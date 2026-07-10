@@ -59,6 +59,7 @@ import { app as replication } from '../../supabase/functions/_backend/public/rep
 import { app as statistics } from '../../supabase/functions/_backend/public/statistics/index.ts'
 import { app as translation } from '../../supabase/functions/_backend/public/translation.ts'
 import { app as webhooks } from '../../supabase/functions/_backend/public/webhooks/index.ts'
+import { app as cache_invalidate } from '../../supabase/functions/_backend/triggers/cache_invalidate.ts'
 import { app as credit_usage_alerts } from '../../supabase/functions/_backend/triggers/credit_usage_alerts.ts'
 import { app as cron_app_fame } from '../../supabase/functions/_backend/triggers/cron_app_fame.ts'
 import { app as cron_clean_orphan_images } from '../../supabase/functions/_backend/triggers/cron_clean_orphan_images.ts'
@@ -170,6 +171,7 @@ appPrivate.route('/sso/verify-dns', sso_verify_dns)
 const functionNameTriggers = 'triggers'
 const appTriggers = createHono(functionNameTriggers, version)
 appTriggers.route('/ok', ok)
+appTriggers.route('/cache_invalidate', cache_invalidate)
 appTriggers.route('/cron_app_fame', cron_app_fame)
 appTriggers.route('/cron_email', cron_email)
 appTriggers.route('/cron_clear_versions', cron_clear_versions)

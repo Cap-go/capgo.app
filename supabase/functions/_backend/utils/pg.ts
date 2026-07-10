@@ -27,7 +27,7 @@ const REPLICATION_LAG_CACHE_TTL_MS = REPLICATION_LAG_CACHE_TTL_SECONDS * 1000
 
 type ReplicationStatus = 'ok' | 'lagging' | 'unknown'
 interface ChannelLookupResult { id: number, name: string, allow_device_self_set: boolean, public: boolean, owner_org: string }
-type PlanAction = 'mau' | 'storage' | 'bandwidth'
+export type PlanAction = 'mau' | 'storage' | 'bandwidth'
 type ReadReplicaHyperdriveBinding
   = | 'HYPERDRIVE_CAPGO_READ_AS_JAPAN'
     | 'HYPERDRIVE_CAPGO_READ_AS_INDIA'

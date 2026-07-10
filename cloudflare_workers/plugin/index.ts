@@ -1,3 +1,4 @@
+import { app as cache_invalidate } from '../../supabase/functions/_backend/private/cache_invalidate.ts'
 import { app as channel_self } from '../../supabase/functions/_backend/plugin_runtime/plugins/channel_self.ts'
 import { app as stats } from '../../supabase/functions/_backend/plugin_runtime/plugins/stats.ts'
 import { app as updates } from '../../supabase/functions/_backend/plugin_runtime/plugins/updates.ts'
@@ -32,6 +33,7 @@ app.route('/updates', updates)
 app.route('/stats', stats)
 app.route('/ok', ok)
 app.route('/latency', latency)
+app.route('/cache_invalidate', cache_invalidate)
 
 createAllCatch(app, functionName)
 
