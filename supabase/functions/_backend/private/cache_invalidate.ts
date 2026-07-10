@@ -37,11 +37,8 @@ app.post('/', async (c) => {
 
   // Bump even when the cache mode is off so entries from a prior "on"
   // window can never be served stale after a toggle.
-  let bumped = 0
-  for (const appId of appIds) {
-    if (await bumpAppCacheToken(c, appId))
-      bumped++
-  }
+  const results = await Promise.all(appIds.map(appId => bumpAppCacheToken(c, appId)))
+  const bumped = results.filter(Boolean).length
   cloudlog({ requestId: c.get('requestId'), message: 'updates cache invalidated', appIds, bumped, enabled: isUpdatesCacheEnabled(c) })
   return c.json({ ...BRES, bumped })
 })

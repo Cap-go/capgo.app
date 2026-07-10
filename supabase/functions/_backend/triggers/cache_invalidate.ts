@@ -10,13 +10,13 @@
 
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
+import { MAX_INVALIDATE_APPS } from '../private/cache_invalidate.ts'
 import { BRES, middlewareAPISecret, parseBody } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
 import { existInEnv, getEnv } from '../utils/utils.ts'
 
 const FANOUT_TIMEOUT_MS = 5000
-// Keep in sync with MAX_INVALIDATE_APPS in private/cache_invalidate.ts.
-const FANOUT_CHUNK_SIZE = 100
+const FANOUT_CHUNK_SIZE = MAX_INVALIDATE_APPS
 
 export function chunkAppIds(appIds: string[], size = FANOUT_CHUNK_SIZE): string[][] {
   const unique = [...new Set(appIds)]
