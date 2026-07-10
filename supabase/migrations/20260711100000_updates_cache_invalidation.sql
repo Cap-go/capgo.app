@@ -50,6 +50,13 @@ BEGIN
 END;
 $$;
 
+-- The notify helper runs privileged fan-out (uses get_apikey()): it must
+-- never be RPC-callable by API roles. Trigger functions are locked down the
+-- same way for defense in depth.
+REVOKE ALL ON FUNCTION public.notify_updates_cache_invalidation(text[]) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.notify_updates_cache_invalidation(text[]) FROM anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.notify_updates_cache_invalidation(text[]) TO service_role;
+
 CREATE OR REPLACE FUNCTION public.invalidate_updates_cache()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -113,7 +120,7 @@ END;
 $$;
 
 -- channels: any change moves versions/flags devices resolve against.
-CREATE TRIGGER invalidate_updates_cache_channels
+CREATE OR REPLACE TRIGGER invalidate_updates_cache_channels
 AFTER INSERT OR UPDATE OR DELETE ON public.channels
 FOR EACH ROW EXECUTE FUNCTION public.invalidate_updates_cache();
 
@@ -121,43 +128,48 @@ FOR EACH ROW EXECUTE FUNCTION public.invalidate_updates_cache();
 -- an app gaining its FIRST override switches off the cached no-override
 -- fast path immediately (apps.channel_device_count is inside the cached
 -- payload).
-CREATE TRIGGER invalidate_updates_cache_channel_devices
+CREATE OR REPLACE TRIGGER invalidate_updates_cache_channel_devices
 AFTER INSERT OR UPDATE OR DELETE ON public.channel_devices
 FOR EACH ROW EXECUTE FUNCTION public.invalidate_updates_cache();
 
 -- apps: counters, plan/provider flags, metadata exposure. INSERT clears the
 -- negative (unknown-app) cache entry the moment an app is created.
-CREATE TRIGGER invalidate_updates_cache_apps
+CREATE OR REPLACE TRIGGER invalidate_updates_cache_apps
 AFTER INSERT OR UPDATE OR DELETE ON public.apps
 FOR EACH ROW EXECUTE FUNCTION public.invalidate_updates_cache();
 
 -- app_versions: UPDATE only (r2_path/checksum/deleted change after a channel
 -- may already point at the version; freshly inserted rows are not yet
 -- referenced by any channel).
-CREATE TRIGGER invalidate_updates_cache_app_versions
+CREATE OR REPLACE TRIGGER invalidate_updates_cache_app_versions
 AFTER UPDATE ON public.app_versions
 FOR EACH ROW WHEN (OLD IS DISTINCT FROM NEW)
 EXECUTE FUNCTION public.invalidate_updates_cache();
 
 -- manifest: cached inside channel payloads and per-version entries; bundle
 -- uploads insert many rows at once, so notify once per statement.
-CREATE TRIGGER invalidate_updates_cache_manifest_insert
+CREATE OR REPLACE TRIGGER invalidate_updates_cache_manifest_insert
 AFTER INSERT ON public.manifest
 REFERENCING NEW TABLE AS new_rows
 FOR EACH STATEMENT EXECUTE FUNCTION public.invalidate_updates_cache_manifest();
 
-CREATE TRIGGER invalidate_updates_cache_manifest_delete
+CREATE OR REPLACE TRIGGER invalidate_updates_cache_manifest_delete
 AFTER DELETE ON public.manifest
 REFERENCING OLD TABLE AS old_rows
 FOR EACH STATEMENT EXECUTE FUNCTION public.invalidate_updates_cache_manifest();
 
 -- orgs: has_usage_credits / customer_id feed plan validation.
-CREATE TRIGGER invalidate_updates_cache_orgs
+CREATE OR REPLACE TRIGGER invalidate_updates_cache_orgs
 AFTER UPDATE ON public.orgs
 FOR EACH ROW WHEN (OLD IS DISTINCT FROM NEW)
 EXECUTE FUNCTION public.invalidate_updates_cache();
 
 -- stripe_info: status / trial / exceeded flags feed plan validation.
-CREATE TRIGGER invalidate_updates_cache_stripe_info
+CREATE OR REPLACE TRIGGER invalidate_updates_cache_stripe_info
 AFTER INSERT OR UPDATE ON public.stripe_info
 FOR EACH ROW EXECUTE FUNCTION public.invalidate_updates_cache();
+
+REVOKE ALL ON FUNCTION public.invalidate_updates_cache() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.invalidate_updates_cache() FROM anon, authenticated;
+REVOKE ALL ON FUNCTION public.invalidate_updates_cache_manifest() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.invalidate_updates_cache_manifest() FROM anon, authenticated;
