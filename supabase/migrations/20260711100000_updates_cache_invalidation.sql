@@ -86,7 +86,7 @@ ON public.apps
 FOR EACH ROW EXECUTE FUNCTION public.invalidate_updates_cache();
 
 -- app_versions: UPDATE only (r2_path/checksum/deleted change after a channel
--- may already point at the version; INSERTs are not yet referenced).
+-- may already point at the version; freshly inserted rows are not yet referenced).
 CREATE TRIGGER invalidate_updates_cache_app_versions
 AFTER UPDATE ON public.app_versions
 FOR EACH ROW WHEN (OLD IS DISTINCT FROM NEW)
