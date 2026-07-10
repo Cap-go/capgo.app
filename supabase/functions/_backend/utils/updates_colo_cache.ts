@@ -26,15 +26,12 @@ import { CacheHelper } from './cache.ts'
 import { cloudlog } from './logging.ts'
 import {
   getAppOwnerPostgres,
-  requestInfosChannelByIdPostgres,
-  requestInfosChannelByIdPostgresRollout,
-  requestInfosChannelDevicePostgres,
-  requestInfosChannelDevicePostgresRollout,
+  requestChannelOverrideLookup,
   requestInfosChannelPostgres,
   requestInfosChannelPostgresRollout,
   requestManifestEntriesPostgres,
+  resolveRolloutChannelDataPostgres,
 } from './pg.ts'
-import { getRolloutDecision } from './rollout.ts'
 import { existInEnv, getEnv } from './utils.ts'
 
 const TOKEN_CACHE_PATH = '/cache/updates-token'
@@ -148,20 +145,16 @@ export async function cachedRequestInfos(options: CachedRequestInfosOptions): Pr
   const rollout = (rolloutChannelCount ?? 0) > 0 || isPausedRolloutVersion
 
   // Device-level override lookup: never cached (per-device result).
-  let channelOverridePromise: Promise<any>
-  if (typeof channelSelfOverrideChannelId === 'number') {
-    channelOverridePromise = rollout
-      ? requestInfosChannelByIdPostgresRollout(c, app_id, channelSelfOverrideChannelId, drizzleClient, includeMetadata)
-      : requestInfosChannelByIdPostgres(c, app_id, channelSelfOverrideChannelId, drizzleClient, shouldFetchManifest, includeMetadata)
-  }
-  else if (shouldQueryChannelOverride) {
-    channelOverridePromise = rollout
-      ? requestInfosChannelDevicePostgresRollout(c, app_id, device_id, drizzleClient, includeMetadata)
-      : requestInfosChannelDevicePostgres(c, app_id, device_id, drizzleClient, shouldFetchManifest, includeMetadata)
-  }
-  else {
-    channelOverridePromise = Promise.resolve(null)
-  }
+  const channelOverridePromise = requestChannelOverrideLookup(c, {
+    app_id,
+    device_id,
+    drizzleClient,
+    includeManifest: shouldFetchManifest,
+    includeMetadata,
+    rollout,
+    shouldQueryChannelOverride,
+    channelSelfOverrideChannelId,
+  })
 
   // App-level channel resolution: cached.
   const channelPromise = cachedChannelLookup(c, {
@@ -179,12 +172,13 @@ export async function cachedRequestInfos(options: CachedRequestInfosOptions): Pr
   if (!rollout)
     return { channelData: channelDataRaw, channelOverride: channelOverrideRaw }
 
-  // Rollout: per-device decision + manifest for the selected version,
-  // mirrors resolveRolloutChannelDataPostgres (pg.ts).
-  const channelOverride = await resolveRolloutChannelData(c, channelOverrideRaw, app_id, device_id, currentVersionName, drizzleClient, shouldFetchManifest)
+  // Rollout: per-device decision + manifest for the selected version, via
+  // the shared resolver with the version-keyed manifest cache as loader.
+  const manifestLoader = (versionId: number) => cachedManifestEntries(c, app_id, versionId, drizzleClient)
+  const channelOverride = await resolveRolloutChannelDataPostgres(c, channelOverrideRaw, app_id, device_id, currentVersionName, drizzleClient, shouldFetchManifest, manifestLoader)
   const channelData = channelOverride
     ? channelDataRaw
-    : await resolveRolloutChannelData(c, channelDataRaw, app_id, device_id, currentVersionName, drizzleClient, shouldFetchManifest)
+    : await resolveRolloutChannelDataPostgres(c, channelDataRaw, app_id, device_id, currentVersionName, drizzleClient, shouldFetchManifest, manifestLoader)
   return { channelOverride, channelData }
 }
 
@@ -228,16 +222,21 @@ async function cachedChannelLookup(c: Context, options: CachedChannelLookupOptio
   return channel
 }
 
-// Manifest entries for a rollout-selected version. Keyed by version id only:
-// manifest rows are append-only per bundle, so a non-empty result is stable.
-// Empty results are never cached (the bundle may still be uploading).
+// Manifest entries for a rollout-selected version, keyed under the app's
+// version token so a token bump (e.g. the manifest trigger) invalidates them
+// together with the channel payloads. Empty results are never cached (the
+// bundle may still be uploading).
 async function cachedManifestEntries(
   c: Context,
+  appId: string,
   versionId: number,
   drizzleClient: ReturnType<typeof getDrizzleClient>,
 ): Promise<{ file_name: string | null, file_hash: string | null, s3_path: string | null }[]> {
   const helper = new CacheHelper(c)
-  const request = helper.buildRequest(MANIFEST_CACHE_PATH, { version_id: String(versionId) })
+  const token = await getAppCacheToken(c, helper, appId)
+  if (!token)
+    return requestManifestEntriesPostgres(c, versionId, drizzleClient)
+  const request = helper.buildRequest(MANIFEST_CACHE_PATH, { app_id: appId, v: token, version_id: String(versionId) })
   const cached = await helper.matchJson<{ entries: { file_name: string | null, file_hash: string | null, s3_path: string | null }[] }>(request)
   if (cached)
     return cached.entries
@@ -245,44 +244,4 @@ async function cachedManifestEntries(
   if (entries.length > 0)
     await helper.putJson(request, { entries }, MANIFEST_TTL_SECONDS)
   return entries
-}
-
-// Mirrors resolveRolloutChannelDataPostgres (pg.ts), with the manifest read
-// going through the version-keyed cache.
-async function resolveRolloutChannelData(
-  c: Context,
-  channelData: any,
-  appId: string,
-  deviceId: string,
-  currentVersionName: string,
-  drizzleClient: ReturnType<typeof getDrizzleClient>,
-  includeManifest: boolean,
-) {
-  if (!channelData)
-    return channelData
-  const stableVersion = channelData.version
-  const rolloutVersion = channelData.rolloutVersion
-  let selectedVersion = stableVersion
-  if (rolloutVersion?.id && channelData.channels?.rollout_version) {
-    const decision = await getRolloutDecision(c, {
-      appId,
-      channelId: channelData.channels.id,
-      currentVersionName,
-      deviceId,
-      rolloutCacheTtlSeconds: channelData.channels.rollout_cache_ttl_seconds,
-      rolloutEnabled: channelData.channels.rollout_enabled,
-      rolloutId: channelData.channels.rollout_id,
-      rolloutPausedAt: channelData.channels.rollout_paused_at,
-      rolloutPercentageBps: channelData.channels.rollout_percentage_bps,
-      rolloutVersionId: rolloutVersion.id,
-      rolloutVersionName: rolloutVersion.name,
-    })
-    if (decision.selected)
-      selectedVersion = rolloutVersion
-    cloudlog({ requestId: c.get('requestId'), message: 'rollout decision', appId, channelId: channelData.channels.id, selected: decision.selected, reason: decision.reason })
-  }
-  const manifestEntries = includeManifest && selectedVersion?.manifest_count > 0
-    ? await cachedManifestEntries(c, selectedVersion.id, drizzleClient)
-    : []
-  return { ...channelData, version: selectedVersion, manifestEntries }
 }

@@ -6,6 +6,50 @@
 -- write) which fans the per-app token bump out to every regional plugin
 -- worker. The cache TTL remains the backstop if a call is lost.
 
+-- Notify helper: dedupes, caps and chunks the app list so the payload is
+-- always bounded (the fan-out endpoint enforces 100 ids per request; an
+-- org bigger than the cap falls back to the cache TTL for the tail).
+CREATE OR REPLACE FUNCTION public.notify_updates_cache_invalidation(p_app_ids text[])
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  deduped text[];
+  chunk text[];
+  chunk_size constant int := 100;
+  max_apps constant int := 1000;
+  i int;
+BEGIN
+  SELECT array_agg(DISTINCT app_id) INTO deduped
+  FROM unnest(p_app_ids) AS app_id
+  WHERE app_id IS NOT NULL AND app_id <> '';
+
+  IF deduped IS NULL OR array_length(deduped, 1) = 0 THEN
+    RETURN;
+  END IF;
+  IF array_length(deduped, 1) > max_apps THEN
+    deduped := deduped[1:max_apps];
+  END IF;
+
+  i := 1;
+  WHILE i <= array_length(deduped, 1) LOOP
+    chunk := deduped[i:i + chunk_size - 1];
+    PERFORM net.http_post(
+      url := public.get_db_url() || '/functions/v1/triggers/cache_invalidate',
+      headers := jsonb_build_object(
+        'Content-Type', 'application/json',
+        'apisecret', public.get_apikey()
+      ),
+      body := jsonb_build_object('app_ids', to_jsonb(chunk)),
+      timeout_milliseconds := 5000
+    );
+    i := i + chunk_size;
+  END LOOP;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION public.invalidate_updates_cache()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -32,22 +76,39 @@ BEGIN
     WHERE o.customer_id = NEW.customer_id;
   END IF;
 
-  IF app_ids IS NOT NULL AND array_length(app_ids, 1) > 0 THEN
-    PERFORM net.http_post(
-      url := public.get_db_url() || '/functions/v1/triggers/cache_invalidate',
-      headers := jsonb_build_object(
-        'Content-Type', 'application/json',
-        'apisecret', public.get_apikey()
-      ),
-      body := jsonb_build_object('app_ids', to_jsonb(app_ids)),
-      timeout_milliseconds := 5000
-    );
-  END IF;
+  PERFORM public.notify_updates_cache_invalidation(app_ids);
 
   IF TG_OP = 'DELETE' THEN
     RETURN OLD;
   END IF;
   RETURN NEW;
+END;
+$$;
+
+-- Statement-level trigger for manifest: one notification per statement (a
+-- bundle upload inserts hundreds of manifest rows in one INSERT), resolving
+-- affected apps through their bundles.
+CREATE OR REPLACE FUNCTION public.invalidate_updates_cache_manifest()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  app_ids text[];
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    SELECT array_agg(DISTINCT av.app_id::text) INTO app_ids
+    FROM old_rows m
+    JOIN public.app_versions av ON av.id = m.app_version_id;
+  ELSE
+    SELECT array_agg(DISTINCT av.app_id::text) INTO app_ids
+    FROM new_rows m
+    JOIN public.app_versions av ON av.id = m.app_version_id;
+  END IF;
+
+  PERFORM public.notify_updates_cache_invalidation(app_ids);
+  RETURN NULL;
 END;
 $$;
 
@@ -65,47 +126,38 @@ AFTER INSERT OR UPDATE OR DELETE ON public.channel_devices
 FOR EACH ROW EXECUTE FUNCTION public.invalidate_updates_cache();
 
 -- apps: counters, plan/provider flags, metadata exposure. INSERT clears the
--- negative (unknown-app) cache entry the moment an app is created. The
--- UPDATE trigger is column-scoped so stats churn (stats_updated_at etc.)
--- never storms the invalidation path.
-CREATE TRIGGER invalidate_updates_cache_apps_ins_del
-AFTER INSERT OR DELETE ON public.apps
-FOR EACH ROW EXECUTE FUNCTION public.invalidate_updates_cache();
-
-CREATE TRIGGER invalidate_updates_cache_apps_upd
-AFTER UPDATE OF
-  channel_device_count,
-  manifest_bundle_count,
-  rollout_channel_count,
-  rollout_paused_version_names,
-  expose_metadata,
-  allow_device_custom_id,
-  block_provider_infra_requests,
-  owner_org
-ON public.apps
+-- negative (unknown-app) cache entry the moment an app is created.
+CREATE TRIGGER invalidate_updates_cache_apps
+AFTER INSERT OR UPDATE OR DELETE ON public.apps
 FOR EACH ROW EXECUTE FUNCTION public.invalidate_updates_cache();
 
 -- app_versions: UPDATE only (r2_path/checksum/deleted change after a channel
--- may already point at the version; freshly inserted rows are not yet referenced).
+-- may already point at the version; freshly inserted rows are not yet
+-- referenced by any channel).
 CREATE TRIGGER invalidate_updates_cache_app_versions
 AFTER UPDATE ON public.app_versions
 FOR EACH ROW WHEN (OLD IS DISTINCT FROM NEW)
 EXECUTE FUNCTION public.invalidate_updates_cache();
 
--- orgs: only the columns feeding plan validation / app ownership; the
--- frequent stats_updated_at churn must not fan out.
+-- manifest: cached inside channel payloads and per-version entries; bundle
+-- uploads insert many rows at once, so notify once per statement.
+CREATE TRIGGER invalidate_updates_cache_manifest_insert
+AFTER INSERT ON public.manifest
+REFERENCING NEW TABLE AS new_rows
+FOR EACH STATEMENT EXECUTE FUNCTION public.invalidate_updates_cache_manifest();
+
+CREATE TRIGGER invalidate_updates_cache_manifest_delete
+AFTER DELETE ON public.manifest
+REFERENCING OLD TABLE AS old_rows
+FOR EACH STATEMENT EXECUTE FUNCTION public.invalidate_updates_cache_manifest();
+
+-- orgs: has_usage_credits / customer_id feed plan validation.
 CREATE TRIGGER invalidate_updates_cache_orgs
-AFTER UPDATE OF customer_id, has_usage_credits, created_by, management_email
-ON public.orgs
-FOR EACH ROW EXECUTE FUNCTION public.invalidate_updates_cache();
+AFTER UPDATE ON public.orgs
+FOR EACH ROW WHEN (OLD IS DISTINCT FROM NEW)
+EXECUTE FUNCTION public.invalidate_updates_cache();
 
--- stripe_info: only the columns feeding plan validation; hourly
--- plan_usage/updated_at churn must not fan out.
-CREATE TRIGGER invalidate_updates_cache_stripe_info_ins
-AFTER INSERT ON public.stripe_info
-FOR EACH ROW EXECUTE FUNCTION public.invalidate_updates_cache();
-
-CREATE TRIGGER invalidate_updates_cache_stripe_info_upd
-AFTER UPDATE OF status, trial_at, mau_exceeded, storage_exceeded, bandwidth_exceeded, customer_id
-ON public.stripe_info
+-- stripe_info: status / trial / exceeded flags feed plan validation.
+CREATE TRIGGER invalidate_updates_cache_stripe_info
+AFTER INSERT OR UPDATE ON public.stripe_info
 FOR EACH ROW EXECUTE FUNCTION public.invalidate_updates_cache();

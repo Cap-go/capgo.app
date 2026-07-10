@@ -15,6 +15,16 @@ import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
 import { existInEnv, getEnv } from '../utils/utils.ts'
 
 const FANOUT_TIMEOUT_MS = 5000
+// Keep in sync with MAX_INVALIDATE_APPS in private/cache_invalidate.ts.
+const FANOUT_CHUNK_SIZE = 100
+
+export function chunkAppIds(appIds: string[], size = FANOUT_CHUNK_SIZE): string[][] {
+  const unique = [...new Set(appIds)]
+  const chunks: string[][] = []
+  for (let i = 0; i < unique.length; i += size)
+    chunks.push(unique.slice(i, i + size))
+  return chunks
+}
 
 export function parsePluginInvalidateUrls(raw: string): string[] {
   return raw
@@ -43,20 +53,25 @@ app.post('/', middlewareAPISecret, async (c) => {
 
   const urls = parsePluginInvalidateUrls(getEnv(c, 'PLUGIN_INVALIDATE_URLS'))
   const secret = getEnv(c, 'CACHE_INVALIDATE_SECRET')
+  const chunks = chunkAppIds(appIds)
   const results = await Promise.all(urls.map(async (url) => {
     try {
-      const response = await fetch(`${url}/cache_invalidate`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-cache-invalidate-secret': secret,
-        },
-        body: JSON.stringify({ app_ids: appIds }),
-        signal: AbortSignal.timeout(FANOUT_TIMEOUT_MS),
-      })
-      if (!response.ok) {
-        cloudlogErr({ requestId: c.get('requestId'), message: 'cache invalidate fanout failed', url, status: response.status })
-        return false
+      // Chunked to the route's per-request cap: nothing is ever silently
+      // dropped, a large org just becomes a few sequential calls per region.
+      for (const chunk of chunks) {
+        const response = await fetch(`${url}/cache_invalidate`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-cache-invalidate-secret': secret,
+          },
+          body: JSON.stringify({ app_ids: chunk }),
+          signal: AbortSignal.timeout(FANOUT_TIMEOUT_MS),
+        })
+        if (!response.ok) {
+          cloudlogErr({ requestId: c.get('requestId'), message: 'cache invalidate fanout failed', url, status: response.status })
+          return false
+        }
       }
       return true
     }

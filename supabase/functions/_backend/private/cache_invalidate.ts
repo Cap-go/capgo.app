@@ -26,10 +26,14 @@ app.post('/', async (c) => {
 
   const body = await parseBody<{ app_ids?: unknown }>(c)
   const appIds = Array.isArray(body.app_ids)
-    ? body.app_ids.filter((appId): appId is string => typeof appId === 'string' && appId.length > 0).slice(0, MAX_INVALIDATE_APPS)
+    ? body.app_ids.filter((appId): appId is string => typeof appId === 'string' && appId.length > 0)
     : []
   if (appIds.length === 0)
     throw quickError(400, 'missing_app_ids', 'app_ids must be a non-empty array of strings')
+  // Loud rejection instead of silent truncation: the fan-out chunks to this
+  // size, so anything larger is a caller bug that would leave caches stale.
+  if (appIds.length > MAX_INVALIDATE_APPS)
+    throw quickError(400, 'too_many_app_ids', `app_ids is limited to ${MAX_INVALIDATE_APPS} per request`)
 
   // Bump even when the cache mode is off so entries from a prior "on"
   // window can never be served stale after a toggle.

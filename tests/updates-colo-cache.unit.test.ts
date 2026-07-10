@@ -1,6 +1,6 @@
 import { Hono } from 'hono/tiny'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { app as cacheInvalidateFanout, parsePluginInvalidateUrls } from '../supabase/functions/_backend/triggers/cache_invalidate.ts'
+import { app as cacheInvalidateFanout, chunkAppIds, parsePluginInvalidateUrls } from '../supabase/functions/_backend/triggers/cache_invalidate.ts'
 import { app as cacheInvalidateRoute } from '../supabase/functions/_backend/private/cache_invalidate.ts'
 import { bumpAppCacheToken, cachedGetAppOwner, cachedRequestInfos, isUpdatesCacheEnabled } from '../supabase/functions/_backend/utils/updates_colo_cache.ts'
 
@@ -40,18 +40,43 @@ const CHANNEL_ROW = {
   channels: { id: 7, name: 'production', app_id: 'com.demo.app', ios: true, android: true, public: true, allow_device_self_set: false },
 }
 
-// The pg loaders are stubbed: these tests exercise the cache semantics, not
-// the SQL (covered by the existing update tests with the flag off).
-vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
-  getAppOwnerPostgres: vi.fn(async () => structuredClone(APP_OWNER)),
-  requestInfosChannelPostgres: vi.fn(async () => structuredClone(CHANNEL_ROW)),
-  requestInfosChannelPostgresRollout: vi.fn(async () => structuredClone(CHANNEL_ROW)),
-  requestInfosChannelDevicePostgres: vi.fn(async () => null),
-  requestInfosChannelDevicePostgresRollout: vi.fn(async () => null),
-  requestInfosChannelByIdPostgres: vi.fn(async () => structuredClone(CHANNEL_ROW)),
-  requestInfosChannelByIdPostgresRollout: vi.fn(async () => structuredClone(CHANNEL_ROW)),
-  requestManifestEntriesPostgres: vi.fn(async () => []),
-}))
+// The pg query loaders are stubbed: these tests exercise the cache
+// semantics, not the SQL (covered by the existing update tests with the
+// flag off). The shared dispatch/rollout helpers stay real so the cached
+// path runs the exact same code as the direct path.
+vi.mock('../supabase/functions/_backend/utils/pg.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../supabase/functions/_backend/utils/pg.ts')>()
+  const requestInfosChannelDevicePostgres = vi.fn(async () => null)
+  const requestInfosChannelDevicePostgresRollout = vi.fn(async () => null)
+  const requestInfosChannelByIdPostgres = vi.fn(async () => structuredClone(CHANNEL_ROW))
+  const requestInfosChannelByIdPostgresRollout = vi.fn(async () => structuredClone(CHANNEL_ROW))
+  return {
+    ...actual,
+    getAppOwnerPostgres: vi.fn(async () => structuredClone(APP_OWNER)),
+    requestInfosChannelPostgres: vi.fn(async () => structuredClone(CHANNEL_ROW)),
+    requestInfosChannelPostgresRollout: vi.fn(async () => structuredClone(CHANNEL_ROW)),
+    requestInfosChannelDevicePostgres,
+    requestInfosChannelDevicePostgresRollout,
+    requestInfosChannelByIdPostgres,
+    requestInfosChannelByIdPostgresRollout,
+    requestManifestEntriesPostgres: vi.fn(async () => []),
+    // Same dispatch semantics as the real helper, wired to the stubs above
+    // (the real one binds pg-internal functions, bypassing the mock).
+    requestChannelOverrideLookup: vi.fn(async (c: any, args: any) => {
+      if (typeof args.channelSelfOverrideChannelId === 'number') {
+        return args.rollout
+          ? requestInfosChannelByIdPostgresRollout()
+          : requestInfosChannelByIdPostgres()
+      }
+      if (args.shouldQueryChannelOverride) {
+        return args.rollout
+          ? requestInfosChannelDevicePostgresRollout()
+          : requestInfosChannelDevicePostgres()
+      }
+      return null
+    }),
+  }
+})
 
 const pg = await import('../supabase/functions/_backend/utils/pg.ts')
 
@@ -225,6 +250,35 @@ describe('updates colo cache', () => {
     // channel row cached once, decision computed per device
     expect(pg.requestInfosChannelPostgresRollout).toHaveBeenCalledTimes(1)
   })
+
+  it('token bump also invalidates cached rollout manifests', async () => {
+    ;(pg.requestInfosChannelPostgresRollout as any).mockResolvedValue({
+      ...structuredClone(CHANNEL_ROW),
+      rolloutVersion: { id: 43, name: '1.2.4', manifest_count: 2 },
+      channels: { ...structuredClone(CHANNEL_ROW.channels), rollout_version: 43, rollout_enabled: true, rollout_percentage_bps: 10000, rollout_id: 'r-1', rollout_paused_at: null, rollout_cache_ttl_seconds: 2592000 },
+    })
+    ;(pg.requestManifestEntriesPostgres as any).mockResolvedValue([{ file_name: 'a', file_hash: 'h', s3_path: 'p' }])
+    const c = makeContext()
+    const options = {
+      c,
+      platform: 'ios',
+      app_id: 'com.demo.app',
+      device_id: 'device-1',
+      defaultChannel: '',
+      drizzleClient: {} as any,
+      channelDeviceCount: 0,
+      manifestBundleCount: 1,
+      rolloutChannelCount: 1,
+      rolloutPausedVersionNames: [],
+      currentVersionName: '1.0.0',
+    }
+    await cachedRequestInfos(options)
+    await cachedRequestInfos(options)
+    expect(pg.requestManifestEntriesPostgres).toHaveBeenCalledTimes(1)
+    await bumpAppCacheToken(c, 'com.demo.app')
+    await cachedRequestInfos(options)
+    expect(pg.requestManifestEntriesPostgres).toHaveBeenCalledTimes(2)
+  })
 })
 
 describe('cache invalidate route (plugin worker)', () => {
@@ -277,6 +331,17 @@ describe('cache invalidate route (plugin worker)', () => {
     expect(cache.put).toHaveBeenCalledTimes(2)
   })
 
+  it('rejects oversized app_ids loudly instead of truncating', async () => {
+    const app = buildApp()
+    const response = await app.request('/cache_invalidate', {
+      method: 'POST',
+      headers: { 'x-cache-invalidate-secret': 's3cret', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ app_ids: Array.from({ length: 101 }, (_, i) => `com.app.${i}`) }),
+    })
+    expect(response.status).toBe(400)
+    expect(cache.put).not.toHaveBeenCalled()
+  })
+
   it('rejects empty app_ids', async () => {
     const app = buildApp()
     const response = await app.request('/cache_invalidate', {
@@ -308,6 +373,31 @@ describe('cache invalidate fanout (triggers)', () => {
 
   it('parses and normalizes the regional url list', () => {
     expect(parsePluginInvalidateUrls('https://a.com, https://b.com/ ,')).toEqual(['https://a.com', 'https://b.com'])
+  })
+
+  it('dedupes and chunks app ids to the per-request cap', () => {
+    const ids = Array.from({ length: 150 }, (_, i) => `com.app.${i % 120}`)
+    const chunks = chunkAppIds(ids)
+    expect(chunks).toHaveLength(2)
+    expect(chunks[0]).toHaveLength(100)
+    expect(chunks[1]).toHaveLength(20)
+  })
+
+  it('fans out one call per region per chunk, nothing dropped', async () => {
+    stubFullEnv()
+    const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const app = buildApp()
+    const response = await app.request('/cache_invalidate', {
+      method: 'POST',
+      headers: { 'apisecret': 'api-secret', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ app_ids: Array.from({ length: 150 }, (_, i) => `com.app.${i}`) }),
+    })
+    expect(response.status).toBe(200)
+    // 2 regions x 2 chunks
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+    const sent = fetchMock.mock.calls.flatMap(([, init]: any) => JSON.parse(init.body).app_ids)
+    expect(new Set(sent).size).toBe(150)
   })
 
   it('fans out one call per regional worker with the shared secret', async () => {

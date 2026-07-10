@@ -892,7 +892,9 @@ export function requestInfosChannelPostgresRollout(
   return channelQuery.then(data => data.at(0))
 }
 
-async function resolveRolloutChannelDataPostgres(
+export type ManifestEntriesLoader = (versionId: number) => Promise<{ file_name: string | null, file_hash: string | null, s3_path: string | null }[]>
+
+export async function resolveRolloutChannelDataPostgres(
   c: Context,
   channelData: any,
   appId: string,
@@ -900,6 +902,7 @@ async function resolveRolloutChannelDataPostgres(
   currentVersionName: string,
   drizzleClient: ReturnType<typeof getDrizzleClient>,
   includeManifest: boolean,
+  manifestLoader?: ManifestEntriesLoader,
 ) {
   if (!channelData)
     return channelData
@@ -929,8 +932,9 @@ async function resolveRolloutChannelDataPostgres(
     cloudlog({ requestId: c.get('requestId'), message: 'rollout decision', appId, channelId: channelData.channels.id, selected: decision.selected, reason: decision.reason })
   }
 
+  const loadManifest = manifestLoader ?? ((versionId: number) => requestManifestEntriesPostgres(c, versionId, drizzleClient))
   const manifestEntries = includeManifest && selectedVersion?.manifest_count > 0
-    ? await requestManifestEntriesPostgres(c, selectedVersion.id, drizzleClient)
+    ? await loadManifest(selectedVersion.id)
     : []
 
   return {
@@ -956,6 +960,35 @@ interface RequestInfosPostgresOptions {
   channelSelfOverrideChannelId?: number | null
 }
 
+export interface ChannelOverrideLookupArgs {
+  app_id: string
+  device_id: string
+  drizzleClient: ReturnType<typeof getDrizzleClient>
+  includeManifest: boolean
+  includeMetadata: boolean
+  rollout: boolean
+  shouldQueryChannelOverride: boolean
+  channelSelfOverrideChannelId?: number | null
+}
+
+// Per-device channel override lookup shared by the direct and colo-cached
+// read paths. Never cached: the result is device-specific.
+export function requestChannelOverrideLookup(c: Context, args: ChannelOverrideLookupArgs): Promise<any> {
+  const { app_id, device_id, drizzleClient, includeManifest, includeMetadata, rollout, shouldQueryChannelOverride, channelSelfOverrideChannelId } = args
+  if (typeof channelSelfOverrideChannelId === 'number') {
+    return rollout
+      ? requestInfosChannelByIdPostgresRollout(c, app_id, channelSelfOverrideChannelId, drizzleClient, includeMetadata)
+      : requestInfosChannelByIdPostgres(c, app_id, channelSelfOverrideChannelId, drizzleClient, includeManifest, includeMetadata)
+  }
+  if (shouldQueryChannelOverride) {
+    return rollout
+      ? requestInfosChannelDevicePostgresRollout(c, app_id, device_id, drizzleClient, includeMetadata)
+      : requestInfosChannelDevicePostgres(c, app_id, device_id, drizzleClient, includeManifest, includeMetadata)
+  }
+  cloudlog({ requestId: c.get('requestId'), message: 'Skipping channel device override query', rollout })
+  return Promise.resolve(null)
+}
+
 export function requestInfosPostgres(options: RequestInfosPostgresOptions) {
   const {
     c,
@@ -977,19 +1010,18 @@ export function requestInfosPostgres(options: RequestInfosPostgresOptions) {
   const isPausedRolloutVersion = Array.isArray(rolloutPausedVersionNames) && rolloutPausedVersionNames.includes(currentVersionName)
   const shouldUseRolloutPath = (rolloutChannelCount ?? 0) > 0 || isPausedRolloutVersion
 
-  if (!shouldUseRolloutPath) {
-    let channelDevice: ReturnType<typeof requestInfosChannelByIdPostgres> | ReturnType<typeof requestInfosChannelDevicePostgres> | Promise<null>
+  const channelDevice = requestChannelOverrideLookup(c, {
+    app_id,
+    device_id,
+    drizzleClient,
+    includeManifest: shouldFetchManifest,
+    includeMetadata,
+    rollout: shouldUseRolloutPath,
+    shouldQueryChannelOverride,
+    channelSelfOverrideChannelId,
+  })
 
-    if (typeof channelSelfOverrideChannelId === 'number') {
-      channelDevice = requestInfosChannelByIdPostgres(c, app_id, channelSelfOverrideChannelId, drizzleClient, shouldFetchManifest, includeMetadata)
-    }
-    else if (shouldQueryChannelOverride) {
-      channelDevice = requestInfosChannelDevicePostgres(c, app_id, device_id, drizzleClient, shouldFetchManifest, includeMetadata)
-    }
-    else {
-      cloudlog({ requestId: c.get('requestId'), message: 'Skipping channel device override query' })
-      channelDevice = Promise.resolve(null)
-    }
+  if (!shouldUseRolloutPath) {
     const channel = requestInfosChannelPostgres(c, platform, app_id, defaultChannel, drizzleClient, shouldFetchManifest, includeMetadata)
 
     return Promise.all([channelDevice, channel])
@@ -1000,17 +1032,6 @@ export function requestInfosPostgres(options: RequestInfosPostgresOptions) {
       })
   }
 
-  let channelDevice: ReturnType<typeof requestInfosChannelByIdPostgresRollout> | ReturnType<typeof requestInfosChannelDevicePostgresRollout> | Promise<null>
-  if (typeof channelSelfOverrideChannelId === 'number') {
-    channelDevice = requestInfosChannelByIdPostgresRollout(c, app_id, channelSelfOverrideChannelId, drizzleClient, includeMetadata)
-  }
-  else if (shouldQueryChannelOverride) {
-    channelDevice = requestInfosChannelDevicePostgresRollout(c, app_id, device_id, drizzleClient, includeMetadata)
-  }
-  else {
-    cloudlog({ requestId: c.get('requestId'), message: 'Skipping channel device override rollout query' })
-    channelDevice = Promise.resolve(null)
-  }
   const channel = requestInfosChannelPostgresRollout(c, platform, app_id, defaultChannel, drizzleClient, includeMetadata)
 
   return Promise.all([channelDevice, channel])
