@@ -9,21 +9,15 @@
 
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
-import { BRES, parseBody, quickError } from '../utils/hono.ts'
+import { BRES, middlewareAPISecret, parseBody, quickError } from '../utils/hono.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { bumpAppCacheToken, isUpdatesCacheEnabled } from '../utils/updates_colo_cache.ts'
-import { existInEnv, getEnv } from '../utils/utils.ts'
 
 export const MAX_INVALIDATE_APPS = 100
 
 export const app = new Hono<MiddlewareKeyVariables>()
 
-app.post('/', async (c) => {
-  if (!existInEnv(c, 'CACHE_INVALIDATE_SECRET'))
-    throw quickError(503, 'cache_invalidate_disabled', 'CACHE_INVALIDATE_SECRET is not configured')
-  if (c.req.header('x-cache-invalidate-secret') !== getEnv(c, 'CACHE_INVALIDATE_SECRET'))
-    throw quickError(401, 'unauthorized', 'Invalid cache invalidation secret')
-
+app.post('/', middlewareAPISecret, async (c) => {
   const body = await parseBody<{ app_ids?: unknown }>(c)
   const appIds = Array.isArray(body.app_ids)
     ? body.app_ids.filter((appId): appId is string => typeof appId === 'string' && appId.length > 0)

@@ -30,7 +30,7 @@
       "vars": {
         "ENV_NAME": "capgo_api-prod",
         // Regional plugin workers for /updates colo-cache invalidation
-        // fan-out (CACHE_INVALIDATE_SECRET comes via wrangler secret bulk).
+        // fan-out (authenticated with the shared API_SECRET).
         "PLUGIN_INVALIDATE_URLS": "https://plugin.eu.capgo.app,https://plugin.na.capgo.app,https://plugin.sa.capgo.app,https://plugin.oc.capgo.app,https://plugin.jp.capgo.app,https://plugin.as.capgo.app,https://plugin.hk.capgo.app,https://plugin.me.capgo.app,https://plugin.af.capgo.app"
       },
       "routes": [

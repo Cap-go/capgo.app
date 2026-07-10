@@ -315,7 +315,7 @@ describe('cache invalidate route (plugin worker)', () => {
   beforeEach(() => {
     cache = createMemoryCache()
     vi.stubGlobal('caches', { open: vi.fn(async () => cache) })
-    vi.stubEnv('CACHE_INVALIDATE_SECRET', 's3cret')
+    vi.stubEnv('API_SECRET', 's3cret')
   })
 
   afterEach(() => {
@@ -327,10 +327,10 @@ describe('cache invalidate route (plugin worker)', () => {
     const app = buildApp()
     const wrong = await app.request('/cache_invalidate', {
       method: 'POST',
-      headers: { 'x-cache-invalidate-secret': 'nope', 'Content-Type': 'application/json' },
+      headers: { 'apisecret': 'nope', 'Content-Type': 'application/json' },
       body: JSON.stringify({ app_ids: ['com.demo.app'] }),
     })
-    expect(wrong.status).toBe(401)
+    expect(wrong.status).toBe(400)
 
     vi.unstubAllEnvs()
     const disabled = await buildApp().request('/cache_invalidate', {
@@ -338,14 +338,14 @@ describe('cache invalidate route (plugin worker)', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ app_ids: ['com.demo.app'] }),
     })
-    expect(disabled.status).toBe(503)
+    expect(disabled.status).toBe(400)
   })
 
   it('bumps tokens for each app', async () => {
     const app = buildApp()
     const response = await app.request('/cache_invalidate', {
       method: 'POST',
-      headers: { 'x-cache-invalidate-secret': 's3cret', 'Content-Type': 'application/json' },
+      headers: { 'apisecret': 's3cret', 'Content-Type': 'application/json' },
       body: JSON.stringify({ app_ids: ['com.demo.app', 'com.other.app'] }),
     })
     expect(response.status).toBe(200)
@@ -368,7 +368,7 @@ describe('cache invalidate route (plugin worker)', () => {
     const app = buildApp()
     const response = await app.request('/cache_invalidate', {
       method: 'POST',
-      headers: { 'x-cache-invalidate-secret': 's3cret', 'Content-Type': 'application/json' },
+      headers: { 'apisecret': 's3cret', 'Content-Type': 'application/json' },
       body: JSON.stringify({ app_ids: [] }),
     })
     expect(response.status).toBe(400)
@@ -385,7 +385,6 @@ describe('cache invalidate fanout (triggers)', () => {
   function stubFullEnv() {
     vi.stubEnv('API_SECRET', 'api-secret')
     vi.stubEnv('PLUGIN_INVALIDATE_URLS', 'https://plugin.eu.capgo.app, https://plugin.na.capgo.app/')
-    vi.stubEnv('CACHE_INVALIDATE_SECRET', 's3cret')
   }
 
   afterEach(() => {
@@ -437,7 +436,7 @@ describe('cache invalidate fanout (triggers)', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
     const [url, init] = fetchMock.mock.calls[0] as any
     expect(url).toBe('https://plugin.eu.capgo.app/cache_invalidate')
-    expect(init.headers['x-cache-invalidate-secret']).toBe('s3cret')
+    expect(init.headers.apisecret).toBe('api-secret')
     expect(JSON.parse(init.body)).toEqual({ app_ids: ['com.demo.app'] })
   })
 

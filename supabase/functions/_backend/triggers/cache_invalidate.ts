@@ -45,14 +45,15 @@ app.post('/', middlewareAPISecret, async (c) => {
     return c.json(BRES)
   }
 
-  if (!existInEnv(c, 'PLUGIN_INVALIDATE_URLS') || !existInEnv(c, 'CACHE_INVALIDATE_SECRET')) {
+  if (!existInEnv(c, 'PLUGIN_INVALIDATE_URLS')) {
     // Soft-skip: invalidation is an accelerator, the cache TTL is the backstop.
     cloudlog({ requestId: c.get('requestId'), message: 'cache invalidate fanout skipped (missing env)', appIds })
     return c.json(BRES)
   }
 
   const urls = parsePluginInvalidateUrls(getEnv(c, 'PLUGIN_INVALIDATE_URLS'))
-  const secret = getEnv(c, 'CACHE_INVALIDATE_SECRET')
+  // Same intercommunication secret that authenticated this request.
+  const secret = getEnv(c, 'API_SECRET')
   const chunks = chunkAppIds(appIds)
   const results = await Promise.all(urls.map(async (url) => {
     try {
@@ -63,7 +64,7 @@ app.post('/', middlewareAPISecret, async (c) => {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'x-cache-invalidate-secret': secret,
+            'apisecret': secret,
           },
           body: JSON.stringify({ app_ids: chunk }),
           signal: AbortSignal.timeout(FANOUT_TIMEOUT_MS),
