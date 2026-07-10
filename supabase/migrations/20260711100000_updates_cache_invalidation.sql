@@ -80,7 +80,7 @@ BEGIN
     SELECT array_agg(a.app_id::text) INTO app_ids
     FROM public.apps a
     JOIN public.orgs o ON o.id = a.owner_org
-    WHERE o.customer_id = NEW.customer_id;
+    WHERE o.customer_id = CASE WHEN TG_OP = 'DELETE' THEN OLD.customer_id ELSE NEW.customer_id END;
   END IF;
 
   PERFORM public.notify_updates_cache_invalidation(app_ids);
@@ -164,9 +164,10 @@ AFTER UPDATE ON public.orgs
 FOR EACH ROW WHEN (OLD IS DISTINCT FROM NEW)
 EXECUTE FUNCTION public.invalidate_updates_cache();
 
--- stripe_info: status / trial / exceeded flags feed plan validation.
+-- stripe_info: status / trial / exceeded flags feed plan validation; DELETE
+-- included (orphaned-row cleanup must not leave plan_valid cached wrong).
 CREATE OR REPLACE TRIGGER invalidate_updates_cache_stripe_info
-AFTER INSERT OR UPDATE ON public.stripe_info
+AFTER INSERT OR UPDATE OR DELETE ON public.stripe_info
 FOR EACH ROW EXECUTE FUNCTION public.invalidate_updates_cache();
 
 REVOKE ALL ON FUNCTION public.invalidate_updates_cache() FROM PUBLIC;

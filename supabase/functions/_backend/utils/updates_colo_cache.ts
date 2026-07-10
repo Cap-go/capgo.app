@@ -26,6 +26,7 @@ import { CacheHelper } from './cache.ts'
 import { cloudlog } from './logging.ts'
 import {
   getAppOwnerPostgres,
+  queryAppOwnerPostgres,
   requestChannelOverrideLookup,
   requestInfosChannelPostgres,
   requestInfosChannelPostgresRollout,
@@ -44,6 +45,17 @@ const DEFAULT_PAYLOAD_TTL_SECONDS = 60
 const MANIFEST_TTL_SECONDS = 300
 
 interface TokenPayload { t: string }
+
+const requestTokenMemo = new WeakMap<object, Map<string, Promise<string | null>>>()
+
+function memoKey(c: Context): object | null {
+  try {
+    return (c.req?.raw as object) ?? null
+  }
+  catch {
+    return null
+  }
+}
 interface OwnerPayload { owner: AppOwnerPostgresResult | null }
 interface ChannelPayload { channel: unknown }
 
@@ -59,13 +71,33 @@ function payloadTtlSeconds(c: Context): number {
 // Per-app version token: every cached payload embeds it in its key, so one
 // token bump atomically invalidates all payload variants of the app in this
 // colo. The old entries become unreachable and expire by TTL.
-async function getAppCacheToken(_c: Context, helper: CacheHelper, appId: string): Promise<string | null> {
+async function loadAppCacheToken(helper: CacheHelper, appId: string): Promise<string | null> {
   const request = helper.buildRequest(TOKEN_CACHE_PATH, { app_id: appId })
   const cached = await helper.matchJson<TokenPayload>(request)
   if (cached?.t)
     return cached.t
   const token = crypto.randomUUID()
   await helper.putJson(request, { t: token }, TOKEN_TTL_SECONDS)
+  return token
+}
+
+// Memoized per request: every cached lookup of one update check reads the
+// same token generation, so a bump landing mid-request cannot mix stale and
+// fresh payloads in a single response.
+function getAppCacheToken(c: Context, helper: CacheHelper, appId: string): Promise<string | null> {
+  const key = memoKey(c)
+  if (!key)
+    return loadAppCacheToken(helper, appId)
+  let perApp = requestTokenMemo.get(key)
+  if (!perApp) {
+    perApp = new Map()
+    requestTokenMemo.set(key, perApp)
+  }
+  let token = perApp.get(appId)
+  if (!token) {
+    token = loadAppCacheToken(helper, appId)
+    perApp.set(appId, token)
+  }
   return token
 }
 
@@ -98,7 +130,16 @@ export async function cachedGetAppOwner(
     cloudlog({ requestId: c.get('requestId'), message: 'updates cache hit (owner)', appId })
     return cached.owner
   }
-  const owner = await getAppOwnerPostgres(c, appId, drizzleClient, actions)
+  let owner: AppOwnerPostgresResult | null
+  try {
+    owner = await queryAppOwnerPostgres(c, appId, drizzleClient, actions)
+  }
+  catch {
+    // Transient query failure: same null-owner behavior as the direct path,
+    // but never cached — an unknown-app entry would misclassify the app as
+    // on-prem for the whole TTL.
+    return getAppOwnerPostgres(c, appId, drizzleClient, actions)
+  }
   await helper.putJson(request, { owner }, payloadTtlSeconds(c))
   return owner
 }

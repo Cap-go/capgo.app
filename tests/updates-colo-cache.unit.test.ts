@@ -50,9 +50,13 @@ vi.mock('../supabase/functions/_backend/utils/pg.ts', async (importOriginal) => 
   const requestInfosChannelDevicePostgresRollout = vi.fn(async () => null)
   const requestInfosChannelByIdPostgres = vi.fn(async () => structuredClone(CHANNEL_ROW))
   const requestInfosChannelByIdPostgresRollout = vi.fn(async () => structuredClone(CHANNEL_ROW))
+  const getAppOwnerPostgres = vi.fn(async () => structuredClone(APP_OWNER))
   return {
     ...actual,
-    getAppOwnerPostgres: vi.fn(async () => structuredClone(APP_OWNER)),
+    getAppOwnerPostgres,
+    // The cached path uses the throwing variant; share the same stub so
+    // call-count assertions cover both entry points.
+    queryAppOwnerPostgres: getAppOwnerPostgres,
     requestInfosChannelPostgres: vi.fn(async () => structuredClone(CHANNEL_ROW)),
     requestInfosChannelPostgresRollout: vi.fn(async () => structuredClone(CHANNEL_ROW)),
     requestInfosChannelDevicePostgres,
@@ -123,18 +127,36 @@ describe('updates colo cache', () => {
 
   it('caches negative owner results (unknown app)', async () => {
     ;(pg.getAppOwnerPostgres as any).mockResolvedValueOnce(null)
-    const c = makeContext()
-    expect(await cachedGetAppOwner(c, 'com.ghost.app', {} as any, ['mau'])).toBeNull()
-    expect(await cachedGetAppOwner(c, 'com.ghost.app', {} as any, ['mau'])).toBeNull()
+    expect(await cachedGetAppOwner(makeContext(), 'com.ghost.app', {} as any, ['mau'])).toBeNull()
+    expect(await cachedGetAppOwner(makeContext(), 'com.ghost.app', {} as any, ['mau'])).toBeNull()
     expect(pg.getAppOwnerPostgres).toHaveBeenCalledTimes(1)
   })
 
+  it('never caches a transient query failure as unknown app', async () => {
+    ;(pg.getAppOwnerPostgres as any).mockRejectedValueOnce(new Error('replica down'))
+    // direct-path fallback also fails once: the request answers null...
+    ;(pg.getAppOwnerPostgres as any).mockRejectedValueOnce(new Error('replica down'))
+    await expect(cachedGetAppOwner(makeContext(), 'com.demo.app', {} as any, ['mau'])).rejects.toThrow('replica down')
+    // ...but the next request loads and caches the real owner
+    const owner = await cachedGetAppOwner(makeContext(), 'com.demo.app', {} as any, ['mau'])
+    expect(owner?.owner_org).toBe('org-1')
+  })
+
   it('token bump invalidates every cached payload of the app', async () => {
+    await cachedGetAppOwner(makeContext(), 'com.demo.app', {} as any, ['mau'])
+    expect(await bumpAppCacheToken(makeContext(), 'com.demo.app')).toBe(true)
+    // fresh request context: the token memo is per-request by design
+    await cachedGetAppOwner(makeContext(), 'com.demo.app', {} as any, ['mau'])
+    expect(pg.getAppOwnerPostgres).toHaveBeenCalledTimes(2)
+  })
+
+  it('one request never mixes token generations (memoized per request)', async () => {
     const c = makeContext()
     await cachedGetAppOwner(c, 'com.demo.app', {} as any, ['mau'])
-    expect(await bumpAppCacheToken(c, 'com.demo.app')).toBe(true)
+    await bumpAppCacheToken(makeContext(), 'com.demo.app')
+    // same request keeps reading its generation: still a cache hit
     await cachedGetAppOwner(c, 'com.demo.app', {} as any, ['mau'])
-    expect(pg.getAppOwnerPostgres).toHaveBeenCalledTimes(2)
+    expect(pg.getAppOwnerPostgres).toHaveBeenCalledTimes(1)
   })
 
   it('caches the channel lookup but never the per-device override', async () => {
@@ -273,10 +295,10 @@ describe('updates colo cache', () => {
       currentVersionName: '1.0.0',
     }
     await cachedRequestInfos(options)
-    await cachedRequestInfos(options)
+    await cachedRequestInfos({ ...options, c: makeContext() })
     expect(pg.requestManifestEntriesPostgres).toHaveBeenCalledTimes(1)
-    await bumpAppCacheToken(c, 'com.demo.app')
-    await cachedRequestInfos(options)
+    await bumpAppCacheToken(makeContext(), 'com.demo.app')
+    await cachedRequestInfos({ ...options, c: makeContext() })
     expect(pg.requestManifestEntriesPostgres).toHaveBeenCalledTimes(2)
   })
 })
