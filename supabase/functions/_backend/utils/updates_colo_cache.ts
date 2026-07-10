@@ -42,6 +42,11 @@ const MANIFEST_CACHE_PATH = '/cache/updates-manifest'
 
 const TOKEN_TTL_SECONDS = 7 * 24 * 3600
 const DEFAULT_PAYLOAD_TTL_SECONDS = 60
+// Unknown apps (Capgo removed, misconfigured open-source installs, plain
+// abuse) hammer /updates forever and by definition never change: cache the
+// negative long. Safe because the apps INSERT trigger bumps the token the
+// moment the app is created; the TTL only matters if that fan-out is lost.
+const DEFAULT_NEGATIVE_TTL_SECONDS = 600
 const MANIFEST_TTL_SECONDS = 300
 
 interface TokenPayload { t: string }
@@ -66,6 +71,11 @@ export function isUpdatesCacheEnabled(c: Context): boolean {
 function payloadTtlSeconds(c: Context): number {
   const raw = Number(getEnv(c, 'UPDATES_CACHE_TTL_SECONDS'))
   return Number.isFinite(raw) && raw >= 5 ? raw : DEFAULT_PAYLOAD_TTL_SECONDS
+}
+
+function negativeTtlSeconds(c: Context): number {
+  const raw = Number(getEnv(c, 'UPDATES_CACHE_NEGATIVE_TTL_SECONDS'))
+  return Number.isFinite(raw) && raw >= 5 ? raw : DEFAULT_NEGATIVE_TTL_SECONDS
 }
 
 // Per-app version token: every cached payload embeds it in its key, so one
@@ -140,7 +150,9 @@ export async function cachedGetAppOwner(
     // on-prem for the whole TTL.
     return getAppOwnerPostgres(c, appId, drizzleClient, actions)
   }
-  await helper.putJson(request, { owner }, payloadTtlSeconds(c))
+  // Missing apps get the (longer) negative TTL: they never come back on
+  // their own, and app creation bumps the token immediately via trigger.
+  await helper.putJson(request, { owner }, owner === null ? negativeTtlSeconds(c) : payloadTtlSeconds(c))
   return owner
 }
 

@@ -67,6 +67,7 @@ export type Bindings = {
   // /updates colo cache + targeted invalidation (see utils/updates_colo_cache.ts)
   UPDATES_CACHE_MODE?: string
   UPDATES_CACHE_TTL_SECONDS?: string
+  UPDATES_CACHE_NEGATIVE_TTL_SECONDS?: string
   PLUGIN_INVALIDATE_URLS?: string
   CHANNEL_SELF_STORE?: KVNamespace
   PLUGIN_NOTIFICATION_QUEUE?: KVNamespace
