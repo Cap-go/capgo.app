@@ -61,7 +61,7 @@ interface TokenPayload { t: string }
 // domain alias the device (or the invalidation fan-out) used.
 function buildCacheRequest(path: string, params: Record<string, string>): Request {
   const url = new URL(path, CACHE_ORIGIN)
-  for (const key of Object.keys(params).sort())
+  for (const key of Object.keys(params).sort((a, b) => a.localeCompare(b)))
     url.searchParams.set(key, params[key])
   return new Request(url.toString(), { method: 'GET' })
 }
@@ -254,11 +254,18 @@ export async function cachedRequestInfos(options: CachedRequestInfosOptions): Pr
 
   // Rollout: per-device decision + manifest for the selected version, via
   // the shared resolver with the version-keyed manifest cache as loader.
-  const manifestLoader = (versionId: number) => cachedManifestEntries(c, app_id, versionId, drizzleClient)
-  const channelOverride = await resolveRolloutChannelDataPostgres(c, channelOverrideRaw, app_id, device_id, currentVersionName, drizzleClient, shouldFetchManifest, manifestLoader)
+  const rolloutArgs = {
+    appId: app_id,
+    deviceId: device_id,
+    currentVersionName,
+    drizzleClient,
+    includeManifest: shouldFetchManifest,
+    manifestLoader: (versionId: number) => cachedManifestEntries(c, app_id, versionId, drizzleClient),
+  }
+  const channelOverride = await resolveRolloutChannelDataPostgres(c, channelOverrideRaw, rolloutArgs)
   const channelData = channelOverride
     ? channelDataRaw
-    : await resolveRolloutChannelDataPostgres(c, channelDataRaw, app_id, device_id, currentVersionName, drizzleClient, shouldFetchManifest, manifestLoader)
+    : await resolveRolloutChannelDataPostgres(c, channelDataRaw, rolloutArgs)
   return { channelOverride, channelData }
 }
 

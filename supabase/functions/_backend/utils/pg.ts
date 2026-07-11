@@ -894,16 +894,21 @@ export function requestInfosChannelPostgresRollout(
 
 export type ManifestEntriesLoader = (versionId: number) => Promise<{ file_name: string | null, file_hash: string | null, s3_path: string | null }[]>
 
+export interface ResolveRolloutArgs {
+  appId: string
+  deviceId: string
+  currentVersionName: string
+  drizzleClient: ReturnType<typeof getDrizzleClient>
+  includeManifest: boolean
+  manifestLoader?: ManifestEntriesLoader
+}
+
 export async function resolveRolloutChannelDataPostgres(
   c: Context,
   channelData: any,
-  appId: string,
-  deviceId: string,
-  currentVersionName: string,
-  drizzleClient: ReturnType<typeof getDrizzleClient>,
-  includeManifest: boolean,
-  manifestLoader?: ManifestEntriesLoader,
+  args: ResolveRolloutArgs,
 ) {
+  const { appId, deviceId, currentVersionName, drizzleClient, includeManifest, manifestLoader } = args
   if (!channelData)
     return channelData
 
@@ -1036,10 +1041,11 @@ export function requestInfosPostgres(options: RequestInfosPostgresOptions) {
 
   return Promise.all([channelDevice, channel])
     .then(async ([channelOverride, channelData]) => {
-      const resolvedChannelOverride = await resolveRolloutChannelDataPostgres(c, channelOverride, app_id, device_id, currentVersionName, drizzleClient, shouldFetchManifest)
+      const rolloutArgs = { appId: app_id, deviceId: device_id, currentVersionName, drizzleClient, includeManifest: shouldFetchManifest }
+      const resolvedChannelOverride = await resolveRolloutChannelDataPostgres(c, channelOverride, rolloutArgs)
       const resolvedChannelData = resolvedChannelOverride
         ? channelData
-        : await resolveRolloutChannelDataPostgres(c, channelData, app_id, device_id, currentVersionName, drizzleClient, shouldFetchManifest)
+        : await resolveRolloutChannelDataPostgres(c, channelData, rolloutArgs)
       return { channelOverride: resolvedChannelOverride, channelData: resolvedChannelData }
     })
     .catch((e) => {
@@ -1069,10 +1075,9 @@ export async function queryAppOwnerPostgres(
   drizzleClient: ReturnType<typeof getDrizzleClient>,
   actions: PlanAction[] = [],
 ): Promise<AppOwnerPostgresResult | null> {
-  {
-    if (actions.length === 0)
-      return null
-    const orgAlias = alias(schema.orgs, 'orgs')
+  if (actions.length === 0)
+    return null
+  const orgAlias = alias(schema.orgs, 'orgs')
     const planExpression = buildPlanValidationExpression(actions, schema.apps.owner_org)
 
     const appOwner = await drizzleClient
@@ -1119,7 +1124,6 @@ export async function queryAppOwnerPostgres(
     }
 
     return appOwner as AppOwnerPostgresResult
-  }
 }
 
 export async function getAppOwnerPostgres(

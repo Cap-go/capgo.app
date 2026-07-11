@@ -55,8 +55,10 @@ BEGIN
 END;
 $$;
 
--- The notify helper runs privileged fan-out (uses get_apikey()): it must
--- never be RPC-callable by API roles.
+-- Pin ownership so SECURITY DEFINER privileges stay consistent regardless
+-- of the migration role, then lock execution down: the helper runs
+-- privileged fan-out (uses get_apikey()) and must never be RPC-callable.
+ALTER FUNCTION public.notify_updates_cache_invalidation(text[]) OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.notify_updates_cache_invalidation(text[]) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.notify_updates_cache_invalidation(text[]) FROM anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.notify_updates_cache_invalidation(text[]) TO service_role;
@@ -115,6 +117,7 @@ BEGIN
 END;
 $$;
 
+ALTER FUNCTION public.invalidate_updates_cache_stmt() OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.invalidate_updates_cache_stmt() FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.invalidate_updates_cache_stmt() FROM anon, authenticated;
 

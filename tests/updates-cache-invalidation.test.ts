@@ -113,11 +113,22 @@ describe('updates cache invalidation (postgres)', () => {
   })
 
   it.concurrent('notify ignores empty input without queueing anything', async () => {
-    const marker = `empty-${randomUUID()}`
-    await pool.query(`SELECT public.notify_updates_cache_invalidation(ARRAY[]::text[])`)
-    await pool.query(`SELECT public.notify_updates_cache_invalidation(ARRAY[NULL, '']::text[])`)
-    const bodies = await queuedBodiesFor(pool, marker)
-    expect(bodies).toHaveLength(0)
+    // Observe total endpoint queue growth inside one transaction so a wrongly
+    // queued empty payload cannot hide from a marker filter.
+    const client = await pool.connect()
+    try {
+      await client.query('BEGIN')
+      const countSql = `SELECT count(*)::int AS c FROM net.http_request_queue WHERE url LIKE '%/triggers/cache_invalidate'`
+      const { rows: [before] } = await client.query(countSql)
+      await client.query(`SELECT public.notify_updates_cache_invalidation(ARRAY[]::text[])`)
+      await client.query(`SELECT public.notify_updates_cache_invalidation(ARRAY[NULL, '']::text[])`)
+      const { rows: [after] } = await client.query(countSql)
+      expect(after.c).toBe(before.c)
+      await client.query('ROLLBACK')
+    }
+    finally {
+      client.release()
+    }
   })
 
   // The blocker scenario: a bulk cleanup statement touching thousands of

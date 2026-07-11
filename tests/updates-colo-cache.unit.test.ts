@@ -419,8 +419,18 @@ describe('cache invalidate fanout (triggers)', () => {
     expect(response.status).toBe(200)
     // 2 regions x 2 chunks
     expect(fetchMock).toHaveBeenCalledTimes(4)
-    const sent = fetchMock.mock.calls.flatMap(([, init]: any) => JSON.parse(init.body).app_ids)
-    expect(new Set(sent).size).toBe(150)
+    // every region must receive the complete, deduplicated set — a global
+    // union could hide one region getting duplicates and another gaps
+    const perRegion = new Map<string, string[]>()
+    for (const [url, init] of fetchMock.mock.calls as any[]) {
+      const host = new URL(url).host
+      perRegion.set(host, [...(perRegion.get(host) ?? []), ...JSON.parse(init.body).app_ids])
+    }
+    expect(perRegion.size).toBe(2)
+    for (const ids of perRegion.values()) {
+      expect(ids).toHaveLength(150)
+      expect(new Set(ids).size).toBe(150)
+    }
   })
 
   it('fans out one call per regional worker with the shared secret', async () => {
