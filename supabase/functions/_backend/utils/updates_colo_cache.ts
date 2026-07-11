@@ -35,8 +35,10 @@ import {
 } from './pg.ts'
 import { existInEnv, getEnv } from './utils.ts'
 
+const CACHE_ORIGIN = 'https://updates-cache.capgo.internal'
 const TOKEN_CACHE_PATH = '/cache/updates-token'
 const OWNER_CACHE_PATH = '/cache/updates-owner'
+const NEGATIVE_STREAK_PATH = '/cache/updates-missing-since'
 const CHANNEL_CACHE_PATH = '/cache/updates-channel'
 const MANIFEST_CACHE_PATH = '/cache/updates-manifest'
 
@@ -44,12 +46,25 @@ const TOKEN_TTL_SECONDS = 7 * 24 * 3600
 const DEFAULT_PAYLOAD_TTL_SECONDS = 60
 // Unknown apps (Capgo removed, misconfigured open-source installs, plain
 // abuse) hammer /updates forever and by definition never change: cache the
-// negative long. Safe because the apps INSERT trigger bumps the token the
-// moment the app is created; the TTL only matters if that fan-out is lost.
+// negative long — but only once the app has been missing for longer than
+// any replica lag could explain. A brand-new app may not be visible on the
+// regional replica yet; caching that first miss for 10 minutes would give
+// devices a false on-prem answer long after replication catches up.
 const DEFAULT_NEGATIVE_TTL_SECONDS = 600
+const NEGATIVE_ESCALATION_AFTER_MS = 15 * 60 * 1000
+const NEGATIVE_STREAK_TTL_SECONDS = 24 * 3600
 const MANIFEST_TTL_SECONDS = 300
 
 interface TokenPayload { t: string }
+
+// Host-independent cache keys: one entry per colo regardless of which
+// domain alias the device (or the invalidation fan-out) used.
+function buildCacheRequest(path: string, params: Record<string, string>): Request {
+  const url = new URL(path, CACHE_ORIGIN)
+  for (const key of Object.keys(params).sort())
+    url.searchParams.set(key, params[key])
+  return new Request(url.toString(), { method: 'GET' })
+}
 
 const requestTokenMemo = new WeakMap<object, Map<string, Promise<string | null>>>()
 
@@ -82,7 +97,7 @@ function negativeTtlSeconds(c: Context): number {
 // token bump atomically invalidates all payload variants of the app in this
 // colo. The old entries become unreachable and expire by TTL.
 async function loadAppCacheToken(helper: CacheHelper, appId: string): Promise<string | null> {
-  const request = helper.buildRequest(TOKEN_CACHE_PATH, { app_id: appId })
+  const request = buildCacheRequest(TOKEN_CACHE_PATH, { app_id: appId })
   const cached = await helper.matchJson<TokenPayload>(request)
   if (cached?.t)
     return cached.t
@@ -115,7 +130,7 @@ function getAppCacheToken(c: Context, helper: CacheHelper, appId: string): Promi
 // regional plugin worker (fan-out from the cache_invalidate trigger).
 export async function bumpAppCacheToken(c: Context, appId: string): Promise<boolean> {
   const helper = new CacheHelper(c)
-  const request = helper.buildRequest(TOKEN_CACHE_PATH, { app_id: appId })
+  const request = buildCacheRequest(TOKEN_CACHE_PATH, { app_id: appId })
   await helper.putJson(request, { t: crypto.randomUUID() }, TOKEN_TTL_SECONDS)
   return true
 }
@@ -134,7 +149,7 @@ export async function cachedGetAppOwner(
   const token = await getAppCacheToken(c, helper, appId)
   if (!token)
     return getAppOwnerPostgres(c, appId, drizzleClient, actions)
-  const request = helper.buildRequest(OWNER_CACHE_PATH, { app_id: appId, v: token, a: actions.join('-') })
+  const request = buildCacheRequest(OWNER_CACHE_PATH, { app_id: appId, v: token, a: actions.join('-') })
   const cached = await helper.matchJson<OwnerPayload>(request)
   if (cached) {
     cloudlog({ requestId: c.get('requestId'), message: 'updates cache hit (owner)', appId })
@@ -150,10 +165,22 @@ export async function cachedGetAppOwner(
     // on-prem for the whole TTL.
     return getAppOwnerPostgres(c, appId, drizzleClient, actions)
   }
-  // Missing apps get the (longer) negative TTL: they never come back on
-  // their own, and app creation bumps the token immediately via trigger.
-  await helper.putJson(request, { owner }, owner === null ? negativeTtlSeconds(c) : payloadTtlSeconds(c))
+  await helper.putJson(request, { owner }, owner === null ? await negativeOwnerTtl(c, helper, appId) : payloadTtlSeconds(c))
   return owner
+}
+
+// Escalating negative TTL: the first sightings of a missing app use the
+// short payload TTL (a replica may simply not have replicated a brand-new
+// app yet); once the app has been missing beyond any plausible replication
+// lag, escalate to the long negative TTL so dead apps stop costing queries.
+async function negativeOwnerTtl(c: Context, helper: CacheHelper, appId: string): Promise<number> {
+  const streakRequest = buildCacheRequest(NEGATIVE_STREAK_PATH, { app_id: appId })
+  const streak = await helper.matchJson<{ first: number }>(streakRequest)
+  if (!streak) {
+    await helper.putJson(streakRequest, { first: Date.now() }, NEGATIVE_STREAK_TTL_SECONDS)
+    return payloadTtlSeconds(c)
+  }
+  return Date.now() - streak.first > NEGATIVE_ESCALATION_AFTER_MS ? negativeTtlSeconds(c) : payloadTtlSeconds(c)
 }
 
 export interface CachedRequestInfosOptions {
@@ -255,7 +282,7 @@ async function cachedChannelLookup(c: Context, options: CachedChannelLookupOptio
   const token = await getAppCacheToken(c, helper, app_id)
   if (!token)
     return load()
-  const request = helper.buildRequest(CHANNEL_CACHE_PATH, {
+  const request = buildCacheRequest(CHANNEL_CACHE_PATH, {
     app_id,
     v: token,
     platform,
@@ -289,7 +316,7 @@ async function cachedManifestEntries(
   const token = await getAppCacheToken(c, helper, appId)
   if (!token)
     return requestManifestEntriesPostgres(c, versionId, drizzleClient)
-  const request = helper.buildRequest(MANIFEST_CACHE_PATH, { app_id: appId, v: token, version_id: String(versionId) })
+  const request = buildCacheRequest(MANIFEST_CACHE_PATH, { app_id: appId, v: token, version_id: String(versionId) })
   const cached = await helper.matchJson<{ entries: { file_name: string | null, file_hash: string | null, s3_path: string | null }[] }>(request)
   if (cached)
     return cached.entries

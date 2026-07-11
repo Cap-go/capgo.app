@@ -1,10 +1,15 @@
 -- Targeted invalidation for the /updates colo cache
 -- (see supabase/functions/_backend/utils/updates_colo_cache.ts).
 --
--- Whenever a row that feeds the update hot path changes, notify the
--- triggers/cache_invalidate function (via pg_net, async, ~ms overhead per
--- write) which fans the per-app token bump out to every regional plugin
--- worker. The cache TTL remains the backstop if a call is lost.
+-- Whenever rows that feed the update hot path change, notify the
+-- triggers/cache_invalidate function (via pg_net, async) which fans the
+-- per-app token bump out to every regional plugin worker. The cache TTL
+-- remains the backstop if a call is lost.
+--
+-- All triggers are STATEMENT-level with transition tables: bulk writes
+-- (daily channel_devices cleanup, bundle uploads inserting hundreds of
+-- manifest rows, org-wide backfills) produce ONE aggregated, deduplicated
+-- notification per statement instead of one per row.
 
 -- Notify helper: dedupes, caps and chunks the app list so the payload is
 -- always bounded (the fan-out endpoint enforces 100 ids per request; an
@@ -51,13 +56,18 @@ END;
 $$;
 
 -- The notify helper runs privileged fan-out (uses get_apikey()): it must
--- never be RPC-callable by API roles. Trigger functions are locked down the
--- same way for defense in depth.
+-- never be RPC-callable by API roles.
 REVOKE ALL ON FUNCTION public.notify_updates_cache_invalidation(text[]) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.notify_updates_cache_invalidation(text[]) FROM anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.notify_updates_cache_invalidation(text[]) TO service_role;
 
-CREATE OR REPLACE FUNCTION public.invalidate_updates_cache()
+-- Drop the previous row-level implementation (and its triggers) if present.
+DROP FUNCTION IF EXISTS public.invalidate_updates_cache() CASCADE;
+DROP FUNCTION IF EXISTS public.invalidate_updates_cache_manifest() CASCADE;
+
+-- One statement-level trigger function for every replicated-read table.
+-- Transition tables are exposed as new_rows / old_rows depending on TG_OP.
+CREATE OR REPLACE FUNCTION public.invalidate_updates_cache_stmt()
 RETURNS trigger
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -66,52 +76,38 @@ AS $$
 DECLARE
   app_ids text[];
 BEGIN
-  IF TG_TABLE_NAME IN ('channels', 'channel_devices', 'app_versions', 'apps') THEN
+  IF TG_TABLE_NAME IN ('channels', 'channel_devices', 'apps', 'app_versions') THEN
     IF TG_OP = 'DELETE' THEN
-      app_ids := ARRAY[OLD.app_id::text];
+      SELECT array_agg(DISTINCT r.app_id::text) INTO app_ids FROM old_rows r;
     ELSE
-      app_ids := ARRAY[NEW.app_id::text];
+      SELECT array_agg(DISTINCT r.app_id::text) INTO app_ids FROM new_rows r;
     END IF;
   ELSIF TG_TABLE_NAME = 'orgs' THEN
-    SELECT array_agg(a.app_id::text) INTO app_ids
-    FROM public.apps a
-    WHERE a.owner_org = NEW.id;
+    SELECT array_agg(DISTINCT a.app_id::text) INTO app_ids
+    FROM new_rows o
+    JOIN public.apps a ON a.owner_org = o.id;
   ELSIF TG_TABLE_NAME = 'stripe_info' THEN
-    SELECT array_agg(a.app_id::text) INTO app_ids
-    FROM public.apps a
-    JOIN public.orgs o ON o.id = a.owner_org
-    WHERE o.customer_id = CASE WHEN TG_OP = 'DELETE' THEN OLD.customer_id ELSE NEW.customer_id END;
-  END IF;
-
-  PERFORM public.notify_updates_cache_invalidation(app_ids);
-
-  IF TG_OP = 'DELETE' THEN
-    RETURN OLD;
-  END IF;
-  RETURN NEW;
-END;
-$$;
-
--- Statement-level trigger for manifest: one notification per statement (a
--- bundle upload inserts hundreds of manifest rows in one INSERT), resolving
--- affected apps through their bundles.
-CREATE OR REPLACE FUNCTION public.invalidate_updates_cache_manifest()
-RETURNS trigger
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = ''
-AS $$
-DECLARE
-  app_ids text[];
-BEGIN
-  IF TG_OP = 'DELETE' THEN
-    SELECT array_agg(DISTINCT av.app_id::text) INTO app_ids
-    FROM old_rows m
-    JOIN public.app_versions av ON av.id = m.app_version_id;
-  ELSE
-    SELECT array_agg(DISTINCT av.app_id::text) INTO app_ids
-    FROM new_rows m
-    JOIN public.app_versions av ON av.id = m.app_version_id;
+    IF TG_OP = 'DELETE' THEN
+      SELECT array_agg(DISTINCT a.app_id::text) INTO app_ids
+      FROM old_rows s
+      JOIN public.orgs o ON o.customer_id = s.customer_id
+      JOIN public.apps a ON a.owner_org = o.id;
+    ELSE
+      SELECT array_agg(DISTINCT a.app_id::text) INTO app_ids
+      FROM new_rows s
+      JOIN public.orgs o ON o.customer_id = s.customer_id
+      JOIN public.apps a ON a.owner_org = o.id;
+    END IF;
+  ELSIF TG_TABLE_NAME = 'manifest' THEN
+    IF TG_OP = 'DELETE' THEN
+      SELECT array_agg(DISTINCT av.app_id::text) INTO app_ids
+      FROM old_rows m
+      JOIN public.app_versions av ON av.id = m.app_version_id;
+    ELSE
+      SELECT array_agg(DISTINCT av.app_id::text) INTO app_ids
+      FROM new_rows m
+      JOIN public.app_versions av ON av.id = m.app_version_id;
+    END IF;
   END IF;
 
   PERFORM public.notify_updates_cache_invalidation(app_ids);
@@ -119,58 +115,114 @@ BEGIN
 END;
 $$;
 
--- channels: any change moves versions/flags devices resolve against.
-CREATE OR REPLACE TRIGGER invalidate_updates_cache_channels
-AFTER INSERT OR UPDATE OR DELETE ON public.channels
-FOR EACH ROW EXECUTE FUNCTION public.invalidate_updates_cache();
+REVOKE ALL ON FUNCTION public.invalidate_updates_cache_stmt() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.invalidate_updates_cache_stmt() FROM anon, authenticated;
 
--- channel_devices: flips or edits per-device overrides; must react fast so
--- an app gaining its FIRST override switches off the cached no-override
--- fast path immediately (apps.channel_device_count is inside the cached
--- payload).
-CREATE OR REPLACE TRIGGER invalidate_updates_cache_channel_devices
-AFTER INSERT OR UPDATE OR DELETE ON public.channel_devices
-FOR EACH ROW EXECUTE FUNCTION public.invalidate_updates_cache();
+-- channels: any change moves versions/flags devices resolve against.
+DROP TRIGGER IF EXISTS invalidate_updates_cache_channels_ins ON public.channels;
+CREATE TRIGGER invalidate_updates_cache_channels_ins
+AFTER INSERT ON public.channels
+REFERENCING NEW TABLE AS new_rows
+FOR EACH STATEMENT EXECUTE FUNCTION public.invalidate_updates_cache_stmt();
+
+DROP TRIGGER IF EXISTS invalidate_updates_cache_channels_upd ON public.channels;
+CREATE TRIGGER invalidate_updates_cache_channels_upd
+AFTER UPDATE ON public.channels
+REFERENCING NEW TABLE AS new_rows
+FOR EACH STATEMENT EXECUTE FUNCTION public.invalidate_updates_cache_stmt();
+
+DROP TRIGGER IF EXISTS invalidate_updates_cache_channels_del ON public.channels;
+CREATE TRIGGER invalidate_updates_cache_channels_del
+AFTER DELETE ON public.channels
+REFERENCING OLD TABLE AS old_rows
+FOR EACH STATEMENT EXECUTE FUNCTION public.invalidate_updates_cache_stmt();
+
+-- channel_devices: per-device overrides; bulk daily cleanups delete
+-- thousands of rows in one statement and must cost one notification.
+DROP TRIGGER IF EXISTS invalidate_updates_cache_channel_devices_ins ON public.channel_devices;
+CREATE TRIGGER invalidate_updates_cache_channel_devices_ins
+AFTER INSERT ON public.channel_devices
+REFERENCING NEW TABLE AS new_rows
+FOR EACH STATEMENT EXECUTE FUNCTION public.invalidate_updates_cache_stmt();
+
+DROP TRIGGER IF EXISTS invalidate_updates_cache_channel_devices_upd ON public.channel_devices;
+CREATE TRIGGER invalidate_updates_cache_channel_devices_upd
+AFTER UPDATE ON public.channel_devices
+REFERENCING NEW TABLE AS new_rows
+FOR EACH STATEMENT EXECUTE FUNCTION public.invalidate_updates_cache_stmt();
+
+DROP TRIGGER IF EXISTS invalidate_updates_cache_channel_devices_del ON public.channel_devices;
+CREATE TRIGGER invalidate_updates_cache_channel_devices_del
+AFTER DELETE ON public.channel_devices
+REFERENCING OLD TABLE AS old_rows
+FOR EACH STATEMENT EXECUTE FUNCTION public.invalidate_updates_cache_stmt();
 
 -- apps: counters, plan/provider flags, metadata exposure. INSERT clears the
 -- negative (unknown-app) cache entry the moment an app is created.
-CREATE OR REPLACE TRIGGER invalidate_updates_cache_apps
-AFTER INSERT OR UPDATE OR DELETE ON public.apps
-FOR EACH ROW EXECUTE FUNCTION public.invalidate_updates_cache();
+DROP TRIGGER IF EXISTS invalidate_updates_cache_apps_ins ON public.apps;
+CREATE TRIGGER invalidate_updates_cache_apps_ins
+AFTER INSERT ON public.apps
+REFERENCING NEW TABLE AS new_rows
+FOR EACH STATEMENT EXECUTE FUNCTION public.invalidate_updates_cache_stmt();
+
+DROP TRIGGER IF EXISTS invalidate_updates_cache_apps_upd ON public.apps;
+CREATE TRIGGER invalidate_updates_cache_apps_upd
+AFTER UPDATE ON public.apps
+REFERENCING NEW TABLE AS new_rows
+FOR EACH STATEMENT EXECUTE FUNCTION public.invalidate_updates_cache_stmt();
+
+DROP TRIGGER IF EXISTS invalidate_updates_cache_apps_del ON public.apps;
+CREATE TRIGGER invalidate_updates_cache_apps_del
+AFTER DELETE ON public.apps
+REFERENCING OLD TABLE AS old_rows
+FOR EACH STATEMENT EXECUTE FUNCTION public.invalidate_updates_cache_stmt();
 
 -- app_versions: UPDATE only (r2_path/checksum/deleted change after a channel
 -- may already point at the version; freshly inserted rows are not yet
 -- referenced by any channel).
-CREATE OR REPLACE TRIGGER invalidate_updates_cache_app_versions
+DROP TRIGGER IF EXISTS invalidate_updates_cache_app_versions_upd ON public.app_versions;
+CREATE TRIGGER invalidate_updates_cache_app_versions_upd
 AFTER UPDATE ON public.app_versions
-FOR EACH ROW WHEN (OLD IS DISTINCT FROM NEW)
-EXECUTE FUNCTION public.invalidate_updates_cache();
+REFERENCING NEW TABLE AS new_rows
+FOR EACH STATEMENT EXECUTE FUNCTION public.invalidate_updates_cache_stmt();
 
 -- manifest: cached inside channel payloads and per-version entries; bundle
--- uploads insert many rows at once, so notify once per statement.
-CREATE OR REPLACE TRIGGER invalidate_updates_cache_manifest_insert
+-- uploads insert many rows at once.
+DROP TRIGGER IF EXISTS invalidate_updates_cache_manifest_insert ON public.manifest;
+CREATE TRIGGER invalidate_updates_cache_manifest_insert
 AFTER INSERT ON public.manifest
 REFERENCING NEW TABLE AS new_rows
-FOR EACH STATEMENT EXECUTE FUNCTION public.invalidate_updates_cache_manifest();
+FOR EACH STATEMENT EXECUTE FUNCTION public.invalidate_updates_cache_stmt();
 
-CREATE OR REPLACE TRIGGER invalidate_updates_cache_manifest_delete
+DROP TRIGGER IF EXISTS invalidate_updates_cache_manifest_delete ON public.manifest;
+CREATE TRIGGER invalidate_updates_cache_manifest_delete
 AFTER DELETE ON public.manifest
 REFERENCING OLD TABLE AS old_rows
-FOR EACH STATEMENT EXECUTE FUNCTION public.invalidate_updates_cache_manifest();
+FOR EACH STATEMENT EXECUTE FUNCTION public.invalidate_updates_cache_stmt();
 
 -- orgs: has_usage_credits / customer_id feed plan validation.
-CREATE OR REPLACE TRIGGER invalidate_updates_cache_orgs
+DROP TRIGGER IF EXISTS invalidate_updates_cache_orgs_upd ON public.orgs;
+CREATE TRIGGER invalidate_updates_cache_orgs_upd
 AFTER UPDATE ON public.orgs
-FOR EACH ROW WHEN (OLD IS DISTINCT FROM NEW)
-EXECUTE FUNCTION public.invalidate_updates_cache();
+REFERENCING NEW TABLE AS new_rows
+FOR EACH STATEMENT EXECUTE FUNCTION public.invalidate_updates_cache_stmt();
 
 -- stripe_info: status / trial / exceeded flags feed plan validation; DELETE
 -- included (orphaned-row cleanup must not leave plan_valid cached wrong).
-CREATE OR REPLACE TRIGGER invalidate_updates_cache_stripe_info
-AFTER INSERT OR UPDATE OR DELETE ON public.stripe_info
-FOR EACH ROW EXECUTE FUNCTION public.invalidate_updates_cache();
+DROP TRIGGER IF EXISTS invalidate_updates_cache_stripe_info_ins ON public.stripe_info;
+CREATE TRIGGER invalidate_updates_cache_stripe_info_ins
+AFTER INSERT ON public.stripe_info
+REFERENCING NEW TABLE AS new_rows
+FOR EACH STATEMENT EXECUTE FUNCTION public.invalidate_updates_cache_stmt();
 
-REVOKE ALL ON FUNCTION public.invalidate_updates_cache() FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.invalidate_updates_cache() FROM anon, authenticated;
-REVOKE ALL ON FUNCTION public.invalidate_updates_cache_manifest() FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.invalidate_updates_cache_manifest() FROM anon, authenticated;
+DROP TRIGGER IF EXISTS invalidate_updates_cache_stripe_info_upd ON public.stripe_info;
+CREATE TRIGGER invalidate_updates_cache_stripe_info_upd
+AFTER UPDATE ON public.stripe_info
+REFERENCING NEW TABLE AS new_rows
+FOR EACH STATEMENT EXECUTE FUNCTION public.invalidate_updates_cache_stmt();
+
+DROP TRIGGER IF EXISTS invalidate_updates_cache_stripe_info_del ON public.stripe_info;
+CREATE TRIGGER invalidate_updates_cache_stripe_info_del
+AFTER DELETE ON public.stripe_info
+REFERENCING OLD TABLE AS old_rows
+FOR EACH STATEMENT EXECUTE FUNCTION public.invalidate_updates_cache_stmt();

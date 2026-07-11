@@ -357,10 +357,12 @@ describe('cache invalidate route (plugin worker)', () => {
     const app = buildApp()
     const response = await app.request('/cache_invalidate', {
       method: 'POST',
-      headers: { 'x-cache-invalidate-secret': 's3cret', 'Content-Type': 'application/json' },
+      headers: { 'apisecret': 's3cret', 'Content-Type': 'application/json' },
       body: JSON.stringify({ app_ids: Array.from({ length: 101 }, (_, i) => `com.app.${i}`) }),
     })
     expect(response.status).toBe(400)
+    // must fail on the size guard, not on auth
+    expect(await response.text()).toContain('app_ids is limited to')
     expect(cache.put).not.toHaveBeenCalled()
   })
 
