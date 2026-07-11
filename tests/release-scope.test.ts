@@ -52,12 +52,12 @@ describe('release scope matching', () => {
     }
   })
 
-  it.concurrent('treats shared package inputs as affecting all components', () => {
-    const files = ['package.json', 'bun.lock', 'tsconfig.json']
+  it.concurrent('treats root package and test inputs as Capgo-only', () => {
+    const files = ['package.json', 'bun.lock', 'tsconfig.json', 'vitest.config.ts']
 
     expect(matchesComponent('capgo', files)).toBe(true)
-    expect(matchesComponent('cli', files)).toBe(true)
-    expect(matchesComponent('notifications', files)).toBe(true)
+    expect(matchesComponent('cli', files)).toBe(false)
+    expect(matchesComponent('notifications', files)).toBe(false)
   })
 
   it.concurrent('treats read-replica schema sync scripts as Capgo releases', () => {
@@ -104,10 +104,14 @@ describe('release scope matching', () => {
       ['.github/workflows/publish_notifications.yml', 'notifications-'],
     ] as const) {
       const workflow = readFileSync(workflowPath, 'utf8')
+      const changelogUrl = 'compare/$' + '{{ steps.changelog_base.outputs.from_tag }}...$' + '{{ github.ref_name }}'
+      const legacyChangelogUrl = 'compare/$' + '{{ steps.changelog.outputs.from_tag }}...$' + '{{ steps.changelog.outputs.to_tag }}'
 
       expect(workflow).toContain('gh release list')
       expect(workflow).toContain(`--arg prefix "${prefix}"`)
       expect(workflow).toContain('FROM_TAG: $' + '{{ steps.changelog_base.outputs.from_tag }}')
+      expect(workflow).toContain(changelogUrl)
+      expect(workflow).not.toContain(legacyChangelogUrl)
     }
   })
 
