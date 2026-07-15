@@ -78,4 +78,3 @@ export const CapgoUpdater: CapgoRNUpdater = {
 
 export * from './definitions'
 export { PLUGIN_VERSION }
-export default CapgoUpdater

@@ -44,7 +44,7 @@ Add `CapgoAppId`, `CapgoUpdateUrl`, and `CapgoStatsUrl` to `Info.plist`.
 ## JS usage
 
 ```ts
-import CapgoUpdater from '@capgo/react-native-updater'
+import { CapgoUpdater } from '@capgo/react-native-updater'
 
 await CapgoUpdater.notifyAppReady()
 
