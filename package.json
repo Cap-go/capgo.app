@@ -60,6 +60,8 @@
     "cli:typecheck": "bun run --cwd cli typecheck",
     "cli:test": "bun run --cwd cli test",
     "cli:check": "bun run cli:lint && bun run cli:typecheck && bun run cli:build && bun run cli:test",
+    "rn-cli:test": "bun run --cwd packages/rn-cli test",
+    "rn-updater:test": "bun run --cwd packages/react-native-updater test",
     "cli:test:capgo": "bun run test:cli",
     "api:dev": "wrangler dev -c cloudflare_workers/api/wrangler.jsonc --env=dev --env-file=internal/cloudflare/.env.local",
     "plugin:dev": "wrangler dev -c cloudflare_workers/plugin/wrangler.jsonc --env=dev --env-file=internal/cloudflare/.env.local",

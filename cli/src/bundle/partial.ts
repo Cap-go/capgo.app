@@ -15,7 +15,7 @@ import * as tus from 'tus-js-client'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { encryptChecksum, encryptChecksumV3, encryptSource } from '../api/crypto'
 import { CliUserError } from '../shared/cli-user-error'
-import { appAddHintMessage, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, deltaManifestTooLargeMessage, findRoot, generateManifest, getContentType, getInstalledVersion, getLocalConfig, isAppNotFoundError, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, sendEvent, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
+import { appAddHintMessage, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, deltaManifestTooLargeMessage, findRoot, generateManifest, getCapgoUpdaterPackageVersion, getContentType, getInstalledVersion, getLocalConfig, isAppNotFoundError, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, sendEvent, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
 import { getUploadReporter } from './reporter'
 
 const log = {
@@ -47,16 +47,23 @@ const BROTLI_MIN_SIZE = 8192
 // Check if the updater version supports .br extension
 async function getUpdaterVersion(uploadOptions: OptionsUpload): Promise<{ version: string | null, supportsBrotliV2: boolean }> {
   const root = findRoot(cwd())
-  const updaterVersion = await getInstalledVersion('@capgo/capacitor-updater', root, uploadOptions.packageJson)
+  const updater = await getCapgoUpdaterPackageVersion(root, uploadOptions.packageJson)
+  if (!updater)
+    return { version: null, supportsBrotliV2: false }
+
+  // React Native updater ships with Capgo file-level delta + brotli support.
+  if (updater.kind === 'react-native')
+    return { version: updater.version, supportsBrotliV2: true }
+
   let coerced
   try {
-    coerced = updaterVersion ? parse(updaterVersion) : undefined
+    coerced = parse(updater.version)
   }
   catch {
     coerced = undefined
   }
 
-  if (!updaterVersion || !coerced)
+  if (!coerced)
     return { version: null, supportsBrotliV2: false }
 
   // Brotli is supported in updater versions >= 5.10.0 (v5), >= 6.25.0 (v6) or >= 7.0.35 (v7)
@@ -215,7 +222,7 @@ export async function uploadPartial(
 
   // Check for incompatible options with older updater versions
   if (!supportsBrotliV2) {
-    throw new CliUserError(`Your project is using an older version of @capgo/capacitor-updater (${version || 'unknown'}). To use Delta updates, please upgrade to version ${BROTLI_MIN_UPDATER_VERSION_V5} (v5), ${BROTLI_MIN_UPDATER_VERSION_V6} (v6) or ${BROTLI_MIN_UPDATER_VERSION_V7} (v7) or higher.`)
+    throw new CliUserError(`Your project is using an older Capgo updater package (${version || 'unknown'}). To use Delta updates, please upgrade to version ${BROTLI_MIN_UPDATER_VERSION_V5} (v5), ${BROTLI_MIN_UPDATER_VERSION_V6} (v6) or ${BROTLI_MIN_UPDATER_VERSION_V7} (v7) or higher.`)
   }
   else {
     // Only newer versions can use Brotli with .br extension

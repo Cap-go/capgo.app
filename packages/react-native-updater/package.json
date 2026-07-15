@@ -1,0 +1,71 @@
+{
+  "name": "@capgo/react-native-updater",
+  "version": "0.1.0",
+  "description": "Capgo live updates for React Native using file-level delta manifests",
+  "license": "MPL-2.0",
+  "main": "lib/commonjs/index.js",
+  "module": "lib/module/index.js",
+  "types": "lib/typescript/index.d.ts",
+  "react-native": "src/index.ts",
+  "source": "src/index.ts",
+  "files": [
+    "src",
+    "lib",
+    "android",
+    "ios",
+    "CapgoReactNativeUpdater.podspec",
+    "react-native.config.js",
+    "!android/build",
+    "!ios/build"
+  ],
+  "scripts": {
+    "build": "bob build",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test src/__tests__",
+    "prepublishOnly": "bun run typecheck && bun run build"
+  },
+  "peerDependencies": {
+    "react": "*",
+    "react-native": "*"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.0",
+    "react": "18.2.0",
+    "react-native": "0.73.6",
+    "react-native-builder-bob": "^0.30.0",
+    "typescript": "^5.9.3"
+  },
+  "react-native-builder-bob": {
+    "source": "src",
+    "output": "lib",
+    "targets": [
+      "commonjs",
+      "module",
+      [
+        "typescript",
+        {
+          "project": "tsconfig.build.json"
+        }
+      ]
+    ]
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "keywords": [
+    "react-native",
+    "capgo",
+    "ota",
+    "live-update",
+    "delta",
+    "ios",
+    "android"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Cap-go/capgo.git",
+    "directory": "packages/react-native-updater"
+  },
+  "homepage": "https://capgo.app/docs"
+}

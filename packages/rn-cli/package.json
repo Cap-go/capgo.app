@@ -1,0 +1,52 @@
+{
+  "name": "@capgo/rn-cli",
+  "version": "0.1.0",
+  "description": "Capgo CLI for React Native live updates (Metro export + file-level delta upload)",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "capgo-rn": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "bun build ./src/index.ts --outdir dist --target node --format esm && bun run build:types",
+    "build:types": "tsc -p tsconfig.json --emitDeclarationOnly",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "bun test test/",
+    "prepublishOnly": "bun run typecheck && bun run build && bun run test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@clack/prompts": "^0.11.0",
+    "commander": "^14.0.0",
+    "picocolors": "^1.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.9.3"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Cap-go/capgo.git",
+    "directory": "packages/rn-cli"
+  },
+  "keywords": [
+    "capgo",
+    "react-native",
+    "ota",
+    "cli",
+    "delta",
+    "metro"
+  ]
+}
