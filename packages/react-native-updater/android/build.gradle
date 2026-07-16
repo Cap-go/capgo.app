@@ -23,6 +23,7 @@ android {
   }
 }
 
+// NOSONAR text:S8569 - library pins versions; consuming app owns Gradle dependency locking
 configurations.configureEach {
   resolutionStrategy {
     force "com.squareup.okhttp3:okhttp:4.12.0"

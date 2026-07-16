@@ -17,23 +17,21 @@ enum ZipArchive {
       if sig != 0x04034b50 { break }
       let method = Int(readU16(data, offset + 8))
       let flags = Int(readU16(data, offset + 6))
-      var compSize = Int(readU32(data, offset + 18))
-      var uncompSize = Int(readU32(data, offset + 22))
+      let compSize = Int(readU32(data, offset + 18))
+      let uncompSize = Int(readU32(data, offset + 22))
       let nameLen = Int(readU16(data, offset + 26))
       let extraLen = Int(readU16(data, offset + 28))
       let nameStart = offset + 30
       let nameData = data.subdata(in: nameStart..<(nameStart + nameLen))
       let name = String(data: nameData, encoding: .utf8) ?? "file"
-      var dataStart = nameStart + nameLen + extraLen
+      let dataStart = nameStart + nameLen + extraLen
 
-      // Data descriptor (bit 3) — sizes after payload; rare for Capgo zips
       if flags & 0x8 != 0 && compSize == 0 {
-        // Cannot reliably stream without end-of-central-directory; fail clearly
         throw NSError(domain: "capgo.zip", code: 3, userInfo: [NSLocalizedDescriptionKey: "Zip data descriptors not supported"])
       }
 
       let payload = data.subdata(in: dataStart..<(dataStart + compSize))
-      let outURL = destination.appendingPathComponent(name)
+      let outURL = try safeURL(destination: destination, name: name)
       if name.hasSuffix("/") {
         try FileManager.default.createDirectory(at: outURL, withIntermediateDirectories: true)
       } else {
@@ -49,8 +47,17 @@ enum ZipArchive {
         try outData.write(to: outURL)
       }
       offset = dataStart + compSize
-      _ = uncompSize
     }
+  }
+
+  private static func safeURL(destination: URL, name: String) throws -> URL {
+    let dest = destination.standardizedFileURL
+    let out = dest.appendingPathComponent(name).standardizedFileURL
+    let destPath = dest.path.hasSuffix("/") ? dest.path : dest.path + "/"
+    guard out.path == dest.path || out.path.hasPrefix(destPath) else {
+      throw NSError(domain: "capgo.zip", code: 4, userInfo: [NSLocalizedDescriptionKey: "Path escapes bundle directory: \(name)"])
+    }
+    return out
   }
 
   private static func readU16(_ data: Data, _ o: Int) -> UInt16 {
@@ -72,10 +79,6 @@ enum ZipArchive {
     }
     defer { compression_stream_destroy(&stream) }
 
-    // ZIP uses raw deflate; Compression ZLIB expects zlib wrapper.
-    // Prepend synthetic zlib header+adler is hard; use COMPRESSION_ZLIB with windowBits workaround:
-    // Apple Compression does not expose raw deflate directly in older SDKs.
-    // Prefer wrapping: 0x78 0x01 + data + adler32 — skip, use larger buffer with ZLIB which often works for zip-deflate via:
     let dstCapacity = max(expectedSize, data.count * 8, 64 * 1024)
     var output = Data(count: dstCapacity)
     let decodedCount: Int = data.withUnsafeBytes { srcBuffer in
@@ -97,7 +100,6 @@ enum ZipArchive {
       output.count = decodedCount
       return output
     }
-    // Fallback: try decode_buffer with COMPRESSION_ZLIB
     let dst = UnsafeMutablePointer<UInt8>.allocate(capacity: dstCapacity)
     defer { dst.deallocate() }
     let n = data.withUnsafeBytes { src -> Int in

@@ -254,6 +254,10 @@ public class CapgoUpdater: RCTEventEmitter {
         }
         let url = options["url"] as? String ?? ""
         let checksum = options["checksum"] as? String ?? ""
+        let sessionKey = options["sessionKey"] as? String ?? ""
+        if !sessionKey.isEmpty {
+          throw NSError(domain: "capgo", code: 8, userInfo: [NSLocalizedDescriptionKey: "Encrypted Capgo updates are not supported yet in @capgo/react-native-updater"])
+        }
         let manifest = options["manifest"] as? [[String: Any]]
         let id = UUID().uuidString
         let dest = CapgoUpdater.bundleDir(id: id)
@@ -316,7 +320,7 @@ public class CapgoUpdater: RCTEventEmitter {
       }
       let isBrotli = fileName.hasSuffix(".br")
       let targetName = isBrotli ? String(fileName.dropLast(3)) : fileName
-      let target = dest.appendingPathComponent(targetName)
+      let target = try Self.safeFileURL(dest: dest, relative: targetName)
       try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
 
       let tmp = dest.appendingPathComponent("\(targetName).download")
@@ -426,6 +430,16 @@ public class CapgoUpdater: RCTEventEmitter {
       ?? (Bundle.main.object(forInfoDictionaryKey: "CapgoDefaultChannel") as? String)
       ?? ""
     resolve(["channel": channel, "status": "ok"])
+  }
+
+  private static func safeFileURL(dest: URL, relative: String) throws -> URL {
+    let base = dest.standardizedFileURL
+    let target = base.appendingPathComponent(relative).standardizedFileURL
+    let prefix = base.path.hasSuffix("/") ? base.path : base.path + "/"
+    guard target.path == base.path || target.path.hasPrefix(prefix) else {
+      throw NSError(domain: "capgo", code: 9, userInfo: [NSLocalizedDescriptionKey: "Path escapes bundle directory: \(relative)"])
+    }
+    return target
   }
 
   private func bundleMap(id: String) -> [String: Any] {

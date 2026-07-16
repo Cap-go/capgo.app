@@ -14,6 +14,9 @@ import java.util.zip.ZipInputStream
 /**
  * Downloads Capgo bundles via full zip or file-level delta manifest
  * (same contract as @capgo/capacitor-updater).
+ *
+ * Encrypted Capgo bundles (non-empty sessionKey) are rejected in v0.1 —
+ * ship unencrypted delta uploads, or wait for crypto parity with Capacitor.
  */
 object CapgoDownloader {
   fun interface Progress {
@@ -34,26 +37,31 @@ object CapgoDownloader {
     request: DownloadRequest,
     progress: Progress?,
   ): BundleRecord {
+    if (!request.sessionKey.isNullOrBlank()) {
+      error("Encrypted Capgo updates are not supported yet in @capgo/react-native-updater. Upload without encryption or omit session_key.")
+    }
+
     val dest = BundleStore.bundleDir(context, request.id)
     dest.listFiles()?.forEach { it.deleteRecursively() }
     dest.mkdirs()
+    val canonicalDest = dest.canonicalFile
 
     val manifest = request.manifest
     when {
       manifest != null && manifest.length() > 0 -> {
         CapgoHttp.sendStats(context, "download_manifest_start", request.version)
-        downloadManifest(context, dest, request.version, manifest, progress)
+        downloadManifest(context, canonicalDest, request.version, manifest, progress)
         CapgoHttp.sendStats(context, "download_manifest_complete", request.version)
       }
       request.url.isNotEmpty() && !request.url.contains("404.capgo.app") -> {
         CapgoHttp.sendStats(context, "download_zip_start", request.version)
-        downloadZip(dest, request.url, progress)
+        downloadZip(canonicalDest, request.url, progress)
         CapgoHttp.sendStats(context, "download_zip_complete", request.version)
       }
       else -> error("No manifest or zip url provided")
     }
 
-    ensureBundleFile(dest)
+    ensureBundleFile(canonicalDest)
     CapgoHttp.sendStats(context, "download_complete", request.version)
     progress?.onPercent(100)
 
@@ -66,6 +74,15 @@ object CapgoDownloader {
     )
     BundleStore.upsert(context, record)
     return record
+  }
+
+  private fun safeTarget(dest: File, relativePath: String): File {
+    val target = File(dest, relativePath).canonicalFile
+    val prefix = dest.canonicalPath + File.separator
+    require(target.path == dest.canonicalPath || target.path.startsWith(prefix)) {
+      "Path escapes bundle directory: $relativePath"
+    }
+    return target
   }
 
   private fun ensureBundleFile(dest: File) {
@@ -108,7 +125,7 @@ object CapgoDownloader {
 
     val isBrotli = fileName.endsWith(".br")
     val targetName = if (isBrotli) fileName.removeSuffix(".br") else fileName
-    val target = File(dest, targetName)
+    val target = safeTarget(dest, targetName)
     target.parentFile?.mkdirs()
 
     val reused = findCachedByHash(context, fileHash, dest)
@@ -136,19 +153,15 @@ object CapgoDownloader {
         decompressBrotli(tmp, target)
       } catch (e: Exception) {
         CapgoHttp.sendStats(context, "download_manifest_brotli_fail", "$version:$fileName")
+        tmp.delete()
         throw e
-      } finally {
-        if (!tmp.delete() && tmp.exists()) {
-          error("Failed to delete temp brotli file ${tmp.absolutePath}")
-        }
       }
+      tmp.delete()
       return
     }
     if (!tmp.renameTo(target)) {
       tmp.copyTo(target, overwrite = true)
-      if (!tmp.delete() && tmp.exists()) {
-        error("Failed to delete temp download ${tmp.absolutePath}")
-      }
+      tmp.delete()
     }
   }
 
@@ -190,9 +203,7 @@ object CapgoDownloader {
     httpDownloadToFile(url, zipFile)
     progress?.onPercent(70)
     unzip(zipFile, dest)
-    if (!zipFile.delete() && zipFile.exists()) {
-      error("Failed to delete zip ${zipFile.absolutePath}")
-    }
+    zipFile.delete()
   }
 
   private fun httpDownloadToFile(url: String, dest: File) {
@@ -217,10 +228,11 @@ object CapgoDownloader {
   }
 
   private fun unzip(zipFile: File, dest: File) {
+    val canonicalDest = dest.canonicalFile
     ZipInputStream(BufferedInputStream(FileInputStream(zipFile))).use { zis ->
       var entry = zis.nextEntry
       while (entry != null) {
-        val outFile = File(dest, entry.name)
+        val outFile = safeTarget(canonicalDest, entry.name)
         if (entry.isDirectory) {
           outFile.mkdirs()
         } else {
