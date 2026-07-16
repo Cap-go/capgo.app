@@ -56,7 +56,10 @@ program
     await runInit(opts)
   })
 
-program.parseAsync(process.argv).catch((error) => {
+try {
+  await program.parseAsync(process.argv)
+}
+catch (error) {
   console.error(error instanceof Error ? error.message : error)
   process.exit(1)
-})
+}

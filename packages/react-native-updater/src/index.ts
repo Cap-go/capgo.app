@@ -1,11 +1,9 @@
 import { NativeEventEmitter, NativeModules, Platform } from 'react-native'
 import type {
-  BundleInfo,
   CapgoRNUpdater,
   CapgoRNUpdaterEvent,
   DownloadEvent,
   DownloadOptions,
-  LatestVersion,
 } from './definitions'
 import { PLUGIN_VERSION } from './version'
 

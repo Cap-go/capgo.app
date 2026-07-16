@@ -20,58 +20,62 @@ object CapgoDownloader {
     fun onPercent(percent: Int)
   }
 
+  data class DownloadRequest(
+    val id: String,
+    val version: String,
+    val url: String,
+    val sessionKey: String?,
+    val checksum: String?,
+    val manifest: JSONArray?,
+  )
+
   fun download(
     context: Context,
-    id: String,
-    version: String,
-    url: String,
-    sessionKey: String?,
-    checksum: String?,
-    manifest: JSONArray?,
+    request: DownloadRequest,
     progress: Progress?,
   ): BundleRecord {
-    val dest = BundleStore.bundleDir(context, id)
+    val dest = BundleStore.bundleDir(context, request.id)
     dest.listFiles()?.forEach { it.deleteRecursively() }
     dest.mkdirs()
 
-    if (manifest != null && manifest.length() > 0) {
-      CapgoHttp.sendStats(context, "download_manifest_start", version)
-      downloadManifest(context, dest, version, manifest, progress)
-      CapgoHttp.sendStats(context, "download_manifest_complete", version)
-    } else if (url.isNotEmpty() && !url.contains("404.capgo.app")) {
-      CapgoHttp.sendStats(context, "download_zip_start", version)
-      downloadZip(dest, url, progress)
-      CapgoHttp.sendStats(context, "download_zip_complete", version)
-    } else {
-      throw IllegalStateException("No manifest or zip url provided")
-    }
-
-    // Ensure primary RN bundle file exists
-    val bundleFile = File(dest, CapgoConfig.BUNDLE_FILE)
-    if (!bundleFile.exists()) {
-      // Accept common alternate names from Metro exports
-      val alt = listOf("index.bundle", "main.jsbundle", "index.jsbundle")
-        .map { File(dest, it) }
-        .firstOrNull { it.exists() }
-      if (alt != null) {
-        alt.copyTo(bundleFile, overwrite = true)
-      } else {
-        throw IllegalStateException("Downloaded bundle missing ${CapgoConfig.BUNDLE_FILE}")
+    val manifest = request.manifest
+    when {
+      manifest != null && manifest.length() > 0 -> {
+        CapgoHttp.sendStats(context, "download_manifest_start", request.version)
+        downloadManifest(context, dest, request.version, manifest, progress)
+        CapgoHttp.sendStats(context, "download_manifest_complete", request.version)
       }
+      request.url.isNotEmpty() && !request.url.contains("404.capgo.app") -> {
+        CapgoHttp.sendStats(context, "download_zip_start", request.version)
+        downloadZip(dest, request.url, progress)
+        CapgoHttp.sendStats(context, "download_zip_complete", request.version)
+      }
+      else -> error("No manifest or zip url provided")
     }
 
-    CapgoHttp.sendStats(context, "download_complete", version)
+    ensureBundleFile(dest)
+    CapgoHttp.sendStats(context, "download_complete", request.version)
     progress?.onPercent(100)
 
     val record = BundleRecord(
-      id = id,
-      version = version,
+      id = request.id,
+      version = request.version,
       status = "success",
-      checksum = checksum ?: "",
+      checksum = request.checksum ?: "",
       downloaded = java.time.Instant.now().toString(),
     )
     BundleStore.upsert(context, record)
     return record
+  }
+
+  private fun ensureBundleFile(dest: File) {
+    val bundleFile = File(dest, CapgoConfig.BUNDLE_FILE)
+    if (bundleFile.exists()) return
+    val alt = listOf("index.bundle", "main.jsbundle", "index.jsbundle")
+      .map { File(dest, it) }
+      .firstOrNull { it.exists() }
+      ?: error("Downloaded bundle missing ${CapgoConfig.BUNDLE_FILE}")
+    alt.copyTo(bundleFile, overwrite = true)
   }
 
   private fun downloadManifest(
@@ -82,55 +86,84 @@ object CapgoDownloader {
     progress: Progress?,
   ) {
     val total = manifest.length()
-    var done = 0
     for (i in 0 until total) {
-      val entry = manifest.getJSONObject(i)
-      val fileName = entry.optString("file_name", "")
-      val fileHash = entry.optString("file_hash", "")
-      val downloadUrl = entry.optString("download_url", "")
-      if (fileName.isEmpty() || downloadUrl.isEmpty()) {
-        CapgoHttp.sendStats(context, "download_manifest_file_fail", "$version:$fileName")
-        throw IllegalStateException("Invalid manifest entry at $i")
-      }
+      downloadManifestEntry(context, dest, version, manifest.getJSONObject(i))
+      progress?.onPercent((((i + 1).toDouble() / total) * 90).toInt().coerceIn(10, 90))
+    }
+  }
 
-      val isBrotli = fileName.endsWith(".br")
-      val targetName = if (isBrotli) fileName.removeSuffix(".br") else fileName
-      val target = File(dest, targetName)
-      target.parentFile?.mkdirs()
+  private fun downloadManifestEntry(
+    context: Context,
+    dest: File,
+    version: String,
+    entry: org.json.JSONObject,
+  ) {
+    val fileName = entry.optString("file_name", "")
+    val fileHash = entry.optString("file_hash", "")
+    val downloadUrl = entry.optString("download_url", "")
+    if (fileName.isEmpty() || downloadUrl.isEmpty()) {
+      CapgoHttp.sendStats(context, "download_manifest_file_fail", "$version:$fileName")
+      error("Invalid manifest entry")
+    }
 
-      // Reuse from other local bundles when hash matches
-      val reused = findCachedByHash(context, fileHash, dest)
-      if (reused != null) {
-        reused.copyTo(target, overwrite = true)
-      } else {
-        val tmp = File(dest, "$targetName.download")
-        httpDownloadToFile(downloadUrl, tmp)
-        if (isBrotli) {
-          try {
-            decompressBrotli(tmp, target)
-            tmp.delete()
-          } catch (e: Exception) {
-            CapgoHttp.sendStats(context, "download_manifest_brotli_fail", "$version:$fileName")
-            throw e
-          }
-        } else {
-          tmp.renameTo(target)
+    val isBrotli = fileName.endsWith(".br")
+    val targetName = if (isBrotli) fileName.removeSuffix(".br") else fileName
+    val target = File(dest, targetName)
+    target.parentFile?.mkdirs()
+
+    val reused = findCachedByHash(context, fileHash, dest)
+    if (reused != null) {
+      reused.copyTo(target, overwrite = true)
+    } else {
+      writeDownloadedFile(context, version, fileName, downloadUrl, target, isBrotli)
+    }
+
+    verifyChecksum(context, version, fileName, fileHash, target)
+  }
+
+  private fun writeDownloadedFile(
+    context: Context,
+    version: String,
+    fileName: String,
+    downloadUrl: String,
+    target: File,
+    isBrotli: Boolean,
+  ) {
+    val tmp = File(target.parentFile, "${target.name}.download")
+    httpDownloadToFile(downloadUrl, tmp)
+    if (isBrotli) {
+      try {
+        decompressBrotli(tmp, target)
+      } catch (e: Exception) {
+        CapgoHttp.sendStats(context, "download_manifest_brotli_fail", "$version:$fileName")
+        throw e
+      } finally {
+        if (!tmp.delete() && tmp.exists()) {
+          error("Failed to delete temp brotli file ${tmp.absolutePath}")
         }
       }
-
-      if (fileHash.isNotEmpty()) {
-        val actual = sha256(target)
-        if (!actual.equals(fileHash, ignoreCase = true) && !fileHash.contains(":")) {
-          // Encrypted checksums contain ':' or are RSA blobs; skip strict match then
-          if (fileHash.length == 64) {
-            CapgoHttp.sendStats(context, "download_manifest_checksum_fail", "$version:$fileName")
-            throw IllegalStateException("Checksum mismatch for $fileName")
-          }
-        }
+      return
+    }
+    if (!tmp.renameTo(target)) {
+      tmp.copyTo(target, overwrite = true)
+      if (!tmp.delete() && tmp.exists()) {
+        error("Failed to delete temp download ${tmp.absolutePath}")
       }
+    }
+  }
 
-      done++
-      progress?.onPercent(((done.toDouble() / total) * 90).toInt().coerceIn(10, 90))
+  private fun verifyChecksum(
+    context: Context,
+    version: String,
+    fileName: String,
+    fileHash: String,
+    target: File,
+  ) {
+    if (fileHash.length != 64) return
+    val actual = sha256(target)
+    if (!actual.equals(fileHash, ignoreCase = true)) {
+      CapgoHttp.sendStats(context, "download_manifest_checksum_fail", "$version:$fileName")
+      error("Checksum mismatch for $fileName")
     }
   }
 
@@ -157,16 +190,16 @@ object CapgoDownloader {
     httpDownloadToFile(url, zipFile)
     progress?.onPercent(70)
     unzip(zipFile, dest)
-    zipFile.delete()
+    if (!zipFile.delete() && zipFile.exists()) {
+      error("Failed to delete zip ${zipFile.absolutePath}")
+    }
   }
 
   private fun httpDownloadToFile(url: String, dest: File) {
     val request = Request.Builder().url(url).get().build()
     CapgoHttp.client().newCall(request).execute().use { response ->
-      if (!response.isSuccessful) {
-        throw IllegalStateException("Download failed ${response.code} for $url")
-      }
-      val body = response.body ?: throw IllegalStateException("Empty body")
+      check(response.isSuccessful) { "Download failed ${response.code} for $url" }
+      val body = response.body ?: error("Empty body")
       FileOutputStream(dest).use { out ->
         body.byteStream().use { input -> input.copyTo(out) }
       }

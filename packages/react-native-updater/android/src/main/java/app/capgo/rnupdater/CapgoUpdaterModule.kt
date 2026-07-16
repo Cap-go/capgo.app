@@ -105,6 +105,22 @@ class CapgoUpdaterModule(private val reactContext: ReactApplicationContext) :
     }
   }
 
+
+  private fun readManifest(options: ReadableMap): JSONArray? {
+    if (!options.hasKey("manifest") || options.isNull("manifest")) return null
+    val readable = options.getArray("manifest") ?: return JSONArray()
+    val manifest = JSONArray()
+    for (i in 0 until readable.size()) {
+      val entry = readable.getMap(i) ?: continue
+      val o = JSONObject()
+      o.put("file_name", entry.getString("file_name"))
+      o.put("file_hash", if (entry.hasKey("file_hash")) entry.getString("file_hash") else "")
+      o.put("download_url", entry.getString("download_url"))
+      manifest.put(o)
+    }
+    return manifest
+  }
+
   @ReactMethod
   fun download(options: ReadableMap, promise: Promise) {
     executor.execute {
@@ -113,21 +129,7 @@ class CapgoUpdaterModule(private val reactContext: ReactApplicationContext) :
         val version = options.getString("version") ?: throw IllegalArgumentException("version required")
         val sessionKey = if (options.hasKey("sessionKey")) options.getString("sessionKey") else null
         val checksum = if (options.hasKey("checksum")) options.getString("checksum") else null
-        var manifest: JSONArray? = null
-        if (options.hasKey("manifest") && !options.isNull("manifest")) {
-          val readable = options.getArray("manifest")
-          manifest = JSONArray()
-          if (readable != null) {
-            for (i in 0 until readable.size()) {
-              val entry = readable.getMap(i) ?: continue
-              val o = JSONObject()
-              o.put("file_name", entry.getString("file_name"))
-              o.put("file_hash", if (entry.hasKey("file_hash")) entry.getString("file_hash") else "")
-              o.put("download_url", entry.getString("download_url"))
-              manifest.put(o)
-            }
-          }
-        }
+        val manifest = readManifest(options)
 
         val id = BundleStore.newId()
         val pending = BundleRecord(id, version, "downloading", checksum ?: "", "")
@@ -135,12 +137,14 @@ class CapgoUpdaterModule(private val reactContext: ReactApplicationContext) :
 
         val record = CapgoDownloader.download(
           reactContext,
-          id,
-          version,
-          url,
-          sessionKey,
-          checksum,
-          manifest,
+          CapgoDownloader.DownloadRequest(
+            id = id,
+            version = version,
+            url = url,
+            sessionKey = sessionKey,
+            checksum = checksum,
+            manifest = manifest,
+          ),
         ) { percent ->
           val event = Arguments.createMap()
           event.putInt("percent", percent)
@@ -167,8 +171,8 @@ class CapgoUpdaterModule(private val reactContext: ReactApplicationContext) :
       try {
         val id = options.getString("id") ?: throw IllegalArgumentException("id required")
         val record = BundleStore.get(reactContext, id) ?: throw IllegalStateException("bundle not found")
-        if (!BundleStore.jsBundleFile(reactContext, id).exists() && id != CapgoConfig.KEY_BUILTIN) {
-          throw IllegalStateException("bundle files missing")
+        check(id == CapgoConfig.KEY_BUILTIN || BundleStore.jsBundleFile(reactContext, id).exists()) {
+          "bundle files missing"
         }
         BundleStore.setCurrent(reactContext, id)
         BundleStore.setNext(reactContext, null)

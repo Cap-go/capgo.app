@@ -23,6 +23,13 @@ android {
   }
 }
 
+configurations.configureEach {
+  resolutionStrategy {
+    force "com.squareup.okhttp3:okhttp:4.12.0"
+    force "org.brotli:dec:0.1.2"
+  }
+}
+
 dependencies {
   implementation "com.facebook.react:react-android"
   implementation "org.brotli:dec:0.1.2"

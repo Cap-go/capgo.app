@@ -85,7 +85,7 @@ export async function runBundle(options: BundleOptions): Promise<string> {
       '--reset-cache',
     ]
     const cmd = useNode ? process.execPath : metroBin
-    await run(cmd, useNode ? args : args, project)
+    await run(cmd, args, project)
     if (!existsSync(bundleOut)) {
       throw new Error(`Metro did not produce ${bundleOut}`)
     }

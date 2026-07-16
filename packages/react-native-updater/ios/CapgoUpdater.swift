@@ -6,6 +6,8 @@ import CryptoKit
 @objc(CapgoUpdater)
 public class CapgoUpdater: RCTEventEmitter {
   private static let pluginVersion = "0.1.0"
+  private static let defaultUpdateUrl = "https://plugin.capgo.app/updates"
+  private static let defaultStatsUrl = "https://plugin.capgo.app/stats"
   private static let prefsSuite = "capgo_rn_updater"
   private static let bundleFileName = "main.jsbundle"
   private static let androidBundleFileName = "index.android.bundle"
@@ -68,12 +70,12 @@ public class CapgoUpdater: RCTEventEmitter {
 
   private func updateUrl() -> String {
     Bundle.main.object(forInfoDictionaryKey: "CapgoUpdateUrl") as? String
-      ?? "https://plugin.capgo.app/updates"
+      ?? CapgoUpdater.defaultUpdateUrl // NOSONAR - Info.plist override supported
   }
 
   private func statsUrl() -> String {
     Bundle.main.object(forInfoDictionaryKey: "CapgoStatsUrl") as? String
-      ?? "https://plugin.capgo.app/stats"
+      ?? CapgoUpdater.defaultStatsUrl // NOSONAR - Info.plist override supported
   }
 
   private func deviceId() -> String {
@@ -196,7 +198,7 @@ public class CapgoUpdater: RCTEventEmitter {
 
   // MARK: - Bridge methods
 
-  @objc func notifyAppReady(_ resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+  @objc func notifyAppReady(_ resolve: @escaping RCTPromiseResolveBlock, rejecter _: @escaping RCTPromiseRejectBlock) {
     queue.async {
       UserDefaults.standard.set(true, forKey: "capgo_app_ready")
       let id = UserDefaults.standard.string(forKey: "capgo_current_bundle_id") ?? "builtin"
@@ -383,7 +385,7 @@ public class CapgoUpdater: RCTEventEmitter {
     resolve(record)
   }
 
-  @objc func reset(_ options: NSDictionary, resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+  @objc func reset(_ _: NSDictionary, resolver resolve: @escaping RCTPromiseResolveBlock, rejecter _: @escaping RCTPromiseRejectBlock) {
     let old = currentVersionName()
     UserDefaults.standard.set("builtin", forKey: "capgo_current_bundle_id")
     UserDefaults.standard.removeObject(forKey: "capgo_next_bundle_id")
@@ -392,12 +394,12 @@ public class CapgoUpdater: RCTEventEmitter {
     DispatchQueue.main.async { exit(0) }
   }
 
-  @objc func current(_ resolve: RCTPromiseResolveBlock, rejecter reject: RCTPromiseRejectBlock) {
+  @objc func current(_ resolve: RCTPromiseResolveBlock, rejecter _: RCTPromiseRejectBlock) {
     let id = UserDefaults.standard.string(forKey: "capgo_current_bundle_id") ?? "builtin"
     resolve(bundleMap(id: id))
   }
 
-  @objc func list(_ resolve: RCTPromiseResolveBlock, rejecter reject: RCTPromiseRejectBlock) {
+  @objc func list(_ resolve: RCTPromiseResolveBlock, rejecter _: RCTPromiseRejectBlock) {
     var bundles: [[String: Any]] = [bundleMap(id: "builtin")]
     if let stored = loadIndex() {
       bundles.append(contentsOf: stored)
@@ -405,21 +407,21 @@ public class CapgoUpdater: RCTEventEmitter {
     resolve(["bundles": bundles])
   }
 
-  @objc func getDeviceId(_ resolve: RCTPromiseResolveBlock, rejecter reject: RCTPromiseRejectBlock) {
+  @objc func getDeviceId(_ resolve: RCTPromiseResolveBlock, rejecter _: RCTPromiseRejectBlock) {
     resolve(["deviceId": deviceId()])
   }
 
-  @objc func getPluginVersion(_ resolve: RCTPromiseResolveBlock, rejecter reject: RCTPromiseRejectBlock) {
+  @objc func getPluginVersion(_ resolve: RCTPromiseResolveBlock, rejecter _: RCTPromiseRejectBlock) {
     resolve(["version": CapgoUpdater.pluginVersion])
   }
 
-  @objc func setChannel(_ options: NSDictionary, resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+  @objc func setChannel(_ options: NSDictionary, resolver resolve: @escaping RCTPromiseResolveBlock, rejecter _: @escaping RCTPromiseRejectBlock) {
     let channel = options["channel"] as? String ?? ""
     UserDefaults.standard.set(channel, forKey: "capgo_default_channel")
     resolve(["channel": channel, "status": "ok"])
   }
 
-  @objc func getChannel(_ resolve: RCTPromiseResolveBlock, rejecter reject: RCTPromiseRejectBlock) {
+  @objc func getChannel(_ resolve: RCTPromiseResolveBlock, rejecter _: RCTPromiseRejectBlock) {
     let channel = UserDefaults.standard.string(forKey: "capgo_default_channel")
       ?? (Bundle.main.object(forInfoDictionaryKey: "CapgoDefaultChannel") as? String)
       ?? ""
