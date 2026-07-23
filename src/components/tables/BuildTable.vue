@@ -348,6 +348,7 @@ columns.value = [
         }, truncated),
         h('button', {
           type: 'button',
+          'aria-label': t('build-error-details'),
           class: 'p-1 text-gray-500 rounded-md cursor-pointer shrink-0 dark:text-gray-400 hover:text-gray-600 hover:bg-gray-200 dark:hover:bg-gray-700 dark:hover:text-gray-300',
           onClick: (event: MouseEvent) => {
             event.stopPropagation()
