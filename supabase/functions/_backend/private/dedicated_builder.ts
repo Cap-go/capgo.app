@@ -257,6 +257,66 @@ app.post('/', middlewareAuth, async (c) => {
   }, 200)
 })
 
+async function cancelDedicatedBuilderRequest(
+  c: Context<MiddlewareKeyVariables>,
+  existing: NonNullable<Awaited<ReturnType<typeof getDedicatedBuilderForOrg>>>,
+) {
+  if (existing.status !== 'requested' && existing.status !== 'provisioning') {
+    throw quickError(400, 'cannot_cancel', 'Only requested or provisioning dedicated builders can be cancelled from the console')
+  }
+
+  const { data, error } = await supabaseAdmin(c)
+    .from('dedicated_builders')
+    .update({
+      status: 'cancelled',
+      cancelled_at: new Date().toISOString(),
+    })
+    .eq('id', existing.id)
+    .select('*')
+    .single()
+
+  if (error || !data) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to cancel dedicated builder', error })
+    throw simpleError('internal_error', 'Unable to cancel dedicated builder request')
+  }
+
+  return c.json({
+    dedicated_builder: publicDedicatedBuilderView(data, 0),
+    ...BRES,
+  }, 200)
+}
+
+async function updateDedicatedBuilderFallback(
+  c: Context<MiddlewareKeyVariables>,
+  orgId: string,
+  existing: NonNullable<Awaited<ReturnType<typeof getDedicatedBuilderForOrg>>>,
+  allowSharedFallback: boolean,
+) {
+  if (existing.status !== 'active' && existing.status !== 'provisioning' && existing.status !== 'requested') {
+    throw quickError(400, 'invalid_status', 'Fallback can only be changed while the dedicated builder is active or pending')
+  }
+
+  const { data, error } = await supabaseAdmin(c)
+    .from('dedicated_builders')
+    .update({
+      allow_shared_fallback: allowSharedFallback,
+    })
+    .eq('id', existing.id)
+    .select('*')
+    .single()
+
+  if (error || !data) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to update dedicated builder fallback', error })
+    throw simpleError('internal_error', 'Unable to update dedicated builder')
+  }
+
+  const activeDedicatedBuilds = await countActiveDedicatedBuilds(c, orgId)
+  return c.json({
+    dedicated_builder: publicDedicatedBuilderView(data, activeDedicatedBuilds),
+    ...BRES,
+  }, 200)
+}
+
 // PATCH /private/dedicated_builder/:orgId — toggle fallback or cancel a pending request
 app.patch('/:orgId', middlewareAuth, async (c) => {
   const orgIdResult = uuidSchema(c.req.param('orgId'))
@@ -278,57 +338,11 @@ app.patch('/:orgId', middlewareAuth, async (c) => {
   if (!existing)
     throw quickError(404, 'not_found', 'No dedicated builder found for this organization')
 
-  if (parsed.data.cancel) {
-    if (existing.status !== 'requested' && existing.status !== 'provisioning') {
-      throw quickError(400, 'cannot_cancel', 'Only requested or provisioning dedicated builders can be cancelled from the console')
-    }
+  if (parsed.data.cancel)
+    return cancelDedicatedBuilderRequest(c, existing)
 
-    const { data, error } = await supabaseAdmin(c)
-      .from('dedicated_builders')
-      .update({
-        status: 'cancelled',
-        cancelled_at: new Date().toISOString(),
-      })
-      .eq('id', existing.id)
-      .select('*')
-      .single()
-
-    if (error || !data) {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to cancel dedicated builder', error })
-      throw simpleError('internal_error', 'Unable to cancel dedicated builder request')
-    }
-
-    return c.json({
-      dedicated_builder: publicDedicatedBuilderView(data, 0),
-      ...BRES,
-    }, 200)
-  }
-
-  if (parsed.data.allow_shared_fallback !== undefined) {
-    if (existing.status !== 'active' && existing.status !== 'provisioning' && existing.status !== 'requested') {
-      throw quickError(400, 'invalid_status', 'Fallback can only be changed while the dedicated builder is active or pending')
-    }
-
-    const { data, error } = await supabaseAdmin(c)
-      .from('dedicated_builders')
-      .update({
-        allow_shared_fallback: parsed.data.allow_shared_fallback,
-      })
-      .eq('id', existing.id)
-      .select('*')
-      .single()
-
-    if (error || !data) {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to update dedicated builder fallback', error })
-      throw simpleError('internal_error', 'Unable to update dedicated builder')
-    }
-
-    const activeDedicatedBuilds = await countActiveDedicatedBuilds(c, orgId)
-    return c.json({
-      dedicated_builder: publicDedicatedBuilderView(data, activeDedicatedBuilds),
-      ...BRES,
-    }, 200)
-  }
+  if (parsed.data.allow_shared_fallback !== undefined)
+    return updateDedicatedBuilderFallback(c, orgId, existing, parsed.data.allow_shared_fallback)
 
   throw simpleError('invalid_body', 'Nothing to update')
 })
