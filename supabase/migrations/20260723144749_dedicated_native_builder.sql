@@ -6,16 +6,26 @@ ALTER TABLE "public"."build_requests"
   ADD COLUMN IF NOT EXISTS "builder_pool" text;
 
 COMMENT ON COLUMN "public"."build_requests"."builder_pool" IS
-  'Preferred builder pool at request time (dedicated or shared). May differ from the pool that actually ran the job when shared fallback is enabled. Null for legacy rows.';
+  'Preferred builder pool at request time (dedicated or shared). '
+  'May differ from the pool that actually ran the job when shared '
+  'fallback is enabled. Null for legacy rows.';
 
 ALTER TABLE "public"."build_requests"
   DROP CONSTRAINT IF EXISTS "build_requests_builder_pool_check";
 
--- NOT VALID: avoid a blocking ACCESS EXCLUSIVE full scan of build_requests on apply.
--- New/updated rows are still checked; validate later in a maintenance window if desired.
+-- NOT VALID: avoid a blocking ACCESS EXCLUSIVE full scan of
+-- build_requests on apply. New/updated rows are still checked;
+-- validate later in a maintenance window if desired.
 ALTER TABLE "public"."build_requests"
   ADD CONSTRAINT "build_requests_builder_pool_check"
-  CHECK (("builder_pool" IS NULL OR "builder_pool" = ANY (ARRAY['dedicated'::text, 'shared'::text])))
+  CHECK (
+    (
+      "builder_pool" IS NULL
+      OR "builder_pool" = ANY (
+        ARRAY['dedicated'::text, 'shared'::text]
+      )
+    )
+  )
   NOT VALID;
 
 CREATE INDEX IF NOT EXISTS "idx_build_requests_org_pool_status"

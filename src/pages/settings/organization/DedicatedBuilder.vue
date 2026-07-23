@@ -123,9 +123,9 @@ watch(currentOrganization, async () => {
   await loadDedicatedBuilder()
 })
 
-watch(canReadBilling, async (allowed) => {
-  if (allowed)
-    await loadDedicatedBuilder()
+watch(canReadBilling, async () => {
+  // Load on grant and clear/invalidate in-flight work on revoke.
+  await loadDedicatedBuilder()
 })
 
 async function submitRequest() {
