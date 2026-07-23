@@ -76,7 +76,8 @@ export async function countActiveDedicatedBuilds(
       org_id: orgId,
       error: error.message,
     })
-    return 0
+    // Do not invent idle/zero — callers must surface the failure.
+    throw error
   }
 
   return count ?? 0
@@ -84,7 +85,12 @@ export async function countActiveDedicatedBuilds(
 
 /**
  * Derive a customer-facing worker status from stored state + active dedicated jobs.
- * Capgo ops can mark the worker offline; otherwise busy/idle follows active dedicated builds.
+ *
+ * `builder_pool` on build_requests is the preferred pool at request time. When
+ * shared fallback is enabled, a preferred-dedicated job may still run on shared,
+ * so busy must not be inferred from that count alone — trust explicit worker
+ * heartbeats (`worker_status`) instead. When fallback is disabled, preferred
+ * dedicated jobs must use the dedicated worker, so the count is reliable.
  */
 export function deriveWorkerStatus(
   row: DedicatedBuilderRow,
@@ -94,6 +100,11 @@ export function deriveWorkerStatus(
     return 'unknown'
   if (row.worker_status === 'offline')
     return 'offline'
+  if (row.allow_shared_fallback) {
+    if (row.worker_status === 'busy' || row.worker_status === 'idle')
+      return row.worker_status
+    return 'unknown'
+  }
   if (activeDedicatedBuilds > 0)
     return 'busy'
   return 'idle'

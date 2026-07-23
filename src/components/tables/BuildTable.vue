@@ -3,7 +3,7 @@ import type { Ref } from 'vue'
 import type { TableColumn } from '../comp_def'
 import type { Database } from '~/types/supabase.types'
 import { Capacitor } from '@capacitor/core'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, h, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
@@ -308,18 +308,27 @@ columns.value = [
     key: 'status',
     mobile: true,
     class: 'truncate max-w-24',
-    displayFunction: (elem: Element) => elem.status,
+    renderFunction: (elem: Element) => h('span', {
+      class: `font-semibold ${getStatusColor(elem.status)}`,
+    }, elem.status),
   },
   {
     label: t('builder-pool'),
     key: 'builder_pool',
     class: 'truncate max-w-24',
-    displayFunction: (elem: Element) => {
-      if (elem.builder_pool === 'dedicated')
-        return t('builder-pool-dedicated')
-      if (elem.builder_pool === 'shared')
-        return t('builder-pool-shared')
-      return '—'
+    // Preferred pool at request time (may differ from actual when fallback runs).
+    renderFunction: (elem: Element) => {
+      if (elem.builder_pool === 'dedicated') {
+        return h('span', {
+          class: 'inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-azure-500/10 text-azure-700 dark:text-azure-300',
+        }, t('builder-pool-dedicated'))
+      }
+      if (elem.builder_pool === 'shared') {
+        return h('span', {
+          class: 'inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300',
+        }, t('builder-pool-shared'))
+      }
+      return h('span', { class: 'text-gray-400 dark:text-gray-600' }, '—')
     },
   },
   {
@@ -327,10 +336,27 @@ columns.value = [
     key: 'last_error',
     mobile: true,
     class: 'max-w-48',
-    displayFunction: (elem: Element) => {
+    renderFunction: (elem: Element) => {
       if (!elem.last_error)
-        return '-'
-      return elem.last_error.length > 50 ? `${elem.last_error.substring(0, 50)}...` : elem.last_error
+        return h('span', {}, '-')
+      const truncated = elem.last_error.length > 50
+        ? `${elem.last_error.substring(0, 50)}...`
+        : elem.last_error
+      return h('div', { class: 'flex items-center gap-2' }, [
+        h('span', {
+          class: 'max-w-xs text-red-600 truncate dark:text-red-400',
+        }, truncated),
+        h('button', {
+          type: 'button',
+          class: 'p-1 text-gray-500 rounded-md cursor-pointer shrink-0 dark:text-gray-400 hover:text-gray-600 hover:bg-gray-200 dark:hover:bg-gray-700 dark:hover:text-gray-300',
+          onClick: (event: MouseEvent) => {
+            event.stopPropagation()
+            showErrorDetails(elem.last_error!)
+          },
+        }, [
+          h(IconEye, { class: 'w-4 h-4' }),
+        ]),
+      ])
     },
   },
   {
@@ -444,6 +470,9 @@ watch(showSetupFlow, (newValue) => {
           </div>
         </template>
       </DataTable>
+=======
+      />
+>>>>>>> 64b92671c (fix(builder): address Cubic review on dedicated builder UI)
     </div>
   </div>
 </template>

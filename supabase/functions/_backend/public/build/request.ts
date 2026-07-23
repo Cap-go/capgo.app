@@ -537,6 +537,8 @@ export async function requestBuild(
     upload_path,
     upload_url,
     upload_expires_at,
+    // Preferred pool at request time. Actual assignment may fall back to shared
+    // when the dedicated worker is busy/offline and allowSharedFallback is true.
     builder_pool: poolRouting?.preferDedicated ? 'dedicated' : 'shared',
   })
 

@@ -48,18 +48,43 @@ describe('dedicated builder helpers', () => {
     expect(toDedicatedPoolRouting(makeRow({ status: 'requested' }))).toBeNull()
   })
 
-  it.concurrent('derives busy from active dedicated builds and respects offline', () => {
-    expect(deriveWorkerStatus(makeRow({ worker_status: 'idle' }), 0)).toBe('idle')
-    expect(deriveWorkerStatus(makeRow({ worker_status: 'idle' }), 2)).toBe('busy')
+  it.concurrent('derives busy from active dedicated builds only when fallback is off', () => {
+    expect(deriveWorkerStatus(makeRow({
+      allow_shared_fallback: false,
+      worker_status: 'idle',
+    }), 0)).toBe('idle')
+    expect(deriveWorkerStatus(makeRow({
+      allow_shared_fallback: false,
+      worker_status: 'idle',
+    }), 2)).toBe('busy')
     expect(deriveWorkerStatus(makeRow({ worker_status: 'offline' }), 0)).toBe('offline')
     expect(deriveWorkerStatus(makeRow({ status: 'requested' }), 1)).toBe('unknown')
   })
 
+  it.concurrent('does not infer busy from preferred-pool counts when shared fallback is on', () => {
+    expect(deriveWorkerStatus(makeRow({
+      allow_shared_fallback: true,
+      worker_status: 'idle',
+    }), 2)).toBe('idle')
+    expect(deriveWorkerStatus(makeRow({
+      allow_shared_fallback: true,
+      worker_status: 'busy',
+    }), 0)).toBe('busy')
+    expect(deriveWorkerStatus(makeRow({
+      allow_shared_fallback: true,
+      worker_status: 'unknown',
+    }), 2)).toBe('unknown')
+  })
+
   it.concurrent('exposes a sanitized public view with derived worker status', () => {
-    const view = publicDedicatedBuilderView(makeRow({ worker_status: 'idle', worker_current_job_id: 'job-9' }), 1)
+    const view = publicDedicatedBuilderView(makeRow({
+      allow_shared_fallback: false,
+      worker_status: 'idle',
+      worker_current_job_id: 'job-9',
+    }), 1)
     expect(view.worker_status).toBe('busy')
     expect(view.active_dedicated_builds).toBe(1)
     expect(view.pool_id).toBe('pool-org-1')
-    expect(view.allow_shared_fallback).toBe(true)
+    expect(view.allow_shared_fallback).toBe(false)
   })
 })

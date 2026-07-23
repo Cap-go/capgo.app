@@ -1,3 +1,4 @@
+import { FunctionsHttpError } from '@supabase/supabase-js'
 import { useSupabase } from '~/services/supabase'
 
 export type DedicatedBuilderStatus = 'requested' | 'provisioning' | 'active' | 'suspended' | 'cancelled'
@@ -30,6 +31,18 @@ interface DedicatedBuilderResponse {
   status?: string
 }
 
+export class DedicatedBuilderApiError extends Error {
+  code: string
+  status: number
+
+  constructor(code: string, status: number, message?: string) {
+    super(message || code)
+    this.name = 'DedicatedBuilderApiError'
+    this.code = code
+    this.status = status
+  }
+}
+
 async function getAuthHeaders(): Promise<Record<string, string>> {
   const supabase = useSupabase()
   const { data: currentSession } = await supabase.auth.getSession()
@@ -42,6 +55,21 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
   }
 }
 
+async function normalizeInvokeError(error: unknown): Promise<never> {
+  if (error instanceof FunctionsHttpError && error.context instanceof Response) {
+    let code = 'request_failed'
+    try {
+      const payload = await error.context.clone().json() as { error?: string, status?: string }
+      code = payload.error || payload.status || code
+    }
+    catch {
+      // keep default code
+    }
+    throw new DedicatedBuilderApiError(code, error.context.status, code)
+  }
+  throw error
+}
+
 export async function fetchDedicatedBuilder(orgId: string): Promise<DedicatedBuilder | null> {
   const supabase = useSupabase()
   const { data, error } = await supabase.functions.invoke<DedicatedBuilderResponse>(
@@ -49,7 +77,7 @@ export async function fetchDedicatedBuilder(orgId: string): Promise<DedicatedBui
     { method: 'GET' },
   )
   if (error)
-    throw error
+    await normalizeInvokeError(error)
   return data?.dedicated_builder ?? null
 }
 
@@ -73,7 +101,7 @@ export async function requestDedicatedBuilder(input: {
     },
   )
   if (error)
-    throw error
+    await normalizeInvokeError(error)
   if (!data?.dedicated_builder)
     throw new Error('Missing dedicated builder in response')
   return data.dedicated_builder
@@ -95,7 +123,7 @@ export async function updateDedicatedBuilder(
     },
   )
   if (error)
-    throw error
+    await normalizeInvokeError(error)
   if (!data?.dedicated_builder)
     throw new Error('Missing dedicated builder in response')
   return data.dedicated_builder

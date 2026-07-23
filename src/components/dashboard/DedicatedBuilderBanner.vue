@@ -4,10 +4,11 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import IconServer from '~icons/heroicons/server-stack'
-import { fetchDedicatedBuilder } from '~/services/dedicatedBuilder'
+import { DedicatedBuilderApiError, fetchDedicatedBuilder } from '~/services/dedicatedBuilder'
 import { useOrganizationStore } from '~/stores/organization'
 
 const props = defineProps<{
+  appId: string
   /** When true, show even if the org already has a pending/active dedicated builder. */
   force?: boolean
 }>()
@@ -18,10 +19,11 @@ const organizationStore = useOrganizationStore()
 
 const dedicatedBuilder = ref<DedicatedBuilder | null>(null)
 const loaded = ref(false)
+const loadFailed = ref(false)
 let reqToken = 0
 
 const visible = computed(() => {
-  if (!loaded.value)
+  if (!loaded.value || loadFailed.value)
     return false
   if (props.force)
     return true
@@ -40,10 +42,15 @@ const ctaLabel = computed(() => {
 async function load() {
   const token = ++reqToken
   loaded.value = false
+  loadFailed.value = false
   await organizationStore.awaitInitialLoad()
-  const orgId = organizationStore.currentOrganization?.gid
+  // App URLs can belong to an org other than the currently selected one.
+  const orgId = organizationStore.getOrgByAppId(props.appId)?.gid
   if (!orgId) {
+    if (token !== reqToken)
+      return
     dedicatedBuilder.value = null
+    loadFailed.value = true
     loaded.value = true
     return
   }
@@ -53,10 +60,14 @@ async function load() {
       return
     dedicatedBuilder.value = row
   }
-  catch {
+  catch (error) {
     if (token !== reqToken)
       return
+    // Auth/billing failures and transient API errors must not look like "no builder".
     dedicatedBuilder.value = null
+    loadFailed.value = true
+    if (!(error instanceof DedicatedBuilderApiError && error.status === 403))
+      console.error('[DedicatedBuilderBanner] failed to load dedicated builder', error)
   }
   finally {
     if (token === reqToken)
@@ -65,7 +76,7 @@ async function load() {
 }
 
 watch(
-  () => organizationStore.currentOrganization?.gid,
+  () => [props.appId, organizationStore.currentOrganization?.gid] as const,
   () => {
     load()
   },

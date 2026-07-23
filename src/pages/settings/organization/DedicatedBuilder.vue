@@ -14,6 +14,7 @@ import RbacPermissionOnlyModal from '~/components/RbacPermissionOnlyModal.vue'
 import Spinner from '~/components/Spinner.vue'
 import { formatLocalDateTime } from '~/services/date'
 import {
+  DedicatedBuilderApiError,
   fetchDedicatedBuilder,
   requestDedicatedBuilder,
   updateDedicatedBuilder,
@@ -41,6 +42,7 @@ const useCase = ref('')
 const monthlyBuildsEstimate = ref<number | null>(null)
 const platformIos = ref(true)
 const platformAndroid = ref(true)
+let loadToken = 0
 
 const canReadBilling = computedAsync(async () => {
   const orgId = currentOrganization.value?.gid
@@ -83,22 +85,32 @@ const workerStatusClass = computed(() => {
 
 async function loadDedicatedBuilder() {
   const orgId = currentOrganization.value?.gid
+  const token = ++loadToken
   if (!orgId || !canReadBilling.value) {
-    dedicatedBuilder.value = null
-    isLoading.value = false
+    if (token === loadToken) {
+      dedicatedBuilder.value = null
+      isLoading.value = false
+    }
     return
   }
 
   isLoading.value = true
   try {
-    dedicatedBuilder.value = await fetchDedicatedBuilder(orgId)
+    const row = await fetchDedicatedBuilder(orgId)
+    if (token !== loadToken)
+      return
+    dedicatedBuilder.value = row
   }
   catch (error) {
+    if (token !== loadToken)
+      return
     console.error('Failed to load dedicated builder', error)
+    dedicatedBuilder.value = null
     toast.error(t('dedicated-builder-load-error'))
   }
   finally {
-    isLoading.value = false
+    if (token === loadToken)
+      isLoading.value = false
   }
 }
 
@@ -145,9 +157,9 @@ async function submitRequest() {
     })
     toast.success(t('dedicated-builder-request-success'))
   }
-  catch (error: any) {
+  catch (error) {
     console.error('Failed to request dedicated builder', error)
-    const message = error?.message?.includes('dedicated_builder_exists')
+    const message = error instanceof DedicatedBuilderApiError && error.code === 'dedicated_builder_exists'
       ? t('dedicated-builder-already-exists')
       : t('dedicated-builder-request-error')
     toast.error(message)
