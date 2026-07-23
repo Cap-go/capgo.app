@@ -1,5 +1,7 @@
 import type { Context } from 'hono'
+import type { DedicatedPoolRouting } from '../../utils/dedicated_builder.ts'
 import type { Database, Json } from '../../utils/supabase.types.ts'
+import { getDedicatedBuilderForOrg, toDedicatedPoolRouting } from '../../utils/dedicated_builder.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../../utils/logging.ts'
 import { checkPermission } from '../../utils/rbac.ts'
@@ -59,11 +61,12 @@ export function buildBuilderPayload(input: {
   platform: string
   buildOptions: Record<string, unknown>
   buildCredentials: Record<string, string>
+  poolRouting?: DedicatedPoolRouting | null
 }) {
   const buildOptions = { ...input.buildOptions }
   delete buildOptions.timeoutSeconds
 
-  return {
+  const payload: Record<string, unknown> = {
     // userId carries the org_id (anonymized owner) — kept for backwards compat.
     userId: input.orgId,
     // actorUserId is the human user who triggered the build (apikey.user_id). The builder
@@ -74,6 +77,17 @@ export function buildBuilderPayload(input: {
     buildOptions,
     buildCredentials: input.buildCredentials,
   }
+
+  // Prefer the org dedicated pool when active. Builder may fall back to shared
+  // when the dedicated worker is busy/offline and allowSharedFallback is true.
+  if (input.poolRouting?.preferDedicated) {
+    payload.poolPreference = 'dedicated'
+    payload.allowSharedFallback = input.poolRouting.allowSharedFallback
+    if (input.poolRouting.poolId)
+      payload.poolId = input.poolRouting.poolId
+  }
+
+  return payload
 }
 
 /** Exported for unit tests — follows bundleUsageTestUtils pattern. */
@@ -240,8 +254,9 @@ async function createBuilderJob(c: Context, input: {
   uploadPath: string
   buildOptions: Record<string, unknown>
   buildCredentials: Record<string, string>
+  poolRouting?: DedicatedPoolRouting | null
 }): Promise<BuilderJobResponse> {
-  const { builderUrl, builderApiKey, orgId, actorUserId, appId, platform, uploadPath, buildOptions, buildCredentials } = input
+  const { builderUrl, builderApiKey, orgId, actorUserId, appId, platform, uploadPath, buildOptions, buildCredentials, poolRouting } = input
   cloudlog({
     requestId: c.get('requestId'),
     message: 'Calling builder API',
@@ -250,6 +265,8 @@ async function createBuilderJob(c: Context, input: {
     app_id: appId,
     platform,
     artifact_key: uploadPath,
+    pool_preference: poolRouting?.preferDedicated ? 'dedicated' : 'shared',
+    allow_shared_fallback: poolRouting?.allowSharedFallback ?? true,
   })
 
   try {
@@ -266,6 +283,7 @@ async function createBuilderJob(c: Context, input: {
         platform,
         buildOptions,
         buildCredentials,
+        poolRouting,
       })),
     })
 
@@ -349,6 +367,7 @@ async function persistBuildRequest(c: Context, input: {
   upload_path: string
   upload_url: string
   upload_expires_at: Date
+  builder_pool: 'dedicated' | 'shared' | null
 }) {
   const {
     app_id,
@@ -362,6 +381,7 @@ async function persistBuildRequest(c: Context, input: {
     upload_path,
     upload_url,
     upload_expires_at,
+    builder_pool,
   } = input
 
   const supabaseAdminClient = supabaseAdmin(c)
@@ -380,6 +400,7 @@ async function persistBuildRequest(c: Context, input: {
       upload_path,
       upload_url,
       upload_expires_at: upload_expires_at.toISOString(),
+      builder_pool,
     })
     .select('*')
     .single()
@@ -465,6 +486,21 @@ export async function requestBuild(
   const upload_session_key = crypto.randomUUID()
   const upload_path = `orgs/${org_id}/apps/${app_id}/native-builds/${upload_session_key}.zip`
   const { builderUrl, builderApiKey } = getBuilderConfig(c)
+
+  let poolRouting: DedicatedPoolRouting | null = null
+  try {
+    poolRouting = toDedicatedPoolRouting(await getDedicatedBuilderForOrg(c, org_id))
+  }
+  catch (error) {
+    // Prefer shared pool over failing the build if dedicated lookup fails.
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'Dedicated builder lookup failed; continuing on shared pool',
+      org_id,
+      error: serializeError(error),
+    })
+  }
+
   const builderJob = await createBuilderJob(c, {
     builderUrl,
     builderApiKey,
@@ -475,6 +511,7 @@ export async function requestBuild(
     uploadPath: upload_path,
     buildOptions: build_options,
     buildCredentials: build_credentials,
+    poolRouting,
   })
 
   ensureBuilderUploadUrl(c, builderUrl, builderApiKey, builderJob)
@@ -500,6 +537,7 @@ export async function requestBuild(
     upload_path,
     upload_url,
     upload_expires_at,
+    builder_pool: poolRouting?.preferDedicated ? 'dedicated' : 'shared',
   })
 
   cloudlog({

@@ -311,6 +311,18 @@ columns.value = [
     displayFunction: (elem: Element) => elem.status,
   },
   {
+    label: t('builder-pool'),
+    key: 'builder_pool',
+    class: 'truncate max-w-24',
+    displayFunction: (elem: Element) => {
+      if (elem.builder_pool === 'dedicated')
+        return t('builder-pool-dedicated')
+      if (elem.builder_pool === 'shared')
+        return t('builder-pool-shared')
+      return '—'
+    },
+  },
+  {
     label: t('error'),
     key: 'last_error',
     mobile: true,
@@ -382,6 +394,21 @@ watch(showSetupFlow, (newValue) => {
           >
             {{ element.status }}
           </span>
+        </template>
+        <template #builder_pool="{ element }">
+          <span
+            v-if="element.builder_pool === 'dedicated'"
+            class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-azure-500/10 text-azure-700 dark:text-azure-300"
+          >
+            {{ t('builder-pool-dedicated') }}
+          </span>
+          <span
+            v-else-if="element.builder_pool === 'shared'"
+            class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300"
+          >
+            {{ t('builder-pool-shared') }}
+          </span>
+          <span v-else class="text-gray-400 dark:text-gray-600">—</span>
         </template>
         <template #last_error="{ element }">
           <div v-if="element.last_error" class="flex items-center gap-2">

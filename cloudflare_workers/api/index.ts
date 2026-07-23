@@ -9,6 +9,7 @@ import { app as config } from '../../supabase/functions/_backend/private/config.
 import { app as configBuilder } from '../../supabase/functions/_backend/private/config_builder.ts'
 import { app as create_device } from '../../supabase/functions/_backend/private/create_device.ts'
 import { app as credits } from '../../supabase/functions/_backend/private/credits.ts'
+import { app as dedicated_builder } from '../../supabase/functions/_backend/private/dedicated_builder.ts'
 import { app as deleted_failed_version } from '../../supabase/functions/_backend/private/delete_failed_version.ts'
 import { app as devices_priv } from '../../supabase/functions/_backend/private/devices.ts'
 import { app as emailPreferences } from '../../supabase/functions/_backend/private/email_preferences.ts'
@@ -123,6 +124,7 @@ const functionNamePrivate = 'private'
 const appPrivate = createHono(functionNamePrivate, version)
 appPrivate.route('/plans', plans)
 appPrivate.route('/credits', credits)
+appPrivate.route('/dedicated_builder', dedicated_builder)
 appPrivate.route('/store_top', storeTop)
 appPrivate.route('/website_stats', publicStats)
 appPrivate.route('/config', config)

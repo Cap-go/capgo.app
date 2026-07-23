@@ -594,6 +594,7 @@ export type Database = {
           build_config: Json | null
           build_mode: string
           builder_job_id: string | null
+          builder_pool: string | null
           completed_at: string | null
           created_at: string
           id: string
@@ -616,6 +617,7 @@ export type Database = {
           build_config?: Json | null
           build_mode?: string
           builder_job_id?: string | null
+          builder_pool?: string | null
           completed_at?: string | null
           created_at?: string
           id?: string
@@ -638,6 +640,7 @@ export type Database = {
           build_config?: Json | null
           build_mode?: string
           builder_job_id?: string | null
+          builder_pool?: string | null
           completed_at?: string | null
           created_at?: string
           id?: string
@@ -1442,6 +1445,78 @@ export type Database = {
           transfer_history?: Json[] | null
         }
         Relationships: []
+      }
+
+      dedicated_builders: {
+        Row: {
+          activated_at: string | null
+          allow_shared_fallback: boolean
+          cancelled_at: string | null
+          created_at: string
+          id: string
+          monthly_builds_estimate: number | null
+          org_id: string
+          platforms: string[]
+          pool_id: string | null
+          requested_by: string | null
+          status: string
+          suspended_at: string | null
+          updated_at: string
+          use_case: string | null
+          worker_current_job_id: string | null
+          worker_last_seen_at: string | null
+          worker_name: string | null
+          worker_status: string
+        }
+        Insert: {
+          activated_at?: string | null
+          allow_shared_fallback?: boolean
+          cancelled_at?: string | null
+          created_at?: string
+          id?: string
+          monthly_builds_estimate?: number | null
+          org_id: string
+          platforms?: string[]
+          pool_id?: string | null
+          requested_by?: string | null
+          status?: string
+          suspended_at?: string | null
+          updated_at?: string
+          use_case?: string | null
+          worker_current_job_id?: string | null
+          worker_last_seen_at?: string | null
+          worker_name?: string | null
+          worker_status?: string
+        }
+        Update: {
+          activated_at?: string | null
+          allow_shared_fallback?: boolean
+          cancelled_at?: string | null
+          created_at?: string
+          id?: string
+          monthly_builds_estimate?: number | null
+          org_id?: string
+          platforms?: string[]
+          pool_id?: string | null
+          requested_by?: string | null
+          status?: string
+          suspended_at?: string | null
+          updated_at?: string
+          use_case?: string | null
+          worker_current_job_id?: string | null
+          worker_last_seen_at?: string | null
+          worker_name?: string | null
+          worker_status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "dedicated_builders_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: true
+            referencedRelation: "orgs"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       deploy_history: {
         Row: {
