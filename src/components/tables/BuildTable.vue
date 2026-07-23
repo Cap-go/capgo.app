@@ -347,10 +347,10 @@ columns.value = [
           class: 'max-w-xs text-red-600 truncate dark:text-red-400',
         }, truncated),
         h('button', {
-          type: 'button',
+          'type': 'button',
           'aria-label': t('build-error-details'),
-          class: 'p-1 text-gray-500 rounded-md cursor-pointer shrink-0 dark:text-gray-400 hover:text-gray-600 hover:bg-gray-200 dark:hover:bg-gray-700 dark:hover:text-gray-300',
-          onClick: (event: MouseEvent) => {
+          'class': 'p-1 text-gray-500 rounded-md cursor-pointer shrink-0 dark:text-gray-400 hover:text-gray-600 hover:bg-gray-200 dark:hover:bg-gray-700 dark:hover:text-gray-300',
+          'onClick': (event: MouseEvent) => {
             event.stopPropagation()
             showErrorDetails(elem.last_error!)
           },
