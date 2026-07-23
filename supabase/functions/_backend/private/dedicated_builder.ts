@@ -38,13 +38,13 @@ app.use('*', useCors)
 async function requireReadBilling(c: Context<MiddlewareKeyVariables>, orgId: string) {
   const allowed = await checkPermission(c, 'org.read_billing' as any, { orgId })
   if (!allowed)
-    quickError(403, 'not_authorized', 'Not authorized to view dedicated builder')
+    throw quickError(403, 'not_authorized', 'Not authorized to view dedicated builder')
 }
 
 async function requireUpdateBilling(c: Context<MiddlewareKeyVariables>, orgId: string) {
   const allowed = await checkPermission(c, 'org.update_billing' as any, { orgId })
   if (!allowed)
-    quickError(403, 'not_authorized', 'Not authorized to manage dedicated builder')
+    throw quickError(403, 'not_authorized', 'Not authorized to manage dedicated builder')
 }
 
 function normalizePlatforms(platforms: string[] | undefined): string[] {

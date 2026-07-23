@@ -11,9 +11,12 @@ COMMENT ON COLUMN "public"."build_requests"."builder_pool" IS
 ALTER TABLE "public"."build_requests"
   DROP CONSTRAINT IF EXISTS "build_requests_builder_pool_check";
 
+-- NOT VALID: avoid a blocking ACCESS EXCLUSIVE full scan of build_requests on apply.
+-- New/updated rows are still checked; validate later in a maintenance window if desired.
 ALTER TABLE "public"."build_requests"
   ADD CONSTRAINT "build_requests_builder_pool_check"
-  CHECK (("builder_pool" IS NULL OR "builder_pool" = ANY (ARRAY['dedicated'::text, 'shared'::text])));
+  CHECK (("builder_pool" IS NULL OR "builder_pool" = ANY (ARRAY['dedicated'::text, 'shared'::text])))
+  NOT VALID;
 
 CREATE INDEX IF NOT EXISTS "idx_build_requests_org_pool_status"
   ON "public"."build_requests" USING "btree" ("owner_org", "builder_pool", "status");
@@ -71,6 +74,9 @@ CREATE TABLE IF NOT EXISTS "public"."dedicated_builders" (
   ),
   CONSTRAINT "dedicated_builders_worker_name_length_check" CHECK (
     ("worker_name" IS NULL OR "char_length"("worker_name") <= 128)
+  ),
+  CONSTRAINT "dedicated_builders_platforms_check" CHECK (
+    ("platforms" <@ ARRAY['ios'::text, 'android'::text])
   )
 );
 
