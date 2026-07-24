@@ -96,11 +96,7 @@ REVOKE ALL ON FUNCTION "public"."cleanup_queue_messages"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."cleanup_queue_messages"() TO "service_role";
 
 -- Drop obsolete meta row with no q_/a_ tables (documented as omitted in prod baseline).
-<<<<<<< HEAD
--- Skip when pgmq.meta is absent (Tinbase/PGlite emulate pgmq without that table).
-=======
 -- Guard for environments without pgmq.meta (Tinbase/PGlite catalog builds).
->>>>>>> origin/main
 DO $$
 BEGIN
   IF to_regclass('pgmq.meta') IS NOT NULL THEN
