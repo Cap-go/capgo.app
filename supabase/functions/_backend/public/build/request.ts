@@ -6,6 +6,7 @@ import { checkPermission } from '../../utils/rbac.ts'
 import { supabaseAdmin, supabaseApikey } from '../../utils/supabase.ts'
 import { sendEventToTracking } from '../../utils/tracking.ts'
 import { getEnv } from '../../utils/utils.ts'
+import { assertNativeBuildConcurrencyAvailable, getPlansUpgradeUrl } from './concurrency.ts'
 
 export interface RequestBuildBody {
   app_id: string
@@ -196,16 +197,18 @@ async function ensureBuildTimePlanAllowed(c: Context, supabase: ReturnType<typeo
   }
 
   if (!buildTimeAllowed) {
+    const upgradeUrl = getPlansUpgradeUrl(c)
     cloudlog({
       requestId: c.get('requestId'),
       message: 'Native build blocked by build time plan limit',
       org_id: orgId,
       app_id: appId,
     })
-    throw quickError(429, 'need_plan_upgrade', 'Cannot request native build, upgrade plan to continue to build', {
+    throw quickError(429, 'need_plan_upgrade', `Cannot request native build, upgrade plan to continue to build: ${upgradeUrl}`, {
       app_id: appId,
       org_id: orgId,
       reason: 'build_time',
+      upgrade_url: upgradeUrl,
     }, undefined, { alert: false })
   }
 }
@@ -444,6 +447,13 @@ export async function requestBuild(
   const supabase = supabaseApikey(c, apikey.key)
   const org_id = await getBuildOwnerOrg(c, supabase, app_id)
   await ensureBuildTimePlanAllowed(c, supabase, org_id, app_id)
+  // Fail before creating a builder job / upload session when the org is already
+  // at its plan concurrency. /build/start still enforces transactionally.
+  await assertNativeBuildConcurrencyAvailable(c, {
+    orgId: org_id,
+    appId: app_id,
+    userId: apikey.user_id,
+  })
 
   cloudlog({
     requestId: c.get('requestId'),

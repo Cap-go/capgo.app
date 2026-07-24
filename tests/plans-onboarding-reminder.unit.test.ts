@@ -20,7 +20,7 @@ const {
   isTrialOrgMock: vi.fn(async () => 0),
   sendEventToTrackingMock: vi.fn(async () => undefined),
   sendNotifToOrgMembersMock: vi.fn(async () => true),
-  sendNotifToOrgMembersOnceMock: vi.fn(async () => true),
+  sendNotifToOrgMembersOnceMock: vi.fn(async (_c: unknown, _event: string, _pref: string, _data: unknown, orgId: string) => !orgId.includes('already-claimed')),
   supabaseAdminMock: vi.fn(),
 }))
 
@@ -127,14 +127,43 @@ describe('handleOrgNotificationsAndEvents onboarding reminder', () => {
       orgId,
       expect.anything(),
     )
-    expect(sendEventToTrackingMock).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        channel: 'usage',
-        event: 'User need onboarding',
-        user_id: orgId,
-      }),
+    expect(trackingCalls(orgId)).toEqual([
+      [
+        expect.anything(),
+        expect.objectContaining({
+          channel: 'usage',
+          event: 'User need onboarding',
+          user_id: orgId,
+        }),
+      ],
+    ])
+  })
+
+  it.concurrent('does not re-emit User need onboarding when the once-helper finds an existing claim', async () => {
+    const { handleOrgNotificationsAndEvents } = await import('../supabase/functions/_backend/utils/plans.ts')
+    const orgId = 'org-onboarding-already-claimed'
+
+    await handleOrgNotificationsAndEvents(
+      createContext(),
+      {
+        customer_id: null,
+        name: 'Acme Mobile',
+        website: 'https://acme.example/',
+        onboarding: null,
+      },
+      orgId,
+      false,
+      {
+        total_percent: 0,
+        mau_percent: 0,
+        bandwidth_percent: 0,
+        storage_percent: 0,
+        build_time_percent: 0,
+      },
+      {} as any,
     )
+
+    expect(trackingCalls(orgId)).toHaveLength(0)
   })
 
   it.concurrent('does not send plan usage alerts from stale total percent alone', async () => {

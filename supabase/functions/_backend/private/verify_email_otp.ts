@@ -1,16 +1,17 @@
-import { type } from 'arktype'
-import { safeParseSchema } from '../utils/ark_validation.ts'
-import { createHono, getClaimsFromJWT, middlewareAuth, parseBody, quickError, simpleError, simpleRateLimit, useCors } from '../utils/hono.ts'
+import { z } from 'zod'
+import { safeParseSchema } from '../utils/schema_validation.ts'
+import { createHono, parseBody, quickError, simpleError, simpleRateLimit, useCors } from '../utils/hono.ts'
+import { getClaimsFromJWT, middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { clearFailedAccountAuth, isAccountRateLimited, recordFailedAccountAuth } from '../utils/rate_limit.ts'
 import { buildRateLimitInfo } from '../utils/rateLimitInfo.ts'
 import { emptySupabase, supabaseAdmin } from '../utils/supabase.ts'
 import { version } from '../utils/version.ts'
 
-const bodySchema = type({
-  'token?': 'string',
-  'token_hash?': 'string',
-  'type?': '"email" | "magiclink"',
+const bodySchema = z.object({
+  token: z.string().optional(),
+  token_hash: z.string().optional(),
+  type: z.enum(['email', 'magiclink']).optional(),
 })
 
 export const app = createHono('', version)

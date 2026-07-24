@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { actionToFilter, filterToAction, statsActionFilters } from '~/services/statsActions'
-import { ALLOWED_STATS_ACTIONS } from '../supabase/functions/_backend/plugins/stats_actions.ts'
+import { ALLOWED_STATS_ACTIONS } from '../supabase/functions/_backend/plugin_runtime/plugins/stats_actions.ts'
 
 const HEALTH_STATS_ACTIONS = [
   'app_crash',

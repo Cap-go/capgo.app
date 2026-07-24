@@ -1,9 +1,9 @@
 import type { Context } from 'hono'
 import type { AuthInfo, MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
-import { type } from 'arktype'
+import { z } from 'zod'
 import { HTTPException } from 'hono/http-exception'
-import { safeParseSchema } from '../../utils/ark_validation.ts'
+import { safeParseSchema } from '../../utils/schema_validation.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { closeClient, getPgClient } from '../../utils/pg.ts'
 import { checkPermission } from '../../utils/rbac.ts'
@@ -12,43 +12,37 @@ import { getStripeCustomerName, isDeterministicStripeCustomerUpdateError, update
 import { apikeyHasOrgRightWithPolicy, supabaseAdmin, supabaseApikey, supabaseClient } from '../../utils/supabase.ts'
 import { normalizeWebsiteUrl } from './website.ts'
 
-const passwordPolicyMinLengthSchema = type('number.integer >= 6').narrow((value, ctx) => {
-  if (value > 72) {
-    return ctx.reject({
-      expected: 'a value <= 72',
-      actual: JSON.stringify(value),
-    })
-  }
+const passwordPolicyMinLengthSchema = z.number().int().min(6).refine(
+  value => value <= 72,
+  { message: 'a value <= 72' },
+)
 
-  return true
+const passwordPolicyConfigSchema = z.object({
+  enabled: z.boolean(),
+  min_length: passwordPolicyMinLengthSchema,
+  require_uppercase: z.boolean(),
+  require_number: z.boolean(),
+  require_special: z.boolean(),
 })
 
-const passwordPolicyConfigSchema = type({
-  'enabled': 'boolean',
-  'min_length': passwordPolicyMinLengthSchema,
-  'require_uppercase': 'boolean',
-  'require_number': 'boolean',
-  'require_special': 'boolean',
-})
-
-const bodySchema = type({
-  'orgId': 'string',
-  'logo?': 'string',
-  'name?': 'string',
-  'website?': 'string | null',
-  'management_email?': 'string.email',
-  'require_apikey_expiration?': 'boolean',
-  'max_apikey_expiration_days?': 'number | null',
-  'enforce_hashed_api_keys?': 'boolean',
-  'enforce_encrypted_bundles?': 'boolean',
-  'required_encryption_key?': 'string | null',
-  'enforcing_2fa?': 'boolean',
-  'password_policy_config?': passwordPolicyConfigSchema.or(type('null')),
+const bodySchema = z.object({
+  orgId: z.string(),
+  logo: z.string().optional(),
+  name: z.string().optional(),
+  website: z.string().nullable().optional(),
+  management_email: z.email().optional(),
+  require_apikey_expiration: z.boolean().optional(),
+  max_apikey_expiration_days: z.number().nullable().optional(),
+  enforce_hashed_api_keys: z.boolean().optional(),
+  enforce_encrypted_bundles: z.boolean().optional(),
+  required_encryption_key: z.string().nullable().optional(),
+  enforcing_2fa: z.boolean().optional(),
+  password_policy_config: passwordPolicyConfigSchema.nullable().optional(),
 })
 
 type OrgRow = Database['public']['Tables']['orgs']['Row']
 type OrgUpdateFields = Partial<Database['public']['Tables']['orgs']['Update']>
-type PasswordPolicyConfig = typeof passwordPolicyConfigSchema.infer
+type PasswordPolicyConfig = z.infer<typeof passwordPolicyConfigSchema>
 
 interface OrganizationPutBody {
   orgId: string

@@ -1,8 +1,8 @@
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
-import { type } from 'arktype'
+import { z } from 'zod'
 import { eq } from 'drizzle-orm'
 import { Hono } from 'hono/tiny'
-import { safeParseSchema } from '../utils/ark_validation.ts'
+import { safeParseSchema } from '../utils/schema_validation.ts'
 import { BRES, parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
@@ -10,12 +10,12 @@ import { schema } from '../utils/postgres_schema.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { createStatsDevices } from '../utils/stats.ts'
 
-const bodySchema = type({
-  device_id: 'string.uuid',
-  app_id: 'string',
-  org_id: 'string.uuid',
-  platform: '"ios" | "android"',
-  version_name: 'string',
+const bodySchema = z.object({
+  device_id: z.uuid(),
+  app_id: z.string(),
+  org_id: z.uuid(),
+  platform: z.enum(['ios', 'android']),
+  version_name: z.string(),
 })
 
 export const app = new Hono<MiddlewareKeyVariables>()

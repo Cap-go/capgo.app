@@ -1,38 +1,38 @@
 import type { Context } from 'hono'
 import type { AuthInfo } from '../../utils/hono.ts'
-import { type } from 'arktype'
-import { safeParseSchema } from '../../utils/ark_validation.ts'
+import { z } from 'zod'
+import { numberLikeSchema, safeParseSchema } from '../../utils/schema_validation.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { apikeyHasOrgRightWithPolicy, supabaseWithAuth } from '../../utils/supabase.ts'
 
-const bodySchema = type({
-  'orgId': 'string',
-  'tableName?': 'string',
-  'operation?': 'string',
-  'page?': 'number | string.numeric.parse',
-  'limit?': 'number | string.numeric.parse',
+const bodySchema = z.object({
+  orgId: z.string(),
+  tableName: z.string().optional(),
+  operation: z.string().optional(),
+  page: numberLikeSchema.optional(),
+  limit: numberLikeSchema.optional(),
 })
 
-const auditLogSchema = type({
-  id: 'number',
-  created_at: 'string',
-  table_name: 'string',
-  record_id: 'string',
-  operation: 'string',
-  user_id: 'string | null',
-  org_id: 'string',
-  old_record: 'unknown',
-  new_record: 'unknown',
-  changed_fields: 'string[] | null',
-  actor_type: '"user" | "apikey" | "system" | "unknown"',
-  actor_user_id: 'string | null',
-  actor_user_email: 'string | null',
-  actor_apikey_id: 'number | null',
-  actor_apikey_name: 'string | null',
+const auditLogSchema = z.object({
+  id: z.number(),
+  created_at: z.string(),
+  table_name: z.string(),
+  record_id: z.string(),
+  operation: z.string(),
+  user_id: z.string().nullable(),
+  org_id: z.string(),
+  old_record: z.unknown(),
+  new_record: z.unknown(),
+  changed_fields: z.array(z.string()).nullable(),
+  actor_type: z.enum(['user', 'apikey', 'system', 'unknown']),
+  actor_user_id: z.string().nullable(),
+  actor_user_email: z.string().nullable(),
+  actor_apikey_id: z.number().nullable(),
+  actor_apikey_name: z.string().nullable(),
 })
 
-const auditLogsSchema = auditLogSchema.array()
+const auditLogsSchema = z.array(auditLogSchema)
 
 export async function getAuditLogs(c: Context, bodyRaw: any): Promise<Response> {
   const bodyParsed = safeParseSchema(bodySchema, bodyRaw)

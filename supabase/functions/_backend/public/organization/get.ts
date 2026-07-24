@@ -1,31 +1,31 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
-import { type } from 'arktype'
-import { safeParseSchema } from '../../utils/ark_validation.ts'
+import { z } from 'zod'
+import { safeParseSchema } from '../../utils/schema_validation.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { createSignedImageUrl } from '../../utils/storage.ts'
 import { apikeyHasOrgRightWithPolicy, supabaseApikey } from '../../utils/supabase.ts'
 import { fetchLimit } from '../../utils/utils.ts'
 
-const bodySchema = type({
-  'orgId?': 'string',
-  'page?': 'number',
+const bodySchema = z.object({
+  orgId: z.string().optional(),
+  page: z.number().optional(),
 })
-const orgSchema = type({
-  id: 'string.uuid',
-  created_by: 'string.uuid',
-  created_at: 'string | Date',
-  updated_at: 'string | Date',
-  logo: 'string | null',
-  name: 'string',
-  management_email: 'string.email',
-  customer_id: 'string | null',
-  website: 'string | null',
+const orgSchema = z.object({
+  id: z.uuid(),
+  created_by: z.uuid(),
+  created_at: z.union([z.string(), z.date()]),
+  updated_at: z.union([z.string(), z.date()]),
+  logo: z.string().nullable(),
+  name: z.string(),
+  management_email: z.email(),
+  customer_id: z.string().nullable(),
+  website: z.string().nullable(),
 })
 
-const orgsSchema = orgSchema.array()
+const orgsSchema = z.array(orgSchema)
 
 function parseBody(bodyRaw: unknown) {
   const bodyParsed = safeParseSchema(bodySchema, bodyRaw)

@@ -14,7 +14,7 @@ import process from 'node:process'
 console.log('🧪 Testing MCP Google sign-in reopen recovery...\n')
 
 const { decideAndroid, runAdvance } = await import('../src/build/onboarding/mcp/engine.ts')
-const { parseSchema } = await import('../src/schemas/ark_validation.ts')
+const { parseSchema } = await import('../src/schemas/schema_validation.ts')
 const { onboardingNextStepSchema } = await import('../src/schemas/onboarding.ts')
 
 let pass = 0

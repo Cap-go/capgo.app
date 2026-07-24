@@ -1,25 +1,25 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../../utils/hono.ts'
 import type { Database } from '../../../utils/supabase.types.ts'
-import { type } from 'arktype'
-import { safeParseSchema } from '../../../utils/ark_validation.ts'
+import { z } from 'zod'
+import { safeParseSchema } from '../../../utils/schema_validation.ts'
 import { quickError, simpleError } from '../../../utils/hono.ts'
 import { cloudlog } from '../../../utils/logging.ts'
 import { checkPermission } from '../../../utils/rbac.ts'
 import { createSignedImageUrl } from '../../../utils/storage.ts'
 import { apikeyHasOrgRightWithPolicy, supabaseApikey } from '../../../utils/supabase.ts'
 
-const bodySchema = type({
-  orgId: 'string',
+const bodySchema = z.object({
+  orgId: z.string(),
 })
 
-const memberSchema = type({
-  uid: 'string.uuid',
-  email: 'string.email',
-  image_url: 'string | null | undefined',
-  role: 'string',
-  is_tmp: 'boolean',
-}).array()
+const memberSchema = z.array(z.object({
+  uid: z.uuid(),
+  email: z.email(),
+  image_url: z.string().nullish(),
+  role: z.string(),
+  is_tmp: z.boolean(),
+}))
 
 export async function get(c: Context<MiddlewareKeyVariables>, bodyRaw: any, apikey: Database['public']['Tables']['apikeys']['Row']): Promise<Response> {
   const bodyParsed = safeParseSchema(bodySchema, bodyRaw)

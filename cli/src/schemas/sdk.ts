@@ -1,8 +1,8 @@
-import { type } from './arktype'
+import { z } from 'zod'
 import { buildCredentialsSchema } from './build'
 import { localizedReleaseNotesSchema, rejectConflictingBooleanGroup } from './common'
 
-export const capacitorConfigOptionSchema = type('string > 0').describe('Capacitor config source to update')
+export const capacitorConfigOptionSchema = z.string().min(1).describe('Capacitor config source to update')
 
 // ============================================================================
 // SDK Result Schema
@@ -22,467 +22,429 @@ export interface SDKResult<T = void> {
 // SDK App Schemas
 // ============================================================================
 
-export const addAppOptionsSchema = type({
-  '+': 'delete',
-  appId: 'string',
-  'name?': 'string',
-  'icon?': 'string',
-  'apikey?': 'string',
-  'supaHost?': 'string',
-  'supaAnon?': 'string',
+export const addAppOptionsSchema = z.object({
+  appId: z.string(),
+  name: z.string().optional(),
+  icon: z.string().optional(),
+  apikey: z.string().optional(),
+  supaHost: z.string().optional(),
+  supaAnon: z.string().optional(),
 })
 
-export type AddAppOptions = typeof addAppOptionsSchema.infer
+export type AddAppOptions = z.infer<typeof addAppOptionsSchema>
 
-export const updateAppOptionsSchema = type({
-  '+': 'delete',
-  appId: 'string',
-  'name?': 'string',
-  'icon?': 'string',
-  'retention?': 'number',
-  'apikey?': 'string',
-  'supaHost?': 'string',
-  'supaAnon?': 'string',
+export const updateAppOptionsSchema = z.object({
+  appId: z.string(),
+  name: z.string().optional(),
+  icon: z.string().optional(),
+  retention: z.number().optional(),
+  apikey: z.string().optional(),
+  supaHost: z.string().optional(),
+  supaAnon: z.string().optional(),
 })
 
-export type UpdateAppOptions = typeof updateAppOptionsSchema.infer
+export type UpdateAppOptions = z.infer<typeof updateAppOptionsSchema>
 
-export const appInfoSchema = type({
-  '+': 'delete',
-  appId: 'string',
-  name: 'string',
-  'iconUrl?': 'string',
-  createdAt: 'Date',
+export const appInfoSchema = z.object({
+  appId: z.string(),
+  name: z.string(),
+  iconUrl: z.string().optional(),
+  createdAt: z.date(),
 })
 
-export type AppInfo = typeof appInfoSchema.infer
+export type AppInfo = z.infer<typeof appInfoSchema>
 
-export const starRepoOptionsSchema = type({
-  '+': 'delete',
-  'repository?': 'string',
+export const starRepoOptionsSchema = z.object({
+  repository: z.string().optional(),
 })
 
-export type StarRepoOptions = typeof starRepoOptionsSchema.infer
+export type StarRepoOptions = z.infer<typeof starRepoOptionsSchema>
 
-export const starAllRepositoriesOptionsSchema = type({
-  '+': 'delete',
-  'repositories?': 'string > 0[]',
-  'minDelayMs?': 'number.integer >= 0',
-  'maxDelayMs?': 'number.integer >= 0',
-  'maxConcurrency?': '1 <= number.integer <= 16',
+export const starAllRepositoriesOptionsSchema = z.object({
+  repositories: z.array(z.string().min(1)).optional(),
+  minDelayMs: z.number().int().min(0).optional(),
+  maxDelayMs: z.number().int().min(0).optional(),
+  maxConcurrency: z.number().int().min(1).max(16).optional(),
 })
 
-export type StarAllRepositoriesOptions = typeof starAllRepositoriesOptionsSchema.infer
+export type StarAllRepositoriesOptions = z.infer<typeof starAllRepositoriesOptionsSchema>
 
 // ============================================================================
 // SDK Bundle Schemas
 // ============================================================================
 
-export const uploadOptionsSchema = type({
-  '+': 'delete',
-  appId: 'string',
-  path: 'string',
-  'bundle?': 'string',
-  'channel?': 'string',
-  'rollout?': '0 <= number <= 100',
-  'rolloutPercentageBps?': '0 <= number.integer <= 10000',
-  'rolloutCacheTtlSeconds?': '60 <= number.integer <= 31536000',
-  'apikey?': 'string',
-  'external?': 'string',
-  'encrypt?': 'boolean',
-  'encryptionKey?': 'string',
-  'supaHost?': 'string',
-  'supaAnon?': 'string',
-  'timeout?': 'number',
-  'useTus?': 'boolean',
-  'comment?': 'string',
-  'minUpdateVersion?': 'string',
-  'autoMinUpdateVersion?': 'boolean',
-  'autoSetBundle?': 'boolean',
-  'selfAssign?': 'boolean',
-  'packageJsonPaths?': 'string',
-  'ignoreCompatibilityCheck?': 'boolean',
-  'disableCodeCheck?': 'boolean',
-  'useZip?': 'boolean',
-  'capacitorConfig?': capacitorConfigOptionSchema,
+export const uploadOptionsSchema = z.object({
+  appId: z.string(),
+  path: z.string(),
+  bundle: z.string().optional(),
+  channel: z.string().optional(),
+  rollout: z.number().min(0).max(100).optional(),
+  rolloutPercentageBps: z.number().int().min(0).max(10000).optional(),
+  rolloutCacheTtlSeconds: z.number().int().min(60).max(31536000).optional(),
+  apikey: z.string().optional(),
+  external: z.string().optional(),
+  encrypt: z.boolean().optional(),
+  encryptionKey: z.string().optional(),
+  supaHost: z.string().optional(),
+  supaAnon: z.string().optional(),
+  timeout: z.number().optional(),
+  useTus: z.boolean().optional(),
+  comment: z.string().optional(),
+  minUpdateVersion: z.string().optional(),
+  autoMinUpdateVersion: z.boolean().optional(),
+  autoSetBundle: z.boolean().optional(),
+  selfAssign: z.boolean().optional(),
+  packageJsonPaths: z.string().optional(),
+  ignoreCompatibilityCheck: z.boolean().optional(),
+  disableCodeCheck: z.boolean().optional(),
+  useZip: z.boolean().optional(),
+  capacitorConfig: capacitorConfigOptionSchema.optional(),
 })
 
-export type UploadOptions = typeof uploadOptionsSchema.infer
+export type UploadOptions = z.infer<typeof uploadOptionsSchema>
 
-export const uploadResultSchema = type({
-  '+': 'delete',
-  success: 'boolean',
-  'bundleId?': 'string',
-  'bundleUrl?': 'string',
-  'checksum?': 'string | null',
-  'encryptionMethod?': "'none' | 'v1' | 'v2'",
-  'sessionKey?': 'string',
-  'ivSessionKey?': 'string | null',
-  'storageProvider?': 'string',
-  'skipped?': 'boolean',
-  'reason?': 'string',
-  'error?': 'string',
-  'warnings?': 'string[]',
+export const uploadResultSchema = z.object({
+  success: z.boolean(),
+  bundleId: z.string().optional(),
+  bundleUrl: z.string().optional(),
+  checksum: z.string().nullable().optional(),
+  encryptionMethod: z.enum(['none', 'v1', 'v2']).optional(),
+  sessionKey: z.string().optional(),
+  ivSessionKey: z.string().nullable().optional(),
+  storageProvider: z.string().optional(),
+  skipped: z.boolean().optional(),
+  reason: z.string().optional(),
+  error: z.string().optional(),
+  warnings: z.array(z.string()).optional(),
 })
 
-export type UploadResult = typeof uploadResultSchema.infer
+export type UploadResult = z.infer<typeof uploadResultSchema>
 
-export const bundleInfoSchema = type({
-  '+': 'delete',
-  id: 'string',
-  version: 'string',
-  'channel?': 'string',
-  uploadedAt: 'Date',
-  size: 'number',
-  encrypted: 'boolean',
+export const bundleInfoSchema = z.object({
+  id: z.string(),
+  version: z.string(),
+  channel: z.string().optional(),
+  uploadedAt: z.date(),
+  size: z.number(),
+  encrypted: z.boolean(),
 })
 
-export type BundleInfo = typeof bundleInfoSchema.infer
+export type BundleInfo = z.infer<typeof bundleInfoSchema>
 
-export const cleanupOptionsSchema = type({
-  '+': 'delete',
-  appId: 'string',
-  'keep?': 'number',
-  'bundle?': 'string',
-  'force?': 'boolean',
-  'ignoreChannel?': 'boolean',
-  'apikey?': 'string',
-  'supaHost?': 'string',
-  'supaAnon?': 'string',
+export const cleanupOptionsSchema = z.object({
+  appId: z.string(),
+  keep: z.number().optional(),
+  bundle: z.string().optional(),
+  force: z.boolean().optional(),
+  ignoreChannel: z.boolean().optional(),
+  apikey: z.string().optional(),
+  supaHost: z.string().optional(),
+  supaAnon: z.string().optional(),
 })
 
-export type CleanupOptions = typeof cleanupOptionsSchema.infer
+export type CleanupOptions = z.infer<typeof cleanupOptionsSchema>
 
 // ============================================================================
 // SDK Key Schemas
 // ============================================================================
 
-export const generateKeyOptionsSchema = type({
-  '+': 'delete',
-  'force?': type('boolean').describe('Overwrite existing keys if they exist'),
-  'setupChannel?': 'boolean',
-  'capacitorConfig?': capacitorConfigOptionSchema,
+export const generateKeyOptionsSchema = z.object({
+  force: z.boolean().optional().describe('Overwrite existing keys if they exist'),
+  setupChannel: z.boolean().optional(),
+  capacitorConfig: capacitorConfigOptionSchema.optional(),
 })
 
-export type GenerateKeyOptions = typeof generateKeyOptionsSchema.infer
+export type GenerateKeyOptions = z.infer<typeof generateKeyOptionsSchema>
 
-export const saveKeyOptionsSchema = type({
-  '+': 'delete',
-  'keyPath?': 'string',
-  'keyData?': 'string',
-  'setupChannel?': 'boolean',
-  'capacitorConfig?': capacitorConfigOptionSchema,
+export const saveKeyOptionsSchema = z.object({
+  keyPath: z.string().optional(),
+  keyData: z.string().optional(),
+  setupChannel: z.boolean().optional(),
+  capacitorConfig: capacitorConfigOptionSchema.optional(),
 })
 
-export type SaveKeyOptions = typeof saveKeyOptionsSchema.infer
+export type SaveKeyOptions = z.infer<typeof saveKeyOptionsSchema>
 
-export const deleteOldKeyOptionsSchema = type({
-  '+': 'delete',
-  'force?': 'boolean',
-  'setupChannel?': 'boolean',
-  'capacitorConfig?': capacitorConfigOptionSchema,
+export const deleteOldKeyOptionsSchema = z.object({
+  force: z.boolean().optional(),
+  setupChannel: z.boolean().optional(),
+  capacitorConfig: capacitorConfigOptionSchema.optional(),
 })
 
-export type DeleteOldKeyOptions = typeof deleteOldKeyOptionsSchema.infer
+export type DeleteOldKeyOptions = z.infer<typeof deleteOldKeyOptionsSchema>
 
 // ============================================================================
 // SDK Channel Schemas
 // ============================================================================
 
-export const addChannelOptionsSchema = type({
-  '+': 'delete',
-  channelId: type('string').describe('Channel name'),
-  appId: 'string',
-  'default?': 'boolean',
-  'selfAssign?': 'boolean',
-  'apikey?': 'string',
-  'supaHost?': 'string',
-  'supaAnon?': 'string',
+export const addChannelOptionsSchema = z.object({
+  channelId: z.string().describe('Channel name'),
+  appId: z.string(),
+  default: z.boolean().optional(),
+  selfAssign: z.boolean().optional(),
+  apikey: z.string().optional(),
+  supaHost: z.string().optional(),
+  supaAnon: z.string().optional(),
 })
 
-export type AddChannelOptions = typeof addChannelOptionsSchema.infer
+export type AddChannelOptions = z.infer<typeof addChannelOptionsSchema>
 
-export const updateChannelOptionsBaseSchema = type({
-  '+': 'delete',
-  channelId: type('string').describe('Channel name'),
-  appId: 'string',
-  'bundle?': 'string',
-  'state?': 'string',
-  'downgrade?': 'boolean',
-  'ios?': 'boolean',
-  'android?': 'boolean',
-  'selfAssign?': 'boolean',
-  'disableAutoUpdate?': 'string',
-  'dev?': 'boolean',
-  'emulator?': 'boolean',
-  'device?': 'boolean',
-  'prod?': 'boolean',
-  'rolloutBundle?': 'string',
-  'rolloutPercentage?': '0 <= number <= 100',
-  'rolloutPercentageBps?': '0 <= number.integer <= 10000',
-  'rolloutEnable?': 'boolean',
-  'rolloutDisable?': 'boolean',
-  'rolloutPause?': 'boolean',
-  'rolloutResume?': 'boolean',
-  'rolloutRollback?': 'boolean',
-  'rolloutPromote?': 'boolean',
-  'rolloutCacheTtlSeconds?': '60 <= number.integer <= 31536000',
-  'autoPauseEnabled?': 'boolean',
-  'autoPauseDisabled?': 'boolean',
-  'autoPauseWindowMinutes?': '1 <= number.integer <= 10080',
-  'autoPauseFailureRateBps?': '0 <= number.integer <= 10000 | null',
-  'autoPauseConfidence?': '0 < number < 1',
-  'autoPauseMinAttempts?': 'number.integer >= 0 | null',
-  'autoPauseMinFailures?': 'number.integer >= 0 | null',
-  'autoPauseAction?': "'pause' | 'rollback' | 'notify'",
-  'autoPauseCooldownMinutes?': '0 <= number.integer <= 10080',
-  'apikey?': 'string',
-  'supaHost?': 'string',
-  'supaAnon?': 'string',
+export const updateChannelOptionsBaseSchema = z.object({
+  channelId: z.string().describe('Channel name'),
+  appId: z.string(),
+  bundle: z.string().optional(),
+  state: z.string().optional(),
+  downgrade: z.boolean().optional(),
+  ios: z.boolean().optional(),
+  android: z.boolean().optional(),
+  selfAssign: z.boolean().optional(),
+  disableAutoUpdate: z.string().optional(),
+  dev: z.boolean().optional(),
+  emulator: z.boolean().optional(),
+  device: z.boolean().optional(),
+  prod: z.boolean().optional(),
+  rolloutBundle: z.string().optional(),
+  rolloutPercentage: z.number().min(0).max(100).optional(),
+  rolloutPercentageBps: z.number().int().min(0).max(10000).optional(),
+  rolloutEnable: z.boolean().optional(),
+  rolloutDisable: z.boolean().optional(),
+  rolloutPause: z.boolean().optional(),
+  rolloutResume: z.boolean().optional(),
+  rolloutRollback: z.boolean().optional(),
+  rolloutPromote: z.boolean().optional(),
+  rolloutCacheTtlSeconds: z.number().int().min(60).max(31536000).optional(),
+  autoPauseEnabled: z.boolean().optional(),
+  autoPauseDisabled: z.boolean().optional(),
+  autoPauseWindowMinutes: z.number().int().min(1).max(10080).optional(),
+  autoPauseFailureRateBps: z.number().int().min(0).max(10000).nullable().optional(),
+  autoPauseConfidence: z.number().gt(0).lt(1).optional(),
+  autoPauseMinAttempts: z.number().int().min(0).nullable().optional(),
+  autoPauseMinFailures: z.number().int().min(0).nullable().optional(),
+  autoPauseAction: z.enum(['pause', 'rollback', 'notify']).optional(),
+  autoPauseCooldownMinutes: z.number().int().min(0).max(10080).optional(),
+  apikey: z.string().optional(),
+  supaHost: z.string().optional(),
+  supaAnon: z.string().optional(),
 })
 
-export const updateChannelOptionsSchema = updateChannelOptionsBaseSchema.narrow((value, ctx) => {
-  if (!rejectConflictingBooleanGroup(value, ctx, ['rolloutEnable', 'rolloutDisable']))
-    return false
-  if (!rejectConflictingBooleanGroup(value, ctx, ['rolloutPause', 'rolloutResume', 'rolloutRollback', 'rolloutPromote']))
-    return false
-  if (!rejectConflictingBooleanGroup(value, ctx, ['autoPauseEnabled', 'autoPauseDisabled']))
-    return false
-  return true
+export const updateChannelOptionsSchema = updateChannelOptionsBaseSchema.superRefine((value, ctx) => {
+  rejectConflictingBooleanGroup(value, ctx, ['rolloutEnable', 'rolloutDisable'])
+  rejectConflictingBooleanGroup(value, ctx, ['rolloutPause', 'rolloutResume', 'rolloutRollback', 'rolloutPromote'])
+  rejectConflictingBooleanGroup(value, ctx, ['autoPauseEnabled', 'autoPauseDisabled'])
 })
 
-export type UpdateChannelOptions = typeof updateChannelOptionsSchema.infer
+export type UpdateChannelOptions = z.infer<typeof updateChannelOptionsSchema>
 
 // ============================================================================
 // SDK Organization Schemas
 // ============================================================================
 
-export const accountIdOptionsSchema = type({
-  '+': 'delete',
-  'apikey?': 'string',
-  'supaHost?': 'string',
-  'supaAnon?': 'string',
+export const accountIdOptionsSchema = z.object({
+  apikey: z.string().optional(),
+  supaHost: z.string().optional(),
+  supaAnon: z.string().optional(),
 })
 
-export type AccountIdOptions = typeof accountIdOptionsSchema.infer
+export type AccountIdOptions = z.infer<typeof accountIdOptionsSchema>
 
 export const listOrganizationsOptionsSchema = accountIdOptionsSchema
 
-export type ListOrganizationsOptions = typeof listOrganizationsOptionsSchema.infer
+export type ListOrganizationsOptions = z.infer<typeof listOrganizationsOptionsSchema>
 
-export const addOrganizationOptionsSchema = type({
-  '...': accountIdOptionsSchema,
-  '+': 'delete',
-  name: 'string',
-  email: 'string',
+export const addOrganizationOptionsSchema = accountIdOptionsSchema.extend({
+  name: z.string(),
+  email: z.string(),
 })
 
-export type AddOrganizationOptions = typeof addOrganizationOptionsSchema.infer
+export type AddOrganizationOptions = z.infer<typeof addOrganizationOptionsSchema>
 
-export const updateOrganizationOptionsSchema = type({
-  '...': accountIdOptionsSchema,
-  '+': 'delete',
-  orgId: 'string',
-  'name?': 'string',
-  'email?': 'string',
+export const updateOrganizationOptionsSchema = accountIdOptionsSchema.extend({
+  orgId: z.string(),
+  name: z.string().optional(),
+  email: z.string().optional(),
 })
 
-export type UpdateOrganizationOptions = typeof updateOrganizationOptionsSchema.infer
+export type UpdateOrganizationOptions = z.infer<typeof updateOrganizationOptionsSchema>
 
-export const organizationInfoSchema = type({
-  '+': 'delete',
-  id: 'string',
-  name: 'string',
-  'role?': 'string',
-  'appCount?': 'number',
-  'email?': 'string',
-  'createdAt?': 'Date',
+export const organizationInfoSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  role: z.string().optional(),
+  appCount: z.number().optional(),
+  email: z.string().optional(),
+  createdAt: z.date().optional(),
 })
 
-export type OrganizationInfo = typeof organizationInfoSchema.infer
+export type OrganizationInfo = z.infer<typeof organizationInfoSchema>
 
-export const deleteOrganizationOptionsSchema = type({
-  '...': accountIdOptionsSchema,
-  '+': 'delete',
-  'autoConfirm?': 'boolean',
+export const deleteOrganizationOptionsSchema = accountIdOptionsSchema.extend({
+  autoConfirm: z.boolean().optional(),
 })
 
-export type DeleteOrganizationOptions = typeof deleteOrganizationOptionsSchema.infer
+export type DeleteOrganizationOptions = z.infer<typeof deleteOrganizationOptionsSchema>
 
 // ============================================================================
 // SDK Login & Doctor Schemas
 // ============================================================================
 
-export const loginOptionsSchema = type({
-  '+': 'delete',
-  apikey: 'string',
-  'local?': 'boolean',
-  'supaHost?': 'string',
-  'supaAnon?': 'string',
+export const loginOptionsSchema = z.object({
+  apikey: z.string(),
+  local: z.boolean().optional(),
+  supaHost: z.string().optional(),
+  supaAnon: z.string().optional(),
 })
 
-export type LoginOptions = typeof loginOptionsSchema.infer
+export type LoginOptions = z.infer<typeof loginOptionsSchema>
 
-export const doctorOptionsSchema = type({
-  '+': 'delete',
-  'packageJson?': 'string',
+export const doctorOptionsSchema = z.object({
+  packageJson: z.string().optional(),
 })
 
-export type DoctorOptions = typeof doctorOptionsSchema.infer
+export type DoctorOptions = z.infer<typeof doctorOptionsSchema>
 
 // ============================================================================
 // SDK Bundle Compatibility Schemas
 // ============================================================================
 
-export const bundleCompatibilityOptionsSchema = type({
-  '+': 'delete',
-  appId: 'string',
-  channel: 'string',
-  'packageJson?': 'string',
-  'nodeModules?': 'string',
-  'textOutput?': 'boolean',
-  'apikey?': 'string',
-  'supaHost?': 'string',
-  'supaAnon?': 'string',
+export const bundleCompatibilityOptionsSchema = z.object({
+  appId: z.string(),
+  channel: z.string(),
+  packageJson: z.string().optional(),
+  nodeModules: z.string().optional(),
+  textOutput: z.boolean().optional(),
+  apikey: z.string().optional(),
+  supaHost: z.string().optional(),
+  supaAnon: z.string().optional(),
 })
 
-export type BundleCompatibilityOptions = typeof bundleCompatibilityOptionsSchema.infer
+export type BundleCompatibilityOptions = z.infer<typeof bundleCompatibilityOptionsSchema>
 
 // ============================================================================
 // SDK Encrypt/Decrypt/Zip Schemas
 // ============================================================================
 
-export const encryptBundleOptionsSchema = type({
-  '+': 'delete',
-  zipPath: 'string',
-  checksum: 'string',
-  'keyPath?': 'string',
-  'keyData?': 'string',
-  'json?': 'boolean',
-  'packageJson?': 'string',
+export const encryptBundleOptionsSchema = z.object({
+  zipPath: z.string(),
+  checksum: z.string(),
+  keyPath: z.string().optional(),
+  keyData: z.string().optional(),
+  json: z.boolean().optional(),
+  packageJson: z.string().optional(),
 })
 
-export type EncryptBundleOptions = typeof encryptBundleOptionsSchema.infer
+export type EncryptBundleOptions = z.infer<typeof encryptBundleOptionsSchema>
 
-export const decryptBundleOptionsSchema = type({
-  '+': 'delete',
-  zipPath: 'string',
-  ivSessionKey: 'string',
-  'keyPath?': 'string',
-  'keyData?': 'string',
-  'checksum?': 'string',
-  'packageJson?': 'string',
+export const decryptBundleOptionsSchema = z.object({
+  zipPath: z.string(),
+  ivSessionKey: z.string(),
+  keyPath: z.string().optional(),
+  keyData: z.string().optional(),
+  checksum: z.string().optional(),
+  packageJson: z.string().optional(),
 })
 
-export type DecryptBundleOptions = typeof decryptBundleOptionsSchema.infer
+export type DecryptBundleOptions = z.infer<typeof decryptBundleOptionsSchema>
 
-export const zipBundleOptionsSchema = type({
-  '+': 'delete',
-  appId: 'string',
-  path: 'string',
-  'bundle?': 'string',
-  'name?': 'string',
-  'codeCheck?': 'boolean',
-  'json?': 'boolean',
-  'keyV2?': 'boolean',
-  'packageJson?': 'string',
+export const zipBundleOptionsSchema = z.object({
+  appId: z.string(),
+  path: z.string(),
+  bundle: z.string().optional(),
+  name: z.string().optional(),
+  codeCheck: z.boolean().optional(),
+  json: z.boolean().optional(),
+  keyV2: z.boolean().optional(),
+  packageJson: z.string().optional(),
 })
 
-export type ZipBundleOptions = typeof zipBundleOptionsSchema.infer
+export type ZipBundleOptions = z.infer<typeof zipBundleOptionsSchema>
 
 // ============================================================================
 // SDK Build Schemas
 // ============================================================================
 
-export const requestBuildOptionsSchema = type({
-  '+': 'delete',
-  appId: 'string',
-  'path?': 'string',
-  'nodeModules?': 'string',
-  platform: "'ios' | 'android'",
-  'credentials?': buildCredentialsSchema,
-  'submitToStoreReview?': 'boolean',
-  'storeReleaseName?': 'string > 0',
-  'storeReleaseNotes?': 'string > 0',
-  'storeReleaseNotesLocalized?': localizedReleaseNotesSchema,
-  'iosTestflightGroups?': 'string > 0',
-  'iosAutomaticRelease?': 'boolean',
-  'userId?': 'string',
-  'apikey?': 'string',
-  'supaHost?': 'string',
-  'supaAnon?': 'string',
-  'prescan?': 'boolean',
-  'prescanIgnoreFatal?': 'boolean',
+export const requestBuildOptionsSchema = z.object({
+  appId: z.string(),
+  path: z.string().optional(),
+  nodeModules: z.string().optional(),
+  platform: z.enum(['ios', 'android']),
+  credentials: buildCredentialsSchema.optional(),
+  submitToStoreReview: z.boolean().optional(),
+  storeReleaseName: z.string().min(1).optional(),
+  storeReleaseNotes: z.string().min(1).optional(),
+  storeReleaseNotesLocalized: localizedReleaseNotesSchema.optional(),
+  iosTestflightGroups: z.string().min(1).optional(),
+  iosAutomaticRelease: z.boolean().optional(),
+  userId: z.string().optional(),
+  apikey: z.string().optional(),
+  supaHost: z.string().optional(),
+  supaAnon: z.string().optional(),
+  prescan: z.boolean().optional(),
+  prescanIgnoreFatal: z.boolean().optional(),
 })
 
-export type RequestBuildOptions = typeof requestBuildOptionsSchema.infer
+export type RequestBuildOptions = z.infer<typeof requestBuildOptionsSchema>
 
 export const currentBundleOptionsSchema = accountIdOptionsSchema
 
-export type CurrentBundleOptions = typeof currentBundleOptionsSchema.infer
+export type CurrentBundleOptions = z.infer<typeof currentBundleOptionsSchema>
 
 // ============================================================================
 // SDK Settings Schemas
 // ============================================================================
 
-export const setSettingOptionsSchema = type({
-  '+': 'delete',
-  'apikey?': 'string',
-  'bool?': 'string',
-  'string?': 'string',
-  'capacitorConfig?': capacitorConfigOptionSchema,
+export const setSettingOptionsSchema = z.object({
+  apikey: z.string().optional(),
+  bool: z.string().optional(),
+  string: z.string().optional(),
+  capacitorConfig: capacitorConfigOptionSchema.optional(),
 })
 
-export type SetSettingOptions = typeof setSettingOptionsSchema.infer
+export type SetSettingOptions = z.infer<typeof setSettingOptionsSchema>
 
 // ============================================================================
 // SDK Stats Schemas
 // ============================================================================
 
-export const statsOrderSchema = type({
-  '+': 'delete',
-  key: 'string',
-  'sortable?': "'asc' | 'desc'",
+export const statsOrderSchema = z.object({
+  key: z.string(),
+  sortable: z.enum(['asc', 'desc']).optional(),
 })
 
-export type StatsOrder = typeof statsOrderSchema.infer
+export type StatsOrder = z.infer<typeof statsOrderSchema>
 
-export const getStatsOptionsSchema = type({
-  '+': 'delete',
-  appId: 'string',
-  'deviceIds?': 'string[]',
-  'search?': 'string',
-  'order?': statsOrderSchema.array(),
-  'rangeStart?': 'string',
-  'rangeEnd?': 'string',
-  'limit?': 'number',
-  'after?': 'string | null',
-  'apikey?': 'string',
-  'supaHost?': 'string',
-  'supaAnon?': 'string',
+export const getStatsOptionsSchema = z.object({
+  appId: z.string(),
+  deviceIds: z.array(z.string()).optional(),
+  search: z.string().optional(),
+  order: z.array(statsOrderSchema).optional(),
+  rangeStart: z.string().optional(),
+  rangeEnd: z.string().optional(),
+  limit: z.number().optional(),
+  after: z.string().nullable().optional(),
+  apikey: z.string().optional(),
+  supaHost: z.string().optional(),
+  supaAnon: z.string().optional(),
 })
 
-export type GetStatsOptions = typeof getStatsOptionsSchema.infer
+export type GetStatsOptions = z.infer<typeof getStatsOptionsSchema>
 
-export const deviceStatsSchema = type({
-  '+': 'delete',
-  appId: 'string',
-  deviceId: 'string',
-  action: 'string',
-  versionId: 'number',
-  'version?': 'number',
-  createdAt: 'string',
+export const deviceStatsSchema = z.object({
+  appId: z.string(),
+  deviceId: z.string(),
+  action: z.string(),
+  versionId: z.number(),
+  version: z.number().optional(),
+  createdAt: z.string(),
 })
 
-export type DeviceStats = typeof deviceStatsSchema.infer
+export type DeviceStats = z.infer<typeof deviceStatsSchema>
 
 // ============================================================================
 // SDK Probe Schemas
 // ============================================================================
 
-export const probeOptionsSchema = type({
-  '+': 'delete',
-  platform: "'ios' | 'android'",
+export const probeOptionsSchema = z.object({
+  platform: z.enum(['ios', 'android']),
 })
 
-export type ProbeOptions = typeof probeOptionsSchema.infer
+export type ProbeOptions = z.infer<typeof probeOptionsSchema>

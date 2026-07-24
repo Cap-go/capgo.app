@@ -1,18 +1,18 @@
 import type { Context } from 'hono'
 import type { AuthInfo, MiddlewareKeyVariables } from '../../../utils/hono.ts'
 import type { Database } from '../../../utils/supabase.types.ts'
-import { type } from 'arktype'
+import { z } from 'zod'
 import { HTTPException } from 'hono/http-exception'
-import { safeParseSchema } from '../../../utils/ark_validation.ts'
+import { safeParseSchema } from '../../../utils/schema_validation.ts'
 import { BRES, quickError, simpleError } from '../../../utils/hono.ts'
 import { cloudlog } from '../../../utils/logging.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../../../utils/pg.ts'
 import { checkPermission, checkPermissionPg } from '../../../utils/rbac.ts'
 import { supabaseAdmin } from '../../../utils/supabase.ts'
 
-const deleteBodySchema = type({
-  orgId: 'string',
-  email: 'string.email',
+const deleteBodySchema = z.object({
+  orgId: z.string(),
+  email: z.email(),
 })
 
 interface MemberRemovalRanks {

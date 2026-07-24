@@ -1,7 +1,7 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
-import { type } from 'arktype'
-import { safeParseSchema } from '../utils/ark_validation.ts'
+import { z } from 'zod'
+import { safeParseSchema } from '../utils/schema_validation.ts'
 import { createHono, parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
@@ -10,11 +10,11 @@ import { version } from '../utils/version.ts'
 
 type AppContext = Context<MiddlewareKeyVariables, any, any>
 
-const grantSchema = type({
-  'org_id': 'string > 0',
-  'amount': 'number >= 1',
-  'notes?': 'string > 0',
-  'expires_at?': 'string',
+const grantSchema = z.object({
+  org_id: z.string().min(1),
+  amount: z.number().min(1),
+  notes: z.string().min(1).optional(),
+  expires_at: z.string().optional(),
 })
 
 interface GrantRequest {

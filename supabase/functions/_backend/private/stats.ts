@@ -1,10 +1,10 @@
 import type { Context } from 'hono'
-import type { StandardSchema } from '../utils/ark_validation.ts'
+import type { StandardSchema } from '../utils/schema_validation.ts'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Order } from '../utils/types.ts'
-import { type } from 'arktype'
+import { z } from 'zod'
 import { Hono } from 'hono/tiny'
-import { literalUnion, safeParseSchema } from '../utils/ark_validation.ts'
+import { safeParseSchema } from '../utils/schema_validation.ts'
 import { toCsv } from '../utils/csv.ts'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
@@ -30,20 +30,20 @@ const EXPORT_FORMATS = ['csv', 'json'] as const
 const NUMERIC_RANGE_INPUT = /^-?(?:(?:0|[1-9]\d*)(?:\.\d+)?|\.\d+)$/
 
 const statsBodyShape = {
-  'appId': appIdSchema,
-  'devicesId?': deviceIdSchema.array(),
-  'search?': safeQueryTextSchema,
-  'order?': type({
-    key: literalUnion(ORDER_KEYS),
-    sortable: literalUnion(['asc', 'desc']),
-  }).array(),
-  'rangeStart?': safeQueryDateSchema.or(type('number')),
-  'rangeEnd?': safeQueryDateSchema.or(type('number')),
-  'limit?': queryLimitSchema,
-  'actions?': statsActionSchema.array(),
+  appId: appIdSchema,
+  devicesId: z.array(deviceIdSchema).optional(),
+  search: safeQueryTextSchema.optional(),
+  order: z.array(z.object({
+    key: z.enum(ORDER_KEYS),
+    sortable: z.enum(['asc', 'desc']),
+  })).optional(),
+  rangeStart: z.union([safeQueryDateSchema, z.number()]).optional(),
+  rangeEnd: z.union([safeQueryDateSchema, z.number()]).optional(),
+  limit: queryLimitSchema.optional(),
+  actions: z.array(statsActionSchema).optional(),
 } as const
 
-const statsBodySchema = type(statsBodyShape)
+const statsBodySchema = z.object(statsBodyShape)
 
 function stripControlChars(input: string): string {
   const out: string[] = []
@@ -77,16 +77,16 @@ function sanitizeFilename(input: string | undefined, extension: 'csv' | 'json'):
   return `${safe}${ext}`
 }
 
-const exportSchema = type({
+const exportSchema = z.object({
   ...statsBodyShape,
-  'format?': literalUnion(EXPORT_FORMATS),
-  'filename?': 'string',
+  format: z.enum(EXPORT_FORMATS).optional(),
+  filename: z.string().optional(),
 })
 
-const statsInsightsSchema = type({
-  'appId': appIdSchema,
-  'days?': 'number',
-  'actions?': statsActionSchema.array(),
+const statsInsightsSchema = z.object({
+  appId: appIdSchema,
+  days: z.number().optional(),
+  actions: z.array(statsActionSchema).optional(),
 })
 
 const insightPeriodDays = [1, 3, 7, 30] as const

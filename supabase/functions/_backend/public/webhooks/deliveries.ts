@@ -1,8 +1,8 @@
 import type { Context } from 'hono'
 import type { AuthInfo, MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { WebhookDeliveryPayload } from '../../utils/webhook.ts'
-import { type } from 'arktype'
-import { safeParseSchema } from '../../utils/ark_validation.ts'
+import { z } from 'zod'
+import { numberLikeSchema, safeParseSchema } from '../../utils/schema_validation.ts'
 import { simpleError } from '../../utils/hono.ts'
 import { supabaseAdmin } from '../../utils/supabase.ts'
 import {
@@ -14,16 +14,16 @@ import {
 } from '../../utils/webhook.ts'
 import { checkWebhookPermissionV2 } from './index.ts'
 
-const getDeliveriesSchema = type({
-  'orgId': 'string',
-  'webhookId': 'string',
-  'page?': 'number | string.numeric.parse',
-  'status?': 'string',
+const getDeliveriesSchema = z.object({
+  orgId: z.string(),
+  webhookId: z.string(),
+  page: numberLikeSchema.optional(),
+  status: z.string().optional(),
 })
 
-const retryDeliverySchema = type({
-  orgId: 'string',
-  deliveryId: 'string',
+const retryDeliverySchema = z.object({
+  orgId: z.string(),
+  deliveryId: z.string(),
 })
 
 const DELIVERIES_PER_PAGE = 50

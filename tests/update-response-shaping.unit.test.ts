@@ -1,8 +1,8 @@
 import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'
 import { describe, expect, it, vi } from 'vitest'
-import { resToVersion } from '../supabase/functions/_backend/utils/update.ts'
+import { resToVersion } from '../supabase/functions/_backend/plugin_runtime/utils/update.ts'
 
-vi.mock('../supabase/functions/_backend/utils/org_email_notifications.ts', () => ({
+vi.mock('../supabase/functions/_backend/plugin_runtime/utils/org_email_notifications.ts', () => ({
   sendNotifToOrgMembersCached: vi.fn(() => Promise.resolve()),
 }))
 

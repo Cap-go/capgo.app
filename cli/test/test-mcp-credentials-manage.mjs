@@ -14,7 +14,7 @@ import process from 'node:process'
 
 console.log('🧪 Testing capgo_builder_credentials_manage...\n')
 
-const { safeParseSchema } = await import('../src/schemas/ark_validation.ts')
+const { safeParseSchema } = await import('../src/schemas/schema_validation.ts')
 const { runCredentialsManage, registerCredentialsManageTool, credentialsManageSchema, KNOWN_CREDENTIAL_KEYS, screenValueFilePath, screenExportPath } = await import('../src/build/onboarding/mcp/credentials-manage.ts')
 const { homedir } = await import('node:os')
 const { join } = await import('node:path')

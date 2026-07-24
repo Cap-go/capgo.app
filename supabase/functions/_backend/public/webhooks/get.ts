@@ -1,17 +1,17 @@
 import type { Context } from 'hono'
 import type { AuthInfo, MiddlewareKeyVariables } from '../../utils/hono.ts'
-import { type } from 'arktype'
-import { safeParseSchema } from '../../utils/ark_validation.ts'
+import { z } from 'zod'
+import { numberLikeSchema, safeParseSchema } from '../../utils/schema_validation.ts'
 import { simpleError } from '../../utils/hono.ts'
 import { supabaseAdmin } from '../../utils/supabase.ts'
 import { fetchLimit } from '../../utils/utils.ts'
 import { checkWebhookPermissionV2 } from './index.ts'
 import { webhookPublicSchema, webhookPublicSelect, webhooksPublicSchema } from './response.ts'
 
-const bodySchema = type({
-  'orgId': 'string',
-  'webhookId?': 'string',
-  'page?': 'number | string.numeric.parse',
+const bodySchema = z.object({
+  orgId: z.string(),
+  webhookId: z.string().optional(),
+  page: numberLikeSchema.optional(),
 })
 
 export async function get(c: Context<MiddlewareKeyVariables, any, any>, bodyRaw: any, auth: AuthInfo): Promise<Response> {

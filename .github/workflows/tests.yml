@@ -163,7 +163,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.run_capgo == 'true' || needs.changes.outputs.run_cli == 'true' || needs.changes.outputs.run_notifications == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 5
     name: Check dead code
     permissions:
       contents: read
@@ -185,7 +185,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.run_notifications == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 5
     name: Notifications plugin package
     permissions:
       contents: read
@@ -211,7 +211,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
     name: Lint and typecheck
     permissions:
       contents: read
@@ -250,7 +250,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
     name: Run unit tests
     permissions:
       contents: read
@@ -272,7 +272,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
     name: Run DB tests (Tinbase)
     permissions:
       contents: read
@@ -299,7 +299,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 5
     name: Run backend tests (shard ${{ matrix.shard }})
     permissions:
       contents: read
@@ -308,16 +308,30 @@ jobs:
       group: capgo-local-services-backend-${{ github.repository }}-${{ matrix.shard }}
       cancel-in-progress: false
     env:
-      SUPABASE_WORKTREE_INSTANCE: backend-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}
+      SUPABASE_WORKTREE_INSTANCE: backend-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard_id }}
       SUPABASE_WORKTREE_PORT_OFFSET: ${{ matrix.supabase_port_offset }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - shard: 1/2
+          - shard: 1/6
+            shard_id: 1-of-6
             supabase_port_offset: 2000
-          - shard: 2/2
+          - shard: 2/6
+            shard_id: 2-of-6
             supabase_port_offset: 2100
+          - shard: 3/6
+            shard_id: 3-of-6
+            supabase_port_offset: 2200
+          - shard: 4/6
+            shard_id: 4-of-6
+            supabase_port_offset: 2300
+          - shard: 5/6
+            shard_id: 5-of-6
+            supabase_port_offset: 2400
+          - shard: 6/6
+            shard_id: 6-of-6
+            supabase_port_offset: 2500
     steps:
       - name: Cache Deno dependencies
         uses: actions/cache@v5 # v5
@@ -374,19 +388,6 @@ jobs:
       - name: Export isolated Supabase endpoints
         run: |
           bun scripts/supabase-worktree.ts with-env bun -e 'const apiUrl = new URL(process.env.SUPABASE_URL ?? ""); const dbUrl = process.env.SUPABASE_DB_URL ?? ""; if (!apiUrl.host || !dbUrl) throw new Error("Isolated Supabase status is missing API_URL or DB_URL."); console.log(`SUPABASE_FUNCTIONS_HEALTH_URL=http-get://${apiUrl.host}/functions/v1/ok`); console.log(`MAIN_SUPABASE_DB_URL=${dbUrl}`)' >> "$GITHUB_ENV"
-      - name: Check read-replica schema snapshot
-        if: matrix.shard == '1/2'
-        env:
-          PSQL_BIN: /usr/lib/postgresql/17/bin/psql
-          PG_DUMP_BIN: /usr/lib/postgresql/17/bin/pg_dump
-          PG_RESTORE_BIN: /usr/lib/postgresql/17/bin/pg_restore
-        run: bun run readreplicate:check-schema
-      - name: Run Supabase Test DB
-        if: matrix.shard == '1/2'
-        run: bun scripts/supabase-worktree.ts test db
-      - name: Lint SQL
-        if: matrix.shard == '1/2'
-        run: bun scripts/supabase-worktree.ts db lint -s public --fail-on warning
       - name: Quiesce test scheduler
         run: bun scripts/supabase-worktree.ts with-env bun scripts/quiesce-test-scheduler.ts
 
@@ -405,9 +406,6 @@ jobs:
         env:
           VITEST_SHARD: ${{ matrix.shard }}
         run: bun run supabase:with-env -- bunx vitest run --exclude=tests/*.unit.test.ts --exclude=tests/cli* --exclude=tests/read-replica-schema-catalog.test.ts $(sed 's|^|--exclude=|' tests/tinbase-db-tests.txt | tr '\n' ' ') --shard="$VITEST_SHARD"
-      - name: Run read-replica schema catalog test
-        if: matrix.shard == '1/2'
-        run: bun run supabase:with-env -- bunx vitest run tests/read-replica-schema-catalog.test.ts --no-file-parallelism --maxWorkers=1
       - name: Show Edge server logs after backend test failure
         if: failure() && steps.bootstrap_edge_server.outputs.log_path != ''
         run: |
@@ -432,11 +430,177 @@ jobs:
           done
           bun scripts/supabase-worktree.ts stop --no-backup || true
 
+
+  # SQL/schema checks split so each 5-minute job has headroom after cold Supabase start.
+  test_backend_sql:
+    needs: changes
+    if: needs.changes.outputs.run_capgo == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    name: Run backend SQL checks
+    permissions:
+      contents: read
+    concurrency:
+      group: capgo-local-services-backend-sql-${{ github.repository }}
+      cancel-in-progress: false
+    env:
+      SUPABASE_WORKTREE_INSTANCE: backend-sql-${{ github.run_id }}-${{ github.run_attempt }}
+      SUPABASE_WORKTREE_PORT_OFFSET: 2600
+    steps:
+      - name: Cache Deno dependencies
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.DENO_DIR }}
+          key: my_cache_key
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.x
+      - name: Setup bun
+        run: bash scripts/setup-bun.sh
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@v2
+        with:
+          version: 2.84.2
+      - name: Link Supabase templates
+        run: ln -sfn supabase/templates templates
+      - name: Stop this job's Supabase stack
+        run: bun scripts/supabase-worktree.ts stop --no-backup || true
+      - name: Run Supabase Start (deps and PostgreSQL 17 client install in background)
+        run: |
+          (
+            set -e
+            bun install
+          ) > "${RUNNER_TEMP}/deps-install.log" 2>&1 &
+          deps_install_pid=$!
+          (
+            if command -v pg_dump-17 >/dev/null 2>&1 && command -v pg_restore-17 >/dev/null 2>&1 && command -v psql-17 >/dev/null 2>&1; then
+              exit 0
+            fi
+            sudo rm -f /etc/apt/sources.list.d/azure-cli.list /etc/apt/sources.list.d/azure-cli.sources /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/microsoft-prod.sources
+            sudo apt-get update
+            sudo apt-get install -y ca-certificates postgresql-common
+            sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+            sudo apt-get install -y postgresql-client-17
+          ) > "${RUNNER_TEMP}/pg17-client-install.log" 2>&1 &
+          pg17_install_pid=$!
+          bun scripts/supabase-worktree.ts start -x imgproxy,studio,mailpit,realtime,postgres-meta,supavisor,logflare,vector
+          if ! wait "${deps_install_pid}"; then
+            echo "::error::Dependency install failed"
+            cat "${RUNNER_TEMP}/deps-install.log"
+            exit 1
+          fi
+          if ! wait "${pg17_install_pid}"; then
+            echo "::error::PostgreSQL 17 client install failed"
+            cat "${RUNNER_TEMP}/pg17-client-install.log"
+            exit 1
+          fi
+      - name: Export isolated Supabase endpoints
+        run: |
+          bun scripts/supabase-worktree.ts with-env bun -e 'const apiUrl = new URL(process.env.SUPABASE_URL ?? ""); const dbUrl = process.env.SUPABASE_DB_URL ?? ""; if (!apiUrl.host || !dbUrl) throw new Error("Isolated Supabase status is missing API_URL or DB_URL."); console.log(`SUPABASE_FUNCTIONS_HEALTH_URL=http-get://${apiUrl.host}/functions/v1/ok`); console.log(`MAIN_SUPABASE_DB_URL=${dbUrl}`)' >> "$GITHUB_ENV"
+      - name: Check read-replica schema snapshot
+        env:
+          PSQL_BIN: /usr/lib/postgresql/17/bin/psql
+          PG_DUMP_BIN: /usr/lib/postgresql/17/bin/pg_dump
+          PG_RESTORE_BIN: /usr/lib/postgresql/17/bin/pg_restore
+        run: bun run readreplicate:check-schema
+      - name: Run Supabase Test DB
+        run: bun scripts/supabase-worktree.ts test db
+      - name: Lint SQL
+        run: bun scripts/supabase-worktree.ts db lint -s public --fail-on warning
+      - name: Stop this job's Supabase stack
+        if: always()
+        run: bun scripts/supabase-worktree.ts stop --no-backup || true
+
+  test_backend_sql_catalog:
+    needs: changes
+    if: needs.changes.outputs.run_capgo == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    name: Run backend SQL catalog checks
+    permissions:
+      contents: read
+    concurrency:
+      group: capgo-local-services-backend-sql-catalog-${{ github.repository }}
+      cancel-in-progress: false
+    env:
+      SUPABASE_WORKTREE_INSTANCE: backend-sql-catalog-${{ github.run_id }}-${{ github.run_attempt }}
+      SUPABASE_WORKTREE_PORT_OFFSET: 2700
+    steps:
+      - name: Cache Deno dependencies
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.DENO_DIR }}
+          key: my_cache_key
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.x
+      - name: Setup bun
+        run: bash scripts/setup-bun.sh
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@v2
+        with:
+          version: 2.84.2
+      - name: Link Supabase templates
+        run: ln -sfn supabase/templates templates
+      - name: Stop this job's Supabase stack
+        run: bun scripts/supabase-worktree.ts stop --no-backup || true
+      - name: Run Supabase Start (deps install in background)
+        run: |
+          (
+            set -e
+            bun install
+          ) > "${RUNNER_TEMP}/deps-install.log" 2>&1 &
+          deps_install_pid=$!
+          bun scripts/supabase-worktree.ts start -x imgproxy,studio,mailpit,realtime,postgres-meta,supavisor,logflare,vector
+          if ! wait "${deps_install_pid}"; then
+            echo "::error::Dependency install failed"
+            cat "${RUNNER_TEMP}/deps-install.log"
+            exit 1
+          fi
+      - name: Export isolated Supabase endpoints
+        run: |
+          bun scripts/supabase-worktree.ts with-env bun -e 'const apiUrl = new URL(process.env.SUPABASE_URL ?? ""); const dbUrl = process.env.SUPABASE_DB_URL ?? ""; if (!apiUrl.host || !dbUrl) throw new Error("Isolated Supabase status is missing API_URL or DB_URL."); console.log(`SUPABASE_FUNCTIONS_HEALTH_URL=http-get://${apiUrl.host}/functions/v1/ok`); console.log(`MAIN_SUPABASE_DB_URL=${dbUrl}`)' >> "$GITHUB_ENV"
+      - name: Quiesce test scheduler
+        run: bun scripts/supabase-worktree.ts with-env bun scripts/quiesce-test-scheduler.ts
+      - id: bootstrap_edge_server
+        name: Bootstrap Edge server
+        env:
+          CAPGO_PREVENT_BACKGROUND_FUNCTIONS: 'true'
+          BACKGROUND_SERVICE_NAME: Bootstrap Edge server
+          BACKGROUND_RUN_COMMAND: exec bun scripts/supabase-worktree.ts functions serve
+          BACKGROUND_LOG_PATH: ${{ runner.temp }}/bootstrap-edge-server-sql-catalog.log
+          BACKGROUND_WAIT_TIMEOUT_MS: 60000
+        run: |
+          export BACKGROUND_WAIT_ON="${SUPABASE_FUNCTIONS_HEALTH_URL:?Missing isolated Supabase health URL}"
+          bash .github/scripts/start-background-service.sh
+      - name: Run read-replica schema catalog test
+        run: bun run supabase:with-env -- bunx vitest run tests/read-replica-schema-catalog.test.ts --no-file-parallelism --maxWorkers=1
+      - name: Stop background services
+        if: always()
+        run: |
+          for pid in "${{ steps.bootstrap_edge_server.outputs.pid }}"; do
+            if [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null; then
+              kill "${pid}" 2>/dev/null || true
+            fi
+          done
+          bun scripts/supabase-worktree.ts stop --no-backup || true
+
+
   test_cloudflare:
     needs: changes
     if: needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 5
     name: Run Cloudflare Workers tests (shard ${{ matrix.shard }})
     permissions:
       contents: read
@@ -444,7 +608,7 @@ jobs:
       group: capgo-local-services-cloudflare-${{ github.repository }}-${{ matrix.shard }}
       cancel-in-progress: false
     env:
-      SUPABASE_WORKTREE_INSTANCE: cloudflare-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}
+      SUPABASE_WORKTREE_INSTANCE: cloudflare-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard_id }}
       SUPABASE_WORKTREE_PORT_OFFSET: ${{ matrix.supabase_port_offset }}
       CLOUDFLARE_WORKER_PORT_OFFSET: ${{ matrix.cloudflare_worker_port_offset }}
       CLOUDFLARE_PERSIST_DIR: .context/cloudflare-workers-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.supabase_port_offset }}
@@ -452,12 +616,38 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - shard: 1/2
+          - shard: 1/8
+            shard_id: 1-of-8
             supabase_port_offset: 4000
             cloudflare_worker_port_offset: 4000
-          - shard: 2/2
+          - shard: 2/8
+            shard_id: 2-of-8
             supabase_port_offset: 4100
             cloudflare_worker_port_offset: 4100
+          - shard: 3/8
+            shard_id: 3-of-8
+            supabase_port_offset: 4200
+            cloudflare_worker_port_offset: 4200
+          - shard: 4/8
+            shard_id: 4-of-8
+            supabase_port_offset: 4300
+            cloudflare_worker_port_offset: 4300
+          - shard: 5/8
+            shard_id: 5-of-8
+            supabase_port_offset: 4400
+            cloudflare_worker_port_offset: 4400
+          - shard: 6/8
+            shard_id: 6-of-8
+            supabase_port_offset: 4500
+            cloudflare_worker_port_offset: 4500
+          - shard: 7/8
+            shard_id: 7-of-8
+            supabase_port_offset: 4600
+            cloudflare_worker_port_offset: 4600
+          - shard: 8/8
+            shard_id: 8-of-8
+            supabase_port_offset: 4700
+            cloudflare_worker_port_offset: 4700
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6 # v6
@@ -559,16 +749,24 @@ jobs:
     needs: changes
     if: needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    name: Run Playwright tests
+    timeout-minutes: 5
+    name: Run Playwright tests (shard ${{ matrix.shard }})
     permissions:
       contents: read
     concurrency:
-      group: capgo-local-services-playwright-${{ github.repository }}
+      group: capgo-local-services-playwright-${{ github.repository }}-${{ matrix.shard }}
       cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: 1/2
+            supabase_port_offset: 5000
+          - shard: 2/2
+            supabase_port_offset: 5100
     env:
-      SUPABASE_WORKTREE_INSTANCE: playwright-${{ github.run_id }}-${{ github.run_attempt }}
-      SUPABASE_WORKTREE_PORT_OFFSET: 5000
+      SUPABASE_WORKTREE_INSTANCE: playwright-${{ github.run_id }}-${{ github.run_attempt }}-${{ strategy.job-index }}
+      SUPABASE_WORKTREE_PORT_OFFSET: ${{ matrix.supabase_port_offset }}
     steps:
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -612,18 +810,20 @@ jobs:
         run: |
           mkdir -p .context/playwright
           rm -f .context/playwright/gha-backend.ready
-          nohup bash -c 'STRIPE_EMULATOR_PORT=4510 bun run stripe:emulator' \
+          stripe_port=$((4510 + ${{ strategy.job-index }} * 10))
+          echo "stripe_port=${stripe_port}" >> "$GITHUB_OUTPUT"
+          nohup bash -c "STRIPE_EMULATOR_PORT=${stripe_port} bun run stripe:emulator" \
             > "${RUNNER_TEMP}/playwright-stripe-emulator.log" 2>&1 &
           echo "stripe_pid=$!" >> "$GITHUB_OUTPUT"
           # Fresh CI runner: supabase start applies migrations + seed, so skip the redundant db reset.
-          nohup bash -c 'PLAYWRIGHT_READY_FILE=.context/playwright/gha-backend.ready \
+          nohup bash -c "PLAYWRIGHT_READY_FILE=.context/playwright/gha-backend.ready \
             SKIP_SUPABASE_DB_RESET=true \
             ENV=local \
             STRIPE_SECRET_KEY=sk_test_emulator \
-            STRIPE_API_BASE_URL=http://host.docker.internal:4510 \
+            STRIPE_API_BASE_URL=http://host.docker.internal:${stripe_port} \
             STRIPE_WEBHOOK_SECRET=testsecret \
             WEBAPP_URL=http://localhost:5173 \
-            bun run backend:playwright' \
+            bun run backend:playwright" \
             > "${RUNNER_TEMP}/playwright-backend.log" 2>&1 &
           echo "backend_pid=$!" >> "$GITHUB_OUTPUT"
           # The backend boots Supabase via the worktree wrapper (hash-derived ports). Plain status
@@ -643,16 +843,19 @@ jobs:
       - name: Wait for Playwright services
         run: |
           bunx wait-on@8.0.1 \
-            tcp:127.0.0.1:4510 \
+            tcp:127.0.0.1:${{ steps.start_playwright_services.outputs.stripe_port }} \
             "file:${{ github.workspace }}/.context/playwright/gha-backend.ready" \
             http-get://localhost:5173 \
-            --timeout 360000 --interval 500 --log
+            --timeout 180000 --interval 500 --log
       - name: Run Playwright tests
         env:
           SKIP_STRIPE_EMULATOR_START: 'true'
           SKIP_BACKEND_START: 'true'
           SKIP_FRONTEND_START: 'true'
-        run: bunx playwright test
+          # Host-side specs must hit localhost; backend uses host.docker.internal.
+          STRIPE_EMULATOR_PORT: ${{ steps.start_playwright_services.outputs.stripe_port }}
+          STRIPE_API_BASE_URL: http://localhost:${{ steps.start_playwright_services.outputs.stripe_port }}
+        run: bunx playwright test --shard=${{ matrix.shard }}
       - name: Show Playwright service logs after failure
         if: failure()
         run: |
@@ -701,7 +904,7 @@ jobs:
     if: needs.changes.outputs.run_cli == 'true'
     name: CLI on Node.js ${{ matrix.node-version }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 5
     strategy:
       fail-fast: false
       matrix:
@@ -731,7 +934,7 @@ jobs:
     if: needs.changes.outputs.run_cli == 'true'
     name: Check for typos (CLI)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 5
     steps:
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -750,7 +953,7 @@ jobs:
     if: needs.changes.outputs.run_cli == 'true'
     name: CLI create valid zip (Linux)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 5
     steps:
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -783,7 +986,7 @@ jobs:
     if: needs.changes.outputs.run_cli == 'true'
     name: CLI POSIX paths (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 5
     strategy:
       matrix:
         os: [windows-2025, windows-2022]
@@ -820,7 +1023,7 @@ jobs:
     if: needs.changes.outputs.run_cli == 'true'
     name: CLI POSIX paths (Unix)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 5
     steps:
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -903,7 +1106,7 @@ jobs:
     if: needs.changes.outputs.run_cli == 'true'
     name: CLI POSIX paths (macOS)
     runs-on: macos-latest
-    timeout-minutes: 30
+    timeout-minutes: 5
     steps:
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -942,7 +1145,7 @@ jobs:
     if: needs.changes.outputs.run_cli == 'true'
     name: CLI POSIX paths final
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 5
     steps:
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -956,7 +1159,7 @@ jobs:
     if: needs.changes.outputs.run_cli == 'true'
     runs-on: ubuntu-latest
     name: Run CLI tests
-    timeout-minutes: 30
+    timeout-minutes: 5
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6 # v6
@@ -993,7 +1196,7 @@ jobs:
     # changes must run them too (they are excluded from the backend shards).
     if: needs.changes.outputs.run_cli == 'true' || needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 5
     name: Run Capgo CLI integration tests
     permissions:
       contents: read

@@ -6,7 +6,9 @@ import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 import {
   assertGoogleReadReplicaSchemaPlan,
+  partitionReadReplicaImportStatements,
   renderReadReplicaImportTransaction,
+  renderReadReplicaIndexImport,
 } from '../scripts/sync-read-replica-schema.ts'
 
 const syncScriptUrl = new URL(
@@ -19,6 +21,27 @@ const safeColumnStatement: ReadReplicaSchemaSyncStatement = {
   table: 'apps',
   name: 'read_replica_import_unit',
   sql: 'ALTER TABLE public."apps" ADD COLUMN IF NOT EXISTS "read_replica_import_unit" boolean',
+}
+
+const safeIndexStatement: ReadReplicaSchemaSyncStatement = {
+  kind: 'index',
+  table: 'apps',
+  name: 'read_replica_import_unit_index',
+  sql: 'CREATE INDEX CONCURRENTLY IF NOT EXISTS "read_replica_import_unit_index" ON public."apps" ("app_id")',
+}
+
+const spacedIndexStatement: ReadReplicaSchemaSyncStatement = {
+  kind: 'index',
+  table: 'orgs',
+  name: 'unique customer_id on orgs',
+  sql: 'CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "unique customer_id on orgs" ON public."orgs" USING btree (customer_id)',
+}
+
+const spacedConstraintStatement: ReadReplicaSchemaSyncStatement = {
+  kind: 'constraint',
+  table: 'orgs',
+  name: 'unique customer_id on orgs',
+  sql: 'ALTER TABLE public."orgs" ADD CONSTRAINT "unique customer_id on orgs" UNIQUE USING INDEX "unique customer_id on orgs"',
 }
 
 function plan(
@@ -40,14 +63,57 @@ describe('read-replica Cloud SQL server-side import', () => {
     )
   })
 
+  it.concurrent('imports reviewed index DDL outside the atomic transaction', () => {
+    assertGoogleReadReplicaSchemaPlan(plan([safeIndexStatement]))
+
+    expect(renderReadReplicaIndexImport([safeIndexStatement])).toBe(
+      'CREATE INDEX IF NOT EXISTS "read_replica_import_unit_index" ON public."apps" ("app_id");',
+    )
+    expect(() => {
+      renderReadReplicaImportTransaction([safeIndexStatement])
+    }).toThrow('cannot atomically apply')
+  })
+
+  it.concurrent('strips only the leading CONCURRENTLY keyword from index DDL', () => {
+    const tricky: ReadReplicaSchemaSyncStatement = {
+      kind: 'index',
+      table: 'apps',
+      name: 'create index concurrently trap',
+      sql: 'CREATE INDEX CONCURRENTLY IF NOT EXISTS "create index concurrently trap" ON public."apps" ("app_id")',
+    }
+    assertGoogleReadReplicaSchemaPlan(plan([tricky]))
+    expect(renderReadReplicaIndexImport([tricky])).toBe(
+      'CREATE INDEX IF NOT EXISTS "create index concurrently trap" ON public."apps" ("app_id");',
+    )
+  })
+
+  it.concurrent('imports quoted index names that contain spaces', () => {
+    assertGoogleReadReplicaSchemaPlan(plan([spacedIndexStatement, spacedConstraintStatement]))
+
+    expect(renderReadReplicaIndexImport([spacedIndexStatement])).toBe(
+      'CREATE UNIQUE INDEX IF NOT EXISTS "unique customer_id on orgs" ON public."orgs" USING btree (customer_id);',
+    )
+    expect(renderReadReplicaImportTransaction([spacedConstraintStatement])).toContain(
+      spacedConstraintStatement.sql,
+    )
+  })
+
+  it.concurrent('partitions index DDL between column and constraint imports', () => {
+    expect(
+      partitionReadReplicaImportStatements([
+        safeColumnStatement,
+        safeIndexStatement,
+        spacedConstraintStatement,
+      ]),
+    ).toEqual({
+      preIndexAtomicStatements: [safeColumnStatement],
+      indexStatements: [safeIndexStatement],
+      postIndexAtomicStatements: [spacedConstraintStatement],
+    })
+  })
+
   it.concurrent('rejects unsupported plans before they can become import input', () => {
     const unsupportedStatements: ReadReplicaSchemaSyncStatement[] = [
-      {
-        kind: 'index',
-        table: 'apps',
-        name: 'read_replica_import_unit_index',
-        sql: 'CREATE INDEX CONCURRENTLY IF NOT EXISTS "read_replica_import_unit_index" ON public."apps" ("app_id")',
-      },
       {
         kind: 'function',
         table: 'public',
@@ -73,6 +139,10 @@ describe('read-replica Cloud SQL server-side import', () => {
     expect(source).toMatch(/--user=(?:postgres|\$\{POSTGRES_IMPORT_USER\})/)
     expect(source).toContain('BEGIN;')
     expect(source).toContain('COMMIT;')
+    expect(source).toContain('renderReadReplicaIndexImport(indexStatements)')
+    expect(source).toContain('preIndexAtomicStatements')
+    expect(source).toContain('postIndexAtomicStatements')
+    expect(source).toContain('renderCloudSqlIndexStatement')
     expect(source).not.toContain('capgo_read_replica_schema_owner')
     expect(source).not.toContain('bootstrap-read-replica-schema-owner')
     expect(source).not.toContain('CREATE ROLE')

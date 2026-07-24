@@ -44,12 +44,15 @@ For each automation listed below, add a segment filter:
 
 #### 1. Usage Limit Alerts (50%, 70%, 90%)
 
-**Events**: `user:usage_50_percent_of_plan`, `user:usage_70_percent_of_plan`, `user:usage_90_percent_of_plan`, `user:upgrade_to_*`
+**Events**: `user:usage_50_percent_of_plan`, `user:usage_70_percent_of_plan`, `user:usage_90_percent_of_plan`, `user:upgrade_to_*`, `user:native_build_concurrency_limit`
 
 **Filter to add**:
+
 ```text
 Tag does NOT contain: usage_limit_disabled
 ```
+
+`user:native_build_concurrency_limit` is emitted when an org tries to start more concurrent native builds than their plan allows. Event data includes `active_builds`, `limit`, `plan_name`, and `upgrade_url`. Wire a Bento automation to this event when the upgrade email is ready.
 
 #### 2. Credit Usage Alerts
 

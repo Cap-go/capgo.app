@@ -23,6 +23,7 @@ export const componentMatchers: Record<Component, RegExp[]> = {
     /^\.github\/workflows\/build_and_deploy\.yml$/,
     /^\.github\/workflows\/build_mobile_ios\.yml$/,
     /^scripts\/deploy-scope\.ts$/,
+    /^scripts\/(check-read-replica-hyperdrive-schema\.sh|sync-read-replica-schema\.ts)$/,
     /^aliproxy\//,
     /^android\//,
     /^assets\//,

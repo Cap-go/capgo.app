@@ -1,6 +1,7 @@
 import { sValidator } from '@hono/standard-validator'
 import { and, eq } from 'drizzle-orm'
-import { createHono, middlewareAuth, useCors } from '../utils/hono.ts'
+import { createHono, useCors } from '../utils/hono.ts'
+import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlogErr } from '../utils/logging.ts'
 import { getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import { schema } from '../utils/postgres_schema.ts'

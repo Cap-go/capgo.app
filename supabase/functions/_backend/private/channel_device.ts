@@ -1,9 +1,9 @@
 import type { Context } from 'hono'
 import type { AuthInfo, MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Database } from '../utils/supabase.types.ts'
-import { type } from 'arktype'
+import { z } from 'zod'
 import { Hono } from 'hono/tiny'
-import { safeParseSchema } from '../utils/ark_validation.ts'
+import { safeParseSchema } from '../utils/schema_validation.ts'
 import { syncLegacyChannelSelfOverrideDeleteForDevice, syncLegacyChannelSelfOverrideForDevice } from '../utils/channelSelfStore.ts'
 import { BRES, parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
@@ -11,15 +11,15 @@ import { checkPermission } from '../utils/rbac.ts'
 import { supabaseWithAuth } from '../utils/supabase.ts'
 import { isValidAppId } from '../utils/utils.ts'
 
-const setBodySchema = type({
-  app_id: 'string',
-  device_id: 'string.uuid',
-  channel_id: 'number.integer >= 1',
+const setBodySchema = z.object({
+  app_id: z.string(),
+  device_id: z.uuid(),
+  channel_id: z.number().int().min(1),
 })
 
-const deleteBodySchema = type({
-  app_id: 'string',
-  device_id: 'string.uuid',
+const deleteBodySchema = z.object({
+  app_id: z.string(),
+  device_id: z.uuid(),
 })
 
 interface SetChannelDeviceBody {

@@ -6,7 +6,7 @@
 
 import { canParse } from '@std/semver'
 import { optionsUploadSchema } from '../src/schemas/bundle.ts'
-import { safeParseSchema } from '../src/schemas/ark_validation.ts'
+import { safeParseSchema } from '../src/schemas/schema_validation.ts'
 
 // This is the actual regex from utils.ts line 40
 const regexSemver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-z-][0-9a-z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-z-][0-9a-z-]*))*))?(?:\+([0-9a-z-]+(?:\.[0-9a-z-]+)*))?$/i

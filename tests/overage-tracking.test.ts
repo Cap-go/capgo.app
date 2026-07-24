@@ -1,9 +1,8 @@
 import type { Database } from '../src/types/supabase.types'
 import { env } from 'node:process'
 import { createClient } from '@supabase/supabase-js'
-import { Pool } from 'pg'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { ORG_ID_OVERAGE, POSTGRES_URL } from './test-utils'
+import { beforeAll, describe, expect, it } from 'vitest'
+import { ORG_ID_OVERAGE } from './test-utils'
 
 const supabaseUrl = env.SUPABASE_URL as string
 const supabaseServiceKey = env.SUPABASE_SERVICE_KEY as string
@@ -15,21 +14,31 @@ async function callRpc<T>(
   return await fn()
 }
 
+type CreditMetric = Database['public']['Enums']['credit_metric_type']
+
+async function countOverageEvents(metric: CreditMetric, billingStart: Date, billingEnd: Date) {
+  const { count, error } = await supabase
+    .from('usage_overage_events')
+    .select('*', { count: 'exact', head: true })
+    .eq('org_id', ORG_ID_OVERAGE)
+    .eq('metric', metric)
+    .eq('billing_cycle_start', billingStart.toISOString().slice(0, 10))
+    .eq('billing_cycle_end', billingEnd.toISOString().slice(0, 10))
+  expect(error).toBeNull()
+  return count ?? 0
+}
+
 describe('overage Tracking - Duplicate Prevention', () => {
-  let pgPool: Pool
-
   beforeAll(async () => {
-    pgPool = new Pool({ connectionString: POSTGRES_URL })
-
-    // Clean up any existing overage events for our test org
-    await pgPool.query('DELETE FROM usage_overage_events WHERE org_id = $1', [ORG_ID_OVERAGE])
-    await pgPool.query('DELETE FROM usage_credit_transactions WHERE org_id = $1', [ORG_ID_OVERAGE])
-    await pgPool.query('DELETE FROM usage_credit_consumptions WHERE org_id = $1', [ORG_ID_OVERAGE])
-    await pgPool.query('DELETE FROM usage_credit_grants WHERE org_id = $1', [ORG_ID_OVERAGE])
-  })
-
-  afterAll(async () => {
-    await pgPool.end()
+    // Clean up any existing overage/credit rows for our dedicated test org (PostgREST only).
+    const { error: overageCleanupError } = await supabase.from('usage_overage_events').delete().eq('org_id', ORG_ID_OVERAGE)
+    expect(overageCleanupError).toBeNull()
+    const { error: transactionCleanupError } = await supabase.from('usage_credit_transactions').delete().eq('org_id', ORG_ID_OVERAGE)
+    expect(transactionCleanupError).toBeNull()
+    const { error: consumptionCleanupError } = await supabase.from('usage_credit_consumptions').delete().eq('org_id', ORG_ID_OVERAGE)
+    expect(consumptionCleanupError).toBeNull()
+    const { error: grantCleanupError } = await supabase.from('usage_credit_grants').delete().eq('org_id', ORG_ID_OVERAGE)
+    expect(grantCleanupError).toBeNull()
   })
 
   it('should not create duplicate overage records when called multiple times with same values', async () => {
@@ -54,19 +63,8 @@ describe('overage Tracking - Duplicate Prevention', () => {
       expect(data).toBeDefined()
     }
 
-    // Count how many records were created
-    const result = await pgPool.query(
-      `SELECT COUNT(*) as count FROM usage_overage_events
-       WHERE org_id = $1 AND metric = $2
-         AND billing_cycle_start = $3::date
-         AND billing_cycle_end = $4::date`,
-      [ORG_ID_OVERAGE, testMetric, billingStart.toISOString(), billingEnd.toISOString()],
-    )
-
-    const recordCount = Number.parseInt(result.rows[0].count)
-
     // Should only create 1 record, not 5
-    expect(recordCount).toBe(1)
+    expect(await countOverageEvents(testMetric, billingStart, billingEnd)).toBe(1)
   })
 
   it('should create new record when overage amount increases significantly', async () => {
@@ -94,16 +92,7 @@ describe('overage Tracking - Duplicate Prevention', () => {
       p_details: { limit: 10000000, usage: 12000000 },
     }))
 
-    // Should create 2 records
-    const result = await pgPool.query(
-      `SELECT COUNT(*) as count FROM usage_overage_events
-       WHERE org_id = $1 AND metric = $2
-         AND billing_cycle_start = $3::date
-         AND billing_cycle_end = $4::date`,
-      [ORG_ID_OVERAGE, testMetric, billingStart.toISOString(), billingEnd.toISOString()],
-    )
-
-    expect(Number.parseInt(result.rows[0].count)).toBe(2)
+    expect(await countOverageEvents(testMetric, billingStart, billingEnd)).toBe(2)
   })
 
   it('should create new record when credits become available', async () => {
@@ -113,11 +102,16 @@ describe('overage Tracking - Duplicate Prevention', () => {
     const overageAmount = 10000
 
     // Grant some credits FIRST
-    await pgPool.query(
-      `INSERT INTO usage_credit_grants (org_id, credits_total, credits_consumed, granted_at, expires_at, source, source_ref)
-       VALUES ($1, 100, 0, NOW(), NOW() + INTERVAL '30 days', 'manual', '{"test": true}')`,
-      [ORG_ID_OVERAGE],
-    )
+    const { error: grantError } = await supabase.from('usage_credit_grants').insert({
+      org_id: ORG_ID_OVERAGE,
+      credits_total: 100,
+      credits_consumed: 0,
+      granted_at: new Date().toISOString(),
+      expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+      source: 'manual',
+      source_ref: { test: true },
+    })
+    expect(grantError).toBeNull()
 
     // Call with credits available - should apply them
     const { data: firstCall, error: firstError } = await callRpc(() => supabase.rpc('apply_usage_overage', {
@@ -147,15 +141,7 @@ describe('overage Tracking - Duplicate Prevention', () => {
     expect(secondError).toBeNull()
 
     // Should only have 1 record since nothing changed
-    const result = await pgPool.query(
-      `SELECT COUNT(*) as count FROM usage_overage_events
-       WHERE org_id = $1 AND metric = $2
-         AND billing_cycle_start = $3::date
-         AND billing_cycle_end = $4::date`,
-      [ORG_ID_OVERAGE, testMetric, billingStart.toISOString(), billingEnd.toISOString()],
-    )
-
-    expect(Number.parseInt(result.rows[0].count)).toBe(1)
+    expect(await countOverageEvents(testMetric, billingStart, billingEnd)).toBe(1)
   })
 
   it('should not create record when overage increases by less than 1%', async () => {
@@ -183,15 +169,6 @@ describe('overage Tracking - Duplicate Prevention', () => {
       p_details: { limit: 1000000, usage: 1100500 },
     }))
 
-    // Should only have 1 record
-    const result = await pgPool.query(
-      `SELECT COUNT(*) as count FROM usage_overage_events
-       WHERE org_id = $1 AND metric = $2
-         AND billing_cycle_start = $3::date
-         AND billing_cycle_end = $4::date`,
-      [ORG_ID_OVERAGE, testMetric, billingStart.toISOString(), billingEnd.toISOString()],
-    )
-
-    expect(Number.parseInt(result.rows[0].count)).toBe(1)
+    expect(await countOverageEvents(testMetric, billingStart, billingEnd)).toBe(1)
   })
 })

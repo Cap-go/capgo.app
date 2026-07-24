@@ -4,7 +4,7 @@ import { McpServer } from '@modelcontextprotocol/server'
 import { StdioServerTransport } from '@modelcontextprotocol/server/stdio'
 import pack from '../../package.json'
 import { enableSupabaseInstrumentation, setInvocationSource, trackMcpServerStarted, withMcpToolTracking } from '../analytics/track'
-import { parseSchema } from '../schemas/ark_validation'
+import { parseSchema } from '../schemas/schema_validation'
 import { starAllRepositoriesOptionsSchema, starRepoOptionsSchema, updateChannelOptionsSchema } from '../schemas/sdk'
 import {
   mcpAddAppInputSchema,

@@ -139,7 +139,7 @@ await test('runStart re-prompts after a previous resume decision', async () => {
 
 const { buildDeps, registerLiveUpdateTools, resolveLiveUpdateProjectTarget } = await import('../src/init/mcp/live-update-tools.ts')
 const { liveUpdateNextStepSchema, liveUpdateStartSchema, liveUpdateExplainInputSchema } = await import('../src/schemas/live-update-onboarding.ts')
-const { safeParseSchema } = await import('../src/schemas/ark_validation.ts')
+const { safeParseSchema } = await import('../src/schemas/schema_validation.ts')
 
 function fakeServer() {
   const tools = {}

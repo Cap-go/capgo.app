@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
-import { type } from 'arktype'
+import { z } from 'zod'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { safeParseSchema } from '../supabase/functions/_backend/utils/ark_validation.ts'
+import { safeParseSchema } from '../supabase/functions/_backend/utils/schema_validation.ts'
 
 import { BASE_URL, createDirectApiKeyWithBindings, executeSQL, fetchTestRequest, getAuthHeaders, getSupabaseClient, TEST_EMAIL, USER_ID } from './test-utils.ts'
 
@@ -12,29 +12,29 @@ const customerId = `cus_audit_${ORG_ID}`
 const APIKEY_AUDIT_APP_ID = `com.audit.logs.${globalId.replace(/-/g, '')}`
 
 // Schema for audit log response
-const auditLogSchema = type({
-  id: 'number',
-  created_at: 'string',
-  table_name: 'string',
-  record_id: 'string',
-  operation: 'string',
-  user_id: 'string | null',
-  org_id: 'string',
-  old_record: 'unknown',
-  new_record: 'unknown',
-  changed_fields: 'string[] | null',
-  actor_type: '"user" | "apikey" | "system" | "unknown"',
-  actor_user_id: 'string | null',
-  actor_user_email: 'string | null',
-  actor_apikey_id: 'number | null',
-  actor_apikey_name: 'string | null',
+const auditLogSchema = z.object({
+  id: z.number(),
+  created_at: z.string(),
+  table_name: z.string(),
+  record_id: z.string(),
+  operation: z.string(),
+  user_id: z.string().nullable(),
+  org_id: z.string(),
+  old_record: z.unknown(),
+  new_record: z.unknown(),
+  changed_fields: z.array(z.string()).nullable(),
+  actor_type: z.enum(['user', 'apikey', 'system', 'unknown']),
+  actor_user_id: z.string().nullable(),
+  actor_user_email: z.string().nullable(),
+  actor_apikey_id: z.number().nullable(),
+  actor_apikey_name: z.string().nullable(),
 })
 
-const auditLogsResponseSchema = type({
-  data: auditLogSchema.array(),
-  total: 'number',
-  page: 'number',
-  limit: 'number',
+const auditLogsResponseSchema = z.object({
+  data: z.array(auditLogSchema),
+  total: z.number(),
+  page: z.number(),
+  limit: z.number(),
 })
 
 interface AuditLog {

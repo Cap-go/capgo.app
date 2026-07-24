@@ -1,0 +1,53 @@
+{
+  "generatedAt": "2026-07-23T09:32:59.031Z",
+  "bundle": {
+    "uploadKiB": 436.21,
+    "gzipKiB": 129.05
+  },
+  "current": {
+    "label": "current",
+    "bytes": 446678,
+    "coldOk": {
+      "wallMs": 72.46413799999982,
+      "cpuMs": 30.967,
+      "status": 200
+    },
+    "warmOk": {
+      "medianWallMs": 0.6939290000000256,
+      "medianCpuMs": 0.209,
+      "statuses": [
+        200
+      ]
+    },
+    "warmUpdatesInvalid": {
+      "medianWallMs": 0.9147689999999784,
+      "medianCpuMs": 0.246,
+      "statuses": [
+        400
+      ]
+    }
+  },
+  "baseline": {
+    "label": "baseline",
+    "bytes": 1054061,
+    "coldOk": {
+      "wallMs": 211.65969100000007,
+      "cpuMs": 85.272,
+      "status": 200
+    },
+    "warmOk": {
+      "medianWallMs": 0.811029999999846,
+      "medianCpuMs": 0.437,
+      "statuses": [
+        200
+      ]
+    },
+    "warmUpdatesInvalid": {
+      "medianWallMs": 0.9710410000000138,
+      "medianCpuMs": 0.469,
+      "statuses": [
+        400
+      ]
+    }
+  }
+}

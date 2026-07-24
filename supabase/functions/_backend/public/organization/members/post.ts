@@ -1,8 +1,8 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../../utils/hono.ts'
 import type { Database } from '../../../utils/supabase.types.ts'
-import { type } from 'arktype'
-import { safeParseSchema } from '../../../utils/ark_validation.ts'
+import { z } from 'zod'
+import { safeParseSchema } from '../../../utils/schema_validation.ts'
 import { BRES, simpleError } from '../../../utils/hono.ts'
 import { cloudlog } from '../../../utils/logging.ts'
 import { checkPermission } from '../../../utils/rbac.ts'
@@ -28,11 +28,11 @@ const inviteRoleAliases: Record<string, RbacInviteRole> = {
 const allowedInviteRoles = [...rbacInviteRoles, ...Object.keys(inviteRoleAliases)]
 const allowedInviteRoleSet = new Set<string>(allowedInviteRoles)
 const rbacInviteRoleSet = new Set<string>(rbacInviteRoles)
-const inviteTypeSchema = type.enumerated(...allowedInviteRoles)
+const inviteTypeSchema = z.enum(allowedInviteRoles as [string, ...string[]])
 
-const inviteBodySchema = type({
-  orgId: 'string',
-  email: 'string.email',
+const inviteBodySchema = z.object({
+  orgId: z.string(),
+  email: z.email(),
   invite_type: inviteTypeSchema,
 })
 

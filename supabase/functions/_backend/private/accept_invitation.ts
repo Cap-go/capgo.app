@@ -1,7 +1,7 @@
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
-import { type } from 'arktype'
+import { z } from 'zod'
 import { Hono } from 'hono/tiny'
-import { safeParseSchema } from '../utils/ark_validation.ts'
+import { safeParseSchema } from '../utils/schema_validation.ts'
 import { parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { getEffectivePasswordMinLength, getPasswordPolicyValidationErrors } from '../utils/password_policy.ts'
@@ -34,11 +34,11 @@ const DEFAULT_PASSWORD_POLICY: PasswordPolicy = {
 }
 
 // Base schema for initial validation (without password)
-const baseInvitationSchema = type({
-  'password': 'string',
-  'magic_invite_string': 'string > 0',
-  'opt_for_newsletters': 'boolean',
-  'captchaToken?': 'string > 0',
+const baseInvitationSchema = z.object({
+  password: z.string(),
+  magic_invite_string: z.string().min(1),
+  opt_for_newsletters: z.boolean(),
+  captchaToken: z.string().min(1).optional(),
 })
 
 export const app = new Hono<MiddlewareKeyVariables>()

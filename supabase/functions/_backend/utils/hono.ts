@@ -3,7 +3,6 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import type { Bindings } from './cloudflare.ts'
 import type { DeletePayload, InsertPayload, UpdatePayload } from './supabase.ts'
 import type { Database } from './supabase.types.ts'
-import { createClient } from '@supabase/supabase-js'
 import { getRuntimeKey } from 'hono/adapter'
 import { cors } from 'hono/cors'
 import { createFactory } from 'hono/factory'
@@ -29,48 +28,6 @@ export interface JWTClaims {
   app_metadata?: {
     provider?: string
     [key: string]: unknown
-  }
-}
-
-const claimsClients = new Map<string, ReturnType<typeof createClient<Database>>>()
-
-function getClaimsClient(supabaseUrl: string, supabaseAnonKey: string) {
-  const cacheKey = `${supabaseUrl}|${supabaseAnonKey.substring(0, 8)}`
-  const cached = claimsClients.get(cacheKey)
-  if (cached) {
-    return cached
-  }
-
-  const client = createClient<Database>(supabaseUrl, supabaseAnonKey, {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-      detectSessionInUrl: false,
-    },
-  })
-  claimsClients.set(cacheKey, client)
-  return client
-}
-
-/**
- * Decode JWT claims through Supabase Auth `getClaims()`.
- */
-export async function getClaimsFromJWT(c: Context, jwt: string): Promise<JWTClaims | null> {
-  try {
-    const token = jwt.startsWith('Bearer ') ? jwt.slice(7) : jwt
-    const supabaseUrl = getEnv(c, 'SUPABASE_URL').replace(/\/$/, '')
-    const supabaseAnonKey = getEnv(c, 'SUPABASE_ANON_KEY')
-
-    const authClient = getClaimsClient(supabaseUrl, supabaseAnonKey).auth
-    const { data, error } = await authClient.getClaims(token)
-    if (error || !data?.claims) {
-      return null
-    }
-
-    return data.claims as JWTClaims
-  }
-  catch {
-    return null
   }
 }
 
@@ -272,33 +229,6 @@ export async function getBodyOrQuery<T>(c: Context<MiddlewareKeyVariables, any, 
   return body
 }
 
-export const middlewareAuth = honoFactory.createMiddleware(async (c, next) => {
-  const authorization = c.req.header('authorization')
-  if (!authorization) {
-    cloudlog({ requestId: c.get('requestId'), message: 'Cannot find authorization', query: c.req.query() })
-    return quickError(401, 'no_jwt_apikey_or_subkey', 'No JWT, apikey or subkey provided')
-  }
-  c.set('authorization', authorization)
-
-  // Decode JWT claims via Supabase Auth `getClaims()`.
-  const claims = await getClaimsFromJWT(c, authorization)
-  if (!claims || !claims.sub) {
-    cloudlog({ requestId: c.get('requestId'), message: 'Invalid JWT claims' })
-    throw simpleError('invalid_jwt', 'Invalid JWT')
-  }
-
-  // Set auth context for RBAC
-  c.set('auth', {
-    userId: claims.sub,
-    authType: 'jwt',
-    apikey: null,
-    jwt: authorization,
-    claims,
-  } as AuthInfo)
-
-  await next()
-})
-
 export const middlewareAPISecret = honoFactory.createMiddleware(async (c, next) => {
   const authorizationSecret = c.req.header('apisecret')
   const API_SECRET = getEnv(c, 'API_SECRET')
@@ -342,6 +272,14 @@ export function createHono(functionName: string, _version: string) {
   else {
     appGlobal = new Hono<MiddlewareKeyVariables>()
   }
+
+  // Plugin hot paths (/updates|/stats|/channel_self and the CF plugin worker).
+  // HAR/CPU inspect showed middleware + logging dominating non-DB request cost.
+  const pluginHotPath = functionName === 'plugin'
+    || functionName === 'updates'
+    || functionName === 'stats'
+    || functionName === 'channel_self'
+
   appGlobal.use('*', (c, next): Promise<any> => {
     // ADD HEADER TO IDENTIFY WORKER SOURCE
     const name = `${getEnv(c, 'ENV_NAME') || functionName}-${CapgoVersion}`
@@ -352,27 +290,25 @@ export function createHono(functionName: string, _version: string) {
     return next()
   })
 
-  appGlobal.use('*', logger())
-  // Use platform-specific request IDs, fallback to generated UUID
+  // Skip hono's access logger on plugin hot paths — it serializes every request
+  // on millions of device calls/day.
+  if (!pluginHotPath)
+    appGlobal.use('*', logger())
+  // Use platform-specific request IDs, fallback to generated UUID.
+  // Do not cloudlog inside the generator: it runs on every request (incl. cf-ray).
   appGlobal.use('*', requestId({
     generator: (c) => {
       // Cloudflare provides the Ray ID in the cf-ray header
       // Check this first as it's our primary deployment target
       const cfRay = c.req.header('cf-ray')
-      if (cfRay) {
-        cloudlog({ message: 'requestId source: cf-ray', cfRay })
+      if (cfRay)
         return cfRay
-      }
       // Supabase Edge Functions provide SB_EXECUTION_ID
       const sbExecutionId = getEnv(c, 'SB_EXECUTION_ID')
-      if (sbExecutionId) {
-        cloudlog({ message: 'requestId source: SB_EXECUTION_ID', sbExecutionId })
+      if (sbExecutionId)
         return sbExecutionId
-      }
       // Fallback to crypto.randomUUID() if not on any known platform
-      const uuid = crypto.randomUUID()
-      cloudlog({ message: 'requestId source: crypto.randomUUID()', uuid })
-      return uuid
+      return crypto.randomUUID()
     },
   }))
 

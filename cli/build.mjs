@@ -1,6 +1,5 @@
 import { copyFileSync, readFileSync, writeFileSync } from 'node:fs'
 import { env, exit } from 'node:process'
-
 // Precompiled helper packages (keychain + ASC key helper .apps) resolve from
 // node_modules at runtime (binary-only optional deps) — never bundle them.
 const HELPER_PACKAGES = [

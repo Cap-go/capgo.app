@@ -28,7 +28,7 @@ import { findMonorepoRoot, findNXMonorepoRoot, isMonorepo, isNXMonorepo } from '
 import { getChecksum } from './checksum'
 import { loadConfig, loadConfigForWrite, writeConfig } from './config'
 import { isTruthyEnvValue } from './posthog'
-import { safeParseSchema } from './schemas/ark_validation'
+import { safeParseSchema } from './schemas/schema_validation'
 import { nativePackageSchema } from './schemas/common'
 import { formatApiErrorForCli, parseSecurityPolicyError } from './utils/security_policy_errors'
 

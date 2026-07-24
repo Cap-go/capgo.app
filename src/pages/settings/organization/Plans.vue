@@ -14,7 +14,7 @@ import { formatIncludedThenPrice } from '~/services/creditPricing'
 import { formatNumberValue } from '~/services/formatLocale'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { checkPermissions } from '~/services/permissions'
-import { getDatafastAttribution, openCheckout } from '~/services/stripe'
+import { getAffonsoReferral, getDatafastAttribution, openCheckout } from '~/services/stripe'
 import { getCreditUnitPricing, getCurrentPlanNameOrg, useSupabase } from '~/services/supabase'
 import { openSupport } from '~/services/support'
 import { sendEvent } from '~/services/tracking'
@@ -161,6 +161,7 @@ async function prefetchStripeCheckoutUrl(plan: Database['public']['Tables']['pla
   const successUrl = `${window.location.href}?success=1`
   const cancelUrl = `${window.location.href}?cancel=1`
   const datafastAttribution = await getDatafastAttribution()
+  const affonsoReferral = await getAffonsoReferral()
   try {
     const resp = await supabase.functions.invoke('private/stripe_checkout', {
       body: JSON.stringify({
@@ -172,6 +173,7 @@ async function prefetchStripeCheckoutUrl(plan: Database['public']['Tables']['pla
         attributionId: datafastAttribution.visitorId,
         datafastVisitorId: datafastAttribution.visitorId,
         datafastSessionId: datafastAttribution.sessionId,
+        affonsoReferral,
       }),
     })
 

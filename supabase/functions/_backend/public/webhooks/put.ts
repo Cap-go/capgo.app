@@ -2,23 +2,23 @@ import type { Context } from 'hono'
 import type { AuthInfo, MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import type { WebhookDeliveryVersion } from '../../utils/webhook.ts'
-import { type } from 'arktype'
-import { safeParseSchema } from '../../utils/ark_validation.ts'
+import { z } from 'zod'
+import { safeParseSchema } from '../../utils/schema_validation.ts'
 import { simpleError } from '../../utils/hono.ts'
 import { supabaseAdmin } from '../../utils/supabase.ts'
 import { getWebhookLogUrlMetadata, getWebhookPublicUrlValidationError, parseWebhookDeliveryVersion, WEBHOOK_EVENT_TYPES } from '../../utils/webhook.ts'
 import { checkWebhookPermissionV2 } from './index.ts'
 import { webhookPublicSelect } from './response.ts'
 
-const bodySchema = type({
-  'orgId': 'string',
-  'webhookId': 'string',
-  'name?': 'string > 0',
-  'url?': 'string.url',
-  'events?': 'string[] > 0',
-  'enabled?': 'boolean',
-  'deliveryVersion?': 'string',
-  'delivery_version?': 'string',
+const bodySchema = z.object({
+  orgId: z.string(),
+  webhookId: z.string(),
+  name: z.string().min(1).optional(),
+  url: z.url().optional(),
+  events: z.array(z.string()).min(1).optional(),
+  enabled: z.boolean().optional(),
+  deliveryVersion: z.string().optional(),
+  delivery_version: z.string().optional(),
 })
 
 interface PutWebhookBody {

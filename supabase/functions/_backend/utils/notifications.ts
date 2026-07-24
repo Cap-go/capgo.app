@@ -1,7 +1,6 @@
 import type { Context } from 'hono'
 import type { getDrizzleClient } from './pg.ts'
 import { parseCronExpression } from 'cron-schedule'
-import dayjs from 'dayjs'
 import { and, eq } from 'drizzle-orm'
 import { trackBentoEvent } from './bento.ts'
 import { CacheHelper } from './cache.ts'
@@ -73,7 +72,7 @@ function isSendable(c: Context, last: string, cron: string) {
   const last_send_at = new Date(last)
   const now = new Date()
   const nextDate = interval.getNextDate(last_send_at)
-  const sendable = dayjs(now).isAfter(nextDate)
+  const sendable = now.getTime() > nextDate.getTime()
   cloudlog({ requestId: c.get('requestId'), message: 'isSendable', cron, last_send_at, nextDate, now, sendable })
 
   return sendable

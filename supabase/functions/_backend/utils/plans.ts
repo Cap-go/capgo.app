@@ -550,6 +550,7 @@ export async function handleOrgNotificationsAndEvents(c: Context, org: any, orgI
   }
   else if (!is_onboarded && is_onboarding_needed) {
     const onboardingIntent = parseOrgOnboardingIntent(org.onboarding)
+    // Once returns true only on the first org claim (not on later cron passes).
     const sent = await sendNotifToOrgMembersOnce(c, 'user:need_onboarding', 'onboarding', buildOnboardingIntentBentoEventData(c, onboardingIntent, {
       id: orgId,
       name: org.name ?? '',

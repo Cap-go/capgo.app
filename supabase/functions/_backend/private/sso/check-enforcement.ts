@@ -1,4 +1,5 @@
-import { createHono, getClaimsFromJWT, middlewareAuth, parseBody, quickError, useCors } from '../../utils/hono.ts'
+import { createHono, parseBody, quickError, useCors } from '../../utils/hono.ts'
+import { getClaimsFromJWT, middlewareAuth } from '../../utils/hono_jwt.ts'
 import { cloudlog } from '../../utils/logging.ts'
 import { supabaseClient, supabaseWithAuth } from '../../utils/supabase.ts'
 import { version } from '../../utils/version.ts'

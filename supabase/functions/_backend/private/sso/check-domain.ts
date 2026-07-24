@@ -1,6 +1,6 @@
 import type { Context } from 'hono'
-import { type } from 'arktype'
-import { safeParseSchema } from '../../utils/ark_validation.ts'
+import { z } from 'zod'
+import { safeParseSchema } from '../../utils/schema_validation.ts'
 import { CacheHelper } from '../../utils/cache.ts'
 import { createHono, parseBody, quickError, simpleError, useCors } from '../../utils/hono.ts'
 import { cloudlog } from '../../utils/logging.ts'
@@ -40,8 +40,8 @@ async function checkDomainRateLimit(c: Context): Promise<boolean> {
   return false
 }
 
-const bodySchema = type({
-  email: 'string.email',
+const bodySchema = z.object({
+  email: z.email(),
 })
 
 export const app = createHono('', version)

@@ -1,26 +1,27 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Database } from '../utils/supabase.types.ts'
-import { type } from 'arktype'
+import { z } from 'zod'
 import dayjs from 'dayjs'
 import { Hono } from 'hono/tiny'
-import { safeParseSchema } from '../utils/ark_validation.ts'
+import { safeParseSchema } from '../utils/schema_validation.ts'
 import { trackBentoEvent } from '../utils/bento.ts'
 import { verifyCaptchaToken } from '../utils/captcha.ts'
-import { BRES, middlewareAuth, parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
+import { BRES, parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
+import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { supabaseAdmin, supabaseClient } from '../utils/supabase.ts'
 import { getEnv } from '../utils/utils.ts'
 
 // Define the schema for the invite user request
-const inviteUserSchema = type({
-  'email': 'string.email',
-  'org_id': 'string > 0',
-  'invite_type': '"org_member" | "org_billing_admin" | "org_admin" | "org_super_admin"',
-  'captcha_token?': 'string > 0',
-  'first_name': 'string > 0',
-  'last_name': 'string > 0',
+const inviteUserSchema = z.object({
+  email: z.email(),
+  org_id: z.string().min(1),
+  invite_type: z.enum(['org_member', 'org_billing_admin', 'org_admin', 'org_super_admin']),
+  captcha_token: z.string().min(1).optional(),
+  first_name: z.string().min(1),
+  last_name: z.string().min(1),
 })
 
 const rbacInviteRoles = ['org_member', 'org_billing_admin', 'org_admin', 'org_super_admin'] as const

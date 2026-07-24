@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { createClient } from '@supabase/supabase-js'
-import { type } from 'arktype'
+import { z } from 'zod'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { parseSchema, safeParseSchema } from '../supabase/functions/_backend/utils/ark_validation.ts'
+import { parseSchema, safeParseSchema } from '../supabase/functions/_backend/utils/schema_validation.ts'
 
 import {
   BASE_URL,
@@ -246,7 +246,7 @@ describe('read-only API keys cannot access destructive organization routes', () 
     })
 
     expect(response.status).toBe(200)
-    const responseType = type({ id: 'string', name: 'string' })
+    const responseType = z.object({ id: z.string(), name: z.string() })
     expect(parseSchema(responseType, await response.json())).toEqual(expect.objectContaining({ id: readOnlyOrgId, name: readOnlyName }))
   })
 
@@ -257,11 +257,11 @@ describe('read-only API keys cannot access destructive organization routes', () 
     })
 
     expect(response.status).toBe(200)
-    const members = type({
-      uid: 'string',
-      email: 'string',
-      role: 'string',
-    }).array()
+    const members = z.array(z.object({
+      uid: z.string(),
+      email: z.string(),
+      role: z.string(),
+    }))
     expect(parseSchema(members, await response.json()).some(member => member.uid === USER_ID)).toBe(true)
   })
 
@@ -272,11 +272,11 @@ describe('read-only API keys cannot access destructive organization routes', () 
     })
 
     expect(response.status).toBe(200)
-    const members = type({
-      uid: 'string',
-      email: 'string',
-      role: 'string',
-    }).array()
+    const members = z.array(z.object({
+      uid: z.string(),
+      email: z.string(),
+      role: z.string(),
+    }))
     expect(parseSchema(members, await response.json()).some(member => member.uid === USER_ID)).toBe(true)
   })
 
@@ -609,7 +609,7 @@ describe('x-limited-key-id subkeys enforce organization scope on middlewareKey r
     })
 
     expect(response.status).toBe(200)
-    const orgListSchema = type({ id: 'string', name: 'string' }).array()
+    const orgListSchema = z.array(z.object({ id: z.string(), name: z.string() }))
     const payload = parseSchema(orgListSchema, await response.json())
     expect(payload.map(org => org.id)).toEqual([scopedOrgId])
   })
@@ -671,7 +671,7 @@ describe('API key organization creation', () => {
       })
 
       expect(response.status).toBe(200)
-      const responseType = type({ id: 'string.uuid' })
+      const responseType = z.object({ id: z.uuid() })
       const payload = parseSchema(responseType, await response.json())
       createdOrgId = payload.id
 
@@ -931,7 +931,7 @@ describe('[GET] /organization', () => {
       headers,
     })
     expect(response.status).toBe(200)
-    const responseType = type({ id: 'string', name: 'string' }).array()
+    const responseType = z.array(z.object({ id: z.string(), name: z.string() }))
     expect(parseSchema(responseType, await response.json()).length).toBeGreaterThan(0)
   })
 
@@ -940,7 +940,7 @@ describe('[GET] /organization', () => {
       headers,
     })
     expect(response.status).toBe(200)
-    const responseType = type({ id: 'string', name: 'string', website: 'string | null' })
+    const responseType = z.object({ id: z.string(), name: z.string(), website: z.string().nullable() })
     const safe = safeParseSchema(responseType, await response.json())
     expect(safe.success).toBe(true)
     if (!safe.success)
@@ -965,12 +965,12 @@ describe('[GET] /organization/members', () => {
       headers,
     })
     expect(response.status).toBe(200)
-    const responseType = type({
-      uid: 'string',
-      email: 'string',
-      image_url: 'string',
-      role: 'string',
-    }).array()
+    const responseType = z.array(z.object({
+      uid: z.string(),
+      email: z.string(),
+      image_url: z.string(),
+      role: z.string(),
+    }))
     const safe = safeParseSchema(responseType, await response.json())
     expect(safe.success).toBe(true)
     if (!safe.success)
@@ -1138,8 +1138,8 @@ describe('[POST] /organization/members', () => {
 
       const responseData = await response.json()
       expect(response.status).toBe(200)
-      const responseType = type({
-        status: 'string',
+      const responseType = z.object({
+        status: z.string(),
       })
       const safe = safeParseSchema(responseType, responseData)
       expect(safe.success).toBe(true)
@@ -1255,8 +1255,8 @@ describe('[DELETE] /organization/members', () => {
       method: 'DELETE',
     })
     expect(response.status).toBe(200)
-    const responseType = type({
-      status: 'string',
+    const responseType = z.object({
+      status: z.string(),
     })
     const safe = safeParseSchema(responseType, await response.json())
     expect(safe.success).toBe(true)
@@ -1315,8 +1315,8 @@ describe('[POST] /organization', () => {
       body: JSON.stringify({ name, estimatedMau }),
     })
     expect(response.status).toBe(200)
-    const responseType = type({
-      id: 'string.uuid',
+    const responseType = z.object({
+      id: z.uuid(),
     })
     const safe = safeParseSchema(responseType, await response.json())
     expect(safe.success).toBe(true)
@@ -1366,8 +1366,8 @@ describe('[POST] /organization', () => {
       body: JSON.stringify({ name, website }),
     })
     expect(response.status).toBe(200)
-    const responseType = type({
-      id: 'string.uuid',
+    const responseType = z.object({
+      id: z.uuid(),
     })
     const safe = safeParseSchema(responseType, await response.json())
     expect(safe.success).toBe(true)
@@ -1496,9 +1496,9 @@ describe('[PUT] /organization', () => {
         body: JSON.stringify({ orgId, name, website }),
       })
       expect(response.status).toBe(200)
-      const responseType = type({
-        id: 'string.uuid',
-        data: 'unknown',
+      const responseType = z.object({
+        id: z.uuid(),
+        data: z.unknown(),
       })
       const safe = safeParseSchema(responseType, await response.json())
       expect(safe.success).toBe(true)
@@ -2143,7 +2143,7 @@ describe('rbac mode - organization member operations', () => {
       headers: rbacHeaders,
     })
     expect(response.status).toBe(200)
-    const responseType = type({ id: 'string', name: 'string' })
+    const responseType = z.object({ id: z.string(), name: z.string() })
     const safe = safeParseSchema(responseType, await response.json())
     expect(safe.success).toBe(true)
     if (!safe.success)
@@ -2156,12 +2156,12 @@ describe('rbac mode - organization member operations', () => {
       headers: rbacHeaders,
     })
     expect(response.status).toBe(200)
-    const responseType = type({
-      uid: 'string',
-      email: 'string',
-      image_url: 'string',
-      role: 'string',
-    }).array()
+    const responseType = z.array(z.object({
+      uid: z.string(),
+      email: z.string(),
+      image_url: z.string(),
+      role: z.string(),
+    }))
     const safe = safeParseSchema(responseType, await response.json())
     expect(safe.success).toBe(true)
     if (!safe.success)
@@ -2181,7 +2181,7 @@ describe('rbac mode - organization member operations', () => {
       body: JSON.stringify({ orgId: ORG_ID_RBAC, name: updatedName }),
     })
     expect(response.status).toBe(200)
-    const responseType = type({ id: 'string.uuid', data: 'unknown' })
+    const responseType = z.object({ id: z.uuid(), data: z.unknown() })
     const safe = safeParseSchema(responseType, await response.json())
     expect(safe.success).toBe(true)
     if (!safe.success)

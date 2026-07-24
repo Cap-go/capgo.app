@@ -2559,7 +2559,6 @@
   "error-categories": "Error categories",
   "error-share": "{share} of errors",
   "errors-in-period": "Errors in period",
-  "events": "Events",
   "failed-to-fetch-log-insights": "Failed to fetch log insights",
   "log-insights": "Insights",
   "log-insights-period-help": "Error categories, affected devices, and trends use this period.",

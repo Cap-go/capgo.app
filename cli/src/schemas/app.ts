@@ -1,43 +1,37 @@
-import { type } from './arktype'
+import { z } from 'zod'
 import { optionsBaseSchema } from './base'
 
 // ============================================================================
 // App Options Schemas
 // ============================================================================
 
-export const appOptionsSchema = type({
-  '...': optionsBaseSchema,
-  '+': 'delete',
-  'name?': 'string',
-  'icon?': 'string',
-  'retention?': 'number',
-  'exposeMetadata?': 'boolean',
-  'preview?': 'boolean',
-  'allowDeviceCustomId?': 'boolean',
-  'blockProviderInfraRequests?': 'boolean',
-  'buildTimeoutMinutes?': 'number',
-  'iosStoreUrl?': 'string',
-  'androidStoreUrl?': 'string',
-  'defaultUploadChannel?': 'string',
-  'defaultDownloadChannel?': 'string',
-  'disableDownloadChannels?': 'boolean',
+export const appOptionsSchema = optionsBaseSchema.extend({
+  name: z.string().optional(),
+  icon: z.string().optional(),
+  retention: z.number().optional(),
+  exposeMetadata: z.boolean().optional(),
+  preview: z.boolean().optional(),
+  allowDeviceCustomId: z.boolean().optional(),
+  blockProviderInfraRequests: z.boolean().optional(),
+  buildTimeoutMinutes: z.number().optional(),
+  iosStoreUrl: z.string().optional(),
+  androidStoreUrl: z.string().optional(),
+  defaultUploadChannel: z.string().optional(),
+  defaultDownloadChannel: z.string().optional(),
+  disableDownloadChannels: z.boolean().optional(),
 })
 
-export type AppOptions = typeof appOptionsSchema.infer
+export type AppOptions = z.infer<typeof appOptionsSchema>
 
-export const appDebugOptionsSchema = type({
-  '...': optionsBaseSchema,
-  '+': 'delete',
-  'device?': 'string',
+export const appDebugOptionsSchema = optionsBaseSchema.extend({
+  device: z.string().optional(),
 })
 
-export type AppDebugOptions = typeof appDebugOptionsSchema.infer
+export type AppDebugOptions = z.infer<typeof appDebugOptionsSchema>
 
-export const appSettingOptionsSchema = type({
-  '...': optionsBaseSchema,
-  '+': 'delete',
-  'bool?': 'string',
-  'string?': 'string',
+export const appSettingOptionsSchema = optionsBaseSchema.extend({
+  bool: z.string().optional(),
+  string: z.string().optional(),
 })
 
-export type AppSettingOptions = typeof appSettingOptionsSchema.infer
+export type AppSettingOptions = z.infer<typeof appSettingOptionsSchema>

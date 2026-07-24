@@ -1,10 +1,10 @@
-import { app as channel_self } from '../../supabase/functions/_backend/plugins/channel_self.ts'
-import { app as stats } from '../../supabase/functions/_backend/plugins/stats.ts'
-import { app as updates } from '../../supabase/functions/_backend/plugins/updates.ts'
-import { app as latency } from '../../supabase/functions/_backend/private/latency.ts'
-import { app as ok } from '../../supabase/functions/_backend/public/ok.ts'
-import { createAllCatch, createHono, useCors } from '../../supabase/functions/_backend/utils/hono.ts'
-import { version } from '../../supabase/functions/_backend/utils/version.ts'
+import { app as channel_self } from '../../supabase/functions/_backend/plugin_runtime/plugins/channel_self.ts'
+import { app as stats } from '../../supabase/functions/_backend/plugin_runtime/plugins/stats.ts'
+import { app as updates } from '../../supabase/functions/_backend/plugin_runtime/plugins/updates.ts'
+import { app as latency } from '../../supabase/functions/_backend/plugin_runtime/private/latency.ts'
+import { app as ok } from '../../supabase/functions/_backend/plugin_runtime/public/ok.ts'
+import { createAllCatch, createHono, useCors } from '../../supabase/functions/_backend/plugin_runtime/utils/hono.ts'
+import { version } from '../../supabase/functions/_backend/plugin_runtime/utils/version.ts'
 
 const functionName = 'plugin'
 const app = createHono(functionName, version)

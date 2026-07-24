@@ -46,7 +46,10 @@ when working with code in this repository.
 - `./scripts/start-cloudflare-workers.sh` - Start local Cloudflare Workers for
   testing
 
-Note: Cloudflare test suite is currently unstable and may not pass reliably.
+Note: Prefer Tinbase (`bun test:db` / `tests/tinbase-db-tests.txt`) for
+PostgREST/auth-only coverage so Docker/Cloudflare shards stay small and can
+run at high concurrency. CI caps every test job at 5 minutes and shards
+backend/Cloudflare/Playwright aggressively instead of lowering concurrency.
 
 See [CLOUDFLARE_TESTING.md](CLOUDFLARE_TESTING.md) for detailed information on
 testing against Cloudflare Workers.
@@ -772,9 +775,9 @@ Also applies to dialog/Teleport content, admin filters, and hidden utility input
 
 ## Frontend Testing
 
-- Cover customer-facing flows with the Playwright MCP suite. Add scenarios under
-  `playwright/e2e` and run them locally with `bun run test:front` before
-  shipping UI changes.
+- Cover customer-facing flows with the Playwright suite under `playwright/e2e`
+  and run them locally with `bun run test:front` before shipping UI changes.
+  CI runs Playwright sharded with a 5-minute job budget.
 
 ### Visual diff for UI changes
 

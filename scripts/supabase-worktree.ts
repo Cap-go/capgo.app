@@ -18,8 +18,13 @@ function hasSupabaseCli(): boolean {
  */
 function getLocalSupabaseCli(repoRoot: string): string | null {
   const binName = process.platform === 'win32' ? 'supabase.exe' : 'supabase'
-  const localBin = resolve(repoRoot, 'node_modules', 'supabase', 'bin', binName)
-  return existsSync(localBin) ? localBin : null
+  // Prefer the package shim Bun/npm expose on PATH (.bin), then legacy bin/ layouts.
+  const candidates = [
+    resolve(repoRoot, 'node_modules', '.bin', binName),
+    resolve(repoRoot, 'node_modules', 'supabase', 'bin', binName),
+    resolve(repoRoot, 'node_modules', 'supabase', 'dist', 'supabase.js'),
+  ]
+  return candidates.find(candidate => existsSync(candidate)) ?? null
 }
 
 /**
@@ -272,7 +277,7 @@ function parseInlineEnvAssignments(args: string[]): { env: Record<string, string
 /**
  * Run a Supabase CLI command against the current worktree's generated `--workdir`.
  */
-function runSupabase(args: string[], repoRoot: string): number {
+function runSupabase(args: string[], repoRoot: string, options: { captureOutput?: boolean } = {}): { status: number, output: string } {
   const { workdir, cfg } = ensureWorktreeSupabaseDir(repoRoot)
   const supa = getSupabaseCmd(repoRoot)
   const commandArgs = [...args]
@@ -283,10 +288,45 @@ function runSupabase(args: string[], repoRoot: string): number {
     commandArgs.push('--env-file', ensureFunctionsEnvFile(repoRoot, workdir, cfg))
 
   const res = spawnSync(supa.cmd, [...supa.argsPrefix, ...commandArgs, '--workdir', workdir], {
-    stdio: 'inherit',
+    stdio: options.captureOutput ? 'pipe' : 'inherit',
+    encoding: options.captureOutput ? 'utf8' : undefined,
     env: process.env,
   })
-  return res.status ?? 1
+  const stdout = options.captureOutput ? (res.stdout ?? '') : ''
+  const stderr = options.captureOutput ? (res.stderr ?? '') : ''
+  if (options.captureOutput) {
+    if (stdout)
+      process.stdout.write(stdout)
+    if (stderr)
+      process.stderr.write(stderr)
+  }
+  return { status: res.status ?? 1, output: `${stdout}${stderr}` }
+}
+
+function isTransientDockerPortBindFailure(output: string): boolean {
+  return /address already in use/i.test(output)
+    || /failed to bind host port/i.test(output)
+}
+
+/**
+ * `supabase start` can fail on GitHub runners with a transient Docker port bind
+ * (`address already in use`) after a partial start/stop. Retry only that class of
+ * failure so permanent start errors fail fast.
+ */
+function runSupabaseStartWithRetry(args: string[], repoRoot: string): number {
+  const maxAttempts = 3
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const { status, output } = runSupabase(args, repoRoot, { captureOutput: true })
+    if (status === 0)
+      return 0
+    const canRetry = attempt < maxAttempts && isTransientDockerPortBindFailure(output)
+    if (!canRetry)
+      return status
+    console.error(`Supabase start hit a transient Docker port bind (attempt ${attempt}/${maxAttempts}); stopping and retrying...`)
+    runSupabase(['stop', '--no-backup'], repoRoot)
+    spawnSync(process.platform === 'win32' ? 'timeout' : 'sleep', process.platform === 'win32' ? ['/T', '2', '/NOBREAK'] : ['2'])
+  }
+  return 1
 }
 
 /**
@@ -365,7 +405,10 @@ function main(): number {
       return runWithEnv(cmdArgs, repoRoot)
     }
 
-    return runSupabase(args, repoRoot)
+    if (args[0] === 'start')
+      return runSupabaseStartWithRetry(args, repoRoot)
+
+    return runSupabase(args, repoRoot).status
   }
   catch (error) {
     console.error(error instanceof Error ? error.message : String(error))

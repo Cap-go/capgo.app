@@ -1,10 +1,10 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Database } from '../utils/supabase.types.ts'
-import { type } from 'arktype'
+import { z } from 'zod'
 import { Hono } from 'hono/tiny'
 // --- Worker logic imports ---
-import { safeParseSchema } from '../utils/ark_validation.ts'
+import { integerLikeSchema, safeParseSchema } from '../utils/schema_validation.ts'
 import { sendDiscordAlert } from '../utils/discord.ts'
 import { BRES, middlewareAPISecret, parseBody, simpleError } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
@@ -29,15 +29,14 @@ export const MAX_QUEUE_READS = 5
 const VERSION_QUEUE_MAX_READS = 30 // deleted manifests can need many partial trash/delete passes
 const DISCORD_IGNORED_ERROR_CODES = new Set(['version_not_found', 'no_channel'])
 
-const integerLikeSchema = type('number.integer').or(type('string.numeric.parse |> number.integer'))
-export const messageSchema = type({
+export const messageSchema = z.object({
   msg_id: integerLikeSchema,
   read_ct: integerLikeSchema,
-  message: type({
-    'payload?': 'unknown',
-    'function_name': 'string',
-    'function_type?': '"cloudflare" | "cloudflare_pp" | "supabase" | "" | null',
-  }),
+  message: z.object({
+    payload: z.unknown().optional(),
+    function_name: z.string(),
+    function_type: z.enum(['cloudflare', 'cloudflare_pp', 'supabase', '']).nullable().optional(),
+  }).passthrough(),
 })
 
 interface Message {

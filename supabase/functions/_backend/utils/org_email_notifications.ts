@@ -653,7 +653,9 @@ export async function sendNotifToOrgMembersOnce(
         orgId,
         uniqId,
       })
-      return true
+      // false = not newly sent this call. Callers that mirror to PostHog/etc must
+      // not treat idempotent "already claimed" as a fresh delivery.
+      return false
     }
 
     const { recipients, resolutionFailed } = await getPreparedEligibleEmailTargets(c, orgId, preferenceKey, writeClient, audience)

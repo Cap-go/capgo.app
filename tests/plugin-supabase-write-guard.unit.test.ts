@@ -253,7 +253,7 @@ describe('plugin Supabase write policy', () => {
 
   it.concurrent('blocks legacy channel_self PostgreSQL storage fallback in the Worker route', async () => {
     const { Hono } = await import('hono/tiny')
-    const { app: channelSelfApp } = await import('../supabase/functions/_backend/plugins/channel_self.ts')
+    const { app: channelSelfApp } = await import('../supabase/functions/_backend/plugin_runtime/plugins/channel_self.ts')
     const wrapper = new Hono()
     wrapper.use('*', async (c, next) => {
       ;(c as any).set('skipSupabaseStatsFallback', true)

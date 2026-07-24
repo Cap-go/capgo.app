@@ -1,7 +1,7 @@
 {
   "name": "@capgo/cli",
   "type": "module",
-  "version": "8.29.1",
+  "version": "8.29.2",
   "description": "A CLI to upload to capgo servers",
   "author": "Martin martin@capgo.app",
   "license": "Apache 2.0",
@@ -218,7 +218,7 @@
     "react": "^19.2.8",
     "rrweb-snapshot": "^2.1.1",
     "string-width": "^8.2.2",
-    "arktype": "^2.2.0",
+    "zod": "^4.4.3",
     "@standard-schema/spec": "^1.1.0"
   },
   "optionalDependencies": {

@@ -1,16 +1,22 @@
 import type { StandardSchemaV1 } from '@standard-schema/spec'
 import type { Context } from 'hono'
-import { type } from 'arktype'
-import { createInsertSchema, createUpdateSchema } from 'drizzle-orm/arktype'
+import { z } from 'zod'
+import { createInsertSchema, createUpdateSchema } from 'drizzle-orm/zod'
 import { simpleErrorWithStatus } from '../utils/hono.ts'
 import { schema } from '../utils/postgres_schema.ts'
 
 type ValidationIssue = StandardSchemaV1.Issue & { readonly code?: string }
 type ValidationIssues = readonly ValidationIssue[]
 
-const ROLE_SCOPE_TYPE_SCHEMA = type('"org" | "app" | "channel"')
-const PRINCIPAL_TYPE_SCHEMA = type('"user" | "group" | "apikey"')
-const NON_EMPTY_STRING_SCHEMA = type('string > 0')
+// Use string + refine (not z.enum) so missing fields emit invalid_type and
+// stay distinguishable from invalid values in error hooks.
+const ROLE_SCOPE_TYPE_SCHEMA = z.string().min(1).refine(
+  (value): value is 'org' | 'app' | 'channel' => value === 'org' || value === 'app' || value === 'channel',
+)
+const PRINCIPAL_TYPE_SCHEMA = z.string().min(1).refine(
+  (value): value is 'user' | 'group' | 'apikey' => value === 'user' || value === 'group' || value === 'apikey',
+)
+const NON_EMPTY_STRING_SCHEMA = z.string().min(1)
 const JSON_CONTENT_TYPE_REGEX = /^application\/(?:[a-z-.]+\+)?json(?:;\s*[a-zA-Z0-9-]+=[^;]+)*$/
 
 interface StandardSchema<T> {
@@ -46,11 +52,23 @@ function issueField(issue: ValidationIssue): string | undefined {
 }
 
 function hasRequiredIssue(issues: ValidationIssues, field: string): boolean {
-  return issues.some(issue => issue.code === 'required' && issueField(issue) === field)
+  return issues.some((issue) => {
+    if (issueField(issue) !== field)
+      return false
+    const code = issue.code ?? ''
+    // Zod: missing → invalid_type; ArkType-compat: required
+    return code === 'required' || code === 'invalid_type'
+  })
 }
 
 function hasRequiredValueIssue(issues: ValidationIssues, field: string): boolean {
-  return issues.some(issue => ['required', 'minLength'].includes(issue.code ?? '') && issueField(issue) === field)
+  return issues.some((issue) => {
+    if (issueField(issue) !== field)
+      return false
+    const code = issue.code ?? ''
+    // Zod: missing → invalid_type, empty string → too_small
+    return code === 'required' || code === 'invalid_type' || code === 'too_small' || code === 'minLength'
+  })
 }
 
 function hasIssueForField(issues: ValidationIssues, field: string): boolean {
@@ -125,53 +143,51 @@ export async function validateJsonBody<T>(
   return { ok: true, data: result.value }
 }
 
-export const orgIdParamSchema = type({
-  org_id: 'string.uuid',
+export const orgIdParamSchema = z.object({
+  org_id: z.uuid(),
 })
 
-export const appIdParamSchema = type({
-  app_id: 'string.uuid',
+export const appIdParamSchema = z.object({
+  app_id: z.uuid(),
 })
 
-export const groupIdParamSchema = type({
-  group_id: 'string.uuid',
+export const groupIdParamSchema = z.object({
+  group_id: z.uuid(),
 })
 
-export const groupMemberParamSchema = type({
-  group_id: 'string.uuid',
-  user_id: 'string.uuid',
+export const groupMemberParamSchema = z.object({
+  group_id: z.uuid(),
+  user_id: z.uuid(),
 })
 
-export const bindingIdParamSchema = type({
-  binding_id: 'string.uuid',
+export const bindingIdParamSchema = z.object({
+  binding_id: z.uuid(),
 })
 
-export const roleScopeParamSchema = type({
+export const roleScopeParamSchema = z.object({
   scope_type: ROLE_SCOPE_TYPE_SCHEMA,
 })
 
-export const createGroupBodySchema = createInsertSchema(schema.groups)
-  .pick('name', 'description')
-  .and(type({
-    name: NON_EMPTY_STRING_SCHEMA,
-  }))
+export const createGroupBodySchema = createInsertSchema(schema.groups, {
+  name: z.string().min(1),
+}).pick({ name: true, description: true })
 
-export const updateGroupBodySchema = createUpdateSchema(schema.groups).pick('name', 'description')
+export const updateGroupBodySchema = createUpdateSchema(schema.groups).pick({ name: true, description: true })
 
-export const addGroupMemberBodySchema = createInsertSchema(schema.group_members).pick('user_id')
+export const addGroupMemberBodySchema = createInsertSchema(schema.group_members).pick({ user_id: true })
 
-export const createRoleBindingBodySchema = type({
-  'principal_type': PRINCIPAL_TYPE_SCHEMA,
-  'principal_id': 'string.uuid',
-  'scope_type': ROLE_SCOPE_TYPE_SCHEMA,
-  'org_id': 'string.uuid',
-  'app_id?': 'string.uuid | null',
-  'channel_id?': 'string.uuid | string.digits | number | null',
-  'reason?': 'string | null',
-  'role_name': NON_EMPTY_STRING_SCHEMA,
+export const createRoleBindingBodySchema = z.object({
+  principal_type: PRINCIPAL_TYPE_SCHEMA,
+  principal_id: z.uuid(),
+  scope_type: ROLE_SCOPE_TYPE_SCHEMA,
+  org_id: z.uuid(),
+  app_id: z.uuid().nullable().optional(),
+  channel_id: z.union([z.uuid(), z.string().regex(/^\d+$/), z.number()]).nullable().optional(),
+  reason: z.string().nullable().optional(),
+  role_name: NON_EMPTY_STRING_SCHEMA,
 })
 
-export const updateRoleBindingBodySchema = type({
+export const updateRoleBindingBodySchema = z.object({
   role_name: NON_EMPTY_STRING_SCHEMA,
 })
 

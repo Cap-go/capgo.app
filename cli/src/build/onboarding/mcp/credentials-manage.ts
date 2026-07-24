@@ -16,7 +16,7 @@ import type { BuildCredentials } from '../../../schemas/build.js'
 import { homedir } from 'node:os'
 import { extname, join, resolve, sep } from 'node:path'
 import { cwd } from 'node:process'
-import { type } from 'arktype'
+import { z } from 'zod'
 import type { McpRegistrar } from '../../../mcp/registrar.js'
 import { readSafeFileBytes } from '../../../utils/safeWrites.js'
 import {
@@ -273,15 +273,15 @@ export async function runCredentialsManage(input: CredentialsManageInput, deps: 
   }
 }
 
-export const credentialsManageSchema = type({
-  action: type("'list' | 'export' | 'set' | 'remove'").describe("list = show which fields are saved (names only); export = write a platform's credentials to a local .env; set = add or edit one field; remove = delete one field."),
-  'platform?': type("'ios' | 'android'").describe('Required for export/set/remove. The platform whose credentials to act on (must already be set up).'),
-  'key?': type('string').describe('For set/remove: the credential field name (e.g. KEYSTORE_STORE_PASSWORD, ANDROID_KEYSTORE_FILE, PLAY_CONFIG_JSON, P12_PASSWORD).'),
-  'value?': type('string').describe('For set: the new value to save (never echoed back).'),
-  'valueFile?': type('string').describe('For set: a path to a credential FILE (.keystore/.jks/.p12/.json/.p8/.cer/.mobileprovision) whose contents are base64-encoded into the value — use for FILE fields like ANDROID_KEYSTORE_FILE, PLAY_CONFIG_JSON, BUILD_CERTIFICATE_BASE64, or APPLE_KEY_CONTENT (the .p8 key). Non-credential files, and files in sensitive dirs (~/.ssh, ~/.aws, ~/.capgo-credentials), are refused.'),
-  'path?': type('string').describe('For export: the target .env path (must stay inside the project dir). Defaults to .env.capgo.<appId>.<platform> in the project dir.'),
-  'overwrite?': type('boolean').describe('For export: overwrite the target file if it already exists.'),
-  'appId?': type('string').describe('App id to target. Defaults to the current Capacitor project.'),
+export const credentialsManageSchema = z.object({
+  action: z.enum(['list', 'export', 'set', 'remove']).describe("list = show which fields are saved (names only); export = write a platform's credentials to a local .env; set = add or edit one field; remove = delete one field."),
+  platform: z.enum(['ios', 'android']).describe('Required for export/set/remove. The platform whose credentials to act on (must already be set up).').optional(),
+  key: z.string().describe('For set/remove: the credential field name (e.g. KEYSTORE_STORE_PASSWORD, ANDROID_KEYSTORE_FILE, PLAY_CONFIG_JSON, P12_PASSWORD).').optional(),
+  value: z.string().describe('For set: the new value to save (never echoed back).').optional(),
+  valueFile: z.string().describe('For set: a path to a credential FILE (.keystore/.jks/.p12/.json/.p8/.cer/.mobileprovision) whose contents are base64-encoded into the value — use for FILE fields like ANDROID_KEYSTORE_FILE, PLAY_CONFIG_JSON, BUILD_CERTIFICATE_BASE64, or APPLE_KEY_CONTENT (the .p8 key). Non-credential files, and files in sensitive dirs (~/.ssh, ~/.aws, ~/.capgo-credentials), are refused.').optional(),
+  path: z.string().describe('For export: the target .env path (must stay inside the project dir). Defaults to .env.capgo.<appId>.<platform> in the project dir.').optional(),
+  overwrite: z.boolean().describe('For export: overwrite the target file if it already exists.').optional(),
+  appId: z.string().describe('App id to target. Defaults to the current Capacitor project.').optional(),
 })
 
 const CREDENTIALS_MANAGE_DESCRIPTION

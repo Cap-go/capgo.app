@@ -1,4 +1,4 @@
-import { type } from './arktype'
+import { z } from 'zod'
 import { optionsBaseSchema } from './base'
 import { rejectConflictingBooleanGroup } from './common'
 
@@ -6,102 +6,92 @@ import { rejectConflictingBooleanGroup } from './common'
 // Channel Data Schema
 // ============================================================================
 
-export const channelSchema = type({
-  id: 'number',
-  name: 'string',
-  public: 'boolean',
-  ios: 'boolean',
-  android: 'boolean',
-  disable_auto_update: 'string',
-  disable_auto_update_under_native: 'boolean',
-  allow_device_self_set: 'boolean',
-  allow_emulator: 'boolean',
-  allow_device: 'boolean',
-  allow_dev: 'boolean',
-  allow_prod: 'boolean',
-  'version?': { 'name?': 'string', '[string]': 'unknown' },
+export const channelSchema = z.object({
+  id: z.number(),
+  name: z.string(),
+  public: z.boolean(),
+  ios: z.boolean(),
+  android: z.boolean(),
+  disable_auto_update: z.string(),
+  disable_auto_update_under_native: z.boolean(),
+  allow_device_self_set: z.boolean(),
+  allow_emulator: z.boolean(),
+  allow_device: z.boolean(),
+  allow_dev: z.boolean(),
+  allow_prod: z.boolean(),
+  version: z.object({
+    name: z.string().optional(),
+  }).catchall(z.unknown()).optional(),
 })
 
-export type Channel = typeof channelSchema.infer
+export type Channel = z.infer<typeof channelSchema>
 
 // ============================================================================
 // Channel Command Options Schemas
 // ============================================================================
 
-export const channelAddOptionsSchema = type({
-  '...': optionsBaseSchema,
-  '+': 'delete',
-  'default?': 'boolean',
-  'selfAssign?': 'boolean',
+export const channelAddOptionsSchema = optionsBaseSchema.extend({
+  default: z.boolean().optional(),
+  selfAssign: z.boolean().optional(),
 })
 
-export type ChannelAddOptions = typeof channelAddOptionsSchema.infer
+export type ChannelAddOptions = z.infer<typeof channelAddOptionsSchema>
 
-export const channelDeleteOptionsSchema = type({
-  '...': optionsBaseSchema,
-  '+': 'delete',
-  deleteBundle: 'boolean',
-  successIfNotFound: 'boolean',
+export const channelDeleteOptionsSchema = optionsBaseSchema.extend({
+  deleteBundle: z.boolean(),
+  successIfNotFound: z.boolean(),
 })
 
-export type ChannelDeleteOptions = typeof channelDeleteOptionsSchema.infer
+export type ChannelDeleteOptions = z.infer<typeof channelDeleteOptionsSchema>
 
-export const channelCurrentBundleOptionsSchema = type({
-  '...': optionsBaseSchema,
-  '+': 'delete',
-  'channel?': 'string',
-  'quiet?': 'boolean',
+export const channelCurrentBundleOptionsSchema = optionsBaseSchema.extend({
+  channel: z.string().optional(),
+  quiet: z.boolean().optional(),
 })
 
-export type ChannelCurrentBundleOptions = typeof channelCurrentBundleOptionsSchema.infer
+export type ChannelCurrentBundleOptions = z.infer<typeof channelCurrentBundleOptionsSchema>
 
-export const optionsSetChannelSchema = type({
-  '...': optionsBaseSchema,
-  '+': 'delete',
-  'bundle?': 'string',
-  'state?': 'string',
-  'downgrade?': 'boolean',
-  'latest?': 'boolean',
-  'latestRemote?': 'boolean',
-  'ios?': 'boolean',
-  'android?': 'boolean',
-  'selfAssign?': 'boolean',
-  'disableAutoUpdate?': 'string',
-  'dev?': 'boolean',
-  'emulator?': 'boolean',
-  'device?': 'boolean',
-  'prod?': 'boolean',
-  'packageJson?': 'string',
-  'ignoreMetadataCheck?': 'boolean',
-  'qrPreview?': 'boolean',
-  'sendUpdateNotification?': 'boolean',
-  'rolloutBundle?': 'string',
-  'rolloutPercentage?': '0 <= number <= 100',
-  'rolloutPercentageBps?': '0 <= number.integer <= 10000',
-  'rolloutEnable?': 'boolean',
-  'rolloutDisable?': 'boolean',
-  'rolloutPause?': 'boolean',
-  'rolloutResume?': 'boolean',
-  'rolloutRollback?': 'boolean',
-  'rolloutPromote?': 'boolean',
-  'rolloutCacheTtlSeconds?': '60 <= number.integer <= 31536000',
-  'autoPauseEnabled?': 'boolean',
-  'autoPauseDisabled?': 'boolean',
-  'autoPauseWindowMinutes?': '1 <= number.integer <= 10080',
-  'autoPauseFailureRateBps?': '0 <= number.integer <= 10000 | null',
-  'autoPauseConfidence?': '0 < number < 1',
-  'autoPauseMinAttempts?': 'number.integer >= 0 | null',
-  'autoPauseMinFailures?': 'number.integer >= 0 | null',
-  'autoPauseAction?': "'pause' | 'rollback' | 'notify'",
-  'autoPauseCooldownMinutes?': '0 <= number.integer <= 10080',
-}).narrow((value, ctx) => {
-  if (!rejectConflictingBooleanGroup(value, ctx, ['rolloutEnable', 'rolloutDisable']))
-    return false
-  if (!rejectConflictingBooleanGroup(value, ctx, ['rolloutPause', 'rolloutResume', 'rolloutRollback', 'rolloutPromote']))
-    return false
-  if (!rejectConflictingBooleanGroup(value, ctx, ['autoPauseEnabled', 'autoPauseDisabled']))
-    return false
-  return true
+export const optionsSetChannelSchema = optionsBaseSchema.extend({
+  bundle: z.string().optional(),
+  state: z.string().optional(),
+  downgrade: z.boolean().optional(),
+  latest: z.boolean().optional(),
+  latestRemote: z.boolean().optional(),
+  ios: z.boolean().optional(),
+  android: z.boolean().optional(),
+  selfAssign: z.boolean().optional(),
+  disableAutoUpdate: z.string().optional(),
+  dev: z.boolean().optional(),
+  emulator: z.boolean().optional(),
+  device: z.boolean().optional(),
+  prod: z.boolean().optional(),
+  packageJson: z.string().optional(),
+  ignoreMetadataCheck: z.boolean().optional(),
+  qrPreview: z.boolean().optional(),
+  sendUpdateNotification: z.boolean().optional(),
+  rolloutBundle: z.string().optional(),
+  rolloutPercentage: z.number().min(0).max(100).optional(),
+  rolloutPercentageBps: z.number().int().min(0).max(10000).optional(),
+  rolloutEnable: z.boolean().optional(),
+  rolloutDisable: z.boolean().optional(),
+  rolloutPause: z.boolean().optional(),
+  rolloutResume: z.boolean().optional(),
+  rolloutRollback: z.boolean().optional(),
+  rolloutPromote: z.boolean().optional(),
+  rolloutCacheTtlSeconds: z.number().int().min(60).max(31536000).optional(),
+  autoPauseEnabled: z.boolean().optional(),
+  autoPauseDisabled: z.boolean().optional(),
+  autoPauseWindowMinutes: z.number().int().min(1).max(10080).optional(),
+  autoPauseFailureRateBps: z.number().int().min(0).max(10000).nullable().optional(),
+  autoPauseConfidence: z.number().gt(0).lt(1).optional(),
+  autoPauseMinAttempts: z.number().int().min(0).nullable().optional(),
+  autoPauseMinFailures: z.number().int().min(0).nullable().optional(),
+  autoPauseAction: z.enum(['pause', 'rollback', 'notify']).optional(),
+  autoPauseCooldownMinutes: z.number().int().min(0).max(10080).optional(),
+}).superRefine((value, ctx) => {
+  rejectConflictingBooleanGroup(value, ctx, ['rolloutEnable', 'rolloutDisable'])
+  rejectConflictingBooleanGroup(value, ctx, ['rolloutPause', 'rolloutResume', 'rolloutRollback', 'rolloutPromote'])
+  rejectConflictingBooleanGroup(value, ctx, ['autoPauseEnabled', 'autoPauseDisabled'])
 })
 
-export type OptionsSetChannel = typeof optionsSetChannelSchema.infer
+export type OptionsSetChannel = z.infer<typeof optionsSetChannelSchema>

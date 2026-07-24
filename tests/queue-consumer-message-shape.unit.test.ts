@@ -4,7 +4,7 @@ import { __queueConsumerTestUtils__, MAX_QUEUE_READS, messagesArraySchema } from
 import { onManifestCreateTestUtils } from '../supabase/functions/_backend/triggers/on_manifest_create.ts'
 import { onVersionUpdateTestUtils } from '../supabase/functions/_backend/triggers/on_version_update.ts'
 import { s3TestUtils } from '../supabase/functions/_backend/utils/s3.ts'
-import { parseSchema } from '../supabase/functions/_backend/utils/ark_validation.ts'
+import { parseSchema } from '../supabase/functions/_backend/utils/schema_validation.ts'
 
 describe('queue_consumer legacy message compatibility', () => {
   it.concurrent('uses the payload envelope when it is present', () => {

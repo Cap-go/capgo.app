@@ -1,16 +1,16 @@
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
-import { type } from 'arktype'
+import { z } from 'zod'
 import { Hono } from 'hono/tiny'
-import { safeParseSchema } from '../utils/ark_validation.ts'
+import { safeParseSchema } from '../utils/schema_validation.ts'
 import { BRES, parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { updateCustomerEmail } from '../utils/stripe.ts'
 import { supabaseAdmin, supabaseWithAuth } from '../utils/supabase.ts'
 
-const bodySchema = type({
-  email: 'string.email',
-  org_id: 'string.uuid',
+const bodySchema = z.object({
+  email: z.email(),
+  org_id: z.uuid(),
 })
 
 export const app = new Hono<MiddlewareKeyVariables>()

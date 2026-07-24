@@ -43,7 +43,7 @@ describe('deploy scope matching', () => {
   })
 
   it.concurrent('keeps plugin endpoint changes scoped to Supabase and plugin workers', () => {
-    expect(resolveDeployScopeFromFiles(['supabase/functions/_backend/plugins/updates.ts'])).toEqual({
+    expect(resolveDeployScopeFromFiles(['supabase/functions/_backend/plugin_runtime/plugins/updates.ts'])).toEqual({
       api: false,
       files: false,
       plugins: true,
@@ -62,15 +62,36 @@ describe('deploy scope matching', () => {
     })
   })
 
-  it.concurrent('deploys shared Hono utilities to workers that import backend code', () => {
+  it.concurrent('deploys shared Hono utilities to API/files workers but not isolated plugins', () => {
     expect(resolveDeployScopeFromFiles(['supabase/functions/_backend/utils/hono.ts'])).toEqual({
       api: true,
       files: true,
+      plugins: false,
+      supabase: true,
+      translation: false,
+    })
+  })
+
+  it.concurrent('deploys plugin_runtime Hono changes only to plugin workers', () => {
+    expect(resolveDeployScopeFromFiles(['supabase/functions/_backend/plugin_runtime/utils/hono.ts'])).toEqual({
+      api: false,
+      files: false,
       plugins: true,
       supabase: true,
       translation: false,
     })
   })
+
+  it.concurrent('keeps Deno-only plugin stats bridge off the Cloudflare plugin deploy scope', () => {
+    expect(resolveDeployScopeFromFiles(['supabase/functions/shared/plugin_deno_stats_fallbacks.ts'])).toEqual({
+      api: false,
+      files: false,
+      plugins: false,
+      supabase: true,
+      translation: false,
+    })
+  })
+
 
   it.concurrent('deploys files worker when the shared preview subdomain helper changes', () => {
     expect(resolveDeployScopeFromFiles(['supabase/functions/shared/preview-subdomain.ts'])).toEqual({
@@ -134,7 +155,7 @@ describe('deploy scope matching', () => {
         'log -1 --format=%s capgo-12.0.0': 'chore(release): 12.0.0',
         'rev-parse capgo-12.0.0^': 'feature-head',
         'describe --tags --match capgo-[0-9]* --exclude capgo-*-alpha* --abbrev=0 feature-head': 'capgo-11.0.0',
-        'diff --name-only --diff-filter=ACMRTD capgo-11.0.0..feature-head': 'supabase/functions/_backend/plugins/updates.ts',
+        'diff --name-only --diff-filter=ACMRTD capgo-11.0.0..feature-head': 'supabase/functions/_backend/plugin_runtime/plugins/updates.ts',
       }
 
       if (key in responses) {
@@ -146,7 +167,7 @@ describe('deploy scope matching', () => {
 
     expect(resolveDeployScopeFromGit('capgo-12.0.0', run)).toEqual({
       base: 'capgo-11.0.0',
-      files: ['supabase/functions/_backend/plugins/updates.ts'],
+      files: ['supabase/functions/_backend/plugin_runtime/plugins/updates.ts'],
       head: 'feature-head',
       scope: {
         api: false,

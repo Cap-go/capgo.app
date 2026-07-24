@@ -1,21 +1,21 @@
 import type { Context } from 'hono'
 import type { AuthInfo, MiddlewareKeyVariables } from '../../utils/hono.ts'
-import { type } from 'arktype'
-import { safeParseSchema } from '../../utils/ark_validation.ts'
+import { z } from 'zod'
+import { safeParseSchema } from '../../utils/schema_validation.ts'
 import { simpleError } from '../../utils/hono.ts'
 import { supabaseAdmin } from '../../utils/supabase.ts'
 import { getWebhookLogUrlMetadata, getWebhookPublicUrlValidationError, parseWebhookDeliveryVersion, WEBHOOK_EVENT_TYPES } from '../../utils/webhook.ts'
 import { checkWebhookPermissionV2 } from './index.ts'
 import { webhookCreatedSelect } from './response.ts'
 
-const bodySchema = type({
-  'orgId': 'string',
-  'name': 'string > 0',
-  'url': 'string.url',
-  'events': 'string[] > 0',
-  'enabled?': 'boolean',
-  'deliveryVersion?': 'string',
-  'delivery_version?': 'string',
+const bodySchema = z.object({
+  orgId: z.string(),
+  name: z.string().min(1),
+  url: z.url(),
+  events: z.array(z.string()).min(1),
+  enabled: z.boolean().optional(),
+  deliveryVersion: z.string().optional(),
+  delivery_version: z.string().optional(),
 })
 
 export async function post(c: Context<MiddlewareKeyVariables, any, any>, bodyRaw: any, auth: AuthInfo): Promise<Response> {

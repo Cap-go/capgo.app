@@ -7,30 +7,30 @@ const getChannelSelfOverrideMock = vi.fn()
 
 ;(globalThis as any).EdgeRuntime = undefined
 
-vi.mock('../supabase/functions/_backend/utils/appStatus.ts', () => ({
+vi.mock('../supabase/functions/_backend/plugin_runtime/utils/appStatus.ts', () => ({
   getAppStatus: vi.fn(() => Promise.resolve({ status: null, allow_device_custom_id: true })),
   setAppStatus: vi.fn(() => Promise.resolve()),
 }))
 
-vi.mock('../supabase/functions/_backend/utils/channelSelfStore.ts', () => ({
+vi.mock('../supabase/functions/_backend/plugin_runtime/utils/channelSelfStore.ts', () => ({
   getChannelSelfOverride: getChannelSelfOverrideMock,
   isChannelSelfStoreEnabled: vi.fn(() => true),
 }))
 
-vi.mock('../supabase/functions/_backend/utils/downloadUrl.ts', () => ({
+vi.mock('../supabase/functions/_backend/plugin_runtime/utils/downloadUrl.ts', () => ({
   getBundleUrl: vi.fn(),
   getManifestUrl: vi.fn(),
 }))
 
-vi.mock('../supabase/functions/_backend/utils/notifications.ts', () => ({
+vi.mock('../supabase/functions/_backend/plugin_runtime/utils/notifications.ts', () => ({
   sendNotifOrgCached: vi.fn(() => Promise.resolve()),
 }))
 
-vi.mock('../supabase/functions/_backend/utils/org_email_notifications.ts', () => ({
+vi.mock('../supabase/functions/_backend/plugin_runtime/utils/org_email_notifications.ts', () => ({
   sendNotifToOrgMembersCached: vi.fn(() => Promise.resolve()),
 }))
 
-vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
+vi.mock('../supabase/functions/_backend/plugin_runtime/utils/pg.ts', () => ({
   closeClient: vi.fn(() => Promise.resolve()),
   getAppOwnerPostgres: getAppOwnerPostgresMock,
   getDrizzleClient: vi.fn(() => ({})),
@@ -39,11 +39,11 @@ vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
   setReplicationLagHeader: vi.fn(() => Promise.resolve()),
 }))
 
-vi.mock('../supabase/functions/_backend/utils/s3.ts', () => ({
+vi.mock('../supabase/functions/_backend/plugin_runtime/utils/s3.ts', () => ({
   s3: vi.fn(),
 }))
 
-vi.mock('../supabase/functions/_backend/utils/stats.ts', () => ({
+vi.mock('../supabase/functions/_backend/plugin_runtime/utils/plugin_stats.ts', () => ({
   createStatsBandwidth: vi.fn(() => Promise.resolve()),
   createStatsMau: vi.fn(() => Promise.resolve()),
   createStatsVersion: vi.fn(() => Promise.resolve()),
@@ -74,7 +74,7 @@ describe('updates channel_self store override routing', () => {
   })
 
   it.concurrent('queries KV-backed channel_self override only for old plugin versions', async () => {
-    const { updateWithPG } = await import('../supabase/functions/_backend/utils/update.ts')
+    const { updateWithPG } = await import('../supabase/functions/_backend/plugin_runtime/utils/update.ts')
     const app = new Hono()
     const buildBody = (pluginVersion: string) => ({
       app_id: 'com.test.app',

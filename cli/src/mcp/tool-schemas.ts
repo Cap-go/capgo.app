@@ -1,167 +1,148 @@
-import { type } from '../schemas/arktype'
+import { z } from 'zod'
 import { capacitorConfigOptionSchema } from '../schemas/sdk'
 
-export const mcpAddAppInputSchema = type({
-  '+': 'delete',
-  appId: 'string',
-  'name?': 'string',
-  'icon?': 'string',
+export const mcpAddAppInputSchema = z.object({
+  appId: z.string(),
+  name: z.string().optional(),
+  icon: z.string().optional(),
 })
 
-export const mcpUpdateAppInputSchema = type({
-  '+': 'delete',
-  appId: 'string',
-  'name?': 'string',
-  'icon?': 'string',
-  'retention?': 'number',
+export const mcpUpdateAppInputSchema = z.object({
+  appId: z.string(),
+  name: z.string().optional(),
+  icon: z.string().optional(),
+  retention: z.number().optional(),
 })
 
-export const mcpDeleteAppInputSchema = type({
-  '+': 'delete',
-  appId: type('string').describe('App ID to delete'),
+export const mcpDeleteAppInputSchema = z.object({
+  appId: z.string().describe('App ID to delete'),
 })
 
-export const mcpUploadBundleInputSchema = type({
-  '+': 'delete',
-  appId: 'string',
-  path: 'string',
-  'bundle?': 'string',
-  'channel?': 'string',
-  'rollout?': '0 <= number <= 100',
-  'rolloutPercentageBps?': '0 <= number.integer <= 10000',
-  'rolloutCacheTtlSeconds?': '60 <= number.integer <= 31536000',
-  'comment?': 'string',
-  'minUpdateVersion?': 'string',
-  'autoMinUpdateVersion?': 'boolean',
-  'autoSetBundle?': 'boolean',
-  'encrypt?': 'boolean',
-  'capacitorConfig?': capacitorConfigOptionSchema,
+export const mcpUploadBundleInputSchema = z.object({
+  appId: z.string(),
+  path: z.string(),
+  bundle: z.string().optional(),
+  channel: z.string().optional(),
+  rollout: z.number().min(0).max(100).optional(),
+  rolloutPercentageBps: z.number().int().min(0).max(10000).optional(),
+  rolloutCacheTtlSeconds: z.number().int().min(60).max(31536000).optional(),
+  comment: z.string().optional(),
+  minUpdateVersion: z.string().optional(),
+  autoMinUpdateVersion: z.boolean().optional(),
+  autoSetBundle: z.boolean().optional(),
+  encrypt: z.boolean().optional(),
+  capacitorConfig: capacitorConfigOptionSchema.optional(),
 })
 
-export const mcpListBundlesInputSchema = type({
-  '+': 'delete',
-  appId: type('string').describe('App ID to list bundles for'),
+export const mcpListBundlesInputSchema = z.object({
+  appId: z.string().describe('App ID to list bundles for'),
 })
 
-export const mcpDeleteBundleInputSchema = type({
-  '+': 'delete',
-  appId: type('string').describe('App ID'),
-  bundleId: type('string').describe('Bundle version to delete'),
+export const mcpDeleteBundleInputSchema = z.object({
+  appId: z.string().describe('App ID'),
+  bundleId: z.string().describe('Bundle version to delete'),
 })
 
-export const mcpCleanupBundlesInputSchema = type({
-  '+': 'delete',
-  appId: 'string',
-  'keep?': 'number',
-  'bundle?': 'string',
-  'force?': 'boolean',
-  'ignoreChannel?': 'boolean',
+export const mcpCleanupBundlesInputSchema = z.object({
+  appId: z.string(),
+  keep: z.number().optional(),
+  bundle: z.string().optional(),
+  force: z.boolean().optional(),
+  ignoreChannel: z.boolean().optional(),
 })
 
-export const mcpCheckCompatibilityInputSchema = type({
-  '+': 'delete',
-  appId: type('string').describe('App ID to check'),
-  channel: type('string').describe('Channel to check compatibility with'),
-  'packageJson?': type('string').describe('Path to package.json for monorepos'),
+export const mcpCheckCompatibilityInputSchema = z.object({
+  appId: z.string().describe('App ID to check'),
+  channel: z.string().describe('Channel to check compatibility with'),
+  packageJson: z.string().describe('Path to package.json for monorepos').optional(),
 })
 
-export const mcpListChannelsInputSchema = type({
-  '+': 'delete',
-  appId: type('string').describe('App ID to list channels for'),
+export const mcpListChannelsInputSchema = z.object({
+  appId: z.string().describe('App ID to list channels for'),
 })
 
-export const mcpAddChannelInputSchema = type({
-  '+': 'delete',
-  appId: type('string').describe('App ID'),
-  channelId: type('string').describe('Channel name to create'),
-  'default?': type('boolean').describe('Set as default channel'),
-  'selfAssign?': type('boolean').describe('Allow devices to self-assign to this channel'),
+export const mcpAddChannelInputSchema = z.object({
+  appId: z.string().describe('App ID'),
+  channelId: z.string().describe('Channel name to create'),
+  default: z.boolean().describe('Set as default channel').optional(),
+  selfAssign: z.boolean().describe('Allow devices to self-assign to this channel').optional(),
 })
 
-export const mcpUpdateChannelInputSchema = type({
-  '+': 'delete',
-  channelId: type('string').describe('Channel name'),
-  appId: 'string',
-  'bundle?': 'string',
-  'state?': 'string',
-  'downgrade?': 'boolean',
-  'ios?': 'boolean',
-  'android?': 'boolean',
-  'selfAssign?': 'boolean',
-  'disableAutoUpdate?': 'string',
-  'dev?': 'boolean',
-  'emulator?': 'boolean',
-  'device?': 'boolean',
-  'prod?': 'boolean',
-  'rolloutBundle?': 'string',
-  'rolloutPercentage?': '0 <= number <= 100',
-  'rolloutPercentageBps?': '0 <= number.integer <= 10000',
-  'rolloutEnable?': 'boolean',
-  'rolloutDisable?': 'boolean',
-  'rolloutPause?': 'boolean',
-  'rolloutResume?': 'boolean',
-  'rolloutRollback?': 'boolean',
-  'rolloutPromote?': 'boolean',
-  'rolloutCacheTtlSeconds?': '60 <= number.integer <= 31536000',
-  'autoPauseEnabled?': 'boolean',
-  'autoPauseDisabled?': 'boolean',
-  'autoPauseWindowMinutes?': '1 <= number.integer <= 10080',
-  'autoPauseFailureRateBps?': '0 <= number.integer <= 10000 | null',
-  'autoPauseConfidence?': '0 < number < 1',
-  'autoPauseMinAttempts?': 'number.integer >= 0 | null',
-  'autoPauseMinFailures?': 'number.integer >= 0 | null',
-  'autoPauseAction?': "'pause' | 'rollback' | 'notify'",
-  'autoPauseCooldownMinutes?': '0 <= number.integer <= 10080',
+export const mcpUpdateChannelInputSchema = z.object({
+  channelId: z.string().describe('Channel name'),
+  appId: z.string(),
+  bundle: z.string().optional(),
+  state: z.string().optional(),
+  downgrade: z.boolean().optional(),
+  ios: z.boolean().optional(),
+  android: z.boolean().optional(),
+  selfAssign: z.boolean().optional(),
+  disableAutoUpdate: z.string().optional(),
+  dev: z.boolean().optional(),
+  emulator: z.boolean().optional(),
+  device: z.boolean().optional(),
+  prod: z.boolean().optional(),
+  rolloutBundle: z.string().optional(),
+  rolloutPercentage: z.number().min(0).max(100).optional(),
+  rolloutPercentageBps: z.number().int().min(0).max(10000).optional(),
+  rolloutEnable: z.boolean().optional(),
+  rolloutDisable: z.boolean().optional(),
+  rolloutPause: z.boolean().optional(),
+  rolloutResume: z.boolean().optional(),
+  rolloutRollback: z.boolean().optional(),
+  rolloutPromote: z.boolean().optional(),
+  rolloutCacheTtlSeconds: z.number().int().min(60).max(31536000).optional(),
+  autoPauseEnabled: z.boolean().optional(),
+  autoPauseDisabled: z.boolean().optional(),
+  autoPauseWindowMinutes: z.number().int().min(1).max(10080).optional(),
+  autoPauseFailureRateBps: z.number().int().min(0).max(10000).nullable().optional(),
+  autoPauseConfidence: z.number().gt(0).lt(1).optional(),
+  autoPauseMinAttempts: z.number().int().min(0).nullable().optional(),
+  autoPauseMinFailures: z.number().int().min(0).nullable().optional(),
+  autoPauseAction: z.enum(['pause', 'rollback', 'notify']).optional(),
+  autoPauseCooldownMinutes: z.number().int().min(0).max(10080).optional(),
 })
 
-export const mcpDeleteChannelInputSchema = type({
-  '+': 'delete',
-  appId: type('string').describe('App ID'),
-  channelId: type('string').describe('Channel name to delete'),
-  'deleteBundle?': type('boolean').describe('Also delete the bundle linked to this channel'),
+export const mcpDeleteChannelInputSchema = z.object({
+  appId: z.string().describe('App ID'),
+  channelId: z.string().describe('Channel name to delete'),
+  deleteBundle: z.boolean().describe('Also delete the bundle linked to this channel').optional(),
 })
 
-export const mcpGetCurrentBundleInputSchema = type({
-  '+': 'delete',
-  appId: type('string').describe('App ID'),
-  channelId: type('string').describe('Channel name'),
+export const mcpGetCurrentBundleInputSchema = z.object({
+  appId: z.string().describe('App ID'),
+  channelId: z.string().describe('Channel name'),
 })
 
-export const mcpAddOrganizationInputSchema = type({
-  '+': 'delete',
-  name: type('string').describe('Organization name'),
-  email: type('string').describe('Management email for the organization'),
+export const mcpAddOrganizationInputSchema = z.object({
+  name: z.string().describe('Organization name'),
+  email: z.string().describe('Management email for the organization'),
 })
 
-export const mcpDoctorInputSchema = type({
-  '+': 'delete',
-  'packageJson?': type('string').describe('Path to package.json for monorepos'),
+export const mcpDoctorInputSchema = z.object({
+  packageJson: z.string().describe('Path to package.json for monorepos').optional(),
 })
 
-export const mcpGetStatsInputSchema = type({
-  '+': 'delete',
-  appId: 'string',
-  'deviceIds?': 'string[]',
-  'limit?': 'number',
-  'rangeStart?': 'string',
-  'rangeEnd?': 'string',
+export const mcpGetStatsInputSchema = z.object({
+  appId: z.string(),
+  deviceIds: z.array(z.string()).optional(),
+  limit: z.number().optional(),
+  rangeStart: z.string().optional(),
+  rangeEnd: z.string().optional(),
 })
 
-export const mcpRequestBuildInputSchema = type({
-  '+': 'delete',
-  appId: 'string',
-  platform: "'ios' | 'android'",
-  'path?': 'string',
-  'nodeModules?': 'string',
+export const mcpRequestBuildInputSchema = z.object({
+  appId: z.string(),
+  platform: z.enum(['ios', 'android']),
+  path: z.string().optional(),
+  nodeModules: z.string().optional(),
 })
 
-export const mcpGenerateEncryptionKeysInputSchema = type({
-  '+': 'delete',
-  'force?': type('boolean').describe('Overwrite existing keys if they exist'),
-  'capacitorConfig?': capacitorConfigOptionSchema,
+export const mcpGenerateEncryptionKeysInputSchema = z.object({
+  force: z.boolean().describe('Overwrite existing keys if they exist').optional(),
+  capacitorConfig: capacitorConfigOptionSchema.optional(),
 })
 
-export const mcpProbeInputSchema = type({
-  '+': 'delete',
-  platform: type("'ios' | 'android'").describe('Target platform to probe'),
+export const mcpProbeInputSchema = z.object({
+  platform: z.enum(['ios', 'android']).describe('Target platform to probe'),
 })
