@@ -22,9 +22,9 @@ import pg from 'pg'
 
 const ENV_FILE = './internal/cloudflare/.env.prod'
 const TRASH_PREFIX = 'deleted-after-7-days/'
-const R2_CONCURRENCY = 500
-const DB_POOL_SIZE = 16
-const VERSION_BATCH = 100
+const R2_CONCURRENCY = 1500
+const DB_POOL_SIZE = 32
+const VERSION_BATCH = 50
 const DB_URL_ENV_KEYS = [
   'MAIN_SUPABASE_DB_URL',
   'DATABASE_URL',
@@ -128,12 +128,47 @@ function formatRate(count: number, startedAt: number) {
   return `${Math.round(count / elapsedSec)}/s`
 }
 
+/** Global R2 limiter shared across all DB batch workers. */
+function createLimiter(max: number) {
+  let active = 0
+  const waiters: Array<() => void> = []
+  const acquire = async () => {
+    if (active < max) {
+      active += 1
+      return
+    }
+    await new Promise<void>((resolve) => {
+      waiters.push(() => {
+        active += 1
+        resolve()
+      })
+    })
+  }
+  const release = () => {
+    active -= 1
+    const next = waiters.shift()
+    if (next)
+      next()
+  }
+  return async <T>(fn: () => Promise<T>) => {
+    await acquire()
+    try {
+      return await fn()
+    }
+    finally {
+      release()
+    }
+  }
+}
+
 async function processBatch(
   pool: pg.Pool,
   s3: S3Client,
   bucket: string,
   ids: string[],
-): Promise<{ deletedRows: number, trashed: number }> {
+  withR2: <T>(fn: () => Promise<T>) => Promise<T>,
+  onR2Progress?: (done: number, total: number) => void,
+): Promise<{ deletedRows: number, trashed: number, files: number }> {
   const client = await pool.connect()
   try {
     await client.query(`SET statement_timeout = '0'`)
@@ -176,8 +211,12 @@ async function processBatch(
     )]
 
     // Trash first (paths still tracked in DB), then wipe rows.
-    await mapPool(toTrash, R2_CONCURRENCY, async (path) => {
-      await moveToTrash(s3, bucket, path)
+    let r2Done = 0
+    await mapPool(toTrash, Math.min(R2_CONCURRENCY, Math.max(toTrash.length, 1)), async (path) => {
+      await withR2(async () => moveToTrash(s3, bucket, path))
+      r2Done += 1
+      if (onR2Progress && (r2Done % 200 === 0 || r2Done === toTrash.length))
+        onR2Progress(r2Done, toTrash.length)
     })
 
     await client.query('BEGIN')
@@ -220,7 +259,7 @@ async function processBatch(
     )
 
     await client.query('COMMIT')
-    return { deletedRows: deletedRes.rowCount ?? 0, trashed: toTrash.length }
+    return { deletedRows: deletedRes.rowCount ?? 0, trashed: toTrash.length, files: filesRes.rows.length }
   }
   catch (error) {
     try {
@@ -303,7 +342,7 @@ async function main() {
       )
   `)
   const versionIds = versionsRes.rows.map(r => r.id)
-  console.log(`   versions=${versionIds.length}`)
+  console.log(`   deleted versions (bundles)=${versionIds.length}`)
   if (versionIds.length === 0) {
     await pool.end()
     console.log('Nothing to do.')
@@ -311,21 +350,34 @@ async function main() {
   }
 
   const batches = chunk(versionIds, VERSION_BATCH)
-  console.log(`2/2 Parallel batches=${batches.length} pool=${DB_POOL_SIZE} batch=${VERSION_BATCH} r2=${R2_CONCURRENCY}`)
+  console.log(`2/2 Wiping ${versionIds.length} deleted VERSIONS (bundles), not files.`)
+  console.log(`   Each version can have thousands of manifest files.`)
+  console.log(`   parallel: pool=${DB_POOL_SIZE} version_batch=${VERSION_BATCH} batches=${batches.length} r2_concurrency=${R2_CONCURRENCY}`)
 
   let totalDeleted = 0
   let totalTrashed = 0
+  let totalFilesSeen = 0
   let batchesDone = 0
+  let versionsDone = 0
   const workStarted = Date.now()
+  const withR2 = createLimiter(R2_CONCURRENCY)
+
+  const render = (extra = '') => {
+    process.stdout.write(
+      `\r   versions ${versionsDone}/${versionIds.length} | batches ${batchesDone}/${batches.length} | db_rows=${totalDeleted} ${formatRate(totalDeleted, workStarted)} | files_seen=${totalFilesSeen} | r2_trashed=${totalTrashed}${extra}`,
+    )
+  }
 
   await mapPool(batches, DB_POOL_SIZE, async (ids) => {
-    const result = await processBatch(pool, s3, bucket, ids)
+    const result = await processBatch(pool, s3, bucket, ids, withR2, (done, total) => {
+      render(` | r2_batch=${done}/${total}`)
+    })
     totalDeleted += result.deletedRows
     totalTrashed += result.trashed
+    totalFilesSeen += result.files
     batchesDone += 1
-    process.stdout.write(
-      `\r   batches ${batchesDone}/${batches.length} | rows=${totalDeleted} ${formatRate(totalDeleted, workStarted)} | r2=${totalTrashed}`,
-    )
+    versionsDone += ids.length
+    render()
   })
   process.stdout.write('\n')
 
@@ -334,9 +386,10 @@ async function main() {
   await pool.end()
 
   console.log('Done.')
-  console.log(`Versions: ${versionIds.length}`)
-  console.log(`Manifest rows deleted: ${totalDeleted}`)
-  console.log(`R2 trash candidates: ${totalTrashed}`)
+  console.log(`Versions (bundles): ${versionIds.length}`)
+  console.log(`Manifest file rows deleted: ${totalDeleted}`)
+  console.log(`Distinct file rows seen: ${totalFilesSeen}`)
+  console.log(`R2 objects moved to trash: ${totalTrashed}`)
   console.log(`Elapsed: ${((Date.now() - startedAt) / 1000).toFixed(1)}s`)
 }
 
