@@ -91,7 +91,7 @@ function rewriteConfigToml(raw: string, cfg: ReturnType<typeof getSupabaseWorktr
     db: ports.db,
     'db.pooler': ports.dbPooler,
     studio: ports.studio,
-    inbucket: ports.inbucket,
+    local_smtp: ports.inbucket,
     analytics: ports.analytics,
   }
 
