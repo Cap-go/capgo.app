@@ -1,21 +1,15 @@
 /**
  * Reclaim ALL soft-deleted app_versions that still have public.manifest rows.
  *
- * Fast path — only indexed lookups, no global NOT EXISTS on manifest:
- *   For each version-id batch (parallel pool):
- *     1) SELECT DISTINCT s3_path, file_hash WHERE app_version_id = ANY(batch)
- *        (idx_manifest_app_version_id)
- *     2) SELECT live file_hashes WHERE file_hash = ANY(...) AND av.deleted=false
- *        (idx_manifest_file_hash)
- *     3) trash R2 paths whose hash is not live
- *     4) DELETE rows + clear JSON/count (session_replication_role=replica)
+ * Design for speed:
+ *   - 6407 = deleted VERSIONS (bundles). Each can have thousands of files.
+ *   - Per batch (parallel): indexed SELECT files → enqueue R2 trash → DELETE rows
+ *     immediately (do NOT wait for R2 before DB wipe).
+ *   - Global R2 worker pool drains the trash queue in parallel with DB.
+ *   - Progress logs use newlines so terminals actually show updates.
  *
  * Usage:
  *   bun scripts/reclaim_deleted_version_manifests.ts
- *
- * Must print "1/2 ..." — if you see "Cleaned N/M" or "2/3 Collecting R2 paths
- * not used by live versions", you are on an old script.
- * RequestTimeTooSkewed => sudo sntp -sS time.apple.com
  */
 import { CopyObjectCommand, DeleteObjectCommand, HeadObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import pg from 'pg'
@@ -128,53 +122,86 @@ function formatRate(count: number, startedAt: number) {
   return `${Math.round(count / elapsedSec)}/s`
 }
 
-/** Global R2 limiter shared across all DB batch workers. */
-function createLimiter(max: number) {
-  let active = 0
-  const waiters: Array<() => void> = []
-  const acquire = async () => {
-    if (active < max) {
-      active += 1
-      return
-    }
-    await new Promise<void>((resolve) => {
-      waiters.push(() => {
-        active += 1
-        resolve()
-      })
-    })
+function createTrashQueue(s3: S3Client, bucket: string, concurrency: number) {
+  const queue: string[] = []
+  const seen = new Set<string>()
+  let closed = false
+  let pending = 0
+  let done = 0
+  const sleepers: Array<() => void> = []
+  const progressWaiters: Array<() => void> = []
+
+  const wakeAll = () => {
+    while (sleepers.length)
+      sleepers.shift()!()
   }
-  const release = () => {
-    active -= 1
-    const next = waiters.shift()
-    if (next)
-      next()
+
+  const enqueue = (paths: string[]) => {
+    for (const path of paths) {
+      if (!path || seen.has(path))
+        continue
+      seen.add(path)
+      queue.push(path)
+      pending += 1
+    }
+    wakeAll()
   }
-  return async <T>(fn: () => Promise<T>) => {
-    await acquire()
-    try {
-      return await fn()
+
+  const close = () => {
+    closed = true
+    wakeAll()
+  }
+
+  const workers = Array.from({ length: concurrency }, async () => {
+    while (true) {
+      const path = queue.shift()
+      if (!path) {
+        if (closed && pending === done)
+          return
+        await new Promise<void>((resolve) => {
+          sleepers.push(resolve)
+        })
+        continue
+      }
+      try {
+        await moveToTrash(s3, bucket, path)
+      }
+      catch (error) {
+        console.error(`R2 trash failed for ${path}:`, error)
+      }
+      finally {
+        done += 1
+        if (done % 500 === 0) {
+          for (const w of progressWaiters)
+            w()
+        }
+        // Wake siblings in case more work arrived / close completed.
+        if (queue.length > 0 || (closed && pending === done))
+          wakeAll()
+      }
     }
-    finally {
-      release()
-    }
+  })
+
+  return {
+    enqueue,
+    close,
+    get stats() {
+      return { queued: seen.size, done, inflight: pending - done, remaining: queue.length }
+    },
+    onProgress(cb: () => void) {
+      progressWaiters.push(cb)
+    },
+    finished: Promise.all(workers).then(() => undefined),
   }
 }
 
-async function processBatch(
-  pool: pg.Pool,
-  s3: S3Client,
-  bucket: string,
-  ids: string[],
-  withR2: <T>(fn: () => Promise<T>) => Promise<T>,
-  onR2Progress?: (done: number, total: number) => void,
-): Promise<{ deletedRows: number, trashed: number, files: number }> {
+async function wipeDbBatch(pool: pg.Pool, ids: string[]): Promise<{ deletedRows: number, trashPaths: string[], files: number, selectMs: number, liveMs: number, deleteMs: number }> {
   const client = await pool.connect()
   try {
     await client.query(`SET statement_timeout = '0'`)
     await client.query(`SET synchronous_commit = off`)
 
-    // Indexed: idx_manifest_app_version_id
+    const t0 = Date.now()
     const filesRes = await client.query<{ s3_path: string, file_hash: string }>(
       `SELECT DISTINCT m.s3_path, m.file_hash
        FROM public.manifest AS m
@@ -183,42 +210,33 @@ async function processBatch(
          AND m.s3_path <> ''`,
       [ids],
     )
+    const selectMs = Date.now() - t0
 
     const hashes = [...new Set(filesRes.rows.map(r => r.file_hash))]
     const liveHashes = new Set<string>()
-    for (const hashChunk of chunk(hashes, 500)) {
-      // Indexed: idx_manifest_file_hash + deleted filter on small parent set
+    const t1 = Date.now()
+    for (const hashChunk of chunk(hashes, 1000)) {
       const liveRes = await client.query<{ file_hash: string }>(
         `SELECT DISTINCT m.file_hash
          FROM public.manifest AS m
-         WHERE m.file_hash = ANY($1::text[])
-           AND EXISTS (
-             SELECT 1
-             FROM public.app_versions AS av
-             WHERE av.id = m.app_version_id
-               AND av.deleted = false
-           )`,
+         INNER JOIN public.app_versions AS av
+           ON av.id = m.app_version_id
+          AND av.deleted = false
+         WHERE m.file_hash = ANY($1::text[])`,
         [hashChunk],
       )
       for (const row of liveRes.rows)
         liveHashes.add(row.file_hash)
     }
+    const liveMs = Date.now() - t1
 
-    const toTrash = [...new Set(
+    const trashPaths = [...new Set(
       filesRes.rows
         .filter(r => !liveHashes.has(r.file_hash))
         .map(r => r.s3_path),
     )]
 
-    // Trash first (paths still tracked in DB), then wipe rows.
-    let r2Done = 0
-    await mapPool(toTrash, Math.min(R2_CONCURRENCY, Math.max(toTrash.length, 1)), async (path) => {
-      await withR2(async () => moveToTrash(s3, bucket, path))
-      r2Done += 1
-      if (onR2Progress && (r2Done % 200 === 0 || r2Done === toTrash.length))
-        onR2Progress(r2Done, toTrash.length)
-    })
-
+    const t2 = Date.now()
     await client.query('BEGIN')
     await client.query(`SET LOCAL statement_timeout = '0'`)
     await client.query(`SET LOCAL synchronous_commit = off`)
@@ -257,9 +275,17 @@ async function processBatch(
        WHERE a.app_id = per_app.app_id`,
       [ids],
     )
-
     await client.query('COMMIT')
-    return { deletedRows: deletedRes.rowCount ?? 0, trashed: toTrash.length, files: filesRes.rows.length }
+    const deleteMs = Date.now() - t2
+
+    return {
+      deletedRows: deletedRes.rowCount ?? 0,
+      trashPaths,
+      files: filesRes.rows.length,
+      selectMs,
+      liveMs,
+      deleteMs,
+    }
   }
   catch (error) {
     try {
@@ -315,8 +341,10 @@ async function main() {
     maxAttempts: 5,
   })
   const bucket = env.S3_BUCKET || 'capgo'
+  const trash = createTrashQueue(s3, bucket, R2_CONCURRENCY)
 
   const onSignal = () => {
+    trash.close()
     pool.end().finally(() => process.exit(1))
   }
   process.once('SIGINT', onSignal)
@@ -335,7 +363,7 @@ async function main() {
     SELECT av.id::text AS id
     FROM public.app_versions AS av
     WHERE av.deleted = true
-      AND av.manifest_count = 0
+      AND COALESCE(av.manifest_count, 0) = 0
       AND av.app_id NOT LIKE 'com.capdemo%'
       AND EXISTS (
         SELECT 1 FROM public.manifest AS m WHERE m.app_version_id = av.id
@@ -344,42 +372,53 @@ async function main() {
   const versionIds = versionsRes.rows.map(r => r.id)
   console.log(`   deleted versions (bundles)=${versionIds.length}`)
   if (versionIds.length === 0) {
+    trash.close()
+    await trash.finished
     await pool.end()
     console.log('Nothing to do.')
     return
   }
 
   const batches = chunk(versionIds, VERSION_BATCH)
-  console.log(`2/2 Wiping ${versionIds.length} deleted VERSIONS (bundles), not files.`)
-  console.log(`   Each version can have thousands of manifest files.`)
-  console.log(`   parallel: pool=${DB_POOL_SIZE} version_batch=${VERSION_BATCH} batches=${batches.length} r2_concurrency=${R2_CONCURRENCY}`)
+  console.log('2/2 DB wipe + R2 trash in parallel')
+  console.log(`   versions=${versionIds.length} batches=${batches.length} db_pool=${DB_POOL_SIZE} r2_workers=${R2_CONCURRENCY}`)
+  console.log('   DB does NOT wait for R2. Progress prints every batch (newlines).')
 
   let totalDeleted = 0
-  let totalTrashed = 0
   let totalFilesSeen = 0
   let batchesDone = 0
   let versionsDone = 0
   const workStarted = Date.now()
-  const withR2 = createLimiter(R2_CONCURRENCY)
 
-  const render = (extra = '') => {
-    process.stdout.write(
-      `\r   versions ${versionsDone}/${versionIds.length} | batches ${batchesDone}/${batches.length} | db_rows=${totalDeleted} ${formatRate(totalDeleted, workStarted)} | files_seen=${totalFilesSeen} | r2_trashed=${totalTrashed}${extra}`,
+  const logProgress = (extra = '') => {
+    const r2 = trash.stats
+    console.log(
+      `   t+${((Date.now() - workStarted) / 1000).toFixed(1)}s versions ${versionsDone}/${versionIds.length} batches ${batchesDone}/${batches.length} db_rows=${totalDeleted} ${formatRate(totalDeleted, workStarted)} files_seen=${totalFilesSeen} r2_done=${r2.done}/${r2.queued} r2_q=${r2.remaining}${extra}`,
     )
   }
 
+  trash.onProgress(() => logProgress())
+  logProgress(' | starting workers')
+
   await mapPool(batches, DB_POOL_SIZE, async (ids) => {
-    const result = await processBatch(pool, s3, bucket, ids, withR2, (done, total) => {
-      render(` | r2_batch=${done}/${total}`)
-    })
+    const batchStarted = Date.now()
+    console.log(`   → batch start versions=${ids.length} (first_id=${ids[0]})`)
+    const result = await wipeDbBatch(pool, ids)
+    trash.enqueue(result.trashPaths)
     totalDeleted += result.deletedRows
-    totalTrashed += result.trashed
     totalFilesSeen += result.files
     batchesDone += 1
     versionsDone += ids.length
-    render()
+    console.log(
+      `   ← batch done in ${Date.now() - batchStarted}ms select=${result.selectMs}ms live=${result.liveMs}ms delete=${result.deleteMs}ms files=${result.files} trash_enqueued=${result.trashPaths.length}`,
+    )
+    logProgress()
   })
-  process.stdout.write('\n')
+
+  console.log('DB wipe complete. Waiting for R2 queue to drain...')
+  trash.close()
+  await trash.finished
+  logProgress(' | r2 drained')
 
   process.off('SIGINT', onSignal)
   process.off('SIGTERM', onSignal)
@@ -389,8 +428,9 @@ async function main() {
   console.log(`Versions (bundles): ${versionIds.length}`)
   console.log(`Manifest file rows deleted: ${totalDeleted}`)
   console.log(`Distinct file rows seen: ${totalFilesSeen}`)
-  console.log(`R2 objects moved to trash: ${totalTrashed}`)
+  console.log(`R2 objects attempted: ${trash.stats.queued}`)
   console.log(`Elapsed: ${((Date.now() - startedAt) / 1000).toFixed(1)}s`)
+  console.log('Note: R2 alone can exceed 3min if hundreds of thousands of objects need HEAD/copy. DB wipe should be the fast part.')
 }
 
 await main()
