@@ -428,8 +428,8 @@ export async function updateWithPG(
     drizzleClient,
     channelDeviceCount: effectiveChannelDeviceCount,
     manifestBundleCount,
-    // Defer manifest load until after up-to-date short-circuit; json_agg of
-    // thousands of files was a dominant P999/wall-time cost on the common path.
+    // Skip channel-query json_agg (P999 on up-to-date). New-version path loads
+    // via indexed manifest.app_version_id fetch started right after this check.
     includeManifest: false,
     rolloutChannelCount,
     rolloutPausedVersionNames,
@@ -498,6 +498,20 @@ export async function updateWithPG(
     await sendStatsAndDevice(c, device, [{ action: 'noNew', versionName: version.name }])
     return updateError200(c, 'no_new_version_available', 'No new version available')
   }
+
+  // New-version path is the latency-critical one. Start the indexed manifest
+  // lookup immediately so it overlaps auto-update gates + signed URL work.
+  // Still NOT using channel-query json_agg (that was the P999 tax on up-to-date).
+  // Index: idx_manifest_app_version_id.
+  const needsDeferredManifest = !version.external_url
+    && fetchManifestEntries
+    && (!manifestEntries || manifestEntries.length === 0)
+  const startManifestFetch = needsDeferredManifest ? performance.now() : 0
+  const deferredManifestPromise = needsDeferredManifest
+    ? requestManifestEntriesPostgres(c, version.id, drizzleClient)
+    : null
+  // If a gate returns early, this in-flight query must not become an unhandled rejection.
+  deferredManifestPromise?.catch(() => {})
 
   if (channelData) {
     const notifyVersionBlocked = (
@@ -678,23 +692,26 @@ export async function updateWithPG(
   let manifest: ManifestEntry[] = []
   let manifestFetchMs = 0
   if (!version.external_url) {
-    if (version.r2_path) {
-      const url = await getBundleUrl(c, version.r2_path, device_id, version.checksum ?? '')
-      if (url) {
-        // only count the size of the bundle if it's not external and zip for now
-        signedURL = url
-        if (getRuntimeKey() !== 'workerd') {
-          await backgroundTask(c, async () => {
-            const size = await s3.getSize(c, version.r2_path)
-            await createStatsBandwidth(c, device_id, app_id, size ?? 0)
-          })
-        }
-      }
-    }
-    if (fetchManifestEntries && (!manifestEntries || manifestEntries.length === 0)) {
-      const startManifestFetch = performance.now()
-      manifestEntries = await requestManifestEntriesPostgres(c, version.id, drizzleClient)
+    // Overlap signed URL + deferred manifest (started right after up-to-date check).
+    const [url, deferredEntries] = await Promise.all([
+      version.r2_path
+        ? getBundleUrl(c, version.r2_path, device_id, version.checksum ?? '')
+        : Promise.resolve(null),
+      deferredManifestPromise ?? Promise.resolve(null),
+    ])
+    if (needsDeferredManifest) {
+      manifestEntries = (deferredEntries ?? []) as Partial<Database['public']['Tables']['manifest']['Row']>[]
       manifestFetchMs = Math.round(performance.now() - startManifestFetch)
+    }
+    if (url) {
+      // only count the size of the bundle if it's not external and zip for now
+      signedURL = url
+      if (getRuntimeKey() !== 'workerd') {
+        await backgroundTask(c, async () => {
+          const size = await s3.getSize(c, version.r2_path)
+          await createStatsBandwidth(c, device_id, app_id, size ?? 0)
+        })
+      }
     }
     if (!version.r2_path && !isInternalVersionName(version.name) && (!manifestEntries || manifestEntries.length === 0)) {
       cloudlog({ requestId: c.get('requestId'), message: 'Cannot get bundle', id: app_id, version, manifestEntriesLength: 0, channelData: channelData ? channelData.channels.name : 'no channel data', defaultChannel })
