@@ -1,20 +1,21 @@
 /**
  * Reclaim ALL soft-deleted app_versions that still have public.manifest rows.
  *
- * Parallel bulk (target: minutes, not hours):
- *   1) list doomed version ids
- *   2) collect R2 paths not used by any live version
- *   3) IN PARALLEL:
- *        - trash those R2 paths (high concurrency)
- *        - wipe DB in version batches across a connection pool
- *          (SET LOCAL session_replication_role=replica — no table lock)
+ * Fast path — only indexed lookups, no global NOT EXISTS on manifest:
+ *   For each version-id batch (parallel pool):
+ *     1) SELECT DISTINCT s3_path, file_hash WHERE app_version_id = ANY(batch)
+ *        (idx_manifest_app_version_id)
+ *     2) SELECT live file_hashes WHERE file_hash = ANY(...) AND av.deleted=false
+ *        (idx_manifest_file_hash)
+ *     3) trash R2 paths whose hash is not live
+ *     4) DELETE rows + clear JSON/count (session_replication_role=replica)
  *
  * Usage:
  *   bun scripts/reclaim_deleted_version_manifests.ts
  *
- * If logs say "Cleaned N/M versions" you are on the OLD script — stop.
- * Fast script prints "1/3 Listing doomed versions...".
- * RequestTimeTooSkewed => sync clock: sudo sntp -sS time.apple.com
+ * Must print "1/2 ..." — if you see "Cleaned N/M" or "2/3 Collecting R2 paths
+ * not used by live versions", you are on an old script.
+ * RequestTimeTooSkewed => sudo sntp -sS time.apple.com
  */
 import { CopyObjectCommand, DeleteObjectCommand, HeadObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import pg from 'pg'
@@ -23,7 +24,7 @@ const ENV_FILE = './internal/cloudflare/.env.prod'
 const TRASH_PREFIX = 'deleted-after-7-days/'
 const R2_CONCURRENCY = 500
 const DB_POOL_SIZE = 16
-const VERSION_BATCH = 250
+const VERSION_BATCH = 100
 const DB_URL_ENV_KEYS = [
   'MAIN_SUPABASE_DB_URL',
   'DATABASE_URL',
@@ -127,13 +128,61 @@ function formatRate(count: number, startedAt: number) {
   return `${Math.round(count / elapsedSec)}/s`
 }
 
-async function wipeVersionBatch(pool: pg.Pool, ids: string[]) {
+async function processBatch(
+  pool: pg.Pool,
+  s3: S3Client,
+  bucket: string,
+  ids: string[],
+): Promise<{ deletedRows: number, trashed: number }> {
   const client = await pool.connect()
   try {
+    await client.query(`SET statement_timeout = '0'`)
+    await client.query(`SET synchronous_commit = off`)
+
+    // Indexed: idx_manifest_app_version_id
+    const filesRes = await client.query<{ s3_path: string, file_hash: string }>(
+      `SELECT DISTINCT m.s3_path, m.file_hash
+       FROM public.manifest AS m
+       WHERE m.app_version_id = ANY($1::bigint[])
+         AND m.s3_path IS NOT NULL
+         AND m.s3_path <> ''`,
+      [ids],
+    )
+
+    const hashes = [...new Set(filesRes.rows.map(r => r.file_hash))]
+    const liveHashes = new Set<string>()
+    for (const hashChunk of chunk(hashes, 500)) {
+      // Indexed: idx_manifest_file_hash + deleted filter on small parent set
+      const liveRes = await client.query<{ file_hash: string }>(
+        `SELECT DISTINCT m.file_hash
+         FROM public.manifest AS m
+         WHERE m.file_hash = ANY($1::text[])
+           AND EXISTS (
+             SELECT 1
+             FROM public.app_versions AS av
+             WHERE av.id = m.app_version_id
+               AND av.deleted = false
+           )`,
+        [hashChunk],
+      )
+      for (const row of liveRes.rows)
+        liveHashes.add(row.file_hash)
+    }
+
+    const toTrash = [...new Set(
+      filesRes.rows
+        .filter(r => !liveHashes.has(r.file_hash))
+        .map(r => r.s3_path),
+    )]
+
+    // Trash first (paths still tracked in DB), then wipe rows.
+    await mapPool(toTrash, R2_CONCURRENCY, async (path) => {
+      await moveToTrash(s3, bucket, path)
+    })
+
     await client.query('BEGIN')
     await client.query(`SET LOCAL statement_timeout = '0'`)
     await client.query(`SET LOCAL synchronous_commit = off`)
-    // Skip user triggers without ACCESS EXCLUSIVE table locks.
     await client.query(`SET LOCAL session_replication_role = 'replica'`)
 
     const deletedRes = await client.query(
@@ -171,7 +220,7 @@ async function wipeVersionBatch(pool: pg.Pool, ids: string[]) {
     )
 
     await client.query('COMMIT')
-    return deletedRes.rowCount ?? 0
+    return { deletedRows: deletedRes.rowCount ?? 0, trashed: toTrash.length }
   }
   catch (error) {
     try {
@@ -198,14 +247,17 @@ async function main() {
     max: DB_POOL_SIZE,
     allowExitOnIdle: true,
   })
+  pool.on('connect', (client) => {
+    client.query(`SET statement_timeout = '0'`).catch(() => {})
+  })
   pool.on('error', (error) => {
     console.error('pool error', error)
   })
 
-  // Ensure previous crashed runs did not leave the lock trigger disabled.
   {
     const client = await pool.connect()
     try {
+      await client.query(`SET statement_timeout = '0'`)
       await client.query(`ALTER TABLE public.app_versions ENABLE TRIGGER enforce_encrypted_bundle_trigger`)
     }
     finally {
@@ -233,17 +285,22 @@ async function main() {
 
   const startedAt = Date.now()
 
-  console.log('1/3 Listing doomed versions...')
+  console.log('1/2 Listing doomed versions (indexed)...')
   const versionsRes = await pool.query<{ id: string }>(`
     SELECT av.id::text AS id
     FROM public.app_versions AS av
     WHERE av.deleted = true
+      AND av.manifest_count > 0
       AND av.app_id NOT LIKE 'com.capdemo%'
-      AND (
-        av.manifest_count > 0
-        OR EXISTS (SELECT 1 FROM public.manifest AS m WHERE m.app_version_id = av.id)
+    UNION
+    SELECT av.id::text AS id
+    FROM public.app_versions AS av
+    WHERE av.deleted = true
+      AND av.manifest_count = 0
+      AND av.app_id NOT LIKE 'com.capdemo%'
+      AND EXISTS (
+        SELECT 1 FROM public.manifest AS m WHERE m.app_version_id = av.id
       )
-    ORDER BY av.id
   `)
   const versionIds = versionsRes.rows.map(r => r.id)
   console.log(`   versions=${versionIds.length}`)
@@ -253,53 +310,23 @@ async function main() {
     return
   }
 
-  console.log('2/3 Collecting R2 paths not used by live versions...')
-  const pathStarted = Date.now()
-  const pathRes = await pool.query<{ s3_path: string }>(`
-    SELECT DISTINCT m.s3_path
-    FROM public.manifest AS m
-    WHERE m.app_version_id = ANY($1::bigint[])
-      AND m.s3_path IS NOT NULL
-      AND m.s3_path <> ''
-      AND NOT EXISTS (
-        SELECT 1
-        FROM public.manifest AS live_m
-        JOIN public.app_versions AS live_av
-          ON live_av.id = live_m.app_version_id
-         AND live_av.deleted = false
-        WHERE live_m.s3_path = m.s3_path
-      )
-  `, [versionIds])
-  const paths = pathRes.rows.map(r => r.s3_path)
-  console.log(`   r2_paths=${paths.length} (${((Date.now() - pathStarted) / 1000).toFixed(1)}s)`)
-
-  console.log(`3/3 Parallel wipe: DB pool=${DB_POOL_SIZE} batch=${VERSION_BATCH} | R2 concurrency=${R2_CONCURRENCY}`)
   const batches = chunk(versionIds, VERSION_BATCH)
+  console.log(`2/2 Parallel batches=${batches.length} pool=${DB_POOL_SIZE} batch=${VERSION_BATCH} r2=${R2_CONCURRENCY}`)
+
   let totalDeleted = 0
-  let dbBatchesDone = 0
-  let r2Done = 0
+  let totalTrashed = 0
+  let batchesDone = 0
   const workStarted = Date.now()
 
-  const dbWork = mapPool(batches, DB_POOL_SIZE, async (ids) => {
-    const deleted = await wipeVersionBatch(pool, ids)
-    totalDeleted += deleted
-    dbBatchesDone += 1
+  await mapPool(batches, DB_POOL_SIZE, async (ids) => {
+    const result = await processBatch(pool, s3, bucket, ids)
+    totalDeleted += result.deletedRows
+    totalTrashed += result.trashed
+    batchesDone += 1
     process.stdout.write(
-      `\r   DB ${Math.min(dbBatchesDone * VERSION_BATCH, versionIds.length)}/${versionIds.length} versions | rows=${totalDeleted} ${formatRate(totalDeleted, workStarted)} | R2 ${r2Done}/${paths.length}`,
+      `\r   batches ${batchesDone}/${batches.length} | rows=${totalDeleted} ${formatRate(totalDeleted, workStarted)} | r2=${totalTrashed}`,
     )
   })
-
-  const r2Work = mapPool(paths, R2_CONCURRENCY, async (path) => {
-    await moveToTrash(s3, bucket, path)
-    r2Done += 1
-    if (r2Done % 500 === 0 || r2Done === paths.length) {
-      process.stdout.write(
-        `\r   DB ${Math.min(dbBatchesDone * VERSION_BATCH, versionIds.length)}/${versionIds.length} versions | rows=${totalDeleted} ${formatRate(totalDeleted, workStarted)} | R2 ${r2Done}/${paths.length}`,
-      )
-    }
-  })
-
-  await Promise.all([dbWork, r2Work])
   process.stdout.write('\n')
 
   process.off('SIGINT', onSignal)
@@ -309,7 +336,7 @@ async function main() {
   console.log('Done.')
   console.log(`Versions: ${versionIds.length}`)
   console.log(`Manifest rows deleted: ${totalDeleted}`)
-  console.log(`R2 candidates: ${paths.length}`)
+  console.log(`R2 trash candidates: ${totalTrashed}`)
   console.log(`Elapsed: ${((Date.now() - startedAt) / 1000).toFixed(1)}s`)
 }
 
