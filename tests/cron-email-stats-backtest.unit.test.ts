@@ -166,7 +166,7 @@ describe('cron email stats backtest', () => {
     expect(roundedZero.toLowerCase()).not.toContain('no failed updates')
 
     const tenPercent = getFailRateFunComparison(10, 0.10)
-    expect(tenPercent.toLowerCase()).toContain('one in ten')
+    expect(tenPercent.toLowerCase()).toContain('about one in ten')
     expect(tenPercent.toLowerCase()).not.toContain('one in five')
 
     const twentyPercent = getFailRateFunComparison(20, 0.20)

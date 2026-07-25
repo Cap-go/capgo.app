@@ -50,7 +50,7 @@ const funComparisons = {
   ],
   failRate: [
     'Flawless streak—no failed updates this week! 🏅',
-    'Under one in ten updates failed; looking solid overall.',
+    'About one in ten updates failed; looking solid overall.',
     'About one in five updates failed; let\'s squash those errors.',
     'Heads up: nearly a third of updates are failing—worth a closer look.',
   ],

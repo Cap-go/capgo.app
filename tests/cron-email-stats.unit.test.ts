@@ -85,7 +85,7 @@ describe('getFailRateFunComparison', () => {
   })
 
   it.concurrent('keeps threshold copy aligned at exact 10% and 20% boundaries', () => {
-    expect(getFailRateFunComparison(10, 0.10).toLowerCase()).toContain('one in ten')
+    expect(getFailRateFunComparison(10, 0.10).toLowerCase()).toContain('about one in ten')
     expect(getFailRateFunComparison(20, 0.20).toLowerCase()).toContain('one in five')
     expect(getFailRateFunComparison(21, 0.21).toLowerCase()).toContain('failing')
   })
