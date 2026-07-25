@@ -1,27 +1,34 @@
 /**
  * Reclaim soft-deleted app_versions leftover public.manifest rows.
  *
- * FAST path (no parallel live-hash joins — those freeze the DB):
- *   1) Parallel DELETE ... RETURNING s3_path, file_hash + clear version JSON/count
- *   2) ONE pass: which returned hashes still exist in manifest? (= live) → skip
- *   3) R2: move remaining paths to deleted-after-7-days/ (1500 sockets)
+ * DEFAULT = DB only (the part that actually frees Postgres). Target: finish
+ * after deletes — do not sit for hours on R2.
  *
- * Heartbeat every 2s.
+ * R2 (optional): RECLAIM_R2=1
+ *   - Moves objects to deleted-after-7-days/ (copy + delete live key)
+ *   - No HEAD (copy 404 => skip) — fewer RTT
+ *   - Paths logged to .context/reclaim-r2-paths.tsv for resume:
+ *       RECLAIM_R2_ONLY=1 bun scripts/reclaim_deleted_version_manifests.ts
+ *
+ * Usage:
+ *   bun scripts/reclaim_deleted_version_manifests.ts
+ *   RECLAIM_R2=1 bun scripts/reclaim_deleted_version_manifests.ts
+ *   RECLAIM_R2_ONLY=1 bun scripts/reclaim_deleted_version_manifests.ts
  */
+import { mkdirSync, appendFileSync, readFileSync, existsSync, writeFileSync } from 'node:fs'
 import { Agent as HttpsAgent } from 'node:https'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
-import { CopyObjectCommand, DeleteObjectCommand, HeadObjectCommand, S3Client } from '@aws-sdk/client-s3'
+import { CopyObjectCommand, DeleteObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import pg from 'pg'
 
 const ENV_FILE = './internal/cloudflare/.env.prod'
 const TRASH_PREFIX = 'deleted-after-7-days/'
-const R2_CONCURRENCY = 1500
+const PATH_LOG = '.context/reclaim-r2-paths.tsv'
+const R2_CONCURRENCY = 400
 const DB_POOL_SIZE = 16
 const VERSION_BATCH = 50
-const HASH_CHECK_BATCH = 2000
+const HASH_CHECK_BATCH = 5000
 const HEARTBEAT_MS = 2000
-const ASSUMED_FILES_PER_VERSION = 400
-const MAX_OK_MINUTES = 10
 const DB_URL_ENV_KEYS = [
   'MAIN_SUPABASE_DB_URL',
   'DATABASE_URL',
@@ -30,6 +37,9 @@ const DB_URL_ENV_KEYS = [
   'SUPABASE_DB_DIRECT_URL',
   'DIRECT_URL',
 ]
+
+const DO_R2 = process.env.RECLAIM_R2 === '1' || process.env.RECLAIM_R2_ONLY === '1'
+const R2_ONLY = process.env.RECLAIM_R2_ONLY === '1'
 
 type Hb = {
   phase: string
@@ -109,44 +119,52 @@ function formatRate(count: number, startedAt: number) {
   return `${Math.round(count / elapsedSec)}/s`
 }
 
-function printEta(versions: number) {
-  const n = versions * ASSUMED_FILES_PER_VERSION
-  console.log('=== time model ===')
-  console.log(`  assumed files ≈ ${n.toLocaleString()}`)
-  console.log(`  phase1 DB DELETE parallel: should be <2 min`)
-  console.log(`  phase2 live-hash (single-threaded, after delete): seconds–1 min`)
-  console.log(`  phase3 R2 @ ${R2_CONCURRENCY} sockets HEAD30ms: ~${((n * 0.03) / R2_CONCURRENCY / 60).toFixed(1)} min`)
-  console.log(`  phase3 R2 mixed 120ms: ~${((n * 0.12) / R2_CONCURRENCY / 60).toFixed(1)} min`)
-  console.log(`  budget ≤ ${MAX_OK_MINUTES} min`)
-  console.log('==================')
+function ensurePathLog() {
+  mkdirSync('.context', { recursive: true })
+  if (!existsSync(PATH_LOG))
+    writeFileSync(PATH_LOG, '')
 }
 
-async function objectExists(s3: S3Client, bucket: string, key: string) {
+function appendPaths(pairs: Array<{ s3_path: string, file_hash: string }>) {
+  if (pairs.length === 0)
+    return
+  appendFileSync(PATH_LOG, `${pairs.map(p => `${p.s3_path}\t${p.file_hash}`).join('\n')}\n`)
+}
+
+function loadPathLog(): Map<string, string> {
+  const map = new Map<string, string>()
+  if (!existsSync(PATH_LOG))
+    return map
+  for (const line of readFileSync(PATH_LOG, 'utf8').split('\n')) {
+    if (!line)
+      continue
+    const tab = line.indexOf('\t')
+    if (tab <= 0)
+      continue
+    map.set(line.slice(0, tab), line.slice(tab + 1))
+  }
+  return map
+}
+
+/** Copy to trash; no HEAD. Missing object => skip. */
+async function moveToTrashFast(s3: S3Client, bucket: string, key: string) {
+  if (key.startsWith(TRASH_PREFIX))
+    return 'skip' as const
+  const encodedKey = key.split('/').map(segment => encodeURIComponent(segment)).join('/')
   try {
-    await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: key }))
-    return true
+    await s3.send(new CopyObjectCommand({
+      Bucket: bucket,
+      CopySource: `${bucket}/${encodedKey}`,
+      Key: `${TRASH_PREFIX}${key}`,
+    }))
   }
   catch (error: any) {
     const status = error?.$metadata?.httpStatusCode ?? error?.statusCode ?? error?.status
     const code = error?.name ?? error?.Code ?? error?.code
-    if (status === 404 || code === 'NotFound' || code === 'NoSuchKey')
-      return false
+    if (status === 404 || code === 'NoSuchKey' || code === 'NotFound')
+      return 'missing' as const
     throw error
   }
-}
-
-async function moveToTrash(s3: S3Client, bucket: string, key: string) {
-  if (key.startsWith(TRASH_PREFIX))
-    return 'skip' as const
-  const exists = await objectExists(s3, bucket, key)
-  if (!exists)
-    return 'missing' as const
-  const encodedKey = key.split('/').map(segment => encodeURIComponent(segment)).join('/')
-  await s3.send(new CopyObjectCommand({
-    Bucket: bucket,
-    CopySource: `${bucket}/${encodedKey}`,
-    Key: `${TRASH_PREFIX}${key}`,
-  }))
   await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }))
   return 'moved' as const
 }
@@ -158,13 +176,11 @@ async function deleteBatch(
   workerId: number,
 ): Promise<{ deletedRows: number, pairs: Array<{ s3_path: string, file_hash: string }> }> {
   hb.inFlight += 1
-  hb.detail = `w${workerId} connect first=${ids[0]}`
+  hb.detail = `w${workerId} DELETE n=${ids.length} first=${ids[0]}`
   const client = await pool.connect()
   try {
     await client.query(`SET statement_timeout = '0'`)
     await client.query(`SET synchronous_commit = off`)
-
-    hb.detail = `w${workerId} DELETE RETURNING n=${ids.length}`
     await client.query('BEGIN')
     await client.query(`SET LOCAL statement_timeout = '0'`)
     await client.query(`SET LOCAL synchronous_commit = off`)
@@ -177,7 +193,6 @@ async function deleteBatch(
       [ids],
     )
 
-    hb.detail = `w${workerId} clear version counters`
     await client.query(
       `WITH prev AS (
          SELECT av.id, av.app_id,
@@ -213,7 +228,6 @@ async function deleteBatch(
       if (row.s3_path)
         pairs.push({ s3_path: row.s3_path, file_hash: row.file_hash })
     }
-
     return { deletedRows: deletedRes.rowCount ?? 0, pairs }
   }
   catch (error) {
@@ -231,11 +245,100 @@ async function deleteBatch(
   }
 }
 
+async function filterLiveAndTrash(
+  pool: pg.Pool,
+  s3: S3Client,
+  bucket: string,
+  pathToHash: Map<string, string>,
+  hb: Hb,
+) {
+  hb.phase = 'live-filter'
+  const allHashes = [...new Set(pathToHash.values())]
+  const liveHashes = new Set<string>()
+  console.log(`Live-filter: ${allHashes.length} hashes via temp table...`)
+
+  const client = await pool.connect()
+  try {
+    await client.query(`SET statement_timeout = '0'`)
+    await client.query(`SET synchronous_commit = off`)
+    await client.query(`
+      CREATE TEMP TABLE reclaim_candidate_hashes (
+        file_hash text PRIMARY KEY
+      ) ON COMMIT PRESERVE ROWS
+    `)
+    for (const [i, hashChunk] of chunk(allHashes, HASH_CHECK_BATCH).entries()) {
+      hb.detail = `temp insert ${i + 1}`
+      await client.query(
+        `INSERT INTO reclaim_candidate_hashes (file_hash)
+         SELECT DISTINCT unnest($1::text[])
+         ON CONFLICT DO NOTHING`,
+        [hashChunk],
+      )
+    }
+    hb.detail = 'semi-join'
+    const liveRes = await client.query<{ file_hash: string }>(`
+      SELECT c.file_hash
+      FROM reclaim_candidate_hashes AS c
+      WHERE EXISTS (
+        SELECT 1 FROM public.manifest AS m WHERE m.file_hash = c.file_hash
+      )
+    `)
+    for (const row of liveRes.rows)
+      liveHashes.add(row.file_hash)
+    await client.query(`DROP TABLE reclaim_candidate_hashes`)
+  }
+  finally {
+    client.release()
+  }
+
+  const toTrash = [...pathToHash.entries()]
+    .filter(([, hash]) => !liveHashes.has(hash))
+    .map(([path]) => path)
+  console.log(`R2 candidates: trash=${toTrash.length} keep_live=${pathToHash.size - toTrash.length}`)
+
+  hb.phase = 'r2-trash'
+  hb.detail = `${toTrash.length} objects, concurrency=${R2_CONCURRENCY}, no HEAD`
+  let r2Done = 0
+  let r2Moved = 0
+  let r2Missing = 0
+  let r2Failed = 0
+  const r2Started = Date.now()
+
+  // expose counters to heartbeat via hb.detail updates
+  const timer = setInterval(() => {
+    hb.detail = `r2 ${r2Done}/${toTrash.length} moved=${r2Moved} miss=${r2Missing} fail=${r2Failed} ${formatRate(r2Done, r2Started)}`
+  }, 1000)
+  timer.unref?.()
+
+  await mapPool(toTrash, R2_CONCURRENCY, async (path) => {
+    try {
+      const result = await moveToTrashFast(s3, bucket, path)
+      if (result === 'moved')
+        r2Moved += 1
+      else if (result === 'missing')
+        r2Missing += 1
+    }
+    catch (error) {
+      r2Failed += 1
+      if (r2Failed <= 20)
+        console.error(`R2 fail ${path}:`, error)
+    }
+    finally {
+      r2Done += 1
+    }
+  })
+  clearInterval(timer)
+  console.log(`R2 done: moved=${r2Moved} missing=${r2Missing} failed=${r2Failed} in ${((Date.now() - r2Started) / 1000).toFixed(1)}s`)
+}
+
 async function main() {
   const env = await loadEnv(ENV_FILE)
+  ensurePathLog()
+
+  console.log(`Mode: ${R2_ONLY ? 'R2_ONLY (from path log)' : DO_R2 ? 'DB + R2' : 'DB ONLY (set RECLAIM_R2=1 to also trash)'}`)
+
   const databaseUrl = cleanDbUrl(requireDbUrl(env))
   const ssl = sslForUrl(databaseUrl)
-
   const pool = new pg.Pool({
     connectionString: databaseUrl,
     ssl,
@@ -270,7 +373,7 @@ async function main() {
       httpsAgent: new HttpsAgent({
         keepAlive: true,
         maxSockets: R2_CONCURRENCY,
-        maxFreeSockets: 256,
+        maxFreeSockets: 128,
       }),
       connectionTimeout: 10_000,
       requestTimeout: 60_000,
@@ -291,30 +394,43 @@ async function main() {
     startedAt: Date.now(),
   }
 
-  // path -> hash (last writer wins; same path same hash)
-  const pathToHash = new Map<string, string>()
-  let r2Moved = 0
-  let r2Missing = 0
-  let r2Failed = 0
-  let r2Done = 0
-  let r2Total = 0
-
   const heartbeat = setInterval(() => {
     const elapsed = ((Date.now() - hb.startedAt) / 1000).toFixed(1)
     console.log(
-      `[hb t+${elapsed}s] ${hb.phase} | ${hb.detail} | versions ${hb.versionsDone}/${hb.versionsTotal} batches ${hb.batchesDone}/${hb.batchesTotal} inflight=${hb.inFlight} | db_rows=${hb.dbRows} ${formatRate(hb.dbRows, hb.startedAt)} | paths=${hb.pathsCollected} | r2 ${r2Done}/${r2Total} moved=${r2Moved} miss=${r2Missing} fail=${r2Failed}`,
+      `[hb t+${elapsed}s] ${hb.phase} | ${hb.detail} | versions ${hb.versionsDone}/${hb.versionsTotal} batches ${hb.batchesDone}/${hb.batchesTotal} inflight=${hb.inFlight} | db_rows=${hb.dbRows} ${formatRate(hb.dbRows, hb.startedAt)} | paths=${hb.pathsCollected}`,
     )
   }, HEARTBEAT_MS)
   heartbeat.unref?.()
 
   const onSignal = () => {
     clearInterval(heartbeat)
+    console.log(`\nInterrupted. Path log kept at ${PATH_LOG}`)
+    console.log(`Resume R2 later: RECLAIM_R2_ONLY=1 bun scripts/reclaim_deleted_version_manifests.ts`)
     pool.end().finally(() => process.exit(1))
   }
   process.once('SIGINT', onSignal)
   process.once('SIGTERM', onSignal)
 
-  console.log('1/3 Listing doomed versions...')
+  const pathToHash = R2_ONLY ? loadPathLog() : new Map<string, string>()
+
+  if (R2_ONLY) {
+    console.log(`Loaded ${pathToHash.size} paths from ${PATH_LOG}`)
+    if (pathToHash.size === 0) {
+      clearInterval(heartbeat)
+      await pool.end()
+      console.log('No paths to trash.')
+      return
+    }
+    await filterLiveAndTrash(pool, s3, bucket, pathToHash, hb)
+    clearInterval(heartbeat)
+    process.off('SIGINT', onSignal)
+    process.off('SIGTERM', onSignal)
+    await pool.end()
+    console.log(`Done (R2 only). Elapsed ${((Date.now() - hb.startedAt) / 60000).toFixed(2)} min`)
+    return
+  }
+
+  console.log('1/2 Listing doomed versions...')
   hb.phase = 'list'
   const versionsRes = await pool.query<{ id: string }>(`
     SELECT av.id::text AS id
@@ -335,22 +451,31 @@ async function main() {
   const versionIds = versionsRes.rows.map(r => r.id)
   hb.versionsTotal = versionIds.length
   console.log(`   versions=${versionIds.length}`)
-  printEta(versionIds.length)
 
   if (versionIds.length === 0) {
+    console.log('No DB rows left to delete.')
+    if (DO_R2 && existsSync(PATH_LOG)) {
+      const fromLog = loadPathLog()
+      console.log(`RECLAIM_R2=1 and path log has ${fromLog.size} paths — running R2...`)
+      for (const [k, v] of fromLog)
+        pathToHash.set(k, v)
+      await filterLiveAndTrash(pool, s3, bucket, pathToHash, hb)
+    }
     clearInterval(heartbeat)
     await pool.end()
-    console.log('Nothing to do.')
+    console.log('Done.')
     return
   }
 
   const batches = chunk(versionIds, VERSION_BATCH)
   hb.batchesTotal = batches.length
-  console.log(`2/3 Parallel DB DELETE only (no live-hash in hot path) pool=${DB_POOL_SIZE} batch=${VERSION_BATCH} batches=${batches.length}`)
+  console.log(`2/2 DB DELETE pool=${DB_POOL_SIZE} batch=${VERSION_BATCH} batches=${batches.length}`)
+  console.log(`   Paths appended to ${PATH_LOG} as we go (safe to Ctrl+C and resume R2 later)`)
   hb.phase = 'db-delete'
 
   await mapPool(batches, DB_POOL_SIZE, async (ids, workerId) => {
     const result = await deleteBatch(pool, ids, hb, workerId)
+    appendPaths(result.pairs)
     for (const pair of result.pairs)
       pathToHash.set(pair.s3_path, pair.file_hash)
     hb.dbRows += result.deletedRows
@@ -358,104 +483,28 @@ async function main() {
     hb.batchesDone += 1
     hb.versionsDone += ids.length
     console.log(
-      `[db] w${workerId} deleted_rows=${result.deletedRows} returned_paths=${result.pairs.length} unique_paths_total=${pathToHash.size} versions_done=${hb.versionsDone}/${hb.versionsTotal}`,
+      `[db] w${workerId} rows=${result.deletedRows} paths+=${result.pairs.length} total_paths=${pathToHash.size} versions ${hb.versionsDone}/${hb.versionsTotal}`,
     )
   })
 
-  console.log(`DB delete done. rows=${hb.dbRows} unique_paths=${pathToHash.size}`)
-  console.log('3/3 Filter live hashes via TEMP TABLE (one indexed semi-join), then R2...')
-  hb.phase = 'live-filter'
+  console.log(`DB DONE in ${((Date.now() - hb.startedAt) / 60000).toFixed(2)} min — rows=${hb.dbRows} paths_logged=${pathToHash.size}`)
 
-  const allHashes = [...new Set(pathToHash.values())]
-  const liveHashes = new Set<string>()
-  console.log(`   loading ${allHashes.length} candidate hashes into temp table...`)
-
-  const client = await pool.connect()
-  try {
-    await client.query(`SET statement_timeout = '0'`)
-    await client.query(`SET synchronous_commit = off`)
-    await client.query(`
-      CREATE TEMP TABLE reclaim_candidate_hashes (
-        file_hash text PRIMARY KEY
-      ) ON COMMIT PRESERVE ROWS
-    `)
-
-    const hashChunks = chunk(allHashes, 5000)
-    for (let i = 0; i < hashChunks.length; i++) {
-      hb.detail = `temp insert ${i + 1}/${hashChunks.length}`
-      await client.query(
-        `INSERT INTO reclaim_candidate_hashes (file_hash)
-         SELECT DISTINCT unnest($1::text[])
-         ON CONFLICT DO NOTHING`,
-        [hashChunks[i]],
-      )
-      if ((i + 1) % 10 === 0 || i + 1 === hashChunks.length)
-        console.log(`   temp insert ${i + 1}/${hashChunks.length}`)
-    }
-
-    hb.detail = 'semi-join manifest for live hashes'
-    console.log('   running semi-join against manifest (idx_manifest_file_hash)...')
-    // Nested-loop / merge via PK → index lookups; one round trip.
-    const liveRes = await client.query<{ file_hash: string }>(`
-      SELECT c.file_hash
-      FROM reclaim_candidate_hashes AS c
-      WHERE EXISTS (
-        SELECT 1
-        FROM public.manifest AS m
-        WHERE m.file_hash = c.file_hash
-      )
-    `)
-    for (const row of liveRes.rows)
-      liveHashes.add(row.file_hash)
-    console.log(`   live hashes still referenced: ${liveHashes.size}`)
-    await client.query(`DROP TABLE reclaim_candidate_hashes`)
-  }
-  finally {
-    client.release()
+  if (!DO_R2) {
+    clearInterval(heartbeat)
+    process.off('SIGINT', onSignal)
+    process.off('SIGTERM', onSignal)
+    await pool.end()
+    console.log('Skipping R2 (default). Paths saved.')
+    console.log(`Trash later: RECLAIM_R2_ONLY=1 bun scripts/reclaim_deleted_version_manifests.ts`)
+    return
   }
 
-  const toTrash = [...pathToHash.entries()]
-    .filter(([, hash]) => !liveHashes.has(hash))
-    .map(([path]) => path)
-  r2Total = toTrash.length
-  console.log(`   trash_paths=${toTrash.length} keep_live=${pathToHash.size - toTrash.length}`)
-
-  hb.phase = 'r2-trash'
-  hb.detail = `moving ${toTrash.length} objects @ ${R2_CONCURRENCY} sockets`
-  let idx = 0
-  await mapPool(toTrash, R2_CONCURRENCY, async (path) => {
-    try {
-      const result = await moveToTrash(s3, bucket, path)
-      if (result === 'moved')
-        r2Moved += 1
-      else if (result === 'missing')
-        r2Missing += 1
-    }
-    catch (error) {
-      r2Failed += 1
-      if (r2Failed <= 30)
-        console.error(`R2 fail ${path}:`, error)
-    }
-    finally {
-      r2Done += 1
-      // idx unused; r2Done is enough
-      void idx
-    }
-  })
-
+  await filterLiveAndTrash(pool, s3, bucket, pathToHash, hb)
   clearInterval(heartbeat)
   process.off('SIGINT', onSignal)
   process.off('SIGTERM', onSignal)
   await pool.end()
-
-  const elapsedMin = (Date.now() - hb.startedAt) / 60000
-  console.log('Done.')
-  console.log(`Versions: ${versionIds.length}`)
-  console.log(`DB rows deleted: ${hb.dbRows}`)
-  console.log(`R2 moved=${r2Moved} missing=${r2Missing} failed=${r2Failed}`)
-  console.log(`Elapsed: ${elapsedMin.toFixed(2)} min`)
-  if (elapsedMin > MAX_OK_MINUTES)
-    console.error(`FAIL BUDGET: ${elapsedMin.toFixed(2)} min > ${MAX_OK_MINUTES}`)
+  console.log(`Done. Elapsed ${((Date.now() - hb.startedAt) / 60000).toFixed(2)} min`)
 }
 
 await main()
