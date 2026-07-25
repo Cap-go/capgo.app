@@ -160,8 +160,18 @@ describe('cron email stats backtest', () => {
     expect(tinyFail.toLowerCase()).not.toContain('flawless')
     expect(tinyFail.toLowerCase()).not.toContain('no failed updates')
 
+    // Rounded rate can be 0 with nonzero fails on huge volume weeks.
+    const roundedZero = getFailRateFunComparison(1, 0)
+    expect(roundedZero.toLowerCase()).not.toContain('flawless')
+    expect(roundedZero.toLowerCase()).not.toContain('no failed updates')
+
     const tenPercent = getFailRateFunComparison(10, 0.10)
-    expect(tenPercent.toLowerCase()).not.toContain('flawless')
+    expect(tenPercent.toLowerCase()).toContain('one in ten')
+    expect(tenPercent.toLowerCase()).not.toContain('one in five')
+
+    const twentyPercent = getFailRateFunComparison(20, 0.20)
+    expect(twentyPercent.toLowerCase()).toContain('one in five')
+    expect(twentyPercent.toLowerCase()).not.toContain('third')
 
     const highFail = getFailRateFunComparison(40, 0.4)
     expect(highFail.toLowerCase()).toContain('failing')

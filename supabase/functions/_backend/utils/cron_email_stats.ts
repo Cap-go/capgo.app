@@ -34,8 +34,11 @@ export interface WeeklyEmailMetadata {
 
 const thresholds = {
   updates: [100, 1000, 10000],
-  // Non-zero fail bands only. Zero fails uses an explicit flawless message.
-  failRate: [0.10, 0.20, 0.30],
+  // Inclusive upper bounds for non-zero fail bands.
+  // 0 < rate <= 0.10 → under/about one in ten
+  // 0.10 < rate <= 0.20 → about one in five
+  // rate > 0.20 → nearly a third / worse
+  failRate: [0.10, 0.20],
   appOpen: [500, 1500, 5000],
 }
 
@@ -119,24 +122,28 @@ export function getThresholdFunComparison(
 }
 
 /**
- * Flawless copy is reserved for zero failures.
- * Any non-zero fail rate must never claim "no failed updates".
+ * Flawless copy is reserved for zero failures only.
+ * Do not use rounded failureRate === 0, or large weeks with 1 fail look "flawless".
  */
 export function getFailRateFunComparison(failedUpdates: number, failureRate: number): string {
-  if (failedUpdates <= 0 || failureRate <= 0)
+  if (failedUpdates <= 0)
     return funComparisons.failRate[0]
 
-  if (failureRate < thresholds.failRate[0])
+  if (failureRate <= thresholds.failRate[0])
     return funComparisons.failRate[1]
-  if (failureRate < thresholds.failRate[1])
+  if (failureRate <= thresholds.failRate[1])
     return funComparisons.failRate[2]
   return funComparisons.failRate[3]
 }
 
-export function getIsoLikeWeekNumber(now: Date = new Date()): number {
-  const startOfYear = new Date(Date.UTC(now.getUTCFullYear(), 0, 1))
-  const days = Math.floor((now.getTime() - startOfYear.getTime()) / (24 * 60 * 60 * 1000))
-  return Math.ceil((days + startOfYear.getUTCDay() + 1) / 7)
+/** ISO-8601 week number (UTC). */
+export function getIsoWeekNumber(now: Date = new Date()): number {
+  const date = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
+  // ISO weeks start on Monday; the Thursday of this week determines the ISO week year/number.
+  const day = date.getUTCDay() || 7
+  date.setUTCDate(date.getUTCDate() + 4 - day)
+  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1))
+  return Math.ceil((((date.getTime() - yearStart.getTime()) / 86_400_000) + 1) / 7)
 }
 
 export function buildWeeklyEmailMetadata(
@@ -147,7 +154,7 @@ export function buildWeeklyEmailMetadata(
   return {
     app_id: appId,
     month_name: now.toLocaleString('en-US', { month: 'long', timeZone: 'UTC' }),
-    week_number: getIsoLikeWeekNumber(now).toString(),
+    week_number: getIsoWeekNumber(now).toString(),
     weekly_updates: stats.totalUpdates.toString(),
     fun_comparison: getThresholdFunComparison('updates', stats.totalUpdates),
     weekly_install: stats.successfulInstalls.toString(),
@@ -182,9 +189,17 @@ export function sumVersionInstalls(
   versionName?: string | null,
   versionId?: number | null,
 ): number {
+  const hasVersionName = typeof versionName === 'string' && versionName.length > 0
   const versionIdStr = versionId != null ? String(versionId) : null
   return versionStats
-    .filter(row => row.version_name === versionName || (versionIdStr != null && row.version_name === versionIdStr))
+    .filter((row) => {
+      if (hasVersionName && row.version_name === versionName)
+        return true
+      // Legacy Analytics Engine rows stored numeric version_id in blob2.
+      if (versionIdStr != null && row.version_name === versionIdStr)
+        return true
+      return false
+    })
     .reduce((sum, row) => sum + toStatNumber(row.install), 0)
 }
 
@@ -192,7 +207,8 @@ export function sumVersionInstalls(
 export function shouldRetryDeployInstallStats(deployedAt: Date, now: Date = new Date(), retryWindowMs = 48 * 60 * 60 * 1000): boolean {
   if (Number.isNaN(deployedAt.getTime()))
     return false
-  return (now.getTime() - deployedAt.getTime()) < retryWindowMs
+  const elapsedMs = now.getTime() - deployedAt.getTime()
+  return elapsedMs >= 0 && elapsedMs < retryWindowMs
 }
 
 export function shouldSendDeployInstallStatsEmail(installs: number): boolean {

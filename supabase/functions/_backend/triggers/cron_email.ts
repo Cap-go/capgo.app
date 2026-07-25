@@ -162,19 +162,33 @@ async function handleMonthlyCreateStats(c: Context, appId: string) {
   const { startIso, endExclusiveIso, monthName } = getPreviousMonthUtcRange()
 
   // Fetch stats for bundle creation and publishing
-  const { data: appVersions, error: _appVersionsError } = await supabase
+  const { data: appVersions, error: appVersionsError } = await supabase
     .from('app_versions')
     .select('id, created_at')
     .eq('app_id', appId)
     .gte('created_at', startIso)
     .lt('created_at', endExclusiveIso)
 
-  const { data: deployHistory, error: _deployHistoryError } = await supabase
+  if (appVersionsError) {
+    throw simpleError('cannot_fetch_monthly_bundles', 'Cannot fetch monthly bundle stats', {
+      error: appVersionsError,
+      appId,
+    })
+  }
+
+  const { data: deployHistory, error: deployHistoryError } = await supabase
     .from('deploy_history')
     .select('id, deployed_at')
     .eq('app_id', appId)
     .gte('deployed_at', startIso)
     .lt('deployed_at', endExclusiveIso)
+
+  if (deployHistoryError) {
+    throw simpleError('cannot_fetch_monthly_publishes', 'Cannot fetch monthly publish stats', {
+      error: deployHistoryError,
+      appId,
+    })
+  }
 
   const bundleCount = appVersions?.length ?? 0
   const publishCount = deployHistory?.length ?? 0
@@ -286,14 +300,19 @@ async function handleDeployInstallStats(
         error: releaseError,
         metadata: { appId, deployId, installs },
       })
-    }
-    else {
-      cloudlog({
-        requestId: c.get('requestId'),
-        message: 'Released deploy install stats email claim for retry',
-        metadata: { appId, deployId, installs },
+      // Fail the job so the queue can retry instead of permanently keeping the claim.
+      throw simpleError('cannot_release_deploy_stats_claim', 'Cannot release deploy install stats email claim', {
+        error: releaseError,
+        appId,
+        deployId,
+        installs,
       })
     }
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'Released deploy install stats email claim for retry',
+      metadata: { appId, deployId, installs },
+    })
   }
 
   return c.json({ status: 'Not enough installs for deploy stats email', installs }, 200)

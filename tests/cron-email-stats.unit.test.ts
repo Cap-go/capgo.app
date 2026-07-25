@@ -3,6 +3,7 @@ import {
   buildWeeklyEmailMetadata,
   computeWeeklyInstallStats,
   getFailRateFunComparison,
+  getIsoWeekNumber,
   getPreviousMonthUtcRange,
   shouldRetryDeployInstallStats,
   shouldSendDeployInstallStatsEmail,
@@ -79,6 +80,21 @@ describe('getFailRateFunComparison', () => {
   it.concurrent('reserves flawless copy for zero failures only', () => {
     expect(getFailRateFunComparison(0, 0).toLowerCase()).toContain('flawless')
     expect(getFailRateFunComparison(1, 0.01).toLowerCase()).not.toContain('flawless')
+    // Rounded failureRate can be 0 for huge weeks with 1 fail — still not flawless.
+    expect(getFailRateFunComparison(1, 0).toLowerCase()).not.toContain('flawless')
+  })
+
+  it.concurrent('keeps threshold copy aligned at exact 10% and 20% boundaries', () => {
+    expect(getFailRateFunComparison(10, 0.10).toLowerCase()).toContain('one in ten')
+    expect(getFailRateFunComparison(20, 0.20).toLowerCase()).toContain('one in five')
+    expect(getFailRateFunComparison(21, 0.21).toLowerCase()).toContain('failing')
+  })
+})
+
+describe('getIsoWeekNumber', () => {
+  it.concurrent('uses ISO week rules around year boundaries', () => {
+    expect(getIsoWeekNumber(new Date('2021-01-01T00:00:00.000Z'))).toBe(53)
+    expect(getIsoWeekNumber(new Date('2022-01-03T00:00:00.000Z'))).toBe(1)
   })
 })
 
@@ -134,6 +150,19 @@ describe('sumVersionInstalls', () => {
     expect(installs).toBe(22)
   })
 
+  it.concurrent('does not match every nameless row when versionName is absent', () => {
+    const installs = sumVersionInstalls(
+      [
+        { version_name: undefined, install: 50 },
+        { version_name: null, install: 50 },
+        { version_name: '99', install: 3 },
+      ],
+      undefined,
+      99,
+    )
+    expect(installs).toBe(3)
+  })
+
   it.concurrent('does not string-concatenate analytics Float64 values', () => {
     const installs = sumVersionInstalls(
       [
@@ -160,6 +189,12 @@ describe('shouldRetryDeployInstallStats', () => {
   it.concurrent('stops retrying after the retry window', () => {
     const deployedAt = new Date('2026-07-25T00:00:00.000Z')
     const now = new Date('2026-07-27T00:00:01.000Z')
+    expect(shouldRetryDeployInstallStats(deployedAt, now)).toBe(false)
+  })
+
+  it.concurrent('does not retry future deploy timestamps', () => {
+    const deployedAt = new Date('2026-07-26T00:00:00.000Z')
+    const now = new Date('2026-07-25T00:00:00.000Z')
     expect(shouldRetryDeployInstallStats(deployedAt, now)).toBe(false)
   })
 })
