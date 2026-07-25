@@ -203,7 +203,6 @@ interface TrackOptions {
   timestamp?: number | Date
 }
 
-
 export function wait(ms: number) {
   return new Promise((resolve) => {
     setTimeout(resolve, ms)
@@ -721,6 +720,40 @@ export function normalizeSupabaseHost(host: string): string {
 
   const normalizedPath = parsed.pathname.replace(/\/+$/, '')
   return `${parsed.origin}${normalizedPath}`
+}
+
+export function formatCapgoApiErrorBody(body: unknown): string {
+  if (!body || typeof body !== 'object')
+    return ''
+  const record = body as { error?: string, message?: string, status?: string }
+  return [record.error, record.message, record.status].filter(Boolean).join(' | ')
+}
+
+/** Resolve Capgo public API base URL for CLI mutations (app create/update, etc.). */
+export function resolveConfiguredCapgoPublicApiHost(config: {
+  hostApi: string
+  supaHost?: string
+  supaKey?: string
+}): string {
+  if (config.supaHost && config.supaKey && config.hostApi === defaultApiHost)
+    return `${normalizeSupabaseHost(config.supaHost)}/functions/v1`
+
+  return config.hostApi
+}
+
+export async function resolveCapgoPublicApiHost(
+  options?: { supaHost?: string, supaAnon?: string },
+  silent = true,
+): Promise<string> {
+  if (options?.supaHost && options?.supaAnon)
+    return `${normalizeSupabaseHost(options.supaHost)}/functions/v1`
+
+  const localConfig = await getLocalConfig(silent)
+  if (localConfig.supaHost && localConfig.supaKey)
+    return resolveConfiguredCapgoPublicApiHost(localConfig)
+
+  const config = await getRemoteConfig(silent)
+  return config.hostApi
 }
 
 export async function createSupabaseClient(apikey: string, supaHost?: string, supaKey?: string, silent = false, instrument = true, signal?: AbortSignal) {

@@ -1,7 +1,5 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Buffer } from 'node:buffer'
 import type { AppOptions } from '../schemas/app'
-import type { Database } from '../types/supabase.types'
 import type { Organization } from '../utils'
 import { existsSync, readFileSync } from 'node:fs'
 import { intro, log, outro } from '@clack/prompts'
@@ -12,11 +10,13 @@ import {
   assertCliPermission,
   createSupabaseClient,
   findSavedKey,
+  formatCapgoApiErrorBody,
   formatError,
   getAppId,
   getConfig,
   getContentType,
   getOrganizationWithPermission,
+  resolveCapgoPublicApiHost,
   resolveUserIdFromApiKey,
   sendEvent,
 } from '../utils'
@@ -54,7 +54,7 @@ function ensureOptions(appId: string, options: AppOptions, silent: boolean) {
 }
 
 async function ensureAppDoesNotExist(
-  supabase: SupabaseClient<Database>,
+  supabase: Awaited<ReturnType<typeof createSupabaseClient>>,
   appId: string,
   silent: boolean,
 ) {
@@ -75,23 +75,59 @@ async function ensureAppDoesNotExist(
 
 export type AppCreateSource = 'cli-direct' | 'onboarding' | 'mcp'
 
-function isMissingAppBuildOnboardingSchemaError(error: { message?: string, details?: string, hint?: string, code?: string | null } | null) {
-  if (!error)
-    return false
-
-  const text = [error.message, error.details, error.hint, error.code]
-    .filter(Boolean)
-    .join(' ')
-    .toLowerCase()
-
-  return text.includes('created_from_onboarding')
-    || text.includes('onboarding_completed_at')
-}
-
 export function resolveAppCreateSource(explicit?: AppCreateSource): AppCreateSource {
   if (explicit)
     return explicit
   return getInvocationSource() === 'mcp' ? 'mcp' : 'cli-direct'
+}
+
+async function createAppViaApi(
+  apikey: string,
+  params: {
+    ownerOrg: string
+    appId: string
+    name: string
+    iconUrl: string
+    createdFromOnboarding: boolean
+    supaHost?: string
+    supaAnon?: string
+  },
+) {
+  // Prefer Capgo API host (or self-hosted /functions/v1) with the API key.
+  // Avoid supabase.functions.invoke: it always sends Authorization: Bearer <anon>.
+  const apiHost = await resolveCapgoPublicApiHost({
+    supaHost: params.supaHost,
+    supaAnon: params.supaAnon,
+  })
+  const response = await fetch(`${apiHost}/app`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': apikey,
+      'capgkey': apikey,
+    },
+    body: JSON.stringify({
+      owner_org: params.ownerOrg,
+      app_id: params.appId,
+      name: params.name,
+      icon: params.iconUrl,
+      need_onboarding: false,
+      created_from_onboarding: params.createdFromOnboarding,
+    }),
+  })
+
+  const data = await response.json().catch(() => null)
+  if (!response.ok) {
+    const details = formatCapgoApiErrorBody(data) || `HTTP ${response.status}`
+    throw new Error(details)
+  }
+
+  const createdAppId = (data as { app_id?: string } | null)?.app_id
+  if (!createdAppId) {
+    throw new Error('App create API returned no app_id')
+  }
+
+  return data as { app_id: string, icon_url?: string, name?: string }
 }
 
 export async function addAppInternal(
@@ -165,6 +201,8 @@ export async function addAppInternal(
   const iconPath = getAppIconStoragePath(organizationUid, appId)
   let iconUrl = defaultAppIconPath
 
+  // Icon upload is best-effort. Storage RLS issues must not block app creation;
+  // the web onboarding path already continues without an icon on upload failure.
   if (iconBuff && iconType) {
     const { error } = await supabase.storage
       .from('images')
@@ -175,42 +213,33 @@ export async function addAppInternal(
 
     if (error) {
       if (!silent)
-        log.error(`Could not add app ${formatError(error)}`)
-      throw new Error(`Could not add app ${formatError(error)}`)
+        log.warn(`Could not upload app icon (${formatError(error)}). Continuing with the default icon.`)
     }
-
-    iconUrl = iconPath
+    else {
+      iconUrl = iconPath
+    }
   }
 
   const appCreateSource = resolveAppCreateSource(source)
-  const baseAppInsert = {
-    icon_url: iconUrl,
-    owner_org: organizationUid,
-    user_id: userId,
-    name,
-    app_id: appId,
-  }
-  const insertApp = (withOnboardingMetrics: boolean) => supabase
-    .from('apps')
-    .insert({
-      ...baseAppInsert,
-      ...(withOnboardingMetrics
-        ? {
-            created_from_onboarding: true,
-          }
-        : {}),
-    })
 
-  const insertResult = await insertApp(appCreateSource === 'onboarding')
-  let dbError = insertResult.error
-  if (dbError && appCreateSource === 'onboarding' && isMissingAppBuildOnboardingSchemaError(dbError)) {
-    const fallbackInsertResult = await insertApp(false)
-    dbError = fallbackInsertResult.error
+  try {
+    // Use the same authorized API path as the web console. Direct PostgREST inserts
+    // hit apps/storage RLS and fail for common API-key + pending-onboarding setups.
+    await createAppViaApi(options.apikey!, {
+      ownerOrg: organizationUid,
+      appId,
+      name,
+      iconUrl,
+      createdFromOnboarding: appCreateSource === 'onboarding',
+      supaHost: options.supaHost,
+      supaAnon: options.supaAnon,
+    })
   }
-  if (dbError) {
+  catch (error) {
+    const message = formatError(error)
     if (!silent)
-      log.error(`Could not add app ${formatError(dbError)}`)
-    throw new Error(`Could not add app ${formatError(dbError)}`)
+      log.error(`Could not add app ${message}`)
+    throw new Error(`Could not add app ${message}`)
   }
 
   await sendEvent(options.apikey!, {

@@ -24,17 +24,17 @@ import { getRepoStarStatus, isRepoStarredInSession, starAllRepositories, starRep
 import { createKeyInternal } from '../key'
 import { doLoginExists, loginInternal } from '../login'
 import { writeOnboardingSupportBundle, writeSupportBundleFiles } from '../onboarding-support'
-import { contactSupport } from '../support/contact-support'
-import { uploadSupportLogs } from '../support/support-upload'
-import { copyToClipboard, revealInFinder } from '../support/clipboard'
-import { appendInternalLog, getInternalLogPath, startInternalLog } from '../support/internal-log'
 import { showReplicationProgress } from '../replicationProgress'
 import { formatRunnerCommand, splitRunnerCommand } from '../runner-command'
+import { copyToClipboard, revealInFinder } from '../support/clipboard'
+import { contactSupport } from '../support/contact-support'
+import { appendInternalLog, getInternalLogPath, startInternalLog } from '../support/internal-log'
+import { uploadSupportLogs } from '../support/support-upload'
 import { consoleWebUrl, createSupabaseClient, defaultApiHost, findBuildCommandForProjectType, findMainFile, findMainFileForProjectType, findProjectType, findRoot, findSavedKey, findSavedKeySilent, formatError, getAllPackagesDependencies, getAppId, getBundleVersion, getConfig, getConfigForWrite, getLocalConfig, getNativeProjectResetAdvice, getOrganizationListWithPermission, getPackageScripts, getPMAndCommand, hasCliPermission, PACKNAME, projectIsMonorepo, resolveUserIdFromApiKey, updateConfigbyKey, updateConfigUpdater, validateIosUpdaterSync } from '../utils'
 import { buildAppIdConflictSuggestions, isAppAlreadyExistsError } from './app-conflict'
 import { cancel as pCancel, confirm as pConfirm, intro as pIntro, isCancel as pIsCancel, log as pLog, outro as pOutro, select as pSelect, spinner as pSpinner, text as pText } from './prompts'
-import { appendInitStreamingLine, clearInitStreamingOutput, setInitCodeDiff, setInitEncryptionSummary, setInitVersionWarning, startInitStreamingOutput, stopInitInkSession, updateInitStreamingStatus } from './runtime'
 import { finishActiveCliReplay, getActiveCliReplaySessionId, isCliTelemetryDisabled, startInitReplay } from './replay'
+import { appendInitStreamingLine, clearInitStreamingOutput, setInitCodeDiff, setInitEncryptionSummary, setInitVersionWarning, startInitStreamingOutput, stopInitInkSession, updateInitStreamingStatus } from './runtime'
 import { formatInitResumeMessage, initOnboardingSteps, renderInitOnboardingComplete, renderInitOnboardingFrame, renderInitOnboardingWelcome } from './ui'
 import { CAPGO_UPDATER_PACKAGE, getUpdaterInstallState } from './updater'
 
@@ -1866,6 +1866,7 @@ async function maybeReusePendingOnboardingApp(
   apikey: string,
   appId: string | undefined,
   supabase: Awaited<ReturnType<typeof createSupabaseClient>>,
+  options?: Pick<SuperOptions, 'supaHost' | 'supaAnon'>,
 ) {
   const pendingApps = await listPendingOnboardingApps(supabase, organization.gid)
   const selectedApp = await selectPendingOnboardingApp(organization.gid, apikey, appId, pendingApps)
@@ -1888,7 +1889,10 @@ async function maybeReusePendingOnboardingApp(
   const cleanupSpinner = pSpinner()
   cleanupSpinner.start(`Preparing ${selectedAppId} for real onboarding`)
   try {
-    await completePendingOnboardingApp(supabase, organization.gid, selectedAppId)
+    await completePendingOnboardingApp(supabase, organization.gid, selectedAppId, apikey, {
+      supaHost: options?.supaHost,
+      supaAnon: options?.supaAnon,
+    })
     cleanupSpinner.stop('Pending onboarding app prepared ✅')
   }
   catch (error) {
@@ -2055,11 +2059,16 @@ async function completeExistingAppPendingOnboarding(
   supabase: Awaited<ReturnType<typeof createSupabaseClient>>,
   organization: Organization,
   appId: string,
+  apikey: string,
+  options?: Pick<SuperOptions, 'supaHost' | 'supaAnon'>,
 ) {
   const s = pSpinner()
   s.start(`Preparing existing app ${appId}`)
   try {
-    await completePendingOnboardingApp(supabase, organization.gid, appId)
+    await completePendingOnboardingApp(supabase, organization.gid, appId, apikey, {
+      supaHost: options?.supaHost,
+      supaAnon: options?.supaAnon,
+    })
     s.stop('Existing app prepared ✅')
   }
   catch (error) {
@@ -2091,7 +2100,7 @@ async function resolveExistingAppConflict(
 
   if (useExistingApp === true) {
     if (existingApp.need_onboarding)
-      await completeExistingAppPendingOnboarding(supabase, organization, appId)
+      await completeExistingAppPendingOnboarding(supabase, organization, appId, apikey, options)
 
     await saveAppIdToCapacitorConfig(appId)
     return 'use-existing'
@@ -4943,7 +4952,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
     globalAppId = appId
   }
 
-  const pendingOnboardingSelection = await maybeReusePendingOnboardingApp(organization, options.apikey, appId, supabase)
+  const pendingOnboardingSelection = await maybeReusePendingOnboardingApp(organization, options.apikey, appId, supabase, options)
   appId = pendingOnboardingSelection.appId ?? appId
   await ensureCapacitorProjectReady(orgId, options.apikey, appId, pendingOnboardingSelection.pendingApp)
   selectedPackageJsonPath = path.resolve(globalPathToPackageJson ?? join(findRoot(cwd()), PACKNAME))
