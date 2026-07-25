@@ -3,7 +3,7 @@
 -- anniversary day, and credits sums use half-open period bounds.
 BEGIN;
 
-SELECT plan(12);
+SELECT plan(13);
 
 SELECT ok(
     to_regprocedure(
@@ -70,7 +70,7 @@ SELECT
     now()
 FROM billing_period_stats_context;
 
--- Anchor day = today so the processor should queue an email
+-- Anchor DOM = today (UTC). Use January so day 1-31 is always valid.
 INSERT INTO public.stripe_info (
     customer_id,
     status,
@@ -84,11 +84,27 @@ SELECT
     'succeeded',
     'prod_LQIregjtNduh4q',
     'sub_billing_period_stats_test',
-    date_trunc('month', now())
-        + ((EXTRACT(DAY FROM CURRENT_DATE)::int - 1) || ' days')::interval,
-    date_trunc('month', now())
-        + ((EXTRACT(DAY FROM CURRENT_DATE)::int - 1) || ' days')::interval
-        + interval '1 month'
+    make_timestamptz(
+        2024,
+        1,
+        EXTRACT(DAY FROM (now() AT TIME ZONE 'UTC'))::int,
+        15,
+        0,
+        0,
+        'UTC'
+    ),
+    make_timestamptz(
+        2024,
+        2,
+        LEAST(
+            EXTRACT(DAY FROM (now() AT TIME ZONE 'UTC'))::int,
+            29
+        ),
+        15,
+        0,
+        0,
+        'UTC'
+    )
 FROM billing_period_stats_context;
 
 INSERT INTO public.orgs (
@@ -193,9 +209,25 @@ SELECT ok(
             (message -> 'payload' ->> 'cycleStart') IS NOT NULL
             AND (message -> 'payload' ->> 'cycleEnd') IS NOT NULL
             AND (message -> 'payload' ->> 'cycleEnd')::timestamptz::date
-                = CURRENT_DATE
+                = (now() AT TIME ZONE 'UTC')::date
             AND (message -> 'payload' ->> 'cycleStart')::timestamptz
                 < (message -> 'payload' ->> 'cycleEnd')::timestamptz
+            AND (message -> 'payload' ->> 'cycleEnd')::timestamptz
+                = make_timestamptz(
+                    EXTRACT(
+                        YEAR FROM (now() AT TIME ZONE 'UTC')
+                    )::int,
+                    EXTRACT(
+                        MONTH FROM (now() AT TIME ZONE 'UTC')
+                    )::int,
+                    EXTRACT(
+                        DAY FROM (now() AT TIME ZONE 'UTC')
+                    )::int,
+                    15,
+                    0,
+                    0,
+                    'UTC'
+                )
         FROM pgmq.q_cron_email
         WHERE
             message -> 'payload' ->> 'orgId'
@@ -203,33 +235,40 @@ SELECT ok(
             AND message -> 'payload' ->> 'type' = 'billing_period_stats'
         LIMIT 1
     ),
-    'payload includes completed cycle dates ending today'
+    'payload includes completed cycle dates ending today with anchor time'
 );
 
 -- Move the org off today's anniversary and confirm it is not queued
 UPDATE public.stripe_info
 SET
-    subscription_anchor_start
-        = date_trunc('month', now())
-          + (
-              (
-                  CASE
-                      WHEN EXTRACT(DAY FROM CURRENT_DATE)::int = 1 THEN 1
-                      ELSE 0
-                  END
-              ) || ' days'
-          )::interval,
-    subscription_anchor_end
-        = date_trunc('month', now())
-          + (
-              (
-                  CASE
-                      WHEN EXTRACT(DAY FROM CURRENT_DATE)::int = 1 THEN 1
-                      ELSE 0
-                  END
-              ) || ' days'
-          )::interval
-          + interval '1 month'
+    subscription_anchor_start = make_timestamptz(
+        2024,
+        1,
+        CASE
+            WHEN EXTRACT(
+                DAY FROM (now() AT TIME ZONE 'UTC')
+            )::int = 1 THEN 2
+            ELSE 1
+        END,
+        15,
+        0,
+        0,
+        'UTC'
+    ),
+    subscription_anchor_end = make_timestamptz(
+        2024,
+        2,
+        CASE
+            WHEN EXTRACT(
+                DAY FROM (now() AT TIME ZONE 'UTC')
+            )::int = 1 THEN 2
+            ELSE 1
+        END,
+        15,
+        0,
+        0,
+        'UTC'
+    )
 WHERE customer_id = (
     SELECT customer_id FROM billing_period_stats_context
 );
@@ -312,6 +351,18 @@ SELECT is(
     ),
     '2026-02-28'::date,
     'Mar 31 completed cycle starts Feb 28'
+);
+
+SELECT is(
+    (
+        SELECT cycle_end::date
+        FROM public.billing_period_completed_cycle(
+            '2026-01-31 00:00:00+00'::timestamptz,
+            '2026-03-31'::date
+        )
+    ),
+    '2026-03-31'::date,
+    'Mar 31 completed cycle ends Mar 31'
 );
 
 SELECT * FROM finish();

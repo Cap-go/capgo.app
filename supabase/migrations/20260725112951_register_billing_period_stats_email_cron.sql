@@ -21,18 +21,38 @@ AS $$
     AND c.applied_at < p_end;
 $$;
 
-ALTER FUNCTION public.get_org_credits_used_in_period(uuid, timestamptz, timestamptz) OWNER TO postgres;
-REVOKE ALL ON FUNCTION public.get_org_credits_used_in_period(uuid, timestamptz, timestamptz) FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.get_org_credits_used_in_period(uuid, timestamptz, timestamptz) FROM anon;
-REVOKE ALL ON FUNCTION public.get_org_credits_used_in_period(uuid, timestamptz, timestamptz) FROM authenticated;
-GRANT ALL ON FUNCTION public.get_org_credits_used_in_period(uuid, timestamptz, timestamptz) TO service_role;
+ALTER FUNCTION public.get_org_credits_used_in_period(
+  uuid,
+  timestamptz,
+  timestamptz
+) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.get_org_credits_used_in_period(
+  uuid,
+  timestamptz,
+  timestamptz
+) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.get_org_credits_used_in_period(
+  uuid,
+  timestamptz,
+  timestamptz
+) FROM anon;
+REVOKE ALL ON FUNCTION public.get_org_credits_used_in_period(
+  uuid,
+  timestamptz,
+  timestamptz
+) FROM authenticated;
+GRANT ALL ON FUNCTION public.get_org_credits_used_in_period(
+  uuid,
+  timestamptz,
+  timestamptz
+) TO service_role;
 
 -- Stripe-style day-of-month clamping for billing anniversary detection.
 -- Returns the completed cycle ending on p_as_of when that day is the
 -- (clamped) anniversary; otherwise is_anniversary is false.
 CREATE OR REPLACE FUNCTION public.billing_period_completed_cycle(
   p_anchor_start timestamptz,
-  p_as_of date DEFAULT CURRENT_DATE
+  p_as_of date DEFAULT ((now() AT TIME ZONE 'UTC')::date)
 )
 RETURNS TABLE (
   is_anniversary boolean,
@@ -44,28 +64,56 @@ STABLE
 SET search_path = ''
 AS $$
 DECLARE
+  v_as_of date;
+  v_anchor_utc timestamp;
   v_anchor_dom integer;
+  v_anchor_hour integer;
+  v_anchor_min integer;
+  v_anchor_sec double precision;
   v_this_month_last integer;
   v_prev_month_last integer;
   v_this_anniv_dom integer;
   v_prev_anniv_dom integer;
+  v_prev_month date;
 BEGIN
-  v_anchor_dom := COALESCE(EXTRACT(DAY FROM p_anchor_start)::integer, 1);
+  -- Calendar math is UTC so session TimeZone cannot shift anniversary days.
+  v_as_of := COALESCE(p_as_of, (now() AT TIME ZONE 'UTC')::date);
+  v_anchor_utc := p_anchor_start AT TIME ZONE 'UTC';
+  v_anchor_dom := COALESCE(EXTRACT(DAY FROM v_anchor_utc)::integer, 1);
+  v_anchor_hour := EXTRACT(HOUR FROM v_anchor_utc)::integer;
+  v_anchor_min := EXTRACT(MINUTE FROM v_anchor_utc)::integer;
+  v_anchor_sec := EXTRACT(SECOND FROM v_anchor_utc);
   v_this_month_last := EXTRACT(
-    DAY FROM (date_trunc('month', p_as_of) + interval '1 month - 1 day')
+    DAY FROM (date_trunc('month', v_as_of) + interval '1 month - 1 day')
   )::integer;
   v_prev_month_last := EXTRACT(
-    DAY FROM (date_trunc('month', p_as_of) - interval '1 day')
+    DAY FROM (date_trunc('month', v_as_of) - interval '1 day')
   )::integer;
   v_this_anniv_dom := LEAST(v_anchor_dom, v_this_month_last);
   v_prev_anniv_dom := LEAST(v_anchor_dom, v_prev_month_last);
 
-  is_anniversary := EXTRACT(DAY FROM p_as_of)::integer = v_this_anniv_dom;
+  is_anniversary := EXTRACT(DAY FROM v_as_of)::integer = v_this_anniv_dom;
   IF is_anniversary THEN
-    cycle_start := date_trunc('month', p_as_of - interval '1 month')
-      + ((v_prev_anniv_dom - 1) || ' days')::interval;
-    cycle_end := date_trunc('month', p_as_of)
-      + ((v_this_anniv_dom - 1) || ' days')::interval;
+    v_prev_month := (date_trunc('month', v_as_of) - interval '1 month')::date;
+    -- Keep Stripe anchor time-of-day for half-open credit bounds.
+    cycle_start := make_timestamptz(
+      EXTRACT(YEAR FROM v_prev_month)::integer,
+      EXTRACT(MONTH FROM v_prev_month)::integer,
+      v_prev_anniv_dom,
+      v_anchor_hour,
+      v_anchor_min,
+      v_anchor_sec,
+      'UTC'
+    );
+    cycle_end := make_timestamptz(
+      EXTRACT(YEAR FROM v_as_of)::integer,
+      EXTRACT(MONTH FROM v_as_of)::integer,
+      v_this_anniv_dom,
+      v_anchor_hour,
+      v_anchor_min,
+      v_anchor_sec,
+      'UTC'
+    );
   ELSE
     cycle_start := NULL;
     cycle_end := NULL;
@@ -75,11 +123,26 @@ BEGIN
 END;
 $$;
 
-ALTER FUNCTION public.billing_period_completed_cycle(timestamptz, date) OWNER TO postgres;
-REVOKE ALL ON FUNCTION public.billing_period_completed_cycle(timestamptz, date) FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.billing_period_completed_cycle(timestamptz, date) FROM anon;
-REVOKE ALL ON FUNCTION public.billing_period_completed_cycle(timestamptz, date) FROM authenticated;
-GRANT ALL ON FUNCTION public.billing_period_completed_cycle(timestamptz, date) TO service_role;
+ALTER FUNCTION public.billing_period_completed_cycle(
+  timestamptz,
+  date
+) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.billing_period_completed_cycle(
+  timestamptz,
+  date
+) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.billing_period_completed_cycle(
+  timestamptz,
+  date
+) FROM anon;
+REVOKE ALL ON FUNCTION public.billing_period_completed_cycle(
+  timestamptz,
+  date
+) FROM authenticated;
+GRANT ALL ON FUNCTION public.billing_period_completed_cycle(
+  timestamptz,
+  date
+) TO service_role;
 
 CREATE OR REPLACE FUNCTION public.process_billing_period_stats_email()
 RETURNS void
@@ -105,7 +168,7 @@ BEGIN
     INTO v_cycle
     FROM public.billing_period_completed_cycle(
       org_record.subscription_anchor_start,
-      CURRENT_DATE
+      (now() AT TIME ZONE 'UTC')::date
     );
 
     IF v_cycle.is_anniversary THEN
@@ -128,12 +191,16 @@ BEGIN
 END;
 $$;
 
-ALTER FUNCTION public.process_billing_period_stats_email() OWNER TO postgres;
-
-REVOKE ALL ON FUNCTION public.process_billing_period_stats_email() FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.process_billing_period_stats_email() FROM anon;
-REVOKE ALL ON FUNCTION public.process_billing_period_stats_email() FROM authenticated;
-GRANT ALL ON FUNCTION public.process_billing_period_stats_email() TO service_role;
+ALTER FUNCTION public.process_billing_period_stats_email()
+OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.process_billing_period_stats_email()
+FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.process_billing_period_stats_email()
+FROM anon;
+REVOKE ALL ON FUNCTION public.process_billing_period_stats_email()
+FROM authenticated;
+GRANT ALL ON FUNCTION public.process_billing_period_stats_email()
+TO service_role;
 
 INSERT INTO public.cron_tasks (
   name,
