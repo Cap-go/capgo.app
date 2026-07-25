@@ -79,7 +79,8 @@ export async function persistVersionManifestEntries(
     return { inserted: 0, alreadyPresent: false }
   }
 
-  const pgClient = getPgClient(c, false)
+  const pgPool = getPgClient(c, false)
+  const pgClient = await pgPool.connect()
   try {
     await pgClient.query('BEGIN')
     // Serialize concurrent writers for this version (no unique constraint on manifest rows).
@@ -142,7 +143,8 @@ export async function persistVersionManifestEntries(
     throw error
   }
   finally {
-    await closeClient(c, pgClient)
+    pgClient.release()
+    await closeClient(c, pgPool)
   }
 
   return { inserted: validEntries.length, alreadyPresent: false }
