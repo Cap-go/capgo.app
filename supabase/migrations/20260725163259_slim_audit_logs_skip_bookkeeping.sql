@@ -67,7 +67,7 @@ BEGIN
   v_user_id := v_actor_user_id;
 
   -- Skip internal app_versions upload/migrate bookkeeping before to_jsonb()
-  -- so multi-MB manifest/native_packages are never serialized for those UPDATEs.
+  -- so multi-MB manifest/native_packages are never serialized for those UPDATE operations.
   IF TG_OP = 'UPDATE'
     AND TG_TABLE_NAME = 'app_versions'
     AND NEW.native_packages IS NOT DISTINCT FROM OLD.native_packages
