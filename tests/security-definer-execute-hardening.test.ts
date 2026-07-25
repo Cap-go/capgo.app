@@ -28,6 +28,8 @@ const SERVICE_ONLY_PROCS = [
   'public.check_org_hashed_key_enforcement(uuid, public.apikeys)',
   'public.cleanup_onboarding_app_data_on_complete()',
   'public.delete_old_deleted_versions()',
+  'public.long_canceled_org_ids()',
+  'public.process_free_trial_expired()',
   'public.soft_delete_versions_for_long_canceled_orgs(integer)',
   'public.cleanup_audit_logs_for_long_canceled_orgs(integer, integer, integer)',
   'public.cleanup_long_canceled_org_data()',
