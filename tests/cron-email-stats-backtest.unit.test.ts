@@ -58,7 +58,7 @@ function adminSuccessRate(installs: number, fails: number): number {
 }
 
 describe('cron email stats backtest', () => {
-  it('never reproduces the old install-fail negative/wrong-rate bug across production-like weeks', () => {
+  it.concurrent('never reproduces the old install-fail negative/wrong-rate bug across production-like weeks', () => {
     const weeks = [
       { install: 0, fail: 0, get: 0 },
       { install: 1, fail: 0, get: 10 },
@@ -116,7 +116,7 @@ describe('cron email stats backtest', () => {
     }
   })
 
-  it('builds weekly email metadata that cannot look like trash numbers', () => {
+  it.concurrent('builds weekly email metadata that cannot look like trash numbers', () => {
     const cases = [
       { install: 100, fail: 0, get: 200 },
       { install: 100, fail: 5, get: 200 },
@@ -152,7 +152,7 @@ describe('cron email stats backtest', () => {
     }
   })
 
-  it('never says flawless when there were failed updates', () => {
+  it.concurrent('never says flawless when there were failed updates', () => {
     const flawless = getFailRateFunComparison(0, 0)
     expect(flawless.toLowerCase()).toContain('flawless')
 
@@ -185,7 +185,7 @@ describe('cron email stats backtest', () => {
     expect(metadata.fun_comparison_2.toLowerCase()).not.toContain('no failed updates')
   })
 
-  it('monthly window includes the last moment of previous month and excludes current month', () => {
+  it.concurrent('monthly window includes the last moment of previous month and excludes current month', () => {
     const now = new Date('2026-07-01T00:30:00.000Z')
     const range = getPreviousMonthUtcRange(now)
 
@@ -210,7 +210,7 @@ describe('cron email stats backtest', () => {
     expect(lastDayNight < range.endExclusiveIso).toBe(true)
   })
 
-  it('backtests 24h install summing against the old string-concat trash path', () => {
+  it.concurrent('backtests 24h install summing against the old string-concat trash path', () => {
     const rows = [
       { version_name: '1.2.3', install: '10' },
       { version_name: '1.2.3', install: '20' },
@@ -237,7 +237,7 @@ describe('cron email stats backtest', () => {
     expect(shouldSendDeployInstallStatsEmail(2)).toBe(true)
   })
 
-  it('stress-tests random weeks so rates stay sane and email fields stay clean', () => {
+  it.concurrent('stress-tests random weeks so rates stay sane and email fields stay clean', () => {
     let seed = 42
     const rand = () => {
       seed = (seed * 1664525 + 1013904223) % 4294967296
