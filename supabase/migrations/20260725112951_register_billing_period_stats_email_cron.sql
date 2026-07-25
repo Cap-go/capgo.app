@@ -68,9 +68,6 @@ DECLARE
   v_as_of date;
   v_anchor_utc timestamp;
   v_anchor_dom integer;
-  v_anchor_hour integer;
-  v_anchor_min integer;
-  v_anchor_sec double precision;
   v_this_month_last integer;
   v_prev_month_last integer;
   v_this_anniv_dom integer;
@@ -78,12 +75,11 @@ DECLARE
   v_prev_month date;
 BEGIN
   -- Calendar math is UTC so session TimeZone cannot shift anniversary days.
+  -- Bounds are UTC midnight so the daily 12:00 UTC cron always reports a
+  -- completed [start, end) period (Stripe anchors are often afternoon UTC).
   v_as_of := COALESCE(p_as_of, (now() AT TIME ZONE 'UTC')::date);
   v_anchor_utc := p_anchor_start AT TIME ZONE 'UTC';
   v_anchor_dom := COALESCE(EXTRACT(DAY FROM v_anchor_utc)::integer, 1);
-  v_anchor_hour := EXTRACT(HOUR FROM v_anchor_utc)::integer;
-  v_anchor_min := EXTRACT(MINUTE FROM v_anchor_utc)::integer;
-  v_anchor_sec := EXTRACT(SECOND FROM v_anchor_utc);
   v_this_month_last := EXTRACT(
     DAY FROM (date_trunc('month', v_as_of) + interval '1 month - 1 day')
   )::integer;
@@ -96,23 +92,22 @@ BEGIN
   is_anniversary := EXTRACT(DAY FROM v_as_of)::integer = v_this_anniv_dom;
   IF is_anniversary THEN
     v_prev_month := (date_trunc('month', v_as_of) - interval '1 month')::date;
-    -- Keep Stripe anchor time-of-day for half-open credit bounds.
     cycle_start := make_timestamptz(
       EXTRACT(YEAR FROM v_prev_month)::integer,
       EXTRACT(MONTH FROM v_prev_month)::integer,
       v_prev_anniv_dom,
-      v_anchor_hour,
-      v_anchor_min,
-      v_anchor_sec,
+      0,
+      0,
+      0,
       'UTC'
     );
     cycle_end := make_timestamptz(
       EXTRACT(YEAR FROM v_as_of)::integer,
       EXTRACT(MONTH FROM v_as_of)::integer,
       v_this_anniv_dom,
-      v_anchor_hour,
-      v_anchor_min,
-      v_anchor_sec,
+      0,
+      0,
+      0,
       'UTC'
     );
   ELSE

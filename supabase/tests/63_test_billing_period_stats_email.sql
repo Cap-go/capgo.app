@@ -208,10 +208,6 @@ SELECT ok(
         SELECT
             (message -> 'payload' ->> 'cycleStart') IS NOT NULL
             AND (message -> 'payload' ->> 'cycleEnd') IS NOT NULL
-            AND (message -> 'payload' ->> 'cycleEnd')::timestamptz::date
-                = (now() AT TIME ZONE 'UTC')::date
-            AND (message -> 'payload' ->> 'cycleStart')::timestamptz
-                < (message -> 'payload' ->> 'cycleEnd')::timestamptz
             AND (message -> 'payload' ->> 'cycleEnd')::timestamptz
                 = make_timestamptz(
                     EXTRACT(
@@ -223,11 +219,13 @@ SELECT ok(
                     EXTRACT(
                         DAY FROM (now() AT TIME ZONE 'UTC')
                     )::int,
-                    15,
+                    0,
                     0,
                     0,
                     'UTC'
                 )
+            AND (message -> 'payload' ->> 'cycleStart')::timestamptz
+                < (message -> 'payload' ->> 'cycleEnd')::timestamptz
         FROM pgmq.q_cron_email
         WHERE
             message -> 'payload' ->> 'orgId'
@@ -235,7 +233,7 @@ SELECT ok(
             AND message -> 'payload' ->> 'type' = 'billing_period_stats'
         LIMIT 1
     ),
-    'payload includes completed cycle dates ending today with anchor time'
+    'payload includes completed cycle ending today at UTC midnight'
 );
 
 -- Move the org off today's anniversary and confirm it is not queued
