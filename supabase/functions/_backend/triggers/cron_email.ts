@@ -2,9 +2,11 @@ import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
 import {
+  buildWeeklyEmailMetadata,
   computeWeeklyInstallStats,
   getPreviousMonthUtcRange,
   shouldRetryDeployInstallStats,
+  shouldSendDeployInstallStatsEmail,
   sumVersionInstalls,
 } from '../utils/cron_email_stats.ts'
 import { BRES, middlewareAPISecret, parseBody, simpleError } from '../utils/hono.ts'
@@ -13,68 +15,6 @@ import { sendEmailToOrgMembers } from '../utils/org_email_notifications.ts'
 import { findBestPlan } from '../utils/plans.ts'
 import { readStatsVersion } from '../utils/stats.ts'
 import { getCurrentPlanNameOrg, supabaseAdmin } from '../utils/supabase.ts'
-
-const thresholds = {
-  // Number of updates in plain number
-  updates: [
-    100,
-    1000,
-    10000,
-  ],
-  // Percentage in decimal form (0.9 ==== 90%)
-  failRate: [
-    // Failure rate bands (0 = 0% failures, 0.3 = 30% failures)
-    0,
-    0.10,
-    0.20,
-    0.30,
-  ],
-  // Number of app opens in plain number
-  appOpen: [
-    500,
-    1500,
-    5000,
-  ],
-}
-
-const funComparisons = {
-  updates: [
-    'a cupcake to every student in a small school!',
-    'a pizza to every resident of a small town!',
-    'a burger to everyone in a big city!',
-  ],
-  failRate: [
-    'Flawless streak—no failed updates this week! 🏅',
-    'Roughly one in ten updates failed; a quick health check could help.',
-    'About one in five updates failed; let\'s squash those errors.',
-    'Heads up: nearly a third of updates are failing—worth a closer look.',
-  ],
-  appOpen: [
-    'Your app was opened more times than a popular local bakery\'s door!',
-    'Your app was more popular than the latest episode of a hit TV show!',
-    'Your app was opened more times than a blockbuster movie on its opening weekend!',
-  ],
-}
-
-// Check what threshold does the stat qualify for and return the fun comparison
-function getFunComparison(comparison: keyof typeof funComparisons, stat: number): string {
-  const thresholdsForComparisons = thresholds[comparison]
-  // Choose the highest threshold that is <= stat so that bigger stats map to
-  // the more impressive comparison string (including 100% success rate).
-  let chosenIndex = 0
-  for (let i = thresholdsForComparisons.length - 1; i >= 0; i -= 1) {
-    if (stat >= thresholdsForComparisons[i]) {
-      chosenIndex = i
-      break
-    }
-  }
-
-  const comparisonStrings = funComparisons[comparison]
-  if (!comparisonStrings[chosenIndex])
-    throw new Error(`Cannot find index for fun comparison, ${chosenIndex}`)
-
-  return comparisonStrings[chosenIndex]
-}
 
 export const app = new Hono<MiddlewareKeyVariables>()
 
@@ -208,27 +148,7 @@ async function handleWeeklyInstallStats(c: Context, appId: string) {
     return c.json({ status: 'No updates this week' }, 200)
   }
 
-  // Calculate week number and month name for the reported period
-  const now = new Date()
-  const monthName = now.toLocaleString('en-US', { month: 'long', timeZone: 'UTC' })
-  // Calculate ISO week number
-  const startOfYear = new Date(Date.UTC(now.getUTCFullYear(), 0, 1))
-  const days = Math.floor((now.getTime() - startOfYear.getTime()) / (24 * 60 * 60 * 1000))
-  const weekNumber = Math.ceil((days + startOfYear.getUTCDay() + 1) / 7)
-
-  const metadata = {
-    app_id: appId,
-    month_name: monthName,
-    week_number: weekNumber.toString(),
-    weekly_updates: stats.totalUpdates.toString(),
-    fun_comparison: getFunComparison('updates', stats.totalUpdates),
-    weekly_install: stats.successfulInstalls.toString(),
-    weekly_install_success: (stats.successPercentage * 100).toString(),
-    fun_comparison_2: getFunComparison('failRate', stats.failureRate),
-    weekly_fail: stats.failedUpdates.toString(),
-    weekly_open: stats.openApp.toString(),
-    fun_comparison_3: getFunComparison('appOpen', stats.openApp),
-  }
+  const metadata = buildWeeklyEmailMetadata(appId, stats)
 
   await sendEmailToOrgMembers(c, 'user:weekly_stats', 'weekly_stats', metadata, await getOrgIdForApp(c, appId))
 
@@ -346,7 +266,7 @@ async function handleDeployInstallStats(
     window_hours: '24',
   }
 
-  if (installs > 1) {
+  if (shouldSendDeployInstallStatsEmail(installs)) {
     await sendEmailToOrgMembers(c, 'bundle:install_stats_24h', 'deploy_stats_24h', metadata, orgId ?? await getOrgIdForApp(c, appId))
     return c.json(BRES)
   }

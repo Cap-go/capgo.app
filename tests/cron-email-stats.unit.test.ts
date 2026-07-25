@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
+  buildWeeklyEmailMetadata,
   computeWeeklyInstallStats,
+  getFailRateFunComparison,
   getPreviousMonthUtcRange,
   shouldRetryDeployInstallStats,
+  shouldSendDeployInstallStatsEmail,
   sumVersionInstalls,
   toStatNumber,
 } from '../supabase/functions/_backend/utils/cron_email_stats.ts'
@@ -72,6 +75,30 @@ describe('computeWeeklyInstallStats', () => {
   })
 })
 
+describe('getFailRateFunComparison', () => {
+  it.concurrent('reserves flawless copy for zero failures only', () => {
+    expect(getFailRateFunComparison(0, 0).toLowerCase()).toContain('flawless')
+    expect(getFailRateFunComparison(1, 0.01).toLowerCase()).not.toContain('flawless')
+  })
+})
+
+describe('buildWeeklyEmailMetadata', () => {
+  it.concurrent('keeps install/fail/success fields consistent', () => {
+    const stats = computeWeeklyInstallStats({
+      all_updates: 90,
+      failed_updates: 10,
+      open_app: 300,
+    })
+    const metadata = buildWeeklyEmailMetadata('com.demo.app', stats, new Date('2026-07-25T00:00:00.000Z'))
+
+    expect(metadata.weekly_updates).toBe('100')
+    expect(metadata.weekly_install).toBe('90')
+    expect(metadata.weekly_fail).toBe('10')
+    expect(metadata.weekly_install_success).toBe('90')
+    expect(metadata.fun_comparison_2.toLowerCase()).not.toContain('flawless')
+  })
+})
+
 describe('getPreviousMonthUtcRange', () => {
   it.concurrent('covers the full previous UTC month with an exclusive end', () => {
     const range = getPreviousMonthUtcRange(new Date('2026-07-25T12:00:00.000Z'))
@@ -119,6 +146,7 @@ describe('sumVersionInstalls', () => {
 
     expect(installs).toBe(30)
     expect(typeof installs).toBe('number')
+    expect(shouldSendDeployInstallStatsEmail(installs)).toBe(true)
   })
 })
 
