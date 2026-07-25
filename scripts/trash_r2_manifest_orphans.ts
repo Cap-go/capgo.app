@@ -1,18 +1,15 @@
 /**
- * Trash R2 manifest orphans listed in .context/r2_manifest_orphans.txt
- * into deleted-after-7-days/, then delete the live key.
+ * Fast orphan cleanup for keys in .context/r2_manifest_orphans.txt
  *
- * Kill-safe / resumable:
- *   - Never truncates the orphan path list
- *   - Per-shard durable done/fail logs (fsync)
- *   - Loads ALL done_* files on resume
- *   - state_*.json + progress logs
+ * DEFAULT MODE=delete — DeleteObjects batches of 1000 (orders of magnitude
+ * faster than per-object copy+delete). Safe for unreferenced orphans.
  *
- * Sharded run (fast):
+ * MODE=trash — old path: copy to deleted-after-7-days/ then delete live key.
+ *
+ * Kill-safe: per-shard done_*.txt (fsync), resume skips done keys.
+ *
  *   bash scripts/run_trash_r2_orphans_sharded.sh
- *
- * Single process:
- *   bun scripts/trash_r2_manifest_orphans.ts
+ *   MODE=trash bash scripts/run_trash_r2_orphans_sharded.sh
  */
 import {
   appendFileSync,
@@ -27,12 +24,14 @@ import {
 } from 'node:fs'
 import { Agent as HttpsAgent } from 'node:https'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
-import { CopyObjectCommand, DeleteObjectCommand, S3Client } from '@aws-sdk/client-s3'
+import { CopyObjectCommand, DeleteObjectCommand, DeleteObjectsCommand, S3Client } from '@aws-sdk/client-s3'
 
 const ENV_FILE = './internal/cloudflare/.env.prod'
 const TRASH_PREFIX = 'deleted-after-7-days/'
 const PATH_LOG = '.context/r2_manifest_orphans.txt'
-const R2_CONCURRENCY = Number(process.env.RECLAIM_R2_CONCURRENCY || 500)
+const MODE = (process.env.MODE || 'delete').toLowerCase() // delete | trash
+const R2_CONCURRENCY = Number(process.env.RECLAIM_R2_CONCURRENCY || (MODE === 'delete' ? 64 : 500))
+const DELETE_BATCH = Number(process.env.RECLAIM_DELETE_BATCH || 1000)
 const SHARD_COUNT = Math.max(1, Number(process.env.SHARD_COUNT || 1))
 const SHARD_INDEX = Math.max(0, Number(process.env.SHARD_INDEX || 0))
 const DONE_LOG = SHARD_COUNT > 1
@@ -47,10 +46,11 @@ const STATE_FILE = SHARD_COUNT > 1
 const PROGRESS_LOG = SHARD_COUNT > 1
   ? `.context/r2_manifest_orphans_progress_${SHARD_INDEX}.log`
   : '.context/r2_manifest_orphans_progress.log'
-const DONE_FLUSH_EVERY = Number(process.env.RECLAIM_DONE_FLUSH || 500)
+const DONE_FLUSH_EVERY = Number(process.env.RECLAIM_DONE_FLUSH || 2000)
 const HEARTBEAT_MS = Number(process.env.RECLAIM_HEARTBEAT_MS || 2000)
 
 type State = {
+  mode: string
   phase: string
   shard: string
   startedAt: string
@@ -58,6 +58,7 @@ type State = {
   totalCandidates: number
   remainingAtStart: number
   processed: number
+  deleted: number
   moved: number
   missing: number
   skippedAlreadyDone: number
@@ -91,12 +92,10 @@ async function loadEnv(filePath: string) {
 
 function ensureContext() {
   mkdirSync('.context', { recursive: true })
-  if (!existsSync(DONE_LOG))
-    writeFileSync(DONE_LOG, '')
-  if (!existsSync(FAIL_LOG))
-    writeFileSync(FAIL_LOG, '')
-  if (!existsSync(PROGRESS_LOG))
-    writeFileSync(PROGRESS_LOG, '')
+  for (const f of [DONE_LOG, FAIL_LOG, PROGRESS_LOG]) {
+    if (!existsSync(f))
+      writeFileSync(f, '')
+  }
 }
 
 function loadLineSet(file: string): Set<string> {
@@ -144,6 +143,13 @@ function logProgress(line: string) {
   appendFileSync(PROGRESS_LOG, `${stamped}\n`)
 }
 
+function chunk<T>(items: T[], size: number): T[][] {
+  const out: T[][] = []
+  for (let i = 0; i < items.length; i += size)
+    out.push(items.slice(i, i + size))
+  return out
+}
+
 async function mapPool<T>(items: T[], concurrency: number, fn: (item: T) => Promise<void>) {
   if (items.length === 0)
     return
@@ -154,6 +160,13 @@ async function mapPool<T>(items: T[], concurrency: number, fn: (item: T) => Prom
       await fn(current)
     }
   }))
+}
+
+function shardHash(path: string): number {
+  let h = 0
+  for (let i = 0; i < path.length; i++)
+    h = (h * 31 + path.charCodeAt(i)) >>> 0
+  return h
 }
 
 async function moveToTrashFast(s3: S3Client, bucket: string, key: string) {
@@ -178,18 +191,32 @@ async function moveToTrashFast(s3: S3Client, bucket: string, key: string) {
   return 'moved' as const
 }
 
-function shardHash(path: string): number {
-  let h = 0
-  for (let i = 0; i < path.length; i++)
-    h = (h * 31 + path.charCodeAt(i)) >>> 0
-  return h
+async function deleteBatch(s3: S3Client, bucket: string, keys: string[]) {
+  if (keys.length === 0)
+    return { deleted: 0, errors: [] as Array<{ key: string, message: string }> }
+  const res = await s3.send(new DeleteObjectsCommand({
+    Bucket: bucket,
+    Delete: {
+      Objects: keys.map(Key => ({ Key })),
+      Quiet: false,
+    },
+  }))
+  const errors = (res.Errors ?? []).map(e => ({
+    key: e.Key || '',
+    message: `${e.Code || 'Error'}: ${e.Message || ''}`,
+  }))
+  const deleted = (res.Deleted?.length ?? 0)
+  // S3 Quiet:false — missing keys often appear in Deleted anyway; treat Errors only as fail
+  return { deleted: deleted || (keys.length - errors.length), errors }
 }
 
 async function main() {
   ensureContext()
-  if (!existsSync(PATH_LOG) || readFileSync(PATH_LOG, 'utf8').trim() === '') {
-    throw new Error(`${PATH_LOG} is empty. Run FIND first.`)
-  }
+  if (!existsSync(PATH_LOG) || readFileSync(PATH_LOG, 'utf8').trim() === '')
+    throw new Error(`${PATH_LOG} empty`)
+
+  if (MODE !== 'delete' && MODE !== 'trash')
+    throw new Error(`MODE must be delete|trash, got ${MODE}`)
 
   const env = await loadEnv(ENV_FILE)
   const bucket = env.S3_BUCKET || 'capgo'
@@ -205,32 +232,33 @@ async function main() {
     requestHandler: new NodeHttpHandler({
       httpsAgent: new HttpsAgent({
         keepAlive: true,
-        maxSockets: R2_CONCURRENCY,
+        maxSockets: Math.max(R2_CONCURRENCY * 2, 128),
         maxFreeSockets: 256,
       }),
       connectionTimeout: 10_000,
-      requestTimeout: 60_000,
+      requestTimeout: 120_000,
     }),
   })
 
-  logProgress(`Loading path/done logs (concurrency=${R2_CONCURRENCY} shard=${SHARD_INDEX}/${SHARD_COUNT})...`)
+  logProgress(`mode=${MODE} concurrency=${R2_CONCURRENCY} shard=${SHARD_INDEX}/${SHARD_COUNT} batch=${DELETE_BATCH}`)
   const done = loadAllDoneSets()
   const all = loadLineSet(PATH_LOG)
   let candidates = [...all].filter(path => !done.has(path) && !path.startsWith(TRASH_PREFIX))
   const skippedAlreadyDone = all.size - candidates.length
-  if (SHARD_COUNT > 1) {
+  if (SHARD_COUNT > 1)
     candidates = candidates.filter(path => (shardHash(path) % SHARD_COUNT) === SHARD_INDEX)
-  }
 
   const startedAtMs = Date.now()
   const state: State = {
-    phase: 'r2-trash',
+    mode: MODE,
+    phase: MODE === 'delete' ? 'r2-delete-batch' : 'r2-trash',
     shard: `${SHARD_INDEX}/${SHARD_COUNT}`,
     startedAt: new Date(startedAtMs).toISOString(),
     updatedAt: new Date().toISOString(),
     totalCandidates: all.size,
     remainingAtStart: candidates.length,
     processed: 0,
+    deleted: 0,
     moved: 0,
     missing: 0,
     skippedAlreadyDone,
@@ -242,12 +270,12 @@ async function main() {
     doneLog: DONE_LOG,
   }
   writeState(state)
-  logProgress(`Ready: unique_paths=${all.size} already_done=${done.size} shard_to_trash=${candidates.length} shard=${SHARD_INDEX}/${SHARD_COUNT}`)
+  logProgress(`Ready: unique=${all.size} done=${done.size} shard_todo=${candidates.length}`)
 
   if (candidates.length === 0) {
     state.phase = 'done'
     writeState(state)
-    logProgress('Nothing left to trash for this shard.')
+    logProgress('Nothing left for this shard.')
     return
   }
 
@@ -257,27 +285,23 @@ async function main() {
   let stopping = false
 
   const flush = () => {
-    if (doneBuf.length) {
-      const chunk = doneBuf.splice(0, doneBuf.length)
-      appendLinesDurable(DONE_LOG, chunk)
-    }
-    if (failBuf.length) {
-      const chunk = failBuf.splice(0, failBuf.length)
-      appendLinesDurable(FAIL_LOG, chunk)
-    }
+    if (doneBuf.length)
+      appendLinesDurable(DONE_LOG, doneBuf.splice(0, doneBuf.length))
+    if (failBuf.length)
+      appendLinesDurable(FAIL_LOG, failBuf.splice(0, failBuf.length))
     lastFlush = Date.now()
   }
 
   const heartbeat = setInterval(() => {
     const elapsedSec = Math.max((Date.now() - startedAtMs) / 1000, 0.001)
-    state.processed = state.moved + state.missing + state.failed
+    state.processed = state.deleted + state.moved + state.missing + state.failed
     state.ratePerSec = Math.round(state.processed / elapsedSec)
-    const left = candidates.length - state.processed
+    const left = Math.max(candidates.length - state.processed, 0)
     state.etaMinutes = state.ratePerSec > 0 ? Math.round((left / state.ratePerSec) / 60) : null
     state.updatedAt = new Date().toISOString()
     writeState(state)
     logProgress(
-      `shard=${SHARD_INDEX}/${SHARD_COUNT} processed=${state.processed}/${candidates.length} moved=${state.moved} missing=${state.missing} failed=${state.failed} rate=${state.ratePerSec}/s eta_min=${state.etaMinutes ?? '?'}`,
+      `shard=${SHARD_INDEX}/${SHARD_COUNT} mode=${MODE} processed=${state.processed}/${candidates.length} deleted=${state.deleted} moved=${state.moved} miss=${state.missing} fail=${state.failed} rate=${state.ratePerSec}/s eta_min=${state.etaMinutes ?? '?'}`,
     )
   }, HEARTBEAT_MS)
   heartbeat.unref?.()
@@ -288,42 +312,80 @@ async function main() {
     if (stopping)
       return
     stopping = true
-    logProgress(`Caught ${signal} — flushing durable done log then exit`)
+    logProgress(`Caught ${signal} — flushing done log`)
     clearInterval(heartbeat)
     flush()
     state.phase = 'interrupted'
     state.updatedAt = new Date().toISOString()
     writeState(state)
-    logProgress('Interrupted safely. Resume: bash scripts/run_trash_r2_orphans_sharded.sh')
+    logProgress('Resume: MODE=delete bash scripts/run_trash_r2_orphans_sharded.sh')
     process.exit(1)
   }
   process.once('SIGINT', onSigInt)
   process.once('SIGTERM', onSigTerm)
 
-  await mapPool(candidates, R2_CONCURRENCY, async (path) => {
-    if (stopping)
-      return
-    try {
-      const result = await moveToTrashFast(s3, bucket, path)
-      if (result === 'moved')
-        state.moved += 1
-      else
-        state.missing += 1
-      doneBuf.push(path)
-    }
-    catch (error: any) {
-      state.failed += 1
-      state.lastError = `${path}: ${error?.message || error}`
-      failBuf.push(`${path}\t${error?.message || error}`)
-      if (state.failed <= 30)
-        logProgress(`FAIL ${path}: ${error?.message || error}`)
-      doneBuf.push(path)
-    }
-    finally {
-      if (doneBuf.length >= DONE_FLUSH_EVERY || Date.now() - lastFlush > 3000)
-        flush()
-    }
-  })
+  if (MODE === 'delete') {
+    const batches = chunk(candidates, DELETE_BATCH)
+    await mapPool(batches, R2_CONCURRENCY, async (keys) => {
+      if (stopping)
+        return
+      try {
+        const result = await deleteBatch(s3, bucket, keys)
+        state.deleted += result.deleted
+        const errKeys = new Set(result.errors.map(e => e.key))
+        for (const key of keys) {
+          if (!errKeys.has(key))
+            doneBuf.push(key)
+        }
+        for (const err of result.errors) {
+          state.failed += 1
+          failBuf.push(`${err.key}\t${err.message}`)
+          doneBuf.push(err.key) // don't infinite loop
+          if (state.failed <= 40)
+            logProgress(`FAIL ${err.key}: ${err.message}`)
+        }
+      }
+      catch (error: any) {
+        state.failed += keys.length
+        state.lastError = error?.message || String(error)
+        for (const key of keys) {
+          failBuf.push(`${key}\t${error?.message || error}`)
+          doneBuf.push(key)
+        }
+        if (state.failed <= 40)
+          logProgress(`BATCH FAIL n=${keys.length}: ${error?.message || error}`)
+      }
+      finally {
+        if (doneBuf.length >= DONE_FLUSH_EVERY || Date.now() - lastFlush > 2000)
+          flush()
+      }
+    })
+  }
+  else {
+    await mapPool(candidates, R2_CONCURRENCY, async (path) => {
+      if (stopping)
+        return
+      try {
+        const result = await moveToTrashFast(s3, bucket, path)
+        if (result === 'moved')
+          state.moved += 1
+        else
+          state.missing += 1
+        doneBuf.push(path)
+      }
+      catch (error: any) {
+        state.failed += 1
+        failBuf.push(`${path}\t${error?.message || error}`)
+        doneBuf.push(path)
+        if (state.failed <= 40)
+          logProgress(`FAIL ${path}: ${error?.message || error}`)
+      }
+      finally {
+        if (doneBuf.length >= DONE_FLUSH_EVERY || Date.now() - lastFlush > 2000)
+          flush()
+      }
+    })
+  }
 
   flush()
   clearInterval(heartbeat)
@@ -331,13 +393,13 @@ async function main() {
   process.off('SIGTERM', onSigTerm)
 
   state.phase = 'done'
-  state.processed = state.moved + state.missing + state.failed
+  state.processed = state.deleted + state.moved + state.missing + state.failed
   state.ratePerSec = Math.round(state.processed / Math.max((Date.now() - startedAtMs) / 1000, 0.001))
   state.etaMinutes = 0
   state.updatedAt = new Date().toISOString()
   writeState(state)
   logProgress(
-    `DONE shard=${SHARD_INDEX}/${SHARD_COUNT} moved=${state.moved} missing=${state.missing} failed=${state.failed} elapsed_min=${((Date.now() - startedAtMs) / 60000).toFixed(2)} rate=${state.ratePerSec}/s`,
+    `DONE shard=${SHARD_INDEX}/${SHARD_COUNT} mode=${MODE} deleted=${state.deleted} moved=${state.moved} miss=${state.missing} fail=${state.failed} elapsed_min=${((Date.now() - startedAtMs) / 60000).toFixed(2)} rate=${state.ratePerSec}/s`,
   )
   if (state.failed > 0)
     process.exitCode = 2

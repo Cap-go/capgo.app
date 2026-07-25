@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
-SHARDS="${SHARD_COUNT:-6}"
-CONC="${RECLAIM_R2_CONCURRENCY:-500}"
+# Fast default: batched DeleteObjects. Use MODE=trash for copy-to-lifecycle-prefix.
+MODE="${MODE:-delete}"
+SHARDS="${SHARD_COUNT:-8}"
+if [[ "$MODE" == "delete" ]]; then
+  CONC="${RECLAIM_R2_CONCURRENCY:-64}"
+else
+  CONC="${RECLAIM_R2_CONCURRENCY:-500}"
+fi
 mkdir -p .context
-echo "Starting ${SHARDS} trash shards @ concurrency ${CONC} each"
+echo "Starting ${SHARDS} shards mode=${MODE} concurrency=${CONC}"
 pids=()
 for i in $(seq 0 $((SHARDS - 1))); do
-  SHARD_COUNT="$SHARDS" SHARD_INDEX="$i" RECLAIM_R2_CONCURRENCY="$CONC" \
+  MODE="$MODE" SHARD_COUNT="$SHARDS" SHARD_INDEX="$i" RECLAIM_R2_CONCURRENCY="$CONC" \
     bun scripts/trash_r2_manifest_orphans.ts \
     >".context/r2_manifest_orphans_shard_${i}.log" 2>&1 &
   pids+=("$!")
@@ -22,23 +28,22 @@ while true; do
   done_n=0
   for f in .context/r2_manifest_orphans_done.txt .context/r2_manifest_orphans_done_*.txt; do
     [[ -f "$f" ]] || continue
-    n=$(wc -l < "$f" | tr -d ' ')
+    n=$(wc -l < "$f" | tr -d " ")
     done_n=$((done_n + n))
   done
   fail_n=0
   for f in .context/r2_manifest_orphans_failed.txt .context/r2_manifest_orphans_failed_*.txt; do
     [[ -f "$f" ]] || continue
-    n=$(wc -l < "$f" | tr -d ' ')
+    n=$(wc -l < "$f" | tr -d " ")
     fail_n=$((fail_n + n))
   done
   ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  line="[$ts] shards_alive=${alive}/${SHARDS} done_lines=${done_n} fail_lines=${fail_n}"
-  echo "$line" | tee -a .context/r2_manifest_orphans_progress.log
+  echo "[$ts] mode=${MODE} shards_alive=${alive}/${SHARDS} done_lines=${done_n} fail_lines=${fail_n}" | tee -a .context/r2_manifest_orphans_progress.log
   if [[ "$alive" -eq 0 ]]; then
     echo "[$ts] all shards finished" | tee -a .context/r2_manifest_orphans_progress.log
     break
   fi
-  sleep 5
+  sleep 3
 done
 
 status=0
