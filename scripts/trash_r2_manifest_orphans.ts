@@ -1,21 +1,18 @@
 /**
- * Trash R2 manifest orphans already listed in .context/r2_manifest_orphans.txt
- * (keys not referenced by live public.manifest).
+ * Trash R2 manifest orphans listed in .context/r2_manifest_orphans.txt
+ * into deleted-after-7-days/, then delete the live key.
  *
  * Kill-safe / resumable:
  *   - Never truncates the orphan path list
- *   - Appends finished keys to .context/r2_manifest_orphans_done.txt (fsync)
- *   - Writes .context/r2_manifest_orphans_state.json every heartbeat
- *   - On restart, skips keys already in the done log
+ *   - Per-shard durable done/fail logs (fsync)
+ *   - Loads ALL done_* files on resume
+ *   - state_*.json + progress logs
  *
- * Fast path:
- *   - No HEAD
- *   - Copy → deleted-after-7-days/ then DeleteObject
- *   - High concurrency + keep-alive sockets
+ * Sharded run (fast):
+ *   bash scripts/run_trash_r2_orphans_sharded.sh
  *
- * Usage:
+ * Single process:
  *   bun scripts/trash_r2_manifest_orphans.ts
- *   RECLAIM_R2_CONCURRENCY=800 bun scripts/trash_r2_manifest_orphans.ts
  */
 import {
   appendFileSync,
@@ -35,18 +32,27 @@ import { CopyObjectCommand, DeleteObjectCommand, S3Client } from '@aws-sdk/clien
 const ENV_FILE = './internal/cloudflare/.env.prod'
 const TRASH_PREFIX = 'deleted-after-7-days/'
 const PATH_LOG = '.context/r2_manifest_orphans.txt'
-const DONE_LOG = '.context/r2_manifest_orphans_done.txt'
-const FAIL_LOG = '.context/r2_manifest_orphans_failed.txt'
-const STATE_FILE = process.env.SHARD_COUNT && Number(process.env.SHARD_COUNT) > 1
-  ? `.context/r2_manifest_orphans_state_${process.env.SHARD_INDEX || 0}.json`
-  : '.context/r2_manifest_orphans_state.json'
-const PROGRESS_LOG = '.context/r2_manifest_orphans_progress.log'
 const R2_CONCURRENCY = Number(process.env.RECLAIM_R2_CONCURRENCY || 500)
+const SHARD_COUNT = Math.max(1, Number(process.env.SHARD_COUNT || 1))
+const SHARD_INDEX = Math.max(0, Number(process.env.SHARD_INDEX || 0))
+const DONE_LOG = SHARD_COUNT > 1
+  ? `.context/r2_manifest_orphans_done_${SHARD_INDEX}.txt`
+  : '.context/r2_manifest_orphans_done.txt'
+const FAIL_LOG = SHARD_COUNT > 1
+  ? `.context/r2_manifest_orphans_failed_${SHARD_INDEX}.txt`
+  : '.context/r2_manifest_orphans_failed.txt'
+const STATE_FILE = SHARD_COUNT > 1
+  ? `.context/r2_manifest_orphans_state_${SHARD_INDEX}.json`
+  : '.context/r2_manifest_orphans_state.json'
+const PROGRESS_LOG = SHARD_COUNT > 1
+  ? `.context/r2_manifest_orphans_progress_${SHARD_INDEX}.log`
+  : '.context/r2_manifest_orphans_progress.log'
 const DONE_FLUSH_EVERY = Number(process.env.RECLAIM_DONE_FLUSH || 500)
 const HEARTBEAT_MS = Number(process.env.RECLAIM_HEARTBEAT_MS || 2000)
 
 type State = {
   phase: string
+  shard: string
   startedAt: string
   updatedAt: string
   totalCandidates: number
@@ -106,7 +112,6 @@ function loadLineSet(file: string): Set<string> {
 
 function loadAllDoneSets(): Set<string> {
   const set = loadLineSet('.context/r2_manifest_orphans_done.txt')
-  // merge any shard done files
   for (const name of readdirSync('.context')) {
     if (name.startsWith('r2_manifest_orphans_done_') && name.endsWith('.txt')) {
       for (const line of loadLineSet(`.context/${name}`))
@@ -173,10 +178,17 @@ async function moveToTrashFast(s3: S3Client, bucket: string, key: string) {
   return 'moved' as const
 }
 
+function shardHash(path: string): number {
+  let h = 0
+  for (let i = 0; i < path.length; i++)
+    h = (h * 31 + path.charCodeAt(i)) >>> 0
+  return h
+}
+
 async function main() {
   ensureContext()
   if (!existsSync(PATH_LOG) || readFileSync(PATH_LOG, 'utf8').trim() === '') {
-    throw new Error(`${PATH_LOG} is empty. Run FIND first (FIND_ONLY=1 bun scripts/find_and_trash_r2_manifest_orphans.ts) without wiping the log.`)
+    throw new Error(`${PATH_LOG} is empty. Run FIND first.`)
   }
 
   const env = await loadEnv(ENV_FILE)
@@ -203,21 +215,17 @@ async function main() {
 
   logProgress(`Loading path/done logs (concurrency=${R2_CONCURRENCY} shard=${SHARD_INDEX}/${SHARD_COUNT})...`)
   const done = loadAllDoneSets()
-  const all = loadLineSet(PATH_LOG) // dedupe
+  const all = loadLineSet(PATH_LOG)
   let candidates = [...all].filter(path => !done.has(path) && !path.startsWith(TRASH_PREFIX))
   const skippedAlreadyDone = all.size - candidates.length
   if (SHARD_COUNT > 1) {
-    candidates = candidates.filter((path) => {
-      let h = 0
-      for (let i = 0; i < path.length; i++)
-        h = (h * 31 + path.charCodeAt(i)) >>> 0
-      return (h % SHARD_COUNT) === SHARD_INDEX
-    })
+    candidates = candidates.filter(path => (shardHash(path) % SHARD_COUNT) === SHARD_INDEX)
   }
 
   const startedAtMs = Date.now()
   const state: State = {
     phase: 'r2-trash',
+    shard: `${SHARD_INDEX}/${SHARD_COUNT}`,
     startedAt: new Date(startedAtMs).toISOString(),
     updatedAt: new Date().toISOString(),
     totalCandidates: all.size,
@@ -234,12 +242,12 @@ async function main() {
     doneLog: DONE_LOG,
   }
   writeState(state)
-
   logProgress(`Ready: unique_paths=${all.size} already_done=${done.size} shard_to_trash=${candidates.length} shard=${SHARD_INDEX}/${SHARD_COUNT}`)
+
   if (candidates.length === 0) {
     state.phase = 'done'
     writeState(state)
-    logProgress('Nothing left to trash.')
+    logProgress('Nothing left to trash for this shard.')
     return
   }
 
@@ -269,7 +277,7 @@ async function main() {
     state.updatedAt = new Date().toISOString()
     writeState(state)
     logProgress(
-      `phase=${state.phase} processed=${state.processed}/${candidates.length} moved=${state.moved} missing=${state.missing} failed=${state.failed} rate=${state.ratePerSec}/s eta_min=${state.etaMinutes ?? '?'}`,
+      `shard=${SHARD_INDEX}/${SHARD_COUNT} processed=${state.processed}/${candidates.length} moved=${state.moved} missing=${state.missing} failed=${state.failed} rate=${state.ratePerSec}/s eta_min=${state.etaMinutes ?? '?'}`,
     )
   }, HEARTBEAT_MS)
   heartbeat.unref?.()
@@ -286,7 +294,7 @@ async function main() {
     state.phase = 'interrupted'
     state.updatedAt = new Date().toISOString()
     writeState(state)
-    logProgress(`Interrupted safely. Resume with: bun scripts/trash_r2_manifest_orphans.ts`)
+    logProgress('Interrupted safely. Resume: bash scripts/run_trash_r2_orphans_sharded.sh')
     process.exit(1)
   }
   process.once('SIGINT', onSigInt)
@@ -309,7 +317,6 @@ async function main() {
       failBuf.push(`${path}\t${error?.message || error}`)
       if (state.failed <= 30)
         logProgress(`FAIL ${path}: ${error?.message || error}`)
-      // still mark done so we don't infinite-loop poison keys; they stay in FAIL_LOG
       doneBuf.push(path)
     }
     finally {
@@ -329,9 +336,8 @@ async function main() {
   state.etaMinutes = 0
   state.updatedAt = new Date().toISOString()
   writeState(state)
-
   logProgress(
-    `DONE moved=${state.moved} missing=${state.missing} failed=${state.failed} elapsed_min=${((Date.now() - startedAtMs) / 60000).toFixed(2)} rate=${state.ratePerSec}/s`,
+    `DONE shard=${SHARD_INDEX}/${SHARD_COUNT} moved=${state.moved} missing=${state.missing} failed=${state.failed} elapsed_min=${((Date.now() - startedAtMs) / 60000).toFixed(2)} rate=${state.ratePerSec}/s`,
   )
   if (state.failed > 0)
     process.exitCode = 2
