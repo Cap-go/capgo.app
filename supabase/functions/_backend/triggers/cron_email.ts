@@ -378,6 +378,42 @@ function formatNumber(num: number): string {
   return num.toLocaleString('en-US')
 }
 
+/** Calendar date (YYYY-MM-DD) from a timestamptz/ISO string without TZ day-shift. */
+function toDateOnlyUtc(value: string): string {
+  const match = /^(\d{4}-\d{2}-\d{2})/.exec(value)
+  if (match)
+    return match[1]
+  return new Date(value).toISOString().slice(0, 10)
+}
+
+/** Shift a YYYY-MM-DD date by N days in UTC. */
+function addDaysToDateOnly(dateOnly: string, days: number): string {
+  const date = new Date(`${dateOnly}T00:00:00.000Z`)
+  date.setUTCDate(date.getUTCDate() + days)
+  return date.toISOString().slice(0, 10)
+}
+
+/**
+ * Billing cycles are half-open [start, end).
+ * get_total_metrics uses inclusive BETWEEN, so the metrics end date is end - 1 day.
+ */
+function billingPeriodMetricsRange(cycleStart: string, cycleEnd: string): {
+  periodStart: string
+  periodEndExclusive: string
+  metricsEndInclusive: string
+} {
+  const periodStart = toDateOnlyUtc(cycleStart)
+  const periodEndExclusive = toDateOnlyUtc(cycleEnd)
+  const metricsEndInclusive = addDaysToDateOnly(periodEndExclusive, -1)
+  return { periodStart, periodEndExclusive, metricsEndInclusive }
+}
+
+export const billingPeriodStatsTestUtils = {
+  toDateOnlyUtc,
+  addDaysToDateOnly,
+  billingPeriodMetricsRange,
+}
+
 async function handleBillingPeriodStats(c: Context, _email: string, orgId: string, cycleStart?: string, cycleEnd?: string) {
   const supabase = await supabaseAdmin(c)
 
@@ -394,16 +430,16 @@ async function handleBillingPeriodStats(c: Context, _email: string, orgId: strin
 
   // Use cycle dates passed from the SQL function if available,
   // otherwise fall back to get_cycle_info_org (for backwards compatibility)
-  let startDate: string
-  let endDate: string
+  let periodStart: string
+  let periodEndExclusive: string
+  let metricsEndInclusive: string
 
   if (cycleStart && cycleEnd) {
-    // Use dates passed from the SQL function (guaranteed to be the completed billing period)
-    startDate = new Date(cycleStart).toISOString().split('T')[0]
-    endDate = new Date(cycleEnd).toISOString().split('T')[0]
+    // Completed billing period from SQL: [cycleStart, cycleEnd)
+    ;({ periodStart, periodEndExclusive, metricsEndInclusive } = billingPeriodMetricsRange(cycleStart, cycleEnd))
   }
   else {
-    // Fallback: get cycle info from RPC
+    // Fallback: get cycle info from RPC (current cycle, same half-open bounds)
     const { data: cycleInfo, error: cycleError } = await supabase
       .rpc('get_cycle_info_org', { orgid: orgId })
       .single()
@@ -413,16 +449,27 @@ async function handleBillingPeriodStats(c: Context, _email: string, orgId: strin
       throw simpleError('cannot_get_cycle_info', 'Cannot get cycle info', { error: cycleError })
     }
 
-    startDate = new Date(cycleInfo.subscription_anchor_start).toISOString().split('T')[0]
-    endDate = new Date(cycleInfo.subscription_anchor_end).toISOString().split('T')[0]
+    ;({ periodStart, periodEndExclusive, metricsEndInclusive } = billingPeriodMetricsRange(
+      cycleInfo.subscription_anchor_start,
+      cycleInfo.subscription_anchor_end,
+    ))
   }
 
-  // Get total metrics for the billing period
+  // Guard against inverted/empty ranges (e.g. bad payloads)
+  if (metricsEndInclusive < periodStart) {
+    throw simpleError('invalid_billing_period', 'Invalid billing period dates', {
+      periodStart,
+      periodEndExclusive,
+      metricsEndInclusive,
+    })
+  }
+
+  // Get total metrics for the completed billing period days
   const { data: metrics, error: metricsError } = await supabase
     .rpc('get_total_metrics', {
       org_id: orgId,
-      start_date: startDate,
-      end_date: endDate,
+      start_date: periodStart,
+      end_date: metricsEndInclusive,
     })
     .single()
 
@@ -431,17 +478,22 @@ async function handleBillingPeriodStats(c: Context, _email: string, orgId: strin
     throw simpleError('cannot_get_metrics', 'Cannot get metrics', { error: metricsError })
   }
 
-  // Get credits used in the billing period
+  // Sum credits in [periodStart, periodEndExclusive) without PostgREST row limits
   let creditsUsed = 0
-  const { data: credits } = await supabase
-    .from('usage_credit_consumptions')
-    .select('credits_used')
-    .eq('org_id', orgId)
-    .gte('applied_at', startDate)
-    .lt('applied_at', endDate)
+  const { data: creditsSum, error: creditsError } = await (supabase.rpc as any)(
+    'get_org_credits_used_in_period',
+    {
+      p_org_id: orgId,
+      p_start: `${periodStart}T00:00:00.000Z`,
+      p_end: `${periodEndExclusive}T00:00:00.000Z`,
+    },
+  )
 
-  if (credits) {
-    creditsUsed = credits.reduce((sum, row) => sum + Number(row.credits_used || 0), 0)
+  if (creditsError) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Cannot get credits used', error: creditsError, metadata: { orgId } })
+  }
+  else {
+    creditsUsed = Number(creditsSum || 0)
   }
 
   // Format the metrics for the email
@@ -526,15 +578,17 @@ async function handleBillingPeriodStats(c: Context, _email: string, orgId: strin
     monthly_active_users: formatNumber(mau),
     bandwidth_used: formatBytes(bandwidth),
     storage_used: formatBytes(storage),
+    build_time_used: formatNumber(buildTimeUnit),
     credits_used: formatNumber(Math.round(creditsUsed * 100) / 100),
     // Raw values for potential use in email templates
     mau_raw: mau.toString(),
     bandwidth_raw: bandwidth.toString(),
     storage_raw: storage.toString(),
+    build_time_raw: buildTimeUnit.toString(),
     credits_raw: creditsUsed.toString(),
-    // Include period dates for context
-    period_start: startDate,
-    period_end: endDate,
+    // Include period dates for context (half-open [start, end))
+    period_start: periodStart,
+    period_end: periodEndExclusive,
     // Plan information
     current_plan: currentPlanName,
     recommended_plan: recommendedPlan,
@@ -547,6 +601,7 @@ async function handleBillingPeriodStats(c: Context, _email: string, orgId: strin
     mau_percent: mauPercent.toString(),
     bandwidth_percent: bandwidthPercent.toString(),
     storage_percent: storagePercent.toString(),
+    build_time_percent: buildTimePercent.toString(),
     max_usage_percent: maxUsagePercent.toString(),
   }
 
