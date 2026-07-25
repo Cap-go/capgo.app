@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(22);
+SELECT plan(21);
 
 SELECT tests.authenticate_as_service_role();
 
