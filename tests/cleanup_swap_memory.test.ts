@@ -184,7 +184,124 @@ describe('swap memory cleanup functions', () => {
     await executeSQL(`DELETE FROM public.apps WHERE app_id = $1`, [appId])
   })
 
-  it('null_migrated_app_version_manifests skips partially migrated arrays', async () => {
+  async function seedAuditAppVersion(appId: string, orgId: string) {
+    await executeSQL(
+      `INSERT INTO public.apps (app_id, name, icon_url, owner_org)
+       VALUES ($1, 'swap-audit-skip', '', $2::uuid)`,
+      [appId, orgId],
+    )
+    const versionRows = await executeSQL(
+      `INSERT INTO public.app_versions (app_id, name, owner_org, storage_provider, comment)
+       VALUES ($1, $2, $3::uuid, 'r2-direct', 'seed')
+       RETURNING id`,
+      [appId, `1.0.0-${randomUUID().slice(0, 8)}`, orgId],
+    )
+    return versionRows[0]?.id as number
+  }
+
+  async function clearVersionAudits(versionId: number) {
+    await executeSQL(
+      `DELETE FROM public.audit_logs
+       WHERE table_name = 'app_versions' AND record_id = $1`,
+      [String(versionId)],
+    )
+  }
+
+  it('audit_log_trigger skips dual-storage migrate finalize', async () => {
+    const appId = `com.swap.auditskip.${randomUUID().slice(0, 8)}`
+    const orgId = (await executeSQL(`SELECT id FROM public.orgs ORDER BY created_at LIMIT 1`))[0]?.id as string
+    const versionId = await seedAuditAppVersion(appId, orgId)
+
+    await executeSQL(
+      `UPDATE public.app_versions
+       SET manifest = ARRAY[ROW('a.js', 'apps/a.js', 'hash')::public.manifest_entry]
+       WHERE id = $1`,
+      [versionId],
+    )
+    await clearVersionAudits(versionId)
+
+    await executeSQL(
+      `INSERT INTO public.manifest (app_version_id, file_name, s3_path, file_hash)
+       VALUES ($1, 'a.js', 'apps/a.js', 'hash')`,
+      [versionId],
+    )
+    await executeSQL(
+      `UPDATE public.app_versions
+       SET manifest = NULL, manifest_count = 1, updated_at = now()
+       WHERE id = $1`,
+      [versionId],
+    )
+
+    const logs = await executeSQL(
+      `SELECT id FROM public.audit_logs
+       WHERE table_name = 'app_versions' AND record_id = $1 AND operation = 'UPDATE'`,
+      [String(versionId)],
+    )
+    expect(logs).toHaveLength(0)
+
+    await executeSQL(`DELETE FROM public.manifest WHERE app_version_id = $1`, [versionId])
+    await executeSQL(`DELETE FROM public.app_versions WHERE id = $1`, [versionId])
+    await executeSQL(`DELETE FROM public.apps WHERE app_id = $1`, [appId])
+  })
+
+  it('audit_log_trigger skips r2_path and storage_provider bookkeeping', async () => {
+    const appId = `com.swap.auditpath.${randomUUID().slice(0, 8)}`
+    const orgId = (await executeSQL(`SELECT id FROM public.orgs ORDER BY created_at LIMIT 1`))[0]?.id as string
+    const versionId = await seedAuditAppVersion(appId, orgId)
+    await clearVersionAudits(versionId)
+
+    await executeSQL(
+      `UPDATE public.app_versions
+       SET r2_path = 'apps/test/bundle.zip', updated_at = now()
+       WHERE id = $1`,
+      [versionId],
+    )
+    await executeSQL(
+      `UPDATE public.app_versions
+       SET storage_provider = 'r2', updated_at = now()
+       WHERE id = $1`,
+      [versionId],
+    )
+
+    const logs = await executeSQL(
+      `SELECT id, changed_fields FROM public.audit_logs
+       WHERE table_name = 'app_versions' AND record_id = $1 AND operation = 'UPDATE'`,
+      [String(versionId)],
+    )
+    expect(logs).toHaveLength(0)
+
+    await executeSQL(`DELETE FROM public.app_versions WHERE id = $1`, [versionId])
+    await executeSQL(`DELETE FROM public.apps WHERE app_id = $1`, [appId])
+  })
+
+  it('audit_log_trigger still records soft-delete', async () => {
+    const appId = `com.swap.auditdel.${randomUUID().slice(0, 8)}`
+    const orgId = (await executeSQL(`SELECT id FROM public.orgs ORDER BY created_at LIMIT 1`))[0]?.id as string
+    const versionId = await seedAuditAppVersion(appId, orgId)
+    await clearVersionAudits(versionId)
+
+    await executeSQL(
+      `UPDATE public.app_versions
+       SET deleted = true, deleted_at = now(), updated_at = now()
+       WHERE id = $1`,
+      [versionId],
+    )
+
+    const logs = await executeSQL(
+      `SELECT changed_fields FROM public.audit_logs
+       WHERE table_name = 'app_versions' AND record_id = $1 AND operation = 'UPDATE'
+       ORDER BY id DESC LIMIT 1`,
+      [String(versionId)],
+    )
+    expect(logs).toHaveLength(1)
+    expect(logs[0]?.changed_fields).toContain('deleted')
+
+    await executeSQL(`DELETE FROM public.audit_logs WHERE record_id = $1 AND table_name = 'app_versions'`, [String(versionId)])
+    await executeSQL(`DELETE FROM public.app_versions WHERE id = $1`, [versionId])
+    await executeSQL(`DELETE FROM public.apps WHERE app_id = $1`, [appId])
+  })
+
+  it('null_migrated_app_version_manifests skips partially migrated arrays, async () => {
     const appId = `com.swap.partialmanifest.${randomUUID().slice(0, 8)}`
     const orgRows = await executeSQL(
       `SELECT id FROM public.orgs ORDER BY created_at LIMIT 1`,
