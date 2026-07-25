@@ -2492,7 +2492,22 @@ DECLARE
   bundle_was_ready boolean;
 BEGIN
   IF TG_OP = 'UPDATE' THEN
-    -- Never drop the only copy of legacy file metadata, ready or not.
+    IF pg_catalog.current_setting('capgo.reclaim_manifest_null', true) = 'on'
+      AND NEW.manifest IS NULL
+      AND OLD.manifest IS NOT NULL
+      AND NEW.native_packages IS NOT DISTINCT FROM OLD.native_packages
+      AND NEW.name IS NOT DISTINCT FROM OLD.name
+      AND NEW.app_id IS NOT DISTINCT FROM OLD.app_id
+      AND NEW.session_key IS NOT DISTINCT FROM OLD.session_key
+      AND NEW.key_id IS NOT DISTINCT FROM OLD.key_id
+      AND NEW.storage_provider IS NOT DISTINCT FROM OLD.storage_provider
+      AND NEW.r2_path IS NOT DISTINCT FROM OLD.r2_path
+      AND NEW.external_url IS NOT DISTINCT FROM OLD.external_url
+      AND NEW.checksum IS NOT DISTINCT FROM OLD.checksum
+    THEN
+      RETURN NEW;
+    END IF;
+
     IF NEW.manifest IS NULL
       AND OLD.manifest IS NOT NULL
       AND EXISTS (
@@ -2502,7 +2517,6 @@ BEGIN
           SELECT 1
           FROM public.manifest AS m
           WHERE m.app_version_id = OLD.id
-            -- Match stable identity; file_name may have been normalized at migrate time.
             AND m.s3_path = entry.s3_path
             AND m.file_hash = entry.file_hash
         )
@@ -2515,9 +2529,6 @@ BEGIN
 
     bundle_was_ready := OLD.storage_provider IS DISTINCT FROM 'r2-direct';
 
-    -- Nulling a fully migrated dual-storage manifest array is allowed after upload.
-    -- native_packages remains locked (compatibility metadata has no table copy).
-    -- Rewriting non-null manifest content stays locked.
     IF bundle_was_ready
       AND (
         NEW.name IS DISTINCT FROM OLD.name
@@ -2529,7 +2540,6 @@ BEGIN
         OR NEW.external_url IS DISTINCT FROM OLD.external_url
         OR NEW.checksum IS DISTINCT FROM OLD.checksum
         OR (NEW.manifest IS DISTINCT FROM OLD.manifest AND NEW.manifest IS NOT NULL)
-        -- Nulling is allowed only when public.manifest has every expected entry.
         OR (
           NEW.manifest IS NULL
           AND OLD.manifest IS NOT NULL
@@ -2540,7 +2550,6 @@ BEGIN
               SELECT 1
               FROM public.manifest AS m
               WHERE m.app_version_id = OLD.id
-                -- Match stable identity; file_name may have been normalized at migrate time.
                 AND m.s3_path = entry.s3_path
                 AND m.file_hash = entry.file_hash
             )
@@ -2565,9 +2574,6 @@ BEGIN
     END IF;
   END IF;
 
-  -- Fully migrated dual-storage nulling must not re-run encryption enforcement.
-  -- Incomplete nulling (still missing public.manifest rows) must not bypass checks,
-  -- including for in-progress r2-direct uploads.
   IF TG_OP = 'UPDATE'
     AND NEW.session_key IS NOT DISTINCT FROM OLD.session_key
     AND NEW.key_id IS NOT DISTINCT FROM OLD.key_id
@@ -2590,7 +2596,6 @@ BEGIN
             SELECT 1
             FROM public.manifest AS m
             WHERE m.app_version_id = OLD.id
-              -- Match stable identity; file_name may have been normalized at migrate time.
               AND m.s3_path = entry.s3_path
               AND m.file_hash = entry.file_hash
           )
@@ -2601,8 +2606,6 @@ BEGIN
     RETURN NEW;
   END IF;
 
-  -- Derive org_id from NEW.app_id first because
-  -- force_valid_owner_org_app_versions runs after this trigger.
   SELECT apps.owner_org INTO org_id
   FROM public.apps
   WHERE apps.app_id = NEW.app_id;
@@ -2611,7 +2614,6 @@ BEGIN
     org_id := NEW.owner_org;
   END IF;
 
-  -- If org not found, allow the existing foreign-key/owner checks to fail.
   IF org_id IS NULL THEN
     RETURN NEW;
   END IF;
@@ -2660,7 +2662,6 @@ BEGIN
         || 'a key_id.';
     END IF;
 
-    -- key_id is 20 chars and required_encryption_key may be 20 or 21 chars.
     IF NOT (
       bundle_key_id = pg_catalog.left(org_required_key, 20)
       OR pg_catalog.left(bundle_key_id, pg_catalog.length(org_required_key)) = org_required_key
@@ -3637,7 +3638,7 @@ $$;
 ALTER FUNCTION "public"."cleanup_net_http_response"() OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."cleanup_old_audit_logs"("max_batches" integer DEFAULT 40, "batch_size" integer DEFAULT 5000) RETURNS "void"
+CREATE OR REPLACE FUNCTION "public"."cleanup_old_audit_logs"("max_batches" integer DEFAULT 1000000, "batch_size" integer DEFAULT 1000, "max_runtime_ms" integer DEFAULT 60000) RETURNS "void"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
@@ -3646,18 +3647,24 @@ DECLARE
   batch_no integer := 0;
   deleted_batch integer;
   deleted_total bigint := 0;
-  v_max_batches integer := GREATEST(1, COALESCE(max_batches, 40));
-  v_batch_size integer := GREATEST(1, COALESCE(batch_size, 5000));
+  v_max_batches integer := GREATEST(1, COALESCE(max_batches, 1000000));
+  v_batch_size integer := GREATEST(1, COALESCE(batch_size, 1000));
+  v_max_runtime_ms integer := GREATEST(1000, COALESCE(max_runtime_ms, 60000));
+  started_at timestamptz := pg_catalog.clock_timestamp();
 BEGIN
+  PERFORM pg_catalog.set_config('statement_timeout', '0', true);
+
   LOOP
     batch_no := batch_no + 1;
     EXIT WHEN batch_no > v_max_batches;
+    EXIT WHEN (EXTRACT(EPOCH FROM (pg_catalog.clock_timestamp() - started_at)) * 1000) >= v_max_runtime_ms;
 
     DELETE FROM public.audit_logs
     WHERE ctid IN (
       SELECT ctid
       FROM public.audit_logs
       WHERE created_at < cutoff
+      ORDER BY created_at
       LIMIT v_batch_size
     );
 
@@ -3667,16 +3674,18 @@ BEGIN
   END LOOP;
 
   RAISE NOTICE
-    'cleanup_old_audit_logs: deleted=% batches=%/% batch_size=%',
+    'cleanup_old_audit_logs: deleted=% batches=%/% batch_size=% runtime_ms=% budget_ms=%',
     deleted_total,
-    batch_no,
+    LEAST(batch_no, v_max_batches),
     v_max_batches,
-    v_batch_size;
+    v_batch_size,
+    (EXTRACT(EPOCH FROM (pg_catalog.clock_timestamp() - started_at)) * 1000)::bigint,
+    v_max_runtime_ms;
 END;
 $$;
 
 
-ALTER FUNCTION "public"."cleanup_old_audit_logs"("max_batches" integer, "batch_size" integer) OWNER TO "postgres";
+ALTER FUNCTION "public"."cleanup_old_audit_logs"("max_batches" integer, "batch_size" integer, "max_runtime_ms" integer) OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."cleanup_old_channel_devices"() RETURNS "void"
@@ -3758,7 +3767,7 @@ $$;
 ALTER FUNCTION "public"."cleanup_onboarding_app_data_on_complete"() OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."cleanup_queue_messages"("max_batches_total" integer DEFAULT 40, "batch_size" integer DEFAULT 10000) RETURNS "void"
+CREATE OR REPLACE FUNCTION "public"."cleanup_queue_messages"("max_batches_total" integer DEFAULT 1000000, "batch_size" integer DEFAULT 5000, "max_runtime_ms" integer DEFAULT 60000) RETURNS "void"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
     AS $_$
@@ -3772,17 +3781,31 @@ DECLARE
   did_work boolean;
   archive_rel regclass;
   queue_rel regclass;
-  v_max_batches integer := GREATEST(1, COALESCE(max_batches_total, 40));
-  v_batch_size integer := GREATEST(1, COALESCE(batch_size, 10000));
+  v_max_batches integer := GREATEST(1, COALESCE(max_batches_total, 1000000));
+  v_batch_size integer := GREATEST(1, COALESCE(batch_size, 5000));
+  v_max_runtime_ms integer := GREATEST(1000, COALESCE(max_runtime_ms, 60000));
+  started_at timestamptz := pg_catalog.clock_timestamp();
 BEGIN
+  PERFORM pg_catalog.set_config('statement_timeout', '0', true);
+
   LOOP
     EXIT WHEN batches_used >= v_max_batches;
+    EXIT WHEN (EXTRACT(EPOCH FROM (pg_catalog.clock_timestamp() - started_at)) * 1000) >= v_max_runtime_ms;
     did_work := false;
 
     FOR queue_name IN (
-      SELECT q.queue_name FROM pgmq.list_queues() q
+      SELECT q.queue_name
+      FROM pgmq.list_queues() q
+      ORDER BY COALESCE(
+        pg_catalog.pg_total_relation_size(
+          to_regclass(pg_catalog.format('pgmq.a_%I', q.queue_name))
+        ),
+        0
+      ) DESC,
+      q.queue_name
     ) LOOP
       EXIT WHEN batches_used >= v_max_batches;
+      EXIT WHEN (EXTRACT(EPOCH FROM (pg_catalog.clock_timestamp() - started_at)) * 1000) >= v_max_runtime_ms;
 
       archive_rel := to_regclass(pg_catalog.format('pgmq.a_%I', queue_name));
       queue_rel := to_regclass(pg_catalog.format('pgmq.q_%I', queue_name));
@@ -3809,9 +3832,8 @@ BEGIN
         END IF;
       END IF;
 
-      IF batches_used >= v_max_batches THEN
-        EXIT;
-      END IF;
+      EXIT WHEN batches_used >= v_max_batches;
+      EXIT WHEN (EXTRACT(EPOCH FROM (pg_catalog.clock_timestamp() - started_at)) * 1000) >= v_max_runtime_ms;
 
       IF queue_rel IS NOT NULL THEN
         EXECUTE pg_catalog.format(
@@ -3840,17 +3862,19 @@ BEGIN
   END LOOP;
 
   RAISE NOTICE
-    'cleanup_queue_messages: archived_deleted=% stuck_deleted=% batches_used=%/% batch_size=%',
+    'cleanup_queue_messages: archived_deleted=% stuck_deleted=% batches_used=%/% batch_size=% runtime_ms=% budget_ms=%',
     deleted_archived_total,
     deleted_stuck_total,
     batches_used,
     v_max_batches,
-    v_batch_size;
+    v_batch_size,
+    (EXTRACT(EPOCH FROM (pg_catalog.clock_timestamp() - started_at)) * 1000)::bigint,
+    v_max_runtime_ms;
 END;
 $_$;
 
 
-ALTER FUNCTION "public"."cleanup_queue_messages"("max_batches_total" integer, "batch_size" integer) OWNER TO "postgres";
+ALTER FUNCTION "public"."cleanup_queue_messages"("max_batches_total" integer, "batch_size" integer, "max_runtime_ms" integer) OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."cleanup_tmp_users"() RETURNS "void"
@@ -10423,60 +10447,88 @@ $_$;
 ALTER FUNCTION "public"."noupdate"() OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."null_migrated_app_version_manifests"("max_batches" integer DEFAULT 50, "batch_size" integer DEFAULT 200) RETURNS "void"
+CREATE OR REPLACE FUNCTION "public"."null_migrated_app_version_manifests"("max_batches" integer DEFAULT 1000000, "batch_size" integer DEFAULT 50, "max_runtime_ms" integer DEFAULT 60000) RETURNS "void"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
 DECLARE
   batch_no integer := 0;
   updated_batch integer;
+  scanned_batch integer;
   updated_total bigint := 0;
-  v_max_batches integer := GREATEST(1, COALESCE(max_batches, 50));
-  v_batch_size integer := GREATEST(1, COALESCE(batch_size, 200));
+  scanned_total bigint := 0;
+  last_id bigint := 0;
+  v_max_batches integer := GREATEST(1, COALESCE(max_batches, 1000000));
+  v_batch_size integer := GREATEST(1, COALESCE(batch_size, 50));
+  v_max_runtime_ms integer := GREATEST(1000, COALESCE(max_runtime_ms, 60000));
+  started_at timestamptz := pg_catalog.clock_timestamp();
 BEGIN
+  PERFORM pg_catalog.set_config('statement_timeout', '0', true);
+  PERFORM pg_catalog.set_config('capgo.reclaim_manifest_null', 'on', true);
+
   LOOP
     batch_no := batch_no + 1;
     EXIT WHEN batch_no > v_max_batches;
+    EXIT WHEN (EXTRACT(EPOCH FROM (pg_catalog.clock_timestamp() - started_at)) * 1000) >= v_max_runtime_ms;
 
-    WITH doomed AS (
+    WITH candidates AS (
       SELECT av.id
       FROM public.app_versions AS av
       WHERE av.manifest IS NOT NULL
-        AND NOT EXISTS (
-          SELECT 1
-          FROM pg_catalog.unnest(av.manifest) AS entry(file_name, s3_path, file_hash)
-          WHERE NOT EXISTS (
-            SELECT 1
-            FROM public.manifest AS m
-            WHERE m.app_version_id = av.id
-              AND m.s3_path = entry.s3_path
-              AND m.file_hash = entry.file_hash
-          )
-        )
+        AND av.id > last_id
       ORDER BY av.id
       LIMIT v_batch_size
+    ),
+    doomed AS (
+      SELECT c.id
+      FROM candidates AS c
+      JOIN public.app_versions AS av ON av.id = c.id
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM pg_catalog.unnest(av.manifest) AS entry(file_name, s3_path, file_hash)
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM public.manifest AS m
+          WHERE m.app_version_id = av.id
+            AND m.s3_path = entry.s3_path
+            AND m.file_hash = entry.file_hash
+        )
+      )
+    ),
+    updated AS (
+      UPDATE public.app_versions AS av
+      SET manifest = NULL
+      FROM doomed
+      WHERE av.id = doomed.id
+      RETURNING av.id
     )
-    UPDATE public.app_versions AS av
-    SET manifest = NULL
-    FROM doomed
-    WHERE av.id = doomed.id;
+    SELECT
+      (SELECT count(*)::integer FROM candidates),
+      (SELECT count(*)::integer FROM updated),
+      COALESCE((SELECT max(id) FROM candidates), last_id)
+    INTO scanned_batch, updated_batch, last_id;
 
-    GET DIAGNOSTICS updated_batch = ROW_COUNT;
+    scanned_total := scanned_total + scanned_batch;
     updated_total := updated_total + updated_batch;
-    EXIT WHEN updated_batch = 0;
+    EXIT WHEN scanned_batch = 0;
   END LOOP;
 
+  PERFORM pg_catalog.set_config('capgo.reclaim_manifest_null', 'off', true);
+
   RAISE NOTICE
-    'null_migrated_app_version_manifests: updated=% batches=%/% batch_size=%',
+    'null_migrated_app_version_manifests: updated=% scanned=% batches=%/% batch_size=% runtime_ms=% budget_ms=%',
     updated_total,
-    batch_no,
+    scanned_total,
+    LEAST(batch_no, v_max_batches),
     v_max_batches,
-    v_batch_size;
+    v_batch_size,
+    (EXTRACT(EPOCH FROM (pg_catalog.clock_timestamp() - started_at)) * 1000)::bigint,
+    v_max_runtime_ms;
 END;
 $$;
 
 
-ALTER FUNCTION "public"."null_migrated_app_version_manifests"("max_batches" integer, "batch_size" integer) OWNER TO "postgres";
+ALTER FUNCTION "public"."null_migrated_app_version_manifests"("max_batches" integer, "batch_size" integer, "max_runtime_ms" integer) OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."one_month_ahead"() RETURNS timestamp without time zone
@@ -11344,7 +11396,7 @@ DECLARE
   should_run boolean;
   lock_acquired boolean;
 BEGIN
-  lock_acquired := pg_try_advisory_lock(1);
+  lock_acquired := pg_catalog.pg_try_advisory_lock(1);
 
   IF NOT lock_acquired THEN
     RAISE NOTICE 'process_all_cron_tasks: skipped, another instance is already running';
@@ -11358,7 +11410,7 @@ BEGIN
     current_dow := EXTRACT(DOW FROM NOW());
     current_day := EXTRACT(DAY FROM NOW());
 
-    FOR task IN SELECT * FROM public.cron_tasks WHERE enabled = true LOOP
+    FOR task IN SELECT * FROM public.cron_tasks WHERE enabled = true ORDER BY id LOOP
       should_run := false;
 
       IF task.second_interval IS NOT NULL THEN
@@ -11412,8 +11464,11 @@ BEGIN
                 PERFORM public.process_function_queue(queue_names);
               END IF;
           END CASE;
-        EXCEPTION WHEN OTHERS THEN
-          RAISE WARNING 'cron task "%" failed: %', task.name, SQLERRM;
+        EXCEPTION
+          WHEN query_canceled THEN
+            RAISE WARNING 'cron task "%" canceled (timeout): %', task.name, SQLERRM;
+          WHEN OTHERS THEN
+            RAISE WARNING 'cron task "%" failed: %', task.name, SQLERRM;
         END;
       END IF;
     END LOOP;
@@ -11430,11 +11485,11 @@ BEGIN
 
     PERFORM public.process_function_queue(ARRAY['cron_rollout_auto_pause']);
   EXCEPTION WHEN OTHERS THEN
-    PERFORM pg_advisory_unlock(1);
+    PERFORM pg_catalog.pg_advisory_unlock(1);
     RAISE;
   END;
 
-  PERFORM pg_advisory_unlock(1);
+  PERFORM pg_catalog.pg_advisory_unlock(1);
 END;
 $$;
 
@@ -23074,8 +23129,8 @@ GRANT ALL ON FUNCTION "public"."cleanup_net_http_response"() TO "service_role";
 
 
 
-REVOKE ALL ON FUNCTION "public"."cleanup_old_audit_logs"("max_batches" integer, "batch_size" integer) FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."cleanup_old_audit_logs"("max_batches" integer, "batch_size" integer) TO "service_role";
+REVOKE ALL ON FUNCTION "public"."cleanup_old_audit_logs"("max_batches" integer, "batch_size" integer, "max_runtime_ms" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."cleanup_old_audit_logs"("max_batches" integer, "batch_size" integer, "max_runtime_ms" integer) TO "service_role";
 
 
 
@@ -23091,8 +23146,8 @@ GRANT ALL ON FUNCTION "public"."cleanup_onboarding_app_data_on_complete"() TO "s
 
 
 
-REVOKE ALL ON FUNCTION "public"."cleanup_queue_messages"("max_batches_total" integer, "batch_size" integer) FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."cleanup_queue_messages"("max_batches_total" integer, "batch_size" integer) TO "service_role";
+REVOKE ALL ON FUNCTION "public"."cleanup_queue_messages"("max_batches_total" integer, "batch_size" integer, "max_runtime_ms" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."cleanup_queue_messages"("max_batches_total" integer, "batch_size" integer, "max_runtime_ms" integer) TO "service_role";
 
 
 
@@ -24036,8 +24091,8 @@ GRANT ALL ON FUNCTION "public"."noupdate"() TO "service_role";
 
 
 
-REVOKE ALL ON FUNCTION "public"."null_migrated_app_version_manifests"("max_batches" integer, "batch_size" integer) FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."null_migrated_app_version_manifests"("max_batches" integer, "batch_size" integer) TO "service_role";
+REVOKE ALL ON FUNCTION "public"."null_migrated_app_version_manifests"("max_batches" integer, "batch_size" integer, "max_runtime_ms" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."null_migrated_app_version_manifests"("max_batches" integer, "batch_size" integer, "max_runtime_ms" integer) TO "service_role";
 
 
 

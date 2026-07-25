@@ -3787,12 +3787,20 @@ export type Database = {
       cleanup_job_run_details_7days: { Args: never; Returns: undefined }
       cleanup_net_http_response: { Args: never; Returns: undefined }
       cleanup_old_audit_logs: {
-        Args: { batch_size?: number; max_batches?: number }
+        Args: {
+          batch_size?: number
+          max_batches?: number
+          max_runtime_ms?: number
+        }
         Returns: undefined
       }
       cleanup_old_channel_devices: { Args: never; Returns: undefined }
       cleanup_queue_messages: {
-        Args: { batch_size?: number; max_batches_total?: number }
+        Args: {
+          batch_size?: number
+          max_batches_total?: number
+          max_runtime_ms?: number
+        }
         Returns: undefined
       }
       cleanup_tmp_users: { Args: never; Returns: undefined }
@@ -4672,7 +4680,11 @@ export type Database = {
         Returns: undefined
       }
       null_migrated_app_version_manifests: {
-        Args: { batch_size?: number; max_batches?: number }
+        Args: {
+          batch_size?: number
+          max_batches?: number
+          max_runtime_ms?: number
+        }
         Returns: undefined
       }
       one_month_ahead: { Args: never; Returns: string }
