@@ -34,57 +34,43 @@ SET search_path = ''
 AS $$
 DECLARE
   org_record RECORD;
+  v_anchor_dom integer;
+  v_this_month_last integer;
+  v_prev_month_last integer;
+  v_this_anniv_dom integer;
+  v_prev_anniv_dom integer;
+  v_prev_cycle_start timestamptz;
+  v_prev_cycle_end timestamptz;
 BEGIN
-  -- Compute the just-completed cycle from yesterday's calendar position.
-  -- Using yesterday (not today) keeps month-end anchors (29th-31st) aligned with
-  -- get_cycle_info_org when shorter months clamp "+ 1 month" to the last day.
+  -- Stripe-style day-of-month anchors: clamp to the last valid day of each month
+  -- so 29th/30th/31st anchors still renew on Feb 28/29, Apr 30, etc.
   FOR org_record IN (
     SELECT
       o.id AS org_id,
       o.management_email,
-      CASE
-        WHEN COALESCE(
-          si.subscription_anchor_start - date_trunc('MONTH', si.subscription_anchor_start),
-          '0 DAYS'::interval
-        ) > (now() - interval '1 day') - date_trunc('MONTH', now() - interval '1 day')
-        THEN date_trunc('MONTH', (now() - interval '1 day') - interval '1 month')
-             + COALESCE(
-               si.subscription_anchor_start - date_trunc('MONTH', si.subscription_anchor_start),
-               '0 DAYS'::interval
-             )
-        ELSE date_trunc('MONTH', now() - interval '1 day')
-             + COALESCE(
-               si.subscription_anchor_start - date_trunc('MONTH', si.subscription_anchor_start),
-               '0 DAYS'::interval
-             )
-      END AS prev_cycle_start,
-      CASE
-        WHEN COALESCE(
-          si.subscription_anchor_start - date_trunc('MONTH', si.subscription_anchor_start),
-          '0 DAYS'::interval
-        ) > (now() - interval '1 day') - date_trunc('MONTH', now() - interval '1 day')
-        THEN (
-          date_trunc('MONTH', (now() - interval '1 day') - interval '1 month')
-          + COALESCE(
-            si.subscription_anchor_start - date_trunc('MONTH', si.subscription_anchor_start),
-            '0 DAYS'::interval
-          )
-        ) + interval '1 month'
-        ELSE (
-          date_trunc('MONTH', now() - interval '1 day')
-          + COALESCE(
-            si.subscription_anchor_start - date_trunc('MONTH', si.subscription_anchor_start),
-            '0 DAYS'::interval
-          )
-        ) + interval '1 month'
-      END AS prev_cycle_end
+      COALESCE(EXTRACT(DAY FROM si.subscription_anchor_start)::integer, 1) AS anchor_dom
     FROM public.orgs o
     JOIN public.stripe_info si ON o.customer_id = si.customer_id
     WHERE si.status = 'succeeded'
       AND o.management_email IS NOT NULL
   )
   LOOP
-    IF org_record.prev_cycle_end::date = CURRENT_DATE THEN
+    v_anchor_dom := org_record.anchor_dom;
+    v_this_month_last := EXTRACT(
+      DAY FROM (date_trunc('month', now()) + interval '1 month - 1 day')
+    )::integer;
+    v_prev_month_last := EXTRACT(
+      DAY FROM (date_trunc('month', now()) - interval '1 day')
+    )::integer;
+    v_this_anniv_dom := LEAST(v_anchor_dom, v_this_month_last);
+    v_prev_anniv_dom := LEAST(v_anchor_dom, v_prev_month_last);
+
+    IF EXTRACT(DAY FROM CURRENT_DATE)::integer = v_this_anniv_dom THEN
+      v_prev_cycle_start := date_trunc('month', now() - interval '1 month')
+        + ((v_prev_anniv_dom - 1) || ' days')::interval;
+      v_prev_cycle_end := date_trunc('month', now())
+        + ((v_this_anniv_dom - 1) || ' days')::interval;
+
       PERFORM pgmq.send(
         'cron_email',
         jsonb_build_object(
@@ -94,8 +80,8 @@ BEGIN
             'email', org_record.management_email,
             'orgId', org_record.org_id,
             'type', 'billing_period_stats',
-            'cycleStart', org_record.prev_cycle_start,
-            'cycleEnd', org_record.prev_cycle_end
+            'cycleStart', v_prev_cycle_start,
+            'cycleEnd', v_prev_cycle_end
           )
         )
       );

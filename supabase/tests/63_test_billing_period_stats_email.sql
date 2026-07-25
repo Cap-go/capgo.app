@@ -255,40 +255,80 @@ SELECT is(
     'does not queue when today is not the billing anniversary'
 );
 
--- Month-end probe: 31st anchor should complete a cycle on the last day of a
--- short month when "+ 1 month" clamps (e.g. Jan 31 -> Feb 28/29).
+-- Month-end probe: 31st-anchor orgs renew on clamped last days
+-- (Jan 31 -> Feb 28 -> Mar 31), not skipped after February.
 DO $$
 DECLARE
-    v_anchor timestamptz := '2026-01-31 00:00:00+00'::timestamptz;
-    v_yesterday timestamptz := '2026-02-27 12:00:00+00'::timestamptz;
-    v_anchor_day interval;
-    v_prev_end timestamptz;
+    v_anchor_dom integer := 31;
+    v_this_last integer;
+    v_prev_last integer;
+    v_this_dom integer;
+    v_prev_dom integer;
+    v_start timestamptz;
+    v_end timestamptz;
 BEGIN
-    v_anchor_day := v_anchor - date_trunc('MONTH', v_anchor);
-    IF v_anchor_day
-        > v_yesterday - date_trunc('MONTH', v_yesterday)
+    -- On 2026-02-28
+    v_this_last := EXTRACT(
+        DAY FROM (
+            date_trunc('month', '2026-02-28'::date)
+            + interval '1 month - 1 day'
+        )
+    )::integer;
+    v_prev_last := EXTRACT(
+        DAY FROM (
+            date_trunc('month', '2026-02-28'::date) - interval '1 day'
+        )
+    )::integer;
+    v_this_dom := LEAST(v_anchor_dom, v_this_last);
+    v_prev_dom := LEAST(v_anchor_dom, v_prev_last);
+    IF v_this_dom IS DISTINCT FROM 28 THEN
+        RAISE EXCEPTION 'Feb anniversary day expected 28, got %', v_this_dom;
+    END IF;
+    v_start := date_trunc('month', '2026-02-28'::date - interval '1 month')
+        + ((v_prev_dom - 1) || ' days')::interval;
+    v_end := date_trunc('month', '2026-02-28'::date)
+        + ((v_this_dom - 1) || ' days')::interval;
+    IF v_start::date IS DISTINCT FROM '2026-01-31'::date
+        OR v_end::date IS DISTINCT FROM '2026-02-28'::date
     THEN
-        v_prev_end := (
-            date_trunc('MONTH', v_yesterday - interval '1 month')
-            + v_anchor_day
-        ) + interval '1 month';
-    ELSE
-        v_prev_end := (
-            date_trunc('MONTH', v_yesterday) + v_anchor_day
-        ) + interval '1 month';
+        RAISE EXCEPTION 'Feb cycle expected Jan31-Feb28, got % - %', v_start, v_end;
     END IF;
 
-    IF v_prev_end::date IS DISTINCT FROM '2026-02-28'::date THEN
+    -- On 2026-03-31 (must not skip March after February clamp)
+    v_this_last := EXTRACT(
+        DAY FROM (
+            date_trunc('month', '2026-03-31'::date)
+            + interval '1 month - 1 day'
+        )
+    )::integer;
+    v_prev_last := EXTRACT(
+        DAY FROM (
+            date_trunc('month', '2026-03-31'::date) - interval '1 day'
+        )
+    )::integer;
+    v_this_dom := LEAST(v_anchor_dom, v_this_last);
+    v_prev_dom := LEAST(v_anchor_dom, v_prev_last);
+    IF v_this_dom IS DISTINCT FROM 31 OR v_prev_dom IS DISTINCT FROM 28 THEN
         RAISE EXCEPTION
-            'expected Feb 28 cycle end for Jan 31 anchor, got %',
-            v_prev_end;
+            'Mar clamp expected this=31 prev=28, got % / %',
+            v_this_dom,
+            v_prev_dom;
+    END IF;
+    v_start := date_trunc('month', '2026-03-31'::date - interval '1 month')
+        + ((v_prev_dom - 1) || ' days')::interval;
+    v_end := date_trunc('month', '2026-03-31'::date)
+        + ((v_this_dom - 1) || ' days')::interval;
+    IF v_start::date IS DISTINCT FROM '2026-02-28'::date
+        OR v_end::date IS DISTINCT FROM '2026-03-31'::date
+    THEN
+        RAISE EXCEPTION 'Mar cycle expected Feb28-Mar31, got % - %', v_start, v_end;
     END IF;
 END;
 $$;
 
 SELECT ok(
     TRUE,
-    '31st-anchor cycle end clamps to last day of short month'
+    '31st-anchor renews on Feb 28 and Mar 31 with clamped bounds'
 );
 
 SELECT * FROM finish();
