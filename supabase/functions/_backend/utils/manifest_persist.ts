@@ -35,6 +35,15 @@ export function buildTrustedManifestRows(
     }))
 }
 
+async function clearLegacyAppVersionManifest(c: Context, versionId: number) {
+  const { error: deleteError } = await supabaseAdmin(c)
+    .from('app_versions')
+    .update({ manifest: null })
+    .eq('id', versionId)
+  if (deleteError)
+    cloudlog({ requestId: c.get('requestId'), message: 'error delete manifest in app_versions', error: deleteError })
+}
+
 /**
  * Inserts manifest rows for a version when none exist yet.
  * Always writes file_size=0; trusted sizes come from on_manifest_create via R2 HEAD.
@@ -51,45 +60,42 @@ export async function persistVersionManifestEntries(
   if (!Array.isArray(manifestEntries))
     return { inserted: 0, alreadyPresent: false }
 
-  const { data: existingEntries, error: existingError } = await supabaseAdmin(c)
-    .from('manifest')
-    .select('id')
-    .eq('app_version_id', record.id)
-    .limit(1)
-
-  if (existingError) {
-    cloudlog({ requestId: c.get('requestId'), message: 'error check existing manifest', error: existingError, id: record.id })
-    throw existingError
-  }
-
-  if (existingEntries?.length) {
-    if (options.clearAppVersionsManifest) {
-      const { error: deleteError } = await supabaseAdmin(c)
-        .from('app_versions')
-        .update({ manifest: null })
-        .eq('id', record.id)
-      if (deleteError)
-        cloudlog({ requestId: c.get('requestId'), message: 'error delete manifest in app_versions', error: deleteError })
-    }
-    return { inserted: 0, alreadyPresent: true }
-  }
-
   const validEntries = buildTrustedManifestRows(record.id, manifestEntries, options.s3PathPrefix)
+  const dropped = manifestEntries.length - validEntries.length
+  if (dropped > 0) {
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'manifest persist dropped invalid entries',
+      id: record.id,
+      dropped,
+      total: manifestEntries.length,
+      kept: validEntries.length,
+    })
+  }
+
   if (validEntries.length === 0) {
-    if (options.clearAppVersionsManifest) {
-      const { error: deleteError } = await supabaseAdmin(c)
-        .from('app_versions')
-        .update({ manifest: null })
-        .eq('id', record.id)
-      if (deleteError)
-        cloudlog({ requestId: c.get('requestId'), message: 'error delete manifest in app_versions', error: deleteError })
-    }
+    if (options.clearAppVersionsManifest)
+      await clearLegacyAppVersionManifest(c, record.id)
     return { inserted: 0, alreadyPresent: false }
   }
 
   const pgClient = getPgClient(c, false)
   try {
     await pgClient.query('BEGIN')
+    // Serialize concurrent writers for this version (no unique constraint on manifest rows).
+    await pgClient.query('SELECT pg_advisory_xact_lock($1)', [record.id])
+
+    const existing = await pgClient.query<{ id: number }>(
+      'SELECT id FROM public.manifest WHERE app_version_id = $1 LIMIT 1',
+      [record.id],
+    )
+    if (existing.rows.length > 0) {
+      await pgClient.query('COMMIT')
+      if (options.clearAppVersionsManifest)
+        await clearLegacyAppVersionManifest(c, record.id)
+      return { inserted: 0, alreadyPresent: true }
+    }
+
     await pgClient.query(
       `INSERT INTO public.manifest (app_version_id, file_name, s3_path, file_hash, file_size)
        SELECT

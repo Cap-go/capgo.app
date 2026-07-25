@@ -180,7 +180,7 @@ describe('[POST] /private/set_manifest', () => {
 
   it('rejects finalized versions that have no manifest rows yet', async () => {
     const finalizedName = `${BUNDLE_NAME}-final`
-    await getSupabaseClient()
+    const { data: finalized } = await getSupabaseClient()
       .from('app_versions')
       .insert({
         app_id: APP_ID,
@@ -191,6 +191,8 @@ describe('[POST] /private/set_manifest', () => {
         storage_provider: 'r2',
         deleted: false,
       })
+      .select('owner_org')
+      .single()
 
     const response = await fetchTestRequest(getEndpointUrl('/private/set_manifest'), {
       method: 'POST',
@@ -201,12 +203,62 @@ describe('[POST] /private/set_manifest', () => {
       body: JSON.stringify({
         app_id: APP_ID,
         name: finalizedName,
-        manifest: manifestEntries(ORG_ID),
+        manifest: manifestEntries(finalized!.owner_org),
       }),
     })
 
     expect(response.status).toBe(400)
     const json = await response.json() as { error: string }
     expect(json.error).toBe('error_version_already_finalized')
+  })
+
+  it('rejects missing versions and non-uploadable storage providers', async () => {
+    const missing = await fetchTestRequest(getEndpointUrl('/private/set_manifest'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': APIKEY_TEST_ALL,
+      },
+      body: JSON.stringify({
+        app_id: APP_ID,
+        name: `${BUNDLE_NAME}-does-not-exist`,
+        manifest: manifestEntries(ORG_ID),
+      }),
+    })
+    expect(missing.status).toBe(404)
+    const missingJson = await missing.json() as { error: string }
+    expect(missingJson.error).toBe('error_version_not_found')
+
+    const externalName = `${BUNDLE_NAME}-external`
+    const { data: external } = await getSupabaseClient()
+      .from('app_versions')
+      .insert({
+        app_id: APP_ID,
+        name: externalName,
+        checksum: randomUUID().replaceAll('-', ''),
+        owner_org: ORG_ID,
+        user_id: USER_ID,
+        storage_provider: 'external',
+        external_url: 'https://example.com/bundle.zip',
+        deleted: false,
+      })
+      .select('owner_org')
+      .single()
+
+    const response = await fetchTestRequest(getEndpointUrl('/private/set_manifest'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': APIKEY_TEST_ALL,
+      },
+      body: JSON.stringify({
+        app_id: APP_ID,
+        name: externalName,
+        manifest: manifestEntries(external!.owner_org),
+      }),
+    })
+    expect(response.status).toBe(400)
+    const json = await response.json() as { error: string }
+    expect(json.error).toBe('error_version_not_uploadable')
   })
 })

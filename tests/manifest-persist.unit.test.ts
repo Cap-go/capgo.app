@@ -31,4 +31,33 @@ describe('buildTrustedManifestRows', () => {
       file_size: 0,
     }])
   })
+
+  it.concurrent('keeps all valid rows when s3PathPrefix is omitted', () => {
+    const rows = buildTrustedManifestRows(7, [
+      {
+        file_name: 'a.js',
+        s3_path: 'orgs/a/apps/com.a/delta/h_a.js',
+        file_hash: 'ha',
+      },
+      {
+        file_name: 'b.js',
+        s3_path: 'orgs/b/apps/com.b/delta/h_b.js',
+        file_hash: 'hb',
+      },
+    ])
+
+    expect(rows).toHaveLength(2)
+    expect(rows.every(row => row.file_size === 0)).toBe(true)
+  })
+
+  it.concurrent('normalizes legacy percent-encoded file names', () => {
+    const rows = buildTrustedManifestRows(9, [{
+      file_name: 'assets/img/sad_post_grey%402x.png',
+      s3_path: 'orgs/org/apps/com.app/delta/hash_assets/img/sad_post_grey%402x.png',
+      file_hash: 'imghash',
+    }])
+
+    expect(rows[0]?.file_name).toBe('assets/img/sad_post_grey@2x.png')
+    expect(rows[0]?.file_size).toBe(0)
+  })
 })

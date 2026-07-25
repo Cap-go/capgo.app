@@ -1475,31 +1475,15 @@ export async function deletedFailedVersion(supabase: SupabaseClient<Database>, a
     app_id: appId,
     name,
   }
-  try {
-    const pathFailed = 'private/delete_failed_version'
-    const res = await supabase.functions.invoke(pathFailed, { body: JSON.stringify(data), method: 'DELETE' })
+  const pathFailed = 'private/delete_failed_version'
+  const res = await supabase.functions.invoke(pathFailed, { body: JSON.stringify(data), method: 'DELETE' })
 
-    if (res.error) {
-      if (res.error instanceof FunctionsHttpError) {
-        const errorBody = await res.error.context.json()
-        log.error(`Cannot delete failed version: ${errorBody.status || JSON.stringify(errorBody)}`)
-      }
-      else {
-        log.error(`Cannot delete failed version: ${res.error.message}`)
-      }
-      return
+  if (res.error) {
+    if (res.error instanceof FunctionsHttpError) {
+      const errorBody = await res.error.context.json().catch(() => ({}))
+      throw new Error(errorBody.status || errorBody.message || JSON.stringify(errorBody))
     }
-
-    return res.data?.status
-  }
-  catch (error) {
-    if (error instanceof FunctionsHttpError) {
-      const errorBody = await error.context.json()
-      log.error(`Cannot delete failed version: ${errorBody.message || JSON.stringify(errorBody)}`)
-    }
-    else {
-      log.error(`Cannot delete failed version: ${formatError(error)}`)
-    }
+    throw new Error(res.error.message)
   }
 }
 

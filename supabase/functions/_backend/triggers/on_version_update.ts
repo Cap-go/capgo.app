@@ -199,17 +199,17 @@ async function handleManifest(c: Context, record: Database['public']['Tables']['
   if (!Array.isArray(manifestEntries))
     return
 
-  try {
-    await persistVersionManifestEntries(
-      c,
-      { id: record.id, app_id: record.app_id },
-      manifestEntries,
-      { clearAppVersionsManifest: true },
-    )
-  }
-  catch (error) {
-    cloudlog({ requestId: c.get('requestId'), message: 'error handleManifest', error, id: record.id })
-  }
+  const ownerOrg = await resolveOwnerOrg(c, record)
+  const s3PathPrefix = ownerOrg && record.app_id
+    ? `orgs/${ownerOrg}/apps/${record.app_id}/`
+    : null
+
+  await persistVersionManifestEntries(
+    c,
+    { id: record.id, app_id: record.app_id },
+    manifestEntries,
+    { clearAppVersionsManifest: true, s3PathPrefix },
+  )
 }
 
 /**

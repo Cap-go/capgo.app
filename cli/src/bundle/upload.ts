@@ -671,11 +671,14 @@ async function uploadBundleToCapgoCloud(apikey: string, supabase: SupabaseType, 
     if (options.verbose)
       log.info(`[Verbose] Cleaning up failed version from database...`)
 
-    // call delete version on path /delete_failed_version to delete the version
-    await deletedFailedVersion(supabase, appid, bundle)
-
-    if (options.verbose)
-      log.info(`[Verbose] Failed version cleaned up`)
+    try {
+      await deletedFailedVersion(supabase, appid, bundle)
+      if (options.verbose)
+        log.info(`[Verbose] Failed version cleaned up`)
+    }
+    catch (cleanupError) {
+      log.error(`Cleanup of the incomplete version failed (${formatError(cleanupError)}); delete bundle ${bundle} manually before retrying.`)
+    }
 
     throw errorUpload instanceof Error ? errorUpload : new Error(String(errorUpload))
   }
@@ -1580,7 +1583,12 @@ export async function uploadBundleInternal(preAppid: string, options: OptionsUpl
       await persistVersionData(supabase, versionData, 'update')
     }
     catch (error) {
-      await deletedFailedVersion(supabase, appid, bundle)
+      try {
+        await deletedFailedVersion(supabase, appid, bundle)
+      }
+      catch (cleanupError) {
+        uploadFail(`Cannot upload bundle to S3 ${formatError(error)}. Cleanup of the incomplete version also failed (${formatError(cleanupError)}); delete bundle ${bundle} manually before retrying.`)
+      }
       uploadFail(`Cannot upload bundle to S3 ${formatError(error)}`)
     }
 
@@ -1655,7 +1663,12 @@ export async function uploadBundleInternal(preAppid: string, options: OptionsUpl
         await setVersionManifest(supabase, appid, bundle, finalManifest)
       }
       catch (error) {
-        await deletedFailedVersion(supabase, appid, bundle)
+        try {
+          await deletedFailedVersion(supabase, appid, bundle)
+        }
+        catch (cleanupError) {
+          uploadFail(`Cannot set bundle manifest ${formatError(error)}. Cleanup of the incomplete version also failed (${formatError(cleanupError)}); delete bundle ${bundle} manually before retrying.`)
+        }
         uploadFail(`Cannot set bundle manifest ${formatError(error)}`)
       }
 

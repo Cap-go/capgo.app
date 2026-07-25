@@ -15,6 +15,12 @@ interface DataSetManifest {
   manifest?: ManifestPersistEntry[]
 }
 
+// Bundles of ~5k files are expected; keep headroom without allowing unbounded payloads.
+const MAX_MANIFEST_ENTRIES = 20_000
+const MAX_FILE_NAME_LENGTH = 2048
+const MAX_S3_PATH_LENGTH = 2048
+const MAX_FILE_HASH_LENGTH = 512
+
 export const app = new Hono<MiddlewareKeyVariables>()
 
 app.post('/', middlewareKey(), async (c) => {
@@ -36,6 +42,12 @@ app.post('/', middlewareKey(), async (c) => {
     return quickError(400, 'error_bundle_name_missing', 'Error bundle name missing', { body })
   if (!Array.isArray(body.manifest) || body.manifest.length === 0)
     return quickError(400, 'error_manifest_missing', 'Error manifest missing or empty', { body })
+  if (body.manifest.length > MAX_MANIFEST_ENTRIES) {
+    return quickError(400, 'error_manifest_too_large', 'Manifest has too many entries', {
+      max: MAX_MANIFEST_ENTRIES,
+      count: body.manifest.length,
+    })
+  }
 
   if (!(await checkPermission(c, 'app.upload_bundle', { appId: body.app_id })))
     return quickError(401, 'not_authorized', 'You can\'t access this app', { app_id: body.app_id })
@@ -63,6 +75,9 @@ app.post('/', middlewareKey(), async (c) => {
     !entry?.file_name
     || !entry?.file_hash
     || !entry?.s3_path
+    || entry.file_name.length > MAX_FILE_NAME_LENGTH
+    || entry.file_hash.length > MAX_FILE_HASH_LENGTH
+    || entry.s3_path.length > MAX_S3_PATH_LENGTH
     || !entry.s3_path.startsWith(s3PathPrefix),
   )
   if (invalidEntry) {
