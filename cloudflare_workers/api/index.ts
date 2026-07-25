@@ -5,8 +5,6 @@ import { app as admin_credits } from '../../supabase/functions/_backend/private/
 import { app as admin_stats } from '../../supabase/functions/_backend/private/admin_stats.ts'
 import { app as channel_device } from '../../supabase/functions/_backend/private/channel_device.ts'
 import { app as channel_stats } from '../../supabase/functions/_backend/private/channel_stats.ts'
-import { app as native_observe_stats } from '../../supabase/functions/_backend/private/native_observe_stats.ts'
-import { app as update_delivery_stats } from '../../supabase/functions/_backend/private/update_delivery_stats.ts'
 import { app as config } from '../../supabase/functions/_backend/private/config.ts'
 import { app as configBuilder } from '../../supabase/functions/_backend/private/config_builder.ts'
 import { app as create_device } from '../../supabase/functions/_backend/private/create_device.ts'
@@ -19,6 +17,7 @@ import { app as invite_existing_user_to_org } from '../../supabase/functions/_ba
 import { app as invite_new_user_to_org } from '../../supabase/functions/_backend/private/invite_new_user_to_org.ts'
 import { app as latency } from '../../supabase/functions/_backend/private/latency.ts'
 import { app as log_as } from '../../supabase/functions/_backend/private/log_as.ts'
+import { app as native_observe_stats } from '../../supabase/functions/_backend/private/native_observe_stats.ts'
 import { app as plans } from '../../supabase/functions/_backend/private/plans.ts'
 import { app as publicStats } from '../../supabase/functions/_backend/private/public_stats.ts'
 import { app as replay } from '../../supabase/functions/_backend/private/replay.ts'
@@ -35,6 +34,7 @@ import { app as stats_priv } from '../../supabase/functions/_backend/private/sta
 import { app as storeTop } from '../../supabase/functions/_backend/private/store_top.ts'
 import { app as stripe_checkout } from '../../supabase/functions/_backend/private/stripe_checkout.ts'
 import { app as stripe_portal } from '../../supabase/functions/_backend/private/stripe_portal.ts'
+import { app as update_delivery_stats } from '../../supabase/functions/_backend/private/update_delivery_stats.ts'
 import { app as validate_password_compliance } from '../../supabase/functions/_backend/private/validate_password_compliance.ts'
 import { app as verify_email_otp } from '../../supabase/functions/_backend/private/verify_email_otp.ts'
 import { app as apikey } from '../../supabase/functions/_backend/public/apikey/index.ts'
@@ -48,6 +48,7 @@ import { app as notifications } from '../../supabase/functions/_backend/public/n
 import { app as ok } from '../../supabase/functions/_backend/public/ok.ts'
 import { app as organization } from '../../supabase/functions/_backend/public/organization/index.ts'
 import { app as pluginRegions } from '../../supabase/functions/_backend/public/plugin_regions.ts'
+import { app as queue_health } from '../../supabase/functions/_backend/public/queue_health.ts'
 import { app as replication } from '../../supabase/functions/_backend/public/replication.ts'
 import { app as statistics } from '../../supabase/functions/_backend/public/statistics/index.ts'
 import { app as translation } from '../../supabase/functions/_backend/public/translation.ts'
@@ -104,6 +105,7 @@ app.route('/webhooks', webhooks)
 app.route('/app', appEndpoint)
 app.route('/build', build)
 app.route('/replication', replication)
+app.route('/queue_health', queue_health)
 app.route('/check_cpu_usage', check_cpu_usage)
 app.route('/translation', translation)
 app.route('/plugin_regions', pluginRegions)
