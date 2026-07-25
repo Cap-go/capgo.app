@@ -23,6 +23,8 @@ $$;
 
 ALTER FUNCTION public.get_org_credits_used_in_period(uuid, timestamptz, timestamptz) OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.get_org_credits_used_in_period(uuid, timestamptz, timestamptz) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.get_org_credits_used_in_period(uuid, timestamptz, timestamptz) FROM anon;
+REVOKE ALL ON FUNCTION public.get_org_credits_used_in_period(uuid, timestamptz, timestamptz) FROM authenticated;
 GRANT ALL ON FUNCTION public.get_org_credits_used_in_period(uuid, timestamptz, timestamptz) TO service_role;
 
 CREATE OR REPLACE FUNCTION public.process_billing_period_stats_email()
@@ -82,6 +84,8 @@ $$;
 ALTER FUNCTION public.process_billing_period_stats_email() OWNER TO postgres;
 
 REVOKE ALL ON FUNCTION public.process_billing_period_stats_email() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.process_billing_period_stats_email() FROM anon;
+REVOKE ALL ON FUNCTION public.process_billing_period_stats_email() FROM authenticated;
 GRANT ALL ON FUNCTION public.process_billing_period_stats_email() TO service_role;
 
 INSERT INTO public.cron_tasks (

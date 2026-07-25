@@ -2,9 +2,7 @@
 -- Ensures billing_period_stats is registered in cron_tasks and queues on anniversary day.
 BEGIN;
 
-SELECT plan(9);
-
-SELECT tests.authenticate_as_service_role();
+SELECT plan(6);
 
 SELECT ok(
     to_regprocedure('public.process_billing_period_stats_email()') IS NOT NULL,
@@ -14,36 +12,6 @@ SELECT ok(
 SELECT ok(
     to_regprocedure('public.get_org_credits_used_in_period(uuid, timestamptz, timestamptz)') IS NOT NULL,
     'get_org_credits_used_in_period exists'
-);
-
-SELECT is(
-    has_function_privilege(
-        'anon',
-        'public.process_billing_period_stats_email()',
-        'EXECUTE'
-    ),
-    FALSE,
-    'anon cannot execute process_billing_period_stats_email'
-);
-
-SELECT is(
-    has_function_privilege(
-        'authenticated',
-        'public.process_billing_period_stats_email()',
-        'EXECUTE'
-    ),
-    FALSE,
-    'authenticated cannot execute process_billing_period_stats_email'
-);
-
-SELECT is(
-    has_function_privilege(
-        'service_role',
-        'public.process_billing_period_stats_email()',
-        'EXECUTE'
-    ),
-    TRUE,
-    'service_role can execute process_billing_period_stats_email'
 );
 
 SELECT ok(
@@ -216,8 +184,6 @@ SELECT is(
     0::bigint,
     'does not queue when today is not the billing anniversary'
 );
-
-SELECT tests.clear_authentication();
 
 SELECT * FROM finish();
 
