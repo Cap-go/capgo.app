@@ -440,3 +440,9 @@ import_map = "./functions/deno.json"
 [functions.check_cpu_usage]
 verify_jwt = false
 import_map = "./functions/deno.json"
+
+# Queue Health
+
+[functions.queue_health]
+verify_jwt = false
+import_map = "./functions/deno.json"
