@@ -24,6 +24,7 @@ import {
   fsyncSync,
   mkdirSync,
   openSync,
+  readdirSync,
   readFileSync,
   writeFileSync,
 } from 'node:fs'
@@ -36,9 +37,11 @@ const TRASH_PREFIX = 'deleted-after-7-days/'
 const PATH_LOG = '.context/r2_manifest_orphans.txt'
 const DONE_LOG = '.context/r2_manifest_orphans_done.txt'
 const FAIL_LOG = '.context/r2_manifest_orphans_failed.txt'
-const STATE_FILE = '.context/r2_manifest_orphans_state.json'
+const STATE_FILE = process.env.SHARD_COUNT && Number(process.env.SHARD_COUNT) > 1
+  ? `.context/r2_manifest_orphans_state_${process.env.SHARD_INDEX || 0}.json`
+  : '.context/r2_manifest_orphans_state.json'
 const PROGRESS_LOG = '.context/r2_manifest_orphans_progress.log'
-const R2_CONCURRENCY = Number(process.env.RECLAIM_R2_CONCURRENCY || 800)
+const R2_CONCURRENCY = Number(process.env.RECLAIM_R2_CONCURRENCY || 500)
 const DONE_FLUSH_EVERY = Number(process.env.RECLAIM_DONE_FLUSH || 500)
 const HEARTBEAT_MS = Number(process.env.RECLAIM_HEARTBEAT_MS || 2000)
 
@@ -97,6 +100,18 @@ function loadLineSet(file: string): Set<string> {
   for (const line of readFileSync(file, 'utf8').split('\n')) {
     if (line)
       set.add(line)
+  }
+  return set
+}
+
+function loadAllDoneSets(): Set<string> {
+  const set = loadLineSet('.context/r2_manifest_orphans_done.txt')
+  // merge any shard done files
+  for (const name of readdirSync('.context')) {
+    if (name.startsWith('r2_manifest_orphans_done_') && name.endsWith('.txt')) {
+      for (const line of loadLineSet(`.context/${name}`))
+        set.add(line)
+    }
   }
   return set
 }
@@ -186,11 +201,19 @@ async function main() {
     }),
   })
 
-  logProgress(`Loading path/done logs (concurrency=${R2_CONCURRENCY})...`)
-  const done = loadLineSet(DONE_LOG)
+  logProgress(`Loading path/done logs (concurrency=${R2_CONCURRENCY} shard=${SHARD_INDEX}/${SHARD_COUNT})...`)
+  const done = loadAllDoneSets()
   const all = loadLineSet(PATH_LOG) // dedupe
-  const candidates = [...all].filter(path => !done.has(path) && !path.startsWith(TRASH_PREFIX))
+  let candidates = [...all].filter(path => !done.has(path) && !path.startsWith(TRASH_PREFIX))
   const skippedAlreadyDone = all.size - candidates.length
+  if (SHARD_COUNT > 1) {
+    candidates = candidates.filter((path) => {
+      let h = 0
+      for (let i = 0; i < path.length; i++)
+        h = (h * 31 + path.charCodeAt(i)) >>> 0
+      return (h % SHARD_COUNT) === SHARD_INDEX
+    })
+  }
 
   const startedAtMs = Date.now()
   const state: State = {
@@ -212,7 +235,7 @@ async function main() {
   }
   writeState(state)
 
-  logProgress(`Ready: unique_paths=${all.size} already_done=${done.size} to_trash=${candidates.length}`)
+  logProgress(`Ready: unique_paths=${all.size} already_done=${done.size} shard_to_trash=${candidates.length} shard=${SHARD_INDEX}/${SHARD_COUNT}`)
   if (candidates.length === 0) {
     state.phase = 'done'
     writeState(state)
