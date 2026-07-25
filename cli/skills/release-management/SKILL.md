@@ -71,7 +71,7 @@ Use this skill for OTA update workflows in Capgo Cloud.
   - `--zip`
   - `--tus`
   - `--tus-chunk-size <tusChunkSize>`
-  - `--delta`
+  - `--delta` (refuses when the bundle has more than 10,000 files; use `--no-delta` or reduce files)
   - `--delta-only`
   - `--no-delta`
   - `--encrypted-checksum <encryptedChecksum>`
