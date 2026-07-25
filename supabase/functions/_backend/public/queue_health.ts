@@ -7,7 +7,8 @@ type QueueStatus = 'ok' | 'ko'
 type SqlCountValue = string | number | null
 
 export const STUCK_READ_CT_THRESHOLD = 5
-export const ARCHIVE_STALE_SECONDS = 2 * 24 * 60 * 60
+// cleanup_queue_messages purges archives older than 2 days; allow 1 day of batch lag.
+export const ARCHIVE_STALE_SECONDS = 3 * 24 * 60 * 60
 export const ARCHIVE_RECENT_WINDOW_SECONDS = 60 * 60
 export const DEFAULT_ARCHIVE_RECENT_THRESHOLD = 5_000
 export const DEFAULT_QUEUE_DEPTH_THRESHOLD = 50_000
@@ -85,6 +86,8 @@ export function cronTaskIntervalSeconds(task: {
   minute_interval?: number | null
   hour_interval?: number | null
   run_at_hour?: number | null
+  run_on_dow?: number | null
+  run_on_day?: number | null
 }): number | null {
   if (task.second_interval != null && task.second_interval > 0)
     return task.second_interval
@@ -92,6 +95,11 @@ export function cronTaskIntervalSeconds(task: {
     return task.minute_interval * 60
   if (task.hour_interval != null && task.hour_interval > 0)
     return task.hour_interval * 3600
+  // Calendar schedules: prefer the coarsest cadence marker first.
+  if (task.run_on_day != null)
+    return 31 * 24 * 60 * 60
+  if (task.run_on_dow != null)
+    return 7 * 24 * 60 * 60
   if (task.run_at_hour != null)
     return 24 * 60 * 60
   return null
@@ -129,6 +137,8 @@ export function buildQueueIntervalMap(
     minute_interval?: number | null
     hour_interval?: number | null
     run_at_hour?: number | null
+    run_on_dow?: number | null
+    run_on_day?: number | null
   }>,
 ): Map<string, number> {
   const intervals = new Map<string, number>()
@@ -299,13 +309,17 @@ async function loadQueueIntervals(client: ReturnType<typeof getPgClient>): Promi
     minute_interval: number | null
     hour_interval: number | null
     run_at_hour: number | null
+    run_on_dow: number | null
+    run_on_day: number | null
   }>(`
     SELECT task_type::text AS task_type,
            target,
            second_interval,
            minute_interval,
            hour_interval,
-           run_at_hour
+           run_at_hour,
+           run_on_dow,
+           run_on_day
     FROM public.cron_tasks
     WHERE enabled = true
       AND task_type IN ('function_queue', 'queue')
@@ -320,6 +334,9 @@ async function fetchQueueMetrics(
   expectedIntervalSeconds: number | null,
   thresholds: QueueHealthThresholds,
 ): Promise<QueueMetrics> {
+  if (!isSafeQueueName(queueName))
+    throw new Error(`Invalid queue name: ${queueName}`)
+
   const neverReadStaleSeconds = resolveNeverReadStaleSeconds(expectedIntervalSeconds, thresholds)
 
   const { rows: existenceRows } = await client.query<{
@@ -497,7 +514,7 @@ app.get('/', async (c) => {
       error: 'queue_health_error',
       message: 'Failed to check queue health',
       checked_at: new Date().toISOString(),
-      no_queues_registered: false,
+      no_queues_registered: null,
       queue_count: 0,
       healthy_count: 0,
       unhealthy_count: 0,

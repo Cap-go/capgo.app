@@ -68,6 +68,8 @@ describe('queue_health helpers', () => {
     expect(cronTaskIntervalSeconds({ minute_interval: 5 })).toBe(300)
     expect(cronTaskIntervalSeconds({ hour_interval: 2 })).toBe(7200)
     expect(cronTaskIntervalSeconds({ run_at_hour: 3 })).toBe(86400)
+    expect(cronTaskIntervalSeconds({ run_at_hour: 12, run_on_dow: 6 })).toBe(7 * 24 * 60 * 60)
+    expect(cronTaskIntervalSeconds({ run_at_hour: 12, run_on_day: 1 })).toBe(31 * 24 * 60 * 60)
 
     const intervals = buildQueueIntervalMap([
       {
