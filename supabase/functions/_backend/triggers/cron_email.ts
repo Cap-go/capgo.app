@@ -432,9 +432,6 @@ async function handleBillingPeriodStats(c: Context, _email: string, orgId: strin
   // otherwise fall back to get_cycle_info_org (for backwards compatibility)
   let cycleStartTs: string
   let cycleEndTs: string
-  let periodStart: string
-  let periodEndExclusive: string
-  let metricsEndInclusive: string
 
   if (cycleStart && cycleEnd) {
     // Completed billing period from SQL: [cycleStart, cycleEnd)
@@ -456,10 +453,10 @@ async function handleBillingPeriodStats(c: Context, _email: string, orgId: strin
     cycleEndTs = cycleInfo.subscription_anchor_end
   }
 
-  ;({ periodStart, periodEndExclusive, metricsEndInclusive } = billingPeriodMetricsRange(
+  const { periodStart, periodEndExclusive, metricsEndInclusive } = billingPeriodMetricsRange(
     cycleStartTs,
     cycleEndTs,
-  ))
+  )
 
   // Guard against inverted/empty ranges (e.g. bad payloads)
   if (metricsEndInclusive < periodStart) {
