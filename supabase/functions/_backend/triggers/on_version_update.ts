@@ -5,7 +5,7 @@ import { eq } from 'drizzle-orm'
 import { Hono } from 'hono/tiny'
 import { BRES, middlewareAPISecret, simpleError, triggerValidator } from '../utils/hono.ts'
 import { cloudlog } from '../utils/logging.ts'
-import { normalizeLegacyEncodedManifestFileName } from '../utils/manifest_encoding.ts'
+import { persistVersionManifestEntries } from '../utils/manifest_persist.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import { manifest } from '../utils/postgres_schema.ts'
 import { getPath, s3 } from '../utils/s3.ts'
@@ -190,7 +190,8 @@ async function ensureVersionManifest(
 }
 
 /**
- * Persists manifest rows and updates aggregate counters when a version includes a manifest payload.
+ * Legacy path: CLI wrote jsonb onto app_versions.manifest; migrate into public.manifest.
+ * New CLIs call /private/set_manifest directly and skip this jsonb hop.
  */
 async function handleManifest(c: Context, record: Database['public']['Tables']['app_versions']['Row']) {
   cloudlog({ requestId: c.get('requestId'), message: 'manifest', manifest: record.manifest })
@@ -198,68 +199,17 @@ async function handleManifest(c: Context, record: Database['public']['Tables']['
   if (!Array.isArray(manifestEntries))
     return
 
-  // Check if entries exist
-  const { data: existingEntries } = await supabaseAdmin(c)
-    .from('manifest')
-    .select('id')
-    .eq('app_version_id', record.id)
-    .limit(1)
-
-  // Only create entries if none exist
-  if (!existingEntries?.length && manifestEntries.length > 0) {
-    const validEntries = manifestEntries
-      .filter(entry => entry.file_name && entry.file_hash && entry.s3_path)
-      .map(entry => ({
-        app_version_id: record.id,
-        file_name: normalizeLegacyEncodedManifestFileName(entry.file_name, entry.s3_path)!,
-        file_hash: entry.file_hash!,
-        s3_path: entry.s3_path!,
-        file_size: 0,
-      }))
-
-    if (validEntries.length > 0) {
-      const { error: insertError } = await supabaseAdmin(c)
-        .from('manifest')
-        .insert(validEntries)
-      if (insertError) {
-        cloudlog({ requestId: c.get('requestId'), message: 'error insert manifest', error: insertError })
-      }
-      else {
-        // Update manifest_count on the version
-        const { error: countError } = await supabaseAdmin(c)
-          .from('app_versions')
-          .update({ manifest_count: validEntries.length })
-          .eq('id', record.id)
-        if (countError)
-          cloudlog({ requestId: c.get('requestId'), message: 'error update manifest_count', error: countError })
-
-        // Increment manifest_bundle_count on the app using raw SQL
-        const pgClient = getPgClient(c, false)
-        try {
-          await pgClient.query(
-            `UPDATE apps
-             SET manifest_bundle_count = manifest_bundle_count + 1,
-                 updated_at = now()
-             WHERE app_id = $1`,
-            [record.app_id],
-          )
-        }
-        catch (error) {
-          cloudlog({ requestId: c.get('requestId'), message: 'error update manifest_bundle_count', error })
-        }
-        finally {
-          await closeClient(c, pgClient)
-        }
-      }
-    }
+  try {
+    await persistVersionManifestEntries(
+      c,
+      { id: record.id, app_id: record.app_id },
+      manifestEntries,
+      { clearAppVersionsManifest: true },
+    )
   }
-  // delete manifest in app_versions
-  const { error: deleteError } = await supabaseAdmin(c)
-    .from('app_versions')
-    .update({ manifest: null })
-    .eq('id', record.id)
-  if (deleteError)
-    cloudlog({ requestId: c.get('requestId'), message: 'error delete manifest in app_versions', error: deleteError })
+  catch (error) {
+    cloudlog({ requestId: c.get('requestId'), message: 'error handleManifest', error, id: record.id })
+  }
 }
 
 /**

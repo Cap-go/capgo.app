@@ -1503,6 +1503,39 @@ export async function deletedFailedVersion(supabase: SupabaseClient<Database>, a
   }
 }
 
+export interface VersionManifestEntry {
+  file_name: string
+  s3_path: string
+  file_hash: string
+}
+
+/**
+ * Writes delta manifest rows through the backend (file_size stays 0 until R2 size lookup).
+ * Prefer this over writing app_versions.manifest jsonb — old CLIs still use that legacy path.
+ */
+export async function setVersionManifest(
+  supabase: SupabaseClient<Database>,
+  appId: string,
+  name: string,
+  manifest: VersionManifestEntry[],
+): Promise<void> {
+  const data = {
+    app_id: appId,
+    name,
+    manifest,
+  }
+  const pathSetManifest = 'private/set_manifest'
+  const res = await supabase.functions.invoke(pathSetManifest, { body: JSON.stringify(data) })
+
+  if (res.error) {
+    if (res.error instanceof FunctionsHttpError) {
+      const errorBody = await res.error.context.json().catch(() => ({}))
+      throw new Error(errorBody.error || errorBody.status || errorBody.message || JSON.stringify(errorBody))
+    }
+    throw new Error(res.error.message)
+  }
+}
+
 export async function updateOrCreateChannel(supabase: SupabaseClient<Database>, update: Database['public']['Tables']['channels']['Insert']) {
   // console.log('updateOrCreateChannel', update)
   if (!update.app_id || !update.name || !update.created_by) {
