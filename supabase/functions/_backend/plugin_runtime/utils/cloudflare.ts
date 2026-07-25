@@ -389,9 +389,17 @@ function convertDataToJsTypes<T>(apiResponse: AnalyticsApiResponse) {
   const { meta, data } = apiResponse
 
   // cloudlog(c.get('requestId'), 'meta', meta)
-  const converters = {
+  const toNumber = (value: string) => Number(value)
+  const converters: Record<string, (value: string) => unknown> = {
     String: (value: string) => String(value),
-    UInt64: (value: string) => Number(value),
+    // Analytics Engine returns aggregate sums as Float64 string values.
+    // Without conversion, callers that do `sum + row.install` string-concatenate.
+    Float64: toNumber,
+    Float32: toNumber,
+    Int64: toNumber,
+    Int32: toNumber,
+    UInt64: toNumber,
+    UInt32: toNumber,
     DateTime: (value: string) => new Date(value),
   }
 
@@ -399,7 +407,7 @@ function convertDataToJsTypes<T>(apiResponse: AnalyticsApiResponse) {
     const convertedRow = {} as any
     meta.forEach((column) => {
       const { name, type } = column
-      convertedRow[name] = (converters as any)[type] ? (converters as any)[type](row[name]) : row[name]
+      convertedRow[name] = converters[type] ? converters[type](row[name]) : row[name]
     })
     return convertedRow as T
   })
