@@ -363,31 +363,52 @@ async function main() {
   })
 
   console.log(`DB delete done. rows=${hb.dbRows} unique_paths=${pathToHash.size}`)
-  console.log('3/3 Filter live hashes (single connection) then R2 move-to-trash...')
+  console.log('3/3 Filter live hashes via TEMP TABLE (one indexed semi-join), then R2...')
   hb.phase = 'live-filter'
 
   const allHashes = [...new Set(pathToHash.values())]
   const liveHashes = new Set<string>()
-  const hashChunks = chunk(allHashes, HASH_CHECK_BATCH)
-  console.log(`   checking ${allHashes.length} hashes in ${hashChunks.length} chunks (AFTER delete, so only live refs remain)`)
+  console.log(`   loading ${allHashes.length} candidate hashes into temp table...`)
 
   const client = await pool.connect()
   try {
     await client.query(`SET statement_timeout = '0'`)
+    await client.query(`SET synchronous_commit = off`)
+    await client.query(`
+      CREATE TEMP TABLE reclaim_candidate_hashes (
+        file_hash text PRIMARY KEY
+      ) ON COMMIT PRESERVE ROWS
+    `)
+
+    const hashChunks = chunk(allHashes, 5000)
     for (let i = 0; i < hashChunks.length; i++) {
-      hb.detail = `live chunk ${i + 1}/${hashChunks.length}`
-      const liveRes = await client.query<{ file_hash: string }>(
-        `SELECT DISTINCT file_hash
-         FROM public.manifest
-         WHERE file_hash = ANY($1::text[])`,
+      hb.detail = `temp insert ${i + 1}/${hashChunks.length}`
+      await client.query(
+        `INSERT INTO reclaim_candidate_hashes (file_hash)
+         SELECT DISTINCT unnest($1::text[])
+         ON CONFLICT DO NOTHING`,
         [hashChunks[i]],
       )
-      for (const row of liveRes.rows)
-        liveHashes.add(row.file_hash)
-      if ((i + 1) % 5 === 0 || i + 1 === hashChunks.length) {
-        console.log(`   live-filter ${i + 1}/${hashChunks.length} live_hashes_so_far=${liveHashes.size}`)
-      }
+      if ((i + 1) % 10 === 0 || i + 1 === hashChunks.length)
+        console.log(`   temp insert ${i + 1}/${hashChunks.length}`)
     }
+
+    hb.detail = 'semi-join manifest for live hashes'
+    console.log('   running semi-join against manifest (idx_manifest_file_hash)...')
+    // Nested-loop / merge via PK → index lookups; one round trip.
+    const liveRes = await client.query<{ file_hash: string }>(`
+      SELECT c.file_hash
+      FROM reclaim_candidate_hashes AS c
+      WHERE EXISTS (
+        SELECT 1
+        FROM public.manifest AS m
+        WHERE m.file_hash = c.file_hash
+      )
+    `)
+    for (const row of liveRes.rows)
+      liveHashes.add(row.file_hash)
+    console.log(`   live hashes still referenced: ${liveHashes.size}`)
+    await client.query(`DROP TABLE reclaim_candidate_hashes`)
   }
   finally {
     client.release()
