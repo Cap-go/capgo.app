@@ -1,7 +1,8 @@
--- Re-register billing period stats email after it was dropped from the cron path.
--- Original feature (#1335) called process_billing_period_stats_email() from
--- process_all_cron_tasks at 12:00 UTC. The cron_tasks table refactor never added
--- a row for it, so org:billing_period_stats was never queued.
+-- Re-register billing period stats email after it was dropped from the
+-- cron path. Original feature (#1335) called
+-- process_billing_period_stats_email() from process_all_cron_tasks at
+-- 12:00 UTC. The cron_tasks table refactor never added a row for it, so
+-- org:billing_period_stats was never queued.
 
 CREATE OR REPLACE FUNCTION public.get_org_credits_used_in_period(
   p_org_id uuid,
@@ -221,7 +222,7 @@ INSERT INTO public.cron_tasks (
   healthcheck_url
 ) VALUES (
   'billing_period_stats_email',
-  'Send billing period stats emails on each org billing anniversary (12:00 UTC)',
+  'Send billing period stats emails on each org billing anniversary',
   'function',
   'public.process_billing_period_stats_email()',
   NULL,
