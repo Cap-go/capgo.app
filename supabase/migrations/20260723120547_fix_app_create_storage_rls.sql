@@ -27,7 +27,10 @@ WITH CHECK (
           NULL::bigint
         )
         OR (
-          public.rbac_check_permission_request(
+          -- create-only keys may upsert the onboarding icon only
+          -- (org/{org_id}/{app_id}/icon), not arbitrary image assets
+          storage.filename(objects.name) = 'icon'
+          AND public.rbac_check_permission_request(
             public.rbac_perm_org_create_app(),
             ((storage.foldername(objects.name))[2])::uuid,
             NULL::character varying,
@@ -87,7 +90,8 @@ USING (
           NULL::bigint
         )
         OR (
-          public.rbac_check_permission_request(
+          storage.filename(objects.name) = 'icon'
+          AND public.rbac_check_permission_request(
             public.rbac_perm_org_create_app(),
             ((storage.foldername(objects.name))[2])::uuid,
             NULL::character varying,
@@ -141,7 +145,8 @@ WITH CHECK (
           NULL::bigint
         )
         OR (
-          public.rbac_check_permission_request(
+          storage.filename(objects.name) = 'icon'
+          AND public.rbac_check_permission_request(
             public.rbac_perm_org_create_app(),
             ((storage.foldername(objects.name))[2])::uuid,
             NULL::character varying,

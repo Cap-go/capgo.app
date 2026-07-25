@@ -16,6 +16,8 @@ SELECT ok(
       AND with_check LIKE '%foldername%objects.name%'
       AND with_check LIKE '%rbac_perm_org_create_app%'
       AND with_check LIKE '%need_onboarding%'
+      AND with_check LIKE '%filename%objects.name%'
+      AND with_check LIKE '%''icon''%'
   ),
   'images insert policy uses storage objects.name path and org.create_app for new/pending app icons'
 );
