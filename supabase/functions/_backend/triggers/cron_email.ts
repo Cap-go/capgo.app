@@ -1,6 +1,12 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
+import {
+  computeWeeklyInstallStats,
+  getPreviousMonthUtcRange,
+  shouldRetryDeployInstallStats,
+  sumVersionInstalls,
+} from '../utils/cron_email_stats.ts'
 import { BRES, middlewareAPISecret, parseBody, simpleError } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { sendEmailToOrgMembers } from '../utils/org_email_notifications.ts'
@@ -194,40 +200,34 @@ async function handleWeeklyInstallStats(c: Context, appId: string) {
     throw simpleError('cannot_generate_stats', 'Cannot generate stats', { error: generateStatsError })
   }
 
-  if (weeklyStats.all_updates === 0) {
+  // get_weekly_stats.all_updates is SUM(install); failed_updates is SUM(fail).
+  // Those are independent counters, so rates use install / (install + fail).
+  const stats = computeWeeklyInstallStats(weeklyStats)
+
+  if (stats.totalUpdates === 0) {
     return c.json({ status: 'No updates this week' }, 200)
   }
 
-  const successUpdates = weeklyStats.all_updates - weeklyStats.failed_updates
-  if (successUpdates < 0) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'Cannot send email for app, successUpdates < 0', error: weeklyStats, metadata: { app_id: appId } })
-    cloudlogErr({ requestId: c.get('requestId'), message: 'Invalid stats detected', error: weeklyStats, metadata: { app_id: appId } })
-    return c.json({ status: 'No valid stats available' }, 200)
-  }
-
-  const successPercentage = Math.round((successUpdates / weeklyStats.all_updates) * 10_000) / 10_000
-  const failureRate = Math.round((weeklyStats.failed_updates / weeklyStats.all_updates) * 10_000) / 10_000
-
   // Calculate week number and month name for the reported period
   const now = new Date()
-  const monthName = now.toLocaleString('en-US', { month: 'long' })
+  const monthName = now.toLocaleString('en-US', { month: 'long', timeZone: 'UTC' })
   // Calculate ISO week number
-  const startOfYear = new Date(now.getFullYear(), 0, 1)
+  const startOfYear = new Date(Date.UTC(now.getUTCFullYear(), 0, 1))
   const days = Math.floor((now.getTime() - startOfYear.getTime()) / (24 * 60 * 60 * 1000))
-  const weekNumber = Math.ceil((days + startOfYear.getDay() + 1) / 7)
+  const weekNumber = Math.ceil((days + startOfYear.getUTCDay() + 1) / 7)
 
   const metadata = {
     app_id: appId,
     month_name: monthName,
     week_number: weekNumber.toString(),
-    weekly_updates: (weeklyStats.all_updates).toString(),
-    fun_comparison: getFunComparison('updates', weeklyStats.all_updates),
-    weekly_install: successUpdates.toString(),
-    weekly_install_success: (successPercentage * 100).toString(),
-    fun_comparison_2: getFunComparison('failRate', failureRate),
-    weekly_fail: (weeklyStats.failed_updates).toString(),
-    weekly_open: (weeklyStats.open_app).toString(),
-    fun_comparison_3: getFunComparison('appOpen', weeklyStats.open_app),
+    weekly_updates: stats.totalUpdates.toString(),
+    fun_comparison: getFunComparison('updates', stats.totalUpdates),
+    weekly_install: stats.successfulInstalls.toString(),
+    weekly_install_success: (stats.successPercentage * 100).toString(),
+    fun_comparison_2: getFunComparison('failRate', stats.failureRate),
+    weekly_fail: stats.failedUpdates.toString(),
+    weekly_open: stats.openApp.toString(),
+    fun_comparison_3: getFunComparison('appOpen', stats.openApp),
   }
 
   await sendEmailToOrgMembers(c, 'user:weekly_stats', 'weekly_stats', metadata, await getOrgIdForApp(c, appId))
@@ -238,28 +238,23 @@ async function handleWeeklyInstallStats(c: Context, appId: string) {
 async function handleMonthlyCreateStats(c: Context, appId: string) {
   const supabase = await supabaseAdmin(c)
 
-  // Calculate the previous month's date range
-  const now = new Date()
-  const previousMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1)
-  const previousMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0) // Last day of previous month
-
-  // Get full month name for the reported period
-  const monthName = previousMonth.toLocaleString('en-US', { month: 'long' })
+  // Previous calendar month in UTC: [start, nextMonthStart)
+  const { startIso, endExclusiveIso, monthName } = getPreviousMonthUtcRange()
 
   // Fetch stats for bundle creation and publishing
   const { data: appVersions, error: _appVersionsError } = await supabase
     .from('app_versions')
     .select('id, created_at')
     .eq('app_id', appId)
-    .gte('created_at', previousMonth.toISOString())
-    .lte('created_at', previousMonthEnd.toISOString())
+    .gte('created_at', startIso)
+    .lt('created_at', endExclusiveIso)
 
   const { data: deployHistory, error: _deployHistoryError } = await supabase
     .from('deploy_history')
     .select('id, deployed_at')
     .eq('app_id', appId)
-    .gte('deployed_at', previousMonth.toISOString())
-    .lte('deployed_at', previousMonthEnd.toISOString())
+    .gte('deployed_at', startIso)
+    .lt('deployed_at', endExclusiveIso)
 
   const bundleCount = appVersions?.length ?? 0
   const publishCount = deployHistory?.length ?? 0
@@ -330,13 +325,12 @@ async function handleDeployInstallStats(
 
   const windowStart = deployTime.toISOString()
   const windowEnd = new Date(deployTime.getTime() + 24 * 60 * 60 * 1000).toISOString()
+  // Do not filter by channel here: older VERSION_USAGE rows may lack channel blobs,
+  // and this email counts installs for the deployed version across the app.
   const versionStats = await readStatsVersion(c, appId, windowStart, windowEnd)
-  // Filter by version_name (new format) OR version_id as string (old Cloudflare format)
-  // This handles backwards compatibility during the transition period
-  const versionIdStr = versionId ? String(versionId) : null
-  const installs = versionStats
-    .filter(row => row.version_name === versionName || (versionIdStr && row.version_name === versionIdStr))
-    .reduce((sum, row) => sum + (row.install ?? 0), 0)
+  // Filter by version_name (new format) OR version_id as string (old Cloudflare format).
+  // Coerce installs with Number() — Analytics Engine sum() can arrive as stringy Float64.
+  const installs = sumVersionInstalls(versionStats, versionName, versionId)
 
   const metadata = {
     app_id: appId,
@@ -354,9 +348,35 @@ async function handleDeployInstallStats(
 
   if (installs > 1) {
     await sendEmailToOrgMembers(c, 'bundle:install_stats_24h', 'deploy_stats_24h', metadata, orgId ?? await getOrgIdForApp(c, appId))
+    return c.json(BRES)
   }
 
-  return c.json(BRES)
+  // SQL claims install_stats_email_sent_at before the worker runs. If analytics
+  // lagged or returned unusable counts, release the claim so cron can retry
+  // while this deploy is still the latest within the retry window.
+  if (deployId && shouldRetryDeployInstallStats(deployTime)) {
+    const { error: releaseError } = await supabaseAdmin(c)
+      .from('deploy_history')
+      .update({ install_stats_email_sent_at: null })
+      .eq('id', deployId)
+    if (releaseError) {
+      cloudlogErr({
+        requestId: c.get('requestId'),
+        message: 'Failed to release deploy install stats email claim for retry',
+        error: releaseError,
+        metadata: { appId, deployId, installs },
+      })
+    }
+    else {
+      cloudlog({
+        requestId: c.get('requestId'),
+        message: 'Released deploy install stats email claim for retry',
+        metadata: { appId, deployId, installs },
+      })
+    }
+  }
+
+  return c.json({ status: 'Not enough installs for deploy stats email', installs }, 200)
 }
 
 /**
