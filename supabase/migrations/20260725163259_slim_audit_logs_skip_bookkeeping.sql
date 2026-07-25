@@ -66,34 +66,31 @@ BEGIN
 
   v_user_id := v_actor_user_id;
 
-  -- Skip internal app_versions upload/migrate bookkeeping before to_jsonb()
-  -- so multi-MB manifest/native_packages are never serialized for those UPDATE operations.
-  IF TG_OP = 'UPDATE'
-    AND TG_TABLE_NAME = 'app_versions'
-    AND NEW.native_packages IS NOT DISTINCT FROM OLD.native_packages
-    AND NEW.comment IS NOT DISTINCT FROM OLD.comment
-    AND NEW.checksum IS NOT DISTINCT FROM OLD.checksum
-    AND NEW.deleted IS NOT DISTINCT FROM OLD.deleted
-    AND NEW.deleted_at IS NOT DISTINCT FROM OLD.deleted_at
-    AND NEW.name IS NOT DISTINCT FROM OLD.name
-    AND NEW.external_url IS NOT DISTINCT FROM OLD.external_url
-    AND NEW.min_update_version IS NOT DISTINCT FROM OLD.min_update_version
-    AND NEW.owner_org IS NOT DISTINCT FROM OLD.owner_org
-    AND NEW.user_id IS NOT DISTINCT FROM OLD.user_id
-    AND NEW.link IS NOT DISTINCT FROM OLD.link
-    AND NEW.key_id IS NOT DISTINCT FROM OLD.key_id
-    AND NEW.cli_version IS NOT DISTINCT FROM OLD.cli_version
-    AND NEW.created_by_apikey_rbac_id IS NOT DISTINCT FROM OLD.created_by_apikey_rbac_id
-    AND NEW.app_id IS NOT DISTINCT FROM OLD.app_id
-    AND NEW.session_key IS NOT DISTINCT FROM OLD.session_key
-    AND (
-      NEW.manifest IS DISTINCT FROM OLD.manifest
-      OR NEW.manifest_count IS DISTINCT FROM OLD.manifest_count
-      OR NEW.storage_provider IS DISTINCT FROM OLD.storage_provider
-      OR NEW.r2_path IS DISTINCT FROM OLD.r2_path
-      OR NEW.updated_at IS DISTINCT FROM OLD.updated_at
+  -- Skip internal app_versions upload/migrate bookkeeping before the generic
+  -- changed_fields walk. Compare via to_jsonb only (this trigger is shared across
+  -- tables; never touch NEW.column names that only exist on app_versions).
+  IF TG_OP = 'UPDATE' AND TG_TABLE_NAME = 'app_versions' THEN
+    v_old_record := pg_catalog.to_jsonb(OLD);
+    v_new_record := pg_catalog.to_jsonb(NEW);
+    IF (
+      v_old_record
+        - 'manifest'
+        - 'native_packages'
+        - 'updated_at'
+        - 'manifest_count'
+        - 'storage_provider'
+        - 'r2_path'
+    ) IS NOT DISTINCT FROM (
+      v_new_record
+        - 'manifest'
+        - 'native_packages'
+        - 'updated_at'
+        - 'manifest_count'
+        - 'storage_provider'
+        - 'r2_path'
     ) THEN
-    RETURN NEW;
+      RETURN NEW;
+    END IF;
   END IF;
 
   IF TG_OP = 'DELETE' THEN
