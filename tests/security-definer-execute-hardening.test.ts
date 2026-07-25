@@ -29,6 +29,8 @@ const SERVICE_ONLY_PROCS = [
   'public.cleanup_onboarding_app_data_on_complete()',
   'public.delete_old_deleted_versions()',
   'public.soft_delete_versions_for_long_canceled_orgs(integer)',
+  'public.cleanup_audit_logs_for_long_canceled_orgs(integer, integer, integer)',
+  'public.cleanup_long_canceled_org_data()',
   'public.enqueue_credit_usage_posthog_event()',
   'public.generate_org_user_stripe_info_on_org_create()',
   'public.get_apikey()',

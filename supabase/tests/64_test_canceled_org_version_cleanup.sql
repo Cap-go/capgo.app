@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(16);
+SELECT plan(22);
 
 SELECT tests.authenticate_as_service_role();
 
@@ -9,34 +9,46 @@ SELECT ok(
   'soft_delete_versions_for_long_canceled_orgs exists'
 );
 
+SELECT ok(
+  to_regprocedure(
+    'public.cleanup_audit_logs_for_long_canceled_orgs(integer, integer, integer)'
+  ) IS NOT NULL,
+  'cleanup_audit_logs_for_long_canceled_orgs exists'
+);
+
+SELECT ok(
+  to_regprocedure('public.cleanup_long_canceled_org_data()') IS NOT NULL,
+  'cleanup_long_canceled_org_data exists'
+);
+
 SELECT is(
   has_function_privilege(
     'anon',
-    'public.soft_delete_versions_for_long_canceled_orgs(integer)',
+    'public.cleanup_long_canceled_org_data()',
     'EXECUTE'
   ),
   false,
-  'anon cannot execute soft_delete_versions_for_long_canceled_orgs'
+  'anon cannot execute cleanup_long_canceled_org_data'
 );
 
 SELECT is(
   has_function_privilege(
     'authenticated',
-    'public.soft_delete_versions_for_long_canceled_orgs(integer)',
+    'public.cleanup_long_canceled_org_data()',
     'EXECUTE'
   ),
   false,
-  'authenticated cannot execute soft_delete_versions_for_long_canceled_orgs'
+  'authenticated cannot execute cleanup_long_canceled_org_data'
 );
 
 SELECT is(
   has_function_privilege(
     'service_role',
-    'public.soft_delete_versions_for_long_canceled_orgs(integer)',
+    'public.cleanup_long_canceled_org_data()',
     'EXECUTE'
   ),
   true,
-  'service_role can execute soft_delete_versions_for_long_canceled_orgs'
+  'service_role can execute cleanup_long_canceled_org_data'
 );
 
 SELECT ok(
@@ -46,11 +58,11 @@ SELECT ok(
     WHERE name = 'canceled_org_version_cleanup'
       AND enabled = true
       AND task_type = 'function'::public.cron_task_type
-      AND target = 'public.soft_delete_versions_for_long_canceled_orgs()'
+      AND target = 'public.cleanup_long_canceled_org_data()'
       AND run_at_hour = 3
       AND run_at_minute = 20
   ) = 1,
-  'cron_tasks contains daily canceled_org_version_cleanup task'
+  'cron_tasks points canceled_org_version_cleanup at cleanup_long_canceled_org_data'
 );
 
 -- Dedicated fixtures (unique customer/app ids for parallel safety)
@@ -208,6 +220,54 @@ SELECT
   long_canceled_org
 FROM canceled_cleanup_ctx;
 
+-- Fresh audit rows (not age-expired) so only canceled-org cleanup removes them.
+INSERT INTO public.audit_logs (
+  created_at,
+  table_name,
+  record_id,
+  operation,
+  user_id,
+  org_id,
+  old_record,
+  new_record,
+  changed_fields
+)
+SELECT
+  now() - interval '2 days',
+  'canceled_org_cleanup_test',
+  'audit-long-canceled',
+  'UPDATE',
+  user_id,
+  long_canceled_org,
+  '{}'::jsonb,
+  '{}'::jsonb,
+  ARRAY['canceled_org_cleanup']::text []
+FROM canceled_cleanup_ctx
+UNION ALL
+SELECT
+  now() - interval '2 days',
+  'canceled_org_cleanup_test',
+  'audit-recent-canceled',
+  'UPDATE',
+  user_id,
+  recent_canceled_org,
+  '{}'::jsonb,
+  '{}'::jsonb,
+  ARRAY['canceled_org_cleanup']::text []
+FROM canceled_cleanup_ctx
+UNION ALL
+SELECT
+  now() - interval '2 days',
+  'canceled_org_cleanup_test',
+  'audit-paying',
+  'UPDATE',
+  user_id,
+  paying_org,
+  '{}'::jsonb,
+  '{}'::jsonb,
+  ARRAY['canceled_org_cleanup']::text []
+FROM canceled_cleanup_ctx;
+
 -- Expired trial -> canceled
 SELECT public.process_free_trial_expired();
 
@@ -250,8 +310,8 @@ SELECT is(
   'process_free_trial_expired leaves paying orgs unchanged'
 );
 
--- Long-canceled cleanup
-SELECT public.soft_delete_versions_for_long_canceled_orgs();
+-- Full canceled-org cleanup (versions + audit logs)
+SELECT public.cleanup_long_canceled_org_data();
 
 SELECT is(
   (SELECT deleted FROM public.app_versions WHERE id = 970101),
@@ -303,6 +363,39 @@ SELECT is(
   (SELECT deleted FROM public.app_versions WHERE id = 970401),
   false,
   'paying org versions are never soft-deleted by canceled cleanup'
+);
+
+SELECT is(
+  (
+    SELECT count(*)::int
+    FROM public.audit_logs
+    WHERE table_name = 'canceled_org_cleanup_test'
+      AND record_id = 'audit-long-canceled'
+  ),
+  0,
+  'audit logs for long-canceled orgs are purged'
+);
+
+SELECT is(
+  (
+    SELECT count(*)::int
+    FROM public.audit_logs
+    WHERE table_name = 'canceled_org_cleanup_test'
+      AND record_id = 'audit-recent-canceled'
+  ),
+  1,
+  'audit logs for recently canceled orgs are kept within 90 days'
+);
+
+SELECT is(
+  (
+    SELECT count(*)::int
+    FROM public.audit_logs
+    WHERE table_name = 'canceled_org_cleanup_test'
+      AND record_id = 'audit-paying'
+  ),
+  1,
+  'audit logs for paying orgs are never purged by canceled cleanup'
 );
 
 SELECT tests.clear_authentication();
