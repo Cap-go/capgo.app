@@ -430,13 +430,16 @@ async function handleBillingPeriodStats(c: Context, _email: string, orgId: strin
 
   // Use cycle dates passed from the SQL function if available,
   // otherwise fall back to get_cycle_info_org (for backwards compatibility)
+  let cycleStartTs: string
+  let cycleEndTs: string
   let periodStart: string
   let periodEndExclusive: string
   let metricsEndInclusive: string
 
   if (cycleStart && cycleEnd) {
     // Completed billing period from SQL: [cycleStart, cycleEnd)
-    ;({ periodStart, periodEndExclusive, metricsEndInclusive } = billingPeriodMetricsRange(cycleStart, cycleEnd))
+    cycleStartTs = cycleStart
+    cycleEndTs = cycleEnd
   }
   else {
     // Fallback: get cycle info from RPC (current cycle, same half-open bounds)
@@ -449,11 +452,14 @@ async function handleBillingPeriodStats(c: Context, _email: string, orgId: strin
       throw simpleError('cannot_get_cycle_info', 'Cannot get cycle info', { error: cycleError })
     }
 
-    ;({ periodStart, periodEndExclusive, metricsEndInclusive } = billingPeriodMetricsRange(
-      cycleInfo.subscription_anchor_start,
-      cycleInfo.subscription_anchor_end,
-    ))
+    cycleStartTs = cycleInfo.subscription_anchor_start
+    cycleEndTs = cycleInfo.subscription_anchor_end
   }
+
+  ;({ periodStart, periodEndExclusive, metricsEndInclusive } = billingPeriodMetricsRange(
+    cycleStartTs,
+    cycleEndTs,
+  ))
 
   // Guard against inverted/empty ranges (e.g. bad payloads)
   if (metricsEndInclusive < periodStart) {
@@ -478,13 +484,13 @@ async function handleBillingPeriodStats(c: Context, _email: string, orgId: strin
     throw simpleError('cannot_get_metrics', 'Cannot get metrics', { error: metricsError })
   }
 
-  // Sum credits in [periodStart, periodEndExclusive) without PostgREST row limits
+  // Sum credits with original timestamptz bounds (anchors are often not midnight)
   const { data: creditsSum, error: creditsError } = await supabase.rpc(
     'get_org_credits_used_in_period',
     {
       p_org_id: orgId,
-      p_start: `${periodStart}T00:00:00.000Z`,
-      p_end: `${periodEndExclusive}T00:00:00.000Z`,
+      p_start: cycleStartTs,
+      p_end: cycleEndTs,
     },
   )
 
