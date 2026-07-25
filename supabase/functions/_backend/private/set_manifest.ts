@@ -15,8 +15,8 @@ interface DataSetManifest {
   manifest?: ManifestPersistEntry[]
 }
 
-// Bundles of ~5k files are expected; keep headroom without allowing unbounded payloads.
-const MAX_MANIFEST_ENTRIES = 20_000
+// Prod max is ~7.5k files per version; keep modest headroom without unbounded payloads.
+const MAX_MANIFEST_ENTRIES = 10_000
 const MAX_FILE_NAME_LENGTH = 2048
 const MAX_S3_PATH_LENGTH = 2048
 const MAX_FILE_HASH_LENGTH = 512
