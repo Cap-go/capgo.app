@@ -481,7 +481,9 @@ async function handleBillingPeriodStats(c: Context, _email: string, orgId: strin
     throw simpleError('cannot_get_metrics', 'Cannot get metrics', { error: metricsError })
   }
 
-  // Sum credits with original timestamptz bounds (anchors are often not midnight)
+  // Half-open credit sum on the same timestamptz bounds as the cycle payload.
+  // Cron path uses UTC midnight bounds so the 12:00 UTC job never under-counts
+  // a still-open Stripe afternoon anchor.
   const { data: creditsSum, error: creditsError } = await supabase.rpc(
     'get_org_credits_used_in_period',
     {

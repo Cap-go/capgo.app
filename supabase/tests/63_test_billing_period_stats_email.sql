@@ -3,7 +3,7 @@
 -- anniversary day, and credits sums use half-open period bounds.
 BEGIN;
 
-SELECT plan(13);
+SELECT plan(20);
 
 SELECT ok(
     to_regprocedure(
@@ -361,6 +361,110 @@ SELECT is(
     ),
     '2026-03-31'::date,
     'Mar 31 completed cycle ends Mar 31'
+);
+
+-- Contiguous cycle chain for 31st anchors (no gap/overlap across short months)
+SELECT is(
+    (
+        SELECT cycle_end
+        FROM public.billing_period_completed_cycle(
+            '2026-01-31 15:00:00+00'::timestamptz,
+            '2026-02-28'::date
+        )
+    ),
+    (
+        SELECT cycle_start
+        FROM public.billing_period_completed_cycle(
+            '2026-01-31 15:00:00+00'::timestamptz,
+            '2026-03-31'::date
+        )
+    ),
+    'Feb cycle_end abuts Mar cycle_start for 31st anchor'
+);
+
+SELECT is(
+    (
+        SELECT cycle_end
+        FROM public.billing_period_completed_cycle(
+            '2026-01-31 15:00:00+00'::timestamptz,
+            '2026-03-31'::date
+        )
+    ),
+    (
+        SELECT cycle_start
+        FROM public.billing_period_completed_cycle(
+            '2026-01-31 15:00:00+00'::timestamptz,
+            '2026-04-30'::date
+        )
+    ),
+    'Mar cycle_end abuts Apr cycle_start for 31st anchor'
+);
+
+SELECT is(
+    (
+        SELECT cycle_start::date
+        FROM public.billing_period_completed_cycle(
+            '2026-01-31 15:00:00+00'::timestamptz,
+            '2026-04-30'::date
+        )
+    ),
+    '2026-03-31'::date,
+    'Apr 30 anniversary for 31st anchor starts Mar 31'
+);
+
+SELECT is(
+    (
+        SELECT cycle_end::date
+        FROM public.billing_period_completed_cycle(
+            '2026-01-31 15:00:00+00'::timestamptz,
+            '2026-04-30'::date
+        )
+    ),
+    '2026-04-30'::date,
+    'Apr 30 anniversary for 31st anchor ends Apr 30'
+);
+
+SELECT is(
+    (
+        SELECT cycle_start::date
+        FROM public.billing_period_completed_cycle(
+            '2026-01-31 15:00:00+00'::timestamptz,
+            '2026-05-31'::date
+        )
+    ),
+    '2026-04-30'::date,
+    'May 31 anniversary for 31st anchor starts Apr 30'
+);
+
+SELECT is(
+    (
+        SELECT cycle_end
+        FROM public.billing_period_completed_cycle(
+            '2026-01-31 15:00:00+00'::timestamptz,
+            '2026-04-30'::date
+        )
+    ),
+    (
+        SELECT cycle_start
+        FROM public.billing_period_completed_cycle(
+            '2026-01-31 15:00:00+00'::timestamptz,
+            '2026-05-31'::date
+        )
+    ),
+    'Apr cycle_end abuts May cycle_start for 31st anchor'
+);
+
+-- UTC midnight bounds even when Stripe anchor is afternoon
+SELECT is(
+    (
+        SELECT cycle_end
+        FROM public.billing_period_completed_cycle(
+            '2026-01-15 15:00:00+00'::timestamptz,
+            '2026-07-15'::date
+        )
+    ),
+    '2026-07-15 00:00:00+00'::timestamptz,
+    'cycle_end is UTC midnight so noon cron reports a finished period'
 );
 
 SELECT * FROM finish();
