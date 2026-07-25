@@ -156,6 +156,16 @@ describe('evaluateQueueHealth', () => {
     ]))
   })
 
+  it.concurrent('fails when queue depth exceeds the threshold', () => {
+    const result = evaluateQueueHealth(createMetrics({
+      queue_count: DEFAULT_QUEUE_DEPTH_THRESHOLD + 1,
+    }), thresholds)
+
+    expect(result.status).toBe('ko')
+    expect(result.reasons).toContain('queue_depth_exceeded')
+    expect(result.reason_details.queue_depth_exceeded).toContain(String(DEFAULT_QUEUE_DEPTH_THRESHOLD))
+  })
+
   it.concurrent('documents healthy and unhealthy criteria', () => {
     const criteria = buildQueueHealthCriteria(thresholds)
     expect(criteria.never_read_stale.healthy_when).toContain('read_ct=0')

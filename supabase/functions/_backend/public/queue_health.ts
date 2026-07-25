@@ -497,7 +497,8 @@ app.get('/', async (c) => {
 
     const queues = metricsList.map(metrics => evaluateQueueHealth(metrics, thresholds))
     const unhealthy = queues.filter(queue => queue.status === 'ko')
-    const overallStatus: QueueStatus = queues.length === 0 || unhealthy.length > 0 ? 'ko' : 'ok'
+    // Empty registry is not a processing failure (fresh installs / no pgmq queues yet).
+    const overallStatus: QueueStatus = unhealthy.length > 0 ? 'ko' : 'ok'
 
     const maxQueueDepth = queues.reduce((max, queue) => Math.max(max, queue.queue_count), 0)
     const maxArchiveRecent = queues.reduce((max, queue) => Math.max(max, queue.archive_recent_count), 0)
@@ -508,6 +509,7 @@ app.get('/', async (c) => {
     return c.json({
       status: overallStatus,
       checked_at: new Date().toISOString(),
+      no_queues_registered: queues.length === 0,
       queue_count: queues.length,
       healthy_count: queues.length - unhealthy.length,
       unhealthy_count: unhealthy.length,
@@ -535,6 +537,7 @@ app.get('/', async (c) => {
       error: 'queue_health_error',
       message: 'Failed to check queue health',
       checked_at: new Date().toISOString(),
+      no_queues_registered: false,
       queue_count: 0,
       healthy_count: 0,
       unhealthy_count: 0,
