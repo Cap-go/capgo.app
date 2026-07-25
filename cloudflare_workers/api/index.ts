@@ -21,6 +21,7 @@ import { app as native_observe_stats } from '../../supabase/functions/_backend/p
 import { app as plans } from '../../supabase/functions/_backend/private/plans.ts'
 import { app as publicStats } from '../../supabase/functions/_backend/private/public_stats.ts'
 import { app as replay } from '../../supabase/functions/_backend/private/replay.ts'
+import { app as set_manifest } from '../../supabase/functions/_backend/private/set_manifest.ts'
 import { app as set_org_email } from '../../supabase/functions/_backend/private/set_org_email.ts'
 import { app as sso_check_domain } from '../../supabase/functions/_backend/private/sso/check-domain.ts'
 import { app as sso_check_enforcement } from '../../supabase/functions/_backend/private/sso/check-enforcement.ts'
@@ -137,6 +138,7 @@ appPrivate.route('/stripe_checkout', stripe_checkout)
 appPrivate.route('/stripe_portal', stripe_portal)
 appPrivate.route('/verify_email_otp', verify_email_otp)
 appPrivate.route('/delete_failed_version', deleted_failed_version)
+appPrivate.route('/set_manifest', set_manifest)
 appPrivate.route('/create_device', create_device)
 appPrivate.route('/latency', latency)
 appPrivate.route('/replay', replay)
