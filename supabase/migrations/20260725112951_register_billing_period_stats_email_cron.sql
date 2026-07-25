@@ -34,34 +34,57 @@ SET search_path = ''
 AS $$
 DECLARE
   org_record RECORD;
-  v_anchor_day interval;
-  v_anniversary date;
-  v_prev_cycle_start timestamptz;
-  v_prev_cycle_end timestamptz;
 BEGIN
-  -- Find orgs whose billing anniversary is today and queue an email for the
-  -- just-completed cycle [anniversary - 1 month, anniversary).
+  -- Compute the just-completed cycle from yesterday's calendar position.
+  -- Using yesterday (not today) keeps month-end anchors (29th-31st) aligned with
+  -- get_cycle_info_org when shorter months clamp "+ 1 month" to the last day.
   FOR org_record IN (
     SELECT
       o.id AS org_id,
       o.management_email,
-      COALESCE(
-        si.subscription_anchor_start - date_trunc('MONTH', si.subscription_anchor_start),
-        '0 DAYS'::interval
-      ) AS anchor_day
+      CASE
+        WHEN COALESCE(
+          si.subscription_anchor_start - date_trunc('MONTH', si.subscription_anchor_start),
+          '0 DAYS'::interval
+        ) > (now() - interval '1 day') - date_trunc('MONTH', now() - interval '1 day')
+        THEN date_trunc('MONTH', (now() - interval '1 day') - interval '1 month')
+             + COALESCE(
+               si.subscription_anchor_start - date_trunc('MONTH', si.subscription_anchor_start),
+               '0 DAYS'::interval
+             )
+        ELSE date_trunc('MONTH', now() - interval '1 day')
+             + COALESCE(
+               si.subscription_anchor_start - date_trunc('MONTH', si.subscription_anchor_start),
+               '0 DAYS'::interval
+             )
+      END AS prev_cycle_start,
+      CASE
+        WHEN COALESCE(
+          si.subscription_anchor_start - date_trunc('MONTH', si.subscription_anchor_start),
+          '0 DAYS'::interval
+        ) > (now() - interval '1 day') - date_trunc('MONTH', now() - interval '1 day')
+        THEN (
+          date_trunc('MONTH', (now() - interval '1 day') - interval '1 month')
+          + COALESCE(
+            si.subscription_anchor_start - date_trunc('MONTH', si.subscription_anchor_start),
+            '0 DAYS'::interval
+          )
+        ) + interval '1 month'
+        ELSE (
+          date_trunc('MONTH', now() - interval '1 day')
+          + COALESCE(
+            si.subscription_anchor_start - date_trunc('MONTH', si.subscription_anchor_start),
+            '0 DAYS'::interval
+          )
+        ) + interval '1 month'
+      END AS prev_cycle_end
     FROM public.orgs o
     JOIN public.stripe_info si ON o.customer_id = si.customer_id
     WHERE si.status = 'succeeded'
       AND o.management_email IS NOT NULL
   )
   LOOP
-    v_anchor_day := org_record.anchor_day;
-    v_anniversary := (date_trunc('MONTH', now()) + v_anchor_day)::date;
-
-    IF v_anniversary = CURRENT_DATE THEN
-      v_prev_cycle_start := date_trunc('MONTH', now() - interval '1 month') + v_anchor_day;
-      v_prev_cycle_end := date_trunc('MONTH', now()) + v_anchor_day;
-
+    IF org_record.prev_cycle_end::date = CURRENT_DATE THEN
       PERFORM pgmq.send(
         'cron_email',
         jsonb_build_object(
@@ -71,8 +94,8 @@ BEGIN
             'email', org_record.management_email,
             'orgId', org_record.org_id,
             'type', 'billing_period_stats',
-            'cycleStart', v_prev_cycle_start,
-            'cycleEnd', v_prev_cycle_end
+            'cycleStart', org_record.prev_cycle_start,
+            'cycleEnd', org_record.prev_cycle_end
           )
         )
       );

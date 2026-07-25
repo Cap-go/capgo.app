@@ -479,8 +479,7 @@ async function handleBillingPeriodStats(c: Context, _email: string, orgId: strin
   }
 
   // Sum credits in [periodStart, periodEndExclusive) without PostgREST row limits
-  let creditsUsed = 0
-  const { data: creditsSum, error: creditsError } = await (supabase.rpc as any)(
+  const { data: creditsSum, error: creditsError } = await supabase.rpc(
     'get_org_credits_used_in_period',
     {
       p_org_id: orgId,
@@ -491,10 +490,9 @@ async function handleBillingPeriodStats(c: Context, _email: string, orgId: strin
 
   if (creditsError) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Cannot get credits used', error: creditsError, metadata: { orgId } })
+    throw simpleError('cannot_get_credits', 'Cannot get credits used', { error: creditsError })
   }
-  else {
-    creditsUsed = Number(creditsSum || 0)
-  }
+  const creditsUsed = Number(creditsSum || 0)
 
   // Format the metrics for the email
   const mau = metrics?.mau ?? 0

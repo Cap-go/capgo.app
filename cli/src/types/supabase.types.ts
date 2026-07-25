@@ -3747,6 +3747,14 @@ export type Database = {
           yearly: number
         }[]
       }
+      get_org_credits_used_in_period: {
+        Args: {
+          p_end: string
+          p_org_id: string
+          p_start: string
+        }
+        Returns: number
+      }
       get_cycle_info_org: {
         Args: { orgid: string }
         Returns: {

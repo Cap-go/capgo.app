@@ -1,16 +1,21 @@
 -- 63_test_billing_period_stats_email.sql
--- Ensures billing_period_stats is registered in cron_tasks and queues on anniversary day.
+-- Ensures billing_period_stats is registered in cron_tasks and queues on
+-- anniversary day, and credits sums use half-open period bounds.
 BEGIN;
 
-SELECT plan(6);
+SELECT plan(8);
 
 SELECT ok(
-    to_regprocedure('public.process_billing_period_stats_email()') IS NOT NULL,
+    to_regprocedure(
+        'public.process_billing_period_stats_email()'
+    ) IS NOT NULL,
     'process_billing_period_stats_email exists'
 );
 
 SELECT ok(
-    to_regprocedure('public.get_org_credits_used_in_period(uuid, timestamptz, timestamptz)') IS NOT NULL,
+    to_regprocedure(
+        'public.get_org_credits_used_in_period(uuid, timestamptz, timestamptz)'
+    ) IS NOT NULL,
     'get_org_credits_used_in_period exists'
 );
 
@@ -33,7 +38,8 @@ CREATE TEMP TABLE billing_period_stats_context (
     user_id uuid,
     org_id uuid,
     customer_id text,
-    app_id text
+    app_id text,
+    grant_id uuid
 ) ON COMMIT DROP;
 
 DO $$
@@ -46,7 +52,9 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-INSERT INTO billing_period_stats_context (user_id, org_id, customer_id, app_id)
+INSERT INTO billing_period_stats_context (
+    user_id, org_id, customer_id, app_id
+)
 VALUES (
     tests.get_supabase_uid('billing_period_stats_user'),
     gen_random_uuid(),
@@ -76,11 +84,16 @@ SELECT
     'succeeded',
     'prod_LQIregjtNduh4q',
     'sub_billing_period_stats_test',
-    date_trunc('month', now()) + ((EXTRACT(DAY FROM CURRENT_DATE)::int - 1) || ' days')::interval,
-    date_trunc('month', now()) + ((EXTRACT(DAY FROM CURRENT_DATE)::int - 1) || ' days')::interval + interval '1 month'
+    date_trunc('month', now())
+        + ((EXTRACT(DAY FROM CURRENT_DATE)::int - 1) || ' days')::interval,
+    date_trunc('month', now())
+        + ((EXTRACT(DAY FROM CURRENT_DATE)::int - 1) || ' days')::interval
+        + interval '1 month'
 FROM billing_period_stats_context;
 
-INSERT INTO public.orgs (id, created_by, name, management_email, customer_id)
+INSERT INTO public.orgs (
+    id, created_by, name, management_email, customer_id
+)
 SELECT
     org_id,
     user_id,
@@ -101,9 +114,62 @@ SELECT
     'production'
 FROM billing_period_stats_context;
 
+WITH grant_insert AS (
+    INSERT INTO public.usage_credit_grants (
+        org_id,
+        credits_total,
+        credits_consumed,
+        granted_at,
+        expires_at,
+        source
+    )
+    SELECT
+        org_id,
+        100,
+        0,
+        now() - interval '40 days',
+        now() + interval '1 year',
+        'manual'
+    FROM billing_period_stats_context
+    RETURNING id, org_id
+)
+UPDATE billing_period_stats_context ctx
+SET grant_id = grant_insert.id
+FROM grant_insert
+WHERE ctx.org_id = grant_insert.org_id;
+
+-- Half-open [start, end): include start and mid, exclude end
+INSERT INTO public.usage_credit_consumptions (
+    grant_id, org_id, metric, credits_used, applied_at
+)
+SELECT
+    grant_id,
+    org_id,
+    'mau'::public.credit_metric_type,
+    credits_used,
+    applied_at
+FROM billing_period_stats_context
+CROSS JOIN (
+    VALUES
+        (1.5::numeric, (CURRENT_DATE - 20)::timestamptz),
+        (2.5::numeric, (CURRENT_DATE - 1)::timestamptz),
+        (9.0::numeric, CURRENT_DATE::timestamptz)
+) AS samples(credits_used, applied_at);
+
+SELECT is(
+    public.get_org_credits_used_in_period(
+        (SELECT org_id FROM billing_period_stats_context),
+        (CURRENT_DATE - 30)::timestamptz,
+        CURRENT_DATE::timestamptz
+    ),
+    4.0::numeric,
+    'credits sum includes [start, end) and excludes end boundary'
+);
+
 DELETE FROM pgmq.q_cron_email
 WHERE
-    message -> 'payload' ->> 'orgId' = (SELECT org_id::text FROM billing_period_stats_context)
+    message -> 'payload' ->> 'orgId'
+    = (SELECT org_id::text FROM billing_period_stats_context)
     AND message -> 'payload' ->> 'type' = 'billing_period_stats';
 
 SELECT public.process_billing_period_stats_email();
@@ -126,7 +192,8 @@ SELECT ok(
         SELECT
             (message -> 'payload' ->> 'cycleStart') IS NOT NULL
             AND (message -> 'payload' ->> 'cycleEnd') IS NOT NULL
-            AND (message -> 'payload' ->> 'cycleEnd')::timestamptz::date = CURRENT_DATE
+            AND (message -> 'payload' ->> 'cycleEnd')::timestamptz::date
+                = CURRENT_DATE
             AND (message -> 'payload' ->> 'cycleStart')::timestamptz
                 < (message -> 'payload' ->> 'cycleEnd')::timestamptz
         FROM pgmq.q_cron_email
@@ -163,11 +230,14 @@ SET
               ) || ' days'
           )::interval
           + interval '1 month'
-WHERE customer_id = (SELECT customer_id FROM billing_period_stats_context);
+WHERE customer_id = (
+    SELECT customer_id FROM billing_period_stats_context
+);
 
 DELETE FROM pgmq.q_cron_email
 WHERE
-    message -> 'payload' ->> 'orgId' = (SELECT org_id::text FROM billing_period_stats_context)
+    message -> 'payload' ->> 'orgId'
+    = (SELECT org_id::text FROM billing_period_stats_context)
     AND message -> 'payload' ->> 'type' = 'billing_period_stats';
 
 SELECT public.process_billing_period_stats_email();
@@ -183,6 +253,42 @@ SELECT is(
     ),
     0::bigint,
     'does not queue when today is not the billing anniversary'
+);
+
+-- Month-end probe: 31st anchor should complete a cycle on the last day of a
+-- short month when "+ 1 month" clamps (e.g. Jan 31 -> Feb 28/29).
+DO $$
+DECLARE
+    v_anchor timestamptz := '2026-01-31 00:00:00+00'::timestamptz;
+    v_yesterday timestamptz := '2026-02-27 12:00:00+00'::timestamptz;
+    v_anchor_day interval;
+    v_prev_end timestamptz;
+BEGIN
+    v_anchor_day := v_anchor - date_trunc('MONTH', v_anchor);
+    IF v_anchor_day
+        > v_yesterday - date_trunc('MONTH', v_yesterday)
+    THEN
+        v_prev_end := (
+            date_trunc('MONTH', v_yesterday - interval '1 month')
+            + v_anchor_day
+        ) + interval '1 month';
+    ELSE
+        v_prev_end := (
+            date_trunc('MONTH', v_yesterday) + v_anchor_day
+        ) + interval '1 month';
+    END IF;
+
+    IF v_prev_end::date IS DISTINCT FROM '2026-02-28'::date THEN
+        RAISE EXCEPTION
+            'expected Feb 28 cycle end for Jan 31 anchor, got %',
+            v_prev_end;
+    END IF;
+END;
+$$;
+
+SELECT ok(
+    TRUE,
+    '31st-anchor cycle end clamps to last day of short month'
 );
 
 SELECT * FROM finish();
