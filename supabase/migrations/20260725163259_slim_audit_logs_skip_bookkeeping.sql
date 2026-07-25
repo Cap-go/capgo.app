@@ -1,6 +1,8 @@
 -- Slim audit_logs: do not store internal app_versions upload/migrate bookkeeping.
 -- Capgo-EU evidence: r2_path/storage_provider/manifest pipeline updates were hundreds
 -- of MB of TOAST with no user-facing audit value. Soft-delete and real edits stay.
+-- Historical cleanup is intentionally NOT in this migration (avoids one-shot WAL/lock
+-- storm on audit_logs). Run bounded ops deletes separately if needed.
 
 CREATE OR REPLACE FUNCTION "public"."audit_log_trigger"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
@@ -24,15 +26,6 @@ DECLARE
   v_stats_refresh_fields constant text[] := ARRAY['stats_refresh_requested_at', 'stats_updated_at', 'updated_at'];
   v_background_counter_fields constant text[] := ARRAY['channel_device_count', 'manifest_bundle_count', 'updated_at'];
   v_fat_app_version_fields constant text[] := ARRAY['manifest', 'native_packages'];
-  -- Internal upload/migrate bookkeeping only. Real user intent fields
-  -- (comment, checksum, deleted, name, ...) must still produce audit rows.
-  v_app_version_bookkeeping_fields constant text[] := ARRAY[
-    'manifest',
-    'manifest_count',
-    'storage_provider',
-    'r2_path',
-    'updated_at'
-  ];
 BEGIN
   SELECT auth.uid() INTO v_actor_user_id;
 
@@ -72,6 +65,36 @@ BEGIN
   END IF;
 
   v_user_id := v_actor_user_id;
+
+  -- Skip internal app_versions upload/migrate bookkeeping before to_jsonb()
+  -- so multi-MB manifest/native_packages are never serialized for those UPDATEs.
+  IF TG_OP = 'UPDATE'
+    AND TG_TABLE_NAME = 'app_versions'
+    AND NEW.native_packages IS NOT DISTINCT FROM OLD.native_packages
+    AND NEW.comment IS NOT DISTINCT FROM OLD.comment
+    AND NEW.checksum IS NOT DISTINCT FROM OLD.checksum
+    AND NEW.deleted IS NOT DISTINCT FROM OLD.deleted
+    AND NEW.deleted_at IS NOT DISTINCT FROM OLD.deleted_at
+    AND NEW.name IS NOT DISTINCT FROM OLD.name
+    AND NEW.external_url IS NOT DISTINCT FROM OLD.external_url
+    AND NEW.min_update_version IS NOT DISTINCT FROM OLD.min_update_version
+    AND NEW.owner_org IS NOT DISTINCT FROM OLD.owner_org
+    AND NEW.user_id IS NOT DISTINCT FROM OLD.user_id
+    AND NEW.link IS NOT DISTINCT FROM OLD.link
+    AND NEW.key_id IS NOT DISTINCT FROM OLD.key_id
+    AND NEW.cli_version IS NOT DISTINCT FROM OLD.cli_version
+    AND NEW.created_by_apikey_rbac_id IS NOT DISTINCT FROM OLD.created_by_apikey_rbac_id
+    AND NEW.app_id IS NOT DISTINCT FROM OLD.app_id
+    AND NEW.session_key IS NOT DISTINCT FROM OLD.session_key
+    AND (
+      NEW.manifest IS DISTINCT FROM OLD.manifest
+      OR NEW.manifest_count IS DISTINCT FROM OLD.manifest_count
+      OR NEW.storage_provider IS DISTINCT FROM OLD.storage_provider
+      OR NEW.r2_path IS DISTINCT FROM OLD.r2_path
+      OR NEW.updated_at IS DISTINCT FROM OLD.updated_at
+    ) THEN
+    RETURN NEW;
+  END IF;
 
   IF TG_OP = 'DELETE' THEN
     v_old_record := pg_catalog.to_jsonb(OLD);
@@ -122,21 +145,6 @@ BEGIN
       v_new_record := v_new_record - v_fat_app_version_fields;
     END IF;
 
-    -- Skip internal upload/migrate bookkeeping. Examples that must not audit:
-    -- - manifest[] write then null + manifest_count (dual-storage migrate)
-    -- - r2_path / storage_provider finalization from backend workers
-    -- - updated_at-only bumps
-    -- Keep soft-delete, comment, checksum, channel-facing edits, etc.
-    IF TG_OP = 'UPDATE'
-      AND NEW.native_packages IS NOT DISTINCT FROM OLD.native_packages
-      AND v_changed_fields IS NOT NULL
-      AND NOT EXISTS (
-        SELECT 1
-        FROM pg_catalog.unnest(v_changed_fields) AS changed_field(field_name)
-        WHERE changed_field.field_name <> ALL(v_app_version_bookkeeping_fields)
-      ) THEN
-      RETURN NEW;
-    END IF;
   END IF;
 
   CASE TG_TABLE_NAME
@@ -198,19 +206,3 @@ $$;
 
 
 ALTER FUNCTION "public"."audit_log_trigger"() OWNER TO "postgres";
-
-SET statement_timeout = '0';
-
--- Remove historical bookkeeping noise already written under the old rules.
--- Soft-deletes and user-facing field edits are kept.
-DELETE FROM public.audit_logs
-WHERE table_name = 'app_versions'
-  AND changed_fields IS NOT NULL
-  AND NOT EXISTS (
-    SELECT 1
-    FROM pg_catalog.unnest(changed_fields) AS changed_field(field_name)
-    WHERE changed_field.field_name <> ALL(
-      ARRAY['manifest', 'manifest_count', 'storage_provider', 'r2_path', 'updated_at']::text[]
-    )
-  );
-
