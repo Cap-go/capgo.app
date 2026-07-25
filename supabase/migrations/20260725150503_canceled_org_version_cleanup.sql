@@ -50,28 +50,7 @@ BEGIN
   -- Eligible when canceled/deleted and paid/trial access ended 90+ days ago.
   -- canceled_at is period end for cancel-at-period-end; for past_due churn it is
   -- set when Stripe finally ends the sub (after retries). Trials use trial_at.
-  WITH eligible_orgs AS (
-    SELECT o.id AS org_id
-    FROM public.stripe_info AS si
-    JOIN public.orgs AS o ON o.customer_id = si.customer_id
-    WHERE si.status IN ('canceled', 'deleted')
-      AND COALESCE(si.canceled_at, si.subscription_anchor_end, si.trial_at)
-        <= pg_catalog.now() - INTERVAL '90 days'
-  ),
-  cleared AS (
-    UPDATE public.channels AS c
-    SET
-      version = NULL,
-      rollout_version = NULL,
-      updated_at = pg_catalog.now()
-    FROM public.apps AS a
-    JOIN eligible_orgs AS e ON e.org_id = a.owner_org
-    WHERE c.app_id = a.app_id
-      AND (c.version IS NOT NULL OR c.rollout_version IS NOT NULL)
-    RETURNING c.id
-  )
-  SELECT COUNT(*) INTO unlinked_count FROM cleared;
-
+  -- Single WITH: pick a version batch first, unlink only those targets, then soft-delete.
   WITH eligible_orgs AS (
     SELECT o.id AS org_id
     FROM public.stripe_info AS si
@@ -88,13 +67,37 @@ BEGIN
       AND av.name NOT IN ('builtin', 'unknown')
     ORDER BY av.id
     LIMIT v_batch_size
+  ),
+  cleared AS (
+    UPDATE public.channels AS c
+    SET
+      version = CASE
+        WHEN EXISTS (SELECT 1 FROM candidates AS x WHERE x.id = c.version) THEN NULL
+        ELSE c.version
+      END,
+      rollout_version = CASE
+        WHEN EXISTS (SELECT 1 FROM candidates AS x WHERE x.id = c.rollout_version) THEN NULL
+        ELSE c.rollout_version
+      END,
+      updated_at = pg_catalog.now()
+    WHERE EXISTS (
+      SELECT 1
+      FROM candidates AS x
+      WHERE x.id = c.version OR x.id = c.rollout_version
+    )
+    RETURNING c.id
+  ),
+  soft_deleted AS (
+    UPDATE public.app_versions AS av
+    SET deleted = true
+    FROM candidates
+    WHERE av.id = candidates.id
+    RETURNING av.id
   )
-  UPDATE public.app_versions AS av
-  SET deleted = true
-  FROM candidates
-  WHERE av.id = candidates.id;
-
-  GET DIAGNOSTICS deleted_count = ROW_COUNT;
+  SELECT
+    (SELECT COUNT(*) FROM cleared),
+    (SELECT COUNT(*) FROM soft_deleted)
+  INTO unlinked_count, deleted_count;
 
   IF unlinked_count > 0 OR deleted_count > 0 THEN
     RAISE NOTICE
@@ -114,7 +117,7 @@ REVOKE ALL ON FUNCTION public.soft_delete_versions_for_long_canceled_orgs(intege
 GRANT ALL ON FUNCTION public.soft_delete_versions_for_long_canceled_orgs(integer) TO service_role;
 
 COMMENT ON FUNCTION public.soft_delete_versions_for_long_canceled_orgs(integer) IS
-  'Soft-deletes app_versions for orgs canceled/deleted more than 90 days past COALESCE(canceled_at, subscription_anchor_end, trial_at). Unlinks channels first. Bounded by p_batch_size.';
+  'Soft-deletes app_versions for orgs canceled/deleted more than 90 days past COALESCE(canceled_at, subscription_anchor_end, trial_at). Unlinks only channel targets pointing at deletion candidates. Bounded by p_batch_size.';
 
 INSERT INTO public.cron_tasks (
   name,

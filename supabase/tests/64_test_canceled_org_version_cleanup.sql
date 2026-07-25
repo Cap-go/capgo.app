@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(15);
+SELECT plan(16);
 
 SELECT tests.authenticate_as_service_role();
 
@@ -186,6 +186,26 @@ SELECT
   true,
   user_id,
   long_canceled_org
+FROM canceled_cleanup_ctx
+UNION ALL
+SELECT
+  now(),
+  'builtin-channel',
+  long_app,
+  970103,
+  now(),
+  false,
+  true,
+  'major'::public.disable_update,
+  false,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  user_id,
+  long_canceled_org
 FROM canceled_cleanup_ctx;
 
 -- Expired trial -> canceled
@@ -250,9 +270,21 @@ SELECT is(
     SELECT version
     FROM public.channels
     WHERE app_id = (SELECT long_app FROM canceled_cleanup_ctx)
+      AND name = 'production'
   ),
   NULL::bigint,
-  'channels are unlinked before soft-delete'
+  'channels targeting deletion candidates are unlinked'
+);
+
+SELECT is(
+  (
+    SELECT version
+    FROM public.channels
+    WHERE app_id = (SELECT long_app FROM canceled_cleanup_ctx)
+      AND name = 'builtin-channel'
+  ),
+  970103::bigint,
+  'channels targeting builtin versions are preserved'
 );
 
 SELECT is(
