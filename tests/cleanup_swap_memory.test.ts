@@ -301,7 +301,7 @@ describe('swap memory cleanup functions', () => {
     await executeSQL(`DELETE FROM public.apps WHERE app_id = $1`, [appId])
   })
 
-  it('null_migrated_app_version_manifests skips partially migrated arrays, async () => {
+  it('null_migrated_app_version_manifests skips partially migrated arrays', async () => {
     const appId = `com.swap.partialmanifest.${randomUUID().slice(0, 8)}`
     const orgRows = await executeSQL(
       `SELECT id FROM public.orgs ORDER BY created_at LIMIT 1`,
