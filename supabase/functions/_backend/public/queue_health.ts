@@ -1,13 +1,10 @@
-import type { Context } from 'hono'
-import type { MiddlewareKeyVariables } from '../utils/hono.ts'
-import { honoFactory, middlewareAPISecret, quickError, useCors } from '../utils/hono.ts'
-import { getClaimsFromJWT } from '../utils/hono_jwt.ts'
+import { honoFactory, useCors } from '../utils/hono.ts'
 import { cloudlogErr } from '../utils/logging.ts'
 import { closeClient, getPgClient, logPgError } from '../utils/pg.ts'
-import { supabaseClient } from '../utils/supabase.ts'
+import { validatePlatformAdminOrApiSecret } from '../utils/platform_admin_access.ts'
 
 type QueueStatus = 'ok' | 'ko'
-type QueueHealthContext = Context<MiddlewareKeyVariables, any, any>
+type SqlCountValue = string | number | null
 
 export const STUCK_READ_CT_THRESHOLD = 5
 export const ARCHIVE_STALE_SECONDS = 2 * 24 * 60 * 60
@@ -285,46 +282,6 @@ function defaultThresholds(): QueueHealthThresholds {
   }
 }
 
-async function validateQueueHealthAccess(c: QueueHealthContext) {
-  const apiSecret = c.req.header('apisecret')
-
-  if (apiSecret) {
-    await middlewareAPISecret(c, async () => {})
-    return
-  }
-
-  const authorization = c.req.header('authorization')
-  if (!authorization) {
-    throw quickError(401, 'no_authorization', 'Authorization header or apisecret is required')
-  }
-
-  const claims = await getClaimsFromJWT(c, authorization)
-  if (!claims?.sub) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'queue_health_invalid_jwt' })
-    throw quickError(401, 'invalid_jwt', 'Invalid JWT')
-  }
-
-  c.set('authorization', authorization)
-  c.set('auth', {
-    userId: claims.sub,
-    authType: 'jwt',
-    apikey: null,
-    jwt: authorization,
-  })
-
-  const userClient = supabaseClient(c, authorization)
-  const { data: isAdmin, error: adminError } = await userClient.rpc('is_platform_admin')
-  if (adminError) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'queue_health_is_admin_error', error: adminError })
-    throw quickError(500, 'is_admin_error', 'Unable to verify admin rights')
-  }
-
-  if (!isAdmin) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'queue_health_not_admin', userId: claims.sub })
-    throw quickError(403, 'not_admin', 'Not admin - only admin users can access queue health')
-  }
-}
-
 async function listQueues(client: ReturnType<typeof getPgClient>): Promise<string[]> {
   const { rows } = await client.query<{ queue_name: string }>(
     'SELECT queue_name FROM pgmq.list_queues() ORDER BY queue_name',
@@ -389,12 +346,12 @@ async function fetchQueueMetrics(
 
   if (queueExists) {
     const { rows } = await client.query<{
-      queue_count: string | number | null
-      never_read_count: string | number | null
-      never_read_stale_count: string | number | null
-      stuck_count: string | number | null
-      max_read_ct: string | number | null
-      oldest_message_age_seconds: string | number | null
+      queue_count: SqlCountValue
+      never_read_count: SqlCountValue
+      never_read_stale_count: SqlCountValue
+      stuck_count: SqlCountValue
+      max_read_ct: SqlCountValue
+      oldest_message_age_seconds: SqlCountValue
     }>(
       `
       SELECT
@@ -427,10 +384,10 @@ async function fetchQueueMetrics(
 
   if (archiveExists) {
     const { rows } = await client.query<{
-      archive_count: string | number | null
-      archive_stale_count: string | number | null
-      archive_recent_count: string | number | null
-      oldest_archive_age_seconds: string | number | null
+      archive_count: SqlCountValue
+      archive_stale_count: SqlCountValue
+      archive_recent_count: SqlCountValue
+      oldest_archive_age_seconds: SqlCountValue
     }>(
       `
       SELECT
@@ -477,7 +434,10 @@ export const app = honoFactory.createApp()
 app.use('*', useCors)
 
 app.get('/', async (c) => {
-  await validateQueueHealthAccess(c)
+  await validatePlatformAdminOrApiSecret(c, {
+    logPrefix: 'queue_health',
+    forbiddenMessage: 'Not admin - only admin users can access queue health',
+  })
 
   const thresholds = defaultThresholds()
   const pgClient = getPgClient(c, false)
