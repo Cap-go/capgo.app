@@ -3,7 +3,7 @@
 -- anniversary day, and credits sums use half-open period bounds.
 BEGIN;
 
-SELECT plan(8);
+SELECT plan(12);
 
 SELECT ok(
     to_regprocedure(
@@ -255,80 +255,63 @@ SELECT is(
     'does not queue when today is not the billing anniversary'
 );
 
--- Month-end probe: 31st-anchor orgs renew on clamped last days
--- (Jan 31 -> Feb 28 -> Mar 31), not skipped after February.
-DO $$
-DECLARE
-    v_anchor_dom integer := 31;
-    v_this_last integer;
-    v_prev_last integer;
-    v_this_dom integer;
-    v_prev_dom integer;
-    v_start timestamptz;
-    v_end timestamptz;
-BEGIN
-    -- On 2026-02-28
-    v_this_last := EXTRACT(
-        DAY FROM (
-            date_trunc('month', '2026-02-28'::date)
-            + interval '1 month - 1 day'
+-- Month-end: exercise the deployed helper (not a re-derived copy)
+SELECT ok(
+    (
+        SELECT is_anniversary
+        FROM public.billing_period_completed_cycle(
+            '2026-01-31 00:00:00+00'::timestamptz,
+            '2026-02-28'::date
         )
-    )::integer;
-    v_prev_last := EXTRACT(
-        DAY FROM (
-            date_trunc('month', '2026-02-28'::date) - interval '1 day'
-        )
-    )::integer;
-    v_this_dom := LEAST(v_anchor_dom, v_this_last);
-    v_prev_dom := LEAST(v_anchor_dom, v_prev_last);
-    IF v_this_dom IS DISTINCT FROM 28 THEN
-        RAISE EXCEPTION 'Feb anniversary day expected 28, got %', v_this_dom;
-    END IF;
-    v_start := date_trunc('month', '2026-02-28'::date - interval '1 month')
-        + ((v_prev_dom - 1) || ' days')::interval;
-    v_end := date_trunc('month', '2026-02-28'::date)
-        + ((v_this_dom - 1) || ' days')::interval;
-    IF v_start::date IS DISTINCT FROM '2026-01-31'::date
-        OR v_end::date IS DISTINCT FROM '2026-02-28'::date
-    THEN
-        RAISE EXCEPTION 'Feb cycle expected Jan31-Feb28, got % - %', v_start, v_end;
-    END IF;
+    ),
+    '31st-anchor is anniversary on Feb 28'
+);
 
-    -- On 2026-03-31 (must not skip March after February clamp)
-    v_this_last := EXTRACT(
-        DAY FROM (
-            date_trunc('month', '2026-03-31'::date)
-            + interval '1 month - 1 day'
+SELECT is(
+    (
+        SELECT cycle_start::date
+        FROM public.billing_period_completed_cycle(
+            '2026-01-31 00:00:00+00'::timestamptz,
+            '2026-02-28'::date
         )
-    )::integer;
-    v_prev_last := EXTRACT(
-        DAY FROM (
-            date_trunc('month', '2026-03-31'::date) - interval '1 day'
+    ),
+    '2026-01-31'::date,
+    'Feb 28 completed cycle starts Jan 31'
+);
+
+SELECT is(
+    (
+        SELECT cycle_end::date
+        FROM public.billing_period_completed_cycle(
+            '2026-01-31 00:00:00+00'::timestamptz,
+            '2026-02-28'::date
         )
-    )::integer;
-    v_this_dom := LEAST(v_anchor_dom, v_this_last);
-    v_prev_dom := LEAST(v_anchor_dom, v_prev_last);
-    IF v_this_dom IS DISTINCT FROM 31 OR v_prev_dom IS DISTINCT FROM 28 THEN
-        RAISE EXCEPTION
-            'Mar clamp expected this=31 prev=28, got % / %',
-            v_this_dom,
-            v_prev_dom;
-    END IF;
-    v_start := date_trunc('month', '2026-03-31'::date - interval '1 month')
-        + ((v_prev_dom - 1) || ' days')::interval;
-    v_end := date_trunc('month', '2026-03-31'::date)
-        + ((v_this_dom - 1) || ' days')::interval;
-    IF v_start::date IS DISTINCT FROM '2026-02-28'::date
-        OR v_end::date IS DISTINCT FROM '2026-03-31'::date
-    THEN
-        RAISE EXCEPTION 'Mar cycle expected Feb28-Mar31, got % - %', v_start, v_end;
-    END IF;
-END;
-$$;
+    ),
+    '2026-02-28'::date,
+    'Feb 28 completed cycle ends Feb 28'
+);
 
 SELECT ok(
-    TRUE,
-    '31st-anchor renews on Feb 28 and Mar 31 with clamped bounds'
+    (
+        SELECT is_anniversary
+        FROM public.billing_period_completed_cycle(
+            '2026-01-31 00:00:00+00'::timestamptz,
+            '2026-03-31'::date
+        )
+    ),
+    '31st-anchor is anniversary on Mar 31 (not skipped after Feb)'
+);
+
+SELECT is(
+    (
+        SELECT cycle_start::date
+        FROM public.billing_period_completed_cycle(
+            '2026-01-31 00:00:00+00'::timestamptz,
+            '2026-03-31'::date
+        )
+    ),
+    '2026-02-28'::date,
+    'Mar 31 completed cycle starts Feb 28'
 );
 
 SELECT * FROM finish();

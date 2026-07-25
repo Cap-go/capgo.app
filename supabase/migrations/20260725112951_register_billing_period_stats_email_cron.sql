@@ -27,6 +27,60 @@ REVOKE ALL ON FUNCTION public.get_org_credits_used_in_period(uuid, timestamptz, 
 REVOKE ALL ON FUNCTION public.get_org_credits_used_in_period(uuid, timestamptz, timestamptz) FROM authenticated;
 GRANT ALL ON FUNCTION public.get_org_credits_used_in_period(uuid, timestamptz, timestamptz) TO service_role;
 
+-- Stripe-style day-of-month clamping for billing anniversary detection.
+-- Returns the completed cycle ending on p_as_of when that day is the
+-- (clamped) anniversary; otherwise is_anniversary is false.
+CREATE OR REPLACE FUNCTION public.billing_period_completed_cycle(
+  p_anchor_start timestamptz,
+  p_as_of date DEFAULT CURRENT_DATE
+)
+RETURNS TABLE (
+  is_anniversary boolean,
+  cycle_start timestamptz,
+  cycle_end timestamptz
+)
+LANGUAGE plpgsql
+STABLE
+SET search_path = ''
+AS $$
+DECLARE
+  v_anchor_dom integer;
+  v_this_month_last integer;
+  v_prev_month_last integer;
+  v_this_anniv_dom integer;
+  v_prev_anniv_dom integer;
+BEGIN
+  v_anchor_dom := COALESCE(EXTRACT(DAY FROM p_anchor_start)::integer, 1);
+  v_this_month_last := EXTRACT(
+    DAY FROM (date_trunc('month', p_as_of) + interval '1 month - 1 day')
+  )::integer;
+  v_prev_month_last := EXTRACT(
+    DAY FROM (date_trunc('month', p_as_of) - interval '1 day')
+  )::integer;
+  v_this_anniv_dom := LEAST(v_anchor_dom, v_this_month_last);
+  v_prev_anniv_dom := LEAST(v_anchor_dom, v_prev_month_last);
+
+  is_anniversary := EXTRACT(DAY FROM p_as_of)::integer = v_this_anniv_dom;
+  IF is_anniversary THEN
+    cycle_start := date_trunc('month', p_as_of - interval '1 month')
+      + ((v_prev_anniv_dom - 1) || ' days')::interval;
+    cycle_end := date_trunc('month', p_as_of)
+      + ((v_this_anniv_dom - 1) || ' days')::interval;
+  ELSE
+    cycle_start := NULL;
+    cycle_end := NULL;
+  END IF;
+
+  RETURN NEXT;
+END;
+$$;
+
+ALTER FUNCTION public.billing_period_completed_cycle(timestamptz, date) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.billing_period_completed_cycle(timestamptz, date) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.billing_period_completed_cycle(timestamptz, date) FROM anon;
+REVOKE ALL ON FUNCTION public.billing_period_completed_cycle(timestamptz, date) FROM authenticated;
+GRANT ALL ON FUNCTION public.billing_period_completed_cycle(timestamptz, date) TO service_role;
+
 CREATE OR REPLACE FUNCTION public.process_billing_period_stats_email()
 RETURNS void
 LANGUAGE plpgsql
@@ -34,43 +88,27 @@ SET search_path = ''
 AS $$
 DECLARE
   org_record RECORD;
-  v_anchor_dom integer;
-  v_this_month_last integer;
-  v_prev_month_last integer;
-  v_this_anniv_dom integer;
-  v_prev_anniv_dom integer;
-  v_prev_cycle_start timestamptz;
-  v_prev_cycle_end timestamptz;
+  v_cycle RECORD;
 BEGIN
-  -- Stripe-style day-of-month anchors: clamp to the last valid day of each month
-  -- so 29th/30th/31st anchors still renew on Feb 28/29, Apr 30, etc.
   FOR org_record IN (
     SELECT
       o.id AS org_id,
       o.management_email,
-      COALESCE(EXTRACT(DAY FROM si.subscription_anchor_start)::integer, 1) AS anchor_dom
+      si.subscription_anchor_start
     FROM public.orgs o
     JOIN public.stripe_info si ON o.customer_id = si.customer_id
     WHERE si.status = 'succeeded'
       AND o.management_email IS NOT NULL
   )
   LOOP
-    v_anchor_dom := org_record.anchor_dom;
-    v_this_month_last := EXTRACT(
-      DAY FROM (date_trunc('month', now()) + interval '1 month - 1 day')
-    )::integer;
-    v_prev_month_last := EXTRACT(
-      DAY FROM (date_trunc('month', now()) - interval '1 day')
-    )::integer;
-    v_this_anniv_dom := LEAST(v_anchor_dom, v_this_month_last);
-    v_prev_anniv_dom := LEAST(v_anchor_dom, v_prev_month_last);
+    SELECT *
+    INTO v_cycle
+    FROM public.billing_period_completed_cycle(
+      org_record.subscription_anchor_start,
+      CURRENT_DATE
+    );
 
-    IF EXTRACT(DAY FROM CURRENT_DATE)::integer = v_this_anniv_dom THEN
-      v_prev_cycle_start := date_trunc('month', now() - interval '1 month')
-        + ((v_prev_anniv_dom - 1) || ' days')::interval;
-      v_prev_cycle_end := date_trunc('month', now())
-        + ((v_this_anniv_dom - 1) || ' days')::interval;
-
+    IF v_cycle.is_anniversary THEN
       PERFORM pgmq.send(
         'cron_email',
         jsonb_build_object(
@@ -80,8 +118,8 @@ BEGIN
             'email', org_record.management_email,
             'orgId', org_record.org_id,
             'type', 'billing_period_stats',
-            'cycleStart', v_prev_cycle_start,
-            'cycleEnd', v_prev_cycle_end
+            'cycleStart', v_cycle.cycle_start,
+            'cycleEnd', v_cycle.cycle_end
           )
         )
       );
