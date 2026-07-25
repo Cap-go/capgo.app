@@ -1,8 +1,8 @@
 -- Slim audit_logs: do not store internal app_versions upload/migrate bookkeeping.
 -- Capgo-EU evidence: r2_path/storage_provider/manifest pipeline updates were hundreds
 -- of MB of TOAST with no user-facing audit value. Soft-delete and real edits stay.
--- Historical cleanup is intentionally NOT in this migration (avoids one-shot WAL/lock
--- storm on audit_logs). Run bounded ops deletes separately if needed.
+-- Historical cleanup stays out of this migration to avoid a WAL/lock storm.
+-- Run bounded ops deletes separately if needed.
 
 CREATE OR REPLACE FUNCTION "public"."audit_log_trigger"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
@@ -75,7 +75,6 @@ BEGIN
     IF (
       v_old_record
         - 'manifest'
-        - 'native_packages'
         - 'updated_at'
         - 'manifest_count'
         - 'storage_provider'
@@ -83,7 +82,6 @@ BEGIN
     ) IS NOT DISTINCT FROM (
       v_new_record
         - 'manifest'
-        - 'native_packages'
         - 'updated_at'
         - 'manifest_count'
         - 'storage_provider'
