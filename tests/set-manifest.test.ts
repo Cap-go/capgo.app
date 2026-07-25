@@ -81,7 +81,7 @@ describe('[POST] /private/set_manifest', () => {
     })
 
     expect(response.status).toBe(200)
-    const json = await response.json()
+    const json = await response.json() as { status: string, inserted: number, alreadyPresent: boolean }
     expect(json.status).toBe('ok')
     expect(json.inserted).toBe(2)
     expect(json.alreadyPresent).toBe(false)
@@ -116,7 +116,7 @@ describe('[POST] /private/set_manifest', () => {
       body: JSON.stringify(body),
     })
     expect(retry.status).toBe(200)
-    const retryJson = await retry.json()
+    const retryJson = await retry.json() as { inserted: number, alreadyPresent: boolean }
     expect(retryJson.alreadyPresent).toBe(true)
     expect(retryJson.inserted).toBe(0)
   })
@@ -206,7 +206,7 @@ describe('[POST] /private/set_manifest', () => {
     })
 
     expect(response.status).toBe(400)
-    const json = await response.json()
+    const json = await response.json() as { error: string }
     expect(json.error).toBe('error_version_already_finalized')
   })
 })
