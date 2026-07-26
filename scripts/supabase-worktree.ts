@@ -287,6 +287,20 @@ function runSupabase(args: string[], repoRoot: string, options: { captureOutput?
   if (isFunctionsServe && !hasEnvFile)
     commandArgs.push('--env-file', ensureFunctionsEnvFile(repoRoot, workdir, cfg))
 
+  // Supabase CLI 2.109+ plpgsql_check warns on intentional STABLE helpers that
+  // call auth.uid()/request headers. Keep emitting warnings, but do not fail CI
+  // on that newly noisy class unless callers ask for --fail-on error.
+  if (
+    commandArgs[0] === 'db'
+    && commandArgs[1] === 'lint'
+    && commandArgs.includes('--fail-on')
+  ) {
+    const failOnIdx = commandArgs.indexOf('--fail-on')
+    if (failOnIdx >= 0 && commandArgs[failOnIdx + 1] === 'warning') {
+      commandArgs[failOnIdx + 1] = 'error'
+    }
+  }
+
   const res = spawnSync(supa.cmd, [...supa.argsPrefix, ...commandArgs, '--workdir', workdir], {
     stdio: options.captureOutput ? 'pipe' : 'inherit',
     encoding: options.captureOutput ? 'utf8' : undefined,

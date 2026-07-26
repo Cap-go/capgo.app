@@ -151,6 +151,23 @@ done < <(git diff --name-status -M100% --diff-filter=R "${base_ref}...HEAD" -- '
 failed_migration_hotfix='supabase/migrations/20260713114104_harden_rbac_compat_cleanup_after_rls.sql'
 failed_migration_hotfix_blob='17dfb3f478bff6b52bc71a85f0016cce11f1d789'
 
+# Prod-applied migrations restored from remote schema_migrations.statements.
+# Exact blob hashes keep this allowlist from accepting later edits.
+is_prod_history_restore() {
+  local file="$1"
+  local blob
+  blob="$(git hash-object "$file")"
+  case "${file}:${blob}" in
+    supabase/migrations/20260725111831_fix_reclaim_no_timeout_max_work.sql:375c5ec53b9037fc2c95b6c6f14505663fdba338) return 0 ;;
+    supabase/migrations/20260725111921_fix_reclaim_encrypt_trigger_guc.sql:498056fe115946cfef691d9c16c299891a3e2076) return 0 ;;
+    supabase/migrations/20260725111931_fix_reclaim_cron_catch_canceled.sql:4226e0cab969bbefc7ca622e34821ae12a0c8c3a) return 0 ;;
+    supabase/migrations/20260725162854_skip_audit_dual_storage_manifest_count.sql:ea3b1c49c5469aa9ba0d74bef34eba35f78d934f) return 0 ;;
+    supabase/migrations/20260725182614_slim_audit_logs_skip_bookkeeping.sql:1856f7dced19a929e4ea3548e75e2a17b8a99863) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+
 modified_files="$(git diff --name-only --diff-filter=MR "${base_ref}...HEAD" -- 'supabase/migrations/*.sql')"
 if [[ -n "$modified_files" ]]; then
   disallowed_modified_files=''
@@ -262,6 +279,8 @@ if [[ -n "$added_files" ]]; then
     if (( 10#$ts < 10#$latest_base_timestamp )); then
       if [[ "$allow_migration_squash" -eq 1 && "${file##*/}" == *_baseline.sql ]]; then
         echo "⚠️  Allowing baseline timestamp before latest main migration during squash: $file"
+      elif is_prod_history_restore "$file"; then
+        echo "⚠️  Allowing audited prod-history restore with older timestamp: $file"
       else
         echo '❌ Migration timestamp regression detected'
         echo "  Latest timestamp on ${base_ref}: ${latest_base_timestamp}"
