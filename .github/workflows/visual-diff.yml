@@ -70,7 +70,7 @@ jobs:
       - name: Install Supabase CLI
         uses: supabase/setup-cli@v2
         with:
-          version: 2.84.2
+          version: 2.109.1
 
       - name: Link Supabase templates
         run: ln -sfn supabase/templates templates
