@@ -1628,6 +1628,8 @@ BEGIN
       FROM public.find_apikey_by_value(v_api_key_text)
       LIMIT 1;
 
+      -- Attribute only valid, write-capable API keys; a read-only key present on
+      -- a request must not be recorded as the actor of a mutation.
       IF v_api_key.id IS NOT NULL
         AND NOT public.is_apikey_expired(v_api_key.expires_at)
         AND (
@@ -1652,6 +1654,9 @@ BEGIN
 
   v_user_id := v_actor_user_id;
 
+  -- Skip internal app_versions upload/migrate bookkeeping before the generic
+  -- changed_fields walk. Compare via to_jsonb only (this trigger is shared across
+  -- tables; never touch NEW.column names that only exist on app_versions).
   IF TG_OP = 'UPDATE' AND TG_TABLE_NAME = 'app_versions' THEN
     v_old_record := pg_catalog.to_jsonb(OLD);
     v_new_record := pg_catalog.to_jsonb(NEW);
@@ -1713,6 +1718,8 @@ BEGIN
     END IF;
   END IF;
 
+  -- Never persist multi-MB array/json columns in audit TOAST.
+  -- Keep fat field names in changed_fields when co-occurring with real user edits.
   IF TG_TABLE_NAME = 'app_versions' THEN
     IF v_old_record IS NOT NULL THEN
       v_old_record := v_old_record - v_fat_app_version_fields;
@@ -1720,6 +1727,7 @@ BEGIN
     IF v_new_record IS NOT NULL THEN
       v_new_record := v_new_record - v_fat_app_version_fields;
     END IF;
+
   END IF;
 
   CASE TG_TABLE_NAME
@@ -1836,6 +1844,69 @@ $$;
 
 
 ALTER FUNCTION "public"."auto_owner_org_by_app_id"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."billing_period_completed_cycle"("p_anchor_start" timestamp with time zone, "p_as_of" "date" DEFAULT (("now"() AT TIME ZONE 'UTC'::"text"))::"date") RETURNS TABLE("is_anniversary" boolean, "cycle_start" timestamp with time zone, "cycle_end" timestamp with time zone)
+    LANGUAGE "plpgsql" STABLE
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  v_as_of date;
+  v_anchor_utc timestamp;
+  v_anchor_dom integer;
+  v_this_month_last integer;
+  v_prev_month_last integer;
+  v_this_anniv_dom integer;
+  v_prev_anniv_dom integer;
+  v_prev_month date;
+BEGIN
+  -- Calendar math is UTC so session TimeZone cannot shift anniversary days.
+  -- Bounds are UTC midnight so the daily 12:00 UTC cron always reports a
+  -- completed [start, end) period (Stripe anchors are often afternoon UTC).
+  v_as_of := COALESCE(p_as_of, (now() AT TIME ZONE 'UTC')::date);
+  v_anchor_utc := p_anchor_start AT TIME ZONE 'UTC';
+  v_anchor_dom := COALESCE(EXTRACT(DAY FROM v_anchor_utc)::integer, 1);
+  v_this_month_last := EXTRACT(
+    DAY FROM (date_trunc('month', v_as_of) + interval '1 month - 1 day')
+  )::integer;
+  v_prev_month_last := EXTRACT(
+    DAY FROM (date_trunc('month', v_as_of) - interval '1 day')
+  )::integer;
+  v_this_anniv_dom := LEAST(v_anchor_dom, v_this_month_last);
+  v_prev_anniv_dom := LEAST(v_anchor_dom, v_prev_month_last);
+
+  is_anniversary := EXTRACT(DAY FROM v_as_of)::integer = v_this_anniv_dom;
+  IF is_anniversary THEN
+    v_prev_month := (date_trunc('month', v_as_of) - interval '1 month')::date;
+    cycle_start := make_timestamptz(
+      EXTRACT(YEAR FROM v_prev_month)::integer,
+      EXTRACT(MONTH FROM v_prev_month)::integer,
+      v_prev_anniv_dom,
+      0,
+      0,
+      0,
+      'UTC'
+    );
+    cycle_end := make_timestamptz(
+      EXTRACT(YEAR FROM v_as_of)::integer,
+      EXTRACT(MONTH FROM v_as_of)::integer,
+      v_this_anniv_dom,
+      0,
+      0,
+      0,
+      'UTC'
+    );
+  ELSE
+    cycle_start := NULL;
+    cycle_end := NULL;
+  END IF;
+
+  RETURN NEXT;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."billing_period_completed_cycle"("p_anchor_start" timestamp with time zone, "p_as_of" "date") OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."bind_app_preview_apikey_to_created_channel"() RETURNS "trigger"
@@ -6965,6 +7036,21 @@ $$;
 ALTER FUNCTION "public"."get_org_build_time_unit"("p_org_id" "uuid", "p_start_date" "date", "p_end_date" "date") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."get_org_credits_used_in_period"("p_org_id" "uuid", "p_start" timestamp with time zone, "p_end" timestamp with time zone) RETURNS numeric
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  SELECT COALESCE(SUM(c.credits_used), 0)::numeric
+  FROM public.usage_credit_consumptions c
+  WHERE c.org_id = p_org_id
+    AND c.applied_at >= p_start
+    AND c.applied_at < p_end;
+$$;
+
+
+ALTER FUNCTION "public"."get_org_credits_used_in_period"("p_org_id" "uuid", "p_start" timestamp with time zone, "p_end" timestamp with time zone) OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."get_org_members"("guild_id" "uuid") RETURNS TABLE("aid" bigint, "uid" "uuid", "email" character varying, "image_url" character varying, "role" "text", "is_tmp" boolean)
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -8764,12 +8850,23 @@ CREATE OR REPLACE FUNCTION "public"."get_weekly_stats"("app_id" character varyin
     LANGUAGE "plpgsql"
     SET "search_path" TO ''
     AS $$
-DECLARE seven_days_ago DATE;
+DECLARE
+  period_start DATE;
 BEGIN
-  seven_days_ago := CURRENT_DATE - INTERVAL '7 days';
-  SELECT COALESCE(SUM(install), 0) INTO all_updates FROM public.daily_version WHERE date BETWEEN seven_days_ago AND CURRENT_DATE AND public.daily_version.app_id = get_weekly_stats.app_id;
-  SELECT COALESCE(SUM(fail), 0) INTO failed_updates FROM public.daily_version WHERE date BETWEEN seven_days_ago AND CURRENT_DATE AND public.daily_version.app_id = get_weekly_stats.app_id;
-  SELECT COALESCE(SUM(get), 0) INTO open_app FROM public.daily_version WHERE date BETWEEN seven_days_ago AND CURRENT_DATE AND public.daily_version.app_id = get_weekly_stats.app_id;
+  -- Inclusive 7-day window: today and the previous 6 days.
+  period_start := CURRENT_DATE - INTERVAL '6 days';
+  SELECT COALESCE(SUM(install), 0) INTO all_updates
+  FROM public.daily_version
+  WHERE date BETWEEN period_start AND CURRENT_DATE
+    AND public.daily_version.app_id = get_weekly_stats.app_id;
+  SELECT COALESCE(SUM(fail), 0) INTO failed_updates
+  FROM public.daily_version
+  WHERE date BETWEEN period_start AND CURRENT_DATE
+    AND public.daily_version.app_id = get_weekly_stats.app_id;
+  SELECT COALESCE(SUM(get), 0) INTO open_app
+  FROM public.daily_version
+  WHERE date BETWEEN period_start AND CURRENT_DATE
+    AND public.daily_version.app_id = get_weekly_stats.app_id;
   RETURN QUERY SELECT all_updates, failed_updates, open_app;
 END;
 $$;
@@ -11522,47 +11619,29 @@ CREATE OR REPLACE FUNCTION "public"."process_billing_period_stats_email"() RETUR
     AS $$
 DECLARE
   org_record RECORD;
+  v_cycle RECORD;
 BEGIN
-  -- Find all orgs whose billing cycle ends today
-  -- We calculate the PREVIOUS cycle's dates to ensure we report on completed data
   FOR org_record IN (
     SELECT
       o.id AS org_id,
       o.management_email,
-      si.subscription_anchor_start,
-      -- Calculate the previous billing cycle dates
-      -- We use (now() - interval '1 day') to get yesterday's cycle end date calculation
-      -- This ensures we're always looking at the just-completed cycle
-      CASE
-        WHEN COALESCE(
-          si.subscription_anchor_start - date_trunc('MONTH', si.subscription_anchor_start),
-          '0 DAYS'::INTERVAL
-        ) > (now() - interval '1 day') - date_trunc('MONTH', now() - interval '1 day')
-        THEN date_trunc('MONTH', (now() - interval '1 day') - INTERVAL '1 MONTH') +
-             COALESCE(si.subscription_anchor_start - date_trunc('MONTH', si.subscription_anchor_start), '0 DAYS'::INTERVAL)
-        ELSE date_trunc('MONTH', now() - interval '1 day') +
-             COALESCE(si.subscription_anchor_start - date_trunc('MONTH', si.subscription_anchor_start), '0 DAYS'::INTERVAL)
-      END AS prev_cycle_start,
-      CASE
-        WHEN COALESCE(
-          si.subscription_anchor_start - date_trunc('MONTH', si.subscription_anchor_start),
-          '0 DAYS'::INTERVAL
-        ) > (now() - interval '1 day') - date_trunc('MONTH', now() - interval '1 day')
-        THEN (date_trunc('MONTH', (now() - interval '1 day') - INTERVAL '1 MONTH') +
-              COALESCE(si.subscription_anchor_start - date_trunc('MONTH', si.subscription_anchor_start), '0 DAYS'::INTERVAL)) + INTERVAL '1 MONTH'
-        ELSE (date_trunc('MONTH', now() - interval '1 day') +
-              COALESCE(si.subscription_anchor_start - date_trunc('MONTH', si.subscription_anchor_start), '0 DAYS'::INTERVAL)) + INTERVAL '1 MONTH'
-      END AS prev_cycle_end
+      si.subscription_anchor_start
     FROM public.orgs o
     JOIN public.stripe_info si ON o.customer_id = si.customer_id
     WHERE si.status = 'succeeded'
       AND o.management_email IS NOT NULL
   )
   LOOP
-    -- If today is the billing cycle end date, queue the email
-    -- We pass the calculated previous cycle dates to ensure correct data
-    IF org_record.prev_cycle_end::date = CURRENT_DATE THEN
-      PERFORM pgmq.send('cron_email',
+    SELECT *
+    INTO v_cycle
+    FROM public.billing_period_completed_cycle(
+      org_record.subscription_anchor_start,
+      (now() AT TIME ZONE 'UTC')::date
+    );
+
+    IF v_cycle.is_anniversary THEN
+      PERFORM pgmq.send(
+        'cron_email',
         jsonb_build_object(
           'function_name', 'cron_email',
           'function_type', 'cloudflare',
@@ -11570,8 +11649,8 @@ BEGIN
             'email', org_record.management_email,
             'orgId', org_record.org_id,
             'type', 'billing_period_stats',
-            'cycleStart', org_record.prev_cycle_start,
-            'cycleEnd', org_record.prev_cycle_end
+            'cycleStart', v_cycle.cycle_start,
+            'cycleEnd', v_cycle.cycle_end
           )
         )
       );
@@ -22981,6 +23060,11 @@ REVOKE ALL ON FUNCTION "public"."auto_owner_org_by_app_id"() FROM PUBLIC;
 
 
 
+REVOKE ALL ON FUNCTION "public"."billing_period_completed_cycle"("p_anchor_start" timestamp with time zone, "p_as_of" "date") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."billing_period_completed_cycle"("p_anchor_start" timestamp with time zone, "p_as_of" "date") TO "service_role";
+
+
+
 REVOKE ALL ON FUNCTION "public"."bind_app_preview_apikey_to_created_channel"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."bind_app_preview_apikey_to_created_channel"() TO "service_role";
 
@@ -23564,6 +23648,11 @@ GRANT ALL ON FUNCTION "public"."get_org_apps_with_last_upload"("p_org_id" "uuid"
 GRANT ALL ON FUNCTION "public"."get_org_build_time_unit"("p_org_id" "uuid", "p_start_date" "date", "p_end_date" "date") TO "anon";
 GRANT ALL ON FUNCTION "public"."get_org_build_time_unit"("p_org_id" "uuid", "p_start_date" "date", "p_end_date" "date") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."get_org_build_time_unit"("p_org_id" "uuid", "p_start_date" "date", "p_end_date" "date") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."get_org_credits_used_in_period"("p_org_id" "uuid", "p_start" timestamp with time zone, "p_end" timestamp with time zone) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."get_org_credits_used_in_period"("p_org_id" "uuid", "p_start" timestamp with time zone, "p_end" timestamp with time zone) TO "service_role";
 
 
 
@@ -24208,6 +24297,7 @@ GRANT ALL ON FUNCTION "public"."process_all_cron_tasks"() TO "service_role";
 
 
 REVOKE ALL ON FUNCTION "public"."process_billing_period_stats_email"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."process_billing_period_stats_email"() TO "service_role";
 
 
 
