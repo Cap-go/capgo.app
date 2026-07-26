@@ -193,12 +193,12 @@ export function evaluateQueueHealth(
 
   if (metrics.queue_table_exists && metrics.never_read_stale_count > 0) {
     reasons.push('never_read_stale')
-    reason_details.never_read_stale = `${metrics.never_read_stale_count} message(s) still have read_ct=0 after ${metrics.never_read_stale_seconds}s (oldest age ${metrics.oldest_message_age_seconds ?? 'unknown'}s). Consumers are not reading this queue in time.`
+    reason_details.never_read_stale = `${metrics.never_read_stale_count} visible message(s) still have read_ct=0 after ${metrics.never_read_stale_seconds}s (oldest age ${metrics.oldest_message_age_seconds ?? 'unknown'}s). Consumers are not reading this queue in time.`
   }
 
   if (metrics.queue_table_exists && metrics.stuck_count > 0) {
     reasons.push('stuck_high_read_ct')
-    reason_details.stuck_high_read_ct = `${metrics.stuck_count} message(s) have read_ct > ${thresholds.stuck_read_ct} (max ${metrics.max_read_ct ?? 'unknown'}). Messages are being retried without successful ack/delete.`
+    reason_details.stuck_high_read_ct = `${metrics.stuck_count} message(s) have read_ct > ${thresholds.stuck_read_ct} (max ${metrics.max_read_ct ?? 'unknown'}). Hard retry budget is 5 for every queue; poison messages must be archived/deleted, not retried forever.`
   }
 
   if (metrics.queue_table_exists && metrics.queue_count > thresholds.queue_depth_threshold) {
@@ -241,14 +241,14 @@ export function evaluateQueueHealth(
 export function buildQueueHealthCriteria(thresholds: QueueHealthThresholds) {
   return {
     never_read_stale: {
-      healthy_when: 'No queue messages remain with read_ct=0 longer than the queue stale threshold (derived from cron interval when known).',
-      unhealthy_when: 'Messages sit unread long enough that consumers are likely stuck or not scheduled.',
+      healthy_when: 'No visible (vt <= now()) queue messages remain with read_ct=0 longer than the queue stale threshold (derived from cron interval when known). Delayed retries with future vt are ignored.',
+      unhealthy_when: 'Visible messages sit unread long enough that consumers are likely stuck or not scheduled.',
       default_threshold_seconds: thresholds.default_never_read_stale_seconds,
       min_threshold_seconds: thresholds.min_never_read_stale_seconds,
       interval_multiplier: thresholds.never_read_interval_multiplier,
     },
     stuck_high_read_ct: {
-      healthy_when: `No queue messages have read_ct > ${thresholds.stuck_read_ct}.`,
+      healthy_when: `No queue messages have read_ct > ${thresholds.stuck_read_ct} (hard max retries = 5 for every queue).`,
       unhealthy_when: 'Messages keep retrying past the stuck threshold without successful processing.',
       threshold: thresholds.stuck_read_ct,
     },
@@ -373,14 +373,19 @@ async function fetchQueueMetrics(
       `
       SELECT
         COUNT(*)::bigint AS queue_count,
+        -- All unread rows (including delayed vt > now()). Public metric — keep meaning stable.
         COUNT(*) FILTER (WHERE read_ct = 0)::bigint AS never_read_count,
+        -- Staleness only cares about messages consumers can already read.
         COUNT(*) FILTER (
           WHERE read_ct = 0
+            AND vt <= now()
             AND enqueued_at < now() - ($1::text || ' seconds')::interval
         )::bigint AS never_read_stale_count,
         COUNT(*) FILTER (WHERE read_ct > $2)::bigint AS stuck_count,
         MAX(read_ct)::bigint AS max_read_ct,
-        EXTRACT(EPOCH FROM (now() - MIN(enqueued_at)))::numeric AS oldest_message_age_seconds
+        EXTRACT(EPOCH FROM (
+          now() - MIN(enqueued_at) FILTER (WHERE vt <= now())
+        ))::numeric AS oldest_message_age_seconds
       FROM pgmq.q_${queueName}
       `,
       [String(neverReadStaleSeconds), thresholds.stuck_read_ct],
