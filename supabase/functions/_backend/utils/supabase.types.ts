@@ -3698,6 +3698,14 @@ export type Database = {
         Returns: undefined
       }
       audit_logs_allowed_orgs: { Args: never; Returns: string[] }
+      billing_period_completed_cycle: {
+        Args: { p_anchor_start: string; p_as_of?: string }
+        Returns: {
+          cycle_end: string
+          cycle_start: string
+          is_anniversary: boolean
+        }[]
+      }
       calculate_credit_cost: {
         Args: {
           p_metric: Database["public"]["Enums"]["credit_metric_type"]
@@ -4195,6 +4203,10 @@ export type Database = {
           total_build_time_unit: number
           total_builds: number
         }[]
+      }
+      get_org_credits_used_in_period: {
+        Args: { p_end: string; p_org_id: string; p_start: string }
+        Returns: number
       }
       get_org_members:
         | {
