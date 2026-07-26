@@ -26,7 +26,6 @@ const QUEUE_HTTP_TIMEOUT_MS = 15_000
 const VERSION_QUEUE_HTTP_TIMEOUT_MS = 300_000 // large deleted manifests: trash then DB delete
 const HEALTHCHECK_HTTP_TIMEOUT_MS = 8_000
 export const MAX_QUEUE_READS = 5
-const VERSION_QUEUE_MAX_READS = 30 // deleted manifests can need many partial trash/delete passes
 const DISCORD_IGNORED_ERROR_CODES = new Set(['version_not_found', 'no_channel'])
 
 export const messageSchema = z.object({
@@ -281,9 +280,10 @@ function getQueueHttpTimeoutMs(functionName: string): number {
   return QUEUE_HTTP_TIMEOUT_MS
 }
 
-function getQueueMaxReads(queueName: string): number {
-  if (isVersionQueueFunction(queueName))
-    return VERSION_QUEUE_MAX_READS
+function getQueueMaxReads(_queueName: string): number {
+  // Same budget for every queue. Large deleted-manifest cleanup already commits
+  // per file; leftover rows are reclaimed by sweep_deleted_version_manifests.
+  // Do not burn retries as a fake "progress" budget.
   return MAX_QUEUE_READS
 }
 
