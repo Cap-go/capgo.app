@@ -96,18 +96,18 @@ export type WebhookEventType = typeof WEBHOOK_EVENT_TYPES[number]
 
 const WEBHOOK_DELIVERY_TIMEOUT_MS = 20000
 const WEBHOOK_RESPONSE_BODY_LIMIT_BYTES = 10000
-const WEBHOOK_MAX_RETRY_AFTER_SECONDS = 24 * 60 * 60
+const WEBHOOK_MAX_RETRY_AFTER_SECONDS = 2 * 60 * 60
+// HARD RULE: same ceiling as MAX_QUEUE_READS — never more than 5 delivery attempts.
+export const WEBHOOK_MAX_ATTEMPTS = 5
 const WEBHOOK_RETRY_THROTTLE_STATUSES = new Set([429, 502, 504])
+// Five delays for attempts 1..5. Do not lengthen past a few hours — delayed
+// pgmq messages with future vt must not look like abandoned backlog forever.
 const WEBHOOK_RETRY_DELAYS_SECONDS = [
   5,
   5 * 60,
   30 * 60,
   2 * 60 * 60,
   5 * 60 * 60,
-  10 * 60 * 60,
-  14 * 60 * 60,
-  20 * 60 * 60,
-  24 * 60 * 60,
 ]
 
 interface WebhookLogUrlMetadata {

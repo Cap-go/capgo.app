@@ -130,6 +130,17 @@ backfill code, design for this scale:
 - Queue consumers must be sized from measured throughput: batch size,
   concurrency, visibility timeout, retry count, provider/API limits, and caller
   timeout must all fit the same worst-case calculation.
+- **HARD RULE — max 5 retries for every queue:** `MAX_QUEUE_READS = 5` in
+  `supabase/functions/_backend/triggers/queue_consumer.ts` is the global ceiling
+  for pgmq `read_ct`. Never raise it. Never add a per-queue exception (including
+  `on_version_update`, webhook queues, or cron queues). Application-level
+  retries (e.g. `webhook_deliveries.max_attempts` / `WEBHOOK_MAX_ATTEMPTS`) must
+  also stay at **5 or less**. If work needs more passes (large deleted
+  manifests, delayed webhook delivery, etc.), commit progress and re-enqueue via
+  a sweeper/cron (`sweep_deleted_version_manifests`, delayed `pgmq.send`, etc.) —
+  do not burn queue reads as a fake progress budget. `/queue_health` treats
+  `read_ct > 5` as unhealthy (`stuck_high_read_ct`); `cleanup_queue_messages`
+  deletes those poison rows.
 - Do not assume a `202` HTTP response means queue work finished. If the handler
   uses background work, prove the work can finish inside the runtime limits and
   that successful queue messages are deleted before visibility timeout expires.
@@ -144,6 +155,28 @@ backfill code, design for this scale:
   production evidence in database state, queue/archive tables, provider logs, or
   HTTP/runtime logs. If the current logs cannot identify the cause, first add
   logging that will identify it in the next occurrence.
+
+### Queue Retry Budget (HARD RULE)
+
+**Retries must never exceed 5 for any queue or queue-backed delivery path.**
+
+| Layer | Cap | Source of truth |
+| --- | --- | --- |
+| pgmq consumer `read_ct` | **5** | `MAX_QUEUE_READS` in `queue_consumer.ts` |
+| Discord / skip-archive budget | **5** | `getQueueMaxReads()` → always `MAX_QUEUE_READS` |
+| `/queue_health` stuck threshold | **5** | `STUCK_READ_CT_THRESHOLD` |
+| `cleanup_queue_messages` poison delete | **`read_ct > 5`** | SQL cleanup cron |
+| Webhook delivery attempts | **5** | `WEBHOOK_MAX_ATTEMPTS` + `webhook_deliveries.max_attempts` default |
+
+Do **not**:
+- Add `VERSION_QUEUE_MAX_READS` (or any other per-queue) above 5
+- Lengthen webhook retry ladders past a few hours / past 5 attempts
+- Treat incomplete multi-pass work as “just raise retries”
+
+Do:
+- Size `cron_tasks.batch_size` / intervals so visible backlog drains
+- Re-enqueue unfinished work via sweepers (e.g. deleted-manifest cleanup)
+- Keep `/queue_health` green: no visible `read_ct=0` stale msgs, no `read_ct > 5`
 
 ### AI Workflow Notes
 

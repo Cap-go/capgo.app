@@ -278,7 +278,10 @@ type ManifestCleanupEntry = {
 /**
  * Trash unreferenced R2 objects first (exist → move to deleted-after-7-days/,
  * missing → ok), then delete that DB row. Never drop DB tracking before R2 is handled.
- * Incomplete work throws so the queue retries; already-trashed paths are idempotent.
+ * Per-file work is committed, so a timeout mid-pass is safe to retry. Leftover rows
+ * after the normal retry budget (MAX_QUEUE_READS=5) are reclaimed by
+ * sweep_deleted_version_manifests. Incomplete work throws so the queue retries;
+ * already-trashed paths are idempotent.
  */
 async function deleteManifest(c: Context, record: Database['public']['Tables']['app_versions']['Row']) {
   const readPgClient = getPgClient(c, true)

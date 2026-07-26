@@ -25,8 +25,10 @@ const MANIFEST_QUEUE_VISIBILITY_TIMEOUT_SECONDS = 900
 const QUEUE_HTTP_TIMEOUT_MS = 15_000
 const VERSION_QUEUE_HTTP_TIMEOUT_MS = 300_000 // large deleted manifests: trash then DB delete
 const HEALTHCHECK_HTTP_TIMEOUT_MS = 8_000
+// HARD RULE: no pgmq queue may retry more than 5 times. Do not raise this, and
+// do not add per-queue exceptions. Leftover work must be re-enqueued by a
+// sweeper/cron (e.g. sweep_deleted_version_manifests), never by burning reads.
 export const MAX_QUEUE_READS = 5
-const VERSION_QUEUE_MAX_READS = 30 // deleted manifests can need many partial trash/delete passes
 const DISCORD_IGNORED_ERROR_CODES = new Set(['version_not_found', 'no_channel'])
 
 export const messageSchema = z.object({
@@ -281,9 +283,7 @@ function getQueueHttpTimeoutMs(functionName: string): number {
   return QUEUE_HTTP_TIMEOUT_MS
 }
 
-function getQueueMaxReads(queueName: string): number {
-  if (isVersionQueueFunction(queueName))
-    return VERSION_QUEUE_MAX_READS
+function getQueueMaxReads(_queueName: string): number {
   return MAX_QUEUE_READS
 }
 
