@@ -313,8 +313,9 @@ async function deleteManifest(c: Context, record: Database['public']['Tables']['
         try {
           await entryPg.query('BEGIN')
           // Serialize shared-hash cleanup across concurrent deleted versions.
+          // Do NOT use chr(0) as a separator — Postgres raises 54000 "null character not permitted".
           await entryPg.query(
-            `SELECT pg_advisory_xact_lock(hashtextextended($1 || chr(0) || $2, 0))`,
+            `SELECT pg_advisory_xact_lock(hashtext($1::text), hashtext($2::text))`,
             [entry.file_hash, entry.file_name],
           )
 

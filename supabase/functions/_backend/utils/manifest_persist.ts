@@ -1,6 +1,6 @@
 import type { Context } from 'hono'
 import { cloudlog } from './logging.ts'
-import { normalizeLegacyEncodedManifestFileName } from './manifest_encoding.ts'
+import { isPostgresSafeText, normalizeLegacyEncodedManifestFileName } from './manifest_encoding.ts'
 import { closeClient, getPgClient } from './pg.ts'
 import { supabaseAdmin } from './supabase.ts'
 
@@ -33,6 +33,12 @@ export function buildTrustedManifestRows(
       // Never trust client-provided sizes; on_manifest_create fills these from R2.
       file_size: 0,
     }))
+    // Drop rows that would raise Postgres 54000 "null character not permitted".
+    .filter(entry =>
+      isPostgresSafeText(entry.file_name)
+      && isPostgresSafeText(entry.file_hash)
+      && isPostgresSafeText(entry.s3_path),
+    )
 }
 
 async function clearLegacyAppVersionManifest(c: Context, versionId: number) {

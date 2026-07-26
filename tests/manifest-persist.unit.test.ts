@@ -60,4 +60,44 @@ describe('buildTrustedManifestRows', () => {
     expect(rows[0]?.file_name).toBe('assets/img/sad_post_grey@2x.png')
     expect(rows[0]?.file_size).toBe(0)
   })
+
+  it.concurrent('keeps legacy %00 encoded names but drops raw null bytes', () => {
+    const rows = buildTrustedManifestRows(11, [
+      {
+        file_name: 'ok.js',
+        s3_path: 'orgs/org/apps/com.app/delta/h_ok.js',
+        file_hash: 'okhash',
+      },
+      {
+        // Decode would yield U+0000 — keep the encoded form (Postgres-safe).
+        file_name: 'bad%00.js',
+        s3_path: 'orgs/org/apps/com.app/delta/h_bad%00.js',
+        file_hash: 'badhash',
+      },
+      {
+        file_name: 'raw\0null.js',
+        s3_path: 'orgs/org/apps/com.app/delta/h_raw.js',
+        file_hash: 'rawhash',
+      },
+    ], 'orgs/org/apps/com.app/')
+
+    expect(rows).toEqual([
+      {
+        app_version_id: 11,
+        file_name: 'ok.js',
+        s3_path: 'orgs/org/apps/com.app/delta/h_ok.js',
+        file_hash: 'okhash',
+        file_size: 0,
+      },
+      {
+        app_version_id: 11,
+        file_name: 'bad%00.js',
+        s3_path: 'orgs/org/apps/com.app/delta/h_bad%00.js',
+        file_hash: 'badhash',
+        file_size: 0,
+      },
+    ])
+  })
 })
+
+
