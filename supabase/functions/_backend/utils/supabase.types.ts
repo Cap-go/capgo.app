@@ -3576,6 +3576,20 @@ export type Database = {
       }
     }
     Views: {
+      pg_buffercache: {
+        Row: {
+          bufferid: number | null
+          isdirty: boolean | null
+          pinning_backends: number | null
+          relblocknumber: number | null
+          reldatabase: unknown
+          relfilenode: unknown
+          relforknumber: number | null
+          reltablespace: unknown
+          usagecount: number | null
+        }
+        Relationships: []
+      }
       usage_credit_balances: {
         Row: {
           available_credits: number | null
@@ -4069,14 +4083,6 @@ export type Database = {
           total: number
           yearly: number
         }[]
-      }
-      get_org_credits_used_in_period: {
-        Args: {
-          p_end: string
-          p_org_id: string
-          p_start: string
-        }
-        Returns: number
       }
       get_cycle_info_org: {
         Args: { orgid: string }
@@ -4704,6 +4710,12 @@ export type Database = {
         Returns: number
       }
       parse_step_pattern: { Args: { pattern: string }; Returns: number }
+      pg_buffercache_pages: { Args: never; Returns: Record<string, unknown>[] }
+      pg_buffercache_summary: { Args: never; Returns: Record<string, unknown> }
+      pg_buffercache_usage_counts: {
+        Args: never
+        Returns: Record<string, unknown>[]
+      }
       pg_log: { Args: { decision: string; input?: Json }; Returns: undefined }
       principal_can_manage_group_rank: {
         Args: {

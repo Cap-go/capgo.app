@@ -64,6 +64,13 @@ CREATE EXTENSION IF NOT EXISTS "moddatetime" WITH SCHEMA "extensions";
 
 
 
+CREATE EXTENSION IF NOT EXISTS "pg_buffercache" WITH SCHEMA "public";
+
+
+
+
+
+
 CREATE EXTENSION IF NOT EXISTS "pg_stat_statements" WITH SCHEMA "extensions";
 
 
@@ -1621,8 +1628,6 @@ BEGIN
       FROM public.find_apikey_by_value(v_api_key_text)
       LIMIT 1;
 
-      -- Attribute only valid, write-capable API keys; a read-only key present on
-      -- a request must not be recorded as the actor of a mutation.
       IF v_api_key.id IS NOT NULL
         AND NOT public.is_apikey_expired(v_api_key.expires_at)
         AND (
@@ -1646,6 +1651,28 @@ BEGIN
   END IF;
 
   v_user_id := v_actor_user_id;
+
+  IF TG_OP = 'UPDATE' AND TG_TABLE_NAME = 'app_versions' THEN
+    v_old_record := pg_catalog.to_jsonb(OLD);
+    v_new_record := pg_catalog.to_jsonb(NEW);
+    IF (
+      v_old_record
+        - 'manifest'
+        - 'updated_at'
+        - 'manifest_count'
+        - 'storage_provider'
+        - 'r2_path'
+    ) IS NOT DISTINCT FROM (
+      v_new_record
+        - 'manifest'
+        - 'updated_at'
+        - 'manifest_count'
+        - 'storage_provider'
+        - 'r2_path'
+    ) THEN
+      RETURN NEW;
+    END IF;
+  END IF;
 
   IF TG_OP = 'DELETE' THEN
     v_old_record := pg_catalog.to_jsonb(OLD);
@@ -1686,27 +1713,12 @@ BEGIN
     END IF;
   END IF;
 
-  -- Never persist multi-MB array/json columns in audit TOAST.
-  -- Keep fat field names in changed_fields so upload-time edits remain visible.
   IF TG_TABLE_NAME = 'app_versions' THEN
     IF v_old_record IS NOT NULL THEN
       v_old_record := v_old_record - v_fat_app_version_fields;
     END IF;
     IF v_new_record IS NOT NULL THEN
       v_new_record := v_new_record - v_fat_app_version_fields;
-    END IF;
-
-    -- Skip audit only for dual-storage reclaim: non-null manifest -> NULL (+ updated_at).
-    IF TG_OP = 'UPDATE'
-      AND OLD.manifest IS NOT NULL
-      AND NEW.manifest IS NULL
-      AND NEW.native_packages IS NOT DISTINCT FROM OLD.native_packages
-      AND NOT EXISTS (
-        SELECT 1
-        FROM pg_catalog.unnest(COALESCE(v_changed_fields, ARRAY[]::text[])) AS changed_field(field_name)
-        WHERE changed_field.field_name <> ALL(ARRAY['manifest', 'updated_at']::text[])
-      ) THEN
-      RETURN NEW;
     END IF;
   END IF;
 
@@ -24132,6 +24144,13 @@ GRANT ALL ON FUNCTION "public"."parse_cron_field"("field" "text", "current_val" 
 GRANT ALL ON FUNCTION "public"."parse_step_pattern"("pattern" "text") TO "anon";
 GRANT ALL ON FUNCTION "public"."parse_step_pattern"("pattern" "text") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."parse_step_pattern"("pattern" "text") TO "service_role";
+
+
+
+GRANT ALL ON FUNCTION "public"."pg_buffercache_evict"(integer) TO "postgres";
+GRANT ALL ON FUNCTION "public"."pg_buffercache_evict"(integer) TO "anon";
+GRANT ALL ON FUNCTION "public"."pg_buffercache_evict"(integer) TO "authenticated";
+GRANT ALL ON FUNCTION "public"."pg_buffercache_evict"(integer) TO "service_role";
 
 
 
