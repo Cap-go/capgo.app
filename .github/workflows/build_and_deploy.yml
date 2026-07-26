@@ -82,7 +82,7 @@ jobs:
       - name: Install Supabase CLI
         uses: supabase/setup-cli@v2.0.0
         with:
-          version: 2.98.2
+          version: 2.109.1
       - name: Prepare Supabase
         run: supabase link --project-ref ${{ env.SUPABASE_PROJECT_ID }}
         env:
