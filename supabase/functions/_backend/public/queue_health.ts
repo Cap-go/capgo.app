@@ -373,10 +373,9 @@ async function fetchQueueMetrics(
       `
       SELECT
         COUNT(*)::bigint AS queue_count,
-        COUNT(*) FILTER (
-          WHERE read_ct = 0
-            AND vt <= now()
-        )::bigint AS never_read_count,
+        -- All unread rows (including delayed vt > now()). Public metric — keep meaning stable.
+        COUNT(*) FILTER (WHERE read_ct = 0)::bigint AS never_read_count,
+        -- Staleness only cares about messages consumers can already read.
         COUNT(*) FILTER (
           WHERE read_ct = 0
             AND vt <= now()

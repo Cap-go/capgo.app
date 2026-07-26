@@ -22,35 +22,42 @@ SET max_attempts = 5
 WHERE max_attempts > 5;
 
 -- 3) Immediate purge of poison messages that already exceeded the hard retry
--- budget. Bounded per queue so deploy stays safe at production scale.
+-- budget. Bounded globally (batches + wall-clock) like cleanup_queue_messages.
 DO $$
 DECLARE
   queue_name text;
   deleted_batch integer;
   deleted_total bigint := 0;
   batch_size integer := 5000;
-  max_batches_per_queue integer := 20;
-  batches_used integer;
+  max_batches_total integer := 40;
+  batches_used integer := 0;
+  max_runtime_ms integer := 30000;
+  started_at timestamptz := pg_catalog.clock_timestamp();
 BEGIN
-  IF to_regclass('pgmq.meta') IS NULL THEN
+  IF pg_catalog.to_regclass('pgmq.meta') IS NULL THEN
     RAISE NOTICE 'queue_health_retry_budget_5: pgmq.meta missing, skip stuck purge';
     RETURN;
   END IF;
+
+  PERFORM pg_catalog.set_config('statement_timeout', '0', true);
 
   FOR queue_name IN
     SELECT q.queue_name
     FROM pgmq.list_queues() q
     ORDER BY q.queue_name
   LOOP
-    IF to_regclass(format('pgmq.q_%I', queue_name)) IS NULL THEN
+    EXIT WHEN batches_used >= max_batches_total;
+    EXIT WHEN (EXTRACT(EPOCH FROM (pg_catalog.clock_timestamp() - started_at)) * 1000) >= max_runtime_ms;
+
+    IF pg_catalog.to_regclass(pg_catalog.format('pgmq.q_%I', queue_name)) IS NULL THEN
       CONTINUE;
     END IF;
 
-    batches_used := 0;
     LOOP
-      EXIT WHEN batches_used >= max_batches_per_queue;
+      EXIT WHEN batches_used >= max_batches_total;
+      EXIT WHEN (EXTRACT(EPOCH FROM (pg_catalog.clock_timestamp() - started_at)) * 1000) >= max_runtime_ms;
 
-      EXECUTE format(
+      EXECUTE pg_catalog.format(
         'DELETE FROM pgmq.q_%I
          WHERE ctid IN (
            SELECT ctid
@@ -71,6 +78,11 @@ BEGIN
     END LOOP;
   END LOOP;
 
-  RAISE NOTICE 'queue_health_retry_budget_5: deleted_stuck_read_ct=%', deleted_total;
+  RAISE NOTICE
+    'queue_health_retry_budget_5: deleted_stuck_read_ct=% batches_used=%/% runtime_ms=%',
+    deleted_total,
+    batches_used,
+    max_batches_total,
+    (EXTRACT(EPOCH FROM (pg_catalog.clock_timestamp() - started_at)) * 1000)::bigint;
 END;
 $$;
