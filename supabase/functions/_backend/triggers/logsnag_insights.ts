@@ -562,13 +562,14 @@ function getPaidPlanTotal(plans: PlanTotal) {
   return (plans.Solo ?? 0) + (plans.Maker ?? 0) + (plans.Team ?? 0) + (plans.Enterprise ?? 0)
 }
 
-function getPlanConversionRates(plans: PlanTotal, totalOrgs: number): PlanConversionRates {
+function getPlanConversionRates(plans: PlanTotal, payingCount: number): PlanConversionRates {
+  // Plan mix among paying orgs (not all orgs/users). Matches LogSnag insight cards.
   return {
-    solo: calculateConversionRate(plans.Solo, totalOrgs),
-    maker: calculateConversionRate(plans.Maker, totalOrgs),
-    team: calculateConversionRate(plans.Team, totalOrgs),
-    enterprise: calculateConversionRate(plans.Enterprise, totalOrgs),
-    total: calculateConversionRate(getPaidPlanTotal(plans), totalOrgs),
+    solo: calculateConversionRate(plans.Solo, payingCount),
+    maker: calculateConversionRate(plans.Maker, payingCount),
+    team: calculateConversionRate(plans.Team, payingCount),
+    enterprise: calculateConversionRate(plans.Enterprise, payingCount),
+    total: calculateConversionRate(getPaidPlanTotal(plans), payingCount),
   }
 }
 
@@ -2638,7 +2639,8 @@ async function runCoreGlobalStatsShard(c: Context, window: DailyWindow): Promise
   } = coreSnapshot
   const not_paying = users - customers.total - plans.Trial
   const org_conversion_rate = calculateConversionRate(payingOrgsForConversion, orgs)
-  const planConversionRates = getPlanConversionRates(plans, orgs)
+  // Plan upgrade/mix rates use paying orgs as denominator (not total users/orgs).
+  const planConversionRates = getPlanConversionRates(plans, customers.total)
 
   await updateGlobalStatsSnapshot(c, finalizedAppBuildOnboardingWindow.prevDayDateId, {
     apps_created: finalizedAppBuildOnboardingMetrics.apps_created,
@@ -2778,7 +2780,6 @@ async function runUsageDemoAppsGlobalStatsShard(c: Context, window: DailyWindow)
   await updateUsageGlobalStatsSnapshot(c, window, 'Updated global stats usage demo apps shard', { demo_apps_created: demoAppsCreated }, { demoAppsCreated })
 }
 
-
 function getTrailing12mStart(nextDayStart: Date): Date {
   const year = nextDayStart.getUTCFullYear() - 1
   const month = nextDayStart.getUTCMonth()
@@ -2805,11 +2806,14 @@ async function getUpgradeRate12m(c: Context, nextDayStart: Date): Promise<number
   const trailing12mStartIso = getTrailing12mStart(nextDayStart).toISOString()
 
   try {
+    // Paying denominator matches getBillingSnapshotCounts (plans join + lifecycle filters),
+    // not all orgs/users.
     const result = await drizzleClient.execute(sql`
       SELECT
         (
-          SELECT COUNT(*)::int
+          SELECT COUNT(DISTINCT si.customer_id)::int
           FROM public.stripe_info si
+          INNER JOIN public.plans p ON p.stripe_id = si.product_id
           WHERE si.is_good_plan = true
             AND si.created_at < ${snapshotEndIso}::timestamptz
             AND (
@@ -3323,6 +3327,8 @@ export const logsnagInsightsTestUtils = {
   calculateChurnRevenue,
   calculateConversionRate,
   calculateNrr,
+  getPlanConversionRates,
+  getPaidPlanTotal,
   getUpgradeRate12m,
   getTrailing12mStart,
   countUniqueCustomers,

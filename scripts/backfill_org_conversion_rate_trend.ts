@@ -1,9 +1,12 @@
 /*
  * Backfill the admin org and plan conversion rate trend metrics.
  *
- * The historical paying counts in public.global_stats are Stripe-backed
- * snapshots written by the admin stats cron. The raw org count was not stored,
- * so this script reconstructs that denominator from public.orgs.created_at.
+ * org_conversion_rate = paying / orgs * 100
+ *   The raw org count was not stored historically, so this script reconstructs
+ *   that denominator from public.orgs.created_at.
+ *
+ * plan_*_conversion_rate = plan_count / paying * 100
+ *   Plan mix among paying orgs (same as the daily admin core shard / LogSnag).
  *
  * Dry run, defaulting to the last 30 UTC calendar days:
  *   bun run stripe:backfill-org-conversion-rate
@@ -95,18 +98,19 @@ export function calculateOrgConversionRate(paying: number | string | null | unde
   return Number(((payingCount * 100) / orgCount).toFixed(1))
 }
 
-function calculatePlanConversionRates(row: GlobalStatsRow, orgs: number): PlanConversionRates {
+function calculatePlanConversionRates(row: GlobalStatsRow, paying: number): PlanConversionRates {
+  // Plan mix among paying orgs — same denominator as the daily admin core shard.
   const total = toMetricNumber(row.plan_solo)
     + toMetricNumber(row.plan_maker)
     + toMetricNumber(row.plan_team)
     + toMetricNumber(row.plan_enterprise)
 
   return {
-    solo: calculateOrgConversionRate(row.plan_solo, orgs),
-    maker: calculateOrgConversionRate(row.plan_maker, orgs),
-    team: calculateOrgConversionRate(row.plan_team, orgs),
-    enterprise: calculateOrgConversionRate(row.plan_enterprise, orgs),
-    total: calculateOrgConversionRate(total, orgs),
+    solo: calculateOrgConversionRate(row.plan_solo, paying),
+    maker: calculateOrgConversionRate(row.plan_maker, paying),
+    team: calculateOrgConversionRate(row.plan_team, paying),
+    enterprise: calculateOrgConversionRate(row.plan_enterprise, paying),
+    total: calculateOrgConversionRate(total, paying),
   }
 }
 
@@ -159,7 +163,7 @@ export function buildOrgConversionRateBackfillRows(rows: GlobalStatsRow[], orgRo
     const currentRate = toMetricNumber(row.org_conversion_rate)
     const nextRate = calculateOrgConversionRate(paying, orgs)
     const currentPlanRates = getCurrentPlanConversionRates(row)
-    const nextPlanRates = calculatePlanConversionRates(row, orgs)
+    const nextPlanRates = calculatePlanConversionRates(row, paying)
     return {
       date_id: row.date_id,
       orgs,

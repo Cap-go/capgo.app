@@ -285,7 +285,7 @@ const planConversionSeries = computed(() => {
 
   return [
     {
-      label: 'All Paid Plans (%)',
+      label: 'All Paid Plans (% of paying)',
       data: globalStatsTrendData.value.map(item => ({
         date: item.date,
         value: item.plan_total_conversion_rate || 0,
@@ -293,7 +293,7 @@ const planConversionSeries = computed(() => {
       color: '#3b82f6', // blue
     },
     {
-      label: 'Solo Conversion (%)',
+      label: 'Solo (% of paying)',
       data: globalStatsTrendData.value.map(item => ({
         date: item.date,
         value: item.plan_solo_conversion_rate || 0,
@@ -301,7 +301,7 @@ const planConversionSeries = computed(() => {
       color: '#8b5cf6', // purple
     },
     {
-      label: 'Maker Conversion (%)',
+      label: 'Maker (% of paying)',
       data: globalStatsTrendData.value.map(item => ({
         date: item.date,
         value: item.plan_maker_conversion_rate || 0,
@@ -309,7 +309,7 @@ const planConversionSeries = computed(() => {
       color: '#ec4899', // pink
     },
     {
-      label: 'Team Conversion (%)',
+      label: 'Team (% of paying)',
       data: globalStatsTrendData.value.map(item => ({
         date: item.date,
         value: item.plan_team_conversion_rate || 0,
@@ -317,7 +317,7 @@ const planConversionSeries = computed(() => {
       color: '#10b981', // green
     },
     {
-      label: 'Enterprise Conversion (%)',
+      label: 'Enterprise (% of paying)',
       data: globalStatsTrendData.value.map(item => ({
         date: item.date,
         value: item.plan_enterprise_conversion_rate || 0,
@@ -1128,7 +1128,7 @@ displayStore.defaultBack = '/dashboard'
 
           <div class="grid grid-cols-1 gap-6">
             <ChartCard
-              title="Paid Plan Conversion Rate"
+              title="Paid Plan Mix (of paying)"
               :is-loading="isLoadingGlobalStatsTrend"
               :has-data="planConversionSeries.length > 0"
             >
