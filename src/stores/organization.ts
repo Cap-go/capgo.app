@@ -1,3 +1,4 @@
+import type { AuthChangeEvent } from '@supabase/supabase-js'
 import type { ComputedRef, Ref } from 'vue'
 import type { ArrayElement, Concrete, Merge } from '~/services/types'
 import type { Database } from '~/types/supabase.types'
@@ -520,7 +521,7 @@ export const useOrganizationStore = defineStore('organization', () => {
       return
 
     if (!_initialized.value) {
-      const listener = supabase.auth.onAuthStateChange((event: any) => {
+      const listener = supabase.auth.onAuthStateChange((event: AuthChangeEvent) => {
         if (event === 'SIGNED_OUT') {
           listener.data.subscription.unsubscribe()
           clearWebsitePaidUserCookie()

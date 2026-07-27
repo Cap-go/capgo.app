@@ -1,4 +1,5 @@
 import type { Context } from 'hono'
+import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { sValidator } from '@hono/standard-validator'
 import { and, eq, sql } from 'drizzle-orm'
@@ -8,6 +9,7 @@ import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import { schema } from '../utils/postgres_schema.ts'
 import { checkPermission, checkPermissionPg } from '../utils/rbac.ts'
+import { getErrorCode } from '../utils/errors.ts'
 import { version } from '../utils/version.ts'
 import {
   appIdParamSchema,
@@ -448,12 +450,12 @@ async function loadAssignableRoleForBinding(
     ? await validatePrincipalAccess(drizzle, binding.principal_type as RoleBindingBody['principal_type'], binding.principal_id, binding.org_id)
     : { ok: true as const, data: null }
   if (!principalValidation.ok) {
-    return { ok: false, response: c.json({ error: principalValidation.error }, principalValidation.status as any) }
+    return { ok: false, response: c.json({ error: principalValidation.error }, principalValidation.status as ContentfulStatusCode) }
   }
 
   const roleScopeValidation = validateRoleScope(role.scope_type, binding.scope_type)
   if (!roleScopeValidation.ok) {
-    return { ok: false, response: c.json({ error: roleScopeValidation.error }, roleScopeValidation.status as any) }
+    return { ok: false, response: c.json({ error: roleScopeValidation.error }, roleScopeValidation.status as ContentfulStatusCode) }
   }
 
   return { ok: true, data: role }
@@ -1047,7 +1049,7 @@ app.post('/', requireAuthAndGuardLimitedKeys, async (c) => {
     })
 
     if (!result.ok) {
-      return c.json({ error: result.error }, result.status as any)
+      return c.json({ error: result.error }, result.status as ContentfulStatusCode)
     }
 
     const binding = result.data
@@ -1067,8 +1069,8 @@ app.post('/', requireAuthAndGuardLimitedKeys, async (c) => {
 
     return c.json(binding)
   }
-  catch (error: any) {
-    if (error?.code === '23505') {
+  catch (error: unknown) {
+    if (getErrorCode(error) === '23505') {
       cloudlog({
         requestId: c.get('requestId'),
         message: 'role_binding_duplicate',

@@ -1,5 +1,5 @@
 import type { Context } from 'hono'
-import type { Database } from '../../utils/supabase.types.ts'
+import type { Database, Json } from '../../utils/supabase.types.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../../utils/logging.ts'
 import { checkPermission } from '../../utils/rbac.ts'
@@ -12,7 +12,7 @@ export interface RequestBuildBody {
   app_id: string
   platform: 'ios' | 'android'
   build_mode?: 'release' | 'debug'
-  build_config?: Record<string, any>
+  build_config?: Json
   /** @deprecated Use build_credentials instead. Rejected at runtime. */
   credentials?: Record<string, string>
   build_options?: Record<string, unknown>
@@ -39,7 +39,7 @@ interface ValidBuildRequestBody {
   app_id: string
   platform: 'ios' | 'android'
   build_mode: 'release' | 'debug'
-  build_config: Record<string, any>
+  build_config: Json
   build_options: Record<string, unknown>
   build_credentials: Record<string, string>
 }
@@ -146,7 +146,7 @@ function validateBuildRequestBody(c: Context, body: RequestBuildBody, userId: st
     app_id,
     platform: platform as 'ios' | 'android',
     build_mode: build_mode as 'release' | 'debug',
-    build_config: build_config as Record<string, any>,
+    build_config: build_config as Json,
     build_options,
     build_credentials,
   }
@@ -343,7 +343,7 @@ async function persistBuildRequest(c: Context, input: {
   requested_by: string
   platform: 'ios' | 'android'
   build_mode: 'release' | 'debug'
-  build_config: Record<string, any>
+  build_config: Json
   builder_job_id: string
   upload_session_key: string
   upload_path: string

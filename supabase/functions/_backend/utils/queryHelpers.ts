@@ -1,4 +1,4 @@
-export function withOptionalManifestSelect<TBase extends Record<string, any>, TManifest>(
+export function withOptionalManifestSelect<TBase extends Record<string, unknown>, TManifest>(
   baseSelect: TBase,
   includeManifest: boolean,
   manifestSelect: TManifest,

@@ -94,7 +94,7 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
     ? await lockOnboardingApp(c, appId)
     : null
 
-  let data: Record<string, any> | undefined
+  let data: Database['public']['Tables']['apps']['Row'] | undefined
   let dbError: { message?: string } | null = null
   let completedPendingOnboarding = false
 

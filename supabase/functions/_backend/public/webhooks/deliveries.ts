@@ -28,7 +28,7 @@ const retryDeliverySchema = z.object({
 
 const DELIVERIES_PER_PAGE = 50
 
-export async function getDeliveries(c: Context<MiddlewareKeyVariables, any, any>, bodyRaw: any, auth: AuthInfo): Promise<Response> {
+export async function getDeliveries(c: Context<MiddlewareKeyVariables>, bodyRaw: unknown, auth: AuthInfo): Promise<Response> {
   const bodyParsed = safeParseSchema(getDeliveriesSchema, bodyRaw)
   if (!bodyParsed.success) {
     throw simpleError('invalid_body', 'Invalid body', { error: bodyParsed.error })
@@ -104,7 +104,7 @@ export async function getDeliveries(c: Context<MiddlewareKeyVariables, any, any>
   })
 }
 
-export async function retryDelivery(c: Context<MiddlewareKeyVariables, any, any>, bodyRaw: any, auth: AuthInfo): Promise<Response> {
+export async function retryDelivery(c: Context<MiddlewareKeyVariables>, bodyRaw: unknown, auth: AuthInfo): Promise<Response> {
   const bodyParsed = safeParseSchema(retryDeliverySchema, bodyRaw)
   if (!bodyParsed.success) {
     throw simpleError('invalid_body', 'Invalid body', { error: bodyParsed.error })

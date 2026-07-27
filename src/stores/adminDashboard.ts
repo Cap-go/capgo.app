@@ -11,14 +11,23 @@ interface DateRange {
 }
 
 interface CachedData {
-  data: any
+  data: unknown
   timestamp: number
+}
+
+interface AdminStatsRequestBody {
+  metric_category: MetricCategory
+  start_date: string
+  end_date: string
+  app_id?: string
+  org_id?: string
+  limit?: number
 }
 
 interface AdminStatsResponse {
   success: boolean
   metric_category: MetricCategory
-  data: any
+  data: unknown
   period: {
     start: string
     end: string
@@ -149,7 +158,8 @@ export const useAdminDashboardStore = defineStore('adminDashboard', () => {
     return Date.now() - cached.timestamp < CACHE_TTL
   }
 
-  async function fetchStats(category: MetricCategory, forceRefresh = false): Promise<any> {
+  // Response shape varies by metric_category; callers should pass T when known.
+  async function fetchStats<T = any>(category: MetricCategory, forceRefresh = false): Promise<T> {
     const requestDateRange = getRollingDateRange()
     const cacheKey = getCacheKey(category, requestDateRange)
     const skipCache = category === 'customer_country_breakdown'
@@ -157,7 +167,7 @@ export const useAdminDashboardStore = defineStore('adminDashboard', () => {
     // Check cache
     if (!forceRefresh && !skipCache && isCacheValid(cacheKey)) {
       const cached = cache.value.get(cacheKey)
-      return cached?.data
+      return cached?.data as T
     }
 
     loadingCount.value++
@@ -167,7 +177,7 @@ export const useAdminDashboardStore = defineStore('adminDashboard', () => {
       const { start, end } = requestDateRange
       const supabase = useSupabase()
 
-      const body: any = {
+      const body: AdminStatsRequestBody = {
         metric_category: category,
         start_date: start.toISOString(),
         end_date: end.toISOString(),
@@ -213,7 +223,7 @@ export const useAdminDashboardStore = defineStore('adminDashboard', () => {
         timestamp: Date.now(),
       })
 
-      return data.data
+      return data.data as T
     }
     finally {
       loadingCount.value = Math.max(0, loadingCount.value - 1)

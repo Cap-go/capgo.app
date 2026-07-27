@@ -1,3 +1,4 @@
+import type { Database } from '../../utils/supabase.types.ts'
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
@@ -53,7 +54,7 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: CreateApp):
     android_store_url: body.android_store_url ?? null,
   }
   let pgClient
-  let data: Record<string, any> | undefined
+  let data: Database['public']['Tables']['apps']['Row'] | undefined
   try {
     pgClient = getPgClient(c)
     const result = await pgClient.query(

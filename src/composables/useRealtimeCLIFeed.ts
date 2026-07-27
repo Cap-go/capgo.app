@@ -50,8 +50,11 @@ export function useRealtimeCLIFeed() {
   const isConnected = ref(false)
 
   function isEnabled(): boolean {
-    const prefs = (main.user as any)?.email_preferences as Record<string, boolean> | undefined
-    return prefs?.cli_realtime_feed ?? true
+    const prefs = main.user?.email_preferences
+    if (!prefs || typeof prefs !== 'object' || Array.isArray(prefs))
+      return true
+    const feedPref = (prefs as Record<string, unknown>).cli_realtime_feed
+    return typeof feedPref === 'boolean' ? feedPref : true
   }
 
   function subscribe(orgId: string) {
@@ -140,7 +143,12 @@ export function useRealtimeCLIFeed() {
 
   // React to user toggling the setting
   watch(
-    () => (main.user as any)?.email_preferences?.cli_realtime_feed,
+    () => {
+      const prefs = main.user?.email_preferences
+      if (!prefs || typeof prefs !== 'object' || Array.isArray(prefs))
+        return undefined
+      return (prefs as Record<string, unknown>).cli_realtime_feed
+    },
     (enabled) => {
       const orgId = orgStore.currentOrganization?.gid
       if (enabled === false) {

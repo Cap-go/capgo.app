@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { safeParseSchema } from '../../utils/schema_validation.ts'
 import { simpleError } from '../../utils/hono.ts'
 import { supabaseAdmin } from '../../utils/supabase.ts'
-import { getWebhookLogUrlMetadata, getWebhookPublicUrlValidationError, parseWebhookDeliveryVersion, WEBHOOK_EVENT_TYPES } from '../../utils/webhook.ts'
+import { getWebhookLogUrlMetadata, getWebhookPublicUrlValidationError, isWebhookEventType, parseWebhookDeliveryVersion, WEBHOOK_EVENT_TYPES } from '../../utils/webhook.ts'
 import { checkWebhookPermissionV2 } from './index.ts'
 import { webhookCreatedSelect } from './response.ts'
 
@@ -18,7 +18,7 @@ const bodySchema = z.object({
   delivery_version: z.string().optional(),
 })
 
-export async function post(c: Context<MiddlewareKeyVariables, any, any>, bodyRaw: any, auth: AuthInfo): Promise<Response> {
+export async function post(c: Context<MiddlewareKeyVariables>, bodyRaw: unknown, auth: AuthInfo): Promise<Response> {
   const bodyParsed = safeParseSchema(bodySchema, bodyRaw)
   if (!bodyParsed.success) {
     throw simpleError('invalid_body', 'Invalid body', { error: bodyParsed.error })
@@ -35,7 +35,7 @@ export async function post(c: Context<MiddlewareKeyVariables, any, any>, bodyRaw
   }
 
   // Validate events are allowed
-  const invalidEvents = body.events.filter(e => !WEBHOOK_EVENT_TYPES.includes(e as any))
+  const invalidEvents = body.events.filter(e => !isWebhookEventType(e))
   if (invalidEvents.length > 0) {
     throw simpleError('invalid_events', 'Invalid event types', {
       invalid: invalidEvents,

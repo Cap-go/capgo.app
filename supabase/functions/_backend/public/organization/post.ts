@@ -250,7 +250,7 @@ async function insertOrgForApiKey(
 
 export async function post(
   c: Context<MiddlewareKeyVariables>,
-  bodyRaw: any,
+  bodyRaw: unknown,
   _apikey: Database['public']['Tables']['apikeys']['Row'] | null | undefined,
 ): Promise<Response> {
   const bodyParsed = safeParseSchema(bodySchema, bodyRaw)

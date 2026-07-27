@@ -1396,7 +1396,7 @@ async function handleAppAccessAssign() {
     await fetchMemberAppBindings(input.member)
     return true
   }
-  catch (error: any) {
+  catch (error: unknown) {
     console.error('Error assigning app role:', error)
     toast.error(t('error-assigning-role'))
     return false

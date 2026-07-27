@@ -8,7 +8,7 @@ import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { supabaseAdmin, supabaseClient } from '../utils/supabase.ts'
 import { version } from '../utils/version.ts'
 
-type AppContext = Context<MiddlewareKeyVariables, any, any>
+type AppContext = Context<MiddlewareKeyVariables>
 
 const grantSchema = z.object({
   org_id: z.string().min(1),

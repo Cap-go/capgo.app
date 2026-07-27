@@ -392,7 +392,7 @@ function getErrorDetail(error: unknown) {
 
 export async function put(
   c: Context<MiddlewareKeyVariables>,
-  bodyRaw: any,
+  bodyRaw: unknown,
   apikey: Database['public']['Tables']['apikeys']['Row'] | null | undefined,
 ): Promise<Response> {
   const body = parseOrganizationBody(bodyRaw)

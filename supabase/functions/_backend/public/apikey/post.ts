@@ -11,6 +11,7 @@ import { checkPermission, checkPermissionPg } from '../../utils/rbac.ts'
 import { supabaseWithAuth, validateExpirationAgainstOrgPolicies, validateExpirationDate } from '../../utils/supabase.ts'
 import { parseApiKeyGlobalPermissions, replaceApiKeyGlobalPermissions, validateApiKeyGlobalPermissionsForBindings } from './global_permissions.ts'
 import { assertApiKeyManagerCanAssignBindings, ensureApiKeyManagementAllowed, requireApiKeyManagementAuth, sanitizeClientBindings } from './scope.ts'
+import { getErrorStatus } from '../../utils/errors.ts'
 
 type BindingInput = ClientBindingInput
 type ApiKeyRow = Database['public']['Tables']['apikeys']['Row']
@@ -177,7 +178,7 @@ app.post('/', middlewareAuth(), async (c) => {
             binding,
             error: result.error,
           })
-          throw quickError(result.status as any, 'binding_failed', result.error)
+          throw quickError(result.status, 'binding_failed', result.error)
         }
 
         createdBindings.push(result.data)
@@ -193,8 +194,8 @@ app.post('/', middlewareAuth(), async (c) => {
       bindingsCount: createdBindings.length,
     })
   }
-  catch (error: any) {
-    if (error?.status) {
+  catch (error: unknown) {
+    if (getErrorStatus(error)) {
       throw error
     }
     cloudlogErr({

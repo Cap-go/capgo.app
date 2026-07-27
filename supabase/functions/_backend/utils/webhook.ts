@@ -16,8 +16,8 @@ export interface WebhookPayload {
     table: string
     operation: string
     record_id: string
-    old_record: any | null
-    new_record: any | null
+    old_record: Record<string, unknown> | null
+    new_record: Record<string, unknown> | null
     changed_fields: string[] | null
     actor_type?: 'user' | 'apikey' | 'system' | 'unknown'
     actor_user_id?: string | null
@@ -71,8 +71,8 @@ export interface AuditLogData {
   operation: string
   org_id: string
   record_id: string
-  old_record: any | null
-  new_record: any | null
+  old_record: Record<string, unknown> | null
+  new_record: Record<string, unknown> | null
   changed_fields: string[] | null
   user_id: string | null
   actor_type?: 'user' | 'apikey' | 'system' | 'unknown'
@@ -93,6 +93,10 @@ export const WEBHOOK_EVENT_TYPES = [
 ] as const
 
 export type WebhookEventType = typeof WEBHOOK_EVENT_TYPES[number]
+
+export function isWebhookEventType(value: string): value is WebhookEventType {
+  return (WEBHOOK_EVENT_TYPES as readonly string[]).includes(value)
+}
 
 const WEBHOOK_DELIVERY_TIMEOUT_MS = 20000
 const WEBHOOK_RESPONSE_BODY_LIMIT_BYTES = 10000

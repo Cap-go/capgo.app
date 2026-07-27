@@ -19,6 +19,7 @@ export interface VersionInstallRow {
 }
 
 export interface WeeklyEmailMetadata {
+  [key: string]: unknown
   app_id: string
   month_name: string
   week_number: string

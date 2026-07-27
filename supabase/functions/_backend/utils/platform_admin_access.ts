@@ -5,7 +5,7 @@ import { getClaimsFromJWT } from './hono_jwt.ts'
 import { cloudlogErr } from './logging.ts'
 import { supabaseClient } from './supabase.ts'
 
-type PlatformAdminContext = Context<MiddlewareKeyVariables, any, any>
+type PlatformAdminContext = Context<MiddlewareKeyVariables>
 
 export async function validatePlatformAdminOrApiSecret(
   c: PlatformAdminContext,

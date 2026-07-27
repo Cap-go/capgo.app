@@ -23,7 +23,7 @@ const INVITE_RESEND_COOLDOWN_MINUTES = 5
 // unavailable in local/test runtimes.
 const inviteNotificationCooldowns = new Map<string, number>()
 
-type AppContext = Context<MiddlewareKeyVariables, any, any>
+type AppContext = Context<MiddlewareKeyVariables>
 
 export const app = createHono('', version)
 
