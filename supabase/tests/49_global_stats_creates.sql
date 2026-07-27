@@ -2,6 +2,9 @@ BEGIN;
 
 SELECT plan(10);
 
+-- Drain any seed-time enqueue backlog before measuring deltas.
+SELECT public.process_global_stats_creates_queue(1000);
+
 CREATE TEMP TABLE tmp_global_stats_creates AS
 SELECT
   COALESCE((
