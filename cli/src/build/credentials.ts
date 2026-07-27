@@ -48,7 +48,7 @@ function getCredentialsDir(local?: boolean): string | null {
   return local ? null : CREDENTIALS_DIR
 }
 
-export type { AllCredentials, CredentialFile, SavedCredentials } from '../schemas/build'
+export type { CredentialFile, SavedCredentials } from '../schemas/build'
 
 export function parseOutputRetentionSeconds(raw: string): number {
   const trimmed = raw.trim()

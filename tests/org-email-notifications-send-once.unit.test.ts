@@ -166,7 +166,7 @@ describe('sendNotifToOrgMembersOnce', () => {
       {} as any,
     )
 
-    expect(sent).toBe(true)
+    expect(sent).toBe(false)
     expect(hasNotifOrgClaimMock).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ kind: 'write-client' }),

@@ -133,6 +133,23 @@ describe('buildReadDevicesCFQuery', () => {
     expect(query).toContain('GROUP BY blob1')
     expect(query).toContain(`install_source IN ('app_store', 'amazon_appstore')`)
   })
+  it.concurrent('filters devices with updated_at greater than the provided timestamp', () => {
+    const query = buildReadDevicesCFQuery({
+      app_id: 'com.example.app',
+      updated_at_gt: '2026-04-04T03:05:59.000Z',
+      limit: 1,
+    }, false)
+
+    const groupByIndex = query.indexOf('GROUP BY blob1')
+    const innerFilterIndex = query.indexOf(`timestamp > toDateTime('2026-04-04 03:05:59')`)
+    const outerFilterIndex = query.indexOf(`WHERE updated_at > toDateTime('2026-04-04 03:05:59')`)
+
+    expect(groupByIndex).toBeGreaterThan(-1)
+    expect(innerFilterIndex).toBeGreaterThan(-1)
+    expect(innerFilterIndex).toBeLessThan(groupByIndex)
+    expect(outerFilterIndex).toBeGreaterThan(groupByIndex)
+  })
+
 })
 describe('countDevicesCF', () => {
   it('does not read install source blob on default device counts', async () => {
@@ -290,5 +307,32 @@ describe('readDevicesSB', () => {
     }, false)
 
     expect(query.in).toHaveBeenCalledWith('install_source', ['app_store', 'testflight'])
+  })
+
+  it('filters devices with updated_at greater than the provided timestamp', async () => {
+    const { client, query } = createReadDevicesQueryMock()
+    vi.mocked(createClient).mockReturnValue(client as unknown as ReturnType<typeof createClient>)
+
+    await readDevicesSB(createContextMock() as unknown as Context, {
+      app_id: 'com.example.app',
+      updated_at_gt: '2026-04-04T03:05:59.000Z',
+      limit: 1,
+    }, false)
+
+    expect(query.gt).toHaveBeenCalledWith('updated_at', '2026-04-04T03:05:59.000Z')
+  })
+
+  it('orders devices by updated_at when requested', async () => {
+    const { client, query } = createReadDevicesQueryMock()
+    vi.mocked(createClient).mockReturnValue(client as unknown as ReturnType<typeof createClient>)
+
+    await readDevicesSB(createContextMock() as unknown as Context, {
+      app_id: 'com.example.app',
+      order: [{ key: 'updated_at', sortable: 'desc' }],
+      limit: 1,
+    }, false)
+
+    expect(query.order).toHaveBeenCalledWith('updated_at', { ascending: false })
+    expect(query.order).toHaveBeenCalledWith('device_id', { ascending: true })
   })
 })

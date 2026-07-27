@@ -26,6 +26,7 @@ export function createBuiltinChannelVersion(channel: {
     cli_version: null,
     comment: null,
     created_at: channel.created_at,
+    created_by_apikey_rbac_id: null,
     deleted: false,
     deleted_at: null,
     external_url: null,

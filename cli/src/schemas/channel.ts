@@ -1,21 +1,7 @@
 import { z } from 'zod'
 import { optionsBaseSchema } from './base'
+import { rejectConflictingBooleanGroup } from './common'
 
-function rejectConflictingBooleanGroup<T extends Record<string, unknown>>(value: T, ctx: z.RefinementCtx, keys: Array<keyof T>) {
-  const selected = keys.filter(key => value[key] === true)
-  if (selected.length < 2)
-    return
-
-  const first = String(selected[0])
-  for (const key of selected.slice(1)) {
-    const current = String(key)
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: [current],
-      message: `"${first}" and "${current}" cannot be used together`,
-    })
-  }
-}
 // ============================================================================
 // Channel Data Schema
 // ============================================================================
@@ -33,7 +19,9 @@ export const channelSchema = z.object({
   allow_device: z.boolean(),
   allow_dev: z.boolean(),
   allow_prod: z.boolean(),
-  version: z.any().optional(),
+  version: z.object({
+    name: z.string().optional(),
+  }).catchall(z.unknown()).optional(),
 })
 
 export type Channel = z.infer<typeof channelSchema>
@@ -82,7 +70,7 @@ export const optionsSetChannelSchema = optionsBaseSchema.extend({
   qrPreview: z.boolean().optional(),
   sendUpdateNotification: z.boolean().optional(),
   rolloutBundle: z.string().optional(),
-  rolloutPercentage: z.number().finite().min(0).max(100).optional(),
+  rolloutPercentage: z.number().min(0).max(100).optional(),
   rolloutPercentageBps: z.number().int().min(0).max(10000).optional(),
   rolloutEnable: z.boolean().optional(),
   rolloutDisable: z.boolean().optional(),
@@ -95,7 +83,7 @@ export const optionsSetChannelSchema = optionsBaseSchema.extend({
   autoPauseDisabled: z.boolean().optional(),
   autoPauseWindowMinutes: z.number().int().min(1).max(10080).optional(),
   autoPauseFailureRateBps: z.number().int().min(0).max(10000).nullable().optional(),
-  autoPauseConfidence: z.number().finite().gt(0).lt(1).optional(),
+  autoPauseConfidence: z.number().gt(0).lt(1).optional(),
   autoPauseMinAttempts: z.number().int().min(0).nullable().optional(),
   autoPauseMinFailures: z.number().int().min(0).nullable().optional(),
   autoPauseAction: z.enum(['pause', 'rollback', 'notify']).optional(),

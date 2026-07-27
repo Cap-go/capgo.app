@@ -505,10 +505,9 @@ function getRevenueChurnReason(
   return getChurnReason(currentStripeInfo, nextStripeInfo)
 }
 
-function shouldTrackOrganizationUpgrade(isUpgrade: boolean, movement: RevenueMovement) {
-  if (isUpgrade)
-    return true
-
+function shouldTrackOrganizationUpgrade(_isUpgrade: boolean, movement: RevenueMovement) {
+  // Only already-paying orgs that move to higher MRR (larger plan / expansion).
+  // monthly->yearly alone is not enough if MRR does not increase.
   return movement.currentMrr > 0 && movement.nextMrr > movement.currentMrr
 }
 

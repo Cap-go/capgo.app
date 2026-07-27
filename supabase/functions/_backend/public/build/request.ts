@@ -1,17 +1,18 @@
 import type { Context } from 'hono'
-import type { Database } from '../../utils/supabase.types.ts'
+import type { Database, Json } from '../../utils/supabase.types.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../../utils/logging.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { supabaseAdmin, supabaseApikey } from '../../utils/supabase.ts'
 import { sendEventToTracking } from '../../utils/tracking.ts'
 import { getEnv } from '../../utils/utils.ts'
+import { assertNativeBuildConcurrencyAvailable, getPlansUpgradeUrl } from './concurrency.ts'
 
 export interface RequestBuildBody {
   app_id: string
   platform: 'ios' | 'android'
   build_mode?: 'release' | 'debug'
-  build_config?: Record<string, any>
+  build_config?: Json
   /** @deprecated Use build_credentials instead. Rejected at runtime. */
   credentials?: Record<string, string>
   build_options?: Record<string, unknown>
@@ -38,7 +39,7 @@ interface ValidBuildRequestBody {
   app_id: string
   platform: 'ios' | 'android'
   build_mode: 'release' | 'debug'
-  build_config: Record<string, any>
+  build_config: Json
   build_options: Record<string, unknown>
   build_credentials: Record<string, string>
 }
@@ -145,7 +146,7 @@ function validateBuildRequestBody(c: Context, body: RequestBuildBody, userId: st
     app_id,
     platform: platform as 'ios' | 'android',
     build_mode: build_mode as 'release' | 'debug',
-    build_config: build_config as Record<string, any>,
+    build_config: build_config as Json,
     build_options,
     build_credentials,
   }
@@ -196,16 +197,18 @@ async function ensureBuildTimePlanAllowed(c: Context, supabase: ReturnType<typeo
   }
 
   if (!buildTimeAllowed) {
+    const upgradeUrl = getPlansUpgradeUrl(c)
     cloudlog({
       requestId: c.get('requestId'),
       message: 'Native build blocked by build time plan limit',
       org_id: orgId,
       app_id: appId,
     })
-    throw quickError(429, 'need_plan_upgrade', 'Cannot request native build, upgrade plan to continue to build', {
+    throw quickError(429, 'need_plan_upgrade', `Cannot request native build, upgrade plan to continue to build: ${upgradeUrl}`, {
       app_id: appId,
       org_id: orgId,
       reason: 'build_time',
+      upgrade_url: upgradeUrl,
     }, undefined, { alert: false })
   }
 }
@@ -340,7 +343,7 @@ async function persistBuildRequest(c: Context, input: {
   requested_by: string
   platform: 'ios' | 'android'
   build_mode: 'release' | 'debug'
-  build_config: Record<string, any>
+  build_config: Json
   builder_job_id: string
   upload_session_key: string
   upload_path: string
@@ -444,6 +447,13 @@ export async function requestBuild(
   const supabase = supabaseApikey(c, apikey.key)
   const org_id = await getBuildOwnerOrg(c, supabase, app_id)
   await ensureBuildTimePlanAllowed(c, supabase, org_id, app_id)
+  // Fail before creating a builder job / upload session when the org is already
+  // at its plan concurrency. /build/start still enforces transactionally.
+  await assertNativeBuildConcurrencyAvailable(c, {
+    orgId: org_id,
+    appId: app_id,
+    userId: apikey.user_id,
+  })
 
   cloudlog({
     requestId: c.get('requestId'),

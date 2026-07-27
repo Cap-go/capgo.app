@@ -345,7 +345,7 @@ async function submit(form: { current_password?: string, password: string, passw
           <!-- Instructions -->
           <div class="text-sm space-y-2">
             <p>
-              <strong>{{ t('password-if-meets') }}</strong> {{ t('password-verify-it') }}
+              <strong>{{ t('password-if-meets') }}</strong> {{ t('auth-verify-access-hint') }}
             </p>
             <p>
               <strong>{{ t('password-if-not-meets') }}</strong> {{ t('password-change-then-verify') }}

@@ -6,6 +6,7 @@
 
 import { canParse } from '@std/semver'
 import { optionsUploadSchema } from '../src/schemas/bundle.ts'
+import { safeParseSchema } from '../src/schemas/schema_validation.ts'
 
 // This is the actual regex from utils.ts line 40
 const regexSemver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-z-][0-9a-z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-z-][0-9a-z-]*))*))?(?:\+([0-9a-z-]+(?:\.[0-9a-z-]+)*))?$/i
@@ -72,7 +73,7 @@ for (const version of shouldPass) {
 
 console.log('✓ Testing rollout upload options...\n')
 
-const validRolloutOptions = optionsUploadSchema.safeParse({
+const validRolloutOptions = safeParseSchema(optionsUploadSchema, {
   apikey: 'test-key',
   rollout: 12.5,
   rolloutPercentageBps: 1250,
@@ -94,7 +95,7 @@ const invalidRolloutOptions = [
   { apikey: 'test-key', rolloutCacheTtlSeconds: 59 },
 ]
 for (const options of invalidRolloutOptions) {
-  const result = optionsUploadSchema.safeParse(options)
+  const result = safeParseSchema(optionsUploadSchema, options)
   if (result.success) {
     console.error(`  ❌ VALIDATION FAILURE! Expected rejection for ${JSON.stringify(options)}`)
     allPassed = false

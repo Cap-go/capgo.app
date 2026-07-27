@@ -769,6 +769,20 @@ CREATE INDEX idx_app_versions_deleted_at ON public.app_versions USING btree (del
 
 
 --
+-- Name: idx_app_versions_deleted_at_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_app_versions_deleted_at_id ON public.app_versions USING btree (deleted_at, id) WHERE (deleted = true);
+
+
+--
+-- Name: idx_app_versions_deleted_with_manifest; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_app_versions_deleted_with_manifest ON public.app_versions USING btree (id) WHERE ((deleted = true) AND (manifest_count > 0));
+
+
+--
 -- Name: idx_app_versions_id; Type: INDEX; Schema: public; Owner: -
 --
 

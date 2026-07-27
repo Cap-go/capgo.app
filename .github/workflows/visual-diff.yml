@@ -70,12 +70,13 @@ jobs:
       - name: Install Supabase CLI
         uses: supabase/setup-cli@v2
         with:
-          version: 2.84.2
+          version: 2.109.1
 
       - name: Link Supabase templates
         run: ln -sfn supabase/templates templates
 
       - name: Run visual diff pipeline
+        timeout-minutes: 15
         run: |
           bun scripts/visual-diff.ts run \
             --base "${{ github.event.pull_request.base.sha }}" \

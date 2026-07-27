@@ -1,3 +1,7 @@
+import { getErrorMessage } from '~/utils/errors'
+
+export { getErrorMessage } from '~/utils/errors'
+
 const STALE_ASSET_ERROR_PATTERNS = [
   /Failed to fetch dynamically imported module/i,
   /error loading dynamically imported module/i,
@@ -24,22 +28,6 @@ export function isKnownCrawlerNoiseErrorMessage(message: string | undefined): bo
     return false
 
   return KNOWN_CRAWLER_ERROR_PATTERNS.some(pattern => pattern.test(message))
-}
-
-export function getErrorMessage(value: unknown): string | undefined {
-  if (typeof value === 'string')
-    return value
-
-  if (value instanceof Error)
-    return value.message
-
-  if (typeof value === 'object' && value !== null) {
-    const candidate = (value as { message?: unknown }).message
-    if (typeof candidate === 'string')
-      return candidate
-  }
-
-  return undefined
 }
 
 interface PostHogExceptionLike {

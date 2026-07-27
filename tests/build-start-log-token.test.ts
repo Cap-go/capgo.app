@@ -20,9 +20,18 @@ vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({
   checkPermission: mockCheckPermission,
 }))
 
-vi.mock('../supabase/functions/_backend/public/build/concurrency.ts', () => ({
-  reserveNativeBuildSlot: mockReserveNativeBuildSlot,
-}))
+vi.mock('../supabase/functions/_backend/public/build/concurrency.ts', async () => {
+  const { HTTPException } = await import('hono/http-exception')
+  return {
+    reserveNativeBuildSlot: mockReserveNativeBuildSlot,
+    isNativeBuildConcurrencyLimitError: (error: unknown) => {
+      return error instanceof HTTPException
+        && error.status === 429
+        && !!(error.cause && typeof error.cause === 'object' && 'error' in error.cause
+          && (error.cause as { error?: unknown }).error === 'native_build_concurrency_limit_exceeded')
+    },
+  }
+})
 
 vi.mock('../supabase/functions/_backend/utils/utils.ts', () => ({
   getEnv: mockGetEnv,
@@ -106,6 +115,7 @@ describe('build start direct log token', () => {
       activeBuilds: 0,
       limit: 2,
       planName: 'Solo',
+      upgradeUrl: 'https://console.capgo.app/settings/organization/plans',
       status: 'starting',
     })
     mockGetEnv.mockImplementation((_, key: string) => {
@@ -204,6 +214,7 @@ describe('build start direct log token', () => {
         orgId: '3eb4f870-720d-46b9-843f-2e6d57d54001',
         appId,
         jobId,
+        userId,
       })
 
       expect(mockSendEventToTracking).toHaveBeenCalledWith(
@@ -287,6 +298,97 @@ describe('build start direct log token', () => {
             platform: 'ios',
             build_mode: 'release',
             failure_category: expect.any(String),
+          }),
+        }),
+      )
+    }
+    finally {
+      fetchMock.mockRestore()
+    }
+  })
+
+  it('marks the build failed when concurrency limit is reached', async () => {
+    const { HTTPException } = await import('hono/http-exception')
+    const concurrencyMessage = 'Your Solo plan allows 2 concurrent native builds. You already have 2 active. Wait for a build to finish, or upgrade your plan: https://console.capgo.app/settings/organization/plans'
+    mockReserveNativeBuildSlot.mockRejectedValue(new HTTPException(429, {
+      message: concurrencyMessage,
+      cause: {
+        error: 'native_build_concurrency_limit_exceeded',
+        message: concurrencyMessage,
+        moreInfo: {
+          activeBuilds: 2,
+          limit: 2,
+          planName: 'Solo',
+          upgrade_url: 'https://console.capgo.app/settings/organization/plans',
+          reason: 'native_build_concurrency',
+        },
+        suppressDiscordAlert: true,
+      },
+    }))
+
+    const updateBuilder = {
+      eq: vi.fn().mockReturnThis(),
+      select: vi.fn().mockResolvedValue({ data: [{ id: 'row-1' }], error: null }),
+    }
+    const updateMock = vi.fn().mockReturnValue(updateBuilder)
+    const adminSelectChain = {
+      eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({
+        data: {
+          status: 'pending',
+          platform: 'ios',
+          build_mode: 'release',
+          owner_org: '3eb4f870-720d-46b9-843f-2e6d57d54001',
+          requested_by: userId,
+        },
+        error: null,
+      }),
+    }
+    mockSupabaseAdmin.mockReturnValue({
+      from: vi.fn().mockImplementation((table: string) => {
+        expect(table).toBe('build_requests')
+        return {
+          update: updateMock,
+          select: vi.fn().mockReturnValue(adminSelectChain),
+        }
+      }),
+    })
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+    const context = {
+      get: vi.fn().mockImplementation((key: string) => {
+        if (key === 'requestId')
+          return requestId
+        return undefined
+      }),
+      json: (data: unknown, status = 200) => new Response(JSON.stringify(data), {
+        status,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      }),
+    }
+
+    try {
+      await expect(
+        startBuild(context as any, jobId, appId, { key: 'cli-api-key', user_id: userId } as any),
+      ).rejects.toMatchObject({
+        status: 429,
+        message: concurrencyMessage,
+      })
+
+      expect(fetchMock).not.toHaveBeenCalled()
+      expect(updateMock).toHaveBeenCalledWith(expect.objectContaining({
+        status: 'failed',
+        last_error: concurrencyMessage,
+      }))
+      expect(updateBuilder.select).toHaveBeenCalled()
+      expect(mockSendEventToTracking).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          event: 'Build Failed',
+          tags: expect.objectContaining({
+            app_id: appId,
           }),
         }),
       )

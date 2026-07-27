@@ -14,6 +14,7 @@ import { checkPermissions } from '~/services/permissions'
 import { useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { getRbacRoleI18nKey } from '~/stores/organization'
+import { getErrorMessage } from '~/utils/errors'
 
 const props = defineProps<{
   appId: string
@@ -279,7 +280,7 @@ async function fetchData() {
     elements.value = nextElements
     total.value = nextElements.length
   }
-  catch (error: any) {
+  catch (error: unknown) {
     console.error('Error fetching role bindings:', error)
     toast.error(t('error-fetching-role-bindings'))
   }
@@ -388,9 +389,9 @@ async function assignAccessRole() {
     await refreshData()
     return true
   }
-  catch (error: any) {
+  catch (error: unknown) {
     console.error('Error assigning access role:', error)
-    if (error?.message?.includes('already has a role')) {
+    if (getErrorMessage(error)?.includes('already has a role')) {
       toast.error(t('error-role-already-assigned'))
     }
     else {
@@ -467,7 +468,7 @@ async function changeUserRole(element: Element) {
     toast.success(t('permission-changed'))
     await refreshData()
   }
-  catch (error: any) {
+  catch (error: unknown) {
     console.error('Error changing role:', error)
     toast.error(t('error-assigning-role'))
   }
@@ -508,7 +509,7 @@ async function deleteElement(element: Element) {
     toast.success(t('role-removed'))
     await refreshData()
   }
-  catch (error: any) {
+  catch (error: unknown) {
     console.error('Error removing role:', error)
     toast.error(t('error-removing-role'))
   }

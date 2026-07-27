@@ -1,12 +1,12 @@
 import type { Context } from 'hono'
-import type { StandardSchema } from '../supabase/functions/_backend/utils/ark_validation.ts'
-import type { DeviceLink } from '../supabase/functions/_backend/utils/plugin_parser.ts'
+import type { StandardSchema } from '../supabase/functions/_backend/utils/schema_validation.ts'
+import type { DeviceLink } from '../supabase/functions/_backend/plugin_runtime/utils/plugin_parser.ts'
 import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'
 import type { AppInfos, AppStats } from '../supabase/functions/_backend/utils/types.ts'
 import { bench, describe } from 'vitest'
-import { convertQueryToBody, makeDevice, parsePluginBody } from '../supabase/functions/_backend/utils/plugin_parser.ts'
-import { channelSelfGetRequestSchema, channelSelfRequestSchema, statsRequestSchema, updateRequestSchema } from '../supabase/functions/_backend/utils/plugin_validation.ts'
-import { getUpdateResponseKind, resToVersion } from '../supabase/functions/_backend/utils/update.ts'
+import { convertQueryToBody, makeDevice, parsePluginBody } from '../supabase/functions/_backend/plugin_runtime/utils/plugin_parser.ts'
+import { channelSelfGetRequestSchema, channelSelfRequestSchema, statsRequestSchema, updateRequestSchema } from '../supabase/functions/_backend/plugin_runtime/utils/plugin_validation.ts'
+import { getUpdateResponseKind, resToVersion } from '../supabase/functions/_backend/plugin_runtime/utils/update.ts'
 
 interface ChannelSelfPayload extends AppInfos {
   channel: string

@@ -1,11 +1,11 @@
 import type { Context } from 'hono'
-import { type } from 'arktype'
-import { safeParseSchema } from './ark_validation.ts'
+import { z } from 'zod'
+import { safeParseSchema } from './schema_validation.ts'
 import { simpleError } from './hono.ts'
 import { cloudlog } from './logging.ts'
 
-const captchaSchema = type({
-  success: 'boolean',
+const captchaSchema = z.object({
+  success: z.boolean(),
 })
 
 export async function verifyCaptchaToken(c: Context, token: string, captchaSecret: string) {

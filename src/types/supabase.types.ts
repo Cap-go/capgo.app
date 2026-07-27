@@ -167,6 +167,7 @@ export type Database = {
           cli_version: string | null
           comment: string | null
           created_at: string | null
+          created_by_apikey_rbac_id: string | null
           deleted: boolean
           deleted_at: string | null
           external_url: string | null
@@ -193,6 +194,7 @@ export type Database = {
           cli_version?: string | null
           comment?: string | null
           created_at?: string | null
+          created_by_apikey_rbac_id?: string | null
           deleted?: boolean
           deleted_at?: string | null
           external_url?: string | null
@@ -219,6 +221,7 @@ export type Database = {
           cli_version?: string | null
           comment?: string | null
           created_at?: string | null
+          created_by_apikey_rbac_id?: string | null
           deleted?: boolean
           deleted_at?: string | null
           external_url?: string | null
@@ -1620,9 +1623,11 @@ export type Database = {
           updates: number
           updates_external: number | null
           updates_last_month: number | null
+          upgrade_rate_12m: number
           upgraded_orgs: number
           users: number | null
           users_active: number | null
+          versions_created: number
         }
         Insert: {
           above_plan_with_credits?: number | null
@@ -1717,9 +1722,11 @@ export type Database = {
           updates: number
           updates_external?: number | null
           updates_last_month?: number | null
+          upgrade_rate_12m?: number
           upgraded_orgs?: number
           users?: number | null
           users_active?: number | null
+          versions_created?: number
         }
         Update: {
           above_plan_with_credits?: number | null
@@ -1814,9 +1821,11 @@ export type Database = {
           updates?: number
           updates_external?: number | null
           updates_last_month?: number | null
+          upgrade_rate_12m?: number
           upgraded_orgs?: number
           users?: number | null
           users_active?: number | null
+          versions_created?: number
         }
         Relationships: []
       }
@@ -2557,6 +2566,7 @@ export type Database = {
           id: string
           is_direct: boolean
           org_id: string | null
+          parent_binding_id: string | null
           principal_id: string
           principal_type: string
           reason: string | null
@@ -2573,6 +2583,7 @@ export type Database = {
           id?: string
           is_direct?: boolean
           org_id?: string | null
+          parent_binding_id?: string | null
           principal_id: string
           principal_type: string
           reason?: string | null
@@ -2589,6 +2600,7 @@ export type Database = {
           id?: string
           is_direct?: boolean
           org_id?: string | null
+          parent_binding_id?: string | null
           principal_id?: string
           principal_type?: string
           reason?: string | null
@@ -2622,6 +2634,13 @@ export type Database = {
             columns: ["org_id"]
             isOneToOne: false
             referencedRelation: "orgs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "role_bindings_parent_binding_id_fkey"
+            columns: ["parent_binding_id"]
+            isOneToOne: false
+            referencedRelation: "role_bindings"
             referencedColumns: ["id"]
           },
           {
@@ -3560,6 +3579,20 @@ export type Database = {
       }
     }
     Views: {
+      pg_buffercache: {
+        Row: {
+          bufferid: number | null
+          isdirty: boolean | null
+          pinning_backends: number | null
+          relblocknumber: number | null
+          reldatabase: unknown
+          relfilenode: unknown
+          relforknumber: number | null
+          reltablespace: unknown
+          usagecount: number | null
+        }
+        Relationships: []
+      }
       usage_credit_balances: {
         Row: {
           available_credits: number | null
@@ -3655,6 +3688,10 @@ export type Database = {
         Args: { p_group_id: string; p_user_id: string }
         Returns: undefined
       }
+      assert_preview_bundle_owner: {
+        Args: { p_app_id: string; p_owner_org: string; p_version_id: number }
+        Returns: undefined
+      }
       assert_request_principal_rank: {
         Args: {
           p_mutation: string
@@ -3664,6 +3701,14 @@ export type Database = {
         Returns: undefined
       }
       audit_logs_allowed_orgs: { Args: never; Returns: string[] }
+      billing_period_completed_cycle: {
+        Args: { p_anchor_start: string; p_as_of?: string }
+        Returns: {
+          cycle_end: string
+          cycle_start: string
+          is_anniversary: boolean
+        }[]
+      }
       calculate_credit_cost: {
         Args: {
           p_metric: Database["public"]["Enums"]["credit_metric_type"]
@@ -3760,14 +3805,38 @@ export type Database = {
         Args: { p_app_uuid: string }
         Returns: undefined
       }
+      cleanup_audit_logs_for_long_canceled_orgs: {
+        Args: {
+          batch_size?: number
+          max_batches?: number
+          max_runtime_ms?: number
+        }
+        Returns: number
+      }
       cleanup_completed_onboarding_apps: { Args: never; Returns: undefined }
       cleanup_expired_apikeys: { Args: never; Returns: undefined }
       cleanup_expired_demo_apps: { Args: never; Returns: undefined }
       cleanup_frequent_job_details: { Args: never; Returns: undefined }
       cleanup_job_run_details_7days: { Args: never; Returns: undefined }
-      cleanup_old_audit_logs: { Args: never; Returns: undefined }
+      cleanup_long_canceled_org_data: { Args: never; Returns: undefined }
+      cleanup_net_http_response: { Args: never; Returns: undefined }
+      cleanup_old_audit_logs: {
+        Args: {
+          batch_size?: number
+          max_batches?: number
+          max_runtime_ms?: number
+        }
+        Returns: undefined
+      }
       cleanup_old_channel_devices: { Args: never; Returns: undefined }
-      cleanup_queue_messages: { Args: never; Returns: undefined }
+      cleanup_queue_messages: {
+        Args: {
+          batch_size?: number
+          max_batches_total?: number
+          max_runtime_ms?: number
+        }
+        Returns: undefined
+      }
       cleanup_tmp_users: { Args: never; Returns: undefined }
       cleanup_webhook_deliveries: { Args: never; Returns: undefined }
       clear_onboarding_app_data:
@@ -3811,6 +3880,14 @@ export type Database = {
           total_non_compliant: number
           wrong_key_count: number
         }[]
+      }
+      current_app_preview_apikey_rbac_id: {
+        Args: { p_app_id: string; p_owner_org: string }
+        Returns: string
+      }
+      current_app_preview_binding_id: {
+        Args: { p_app_id: string; p_owner_org: string }
+        Returns: string
       }
       current_request_role: { Args: never; Returns: string }
       current_user_member_org_ids: { Args: never; Returns: string[] }
@@ -4139,6 +4216,10 @@ export type Database = {
           total_builds: number
         }[]
       }
+      get_org_credits_used_in_period: {
+        Args: { p_end: string; p_org_id: string; p_start: string }
+        Returns: number
+      }
       get_org_members:
         | {
             Args: { guild_id: string }
@@ -4442,6 +4523,7 @@ export type Database = {
           cli_version: string | null
           comment: string | null
           created_at: string | null
+          created_by_apikey_rbac_id: string | null
           deleted: boolean
           deleted_at: string | null
           external_url: string | null
@@ -4620,14 +4702,27 @@ export type Database = {
         Args: { p_org_id: string; p_user_id: string }
         Returns: boolean
       }
+      lock_channel_bundle_lifecycle: {
+        Args: { p_rollout_version_id: number; p_version_id: number }
+        Returns: undefined
+      }
       lock_rbac_orgs: {
         Args: { p_first_org_id: string; p_second_org_id?: string }
         Returns: undefined
       }
+      long_canceled_org_ids: { Args: never; Returns: string[] }
       mark_app_stats_refreshed: { Args: { p_app_id: string }; Returns: string }
       mass_edit_queue_messages_cf_ids: {
         Args: {
           updates: Database["public"]["CompositeTypes"]["message_update"][]
+        }
+        Returns: undefined
+      }
+      null_migrated_app_version_manifests: {
+        Args: {
+          batch_size?: number
+          max_batches?: number
+          max_runtime_ms?: number
         }
         Returns: undefined
       }
@@ -4640,6 +4735,12 @@ export type Database = {
         Returns: number
       }
       parse_step_pattern: { Args: { pattern: string }; Returns: number }
+      pg_buffercache_pages: { Args: never; Returns: Record<string, unknown>[] }
+      pg_buffercache_summary: { Args: never; Returns: Record<string, unknown> }
+      pg_buffercache_usage_counts: {
+        Args: never
+        Returns: Record<string, unknown>[]
+      }
       pg_log: { Args: { decision: string; input?: Json }; Returns: undefined }
       principal_can_manage_group_rank: {
         Args: {
@@ -4679,6 +4780,10 @@ export type Database = {
             Args: { batch_size?: number; queue_names: string[] }
             Returns: undefined
           }
+      process_global_stats_creates_queue: {
+        Args: { batch_size?: number }
+        Returns: number
+      }
       process_queue_with_healthcheck: {
         Args: {
           batch_size: number
@@ -5060,7 +5165,15 @@ export type Database = {
         Args: { disabled: boolean; org_id: string }
         Returns: undefined
       }
+      soft_delete_versions_for_long_canceled_orgs: {
+        Args: { p_batch_size?: number }
+        Returns: number
+      }
       strip_html: { Args: { input: string }; Returns: string }
+      sweep_deleted_version_manifests: {
+        Args: { p_batch_size?: number }
+        Returns: number
+      }
       top_up_usage_credits: {
         Args: {
           p_amount: number

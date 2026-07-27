@@ -33,6 +33,9 @@ export const REPLICA_FUNCTIONS = ['one_month_ahead'] as const
 export const REPLICA_EXCLUDED_INDEXES = [
   // replicate_prepare.sh intentionally omits this source-only customer lookup index from the replica DDL.
   'idx_stripe_info_customer_id',
+  // Primary-only reclaim helper for null_migrated_app_version_manifests; not needed on subscribers
+  // and Cloud SQL server-side import cannot apply CREATE INDEX before primary migrations.
+  'app_versions_manifest_present_idx',
 ] as const
 
 export function replicaConfigPattern(values: readonly string[]): string {

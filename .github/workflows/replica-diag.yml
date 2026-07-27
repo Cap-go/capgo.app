@@ -1,0 +1,51 @@
+name: Replica diag (temp)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Activate SA and inspect Cloud SQL
+        env:
+          GOOGLE_SERVICE_ACCOUNT_BASE64: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
+        run: |
+          set -uo pipefail
+          credentials_file="$(mktemp)"
+          trap 'rm -f "$credentials_file"' EXIT
+          printf '%s' "$GOOGLE_SERVICE_ACCOUNT_BASE64" | base64 --decode > "$credentials_file"
+          gcloud auth activate-service-account --key-file="$credentials_file"
+          gcloud config set project capgo-394818
+
+          echo "==== instance ===="
+          gcloud sql instances describe eu-2 --format='yaml(name,state,settings.activationPolicy,currentDiskSize,settings.dataDiskSizeGb)' || true
+
+          echo "==== operations last 30 ===="
+          gcloud sql operations list --instance=eu-2 --limit=30 --format='table(name,operationType,status,user,insertTime,endTime,error.errors[].message)' || true
+
+          echo "==== logging (may deny) ===="
+          gcloud logging read 'resource.type="cloudsql_database" AND resource.labels.database_id="capgo-394818:eu-2"' --limit=40 --freshness=12h --format='value(timestamp,textPayload,jsonPayload.message)' || true
+
+          echo "==== pg_stat_subscription ===="
+          gcloud sql instances execute-sql eu-2 --database=postgres --format=json \
+            --sql="SELECT subname, pid, received_lsn, latest_end_lsn, last_msg_send_time, last_msg_receipt_time, now()-last_msg_receipt_time AS no_message_for FROM pg_stat_subscription;" || true
+
+          echo "==== pg_subscription ===="
+          gcloud sql instances execute-sql eu-2 --database=postgres --format=json \
+            --sql="SELECT subname, subenabled, subslotname, subpublications FROM pg_subscription;" || true
+
+          echo "==== subscription rel states ===="
+          gcloud sql instances execute-sql eu-2 --database=postgres --format=json \
+            --sql="SELECT sr.srrelid::regclass AS table_name, sr.srsubstate, sr.srsublsn FROM pg_subscription_rel sr JOIN pg_subscription s ON s.oid=sr.srsubid ORDER BY 1;" || true
+
+          echo "==== activity ===="
+          gcloud sql instances execute-sql eu-2 --database=postgres --format=json \
+            --sql="SELECT pid, usename, application_name, state, wait_event_type, wait_event, left(query,200) AS query FROM pg_stat_activity WHERE pid<>pg_backend_pid() ORDER BY backend_start NULLS LAST LIMIT 50;" || true
+
+          echo "==== blocking locks ===="
+          gcloud sql instances execute-sql eu-2 --database=postgres --format=json \
+            --sql="SELECT a.pid AS blocked_pid, left(a.query,120) AS blocked_query, b.pid AS blocking_pid, left(b.query,120) AS blocking_query FROM pg_locks l JOIN pg_stat_activity a ON a.pid=l.pid JOIN pg_locks o ON o.locktype=l.locktype AND o.database IS NOT DISTINCT FROM l.database AND o.relation IS NOT DISTINCT FROM l.relation AND o.page IS NOT DISTINCT FROM l.page AND o.tuple IS NOT DISTINCT FROM l.tuple AND o.virtualxid IS NOT DISTINCT FROM l.virtualxid AND o.transactionid IS NOT DISTINCT FROM l.transactionid AND o.classid IS NOT DISTINCT FROM l.classid AND o.objid IS NOT DISTINCT FROM l.objid AND o.objsubid IS NOT DISTINCT FROM l.objsubid AND o.pid<>l.pid JOIN pg_stat_activity b ON b.pid=o.pid WHERE NOT l.granted AND o.granted LIMIT 30;" || true

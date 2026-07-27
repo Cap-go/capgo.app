@@ -1,4 +1,3 @@
-import { z } from 'zod'
 import process from 'node:process'
 // src/init/mcp/live-update-tools.ts
 import { existsSync } from 'node:fs'
@@ -6,8 +5,8 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import type { CapgoSDK } from '../../sdk.js'
 import type { LiveUpdateNextStepInput, LiveUpdateStartInput } from '../../schemas/live-update-onboarding.js'
-import { liveUpdateNextStepSchema, liveUpdateStartSchema } from '../../schemas/live-update-onboarding.js'
-import { capacitorConfigOptionSchema } from '../../schemas/sdk.js'
+import { liveUpdateExplainInputSchema, liveUpdateNextStepSchema, liveUpdateStartSchema } from '../../schemas/live-update-onboarding.js'
+import type { McpRegistrar } from '../../mcp/registrar.js'
 import { getConfigWriteTarget, resolveCapacitorConfigTargetPath, withConfigWriteTarget } from '../../config'
 import { getPlatformDirFromCapacitorConfig } from '../../build/platform-paths.js'
 import { createKeyInternal } from '../../key.js'
@@ -31,19 +30,7 @@ import type { EngineDeps } from './engine.js'
 import { explainLiveUpdateOnboarding, runAdvance, runStart } from './engine.js'
 import { clearLiveUpdateProgress, loadLiveUpdateProgress, saveLiveUpdateProgress } from './progress.js'
 
-interface McpLike {
-  tool: (
-    name: string,
-    description: string,
-    schema: Record<string, unknown>,
-    handler: (args: any) => Promise<{ content: Array<{ type: 'text', text: string }> }>,
-  ) => unknown
-  prompt?: (
-    name: string,
-    description: string,
-    handler: () => { messages: Array<{ role: 'user' | 'assistant', content: { type: 'text', text: string } }> },
-  ) => unknown
-}
+
 
 const DEFAULT_CHANNEL = 'production'
 const importInject = 'import { CapacitorUpdater } from \'@capgo/capacitor-updater\''
@@ -294,7 +281,7 @@ function addConfigTargetToResult(
   }
 }
 
-export function registerLiveUpdateTools(server: McpLike, sdk: CapgoSDK, depsOverride?: EngineDeps): void {
+export function registerLiveUpdateTools(server: McpRegistrar, sdk: CapgoSDK, depsOverride?: EngineDeps): void {
   const configTargetsByApp = new Map<string, Set<string>>()
   const projectTargetsByConfig = new Map<string, LiveUpdateProjectTarget>()
   const deps = depsOverride ?? buildDeps(sdk, process.cwd(), () => {
@@ -369,10 +356,12 @@ export function registerLiveUpdateTools(server: McpLike, sdk: CapgoSDK, depsOver
     return targets?.values().next().value ?? getConfigWriteTarget()
   }
 
-  server.tool(
+  server.registerTool(
     'start_capgo_live_update_onboarding',
-    'Start (or resume) the guided Capgo live-update (OTA) setup for this Capacitor project — register the app, install the updater plugin, build, upload a test bundle, and confirm OTA delivery. ALWAYS call this FIRST when the user wants to set up or troubleshoot Capgo OTA / live updates. Do NOT configure Capgo yourself — this tool conducts the flow.',
-    liveUpdateStartSchema.shape,
+    {
+      description: 'Start (or resume) the guided Capgo live-update (OTA) setup for this Capacitor project — register the app, install the updater plugin, build, upload a test bundle, and confirm OTA delivery. ALWAYS call this FIRST when the user wants to set up or troubleshoot Capgo OTA / live updates. Do NOT configure Capgo yourself — this tool conducts the flow.',
+      inputSchema: liveUpdateStartSchema,
+    },
     async (args: LiveUpdateStartInput) => {
       const requestedProjectTarget = resolveLiveUpdateProjectTarget(args, deps.cwd)
       const requestedConfigTarget = args.capacitorConfig === undefined
@@ -400,10 +389,12 @@ export function registerLiveUpdateTools(server: McpLike, sdk: CapgoSDK, depsOver
     },
   )
 
-  server.tool(
+  server.registerTool(
     'capgo_live_update_onboarding_next_step',
-    'Advance the guided Capgo live-update onboarding by one step. Call ONLY as directed by the previous result\'s `next`. Pass the user\'s choice when the previous step asked for one.',
-    liveUpdateNextStepSchema.shape,
+    {
+      description: 'Advance the guided Capgo live-update onboarding by one step. Call ONLY as directed by the previous result\'s `next`. Pass the user\'s choice when the previous step asked for one.',
+      inputSchema: liveUpdateNextStepSchema,
+    },
     async (args: LiveUpdateNextStepInput) => {
       const { capacitorConfig, packageJson, mainFile, ...input } = args
       const configTarget = await getSessionConfigTarget(capacitorConfig)
@@ -417,12 +408,11 @@ export function registerLiveUpdateTools(server: McpLike, sdk: CapgoSDK, depsOver
     },
   )
 
-  server.tool(
+  server.registerTool(
     'capgo_live_update_onboarding_explain',
-    'Explain a Capgo live-update onboarding step in plain language — call when the user is confused. Defaults to the CURRENT step; pass { state } for a specific one. Read-only; never advances the flow.',
     {
-      state: z.string().optional().describe('Optional state name to explain (from a prior result state field).'),
-      capacitorConfig: capacitorConfigOptionSchema.describe('The same app-specific capacitor.config.* source used to start onboarding when more than one source is active for this app.'),
+      description: 'Explain a Capgo live-update onboarding step in plain language — call when the user is confused. Defaults to the CURRENT step; pass { state } for a specific one. Read-only; never advances the flow.',
+      inputSchema: liveUpdateExplainInputSchema,
     },
     async (args: { state?: string, capacitorConfig?: string }) => {
       const { capacitorConfig, ...input } = args
@@ -432,9 +422,9 @@ export function registerLiveUpdateTools(server: McpLike, sdk: CapgoSDK, depsOver
     },
   )
 
-  server.prompt?.(
+  server.registerPrompt(
     'capgo-live-update-setup',
-    'Set up Capgo live updates (OTA) for this Capacitor app — starts the guided onboarding.',
+    { description: 'Set up Capgo live updates (OTA) for this Capacitor app — starts the guided onboarding.' },
     () => ({
       messages: [{
         role: 'user' as const,

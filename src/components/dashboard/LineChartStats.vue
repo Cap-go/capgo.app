@@ -134,7 +134,6 @@ const projectionData = computed(() => {
   const lastDay = arrWithoutUndefined[arrWithoutUndefined.length - 1]
   // create a projection of the evolution, start after the last value of the array, put undefined for the beginning of the month
   // each value is the previous value + the evolution, the first value is the last value of the array
-  // eslint-disable-next-line unicorn/no-new-array
   let res = new Array(getDaysInCurrentMonth()).fill(undefined)
   res = res.reduce((acc: number[], val: number, i: number) => {
     let newVal

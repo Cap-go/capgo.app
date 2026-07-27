@@ -12,7 +12,6 @@ import type { SupabaseCallInfo } from './supabase-perf'
 // shared sendEvent() path (cli/src/utils.ts) can inject them on every event
 // without a circular import. Re-exported here for existing import sites.
 export { getGlobalAnalyticsProps, getInvocationSource, setInvocationSource } from './global-props'
-export type { GlobalAnalyticsProps, InvocationSource } from './global-props'
 
 export function isTelemetryDisabled(): boolean {
   return isTruthyEnvValue(env.CAPGO_DISABLE_TELEMETRY) || isTruthyEnvValue(env.CAPGO_DISABLE_POSTHOG)
@@ -279,8 +278,16 @@ const CLI_PERF_CHANNEL = 'cli-perf'
 /**
  * Turns a raw timed-fetch observation into a fire-and-forget `Supabase Call`
  * event. Injected into supabase-perf so that module stays a leaf (no cycle).
+ *
+ * Only slow or failed calls are emitted. Successful fast calls were ~50% of
+ * PostHog volume (mostly CI `bundle upload`) and added little beyond the
+ * existing CLI command lifecycle events.
  */
 function recordSupabaseCall(info: SupabaseCallInfo): void {
+  const slow = info.durationMs > SLOW_THRESHOLD_MS
+  if (info.ok && !slow)
+    return
+
   // MCP tool calls scope their path via the async-local store; the CLI uses the
   // module-level value set in trackCommandInvoked.
   const commandPath = mcpCommandPathStore.getStore() ?? currentCommandPath
@@ -290,7 +297,7 @@ function recordSupabaseCall(info: SupabaseCallInfo): void {
     status_code: info.status,
     duration_ms: info.durationMs,
     ok: info.ok,
-    slow: info.durationMs > SLOW_THRESHOLD_MS,
+    slow,
   }
   if (info.source)
     tags.source = info.source

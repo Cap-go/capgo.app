@@ -64,6 +64,13 @@ CREATE EXTENSION IF NOT EXISTS "moddatetime" WITH SCHEMA "extensions";
 
 
 
+CREATE EXTENSION IF NOT EXISTS "pg_buffercache" WITH SCHEMA "public";
+
+
+
+
+
+
 CREATE EXTENSION IF NOT EXISTS "pg_stat_statements" WITH SCHEMA "extensions";
 
 
@@ -1507,6 +1514,49 @@ $$;
 ALTER FUNCTION "public"."assert_group_member_is_org_member"("p_group_id" "uuid", "p_user_id" "uuid") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."assert_preview_bundle_owner"("p_owner_org" "uuid", "p_app_id" character varying, "p_version_id" bigint) RETURNS "void"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  v_preview_apikey_rbac_id uuid;
+  v_bundle_creator_apikey_rbac_id uuid;
+BEGIN
+  IF p_version_id IS NULL THEN
+    RETURN;
+  END IF;
+
+  SELECT public.current_app_preview_apikey_rbac_id(p_owner_org, p_app_id)
+  INTO v_preview_apikey_rbac_id;
+
+  IF v_preview_apikey_rbac_id IS NULL THEN
+    RETURN;
+  END IF;
+
+  SELECT version.created_by_apikey_rbac_id
+  INTO v_bundle_creator_apikey_rbac_id
+  FROM public.app_versions AS version
+  WHERE version.id = p_version_id
+    AND version.app_id = p_app_id
+    AND version.owner_org = p_owner_org
+    AND version.deleted = false
+  FOR KEY SHARE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'INVALID_CHANNEL_VERSION';
+  END IF;
+
+  IF v_bundle_creator_apikey_rbac_id IS DISTINCT FROM v_preview_apikey_rbac_id THEN
+    RAISE EXCEPTION 'PREVIEW_APIKEY_CAN_ONLY_PROMOTE_OWN_BUNDLE'
+      USING ERRCODE = '42501';
+  END IF;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."assert_preview_bundle_owner"("p_owner_org" "uuid", "p_app_id" character varying, "p_version_id" bigint) OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."assert_request_principal_rank"("p_org_id" "uuid", "p_target_priority" integer, "p_mutation" "text") RETURNS "void"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -1563,6 +1613,7 @@ DECLARE
   v_actor_apikey_name text;
   v_stats_refresh_fields constant text[] := ARRAY['stats_refresh_requested_at', 'stats_updated_at', 'updated_at'];
   v_background_counter_fields constant text[] := ARRAY['channel_device_count', 'manifest_bundle_count', 'updated_at'];
+  v_fat_app_version_fields constant text[] := ARRAY['manifest', 'native_packages'];
 BEGIN
   SELECT auth.uid() INTO v_actor_user_id;
 
@@ -1603,6 +1654,31 @@ BEGIN
 
   v_user_id := v_actor_user_id;
 
+  -- Skip internal app_versions upload/migrate bookkeeping before the generic
+  -- changed_fields walk. Compare via to_jsonb only (this trigger is shared across
+  -- tables; never touch NEW.column names that only exist on app_versions).
+  IF TG_OP = 'UPDATE' AND TG_TABLE_NAME = 'app_versions' THEN
+    v_old_record := pg_catalog.to_jsonb(OLD);
+    v_new_record := pg_catalog.to_jsonb(NEW);
+    IF (
+      v_old_record
+        - 'manifest'
+        - 'updated_at'
+        - 'manifest_count'
+        - 'storage_provider'
+        - 'r2_path'
+    ) IS NOT DISTINCT FROM (
+      v_new_record
+        - 'manifest'
+        - 'updated_at'
+        - 'manifest_count'
+        - 'storage_provider'
+        - 'r2_path'
+    ) THEN
+      RETURN NEW;
+    END IF;
+  END IF;
+
   IF TG_OP = 'DELETE' THEN
     v_old_record := pg_catalog.to_jsonb(OLD);
     v_new_record := NULL;
@@ -1640,6 +1716,18 @@ BEGIN
       ) THEN
       RETURN NEW;
     END IF;
+  END IF;
+
+  -- Never persist multi-MB array/json columns in audit TOAST.
+  -- Keep fat field names in changed_fields when co-occurring with real user edits.
+  IF TG_TABLE_NAME = 'app_versions' THEN
+    IF v_old_record IS NOT NULL THEN
+      v_old_record := v_old_record - v_fat_app_version_fields;
+    END IF;
+    IF v_new_record IS NOT NULL THEN
+      v_new_record := v_new_record - v_fat_app_version_fields;
+    END IF;
+
   END IF;
 
   CASE TG_TABLE_NAME
@@ -1756,6 +1844,141 @@ $$;
 
 
 ALTER FUNCTION "public"."auto_owner_org_by_app_id"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."billing_period_completed_cycle"("p_anchor_start" timestamp with time zone, "p_as_of" "date" DEFAULT (("now"() AT TIME ZONE 'UTC'::"text"))::"date") RETURNS TABLE("is_anniversary" boolean, "cycle_start" timestamp with time zone, "cycle_end" timestamp with time zone)
+    LANGUAGE "plpgsql" STABLE
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  v_as_of date;
+  v_anchor_utc timestamp;
+  v_anchor_dom integer;
+  v_this_month_last integer;
+  v_prev_month_last integer;
+  v_this_anniv_dom integer;
+  v_prev_anniv_dom integer;
+  v_prev_month date;
+BEGIN
+  -- Calendar math is UTC so session TimeZone cannot shift anniversary days.
+  -- Bounds are UTC midnight so the daily 12:00 UTC cron always reports a
+  -- completed [start, end) period (Stripe anchors are often afternoon UTC).
+  v_as_of := COALESCE(p_as_of, (now() AT TIME ZONE 'UTC')::date);
+  v_anchor_utc := p_anchor_start AT TIME ZONE 'UTC';
+  v_anchor_dom := COALESCE(EXTRACT(DAY FROM v_anchor_utc)::integer, 1);
+  v_this_month_last := EXTRACT(
+    DAY FROM (date_trunc('month', v_as_of) + interval '1 month - 1 day')
+  )::integer;
+  v_prev_month_last := EXTRACT(
+    DAY FROM (date_trunc('month', v_as_of) - interval '1 day')
+  )::integer;
+  v_this_anniv_dom := LEAST(v_anchor_dom, v_this_month_last);
+  v_prev_anniv_dom := LEAST(v_anchor_dom, v_prev_month_last);
+
+  is_anniversary := EXTRACT(DAY FROM v_as_of)::integer = v_this_anniv_dom;
+  IF is_anniversary THEN
+    v_prev_month := (date_trunc('month', v_as_of) - interval '1 month')::date;
+    cycle_start := make_timestamptz(
+      EXTRACT(YEAR FROM v_prev_month)::integer,
+      EXTRACT(MONTH FROM v_prev_month)::integer,
+      v_prev_anniv_dom,
+      0,
+      0,
+      0,
+      'UTC'
+    );
+    cycle_end := make_timestamptz(
+      EXTRACT(YEAR FROM v_as_of)::integer,
+      EXTRACT(MONTH FROM v_as_of)::integer,
+      v_this_anniv_dom,
+      0,
+      0,
+      0,
+      'UTC'
+    );
+  ELSE
+    cycle_start := NULL;
+    cycle_end := NULL;
+  END IF;
+
+  RETURN NEXT;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."billing_period_completed_cycle"("p_anchor_start" timestamp with time zone, "p_as_of" "date") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."bind_app_preview_apikey_to_created_channel"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  v_parent_binding_id uuid;
+  v_apikey_text text;
+  v_apikey public.apikeys%ROWTYPE;
+BEGIN
+  SELECT public.current_app_preview_binding_id(NEW.owner_org, NEW.app_id)
+  INTO v_parent_binding_id;
+
+  IF v_parent_binding_id IS NULL THEN
+    RETURN NEW;
+  END IF;
+
+  SELECT public.get_apikey_header() INTO v_apikey_text;
+  SELECT *
+  INTO v_apikey
+  FROM public.find_apikey_by_value(v_apikey_text)
+  LIMIT 1;
+
+  IF v_apikey.id IS NULL
+    OR public.is_apikey_expired(v_apikey.expires_at)
+    OR v_apikey.user_id IS DISTINCT FROM NEW.created_by
+  THEN
+    RAISE EXCEPTION 'INVALID_PREVIEW_CHANNEL_CREATOR'
+      USING ERRCODE = '42501';
+  END IF;
+
+  INSERT INTO public.role_bindings (
+    principal_type,
+    principal_id,
+    role_id,
+    scope_type,
+    org_id,
+    app_id,
+    channel_id,
+    parent_binding_id,
+    granted_by,
+    granted_at,
+    reason,
+    is_direct
+  )
+  SELECT
+    public.rbac_principal_apikey(),
+    parent_binding.principal_id,
+    preview_role.id,
+    public.rbac_scope_channel(),
+    parent_binding.org_id,
+    parent_binding.app_id,
+    NEW.rbac_id,
+    parent_binding.id,
+    v_apikey.user_id,
+    pg_catalog.now(),
+    'Automatically granted to the app-preview API key that created this channel',
+    false
+  FROM public.role_bindings AS parent_binding
+  INNER JOIN public.roles AS preview_role
+    ON preview_role.name = 'channel_preview'
+    AND preview_role.scope_type = public.rbac_scope_channel()
+  WHERE parent_binding.id = v_parent_binding_id
+  ON CONFLICT DO NOTHING;
+
+  RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."bind_app_preview_apikey_to_created_channel"() OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."bind_creating_apikey_to_org_on_create"() RETURNS "trigger"
@@ -2352,6 +2575,41 @@ DECLARE
   bundle_was_ready boolean;
 BEGIN
   IF TG_OP = 'UPDATE' THEN
+    IF pg_catalog.current_setting('capgo.reclaim_manifest_null', true) = 'on'
+      AND NEW.manifest IS NULL
+      AND OLD.manifest IS NOT NULL
+      AND NEW.native_packages IS NOT DISTINCT FROM OLD.native_packages
+      AND NEW.name IS NOT DISTINCT FROM OLD.name
+      AND NEW.app_id IS NOT DISTINCT FROM OLD.app_id
+      AND NEW.session_key IS NOT DISTINCT FROM OLD.session_key
+      AND NEW.key_id IS NOT DISTINCT FROM OLD.key_id
+      AND NEW.storage_provider IS NOT DISTINCT FROM OLD.storage_provider
+      AND NEW.r2_path IS NOT DISTINCT FROM OLD.r2_path
+      AND NEW.external_url IS NOT DISTINCT FROM OLD.external_url
+      AND NEW.checksum IS NOT DISTINCT FROM OLD.checksum
+    THEN
+      RETURN NEW;
+    END IF;
+
+    IF NEW.manifest IS NULL
+      AND OLD.manifest IS NOT NULL
+      AND EXISTS (
+        SELECT 1
+        FROM pg_catalog.unnest(OLD.manifest) AS entry(file_name, s3_path, file_hash)
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM public.manifest AS m
+          WHERE m.app_version_id = OLD.id
+            AND m.s3_path = entry.s3_path
+            AND m.file_hash = entry.file_hash
+        )
+      )
+    THEN
+      RAISE EXCEPTION '%',
+        'bundle_manifest_not_migrated: Cannot clear app_versions.manifest '
+        || 'until every entry exists in public.manifest.';
+    END IF;
+
     bundle_was_ready := OLD.storage_provider IS DISTINCT FROM 'r2-direct';
 
     IF bundle_was_ready
@@ -2364,12 +2622,27 @@ BEGIN
         OR NEW.r2_path IS DISTINCT FROM OLD.r2_path
         OR NEW.external_url IS DISTINCT FROM OLD.external_url
         OR NEW.checksum IS DISTINCT FROM OLD.checksum
-        OR NEW.manifest IS DISTINCT FROM OLD.manifest
+        OR (NEW.manifest IS DISTINCT FROM OLD.manifest AND NEW.manifest IS NOT NULL)
+        OR (
+          NEW.manifest IS NULL
+          AND OLD.manifest IS NOT NULL
+          AND EXISTS (
+            SELECT 1
+            FROM pg_catalog.unnest(OLD.manifest) AS entry(file_name, s3_path, file_hash)
+            WHERE NOT EXISTS (
+              SELECT 1
+              FROM public.manifest AS m
+              WHERE m.app_version_id = OLD.id
+                AND m.s3_path = entry.s3_path
+                AND m.file_hash = entry.file_hash
+            )
+          )
+        )
         OR NEW.native_packages IS DISTINCT FROM OLD.native_packages
       )
     THEN
       PERFORM public.pg_log('deny: BUNDLE_CONTENT_LOCKED_TRIGGER',
-        jsonb_build_object(
+        pg_catalog.jsonb_build_object(
           'org_id', OLD.owner_org,
           'app_id', OLD.app_id,
           'version_name', OLD.name,
@@ -2384,8 +2657,38 @@ BEGIN
     END IF;
   END IF;
 
-  -- Derive org_id from NEW.app_id first because
-  -- force_valid_owner_org_app_versions runs after this trigger.
+  IF TG_OP = 'UPDATE'
+    AND NEW.session_key IS NOT DISTINCT FROM OLD.session_key
+    AND NEW.key_id IS NOT DISTINCT FROM OLD.key_id
+    AND NEW.name IS NOT DISTINCT FROM OLD.name
+    AND NEW.app_id IS NOT DISTINCT FROM OLD.app_id
+    AND NEW.storage_provider IS NOT DISTINCT FROM OLD.storage_provider
+    AND NEW.r2_path IS NOT DISTINCT FROM OLD.r2_path
+    AND NEW.external_url IS NOT DISTINCT FROM OLD.external_url
+    AND NEW.checksum IS NOT DISTINCT FROM OLD.checksum
+    AND NEW.native_packages IS NOT DISTINCT FROM OLD.native_packages
+    AND (
+      NEW.manifest IS NOT DISTINCT FROM OLD.manifest
+      OR (
+        NEW.manifest IS NULL
+        AND OLD.manifest IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1
+          FROM pg_catalog.unnest(OLD.manifest) AS entry(file_name, s3_path, file_hash)
+          WHERE NOT EXISTS (
+            SELECT 1
+            FROM public.manifest AS m
+            WHERE m.app_version_id = OLD.id
+              AND m.s3_path = entry.s3_path
+              AND m.file_hash = entry.file_hash
+          )
+        )
+      )
+    )
+  THEN
+    RETURN NEW;
+  END IF;
+
   SELECT apps.owner_org INTO org_id
   FROM public.apps
   WHERE apps.app_id = NEW.app_id;
@@ -2394,7 +2697,6 @@ BEGIN
     org_id := NEW.owner_org;
   END IF;
 
-  -- If org not found, allow the existing foreign-key/owner checks to fail.
   IF org_id IS NULL THEN
     RETURN NEW;
   END IF;
@@ -2409,11 +2711,11 @@ BEGIN
   END IF;
 
   bundle_is_encrypted := public.is_bundle_encrypted(NEW.session_key);
-  bundle_key_id := NULLIF(btrim(NEW.key_id), '')::varchar(20);
+  bundle_key_id := NULLIF(pg_catalog.btrim(NEW.key_id), '')::varchar(20);
 
   IF NOT bundle_is_encrypted THEN
     PERFORM public.pg_log('deny: ORG_REQUIRES_ENCRYPTED_BUNDLES_TRIGGER',
-      jsonb_build_object(
+      pg_catalog.jsonb_build_object(
         'org_id', org_id,
         'app_id', NEW.app_id,
         'version_name', NEW.name,
@@ -2428,7 +2730,7 @@ BEGIN
   IF org_required_key IS NOT NULL AND org_required_key <> '' THEN
     IF bundle_key_id IS NULL THEN
       PERFORM public.pg_log('deny: ORG_REQUIRES_SPECIFIC_ENCRYPTION_KEY_TRIGGER',
-        jsonb_build_object(
+        pg_catalog.jsonb_build_object(
           'org_id', org_id,
           'app_id', NEW.app_id,
           'version_name', NEW.name,
@@ -2443,13 +2745,12 @@ BEGIN
         || 'a key_id.';
     END IF;
 
-    -- key_id is 20 chars and required_encryption_key may be 20 or 21 chars.
     IF NOT (
-      bundle_key_id = LEFT(org_required_key, 20)
-      OR LEFT(bundle_key_id, LENGTH(org_required_key)) = org_required_key
+      bundle_key_id = pg_catalog.left(org_required_key, 20)
+      OR pg_catalog.left(bundle_key_id, pg_catalog.length(org_required_key)) = org_required_key
     ) THEN
       PERFORM public.pg_log('deny: ORG_REQUIRES_SPECIFIC_ENCRYPTION_KEY_TRIGGER',
-        jsonb_build_object(
+        pg_catalog.jsonb_build_object(
           'org_id', org_id,
           'app_id', NEW.app_id,
           'version_name', NEW.name,
@@ -3271,6 +3572,79 @@ $$;
 ALTER FUNCTION "public"."cleanup_apikey_role_bindings"() OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."cleanup_audit_logs_for_long_canceled_orgs"("max_batches" integer DEFAULT 1000000, "batch_size" integer DEFAULT 1000, "max_runtime_ms" integer DEFAULT 60000) RETURNS bigint
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  batch_no integer := 0;
+  deleted_batch integer;
+  deleted_total bigint := 0;
+  v_max_batches integer := GREATEST(1, COALESCE(max_batches, 1000000));
+  v_batch_size integer := GREATEST(1, COALESCE(batch_size, 1000));
+  v_max_runtime_ms integer := GREATEST(1000, COALESCE(max_runtime_ms, 60000));
+  started_at timestamptz := pg_catalog.clock_timestamp();
+  remaining_ms bigint;
+BEGIN
+  LOOP
+    batch_no := batch_no + 1;
+    EXIT WHEN batch_no > v_max_batches;
+
+    remaining_ms := v_max_runtime_ms
+      - (EXTRACT(EPOCH FROM (pg_catalog.clock_timestamp() - started_at)) * 1000)::bigint;
+    EXIT WHEN remaining_ms <= 0;
+
+    -- Bound each batch to the remaining runtime budget so one slow delete
+    -- cannot overrun the cron tick / hold the scheduler lock.
+    PERFORM pg_catalog.set_config('statement_timeout', remaining_ms::text || 'ms', true);
+    PERFORM pg_catalog.set_config('lock_timeout', '5s', true);
+
+    BEGIN
+      DELETE FROM public.audit_logs AS al
+      WHERE al.ctid IN (
+        SELECT audit.ctid
+        FROM public.audit_logs AS audit
+        WHERE audit.org_id IN (SELECT public.long_canceled_org_ids())
+        ORDER BY audit.org_id, audit.created_at, audit.id
+        LIMIT v_batch_size
+      );
+
+      GET DIAGNOSTICS deleted_batch = ROW_COUNT;
+    EXCEPTION
+      WHEN query_canceled OR lock_not_available THEN
+        EXIT;
+    END;
+
+    deleted_total := deleted_total + deleted_batch;
+    EXIT WHEN deleted_batch = 0;
+  END LOOP;
+
+  PERFORM pg_catalog.set_config('statement_timeout', '0', true);
+  PERFORM pg_catalog.set_config('lock_timeout', '0', true);
+
+  IF deleted_total > 0 THEN
+    RAISE NOTICE
+      'cleanup_audit_logs_for_long_canceled_orgs: deleted=% batches=%/% batch_size=% runtime_ms=% budget_ms=%',
+      deleted_total,
+      LEAST(batch_no, v_max_batches),
+      v_max_batches,
+      v_batch_size,
+      (EXTRACT(EPOCH FROM (pg_catalog.clock_timestamp() - started_at)) * 1000)::bigint,
+      v_max_runtime_ms;
+  END IF;
+
+  RETURN deleted_total;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."cleanup_audit_logs_for_long_canceled_orgs"("max_batches" integer, "batch_size" integer, "max_runtime_ms" integer) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."cleanup_audit_logs_for_long_canceled_orgs"("max_batches" integer, "batch_size" integer, "max_runtime_ms" integer) IS 'Deletes audit_logs for orgs past the 90-day canceled grace window (see long_canceled_org_ids). Batched with a remaining-budget statement_timeout to avoid cron timeouts.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."cleanup_completed_onboarding_apps"() RETURNS "void"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -3404,18 +3778,88 @@ $$;
 ALTER FUNCTION "public"."cleanup_job_run_details_7days"() OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."cleanup_old_audit_logs"() RETURNS "void"
+CREATE OR REPLACE FUNCTION "public"."cleanup_long_canceled_org_data"() RETURNS "void"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
 BEGIN
-  DELETE FROM "public"."audit_logs"
-  WHERE created_at < pg_catalog.now() - INTERVAL '90 days';
+  PERFORM public.soft_delete_versions_for_long_canceled_orgs();
+  PERFORM public.cleanup_audit_logs_for_long_canceled_orgs();
 END;
 $$;
 
 
-ALTER FUNCTION "public"."cleanup_old_audit_logs"() OWNER TO "postgres";
+ALTER FUNCTION "public"."cleanup_long_canceled_org_data"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."cleanup_long_canceled_org_data"() IS 'Daily canceled-org retention: soft-delete app versions then purge audit_logs for orgs past the 90-day grace window. Both steps are batch/runtime bounded.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."cleanup_net_http_response"() RETURNS "void"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+BEGIN
+  -- Responses are only used for short-lived async HTTP debugging.
+  -- Truncate reclaims disk; row deletes do not.
+  TRUNCATE TABLE net._http_response;
+  RAISE NOTICE 'cleanup_net_http_response: truncated net._http_response';
+END;
+$$;
+
+
+ALTER FUNCTION "public"."cleanup_net_http_response"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."cleanup_old_audit_logs"("max_batches" integer DEFAULT 1000000, "batch_size" integer DEFAULT 1000, "max_runtime_ms" integer DEFAULT 60000) RETURNS "void"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  cutoff timestamptz := pg_catalog.now() - INTERVAL '30 days';
+  batch_no integer := 0;
+  deleted_batch integer;
+  deleted_total bigint := 0;
+  v_max_batches integer := GREATEST(1, COALESCE(max_batches, 1000000));
+  v_batch_size integer := GREATEST(1, COALESCE(batch_size, 1000));
+  v_max_runtime_ms integer := GREATEST(1000, COALESCE(max_runtime_ms, 60000));
+  started_at timestamptz := pg_catalog.clock_timestamp();
+BEGIN
+  PERFORM pg_catalog.set_config('statement_timeout', '0', true);
+
+  LOOP
+    batch_no := batch_no + 1;
+    EXIT WHEN batch_no > v_max_batches;
+    EXIT WHEN (EXTRACT(EPOCH FROM (pg_catalog.clock_timestamp() - started_at)) * 1000) >= v_max_runtime_ms;
+
+    DELETE FROM public.audit_logs
+    WHERE ctid IN (
+      SELECT ctid
+      FROM public.audit_logs
+      WHERE created_at < cutoff
+      ORDER BY created_at
+      LIMIT v_batch_size
+    );
+
+    GET DIAGNOSTICS deleted_batch = ROW_COUNT;
+    deleted_total := deleted_total + deleted_batch;
+    EXIT WHEN deleted_batch = 0;
+  END LOOP;
+
+  RAISE NOTICE
+    'cleanup_old_audit_logs: deleted=% batches=%/% batch_size=% runtime_ms=% budget_ms=%',
+    deleted_total,
+    LEAST(batch_no, v_max_batches),
+    v_max_batches,
+    v_batch_size,
+    (EXTRACT(EPOCH FROM (pg_catalog.clock_timestamp() - started_at)) * 1000)::bigint,
+    v_max_runtime_ms;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."cleanup_old_audit_logs"("max_batches" integer, "batch_size" integer, "max_runtime_ms" integer) OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."cleanup_old_channel_devices"() RETURNS "void"
@@ -3497,29 +3941,114 @@ $$;
 ALTER FUNCTION "public"."cleanup_onboarding_app_data_on_complete"() OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."cleanup_queue_messages"() RETURNS "void"
+CREATE OR REPLACE FUNCTION "public"."cleanup_queue_messages"("max_batches_total" integer DEFAULT 1000000, "batch_size" integer DEFAULT 5000, "max_runtime_ms" integer DEFAULT 60000) RETURNS "void"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
     AS $_$
 DECLARE
-    queue_name text;
+  queue_name text;
+  cutoff timestamptz := pg_catalog.now() - INTERVAL '2 days';
+  batches_used integer := 0;
+  deleted_batch integer;
+  deleted_archived_total bigint := 0;
+  deleted_stuck_total bigint := 0;
+  did_work boolean;
+  archive_rel regclass;
+  queue_rel regclass;
+  v_max_batches integer := GREATEST(1, COALESCE(max_batches_total, 1000000));
+  v_batch_size integer := GREATEST(1, COALESCE(batch_size, 5000));
+  v_max_runtime_ms integer := GREATEST(1000, COALESCE(max_runtime_ms, 60000));
+  started_at timestamptz := pg_catalog.clock_timestamp();
 BEGIN
-    -- Clean up messages older than 7 days from all queues
+  PERFORM pg_catalog.set_config('statement_timeout', '0', true);
+
+  LOOP
+    EXIT WHEN batches_used >= v_max_batches;
+    EXIT WHEN (EXTRACT(EPOCH FROM (pg_catalog.clock_timestamp() - started_at)) * 1000) >= v_max_runtime_ms;
+    did_work := false;
+
     FOR queue_name IN (
-        SELECT q.queue_name FROM pgmq.list_queues() q
+      SELECT q.queue_name
+      FROM pgmq.list_queues() q
+      ORDER BY COALESCE(
+        pg_catalog.pg_total_relation_size(
+          to_regclass(pg_catalog.format('pgmq.a_%I', q.queue_name))
+        ),
+        0
+      ) DESC,
+      q.queue_name
     ) LOOP
-        -- Delete archived messages older than 7 days
-        EXECUTE format('DELETE FROM pgmq.a_%I WHERE archived_at < $1', queue_name)
-        USING (NOW() - INTERVAL '7 days')::timestamptz;
-        
-        -- Delete failed messages that have been retried more than 5 times
-        EXECUTE format('DELETE FROM pgmq.q_%I WHERE read_ct > 5', queue_name);
+      EXIT WHEN batches_used >= v_max_batches;
+      EXIT WHEN (EXTRACT(EPOCH FROM (pg_catalog.clock_timestamp() - started_at)) * 1000) >= v_max_runtime_ms;
+
+      archive_rel := to_regclass(pg_catalog.format('pgmq.a_%I', queue_name));
+      queue_rel := to_regclass(pg_catalog.format('pgmq.q_%I', queue_name));
+
+      IF archive_rel IS NOT NULL THEN
+        EXECUTE pg_catalog.format(
+          'DELETE FROM pgmq.a_%I
+           WHERE ctid IN (
+             SELECT ctid
+             FROM pgmq.a_%I
+             WHERE archived_at < $1
+             LIMIT $2
+           )',
+          queue_name,
+          queue_name
+        )
+        USING cutoff, v_batch_size;
+
+        GET DIAGNOSTICS deleted_batch = ROW_COUNT;
+        IF deleted_batch > 0 THEN
+          batches_used := batches_used + 1;
+          deleted_archived_total := deleted_archived_total + deleted_batch;
+          did_work := true;
+        END IF;
+      END IF;
+
+      EXIT WHEN batches_used >= v_max_batches;
+      EXIT WHEN (EXTRACT(EPOCH FROM (pg_catalog.clock_timestamp() - started_at)) * 1000) >= v_max_runtime_ms;
+
+      IF queue_rel IS NOT NULL THEN
+        EXECUTE pg_catalog.format(
+          'DELETE FROM pgmq.q_%I
+           WHERE ctid IN (
+             SELECT ctid
+             FROM pgmq.q_%I
+             WHERE read_ct > 5
+             LIMIT $1
+           )',
+          queue_name,
+          queue_name
+        )
+        USING v_batch_size;
+
+        GET DIAGNOSTICS deleted_batch = ROW_COUNT;
+        IF deleted_batch > 0 THEN
+          batches_used := batches_used + 1;
+          deleted_stuck_total := deleted_stuck_total + deleted_batch;
+          did_work := true;
+        END IF;
+      END IF;
     END LOOP;
+
+    EXIT WHEN NOT did_work;
+  END LOOP;
+
+  RAISE NOTICE
+    'cleanup_queue_messages: archived_deleted=% stuck_deleted=% batches_used=%/% batch_size=% runtime_ms=% budget_ms=%',
+    deleted_archived_total,
+    deleted_stuck_total,
+    batches_used,
+    v_max_batches,
+    v_batch_size,
+    (EXTRACT(EPOCH FROM (pg_catalog.clock_timestamp() - started_at)) * 1000)::bigint,
+    v_max_runtime_ms;
 END;
 $_$;
 
 
-ALTER FUNCTION "public"."cleanup_queue_messages"() OWNER TO "postgres";
+ALTER FUNCTION "public"."cleanup_queue_messages"("max_batches_total" integer, "batch_size" integer, "max_runtime_ms" integer) OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."cleanup_tmp_users"() RETURNS "void"
@@ -3845,6 +4374,88 @@ $$;
 
 
 ALTER FUNCTION "public"."count_non_compliant_bundles"("org_id" "uuid", "required_key" "text") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."current_app_preview_apikey_rbac_id"("p_owner_org" "uuid", "p_app_id" character varying) RETURNS "uuid"
+    LANGUAGE "plpgsql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  v_parent_binding_id uuid;
+  v_apikey_rbac_id uuid;
+BEGIN
+  SELECT public.current_app_preview_binding_id(p_owner_org, p_app_id)
+  INTO v_parent_binding_id;
+
+  IF v_parent_binding_id IS NULL THEN
+    RETURN NULL;
+  END IF;
+
+  SELECT parent_binding.principal_id
+  INTO v_apikey_rbac_id
+  FROM public.role_bindings AS parent_binding
+  WHERE parent_binding.id = v_parent_binding_id
+  LIMIT 1;
+
+  RETURN v_apikey_rbac_id;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."current_app_preview_apikey_rbac_id"("p_owner_org" "uuid", "p_app_id" character varying) OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."current_app_preview_binding_id"("p_owner_org" "uuid", "p_app_id" character varying) RETURNS "uuid"
+    LANGUAGE "plpgsql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  v_apikey_text text;
+  v_apikey public.apikeys%ROWTYPE;
+  v_parent_binding_id uuid;
+BEGIN
+  IF p_owner_org IS NULL OR p_app_id IS NULL THEN
+    RETURN NULL;
+  END IF;
+
+  SELECT public.get_apikey_header() INTO v_apikey_text;
+  IF v_apikey_text IS NULL OR v_apikey_text = '' THEN
+    RETURN NULL;
+  END IF;
+
+  SELECT *
+  INTO v_apikey
+  FROM public.find_apikey_by_value(v_apikey_text)
+  LIMIT 1;
+
+  IF v_apikey.id IS NULL OR public.is_apikey_expired(v_apikey.expires_at) THEN
+    RETURN NULL;
+  END IF;
+
+  SELECT parent_binding.id
+  INTO v_parent_binding_id
+  FROM public.role_bindings AS parent_binding
+  INNER JOIN public.roles AS parent_role
+    ON parent_role.id = parent_binding.role_id
+    AND parent_role.scope_type = parent_binding.scope_type
+  INNER JOIN public.apps AS app
+    ON app.id = parent_binding.app_id
+  WHERE parent_binding.principal_type = public.rbac_principal_apikey()
+    AND parent_binding.principal_id = v_apikey.rbac_id
+    AND parent_binding.scope_type = public.rbac_scope_app()
+    AND parent_binding.org_id = p_owner_org
+    AND parent_role.name = 'app_preview'
+    AND app.app_id = p_app_id
+    AND app.owner_org = p_owner_org
+    AND (parent_binding.expires_at IS NULL OR parent_binding.expires_at > pg_catalog.now())
+  LIMIT 1;
+
+  RETURN v_parent_binding_id;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."current_app_preview_binding_id"("p_owner_org" "uuid", "p_app_id" character varying) OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."current_request_role"() RETURNS "text"
@@ -4555,6 +5166,8 @@ BEGIN
     RETURN NEW;
   END IF;
 
+  PERFORM public.lock_channel_bundle_lifecycle(NEW.version, NEW.rollout_version);
+
   IF TG_OP = 'INSERT' THEN
     v_owner_org := public.get_owner_org_by_app_id_internal(NEW.app_id);
     v_channel_id := NULL::bigint;
@@ -4585,16 +5198,26 @@ BEGIN
     END IF;
   END IF;
 
-  IF NEW.version IS NOT NULL
-    AND NOT EXISTS (
-      SELECT 1
-      FROM public.app_versions AS app_version
-      WHERE app_version.id = NEW.version
-        AND app_version.app_id = NEW.app_id
-        AND app_version.owner_org = v_owner_org
-        AND app_version.deleted = false
-    ) THEN
-    RAISE EXCEPTION 'INVALID_CHANNEL_VERSION';
+  IF NEW.version IS NOT NULL THEN
+    PERFORM 1
+    FROM public.app_versions AS version
+    WHERE version.id = NEW.version
+      AND version.app_id = NEW.app_id
+      AND version.owner_org = v_owner_org
+      AND version.deleted = false
+    FOR KEY SHARE;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'INVALID_CHANNEL_VERSION';
+    END IF;
+
+    -- Service-role endpoints carry the key in request.headers. This helper
+    -- no-ops for other callers and preserves preview-key bundle ownership.
+    PERFORM public.assert_preview_bundle_owner(
+      v_owner_org,
+      NEW.app_id,
+      NEW.version
+    );
   END IF;
 
   RETURN NEW;
@@ -4654,6 +5277,93 @@ $$;
 
 
 ALTER FUNCTION "public"."enforce_email_otp_for_mfa"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."enforce_preview_bundle_ownership"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  v_preview_apikey_rbac_id uuid;
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    SELECT public.current_app_preview_apikey_rbac_id(NEW.owner_org, NEW.app_id)
+    INTO v_preview_apikey_rbac_id;
+
+    NEW.created_by_apikey_rbac_id := v_preview_apikey_rbac_id;
+    RETURN NEW;
+  END IF;
+
+  SELECT public.current_app_preview_apikey_rbac_id(OLD.owner_org, OLD.app_id)
+  INTO v_preview_apikey_rbac_id;
+
+  IF NEW.created_by_apikey_rbac_id IS DISTINCT FROM OLD.created_by_apikey_rbac_id THEN
+    RAISE EXCEPTION 'PREVIEW_BUNDLE_CREATOR_IMMUTABLE'
+      USING ERRCODE = '42501';
+  END IF;
+
+  IF v_preview_apikey_rbac_id IS NOT NULL
+    AND OLD.created_by_apikey_rbac_id IS DISTINCT FROM v_preview_apikey_rbac_id
+  THEN
+    RAISE EXCEPTION 'PREVIEW_APIKEY_CAN_ONLY_MANAGE_OWN_BUNDLE'
+      USING ERRCODE = '42501';
+  END IF;
+
+  -- Endpoint-level lifecycle checks are not sufficient here: an app_preview
+  -- key can directly update app_versions through PostgREST. Once a bundle is
+  -- referenced by a main channel or another key's preview channel, only a
+  -- matching active channel_preview binding may keep it mutable.
+  IF v_preview_apikey_rbac_id IS NOT NULL
+    AND OLD.created_by_apikey_rbac_id = v_preview_apikey_rbac_id
+    AND EXISTS (
+      SELECT 1
+      FROM public.channels AS channel
+      WHERE channel.app_id = OLD.app_id
+        AND channel.owner_org = OLD.owner_org
+        AND (channel.version = OLD.id OR channel.rollout_version = OLD.id)
+        AND NOT EXISTS (
+          SELECT 1
+          FROM public.role_bindings AS child_binding
+          INNER JOIN public.roles AS child_role
+            ON child_role.id = child_binding.role_id
+            AND child_role.scope_type = child_binding.scope_type
+          INNER JOIN public.apps AS app
+            ON app.id = child_binding.app_id
+            AND app.app_id = channel.app_id
+            AND app.owner_org = channel.owner_org
+          INNER JOIN public.role_bindings AS parent_binding
+            ON parent_binding.id = child_binding.parent_binding_id
+          INNER JOIN public.roles AS parent_role
+            ON parent_role.id = parent_binding.role_id
+            AND parent_role.scope_type = parent_binding.scope_type
+          WHERE child_binding.principal_type = public.rbac_principal_apikey()
+            AND child_binding.principal_id = v_preview_apikey_rbac_id
+            AND child_binding.scope_type = public.rbac_scope_channel()
+            AND child_binding.org_id = channel.owner_org
+            AND child_binding.channel_id = channel.rbac_id
+            AND child_binding.is_direct IS FALSE
+            AND child_role.name = 'channel_preview'
+            AND (child_binding.expires_at IS NULL OR child_binding.expires_at > pg_catalog.now())
+            AND parent_binding.principal_type = child_binding.principal_type
+            AND parent_binding.principal_id = child_binding.principal_id
+            AND parent_binding.scope_type = public.rbac_scope_app()
+            AND parent_binding.org_id = child_binding.org_id
+            AND parent_binding.app_id = child_binding.app_id
+            AND parent_role.name = 'app_preview'
+            AND (parent_binding.expires_at IS NULL OR parent_binding.expires_at > pg_catalog.now())
+        )
+    )
+  THEN
+    RAISE EXCEPTION 'PREVIEW_APIKEY_CANNOT_MUTATE_SHARED_BUNDLE'
+      USING ERRCODE = '42501';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."enforce_preview_bundle_ownership"() OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."enforce_role_binding_role_scope"() RETURNS "trigger"
@@ -6417,6 +7127,21 @@ $$;
 ALTER FUNCTION "public"."get_org_build_time_unit"("p_org_id" "uuid", "p_start_date" "date", "p_end_date" "date") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."get_org_credits_used_in_period"("p_org_id" "uuid", "p_start" timestamp with time zone, "p_end" timestamp with time zone) RETURNS numeric
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  SELECT COALESCE(SUM(c.credits_used), 0)::numeric
+  FROM public.usage_credit_consumptions c
+  WHERE c.org_id = p_org_id
+    AND c.applied_at >= p_start
+    AND c.applied_at < p_end;
+$$;
+
+
+ALTER FUNCTION "public"."get_org_credits_used_in_period"("p_org_id" "uuid", "p_start" timestamp with time zone, "p_end" timestamp with time zone) OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."get_org_members"("guild_id" "uuid") RETURNS TABLE("aid" bigint, "uid" "uuid", "email" character varying, "image_url" character varying, "role" "text", "is_tmp" boolean)
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -8170,7 +8895,8 @@ CREATE TABLE IF NOT EXISTS "public"."app_versions" (
     "manifest_count" integer DEFAULT 0 NOT NULL,
     "key_id" character varying(20),
     "cli_version" character varying,
-    "deleted_at" timestamp with time zone
+    "deleted_at" timestamp with time zone,
+    "created_by_apikey_rbac_id" "uuid"
 )
 WITH ("autovacuum_vacuum_scale_factor"='0.05', "autovacuum_analyze_scale_factor"='0.02');
 
@@ -8185,6 +8911,10 @@ COMMENT ON COLUMN "public"."app_versions"."key_id" IS 'First 4 characters of the
 
 
 COMMENT ON COLUMN "public"."app_versions"."cli_version" IS 'The version of @capgo/cli used to upload this bundle';
+
+
+
+COMMENT ON COLUMN "public"."app_versions"."created_by_apikey_rbac_id" IS 'Immutable API-key RBAC principal recorded only for bundles created by an active app_preview API key. Legacy bundles remain NULL and are not preview-key manageable.';
 
 
 
@@ -8211,12 +8941,23 @@ CREATE OR REPLACE FUNCTION "public"."get_weekly_stats"("app_id" character varyin
     LANGUAGE "plpgsql"
     SET "search_path" TO ''
     AS $$
-DECLARE seven_days_ago DATE;
+DECLARE
+  period_start DATE;
 BEGIN
-  seven_days_ago := CURRENT_DATE - INTERVAL '7 days';
-  SELECT COALESCE(SUM(install), 0) INTO all_updates FROM public.daily_version WHERE date BETWEEN seven_days_ago AND CURRENT_DATE AND public.daily_version.app_id = get_weekly_stats.app_id;
-  SELECT COALESCE(SUM(fail), 0) INTO failed_updates FROM public.daily_version WHERE date BETWEEN seven_days_ago AND CURRENT_DATE AND public.daily_version.app_id = get_weekly_stats.app_id;
-  SELECT COALESCE(SUM(get), 0) INTO open_app FROM public.daily_version WHERE date BETWEEN seven_days_ago AND CURRENT_DATE AND public.daily_version.app_id = get_weekly_stats.app_id;
+  -- Inclusive 7-day window: today and the previous 6 days.
+  period_start := CURRENT_DATE - INTERVAL '6 days';
+  SELECT COALESCE(SUM(install), 0) INTO all_updates
+  FROM public.daily_version
+  WHERE date BETWEEN period_start AND CURRENT_DATE
+    AND public.daily_version.app_id = get_weekly_stats.app_id;
+  SELECT COALESCE(SUM(fail), 0) INTO failed_updates
+  FROM public.daily_version
+  WHERE date BETWEEN period_start AND CURRENT_DATE
+    AND public.daily_version.app_id = get_weekly_stats.app_id;
+  SELECT COALESCE(SUM(get), 0) INTO open_app
+  FROM public.daily_version
+  WHERE date BETWEEN period_start AND CURRENT_DATE
+    AND public.daily_version.app_id = get_weekly_stats.app_id;
   RETURN QUERY SELECT all_updates, failed_updates, open_app;
 END;
 $$;
@@ -9619,6 +10360,28 @@ COMMENT ON FUNCTION "public"."is_user_org_admin"("p_user_id" "uuid", "p_org_id" 
 
 
 
+CREATE OR REPLACE FUNCTION "public"."lock_channel_bundle_lifecycle"("p_version_id" bigint, "p_rollout_version_id" bigint) RETURNS "void"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  v_bundle_id bigint;
+BEGIN
+  FOR v_bundle_id IN
+    SELECT bundle.bundle_id
+    FROM pg_catalog.unnest(ARRAY[p_version_id, p_rollout_version_id]) AS bundle(bundle_id)
+    WHERE bundle.bundle_id IS NOT NULL
+    ORDER BY bundle.bundle_id
+  LOOP
+    PERFORM pg_catalog.pg_advisory_xact_lock(v_bundle_id);
+  END LOOP;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."lock_channel_bundle_lifecycle"("p_version_id" bigint, "p_rollout_version_id" bigint) OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."lock_org_tombstone_guard"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -9672,6 +10435,26 @@ $$;
 
 
 ALTER FUNCTION "public"."lock_rbac_orgs"("p_first_org_id" "uuid", "p_second_org_id" "uuid") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."long_canceled_org_ids"() RETURNS SETOF "uuid"
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  SELECT o.id
+  FROM public.stripe_info AS si
+  JOIN public.orgs AS o ON o.customer_id = si.customer_id
+  WHERE si.status IN ('canceled', 'deleted')
+    AND GREATEST(si.canceled_at, si.subscription_anchor_end, si.trial_at)
+      <= pg_catalog.now() - INTERVAL '90 days';
+$$;
+
+
+ALTER FUNCTION "public"."long_canceled_org_ids"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."long_canceled_org_ids"() IS 'Org ids whose stripe_info is canceled/deleted and GREATEST(canceled_at, subscription_anchor_end, trial_at) is older than 90 days.';
+
 
 
 CREATE OR REPLACE FUNCTION "public"."mark_app_stats_refreshed"("p_app_id" character varying) RETURNS timestamp without time zone
@@ -9882,6 +10665,90 @@ $_$;
 
 
 ALTER FUNCTION "public"."noupdate"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."null_migrated_app_version_manifests"("max_batches" integer DEFAULT 1000000, "batch_size" integer DEFAULT 50, "max_runtime_ms" integer DEFAULT 60000) RETURNS "void"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  batch_no integer := 0;
+  updated_batch integer;
+  scanned_batch integer;
+  updated_total bigint := 0;
+  scanned_total bigint := 0;
+  last_id bigint := 0;
+  v_max_batches integer := GREATEST(1, COALESCE(max_batches, 1000000));
+  v_batch_size integer := GREATEST(1, COALESCE(batch_size, 50));
+  v_max_runtime_ms integer := GREATEST(1000, COALESCE(max_runtime_ms, 60000));
+  started_at timestamptz := pg_catalog.clock_timestamp();
+BEGIN
+  PERFORM pg_catalog.set_config('statement_timeout', '0', true);
+  PERFORM pg_catalog.set_config('capgo.reclaim_manifest_null', 'on', true);
+
+  LOOP
+    batch_no := batch_no + 1;
+    EXIT WHEN batch_no > v_max_batches;
+    EXIT WHEN (EXTRACT(EPOCH FROM (pg_catalog.clock_timestamp() - started_at)) * 1000) >= v_max_runtime_ms;
+
+    WITH candidates AS (
+      SELECT av.id
+      FROM public.app_versions AS av
+      WHERE av.manifest IS NOT NULL
+        AND av.id > last_id
+      ORDER BY av.id
+      LIMIT v_batch_size
+    ),
+    doomed AS (
+      SELECT c.id
+      FROM candidates AS c
+      JOIN public.app_versions AS av ON av.id = c.id
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM pg_catalog.unnest(av.manifest) AS entry(file_name, s3_path, file_hash)
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM public.manifest AS m
+          WHERE m.app_version_id = av.id
+            AND m.s3_path = entry.s3_path
+            AND m.file_hash = entry.file_hash
+        )
+      )
+    ),
+    updated AS (
+      UPDATE public.app_versions AS av
+      SET manifest = NULL
+      FROM doomed
+      WHERE av.id = doomed.id
+      RETURNING av.id
+    )
+    SELECT
+      (SELECT count(*)::integer FROM candidates),
+      (SELECT count(*)::integer FROM updated),
+      COALESCE((SELECT max(id) FROM candidates), last_id)
+    INTO scanned_batch, updated_batch, last_id;
+
+    scanned_total := scanned_total + scanned_batch;
+    updated_total := updated_total + updated_batch;
+    EXIT WHEN scanned_batch = 0;
+  END LOOP;
+
+  PERFORM pg_catalog.set_config('capgo.reclaim_manifest_null', 'off', true);
+
+  RAISE NOTICE
+    'null_migrated_app_version_manifests: updated=% scanned=% batches=%/% batch_size=% runtime_ms=% budget_ms=%',
+    updated_total,
+    scanned_total,
+    LEAST(batch_no, v_max_batches),
+    v_max_batches,
+    v_batch_size,
+    (EXTRACT(EPOCH FROM (pg_catalog.clock_timestamp() - started_at)) * 1000)::bigint,
+    v_max_runtime_ms;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."null_migrated_app_version_manifests"("max_batches" integer, "batch_size" integer, "max_runtime_ms" integer) OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."one_month_ahead"() RETURNS timestamp without time zone
@@ -10555,6 +11422,27 @@ BEGIN
     RETURN NEW;
   END IF;
 
+  -- The channel insert trigger is the sole creator of this non-assignable role.
+  -- validate_channel_preview_role_binding fires after this guard and checks the
+  -- exact active parent, key, organization, app, and channel scope.
+  IF TG_OP = 'INSERT'
+    AND pg_trigger_depth() > 1
+    AND NEW.principal_type = public.rbac_principal_apikey()
+    AND NEW.scope_type = public.rbac_scope_channel()
+    AND NEW.is_direct IS FALSE
+    AND NEW.parent_binding_id IS NOT NULL
+    AND EXISTS (
+      SELECT 1
+      FROM public.roles
+      WHERE roles.id = NEW.role_id
+        AND roles.scope_type = public.rbac_scope_channel()
+        AND roles.name = 'channel_preview'
+        AND roles.is_assignable IS FALSE
+    )
+  THEN
+    RETURN NEW;
+  END IF;
+
   IF TG_OP <> 'INSERT' THEN
     SELECT roles.priority_rank
     INTO v_old_role_priority
@@ -10728,7 +11616,7 @@ DECLARE
   should_run boolean;
   lock_acquired boolean;
 BEGIN
-  lock_acquired := pg_try_advisory_lock(1);
+  lock_acquired := pg_catalog.pg_try_advisory_lock(1);
 
   IF NOT lock_acquired THEN
     RAISE NOTICE 'process_all_cron_tasks: skipped, another instance is already running';
@@ -10742,7 +11630,7 @@ BEGIN
     current_dow := EXTRACT(DOW FROM NOW());
     current_day := EXTRACT(DAY FROM NOW());
 
-    FOR task IN SELECT * FROM public.cron_tasks WHERE enabled = true LOOP
+    FOR task IN SELECT * FROM public.cron_tasks WHERE enabled = true ORDER BY id LOOP
       should_run := false;
 
       IF task.second_interval IS NOT NULL THEN
@@ -10796,8 +11684,11 @@ BEGIN
                 PERFORM public.process_function_queue(queue_names);
               END IF;
           END CASE;
-        EXCEPTION WHEN OTHERS THEN
-          RAISE WARNING 'cron task "%" failed: %', task.name, SQLERRM;
+        EXCEPTION
+          WHEN query_canceled THEN
+            RAISE WARNING 'cron task "%" canceled (timeout): %', task.name, SQLERRM;
+          WHEN OTHERS THEN
+            RAISE WARNING 'cron task "%" failed: %', task.name, SQLERRM;
         END;
       END IF;
     END LOOP;
@@ -10814,11 +11705,11 @@ BEGIN
 
     PERFORM public.process_function_queue(ARRAY['cron_rollout_auto_pause']);
   EXCEPTION WHEN OTHERS THEN
-    PERFORM pg_advisory_unlock(1);
+    PERFORM pg_catalog.pg_advisory_unlock(1);
     RAISE;
   END;
 
-  PERFORM pg_advisory_unlock(1);
+  PERFORM pg_catalog.pg_advisory_unlock(1);
 END;
 $$;
 
@@ -10839,47 +11730,29 @@ CREATE OR REPLACE FUNCTION "public"."process_billing_period_stats_email"() RETUR
     AS $$
 DECLARE
   org_record RECORD;
+  v_cycle RECORD;
 BEGIN
-  -- Find all orgs whose billing cycle ends today
-  -- We calculate the PREVIOUS cycle's dates to ensure we report on completed data
   FOR org_record IN (
     SELECT
       o.id AS org_id,
       o.management_email,
-      si.subscription_anchor_start,
-      -- Calculate the previous billing cycle dates
-      -- We use (now() - interval '1 day') to get yesterday's cycle end date calculation
-      -- This ensures we're always looking at the just-completed cycle
-      CASE
-        WHEN COALESCE(
-          si.subscription_anchor_start - date_trunc('MONTH', si.subscription_anchor_start),
-          '0 DAYS'::INTERVAL
-        ) > (now() - interval '1 day') - date_trunc('MONTH', now() - interval '1 day')
-        THEN date_trunc('MONTH', (now() - interval '1 day') - INTERVAL '1 MONTH') +
-             COALESCE(si.subscription_anchor_start - date_trunc('MONTH', si.subscription_anchor_start), '0 DAYS'::INTERVAL)
-        ELSE date_trunc('MONTH', now() - interval '1 day') +
-             COALESCE(si.subscription_anchor_start - date_trunc('MONTH', si.subscription_anchor_start), '0 DAYS'::INTERVAL)
-      END AS prev_cycle_start,
-      CASE
-        WHEN COALESCE(
-          si.subscription_anchor_start - date_trunc('MONTH', si.subscription_anchor_start),
-          '0 DAYS'::INTERVAL
-        ) > (now() - interval '1 day') - date_trunc('MONTH', now() - interval '1 day')
-        THEN (date_trunc('MONTH', (now() - interval '1 day') - INTERVAL '1 MONTH') +
-              COALESCE(si.subscription_anchor_start - date_trunc('MONTH', si.subscription_anchor_start), '0 DAYS'::INTERVAL)) + INTERVAL '1 MONTH'
-        ELSE (date_trunc('MONTH', now() - interval '1 day') +
-              COALESCE(si.subscription_anchor_start - date_trunc('MONTH', si.subscription_anchor_start), '0 DAYS'::INTERVAL)) + INTERVAL '1 MONTH'
-      END AS prev_cycle_end
+      si.subscription_anchor_start
     FROM public.orgs o
     JOIN public.stripe_info si ON o.customer_id = si.customer_id
     WHERE si.status = 'succeeded'
       AND o.management_email IS NOT NULL
   )
   LOOP
-    -- If today is the billing cycle end date, queue the email
-    -- We pass the calculated previous cycle dates to ensure correct data
-    IF org_record.prev_cycle_end::date = CURRENT_DATE THEN
-      PERFORM pgmq.send('cron_email',
+    SELECT *
+    INTO v_cycle
+    FROM public.billing_period_completed_cycle(
+      org_record.subscription_anchor_start,
+      (now() AT TIME ZONE 'UTC')::date
+    );
+
+    IF v_cycle.is_anniversary THEN
+      PERFORM pgmq.send(
+        'cron_email',
         jsonb_build_object(
           'function_name', 'cron_email',
           'function_type', 'cloudflare',
@@ -10887,8 +11760,8 @@ BEGIN
             'email', org_record.management_email,
             'orgId', org_record.org_id,
             'type', 'billing_period_stats',
-            'cycleStart', org_record.prev_cycle_start,
-            'cycleEnd', org_record.prev_cycle_end
+            'cycleStart', v_cycle.cycle_start,
+            'cycleEnd', v_cycle.cycle_end
           )
         )
       );
@@ -11248,13 +12121,22 @@ CREATE OR REPLACE FUNCTION "public"."process_free_trial_expired"() RETURNS "void
     AS $$
 BEGIN
   UPDATE public.stripe_info
-  SET is_good_plan = false
-  WHERE status <> 'succeeded' AND trial_at < NOW();
+  SET
+    is_good_plan = false,
+    status = 'canceled',
+    canceled_at = COALESCE(canceled_at, trial_at)
+  WHERE (status IS NULL OR status NOT IN ('succeeded', 'deleted', 'canceled'))
+    AND trial_at IS NOT NULL
+    AND trial_at < NOW();
 END;
 $$;
 
 
 ALTER FUNCTION "public"."process_free_trial_expired"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."process_free_trial_expired"() IS 'Marks expired never-converted trials as canceled (is_good_plan=false, status=canceled, canceled_at=trial_at) so they share the canceled-org retention path.';
+
 
 
 CREATE OR REPLACE FUNCTION "public"."process_function_queue"("queue_names" "text"[], "batch_size" integer DEFAULT 950) RETURNS "void"
@@ -12109,11 +12991,11 @@ BEGIN
     RETURN false;
   END IF;
 
-  -- Resolve scope identifiers to UUIDs. Preserve the caller org when the app does not exist yet.
   IF p_app_id IS NOT NULL THEN
-    SELECT id, owner_org INTO v_app_uuid, v_app_owner_org
-    FROM public.apps
-    WHERE app_id = p_app_id
+    SELECT app.id, app.owner_org
+    INTO v_app_uuid, v_app_owner_org
+    FROM public.apps AS app
+    WHERE app.app_id = p_app_id
     LIMIT 1;
 
     IF v_app_owner_org IS NOT NULL THEN
@@ -12122,9 +13004,10 @@ BEGIN
   END IF;
 
   IF p_channel_id IS NOT NULL THEN
-    SELECT rbac_id, app_id, owner_org INTO v_channel_uuid, v_channel_app_id, v_channel_org_id
-    FROM public.channels
-    WHERE id = p_channel_id
+    SELECT channel.rbac_id, channel.app_id, channel.owner_org
+    INTO v_channel_uuid, v_channel_app_id, v_channel_org_id
+    FROM public.channels AS channel
+    WHERE channel.id = p_channel_id
     LIMIT 1;
 
     IF v_channel_uuid IS NOT NULL THEN
@@ -12136,9 +13019,10 @@ BEGIN
         RETURN false;
       END IF;
 
-      SELECT id INTO v_app_uuid
-      FROM public.apps
-      WHERE app_id = v_channel_app_id
+      SELECT app.id
+      INTO v_app_uuid
+      FROM public.apps AS app
+      WHERE app.app_id = v_channel_app_id
       LIMIT 1;
 
       v_org_id := v_channel_org_id;
@@ -12153,37 +13037,68 @@ BEGIN
     SELECT public.rbac_scope_channel(), v_org_id, v_app_uuid, v_channel_uuid WHERE v_channel_uuid IS NOT NULL
   ),
   direct_roles AS (
-    SELECT rb.role_id, rb.scope_type
-    FROM scope_catalog s
-    JOIN public.role_bindings rb ON rb.scope_type = s.scope_type
+    SELECT role_binding.role_id, role_binding.scope_type
+    FROM scope_catalog AS scope
+    INNER JOIN public.role_bindings AS role_binding
+      ON role_binding.scope_type = scope.scope_type
       AND (
-        (rb.scope_type = public.rbac_scope_org() AND rb.org_id = s.org_id) OR
-        (rb.scope_type = public.rbac_scope_app() AND rb.org_id = s.org_id AND rb.app_id = s.app_id) OR
-        (rb.scope_type = public.rbac_scope_channel() AND rb.org_id = s.org_id AND rb.app_id = s.app_id AND rb.channel_id = s.channel_id)
+        (role_binding.scope_type = public.rbac_scope_org() AND role_binding.org_id = scope.org_id)
+        OR (role_binding.scope_type = public.rbac_scope_app() AND role_binding.org_id = scope.org_id AND role_binding.app_id = scope.app_id)
+        OR (role_binding.scope_type = public.rbac_scope_channel() AND role_binding.org_id = scope.org_id AND role_binding.app_id = scope.app_id AND role_binding.channel_id = scope.channel_id)
       )
-    JOIN public.roles r ON r.id = rb.role_id
-      AND r.scope_type = rb.scope_type
-    WHERE rb.principal_type = p_principal_type
-      AND rb.principal_id = p_principal_id
-      AND (rb.expires_at IS NULL OR rb.expires_at > now())
+    INNER JOIN public.roles AS role
+      ON role.id = role_binding.role_id
+      AND role.scope_type = role_binding.scope_type
+    WHERE role_binding.principal_type = p_principal_type
+      AND role_binding.principal_id = p_principal_id
+      AND (role_binding.expires_at IS NULL OR role_binding.expires_at > pg_catalog.now())
+      AND (
+        role.name <> 'channel_preview'
+        OR (
+          role_binding.principal_type = public.rbac_principal_apikey()
+          AND role_binding.is_direct IS FALSE
+          AND role_binding.parent_binding_id IS NOT NULL
+          AND EXISTS (
+            SELECT 1
+            FROM public.role_bindings AS parent_binding
+            INNER JOIN public.roles AS parent_role
+              ON parent_role.id = parent_binding.role_id
+              AND parent_role.scope_type = parent_binding.scope_type
+            WHERE parent_binding.id = role_binding.parent_binding_id
+              AND parent_binding.principal_type = role_binding.principal_type
+              AND parent_binding.principal_id = role_binding.principal_id
+              AND parent_binding.scope_type = public.rbac_scope_app()
+              AND parent_binding.org_id = scope.org_id
+              AND parent_binding.app_id = scope.app_id
+              AND parent_role.name = 'app_preview'
+              AND (parent_binding.expires_at IS NULL OR parent_binding.expires_at > pg_catalog.now())
+          )
+        )
+      )
   ),
   group_roles AS (
-    SELECT rb.role_id, rb.scope_type
-    FROM scope_catalog s
-    JOIN public.group_members gm ON gm.user_id = p_principal_id
-    JOIN public.groups g ON g.id = gm.group_id
-    JOIN public.role_bindings rb ON rb.principal_type = public.rbac_principal_group() AND rb.principal_id = gm.group_id
-    JOIN public.roles r ON r.id = rb.role_id
-      AND r.scope_type = rb.scope_type
+    SELECT role_binding.role_id, role_binding.scope_type
+    FROM scope_catalog AS scope
+    INNER JOIN public.group_members AS group_member
+      ON group_member.user_id = p_principal_id
+    INNER JOIN public.groups AS member_group
+      ON member_group.id = group_member.group_id
+    INNER JOIN public.role_bindings AS role_binding
+      ON role_binding.principal_type = public.rbac_principal_group()
+      AND role_binding.principal_id = group_member.group_id
+    INNER JOIN public.roles AS role
+      ON role.id = role_binding.role_id
+      AND role.scope_type = role_binding.scope_type
     WHERE p_principal_type = public.rbac_principal_user()
-      AND rb.scope_type = s.scope_type
+      AND role.name <> 'channel_preview'
+      AND role_binding.scope_type = scope.scope_type
       AND (
-        (rb.scope_type = public.rbac_scope_org() AND rb.org_id = s.org_id) OR
-        (rb.scope_type = public.rbac_scope_app() AND rb.org_id = s.org_id AND rb.app_id = s.app_id) OR
-        (rb.scope_type = public.rbac_scope_channel() AND rb.org_id = s.org_id AND rb.app_id = s.app_id AND rb.channel_id = s.channel_id)
+        (role_binding.scope_type = public.rbac_scope_org() AND role_binding.org_id = scope.org_id)
+        OR (role_binding.scope_type = public.rbac_scope_app() AND role_binding.org_id = scope.org_id AND role_binding.app_id = scope.app_id)
+        OR (role_binding.scope_type = public.rbac_scope_channel() AND role_binding.org_id = scope.org_id AND role_binding.app_id = scope.app_id AND role_binding.channel_id = scope.channel_id)
       )
-      AND (v_org_id IS NULL OR g.org_id = v_org_id)
-      AND (rb.expires_at IS NULL OR rb.expires_at > now())
+      AND (v_org_id IS NULL OR member_group.org_id = v_org_id)
+      AND (role_binding.expires_at IS NULL OR role_binding.expires_at > pg_catalog.now())
   ),
   combined_roles AS (
     SELECT role_id, scope_type FROM direct_roles
@@ -12193,19 +13108,28 @@ BEGIN
   role_closure AS (
     SELECT role_id, scope_type FROM combined_roles
     UNION
-    SELECT rh.child_role_id, rc.scope_type
-    FROM public.role_hierarchy rh
-    JOIN role_closure rc ON rc.role_id = rh.parent_role_id
-    JOIN public.roles child_role ON child_role.id = rh.child_role_id
-      AND child_role.scope_type = rc.scope_type
+    SELECT hierarchy.child_role_id, closure.scope_type
+    FROM public.role_hierarchy AS hierarchy
+    INNER JOIN role_closure AS closure
+      ON closure.role_id = hierarchy.parent_role_id
+    INNER JOIN public.roles AS child_role
+      ON child_role.id = hierarchy.child_role_id
+      AND child_role.scope_type = closure.scope_type
   ),
-  perm_set AS (
-    SELECT DISTINCT p.key
-    FROM role_closure rc
-    JOIN public.role_permissions rp ON rp.role_id = rc.role_id
-    JOIN public.permissions p ON p.id = rp.permission_id
+  permission_set AS (
+    SELECT DISTINCT permission.key
+    FROM role_closure AS closure
+    INNER JOIN public.role_permissions AS role_permission
+      ON role_permission.role_id = closure.role_id
+    INNER JOIN public.permissions AS permission
+      ON permission.id = role_permission.permission_id
   )
-  SELECT EXISTS (SELECT 1 FROM perm_set WHERE key = p_permission_key) INTO v_has;
+  SELECT EXISTS (
+    SELECT 1
+    FROM permission_set
+    WHERE permission_set.key = p_permission_key
+  )
+  INTO v_has;
 
   RETURN v_has;
 END;
@@ -12215,7 +13139,7 @@ $$;
 ALTER FUNCTION "public"."rbac_has_permission"("p_principal_type" "text", "p_principal_id" "uuid", "p_permission_key" "text", "p_org_id" "uuid", "p_app_id" character varying, "p_channel_id" bigint) OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."rbac_has_permission"("p_principal_type" "text", "p_principal_id" "uuid", "p_permission_key" "text", "p_org_id" "uuid", "p_app_id" character varying, "p_channel_id" bigint) IS 'Checks whether a principal has a permission at org/app/channel scope. App and channel bindings must match the resolved owning org so forged cross-org scope rows are ignored.';
+COMMENT ON FUNCTION "public"."rbac_has_permission"("p_principal_type" "text", "p_principal_id" "uuid", "p_permission_key" "text", "p_org_id" "uuid", "p_app_id" character varying, "p_channel_id" bigint) IS 'Checks org, app, and channel RBAC permissions. System-managed channel_preview bindings require their active organization-bound app_preview parent.';
 
 
 
@@ -13540,18 +14464,20 @@ CREATE OR REPLACE FUNCTION "public"."refresh_channel_rollout_id"() RETURNS "trig
     SET "search_path" TO ''
     AS $$
 DECLARE
-  rollout_changed boolean;
+  v_rollout_changed boolean;
   v_channel_id bigint;
 BEGIN
   IF TG_OP = 'INSERT' THEN
-    rollout_changed := NEW.rollout_version IS NOT NULL;
+    v_rollout_changed := NEW.rollout_version IS NOT NULL;
     v_channel_id := NULL::bigint;
   ELSE
-    rollout_changed := NEW.rollout_version IS DISTINCT FROM OLD.rollout_version;
+    v_rollout_changed := NEW.rollout_version IS DISTINCT FROM OLD.rollout_version;
     v_channel_id := NEW.id;
   END IF;
 
-  IF rollout_changed THEN
+  IF v_rollout_changed THEN
+    PERFORM public.lock_channel_bundle_lifecycle(NEW.version, NEW.rollout_version);
+
     IF (auth.uid() IS NOT NULL OR public.get_apikey_header() IS NOT NULL)
       AND NOT public.rbac_check_permission_request(
         public.rbac_perm_channel_promote_bundle(),
@@ -13563,17 +14489,24 @@ BEGIN
       RAISE EXCEPTION 'NO_RIGHTS';
     END IF;
 
-    IF NEW.rollout_version IS NOT NULL
-      AND NOT EXISTS (
-        SELECT 1
-        FROM public.app_versions AS app_version
-        WHERE app_version.id = NEW.rollout_version
-          AND app_version.app_id = NEW.app_id
-          AND app_version.owner_org = NEW.owner_org
-          AND app_version.deleted = false
-      )
-    THEN
-      RAISE EXCEPTION 'INVALID_ROLLOUT_VERSION';
+    IF NEW.rollout_version IS NOT NULL THEN
+      PERFORM 1
+      FROM public.app_versions AS version
+      WHERE version.id = NEW.rollout_version
+        AND version.app_id = NEW.app_id
+        AND version.owner_org = NEW.owner_org
+        AND version.deleted = false
+      FOR KEY SHARE;
+
+      IF NOT FOUND THEN
+        RAISE EXCEPTION 'INVALID_ROLLOUT_VERSION';
+      END IF;
+
+      PERFORM public.assert_preview_bundle_owner(
+        NEW.owner_org,
+        NEW.app_id,
+        NEW.rollout_version
+      );
     END IF;
 
     NEW.rollout_id = gen_random_uuid();
@@ -15117,6 +16050,79 @@ $$;
 ALTER FUNCTION "public"."set_webhook_created_by"() OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."soft_delete_versions_for_long_canceled_orgs"("p_batch_size" integer DEFAULT 5000) RETURNS bigint
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  v_batch_size integer := GREATEST(1, COALESCE(p_batch_size, 5000));
+  unlinked_count bigint := 0;
+  deleted_count bigint := 0;
+BEGIN
+  -- Bypass channel promote guard for this internal cleanup (same gate seed uses).
+  PERFORM set_config('capgo.seed_channel_targets', 'true', true);
+
+  -- Single WITH: pick a version batch first, unlink only those targets, then soft-delete.
+  WITH candidates AS (
+    SELECT av.id, av.app_id
+    FROM public.app_versions AS av
+    WHERE av.owner_org IN (SELECT public.long_canceled_org_ids())
+      AND av.deleted = false
+      AND av.name NOT IN ('builtin', 'unknown')
+    ORDER BY av.id
+    LIMIT v_batch_size
+  ),
+  cleared AS (
+    UPDATE public.channels AS c
+    SET
+      version = CASE
+        WHEN EXISTS (SELECT 1 FROM candidates AS x WHERE x.id = c.version) THEN NULL
+        ELSE c.version
+      END,
+      rollout_version = CASE
+        WHEN EXISTS (SELECT 1 FROM candidates AS x WHERE x.id = c.rollout_version) THEN NULL
+        ELSE c.rollout_version
+      END,
+      updated_at = pg_catalog.now()
+    WHERE c.app_id IN (SELECT DISTINCT x.app_id FROM candidates AS x)
+      AND EXISTS (
+        SELECT 1
+        FROM candidates AS x
+        WHERE x.id = c.version OR x.id = c.rollout_version
+      )
+    RETURNING c.id
+  ),
+  soft_deleted AS (
+    UPDATE public.app_versions AS av
+    SET deleted = true
+    FROM candidates
+    WHERE av.id = candidates.id
+    RETURNING av.id
+  )
+  SELECT
+    (SELECT COUNT(*) FROM cleared),
+    (SELECT COUNT(*) FROM soft_deleted)
+  INTO unlinked_count, deleted_count;
+
+  IF unlinked_count > 0 OR deleted_count > 0 THEN
+    RAISE NOTICE
+      'soft_delete_versions_for_long_canceled_orgs: unlinked_channels=% soft_deleted_versions=%',
+      unlinked_count,
+      deleted_count;
+  END IF;
+
+  RETURN deleted_count;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."soft_delete_versions_for_long_canceled_orgs"("p_batch_size" integer) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."soft_delete_versions_for_long_canceled_orgs"("p_batch_size" integer) IS 'Soft-deletes app_versions for orgs past the 90-day canceled grace window (see long_canceled_org_ids). Unlinks only channel targets pointing at deletion candidates. Bounded by p_batch_size.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."strip_html"("input" "text") RETURNS "text"
     LANGUAGE "sql" IMMUTABLE
     SET "search_path" TO ''
@@ -15129,6 +16135,94 @@ $$;
 
 
 ALTER FUNCTION "public"."strip_html"("input" "text") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."sweep_deleted_version_manifests"("p_batch_size" integer DEFAULT 100) RETURNS bigint
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  stale_fixed bigint := 0;
+  requeued bigint := 0;
+BEGIN
+  IF p_batch_size IS NULL OR p_batch_size < 1 THEN
+    p_batch_size := 100;
+  END IF;
+
+  -- Fix stale counters: deleted versions with manifest_count > 0 but no rows.
+  WITH stale AS (
+    SELECT av.id, av.app_id
+    FROM public.app_versions AS av
+    WHERE av.deleted = true
+      AND av.manifest_count > 0
+      AND NOT EXISTS (
+        SELECT 1
+        FROM public.manifest AS m
+        WHERE m.app_version_id = av.id
+      )
+    ORDER BY av.deleted_at NULLS LAST, av.id
+    LIMIT p_batch_size
+  ),
+  cleared AS (
+    UPDATE public.app_versions AS av
+    SET manifest_count = 0,
+        manifest = NULL,
+        updated_at = now()
+    FROM stale
+    WHERE av.id = stale.id
+    RETURNING stale.app_id
+  ),
+  app_counts AS (
+    SELECT app_id, COUNT(*)::int AS cleared_count
+    FROM cleared
+    GROUP BY app_id
+  )
+  UPDATE public.apps AS a
+  SET manifest_bundle_count = GREATEST(a.manifest_bundle_count - app_counts.cleared_count, 0),
+      updated_at = now()
+  FROM app_counts
+  WHERE a.app_id = app_counts.app_id;
+
+  GET DIAGNOSTICS stale_fixed = ROW_COUNT;
+
+  -- Re-queue deleted versions that still have manifest rows by touching them.
+  -- on_version_update trigger enqueues cleanup when deleted_at is unchanged and
+  -- manifest_count > 0.
+  -- Start from deleted versions (bounded) and probe manifest via app_version_id index.
+  WITH candidates AS (
+    SELECT av.id
+    FROM public.app_versions AS av
+    WHERE av.deleted = true
+      AND EXISTS (
+        SELECT 1
+        FROM public.manifest AS m
+        WHERE m.app_version_id = av.id
+      )
+    ORDER BY av.deleted_at NULLS LAST, av.id
+    LIMIT p_batch_size
+  )
+  UPDATE public.app_versions AS av
+  SET manifest_count = GREATEST(av.manifest_count, 1),
+      updated_at = now()
+  FROM candidates
+  WHERE av.id = candidates.id;
+
+  GET DIAGNOSTICS requeued = ROW_COUNT;
+
+  IF stale_fixed > 0 OR requeued > 0 THEN
+    RAISE NOTICE 'sweep_deleted_version_manifests: stale_counters=% requeued=%', stale_fixed, requeued;
+  END IF;
+
+  RETURN requeued;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."sweep_deleted_version_manifests"("p_batch_size" integer) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."sweep_deleted_version_manifests"("p_batch_size" integer) IS 'Bounded sweeper for soft-deleted versions with leftover manifest rows or stale manifest_count. Re-touches rows so on_version_update runs cleanup_manifest (DB delete + R2 trash).';
+
 
 
 CREATE OR REPLACE FUNCTION "public"."sync_org_has_usage_credits_from_grants"() RETURNS "trigger"
@@ -15545,25 +16639,56 @@ CREATE OR REPLACE FUNCTION "public"."trigger_http_queue_post_to_function"() RETU
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
-DECLARE 
+DECLARE
   payload jsonb;
-BEGIN 
-  -- Build the base payload
-  payload := jsonb_build_object(
+  record_payload jsonb;
+  old_record_payload jsonb;
+  function_type text;
+BEGIN
+  function_type := CASE
+    WHEN NULLIF(TG_ARGV[1], '') IS NULL THEN 'cloudflare'
+    WHEN pg_catalog.lower(TG_ARGV[1]) = 'supabase' THEN 'cloudflare'
+    ELSE TG_ARGV[1]
+  END;
+
+  record_payload := pg_catalog.to_jsonb(NEW);
+  old_record_payload := pg_catalog.to_jsonb(OLD);
+
+  -- app_versions fat columns can be multi-MB. Never enqueue them; handlers reload when needed.
+  IF TG_TABLE_NAME = 'app_versions' THEN
+    IF record_payload IS NOT NULL THEN
+      record_payload := record_payload - 'manifest' - 'native_packages';
+    END IF;
+    IF old_record_payload IS NOT NULL THEN
+      old_record_payload := old_record_payload - 'manifest' - 'native_packages';
+    END IF;
+
+    -- Skip queue fan-out only for dual-storage reclaim: non-null manifest -> NULL.
+    -- native_packages is stripped from payloads, so compare it explicitly.
+    IF TG_OP = 'UPDATE'
+      AND OLD.manifest IS NOT NULL
+      AND NEW.manifest IS NULL
+      AND NEW.native_packages IS NOT DISTINCT FROM OLD.native_packages
+      AND (record_payload - 'updated_at') IS NOT DISTINCT FROM (old_record_payload - 'updated_at')
+    THEN
+      RETURN NEW;
+    END IF;
+  END IF;
+
+  payload := pg_catalog.jsonb_build_object(
     'function_name', TG_ARGV[0],
-    'function_type', TG_ARGV[1],
-    'payload', jsonb_build_object(
-      'old_record', OLD, 
-      'record', NEW, 
+    'function_type', function_type,
+    'payload', pg_catalog.jsonb_build_object(
+      'old_record', old_record_payload,
+      'record', record_payload,
       'type', TG_OP,
       'table', TG_TABLE_NAME,
       'schema', TG_TABLE_SCHEMA
     )
   );
-  
-  -- Also send to function-specific queue
+
   IF TG_ARGV[0] IS NOT NULL THEN
-    PERFORM pgmq.send(TG_ARGV[0], payload);
+    PERFORM "pgmq"."send"(TG_ARGV[0], payload);
   END IF;
   RETURN NEW;
 END;
@@ -16159,6 +17284,91 @@ $$;
 
 
 ALTER FUNCTION "public"."user_meets_password_policy"("user_id" "uuid", "org_id" "uuid") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."validate_channel_preview_role_binding"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  v_role_name text;
+  v_parent_principal_id uuid;
+  v_parent_org_id uuid;
+  v_parent_app_id uuid;
+  v_channel_org_id uuid;
+  v_channel_app_id uuid;
+BEGIN
+  SELECT roles.name
+  INTO v_role_name
+  FROM public.roles
+  WHERE roles.id = NEW.role_id
+  LIMIT 1;
+
+  IF v_role_name IS DISTINCT FROM 'channel_preview' THEN
+    RETURN NEW;
+  END IF;
+
+  IF NEW.principal_type IS DISTINCT FROM public.rbac_principal_apikey()
+    OR NEW.scope_type IS DISTINCT FROM public.rbac_scope_channel()
+    OR NEW.is_direct IS DISTINCT FROM false
+    OR NEW.parent_binding_id IS NULL
+    OR NEW.expires_at IS NOT NULL
+  THEN
+    RAISE EXCEPTION 'INVALID_CHANNEL_PREVIEW_BINDING'
+      USING ERRCODE = '42501';
+  END IF;
+
+  SELECT
+    parent_binding.principal_id,
+    parent_binding.org_id,
+    parent_binding.app_id
+  INTO
+    v_parent_principal_id,
+    v_parent_org_id,
+    v_parent_app_id
+  FROM public.role_bindings AS parent_binding
+  INNER JOIN public.roles AS parent_role
+    ON parent_role.id = parent_binding.role_id
+    AND parent_role.scope_type = parent_binding.scope_type
+  WHERE parent_binding.id = NEW.parent_binding_id
+    AND parent_binding.principal_type = public.rbac_principal_apikey()
+    AND parent_binding.scope_type = public.rbac_scope_app()
+    AND parent_role.name = 'app_preview'
+    AND (parent_binding.expires_at IS NULL OR parent_binding.expires_at > pg_catalog.now())
+  LIMIT 1;
+
+  IF v_parent_principal_id IS NULL
+    OR v_parent_principal_id IS DISTINCT FROM NEW.principal_id
+    OR v_parent_org_id IS DISTINCT FROM NEW.org_id
+    OR v_parent_app_id IS DISTINCT FROM NEW.app_id
+  THEN
+    RAISE EXCEPTION 'INVALID_CHANNEL_PREVIEW_PARENT'
+      USING ERRCODE = '42501';
+  END IF;
+
+  SELECT channel.owner_org, app.id
+  INTO v_channel_org_id, v_channel_app_id
+  FROM public.channels AS channel
+  INNER JOIN public.apps AS app
+    ON app.app_id = channel.app_id
+    AND app.owner_org = channel.owner_org
+  WHERE channel.rbac_id = NEW.channel_id
+  LIMIT 1;
+
+  IF v_channel_org_id IS NULL
+    OR v_channel_org_id IS DISTINCT FROM NEW.org_id
+    OR v_channel_app_id IS DISTINCT FROM NEW.app_id
+  THEN
+    RAISE EXCEPTION 'INVALID_CHANNEL_PREVIEW_SCOPE'
+      USING ERRCODE = '42501';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."validate_channel_preview_role_binding"() OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."verify_api_key_hash"("plain_key" "text", "stored_hash" "text") RETURNS boolean
@@ -17216,7 +18426,8 @@ CREATE TABLE IF NOT EXISTS "public"."global_stats" (
     "apps_with_cli_onboarding_builds_24h" bigint DEFAULT 0 NOT NULL,
     "apps_with_manual_builds_24h" bigint DEFAULT 0 NOT NULL,
     "above_plan_with_credits" bigint,
-    "above_plan_without_credits" bigint
+    "above_plan_without_credits" bigint,
+    "upgrade_rate_12m" double precision DEFAULT 0 NOT NULL
 );
 
 
@@ -17399,23 +18610,23 @@ COMMENT ON COLUMN "public"."global_stats"."live_updates_active_paying_clients_60
 
 
 
-COMMENT ON COLUMN "public"."global_stats"."plan_solo_conversion_rate" IS 'Percentage of organizations converted to the Solo plan (plan_solo / orgs * 100)';
+COMMENT ON COLUMN "public"."global_stats"."plan_solo_conversion_rate" IS 'Percentage of paying organizations on the Solo plan (plan_solo / paying * 100)';
 
 
 
-COMMENT ON COLUMN "public"."global_stats"."plan_maker_conversion_rate" IS 'Percentage of organizations converted to the Maker plan (plan_maker / orgs * 100)';
+COMMENT ON COLUMN "public"."global_stats"."plan_maker_conversion_rate" IS 'Percentage of paying organizations on the Maker plan (plan_maker / paying * 100)';
 
 
 
-COMMENT ON COLUMN "public"."global_stats"."plan_team_conversion_rate" IS 'Percentage of organizations converted to the Team plan (plan_team / orgs * 100)';
+COMMENT ON COLUMN "public"."global_stats"."plan_team_conversion_rate" IS 'Percentage of paying organizations on the Team plan (plan_team / paying * 100)';
 
 
 
-COMMENT ON COLUMN "public"."global_stats"."plan_enterprise_conversion_rate" IS 'Percentage of organizations converted to the Enterprise plan (plan_enterprise / orgs * 100)';
+COMMENT ON COLUMN "public"."global_stats"."plan_enterprise_conversion_rate" IS 'Percentage of paying organizations on the Enterprise plan (plan_enterprise / paying * 100)';
 
 
 
-COMMENT ON COLUMN "public"."global_stats"."plan_total_conversion_rate" IS 'Percentage of organizations converted to any paid plan ((plan_solo + plan_maker + plan_team + plan_enterprise) / orgs * 100)';
+COMMENT ON COLUMN "public"."global_stats"."plan_total_conversion_rate" IS 'Percentage of paying organizations on any paid plan ((plan_solo + plan_maker + plan_team + plan_enterprise) / paying * 100)';
 
 
 
@@ -17480,6 +18691,10 @@ COMMENT ON COLUMN "public"."global_stats"."above_plan_with_credits" IS 'Active a
 
 
 COMMENT ON COLUMN "public"."global_stats"."above_plan_without_credits" IS 'Active above-plan organizations with no positive, unexpired usage credits at snapshot time; null for snapshots created before this metric existed.';
+
+
+
+COMMENT ON COLUMN "public"."global_stats"."upgrade_rate_12m" IS 'Trailing 12-month paying-to-larger-plan upgrade events as a percentage of paying organizations (upgrade events in-window / paying * 100).';
 
 
 
@@ -17864,6 +19079,7 @@ CREATE TABLE IF NOT EXISTS "public"."role_bindings" (
     "expires_at" timestamp with time zone,
     "reason" "text",
     "is_direct" boolean DEFAULT true NOT NULL,
+    "parent_binding_id" "uuid",
     CONSTRAINT "role_bindings_check" CHECK (((("scope_type" = "public"."rbac_scope_platform"()) AND ("org_id" IS NULL) AND ("app_id" IS NULL) AND ("bundle_id" IS NULL) AND ("channel_id" IS NULL)) OR (("scope_type" = "public"."rbac_scope_org"()) AND ("org_id" IS NOT NULL) AND ("app_id" IS NULL) AND ("bundle_id" IS NULL) AND ("channel_id" IS NULL)) OR (("scope_type" = "public"."rbac_scope_app"()) AND ("org_id" IS NOT NULL) AND ("app_id" IS NOT NULL) AND ("bundle_id" IS NULL) AND ("channel_id" IS NULL)) OR (("scope_type" = "public"."rbac_scope_bundle"()) AND ("org_id" IS NOT NULL) AND ("app_id" IS NOT NULL) AND ("bundle_id" IS NOT NULL) AND ("channel_id" IS NULL)) OR (("scope_type" = "public"."rbac_scope_channel"()) AND ("org_id" IS NOT NULL) AND ("app_id" IS NOT NULL) AND ("bundle_id" IS NULL) AND ("channel_id" IS NOT NULL)))),
     CONSTRAINT "role_bindings_principal_type_check" CHECK (("principal_type" = ANY (ARRAY["public"."rbac_principal_user"(), "public"."rbac_principal_group"(), "public"."rbac_principal_apikey"()]))),
     CONSTRAINT "role_bindings_scope_type_check" CHECK (("scope_type" = ANY (ARRAY["public"."rbac_scope_platform"(), "public"."rbac_scope_org"(), "public"."rbac_scope_app"(), "public"."rbac_scope_bundle"(), "public"."rbac_scope_channel"()]))),
@@ -18547,7 +19763,7 @@ CREATE TABLE IF NOT EXISTS "public"."webhook_deliveries" (
     "response_body" "text",
     "response_headers" "jsonb",
     "attempt_count" integer DEFAULT 0 NOT NULL,
-    "max_attempts" integer DEFAULT 10 NOT NULL,
+    "max_attempts" integer DEFAULT 5 NOT NULL,
     "next_retry_at" timestamp with time zone,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "completed_at" timestamp with time zone,
@@ -19103,6 +20319,10 @@ CREATE INDEX "app_versions_cli_version_idx" ON "public"."app_versions" USING "bt
 
 
 
+CREATE INDEX "app_versions_manifest_present_idx" ON "public"."app_versions" USING "btree" ("id") WHERE ("manifest" IS NOT NULL);
+
+
+
 CREATE INDEX "app_versions_meta_app_id_idx" ON "public"."app_versions_meta" USING "btree" ("app_id");
 
 
@@ -19256,6 +20476,14 @@ CREATE INDEX "idx_app_versions_deleted" ON "public"."app_versions" USING "btree"
 
 
 CREATE INDEX "idx_app_versions_deleted_at" ON "public"."app_versions" USING "btree" ("deleted_at") WHERE ("deleted_at" IS NOT NULL);
+
+
+
+CREATE INDEX "idx_app_versions_deleted_at_id" ON "public"."app_versions" USING "btree" ("deleted_at", "id") WHERE ("deleted" = true);
+
+
+
+CREATE INDEX "idx_app_versions_deleted_with_manifest" ON "public"."app_versions" USING "btree" ("id") WHERE (("deleted" = true) AND ("manifest_count" > 0));
 
 
 
@@ -19659,6 +20887,10 @@ CREATE UNIQUE INDEX "role_bindings_org_scope_uniq" ON "public"."role_bindings" U
 
 
 
+CREATE INDEX "role_bindings_parent_binding_id_idx" ON "public"."role_bindings" USING "btree" ("parent_binding_id") WHERE ("parent_binding_id" IS NOT NULL);
+
+
+
 CREATE INDEX "role_bindings_principal_scope_idx" ON "public"."role_bindings" USING "btree" ("principal_type", "principal_id", "scope_type", "org_id", "app_id", "channel_id");
 
 
@@ -19768,6 +21000,10 @@ CREATE OR REPLACE TRIGGER "audit_org_users_trigger" AFTER INSERT OR DELETE OR UP
 
 
 CREATE OR REPLACE TRIGGER "audit_orgs_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."orgs" FOR EACH ROW EXECUTE FUNCTION "public"."audit_log_trigger"();
+
+
+
+CREATE OR REPLACE TRIGGER "bind_app_preview_apikey_to_created_channel" AFTER INSERT ON "public"."channels" FOR EACH ROW EXECUTE FUNCTION "public"."bind_app_preview_apikey_to_created_channel"();
 
 
 
@@ -20063,6 +21299,10 @@ CREATE OR REPLACE TRIGGER "tombstone_deleted_org_id" BEFORE DELETE ON "public"."
 
 
 
+CREATE OR REPLACE TRIGGER "track_preview_bundle_creator" BEFORE INSERT OR UPDATE ON "public"."app_versions" FOR EACH ROW EXECUTE FUNCTION "public"."enforce_preview_bundle_ownership"();
+
+
+
 CREATE OR REPLACE TRIGGER "trg_sync_org_has_usage_credits" AFTER INSERT OR DELETE OR UPDATE ON "public"."usage_credit_grants" FOR EACH ROW EXECUTE FUNCTION "public"."sync_org_has_usage_credits_from_grants"();
 
 
@@ -20072,6 +21312,10 @@ CREATE OR REPLACE TRIGGER "update_apps_build_timeout_updated_at" BEFORE INSERT O
 
 
 CREATE OR REPLACE TRIGGER "update_webhooks_updated_at" BEFORE UPDATE ON "public"."webhooks" FOR EACH ROW EXECUTE FUNCTION "public"."update_webhook_updated_at"();
+
+
+
+CREATE OR REPLACE TRIGGER "validate_channel_preview_role_binding" BEFORE INSERT OR UPDATE OF "role_id", "scope_type", "principal_type", "principal_id", "org_id", "app_id", "channel_id", "parent_binding_id", "expires_at", "is_direct" ON "public"."role_bindings" FOR EACH ROW EXECUTE FUNCTION "public"."validate_channel_preview_role_binding"();
 
 
 
@@ -20392,6 +21636,11 @@ ALTER TABLE ONLY "public"."role_bindings"
 
 ALTER TABLE ONLY "public"."role_bindings"
     ADD CONSTRAINT "role_bindings_org_id_fkey" FOREIGN KEY ("org_id") REFERENCES "public"."orgs"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."role_bindings"
+    ADD CONSTRAINT "role_bindings_parent_binding_id_fkey" FOREIGN KEY ("parent_binding_id") REFERENCES "public"."role_bindings"("id") ON DELETE CASCADE;
 
 
 
@@ -21974,6 +23223,11 @@ GRANT ALL ON FUNCTION "public"."assert_group_member_is_org_member"("p_group_id" 
 
 
 
+REVOKE ALL ON FUNCTION "public"."assert_preview_bundle_owner"("p_owner_org" "uuid", "p_app_id" character varying, "p_version_id" bigint) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."assert_preview_bundle_owner"("p_owner_org" "uuid", "p_app_id" character varying, "p_version_id" bigint) TO "service_role";
+
+
+
 REVOKE ALL ON FUNCTION "public"."assert_request_principal_rank"("p_org_id" "uuid", "p_target_priority" integer, "p_mutation" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."assert_request_principal_rank"("p_org_id" "uuid", "p_target_priority" integer, "p_mutation" "text") TO "service_role";
 
@@ -21996,6 +23250,16 @@ REVOKE ALL ON FUNCTION "public"."auto_apikey_name_by_id"() FROM PUBLIC;
 
 
 REVOKE ALL ON FUNCTION "public"."auto_owner_org_by_app_id"() FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "public"."billing_period_completed_cycle"("p_anchor_start" timestamp with time zone, "p_as_of" "date") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."billing_period_completed_cycle"("p_anchor_start" timestamp with time zone, "p_as_of" "date") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."bind_app_preview_apikey_to_created_channel"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."bind_app_preview_apikey_to_created_channel"() TO "service_role";
 
 
 
@@ -22092,16 +23356,16 @@ GRANT ALL ON FUNCTION "public"."check_org_hashed_key_enforcement"("org_id" "uuid
 
 
 REVOKE ALL ON FUNCTION "public"."check_org_members_2fa_enabled"("org_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."check_org_members_2fa_enabled"("org_id" "uuid") TO "anon";
 GRANT ALL ON FUNCTION "public"."check_org_members_2fa_enabled"("org_id" "uuid") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."check_org_members_2fa_enabled"("org_id" "uuid") TO "service_role";
-GRANT ALL ON FUNCTION "public"."check_org_members_2fa_enabled"("org_id" "uuid") TO "anon";
 
 
 
 REVOKE ALL ON FUNCTION "public"."check_org_members_password_policy"("org_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."check_org_members_password_policy"("org_id" "uuid") TO "anon";
 GRANT ALL ON FUNCTION "public"."check_org_members_password_policy"("org_id" "uuid") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."check_org_members_password_policy"("org_id" "uuid") TO "service_role";
-GRANT ALL ON FUNCTION "public"."check_org_members_password_policy"("org_id" "uuid") TO "anon";
 
 
 
@@ -22127,6 +23391,11 @@ GRANT ALL ON FUNCTION "public"."cleanup_apikey_role_bindings"() TO "service_role
 
 
 
+REVOKE ALL ON FUNCTION "public"."cleanup_audit_logs_for_long_canceled_orgs"("max_batches" integer, "batch_size" integer, "max_runtime_ms" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."cleanup_audit_logs_for_long_canceled_orgs"("max_batches" integer, "batch_size" integer, "max_runtime_ms" integer) TO "service_role";
+
+
+
 REVOKE ALL ON FUNCTION "public"."cleanup_completed_onboarding_apps"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."cleanup_completed_onboarding_apps"() TO "service_role";
 
@@ -22149,8 +23418,18 @@ REVOKE ALL ON FUNCTION "public"."cleanup_job_run_details_7days"() FROM PUBLIC;
 
 
 
-REVOKE ALL ON FUNCTION "public"."cleanup_old_audit_logs"() FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."cleanup_old_audit_logs"() TO "service_role";
+REVOKE ALL ON FUNCTION "public"."cleanup_long_canceled_org_data"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."cleanup_long_canceled_org_data"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."cleanup_net_http_response"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."cleanup_net_http_response"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."cleanup_old_audit_logs"("max_batches" integer, "batch_size" integer, "max_runtime_ms" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."cleanup_old_audit_logs"("max_batches" integer, "batch_size" integer, "max_runtime_ms" integer) TO "service_role";
 
 
 
@@ -22166,7 +23445,8 @@ GRANT ALL ON FUNCTION "public"."cleanup_onboarding_app_data_on_complete"() TO "s
 
 
 
-REVOKE ALL ON FUNCTION "public"."cleanup_queue_messages"() FROM PUBLIC;
+REVOKE ALL ON FUNCTION "public"."cleanup_queue_messages"("max_batches_total" integer, "batch_size" integer, "max_runtime_ms" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."cleanup_queue_messages"("max_batches_total" integer, "batch_size" integer, "max_runtime_ms" integer) TO "service_role";
 
 
 
@@ -22253,6 +23533,16 @@ GRANT ALL ON FUNCTION "public"."count_non_compliant_bundles"("org_id" "uuid", "r
 
 
 
+REVOKE ALL ON FUNCTION "public"."current_app_preview_apikey_rbac_id"("p_owner_org" "uuid", "p_app_id" character varying) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."current_app_preview_apikey_rbac_id"("p_owner_org" "uuid", "p_app_id" character varying) TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."current_app_preview_binding_id"("p_owner_org" "uuid", "p_app_id" character varying) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."current_app_preview_binding_id"("p_owner_org" "uuid", "p_app_id" character varying) TO "service_role";
+
+
+
 GRANT ALL ON FUNCTION "public"."current_request_role"() TO "service_role";
 
 
@@ -22324,6 +23614,11 @@ REVOKE ALL ON FUNCTION "public"."enforce_email_otp_for_mfa"() FROM PUBLIC;
 
 
 
+REVOKE ALL ON FUNCTION "public"."enforce_preview_bundle_ownership"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."enforce_preview_bundle_ownership"() TO "service_role";
+
+
+
 GRANT ALL ON FUNCTION "public"."enforce_role_binding_role_scope"() TO "service_role";
 
 
@@ -22337,6 +23632,7 @@ REVOKE ALL ON FUNCTION "public"."enqueue_credit_usage_alert"() FROM PUBLIC;
 
 
 REVOKE ALL ON FUNCTION "public"."enqueue_credit_usage_posthog_event"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."enqueue_credit_usage_posthog_event"() TO "service_role";
 
 
 
@@ -22558,10 +23854,15 @@ GRANT ALL ON FUNCTION "public"."get_org_build_time_unit"("p_org_id" "uuid", "p_s
 
 
 
+REVOKE ALL ON FUNCTION "public"."get_org_credits_used_in_period"("p_org_id" "uuid", "p_start" timestamp with time zone, "p_end" timestamp with time zone) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."get_org_credits_used_in_period"("p_org_id" "uuid", "p_start" timestamp with time zone, "p_end" timestamp with time zone) TO "service_role";
+
+
+
 REVOKE ALL ON FUNCTION "public"."get_org_members"("guild_id" "uuid") FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."get_org_members"("guild_id" "uuid") TO "service_role";
 GRANT ALL ON FUNCTION "public"."get_org_members"("guild_id" "uuid") TO "anon";
 GRANT ALL ON FUNCTION "public"."get_org_members"("guild_id" "uuid") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."get_org_members"("guild_id" "uuid") TO "service_role";
 
 
 
@@ -22571,9 +23872,9 @@ GRANT ALL ON FUNCTION "public"."get_org_members"("user_id" "uuid", "guild_id" "u
 
 
 REVOKE ALL ON FUNCTION "public"."get_org_members_rbac"("p_org_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."get_org_members_rbac"("p_org_id" "uuid") TO "anon";
 GRANT ALL ON FUNCTION "public"."get_org_members_rbac"("p_org_id" "uuid") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."get_org_members_rbac"("p_org_id" "uuid") TO "service_role";
-GRANT ALL ON FUNCTION "public"."get_org_members_rbac"("p_org_id" "uuid") TO "anon";
 
 
 
@@ -22585,9 +23886,9 @@ GRANT ALL ON FUNCTION "public"."get_org_perm_for_apikey"("apikey" "text", "app_i
 
 
 REVOKE ALL ON FUNCTION "public"."get_org_perm_for_apikey_v2"("apikey" "text", "app_id" "text") FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."get_org_perm_for_apikey_v2"("apikey" "text", "app_id" "text") TO "service_role";
 GRANT ALL ON FUNCTION "public"."get_org_perm_for_apikey_v2"("apikey" "text", "app_id" "text") TO "anon";
 GRANT ALL ON FUNCTION "public"."get_org_perm_for_apikey_v2"("apikey" "text", "app_id" "text") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."get_org_perm_for_apikey_v2"("apikey" "text", "app_id" "text") TO "service_role";
 
 
 
@@ -23050,6 +24351,11 @@ GRANT ALL ON FUNCTION "public"."is_user_org_admin"("p_user_id" "uuid", "p_org_id
 
 
 
+REVOKE ALL ON FUNCTION "public"."lock_channel_bundle_lifecycle"("p_version_id" bigint, "p_rollout_version_id" bigint) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."lock_channel_bundle_lifecycle"("p_version_id" bigint, "p_rollout_version_id" bigint) TO "service_role";
+
+
+
 REVOKE ALL ON FUNCTION "public"."lock_org_tombstone_guard"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."lock_org_tombstone_guard"() TO "service_role";
 
@@ -23057,6 +24363,11 @@ GRANT ALL ON FUNCTION "public"."lock_org_tombstone_guard"() TO "service_role";
 
 REVOKE ALL ON FUNCTION "public"."lock_rbac_orgs"("p_first_org_id" "uuid", "p_second_org_id" "uuid") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."lock_rbac_orgs"("p_first_org_id" "uuid", "p_second_org_id" "uuid") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."long_canceled_org_ids"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."long_canceled_org_ids"() TO "service_role";
 
 
 
@@ -23086,6 +24397,11 @@ GRANT ALL ON FUNCTION "public"."normalize_sso_provider_domain"() TO "service_rol
 
 REVOKE ALL ON FUNCTION "public"."noupdate"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."noupdate"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."null_migrated_app_version_manifests"("max_batches" integer, "batch_size" integer, "max_runtime_ms" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."null_migrated_app_version_manifests"("max_batches" integer, "batch_size" integer, "max_runtime_ms" integer) TO "service_role";
 
 
 
@@ -23125,6 +24441,13 @@ GRANT ALL ON FUNCTION "public"."parse_cron_field"("field" "text", "current_val" 
 GRANT ALL ON FUNCTION "public"."parse_step_pattern"("pattern" "text") TO "anon";
 GRANT ALL ON FUNCTION "public"."parse_step_pattern"("pattern" "text") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."parse_step_pattern"("pattern" "text") TO "service_role";
+
+
+
+GRANT ALL ON FUNCTION "public"."pg_buffercache_evict"(integer) TO "postgres";
+GRANT ALL ON FUNCTION "public"."pg_buffercache_evict"(integer) TO "anon";
+GRANT ALL ON FUNCTION "public"."pg_buffercache_evict"(integer) TO "authenticated";
+GRANT ALL ON FUNCTION "public"."pg_buffercache_evict"(integer) TO "service_role";
 
 
 
@@ -23182,6 +24505,7 @@ GRANT ALL ON FUNCTION "public"."process_all_cron_tasks"() TO "service_role";
 
 
 REVOKE ALL ON FUNCTION "public"."process_billing_period_stats_email"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."process_billing_period_stats_email"() TO "service_role";
 
 
 
@@ -23216,6 +24540,7 @@ REVOKE ALL ON FUNCTION "public"."process_failed_uploads"() FROM PUBLIC;
 
 
 REVOKE ALL ON FUNCTION "public"."process_free_trial_expired"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."process_free_trial_expired"() TO "service_role";
 
 
 
@@ -24004,9 +25329,19 @@ GRANT ALL ON FUNCTION "public"."set_webhook_created_by"() TO "service_role";
 
 
 
+REVOKE ALL ON FUNCTION "public"."soft_delete_versions_for_long_canceled_orgs"("p_batch_size" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."soft_delete_versions_for_long_canceled_orgs"("p_batch_size" integer) TO "service_role";
+
+
+
 GRANT ALL ON FUNCTION "public"."strip_html"("input" "text") TO "anon";
 GRANT ALL ON FUNCTION "public"."strip_html"("input" "text") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."strip_html"("input" "text") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."sweep_deleted_version_manifests"("p_batch_size" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."sweep_deleted_version_manifests"("p_batch_size" integer) TO "service_role";
 
 
 
@@ -24060,9 +25395,9 @@ GRANT ALL ON FUNCTION "public"."update_apps_build_timeout_updated_at"() TO "serv
 
 
 REVOKE ALL ON FUNCTION "public"."update_org_invite_role_rbac"("p_org_id" "uuid", "p_user_id" "uuid", "p_new_role_name" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."update_org_invite_role_rbac"("p_org_id" "uuid", "p_user_id" "uuid", "p_new_role_name" "text") TO "anon";
 GRANT ALL ON FUNCTION "public"."update_org_invite_role_rbac"("p_org_id" "uuid", "p_user_id" "uuid", "p_new_role_name" "text") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."update_org_invite_role_rbac"("p_org_id" "uuid", "p_user_id" "uuid", "p_new_role_name" "text") TO "service_role";
-GRANT ALL ON FUNCTION "public"."update_org_invite_role_rbac"("p_org_id" "uuid", "p_user_id" "uuid", "p_new_role_name" "text") TO "anon";
 
 
 
@@ -24079,9 +25414,9 @@ GRANT ALL ON FUNCTION "public"."update_sso_providers_updated_at"() TO "authentic
 
 
 REVOKE ALL ON FUNCTION "public"."update_tmp_invite_role_rbac"("p_org_id" "uuid", "p_email" "text", "p_new_role_name" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."update_tmp_invite_role_rbac"("p_org_id" "uuid", "p_email" "text", "p_new_role_name" "text") TO "anon";
 GRANT ALL ON FUNCTION "public"."update_tmp_invite_role_rbac"("p_org_id" "uuid", "p_email" "text", "p_new_role_name" "text") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."update_tmp_invite_role_rbac"("p_org_id" "uuid", "p_email" "text", "p_new_role_name" "text") TO "service_role";
-GRANT ALL ON FUNCTION "public"."update_tmp_invite_role_rbac"("p_org_id" "uuid", "p_email" "text", "p_new_role_name" "text") TO "anon";
 
 
 
@@ -24115,6 +25450,11 @@ GRANT ALL ON FUNCTION "public"."user_has_role_in_app"("p_user_id" "uuid", "p_app
 
 REVOKE ALL ON FUNCTION "public"."user_meets_password_policy"("user_id" "uuid", "org_id" "uuid") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."user_meets_password_policy"("user_id" "uuid", "org_id" "uuid") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."validate_channel_preview_role_binding"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."validate_channel_preview_role_binding"() TO "service_role";
 
 
 

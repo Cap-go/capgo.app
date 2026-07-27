@@ -23,7 +23,7 @@ import { confirmWithRememberedChoice } from '../promptPreferences'
 import { showReplicationProgress } from '../replicationProgress'
 import { formatTable } from '../terminal-table'
 import { usesAlwaysDirectUpdate } from '../updaterConfig'
-import { baseKeyV2, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, canPromptInteractively, checkCompatibilityCloud, checkPlanValidUpload, checkRemoteCliMessages, createSupabaseClient, deletedFailedVersion, findRoot, findSavedKey, formatError, getAppId, getBundleVersion, getCompatibilityDetails, getConfig, getInstalledVersion, getLocalConfig, getLocalDependencies, getOrganizationId, getPMAndCommand, getRemoteChecksums, getRemoteFileConfig, hasCliPermission, isCompatible, isDeprecatedPluginVersion, regexSemver, resolveUserIdFromApiKey, sendEvent, updateConfigUpdater, updateOrCreateChannel, updateOrCreateVersion, UPLOAD_TIMEOUT, uploadTUS, uploadUrl, zipFile } from '../utils'
+import { baseKeyV2, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, canPromptInteractively, checkCompatibilityCloud, checkPlanValidUpload, checkRemoteCliMessages, createSupabaseClient, deletedFailedVersion, deltaManifestTooLargeMessage, findRoot, findSavedKey, formatError, getAppId, getBundleVersion, getCompatibilityDetails, getConfig, getInstalledVersion, getLocalConfig, getLocalDependencies, getOrganizationId, getPMAndCommand, getRemoteChecksums, getRemoteFileConfig, hasCliPermission, isCompatible, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, regexSemver, resolveUserIdFromApiKey, sendEvent, setVersionManifest, updateConfigUpdater, updateOrCreateChannel, updateOrCreateVersion, UPLOAD_TIMEOUT, uploadTUS, uploadUrl, zipFile } from '../utils'
 import { getVersionSuggestions, interactiveVersionBump } from '../versionHelpers'
 import { maybePromptBuilderCta, shouldBlockIncompatibleUpload } from './builder-cta'
 import { checkIndexPosition, searchInDirectory } from './check'
@@ -671,11 +671,14 @@ async function uploadBundleToCapgoCloud(apikey: string, supabase: SupabaseType, 
     if (options.verbose)
       log.info(`[Verbose] Cleaning up failed version from database...`)
 
-    // call delete version on path /delete_failed_version to delete the version
-    await deletedFailedVersion(supabase, appid, bundle)
-
-    if (options.verbose)
-      log.info(`[Verbose] Failed version cleaned up`)
+    try {
+      await deletedFailedVersion(supabase, appid, bundle)
+      if (options.verbose)
+        log.info(`[Verbose] Failed version cleaned up`)
+    }
+    catch (cleanupError) {
+      log.error(`Cleanup of the incomplete version failed (${formatError(cleanupError)}); delete bundle ${bundle} manually before retrying.`)
+    }
 
     throw errorUpload instanceof Error ? errorUpload : new Error(String(errorUpload))
   }
@@ -1507,6 +1510,11 @@ export async function uploadBundleInternal(preAppid: string, options: OptionsUpl
   if (options.verbose && options.delta)
     log.info(`[Verbose] Delta manifest prepared with ${manifest.length} files`)
 
+  // Refuse before creating a version row or uploading files (matches set_manifest cap).
+  if (options.delta && manifest.length > MAX_MANIFEST_ENTRIES)
+    uploadFail(deltaManifestTooLargeMessage(manifest.length))
+
+
   if (options.verbose)
     log.info(`[Verbose] Creating version record in database...`)
 
@@ -1580,7 +1588,12 @@ export async function uploadBundleInternal(preAppid: string, options: OptionsUpl
       await persistVersionData(supabase, versionData, 'update')
     }
     catch (error) {
-      await deletedFailedVersion(supabase, appid, bundle)
+      try {
+        await deletedFailedVersion(supabase, appid, bundle)
+      }
+      catch (cleanupError) {
+        uploadFail(`Cannot upload bundle to S3 ${formatError(error)}. Cleanup of the incomplete version also failed (${formatError(cleanupError)}); delete bundle ${bundle} manually before retrying.`)
+      }
       uploadFail(`Cannot upload bundle to S3 ${formatError(error)}`)
     }
 
@@ -1647,11 +1660,33 @@ export async function uploadBundleInternal(preAppid: string, options: OptionsUpl
         log.info(`[Verbose] Delta upload error details: ${formatError(err)}`)
     }
 
+    if (finalManifest?.length) {
+      if (options.verbose)
+        log.info(`[Verbose] Writing ${finalManifest.length} manifest rows via set_manifest...`)
+
+      try {
+        await setVersionManifest(supabase, appid, bundle, finalManifest)
+      }
+      catch (error) {
+        try {
+          await deletedFailedVersion(supabase, appid, bundle)
+        }
+        catch (cleanupError) {
+          uploadFail(`Cannot set bundle manifest ${formatError(error)}. Cleanup of the incomplete version also failed (${formatError(cleanupError)}); delete bundle ${bundle} manually before retrying.`)
+        }
+        uploadFail(`Cannot set bundle manifest ${formatError(error)}`)
+      }
+
+      if (options.verbose)
+        log.info(`[Verbose] Manifest rows written (sizes filled by backend from R2)`)
+    }
+
+    // Keep jsonb null — legacy CLIs still upload via app_versions.manifest.
     versionData.storage_provider = 'r2'
-    versionData.manifest = finalManifest
+    versionData.manifest = null
 
     if (options.verbose)
-      log.info(`[Verbose] Updating version record with storage provider and manifest...`)
+      log.info(`[Verbose] Updating version record with storage provider...`)
 
     await persistVersionData(supabase, versionData, 'update')
 

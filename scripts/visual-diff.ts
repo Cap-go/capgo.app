@@ -16,7 +16,7 @@ import { getPlaywrightStripeApiBaseUrl, getStripeEmulatorPort } from './playwrig
 import { getSupabaseWorktreeConfig } from './supabase-worktree-config'
 
 type Phase = 'before' | 'after'
-type Command = 'capture' | 'diff' | 'run'
+type Command = 'capture' | 'capture-route' | 'diff' | 'run'
 
 interface ManagedProcess {
   child: ChildProcessWithoutNullStreams
@@ -45,14 +45,14 @@ interface CliOptions {
 }
 
 const repoRoot = process.cwd()
+const defaultVisualDiffConfigPath = process.env.VISUAL_DIFF_CONFIG_PATH || resolve(repoRoot, 'playwright/visual-diff.config.ts')
 
 interface LoadedVisualDiffConfig {
   visualDiffRoutes: VisualDiffRoute[]
   visualDiffViewport: { width: number, height: number }
 }
 
-async function loadVisualDiffConfig(): Promise<LoadedVisualDiffConfig> {
-  const configPath = resolve(repoRoot, 'playwright/visual-diff.config.ts')
+async function loadVisualDiffConfig(configPath = defaultVisualDiffConfigPath): Promise<LoadedVisualDiffConfig> {
   const module = await import(pathToFileURL(configPath).href)
   return {
     visualDiffRoutes: module.visualDiffRoutes as VisualDiffRoute[],
@@ -72,6 +72,7 @@ const managedProcesses: ManagedProcess[] = []
 const isWindows = process.platform === 'win32'
 const httpReadyTimeoutMs = 5_000
 const visualDiffActionTimeoutMs = 60_000
+const visualDiffRouteTimeoutMs = 120_000
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
@@ -87,8 +88,8 @@ function parseThreshold(raw: string, source: string): number {
 function parseArgs(argv: string[]): CliOptions {
   const [commandRaw, ...rest] = argv
   const command = (commandRaw || 'run') as Command
-  if (!['capture', 'diff', 'run'].includes(command)) {
-    throw new Error(`Unknown command "${commandRaw}". Use capture, diff, or run.`)
+  if (!['capture', 'capture-route', 'diff', 'run'].includes(command)) {
+    throw new Error(`Unknown command "${commandRaw}". Use capture, capture-route, diff, or run.`)
   }
 
   let phase: Phase | undefined
@@ -134,9 +135,12 @@ function parseArgs(argv: string[]): CliOptions {
     throw new Error(`Unknown argument "${arg}"`)
   }
 
-  if (command === 'capture' && phase !== 'before' && phase !== 'after') {
-    throw new Error('capture requires --phase before or --phase after')
+  if ((command === 'capture' || command === 'capture-route') && phase !== 'before' && phase !== 'after') {
+    throw new Error(`${command} requires --phase before or --phase after`)
   }
+
+  if (command === 'capture-route' && routes.length !== 1)
+    throw new Error('capture-route requires exactly one --routes slug')
 
   return {
     command,
@@ -320,6 +324,62 @@ async function stopProcess(processToStop: ManagedProcess) {
   await waitForExit(2000)
 }
 
+function waitForManagedProcess(managed: ManagedProcess, timeoutMs: number, label: string) {
+  const { child } = managed
+  if (child.exitCode !== null || child.signalCode !== null) {
+    if (child.exitCode === 0)
+      return Promise.resolve()
+    return Promise.reject(new Error(`${label} exited before it completed`))
+  }
+
+  return new Promise<void>((resolveProcess, rejectProcess) => {
+    let settled = false
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    const finish = (callback: () => void) => {
+      if (settled)
+        return
+      settled = true
+      if (timeout)
+        clearTimeout(timeout)
+      callback()
+    }
+    const onError = (error: Error) => finish(() => rejectProcess(error))
+    const onClose = (code: number | null, signal: NodeJS.Signals | null) => finish(() => {
+      if (code === 0) {
+        resolveProcess()
+        return
+      }
+      rejectProcess(new Error(`${label} exited with code ${code ?? 'none'}${signal ? ` (${signal})` : ''}`))
+    })
+
+    timeout = setTimeout(() => {
+      finish(() => rejectProcess(new Error(`Timed out ${label} after ${timeoutMs}ms`)))
+    }, timeoutMs)
+    child.once('error', onError)
+    child.once('close', onClose)
+  })
+}
+
+async function captureRouteInChild(phase: Phase, route: VisualDiffRoute, configPath: string, runnerPath: string) {
+  const captureProcess = startProcess(
+    `capture-${phase}-${route.slug}`,
+    [process.execPath, runnerPath, 'capture-route', '--phase', phase, '--routes', route.slug],
+    { VISUAL_DIFF_CONFIG_PATH: configPath },
+  )
+  try {
+    await waitForManagedProcess(captureProcess, visualDiffRouteTimeoutMs, `capturing ${phase} ${route.slug}`)
+  }
+  catch (error) {
+    await stopProcess(captureProcess)
+    throw error
+  }
+  finally {
+    const index = managedProcesses.indexOf(captureProcess)
+    if (index >= 0)
+      managedProcesses.splice(index, 1)
+  }
+}
+
 async function stopAllProcesses() {
   for (const managed of [...managedProcesses].reverse())
     await stopProcess(managed)
@@ -481,16 +541,64 @@ async function settlePage(page: Page) {
   })
 }
 
+async function captureRouteScreenshot(
+  phase: Phase,
+  route: VisualDiffRoute,
+  visualDiffViewport: LoadedVisualDiffConfig['visualDiffViewport'],
+) {
+  const targetDir = phaseDir(phase)
+  mkdirSync(targetDir, { recursive: true })
+
+  console.log(`[visual-diff] launching browser for ${phase} ${route.slug}`)
+  const browser = await chromium.launch({ headless: true, timeout: visualDiffActionTimeoutMs })
+  try {
+    console.log(`[visual-diff] creating browser context for ${phase} ${route.slug}`)
+    const context = await browser.newContext({
+      baseURL: frontendBaseUrl,
+      viewport: visualDiffViewport,
+      deviceScaleFactor: 1,
+    })
+    const page = await context.newPage()
+    page.setDefaultTimeout(visualDiffActionTimeoutMs)
+    page.setDefaultNavigationTimeout(visualDiffActionTimeoutMs)
+
+    if (route.auth) {
+      console.log(`[visual-diff] logging in for ${phase} ${route.slug}`)
+      await login(page)
+      console.log(`[visual-diff] logged in for ${phase} ${route.slug}`)
+    }
+
+    console.log(`[visual-diff] navigating ${phase} ${route.slug}`)
+    await page.goto(route.path, { waitUntil: 'domcontentloaded', timeout: visualDiffActionTimeoutMs })
+    console.log(`[visual-diff] settling ${phase} ${route.slug}`)
+    await settlePage(page)
+    if (route.prepare) {
+      console.log(`[visual-diff] preparing ${phase} ${route.slug}`)
+      await route.prepare(page)
+      await settlePage(page)
+    }
+    const outputPath = resolve(targetDir, `${route.slug}.png`)
+    console.log(`[visual-diff] screenshotting ${phase} ${route.slug}`)
+    await page.screenshot({ path: outputPath, fullPage: false, timeout: visualDiffActionTimeoutMs })
+    console.log(`[visual-diff] captured ${phase} ${route.slug} -> ${outputPath}`)
+    await context.close()
+  }
+  finally {
+    await browser.close()
+  }
+}
+
 async function captureScreenshots(
   phase: Phase,
   routeFilter: string[],
   options: { forceFrontend?: boolean, forceBackend?: boolean } = {},
   config?: LoadedVisualDiffConfig,
+  configPath = defaultVisualDiffConfigPath,
+  runnerPath = resolve(repoRoot, 'scripts/visual-diff.ts'),
 ) {
-  const { visualDiffRoutes, visualDiffViewport } = config ?? await loadVisualDiffConfig()
+  const { visualDiffRoutes } = config ?? await loadVisualDiffConfig(configPath)
   const routes = selectedRoutes(visualDiffRoutes, routeFilter)
-  const targetDir = phaseDir(phase)
-  mkdirSync(targetDir, { recursive: true })
+  mkdirSync(phaseDir(phase), { recursive: true })
 
   console.log(`[visual-diff] preparing ${phase} capture stack`)
   const { supabaseUrl, supabaseAnon, apiDomain } = await ensureBackendStack({ force: options.forceBackend })
@@ -498,43 +606,10 @@ async function captureScreenshots(
   await ensureFrontendStack(supabaseUrl, supabaseAnon, apiDomain, { force: options.forceFrontend })
   console.log(`[visual-diff] ${phase} frontend ready`)
 
-  console.log(`[visual-diff] launching browser for ${phase}`)
-  const browser = await chromium.launch({ headless: true, timeout: visualDiffActionTimeoutMs })
-  try {
-    console.log(`[visual-diff] creating browser context for ${phase}`)
-    const context = await browser.newContext({
-      baseURL: frontendBaseUrl,
-      viewport: visualDiffViewport,
-      deviceScaleFactor: 1,
-    })
-    console.log(`[visual-diff] creating page for ${phase}`)
-    const page = await context.newPage()
-    page.setDefaultTimeout(visualDiffActionTimeoutMs)
-    page.setDefaultNavigationTimeout(visualDiffActionTimeoutMs)
-    let authenticated = false
-
-    for (const route of routes) {
-      console.log(`[visual-diff] capturing ${phase} ${route.slug}`)
-      if (route.auth && !authenticated) {
-        await login(page)
-        authenticated = true
-      }
-
-      await page.goto(route.path, { waitUntil: 'domcontentloaded', timeout: visualDiffActionTimeoutMs })
-      await settlePage(page)
-      if (route.prepare) {
-        await route.prepare(page)
-        await settlePage(page)
-      }
-      const outputPath = resolve(targetDir, `${route.slug}.png`)
-      await page.screenshot({ path: outputPath, fullPage: false, timeout: visualDiffActionTimeoutMs })
-      console.log(`[visual-diff] captured ${phase} ${route.slug} -> ${outputPath}`)
-    }
-
-    await context.close()
-  }
-  finally {
-    await browser.close()
+  for (const route of routes) {
+    console.log(`[visual-diff] capturing ${phase} ${route.slug} in an isolated browser`)
+    await captureRouteInChild(phase, route, configPath, runnerPath)
+    console.log(`[visual-diff] captured ${phase} ${route.slug}`)
   }
 }
 
@@ -719,6 +794,31 @@ function generateReport(results: DiffResult[], thresholdPercent: number) {
   return summary
 }
 
+function bundleVisualDiffModule(sourcePath: string, snapshotPath: string) {
+  const build = spawnSync('bun', [
+    'build',
+    sourcePath,
+    '--bundle',
+    '--target=bun',
+    '--packages=external',
+    `--outfile=${snapshotPath}`,
+  ], {
+    cwd: repoRoot,
+    stdio: 'inherit',
+    env: process.env,
+  })
+  if ((build.status ?? 1) !== 0)
+    throw new Error(`Failed to bundle visual diff module ${sourcePath}`)
+}
+
+function snapshotVisualDiffConfig(snapshotPath: string) {
+  bundleVisualDiffModule(defaultVisualDiffConfigPath, snapshotPath)
+}
+
+function snapshotVisualDiffRunner(snapshotPath: string) {
+  bundleVisualDiffModule(resolve(repoRoot, 'scripts/visual-diff.ts'), snapshotPath)
+}
+
 async function checkoutRef(ref: string) {
   git(['checkout', '--force', ref])
   const install = spawnSync('bun', ['install'], { cwd: repoRoot, stdio: 'inherit', env: process.env })
@@ -730,13 +830,16 @@ async function runPipeline(options: CliOptions) {
   const originalRef = git(['rev-parse', 'HEAD'])
   const baseSha = resolveGitRef(options.baseRef, git(['merge-base', 'HEAD', 'origin/main']))
   const headSha = resolveGitRef(options.headRef, originalRef)
+  const visualDiffConfigPath = resolve(outputRoot, `visual-diff-config-${process.pid}.mjs`)
+  const visualDiffRunnerPath = resolve(outputRoot, `visual-diff-runner-${process.pid}.mjs`)
 
   try {
     if (!options.skipGitCheckout && originalRef !== headSha)
       await checkoutRef(headSha)
 
-    // Keep the head route manifest while Git moves between revisions.
-    const visualDiffConfig = await loadVisualDiffConfig()
+    snapshotVisualDiffConfig(visualDiffConfigPath)
+    const visualDiffConfig = await loadVisualDiffConfig(visualDiffConfigPath)
+    snapshotVisualDiffRunner(visualDiffRunnerPath)
 
     if (!options.skipGitCheckout) {
       await stopFrontendStack()
@@ -747,6 +850,8 @@ async function runPipeline(options: CliOptions) {
         options.routes,
         { forceFrontend: true, forceBackend: true },
         visualDiffConfig,
+        visualDiffConfigPath,
+        visualDiffRunnerPath,
       )
       await stopFrontendStack()
       await stopBackendStack()
@@ -761,6 +866,8 @@ async function runPipeline(options: CliOptions) {
         forceBackend: !options.skipGitCheckout,
       },
       visualDiffConfig,
+      visualDiffConfigPath,
+      visualDiffRunnerPath,
     )
     const results = await compareScreenshots(options.thresholdPercent, options.routes, visualDiffConfig)
     const summary = generateReport(results, options.thresholdPercent)
@@ -785,6 +892,8 @@ async function runPipeline(options: CliOptions) {
         console.error(`[visual-diff] failed to restore git ref ${originalRef}:`, error)
       }
     }
+    rmSync(visualDiffConfigPath, { force: true })
+    rmSync(visualDiffRunnerPath, { force: true })
   }
 }
 
@@ -795,6 +904,15 @@ async function main() {
   try {
     if (options.command === 'capture') {
       await captureScreenshots(options.phase!, options.routes)
+      return
+    }
+
+    if (options.command === 'capture-route') {
+      const { visualDiffRoutes, visualDiffViewport } = await loadVisualDiffConfig()
+      const [route] = selectedRoutes(visualDiffRoutes, options.routes)
+      if (!route)
+        throw new Error('capture-route could not resolve its configured route')
+      await captureRouteScreenshot(options.phase!, route, visualDiffViewport)
       return
     }
 

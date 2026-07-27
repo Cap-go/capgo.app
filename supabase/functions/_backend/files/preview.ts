@@ -171,6 +171,11 @@ function buildPreviewPayloadResponseHeaders(): Headers {
 }
 
 export async function buildPreviewDownloadPayload(c: Context, appId: string, bundle: PreviewDownloadBundle): Promise<PreviewDownloadPayload> {
+  // Capgo Preview cannot decrypt customer-encrypted zips. Never return a download
+  // payload for encrypted bundles or clients will fail later with unzip errors.
+  if (bundle.session_key)
+    throw simpleError('bundle_encrypted', 'Encrypted bundles cannot be previewed. Upload an unencrypted bundle to use Capgo preview.')
+
   const downloadUrl = bundle.external_url || rewritePreviewDownloadUrl(c, await getBundleUrl(c, bundle.r2_path, 'preview', bundle.checksum ?? String(bundle.id)))
   if (!downloadUrl)
     throw simpleError('bundle_download_unavailable', 'Bundle download URL is not available', { versionId: bundle.id })
@@ -178,6 +183,7 @@ export async function buildPreviewDownloadPayload(c: Context, appId: string, bun
   return {
     appId,
     checksum: bundle.checksum ?? undefined,
+    // Unencrypted bundles have a null session_key; keep the field for payload shape stability.
     sessionKey: bundle.session_key ?? undefined,
     url: downloadUrl,
     version: bundle.name || `preview-${bundle.id}`,
@@ -378,6 +384,14 @@ export async function handlePreviewRequest(c: Context<MiddlewareKeyVariables>): 
     setBundleInfo(c, previewVersionId, bundleInfo)
   }
 
+  // Capgo Preview cannot decrypt customer-encrypted bundles: the decryption
+  // private material lives only in the customer's app, not in Capgo's preview
+  // client. Reject early for both payload and file preview so QR/native flow
+  // does not download an encrypted zip and fail with a cryptic unzip error.
+  if (bundleInfo.isEncrypted) {
+    throw simpleError('bundle_encrypted', 'Encrypted bundles cannot be previewed. Upload an unencrypted bundle to use Capgo preview.')
+  }
+
   if (isPayloadRequest) {
     if (!payloadBundle)
       throw simpleError('bundle_not_found', 'Bundle not found', { versionId: previewVersionId })
@@ -395,11 +409,6 @@ export async function handlePreviewRequest(c: Context<MiddlewareKeyVariables>): 
     return new Response(JSON.stringify(payload), {
       headers: buildPreviewPayloadResponseHeaders(),
     })
-  }
-
-  // Check if bundle is encrypted
-  if (bundleInfo.isEncrypted) {
-    throw simpleError('bundle_encrypted', 'Encrypted bundles cannot be previewed')
   }
 
   // Check if bundle has manifest

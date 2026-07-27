@@ -68,9 +68,10 @@ function checkMobile() {
 }
 
 const currentDevice = computed(() => devices[selectedDevice.value])
-const showBrowserPreview = computed(() => props.browserPreview)
+const isEncryptedPreview = computed(() => props.browserPreviewUnavailableReason === 'encrypted')
+const showBrowserPreview = computed(() => props.browserPreview && !isEncryptedPreview.value)
 const showNativeStylePreview = computed(() => isNativePlatform || isMobile.value || props.nativeStylePreview)
-const showQrCode = computed(() => !!qrCodeDataUrl.value && (!isMobile.value || !showBrowserPreview.value))
+const showQrCode = computed(() => !!qrCodeDataUrl.value && !isEncryptedPreview.value && (!isMobile.value || !showBrowserPreview.value))
 const browserPreviewHelp = computed(() => {
   if (props.browserPreviewUnavailableReason === 'missing-manifest') {
     return {
@@ -148,13 +149,15 @@ const qrCodeUrl = computed<string | null>(() => {
   return previewUrl.value
 })
 const startPreviewDisabled = computed(() => {
+  if (isEncryptedPreview.value)
+    return true
   if (isNativePlatform)
     return !qrCodeUrl.value
   return !previewUrl.value || !!browserPreviewHelp.value
 })
 // Generate QR code linking to the preview URL
 function generateQRCode() {
-  if (!qrCodeUrl.value) {
+  if (!qrCodeUrl.value || isEncryptedPreview.value) {
     qrCodeDataUrl.value = ''
     return
   }
@@ -167,8 +170,8 @@ function generateQRCode() {
   }
 }
 
-// Watch for URL changes to regenerate QR
-watch(qrCodeUrl, generateQRCode)
+// Watch for URL/encryption changes to regenerate QR
+watch([qrCodeUrl, isEncryptedPreview], generateQRCode)
 
 function openExternal() {
   if (!previewUrl.value)
@@ -225,7 +228,7 @@ async function startPreview() {
     </div>
 
     <div
-      v-if="browserPreviewHelp && !isNativePlatform"
+      v-if="browserPreviewHelp && (!isNativePlatform || isEncryptedPreview)"
       class="w-full max-w-xs rounded-lg border border-blue-100 bg-blue-50 p-3 text-left dark:border-blue-500/30 dark:bg-blue-500/10"
     >
       <div class="flex items-start gap-2">
@@ -355,6 +358,23 @@ async function startPreview() {
                 {{ browserPreviewHelp.command }}
               </code>
             </div>
+          </div>
+        </div>
+      </div>
+
+      <div
+        v-else-if="browserPreviewHelp"
+        class="w-full max-w-sm rounded-lg border border-blue-100 bg-blue-50 p-3 text-left dark:border-blue-500/30 dark:bg-blue-500/10"
+      >
+        <div class="flex items-start gap-2">
+          <IconInfo class="mt-0.5 h-4 w-4 shrink-0 text-blue-600 dark:text-blue-300" />
+          <div class="min-w-0">
+            <p class="text-sm font-semibold text-blue-950 dark:text-blue-100">
+              {{ browserPreviewHelp.title }}
+            </p>
+            <p class="mt-1 text-xs leading-5 text-blue-900/80 dark:text-blue-100/80">
+              {{ browserPreviewHelp.description }}
+            </p>
           </div>
         </div>
       </div>

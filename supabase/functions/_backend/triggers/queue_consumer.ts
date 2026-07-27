@@ -1,10 +1,10 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Database } from '../utils/supabase.types.ts'
-import { type } from 'arktype'
+import { z } from 'zod'
 import { Hono } from 'hono/tiny'
 // --- Worker logic imports ---
-import { safeParseSchema } from '../utils/ark_validation.ts'
+import { integerLikeSchema, safeParseSchema } from '../utils/schema_validation.ts'
 import { sendDiscordAlert } from '../utils/discord.ts'
 import { BRES, middlewareAPISecret, parseBody, simpleError } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
@@ -23,20 +23,22 @@ const DEFAULT_QUEUE_VISIBILITY_TIMEOUT_SECONDS = 120
 const VERSION_QUEUE_VISIBILITY_TIMEOUT_SECONDS = 900
 const MANIFEST_QUEUE_VISIBILITY_TIMEOUT_SECONDS = 900
 const QUEUE_HTTP_TIMEOUT_MS = 15_000
-const VERSION_QUEUE_HTTP_TIMEOUT_MS = 60_000
+const VERSION_QUEUE_HTTP_TIMEOUT_MS = 300_000 // large deleted manifests: trash then DB delete
 const HEALTHCHECK_HTTP_TIMEOUT_MS = 8_000
+// HARD RULE: no pgmq queue may retry more than 5 times. Do not raise this, and
+// do not add per-queue exceptions. Leftover work must be re-enqueued by a
+// sweeper/cron (e.g. sweep_deleted_version_manifests), never by burning reads.
 export const MAX_QUEUE_READS = 5
 const DISCORD_IGNORED_ERROR_CODES = new Set(['version_not_found', 'no_channel'])
 
-const integerLikeSchema = type('number.integer').or(type('string.numeric.parse |> number.integer'))
-export const messageSchema = type({
+export const messageSchema = z.object({
   msg_id: integerLikeSchema,
   read_ct: integerLikeSchema,
-  message: type({
-    'payload?': 'unknown',
-    'function_name': 'string',
-    'function_type?': '"cloudflare" | "cloudflare_pp" | "supabase" | "" | null',
-  }),
+  message: z.object({
+    payload: z.unknown().optional(),
+    function_name: z.string(),
+    function_type: z.enum(['cloudflare', 'cloudflare_pp', 'supabase', '']).nullable().optional(),
+  }).passthrough(),
 })
 
 interface Message {
@@ -137,9 +139,9 @@ function getQueueMessageTrace(functionName: string, body: Record<string, unknown
   }
 }
 
-function getActionableQueueFailures(failureDetails: FailureDetail[]): FailureDetail[] {
+function getActionableQueueFailures(failureDetails: FailureDetail[], retryBudget: number = MAX_QUEUE_READS): FailureDetail[] {
   return failureDetails.filter((detail) => {
-    if (detail.read_count < MAX_QUEUE_READS)
+    if (detail.read_count < retryBudget)
       return false
     return !detail.error_code || !DISCORD_IGNORED_ERROR_CODES.has(detail.error_code)
   })
@@ -279,6 +281,10 @@ function getQueueHttpTimeoutMs(functionName: string): number {
   if (isVersionQueueFunction(functionName))
     return VERSION_QUEUE_HTTP_TIMEOUT_MS
   return QUEUE_HTTP_TIMEOUT_MS
+}
+
+function getQueueMaxReads(_queueName: string): number {
+  return MAX_QUEUE_READS
 }
 
 function resolveFunctionUrl(c: Context, function_name: string, function_type: string | null | undefined): string {
@@ -675,6 +681,7 @@ async function reportQueueFailures(c: Context, queueName: string, messagesFailed
 
   cloudlog({ requestId: c.get('requestId'), message: `[${queueName}] Failed to process ${messagesFailed.length} messages.` })
 
+  const retryBudget = getQueueMaxReads(queueName)
   const timestamp = new Date().toISOString()
   const failureDetails = messagesFailed.map(msg => ({
     function_name: msg.message?.function_name ?? 'unknown',
@@ -692,7 +699,7 @@ async function reportQueueFailures(c: Context, queueName: string, messagesFailed
     target_url: msg.targetUrl ?? undefined,
   }))
 
-  const actionableFailures = getActionableQueueFailures(failureDetails)
+  const actionableFailures = getActionableQueueFailures(failureDetails, retryBudget)
   const groupedByFunction = actionableFailures.reduce((acc, detail) => {
     const key = detail.function_name
     acc[key] ??= []
@@ -727,7 +734,7 @@ async function reportQueueFailures(c: Context, queueName: string, messagesFailed
                 const messageInfo = detail.error_message ? ` | ${truncateDiscordField(detail.error_message.replace(/\s+/g, ' ').trim(), 180)}` : ''
                 const durationInfo = typeof detail.duration_ms === 'number' ? ` | ${detail.duration_ms}ms` : ''
                 const targetInfo = detail.target_url ? ` | Target: ${truncateDiscordField(detail.target_url, 120)}` : ''
-                return `**${detail.function_name}** | Status: ${detail.status} | Read: ${detail.read_count}/${MAX_QUEUE_READS}${durationInfo}${errorInfo}${messageInfo}${targetInfo} | [CF Logs](${cfLogUrl})`
+                return `**${detail.function_name}** | Status: ${detail.status} | Read: ${detail.read_count}/${retryBudget}${durationInfo}${errorInfo}${messageInfo}${targetInfo} | [CF Logs](${cfLogUrl})`
               }).join('\n')),
               inline: false,
             },
@@ -770,7 +777,7 @@ async function reportQueueFailures(c: Context, queueName: string, messagesFailed
     cloudlog({
       requestId: c.get('requestId'),
       message: `[${queueName}] Suppressed Discord alert for retryable or ignored queue failures.`,
-      retryingFailures: failureDetails.filter(detail => detail.read_count < MAX_QUEUE_READS).length,
+      retryingFailures: failureDetails.filter(detail => detail.read_count < retryBudget).length,
       ignoredErrors: Array.from(DISCORD_IGNORED_ERROR_CODES),
     })
   }
@@ -799,8 +806,9 @@ async function processQueue(c: Context, db: ReturnType<typeof getPgClient>, queu
     }
   }
 
+  const retryBudget = getQueueMaxReads(queueName)
   const [messagesToProcess, messagesToSkip] = messages.reduce((acc, message) => {
-    acc[message.read_ct <= MAX_QUEUE_READS ? 0 : 1].push(message)
+    acc[message.read_ct <= retryBudget ? 0 : 1].push(message)
     return acc
   }, [[], []] as [typeof messages, typeof messages])
 
@@ -812,7 +820,7 @@ async function processQueue(c: Context, db: ReturnType<typeof getPgClient>, queu
     processingCount: messagesToProcess.length,
     skippedCount: messagesToSkip.length,
     concurrency: processConcurrency,
-    retryBudget: MAX_QUEUE_READS,
+    retryBudget,
   })
 
   // Archive messages after the configured retry budget is exhausted.
@@ -822,7 +830,7 @@ async function processQueue(c: Context, db: ReturnType<typeof getPgClient>, queu
       message: `[${queueName}] Archiving messages that exceeded the retry budget.`,
       queueName,
       archiveCount: messagesToSkip.length,
-      retryBudget: MAX_QUEUE_READS,
+      retryBudget,
     })
     await archive_queue_messages(c, db, queueName, messagesToSkip.map(msg => msg.msg_id))
   }
@@ -978,7 +986,7 @@ export async function http_post_helper(
     headers['x-capgo-queue-name'] = metadata.queueName
     headers['x-capgo-queue-msg-id'] = String(metadata.msgId)
     headers['x-capgo-queue-read-count'] = String(metadata.readCount)
-    headers['x-capgo-queue-max-reads'] = String(MAX_QUEUE_READS)
+    headers['x-capgo-queue-max-reads'] = String(metadata ? getQueueMaxReads(metadata.queueName) : MAX_QUEUE_READS)
   }
   if (waitForCompletion)
     headers[WAIT_FOR_COMPLETION_HEADER] = 'true'
@@ -1243,6 +1251,7 @@ export const __queueConsumerTestUtils__ = {
   getQueueAckChunkSize,
   getQueueHttpConcurrency,
   getQueueHttpTimeoutMs,
+  getQueueMaxReads,
   httpExceptionToQueueResponse,
   getQueueVisibilityTimeout,
   normalizeQueueFunctionType,

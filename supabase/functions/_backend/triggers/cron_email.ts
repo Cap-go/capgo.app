@@ -1,74 +1,20 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
+import {
+  buildWeeklyEmailMetadata,
+  computeWeeklyInstallStats,
+  getPreviousMonthUtcRange,
+  shouldRetryDeployInstallStats,
+  shouldSendDeployInstallStatsEmail,
+  sumVersionInstalls,
+} from '../utils/cron_email_stats.ts'
 import { BRES, middlewareAPISecret, parseBody, simpleError } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { sendEmailToOrgMembers } from '../utils/org_email_notifications.ts'
 import { findBestPlan } from '../utils/plans.ts'
 import { readStatsVersion } from '../utils/stats.ts'
 import { getCurrentPlanNameOrg, supabaseAdmin } from '../utils/supabase.ts'
-
-const thresholds = {
-  // Number of updates in plain number
-  updates: [
-    100,
-    1000,
-    10000,
-  ],
-  // Percentage in decimal form (0.9 ==== 90%)
-  failRate: [
-    // Failure rate bands (0 = 0% failures, 0.3 = 30% failures)
-    0,
-    0.10,
-    0.20,
-    0.30,
-  ],
-  // Number of app opens in plain number
-  appOpen: [
-    500,
-    1500,
-    5000,
-  ],
-}
-
-const funComparisons = {
-  updates: [
-    'a cupcake to every student in a small school!',
-    'a pizza to every resident of a small town!',
-    'a burger to everyone in a big city!',
-  ],
-  failRate: [
-    'Flawless streak—no failed updates this week! 🏅',
-    'Roughly one in ten updates failed; a quick health check could help.',
-    'About one in five updates failed; let\'s squash those errors.',
-    'Heads up: nearly a third of updates are failing—worth a closer look.',
-  ],
-  appOpen: [
-    'Your app was opened more times than a popular local bakery\'s door!',
-    'Your app was more popular than the latest episode of a hit TV show!',
-    'Your app was opened more times than a blockbuster movie on its opening weekend!',
-  ],
-}
-
-// Check what threshold does the stat qualify for and return the fun comparison
-function getFunComparison(comparison: keyof typeof funComparisons, stat: number): string {
-  const thresholdsForComparisons = thresholds[comparison]
-  // Choose the highest threshold that is <= stat so that bigger stats map to
-  // the more impressive comparison string (including 100% success rate).
-  let chosenIndex = 0
-  for (let i = thresholdsForComparisons.length - 1; i >= 0; i -= 1) {
-    if (stat >= thresholdsForComparisons[i]) {
-      chosenIndex = i
-      break
-    }
-  }
-
-  const comparisonStrings = funComparisons[comparison]
-  if (!comparisonStrings[chosenIndex])
-    throw new Error(`Cannot find index for fun comparison, ${chosenIndex}`)
-
-  return comparisonStrings[chosenIndex]
-}
 
 export const app = new Hono<MiddlewareKeyVariables>()
 
@@ -194,41 +140,15 @@ async function handleWeeklyInstallStats(c: Context, appId: string) {
     throw simpleError('cannot_generate_stats', 'Cannot generate stats', { error: generateStatsError })
   }
 
-  if (weeklyStats.all_updates === 0) {
+  // get_weekly_stats.all_updates is SUM(install); failed_updates is SUM(fail).
+  // Those are independent counters, so rates use install / (install + fail).
+  const stats = computeWeeklyInstallStats(weeklyStats)
+
+  if (stats.totalUpdates === 0) {
     return c.json({ status: 'No updates this week' }, 200)
   }
 
-  const successUpdates = weeklyStats.all_updates - weeklyStats.failed_updates
-  if (successUpdates < 0) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'Cannot send email for app, successUpdates < 0', error: weeklyStats, metadata: { app_id: appId } })
-    cloudlogErr({ requestId: c.get('requestId'), message: 'Invalid stats detected', error: weeklyStats, metadata: { app_id: appId } })
-    return c.json({ status: 'No valid stats available' }, 200)
-  }
-
-  const successPercentage = Math.round((successUpdates / weeklyStats.all_updates) * 10_000) / 10_000
-  const failureRate = Math.round((weeklyStats.failed_updates / weeklyStats.all_updates) * 10_000) / 10_000
-
-  // Calculate week number and month name for the reported period
-  const now = new Date()
-  const monthName = now.toLocaleString('en-US', { month: 'long' })
-  // Calculate ISO week number
-  const startOfYear = new Date(now.getFullYear(), 0, 1)
-  const days = Math.floor((now.getTime() - startOfYear.getTime()) / (24 * 60 * 60 * 1000))
-  const weekNumber = Math.ceil((days + startOfYear.getDay() + 1) / 7)
-
-  const metadata = {
-    app_id: appId,
-    month_name: monthName,
-    week_number: weekNumber.toString(),
-    weekly_updates: (weeklyStats.all_updates).toString(),
-    fun_comparison: getFunComparison('updates', weeklyStats.all_updates),
-    weekly_install: successUpdates.toString(),
-    weekly_install_success: (successPercentage * 100).toString(),
-    fun_comparison_2: getFunComparison('failRate', failureRate),
-    weekly_fail: (weeklyStats.failed_updates).toString(),
-    weekly_open: (weeklyStats.open_app).toString(),
-    fun_comparison_3: getFunComparison('appOpen', weeklyStats.open_app),
-  }
+  const metadata = buildWeeklyEmailMetadata(appId, stats)
 
   await sendEmailToOrgMembers(c, 'user:weekly_stats', 'weekly_stats', metadata, await getOrgIdForApp(c, appId))
 
@@ -238,28 +158,37 @@ async function handleWeeklyInstallStats(c: Context, appId: string) {
 async function handleMonthlyCreateStats(c: Context, appId: string) {
   const supabase = await supabaseAdmin(c)
 
-  // Calculate the previous month's date range
-  const now = new Date()
-  const previousMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1)
-  const previousMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0) // Last day of previous month
-
-  // Get full month name for the reported period
-  const monthName = previousMonth.toLocaleString('en-US', { month: 'long' })
+  // Previous calendar month in UTC: [start, nextMonthStart)
+  const { startIso, endExclusiveIso, monthName } = getPreviousMonthUtcRange()
 
   // Fetch stats for bundle creation and publishing
-  const { data: appVersions, error: _appVersionsError } = await supabase
+  const { data: appVersions, error: appVersionsError } = await supabase
     .from('app_versions')
     .select('id, created_at')
     .eq('app_id', appId)
-    .gte('created_at', previousMonth.toISOString())
-    .lte('created_at', previousMonthEnd.toISOString())
+    .gte('created_at', startIso)
+    .lt('created_at', endExclusiveIso)
 
-  const { data: deployHistory, error: _deployHistoryError } = await supabase
+  if (appVersionsError) {
+    throw simpleError('cannot_fetch_monthly_bundles', 'Cannot fetch monthly bundle stats', {
+      error: appVersionsError,
+      appId,
+    })
+  }
+
+  const { data: deployHistory, error: deployHistoryError } = await supabase
     .from('deploy_history')
     .select('id, deployed_at')
     .eq('app_id', appId)
-    .gte('deployed_at', previousMonth.toISOString())
-    .lte('deployed_at', previousMonthEnd.toISOString())
+    .gte('deployed_at', startIso)
+    .lt('deployed_at', endExclusiveIso)
+
+  if (deployHistoryError) {
+    throw simpleError('cannot_fetch_monthly_publishes', 'Cannot fetch monthly publish stats', {
+      error: deployHistoryError,
+      appId,
+    })
+  }
 
   const bundleCount = appVersions?.length ?? 0
   const publishCount = deployHistory?.length ?? 0
@@ -330,13 +259,12 @@ async function handleDeployInstallStats(
 
   const windowStart = deployTime.toISOString()
   const windowEnd = new Date(deployTime.getTime() + 24 * 60 * 60 * 1000).toISOString()
+  // Do not filter by channel here: older VERSION_USAGE rows may lack channel blobs,
+  // and this email counts installs for the deployed version across the app.
   const versionStats = await readStatsVersion(c, appId, windowStart, windowEnd)
-  // Filter by version_name (new format) OR version_id as string (old Cloudflare format)
-  // This handles backwards compatibility during the transition period
-  const versionIdStr = versionId ? String(versionId) : null
-  const installs = versionStats
-    .filter(row => row.version_name === versionName || (versionIdStr && row.version_name === versionIdStr))
-    .reduce((sum, row) => sum + (row.install ?? 0), 0)
+  // Filter by version_name (new format) OR version_id as string (old Cloudflare format).
+  // Coerce installs with Number() — Analytics Engine sum() can arrive as stringy Float64.
+  const installs = sumVersionInstalls(versionStats, versionName, versionId)
 
   const metadata = {
     app_id: appId,
@@ -352,11 +280,42 @@ async function handleDeployInstallStats(
     window_hours: '24',
   }
 
-  if (installs > 1) {
+  if (shouldSendDeployInstallStatsEmail(installs)) {
     await sendEmailToOrgMembers(c, 'bundle:install_stats_24h', 'deploy_stats_24h', metadata, orgId ?? await getOrgIdForApp(c, appId))
+    return c.json(BRES)
   }
 
-  return c.json(BRES)
+  // SQL claims install_stats_email_sent_at before the worker runs. If analytics
+  // lagged or returned unusable counts, release the claim so cron can retry
+  // while this deploy is still the latest within the retry window.
+  if (deployId && shouldRetryDeployInstallStats(deployTime)) {
+    const { error: releaseError } = await supabaseAdmin(c)
+      .from('deploy_history')
+      .update({ install_stats_email_sent_at: null })
+      .eq('id', deployId)
+    if (releaseError) {
+      cloudlogErr({
+        requestId: c.get('requestId'),
+        message: 'Failed to release deploy install stats email claim for retry',
+        error: releaseError,
+        metadata: { appId, deployId, installs },
+      })
+      // Fail the job so the queue can retry instead of permanently keeping the claim.
+      throw simpleError('cannot_release_deploy_stats_claim', 'Cannot release deploy install stats email claim', {
+        error: releaseError,
+        appId,
+        deployId,
+        installs,
+      })
+    }
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'Released deploy install stats email claim for retry',
+      metadata: { appId, deployId, installs },
+    })
+  }
+
+  return c.json({ status: 'Not enough installs for deploy stats email', installs }, 200)
 }
 
 /**
@@ -378,6 +337,42 @@ function formatNumber(num: number): string {
   return num.toLocaleString('en-US')
 }
 
+/** Calendar date (YYYY-MM-DD) from a timestamptz/ISO string without TZ day-shift. */
+function toDateOnlyUtc(value: string): string {
+  const match = /^(\d{4}-\d{2}-\d{2})/.exec(value)
+  if (match)
+    return match[1]
+  return new Date(value).toISOString().slice(0, 10)
+}
+
+/** Shift a YYYY-MM-DD date by N days in UTC. */
+function addDaysToDateOnly(dateOnly: string, days: number): string {
+  const date = new Date(`${dateOnly}T00:00:00.000Z`)
+  date.setUTCDate(date.getUTCDate() + days)
+  return date.toISOString().slice(0, 10)
+}
+
+/**
+ * Billing cycles are half-open [start, end).
+ * get_total_metrics uses inclusive BETWEEN, so the metrics end date is end - 1 day.
+ */
+function billingPeriodMetricsRange(cycleStart: string, cycleEnd: string): {
+  periodStart: string
+  periodEndExclusive: string
+  metricsEndInclusive: string
+} {
+  const periodStart = toDateOnlyUtc(cycleStart)
+  const periodEndExclusive = toDateOnlyUtc(cycleEnd)
+  const metricsEndInclusive = addDaysToDateOnly(periodEndExclusive, -1)
+  return { periodStart, periodEndExclusive, metricsEndInclusive }
+}
+
+export const billingPeriodStatsTestUtils = {
+  toDateOnlyUtc,
+  addDaysToDateOnly,
+  billingPeriodMetricsRange,
+}
+
 async function handleBillingPeriodStats(c: Context, _email: string, orgId: string, cycleStart?: string, cycleEnd?: string) {
   const supabase = await supabaseAdmin(c)
 
@@ -394,16 +389,16 @@ async function handleBillingPeriodStats(c: Context, _email: string, orgId: strin
 
   // Use cycle dates passed from the SQL function if available,
   // otherwise fall back to get_cycle_info_org (for backwards compatibility)
-  let startDate: string
-  let endDate: string
+  let cycleStartTs: string
+  let cycleEndTs: string
 
   if (cycleStart && cycleEnd) {
-    // Use dates passed from the SQL function (guaranteed to be the completed billing period)
-    startDate = new Date(cycleStart).toISOString().split('T')[0]
-    endDate = new Date(cycleEnd).toISOString().split('T')[0]
+    // Completed billing period from SQL: [cycleStart, cycleEnd)
+    cycleStartTs = cycleStart
+    cycleEndTs = cycleEnd
   }
   else {
-    // Fallback: get cycle info from RPC
+    // Fallback: get cycle info from RPC (current cycle, same half-open bounds)
     const { data: cycleInfo, error: cycleError } = await supabase
       .rpc('get_cycle_info_org', { orgid: orgId })
       .single()
@@ -413,16 +408,30 @@ async function handleBillingPeriodStats(c: Context, _email: string, orgId: strin
       throw simpleError('cannot_get_cycle_info', 'Cannot get cycle info', { error: cycleError })
     }
 
-    startDate = new Date(cycleInfo.subscription_anchor_start).toISOString().split('T')[0]
-    endDate = new Date(cycleInfo.subscription_anchor_end).toISOString().split('T')[0]
+    cycleStartTs = cycleInfo.subscription_anchor_start
+    cycleEndTs = cycleInfo.subscription_anchor_end
   }
 
-  // Get total metrics for the billing period
+  const { periodStart, periodEndExclusive, metricsEndInclusive } = billingPeriodMetricsRange(
+    cycleStartTs,
+    cycleEndTs,
+  )
+
+  // Guard against inverted/empty ranges (e.g. bad payloads)
+  if (metricsEndInclusive < periodStart) {
+    throw simpleError('invalid_billing_period', 'Invalid billing period dates', {
+      periodStart,
+      periodEndExclusive,
+      metricsEndInclusive,
+    })
+  }
+
+  // Get total metrics for the completed billing period days
   const { data: metrics, error: metricsError } = await supabase
     .rpc('get_total_metrics', {
       org_id: orgId,
-      start_date: startDate,
-      end_date: endDate,
+      start_date: periodStart,
+      end_date: metricsEndInclusive,
     })
     .single()
 
@@ -431,18 +440,23 @@ async function handleBillingPeriodStats(c: Context, _email: string, orgId: strin
     throw simpleError('cannot_get_metrics', 'Cannot get metrics', { error: metricsError })
   }
 
-  // Get credits used in the billing period
-  let creditsUsed = 0
-  const { data: credits } = await supabase
-    .from('usage_credit_consumptions')
-    .select('credits_used')
-    .eq('org_id', orgId)
-    .gte('applied_at', startDate)
-    .lt('applied_at', endDate)
+  // Half-open credit sum on the same timestamptz bounds as the cycle payload.
+  // Cron path uses UTC midnight bounds so the 12:00 UTC job never under-counts
+  // a still-open Stripe afternoon anchor.
+  const { data: creditsSum, error: creditsError } = await supabase.rpc(
+    'get_org_credits_used_in_period',
+    {
+      p_org_id: orgId,
+      p_start: cycleStartTs,
+      p_end: cycleEndTs,
+    },
+  )
 
-  if (credits) {
-    creditsUsed = credits.reduce((sum, row) => sum + Number(row.credits_used || 0), 0)
+  if (creditsError) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Cannot get credits used', error: creditsError, metadata: { orgId } })
+    throw simpleError('cannot_get_credits', 'Cannot get credits used', { error: creditsError })
   }
+  const creditsUsed = Number(creditsSum || 0)
 
   // Format the metrics for the email
   const mau = metrics?.mau ?? 0
@@ -526,15 +540,17 @@ async function handleBillingPeriodStats(c: Context, _email: string, orgId: strin
     monthly_active_users: formatNumber(mau),
     bandwidth_used: formatBytes(bandwidth),
     storage_used: formatBytes(storage),
+    build_time_used: formatNumber(buildTimeUnit),
     credits_used: formatNumber(Math.round(creditsUsed * 100) / 100),
     // Raw values for potential use in email templates
     mau_raw: mau.toString(),
     bandwidth_raw: bandwidth.toString(),
     storage_raw: storage.toString(),
+    build_time_raw: buildTimeUnit.toString(),
     credits_raw: creditsUsed.toString(),
-    // Include period dates for context
-    period_start: startDate,
-    period_end: endDate,
+    // Include period dates for context (half-open [start, end))
+    period_start: periodStart,
+    period_end: periodEndExclusive,
     // Plan information
     current_plan: currentPlanName,
     recommended_plan: recommendedPlan,
@@ -547,6 +563,7 @@ async function handleBillingPeriodStats(c: Context, _email: string, orgId: strin
     mau_percent: mauPercent.toString(),
     bandwidth_percent: bandwidthPercent.toString(),
     storage_percent: storagePercent.toString(),
+    build_time_percent: buildTimePercent.toString(),
     max_usage_percent: maxUsagePercent.toString(),
   }
 

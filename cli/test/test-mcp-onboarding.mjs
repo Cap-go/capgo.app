@@ -207,7 +207,8 @@ function fakeServer() {
   const tools = {}
   return {
     tools,
-    tool(name, _desc, _schema, handler) { tools[name] = { handler } },
+    registerTool(name, _config, handler) { tools[name] = { handler } },
+    registerPrompt() {},
   }
 }
 

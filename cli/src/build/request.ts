@@ -64,7 +64,7 @@ import { contactSupport } from '../support/contact-support.js'
 import { appendInternalLog, getInternalLogPath, startInternalLog } from '../support/internal-log.js'
 import { uploadSupportLogs } from '../support/support-upload.js'
 import { offerSupportUploadBeforeAi } from '../support/support-upload-prompt.js'
-import { assertCliPermission, canPromptInteractively, createSupabaseClient, findSavedKey, getConfig, getOrganizationId, sendEvent, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
+import { assertCliPermission, canPromptInteractively, createSupabaseClient, findSavedKey, getConfig, getOrganizationId, getRemoteConfig, sendEvent, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
 import { mergeCredentials, MIN_OUTPUT_RETENTION_SECONDS, parseInAppUpdatePriority, parseOptionalBoolean, parseOutputRetentionSeconds } from './credentials'
 import { buildProvisioningMap } from './credentials-command'
 import { withCwd } from './cwd'
@@ -202,6 +202,66 @@ function createDefaultLogger(silent: boolean): BuildLogger {
 
 // `withCwd` (the global chdir queue) lives in ./cwd so the prescan context
 // builder shares the same queue — see src/build/cwd.ts.
+
+interface CapgoApiErrorBody {
+  error?: string
+  message?: string
+  moreInfo?: {
+    upgrade_url?: string
+    reason?: string
+    activeBuilds?: number
+    limit?: number
+    planName?: string
+  }
+}
+
+function parseCapgoApiErrorBody(errorText: string): CapgoApiErrorBody | null {
+  try {
+    const parsed = JSON.parse(errorText) as CapgoApiErrorBody
+    if (!parsed || typeof parsed !== 'object')
+      return null
+    return parsed
+  }
+  catch {
+    return null
+  }
+}
+
+/** Surface plan / concurrency limit errors with a clear upgrade CTA, then throw. */
+async function throwIfBuildPlanLimitError(
+  status: number,
+  errorText: string,
+  action: 'request' | 'start',
+  logger: BuildLogger,
+): Promise<void> {
+  if (status !== 429)
+    return
+
+  const body = parseCapgoApiErrorBody(errorText)
+  const errorCode = body?.error
+  if (errorCode !== 'native_build_concurrency_limit_exceeded' && errorCode !== 'need_plan_upgrade')
+    return
+
+  const config = await getRemoteConfig()
+  const upgradeUrl = body?.moreInfo?.upgrade_url || `${config.hostWeb}/settings/organization/plans`
+  const message = body?.message
+    || (errorCode === 'native_build_concurrency_limit_exceeded'
+      ? `Native build concurrency limit reached for your plan. Upgrade here: ${upgradeUrl}`
+      : `Cannot ${action} native build, upgrade plan to continue: ${upgradeUrl}`)
+
+  logger.error(message)
+  if (!message.includes(upgradeUrl))
+    logger.error(`Upgrade here: ${upgradeUrl}`)
+
+  try {
+    const module = await import('open')
+    await module.default(upgradeUrl)
+  }
+  catch {
+    // Ignore browser-open failures in CI / headless environments.
+  }
+  throw new Error(message)
+}
 
 /**
  * Fetch with retry logic for build requests
@@ -1876,6 +1936,7 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
 
     if (!response.ok) {
       const errorText = await response.text()
+      await throwIfBuildPlanLimitError(response.status, errorText, 'request', log)
       throw new Error(`Failed to request build: ${response.status} - ${errorText}`)
     }
 
@@ -2111,6 +2172,7 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
 
       if (!startResponse.ok) {
         const errorText = await startResponse.text()
+        await throwIfBuildPlanLimitError(startResponse.status, errorText, 'start', log)
         throw new Error(`Failed to start build: ${startResponse.status} - ${errorText}`)
       }
 

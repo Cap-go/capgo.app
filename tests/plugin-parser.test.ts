@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { convertQueryToBody, makeDevice } from '../supabase/functions/_backend/utils/plugin_parser.ts'
+import { convertQueryToBody, makeDevice } from '../supabase/functions/_backend/plugin_runtime/utils/plugin_parser.ts'
 
 describe('plugin parser install_source normalization', () => {
   it.concurrent('trims and lowercases reported install sources', () => {

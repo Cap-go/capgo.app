@@ -5,12 +5,10 @@ import {
   assertOrgPermission,
   check2FAAccessForOrg,
   createSupabaseClient,
-  defaultApiHost,
   findSavedKey,
   formatError,
-  getLocalConfig,
-  getRemoteConfig,
-  normalizeSupabaseHost,
+  resolveCapgoPublicApiHost,
+  resolveConfiguredCapgoPublicApiHost,
   sendEvent,
 } from '../utils'
 
@@ -36,29 +34,10 @@ interface OrganizationUpdateResponse {
   message?: string
 }
 
-interface OrganizationApiHostConfig {
-  hostApi: string
-  supaHost?: string
-  supaKey?: string
-}
-
-export function resolveConfiguredOrganizationUpdateApiHost(config: OrganizationApiHostConfig) {
-  if (config.supaHost && config.supaKey && config.hostApi === defaultApiHost)
-    return `${normalizeSupabaseHost(config.supaHost)}/functions/v1`
-
-  return config.hostApi
-}
+export const resolveConfiguredOrganizationUpdateApiHost = resolveConfiguredCapgoPublicApiHost
 
 export async function resolveOrganizationUpdateApiHost(options: Pick<OrganizationSetOptions, 'supaHost' | 'supaAnon'>, silent: boolean) {
-  if (options.supaHost && options.supaAnon)
-    return `${normalizeSupabaseHost(options.supaHost)}/functions/v1`
-
-  const localConfig = await getLocalConfig(silent)
-  if (localConfig.supaHost && localConfig.supaKey)
-    return resolveConfiguredOrganizationUpdateApiHost(localConfig)
-
-  const config = await getRemoteConfig(silent)
-  return config.hostApi
+  return resolveCapgoPublicApiHost(options, silent)
 }
 
 async function updateOrganizationViaApi(apikey: string, payload: OrganizationUpdatePayload, silent: boolean, apiHost: string) {

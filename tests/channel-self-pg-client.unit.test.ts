@@ -12,32 +12,32 @@ const upsertChannelDevicePgMock = vi.fn(() => Promise.resolve(true))
 
 ;(globalThis as any).EdgeRuntime = undefined
 
-vi.mock('../supabase/functions/_backend/utils/appStatus.ts', () => ({
+vi.mock('../supabase/functions/_backend/plugin_runtime/utils/appStatus.ts', () => ({
   getAppStatus: vi.fn(() => Promise.resolve({ status: 'cloud', allow_device_custom_id: true })),
   setAppStatus: vi.fn(() => Promise.resolve()),
 }))
 
-vi.mock('../supabase/functions/_backend/utils/channelSelfRateLimit.ts', () => ({
+vi.mock('../supabase/functions/_backend/plugin_runtime/utils/channelSelfRateLimit.ts', () => ({
   checkChannelSelfIPRateLimit: vi.fn(() => Promise.resolve({ limited: false })),
   isChannelSelfRateLimited: vi.fn(() => Promise.resolve({ limited: false })),
   recordChannelSelfIPRequest: vi.fn(() => Promise.resolve()),
   recordChannelSelfRequest: vi.fn(() => Promise.resolve()),
 }))
 
-vi.mock('../supabase/functions/_backend/utils/discord.ts', () => ({
+vi.mock('../supabase/functions/_backend/plugin_runtime/utils/discord.ts', () => ({
   sendDiscordAlert500: vi.fn(() => Promise.resolve()),
   sendDiscordAlert: vi.fn(() => Promise.resolve()),
 }))
 
-vi.mock('../supabase/functions/_backend/utils/notifications.ts', () => ({
+vi.mock('../supabase/functions/_backend/plugin_runtime/utils/notifications.ts', () => ({
   sendNotifOrgCached: vi.fn(() => Promise.resolve()),
 }))
 
-vi.mock('../supabase/functions/_backend/utils/org_email_notifications.ts', () => ({
+vi.mock('../supabase/functions/_backend/plugin_runtime/utils/org_email_notifications.ts', () => ({
   sendNotifToOrgMembersCached: vi.fn(() => Promise.resolve()),
 }))
 
-vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
+vi.mock('../supabase/functions/_backend/plugin_runtime/utils/pg.ts', () => ({
   closeClient: vi.fn(() => Promise.resolve()),
   deleteChannelDevicePg: deleteChannelDevicePgMock,
   getAppByIdPg: vi.fn(),
@@ -54,7 +54,7 @@ vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
   upsertChannelDevicePg: upsertChannelDevicePgMock,
 }))
 
-vi.mock('../supabase/functions/_backend/utils/stats.ts', () => ({
+vi.mock('../supabase/functions/_backend/plugin_runtime/utils/plugin_stats.ts', () => ({
   sendStatsAndDevice: vi.fn(() => Promise.resolve()),
 }))
 
@@ -95,7 +95,7 @@ function channelSelfStoreKey() {
 }
 
 async function fetchPut(pluginVersion: string, env = {}) {
-  const { app } = await import('../supabase/functions/_backend/plugins/channel_self.ts')
+  const { app } = await import('../supabase/functions/_backend/plugin_runtime/plugins/channel_self.ts')
   return app.fetch(new Request('http://localhost/', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
@@ -104,7 +104,7 @@ async function fetchPut(pluginVersion: string, env = {}) {
 }
 
 async function fetchPost(pluginVersion: string, env = {}) {
-  const { app } = await import('../supabase/functions/_backend/plugins/channel_self.ts')
+  const { app } = await import('../supabase/functions/_backend/plugin_runtime/plugins/channel_self.ts')
   return app.fetch(new Request('http://localhost/', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -116,7 +116,7 @@ async function fetchPost(pluginVersion: string, env = {}) {
 }
 
 async function fetchDelete(pluginVersion: string, env = {}) {
-  const { app } = await import('../supabase/functions/_backend/plugins/channel_self.ts')
+  const { app } = await import('../supabase/functions/_backend/plugin_runtime/plugins/channel_self.ts')
   const params = new URLSearchParams()
   for (const [key, value] of Object.entries(putBody(pluginVersion))) {
     params.set(key, String(value))

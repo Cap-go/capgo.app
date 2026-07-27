@@ -562,13 +562,14 @@ function getPaidPlanTotal(plans: PlanTotal) {
   return (plans.Solo ?? 0) + (plans.Maker ?? 0) + (plans.Team ?? 0) + (plans.Enterprise ?? 0)
 }
 
-function getPlanConversionRates(plans: PlanTotal, totalOrgs: number): PlanConversionRates {
+function getPlanConversionRates(plans: PlanTotal, payingCount: number): PlanConversionRates {
+  // Plan mix among paying orgs (not all orgs/users). Matches LogSnag insight cards.
   return {
-    solo: calculateConversionRate(plans.Solo, totalOrgs),
-    maker: calculateConversionRate(plans.Maker, totalOrgs),
-    team: calculateConversionRate(plans.Team, totalOrgs),
-    enterprise: calculateConversionRate(plans.Enterprise, totalOrgs),
-    total: calculateConversionRate(getPaidPlanTotal(plans), totalOrgs),
+    solo: calculateConversionRate(plans.Solo, payingCount),
+    maker: calculateConversionRate(plans.Maker, payingCount),
+    team: calculateConversionRate(plans.Team, payingCount),
+    enterprise: calculateConversionRate(plans.Enterprise, payingCount),
+    total: calculateConversionRate(getPaidPlanTotal(plans), payingCount),
   }
 }
 
@@ -2638,10 +2639,12 @@ async function runCoreGlobalStatsShard(c: Context, window: DailyWindow): Promise
   } = coreSnapshot
   const not_paying = users - customers.total - plans.Trial
   const org_conversion_rate = calculateConversionRate(payingOrgsForConversion, orgs)
-  const planConversionRates = getPlanConversionRates(plans, orgs)
+  // Plan upgrade/mix rates use paying orgs as denominator (not total users/orgs).
+  const planConversionRates = getPlanConversionRates(plans, customers.total)
 
+  // apps_created is event-sourced via the global_stats_creates queue so deleted
+  // apps still count for the UTC day. Do not overwrite it from surviving rows.
   await updateGlobalStatsSnapshot(c, finalizedAppBuildOnboardingWindow.prevDayDateId, {
-    apps_created: finalizedAppBuildOnboardingMetrics.apps_created,
     apps_with_cli_onboarding_builds_24h: finalizedAppBuildOnboardingMetrics.apps_with_cli_onboarding_builds_24h,
     apps_with_manual_builds_24h: finalizedAppBuildOnboardingMetrics.apps_with_manual_builds_24h,
   })
@@ -2778,6 +2781,76 @@ async function runUsageDemoAppsGlobalStatsShard(c: Context, window: DailyWindow)
   await updateUsageGlobalStatsSnapshot(c, window, 'Updated global stats usage demo apps shard', { demo_apps_created: demoAppsCreated }, { demoAppsCreated })
 }
 
+function getTrailing12mStart(nextDayStart: Date): Date {
+  const year = nextDayStart.getUTCFullYear() - 1
+  const month = nextDayStart.getUTCMonth()
+  const day = nextDayStart.getUTCDate()
+  const clampedDay = Math.min(day, new Date(Date.UTC(year, month + 1, 0)).getUTCDate())
+  return new Date(Date.UTC(
+    year,
+    month,
+    clampedDay,
+    nextDayStart.getUTCHours(),
+    nextDayStart.getUTCMinutes(),
+    nextDayStart.getUTCSeconds(),
+    nextDayStart.getUTCMilliseconds(),
+  ))
+}
+
+async function getUpgradeRate12m(c: Context, nextDayStart: Date): Promise<number> {
+  // Paying -> bigger plan only, via stripe_info.upgraded_at (set when already-paying
+  // MRR increases). Self-contained so multi-day revenue repairs cannot undercount
+  // by reading prior global_stats.upgraded_orgs before those shards finish.
+  const pgClient = getPgClient(c, false)
+  const drizzleClient = getDrizzleClient(pgClient)
+  const snapshotEndIso = nextDayStart.toISOString()
+  const trailing12mStartIso = getTrailing12mStart(nextDayStart).toISOString()
+
+  try {
+    // Paying denominator matches getBillingSnapshotCounts (plans join + lifecycle filters),
+    // not all orgs/users.
+    const result = await drizzleClient.execute(sql`
+      SELECT
+        (
+          SELECT COUNT(DISTINCT si.customer_id)::int
+          FROM public.stripe_info si
+          INNER JOIN public.plans p ON p.stripe_id = si.product_id
+          WHERE si.is_good_plan = true
+            AND si.created_at < ${snapshotEndIso}::timestamptz
+            AND (
+              si.paid_at < ${snapshotEndIso}::timestamptz
+              OR (
+                si.paid_at IS NULL
+                AND si.trial_at <= ${snapshotEndIso}::timestamptz
+              )
+            )
+            AND si.status IN (
+              'succeeded'::public.stripe_status,
+              'canceled'::public.stripe_status,
+              'deleted'::public.stripe_status
+            )
+            AND (si.canceled_at IS NULL OR si.canceled_at >= ${snapshotEndIso}::timestamptz)
+            AND si.subscription_anchor_end > ${snapshotEndIso}::timestamptz
+        ) AS paying,
+        (
+          SELECT COUNT(DISTINCT si.customer_id)::int
+          FROM public.stripe_info si
+          WHERE si.upgraded_at >= ${trailing12mStartIso}::timestamptz
+            AND si.upgraded_at < ${snapshotEndIso}::timestamptz
+        ) AS upgraded_orgs_12m
+    `)
+    const row = result.rows[0] as { paying?: number | string | null, upgraded_orgs_12m?: number | string | null } | undefined
+    return calculateConversionRate(Number(row?.upgraded_orgs_12m) || 0, Number(row?.paying) || 0)
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'getUpgradeRate12m error', error })
+    throw error
+  }
+  finally {
+    closeClient(c, pgClient)
+  }
+}
+
 async function runRevenueGlobalStatsShard(c: Context, window: DailyWindow): Promise<void> {
   const supabase = supabaseAdmin(c)
   const metricWindow = getMetricWindowFromDailyWindow(window)
@@ -2791,6 +2864,7 @@ async function runRevenueGlobalStatsShard(c: Context, window: DailyWindow): Prom
     new_paying_orgs,
     canceled_orgs,
     upgraded_orgs,
+    upgrade_rate_12m,
     trialExtensionStats,
     pastDueOrgStats,
     subscriptionAccessCounts,
@@ -2850,6 +2924,7 @@ async function runRevenueGlobalStatsShard(c: Context, window: DailyWindow): Prom
         }
         return new Set((res.data || []).map(row => row.customer_id)).size
       }),
+    getUpgradeRate12m(c, nextDayStart),
     getTrialExtensionStats(c, metricWindow),
     refreshPastDueStats
       ? (async () => {
@@ -2917,6 +2992,7 @@ async function runRevenueGlobalStatsShard(c: Context, window: DailyWindow): Prom
     trial_extended_orgs: trialExtensionStats.trial_extended_orgs,
     trial_extended_subscribed_orgs: trialExtensionStats.trial_extended_subscribed_orgs,
     total_revenue: revenue.total_revenue,
+    upgrade_rate_12m,
     upgraded_orgs,
   }
 
@@ -3250,7 +3326,12 @@ export const logsnagInsightsTestUtils = {
   normalizeSubscriptionAccessSnapshotCounts,
   shouldRefreshMutablePastDueStats,
   calculateChurnRevenue,
+  calculateConversionRate,
   calculateNrr,
+  getPlanConversionRates,
+  getPaidPlanTotal,
+  getUpgradeRate12m,
+  getTrailing12mStart,
   countUniqueCustomers,
   getCompletedDayWindowForDateId,
   getMetricWindowFromDailyWindow,

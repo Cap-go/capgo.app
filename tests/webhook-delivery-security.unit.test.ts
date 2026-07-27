@@ -367,7 +367,8 @@ describe('webhook retry scheduling', () => {
     expect(getWebhookRetryDelaySeconds(1, null, 500, 0.5)).toBe(5)
     expect(getWebhookRetryDelaySeconds(2, null, 500, 0.5)).toBe(5 * 60)
     expect(getWebhookRetryDelaySeconds(3, null, 500, 0.5)).toBe(30 * 60)
-    expect(getWebhookRetryDelaySeconds(9, null, 500, 0.5)).toBe(24 * 60 * 60)
+    expect(getWebhookRetryDelaySeconds(4, null, 500, 0.5)).toBe(2 * 60 * 60)
+    expect(getWebhookRetryDelaySeconds(9, null, 500, 0.5)).toBe(2 * 60 * 60)
   })
 
   it('honors retry-after and throttles rate-limit responses', async () => {

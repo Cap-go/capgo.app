@@ -1,0 +1,108 @@
+{
+  "generatedAt": "2026-07-23T11:33:11.311Z",
+  "methodology": "Miniflare + process.cpuUsage around dispatchFetch; test-utils payload shapes; cf-ray header; muted parent console during samples; no DB so /updates|/stats often 500 after validation.",
+  "findings": [
+    "Top warm CPU without DB: channel_self (store/fallback path) then updates_valid_shape",
+    "Middleware tax was large: requestId cloudlog + hono logger on every request including /ok",
+    "Full request body cloudlog on /updates and /channel_self was wasteful; curated fields kept"
+  ],
+  "quickWinsApplied": [
+    "Remove cloudlog from requestId generator",
+    "Skip hono logger on plugin/updates/stats/channel_self",
+    "Curate body cloudlogs on updates/channel_self; drop duplicate updateWithPG body log"
+  ],
+  "comparison": [
+    {
+      "scenario": "ok_get",
+      "baseMedianCpuMs": 0.377,
+      "currentMedianCpuMs": 0.183,
+      "deltaPct": -51.5,
+      "currentStatus": [
+        200
+      ],
+      "rankedNote": 3
+    },
+    {
+      "scenario": "updates_valid_shape",
+      "baseMedianCpuMs": 0.473,
+      "currentMedianCpuMs": 0.408,
+      "deltaPct": -13.7,
+      "currentStatus": [
+        500
+      ],
+      "rankedNote": 1
+    },
+    {
+      "scenario": "updates_invalid",
+      "baseMedianCpuMs": 0.282,
+      "currentMedianCpuMs": 0.17,
+      "deltaPct": -39.7,
+      "currentStatus": [
+        400
+      ],
+      "rankedNote": 4
+    },
+    {
+      "scenario": "stats_valid_shape",
+      "baseMedianCpuMs": 0.349,
+      "currentMedianCpuMs": 0.236,
+      "deltaPct": -32.4,
+      "currentStatus": [
+        500
+      ],
+      "rankedNote": 2
+    },
+    {
+      "scenario": "channel_self_valid_shape",
+      "baseMedianCpuMs": 0.49,
+      "currentMedianCpuMs": 1.02,
+      "deltaPct": 108.2,
+      "currentStatus": [
+        200
+      ],
+      "rankedNote": 0
+    }
+  ],
+  "rankedCurrent": [
+    {
+      "name": "channel_self_valid_shape",
+      "medianCpuMs": 1.02,
+      "medianWallMs": 7.4600900000000365,
+      "status": [
+        200
+      ]
+    },
+    {
+      "name": "updates_valid_shape",
+      "medianCpuMs": 0.408,
+      "medianWallMs": 1.0345459999998639,
+      "status": [
+        500
+      ]
+    },
+    {
+      "name": "stats_valid_shape",
+      "medianCpuMs": 0.236,
+      "medianWallMs": 0.877755999999863,
+      "status": [
+        500
+      ]
+    },
+    {
+      "name": "ok_get",
+      "medianCpuMs": 0.183,
+      "medianWallMs": 0.6322499999998854,
+      "status": [
+        200
+      ]
+    },
+    {
+      "name": "updates_invalid",
+      "medianCpuMs": 0.17,
+      "medianWallMs": 0.8213620000001356,
+      "status": [
+        400
+      ]
+    }
+  ]
+}

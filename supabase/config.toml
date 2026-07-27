@@ -70,7 +70,7 @@ openai_api_key = "env(OPENAI_API_KEY)"
 
 # Email testing server. Emails sent with the local dev setup are not actually sent - rather, they
 # are monitored, and you can view the emails that would have been sent from the web interface.
-[inbucket]
+[local_smtp]
 enabled = false
 # Port to use for the email testing server web interface.
 port = 54324
@@ -438,5 +438,11 @@ import_map = "./functions/deno.json"
 # Check CPU Usage
 
 [functions.check_cpu_usage]
+verify_jwt = false
+import_map = "./functions/deno.json"
+
+# Queue Health
+
+[functions.queue_health]
 verify_jwt = false
 import_map = "./functions/deno.json"

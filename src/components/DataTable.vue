@@ -646,11 +646,13 @@ const paginationClass = computed(() => props.mobileFixedPagination
                   </div>
                 </td>
                 <td
-                  v-else :class="`${col.class ?? ''} ${!col.mobile ? 'hidden md:table-cell' : ''
+                  v-else
+                  class="overflow-hidden text-ellipsis whitespace-nowrap px-4 py-2 md:py-4 md:px-6"
+                  :class="`${col.class ?? ''} ${!col.mobile ? 'hidden md:table-cell' : ''
                   } ${col.onClick
                     ? 'cursor-pointer hover:underline clickable-cell'
                     : ''
-                  } overflow-hidden text-ellipsis whitespace-nowrap`" class="px-4 py-2 md:py-4 md:px-6"
+                  }`"
                   @click.stop="col.onClick ? col.onClick(elem) : () => { }"
                 >
                   <RenderCell v-if="col.renderFunction" :renderer="col.renderFunction" :item="elem" />

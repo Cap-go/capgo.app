@@ -476,7 +476,7 @@ export async function sendEmailToOrgMembers(
   c: Context,
   eventName: string,
   preferenceKey: EmailPreferenceKey,
-  eventData: Record<string, any>,
+  eventData: Record<string, unknown>,
   orgId: string,
   drizzleClient?: ReturnType<typeof getDrizzleClient>,
 ): Promise<number> {
@@ -542,7 +542,7 @@ export async function sendNotifToOrgMembers(
   c: Context,
   eventName: string,
   preferenceKey: EmailPreferenceKey,
-  eventData: Record<string, any>,
+  eventData: Record<string, unknown>,
   orgId: string,
   uniqId: string,
   cron: string,
@@ -614,7 +614,7 @@ export async function sendNotifToOrgMembersOnce(
   c: Context,
   eventName: string,
   preferenceKey: EmailPreferenceKey,
-  eventData: Record<string, any>,
+  eventData: Record<string, unknown>,
   orgId: string,
   uniqId: string,
   drizzleClient: ReturnType<typeof getDrizzleClient>,
@@ -653,7 +653,9 @@ export async function sendNotifToOrgMembersOnce(
         orgId,
         uniqId,
       })
-      return true
+      // false = not newly sent this call. Callers that mirror to PostHog/etc must
+      // not treat idempotent "already claimed" as a fresh delivery.
+      return false
     }
 
     const { recipients, resolutionFailed } = await getPreparedEligibleEmailTargets(c, orgId, preferenceKey, writeClient, audience)
@@ -775,7 +777,7 @@ export async function sendNotifToOrgMembersCached(
   c: Context,
   eventName: string,
   preferenceKey: EmailPreferenceKey,
-  eventData: Record<string, any>,
+  eventData: Record<string, unknown>,
   orgId: string,
   uniqId: string,
   cron: string,

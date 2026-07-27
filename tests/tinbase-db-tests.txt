@@ -10,9 +10,12 @@ tests/compatibility-events-handler.test.ts
 tests/deploy-scope.test.ts
 tests/device_comparison.test.ts
 tests/files-r2-error.test.ts
+tests/frontend-channel-rbac-scope.test.ts
+tests/overage-tracking.test.ts
 tests/pg-header-safety.test.ts
 tests/plugin-parser.test.ts
 tests/plugin-validation.test.ts
 tests/release-scope.test.ts
 tests/rollout.test.ts
 tests/stats-export-cors.test.ts
+tests/upsert-version-meta-rpc.test.ts

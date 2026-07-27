@@ -1,13 +1,14 @@
 import type Stripe from 'stripe'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
-import { type } from 'arktype'
+import { z } from 'zod'
 import { Hono } from 'hono/tiny'
-import { literalUnion, safeParseSchema } from '../utils/ark_validation.ts'
+import { safeParseSchema } from '../utils/schema_validation.ts'
+import { getAdminBuilderAnalytics } from '../utils/builder_analytics.ts'
 import { getAdminAppsTrend, getAdminBandwidthTrend, getAdminBundlesTrend, getAdminDistributionMetrics, getAdminFailureMetrics, getAdminMauTrend, getAdminOrgMetrics, getAdminPlatformOverview, getAdminStorageTrend, getAdminSuccessRate, getAdminSuccessRateTrend, getAdminUploadMetrics } from '../utils/cloudflare.ts'
-import { middlewareAuth, parseBody, simpleError, useCors } from '../utils/hono.ts'
+import { parseBody, simpleError, useCors } from '../utils/hono.ts'
+import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { getAdminCancelledOrganizations, getAdminCustomerCountryBreakdown, getAdminDeploymentsTrend, getAdminEmailTypeBreakdown, getAdminGlobalStatsTrend, getAdminOnboardingFunnel, getAdminOrganizationInsights, getAdminPluginBreakdown, getAdminTrialOrganizations, getAdminTrialPlanBreakdown } from '../utils/pg.ts'
-import { getAdminBuilderAnalytics } from '../utils/builder_analytics.ts'
 import { getCancellationDetails } from '../utils/stripe.ts'
 import { supabaseClient as useSupabaseClient } from '../utils/supabase.ts'
 
@@ -42,51 +43,33 @@ const metricCategories = [
   'builder_analytics',
 ] as const
 
-const isoUtcDatetimeSchema = type('string').narrow((value, ctx) => {
-  if (value.length === 0 || !ISO_UTC_DATETIME_REGEX.test(value)) {
-    return ctx.reject({
-      expected: INVALID_ADMIN_STATS_DATE,
-      actual: JSON.stringify(value),
-    })
-  }
+const isoUtcDatetimeSchema = z.string().refine(
+  value => value.length > 0 && ISO_UTC_DATETIME_REGEX.test(value),
+  { message: INVALID_ADMIN_STATS_DATE },
+)
 
-  return true
-})
+const limitSchema = z.number().int().min(1).refine(
+  value => value <= MAX_ADMIN_STATS_LIMIT,
+  { message: `a value <= ${MAX_ADMIN_STATS_LIMIT}` },
+)
 
-const limitSchema = type('number.integer >= 1').narrow((value, ctx) => {
-  if (value > MAX_ADMIN_STATS_LIMIT) {
-    return ctx.reject({
-      expected: `a value <= ${MAX_ADMIN_STATS_LIMIT}`,
-      actual: JSON.stringify(value),
-    })
-  }
+const offsetSchema = z.number().int().min(0).refine(
+  value => value <= MAX_ADMIN_STATS_OFFSET,
+  { message: `a value <= ${MAX_ADMIN_STATS_OFFSET}` },
+)
 
-  return true
-})
-
-const offsetSchema = type('number.integer >= 0').narrow((value, ctx) => {
-  if (value > MAX_ADMIN_STATS_OFFSET) {
-    return ctx.reject({
-      expected: `a value <= ${MAX_ADMIN_STATS_OFFSET}`,
-      actual: JSON.stringify(value),
-    })
-  }
-
-  return true
-})
-
-export const adminStatsBodySchema = type({
-  'metric_category': literalUnion(metricCategories),
-  'start_date': isoUtcDatetimeSchema,
-  'end_date': isoUtcDatetimeSchema,
-  'app_id?': 'string > 0',
-  'org_id?': 'string > 0',
-  'plan_name?': 'string <= 128',
-  'billing_type?': literalUnion(['monthly', 'yearly']),
-  'paid_only?': 'boolean',
-  'search?': 'string <= 128',
-  'limit?': limitSchema,
-  'offset?': offsetSchema,
+export const adminStatsBodySchema = z.object({
+  metric_category: z.enum(metricCategories),
+  start_date: isoUtcDatetimeSchema,
+  end_date: isoUtcDatetimeSchema,
+  app_id: z.string().min(1).optional(),
+  org_id: z.string().min(1).optional(),
+  plan_name: z.string().max(128).optional(),
+  billing_type: z.enum(['monthly', 'yearly']).optional(),
+  paid_only: z.boolean().optional(),
+  search: z.string().max(128).optional(),
+  limit: limitSchema.optional(),
+  offset: offsetSchema.optional(),
 })
 
 interface AdminStatsBody {

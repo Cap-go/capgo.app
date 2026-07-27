@@ -19,6 +19,13 @@ export default defineConfig(({ mode }) => ({
       'tests/rbac-permissions.test.ts',
       'tests/private-role-bindings.test.ts',
       'tests/public-rest-unfiltered-rls.test.ts',
+      // Raw Postgres / queue / auth-trigger suites do not need workerd; keep them on
+      // backend so Cloudflare shards stay light enough for concurrency.
+      'tests/cleanup_swap_memory.test.ts',
+      'tests/hashed-apikey-rls.test.ts',
+      'tests/mfa-email-otp-trigger.test.ts',
+      'tests/queue_big_job_archive.test.ts',
+      'tests/queue_cron_stat_org_function.test.ts',
     ],
     environment: 'node',
     watch: false,

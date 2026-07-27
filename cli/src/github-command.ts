@@ -1,7 +1,7 @@
 import process, { exit, stdout } from 'node:process'
 import { intro, log, outro, spinner as spinnerC } from '@clack/prompts'
 import { trackEvent } from './analytics/track'
-import { defaultStarRepo, starAllRepositories, StarAllRepositoriesAbortedError, starRepository } from './github'
+import { starAllRepositories, StarAllRepositoriesAbortedError, starRepository } from './github'
 import { formatError } from './utils'
 
 export function starRepositoryCommand(repository?: string) {
@@ -155,4 +155,3 @@ export async function starAllRepositoriesCommand(repositories: string[], options
   }
 }
 
-export { defaultStarRepo }

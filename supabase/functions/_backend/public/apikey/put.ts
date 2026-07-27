@@ -14,6 +14,7 @@ import { checkPermission, checkPermissionPg } from '../../utils/rbac.ts'
 import { supabaseAdmin, supabaseWithAuth, validateExpirationAgainstOrgPolicies, validateExpirationDate } from '../../utils/supabase.ts'
 import { apiKeyBindingsAllowOrgCreate, assertApiKeyCanKeepOrgCreateGrant, parseApiKeyGlobalPermissions, replaceApiKeyGlobalPermissions, validateApiKeyGlobalPermissionsForBindings } from './global_permissions.ts'
 import { assertApiKeyManagerCanAssignBindings, ensureApiKeyCanManageTargetOrgIds, ensureApiKeyManagementAllowed, getApiKeyBindingOrgIds, isValidApiKeyIdFormat, requireApiKeyManagementAuth, sanitizeClientBindings, selectOwnedApiKeyByIdentifier } from './scope.ts'
+import { getErrorCode, getErrorStatus } from '../../utils/errors.ts'
 
 const app = honoFactory.createApp()
 type ApiKeyRow = Database['public']['Tables']['apikeys']['Row']
@@ -178,11 +179,11 @@ async function replaceApiKeyBindings(
       bindingsCount: bindings.length,
     })
   }
-  catch (error: any) {
-    if (error?.status) {
+  catch (error: unknown) {
+    if (getErrorStatus(error)) {
       throw error
     }
-    if (error?.code === '23505') {
+    if (getErrorCode(error) === '23505') {
       throw quickError(409, 'duplicate_binding', 'API key already has a role in this family at this scope', { requestId: c.get('requestId'), apikeyId: apikey.id }, error)
     }
     cloudlogErr({
@@ -255,8 +256,8 @@ async function replaceApiKeyGlobalPermissionsForExistingBindings(
       permissionsCount: globalPermissions.length,
     })
   }
-  catch (error: any) {
-    if (error?.status) {
+  catch (error: unknown) {
+    if (getErrorStatus(error)) {
       throw error
     }
     cloudlogErr({

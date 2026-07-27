@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { env } from 'node:process'
-import { type } from 'arktype'
+import { z } from 'zod'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
-import { parseSchema } from '../supabase/functions/_backend/utils/ark_validation.ts'
+import { parseSchema } from '../supabase/functions/_backend/utils/schema_validation.ts'
 
 import { APP_NAME, createAppVersions, getBaseData, getEndpointUrl, getSupabaseClient, getVersionFromAction, headers, ORG_ID, postUpdate, resetAndSeedAppData, resetAppData, resetAppDataStats, USER_ID } from './test-utils.ts'
 
@@ -22,9 +22,9 @@ interface UpdateRes {
   major?: boolean
 }
 
-const updateNewScheme = type({
-  url: 'string',
-  version: 'string',
+const updateNewScheme = z.object({
+  url: z.string(),
+  version: z.string(),
 })
 
 async function updateChannel(

@@ -1,8 +1,27 @@
 import { z } from 'zod'
 
 // ============================================================================
-// Shared Regex Validators
+// Shared Validation Helpers
 // ============================================================================
+
+export function rejectConflictingBooleanGroup(
+  data: Record<string, unknown>,
+  ctx: z.RefinementCtx,
+  keys: string[],
+): void {
+  const selected = keys.filter(key => data[key] === true)
+  if (selected.length < 2)
+    return
+
+  const first = String(selected[0])
+  for (const key of selected.slice(1)) {
+    ctx.addIssue({
+      code: 'custom',
+      message: `not used together with "${first}"`,
+      path: [key],
+    })
+  }
+}
 
 // ============================================================================
 // Native Package Schema
@@ -50,15 +69,11 @@ export type Compatibility = z.infer<typeof compatibilitySchema>
 
 export const compatibilityDetailsSchema = z.object({
   compatible: z.boolean(),
-  reasons: z.array(incompatibilityReasonSchema),
+  reasons: incompatibilityReasonSchema.array(),
   message: z.string(),
 })
 
 export type CompatibilityDetails = z.infer<typeof compatibilityDetailsSchema>
-
-// ============================================================================
-// Upload URLs Schema
-// ============================================================================
 
 // ============================================================================
 // Security Policy Error Schema
@@ -71,3 +86,33 @@ export const parsedSecurityErrorSchema = z.object({
 })
 
 export type ParsedSecurityError = z.infer<typeof parsedSecurityErrorSchema>
+
+// ============================================================================
+// Localized Store Release Notes
+// ============================================================================
+
+export const localizedReleaseNotesSchema = z.record(z.string(), z.string()).transform((data, ctx) => {
+  if (data === null || typeof data !== 'object' || Array.isArray(data) || Object.getPrototypeOf(data) !== Object.prototype) {
+    ctx.addIssue({ code: 'custom', message: 'a plain object of locale keys to release notes' })
+    return z.NEVER
+  }
+  const out = Object.create(null) as Record<string, string>
+  for (const [rawKey, rawValue] of Object.entries(data)) {
+    const key = rawKey.trim()
+    const value = rawValue.trim()
+    if (!key) {
+      ctx.addIssue({ code: 'custom', message: 'a non-empty locale key' })
+      return z.NEVER
+    }
+    if (!value) {
+      ctx.addIssue({ code: 'custom', message: 'a non-empty release note' })
+      return z.NEVER
+    }
+    if (Object.prototype.hasOwnProperty.call(out, key)) {
+      ctx.addIssue({ code: 'custom', message: `a unique locale key (duplicate after trim: "${key}")` })
+      return z.NEVER
+    }
+    out[key] = value
+  }
+  return out
+})

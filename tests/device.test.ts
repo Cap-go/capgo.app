@@ -67,6 +67,136 @@ describe.concurrent('[GET] /device operations', () => {
   })
 })
 
+
+describe('[GET] /device updated_at filter and order', () => {
+  it('filters devices by updated_at greater than ISO date', async () => {
+    const supabase = getSupabaseClient()
+    const pastDeviceId = randomUUID().toLowerCase()
+    const futureDeviceId = randomUUID().toLowerCase()
+    const cutoff = new Date('2026-01-01T00:00:00.000Z')
+
+    const { error: insertError } = await supabase.from('devices').upsert([
+      {
+        app_id: APPNAME_DEVICE,
+        device_id: pastDeviceId,
+        platform: 'ios',
+        plugin_version: '6.0.0',
+        os_version: '17.0',
+        version_build: '1.0.0',
+        version_name: '1.0.0',
+        is_prod: true,
+        is_emulator: false,
+        updated_at: '2025-06-01T00:00:00.000Z',
+      },
+      {
+        app_id: APPNAME_DEVICE,
+        device_id: futureDeviceId,
+        platform: 'android',
+        plugin_version: '6.0.0',
+        os_version: '14',
+        version_build: '1.0.0',
+        version_name: '1.0.0',
+        is_prod: true,
+        is_emulator: false,
+        updated_at: '2026-06-01T00:00:00.000Z',
+      },
+    ])
+    expect(insertError).toBeNull()
+
+    const params = new URLSearchParams({
+      app_id: APPNAME_DEVICE,
+      updated_at: cutoff.toISOString(),
+    })
+    const response = await fetch(`${BASE_URL}/device?${params.toString()}`, {
+      method: 'GET',
+      headers,
+    })
+    const data = await response.json<{ data: { device_id: string, updated_at: string }[], error?: string }>()
+    expect(response.status).toBe(200)
+    expect(data.error).toBeUndefined()
+    expect(data.data.some(device => device.device_id === futureDeviceId)).toBe(true)
+    expect(data.data.some(device => device.device_id === pastDeviceId)).toBe(false)
+    expect(data.data.every(device => new Date(device.updated_at).getTime() > cutoff.getTime())).toBe(true)
+  })
+
+  it('sorts devices by updated_at desc', async () => {
+    const params = new URLSearchParams({
+      app_id: APPNAME_DEVICE,
+      order: 'desc',
+    })
+    const response = await fetch(`${BASE_URL}/device?${params.toString()}`, {
+      method: 'GET',
+      headers,
+    })
+    const data = await response.json<{ data: { updated_at: string }[], error?: string }>()
+    expect(response.status).toBe(200)
+    expect(data.error).toBeUndefined()
+    expect(data.data.length).toBeGreaterThan(1)
+    for (let i = 1; i < data.data.length; i++) {
+      expect(new Date(data.data[i - 1].updated_at).getTime()).toBeGreaterThanOrEqual(new Date(data.data[i].updated_at).getTime())
+    }
+  })
+
+  it('rejects invalid updated_at filter', async () => {
+    const params = new URLSearchParams({
+      app_id: APPNAME_DEVICE,
+      updated_at: 'not-a-date',
+    })
+    const response = await fetch(`${BASE_URL}/device?${params.toString()}`, {
+      method: 'GET',
+      headers,
+    })
+    const data = await response.json<{ error?: string }>()
+    expect(response.status).toBe(400)
+    expect(data.error).toBe('invalid_updated_at')
+  })
+
+  it('rejects non-calendar ISO updated_at values', async () => {
+    const params = new URLSearchParams({
+      app_id: APPNAME_DEVICE,
+      updated_at: '2024-02-31T00:00:00.000Z',
+    })
+    const response = await fetch(`${BASE_URL}/device?${params.toString()}`, {
+      method: 'GET',
+      headers,
+    })
+    const data = await response.json<{ error?: string }>()
+    expect(response.status).toBe(400)
+    expect(data.error).toBe('invalid_updated_at')
+  })
+
+  it('rejects invalid order', async () => {
+    const params = new URLSearchParams({
+      app_id: APPNAME_DEVICE,
+      order: 'sideways',
+    })
+    const response = await fetch(`${BASE_URL}/device?${params.toString()}`, {
+      method: 'GET',
+      headers,
+    })
+    const data = await response.json<{ error?: string }>()
+    expect(response.status).toBe(400)
+    expect(data.error).toBe('invalid_order')
+  })
+
+  it('ignores list-only params when fetching a specific device', async () => {
+    const params = new URLSearchParams({
+      app_id: APPNAME_DEVICE,
+      device_id: '00000000-0000-0000-0000-000000000000',
+      order: 'sideways',
+      updated_at: 'not-a-date',
+      limit: '1.5',
+    })
+    const response = await fetch(`${BASE_URL}/device?${params.toString()}`, {
+      method: 'GET',
+      headers,
+    })
+    const data = await response.json<{ device_id?: string, error?: string }>()
+    expect(response.status).toBe(200)
+    expect(data.device_id).toBe('00000000-0000-0000-0000-000000000000')
+  })
+})
+
 describe('[POST] /device operations', () => {
   it('link device', async () => {
     const deviceId = randomUUID().toLowerCase()

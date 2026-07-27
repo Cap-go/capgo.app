@@ -28,6 +28,7 @@ import { findMonorepoRoot, findNXMonorepoRoot, isMonorepo, isNXMonorepo } from '
 import { getChecksum } from './checksum'
 import { loadConfig, loadConfigForWrite, writeConfig } from './config'
 import { isTruthyEnvValue } from './posthog'
+import { safeParseSchema } from './schemas/schema_validation'
 import { nativePackageSchema } from './schemas/common'
 import { formatApiErrorForCli, parseSecurityPolicyError } from './utils/security_policy_errors'
 
@@ -51,6 +52,22 @@ export const ALERT_UPLOAD_SIZE_BYTES = 1024 * 1024 * 20 // 20MB
 export const MAX_UPLOAD_LENGTH_BYTES = 1024 * 1024 * 1024 // 1GB
 export const MAX_CHUNK_SIZE_BYTES = 1024 * 1024 * 99 // 99MB
 export const TUS_UPLOAD_RETRY_DELAYS = [0, 1000, 3000, 5000, 10000]
+// Keep in sync with supabase/functions/_backend/private/set_manifest.ts
+export const MAX_MANIFEST_ENTRIES = 10_000
+
+/** User-facing error when a delta/manifest upload exceeds MAX_MANIFEST_ENTRIES. */
+export function deltaManifestTooLargeMessage(fileCount: number): string {
+  const max = MAX_MANIFEST_ENTRIES.toLocaleString('en-US')
+  const count = fileCount.toLocaleString('en-US')
+  return [
+    `Delta updates cannot upload this bundle: it has ${count} files, and Capgo allows at most ${max} files per delta (manifest) upload.`,
+    'Delta mode tracks and uploads each file individually so devices can download only what changed. Very large file counts are not supported on that path.',
+    'What you can do:',
+    `1. Upload a full zip instead: npx @capgo/cli@latest bundle upload --no-delta`,
+    '2. Or reduce files in your web build output (remove unused assets, avoid copying large trees into dist).',
+    'See https://capgo.app/docs/faq/#are-there-delta-update-file-path-limitations',
+  ].join('\n')
+}
 
 export const PACKNAME = 'package.json'
 
@@ -201,8 +218,6 @@ interface TrackOptions {
    */
   timestamp?: number | Date
 }
-
-export type { OptionsBase } from './schemas/base'
 
 export function wait(ms: number) {
   return new Promise((resolve) => {
@@ -721,6 +736,40 @@ export function normalizeSupabaseHost(host: string): string {
 
   const normalizedPath = parsed.pathname.replace(/\/+$/, '')
   return `${parsed.origin}${normalizedPath}`
+}
+
+export function formatCapgoApiErrorBody(body: unknown): string {
+  if (!body || typeof body !== 'object')
+    return ''
+  const record = body as { error?: string, message?: string, status?: string }
+  return [record.error, record.message, record.status].filter(Boolean).join(' | ')
+}
+
+/** Resolve Capgo public API base URL for CLI mutations (app create/update, etc.). */
+export function resolveConfiguredCapgoPublicApiHost(config: {
+  hostApi: string
+  supaHost?: string
+  supaKey?: string
+}): string {
+  if (config.supaHost && config.supaKey && config.hostApi === defaultApiHost)
+    return `${normalizeSupabaseHost(config.supaHost)}/functions/v1`
+
+  return config.hostApi
+}
+
+export async function resolveCapgoPublicApiHost(
+  options?: { supaHost?: string, supaAnon?: string },
+  silent = true,
+): Promise<string> {
+  if (options?.supaHost && options?.supaAnon)
+    return `${normalizeSupabaseHost(options.supaHost)}/functions/v1`
+
+  const localConfig = await getLocalConfig(silent)
+  if (localConfig.supaHost && localConfig.supaKey)
+    return resolveConfiguredCapgoPublicApiHost(localConfig)
+
+  const config = await getRemoteConfig(silent)
+  return config.hostApi
 }
 
 export async function createSupabaseClient(apikey: string, supaHost?: string, supaKey?: string, silent = false, instrument = true, signal?: AbortSignal) {
@@ -1442,31 +1491,48 @@ export async function deletedFailedVersion(supabase: SupabaseClient<Database>, a
     app_id: appId,
     name,
   }
-  try {
-    const pathFailed = 'private/delete_failed_version'
-    const res = await supabase.functions.invoke(pathFailed, { body: JSON.stringify(data), method: 'DELETE' })
+  const pathFailed = 'private/delete_failed_version'
+  const res = await supabase.functions.invoke(pathFailed, { body: JSON.stringify(data), method: 'DELETE' })
 
-    if (res.error) {
-      if (res.error instanceof FunctionsHttpError) {
-        const errorBody = await res.error.context.json()
-        log.error(`Cannot delete failed version: ${errorBody.status || JSON.stringify(errorBody)}`)
-      }
-      else {
-        log.error(`Cannot delete failed version: ${res.error.message}`)
-      }
-      return
+  if (res.error) {
+    if (res.error instanceof FunctionsHttpError) {
+      const errorBody = await res.error.context.json().catch(() => ({}))
+      throw new Error(errorBody.status || errorBody.message || JSON.stringify(errorBody))
     }
-
-    return res.data?.status
+    throw new Error(res.error.message)
   }
-  catch (error) {
-    if (error instanceof FunctionsHttpError) {
-      const errorBody = await error.context.json()
-      log.error(`Cannot delete failed version: ${errorBody.message || JSON.stringify(errorBody)}`)
+}
+
+export interface VersionManifestEntry {
+  file_name: string
+  s3_path: string
+  file_hash: string
+}
+
+/**
+ * Writes delta manifest rows through the backend (file_size stays 0 until R2 size lookup).
+ * Prefer this over writing app_versions.manifest jsonb — old CLIs still use that legacy path.
+ */
+export async function setVersionManifest(
+  supabase: SupabaseClient<Database>,
+  appId: string,
+  name: string,
+  manifest: VersionManifestEntry[],
+): Promise<void> {
+  const data = {
+    app_id: appId,
+    name,
+    manifest,
+  }
+  const pathSetManifest = 'private/set_manifest'
+  const res = await supabase.functions.invoke(pathSetManifest, { body: JSON.stringify(data) })
+
+  if (res.error) {
+    if (res.error instanceof FunctionsHttpError) {
+      const errorBody = await res.error.context.json().catch(() => ({}))
+      throw new Error(errorBody.error || errorBody.status || errorBody.message || JSON.stringify(errorBody))
     }
-    else {
-      log.error(`Cannot delete failed version: ${formatError(error)}`)
-    }
+    throw new Error(res.error.message)
   }
 }
 
@@ -2084,9 +2150,9 @@ export function convertNativePackages(nativePackages: NativePackage[]): Map<stri
 
   // Validate each package using Zod schema
   for (const data of nativePackages) {
-    const result = nativePackageSchema.safeParse(data)
+    const result = safeParseSchema(nativePackageSchema, data)
     if (!result.success) {
-      const errorMsg = result.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join(', ')
+      const errorMsg = result.error.issues.map(i => `${(i.path ?? []).join('.')}: ${i.message}`).join(', ')
       log.error(`Invalid remote native package data: ${errorMsg}`)
       throw new Error(`Invalid remote native package data: ${errorMsg}`)
     }
@@ -2115,7 +2181,7 @@ export async function getRemoteDependencies(supabase: SupabaseClient<Database>, 
   return convertNativePackages(((remoteNativePackages.version as any)?.native_packages as any) ?? [])
 }
 
-export type { Compatibility, CompatibilityDetails, IncompatibilityReason } from './schemas/common'
+export type { Compatibility, CompatibilityDetails } from './schemas/common'
 
 export function getAppId(appId: string | undefined, config: CapacitorConfig | undefined) {
   const finalAppId = appId || config?.plugins?.CapacitorUpdater?.appId || config?.appId

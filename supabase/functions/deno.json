@@ -3,7 +3,7 @@
     "@cloudflare/workers-types": "npm:@cloudflare/workers-types@4.20260526.1",
     "@hono/standard-validator": "npm:@hono/standard-validator@^0.2.2",
     "@standard-schema/spec": "npm:@standard-schema/spec@^1.1.0",
-    "arktype": "npm:arktype@^2.2.0",
+    "zod": "npm:zod@^4.4.3",
     "hono": "npm:hono@4.12.23",
     "hono/": "npm:/hono@4.12.23/",
     "stripe": "npm:stripe@22.1.1",

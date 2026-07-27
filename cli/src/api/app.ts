@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Database } from '../types/supabase.types'
 import { log } from '@clack/prompts'
-import { getPMAndCommand, hasCliPermission, show2FADeniedError } from '../utils'
+import { formatCapgoApiErrorBody, getPMAndCommand, hasCliPermission, resolveCapgoPublicApiHost, show2FADeniedError } from '../utils'
 
 export async function checkAppExists(supabase: SupabaseClient<Database>, appid: string) {
   const { data: app } = await supabase
@@ -98,23 +98,34 @@ export async function findAppInOrganization(
 }
 
 export async function completePendingOnboardingApp(
-  supabase: SupabaseClient<Database>,
+  _supabase: SupabaseClient<Database>,
   orgId: string,
   appId: string,
+  apikey: string,
+  options?: { supaHost?: string, supaAnon?: string },
 ): Promise<void> {
-  const { data, error } = await supabase
-    .from('apps')
-    .update({ need_onboarding: false })
-    .select('app_id')
-    .eq('owner_org', orgId)
-    .eq('app_id', appId)
-    .eq('need_onboarding', true)
+  // Prefer Capgo API host (or self-hosted /functions/v1) with the API key so
+  // org.create_app keys can finish pending onboarding without app.update_settings.
+  const apiHost = await resolveCapgoPublicApiHost(options)
+  const response = await fetch(`${apiHost}/app/${encodeURIComponent(appId)}`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': apikey,
+      'capgkey': apikey,
+    },
+    body: JSON.stringify({
+      need_onboarding: false,
+    }),
+  })
 
-  if (error) {
-    throw new Error(`Could not complete onboarding for app ${appId}: ${error.message}`)
+  const data = await response.json().catch(() => null)
+  if (!response.ok) {
+    const details = formatCapgoApiErrorBody(data) || `HTTP ${response.status}`
+    throw new Error(`Could not complete onboarding for app ${appId}: ${details}`)
   }
 
-  if (!data?.length) {
+  if (!(data as { app_id?: string } | null)?.app_id) {
     throw new Error(`Could not complete onboarding for app ${appId} in org ${orgId}: app was not found or is no longer pending onboarding`)
   }
 }

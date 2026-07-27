@@ -1,8 +1,8 @@
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Order } from '../utils/types.ts'
-import { type } from 'arktype'
+import { z } from 'zod'
 import { Hono } from 'hono/tiny'
-import { literalUnion, safeParseSchema } from '../utils/ark_validation.ts'
+import { safeParseSchema } from '../utils/schema_validation.ts'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
 import { cloudlog } from '../utils/logging.ts'
@@ -27,23 +27,23 @@ interface DataDevice {
   limit?: number
 }
 
-const orderItemSchema = type({
-  'key': 'string <= 64',
-  'sortable?': literalUnion(['asc', 'desc']),
+const orderItemSchema = z.object({
+  key: z.string().max(64),
+  sortable: z.enum(['asc', 'desc']).optional(),
 })
-const devicesBodySchema = type({
-  'appId': appIdSchema,
-  'count?': 'boolean',
-  'installSourceCounts?': 'boolean',
-  'versionName?': safeQueryTextSchema,
-  'devicesId?': deviceIdSchema.array(),
-  'deviceIds?': deviceIdSchema.array(),
-  'installSources?': safeQueryTextSchema.array(),
-  'search?': safeQueryTextSchema,
-  'customIdMode?': 'boolean',
-  'order?': orderItemSchema.array(),
-  'cursor?': cursorSchema,
-  'limit?': queryLimitSchema,
+const devicesBodySchema = z.object({
+  appId: appIdSchema,
+  count: z.boolean().optional(),
+  installSourceCounts: z.boolean().optional(),
+  versionName: safeQueryTextSchema.optional(),
+  devicesId: z.array(deviceIdSchema).optional(),
+  deviceIds: z.array(deviceIdSchema).optional(),
+  installSources: z.array(safeQueryTextSchema).optional(),
+  search: safeQueryTextSchema.optional(),
+  customIdMode: z.boolean().optional(),
+  order: z.array(orderItemSchema).optional(),
+  cursor: cursorSchema.optional(),
+  limit: queryLimitSchema.optional(),
 })
 
 export const app = new Hono<MiddlewareKeyVariables>()

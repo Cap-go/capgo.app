@@ -138,12 +138,15 @@ await test('runStart re-prompts after a previous resume decision', async () => {
 })
 
 const { buildDeps, registerLiveUpdateTools, resolveLiveUpdateProjectTarget } = await import('../src/init/mcp/live-update-tools.ts')
+const { liveUpdateNextStepSchema, liveUpdateStartSchema, liveUpdateExplainInputSchema } = await import('../src/schemas/live-update-onboarding.ts')
+const { safeParseSchema } = await import('../src/schemas/schema_validation.ts')
 
 function fakeServer() {
   const tools = {}
   return {
     tools,
-    tool(name, _desc, schema, handler) { tools[name] = { schema, handler } },
+    registerTool(name, config, handler) { tools[name] = { inputSchema: config.inputSchema, handler } },
+    registerPrompt() {},
   }
 }
 
@@ -151,14 +154,13 @@ await test('registerLiveUpdateTools registers spine + explain', async () => {
   const server = fakeServer()
   registerLiveUpdateTools(server, null, fakeDeps())
   ok(server.tools.start_capgo_live_update_onboarding)
-  ok(server.tools.start_capgo_live_update_onboarding.schema.capacitorConfig)
+  ok(server.tools.start_capgo_live_update_onboarding.inputSchema)
   ok(server.tools.capgo_live_update_onboarding_next_step)
   ok(server.tools.capgo_live_update_onboarding_explain)
-  ok(server.tools.capgo_live_update_onboarding_next_step.schema.capacitorConfig)
-  ok(server.tools.capgo_live_update_onboarding_explain.schema.capacitorConfig)
-  const explainConfigSchema = server.tools.capgo_live_update_onboarding_explain.schema.capacitorConfig
-  eq(explainConfigSchema.safeParse('').success, false)
-  eq(explainConfigSchema.safeParse('./env-configs/capacitor.config.qr-code-reader.ts').success, true)
+  ok(server.tools.capgo_live_update_onboarding_next_step.inputSchema)
+  ok(server.tools.capgo_live_update_onboarding_explain.inputSchema)
+  eq(safeParseSchema(liveUpdateExplainInputSchema, { capacitorConfig: '' }).success, false)
+  eq(safeParseSchema(liveUpdateExplainInputSchema, { capacitorConfig: './env-configs/capacitor.config.qr-code-reader.ts' }).success, true)
 })
 
 await test('registerLiveUpdateTools: start returns rendered text', async () => {
@@ -169,12 +171,11 @@ await test('registerLiveUpdateTools: start returns rendered text', async () => {
 })
 
 const { getConfigWriteTarget, setConfigWriteTarget, withConfigWriteTarget } = await import('../src/config/index.ts')
-const { liveUpdateNextStepSchema, liveUpdateStartSchema } = await import('../src/schemas/live-update-onboarding.ts')
 await test('live-update onboarding validates Capacitor config target input', async () => {
-  eq(liveUpdateStartSchema.safeParse({ capacitorConfig: '' }).success, false)
-  eq(liveUpdateNextStepSchema.safeParse({ capacitorConfig: '' }).success, false)
-  eq(liveUpdateNextStepSchema.safeParse({ capacitorConfig: './env-configs/capacitor.config.qr-code-reader.ts' }).success, true)
-  eq(liveUpdateStartSchema.safeParse({}).success, true)
+  eq(safeParseSchema(liveUpdateStartSchema, { capacitorConfig: '' }).success, false)
+  eq(safeParseSchema(liveUpdateNextStepSchema, { capacitorConfig: '' }).success, false)
+  eq(safeParseSchema(liveUpdateNextStepSchema, { capacitorConfig: './env-configs/capacitor.config.qr-code-reader.ts' }).success, true)
+  eq(safeParseSchema(liveUpdateStartSchema, {}).success, true)
 })
 
 await test('MCP monorepo targets keep project work scoped to the selected app', async () => {
@@ -222,8 +223,8 @@ await test('MCP monorepo targets keep project work scoped to the selected app', 
       invalidMainError = error
     }
     ok(String(invalidMainError).includes('JavaScript or TypeScript'))
-    eq(liveUpdateStartSchema.safeParse({ packageJson: './projects/reader/package.json', mainFile: './projects/reader/src/main.ts' }).success, true)
-    eq(liveUpdateNextStepSchema.safeParse({ packageJson: './projects/reader/package.json', mainFile: './projects/reader/src/main.ts' }).success, true)
+    eq(safeParseSchema(liveUpdateStartSchema, { packageJson: './projects/reader/package.json', mainFile: './projects/reader/src/main.ts' }).success, true)
+    eq(safeParseSchema(liveUpdateNextStepSchema, { packageJson: './projects/reader/package.json', mainFile: './projects/reader/src/main.ts' }).success, true)
 
     process.chdir(root)
     setConfigWriteTarget(undefined)

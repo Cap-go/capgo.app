@@ -2054,6 +2054,20 @@
     },
     {
       "constraintOwned": false,
+      "definition": "CREATE INDEX idx_app_versions_deleted_at_id ON public.app_versions USING btree (deleted_at, id) WHERE (deleted = true)",
+      "name": "idx_app_versions_deleted_at_id",
+      "table": "app_versions",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX idx_app_versions_deleted_with_manifest ON public.app_versions USING btree (id) WHERE ((deleted = true) AND (manifest_count > 0))",
+      "name": "idx_app_versions_deleted_with_manifest",
+      "table": "app_versions",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
       "definition": "CREATE INDEX idx_app_versions_id ON public.app_versions USING btree (id)",
       "name": "idx_app_versions_id",
       "table": "app_versions",

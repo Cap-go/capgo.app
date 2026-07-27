@@ -653,7 +653,7 @@ export function convertNativePackages(nativePackages: { name: string, version: s
   }
 
   // Check types
-  nativePackages.forEach((data: any) => {
+  nativePackages.forEach((data) => {
     if (typeof data !== 'object') {
       throw new TypeError(`Invalid remote native package data: ${data}, expected object, got ${typeof data}`)
     }
@@ -687,7 +687,11 @@ export async function getRemoteDependencies(appId: string, channel: string) {
   if (error) {
     throw new Error(error.message)
   }
-  return convertNativePackages(((remoteNativePackages.version as any)?.native_packages as any) ?? [])
+  const version = remoteNativePackages.version as { native_packages?: unknown } | null
+  const nativePackages = version?.native_packages
+  if (!Array.isArray(nativePackages))
+    throw new Error('Error parsing native packages, perhaps the metadata does not exist in Capgo?')
+  return convertNativePackages(nativePackages as { name: string, version: string }[])
 }
 
 interface Compatibility {

@@ -1,6 +1,7 @@
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
-import { middlewareAuth, parseBody, simpleError, useCors } from '../utils/hono.ts'
+import { parseBody, simpleError, useCors } from '../utils/hono.ts'
+import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { createCheckout } from '../utils/stripe.ts'
@@ -14,6 +15,7 @@ interface CheckoutData {
   attributionId?: string
   datafastVisitorId?: string
   datafastSessionId?: string
+  affonsoReferral?: string
   successUrl: string
   cancelUrl: string
   orgId: string
@@ -60,6 +62,6 @@ app.post('/', middlewareAuth, async (c) => {
   const checkout = await createCheckout(c, org.customer_id, body.recurrence ?? 'month', body.priceId ?? 'price_1KkINoGH46eYKnWwwEi97h1B', body.successUrl ?? `${getEnv(c, 'WEBAPP_URL')}/app/usage`, body.cancelUrl ?? `${getEnv(c, 'WEBAPP_URL')}/app/usage`, body.clientReferenceId, body.attributionId, {
     visitorId: body.datafastVisitorId,
     sessionId: body.datafastSessionId,
-  })
+  }, body.affonsoReferral)
   return c.json({ url: checkout.url })
 })

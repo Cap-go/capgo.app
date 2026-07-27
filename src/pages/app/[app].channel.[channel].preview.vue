@@ -29,10 +29,12 @@ const browserPreviewUnavailableReason = computed<'missing-manifest' | 'encrypted
   const currentVersion = channel.value?.version
   if (!currentVersion)
     return null
-  if (!currentVersion.manifest_count)
-    return 'missing-manifest'
+  // Encryption blocks all Capgo preview paths; check it before missing-manifest so
+  // promotion QR layout does not treat encrypted+no-manifest as QR-eligible.
   if (currentVersion.session_key)
     return 'encrypted'
+  if (!currentVersion.manifest_count)
+    return 'missing-manifest'
   return null
 })
 const browserPreviewAvailable = computed(() => {
@@ -41,7 +43,16 @@ const browserPreviewAvailable = computed(() => {
 })
 const promotionQrLayout = computed(() => route.query.appStoreQr === '1')
 const frameBrowserPreview = computed(() => !promotionQrLayout.value && browserPreviewAvailable.value)
-const frameBrowserPreviewUnavailableReason = computed(() => promotionQrLayout.value ? null : browserPreviewUnavailableReason.value)
+// Promotion QR layout hides browser iframe and can still use native QR when only
+// the manifest is missing. Encrypted bundles must keep the unavailable reason so
+// QR/start stay disabled (Capgo Preview cannot decrypt customer keys).
+const frameBrowserPreviewUnavailableReason = computed(() => {
+  if (!promotionQrLayout.value)
+    return browserPreviewUnavailableReason.value
+  return browserPreviewUnavailableReason.value === 'encrypted'
+    ? 'encrypted'
+    : null
+})
 
 async function getChannel() {
   if (!id.value)

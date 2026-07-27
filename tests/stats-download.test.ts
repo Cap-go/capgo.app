@@ -2,7 +2,7 @@ import type { Database } from '../src/types/supabase.types.ts'
 import { randomUUID } from 'node:crypto'
 import { env } from 'node:process'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { ALLOWED_STATS_ACTIONS } from '../supabase/functions/_backend/plugins/stats_actions.ts'
+import { ALLOWED_STATS_ACTIONS } from '../supabase/functions/_backend/plugin_runtime/plugins/stats_actions.ts'
 import { createAppVersions, fetchTestRequest, getBaseData, getSupabaseClient, getVersionFromAction, headers, PLUGIN_BASE_URL, resetAndSeedAppData, resetAndSeedAppDataStats, resetAppData, resetAppDataStats } from './test-utils.ts'
 
 const id = randomUUID().substring(0, 8)

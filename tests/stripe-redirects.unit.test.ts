@@ -138,6 +138,7 @@ describe('stripe redirect URL allowlist', () => {
         visitorId: 'visitor_123',
         sessionId: 'session_123',
       },
+      'affonso_ref_123',
     )
 
     expect(result.url).toBe('https://pay.capgo.test/p/pay')
@@ -150,6 +151,7 @@ describe('stripe redirect URL allowlist', () => {
         attribution_id: 'legacy_visitor_123',
         datafast_visitor_id: 'visitor_123',
         datafast_session_id: 'session_123',
+        affonso_referral: 'affonso_ref_123',
       },
     }))
   })
@@ -320,6 +322,7 @@ describe('stripe redirect URL allowlist', () => {
         visitorId: 'visitor_456',
         sessionId: 'session_456',
       },
+      'affonso_ref_456',
     )
 
     expect(createSession).toHaveBeenCalledWith(expect.objectContaining({
@@ -331,6 +334,7 @@ describe('stripe redirect URL allowlist', () => {
       metadata: expect.objectContaining({
         datafast_visitor_id: 'visitor_456',
         datafast_session_id: 'session_456',
+        affonso_referral: 'affonso_ref_456',
         intendedQuantity: '5',
         orgId: 'org_123',
       }),

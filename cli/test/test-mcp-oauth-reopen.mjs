@@ -14,6 +14,7 @@ import process from 'node:process'
 console.log('🧪 Testing MCP Google sign-in reopen recovery...\n')
 
 const { decideAndroid, runAdvance } = await import('../src/build/onboarding/mcp/engine.ts')
+const { parseSchema } = await import('../src/schemas/schema_validation.ts')
 const { onboardingNextStepSchema } = await import('../src/schemas/onboarding.ts')
 
 let pass = 0
@@ -70,7 +71,7 @@ function googleSignInWorld() {
 }
 
 await test('schema keeps reopenSignIn (not stripped by the MCP SDK)', async () => {
-  eq(onboardingNextStepSchema.parse({ reopenSignIn: true }).reopenSignIn, true, 'reopenSignIn must survive zod parse')
+  eq(parseSchema(onboardingNextStepSchema, { reopenSignIn: true }).reopenSignIn, true, 'reopenSignIn must survive schema parse')
 })
 
 await test('decideAndroid: reopen clears the stale session and begins a fresh OAuth flow', async () => {

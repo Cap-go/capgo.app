@@ -9,7 +9,11 @@
     "outDir": "dist",
     "skipLibCheck": true,
     "esModuleInterop": true,
-    "lib": ["ES2022", "DOM"]
+    "lib": [
+      "ES2022",
+      "DOM"
+    ],
+    "rootDir": "src"
   },
   "include": [
     "src/**/*.ts"

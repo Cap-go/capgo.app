@@ -1,8 +1,9 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
-import { type } from 'arktype'
-import { literalUnion, safeParseSchema } from '../../utils/ark_validation.ts'
-import { BRES, createHono, middlewareAuth, parseBody, quickError, simpleError, useCors } from '../../utils/hono.ts'
+import { z } from 'zod'
+import { safeParseSchema } from '../../utils/schema_validation.ts'
+import { BRES, createHono, parseBody, quickError, simpleError, useCors } from '../../utils/hono.ts'
+import { middlewareAuth } from '../../utils/hono_jwt.ts'
 import { cloudlogErr } from '../../utils/logging.ts'
 import { closeClient, getPgClient } from '../../utils/pg.ts'
 import { requireEnterprisePlan } from '../../utils/plan-gating.ts'
@@ -11,21 +12,21 @@ import { createSSOProvider, deleteSSOProvider, ManagementAPIError } from '../../
 import { supabaseWithAuth } from '../../utils/supabase.ts'
 import { version } from '../../utils/version.ts'
 
-const createBodySchema = type({
-  'org_id': 'string.uuid',
-  'domain': 'string > 0',
-  'metadata_url': 'string.url',
-  'attribute_mapping?': 'unknown',
+const createBodySchema = z.object({
+  org_id: z.uuid(),
+  domain: z.string().min(1),
+  metadata_url: z.url(),
+  attribute_mapping: z.unknown().optional(),
 })
 
-const updateBodySchema = type({
-  'metadata_url?': 'string.url',
-  'attribute_mapping?': 'unknown',
-  'enforce_sso?': 'boolean',
-  'status?': literalUnion(['verified', 'active', 'disabled'] as const),
+const updateBodySchema = z.object({
+  metadata_url: z.url().optional(),
+  attribute_mapping: z.unknown().optional(),
+  enforce_sso: z.boolean().optional(),
+  status: z.enum(['verified', 'active', 'disabled']).optional(),
 })
 
-const uuidSchema = type('string.uuid')
+const uuidSchema = z.uuid()
 
 function sanitizeProvider(provider: Record<string, unknown>) {
   const { dns_verification_token: _dnsVerificationToken, ...safeProvider } = provider

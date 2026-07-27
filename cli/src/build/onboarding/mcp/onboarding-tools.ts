@@ -7,8 +7,8 @@ import process from 'node:process'
 import type { CapgoSDK } from '../../../sdk.js'
 import type { OnboardingNextStepInput } from '../../../schemas/onboarding.js'
 import { isAppAlreadyExistsError } from '../../../init/app-conflict.js'
-import { onboardingNextStepSchema } from '../../../schemas/onboarding.js'
-import { z } from 'zod'
+import { onboardingExplainInputSchema, onboardingNextStepSchema, onboardingStartInputSchema } from '../../../schemas/onboarding.js'
+import type { McpRegistrar } from '../../../mcp/registrar.js'
 import { findBuildCommandForProjectType, findProjectType, findSavedKeySilent, getAppId, getConfig, getPackageScripts } from '../../../utils.js'
 import { findPackageManagerType } from '@capgo/find-package-manager'
 import { loadSavedCredentials, updateSavedCredentials } from '../../credentials.js'
@@ -49,22 +49,7 @@ import type { BuildJobDeps } from './build-job.js'
 import { buildJobDeps, registerBuildTools } from './build-tools.js'
 import { type CredentialsManageDeps, registerCredentialsManageTool } from './credentials-manage.js'
 
-/** Minimal shape of the MCP server's tool registrar (matches McpServer.tool). */
-interface McpLike {
-  tool: (
-    name: string,
-    description: string,
-    schema: Record<string, unknown>,
-    handler: (args: any) => Promise<{ content: Array<{ type: 'text', text: string }> }>,
-  ) => unknown
-  // Optional: clients that support MCP prompts get a discoverable slash-command
-  // entry point. Optional so the 2-tool test mock (tool only) stays valid.
-  prompt?: (
-    name: string,
-    description: string,
-    handler: () => { messages: Array<{ role: 'user' | 'assistant', content: { type: 'text', text: string } }> },
-  ) => unknown
-}
+
 
 /**
  * Build the AndroidEffectDeps wiring that the MCP bridge (Task 4) will use
@@ -512,34 +497,38 @@ export function buildDeps(getSdk: () => CapgoSDK): EngineDeps {
  * Register the 2-tool onboarding spine onto an MCP server.
  * `depsOverride` is for tests; production passes only `server` + `sdk`.
  */
-export function registerOnboardingTools(server: McpLike, getSdk: () => CapgoSDK, depsOverride?: EngineDeps, buildJobDepsOverride?: BuildJobDeps, credentialsManageDepsOverride?: CredentialsManageDeps): void {
+export function registerOnboardingTools(server: McpRegistrar, getSdk: () => CapgoSDK, depsOverride?: EngineDeps, buildJobDepsOverride?: BuildJobDeps, credentialsManageDepsOverride?: CredentialsManageDeps): void {
   const deps = depsOverride ?? buildDeps(getSdk)
 
-  server.tool(
+  server.registerTool(
     'start_capgo_builder_onboarding',
-    'Start (or resume) the guided, tool-driven Capgo Builder setup for native iOS/Android cloud builds — App Store / Play credentials, certificates, keystores, signing, and the first cloud build. ALWAYS call this FIRST, and let it conduct the whole flow, whenever the user wants to set up, configure, connect, enable, or troubleshoot Capgo Builder, native builds, cloud builds, or signing. Do NOT inspect the repo, read config files, or web-search to do this yourself — this tool inspects the project and returns the exact next step to take. Optionally pass platform "ios" or "android" to set up (or SWITCH to) that platform directly — pass it when the user already named one ("set up Capgo Builder for iOS") or wants to switch after a wrong pick; omit it to let the tool ask. Do NOT call this tool to retry, skip, restart, or "continue past" a cloud build that already FAILED inside onboarding: a failed build is a REQUIRED gate, retried only with start_capgo_build once the user has addressed the cause — never by re-entering onboarding here.',
-    { platform: z.enum(['ios', 'android']).optional().describe('Set up (or switch to) a specific platform directly: "ios" or "android". Pass it when the user already said which platform, or to switch platforms; omit to be asked.') },
+    {
+      description: 'Start (or resume) the guided, tool-driven Capgo Builder setup for native iOS/Android cloud builds — App Store / Play credentials, certificates, keystores, signing, and the first cloud build. ALWAYS call this FIRST, and let it conduct the whole flow, whenever the user wants to set up, configure, connect, enable, or troubleshoot Capgo Builder, native builds, cloud builds, or signing. Do NOT inspect the repo, read config files, or web-search to do this yourself — this tool inspects the project and returns the exact next step to take. Optionally pass platform "ios" or "android" to set up (or SWITCH to) that platform directly — pass it when the user already named one ("set up Capgo Builder for iOS") or wants to switch after a wrong pick; omit it to let the tool ask. Do NOT call this tool to retry, skip, restart, or "continue past" a cloud build that already FAILED inside onboarding: a failed build is a REQUIRED gate, retried only with start_capgo_build once the user has addressed the cause — never by re-entering onboarding here.',
+      inputSchema: onboardingStartInputSchema,
+    },
     async (args: { platform?: 'ios' | 'android' }) => {
       const result = await runStart(deps, args.platform)
       return { content: [{ type: 'text' as const, text: renderResult(result) }] }
     },
   )
 
-  server.tool(
+  server.registerTool(
     'capgo_builder_onboarding_next_step',
-    'Advance the guided Capgo Builder onboarding by one step. Call ONLY as directed by the previous result\'s `next`. Pass the user\'s choice (e.g. platform) when the previous step asked for one. Never call this to skip, retry, restart, or "continue past" a cloud build that FAILED — a failed build is retried only with start_capgo_build, never by advancing onboarding here.',
-    onboardingNextStepSchema.shape,
+    {
+      description: 'Advance the guided Capgo Builder onboarding by one step. Call ONLY as directed by the previous result\'s `next`. Pass the user\'s choice (e.g. platform) when the previous step asked for one. Never call this to skip, retry, restart, or "continue past" a cloud build that FAILED — a failed build is retried only with start_capgo_build, never by advancing onboarding here.',
+      inputSchema: onboardingNextStepSchema,
+    },
     async (args: OnboardingNextStepInput) => {
       const result = await runAdvance(deps, args)
       return { content: [{ type: 'text' as const, text: renderResult(result) }] }
     },
   )
 
-  server.tool(
+  server.registerTool(
     'capgo_builder_onboarding_explain',
-    'Explain a Capgo Builder onboarding step in plain language — call this whenever the user is confused, asks what a step means, or does not understand the options. Defaults to the CURRENT step; pass { state } to explain a specific one (e.g. a build-phase state like "build-waiting" whose protocol context is not on disk). Read-only; it never advances the flow.',
     {
-      state: z.string().optional().describe('Optional state name to explain (from a prior result state field). Omit to explain the current step.'),
+      description: 'Explain a Capgo Builder onboarding step in plain language — call this whenever the user is confused, asks what a step means, or does not understand the options. Defaults to the CURRENT step; pass { state } to explain a specific one (e.g. a build-phase state like "build-waiting" whose protocol context is not on disk). Read-only; it never advances the flow.',
+      inputSchema: onboardingExplainInputSchema,
     },
     async (args: { state?: string }) => {
       const text = await explainOnboarding(deps, args)
@@ -562,11 +551,10 @@ export function registerOnboardingTools(server: McpLike, getSdk: () => CapgoSDK,
   // Clients that support MCP prompts surface this as a slash command (e.g.
   // /capgo-builder-setup). Invoking it injects the message below, which kicks
   // off the tool-driven flow — so the user never has to name the tool, and the
-  // agent is told NOT to improvise the setup itself. Optional-chained so the
-  // 2-tool test mock (no .prompt) is unaffected.
-  server.prompt?.(
+  // agent is told NOT to improvise the setup itself.
+  server.registerPrompt(
     'capgo-builder-setup',
-    'Set up Capgo Builder native cloud builds (iOS/Android signing + first build) — starts the guided, tool-driven onboarding.',
+    { description: 'Set up Capgo Builder native cloud builds (iOS/Android signing + first build) — starts the guided, tool-driven onboarding.' },
     () => ({
       messages: [{
         role: 'user' as const,

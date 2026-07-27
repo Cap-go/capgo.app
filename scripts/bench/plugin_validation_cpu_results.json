@@ -1,0 +1,132 @@
+{
+  "generatedAt": "2026-07-23T09:40:20.607Z",
+  "iterations": 80000,
+  "agreement": {
+    "valid": {
+      "handrolled": true,
+      "production_is_predicate": true,
+      "arktype": true,
+      "zod_runtime": true,
+      "zod_compiler_safeParse": true,
+      "zod_compiler_is": true
+    },
+    "invalid": {
+      "handrolled": false,
+      "production_is_predicate": false,
+      "arktype": false,
+      "zod_runtime": false,
+      "zod_compiler_safeParse": false,
+      "zod_compiler_is": false
+    }
+  },
+  "rows": [
+    {
+      "name": "handrolled_valid",
+      "iterations": 80000,
+      "wallMs": 9.653120999999999,
+      "cpuMs": 17.013,
+      "nsCpuPerOp": 212.6625,
+      "successCount": 80000,
+      "failCount": 0
+    },
+    {
+      "name": "handrolled_mixed",
+      "iterations": 80000,
+      "wallMs": 73.44548800000001,
+      "cpuMs": 106.061,
+      "nsCpuPerOp": 1325.7625,
+      "successCount": 60000,
+      "failCount": 20000
+    },
+    {
+      "name": "production_is_predicate_valid",
+      "iterations": 80000,
+      "wallMs": 6.709743000000003,
+      "cpuMs": 7.878,
+      "nsCpuPerOp": 98.475,
+      "successCount": 80000,
+      "failCount": 0
+    },
+    {
+      "name": "production_is_predicate_mixed",
+      "iterations": 80000,
+      "wallMs": 5.545702000000006,
+      "cpuMs": 5.547,
+      "nsCpuPerOp": 69.3375,
+      "successCount": 60000,
+      "failCount": 20000
+    },
+    {
+      "name": "arktype_valid",
+      "iterations": 80000,
+      "wallMs": 42.71982300000002,
+      "cpuMs": 59.96,
+      "nsCpuPerOp": 749.5,
+      "successCount": 80000,
+      "failCount": 0
+    },
+    {
+      "name": "arktype_mixed",
+      "iterations": 80000,
+      "wallMs": 50.977595000000065,
+      "cpuMs": 78.42,
+      "nsCpuPerOp": 980.25,
+      "successCount": 60000,
+      "failCount": 20000
+    },
+    {
+      "name": "zod_runtime_valid",
+      "iterations": 80000,
+      "wallMs": 44.19804199999999,
+      "cpuMs": 97.207,
+      "nsCpuPerOp": 1215.0875,
+      "successCount": 80000,
+      "failCount": 0
+    },
+    {
+      "name": "zod_runtime_mixed",
+      "iterations": 80000,
+      "wallMs": 191.53843599999993,
+      "cpuMs": 222.924,
+      "nsCpuPerOp": 2786.55,
+      "successCount": 60000,
+      "failCount": 20000
+    },
+    {
+      "name": "zod_compiler_safeParse_valid",
+      "iterations": 80000,
+      "wallMs": 8.19854799999996,
+      "cpuMs": 13.654,
+      "nsCpuPerOp": 170.675,
+      "successCount": 80000,
+      "failCount": 0
+    },
+    {
+      "name": "zod_compiler_safeParse_mixed",
+      "iterations": 80000,
+      "wallMs": 6.225914999999986,
+      "cpuMs": 7.9,
+      "nsCpuPerOp": 98.75,
+      "successCount": 60000,
+      "failCount": 20000
+    },
+    {
+      "name": "zod_compiler_is_valid",
+      "iterations": 80000,
+      "wallMs": 6.924820999999952,
+      "cpuMs": 7.374,
+      "nsCpuPerOp": 92.175,
+      "successCount": 80000,
+      "failCount": 0
+    },
+    {
+      "name": "zod_compiler_is_mixed",
+      "iterations": 80000,
+      "wallMs": 5.981015999999954,
+      "cpuMs": 5.958,
+      "nsCpuPerOp": 74.475,
+      "successCount": 60000,
+      "failCount": 20000
+    }
+  ]
+}

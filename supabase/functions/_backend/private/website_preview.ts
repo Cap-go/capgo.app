@@ -1,4 +1,5 @@
-import { createHono, middlewareAuth, parseBody, quickError, useCors } from '../utils/hono.ts'
+import { createHono, parseBody, quickError, useCors } from '../utils/hono.ts'
+import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { fetchPublicUrl, getPublicHostnameValidationError as getPublicHostnameValidationErrorBase } from '../utils/publicUrl.ts'
 import { version } from '../utils/version.ts'
 

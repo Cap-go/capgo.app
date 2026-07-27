@@ -16,6 +16,10 @@ interface GetDevice {
   cursor?: string
   /** Limit for results (default uses fetchLimit) */
   limit?: number
+  /** ISO timestamp - only return devices with updated_at greater than this value */
+  updated_at?: string
+  /** Sort devices by updated_at: asc or desc */
+  order?: string
 }
 
 interface publicDevice {
@@ -37,10 +41,75 @@ interface publicDevice {
   channel?: string
 }
 
+function toPublicUpdatedAt(value: string): string {
+  // Cloudflare Analytics Engine returns UTC as "YYYY-MM-DD HH:mm:ss".
+  const cloudflareUtc = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})$/.exec(value)
+  const normalized = cloudflareUtc ? `${cloudflareUtc[1]}T${cloudflareUtc[2]}.000Z` : value
+  return new Date(normalized).toISOString()
+}
+
+function parseUpdatedAtFilter(updatedAt: string | undefined): string | undefined {
+  if (!updatedAt)
+    return undefined
+
+  // Accept ISO-8601 UTC (Z) and the Cloudflare device timestamp format for sync round-trips.
+  const cloudflareUtc = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/.exec(updatedAt)
+  const normalized = cloudflareUtc
+    ? `${cloudflareUtc[1]}-${cloudflareUtc[2]}-${cloudflareUtc[3]}T${cloudflareUtc[4]}:${cloudflareUtc[5]}:${cloudflareUtc[6]}.000Z`
+    : updatedAt
+
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?Z$/.exec(normalized)
+  if (!match) {
+    throw simpleError('invalid_updated_at', 'updated_at must be a valid ISO date', { updated_at: updatedAt })
+  }
+
+  const parsed = new Date(normalized)
+  if (Number.isNaN(parsed.getTime()))
+    throw simpleError('invalid_updated_at', 'updated_at must be a valid ISO date', { updated_at: updatedAt })
+
+  const [, year, month, day, hour, minute, second] = match
+  if (
+    parsed.getUTCFullYear() !== Number(year)
+    || parsed.getUTCMonth() + 1 !== Number(month)
+    || parsed.getUTCDate() !== Number(day)
+    || parsed.getUTCHours() !== Number(hour)
+    || parsed.getUTCMinutes() !== Number(minute)
+    || parsed.getUTCSeconds() !== Number(second)
+  ) {
+    throw simpleError('invalid_updated_at', 'updated_at must be a valid ISO date', { updated_at: updatedAt })
+  }
+
+  return parsed.toISOString()
+}
+
+function parseDevicesOrder(order: string | undefined) {
+  if (!order)
+    return undefined
+  if (order !== 'asc' && order !== 'desc')
+    throw simpleError('invalid_order', 'order must be asc or desc', { order })
+  return [{ key: 'updated_at', sortable: order as 'asc' | 'desc' }]
+}
+
 export function filterDeviceKeys(devices: DeviceRes[]) {
   return devices.map((device) => {
     const { updated_at, device_id, custom_id, is_prod, is_emulator, install_source, version_name, version, app_id, platform, plugin_version, os_version, version_build, key_id, country_code } = device
-    return { updated_at, device_id, custom_id, is_prod, is_emulator, install_source, version_name, version, app_id, platform, plugin_version, os_version, version_build, key_id, country_code }
+    return {
+      updated_at: updated_at ? toPublicUpdatedAt(updated_at) : updated_at,
+      device_id,
+      custom_id,
+      is_prod,
+      is_emulator,
+      install_source,
+      version_name,
+      version,
+      app_id,
+      platform,
+      plugin_version,
+      os_version,
+      version_build,
+      key_id,
+      country_code,
+    }
   })
 }
 
@@ -51,6 +120,7 @@ export async function get(c: Context, body: GetDevice, apikey: Database['public'
   if (!isValidAppId(body.app_id)) {
     throw simpleError('invalid_app_id', 'App ID must be a reverse domain string', { app_id: body.app_id })
   }
+
   // Auth context is already set by middlewareKey
   if (!(await checkPermission(c, 'app.read_devices', { appId: body.app_id }))) {
     throw simpleError('cannot_access_app', 'You can\'t access this app', { app_id: body.app_id })
@@ -100,10 +170,19 @@ export async function get(c: Context, body: GetDevice, apikey: Database['public'
     return c.json(dataDevice)
   }
   else {
+    const updatedAtGt = parseUpdatedAtFilter(body.updated_at)
+    const order = parseDevicesOrder(body.order)
+    const limit = body.limit == null ? fetchLimit : Number(body.limit)
+    if (!Number.isFinite(limit) || !Number.isInteger(limit) || limit < 1) {
+      throw simpleError('invalid_limit', 'limit must be a positive integer', { limit: body.limit })
+    }
+
     const res = await readDevices(c, {
       app_id: body.app_id,
       cursor: body.cursor,
-      limit: body.limit ?? fetchLimit,
+      limit,
+      updated_at_gt: updatedAtGt,
+      order,
     }, body.customIdMode ?? false)
 
     if (!res?.data) {

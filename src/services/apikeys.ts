@@ -188,9 +188,18 @@ export async function findUsablePlainApiKey(
     return null
 
   const orgAdminRoles = new Set(['org_super_admin', 'org_admin'])
-  const scopedKeyIds = new Set(((bindings ?? []) as any[])
+  type BindingRole = { name?: string | null } | { name?: string | null }[] | null
+  interface BindingRow {
+    principal_id: string | null
+    scope_type: string | null
+    app_id: string | null
+    roles: BindingRole
+  }
+  const scopedKeyIds = new Set((bindings as BindingRow[])
     .filter((binding) => {
       const roleName = Array.isArray(binding.roles) ? binding.roles[0]?.name : binding.roles?.name
+      if (!roleName)
+        return false
       if (binding.scope_type === 'org' && orgAdminRoles.has(roleName))
         return true
       return !!appUuid && binding.scope_type === 'app' && binding.app_id === appUuid

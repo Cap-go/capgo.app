@@ -30,7 +30,7 @@ function has(text, sub, msg) { if (!String(text).includes(sub)) throw new Error(
 function setup(opts = {}) {
   const appId = Object.prototype.hasOwnProperty.call(opts, 'appId') ? opts.appId : 'com.acme.app'
   const tools = {}
-  const server = { tool: (name, _desc, _schema, handler) => { tools[name] = handler } }
+  const server = { registerTool: (name, _config, handler) => { tools[name] = handler } }
   const state = { record: null, log: '', clock: 0, spawnCount: 0, lastChild: null }
   const deps = {
     spawnBuild: () => {

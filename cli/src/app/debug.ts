@@ -52,7 +52,6 @@ function describeFetchFailure(error: unknown, endpoint: string) {
   return formatError(error)
 }
 
-export type { AppDebugOptions as OptionsBaseDebug } from '../schemas/app'
 
 export async function markSnag(channel: string, orgId: string, apikey: string, event: string, appId?: string, icon = '✅', tags?: Record<string, string | number | boolean>) {
   await sendEvent(apikey, {

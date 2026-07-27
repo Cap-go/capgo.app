@@ -51,6 +51,26 @@ describe('logsnag revenue metric helpers', () => {
     )).toBe(1)
   })
 
+  it.concurrent('clamps trailing 12-month start for leap-day ends', () => {
+    const start = logsnagInsightsTestUtils.getTrailing12mStart(new Date('2024-02-29T00:00:00.000Z'))
+    expect(start.toISOString()).toBe('2023-02-28T00:00:00.000Z')
+  })
+
+  it.concurrent('computes plan conversion rates against paying orgs, not all users/orgs', () => {
+    const rates = logsnagInsightsTestUtils.getPlanConversionRates(
+      { Solo: 15, Maker: 10, Team: 0, Enterprise: 0, Trial: 50 },
+      25,
+    )
+    expect(rates).toEqual({
+      solo: 60,
+      maker: 40,
+      team: 0,
+      enterprise: 0,
+      total: 100,
+    })
+    expect(logsnagInsightsTestUtils.calculateConversionRate(15, 200)).toBe(7.5)
+  })
+
   it.concurrent('builds UTC calendar-day bounds', () => {
     const { dayStart, nextDayStart, dayDateId } = logsnagInsightsTestUtils.getCurrentDayWindow(new Date('2026-03-24T18:45:12.000Z'))
 

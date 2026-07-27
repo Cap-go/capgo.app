@@ -23,6 +23,7 @@ import { app as publicStats } from '../_backend/private/public_stats.ts'
 import { app as replay } from '../_backend/private/replay.ts'
 import { app as role_bindings } from '../_backend/private/role_bindings.ts'
 import { app as roles } from '../_backend/private/roles.ts'
+import { app as set_manifest } from '../_backend/private/set_manifest.ts'
 import { app as set_org_email } from '../_backend/private/set_org_email.ts'
 import { app as sso_check_domain } from '../_backend/private/sso/check-domain.ts'
 import { app as sso_check_enforcement } from '../_backend/private/sso/check-enforcement.ts'
@@ -67,6 +68,7 @@ appGlobal.route('/stats', stats_priv)
 appGlobal.route('/stripe_checkout', stripe_checkout)
 appGlobal.route('/stripe_portal', stripe_portal)
 appGlobal.route('/upload_link', upload_link)
+appGlobal.route('/set_manifest', set_manifest)
 appGlobal.route('/delete_failed_version', deleted_failed_version)
 appGlobal.route('/set_org_email', set_org_email)
 appGlobal.route('/latency', latency)

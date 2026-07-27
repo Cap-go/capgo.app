@@ -5,6 +5,7 @@ import type { Database } from '~/types/supabase.types'
 import { Capacitor } from '@capacitor/core'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import IconEye from '~icons/heroicons/eye'
 import { formatDate } from '~/services/date'
@@ -25,6 +26,7 @@ type Element = BuildRequest
 type Platform = 'ios' | 'android'
 
 const { t } = useI18n()
+const router = useRouter()
 const supabase = useSupabase()
 const isMobile = Capacitor.isNativePlatform()
 const dialogStore = useDialogV2Store()
@@ -191,16 +193,35 @@ async function reload() {
   }
 }
 
+function isPlanUpgradeError(errorMessage: string): boolean {
+  const normalized = errorMessage.toLowerCase()
+  return normalized.includes('concurrent native')
+    || normalized.includes('native build concurrency')
+    || normalized.includes('/settings/organization/plans')
+    || normalized.includes('upgrade plan to continue to build')
+}
+
 function showErrorDetails(errorMessage: string | null) {
   if (!errorMessage) {
     toast.error(t('no-error-message'))
     return
   }
 
+  const showUpgrade = isPlanUpgradeError(errorMessage)
   dialogStore.openDialog({
     title: t('build-error-details'),
     size: 'lg',
     buttons: [
+      ...(showUpgrade
+        ? [{
+            text: t('plan-upgrade-v2'),
+            id: 'upgrade',
+            role: 'primary' as const,
+            handler: () => {
+              router.push('/settings/organization/plans')
+            },
+          }]
+        : []),
       {
         text: t('close'),
         role: 'cancel',
@@ -372,6 +393,14 @@ watch(showSetupFlow, (newValue) => {
               @click.stop="showErrorDetails(element.last_error)"
             >
               <IconEye class="w-4 h-4" />
+            </button>
+            <button
+              v-if="isPlanUpgradeError(element.last_error)"
+              type="button"
+              class="px-2 py-1 text-xs font-semibold text-white rounded-md d-btn d-btn-xs d-btn-primary shrink-0"
+              @click.stop="router.push('/settings/organization/plans')"
+            >
+              {{ t('plan-upgrade-v2') }}
             </button>
           </div>
           <span v-else class="text-gray-400 dark:text-gray-600">-</span>

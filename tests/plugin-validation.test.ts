@@ -1,7 +1,7 @@
-import type { StandardSchema } from '../supabase/functions/_backend/utils/ark_validation.ts'
+import type { StandardSchema } from '../supabase/functions/_backend/utils/schema_validation.ts'
 import { describe, expect, it } from 'vitest'
-import { safeParseSchema } from '../supabase/functions/_backend/utils/ark_validation.ts'
-import { channelSelfRequestSchema, statsRequestSchema, updateRequestSchema } from '../supabase/functions/_backend/utils/plugin_validation.ts'
+import { safeParseSchema } from '../supabase/functions/_backend/utils/schema_validation.ts'
+import { channelSelfRequestSchema, statsRequestSchema, updateRequestSchema } from '../supabase/functions/_backend/plugin_runtime/utils/plugin_validation.ts'
 import { INVALID_STRING_APP_ID, INVALID_STRING_DEVICE_ID, MISSING_STRING_APP_ID, MISSING_STRING_DEVICE_ID, MISSING_STRING_PLATFORM, MISSING_STRING_VERSION_BUILD, MISSING_STRING_VERSION_NAME, MISSING_STRING_VERSION_OS, NON_STRING_APP_ID, NON_STRING_DEVICE_ID, NON_STRING_PLATFORM, NON_STRING_VERSION_BUILD, NON_STRING_VERSION_NAME, NON_STRING_VERSION_OS } from '../supabase/functions/_backend/utils/utils.ts'
 
 const NO_ERROR = { error: '' }
