@@ -3572,6 +3572,79 @@ $$;
 ALTER FUNCTION "public"."cleanup_apikey_role_bindings"() OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."cleanup_audit_logs_for_long_canceled_orgs"("max_batches" integer DEFAULT 1000000, "batch_size" integer DEFAULT 1000, "max_runtime_ms" integer DEFAULT 60000) RETURNS bigint
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  batch_no integer := 0;
+  deleted_batch integer;
+  deleted_total bigint := 0;
+  v_max_batches integer := GREATEST(1, COALESCE(max_batches, 1000000));
+  v_batch_size integer := GREATEST(1, COALESCE(batch_size, 1000));
+  v_max_runtime_ms integer := GREATEST(1000, COALESCE(max_runtime_ms, 60000));
+  started_at timestamptz := pg_catalog.clock_timestamp();
+  remaining_ms bigint;
+BEGIN
+  LOOP
+    batch_no := batch_no + 1;
+    EXIT WHEN batch_no > v_max_batches;
+
+    remaining_ms := v_max_runtime_ms
+      - (EXTRACT(EPOCH FROM (pg_catalog.clock_timestamp() - started_at)) * 1000)::bigint;
+    EXIT WHEN remaining_ms <= 0;
+
+    -- Bound each batch to the remaining runtime budget so one slow delete
+    -- cannot overrun the cron tick / hold the scheduler lock.
+    PERFORM pg_catalog.set_config('statement_timeout', remaining_ms::text || 'ms', true);
+    PERFORM pg_catalog.set_config('lock_timeout', '5s', true);
+
+    BEGIN
+      DELETE FROM public.audit_logs AS al
+      WHERE al.ctid IN (
+        SELECT audit.ctid
+        FROM public.audit_logs AS audit
+        WHERE audit.org_id IN (SELECT public.long_canceled_org_ids())
+        ORDER BY audit.org_id, audit.created_at, audit.id
+        LIMIT v_batch_size
+      );
+
+      GET DIAGNOSTICS deleted_batch = ROW_COUNT;
+    EXCEPTION
+      WHEN query_canceled OR lock_not_available THEN
+        EXIT;
+    END;
+
+    deleted_total := deleted_total + deleted_batch;
+    EXIT WHEN deleted_batch = 0;
+  END LOOP;
+
+  PERFORM pg_catalog.set_config('statement_timeout', '0', true);
+  PERFORM pg_catalog.set_config('lock_timeout', '0', true);
+
+  IF deleted_total > 0 THEN
+    RAISE NOTICE
+      'cleanup_audit_logs_for_long_canceled_orgs: deleted=% batches=%/% batch_size=% runtime_ms=% budget_ms=%',
+      deleted_total,
+      LEAST(batch_no, v_max_batches),
+      v_max_batches,
+      v_batch_size,
+      (EXTRACT(EPOCH FROM (pg_catalog.clock_timestamp() - started_at)) * 1000)::bigint,
+      v_max_runtime_ms;
+  END IF;
+
+  RETURN deleted_total;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."cleanup_audit_logs_for_long_canceled_orgs"("max_batches" integer, "batch_size" integer, "max_runtime_ms" integer) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."cleanup_audit_logs_for_long_canceled_orgs"("max_batches" integer, "batch_size" integer, "max_runtime_ms" integer) IS 'Deletes audit_logs for orgs past the 90-day canceled grace window (see long_canceled_org_ids). Batched with a remaining-budget statement_timeout to avoid cron timeouts.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."cleanup_completed_onboarding_apps"() RETURNS "void"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -3703,6 +3776,24 @@ $$;
 
 
 ALTER FUNCTION "public"."cleanup_job_run_details_7days"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."cleanup_long_canceled_org_data"() RETURNS "void"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+BEGIN
+  PERFORM public.soft_delete_versions_for_long_canceled_orgs();
+  PERFORM public.cleanup_audit_logs_for_long_canceled_orgs();
+END;
+$$;
+
+
+ALTER FUNCTION "public"."cleanup_long_canceled_org_data"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."cleanup_long_canceled_org_data"() IS 'Daily canceled-org retention: soft-delete app versions then purge audit_logs for orgs past the 90-day grace window. Both steps are batch/runtime bounded.';
+
 
 
 CREATE OR REPLACE FUNCTION "public"."cleanup_net_http_response"() RETURNS "void"
@@ -10346,6 +10437,26 @@ $$;
 ALTER FUNCTION "public"."lock_rbac_orgs"("p_first_org_id" "uuid", "p_second_org_id" "uuid") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."long_canceled_org_ids"() RETURNS SETOF "uuid"
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  SELECT o.id
+  FROM public.stripe_info AS si
+  JOIN public.orgs AS o ON o.customer_id = si.customer_id
+  WHERE si.status IN ('canceled', 'deleted')
+    AND GREATEST(si.canceled_at, si.subscription_anchor_end, si.trial_at)
+      <= pg_catalog.now() - INTERVAL '90 days';
+$$;
+
+
+ALTER FUNCTION "public"."long_canceled_org_ids"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."long_canceled_org_ids"() IS 'Org ids whose stripe_info is canceled/deleted and GREATEST(canceled_at, subscription_anchor_end, trial_at) is older than 90 days.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."mark_app_stats_refreshed"("p_app_id" character varying) RETURNS timestamp without time zone
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -12010,13 +12121,22 @@ CREATE OR REPLACE FUNCTION "public"."process_free_trial_expired"() RETURNS "void
     AS $$
 BEGIN
   UPDATE public.stripe_info
-  SET is_good_plan = false
-  WHERE status <> 'succeeded' AND trial_at < NOW();
+  SET
+    is_good_plan = false,
+    status = 'canceled',
+    canceled_at = COALESCE(canceled_at, trial_at)
+  WHERE (status IS NULL OR status NOT IN ('succeeded', 'deleted', 'canceled'))
+    AND trial_at IS NOT NULL
+    AND trial_at < NOW();
 END;
 $$;
 
 
 ALTER FUNCTION "public"."process_free_trial_expired"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."process_free_trial_expired"() IS 'Marks expired never-converted trials as canceled (is_good_plan=false, status=canceled, canceled_at=trial_at) so they share the canceled-org retention path.';
+
 
 
 CREATE OR REPLACE FUNCTION "public"."process_function_queue"("queue_names" "text"[], "batch_size" integer DEFAULT 950) RETURNS "void"
@@ -15930,6 +16050,79 @@ $$;
 ALTER FUNCTION "public"."set_webhook_created_by"() OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."soft_delete_versions_for_long_canceled_orgs"("p_batch_size" integer DEFAULT 5000) RETURNS bigint
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  v_batch_size integer := GREATEST(1, COALESCE(p_batch_size, 5000));
+  unlinked_count bigint := 0;
+  deleted_count bigint := 0;
+BEGIN
+  -- Bypass channel promote guard for this internal cleanup (same gate seed uses).
+  PERFORM set_config('capgo.seed_channel_targets', 'true', true);
+
+  -- Single WITH: pick a version batch first, unlink only those targets, then soft-delete.
+  WITH candidates AS (
+    SELECT av.id, av.app_id
+    FROM public.app_versions AS av
+    WHERE av.owner_org IN (SELECT public.long_canceled_org_ids())
+      AND av.deleted = false
+      AND av.name NOT IN ('builtin', 'unknown')
+    ORDER BY av.id
+    LIMIT v_batch_size
+  ),
+  cleared AS (
+    UPDATE public.channels AS c
+    SET
+      version = CASE
+        WHEN EXISTS (SELECT 1 FROM candidates AS x WHERE x.id = c.version) THEN NULL
+        ELSE c.version
+      END,
+      rollout_version = CASE
+        WHEN EXISTS (SELECT 1 FROM candidates AS x WHERE x.id = c.rollout_version) THEN NULL
+        ELSE c.rollout_version
+      END,
+      updated_at = pg_catalog.now()
+    WHERE c.app_id IN (SELECT DISTINCT x.app_id FROM candidates AS x)
+      AND EXISTS (
+        SELECT 1
+        FROM candidates AS x
+        WHERE x.id = c.version OR x.id = c.rollout_version
+      )
+    RETURNING c.id
+  ),
+  soft_deleted AS (
+    UPDATE public.app_versions AS av
+    SET deleted = true
+    FROM candidates
+    WHERE av.id = candidates.id
+    RETURNING av.id
+  )
+  SELECT
+    (SELECT COUNT(*) FROM cleared),
+    (SELECT COUNT(*) FROM soft_deleted)
+  INTO unlinked_count, deleted_count;
+
+  IF unlinked_count > 0 OR deleted_count > 0 THEN
+    RAISE NOTICE
+      'soft_delete_versions_for_long_canceled_orgs: unlinked_channels=% soft_deleted_versions=%',
+      unlinked_count,
+      deleted_count;
+  END IF;
+
+  RETURN deleted_count;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."soft_delete_versions_for_long_canceled_orgs"("p_batch_size" integer) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."soft_delete_versions_for_long_canceled_orgs"("p_batch_size" integer) IS 'Soft-deletes app_versions for orgs past the 90-day canceled grace window (see long_canceled_org_ids). Unlinks only channel targets pointing at deletion candidates. Bounded by p_batch_size.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."strip_html"("input" "text") RETURNS "text"
     LANGUAGE "sql" IMMUTABLE
     SET "search_path" TO ''
@@ -18417,23 +18610,23 @@ COMMENT ON COLUMN "public"."global_stats"."live_updates_active_paying_clients_60
 
 
 
-COMMENT ON COLUMN "public"."global_stats"."plan_solo_conversion_rate" IS 'Percentage of organizations converted to the Solo plan (plan_solo / orgs * 100)';
+COMMENT ON COLUMN "public"."global_stats"."plan_solo_conversion_rate" IS 'Percentage of paying organizations on the Solo plan (plan_solo / paying * 100)';
 
 
 
-COMMENT ON COLUMN "public"."global_stats"."plan_maker_conversion_rate" IS 'Percentage of organizations converted to the Maker plan (plan_maker / orgs * 100)';
+COMMENT ON COLUMN "public"."global_stats"."plan_maker_conversion_rate" IS 'Percentage of paying organizations on the Maker plan (plan_maker / paying * 100)';
 
 
 
-COMMENT ON COLUMN "public"."global_stats"."plan_team_conversion_rate" IS 'Percentage of organizations converted to the Team plan (plan_team / orgs * 100)';
+COMMENT ON COLUMN "public"."global_stats"."plan_team_conversion_rate" IS 'Percentage of paying organizations on the Team plan (plan_team / paying * 100)';
 
 
 
-COMMENT ON COLUMN "public"."global_stats"."plan_enterprise_conversion_rate" IS 'Percentage of organizations converted to the Enterprise plan (plan_enterprise / orgs * 100)';
+COMMENT ON COLUMN "public"."global_stats"."plan_enterprise_conversion_rate" IS 'Percentage of paying organizations on the Enterprise plan (plan_enterprise / paying * 100)';
 
 
 
-COMMENT ON COLUMN "public"."global_stats"."plan_total_conversion_rate" IS 'Percentage of organizations converted to any paid plan ((plan_solo + plan_maker + plan_team + plan_enterprise) / orgs * 100)';
+COMMENT ON COLUMN "public"."global_stats"."plan_total_conversion_rate" IS 'Percentage of paying organizations on any paid plan ((plan_solo + plan_maker + plan_team + plan_enterprise) / paying * 100)';
 
 
 
@@ -18501,7 +18694,7 @@ COMMENT ON COLUMN "public"."global_stats"."above_plan_without_credits" IS 'Activ
 
 
 
-COMMENT ON COLUMN "public"."global_stats"."upgrade_rate_12m" IS 'Percentage of organizations whose last stripe_info.upgraded_at falls within the trailing 12 calendar months ending at the UTC snapshot day end (orgs with last stripe_info.upgraded_at in-window / orgs created by day end * 100).';
+COMMENT ON COLUMN "public"."global_stats"."upgrade_rate_12m" IS 'Trailing 12-month paying-to-larger-plan upgrade events as a percentage of paying organizations (upgrade events in-window / paying * 100).';
 
 
 
@@ -23198,6 +23391,11 @@ GRANT ALL ON FUNCTION "public"."cleanup_apikey_role_bindings"() TO "service_role
 
 
 
+REVOKE ALL ON FUNCTION "public"."cleanup_audit_logs_for_long_canceled_orgs"("max_batches" integer, "batch_size" integer, "max_runtime_ms" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."cleanup_audit_logs_for_long_canceled_orgs"("max_batches" integer, "batch_size" integer, "max_runtime_ms" integer) TO "service_role";
+
+
+
 REVOKE ALL ON FUNCTION "public"."cleanup_completed_onboarding_apps"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."cleanup_completed_onboarding_apps"() TO "service_role";
 
@@ -23217,6 +23415,11 @@ REVOKE ALL ON FUNCTION "public"."cleanup_frequent_job_details"() FROM PUBLIC;
 
 
 REVOKE ALL ON FUNCTION "public"."cleanup_job_run_details_7days"() FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "public"."cleanup_long_canceled_org_data"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."cleanup_long_canceled_org_data"() TO "service_role";
 
 
 
@@ -24163,6 +24366,11 @@ GRANT ALL ON FUNCTION "public"."lock_rbac_orgs"("p_first_org_id" "uuid", "p_seco
 
 
 
+REVOKE ALL ON FUNCTION "public"."long_canceled_org_ids"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."long_canceled_org_ids"() TO "service_role";
+
+
+
 REVOKE ALL ON FUNCTION "public"."mark_app_stats_refreshed"("p_app_id" character varying) FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."mark_app_stats_refreshed"("p_app_id" character varying) TO "service_role";
 
@@ -24332,6 +24540,7 @@ REVOKE ALL ON FUNCTION "public"."process_failed_uploads"() FROM PUBLIC;
 
 
 REVOKE ALL ON FUNCTION "public"."process_free_trial_expired"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."process_free_trial_expired"() TO "service_role";
 
 
 
@@ -25117,6 +25326,11 @@ GRANT ALL ON FUNCTION "public"."set_deleted_at_on_soft_delete"() TO "service_rol
 
 REVOKE ALL ON FUNCTION "public"."set_webhook_created_by"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."set_webhook_created_by"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."soft_delete_versions_for_long_canceled_orgs"("p_batch_size" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."soft_delete_versions_for_long_canceled_orgs"("p_batch_size" integer) TO "service_role";
 
 
 

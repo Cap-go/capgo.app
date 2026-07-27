@@ -1538,7 +1538,6 @@ export type Database = {
           apps: number
           apps_active: number | null
           apps_created: number
-          versions_created: number
           apps_with_cli_onboarding_builds_24h: number
           apps_with_manual_builds_24h: number
           average_ltv: number
@@ -1628,6 +1627,7 @@ export type Database = {
           upgraded_orgs: number
           users: number | null
           users_active: number | null
+          versions_created: number
         }
         Insert: {
           above_plan_with_credits?: number | null
@@ -1637,7 +1637,6 @@ export type Database = {
           apps: number
           apps_active?: number | null
           apps_created?: number
-          versions_created?: number
           apps_with_cli_onboarding_builds_24h?: number
           apps_with_manual_builds_24h?: number
           average_ltv?: number
@@ -1727,6 +1726,7 @@ export type Database = {
           upgraded_orgs?: number
           users?: number | null
           users_active?: number | null
+          versions_created?: number
         }
         Update: {
           above_plan_with_credits?: number | null
@@ -1736,7 +1736,6 @@ export type Database = {
           apps?: number
           apps_active?: number | null
           apps_created?: number
-          versions_created?: number
           apps_with_cli_onboarding_builds_24h?: number
           apps_with_manual_builds_24h?: number
           average_ltv?: number
@@ -1826,6 +1825,7 @@ export type Database = {
           upgraded_orgs?: number
           users?: number | null
           users_active?: number | null
+          versions_created?: number
         }
         Relationships: []
       }
@@ -3805,11 +3805,20 @@ export type Database = {
         Args: { p_app_uuid: string }
         Returns: undefined
       }
+      cleanup_audit_logs_for_long_canceled_orgs: {
+        Args: {
+          batch_size?: number
+          max_batches?: number
+          max_runtime_ms?: number
+        }
+        Returns: number
+      }
       cleanup_completed_onboarding_apps: { Args: never; Returns: undefined }
       cleanup_expired_apikeys: { Args: never; Returns: undefined }
       cleanup_expired_demo_apps: { Args: never; Returns: undefined }
       cleanup_frequent_job_details: { Args: never; Returns: undefined }
       cleanup_job_run_details_7days: { Args: never; Returns: undefined }
+      cleanup_long_canceled_org_data: { Args: never; Returns: undefined }
       cleanup_net_http_response: { Args: never; Returns: undefined }
       cleanup_old_audit_logs: {
         Args: {
@@ -4701,6 +4710,7 @@ export type Database = {
         Args: { p_first_org_id: string; p_second_org_id?: string }
         Returns: undefined
       }
+      long_canceled_org_ids: { Args: never; Returns: string[] }
       mark_app_stats_refreshed: { Args: { p_app_id: string }; Returns: string }
       mass_edit_queue_messages_cf_ids: {
         Args: {
@@ -4755,10 +4765,6 @@ export type Database = {
         Args: { batch_size?: number }
         Returns: number
       }
-      process_global_stats_creates_queue: {
-        Args: { batch_size?: number }
-        Returns: number
-      }
       process_cron_stats_jobs: { Args: never; Returns: undefined }
       process_cron_sync_sub_jobs: { Args: never; Returns: undefined }
       process_daily_fail_ratio_email: { Args: never; Returns: undefined }
@@ -4774,6 +4780,10 @@ export type Database = {
             Args: { batch_size?: number; queue_names: string[] }
             Returns: undefined
           }
+      process_global_stats_creates_queue: {
+        Args: { batch_size?: number }
+        Returns: number
+      }
       process_queue_with_healthcheck: {
         Args: {
           batch_size: number
@@ -5154,6 +5164,10 @@ export type Database = {
       set_build_time_exceeded_by_org: {
         Args: { disabled: boolean; org_id: string }
         Returns: undefined
+      }
+      soft_delete_versions_for_long_canceled_orgs: {
+        Args: { p_batch_size?: number }
+        Returns: number
       }
       strip_html: { Args: { input: string }; Returns: string }
       sweep_deleted_version_manifests: {
