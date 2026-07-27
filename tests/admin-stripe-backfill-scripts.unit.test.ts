@@ -95,12 +95,13 @@ describe('admin Stripe backfill scripts', () => {
           total: 0,
         },
         current_rate: 0,
+        // Plan rates use paying denominator: 10/25, 15/25, 25/25
         next_plan_rates: {
           enterprise: 0,
-          maker: 5,
-          solo: 7.5,
+          maker: 40,
+          solo: 60,
           team: 0,
-          total: 12.5,
+          total: 100,
         },
         next_rate: 12.5,
         changed: true,
@@ -119,13 +120,13 @@ describe('admin Stripe backfill scripts', () => {
         current_rate: 25,
         next_plan_rates: {
           enterprise: 0,
-          maker: 10,
-          solo: 15,
+          maker: 40,
+          solo: 60,
           team: 0,
-          total: 25,
+          total: 100,
         },
         next_rate: 25,
-        changed: false,
+        changed: true,
       },
     ])
   })
@@ -161,12 +162,13 @@ describe('admin Stripe backfill scripts', () => {
           total: 19.5,
         },
         current_rate: 20,
+        // Plan rates use paying: 10/40=25, 30/40=75, 40/40=100
         next_plan_rates: {
           enterprise: 0,
-          maker: 5,
-          solo: 15,
+          maker: 25,
+          solo: 75,
           team: 0,
-          total: 20,
+          total: 100,
         },
         next_rate: 20,
         changed: true,
