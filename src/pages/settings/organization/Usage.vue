@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import type { ArrayElement } from '~/services/types'
 import type { Database } from '~/types/supabase.types'
 import dayjs from 'dayjs'
 import { storeToRefs } from 'pinia'
@@ -17,6 +16,8 @@ import { calculateCreditCost, getCurrentPlanNameOrg, getPlans, getPlanUsagePerce
 import { sendEvent } from '~/services/tracking'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
+
+type PlanUsageDetailed = Database['public']['Functions']['get_plan_usage_percent_detailed']['Returns'][number]
 // tabs handled by settings layout
 
 const { t } = useI18n()
@@ -64,7 +65,7 @@ async function getUsage(orgId: string) {
   const currentPlan = plans.value.find((p: Database['public']['Tables']['plans']['Row']) => p.name === planCurrent)
 
   // Get usage percentages
-  let detailPlanUsage: ArrayElement<Database['public']['Functions']['get_plan_usage_percent_detailed']['Returns']> = {
+  let detailPlanUsage: PlanUsageDetailed = {
     total_percent: 0,
     mau_percent: 0,
     bandwidth_percent: 0,
@@ -221,7 +222,7 @@ function percent(usage: number, limit: number) {
   return Math.round((usage / limit) * 100)
 }
 
-function roundUsagePercents(usage: ArrayElement<Database['public']['Functions']['get_plan_usage_percent_detailed']['Returns']>) {
+function roundUsagePercents(usage: PlanUsageDetailed) {
   return {
     ...usage,
     total_percent: Math.round(usage.total_percent ?? 0),
@@ -233,7 +234,7 @@ function roundUsagePercents(usage: ArrayElement<Database['public']['Functions'][
 }
 
 function maybeDeriveMissingUsagePercents(params: {
-  detailPlanUsage: ArrayElement<Database['public']['Functions']['get_plan_usage_percent_detailed']['Returns']>
+  detailPlanUsage: PlanUsageDetailed
   currentPlan: Database['public']['Tables']['plans']['Row'] | undefined
   totalMau: number
   totalBandwidth: number
