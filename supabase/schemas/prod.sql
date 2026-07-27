@@ -19570,7 +19570,7 @@ CREATE TABLE IF NOT EXISTS "public"."webhook_deliveries" (
     "response_body" "text",
     "response_headers" "jsonb",
     "attempt_count" integer DEFAULT 0 NOT NULL,
-    "max_attempts" integer DEFAULT 10 NOT NULL,
+    "max_attempts" integer DEFAULT 5 NOT NULL,
     "next_retry_at" timestamp with time zone,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "completed_at" timestamp with time zone,
