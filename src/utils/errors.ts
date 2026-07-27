@@ -31,16 +31,3 @@ export function getErrorCode(value: unknown): string | undefined {
   }
   return undefined
 }
-
-export function getErrorStatus(value: unknown): number | undefined {
-  if (typeof value === 'object' && value !== null) {
-    const candidate = (value as { status?: unknown }).status
-    if (typeof candidate === 'number')
-      return candidate
-  }
-  return undefined
-}
-
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
