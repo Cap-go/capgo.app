@@ -158,8 +158,9 @@ export const useAdminDashboardStore = defineStore('adminDashboard', () => {
     return Date.now() - cached.timestamp < CACHE_TTL
   }
 
-  // Response shape varies by metric_category; callers should pass T when known.
-  async function fetchStats<T = any>(category: MetricCategory, forceRefresh = false): Promise<T> {
+  // Response shape varies by metric_category. Full per-metric runtime schemas are
+  // out of scope here; keep the previous polymorphic return contract.
+  async function fetchStats(category: MetricCategory, forceRefresh = false): Promise<any> {
     const requestDateRange = getRollingDateRange()
     const cacheKey = getCacheKey(category, requestDateRange)
     const skipCache = category === 'customer_country_breakdown'
@@ -167,7 +168,7 @@ export const useAdminDashboardStore = defineStore('adminDashboard', () => {
     // Check cache
     if (!forceRefresh && !skipCache && isCacheValid(cacheKey)) {
       const cached = cache.value.get(cacheKey)
-      return cached?.data as T
+      return cached?.data
     }
 
     loadingCount.value++
@@ -223,7 +224,7 @@ export const useAdminDashboardStore = defineStore('adminDashboard', () => {
         timestamp: Date.now(),
       })
 
-      return data.data as T
+      return data.data
     }
     finally {
       loadingCount.value = Math.max(0, loadingCount.value - 1)

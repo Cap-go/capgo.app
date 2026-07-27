@@ -688,7 +688,10 @@ export async function getRemoteDependencies(appId: string, channel: string) {
     throw new Error(error.message)
   }
   const version = remoteNativePackages.version as { native_packages?: { name: string, version: string }[] | null } | null
-  return convertNativePackages(version?.native_packages ?? [])
+  const nativePackages = version?.native_packages
+  if (!nativePackages)
+    throw new Error('Error parsing native packages, perhaps the metadata does not exist in Capgo?')
+  return convertNativePackages(nativePackages)
 }
 
 interface Compatibility {

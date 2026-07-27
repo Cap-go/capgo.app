@@ -48,7 +48,7 @@ export interface TableColumn<T = TableRow> {
   renderFunction?: (item: T) => VNodeChild
 }
 
-export interface Tab<T = unknown> {
+export interface Tab<T = TableRow> {
   label: string
   icon?: FunctionalComponent | ShallowRef<FunctionalComponent>
   key: string
