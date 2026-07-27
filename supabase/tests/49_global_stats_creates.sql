@@ -1,9 +1,18 @@
 BEGIN;
 
-SELECT plan(10);
+SELECT plan(11);
 
 -- Drain any seed-time enqueue backlog before measuring deltas.
-SELECT public.process_global_stats_creates_queue(1000);
+DO $$
+DECLARE
+  drained bigint;
+BEGIN
+  LOOP
+    drained := public.process_global_stats_creates_queue(1000);
+    EXIT WHEN drained = 0;
+  END LOOP;
+END;
+$$;
 
 CREATE TEMP TABLE tmp_global_stats_creates AS
 SELECT
@@ -132,6 +141,32 @@ SELECT is(
   ),
   0::bigint,
   'Internal builtin version does not enqueue create counter'
+);
+
+INSERT INTO public.app_versions (
+  app_id,
+  name,
+  owner_org,
+  user_id,
+  storage_provider
+)
+VALUES (
+  'com.test.global.stats.creates',
+  'unknown',
+  '046a36ac-e03c-4590-9257-bd6c9dba9ee8',
+  '6aa76066-55ef-4238-ade6-0b32334a4097',
+  'r2'
+);
+
+SELECT is(
+  (
+    SELECT count(*)
+    FROM pgmq.q_global_stats_creates
+    WHERE message ->> 'metric' = 'versions_created'
+      AND message ->> 'date_id' = ((now() AT TIME ZONE 'UTC')::date)::text
+  ),
+  0::bigint,
+  'Internal unknown version does not enqueue create counter'
 );
 
 DELETE FROM public.apps

@@ -1,6 +1,15 @@
 -- Durable create counters for admin daily stats.
 -- Count every app INSERT and non-internal version INSERT via PGMQ so deletes
 -- later in the day do not undercount the daily totals.
+--
+-- Execution model for enqueue_global_stats_creates:
+-- - Where: AFTER INSERT triggers on public.apps and public.app_versions
+-- - Frequency: once per inserted row (app create / version upload)
+-- - Roles: runs as SECURITY DEFINER (postgres); fired for any insert role
+-- - Cardinality: O(1) pgmq.send per insert; processor upserts one global_stats
+--   row keyed by date_id (PK). No scans of apps/app_versions.
+-- - Isolation: pgmq.send failures are caught so analytics never rolls back the
+--   primary insert (bundle upload / app create hot path).
 
 ALTER TABLE public.global_stats
   ADD COLUMN IF NOT EXISTS versions_created bigint DEFAULT 0 NOT NULL;
@@ -35,25 +44,29 @@ DECLARE
 BEGIN
   IF TG_TABLE_NAME = 'apps' THEN
     v_metric := 'apps_created';
-    v_date_id := ((NEW.created_at AT TIME ZONE 'UTC')::date)::text;
+    v_date_id := ((COALESCE(NEW.created_at, now()) AT TIME ZONE 'UTC')::date)::text;
   ELSIF TG_TABLE_NAME = 'app_versions' THEN
     IF NEW.name = 'builtin' OR NEW.name = 'unknown' THEN
       RETURN NEW;
     END IF;
     v_metric := 'versions_created';
-    v_date_id := ((NEW.created_at AT TIME ZONE 'UTC')::date)::text;
+    v_date_id := ((COALESCE(NEW.created_at, now()) AT TIME ZONE 'UTC')::date)::text;
   ELSE
     RETURN NEW;
   END IF;
 
-  PERFORM pgmq.send(
-    'global_stats_creates',
-    jsonb_build_object(
-      'metric', v_metric,
-      'date_id', v_date_id,
-      'delta', 1
-    )
-  );
+  BEGIN
+    PERFORM pgmq.send(
+      'global_stats_creates',
+      jsonb_build_object(
+        'metric', v_metric,
+        'date_id', v_date_id,
+        'delta', 1
+      )
+    );
+  EXCEPTION WHEN OTHERS THEN
+    RAISE WARNING 'enqueue_global_stats_creates: failed to enqueue % for %: %', v_metric, v_date_id, SQLERRM;
+  END;
 
   RETURN NEW;
 END;
@@ -61,6 +74,9 @@ $$;
 
 ALTER FUNCTION public.enqueue_global_stats_creates() OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.enqueue_global_stats_creates() FROM PUBLIC;
+
+COMMENT ON FUNCTION public.enqueue_global_stats_creates() IS
+  'AFTER INSERT enqueue for apps/app_versions create counters. O(1) pgmq.send per row; failures are isolated from the primary write.';
 
 CREATE OR REPLACE FUNCTION public.process_global_stats_creates_queue(batch_size integer DEFAULT 1000)
 RETURNS bigint
@@ -128,7 +144,7 @@ REVOKE ALL ON FUNCTION public.process_global_stats_creates_queue(integer) FROM P
 GRANT ALL ON FUNCTION public.process_global_stats_creates_queue(integer) TO service_role;
 
 COMMENT ON FUNCTION public.process_global_stats_creates_queue(integer) IS
-  'Applies queued app-create and version-upload deltas onto global_stats daily counters.';
+  'Applies queued app-create and version-upload deltas onto global_stats daily counters. Indexed upsert on global_stats.date_id PK.';
 
 DROP TRIGGER IF EXISTS global_stats_creates_on_app_insert ON public.apps;
 CREATE TRIGGER global_stats_creates_on_app_insert
