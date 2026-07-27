@@ -1533,6 +1533,7 @@ export interface AdminGlobalStatsTrend {
   date: string
   apps: number
   apps_created: number
+  versions_created: number
   apps_with_cli_onboarding_builds_24h: number
   apps_with_manual_builds_24h: number
   app_build_onboarding_finalized: boolean
@@ -1659,6 +1660,7 @@ export async function getAdminGlobalStatsTrend(
         gs.date_id AS date,
         gs.apps::int AS apps,
         COALESCE(NULLIF(to_jsonb(gs) ->> 'apps_created', '')::int, 0)::int AS apps_created,
+        COALESCE(NULLIF(to_jsonb(gs) ->> 'versions_created', '')::int, 0)::int AS versions_created,
         COALESCE(NULLIF(to_jsonb(gs) ->> 'apps_with_cli_onboarding_builds_24h', '')::int, 0)::int AS apps_with_cli_onboarding_builds_24h,
         COALESCE(NULLIF(to_jsonb(gs) ->> 'apps_with_manual_builds_24h', '')::int, 0)::int AS apps_with_manual_builds_24h,
         (onboarding_next.date_id IS NOT NULL)::boolean AS app_build_onboarding_finalized,
@@ -1814,6 +1816,7 @@ export async function getAdminGlobalStatsTrend(
       date: normalizeAdminStatsDate(row.date),
       apps: Number(row.apps) || 0,
       apps_created: Number(row.apps_created) || 0,
+      versions_created: Number(row.versions_created) || 0,
       apps_with_cli_onboarding_builds_24h: Number(row.apps_with_cli_onboarding_builds_24h) || 0,
       apps_with_manual_builds_24h: Number(row.apps_with_manual_builds_24h) || 0,
       app_build_onboarding_finalized: row.app_build_onboarding_finalized === true || row.app_build_onboarding_finalized === 'true',

@@ -123,6 +123,7 @@ beforeAll(async () => {
       date_id: GLOBAL_STATS_TREND_DATES[0],
       apps: 10,
       apps_created: 2,
+      versions_created: 5,
       apps_with_cli_onboarding_builds_24h: 1,
       apps_with_manual_builds_24h: 0,
       apps_active: 7,
@@ -166,6 +167,7 @@ beforeAll(async () => {
       date_id: GLOBAL_STATS_TREND_DATES[1],
       apps: 11,
       apps_created: 3,
+      versions_created: 8,
       apps_with_cli_onboarding_builds_24h: 2,
       apps_with_manual_builds_24h: 1,
       apps_active: 8,
@@ -209,6 +211,7 @@ beforeAll(async () => {
       date_id: GLOBAL_STATS_TREND_DATES[2],
       apps: 12,
       apps_created: 0,
+      versions_created: 0,
       apps_with_cli_onboarding_builds_24h: 0,
       apps_with_manual_builds_24h: 0,
       apps_active: 0,
@@ -691,6 +694,7 @@ describe('/private/admin_stats', () => {
         date: string
         apps: number
         apps_created: number
+        versions_created: number
         apps_with_cli_onboarding_builds_24h: number
         apps_with_manual_builds_24h: number
         app_build_onboarding_finalized: boolean
@@ -717,6 +721,7 @@ describe('/private/admin_stats', () => {
     expect(latest).toBeTruthy()
     expect(latest?.apps).toBe(11)
     expect(latest?.apps_created).toBe(3)
+    expect(latest?.versions_created).toBe(8)
     expect(latest?.apps_with_cli_onboarding_builds_24h).toBe(2)
     expect(latest?.app_build_onboarding_finalized).toBe(true)
     expect(latest?.apps_with_manual_builds_24h).toBe(1)

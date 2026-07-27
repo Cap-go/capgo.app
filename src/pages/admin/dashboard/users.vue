@@ -123,6 +123,8 @@ const globalStatsTrendData = ref<Array<{
   plan_team: number
   plan_enterprise: number
   registers_today: number
+  apps_created: number
+  versions_created: number
   demo_apps_created: number
   devices_last_month: number
   trial_extended_orgs: number
@@ -637,6 +639,38 @@ const registrationsTrendSeries = computed(() => {
         value: item.registers_today,
       })),
       color: '#3b82f6', // blue
+    },
+  ]
+})
+
+const appsCreatedTrendSeries = computed(() => {
+  if (globalStatsTrendData.value.length === 0)
+    return []
+
+  return [
+    {
+      label: t('admin-apps-created-by-day-series'),
+      data: globalStatsTrendData.value.map(item => ({
+        date: item.date,
+        value: item.apps_created ?? 0,
+      })),
+      color: '#2563eb',
+    },
+  ]
+})
+
+const versionsCreatedTrendSeries = computed(() => {
+  if (globalStatsTrendData.value.length === 0)
+    return []
+
+  return [
+    {
+      label: t('admin-versions-uploaded-by-day-series'),
+      data: globalStatsTrendData.value.map(item => ({
+        date: item.date,
+        value: item.versions_created ?? 0,
+      })),
+      color: '#10b981',
     },
   ]
 })
@@ -1389,6 +1423,30 @@ displayStore.defaultBack = '/dashboard'
             >
               <AdminMultiLineChart
                 :series="registrationsTrendSeries"
+                :is-loading="isLoadingGlobalStatsTrend"
+              />
+            </ChartCard>
+
+            <!-- Apps Created by Day -->
+            <ChartCard
+              :title="t('admin-apps-created-by-day')"
+              :is-loading="isLoadingGlobalStatsTrend"
+              :has-data="appsCreatedTrendSeries.length > 0"
+            >
+              <AdminMultiLineChart
+                :series="appsCreatedTrendSeries"
+                :is-loading="isLoadingGlobalStatsTrend"
+              />
+            </ChartCard>
+
+            <!-- Versions Uploaded by Day -->
+            <ChartCard
+              :title="t('admin-versions-uploaded-by-day')"
+              :is-loading="isLoadingGlobalStatsTrend"
+              :has-data="versionsCreatedTrendSeries.length > 0"
+            >
+              <AdminMultiLineChart
+                :series="versionsCreatedTrendSeries"
                 :is-loading="isLoadingGlobalStatsTrend"
               />
             </ChartCard>
