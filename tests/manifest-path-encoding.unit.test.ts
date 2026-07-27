@@ -55,6 +55,15 @@ describe('manifest path encoding', () => {
     )).toBe('assets/suite-marketing/images/social-media/sad_post_grey%402x.png')
   })
 
+  it.concurrent('does not decode legacy %00 into a Postgres-illegal null character', () => {
+    // Keep the encoded form rather than decoding to U+0000 (PG text rejects that).
+    expect(normalizeLegacyEncodedManifestFileName(
+      'assets/bad%00.js',
+      'orgs/org-id/apps/com.test.app/delta/hash_assets/bad%00.js',
+    )).toBe('assets/bad%00.js')
+  })
+
+
   it.concurrent('checks legacy percent, decoded, and upload-location encoded storage keys', () => {
     expect(getManifestStorageCandidateKeys(
       'orgs/org-id/apps/com.test.app/delta/hash_assets/suite-marketing/images/social-media/sad_post_grey%402x.png',

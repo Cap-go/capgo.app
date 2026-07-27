@@ -14,10 +14,16 @@ export function decodeManifestPathSegments(path: string): string | null {
 }
 
 function isSafeManifestPath(path: string): boolean {
-  if (!path || path.startsWith('/') || path.includes('\\'))
+  // Postgres text/varchar cannot store U+0000; reject before decode/persist.
+  if (!path || path.startsWith('/') || path.includes('\\') || path.includes('\0'))
     return false
 
   return path.split('/').every(segment => segment !== '' && segment !== '.' && segment !== '..')
+}
+
+/** True when a string is safe to store in Postgres text/varchar columns. */
+export function isPostgresSafeText(value: string): boolean {
+  return value.length > 0 && !value.includes('\0')
 }
 
 export function normalizeLegacyEncodedManifestFileName(fileName: string | null | undefined, s3Path: string | null | undefined): string | null {

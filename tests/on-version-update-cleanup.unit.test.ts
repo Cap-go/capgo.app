@@ -191,6 +191,10 @@ describe('on_version_update deleted version cleanup', () => {
     expect(callOrder.indexOf('r2_trash')).toBeGreaterThan(callOrder.indexOf('lock'))
     expect(callOrder.indexOf('db_delete_row:1000')).toBeGreaterThan(callOrder.indexOf('r2_trash'))
     expect(pgQuery).toHaveBeenCalledWith(expect.stringContaining('WITH prev AS'), expect.any(Array))
+    // Postgres rejects chr(0) with 54000 "null character not permitted".
+    const lockSql = pgQuery.mock.calls.find(([sql]) => typeof sql === 'string' && sql.includes('pg_advisory_xact_lock'))?.[0] as string
+    expect(lockSql).toContain('hashtext($1::text), hashtext($2::text)')
+    expect(lockSql).not.toContain('chr(0)')
   })
 
   it('does not delete DB rows when R2 trash fails', async () => {
