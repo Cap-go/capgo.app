@@ -78,7 +78,7 @@ interface CompleteTopUpRequest {
 const DEFAULT_TOP_UP_QUANTITY = 100
 const MAX_TOP_UP_QUANTITY = 100000
 
-type AppContext = Context<MiddlewareKeyVariables, any, any>
+type AppContext = Context<MiddlewareKeyVariables>
 
 function sortCreditSteps(steps: CreditStep[]): CreditStep[] {
   return [...steps].sort((a, b) => {

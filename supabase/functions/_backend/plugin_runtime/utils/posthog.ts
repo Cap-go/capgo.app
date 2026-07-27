@@ -15,8 +15,8 @@ interface PostHogCapturePayload extends Pick<TrackOptions, 'event'>, Pick<TrackO
   groups?: PostHogGroups
   ip?: string
   setPersonProperties?: boolean
-  tags?: Record<string, any>
-  nonPersonTags?: Record<string, any>
+  tags?: Record<string, unknown>
+  nonPersonTags?: Record<string, unknown>
   timestamp?: string
   user_id?: string
 }

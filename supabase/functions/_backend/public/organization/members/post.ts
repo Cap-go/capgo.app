@@ -46,7 +46,7 @@ export function normalizeInviteRole(inviteType: string): RbacInviteRole | null {
   return inviteRoleAliases[inviteType]
 }
 
-export async function post(c: Context<MiddlewareKeyVariables>, bodyRaw: any, _apikey: Database['public']['Tables']['apikeys']['Row']) {
+export async function post(c: Context<MiddlewareKeyVariables>, bodyRaw: unknown, _apikey: Database['public']['Tables']['apikeys']['Row']) {
   const bodyParsed = safeParseSchema(inviteBodySchema, bodyRaw)
   if (!bodyParsed.success) {
     throw simpleError('invalid_body', 'Invalid body', { error: bodyParsed.error })

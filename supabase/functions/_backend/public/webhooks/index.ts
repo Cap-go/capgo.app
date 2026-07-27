@@ -16,7 +16,7 @@ import { test } from './test.ts'
 export const app = honoFactory.createApp()
 
 async function apiKeyHasAppScopedBinding(
-  c: Context<MiddlewareKeyVariables, any, any>,
+  c: Context<MiddlewareKeyVariables>,
   apikey: Database['public']['Tables']['apikeys']['Row'],
 ): Promise<boolean> {
   if (!apikey.rbac_id)
@@ -50,7 +50,7 @@ async function apiKeyHasAppScopedBinding(
 }
 
 async function assertOrgWebhookScope(
-  c: Context<MiddlewareKeyVariables, any, any>,
+  c: Context<MiddlewareKeyVariables>,
   orgId: string,
   apikey: Database['public']['Tables']['apikeys']['Row'],
 ): Promise<void> {
@@ -64,7 +64,7 @@ async function assertOrgWebhookScope(
 }
 
 async function assertWebhookOrgPolicy(
-  c: Context<MiddlewareKeyVariables, any, any>,
+  c: Context<MiddlewareKeyVariables>,
   orgId: string,
   apikey: Database['public']['Tables']['apikeys']['Row'],
 ): Promise<void> {
@@ -88,12 +88,12 @@ function uniqueApiKeys(
   return filteredApiKeys.filter((apikey, index) => filteredApiKeys.findIndex(existing => existing.id === apikey.id) === index)
 }
 
-function getWebhookApiKeyChain(c: Context<MiddlewareKeyVariables, any, any>, apikey: Database['public']['Tables']['apikeys']['Row']) {
+function getWebhookApiKeyChain(c: Context<MiddlewareKeyVariables>, apikey: Database['public']['Tables']['apikeys']['Row']) {
   const parentApikey = c.get('parentApikey') as Database['public']['Tables']['apikeys']['Row'] | undefined
   return uniqueApiKeys([parentApikey, apikey])
 }
 
-function getWebhookAuthApiKeyChain(c: Context<MiddlewareKeyVariables, any, any>, auth: AuthInfo) {
+function getWebhookAuthApiKeyChain(c: Context<MiddlewareKeyVariables>, auth: AuthInfo) {
   if (auth.authType !== 'apikey' || !auth.apikey)
     return []
 
@@ -101,7 +101,7 @@ function getWebhookAuthApiKeyChain(c: Context<MiddlewareKeyVariables, any, any>,
 }
 
 async function assertWebhookApiKeyChain(
-  c: Context<MiddlewareKeyVariables, any, any>,
+  c: Context<MiddlewareKeyVariables>,
   orgId: string,
   apiKeyChain: Database['public']['Tables']['apikeys']['Row'][],
 ) {
@@ -119,7 +119,7 @@ async function assertWebhookApiKeyChain(
  * Validates admin access to organization
  */
 export async function checkWebhookPermission(
-  c: Context<MiddlewareKeyVariables, any, any>,
+  c: Context<MiddlewareKeyVariables>,
   orgId: string,
   apikey: Database['public']['Tables']['apikeys']['Row'],
 ): Promise<void> {
@@ -135,7 +135,7 @@ export async function checkWebhookPermission(
  * Validates admin access to organization using the unified auth info
  */
 export async function checkWebhookPermissionV2(
-  c: Context<MiddlewareKeyVariables, any, any>,
+  c: Context<MiddlewareKeyVariables>,
   orgId: string,
   auth: AuthInfo,
 ): Promise<void> {

@@ -12,7 +12,7 @@ const PLUGIN_NOTIFICATION_QUEUE_CACHE_TTL_SECONDS = 60
 export interface PluginOrgNotificationQueueItem {
   type: 'org'
   eventName: string
-  eventData: Record<string, any>
+  eventData: Record<string, unknown>
   orgId: string
   uniqId: string
   cron: string
@@ -24,7 +24,7 @@ export interface PluginOrgMembersNotificationQueueItem {
   type: 'org_members'
   eventName: string
   preferenceKey: EmailPreferenceKey
-  eventData: Record<string, any>
+  eventData: Record<string, unknown>
   orgId: string
   uniqId: string
   cron: string
@@ -123,7 +123,7 @@ async function enqueuePluginNotification(c: Context, item: PluginNotificationQue
 export function queuePluginOrgNotification(
   c: Context,
   eventName: string,
-  eventData: Record<string, any>,
+  eventData: Record<string, unknown>,
   orgId: string,
   uniqId: string,
   cron: string,

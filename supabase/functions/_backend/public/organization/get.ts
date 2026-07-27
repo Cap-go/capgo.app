@@ -103,7 +103,7 @@ async function fetchOrgs(
   return parseOrgs(data)
 }
 
-export async function get(c: Context<MiddlewareKeyVariables>, bodyRaw: any, apikey: Database['public']['Tables']['apikeys']['Row']): Promise<Response> {
+export async function get(c: Context<MiddlewareKeyVariables>, bodyRaw: unknown, apikey: Database['public']['Tables']['apikeys']['Row']): Promise<Response> {
   const body = parseBody(bodyRaw)
   const supabase = supabaseApikey(c, apikey.key)
 

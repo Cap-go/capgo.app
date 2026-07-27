@@ -11,14 +11,23 @@ interface DateRange {
 }
 
 interface CachedData {
-  data: any
+  data: unknown
   timestamp: number
+}
+
+interface AdminStatsRequestBody {
+  metric_category: MetricCategory
+  start_date: string
+  end_date: string
+  app_id?: string
+  org_id?: string
+  limit?: number
 }
 
 interface AdminStatsResponse {
   success: boolean
   metric_category: MetricCategory
-  data: any
+  data: unknown
   period: {
     start: string
     end: string
@@ -149,6 +158,8 @@ export const useAdminDashboardStore = defineStore('adminDashboard', () => {
     return Date.now() - cached.timestamp < CACHE_TTL
   }
 
+  // Response shape varies by metric_category. Full per-metric runtime schemas are
+  // out of scope here; keep the previous polymorphic return contract.
   async function fetchStats(category: MetricCategory, forceRefresh = false): Promise<any> {
     const requestDateRange = getRollingDateRange()
     const cacheKey = getCacheKey(category, requestDateRange)
@@ -167,7 +178,7 @@ export const useAdminDashboardStore = defineStore('adminDashboard', () => {
       const { start, end } = requestDateRange
       const supabase = useSupabase()
 
-      const body: any = {
+      const body: AdminStatsRequestBody = {
         metric_category: category,
         start_date: start.toISOString(),
         end_date: end.toISOString(),

@@ -183,7 +183,7 @@ async function assertMemberRemovalAuthorizedAfterLock(
   }
 }
 
-export async function deleteMember(c: Context<MiddlewareKeyVariables>, bodyRaw: any, _apikey: Database['public']['Tables']['apikeys']['Row']) {
+export async function deleteMember(c: Context<MiddlewareKeyVariables>, bodyRaw: unknown, _apikey: Database['public']['Tables']['apikeys']['Row']) {
   const bodyParsed = safeParseSchema(deleteBodySchema, bodyRaw)
   if (!bodyParsed.success) {
     throw simpleError('invalid_body', 'Invalid body', { error: bodyParsed.error })

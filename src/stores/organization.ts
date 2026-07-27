@@ -1,5 +1,5 @@
+import type { AuthChangeEvent } from '@supabase/supabase-js'
 import type { ComputedRef, Ref } from 'vue'
-import type { ArrayElement, Concrete, Merge } from '~/services/types'
 import type { Database } from '~/types/supabase.types'
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
@@ -22,7 +22,7 @@ export interface PasswordPolicyConfig {
 
 // Extended organization type with password policy and 2FA fields (from get_orgs_v7)
 // Note: Using get_orgs_v7 return type with explicit JSON parsing for password_policy_config
-type RawOrganization = ArrayElement<Database['public']['Functions']['get_orgs_v7']['Returns']>
+type RawOrganization = Database['public']['Functions']['get_orgs_v7']['Returns'][number]
 export type Organization = Omit<RawOrganization, 'password_policy_config' | 'stats_refresh_requested_at' | 'stats_updated_at'> & {
   logo_storage_path?: string | null
   logo_is_loading?: boolean
@@ -44,7 +44,8 @@ export type OrganizationRole
     | 'org_billing_admin'
     | 'org_admin'
     | 'org_super_admin'
-export type ExtendedOrganizationMember = Concrete<Merge<ArrayElement<Database['public']['Functions']['get_org_members']['Returns']>, { id: number | string }>>
+type OrgMemberRow = Database['public']['Functions']['get_org_members']['Returns'][number]
+export type ExtendedOrganizationMember = OrgMemberRow & { id: number | string }
 export type ExtendedOrganizationMembers = ExtendedOrganizationMember[]
 type SignedMemberImageCallback = (signedImages: Map<string, string>) => void
 type OrgPermissionFloor = 'org_member' | 'org_billing_admin' | 'org_admin' | 'org_super_admin' | 'owner'
@@ -520,7 +521,7 @@ export const useOrganizationStore = defineStore('organization', () => {
       return
 
     if (!_initialized.value) {
-      const listener = supabase.auth.onAuthStateChange((event: any) => {
+      const listener = supabase.auth.onAuthStateChange((event: AuthChangeEvent) => {
         if (event === 'SIGNED_OUT') {
           listener.data.subscription.unsubscribe()
           clearWebsitePaidUserCookie()

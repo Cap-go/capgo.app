@@ -34,7 +34,7 @@ const auditLogSchema = z.object({
 
 const auditLogsSchema = z.array(auditLogSchema)
 
-export async function getAuditLogs(c: Context, bodyRaw: any): Promise<Response> {
+export async function getAuditLogs(c: Context, bodyRaw: unknown): Promise<Response> {
   const bodyParsed = safeParseSchema(bodySchema, bodyRaw)
   if (!bodyParsed.success) {
     throw simpleError('invalid_body', 'Invalid body', { error: bodyParsed.error })

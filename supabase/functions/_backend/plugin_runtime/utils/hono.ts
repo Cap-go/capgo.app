@@ -48,8 +48,8 @@ export interface MiddlewareKeyVariables {
     APISecret?: string
     auth?: AuthInfo
     subkey?: Database['public']['Tables']['apikeys']['Row']
-    webhookBody?: any
-    oldRecord?: any
+    webhookBody?: unknown
+    oldRecord?: unknown
     // RBAC context variables
     rbacEnabled?: boolean
     resolvedOrgId?: string
@@ -283,7 +283,7 @@ export function quickError(status: number, errorCode: string, message: string, m
     suppressDiscordAlert: options.alert === false,
   }
   // Throw a simple HTTPException - onError will create the response with X-Request-Id header
-  throw new HTTPException(status as any, {
+  throw new HTTPException(status as ContentfulStatusCode, {
     message,
     cause: errorDetails,
   })

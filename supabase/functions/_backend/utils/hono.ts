@@ -51,8 +51,8 @@ export interface MiddlewareKeyVariables {
     APISecret?: string
     auth?: AuthInfo
     subkey?: Database['public']['Tables']['apikeys']['Row']
-    webhookBody?: any
-    oldRecord?: any
+    webhookBody?: unknown
+    oldRecord?: unknown
     // RBAC context variables
     rbacEnabled?: boolean
     resolvedOrgId?: string
@@ -208,7 +208,7 @@ export function triggerValidator(
   })
 }
 
-export async function getBodyOrQuery<T>(c: Context<MiddlewareKeyVariables, any, any>) {
+export async function getBodyOrQuery<T>(c: Context<MiddlewareKeyVariables>) {
   let body: T
   try {
     body = await c.req.json<T>()
@@ -338,15 +338,15 @@ export function createAllCatch(appGlobal: Hono<MiddlewareKeyVariables>, function
 export interface SimpleErrorResponse {
   error: string
   message: string
-  cause?: any
-  moreInfo?: any
+  cause?: unknown
+  moreInfo?: Record<string, unknown>
 }
 
-export function simpleError200(c: Context, errorCode: string, message: string, moreInfo: any = {}) {
+export function simpleError200(c: Context, errorCode: string, message: string, moreInfo: Record<string, unknown> = {}) {
   return simpleErrorWithStatus(c, 200, errorCode, message, moreInfo)
 }
 
-export function simpleErrorWithStatus(c: Context, status: ContentfulStatusCode, errorCode: string, message: string, moreInfo: any = {}) {
+export function simpleErrorWithStatus(c: Context, status: ContentfulStatusCode, errorCode: string, message: string, moreInfo: Record<string, unknown> = {}) {
   const res: SimpleErrorResponse = {
     error: errorCode,
     message,
@@ -360,7 +360,7 @@ export interface QuickErrorOptions {
   alert?: boolean
 }
 
-export function quickError(status: number, errorCode: string, message: string, moreInfo: any = {}, cause?: any, options: QuickErrorOptions = {}): never {
+export function quickError(status: ContentfulStatusCode | number, errorCode: string, message: string, moreInfo: Record<string, unknown> = {}, cause?: unknown, options: QuickErrorOptions = {}): never {
   // Store error details in cause so onError can extract them
   const errorDetails = {
     error: errorCode,
@@ -370,7 +370,7 @@ export function quickError(status: number, errorCode: string, message: string, m
     suppressDiscordAlert: options.alert === false,
   }
   // Throw a simple HTTPException - onError will create the response with X-Request-Id header
-  throw new HTTPException(status as any, {
+  throw new HTTPException(status as ContentfulStatusCode, {
     message,
     cause: errorDetails,
   })
@@ -387,7 +387,7 @@ export function quickError(status: number, errorCode: string, message: string, m
  * echo of whatever the client submitted and means any future field added to
  * the request schema (sensitive or not) silently lands in the error payload.
  */
-export function simpleRateLimit(moreInfo: any = {}, cause?: any): never {
+export function simpleRateLimit(moreInfo: Record<string, unknown> = {}, cause?: unknown): never {
   const status = 429
   const message = 'Too many requests'
   const errorCode = 'too_many_requests'
@@ -395,7 +395,7 @@ export function simpleRateLimit(moreInfo: any = {}, cause?: any): never {
   return quickError(status, errorCode, message, moreInfo, cause)
 }
 
-export function simpleError(errorCode: string, message: string, moreInfo: any = {}, cause?: any): never {
+export function simpleError(errorCode: string, message: string, moreInfo: Record<string, unknown> = {}, cause?: unknown): never {
   if (errorCode === 'invalid_jwt') {
     return quickError(401, errorCode, message, moreInfo, cause)
   }
@@ -406,11 +406,13 @@ export function parseBody<T>(c: Context) {
   // IMPORTANT: c.req.json() consumes the request body.
   // Supabase/CF error reporters may try to read the body later for alerts and log
   // "Body already consumed". Parsing from a clone keeps the original readable.
-  return c.req.raw.clone().json<T>().catch((e) => {
+  return c.req.raw.clone().json<T>().catch((e: unknown) => {
     throw simpleError('invalid_json_parse_body', 'Invalid JSON body', { e })
   }).then((body) => {
-    if ((body as any).device_id) {
-      (body as any).device_id = (body as any).device_id.toLowerCase()
+    if (body && typeof body === 'object' && 'device_id' in body) {
+      const record = body as { device_id?: unknown }
+      if (typeof record.device_id === 'string')
+        record.device_id = record.device_id.toLowerCase()
     }
     return body
   })

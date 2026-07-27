@@ -60,7 +60,7 @@ async function bentoFetch(c: Context, path: string, siteUuid: string, body: any)
 }
 
 // Only use this function when a specific member of the organization needs to be tracked in Bento. For organization-level events, use sendNotifToOrgMembers in org_email_notifications.ts which will call trackBentoEvent for each member with an email in the background.
-export async function trackBentoEvent(c: Context, email: string, data: any, event: string) {
+export async function trackBentoEvent(c: Context, email: string, data: Record<string, unknown>, event: string) {
   if (!isBentoConfigured(c))
     return
 

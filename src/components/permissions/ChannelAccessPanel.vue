@@ -7,6 +7,7 @@ import IconTrash from '~icons/heroicons/trash'
 import ChannelPermissionOverridesPanel from '~/components/permissions/ChannelPermissionOverridesPanel.vue'
 import { useSupabase } from '~/services/supabase'
 import { getRbacRoleI18nKey } from '~/stores/organization'
+import { getErrorCode, getErrorMessage } from '~/utils/errors'
 
 type PrincipalType = 'user' | 'group' | 'apikey'
 
@@ -200,9 +201,9 @@ async function addChannelRole() {
     await loadChannelAccess()
     emit('changed')
   }
-  catch (error: any) {
+  catch (error: unknown) {
     console.error('Error assigning channel role:', error)
-    if (error?.message?.includes('duplicate') || error?.code === '23505')
+    if (getErrorMessage(error)?.includes('duplicate') || getErrorCode(error) === '23505')
       toast.error(t('error-role-already-assigned'))
     else
       toast.error(t('error-assigning-role'))
