@@ -14,7 +14,7 @@ import { parse } from '@std/semver'
 import * as micromatch from 'micromatch'
 import * as tus from 'tus-js-client'
 import { encryptChecksum, encryptChecksumV3, encryptSource } from '../api/crypto'
-import { BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, findRoot, generateManifest, getContentType, getInstalledVersion, getLocalConfig, isDeprecatedPluginVersion, sendEvent, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
+import { BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, deltaManifestTooLargeMessage, findRoot, generateManifest, getContentType, getInstalledVersion, getLocalConfig, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, sendEvent, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
 
 // Check if file already exists on server (bypass cache and force storage lookup)
 async function fileExists(localConfig: any, filename: string): Promise<boolean> {
@@ -230,6 +230,10 @@ export async function uploadPartial(
   if (filesWithSpaces.length > 0) {
     throw new Error(`Files with spaces in their names (${filesWithSpaces.map(f => f.file).join(', ')}). Please rename the files.`)
   }
+
+  if (manifest.length > MAX_MANIFEST_ENTRIES)
+    throw new Error(deltaManifestTooLargeMessage(manifest.length))
+
 
   let uploadedFiles = 0
   const totalFiles = manifest.length

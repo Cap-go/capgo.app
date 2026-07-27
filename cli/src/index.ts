@@ -260,7 +260,7 @@ Example: npx @capgo/cli@latest bundle upload com.example.app --path ./dist --cha
   .option('--tus-chunk-size <tusChunkSize>', `Chunk size in bytes for TUS resumable uploads (default: auto)`)
   .option('--partial', `[DEPRECATED] Use --delta instead. Upload incremental updates`)
   .option('--partial-only', `[DEPRECATED] Use --delta-only instead. Upload only incremental updates, skip full bundle`)
-  .option('--delta', `Upload delta updates (only changed files) for instant, super-fast updates instead of big zip downloads`)
+  .option('--delta', `Upload delta updates (only changed files) for instant, super-fast updates instead of big zip downloads. Capgo refuses delta uploads over 10,000 files (delta tracks each file); use --no-delta for a full zip, or reduce files in your web build.`)
   .option('--delta-only', `Upload only delta updates without full bundle for maximum speed (useful for large apps)`)
   .option('--no-delta', `Disable delta updates even if instant updates are enabled`)
   .option('--encrypted-checksum <encryptedChecksum>', `An encrypted checksum (signature). Used only when uploading an external bundle.`)

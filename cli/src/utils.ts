@@ -52,6 +52,22 @@ export const ALERT_UPLOAD_SIZE_BYTES = 1024 * 1024 * 20 // 20MB
 export const MAX_UPLOAD_LENGTH_BYTES = 1024 * 1024 * 1024 // 1GB
 export const MAX_CHUNK_SIZE_BYTES = 1024 * 1024 * 99 // 99MB
 export const TUS_UPLOAD_RETRY_DELAYS = [0, 1000, 3000, 5000, 10000]
+// Keep in sync with supabase/functions/_backend/private/set_manifest.ts
+export const MAX_MANIFEST_ENTRIES = 10_000
+
+/** User-facing error when a delta/manifest upload exceeds MAX_MANIFEST_ENTRIES. */
+export function deltaManifestTooLargeMessage(fileCount: number): string {
+  const max = MAX_MANIFEST_ENTRIES.toLocaleString('en-US')
+  const count = fileCount.toLocaleString('en-US')
+  return [
+    `Delta updates cannot upload this bundle: it has ${count} files, and Capgo allows at most ${max} files per delta (manifest) upload.`,
+    'Delta mode tracks and uploads each file individually so devices can download only what changed. Very large file counts are not supported on that path.',
+    'What you can do:',
+    `1. Upload a full zip instead: npx @capgo/cli@latest bundle upload --no-delta`,
+    '2. Or reduce files in your web build output (remove unused assets, avoid copying large trees into dist).',
+    'See https://capgo.app/docs/faq/#are-there-delta-update-file-path-limitations',
+  ].join('\n')
+}
 
 export const PACKNAME = 'package.json'
 
