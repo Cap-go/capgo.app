@@ -2,8 +2,6 @@ BEGIN;
 
 SELECT plan(10);
 
-SELECT tests.authenticate_as_service_role();
-
 CREATE TEMP TABLE tmp_global_stats_creates AS
 SELECT
   COALESCE((
