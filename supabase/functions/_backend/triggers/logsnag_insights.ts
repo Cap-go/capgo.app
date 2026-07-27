@@ -2642,8 +2642,9 @@ async function runCoreGlobalStatsShard(c: Context, window: DailyWindow): Promise
   // Plan upgrade/mix rates use paying orgs as denominator (not total users/orgs).
   const planConversionRates = getPlanConversionRates(plans, customers.total)
 
+  // apps_created is event-sourced via the global_stats_creates queue so deleted
+  // apps still count for the UTC day. Do not overwrite it from surviving rows.
   await updateGlobalStatsSnapshot(c, finalizedAppBuildOnboardingWindow.prevDayDateId, {
-    apps_created: finalizedAppBuildOnboardingMetrics.apps_created,
     apps_with_cli_onboarding_builds_24h: finalizedAppBuildOnboardingMetrics.apps_with_cli_onboarding_builds_24h,
     apps_with_manual_builds_24h: finalizedAppBuildOnboardingMetrics.apps_with_manual_builds_24h,
   })

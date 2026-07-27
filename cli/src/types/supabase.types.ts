@@ -1527,6 +1527,7 @@ export type Database = {
         Row: {
           apps: number
           apps_created: number
+          versions_created: number
           apps_with_cli_onboarding_builds_24h: number
           apps_with_manual_builds_24h: number
           apps_active: number | null
@@ -1619,6 +1620,7 @@ export type Database = {
         Insert: {
           apps: number
           apps_created?: number
+          versions_created?: number
           apps_with_cli_onboarding_builds_24h?: number
           apps_with_manual_builds_24h?: number
           apps_active?: number | null
@@ -1711,6 +1713,7 @@ export type Database = {
         Update: {
           apps?: number
           apps_created?: number
+          versions_created?: number
           apps_with_cli_onboarding_builds_24h?: number
           apps_with_manual_builds_24h?: number
           apps_active?: number | null
@@ -4337,6 +4340,10 @@ export type Database = {
       process_all_cron_tasks: { Args: never; Returns: undefined }
       process_billing_period_stats_email: { Args: never; Returns: undefined }
       process_channel_device_counts_queue: {
+        Args: { batch_size?: number }
+        Returns: number
+      }
+      process_global_stats_creates_queue: {
         Args: { batch_size?: number }
         Returns: number
       }
