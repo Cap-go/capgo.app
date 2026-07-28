@@ -11,7 +11,6 @@ const sendStatsAndDeviceMock = vi.fn(() => Promise.resolve())
 vi.mock('../supabase/functions/_backend/plugin_runtime/utils/appStatus.ts', () => ({
   getAppStatus: vi.fn(() => Promise.resolve({ status: null, allow_device_custom_id: true })),
   setAppStatus: vi.fn(() => Promise.resolve()),
-  toOwnerRoutingCache: (owner: any) => owner,
 }))
 
 vi.mock('../supabase/functions/_backend/plugin_runtime/utils/channelSelfStore.ts', () => ({

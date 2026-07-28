@@ -12,7 +12,7 @@ import {
   tryParse,
 } from '@std/semver'
 import { getRuntimeKey } from 'hono/adapter'
-import { getAppStatus, setAppStatus, toOwnerRoutingCache } from './appStatus.ts'
+import { getAppStatus, setAppStatus } from './appStatus.ts'
 import { getBundleUrl, getManifestUrl } from './downloadUrl.ts'
 import { simpleError200 } from './hono.ts'
 import { cloudlog } from './logging.ts'
@@ -349,7 +349,6 @@ export async function updateWithPG(
     'cloud',
     appOwner.allow_device_custom_id,
     appOwner.block_provider_infra_requests,
-    toOwnerRoutingCache(appOwner),
   )
   const pluginVersion = parse(plugin_version)
   const shouldUseChannelSelfStore = usesLegacyChannelSelfStoreVersion(pluginVersion) && hasChannelSelfStoreBinding(c)

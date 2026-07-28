@@ -4,7 +4,7 @@ import type { Database } from '../utils/supabase.types.ts'
 import type { AppStats, StatsActions } from '../utils/types.ts'
 import { greaterOrEqual, parse, tryParse } from '@std/semver'
 import { Hono } from 'hono/tiny'
-import { getAppStatus, setAppStatus, toOwnerRoutingCache } from '../utils/appStatus.ts'
+import { getAppStatus, setAppStatus } from '../utils/appStatus.ts'
 import { BRES, simpleError, simpleError200, simpleRateLimit } from '../utils/hono.ts'
 import { invalidIpInfo } from '../utils/invalids_ip.ts'
 import { cloudlog } from '../utils/logging.ts'
@@ -134,7 +134,7 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
     }, appOwner.owner_org, app_id, '0 0 * * 1', appOwner.orgs.management_email, drizzleClient)) // Weekly on Monday
     return { success: false, error: 'need_plan_upgrade', message: 'Cannot update, upgrade plan to continue to update' }
   }
-  await setAppStatus(c, app_id, 'cloud', appOwner.allow_device_custom_id, appOwner.block_provider_infra_requests, toOwnerRoutingCache(appOwner))
+  await setAppStatus(c, app_id, 'cloud', appOwner.allow_device_custom_id, appOwner.block_provider_infra_requests)
   const statsActions: StatsActions[] = []
   if (allowDeviceCustomId === false && typeof body.custom_id === 'string' && body.custom_id.trim() !== '') {
     statsActions.push({ action: 'customIdBlocked' })

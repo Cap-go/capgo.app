@@ -752,6 +752,11 @@ export default {
                 console.log(`${workerUrl} returned on-prem for ${appId}; confirming with one fallback worker`)
                 continue
               }
+              // Never cache after a skipped/failed configured fallback (partial outage).
+              if (fallbackFailure) {
+                console.log(`On-prem seen after fallback failure for ${appId}; not caching`)
+                continue
+              }
               console.log(`On-prem confirmed (${onPremConfirmations}) for ${appId}`)
               return await buildOnPremResponse(hostname, appId, endpoint, method, pendingOnPrem.responseBody, pendingOnPrem.status, pendingOnPrem.headers)
             }
