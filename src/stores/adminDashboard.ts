@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
 
 export type MetricCategory = 'uploads' | 'distribution' | 'failures' | 'success_rate' | 'platform_overview' | 'org_metrics' | 'mau_trend' | 'success_rate_trend' | 'apps_trend' | 'bundles_trend' | 'deployments_trend' | 'storage_trend' | 'bandwidth_trend' | 'global_stats_trend' | 'plugin_breakdown' | 'trial_organizations' | 'trial_plan_breakdown' | 'onboarding_funnel' | 'cancelled_users' | 'email_type_breakdown' | 'customer_country_breakdown' | 'organization_insights' | 'builder_analytics'
-export type DateRangeMode = '3day' | '7day' | '14day' | '30day' | '90day' | 'quarter' | '6month' | '12month' | 'custom'
+export type DateRangeMode = '30min' | '1h' | '6h' | '12h' | '24h' | '3day' | '7day' | '14day' | '30day' | '90day' | 'quarter' | '6month' | '12month' | 'custom'
 
 interface DateRange {
   start: Date
@@ -38,9 +38,9 @@ export const useAdminDashboardStore = defineStore('adminDashboard', () => {
   // Filter state
   const selectedOrgId = ref<string | null>(null)
   const selectedAppId = ref<string | null>(null)
-  const dateRangeMode = ref<DateRangeMode>('30day')
+  const dateRangeMode = ref<DateRangeMode>('24h')
   const customDateRange = ref<DateRange>({
-    start: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+    start: new Date(Date.now() - 24 * 60 * 60 * 1000),
     end: new Date(),
   })
 
@@ -59,6 +59,31 @@ export const useAdminDashboardStore = defineStore('adminDashboard', () => {
 
   function getRollingDateRange(now = new Date()): DateRange {
     switch (dateRangeMode.value) {
+      case '30min':
+        return {
+          start: new Date(now.getTime() - 30 * 60 * 1000),
+          end: now,
+        }
+      case '1h':
+        return {
+          start: new Date(now.getTime() - 60 * 60 * 1000),
+          end: now,
+        }
+      case '6h':
+        return {
+          start: new Date(now.getTime() - 6 * 60 * 60 * 1000),
+          end: now,
+        }
+      case '12h':
+        return {
+          start: new Date(now.getTime() - 12 * 60 * 60 * 1000),
+          end: now,
+        }
+      case '24h':
+        return {
+          start: new Date(now.getTime() - 24 * 60 * 60 * 1000),
+          end: now,
+        }
       case '3day':
         return {
           start: new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000),
