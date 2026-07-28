@@ -344,59 +344,72 @@ function toNativeObserveEventSamples(events: UpdateDeliveryTimingEventCF[]): Nat
   return samples
 }
 
-function aggregateNativeObserveSamples(samples: NativeObserveEventSample[]): {
-  dailyRows: NativeObserveMetricRow[]
-  actionRows: NativeObserveMetricRow[]
-  versionRows: NativeObserveVersionRow[]
-  overviewRow: NativeObserveOverviewRow
-} {
-  const dailyMap = new Map<string, { events: number, devices: Set<string>, durations: number[] }>()
-  const actionMap = new Map<string, { events: number, devices: Set<string>, durations: number[] }>()
-  const versionMap = new Map<string, {
+interface NativeObserveAggregateState {
+  dailyMap: Map<string, { events: number, devices: Set<string>, durations: number[] }>
+  actionMap: Map<string, { events: number, devices: Set<string>, durations: number[] }>
+  versionMap: Map<string, {
     devices: Set<string>
     issueDevices: Set<string>
     events: number
     issueCount: number
     launchDurations: number[]
     webviewDurations: number[]
-  }>()
+  }>
+  allDevices: Set<string>
+  issueDevices: Set<string>
+  issueCount: number
+  launchTimeoutCount: number
+  launchDurations: number[]
+  webviewDurations: number[]
+  events: number
+}
 
-  const allDevices = new Set<string>()
-  const issueDevices = new Set<string>()
-  let issueCount = 0
-  let launchTimeoutCount = 0
-  const launchDurations: number[] = []
-  const webviewDurations: number[] = []
+function createNativeObserveAggregateState(): NativeObserveAggregateState {
+  return {
+    dailyMap: new Map(),
+    actionMap: new Map(),
+    versionMap: new Map(),
+    allDevices: new Set(),
+    issueDevices: new Set(),
+    issueCount: 0,
+    launchTimeoutCount: 0,
+    launchDurations: [],
+    webviewDurations: [],
+    events: 0,
+  }
+}
 
+function foldNativeObserveSamples(state: NativeObserveAggregateState, samples: NativeObserveEventSample[]) {
   for (const sample of samples) {
-    allDevices.add(sample.device_id)
+    state.events += 1
+    state.allDevices.add(sample.device_id)
     if (issueActionSet.has(sample.action)) {
-      issueCount += 1
-      issueDevices.add(sample.device_id)
+      state.issueCount += 1
+      state.issueDevices.add(sample.device_id)
     }
     if (sample.action === 'app_launch_timeout')
-      launchTimeoutCount += 1
+      state.launchTimeoutCount += 1
     if (sample.action === launchReadyAction && sample.duration_ms !== null)
-      launchDurations.push(sample.duration_ms)
+      state.launchDurations.push(sample.duration_ms)
     if (sample.action === webviewPageLoadedAction && sample.duration_ms !== null)
-      webviewDurations.push(sample.duration_ms)
+      state.webviewDurations.push(sample.duration_ms)
 
     const dailyKey = `${sample.day}\0${sample.action}`
-    const daily = dailyMap.get(dailyKey) ?? { events: 0, devices: new Set<string>(), durations: [] }
+    const daily = state.dailyMap.get(dailyKey) ?? { events: 0, devices: new Set<string>(), durations: [] }
     daily.events += 1
     daily.devices.add(sample.device_id)
     if (sample.duration_ms !== null)
       daily.durations.push(sample.duration_ms)
-    dailyMap.set(dailyKey, daily)
+    state.dailyMap.set(dailyKey, daily)
 
-    const action = actionMap.get(sample.action) ?? { events: 0, devices: new Set<string>(), durations: [] }
+    const action = state.actionMap.get(sample.action) ?? { events: 0, devices: new Set<string>(), durations: [] }
     action.events += 1
     action.devices.add(sample.device_id)
     if (sample.duration_ms !== null)
       action.durations.push(sample.duration_ms)
-    actionMap.set(sample.action, action)
+    state.actionMap.set(sample.action, action)
 
-    const version = versionMap.get(sample.version_name) ?? {
+    const version = state.versionMap.get(sample.version_name) ?? {
       devices: new Set<string>(),
       issueDevices: new Set<string>(),
       events: 0,
@@ -414,10 +427,17 @@ function aggregateNativeObserveSamples(samples: NativeObserveEventSample[]): {
       version.launchDurations.push(sample.duration_ms)
     if (sample.action === webviewPageLoadedAction && sample.duration_ms !== null)
       version.webviewDurations.push(sample.duration_ms)
-    versionMap.set(sample.version_name, version)
+    state.versionMap.set(sample.version_name, version)
   }
+}
 
-  const dailyRows: NativeObserveMetricRow[] = [...dailyMap.entries()]
+function finalizeNativeObserveAggregate(state: NativeObserveAggregateState): {
+  dailyRows: NativeObserveMetricRow[]
+  actionRows: NativeObserveMetricRow[]
+  versionRows: NativeObserveVersionRow[]
+  overviewRow: NativeObserveOverviewRow
+} {
+  const dailyRows: NativeObserveMetricRow[] = [...state.dailyMap.entries()]
     .map(([key, value]) => {
       const [day, action] = key.split('\0')
       return {
@@ -433,7 +453,7 @@ function aggregateNativeObserveSamples(samples: NativeObserveEventSample[]): {
       return dayCmp !== 0 ? dayCmp : a.action.localeCompare(b.action)
     })
 
-  const actionRows: NativeObserveMetricRow[] = [...actionMap.entries()]
+  const actionRows: NativeObserveMetricRow[] = [...state.actionMap.entries()]
     .map(([action, value]) => ({
       action,
       events: value.events,
@@ -445,7 +465,7 @@ function aggregateNativeObserveSamples(samples: NativeObserveEventSample[]): {
       return eventCmp !== 0 ? eventCmp : a.action.localeCompare(b.action)
     })
 
-  const versionRows: NativeObserveVersionRow[] = [...versionMap.entries()]
+  const versionRows: NativeObserveVersionRow[] = [...state.versionMap.entries()]
     .map(([version_name, value]) => ({
       version_name,
       events: value.events,
@@ -466,18 +486,25 @@ function aggregateNativeObserveSamples(samples: NativeObserveEventSample[]): {
     actionRows,
     versionRows,
     overviewRow: {
-      events: samples.length,
-      devices: allDevices.size,
-      issue_count: issueCount,
-      affected_devices: issueDevices.size,
-      launch_timeout_count: launchTimeoutCount,
-      launch_p50_ms: percentileCont([...launchDurations].sort((a, b) => a - b), 0.5),
-      launch_p90_ms: percentileCont([...launchDurations].sort((a, b) => a - b), 0.9),
-      webview_load_p50_ms: percentileCont([...webviewDurations].sort((a, b) => a - b), 0.5),
-      webview_load_p90_ms: percentileCont([...webviewDurations].sort((a, b) => a - b), 0.9),
+      events: state.events,
+      devices: state.allDevices.size,
+      issue_count: state.issueCount,
+      affected_devices: state.issueDevices.size,
+      launch_timeout_count: state.launchTimeoutCount,
+      launch_p50_ms: percentileCont([...state.launchDurations].sort((a, b) => a - b), 0.5),
+      launch_p90_ms: percentileCont([...state.launchDurations].sort((a, b) => a - b), 0.9),
+      webview_load_p50_ms: percentileCont([...state.webviewDurations].sort((a, b) => a - b), 0.5),
+      webview_load_p90_ms: percentileCont([...state.webviewDurations].sort((a, b) => a - b), 0.9),
     },
   }
 }
+
+function aggregateNativeObserveSamples(samples: NativeObserveEventSample[]) {
+  const state = createNativeObserveAggregateState()
+  foldNativeObserveSamples(state, samples)
+  return finalizeNativeObserveAggregate(state)
+}
+
 
 function buildNativeObserveResponse(input: BuildNativeObserveResponseInput) {
   const labelIndex = new Map(input.labels.map((label, index) => [label, index]))
@@ -622,13 +649,14 @@ async function readReleaseMarkers(
   }
 }
 
-async function readNativeObserveTimingEventsCFChunked(
+async function foldNativeObserveTimingEventsCFChunked(
   c: Context<MiddlewareKeyVariables>,
   appId: string,
   start: Dayjs,
   endExclusive: Dayjs,
+  state: NativeObserveAggregateState,
 ) {
-  const events: UpdateDeliveryTimingEventCF[] = []
+  // Fold each UTC day chunk immediately so we never hold 30x50k rows in memory.
   let cursor = start.utc().startOf('day')
   const end = endExclusive.utc()
 
@@ -641,11 +669,9 @@ async function readNativeObserveTimingEventsCFChunked(
       actions: [...nativeObserveActions],
       app_ids: [appId],
     })
-    events.push(...chunk)
+    foldNativeObserveSamples(state, toNativeObserveEventSamples(chunk))
     cursor = next
   }
-
-  return events
 }
 
 async function readNativeObserveStatsSB(
@@ -698,9 +724,9 @@ async function readNativeObserveStatsCF(
   endExclusive: Dayjs,
   endInclusive: Dayjs,
 ) {
-  const events = await readNativeObserveTimingEventsCFChunked(c, appId, start, endExclusive)
-  const samples = toNativeObserveEventSamples(events)
-  const aggregates = aggregateNativeObserveSamples(samples)
+  const state = createNativeObserveAggregateState()
+  await foldNativeObserveTimingEventsCFChunked(c, appId, start, endExclusive, state)
+  const aggregates = finalizeNativeObserveAggregate(state)
   const releaseMarkers = await readReleaseMarkers(c, appId, start, endExclusive)
 
   return buildNativeObserveResponse({
