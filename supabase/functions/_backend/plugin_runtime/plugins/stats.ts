@@ -291,7 +291,7 @@ app.post('/', async (c) => {
     return typeof v === 'string' && v.trim() !== ''
   })
 
-  const pgClient = getPgClient(c, !hasCustomId)
+  const pgClient = await getPgClient(c, !hasCustomId)
   const drizzleClient = getDrizzleClient(pgClient!, { logger: false })
 
   try {

@@ -18,7 +18,7 @@ import { simpleError200 } from './hono.ts'
 import { cloudlog } from './logging.ts'
 import { sendNotifOrgCached } from './notifications.ts'
 import { sendNotifToOrgMembersCached } from './org_email_notifications.ts'
-import { closeClient, getAppBlockProviderInfraRequestsPostgres, getAppOwnerPostgres, getDrizzleClient, getPgClient, requestInfosPostgres, setReplicationLagHeader } from './pg.ts'
+import { closeClient, getAppBlockProviderInfraRequestsPostgres, getAppOwnerPostgres, getDrizzleClient, getPgClient, requestInfosPostgres, requestManifestEntriesPostgres, setReplicationLagHeader } from './pg.ts'
 import { makeDevice } from './plugin_parser.ts'
 import { createStatsBandwidth, createStatsMau, createStatsVersion, onPremStats, sendStatsAndDevice } from './plugin_stats.ts'
 import { getClientIP } from './rate_limit.ts'
@@ -83,7 +83,7 @@ function notifyAutoUpdateVersionBlocked(
 
     // Non-queued fallback (local/Supabase): own a short-lived client so the request
     // pool can close without cancelling the Bento send.
-    const pgClient = getPgClient(c)
+    const pgClient = await getPgClient(c)
     const drizzleClient = getDrizzleClient(pgClient, { logger: false })
     try {
       await sendNotifToOrgMembersCached(
@@ -208,6 +208,7 @@ interface ResponseFeatureSupport {
   metadata: boolean
 }
 
+const RESPONSE_FEATURE_SUPPORT_CACHE_MAX = 256
 const responseFeatureSupportCache = new Map<string, ResponseFeatureSupport>()
 
 function getResponseFeatureSupport(plugin_version: string): ResponseFeatureSupport {
@@ -219,6 +220,11 @@ function getResponseFeatureSupport(plugin_version: string): ResponseFeatureSuppo
   const support = {
     manifest: !isDeprecatedPluginVersion(pluginVersion, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7),
     metadata: !isDeprecatedPluginVersion(pluginVersion, '5.35.0', '6.35.0', '7.35.0', '8.35.0'),
+  }
+  if (responseFeatureSupportCache.size >= RESPONSE_FEATURE_SUPPORT_CACHE_MAX) {
+    const oldest = responseFeatureSupportCache.keys().next().value
+    if (oldest !== undefined)
+      responseFeatureSupportCache.delete(oldest)
   }
   responseFeatureSupportCache.set(plugin_version, support)
   return support
@@ -412,6 +418,7 @@ export async function updateWithPG(
   // Only query link/comment if plugin supports it (v5.35.0+, v6.35.0+, v7.35.0+, v8.35.0+) AND app has expose_metadata enabled
   const needsMetadata = appOwner.expose_metadata && !isDeprecatedPluginVersion(pluginVersion, '5.35.0', '6.35.0', '7.35.0', '8.35.0')
 
+  const startRequestInfos = performance.now()
   const requestedInto = await requestInfosPostgres({
     c,
     platform,
@@ -421,12 +428,16 @@ export async function updateWithPG(
     drizzleClient,
     channelDeviceCount: effectiveChannelDeviceCount,
     manifestBundleCount,
+    // Skip channel-query json_agg (P999 on up-to-date). New-version path loads
+    // via indexed manifest.app_version_id fetch started right after this check.
+    includeManifest: false,
     rolloutChannelCount,
     rolloutPausedVersionNames,
     currentVersionName: version_name,
     includeMetadata: needsMetadata,
     channelSelfOverrideChannelId: channelSelfOverride?.channel_id.id,
   })
+  const requestInfosMs = Math.round(performance.now() - startRequestInfos)
   const { channelOverride } = requestedInto
   let { channelData } = requestedInto
   cloudlog({ requestId: c.get('requestId'), message: `channelData exists ? ${channelData !== undefined}, channelOverride exists ? ${channelOverride !== undefined}` })
@@ -446,10 +457,13 @@ export async function updateWithPG(
   }
 
   const version = channelOverride?.version ?? channelData.version
-  const manifestEntries = (channelOverride?.manifestEntries ?? channelData?.manifestEntries ?? []) as Partial<Database['public']['Tables']['manifest']['Row']>[]
+  let manifestEntries = (channelOverride?.manifestEntries ?? channelData?.manifestEntries ?? []) as Partial<Database['public']['Tables']['manifest']['Row']>[]
   // device.version = versionData ? versionData.id : version.id
 
-  if (!version.external_url && !version.r2_path && !isInternalVersionName(version.name) && (!manifestEntries || manifestEntries.length === 0)) {
+  // App-level manifest_bundle_count gates whether we may load files later.
+  // Do not require version.manifest_count here — seed/legacy rows can lag that column
+  // while still having manifest table entries (and the old json_agg path found them).
+  if (!version.external_url && !version.r2_path && !isInternalVersionName(version.name) && !fetchManifestEntries && (!manifestEntries || manifestEntries.length === 0)) {
     cloudlog({ requestId: c.get('requestId'), message: 'Cannot get bundle', id: app_id, version, manifestEntriesLength: manifestEntries ? manifestEntries.length : 0, channelData: channelData ? channelData.channels.name : 'no channel data', defaultChannel })
     await sendStatsAndDevice(c, device, [{ action: 'missingBundle', versionName: version.name }])
     return updateError200(c, 'no_bundle', 'Cannot get bundle')
@@ -470,10 +484,34 @@ export async function updateWithPG(
   // cloudlog(c.get('requestId'), 'signedURL', device_id, version_name, version.name)
   if (version_name === version.name) {
     cloudlog({ requestId: c.get('requestId'), message: 'No new version available', id: device_id, version_name, version: version.name, date: new Date().toISOString() })
+    if (requestInfosMs >= 50) {
+      cloudlog({
+        requestId: c.get('requestId'),
+        message: 'plugin_path_timing',
+        path: 'updates',
+        outcome: 'no_new_version',
+        requestInfosMs,
+        app_id,
+      })
+    }
     // TODO: check why this event is send with wrong version_name
     await sendStatsAndDevice(c, device, [{ action: 'noNew', versionName: version.name }])
     return updateError200(c, 'no_new_version_available', 'No new version available')
   }
+
+  // New-version path is the latency-critical one. Start the indexed manifest
+  // lookup immediately so it overlaps auto-update gates + signed URL work.
+  // Still NOT using channel-query json_agg (that was the P999 tax on up-to-date).
+  // Index: idx_manifest_app_version_id.
+  const needsDeferredManifest = !version.external_url
+    && fetchManifestEntries
+    && (!manifestEntries || manifestEntries.length === 0)
+  const startManifestFetch = needsDeferredManifest ? performance.now() : 0
+  const deferredManifestPromise = needsDeferredManifest
+    ? requestManifestEntriesPostgres(c, version.id, drizzleClient)
+    : null
+  // If a gate returns early, this in-flight query must not become an unhandled rejection.
+  deferredManifestPromise?.catch(() => {})
 
   if (channelData) {
     const notifyVersionBlocked = (
@@ -652,24 +690,39 @@ export async function updateWithPG(
   const startBundleUrl = performance.now()
   let signedURL = version.external_url ?? ''
   let manifest: ManifestEntry[] = []
+  let manifestFetchMs = 0
   if (!version.external_url) {
-    if (version.r2_path) {
-      const url = await getBundleUrl(c, version.r2_path, device_id, version.checksum ?? '')
-      if (url) {
-        // only count the size of the bundle if it's not external and zip for now
-        signedURL = url
-        if (getRuntimeKey() !== 'workerd') {
-          await backgroundTask(c, async () => {
-            const size = await s3.getSize(c, version.r2_path)
-            await createStatsBandwidth(c, device_id, app_id, size ?? 0)
-          })
-        }
+    // Overlap signed URL + deferred manifest (started right after up-to-date check).
+    const [url, deferredEntries] = await Promise.all([
+      version.r2_path
+        ? getBundleUrl(c, version.r2_path, device_id, version.checksum ?? '')
+        : Promise.resolve(null),
+      deferredManifestPromise ?? Promise.resolve(null),
+    ])
+    if (needsDeferredManifest) {
+      manifestEntries = (deferredEntries ?? []) as Partial<Database['public']['Tables']['manifest']['Row']>[]
+      manifestFetchMs = Math.round(performance.now() - startManifestFetch)
+    }
+    if (url) {
+      // only count the size of the bundle if it's not external and zip for now
+      signedURL = url
+      if (getRuntimeKey() !== 'workerd') {
+        await backgroundTask(c, async () => {
+          const size = await s3.getSize(c, version.r2_path)
+          await createStatsBandwidth(c, device_id, app_id, size ?? 0)
+        })
       }
+    }
+    if (!version.r2_path && !isInternalVersionName(version.name) && (!manifestEntries || manifestEntries.length === 0)) {
+      cloudlog({ requestId: c.get('requestId'), message: 'Cannot get bundle', id: app_id, version, manifestEntriesLength: 0, channelData: channelData ? channelData.channels.name : 'no channel data', defaultChannel })
+      await sendStatsAndDevice(c, device, [{ action: 'missingBundle', versionName: version.name }])
+      return updateError200(c, 'no_bundle', 'Cannot get bundle')
     }
     manifest = getManifestUrl(c, version.id, manifestEntries, device_id)
   }
   const endBundleUrl = performance.now()
-  cloudlog({ requestId: c.get('requestId'), message: 'bundle_url_timing', duration: `${endBundleUrl - startBundleUrl}ms`, date: new Date().toISOString() })
+  const bundleUrlMs = Math.round(endBundleUrl - startBundleUrl)
+  cloudlog({ requestId: c.get('requestId'), message: 'bundle_url_timing', duration: `${bundleUrlMs}ms`, date: new Date().toISOString() })
   //  check signedURL and if it's url
   if ((!signedURL || (!(signedURL.startsWith('http://') || signedURL.startsWith('https://')))) && !manifest.length) {
     cloudlog({ requestId: c.get('requestId'), message: 'Cannot get bundle signedURL', url: signedURL, id: app_id, date: new Date().toISOString() })
@@ -687,6 +740,19 @@ export async function updateWithPG(
     sendStatsAndDevice(c, device, [{ action: 'get', versionName: version.name }]),
   ])
   cloudlog({ requestId: c.get('requestId'), message: 'New version available', app_id, version: version.name, signedURL, date: new Date().toISOString() })
+  if (requestInfosMs >= 50 || manifestFetchMs >= 50 || bundleUrlMs >= 50) {
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'plugin_path_timing',
+      path: 'updates',
+      outcome: 'new_version',
+      requestInfosMs,
+      manifestFetchMs,
+      bundleUrlMs,
+      manifestCount: manifest.length,
+      app_id,
+    })
+  }
   const res = resToVersion(plugin_version, signedURL, version as any, manifest, needsMetadata)
   if (!res.url && !res.manifest) {
     cloudlog({ requestId: c.get('requestId'), message: 'No url or manifest', id: app_id, version: version.name, date: new Date().toISOString() })
@@ -696,19 +762,37 @@ export async function updateWithPG(
 }
 
 export async function update(c: Context, body: AppInfos) {
+  const startUpdate = performance.now()
   const appStatus = await getAppStatus(c, body.app_id)
+  const appStatusMs = Math.round(performance.now() - startUpdate)
   if (appStatus.cacheHit) {
     const providerBlockedResponse = await providerInfrastructureBlockResponse(c, appStatus.block_provider_infra_requests)
     if (providerBlockedResponse)
       return providerBlockedResponse
   }
-  const pgClient = getPgClient(c, true)
+  const pgClient = await getPgClient(c, true)
   try {
+    const startLag = performance.now()
     await setReplicationLagHeader(c, pgClient)
+    const replicationLagMs = Math.round(performance.now() - startLag)
 
     const drizzlePg = getDrizzleClient(pgClient, { logger: false })
     // Use the active DB client only when needed
-    return await updateWithPG(c, body, drizzlePg, appStatus)
+    const response = await updateWithPG(c, body, drizzlePg, appStatus)
+    const totalMs = Math.round(performance.now() - startUpdate)
+    if (totalMs >= 100) {
+      cloudlog({
+        requestId: c.get('requestId'),
+        message: 'plugin_path_timing',
+        path: 'updates',
+        outcome: 'total',
+        totalMs,
+        appStatusMs,
+        replicationLagMs,
+        app_id: body.app_id,
+      })
+    }
+    return response
   }
   finally {
     await closeClient(c, pgClient)
