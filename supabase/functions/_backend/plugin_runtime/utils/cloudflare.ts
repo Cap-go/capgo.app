@@ -204,7 +204,7 @@ function parseStatsDurationMs(metadata?: StatsMetadata): number | null {
     const raw = metadata[key]
     if (typeof raw !== 'string' || raw.length === 0 || raw.length > 15)
       continue
-    if (!/^[0-9]+(\.[0-9]+)?$/.test(raw))
+    if (!/^\d+(\.\d+)?$/.test(raw))
       continue
     const value = Number(raw)
     if (!Number.isFinite(value) || value < 0 || value > 7_200_000)

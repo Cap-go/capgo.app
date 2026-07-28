@@ -49,6 +49,8 @@ export interface UpdateDeliveryStatsCFResult {
   overviewRow: UpdateDeliveryOverviewRowCF
 }
 
+type NumericValue = number | string | null | undefined
+
 interface DeliveryAggRow {
   day?: string
   samples: number | string
@@ -88,12 +90,12 @@ function buildAppFilter(appIds?: string[]) {
   return `AND index1 IN (${list})`
 }
 
-function toCount(value: number | string | null | undefined) {
+function toCount(value: NumericValue) {
   const numeric = Number(value ?? 0)
   return Number.isFinite(numeric) ? Math.max(0, Math.round(numeric)) : 0
 }
 
-function toMetric(value: number | string | null | undefined) {
+function toMetric(value: NumericValue) {
   if (value === null || value === undefined || value === '')
     return null
   const numeric = Number(value)
@@ -127,7 +129,7 @@ function percentile(sorted: number[], q: number) {
   return sorted[lower] * (1 - weight) + sorted[upper] * weight
 }
 
-function parseDurationFromMetadata(metadata: string, double1: number | string | null | undefined) {
+function parseDurationFromMetadata(metadata: string, double1: NumericValue) {
   const fromDouble = Number(double1)
   if (Number.isFinite(fromDouble) && fromDouble > 0 && fromDouble <= MAX_DELIVERY_MS)
     return fromDouble
@@ -139,7 +141,7 @@ function parseDurationFromMetadata(metadata: string, double1: number | string | 
       const raw = parsed[key]
       if (typeof raw !== 'string' || raw.length === 0 || raw.length > 15)
         continue
-      if (!/^[0-9]+(\.[0-9]+)?$/.test(raw))
+      if (!/^\d+(\.\d+)?$/.test(raw))
         continue
       const value = Number(raw)
       if (Number.isFinite(value) && value >= 0 && value <= MAX_DELIVERY_MS)
@@ -203,48 +205,50 @@ function aggregateDeliveries(samples: Array<{ day: string, app_id: string, devic
   }
 }
 
+interface TimedEvent extends TimingEventRow {
+  at: number
+  version: string
+}
+
+function toTimedEvents(rows: TimingEventRow[], actions: readonly string[]) {
+  const actionSet = new Set<string>(actions)
+  return rows
+    .filter(row => actionSet.has(row.action))
+    .map(row => ({
+      ...row,
+      at: new Date(row.created_at).getTime(),
+      version: row.version_name || 'unknown',
+    }))
+    .filter(row => Number.isFinite(row.at))
+}
+
+function findLatestStartBefore(starts: TimedEvent[], end: TimedEvent) {
+  for (let i = starts.length - 1; i >= 0; i -= 1) {
+    const start = starts[i]
+    if (start.app_id !== end.app_id || start.device_id !== end.device_id || start.version !== end.version)
+      continue
+    if (start.at > end.at || end.at - start.at > 2 * 60 * 60 * 1000)
+      continue
+    return start.at
+  }
+  return null
+}
+
+function resolveDeliveryDuration(end: TimedEvent, starts: TimedEvent[]) {
+  const metaDuration = parseDurationFromMetadata(rowMetadata(end.metadata), end.double1)
+  if (metaDuration !== null)
+    return metaDuration
+  const matchedStart = findLatestStartBefore(starts, end)
+  return matchedStart === null ? null : end.at - matchedStart
+}
+
 function pairTimingEvents(rows: TimingEventRow[]) {
-  const endSet = new Set<string>(END_ACTIONS)
-  const startSet = new Set<string>(START_ACTIONS)
-  const starts = rows
-    .filter(row => startSet.has(row.action))
-    .map(row => ({
-      ...row,
-      at: new Date(row.created_at).getTime(),
-      version: row.version_name || 'unknown',
-    }))
-    .filter(row => Number.isFinite(row.at))
-    .sort((a, b) => a.at - b.at)
-
-  const ends = rows
-    .filter(row => endSet.has(row.action))
-    .map(row => ({
-      ...row,
-      at: new Date(row.created_at).getTime(),
-      version: row.version_name || 'unknown',
-    }))
-    .filter(row => Number.isFinite(row.at))
-
+  const starts = toTimedEvents(rows, START_ACTIONS).sort((a, b) => a.at - b.at)
+  const ends = toTimedEvents(rows, END_ACTIONS)
   const samples: Array<{ day: string, app_id: string, device_id: string, duration_ms: number }> = []
+
   for (const end of ends) {
-    const metaDuration = parseDurationFromMetadata(rowMetadata(end.metadata), end.double1)
-    let duration = metaDuration
-    if (duration === null) {
-      let matchedStart: number | null = null
-      for (let i = starts.length - 1; i >= 0; i -= 1) {
-        const start = starts[i]
-        if (start.app_id !== end.app_id || start.device_id !== end.device_id || start.version !== end.version)
-          continue
-        if (start.at > end.at)
-          continue
-        if (end.at - start.at > 2 * 60 * 60 * 1000)
-          continue
-        matchedStart = start.at
-        break
-      }
-      if (matchedStart !== null)
-        duration = end.at - matchedStart
-    }
+    const duration = resolveDeliveryDuration(end, starts)
     if (duration === null || duration < 0 || duration > MAX_DELIVERY_MS)
       continue
     const day = dayKeyUTC(end.created_at)
@@ -257,6 +261,7 @@ function pairTimingEvents(rows: TimingEventRow[]) {
       duration_ms: duration,
     })
   }
+
   return aggregateDeliveries(samples)
 }
 
