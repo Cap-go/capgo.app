@@ -429,7 +429,7 @@ async function createOrganization() {
 
     if (error || !data?.id) {
       console.error('Error creating organization during onboarding', error)
-      toast.error(error?.code === '23505'
+      toast.error((error as { code?: string } | null)?.code === '23505'
         ? t('org-with-this-name-exists')
         : t('cannot-create-org'))
       return

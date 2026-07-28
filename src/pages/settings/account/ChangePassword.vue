@@ -122,7 +122,7 @@ async function verifyPassword(form: { current_password: string }) {
 
     let result: { error?: string, message?: string } = compliancePayload ?? {}
     if (complianceInvokeError instanceof FunctionsHttpError && complianceInvokeError.context instanceof Response) {
-      result = await complianceInvokeError.context.json().catch(() => result)
+      result = await complianceInvokeError.context.json().catch(() => result) as { error?: string, message?: string }
     }
 
     if (complianceInvokeError) {

@@ -30,7 +30,7 @@ function serializeBody(body: CapgoApiInvokeOptions['body']): BodyInit | undefine
  * supabase.functions.invoke. Capgo cloud console traffic must not use
  * sb.capgo.app edge functions.
  */
-export async function invokeCapgoApi<T = unknown>(
+export async function invokeCapgoApi<T = any>(
   path: string,
   options: CapgoApiInvokeOptions = {},
 ): Promise<{ data: T | null, error: Error | null }> {

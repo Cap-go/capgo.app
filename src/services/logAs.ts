@@ -48,7 +48,7 @@ export async function logAsUser(identifier: string, router: Router) {
     if (spoofedAdminJwt)
       invokeOptions.headers = { Authorization: `Bearer ${spoofedAdminJwt}` }
 
-    const { data, error } = await invokeCapgoApi('private/log_as', invokeOptions)
+    const { data, error } = await invokeCapgoApi<{ jwt?: string, refreshToken?: string }>('private/log_as', invokeOptions)
 
     if (error)
       throw new Error(await getErrorMessage(error))

@@ -793,7 +793,7 @@ export interface CapgoCliInvokeOptions {
  * Invoke Capgo HTTP APIs formerly reached via supabase.functions.invoke.
  * Capgo cloud -> hostApi / hostFilesApi. Self-host -> /functions/v1.
  */
-export async function invokeCapgoCliApi<T = unknown>(
+export async function invokeCapgoCliApi<T = any>(
   path: string,
   options: CapgoCliInvokeOptions,
 ): Promise<{ data: T | null, error: Error | null }> {
