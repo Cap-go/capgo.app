@@ -75,6 +75,15 @@ function argValue(flag: string, fallback: string): string {
   return fallback
 }
 
+function numArg(flag: string, fallback: string, opts?: { min?: number }): number {
+  const raw = argValue(flag, fallback)
+  const n = Number(raw)
+  const min = opts?.min ?? 0
+  if (!Number.isFinite(n) || n < min)
+    throw new Error(`Invalid value for ${flag}: ${raw} (need finite number >= ${min})`)
+  return n
+}
+
 function percentile(sorted: number[], p: number): number {
   if (sorted.length === 0)
     return 0
@@ -148,6 +157,7 @@ async function seed(client: Client, files: number, noiseVersions = 40) {
   for (let v = 1001; v <= 1001 + noiseVersions; v++) {
     versionRows.push(`(${v}, 'com.bench.manifest', '${(v - 1000)}.0.0', false, NULL, 'checksum-${v}', ${files})`)
   }
+  // SQL built from local loop integers/literals only — not user input.
   await client.query(`
     INSERT INTO app_versions (id, app_id, name, deleted, r2_path, checksum, manifest_count)
     VALUES ${versionRows.join(',')}
@@ -322,7 +332,10 @@ async function loadScenario(
   return { name, path, scenario, files, concurrency, stats: s }
 }
 
-async function explain(client: Client, sql: string, params: unknown[]): Promise<string> {
+type BenchExplainSql = typeof OLD_CHANNEL_WITH_MANIFEST | typeof NEW_CHANNEL_LIGHT | typeof NEW_MANIFEST_BY_VERSION
+
+// sql is always one of the module-level constants above — not user input.
+async function explain(client: Client, sql: BenchExplainSql, params: unknown[]): Promise<string> {
   const res = await client.query(`EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT) ${sql}`, params)
   return res.rows.map((r: { 'QUERY PLAN': string }) => r['QUERY PLAN']).join('\n')
 }
@@ -352,11 +365,11 @@ async function main() {
   // Never fall back to DATABASE_URL — setupSchema() DROP SCHEMA public CASCADE.
   const databaseUrl = process.env.MANIFEST_BENCH_DATABASE_URL || argValue('--database-url', DEFAULT_URL)
   assertSafeBenchDatabaseUrl(databaseUrl)
-  const files = Number(argValue('--files', '5000'))
-  const concurrency = Number(argValue('--concurrency', '50'))
-  const requests = Number(argValue('--requests', '800'))
-  const warmup = Number(argValue('--warmup', '20'))
-  const noiseVersions = Number(argValue('--noise-versions', '40'))
+  const files = numArg('--files', '5000', { min: 1 })
+  const concurrency = numArg('--concurrency', '50', { min: 1 })
+  const requests = numArg('--requests', '800', { min: 1 })
+  const warmup = numArg('--warmup', '20', { min: 0 })
+  const noiseVersions = numArg('--noise-versions', '40', { min: 0 })
   const savePath = argValue('--save', 'scripts/bench/updates_manifest_path_results.json')
 
   console.log(`DB=${databaseUrl.replace(/:[^:@/]+@/, ':***@')}`)

@@ -499,20 +499,11 @@ export async function updateWithPG(
     return updateError200(c, 'no_new_version_available', 'No new version available')
   }
 
-  // New-version path is the latency-critical one. Start the indexed manifest
-  // lookup immediately so it overlaps auto-update gates + signed URL work.
-  // Still NOT using channel-query json_agg (that was the P999 tax on up-to-date).
-  // Index: idx_manifest_app_version_id.
+  // Manifest is loaded later (after gates) via indexed app_version_id — never
+  // channel-query json_agg (that was the P999 tax on up-to-date).
   const needsDeferredManifest = !version.external_url
     && fetchManifestEntries
     && (!manifestEntries || manifestEntries.length === 0)
-  const startManifestFetch = needsDeferredManifest ? performance.now() : 0
-  // Single Promise from .execute() — do NOT await the builder twice (re-runs SQL).
-  const deferredManifestPromise = needsDeferredManifest
-    ? requestManifestEntriesPostgres(c, version.id, drizzleClient)
-    : null
-  // If a gate returns early, this in-flight query must not become an unhandled rejection.
-  deferredManifestPromise?.catch(() => {})
 
   if (channelData) {
     const notifyVersionBlocked = (
@@ -693,17 +684,25 @@ export async function updateWithPG(
   let manifest: ManifestEntry[] = []
   let manifestFetchMs = 0
   if (!version.external_url) {
-    // Overlap signed URL + deferred manifest (started right after up-to-date check).
+    // Start indexed manifest only after gates pass (avoids wasted DB on blocked
+    // updates). Overlap with signed URL — Hyperdrive Client is single-conn so
+    // overlapping two DB queries would not help; URL work is not DB-bound.
+    // Single Promise from .execute() — do NOT await the builder twice (re-runs SQL).
+    const startManifestFetch = needsDeferredManifest ? performance.now() : 0
+    const deferredManifestPromise = needsDeferredManifest
+      ? requestManifestEntriesPostgres(c, version.id, drizzleClient).then((rows) => {
+          manifestFetchMs = Math.round(performance.now() - startManifestFetch)
+          return rows
+        })
+      : null
     const [url, deferredEntries] = await Promise.all([
       version.r2_path
         ? getBundleUrl(c, version.r2_path, device_id, version.checksum ?? '')
         : Promise.resolve(null),
       deferredManifestPromise ?? Promise.resolve(null),
     ])
-    if (needsDeferredManifest) {
+    if (needsDeferredManifest)
       manifestEntries = (deferredEntries ?? []) as Partial<Database['public']['Tables']['manifest']['Row']>[]
-      manifestFetchMs = Math.round(performance.now() - startManifestFetch)
-    }
     if (url) {
       // only count the size of the bundle if it's not external and zip for now
       signedURL = url

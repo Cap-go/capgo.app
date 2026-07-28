@@ -62,6 +62,10 @@ EXPLAIN confirmed Index Scan on `idx_manifest_app_version_id` for the deferred f
 Promise). Drizzle builders are thenables and would re-run SQL on every
 `await`/`catch` — that double-fire bug was fixed before reopening this PR.
 
+Manifest fetch starts **only after auto-update gates pass**, then overlaps
+signed URL generation (non-DB). Hyperdrive uses one `pg.Client` per request, so
+overlapping two DB queries would not buy parallelism.
+
 ## Conclusion
 
 Under concurrent load against a selective index, the deferred path is **faster**
