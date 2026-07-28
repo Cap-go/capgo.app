@@ -254,11 +254,20 @@ async function getCachedReplicaLag(c: Context, pool: PluginPgClient): Promise<Re
  * Set replication lag headers on hot plugin responses using a 60-second cache.
  */
 export async function setReplicationLagHeader(c: Context, pool: PluginPgClient): Promise<void> {
-  const status = await getCachedReplicaLag(c, pool)
-  safeSetResponseHeader(c, 'X-Replication-Lag', status.status)
-  if (status.max_lag_seconds !== null) {
-    safeSetResponseHeader(c, 'X-Replication-Lag-Seconds', String(Math.round(status.max_lag_seconds)))
+  // Hot path: only use in-memory lag. Cold Cache API / DB probe runs in background
+  // so a miss cannot add another Hyperdrive RTT to /updates P999.
+  const cacheKey = getReplicationLagCacheKey(c)
+  const memoryEntry = getFreshReplicationLagMemoryEntry(cacheKey)
+  if (memoryEntry) {
+    safeSetResponseHeader(c, 'X-Replication-Lag', memoryEntry.status)
+    if (memoryEntry.max_lag_seconds !== null) {
+      safeSetResponseHeader(c, 'X-Replication-Lag-Seconds', String(Math.round(memoryEntry.max_lag_seconds)))
+    }
+    return
   }
+
+  safeSetResponseHeader(c, 'X-Replication-Lag', 'unknown')
+  backgroundTask(c, getCachedReplicaLag(c, pool))
 }
 
 /**

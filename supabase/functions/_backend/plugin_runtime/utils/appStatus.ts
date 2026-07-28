@@ -105,12 +105,12 @@ export async function deleteAppStatus(c: Context, appId: string) {
 export function toOwnerRoutingCache(appOwner: {
   owner_org: string
   plan_valid: boolean
-  channel_device_count: number | null
-  manifest_bundle_count: number | null
-  rollout_channel_count: number | null
-  rollout_paused_version_names: string[] | null
-  expose_metadata: boolean
-  orgs: { id: string, created_by: string, management_email: string }
+  channel_device_count?: number | null
+  manifest_bundle_count?: number | null
+  rollout_channel_count?: number | null
+  rollout_paused_version_names?: string[] | null
+  expose_metadata?: boolean
+  orgs?: { id?: string, created_by?: string, management_email?: string } | null
 }): AppOwnerRoutingCache {
   return {
     owner_org: appOwner.owner_org,
@@ -119,8 +119,8 @@ export function toOwnerRoutingCache(appOwner: {
     manifest_bundle_count: appOwner.manifest_bundle_count ?? 0,
     rollout_channel_count: appOwner.rollout_channel_count ?? 0,
     rollout_paused_version_names: appOwner.rollout_paused_version_names ?? [],
-    expose_metadata: appOwner.expose_metadata,
-    management_email: appOwner.orgs.management_email,
-    org_created_by: appOwner.orgs.created_by,
+    expose_metadata: appOwner.expose_metadata ?? false,
+    management_email: appOwner.orgs?.management_email ?? '',
+    org_created_by: appOwner.orgs?.created_by ?? '',
   }
 }

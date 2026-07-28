@@ -19,7 +19,6 @@ import { cloudlog } from './logging.ts'
 import { sendNotifOrgCached } from './notifications.ts'
 import { sendNotifToOrgMembersCached } from './org_email_notifications.ts'
 import { closeClient, getAppBlockProviderInfraRequestsPostgres, getAppOwnerPostgres, getDrizzleClient, getPgClient, requestInfosPostgres, requestManifestEntriesPostgres, setReplicationLagHeader } from './pg.ts'
-import type { AppOwnerPostgresResult } from './pg.ts'
 import { makeDevice } from './plugin_parser.ts'
 import { createStatsBandwidth, createStatsMau, createStatsVersion, onPremStats, sendStatsAndDevice } from './plugin_stats.ts'
 import { getClientIP } from './rate_limit.ts'
@@ -317,35 +316,7 @@ export async function updateWithPG(
       return providerBlockedResponse
   }
 
-  // Warm app-status cache can skip getAppOwnerPostgres (saves 1 Hyperdrive RTT on the hot path).
-  let appOwner: AppOwnerPostgresResult | null = null
-  if (
-    cachedAppStatus.cacheHit
-    && cachedAppStatus.status === 'cloud'
-    && cachedAppStatus.owner
-    && cachedAppStatus.owner.plan_valid
-  ) {
-    const cachedOwner = cachedAppStatus.owner
-    appOwner = {
-      owner_org: cachedOwner.owner_org,
-      plan_valid: true,
-      channel_device_count: cachedOwner.channel_device_count,
-      manifest_bundle_count: cachedOwner.manifest_bundle_count,
-      rollout_channel_count: cachedOwner.rollout_channel_count,
-      rollout_paused_version_names: cachedOwner.rollout_paused_version_names,
-      expose_metadata: cachedOwner.expose_metadata,
-      allow_device_custom_id: cachedAppStatus.allow_device_custom_id,
-      block_provider_infra_requests: cachedAppStatus.block_provider_infra_requests,
-      orgs: {
-        id: cachedOwner.owner_org,
-        created_by: cachedOwner.org_created_by,
-        management_email: cachedOwner.management_email,
-      },
-    }
-  }
-  else {
-    appOwner = await getAppOwnerPostgres(c, app_id, drizzleClient, PLAN_LIMIT)
-  }
+  const appOwner = await getAppOwnerPostgres(c, app_id, drizzleClient, PLAN_LIMIT)
   // if version_build is not semver, then make it semver
   const device = makeDevice(body, appOwner?.allow_device_custom_id)
   if (!appOwner) {
