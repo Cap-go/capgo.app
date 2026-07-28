@@ -9,7 +9,7 @@ import IconBell from '~icons/heroicons/bell'
 import IconChart from '~icons/heroicons/chart-bar'
 import IconTimer from '~icons/lucide/timer'
 import DeliveryLatencyPanel from '~/components/dashboard/DeliveryLatencyPanel.vue'
-import OrgEmailNotificationsPanel from '~/components/dashboard/OrgEmailNotificationsPanel.vue'
+import OrgNotificationStatsPanel from '~/components/dashboard/OrgNotificationStatsPanel.vue'
 import Tabs from '~/components/Tabs.vue'
 import { useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
@@ -32,7 +32,7 @@ const { currentOrganization } = storeToRefs(organizationStore)
 const dashboardTabs = computed<Tab[]>(() => [
   { label: 'dashboard-tab-usage', icon: IconChart, key: 'usage' },
   { label: 'update-delivery-latency', icon: IconTimer, key: 'delivery', badge: 'beta' },
-  { label: 'notifications', icon: IconBell, key: 'notifications' },
+  { label: 'notifications', icon: IconBell, key: 'notifications', badge: 'beta' },
 ])
 
 const lacksSecurityAccess = computed(() => {
@@ -106,27 +106,26 @@ function handleTab(key: string) {
 </script>
 
 <template>
-  <div>
-    <div class="overflow-hidden pb-4 h-full">
+  <div class="flex flex-col flex-1 h-full min-h-0 overflow-hidden">
+    <Tabs
+      v-if="!lacksSecurityAccess"
+      :tabs="dashboardTabs"
+      :active-tab="activeTab"
+      no-wrap
+      @update:active-tab="handleTab"
+    />
+
+    <main class="relative flex flex-1 w-full min-h-0 mt-0 overflow-hidden bg-blue-50 dark:bg-slate-800/40">
       <div
         ref="scrollContainer"
-        class="relative px-4 pt-2 mx-auto mb-8 w-full h-full sm:px-6 md:pt-8 lg:px-8 max-w-9xl max-h-fit"
+        class="relative flex-1 w-full min-h-0 px-4 pt-2 mx-auto mb-8 sm:px-6 md:pt-8 lg:px-8 max-w-9xl"
         :class="shouldBlurContent ? 'overflow-hidden' : 'overflow-y-auto'"
       >
         <FailedCard v-if="lacksSecurityAccess" />
 
-        <TrialBanner />
+        <TrialBanner v-if="!lacksSecurityAccess" />
 
         <div :class="{ 'blur-sm pointer-events-none select-none': shouldBlurContent }">
-          <div v-if="!lacksSecurityAccess" class="mb-4">
-            <Tabs
-              :tabs="dashboardTabs"
-              :active-tab="activeTab"
-              no-wrap
-              @update:active-tab="handleTab"
-            />
-          </div>
-
           <Usage
             v-if="!lacksSecurityAccess && activeTab === 'usage'"
             :force-demo="paymentFailed"
@@ -142,7 +141,11 @@ function handleTab(key: string) {
           </div>
 
           <div v-else-if="!lacksSecurityAccess && activeTab === 'notifications'" class="mb-6">
-            <OrgEmailNotificationsPanel embedded />
+            <OrgNotificationStatsPanel
+              :key="['org-notif', currentOrganization?.gid || ''].join(':')"
+              :org-id="currentOrganization?.gid || ''"
+              :force-demo="paymentFailed"
+            />
           </div>
         </div>
 
@@ -169,6 +172,6 @@ function handleTab(key: string) {
 
         <PaymentRequiredModal v-if="paymentFailed" />
       </div>
-    </div>
+    </main>
   </div>
 </template>

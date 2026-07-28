@@ -855,11 +855,97 @@ app.post('/campaigns', middlewareKey(), async (c) => {
   return c.json(await createCampaignRecord(c, body))
 })
 
+async function readOrgNotificationOverview(c: Context<MiddlewareKeyVariables>, orgId: string) {
+  let pgClient: ReturnType<typeof getPgClient> | undefined
+  try {
+    pgClient = getPgClient(c)
+    const drizzleClient = getDrizzleClient(pgClient)
+    const result = await drizzleClient.execute(sql`
+      SELECT
+        (SELECT COUNT(*)::int FROM public.apps WHERE owner_org = ${orgId}) AS apps,
+        (SELECT COUNT(*)::int FROM public.notification_campaigns WHERE owner_org = ${orgId}) AS campaigns,
+        (SELECT COUNT(*)::int FROM public.notification_provider_configs WHERE owner_org = ${orgId} AND status = 'configured') AS configured_providers,
+        COALESCE(
+          (
+            SELECT array_agg(app_id ORDER BY app_id)
+            FROM public.apps
+            WHERE owner_org = ${orgId}
+          ),
+          '{}'::text[]
+        ) AS app_ids
+    `)
+    const row = (result.rows[0] ?? {}) as {
+      apps?: number
+      campaigns?: number
+      configured_providers?: number
+      app_ids?: string[] | null
+    }
+    return {
+      apps: Number(row.apps ?? 0),
+      campaigns: Number(row.campaigns ?? 0),
+      configured_providers: Number(row.configured_providers ?? 0),
+      appIds: Array.isArray(row.app_ids) ? row.app_ids.filter(Boolean) : [],
+    }
+  }
+  finally {
+    if (pgClient)
+      closeClient(c, pgClient)
+  }
+}
+
+function mergeNotificationStats(rows: Array<{ event: string, count: number }>[]) {
+  const totals = new Map<string, number>()
+  for (const batch of rows) {
+    for (const row of batch) {
+      const event = String(row.event || '')
+      if (!event)
+        continue
+      totals.set(event, (totals.get(event) ?? 0) + Number(row.count || 0))
+    }
+  }
+  return [...totals.entries()]
+    .map(([event, count]) => ({ event, count }))
+    .sort((a, b) => b.count - a.count)
+}
+
 app.get('/stats', middlewareKey(), async (c) => {
-  const appId = assertString(c.req.query('app_id'), 'app_id', 128)
-  await assertAppPermission(c, NOTIFICATION_MANAGE_PERMISSION, appId)
+  const orgIdRaw = c.req.query('org_id')
+  const appIdRaw = c.req.query('app_id')
   const days = Number(c.req.query('days') ?? 30)
   const campaignId = c.req.query('campaign_id') || undefined
+
+  if (orgIdRaw && !appIdRaw) {
+    const orgId = assertString(orgIdRaw, 'org_id', 64)
+    if (!(await checkPermission(c, 'org.read', { orgId })))
+      throw quickError(403, 'org_access_denied', 'You can\'t access this organization', { org_id: orgId })
+    if (campaignId)
+      throw simpleError('invalid_body', 'campaign_id is not supported for org stats', { field: 'campaign_id' })
+
+    const overview = await readOrgNotificationOverview(c, orgId)
+    const batches: Array<{ event: string, count: number }>[] = []
+    const concurrency = 8
+    for (let i = 0; i < overview.appIds.length; i += concurrency) {
+      const chunk = overview.appIds.slice(i, i + concurrency)
+      const chunkRows = await Promise.all(
+        chunk.map(appId => readNotificationStatsCF(c, { appId, days })),
+      )
+      batches.push(...chunkRows)
+    }
+    const data = mergeNotificationStats(batches)
+    const totalEvents = data.reduce((sum, item) => sum + Number(item.count || 0), 0)
+    return c.json({
+      data,
+      overview: {
+        apps: overview.apps,
+        campaigns: overview.campaigns,
+        configured_providers: overview.configured_providers,
+        total_events: totalEvents,
+      },
+    })
+  }
+
+  const appId = assertString(appIdRaw, 'app_id', 128)
+  await assertAppPermission(c, NOTIFICATION_MANAGE_PERMISSION, appId)
   const data = await readNotificationStatsCF(c, { appId, campaignId, days })
   return c.json({ data })
 })
