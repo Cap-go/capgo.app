@@ -1,6 +1,8 @@
 import type { Context } from 'hono'
 import {
   buildReadDevicesCFQuery,
+  buildNativeObservePluginTotalDevicesCFQuery,
+  buildNativeObservePluginVersionsCFQuery,
   buildUpdateDeliveryTimingEventsCFQuery,
   countDevicesCF,
   countInstallSourcesCF,
@@ -228,9 +230,19 @@ export async function collectAnalyticsEngineSqlFixtures(): Promise<AnalyticsEngi
         }),
       },
       {
+        name: 'buildNativeObservePluginVersionsCFQuery.default',
+        query: buildNativeObservePluginVersionsCFQuery(SAMPLE_APP_ID, 12),
+      },
+
+      {
         name: 'buildReadDevicesCFQuery.default',
         query: buildReadDevicesCFQuery({ app_id: SAMPLE_APP_ID, limit: 10 }, false),
       },
+      {
+        name: 'buildNativeObservePluginTotalDevicesCFQuery.default',
+        query: buildNativeObservePluginTotalDevicesCFQuery(SAMPLE_APP_ID),
+      },
+
       {
         name: 'buildReadDevicesCFQuery.installSources',
         query: buildReadDevicesCFQuery({
