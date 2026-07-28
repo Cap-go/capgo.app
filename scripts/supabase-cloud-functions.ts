@@ -3,14 +3,29 @@ import { join } from 'node:path'
 import process from 'node:process'
 
 /**
- * Capgo cloud (prod/preprod/alpha) only publishes Supabase Edge Functions that
- * still receive traffic from Postgres (pg_net) or other non-Cloudflare callers.
+ * Capgo cloud (prod/preprod/alpha) Supabase Edge Functions that must stay
+ * published on sb.capgo.app.
  *
- * Public API, plugin, private, and files traffic runs on Cloudflare Workers.
- * Self-hosted installs keep deploying every function under supabase/functions/.
+ * Keep:
+ * - `triggers` — Postgres pg_net calls /functions/v1/triggers/queue_consumer/sync
+ * - console/CLI `supabase.functions.invoke(...)` targets (SDK always uses
+ *   SUPABASE_URL, not api.capgo.app)
+ *
+ * Skip (Cloudflare or unused on Capgo cloud Supabase):
+ * plugin hot paths, device public API, build, notifications, ops probes, etc.
+ * Self-hosted installs still deploy every function under supabase/functions/.
  */
 export const CAPGO_CLOUD_SUPABASE_FUNCTIONS = [
+  'apikey',
+  'app',
+  'bundle',
+  'channel',
+  'files',
+  'organization',
+  'private',
+  'statistics',
   'triggers',
+  'webhooks',
 ] as const
 
 export type CapgoCloudSupabaseFunction = typeof CAPGO_CLOUD_SUPABASE_FUNCTIONS[number]

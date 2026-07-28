@@ -77,10 +77,10 @@ We support both deployments for practical reasons:
 
 In production, we route most traffic through Cloudflare Workers for cost and
 scale, while Supabase remains the reference backend and the default for
-self-hosted deployments. Capgo cloud still publishes the `triggers` Supabase
-function so Postgres `pg_net` can reach `queue_consumer`; cron/trigger work is
-then forwarded to Cloudflare when configured. Private, public, plugin, and files
-endpoints are not published on Capgo cloud Supabase anymore.
+self-hosted deployments. Capgo cloud still publishes the Supabase functions used
+by Postgres `pg_net` (`triggers`) and by `supabase.functions.invoke` from the
+console/CLI (those always target `SUPABASE_URL`, not Cloudflare). Plugin hot
+paths and other unused Capgo cloud endpoints are not published on Supabase.
 
 ## Project structure (self-hosting map)
 
@@ -453,9 +453,10 @@ supabase secrets set --env-file supabase/functions/.env
 ### Deploy Capgo Cloud Supabase functions
 
 Capgo Cloud (prod / preprod / alpha) only publishes allowlisted Supabase
-functions from `scripts/supabase-cloud-functions.ts` (currently `triggers`, for
-`pg_net` / queue-consumer entry). Public API, plugin, private, and files traffic
-runs on Cloudflare Workers.
+functions from `scripts/supabase-cloud-functions.ts`: `triggers` for `pg_net`,
+plus every function still reached by console/CLI `supabase.functions.invoke`
+(`private`, `apikey`, `app`, `bundle`, `channel`, `files`, `organization`,
+`statistics`, `webhooks`). Plugin hot paths and unused ops endpoints are skipped.
 
 ```bash
 bun run deploy:supabase:prod
