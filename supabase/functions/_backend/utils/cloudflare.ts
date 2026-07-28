@@ -201,7 +201,7 @@ function serializeStatsMetadata(metadata?: StatsMetadata): string {
   return metadata && Object.keys(metadata).length > 0 ? JSON.stringify(metadata) : ''
 }
 
-function parseStatsMetadata(metadata: unknown): StatsMetadata | null {
+export function parseStatsMetadata(metadata: unknown): StatsMetadata | null {
   if (typeof metadata !== 'string' || metadata === '')
     return null
 
@@ -480,12 +480,36 @@ interface AdminOnboardingTelemetryRow {
   first_at: Date | string
 }
 
-const ADMIN_ONBOARDING_TELEMETRY_WINDOWS_PER_QUERY = 100
+// Cloudflare Analytics Engine SQL rejects bodies longer than 10_000 chars.
+const ADMIN_ONBOARDING_TELEMETRY_MAX_SQL_CHARS = 9_000
 const ADMIN_ONBOARDING_COMPLETED_DOWNLOAD_ACTIONS = [
   'download_complete',
   'download_manifest_complete',
   'download_zip_complete',
 ]
+
+function batchAdminOnboardingTelemetryWindows(
+  windows: AdminOnboardingTelemetryWindow[],
+  buildQuery: (batch: AdminOnboardingTelemetryWindow[]) => string,
+): AdminOnboardingTelemetryWindow[][] {
+  const batches: AdminOnboardingTelemetryWindow[][] = []
+  let current: AdminOnboardingTelemetryWindow[] = []
+
+  for (const window of windows) {
+    const candidate = [...current, window]
+    if (current.length > 0 && buildQuery(candidate).length > ADMIN_ONBOARDING_TELEMETRY_MAX_SQL_CHARS) {
+      batches.push(current)
+      current = [window]
+      continue
+    }
+    current = candidate
+  }
+
+  if (current.length > 0)
+    batches.push(current)
+
+  return batches
+}
 
 function toValidDate(value: Date | string) {
   const date = value instanceof Date ? value : new Date(value)
@@ -580,8 +604,12 @@ export async function getAdminOnboardingTelemetry(
 
   const telemetry = emptyAdminOnboardingTelemetry(true)
   try {
-    for (let index = 0; index < validWindows.length; index += ADMIN_ONBOARDING_TELEMETRY_WINDOWS_PER_QUERY) {
-      const windowBatch = validWindows.slice(index, index + ADMIN_ONBOARDING_TELEMETRY_WINDOWS_PER_QUERY)
+    // Batch by SQL size so both queries stay under the Analytics Engine 10k limit.
+    const windowBatches = batchAdminOnboardingTelemetryWindows(
+      validWindows,
+      batch => buildAdminOnboardingUpdateDownloadQuery(batch),
+    )
+    for (const windowBatch of windowBatches) {
       const [productionDeviceRows, updateDownloadRows] = await Promise.all([
         runQueryToCFA<AdminOnboardingTelemetryRow>(c, buildAdminOnboardingProductionDeviceQuery(windowBatch)),
         runQueryToCFA<AdminOnboardingTelemetryRow>(c, buildAdminOnboardingUpdateDownloadQuery(windowBatch)),
@@ -1238,6 +1266,163 @@ LIMIT ${limit}`
     cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading stats list', error: serializeError(e), query })
   }
   return [] as StatRowCF[]
+}
+
+export interface UpdateDeliveryTimingEventCF {
+  app_id: string
+  device_id: string
+  action: string
+  version_name: string
+  metadata: StatsMetadata | null
+  created_at: string
+}
+
+export interface ReadUpdateDeliveryTimingEventsCFParams {
+  start_date: string
+  end_date: string
+  actions: string[]
+  /** When set, restrict to these app ids. Omit for platform-wide scans. */
+  app_ids?: string[]
+  limit?: number
+}
+
+export function buildUpdateDeliveryTimingEventsCFQuery(params: ReadUpdateDeliveryTimingEventsCFParams): string {
+  const limit = normalizeAnalyticsLimit(params.limit, MAX_ANALYTICS_QUERY_LIMIT)
+  const actionsList = params.actions.map(action => `'${escapeSqlString(action)}'`).join(', ')
+  const appFilter = params.app_ids?.length
+    ? (
+        params.app_ids.length === 1
+          ? `AND index1 = '${escapeSqlString(params.app_ids[0])}'`
+          : `AND index1 IN (${params.app_ids.map(id => `'${escapeSqlString(id)}'`).join(', ')})`
+      )
+    : ''
+
+  return `SELECT
+  index1 AS app_id,
+  blob1 AS device_id,
+  blob2 AS action,
+  blob3 AS version_name,
+  blob4 AS metadata,
+  timestamp AS created_at
+FROM app_log
+WHERE
+  timestamp >= toDateTime('${formatDateCF(params.start_date)}')
+  AND timestamp < toDateTime('${formatDateCF(params.end_date)}')
+  AND blob2 IN (${actionsList})
+  ${appFilter}
+GROUP BY app_id, device_id, action, version_name, metadata, created_at
+ORDER BY created_at ASC
+LIMIT ${limit}`
+}
+
+export async function readUpdateDeliveryTimingEventsCF(
+  c: Context,
+  params: ReadUpdateDeliveryTimingEventsCFParams,
+): Promise<UpdateDeliveryTimingEventCF[]> {
+  if (!c.env.APP_LOG)
+    return []
+
+  if (!params.actions.length)
+    return []
+
+  // Empty app_ids array means "no apps in scope" (e.g. empty org), not platform-wide.
+  if (params.app_ids && params.app_ids.length === 0)
+    return []
+
+  const query = buildUpdateDeliveryTimingEventsCFQuery(params)
+  cloudlog({ requestId: c.get('requestId'), message: 'readUpdateDeliveryTimingEventsCF query', query })
+  try {
+    const rows = await runQueryToCFA<{
+      app_id: string
+      device_id: string
+      action: string
+      version_name: string
+      metadata: string | null
+      created_at: string
+    }>(c, query)
+    return rows.map(row => ({
+      app_id: row.app_id,
+      device_id: row.device_id,
+      action: row.action,
+      version_name: row.version_name || 'unknown',
+      metadata: parseStatsMetadata(row.metadata),
+      created_at: row.created_at,
+    }))
+  }
+  catch (e) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading update delivery timing events', error: serializeError(e), query })
+    throw e
+  }
+}
+
+
+export interface NativeObservePluginVersionCF {
+  plugin_version: string
+  devices: number
+}
+
+function nativeObservePluginDevicesSubquery(appId: string): string {
+  return `SELECT
+    blob1 AS device_id,
+    argMax(blob3, timestamp) AS plugin_version,
+    argMax(double2, timestamp) AS is_prod,
+    argMax(double3, timestamp) AS is_emulator
+  FROM device_info
+  WHERE index1 = '${escapeSqlString(appId)}'
+  GROUP BY blob1`
+}
+
+export function buildNativeObservePluginVersionsCFQuery(appId: string, limit = 12): string {
+  const safeLimit = normalizeAnalyticsLimit(limit, 12)
+  return `SELECT
+  if(plugin_version = '', 'unknown', plugin_version) AS plugin_version,
+  count() AS devices
+FROM (
+  ${nativeObservePluginDevicesSubquery(appId)}
+)
+WHERE is_prod = 1 AND is_emulator != 1
+GROUP BY plugin_version
+ORDER BY devices DESC, plugin_version ASC
+LIMIT ${safeLimit}`
+}
+
+export function buildNativeObservePluginTotalDevicesCFQuery(appId: string): string {
+  return `SELECT
+  count() AS total_devices
+FROM (
+  ${nativeObservePluginDevicesSubquery(appId)}
+)
+WHERE is_prod = 1 AND is_emulator != 1`
+}
+
+export async function readNativeObservePluginVersionsCF(
+  c: Context,
+  appId: string,
+  limit = 12,
+): Promise<{ rows: NativeObservePluginVersionCF[], total_devices: number }> {
+  if (!c.env.DEVICE_INFO)
+    return { rows: [], total_devices: 0 }
+
+  const versionsQuery = buildNativeObservePluginVersionsCFQuery(appId, limit)
+  const totalQuery = buildNativeObservePluginTotalDevicesCFQuery(appId)
+  cloudlog({ requestId: c.get('requestId'), message: 'readNativeObservePluginVersionsCF query', versionsQuery, totalQuery })
+  try {
+    const [rows, totalRows] = await Promise.all([
+      runQueryToCFA<{ plugin_version: string, devices: number }>(c, versionsQuery),
+      runQueryToCFA<{ total_devices: number }>(c, totalQuery),
+    ])
+    return {
+      rows: rows.map(row => ({
+        plugin_version: row.plugin_version || 'unknown',
+        devices: Number(row.devices) || 0,
+      })),
+      total_devices: Number(totalRows[0]?.total_devices) || 0,
+    }
+  }
+  catch (e) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading native observe plugin versions', error: serializeError(e), versionsQuery, totalQuery })
+    throw e
+  }
 }
 
 function buildStatsInsightsActionFilter(actions?: string[]) {

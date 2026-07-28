@@ -1,6 +1,9 @@
 import type { Context } from 'hono'
 import {
   buildReadDevicesCFQuery,
+  buildNativeObservePluginTotalDevicesCFQuery,
+  buildNativeObservePluginVersionsCFQuery,
+  buildUpdateDeliveryTimingEventsCFQuery,
   countDevicesCF,
   countInstallSourcesCF,
   countUpdatesFromLogsCF,
@@ -11,27 +14,28 @@ import {
   getAdminDistributionMetrics,
   getAdminFailureMetrics,
   getAdminMauTrend,
-  getAdminOrgMetrics,
   getAdminOnboardingTelemetry,
+  getAdminOrgMetrics,
   getAdminPlatformOverview,
   getAdminStorageTrend,
   getAdminSuccessRate,
   getAdminSuccessRateTrend,
   getAdminUploadMetrics,
-  getPublicLiveUpdateMetricsCF,
   getPluginBreakdownCF,
+  getPublicLiveUpdateMetricsCF,
   getUpdateStatsCF,
   readActiveAppsCF,
   readBandwidthUsageCF,
+  readDevicesCF,
   readDeviceUsageCF,
   readDeviceVersionCountsCF,
-  readDevicesCF,
   readLastMonthDevicesByPlatformCF,
   readLastMonthDevicesCF,
   readLastMonthUpdatesCF,
   readNativeVersionUsageCF,
   readStatsCF,
   readStatsVersionCF,
+  readUpdateDeliveryTimingEventsCF,
 } from '../../supabase/functions/_backend/utils/cloudflare.ts'
 
 export interface AnalyticsEngineSqlFixture {
@@ -216,9 +220,29 @@ export async function collectAnalyticsEngineSqlFixtures(): Promise<AnalyticsEngi
 
     const staticFixtures: AnalyticsEngineSqlFixture[] = [
       {
+        name: 'buildUpdateDeliveryTimingEventsCFQuery.app',
+        query: buildUpdateDeliveryTimingEventsCFQuery({
+          start_date: SAMPLE_START,
+          end_date: SAMPLE_END,
+          actions: ['download_complete', 'download_0'],
+          app_ids: [SAMPLE_APP_ID],
+          limit: 10,
+        }),
+      },
+      {
+        name: 'buildNativeObservePluginVersionsCFQuery.default',
+        query: buildNativeObservePluginVersionsCFQuery(SAMPLE_APP_ID, 12),
+      },
+
+      {
         name: 'buildReadDevicesCFQuery.default',
         query: buildReadDevicesCFQuery({ app_id: SAMPLE_APP_ID, limit: 10 }, false),
       },
+      {
+        name: 'buildNativeObservePluginTotalDevicesCFQuery.default',
+        query: buildNativeObservePluginTotalDevicesCFQuery(SAMPLE_APP_ID),
+      },
+
       {
         name: 'buildReadDevicesCFQuery.installSources',
         query: buildReadDevicesCFQuery({
@@ -254,6 +278,13 @@ export async function collectAnalyticsEngineSqlFixtures(): Promise<AnalyticsEngi
       search: 'demo',
       limit: 10,
     }, false))
+    await captureCall('readUpdateDeliveryTimingEventsCF', () => readUpdateDeliveryTimingEventsCF(context, {
+      start_date: SAMPLE_START,
+      end_date: SAMPLE_END,
+      actions: ['download_complete', 'download_0', 'download_zip_start'],
+      app_ids: [SAMPLE_APP_ID],
+      limit: 10,
+    }))
     await captureCall('readStatsCF', () => readStatsCF(context, {
       app_id: SAMPLE_APP_ID,
       start_date: SAMPLE_START,
