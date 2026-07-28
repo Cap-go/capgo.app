@@ -310,7 +310,6 @@ function getReadOnlyDatabaseURL(c: Context, dbRegion: string | undefined): strin
     return null
 
   setDatabaseSource(c, selectedRoute.binding)
-  cloudlog({ requestId: c.get('requestId'), message: `Using ${selectedRoute.binding} for read-only` })
   return c.env[selectedRoute.binding].connectionString
 }
 
@@ -323,7 +322,6 @@ function getLocalReadOnlyDatabaseURL(c: Context): string | null {
     return null
 
   setDatabaseSource(c, 'local_read_replica')
-  cloudlog({ requestId: c.get('requestId'), message: 'Using LOCAL_READ_REPLICA_SUPABASE_DB_URL for read-only' })
   return fixSupabaseHost(getEnv(c, 'LOCAL_READ_REPLICA_SUPABASE_DB_URL'))
 }
 
@@ -342,30 +340,25 @@ export function getDatabaseURL(c: Context, readOnly = false): string {
   }
 
   if (readOnly && shouldRequireReadReplica(c)) {
-    cloudlog({ requestId: c.get('requestId'), message: 'Read replica is required for this endpoint' })
     throw new Error('Read replica is required for this endpoint')
   }
 
   if (c.env.HYPERDRIVE_CAPGO_DIRECT_EU && !shouldSkipDirectHyperdriveFallback(c)) {
     setDatabaseSource(c, 'HYPERDRIVE_CAPGO_DIRECT_EU')
-    cloudlog({ requestId: c.get('requestId'), message: `Using HYPERDRIVE_CAPGO_DIRECT_EU for ${readOnly ? 'read-only' : 'read-write'}` })
     return c.env.HYPERDRIVE_CAPGO_DIRECT_EU.connectionString
   }
 
   if (c.env.HYPERDRIVE_CAPGO_DIRECT_EU) {
-    cloudlog({ requestId: c.get('requestId'), message: 'Skipping HYPERDRIVE_CAPGO_DIRECT_EU fallback for this endpoint' })
   }
 
   // Main DB write poller EU region in supabase
   if (existInEnv(c, 'MAIN_SUPABASE_DB_URL')) {
     setDatabaseSource(c, 'sb_pooler_main')
-    cloudlog({ requestId: c.get('requestId'), message: 'Using MAIN_SUPABASE_DB_URL for read-write' })
     return getEnv(c, 'MAIN_SUPABASE_DB_URL')
   }
 
   // Default Supabase direct connection used for testing or if no other option is available
   setDatabaseSource(c, 'direct')
-  cloudlog({ requestId: c.get('requestId'), message: 'Using Direct Supabase for read-write' })
   return fixSupabaseHost(getEnv(c, 'SUPABASE_DB_URL'))
 }
 
@@ -400,8 +393,6 @@ export async function getPgClient(c: Context, readOnly = false): Promise<PluginP
   const requestId = c.get('requestId')
   const appName = c.res.headers.get('X-Worker-Source') ?? 'unknown source'
   const dbName = String(c.get('databaseSource') ?? c.res.headers.get('X-Database-Source') ?? 'unknown source')
-  cloudlog({ requestId, message: 'SUPABASE_DB_URL selected', dbName, appName, readOnly })
-
   const isPooler = dbName.startsWith('sb_pooler')
   const readOnlyOptions = readOnly && !isPooler ? '-c default_transaction_read_only=on' : undefined
   const isWorkerd = getRuntimeKey() === 'workerd'
@@ -641,7 +632,6 @@ export function requestInfosChannelDevicePostgres(
     ))
     .groupBy(channelDevicesAlias.device_id, channelDevicesAlias.app_id, channelAlias.id, versionAlias.id)
     .limit(1)
-  cloudlog({ requestId: c.get('requestId'), message: 'channelDevice Query:', channelDeviceQuery: channelDevice.toSQL() })
 
   return channelDevice.then(data => data.at(0))
 }
@@ -676,7 +666,6 @@ export async function getEffectiveDeviceChannelNamePostgres(
       ))
       .limit(1)
 
-    cloudlog({ requestId: c.get('requestId'), message: 'stats channel self override Query:', channelQuery: channelQuery.toSQL() })
     const channel = await channelQuery.then(data => data.at(0))
     return channel?.name ? channel : null
   }
@@ -698,7 +687,6 @@ export async function getEffectiveDeviceChannelNamePostgres(
       .where(and(eq(channelDevicesAlias.device_id, device_id), eq(channelDevicesAlias.app_id, app_id)))
       .limit(1)
 
-    cloudlog({ requestId: c.get('requestId'), message: 'stats channel override Query:', channelQuery: channelQuery.toSQL() })
     const channel = await channelQuery.then(data => data.at(0))
     if (channel?.name)
       return channel
@@ -727,7 +715,6 @@ export async function getEffectiveDeviceChannelNamePostgres(
       .orderBy(channelAlias.name, channelAlias.id)
       .limit(1)
 
-    cloudlog({ requestId: c.get('requestId'), message: 'stats channel Query:', channelQuery: channelQuery.toSQL(), fallbackChannelName: channelName })
     const channel = await channelQuery.then(data => data.at(0))
     return channel?.name ? channel : null
   }
@@ -770,7 +757,6 @@ export function requestInfosChannelByIdPostgres(
     ))
     .groupBy(channelAlias.id, versionAlias.id)
     .limit(1)
-  cloudlog({ requestId: c.get('requestId'), message: 'channel self override Query:', channelSelfOverrideQuery: channel.toSQL() })
 
   return channel.then(data => data.at(0))
 }
@@ -825,18 +811,29 @@ export function requestInfosChannelPostgres(
     .groupBy(channelAlias.id, versionAlias.id)
     .orderBy(channelAlias.name, channelAlias.id)
     .limit(1)
-  cloudlog({ requestId: c.get('requestId'), message: 'channel Query:', channelQuery: channelQuery.toSQL() })
   const channel = channelQuery.then(data => data.at(0))
 
   return channel
 }
 
-export function requestManifestEntriesPostgres(
+const MANIFEST_ROWS_CACHE_PATH = '/.manifest-rows-v1'
+const MANIFEST_ROWS_CACHE_TTL_SECONDS = 60
+
+type ManifestRow = { file_name: string, file_hash: string, s3_path: string }
+
+export async function requestManifestEntriesPostgres(
   c: Context,
   versionId: number,
   drizzleClient: ReturnType<typeof getDrizzleClient>,
-) {
-  const manifestQuery = drizzleClient
+): Promise<ManifestRow[]> {
+  // Cache raw rows by version id (not final download URLs — those embed device_id).
+  const helper = new CacheHelper(c)
+  const cacheKey = helper.buildRequest(MANIFEST_ROWS_CACHE_PATH, { version_id: String(versionId) })
+  const cached = await helper.matchJson<ManifestRow[]>(cacheKey)
+  if (cached)
+    return cached
+
+  const rows = await drizzleClient
     .select({
       file_name: schema.manifest.file_name,
       file_hash: schema.manifest.file_hash,
@@ -845,10 +842,9 @@ export function requestManifestEntriesPostgres(
     .from(schema.manifest)
     .where(eq(schema.manifest.app_version_id, versionId))
 
-  cloudlog({ requestId: c.get('requestId'), message: 'rollout manifest Query:', manifestQuery: manifestQuery.toSQL() })
-  // Drizzle builders are thenables and re-execute SQL on every await/catch.
-  // Return one Promise so overlap-start + later await share a single query.
-  return manifestQuery.execute()
+  // Fire-and-forget put; Cache API size limits may reject huge manifests.
+  void helper.putJson(cacheKey, rows, MANIFEST_ROWS_CACHE_TTL_SECONDS)
+  return rows
 }
 
 export function requestInfosChannelByIdPostgresRollout(
@@ -875,7 +871,6 @@ export function requestInfosChannelByIdPostgresRollout(
     ))
     .limit(1)
 
-  cloudlog({ requestId: c.get('requestId'), message: 'channel self override rollout Query:', channelSelfOverrideQuery: channel.toSQL() })
   return channel.then(data => data.at(0))
 }
 
@@ -904,7 +899,6 @@ export function requestInfosChannelDevicePostgresRollout(
     ))
     .limit(1)
 
-  cloudlog({ requestId: c.get('requestId'), message: 'channelDevice rollout Query:', channelDeviceQuery: channelDevice.toSQL() })
   return channelDevice.then(data => data.at(0))
 }
 
@@ -951,7 +945,6 @@ export function requestInfosChannelPostgresRollout(
     .orderBy(channelAlias.name, channelAlias.id)
     .limit(1)
 
-  cloudlog({ requestId: c.get('requestId'), message: 'channel rollout Query:', channelQuery: channelQuery.toSQL() })
   return channelQuery.then(data => data.at(0))
 }
 
@@ -1057,7 +1050,6 @@ export function requestInfosPostgres(options: RequestInfosPostgresOptions) {
       channelDevice = requestInfosChannelDevicePostgres(c, app_id, device_id, drizzleClient, shouldFetchManifest, includeMetadata)
     }
     else {
-      cloudlog({ requestId: c.get('requestId'), message: 'Skipping channel device override query' })
       channelDevice = Promise.resolve(null)
     }
     const channel = requestInfosChannelPostgres(c, platform, app_id, defaultChannel, drizzleClient, shouldFetchManifest, includeMetadata)
@@ -1078,7 +1070,6 @@ export function requestInfosPostgres(options: RequestInfosPostgresOptions) {
     channelDevice = requestInfosChannelDevicePostgresRollout(c, app_id, device_id, drizzleClient, includeMetadata)
   }
   else {
-    cloudlog({ requestId: c.get('requestId'), message: 'Skipping channel device override rollout query' })
     channelDevice = Promise.resolve(null)
   }
   const channel = requestInfosChannelPostgresRollout(c, platform, app_id, defaultChannel, drizzleClient, includeMetadata)

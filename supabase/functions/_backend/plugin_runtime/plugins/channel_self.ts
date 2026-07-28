@@ -7,7 +7,7 @@ import type { StandardSchema } from '../utils/schema_validation.ts'
 import type { Database } from '../utils/supabase.types.ts'
 import { parse } from '@std/semver'
 import { Hono } from 'hono/tiny'
-import { getAppStatus, setAppStatus } from '../utils/appStatus.ts'
+import { getAppStatus, setAppStatus, toOwnerRoutingCache } from '../utils/appStatus.ts'
 import { checkChannelSelfIPRateLimit, isChannelSelfRateLimited, recordChannelSelfIPRequest, recordChannelSelfRequest } from '../utils/channelSelfRateLimit.ts'
 import { deleteChannelSelfOverride, getChannelSelfOverride, isChannelSelfStoreEnabled, setChannelSelfOverride } from '../utils/channelSelfStore.ts'
 import { BRES, parseBody, quickError, simpleError200, simpleRateLimit } from '../utils/hono.ts'
@@ -163,7 +163,7 @@ async function assertChannelSelfAppOwnerPlanValid(
     return { response: c.json({ error: 'on_premise_app', message: 'On-premise app detected' }, 429) }
   }
 
-  await setAppStatus(c, appId, 'cloud', appOwner.allow_device_custom_id, appOwner.block_provider_infra_requests)
+  await setAppStatus(c, appId, 'cloud', appOwner.allow_device_custom_id, appOwner.block_provider_infra_requests, toOwnerRoutingCache(appOwner))
   return { appOwner }
 }
 
