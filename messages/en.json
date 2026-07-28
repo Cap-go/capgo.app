@@ -357,6 +357,7 @@
   "app-access-scope-channel": "One channel",
   "app-deleted": "App deleted",
   "app-id": "App ID",
+  "org-to-app": "Org → App",
   "app-to-channel": "App → Channel",
   "app-id-missing": "App ID is missing",
   "app-info": "App information",
