@@ -1,8 +1,11 @@
 import type { Context } from 'hono'
+import type { Dayjs } from 'dayjs'
+import type { UpdateDeliveryTimingEventCF } from '../utils/cloudflare.ts'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc.js'
 import { Hono } from 'hono/tiny'
+import { readNativeObservePluginVersionsCF, readUpdateDeliveryTimingEventsCF } from '../utils/cloudflare.ts'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog } from '../utils/logging.ts'
@@ -63,6 +66,14 @@ interface NativeObserveReleaseMarker {
   version_name: string
   channel_name: string
   deployed_at: string
+}
+
+interface NativeObserveEventSample {
+  day: string
+  action: string
+  version_name: string
+  device_id: string
+  duration_ms: number | null
 }
 
 type NativeObserveNumericValue = number | string | null | undefined
@@ -276,6 +287,198 @@ function setMetric(series: Array<number | null>, index: number, value: NativeObs
     series[index] = metric
 }
 
+function parseMetaDurationMs(metadata: Record<string, string> | null | undefined): number | null {
+  if (!metadata)
+    return null
+  for (const key of ['duration_ms', 'duration'] as const) {
+    const raw = metadata[key]
+    if (typeof raw !== 'string' || raw.length === 0 || raw.length > 15)
+      continue
+    if (!/^\d+(?:\.\d+)?$/.test(raw))
+      continue
+    const value = Number(raw)
+    if (!Number.isFinite(value))
+      continue
+    return value
+  }
+  return null
+}
+
+function percentileCont(sorted: number[], q: number): number | null {
+  if (!sorted.length)
+    return null
+  if (sorted.length === 1)
+    return sorted[0]!
+  const index = (sorted.length - 1) * q
+  const lower = Math.floor(index)
+  const upper = Math.ceil(index)
+  if (lower === upper)
+    return sorted[lower]!
+  const weight = index - lower
+  return sorted[lower]! * (1 - weight) + sorted[upper]! * weight
+}
+
+function metricFromDurations(durations: number[]): Pick<NativeObserveMetricRow, 'p50_ms' | 'p90_ms' | 'p99_ms'> {
+  const sorted = [...durations].sort((a, b) => a - b)
+  return {
+    p50_ms: percentileCont(sorted, 0.5),
+    p90_ms: percentileCont(sorted, 0.9),
+    p99_ms: percentileCont(sorted, 0.99),
+  }
+}
+
+function toNativeObserveEventSamples(events: UpdateDeliveryTimingEventCF[]): NativeObserveEventSample[] {
+  const samples: NativeObserveEventSample[] = []
+  for (const event of events) {
+    const createdAtMs = Date.parse(event.created_at)
+    if (!Number.isFinite(createdAtMs))
+      continue
+    samples.push({
+      day: new Date(createdAtMs).toISOString().slice(0, 10),
+      action: event.action,
+      version_name: event.version_name || 'unknown',
+      device_id: event.device_id,
+      duration_ms: parseMetaDurationMs(event.metadata),
+    })
+  }
+  return samples
+}
+
+function aggregateNativeObserveSamples(samples: NativeObserveEventSample[]): {
+  dailyRows: NativeObserveMetricRow[]
+  actionRows: NativeObserveMetricRow[]
+  versionRows: NativeObserveVersionRow[]
+  overviewRow: NativeObserveOverviewRow
+} {
+  const dailyMap = new Map<string, { events: number, devices: Set<string>, durations: number[] }>()
+  const actionMap = new Map<string, { events: number, devices: Set<string>, durations: number[] }>()
+  const versionMap = new Map<string, {
+    devices: Set<string>
+    issueDevices: Set<string>
+    events: number
+    issueCount: number
+    launchDurations: number[]
+    webviewDurations: number[]
+  }>()
+
+  const allDevices = new Set<string>()
+  const issueDevices = new Set<string>()
+  let issueCount = 0
+  let launchTimeoutCount = 0
+  const launchDurations: number[] = []
+  const webviewDurations: number[] = []
+
+  for (const sample of samples) {
+    allDevices.add(sample.device_id)
+    if (issueActionSet.has(sample.action)) {
+      issueCount += 1
+      issueDevices.add(sample.device_id)
+    }
+    if (sample.action === 'app_launch_timeout')
+      launchTimeoutCount += 1
+    if (sample.action === launchReadyAction && sample.duration_ms !== null)
+      launchDurations.push(sample.duration_ms)
+    if (sample.action === webviewPageLoadedAction && sample.duration_ms !== null)
+      webviewDurations.push(sample.duration_ms)
+
+    const dailyKey = `${sample.day}\0${sample.action}`
+    const daily = dailyMap.get(dailyKey) ?? { events: 0, devices: new Set<string>(), durations: [] }
+    daily.events += 1
+    daily.devices.add(sample.device_id)
+    if (sample.duration_ms !== null)
+      daily.durations.push(sample.duration_ms)
+    dailyMap.set(dailyKey, daily)
+
+    const action = actionMap.get(sample.action) ?? { events: 0, devices: new Set<string>(), durations: [] }
+    action.events += 1
+    action.devices.add(sample.device_id)
+    if (sample.duration_ms !== null)
+      action.durations.push(sample.duration_ms)
+    actionMap.set(sample.action, action)
+
+    const version = versionMap.get(sample.version_name) ?? {
+      devices: new Set<string>(),
+      issueDevices: new Set<string>(),
+      events: 0,
+      issueCount: 0,
+      launchDurations: [],
+      webviewDurations: [],
+    }
+    version.events += 1
+    version.devices.add(sample.device_id)
+    if (issueActionSet.has(sample.action)) {
+      version.issueCount += 1
+      version.issueDevices.add(sample.device_id)
+    }
+    if (sample.action === launchReadyAction && sample.duration_ms !== null)
+      version.launchDurations.push(sample.duration_ms)
+    if (sample.action === webviewPageLoadedAction && sample.duration_ms !== null)
+      version.webviewDurations.push(sample.duration_ms)
+    versionMap.set(sample.version_name, version)
+  }
+
+  const dailyRows: NativeObserveMetricRow[] = [...dailyMap.entries()]
+    .map(([key, value]) => {
+      const [day, action] = key.split('\0')
+      return {
+        day,
+        action: action!,
+        events: value.events,
+        devices: value.devices.size,
+        ...metricFromDurations(value.durations),
+      }
+    })
+    .sort((a, b) => {
+      const dayCmp = (a.day ?? '').localeCompare(b.day ?? '')
+      return dayCmp !== 0 ? dayCmp : a.action.localeCompare(b.action)
+    })
+
+  const actionRows: NativeObserveMetricRow[] = [...actionMap.entries()]
+    .map(([action, value]) => ({
+      action,
+      events: value.events,
+      devices: value.devices.size,
+      ...metricFromDurations(value.durations),
+    }))
+    .sort((a, b) => {
+      const eventCmp = toCount(b.events) - toCount(a.events)
+      return eventCmp !== 0 ? eventCmp : a.action.localeCompare(b.action)
+    })
+
+  const versionRows: NativeObserveVersionRow[] = [...versionMap.entries()]
+    .map(([version_name, value]) => ({
+      version_name,
+      events: value.events,
+      devices: value.devices.size,
+      issue_count: value.issueCount,
+      affected_devices: value.issueDevices.size,
+      launch_p90_ms: percentileCont([...value.launchDurations].sort((a, b) => a - b), 0.9),
+      webview_load_p90_ms: percentileCont([...value.webviewDurations].sort((a, b) => a - b), 0.9),
+    }))
+    .sort((a, b) => {
+      const eventCmp = toCount(b.events) - toCount(a.events)
+      return eventCmp !== 0 ? eventCmp : a.version_name.localeCompare(b.version_name)
+    })
+    .slice(0, 12)
+
+  return {
+    dailyRows,
+    actionRows,
+    versionRows,
+    overviewRow: {
+      events: samples.length,
+      devices: allDevices.size,
+      issue_count: issueCount,
+      affected_devices: issueDevices.size,
+      launch_timeout_count: launchTimeoutCount,
+      launch_p50_ms: percentileCont([...launchDurations].sort((a, b) => a - b), 0.5),
+      launch_p90_ms: percentileCont([...launchDurations].sort((a, b) => a - b), 0.9),
+      webview_load_p50_ms: percentileCont([...webviewDurations].sort((a, b) => a - b), 0.5),
+      webview_load_p90_ms: percentileCont([...webviewDurations].sort((a, b) => a - b), 0.9),
+    },
+  }
+}
+
 function buildNativeObserveResponse(input: BuildNativeObserveResponseInput) {
   const labelIndex = new Map(input.labels.map((label, index) => [label, index]))
   const totalEvents = createSeries(input.labels.length)
@@ -396,11 +599,64 @@ function buildNativeObservePluginResponse(pluginVersionRows: NativeObservePlugin
   }
 }
 
-async function readNativeObserveStats(c: Context<MiddlewareKeyVariables>, appId: string, days: NativeObservePeriodDays) {
-  const endExclusive = dayjs().utc().add(1, 'day').startOf('day')
-  const start = endExclusive.subtract(days, 'day')
-  const endInclusive = endExclusive.subtract(1, 'millisecond')
-  const labels = generateDateLabels(start.toDate(), endExclusive.subtract(1, 'day').toDate())
+async function readReleaseMarkers(
+  c: Context<MiddlewareKeyVariables>,
+  appId: string,
+  start: Dayjs,
+  endExclusive: Dayjs,
+) {
+  const db = getPgClient(c, true)
+  try {
+    const result = await db.query<NativeObserveReleaseMarker>(
+      releaseMarkersQuery,
+      [appId, start.toISOString(), endExclusive.toISOString()],
+    )
+    return result.rows
+  }
+  catch (error) {
+    logPgError(c, 'readNativeObserveReleaseMarkers', error)
+    throw error
+  }
+  finally {
+    await closeClient(c, db)
+  }
+}
+
+async function readNativeObserveTimingEventsCFChunked(
+  c: Context<MiddlewareKeyVariables>,
+  appId: string,
+  start: Dayjs,
+  endExclusive: Dayjs,
+) {
+  const events: UpdateDeliveryTimingEventCF[] = []
+  let cursor = start.utc().startOf('day')
+  const end = endExclusive.utc()
+
+  while (cursor.isBefore(end)) {
+    const next = cursor.add(1, 'day')
+    const chunkEnd = next.isBefore(end) ? next : end
+    const chunk = await readUpdateDeliveryTimingEventsCF(c, {
+      start_date: cursor.toISOString(),
+      end_date: chunkEnd.toISOString(),
+      actions: [...nativeObserveActions],
+      app_ids: [appId],
+    })
+    events.push(...chunk)
+    cursor = next
+  }
+
+  return events
+}
+
+async function readNativeObserveStatsSB(
+  c: Context<MiddlewareKeyVariables>,
+  appId: string,
+  days: NativeObservePeriodDays,
+  labels: string[],
+  start: Dayjs,
+  endExclusive: Dayjs,
+  endInclusive: Dayjs,
+) {
   const params = [appId, start.toISOString(), endExclusive.toISOString(), nativeObserveActions]
   const paramsWithIssues = [...params, issueActions]
   const db = getPgClient(c, true)
@@ -425,7 +681,7 @@ async function readNativeObserveStats(c: Context<MiddlewareKeyVariables>, appId:
     })
   }
   catch (error) {
-    logPgError(c, 'readNativeObserveStats', error)
+    logPgError(c, 'readNativeObserveStatsSB', error)
     throw error
   }
   finally {
@@ -433,7 +689,64 @@ async function readNativeObserveStats(c: Context<MiddlewareKeyVariables>, appId:
   }
 }
 
-async function readNativeObservePluginStats(c: Context<MiddlewareKeyVariables>, appId: string) {
+async function readNativeObserveStatsCF(
+  c: Context<MiddlewareKeyVariables>,
+  appId: string,
+  days: NativeObservePeriodDays,
+  labels: string[],
+  start: Dayjs,
+  endExclusive: Dayjs,
+  endInclusive: Dayjs,
+) {
+  const events = await readNativeObserveTimingEventsCFChunked(c, appId, start, endExclusive)
+  const samples = toNativeObserveEventSamples(events)
+  const aggregates = aggregateNativeObserveSamples(samples)
+  const releaseMarkers = await readReleaseMarkers(c, appId, start, endExclusive)
+
+  return buildNativeObserveResponse({
+    labels,
+    days,
+    start: start.toISOString(),
+    end: endInclusive.toISOString(),
+    dailyRows: aggregates.dailyRows,
+    actionRows: aggregates.actionRows,
+    versionRows: aggregates.versionRows,
+    overviewRow: aggregates.overviewRow,
+    releaseMarkers,
+  })
+}
+
+async function readNativeObserveStats(c: Context<MiddlewareKeyVariables>, appId: string, days: NativeObservePeriodDays) {
+  const endExclusive = dayjs().utc().add(1, 'day').startOf('day')
+  const start = endExclusive.subtract(days, 'day')
+  const endInclusive = endExclusive.subtract(1, 'millisecond')
+  const labels = generateDateLabels(start.toDate(), endExclusive.subtract(1, 'day').toDate())
+
+  // Same dual-path pattern as private/stats and update_delivery_stats.
+  if (c.env.APP_LOG) {
+    return readNativeObserveStatsCF(
+      c,
+      appId,
+      days,
+      labels,
+      start,
+      endExclusive,
+      endInclusive,
+    )
+  }
+
+  return readNativeObserveStatsSB(
+    c,
+    appId,
+    days,
+    labels,
+    start,
+    endExclusive,
+    endInclusive,
+  )
+}
+
+async function readNativeObservePluginStatsSB(c: Context<MiddlewareKeyVariables>, appId: string) {
   const db = getPgClient(c, true)
 
   try {
@@ -441,12 +754,28 @@ async function readNativeObservePluginStats(c: Context<MiddlewareKeyVariables>, 
     return buildNativeObservePluginResponse(pluginVersionResult.rows)
   }
   catch (error) {
-    logPgError(c, 'readNativeObservePluginStats', error)
+    logPgError(c, 'readNativeObservePluginStatsSB', error)
     throw error
   }
   finally {
     await closeClient(c, db)
   }
+}
+
+async function readNativeObservePluginStatsCF(c: Context<MiddlewareKeyVariables>, appId: string) {
+  const rows = await readNativeObservePluginVersionsCF(c, appId)
+  const totalDevices = rows.reduce((sum, row) => sum + (Number(row.devices) || 0), 0)
+  return buildNativeObservePluginResponse(rows.map(row => ({
+    plugin_version: row.plugin_version,
+    devices: row.devices,
+    total_devices: totalDevices,
+  })))
+}
+
+async function readNativeObservePluginStats(c: Context<MiddlewareKeyVariables>, appId: string) {
+  if (c.env.DEVICE_INFO)
+    return readNativeObservePluginStatsCF(c, appId)
+  return readNativeObservePluginStatsSB(c, appId)
 }
 
 export const app = new Hono<MiddlewareKeyVariables>()
@@ -484,9 +813,13 @@ app.post('/', middlewareAuth, async (c) => {
 })
 
 export const nativeObserveStatsTestUtils = {
+  aggregateNativeObserveSamples,
   buildNativeObservePluginResponse,
   buildNativeObserveResponse,
   generateDateLabels,
   normalizeNativeObservePeriodDays,
   normalizeNativeObserveView,
+  parseMetaDurationMs,
+  percentileCont,
+  toNativeObserveEventSamples,
 }

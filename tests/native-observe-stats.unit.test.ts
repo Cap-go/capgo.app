@@ -83,4 +83,102 @@ describe('native observe stats helpers', () => {
       ],
     })
   })
+
+  it.concurrent('parses duration metadata strings', () => {
+    expect(nativeObserveStatsTestUtils.parseMetaDurationMs({ duration_ms: '1250.5' })).toBe(1250.5)
+    expect(nativeObserveStatsTestUtils.parseMetaDurationMs({ duration: '900' })).toBe(900)
+    expect(nativeObserveStatsTestUtils.parseMetaDurationMs({ duration_ms: 'nope' })).toBeNull()
+    expect(nativeObserveStatsTestUtils.parseMetaDurationMs(null)).toBeNull()
+  })
+
+  it('aggregates CF observe samples into daily/action/version/overview rows', () => {
+    const aggregates = nativeObserveStatsTestUtils.aggregateNativeObserveSamples([
+      {
+        day: '2026-07-01',
+        action: 'app_launch_ready',
+        version_name: '1.2.3',
+        device_id: 'd1',
+        duration_ms: 400,
+      },
+      {
+        day: '2026-07-01',
+        action: 'app_launch_ready',
+        version_name: '1.2.3',
+        device_id: 'd2',
+        duration_ms: 800,
+      },
+      {
+        day: '2026-07-01',
+        action: 'webview_page_loaded',
+        version_name: '1.2.3',
+        device_id: 'd1',
+        duration_ms: 1200,
+      },
+      {
+        day: '2026-07-02',
+        action: 'app_crash',
+        version_name: '1.2.3',
+        device_id: 'd3',
+        duration_ms: null,
+      },
+      {
+        day: '2026-07-02',
+        action: 'app_launch_timeout',
+        version_name: '1.2.4',
+        device_id: 'd3',
+        duration_ms: null,
+      },
+    ])
+
+    expect(aggregates.overviewRow).toMatchObject({
+      events: 5,
+      devices: 3,
+      issue_count: 2,
+      affected_devices: 1,
+      launch_timeout_count: 1,
+    })
+    expect(aggregates.overviewRow.launch_p50_ms).toBe(600)
+    expect(aggregates.overviewRow.webview_load_p90_ms).toBe(1200)
+
+    expect(aggregates.dailyRows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ day: '2026-07-01', action: 'app_launch_ready', events: 2, devices: 2 }),
+      expect.objectContaining({ day: '2026-07-02', action: 'app_crash', events: 1, devices: 1, p50_ms: null }),
+    ]))
+
+    expect(aggregates.actionRows[0]).toMatchObject({ action: 'app_launch_ready', events: 2, devices: 2 })
+    expect(aggregates.versionRows).toEqual([
+      expect.objectContaining({ version_name: '1.2.3', events: 4, devices: 3, issue_count: 1, affected_devices: 1 }),
+      expect.objectContaining({ version_name: '1.2.4', events: 1, devices: 1, issue_count: 1, affected_devices: 1 }),
+    ])
+  })
+
+  it('maps CF timing events into observe samples', () => {
+    expect(nativeObserveStatsTestUtils.toNativeObserveEventSamples([
+      {
+        app_id: 'com.demo.app',
+        device_id: 'd1',
+        action: 'app_launch_ready',
+        version_name: '1.0.0',
+        metadata: { duration_ms: '450' },
+        created_at: '2026-07-02T10:00:00.000Z',
+      },
+      {
+        app_id: 'com.demo.app',
+        device_id: 'd2',
+        action: 'app_crash',
+        version_name: '',
+        metadata: null,
+        created_at: 'not-a-date',
+      },
+    ])).toEqual([
+      {
+        day: '2026-07-02',
+        action: 'app_launch_ready',
+        version_name: '1.0.0',
+        device_id: 'd1',
+        duration_ms: 450,
+      },
+    ])
+  })
+
 })
