@@ -12,6 +12,14 @@ describe('supabase cloud function allowlist', () => {
     expect(buildCapgoCloudSupabaseDeployArgs()).toEqual(['triggers'])
   })
 
+  it('rejects an empty explicit deploy list', () => {
+    expect(() => buildCapgoCloudSupabaseDeployArgs([])).toThrow(/must not be empty/)
+  })
+
+  it('passes through multiple explicit deploy targets', () => {
+    expect(buildCapgoCloudSupabaseDeployArgs(['triggers', 'ok'])).toEqual(['triggers', 'ok'])
+  })
+
   it('skips every local function except the Capgo cloud allowlist', () => {
     const local = listLocalSupabaseFunctions()
     expect(local).toContain('triggers')

@@ -450,17 +450,25 @@ Seed the secret for functions:
 supabase secrets set --env-file supabase/functions/.env
 ```
 
-Push the functions to the cloud:
+### Deploy Capgo Cloud Supabase functions
+
+Capgo Cloud (prod / preprod / alpha) only publishes allowlisted Supabase
+functions from `scripts/supabase-cloud-functions.ts` (currently `triggers`, for
+`pg_net` / queue-consumer entry). Public API, plugin, private, and files traffic
+runs on Cloudflare Workers.
+
+```bash
+bun run deploy:supabase:prod
+# or: bunx supabase functions deploy $(bun scripts/supabase-cloud-functions.ts deploy-args) --project-ref <ref>
+```
+
+### Deploy self-hosted Supabase functions
+
+Self-hosted installs should keep deploying every function:
 
 ```bash
 supabase functions deploy
 ```
-
-Capgo cloud production only publishes the allowlisted Supabase functions in
-`scripts/supabase-cloud-functions.ts` (currently `triggers`, for `pg_net` /
-queue-consumer entry). Public API, plugin, private, and files traffic runs on
-Cloudflare Workers. Self-hosted installs should keep deploying every function
-with `supabase functions deploy` as shown above.
 
 ### Environment Variables for Self-Hosted Deployments
 
