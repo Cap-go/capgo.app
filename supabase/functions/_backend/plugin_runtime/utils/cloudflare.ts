@@ -197,6 +197,23 @@ export function trackVersionUsageCF(c: Context, version_name: string, app_id: st
   return Promise.resolve()
 }
 
+function parseStatsDurationMs(metadata?: StatsMetadata): number | null {
+  if (!metadata)
+    return null
+  for (const key of ['duration_ms', 'duration'] as const) {
+    const raw = metadata[key]
+    if (typeof raw !== 'string' || raw.length === 0 || raw.length > 15)
+      continue
+    if (!/^[0-9]+(\.[0-9]+)?$/.test(raw))
+      continue
+    const value = Number(raw)
+    if (!Number.isFinite(value) || value < 0 || value > 7_200_000)
+      continue
+    return value
+  }
+  return null
+}
+
 function serializeStatsMetadata(metadata?: StatsMetadata): string {
   return metadata && Object.keys(metadata).length > 0 ? JSON.stringify(metadata) : ''
 }
@@ -244,8 +261,10 @@ export function trackLogsCF(c: Context, app_id: string, device_id: string, actio
   if (!c.env.APP_LOG)
     return Promise.resolve()
 
+  const durationMs = parseStatsDurationMs(metadata)
   c.env.APP_LOG.writeDataPoint({
     blobs: [device_id, action, version_name, serializeStatsMetadata(metadata), ...appLogDimensionBlobs(dimensions)],
+    ...(durationMs !== null ? { doubles: [durationMs] } : {}),
     indexes: [app_id],
   })
 
@@ -256,8 +275,10 @@ export function trackLogsCFExternal(c: Context, app_id: string, device_id: strin
   if (!c.env.APP_LOG_EXTERNAL)
     return Promise.resolve()
 
+  const durationMs = parseStatsDurationMs(metadata)
   c.env.APP_LOG_EXTERNAL.writeDataPoint({
     blobs: [device_id, action, version_name, serializeStatsMetadata(metadata), ...appLogDimensionBlobs(dimensions)],
+    ...(durationMs !== null ? { doubles: [durationMs] } : {}),
     indexes: [app_id],
   })
 

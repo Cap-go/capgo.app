@@ -3,16 +3,21 @@ import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc.js'
 import { Hono } from 'hono/tiny'
+import { CacheHelper } from '../utils/cache.ts'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
-import { cloudlog } from '../utils/logging.ts'
+import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
 import { closeClient, getPgClient, logPgError } from '../utils/pg.ts'
 import { checkPermission } from '../utils/rbac.ts'
-import { supabaseClient as useSupabaseClient } from '../utils/supabase.ts'
+import { supabaseAdmin, supabaseClient as useSupabaseClient } from '../utils/supabase.ts'
+import { readUpdateDeliveryStatsCF } from '../utils/updateDeliveryStatsCf.ts'
 
 dayjs.extend(utc)
 
 const maxPeriodDays = 365
+const UPDATE_DELIVERY_STATS_CACHE_TTL_SECONDS = 300
+const UPDATE_DELIVERY_STATS_CACHE_PATH = '/.update-delivery-stats'
+
 type UpdateDeliveryPeriodDays = number
 type UpdateDeliveryScope = 'app' | 'org' | 'platform'
 
@@ -316,7 +321,7 @@ async function assertPlatformAdmin(c: Context<MiddlewareKeyVariables>) {
     throw simpleError('not_admin', 'Not admin - only admin users can access platform delivery latency')
 }
 
-async function readUpdateDeliveryStats(
+async function readUpdateDeliveryStatsPg(
   c: Context<MiddlewareKeyVariables>,
   scope: UpdateDeliveryScope,
   days: UpdateDeliveryPeriodDays,
@@ -364,6 +369,100 @@ async function readUpdateDeliveryStats(
   finally {
     await closeClient(c, db)
   }
+}
+
+
+async function listOrgAppIds(c: Context<MiddlewareKeyVariables>, orgId: string) {
+  const { data, error } = await supabaseAdmin(c)
+    .from('apps')
+    .select('app_id')
+    .eq('owner_org', orgId)
+  if (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'listOrgAppIds failed', error: serializeError(error) })
+    throw simpleError('fetch_error', 'Failed to list organization apps', { error: String(error.message || error) })
+  }
+  return (data ?? []).map(row => row.app_id).filter(Boolean)
+}
+
+async function readUpdateDeliveryStatsFromCf(
+  c: Context<MiddlewareKeyVariables>,
+  scope: UpdateDeliveryScope,
+  days: UpdateDeliveryPeriodDays,
+  scopeId?: string,
+) {
+  const endExclusive = dayjs().utc().add(1, 'day').startOf('day')
+  const start = endExclusive.subtract(days, 'day')
+  const endInclusive = endExclusive.subtract(1, 'millisecond')
+  const labels = generateDateLabels(start.toDate(), endExclusive.subtract(1, 'day').toDate())
+
+  let appIds: string[] | undefined
+  if (scope === 'app') {
+    if (!scopeId)
+      throw simpleError('missing_params', 'app_id is required for app scope')
+    appIds = [scopeId]
+  }
+  else if (scope === 'org') {
+    if (!scopeId)
+      throw simpleError('missing_params', 'org_id is required for org scope')
+    appIds = await listOrgAppIds(c, scopeId)
+  }
+
+  const cfResult = await readUpdateDeliveryStatsCF(c, {
+    scope,
+    appIds,
+    start: start.toDate(),
+    end: endExclusive.toDate(),
+  })
+  if (!cfResult)
+    return null
+
+  return buildUpdateDeliveryResponse({
+    labels,
+    days,
+    start: start.toISOString(),
+    end: endInclusive.toISOString(),
+    scope,
+    dailyRows: cfResult.dailyRows,
+    overviewRow: cfResult.overviewRow,
+  })
+}
+
+async function readUpdateDeliveryStats(
+  c: Context<MiddlewareKeyVariables>,
+  scope: UpdateDeliveryScope,
+  days: UpdateDeliveryPeriodDays,
+  scopeId?: string,
+) {
+  const cache = new CacheHelper(c)
+  const cacheKey = cache.buildRequest(UPDATE_DELIVERY_STATS_CACHE_PATH, {
+    scope,
+    scopeId: scopeId ?? '',
+    days: String(days),
+  })
+  const cached = await cache.matchJson<ReturnType<typeof buildUpdateDeliveryResponse>>(cacheKey)
+  if (cached)
+    return cached
+
+  // Production plugin timing lives in Analytics Engine APP_LOG; Postgres is local/legacy fallback.
+  try {
+    const cfResponse = await readUpdateDeliveryStatsFromCf(c, scope, days, scopeId)
+    if (cfResponse) {
+      await cache.putJson(cacheKey, cfResponse, UPDATE_DELIVERY_STATS_CACHE_TTL_SECONDS)
+      return cfResponse
+    }
+  }
+  catch (error) {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'CF update delivery stats failed, falling back to Postgres',
+      error: serializeError(error),
+      scope,
+    })
+  }
+
+  const pgResponse = await readUpdateDeliveryStatsPg(c, scope, days, scopeId)
+  await cache.putJson(cacheKey, pgResponse, UPDATE_DELIVERY_STATS_CACHE_TTL_SECONDS)
+  return pgResponse
 }
 
 export const app = new Hono<MiddlewareKeyVariables>()

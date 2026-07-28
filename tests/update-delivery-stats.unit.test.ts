@@ -74,3 +74,56 @@ describe('update delivery stats helpers', () => {
     expect(updateDeliveryStatsTestUtils.toMetric(12.4)).toBe(12)
   })
 })
+
+import { updateDeliveryStatsCfTestUtils } from '../supabase/functions/_backend/utils/updateDeliveryStatsCf.ts'
+
+describe('update delivery stats CF helpers', () => {
+  it.concurrent('parses duration metadata and doubles', () => {
+    expect(updateDeliveryStatsCfTestUtils.parseDurationFromMetadata('{"duration_ms":"1250"}', null)).toBe(1250)
+    expect(updateDeliveryStatsCfTestUtils.parseDurationFromMetadata('', 980)).toBe(980)
+    expect(updateDeliveryStatsCfTestUtils.parseDurationFromMetadata('{"duration":"nope"}', null)).toBeNull()
+  })
+
+  it.concurrent('computes percentiles from sorted samples', () => {
+    expect(updateDeliveryStatsCfTestUtils.percentile([10, 20, 30, 40], 0.5)).toBe(25)
+    expect(updateDeliveryStatsCfTestUtils.percentile([100], 0.99)).toBe(100)
+    expect(updateDeliveryStatsCfTestUtils.percentile([], 0.5)).toBeNull()
+  })
+
+  it('pairs start and complete events when metadata is missing', () => {
+    const result = updateDeliveryStatsCfTestUtils.pairTimingEvents([
+      {
+        app_id: 'com.demo.app',
+        device_id: 'device-1',
+        version_name: '1.0.0',
+        action: 'download_0',
+        metadata: '',
+        created_at: '2026-07-01T10:00:00.000Z',
+        double1: null,
+      },
+      {
+        app_id: 'com.demo.app',
+        device_id: 'device-1',
+        version_name: '1.0.0',
+        action: 'download_complete',
+        metadata: '',
+        created_at: '2026-07-01T10:00:02.500Z',
+        double1: null,
+      },
+      {
+        app_id: 'com.demo.app',
+        device_id: 'device-2',
+        version_name: '1.0.0',
+        action: 'download_complete',
+        metadata: '{"duration_ms":"800"}',
+        created_at: '2026-07-01T11:00:00.000Z',
+        double1: null,
+      },
+    ])
+
+    expect(result.overviewRow.samples).toBe(2)
+    expect(result.overviewRow.devices).toBe(2)
+    expect(result.dailyRows[0]?.day).toBe('2026-07-01')
+    expect(result.dailyRows[0]?.samples).toBe(2)
+  })
+})

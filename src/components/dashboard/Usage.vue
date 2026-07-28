@@ -30,7 +30,6 @@ import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
-import DeliveryLatencyPanel from './DeliveryLatencyPanel.vue'
 import DeploymentStatsCard from './DeploymentStatsCard.vue'
 import UpdateStatsCard from './UpdateStatsCard.vue'
 import UsageCard from './UsageCard.vue'
@@ -1170,12 +1169,4 @@ onBeforeUnmount(() => {
     <DeploymentStatsCard v-show="!appId" :use-billing-period="useBillingPeriod" :accumulated="useBillingPeriod && showCumulative" :reload-trigger="reloadTrigger" :force-demo="forceDemo" class="col-span-full sm:col-span-6 xl:col-span-4" />
   </div>
 
-  <div v-if="!appId" class="mb-6">
-    <DeliveryLatencyPanel
-      :key="['org', effectiveOrganization?.gid || '', reloadTrigger].join(':')"
-      scope="org"
-      :org-id="effectiveOrganization?.gid || ''"
-      :force-demo="forceDemo"
-    />
-  </div>
 </template>
