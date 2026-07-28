@@ -129,7 +129,7 @@ watch(() => adminStore.dateRangeMode, () => {
           id="admin-date-range"
           type="button"
           class="d-btn d-btn-sm gap-2 border border-gray-300 bg-white font-medium normal-case dark:border-gray-600 dark:bg-gray-700"
-          :aria-label="t('date-range')"
+          :aria-label="`${t('date-range')}: ${triggerLabel}`"
           aria-haspopup="dialog"
           :aria-expanded="isOpen"
           aria-controls="admin-date-range-popover"
@@ -146,7 +146,7 @@ watch(() => adminStore.dateRangeMode, () => {
           v-if="isOpen"
           id="admin-date-range-popover"
           role="dialog"
-          :aria-label="t('date-range')"
+          :aria-label="`${t('date-range')}: ${triggerLabel}`"
           class="absolute right-0 top-full z-50 mt-2 w-[min(720px,95vw)] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xl dark:border-gray-700 dark:bg-gray-900"
         >
           <div class="flex flex-col md:flex-row">
@@ -184,10 +184,13 @@ watch(() => adminStore.dateRangeMode, () => {
           <div class="flex flex-col gap-3 border-t border-gray-200 px-3 py-3 dark:border-gray-700 sm:flex-row sm:items-end sm:justify-between sm:px-4">
             <div class="grid flex-1 grid-cols-1 gap-2 sm:grid-cols-2">
               <div>
-                <label class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400" for="admin-range-start">{{ t('start') }}</label>
+                <div id="admin-range-start-label" class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">
+                  {{ t('start') }}
+                </div>
                 <div
-                  id="admin-range-start"
                   class="flex items-center gap-2 rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 dark:border-gray-600 dark:bg-gray-800"
+                  role="text"
+                  aria-labelledby="admin-range-start-label"
                 >
                   <CalendarDaysIcon class="h-4 w-4 shrink-0 text-gray-500 dark:text-gray-400" aria-hidden="true" />
                   <span class="truncate text-sm text-gray-900 dark:text-white">
@@ -196,10 +199,13 @@ watch(() => adminStore.dateRangeMode, () => {
                 </div>
               </div>
               <div>
-                <label class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400" for="admin-range-end">{{ t('end') }}</label>
+                <div id="admin-range-end-label" class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">
+                  {{ t('end') }}
+                </div>
                 <div
-                  id="admin-range-end"
                   class="flex items-center gap-2 rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 dark:border-gray-600 dark:bg-gray-800"
+                  role="text"
+                  aria-labelledby="admin-range-end-label"
                 >
                   <CalendarDaysIcon class="h-4 w-4 shrink-0 text-gray-500 dark:text-gray-400" aria-hidden="true" />
                   <span class="truncate text-sm text-gray-900 dark:text-white">
