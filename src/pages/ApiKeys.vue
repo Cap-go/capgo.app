@@ -84,6 +84,7 @@ interface ApiKeyAppAccessOption {
 
 type ApiKeyRow = Database['public']['Tables']['apikeys']['Row'] & {
   global_permissions?: string[]
+  is_hashed_key?: boolean
 }
 
 const { t } = useI18n()
@@ -160,7 +161,9 @@ function hideString(str: string | null) {
 }
 
 // Check if a key is a hashed (secure) key
-function isHashedKey(key: Database['public']['Tables']['apikeys']['Row']) {
+function isHashedKey(key: ApiKeyRow) {
+  if (typeof key.is_hashed_key === 'boolean')
+    return key.is_hashed_key
   return key.key === null && key.key_hash !== null
 }
 
@@ -1558,22 +1561,38 @@ async function getUserFacingErrorMessage(error: unknown, fallbackMessage: string
   return fallbackMessage
 }
 
-async function copyKey(apikey: Database['public']['Tables']['apikeys']['Row']) {
+async function copyKey(apikey: ApiKeyRow) {
   // Cannot copy hashed keys - they are never stored in plain text
   if (isHashedKey(apikey)) {
     toast.error(t('cannot-copy-secure-key'))
     return
   }
 
+  // List endpoint omits the raw key; load it on demand for plain keys only.
+  let key = apikey.key
+  if (!key) {
+    const { data, error } = await supabase
+      .from('apikeys')
+      .select('key')
+      .eq('id', apikey.id)
+      .single()
+
+    if (error || !data?.key) {
+      toast.error(t('cannot-copy-key'))
+      return
+    }
+    key = data.key
+  }
+
   try {
-    await navigator.clipboard.writeText(apikey.key!)
+    await navigator.clipboard.writeText(key)
     toast.success(t('key-copied'))
   }
   catch (err) {
     console.error('Failed to copy: ', err)
     dialogStore.openDialog({
       title: t('cannot-copy-key'),
-      description: apikey.key!,
+      description: key,
       buttons: [
         {
           text: t('ok'),
