@@ -388,55 +388,67 @@ function createNativeObserveAggregateState(): NativeObserveAggregateState {
   }
 }
 
+type NativeObserveMetricBucket = { events: number, devices: Set<string>, durations: number[] }
+function bumpMetricBucket(
+  map: Map<string, NativeObserveMetricBucket>,
+  key: string,
+  deviceId: string,
+  durationMs: number | null,
+) {
+  const bucket = map.get(key) ?? { events: 0, devices: new Set<string>(), durations: [] }
+  bucket.events += 1
+  bucket.devices.add(deviceId)
+  if (durationMs !== null)
+    pushDurationSample(bucket.durations, durationMs)
+  map.set(key, bucket)
+}
+
+function pushTimedActionDuration(action: string, durationMs: number | null, launch: number[], webview: number[]) {
+  if (durationMs === null)
+    return
+  if (action === launchReadyAction)
+    pushDurationSample(launch, durationMs)
+  else if (action === webviewPageLoadedAction)
+    pushDurationSample(webview, durationMs)
+}
+
+function foldOverviewCounters(state: NativeObserveAggregateState, sample: NativeObserveEventSample) {
+  state.events += 1
+  state.allDevices.add(sample.device_id)
+  if (issueActionSet.has(sample.action)) {
+    state.issueCount += 1
+    state.issueDevices.add(sample.device_id)
+  }
+  if (sample.action === 'app_launch_timeout')
+    state.launchTimeoutCount += 1
+  pushTimedActionDuration(sample.action, sample.duration_ms, state.launchDurations, state.webviewDurations)
+}
+
+function foldVersionBucket(state: NativeObserveAggregateState, sample: NativeObserveEventSample) {
+  const version = state.versionMap.get(sample.version_name) ?? {
+    devices: new Set<string>(),
+    issueDevices: new Set<string>(),
+    events: 0,
+    issueCount: 0,
+    launchDurations: [],
+    webviewDurations: [],
+  }
+  version.events += 1
+  version.devices.add(sample.device_id)
+  if (issueActionSet.has(sample.action)) {
+    version.issueCount += 1
+    version.issueDevices.add(sample.device_id)
+  }
+  pushTimedActionDuration(sample.action, sample.duration_ms, version.launchDurations, version.webviewDurations)
+  state.versionMap.set(sample.version_name, version)
+}
+
 function foldNativeObserveSamples(state: NativeObserveAggregateState, samples: NativeObserveEventSample[]) {
   for (const sample of samples) {
-    state.events += 1
-    state.allDevices.add(sample.device_id)
-    if (issueActionSet.has(sample.action)) {
-      state.issueCount += 1
-      state.issueDevices.add(sample.device_id)
-    }
-    if (sample.action === 'app_launch_timeout')
-      state.launchTimeoutCount += 1
-    if (sample.action === launchReadyAction && sample.duration_ms !== null)
-      pushDurationSample(state.launchDurations, sample.duration_ms)
-    if (sample.action === webviewPageLoadedAction && sample.duration_ms !== null)
-      pushDurationSample(state.webviewDurations, sample.duration_ms)
-
-    const dailyKey = `${sample.day}\0${sample.action}`
-    const daily = state.dailyMap.get(dailyKey) ?? { events: 0, devices: new Set<string>(), durations: [] }
-    daily.events += 1
-    daily.devices.add(sample.device_id)
-    if (sample.duration_ms !== null)
-      pushDurationSample(daily.durations, sample.duration_ms)
-    state.dailyMap.set(dailyKey, daily)
-
-    const action = state.actionMap.get(sample.action) ?? { events: 0, devices: new Set<string>(), durations: [] }
-    action.events += 1
-    action.devices.add(sample.device_id)
-    if (sample.duration_ms !== null)
-      pushDurationSample(action.durations, sample.duration_ms)
-    state.actionMap.set(sample.action, action)
-
-    const version = state.versionMap.get(sample.version_name) ?? {
-      devices: new Set<string>(),
-      issueDevices: new Set<string>(),
-      events: 0,
-      issueCount: 0,
-      launchDurations: [],
-      webviewDurations: [],
-    }
-    version.events += 1
-    version.devices.add(sample.device_id)
-    if (issueActionSet.has(sample.action)) {
-      version.issueCount += 1
-      version.issueDevices.add(sample.device_id)
-    }
-    if (sample.action === launchReadyAction && sample.duration_ms !== null)
-      pushDurationSample(version.launchDurations, sample.duration_ms)
-    if (sample.action === webviewPageLoadedAction && sample.duration_ms !== null)
-      pushDurationSample(version.webviewDurations, sample.duration_ms)
-    state.versionMap.set(sample.version_name, version)
+    foldOverviewCounters(state, sample)
+    bumpMetricBucket(state.dailyMap, `${sample.day}\0${sample.action}`, sample.device_id, sample.duration_ms)
+    bumpMetricBucket(state.actionMap, sample.action, sample.device_id, sample.duration_ms)
+    foldVersionBucket(state, sample)
   }
 }
 
