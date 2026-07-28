@@ -480,12 +480,36 @@ interface AdminOnboardingTelemetryRow {
   first_at: Date | string
 }
 
-const ADMIN_ONBOARDING_TELEMETRY_WINDOWS_PER_QUERY = 100
+// Cloudflare Analytics Engine SQL rejects bodies longer than 10_000 chars.
+const ADMIN_ONBOARDING_TELEMETRY_MAX_SQL_CHARS = 9_000
 const ADMIN_ONBOARDING_COMPLETED_DOWNLOAD_ACTIONS = [
   'download_complete',
   'download_manifest_complete',
   'download_zip_complete',
 ]
+
+function batchAdminOnboardingTelemetryWindows(
+  windows: AdminOnboardingTelemetryWindow[],
+  buildQuery: (batch: AdminOnboardingTelemetryWindow[]) => string,
+): AdminOnboardingTelemetryWindow[][] {
+  const batches: AdminOnboardingTelemetryWindow[][] = []
+  let current: AdminOnboardingTelemetryWindow[] = []
+
+  for (const window of windows) {
+    const candidate = [...current, window]
+    if (current.length > 0 && buildQuery(candidate).length > ADMIN_ONBOARDING_TELEMETRY_MAX_SQL_CHARS) {
+      batches.push(current)
+      current = [window]
+      continue
+    }
+    current = candidate
+  }
+
+  if (current.length > 0)
+    batches.push(current)
+
+  return batches
+}
 
 function toValidDate(value: Date | string) {
   const date = value instanceof Date ? value : new Date(value)
@@ -580,8 +604,12 @@ export async function getAdminOnboardingTelemetry(
 
   const telemetry = emptyAdminOnboardingTelemetry(true)
   try {
-    for (let index = 0; index < validWindows.length; index += ADMIN_ONBOARDING_TELEMETRY_WINDOWS_PER_QUERY) {
-      const windowBatch = validWindows.slice(index, index + ADMIN_ONBOARDING_TELEMETRY_WINDOWS_PER_QUERY)
+    // Batch by SQL size so both queries stay under the Analytics Engine 10k limit.
+    const windowBatches = batchAdminOnboardingTelemetryWindows(
+      validWindows,
+      batch => buildAdminOnboardingUpdateDownloadQuery(batch),
+    )
+    for (const windowBatch of windowBatches) {
       const [productionDeviceRows, updateDownloadRows] = await Promise.all([
         runQueryToCFA<AdminOnboardingTelemetryRow>(c, buildAdminOnboardingProductionDeviceQuery(windowBatch)),
         runQueryToCFA<AdminOnboardingTelemetryRow>(c, buildAdminOnboardingUpdateDownloadQuery(windowBatch)),
