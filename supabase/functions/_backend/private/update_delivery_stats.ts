@@ -39,7 +39,7 @@ interface UpdateDeliveryDailyRow {
 
 interface UpdateDeliveryOverviewRow {
   samples: number | string
-  devices: number | string
+  devices: number | string | null
   p50_ms: number | string | null
   p75_ms: number | string | null
   p95_ms: number | string | null
@@ -233,6 +233,12 @@ function toCount(value: NumericValue) {
   return Number.isFinite(numeric) ? Math.max(0, Math.round(numeric)) : 0
 }
 
+function toDeviceCount(value: NumericValue) {
+  if (value === null || value === undefined)
+    return null
+  return toCount(value)
+}
+
 function toMetric(value: NumericValue, decimals = 0) {
   if (value === null || value === undefined || value === '')
     return null
@@ -290,7 +296,7 @@ function buildUpdateDeliveryResponse(input: {
     },
     overview: {
       samples: toCount(overview.samples),
-      devices: toCount(overview.devices),
+      devices: toDeviceCount(overview.devices),
       p50_ms: toMetric(overview.p50_ms),
       p75_ms: toMetric(overview.p75_ms),
       p95_ms: toMetric(overview.p95_ms),
@@ -373,15 +379,31 @@ async function readUpdateDeliveryStatsPg(
 
 
 async function listOrgAppIds(c: Context<MiddlewareKeyVariables>, orgId: string) {
-  const { data, error } = await supabaseAdmin(c)
-    .from('apps')
-    .select('app_id')
-    .eq('owner_org', orgId)
-  if (error) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'listOrgAppIds failed', error: serializeError(error) })
-    throw simpleError('fetch_error', 'Failed to list organization apps', { error: String(error.message || error) })
+  const limit = 1000
+  let page = 0
+  const appIds: string[] = []
+  while (true) {
+    const { data, error } = await supabaseAdmin(c)
+      .from('apps')
+      .select('app_id')
+      .eq('owner_org', orgId)
+      .range(page * limit, (page + 1) * limit - 1)
+    if (error) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'listOrgAppIds failed', error: serializeError(error) })
+      throw simpleError('fetch_error', 'Failed to list organization apps', { error: String(error.message || error) })
+    }
+    const rows = data ?? []
+    if (rows.length === 0)
+      break
+    for (const row of rows) {
+      if (row.app_id)
+        appIds.push(row.app_id)
+    }
+    if (rows.length < limit)
+      break
+    page += 1
   }
-  return (data ?? []).map(row => row.app_id).filter(Boolean)
+  return appIds
 }
 
 async function readUpdateDeliveryStatsFromCf(

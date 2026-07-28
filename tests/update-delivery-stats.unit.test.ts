@@ -126,4 +126,81 @@ describe('update delivery stats CF helpers', () => {
     expect(result.dailyRows[0]?.day).toBe('2026-07-01')
     expect(result.dailyRows[0]?.samples).toBe(2)
   })
+
+  it('keeps legacy start/end samples when metadata samples already exist', () => {
+    const metadata = updateDeliveryStatsCfTestUtils.aggregateDeliveries([
+      { day: '2026-07-01', app_id: 'com.demo.app', device_id: 'd1', duration_ms: 1000 },
+    ])
+    const legacy = updateDeliveryStatsCfTestUtils.pairTimingEvents([
+      {
+        app_id: 'com.demo.app',
+        device_id: 'd2',
+        version_name: '1.0.0',
+        action: 'download_0',
+        metadata: '',
+        created_at: '2026-07-01T10:00:00.000Z',
+        double1: null,
+      },
+      {
+        app_id: 'com.demo.app',
+        device_id: 'd2',
+        version_name: '1.0.0',
+        action: 'download_complete',
+        metadata: '',
+        created_at: '2026-07-01T10:00:03.000Z',
+        double1: null,
+      },
+    ], { legacyOnly: true })
+    const merged = updateDeliveryStatsCfTestUtils.mergeDeliveryStats(metadata, legacy)
+    expect(merged.overviewRow.samples).toBe(2)
+    expect(merged.overviewRow.devices).toBe(2)
+  })
+
+  it('filters paired ends to the requested period start', () => {
+    const result = updateDeliveryStatsCfTestUtils.pairTimingEvents([
+      {
+        app_id: 'com.demo.app',
+        device_id: 'd1',
+        version_name: '1.0.0',
+        action: 'download_0',
+        metadata: '',
+        created_at: '2026-06-30T23:00:00.000Z',
+        double1: null,
+      },
+      {
+        app_id: 'com.demo.app',
+        device_id: 'd1',
+        version_name: '1.0.0',
+        action: 'download_complete',
+        metadata: '',
+        created_at: '2026-06-30T23:00:02.000Z',
+        double1: null,
+      },
+      {
+        app_id: 'com.demo.app',
+        device_id: 'd2',
+        version_name: '1.0.0',
+        action: 'download_0',
+        metadata: '',
+        created_at: '2026-07-01T10:00:00.000Z',
+        double1: null,
+      },
+      {
+        app_id: 'com.demo.app',
+        device_id: 'd2',
+        version_name: '1.0.0',
+        action: 'download_complete',
+        metadata: '',
+        created_at: '2026-07-01T10:00:02.000Z',
+        double1: null,
+      },
+    ], { periodStartMs: Date.parse('2026-07-01T00:00:00.000Z') })
+    expect(result.overviewRow.samples).toBe(1)
+    expect(result.overviewRow.devices).toBe(1)
+  })
+
+  it('parses zero-duration metadata', () => {
+    expect(updateDeliveryStatsCfTestUtils.parseDurationFromMetadata('{"duration_ms":"0"}', null)).toBe(0)
+  })
+
 })

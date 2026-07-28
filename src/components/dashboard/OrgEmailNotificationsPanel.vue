@@ -110,14 +110,14 @@ async function toggleEmailPref(key: EmailPreferenceKey) {
           <InfoRow :label="t('notifications-usage-limit')" :editable="false" :value="t('org-notifications-usage-limit-desc')">
             <Toggle
               :value="getEmailPref('usage_limit')"
-              :disabled="!hasOrgPerm"
+              :disabled="!hasOrgPerm || isLoading"
               @change="toggleEmailPref('usage_limit')"
             />
           </InfoRow>
           <InfoRow :label="t('notifications-credit-usage')" :editable="false" :value="t('org-notifications-credit-usage-desc')">
             <Toggle
               :value="getEmailPref('credit_usage')"
-              :disabled="!hasOrgPerm"
+              :disabled="!hasOrgPerm || isLoading"
               @change="toggleEmailPref('credit_usage')"
             />
           </InfoRow>
@@ -130,21 +130,21 @@ async function toggleEmailPref(key: EmailPreferenceKey) {
           <InfoRow :label="t('notifications-bundle-created')" :editable="false" :value="t('org-notifications-bundle-created-desc')">
             <Toggle
               :value="getEmailPref('bundle_created')"
-              :disabled="!hasOrgPerm"
+              :disabled="!hasOrgPerm || isLoading"
               @change="toggleEmailPref('bundle_created')"
             />
           </InfoRow>
           <InfoRow :label="t('notifications-bundle-deployed')" :editable="false" :value="t('org-notifications-bundle-deployed-desc')">
             <Toggle
               :value="getEmailPref('bundle_deployed')"
-              :disabled="!hasOrgPerm"
+              :disabled="!hasOrgPerm || isLoading"
               @change="toggleEmailPref('bundle_deployed')"
             />
           </InfoRow>
           <InfoRow :label="t('notifications-deploy-stats')" :editable="false" :value="t('org-notifications-deploy-stats-desc')">
             <Toggle
               :value="getEmailPref('deploy_stats_24h')"
-              :disabled="!hasOrgPerm"
+              :disabled="!hasOrgPerm || isLoading"
               @change="toggleEmailPref('deploy_stats_24h')"
             />
           </InfoRow>
@@ -157,21 +157,21 @@ async function toggleEmailPref(key: EmailPreferenceKey) {
           <InfoRow :label="t('notifications-weekly-stats')" :editable="false" :value="t('org-notifications-weekly-stats-desc')">
             <Toggle
               :value="getEmailPref('weekly_stats')"
-              :disabled="!hasOrgPerm"
+              :disabled="!hasOrgPerm || isLoading"
               @change="toggleEmailPref('weekly_stats')"
             />
           </InfoRow>
           <InfoRow :label="t('notifications-monthly-stats')" :editable="false" :value="t('org-notifications-monthly-stats-desc')">
             <Toggle
               :value="getEmailPref('monthly_stats')"
-              :disabled="!hasOrgPerm"
+              :disabled="!hasOrgPerm || isLoading"
               @change="toggleEmailPref('monthly_stats')"
             />
           </InfoRow>
           <InfoRow :label="t('notifications-billing-period-stats')" :editable="false" :value="t('org-notifications-billing-period-stats-desc')">
             <Toggle
               :value="getEmailPref('billing_period_stats')"
-              :disabled="!hasOrgPerm"
+              :disabled="!hasOrgPerm || isLoading"
               @change="toggleEmailPref('billing_period_stats')"
             />
           </InfoRow>
@@ -184,14 +184,14 @@ async function toggleEmailPref(key: EmailPreferenceKey) {
           <InfoRow :label="t('notifications-device-error')" :editable="false" :value="t('org-notifications-device-error-desc')">
             <Toggle
               :value="getEmailPref('device_error')"
-              :disabled="!hasOrgPerm"
+              :disabled="!hasOrgPerm || isLoading"
               @change="toggleEmailPref('device_error')"
             />
           </InfoRow>
           <InfoRow :label="t('notifications-channel-self-rejected')" :editable="false" :value="t('org-notifications-channel-self-rejected-desc')">
             <Toggle
               :value="getEmailPref('channel_self_rejected')"
-              :disabled="!hasOrgPerm"
+              :disabled="!hasOrgPerm || isLoading"
               @change="toggleEmailPref('channel_self_rejected')"
             />
           </InfoRow>
@@ -204,14 +204,14 @@ async function toggleEmailPref(key: EmailPreferenceKey) {
           <InfoRow :label="t('notifications-onboarding-emails')" :editable="false" :value="t('org-notifications-onboarding-desc')">
             <Toggle
               :value="getEmailPref('onboarding')"
-              :disabled="!hasOrgPerm"
+              :disabled="!hasOrgPerm || isLoading"
               @change="toggleEmailPref('onboarding')"
             />
           </InfoRow>
           <InfoRow :label="t('notifications-builder-onboarding')" :editable="false" :value="t('org-notifications-builder-onboarding-desc')">
             <Toggle
               :value="getEmailPref('builder_onboarding')"
-              :disabled="!hasOrgPerm"
+              :disabled="!hasOrgPerm || isLoading"
               @change="toggleEmailPref('builder_onboarding')"
             />
           </InfoRow>

@@ -8,17 +8,19 @@ const END_ACTIONS = ['download_complete', 'download_zip_complete'] as const
 const START_ACTIONS = ['download_0', 'download_zip_start', 'download_manifest_start'] as const
 const TIMING_ACTIONS = [...END_ACTIONS, ...START_ACTIONS] as const
 const PAIRING_EVENT_LIMIT = 50_000
+// Prefer double1 when present (>0). Fallback to blob4 JSON string extract (includes 0).
+// Sentinel -1 means "no duration" so zero-duration metadata is not confused with missing.
 const DURATION_MS_SQL = `if(
   double1 > 0 AND double1 <= 7200000,
   double1,
-  toUInt32(
+  toInt64(
     if(
       position('"duration_ms":"' IN blob4) > 0,
       substring(blob4, position('"duration_ms":"' IN blob4) + 15, position('"' IN substring(blob4, position('"duration_ms":"' IN blob4) + 15)) - 1),
       if(
         position('"duration":"' IN blob4) > 0,
         substring(blob4, position('"duration":"' IN blob4) + 12, position('"' IN substring(blob4, position('"duration":"' IN blob4) + 12)) - 1),
-        '0'
+        '-1'
       )
     )
   )
@@ -37,7 +39,8 @@ export interface UpdateDeliveryDailyRowCF {
 
 export interface UpdateDeliveryOverviewRowCF {
   samples: number
-  devices: number
+  /** Exact from pairing; null for AE metadata aggregates (distinct is not sampling-safe). */
+  devices: number | null
   p50_ms: number | null
   p75_ms: number | null
   p95_ms: number | null
@@ -54,7 +57,6 @@ type NumericValue = number | string | null | undefined
 interface DeliveryAggRow {
   day?: string
   samples: number | string
-  devices?: number | string
   p50_ms: number | string | null
   p75_ms: number | string | null
   p95_ms: number | string | null
@@ -130,6 +132,7 @@ function percentile(sorted: number[], q: number) {
 }
 
 function parseDurationFromMetadata(metadata: string, double1: NumericValue) {
+  // double1 defaults to 0 when unset in AE — only trust strictly positive doubles.
   const fromDouble = Number(double1)
   if (Number.isFinite(fromDouble) && fromDouble > 0 && fromDouble <= MAX_DELIVERY_MS)
     return fromDouble
@@ -242,13 +245,31 @@ function resolveDeliveryDuration(end: TimedEvent, starts: TimedEvent[]) {
   return matchedStart === null ? null : end.at - matchedStart
 }
 
-function pairTimingEvents(rows: TimingEventRow[]) {
+function pairTimingEvents(
+  rows: TimingEventRow[],
+  options?: {
+    periodStartMs?: number
+    legacyOnly?: boolean
+  },
+) {
   const starts = toTimedEvents(rows, START_ACTIONS).sort((a, b) => a.at - b.at)
   const ends = toTimedEvents(rows, END_ACTIONS)
   const samples: Array<{ day: string, app_id: string, device_id: string, duration_ms: number }> = []
+  const periodStartMs = options?.periodStartMs
+  const legacyOnly = options?.legacyOnly === true
 
   for (const end of ends) {
-    const duration = resolveDeliveryDuration(end, starts)
+    if (periodStartMs !== undefined && end.at < periodStartMs)
+      continue
+    const metaDuration = parseDurationFromMetadata(rowMetadata(end.metadata), end.double1)
+    if (legacyOnly && metaDuration !== null)
+      continue
+    const duration = legacyOnly
+      ? (() => {
+          const matchedStart = findLatestStartBefore(starts, end)
+          return matchedStart === null ? null : end.at - matchedStart
+        })()
+      : resolveDeliveryDuration(end, starts)
     if (duration === null || duration < 0 || duration > MAX_DELIVERY_MS)
       continue
     const day = dayKeyUTC(end.created_at)
@@ -267,6 +288,75 @@ function pairTimingEvents(rows: TimingEventRow[]) {
 
 function rowMetadata(metadata: string) {
   return typeof metadata === 'string' ? metadata : ''
+}
+
+function mixMetric(a: number | null, b: number | null, aN: number, bN: number) {
+  if (a === null)
+    return b
+  if (b === null)
+    return a
+  return Math.round((a * aN + b * bN) / (aN + bN))
+}
+
+function mergeDeliveryStats(
+  primary: UpdateDeliveryStatsCFResult,
+  secondary: UpdateDeliveryStatsCFResult,
+): UpdateDeliveryStatsCFResult {
+  if (secondary.overviewRow.samples === 0)
+    return primary
+  if (primary.overviewRow.samples === 0)
+    return secondary
+
+  const byDay = new Map<string, { samples: number, p50: number | null, p75: number | null, p95: number | null, p99: number | null }>()
+  for (const row of [...primary.dailyRows, ...secondary.dailyRows]) {
+    const prev = byDay.get(row.day)
+    if (!prev) {
+      byDay.set(row.day, {
+        samples: row.samples,
+        p50: row.p50_ms,
+        p75: row.p75_ms,
+        p95: row.p95_ms,
+        p99: row.p99_ms,
+      })
+      continue
+    }
+    byDay.set(row.day, {
+      samples: prev.samples + row.samples,
+      p50: mixMetric(prev.p50, row.p50_ms, prev.samples, row.samples),
+      p75: mixMetric(prev.p75, row.p75_ms, prev.samples, row.samples),
+      p95: mixMetric(prev.p95, row.p95_ms, prev.samples, row.samples),
+      p99: mixMetric(prev.p99, row.p99_ms, prev.samples, row.samples),
+    })
+  }
+
+  const dailyRows: UpdateDeliveryDailyRowCF[] = [...byDay.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([day, row]) => ({
+      day,
+      samples: row.samples,
+      p50_ms: row.p50,
+      p75_ms: row.p75,
+      p95_ms: row.p95,
+      p99_ms: row.p99,
+    }))
+
+  const a = primary.overviewRow
+  const b = secondary.overviewRow
+  const total = a.samples + b.samples
+
+  return {
+    dailyRows,
+    overviewRow: {
+      samples: total,
+      devices: a.devices === null || b.devices === null
+        ? null
+        : a.devices + b.devices,
+      p50_ms: mixMetric(a.p50_ms, b.p50_ms, a.samples, b.samples),
+      p75_ms: mixMetric(a.p75_ms, b.p75_ms, a.samples, b.samples),
+      p95_ms: mixMetric(a.p95_ms, b.p95_ms, a.samples, b.samples),
+      p99_ms: mixMetric(a.p99_ms, b.p99_ms, a.samples, b.samples),
+    },
+  }
 }
 
 async function readMetadataDurationStatsCF(
@@ -294,7 +384,7 @@ FROM (
     AND blob2 IN (${endActionsSql})
     ${appFilter}
 )
-WHERE duration_ms > 0
+WHERE duration_ms >= 0
   AND duration_ms <= ${MAX_DELIVERY_MS}`
 
   const dailyQuery = `
@@ -309,10 +399,10 @@ ${baseFrom}
 GROUP BY day
 ORDER BY day`
 
+  // Omit distinct devices: AE sampling makes count(DISTINCT ...) under-report.
   const overviewQuery = `
 SELECT
   sum(weight) AS samples,
-  count(DISTINCT format('{}:{}', app_id, device_id)) AS devices,
   quantileExactWeighted(0.50)(duration_ms, weight) AS p50_ms,
   quantileExactWeighted(0.75)(duration_ms, weight) AS p75_ms,
   quantileExactWeighted(0.95)(duration_ms, weight) AS p95_ms,
@@ -339,7 +429,7 @@ ${baseFrom}`
     overviewRow: overview
       ? {
           samples: toCount(overview.samples),
-          devices: toCount(overview.devices),
+          devices: null,
           p50_ms: toMetric(overview.p50_ms),
           p75_ms: toMetric(overview.p75_ms),
           p95_ms: toMetric(overview.p95_ms),
@@ -349,16 +439,20 @@ ${baseFrom}`
   }
 }
 
+function toDate(value: Date | string) {
+  return typeof value === 'string' ? new Date(value) : value
+}
+
 async function readPairedTimingStatsCF(
   c: Context,
   start: Date | string,
   end: Date | string,
   appIds?: string[],
+  legacyOnly = false,
 ): Promise<UpdateDeliveryStatsCFResult> {
   const appFilter = buildAppFilter(appIds)
-  const startFilter = formatDateCF(
-    typeof start === 'string' ? new Date(new Date(start).getTime() - 2 * 60 * 60 * 1000) : new Date(start.getTime() - 2 * 60 * 60 * 1000),
-  )
+  const periodStart = toDate(start)
+  const startFilter = formatDateCF(new Date(periodStart.getTime() - 2 * 60 * 60 * 1000))
   const endFilter = formatDateCF(end)
   const actionsSql = TIMING_ACTIONS.map(action => `'${escapeSqlString(action)}'`).join(', ')
   const query = `
@@ -379,7 +473,10 @@ ORDER BY timestamp DESC
 LIMIT ${PAIRING_EVENT_LIMIT}`
 
   const rows = await runQueryToCFA<TimingEventRow>(c, query)
-  return pairTimingEvents(rows)
+  return pairTimingEvents(rows, {
+    periodStartMs: periodStart.getTime(),
+    legacyOnly,
+  })
 }
 
 export async function readUpdateDeliveryStatsCF(
@@ -396,11 +493,12 @@ export async function readUpdateDeliveryStatsCF(
 
   try {
     const metadataStats = await readMetadataDurationStatsCF(c, params.start, params.end, params.appIds)
-    if (metadataStats.overviewRow.samples > 0 || params.scope === 'platform')
+    if (params.scope === 'platform')
       return metadataStats
 
-    // App/org: also try start/end pairing when duration metadata is absent.
-    return await readPairedTimingStatsCF(c, params.start, params.end, params.appIds)
+    // Always add legacy start/end pairs for completions without duration metadata.
+    const legacyStats = await readPairedTimingStatsCF(c, params.start, params.end, params.appIds, true)
+    return mergeDeliveryStats(metadataStats, legacyStats)
   }
   catch (error) {
     cloudlogErr({
@@ -418,4 +516,5 @@ export const updateDeliveryStatsCfTestUtils = {
   percentile,
   pairTimingEvents,
   aggregateDeliveries,
+  mergeDeliveryStats,
 }
