@@ -1,7 +1,18 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Database } from '../src/types/supabase.types'
-import { describe, expect, it, vi } from 'vitest'
-import { createAiApiKey } from '../src/services/apikeys'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+const mocks = vi.hoisted(() => ({
+  invokeCapgoApi: vi.fn(),
+}))
+
+vi.mock('../src/services/capgoApi.ts', () => ({
+  invokeCapgoApi: mocks.invokeCapgoApi,
+}))
+
+vi.mock('~/services/capgoApi', () => ({
+  invokeCapgoApi: mocks.invokeCapgoApi,
+}))
 
 interface ApiKeyInvokePayload {
   body: {
@@ -16,17 +27,21 @@ interface ApiKeyInvokePayload {
 }
 
 function createSupabaseMock() {
-  const invoke = vi.fn().mockResolvedValue({ data: {}, error: null })
-  const supabase = {
-    functions: { invoke },
-  } as unknown as SupabaseClient<Database>
-
-  return { invoke, supabase }
+  return {
+    supabase: {} as unknown as SupabaseClient<Database>,
+  }
 }
 
 describe('createAiApiKey', () => {
+  beforeEach(() => {
+    vi.resetModules()
+    vi.clearAllMocks()
+    mocks.invokeCapgoApi.mockResolvedValue({ data: {}, error: null })
+  })
+
   it.concurrent('creates a member key with only the selected app bindings', async () => {
-    const { invoke, supabase } = createSupabaseMock()
+    const { createAiApiKey } = await import('../src/services/apikeys')
+    const { supabase } = createSupabaseMock()
 
     await createAiApiKey(supabase, 'Preview key', {
       orgIds: ['org-a', 'org-b'],
@@ -37,7 +52,8 @@ describe('createAiApiKey', () => {
       ],
     })
 
-    const payload = invoke.mock.calls[0]?.[1] as ApiKeyInvokePayload
+    const payload = mocks.invokeCapgoApi.mock.calls[0]?.[1] as ApiKeyInvokePayload
+    expect(mocks.invokeCapgoApi).toHaveBeenCalledWith('apikey', expect.objectContaining({ method: 'POST' }))
     expect(payload.body.bindings).toEqual([
       { role_name: 'app_preview', scope_type: 'app', org_id: 'org-a', app_id: 'app-a' },
       { role_name: 'app_reader', scope_type: 'app', org_id: 'org-b', app_id: 'app-b' },
@@ -47,6 +63,7 @@ describe('createAiApiKey', () => {
   })
 
   it.concurrent('requires a member key to select at least one app', async () => {
+    const { createAiApiKey } = await import('../src/services/apikeys')
     const { supabase } = createSupabaseMock()
 
     await expect(createAiApiKey(supabase, 'Empty member key', {

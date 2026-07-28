@@ -6,8 +6,8 @@ export interface CapgoApiInvokeOptions {
   headers?: Record<string, string>
 }
 
-function normalizeApiHost(host: string): string {
-  return host.replace(/\/+$/, '')
+function normalizeApiHost(host: string | undefined): string {
+  return (host ?? '').replace(/\/+$/, '')
 }
 
 function serializeBody(body: CapgoApiInvokeOptions['body']): BodyInit | undefined {
