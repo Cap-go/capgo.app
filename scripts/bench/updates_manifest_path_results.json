@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-07-25T08:11:24.224Z",
-  "gitHead": "a84680749",
+  "generatedAt": "2026-07-28T11:42:59.413Z",
+  "gitHead": "4fb28d8b0",
   "databaseUrlHost": "127.0.0.1:55432",
   "files": 5000,
   "concurrency": 50,
@@ -15,16 +15,16 @@
       "concurrency": 50,
       "stats": {
         "count": 800,
-        "minMs": 13.754844999999477,
-        "p50Ms": 122.09823099999994,
-        "p95Ms": 217.06337499999972,
-        "p99Ms": 417.4812460000003,
-        "maxMs": 476.2438350000002,
-        "meanMs": 135.81253232000006,
-        "qps": 360.4457636002456,
+        "minMs": 6.68204199999991,
+        "p50Ms": 74.71204100000023,
+        "p95Ms": 302.2626660000001,
+        "p99Ms": 515.9663329999998,
+        "maxMs": 881.5730000000003,
+        "meanMs": 106.91595723624997,
+        "qps": 459.329407382879,
         "rowBytesApprox": 591671
       },
-      "explain": "Limit  (cost=395.36..395.36 rows=1 width=65) (actual time=6.468..6.470 rows=1 loops=1)\n  Buffers: shared hit=79\n  ->  Sort  (cost=395.36..395.46 rows=41 width=65) (actual time=6.467..6.469 rows=1 loops=1)\n        Sort Key: c.id\n        Sort Method: quicksort  Memory: 646kB\n        Buffers: shared hit=79\n        ->  HashAggregate  (cost=394.64..395.15 rows=41 width=65) (actual time=6.199..6.202 rows=1 loops=1)\n              Group Key: c.id, v.id\n              Batches: 1  Memory Usage: 1065kB\n              Buffers: shared hit=79\n              ->  Nested Loop Left Join  (cost=0.29..344.64 rows=5000 width=107) (actual time=0.024..0.913 rows=5000 loops=1)\n                    Buffers: shared hit=79\n                    ->  Nested Loop Left Join  (cost=0.00..3.04 rows=1 width=33) (actual time=0.011..0.012 rows=1 loops=1)\n                          Join Filter: (c.version = v.id)\n                          Rows Removed by Join Filter: 1\n                          Buffers: shared hit=2\n                          ->  Seq Scan on channels c  (cost=0.00..1.01 rows=1 width=27) (actual time=0.007..0.008 rows=1 loops=1)\n                                Filter: (android AND (public OR allow_device_self_set) AND (app_id = 'com.bench.manifest'::text) AND (name = 'production'::text))\n                                Buffers: shared hit=1\n                          ->  Seq Scan on app_versions v  (cost=0.00..1.51 rows=41 width=14) (actual time=0.002..0.002 rows=2 loops=1)\n                                Filter: ((NOT deleted) OR (name = 'builtin'::text))\n                                Buffers: shared hit=1\n                    ->  Index Scan using idx_manifest_app_version_id on manifest m  (cost=0.29..291.60 rows=5000 width=82) (actual time=0.012..0.451 rows=5000 loops=1)\n                          Index Cond: (app_version_id = v.id)\n                          Buffers: shared hit=77\nPlanning:\n  Buffers: shared hit=107\nPlanning Time: 0.621 ms\nExecution Time: 6.566 ms"
+      "explain": "Limit  (cost=395.36..395.36 rows=1 width=65) (actual time=3.514..3.515 rows=1 loops=1)\n  Buffers: shared hit=79\n  ->  Sort  (cost=395.36..395.46 rows=41 width=65) (actual time=3.514..3.514 rows=1 loops=1)\n        Sort Key: c.id\n        Sort Method: quicksort  Memory: 646kB\n        Buffers: shared hit=79\n        ->  HashAggregate  (cost=394.64..395.15 rows=41 width=65) (actual time=3.434..3.435 rows=1 loops=1)\n              Group Key: c.id, v.id\n              Batches: 1  Memory Usage: 1065kB\n              Buffers: shared hit=79\n              ->  Nested Loop Left Join  (cost=0.29..344.64 rows=5000 width=107) (actual time=0.014..0.536 rows=5000 loops=1)\n                    Buffers: shared hit=79\n                    ->  Nested Loop Left Join  (cost=0.00..3.04 rows=1 width=33) (actual time=0.006..0.007 rows=1 loops=1)\n                          Join Filter: (c.version = v.id)\n                          Rows Removed by Join Filter: 1\n                          Buffers: shared hit=2\n                          ->  Seq Scan on channels c  (cost=0.00..1.01 rows=1 width=27) (actual time=0.004..0.004 rows=1 loops=1)\n                                Filter: (android AND (public OR allow_device_self_set) AND (app_id = 'com.bench.manifest'::text) AND (name = 'production'::text))\n                                Buffers: shared hit=1\n                          ->  Seq Scan on app_versions v  (cost=0.00..1.51 rows=41 width=14) (actual time=0.001..0.001 rows=2 loops=1)\n                                Filter: ((NOT deleted) OR (name = 'builtin'::text))\n                                Buffers: shared hit=1\n                    ->  Index Scan using idx_manifest_app_version_id on manifest m  (cost=0.29..291.60 rows=5000 width=82) (actual time=0.007..0.247 rows=5000 loops=1)\n                          Index Cond: (app_version_id = v.id)\n                          Buffers: shared hit=77\nPlanning:\n  Buffers: shared hit=107 read=1\nPlanning Time: 0.307 ms\nExecution Time: 3.569 ms"
     },
     {
       "name": "NEW up_to_date (channel only)",
@@ -34,16 +34,16 @@
       "concurrency": 50,
       "stats": {
         "count": 800,
-        "minMs": 0.301766000000498,
-        "p50Ms": 3.0458019999996395,
-        "p95Ms": 8.418724000000111,
-        "p99Ms": 11.359002999999575,
-        "maxMs": 15.73071600000003,
-        "meanMs": 3.5815852362500094,
-        "qps": 13802.335783086864,
+        "minMs": 0.2986249999999018,
+        "p50Ms": 1.3263750000000982,
+        "p95Ms": 3.208708000000115,
+        "p99Ms": 5.589375000000018,
+        "maxMs": 13.747624999999971,
+        "meanMs": 1.5427818425000037,
+        "qps": 29552.556562115606,
         "rowBytesApprox": 89
       },
-      "explain": "Limit  (cost=2.71..2.72 rows=1 width=33) (actual time=0.041..0.043 rows=1 loops=1)\n  Buffers: shared hit=2\n  ->  Sort  (cost=2.71..2.72 rows=1 width=33) (actual time=0.041..0.042 rows=1 loops=1)\n        Sort Key: c.id\n        Sort Method: quicksort  Memory: 25kB\n        Buffers: shared hit=2\n        ->  Hash Right Join  (cost=1.03..2.70 rows=1 width=33) (actual time=0.029..0.035 rows=1 loops=1)\n              Hash Cond: (v.id = c.version)\n              Buffers: shared hit=2\n              ->  Seq Scan on app_versions v  (cost=0.00..1.51 rows=41 width=14) (actual time=0.003..0.006 rows=41 loops=1)\n                    Filter: ((NOT deleted) OR (name = 'builtin'::text))\n                    Buffers: shared hit=1\n              ->  Hash  (cost=1.01..1.01 rows=1 width=27) (actual time=0.014..0.015 rows=1 loops=1)\n                    Buckets: 1024  Batches: 1  Memory Usage: 9kB\n                    Buffers: shared hit=1\n                    ->  Seq Scan on channels c  (cost=0.00..1.01 rows=1 width=27) (actual time=0.006..0.006 rows=1 loops=1)\n                          Filter: (android AND (public OR allow_device_self_set) AND (app_id = 'com.bench.manifest'::text) AND (name = 'production'::text))\n                          Buffers: shared hit=1\nPlanning Time: 0.089 ms\nExecution Time: 0.087 ms"
+      "explain": "Limit  (cost=2.71..2.72 rows=1 width=33) (actual time=0.023..0.024 rows=1 loops=1)\n  Buffers: shared hit=2\n  ->  Sort  (cost=2.71..2.72 rows=1 width=33) (actual time=0.023..0.024 rows=1 loops=1)\n        Sort Key: c.id\n        Sort Method: quicksort  Memory: 25kB\n        Buffers: shared hit=2\n        ->  Hash Right Join  (cost=1.03..2.70 rows=1 width=33) (actual time=0.013..0.018 rows=1 loops=1)\n              Hash Cond: (v.id = c.version)\n              Buffers: shared hit=2\n              ->  Seq Scan on app_versions v  (cost=0.00..1.51 rows=41 width=14) (actual time=0.001..0.003 rows=41 loops=1)\n                    Filter: ((NOT deleted) OR (name = 'builtin'::text))\n                    Buffers: shared hit=1\n              ->  Hash  (cost=1.01..1.01 rows=1 width=27) (actual time=0.007..0.007 rows=1 loops=1)\n                    Buckets: 1024  Batches: 1  Memory Usage: 9kB\n                    Buffers: shared hit=1\n                    ->  Seq Scan on channels c  (cost=0.00..1.01 rows=1 width=27) (actual time=0.004..0.004 rows=1 loops=1)\n                          Filter: (android AND (public OR allow_device_self_set) AND (app_id = 'com.bench.manifest'::text) AND (name = 'production'::text))\n                          Buffers: shared hit=1\nPlanning Time: 0.055 ms\nExecution Time: 0.035 ms"
     },
     {
       "name": "OLD new_version (json_agg)",
@@ -53,13 +53,13 @@
       "concurrency": 50,
       "stats": {
         "count": 800,
-        "minMs": 27.50664499999948,
-        "p50Ms": 117.86828299999979,
-        "p95Ms": 224.23219700000027,
-        "p99Ms": 273.2464309999996,
-        "maxMs": 335.5482000000002,
-        "meanMs": 127.7414036062501,
-        "qps": 382.70072186445293,
+        "minMs": 9.388959000000341,
+        "p50Ms": 104.23566699999992,
+        "p95Ms": 207.93962499999998,
+        "p99Ms": 300.37645799999973,
+        "maxMs": 361.70137500000055,
+        "meanMs": 109.51880270499993,
+        "qps": 448.15834936709916,
         "rowBytesApprox": 591671
       }
     },
@@ -71,22 +71,22 @@
       "concurrency": 50,
       "stats": {
         "count": 800,
-        "minMs": 4.492151999998896,
-        "p50Ms": 111.73129100000006,
-        "p95Ms": 147.71423700000014,
-        "p99Ms": 222.65446599999996,
-        "maxMs": 226.83504899999934,
-        "meanMs": 114.00629978999996,
-        "qps": 424.5425370283534,
+        "minMs": 26.423291999999492,
+        "p50Ms": 63.562165999999706,
+        "p95Ms": 115.98016699999971,
+        "p99Ms": 128.11212499999965,
+        "maxMs": 160.7654160000002,
+        "meanMs": 72.27568863749998,
+        "qps": 672.8541917607114,
         "rowBytesApprox": 591671
       },
-      "explain": "Limit  (cost=2.71..2.72 rows=1 width=33) (actual time=0.041..0.043 rows=1 loops=1)\n  Buffers: shared hit=2\n  ->  Sort  (cost=2.71..2.72 rows=1 width=33) (actual time=0.041..0.042 rows=1 loops=1)\n        Sort Key: c.id\n        Sort Method: quicksort  Memory: 25kB\n        Buffers: shared hit=2\n        ->  Hash Right Join  (cost=1.03..2.70 rows=1 width=33) (actual time=0.029..0.035 rows=1 loops=1)\n              Hash Cond: (v.id = c.version)\n              Buffers: shared hit=2\n              ->  Seq Scan on app_versions v  (cost=0.00..1.51 rows=41 width=14) (actual time=0.003..0.006 rows=41 loops=1)\n                    Filter: ((NOT deleted) OR (name = 'builtin'::text))\n                    Buffers: shared hit=1\n              ->  Hash  (cost=1.01..1.01 rows=1 width=27) (actual time=0.014..0.015 rows=1 loops=1)\n                    Buckets: 1024  Batches: 1  Memory Usage: 9kB\n                    Buffers: shared hit=1\n                    ->  Seq Scan on channels c  (cost=0.00..1.01 rows=1 width=27) (actual time=0.006..0.006 rows=1 loops=1)\n                          Filter: (android AND (public OR allow_device_self_set) AND (app_id = 'com.bench.manifest'::text) AND (name = 'production'::text))\n                          Buffers: shared hit=1\nPlanning Time: 0.089 ms\nExecution Time: 0.087 ms\n---\nIndex Scan using idx_manifest_app_version_id on manifest  (cost=0.29..184.67 rows=5050 width=74) (actual time=0.029..0.467 rows=5000 loops=1)\n  Index Cond: (app_version_id = '1002'::bigint)\n  Buffers: shared hit=77\nPlanning Time: 0.031 ms\nExecution Time: 0.643 ms"
+      "explain": "Limit  (cost=2.71..2.72 rows=1 width=33) (actual time=0.023..0.024 rows=1 loops=1)\n  Buffers: shared hit=2\n  ->  Sort  (cost=2.71..2.72 rows=1 width=33) (actual time=0.023..0.024 rows=1 loops=1)\n        Sort Key: c.id\n        Sort Method: quicksort  Memory: 25kB\n        Buffers: shared hit=2\n        ->  Hash Right Join  (cost=1.03..2.70 rows=1 width=33) (actual time=0.013..0.018 rows=1 loops=1)\n              Hash Cond: (v.id = c.version)\n              Buffers: shared hit=2\n              ->  Seq Scan on app_versions v  (cost=0.00..1.51 rows=41 width=14) (actual time=0.001..0.003 rows=41 loops=1)\n                    Filter: ((NOT deleted) OR (name = 'builtin'::text))\n                    Buffers: shared hit=1\n              ->  Hash  (cost=1.01..1.01 rows=1 width=27) (actual time=0.007..0.007 rows=1 loops=1)\n                    Buckets: 1024  Batches: 1  Memory Usage: 9kB\n                    Buffers: shared hit=1\n                    ->  Seq Scan on channels c  (cost=0.00..1.01 rows=1 width=27) (actual time=0.004..0.004 rows=1 loops=1)\n                          Filter: (android AND (public OR allow_device_self_set) AND (app_id = 'com.bench.manifest'::text) AND (name = 'production'::text))\n                          Buffers: shared hit=1\nPlanning Time: 0.055 ms\nExecution Time: 0.035 ms\n---\nIndex Scan using idx_manifest_app_version_id on manifest  (cost=0.29..180.99 rows=4954 width=74) (actual time=0.007..0.281 rows=5000 loops=1)\n  Index Cond: (app_version_id = '1002'::bigint)\n  Buffers: shared hit=77\nPlanning Time: 0.010 ms\nExecution Time: 0.378 ms"
     }
   ],
   "gates": {
-    "newVersionP95RegressionPct": -34.12443040015348,
-    "newVersionP95DeltaMs": -76.51796000000013,
-    "upToDateP95ImprovementPct": 96.1215363946128,
+    "newVersionP95RegressionPct": -44.22411457171776,
+    "newVersionP95DeltaMs": -91.95945800000027,
+    "upToDateP95ImprovementPct": 98.93843720679678,
     "passed": true,
     "reasons": []
   }

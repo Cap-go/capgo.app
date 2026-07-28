@@ -507,6 +507,7 @@ export async function updateWithPG(
     && fetchManifestEntries
     && (!manifestEntries || manifestEntries.length === 0)
   const startManifestFetch = needsDeferredManifest ? performance.now() : 0
+  // Single Promise from .execute() — do NOT await the builder twice (re-runs SQL).
   const deferredManifestPromise = needsDeferredManifest
     ? requestManifestEntriesPostgres(c, version.id, drizzleClient)
     : null

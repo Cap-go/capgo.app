@@ -846,7 +846,9 @@ export function requestManifestEntriesPostgres(
     .where(eq(schema.manifest.app_version_id, versionId))
 
   cloudlog({ requestId: c.get('requestId'), message: 'rollout manifest Query:', manifestQuery: manifestQuery.toSQL() })
-  return manifestQuery
+  // Drizzle builders are thenables and re-execute SQL on every await/catch.
+  // Return one Promise so overlap-start + later await share a single query.
+  return manifestQuery.execute()
 }
 
 export function requestInfosChannelByIdPostgresRollout(

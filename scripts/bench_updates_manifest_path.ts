@@ -12,11 +12,12 @@
  * Usage:
  *   bun scripts/bench_updates_manifest_path.ts
  *   bun scripts/bench_updates_manifest_path.ts --files 5000 --concurrency 50 --requests 1000
- *   DATABASE_URL=postgres://… bun scripts/bench_updates_manifest_path.ts
+ *   MANIFEST_BENCH_DATABASE_URL=postgres://… bun scripts/bench_updates_manifest_path.ts
  *
- * Default DATABASE_URL points at the local docker bench container on :55432.
+ * Default URL points at the local docker bench container on :55432 / db manifest_bench.
+ * Intentionally ignores DATABASE_URL so a destructive DROP SCHEMA cannot hit the app DB.
  *
- * Exit code 1 if the new-version path regresses beyond the gate (see PASS_GATE).
+ * Exit code 1 if the new-version path is slower than OLD beyond noise (see PASS_GATE).
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs'
@@ -326,8 +327,31 @@ async function explain(client: Client, sql: string, params: unknown[]): Promise<
   return res.rows.map((r: { 'QUERY PLAN': string }) => r['QUERY PLAN']).join('\n')
 }
 
+function assertSafeBenchDatabaseUrl(databaseUrl: string) {
+  let parsed: URL
+  try {
+    parsed = new URL(databaseUrl)
+  }
+  catch {
+    throw new Error(`Invalid MANIFEST_BENCH_DATABASE_URL: ${databaseUrl}`)
+  }
+  const dbName = decodeURIComponent(parsed.pathname.replace(/^\/+/, '').split('/')[0] ?? '')
+  const host = parsed.hostname
+  const port = parsed.port || (parsed.protocol === 'postgres:' || parsed.protocol === 'postgresql:' ? '5432' : '')
+  const isLocalBenchHost = (host === '127.0.0.1' || host === 'localhost') && port === '55432'
+  if (dbName !== 'manifest_bench' || !isLocalBenchHost) {
+    throw new Error(
+      `Refusing destructive bench against ${host}:${port}/${dbName}. `
+      + `Only postgres://…@127.0.0.1:55432/manifest_bench (or localhost) is allowed. `
+      + `Do not pass DATABASE_URL; use MANIFEST_BENCH_DATABASE_URL or --database-url.`,
+    )
+  }
+}
+
 async function main() {
-  const databaseUrl = process.env.DATABASE_URL || DEFAULT_URL
+  // Never fall back to DATABASE_URL — setupSchema() DROP SCHEMA public CASCADE.
+  const databaseUrl = process.env.MANIFEST_BENCH_DATABASE_URL || argValue('--database-url', DEFAULT_URL)
+  assertSafeBenchDatabaseUrl(databaseUrl)
   const files = Number(argValue('--files', '5000'))
   const concurrency = Number(argValue('--concurrency', '50'))
   const requests = Number(argValue('--requests', '800'))
@@ -438,15 +462,16 @@ async function main() {
     ? ((oldUtd.stats.p95Ms - newUtd.stats.p95Ms) / oldUtd.stats.p95Ms) * 100
     : 0
 
-  // PASS GATE (new-version path must not be destroyed):
-  // Fail if NEW new_version p95 is >30% slower AND more than +25ms worse than OLD.
-  // Also require up-to-date p95 improvement >= 50% (why we deferred).
+  // PASS GATE (strict — user closed prior PR over new-version latency risk):
+  // NEW new_version must not be slower than OLD beyond measurement noise.
+  // Noise = max(10ms, 5% of OLD p95). Also require up-to-date p95 improvement >= 50%.
   const reasons: string[] = []
-  const newVersionDestroyed = newVersionP95RegressionPct > 30 && newVersionP95DeltaMs > 25
-  if (newVersionDestroyed) {
+  const newVersionNoiseMs = Math.max(10, oldNew.stats.p95Ms * 0.05)
+  if (newVersionP95DeltaMs > newVersionNoiseMs) {
     reasons.push(
-      `NEW new_version p95 regressed ${newVersionP95RegressionPct.toFixed(1)}% `
-      + `(${oldNew.stats.p95Ms.toFixed(2)} → ${newNew.stats.p95Ms.toFixed(2)} ms)`,
+      `NEW new_version p95 slower than OLD by ${newVersionP95DeltaMs.toFixed(2)}ms `
+      + `(limit +${newVersionNoiseMs.toFixed(2)}ms / ${newVersionP95RegressionPct.toFixed(1)}%; `
+      + `${oldNew.stats.p95Ms.toFixed(2)} → ${newNew.stats.p95Ms.toFixed(2)} ms)`,
     )
   }
   if (upToDateP95ImprovementPct < 50) {
@@ -455,10 +480,13 @@ async function main() {
       + `(expected >= 50%; ${oldUtd.stats.p95Ms.toFixed(2)} → ${newUtd.stats.p95Ms.toFixed(2)} ms)`,
     )
   }
-  // Absolute: new_version must return correct file count under load (already checked once)
-  if (newNew.stats.p99Ms > Math.max(oldNew.stats.p99Ms * 1.5, oldNew.stats.p99Ms + 50)) {
+  // Tail: p99 must not regress beyond max(15% , +25ms)
+  const p99Delta = newNew.stats.p99Ms - oldNew.stats.p99Ms
+  const p99Limit = Math.max(oldNew.stats.p99Ms * 0.15, 25)
+  if (p99Delta > p99Limit) {
     reasons.push(
-      `NEW new_version p99 too high: ${newNew.stats.p99Ms.toFixed(2)} ms vs OLD ${oldNew.stats.p99Ms.toFixed(2)} ms`,
+      `NEW new_version p99 slower than OLD by ${p99Delta.toFixed(2)}ms `
+      + `(limit +${p99Limit.toFixed(2)}ms; ${oldNew.stats.p99Ms.toFixed(2)} → ${newNew.stats.p99Ms.toFixed(2)} ms)`,
     )
   }
 
@@ -492,7 +520,7 @@ async function main() {
     + `(${newVersionP95RegressionPct >= 0 ? '+' : ''}${newVersionP95RegressionPct.toFixed(1)}% / ${newVersionP95DeltaMs >= 0 ? '+' : ''}${newVersionP95DeltaMs.toFixed(2)}ms)`)
   console.log(`up_to_date p95:  OLD ${oldUtd.stats.p95Ms.toFixed(2)}ms → NEW ${newUtd.stats.p95Ms.toFixed(2)}ms `
     + `(improvement ${upToDateP95ImprovementPct.toFixed(1)}%)`)
-  console.log(passed ? 'PASS: new-version path not destroyed; up-to-date improved' : `FAIL:\n- ${reasons.join('\n- ')}`)
+  console.log(passed ? 'PASS: new-version not slower than OLD (within noise); up-to-date improved' : `FAIL:\n- ${reasons.join('\n- ')}`)
   console.log(`Wrote ${out}`)
 
   await pool.end()
