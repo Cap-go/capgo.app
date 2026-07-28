@@ -5,6 +5,7 @@ import { toast } from 'vue-sonner'
 import IconPlus from '~icons/heroicons/plus'
 import IconTrash from '~icons/heroicons/trash'
 import ChannelPermissionOverridesPanel from '~/components/permissions/ChannelPermissionOverridesPanel.vue'
+import { invokeCapgoApi } from '~/services/capgoApi'
 import { useSupabase } from '~/services/supabase'
 import { getRbacRoleI18nKey } from '~/stores/organization'
 import { getErrorCode, getErrorMessage } from '~/utils/errors'
@@ -144,7 +145,7 @@ async function loadChannelAccess() {
     channels.value = (channelsResult.data || []) as ChannelSummary[]
     channelRoles.value = (rolesResult.data || []) as Role[]
 
-    const { data, error } = await supabase.functions.invoke(`private/role_bindings/app/${props.appUuid}/channel`, {
+    const { data, error } = await invokeCapgoApi(`private/role_bindings/app/${props.appUuid}/channel`, {
       method: 'GET',
     })
 
@@ -180,7 +181,7 @@ async function addChannelRole() {
 
   isSaving.value = true
   try {
-    const { error } = await supabase.functions.invoke('private/role_bindings', {
+    const { error } = await invokeCapgoApi('private/role_bindings', {
       method: 'POST',
       body: {
         principal_type: props.principalType,
@@ -224,7 +225,7 @@ async function updateChannelRole(binding: ChannelRoleBinding, event: Event) {
 
   isSaving.value = true
   try {
-    const { error } = await supabase.functions.invoke(`private/role_bindings/${binding.id}`, {
+    const { error } = await invokeCapgoApi(`private/role_bindings/${binding.id}`, {
       method: 'PATCH',
       body: { role_name: role.name },
     })
@@ -251,7 +252,7 @@ async function removeChannelRole(binding: ChannelRoleBinding) {
 
   isSaving.value = true
   try {
-    const { error } = await supabase.functions.invoke(`private/role_bindings/${binding.id}`, {
+    const { error } = await invokeCapgoApi(`private/role_bindings/${binding.id}`, {
       method: 'DELETE',
     })
 

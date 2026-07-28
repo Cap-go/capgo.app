@@ -9,6 +9,7 @@ import IconShield from '~icons/heroicons/shield-check'
 import IconTrash from '~icons/heroicons/trash'
 import IconWrench from '~icons/heroicons/wrench'
 import ChannelAccessPanel from '~/components/permissions/ChannelAccessPanel.vue'
+import { invokeCapgoApi } from '~/services/capgoApi'
 import { formatDate } from '~/services/date'
 import { checkPermissions } from '~/services/permissions'
 import { useSupabase } from '~/services/supabase'
@@ -185,7 +186,7 @@ async function loadAccessReferenceData() {
 
   const nextPrincipalOptions: PrincipalOption[] = []
   if (canUpdateUserRoles.value) {
-    const { data: principals, error: principalsError } = await supabase.functions.invoke(`private/role_bindings/app/${app.value.id}/principals`, { method: 'GET' })
+    const { data: principals, error: principalsError } = await invokeCapgoApi(`private/role_bindings/app/${app.value.id}/principals`, { method: 'GET' })
 
     if (principalsError) {
       console.error('Error loading assignable principals for app access:', principalsError)
@@ -367,7 +368,7 @@ async function assignAccessRole() {
       return false
     }
 
-    const { error } = await supabase.functions.invoke('private/role_bindings', {
+    const { error } = await invokeCapgoApi('private/role_bindings', {
       method: 'POST',
       body: {
         principal_type: assignAccessForm.value.principal_type,
@@ -457,7 +458,7 @@ async function changeUserRole(element: Element) {
 
   isLoading.value = true
   try {
-    const { error: updateError } = await supabase.functions.invoke(`private/role_bindings/${element.id}`, {
+    const { error: updateError } = await invokeCapgoApi(`private/role_bindings/${element.id}`, {
       method: 'PATCH',
       body: { role_name: newRoleName },
     })
@@ -499,7 +500,7 @@ async function deleteElement(element: Element) {
 
   isLoading.value = true
   try {
-    const { error } = await supabase.functions.invoke(`private/role_bindings/${element.id}`, {
+    const { error } = await invokeCapgoApi(`private/role_bindings/${element.id}`, {
       method: 'DELETE',
     })
 

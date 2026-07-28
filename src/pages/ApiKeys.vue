@@ -23,6 +23,7 @@ import {
   showApiKeySecretModal,
   sortApiKeyRows,
 } from '~/services/apikeys'
+import { invokeCapgoApi } from '~/services/capgoApi'
 import { formatLocalDate } from '~/services/date'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { checkPermissions } from '~/services/permissions'
@@ -881,7 +882,7 @@ async function refreshData() {
 
 async function getKeys(retry = true): Promise<void> {
   isLoading.value = true
-  const { data, error } = await supabase.functions.invoke<ApiKeyRow[]>('apikey', {
+  const { data, error } = await invokeCapgoApi<ApiKeyRow[]>('apikey', {
     method: 'GET',
   })
   if (error) {
@@ -1042,7 +1043,7 @@ async function createApiKey() {
 
     let plainKeyForDisplay: string | null = null
 
-    const { data, error } = await supabase.functions.invoke('apikey', {
+    const { data, error } = await invokeCapgoApi('apikey', {
       method: 'POST',
       body: {
         name: newApiKeyName.value.trim(),
@@ -1252,7 +1253,7 @@ async function updateApiKey() {
   if (setExpirationCheckbox.value && expirationDate.value)
     expiresAt = dayjs(expirationDate.value).toISOString()
 
-  const { data, error } = await supabase.functions.invoke('apikey', {
+  const { data, error } = await invokeCapgoApi('apikey', {
     method: 'PUT',
     body: {
       id: key.id,
@@ -1298,7 +1299,7 @@ async function regenrateKey(apikey: Database['public']['Tables']['apikeys']['Row
 
   const wasHashed = isHashedKey(apikey)
 
-  const { data, error } = await supabase.functions.invoke('apikey', {
+  const { data, error } = await invokeCapgoApi('apikey', {
     method: 'PUT',
     body: {
       id: apikey.id,

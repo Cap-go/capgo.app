@@ -2,54 +2,56 @@ import { describe, expect, it } from 'vitest'
 import {
   buildCapgoCloudSupabaseDeployArgs,
   CAPGO_CLOUD_SUPABASE_FUNCTIONS,
+  CAPGO_CLOUD_SUPABASE_FUNCTIONS_CLI_DEPRECATION,
+  CAPGO_CLOUD_SUPABASE_FUNCTIONS_CLI_DEPRECATION_UNTIL,
+  CAPGO_CLOUD_SUPABASE_FUNCTIONS_FOREVER,
   listCapgoCloudSkippedSupabaseFunctions,
   listLocalSupabaseFunctions,
-} from '../scripts/supabase-cloud-functions.ts'
+} from '../scripts/supabase-cloud-functions'
 
 describe('supabase cloud function allowlist', () => {
-  it('keeps SDK invoke + pg_net Capgo cloud functions', () => {
-    expect([...CAPGO_CLOUD_SUPABASE_FUNCTIONS]).toEqual([
-      'apikey',
-      'app',
+  it('keeps pg_net triggers forever and CLI-deprecated functions until sunset', () => {
+    expect([...CAPGO_CLOUD_SUPABASE_FUNCTIONS_FOREVER]).toEqual(['triggers'])
+    expect([...CAPGO_CLOUD_SUPABASE_FUNCTIONS_CLI_DEPRECATION]).toEqual([
       'bundle',
       'channel',
       'files',
-      'organization',
       'private',
-      'statistics',
+    ])
+    expect(CAPGO_CLOUD_SUPABASE_FUNCTIONS_CLI_DEPRECATION_UNTIL).toBe('2026-10-28')
+    expect([...CAPGO_CLOUD_SUPABASE_FUNCTIONS]).toEqual([
       'triggers',
-      'webhooks',
+      'bundle',
+      'channel',
+      'files',
+      'private',
     ])
     expect(buildCapgoCloudSupabaseDeployArgs()).toEqual([...CAPGO_CLOUD_SUPABASE_FUNCTIONS])
   })
 
-  it('rejects an empty explicit deploy list', () => {
-    expect(() => buildCapgoCloudSupabaseDeployArgs([])).toThrow(/must not be empty/)
+  it('no longer publishes console-only invoke targets on Capgo cloud Supabase', () => {
+    for (const name of ['apikey', 'app', 'organization', 'statistics', 'webhooks'] as const) {
+      expect(CAPGO_CLOUD_SUPABASE_FUNCTIONS).not.toContain(name)
+      expect(listCapgoCloudSkippedSupabaseFunctions()).toContain(name)
+    }
   })
 
-  it('passes through multiple explicit deploy targets', () => {
+  it('builds deploy args from an explicit list', () => {
     expect(buildCapgoCloudSupabaseDeployArgs(['triggers', 'ok'])).toEqual(['triggers', 'ok'])
   })
 
-  it('skips plugin/ops functions not used via supabase.functions.invoke', () => {
+  it('skips Capgo-cloud-only unused local functions while keeping allowlisted ones', () => {
     const local = listLocalSupabaseFunctions()
     expect(local).toContain('triggers')
     expect(local).toContain('private')
     expect(local).toContain('updates')
-    expect(local).toContain('stats')
 
     const skipped = listCapgoCloudSkippedSupabaseFunctions(local)
     for (const keep of CAPGO_CLOUD_SUPABASE_FUNCTIONS)
       expect(skipped).not.toContain(keep)
-
     expect(skipped).toContain('updates')
     expect(skipped).toContain('stats')
-    expect(skipped).toContain('channel_self')
-    expect(skipped).toContain('updates_debug')
-    expect(skipped).toContain('device')
-    expect(skipped).toContain('build')
     expect(skipped).toContain('ok')
-    expect(skipped).toContain('queue_health')
     expect(skipped.length).toBe(local.length - CAPGO_CLOUD_SUPABASE_FUNCTIONS.length)
   })
 })

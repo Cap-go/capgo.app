@@ -453,10 +453,15 @@ supabase secrets set --env-file supabase/functions/.env
 ### Deploy Capgo Cloud Supabase functions
 
 Capgo Cloud (prod / preprod / alpha) only publishes allowlisted Supabase
-functions from `scripts/supabase-cloud-functions.ts`: `triggers` for `pg_net`,
-plus every function still reached by console/CLI `supabase.functions.invoke`
-(`private`, `apikey`, `app`, `bundle`, `channel`, `files`, `organization`,
-`statistics`, `webhooks`). Plugin hot paths and unused ops endpoints are skipped.
+functions from `scripts/supabase-cloud-functions.ts`:
+
+- `triggers` forever (`pg_net` queue consumer)
+- `bundle`, `channel`, `files`, `private` until **2026-10-28** (old Capgo CLI
+  still called these via `supabase.functions.invoke` on `sb.capgo.app`; new
+  CLI uses `api.capgo.app` / `files.capgo.app`)
+
+Console traffic uses Cloudflare (`VITE_API_HOST`). Plugin hot paths and unused
+ops endpoints are skipped on Capgo cloud Supabase.
 
 ```bash
 bun run deploy:supabase:prod

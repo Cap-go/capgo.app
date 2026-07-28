@@ -8,6 +8,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import plusOutline from '~icons/ion/add-outline'
 import IconAlertCircle from '~icons/lucide/alert-circle'
+import { invokeCapgoApi } from '~/services/capgoApi'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
 import { withBuiltinChannelVersion } from '~/services/versions'
 import { useAppDetailStore } from '~/stores/appDetail'
@@ -147,7 +148,7 @@ async function customDeviceOverwritePart5(
     return
   }
 
-  const { error: addDeviceError } = await supabase.functions.invoke('private/create_device', {
+  const { error: addDeviceError } = await invokeCapgoApi('private/create_device', {
     body: {
       device_id: deviceId,
       app_id: route.params.app as string,

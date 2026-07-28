@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { TableColumn } from '~/components/comp_def'
 import type { DialogV2Button, DialogV2Options } from '~/stores/dialogv2'
 import type { Database } from '~/types/supabase.types'
+import { invokeCapgoApi } from '~/services/capgoApi'
 
 export async function createDefaultApiKey(
   supabase: SupabaseClient<Database>,
@@ -64,7 +65,7 @@ export async function createDefaultApiKey(
         },
       ]
 
-  return supabase.functions.invoke('apikey', {
+  return invokeCapgoApi('apikey', {
     method: 'POST',
     body: {
       name,
@@ -120,7 +121,7 @@ export async function createAiApiKey(
   // `org.create` is only valid on a key that has an org-admin binding — i.e. the admin role.
   const globalPermissions = role === 'admin' && options.allowOrgCreate ? ['org.create'] : undefined
 
-  return supabase.functions.invoke('apikey', {
+  return invokeCapgoApi('apikey', {
     method: 'POST',
     body: {
       name,

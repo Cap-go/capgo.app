@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import colors from 'tailwindcss/colors'
 import { ref } from 'vue'
+import { invokeCapgoApi } from '~/services/capgoApi'
 
 const SKIP_COLOR = 10
 const colorKeys = Object.keys(colors)
@@ -35,7 +36,7 @@ export async function useChartData(supabase: SupabaseClient, appId: string, from
   const fromParam = formatDateParam(from)
   const toParam = formatDateParam(clampedTo)
   const usagePath = kind === 'native' ? 'native_usage' : 'bundle_usage'
-  const { error, data } = await supabase.functions.invoke(`statistics/app/${appId}/${usagePath}?from=${fromParam}&to=${toParam}`, {
+  const { error, data } = await invokeCapgoApi(`statistics/app/${appId}/${usagePath}?from=${fromParam}&to=${toParam}`, {
     method: 'GET',
   })
   if (error)

@@ -23,6 +23,7 @@ import IconStore from '~icons/lucide/store'
 import IconTerminal from '~icons/lucide/terminal'
 import IconUsers from '~icons/lucide/users-round'
 import { createDefaultApiKey, findUsablePlainApiKey } from '~/services/apikeys'
+import { invokeCapgoApi } from '~/services/capgoApi'
 import { pushEvent } from '~/services/posthog'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
 import { getLocalConfig, isLocal, useSupabase } from '~/services/supabase'
@@ -412,7 +413,7 @@ async function importStoreMetadata() {
   const requestedRun = ++storeImportRun
   isImportingStore.value = true
   try {
-    const { data, error } = await supabase.functions.invoke('app/store-metadata', {
+    const { data, error } = await invokeCapgoApi('app/store-metadata', {
       method: 'POST',
       body: { url: requestedUrl },
     })
@@ -630,7 +631,7 @@ async function createOrganizationAndApp() {
 
   isSubmitting.value = true
   try {
-    const { data, error } = await supabase.functions.invoke('organization', {
+    const { data, error } = await invokeCapgoApi('organization', {
       method: 'POST',
       body: {
         name: orgName,
@@ -796,7 +797,7 @@ async function seedDemoData() {
 
   isSeedingDemo.value = true
   try {
-    const { data, error } = await supabase.functions.invoke('app/demo', {
+    const { data, error } = await invokeCapgoApi('app/demo', {
       method: 'POST',
       body: {
         owner_org: currentOrg.value.gid,

@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import VueTurnstile from 'vue-turnstile'
+import { invokeCapgoApi } from '~/services/capgoApi'
 import { useSupabase } from '~/services/supabase'
 import { sendEvent } from '~/services/tracking'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -315,7 +316,7 @@ async function handleFullDetailsSubmit() {
   isInviting.value = true
 
   try {
-    const { error } = await supabase.functions.invoke('private/invite_new_user_to_org', {
+    const { error } = await invokeCapgoApi('private/invite_new_user_to_org', {
       body: {
         email,
         org_id: orgId,

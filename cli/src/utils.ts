@@ -28,8 +28,8 @@ import { findMonorepoRoot, findNXMonorepoRoot, isMonorepo, isNXMonorepo } from '
 import { getChecksum } from './checksum'
 import { loadConfig, loadConfigForWrite, writeConfig } from './config'
 import { isTruthyEnvValue } from './posthog'
-import { safeParseSchema } from './schemas/schema_validation'
 import { nativePackageSchema } from './schemas/common'
+import { safeParseSchema } from './schemas/schema_validation'
 import { formatApiErrorForCli, parseSecurityPolicyError } from './utils/security_policy_errors'
 
 export const baseKey = '.capgo_key'
@@ -745,16 +745,115 @@ export function formatCapgoApiErrorBody(body: unknown): string {
   return [record.error, record.message, record.status].filter(Boolean).join(' | ')
 }
 
-/** Resolve Capgo public API base URL for CLI mutations (app create/update, etc.). */
+/** Capgo-managed Supabase hosts (cloud). Self-host uses a different origin. */
+export function isCapgoManagedSupabaseHost(supaHost?: string): boolean {
+  if (!supaHost)
+    return false
+  const host = normalizeSupabaseHost(supaHost).toLowerCase()
+  return host.includes('sb.capgo.app')
+    || host.includes('xvwzpoazmxkqosrdewyv')
+    || host.includes('ibwjdnhknbkcqfbabwei')
+    || host.includes('aucsybvnhavogdmzwtcw')
+}
+
+/**
+ * Resolve Capgo public API base URL for CLI mutations (app create/update, etc.).
+ * Capgo cloud uses api.capgo.app. Self-host with only localSupa (default localApi)
+ * keeps /functions/v1 on that Supabase host.
+ */
 export function resolveConfiguredCapgoPublicApiHost(config: {
   hostApi: string
+  hostFilesApi?: string
   supaHost?: string
   supaKey?: string
 }): string {
-  if (config.supaHost && config.supaKey && config.hostApi === defaultApiHost)
+  if (
+    config.supaHost
+    && config.supaKey
+    && config.hostApi === defaultApiHost
+    && !isCapgoManagedSupabaseHost(config.supaHost)
+  ) {
     return `${normalizeSupabaseHost(config.supaHost)}/functions/v1`
+  }
 
   return config.hostApi
+}
+
+export interface CapgoCliInvokeOptions {
+  apikey: string
+  method?: string
+  body?: unknown
+  /** Capgo cloud files worker; ignored when resolving to self-host /functions/v1 */
+  useFilesHost?: boolean
+  supaHost?: string
+  supaAnon?: string
+}
+
+/**
+ * Invoke Capgo HTTP APIs formerly reached via supabase.functions.invoke.
+ * Capgo cloud -> hostApi / hostFilesApi. Self-host -> /functions/v1.
+ */
+export async function invokeCapgoCliApi<T = unknown>(
+  path: string,
+  options: CapgoCliInvokeOptions,
+): Promise<{ data: T | null, error: Error | null }> {
+  const method = (options.method ?? 'POST').toUpperCase()
+  let base: string
+  if (options.supaHost && options.supaAnon) {
+    base = `${normalizeSupabaseHost(options.supaHost)}/functions/v1`
+  }
+  else {
+    const localConfig = await getRemoteConfig(true)
+    if (
+      localConfig.supaHost
+      && localConfig.supaKey
+      && localConfig.hostApi === defaultApiHost
+      && !isCapgoManagedSupabaseHost(localConfig.supaHost)
+    ) {
+      base = `${normalizeSupabaseHost(localConfig.supaHost)}/functions/v1`
+    }
+    else if (options.useFilesHost) {
+      base = localConfig.hostFilesApi
+    }
+    else {
+      base = localConfig.hostApi
+    }
+  }
+
+  const url = `${base.replace(/\/+$/, '')}/${path.replace(/^\//, '')}`
+  try {
+    const response = await fetch(url, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': options.apikey,
+        'capgkey': options.apikey,
+      },
+      body: method === 'GET' || method === 'HEAD'
+        ? undefined
+        : (typeof options.body === 'string' ? options.body : JSON.stringify(options.body ?? {})),
+    })
+
+    const contentType = response.headers.get('content-type') ?? ''
+    const payload = contentType.includes('application/json')
+      ? await response.json().catch(() => null)
+      : await response.text().catch(() => null)
+
+    if (!response.ok) {
+      return {
+        data: null,
+        error: new FunctionsHttpError(response),
+      }
+    }
+
+    return { data: payload as T, error: null }
+  }
+  catch (error) {
+    return {
+      data: null,
+      error: error instanceof Error ? error : new Error(String(error)),
+    }
+  }
 }
 
 export async function resolveCapgoPublicApiHost(
@@ -1287,20 +1386,24 @@ export async function updateOrCreateVersion(supabase: SupabaseClient<Database>, 
     .eq('name', update.name)
 }
 
-export async function uploadUrl(supabase: SupabaseClient<Database>, appId: string, name: string): Promise<string> {
+export async function uploadUrl(apikey: string, appId: string, name: string, options?: { supaHost?: string, supaAnon?: string }): Promise<string> {
   const data = {
     app_id: appId,
     name,
     version: 0,
   }
   try {
-    const pathUploadLink = 'files/upload_link'
-    const res = await supabase.functions.invoke(pathUploadLink, { body: JSON.stringify(data) })
+    const res = await invokeCapgoCliApi<{ url?: string }>('files/upload_link', {
+      apikey,
+      body: data,
+      useFilesHost: true,
+      supaHost: options?.supaHost,
+      supaAnon: options?.supaAnon,
+    })
 
     if (res.error) {
-      // Handle error case
       if (res.error instanceof FunctionsHttpError) {
-        const errorBody = await res.error.context.json()
+        const errorBody = await res.error.context.json().catch(() => ({}))
         log.error(`Upload URL error: ${errorBody.status || JSON.stringify(errorBody)}`)
       }
       else {
@@ -1309,7 +1412,7 @@ export async function uploadUrl(supabase: SupabaseClient<Database>, appId: strin
       return ''
     }
 
-    return res.data.url
+    return res.data?.url ?? ''
   }
   catch (error) {
     log.error(`Cannot get upload url ${formatError(error)}`)
@@ -1486,13 +1589,18 @@ export async function uploadTUS(apikey: string, data: Buffer, orgId: string, app
   })
 }
 
-export async function deletedFailedVersion(supabase: SupabaseClient<Database>, appId: string, name: string): Promise<void> {
+export async function deletedFailedVersion(apikey: string, appId: string, name: string, options?: { supaHost?: string, supaAnon?: string }): Promise<void> {
   const data = {
     app_id: appId,
     name,
   }
-  const pathFailed = 'private/delete_failed_version'
-  const res = await supabase.functions.invoke(pathFailed, { body: JSON.stringify(data), method: 'DELETE' })
+  const res = await invokeCapgoCliApi('private/delete_failed_version', {
+    apikey,
+    method: 'DELETE',
+    body: data,
+    supaHost: options?.supaHost,
+    supaAnon: options?.supaAnon,
+  })
 
   if (res.error) {
     if (res.error instanceof FunctionsHttpError) {
@@ -1514,18 +1622,23 @@ export interface VersionManifestEntry {
  * Prefer this over writing app_versions.manifest jsonb — old CLIs still use that legacy path.
  */
 export async function setVersionManifest(
-  supabase: SupabaseClient<Database>,
+  apikey: string,
   appId: string,
   name: string,
   manifest: VersionManifestEntry[],
+  options?: { supaHost?: string, supaAnon?: string },
 ): Promise<void> {
   const data = {
     app_id: appId,
     name,
     manifest,
   }
-  const pathSetManifest = 'private/set_manifest'
-  const res = await supabase.functions.invoke(pathSetManifest, { body: JSON.stringify(data) })
+  const res = await invokeCapgoCliApi('private/set_manifest', {
+    apikey,
+    body: data,
+    supaHost: options?.supaHost,
+    supaAnon: options?.supaAnon,
+  })
 
   if (res.error) {
     if (res.error instanceof FunctionsHttpError) {

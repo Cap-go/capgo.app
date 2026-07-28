@@ -8,6 +8,7 @@ import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import iconEmail from '~icons/heroicons/envelope?raw'
 import iconName from '~icons/heroicons/user?raw'
+import { invokeCapgoApi } from '~/services/capgoApi'
 import { checkPermissions } from '~/services/permissions'
 import { pickPhoto, takePhoto } from '~/services/photos'
 import { useSupabase } from '~/services/supabase'
@@ -103,7 +104,7 @@ async function updateEmail(form: { email: string }) {
     return false
   const orgCopy = { ...currentOrganization.value }
 
-  const { error } = await supabase.functions.invoke('private/set_org_email', {
+  const { error } = await invokeCapgoApi('private/set_org_email', {
     body: {
       email: form.email,
       org_id: orgCopy.gid,

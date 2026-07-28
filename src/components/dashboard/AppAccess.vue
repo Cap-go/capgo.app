@@ -13,6 +13,7 @@ import DataTable from '~/components/DataTable.vue'
 import RoleSelect from '~/components/forms/RoleSelect.vue'
 import SearchInput from '~/components/forms/SearchInput.vue'
 import RoleSelectionModal from '~/components/modals/RoleSelectionModal.vue'
+import { invokeCapgoApi } from '~/services/capgoApi'
 import { formatLocalDate } from '~/services/date'
 import { checkPermissions } from '~/services/permissions'
 import { useSupabase } from '~/services/supabase'
@@ -151,7 +152,7 @@ async function fetchAppRoleBindings() {
 
   isLoading.value = true
   try {
-    const { data, error } = await supabase.functions.invoke(`private/role_bindings/${ownerOrg.value}`, {
+    const { data, error } = await invokeCapgoApi(`private/role_bindings/${ownerOrg.value}`, {
       method: 'GET',
     })
 
@@ -295,7 +296,7 @@ async function fetchAvailableGroups() {
     return
 
   try {
-    const { data, error } = await supabase.functions.invoke(`private/groups/${ownerOrg.value}`, {
+    const { data, error } = await invokeCapgoApi(`private/groups/${ownerOrg.value}`, {
       method: 'GET',
     })
 
@@ -331,7 +332,7 @@ async function assignRole() {
 
   isLoading.value = true
   try {
-    const { error } = await supabase.functions.invoke('private/role_bindings', {
+    const { error } = await invokeCapgoApi('private/role_bindings', {
       method: 'POST',
       body: {
         principal_type: assignRoleForm.value.principal_type,
@@ -377,7 +378,7 @@ async function handleEditRoleConfirm(newRoleName: string) {
 
   isEditingRole.value = true
   try {
-    const { error: updateError } = await supabase.functions.invoke(`private/role_bindings/${editRoleBinding.value.id}`, {
+    const { error: updateError } = await invokeCapgoApi(`private/role_bindings/${editRoleBinding.value.id}`, {
       method: 'PATCH',
       body: { role_name: newRoleName },
     })
@@ -412,7 +413,7 @@ async function removeRoleBinding(bindingId: string) {
 
   isLoading.value = true
   try {
-    const { error } = await supabase.functions.invoke(`private/role_bindings/${bindingId}`, {
+    const { error } = await invokeCapgoApi(`private/role_bindings/${bindingId}`, {
       method: 'DELETE',
     })
 

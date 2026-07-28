@@ -6,6 +6,7 @@ import { format, parse } from '@std/semver'
 import { createClient } from '@supabase/supabase-js'
 import subset from 'semver/ranges/subset'
 import { ref } from 'vue'
+import { invokeCapgoApi } from '~/services/capgoApi'
 import { getFirstTierCreditUnitPricing, sortCreditPricingSteps } from './creditPricing'
 
 let supaClient: SupabaseClient<Database> = null as any
@@ -372,12 +373,11 @@ export function normalizeDashboardDateRange(startDate?: string, endDate?: string
 
 export async function getAllDashboard(orgId: string, startDate?: string, endDate?: string): Promise<AppUsageGlobalByApp> {
   try {
-    const supabase = useSupabase()
     const { start, end } = normalizeDashboardDateRange(startDate, endDate)
     const dateRange = `?from=${start}&to=${end}&breakdown=true&noAccumulate=true`
 
     // 🚀 SUPER OPTIMIZED: Single API call returns both aggregated AND per-app breakdown (with daily values, not accumulated)
-    const response = await supabase.functions.invoke(`statistics/org/${orgId}/${dateRange}`, {
+    const response = await invokeCapgoApi(`statistics/org/${orgId}${dateRange}`, {
       method: 'GET',
     })
 
@@ -577,7 +577,7 @@ export async function getUsageCreditDeductions(orgId: string): Promise<UsageCred
 }
 
 export async function calculateCreditCost(request: CreditCostCalculationRequest): Promise<CreditCostCalculationResponse> {
-  const response = await useSupabase().functions.invoke('private/credits', {
+  const response = await invokeCapgoApi('private/credits', {
     body: {
       ...request,
       build_time: request.build_time ?? 0,

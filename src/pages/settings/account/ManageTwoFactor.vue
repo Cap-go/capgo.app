@@ -5,6 +5,7 @@ import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import VueTurnstile from 'vue-turnstile'
+import { invokeCapgoApi } from '~/services/capgoApi'
 import { formatLocalDate } from '~/services/date'
 import { useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -110,7 +111,7 @@ async function verifyOtpForMfa() {
     return
 
   otpVerificationLoading.value = true
-  const { data, error: verifyError } = await supabase.functions.invoke('private/verify_email_otp', {
+  const { data, error: verifyError } = await invokeCapgoApi('private/verify_email_otp', {
     body: { token },
   })
   otpVerificationLoading.value = false

@@ -6,26 +6,38 @@ import process from 'node:process'
  * Capgo cloud (prod/preprod/alpha) Supabase Edge Functions that must stay
  * published on sb.capgo.app.
  *
- * Keep:
- * - `triggers` — Postgres pg_net calls /functions/v1/triggers/queue_consumer/sync
- * - console/CLI `supabase.functions.invoke(...)` targets (SDK always uses
- *   SUPABASE_URL, not api.capgo.app)
+ * Forever:
+ * - `triggers` — Postgres pg_net → /functions/v1/triggers/queue_consumer/sync
  *
- * Skip (Cloudflare or unused on Capgo cloud Supabase):
- * plugin hot paths, device public API, build, notifications, ops probes, etc.
+ * Deprecated (CLI still used supabase.functions.invoke for these until the
+ * Capgo CLI migration ships and old CLIs age out). Keep Capgo-cloud publish
+ * until 2026-10-28 (~3 months after console+CLI migrate to api.capgo.app /
+ * files.capgo.app). After that date remove them from this allowlist and delete
+ * the Capgo cloud Supabase deployments.
+ * - `bundle`, `channel`, `files`, `private`
+ *
+ * Console-only invoke targets were migrated to VITE_API_HOST (Cloudflare) and
+ * are no longer published on Capgo cloud Supabase:
+ * - apikey, app, organization, statistics, webhooks
+ *
  * Self-hosted installs still deploy every function under supabase/functions/.
  */
-export const CAPGO_CLOUD_SUPABASE_FUNCTIONS = [
-  'apikey',
-  'app',
+export const CAPGO_CLOUD_SUPABASE_FUNCTIONS_CLI_DEPRECATION_UNTIL = '2026-10-28'
+
+export const CAPGO_CLOUD_SUPABASE_FUNCTIONS_FOREVER = [
+  'triggers',
+] as const
+
+export const CAPGO_CLOUD_SUPABASE_FUNCTIONS_CLI_DEPRECATION = [
   'bundle',
   'channel',
   'files',
-  'organization',
   'private',
-  'statistics',
-  'triggers',
-  'webhooks',
+] as const
+
+export const CAPGO_CLOUD_SUPABASE_FUNCTIONS = [
+  ...CAPGO_CLOUD_SUPABASE_FUNCTIONS_FOREVER,
+  ...CAPGO_CLOUD_SUPABASE_FUNCTIONS_CLI_DEPRECATION,
 ] as const
 
 export type CapgoCloudSupabaseFunction = typeof CAPGO_CLOUD_SUPABASE_FUNCTIONS[number]
