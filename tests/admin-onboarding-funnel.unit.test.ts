@@ -25,6 +25,22 @@ describe('admin onboarding activation telemetry', () => {
     expect(isAdminOnboardingTelemetryWithinRetention('not-a-date', now)).toBe(false)
   })
 
+  it.concurrent('keeps onboarding Analytics Engine SQL under the 10k character limit', () => {
+    const windows = Array.from({ length: 100 }, (_, index) => ({
+      app_id: `com.customer.very.long.app.identifier.${index}`,
+      start_at: '2026-07-01T00:00:00.000Z',
+      end_at: '2026-07-08T00:00:00.000Z',
+    }))
+
+    // Legacy fixed batches of 100 windows overflow Cloudflare's SQL body limit.
+    expect(buildAdminOnboardingProductionDeviceQuery(windows).length).toBeGreaterThan(10_000)
+    expect(buildAdminOnboardingUpdateDownloadQuery(windows).length).toBeGreaterThan(10_000)
+
+    const safeWindows = windows.slice(0, 40)
+    expect(buildAdminOnboardingProductionDeviceQuery(safeWindows).length).toBeLessThanOrEqual(9_000)
+    expect(buildAdminOnboardingUpdateDownloadQuery(safeWindows).length).toBeLessThanOrEqual(9_000)
+  })
+
   it.concurrent('builds bounded first-event queries for production devices and completed downloads', () => {
     const windows = [{
       app_id: "com.example.o'hara",
