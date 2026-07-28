@@ -79,8 +79,8 @@ function numArg(flag: string, fallback: string, opts?: { min?: number }): number
   const raw = argValue(flag, fallback)
   const n = Number(raw)
   const min = opts?.min ?? 0
-  if (!Number.isFinite(n) || n < min)
-    throw new Error(`Invalid value for ${flag}: ${raw} (need finite number >= ${min})`)
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < min)
+    throw new Error(`Invalid value for ${flag}: ${raw} (need integer >= ${min})`)
   return n
 }
 
