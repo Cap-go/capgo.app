@@ -806,6 +806,63 @@ const onboardingFunnelRates = computed(() => {
   }
 })
 
+const onboardingFunnelConversionSummaries = computed(() => {
+  const rates = onboardingFunnelRates.value
+  const items = [
+    {
+      key: 'app',
+      value: rates.app,
+      label: t('org-to-app'),
+      colorClass: 'text-purple-500',
+    },
+    {
+      key: 'channel',
+      value: rates.channel,
+      label: t('app-to-channel'),
+      colorClass: 'text-amber-500',
+    },
+    {
+      key: 'bundle',
+      value: rates.bundle,
+      label: t('channel-to-bundle'),
+      colorClass: 'text-emerald-500',
+    },
+  ]
+
+  if (onboardingFunnelData.value?.activation_telemetry_available) {
+    items.push(
+      {
+        key: 'productionDevice',
+        value: rates.productionDevice,
+        label: t('bundle-to-production-device'),
+        colorClass: 'text-pink-500',
+      },
+      {
+        key: 'updateDownload',
+        value: rates.updateDownload,
+        label: t('production-device-to-update-download'),
+        colorClass: 'text-indigo-500',
+      },
+    )
+  }
+
+  items.push({
+    key: 'subscribed',
+    value: rates.subscribed,
+    label: t('bundle-to-subscribed'),
+    colorClass: 'text-rose-500',
+  })
+
+  return items
+})
+
+const onboardingFunnelConversionGridClass = computed(() => {
+  // Keep one row on large screens so rates follow the funnel columns.
+  return onboardingFunnelConversionSummaries.value.length >= 6
+    ? 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-6'
+    : 'grid-cols-2 sm:grid-cols-4'
+})
+
 // Onboarding funnel stages for display
 const onboardingFunnelStages = computed(() => {
   if (!onboardingFunnelData.value)
@@ -1012,46 +1069,24 @@ displayStore.defaultBack = '/dashboard'
                 <AdminFunnelChart :stages="onboardingFunnelStages" :is-loading="isLoadingOnboardingFunnel" />
               </div>
 
-              <!-- Funnel conversion summary -->
-              <div class="grid grid-cols-2 gap-4 pt-4 mt-4 border-t border-gray-200 sm:grid-cols-3 xl:grid-cols-5 dark:border-gray-700">
-                <div class="text-center">
-                  <p class="text-2xl font-bold text-purple-500">
-                    {{ formatOneDecimal(onboardingFunnelRates.app) }}%
+              <!-- Funnel conversion summary: one grid so rates share the funnel column rhythm -->
+              <div
+                class="grid gap-x-2 gap-y-4 pt-4 mt-4 border-t border-gray-200 dark:border-gray-700"
+                :class="onboardingFunnelConversionGridClass"
+              >
+                <div
+                  v-for="item in onboardingFunnelConversionSummaries"
+                  :key="item.key"
+                  class="min-w-0 px-1 text-center"
+                >
+                  <p
+                    class="text-xl font-bold tabular-nums sm:text-2xl"
+                    :class="item.colorClass"
+                  >
+                    {{ formatOneDecimal(item.value) }}%
                   </p>
-                  <p class="text-xs text-gray-500 dark:text-gray-400">
-                    Org → App
-                  </p>
-                </div>
-                <div class="text-center">
-                  <p class="text-2xl font-bold text-amber-500">
-                    {{ formatOneDecimal(onboardingFunnelRates.channel) }}%
-                  </p>
-                  <p class="text-xs text-gray-500 dark:text-gray-400">
-                    {{ t('app-to-channel') }}
-                  </p>
-                </div>
-                <div class="text-center">
-                  <p class="text-2xl font-bold text-emerald-500">
-                    {{ formatOneDecimal(onboardingFunnelRates.bundle) }}%
-                  </p>
-                  <p class="text-xs text-gray-500 dark:text-gray-400">
-                    {{ t('channel-to-bundle') }}
-                  </p>
-                </div>
-                <div v-if="onboardingFunnelData?.activation_telemetry_available" class="text-center">
-                  <p class="text-2xl font-bold text-pink-500">
-                    {{ formatOneDecimal(onboardingFunnelRates.productionDevice) }}%
-                  </p>
-                  <p class="text-xs text-gray-500 dark:text-gray-400">
-                    {{ t('bundle-to-production-device') }}
-                  </p>
-                </div>
-                <div v-if="onboardingFunnelData?.activation_telemetry_available" class="text-center">
-                  <p class="text-2xl font-bold text-indigo-500">
-                    {{ formatOneDecimal(onboardingFunnelRates.updateDownload) }}%
-                  </p>
-                  <p class="text-xs text-gray-500 dark:text-gray-400">
-                    {{ t('production-device-to-update-download') }}
+                  <p class="mt-1 text-[11px] leading-snug text-gray-500 break-words sm:text-xs dark:text-gray-400">
+                    {{ item.label }}
                   </p>
                 </div>
               </div>
@@ -1059,18 +1094,6 @@ displayStore.defaultBack = '/dashboard'
               <p v-if="!onboardingFunnelData?.activation_telemetry_available" class="text-sm text-slate-500 dark:text-slate-400">
                 {{ t('activation-telemetry-unavailable') }}
               </p>
-
-              <!-- Commercial conversion -->
-              <div class="pt-4 mt-4 border-t border-gray-200 dark:border-gray-700">
-                <div class="text-center">
-                  <p class="text-2xl font-bold text-rose-500">
-                    {{ formatOneDecimal(onboardingFunnelRates.subscribed) }}%
-                  </p>
-                  <p class="text-xs text-gray-500 dark:text-gray-400">
-                    {{ t('bundle-to-subscribed') }}
-                  </p>
-                </div>
-              </div>
             </div>
             <div v-else class="flex items-center justify-center h-48 text-slate-400">
               {{ t('no-data-available') }}
