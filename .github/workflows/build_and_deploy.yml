@@ -92,7 +92,11 @@ jobs:
       - name: Update functions
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_TOKEN }}
-        run: supabase functions deploy
+        # Capgo cloud only publishes functions still needed on Supabase (pg_net entry).
+        # Self-hosting keeps deploying all functions via `supabase functions deploy`.
+        run: |
+          mapfile -t FUNCTIONS < <(bun scripts/supabase-cloud-functions.ts list)
+          supabase functions deploy "${FUNCTIONS[@]}"
 
   read_replica_schema:
     needs: changes
