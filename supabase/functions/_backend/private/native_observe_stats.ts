@@ -6,6 +6,7 @@ import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc.js'
 import { Hono } from 'hono/tiny'
 import { readNativeObservePluginVersionsCF, readUpdateDeliveryTimingEventsCF } from '../utils/cloudflare.ts'
+import { parseMetaDurationMs } from './update_delivery_stats.ts'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog } from '../utils/logging.ts'
@@ -287,22 +288,6 @@ function setMetric(series: Array<number | null>, index: number, value: NativeObs
     series[index] = metric
 }
 
-function parseMetaDurationMs(metadata: Record<string, string> | null | undefined): number | null {
-  if (!metadata)
-    return null
-  for (const key of ['duration_ms', 'duration'] as const) {
-    const raw = metadata[key]
-    if (typeof raw !== 'string' || raw.length === 0 || raw.length > 15)
-      continue
-    if (!/^\d+(?:\.\d+)?$/.test(raw))
-      continue
-    const value = Number(raw)
-    if (!Number.isFinite(value))
-      continue
-    return value
-  }
-  return null
-}
 
 function percentileCont(sorted: number[], q: number): number | null {
   if (!sorted.length)

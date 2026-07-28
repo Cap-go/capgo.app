@@ -252,7 +252,7 @@ function toMetric(value: NumericValue, decimals = 0) {
   return Math.round(numeric * factor) / factor
 }
 
-function parseMetaDurationMs(metadata: Record<string, string> | null | undefined): number | null {
+export function parseMetaDurationMs(metadata: Record<string, string> | null | undefined): number | null {
   if (!metadata)
     return null
   for (const key of ['duration_ms', 'duration'] as const) {
