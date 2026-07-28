@@ -1333,8 +1333,9 @@ export interface NativeObservePluginVersionCF {
   devices: number
 }
 
-export function buildNativeObservePluginVersionsCFQuery(appId: string, limit = 12): string {
-  const safeLimit = normalizeAnalyticsLimit(limit, 12)
+export function buildNativeObservePluginVersionsCFQuery(appId: string): string {
+  // No LIMIT here: callers need the full version set to compute total_devices
+  // (same as Postgres window sum), then slice the top N in JS.
   return `SELECT
   if(plugin_version = '', 'unknown', plugin_version) AS plugin_version,
   count() AS devices
@@ -1350,19 +1351,17 @@ FROM (
 )
 WHERE is_prod = 1 AND is_emulator != 1
 GROUP BY plugin_version
-ORDER BY devices DESC, plugin_version ASC
-LIMIT ${safeLimit}`
+ORDER BY devices DESC, plugin_version ASC`
 }
 
 export async function readNativeObservePluginVersionsCF(
   c: Context,
   appId: string,
-  limit = 12,
 ): Promise<NativeObservePluginVersionCF[]> {
   if (!c.env.DEVICE_INFO)
     return []
 
-  const query = buildNativeObservePluginVersionsCFQuery(appId, limit)
+  const query = buildNativeObservePluginVersionsCFQuery(appId)
   cloudlog({ requestId: c.get('requestId'), message: 'readNativeObservePluginVersionsCF query', query })
   try {
     const rows = await runQueryToCFA<{ plugin_version: string, devices: number }>(c, query)

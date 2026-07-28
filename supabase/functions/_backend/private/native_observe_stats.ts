@@ -764,8 +764,9 @@ async function readNativeObservePluginStatsSB(c: Context<MiddlewareKeyVariables>
 
 async function readNativeObservePluginStatsCF(c: Context<MiddlewareKeyVariables>, appId: string) {
   const rows = await readNativeObservePluginVersionsCF(c, appId)
+  // Sum every version before slicing top 12 so shares match Postgres window total.
   const totalDevices = rows.reduce((sum, row) => sum + (Number(row.devices) || 0), 0)
-  return buildNativeObservePluginResponse(rows.map(row => ({
+  return buildNativeObservePluginResponse(rows.slice(0, 12).map(row => ({
     plugin_version: row.plugin_version,
     devices: row.devices,
     total_devices: totalDevices,

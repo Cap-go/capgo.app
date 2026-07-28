@@ -230,7 +230,7 @@ export async function collectAnalyticsEngineSqlFixtures(): Promise<AnalyticsEngi
       },
       {
         name: 'buildNativeObservePluginVersionsCFQuery.default',
-        query: buildNativeObservePluginVersionsCFQuery(SAMPLE_APP_ID, 12),
+        query: buildNativeObservePluginVersionsCFQuery(SAMPLE_APP_ID),
       },
 
       {
