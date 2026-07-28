@@ -480,20 +480,27 @@ function finalizeNativeObserveAggregate(state: NativeObserveAggregateState): {
     })
 
   const versionRows: NativeObserveVersionRow[] = [...state.versionMap.entries()]
-    .map(([version_name, value]) => ({
-      version_name,
-      events: value.events,
-      devices: value.devices.size,
-      issue_count: value.issueCount,
-      affected_devices: value.issueDevices.size,
-      launch_p90_ms: percentileCont([...value.launchDurations].sort((a, b) => a - b), 0.9),
-      webview_load_p90_ms: percentileCont([...value.webviewDurations].sort((a, b) => a - b), 0.9),
-    }))
+    .map(([version_name, value]) => {
+      const launchMetrics = metricFromDurations(value.launchDurations)
+      const webviewMetrics = metricFromDurations(value.webviewDurations)
+      return {
+        version_name,
+        events: value.events,
+        devices: value.devices.size,
+        issue_count: value.issueCount,
+        affected_devices: value.issueDevices.size,
+        launch_p90_ms: launchMetrics.p90_ms,
+        webview_load_p90_ms: webviewMetrics.p90_ms,
+      }
+    })
     .sort((a, b) => {
       const eventCmp = toCount(b.events) - toCount(a.events)
       return eventCmp !== 0 ? eventCmp : a.version_name.localeCompare(b.version_name)
     })
     .slice(0, 12)
+
+  const launchSorted = [...state.launchDurations].sort((a, b) => a - b)
+  const webviewSorted = [...state.webviewDurations].sort((a, b) => a - b)
 
   return {
     dailyRows,
@@ -505,10 +512,10 @@ function finalizeNativeObserveAggregate(state: NativeObserveAggregateState): {
       issue_count: state.issueCount,
       affected_devices: state.issueDevices.size,
       launch_timeout_count: state.launchTimeoutCount,
-      launch_p50_ms: percentileCont([...state.launchDurations].sort((a, b) => a - b), 0.5),
-      launch_p90_ms: percentileCont([...state.launchDurations].sort((a, b) => a - b), 0.9),
-      webview_load_p50_ms: percentileCont([...state.webviewDurations].sort((a, b) => a - b), 0.5),
-      webview_load_p90_ms: percentileCont([...state.webviewDurations].sort((a, b) => a - b), 0.9),
+      launch_p50_ms: percentileCont(launchSorted, 0.5),
+      launch_p90_ms: percentileCont(launchSorted, 0.9),
+      webview_load_p50_ms: percentileCont(webviewSorted, 0.5),
+      webview_load_p90_ms: percentileCont(webviewSorted, 0.9),
     },
   }
 }
@@ -664,6 +671,7 @@ async function readReleaseMarkers(
 }
 
 const MAX_NATIVE_OBSERVE_EVENTS = 100_000
+const NATIVE_OBSERVE_CHUNK_CONCURRENCY = 4
 
 async function foldNativeObserveTimingEventsCFChunked(
   c: Context<MiddlewareKeyVariables>,
@@ -672,22 +680,33 @@ async function foldNativeObserveTimingEventsCFChunked(
   endExclusive: Dayjs,
   state: NativeObserveAggregateState,
 ) {
-  // Fold each UTC day chunk immediately so we never hold 30x50k rows in memory.
+  // Build UTC day windows, then fetch with bounded concurrency and fold as batches complete.
+  const windows: Array<{ start: string, end: string }> = []
   let cursor = start.utc().startOf('day')
   const end = endExclusive.utc()
-
-  while (cursor.isBefore(end) && state.events < MAX_NATIVE_OBSERVE_EVENTS) {
+  while (cursor.isBefore(end)) {
     const next = cursor.add(1, 'day')
     const chunkEnd = next.isBefore(end) ? next : end
-    const chunk = await readUpdateDeliveryTimingEventsCF(c, {
-      start_date: cursor.toISOString(),
-      end_date: chunkEnd.toISOString(),
+    windows.push({ start: cursor.toISOString(), end: chunkEnd.toISOString() })
+    cursor = next
+  }
+
+  for (let i = 0; i < windows.length && state.events < MAX_NATIVE_OBSERVE_EVENTS; i += NATIVE_OBSERVE_CHUNK_CONCURRENCY) {
+    const batch = windows.slice(i, i + NATIVE_OBSERVE_CHUNK_CONCURRENCY)
+    const remaining = MAX_NATIVE_OBSERVE_EVENTS - state.events
+    const perChunkLimit = Math.max(1, Math.min(50_000, Math.ceil(remaining / batch.length)))
+    const chunks = await Promise.all(batch.map(window => readUpdateDeliveryTimingEventsCF(c, {
+      start_date: window.start,
+      end_date: window.end,
       actions: [...nativeObserveActions],
       app_ids: [appId],
-      limit: Math.min(50_000, MAX_NATIVE_OBSERVE_EVENTS - state.events),
-    })
-    foldNativeObserveSamples(state, toNativeObserveEventSamples(chunk))
-    cursor = next
+      limit: perChunkLimit,
+    })))
+    for (const chunk of chunks) {
+      if (state.events >= MAX_NATIVE_OBSERVE_EVENTS)
+        break
+      foldNativeObserveSamples(state, toNativeObserveEventSamples(chunk))
+    }
   }
 }
 

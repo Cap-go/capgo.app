@@ -26,7 +26,7 @@ describe('native observe stats helpers', () => {
     )).toEqual(['2026-07-01', '2026-07-02', '2026-07-03'])
   })
 
-  it('builds daily timing, issue, action, and version aggregates', () => {
+  it.concurrent('builds daily timing, issue, action, and version aggregates', () => {
     const response = nativeObserveStatsTestUtils.buildNativeObserveResponse({
       labels: ['2026-07-01', '2026-07-02'],
       days: 7,
@@ -72,7 +72,7 @@ describe('native observe stats helpers', () => {
     expect(response.releaseMarkers).toHaveLength(1)
   })
 
-  it('builds plugin version aggregates without global statistics', () => {
+  it.concurrent('builds plugin version aggregates without global statistics', () => {
     expect(nativeObserveStatsTestUtils.buildNativeObservePluginResponse([
       { plugin_version: '7.0.0', devices: 3, total_devices: 4 },
       { plugin_version: '6.9.0', devices: 1, total_devices: 4 },
@@ -91,7 +91,7 @@ describe('native observe stats helpers', () => {
     expect(nativeObserveStatsTestUtils.parseMetaDurationMs(null)).toBeNull()
   })
 
-  it('aggregates CF observe samples into daily/action/version/overview rows', () => {
+  it.concurrent('aggregates CF observe samples into daily/action/version/overview rows', () => {
     const aggregates = nativeObserveStatsTestUtils.aggregateNativeObserveSamples([
       {
         day: '2026-07-01',
@@ -152,7 +152,7 @@ describe('native observe stats helpers', () => {
     ])
   })
 
-  it('maps CF timing events into observe samples', () => {
+  it.concurrent('maps CF timing events into observe samples', () => {
     expect(nativeObserveStatsTestUtils.toNativeObserveEventSamples([
       {
         app_id: 'com.demo.app',
