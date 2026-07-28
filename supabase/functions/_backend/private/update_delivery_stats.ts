@@ -544,6 +544,37 @@ async function readUpdateDeliveryStatsSB(
   }
 }
 
+async function readUpdateDeliveryTimingEventsCFChunked(
+  c: Context<MiddlewareKeyVariables>,
+  params: {
+    queryStart: Dayjs
+    endExclusive: Dayjs
+    actions: string[]
+    appIds?: string[]
+  },
+) {
+  // AE SQL has a hard row cap and no JOIN. Fetch UTC day windows so busy apps
+  // keep coverage across the whole period instead of only the newest 50k rows.
+  const events: UpdateDeliveryTimingEventCF[] = []
+  let cursor = params.queryStart.utc().startOf('day')
+  const end = params.endExclusive.utc()
+
+  while (cursor.isBefore(end)) {
+    const next = cursor.add(1, 'day')
+    const chunkEnd = next.isBefore(end) ? next : end
+    const chunk = await readUpdateDeliveryTimingEventsCF(c, {
+      start_date: cursor.toISOString(),
+      end_date: chunkEnd.toISOString(),
+      actions: params.actions,
+      app_ids: params.appIds,
+    })
+    events.push(...chunk)
+    cursor = next
+  }
+
+  return events
+}
+
 async function readUpdateDeliveryStatsCF(
   c: Context<MiddlewareKeyVariables>,
   scope: UpdateDeliveryScope,
@@ -571,11 +602,11 @@ async function readUpdateDeliveryStatsCF(
     appIds = await listOrgAppIds(c, scopeId)
   }
 
-  const events = await readUpdateDeliveryTimingEventsCF(c, {
-    start_date: queryStart.toISOString(),
-    end_date: endExclusive.toISOString(),
+  const events = await readUpdateDeliveryTimingEventsCFChunked(c, {
+    queryStart,
+    endExclusive,
     actions: allowPairing ? [...timingActions] : [...endActions],
-    app_ids: appIds,
+    appIds,
   })
 
   const samples = buildDeliveriesFromEvents(events, {

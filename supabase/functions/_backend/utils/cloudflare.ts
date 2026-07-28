@@ -1283,7 +1283,7 @@ WHERE
   AND blob2 IN (${actionsList})
   ${appFilter}
 GROUP BY app_id, device_id, action, version_name, metadata, created_at
-ORDER BY created_at DESC
+ORDER BY created_at ASC
 LIMIT ${limit}`
 }
 
