@@ -342,15 +342,14 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: ChannelSet,
       throw simpleError('cannot_access_app', 'You can\'t access this app', { app_id: body.app_id, channel: body.channel })
     }
   }
-  else {
-    if (!(await checkPermission(c, 'app.create_channel', { appId: body.app_id }))) {
-      throw simpleError('cannot_access_app', 'You can\'t access this app', { app_id: body.app_id })
-    }
-    // A public/default channel changes the app's delivery configuration. Preview
-    // keys may bootstrap private channels only, so they cannot make one public.
-    if (body.public === true && !(await checkPermission(c, 'app.update_settings', { appId: body.app_id }))) {
-      throw simpleError('cannot_access_app', 'You can\'t access this app', { app_id: body.app_id, channel: body.channel })
-    }
+  else if (!(await checkPermission(c, 'app.create_channel', { appId: body.app_id }))) {
+    throw simpleError('cannot_access_app', 'You can\'t access this app', { app_id: body.app_id })
+  }
+  // A public/default channel changes the app's delivery configuration. Preview
+  // keys may bootstrap private channels only, so they cannot create or flip one
+  // to public without app.update_settings.
+  if (body.public === true && !(await checkPermission(c, 'app.update_settings', { appId: body.app_id }))) {
+    throw simpleError('cannot_access_app', 'You can\'t access this app', { app_id: body.app_id, channel: body.channel })
   }
   const { data: org, error } = await supabaseAdmin(c).from('apps').select('owner_org').eq('app_id', body.app_id).single()
   if (error || !org) {

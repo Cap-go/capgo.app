@@ -276,6 +276,30 @@ describe('public channel post', () => {
     expect(updateOrCreateChannel).not.toHaveBeenCalled()
   })
 
+  it('requires app settings permission to make an existing channel public', async () => {
+    supabaseAdmin.mockImplementation(() => buildAdminChain({
+      existingChannelId: 42,
+      existingChannelVersion: 123,
+    }))
+    checkPermission
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+    const { post } = await import('../supabase/functions/_backend/public/channel/post.ts')
+    const c = context()
+
+    await expect(post(c, {
+      app_id: 'com.test.preview',
+      channel: 'preview-existing',
+      public: true,
+    }, apiKey())).rejects.toMatchObject({
+      cause: expect.objectContaining({ error: 'cannot_access_app' }),
+    })
+
+    expect(checkPermission).toHaveBeenNthCalledWith(1, c, 'channel.update_settings', { appId: 'com.test.preview', channelId: 42 })
+    expect(checkPermission).toHaveBeenNthCalledWith(2, c, 'app.update_settings', { appId: 'com.test.preview' })
+    expect(updateOrCreateChannel).not.toHaveBeenCalled()
+  })
+
   it('preserves the stable version for a settings-only update without channel.read or bundle lookup', async () => {
     const fromCalls: string[] = []
     supabaseAdmin.mockImplementation(() => buildAdminChain({
