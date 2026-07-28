@@ -3,22 +3,25 @@
 // Proxies updater.capgo.com.cn with stale-while-revalidate cache.
 // After an upstream timeout/error, serve cached JSON/files until a
 // revalidate succeeds.
+//
+// Important: FC freezes the instance after the HTTP response is returned, so
+// revalidation must finish inside this request (within CLIENT_BUDGET_MS). Do
+// not wait for a full upstream timeout and then answer — Capgo clients already
+// abandon around 3s.
 const { Buffer } = require('node:buffer')
 const crypto = require('node:crypto')
 const https = require('node:https')
 
 const TARGET_HOST = 'updater.capgo.com.cn'
-// Capgo plugin/edge often abandons around 3s (CF snippet TIMEOUT_MS=3000).
-// Never wait for a full upstream timeout and *then* answer — that response is
-// already lost. With a cache: answer within CLIENT_BUDGET_MS. Without cache:
-// allow a longer upstream wait for clients that raised responseTimeout.
 const CLIENT_BUDGET_MS = 2500
 const FETCH_TIMEOUT_MS = 15000
-const MAX_CACHE_BYTES = 20 * 1024 * 1024
+const MAX_ENTRY_BYTES = 2 * 1024 * 1024
+const MAX_TOTAL_CACHE_BYTES = 20 * 1024 * 1024
 const MAX_MEMORY_ENTRIES = 200
 
 /** @type {Map<string, CacheEntry>} */
 const memoryCache = new Map()
+let memoryCacheBytes = 0
 let upstreamDegraded = false
 
 /**
@@ -28,6 +31,7 @@ let upstreamDegraded = false
  *   body: string,
  *   isBase64Encoded: boolean,
  *   cachedAt: number,
+ *   byteLength: number,
  * }} CacheEntry
  */
 
@@ -37,6 +41,10 @@ function isDegraded() {
 
 function setDegraded(value) {
   upstreamDegraded = value
+}
+
+function entryByteLength(entry) {
+  return entry.byteLength ?? Buffer.byteLength(entry.body, entry.isBase64Encoded ? 'base64' : 'utf8')
 }
 
 /**
@@ -52,22 +60,38 @@ function getCache(key) {
   return mem
 }
 
+function trimMemoryCache() {
+  while (
+    memoryCache.size > MAX_MEMORY_ENTRIES
+    || memoryCacheBytes > MAX_TOTAL_CACHE_BYTES
+  ) {
+    const oldest = memoryCache.keys().next().value
+    if (oldest === undefined)
+      break
+    const oldestEntry = memoryCache.get(oldest)
+    if (oldestEntry)
+      memoryCacheBytes -= entryByteLength(oldestEntry)
+    memoryCache.delete(oldest)
+  }
+}
+
 /**
  * @param {string} key
  * @param {CacheEntry} entry
  */
 function setCache(key, entry) {
-  const bodyBytes = Buffer.byteLength(entry.body, entry.isBase64Encoded ? 'base64' : 'utf8')
-  if (bodyBytes > MAX_CACHE_BYTES) {
-    console.log('[CACHE] skip oversized entry', { key: key.slice(0, 120), bodyBytes })
+  if (entry.byteLength > MAX_ENTRY_BYTES) {
+    console.log('[CACHE] skip oversized entry', { key: key.slice(0, 120), bodyBytes: entry.byteLength })
     return
   }
 
+  const previous = memoryCache.get(key)
+  if (previous)
+    memoryCacheBytes -= entryByteLength(previous)
+
   memoryCache.set(key, entry)
-  while (memoryCache.size > MAX_MEMORY_ENTRIES) {
-    const oldest = memoryCache.keys().next().value
-    memoryCache.delete(oldest)
-  }
+  memoryCacheBytes += entry.byteLength
+  trimMemoryCache()
 }
 
 /**
@@ -85,13 +109,13 @@ function makeCacheKey(method, reqPath, bodyBuffer) {
 /**
  * @param {Record<string, string | string[] | undefined>} headers
  */
-function sanitizeCachedHeaders(headers) {
-  // Keep content-encoding: body is stored as upstream wire bytes (base64 when binary/compressed).
+function sanitizeResponseHeaders(headers) {
   const skip = new Set([
     'connection',
     'keep-alive',
     'transfer-encoding',
     'content-length',
+    'set-cookie',
   ])
   /** @type {Record<string, string | string[] | undefined>} */
   const out = {}
@@ -111,7 +135,7 @@ function respondFromCache(entry, cacheState) {
   return {
     statusCode: entry.statusCode,
     headers: {
-      ...sanitizeCachedHeaders(entry.headers),
+      ...sanitizeResponseHeaders(entry.headers),
       'x-aliproxy-cache': cacheState,
       'x-aliproxy-cached-at': String(entry.cachedAt),
     },
@@ -127,10 +151,22 @@ function respondFromCache(entry, cacheState) {
  */
 function fetchUpstream(options, bodyBuffer, timeoutMs) {
   return new Promise((resolve) => {
+    let settled = false
+    const fail = (err, timeout = false) => {
+      if (settled)
+        return
+      settled = true
+      resolve({ ok: false, error: err, timeout })
+    }
+
     const req = https.request({ ...options, timeout: timeoutMs }, (res) => {
       const chunks = []
       res.on('data', d => chunks.push(d))
+      res.on('error', err => fail(err, false))
       res.on('end', () => {
+        if (settled)
+          return
+        settled = true
         resolve({
           ok: true,
           statusCode: res.statusCode || 502,
@@ -139,14 +175,6 @@ function fetchUpstream(options, bodyBuffer, timeoutMs) {
         })
       })
     })
-
-    let settled = false
-    const fail = (err, timeout = false) => {
-      if (settled)
-        return
-      settled = true
-      resolve({ ok: false, error: err, timeout })
-    }
 
     req.on('timeout', () => {
       req.destroy()
@@ -160,6 +188,10 @@ function fetchUpstream(options, bodyBuffer, timeoutMs) {
   })
 }
 
+function isUpstreamUsable(result) {
+  return result.ok && result.statusCode < 500
+}
+
 /**
  * @param {{ statusCode: number, headers: any, body: Buffer }} upstream
  */
@@ -169,16 +201,17 @@ function buildProxyResponse(upstream) {
   const isTextResponse = !isCompressed && /^(?:text\/|application\/(?:json|javascript|xml))/.test(
     upstream.headers['content-type'] || '',
   )
+  const body = isTextResponse ? upstream.body.toString('utf8') : upstream.body.toString('base64')
+  const isBase64Encoded = !isTextResponse
 
   return {
     statusCode: upstream.statusCode,
     headers: {
-      ...upstream.headers,
-      'access-control-allow-origin': '*',
+      ...sanitizeResponseHeaders(upstream.headers),
       'x-aliproxy-cache': 'MISS',
     },
-    body: isTextResponse ? upstream.body.toString('utf8') : upstream.body.toString('base64'),
-    isBase64Encoded: !isTextResponse,
+    body,
+    isBase64Encoded,
   }
 }
 
@@ -193,10 +226,11 @@ function maybeCacheResponse(key, response, upstreamHeaders) {
 
   setCache(key, {
     statusCode: response.statusCode,
-    headers: upstreamHeaders,
+    headers: sanitizeResponseHeaders(upstreamHeaders),
     body: response.body,
     isBase64Encoded: response.isBase64Encoded,
     cachedAt: Date.now(),
+    byteLength: Buffer.byteLength(response.body, response.isBase64Encoded ? 'base64' : 'utf8'),
   })
 }
 
@@ -240,23 +274,14 @@ function buildUpstreamRequest(requestData) {
   }
 }
 
-function cacheSuccessfulUpstream(cacheKey, result) {
+function storeFreshUpstream(cacheKey, result) {
   const response = buildProxyResponse(result)
   maybeCacheResponse(cacheKey, response, result.headers)
   setDegraded(false)
   return response
 }
 
-function startBackgroundRevalidate(options, bodyBuffer, cacheKey) {
-  fetchUpstream(options, bodyBuffer, FETCH_TIMEOUT_MS).then((result) => {
-    if (!result.ok)
-      return
-    cacheSuccessfulUpstream(cacheKey, result)
-    console.log('[CACHE] background revalidate succeeded, leaving degraded mode')
-  }).catch(() => {})
-}
-
-function upstreamErrorResponse(message) {
+function upstreamErrorResponse() {
   return {
     statusCode: 502,
     headers: {
@@ -264,7 +289,7 @@ function upstreamErrorResponse(message) {
       'x-aliproxy-cache': 'MISS',
       'x-aliproxy-degraded': '1',
     },
-    body: `upstream error: ${message}`,
+    body: 'upstream error',
   }
 }
 
@@ -284,20 +309,13 @@ async function handleRequest(event) {
     hasCache: !!cached,
   })
 
-  // Degraded + cache: answer STALE immediately, revalidate in background.
-  if (degraded && cached) {
-    startBackgroundRevalidate(options, bodyBuffer, cacheKey)
-    console.log('[DEBUG] Serving STALE immediately while revalidating')
-    return respondFromCache(cached, 'STALE')
-  }
-
-  // Have cache: only wait within client budget, then fall back to stale.
-  // No cache: allow longer wait for clients with raised responseTimeout.
+  // With cache (healthy or degraded): revalidate in-request within client budget,
+  // then fall back to stale. Never depend on work after the response is sent.
   const waitMs = cached ? CLIENT_BUDGET_MS : FETCH_TIMEOUT_MS
   const result = await fetchUpstream(options, bodyBuffer, waitMs)
 
-  if (result.ok) {
-    const response = cacheSuccessfulUpstream(cacheKey, result)
+  if (isUpstreamUsable(result)) {
+    const response = storeFreshUpstream(cacheKey, result)
     console.log('[DEBUG] Response:', {
       statusCode: response.statusCode,
       contentType: result.headers['content-type'],
@@ -307,16 +325,18 @@ async function handleRequest(event) {
     return response
   }
 
-  console.error('[ERROR] Request failed:', result.error.message, { timeout: result.timeout })
+  const failureReason = result.ok
+    ? `upstream status ${result.statusCode}`
+    : result.error.message
+  console.error('[ERROR] Request failed:', failureReason, { timeout: !result.ok && result.timeout })
   setDegraded(true)
 
   if (cached) {
-    startBackgroundRevalidate(options, bodyBuffer, cacheKey)
-    console.log('[DEBUG] Serving STALE after upstream failure within client budget')
+    console.log('[DEBUG] Serving STALE within client budget')
     return respondFromCache(cached, 'STALE')
   }
 
-  return upstreamErrorResponse(result.error.message)
+  return upstreamErrorResponse()
 }
 
 exports.handler = function (event, _context, callback) {
@@ -327,7 +347,7 @@ exports.handler = function (event, _context, callback) {
       callback(null, {
         statusCode: 500,
         headers: { 'content-type': 'text/plain' },
-        body: `internal error: ${err.message}`,
+        body: 'internal error',
       })
     })
 }
