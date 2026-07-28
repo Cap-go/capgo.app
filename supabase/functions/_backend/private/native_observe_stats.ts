@@ -322,14 +322,9 @@ function percentileCont(sorted: number[], q: number): number | null {
 const MAX_DURATION_SAMPLES = 10_000
 
 function pushDurationSample(target: number[], value: number) {
-  if (target.length < MAX_DURATION_SAMPLES) {
+  // Keep the first N samples only (deterministic; matches a stable Postgres-like refresh).
+  if (target.length < MAX_DURATION_SAMPLES)
     target.push(value)
-    return
-  }
-  // Reservoir sample so later days still influence percentiles.
-  const index = Math.floor(Math.random() * (target.length + 1))
-  if (index < target.length)
-    target[index] = value
 }
 
 function metricFromDurations(durations: number[]): Pick<NativeObserveMetricRow, 'p50_ms' | 'p90_ms' | 'p99_ms'> {
@@ -680,7 +675,7 @@ async function foldNativeObserveTimingEventsCFChunked(
   endExclusive: Dayjs,
   state: NativeObserveAggregateState,
 ) {
-  // Build UTC day windows, then fetch with bounded concurrency and fold as batches complete.
+  // Build UTC day windows newest-first so an event cap truncates older days, not recent ones.
   const windows: Array<{ start: string, end: string }> = []
   let cursor = start.utc().startOf('day')
   const end = endExclusive.utc()
@@ -690,6 +685,7 @@ async function foldNativeObserveTimingEventsCFChunked(
     windows.push({ start: cursor.toISOString(), end: chunkEnd.toISOString() })
     cursor = next
   }
+  windows.reverse()
 
   for (let i = 0; i < windows.length && state.events < MAX_NATIVE_OBSERVE_EVENTS; i += NATIVE_OBSERVE_CHUNK_CONCURRENCY) {
     const batch = windows.slice(i, i + NATIVE_OBSERVE_CHUNK_CONCURRENCY)
