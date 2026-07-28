@@ -251,7 +251,7 @@ watch(
             {{ t('update-delivery-devices') }}
           </div>
           <div class="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
-            {{ formatCount(effectiveStats?.overview.devices) }}
+            {{ effectiveStats?.overview.devices == null ? '-' : formatCount(effectiveStats.overview.devices) }}
           </div>
         </div>
       </div>

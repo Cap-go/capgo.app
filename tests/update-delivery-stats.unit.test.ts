@@ -77,6 +77,7 @@ describe('update delivery stats helpers', () => {
   it.concurrent('parses duration metadata strings', () => {
     expect(updateDeliveryStatsTestUtils.parseMetaDurationMs({ duration_ms: '1250.5' })).toBe(1250.5)
     expect(updateDeliveryStatsTestUtils.parseMetaDurationMs({ duration: '900' })).toBe(900)
+    expect(updateDeliveryStatsTestUtils.parseMetaDurationMs({ duration_ms: '0' })).toBe(0)
     expect(updateDeliveryStatsTestUtils.parseMetaDurationMs({ duration_ms: 'nope' })).toBeNull()
     expect(updateDeliveryStatsTestUtils.parseMetaDurationMs(null)).toBeNull()
   })

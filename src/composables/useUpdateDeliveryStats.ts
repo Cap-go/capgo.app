@@ -17,7 +17,7 @@ export interface UpdateDeliveryStatsResponse {
   }
   overview: {
     samples: number
-    devices: number
+    devices: number | null
     p50_ms: number | null
     p75_ms: number | null
     p95_ms: number | null
