@@ -424,11 +424,11 @@ async function copyCurlCommand() {
             <InfoRow v-if="device.os_version" :label="t('os-version')">
               {{ device.os_version }}
             </InfoRow>
-            <InfoRow v-if="minVersion(device.plugin_version) && device.is_emulator" :label="t('is-emulator')">
-              {{ device.is_emulator?.toString() }}
+            <InfoRow v-if="minVersion(device.plugin_version) && device.is_emulator != null" :label="t('is-emulator')">
+              {{ device.is_emulator ? t('yes') : t('no') }}
             </InfoRow>
-            <InfoRow v-if="minVersion(device.plugin_version) && device.is_prod" :label="t('is-production-app')">
-              {{ device.is_prod?.toString() }}
+            <InfoRow v-if="minVersion(device.plugin_version) && device.is_prod != null" :label="t('is-production-app')">
+              {{ device.is_prod ? t('yes') : t('no') }}
             </InfoRow>
             <InfoRow v-if="device.key_id" :label="t('public-key-prefix')">
               {{ device.key_id }}

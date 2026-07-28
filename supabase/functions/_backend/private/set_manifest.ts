@@ -43,7 +43,7 @@ app.post('/', middlewareKey(), async (c) => {
   if (!Array.isArray(body.manifest) || body.manifest.length === 0)
     return quickError(400, 'error_manifest_missing', 'Error manifest missing or empty', { body })
   if (body.manifest.length > MAX_MANIFEST_ENTRIES) {
-    return quickError(400, 'error_manifest_too_large', 'Manifest has too many entries', {
+    return quickError(400, 'error_manifest_too_large', `Delta manifests are limited to ${MAX_MANIFEST_ENTRIES} files (got ${body.manifest.length}). Use a full zip upload (--no-delta) or reduce files in the web build.`, {
       max: MAX_MANIFEST_ENTRIES,
       count: body.manifest.length,
     })

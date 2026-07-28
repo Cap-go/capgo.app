@@ -212,6 +212,48 @@ describe('[POST] /private/set_manifest', () => {
     expect(json.error).toBe('error_version_already_finalized')
   })
 
+  it('rejects manifests larger than 10,000 entries', async () => {
+    const oversizedName = `${BUNDLE_NAME}-too-large`
+    const { data: version, error } = await getSupabaseClient()
+      .from('app_versions')
+      .insert({
+        app_id: APP_ID,
+        name: oversizedName,
+        checksum: randomUUID().replaceAll('-', ''),
+        owner_org: ORG_ID,
+        user_id: USER_ID,
+        storage_provider: 'r2-direct',
+        deleted: false,
+      })
+      .select('owner_org')
+      .single()
+    expect(error).toBeNull()
+
+    const prefix = `orgs/${version!.owner_org}/apps/${APP_ID}/delta`
+    const oversized = Array.from({ length: 10_001 }, (_, i) => ({
+      file_name: `f${i}.js`,
+      s3_path: `${prefix}/h${i}_f${i}.js`,
+      file_hash: `h${i}`,
+    }))
+
+    const response = await fetchTestRequest(getEndpointUrl('/private/set_manifest'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': APIKEY_TEST_ALL,
+      },
+      body: JSON.stringify({
+        app_id: APP_ID,
+        name: oversizedName,
+        manifest: oversized,
+      }),
+    })
+
+    expect(response.status).toBe(400)
+    const json = await response.json() as { error: string, max?: number, count?: number }
+    expect(json.error).toBe('error_manifest_too_large')
+  })
+
   it('rejects missing versions and non-uploadable storage providers', async () => {
     const missing = await fetchTestRequest(getEndpointUrl('/private/set_manifest'), {
       method: 'POST',

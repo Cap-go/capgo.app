@@ -73,134 +73,111 @@ describe('update delivery stats helpers', () => {
     expect(updateDeliveryStatsTestUtils.toMetric('')).toBeNull()
     expect(updateDeliveryStatsTestUtils.toMetric(12.4)).toBe(12)
   })
-})
 
-import { updateDeliveryStatsCfTestUtils } from '../supabase/functions/_backend/utils/updateDeliveryStatsCf.ts'
-
-describe('update delivery stats CF helpers', () => {
-  it.concurrent('parses duration metadata and doubles', () => {
-    expect(updateDeliveryStatsCfTestUtils.parseDurationFromMetadata('{"duration_ms":"1250"}', null)).toBe(1250)
-    expect(updateDeliveryStatsCfTestUtils.parseDurationFromMetadata('', 980)).toBe(980)
-    expect(updateDeliveryStatsCfTestUtils.parseDurationFromMetadata('{"duration":"nope"}', null)).toBeNull()
+  it.concurrent('parses duration metadata strings', () => {
+    expect(updateDeliveryStatsTestUtils.parseMetaDurationMs({ duration_ms: '1250.5' })).toBe(1250.5)
+    expect(updateDeliveryStatsTestUtils.parseMetaDurationMs({ duration: '900' })).toBe(900)
+    expect(updateDeliveryStatsTestUtils.parseMetaDurationMs({ duration_ms: '0' })).toBe(0)
+    expect(updateDeliveryStatsTestUtils.parseMetaDurationMs({ duration_ms: 'nope' })).toBeNull()
+    expect(updateDeliveryStatsTestUtils.parseMetaDurationMs(null)).toBeNull()
   })
 
-  it.concurrent('computes percentiles from sorted samples', () => {
-    expect(updateDeliveryStatsCfTestUtils.percentile([10, 20, 30, 40], 0.5)).toBe(25)
-    expect(updateDeliveryStatsCfTestUtils.percentile([100], 0.99)).toBe(100)
-    expect(updateDeliveryStatsCfTestUtils.percentile([], 0.5)).toBeNull()
-  })
-
-  it('pairs start and complete events when metadata is missing', () => {
-    const result = updateDeliveryStatsCfTestUtils.pairTimingEvents([
+  it('pairs start/complete events when metadata duration is missing', () => {
+    const periodStartMs = Date.parse('2026-07-02T00:00:00.000Z')
+    const samples = updateDeliveryStatsTestUtils.buildDeliveriesFromEvents([
       {
         app_id: 'com.demo.app',
         device_id: 'device-1',
-        version_name: '1.0.0',
         action: 'download_0',
-        metadata: '',
-        created_at: '2026-07-01T10:00:00.000Z',
-        double1: null,
+        version_name: '1.2.3',
+        metadata: null,
+        created_at: '2026-07-02T10:00:00.000Z',
       },
       {
         app_id: 'com.demo.app',
         device_id: 'device-1',
-        version_name: '1.0.0',
         action: 'download_complete',
-        metadata: '',
-        created_at: '2026-07-01T10:00:02.500Z',
-        double1: null,
+        version_name: '1.2.3',
+        metadata: null,
+        created_at: '2026-07-02T10:00:01.500Z',
       },
       {
         app_id: 'com.demo.app',
         device_id: 'device-2',
-        version_name: '1.0.0',
         action: 'download_complete',
-        metadata: '{"duration_ms":"800"}',
-        created_at: '2026-07-01T11:00:00.000Z',
-        double1: null,
+        version_name: '1.2.3',
+        metadata: { duration_ms: '2200' },
+        created_at: '2026-07-02T11:00:00.000Z',
+      },
+    ], { periodStartMs, allowPairing: true })
+
+    expect(samples).toEqual([
+      {
+        day: '2026-07-02',
+        app_id: 'com.demo.app',
+        device_id: 'device-1',
+        duration_ms: 1500,
+      },
+      {
+        day: '2026-07-02',
+        app_id: 'com.demo.app',
+        device_id: 'device-2',
+        duration_ms: 2200,
       },
     ])
-
-    expect(result.overviewRow.samples).toBe(2)
-    expect(result.overviewRow.devices).toBe(2)
-    expect(result.dailyRows[0]?.day).toBe('2026-07-01')
-    expect(result.dailyRows[0]?.samples).toBe(2)
   })
 
-  it('keeps legacy start/end samples when metadata samples already exist', () => {
-    const metadata = updateDeliveryStatsCfTestUtils.aggregateDeliveries([
-      { day: '2026-07-01', app_id: 'com.demo.app', device_id: 'd1', duration_ms: 1000 },
+  it('skips pairing for platform-style metadata-only mode', () => {
+    const periodStartMs = Date.parse('2026-07-02T00:00:00.000Z')
+    const samples = updateDeliveryStatsTestUtils.buildDeliveriesFromEvents([
+      {
+        app_id: 'com.demo.app',
+        device_id: 'device-1',
+        action: 'download_0',
+        version_name: '1.2.3',
+        metadata: null,
+        created_at: '2026-07-02T10:00:00.000Z',
+      },
+      {
+        app_id: 'com.demo.app',
+        device_id: 'device-1',
+        action: 'download_complete',
+        version_name: '1.2.3',
+        metadata: null,
+        created_at: '2026-07-02T10:00:01.500Z',
+      },
+      {
+        app_id: 'com.demo.app',
+        device_id: 'device-2',
+        action: 'download_complete',
+        version_name: '1.2.3',
+        metadata: { duration_ms: '2200' },
+        created_at: '2026-07-02T11:00:00.000Z',
+      },
+    ], { periodStartMs, allowPairing: false })
+
+    expect(samples).toEqual([
+      {
+        day: '2026-07-02',
+        app_id: 'com.demo.app',
+        device_id: 'device-2',
+        duration_ms: 2200,
+      },
     ])
-    const legacy = updateDeliveryStatsCfTestUtils.pairTimingEvents([
-      {
-        app_id: 'com.demo.app',
-        device_id: 'd2',
-        version_name: '1.0.0',
-        action: 'download_0',
-        metadata: '',
-        created_at: '2026-07-01T10:00:00.000Z',
-        double1: null,
-      },
-      {
-        app_id: 'com.demo.app',
-        device_id: 'd2',
-        version_name: '1.0.0',
-        action: 'download_complete',
-        metadata: '',
-        created_at: '2026-07-01T10:00:03.000Z',
-        double1: null,
-      },
-    ], { legacyOnly: true })
-    const merged = updateDeliveryStatsCfTestUtils.mergeDeliveryStats(metadata, legacy)
-    expect(merged.overviewRow.samples).toBe(2)
-    expect(merged.overviewRow.devices).toBe(2)
   })
 
-  it('filters paired ends to the requested period start', () => {
-    const result = updateDeliveryStatsCfTestUtils.pairTimingEvents([
-      {
-        app_id: 'com.demo.app',
-        device_id: 'd1',
-        version_name: '1.0.0',
-        action: 'download_0',
-        metadata: '',
-        created_at: '2026-06-30T23:00:00.000Z',
-        double1: null,
-      },
-      {
-        app_id: 'com.demo.app',
-        device_id: 'd1',
-        version_name: '1.0.0',
-        action: 'download_complete',
-        metadata: '',
-        created_at: '2026-06-30T23:00:02.000Z',
-        double1: null,
-      },
-      {
-        app_id: 'com.demo.app',
-        device_id: 'd2',
-        version_name: '1.0.0',
-        action: 'download_0',
-        metadata: '',
-        created_at: '2026-07-01T10:00:00.000Z',
-        double1: null,
-      },
-      {
-        app_id: 'com.demo.app',
-        device_id: 'd2',
-        version_name: '1.0.0',
-        action: 'download_complete',
-        metadata: '',
-        created_at: '2026-07-01T10:00:02.000Z',
-        double1: null,
-      },
-    ], { periodStartMs: Date.parse('2026-07-01T00:00:00.000Z') })
-    expect(result.overviewRow.samples).toBe(1)
-    expect(result.overviewRow.devices).toBe(1)
-  })
+  it('aggregates daily and overview percentiles from samples', () => {
+    const { dailyRows, overviewRow } = updateDeliveryStatsTestUtils.aggregateDeliverySamples([
+      { day: '2026-07-01', app_id: 'a', device_id: 'd1', duration_ms: 100 },
+      { day: '2026-07-01', app_id: 'a', device_id: 'd2', duration_ms: 300 },
+      { day: '2026-07-02', app_id: 'a', device_id: 'd1', duration_ms: 200 },
+    ])
 
-  it('parses zero-duration metadata', () => {
-    expect(updateDeliveryStatsCfTestUtils.parseDurationFromMetadata('{"duration_ms":"0"}', null)).toBe(0)
+    expect(dailyRows).toHaveLength(2)
+    expect(dailyRows[0]).toMatchObject({ day: '2026-07-01', samples: 2, p50_ms: 200 })
+    expect(overviewRow.samples).toBe(3)
+    expect(overviewRow.devices).toBe(2)
+    expect(overviewRow.p50_ms).toBe(200)
+    expect(updateDeliveryStatsTestUtils.percentileCont([100, 200, 300], 0.5)).toBe(200)
   })
-
 })
