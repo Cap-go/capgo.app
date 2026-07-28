@@ -2584,5 +2584,7 @@
   "version-count": "Versions",
   "view-action-logs": "View action logs",
   "view-logs": "View logs",
-  "last-seen": "Last seen"
+  "last-seen": "Last seen",
+  "start": "Start",
+  "end": "End"
 }
