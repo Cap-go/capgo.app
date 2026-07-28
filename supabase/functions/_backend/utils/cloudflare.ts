@@ -1333,45 +1333,66 @@ export interface NativeObservePluginVersionCF {
   devices: number
 }
 
-export function buildNativeObservePluginVersionsCFQuery(appId: string): string {
-  // No LIMIT here: callers need the full version set to compute total_devices
-  // (same as Postgres window sum), then slice the top N in JS.
+function nativeObservePluginDevicesSubquery(appId: string): string {
   return `SELECT
-  if(plugin_version = '', 'unknown', plugin_version) AS plugin_version,
-  count() AS devices
-FROM (
-  SELECT
     blob1 AS device_id,
     argMax(blob3, timestamp) AS plugin_version,
     argMax(double2, timestamp) AS is_prod,
     argMax(double3, timestamp) AS is_emulator
   FROM device_info
   WHERE index1 = '${escapeSqlString(appId)}'
-  GROUP BY blob1
+  GROUP BY blob1`
+}
+
+export function buildNativeObservePluginVersionsCFQuery(appId: string, limit = 12): string {
+  const safeLimit = normalizeAnalyticsLimit(limit, 12)
+  return `SELECT
+  if(plugin_version = '', 'unknown', plugin_version) AS plugin_version,
+  count() AS devices
+FROM (
+  ${nativeObservePluginDevicesSubquery(appId)}
 )
 WHERE is_prod = 1 AND is_emulator != 1
 GROUP BY plugin_version
-ORDER BY devices DESC, plugin_version ASC`
+ORDER BY devices DESC, plugin_version ASC
+LIMIT ${safeLimit}`
+}
+
+export function buildNativeObservePluginTotalDevicesCFQuery(appId: string): string {
+  return `SELECT
+  count() AS total_devices
+FROM (
+  ${nativeObservePluginDevicesSubquery(appId)}
+)
+WHERE is_prod = 1 AND is_emulator != 1`
 }
 
 export async function readNativeObservePluginVersionsCF(
   c: Context,
   appId: string,
-): Promise<NativeObservePluginVersionCF[]> {
+  limit = 12,
+): Promise<{ rows: NativeObservePluginVersionCF[], total_devices: number }> {
   if (!c.env.DEVICE_INFO)
-    return []
+    return { rows: [], total_devices: 0 }
 
-  const query = buildNativeObservePluginVersionsCFQuery(appId)
-  cloudlog({ requestId: c.get('requestId'), message: 'readNativeObservePluginVersionsCF query', query })
+  const versionsQuery = buildNativeObservePluginVersionsCFQuery(appId, limit)
+  const totalQuery = buildNativeObservePluginTotalDevicesCFQuery(appId)
+  cloudlog({ requestId: c.get('requestId'), message: 'readNativeObservePluginVersionsCF query', versionsQuery, totalQuery })
   try {
-    const rows = await runQueryToCFA<{ plugin_version: string, devices: number }>(c, query)
-    return rows.map(row => ({
-      plugin_version: row.plugin_version || 'unknown',
-      devices: Number(row.devices) || 0,
-    }))
+    const [rows, totalRows] = await Promise.all([
+      runQueryToCFA<{ plugin_version: string, devices: number }>(c, versionsQuery),
+      runQueryToCFA<{ total_devices: number }>(c, totalQuery),
+    ])
+    return {
+      rows: rows.map(row => ({
+        plugin_version: row.plugin_version || 'unknown',
+        devices: Number(row.devices) || 0,
+      })),
+      total_devices: Number(totalRows[0]?.total_devices) || 0,
+    }
   }
   catch (e) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading native observe plugin versions', error: serializeError(e), query })
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading native observe plugin versions', error: serializeError(e), versionsQuery, totalQuery })
     throw e
   }
 }

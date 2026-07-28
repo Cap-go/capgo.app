@@ -318,6 +318,20 @@ function percentileCont(sorted: number[], q: number): number | null {
   return sorted[lower]! * (1 - weight) + sorted[upper]! * weight
 }
 
+// Cap duration samples kept for percentiles so one busy app cannot pin unbounded arrays.
+const MAX_DURATION_SAMPLES = 10_000
+
+function pushDurationSample(target: number[], value: number) {
+  if (target.length < MAX_DURATION_SAMPLES) {
+    target.push(value)
+    return
+  }
+  // Reservoir sample so later days still influence percentiles.
+  const index = Math.floor(Math.random() * (target.length + 1))
+  if (index < target.length)
+    target[index] = value
+}
+
 function metricFromDurations(durations: number[]): Pick<NativeObserveMetricRow, 'p50_ms' | 'p90_ms' | 'p99_ms'> {
   const sorted = [...durations].sort((a, b) => a - b)
   return {
@@ -390,23 +404,23 @@ function foldNativeObserveSamples(state: NativeObserveAggregateState, samples: N
     if (sample.action === 'app_launch_timeout')
       state.launchTimeoutCount += 1
     if (sample.action === launchReadyAction && sample.duration_ms !== null)
-      state.launchDurations.push(sample.duration_ms)
+      pushDurationSample(state.launchDurations, sample.duration_ms)
     if (sample.action === webviewPageLoadedAction && sample.duration_ms !== null)
-      state.webviewDurations.push(sample.duration_ms)
+      pushDurationSample(state.webviewDurations, sample.duration_ms)
 
     const dailyKey = `${sample.day}\0${sample.action}`
     const daily = state.dailyMap.get(dailyKey) ?? { events: 0, devices: new Set<string>(), durations: [] }
     daily.events += 1
     daily.devices.add(sample.device_id)
     if (sample.duration_ms !== null)
-      daily.durations.push(sample.duration_ms)
+      pushDurationSample(daily.durations, sample.duration_ms)
     state.dailyMap.set(dailyKey, daily)
 
     const action = state.actionMap.get(sample.action) ?? { events: 0, devices: new Set<string>(), durations: [] }
     action.events += 1
     action.devices.add(sample.device_id)
     if (sample.duration_ms !== null)
-      action.durations.push(sample.duration_ms)
+      pushDurationSample(action.durations, sample.duration_ms)
     state.actionMap.set(sample.action, action)
 
     const version = state.versionMap.get(sample.version_name) ?? {
@@ -424,9 +438,9 @@ function foldNativeObserveSamples(state: NativeObserveAggregateState, samples: N
       version.issueDevices.add(sample.device_id)
     }
     if (sample.action === launchReadyAction && sample.duration_ms !== null)
-      version.launchDurations.push(sample.duration_ms)
+      pushDurationSample(version.launchDurations, sample.duration_ms)
     if (sample.action === webviewPageLoadedAction && sample.duration_ms !== null)
-      version.webviewDurations.push(sample.duration_ms)
+      pushDurationSample(version.webviewDurations, sample.duration_ms)
     state.versionMap.set(sample.version_name, version)
   }
 }
@@ -649,6 +663,8 @@ async function readReleaseMarkers(
   }
 }
 
+const MAX_NATIVE_OBSERVE_EVENTS = 100_000
+
 async function foldNativeObserveTimingEventsCFChunked(
   c: Context<MiddlewareKeyVariables>,
   appId: string,
@@ -660,7 +676,7 @@ async function foldNativeObserveTimingEventsCFChunked(
   let cursor = start.utc().startOf('day')
   const end = endExclusive.utc()
 
-  while (cursor.isBefore(end)) {
+  while (cursor.isBefore(end) && state.events < MAX_NATIVE_OBSERVE_EVENTS) {
     const next = cursor.add(1, 'day')
     const chunkEnd = next.isBefore(end) ? next : end
     const chunk = await readUpdateDeliveryTimingEventsCF(c, {
@@ -668,6 +684,7 @@ async function foldNativeObserveTimingEventsCFChunked(
       end_date: chunkEnd.toISOString(),
       actions: [...nativeObserveActions],
       app_ids: [appId],
+      limit: Math.min(50_000, MAX_NATIVE_OBSERVE_EVENTS - state.events),
     })
     foldNativeObserveSamples(state, toNativeObserveEventSamples(chunk))
     cursor = next
@@ -789,13 +806,11 @@ async function readNativeObservePluginStatsSB(c: Context<MiddlewareKeyVariables>
 }
 
 async function readNativeObservePluginStatsCF(c: Context<MiddlewareKeyVariables>, appId: string) {
-  const rows = await readNativeObservePluginVersionsCF(c, appId)
-  // Sum every version before slicing top 12 so shares match Postgres window total.
-  const totalDevices = rows.reduce((sum, row) => sum + (Number(row.devices) || 0), 0)
-  return buildNativeObservePluginResponse(rows.slice(0, 12).map(row => ({
+  const { rows, total_devices } = await readNativeObservePluginVersionsCF(c, appId)
+  return buildNativeObservePluginResponse(rows.map(row => ({
     plugin_version: row.plugin_version,
     devices: row.devices,
-    total_devices: totalDevices,
+    total_devices,
   })))
 }
 
