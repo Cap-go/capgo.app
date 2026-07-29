@@ -1,7 +1,7 @@
 import type { Database } from '../src/types/supabase.types'
 import { describe, expect, it } from 'vitest'
 import { useDeviceUpdateFormat } from '../src/composables/useDeviceUpdateFormat'
-import { filterDeviceKeys } from '../supabase/functions/_backend/public/device/get.ts'
+import { filterDeviceKeys, parseCustomIdFilter } from '../supabase/functions/_backend/public/device/get.ts'
 
 type DeviceRow = Database['public']['Tables']['devices']['Row']
 
@@ -90,5 +90,19 @@ describe('device update format helpers', () => {
       device_id: '31de6a5e-80a9-4348-9af1-31e1e9562583',
       install_source: 'app_store',
     })
+  })
+})
+
+describe('parseCustomIdFilter', () => {
+  it.concurrent('treats undefined as omitted', () => {
+    expect(parseCustomIdFilter(undefined)).toBeUndefined()
+  })
+
+  it.concurrent('rejects null custom_id', () => {
+    expect(() => parseCustomIdFilter(null)).toThrowError(/custom_id must be a string|invalid_custom_id/)
+  })
+
+  it.concurrent('trims and returns a valid custom_id', () => {
+    expect(parseCustomIdFilter('  user-123  ')).toBe('user-123')
   })
 })

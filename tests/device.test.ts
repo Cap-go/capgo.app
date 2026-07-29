@@ -198,6 +198,7 @@ describe('[GET] /device custom_id filter', () => {
     expect(response.status).toBe(400)
     expect(data.error).toBe('invalid_custom_id')
   })
+
 })
 
 

@@ -12,7 +12,7 @@ interface GetDevice {
   app_id: string
   device_id?: string
   /** Exact custom_id match (trimmed). Returns the paginated list shape. */
-  custom_id?: string
+  custom_id?: string | null
   customIdMode?: boolean
   /** Cursor for pagination - pass nextCursor from previous response */
   cursor?: string
@@ -92,8 +92,9 @@ function parseDevicesOrder(order: string | undefined) {
   return [{ key: 'updated_at', sortable: order as 'asc' | 'desc' }]
 }
 
-function parseCustomIdFilter(customId: string | undefined): string | undefined {
-  if (customId == null)
+export function parseCustomIdFilter(customId: string | null | undefined): string | undefined {
+  // Only omit when the query/body field is absent. Explicit null must fail validation.
+  if (customId === undefined)
     return undefined
   if (typeof customId !== 'string')
     throw simpleError('invalid_custom_id', 'custom_id must be a string', { custom_id: customId })
