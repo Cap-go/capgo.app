@@ -14,6 +14,7 @@ import IconTrash from '~icons/heroicons/trash'
 import { formatDate } from '~/services/date'
 import { checkPermissions } from '~/services/permissions'
 import { useSupabase } from '~/services/supabase'
+import { refetchIfPageOutOfRange } from '~/services/tablePagination'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
@@ -134,14 +135,8 @@ async function getData() {
     if (!dataVersions)
       return
     total.value = count ?? 0
-    const maxPage = Math.max(1, Math.ceil(total.value / offset))
-    if (currentPage.value > maxPage) {
-      currentPage.value = maxPage
-      // Await the clamped-page refetch so isLoading stays true until fresh rows
-      // arrive (e.g. after deletes shrink the last page away).
-      await getData()
+    if (await refetchIfPageOutOfRange(currentPage, total.value, offset, getData))
       return
-    }
     elements.value.length = 0
     elements.value.push(...dataVersions as any)
     if (count === 0) {
