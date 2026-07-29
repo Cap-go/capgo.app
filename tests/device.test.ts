@@ -67,6 +67,136 @@ describe.concurrent('[GET] /device operations', () => {
   })
 })
 
+describe('[GET] /device custom_id filter', () => {
+  it('returns devices matching an exact custom_id', async () => {
+    const supabase = getSupabaseClient()
+    const customId = `custom-${randomUUID().slice(0, 8)}`
+    const matchingDeviceId = randomUUID().toLowerCase()
+    const otherDeviceId = randomUUID().toLowerCase()
+
+    const { error: insertError } = await supabase.from('devices').upsert([
+      {
+        app_id: APPNAME_DEVICE,
+        device_id: matchingDeviceId,
+        platform: 'ios',
+        plugin_version: '6.0.0',
+        os_version: '17.0',
+        version_build: '1.0.0',
+        version_name: '1.0.0',
+        custom_id: customId,
+        is_prod: true,
+        is_emulator: false,
+      },
+      {
+        app_id: APPNAME_DEVICE,
+        device_id: otherDeviceId,
+        platform: 'android',
+        plugin_version: '6.0.0',
+        os_version: '14',
+        version_build: '1.0.0',
+        version_name: '1.0.0',
+        custom_id: `other-${customId}`,
+        is_prod: true,
+        is_emulator: false,
+      },
+    ])
+    expect(insertError).toBeNull()
+
+    const params = new URLSearchParams({
+      app_id: APPNAME_DEVICE,
+      custom_id: customId,
+    })
+    const response = await fetch(`${BASE_URL}/device?${params.toString()}`, {
+      method: 'GET',
+      headers,
+    })
+    const data = await response.json<{ data: { device_id: string, custom_id: string }[], error?: string }>()
+    expect(response.status).toBe(200)
+    expect(data.error).toBeUndefined()
+    expect(data.data.length).toBeGreaterThanOrEqual(1)
+    expect(data.data.every(device => device.custom_id === customId)).toBe(true)
+    expect(data.data.some(device => device.device_id === matchingDeviceId)).toBe(true)
+    expect(data.data.some(device => device.device_id === otherDeviceId)).toBe(false)
+  })
+
+  it('trims custom_id before matching', async () => {
+    const supabase = getSupabaseClient()
+    const customId = `trim-${randomUUID().slice(0, 8)}`
+    const deviceId = randomUUID().toLowerCase()
+
+    const { error: insertError } = await supabase.from('devices').upsert({
+      app_id: APPNAME_DEVICE,
+      device_id: deviceId,
+      platform: 'ios',
+      plugin_version: '6.0.0',
+      os_version: '17.0',
+      version_build: '1.0.0',
+      version_name: '1.0.0',
+      custom_id: customId,
+      is_prod: true,
+      is_emulator: false,
+    })
+    expect(insertError).toBeNull()
+
+    const params = new URLSearchParams({
+      app_id: APPNAME_DEVICE,
+      custom_id: `  ${customId}  `,
+    })
+    const response = await fetch(`${BASE_URL}/device?${params.toString()}`, {
+      method: 'GET',
+      headers,
+    })
+    const data = await response.json<{ data: { device_id: string, custom_id: string }[], error?: string }>()
+    expect(response.status).toBe(200)
+    expect(data.error).toBeUndefined()
+    expect(data.data.some(device => device.device_id === deviceId && device.custom_id === customId)).toBe(true)
+  })
+
+  it('returns an empty list when custom_id has no matches', async () => {
+    const params = new URLSearchParams({
+      app_id: APPNAME_DEVICE,
+      custom_id: `missing-${randomUUID().slice(0, 8)}`,
+    })
+    const response = await fetch(`${BASE_URL}/device?${params.toString()}`, {
+      method: 'GET',
+      headers,
+    })
+    const data = await response.json<{ data: unknown[], hasMore: boolean, error?: string }>()
+    expect(response.status).toBe(200)
+    expect(data.error).toBeUndefined()
+    expect(data.data).toEqual([])
+    expect(data.hasMore).toBe(false)
+  })
+
+  it('rejects empty custom_id', async () => {
+    const params = new URLSearchParams({
+      app_id: APPNAME_DEVICE,
+      custom_id: '   ',
+    })
+    const response = await fetch(`${BASE_URL}/device?${params.toString()}`, {
+      method: 'GET',
+      headers,
+    })
+    const data = await response.json<{ error?: string }>()
+    expect(response.status).toBe(400)
+    expect(data.error).toBe('invalid_custom_id')
+  })
+
+  it('rejects custom_id longer than 36 characters', async () => {
+    const params = new URLSearchParams({
+      app_id: APPNAME_DEVICE,
+      custom_id: 'a'.repeat(37),
+    })
+    const response = await fetch(`${BASE_URL}/device?${params.toString()}`, {
+      method: 'GET',
+      headers,
+    })
+    const data = await response.json<{ error?: string }>()
+    expect(response.status).toBe(400)
+    expect(data.error).toBe('invalid_custom_id')
+  })
+})
+
 
 describe('[GET] /device updated_at filter and order', () => {
   it('filters devices by updated_at greater than ISO date', async () => {

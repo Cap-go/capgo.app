@@ -131,6 +131,8 @@ export interface ReadDevicesParams {
   app_id: string
   version_name?: string | undefined
   deviceIds?: string[]
+  /** Exact custom_id match filter (case-sensitive, already trimmed by callers) */
+  customIds?: string[]
   installSources?: string[]
   search?: string
   order?: Order[]

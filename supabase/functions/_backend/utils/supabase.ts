@@ -1512,6 +1512,14 @@ export async function readDevicesSB(c: Context, params: ReadDevicesParams, custo
       query = query.in('device_id', params.deviceIds)
   }
 
+  if (params.customIds?.length) {
+    cloudlog({ requestId: c.get('requestId'), message: 'customIds', customIds: params.customIds })
+    if (params.customIds.length === 1)
+      query = query.eq('custom_id', params.customIds[0])
+    else
+      query = query.in('custom_id', params.customIds)
+  }
+
   if (params.search) {
     cloudlog({ requestId: c.get('requestId'), message: 'search', search: params.search })
     const searchPattern = buildIlikeContainsPattern(params.search)
