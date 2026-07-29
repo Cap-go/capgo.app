@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(28); -- includes appid overload + foreign-key denial cases
+SELECT plan(29); -- includes appid overload + org-key-with-appid + foreign denial
 
 -- Member of admin org can read billing/trial RPCs
 SELECT tests.authenticate_as('test_admin');
@@ -304,6 +304,21 @@ SELECT
             WHERE id = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'
         ),
         'has_usage_credits_org - org-scoped API key can read credit flag'
+    );
+
+-- Org-scoped keys still work when CLI passes appid (org-read OR app-read)
+SELECT
+    is(
+        public.has_usage_credits_org(
+            '046a36ac-e03c-4590-9257-bd6c9dba9ee8',
+            'com.demo.app'
+        ),
+        (
+            SELECT has_usage_credits
+            FROM public.orgs
+            WHERE id = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'
+        ),
+        'has_usage_credits_org - org-scoped API key with appid still reads via org access'
     );
 
 -- App-scoped overload: key with app_read on the target app can read flags.
