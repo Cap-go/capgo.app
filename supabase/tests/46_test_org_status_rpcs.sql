@@ -306,18 +306,17 @@ SELECT
         'has_usage_credits_org - org-scoped API key can read credit flag'
     );
 
--- Truly app-scoped key (no org role binding) for credit/trial/paying RPCs
+-- Strip org bindings from the seeded admin app uploader key so it is truly
+-- app-scoped for this transaction (rolled back at the end of the test).
 SELECT tests.authenticate_as_service_role();
-SELECT tests.create_v2_apikey(
-    46001,
-    tests.get_supabase_uid('test_admin'),
-    'org-status-app-only-key',
-    'org status app-only uploader',
-    '22dbad8a-b885-4309-9b3b-a09f8460fb6d'::uuid,
-    NULL, -- no org binding
-    'com.demoadmin.app',
-    public.rbac_role_app_uploader()
-);
+DELETE FROM public.role_bindings
+WHERE principal_type = public.rbac_principal_apikey()
+  AND principal_id = (
+    SELECT rbac_id
+    FROM public.apikeys
+    WHERE key = 'c591b04e-cf29-4945-b9a0-776d0672061e'
+  )
+  AND scope_type = public.rbac_scope_org();
 
 SELECT tests.clear_authentication();
 DO $$
@@ -325,7 +324,7 @@ BEGIN
     PERFORM set_config('request.jwt.claims', '{}', true);
     PERFORM set_config('request.jwt.claim.sub', '', true);
     PERFORM set_config('request.jwt.claim.role', 'anon', true);
-    PERFORM set_config('request.headers', '{"capgkey": "org-status-app-only-key"}', true);
+    PERFORM set_config('request.headers', '{"capgkey": "c591b04e-cf29-4945-b9a0-776d0672061e"}', true);
 END $$;
 
 SELECT
