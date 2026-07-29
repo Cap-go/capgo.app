@@ -14,6 +14,7 @@ import {
   getAllNotificationBuckets,
   getNotificationBucket,
   getNotificationDeliveryEventId,
+  MAX_ORG_NOTIFICATION_STATS_APPS,
   normalizeNotificationTag,
   readNotificationBadgeStateCF,
   readNotificationRegistrationsCF,
@@ -628,14 +629,14 @@ app.post('/events', async (c) => {
   const occurredAt = typeof body.occurredAt === 'string' ? body.occurredAt.trim().slice(0, 64) : ''
   const validProof = CLIENT_NOTIFICATION_DELIVERY_EVENTS.has(body.event)
     ? campaignId && notificationId && await verifyNotificationDeliveryEventProof(c, {
-        appId,
-        recipientKey,
-        deviceKey,
-        campaignId,
-        notificationId,
-        event: body.event,
-        proof: eventProof,
-      })
+      appId,
+      recipientKey,
+      deviceKey,
+      campaignId,
+      notificationId,
+      event: body.event,
+      proof: eventProof,
+    })
     : await verifyNotificationEventProof(c, appId, recipientKey, deviceKey, eventProof)
   if (!validProof)
     throw quickError(401, 'invalid_notification_event_proof', 'Invalid notification event proof', { appId })
@@ -893,21 +894,6 @@ async function readOrgNotificationOverview(c: Context<MiddlewareKeyVariables>, o
   }
 }
 
-function mergeNotificationStats(rows: Array<{ event: string, count: number }>[]) {
-  const totals = new Map<string, number>()
-  for (const batch of rows) {
-    for (const row of batch) {
-      const event = String(row.event || '')
-      if (!event)
-        continue
-      totals.set(event, (totals.get(event) ?? 0) + Number(row.count || 0))
-    }
-  }
-  return [...totals.entries()]
-    .map(([event, count]) => ({ event, count }))
-    .sort((a, b) => b.count - a.count)
-}
-
 app.get('/stats', middlewareKey(), async (c) => {
   const orgIdRaw = c.req.query('org_id')
   const appIdRaw = c.req.query('app_id')
@@ -922,21 +908,23 @@ app.get('/stats', middlewareKey(), async (c) => {
       throw simpleError('invalid_body', 'campaign_id is not supported for org stats', { field: 'campaign_id' })
 
     const overview = await readOrgNotificationOverview(c, orgId)
-    const batches: Array<{ event: string, count: number }>[] = []
-    const concurrency = 8
-    for (let i = 0; i < overview.appIds.length; i += concurrency) {
-      const chunk = overview.appIds.slice(i, i + concurrency)
-      const chunkRows = await Promise.all(
-        chunk.map(appId => readNotificationStatsCF(c, { appId, days })),
-      )
-      batches.push(...chunkRows)
+    const appIds = overview.appIds.slice(0, MAX_ORG_NOTIFICATION_STATS_APPS)
+    let data: Array<{ event: string, count: number }> = []
+    if (appIds.length) {
+      try {
+        data = await readNotificationStatsCF(c, { appIds, days, throwOnError: true })
+      }
+      catch (error) {
+        throw quickError(503, 'notification_stats_unavailable', 'Failed to load organization notification stats', { org_id: orgId }, error)
+      }
     }
-    const data = mergeNotificationStats(batches)
     const totalEvents = data.reduce((sum, item) => sum + Number(item.count || 0), 0)
     return c.json({
       data,
       overview: {
         apps: overview.apps,
+        apps_queried: appIds.length,
+        apps_truncated: overview.appIds.length > appIds.length,
         campaigns: overview.campaigns,
         configured_providers: overview.configured_providers,
         total_events: totalEvents,

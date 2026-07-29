@@ -195,6 +195,20 @@ describe('native notification AE registry', () => {
     expect(query).toContain('GROUP BY blob1')
   })
 
+  it.concurrent('builds org notification stats query across multiple app indexes', () => {
+    const query = buildNotificationStatsQuery({
+      dataset: 'notification_events',
+      appIds: ['com.demo.app', 'com.demo.app2'],
+      days: 7,
+      now: new Date('2026-05-06T00:00:00Z'),
+    })
+
+    expect(query).toContain('FROM notification_events')
+    expect(query).toContain("(index1 = 'com.demo.app' OR startsWith(index1, 'com.demo.app:'))")
+    expect(query).toContain("(index1 = 'com.demo.app2' OR startsWith(index1, 'com.demo.app2:'))")
+    expect(query).toContain('GROUP BY blob1')
+  })
+
   it.concurrent('builds latest desired badge lookup from AE event rows', () => {
     const query = buildNotificationBadgeStateQuery({
       dataset: 'notification_events',

@@ -46,6 +46,7 @@ const overview = ref<OrgNotificationStatsResponse['overview']>({
 })
 const loading = ref(false)
 const error = ref(false)
+let latestRequest = 0
 
 const hasStats = computed(() => stats.value.length > 0)
 
@@ -86,6 +87,7 @@ async function fetchStats() {
   if (props.forceDemo)
     return
   if (!props.orgId) {
+    latestRequest += 1
     stats.value = []
     overview.value = { apps: 0, campaigns: 0, configured_providers: 0, total_events: 0 }
     error.value = false
@@ -93,14 +95,18 @@ async function fetchStats() {
     return
   }
 
+  const requestId = ++latestRequest
   loading.value = true
   error.value = false
   try {
     const { data: sessionData } = await supabase.auth.getSession()
     const token = sessionData.session?.access_token
     if (!token) {
-      error.value = true
-      toast.error(t('not-authenticated'))
+      if (requestId === latestRequest) {
+        error.value = true
+        toast.error(t('not-authenticated'))
+        loading.value = false
+      }
       return
     }
 
@@ -113,10 +119,14 @@ async function fetchStats() {
         },
       },
     )
+    if (requestId !== latestRequest)
+      return
     if (!response.ok)
       throw new Error(await response.text())
 
     const body = await response.json() as OrgNotificationStatsResponse
+    if (requestId !== latestRequest)
+      return
     stats.value = body.data ?? []
     overview.value = body.overview ?? {
       apps: 0,
@@ -126,13 +136,16 @@ async function fetchStats() {
     }
   }
   catch (err) {
+    if (requestId !== latestRequest)
+      return
     console.error(err)
     error.value = true
     stats.value = []
     overview.value = { apps: 0, campaigns: 0, configured_providers: 0, total_events: 0 }
   }
   finally {
-    loading.value = false
+    if (requestId === latestRequest)
+      loading.value = false
   }
 }
 
