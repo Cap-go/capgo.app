@@ -133,10 +133,17 @@ async function getData() {
     const { data: dataVersions, count } = await req
     if (!dataVersions)
       return
+    total.value = count ?? 0
+    const maxPage = Math.max(1, Math.ceil(total.value / offset))
+    if (currentPage.value > maxPage) {
+      currentPage.value = maxPage
+      // Await the clamped-page refetch so isLoading stays true until fresh rows
+      // arrive (e.g. after deletes shrink the last page away).
+      await getData()
+      return
+    }
     elements.value.length = 0
     elements.value.push(...dataVersions as any)
-    // console.log('count', count)
-    total.value = count ?? 0
     if (count === 0) {
       showAddModal()
     }
@@ -166,16 +173,13 @@ async function getData() {
   isLoading.value = false
 }
 async function refreshData(keepCurrentPage = false) {
-  // console.log('refreshData')
   try {
-    const page = currentPage.value
     if (!keepCurrentPage)
       currentPage.value = 1
 
     elements.value.length = 0
+    // getData clamps currentPage when deletes leave it past the last page
     await getData()
-    if (keepCurrentPage)
-      currentPage.value = page
   }
   catch (error) {
     console.error(error)
