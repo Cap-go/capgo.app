@@ -2,6 +2,36 @@
 -- authorization-aware SECURITY DEFINER RPCs so app-scoped API keys (and other
 -- callers that cannot SELECT orgs via RLS) can still read the flags.
 
+-- Shared auth: org read, or app read when appid is provided (org-only keys keep
+-- working when the CLI passes appId).
+CREATE OR REPLACE FUNCTION "public"."request_has_org_or_app_read_access"("orgid" "uuid", "appid" character varying)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+  IF public.request_has_org_read_access(orgid) THEN
+    RETURN true;
+  END IF;
+
+  IF appid IS NOT NULL AND public.request_has_app_read_access(orgid, appid) THEN
+    RETURN true;
+  END IF;
+
+  RETURN false;
+END;
+$$;
+
+ALTER FUNCTION public.request_has_org_or_app_read_access(uuid, character varying) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.request_has_org_or_app_read_access(uuid, character varying) FROM PUBLIC;
+GRANT ALL ON FUNCTION public.request_has_org_or_app_read_access(uuid, character varying) TO anon;
+GRANT ALL ON FUNCTION public.request_has_org_or_app_read_access(uuid, character varying) TO authenticated;
+GRANT ALL ON FUNCTION public.request_has_org_or_app_read_access(uuid, character varying) TO service_role;
+
+COMMENT ON FUNCTION public.request_has_org_or_app_read_access(uuid, character varying) IS
+  'True when the request has org read access, or app read access for appid within orgid. Used by CLI billing/credit status RPCs.';
+
 -- Add app-scoped overloads for existing plan-status RPCs used by the CLI.
 CREATE OR REPLACE FUNCTION "public"."is_paying_org"("orgid" "uuid", "appid" character varying)
 RETURNS boolean
@@ -15,16 +45,7 @@ BEGIN
   SELECT public.current_request_role() INTO caller_role;
 
   IF NOT public.is_internal_request_role(caller_role) THEN
-    IF appid IS NOT NULL THEN
-      IF NOT public.rbac_check_permission_request(
-        public.rbac_perm_app_read(),
-        orgid,
-        appid,
-        NULL::bigint
-      ) THEN
-        RETURN false;
-      END IF;
-    ELSIF NOT public.request_has_org_read_access(orgid) THEN
+    IF NOT public.request_has_org_or_app_read_access(orgid, appid) THEN
       RETURN false;
     END IF;
   END IF;
@@ -69,16 +90,7 @@ BEGIN
   SELECT public.current_request_role() INTO caller_role;
 
   IF NOT public.is_internal_request_role(caller_role) THEN
-    IF appid IS NOT NULL THEN
-      IF NOT public.rbac_check_permission_request(
-        public.rbac_perm_app_read(),
-        orgid,
-        appid,
-        NULL::bigint
-      ) THEN
-        RETURN 0;
-      END IF;
-    ELSIF NOT public.request_has_org_read_access(orgid) THEN
+    IF NOT public.request_has_org_or_app_read_access(orgid, appid) THEN
       RETURN 0;
     END IF;
   END IF;
@@ -124,16 +136,7 @@ BEGIN
   SELECT public.current_request_role() INTO caller_role;
 
   IF NOT public.is_internal_request_role(caller_role) THEN
-    IF appid IS NOT NULL THEN
-      IF NOT public.rbac_check_permission_request(
-        public.rbac_perm_app_read(),
-        orgid,
-        appid,
-        NULL::bigint
-      ) THEN
-        RETURN false;
-      END IF;
-    ELSIF NOT public.request_has_org_read_access(orgid) THEN
+    IF NOT public.request_has_org_or_app_read_access(orgid, appid) THEN
       RETURN false;
     END IF;
   END IF;
