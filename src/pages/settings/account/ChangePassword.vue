@@ -238,18 +238,16 @@ async function submit(form: { current_password: string, password: string, passwo
 
   isLoading.value = false
   if (updateError) {
-    if (
-      updateError.code === 'current_password_required'
-      || updateError.code === 'reauthentication_needed'
-      || updateError.code === 'reauthentication_not_valid'
-      || updateError.message.toLowerCase().includes('current password')
-    ) {
+    // Auth error codes from GoTrue user update (do not match on message text —
+    // current_password_mismatch reuses the same message as current_password_required).
+    if (updateError.code === 'current_password_required' || updateError.code === 'reauthentication_needed') {
       reportPasswordUpdateError(t('current-password-required'))
       return
     }
     if (
-      updateError.code === 'invalid_credentials'
-      || updateError.message.toLowerCase().includes('invalid')
+      updateError.code === 'current_password_mismatch'
+      || updateError.code === 'reauthentication_not_valid'
+      || updateError.code === 'invalid_credentials'
     ) {
       reportPasswordUpdateError(t('invalid-password'))
       return
