@@ -306,10 +306,26 @@ SELECT
         'has_usage_credits_org - org-scoped API key can read credit flag'
     );
 
--- App-scoped uploader key cannot read via org-only overload
+-- Truly app-scoped key (no org role binding) for credit/trial/paying RPCs
+SELECT tests.authenticate_as_service_role();
+SELECT tests.create_v2_apikey(
+    46001,
+    tests.get_supabase_uid('test_admin'),
+    'org-status-app-only-key',
+    'org status app-only uploader',
+    '22dbad8a-b885-4309-9b3b-a09f8460fb6d'::uuid,
+    NULL, -- no org binding
+    'com.demoadmin.app',
+    public.rbac_role_app_uploader()
+);
+
+SELECT tests.clear_authentication();
 DO $$
 BEGIN
-    PERFORM set_config('request.headers', '{"capgkey": "c591b04e-cf29-4945-b9a0-776d0672061e"}', true);
+    PERFORM set_config('request.jwt.claims', '{}', true);
+    PERFORM set_config('request.jwt.claim.sub', '', true);
+    PERFORM set_config('request.jwt.claim.role', 'anon', true);
+    PERFORM set_config('request.headers', '{"capgkey": "org-status-app-only-key"}', true);
 END $$;
 
 SELECT
@@ -319,7 +335,6 @@ SELECT
         'has_usage_credits_org - app-scoped API key without appid gets false'
     );
 
--- Same app-scoped key can read when appid is provided
 SELECT
     is(
         public.has_usage_credits_org(
@@ -334,7 +349,6 @@ SELECT
         'has_usage_credits_org - app-scoped API key with appid can read credit flag'
     );
 
--- App-scoped overloads for trial/paying also accept app bindings
 SELECT
     is(
         public.is_paying_org(
