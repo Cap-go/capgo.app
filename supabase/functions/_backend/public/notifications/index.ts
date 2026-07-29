@@ -908,23 +908,33 @@ app.get('/stats', middlewareKey(), async (c) => {
       throw simpleError('invalid_body', 'campaign_id is not supported for org stats', { field: 'campaign_id' })
 
     const overview = await readOrgNotificationOverview(c, orgId)
-    const appIds = overview.appIds.slice(0, MAX_ORG_NOTIFICATION_STATS_APPS)
-    let data: Array<{ event: string, count: number }> = []
-    if (appIds.length) {
-      try {
-        data = await readNotificationStatsCF(c, { appIds, days, throwOnError: true })
-      }
-      catch (error) {
-        throw quickError(503, 'notification_stats_unavailable', 'Failed to load organization notification stats', { org_id: orgId }, error)
+    const totals = new Map<string, number>()
+    try {
+      for (let i = 0; i < overview.appIds.length; i += MAX_ORG_NOTIFICATION_STATS_APPS) {
+        const appIds = overview.appIds.slice(i, i + MAX_ORG_NOTIFICATION_STATS_APPS)
+        if (!appIds.length)
+          continue
+        const rows = await readNotificationStatsCF(c, { appIds, days, throwOnError: true })
+        for (const row of rows) {
+          const event = String(row.event || '')
+          if (!event)
+            continue
+          totals.set(event, (totals.get(event) ?? 0) + Number(row.count || 0))
+        }
       }
     }
+    catch (error) {
+      throw quickError(503, 'notification_stats_unavailable', 'Failed to load organization notification stats', { org_id: orgId }, error)
+    }
+    const data = [...totals.entries()]
+      .map(([event, count]) => ({ event, count }))
+      .sort((a, b) => b.count - a.count)
     const totalEvents = data.reduce((sum, item) => sum + Number(item.count || 0), 0)
     return c.json({
       data,
       overview: {
         apps: overview.apps,
-        apps_queried: appIds.length,
-        apps_truncated: overview.appIds.length > appIds.length,
+        apps_queried: overview.appIds.length,
         campaigns: overview.campaigns,
         configured_providers: overview.configured_providers,
         total_events: totalEvents,
