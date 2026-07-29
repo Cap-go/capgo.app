@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm'
+import { z } from 'zod'
 import { createHono, parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import {
@@ -56,10 +57,10 @@ async function readOrgNotificationOverview(c: Parameters<typeof getPgClient>[0],
 
 app.post('/', middlewareAuth, async (c) => {
   const body = await parseBody<OrgNotificationStatsBody>(c)
-  if (!body.org_id)
+  if (typeof body.org_id !== 'string' || !body.org_id.trim())
     throw simpleError('missing_params', 'org_id is required')
   const orgId = body.org_id.trim()
-  if (!orgId || orgId.length > 64)
+  if (!z.uuid().safeParse(orgId).success)
     throw simpleError('invalid_body', 'Invalid body', { field: 'org_id' })
   if (!(await checkPermission(c, 'org.read', { orgId })))
     throw quickError(403, 'org_access_denied', 'You can\'t access this organization', { org_id: orgId })
