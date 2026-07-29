@@ -4579,6 +4579,9 @@ export type Database = {
         Returns: boolean
       }
       has_seeded_demo_data: { Args: { p_app_id: string }; Returns: boolean }
+      has_usage_credits_org:
+        | { Args: { orgid: string }; Returns: boolean }
+        | { Args: { appid: string; orgid: string }; Returns: boolean }
       internal_request_db_user_names: { Args: never; Returns: string[] }
       internal_request_role_names: { Args: never; Returns: string[] }
       invite_user_to_org_rbac: {
@@ -4683,7 +4686,9 @@ export type Database = {
             }
             Returns: boolean
           }
-      is_paying_org: { Args: { orgid: string }; Returns: boolean }
+      is_paying_org:
+        | { Args: { orgid: string }; Returns: boolean }
+        | { Args: { appid: string; orgid: string }; Returns: boolean }
       is_platform_admin:
         | { Args: never; Returns: boolean }
         | { Args: { userid: string }; Returns: boolean }
@@ -4693,7 +4698,9 @@ export type Database = {
         Returns: boolean
       }
       is_storage_exceeded_by_org: { Args: { org_id: string }; Returns: boolean }
-      is_trial_org: { Args: { orgid: string }; Returns: number }
+      is_trial_org:
+        | { Args: { orgid: string }; Returns: number }
+        | { Args: { appid: string; orgid: string }; Returns: number }
       is_user_app_admin: {
         Args: { p_app_id: string; p_user_id: string }
         Returns: boolean

@@ -800,27 +800,28 @@ export async function createSupabaseClient(apikey: string, supaHost?: string, su
   })
 }
 
-export async function isPayingOrg(supabase: SupabaseClient<Database>, orgId: string): Promise<boolean> {
+export async function isPayingOrg(supabase: SupabaseClient<Database>, orgId: string, appId?: string): Promise<boolean> {
+  // Pass appid so app-scoped API keys can read billing state (2-arg overload).
   const { data } = await supabase
-    .rpc('is_paying_org', { orgid: orgId })
+    .rpc('is_paying_org', appId ? { orgid: orgId, appid: appId } : { orgid: orgId })
     .single()
   return data || false
 }
 
-export async function isTrialOrg(supabase: SupabaseClient<Database>, orgId: string): Promise<number> {
+export async function isTrialOrg(supabase: SupabaseClient<Database>, orgId: string, appId?: string): Promise<number> {
   const { data } = await supabase
-    .rpc('is_trial_org', { orgid: orgId })
+    .rpc('is_trial_org', appId ? { orgid: orgId, appid: appId } : { orgid: orgId })
     .single()
   return data || 0
 }
 
-export async function hasOrgUsageCredits(supabase: SupabaseClient<Database>, orgId: string): Promise<boolean> {
+export async function hasOrgUsageCredits(supabase: SupabaseClient<Database>, orgId: string, appId?: string): Promise<boolean> {
+  // SECURITY DEFINER RPC — do not SELECT orgs.has_usage_credits directly; RLS can deny
+  // app-scoped API keys even when they may upload for that org.
   const { data } = await supabase
-    .from('orgs')
-    .select('has_usage_credits')
-    .eq('id', orgId)
-    .maybeSingle()
-  return !!data?.has_usage_credits
+    .rpc('has_usage_credits_org', appId ? { orgid: orgId, appid: appId } : { orgid: orgId })
+    .single()
+  return data || false
 }
 
 /** Trial upgrade nag is for unpaid trial orgs only — skip when paying or using credits. */
@@ -896,9 +897,9 @@ export async function checkPlanValid(supabase: SupabaseClient<Database>, orgId: 
     throw new Error('Plan upgrade required')
   }
   const [trialDays, ispaying, hasCredits] = await Promise.all([
-    isTrialOrg(supabase, orgId),
-    isPayingOrg(supabase, orgId),
-    hasOrgUsageCredits(supabase, orgId),
+    isTrialOrg(supabase, orgId, appId),
+    isPayingOrg(supabase, orgId, appId),
+    hasOrgUsageCredits(supabase, orgId, appId),
   ])
   if (shouldWarnTrialExpiry({ trialDays, isPaying: ispaying, hasCredits, warning }))
     log.warn(`WARNING !!\nTrial expires in ${trialDays} days, upgrade here: ${config.hostWeb}/settings/organization/plans\n`)
@@ -932,9 +933,9 @@ export async function checkPlanValidUpload(supabase: SupabaseClient<Database>, o
     throw new Error('Plan upgrade required for upload')
   }
   const [trialDays, ispaying, hasCredits] = await Promise.all([
-    isTrialOrg(supabase, orgId),
-    isPayingOrg(supabase, orgId),
-    hasOrgUsageCredits(supabase, orgId),
+    isTrialOrg(supabase, orgId, appId),
+    isPayingOrg(supabase, orgId, appId),
+    hasOrgUsageCredits(supabase, orgId, appId),
   ])
   if (shouldWarnTrialExpiry({ trialDays, isPaying: ispaying, hasCredits, warning }))
     log.warn(`WARNING !!\nTrial expires in ${trialDays} days, upgrade here: ${config.hostWeb}/settings/organization/plans\n`)

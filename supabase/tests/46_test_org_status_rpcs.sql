@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(18);
+SELECT plan(28);
 
 -- Member of admin org can read billing/trial RPCs
 SELECT tests.authenticate_as('test_admin');
@@ -219,6 +219,154 @@ SELECT
         ),
         true,
         'is_paying_and_good_plan_org_action - service role can read plan status'
+    );
+
+-- has_usage_credits_org: service role can read the credit flag
+SELECT
+    is(
+        public.has_usage_credits_org('22dbad8a-b885-4309-9b3b-a09f8460fb6d'),
+        (
+            SELECT has_usage_credits
+            FROM public.orgs
+            WHERE id = '22dbad8a-b885-4309-9b3b-a09f8460fb6d'
+        ),
+        'has_usage_credits_org - service role can read credit flag'
+    );
+
+-- Org admin can read credit flag
+SELECT tests.authenticate_as('test_admin');
+
+SELECT
+    is(
+        public.has_usage_credits_org('22dbad8a-b885-4309-9b3b-a09f8460fb6d'),
+        (
+            SELECT has_usage_credits
+            FROM public.orgs
+            WHERE id = '22dbad8a-b885-4309-9b3b-a09f8460fb6d'
+        ),
+        'has_usage_credits_org - org admin can read credit flag'
+    );
+
+-- Non-member denied
+SELECT tests.authenticate_as('org_status_non_member');
+
+SELECT
+    is(
+        public.has_usage_credits_org('22dbad8a-b885-4309-9b3b-a09f8460fb6d'),
+        false,
+        'has_usage_credits_org - non-member gets false'
+    );
+
+-- Anonymous execute allowed; body still gated by auth
+SELECT tests.clear_authentication();
+DO $$
+BEGIN
+    PERFORM set_config('request.jwt.claims', '{}', true);
+    PERFORM set_config('request.jwt.claim.sub', '', true);
+    PERFORM set_config('request.jwt.claim.role', 'anon', true);
+    PERFORM set_config('request.headers', '{}', true);
+END $$;
+
+SELECT
+    is(
+        has_function_privilege(
+            'anon'::name,
+            'public.has_usage_credits_org(uuid)'::regprocedure,
+            'EXECUTE'
+        ),
+        true,
+        'has_usage_credits_org - anonymous execute is allowed for API-key CLI callers'
+    );
+
+SELECT
+    is(
+        has_function_privilege(
+            'anon'::name,
+            'public.has_usage_credits_org(uuid,character varying)'::regprocedure,
+            'EXECUTE'
+        ),
+        true,
+        'has_usage_credits_org(appid) - anonymous execute is allowed for API-key CLI callers'
+    );
+
+-- Org-scoped API key can read credit flag without appid
+DO $$
+BEGIN
+    PERFORM set_config('request.headers', '{"capgkey": "ae6e7458-c46d-4c00-aa3b-153b0b8520ea"}', true);
+END $$;
+
+SELECT
+    is(
+        public.has_usage_credits_org('046a36ac-e03c-4590-9257-bd6c9dba9ee8'),
+        (
+            SELECT has_usage_credits
+            FROM public.orgs
+            WHERE id = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'
+        ),
+        'has_usage_credits_org - org-scoped API key can read credit flag'
+    );
+
+-- App-scoped uploader key cannot read via org-only overload
+DO $$
+BEGIN
+    PERFORM set_config('request.headers', '{"capgkey": "c591b04e-cf29-4945-b9a0-776d0672061e"}', true);
+END $$;
+
+SELECT
+    is(
+        public.has_usage_credits_org('22dbad8a-b885-4309-9b3b-a09f8460fb6d'),
+        false,
+        'has_usage_credits_org - app-scoped API key without appid gets false'
+    );
+
+-- Same app-scoped key can read when appid is provided
+SELECT
+    is(
+        public.has_usage_credits_org(
+            '22dbad8a-b885-4309-9b3b-a09f8460fb6d',
+            'com.demoadmin.app'
+        ),
+        (
+            SELECT has_usage_credits
+            FROM public.orgs
+            WHERE id = '22dbad8a-b885-4309-9b3b-a09f8460fb6d'
+        ),
+        'has_usage_credits_org - app-scoped API key with appid can read credit flag'
+    );
+
+-- App-scoped overloads for trial/paying also accept app bindings
+SELECT
+    is(
+        public.is_paying_org(
+            '22dbad8a-b885-4309-9b3b-a09f8460fb6d',
+            'com.demoadmin.app'
+        ),
+        (
+            SELECT EXISTS (
+                SELECT 1
+                FROM public.stripe_info
+                WHERE customer_id = 'cus_Pa0k8TO6HVln6A'
+                    AND status = 'succeeded'
+            )
+        ),
+        'is_paying_org(appid) - app-scoped API key can read paying state'
+    );
+
+SELECT
+    is(
+        public.is_trial_org(
+            '22dbad8a-b885-4309-9b3b-a09f8460fb6d',
+            'com.demoadmin.app'
+        ),
+        (
+            SELECT COALESCE(
+                GREATEST((trial_at::date - CURRENT_DATE), 0),
+                0
+            )::integer
+            FROM public.stripe_info
+            WHERE customer_id = 'cus_Pa0k8TO6HVln6A'
+        ),
+        'is_trial_org(appid) - app-scoped API key can read trial days'
     );
 
 SELECT * -- noqa: AM04
