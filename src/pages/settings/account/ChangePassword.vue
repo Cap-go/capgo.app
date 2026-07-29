@@ -224,54 +224,55 @@ async function submit(form: { current_password: string, password: string, passwo
     return
   isLoading.value = true
 
-  const mfaOk = await ensureMfaIfNeeded()
-  if (!mfaOk) {
+  try {
+    const mfaOk = await ensureMfaIfNeeded()
+    if (!mfaOk)
+      return
+
+    // Auth may require the current password (security_update_password_require_current_password).
+    const { error: updateError } = await supabase.auth.updateUser({
+      password: form.password,
+      current_password: form.current_password,
+    })
+
+    if (updateError) {
+      // Auth error codes from GoTrue user update (do not match on message text —
+      // current_password_mismatch reuses the same message as current_password_required).
+      if (updateError.code === 'current_password_required' || updateError.code === 'reauthentication_needed') {
+        reportPasswordUpdateError(t('current-password-required'))
+        return
+      }
+      if (
+        updateError.code === 'current_password_mismatch'
+        || updateError.code === 'reauthentication_not_valid'
+        || updateError.code === 'invalid_credentials'
+      ) {
+        reportPasswordUpdateError(t('invalid-password'))
+        return
+      }
+      reportPasswordUpdateError(updateError.message || t('account-password-error'))
+      return
+    }
+
+    resetCaptcha()
+
+    if (!organizationStore.currentOrganization?.password_has_access) {
+      await organizationStore.fetchOrganizations()
+    }
+
+    // Best-effort: password already changed; do not treat other-session sign-out as failure.
+    const { error: signOutError } = await supabase.auth.signOut({ scope: 'others' })
+    if (signOutError)
+      console.error('Failed to sign out other sessions after password change', signOutError)
+
+    toast.success(t('changed-password-suc'))
+    form.password = ''
+    form.password_confirm = ''
+    form.current_password = ''
+  }
+  finally {
     isLoading.value = false
-    return
   }
-
-  // Auth may require the current password (security_update_password_require_current_password).
-  const { error: updateError } = await supabase.auth.updateUser({
-    password: form.password,
-    current_password: form.current_password,
-  })
-
-  isLoading.value = false
-  if (updateError) {
-    // Auth error codes from GoTrue user update (do not match on message text —
-    // current_password_mismatch reuses the same message as current_password_required).
-    if (updateError.code === 'current_password_required' || updateError.code === 'reauthentication_needed') {
-      reportPasswordUpdateError(t('current-password-required'))
-      return
-    }
-    if (
-      updateError.code === 'current_password_mismatch'
-      || updateError.code === 'reauthentication_not_valid'
-      || updateError.code === 'invalid_credentials'
-    ) {
-      reportPasswordUpdateError(t('invalid-password'))
-      return
-    }
-    reportPasswordUpdateError(updateError.message || t('account-password-error'))
-    return
-  }
-
-  resetCaptcha()
-
-  if (!organizationStore.currentOrganization?.password_has_access) {
-    await organizationStore.fetchOrganizations()
-  }
-
-  const { error: signOutError } = await supabase.auth.signOut({ scope: 'others' })
-  if (signOutError) {
-    reportPasswordUpdateError(signOutError.message)
-    return
-  }
-
-  toast.success(t('changed-password-suc'))
-  form.password = ''
-  form.password_confirm = ''
-  form.current_password = ''
 }
 </script>
 
