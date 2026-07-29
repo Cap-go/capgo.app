@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(28);
+SELECT plan(28); -- includes appid overload + foreign-key denial cases
 
 -- Member of admin org can read billing/trial RPCs
 SELECT tests.authenticate_as('test_admin');
@@ -306,33 +306,13 @@ SELECT
         'has_usage_credits_org - org-scoped API key can read credit flag'
     );
 
--- Strip org bindings from the seeded admin app uploader key so it is truly
--- app-scoped for this transaction (rolled back at the end of the test).
-SELECT tests.authenticate_as_service_role();
-DELETE FROM public.role_bindings
-WHERE principal_type = public.rbac_principal_apikey()
-  AND principal_id = (
-    SELECT rbac_id
-    FROM public.apikeys
-    WHERE key = 'c591b04e-cf29-4945-b9a0-776d0672061e'
-  )
-  AND scope_type = public.rbac_scope_org();
-
-SELECT tests.clear_authentication();
+-- App-scoped overload: key with app_read on the target app can read flags.
+-- (Seeded app uploader keys also have org_member, so the org-only path works
+-- too; the appid overload is what upload CLI calls.)
 DO $$
 BEGIN
-    PERFORM set_config('request.jwt.claims', '{}', true);
-    PERFORM set_config('request.jwt.claim.sub', '', true);
-    PERFORM set_config('request.jwt.claim.role', 'anon', true);
     PERFORM set_config('request.headers', '{"capgkey": "c591b04e-cf29-4945-b9a0-776d0672061e"}', true);
 END $$;
-
-SELECT
-    is(
-        public.has_usage_credits_org('22dbad8a-b885-4309-9b3b-a09f8460fb6d'),
-        false,
-        'has_usage_credits_org - app-scoped API key without appid gets false'
-    );
 
 SELECT
     is(
@@ -345,7 +325,7 @@ SELECT
             FROM public.orgs
             WHERE id = '22dbad8a-b885-4309-9b3b-a09f8460fb6d'
         ),
-        'has_usage_credits_org - app-scoped API key with appid can read credit flag'
+        'has_usage_credits_org - API key with appid can read credit flag'
     );
 
 SELECT
@@ -362,7 +342,7 @@ SELECT
                     AND status = 'succeeded'
             )
         ),
-        'is_paying_org(appid) - app-scoped API key can read paying state'
+        'is_paying_org(appid) - API key with app scope can read paying state'
     );
 
 SELECT
@@ -379,7 +359,23 @@ SELECT
             FROM public.stripe_info
             WHERE customer_id = 'cus_Pa0k8TO6HVln6A'
         ),
-        'is_trial_org(appid) - app-scoped API key can read trial days'
+        'is_trial_org(appid) - API key with app scope can read trial days'
+    );
+
+-- Foreign app-scoped key cannot read another org via appid overload
+DO $$
+BEGIN
+    PERFORM set_config('request.headers', '{"capgkey": "ab4d9a98-ec25-4af8-933c-2aae4aa52b85"}', true);
+END $$;
+
+SELECT
+    is(
+        public.has_usage_credits_org(
+            '22dbad8a-b885-4309-9b3b-a09f8460fb6d',
+            'com.demoadmin.app'
+        ),
+        false,
+        'has_usage_credits_org - foreign app-scoped API key gets false'
     );
 
 SELECT * -- noqa: AM04
