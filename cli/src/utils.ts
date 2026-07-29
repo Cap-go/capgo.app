@@ -814,6 +814,26 @@ export async function isTrialOrg(supabase: SupabaseClient<Database>, orgId: stri
   return data || 0
 }
 
+export async function hasOrgUsageCredits(supabase: SupabaseClient<Database>, orgId: string): Promise<boolean> {
+  const { data } = await supabase
+    .from('orgs')
+    .select('has_usage_credits')
+    .eq('id', orgId)
+    .maybeSingle()
+  return !!data?.has_usage_credits
+}
+
+/** Trial upgrade nag is for unpaid trial orgs only — skip when paying or using credits. */
+export function shouldWarnTrialExpiry(options: {
+  trialDays: number
+  isPaying: boolean
+  hasCredits: boolean
+  warning?: boolean
+}): boolean {
+  const { trialDays, isPaying, hasCredits, warning = true } = options
+  return !!warning && trialDays > 0 && !isPaying && !hasCredits
+}
+
 export async function isAllowedActionOrg(supabase: SupabaseClient<Database>, orgId: string): Promise<boolean> {
   const { data } = await supabase
     .rpc('is_allowed_action_org', { orgid: orgId })
@@ -875,11 +895,12 @@ export async function checkPlanValid(supabase: SupabaseClient<Database>, orgId: 
     wait(500)
     throw new Error('Plan upgrade required')
   }
-  const [trialDays, ispaying] = await Promise.all([
+  const [trialDays, ispaying, hasCredits] = await Promise.all([
     isTrialOrg(supabase, orgId),
     isPayingOrg(supabase, orgId),
+    hasOrgUsageCredits(supabase, orgId),
   ])
-  if (trialDays > 0 && warning && !ispaying)
+  if (shouldWarnTrialExpiry({ trialDays, isPaying: ispaying, hasCredits, warning }))
     log.warn(`WARNING !!\nTrial expires in ${trialDays} days, upgrade here: ${config.hostWeb}/settings/organization/plans\n`)
 }
 
@@ -910,11 +931,12 @@ export async function checkPlanValidUpload(supabase: SupabaseClient<Database>, o
     wait(500)
     throw new Error('Plan upgrade required for upload')
   }
-  const [trialDays, ispaying] = await Promise.all([
+  const [trialDays, ispaying, hasCredits] = await Promise.all([
     isTrialOrg(supabase, orgId),
     isPayingOrg(supabase, orgId),
+    hasOrgUsageCredits(supabase, orgId),
   ])
-  if (trialDays > 0 && warning && !ispaying)
+  if (shouldWarnTrialExpiry({ trialDays, isPaying: ispaying, hasCredits, warning }))
     log.warn(`WARNING !!\nTrial expires in ${trialDays} days, upgrade here: ${config.hostWeb}/settings/organization/plans\n`)
 }
 
