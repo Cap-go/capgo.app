@@ -409,7 +409,7 @@ async function ensureVersionNames(devices: Device[]) {
   <div>
     <DataTable
       v-model:filters="filters" v-model:columns="columns" v-model:current-page="currentPage" v-model:search="search"
-      :total="total" :element-list="elements"
+      :total="total" :offset="offset" :element-list="elements"
       filter-text="Filters"
       :show-add="showAddButton"
       :is-loading="isLoading"

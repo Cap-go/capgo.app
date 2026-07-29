@@ -36,6 +36,8 @@ interface Props {
   addButtonTestId?: string
   search?: string
   total: number
+  /** Fixed page size used for last-page / next calculations. Prefer this over inferring from the current page length. */
+  offset?: number
   currentPage: number
   columns: TableColumn[]
   elementList: { [key: string]: any }[]
@@ -71,11 +73,18 @@ const pendingAdd = ref(false)
 // const sorts = ref<TableSort>({})
 // get columns from elementList
 
-const offset = computed(() => {
-  if (!props.elementList)
-    return 0
+// Page size must stay fixed across pages. Inferring it from the current page's
+// row count breaks last-page / next controls when the final page is short
+// (common after deletes).
+const pageSize = computed(() => {
+  if (props.offset && props.offset > 0)
+    return props.offset
+  if (!props.elementList || props.elementList.length === 0)
+    return 1
   return props.elementList.length
 })
+
+const totalPages = computed(() => Math.max(1, Math.ceil(props.total / pageSize.value)))
 
 const selectedRows = ref<boolean[]>(props.elementList.map(_ => false))
 const previousSelectedRow = ref<number | null>(null)
@@ -335,13 +344,15 @@ function tooltipIdFor(rowIndex: number, actionIndex: number): string {
 }
 
 const displayElemRange = computed(() => {
-  const begin = (props.currentPage - 1) * props.elementList.length
+  if (props.elementList.length === 0)
+    return '0-0'
+  const begin = (props.currentPage - 1) * pageSize.value
   const end = begin + props.elementList.length
   return `${begin}-${end}`
 })
 
 function canNext() {
-  return props.currentPage < Math.ceil(props.total / offset.value)
+  return props.currentPage < totalPages.value
 }
 function canPrev() {
   return props.currentPage > 1
@@ -356,7 +367,7 @@ async function next() {
 async function fastForward() {
   if (canNext()) {
     emit('fastForward')
-    emit('update:currentPage', Math.ceil(props.total / offset.value))
+    emit('update:currentPage', totalPages.value)
   }
 }
 async function prev() {

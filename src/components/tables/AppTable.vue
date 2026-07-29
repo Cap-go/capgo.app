@@ -15,6 +15,8 @@ const props = defineProps<{
   apps: (Database['public']['Tables']['apps']['Row'])[]
   deleteButton: boolean
   total?: number
+  /** Fixed page size for server-side pagination controls */
+  offset?: number
   currentPage?: number
   search?: string
   serverSidePagination?: boolean
@@ -308,6 +310,7 @@ const filteredApps = computed(() => {
         v-model:search="internalSearch"
         :show-add="!isMobile"
         :total="props.total ?? filteredApps.length"
+        :offset="props.offset"
         :element-list="filteredApps"
         :search-placeholder="t('search-by-name-or-app-id')"
         :is-loading="props.isLoading ?? false"

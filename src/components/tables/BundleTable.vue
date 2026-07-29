@@ -247,10 +247,17 @@ async function getData() {
     const { data: dataVersions, count } = await req
     if (!dataVersions)
       return
+    total.value = count ?? 0
+    const maxPage = Math.max(1, Math.ceil(total.value / offset))
+    if (currentPage.value > maxPage) {
+      currentPage.value = maxPage
+      // Re-fetch the clamped page so pagination stays aligned with the new total
+      // (e.g. after deletes shrink the last page away).
+      return getData()
+    }
     const enhancedVersions = await enhanceVersionElems(dataVersions)
     await fetchChannelsForVersions(enhancedVersions)
     elements.value = enhancedVersions as any
-    total.value = count ?? 0
   }
   catch (error) {
     console.error(error)
@@ -612,6 +619,7 @@ watch(props, async () => {
       <DataTable
         v-model:filters="filters" v-model:columns="columns" v-model:current-page="currentPage" v-model:search="search"
         :total="total"
+        :offset="offset"
         :show-add="!isMobile"
         :element-list="elements"
         filter-text="Filters"
