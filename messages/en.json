@@ -933,6 +933,7 @@
   "stripe-subscriptions-past-due": "Stripe subscriptions past due",
   "current-bundle": "Current bundle",
   "current-password": "Current Password",
+  "current-password-required": "Please enter your current password to set a new one.",
   "current-version": "Current Version",
   "currently-live-on": "Currently live on {channels}",
   "custom": "Custom",
