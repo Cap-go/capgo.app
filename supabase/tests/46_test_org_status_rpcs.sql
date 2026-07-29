@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(29); -- includes appid overload + org-key-with-appid + foreign denial
+SELECT plan(27); -- has_usage_credits_org appid + org-key-with-appid + foreign denial
 
 -- Member of admin org can read billing/trial RPCs
 SELECT tests.authenticate_as('test_admin');
@@ -321,9 +321,8 @@ SELECT
         'has_usage_credits_org - org-scoped API key with appid still reads via org access'
     );
 
--- App-scoped overload: key with app_read on the target app can read flags.
--- (Seeded app uploader keys also have org_member, so the org-only path works
--- too; the appid overload is what upload CLI calls.)
+-- App-scoped overload: key with app_read on the target app can read credit flag.
+-- (is_paying_org / is_trial_org stay single-arg for old CLI compatibility.)
 DO $$
 BEGIN
     PERFORM set_config('request.headers', '{"capgkey": "c591b04e-cf29-4945-b9a0-776d0672061e"}', true);
@@ -341,40 +340,6 @@ SELECT
             WHERE id = '22dbad8a-b885-4309-9b3b-a09f8460fb6d'
         ),
         'has_usage_credits_org - API key with appid can read credit flag'
-    );
-
-SELECT
-    is(
-        public.is_paying_org(
-            '22dbad8a-b885-4309-9b3b-a09f8460fb6d',
-            'com.demoadmin.app'
-        ),
-        (
-            SELECT EXISTS (
-                SELECT 1
-                FROM public.stripe_info
-                WHERE customer_id = 'cus_Pa0k8TO6HVln6A'
-                    AND status = 'succeeded'
-            )
-        ),
-        'is_paying_org(appid) - API key with app scope can read paying state'
-    );
-
-SELECT
-    is(
-        public.is_trial_org(
-            '22dbad8a-b885-4309-9b3b-a09f8460fb6d',
-            'com.demoadmin.app'
-        ),
-        (
-            SELECT COALESCE(
-                GREATEST((trial_at::date - CURRENT_DATE), 0),
-                0
-            )::integer
-            FROM public.stripe_info
-            WHERE customer_id = 'cus_Pa0k8TO6HVln6A'
-        ),
-        'is_trial_org(appid) - API key with app scope can read trial days'
     );
 
 -- Foreign app-scoped key cannot read another org via appid overload
