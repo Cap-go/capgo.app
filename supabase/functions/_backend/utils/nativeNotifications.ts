@@ -587,7 +587,8 @@ export function buildNotificationStatsQuery(params: {
   days?: number
   now?: Date
 }) {
-  const days = Math.min(Math.max(Math.trunc(params.days ?? 30), 1), 92)
+  const rawDays = Number(params.days)
+  const days = Number.isFinite(rawDays) ? Math.min(Math.max(Math.trunc(rawDays), 1), 92) : 30
   const since = new Date((params.now?.getTime() ?? Date.now()) - days * 24 * 60 * 60 * 1000)
   const appIds = (params.appIds?.length
     ? params.appIds

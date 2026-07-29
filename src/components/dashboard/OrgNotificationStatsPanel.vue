@@ -110,15 +110,17 @@ async function fetchStats() {
       return
     }
 
-    const response = await fetch(
-      `${defaultApiHost}/notifications/stats?org_id=${encodeURIComponent(props.orgId)}&days=${localDays.value}`,
-      {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
+    const response = await fetch(`${defaultApiHost}/private/org_notification_stats`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
       },
-    )
+      body: JSON.stringify({
+        org_id: props.orgId,
+        days: localDays.value,
+      }),
+    })
     if (requestId !== latestRequest)
       return
     if (!response.ok)

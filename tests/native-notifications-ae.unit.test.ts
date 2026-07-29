@@ -209,6 +209,28 @@ describe('native notification AE registry', () => {
     expect(query).toContain('GROUP BY blob1')
   })
 
+  it.concurrent('rejects stats query without any app id', () => {
+    expect(() => buildNotificationStatsQuery({ dataset: 'notification_events' })).toThrow()
+  })
+
+  it.concurrent('rejects campaign stats spanning multiple apps', () => {
+    expect(() => buildNotificationStatsQuery({
+      dataset: 'notification_events',
+      appIds: ['com.demo.app', 'com.demo.app2'],
+      campaignId: 'campaign-1',
+    })).toThrow()
+  })
+
+  it.concurrent('falls back to 30 days when days is not finite', () => {
+    const query = buildNotificationStatsQuery({
+      dataset: 'notification_events',
+      appId: 'com.demo.app',
+      days: Number.NaN,
+      now: new Date('2026-05-06T00:00:00Z'),
+    })
+    expect(query).toContain("timestamp >= toDateTime('2026-04-06")
+  })
+
   it.concurrent('builds latest desired badge lookup from AE event rows', () => {
     const query = buildNotificationBadgeStateQuery({
       dataset: 'notification_events',

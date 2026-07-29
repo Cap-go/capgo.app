@@ -2584,5 +2584,6 @@
   "org-notification-total-events": "Total events",
   "org-notification-apps": "Apps in org",
   "org-notification-events-help": "Event breakdown for the last {days} days.",
-  "org-notification-no-stats-help": "Send or receive push notifications from your apps to see org-wide delivery stats here."
+  "org-notification-no-stats-help": "Send or receive push notifications from your apps to see org-wide delivery stats here.",
+  "not-authenticated": "Not authenticated"
 }
