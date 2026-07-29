@@ -251,9 +251,10 @@ async function getData() {
     const maxPage = Math.max(1, Math.ceil(total.value / offset))
     if (currentPage.value > maxPage) {
       currentPage.value = maxPage
-      // Re-fetch the clamped page so pagination stays aligned with the new total
-      // (e.g. after deletes shrink the last page away).
-      return getData()
+      // Await the clamped-page refetch so isLoading stays true until fresh rows
+      // arrive (e.g. after deletes shrink the last page away).
+      await getData()
+      return
     }
     const enhancedVersions = await enhanceVersionElems(dataVersions)
     await fetchChannelsForVersions(enhancedVersions)
