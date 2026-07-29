@@ -21,7 +21,6 @@ const supabase = useSupabase()
 const organizationStore = useOrganizationStore()
 const mainStore = useMainStore()
 const mfaCode = ref('')
-const needsReauthentication = ref(false)
 const turnstileToken = ref('')
 const captchaKey = ref(import.meta.env.VITE_CAPTCHA_KEY)
 const captchaComponent = ref<InstanceType<typeof VueTurnstile> | null>(null)
@@ -156,56 +155,26 @@ async function verifyPassword(form: { current_password: string }) {
   }
 }
 
-async function verifyCurrentPassword(currentPassword: string) {
-  const user = mainStore.user
-  if (!user?.email) {
-    setErrors('change-pass', [t('user-not-found')], {})
-    return false
-  }
-
-  const { error: signInError } = await supabase.auth.signInWithPassword({
-    email: user.email,
-    password: currentPassword,
-    options: turnstileToken.value
-      ? { captchaToken: turnstileToken.value }
-      : undefined,
-  })
-
-  if (signInError?.code === 'mfa_required') {
-    return await runMfaChallenge()
-  }
-
-  if (signInError) {
-    resetCaptcha()
-    if (signInError.message.includes('captcha')) {
-      toast.error(t('captcha-fail'))
-    }
-    else {
-      setErrors('change-pass', [t('invalid-password')], {})
-    }
-    return false
-  }
-
-  return true
-}
-
 async function runMfaChallenge() {
   const { data: mfaFactors, error: mfaError } = await supabase.auth.mfa.listFactors()
   if (mfaError) {
-    setErrors('forgot-password', [mfaError.message], {})
+    setErrors('change-pass', [mfaError.message], {})
+    toast.error(mfaError.message)
     console.error('Cannot get MFA factors', mfaError)
     return false
   }
   const factor = mfaFactors.all.find(factor => factor.status === 'verified')
   if (!factor) {
-    setErrors('forgot-password', ['Cannot find MFA factor'], {})
+    setErrors('change-pass', [t('alert-2fa-required')], {})
+    toast.error(t('alert-2fa-required'))
     console.error('Cannot find MFA factors', mfaError)
     return false
   }
 
   const { data: challenge, error: errorChallenge } = await supabase.auth.mfa.challenge({ factorId: factor.id })
   if (errorChallenge) {
-    setErrors('forgot-password', [errorChallenge.message], {})
+    setErrors('change-pass', [errorChallenge.message], {})
+    toast.error(errorChallenge.message)
     console.error('Cannot challenge MFA factor', errorChallenge)
     return false
   }
@@ -245,56 +214,66 @@ async function ensureMfaIfNeeded() {
   return true
 }
 
-async function submit(form: { current_password?: string, password: string, password_confirm: string }) {
+function reportPasswordUpdateError(message: string) {
+  setErrors('change-pass', [message], {})
+  toast.error(message)
+}
+
+async function submit(form: { current_password: string, password: string, password_confirm: string }) {
   if (isLoading.value)
     return
   isLoading.value = true
-
-  if (needsReauthentication.value) {
-    const currentPasswordValid = await verifyCurrentPassword(form.current_password ?? '')
-    if (!currentPasswordValid) {
-      isLoading.value = false
-      return
-    }
-  }
 
   const mfaOk = await ensureMfaIfNeeded()
   if (!mfaOk) {
     isLoading.value = false
     return
   }
-  const { error: updateError } = await supabase.auth.updateUser({ password: form.password })
+
+  // Auth may require the current password (security_update_password_require_current_password).
+  const { error: updateError } = await supabase.auth.updateUser({
+    password: form.password,
+    current_password: form.current_password,
+  })
 
   isLoading.value = false
   if (updateError) {
-    if (updateError.code === 'reauthentication_needed' || updateError.code === 'reauthentication_not_valid') {
-      needsReauthentication.value = true
-      isLoading.value = false
+    if (
+      updateError.code === 'current_password_required'
+      || updateError.code === 'reauthentication_needed'
+      || updateError.code === 'reauthentication_not_valid'
+      || updateError.message.toLowerCase().includes('current password')
+    ) {
+      reportPasswordUpdateError(t('current-password-required'))
       return
     }
-    setErrors('change-pass', [t('account-password-error')], {})
-  }
-  else {
-    needsReauthentication.value = false
-    resetCaptcha()
-
-    if (!organizationStore.currentOrganization?.password_has_access) {
-      await organizationStore.fetchOrganizations()
-    }
-
-    const { error: signOutError } = await supabase.auth.signOut({ scope: 'others' })
-    if (signOutError) {
-      setErrors('change-pass', [signOutError.message], {})
+    if (
+      updateError.code === 'invalid_credentials'
+      || updateError.message.toLowerCase().includes('invalid')
+    ) {
+      reportPasswordUpdateError(t('invalid-password'))
       return
     }
+    reportPasswordUpdateError(updateError.message || t('account-password-error'))
+    return
+  }
 
-    toast.success(t('changed-password-suc'))
+  resetCaptcha()
+
+  if (!organizationStore.currentOrganization?.password_has_access) {
+    await organizationStore.fetchOrganizations()
   }
-  if (!updateError) {
-    form.password = ''
-    form.password_confirm = ''
-    form.current_password = ''
+
+  const { error: signOutError } = await supabase.auth.signOut({ scope: 'others' })
+  if (signOutError) {
+    reportPasswordUpdateError(signOutError.message)
+    return
   }
+
+  toast.success(t('changed-password-suc'))
+  form.password = ''
+  form.password_confirm = ''
+  form.current_password = ''
 }
 </script>
 
@@ -401,7 +380,6 @@ async function submit(form: { current_password?: string, password: string, passw
           <section>
             <div class="mt-5 flex flex-col gap-4 sm:flex-row sm:flex-wrap">
               <FormKit
-                v-if="needsReauthentication"
                 type="password"
                 name="current_password"
                 :prefix-icon="iconPassword"
