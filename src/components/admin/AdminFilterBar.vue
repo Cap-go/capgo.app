@@ -189,7 +189,6 @@ watch(() => adminStore.dateRangeMode, () => {
                 </div>
                 <div
                   class="flex items-center gap-2 rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 dark:border-gray-600 dark:bg-gray-800"
-                  role="text"
                   aria-labelledby="admin-range-start-label"
                 >
                   <CalendarDaysIcon class="h-4 w-4 shrink-0 text-gray-500 dark:text-gray-400" aria-hidden="true" />
@@ -204,7 +203,6 @@ watch(() => adminStore.dateRangeMode, () => {
                 </div>
                 <div
                   class="flex items-center gap-2 rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 dark:border-gray-600 dark:bg-gray-800"
-                  role="text"
                   aria-labelledby="admin-range-end-label"
                 >
                   <CalendarDaysIcon class="h-4 w-4 shrink-0 text-gray-500 dark:text-gray-400" aria-hidden="true" />
