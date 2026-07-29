@@ -1042,10 +1042,23 @@ function buildReadDevicesCFUpdatedAtGtCondition(updatedAtGt: string | undefined)
   return `updated_at > toDateTime('${safeUpdatedAtGt}')`
 }
 
+function buildReadDevicesCFCustomIdsCondition(customIds: string[] | undefined) {
+  if (!customIds?.length)
+    return ''
+
+  if (customIds.length === 1)
+    return `custom_id = '${escapeSqlString(customIds[0])}'`
+
+  const customIdsList = customIds.map(id => `'${escapeSqlString(id)}'`).join(', ')
+  return `custom_id IN (${customIdsList})`
+}
+
 function buildReadDevicesCFOuterConditions(params: ReadDevicesParams, devicesOrder: DevicesOrderCF | null) {
   const conditions = [
     buildReadDevicesCFCursorCondition(params.cursor, devicesOrder),
     buildReadDevicesCFUpdatedAtGtCondition(params.updated_at_gt),
+    // Match the latest aggregated custom_id, not historical event rows.
+    buildReadDevicesCFCustomIdsCondition(params.customIds),
   ]
   return conditions.filter(Boolean)
 }
