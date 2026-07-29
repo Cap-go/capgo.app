@@ -86,6 +86,7 @@ describe('[GET] /device custom_id filter', () => {
         custom_id: customId,
         is_prod: true,
         is_emulator: false,
+        updated_at: new Date().toISOString(),
       },
       {
         app_id: APPNAME_DEVICE,
@@ -98,6 +99,7 @@ describe('[GET] /device custom_id filter', () => {
         custom_id: `other-${customId}`,
         is_prod: true,
         is_emulator: false,
+        updated_at: new Date().toISOString(),
       },
     ])
     expect(insertError).toBeNull()
@@ -135,6 +137,7 @@ describe('[GET] /device custom_id filter', () => {
       custom_id: customId,
       is_prod: true,
       is_emulator: false,
+      updated_at: new Date().toISOString(),
     })
     expect(insertError).toBeNull()
 
