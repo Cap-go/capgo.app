@@ -272,9 +272,9 @@ async function submit(form: { current_password: string, password: string, passwo
 
     if (updateError?.code === 'reauthentication_needed' || updateError?.code === 'reauthentication_not_valid') {
       const refreshed = await refreshSessionWithCurrentPassword(form.current_password)
-      if (!refreshed)
+      if (!refreshed) {
         return
-      ;({ error: updateError } = await updatePasswordWithCurrent(form.password, form.current_password))
+      }({ error: updateError } = await updatePasswordWithCurrent(form.password, form.current_password))
     }
 
     if (updateError) {
