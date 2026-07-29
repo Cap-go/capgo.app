@@ -214,9 +214,47 @@ async function ensureMfaIfNeeded() {
   return true
 }
 
+// Refresh the session with the current password when GoTrue requires recent reauthentication.
+async function refreshSessionWithCurrentPassword(currentPassword: string) {
+  const user = mainStore.user
+  if (!user?.email) {
+    reportPasswordUpdateError(t('account-password-error'))
+    return false
+  }
+
+  const { error: signInError } = await supabase.auth.signInWithPassword({
+    email: user.email,
+    password: currentPassword,
+    options: turnstileToken.value
+      ? { captchaToken: turnstileToken.value }
+      : undefined,
+  })
+
+  if (signInError?.code === 'mfa_required')
+    return await runMfaChallenge()
+
+  if (signInError) {
+    resetCaptcha()
+    if (signInError.message.includes('captcha'))
+      toast.error(t('captcha-fail'))
+    else
+      reportPasswordUpdateError(t('invalid-password'))
+    return false
+  }
+
+  return true
+}
+
 function reportPasswordUpdateError(message: string) {
   setErrors('change-pass', [message], {})
   toast.error(message)
+}
+
+async function updatePasswordWithCurrent(password: string, currentPassword: string) {
+  return supabase.auth.updateUser({
+    password,
+    current_password: currentPassword,
+  })
 }
 
 async function submit(form: { current_password: string, password: string, password_confirm: string }) {
@@ -229,22 +267,25 @@ async function submit(form: { current_password: string, password: string, passwo
     if (!mfaOk)
       return
 
-    // Auth may require the current password (security_update_password_require_current_password).
-    const { error: updateError } = await supabase.auth.updateUser({
-      password: form.password,
-      current_password: form.current_password,
-    })
+    // Auth may require current_password and/or a fresh session (reauthentication).
+    let { error: updateError } = await updatePasswordWithCurrent(form.password, form.current_password)
+
+    if (updateError?.code === 'reauthentication_needed' || updateError?.code === 'reauthentication_not_valid') {
+      const refreshed = await refreshSessionWithCurrentPassword(form.current_password)
+      if (!refreshed)
+        return
+      ;({ error: updateError } = await updatePasswordWithCurrent(form.password, form.current_password))
+    }
 
     if (updateError) {
       // Auth error codes from GoTrue user update (do not match on message text —
       // current_password_mismatch reuses the same message as current_password_required).
-      if (updateError.code === 'current_password_required' || updateError.code === 'reauthentication_needed') {
+      if (updateError.code === 'current_password_required') {
         reportPasswordUpdateError(t('current-password-required'))
         return
       }
       if (
         updateError.code === 'current_password_mismatch'
-        || updateError.code === 'reauthentication_not_valid'
         || updateError.code === 'invalid_credentials'
       ) {
         reportPasswordUpdateError(t('invalid-password'))
