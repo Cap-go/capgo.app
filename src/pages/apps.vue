@@ -214,6 +214,7 @@ displayStore.defaultBack = '/apps'
               :search="searchQuery"
               :apps="apps"
               :total="totalApps"
+              :offset="pageSize"
               :delete-button="!organizationStore.currentOrganizationFailed"
               :server-side-pagination="true"
               :is-loading="isTableLoading"
