@@ -47,6 +47,20 @@ const offset = 10
 const activeExtraFilters = computed(() =>
   (selectedPlatform.value ? 1 : 0) + (selectedVersionName.value.trim() ? 1 : 0),
 )
+const platformOptions = computed(() => [
+  { value: '' as const, label: t('all-platforms') },
+  { value: 'ios' as const, label: t('platform-ios') },
+  { value: 'android' as const, label: t('platform-android') },
+  { value: 'electron' as const, label: t('platform-electron') },
+])
+
+function clearExtraFilters() {
+  skipFilterReload.value = true
+  selectedPlatform.value = ''
+  selectedVersionName.value = ''
+  skipFilterReload.value = false
+  debouncedReload()
+}
 const columns = ref<TableColumn[]>([
   {
     label: t('device-id'),
@@ -517,35 +531,38 @@ watch([selectedPlatform, selectedVersionName], () => {
     @add="handleAddDevice"
     @reload="reload()"
     @reset="refreshData()"
+    @clear-extra-filters="clearExtraFilters"
   >
     <template #filter-extras>
-      <div class="flex w-full flex-col gap-1">
-        <label for="device-table-platform-filter" class="text-xs font-medium text-slate-600 dark:text-gray-300">
+      <fieldset>
+        <legend class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
           {{ t('platform') }}
-        </label>
-        <select
+        </legend>
+        <div
           id="device-table-platform-filter"
-          v-model="selectedPlatform"
-          class="d-select d-select-bordered d-select-sm h-9 w-full min-h-9 border-gray-300 bg-white text-sm text-slate-900 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+          class="grid grid-cols-2 gap-2 sm:grid-cols-4"
+          role="group"
           :aria-label="t('platform')"
           data-test="device-platform-filter"
         >
-          <option value="">
-            {{ t('all-platforms') }}
-          </option>
-          <option value="ios">
-            {{ t('platform-ios') }}
-          </option>
-          <option value="android">
-            {{ t('platform-android') }}
-          </option>
-          <option value="electron">
-            {{ t('platform-electron') }}
-          </option>
-        </select>
-      </div>
-      <div class="flex w-full flex-col gap-1">
-        <label for="device-table-bundle-filter" class="text-xs font-medium text-slate-600 dark:text-gray-300">
+          <button
+            v-for="option in platformOptions"
+            :key="option.value || 'all'"
+            type="button"
+            class="min-h-11 rounded-md border px-2 text-sm font-medium transition-colors duration-150 focus:outline-hidden focus:ring-2 focus:ring-azure-500"
+            :class="selectedPlatform === option.value
+              ? 'border-azure-500 bg-azure-500/10 text-azure-700 dark:border-azure-400 dark:bg-azure-400/10 dark:text-azure-200'
+              : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-800'"
+            :aria-pressed="selectedPlatform === option.value"
+            :data-test="`device-platform-${option.value || 'all'}`"
+            @click="selectedPlatform = option.value"
+          >
+            {{ option.label }}
+          </button>
+        </div>
+      </fieldset>
+      <div class="flex w-full flex-col gap-2">
+        <label for="device-table-bundle-filter" class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
           {{ t('bundle') }}
         </label>
         <input
@@ -553,7 +570,7 @@ watch([selectedPlatform, selectedVersionName], () => {
           v-model="selectedVersionName"
           list="device-table-bundle-options"
           type="text"
-          class="d-input d-input-bordered d-input-sm h-9 w-full border-gray-300 bg-white text-sm text-slate-900 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+          class="d-input d-input-bordered min-h-11 w-full border-slate-200 bg-white text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
           :placeholder="t('all-bundles')"
           :aria-label="t('bundle')"
           data-test="device-bundle-filter"
