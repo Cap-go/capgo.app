@@ -77,7 +77,8 @@ describe('buildReadDevicesCFQuery', () => {
       limit: 1,
     }, true)
 
-    expect(query).toContain('blob5 != \'\'')
+    expect(query).toContain("custom_id != ''")
+    expect(query).not.toContain("blob5 != ''")
     expect(query).not.toContain('blob10')
   })
 

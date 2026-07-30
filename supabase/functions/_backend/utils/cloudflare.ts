@@ -957,9 +957,6 @@ export async function countDevicesCF(
   // Use Analytics Engine DEVICE_INFO for counting devices
   const conditions = [`index1 = '${escapeSqlString(app_id)}'`]
 
-  if (customIdMode)
-    conditions.push(`blob5 != ''`)
-
   if (deviceIds.length) {
     if (deviceIds.length === 1)
       conditions.push(`blob1 = '${escapeSqlString(deviceIds[0])}'`)
@@ -968,8 +965,12 @@ export async function countDevicesCF(
   }
 
   // Match latest aggregated fields for current-state filtering (same as Supabase devices table).
-  if (versionName || platform || search) {
+  // customIdMode must use aggregated custom_id so historical non-empty blob5 rows
+  // do not keep devices that later cleared their custom id.
+  if (versionName || platform || search || customIdMode) {
     const outerConditions: string[] = []
+    if (customIdMode)
+      outerConditions.push(`custom_id != ''`)
     if (versionName)
       outerConditions.push(`version_name = '${escapeSqlString(versionName)}'`)
     if (platform)
@@ -1110,27 +1111,23 @@ function buildReadDevicesCFSearchCondition(search: string | undefined, deviceIds
   return `(position('${escapeSqlString(searchLower)}' IN toLower(device_id)) > 0 OR position('${escapeSqlString(searchLower)}' IN toLower(custom_id)) > 0 OR position('${escapeSqlString(searchLower)}' IN toLower(version_name)) > 0)`
 }
 
-function buildReadDevicesCFOuterConditions(params: ReadDevicesParams, devicesOrder: DevicesOrderCF | null) {
-  const conditions = [
+function buildReadDevicesCFOuterConditions(params: ReadDevicesParams, devicesOrder: DevicesOrderCF | null, customIdMode: boolean) {
+  return [
     buildReadDevicesCFCursorCondition(params.cursor, devicesOrder),
     buildReadDevicesCFUpdatedAtGtCondition(params.updated_at_gt),
     // Match the latest aggregated custom_id, not historical event rows.
+    customIdMode ? `custom_id != ''` : undefined,
     buildReadDevicesCFCustomIdsCondition(params.customIds),
     // Match the latest aggregated platform/version/search, not historical event rows.
     buildReadDevicesCFPlatformCondition(params.platform),
     buildReadDevicesCFVersionNameCondition(params.version_name),
     buildReadDevicesCFSearchCondition(params.search, params.deviceIds),
-  ]
-  return conditions.filter(Boolean)
+  ].filter((condition): condition is string => Boolean(condition))
 }
 
 export function buildReadDevicesCFQuery(params: ReadDevicesParams, customIdMode: boolean) {
   const limit = normalizeAnalyticsLimit(params.limit)
   const conditions: string[] = [`index1 = '${escapeSqlString(params.app_id)}'`]
-
-  if (customIdMode) {
-    conditions.push(`blob5 != ''`)
-  }
 
   if (params.deviceIds?.length) {
     if (params.deviceIds.length === 1) {
@@ -1148,7 +1145,7 @@ export function buildReadDevicesCFQuery(params: ReadDevicesParams, customIdMode:
   }
 
   const devicesOrder = getReadDevicesCFOrder(params)
-  const outerConditions = buildReadDevicesCFOuterConditions(params, devicesOrder)
+  const outerConditions = buildReadDevicesCFOuterConditions(params, devicesOrder, customIdMode)
   const includeCountryCode = !!params.deviceIds?.length
   const outerFilter = outerConditions.length ? `WHERE ${outerConditions.join(' AND ')}` : ''
   let orderBy = 'device_id ASC'
