@@ -5100,6 +5100,10 @@ export type Database = {
         Args: { appid: string; orgid: string }
         Returns: boolean
       }
+      request_has_org_or_app_read_access: {
+        Args: { appid: string; orgid: string }
+        Returns: boolean
+      }
       request_has_org_read_access: { Args: { orgid: string }; Returns: boolean }
       request_org_chart_refresh: {
         Args: { org_id: string }

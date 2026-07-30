@@ -20885,6 +20885,10 @@ CREATE INDEX "idx_device_usage_app_timestamp_version_build" ON "public"."device_
 
 
 
+CREATE INDEX "idx_devices_app_id_custom_id" ON "public"."devices" USING "btree" ("app_id", "custom_id") WHERE (("custom_id")::"text" <> ''::"text");
+
+
+
 CREATE INDEX "idx_devices_app_id_install_source" ON "public"."devices" USING "btree" ("app_id", "install_source") WHERE ("install_source" IS NOT NULL);
 
 
