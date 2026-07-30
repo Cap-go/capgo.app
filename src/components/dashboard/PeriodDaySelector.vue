@@ -33,7 +33,10 @@ function select(option: PeriodDayOption) {
 </script>
 
 <template>
-  <fieldset class="d-join shrink-0">
+  <fieldset
+    class="flex items-center p-1 space-x-1 shrink-0 bg-gray-200 rounded-lg dark:bg-gray-800"
+    data-testid="period-day-selector"
+  >
     <legend class="sr-only">
       {{ t('selected-period') }}: {{ t(selectedLabel) }}
     </legend>
@@ -42,8 +45,11 @@ function select(option: PeriodDayOption) {
       :key="option"
       type="button"
       :aria-pressed="props.modelValue === option"
-      class="d-btn d-btn-sm d-join-item min-w-12"
-      :class="props.modelValue === option ? 'd-btn-primary' : 'd-btn-outline'"
+      :aria-label="t(props.labels[option] ?? defaultLabels[option])"
+      class="flex justify-center items-center min-h-9 min-w-[2.75rem] px-2.5 sm:px-3 py-1.5 text-xs font-medium text-center whitespace-nowrap rounded-md transition-colors duration-150 cursor-pointer"
+      :class="props.modelValue === option
+        ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
+        : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'"
       @click="select(option)"
     >
       {{ t(props.labels[option] ?? defaultLabels[option]) }}

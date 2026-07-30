@@ -2579,5 +2579,12 @@
   "version-count": "Versions",
   "view-action-logs": "View action logs",
   "view-logs": "View logs",
-  "last-seen": "Last seen"
+  "last-seen": "Last seen",
+  "org-notification-stats-title": "Notification stats",
+  "org-notification-stats-help": "Aggregated push notification activity across all apps in this organization.",
+  "org-notification-total-events": "Total events",
+  "org-notification-apps": "Apps in org",
+  "org-notification-events-help": "Event breakdown for the last {days} days.",
+  "org-notification-no-stats-help": "Send or receive push notifications from your apps to see org-wide delivery stats here.",
+  "not-authenticated": "Not authenticated"
 }

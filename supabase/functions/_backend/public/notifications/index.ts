@@ -628,14 +628,14 @@ app.post('/events', async (c) => {
   const occurredAt = typeof body.occurredAt === 'string' ? body.occurredAt.trim().slice(0, 64) : ''
   const validProof = CLIENT_NOTIFICATION_DELIVERY_EVENTS.has(body.event)
     ? campaignId && notificationId && await verifyNotificationDeliveryEventProof(c, {
-        appId,
-        recipientKey,
-        deviceKey,
-        campaignId,
-        notificationId,
-        event: body.event,
-        proof: eventProof,
-      })
+      appId,
+      recipientKey,
+      deviceKey,
+      campaignId,
+      notificationId,
+      event: body.event,
+      proof: eventProof,
+    })
     : await verifyNotificationEventProof(c, appId, recipientKey, deviceKey, eventProof)
   if (!validProof)
     throw quickError(401, 'invalid_notification_event_proof', 'Invalid notification event proof', { appId })
