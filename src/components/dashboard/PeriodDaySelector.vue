@@ -46,7 +46,7 @@ function select(option: PeriodDayOption) {
       type="button"
       :aria-pressed="props.modelValue === option"
       :aria-label="t(props.labels[option] ?? defaultLabels[option])"
-      class="flex justify-center items-center min-h-9 min-w-[2.75rem] px-2.5 sm:px-3 py-1.5 text-xs font-medium text-center whitespace-nowrap rounded-md transition-colors duration-150 cursor-pointer"
+      class="flex justify-center items-center h-9 min-h-9 min-w-[2.75rem] px-2.5 sm:px-3 py-1.5 text-xs font-medium text-center whitespace-nowrap rounded-md transition-colors duration-150 cursor-pointer"
       :class="props.modelValue === option
         ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
         : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'"
