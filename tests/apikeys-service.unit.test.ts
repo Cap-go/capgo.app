@@ -6,10 +6,6 @@ const mocks = vi.hoisted(() => ({
   invokeCapgoApi: vi.fn(),
 }))
 
-vi.mock('../src/services/capgoApi.ts', () => ({
-  invokeCapgoApi: mocks.invokeCapgoApi,
-}))
-
 vi.mock('~/services/capgoApi', () => ({
   invokeCapgoApi: mocks.invokeCapgoApi,
 }))

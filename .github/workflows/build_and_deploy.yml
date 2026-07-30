@@ -95,8 +95,18 @@ jobs:
         # Capgo cloud publishes allowlisted functions only (pg_net + functions.invoke).
         # Self-hosting keeps deploying all functions via `supabase functions deploy`.
         run: |
-          mapfile -t FUNCTIONS < <(bun scripts/supabase-cloud-functions.ts list)
+          FUNCTIONS=($(bun scripts/supabase-cloud-functions.ts list))
+          if [ "${#FUNCTIONS[@]}" -eq 0 ]; then
+            echo "Capgo cloud function allowlist is empty; refusing to deploy all functions" >&2
+            exit 1
+          fi
           supabase functions deploy "${FUNCTIONS[@]}"
+          # Remove Capgo-cloud-only functions that are no longer allowlisted.
+          # Self-host installs are unaffected (they deploy every local function).
+          SKIPPED=($(bun scripts/supabase-cloud-functions.ts skip-list))
+          for fn in "${SKIPPED[@]}"; do
+            supabase functions delete "$fn" || true
+          done
 
   read_replica_schema:
     needs: changes

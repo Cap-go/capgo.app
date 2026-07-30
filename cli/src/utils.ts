@@ -799,16 +799,19 @@ export async function invokeCapgoCliApi<T = any>(
 ): Promise<{ data: T | null, error: Error | null }> {
   const method = (options.method ?? 'POST').toUpperCase()
   let base: string
-  if (options.supaHost && options.supaAnon) {
+  let anonKey: string | undefined = options.supaAnon
+  if (options.supaHost && options.supaAnon && !isCapgoManagedSupabaseHost(options.supaHost)) {
     base = `${normalizeSupabaseHost(options.supaHost)}/functions/v1`
   }
   else {
     const localConfig = await getRemoteConfig(true)
+    anonKey = options.supaAnon ?? localConfig.supaKey
     if (
       localConfig.supaHost
       && localConfig.supaKey
       && localConfig.hostApi === defaultApiHost
       && !isCapgoManagedSupabaseHost(localConfig.supaHost)
+      && !(options.supaHost && isCapgoManagedSupabaseHost(options.supaHost))
     ) {
       base = `${normalizeSupabaseHost(localConfig.supaHost)}/functions/v1`
     }
@@ -820,13 +823,15 @@ export async function invokeCapgoCliApi<T = any>(
     }
   }
 
+  const usesFunctionsV1 = base.includes('/functions/v1')
   const url = `${base.replace(/\/+$/, '')}/${path.replace(/^\//, '')}`
   try {
     const response = await fetch(url, {
       method,
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': options.apikey,
+        // Self-host Edge Functions validate the Supabase anon JWT; Capgo cloud uses the API key.
+        'Authorization': usesFunctionsV1 && anonKey ? `Bearer ${anonKey}` : options.apikey,
         'capgkey': options.apikey,
       },
       body: method === 'GET' || method === 'HEAD'
@@ -834,17 +839,17 @@ export async function invokeCapgoCliApi<T = any>(
         : (typeof options.body === 'string' ? options.body : JSON.stringify(options.body ?? {})),
     })
 
-    const contentType = response.headers.get('content-type') ?? ''
-    const payload = contentType.includes('application/json')
-      ? await response.json().catch(() => null)
-      : await response.text().catch(() => null)
-
     if (!response.ok) {
       return {
         data: null,
         error: new FunctionsHttpError(response),
       }
     }
+
+    const contentType = response.headers.get('content-type') ?? ''
+    const payload = contentType.includes('application/json')
+      ? await response.json().catch(() => null)
+      : await response.text().catch(() => null)
 
     return { data: payload as T, error: null }
   }
@@ -860,8 +865,13 @@ export async function resolveCapgoPublicApiHost(
   options?: { supaHost?: string, supaAnon?: string },
   silent = true,
 ): Promise<string> {
-  if (options?.supaHost && options?.supaAnon)
+  if (options?.supaHost && options?.supaAnon) {
+    if (isCapgoManagedSupabaseHost(options.supaHost)) {
+      const localConfig = await getLocalConfig(silent)
+      return localConfig.hostApi
+    }
     return `${normalizeSupabaseHost(options.supaHost)}/functions/v1`
+  }
 
   const localConfig = await getLocalConfig(silent)
   if (localConfig.supaHost && localConfig.supaKey)

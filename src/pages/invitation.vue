@@ -123,6 +123,7 @@ async function submitForm() {
 
     // Call the backend API to accept the invitation using Supabase Functions
     const { data, error } = await invokeCapgoApi('private/accept_invitation', {
+      allowAnonymous: true,
       body: {
         password: password.value,
         magic_invite_string: inviteMagicString.value,

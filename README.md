@@ -460,8 +460,9 @@ functions from `scripts/supabase-cloud-functions.ts`:
   still called these via `supabase.functions.invoke` on `sb.capgo.app`; new
   CLI uses `api.capgo.app` / `files.capgo.app`)
 
-Console traffic uses Cloudflare (`VITE_API_HOST`). Plugin hot paths and unused
-ops endpoints are skipped on Capgo cloud Supabase.
+Console Capgo-cloud traffic uses Cloudflare (`VITE_API_HOST`); self-host / local
+consoles keep `supabase.functions.invoke`. Capgo cloud deploy also deletes
+functions outside the allowlist (`skip-list` / `delete-args`).
 
 ```bash
 bun run deploy:supabase:prod

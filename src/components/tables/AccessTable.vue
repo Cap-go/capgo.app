@@ -266,9 +266,7 @@ async function fetchData() {
     if (error)
       throw error
 
-    const { data: channelBindings, error: channelBindingsError } = await supabase
-      .functions
-      .invoke(`private/role_bindings/app/${app.value.id}/channel`, { method: 'GET' })
+    const { data: channelBindings, error: channelBindingsError } = await invokeCapgoApi(`private/role_bindings/app/${app.value.id}/channel`, { method: 'GET' })
 
     if (channelBindingsError)
       throw channelBindingsError

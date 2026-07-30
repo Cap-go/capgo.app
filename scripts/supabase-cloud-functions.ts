@@ -84,6 +84,10 @@ if (import.meta.main) {
     console.log(buildCapgoCloudSupabaseDeployArgs().join(' '))
     process.exit(0)
   }
-  console.error(`Unknown mode: ${mode}. Use deploy-args | list | skip-list`)
+  if (mode === 'delete-args') {
+    console.log(listCapgoCloudSkippedSupabaseFunctions().join(' '))
+    process.exit(0)
+  }
+  console.error(`Unknown mode: ${mode}. Use deploy-args | list | skip-list | delete-args`)
   process.exit(1)
 }
