@@ -24,9 +24,13 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
     path: '/app/com.demo.app/devices',
     auth: true,
     prepare: async (page) => {
-      // Open the Filters dropdown so platform/bundle controls are visible in the capture.
+      // Open Filters so reviewers see the menu (platform/bundle only exist on head).
       await page.getByRole('button', { name: /filters/i }).click()
-      await page.locator('[data-test="device-platform-filter"]').waitFor({ state: 'visible' })
+      const platformFilter = page.locator('[data-test="device-platform-filter"]')
+      if (await platformFilter.count())
+        await platformFilter.waitFor({ state: 'visible' })
+      else
+        await page.getByText('Override', { exact: true }).waitFor({ state: 'visible' })
     },
   },
   { slug: 'observe', path: '/app/com.demo.app/observe', auth: true },

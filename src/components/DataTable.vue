@@ -530,9 +530,9 @@ const paginationClass = computed(() => props.mobileFixedPagination
             >
               <slot name="filter-extras" />
             </li>
-            <div
+            <li
               v-if="$slots['filter-extras'] && filterList.length"
-              class="my-1 border-t border-gray-200 dark:border-gray-600"
+              class="pointer-events-none m-0! h-px! min-h-0! p-0! bg-gray-200 dark:bg-gray-600"
               role="separator"
             />
             <li v-for="(f, i) in filterList" :key="i">
