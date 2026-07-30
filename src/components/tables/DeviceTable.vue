@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { TableColumn } from '../comp_def'
 import type { Database } from '~/types/supabase.types'
-import { h, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, h, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
@@ -44,8 +44,9 @@ const selectedVersionName = ref(props.versionName ?? '')
 const bundleNames = ref<string[]>([])
 const skipFilterReload = ref(false)
 const offset = 10
-const selectControlClass = 'd-select d-select-bordered h-10 min-h-10 w-full max-w-56 rounded-md border-gray-300 bg-white text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-primary/30 dark:border-gray-600 dark:bg-gray-800 dark:text-white'
-const inputControlClass = 'd-input d-input-bordered h-10 w-full max-w-56 rounded-md border-gray-300 bg-white px-3 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-primary/30 dark:border-gray-600 dark:bg-gray-800 dark:text-white'
+const activeExtraFilters = computed(() =>
+  (selectedPlatform.value ? 1 : 0) + (selectedVersionName.value.trim() ? 1 : 0),
+)
 const columns = ref<TableColumn[]>([
   {
     label: t('device-id'),
@@ -505,67 +506,69 @@ watch([selectedPlatform, selectedVersionName], () => {
 </script>
 
 <template>
-  <div>
-    <div class="flex flex-wrap items-end gap-3 px-4 pt-4">
-      <div class="flex min-w-40 flex-col gap-1">
-        <label for="device-table-platform-filter" class="text-xs font-medium text-slate-600 dark:text-gray-300">
-          {{ t('platform') }}
-        </label>
-        <select
-          id="device-table-platform-filter"
-          v-model="selectedPlatform"
-          :class="selectControlClass"
-          :aria-label="t('platform')"
-          data-test="device-platform-filter"
-        >
-          <option value="">
-            {{ t('all-platforms') }}
-          </option>
-          <option value="ios">
-            {{ t('platform-ios') }}
-          </option>
-          <option value="android">
-            {{ t('platform-android') }}
-          </option>
-          <option value="electron">
-            {{ t('platform-electron') }}
-          </option>
-        </select>
+  <DataTable
+    v-model:filters="filters" v-model:columns="columns" v-model:current-page="currentPage" v-model:search="search"
+    :total="total" :offset="offset" :element-list="elements"
+    filter-text="Filters"
+    :extra-filter-count="activeExtraFilters"
+    :show-add="showAddButton"
+    :is-loading="isLoading"
+    :search-placeholder="t('search-by-device-id')"
+    @add="handleAddDevice"
+    @reload="reload()"
+    @reset="refreshData()"
+  >
+    <template #filter-extras>
+      <div class="flex w-full flex-col gap-3 p-2" @click.stop>
+        <div class="flex flex-col gap-1">
+          <label for="device-table-platform-filter" class="text-xs font-medium text-slate-600 dark:text-gray-300">
+            {{ t('platform') }}
+          </label>
+          <select
+            id="device-table-platform-filter"
+            v-model="selectedPlatform"
+            class="d-select d-select-bordered d-select-sm w-full border-gray-300 bg-white text-slate-900 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+            :aria-label="t('platform')"
+            data-test="device-platform-filter"
+          >
+            <option value="">
+              {{ t('all-platforms') }}
+            </option>
+            <option value="ios">
+              {{ t('platform-ios') }}
+            </option>
+            <option value="android">
+              {{ t('platform-android') }}
+            </option>
+            <option value="electron">
+              {{ t('platform-electron') }}
+            </option>
+          </select>
+        </div>
+        <div class="flex flex-col gap-1">
+          <label for="device-table-bundle-filter" class="text-xs font-medium text-slate-600 dark:text-gray-300">
+            {{ t('bundle') }}
+          </label>
+          <input
+            id="device-table-bundle-filter"
+            v-model="selectedVersionName"
+            list="device-table-bundle-options"
+            type="text"
+            class="d-input d-input-bordered d-input-sm w-full border-gray-300 bg-white text-slate-900 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+            :placeholder="t('all-bundles')"
+            :aria-label="t('bundle')"
+            data-test="device-bundle-filter"
+            autocomplete="off"
+          >
+          <datalist id="device-table-bundle-options">
+            <option
+              v-for="name in bundleNames"
+              :key="name"
+              :value="name"
+            />
+          </datalist>
+        </div>
       </div>
-      <div class="flex min-w-48 flex-col gap-1">
-        <label for="device-table-bundle-filter" class="text-xs font-medium text-slate-600 dark:text-gray-300">
-          {{ t('bundle') }}
-        </label>
-        <input
-          id="device-table-bundle-filter"
-          v-model="selectedVersionName"
-          list="device-table-bundle-options"
-          type="text"
-          :class="inputControlClass"
-          :placeholder="t('all-bundles')"
-          :aria-label="t('bundle')"
-          data-test="device-bundle-filter"
-          autocomplete="off"
-        >
-        <datalist id="device-table-bundle-options">
-          <option
-            v-for="name in bundleNames"
-            :key="name"
-            :value="name"
-          />
-        </datalist>
-      </div>
-    </div>
-    <DataTable
-      v-model:filters="filters" v-model:columns="columns" v-model:current-page="currentPage" v-model:search="search"
-      :total="total" :offset="offset" :element-list="elements"
-      filter-text="Filters"
-      :show-add="showAddButton"
-      :is-loading="isLoading"
-      :search-placeholder="t('search-by-device-id')"
-      @add="handleAddDevice"
-      @reload="reload()"
-      @reset="refreshData()"
-    />
-  </div>
+    </template>
+  </DataTable>
 </template>

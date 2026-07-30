@@ -19,7 +19,16 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
   { slug: 'apps', path: '/apps', auth: true },
   { slug: 'app-overview', path: '/app/com.demo.app', auth: true },
   { slug: 'channels', path: '/app/com.demo.app/channels', auth: true },
-  { slug: 'devices', path: '/app/com.demo.app/devices', auth: true },
+  {
+    slug: 'devices',
+    path: '/app/com.demo.app/devices',
+    auth: true,
+    prepare: async (page) => {
+      // Open the Filters dropdown so platform/bundle controls are visible in the capture.
+      await page.getByRole('button', { name: /filters/i }).click()
+      await page.locator('[data-test="device-platform-filter"]').waitFor({ state: 'visible' })
+    },
+  },
   { slug: 'observe', path: '/app/com.demo.app/observe', auth: true },
   { slug: 'observe-plugins', path: '/app/com.demo.app/observe/plugins', auth: true },
   {

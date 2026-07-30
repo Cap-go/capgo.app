@@ -9,6 +9,7 @@ import {
   onMounted,
   onUnmounted,
   ref,
+  useSlots,
   watch,
 } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -31,6 +32,8 @@ interface Props {
   filterText?: string
   filters?: { [key: string]: boolean }
   filterLabels?: { [key: string]: string }
+  /** Extra active filters contributed by the filter-extras slot (e.g. selects). */
+  extraFilterCount?: number
   searchPlaceholder?: string
   showAdd?: boolean
   addButtonTestId?: string
@@ -49,6 +52,7 @@ interface Props {
 const props = withDefaults(defineProps<Props>(), {
   autoReload: true,
   mobileFixedPagination: true,
+  extraFilterCount: 0,
 })
 const emit = defineEmits([
   'add',
@@ -66,6 +70,7 @@ const emit = defineEmits([
   'selectRow',
   'massDelete',
 ])
+const slots = useSlots()
 const { t } = useI18n()
 const searchVal = ref(props.search ?? '')
 const pendingReset = ref(false)
@@ -95,14 +100,19 @@ const filterList = computed(() => {
   return Object.keys(props.filters)
 })
 const filterActivated = computed(() => {
-  if (!props.filters)
-    return []
-  return Object.keys(props.filters).reduce((acc, key) => {
-    if (props.filters![key])
-      acc += 1
-    return acc
-  }, 0)
+  const booleanCount = props.filters
+    ? Object.keys(props.filters).reduce((acc, key) => {
+        if (props.filters![key])
+          acc += 1
+        return acc
+      }, 0)
+    : 0
+  return booleanCount + (props.extraFilterCount ?? 0)
 })
+
+const showFilterMenu = computed(() =>
+  Boolean(props.filterText && (filterList.value.length || slots['filter-extras'])),
+)
 
 function getFilterLabel(filter: string) {
   return props.filterLabels?.[filter] ?? t(filter)
@@ -497,7 +507,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
             <span class="hidden text-sm md:block">{{ t("add-one") }}</span>
           </button>
         </div>
-        <div v-if="filterText && filterList.length" class="h-10 d-dropdown">
+        <div v-if="showFilterMenu" class="relative h-10 d-dropdown">
           <button
             tabindex="0"
             class="inline-flex items-center py-1.5 px-3 mr-2 h-full text-sm font-medium text-gray-500 bg-white rounded-md border border-gray-300 cursor-pointer dark:text-white dark:bg-gray-800 dark:border-gray-600 hover:bg-gray-100 focus:ring-4 focus:ring-gray-200 dark:hover:border-gray-600 dark:hover:bg-gray-700 dark:focus:ring-gray-700 focus:outline-hidden"
@@ -509,10 +519,17 @@ const paginationClass = computed(() => props.mobileFixedPagination
               {{ filterActivated }}
             </div>
             <IconFilter class="w-4 h-4 mr-2" />
-            <span class="hidden md:block">{{ t(filterText) }}</span>
+            <span class="hidden md:block">{{ t(filterText ?? '') }}</span>
             <IconDown class="hidden w-4 h-4 ml-2 md:block" />
           </button>
           <ul class="max-h-80 w-72 max-w-[calc(100vw-2rem)] overflow-y-auto border border-gray-200 bg-white p-2 shadow-xl d-dropdown-content d-menu rounded-box z-20 dark:border-gray-700 dark:bg-base-200">
+            <li v-if="$slots['filter-extras']" class="p-0!" @click.stop>
+              <slot name="filter-extras" />
+            </li>
+            <li
+              v-if="$slots['filter-extras'] && filterList.length"
+              class="my-1 border-t border-gray-200 dark:border-gray-600"
+            />
             <li v-for="(f, i) in filterList" :key="i">
               <div
                 class="flex min-h-10 items-center rounded-md p-2 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600"
