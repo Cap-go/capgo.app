@@ -18,7 +18,7 @@ import { simpleError200 } from './hono.ts'
 import { cloudlog } from './logging.ts'
 import { sendNotifOrgCached } from './notifications.ts'
 import { sendNotifToOrgMembersCached } from './org_email_notifications.ts'
-import { closeClient, getAppBlockProviderInfraRequestsPostgres, getAppOwnerPostgres, getDrizzleClient, getPgClient, requestInfosPostgres, requestManifestEntriesPostgres, setReplicationLagHeader } from './pg.ts'
+import { closeClient, getAppBlockProviderInfraRequestsPostgres, getAppOwnerPostgres, getDrizzleClient, getPgClient, requestInfosChannelDevicePostgres, requestInfosChannelPostgres, requestInfosPostgres, requestManifestEntriesPostgres, setReplicationLagHeader } from './pg.ts'
 import { makeDevice } from './plugin_parser.ts'
 import { createStatsBandwidth, createStatsMau, createStatsVersion, onPremStats, sendStatsAndDevice } from './plugin_stats.ts'
 import { getClientIP } from './rate_limit.ts'
@@ -275,6 +275,8 @@ async function getStoredChannelSelfOverride(c: Context, appId: string, deviceId:
 
 export interface UpdatePathTiming {
   ownerMs?: number
+  requestInfosMs?: number
+  channelPrefetchHit?: boolean
 }
 
 export async function updateWithPG(
@@ -321,8 +323,30 @@ export async function updateWithPG(
       return providerBlockedResponse
   }
 
+  // Overlap owner lookup with default-channel prefetch on a second Hyperdrive
+  // client when app-status cache already says cloud. Cuts Request Duration by
+  // one serial replica RTT on the common path (CF chart != waitUntil).
   const startOwner = performance.now()
-  const appOwner = await getAppOwnerPostgres(c, app_id, drizzleClient, PLAN_LIMIT)
+  let appOwner: Awaited<ReturnType<typeof getAppOwnerPostgres>>
+  let prefetchedChannel: Awaited<ReturnType<typeof requestInfosChannelPostgres>> | null = null
+  if (cachedStatus === 'cloud') {
+    const prefetchClient = await getPgClient(c, true)
+    try {
+      const drizzlePrefetch = getDrizzleClient(prefetchClient, { logger: false })
+      const [appOwnerParallel, channelParallel] = await Promise.all([
+        getAppOwnerPostgres(c, app_id, drizzleClient, PLAN_LIMIT),
+        requestInfosChannelPostgres(c, platform, app_id, defaultChannel, drizzlePrefetch, false, false),
+      ])
+      appOwner = appOwnerParallel
+      prefetchedChannel = channelParallel ?? null
+    }
+    finally {
+      await closeClient(c, prefetchClient)
+    }
+  }
+  else {
+    appOwner = await getAppOwnerPostgres(c, app_id, drizzleClient, PLAN_LIMIT)
+  }
   if (pathTiming)
     pathTiming.ownerMs = Math.round(performance.now() - startOwner)
   // if version_build is not semver, then make it semver
@@ -419,25 +443,56 @@ export async function updateWithPG(
   const needsMetadata = appOwner.expose_metadata && !isDeprecatedPluginVersion(pluginVersion, '5.35.0', '6.35.0', '7.35.0', '8.35.0')
 
   const startRequestInfos = performance.now()
-  const requestedInto = await requestInfosPostgres({
-    c,
-    platform,
-    app_id,
-    device_id,
-    defaultChannel,
-    drizzleClient,
-    channelDeviceCount: effectiveChannelDeviceCount,
-    manifestBundleCount,
-    // Skip channel-query json_agg (P999 on up-to-date). New-version path loads
-    // via indexed manifest.app_version_id fetch started right after this check.
-    includeManifest: false,
-    rolloutChannelCount,
-    rolloutPausedVersionNames,
-    currentVersionName: version_name,
-    includeMetadata: needsMetadata,
-    channelSelfOverrideChannelId: channelSelfOverride?.channel_id.id,
-  })
+  const isPausedRolloutVersion = Array.isArray(rolloutPausedVersionNames) && rolloutPausedVersionNames.includes(version_name)
+  const shouldUseRolloutPath = (rolloutChannelCount ?? 0) > 0 || isPausedRolloutVersion
+  const canUseChannelPrefetch = Boolean(
+    prefetchedChannel
+    && !needsMetadata
+    && !shouldUseRolloutPath
+    && !channelSelfOverride,
+  )
+  let requestedInto: Awaited<ReturnType<typeof requestInfosPostgres>>
+  if (canUseChannelPrefetch) {
+    let channelOverride: Awaited<ReturnType<typeof requestInfosChannelDevicePostgres>> | null = null
+    if (effectiveChannelDeviceCount > 0) {
+      channelOverride = await requestInfosChannelDevicePostgres(
+        c,
+        app_id,
+        device_id,
+        drizzleClient,
+        false,
+        false,
+      ) ?? null
+    }
+    requestedInto = { channelData: prefetchedChannel, channelOverride }
+    if (pathTiming)
+      pathTiming.channelPrefetchHit = true
+  }
+  else {
+    requestedInto = await requestInfosPostgres({
+      c,
+      platform,
+      app_id,
+      device_id,
+      defaultChannel,
+      drizzleClient,
+      channelDeviceCount: effectiveChannelDeviceCount,
+      manifestBundleCount,
+      // Skip channel-query json_agg (P999 on up-to-date). New-version path loads
+      // via indexed manifest.app_version_id fetch started right after this check.
+      includeManifest: false,
+      rolloutChannelCount,
+      rolloutPausedVersionNames,
+      currentVersionName: version_name,
+      includeMetadata: needsMetadata,
+      channelSelfOverrideChannelId: channelSelfOverride?.channel_id.id,
+    })
+    if (pathTiming)
+      pathTiming.channelPrefetchHit = false
+  }
   const requestInfosMs = Math.round(performance.now() - startRequestInfos)
+  if (pathTiming)
+    pathTiming.requestInfosMs = requestInfosMs
   const { channelOverride } = requestedInto
   let { channelData } = requestedInto
 
@@ -793,6 +848,8 @@ export async function update(c: Context, body: AppInfos) {
         appStatusMs,
         pgClientMs,
         ownerMs: pathTiming.ownerMs ?? 0,
+        requestInfosMs: pathTiming.requestInfosMs ?? 0,
+        channelPrefetchHit: pathTiming.channelPrefetchHit ?? false,
         replicationLagMs,
         databaseSource: c.get('databaseSource') ?? c.res.headers.get('X-Database-Source') ?? null,
         app_id: body.app_id,

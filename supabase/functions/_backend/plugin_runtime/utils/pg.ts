@@ -1050,25 +1050,48 @@ export function requestInfosPostgres(options: RequestInfosPostgresOptions) {
   const shouldUseRolloutPath = (rolloutChannelCount ?? 0) > 0 || isPausedRolloutVersion
 
   if (!shouldUseRolloutPath) {
-    let channelDevice: ReturnType<typeof requestInfosChannelByIdPostgres> | ReturnType<typeof requestInfosChannelDevicePostgres> | Promise<null>
+    const runPair = async (
+      deviceClient: typeof drizzleClient,
+      channelClient: typeof drizzleClient,
+    ) => {
+      let channelDevice: ReturnType<typeof requestInfosChannelByIdPostgres> | ReturnType<typeof requestInfosChannelDevicePostgres> | Promise<null>
 
-    if (typeof channelSelfOverrideChannelId === 'number') {
-      channelDevice = requestInfosChannelByIdPostgres(c, app_id, channelSelfOverrideChannelId, drizzleClient, shouldFetchManifest, includeMetadata)
+      if (typeof channelSelfOverrideChannelId === 'number') {
+        channelDevice = requestInfosChannelByIdPostgres(c, app_id, channelSelfOverrideChannelId, deviceClient, shouldFetchManifest, includeMetadata)
+      }
+      else if (shouldQueryChannelOverride) {
+        channelDevice = requestInfosChannelDevicePostgres(c, app_id, device_id, deviceClient, shouldFetchManifest, includeMetadata)
+      }
+      else {
+        channelDevice = Promise.resolve(null)
+      }
+      const channel = requestInfosChannelPostgres(c, platform, app_id, defaultChannel, channelClient, shouldFetchManifest, includeMetadata)
+      const [channelOverride, channelData] = await Promise.all([channelDevice, channel])
+      return { channelData, channelOverride }
     }
-    else if (shouldQueryChannelOverride) {
-      channelDevice = requestInfosChannelDevicePostgres(c, app_id, device_id, drizzleClient, shouldFetchManifest, includeMetadata)
-    }
-    else {
-      channelDevice = Promise.resolve(null)
-    }
-    const channel = requestInfosChannelPostgres(c, platform, app_id, defaultChannel, drizzleClient, shouldFetchManifest, includeMetadata)
 
-    return Promise.all([channelDevice, channel])
-      .then(([channelOverride, channelData]) => ({ channelData, channelOverride }))
-      .catch((e) => {
+    return (async () => {
+      try {
+        // Single pg.Client serializes queries; use a second Hyperdrive client when
+        // both override + default channel are needed so the two RTTs overlap.
+        const needsParallelClients = shouldQueryChannelOverride || typeof channelSelfOverrideChannelId === 'number'
+        if (needsParallelClients && getRuntimeKey() === 'workerd') {
+          const parallelClient = await getPgClient(c, true)
+          try {
+            const drizzleParallel = getDrizzleClient(parallelClient, { logger: false })
+            return await runPair(drizzleClient, drizzleParallel)
+          }
+          finally {
+            await closeClient(c, parallelClient)
+          }
+        }
+        return await runPair(drizzleClient, drizzleClient)
+      }
+      catch (e) {
         logPgError(c, 'requestInfosPostgres', e)
         throw e
-      })
+      }
+    })()
   }
 
   let channelDevice: ReturnType<typeof requestInfosChannelByIdPostgresRollout> | ReturnType<typeof requestInfosChannelDevicePostgresRollout> | Promise<null>

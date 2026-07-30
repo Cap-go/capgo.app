@@ -6,6 +6,8 @@ const CACHE_METHOD = 'GET'
 
 /** Hot-path Cache API reads must not block /updates P999 when CF Cache stalls. */
 export const CACHE_MATCH_TIMEOUT_MS = 20
+/** Cache puts also run under waitUntil and inflate Workers Wall Time charts. */
+export const CACHE_PUT_TIMEOUT_MS = 20
 
 type CacheLike = Cache & { default?: Cache, open?: (cacheName: string) => Promise<Cache> }
 
@@ -110,16 +112,27 @@ export class CacheHelper {
     }
   }
 
-  async putJson(key: Request, payload: unknown, ttlSeconds: number) {
-    const cache = await this.ensureCache()
-    if (!cache)
+  /**
+   * Write JSON to Cache API. On timeout or error, fail open so waitUntil work
+   * (device tracking, app status) cannot stretch Workers Wall Time P999.
+   */
+  async putJson(key: Request, payload: unknown, ttlSeconds: number, options?: { timeoutMs?: number }) {
+    const timeoutMs = options?.timeoutMs ?? CACHE_PUT_TIMEOUT_MS
+    const result = await withTimeout(this.putJsonUnbound(key, payload, ttlSeconds), timeoutMs)
+    if (result === TIMEOUT)
       return
-    const headers = new Headers({
-      'Content-Type': 'application/json',
-      'Cache-Control': this.buildCacheControl(ttlSeconds),
-    })
-    const response = new Response(JSON.stringify(payload), { headers })
+  }
+
+  private async putJsonUnbound(key: Request, payload: unknown, ttlSeconds: number) {
     try {
+      const cache = await this.ensureCache()
+      if (!cache)
+        return
+      const headers = new Headers({
+        'Content-Type': 'application/json',
+        'Cache-Control': this.buildCacheControl(ttlSeconds),
+      })
+      const response = new Response(JSON.stringify(payload), { headers })
       await cache.put(key, response.clone())
     }
     catch (error) {
