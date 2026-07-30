@@ -10,6 +10,7 @@ import {
   onMounted,
   onUnmounted,
   ref,
+  useId,
   useSlots,
   watch,
 } from 'vue'
@@ -75,6 +76,7 @@ const emit = defineEmits([
 const isFilterModalOpen = ref(false)
 const filterModalBoxRef = ref<HTMLElement | null>(null)
 const filterOpenButtonRef = ref<HTMLButtonElement | null>(null)
+const filterModalTitleId = `${useId()}-filters-title`
 const slots = useSlots()
 const { t } = useI18n()
 const searchVal = ref(props.search ?? '')
@@ -610,7 +612,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
               class="d-modal d-modal-open"
               role="dialog"
               aria-modal="true"
-              aria-labelledby="data-table-filters-title"
+              :aria-labelledby="filterModalTitleId"
               data-test="data-table-filters-modal"
             >
               <div
@@ -620,7 +622,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
                 <div class="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4 dark:border-slate-800">
                   <div class="min-w-0">
                     <h2
-                      id="data-table-filters-title"
+                      :id="filterModalTitleId"
                       class="text-lg font-semibold leading-7 text-slate-950 dark:text-white"
                     >
                       {{ t(filterText ?? 'Filters') }}

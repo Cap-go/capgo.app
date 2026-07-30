@@ -25,16 +25,17 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
     auth: true,
     prepare: async (page) => {
       // Open Filters so reviewers see platform/bundle controls on head.
-      // Base still uses the legacy dropdown, so fall back when modal is absent.
+      // Base still uses the legacy dropdown, so fall back only when modal is absent.
       await page.getByRole('button', { name: /filters/i }).click()
       const modal = page.locator('[data-test="data-table-filters-modal"]')
       try {
         await modal.waitFor({ state: 'visible', timeout: 3000 })
-        await page.locator('[data-test="device-platform-filter"]').waitFor({ state: 'visible' })
       }
       catch {
         await page.getByText('Override', { exact: true }).waitFor({ state: 'visible' })
+        return
       }
+      await page.locator('[data-test="device-platform-filter"]').waitFor({ state: 'visible' })
     },
   },
   { slug: 'observe', path: '/app/com.demo.app/observe', auth: true },
