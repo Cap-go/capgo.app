@@ -1,7 +1,7 @@
 import { FunctionsHttpError } from '@supabase/supabase-js'
 
 export interface CapgoApiInvokeOptions {
-  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
   body?: BodyInit | Record<string, unknown> | null
   headers?: Record<string, string>
   /** Use the anon key when there is no user session (public bootstrap endpoints). */
