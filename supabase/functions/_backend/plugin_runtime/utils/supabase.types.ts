@@ -4544,6 +4544,9 @@ export type Database = {
         Returns: boolean
       }
       has_seeded_demo_data: { Args: { p_app_id: string }; Returns: boolean }
+      has_usage_credits_org:
+        | { Args: { orgid: string }; Returns: boolean }
+        | { Args: { appid: string; orgid: string }; Returns: boolean }
       internal_request_db_user_names: { Args: never; Returns: string[] }
       internal_request_role_names: { Args: never; Returns: string[] }
       invite_user_to_org_rbac: {
