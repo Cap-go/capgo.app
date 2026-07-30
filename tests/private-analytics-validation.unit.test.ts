@@ -119,7 +119,49 @@ describe('private analytics route validation', () => {
     ['non-numeric limits', { limit: '1 UNION SELECT 1' }],
     ['decimal limits', { limit: 1.5 }],
     ['boolean limits', { limit: true }],
+    ['invalid platform', { platform: 'windows' }],
   ])('rejects %s on /private/devices', async (_label, body) => {
     await expectRejectedDevicesBody(body)
+  })
+
+  it('accepts platform and versionName filters on /private/devices', async () => {
+    readDevicesMock.mockResolvedValue({ data: [], nextCursor: undefined, hasMore: false })
+
+    const response = await devicesApp.request(postJson('http://local/', {
+      appId: 'com.example.app',
+      platform: 'ios',
+      versionName: '1.2.3',
+    }))
+
+    expect(response.status).toBe(200)
+    expect(checkPermissionMock).toHaveBeenCalled()
+    expect(readDevicesMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      app_id: 'com.example.app',
+      platform: 'ios',
+      version_name: '1.2.3',
+    }), false)
+  })
+
+  it('passes platform to countDevices on /private/devices', async () => {
+    countDevicesMock.mockResolvedValue(7)
+
+    const response = await devicesApp.request(postJson('http://local/', {
+      appId: 'com.example.app',
+      count: true,
+      platform: 'android',
+      versionName: '2.0.0',
+    }))
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ count: 7 })
+    expect(countDevicesMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'com.example.app',
+      false,
+      [],
+      '2.0.0',
+      undefined,
+      'android',
+    )
   })
 })

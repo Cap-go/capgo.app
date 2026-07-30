@@ -937,6 +937,14 @@ GROUP BY install_source`
   return counts
 }
 
+function platformOsToCFDouble(platform: Database['public']['Enums']['platform_os']): number {
+  if (platform === 'ios')
+    return 1
+  if (platform === 'electron')
+    return 2
+  return 0
+}
+
 export async function countDevicesCF(
   c: Context,
   app_id: string,
@@ -944,6 +952,7 @@ export async function countDevicesCF(
   deviceIds: string[] = [],
   versionName?: string,
   search?: string,
+  platform?: Database['public']['Enums']['platform_os'],
 ) {
   // Use Analytics Engine DEVICE_INFO for counting devices
   const conditions = [`index1 = '${escapeSqlString(app_id)}'`]
@@ -971,6 +980,29 @@ export async function countDevicesCF(
 
   if (versionName)
     conditions.push(`blob2 = '${escapeSqlString(versionName)}'`)
+
+  // Match latest aggregated platform for current-state filtering.
+  if (platform) {
+    const platformValue = platformOsToCFDouble(platform)
+    const query = `SELECT COUNT() AS total
+FROM (
+  SELECT argMax(double1, timestamp) AS platform
+  FROM device_info
+  WHERE ${conditions.join(' AND ')}
+  GROUP BY blob1
+)
+WHERE platform = ${platformValue}`
+
+    cloudlog({ requestId: c.get('requestId'), message: 'countDevicesCF query', query })
+    try {
+      const res = await runQueryToCFA<{ total: number }>(c, query)
+      return res[0]?.total ?? 0
+    }
+    catch (e) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading device count from Analytics Engine', error: serializeError(e), query })
+    }
+    return 0
+  }
 
   const query = `SELECT COUNT(DISTINCT blob1) AS total
 FROM device_info
@@ -1053,12 +1085,20 @@ function buildReadDevicesCFCustomIdsCondition(customIds: string[] | undefined) {
   return `custom_id IN (${customIdsList})`
 }
 
+function buildReadDevicesCFPlatformCondition(platform: ReadDevicesParams['platform']) {
+  if (!platform)
+    return ''
+  return `platform = ${platformOsToCFDouble(platform)}`
+}
+
 function buildReadDevicesCFOuterConditions(params: ReadDevicesParams, devicesOrder: DevicesOrderCF | null) {
   const conditions = [
     buildReadDevicesCFCursorCondition(params.cursor, devicesOrder),
     buildReadDevicesCFUpdatedAtGtCondition(params.updated_at_gt),
     // Match the latest aggregated custom_id, not historical event rows.
     buildReadDevicesCFCustomIdsCondition(params.customIds),
+    // Match the latest aggregated platform, not historical event rows.
+    buildReadDevicesCFPlatformCondition(params.platform),
   ]
   return conditions.filter(Boolean)
 }

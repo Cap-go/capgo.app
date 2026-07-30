@@ -1,20 +1,22 @@
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Order } from '../utils/types.ts'
-import { z } from 'zod'
 import { Hono } from 'hono/tiny'
-import { safeParseSchema } from '../utils/schema_validation.ts'
+import { z } from 'zod'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { appIdSchema, cursorSchema, deviceIdSchema, hasInvalidQueryLimitInput, hasUnsafeDevicesQueryText, queryLimitSchema, safeQueryTextSchema } from '../utils/privateAnalyticsValidation.ts'
 import { checkPermission } from '../utils/rbac.ts'
+import { safeParseSchema } from '../utils/schema_validation.ts'
 import { countDevices, countInstallSources, readDevices } from '../utils/stats.ts'
+import { Constants } from '../utils/supabase.types.ts'
 
 interface DataDevice {
   appId: string
   count?: boolean
   installSourceCounts?: boolean
   versionName?: string
+  platform?: typeof Constants.public.Enums.platform_os[number]
   devicesId?: string[]
   deviceIds?: string[] // TODO: remove when migration is done
   installSources?: string[]
@@ -31,11 +33,13 @@ const orderItemSchema = z.object({
   key: z.string().max(64),
   sortable: z.enum(['asc', 'desc']).optional(),
 })
+const platformSchema = z.enum(Constants.public.Enums.platform_os)
 const devicesBodySchema = z.object({
   appId: appIdSchema,
   count: z.boolean().optional(),
   installSourceCounts: z.boolean().optional(),
   versionName: safeQueryTextSchema.optional(),
+  platform: platformSchema.optional(),
   devicesId: z.array(deviceIdSchema).optional(),
   deviceIds: z.array(deviceIdSchema).optional(),
   installSources: z.array(safeQueryTextSchema).optional(),
@@ -70,11 +74,23 @@ app.post('/', middlewareAuth(), async (c) => {
   const devicesIds = body.devicesId ?? body.deviceIds ?? []
   if (body.installSourceCounts)
     return c.json({ installSources: await countInstallSources(c, body.appId) })
-  if (body.count)
-    return c.json({ count: await countDevices(c, body.appId, body.customIdMode ?? false, devicesIds, body.versionName, body.search?.trim()) })
+  if (body.count) {
+    return c.json({
+      count: await countDevices(
+        c,
+        body.appId,
+        body.customIdMode ?? false,
+        devicesIds,
+        body.versionName,
+        body.search?.trim(),
+        body.platform,
+      ),
+    })
+  }
   return c.json(await readDevices(c, {
     app_id: body.appId,
     version_name: body.versionName,
+    platform: body.platform,
     deviceIds: devicesIds,
     installSources: body.installSources,
     search: body.search,

@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import type { TableColumn } from '../comp_def'
 import type { Database } from '~/types/supabase.types'
-import { h, ref } from 'vue'
+import { useDebounceFn } from '@vueuse/core'
+import { h, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
@@ -20,6 +21,7 @@ const emit = defineEmits(['addDevice'])
 
 // TODO: delete the old version check when all devices uses the new version system
 type Device = Database['public']['Tables']['devices']['Row']
+type PlatformOs = Database['public']['Enums']['platform_os']
 
 const { t } = useI18n()
 const supabase = useSupabase()
@@ -38,7 +40,11 @@ const filters = ref({
   Override: false,
   CustomId: false,
 })
+const selectedPlatform = ref<'' | PlatformOs>('')
+const selectedVersionName = ref(props.versionName ?? '')
+const bundleNames = ref<string[]>([])
 const offset = 10
+const selectControlClass = 'd-select d-select-bordered h-10 min-h-10 w-full max-w-56 rounded-md border-gray-300 bg-white text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-primary/30 dark:border-gray-600 dark:bg-gray-800 dark:text-white'
 const columns = ref<TableColumn[]>([
   {
     label: t('device-id'),
@@ -95,16 +101,52 @@ function getSearchTerm() {
   return trimmed.length ? trimmed : undefined
 }
 
+function getVersionNameFilter() {
+  const selected = selectedVersionName.value.trim()
+  if (selected)
+    return selected
+  return props.versionName || undefined
+}
+
+function getPlatformFilter(): PlatformOs | undefined {
+  return selectedPlatform.value || undefined
+}
+
 function getQuerySignature() {
   return JSON.stringify({
     appId: props.appId,
-    versionName: props.versionName,
+    versionName: getVersionNameFilter(),
+    platform: getPlatformFilter() ?? '',
     search: getSearchTerm(),
     order: getActiveOrder(columns.value),
     override: filters.value.Override,
     customIdMode: filters.value.CustomId,
     ids: props.ids ? [...props.ids].sort().join(',') : '',
   })
+}
+
+async function loadBundleNames() {
+  if (!props.appId)
+    return
+
+  const { data, error } = await supabase
+    .from('app_versions')
+    .select('name')
+    .eq('app_id', props.appId)
+    .eq('deleted', false)
+    .order('created_at', { ascending: false })
+    .limit(200)
+
+  if (error || !data) {
+    bundleNames.value = []
+    return
+  }
+
+  const names = [...new Set(data.map(row => row.name).filter(Boolean))]
+  const selected = getVersionNameFilter()
+  if (selected && !names.includes(selected))
+    names.unshift(selected)
+  bundleNames.value = names
 }
 
 async function getDevicesID() {
@@ -149,7 +191,8 @@ async function countDevices() {
       body: JSON.stringify({
         count: true,
         appId: props.appId,
-        versionName: props.versionName,
+        versionName: getVersionNameFilter(),
+        platform: getPlatformFilter(),
         devicesId: deviceIds.length > 0 ? deviceIds : undefined,
         search: searchTerm,
         order: getActiveOrder(columns.value),
@@ -235,6 +278,10 @@ async function refreshData() {
   }
 }
 
+const debouncedReload = useDebounceFn(() => {
+  reload()
+}, 300)
+
 async function fetchDevicesPage(cursor: string | undefined | null) {
   const ids = await resolveDeviceIds()
   const searchTerm = getSearchTerm()
@@ -252,7 +299,8 @@ async function fetchDevicesPage(cursor: string | undefined | null) {
     },
     body: JSON.stringify({
       appId: props.appId,
-      versionName: props.versionName,
+      versionName: getVersionNameFilter(),
+      platform: getPlatformFilter(),
       devicesId: ids.length ? ids : undefined,
       search: searchTerm,
       order: getActiveOrder(columns.value),
@@ -403,10 +451,80 @@ async function ensureVersionNames(devices: Device[]) {
       device.version_name = versionMap[id]
   })
 }
+
+onMounted(async () => {
+  await loadBundleNames()
+})
+
+watch(() => props.appId, async () => {
+  selectedPlatform.value = ''
+  selectedVersionName.value = props.versionName ?? ''
+  await loadBundleNames()
+  await refreshData()
+})
+
+watch(() => props.versionName, (value) => {
+  if (value && !selectedVersionName.value)
+    selectedVersionName.value = value
+})
+
+watch([selectedPlatform, selectedVersionName], () => {
+  debouncedReload()
+})
 </script>
 
 <template>
   <div>
+    <div class="flex flex-wrap items-end gap-3 px-4 pt-4">
+      <div class="flex min-w-40 flex-col gap-1">
+        <label for="device-table-platform-filter" class="text-xs font-medium text-slate-600 dark:text-gray-300">
+          {{ t('platform') }}
+        </label>
+        <select
+          id="device-table-platform-filter"
+          v-model="selectedPlatform"
+          :class="selectControlClass"
+          :aria-label="t('platform')"
+          data-test="device-platform-filter"
+        >
+          <option value="">
+            {{ t('all-platforms') }}
+          </option>
+          <option value="ios">
+            {{ t('platform-ios') }}
+          </option>
+          <option value="android">
+            {{ t('platform-android') }}
+          </option>
+          <option value="electron">
+            {{ t('platform-electron') }}
+          </option>
+        </select>
+      </div>
+      <div class="flex min-w-48 flex-col gap-1">
+        <label for="device-table-bundle-filter" class="text-xs font-medium text-slate-600 dark:text-gray-300">
+          {{ t('bundle') }}
+        </label>
+        <select
+          id="device-table-bundle-filter"
+          v-model="selectedVersionName"
+          :class="selectControlClass"
+          :aria-label="t('bundle')"
+          data-test="device-bundle-filter"
+        >
+          <option value="">
+            {{ t('all-bundles') }}
+          </option>
+          <option
+            v-for="name in bundleNames"
+            :key="name"
+            :value="name"
+          >
+            {{ name }}
+          </option>
+        </select>
+      </div>
+    </div>
     <DataTable
       v-model:filters="filters" v-model:columns="columns" v-model:current-page="currentPage" v-model:search="search"
       :total="total" :offset="offset" :element-list="elements"

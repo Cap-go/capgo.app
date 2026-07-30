@@ -150,6 +150,22 @@ describe('buildReadDevicesCFQuery', () => {
     expect(outerFilterIndex).toBeGreaterThan(groupByIndex)
   })
 
+  it.concurrent('filters devices by latest aggregated platform after grouping', () => {
+    const query = buildReadDevicesCFQuery({
+      app_id: 'com.example.app',
+      platform: 'ios',
+      version_name: '1.2.3',
+      limit: 1,
+    }, false)
+
+    const groupByIndex = query.indexOf('GROUP BY blob1')
+    const versionIndex = query.indexOf(`blob2 = '1.2.3'`)
+    const platformIndex = query.indexOf('WHERE platform = 1')
+
+    expect(versionIndex).toBeGreaterThan(-1)
+    expect(versionIndex).toBeLessThan(groupByIndex)
+    expect(platformIndex).toBeGreaterThan(groupByIndex)
+  })
 })
 describe('countDevicesCF', () => {
   it('does not read install source blob on default device counts', async () => {
@@ -307,6 +323,21 @@ describe('readDevicesSB', () => {
     }, false)
 
     expect(query.in).toHaveBeenCalledWith('install_source', ['app_store', 'testflight'])
+  })
+
+  it('applies platform and version_name filters together', async () => {
+    const { client, query } = createReadDevicesQueryMock()
+    vi.mocked(createClient).mockReturnValue(client as unknown as ReturnType<typeof createClient>)
+
+    await readDevicesSB(createContextMock() as unknown as Context, {
+      app_id: 'com.example.app',
+      platform: 'android',
+      version_name: '2.0.0',
+      limit: 1,
+    }, false)
+
+    expect(query.eq).toHaveBeenCalledWith('platform', 'android')
+    expect(query.eq).toHaveBeenCalledWith('version_name', '2.0.0')
   })
 
   it('filters devices with updated_at greater than the provided timestamp', async () => {
