@@ -6,7 +6,7 @@ import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc.js'
 import { Hono } from 'hono/tiny'
 import { CacheHelper } from '../utils/cache.ts'
-import { readUpdateDeliveryTimingEventsCF } from '../utils/cloudflare.ts'
+import { parseStatsDurationMs, readUpdateDeliveryTimingEventsCF, resolveUpdateDeliveryTimingDurationMs } from '../utils/cloudflare.ts'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
@@ -256,31 +256,11 @@ function toMetric(value: NumericValue, decimals = 0) {
 }
 
 function parseMetaDurationMs(metadata: Record<string, unknown> | null | undefined): number | null {
-  if (!metadata)
-    return null
-  for (const key of ['duration_ms', 'duration'] as const) {
-    const raw = metadata[key]
-    if (typeof raw === 'number') {
-      if (Number.isFinite(raw) && raw >= 0 && raw <= maxDeliveryMs)
-        return raw
-      continue
-    }
-    if (typeof raw !== 'string' || raw.length === 0 || raw.length > 15)
-      continue
-    if (!/^\d+(?:\.\d+)?$/.test(raw))
-      continue
-    const value = Number(raw)
-    if (!Number.isFinite(value) || value < 0 || value > maxDeliveryMs)
-      continue
-    return value
-  }
-  return null
+  return parseStatsDurationMs(metadata)
 }
 
 function resolveEventDurationMs(event: UpdateDeliveryTimingEventCF): number | null {
-  if (typeof event.duration_ms === 'number' && Number.isFinite(event.duration_ms) && event.duration_ms > 0 && event.duration_ms <= maxDeliveryMs)
-    return event.duration_ms
-  return parseMetaDurationMs(event.metadata)
+  return resolveUpdateDeliveryTimingDurationMs(event)
 }
 
 function percentileCont(sorted: number[], q: number): number | null {

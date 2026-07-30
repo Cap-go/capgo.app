@@ -197,17 +197,24 @@ export function trackVersionUsageCF(c: Context, version_name: string, app_id: st
   return Promise.resolve()
 }
 
-function parseStatsDurationMs(metadata?: StatsMetadata): number | null {
+const MAX_STATS_DURATION_MS = 7_200_000
+
+function parseStatsDurationMs(metadata?: StatsMetadata | Record<string, unknown> | null): number | null {
   if (!metadata)
     return null
   for (const key of ['duration_ms', 'duration'] as const) {
     const raw = metadata[key]
+    if (typeof raw === 'number') {
+      if (Number.isFinite(raw) && raw >= 0 && raw <= MAX_STATS_DURATION_MS)
+        return raw
+      continue
+    }
     if (typeof raw !== 'string' || raw.length === 0 || raw.length > 15)
       continue
-    if (!/^\d+(\.\d+)?$/.test(raw))
+    if (!/^\d+(?:\.\d+)?$/.test(raw))
       continue
     const value = Number(raw)
-    if (!Number.isFinite(value) || value < 0 || value > 7_200_000)
+    if (!Number.isFinite(value) || value < 0 || value > MAX_STATS_DURATION_MS)
       continue
     return value
   }
