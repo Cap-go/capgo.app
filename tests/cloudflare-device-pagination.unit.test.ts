@@ -167,6 +167,7 @@ describe('buildReadDevicesCFQuery', () => {
     expect(platformIndex).toBeGreaterThan(groupByIndex)
   })
 })
+
 describe('countDevicesCF', () => {
   it('does not read install source blob on default device counts', async () => {
     let query = ''
