@@ -330,21 +330,7 @@ describe('[POST] /private/download_link - Error Cases', () => {
   })
 })
 
-describe('[POST] /private/delete_failed_version - Error Cases', () => {
-  it('should return 500 when user not found', async () => {
-    const response = await fetch(getEndpointUrl('/private/delete_failed_version'), {
-      method: 'DELETE',
-      headers,
-      body: JSON.stringify({
-        app_id: 'nonexistent.app',
-        name: '1.0.0',
-      }),
-    })
-    expect(response.status).toBe(401)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('not_authorized')
-  })
-
+describe('[DELETE] /private/delete_failed_version', () => {
   it('should return 401 when user cannot access app', async () => {
     const response = await fetch(getEndpointUrl('/private/delete_failed_version'), {
       method: 'DELETE',
@@ -359,7 +345,7 @@ describe('[POST] /private/delete_failed_version - Error Cases', () => {
     expect(data.error).toBe('not_authorized')
   })
 
-  it('should return 500 when app_id or bundle name missing', async () => {
+  it('should return 400 when bundle name missing', async () => {
     const response = await fetch(getEndpointUrl('/private/delete_failed_version'), {
       method: 'DELETE',
       headers,
@@ -371,6 +357,80 @@ describe('[POST] /private/delete_failed_version - Error Cases', () => {
     expect(response.status).toBe(400)
     const data = await response.json() as { error: string }
     expect(data.error).toBe('error_bundle_name_missing')
+  })
+
+  it('allows app_uploader keys to clean up incomplete r2-direct versions', async () => {
+    const bundleName = `1.0.0-failed-upload-${id.slice(0, 8)}`
+    const createdApikey = await createDirectApiKeyWithBindings({
+      userId: USER_ID,
+      key: randomUUID(),
+      name: `delete-failed-uploader-${id}`,
+      orgId: ORG_ID,
+      roleName: 'apikey_org_reader',
+      appId: APPNAME,
+      appRoleName: 'app_uploader',
+    })
+    if (!createdApikey.key)
+      throw new Error('Expected plain API key from createDirectApiKeyWithBindings')
+
+    try {
+      const { data: version, error: versionError } = await getSupabaseClient()
+        .from('app_versions')
+        .insert({
+          app_id: APPNAME,
+          name: bundleName,
+          checksum: '',
+          owner_org: ORG_ID,
+          user_id: USER_ID,
+          storage_provider: 'r2-direct',
+          deleted: false,
+        })
+        .select('id')
+        .single()
+      if (versionError || !version)
+        throw new Error(`Failed to create incomplete version: ${versionError?.message}`)
+
+      const response = await fetch(getEndpointUrl('/private/delete_failed_version'), {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': createdApikey.key,
+        },
+        body: JSON.stringify({
+          app_id: APPNAME,
+          name: bundleName,
+        }),
+      })
+      expect(response.status).toBe(200)
+      const data = await response.json() as { status: string }
+      expect(data.status).toBe('ok')
+
+      const { data: remaining, error: remainingError } = await getSupabaseClient()
+        .from('app_versions')
+        .select('id')
+        .eq('id', version.id)
+        .maybeSingle()
+      expect(remainingError).toBeNull()
+      expect(remaining).toBeNull()
+
+      const denied = await fetch(getEndpointUrl('/private/delete_failed_version'), {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': createdApikey.key,
+        },
+        body: JSON.stringify({
+          app_id: 'com.demoadmin.app',
+          name: '1.0.0',
+        }),
+      })
+      expect(denied.status).toBe(401)
+      const deniedData = await denied.json() as { error: string }
+      expect(deniedData.error).toBe('not_authorized')
+    }
+    finally {
+      await getSupabaseClient().from('apikeys').delete().eq('id', createdApikey.id).throwOnError()
+    }
   })
 })
 
