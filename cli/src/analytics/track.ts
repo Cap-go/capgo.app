@@ -127,7 +127,7 @@ export function trackEvent(input: TrackEventInput): Promise<void> {
         tracking_version: 2,
         ...(orgId ? { org_id: orgId } : {}),
         tags,
-      }, false, controller.signal).catch(() => {})
+      }, false, controller.signal).catch(() => { })
     }
     catch {
       // telemetry must never break a command
