@@ -1308,6 +1308,8 @@ export interface UpdateDeliveryTimingEventCF {
   action: string
   version_name: string
   metadata: StatsMetadata | null
+  /** Duration from Analytics Engine double1 when plugins report timing. */
+  duration_ms: number | null
   created_at: string
 }
 
@@ -1337,6 +1339,7 @@ export function buildUpdateDeliveryTimingEventsCFQuery(params: ReadUpdateDeliver
   blob2 AS action,
   blob3 AS version_name,
   blob4 AS metadata,
+  double1 AS duration_ms,
   timestamp AS created_at
 FROM app_log
 WHERE
@@ -1344,7 +1347,6 @@ WHERE
   AND timestamp < toDateTime('${formatDateCF(params.end_date)}')
   AND blob2 IN (${actionsList})
   ${appFilter}
-GROUP BY app_id, device_id, action, version_name, metadata, created_at
 ORDER BY created_at ASC
 LIMIT ${limit}`
 }
@@ -1372,16 +1374,21 @@ export async function readUpdateDeliveryTimingEventsCF(
       action: string
       version_name: string
       metadata: string | null
+      duration_ms: number | string | null
       created_at: string
     }>(c, query)
-    return rows.map(row => ({
-      app_id: row.app_id,
-      device_id: row.device_id,
-      action: row.action,
-      version_name: row.version_name || 'unknown',
-      metadata: parseStatsMetadata(row.metadata),
-      created_at: row.created_at,
-    }))
+    return rows.map(row => {
+      const rawDuration = Number(row.duration_ms)
+      return {
+        app_id: row.app_id,
+        device_id: row.device_id,
+        action: row.action,
+        version_name: row.version_name || 'unknown',
+        metadata: parseStatsMetadata(row.metadata),
+        duration_ms: Number.isFinite(rawDuration) && rawDuration > 0 ? rawDuration : null,
+        created_at: row.created_at,
+      }
+    })
   }
   catch (e) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading update delivery timing events', error: serializeError(e), query })

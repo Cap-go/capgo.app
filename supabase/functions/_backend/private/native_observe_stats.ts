@@ -342,12 +342,15 @@ function toNativeObserveEventSamples(events: UpdateDeliveryTimingEventCF[]): Nat
     const createdAtMs = Date.parse(event.created_at)
     if (!Number.isFinite(createdAtMs))
       continue
+    const durationFromDouble = typeof event.duration_ms === 'number' && Number.isFinite(event.duration_ms) && event.duration_ms > 0
+      ? event.duration_ms
+      : null
     samples.push({
       day: new Date(createdAtMs).toISOString().slice(0, 10),
       action: event.action,
       version_name: event.version_name || 'unknown',
       device_id: event.device_id,
-      duration_ms: parseMetaDurationMs(event.metadata),
+      duration_ms: durationFromDouble ?? parseMetaDurationMs(event.metadata),
     })
   }
   return samples

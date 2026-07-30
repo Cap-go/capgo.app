@@ -255,21 +255,32 @@ function toMetric(value: NumericValue, decimals = 0) {
   return Math.round(numeric * factor) / factor
 }
 
-function parseMetaDurationMs(metadata: Record<string, string> | null | undefined): number | null {
+function parseMetaDurationMs(metadata: Record<string, unknown> | null | undefined): number | null {
   if (!metadata)
     return null
   for (const key of ['duration_ms', 'duration'] as const) {
     const raw = metadata[key]
+    if (typeof raw === 'number') {
+      if (Number.isFinite(raw) && raw >= 0 && raw <= maxDeliveryMs)
+        return raw
+      continue
+    }
     if (typeof raw !== 'string' || raw.length === 0 || raw.length > 15)
       continue
     if (!/^\d+(?:\.\d+)?$/.test(raw))
       continue
     const value = Number(raw)
-    if (!Number.isFinite(value))
+    if (!Number.isFinite(value) || value < 0 || value > maxDeliveryMs)
       continue
     return value
   }
   return null
+}
+
+function resolveEventDurationMs(event: UpdateDeliveryTimingEventCF): number | null {
+  if (typeof event.duration_ms === 'number' && Number.isFinite(event.duration_ms) && event.duration_ms > 0 && event.duration_ms <= maxDeliveryMs)
+    return event.duration_ms
+  return parseMetaDurationMs(event.metadata)
 }
 
 function percentileCont(sorted: number[], q: number): number | null {
@@ -327,7 +338,7 @@ function buildDeliveriesFromEvents(
     if (!Number.isFinite(endMs) || endMs < options.periodStartMs)
       continue
 
-    let durationMs = parseMetaDurationMs(event.metadata)
+    let durationMs = resolveEventDurationMs(event)
     if (!isValidDuration(durationMs) && options.allowPairing) {
       const key = `${event.app_id}\0${event.device_id}\0${event.version_name || 'unknown'}`
       const starts = startsByKey.get(key)
@@ -634,6 +645,19 @@ async function readUpdateDeliveryStatsCF(
   })
   const { dailyRows, overviewRow } = aggregateDeliverySamples(samples)
 
+  if (overviewRow.samples === 0) {
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'update_delivery_stats CF produced zero samples',
+      scope,
+      event_count: events.length,
+      app_count: appIds?.length ?? null,
+      allow_pairing: allowPairing,
+      start: start.toISOString(),
+      end: endExclusive.toISOString(),
+    })
+  }
+
   return buildUpdateDeliveryResponse({
     labels,
     days,
@@ -679,7 +703,9 @@ async function readUpdateDeliveryStats(
         endExclusive,
         endInclusive,
       )
-      await cache.putJson(cacheKey, cfResponse, UPDATE_DELIVERY_STATS_CACHE_TTL_SECONDS)
+      // Avoid caching empty windows — AE ingest lag or sparse orgs should retry next load.
+      if (cfResponse.overview.samples > 0)
+        await cache.putJson(cacheKey, cfResponse, UPDATE_DELIVERY_STATS_CACHE_TTL_SECONDS)
       return cfResponse
     }
     catch (error) {
@@ -702,7 +728,8 @@ async function readUpdateDeliveryStats(
     endExclusive,
     endInclusive,
   )
-  await cache.putJson(cacheKey, pgResponse, UPDATE_DELIVERY_STATS_CACHE_TTL_SECONDS)
+  if (pgResponse.overview.samples > 0)
+    await cache.putJson(cacheKey, pgResponse, UPDATE_DELIVERY_STATS_CACHE_TTL_SECONDS)
   return pgResponse
 }
 
@@ -769,6 +796,7 @@ export const updateDeliveryStatsTestUtils = {
   normalizePeriodDays,
   normalizeScope,
   parseMetaDurationMs,
+  resolveEventDurationMs,
   percentileCont,
   toMetric,
 }
