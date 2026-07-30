@@ -1277,7 +1277,7 @@
   "fetching-release-data": "Fetching release data...",
   "filter-actions": "Actions",
   "filter-options": "Options",
-  "filters-modal-subtitle": "Narrow results by platform, bundle, or status.",
+  "filter-modal-subtitle": "Narrow results by platform, bundle, or status.",
   "filter-shortcut-all-fail": "All failures",
   "first-name": "First name",
   "first-name-required": "First name required",

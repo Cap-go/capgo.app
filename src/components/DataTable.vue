@@ -6,6 +6,7 @@ import DOMPurify from 'dompurify'
 import {
   computed,
   defineComponent,
+  nextTick,
   onMounted,
   onUnmounted,
   ref,
@@ -72,6 +73,7 @@ const emit = defineEmits([
   'clearExtraFilters',
 ])
 const isFilterModalOpen = ref(false)
+const filterModalBoxRef = ref<HTMLElement | null>(null)
 const slots = useSlots()
 const { t } = useI18n()
 const searchVal = ref(props.search ?? '')
@@ -128,7 +130,59 @@ function closeFilterModal() {
   isFilterModalOpen.value = false
 }
 
+function getFilterModalFocusable() {
+  const root = filterModalBoxRef.value
+  if (!root)
+    return [] as HTMLElement[]
+  return Array.from(root.querySelectorAll<HTMLElement>(
+    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+  )).filter(el => !el.hasAttribute('disabled') && el.offsetParent !== null)
+}
+
+function onFilterModalKeydown(e: KeyboardEvent) {
+  if (!isFilterModalOpen.value)
+    return
+  if (e.key === 'Escape') {
+    e.preventDefault()
+    closeFilterModal()
+    return
+  }
+  if (e.key !== 'Tab')
+    return
+  const focusable = getFilterModalFocusable()
+  if (!focusable.length)
+    return
+  const first = focusable[0]!
+  const last = focusable[focusable.length - 1]!
+  if (e.shiftKey && document.activeElement === first) {
+    e.preventDefault()
+    last.focus()
+  }
+  else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault()
+    first.focus()
+  }
+}
+
+watch(isFilterModalOpen, async (open) => {
+  if (open) {
+    window.addEventListener('keydown', onFilterModalKeydown)
+    await nextTick()
+    const focusable = getFilterModalFocusable()
+    focusable[0]?.focus()
+  }
+  else {
+    window.removeEventListener('keydown', onFilterModalKeydown)
+  }
+})
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', onFilterModalKeydown)
+})
+
 function clearAllFilters() {
+  // Emit a new filters object so DataTable's filters watcher performs one reload.
+  // Extra filters are cleared without scheduling a second reload.
   if (props.filters) {
     const cleared = Object.fromEntries(
       Object.keys(props.filters).map(key => [key, false]),
@@ -554,7 +608,10 @@ const paginationClass = computed(() => props.mobileFixedPagination
               aria-labelledby="data-table-filters-title"
               data-test="data-table-filters-modal"
             >
-              <div class="d-modal-box w-[calc(100vw-2rem)] max-w-md rounded-lg border border-slate-200 bg-white p-0 shadow-2xl dark:border-slate-700 dark:bg-slate-900">
+              <div
+                ref="filterModalBoxRef"
+                class="d-modal-box w-[calc(100vw-2rem)] max-w-md rounded-lg border border-slate-200 bg-white p-0 shadow-2xl dark:border-slate-700 dark:bg-slate-900"
+              >
                 <div class="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4 dark:border-slate-800">
                   <div class="min-w-0">
                     <h2
@@ -564,7 +621,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
                       {{ t(filterText ?? 'Filters') }}
                     </h2>
                     <p class="mt-1 text-sm leading-5 text-slate-600 dark:text-slate-300">
-                      {{ t('filters-modal-subtitle') }}
+                      {{ t('filter-modal-subtitle') }}
                     </p>
                   </div>
                   <button

@@ -55,11 +55,11 @@ const platformOptions = computed(() => [
 ])
 
 function clearExtraFilters() {
+  // Values only — DataTable clear emits a filters update that triggers the single reload.
   skipFilterReload.value = true
   selectedPlatform.value = ''
   selectedVersionName.value = ''
   skipFilterReload.value = false
-  debouncedReload()
 }
 const columns = ref<TableColumn[]>([
   {
