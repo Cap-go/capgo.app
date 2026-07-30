@@ -262,4 +262,155 @@ describe('org invite path ignores app-scoped org_users rows', () => {
     )
     expect(members.rows).toEqual([])
   })
+
+  it('does not accept an app-scoped invite row as proof for an org-role elevation', async () => {
+    const orgId = await createOrgOwnedByUser(USER_ID)
+    const appId = await createApp(orgId, USER_ID)
+    const groupId = randomUUID()
+
+    await withServiceRole()
+    await query(
+      `
+        INSERT INTO public.org_users (org_id, user_id, rbac_role_name, is_invite)
+        VALUES ($1::uuid, $2::uuid, public.rbac_role_org_admin(), false)
+      `,
+      [orgId, USER_ID_NONMEMBER],
+    )
+    await query(
+      `
+        INSERT INTO public.groups (id, org_id, name, created_by)
+        VALUES ($1::uuid, $2::uuid, $3, $4::uuid)
+      `,
+      [groupId, orgId, `Scoped invite guard ${groupId}`, USER_ID],
+    )
+    await query(
+      `
+        INSERT INTO public.role_bindings (
+          principal_type, principal_id, role_id, scope_type, org_id,
+          granted_by, granted_at, reason, is_direct
+        )
+        SELECT
+          public.rbac_principal_group(), $1::uuid, roles.id, public.rbac_scope_org(), $2::uuid,
+          $3::uuid, now(), 'Test group admin binding', true
+        FROM public.roles
+        WHERE roles.name = public.rbac_role_org_admin()
+          AND roles.scope_type = public.rbac_scope_org()
+      `,
+      [groupId, orgId, USER_ID],
+    )
+    await query(
+      `
+        INSERT INTO public.group_members (group_id, user_id, added_by)
+        VALUES ($1::uuid, $2::uuid, $3::uuid)
+      `,
+      [groupId, USER_ID_NONMEMBER, USER_ID],
+    )
+    await query(
+      `
+        INSERT INTO public.org_users (org_id, user_id, app_id, rbac_role_name, is_invite)
+        VALUES ($1::uuid, $2::uuid, $3, public.rbac_role_org_super_admin(), true)
+      `,
+      [orgId, USER_ID_NONMEMBER, appId],
+    )
+
+    await withAuthClaim(USER_ID_NONMEMBER)
+
+    let thrown: unknown
+    try {
+      await query(
+        `
+          INSERT INTO public.role_bindings (
+            principal_type, principal_id, role_id, scope_type, org_id,
+            granted_by, granted_at, reason, is_direct
+          )
+          SELECT
+            public.rbac_principal_user(), $1::uuid, roles.id, public.rbac_scope_org(), $2::uuid,
+            $1::uuid, now(), 'Accepted invitation', true
+          FROM public.roles
+          WHERE roles.name = public.rbac_role_org_super_admin()
+            AND roles.scope_type = public.rbac_scope_org()
+        `,
+        [USER_ID_NONMEMBER, orgId],
+      )
+    }
+    catch (error) {
+      thrown = error
+    }
+
+    expect(thrown).toBeTruthy()
+    expect((thrown as Error).message).toContain('Admins cannot elevate privileges!')
+  })
+
+  it('does not allow an app-scoped row to be converted into an org invitation', async () => {
+    const orgId = await createOrgOwnedByUser(USER_ID)
+    const appId = await createApp(orgId, USER_ID)
+    const groupId = randomUUID()
+
+    await withServiceRole()
+    await query(
+      `
+        INSERT INTO public.org_users (org_id, user_id, rbac_role_name, is_invite)
+        VALUES ($1::uuid, $2::uuid, public.rbac_role_org_admin(), false)
+      `,
+      [orgId, USER_ID_NONMEMBER],
+    )
+    await query(
+      `
+        INSERT INTO public.groups (id, org_id, name, created_by)
+        VALUES ($1::uuid, $2::uuid, $3, $4::uuid)
+      `,
+      [groupId, orgId, `Scoped invite conversion ${groupId}`, USER_ID],
+    )
+    await query(
+      `
+        INSERT INTO public.role_bindings (
+          principal_type, principal_id, role_id, scope_type, org_id,
+          granted_by, granted_at, reason, is_direct
+        )
+        SELECT
+          public.rbac_principal_group(), $1::uuid, roles.id, public.rbac_scope_org(), $2::uuid,
+          $3::uuid, now(), 'Test group admin binding', true
+        FROM public.roles
+        WHERE roles.name = public.rbac_role_org_admin()
+          AND roles.scope_type = public.rbac_scope_org()
+      `,
+      [groupId, orgId, USER_ID],
+    )
+    await query(
+      `
+        INSERT INTO public.group_members (group_id, user_id, added_by)
+        VALUES ($1::uuid, $2::uuid, $3::uuid)
+      `,
+      [groupId, USER_ID_NONMEMBER, USER_ID],
+    )
+    await query(
+      `
+        INSERT INTO public.org_users (org_id, user_id, app_id, rbac_role_name, is_invite)
+        VALUES ($1::uuid, $2::uuid, $3, public.rbac_role_org_super_admin(), true)
+      `,
+      [orgId, USER_ID_NONMEMBER, appId],
+    )
+
+    await withAuthClaim(USER_ID_NONMEMBER)
+
+    let thrown: unknown
+    try {
+      await query(
+        `
+          UPDATE public.org_users
+          SET app_id = NULL
+          WHERE org_id = $1::uuid
+            AND user_id = $2::uuid
+            AND app_id = $3
+        `,
+        [orgId, USER_ID_NONMEMBER, appId],
+      )
+    }
+    catch (error) {
+      thrown = error
+    }
+
+    expect(thrown).toBeTruthy()
+    expect((thrown as Error).message).toContain('Admins cannot move org membership scopes!')
+  })
 })

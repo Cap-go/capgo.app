@@ -389,4 +389,95 @@ BEGIN
 END;
 $$;
 
+-- A scoped legacy row is not evidence that the caller has an organization
+-- invitation. Keep this as a separate guard so an old contaminated row cannot
+-- use the invite-acceptance exception in prevent_role_binding_priority_escalation.
+CREATE OR REPLACE FUNCTION public.prevent_scoped_invite_role_acceptance() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO ''
+    AS $$
+BEGIN
+  IF public.is_internal_request_role(public.current_request_role()) THEN
+    RETURN NEW;
+  END IF;
+
+  IF NEW.principal_type = public.rbac_principal_user()
+    AND NEW.principal_id = auth.uid()
+    AND NEW.scope_type = public.rbac_scope_org()
+    AND NEW.reason = 'Accepted invitation'
+    AND NEW.app_id IS NULL
+    AND NEW.bundle_id IS NULL
+    AND NEW.channel_id IS NULL
+    AND NOT EXISTS (
+      SELECT 1
+      FROM public.org_users ou
+      JOIN public.roles r
+        ON r.name = ou.rbac_role_name
+        AND r.scope_type = public.rbac_scope_org()
+      WHERE ou.user_id = NEW.principal_id
+        AND ou.org_id = NEW.org_id
+        AND ou.is_invite IS TRUE
+        AND ou.app_id IS NULL
+        AND ou.channel_id IS NULL
+        AND r.id = NEW.role_id
+    )
+  THEN
+    PERFORM public.pg_log(
+      'deny: SCOPED_INVITE_ROLE_ACCEPTANCE',
+      pg_catalog.jsonb_build_object('org_id', NEW.org_id, 'uid', auth.uid())
+    );
+    RAISE EXCEPTION 'Admins cannot elevate privileges!';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+ALTER FUNCTION public.prevent_scoped_invite_role_acceptance() OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.prevent_scoped_invite_role_acceptance() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.prevent_scoped_invite_role_acceptance() TO service_role;
+
+DROP TRIGGER IF EXISTS prevent_scoped_invite_role_acceptance ON public.role_bindings;
+CREATE TRIGGER prevent_scoped_invite_role_acceptance
+BEFORE INSERT ON public.role_bindings
+FOR EACH ROW
+EXECUTE FUNCTION public.prevent_scoped_invite_role_acceptance();
+
+-- Scope columns are part of a membership row's identity. External callers must
+-- not turn an app/channel row into an organization invitation after the fact.
+CREATE OR REPLACE FUNCTION public.prevent_org_user_scope_mutation() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO ''
+    AS $$
+BEGIN
+  IF public.is_internal_request_role(public.current_request_role()) THEN
+    RETURN NEW;
+  END IF;
+
+  IF NEW.app_id IS DISTINCT FROM OLD.app_id
+    OR NEW.channel_id IS DISTINCT FROM OLD.channel_id
+  THEN
+    PERFORM public.pg_log(
+      'deny: ORG_USER_SCOPE_MOVE',
+      pg_catalog.jsonb_build_object('org_id', NEW.org_id, 'uid', auth.uid())
+    );
+    RAISE EXCEPTION 'Admins cannot move org membership scopes!';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+ALTER FUNCTION public.prevent_org_user_scope_mutation() OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.prevent_org_user_scope_mutation() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.prevent_org_user_scope_mutation() TO service_role;
+
+DROP TRIGGER IF EXISTS prevent_org_user_scope_mutation ON public.org_users;
+CREATE TRIGGER prevent_org_user_scope_mutation
+BEFORE UPDATE OF app_id, channel_id ON public.org_users
+FOR EACH ROW
+EXECUTE FUNCTION public.prevent_org_user_scope_mutation();
+
+COMMENT ON FUNCTION public.prevent_scoped_invite_role_acceptance() IS 'Requires an org-level pending membership row before an authenticated user can insert an accepted org-role binding.';
+COMMENT ON FUNCTION public.prevent_org_user_scope_mutation() IS 'Prevents external callers from changing an org_users row between org, app, and channel scopes.';
 COMMENT ON FUNCTION "public"."accept_invitation_to_org"("org_id" "uuid") IS 'Accepts a pending org invite and creates the active RBAC binding. Kept for old clients.';
