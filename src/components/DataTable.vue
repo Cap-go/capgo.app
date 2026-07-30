@@ -74,6 +74,7 @@ const emit = defineEmits([
 ])
 const isFilterModalOpen = ref(false)
 const filterModalBoxRef = ref<HTMLElement | null>(null)
+const filterOpenButtonRef = ref<HTMLButtonElement | null>(null)
 const slots = useSlots()
 const { t } = useI18n()
 const searchVal = ref(props.search ?? '')
@@ -128,6 +129,9 @@ function openFilterModal() {
 
 function closeFilterModal() {
   isFilterModalOpen.value = false
+  nextTick(() => {
+    filterOpenButtonRef.value?.focus()
+  })
 }
 
 function getFilterModalFocusable() {
@@ -583,6 +587,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
         </div>
         <div v-if="showFilterMenu" class="relative h-10">
           <button
+            ref="filterOpenButtonRef"
             type="button"
             class="inline-flex items-center py-1.5 px-3 mr-2 h-full text-sm font-medium text-gray-500 bg-white rounded-md border border-gray-300 cursor-pointer dark:text-white dark:bg-gray-800 dark:border-gray-600 hover:bg-gray-100 focus:ring-4 focus:ring-gray-200 dark:hover:border-gray-600 dark:hover:bg-gray-700 dark:focus:ring-gray-700 focus:outline-hidden"
             data-test="data-table-filters-open"
