@@ -2,7 +2,7 @@
 import type { TableColumn } from '../comp_def'
 import type { Database } from '~/types/supabase.types'
 import { useDebounceFn } from '@vueuse/core'
-import { h, onMounted, ref, watch } from 'vue'
+import { h, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
@@ -43,8 +43,10 @@ const filters = ref({
 const selectedPlatform = ref<'' | PlatformOs>('')
 const selectedVersionName = ref(props.versionName ?? '')
 const bundleNames = ref<string[]>([])
+const skipFilterReload = ref(false)
 const offset = 10
 const selectControlClass = 'd-select d-select-bordered h-10 min-h-10 w-full max-w-56 rounded-md border-gray-300 bg-white text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-primary/30 dark:border-gray-600 dark:bg-gray-800 dark:text-white'
+const inputControlClass = 'h-10 w-full max-w-56 rounded-md border border-gray-300 bg-white px-3 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-primary/30 dark:border-gray-600 dark:bg-gray-800 dark:text-white'
 const columns = ref<TableColumn[]>([
   {
     label: t('device-id'),
@@ -285,6 +287,10 @@ const debouncedReload = useDebounceFn(() => {
   reload()
 }, 300)
 
+onUnmounted(() => {
+  debouncedReload.cancel()
+})
+
 async function fetchDevicesPage(cursor: string | undefined | null) {
   const ids = await resolveDeviceIds()
   const searchTerm = getSearchTerm()
@@ -460,17 +466,24 @@ onMounted(async () => {
 })
 
 watch(() => props.appId, async () => {
+  skipFilterReload.value = true
   selectedPlatform.value = ''
   selectedVersionName.value = props.versionName ?? ''
   await loadBundleNames()
+  skipFilterReload.value = false
   await refreshData()
 })
 
 watch(() => props.versionName, (value) => {
+  skipFilterReload.value = true
   selectedVersionName.value = value ?? ''
+  skipFilterReload.value = false
+  debouncedReload()
 })
 
 watch([selectedPlatform, selectedVersionName], () => {
+  if (skipFilterReload.value)
+    return
   debouncedReload()
 })
 </script>
@@ -507,24 +520,24 @@ watch([selectedPlatform, selectedVersionName], () => {
         <label for="device-table-bundle-filter" class="text-xs font-medium text-slate-600 dark:text-gray-300">
           {{ t('bundle') }}
         </label>
-        <select
+        <input
           id="device-table-bundle-filter"
           v-model="selectedVersionName"
-          :class="selectControlClass"
+          list="device-table-bundle-options"
+          type="text"
+          :class="inputControlClass"
+          :placeholder="t('all-bundles')"
           :aria-label="t('bundle')"
           data-test="device-bundle-filter"
+          autocomplete="off"
         >
-          <option value="">
-            {{ t('all-bundles') }}
-          </option>
+        <datalist id="device-table-bundle-options">
           <option
             v-for="name in bundleNames"
             :key="name"
             :value="name"
-          >
-            {{ name }}
-          </option>
-        </select>
+          />
+        </datalist>
       </div>
     </div>
     <DataTable
