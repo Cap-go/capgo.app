@@ -522,39 +522,41 @@ const paginationClass = computed(() => props.mobileFixedPagination
             <span class="hidden md:block">{{ t(filterText ?? '') }}</span>
             <IconDown class="hidden w-4 h-4 ml-2 md:block" />
           </button>
-          <ul class="max-h-80 w-72 max-w-[calc(100vw-2rem)] overflow-y-auto border border-gray-200 bg-white p-2 shadow-xl d-dropdown-content d-menu rounded-box z-20 dark:border-gray-700 dark:bg-base-200">
-            <li
-              v-if="$slots['filter-extras']"
-              class="menu-title! m-0! p-0! text-inherit! opacity-100!"
-              @click.stop
-            >
+          <div
+            class="max-h-80 w-72 max-w-[calc(100vw-2rem)] overflow-y-auto border border-gray-200 bg-white p-3 shadow-xl d-dropdown-content rounded-box z-20 dark:border-gray-700 dark:bg-base-200"
+            @click.stop
+          >
+            <div v-if="$slots['filter-extras']" class="flex flex-col gap-3">
               <slot name="filter-extras" />
-            </li>
-            <li
+            </div>
+            <div
               v-if="$slots['filter-extras'] && filterList.length"
-              class="pointer-events-none m-0! h-px! min-h-0! p-0! bg-gray-200 dark:bg-gray-600"
+              class="my-3 border-t border-gray-200 dark:border-gray-600"
               role="separator"
             />
-            <li v-for="(f, i) in filterList" :key="i">
-              <div
-                class="flex min-h-10 items-center rounded-md p-2 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600"
+            <div v-if="filterList.length" class="flex flex-col gap-1">
+              <label
+                v-for="(f, i) in filterList"
+                :key="i"
+                :for="`filter-radio-example-${i}`"
+                class="flex min-h-9 cursor-pointer items-center rounded-md px-1 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-600"
               >
                 <input
-                  :id="`filter-radio-example-${i}`" :checked="filters?.[f]" type="checkbox"
+                  :id="`filter-radio-example-${i}`"
+                  :checked="filters?.[f]"
+                  type="checkbox"
                   :name="`filter-radio-${i}`"
-                  class="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 dark:bg-gray-700 dark:border-gray-600 dark:ring-offset-gray-800 focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-600 dark:focus:ring-offset-gray-800"
+                  class="h-4 w-4 shrink-0 rounded border-gray-300 text-blue-600 focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:ring-offset-gray-800 dark:focus:ring-blue-600"
                   @change="
                     emit('update:filters', { ...filters, [f]: !filters?.[f] })
                   "
                 >
-                <label
-                  :for="`filter-radio-example-${i}`"
-                  class="w-full min-w-0 truncate ml-2 text-sm font-medium text-gray-900 rounded-sm cursor-pointer dark:text-gray-300"
-                >{{
-                  getFilterLabel(f) }}</label>
-              </div>
-            </li>
-          </ul>
+                <span class="ml-2 min-w-0 truncate text-sm font-medium text-gray-900 dark:text-gray-300">
+                  {{ getFilterLabel(f) }}
+                </span>
+              </label>
+            </div>
+          </div>
         </div>
       </div>
       <button

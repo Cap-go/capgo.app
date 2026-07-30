@@ -519,55 +519,53 @@ watch([selectedPlatform, selectedVersionName], () => {
     @reset="refreshData()"
   >
     <template #filter-extras>
-      <div class="flex w-full flex-col gap-3 p-2" @click.stop>
-        <div class="flex flex-col gap-1">
-          <label for="device-table-platform-filter" class="text-xs font-medium text-slate-600 dark:text-gray-300">
-            {{ t('platform') }}
-          </label>
-          <select
-            id="device-table-platform-filter"
-            v-model="selectedPlatform"
-            class="d-select d-select-bordered d-select-sm w-full border-gray-300 bg-white text-slate-900 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
-            :aria-label="t('platform')"
-            data-test="device-platform-filter"
-          >
-            <option value="">
-              {{ t('all-platforms') }}
-            </option>
-            <option value="ios">
-              {{ t('platform-ios') }}
-            </option>
-            <option value="android">
-              {{ t('platform-android') }}
-            </option>
-            <option value="electron">
-              {{ t('platform-electron') }}
-            </option>
-          </select>
-        </div>
-        <div class="flex flex-col gap-1">
-          <label for="device-table-bundle-filter" class="text-xs font-medium text-slate-600 dark:text-gray-300">
-            {{ t('bundle') }}
-          </label>
-          <input
-            id="device-table-bundle-filter"
-            v-model="selectedVersionName"
-            list="device-table-bundle-options"
-            type="text"
-            class="d-input d-input-bordered d-input-sm w-full border-gray-300 bg-white text-slate-900 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
-            :placeholder="t('all-bundles')"
-            :aria-label="t('bundle')"
-            data-test="device-bundle-filter"
-            autocomplete="off"
-          >
-          <datalist id="device-table-bundle-options">
-            <option
-              v-for="name in bundleNames"
-              :key="name"
-              :value="name"
-            />
-          </datalist>
-        </div>
+      <div class="flex w-full flex-col gap-1">
+        <label for="device-table-platform-filter" class="text-xs font-medium text-slate-600 dark:text-gray-300">
+          {{ t('platform') }}
+        </label>
+        <select
+          id="device-table-platform-filter"
+          v-model="selectedPlatform"
+          class="d-select d-select-bordered d-select-sm h-9 w-full min-h-9 border-gray-300 bg-white text-sm text-slate-900 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+          :aria-label="t('platform')"
+          data-test="device-platform-filter"
+        >
+          <option value="">
+            {{ t('all-platforms') }}
+          </option>
+          <option value="ios">
+            {{ t('platform-ios') }}
+          </option>
+          <option value="android">
+            {{ t('platform-android') }}
+          </option>
+          <option value="electron">
+            {{ t('platform-electron') }}
+          </option>
+        </select>
+      </div>
+      <div class="flex w-full flex-col gap-1">
+        <label for="device-table-bundle-filter" class="text-xs font-medium text-slate-600 dark:text-gray-300">
+          {{ t('bundle') }}
+        </label>
+        <input
+          id="device-table-bundle-filter"
+          v-model="selectedVersionName"
+          list="device-table-bundle-options"
+          type="text"
+          class="d-input d-input-bordered d-input-sm h-9 w-full border-gray-300 bg-white text-sm text-slate-900 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+          :placeholder="t('all-bundles')"
+          :aria-label="t('bundle')"
+          data-test="device-bundle-filter"
+          autocomplete="off"
+        >
+        <datalist id="device-table-bundle-options">
+          <option
+            v-for="name in bundleNames"
+            :key="name"
+            :value="name"
+          />
+        </datalist>
       </div>
     </template>
   </DataTable>
