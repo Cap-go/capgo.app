@@ -9248,6 +9248,57 @@ $$;
 ALTER FUNCTION "public"."has_seeded_demo_data"("p_app_id" "text") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."has_usage_credits_org"("orgid" "uuid") RETURNS boolean
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+BEGIN
+  RETURN public.has_usage_credits_org(orgid, NULL::character varying);
+END;
+$$;
+
+
+ALTER FUNCTION "public"."has_usage_credits_org"("orgid" "uuid") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."has_usage_credits_org"("orgid" "uuid") IS 'Org-scope overload of has_usage_credits_org(orgid, appid).';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."has_usage_credits_org"("orgid" "uuid", "appid" character varying) RETURNS boolean
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  caller_role text;
+BEGIN
+  SELECT public.current_request_role() INTO caller_role;
+
+  IF NOT public.is_internal_request_role(caller_role) THEN
+    IF NOT public.request_has_org_or_app_read_access(orgid, appid) THEN
+      RETURN false;
+    END IF;
+  END IF;
+
+  RETURN COALESCE(
+    (
+      SELECT o.has_usage_credits
+      FROM public.orgs o
+      WHERE o.id = orgid
+    ),
+    false
+  );
+END;
+$$;
+
+
+ALTER FUNCTION "public"."has_usage_credits_org"("orgid" "uuid", "appid" character varying) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."has_usage_credits_org"("orgid" "uuid", "appid" character varying) IS 'Returns orgs.has_usage_credits for callers with org read access, or app read access when appid is provided. Used by the CLI to skip trial upgrade warnings for credit-only orgs.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."internal_request_db_user_names"() RETURNS "text"[]
     LANGUAGE "sql" IMMUTABLE
     SET "search_path" TO ''
@@ -15171,6 +15222,31 @@ $$;
 
 
 ALTER FUNCTION "public"."request_has_app_read_access"("orgid" "uuid", "appid" character varying) OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."request_has_org_or_app_read_access"("orgid" "uuid", "appid" character varying) RETURNS boolean
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+BEGIN
+  IF public.request_has_org_read_access(orgid) THEN
+    RETURN true;
+  END IF;
+
+  IF appid IS NOT NULL AND public.request_has_app_read_access(orgid, appid) THEN
+    RETURN true;
+  END IF;
+
+  RETURN false;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."request_has_org_or_app_read_access"("orgid" "uuid", "appid" character varying) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."request_has_org_or_app_read_access"("orgid" "uuid", "appid" character varying) IS 'True when the request has org read access, or app read access for appid within orgid. Used by has_usage_credits_org.';
+
 
 
 CREATE OR REPLACE FUNCTION "public"."request_has_org_read_access"("orgid" "uuid") RETURNS boolean
@@ -24319,6 +24395,20 @@ GRANT ALL ON FUNCTION "public"."has_seeded_demo_data"("p_app_id" "text") TO "ser
 
 
 
+REVOKE ALL ON FUNCTION "public"."has_usage_credits_org"("orgid" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."has_usage_credits_org"("orgid" "uuid") TO "service_role";
+GRANT ALL ON FUNCTION "public"."has_usage_credits_org"("orgid" "uuid") TO "anon";
+GRANT ALL ON FUNCTION "public"."has_usage_credits_org"("orgid" "uuid") TO "authenticated";
+
+
+
+REVOKE ALL ON FUNCTION "public"."has_usage_credits_org"("orgid" "uuid", "appid" character varying) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."has_usage_credits_org"("orgid" "uuid", "appid" character varying) TO "service_role";
+GRANT ALL ON FUNCTION "public"."has_usage_credits_org"("orgid" "uuid", "appid" character varying) TO "anon";
+GRANT ALL ON FUNCTION "public"."has_usage_credits_org"("orgid" "uuid", "appid" character varying) TO "authenticated";
+
+
+
 REVOKE ALL ON FUNCTION "public"."internal_request_db_user_names"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."internal_request_db_user_names"() TO "service_role";
 
@@ -25466,6 +25556,13 @@ REVOKE ALL ON FUNCTION "public"."request_has_app_read_access"("orgid" "uuid", "a
 GRANT ALL ON FUNCTION "public"."request_has_app_read_access"("orgid" "uuid", "appid" character varying) TO "service_role";
 GRANT ALL ON FUNCTION "public"."request_has_app_read_access"("orgid" "uuid", "appid" character varying) TO "anon";
 GRANT ALL ON FUNCTION "public"."request_has_app_read_access"("orgid" "uuid", "appid" character varying) TO "authenticated";
+
+
+
+REVOKE ALL ON FUNCTION "public"."request_has_org_or_app_read_access"("orgid" "uuid", "appid" character varying) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."request_has_org_or_app_read_access"("orgid" "uuid", "appid" character varying) TO "service_role";
+GRANT ALL ON FUNCTION "public"."request_has_org_or_app_read_access"("orgid" "uuid", "appid" character varying) TO "anon";
+GRANT ALL ON FUNCTION "public"."request_has_org_or_app_read_access"("orgid" "uuid", "appid" character varying) TO "authenticated";
 
 
 
