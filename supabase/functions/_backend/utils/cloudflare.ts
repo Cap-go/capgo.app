@@ -978,20 +978,24 @@ export async function countDevicesCF(
     }
   }
 
-  if (versionName)
-    conditions.push(`blob2 = '${escapeSqlString(versionName)}'`)
+  // Match latest aggregated version/platform for current-state filtering (same as Supabase devices table).
+  if (versionName || platform) {
+    const outerConditions: string[] = []
+    if (versionName)
+      outerConditions.push(`version_name = '${escapeSqlString(versionName)}'`)
+    if (platform)
+      outerConditions.push(`platform = ${platformOsToCFDouble(platform)}`)
 
-  // Match latest aggregated platform for current-state filtering.
-  if (platform) {
-    const platformValue = platformOsToCFDouble(platform)
     const query = `SELECT COUNT() AS total
 FROM (
-  SELECT argMax(double1, timestamp) AS platform
+  SELECT
+    argMax(blob2, timestamp) AS version_name,
+    argMax(double1, timestamp) AS platform
   FROM device_info
   WHERE ${conditions.join(' AND ')}
   GROUP BY blob1
 )
-WHERE platform = ${platformValue}`
+WHERE ${outerConditions.join(' AND ')}`
 
     cloudlog({ requestId: c.get('requestId'), message: 'countDevicesCF query', query })
     try {
@@ -1091,14 +1095,21 @@ function buildReadDevicesCFPlatformCondition(platform: ReadDevicesParams['platfo
   return `platform = ${platformOsToCFDouble(platform)}`
 }
 
+function buildReadDevicesCFVersionNameCondition(versionName: ReadDevicesParams['version_name']) {
+  if (!versionName)
+    return ''
+  return `version_name = '${escapeSqlString(versionName)}'`
+}
+
 function buildReadDevicesCFOuterConditions(params: ReadDevicesParams, devicesOrder: DevicesOrderCF | null) {
   const conditions = [
     buildReadDevicesCFCursorCondition(params.cursor, devicesOrder),
     buildReadDevicesCFUpdatedAtGtCondition(params.updated_at_gt),
     // Match the latest aggregated custom_id, not historical event rows.
     buildReadDevicesCFCustomIdsCondition(params.customIds),
-    // Match the latest aggregated platform, not historical event rows.
+    // Match the latest aggregated platform/version, not historical event rows.
     buildReadDevicesCFPlatformCondition(params.platform),
+    buildReadDevicesCFVersionNameCondition(params.version_name),
   ]
   return conditions.filter(Boolean)
 }
@@ -1129,10 +1140,6 @@ export function buildReadDevicesCFQuery(params: ReadDevicesParams, customIdMode:
     else {
       conditions.push(`(position('${escapeSqlString(searchLower)}' IN toLower(blob1)) > 0 OR position('${escapeSqlString(searchLower)}' IN toLower(blob5)) > 0 OR position('${escapeSqlString(searchLower)}' IN toLower(blob2)) > 0)`)
     }
-  }
-
-  if (params.version_name) {
-    conditions.push(`blob2 = '${escapeSqlString(params.version_name)}'`)
   }
 
   if (params.updated_at_gt) {

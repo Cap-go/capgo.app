@@ -150,7 +150,7 @@ describe('buildReadDevicesCFQuery', () => {
     expect(outerFilterIndex).toBeGreaterThan(groupByIndex)
   })
 
-  it.concurrent('filters devices by latest aggregated platform after grouping', () => {
+  it.concurrent('filters devices by latest aggregated platform and version after grouping', () => {
     const query = buildReadDevicesCFQuery({
       app_id: 'com.example.app',
       platform: 'ios',
@@ -159,12 +159,11 @@ describe('buildReadDevicesCFQuery', () => {
     }, false)
 
     const groupByIndex = query.indexOf('GROUP BY blob1')
-    const versionIndex = query.indexOf(`blob2 = '1.2.3'`)
-    const platformIndex = query.indexOf('WHERE platform = 1')
+    const outerWhereIndex = query.indexOf('WHERE platform = 1 AND version_name = \'1.2.3\'')
+    const altOuterWhereIndex = query.indexOf('WHERE version_name = \'1.2.3\' AND platform = 1')
 
-    expect(versionIndex).toBeGreaterThan(-1)
-    expect(versionIndex).toBeLessThan(groupByIndex)
-    expect(platformIndex).toBeGreaterThan(groupByIndex)
+    expect(query).not.toContain(`blob2 = '1.2.3'`)
+    expect(Math.max(outerWhereIndex, altOuterWhereIndex)).toBeGreaterThan(groupByIndex)
   })
 })
 

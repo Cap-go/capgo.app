@@ -103,9 +103,7 @@ function getSearchTerm() {
 
 function getVersionNameFilter() {
   const selected = selectedVersionName.value.trim()
-  if (selected)
-    return selected
-  return props.versionName || undefined
+  return selected || undefined
 }
 
 function getPlatformFilter(): PlatformOs | undefined {
@@ -469,8 +467,7 @@ watch(() => props.appId, async () => {
 })
 
 watch(() => props.versionName, (value) => {
-  if (value && !selectedVersionName.value)
-    selectedVersionName.value = value
+  selectedVersionName.value = value ?? ''
 })
 
 watch([selectedPlatform, selectedVersionName], () => {
