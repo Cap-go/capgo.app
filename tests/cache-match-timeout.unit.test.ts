@@ -65,4 +65,14 @@ describe('CacheHelper.matchJson timeout', () => {
     await vi.advanceTimersByTimeAsync(16)
     await expect(pending).resolves.toBeNull()
   })
+
+  it('fails open with null when caches.open rejects', async () => {
+    vi.stubGlobal('caches', {
+      open: vi.fn().mockRejectedValue(new Error('cache open failed')),
+    })
+
+    const helper = new CacheHelper(makeContext())
+    const key = helper.buildRequest('/.app-status-v3', { app_id: 'com.test.app' })
+    await expect(helper.matchJson(key)).resolves.toBeNull()
+  })
 })

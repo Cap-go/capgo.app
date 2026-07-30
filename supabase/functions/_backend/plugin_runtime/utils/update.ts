@@ -769,9 +769,10 @@ export async function update(c: Context, body: AppInfos) {
     if (providerBlockedResponse)
       return providerBlockedResponse
   }
-  const startConnect = performance.now()
+  const startPgClient = performance.now()
   const pgClient = await getPgClient(c, true)
-  const connectMs = Math.round(performance.now() - startConnect)
+  // Hyperdrive: includes await client.connect(). Pool: construction only (lazy connect later).
+  const pgClientMs = Math.round(performance.now() - startPgClient)
   const pathTiming: UpdatePathTiming = {}
   try {
     const startLag = performance.now()
@@ -790,7 +791,7 @@ export async function update(c: Context, body: AppInfos) {
         outcome: 'total',
         totalMs,
         appStatusMs,
-        connectMs,
+        pgClientMs,
         ownerMs: pathTiming.ownerMs ?? 0,
         replicationLagMs,
         databaseSource: c.get('databaseSource') ?? c.res.headers.get('X-Database-Source') ?? null,

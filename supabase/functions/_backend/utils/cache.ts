@@ -95,10 +95,10 @@ export class CacheHelper {
   }
 
   private async matchJsonUnbound<T>(key: Request): Promise<T | null> {
-    const cache = await this.ensureCache()
-    if (!cache)
-      return null
     try {
+      const cache = await this.ensureCache()
+      if (!cache)
+        return null
       const cachedResponse = await cache.match(key)
       if (!cachedResponse)
         return null
