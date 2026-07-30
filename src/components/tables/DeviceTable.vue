@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { TableColumn } from '../comp_def'
 import type { Database } from '~/types/supabase.types'
-import { computed, h, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, h, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
@@ -56,10 +56,14 @@ const platformOptions = computed(() => [
 
 function clearExtraFilters() {
   // Values only — DataTable clear emits a filters update that triggers the single reload.
+  // Keep skipFilterReload true until the next tick so platform/bundle watchers do not
+  // schedule a second reload in the same clear action.
   skipFilterReload.value = true
   selectedPlatform.value = ''
   selectedVersionName.value = ''
-  skipFilterReload.value = false
+  nextTick(() => {
+    skipFilterReload.value = false
+  })
 }
 const columns = ref<TableColumn[]>([
   {

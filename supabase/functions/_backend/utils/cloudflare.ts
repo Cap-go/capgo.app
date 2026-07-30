@@ -977,10 +977,12 @@ export async function countDevicesCF(
       outerConditions.push(`platform = ${platformOsToCFDouble(platform)}`)
     if (search) {
       const searchLower = search.toLowerCase()
-      if (deviceIds.length)
-        outerConditions.push(`position('${escapeSqlString(searchLower)}' IN toLower(custom_id)) > 0`)
-      else
+      if (deviceIds.length) {
+        outerConditions.push(`(position('${escapeSqlString(searchLower)}' IN toLower(custom_id)) > 0 OR position('${escapeSqlString(searchLower)}' IN toLower(version_name)) > 0)`)
+      }
+      else {
         outerConditions.push(`(position('${escapeSqlString(searchLower)}' IN toLower(device_id)) > 0 OR position('${escapeSqlString(searchLower)}' IN toLower(custom_id)) > 0 OR position('${escapeSqlString(searchLower)}' IN toLower(version_name)) > 0)`)
+      }
     }
 
     const query = `SELECT COUNT() AS total
@@ -1102,12 +1104,11 @@ function buildReadDevicesCFVersionNameCondition(versionName: ReadDevicesParams['
 
 function buildReadDevicesCFSearchCondition(search: string | undefined, deviceIds: string[] | undefined) {
   if (!search)
-    return ''
-
+    return undefined
   const searchLower = search.toLowerCase()
-  if (deviceIds?.length)
-    return `position('${escapeSqlString(searchLower)}' IN toLower(custom_id)) > 0`
-
+  if (deviceIds?.length) {
+    return `(position('${escapeSqlString(searchLower)}' IN toLower(custom_id)) > 0 OR position('${escapeSqlString(searchLower)}' IN toLower(version_name)) > 0)`
+  }
   return `(position('${escapeSqlString(searchLower)}' IN toLower(device_id)) > 0 OR position('${escapeSqlString(searchLower)}' IN toLower(custom_id)) > 0 OR position('${escapeSqlString(searchLower)}' IN toLower(version_name)) > 0)`
 }
 

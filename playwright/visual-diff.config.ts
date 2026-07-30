@@ -26,14 +26,8 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
     prepare: async (page) => {
       // Open Filters modal so reviewers see platform/bundle controls.
       await page.getByRole('button', { name: /filters/i }).click()
-      const modal = page.locator('[data-test="data-table-filters-modal"]')
-      if (await modal.count())
-        await modal.waitFor({ state: 'visible' })
-      const platformFilter = page.locator('[data-test="device-platform-filter"]')
-      if (await platformFilter.count())
-        await platformFilter.waitFor({ state: 'visible' })
-      else
-        await page.getByText('Override', { exact: true }).waitFor({ state: 'visible' })
+      await page.locator('[data-test="data-table-filters-modal"]').waitFor({ state: 'visible' })
+      await page.locator('[data-test="device-platform-filter"]').waitFor({ state: 'visible' })
     },
   },
   { slug: 'observe', path: '/app/com.demo.app/observe', auth: true },
