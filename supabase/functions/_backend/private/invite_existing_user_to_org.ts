@@ -263,6 +263,9 @@ app.post('/', middlewareAuth, async (c) => {
     .select('id, is_invite, rbac_role_name')
     .eq('org_id', body.org_id)
     .eq('user_id', invitedUser.id)
+    // Legacy app/channel-scoped rows share (org_id, user_id); only the org-level row is the membership.
+    .is('app_id', null)
+    .is('channel_id', null)
     .maybeSingle()
 
   if (membershipError) {
