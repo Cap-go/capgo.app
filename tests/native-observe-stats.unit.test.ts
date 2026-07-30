@@ -160,6 +160,7 @@ describe('native observe stats helpers', () => {
         action: 'app_launch_ready',
         version_name: '1.0.0',
         metadata: { duration_ms: '450' },
+        duration_ms: null,
         created_at: '2026-07-02T10:00:00.000Z',
       },
       {
@@ -168,6 +169,7 @@ describe('native observe stats helpers', () => {
         action: 'app_crash',
         version_name: '',
         metadata: null,
+        duration_ms: null,
         created_at: 'not-a-date',
       },
     ])).toEqual([

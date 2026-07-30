@@ -5,7 +5,7 @@ import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc.js'
 import { Hono } from 'hono/tiny'
-import { readNativeObservePluginVersionsCF, readUpdateDeliveryTimingEventsCF } from '../utils/cloudflare.ts'
+import { parseStatsDurationMs, readNativeObservePluginVersionsCF, readUpdateDeliveryTimingEventsCF, resolveUpdateDeliveryTimingDurationMs } from '../utils/cloudflare.ts'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog } from '../utils/logging.ts'
@@ -288,20 +288,7 @@ function setMetric(series: Array<number | null>, index: number, value: NativeObs
 }
 
 function parseMetaDurationMs(metadata: Record<string, string> | null | undefined): number | null {
-  if (!metadata)
-    return null
-  for (const key of ['duration_ms', 'duration'] as const) {
-    const raw = metadata[key]
-    if (typeof raw !== 'string' || raw.length === 0 || raw.length > 15)
-      continue
-    if (!/^\d+(?:\.\d+)?$/.test(raw))
-      continue
-    const value = Number(raw)
-    if (!Number.isFinite(value))
-      continue
-    return value
-  }
-  return null
+  return parseStatsDurationMs(metadata)
 }
 
 function percentileCont(sorted: number[], q: number): number | null {
@@ -347,7 +334,7 @@ function toNativeObserveEventSamples(events: UpdateDeliveryTimingEventCF[]): Nat
       action: event.action,
       version_name: event.version_name || 'unknown',
       device_id: event.device_id,
-      duration_ms: parseMetaDurationMs(event.metadata),
+      duration_ms: resolveUpdateDeliveryTimingDurationMs(event),
     })
   }
   return samples

@@ -76,6 +76,8 @@ describe('update delivery stats helpers', () => {
 
   it.concurrent('parses duration metadata strings', () => {
     expect(updateDeliveryStatsTestUtils.parseMetaDurationMs({ duration_ms: '1250.5' })).toBe(1250.5)
+    expect(updateDeliveryStatsTestUtils.parseMetaDurationMs({ duration_ms: 800 })).toBe(800)
+    expect(updateDeliveryStatsTestUtils.parseMetaDurationMs({ duration_ms: '0' })).toBe(0)
     expect(updateDeliveryStatsTestUtils.parseMetaDurationMs({ duration: '900' })).toBe(900)
     expect(updateDeliveryStatsTestUtils.parseMetaDurationMs({ duration_ms: '0' })).toBe(0)
     expect(updateDeliveryStatsTestUtils.parseMetaDurationMs({ duration_ms: 'nope' })).toBeNull()
@@ -91,6 +93,7 @@ describe('update delivery stats helpers', () => {
         action: 'download_0',
         version_name: '1.2.3',
         metadata: null,
+        duration_ms: null,
         created_at: '2026-07-02T10:00:00.000Z',
       },
       {
@@ -99,6 +102,7 @@ describe('update delivery stats helpers', () => {
         action: 'download_complete',
         version_name: '1.2.3',
         metadata: null,
+        duration_ms: null,
         created_at: '2026-07-02T10:00:01.500Z',
       },
       {
@@ -107,6 +111,7 @@ describe('update delivery stats helpers', () => {
         action: 'download_complete',
         version_name: '1.2.3',
         metadata: { duration_ms: '2200' },
+        duration_ms: null,
         created_at: '2026-07-02T11:00:00.000Z',
       },
     ], { periodStartMs, allowPairing: true })
@@ -136,6 +141,7 @@ describe('update delivery stats helpers', () => {
         action: 'download_0',
         version_name: '1.2.3',
         metadata: null,
+        duration_ms: null,
         created_at: '2026-07-02T10:00:00.000Z',
       },
       {
@@ -144,6 +150,7 @@ describe('update delivery stats helpers', () => {
         action: 'download_complete',
         version_name: '1.2.3',
         metadata: null,
+        duration_ms: null,
         created_at: '2026-07-02T10:00:01.500Z',
       },
       {
@@ -152,6 +159,7 @@ describe('update delivery stats helpers', () => {
         action: 'download_complete',
         version_name: '1.2.3',
         metadata: { duration_ms: '2200' },
+        duration_ms: null,
         created_at: '2026-07-02T11:00:00.000Z',
       },
     ], { periodStartMs, allowPairing: false })
@@ -163,6 +171,37 @@ describe('update delivery stats helpers', () => {
         device_id: 'device-2',
         duration_ms: 2200,
       },
+    ])
+  })
+
+
+  it.concurrent('uses Analytics Engine double1 when metadata is empty', () => {
+    expect(updateDeliveryStatsTestUtils.resolveEventDurationMs({
+      app_id: 'a',
+      device_id: 'd',
+      action: 'download_complete',
+      version_name: '1.0.0',
+      metadata: null,
+      duration_ms: 1200,
+      created_at: '2026-07-01T00:00:00.000Z',
+    })).toBe(1200)
+  })
+
+  it('builds samples from double1 without pairing', () => {
+    const periodStartMs = Date.parse('2026-07-02T00:00:00.000Z')
+    const samples = updateDeliveryStatsTestUtils.buildDeliveriesFromEvents([
+      {
+        app_id: 'com.demo.app',
+        device_id: 'device-9',
+        action: 'download_complete',
+        version_name: '1.2.3',
+        metadata: null,
+        duration_ms: 900,
+        created_at: '2026-07-02T12:00:00.000Z',
+      },
+    ], { periodStartMs, allowPairing: false })
+    expect(samples).toEqual([
+      { day: '2026-07-02', app_id: 'com.demo.app', device_id: 'device-9', duration_ms: 900 },
     ])
   })
 
