@@ -1036,7 +1036,6 @@ export type Database = {
           created_at: string
           description: string | null
           enabled: boolean
-          healthcheck_url: string | null
           hour_interval: number | null
           id: number
           minute_interval: number | null
@@ -1057,7 +1056,6 @@ export type Database = {
           created_at?: string
           description?: string | null
           enabled?: boolean
-          healthcheck_url?: string | null
           hour_interval?: number | null
           id?: number
           minute_interval?: number | null
@@ -1078,7 +1076,6 @@ export type Database = {
           created_at?: string
           description?: string | null
           enabled?: boolean
-          healthcheck_url?: string | null
           hour_interval?: number | null
           id?: number
           minute_interval?: number | null
@@ -4365,14 +4362,6 @@ export type Database = {
             Args: { batch_size?: number; queue_names: string[] }
             Returns: undefined
           }
-      process_queue_with_healthcheck: {
-        Args: {
-          batch_size: number
-          healthcheck_url: string
-          queue_names: string[]
-        }
-        Returns: undefined
-      }
       process_stats_email_monthly: { Args: never; Returns: undefined }
       process_stats_email_weekly: { Args: never; Returns: undefined }
       process_subscribed_orgs: { Args: never; Returns: undefined }
