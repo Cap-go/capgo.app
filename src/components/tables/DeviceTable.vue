@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import type { TableColumn } from '../comp_def'
 import type { Database } from '~/types/supabase.types'
-import { useDebounceFn } from '@vueuse/core'
 import { h, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
@@ -46,7 +45,7 @@ const bundleNames = ref<string[]>([])
 const skipFilterReload = ref(false)
 const offset = 10
 const selectControlClass = 'd-select d-select-bordered h-10 min-h-10 w-full max-w-56 rounded-md border-gray-300 bg-white text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-primary/30 dark:border-gray-600 dark:bg-gray-800 dark:text-white'
-const inputControlClass = 'h-10 w-full max-w-56 rounded-md border border-gray-300 bg-white px-3 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-primary/30 dark:border-gray-600 dark:bg-gray-800 dark:text-white'
+const inputControlClass = 'd-input d-input-bordered h-10 w-full max-w-56 rounded-md border-gray-300 bg-white px-3 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-primary/30 dark:border-gray-600 dark:bg-gray-800 dark:text-white'
 const columns = ref<TableColumn[]>([
   {
     label: t('device-id'),
@@ -283,12 +282,25 @@ async function refreshData() {
   }
 }
 
-const debouncedReload = useDebounceFn(() => {
-  reload()
-}, 300)
+let reloadTimer: ReturnType<typeof setTimeout> | undefined
+
+function cancelScheduledReload() {
+  if (!reloadTimer)
+    return
+  clearTimeout(reloadTimer)
+  reloadTimer = undefined
+}
+
+function debouncedReload() {
+  cancelScheduledReload()
+  reloadTimer = setTimeout(() => {
+    reloadTimer = undefined
+    reload()
+  }, 300)
+}
 
 onUnmounted(() => {
-  debouncedReload.cancel()
+  cancelScheduledReload()
 })
 
 async function fetchDevicesPage(cursor: string | undefined | null) {
@@ -465,16 +477,20 @@ onMounted(async () => {
   await loadBundleNames()
 })
 
-watch(() => props.appId, async () => {
+watch(() => props.appId, async (appId) => {
+  cancelScheduledReload()
   skipFilterReload.value = true
   selectedPlatform.value = ''
   selectedVersionName.value = props.versionName ?? ''
   await loadBundleNames()
+  if (appId !== props.appId)
+    return
   skipFilterReload.value = false
   await refreshData()
 })
 
 watch(() => props.versionName, (value) => {
+  cancelScheduledReload()
   skipFilterReload.value = true
   selectedVersionName.value = value ?? ''
   skipFilterReload.value = false

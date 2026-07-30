@@ -967,29 +967,27 @@ export async function countDevicesCF(
       conditions.push(`blob1 IN (${deviceIds.map(id => `'${escapeSqlString(id)}'`).join(', ')})`)
   }
 
-  if (search) {
-    const searchLower = search.toLowerCase()
-    if (deviceIds.length) {
-      conditions.push(`position('${escapeSqlString(searchLower)}' IN toLower(blob5)) > 0`)
-    }
-    else {
-      // Search in device_id, custom_id, or version_name
-      conditions.push(`(position('${escapeSqlString(searchLower)}' IN toLower(blob1)) > 0 OR position('${escapeSqlString(searchLower)}' IN toLower(blob5)) > 0 OR position('${escapeSqlString(searchLower)}' IN toLower(blob2)) > 0)`)
-    }
-  }
-
-  // Match latest aggregated version/platform for current-state filtering (same as Supabase devices table).
-  if (versionName || platform) {
+  // Match latest aggregated fields for current-state filtering (same as Supabase devices table).
+  if (versionName || platform || search) {
     const outerConditions: string[] = []
     if (versionName)
       outerConditions.push(`version_name = '${escapeSqlString(versionName)}'`)
     if (platform)
       outerConditions.push(`platform = ${platformOsToCFDouble(platform)}`)
+    if (search) {
+      const searchLower = search.toLowerCase()
+      if (deviceIds.length)
+        outerConditions.push(`position('${escapeSqlString(searchLower)}' IN toLower(custom_id)) > 0`)
+      else
+        outerConditions.push(`(position('${escapeSqlString(searchLower)}' IN toLower(device_id)) > 0 OR position('${escapeSqlString(searchLower)}' IN toLower(custom_id)) > 0 OR position('${escapeSqlString(searchLower)}' IN toLower(version_name)) > 0)`)
+    }
 
     const query = `SELECT COUNT() AS total
 FROM (
   SELECT
+    argMax(blob1, timestamp) AS device_id,
     argMax(blob2, timestamp) AS version_name,
+    argMax(blob5, timestamp) AS custom_id,
     argMax(double1, timestamp) AS platform
   FROM device_info
   WHERE ${conditions.join(' AND ')}
@@ -1101,15 +1099,27 @@ function buildReadDevicesCFVersionNameCondition(versionName: ReadDevicesParams['
   return `version_name = '${escapeSqlString(versionName)}'`
 }
 
+function buildReadDevicesCFSearchCondition(search: string | undefined, deviceIds: string[] | undefined) {
+  if (!search)
+    return ''
+
+  const searchLower = search.toLowerCase()
+  if (deviceIds?.length)
+    return `position('${escapeSqlString(searchLower)}' IN toLower(custom_id)) > 0`
+
+  return `(position('${escapeSqlString(searchLower)}' IN toLower(device_id)) > 0 OR position('${escapeSqlString(searchLower)}' IN toLower(custom_id)) > 0 OR position('${escapeSqlString(searchLower)}' IN toLower(version_name)) > 0)`
+}
+
 function buildReadDevicesCFOuterConditions(params: ReadDevicesParams, devicesOrder: DevicesOrderCF | null) {
   const conditions = [
     buildReadDevicesCFCursorCondition(params.cursor, devicesOrder),
     buildReadDevicesCFUpdatedAtGtCondition(params.updated_at_gt),
     // Match the latest aggregated custom_id, not historical event rows.
     buildReadDevicesCFCustomIdsCondition(params.customIds),
-    // Match the latest aggregated platform/version, not historical event rows.
+    // Match the latest aggregated platform/version/search, not historical event rows.
     buildReadDevicesCFPlatformCondition(params.platform),
     buildReadDevicesCFVersionNameCondition(params.version_name),
+    buildReadDevicesCFSearchCondition(params.search, params.deviceIds),
   ]
   return conditions.filter(Boolean)
 }
@@ -1129,16 +1139,6 @@ export function buildReadDevicesCFQuery(params: ReadDevicesParams, customIdMode:
     else {
       const devicesList = params.deviceIds.map(id => `'${escapeSqlString(id)}'`).join(', ')
       conditions.push(`blob1 IN (${devicesList})`)
-    }
-  }
-
-  if (params.search) {
-    const searchLower = params.search.toLowerCase()
-    if (params.deviceIds?.length) {
-      conditions.push(`position('${escapeSqlString(searchLower)}' IN toLower(blob5)) > 0`)
-    }
-    else {
-      conditions.push(`(position('${escapeSqlString(searchLower)}' IN toLower(blob1)) > 0 OR position('${escapeSqlString(searchLower)}' IN toLower(blob5)) > 0 OR position('${escapeSqlString(searchLower)}' IN toLower(blob2)) > 0)`)
     }
   }
 
