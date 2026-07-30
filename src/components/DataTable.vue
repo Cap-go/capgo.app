@@ -523,12 +523,17 @@ const paginationClass = computed(() => props.mobileFixedPagination
             <IconDown class="hidden w-4 h-4 ml-2 md:block" />
           </button>
           <ul class="max-h-80 w-72 max-w-[calc(100vw-2rem)] overflow-y-auto border border-gray-200 bg-white p-2 shadow-xl d-dropdown-content d-menu rounded-box z-20 dark:border-gray-700 dark:bg-base-200">
-            <li v-if="$slots['filter-extras']" class="p-0!" @click.stop>
+            <li
+              v-if="$slots['filter-extras']"
+              class="menu-title! m-0! p-0! text-inherit! opacity-100!"
+              @click.stop
+            >
               <slot name="filter-extras" />
             </li>
-            <li
+            <div
               v-if="$slots['filter-extras'] && filterList.length"
               class="my-1 border-t border-gray-200 dark:border-gray-600"
+              role="separator"
             />
             <li v-for="(f, i) in filterList" :key="i">
               <div
