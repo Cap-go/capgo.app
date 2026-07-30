@@ -126,16 +126,21 @@ function getQuerySignature() {
 }
 
 async function loadBundleNames() {
-  if (!props.appId)
+  const appId = props.appId
+  if (!appId)
     return
 
   const { data, error } = await supabase
     .from('app_versions')
     .select('name')
-    .eq('app_id', props.appId)
+    .eq('app_id', appId)
     .eq('deleted', false)
     .order('created_at', { ascending: false })
     .limit(200)
+
+  // Ignore stale responses if the user switched apps while the query was in flight.
+  if (appId !== props.appId)
+    return
 
   if (error || !data) {
     bundleNames.value = []
