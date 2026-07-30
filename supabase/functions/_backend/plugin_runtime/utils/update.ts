@@ -273,11 +273,16 @@ async function getStoredChannelSelfOverride(c: Context, appId: string, deviceId:
   return getChannelSelfOverride(c as Context<MiddlewareKeyVariables>, appId, deviceId)
 }
 
+export interface UpdatePathTiming {
+  ownerMs?: number
+}
+
 export async function updateWithPG(
   c: Context,
   body: AppInfos,
   drizzleClient: ReturnType<typeof getDrizzleClient>,
   appStatus?: Awaited<ReturnType<typeof getAppStatus>>,
+  pathTiming?: UpdatePathTiming,
 ) {
   const {
     version_name,
@@ -316,7 +321,10 @@ export async function updateWithPG(
       return providerBlockedResponse
   }
 
+  const startOwner = performance.now()
   const appOwner = await getAppOwnerPostgres(c, app_id, drizzleClient, PLAN_LIMIT)
+  if (pathTiming)
+    pathTiming.ownerMs = Math.round(performance.now() - startOwner)
   // if version_build is not semver, then make it semver
   const device = makeDevice(body, appOwner?.allow_device_custom_id)
   if (!appOwner) {
@@ -761,7 +769,11 @@ export async function update(c: Context, body: AppInfos) {
     if (providerBlockedResponse)
       return providerBlockedResponse
   }
+  const startPgClient = performance.now()
   const pgClient = await getPgClient(c, true)
+  // Hyperdrive: includes await client.connect(). Pool: construction only (lazy connect later).
+  const pgClientMs = Math.round(performance.now() - startPgClient)
+  const pathTiming: UpdatePathTiming = {}
   try {
     const startLag = performance.now()
     await setReplicationLagHeader(c, pgClient)
@@ -769,7 +781,7 @@ export async function update(c: Context, body: AppInfos) {
 
     const drizzlePg = getDrizzleClient(pgClient, { logger: false })
     // Use the active DB client only when needed
-    const response = await updateWithPG(c, body, drizzlePg, appStatus)
+    const response = await updateWithPG(c, body, drizzlePg, appStatus, pathTiming)
     const totalMs = Math.round(performance.now() - startUpdate)
     if (totalMs >= 100) {
       cloudlog({
@@ -779,7 +791,10 @@ export async function update(c: Context, body: AppInfos) {
         outcome: 'total',
         totalMs,
         appStatusMs,
+        pgClientMs,
+        ownerMs: pathTiming.ownerMs ?? 0,
         replicationLagMs,
+        databaseSource: c.get('databaseSource') ?? c.res.headers.get('X-Database-Source') ?? null,
         app_id: body.app_id,
       })
     }

@@ -4,7 +4,28 @@ import { cloudlogErr, serializeError } from './logging.ts'
 
 const CACHE_METHOD = 'GET'
 
+/** Hot-path Cache API reads must not block /updates P999 when CF Cache stalls. */
+export const CACHE_MATCH_TIMEOUT_MS = 20
+
 type CacheLike = Cache & { default?: Cache, open?: (cacheName: string) => Promise<Cache> }
+
+const TIMEOUT = Symbol('cache-timeout')
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | typeof TIMEOUT> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<typeof TIMEOUT>((resolve) => {
+        timer = setTimeout(() => resolve(TIMEOUT), timeoutMs)
+      }),
+    ])
+  }
+  finally {
+    if (timer !== undefined)
+      clearTimeout(timer)
+  }
+}
 
 async function resolveGlobalCache(): Promise<Cache | null> {
   if (typeof caches === 'undefined')
@@ -60,11 +81,24 @@ export class CacheHelper {
     return new Request(url.toString(), { method: CACHE_METHOD })
   }
 
-  async matchJson<T>(key: Request): Promise<T | null> {
-    const cache = await this.ensureCache()
-    if (!cache)
+  /**
+   * Read JSON from Cache API. On timeout or error, fail open with null so hot
+   * paths (app status, manifest rows) continue via DB/cold logic instead of
+   * hanging the worker wall clock.
+   */
+  async matchJson<T>(key: Request, options?: { timeoutMs?: number }): Promise<T | null> {
+    const timeoutMs = options?.timeoutMs ?? CACHE_MATCH_TIMEOUT_MS
+    const result = await withTimeout(this.matchJsonUnbound<T>(key), timeoutMs)
+    if (result === TIMEOUT)
       return null
+    return result
+  }
+
+  private async matchJsonUnbound<T>(key: Request): Promise<T | null> {
     try {
+      const cache = await this.ensureCache()
+      if (!cache)
+        return null
       const cachedResponse = await cache.match(key)
       if (!cachedResponse)
         return null
