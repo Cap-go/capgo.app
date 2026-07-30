@@ -494,6 +494,8 @@ onMounted(async () => {
 
 watch(() => props.appId, async (appId) => {
   cancelScheduledReload()
+  // Invalidate in-flight reloads from the previous app before awaiting.
+  activeLoadId.value += 1
   skipFilterReload.value = true
   selectedPlatform.value = ''
   selectedVersionName.value = props.versionName ?? ''
