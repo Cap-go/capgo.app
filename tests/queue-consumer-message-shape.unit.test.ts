@@ -1,5 +1,5 @@
 import { HTTPException } from 'hono/http-exception'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { __queueConsumerTestUtils__, MAX_QUEUE_READS, messagesArraySchema } from '../supabase/functions/_backend/triggers/queue_consumer.ts'
 import { onManifestCreateTestUtils } from '../supabase/functions/_backend/triggers/on_manifest_create.ts'
 import { onVersionUpdateTestUtils } from '../supabase/functions/_backend/triggers/on_version_update.ts'
