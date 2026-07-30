@@ -1,9 +1,8 @@
 import { app as accept_invitation } from '../_backend/private/accept_invitation.ts'
 import { app as admin_credits } from '../_backend/private/admin_credits.ts'
 import { app as admin_stats } from '../_backend/private/admin_stats.ts'
-import { app as channel_stats } from '../_backend/private/channel_stats.ts'
-import { app as native_observe_stats } from '../_backend/private/native_observe_stats.ts'
 import { app as channel_device } from '../_backend/private/channel_device.ts'
+import { app as channel_stats } from '../_backend/private/channel_stats.ts'
 import { app as config } from '../_backend/private/config.ts'
 import { app as configBuilder } from '../_backend/private/config_builder.ts'
 import { app as create_device } from '../_backend/private/create_device.ts'
@@ -17,6 +16,8 @@ import { app as invite_existing_user_to_org } from '../_backend/private/invite_e
 import { app as invite_new_user_to_org } from '../_backend/private/invite_new_user_to_org.ts'
 import { app as latency } from '../_backend/private/latency.ts'
 import { app as log_as } from '../_backend/private/log_as.ts'
+import { app as native_observe_stats } from '../_backend/private/native_observe_stats.ts'
+import { app as org_notification_stats } from '../_backend/private/org_notification_stats.ts'
 // Webapps API
 import { app as plans } from '../_backend/private/plans.ts'
 import { app as publicStats } from '../_backend/private/public_stats.ts'
@@ -60,6 +61,7 @@ appGlobal.route('/channel_device', channel_device)
 appGlobal.route('/create_device', create_device)
 appGlobal.route('/channel_stats', channel_stats)
 appGlobal.route('/native_observe_stats', native_observe_stats)
+appGlobal.route('/org_notification_stats', org_notification_stats)
 appGlobal.route('/download_link', download_link)
 appGlobal.route('/log_as', log_as)
 appGlobal.route('/admin_credits', admin_credits)

@@ -14,6 +14,7 @@ import IconTrash from '~icons/heroicons/trash'
 import { formatDate } from '~/services/date'
 import { checkPermissions } from '~/services/permissions'
 import { useSupabase } from '~/services/supabase'
+import { refetchIfPageOutOfRange } from '~/services/tablePagination'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
@@ -133,10 +134,11 @@ async function getData() {
     const { data: dataVersions, count } = await req
     if (!dataVersions)
       return
+    total.value = count ?? 0
+    if (await refetchIfPageOutOfRange(currentPage, total.value, offset, getData))
+      return
     elements.value.length = 0
     elements.value.push(...dataVersions as any)
-    // console.log('count', count)
-    total.value = count ?? 0
     if (count === 0) {
       showAddModal()
     }
@@ -166,16 +168,13 @@ async function getData() {
   isLoading.value = false
 }
 async function refreshData(keepCurrentPage = false) {
-  // console.log('refreshData')
   try {
-    const page = currentPage.value
     if (!keepCurrentPage)
       currentPage.value = 1
 
     elements.value.length = 0
+    // getData clamps currentPage when deletes leave it past the last page
     await getData()
-    if (keepCurrentPage)
-      currentPage.value = page
   }
   catch (error) {
     console.error(error)
@@ -380,7 +379,7 @@ watch(props, async () => {
   <div>
     <DataTable
       v-model:filters="filters" v-model:columns="columns" v-model:current-page="currentPage" v-model:search="search"
-      :total="total" :element-list="elements"
+      :total="total" :offset="offset" :element-list="elements"
       show-add
       filter-text="Filters"
       :is-loading="isLoading"

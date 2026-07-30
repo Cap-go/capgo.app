@@ -263,6 +263,15 @@ export async function collectAnalyticsEngineSqlFixtures(): Promise<AnalyticsEngi
           limit: 10,
         }, true),
       },
+      {
+        name: 'buildReadDevicesCFQuery.customIds',
+        query: buildReadDevicesCFQuery({
+          app_id: SAMPLE_APP_ID,
+          customIds: ['user-123'],
+          order: [{ key: 'updated_at', sortable: 'desc' }],
+          limit: 10,
+        }, false),
+      },
     ]
 
     await captureCall('readDeviceUsageCF', () => readDeviceUsageCF(context, SAMPLE_APP_ID, SAMPLE_START, SAMPLE_END))

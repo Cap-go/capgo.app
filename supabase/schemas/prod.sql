@@ -432,15 +432,11 @@ BEGIN
     RETURN 'ROLE_NOT_FOUND';
   END IF;
 
+  -- Keep is_invite true until after the accepted binding is inserted so the
+  -- privilege guards can verify this is a real invite acceptance.
   IF invite.id IS NULL THEN
     INSERT INTO public.org_users (user_id, org_id, rbac_role_name, is_invite)
-    VALUES (invite_user_id, invite_org_id, role_name, false);
-  ELSE
-    UPDATE public.org_users
-    SET is_invite = false,
-        rbac_role_name = role_name,
-        updated_at = CURRENT_TIMESTAMP
-    WHERE public.org_users.id = invite.id;
+    VALUES (invite_user_id, invite_org_id, role_name, true);
   END IF;
 
   DELETE FROM public.role_bindings
@@ -474,6 +470,14 @@ BEGIN
     'Accepted invitation',
     true
   ) ON CONFLICT DO NOTHING;
+
+  UPDATE public.org_users
+  SET is_invite = false,
+      rbac_role_name = role_name,
+      updated_at = CURRENT_TIMESTAMP
+  WHERE public.org_users.user_id = invite_user_id
+    AND public.org_users.org_id = invite_org_id
+    AND public.org_users.is_invite IS TRUE;
 
   RETURN 'OK';
 END;
@@ -3056,6 +3060,54 @@ BEGIN
 
   v_actor_id := public.request_actor_user_id();
 
+  -- Invitees may create/activate their own pending membership for the invited role.
+  IF v_actor_id IS NOT NULL
+    AND NEW.user_id = v_actor_id
+    AND (
+      (
+        TG_OP = 'UPDATE'
+        AND COALESCE(OLD.is_invite, false) IS TRUE
+        AND COALESCE(NEW.is_invite, false) IS FALSE
+        AND NEW.org_id IS NOT DISTINCT FROM OLD.org_id
+        AND NEW.user_id IS NOT DISTINCT FROM OLD.user_id
+        AND (
+          NEW.rbac_role_name IS NOT DISTINCT FROM OLD.rbac_role_name
+          OR EXISTS (
+            SELECT 1
+            FROM public.role_bindings rb
+            JOIN public.roles r
+              ON r.id = rb.role_id
+              AND r.scope_type = rb.scope_type
+            WHERE rb.principal_type = public.rbac_principal_user()
+              AND rb.principal_id = NEW.user_id
+              AND rb.org_id = NEW.org_id
+              AND rb.scope_type = public.rbac_scope_org()
+              AND r.name = NEW.rbac_role_name
+              AND rb.reason IN ('Pending invitation', 'Invited via invite_user_to_org_rbac', 'Accepted invitation')
+          )
+        )
+      )
+      OR (
+        TG_OP = 'INSERT'
+        AND EXISTS (
+          SELECT 1
+          FROM public.role_bindings rb
+          JOIN public.roles r
+            ON r.id = rb.role_id
+            AND r.scope_type = rb.scope_type
+          WHERE rb.principal_type = public.rbac_principal_user()
+            AND rb.principal_id = NEW.user_id
+            AND rb.org_id = NEW.org_id
+            AND rb.scope_type = public.rbac_scope_org()
+            AND r.name = NEW.rbac_role_name
+            AND rb.reason IN ('Pending invitation', 'Invited via invite_user_to_org_rbac')
+        )
+      )
+    )
+  THEN
+    RETURN NEW;
+  END IF;
+
   IF TG_OP = 'UPDATE'
     AND (
       NEW.org_id IS DISTINCT FROM OLD.org_id
@@ -5551,6 +5603,52 @@ $$;
 
 
 ALTER FUNCTION "public"."enqueue_credit_usage_posthog_event"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."enqueue_global_stats_creates"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  v_metric text;
+  v_date_id text;
+BEGIN
+  IF TG_TABLE_NAME = 'apps' THEN
+    v_metric := 'apps_created';
+    v_date_id := ((COALESCE(NEW.created_at, now()) AT TIME ZONE 'UTC')::date)::text;
+  ELSIF TG_TABLE_NAME = 'app_versions' THEN
+    IF NEW.name = 'builtin' OR NEW.name = 'unknown' THEN
+      RETURN NEW;
+    END IF;
+    v_metric := 'versions_created';
+    v_date_id := ((COALESCE(NEW.created_at, now()) AT TIME ZONE 'UTC')::date)::text;
+  ELSE
+    RETURN NEW;
+  END IF;
+
+  BEGIN
+    PERFORM pgmq.send(
+      'global_stats_creates',
+      jsonb_build_object(
+        'metric', v_metric,
+        'date_id', v_date_id,
+        'delta', 1
+      )
+    );
+  EXCEPTION WHEN OTHERS THEN
+    RAISE WARNING 'enqueue_global_stats_creates: failed to enqueue % for %: %', v_metric, v_date_id, SQLERRM;
+  END;
+
+  RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."enqueue_global_stats_creates"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."enqueue_global_stats_creates"() IS 'AFTER INSERT enqueue for apps/app_versions create counters. O(1) pgmq.send per row; failures are isolated from the primary write.';
+
 
 
 CREATE OR REPLACE FUNCTION "public"."exist_app"("appid" character varying) RETURNS boolean
@@ -9150,6 +9248,57 @@ $$;
 ALTER FUNCTION "public"."has_seeded_demo_data"("p_app_id" "text") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."has_usage_credits_org"("orgid" "uuid") RETURNS boolean
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+BEGIN
+  RETURN public.has_usage_credits_org(orgid, NULL::character varying);
+END;
+$$;
+
+
+ALTER FUNCTION "public"."has_usage_credits_org"("orgid" "uuid") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."has_usage_credits_org"("orgid" "uuid") IS 'Org-scope overload of has_usage_credits_org(orgid, appid).';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."has_usage_credits_org"("orgid" "uuid", "appid" character varying) RETURNS boolean
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  caller_role text;
+BEGIN
+  SELECT public.current_request_role() INTO caller_role;
+
+  IF NOT public.is_internal_request_role(caller_role) THEN
+    IF NOT public.request_has_org_or_app_read_access(orgid, appid) THEN
+      RETURN false;
+    END IF;
+  END IF;
+
+  RETURN COALESCE(
+    (
+      SELECT o.has_usage_credits
+      FROM public.orgs o
+      WHERE o.id = orgid
+    ),
+    false
+  );
+END;
+$$;
+
+
+ALTER FUNCTION "public"."has_usage_credits_org"("orgid" "uuid", "appid" character varying) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."has_usage_credits_org"("orgid" "uuid", "appid" character varying) IS 'Returns orgs.has_usage_credits for callers with org read access, or app read access when appid is provided. Used by the CLI to skip trial upgrade warnings for credit-only orgs.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."internal_request_db_user_names"() RETURNS "text"[]
     LANGUAGE "sql" IMMUTABLE
     SET "search_path" TO ''
@@ -11287,6 +11436,7 @@ CREATE OR REPLACE FUNCTION "public"."prevent_role_binding_priority_escalation"()
 DECLARE
   v_old_role_priority integer;
   v_new_role_priority integer;
+  v_actor_id uuid;
 BEGIN
   IF TG_OP = 'DELETE' THEN
     PERFORM public.lock_rbac_orgs(OLD.org_id);
@@ -11373,6 +11523,53 @@ BEGIN
     IF TG_OP = 'DELETE' THEN
       RETURN OLD;
     END IF;
+    RETURN NEW;
+  END IF;
+
+  v_actor_id := auth.uid();
+
+  -- Invitees may clear their own pending invite bindings and insert the accepted
+  -- binding for the same invited role while the org_users invite is still pending.
+  IF TG_OP = 'DELETE'
+    AND v_actor_id IS NOT NULL
+    AND OLD.principal_type = public.rbac_principal_user()
+    AND OLD.principal_id = v_actor_id
+    AND OLD.scope_type = public.rbac_scope_org()
+    AND (
+      OLD.reason IN ('Pending invitation', 'Invited via invite_user_to_org_rbac')
+      OR EXISTS (
+        SELECT 1
+        FROM public.org_users
+        WHERE org_users.user_id = v_actor_id
+          AND org_users.org_id = OLD.org_id
+          AND org_users.is_invite IS TRUE
+      )
+    )
+  THEN
+    RETURN OLD;
+  END IF;
+
+  IF TG_OP = 'INSERT'
+    AND v_actor_id IS NOT NULL
+    AND NEW.principal_type = public.rbac_principal_user()
+    AND NEW.principal_id = v_actor_id
+    AND NEW.scope_type = public.rbac_scope_org()
+    AND NEW.reason = 'Accepted invitation'
+    AND NEW.app_id IS NULL
+    AND NEW.bundle_id IS NULL
+    AND NEW.channel_id IS NULL
+    AND EXISTS (
+      SELECT 1
+      FROM public.org_users
+      JOIN public.roles
+        ON roles.name = org_users.rbac_role_name
+        AND roles.scope_type = public.rbac_scope_org()
+      WHERE org_users.user_id = v_actor_id
+        AND org_users.org_id = NEW.org_id
+        AND org_users.is_invite IS TRUE
+        AND roles.id = NEW.role_id
+    )
+  THEN
     RETURN NEW;
   END IF;
 
@@ -12211,6 +12408,73 @@ $$;
 
 
 ALTER FUNCTION "public"."process_function_queue"("queue_name" "text", "batch_size" integer) OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."process_global_stats_creates_queue"("batch_size" integer DEFAULT 1000) RETURNS bigint
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $_$
+DECLARE
+  message_record RECORD;
+  v_payload jsonb;
+  v_metric text;
+  v_date_id text;
+  v_delta integer;
+  msg_ids bigint[] := ARRAY[]::bigint[];
+  processed bigint := 0;
+BEGIN
+  IF batch_size IS NULL OR batch_size < 1 THEN
+    batch_size := 100;
+  END IF;
+
+  FOR message_record IN
+    SELECT *
+    FROM pgmq.read('global_stats_creates', 60, batch_size)
+  LOOP
+    v_payload := message_record.message;
+    v_metric := v_payload ->> 'metric';
+    v_date_id := v_payload ->> 'date_id';
+    v_delta := COALESCE((v_payload ->> 'delta')::integer, 0);
+
+    IF v_metric IS NULL
+       OR v_date_id IS NULL
+       OR v_date_id !~ '^\d{4}-\d{2}-\d{2}$'
+       OR v_delta = 0
+       OR v_metric NOT IN ('apps_created', 'versions_created') THEN
+      msg_ids := array_append(msg_ids, message_record.msg_id);
+      CONTINUE;
+    END IF;
+
+    IF v_metric = 'apps_created' THEN
+      INSERT INTO public.global_stats (date_id, apps, updates, stars, apps_created)
+      VALUES (v_date_id, 0, 0, 0, v_delta)
+      ON CONFLICT (date_id) DO UPDATE
+      SET apps_created = public.global_stats.apps_created + EXCLUDED.apps_created;
+    ELSE
+      INSERT INTO public.global_stats (date_id, apps, updates, stars, versions_created)
+      VALUES (v_date_id, 0, 0, 0, v_delta)
+      ON CONFLICT (date_id) DO UPDATE
+      SET versions_created = public.global_stats.versions_created + EXCLUDED.versions_created;
+    END IF;
+
+    processed := processed + 1;
+    msg_ids := array_append(msg_ids, message_record.msg_id);
+  END LOOP;
+
+  IF array_length(msg_ids, 1) IS NOT NULL THEN
+    PERFORM pgmq.delete('global_stats_creates', msg_ids);
+  END IF;
+
+  RETURN processed;
+END;
+$_$;
+
+
+ALTER FUNCTION "public"."process_global_stats_creates_queue"("batch_size" integer) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."process_global_stats_creates_queue"("batch_size" integer) IS 'Applies queued app-create and version-upload deltas onto global_stats daily counters. Indexed upsert on global_stats.date_id PK.';
+
 
 
 CREATE OR REPLACE FUNCTION "public"."process_queue_with_healthcheck"("queue_names" "text"[], "batch_size" integer, "healthcheck_url" "text") RETURNS "void"
@@ -14958,6 +15222,31 @@ $$;
 
 
 ALTER FUNCTION "public"."request_has_app_read_access"("orgid" "uuid", "appid" character varying) OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."request_has_org_or_app_read_access"("orgid" "uuid", "appid" character varying) RETURNS boolean
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+BEGIN
+  IF public.request_has_org_read_access(orgid) THEN
+    RETURN true;
+  END IF;
+
+  IF appid IS NOT NULL AND public.request_has_app_read_access(orgid, appid) THEN
+    RETURN true;
+  END IF;
+
+  RETURN false;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."request_has_org_or_app_read_access"("orgid" "uuid", "appid" character varying) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."request_has_org_or_app_read_access"("orgid" "uuid", "appid" character varying) IS 'True when the request has org read access, or app read access for appid within orgid. Used by has_usage_credits_org.';
+
 
 
 CREATE OR REPLACE FUNCTION "public"."request_has_org_read_access"("orgid" "uuid") RETURNS boolean
@@ -18427,7 +18716,8 @@ CREATE TABLE IF NOT EXISTS "public"."global_stats" (
     "apps_with_manual_builds_24h" bigint DEFAULT 0 NOT NULL,
     "above_plan_with_credits" bigint,
     "above_plan_without_credits" bigint,
-    "upgrade_rate_12m" double precision DEFAULT 0 NOT NULL
+    "upgrade_rate_12m" double precision DEFAULT 0 NOT NULL,
+    "versions_created" bigint DEFAULT 0 NOT NULL
 );
 
 
@@ -18674,7 +18964,7 @@ COMMENT ON COLUMN "public"."global_stats"."active_past_due_orgs" IS 'Organizatio
 
 
 
-COMMENT ON COLUMN "public"."global_stats"."apps_created" IS 'Number of apps created during the UTC day.';
+COMMENT ON COLUMN "public"."global_stats"."apps_created" IS 'Number of apps created during the UTC day. Event-sourced via the global_stats_creates queue so deletes later that day still count.';
 
 
 
@@ -18695,6 +18985,10 @@ COMMENT ON COLUMN "public"."global_stats"."above_plan_without_credits" IS 'Activ
 
 
 COMMENT ON COLUMN "public"."global_stats"."upgrade_rate_12m" IS 'Trailing 12-month paying-to-larger-plan upgrade events as a percentage of paying organizations (upgrade events in-window / paying * 100).';
+
+
+
+COMMENT ON COLUMN "public"."global_stats"."versions_created" IS 'Number of non-internal app versions uploaded during the UTC day. Event-sourced via the global_stats_creates queue so deletes later that day still count.';
 
 
 
@@ -20667,6 +20961,10 @@ CREATE INDEX "idx_device_usage_app_timestamp_version_build" ON "public"."device_
 
 
 
+CREATE INDEX "idx_devices_app_id_custom_id" ON "public"."devices" USING "btree" ("app_id", "custom_id") WHERE (("custom_id")::"text" <> ''::"text");
+
+
+
 CREATE INDEX "idx_devices_app_id_install_source" ON "public"."devices" USING "btree" ("app_id", "install_source") WHERE ("install_source" IS NOT NULL);
 
 
@@ -21080,6 +21378,14 @@ CREATE OR REPLACE TRIGGER "force_valid_user_id_on_app" BEFORE INSERT ON "public"
 
 
 CREATE OR REPLACE TRIGGER "generate_org_user_stripe_info_on_org_create" AFTER INSERT ON "public"."orgs" FOR EACH ROW EXECUTE FUNCTION "public"."generate_org_user_stripe_info_on_org_create"();
+
+
+
+CREATE OR REPLACE TRIGGER "global_stats_creates_on_app_insert" AFTER INSERT ON "public"."apps" FOR EACH ROW EXECUTE FUNCTION "public"."enqueue_global_stats_creates"();
+
+
+
+CREATE OR REPLACE TRIGGER "global_stats_creates_on_version_insert" AFTER INSERT ON "public"."app_versions" FOR EACH ROW EXECUTE FUNCTION "public"."enqueue_global_stats_creates"();
 
 
 
@@ -23636,6 +23942,11 @@ GRANT ALL ON FUNCTION "public"."enqueue_credit_usage_posthog_event"() TO "servic
 
 
 
+REVOKE ALL ON FUNCTION "public"."enqueue_global_stats_creates"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."enqueue_global_stats_creates"() TO "service_role";
+
+
+
 REVOKE ALL ON FUNCTION "public"."exist_app"("appid" character varying) FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."exist_app"("appid" character varying) TO "service_role";
 GRANT ALL ON FUNCTION "public"."exist_app"("appid" character varying) TO "anon";
@@ -24081,6 +24392,20 @@ GRANT ALL ON FUNCTION "public"."has_effective_non_expiring_org_super_admin_after
 
 REVOKE ALL ON FUNCTION "public"."has_seeded_demo_data"("p_app_id" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."has_seeded_demo_data"("p_app_id" "text") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."has_usage_credits_org"("orgid" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."has_usage_credits_org"("orgid" "uuid") TO "service_role";
+GRANT ALL ON FUNCTION "public"."has_usage_credits_org"("orgid" "uuid") TO "anon";
+GRANT ALL ON FUNCTION "public"."has_usage_credits_org"("orgid" "uuid") TO "authenticated";
+
+
+
+REVOKE ALL ON FUNCTION "public"."has_usage_credits_org"("orgid" "uuid", "appid" character varying) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."has_usage_credits_org"("orgid" "uuid", "appid" character varying) TO "service_role";
+GRANT ALL ON FUNCTION "public"."has_usage_credits_org"("orgid" "uuid", "appid" character varying) TO "anon";
+GRANT ALL ON FUNCTION "public"."has_usage_credits_org"("orgid" "uuid", "appid" character varying) TO "authenticated";
 
 
 
@@ -24549,6 +24874,11 @@ REVOKE ALL ON FUNCTION "public"."process_function_queue"("queue_names" "text"[],
 
 
 REVOKE ALL ON FUNCTION "public"."process_function_queue"("queue_name" "text", "batch_size" integer) FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "public"."process_global_stats_creates_queue"("batch_size" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."process_global_stats_creates_queue"("batch_size" integer) TO "service_role";
 
 
 
@@ -25226,6 +25556,13 @@ REVOKE ALL ON FUNCTION "public"."request_has_app_read_access"("orgid" "uuid", "a
 GRANT ALL ON FUNCTION "public"."request_has_app_read_access"("orgid" "uuid", "appid" character varying) TO "service_role";
 GRANT ALL ON FUNCTION "public"."request_has_app_read_access"("orgid" "uuid", "appid" character varying) TO "anon";
 GRANT ALL ON FUNCTION "public"."request_has_app_read_access"("orgid" "uuid", "appid" character varying) TO "authenticated";
+
+
+
+REVOKE ALL ON FUNCTION "public"."request_has_org_or_app_read_access"("orgid" "uuid", "appid" character varying) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."request_has_org_or_app_read_access"("orgid" "uuid", "appid" character varying) TO "service_role";
+GRANT ALL ON FUNCTION "public"."request_has_org_or_app_read_access"("orgid" "uuid", "appid" character varying) TO "anon";
+GRANT ALL ON FUNCTION "public"."request_has_org_or_app_read_access"("orgid" "uuid", "appid" character varying) TO "authenticated";
 
 
 
