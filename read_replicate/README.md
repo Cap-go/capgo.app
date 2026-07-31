@@ -28,6 +28,9 @@ bun run readreplicate:status
 because a Postgres upgrade invalidates WAL continuity. Do not use
 subscription-only reconnect after an upgrade.
 
+Both commands read `internal/cloudflare/.env.prod` for DB URLs and use the
+baked-in Capgo EU2 publication/subscription/slot names — no shell exports.
+
 ## Release reconciliation
 
 The release job rebuilds the selected schema catalog from the checked-out local
