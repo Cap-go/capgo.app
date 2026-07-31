@@ -37,6 +37,7 @@ export async function useChartData(supabase: SupabaseClient, appId: string, from
   const toParam = formatDateParam(clampedTo)
   const usagePath = kind === 'native' ? 'native_usage' : 'bundle_usage'
   const { error, data } = await invokeCapgoApi(`statistics/app/${appId}/${usagePath}?from=${fromParam}&to=${toParam}`, {
+    client: supabase,
     method: 'GET',
   })
   if (error)

@@ -679,10 +679,11 @@ let remoteConfigInFlight: Promise<CapgoConfig> | null = null
 
 export async function getRemoteConfig(silent = false, signal?: AbortSignal) {
   // call host + /api/get_config and parse the result as json using fetch
+  // Always return a shallow copy so callers cannot mutate the process-wide cache.
   if (!signal && cachedRemoteConfig)
-    return cachedRemoteConfig
+    return { ...cachedRemoteConfig }
   if (!signal && remoteConfigInFlight)
-    return remoteConfigInFlight
+    return remoteConfigInFlight.then(config => ({ ...config }))
 
   const run = (async () => {
     const localConfig = await getLocalConfig(silent)
@@ -694,13 +695,13 @@ export async function getRemoteConfig(silent = false, signal?: AbortSignal) {
       const merged = { ...data, ...localConfig } as CapgoConfig
       if (!signal)
         cachedRemoteConfig = merged
-      return merged
+      return { ...merged }
     }
     catch {
       if (!silent)
         log.info(`Local config ${formatError(localConfig)}`)
       // Do not cache fallbacks — a later call can recover after a transient failure.
-      return localConfig
+      return { ...localConfig }
     }
     finally {
       if (!signal)
@@ -912,6 +913,7 @@ export async function createSupabaseClient(apikey: string, supaHost?: string, su
   if (supaHost && supaKey) {
     if (!silent)
       log.info('Using custom supabase instance from provided options')
+    // Mutate only this call's copy — getRemoteConfig returns a shallow clone.
     config.supaHost = supaHost
     config.supaKey = supaKey
   }

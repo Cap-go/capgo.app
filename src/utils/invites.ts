@@ -42,6 +42,7 @@ export async function notifyExistingUserInvite(
   orgId: string,
 ): Promise<boolean> {
   const { error } = await invokeCapgoApi('private/invite_existing_user_to_org', {
+    client: supabase,
     body: {
       email,
       org_id: orgId,

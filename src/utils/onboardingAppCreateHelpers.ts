@@ -122,6 +122,7 @@ export async function createOnboardingAppWithFallbackIds(
 
   for (const candidateId of candidateIds) {
     const { data, error } = await invokeCapgoApi('app', {
+      client: supabase,
       method: 'POST',
       body: {
         owner_org: input.ownerOrgId,
