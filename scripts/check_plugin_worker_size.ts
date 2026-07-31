@@ -73,10 +73,10 @@ function measurePluginWorkerSize(): MeasuredSize {
       maxBuffer: 32 * 1024 * 1024,
       timeout: WRANGLER_TIMEOUT_MS,
     })
-    if (result.error)
-      throw new Error(`wrangler dry-run failed to start: ${result.error.message}`)
     if (result.signal)
       throw new Error(`wrangler dry-run killed by signal ${result.signal} (timeout ${WRANGLER_TIMEOUT_MS}ms?)`)
+    if (result.error)
+      throw new Error(`wrangler dry-run failed to start: ${result.error.message}`)
     if (result.status !== 0) {
       throw new Error(`wrangler dry-run failed:\n${result.stdout}\n${result.stderr}`)
     }
