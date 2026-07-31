@@ -547,6 +547,67 @@ function getObjectType(value: object): string {
   return 'Object'
 }
 
+function getLogArrayLength(value: unknown[]): number {
+  const length = readOwnLogProperty(value, 'length')
+  return typeof length === 'number' && Number.isSafeInteger(length) && length > 0
+    ? length
+    : 0
+}
+
+function serializePostgresLogArray(
+  value: unknown[],
+  seen: WeakSet<object>,
+  depth: number,
+): unknown[] {
+  const totalLength = getLogArrayLength(value)
+  const boundedLength = Math.min(totalLength, MAX_POSTGRES_LOG_ARRAY_ITEMS)
+  const serialized: unknown[] = []
+  for (let index = 0; index < boundedLength; index++)
+    serialized.push(serializePostgresLogValue(readOwnLogProperty(value, index), seen, depth + 1))
+
+  if (totalLength > boundedLength)
+    serialized.push(`[truncated ${totalLength - boundedLength} items]`)
+  return serialized
+}
+
+function serializePostgresLogObject(
+  value: object,
+  seen: WeakSet<object>,
+  depth: number,
+): unknown {
+  let keys: string[]
+  try {
+    keys = Object.keys(value)
+  }
+  catch (keyError) {
+    return `[unreadable object: ${describeThrownValue(keyError)}]`
+  }
+
+  // A null-prototype record plus explicit unsafe-key filtering prevents
+  // attacker-controlled diagnostic keys from invoking `__proto__` setters
+  // here or in less defensive downstream log processors.
+  const serialized: Record<string, unknown> = Object.create(null)
+  const blockedKeys: string[] = []
+  for (const key of keys.slice(0, MAX_POSTGRES_LOG_OBJECT_KEYS)) {
+    if (POSTGRES_LOG_UNSAFE_KEYS.has(key.toLowerCase())) {
+      blockedKeys.push(key)
+      continue
+    }
+    // Structured query objects can carry bound values under these keys.
+    // Keep the query text and shape, but never copy parameter values to logs.
+    serialized[key] = POSTGRES_LOG_REDACTED_KEYS.has(key.toLowerCase())
+      ? '[redacted]'
+      : serializePostgresLogValue(readOwnLogProperty(value, key), seen, depth + 1)
+  }
+
+  if (keys.length > MAX_POSTGRES_LOG_OBJECT_KEYS)
+    serialized.__truncatedKeys = keys.length - MAX_POSTGRES_LOG_OBJECT_KEYS
+  if (blockedKeys.length)
+    serialized.__blockedKeys = blockedKeys
+
+  return serialized
+}
+
 function serializePostgresLogValue(
   value: unknown,
   seen = new WeakSet<object>(),
@@ -572,46 +633,9 @@ function serializePostgresLogValue(
 
   seen.add(value)
   try {
-    if (Array.isArray(value)) {
-      const serialized = value
-        .slice(0, MAX_POSTGRES_LOG_ARRAY_ITEMS)
-        .map(item => serializePostgresLogValue(item, seen, depth + 1))
-      if (value.length > MAX_POSTGRES_LOG_ARRAY_ITEMS)
-        serialized.push(`[truncated ${value.length - MAX_POSTGRES_LOG_ARRAY_ITEMS} items]`)
-      return serialized
-    }
-
-    let keys: string[]
-    try {
-      keys = Object.keys(value)
-    }
-    catch (keyError) {
-      return `[unreadable object: ${describeThrownValue(keyError)}]`
-    }
-
-    // A null-prototype record plus explicit unsafe-key filtering prevents
-    // attacker-controlled diagnostic keys from invoking `__proto__` setters
-    // here or in less defensive downstream log processors.
-    const serialized: Record<string, unknown> = Object.create(null)
-    const blockedKeys: string[] = []
-    for (const key of keys.slice(0, MAX_POSTGRES_LOG_OBJECT_KEYS)) {
-      if (POSTGRES_LOG_UNSAFE_KEYS.has(key.toLowerCase())) {
-        blockedKeys.push(key)
-        continue
-      }
-      // Structured query objects can carry bound values under these keys.
-      // Keep the query text and shape, but never copy parameter values to logs.
-      serialized[key] = POSTGRES_LOG_REDACTED_KEYS.has(key.toLowerCase())
-        ? '[redacted]'
-        : serializePostgresLogValue(readOwnLogProperty(value, key), seen, depth + 1)
-    }
-
-    if (keys.length > MAX_POSTGRES_LOG_OBJECT_KEYS)
-      serialized.__truncatedKeys = keys.length - MAX_POSTGRES_LOG_OBJECT_KEYS
-    if (blockedKeys.length)
-      serialized.__blockedKeys = blockedKeys
-
-    return serialized
+    return Array.isArray(value)
+      ? serializePostgresLogArray(value, seen, depth)
+      : serializePostgresLogObject(value, seen, depth)
   }
   catch (serializationError) {
     return `[unserializable ${getObjectType(value)}: ${describeThrownValue(serializationError)}]`
@@ -619,6 +643,30 @@ function serializePostgresLogValue(
   finally {
     seen.delete(value)
   }
+}
+
+function serializePostgresAggregateErrors(
+  aggregateErrors: unknown[],
+  seen: WeakSet<object>,
+  depth: number,
+): Record<string, unknown>[] {
+  const totalLength = getLogArrayLength(aggregateErrors)
+  const boundedLength = Math.min(totalLength, MAX_POSTGRES_LOG_ARRAY_ITEMS)
+  const errors: Record<string, unknown>[] = []
+  for (let index = 0; index < boundedLength; index++) {
+    errors.push(serializePostgresError(
+      readOwnLogProperty(aggregateErrors, index),
+      seen,
+      depth + 1,
+    ))
+  }
+  if (totalLength > boundedLength) {
+    errors.push({
+      type: 'truncated',
+      omitted: totalLength - boundedLength,
+    })
+  }
+  return errors
 }
 
 /**
@@ -677,18 +725,8 @@ export function serializePostgresError(
     }
 
     const aggregateErrors = readErrorProperty(error, 'errors')
-    if (Array.isArray(aggregateErrors)) {
-      const errors: Record<string, unknown>[] = aggregateErrors
-        .slice(0, MAX_POSTGRES_LOG_ARRAY_ITEMS)
-        .map(nestedError => serializePostgresError(nestedError, seen, depth + 1))
-      if (aggregateErrors.length > MAX_POSTGRES_LOG_ARRAY_ITEMS) {
-        errors.push({
-          type: 'truncated',
-          omitted: aggregateErrors.length - MAX_POSTGRES_LOG_ARRAY_ITEMS,
-        })
-      }
-      serialized.errors = errors
-    }
+    if (Array.isArray(aggregateErrors))
+      serialized.errors = serializePostgresAggregateErrors(aggregateErrors, seen, depth)
 
     const cause = readErrorProperty(error, 'cause')
     if (cause !== undefined)
