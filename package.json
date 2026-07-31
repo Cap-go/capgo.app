@@ -14,6 +14,8 @@
     "readreplicate:replica": "bash read_replicate/replicate_to_replica.sh",
     "readreplicate:indexes": "bash read_replicate/replicate_ensure_indexes.sh",
     "readreplicate:status": "bash read_replicate/replicate_status.sh",
+    "readreplicate:upgrade:teardown": "bash read_replicate/replicate_upgrade_teardown.sh",
+    "readreplicate:upgrade:reconnect": "READ_REPLICA_FULL_RESET=1 bash read_replicate/replicate_to_replica.sh",
     "readreplicate:check-schema": "bash scripts/check-read-replica-schema.sh",
     "readreplicate:sync-schema": "bun scripts/sync-read-replica-schema.ts",
     "supabase:reset-postgres-config": "bash scripts/reset_supabase_postgres_config_defaults.sh",
