@@ -501,7 +501,7 @@ function redactPostgresLogText(value: string): string {
 function describeThrownValue(value: unknown): string {
   if (typeof value === 'string')
     return redactPostgresLogText(value)
-  if (value === null || typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint' || typeof value === 'symbol')
+  if (value === null || value === undefined || typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint' || typeof value === 'symbol')
     return String(value)
   return 'object thrown'
 }

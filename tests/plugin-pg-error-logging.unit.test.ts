@@ -205,6 +205,15 @@ describe('plugin PostgreSQL error logging', () => {
       code: '[accessor property omitted]',
     })
     expect(getterCalled).toBe(false)
+
+    const undefinedThrowingProxy = new Proxy(new Error('proxy'), {
+      getOwnPropertyDescriptor() {
+        throw undefined
+      },
+    })
+    expect(serializePostgresError(undefinedThrowingProxy)).toMatchObject({
+      name: '[unreadable property: undefined]',
+    })
   })
 
   it('bounds cyclic structured PostgreSQL fields and remains JSON serializable', () => {
