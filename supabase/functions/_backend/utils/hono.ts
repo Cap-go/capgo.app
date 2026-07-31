@@ -59,6 +59,7 @@ export interface MiddlewareKeyVariables {
     skipSupabaseStatsFallback?: boolean
     skipSupabaseNotificationWrites?: boolean
     queuePluginNotifications?: boolean
+    deliverPluginNotificationsInProcess?: boolean
     skipChannelSelfPostgresFallback?: boolean
     requireReadReplica?: boolean
   }

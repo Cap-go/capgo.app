@@ -944,6 +944,14 @@ GROUP BY install_source`
   return counts
 }
 
+function platformOsToCFDouble(platform: Database['public']['Enums']['platform_os']): number {
+  if (platform === 'ios')
+    return 1
+  if (platform === 'electron')
+    return 2
+  return 0
+}
+
 export async function countDevicesCF(
   c: Context,
   app_id: string,
@@ -951,12 +959,15 @@ export async function countDevicesCF(
   deviceIds: string[] = [],
   versionName?: string,
   search?: string,
+  options?: {
+    platform?: Database['public']['Enums']['platform_os']
+    updatedAt?: { gt?: string, lte?: string }
+  },
 ) {
   // Use Analytics Engine DEVICE_INFO for counting devices
+  const platform = options?.platform
+  const updatedAt = options?.updatedAt
   const conditions = [`index1 = '${escapeSqlString(app_id)}'`]
-
-  if (customIdMode)
-    conditions.push(`blob5 != ''`)
 
   if (deviceIds.length) {
     if (deviceIds.length === 1)
@@ -965,19 +976,55 @@ export async function countDevicesCF(
       conditions.push(`blob1 IN (${deviceIds.map(id => `'${escapeSqlString(id)}'`).join(', ')})`)
   }
 
-  if (search) {
-    const searchLower = search.toLowerCase()
-    if (deviceIds.length) {
-      conditions.push(`position('${escapeSqlString(searchLower)}' IN toLower(blob5)) > 0`)
-    }
-    else {
-      // Search in device_id, custom_id, or version_name
-      conditions.push(`(position('${escapeSqlString(searchLower)}' IN toLower(blob1)) > 0 OR position('${escapeSqlString(searchLower)}' IN toLower(blob5)) > 0 OR position('${escapeSqlString(searchLower)}' IN toLower(blob2)) > 0)`)
-    }
-  }
+  if (updatedAt?.gt)
+    conditions.push(`timestamp > toDateTime('${escapeSqlString(formatDateCF(updatedAt.gt))}')`)
+  if (updatedAt?.lte)
+    conditions.push(`timestamp <= toDateTime('${escapeSqlString(formatDateCF(updatedAt.lte))}')`)
 
-  if (versionName)
-    conditions.push(`blob2 = '${escapeSqlString(versionName)}'`)
+  // Match latest aggregated fields for current-state filtering (same as Supabase devices table).
+  // customIdMode must use aggregated custom_id so historical non-empty blob5 rows
+  // do not keep devices that later cleared their custom id.
+  if (versionName || platform || search || customIdMode) {
+    const outerConditions: string[] = []
+    if (customIdMode)
+      outerConditions.push(`custom_id != ''`)
+    if (versionName)
+      outerConditions.push(`version_name = '${escapeSqlString(versionName)}'`)
+    if (platform)
+      outerConditions.push(`platform = ${platformOsToCFDouble(platform)}`)
+    if (search) {
+      const searchLower = search.toLowerCase()
+      if (deviceIds.length) {
+        outerConditions.push(`(position('${escapeSqlString(searchLower)}' IN toLower(custom_id)) > 0 OR position('${escapeSqlString(searchLower)}' IN toLower(version_name)) > 0)`)
+      }
+      else {
+        outerConditions.push(`(position('${escapeSqlString(searchLower)}' IN toLower(device_id)) > 0 OR position('${escapeSqlString(searchLower)}' IN toLower(custom_id)) > 0 OR position('${escapeSqlString(searchLower)}' IN toLower(version_name)) > 0)`)
+      }
+    }
+
+    const query = `SELECT COUNT() AS total
+FROM (
+  SELECT
+    argMax(blob1, timestamp) AS device_id,
+    argMax(blob2, timestamp) AS version_name,
+    argMax(blob5, timestamp) AS custom_id,
+    argMax(double1, timestamp) AS platform
+  FROM device_info
+  WHERE ${conditions.join(' AND ')}
+  GROUP BY blob1
+)
+WHERE ${outerConditions.join(' AND ')}`
+
+    cloudlog({ requestId: c.get('requestId'), message: 'countDevicesCF query', query })
+    try {
+      const res = await runQueryToCFA<{ total: number }>(c, query)
+      return res[0]?.total ?? 0
+    }
+    catch (e) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading device count from Analytics Engine', error: serializeError(e), query })
+    }
+    return 0
+  }
 
   const query = `SELECT COUNT(DISTINCT blob1) AS total
 FROM device_info
@@ -1048,6 +1095,12 @@ function buildReadDevicesCFUpdatedAtGtCondition(updatedAtGt: string | undefined)
   const safeUpdatedAtGt = escapeSqlString(formatDateCF(updatedAtGt))
   return `updated_at > toDateTime('${safeUpdatedAtGt}')`
 }
+function buildReadDevicesCFUpdatedAtLteCondition(updatedAtLte: string | undefined) {
+  if (!updatedAtLte)
+    return ''
+  const safeUpdatedAtLte = escapeSqlString(formatDateCF(updatedAtLte))
+  return `updated_at <= toDateTime('${safeUpdatedAtLte}')`
+}
 
 function buildReadDevicesCFCustomIdsCondition(customIds: string[] | undefined) {
   if (!customIds?.length)
@@ -1060,23 +1113,46 @@ function buildReadDevicesCFCustomIdsCondition(customIds: string[] | undefined) {
   return `custom_id IN (${customIdsList})`
 }
 
-function buildReadDevicesCFOuterConditions(params: ReadDevicesParams, devicesOrder: DevicesOrderCF | null) {
-  const conditions = [
+function buildReadDevicesCFPlatformCondition(platform: ReadDevicesParams['platform']) {
+  if (!platform)
+    return ''
+  return `platform = ${platformOsToCFDouble(platform)}`
+}
+
+function buildReadDevicesCFVersionNameCondition(versionName: ReadDevicesParams['version_name']) {
+  if (!versionName)
+    return ''
+  return `version_name = '${escapeSqlString(versionName)}'`
+}
+
+function buildReadDevicesCFSearchCondition(search: string | undefined, deviceIds: string[] | undefined) {
+  if (!search)
+    return undefined
+  const searchLower = search.toLowerCase()
+  if (deviceIds?.length) {
+    return `(position('${escapeSqlString(searchLower)}' IN toLower(custom_id)) > 0 OR position('${escapeSqlString(searchLower)}' IN toLower(version_name)) > 0)`
+  }
+  return `(position('${escapeSqlString(searchLower)}' IN toLower(device_id)) > 0 OR position('${escapeSqlString(searchLower)}' IN toLower(custom_id)) > 0 OR position('${escapeSqlString(searchLower)}' IN toLower(version_name)) > 0)`
+}
+
+function buildReadDevicesCFOuterConditions(params: ReadDevicesParams, devicesOrder: DevicesOrderCF | null, customIdMode: boolean) {
+  return [
     buildReadDevicesCFCursorCondition(params.cursor, devicesOrder),
     buildReadDevicesCFUpdatedAtGtCondition(params.updated_at_gt),
+    buildReadDevicesCFUpdatedAtLteCondition(params.updated_at_lte),
     // Match the latest aggregated custom_id, not historical event rows.
+    customIdMode ? `custom_id != ''` : undefined,
     buildReadDevicesCFCustomIdsCondition(params.customIds),
-  ]
-  return conditions.filter(Boolean)
+    // Match the latest aggregated platform/version/search, not historical event rows.
+    buildReadDevicesCFPlatformCondition(params.platform),
+    buildReadDevicesCFVersionNameCondition(params.version_name),
+    buildReadDevicesCFSearchCondition(params.search, params.deviceIds),
+  ].filter((condition): condition is string => Boolean(condition))
 }
 
 export function buildReadDevicesCFQuery(params: ReadDevicesParams, customIdMode: boolean) {
   const limit = normalizeAnalyticsLimit(params.limit)
   const conditions: string[] = [`index1 = '${escapeSqlString(params.app_id)}'`]
-
-  if (customIdMode) {
-    conditions.push(`blob5 != ''`)
-  }
 
   if (params.deviceIds?.length) {
     if (params.deviceIds.length === 1) {
@@ -1088,27 +1164,18 @@ export function buildReadDevicesCFQuery(params: ReadDevicesParams, customIdMode:
     }
   }
 
-  if (params.search) {
-    const searchLower = params.search.toLowerCase()
-    if (params.deviceIds?.length) {
-      conditions.push(`position('${escapeSqlString(searchLower)}' IN toLower(blob5)) > 0`)
-    }
-    else {
-      conditions.push(`(position('${escapeSqlString(searchLower)}' IN toLower(blob1)) > 0 OR position('${escapeSqlString(searchLower)}' IN toLower(blob5)) > 0 OR position('${escapeSqlString(searchLower)}' IN toLower(blob2)) > 0)`)
-    }
-  }
-
-  if (params.version_name) {
-    conditions.push(`blob2 = '${escapeSqlString(params.version_name)}'`)
-  }
-
   if (params.updated_at_gt) {
     const safeUpdatedAtGt = escapeSqlString(formatDateCF(params.updated_at_gt))
     conditions.push(`timestamp > toDateTime('${safeUpdatedAtGt}')`)
   }
 
+  if (params.updated_at_lte) {
+    const safeUpdatedAtLte = escapeSqlString(formatDateCF(params.updated_at_lte))
+    conditions.push(`timestamp <= toDateTime('${safeUpdatedAtLte}')`)
+  }
+
   const devicesOrder = getReadDevicesCFOrder(params)
-  const outerConditions = buildReadDevicesCFOuterConditions(params, devicesOrder)
+  const outerConditions = buildReadDevicesCFOuterConditions(params, devicesOrder, customIdMode)
   const includeCountryCode = !!params.deviceIds?.length
   const outerFilter = outerConditions.length ? `WHERE ${outerConditions.join(' AND ')}` : ''
   let orderBy = 'device_id ASC'
@@ -1327,7 +1394,6 @@ export function resolveUpdateDeliveryTimingDurationMs(event: UpdateDeliveryTimin
   return parseStatsDurationMs(event.metadata)
 }
 
-
 export interface ReadUpdateDeliveryTimingEventsCFParams {
   start_date: string
   end_date: string
@@ -1392,7 +1458,7 @@ export async function readUpdateDeliveryTimingEventsCF(
       duration_ms: number | string | null
       created_at: string
     }>(c, query)
-    return rows.map(row => {
+    return rows.map((row) => {
       const rawDuration = Number(row.duration_ms)
       return {
         app_id: row.app_id,
@@ -1410,7 +1476,6 @@ export async function readUpdateDeliveryTimingEventsCF(
     throw e
   }
 }
-
 
 export interface NativeObservePluginVersionCF {
   plugin_version: string

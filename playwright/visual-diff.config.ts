@@ -21,7 +21,25 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
   { slug: 'app-settings', path: '/app/com.demo.app/settings', auth: true },
   { slug: 'app-settings-access', path: '/app/com.demo.app/settings/access', auth: true },
   { slug: 'channels', path: '/app/com.demo.app/channels', auth: true },
-  { slug: 'devices', path: '/app/com.demo.app/devices', auth: true },
+  {
+    slug: 'devices',
+    path: '/app/com.demo.app/devices',
+    auth: true,
+    prepare: async (page) => {
+      // Open Filters so reviewers see platform/bundle controls on head.
+      // Base still uses the legacy dropdown, so fall back only when modal is absent.
+      await page.getByRole('button', { name: /filters/i }).click()
+      const modal = page.locator('[data-test="data-table-filters-modal"]')
+      try {
+        await modal.waitFor({ state: 'visible', timeout: 3000 })
+      }
+      catch {
+        await page.getByText('Override', { exact: true }).waitFor({ state: 'visible' })
+        return
+      }
+      await page.locator('[data-test="device-platform-filter"]').waitFor({ state: 'visible' })
+    },
+  },
   { slug: 'observe', path: '/app/com.demo.app/observe/updater', auth: true },
   { slug: 'observe-logs', path: '/app/com.demo.app/observe/logs', auth: true },
   { slug: 'observe-native', path: '/app/com.demo.app/observe/native', auth: true },
