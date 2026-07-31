@@ -57,39 +57,8 @@ drop_target_subscription() {
 }
 
 drop_source_slot() {
-  echo "==> Dropping source slot ${REPLICA_SLOT_NAME} if present..."
-  psql-17 "$SOURCE_DB_URL" -v ON_ERROR_STOP=0 <<SQL
-DO \$\$
-DECLARE
-  slot record;
-BEGIN
-  SELECT slot_name, active, active_pid
-  INTO slot
-  FROM pg_replication_slots
-  WHERE slot_name = '${REPLICA_SLOT_NAME}';
-
-  IF slot.slot_name IS NOT NULL THEN
-    RAISE NOTICE 'Found replication slot: % (active: %)', slot.slot_name, slot.active;
-
-    IF slot.active AND slot.active_pid IS NOT NULL THEN
-      PERFORM pg_terminate_backend(slot.active_pid);
-      PERFORM pg_sleep(2);
-    END IF;
-
-    BEGIN
-      PERFORM pg_drop_replication_slot(slot.slot_name);
-      RAISE NOTICE 'Dropped slot: %', slot.slot_name;
-    EXCEPTION WHEN OTHERS THEN
-      RAISE NOTICE 'Could not drop slot: %', SQLERRM;
-    END;
-  ELSE
-    RAISE NOTICE 'No source slot named ${REPLICA_SLOT_NAME}';
-  END IF;
-END
-\$\$;
-SQL
+  drop_source_slot_with_retry "${REPLICA_SLOT_NAME}" "${SOURCE_DB_URL}"
 }
-
 source_slot_exists() {
   local exists
   exists=$(psql-17 "$SOURCE_DB_URL" -t -A -c "
