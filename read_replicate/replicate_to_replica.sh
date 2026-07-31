@@ -194,14 +194,27 @@ SQL
 
 dump_table() {
   local table_name="$1"
+  local expected_count="${2:-}"
   local dump_file="${DUMP_DIR}/${table_name}.csv.gz"
+  local rows_file="${dump_file}.rows"
 
   echo "    [${table_name}] Dumping from source..."
   # manifest (and similar) exceed Supabase statement_timeout on a full COPY.
-  rm -f "$dump_file"
+  # Do NOT validate dumps with wc -l: CSV fields can contain newlines.
+  rm -f "$dump_file" "$rows_file"
   psql_no_timeout "$SOURCE_DB_URL" -v ON_ERROR_STOP=1 \
     -c "\COPY public.${table_name} TO STDOUT WITH (FORMAT csv, HEADER)" \
     | gzip > "$dump_file"
+
+  if ! gzip -t "$dump_file" 2>/dev/null || [[ ! -s "$dump_file" ]]; then
+    echo "Error: dump for ${table_name} is missing or corrupt"
+    rm -f "$dump_file" "$rows_file"
+    exit 1
+  fi
+
+  if [[ -n "$expected_count" ]]; then
+    printf '%s\n' "$expected_count" > "$rows_file"
+  fi
 
   echo "    [${table_name}] Dump complete: $(du -h "$dump_file" | cut -f1)"
 }
@@ -215,18 +228,20 @@ table_count() {
   "
 }
 
-dump_matches_count() {
+# Reuse dump only when gzip is healthy and sidecar row marker matches source count.
+# Never use wc -l on CSV (embedded newlines break that check).
+dump_reusable() {
   local table_name="$1"
   local expected="$2"
   local dump_file="${DUMP_DIR}/${table_name}.csv.gz"
-  local lines
-  local rows
+  local rows_file="${dump_file}.rows"
+  local marked
 
-  [[ -f "$dump_file" ]] || return 1
+  [[ -f "$dump_file" && -f "$rows_file" ]] || return 1
   gzip -t "$dump_file" 2>/dev/null || return 1
-  lines=$(gunzip -c "$dump_file" | wc -l | tr -d ' ')
-  rows=$((lines - 1))
-  [[ "$rows" -eq "$expected" ]]
+  [[ -s "$dump_file" ]] || return 1
+  marked=$(tr -d '[:space:]' < "$rows_file")
+  [[ "$marked" == "$expected" ]]
 }
 
 restore_table() {
@@ -281,6 +296,7 @@ sync_table() {
   local table_name="$1"
   local source_count
   local target_count
+  local source_after
 
   source_count=$(table_count "$SOURCE_DB_URL" "$table_name")
   if target_table_exists "$table_name"; then
@@ -296,20 +312,30 @@ sync_table() {
 
   echo "    [${table_name}] Needs sync (source=${source_count} target=${target_count})"
 
-  if dump_matches_count "$table_name" "$source_count"; then
-    echo "    [${table_name}] Reusing complete dump file"
+  if dump_reusable "$table_name" "$source_count"; then
+    echo "    [${table_name}] Reusing dump marked for ${source_count} rows"
   else
-    dump_table "$table_name"
-    if ! dump_matches_count "$table_name" "$source_count"; then
-      echo "Error: dump for ${table_name} does not match source count ${source_count}"
-      exit 1
-    fi
+    dump_table "$table_name" "$source_count"
   fi
 
   restore_table "$table_name"
   target_count=$(table_count "$REPLICA_TARGET_DB_URL" "$table_name")
-  if [[ "$target_count" != "$source_count" ]]; then
-    echo "Error: ${table_name} restore count ${target_count} != source ${source_count}"
+  source_after=$(table_count "$SOURCE_DB_URL" "$table_name")
+
+  # Accept snapshot match (pre-dump count) or live match (writes during copy).
+  if [[ "$target_count" == "$source_count" || "$target_count" == "$source_after" ]]; then
+    echo "    [${table_name}] Sync ok (target=${target_count} source_now=${source_after})"
+    return 0
+  fi
+
+  echo "    [${table_name}] Count drift after restore (target=${target_count} snapshot=${source_count} source_now=${source_after}); retrying once"
+  source_count="$source_after"
+  dump_table "$table_name" "$source_count"
+  restore_table "$table_name"
+  target_count=$(table_count "$REPLICA_TARGET_DB_URL" "$table_name")
+  source_after=$(table_count "$SOURCE_DB_URL" "$table_name")
+  if [[ "$target_count" != "$source_count" && "$target_count" != "$source_after" ]]; then
+    echo "Error: ${table_name} restore count ${target_count} != source ${source_after}"
     exit 1
   fi
 }
