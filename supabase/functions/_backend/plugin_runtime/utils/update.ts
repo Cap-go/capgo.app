@@ -494,6 +494,8 @@ export async function updateWithPG(
     }
     // TODO: check why this event is send with wrong version_name
     await sendStatsAndDevice(c, device, [{ action: 'noNew', versionName: version.name }])
+    if (version.name === 'builtin')
+      return updateError200(c, 'already_on_builtin', 'Already on builtin')
     return updateError200(c, 'no_new_version_available', 'No new version available')
   }
 
@@ -665,12 +667,9 @@ export async function updateWithPG(
     }
   }
   if (version.name === 'builtin' && greaterOrEqual(parse(plugin_version), parse('6.2.0'))) {
-    // Already on builtin: up-to-date signal (error + kind). Plugin treats this as no-op.
-    if (body.version_name === 'builtin') {
-      return updateError200(c, 'already_on_builtin', 'Already on builtin')
-    }
     // Channel kill-switch / revert: success payload with version builtin and NO error/kind,
     // so the plugin reaches its builtin reset path (_reset / setNextBundle).
+    // (Already-on-builtin is handled above via version_name === version.name.)
     await sendStatsAndDevice(c, device, [{ action: 'get', versionName: 'builtin' }])
     return c.json({ version: 'builtin' }, 200)
   }
