@@ -31,7 +31,8 @@ are reused, and schema is not wiped if replica tables already exist. Do not
 use subscription-only reconnect after an upgrade.
 
 Both commands read `internal/cloudflare/.env.prod` for DB URLs and use the
-baked-in Capgo EU2 publication/subscription/slot names — no shell exports.
+baked-in Capgo EU2 publication/subscription/slot names (`capgo_google_eu_2_pub` /
+`capgo_google_eu_2_sub` / live slot) — no shell exports.
 
 ## Release reconciliation
 

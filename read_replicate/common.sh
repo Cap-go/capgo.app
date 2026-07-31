@@ -9,9 +9,10 @@ REPLICA_ENV_FILE="${REPLICA_ENV_FILE:-${REPLICA_SCRIPT_DIR}/../internal/cloudfla
 
 # Capgo production defaults for the single Google Cloud SQL eu-2 subscriber.
 # DB URLs come from .env.prod; pub/sub/region are fixed so bun scripts need zero exports.
+# Live subscription name is capgo_google_eu_2_sub (not capgo_google_eu_2).
 # Slot name is discovered from the live subscription when present (fallback: <sub>_slot).
 : "${READ_REPLICA_PUBLICATION_NAME:=capgo_google_eu_2_pub}"
-: "${READ_REPLICA_SUBSCRIPTION_NAME:=capgo_google_eu_2}"
+: "${READ_REPLICA_SUBSCRIPTION_NAME:=capgo_google_eu_2_sub}"
 : "${READ_REPLICA_REGION:=eu_2}"
 
 REPLICA_TABLES=(
@@ -430,34 +431,43 @@ discover_subscription() {
   local count
   local subname
   local slotname
+  local configured_name="${READ_REPLICA_SUBSCRIPTION_NAME:-}"
 
-  if [[ -n "${READ_REPLICA_SUBSCRIPTION_NAME:-}" ]]; then
-    REPLICA_SUBSCRIPTION_NAME="$READ_REPLICA_SUBSCRIPTION_NAME"
+  # If a configured name exists on the target, use it (and its live slot).
+  if [[ -n "$configured_name" ]]; then
     slotname=$(psql-17 "$REPLICA_TARGET_DB_URL" -t -A -c "
       SELECT COALESCE(subslotname, '')
       FROM pg_subscription
-      WHERE subname = '${REPLICA_SUBSCRIPTION_NAME}'
+      WHERE subname = '${configured_name}'
       LIMIT 1;
     " 2>/dev/null || true)
-    # Prefer the live subscription slot when present; only then fall back.
-    if [[ -n "$slotname" ]]; then
-      REPLICA_SLOT_NAME="$slotname"
-    else
-      REPLICA_SLOT_NAME="${READ_REPLICA_SLOT_NAME:-${REPLICA_SUBSCRIPTION_NAME}_slot}"
+    if [[ -n "$slotname" || -n "$(psql-17 "$REPLICA_TARGET_DB_URL" -t -A -c "
+      SELECT 1 FROM pg_subscription WHERE subname = '${configured_name}' LIMIT 1;
+    " 2>/dev/null || true)" ]]; then
+      REPLICA_SUBSCRIPTION_NAME="$configured_name"
+      if [[ -n "$slotname" ]]; then
+        REPLICA_SLOT_NAME="$slotname"
+      else
+        REPLICA_SLOT_NAME="${READ_REPLICA_SLOT_NAME:-${configured_name}_slot}"
+      fi
+      return 0
     fi
-    return 0
+    echo "==> Configured subscription ${configured_name} not found on target; discovering live subscription..."
   fi
 
+  # Prefer a subscription that currently has an apply worker (non-null pid).
   rows=$(psql-17 "$REPLICA_TARGET_DB_URL" -t -A -F '|' -c "
-    SELECT subname, COALESCE(subslotname, '')
-    FROM pg_subscription
-    ORDER BY subname;
+    SELECT s.subname, COALESCE(s.subslotname, ''), CASE WHEN st.pid IS NULL THEN 0 ELSE 1 END AS has_worker
+    FROM pg_subscription s
+    LEFT JOIN pg_stat_subscription st ON st.subname = s.subname AND st.pid IS NOT NULL
+    ORDER BY has_worker DESC, s.subname;
   " 2>/dev/null || true)
   count=$(printf '%s\n' "$rows" | sed '/^$/d' | wc -l | tr -d ' ')
 
   if [[ "$count" == "1" ]]; then
     subname="${rows%%|*}"
     slotname="${rows#*|}"
+    slotname="${slotname%%|*}"
     REPLICA_SUBSCRIPTION_NAME="$subname"
     if [[ -n "$slotname" ]]; then
       REPLICA_SLOT_NAME="$slotname"
@@ -468,13 +478,31 @@ discover_subscription() {
   fi
 
   if [[ "$count" -gt 1 ]]; then
+    # If exactly one has a worker, use that. Otherwise refuse to guess.
+    local worker_rows
+    worker_rows=$(printf '%s\n' "$rows" | awk -F'|' '$3 == 1 { print }')
+    local worker_count
+    worker_count=$(printf '%s\n' "$worker_rows" | sed '/^$/d' | wc -l | tr -d ' ')
+    if [[ "$worker_count" == "1" ]]; then
+      subname="${worker_rows%%|*}"
+      slotname="${worker_rows#*|}"
+      slotname="${slotname%%|*}"
+      echo "==> Multiple subscriptions found; using live worker subscription ${subname}"
+      REPLICA_SUBSCRIPTION_NAME="$subname"
+      if [[ -n "$slotname" ]]; then
+        REPLICA_SLOT_NAME="$slotname"
+      else
+        REPLICA_SLOT_NAME="${READ_REPLICA_SLOT_NAME:-${subname}_slot}"
+      fi
+      return 0
+    fi
     echo "Error: multiple subscriptions found on $REPLICA_TARGET_ENV. Refusing to guess."
     echo "$rows" | sed 's/^/  /'
     echo "Set READ_REPLICA_SUBSCRIPTION_NAME and READ_REPLICA_SLOT_NAME."
     exit 1
   fi
 
-  REPLICA_SUBSCRIPTION_NAME="${default_name:-capgo_google_subscription}"
+  REPLICA_SUBSCRIPTION_NAME="${configured_name:-${default_name:-capgo_google_subscription}}"
   REPLICA_SLOT_NAME="${READ_REPLICA_SLOT_NAME:-${REPLICA_SUBSCRIPTION_NAME}_slot}"
 }
 
