@@ -77,10 +77,12 @@ We support both deployments for practical reasons:
 
 In production, we route most traffic through Cloudflare Workers for cost and
 scale, while Supabase remains the reference backend and the default for
-self-hosted deployments. Capgo cloud still publishes the Supabase functions used
-by Postgres `pg_net` (`triggers`) and by `supabase.functions.invoke` from the
-console/CLI (those always target `SUPABASE_URL`, not Cloudflare). Plugin hot
-paths and other unused Capgo cloud endpoints are not published on Supabase.
+self-hosted deployments. Capgo cloud console and current CLI calls go to the
+Cloudflare API hosts (`VITE_API_HOST` / `hostApi`). Capgo cloud still publishes
+a small Supabase function allowlist for Postgres `pg_net` (`triggers`) and for
+legacy CLI compatibility via `/functions/v1` through 2026-10-28. Self-hosted
+deployments keep using `/functions/v1`. Plugin hot paths and other unused Capgo
+cloud endpoints are not published on Supabase.
 
 ## Project structure (self-hosting map)
 
