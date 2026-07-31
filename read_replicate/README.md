@@ -24,9 +24,11 @@ bun run readreplicate:upgrade:reconnect
 bun run readreplicate:status
 ```
 
-`upgrade:reconnect` always runs a full reset (`READ_REPLICA_FULL_RESET=1`)
-because a Postgres upgrade invalidates WAL continuity. Do not use
-subscription-only reconnect after an upgrade.
+`upgrade:reconnect` runs a full reset (`READ_REPLICA_FULL_RESET=1`) because a
+Postgres upgrade invalidates WAL continuity. Table copy is **resumable**:
+already-synced tables (matching row counts) are skipped, complete dump files
+are reused, and schema is not wiped if replica tables already exist. Do not
+use subscription-only reconnect after an upgrade.
 
 Both commands read `internal/cloudflare/.env.prod` for DB URLs and use the
 baked-in Capgo EU2 publication/subscription/slot names — no shell exports.
