@@ -70,7 +70,9 @@ async function postPluginNotificationBatch(c: Context, items: PluginNotification
       })
       return { accepted: false }
     }
-    const throttledResult = result.results.find(entry => entry.status === 'throttled' && entry.lastSendAt)
+    const throttledResult = result.results.find(
+      (entry): entry is { status: 'throttled', lastSendAt: string } => entry.status === 'throttled' && Boolean(entry.lastSendAt),
+    )
     return { accepted: true, throttledLastSendAt: throttledResult?.lastSendAt }
   }
 

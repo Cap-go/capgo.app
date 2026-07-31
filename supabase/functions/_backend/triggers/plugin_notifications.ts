@@ -119,7 +119,7 @@ app.post('/', middlewareAPISecret, async (c) => {
 
   const result = await deliverQueuedPluginNotifications(c, rawItems)
   if (result.failed > 0) {
-    throw quickError(500, 'plugin_notification_batch_failed', 'Plugin notification batch failed', result, undefined, { alert: false })
+    throw quickError(500, 'plugin_notification_batch_failed', 'Plugin notification batch failed', { ...result }, undefined, { alert: false })
   }
   return c.json({ ...BRES, ...result })
 })
