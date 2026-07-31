@@ -1,47 +1,20 @@
+import type { DateRangePreset, DateRangeValue } from '~/services/dateRange'
 import { acceptHMRUpdate, defineStore } from 'pinia'
 import { computed, ref } from 'vue'
+import {
+  DATE_RANGE_DURATIONS_MS,
+  DEFAULT_DATE_RANGE_PRESET,
+  getDateRangeForPreset as getDateRangeForMode,
+} from '~/services/dateRange'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
 
 export type MetricCategory = 'uploads' | 'distribution' | 'failures' | 'success_rate' | 'platform_overview' | 'org_metrics' | 'mau_trend' | 'success_rate_trend' | 'apps_trend' | 'bundles_trend' | 'deployments_trend' | 'storage_trend' | 'bandwidth_trend' | 'global_stats_trend' | 'plugin_breakdown' | 'trial_organizations' | 'trial_plan_breakdown' | 'onboarding_funnel' | 'cancelled_users' | 'email_type_breakdown' | 'customer_country_breakdown' | 'organization_insights' | 'builder_analytics'
-export type DateRangeMode = '30min' | '1h' | '6h' | '12h' | '24h' | '3day' | '7day' | '14day' | '30day' | '90day' | 'quarter' | '6month' | '12month' | 'custom'
 
-export const DEFAULT_DATE_RANGE_MODE = '24h' as const satisfies Exclude<DateRangeMode, 'custom'>
+export type DateRangeMode = DateRangePreset
+export const DEFAULT_DATE_RANGE_MODE = DEFAULT_DATE_RANGE_PRESET
+export { DATE_RANGE_DURATIONS_MS, getDateRangeForMode }
 
-/** Rolling window lengths for preset modes (ms before `now`). */
-export const DATE_RANGE_DURATIONS_MS: Record<Exclude<DateRangeMode, 'custom'>, number> = {
-  '30min': 30 * 60 * 1000,
-  '1h': 60 * 60 * 1000,
-  '6h': 6 * 60 * 60 * 1000,
-  '12h': 12 * 60 * 60 * 1000,
-  '24h': 24 * 60 * 60 * 1000,
-  '3day': 3 * 24 * 60 * 60 * 1000,
-  '7day': 7 * 24 * 60 * 60 * 1000,
-  '14day': 14 * 24 * 60 * 60 * 1000,
-  '30day': 30 * 24 * 60 * 60 * 1000,
-  '90day': 90 * 24 * 60 * 60 * 1000,
-  'quarter': 90 * 24 * 60 * 60 * 1000,
-  '6month': 180 * 24 * 60 * 60 * 1000,
-  '12month': 365 * 24 * 60 * 60 * 1000,
-}
-
-interface DateRange {
-  start: Date
-  end: Date
-}
-
-export function getDateRangeForMode(mode: DateRangeMode, now = new Date(), custom?: DateRange): DateRange {
-  if (mode === 'custom') {
-    return custom ?? {
-      start: new Date(now.getTime() - DATE_RANGE_DURATIONS_MS[DEFAULT_DATE_RANGE_MODE]),
-      end: now,
-    }
-  }
-  const presetMode: Exclude<DateRangeMode, 'custom'> = mode
-  return {
-    start: new Date(now.getTime() - DATE_RANGE_DURATIONS_MS[presetMode]),
-    end: now,
-  }
-}
+type DateRange = DateRangeValue
 
 interface CachedData {
   data: unknown

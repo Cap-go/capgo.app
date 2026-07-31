@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import type { TableColumn } from '../comp_def'
+import type { DateRangePreset } from '~/services/dateRange'
 import type { Database } from '~/types/supabase.types'
 import { h, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
+import DateRangePicker from '~/components/DateRangePicker.vue'
 import { formatDate } from '~/services/date'
+import { DEFAULT_DATE_RANGE_PRESET, getDateRangeForPreset } from '~/services/dateRange'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
 
 const props = defineProps<{
@@ -38,6 +41,9 @@ const filters = ref({
   Override: false,
   CustomId: false,
 })
+const initialRange = getDateRangeForPreset(DEFAULT_DATE_RANGE_PRESET)
+const dateRange = ref<[Date, Date] | null>([initialRange.start, initialRange.end])
+const dateRangeMode = ref<DateRangePreset>(DEFAULT_DATE_RANGE_PRESET)
 const offset = 10
 const columns = ref<TableColumn[]>([
   {
@@ -95,6 +101,15 @@ function getSearchTerm() {
   return trimmed.length ? trimmed : undefined
 }
 
+function getDateRangePayload() {
+  if (!dateRange.value)
+    return {}
+  return {
+    updated_at_gt: dateRange.value[0].toISOString(),
+    updated_at_lte: dateRange.value[1].toISOString(),
+  }
+}
+
 function getQuerySignature() {
   return JSON.stringify({
     appId: props.appId,
@@ -104,6 +119,7 @@ function getQuerySignature() {
     override: filters.value.Override,
     customIdMode: filters.value.CustomId,
     ids: props.ids ? [...props.ids].sort().join(',') : '',
+    dateRange: getDateRangePayload(),
   })
 }
 
@@ -154,6 +170,7 @@ async function countDevices() {
         search: searchTerm,
         order: getActiveOrder(columns.value),
         customIdMode: filters.value.CustomId,
+        ...getDateRangePayload(),
       }),
     })
 
@@ -259,6 +276,7 @@ async function fetchDevicesPage(cursor: string | undefined | null) {
       cursor: cursor ?? undefined,
       limit: offset,
       customIdMode: filters.value.CustomId,
+      ...getDateRangePayload(),
     }),
   })
 
@@ -407,6 +425,14 @@ async function ensureVersionNames(devices: Device[]) {
 
 <template>
   <div>
+    <div class="flex justify-end px-3 pt-3">
+      <DateRangePicker
+        v-model="dateRange"
+        v-model:mode="dateRangeMode"
+        compact
+        @apply="refreshData()"
+      />
+    </div>
     <DataTable
       v-model:filters="filters" v-model:columns="columns" v-model:current-page="currentPage" v-model:search="search"
       :total="total" :offset="offset" :element-list="elements"

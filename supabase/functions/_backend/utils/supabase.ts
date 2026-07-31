@@ -1082,7 +1082,6 @@ export async function getDefaultPlan(c: Context) {
   return plan
 }
 
-
 export function trackBandwidthUsageSB(
   c: Context,
   deviceId: string,
@@ -1537,6 +1536,8 @@ export async function readDevicesSB(c: Context, params: ReadDevicesParams, custo
 
   if (params.updated_at_gt)
     query = query.gt('updated_at', params.updated_at_gt)
+  if (params.updated_at_lte)
+    query = query.lte('updated_at', params.updated_at_lte)
 
   const devicesOrder = getDevicesOrder(params.order)
 
@@ -1606,6 +1607,8 @@ export async function countDevicesSB(
   deviceIds: string[] = [],
   versionName?: string,
   search?: string,
+  updated_at_gt?: string,
+  updated_at_lte?: string,
 ) {
   let req = supabaseAdmin(c)
     .from('devices')
@@ -1635,6 +1638,11 @@ export async function countDevicesSB(
 
   if (versionName)
     req = req.eq('version_name', versionName)
+
+  if (updated_at_gt)
+    req = req.gt('updated_at', updated_at_gt)
+  if (updated_at_lte)
+    req = req.lte('updated_at', updated_at_lte)
 
   const { count, error } = await req
 

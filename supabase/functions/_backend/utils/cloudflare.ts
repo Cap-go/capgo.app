@@ -951,6 +951,8 @@ export async function countDevicesCF(
   deviceIds: string[] = [],
   versionName?: string,
   search?: string,
+  updated_at_gt?: string,
+  updated_at_lte?: string,
 ) {
   // Use Analytics Engine DEVICE_INFO for counting devices
   const conditions = [`index1 = '${escapeSqlString(app_id)}'`]
@@ -978,6 +980,11 @@ export async function countDevicesCF(
 
   if (versionName)
     conditions.push(`blob2 = '${escapeSqlString(versionName)}'`)
+
+  if (updated_at_gt)
+    conditions.push(`timestamp > toDateTime('${escapeSqlString(formatDateCF(updated_at_gt))}')`)
+  if (updated_at_lte)
+    conditions.push(`timestamp <= toDateTime('${escapeSqlString(formatDateCF(updated_at_lte))}')`)
 
   const query = `SELECT COUNT(DISTINCT blob1) AS total
 FROM device_info
@@ -1048,6 +1055,12 @@ function buildReadDevicesCFUpdatedAtGtCondition(updatedAtGt: string | undefined)
   const safeUpdatedAtGt = escapeSqlString(formatDateCF(updatedAtGt))
   return `updated_at > toDateTime('${safeUpdatedAtGt}')`
 }
+function buildReadDevicesCFUpdatedAtLteCondition(updatedAtLte: string | undefined) {
+  if (!updatedAtLte)
+    return ''
+  const safeUpdatedAtLte = escapeSqlString(formatDateCF(updatedAtLte))
+  return `updated_at <= toDateTime('${safeUpdatedAtLte}')`
+}
 
 function buildReadDevicesCFCustomIdsCondition(customIds: string[] | undefined) {
   if (!customIds?.length)
@@ -1064,6 +1077,7 @@ function buildReadDevicesCFOuterConditions(params: ReadDevicesParams, devicesOrd
   const conditions = [
     buildReadDevicesCFCursorCondition(params.cursor, devicesOrder),
     buildReadDevicesCFUpdatedAtGtCondition(params.updated_at_gt),
+    buildReadDevicesCFUpdatedAtLteCondition(params.updated_at_lte),
     // Match the latest aggregated custom_id, not historical event rows.
     buildReadDevicesCFCustomIdsCondition(params.customIds),
   ]
@@ -1105,6 +1119,11 @@ export function buildReadDevicesCFQuery(params: ReadDevicesParams, customIdMode:
   if (params.updated_at_gt) {
     const safeUpdatedAtGt = escapeSqlString(formatDateCF(params.updated_at_gt))
     conditions.push(`timestamp > toDateTime('${safeUpdatedAtGt}')`)
+  }
+
+  if (params.updated_at_lte) {
+    const safeUpdatedAtLte = escapeSqlString(formatDateCF(params.updated_at_lte))
+    conditions.push(`timestamp <= toDateTime('${safeUpdatedAtLte}')`)
   }
 
   const devicesOrder = getReadDevicesCFOrder(params)
@@ -1327,7 +1346,6 @@ export function resolveUpdateDeliveryTimingDurationMs(event: UpdateDeliveryTimin
   return parseStatsDurationMs(event.metadata)
 }
 
-
 export interface ReadUpdateDeliveryTimingEventsCFParams {
   start_date: string
   end_date: string
@@ -1392,7 +1410,7 @@ export async function readUpdateDeliveryTimingEventsCF(
       duration_ms: number | string | null
       created_at: string
     }>(c, query)
-    return rows.map(row => {
+    return rows.map((row) => {
       const rawDuration = Number(row.duration_ms)
       return {
         app_id: row.app_id,
@@ -1410,7 +1428,6 @@ export async function readUpdateDeliveryTimingEventsCF(
     throw e
   }
 }
-
 
 export interface NativeObservePluginVersionCF {
   plugin_version: string
