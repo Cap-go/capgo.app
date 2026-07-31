@@ -130,6 +130,8 @@ export interface NativeVersionUsage {
 export interface ReadDevicesParams {
   app_id: string
   version_name?: string | undefined
+  /** Exact platform filter (`ios` | `android` | `electron`) */
+  platform?: Database['public']['Enums']['platform_os']
   deviceIds?: string[]
   /** Exact custom_id match filter (case-sensitive, already trimmed by callers) */
   customIds?: string[]
