@@ -50,30 +50,45 @@ if [[ -n "$SUB_REMAINING" ]]; then
 fi
 
 echo "==> Dropping source slot ${REPLICA_SLOT_NAME} if present..."
+# Walsender can stay attached briefly after subscription drop; terminate + retry
+# until inactive, then drop. A single terminate+2s sleep is not enough in prod.
 psql-17 "$SOURCE_DB_URL" -v ON_ERROR_STOP=1 <<SQL
 DO \$\$
 DECLARE
   slot record;
+  attempt int := 0;
 BEGIN
-  SELECT slot_name, active, active_pid
-  INTO slot
-  FROM pg_replication_slots
-  WHERE slot_name = '${REPLICA_SLOT_NAME}';
+  LOOP
+    attempt := attempt + 1;
+    SELECT slot_name, active, active_pid
+    INTO slot
+    FROM pg_replication_slots
+    WHERE slot_name = '${REPLICA_SLOT_NAME}';
 
-  IF slot.slot_name IS NULL THEN
-    RAISE NOTICE 'No source slot named ${REPLICA_SLOT_NAME}';
-    RETURN;
-  END IF;
+    IF slot.slot_name IS NULL THEN
+      RAISE NOTICE 'No source slot named ${REPLICA_SLOT_NAME}';
+      RETURN;
+    END IF;
 
-  RAISE NOTICE 'Found replication slot: % (active: %)', slot.slot_name, slot.active;
+    IF NOT COALESCE(slot.active, false) THEN
+      PERFORM pg_drop_replication_slot(slot.slot_name);
+      RAISE NOTICE 'Dropped slot: %', slot.slot_name;
+      RETURN;
+    END IF;
 
-  IF slot.active AND slot.active_pid IS NOT NULL THEN
-    PERFORM pg_terminate_backend(slot.active_pid);
+    RAISE NOTICE 'Slot % still active (pid %, attempt %/15)', slot.slot_name, slot.active_pid, attempt;
+
+    IF slot.active_pid IS NOT NULL THEN
+      PERFORM pg_terminate_backend(slot.active_pid);
+    END IF;
+
+    IF attempt >= 15 THEN
+      RAISE EXCEPTION 'replication slot % still active for PID % after % attempts',
+        slot.slot_name, slot.active_pid, attempt;
+    END IF;
+
     PERFORM pg_sleep(2);
-  END IF;
-
-  PERFORM pg_drop_replication_slot(slot.slot_name);
-  RAISE NOTICE 'Dropped slot: %', slot.slot_name;
+  END LOOP;
 END
 \$\$;
 SQL
