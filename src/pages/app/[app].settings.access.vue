@@ -9,7 +9,7 @@ import { useDisplayStore } from '~/stores/display'
 
 const { t } = useI18n()
 const id = ref('')
-const route = useRoute('/app/[app].access')
+const route = useRoute('/app/[app].settings.access')
 const lastPath = ref('')
 const isLoading = ref(false)
 const supabase = useSupabase()

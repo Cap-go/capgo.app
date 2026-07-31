@@ -4,14 +4,12 @@ import { ref, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import IconAlertCircle from '~icons/lucide/alert-circle'
-import AppSetting from '~/components/dashboard/AppSetting.vue'
 import { useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
 
 const { t } = useI18n()
-
 const id = ref('')
-const route = useRoute('/app/[app].info')
+const route = useRoute('/app/[app].observe.logs')
 const lastPath = ref('')
 const isLoading = ref(false)
 const supabase = useSupabase()
@@ -60,7 +58,7 @@ watchEffect(async () => {
       <div class="mt-0 md:mt-8">
         <div class="w-full h-full px-0 pt-0 mx-auto mb-8 overflow-y-auto sm:px-6 md:pt-8 lg:px-8 max-w-9xl max-h-fit">
           <div class="flex flex-col overflow-hidden overflow-y-auto bg-white border shadow-lg md:rounded-lg dark:bg-gray-800 border-slate-300 dark:border-slate-900">
-            <AppSetting :app-id="id" />
+            <LogTable :app-id="id" />
           </div>
         </div>
       </div>

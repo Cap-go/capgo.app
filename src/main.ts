@@ -165,7 +165,7 @@ const router = createRouter({
       redirect: (to) => {
         const { tab: _, ...query } = to.query
         return {
-          path: `/app/${encodeURIComponent(String((to.params as { package: string }).package))}/logs`,
+          path: `/app/${encodeURIComponent(String((to.params as { package: string }).package))}/observe/logs`,
           query,
           hash: to.hash,
         }
@@ -188,14 +188,63 @@ const router = createRouter({
       redirect: (to) => {
         const { tab: _, ...query } = to.query
         return {
-          path: `/app/${encodeURIComponent(String((to.params as { package: string }).package))}/logs`,
+          path: `/app/${encodeURIComponent(String((to.params as { package: string }).package))}/observe/logs`,
           query,
           hash: to.hash,
         }
       },
     },
     { path: '/app/package/:package', redirect: to => `/app/${(to.params as { package: string }).package}` },
-    { path: '/app/package/:package/settings', redirect: to => `/app/${(to.params as { package: string }).package}` },
+    { path: '/app/package/:package/settings', redirect: to => `/app/${(to.params as { package: string }).package}/settings` },
+    // Legacy app tab URLs after settings/observe revamp
+    {
+      path: '/app/:app/info',
+      redirect: to => ({
+        path: `/app/${encodeURIComponent(String((to.params as { app: string }).app))}/settings`,
+        query: to.query,
+        hash: to.hash,
+      }),
+    },
+    {
+      path: '/app/:app/access',
+      redirect: to => ({
+        path: `/app/${encodeURIComponent(String((to.params as { app: string }).app))}/settings/access`,
+        query: to.query,
+        hash: to.hash,
+      }),
+    },
+    {
+      path: '/app/:app/logs/insights',
+      redirect: to => ({
+        path: `/app/${encodeURIComponent(String((to.params as { app: string }).app))}/observe/updater`,
+        query: to.query,
+        hash: to.hash,
+      }),
+    },
+    {
+      path: '/app/:app/logs',
+      redirect: to => ({
+        path: `/app/${encodeURIComponent(String((to.params as { app: string }).app))}/observe/logs`,
+        query: to.query,
+        hash: to.hash,
+      }),
+    },
+    {
+      path: '/app/:app/compatibility',
+      redirect: to => ({
+        path: `/app/${encodeURIComponent(String((to.params as { app: string }).app))}/observe/compatibility`,
+        query: to.query,
+        hash: to.hash,
+      }),
+    },
+    {
+      path: '/app/:app/observe',
+      redirect: to => ({
+        path: `/app/${encodeURIComponent(String((to.params as { app: string }).app))}/observe/native`,
+        query: to.query,
+        hash: to.hash,
+      }),
+    },
     ...setupLayouts(newRoutes),
   ],
   history: createWebHistory(import.meta.env.BASE_URL),

@@ -18,9 +18,12 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
   { slug: 'dashboard', path: '/dashboard', auth: true },
   { slug: 'apps', path: '/apps', auth: true },
   { slug: 'app-overview', path: '/app/com.demo.app', auth: true },
+  { slug: 'app-settings', path: '/app/com.demo.app/settings', auth: true },
+  { slug: 'app-settings-access', path: '/app/com.demo.app/settings/access', auth: true },
   { slug: 'channels', path: '/app/com.demo.app/channels', auth: true },
   { slug: 'devices', path: '/app/com.demo.app/devices', auth: true },
-  { slug: 'observe', path: '/app/com.demo.app/observe', auth: true },
+  { slug: 'observe', path: '/app/com.demo.app/observe/updater', auth: true },
+  { slug: 'observe-native', path: '/app/com.demo.app/observe/native', auth: true },
   { slug: 'observe-plugins', path: '/app/com.demo.app/observe/plugins', auth: true },
   {
     slug: 'api-keys-app-preview',

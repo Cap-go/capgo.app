@@ -129,13 +129,6 @@ declare module 'vue-router/auto-routes' {
       { app: ParamValue<false> },
       | never
     >,
-    '/app/[app].access': RouteRecordInfo<
-      '/app/[app].access',
-      '/app/:app/access',
-      { app: ParamValue<true> },
-      { app: ParamValue<false> },
-      | never
-    >,
     '/app/[app].builds': RouteRecordInfo<
       '/app/[app].builds',
       '/app/:app/builds',
@@ -234,13 +227,6 @@ declare module 'vue-router/auto-routes' {
       { app: ParamValue<false> },
       | never
     >,
-    '/app/[app].compatibility': RouteRecordInfo<
-      '/app/[app].compatibility',
-      '/app/:app/compatibility',
-      { app: ParamValue<true> },
-      { app: ParamValue<false> },
-      | never
-    >,
     '/app/[app].device.[device]': RouteRecordInfo<
       '/app/[app].device.[device]',
       '/app/:app/device/:device',
@@ -269,27 +255,6 @@ declare module 'vue-router/auto-routes' {
       { app: ParamValue<false> },
       | never
     >,
-    '/app/[app].info': RouteRecordInfo<
-      '/app/[app].info',
-      '/app/:app/info',
-      { app: ParamValue<true> },
-      { app: ParamValue<false> },
-      | never
-    >,
-    '/app/[app].logs': RouteRecordInfo<
-      '/app/[app].logs',
-      '/app/:app/logs',
-      { app: ParamValue<true> },
-      { app: ParamValue<false> },
-      | never
-    >,
-    '/app/[app].logs.insights': RouteRecordInfo<
-      '/app/[app].logs.insights',
-      '/app/:app/logs/insights',
-      { app: ParamValue<true> },
-      { app: ParamValue<false> },
-      | never
-    >,
     '/app/[app].notifications': RouteRecordInfo<
       '/app/[app].notifications',
       '/app/:app/notifications',
@@ -297,9 +262,23 @@ declare module 'vue-router/auto-routes' {
       { app: ParamValue<false> },
       | never
     >,
-    '/app/[app].observe': RouteRecordInfo<
-      '/app/[app].observe',
-      '/app/:app/observe',
+    '/app/[app].observe.compatibility': RouteRecordInfo<
+      '/app/[app].observe.compatibility',
+      '/app/:app/observe/compatibility',
+      { app: ParamValue<true> },
+      { app: ParamValue<false> },
+      | never
+    >,
+    '/app/[app].observe.logs': RouteRecordInfo<
+      '/app/[app].observe.logs',
+      '/app/:app/observe/logs',
+      { app: ParamValue<true> },
+      { app: ParamValue<false> },
+      | never
+    >,
+    '/app/[app].observe.native': RouteRecordInfo<
+      '/app/[app].observe.native',
+      '/app/:app/observe/native',
       { app: ParamValue<true> },
       { app: ParamValue<false> },
       | never
@@ -307,6 +286,27 @@ declare module 'vue-router/auto-routes' {
     '/app/[app].observe.plugins': RouteRecordInfo<
       '/app/[app].observe.plugins',
       '/app/:app/observe/plugins',
+      { app: ParamValue<true> },
+      { app: ParamValue<false> },
+      | never
+    >,
+    '/app/[app].observe.updater': RouteRecordInfo<
+      '/app/[app].observe.updater',
+      '/app/:app/observe/updater',
+      { app: ParamValue<true> },
+      { app: ParamValue<false> },
+      | never
+    >,
+    '/app/[app].settings': RouteRecordInfo<
+      '/app/[app].settings',
+      '/app/:app/settings',
+      { app: ParamValue<true> },
+      { app: ParamValue<false> },
+      | never
+    >,
+    '/app/[app].settings.access': RouteRecordInfo<
+      '/app/[app].settings.access',
+      '/app/:app/settings/access',
       { app: ParamValue<true> },
       { app: ParamValue<false> },
       | never
@@ -730,14 +730,6 @@ declare module 'vue-router/auto-routes' {
       pathParamNames:
         | 'app'
     }
-    'src/pages/app/[app].access.vue': {
-      routes:
-        | '/app/[app].access'
-      views:
-        | never
-      pathParamNames:
-        | 'app'
-    }
     'src/pages/app/[app].builds.vue': {
       routes:
         | '/app/[app].builds'
@@ -860,14 +852,6 @@ declare module 'vue-router/auto-routes' {
       pathParamNames:
         | 'app'
     }
-    'src/pages/app/[app].compatibility.vue': {
-      routes:
-        | '/app/[app].compatibility'
-      views:
-        | never
-      pathParamNames:
-        | 'app'
-    }
     'src/pages/app/[app].device.[device].vue': {
       routes:
         | '/app/[app].device.[device]'
@@ -903,30 +887,6 @@ declare module 'vue-router/auto-routes' {
       pathParamNames:
         | 'app'
     }
-    'src/pages/app/[app].info.vue': {
-      routes:
-        | '/app/[app].info'
-      views:
-        | never
-      pathParamNames:
-        | 'app'
-    }
-    'src/pages/app/[app].logs.vue': {
-      routes:
-        | '/app/[app].logs'
-      views:
-        | never
-      pathParamNames:
-        | 'app'
-    }
-    'src/pages/app/[app].logs.insights.vue': {
-      routes:
-        | '/app/[app].logs.insights'
-      views:
-        | never
-      pathParamNames:
-        | 'app'
-    }
     'src/pages/app/[app].notifications.vue': {
       routes:
         | '/app/[app].notifications'
@@ -935,9 +895,25 @@ declare module 'vue-router/auto-routes' {
       pathParamNames:
         | 'app'
     }
-    'src/pages/app/[app].observe.vue': {
+    'src/pages/app/[app].observe.compatibility.vue': {
       routes:
-        | '/app/[app].observe'
+        | '/app/[app].observe.compatibility'
+      views:
+        | never
+      pathParamNames:
+        | 'app'
+    }
+    'src/pages/app/[app].observe.logs.vue': {
+      routes:
+        | '/app/[app].observe.logs'
+      views:
+        | never
+      pathParamNames:
+        | 'app'
+    }
+    'src/pages/app/[app].observe.native.vue': {
+      routes:
+        | '/app/[app].observe.native'
       views:
         | never
       pathParamNames:
@@ -946,6 +922,30 @@ declare module 'vue-router/auto-routes' {
     'src/pages/app/[app].observe.plugins.vue': {
       routes:
         | '/app/[app].observe.plugins'
+      views:
+        | never
+      pathParamNames:
+        | 'app'
+    }
+    'src/pages/app/[app].observe.updater.vue': {
+      routes:
+        | '/app/[app].observe.updater'
+      views:
+        | never
+      pathParamNames:
+        | 'app'
+    }
+    'src/pages/app/[app].settings.vue': {
+      routes:
+        | '/app/[app].settings'
+      views:
+        | never
+      pathParamNames:
+        | 'app'
+    }
+    'src/pages/app/[app].settings.access.vue': {
+      routes:
+        | '/app/[app].settings.access'
       views:
         | never
       pathParamNames:

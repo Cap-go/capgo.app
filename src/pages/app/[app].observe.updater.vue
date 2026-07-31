@@ -73,7 +73,7 @@ interface LogInsightsResponse {
 }
 
 const { t } = useI18n()
-const route = useRoute('/app/[app].logs.insights')
+const route = useRoute('/app/[app].observe.updater')
 const router = useRouter()
 const supabase = useSupabase()
 const displayStore = useDisplayStore()
@@ -244,7 +244,7 @@ function logQuery(action?: string) {
 }
 
 function openLogs(action?: string) {
-  router.push({ path: `/app/${appRouteSegment.value}/logs`, query: logQuery(action) })
+  router.push({ path: `/app/${appRouteSegment.value}/observe/logs`, query: logQuery(action) })
 }
 
 function openDeviceLogs(device: LogInsightDevice) {

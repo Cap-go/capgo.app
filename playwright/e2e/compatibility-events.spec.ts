@@ -166,13 +166,13 @@ test.describe('Compatibility events', () => {
     await expect(page.getByText('Compatibility events').first()).toBeVisible()
 
     await banner.locator('[data-test="compatibility-banner-view"]').click()
-    await page.waitForURL(url => url.pathname === `/app/${APP_ID}/compatibility`)
+    await page.waitForURL(url => url.pathname === `/app/${APP_ID}/observe/compatibility`)
   })
 
   test('renders an unresolved event row with its details and dependency-diff link', async ({ page }) => {
     await mockCompatibilityEvents(page, () => [unresolvedEvent()])
 
-    await page.goto(`/app/${APP_ID}/compatibility`)
+    await page.goto(`/app/${APP_ID}/observe/compatibility`)
 
     await expect(page.getByRole('heading', { name: 'Compatibility events' })).toBeVisible()
 
@@ -220,7 +220,7 @@ test.describe('Compatibility events', () => {
       })
     })
 
-    await page.goto(`/app/${APP_ID}/compatibility`)
+    await page.goto(`/app/${APP_ID}/observe/compatibility`)
 
     // Filter to unresolved-only so the row disappearing is an observable assertion.
     await page.locator('[data-test="compatibility-filter-unresolved"]').check()
