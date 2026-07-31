@@ -104,8 +104,9 @@ beforeAll(async () => {
     'SELECT email FROM public.users WHERE id = $1::uuid LIMIT 1',
     [USER_ID],
   )
-  if (!actorUser?.email)
-    throw new Error('Failed to load audit actor user')
+  if (!actorUser?.email) {
+    throw new Error(`Failed to load audit actor user for id=${USER_ID}: no rows`)
+  }
   actorUserEmail = actorUser.email
 
   const trialAt = new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString()
