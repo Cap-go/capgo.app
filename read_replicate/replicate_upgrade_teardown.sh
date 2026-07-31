@@ -49,34 +49,7 @@ if [[ -n "$SUB_REMAINING" ]]; then
   exit 1
 fi
 
-echo "==> Dropping source slot ${REPLICA_SLOT_NAME} if present..."
-psql-17 "$SOURCE_DB_URL" -v ON_ERROR_STOP=1 <<SQL
-DO \$\$
-DECLARE
-  slot record;
-BEGIN
-  SELECT slot_name, active, active_pid
-  INTO slot
-  FROM pg_replication_slots
-  WHERE slot_name = '${REPLICA_SLOT_NAME}';
-
-  IF slot.slot_name IS NULL THEN
-    RAISE NOTICE 'No source slot named ${REPLICA_SLOT_NAME}';
-    RETURN;
-  END IF;
-
-  RAISE NOTICE 'Found replication slot: % (active: %)', slot.slot_name, slot.active;
-
-  IF slot.active AND slot.active_pid IS NOT NULL THEN
-    PERFORM pg_terminate_backend(slot.active_pid);
-    PERFORM pg_sleep(2);
-  END IF;
-
-  PERFORM pg_drop_replication_slot(slot.slot_name);
-  RAISE NOTICE 'Dropped slot: %', slot.slot_name;
-END
-\$\$;
-SQL
+drop_source_slot_with_retry "${REPLICA_SLOT_NAME}" "${SOURCE_DB_URL}"
 
 echo "==> Verifying slot is gone on source..."
 REMAINING=$(psql-17 "$SOURCE_DB_URL" -t -A -v ON_ERROR_STOP=1 -c "
