@@ -293,9 +293,16 @@ export async function createDirectApiKeyWithBindings(options: {
   hashed?: boolean
 }) {
   // Direct SQL avoids Kong/PostgREST upstream flakes under parallel CI shards.
+  // Inserts run as DB owner, so apikeys_force_server_key does not rewrite the key.
+  // Auth middleware only treats Authorization values as API keys when they are UUIDs,
+  // so plain keys must be UUIDs (PostgREST+authenticator used to force that).
   const userId = options.userId ?? USER_ID
   const roleName = options.roleName ?? 'org_admin'
   const appRoleName = options.appRoleName ?? 'app_admin'
+  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+  const plainKey = options.hashed
+    ? options.key
+    : (uuidRe.test(options.key) ? options.key : randomUUID())
 
   let apiKey: {
     id: number
@@ -311,12 +318,13 @@ export async function createDirectApiKeyWithBindings(options: {
         `INSERT INTO public.apikeys (user_id, key, key_hash, name, expires_at)
          VALUES ($1::uuid, NULL, encode(extensions.digest($2, 'sha256'), 'hex'), $3, $4)
          RETURNING id, key, rbac_id, user_id, expires_at`,
-        [userId, options.key, options.name, options.expiresAt ?? null],
+        [userId, plainKey, options.name, options.expiresAt ?? null],
       )
       apiKey = insertedKey
         ? {
             id: Number(insertedKey.id),
-            key: insertedKey.key,
+            // Return plaintext secret for hashed keys (column key is null).
+            key: plainKey,
             rbac_id: String(insertedKey.rbac_id),
             user_id: String(insertedKey.user_id),
             expires_at: insertedKey.expires_at,
@@ -328,7 +336,7 @@ export async function createDirectApiKeyWithBindings(options: {
         `INSERT INTO public.apikeys (user_id, key, key_hash, name, expires_at)
          VALUES ($1::uuid, $2, NULL, $3, $4)
          RETURNING id, key, rbac_id, user_id, expires_at`,
-        [userId, options.key, options.name, options.expiresAt ?? null],
+        [userId, plainKey, options.name, options.expiresAt ?? null],
       )
       apiKey = insertedKey
         ? {
@@ -345,7 +353,9 @@ export async function createDirectApiKeyWithBindings(options: {
       throw new Error('Unable to create API key')
 
     const [orgRole] = await executeSQL(
-      'SELECT id FROM public.roles WHERE name = $1 LIMIT 1',
+      `SELECT id FROM public.roles
+       WHERE name = $1 AND scope_type = 'org'
+       LIMIT 1`,
       [roleName],
     )
     if (!orgRole?.id)
@@ -373,7 +383,9 @@ export async function createDirectApiKeyWithBindings(options: {
         throw new Error(`App ${options.appId} belongs to org ${app.owner_org}, expected ${options.orgId}`)
 
       const [appRole] = await executeSQL(
-        'SELECT id FROM public.roles WHERE name = $1 LIMIT 1',
+        `SELECT id FROM public.roles
+         WHERE name = $1 AND scope_type = 'app'
+         LIMIT 1`,
         [appRoleName],
       )
       if (!appRole?.id)
