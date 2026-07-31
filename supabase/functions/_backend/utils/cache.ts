@@ -53,19 +53,13 @@ export type CacheKeyParams = Record<string, string>
 
 export class CacheHelper {
   private cache: Cache | null = null
-  private cachePromise: Promise<Cache | null>
+  private cachePromise: Promise<Cache | null> | null = null
 
-  constructor(private context: Context) {
-    this.cachePromise = resolveGlobalCache().then((cache) => {
-      this.cache = cache
-      return cache
-    })
-  }
+  constructor(private context: Context) {}
 
   private async ensureCache(): Promise<Cache | null> {
-    if (this.cache === null) {
-      await this.cachePromise
-    }
+    this.cachePromise ??= resolveGlobalCache()
+    this.cache = await this.cachePromise
     return this.cache
   }
 

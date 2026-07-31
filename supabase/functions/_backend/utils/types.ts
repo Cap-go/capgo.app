@@ -130,6 +130,8 @@ export interface NativeVersionUsage {
 export interface ReadDevicesParams {
   app_id: string
   version_name?: string | undefined
+  /** Exact platform filter (`ios` | `android` | `electron`) */
+  platform?: Database['public']['Enums']['platform_os']
   deviceIds?: string[]
   /** Exact custom_id match filter (case-sensitive, already trimmed by callers) */
   customIds?: string[]
@@ -138,6 +140,8 @@ export interface ReadDevicesParams {
   order?: Order[]
   /** Only return devices with updated_at greater than this ISO timestamp */
   updated_at_gt?: string
+  /** Only return devices with updated_at less than or equal to this ISO timestamp */
+  updated_at_lte?: string
   limit?: number
   /** Cursor for pagination - use the last updated_at from previous page */
   cursor?: string

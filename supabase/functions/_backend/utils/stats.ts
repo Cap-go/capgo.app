@@ -476,11 +476,15 @@ export function countDevices(
   deviceIds: string[] = [],
   versionName?: string,
   search?: string,
+  options?: {
+    platform?: Database['public']['Enums']['platform_os']
+    updatedAt?: { gt?: string, lte?: string }
+  },
 ) {
   const trimmedSearch = search?.trim()
   if (shouldUseAnalyticsEngine(c))
-    return countDevicesCF(c, app_id, customIdMode, deviceIds, versionName, trimmedSearch)
-  return countDevicesSB(c, app_id, customIdMode, deviceIds, versionName, trimmedSearch)
+    return countDevicesCF(c, app_id, customIdMode, deviceIds, versionName, trimmedSearch, options)
+  return countDevicesSB(c, app_id, customIdMode, deviceIds, versionName, trimmedSearch, options)
 }
 
 export function countInstallSources(c: Context, app_id: string) {

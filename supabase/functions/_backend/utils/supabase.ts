@@ -1082,7 +1082,6 @@ export async function getDefaultPlan(c: Context) {
   return plan
 }
 
-
 export function trackBandwidthUsageSB(
   c: Context,
   deviceId: string,
@@ -1532,11 +1531,16 @@ export async function readDevicesSB(c: Context, params: ReadDevicesParams, custo
   if (params.version_name)
     query = query.eq('version_name', params.version_name)
 
+  if (params.platform)
+    query = query.eq('platform', params.platform)
+
   if (params.installSources?.length)
     query = query.in('install_source', params.installSources)
 
   if (params.updated_at_gt)
     query = query.gt('updated_at', params.updated_at_gt)
+  if (params.updated_at_lte)
+    query = query.lte('updated_at', params.updated_at_lte)
 
   const devicesOrder = getDevicesOrder(params.order)
 
@@ -1606,6 +1610,10 @@ export async function countDevicesSB(
   deviceIds: string[] = [],
   versionName?: string,
   search?: string,
+  options?: {
+    platform?: Database['public']['Enums']['platform_os']
+    updatedAt?: { gt?: string, lte?: string }
+  },
 ) {
   let req = supabaseAdmin(c)
     .from('devices')
@@ -1635,6 +1643,13 @@ export async function countDevicesSB(
 
   if (versionName)
     req = req.eq('version_name', versionName)
+
+  if (options?.platform)
+    req = req.eq('platform', options.platform)
+  if (options?.updatedAt?.gt)
+    req = req.gt('updated_at', options.updatedAt.gt)
+  if (options?.updatedAt?.lte)
+    req = req.lte('updated_at', options.updatedAt.lte)
 
   const { count, error } = await req
 
