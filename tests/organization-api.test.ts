@@ -126,25 +126,21 @@ describe('read-only API keys cannot access destructive organization routes', () 
   }
 
   beforeAll(async () => {
-    const { error: stripeError } = await getSupabaseClient().from('stripe_info').insert({
-      customer_id: readOnlyCustomerId,
-      status: 'succeeded',
-      product_id: 'prod_LQIregjtNduh4q',
-      subscription_id: `sub_${readOnlyGlobalId}`,
-      trial_at: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString(),
-      is_good_plan: true,
-    })
-    expect(stripeError).toBeNull()
-
-    const { error: orgError } = await getSupabaseClient().from('orgs').insert({
-      id: readOnlyOrgId,
-      name: readOnlyName,
-      management_email: TEST_EMAIL,
-      created_by: USER_ID,
-      customer_id: readOnlyCustomerId,
-      require_apikey_expiration: false,
-    })
-    expect(orgError).toBeNull()
+    // Seed via SQL — PostgREST/Kong flakes under CF shard load with
+    // "An invalid response was received from the upstream server".
+    const trialAt = new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString()
+    await executeSQL(
+      `INSERT INTO public.stripe_info (
+         customer_id, status, product_id, subscription_id, trial_at, is_good_plan
+       ) VALUES ($1, 'succeeded', 'prod_LQIregjtNduh4q', $2, $3::timestamptz, true)`,
+      [readOnlyCustomerId, `sub_${readOnlyGlobalId}`, trialAt],
+    )
+    await executeSQL(
+      `INSERT INTO public.orgs (
+         id, name, management_email, created_by, customer_id, require_apikey_expiration
+       ) VALUES ($1::uuid, $2, $3, $4::uuid, $5, false)`,
+      [readOnlyOrgId, readOnlyName, TEST_EMAIL, USER_ID, readOnlyCustomerId],
+    )
 
     const createdKey = await createDirectApiKeyWithBindings({
       userId: USER_ID,
@@ -165,10 +161,10 @@ describe('read-only API keys cannot access destructive organization routes', () 
 
   afterAll(async () => {
     if (readOnlyKeyId) {
-      await getSupabaseClient().from('apikeys').delete().eq('id', readOnlyKeyId)
+      await executeSQL('DELETE FROM public.apikeys WHERE id = $1', [readOnlyKeyId])
     }
-    await getSupabaseClient().from('orgs').delete().eq('id', readOnlyOrgId)
-    await getSupabaseClient().from('stripe_info').delete().eq('customer_id', readOnlyCustomerId)
+    await executeSQL('DELETE FROM public.orgs WHERE id = $1::uuid', [readOnlyOrgId])
+    await executeSQL('DELETE FROM public.stripe_info WHERE customer_id = $1', [readOnlyCustomerId])
   })
 
   it.concurrent('rejects POST /organization/members', async () => {
