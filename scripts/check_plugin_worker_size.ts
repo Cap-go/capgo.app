@@ -23,6 +23,7 @@ const ROOT = resolve(import.meta.dirname, '..')
 const BASELINE_PATH = join(ROOT, 'scripts/bench/plugin_worker_size_baseline.json')
 const WARN_PCT = 5
 const FAIL_PCT = 15
+// Keep these well under the unit-test SCRIPT_TIMEOUT_MS (120s) so CI gets a clean size failure, not a killed process.
 const WRANGLER_TIMEOUT_MS = 90_000
 const GIT_TIMEOUT_MS = 10_000
 
