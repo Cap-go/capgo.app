@@ -359,12 +359,6 @@ export async function updateWithPG(
   appOwner = await ownerPromise
   if (pathTiming)
     pathTiming.ownerMs = Math.round(performance.now() - startOwner)
-  try {
-    prefetchedChannel = await channelPrefetchPromise
-  }
-  catch {
-    prefetchedChannel = null
-  }
   // if version_build is not semver, then make it semver
   const device = makeDevice(body, appOwner?.allow_device_custom_id)
   if (!appOwner) {
@@ -457,6 +451,15 @@ export async function updateWithPG(
 
   // Only query link/comment if plugin supports it (v5.35.0+, v6.35.0+, v7.35.0+, v8.35.0+) AND app has expose_metadata enabled
   const needsMetadata = appOwner.expose_metadata && !isDeprecatedPluginVersion(pluginVersion, '5.35.0', '6.35.0', '7.35.0', '8.35.0')
+
+  // Consume prefetch only after owner gates — a hung second client must not
+  // delay early exits (plan/onprem/semver). Fail open to serial requestInfos.
+  try {
+    prefetchedChannel = await channelPrefetchPromise
+  }
+  catch {
+    prefetchedChannel = null
+  }
 
   const startRequestInfos = performance.now()
   const isPausedRolloutVersion = Array.isArray(rolloutPausedVersionNames) && rolloutPausedVersionNames.includes(version_name)
