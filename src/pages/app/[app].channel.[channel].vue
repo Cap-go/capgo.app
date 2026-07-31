@@ -308,16 +308,13 @@ async function notificationFetch<T>(path: string, init: RequestInit = {}) {
   return await response.json() as T
 }
 
-async function queueChannelUpdateNotification() {
-  if (!channel.value)
-    return
-
+async function queueChannelUpdateNotification(appId: string, channelName: string) {
   const response = await notificationFetch<NotificationQueueResponse>('/update-check', {
     method: 'POST',
     body: JSON.stringify({
-      appId: packageId.value,
+      appId,
       target: { broadcast: true },
-      channel: channel.value.name,
+      channel: channelName,
     }),
   })
   if (!response.queued)
@@ -325,9 +322,9 @@ async function queueChannelUpdateNotification() {
   toast.success(t('notification-update-push-success'))
 }
 
-async function isPushUpdateReady() {
+async function isPushUpdateReady(appId: string) {
   try {
-    const query = encodeURIComponent(packageId.value)
+    const query = encodeURIComponent(appId)
     const [settings, providersResponse] = await Promise.all([
       notificationFetch<{ pushUpdateEnabled: boolean }>(`/settings?app_id=${query}`),
       notificationFetch<{ data: Array<{ status: string }> }>(`/providers?app_id=${query}`),
@@ -345,12 +342,19 @@ async function isPushUpdateReady() {
 async function askUpdateNotificationAfterBundleChange() {
   if (!channel.value)
     return
-  if (!(await isPushUpdateReady()))
+
+  const appId = packageId.value
+  const channelName = channel.value.name
+  if (!appId || !channelName)
+    return
+  if (!(await isPushUpdateReady(appId)))
+    return
+  if (packageId.value !== appId || channel.value?.name !== channelName)
     return
 
   dialogStore.openDialog({
     title: t('notification-send-update-title'),
-    description: t('notification-send-update-description', { channel: channel.value.name }),
+    description: t('notification-send-update-description', { channel: channelName }),
     buttons: [
       {
         text: t('button-cancel'),
@@ -361,7 +365,7 @@ async function askUpdateNotificationAfterBundleChange() {
         role: 'primary',
         handler: async () => {
           try {
-            await queueChannelUpdateNotification()
+            await queueChannelUpdateNotification(appId, channelName)
           }
           catch (error) {
             console.error(error)
