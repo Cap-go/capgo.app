@@ -42,12 +42,20 @@ const triggerId = `${baseId}-trigger`
 const popoverId = `${baseId}-popover`
 
 const isDark = ref(false)
+let prefersDarkQuery: MediaQueryList | null = null
+
 function syncThemeFromHtml() {
+  if (typeof document === 'undefined')
+    return
   const root = document.documentElement
+  const theme = root.dataset.theme
+  prefersDarkQuery ??= window.matchMedia('(prefers-color-scheme: dark)')
+  // Capgo DaisyUI: capgodark can win via data-theme OR prefersdark without `.dark`.
   isDark.value = root.classList.contains('dark')
-    || root.dataset.theme === 'capgodark'
+    || theme === 'capgodark'
+    || (theme !== 'capgolight' && prefersDarkQuery.matches)
 }
-onMounted(syncThemeFromHtml)
+
 useMutationObserver(
   document.documentElement,
   syncThemeFromHtml,
@@ -176,17 +184,20 @@ function onViewportChange() {
 }
 
 onMounted(() => {
+  syncThemeFromHtml()
+  prefersDarkQuery?.addEventListener('change', syncThemeFromHtml)
   window.addEventListener('resize', onViewportChange)
   window.addEventListener('scroll', onViewportChange, true)
 })
+
 onUnmounted(() => {
+  prefersDarkQuery?.removeEventListener('change', syncThemeFromHtml)
   window.removeEventListener('resize', onViewportChange)
   window.removeEventListener('scroll', onViewportChange, true)
 })
 
 function syncDraftFromProps() {
   draftMode.value = props.mode
-  // Rolling presets always refresh from "now" so an open dashboard cannot apply a stale window.
   if (props.mode !== 'custom') {
     const range = clampDateRange(getDateRangeForPreset(props.mode), props.minDate, props.maxDate)
     pickerRange.value = [range.start, range.end]
@@ -246,7 +257,6 @@ function apply() {
   let end: Date
 
   if (mode !== 'custom') {
-    // Recompute rolling presets at apply time so delayed Apply still means "last X until now".
     const fresh = clampDateRange(getDateRangeForPreset(mode), props.minDate, props.maxDate)
     start = fresh.start
     end = fresh.end
@@ -273,19 +283,11 @@ watch(() => props.mode, (mode) => {
 })
 
 function presetButtonClass(active: boolean, disabled: boolean) {
-  if (disabled) {
-    return isDark.value
-      ? 'cursor-not-allowed text-slate-600 opacity-50'
-      : 'cursor-not-allowed text-slate-400 opacity-50'
-  }
-  if (active) {
-    return isDark.value
-      ? 'bg-white font-medium text-slate-900'
-      : 'bg-slate-900 font-medium text-white'
-  }
-  return isDark.value
-    ? 'text-slate-300 hover:bg-slate-800'
-    : 'text-slate-600 hover:bg-slate-100'
+  return [
+    'date-range-preset',
+    active ? 'is-active' : '',
+    disabled ? 'is-disabled' : '',
+  ].filter(Boolean).join(' ')
 }
 </script>
 
@@ -296,13 +298,9 @@ function presetButtonClass(active: boolean, disabled: boolean) {
       :id="triggerId"
       ref="triggerRef"
       type="button"
-      class="group inline-flex cursor-pointer items-center gap-2 rounded-md border px-3 text-sm font-medium shadow-sm transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500/40"
-      :class="[
-        compact ? 'h-10 min-h-10' : 'h-9 min-h-9',
-        isDark
-          ? 'border-slate-600 bg-slate-900 text-slate-100 hover:bg-slate-800'
-          : 'border-slate-200 bg-white text-slate-800 hover:bg-slate-50',
-      ]"
+      class="date-range-trigger group inline-flex cursor-pointer items-center gap-2 rounded-md border px-3 text-sm font-medium shadow-sm transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500/40"
+      :class="compact ? 'h-10 min-h-10' : 'h-9 min-h-9'"
+      :data-capgo-surface="isDark ? 'dark' : 'light'"
       :aria-label="`${t('date-range')}: ${triggerLabel}`"
       aria-haspopup="dialog"
       :aria-expanded="isOpen"
@@ -310,14 +308,13 @@ function presetButtonClass(active: boolean, disabled: boolean) {
       @click="togglePicker"
     >
       <CalendarDaysIcon
-        class="h-4 w-4 shrink-0 transition-colors"
-        :class="isDark ? 'text-slate-400 group-hover:text-slate-200' : 'text-slate-500 group-hover:text-slate-700'"
+        class="date-range-trigger-icon h-4 w-4 shrink-0 transition-colors"
         aria-hidden="true"
       />
       <span class="max-w-[14rem] truncate sm:max-w-[20rem]">{{ triggerLabel }}</span>
       <ChevronDownIcon
-        class="h-4 w-4 shrink-0 transition-transform duration-150"
-        :class="[isOpen ? 'rotate-180' : '', isDark ? 'text-slate-500' : 'text-slate-400']"
+        class="date-range-trigger-chevron h-4 w-4 shrink-0 transition-transform duration-150"
+        :class="isOpen ? 'rotate-180' : ''"
         aria-hidden="true"
       />
     </button>
@@ -329,23 +326,17 @@ function presetButtonClass(active: boolean, disabled: boolean) {
         ref="popoverRef"
         open
         :aria-label="`${t('date-range')}: ${triggerLabel}`"
-        class="date-range-popover fixed z-[100] m-0 w-[min(46rem,calc(100vw-1.5rem))] overflow-hidden rounded-lg border p-0 shadow-[0_12px_40px_-12px_rgba(15,23,42,0.35)]"
-        :class="isDark
-          ? 'border-slate-700 bg-slate-950 text-slate-100 shadow-[0_16px_48px_-12px_rgba(0,0,0,0.65)]'
-          : 'border-slate-200 bg-white text-slate-800'"
+        class="date-range-popover fixed z-[100] m-0 w-[min(46rem,calc(100vw-1.5rem))] overflow-hidden rounded-lg border p-0"
+        :data-capgo-surface="isDark ? 'dark' : 'light'"
         :style="popoverStyle"
       >
         <div class="flex flex-col md:flex-row">
-          <div
-            class="flex w-full shrink-0 flex-col md:w-44 md:border-b-0 md:border-r"
-            :class="isDark ? 'border-b border-slate-700' : 'border-b border-slate-200'"
-          >
+          <div class="date-range-sidebar flex w-full shrink-0 flex-col border-b md:w-44 md:border-b-0 md:border-r">
             <div class="max-h-64 overflow-y-auto p-2 md:max-h-[22.5rem]">
               <template v-for="(group, groupIndex) in presetGroups" :key="group.key">
                 <div
                   v-if="groupIndex > 0"
-                  class="my-1.5 border-t"
-                  :class="isDark ? 'border-slate-800' : 'border-slate-100'"
+                  class="date-range-divider my-1.5 border-t"
                   aria-hidden="true"
                 />
                 <div class="flex flex-col gap-0.5">
@@ -365,8 +356,7 @@ function presetButtonClass(active: boolean, disabled: boolean) {
               </template>
 
               <div
-                class="my-1.5 border-t"
-                :class="isDark ? 'border-slate-800' : 'border-slate-100'"
+                class="date-range-divider my-1.5 border-t"
                 aria-hidden="true"
               />
               <button
@@ -400,29 +390,21 @@ function presetButtonClass(active: boolean, disabled: boolean) {
           </div>
         </div>
 
-        <div
-          class="flex flex-col gap-3 border-t px-3 py-3 sm:flex-row sm:items-end sm:justify-between sm:px-4"
-          :class="isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-200 bg-slate-50'"
-        >
+        <div class="date-range-footer flex flex-col gap-3 border-t px-3 py-3 sm:flex-row sm:items-end sm:justify-between sm:px-4">
           <div class="grid flex-1 grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-3">
             <div v-for="field in boundFields" :key="field.id">
               <div
                 :id="`${baseId}-${field.id}-label`"
-                class="mb-1 text-[11px] font-medium tracking-wide uppercase"
-                :class="isDark ? 'text-slate-400' : 'text-slate-500'"
+                class="date-range-field-label mb-1 text-[11px] font-medium tracking-wide uppercase"
               >
                 {{ field.label }}
               </div>
               <div
-                class="flex h-9 items-center gap-2 rounded-md border px-2.5"
-                :class="isDark ? 'border-slate-600 bg-slate-950' : 'border-slate-200 bg-white'"
+                class="date-range-field flex h-9 items-center gap-2 rounded-md border px-2.5"
                 :aria-labelledby="`${baseId}-${field.id}-label`"
               >
-                <CalendarDaysIcon class="h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden="true" />
-                <span
-                  class="truncate font-mono text-[13px] tabular-nums"
-                  :class="isDark ? 'text-slate-100' : 'text-slate-800'"
-                >
+                <CalendarDaysIcon class="date-range-field-icon h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                <span class="date-range-field-value truncate font-mono text-[13px] tabular-nums">
                   {{ field.value instanceof Date ? formatLocalDateTime(field.value) : '—' }}
                 </span>
               </div>
@@ -443,76 +425,175 @@ function presetButtonClass(active: boolean, disabled: boolean) {
 </template>
 
 <style scoped>
-dialog.date-range-popover {
-  max-width: none;
-  max-height: none;
-  color: inherit;
+/* Shared surface tokens — contrast first (WCAG AA). One surface in dark mode. */
+.date-range-trigger[data-capgo-surface='light'],
+.date-range-popover[data-capgo-surface='light'] {
+  --drp-bg: #ffffff;
+  --drp-bg-muted: #f8fafc;
+  --drp-border: #e2e8f0;
+  --drp-divider: #f1f5f9;
+  --drp-text: #0f172a;
+  --drp-text-muted: #64748b;
+  --drp-text-subtle: #94a3b8;
+  --drp-preset: #475569;
+  --drp-preset-hover: #f1f5f9;
+  --drp-preset-active-bg: #0f172a;
+  --drp-preset-active-text: #ffffff;
+  --drp-field-bg: #ffffff;
+  --drp-field-border: #e2e8f0;
+  --drp-shadow: 0 12px 40px -12px rgb(15 23 42 / 0.35);
+  --drp-cal-text: #0f172a;
+  --drp-cal-muted: #94a3b8;
+  --drp-cal-header: #64748b;
+  --drp-cal-hover: #f1f5f9;
+  --drp-cal-icon: #64748b;
+  --drp-cal-between: rgb(17 158 255 / 0.12);
+  --drp-cal-between-text: #0f172a;
+  --drp-cal-input-bg: #f8fafc;
 }
 
-dialog.date-range-popover::backdrop {
+.date-range-trigger[data-capgo-surface='dark'],
+.date-range-popover[data-capgo-surface='dark'] {
+  --drp-bg: #0b1220;
+  --drp-bg-muted: #0b1220;
+  --drp-border: #334155;
+  --drp-divider: #1e293b;
+  --drp-text: #f8fafc;
+  --drp-text-muted: #cbd5e1;
+  --drp-text-subtle: #94a3b8;
+  --drp-preset: #e2e8f0;
+  --drp-preset-hover: #1e293b;
+  --drp-preset-active-bg: #f8fafc;
+  --drp-preset-active-text: #0f172a;
+  --drp-field-bg: #020617;
+  --drp-field-border: #475569;
+  --drp-shadow: 0 16px 48px -12px rgb(0 0 0 / 0.65);
+  --drp-cal-text: #f1f5f9;
+  --drp-cal-muted: #64748b;
+  --drp-cal-header: #cbd5e1;
+  --drp-cal-hover: #1e293b;
+  --drp-cal-icon: #cbd5e1;
+  --drp-cal-between: rgb(17 158 255 / 0.28);
+  --drp-cal-between-text: #f8fafc;
+  --drp-cal-input-bg: #020617;
+}
+
+.date-range-trigger {
+  background: var(--drp-bg);
+  border-color: var(--drp-border);
+  color: var(--drp-text);
+}
+
+.date-range-trigger:hover {
+  filter: brightness(1.05);
+}
+
+.date-range-trigger-icon,
+.date-range-trigger-chevron {
+  color: var(--drp-text-muted);
+}
+
+.date-range-trigger:hover .date-range-trigger-icon,
+.date-range-trigger:hover .date-range-trigger-chevron {
+  color: var(--drp-text);
+}
+
+.date-range-popover {
+  max-width: none;
+  max-height: none;
+  background: var(--drp-bg) !important;
+  border-color: var(--drp-border) !important;
+  color: var(--drp-text) !important;
+  box-shadow: var(--drp-shadow);
+}
+
+.date-range-popover::backdrop {
   display: none;
+}
+
+.date-range-sidebar,
+.date-range-footer {
+  background: var(--drp-bg);
+  border-color: var(--drp-border);
+}
+
+.date-range-divider {
+  border-color: var(--drp-divider);
+}
+
+.date-range-preset {
+  color: var(--drp-preset) !important;
+  background: transparent;
+  cursor: pointer;
+}
+
+.date-range-preset:hover:not(.is-disabled):not(.is-active) {
+  background: var(--drp-preset-hover);
+}
+
+.date-range-preset.is-active {
+  background: var(--drp-preset-active-bg) !important;
+  color: var(--drp-preset-active-text) !important;
+  font-weight: 600;
+}
+
+.date-range-preset.is-disabled {
+  color: var(--drp-text-subtle) !important;
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.date-range-field-label {
+  color: var(--drp-text-muted);
+}
+
+.date-range-field {
+  background: var(--drp-field-bg);
+  border-color: var(--drp-field-border);
+}
+
+.date-range-field-icon {
+  color: var(--drp-text-subtle);
+}
+
+.date-range-field-value {
+  color: var(--drp-text);
+}
+
+.date-range-calendar {
+  background: var(--drp-bg) !important;
 }
 
 .date-range-calendar :deep(.dp__main) {
   font-family: inherit;
+  background: transparent !important;
+  color: var(--drp-cal-text) !important;
 }
 
-.date-range-calendar :deep(.dp__theme_light) {
-  --dp-background-color: transparent;
-  --dp-text-color: #0f172a;
-  --dp-hover-color: #f1f5f9;
-  --dp-hover-text-color: #0f172a;
-  --dp-hover-icon-color: #64748b;
-  --dp-primary-color: var(--color-azure-500);
-  --dp-primary-text-color: #ffffff;
-  --dp-secondary-color: #e2e8f0;
-  --dp-border-color: transparent;
-  --dp-menu-border-color: transparent;
-  --dp-border-color-hover: transparent;
-  --dp-disabled-color: #f8fafc;
-  --dp-disabled-color-text: #94a3b8;
-  --dp-scroll-bar-background: transparent;
-  --dp-scroll-bar-color: #cbd5e1;
-  --dp-success-color: var(--color-azure-500);
-  --dp-success-color-disabled: #94a3b8;
-  --dp-icon-color: #64748b;
-  --dp-danger-color: #ef4444;
-  --dp-highlight-color: rgb(17 158 255 / 0.12);
-  --dp-range-between-dates-background-color: rgb(17 158 255 / 0.12);
-  --dp-range-between-dates-text-color: #0f172a;
-  --dp-range-between-border-radius: 0;
-  --dp-cell-size: 36px;
-  --dp-cell-padding: 2px;
-  --dp-row-margin: 0;
-  --dp-month-year-row-height: 36px;
-  --dp-month-year-row-button-size: 32px;
-  --dp-button-height: 32px;
-  --dp-font-size: 0.875rem;
-}
-
+.date-range-calendar :deep(.dp__theme_light),
 .date-range-calendar :deep(.dp__theme_dark) {
   --dp-background-color: transparent;
-  --dp-text-color: #e2e8f0;
-  --dp-hover-color: #1e293b;
-  --dp-hover-text-color: #f8fafc;
-  --dp-hover-icon-color: #94a3b8;
+  --dp-text-color: var(--drp-cal-text);
+  --dp-hover-color: var(--drp-cal-hover);
+  --dp-hover-text-color: var(--drp-cal-text);
+  --dp-hover-icon-color: var(--drp-cal-icon);
   --dp-primary-color: var(--color-azure-500);
   --dp-primary-text-color: #ffffff;
-  --dp-secondary-color: #334155;
+  --dp-secondary-color: var(--drp-border);
   --dp-border-color: transparent;
   --dp-menu-border-color: transparent;
   --dp-border-color-hover: transparent;
-  --dp-disabled-color: #0f172a;
-  --dp-disabled-color-text: #64748b;
+  --dp-disabled-color: transparent;
+  --dp-disabled-color-text: var(--drp-cal-muted);
   --dp-scroll-bar-background: transparent;
-  --dp-scroll-bar-color: #475569;
+  --dp-scroll-bar-color: var(--drp-border);
   --dp-success-color: var(--color-azure-500);
-  --dp-success-color-disabled: #64748b;
-  --dp-icon-color: #94a3b8;
+  --dp-success-color-disabled: var(--drp-cal-muted);
+  --dp-icon-color: var(--drp-cal-icon);
   --dp-danger-color: #f87171;
-  --dp-highlight-color: rgb(17 158 255 / 0.22);
-  --dp-range-between-dates-background-color: rgb(17 158 255 / 0.2);
-  --dp-range-between-dates-text-color: #e2e8f0;
+  --dp-highlight-color: var(--drp-cal-between);
+  --dp-range-between-dates-background-color: var(--drp-cal-between);
+  --dp-range-between-dates-text-color: var(--drp-cal-between-text);
   --dp-range-between-border-radius: 0;
   --dp-cell-size: 36px;
   --dp-cell-padding: 2px;
@@ -528,6 +609,9 @@ dialog.date-range-popover::backdrop {
 .date-range-calendar :deep(.dp__instance_calendar),
 .date-range-calendar :deep(.dp__calendar),
 .date-range-calendar :deep(.dp__calendar_wrap),
+.date-range-calendar :deep(.dp__calendar_header),
+.date-range-calendar :deep(.dp__calendar_row),
+.date-range-calendar :deep(.dp__month_year_row),
 .date-range-calendar :deep(.dp__time_picker_inline_container),
 .date-range-calendar :deep(.dp--tp-wrap),
 .date-range-calendar :deep(.dp__overlay),
@@ -535,6 +619,7 @@ dialog.date-range-popover::backdrop {
   background: transparent !important;
   border: none !important;
   box-shadow: none !important;
+  color: var(--drp-cal-text) !important;
 }
 
 .date-range-calendar :deep(.dp__menu) {
@@ -546,26 +631,18 @@ dialog.date-range-popover::backdrop {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: #64748b;
-}
-
-.date-range-calendar :deep(.dp__theme_dark .dp__calendar_header_item) {
-  color: #94a3b8;
+  color: var(--drp-cal-header) !important;
 }
 
 .date-range-calendar :deep(.dp__cell_inner) {
-  border-radius: 9999px;
+  border-radius: 0.375rem;
   font-weight: 500;
+  color: var(--drp-cal-text);
 }
 
-.date-range-calendar :deep(.dp__theme_light .dp__cell_offset),
-.date-range-calendar :deep(.dp__theme_light .dp__cell_disabled) {
-  color: #cbd5e1;
-}
-
-.date-range-calendar :deep(.dp__theme_dark .dp__cell_offset),
-.date-range-calendar :deep(.dp__theme_dark .dp__cell_disabled) {
-  color: #475569;
+.date-range-calendar :deep(.dp__cell_offset),
+.date-range-calendar :deep(.dp__cell_disabled) {
+  color: var(--drp-cal-muted) !important;
 }
 
 .date-range-calendar :deep(.dp__range_start .dp__cell_inner),
@@ -587,34 +664,28 @@ dialog.date-range-popover::backdrop {
 .date-range-calendar :deep(.dp__month_year_wrap) {
   font-weight: 600;
   font-size: 0.875rem;
+  color: var(--drp-cal-text) !important;
 }
 
 .date-range-calendar :deep(.dp__action_row) {
   display: none;
 }
 
-.date-range-calendar :deep(.dp__theme_dark .dp__time_display),
-.date-range-calendar :deep(.dp__theme_dark .dp__input),
-.date-range-calendar :deep(.dp__theme_dark .dp__time_input),
-.date-range-calendar :deep(.dp__theme_dark .dp__pm_am_button),
-.date-range-calendar :deep(.dp__theme_dark .dp__overlay) {
-  background: #0f172a !important;
-  color: #e2e8f0 !important;
-  border-color: #334155 !important;
-}
-
-.date-range-calendar :deep(.dp__theme_light .dp__time_display),
-.date-range-calendar :deep(.dp__theme_light .dp__input),
-.date-range-calendar :deep(.dp__theme_light .dp__time_input),
-.date-range-calendar :deep(.dp__theme_light .dp__pm_am_button) {
-  background: #f8fafc !important;
-  color: #0f172a !important;
-  border-color: #e2e8f0 !important;
+.date-range-calendar :deep(.dp__time_display),
+.date-range-calendar :deep(.dp__input),
+.date-range-calendar :deep(.dp__time_input),
+.date-range-calendar :deep(.dp__pm_am_button),
+.date-range-calendar :deep(.dp__overlay) {
+  background: var(--drp-cal-input-bg) !important;
+  color: var(--drp-cal-text) !important;
+  border-color: var(--drp-border) !important;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .date-range-popover,
-  .date-range-popover * {
+  .date-range-popover *,
+  .date-range-trigger,
+  .date-range-trigger * {
     transition: none !important;
   }
 }

@@ -22,8 +22,11 @@ const isDark = ref(false)
 
 function syncThemeFromHtml() {
   const root = document.documentElement
+  const theme = root.dataset.theme
+  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
   isDark.value = root.classList.contains('dark')
-    || root.dataset.theme === 'capgodark'
+    || theme === 'capgodark'
+    || (theme !== 'capgolight' && prefersDark)
 }
 
 onMounted(syncThemeFromHtml)
