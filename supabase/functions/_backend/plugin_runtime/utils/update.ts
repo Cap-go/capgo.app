@@ -665,14 +665,14 @@ export async function updateWithPG(
     }
   }
   if (version.name === 'builtin' && greaterOrEqual(parse(plugin_version), parse('6.2.0'))) {
-    if (body.version_name === 'builtin' && version.name === 'builtin') {
+    // Already on builtin: up-to-date signal (error + kind). Plugin treats this as no-op.
+    if (body.version_name === 'builtin') {
       return updateError200(c, 'already_on_builtin', 'Already on builtin')
     }
-    else {
-      return updateError200(c, 'already_on_builtin', 'Already on builtin', {
-        version: 'builtin',
-      })
-    }
+    // Channel kill-switch / revert: success payload with version builtin and NO error/kind,
+    // so the plugin reaches its builtin reset path (_reset / setNextBundle).
+    await sendStatsAndDevice(c, device, [{ action: 'get', versionName: 'builtin' }])
+    return c.json({ version: 'builtin' }, 200)
   }
   else if (version.name === 'builtin' && !greaterOrEqual(parse(plugin_version), parse('6.2.0'))) {
     return updateError200(c, 'revert_to_builtin_plugin_version_too_old', 'revert_to_builtin used, but plugin version is too old')
