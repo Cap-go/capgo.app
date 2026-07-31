@@ -520,20 +520,6 @@ function readErrorProperty(error: object, key: PropertyKey): unknown {
   }
 }
 
-function readOwnLogProperty(value: object, key: PropertyKey): unknown {
-  try {
-    const descriptor = Object.getOwnPropertyDescriptor(value, key)
-    if (!descriptor)
-      return undefined
-    if ('value' in descriptor)
-      return descriptor.value
-    return '[accessor property omitted]'
-  }
-  catch (propertyError) {
-    return `[unreadable property: ${describeThrownValue(propertyError)}]`
-  }
-}
-
 function getObjectType(value: object): string {
   if (Array.isArray(value))
     return 'Array'
@@ -547,7 +533,7 @@ function getObjectType(value: object): string {
 }
 
 function getLogArrayLength(value: unknown[]): number {
-  const length = readOwnLogProperty(value, 'length')
+  const length = readErrorProperty(value, 'length')
   return typeof length === 'number' && Number.isSafeInteger(length) && length > 0
     ? length
     : 0
@@ -562,7 +548,7 @@ function serializePostgresLogArray(
   const boundedLength = Math.min(totalLength, MAX_POSTGRES_LOG_ARRAY_ITEMS)
   const serialized: unknown[] = []
   for (let index = 0; index < boundedLength; index++)
-    serialized.push(serializePostgresLogValue(readOwnLogProperty(value, index), seen, depth + 1))
+    serialized.push(serializePostgresLogValue(readErrorProperty(value, index), seen, depth + 1))
 
   if (totalLength > boundedLength)
     serialized.push(`[truncated ${totalLength - boundedLength} items]`)
@@ -596,7 +582,7 @@ function serializePostgresLogObject(
     // Keep the query text and shape, but never copy parameter values to logs.
     serialized[key] = POSTGRES_LOG_REDACTED_KEYS.has(key.toLowerCase())
       ? '[redacted]'
-      : serializePostgresLogValue(readOwnLogProperty(value, key), seen, depth + 1)
+      : serializePostgresLogValue(readErrorProperty(value, key), seen, depth + 1)
   }
 
   if (keys.length > MAX_POSTGRES_LOG_OBJECT_KEYS)
@@ -654,7 +640,7 @@ function serializePostgresAggregateErrors(
   const errors: Record<string, unknown>[] = []
   for (let index = 0; index < boundedLength; index++) {
     errors.push(serializePostgresError(
-      readOwnLogProperty(aggregateErrors, index),
+      readErrorProperty(aggregateErrors, index),
       seen,
       depth + 1,
     ))
