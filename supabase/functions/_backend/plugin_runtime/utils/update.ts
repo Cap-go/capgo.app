@@ -28,6 +28,9 @@ import { isUpdateEnumerationLimited, recordUpdateEnumerationMiss, updateEnumerat
 import { backgroundTask, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, fixSemver, isDeprecatedPluginVersion, isInternalVersionName } from './utils.ts'
 
 const PLAN_LIMIT: Array<'mau' | 'bandwidth' | 'storage'> = ['mau', 'bandwidth']
+// Bound speculative channel prefetch wait so a hung second Hyperdrive client
+// cannot stall /updates after owner is already ready.
+const CHANNEL_PREFETCH_WAIT_MS = 50
 const CHANNEL_SELF_STORE_MIN_V5 = '5.34.0'
 const CHANNEL_SELF_STORE_MIN_V6 = '6.34.0'
 const CHANNEL_SELF_STORE_MIN_V7 = '7.34.0'
@@ -323,6 +326,14 @@ export async function updateWithPG(
       return providerBlockedResponse
   }
 
+  // Reject obviously invalid payloads before starting speculative DB work.
+  if (body.version_build === 'unknown') {
+    return updateError200(c, 'unknown_version_build', 'Version build is unknown, cannot proceed with update', { body })
+  }
+  if (!app_id || !device_id || !version_build || !version_name || !platform) {
+    return updateError200(c, 'missing_info', 'Cannot find device_id or app_id')
+  }
+
   // Overlap owner lookup with default-channel prefetch on a second Hyperdrive
   // client when app-status cache already says cloud. Cuts Request Duration by
   // one serial replica RTT on the common path (CF chart != waitUntil).
@@ -406,9 +417,6 @@ export async function updateWithPG(
   const isDeprecated = isDeprecatedPluginVersion(pluginVersion)
   // Ensure there is manifest and the plugin version support manifest fetching (v5.10.0+, v6.25.0+, v7.0.35+)
   const fetchManifestEntries = manifestBundleCount > 0 && !isDeprecatedPluginVersion(pluginVersion, undefined, undefined, BROTLI_MIN_UPDATER_VERSION_V7)
-  if (body.version_build === 'unknown') {
-    return updateError200(c, 'unknown_version_build', 'Version build is unknown, cannot proceed with update', { body })
-  }
   const coerce = tryParse(fixSemver(body.version_build))
   if (!coerce) {
     // get app owner with app_id
@@ -442,20 +450,27 @@ export async function updateWithPG(
       app_id_url: app_id,
     }, appOwner.owner_org, app_id, '0 0 * * 1', appOwner.orgs.management_email, drizzleClient))
   }
-  if (!app_id || !device_id || !version_build || !version_name || !platform) {
-    return updateError200(c, 'missing_info', 'Cannot find device_id or app_id')
-  }
-
   await backgroundTask(c, createStatsMau(c, device_id, app_id, appOwner.owner_org, platform, version_build))
 
 
   // Only query link/comment if plugin supports it (v5.35.0+, v6.35.0+, v7.35.0+, v8.35.0+) AND app has expose_metadata enabled
   const needsMetadata = appOwner.expose_metadata && !isDeprecatedPluginVersion(pluginVersion, '5.35.0', '6.35.0', '7.35.0', '8.35.0')
 
-  // Consume prefetch only after owner gates — a hung second client must not
-  // delay early exits (plan/onprem/semver). Fail open to serial requestInfos.
+  // Consume prefetch only after owner gates. Bound wait so a stalled second
+  // client cannot hold /updates; fail open to serial requestInfos.
   try {
-    prefetchedChannel = await channelPrefetchPromise
+    let settled = false
+    prefetchedChannel = await Promise.race([
+      channelPrefetchPromise.then((value) => {
+        settled = true
+        return value
+      }),
+      new Promise<null>((resolve) => {
+        setTimeout(() => resolve(null), CHANNEL_PREFETCH_WAIT_MS)
+      }),
+    ])
+    if (!settled)
+      prefetchedChannel = null
   }
   catch {
     prefetchedChannel = null
