@@ -52,9 +52,25 @@ function serializeBody(body: CapgoApiInvokeOptions['body']): BodyInit | undefine
   return JSON.stringify(body)
 }
 
+function isPostgresUniqueViolation(message: string): boolean {
+  return message.includes('23505')
+    || /duplicate key value violates unique constraint/i.test(message)
+}
+
+/** Prefer Postgres unique-violation codes nested under Capgo API `moreInfo`. */
 export async function getCapgoApiErrorCode(error: unknown): Promise<string | undefined> {
   if (error instanceof FunctionsHttpError && error.context instanceof Response) {
-    const body = await error.context.clone().json().catch(() => null) as { code?: string, error?: string } | null
+    const body = await error.context.clone().json().catch(() => null) as {
+      code?: string
+      error?: string
+      moreInfo?: { code?: string, error?: unknown }
+    } | null
+    const nestedCode = body?.moreInfo?.code
+    if (typeof nestedCode === 'string')
+      return nestedCode
+    const nestedError = body?.moreInfo?.error
+    if (typeof nestedError === 'string' && isPostgresUniqueViolation(nestedError))
+      return '23505'
     if (typeof body?.code === 'string')
       return body.code
     if (typeof body?.error === 'string')
