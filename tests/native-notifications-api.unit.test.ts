@@ -15,6 +15,7 @@ const {
 }))
 
 vi.mock('../supabase/functions/_backend/utils/hono_middleware.ts', () => ({
+  middlewareAuth: () => async (_c: unknown, next: () => Promise<void>) => next(),
   middlewareKey: () => async (_c: unknown, next: () => Promise<void>) => next(),
   middlewareV2: () => async (_c: unknown, next: () => Promise<void>) => next(),
 }))

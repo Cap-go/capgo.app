@@ -4,7 +4,7 @@ import type { NativeNotificationEvent, NativeNotificationPlatform, NativeNotific
 import type { Permission } from '../../utils/rbac.ts'
 import { sql } from 'drizzle-orm'
 import { BRES, createHono, parseBody, quickError, simpleError, simpleRateLimit, useCors } from '../../utils/hono.ts'
-import { middlewareKey } from '../../utils/hono_middleware.ts'
+import { middlewareAuth } from '../../utils/hono_middleware.ts'
 import {
   createNotificationEventProof,
   createNotificationIdentityProof,
@@ -682,7 +682,7 @@ app.post('/sync', async (c) => {
   })
 })
 
-app.post('/recipients/proof', middlewareKey(), async (c) => {
+app.post('/recipients/proof', middlewareAuth(), async (c) => {
   const body = await parseBody<RecipientProofBody>(c)
   const appId = assertString(body.appId, 'appId', 128)
   const externalId = assertString(body.externalId, 'externalId', 512)
@@ -690,7 +690,7 @@ app.post('/recipients/proof', middlewareKey(), async (c) => {
   return c.json({ identityProof: await createNotificationIdentityProof(c, appId, externalId) })
 })
 
-app.post('/recipients/lookup', middlewareKey(), async (c) => {
+app.post('/recipients/lookup', middlewareAuth(), async (c) => {
   const body = await parseBody<{ appId: string, externalId?: string, recipientKey?: string, limit?: number }>(c)
   const appId = assertString(body.appId, 'appId', 128)
   await assertAppPermission(c, NOTIFICATION_MANAGE_PERMISSION, appId)
@@ -701,18 +701,18 @@ app.post('/recipients/lookup', middlewareKey(), async (c) => {
   return c.json({ recipientKey, devices: devices.map(publicDevice), count: devices.length })
 })
 
-app.get('/settings', middlewareKey(), async (c) => {
+app.get('/settings', middlewareAuth(), async (c) => {
   const appId = assertString(c.req.query('app_id'), 'app_id', 128)
   await assertAppPermission(c, NOTIFICATION_MANAGE_PERMISSION, appId)
   return c.json(await getNotificationSettings(c, appId))
 })
 
-app.put('/settings', middlewareKey(), async (c) => {
+app.put('/settings', middlewareAuth(), async (c) => {
   const body = await parseBody<SettingsBody>(c)
   return c.json(await upsertNotificationSettings(c, body))
 })
 
-app.post('/badge', middlewareKey(), async (c) => {
+app.post('/badge', middlewareAuth(), async (c) => {
   const body = await parseBody<BadgeBody>(c)
   const appId = assertString(body.appId, 'appId', 128)
   await assertAppPermission(c, NOTIFICATION_MANAGE_PERMISSION, appId)
@@ -740,7 +740,7 @@ app.post('/badge', middlewareKey(), async (c) => {
   return c.json({ ...BRES, campaignId, queued, queuedBuckets: plan.buckets.length, targeted: null, badgeRevision })
 })
 
-app.post('/update-check', middlewareKey(), async (c) => {
+app.post('/update-check', middlewareAuth(), async (c) => {
   const body = await parseBody<UpdateCheckBody>(c)
   const appId = assertString(body.appId, 'appId', 128)
   await assertAppPermission(c, NOTIFICATION_MANAGE_PERMISSION, appId)
@@ -792,7 +792,7 @@ app.post('/update-check', middlewareKey(), async (c) => {
   return c.json({ ...BRES, campaignId, queued, queuedBuckets: plan.buckets.length, targeted: null })
 })
 
-app.post('/send', middlewareKey(), async (c) => {
+app.post('/send', middlewareAuth(), async (c) => {
   const body = await parseBody<SendBody>(c)
   const appId = assertString(body.appId, 'appId', 128)
   await assertAppPermission(c, NOTIFICATION_MANAGE_PERMISSION, appId)
@@ -828,7 +828,7 @@ app.post('/send', middlewareKey(), async (c) => {
   return c.json({ ...BRES, campaignId, queued, queuedBuckets: plan.buckets.length, targeted: null })
 })
 
-app.get('/campaigns', middlewareKey(), async (c) => {
+app.get('/campaigns', middlewareAuth(), async (c) => {
   const appId = assertString(c.req.query('app_id'), 'app_id', 128)
   await assertAppPermission(c, NOTIFICATION_MANAGE_PERMISSION, appId)
   let pgClient: ReturnType<typeof getPgClient> | undefined
@@ -850,12 +850,12 @@ app.get('/campaigns', middlewareKey(), async (c) => {
   }
 })
 
-app.post('/campaigns', middlewareKey(), async (c) => {
+app.post('/campaigns', middlewareAuth(), async (c) => {
   const body = await parseBody<CampaignBody>(c)
   return c.json(await createCampaignRecord(c, body))
 })
 
-app.get('/stats', middlewareKey(), async (c) => {
+app.get('/stats', middlewareAuth(), async (c) => {
   const appId = assertString(c.req.query('app_id'), 'app_id', 128)
   await assertAppPermission(c, NOTIFICATION_MANAGE_PERMISSION, appId)
   const days = Number(c.req.query('days') ?? 30)
@@ -864,7 +864,7 @@ app.get('/stats', middlewareKey(), async (c) => {
   return c.json({ data })
 })
 
-app.get('/providers', middlewareKey(), async (c) => {
+app.get('/providers', middlewareAuth(), async (c) => {
   const appId = assertString(c.req.query('app_id'), 'app_id', 128)
   await assertAppPermission(c, NOTIFICATION_MANAGE_PERMISSION, appId)
   let pgClient: ReturnType<typeof getPgClient> | undefined
@@ -885,7 +885,7 @@ app.get('/providers', middlewareKey(), async (c) => {
   }
 })
 
-app.put('/providers', middlewareKey(), async (c) => {
+app.put('/providers', middlewareAuth(), async (c) => {
   const body = await parseBody<ProviderBody>(c)
   const appId = assertString(body.appId, 'appId', 128)
   await assertAppPermission(c, NOTIFICATION_MANAGE_PERMISSION, appId)
