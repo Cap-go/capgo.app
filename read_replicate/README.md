@@ -4,6 +4,30 @@ These scripts manage the Supabase-to-Google Cloud SQL subscriber. Google then
 replicates this subscriber to the regional read replicas, so reconciliation
 always targets only this database.
 
+
+## Supabase Postgres upgrade
+
+Capgo-EU blocks upgrades while the active logical slot `capgo_google_eu_2_slot`
+exists. Use the premade bun commands (they load
+`internal/cloudflare/.env.prod`; no exports needed):
+
+```bash
+# 1) Drop Google subscription + Supabase slot (unblocks dashboard upgrade)
+bun run readreplicate:upgrade:teardown
+
+# 2) Run the Supabase Postgres upgrade in the Capgo-EU dashboard, wait healthy
+
+# 3) Rebuild subscriber data + recreate slot/subscription (WAL was wiped)
+bun run readreplicate:upgrade:reconnect
+
+# 4) Verify lag / active slot
+bun run readreplicate:status
+```
+
+`upgrade:reconnect` always runs a full reset (`READ_REPLICA_FULL_RESET=1`)
+because a Postgres upgrade invalidates WAL continuity. Do not use
+subscription-only reconnect after an upgrade.
+
 ## Release reconciliation
 
 The release job rebuilds the selected schema catalog from the checked-out local

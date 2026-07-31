@@ -7,6 +7,13 @@
 REPLICA_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPLICA_ENV_FILE="${REPLICA_ENV_FILE:-${REPLICA_SCRIPT_DIR}/../internal/cloudflare/.env.prod}"
 
+# Capgo production defaults for the single Google Cloud SQL eu-2 subscriber.
+# DB URLs come from .env.prod; names are fixed so bun scripts need zero exports.
+: "${READ_REPLICA_PUBLICATION_NAME:=capgo_google_eu_2_pub}"
+: "${READ_REPLICA_SUBSCRIPTION_NAME:=capgo_google_eu_2}"
+: "${READ_REPLICA_SLOT_NAME:=capgo_google_eu_2_slot}"
+: "${READ_REPLICA_REGION:=eu_2}"
+
 REPLICA_TABLES=(
   "orgs"
   "stripe_info"
@@ -334,14 +341,18 @@ discover_publication_name() {
   existing=$(psql-17 "$SOURCE_DB_URL" -t -A -c "
     SELECT pubname
     FROM pg_publication
-    WHERE pubname = 'capgo_google_replicate'
+    WHERE pubname IN ('capgo_google_eu_2_pub', 'capgo_google_replicate')
+    ORDER BY CASE pubname
+      WHEN 'capgo_google_eu_2_pub' THEN 0
+      ELSE 1
+    END
     LIMIT 1;
   " 2>/dev/null || true)
 
   if [[ -n "$existing" ]]; then
     printf "%s" "$existing"
   else
-    printf "%s" "capgo_google_replicate"
+    printf "%s" "capgo_google_eu_2_pub"
   fi
 }
 
