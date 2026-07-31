@@ -250,25 +250,38 @@ function buildUpdateFields(body: OrganizationPutBody, sanitizedName?: string) {
 }
 
 async function sanitizeOrgNameForSync(
-  supabase: ReturnType<typeof supabaseApikey>,
+  c: Context<MiddlewareKeyVariables>,
   name: string,
 ) {
-  const { data, error } = await supabase.rpc('strip_html', { input: name })
+  // Direct SQL avoids Kong/PostgREST upstream flakes under parallel test load.
+  const pgPool = getPgClient(c)
+  let client: PgTransactionClient | null = null
+  try {
+    client = await pgPool.connect() as PgTransactionClient
+    const result = await client.query<{ strip_html: string | null }>(
+      'SELECT public.strip_html($1) AS strip_html',
+      [name],
+    )
+    const data = result.rows[0]?.strip_html
+    if (data === null || data === undefined) {
+      throw simpleError('cannot_update_org', 'Cannot update org', {
+        error: 'cannot_sanitize_org_name',
+      })
+    }
 
-  if (error || data === null) {
-    throw simpleError('cannot_update_org', 'Cannot update org', {
-      error: error?.message ?? 'cannot_sanitize_org_name',
-    })
+    const sanitizedName = data.trim()
+    if (!sanitizedName) {
+      throw simpleError('invalid_body', 'Invalid body', {
+        error: 'sanitized_name_empty',
+      })
+    }
+
+    return sanitizedName
   }
-
-  const sanitizedName = data.trim()
-  if (!sanitizedName) {
-    throw simpleError('invalid_body', 'Invalid body', {
-      error: 'sanitized_name_empty',
-    })
+  finally {
+    client?.release()
+    await closeClient(c, pgPool)
   }
-
-  return sanitizedName
 }
 
 async function enforceSelf2faRequirement(authUserId: string, c: Context<MiddlewareKeyVariables>) {
@@ -361,20 +374,28 @@ function buildExpectedCurrentFields(
 }
 
 async function getOrgForNameSync(
-  supabase: ReturnType<typeof supabaseApikey>,
+  c: Context<MiddlewareKeyVariables>,
   orgId: string,
 ): Promise<OrgRow> {
-  const { error, data } = await supabase
-    .from('orgs')
-    .select('*')
-    .eq('id', orgId)
-    .single()
-
-  if (error) {
-    throw simpleError('cannot_get_org', 'Cannot get org', { error: error.message })
+  // Direct SQL avoids Kong/PostgREST upstream flakes under parallel test load.
+  const pgPool = getPgClient(c)
+  let client: PgTransactionClient | null = null
+  try {
+    client = await pgPool.connect() as PgTransactionClient
+    const result = await client.query<OrgRow>(
+      'SELECT * FROM public.orgs WHERE id = $1::uuid LIMIT 1',
+      [orgId],
+    )
+    const data = result.rows[0]
+    if (!data) {
+      throw simpleError('cannot_get_org', 'Cannot get org', { error: 'org_not_found' })
+    }
+    return data
   }
-
-  return data
+  finally {
+    client?.release()
+    await closeClient(c, pgPool)
+  }
 }
 
 function getErrorDetail(error: unknown) {
@@ -417,12 +438,12 @@ export async function put(
   validateMaxExpirationDays(body.max_apikey_expiration_days)
   validateRequiredEncryptionKey(body.required_encryption_key)
   const sanitizedOrgName = body.name !== undefined
-    ? await sanitizeOrgNameForSync(supabase, body.name)
+    ? await sanitizeOrgNameForSync(c, body.name)
     : undefined
   const updateFields = buildUpdateFields(body, sanitizedOrgName)
   const shouldSyncStripeName = body.name !== undefined
   const currentOrg = shouldSyncStripeName
-    ? await getOrgForNameSync(supabase, body.orgId)
+    ? await getOrgForNameSync(c, body.orgId)
     : null
 
   const dataOrg: Database['public']['Tables']['orgs']['Row'] = await updateOrg(c, auth, body.orgId, updateFields, {
