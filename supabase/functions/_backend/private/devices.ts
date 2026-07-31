@@ -27,6 +27,8 @@ interface DataDevice {
   cursor?: string
   /** Limit for results (default 1000) */
   limit?: number
+  updated_at_gt?: string
+  updated_at_lte?: string
 }
 
 const orderItemSchema = z.object({
@@ -48,6 +50,8 @@ const devicesBodySchema = z.object({
   order: z.array(orderItemSchema).optional(),
   cursor: cursorSchema.optional(),
   limit: queryLimitSchema.optional(),
+  updated_at_gt: z.string().min(1).max(64).optional(),
+  updated_at_lte: z.string().min(1).max(64).optional(),
 })
 
 export const app = new Hono<MiddlewareKeyVariables>()
@@ -83,7 +87,10 @@ app.post('/', middlewareAuth(), async (c) => {
         devicesIds,
         body.versionName,
         body.search?.trim(),
-        body.platform,
+        {
+          platform: body.platform,
+          updatedAt: { gt: body.updated_at_gt, lte: body.updated_at_lte },
+        },
       ),
     })
   }
@@ -97,5 +104,7 @@ app.post('/', middlewareAuth(), async (c) => {
     order: body.order,
     cursor: body.cursor,
     limit: body.limit,
+    updated_at_gt: body.updated_at_gt,
+    updated_at_lte: body.updated_at_lte,
   }, body.customIdMode ?? false))
 })
