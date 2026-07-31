@@ -325,8 +325,27 @@ async function queueChannelUpdateNotification() {
   toast.success(t('notification-update-push-success'))
 }
 
+async function isPushUpdateReady() {
+  try {
+    const query = encodeURIComponent(packageId.value)
+    const [settings, providersResponse] = await Promise.all([
+      notificationFetch<{ pushUpdateEnabled: boolean }>(`/settings?app_id=${query}`),
+      notificationFetch<{ data: Array<{ status: string }> }>(`/providers?app_id=${query}`),
+    ])
+    if (!settings.pushUpdateEnabled)
+      return false
+    return (providersResponse.data || []).some(provider => provider.status === 'configured')
+  }
+  catch {
+    // No permission, network error, or notifications unavailable — skip prompt.
+    return false
+  }
+}
+
 async function askUpdateNotificationAfterBundleChange() {
   if (!channel.value)
+    return
+  if (!(await isPushUpdateReady()))
     return
 
   dialogStore.openDialog({
