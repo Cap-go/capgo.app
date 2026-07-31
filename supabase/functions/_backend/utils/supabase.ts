@@ -7,7 +7,7 @@ import type { DeviceWithoutCreatedAt, NativeVersionUsage, Order, ReadDevicesPara
 import { createClient } from '@supabase/supabase-js'
 import { buildBillingPlanBentoTags } from './billing_bento_tags.ts'
 import { buildNormalizedDeviceForWrite, hasComparableDeviceChanged, nullableString } from './deviceComparison.ts'
-import { simpleError } from './hono.ts'
+import { simpleError, quickError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { closeClient, getPgClient } from './pg.ts'
 import { emptyStatsInsights, normalizeStatsInsightsResult } from './statsInsights.ts'
@@ -1751,7 +1751,17 @@ export async function checkKey(c: Context, authorization: string | undefined, su
       .rpc('find_apikey_by_value', { key_value: authorization })
       .single()
 
-    if (error || !data) {
+    if (error) {
+      // Kong/PostgREST overload must not look like a bad key (flaky 401s in CI).
+      const message = error.message ?? ''
+      if (message.includes('invalid response was received from the upstream server') || message.includes('502') || message.includes('503') || message.includes('upstream')) {
+        cloudlog({ requestId: c.get('requestId'), message: 'Apikey lookup upstream failure', authorizationPrefix: authorization?.substring(0, 8), error })
+        throw quickError(503, 'upstream_unavailable', 'Upstream unavailable', { error: message })
+      }
+      cloudlog({ requestId: c.get('requestId'), message: 'Invalid apikey', authorizationPrefix: authorization?.substring(0, 8), error })
+      return null
+    }
+    if (!data) {
       cloudlog({ requestId: c.get('requestId'), message: 'Invalid apikey', authorizationPrefix: authorization?.substring(0, 8), error })
       return null
     }

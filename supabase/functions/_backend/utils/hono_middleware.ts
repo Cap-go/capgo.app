@@ -449,7 +449,10 @@ async function foundAPIKey(c: Context, capgkeyString: string) {
   const subkey_id = await getSubkeyId(c)
 
   cloudlog({ requestId: c.get('requestId'), message: 'Capgkey provided', capgkeyPrefix: maskSecret(capgkeyString) })
-  const apikey = await resolveApiKey(c, capgkeyString, false)
+  // Prefer direct Postgres. PostgREST/Kong under parallel Vitest load returns
+  // upstream errors that were previously misclassified as invalid_apikey 401
+  // (flaky organization-api on backend shard 5/6).
+  const apikey = await resolveApiKey(c, capgkeyString, true)
   if (!apikey) {
     cloudlog({ requestId: c.get('requestId'), message: 'Invalid apikey', capgkeyPrefix: maskSecret(capgkeyString) })
     // Record failed auth attempt - await to ensure accurate counting

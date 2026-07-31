@@ -565,20 +565,67 @@ export async function createAppVersions(
   appId: string,
   values: Partial<Database['public']['Tables']['app_versions']['Insert']> = {},
 ) {
-  const supabase = getSupabaseClient()
-  const { error, data } = await supabase.from('app_versions').upsert({
-    app_id: appId,
-    name: version,
-    owner_org: ORG_ID,
-    ...values,
-  }, {
-    onConflict: 'app_id,name',
-  }).select('id,name').single()
-  if (error)
-    console.error(`Error creating app_version for ${version}:`, error)
+  // Bypass PostgREST/Kong for seed writes. Under shard parallelism Kong returns
+  // "An invalid response was received from the upstream server" and Vitest sees
+  // intermittent "no data" failures (backend shard 5/6 + stats.download_fail).
+  const ownerOrg = values.owner_org ?? (await executeSQL(
+    'SELECT owner_org FROM public.apps WHERE app_id = $1 LIMIT 1',
+    [appId],
+  ))[0]?.owner_org ?? ORG_ID
+
+  const deleted = values.deleted ?? false
+  const externalUrl = values.external_url ?? null
+  const checksum = values.checksum ?? null
+  const sessionKey = values.session_key ?? null
+  const storageProvider = values.storage_provider ?? 'r2'
+  const minUpdateVersion = values.min_update_version ?? null
+  const r2Path = values.r2_path ?? null
+  const link = values.link ?? null
+  const comment = values.comment ?? null
+  const userId = values.user_id ?? null
+
+  const rows = await executeSQL(
+    `INSERT INTO public.app_versions (
+       app_id, name, owner_org, deleted, external_url, checksum, session_key,
+       storage_provider, min_update_version, r2_path, link, comment, user_id
+     ) VALUES (
+       $1, $2, $3::uuid, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::uuid
+     )
+     ON CONFLICT (name, app_id) DO UPDATE SET
+       owner_org = EXCLUDED.owner_org,
+       deleted = EXCLUDED.deleted,
+       external_url = EXCLUDED.external_url,
+       checksum = EXCLUDED.checksum,
+       session_key = EXCLUDED.session_key,
+       storage_provider = EXCLUDED.storage_provider,
+       min_update_version = EXCLUDED.min_update_version,
+       r2_path = EXCLUDED.r2_path,
+       link = EXCLUDED.link,
+       comment = EXCLUDED.comment,
+       user_id = COALESCE(EXCLUDED.user_id, public.app_versions.user_id),
+       updated_at = now()
+     RETURNING id, name`,
+    [
+      appId,
+      version,
+      ownerOrg,
+      deleted,
+      externalUrl,
+      checksum,
+      sessionKey,
+      storageProvider,
+      minUpdateVersion,
+      r2Path,
+      link,
+      comment,
+      userId,
+    ],
+  )
+
+  const data = rows[0]
   if (!data)
     throw new Error(`Error creating app_version for ${version}: no data`)
-  return data
+  return { id: Number(data.id), name: String(data.name) }
 }
 
 export function getBaseData(appId: string): Partial<ReturnType<typeof makeBaseData>> {
