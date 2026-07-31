@@ -959,9 +959,14 @@ export async function countDevicesCF(
   deviceIds: string[] = [],
   versionName?: string,
   search?: string,
-  platform?: Database['public']['Enums']['platform_os'],
+  options?: {
+    platform?: Database['public']['Enums']['platform_os']
+    updatedAt?: { gt?: string, lte?: string }
+  },
 ) {
   // Use Analytics Engine DEVICE_INFO for counting devices
+  const platform = options?.platform
+  const updatedAt = options?.updatedAt
   const conditions = [`index1 = '${escapeSqlString(app_id)}'`]
 
   if (deviceIds.length) {
@@ -970,6 +975,11 @@ export async function countDevicesCF(
     else
       conditions.push(`blob1 IN (${deviceIds.map(id => `'${escapeSqlString(id)}'`).join(', ')})`)
   }
+
+  if (updatedAt?.gt)
+    conditions.push(`timestamp > toDateTime('${escapeSqlString(formatDateCF(updatedAt.gt))}')`)
+  if (updatedAt?.lte)
+    conditions.push(`timestamp <= toDateTime('${escapeSqlString(formatDateCF(updatedAt.lte))}')`)
 
   // Match latest aggregated fields for current-state filtering (same as Supabase devices table).
   // customIdMode must use aggregated custom_id so historical non-empty blob5 rows
@@ -1085,6 +1095,12 @@ function buildReadDevicesCFUpdatedAtGtCondition(updatedAtGt: string | undefined)
   const safeUpdatedAtGt = escapeSqlString(formatDateCF(updatedAtGt))
   return `updated_at > toDateTime('${safeUpdatedAtGt}')`
 }
+function buildReadDevicesCFUpdatedAtLteCondition(updatedAtLte: string | undefined) {
+  if (!updatedAtLte)
+    return ''
+  const safeUpdatedAtLte = escapeSqlString(formatDateCF(updatedAtLte))
+  return `updated_at <= toDateTime('${safeUpdatedAtLte}')`
+}
 
 function buildReadDevicesCFCustomIdsCondition(customIds: string[] | undefined) {
   if (!customIds?.length)
@@ -1123,6 +1139,7 @@ function buildReadDevicesCFOuterConditions(params: ReadDevicesParams, devicesOrd
   return [
     buildReadDevicesCFCursorCondition(params.cursor, devicesOrder),
     buildReadDevicesCFUpdatedAtGtCondition(params.updated_at_gt),
+    buildReadDevicesCFUpdatedAtLteCondition(params.updated_at_lte),
     // Match the latest aggregated custom_id, not historical event rows.
     customIdMode ? `custom_id != ''` : undefined,
     buildReadDevicesCFCustomIdsCondition(params.customIds),
@@ -1150,6 +1167,11 @@ export function buildReadDevicesCFQuery(params: ReadDevicesParams, customIdMode:
   if (params.updated_at_gt) {
     const safeUpdatedAtGt = escapeSqlString(formatDateCF(params.updated_at_gt))
     conditions.push(`timestamp > toDateTime('${safeUpdatedAtGt}')`)
+  }
+
+  if (params.updated_at_lte) {
+    const safeUpdatedAtLte = escapeSqlString(formatDateCF(params.updated_at_lte))
+    conditions.push(`timestamp <= toDateTime('${safeUpdatedAtLte}')`)
   }
 
   const devicesOrder = getReadDevicesCFOrder(params)
@@ -1372,7 +1394,6 @@ export function resolveUpdateDeliveryTimingDurationMs(event: UpdateDeliveryTimin
   return parseStatsDurationMs(event.metadata)
 }
 
-
 export interface ReadUpdateDeliveryTimingEventsCFParams {
   start_date: string
   end_date: string
@@ -1437,7 +1458,7 @@ export async function readUpdateDeliveryTimingEventsCF(
       duration_ms: number | string | null
       created_at: string
     }>(c, query)
-    return rows.map(row => {
+    return rows.map((row) => {
       const rawDuration = Number(row.duration_ms)
       return {
         app_id: row.app_id,
@@ -1455,7 +1476,6 @@ export async function readUpdateDeliveryTimingEventsCF(
     throw e
   }
 }
-
 
 export interface NativeObservePluginVersionCF {
   plugin_version: string

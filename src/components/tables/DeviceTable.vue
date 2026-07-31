@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import type { TableColumn } from '../comp_def'
+import type { DateRangePreset } from '~/services/dateRange'
 import type { Database } from '~/types/supabase.types'
 import { computed, h, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
+import DateRangePicker from '~/components/DateRangePicker.vue'
 import { formatDate } from '~/services/date'
+import { DEFAULT_DATE_RANGE_PRESET, getDateRangeForPreset } from '~/services/dateRange'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
 
 const props = defineProps<{
@@ -39,6 +42,9 @@ const filters = ref({
   Override: false,
   CustomId: false,
 })
+const initialRange = getDateRangeForPreset(DEFAULT_DATE_RANGE_PRESET)
+const dateRange = ref<[Date, Date] | null>([initialRange.start, initialRange.end])
+const dateRangeMode = ref<DateRangePreset>(DEFAULT_DATE_RANGE_PRESET)
 const selectedPlatform = ref<'' | PlatformOs>('')
 const selectedVersionName = ref(props.versionName ?? '')
 const bundleNames = ref<string[]>([])
@@ -121,6 +127,22 @@ function getSearchTerm() {
   return trimmed.length ? trimmed : undefined
 }
 
+function getDateRangePayload() {
+  if (dateRangeMode.value !== 'custom') {
+    const rolling = getDateRangeForPreset(dateRangeMode.value)
+    return {
+      updated_at_gt: rolling.start.toISOString(),
+      updated_at_lte: rolling.end.toISOString(),
+    }
+  }
+  if (!dateRange.value)
+    return {}
+  return {
+    updated_at_gt: dateRange.value[0].toISOString(),
+    updated_at_lte: dateRange.value[1].toISOString(),
+  }
+}
+
 function getVersionNameFilter() {
   const selected = selectedVersionName.value.trim()
   return selected || undefined
@@ -140,6 +162,7 @@ function getQuerySignature() {
     override: filters.value.Override,
     customIdMode: filters.value.CustomId,
     ids: props.ids ? [...props.ids].sort().join(',') : '',
+    dateRange: getDateRangePayload(),
   })
 }
 
@@ -220,6 +243,7 @@ async function countDevices() {
         search: searchTerm,
         order: getActiveOrder(columns.value),
         customIdMode: filters.value.CustomId,
+        ...getDateRangePayload(),
       }),
     })
 
@@ -347,6 +371,7 @@ async function fetchDevicesPage(cursor: string | undefined | null) {
       cursor: cursor ?? undefined,
       limit: offset,
       customIdMode: filters.value.CustomId,
+      ...getDateRangePayload(),
     }),
   })
 
@@ -526,70 +551,80 @@ watch([selectedPlatform, selectedVersionName], () => {
 </script>
 
 <template>
-  <DataTable
-    v-model:filters="filters" v-model:columns="columns" v-model:current-page="currentPage" v-model:search="search"
-    :total="total" :offset="offset" :element-list="elements"
-    filter-text="Filters"
-    :extra-filter-count="activeExtraFilters"
-    :show-add="showAddButton"
-    :is-loading="isLoading"
-    :search-placeholder="t('search-by-device-id')"
-    @add="handleAddDevice"
-    @reload="reload()"
-    @reset="refreshData()"
-    @clear-extra-filters="clearExtraFilters"
-  >
-    <template #filter-extras>
-      <fieldset>
-        <legend class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
-          {{ t('platform') }}
-        </legend>
-        <div
-          id="device-table-platform-filter"
-          class="grid grid-cols-2 gap-2 sm:grid-cols-4"
-          role="group"
-          :aria-label="t('platform')"
-          data-test="device-platform-filter"
-        >
-          <button
-            v-for="option in platformOptions"
-            :key="option.value || 'all'"
-            type="button"
-            class="min-h-11 rounded-md border px-2 text-sm font-medium transition-colors duration-150 focus:outline-hidden focus:ring-2 focus:ring-azure-500"
-            :class="selectedPlatform === option.value
-              ? 'border-azure-500 bg-azure-500/10 text-azure-700 dark:border-azure-400 dark:bg-azure-400/10 dark:text-azure-200'
-              : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-800'"
-            :aria-pressed="selectedPlatform === option.value"
-            :data-test="`device-platform-${option.value || 'all'}`"
-            @click="selectedPlatform = option.value"
+  <div>
+    <div class="flex justify-end px-3 pt-3">
+      <DateRangePicker
+        v-model="dateRange"
+        v-model:mode="dateRangeMode"
+        compact
+        @apply="refreshData()"
+      />
+    </div>
+    <DataTable
+      v-model:filters="filters" v-model:columns="columns" v-model:current-page="currentPage" v-model:search="search"
+      :total="total" :offset="offset" :element-list="elements"
+      filter-text="Filters"
+      :extra-filter-count="activeExtraFilters"
+      :show-add="showAddButton"
+      :is-loading="isLoading"
+      :search-placeholder="t('search-by-device-id')"
+      @add="handleAddDevice"
+      @reload="reload()"
+      @reset="refreshData()"
+      @clear-extra-filters="clearExtraFilters"
+    >
+      <template #filter-extras>
+        <fieldset>
+          <legend class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+            {{ t('platform') }}
+          </legend>
+          <div
+            id="device-table-platform-filter"
+            class="grid grid-cols-2 gap-2 sm:grid-cols-4"
+            role="group"
+            :aria-label="t('platform')"
+            data-test="device-platform-filter"
           >
-            {{ option.label }}
-          </button>
+            <button
+              v-for="option in platformOptions"
+              :key="option.value || 'all'"
+              type="button"
+              class="min-h-11 rounded-md border px-2 text-sm font-medium transition-colors duration-150 focus:outline-hidden focus:ring-2 focus:ring-azure-500"
+              :class="selectedPlatform === option.value
+                ? 'border-azure-500 bg-azure-500/10 text-azure-700 dark:border-azure-400 dark:bg-azure-400/10 dark:text-azure-200'
+                : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-800'"
+              :aria-pressed="selectedPlatform === option.value"
+              :data-test="`device-platform-${option.value || 'all'}`"
+              @click="selectedPlatform = option.value"
+            >
+              {{ option.label }}
+            </button>
+          </div>
+        </fieldset>
+        <div class="flex w-full flex-col gap-2">
+          <label for="device-table-bundle-filter" class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+            {{ t('bundle') }}
+          </label>
+          <input
+            id="device-table-bundle-filter"
+            v-model="selectedVersionName"
+            list="device-table-bundle-options"
+            type="text"
+            class="d-input d-input-bordered min-h-11 w-full border-slate-200 bg-white text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+            :placeholder="t('all-bundles')"
+            :aria-label="t('bundle')"
+            data-test="device-bundle-filter"
+            autocomplete="off"
+          >
+          <datalist id="device-table-bundle-options">
+            <option
+              v-for="name in bundleNames"
+              :key="name"
+              :value="name"
+            />
+          </datalist>
         </div>
-      </fieldset>
-      <div class="flex w-full flex-col gap-2">
-        <label for="device-table-bundle-filter" class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
-          {{ t('bundle') }}
-        </label>
-        <input
-          id="device-table-bundle-filter"
-          v-model="selectedVersionName"
-          list="device-table-bundle-options"
-          type="text"
-          class="d-input d-input-bordered min-h-11 w-full border-slate-200 bg-white text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
-          :placeholder="t('all-bundles')"
-          :aria-label="t('bundle')"
-          data-test="device-bundle-filter"
-          autocomplete="off"
-        >
-        <datalist id="device-table-bundle-options">
-          <option
-            v-for="name in bundleNames"
-            :key="name"
-            :value="name"
-          />
-        </datalist>
-      </div>
-    </template>
-  </DataTable>
+      </template>
+    </DataTable>
+  </div>
 </template>
