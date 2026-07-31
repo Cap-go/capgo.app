@@ -180,7 +180,13 @@ function mockOrganizationUpdates() {
   const query = vi.fn(async (text: string, params?: unknown[]) => {
     if (text.includes('strip_html')) {
       const raw = String(params?.[0] ?? '')
-      return { rows: [{ strip_html: raw.replace(/<[^>]*>/g, '') }] }
+      // Fixture map only — avoid regex "sanitization" that CodeQL flags.
+      const fixtures: Record<string, string> = {
+        '  <b>New Name</b>  ': '  New Name  ',
+        'New Name': 'New Name',
+        '<b></b>': '',
+      }
+      return { rows: [{ strip_html: fixtures[raw] ?? raw }] }
     }
     if (text.startsWith('SELECT * FROM public.orgs')) {
       const builder = pendingOrganizationSelects.shift()
