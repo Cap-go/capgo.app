@@ -107,6 +107,7 @@ const filterButtonLabel = computed(() => {
 })
 const preciseDates = ref<[Date, Date] | null>(null)
 const rangeMode = ref<DateRangePreset>('1h')
+const logsMinDate = computed(() => new Date(Date.now() - 30 * 24 * 60 * 60 * 1000))
 const autoReload = computed(() => props.autoReload ?? true)
 
 function requestReload() {
@@ -322,8 +323,7 @@ onMounted(() => {
           v-model="preciseDates"
           v-model:mode="rangeMode"
           compact
-          :min-date="new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)"
-          :max-date="new Date()"
+          :min-date="logsMinDate"
           @apply="onRangeApply"
         />
       </div>
