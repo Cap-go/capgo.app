@@ -1532,6 +1532,9 @@ export async function readDevicesSB(c: Context, params: ReadDevicesParams, custo
   if (params.version_name)
     query = query.eq('version_name', params.version_name)
 
+  if (params.platform)
+    query = query.eq('platform', params.platform)
+
   if (params.installSources?.length)
     query = query.in('install_source', params.installSources)
 
@@ -1606,6 +1609,7 @@ export async function countDevicesSB(
   deviceIds: string[] = [],
   versionName?: string,
   search?: string,
+  platform?: Database['public']['Enums']['platform_os'],
 ) {
   let req = supabaseAdmin(c)
     .from('devices')
@@ -1635,6 +1639,9 @@ export async function countDevicesSB(
 
   if (versionName)
     req = req.eq('version_name', versionName)
+
+  if (platform)
+    req = req.eq('platform', platform)
 
   const { count, error } = await req
 
