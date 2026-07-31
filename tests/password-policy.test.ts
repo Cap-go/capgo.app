@@ -10,8 +10,13 @@ const ORG_ID = randomUUID()
 const globalId = randomUUID()
 const name = `Test Password Policy Org ${globalId}`
 const customerId = `cus_test_pwd_${ORG_ID}`
+const USE_CLOUDFLARE = process.env.USE_CLOUDFLARE_WORKERS === 'true'
+const describeSupabaseOnly = describe.skipIf(USE_CLOUDFLARE)
 
 beforeAll(async () => {
+  if (USE_CLOUDFLARE)
+    return
+
   // Create stripe_info for this test org
   const { error: stripeError } = await getSupabaseClient().from('stripe_info').insert({
     customer_id: customerId,
@@ -30,30 +35,23 @@ beforeAll(async () => {
     management_email: TEST_EMAIL,
     created_by: USER_ID,
     customer_id: customerId,
-    use_new_rbac: false, // Compatibility flag is ignored; permissions are RBAC-backed.
   })
   if (error)
     throw error
 
-  // Add user as member of the org
-  const { error: memberError } = await getSupabaseClient().from('org_users').insert({
-    org_id: ORG_ID,
-    user_id: USER_ID,
-    user_right: 'super_admin',
-  })
-  if (memberError)
-    throw memberError
 })
 
 afterAll(async () => {
+  if (USE_CLOUDFLARE)
+    return
+
   // Clean up test organization and stripe_info
   await getSupabaseClient().from('user_password_compliance').delete().eq('org_id', ORG_ID)
-  await getSupabaseClient().from('org_users').delete().eq('org_id', ORG_ID)
   await getSupabaseClient().from('orgs').delete().eq('id', ORG_ID)
   await getSupabaseClient().from('stripe_info').delete().eq('customer_id', customerId)
 })
 
-describe('password Policy Configuration via SDK', () => {
+describeSupabaseOnly('password Policy Configuration via SDK', () => {
   it('enable password policy with all requirements via direct update', async () => {
     const policyConfig = {
       enabled: true,
@@ -206,7 +204,7 @@ describe('password Policy Configuration via SDK', () => {
   })
 })
 
-describe('[POST] /private/validate_password_compliance', () => {
+describeSupabaseOnly('[POST] /private/validate_password_compliance', () => {
   beforeAll(async () => {
     // Enable password policy for testing
     await getSupabaseClient()
@@ -588,7 +586,7 @@ describe('checkOrgReadAccess', () => {
   })
 })
 
-describe('[GET] /private/check_org_members_password_policy', () => {
+describeSupabaseOnly('[GET] /private/check_org_members_password_policy', () => {
   beforeAll(async () => {
     // Enable password policy for testing
     await getSupabaseClient()
@@ -626,7 +624,7 @@ describe('[GET] /private/check_org_members_password_policy', () => {
   })
 })
 
-describe('password Policy Enforcement Integration', () => {
+describeSupabaseOnly('password Policy Enforcement Integration', () => {
   const orgWithPolicyId = randomUUID()
   const orgWithPolicyName = `Pwd Policy Integration Org ${randomUUID()}`
   const orgWithPolicyCustomerId = `cus_pwd_int_${orgWithPolicyId}`
@@ -649,7 +647,6 @@ describe('password Policy Enforcement Integration', () => {
       management_email: TEST_EMAIL,
       created_by: USER_ID,
       customer_id: orgWithPolicyCustomerId,
-      use_new_rbac: false,
       password_policy_config: {
         enabled: true,
         min_length: 10,
@@ -659,38 +656,30 @@ describe('password Policy Enforcement Integration', () => {
       },
     })
 
-    // Add user as member
-    await getSupabaseClient().from('org_users').insert({
-      org_id: orgWithPolicyId,
-      user_id: USER_ID,
-      user_right: 'super_admin',
-    })
   })
 
   afterAll(async () => {
     await getSupabaseClient().from('user_password_compliance').delete().eq('org_id', orgWithPolicyId)
-    await getSupabaseClient().from('org_users').delete().eq('org_id', orgWithPolicyId)
     await getSupabaseClient().from('orgs').delete().eq('id', orgWithPolicyId)
     await getSupabaseClient().from('stripe_info').delete().eq('customer_id', orgWithPolicyCustomerId)
   })
 
-  it('check_min_rights respects password policy with compatibility flag disabled', async () => {
-    // Directly test the compatibility check_min_rights function via RPC
-    const { data, error } = await getSupabaseClient().rpc('check_min_rights', {
-      min_right: 'read',
-      user_id: USER_ID,
-      org_id: orgWithPolicyId,
-      app_id: '' as any,
-      channel_id: 0 as any,
-    })
+  it('RBAC permission checks respect password policy with compatibility flag disabled', async () => {
+    const [result] = await executeSQL(`
+      SELECT public.rbac_check_permission_direct(
+        public.rbac_perm_org_read(),
+        $1::uuid,
+        $2::uuid,
+        NULL::character varying,
+        NULL::bigint,
+        NULL
+      ) AS allowed
+    `, [USER_ID, orgWithPolicyId])
 
-    // The result depends on whether the test user has a compliance record
-    // We're testing that the function works, not the specific result
-    expect(error).toBeNull()
-    expect(typeof data).toBe('boolean')
+    expect(typeof result.allowed).toBe('boolean')
   })
 
-  it('check_min_rights respects password policy (RBAC mode)', async () => {
+  it('RBAC permission checks respect password policy', async () => {
     // Create a dedicated RBAC org with password policy to test the RBAC path
     const orgRbacId = randomUUID()
     const orgRbacCustomerId = `cus_pwd_rbac_${orgRbacId}`
@@ -711,7 +700,6 @@ describe('password Policy Enforcement Integration', () => {
       management_email: TEST_EMAIL,
       created_by: USER_ID,
       customer_id: orgRbacCustomerId,
-      use_new_rbac: true, // RBAC path
       password_policy_config: {
         enabled: true,
         min_length: 10,
@@ -722,30 +710,22 @@ describe('password Policy Enforcement Integration', () => {
     })
     expect(orgError).toBeNull()
 
-    // org_users + role_bindings are created by triggers on org + org_users insert
-    const { error: orgUserError } = await getSupabaseClient().from('org_users').insert({
-      org_id: orgRbacId,
-      user_id: USER_ID,
-      user_right: 'super_admin',
-    })
-    expect(orgUserError).toBeNull()
+    // org_users + role_bindings are created by the org creation trigger for created_by.
 
     try {
-      // check_min_rights routes through RBAC path. Password policy is checked
-      // before the RBAC/legacy fork, so it should still be enforced.
-      const { data, error } = await getSupabaseClient().rpc('check_min_rights', {
-        min_right: 'read',
-        user_id: USER_ID,
-        org_id: orgRbacId,
-        app_id: '' as any,
-        channel_id: 0 as any,
-      })
-      expect(error).toBeNull()
-      expect(typeof data).toBe('boolean')
+      const [result] = await executeSQL(`
+        SELECT public.rbac_check_permission_direct(
+          public.rbac_perm_org_read(),
+          $1::uuid,
+          $2::uuid,
+          NULL::character varying,
+          NULL::bigint,
+          NULL
+        ) AS allowed
+      `, [USER_ID, orgRbacId])
+      expect(typeof result.allowed).toBe('boolean')
     }
     finally {
-      await getSupabaseClient().from('role_bindings').delete().eq('org_id', orgRbacId)
-      await getSupabaseClient().from('org_users').delete().eq('org_id', orgRbacId)
       await getSupabaseClient().from('orgs').delete().eq('id', orgRbacId)
       await getSupabaseClient().from('stripe_info').delete().eq('customer_id', orgRbacCustomerId)
     }
@@ -771,7 +751,7 @@ describe('password Policy Enforcement Integration', () => {
   })
 })
 
-describe('user_password_compliance table', () => {
+describeSupabaseOnly('user_password_compliance table', () => {
   it('can insert compliance record via service role', async () => {
     // Get the policy hash
     const { data: org, error: orgError } = await getSupabaseClient()

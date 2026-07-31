@@ -238,6 +238,7 @@ async function submit(form: {
   expose_metadata: boolean
   allow_preview: boolean
   allow_device_custom_id: boolean
+  block_provider_infra_requests: boolean
   build_timeout_minutes?: number | string
 }) {
   isLoading.value = true
@@ -293,6 +294,14 @@ async function submit(form: {
     // Defensive: avoid flipping the flag if the value is missing/invalid.
     if (typeof form.allow_device_custom_id === 'boolean')
       await updateAllowDeviceCustomId(form.allow_device_custom_id)
+  }
+  catch (error) {
+    toast.error(error as string)
+  }
+
+  try {
+    if (typeof form.block_provider_infra_requests === 'boolean')
+      await updateBlockProviderInfraRequests(form.block_provider_infra_requests)
   }
   catch (error) {
     toast.error(error as string)
@@ -536,6 +545,20 @@ async function updateAllowDeviceCustomId(newAllowDeviceCustomId: boolean) {
   toast.success(t('changed-allow-device-custom-id'))
   if (appRef.value)
     appRef.value.allow_device_custom_id = newAllowDeviceCustomId
+}
+
+async function updateBlockProviderInfraRequests(enabled: boolean) {
+  const current = appRef.value?.block_provider_infra_requests ?? false
+  if (enabled === current)
+    return Promise.resolve()
+
+  const { error } = await supabase.from('apps').update({ block_provider_infra_requests: enabled }).eq('app_id', props.appId)
+  if (error)
+    return Promise.reject(t('cannot-change-block-provider-infra-requests'))
+
+  toast.success(t('changed-block-provider-infra-requests'))
+  if (appRef.value)
+    appRef.value.block_provider_infra_requests = enabled
 }
 
 async function loadChannels() {
@@ -1492,6 +1515,13 @@ async function transferAppOwnership() {
                 :help="t('allow-device-custom-id-help')"
               />
               <FormKit
+                type="checkbox"
+                name="block_provider_infra_requests"
+                :value="appRef?.block_provider_infra_requests ?? false"
+                :label="t('block-provider-infra-requests')"
+                :help="t('block-provider-infra-requests-help')"
+              />
+              <FormKit
                 type="button"
                 :label="t('transfer-app-ownership')"
                 :help="t('change-app-organisation-owner')"
@@ -1552,10 +1582,13 @@ async function transferAppOwnership() {
     <!-- Teleport for Transfer App ID Input -->
     <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions?.title === t('confirm-transfer')" defer to="#dialog-v2-content">
       <div class="w-full">
+        <label for="transfer-app-id-input" class="sr-only">{{ t('type-app-id-to-confirm') }}</label>
         <input
+          id="transfer-app-id-input"
           v-model="transferAppIdInput"
           type="text"
           :placeholder="t('type-app-id-to-confirm')"
+          :aria-label="t('type-app-id-to-confirm')"
           class="w-full p-3 border border-gray-300 rounded-lg dark:text-white dark:bg-gray-800 dark:border-gray-600"
         >
       </div>
@@ -1565,10 +1598,13 @@ async function transferAppOwnership() {
     <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions?.title === t('select-default-upload-channel-header')" defer to="#dialog-v2-content">
       <div class="w-full space-y-3">
         <template v-if="uploadChannelOptions.length">
+          <label for="upload-channel-search" class="sr-only">{{ t('default-upload-channel-search-placeholder') }}</label>
           <input
+            id="upload-channel-search"
             v-model="uploadSearch"
             type="text"
             :placeholder="t('default-upload-channel-search-placeholder')"
+            :aria-label="t('default-upload-channel-search-placeholder')"
             class="w-full px-3 py-2 text-sm bg-white border rounded-lg focus:border-blue-500 focus:ring-2 border-slate-200 text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 focus:outline-hidden focus:ring-blue-500/20"
           >
           <div v-if="visibleUploadChannels.length" class="space-y-2">
@@ -1657,10 +1693,13 @@ async function transferAppOwnership() {
               <p class="text-xs text-slate-500 dark:text-slate-300">
                 {{ t('default-download-channel-unified-hint') }}
               </p>
+              <label for="combined-channel-search" class="sr-only">{{ t('default-download-channel-search-placeholder') }}</label>
               <input
+                id="combined-channel-search"
                 v-model="combinedSearch"
                 type="text"
                 :placeholder="t('default-download-channel-search-placeholder')"
+                :aria-label="t('default-download-channel-search-placeholder')"
                 class="w-full px-3 py-2 text-sm bg-white border rounded-lg focus:border-blue-500 focus:ring-2 border-slate-200 text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 focus:outline-hidden focus:ring-blue-500/20"
               >
               <div v-if="visibleCombinedOptions.length" class="space-y-2">

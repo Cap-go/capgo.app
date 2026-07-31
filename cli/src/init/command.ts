@@ -19,28 +19,38 @@ import { canUseFilePicker, openPackageJsonPicker } from '../build/onboarding/fil
 import { getPlatformDirFromCapacitorConfig } from '../build/platform-paths'
 import { uploadBundleInternal } from '../bundle/upload'
 import { addChannelInternal } from '../channel/add'
-import { writeConfigUpdater } from '../config'
+import { getConfigWriteTarget, resolveCapacitorConfigTargetPath, setConfigWriteTarget, writeConfigUpdater } from '../config'
 import { getRepoStarStatus, isRepoStarredInSession, starAllRepositories, starRepository } from '../github'
 import { createKeyInternal } from '../key'
 import { doLoginExists, loginInternal } from '../login'
 import { writeOnboardingSupportBundle, writeSupportBundleFiles } from '../onboarding-support'
-import { contactSupport } from '../support/contact-support'
-import { uploadSupportLogs } from '../support/support-upload'
-import { copyToClipboard, revealInFinder } from '../support/clipboard'
-import { appendInternalLog, getInternalLogPath, startInternalLog } from '../support/internal-log'
 import { showReplicationProgress } from '../replicationProgress'
 import { formatRunnerCommand, splitRunnerCommand } from '../runner-command'
-import { createSupabaseClient, defaultApiHost, findBuildCommandForProjectType, findMainFile, findMainFileForProjectType, findProjectType, findRoot, findSavedKey, findSavedKeySilent, formatError, getAllPackagesDependencies, getAppId, getBundleVersion, getConfig, getLocalConfig, getNativeProjectResetAdvice, getOrganizationListWithPermission, getPackageScripts, getPMAndCommand, hasCliPermission, PACKNAME, projectIsMonorepo, resolveUserIdFromApiKey, updateConfigbyKey, updateConfigUpdater, validateIosUpdaterSync } from '../utils'
+import { copyToClipboard, revealInFinder } from '../support/clipboard'
+import { contactSupport } from '../support/contact-support'
+import { appendInternalLog, getInternalLogPath, startInternalLog } from '../support/internal-log'
+import { uploadSupportLogs } from '../support/support-upload'
+import { consoleWebUrl, createSupabaseClient, defaultApiHost, findBuildCommandForProjectType, findMainFile, findMainFileForProjectType, findProjectType, findRoot, findSavedKey, findSavedKeySilent, formatError, getAllPackagesDependencies, getAppId, getBundleVersion, getConfig, getConfigForWrite, getLocalConfig, getNativeProjectResetAdvice, getOrganizationListWithPermission, getPackageScripts, getPMAndCommand, hasCliPermission, PACKNAME, projectIsMonorepo, resolveUserIdFromApiKey, updateConfigbyKey, updateConfigUpdater, validateIosUpdaterSync } from '../utils'
 import { buildAppIdConflictSuggestions, isAppAlreadyExistsError } from './app-conflict'
 import { cancel as pCancel, confirm as pConfirm, intro as pIntro, isCancel as pIsCancel, log as pLog, outro as pOutro, select as pSelect, spinner as pSpinner, text as pText } from './prompts'
-import { appendInitStreamingLine, clearInitStreamingOutput, setInitCodeDiff, setInitEncryptionSummary, setInitVersionWarning, startInitStreamingOutput, stopInitInkSession, updateInitStreamingStatus } from './runtime'
 import { finishActiveCliReplay, getActiveCliReplaySessionId, isCliTelemetryDisabled, startInitReplay } from './replay'
+import { appendInitStreamingLine, clearInitStreamingOutput, setInitCodeDiff, setInitEncryptionSummary, setInitVersionWarning, startInitStreamingOutput, stopInitInkSession, updateInitStreamingStatus } from './runtime'
 import { formatInitResumeMessage, initOnboardingSteps, renderInitOnboardingComplete, renderInitOnboardingFrame, renderInitOnboardingWelcome } from './ui'
 import { CAPGO_UPDATER_PACKAGE, getUpdaterInstallState } from './updater'
 
 interface SuperOptions extends Options {
   analytics?: boolean
+  capacitorConfig?: string
   local: boolean
+  mainFile?: string
+  packageJson?: string
+}
+
+interface InitTargetPaths {
+  pathToPackageJson?: string
+  capacitorConfigPath?: string
+  configLoadDir?: string
+  mainFilePath?: string
 }
 
 export type RunDeviceCancelHandler = () => Promise<never>
@@ -102,6 +112,9 @@ interface InitAutoTestChange {
   displayPath: string
   kind: InitAutoTestChangeKind
 }
+let globalCapacitorConfigPath: string | undefined
+let globalConfigLoadDir: string | undefined
+let globalMainFilePath: string | undefined
 
 let tmpObject: tmp.FileResult['name'] | undefined
 let globalPathToPackageJson: string | undefined
@@ -112,6 +125,102 @@ let globalDelta = false
 let globalCurrentVersion: string | undefined
 let globalAppId: string | undefined
 let globalSupaHost: string | undefined
+
+export function resolveInitTargetPath(value: string | undefined, label: string, initialCwd = cwd()): string | undefined {
+  if (!value)
+    return undefined
+
+  const resolved = path.resolve(initialCwd, value)
+  if (!existsSync(resolved) || !statSync(resolved).isFile())
+    throw new Error(`${label} does not exist: ${resolved}`)
+
+  const workspaceRoot = realpathSync(initialCwd)
+  const target = realpathSync(resolved)
+  const pathFromWorkspace = path.relative(workspaceRoot, target)
+  if (pathFromWorkspace === '..' || pathFromWorkspace.startsWith(`..${path.sep}`) || path.isAbsolute(pathFromWorkspace))
+    throw new Error(`${label} must stay within the current working directory: ${resolved}`)
+  return resolved
+}
+
+function resolveInitDirectoryPath(value: string | undefined, initialCwd: string): string | undefined {
+  if (!value)
+    return undefined
+
+  const resolved = path.resolve(initialCwd, value)
+  if (!existsSync(resolved) || !statSync(resolved).isDirectory())
+    return undefined
+
+  const workspaceRoot = realpathSync(initialCwd)
+  const target = realpathSync(resolved)
+  const pathFromWorkspace = path.relative(workspaceRoot, target)
+  if (pathFromWorkspace === '..' || pathFromWorkspace.startsWith(`..${path.sep}`) || path.isAbsolute(pathFromWorkspace))
+    return undefined
+  return resolved
+}
+
+export function resolveResumedInitTargets(currentTargets: InitTargetPaths, savedTargets: Partial<InitTargetPaths>, initialCwd = cwd()): InitTargetPaths | undefined {
+  // An explicit config source identifies the app being onboarded. Never merge
+  // it with a checkpoint created for another app in the same workspace.
+  if (currentTargets.capacitorConfigPath) {
+    try {
+      const currentConfigPath = resolveCapacitorConfigTargetPath(currentTargets.capacitorConfigPath, initialCwd)
+      const savedConfigPath = savedTargets.capacitorConfigPath
+        ? resolveCapacitorConfigTargetPath(savedTargets.capacitorConfigPath, initialCwd)
+        : undefined
+      if (!currentConfigPath || currentConfigPath !== savedConfigPath)
+        return undefined
+    }
+    catch {
+      return undefined
+    }
+  }
+
+  const resumedTargets = { ...currentTargets }
+
+  if (!resumedTargets.pathToPackageJson && savedTargets.pathToPackageJson) {
+    try {
+      const packageJsonPath = resolveInitTargetPath(savedTargets.pathToPackageJson, 'Package JSON path', initialCwd)
+      if (!packageJsonPath)
+        return undefined
+      resumedTargets.pathToPackageJson = packageJsonPath
+    }
+    catch {
+      return undefined
+    }
+  }
+
+  if (!resumedTargets.capacitorConfigPath && savedTargets.capacitorConfigPath) {
+    try {
+      const capacitorConfigPath = resolveCapacitorConfigTargetPath(savedTargets.capacitorConfigPath, initialCwd)
+      const configLoadDir = resolveInitDirectoryPath(savedTargets.configLoadDir, initialCwd)
+      if (!capacitorConfigPath || !configLoadDir)
+        return undefined
+      resumedTargets.capacitorConfigPath = capacitorConfigPath
+      resumedTargets.configLoadDir = configLoadDir
+    }
+    catch {
+      return undefined
+    }
+  }
+
+  if (!resumedTargets.mainFilePath && savedTargets.mainFilePath) {
+    try {
+      const mainFilePath = resolveInitTargetPath(savedTargets.mainFilePath, 'Main file path', initialCwd)
+      if (!mainFilePath || !/\.[cm]?[jt]sx?$/.test(mainFilePath))
+        return undefined
+      resumedTargets.mainFilePath = mainFilePath
+    }
+    catch {
+      return undefined
+    }
+  }
+
+  return resumedTargets
+}
+
+function getInitConfigLoadDir(projectDir: string): string {
+  return globalCapacitorConfigPath ? globalConfigLoadDir ?? projectDir : projectDir
+}
 let globalCodeDiff: InitCodeDiff | undefined
 let globalEncryptionSummary: InitEncryptionSummary | undefined
 let globalCurrentStepNumber = 0
@@ -525,7 +634,7 @@ function readInitInternalLogLines(): string[] {
 // .log.gz path → reveal in Finder (macOS) → open a pre-filled mailto. There's
 // no build log in init, so the support bundle carries diagnostics + the
 // internal log only. Every step but "write the bundle" is best-effort.
-async function runInitContactSupport(failureText: string): Promise<void> {
+async function runInitContactSupport(failureText: string, supportPlatform?: PlatformChoice): Promise<void> {
   await contactSupport({
     subject: `Capgo Builder onboarding support — ${globalAppId ?? 'unknown'}`,
     body: `Hi Capgo team,\n\nI hit an error during Capgo Builder onboarding.\n\nApp: ${globalAppId ?? 'unknown'}\nError: ${failureText}`,
@@ -566,7 +675,7 @@ async function runInitContactSupport(failureText: string): Promise<void> {
         return null
       const spinner = pSpinner()
       spinner.start('Uploading your logs to Capgo support…')
-      const r = await uploadSupportLogs({ apiHost: globalSupaHost ?? defaultApiHost, apikey: key, appId: globalAppId, gzPath })
+      const r = await uploadSupportLogs({ apiHost: globalSupaHost ?? defaultApiHost, apikey: key, appId: globalAppId, platform: supportPlatform, gzPath })
       spinner.stop(r ? 'Logs uploaded.' : 'Logs upload unavailable — falling back to attaching the file.')
       return r
     },
@@ -1044,6 +1153,9 @@ function markStepDone(step: number, pathToPackageJson?: string, channelName?: st
       orgName: globalOrgName,
       appId: globalAppId,
       pathToPackageJson: pathToPackageJson ?? globalPathToPackageJson,
+      capacitorConfigPath: globalCapacitorConfigPath,
+      configLoadDir: globalConfigLoadDir,
+      mainFilePath: globalMainFilePath,
       channelName: channelName ?? globalChannelName,
       platform: globalPlatform,
       delta: globalDelta,
@@ -1073,13 +1185,30 @@ interface ResumeResult {
   appId?: string
 }
 
-async function tryResumeOnboarding(apikey: string): Promise<ResumeResult | undefined> {
+async function tryResumeOnboarding(apikey: string, initialTargets: InitTargetPaths, initialCwd: string): Promise<ResumeResult | undefined> {
   try {
     const rawData = readFileSync(getTmpObjectPath(), 'utf-8')
     if (!rawData || rawData.length === 0)
       return undefined
 
-    const { step_done, orgId, orgName, appId: savedAppId, pathToPackageJson, nodeModulesPath, channelName, platform, delta, currentVersion, codeDiff, encryptionSummary, autoTestChange } = JSON.parse(rawData)
+    const {
+      step_done,
+      orgId,
+      orgName,
+      appId: savedAppId,
+      pathToPackageJson,
+      capacitorConfigPath,
+      configLoadDir,
+      mainFilePath,
+      nodeModulesPath,
+      channelName,
+      platform,
+      delta,
+      currentVersion,
+      codeDiff,
+      encryptionSummary,
+      autoTestChange,
+    } = JSON.parse(rawData)
     if (!orgId || !step_done) {
       pLog.warn('⚠️  Found previous onboarding progress, but it was saved in an older format.')
       pLog.info('   Starting fresh. Your previous progress cannot be resumed.')
@@ -1099,9 +1228,27 @@ async function tryResumeOnboarding(apikey: string): Promise<ResumeResult | undef
     })
     await cancelCommand(resumeChoice, orgId, apikey)
     if (resumeChoice === 'yes') {
-      if (pathToPackageJson) {
-        globalPathToPackageJson = pathToPackageJson
+      const resumedTargets = resolveResumedInitTargets(initialTargets, {
+        pathToPackageJson: typeof pathToPackageJson === 'string' ? pathToPackageJson : undefined,
+        capacitorConfigPath: typeof capacitorConfigPath === 'string' ? capacitorConfigPath : undefined,
+        configLoadDir: typeof configLoadDir === 'string' ? configLoadDir : undefined,
+        mainFilePath: typeof mainFilePath === 'string' ? mainFilePath : undefined,
+      }, initialCwd)
+      if (!resumedTargets) {
+        pLog.warn('Saved onboarding targets are no longer available. Starting over.')
+        cleanupStepsDone()
+        globalCodeDiff = undefined
+        setInitCodeDiff(undefined)
+        globalEncryptionSummary = undefined
+        setInitEncryptionSummary(undefined)
+        globalAutoTestChange = undefined
+        return undefined
       }
+      globalPathToPackageJson = resumedTargets.pathToPackageJson
+      globalCapacitorConfigPath = resumedTargets.capacitorConfigPath
+      globalConfigLoadDir = resumedTargets.configLoadDir
+      globalMainFilePath = resumedTargets.mainFilePath
+      setConfigWriteTarget(globalCapacitorConfigPath)
       if (typeof nodeModulesPath === 'string' && nodeModulesPath.length > 0) {
         globalNodeModulesPath = nodeModulesPath
       }
@@ -1246,6 +1393,7 @@ async function selectRecoveryOption<T extends string>(
   message: string,
   options: RecoveryOption<T>[],
   failureText = message,
+  supportPlatform?: PlatformChoice,
 ): Promise<T> {
   type RecoveryChoice = T | '__doctor__' | '__email_support__' | '__support__' | '__cancel__'
 
@@ -1278,7 +1426,7 @@ async function selectRecoveryOption<T extends string>(
     }
 
     if (choice === '__email_support__') {
-      await runInitContactSupport(failureText)
+      await runInitContactSupport(failureText, supportPlatform)
       continue
     }
 
@@ -1432,7 +1580,7 @@ async function saveAppIdToCapacitorConfig(appId: string) {
  */
 async function syncPendingAppIdToCapacitorConfig(appId: string) {
   try {
-    const extConfig = await getConfig()
+    const extConfig = await getConfigForWrite()
     extConfig.config.appId = appId
     extConfig.config.plugins ||= {}
     extConfig.config.plugins.CapacitorUpdater = {
@@ -1718,6 +1866,7 @@ async function maybeReusePendingOnboardingApp(
   apikey: string,
   appId: string | undefined,
   supabase: Awaited<ReturnType<typeof createSupabaseClient>>,
+  options?: Pick<SuperOptions, 'supaHost' | 'supaAnon'>,
 ) {
   const pendingApps = await listPendingOnboardingApps(supabase, organization.gid)
   const selectedApp = await selectPendingOnboardingApp(organization.gid, apikey, appId, pendingApps)
@@ -1740,7 +1889,10 @@ async function maybeReusePendingOnboardingApp(
   const cleanupSpinner = pSpinner()
   cleanupSpinner.start(`Preparing ${selectedAppId} for real onboarding`)
   try {
-    await completePendingOnboardingApp(supabase, organization.gid, selectedAppId)
+    await completePendingOnboardingApp(supabase, organization.gid, selectedAppId, apikey, {
+      supaHost: options?.supaHost,
+      supaAnon: options?.supaAnon,
+    })
     cleanupSpinner.stop('Pending onboarding app prepared ✅')
   }
   catch (error) {
@@ -1791,7 +1943,7 @@ async function selectOrganizationForInit(
 
   if (organization.enforcing_2fa && !organization['2fa_has_access']) {
     pLog.error(`The organization "${organization.name}" requires all members to have 2FA enabled.`)
-    pLog.error('Enable 2FA at https://web.capgo.app/settings/account and try again.')
+    pLog.error(`Enable 2FA at ${consoleWebUrl('/settings/account')} and try again.`)
     throw new Error('2FA required for selected organization')
   }
 
@@ -1907,11 +2059,16 @@ async function completeExistingAppPendingOnboarding(
   supabase: Awaited<ReturnType<typeof createSupabaseClient>>,
   organization: Organization,
   appId: string,
+  apikey: string,
+  options?: Pick<SuperOptions, 'supaHost' | 'supaAnon'>,
 ) {
   const s = pSpinner()
   s.start(`Preparing existing app ${appId}`)
   try {
-    await completePendingOnboardingApp(supabase, organization.gid, appId)
+    await completePendingOnboardingApp(supabase, organization.gid, appId, apikey, {
+      supaHost: options?.supaHost,
+      supaAnon: options?.supaAnon,
+    })
     s.stop('Existing app prepared ✅')
   }
   catch (error) {
@@ -1943,7 +2100,7 @@ async function resolveExistingAppConflict(
 
   if (useExistingApp === true) {
     if (existingApp.need_onboarding)
-      await completeExistingAppPendingOnboarding(supabase, organization, appId)
+      await completeExistingAppPendingOnboarding(supabase, organization, appId, apikey, options)
 
     await saveAppIdToCapacitorConfig(appId)
     return 'use-existing'
@@ -2339,7 +2496,7 @@ async function waitForVerifiedUpdaterInstall(
   packageJsonPath: string,
   pm: PackageManagerInfo,
   versionToInstall: string,
-  options: { allowAutoRetry?: boolean, failureText?: string } = {},
+  options: { allowAutoRetry?: boolean, failureText?: string, supportPlatform?: PlatformChoice } = {},
 ) {
   const manualCommand = getUpdaterInstallCommand(pm, versionToInstall)
 
@@ -2356,8 +2513,7 @@ async function waitForVerifiedUpdaterInstall(
       const recoveryChoice = await selectRecoveryOption(orgId, apikey, 'Updater install is not complete yet. What do you want to do?', [
         { value: 'retry-auto', label: 'Retry automatic updater install' },
         { value: 'manual', label: 'Install it manually, then continue' },
-      ], options.failureText ?? state.details.join('\n'))
-
+      ], options.failureText ?? state.details.join('\n'), options.supportPlatform)
       if (recoveryChoice === 'retry-auto') {
         const s = pSpinner()
         try {
@@ -2447,7 +2603,7 @@ async function addUpdaterStep(orgId: string, apikey: string, appId: string) {
     s.start(`Updating config file`)
     delta = !!doDirectInstall
     const projectDir = dirname(path)
-    await withTemporaryCwd(projectDir, async () => {
+    await withTemporaryCwd(getInitConfigLoadDir(projectDir), async () => {
       if (doDirectInstall) {
         await updateConfigbyKey('SplashScreen', { launchAutoHide: false })
       }
@@ -2479,7 +2635,7 @@ async function addCodeStep(orgId: string, apikey: string, appId: string) {
     const projectDir = dirname(packageJsonPath)
     const resolveProjectFilePath = (filePath: string) => path.isAbsolute(filePath) ? filePath : join(projectDir, filePath)
     const projectType = await findProjectType({ quiet: true, packageJsonPath })
-    if (projectType === 'nuxtjs-js' || projectType === 'nuxtjs-ts') {
+    if (!globalMainFilePath && (projectType === 'nuxtjs-js' || projectType === 'nuxtjs-ts')) {
       // Nuxt.js specific logic
       const nuxtDir = join(projectDir, 'plugins')
       if (!existsSync(nuxtDir)) {
@@ -2536,11 +2692,11 @@ async function addCodeStep(orgId: string, apikey: string, appId: string) {
     }
     else {
       // Handle other project types
-      let mainFilePath: string | null = null
-      if (projectType === 'unknown') {
+      let mainFilePath: string | null = globalMainFilePath ?? null
+      if (!mainFilePath && projectType === 'unknown') {
         mainFilePath = await findMainFile(true, projectDir)
       }
-      else {
+      else if (!mainFilePath) {
         const isTypeScript = projectType.endsWith('-ts')
         const projectTypeMainFile = findMainFileForProjectType(projectType, isTypeScript, projectDir)
         mainFilePath = projectTypeMainFile ? resolveProjectFilePath(projectTypeMainFile) : projectTypeMainFile
@@ -2776,14 +2932,8 @@ async function addEncryptionStep(orgId: string, apikey: string, appId: string) {
     // setupChannel=false avoids a rogue clack confirm when an old private
     // key is present in the config.
     try {
-      const previousCwd = cwd()
-      try {
-        chdir(projectDir)
-        await createKeyInternal({ force: true, setupChannel: false }, true)
-      }
-      finally {
-        chdir(previousCwd)
-      }
+      const encryptionConfig = await withTemporaryCwd(getInitConfigLoadDir(projectDir), () => getConfigForWrite())
+      await withTemporaryCwd(projectDir, () => createKeyInternal({ force: true, setupChannel: false }, true, encryptionConfig))
       // Intentionally stop without a success message: the persistent
       // encryption summary panel renders on the next step and already shows
       // the outcome. Passing a message here would push it into the rolling
@@ -3113,6 +3263,7 @@ async function handleBuildAndSyncFailure(
     const versionToInstall = await getCompatibleUpdaterVersionForPackage(packageJsonPath, pm)
     await waitForVerifiedUpdaterInstall(orgId, apikey, packageJsonPath, pm, versionToInstall, {
       failureText: formattedError,
+      supportPlatform: platform,
     })
     return 'retry'
   }
@@ -3120,7 +3271,7 @@ async function handleBuildAndSyncFailure(
   const recoveryChoice = await selectRecoveryOption(orgId, apikey, 'Build or sync failed. What do you want to do?', [
     { value: 'retry', label: 'Retry build and sync' },
     { value: 'manual', label: 'Fix it manually, then continue' },
-  ], formattedError)
+  ], formattedError, platform)
 
   if (recoveryChoice === 'retry')
     return 'retry'
@@ -4273,7 +4424,7 @@ async function maybeOfferAutoTestCleanup(orgId: string, apikey: string, appId: s
   pLog.warn(`Do not run "${pm.runner} cap sync ${platform}" before this cleanup upload.`)
 }
 
-async function uploadStep(orgId: string, apikey: string, appId: string, newVersion: string, delta: boolean) {
+async function uploadStep(orgId: string, apikey: string, appId: string, newVersion: string, delta: boolean, supportPlatform: PlatformChoice) {
   const pm = getPMAndCommand()
   const selectedPackageJsonPath = globalPathToPackageJson ? path.resolve(globalPathToPackageJson) : undefined
   const selectedProjectDir = selectedPackageJsonPath ? dirname(selectedPackageJsonPath) : cwd()
@@ -4326,14 +4477,14 @@ async function uploadStep(orgId: string, apikey: string, appId: string, newVersi
         pLog.error(formatError(error))
         await selectRecoveryOption(orgId, apikey, 'Bundle upload failed. What do you want to do?', [
           { value: 'retry', label: 'Retry bundle upload' },
-        ], formatError(error))
+        ], formatError(error), supportPlatform)
         continue
       }
       if (!uploadRes?.success) {
         s.stop('Upload failed ❌')
         await selectRecoveryOption(orgId, apikey, 'Bundle upload failed. What do you want to do?', [
           { value: 'retry', label: 'Retry bundle upload' },
-        ], 'Bundle upload did not complete successfully.')
+        ], 'Bundle upload did not complete successfully.', supportPlatform)
         continue
       }
 
@@ -4536,6 +4687,26 @@ async function maybeStarCapgoRepo(includeSkillsRepository = false, repository?: 
 }
 
 export async function initApp(apikeyCommand: string, appId: string, options: SuperOptions) {
+  const initialCwd = cwd()
+  const packageJsonPath = resolveInitTargetPath(options.packageJson, 'Package JSON path', initialCwd)
+  const capacitorConfigPath = getConfigWriteTarget() ?? resolveCapacitorConfigTargetPath(options.capacitorConfig, initialCwd)
+  const mainFilePath = resolveInitTargetPath(options.mainFile, 'Main file path', initialCwd)
+  if (packageJsonPath && path.basename(packageJsonPath) !== PACKNAME)
+    throw new Error(`Package JSON path must point to ${PACKNAME}: ${packageJsonPath}`)
+  if (mainFilePath && !/\.[cm]?[jt]sx?$/.test(mainFilePath))
+    throw new Error(`Main file path must point to a JavaScript or TypeScript file: ${mainFilePath}`)
+
+  const initialTargets: InitTargetPaths = {
+    pathToPackageJson: packageJsonPath,
+    capacitorConfigPath,
+    configLoadDir: capacitorConfigPath ? initialCwd : undefined,
+    mainFilePath,
+  }
+  globalPathToPackageJson = initialTargets.pathToPackageJson
+  globalCapacitorConfigPath = initialTargets.capacitorConfigPath
+  globalConfigLoadDir = initialTargets.configLoadDir
+  globalMainFilePath = initialTargets.mainFilePath
+  setConfigWriteTarget(initialTargets.capacitorConfigPath)
   globalSupaHost = options.supaHost // honor --supa-host for the support-logs upload
   const pm = getPMAndCommand()
   options.apikey = apikeyCommand
@@ -4561,12 +4732,13 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
     }
   }
 
-  let resumed = await tryResumeOnboarding(options.apikey)
+  let resumed = await tryResumeOnboarding(options.apikey, initialTargets, initialCwd)
   let stepToSkip = resumed?.stepDone ?? 0
 
   await ensureGitRepoCleanBeforeInit(stepToSkip > 0 ? globalAutoTestChange : undefined)
 
-  appId = await ensureWorkspaceReadyForInit(appId) ?? appId
+  const initialAppId = await ensureWorkspaceReadyForInit(appId) ?? appId
+  appId = initialAppId
   let selectedPackageJsonPath = path.resolve(globalPathToPackageJson ?? join(findRoot(cwd()), PACKNAME))
   let selectedProjectDir = dirname(selectedPackageJsonPath)
   const versionStatus = await checkVersionStatus()
@@ -4575,27 +4747,32 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
   }
 
   let extConfig: Awaited<ReturnType<typeof getConfig>> | undefined
-  if (!options.supaAnon || !options.supaHost) {
-    try {
-      extConfig = await withTemporaryCwd(selectedProjectDir, () => getConfig())
+  const reloadSelectedProjectConfig = async () => {
+    selectedPackageJsonPath = path.resolve(globalPathToPackageJson ?? join(findRoot(cwd()), PACKNAME))
+    selectedProjectDir = dirname(selectedPackageJsonPath)
+    if (!options.supaAnon || !options.supaHost) {
+      try {
+        extConfig = await withTemporaryCwd(getInitConfigLoadDir(selectedProjectDir), () => getConfig())
+      }
+      catch {
+        extConfig = undefined
+      }
     }
-    catch {
-      extConfig = undefined
+    else {
+      extConfig = await withTemporaryCwd(getInitConfigLoadDir(selectedProjectDir), () => updateConfigUpdater({
+        statsUrl: `${options.supaHost}/functions/v1/stats`,
+        channelUrl: `${options.supaHost}/functions/v1/channel_self`,
+        updateUrl: `${options.supaHost}/functions/v1/updates`,
+        localApiFiles: `${options.supaHost}/functions/v1`,
+        localS3: true,
+        localSupa: options.supaHost,
+        localSupaAnon: options.supaAnon,
+      }))
     }
   }
-  else {
-    extConfig = await withTemporaryCwd(selectedProjectDir, () => updateConfigUpdater({
-      statsUrl: `${options.supaHost}/functions/v1/stats`,
-      channelUrl: `${options.supaHost}/functions/v1/channel_self`,
-      updateUrl: `${options.supaHost}/functions/v1/updates`,
-      localApiFiles: `${options.supaHost}/functions/v1`,
-      localS3: true,
-      localSupa: options.supaHost,
-      localSupaAnon: options.supaAnon,
-    }))
-  }
+  await reloadSelectedProjectConfig()
   // Warn if this doesn't look like a Capacitor project
-  const hasCapacitorConfig = capacitorConfigFiles.some(file => existsSync(join(selectedProjectDir, file)))
+  const hasCapacitorConfig = Boolean(globalCapacitorConfigPath) || capacitorConfigFiles.some(file => existsSync(join(selectedProjectDir, file)))
   if (!hasCapacitorConfig) {
     pLog.warn('⚠️  No capacitor.config.* found in the selected project directory.')
     pLog.info(`   Capgo requires a Capacitor project. Selected project: ${selectedProjectDir}`)
@@ -4672,8 +4849,8 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
     }
   }
 
-  const localConfig = await withTemporaryCwd(selectedProjectDir, () => getLocalConfig())
-  appId = getAppId(appId, extConfig?.config)
+  let localConfig = await withTemporaryCwd(selectedProjectDir, () => getLocalConfig())
+  appId = getAppId(initialAppId, extConfig?.config)
 
   appId ??= await askForAppId('Enter your appId:')
 
@@ -4693,16 +4870,11 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
   const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
   await resolveUserIdFromApiKey(supabase, options.apikey)
 
-  // Whenever a resume is aborted (org no longer available, role lost, 2FA
-  // required, lookup failed) we restart from step 0. Drop any diff that
-  // `tryResumeOnboarding` restored so the freshly walked step 4 doesn't see
-  // stale content from an earlier run, and delete the on-disk resume file so
-  // a subsequent `capgo init` run won't re-offer the now-invalid resume
-  // before `markStepDone()` has had a chance to overwrite it.
-  const discardResumedState = () => {
+  // A failed remote checkpoint (organization access, role, or 2FA) restarts
+  // onboarding at step 0 using only the caller's original project targets.
+  const discardResumedState = async () => {
     stepToSkip = 0
     resumed = undefined
-    globalPathToPackageJson = undefined
     globalNodeModulesPath = undefined
     globalChannelName = defaultChannel
     globalPlatform = 'ios'
@@ -4717,6 +4889,14 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
     setInitEncryptionSummary(undefined)
     globalAutoTestChange = undefined
     cleanupStepsDone()
+    globalPathToPackageJson = initialTargets.pathToPackageJson
+    globalCapacitorConfigPath = initialTargets.capacitorConfigPath
+    globalConfigLoadDir = initialTargets.configLoadDir
+    globalMainFilePath = initialTargets.mainFilePath
+    setConfigWriteTarget(initialTargets.capacitorConfigPath)
+    await reloadSelectedProjectConfig()
+    localConfig = await withTemporaryCwd(selectedProjectDir, () => getLocalConfig())
+    appId = getAppId(initialAppId, extConfig?.config)
   }
 
   let organization: Organization
@@ -4728,7 +4908,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
       pLog.error(`Cannot verify organization access: ${orgError ? JSON.stringify(orgError) : 'no data returned'}`)
       pLog.warn('Falling back to organization selection.')
       organization = await selectOrganizationForInit(supabase, options.apikey)
-      discardResumedState()
+      await discardResumedState()
     }
     else {
       const savedOrg = allOrganizations.find(org => org.gid === resumedSnapshot.orgId)
@@ -4740,18 +4920,18 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
       if (!savedOrg) {
         pLog.warn(`Previously used organization "${resumedSnapshot.orgName}" is no longer available. Please select a new one.`)
         organization = await selectOrganizationForInit(supabase, options.apikey)
-        discardResumedState()
+        await discardResumedState()
       }
       else if (!hasCreateAppPermission) {
         pLog.warn(`You no longer have permission to create an app in "${savedOrg.name}". Please select a different organization.`)
         organization = await selectOrganizationForInit(supabase, options.apikey)
-        discardResumedState()
+        await discardResumedState()
       }
       else if (blocked2fa) {
-        pLog.warn(`Organization "${savedOrg.name}" now requires 2FA. Enable it at https://web.capgo.app/settings/account`)
+        pLog.warn(`Organization "${savedOrg.name}" now requires 2FA. Enable it at ${consoleWebUrl('/settings/account')}`)
         pLog.warn('Please select a different organization or enable 2FA and try again.')
         organization = await selectOrganizationForInit(supabase, options.apikey)
-        discardResumedState()
+        await discardResumedState()
       }
       else {
         organization = savedOrg
@@ -4772,7 +4952,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
     globalAppId = appId
   }
 
-  const pendingOnboardingSelection = await maybeReusePendingOnboardingApp(organization, options.apikey, appId, supabase)
+  const pendingOnboardingSelection = await maybeReusePendingOnboardingApp(organization, options.apikey, appId, supabase, options)
   appId = pendingOnboardingSelection.appId ?? appId
   await ensureCapacitorProjectReady(orgId, options.apikey, appId, pendingOnboardingSelection.pendingApp)
   selectedPackageJsonPath = path.resolve(globalPathToPackageJson ?? join(findRoot(cwd()), PACKNAME))
@@ -4827,7 +5007,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
       selectedPackageJsonPath = path.resolve(globalPathToPackageJson ?? join(findRoot(cwd()), PACKNAME))
       selectedProjectDir = dirname(selectedPackageJsonPath)
       try {
-        extConfig = await withTemporaryCwd(selectedProjectDir, () => getConfig())
+        extConfig = await withTemporaryCwd(getInitConfigLoadDir(selectedProjectDir), () => getConfig())
       }
       catch {
         extConfig = undefined
@@ -4898,7 +5078,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
 
     if (stepToSkip < 10) {
       renderCurrentStep(10)
-      await uploadStep(orgId, options.apikey, appId, currentVersion, delta)
+      await uploadStep(orgId, options.apikey, appId, currentVersion, delta, platform)
       markStepDone(10)
     }
 

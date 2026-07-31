@@ -1,4 +1,4 @@
-import type { User } from '@supabase/supabase-js'
+import type { AuthChangeEvent, User } from '@supabase/supabase-js'
 import type { AppUsageByApp, AppUsageGlobal } from './../services/supabase'
 import type { Database } from '~/types/supabase.types'
 import { acceptHMRUpdate, defineStore } from 'pinia'
@@ -53,7 +53,7 @@ export const useMainStore = defineStore('main', () => {
     const supabase = useSupabase()
     const config = getLocalConfig()
     await new Promise<void>((resolve) => {
-      const listener = supabase.auth.onAuthStateChange((event: any) => {
+      const listener = supabase.auth.onAuthStateChange((event: AuthChangeEvent) => {
         if (event === 'SIGNED_OUT') {
           listener.data.subscription.unsubscribe()
           auth.value = undefined

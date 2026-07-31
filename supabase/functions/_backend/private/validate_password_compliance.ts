@@ -2,9 +2,9 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Database } from '../utils/supabase.types.ts'
-import { type } from 'arktype'
+import { z } from 'zod'
 import { Hono } from 'hono/tiny'
-import { safeParseSchema } from '../utils/ark_validation.ts'
+import { safeParseSchema } from '../utils/schema_validation.ts'
 import { parseBody, quickError, simpleError, simpleRateLimit, useCors } from '../utils/hono.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { getEffectivePasswordMinLength, getPasswordPolicyValidationErrors } from '../utils/password_policy.ts'
@@ -101,11 +101,11 @@ async function validateOrigin(c: BackendContext, next: () => Promise<void>) {
   return next()
 }
 
-const bodySchema = type({
-  'email': 'string.email',
-  'password': 'string > 0',
-  'org_id': 'string.uuid',
-  'captcha_token?': 'string > 0',
+const bodySchema = z.object({
+  email: z.email(),
+  password: z.string().min(1),
+  org_id: z.uuid(),
+  captcha_token: z.string().min(1).optional(),
 })
 
 /**
@@ -208,9 +208,9 @@ app.post('/', async (c) => {
 
   // Fetch the org's password policy after membership verification.
   //
-  // IMPORTANT: do not use userClient here. orgs SELECT is guarded by check_min_rights,
-  // which enforces password-policy compliance, creating a circular dependency for users
-  // who are non-compliant (this endpoint is their remediation path).
+  // IMPORTANT: do not use userClient here. org reads enforce password-policy
+  // compliance, creating a circular dependency for users who are non-compliant
+  // (this endpoint is their remediation path).
   const { data: org, error: orgError } = await adminClient
     .from('orgs')
     .select('id, password_policy_config')

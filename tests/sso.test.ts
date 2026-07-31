@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { fetchWithRetry, getAuthHeaders, getAuthHeadersForCredentials, getEndpointUrl, getSupabaseClient, POSTGRES_URL, USER_ADMIN_EMAIL, USER_EMAIL_NONMEMBER, USER_ID, USER_PASSWORD_NONMEMBER } from './test-utils.ts'
+import { fetchTestRequest, getAuthHeaders, getAuthHeadersForCredentials, getEndpointUrl, getSupabaseClient, POSTGRES_URL, USER_ADMIN_EMAIL, USER_EMAIL_NONMEMBER, USER_ID, USER_PASSWORD_NONMEMBER } from './test-utils.ts'
 
 const SSO_TEST_ORG_ID = randomUUID()
 const SSO_TEST_CUSTOMER_ID = `cus_sso_test_${randomUUID()}`
@@ -36,7 +36,7 @@ beforeAll(async () => {
   const { error: orgUserError } = await getSupabaseClient().from('org_users').insert({
     org_id: SSO_TEST_ORG_ID,
     user_id: USER_ID,
-    user_right: 'super_admin' as const,
+    rbac_role_name: 'org_super_admin' as const,
   })
   if (orgUserError)
     throw orgUserError
@@ -115,7 +115,7 @@ afterAll(async () => {
 
 describe('[POST] /private/sso/check-domain', () => {
   it('should return has_sso=false for non-SSO domain', async () => {
-    const response = await fetchWithRetry(getEndpointUrl('/private/sso/check-domain'), {
+    const response = await fetchTestRequest(getEndpointUrl('/private/sso/check-domain'), {
       method: 'POST',
       headers: authHeaders,
       body: JSON.stringify({ email: 'user@no-sso-configured-domain.com' }),
@@ -127,7 +127,7 @@ describe('[POST] /private/sso/check-domain', () => {
   })
 
   it('should return 400 for invalid email', async () => {
-    const response = await fetchWithRetry(getEndpointUrl('/private/sso/check-domain'), {
+    const response = await fetchTestRequest(getEndpointUrl('/private/sso/check-domain'), {
       method: 'POST',
       headers: authHeaders,
       body: JSON.stringify({ email: 'not-a-valid-email' }),
@@ -155,7 +155,7 @@ describe('[POST] /private/sso/check-domain', () => {
     } as any)
 
     try {
-      const response = await fetchWithRetry(getEndpointUrl('/private/sso/check-domain'), {
+      const response = await fetchTestRequest(getEndpointUrl('/private/sso/check-domain'), {
         method: 'POST',
         headers: authHeaders,
         body: JSON.stringify({ email: `user@${expectedDomain.toUpperCase()}` }),
@@ -250,7 +250,7 @@ describe('[POST] /private/sso/check-enforcement', () => {
 
       const isolatedAuthHeaders = await getAuthHeadersForCredentials(email, password)
 
-      const response = await fetchWithRetry(getEndpointUrl('/private/sso/check-enforcement'), {
+      const response = await fetchTestRequest(getEndpointUrl('/private/sso/check-enforcement'), {
         method: 'POST',
         headers: isolatedAuthHeaders,
         body: JSON.stringify({
@@ -274,7 +274,7 @@ describe('[POST] /private/sso/check-enforcement', () => {
   })
 
   it('should return allowed=true for password auth when no SSO is configured', async () => {
-    const response = await fetchWithRetry(getEndpointUrl('/private/sso/check-enforcement'), {
+    const response = await fetchTestRequest(getEndpointUrl('/private/sso/check-enforcement'), {
       method: 'POST',
       headers: authHeaders,
       body: JSON.stringify({
@@ -292,7 +292,7 @@ describe('[POST] /private/sso/check-enforcement', () => {
     await withEnforcedSsoPasswordUser(async ({ targetAuthHeaders }) => {
       const adminHeaders = await getAuthHeadersForCredentials(USER_ADMIN_EMAIL, 'adminadmin')
 
-      const response = await fetchWithRetry(getEndpointUrl('/private/sso/check-enforcement'), {
+      const response = await fetchTestRequest(getEndpointUrl('/private/sso/check-enforcement'), {
         method: 'POST',
         headers: {
           ...targetAuthHeaders,
@@ -312,7 +312,7 @@ describe('[POST] /private/sso/check-enforcement', () => {
 
   it.concurrent('should not allow a user token to bypass SSO enforcement as spoof proof', async () => {
     await withEnforcedSsoPasswordUser(async ({ targetAuthHeaders }) => {
-      const response = await fetchWithRetry(getEndpointUrl('/private/sso/check-enforcement'), {
+      const response = await fetchTestRequest(getEndpointUrl('/private/sso/check-enforcement'), {
         method: 'POST',
         headers: {
           ...targetAuthHeaders,
@@ -334,7 +334,7 @@ describe('[POST] /private/sso/check-enforcement', () => {
     await withEnforcedSsoPasswordUser(async ({ targetAuthHeaders }) => {
       const nonAdminHeaders = await getAuthHeadersForCredentials(USER_EMAIL_NONMEMBER, USER_PASSWORD_NONMEMBER)
 
-      const response = await fetchWithRetry(getEndpointUrl('/private/sso/check-enforcement'), {
+      const response = await fetchTestRequest(getEndpointUrl('/private/sso/check-enforcement'), {
         method: 'POST',
         headers: {
           ...targetAuthHeaders,
@@ -372,7 +372,7 @@ describe('[POST] /private/sso/check-enforcement', () => {
     try {
       const isolatedAuthHeaders = await getAuthHeadersForCredentials(email, password)
 
-      const response = await fetchWithRetry(getEndpointUrl('/private/sso/check-enforcement'), {
+      const response = await fetchTestRequest(getEndpointUrl('/private/sso/check-enforcement'), {
         method: 'POST',
         headers: isolatedAuthHeaders,
         body: JSON.stringify({
@@ -393,7 +393,7 @@ describe('[POST] /private/sso/check-enforcement', () => {
 
 describe('[GET] /private/sso/sp-metadata', () => {
   it('returns SP metadata derived from the backend runtime URL', async () => {
-    const response = await fetchWithRetry(getEndpointUrl('/private/sso/sp-metadata'), {
+    const response = await fetchTestRequest(getEndpointUrl('/private/sso/sp-metadata'), {
       method: 'GET',
       headers: authHeaders,
     })
@@ -448,12 +448,12 @@ describe('[POST] /private/sso/providers', () => {
       const { error: orgUserError } = await getSupabaseClient().from('org_users').insert({
         org_id: orgId,
         user_id: USER_ID,
-        user_right: 'super_admin' as const,
+        rbac_role_name: 'org_super_admin' as const,
       })
       if (orgUserError)
         throw orgUserError
 
-      const response = await fetchWithRetry(getEndpointUrl('/private/sso/providers'), {
+      const response = await fetchTestRequest(getEndpointUrl('/private/sso/providers'), {
         method: 'POST',
         headers: authHeaders,
         body: JSON.stringify({
@@ -515,7 +515,7 @@ describe('[POST] /private/sso/prelink-users', () => {
       const { error: prelinkAdminError } = await getSupabaseClient().from('org_users').insert({
         org_id: prelinkOrgId,
         user_id: USER_ID,
-        user_right: 'super_admin' as const,
+        rbac_role_name: 'org_super_admin' as const,
       })
       if (prelinkAdminError)
         throw prelinkAdminError
@@ -600,12 +600,12 @@ describe('[POST] /private/sso/prelink-users', () => {
         {
           org_id: prelinkOrgId,
           user_id: memberUserId,
-          user_right: 'read' as const,
+          rbac_role_name: 'org_member' as const,
         },
         {
           org_id: foreignOrgId,
           user_id: outsiderUserId,
-          user_right: 'read' as const,
+          rbac_role_name: 'org_member' as const,
         },
       ])
       if (orgUsersError)
@@ -623,7 +623,7 @@ describe('[POST] /private/sso/prelink-users', () => {
       expect(beforeMemberIdentities.rows.some(row => row.provider === 'email')).toBe(true)
       expect(beforeOutsiderIdentities.rows.some(row => row.provider === 'email')).toBe(true)
 
-      const response = await fetchWithRetry(getEndpointUrl('/private/sso/prelink-users'), {
+      const response = await fetchTestRequest(getEndpointUrl('/private/sso/prelink-users'), {
         method: 'POST',
         headers: authHeaders,
         body: JSON.stringify({ provider_id: providerId }),
@@ -893,7 +893,7 @@ describe('[POST] /private/sso/provision-user', () => {
         [oauthProviderId, email, createdUser.user.id],
       )
 
-      const response = await fetchWithRetry(getEndpointUrl('/private/sso/provision-user'), {
+      const response = await fetchTestRequest(getEndpointUrl('/private/sso/provision-user'), {
         method: 'POST',
         headers: oauthAuthHeaders,
         body: JSON.stringify({}),
@@ -989,7 +989,7 @@ describe('[POST] /private/sso/provision-user', () => {
       // Ensure the test really covers the missing-profile path.
       await getSupabaseClient().from('users').delete().eq('id', createdUser.user.id)
 
-      const response = await fetchWithRetry(getEndpointUrl('/private/sso/provision-user'), {
+      const response = await fetchTestRequest(getEndpointUrl('/private/sso/provision-user'), {
         method: 'POST',
         headers: ssoAuthHeaders,
         body: JSON.stringify({}),
@@ -1022,6 +1022,24 @@ describe('[POST] /private/sso/provision-user', () => {
       expect(membershipError).toBeNull()
       expect(membership?.org_id).toBe(managedOrgId)
       expect(membership?.user_id).toBe(createdUser.user.id)
+
+      const roleBinding = await pool.query<{ role_name: string }>(
+        `
+          select roles.name as role_name
+          from public.role_bindings
+          join public.roles
+            on roles.id = role_bindings.role_id
+            and roles.scope_type = role_bindings.scope_type
+          where role_bindings.principal_type = public.rbac_principal_user()
+            and role_bindings.principal_id = $1
+            and role_bindings.scope_type = public.rbac_scope_org()
+            and role_bindings.org_id = $2
+          limit 1
+        `,
+        [createdUser.user.id, managedOrgId],
+      )
+
+      expect(roleBinding.rows[0]?.role_name).toBe('org_member')
     }
     finally {
       await Promise.allSettled([
@@ -1110,7 +1128,7 @@ describe('[POST] /private/sso/provision-user', () => {
       )
 
       const ssoAuthHeaders = await getAuthHeadersForCredentials(email, password)
-      const response = await fetchWithRetry(getEndpointUrl('/private/sso/provision-user'), {
+      const response = await fetchTestRequest(getEndpointUrl('/private/sso/provision-user'), {
         method: 'POST',
         headers: ssoAuthHeaders,
         body: JSON.stringify({}),
@@ -1219,7 +1237,7 @@ describe('[POST] /private/sso/provision-user', () => {
       const { error: inviteMembershipError } = await getSupabaseClient().from('org_users').insert({
         org_id: managedOrgId,
         user_id: createdUser.user.id,
-        user_right: 'invite_read' as const,
+        rbac_role_name: 'org_member' as const, is_invite: true,
       })
       if (inviteMembershipError)
         throw inviteMembershipError
@@ -1230,7 +1248,7 @@ describe('[POST] /private/sso/provision-user', () => {
       )
 
       const ssoAuthHeaders = await getAuthHeadersForCredentials(email, password)
-      const response = await fetchWithRetry(getEndpointUrl('/private/sso/provision-user'), {
+      const response = await fetchTestRequest(getEndpointUrl('/private/sso/provision-user'), {
         method: 'POST',
         headers: ssoAuthHeaders,
         body: JSON.stringify({}),
@@ -1246,13 +1264,13 @@ describe('[POST] /private/sso/provision-user', () => {
 
       const { data: membership, error: membershipError } = await getSupabaseClient()
         .from('org_users')
-        .select('user_right')
+        .select('rbac_role_name')
         .eq('org_id', managedOrgId)
         .eq('user_id', createdUser.user.id)
         .single()
 
       expect(membershipError).toBeNull()
-      expect(membership?.user_right).toBe('read')
+      expect(membership?.rbac_role_name).toBe('org_member')
     }
     finally {
       await Promise.allSettled([
@@ -1399,7 +1417,7 @@ describe('[POST] /private/sso/provision-user', () => {
         [randomUUID(), duplicateUser.user.id, unrelatedProviderId, targetEmail],
       )
 
-      const response = await fetchWithRetry(getEndpointUrl('/private/sso/provision-user'), {
+      const response = await fetchTestRequest(getEndpointUrl('/private/sso/provision-user'), {
         method: 'POST',
         headers: duplicateAuthHeaders,
         body: JSON.stringify({}),
@@ -1426,7 +1444,7 @@ describe('[POST] /private/sso/provision-user', () => {
 
       const { data: mergedMembership, error: mergedMembershipError } = await getSupabaseClient()
         .from('org_users')
-        .select('org_id, user_id, user_right')
+        .select('org_id, user_id, rbac_role_name')
         .eq('org_id', managedOrgId)
         .eq('user_id', originalUser.user.id)
         .maybeSingle()
@@ -1435,7 +1453,7 @@ describe('[POST] /private/sso/provision-user', () => {
       expect(mergedMembership).toMatchObject({
         org_id: managedOrgId,
         user_id: originalUser.user.id,
-        user_right: 'read',
+        rbac_role_name: 'org_member',
       })
 
       const identitiesAfterMerge = await pool.query(
@@ -1584,7 +1602,7 @@ describe('[POST] /private/sso/provision-user', () => {
       )
 
       const ssoAuthHeaders = await getAuthHeadersForCredentials(targetEmail, password)
-      const response = await fetchWithRetry(getEndpointUrl('/private/sso/provision-user'), {
+      const response = await fetchTestRequest(getEndpointUrl('/private/sso/provision-user'), {
         method: 'POST',
         headers: ssoAuthHeaders,
         body: JSON.stringify({}),
@@ -1610,7 +1628,7 @@ describe('[POST] /private/sso/provision-user', () => {
 
       const { data: ssoMembership, error: ssoMembershipError } = await getSupabaseClient()
         .from('org_users')
-        .select('org_id, user_id, user_right')
+        .select('org_id, user_id, rbac_role_name')
         .eq('org_id', managedOrgId)
         .eq('user_id', ssoUser.user.id)
         .maybeSingle()
@@ -1619,7 +1637,7 @@ describe('[POST] /private/sso/provision-user', () => {
       expect(ssoMembership).toMatchObject({
         org_id: managedOrgId,
         user_id: ssoUser.user.id,
-        user_right: 'read',
+        rbac_role_name: 'org_member',
       })
 
       const identitiesAfterProvision = await pool.query(
@@ -1760,7 +1778,7 @@ describe('[POST] /private/sso/provision-user', () => {
         [attackerIdentityProvider, attackerIdentityProviderId, targetEmail, duplicateUser.user.id],
       )
 
-      const response = await fetchWithRetry(getEndpointUrl('/private/sso/provision-user'), {
+      const response = await fetchTestRequest(getEndpointUrl('/private/sso/provision-user'), {
         method: 'POST',
         headers: duplicateAuthHeaders,
         body: JSON.stringify({}),
@@ -1903,7 +1921,7 @@ describe('[POST] /private/sso/provision-user', () => {
       expect(missingPublicUserError).toBeNull()
       expect(missingPublicUser).toBeNull()
 
-      const response = await fetchWithRetry(getEndpointUrl('/private/sso/provision-user'), {
+      const response = await fetchTestRequest(getEndpointUrl('/private/sso/provision-user'), {
         method: 'POST',
         headers: ssoAuthHeaders,
         body: JSON.stringify({}),
@@ -1931,7 +1949,7 @@ describe('[POST] /private/sso/provision-user', () => {
 
       const { data: membership, error: membershipError } = await getSupabaseClient()
         .from('org_users')
-        .select('id, org_id, user_id, user_right')
+        .select('id, org_id, user_id, rbac_role_name')
         .eq('org_id', managedOrgId)
         .eq('user_id', createdUser.user.id)
         .maybeSingle()
@@ -1940,7 +1958,7 @@ describe('[POST] /private/sso/provision-user', () => {
       expect(membership).toMatchObject({
         org_id: managedOrgId,
         user_id: createdUser.user.id,
-        user_right: 'read',
+        rbac_role_name: 'org_member',
       })
     }
     finally {
@@ -1957,7 +1975,7 @@ describe('[POST] /private/sso/provision-user', () => {
 
 describe('[GET] /private/sso/providers/:orgId', () => {
   it('should return empty array for org with no SSO providers', async () => {
-    const response = await fetchWithRetry(getEndpointUrl(`/private/sso/providers/${SSO_TEST_ORG_ID}`), {
+    const response = await fetchTestRequest(getEndpointUrl(`/private/sso/providers/${SSO_TEST_ORG_ID}`), {
       method: 'GET',
       headers: authHeaders,
     })
@@ -1969,7 +1987,7 @@ describe('[GET] /private/sso/providers/:orgId', () => {
   })
 
   it('should return 401 without authentication', async () => {
-    const response = await fetchWithRetry(getEndpointUrl(`/private/sso/providers/${SSO_TEST_ORG_ID}`), {
+    const response = await fetchTestRequest(getEndpointUrl(`/private/sso/providers/${SSO_TEST_ORG_ID}`), {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
@@ -2020,7 +2038,7 @@ describe('[PATCH] /private/sso/providers/:id', () => {
       )
       expect(initialUser.rows[0]?.is_sso_user).toBe(false)
 
-      const enableResponse = await fetchWithRetry(getEndpointUrl(`/private/sso/providers/${providerId}`), {
+      const enableResponse = await fetchTestRequest(getEndpointUrl(`/private/sso/providers/${providerId}`), {
         method: 'PATCH',
         headers: authHeaders,
         body: JSON.stringify({ enforce_sso: true }),
@@ -2036,7 +2054,7 @@ describe('[PATCH] /private/sso/providers/:id', () => {
       )
       expect(enabledUser.rows[0]?.is_sso_user).toBe(true)
 
-      const disableResponse = await fetchWithRetry(getEndpointUrl(`/private/sso/providers/${providerId}`), {
+      const disableResponse = await fetchTestRequest(getEndpointUrl(`/private/sso/providers/${providerId}`), {
         method: 'PATCH',
         headers: authHeaders,
         body: JSON.stringify({ enforce_sso: false }),

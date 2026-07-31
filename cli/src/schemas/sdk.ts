@@ -1,5 +1,8 @@
 import { z } from 'zod'
 import { buildCredentialsSchema } from './build'
+import { localizedReleaseNotesSchema, rejectConflictingBooleanGroup } from './common'
+
+export const capacitorConfigOptionSchema = z.string().min(1).describe('Capacitor config source to update')
 
 // ============================================================================
 // SDK Result Schema
@@ -75,6 +78,9 @@ export const uploadOptionsSchema = z.object({
   path: z.string(),
   bundle: z.string().optional(),
   channel: z.string().optional(),
+  rollout: z.number().min(0).max(100).optional(),
+  rolloutPercentageBps: z.number().int().min(0).max(10000).optional(),
+  rolloutCacheTtlSeconds: z.number().int().min(60).max(31536000).optional(),
   apikey: z.string().optional(),
   external: z.string().optional(),
   encrypt: z.boolean().optional(),
@@ -86,11 +92,13 @@ export const uploadOptionsSchema = z.object({
   comment: z.string().optional(),
   minUpdateVersion: z.string().optional(),
   autoMinUpdateVersion: z.boolean().optional(),
+  autoSetBundle: z.boolean().optional(),
   selfAssign: z.boolean().optional(),
   packageJsonPaths: z.string().optional(),
   ignoreCompatibilityCheck: z.boolean().optional(),
   disableCodeCheck: z.boolean().optional(),
   useZip: z.boolean().optional(),
+  capacitorConfig: capacitorConfigOptionSchema.optional(),
 })
 
 export type UploadOptions = z.infer<typeof uploadOptionsSchema>
@@ -141,8 +149,9 @@ export type CleanupOptions = z.infer<typeof cleanupOptionsSchema>
 // ============================================================================
 
 export const generateKeyOptionsSchema = z.object({
-  force: z.boolean().optional(),
+  force: z.boolean().optional().describe('Overwrite existing keys if they exist'),
   setupChannel: z.boolean().optional(),
+  capacitorConfig: capacitorConfigOptionSchema.optional(),
 })
 
 export type GenerateKeyOptions = z.infer<typeof generateKeyOptionsSchema>
@@ -151,6 +160,7 @@ export const saveKeyOptionsSchema = z.object({
   keyPath: z.string().optional(),
   keyData: z.string().optional(),
   setupChannel: z.boolean().optional(),
+  capacitorConfig: capacitorConfigOptionSchema.optional(),
 })
 
 export type SaveKeyOptions = z.infer<typeof saveKeyOptionsSchema>
@@ -158,6 +168,7 @@ export type SaveKeyOptions = z.infer<typeof saveKeyOptionsSchema>
 export const deleteOldKeyOptionsSchema = z.object({
   force: z.boolean().optional(),
   setupChannel: z.boolean().optional(),
+  capacitorConfig: capacitorConfigOptionSchema.optional(),
 })
 
 export type DeleteOldKeyOptions = z.infer<typeof deleteOldKeyOptionsSchema>
@@ -178,7 +189,7 @@ export const addChannelOptionsSchema = z.object({
 
 export type AddChannelOptions = z.infer<typeof addChannelOptionsSchema>
 
-export const updateChannelOptionsSchema = z.object({
+export const updateChannelOptionsBaseSchema = z.object({
   channelId: z.string().describe('Channel name'),
   appId: z.string(),
   bundle: z.string().optional(),
@@ -192,9 +203,34 @@ export const updateChannelOptionsSchema = z.object({
   emulator: z.boolean().optional(),
   device: z.boolean().optional(),
   prod: z.boolean().optional(),
+  rolloutBundle: z.string().optional(),
+  rolloutPercentage: z.number().min(0).max(100).optional(),
+  rolloutPercentageBps: z.number().int().min(0).max(10000).optional(),
+  rolloutEnable: z.boolean().optional(),
+  rolloutDisable: z.boolean().optional(),
+  rolloutPause: z.boolean().optional(),
+  rolloutResume: z.boolean().optional(),
+  rolloutRollback: z.boolean().optional(),
+  rolloutPromote: z.boolean().optional(),
+  rolloutCacheTtlSeconds: z.number().int().min(60).max(31536000).optional(),
+  autoPauseEnabled: z.boolean().optional(),
+  autoPauseDisabled: z.boolean().optional(),
+  autoPauseWindowMinutes: z.number().int().min(1).max(10080).optional(),
+  autoPauseFailureRateBps: z.number().int().min(0).max(10000).nullable().optional(),
+  autoPauseConfidence: z.number().gt(0).lt(1).optional(),
+  autoPauseMinAttempts: z.number().int().min(0).nullable().optional(),
+  autoPauseMinFailures: z.number().int().min(0).nullable().optional(),
+  autoPauseAction: z.enum(['pause', 'rollback', 'notify']).optional(),
+  autoPauseCooldownMinutes: z.number().int().min(0).max(10080).optional(),
   apikey: z.string().optional(),
   supaHost: z.string().optional(),
   supaAnon: z.string().optional(),
+})
+
+export const updateChannelOptionsSchema = updateChannelOptionsBaseSchema.superRefine((value, ctx) => {
+  rejectConflictingBooleanGroup(value, ctx, ['rolloutEnable', 'rolloutDisable'])
+  rejectConflictingBooleanGroup(value, ctx, ['rolloutPause', 'rolloutResume', 'rolloutRollback', 'rolloutPromote'])
+  rejectConflictingBooleanGroup(value, ctx, ['autoPauseEnabled', 'autoPauseDisabled'])
 })
 
 export type UpdateChannelOptions = z.infer<typeof updateChannelOptionsSchema>
@@ -332,13 +368,17 @@ export const requestBuildOptionsSchema = z.object({
   nodeModules: z.string().optional(),
   platform: z.enum(['ios', 'android']),
   credentials: buildCredentialsSchema.optional(),
+  submitToStoreReview: z.boolean().optional(),
+  storeReleaseName: z.string().min(1).optional(),
+  storeReleaseNotes: z.string().min(1).optional(),
+  storeReleaseNotesLocalized: localizedReleaseNotesSchema.optional(),
+  iosTestflightGroups: z.string().min(1).optional(),
+  iosAutomaticRelease: z.boolean().optional(),
   userId: z.string().optional(),
   apikey: z.string().optional(),
   supaHost: z.string().optional(),
   supaAnon: z.string().optional(),
-  /** set false to skip the automatic pre-build prescan (equivalent to --no-prescan) */
   prescan: z.boolean().optional(),
-  /** run the prescan in report-only mode: findings never block the build */
   prescanIgnoreFatal: z.boolean().optional(),
 })
 
@@ -356,6 +396,7 @@ export const setSettingOptionsSchema = z.object({
   apikey: z.string().optional(),
   bool: z.string().optional(),
   string: z.string().optional(),
+  capacitorConfig: capacitorConfigOptionSchema.optional(),
 })
 
 export type SetSettingOptions = z.infer<typeof setSettingOptionsSchema>

@@ -10,7 +10,7 @@ import { getLocalConfig, useSupabase } from '~/services/supabase'
 import { sendEvent } from '~/services/tracking'
 import { clearWebsitePaidUserCookie, setWebsitePaidUserCookie } from '~/services/websiteAuthCookie'
 import { useMainStore } from '~/stores/main'
-import { useOrganizationStore } from '~/stores/organization'
+import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
 import { hasPendingInviteSkip } from '~/utils/pendingInviteSkip'
 import { getPlans, isPlatformAdmin } from './../services/supabase'
 
@@ -205,13 +205,15 @@ async function guard(
   }
 
   function shouldRedirectToOrgOnboarding() {
+    if (to.path.startsWith('/onboarding/app'))
+      return false
     if (to.path.startsWith('/onboarding/organization'))
       return false
     if (to.path.startsWith('/onboarding/invitation'))
       return false
     if (!inviteOrgId)
       return true
-    return !organizationStore.organizations.some(org => org.gid === inviteOrgId && org.role.startsWith('invite'))
+    return !organizationStore.organizations.some(org => org.gid === inviteOrgId && isPendingOrganizationInvite(org))
   }
 
   function shouldRedirectToPendingInviteOnboarding(organizationsLoaded: boolean) {
@@ -223,7 +225,7 @@ async function guard(
       return false
     if (hasPendingInviteSkip(sessionUser?.id ?? main.auth?.id))
       return false
-    return organizationStore.organizations.some(org => org.role.startsWith('invite'))
+    return organizationStore.organizations.some(org => isPendingOrganizationInvite(org))
   }
 
   if (hasAuth && sessionUser) {
@@ -307,7 +309,7 @@ async function guard(
     if (organizationsLoaded && !organizationStore.hasOrganizations && shouldRedirectToOrgOnboarding()) {
       if (!isAdminRoute || !main.isAdmin) {
         return next({
-          path: '/onboarding/organization',
+          path: '/onboarding/app',
           query: {
             to: to.fullPath,
           },
@@ -385,7 +387,12 @@ async function guard(
     }
 
     if (organizationsLoaded && !organizationStore.hasOrganizations && shouldRedirectToOrgOnboarding()) {
-      return next('/onboarding/organization')
+      return next({
+        path: '/onboarding/app',
+        query: {
+          to: to.fullPath,
+        },
+      })
     }
 
     // Check if user is trying to access admin routes

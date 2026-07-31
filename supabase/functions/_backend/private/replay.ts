@@ -3,11 +3,11 @@ import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { eq } from 'drizzle-orm'
 import { Hono } from 'hono/tiny'
 import { BRES, parseBody, quickError, useCors } from '../utils/hono.ts'
-import { middlewareV2 } from '../utils/hono_middleware.ts'
+import { middlewareAuth } from '../utils/hono_middleware.ts'
 import { cloudlogErr, serializeError } from '../utils/logging.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
-import { capturePosthogReplaySnapshot } from '../utils/posthog.ts'
 import { schema } from '../utils/postgres_schema.ts'
+import { capturePosthogReplaySnapshot } from '../utils/posthog.ts'
 
 interface CliReplayBody {
   event?: unknown
@@ -99,7 +99,7 @@ async function getAuthenticatedUserEmail(c: Context<MiddlewareKeyVariables>, use
   }
 }
 
-app.post('/', middlewareV2(['read', 'write', 'all', 'upload']), async (c) => {
+app.post('/', middlewareAuth(), async (c) => {
   const auth = c.get('auth')
   const userId = auth?.userId
   if (!userId)

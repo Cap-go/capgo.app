@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   executeSQL,
-  fetchWithRetry,
+  fetchTestRequest,
   getEndpointUrl,
   PRODUCT_ID,
   resetAndSeedAppData,
@@ -82,7 +82,7 @@ describe('credit-only billing', () => {
       VALUES ($1, 100, 0, NOW() + interval '30 days', 'manual', 'former subscriber credit mode regression')
     `, [orgId])
 
-    const response = await fetchWithRetry(getEndpointUrl('/triggers/cron_stat_org'), {
+    const response = await fetchTestRequest(getEndpointUrl('/triggers/cron_stat_org'), {
       method: 'POST',
       headers,
       body: JSON.stringify({ orgId, customerId: stripeCustomerId }),

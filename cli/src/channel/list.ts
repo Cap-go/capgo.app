@@ -2,7 +2,7 @@ import type { OptionsBase } from '../schemas/base'
 import { intro, log, outro } from '@clack/prompts'
 import { check2FAComplianceForApp, checkAppExistsAndHasPermissionOrgErr } from '../api/app'
 import { displayChannels, getActiveChannels } from '../api/channels'
-import { createSupabaseClient, findSavedKey, getAppId, getConfig, getOrganizationId, OrganizationPerm, sendEvent } from '../utils'
+import { createSupabaseClient, findSavedKey, getAppId, getConfig, getOrganizationId, sendEvent } from '../utils'
 
 export async function listChannelsInternal(appId: string, options: OptionsBase, silent = false) {
   if (!silent)
@@ -28,7 +28,7 @@ export async function listChannelsInternal(appId: string, options: OptionsBase, 
   await check2FAComplianceForApp(supabase, appId, silent)
   const orgId = await getOrganizationId(supabase, appId)
 
-  await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, OrganizationPerm.read, silent, true)
+  await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'app.read_channels', silent, true)
 
   if (!silent)
     log.info('Querying available channels in Capgo')

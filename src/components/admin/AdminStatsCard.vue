@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { formatNumberValue } from '~/services/formatLocale'
 
 const props = defineProps({
   title: {
@@ -43,7 +44,7 @@ const displayValue = computed(() => {
   if (props.value === undefined || props.value === null)
     return '-'
   if (typeof props.value === 'number')
-    return props.value.toLocaleString()
+    return formatNumberValue(props.value)
   return props.value
 })
 
@@ -73,7 +74,7 @@ function handleClick() {
           'bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-200': (evolution ?? 0) < 0,
         }"
       >
-        {{ (evolution ?? 0) < 0 ? '' : '+' }}{{ (evolution ?? 0).toFixed(1) }}%
+        {{ (evolution ?? 0) < 0 ? '' : '+' }}{{ formatNumberValue(evolution ?? 0, { minimumFractionDigits: 1, maximumFractionDigits: 1 }) }}%
       </div>
     </div>
 

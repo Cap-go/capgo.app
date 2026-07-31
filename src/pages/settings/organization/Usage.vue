@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import type { ArrayElement } from '~/services/types'
 import type { Database } from '~/types/supabase.types'
 import dayjs from 'dayjs'
 import { storeToRefs } from 'pinia'
@@ -11,11 +10,14 @@ import CreditsCta from '~/components/CreditsCta.vue'
 import PageLoader from '~/components/PageLoader.vue'
 import { bytesToGb } from '~/services/conversion'
 import { formatLocalDate, formatLocalDateTime, formatUtcDateTimeAsLocal } from '~/services/date'
+import { formatNumber, formatNumberValue } from '~/services/formatLocale'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { calculateCreditCost, getCurrentPlanNameOrg, getPlans, getPlanUsagePercent, getTotalStorage, getUsageCreditDeductions } from '~/services/supabase'
 import { sendEvent } from '~/services/tracking'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
+
+type PlanUsageDetailed = Database['public']['Functions']['get_plan_usage_percent_detailed']['Returns'][number]
 // tabs handled by settings layout
 
 const { t } = useI18n()
@@ -63,7 +65,7 @@ async function getUsage(orgId: string) {
   const currentPlan = plans.value.find((p: Database['public']['Tables']['plans']['Row']) => p.name === planCurrent)
 
   // Get usage percentages
-  let detailPlanUsage: ArrayElement<Database['public']['Functions']['get_plan_usage_percent_detailed']['Returns']> = {
+  let detailPlanUsage: PlanUsageDetailed = {
     total_percent: 0,
     mau_percent: 0,
     bandwidth_percent: 0,
@@ -200,14 +202,18 @@ function formatCurrency(value?: number | null) {
   if (typeof value !== 'number' || !Number.isFinite(value))
     return t('unknown')
 
-  return `$${value.toLocaleString()}`
+  return formatNumber(value, { style: 'currency', currency: 'USD' })
 }
 
 function formatMonthlyPrice(value?: number | null) {
   if (typeof value !== 'number' || !Number.isFinite(value))
     return t('unknown')
 
-  return `$${value}/${t('mo')}`
+  return `${formatCurrency(value)}/${t('mo')}`
+}
+
+function formatPercentValue(value?: number | null) {
+  return formatNumberValue(value ?? 0, { maximumFractionDigits: 0 })
 }
 
 function percent(usage: number, limit: number) {
@@ -216,7 +222,7 @@ function percent(usage: number, limit: number) {
   return Math.round((usage / limit) * 100)
 }
 
-function roundUsagePercents(usage: ArrayElement<Database['public']['Functions']['get_plan_usage_percent_detailed']['Returns']>) {
+function roundUsagePercents(usage: PlanUsageDetailed) {
   return {
     ...usage,
     total_percent: Math.round(usage.total_percent ?? 0),
@@ -228,7 +234,7 @@ function roundUsagePercents(usage: ArrayElement<Database['public']['Functions'][
 }
 
 function maybeDeriveMissingUsagePercents(params: {
-  detailPlanUsage: ArrayElement<Database['public']['Functions']['get_plan_usage_percent_detailed']['Returns']>
+  detailPlanUsage: PlanUsageDetailed
   currentPlan: Database['public']['Tables']['plans']['Row'] | undefined
   totalMau: number
   totalBandwidth: number
@@ -282,8 +288,8 @@ function formatBuildTime(seconds: number): string {
   const hours = Math.floor(seconds / 3600)
   const minutes = Math.floor((seconds % 3600) / 60)
   if (hours > 0)
-    return `${hours}h ${minutes}m`
-  return `${minutes}m`
+    return `${formatNumberValue(hours)}h ${formatNumberValue(minutes)}m`
+  return `${formatNumberValue(minutes)}m`
 }
 
 const shouldShowUpgrade = computed(() => {
@@ -432,7 +438,7 @@ function nextRunDate() {
               {{ currentPlanSuggest?.name }}
             </div>
             <div class="mb-4 text-sm text-gray-600 dark:text-gray-300">
-              ${{ currentPlanSuggest?.price_m }}/{{ t('mo') }}
+              {{ formatMonthlyPrice(currentPlanSuggest?.price_m) }}
             </div>
             <button class="w-full py-2 text-sm font-semibold text-white transition-colors bg-blue-600 rounded-lg shadow-sm hover:bg-blue-700" @click="goToPlans">
               {{ t('plan-upgrade-v2') }}
@@ -459,7 +465,7 @@ function nextRunDate() {
               {{ t('monthly-active-users') }}
             </div>
             <div class="text-lg font-bold" :class="(planUsage?.detailPlanUsage?.mau_percent || 0) >= 100 ? 'text-red-600' : 'text-gray-900 dark:text-white'">
-              {{ planUsage?.detailPlanUsage?.mau_percent || 0 }}%
+              {{ formatPercentValue(planUsage?.detailPlanUsage?.mau_percent) }}%
             </div>
           </div>
           <div class="w-full h-2 mb-4 overflow-hidden bg-gray-100 rounded-full dark:bg-gray-700">
@@ -468,11 +474,11 @@ function nextRunDate() {
           <div class="space-y-1 text-sm">
             <div class="flex justify-between text-gray-600 dark:text-gray-400">
               <span>{{ t('used-in-period') }}</span>
-              <span class="font-medium text-gray-900 dark:text-white">{{ planUsage?.totalMau.toLocaleString() }}</span>
+              <span class="font-medium text-gray-900 dark:text-white">{{ formatNumberValue(planUsage?.totalMau) }}</span>
             </div>
             <div class="flex justify-between text-gray-600 dark:text-gray-400">
               <span>{{ t('included-in-plan') }}</span>
-              <span>{{ planUsage?.currentPlan?.mau.toLocaleString() }}</span>
+              <span>{{ formatNumberValue(planUsage?.currentPlan?.mau) }}</span>
             </div>
           </div>
         </div>
@@ -484,7 +490,7 @@ function nextRunDate() {
               {{ t('Storage') }}
             </div>
             <div class="text-lg font-bold" :class="(planUsage?.detailPlanUsage?.storage_percent || 0) >= 100 ? 'text-red-600' : 'text-gray-900 dark:text-white'">
-              {{ planUsage?.detailPlanUsage?.storage_percent || 0 }}%
+              {{ formatPercentValue(planUsage?.detailPlanUsage?.storage_percent) }}%
             </div>
           </div>
           <div class="w-full h-2 mb-4 overflow-hidden bg-gray-100 rounded-full dark:bg-gray-700">
@@ -493,11 +499,11 @@ function nextRunDate() {
           <div class="space-y-1 text-sm">
             <div class="flex justify-between text-gray-600 dark:text-gray-400">
               <span>{{ t('used-in-period') }}</span>
-              <span class="font-medium text-gray-900 dark:text-white">{{ planUsage?.totalStorage.toLocaleString() }} GB</span>
+              <span class="font-medium text-gray-900 dark:text-white">{{ formatNumberValue(planUsage?.totalStorage) }} GB</span>
             </div>
             <div class="flex justify-between text-gray-600 dark:text-gray-400">
               <span>{{ t('included-in-plan') }}</span>
-              <span>{{ planUsage?.currentPlan?.storage.toLocaleString() }} GB</span>
+              <span>{{ formatNumberValue(planUsage?.currentPlan?.storage) }} GB</span>
             </div>
           </div>
         </div>
@@ -509,7 +515,7 @@ function nextRunDate() {
               {{ t('Bandwidth') }}
             </div>
             <div class="text-lg font-bold" :class="(planUsage?.detailPlanUsage?.bandwidth_percent || 0) >= 100 ? 'text-red-600' : 'text-gray-900 dark:text-white'">
-              {{ planUsage?.detailPlanUsage?.bandwidth_percent || 0 }}%
+              {{ formatPercentValue(planUsage?.detailPlanUsage?.bandwidth_percent) }}%
             </div>
           </div>
           <div class="w-full h-2 mb-4 overflow-hidden bg-gray-100 rounded-full dark:bg-gray-700">
@@ -518,11 +524,11 @@ function nextRunDate() {
           <div class="space-y-1 text-sm">
             <div class="flex justify-between text-gray-600 dark:text-gray-400">
               <span>{{ t('used-in-period') }}</span>
-              <span class="font-medium text-gray-900 dark:text-white">{{ planUsage?.totalBandwidth.toLocaleString() }} GB</span>
+              <span class="font-medium text-gray-900 dark:text-white">{{ formatNumberValue(planUsage?.totalBandwidth) }} GB</span>
             </div>
             <div class="flex justify-between text-gray-600 dark:text-gray-400">
               <span>{{ t('included-in-plan') }}</span>
-              <span>{{ planUsage?.currentPlan?.bandwidth.toLocaleString() }} GB</span>
+              <span>{{ formatNumberValue(planUsage?.currentPlan?.bandwidth) }} GB</span>
             </div>
           </div>
         </div>
@@ -534,7 +540,7 @@ function nextRunDate() {
               {{ t('build-time') }}
             </div>
             <div class="text-lg font-bold" :class="(planUsage?.detailPlanUsage?.build_time_percent || 0) >= 100 ? 'text-red-600' : 'text-gray-900 dark:text-white'">
-              {{ planUsage?.detailPlanUsage?.build_time_percent || 0 }}%
+              {{ formatPercentValue(planUsage?.detailPlanUsage?.build_time_percent) }}%
             </div>
           </div>
           <div class="w-full h-2 mb-4 overflow-hidden bg-gray-100 rounded-full dark:bg-gray-700">
@@ -572,19 +578,19 @@ function nextRunDate() {
           <div class="space-y-2 text-gray-600 dark:text-gray-400">
             <div class="flex justify-between">
               <span>{{ t('mau-usage') }}</span>
-              <span class="font-medium">{{ planUsage?.detailPlanUsage?.mau_percent }}%</span>
+              <span class="font-medium">{{ formatPercentValue(planUsage?.detailPlanUsage?.mau_percent) }}%</span>
             </div>
             <div class="flex justify-between">
               <span>{{ t('bandwidth-usage') }}</span>
-              <span class="font-medium">{{ planUsage?.detailPlanUsage?.bandwidth_percent }}%</span>
+              <span class="font-medium">{{ formatPercentValue(planUsage?.detailPlanUsage?.bandwidth_percent) }}%</span>
             </div>
             <div class="flex justify-between">
               <span>{{ t('storage-usage') }}</span>
-              <span class="font-medium">{{ planUsage?.detailPlanUsage?.storage_percent }}%</span>
+              <span class="font-medium">{{ formatPercentValue(planUsage?.detailPlanUsage?.storage_percent) }}%</span>
             </div>
             <div class="flex justify-between">
               <span>{{ t('build-time-usage') }}</span>
-              <span class="font-medium">{{ planUsage?.detailPlanUsage?.build_time_percent }}%</span>
+              <span class="font-medium">{{ formatPercentValue(planUsage?.detailPlanUsage?.build_time_percent) }}%</span>
             </div>
           </div>
 

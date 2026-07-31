@@ -17,7 +17,7 @@ interface DataUpload {
 
 export const app = new Hono<MiddlewareKeyVariables>()
 
-app.post('/', middlewareKey(['all', 'write', 'upload']), async (c) => {
+app.post('/', middlewareKey(), async (c) => {
   const body = await parseBody<DataUpload>(c)
   cloudlog({ requestId: c.get('requestId'), message: 'post upload link body', body })
   const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']

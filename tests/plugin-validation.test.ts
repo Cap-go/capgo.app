@@ -1,7 +1,7 @@
-import type { StandardSchema } from '../supabase/functions/_backend/utils/ark_validation.ts'
+import type { StandardSchema } from '../supabase/functions/_backend/utils/schema_validation.ts'
 import { describe, expect, it } from 'vitest'
-import { safeParseSchema } from '../supabase/functions/_backend/utils/ark_validation.ts'
-import { channelSelfRequestSchema, statsRequestSchema, updateRequestSchema } from '../supabase/functions/_backend/utils/plugin_validation.ts'
+import { safeParseSchema } from '../supabase/functions/_backend/utils/schema_validation.ts'
+import { channelSelfRequestSchema, statsRequestSchema, updateRequestSchema } from '../supabase/functions/_backend/plugin_runtime/utils/plugin_validation.ts'
 import { INVALID_STRING_APP_ID, INVALID_STRING_DEVICE_ID, MISSING_STRING_APP_ID, MISSING_STRING_DEVICE_ID, MISSING_STRING_PLATFORM, MISSING_STRING_VERSION_BUILD, MISSING_STRING_VERSION_NAME, MISSING_STRING_VERSION_OS, NON_STRING_APP_ID, NON_STRING_DEVICE_ID, NON_STRING_PLATFORM, NON_STRING_VERSION_BUILD, NON_STRING_VERSION_NAME, NON_STRING_VERSION_OS } from '../supabase/functions/_backend/utils/utils.ts'
 
 const NO_ERROR = { error: '' }
@@ -17,6 +17,7 @@ interface RequestJSON {
   plugin_version?: string
   is_prod?: boolean
   is_emulator?: boolean
+  install_source?: string | number
   custom_id?: string
 }
 
@@ -31,6 +32,7 @@ const requestJSON: RequestJSON = {
   plugin_version: '5.2.18',
   is_prod: false,
   is_emulator: true,
+  install_source: 'testflight',
   custom_id: '',
 }
 
@@ -312,6 +314,35 @@ describe('test version_os - /stats', () => {
   })
 })
 
+describe('test install_source', () => {
+  const schemasWithInstallSource = [updateRequestSchema, statsRequestSchema, channelSelfRequestSchema]
+
+  schemasWithInstallSource.forEach((schema, index) => {
+    const suffix = index === 0 ? '- /updates' : index === 1 ? '- /stats' : '- /channel_self'
+
+    it(`install_source valid ${suffix}`, () => {
+      const body = getJSON()
+      body.install_source = 'app_store'
+      const response = parseJSON(body, schema)
+      expect(response).toEqual(NO_ERROR)
+    })
+
+    it(`install_source invalid type ${suffix}`, () => {
+      const body = getJSON()
+      body.install_source = 123
+      const response = parseJSON(body, schema)
+      expectError(response, 'install_source must be a string')
+    })
+
+    it(`install_source too long ${suffix}`, () => {
+      const body = getJSON()
+      body.install_source = 'a'.repeat(65)
+      const response = parseJSON(body, schema)
+      expectError(response, 'String must contain at most 64 character(s)')
+    })
+  })
+})
+
 describe('test platform - /stats', () => {
   it('platform missing', () => {
     const body = getJSON()
@@ -353,4 +384,5 @@ function expectError(response: any, expectedErrorMessage: string, errorIndex = 0
   expect(response.nestedError).toBeDefined()
   expect(response.nestedError.issues[errorIndex]).toBeDefined()
   expect(response.nestedError.issues[errorIndex].message).toBeDefined()
+  expect(response.nestedError.issues[errorIndex].message).toContain(expectedErrorMessage)
 }

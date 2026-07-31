@@ -5,7 +5,7 @@ import { middlewareKey } from '../utils/hono_middleware.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { s3 } from '../utils/s3.ts'
-import { supabaseApikey } from '../utils/supabase.ts'
+import { supabaseAdmin, supabaseApikey } from '../utils/supabase.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
 
 interface DataUpload {
@@ -15,7 +15,7 @@ interface DataUpload {
 
 export const app = new Hono<MiddlewareKeyVariables>()
 
-app.delete('/', middlewareKey(['all', 'write', 'upload']), async (c) => {
+app.delete('/', middlewareKey(), async (c) => {
   const body = await parseBody<DataUpload>(c)
   cloudlog({ requestId: c.get('requestId'), message: 'delete failed version body', body })
   const apikey = c.get('apikey')
@@ -29,7 +29,7 @@ app.delete('/', middlewareKey(['all', 'write', 'upload']), async (c) => {
     })
   }
   // Auth context is already set by middlewareKey
-  if (!(await checkPermission(c, 'bundle.delete', { appId: body.app_id }))) {
+  if (!(await checkPermission(c, 'app.upload_bundle', { appId: body.app_id }))) {
     return quickError(401, 'not_authorized', 'You can\'t access this app', { app_id: body.app_id })
   }
 
@@ -68,8 +68,8 @@ app.delete('/', middlewareKey(['all', 'write', 'upload']), async (c) => {
     }
   }
 
-  // delete the version
-  const { error: errorDelete } = await supabaseApikey(c, capgkey)
+  // Hard delete after upload-flow checks; upload keys lack bundle.delete RLS
+  const { error: errorDelete } = await supabaseAdmin(c)
     .from('app_versions')
     .delete()
     .eq('id', version.id)

@@ -4,46 +4,7 @@ import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { uploadBundleSDK } from './cli-sdk-utils'
 import { cleanupCli, getSemver, prepareCli, tempFileFolder } from './cli-utils'
-import { BASE_URL, createDirectApiKeyWithBindings, getSupabaseClient, headers, NON_OWNER_ORG_ID, ORG_ID, resetAndSeedAppData, resetAppData, resetAppDataStats, USER_ID } from './test-utils'
-
-// Helper to retry SDK operations that may fail due to transient network issues in CI
-async function retryUpload<T extends { success: boolean, error?: string }>(
-  fn: () => Promise<T>,
-  maxRetries = 3,
-): Promise<T> {
-  let lastResult: T | null = null
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    lastResult = await fn()
-    // Only retry on transient network errors, not on actual failures
-    if (lastResult.success || !lastResult.error?.includes('fetch failed')) {
-      return lastResult
-    }
-    // Wait before retry with exponential backoff
-    await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)))
-  }
-  return lastResult!
-}
-
-async function uploadWithFreshVersionRetry(
-  appId: string,
-  channel: string,
-  additionalOptions?: Parameters<typeof uploadBundleSDK>[3],
-  maxRetries = 4,
-) {
-  let lastVersion = getSemver()
-  let lastResult = await uploadBundleSDK(appId, lastVersion, channel, additionalOptions)
-
-  for (let attempt = 1; attempt < maxRetries; attempt++) {
-    if (lastResult.success || !lastResult.error?.includes('fetch failed')) {
-      return { result: lastResult, version: lastVersion }
-    }
-    await new Promise(resolve => setTimeout(resolve, 500 * attempt))
-    lastVersion = getSemver()
-    lastResult = await uploadBundleSDK(appId, lastVersion, channel, additionalOptions)
-  }
-
-  return { result: lastResult, version: lastVersion }
-}
+import { BASE_URL, createDirectApiKeyWithBindings, createIsolatedSeedAppOptions, getSupabaseClient, headers, NON_OWNER_ORG_ID, resetAndSeedAppData, resetAppData, resetAppDataStats, USER_ID } from './test-utils'
 
 async function createOrgBoundApiKey(orgId: string, roleName = 'org_admin') {
   const data = await createDirectApiKeyWithBindings({
@@ -75,10 +36,11 @@ async function deleteScopedApiKey(id: number) {
 describe('tests CLI upload', () => {
   const idSuccess = randomUUID()
   const APPNAME_success = `com.cli_${idSuccess}`
+  const successSeedOptions = createIsolatedSeedAppOptions()
 
   beforeAll(async () => {
     await Promise.all([
-      resetAndSeedAppData(APPNAME_success),
+      resetAndSeedAppData(APPNAME_success, successSeedOptions),
       prepareCli(APPNAME_success),
     ])
   })
@@ -92,7 +54,7 @@ describe('tests CLI upload', () => {
   })
 
   it('should upload bundle successfully', async () => {
-    const { result } = await uploadWithFreshVersionRetry(APPNAME_success, 'production', {
+    const result = await uploadBundleSDK(APPNAME_success, getSemver(), 'production', {
       ignoreCompatibilityCheck: true,
     })
     expect(result.success).toBe(true)
@@ -101,8 +63,9 @@ describe('tests CLI upload', () => {
   it('should link uploaded bundle to multiple comma-separated channels', async () => {
     const appName = `com.cli_multi_channel_${randomUUID()}`
     const extraChannel = `multi-${randomUUID().slice(0, 8)}`
+    const seedOptions = createIsolatedSeedAppOptions()
     await Promise.all([
-      resetAndSeedAppData(appName),
+      resetAndSeedAppData(appName, seedOptions),
       prepareCli(appName),
     ])
 
@@ -125,7 +88,7 @@ describe('tests CLI upload', () => {
           name: extraChannel,
           app_id: appName,
           version: versionData.id,
-          owner_org: ORG_ID,
+          owner_org: seedOptions.orgId,
           created_by: USER_ID,
           public: false,
           disable_auto_update_under_native: true,
@@ -141,7 +104,8 @@ describe('tests CLI upload', () => {
 
       expect(channelError).toBeNull()
 
-      const { result, version } = await uploadWithFreshVersionRetry(appName, `production,${extraChannel}`, {
+      const version = getSemver()
+      const result = await uploadBundleSDK(appName, version, `production,${extraChannel}`, {
         ignoreCompatibilityCheck: true,
       })
       expect(result.success).toBe(true)
@@ -166,16 +130,249 @@ describe('tests CLI upload', () => {
     }
   }, 60000)
 
+  it('creates a missing explicit channel before assigning the uploaded bundle', async () => {
+    const appName = `com.cli_new_channel_upload_${randomUUID()}`
+    const targetChannel = `upload-target-${randomUUID().slice(0, 8)}`
+    const seedOptions = createIsolatedSeedAppOptions()
+    await Promise.all([
+      resetAndSeedAppData(appName, seedOptions),
+      prepareCli(appName),
+    ])
+
+    try {
+      const version = getSemver()
+      const result = await uploadBundleSDK(appName, version, targetChannel, {
+        ignoreCompatibilityCheck: true,
+      })
+      expect(result.success).toBe(true)
+
+      const { data: channel, error } = await getSupabaseClient()
+        .from('channels')
+        .select('name, version(name)')
+        .eq('app_id', appName)
+        .eq('name', targetChannel)
+        .single()
+
+      expect(error).toBeNull()
+      expect(channel?.name).toBe(targetChannel)
+      expect((channel?.version as any)?.name).toBe(version)
+    }
+    finally {
+      await Promise.all([
+        cleanupCli(appName),
+        resetAppData(appName),
+        resetAppDataStats(appName),
+      ])
+    }
+  }, 60000)
+
+  it('allows app_uploader to pass explicit channel upload preflight', async () => {
+    const appName = `com.cli_channel_preflight_${randomUUID()}`
+    const seedOptions = createIsolatedSeedAppOptions()
+    await Promise.all([
+      resetAndSeedAppData(appName, seedOptions),
+      prepareCli(appName),
+    ])
+
+    let createdApikeyId: number | null = null
+    try {
+      const createdApikey = await createDirectApiKeyWithBindings({
+        userId: USER_ID,
+        key: randomUUID(),
+        name: `cli-channel-preflight-${randomUUID()}`,
+        orgId: seedOptions.orgId,
+        roleName: 'apikey_org_reader',
+        appId: appName,
+        appRoleName: 'app_uploader',
+      })
+      createdApikeyId = createdApikey.id
+
+      const version = getSemver()
+      const result = await uploadBundleSDK(appName, version, 'production', {
+        ignoreCompatibilityCheck: true,
+        apikey: createdApikey.key ?? undefined,
+      })
+      expect(result.success).toBe(true)
+
+      const { count, error } = await getSupabaseClient()
+        .from('app_versions')
+        .select('id', { count: 'exact', head: true })
+        .eq('app_id', appName)
+        .eq('name', version)
+
+      expect(error).toBeNull()
+      expect(count).toBe(1)
+    }
+    finally {
+      if (createdApikeyId !== null)
+        await deleteScopedApiKey(createdApikeyId)
+      await Promise.all([
+        cleanupCli(appName),
+        resetAppData(appName),
+        resetAppDataStats(appName),
+      ])
+    }
+  }, 60000)
+
+  it('allows app_uploader to pass default channel upload preflight', async () => {
+    const appName = `com.cli_default_channel_preflight_${randomUUID()}`
+    const seedOptions = createIsolatedSeedAppOptions()
+    await Promise.all([
+      resetAndSeedAppData(appName, seedOptions),
+      prepareCli(appName),
+    ])
+
+    let createdApikeyId: number | null = null
+    try {
+      const createdApikey = await createDirectApiKeyWithBindings({
+        userId: USER_ID,
+        key: randomUUID(),
+        name: `cli-default-channel-preflight-${randomUUID()}`,
+        orgId: seedOptions.orgId,
+        roleName: 'apikey_org_reader',
+        appId: appName,
+        appRoleName: 'app_uploader',
+      })
+      createdApikeyId = createdApikey.id
+
+      const version = getSemver()
+      const result = await uploadBundleSDK(appName, version, undefined, {
+        ignoreCompatibilityCheck: true,
+        apikey: createdApikey.key ?? undefined,
+      })
+      expect(result.success).toBe(true)
+
+      const { count, error } = await getSupabaseClient()
+        .from('app_versions')
+        .select('id', { count: 'exact', head: true })
+        .eq('app_id', appName)
+        .eq('name', version)
+
+      expect(error).toBeNull()
+      expect(count).toBe(1)
+    }
+    finally {
+      if (createdApikeyId !== null)
+        await deleteScopedApiKey(createdApikeyId)
+      await Promise.all([
+        cleanupCli(appName),
+        resetAppData(appName),
+        resetAppDataStats(appName),
+      ])
+    }
+  }, 60000)
+
+  it('does not create a missing explicit channel when create-channel preflight fails', async () => {
+    const appName = `com.cli_channel_no_orphan_${randomUUID()}`
+    const targetChannel = `upload-target-${randomUUID().slice(0, 8)}`
+    const seedOptions = createIsolatedSeedAppOptions()
+    await Promise.all([
+      resetAndSeedAppData(appName, seedOptions),
+      prepareCli(appName),
+    ])
+
+    let createdApikeyId: number | null = null
+    try {
+      const createdApikey = await createDirectApiKeyWithBindings({
+        userId: USER_ID,
+        key: randomUUID(),
+        name: `cli-channel-no-orphan-${randomUUID()}`,
+        orgId: seedOptions.orgId,
+        roleName: 'apikey_org_reader',
+        appId: appName,
+        appRoleName: 'app_uploader',
+      })
+      createdApikeyId = createdApikey.id
+
+      const result = await uploadBundleSDK(appName, getSemver(), targetChannel, {
+        ignoreCompatibilityCheck: true,
+        apikey: createdApikey.key ?? undefined,
+      })
+      expect(result.success).toBe(false)
+      expect(result.error).toContain('app.create_channel')
+
+      const { count, error } = await getSupabaseClient()
+        .from('channels')
+        .select('id', { count: 'exact', head: true })
+        .eq('app_id', appName)
+        .eq('name', targetChannel)
+
+      expect(error).toBeNull()
+      expect(count).toBe(0)
+    }
+    finally {
+      if (createdApikeyId !== null)
+        await deleteScopedApiKey(createdApikeyId)
+      await Promise.all([
+        cleanupCli(appName),
+        resetAppData(appName),
+        resetAppDataStats(appName),
+      ])
+    }
+  }, 60000)
+
+  it('fails self-assign upload before creating a bundle when channel settings permission is missing', async () => {
+    const appName = `com.cli_self_assign_preflight_${randomUUID()}`
+    const seedOptions = createIsolatedSeedAppOptions()
+    await Promise.all([
+      resetAndSeedAppData(appName, seedOptions),
+      prepareCli(appName),
+    ])
+
+    let createdApikeyId: number | null = null
+    try {
+      const createdApikey = await createDirectApiKeyWithBindings({
+        userId: USER_ID,
+        key: randomUUID(),
+        name: `cli-self-assign-preflight-${randomUUID()}`,
+        orgId: seedOptions.orgId,
+        roleName: 'org_member',
+        appId: appName,
+        appRoleName: 'app_developer',
+      })
+      createdApikeyId = createdApikey.id
+
+      const version = getSemver()
+      const result = await uploadBundleSDK(appName, version, 'production', {
+        ignoreCompatibilityCheck: true,
+        selfAssign: true,
+        apikey: createdApikey.key ?? undefined,
+      })
+      expect(result.success).toBe(false)
+      expect(result.error).toContain('channel.update_settings')
+
+      const { count, error } = await getSupabaseClient()
+        .from('app_versions')
+        .select('id', { count: 'exact', head: true })
+        .eq('app_id', appName)
+        .eq('name', version)
+
+      expect(error).toBeNull()
+      expect(count).toBe(0)
+    }
+    finally {
+      if (createdApikeyId !== null)
+        await deleteScopedApiKey(createdApikeyId)
+      await Promise.all([
+        cleanupCli(appName),
+        resetAppData(appName),
+        resetAppDataStats(appName),
+      ])
+    }
+  }, 60000)
+
   it('should not upload same hash twice', async () => {
     const appName = `com.cli_duplicate_${randomUUID()}`
+    const seedOptions = createIsolatedSeedAppOptions()
     await Promise.all([
-      resetAndSeedAppData(appName),
+      resetAndSeedAppData(appName, seedOptions),
       prepareCli(appName),
     ])
 
     try {
       // First upload
-      const { result: firstUpload, version } = await uploadWithFreshVersionRetry(appName, 'production', {
+      const version = getSemver()
+      const firstUpload = await uploadBundleSDK(appName, version, 'production', {
         ignoreCompatibilityCheck: true,
       })
       expect(firstUpload.success).toBe(true)
@@ -204,26 +401,35 @@ describe('tests CLI upload options in parallel', () => {
   const sharedId = randomUUID()
   const SHARED_APPNAME = `com.cli_shared_${sharedId}`
 
+  interface PreparedCliApp {
+    id: string
+    APPNAME: string
+    seedOptions: ReturnType<typeof createIsolatedSeedAppOptions>
+  }
+
+  const sharedSeedOptions = createIsolatedSeedAppOptions()
+
   // Use Maps with unique keys for atomic access in concurrent tests
-  const fileTestApps = new Map<string, { id: string, APPNAME: string }>()
-  const apiTestApps = new Map<string, { id: string, APPNAME: string }>()
+  const fileTestApps = new Map<string, PreparedCliApp>()
+  const apiTestApps = new Map<string, PreparedCliApp>()
   const usedApps: Array<string> = []
 
   const prepareApp = async () => {
     const id = randomUUID()
     const APPNAME = `com.cli_ccr_${id}`
+    const seedOptions = createIsolatedSeedAppOptions()
     await Promise.all([
-      resetAndSeedAppData(APPNAME),
+      resetAndSeedAppData(APPNAME, seedOptions),
       prepareCli(APPNAME),
     ])
-    return { id, APPNAME }
+    return { id, APPNAME, seedOptions }
   }
 
   beforeAll(async () => {
     const promises = []
 
     promises.push(Promise.all([
-      resetAndSeedAppData(SHARED_APPNAME),
+      resetAndSeedAppData(SHARED_APPNAME, sharedSeedOptions),
       prepareCli(SHARED_APPNAME),
     ]))
 
@@ -306,14 +512,14 @@ describe('tests CLI upload options in parallel', () => {
     let createdPlainKey: string | null = null
 
     try {
-      const createdApikey = await createOrgBoundApiKey(ORG_ID)
+      const createdApikey = await createOrgBoundApiKey(app.seedOptions.orgId)
       createdApikeyId = createdApikey.id
       createdPlainKey = createdApikey.key
 
-      const result = await retryUpload(() => uploadBundleSDK(app.APPNAME, semver, 'production', {
+      const result = await uploadBundleSDK(app.APPNAME, semver, 'production', {
         ignoreCompatibilityCheck: true,
         apikey: createdPlainKey as string,
-      }))
+      })
       expect(result.success).toBe(true)
     }
     finally {

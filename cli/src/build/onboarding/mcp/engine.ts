@@ -3,10 +3,11 @@ import type { AndroidOnboardingProgress, AndroidOnboardingStep } from '../androi
 import type { AndroidEffectDeps, AndroidStepCtx } from '../android/flow.js'
 import type { IosEffectDeps, IosStepCtx, IosStepView } from '../ios/flow.js'
 import type { OnboardingProgress, OnboardingStep } from '../types.js'
-import type { ChoiceOption, NextStepResult, Platform } from './contract.js'
+import type { ChoiceOption, NextStepResult, Platform, StepKind } from './contract.js'
 import type { IosCarried, TailParkedState } from './session-state.js'
 import type { BuildOutputRecord } from '../../output-record.js'
 import type { TailEffectProgress, TailStep, TailStepCtx } from '../tail/flow.js'
+import { consoleWebUrl } from '../../../utils.js'
 import { buildAppIdConflictSuggestions } from '../../../init/app-conflict.js'
 import { ONBOARDING_RULES } from './contract.js'
 import { explainForState } from './explanations.js'
@@ -20,11 +21,16 @@ import { TAIL_INPUT_KEYS, validateIosStepInput, validateStepInput, validateStore
 import { androidViewForStep, applyAndroidInput, applyGoogleSignInBroker, runAndroidEffect } from '../android/flow.js'
 import { applyIosInput, iosViewForStep, runIosEffect } from '../ios/flow.js'
 import { applyTailInput, tailViewForStep } from '../tail/flow.js'
-import { clearSession, clearSessionCarried, dropIosCarried, getResumeResolvedFor, getSession, getSessionPlatform, mergeIosCarried, mergeTailCarried, setResumeResolvedFor, setSessionPlatform, setTailParked } from './session-state.js'
+import { clearSession, clearSessionCarried, dropIosCarried, getAppflowProgress, getResumeResolvedFor, getSession, getSessionPlatform, mergeIosCarried, mergeTailCarried, setAppflowGate, setAppflowProgress, setResumeResolvedFor, setSessionPlatform, setTailParked } from './session-state.js'
 import { slimAndroidTailProgress, slimIosTailProgress } from './tail-progress.js'
 import { brokerBegin, brokerClear, brokerPoll } from './broker-session.js'
 import type { GoogleUserInfo } from '../android/oauth-google.js'
 import { SUPPORT_EMAIL } from '../../../support/contact-support.js'
+import { appflowFlow, platformsToBuild } from '../appflow/flow.js'
+import type { AppflowEffectResult } from '../appflow/flow.js'
+import type { AppflowProgress, AppflowStep } from '../appflow/types.js'
+import type { StepView } from '../flow/contract.js'
+import { buildAppflowEffectDeps, persistAppflowCredentials } from '../appflow/deps.js'
 
 /** Facts gathered during preflight; the pure deciders branch only on these. */
 export interface PreflightFacts {
@@ -60,6 +66,7 @@ interface OnboardingInput {
   gcpProjectId?: string
   gcpProjectName?: string
   androidPackage?: string
+  androidVerifyAction?: 'open' | 'recheck' | 'cancel' | 'proceed'
   saMethodChoice?: 'retry' | 'save-anyway' | 'oauth'
   /** Set true at google-sign-in to (re)open the browser for a fresh OAuth — recovery when the browser didn't open, was closed, or the sign-in stalled. */
   reopenSignIn?: boolean
@@ -135,6 +142,11 @@ interface OnboardingInput {
   profilePath?: string
   /** Answer to import-export-warning: 'go' exports from the Keychain (the one macOS permission dialog), 'back' re-picks the profile, 'exit' stops. */
   exportConfirm?: 'go' | 'back' | 'exit'
+  // ── Appflow migration answers ───────────────────────────────────────────────
+  /** Generic choice value for the Appflow migration flow's neutral steps (org/app/cert pick, submenu, gap-fill, p8-upgrade, handoff-build). */
+  value?: string
+  /** Answer to the one-time single-platform "Are you migrating from Ionic Appflow?" gate. */
+  migratingFromAppflow?: 'yes' | 'no'
 }
 
 // decideStart
@@ -260,13 +272,12 @@ async function decidePlatform(facts: PreflightFacts, _progress: OnboardingProgre
     next: {
       tool: NEXT_STEP_TOOL,
       with: { platform: '<ios|android>' },
-      instruction: 'Ask the user which platform, then call next_step with their choice.',
+      instruction: 'Ask the user which platform to set up first, then call next_step with their choice.',
       call: `${NEXT_STEP_TOOL}({ platform: "ios" })`,
     },
     rules: ONBOARDING_RULES,
   }
 }
-
 // ─── iOS (granular shared-engine path, S6a) ───────────────────────────────────
 //
 // decideIos is a thin driver over the SHARED iOS flow engine (ios/flow.ts),
@@ -1600,6 +1611,24 @@ export function mapAndroidView(
       }
     }
 
+    case 'android-app-verify':
+      // Only reached as a choice when the chosen package isn't a real Play app
+      // (the effect auto-advances on exact-match or a degraded/un-verifiable
+      // check). The view message + options differ by outcome (no-app vs
+      // wrong-build-id); surface them verbatim and let the user choose.
+      return {
+        ...base,
+        kind: 'choice',
+        summary: view.message ?? 'Your build package does not match an app in Play Console yet.',
+        options: (view.options ?? []).map(o => ({ value: o.value, label: o.label, note: o.note })),
+        next: {
+          tool: NEXT_STEP_TOOL,
+          with: { androidVerifyAction: '<open|recheck|cancel|proceed>' },
+          instruction: 'Show the message verbatim and let the user choose. After they create the app, call next_step with androidVerifyAction: "recheck". If apps:search still does not list a just-created app, "proceed" advances anyway (the provisioning invite is the real check). If the package was simply wrong, call next_step again with a corrected androidPackage instead. "cancel" stops onboarding.',
+          call: `${NEXT_STEP_TOOL}({ androidVerifyAction: "recheck" })`,
+        },
+      }
+
     case 'sa-json-existing-path':
       return {
         ...base,
@@ -1895,6 +1924,360 @@ function androidEffectError(
     onboarding: 'capgo-builder', phase: 'credentials', platform: 'android', state: step,
     progress: stepProg, kind: 'error',
     summary: `Android setup error at step "${step}": ${message}`,
+    rules: ONBOARDING_RULES,
+  }
+}
+
+// ── Appflow migration (MCP) ───────────────────────────────────────────────────
+//
+// The Appflow migration is driven through the NEUTRAL PlatformFlow contract
+// (appflowFlow) rather than a bespoke decider: decideAppflow resolves the
+// resume step, runs auto effects in a bounded loop (the same MAX_AUTO_STEPS
+// guard as ios/android), and maps the flow's neutral StepView into the MCP
+// NextStepResult. Progress is process-local (session-state appflowProgress) —
+// there is no on-disk appflow loader; a restart re-runs from explain and the
+// flow self-heals via the cached token. On the build hand-off the collected
+// per-platform Capgo creds are persisted into the REAL credential store, so the
+// existing build/CI tail treats them like natively-set-up creds.
+const APPFLOW_PHASE = 'credentials' as const
+
+/** Map a neutral StepView.kind to the MCP StepKind. The neutral 'input' kind (the
+ * step-8 provide chain: .p8 path / key id / issuer id) has no MCP equivalent, so
+ * it renders as a 'human_gate' that collects one text field via next_step. */
+function appflowKind(kind: StepView['kind']): StepKind {
+  if (kind === 'choice' || kind === 'human_gate' || kind === 'info' || kind === 'done' || kind === 'error')
+    return kind
+  if (kind === 'input')
+    return 'human_gate'
+  // 'auto' renders as an auto step.
+  return 'auto'
+}
+
+/** Coarse 0-100 progress for an appflow step (informational only). */
+function appflowProgressFor(step: AppflowStep): number {
+  const order: AppflowStep[] = [
+    'explain', 'authenticating', 'select-org', 'select-app', 'fetch-signing',
+    'select-ios-cert', 'select-android-cert', 'no-signing-submenu', 'fetch-distribution',
+    'ios-dist-gapfill', 'android-dist-gapfill', 'ios-p8-generate', 'android-sa-generate',
+    'validate', 'p8-upgrade-prompt', 'p8-source-select', 'input-p8-path', 'input-p8-key-id',
+    'input-p8-issuer-id', 'load-provided-p8', 'handoff-build', 'done',
+  ]
+  const idx = order.indexOf(step)
+  if (idx < 0)
+    return 10
+  return Math.min(95, 10 + Math.round((idx / (order.length - 1)) * 80))
+}
+
+// Cap + flatten an exception/message before weaving it into an MCP summary so a
+// raw exception string (or a hostile API body fragment) cannot leak large/unsafe
+// content to the caller. Single line, allow-listed-ish, bounded.
+function sanitizeForSummary(message: string, max = 200): string {
+  const flat = String(message ?? '').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim()
+  return flat.length > max ? `${flat.slice(0, max)}…` : flat
+}
+
+/**
+ * The no-signing submenu's 'email-support' arm: surface the Capgo support
+ * contact and HOLD on the submenu (the agent re-presents it). We cannot open a
+ * mail client over MCP, so we hand the caller the address + framing and a
+ * next_step that returns to the same choice.
+ */
+function appflowEmailSupportResult(facts: PreflightFacts): NextStepResult {
+  return {
+    onboarding: 'capgo-builder',
+    phase: APPFLOW_PHASE,
+    state: 'appflow-no-signing-submenu',
+    progress: appflowProgressFor('no-signing-submenu'),
+    kind: 'human_gate',
+    summary: `To get help migrating "${facts.appId}" from Appflow, email ${SUPPORT_EMAIL} (mention the app and that signing credentials appear missing). I cannot open your mail app from here.`,
+    human: {
+      instruction: `Email ${SUPPORT_EMAIL} describing your Appflow app ("${facts.appId}") and that the migration reported no signing configuration. After that, you can pick another option on the submenu.`,
+    },
+    context: { supportEmail: SUPPORT_EMAIL },
+    next: {
+      tool: NEXT_STEP_TOOL,
+      with: { value: '<skip|abandon|go-back>' },
+      instruction: 'After emailing support (or deciding not to), call next_step with the submenu choice you want: skip, abandon, or go-back.',
+      call: `${NEXT_STEP_TOOL}({ value: "go-back" })`,
+    },
+    rules: ONBOARDING_RULES,
+  }
+}
+
+/** Render a neutral appflow StepView (interactive — not 'auto') into an MCP NextStepResult. */
+function renderAppflowView(step: AppflowStep, view: StepView): NextStepResult {
+  const base = {
+    onboarding: 'capgo-builder' as const,
+    phase: APPFLOW_PHASE,
+    state: `appflow-${step}`,
+    progress: appflowProgressFor(step),
+    kind: appflowKind(view.kind),
+    summary: view.prompt,
+    rules: ONBOARDING_RULES,
+  }
+  if (view.kind === 'choice') {
+    return {
+      ...base,
+      options: (view.options ?? []).map(o => ({ value: o.value, label: o.label, note: o.note })),
+      next: {
+        tool: NEXT_STEP_TOOL,
+        with: { value: '<one of the option values>' },
+        instruction: 'Present the options and call next_step with the user\'s pick as { value }.',
+        call: `${NEXT_STEP_TOOL}({ value: "${(view.options?.[0]?.value) ?? 'continue'}" })`,
+      },
+    }
+  }
+  if (view.kind === 'human_gate') {
+    return {
+      ...base,
+      human: { instruction: view.prompt },
+      next: {
+        tool: NEXT_STEP_TOOL,
+        instruction: 'Show the explanation, then call next_step({}) to continue.',
+        call: `${NEXT_STEP_TOOL}({})`,
+      },
+    }
+  }
+  if (view.kind === 'info') {
+    return {
+      ...base,
+      next: {
+        tool: NEXT_STEP_TOOL,
+        instruction: 'Show the information, then call next_step({}) to continue.',
+        call: `${NEXT_STEP_TOOL}({})`,
+      },
+    }
+  }
+  if (view.kind === 'input') {
+    // The step-8 provide chain collects ONE text field per step. Map the
+    // collected field to the next_step input key decideAppflow threads back
+    // (p8Path -> input.p8Path, p8KeyId -> input.keyId, p8IssuerId -> input.issuerId).
+    const field = view.collect?.[0]?.field
+    const inputKey = field === 'p8Path' ? 'p8Path' : field === 'p8KeyId' ? 'keyId' : field === 'p8IssuerId' ? 'issuerId' : undefined
+    // An unknown/absent input field would otherwise be silently coerced to
+    // 'issuerId' — surface it as an error instead of routing the value to the wrong field.
+    if (!field || !inputKey) {
+      return {
+        ...base,
+        kind: 'error',
+        summary: `Unsupported Appflow input field for step "${step}".`,
+      }
+    }
+    return {
+      ...base,
+      human: { instruction: view.prompt },
+      // Expose the field metadata so an agent following the structured `collect`
+      // contract knows what to gather (mirrors how other input steps surface it).
+      collect: [{ field: inputKey, desc: view.collect?.[0]?.desc ?? field }],
+      next: {
+        tool: NEXT_STEP_TOOL,
+        with: { [inputKey]: `<${field}>` },
+        instruction: `Ask the user for the value, then call next_step with { ${inputKey} }.`,
+        call: `${NEXT_STEP_TOOL}({ ${inputKey}: "..." })`,
+      },
+    }
+  }
+  return base
+}
+
+/**
+ * Drive the Appflow migration flow.
+ *
+ * `scope` is the migration scope ('ios' | 'android'), from the single-platform
+ * "migrating from Appflow?" gate.
+ * `input` carries the user's last answer (a choice value, or {} to advance an
+ * info / human_gate). The bounded loop runs auto effects until it lands on an
+ * interactive step or the build hand-off.
+ */
+export async function decideAppflow(
+  facts: PreflightFacts,
+  deps: EngineDeps,
+  scope: 'ios' | 'android',
+  input?: OnboardingInput,
+): Promise<NextStepResult> {
+  const appId = facts.appId!
+  // Seed (or resume) the process-local progress. A fresh entry starts at the
+  // explain gate with the chosen scope.
+  let progress: AppflowProgress = getAppflowProgress(appId)
+    // Seed capgoAppId from the Capgo app id (facts.appId) the rest of the engine
+    // builds against, so the handoff-build app-id swap (Appflow hex → Capgo id)
+    // is NOT a no-op over MCP and the inline tail never targets the Appflow hex.
+    ?? { scope, capgoAppId: appId, migratable: { ios: false, android: false }, completedSteps: [] }
+  // Keep the scope in sync with the entry point on a truly fresh entry.
+  if (progress.scope !== scope && progress.completedSteps.length === 0)
+    progress = { ...progress, scope }
+  // Backfill capgoAppId on any resumed progress that predates the seed, so the
+  // handoff-build app-id swap (Appflow hex → Capgo id) is always live over MCP.
+  if (!progress.capgoAppId)
+    progress = { ...progress, capgoAppId: appId }
+
+  const flowDeps = buildAppflowEffectDeps({ appId, packageName: facts.appId })
+
+  // Carries the most-recent AUTO effect's `transient` (e.g. the org/app/cert/dist
+  // option lists, or validation results) so the interactive step it transitions
+  // INTO renders with real options instead of an empty picker. Mirrors the TUI's
+  // setCtx(result.transient) threading.
+  let ctx: Record<string, unknown> = {}
+
+  // Apply the user's answer to the step the migration is parked on (the
+  // interactive step the previous call returned), then advance.
+  //
+  // A FRESH entry into the migration (the single-platform gate
+  // `migratingFromAppflow: 'yes'`) must RENDER the resume step, not advance past
+  // it. Every other call is an advance of the parked interactive step: a bare
+  // next_step({}) advances an info / human_gate, and a next_step({ value })
+  // answers a choice.
+  const isFreshEntry = input?.migratingFromAppflow === 'yes'
+  let step = appflowFlow.resumeStep(progress)
+  const parkedView = appflowFlow.viewForStep(step, progress)
+  const isInteractive = parkedView.kind !== 'auto'
+  if (input && !isFreshEntry && isInteractive) {
+    // The no-signing submenu's 'email-support' surfaces the support contact and
+    // HOLDS the step (does not advance into a credential-less migration tail).
+    if (step === 'no-signing-submenu' && input.value === 'email-support') {
+      setAppflowProgress(appId, progress)
+      return appflowEmailSupportResult(facts)
+    }
+    // Thread any text answer (custom build command / .env export path) so a tail
+    // text-input step answered over MCP is not silently dropped (C31).
+    const inputText = input.buildScriptCustom ?? input.envExportPath ?? input.profilePath ?? input.p8Path ?? input.keyId ?? input.issuerId
+    progress = appflowFlow.applyInput(step, progress, { value: input.value, text: inputText })
+    // 'abandon' on the no-signing submenu leaves the migration and starts native
+    // onboarding for the affected platform (the spec's "come back later" exit).
+    if (step === 'no-signing-submenu' && input.value === 'abandon') {
+      const native: Platform = progress.noSigningScope === 'android' ? 'android' : 'ios'
+      setAppflowProgress(appId, undefined)
+      setSessionPlatform(appId, native)
+      return native === 'android' ? decideAndroid(facts, deps) : decideIos(facts, deps)
+    }
+    // 'go-back' rewinds (the reducer cleared appId/fetch-signing): just resume,
+    // which routes back to the app picker. No special intercept needed.
+    // The build hand-off choice is resolved separately (persist + route/finish).
+    if (step === 'handoff-build')
+      return appflowHandoff(facts, deps, progress, input)
+    step = appflowFlow.resumeStep(progress)
+  }
+
+  for (let i = 0; i < MAX_AUTO_STEPS; i++) {
+    const view = appflowFlow.viewForStep(step, progress, ctx)
+    if (view.kind !== 'auto') {
+      // The build hand-off choice is resolved by appflowHandoff (persist creds +
+      // route to build / finish) when the user answers it; until then it renders
+      // as an ordinary choice.
+      if (step === 'handoff-build')
+        return appflowHandoff(facts, deps, progress, input)
+      setAppflowProgress(appId, progress)
+      return renderAppflowView(step, view)
+    }
+    // Auto step → run the effect, persist, and continue the loop from `next`.
+    let result: AppflowEffectResult
+    try {
+      result = (await appflowFlow.runEffect(step, progress, flowDeps)) as AppflowEffectResult
+    }
+    catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      setAppflowProgress(appId, progress)
+      return {
+        onboarding: 'capgo-builder', phase: APPFLOW_PHASE, state: `appflow-${step}`, platform: undefined,
+        progress: appflowProgressFor(step), kind: 'error',
+        summary: `Appflow migration error at "${step}": ${sanitizeForSummary(message)}. If this persists, email ${SUPPORT_EMAIL}.`,
+        rules: ONBOARDING_RULES,
+      }
+    }
+    progress = result.progress
+    // Thread this auto effect's transient (option lists / results) into the next
+    // step's ctx so the interactive step it transitions to renders real options.
+    ctx = result.transient ?? {}
+    setAppflowProgress(appId, progress)
+    if (!result.next)
+      break
+    step = result.next
+  }
+
+  // Landed on (or looped to) the build hand-off after the auto chain.
+  if (step === 'handoff-build')
+    return appflowHandoff(facts, deps, progress, input)
+  // Fallback: render whatever interactive step we ended on (with the last auto
+  // effect's transient as ctx so option lists survive).
+  setAppflowProgress(appId, progress)
+  return renderAppflowView(step, appflowFlow.viewForStep(step, progress, ctx))
+}
+
+/**
+ * Resolve the build hand-off: when the user answers the handoff-build choice,
+ * persist the migrated creds and either route into the build phase ('build') or
+ * finish ('skip'). Without an answer yet, render the choice.
+ */
+async function appflowHandoff(
+  facts: PreflightFacts,
+  deps: EngineDeps,
+  progress: AppflowProgress,
+  input?: OnboardingInput,
+): Promise<NextStepResult> {
+  const appId = facts.appId!
+  const targets = platformsToBuild(progress)
+  if (!input || input.value === undefined) {
+    setAppflowProgress(appId, progress)
+    return renderAppflowView('handoff-build', appflowFlow.viewForStep('handoff-build', progress))
+  }
+  // Only 'build' or 'skip' are valid choices. Re-present the gate for any other
+  // value rather than silently falling through to the build path (which would
+  // persist credentials + advance as if the user picked 'build').
+  if (input.value !== 'build' && input.value !== 'skip') {
+    setAppflowProgress(appId, progress)
+    return renderAppflowView('handoff-build', appflowFlow.viewForStep('handoff-build', progress))
+  }
+  // Persist the migrated per-platform creds into the real store before anything
+  // downstream reads them (so a build / `build request` sees them). A persist
+  // FAILURE is surfaced loudly — we must NOT report "migration complete" when the
+  // credentials never reached the store.
+  try {
+    await persistAppflowCredentials(appId, progress)
+  }
+  catch (err) {
+    setAppflowProgress(appId, progress)
+    return {
+      onboarding: 'capgo-builder', phase: APPFLOW_PHASE, state: 'appflow-handoff-build', platform: undefined,
+      progress: appflowProgressFor('handoff-build'), kind: 'error',
+      summary: `Appflow migration could not save the imported credentials for "${appId}": ${sanitizeForSummary(err instanceof Error ? err.message : String(err))}. Nothing was persisted — re-run the migration, or email ${SUPPORT_EMAIL}.`,
+      rules: ONBOARDING_RULES,
+    }
+  }
+  if (input.value === 'skip') {
+    setAppflowProgress(appId, undefined)
+    return {
+      onboarding: 'capgo-builder', phase: 'done', state: 'appflow-done', progress: 100, kind: 'done',
+      summary: `Appflow migration complete for "${appId}". Imported credentials for: ${targets.join(', ') || 'no platforms'}. Start your first cloud build anytime with \`capgo build request\`.`,
+      rules: ONBOARDING_RULES,
+    }
+  }
+  const first = targets[0]
+  if (!first) {
+    setAppflowProgress(appId, undefined)
+    return {
+      onboarding: 'capgo-builder', phase: 'done', state: 'appflow-done', progress: 100, kind: 'done',
+      summary: `Appflow migration finished for "${appId}", but no platform credentials were imported. Re-run onboarding or email ${SUPPORT_EMAIL} if you expected credentials.`,
+      rules: ONBOARDING_RULES,
+    }
+  }
+  // Single-platform migration: commit the session to the migrated platform and
+  // enter the build phase. The first build is run by start_capgo_build, exactly
+  // like the native flows.
+  setAppflowProgress(appId, undefined)
+  setSessionPlatform(appId, first)
+  return {
+    onboarding: 'capgo-builder', phase: 'build', state: 'build-ready', platform: first, progress: 90, kind: 'choice',
+    summary: `Credentials imported from Appflow for ${first}. Run the first cloud build for ${first} now?`,
+    options: [
+      { value: 'build', label: `Build ${first} now` },
+      { value: 'skip', label: 'Skip (build later with `capgo build request`)' },
+    ],
+    next: {
+      tool: 'start_capgo_build',
+      with: { platform: first },
+      instruction: `To build, call start_capgo_build({ platform: "${first}" }) and then poll capgo_build_wait. To skip, call ${NEXT_STEP_TOOL}({ runBuild: false, platform: "${first}" }).`,
+      call: `start_capgo_build({ platform: "${first}" })`,
+    },
     rules: ONBOARDING_RULES,
   }
 }
@@ -2984,6 +3367,20 @@ export async function decideAdvance(
       return decideStart(facts, progress, deps)
     if (!facts.appRegistered)
       return decideStart(facts, progress, deps)
+    // ── "Migrating from Appflow?" gate (single-platform entry, OPT-IN) ─────────
+    // The single-platform migration question is surfaced in the TUI (build init).
+    // Over MCP it is OPT-IN: a caller that already knows the user is migrating
+    // passes { migratingFromAppflow: 'yes' } to run the migration scoped to this
+    // platform; 'no' (or omitting the field) keeps the established direct-pick
+    // contract and goes straight to native onboarding. The answer is persisted so
+    // a resume never re-asks.
+    if (input.migratingFromAppflow === 'yes') {
+      if (facts.appId)
+        setAppflowGate(facts.appId, 'asked-yes')
+      return decideAppflow(facts, deps, input.platform, input)
+    }
+    if (input.migratingFromAppflow === 'no' && facts.appId)
+      setAppflowGate(facts.appId, 'asked-no')
     // Commit this session to the chosen platform (the picker answer / explicit
     // pick). Subsequent bare next_step({}) calls resume THIS platform from session
     // memory — never from whichever platform happens to have progress on disk.
@@ -2997,6 +3394,13 @@ export async function decideAdvance(
   // session memory, not disk), so a mid-flow next_step({}) continues the right flow.
   // With no committed platform (fresh start / post-restart) this falls to decideStart,
   // which offers the picker rather than guessing from disk.
+  // An in-flight Appflow migration (process-local progress) takes precedence — a
+  // bare next_step({ value }) answers the migration's current step.
+  if (facts.appId) {
+    const appflowInFlight = getAppflowProgress(facts.appId)
+    if (appflowInFlight)
+      return decideAppflow(facts, deps, appflowInFlight.scope, input)
+  }
   const active = facts.appId ? getSessionPlatform(facts.appId) : undefined
   if (active === 'android')
     return decideAndroid(facts, deps)
@@ -3143,6 +3547,16 @@ async function persistAndroidInput(deps: EngineDeps, appId: string, input: Onboa
       packageName: input.androidPackage,
       source: 'user-input',
       serviceAccountMethod: updated.serviceAccountMethod ?? 'generate',
+    })
+  }
+
+  // android-app-verify gate answer. 'recheck'/'open' leave progress unchanged so
+  // the next drive() re-runs the verify effect (transient isn't persisted → the
+  // apps:search check runs again). 'cancel' is surfaced by the engine's halt path.
+  if (input.androidVerifyAction) {
+    updated = applyAndroidInput('android-app-verify', updated, {
+      step: 'android-app-verify',
+      verifyAction: input.androidVerifyAction,
     })
   }
 
@@ -3421,7 +3835,7 @@ async function enterTailAfterBuild(
   rec: BuildOutputRecord,
 ): Promise<NextStepResult | null> {
   try {
-    const buildUrl = `https://capgo.app/app/${appId}/builds`
+    const buildUrl = consoleWebUrl(`/app/${appId}/builds`)
     if (platform === 'ios') {
       if (!deps.iosEffectDeps?.detectCiSecretTargets || !deps.iosEffectDeps.saveProgress)
         return null
@@ -3894,6 +4308,7 @@ async function drive(deps: EngineDeps, input?: OnboardingInput): Promise<NextSte
     || input.keystoreNewAlias !== undefined
     || input.keystorePasswordMethod !== undefined
     || input.keystoreCommonName !== undefined
+    || input.androidVerifyAction !== undefined
   )
   // Strict step-by-step gate: only the CURRENT android step's single expected
   // field may be applied. Runs BEFORE persistAndroidInput so a mega-call
@@ -3974,6 +4389,18 @@ async function drive(deps: EngineDeps, input?: OnboardingInput): Promise<NextSte
     }
   }
 
+  // Android verify-app gate: 'cancel' halts onboarding (mirrors the TUI's
+  // exitOnboarding at this gate). Runs BEFORE persist/decide so it does not fall
+  // through to decideAndroid and silently re-render the same gate forever.
+  if (androidInputPresent && input?.androidVerifyAction === 'cancel') {
+    const cancelAppId = await deps.getAppId()
+    return {
+      onboarding: 'capgo-builder', phase: 'credentials', state: 'android-app-verify', platform: 'android',
+      progress: ANDROID_STEP_PROGRESS['android-app-verify'], kind: 'done',
+      summary: `Onboarding cancelled at the Play Store app check${cancelAppId ? ` for "${cancelAppId}"` : ''}. Nothing was provisioned. Re-run onboarding once the app exists in Play Console (or pick the package it is published under).`,
+      rules: ONBOARDING_RULES,
+    }
+  }
   if (androidInputPresent) {
     const inputAppId = await deps.getAppId()
     if (inputAppId)

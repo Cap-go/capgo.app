@@ -1,7 +1,9 @@
 // src/init/mcp/progress.ts
+import { createHash } from 'node:crypto'
 import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import tmp from 'tmp'
+import { getConfigWriteTarget } from '../../config'
 
 export interface LiveUpdateProgress {
   step_done: number
@@ -13,18 +15,17 @@ export interface LiveUpdateProgress {
   encryptionEnabled?: boolean
 }
 
-let tmpPath: string | undefined
-
-function ensureTmpPath(): string {
-  if (tmpPath)
-    return tmpPath
-  tmpPath = join(tmp.tmpdir, 'capgocli-live-update-progress.json')
-  return tmpPath
+function progressPath(): string {
+  const configTarget = getConfigWriteTarget()
+  const suffix = configTarget
+    ? `-${createHash('sha256').update(configTarget).digest('hex')}`
+    : ''
+  return join(tmp.tmpdir, `capgocli-live-update-progress${suffix}.json`)
 }
 
 export function loadLiveUpdateProgress(): LiveUpdateProgress | null {
   try {
-    const raw = readFileSync(ensureTmpPath(), 'utf8')
+    const raw = readFileSync(progressPath(), 'utf8')
     if (!raw)
       return null
     const parsed = JSON.parse(raw) as LiveUpdateProgress
@@ -38,17 +39,14 @@ export function loadLiveUpdateProgress(): LiveUpdateProgress | null {
 }
 
 export function saveLiveUpdateProgress(data: LiveUpdateProgress): void {
-  writeFileSync(ensureTmpPath(), JSON.stringify(data))
+  writeFileSync(progressPath(), JSON.stringify(data))
 }
 
 export function clearLiveUpdateProgress(): void {
-  if (!tmpPath)
-    return
   try {
-    rmSync(tmpPath)
+    rmSync(progressPath())
   }
   catch {
     // ignore
   }
-  tmpPath = undefined
 }

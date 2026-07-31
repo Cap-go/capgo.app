@@ -249,9 +249,6 @@ watchEffect(async () => {
           const latestId = await getLatestVersionId()
           step.value += 1
           latestBundleId.value = latestId ?? ''
-          realtimeListener.value = false
-          clearWatchers()
-          setLog()
         }
       }
       catch (e) {

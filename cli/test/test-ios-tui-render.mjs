@@ -1002,7 +1002,7 @@ test('build-complete (bare) shows the all-set box, the credentials-ready line an
 test('build-complete surfaces the cloud-build line and the tracking url when a build was kicked off', () => {
   assertContains(
     h(BuildCompleteStep, {
-      buildUrl: 'https://capgo.app/app/com.example.app/builds',
+      buildUrl: 'https://console.capgo.app/app/com.example.app/builds',
       ciSecretUploadSummary: null,
       buildRequestCommand: 'npx @capgo/cli build request',
     }),
@@ -1010,7 +1010,7 @@ test('build-complete surfaces the cloud-build line and the tracking url when a b
       'You\'re all set!',
       'Your iOS app is building in the cloud.',
       'Track it at',
-      'https://capgo.app/app/com.example.app/builds',
+      'https://console.capgo.app/app/com.example.app/builds',
       'Press Enter to finish',
     ],
     'build-complete-build-url',

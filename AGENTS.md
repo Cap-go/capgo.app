@@ -21,6 +21,16 @@ when working with code in this repository.
 #### Supabase Edge Functions (Default)
 
 - `bun test:all` - Run all backend tests
+- `bun test:unit` - Run unit tests only (`tests/*.unit.test.ts`, no Supabase or
+  Docker required)
+- `bun test:db` - Run the DB-only test subset listed in
+  `tests/tinbase-db-tests.txt` against a throwaway Tinbase instance (no Docker;
+  boots in ~5s). Add a test file to that list only if it talks purely to
+  PostgREST/auth via supabase-js — no edge functions, Cloudflare workers, or raw
+  Postgres TCP (`executeSQL`/`getPostgresClient`)
+- `bun test:backend:integration` - Run backend tests excluding unit and CLI
+  tests (requires running Supabase; this is what CI shards across runners; CLI
+  integration tests run via `bun test:cli`)
 - `bun test:backend` - Run backend tests excluding CLI tests
 - `bun test:cli` - Run CLI-specific tests
 - `bun test:local` - Legacy alias for the default monorepo backend test run
@@ -36,7 +46,10 @@ when working with code in this repository.
 - `./scripts/start-cloudflare-workers.sh` - Start local Cloudflare Workers for
   testing
 
-Note: Cloudflare test suite is currently unstable and may not pass reliably.
+Note: Prefer Tinbase (`bun test:db` / `tests/tinbase-db-tests.txt`) for
+PostgREST/auth-only coverage so Docker/Cloudflare shards stay small and can
+run at high concurrency. CI caps every test job at 5 minutes and shards
+backend/Cloudflare/Playwright aggressively instead of lowering concurrency.
 
 See [CLOUDFLARE_TESTING.md](CLOUDFLARE_TESTING.md) for detailed information on
 testing against Cloudflare Workers.
@@ -117,6 +130,17 @@ backfill code, design for this scale:
 - Queue consumers must be sized from measured throughput: batch size,
   concurrency, visibility timeout, retry count, provider/API limits, and caller
   timeout must all fit the same worst-case calculation.
+- **HARD RULE — max 5 retries for every queue:** `MAX_QUEUE_READS = 5` in
+  `supabase/functions/_backend/triggers/queue_consumer.ts` is the global ceiling
+  for pgmq `read_ct`. Never raise it. Never add a per-queue exception (including
+  `on_version_update`, webhook queues, or cron queues). Application-level
+  retries (e.g. `webhook_deliveries.max_attempts` / `WEBHOOK_MAX_ATTEMPTS`) must
+  also stay at **5 or less**. If work needs more passes (large deleted
+  manifests, delayed webhook delivery, etc.), commit progress and re-enqueue via
+  a sweeper/cron (`sweep_deleted_version_manifests`, delayed `pgmq.send`, etc.) —
+  do not burn queue reads as a fake progress budget. `/queue_health` treats
+  `read_ct > 5` as unhealthy (`stuck_high_read_ct`); `cleanup_queue_messages`
+  deletes those poison rows.
 - Do not assume a `202` HTTP response means queue work finished. If the handler
   uses background work, prove the work can finish inside the runtime limits and
   that successful queue messages are deleted before visibility timeout expires.
@@ -131,6 +155,28 @@ backfill code, design for this scale:
   production evidence in database state, queue/archive tables, provider logs, or
   HTTP/runtime logs. If the current logs cannot identify the cause, first add
   logging that will identify it in the next occurrence.
+
+### Queue Retry Budget (HARD RULE)
+
+**Retries must never exceed 5 for any queue or queue-backed delivery path.**
+
+| Layer | Cap | Source of truth |
+| --- | --- | --- |
+| pgmq consumer `read_ct` | **5** | `MAX_QUEUE_READS` in `queue_consumer.ts` |
+| Discord / skip-archive budget | **5** | `getQueueMaxReads()` → always `MAX_QUEUE_READS` |
+| `/queue_health` stuck threshold | **5** | `STUCK_READ_CT_THRESHOLD` |
+| `cleanup_queue_messages` poison delete | **`read_ct > 5`** | SQL cleanup cron |
+| Webhook delivery attempts | **5** | `WEBHOOK_MAX_ATTEMPTS` + `webhook_deliveries.max_attempts` default |
+
+Do **not**:
+- Add `VERSION_QUEUE_MAX_READS` (or any other per-queue) above 5
+- Lengthen webhook retry ladders past a few hours / past 5 attempts
+- Treat incomplete multi-pass work as “just raise retries”
+
+Do:
+- Size `cron_tasks.batch_size` / intervals so visible backlog drains
+- Re-enqueue unfinished work via sweepers (e.g. deleted-manifest cleanup)
+- Keep `/queue_health` green: no visible `read_ct=0` stale msgs, no `read_ct > 5`
 
 ### AI Workflow Notes
 
@@ -432,8 +478,8 @@ $$;
 Every PostgreSQL function call added to a policy, view, trigger, RPC,
 PostgREST-exposed query path, or hot backend endpoint must be proven to scale
 before it ships. Treat this as mandatory for RLS helpers such as
-`check_min_rights`, `get_identity_org_appid`, `get_identity_org_allowed`, and
-any new wrapper around them.
+`rbac_check_permission_request`, `rbac_check_permission`, and any new wrapper
+around them.
 
 Before adding or changing a function call, document the execution model:
 
@@ -456,9 +502,8 @@ RLS function calls are dangerous by default:
   another large table. Allowed-list helpers are only acceptable when they start
   from caller-scoped, indexed identity data and stay bounded before touching the
   protected resource.
-- Never create a helper that scans a broad production table and calls
-  `check_min_rights`, `get_identity*`, RBAC checks, API-key checks, logging, or
-  other SQL functions once per scanned row.
+- Never create a helper that scans a broad production table and calls RBAC
+  checks, API-key checks, logging, or other SQL functions once per scanned row.
 - If a table has `app_id`, prefer a policy shape that constrains by that
   row's indexed `app_id`/`owner_org` values. Do not precompute visibility by
   scanning all apps, all versions, all channels, or all org resources.
@@ -633,48 +678,37 @@ FOR SELECT USING (
 
 ## Database RLS Policies
 
-### Identity Functions for RLS - CRITICAL RULES
+### RBAC Functions for RLS - CRITICAL RULES
 
-**NEVER use `get_identity()` directly in RLS policies.**
+**NEVER use deleted identity/min-right helpers in RLS policies.**
 
-**ALWAYS use `get_identity_org_appid()` when app_id exists on the table.**
+Authorization must use RBAC permission keys through the current helpers:
 
-```sql
-public.get_identity_org_appid(
-    '{read,upload,write,all}'::public.key_mode[],
-    owner_org,  -- or org_id
-    app_id
-)
-```
+- `public.rbac_check_permission_request(permission_key, org_id, app_id, channel_id)`
+- `public.rbac_check_permission(permission_key, org_id, app_id, channel_id)`
+- `public.rbac_check_permission_direct(permission_key, user_id, org_id, app_id, channel_id, apikey)`
 
-**`get_identity_org_allowed()` is an ABSOLUTE LAST RESORT.** Only use it when:
+`org_users` is metadata only and must not grant rights. API keys must authorize
+through `role_bindings` with `principal_type = public.rbac_principal_apikey()`.
 
-- The table genuinely has NO app_id column
-- There is NO way to join to get an app_id
-- You have exhausted all other options
-
-If you find yourself reaching for `get_identity_org_allowed()`, STOP and ask:
-"Is there ANY way to get an app_id here?" If yes, use `get_identity_org_appid()`.
+When a table has `app_id`, pass the row's indexed `owner_org`/`org_id` and
+`app_id` to the RBAC check. If a table has no `app_id`, join through the closest
+indexed parent that provides the app or org scope.
 
 ### RLS Pattern Examples
 
 ```sql
--- CORRECT: Table has app_id - use get_identity_org_appid
+-- CORRECT: Table has app_id - use row scope with RBAC permission key
 CREATE POLICY "Allow org members to select build_requests"
 ON public.build_requests
 FOR SELECT
 TO authenticated, anon
 USING (
-    public.check_min_rights(
-        'read'::public.user_min_right,
-        public.get_identity_org_appid(
-            '{read,upload,write,all}'::public.key_mode[],
-            owner_org,
-            app_id
-        ),
+    public.rbac_check_permission_request(
+        public.rbac_perm_app_read(),
         owner_org,
         app_id,
-        NULL::BIGINT
+        NULL::bigint
     )
 );
 
@@ -685,46 +719,40 @@ FOR SELECT
 TO authenticated, anon
 USING (
     EXISTS (
-        SELECT 1 FROM public.apps
-        WHERE apps.app_id = daily_build_time.app_id
-        AND public.check_min_rights(
-            'read'::public.user_min_right,
-            public.get_identity_org_appid(
-                '{read,upload,write,all}'::public.key_mode[],
-                apps.owner_org,
-                apps.app_id
-            ),
+      SELECT 1 FROM public.apps
+      WHERE apps.app_id = daily_build_time.app_id
+        AND public.rbac_check_permission_request(
+            public.rbac_perm_app_read(),
             apps.owner_org,
             apps.app_id,
-            NULL::BIGINT
+            NULL::bigint
         )
     )
 );
 
--- LAST RESORT: Table has NO app_id and NO way to get one (e.g., build_logs)
+-- Table has no app scope, so use the row's org scope directly.
 CREATE POLICY "Allow org members to select build_logs"
 ON public.build_logs
 FOR SELECT
 TO authenticated, anon
 USING (
-    public.check_min_rights(
-        'read'::public.user_min_right,
-        public.get_identity_org_allowed(
-            '{read,upload,write,all}'::public.key_mode[],
-            org_id
-        ),
+    public.rbac_check_permission_request(
+        public.rbac_perm_org_read(),
         org_id,
-        NULL::CHARACTER VARYING,
-        NULL::BIGINT
+        NULL::character varying,
+        NULL::bigint
     )
 );
 ```
 
 Key points:
 
-- Use both `authenticated` and `anon` roles (anon enables API key auth)
-- Pass app_id to BOTH `get_identity_org_appid()` AND `check_min_rights()`
-- Reference apps, channels, app_versions tables for more examples
+- Use both `authenticated` and `anon` roles where API-key traffic must reach the
+  policy.
+- API-key access must still resolve through RBAC `role_bindings`; do not inspect
+  key modes.
+- Reference apps, channels, app_versions, and manifest tables for current
+  policy examples.
 
 ## Frontend Style
 
@@ -739,6 +767,37 @@ Key points:
   `src/styles/style.css` (e.g., `--color-primary-500: #515271`) when introducing
   new UI.
 
+### Form accessibility (WCAG 2.0 A)
+
+SonarQube flags any `<input>`, `<select>`, or `<textarea>` without an associated
+label. Treat this as a default requirement for every new or touched form control —
+do not wait for the scanner to catch it later.
+
+Every form control must have **one** of these associations before shipping:
+
+1. **Visible label + `for`/`id`** — when label text is shown next to the field:
+   ```vue
+   <label for="field-id" class="label">...</label>
+   <input id="field-id" ...>
+   ```
+2. **Wrapping `<label>`** — for radios, checkboxes, and toggle rows where the
+   label already wraps the control.
+3. **`sr-only` label + matching `id`** — for search/icon-only fields that only
+   show a placeholder:
+   ```vue
+   <label for="search-id" class="sr-only">{{ t('search') }}</label>
+   <input id="search-id" :aria-label="t('search')" ...>
+   ```
+4. **`aria-label`** — acceptable alongside (1) or (3); required when the only
+   cue is placeholder text.
+
+Reusable components must generate stable ids (`useId()` or an `inputId` prop) and
+expose accessible names by default. Follow `SearchInput.vue` and `RoleSelect.vue`.
+
+Also applies to dialog/Teleport content, admin filters, and hidden utility inputs
+(e.g. file pickers): they still need `aria-label` or an associated label.
+
+
 ## Auth Redirect Guardrails
 
 - We intentionally route auth email links through `/confirm-signup` to avoid
@@ -749,9 +808,49 @@ Key points:
 
 ## Frontend Testing
 
-- Cover customer-facing flows with the Playwright MCP suite. Add scenarios under
-  `playwright/e2e` and run them locally with `bun run test:front` before
-  shipping UI changes.
+- Cover customer-facing flows with the Playwright suite under `playwright/e2e`
+  and run them locally with `bun run test:front` before shipping UI changes.
+  CI runs Playwright sharded with a 5-minute job budget.
+
+### Visual diff for UI changes
+
+When a PR changes customer-facing UI (layout, spacing, colors, components, or
+copy placement), reviewers need a before/after screenshot diff.
+
+**Request the automated PR report** by either:
+
+- adding the `visual-change` label to the PR, or
+- including `<!-- visual-diff:required -->` anywhere in the PR description.
+
+On each push, the `Visual diff` GitHub Action captures screenshots from the PR
+base commit and head commit, generates a diff report, uploads it as a workflow
+artifact, and updates a sticky PR comment (`<!-- capgo-visual-diff -->`).
+
+**Local workflow before opening or updating the PR:**
+
+1. Capture the current UI baseline: `bun run visual:capture:before`
+2. Apply your UI edits and rebuild or refresh the local app as needed.
+3. Capture the updated UI: `bun run visual:capture:after`
+4. Generate the report: `bun run visual:diff`
+5. Paste `.context/visual-diff/report/summary.md` into the PR description under
+   `## Visual changes`.
+6. Add the `visual-change` label (or the HTML marker above) so CI refreshes the
+   report on every push.
+
+**Full local pipeline against `main`:**
+
+```bash
+bun run visual:run -- --base origin/main
+```
+
+**Route configuration:** edit `playwright/visual-diff.config.ts` when a PR
+introduces a new screen that should be part of the visual diff set.
+
+**Outputs:**
+
+- `.context/visual-diff/before/` and `after/` — raw PNG captures
+- `.context/visual-diff/report/index.html` — side-by-side before/after/diff view
+- `.context/visual-diff/report/summary.md` — markdown table for the PR body
 
 ## Mobile Development
 
@@ -937,3 +1036,38 @@ Rules:
   alongside Graphify's graph queries.
 - After code changes that should update the repository graph, run
   `bun run graphify:generate` and commit the resulting `graphify-out/` changes.
+
+## Cursor Cloud specific instructions
+
+These notes capture non-obvious caveats for running the stack in the Cursor
+Cloud VM. Standard commands live in the sections above; only the gotchas are
+repeated here.
+
+- **Docker must be started manually.** systemd is not running in the VM, so the
+  Docker daemon does not auto-start. Run `sudo service docker start` once per VM
+  boot before any Supabase command. The `ubuntu` user is already in the
+  `docker` group, so `docker`/`supabase` work without `sudo` after the daemon is
+  up. The daemon uses the `fuse-overlayfs` storage driver (configured in
+  `/etc/docker/daemon.json`) — do not switch it to `overlay2`.
+- **Supabase ports are worktree-isolated, not the documented defaults.** Each
+  git worktree gets its own ports (e.g. the API may be on `57671`, not `54321`).
+  Always run `bun run supabase:status` to read the current `SUPABASE_URL`,
+  keys, and DB URL. The worktree state lives under `.context/` (a local,
+  untracked artifact — do not commit it).
+- **Run the frontend with `bun run serve:worktree`, not `bun serve:local`.**
+  `serve:worktree` auto-injects the current worktree's Supabase URL/anon key into
+  the Vite dev server (still served on `http://localhost:5173`). Plain
+  `bun serve:local` points at the default ports, which will not match the
+  worktree's Supabase instance.
+- **Backend edge functions:** `bun run supabase:functions:serve` (or `bun
+  backend` to start Supabase + serve). They are served under the worktree API
+  URL at `/functions/v1/<name>`; `/functions/v1/ok` returns `{"status":"ok"}`.
+- **Tests need Supabase running and must be wrapped with the worktree env.** The
+  `test:*` scripts already wrap with `bun run supabase:with-env --`; for ad-hoc
+  single-file runs use e.g.
+  `bun run supabase:with-env -- bunx vitest run tests/app.test.ts`.
+- Local login uses the seeded accounts from the README: `test@capgo.app` /
+  `testtest` (demo data) and `admin@capgo.app` / `adminadmin` (admin).
+  Re-run `bun run supabase:db:reset` to refresh seed data.
+- Cloudflare Workers and the Playwright/Stripe harnesses are optional; the
+  product runs end-to-end on the Supabase stack + Vite frontend alone.

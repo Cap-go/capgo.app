@@ -1,11 +1,9 @@
 <script setup lang="ts">
 import { Capacitor } from '@capacitor/core'
-import { computed, ref, watchEffect } from 'vue'
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRoute } from 'vue-router'
 
 import { stripeEnabled } from '~/services/supabase'
-import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
 
 const props = defineProps({
@@ -14,37 +12,8 @@ const props = defineProps({
   desktop: { type: Boolean, default: false },
 })
 
-const main = useMainStore()
 const { t } = useI18n()
 const organizationStore = useOrganizationStore()
-
-const route = useRoute('/app/[app]')
-const appId = ref('')
-// const organization = ref(null as null | Organization)
-const isOrgOwner = ref(false)
-
-watchEffect(async () => {
-  try {
-    if (route.path.includes('/app/')) {
-      appId.value = route.params.app as string
-      if (!appId.value) {
-        console.error('cannot get app id. Params:', route.params)
-        return
-      }
-
-      await organizationStore.awaitInitialLoad()
-    }
-    else {
-      appId.value = ''
-    }
-
-    isOrgOwner.value = !!organizationStore.currentOrganization && organizationStore.currentOrganization.created_by === main.user?.id
-  }
-  catch (ed) {
-    console.error('Cannot figure out app_id for banner', ed)
-  }
-})
-
 const isMobile = Capacitor.isNativePlatform()
 const billingCtaHref = computed(() => isMobile ? '/settings/organization/usage' : '/settings/organization/plans')
 

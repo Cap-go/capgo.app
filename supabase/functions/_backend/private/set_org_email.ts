@@ -1,22 +1,23 @@
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
-import { type } from 'arktype'
+import { z } from 'zod'
 import { Hono } from 'hono/tiny'
-import { safeParseSchema } from '../utils/ark_validation.ts'
+import { safeParseSchema } from '../utils/schema_validation.ts'
 import { BRES, parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
-import { middlewareV2 } from '../utils/hono_middleware.ts'
+import { middlewareAuth } from '../utils/hono_middleware.ts'
+import { checkPermission } from '../utils/rbac.ts'
 import { updateCustomerEmail } from '../utils/stripe.ts'
-import { supabaseWithAuth } from '../utils/supabase.ts'
+import { supabaseAdmin, supabaseWithAuth } from '../utils/supabase.ts'
 
-const bodySchema = type({
-  email: 'string.email',
-  org_id: 'string.uuid',
+const bodySchema = z.object({
+  email: z.email(),
+  org_id: z.uuid(),
 })
 
 export const app = new Hono<MiddlewareKeyVariables>()
 
 app.use('/', useCors)
 
-app.post('/', middlewareV2(['all', 'write']), async (c) => {
+app.post('/', middlewareAuth(), async (c) => {
   const auth = c.get('auth')!
 
   const body = await parseBody<any>(c)
@@ -47,33 +48,23 @@ app.post('/', middlewareV2(['all', 'write']), async (c) => {
     throw simpleError('org_does_not_have_customer', 'Organization does not have a customer id', { orgId: safeBody.org_id })
   }
 
-  const userRight = await supabase.rpc('check_min_rights', {
-    min_right: 'super_admin',
-    org_id: safeBody.org_id,
-    user_id: auth.userId,
-    channel_id: null as any,
-    app_id: null as any,
-  })
-
-  if (userRight.error) {
-    throw simpleError('internal_auth_error', 'Internal auth error', { userRight })
-  }
-
-  if (!userRight.data) {
+  if (!(await checkPermission(c, 'org.update_billing', { orgId: safeBody.org_id }))) {
     return quickError(401, 'not_authorized', 'Not authorized', { userId: auth.userId, orgId: safeBody.org_id })
   }
 
   await updateCustomerEmail(c, organization.customer_id, safeBody.email)
 
   // Update supabase
-  const { error: updateOrgErr } = await supabase.from('orgs')
+  const { data: updatedOrg, error: updateOrgErr } = await supabaseAdmin(c).from('orgs')
     .update({ management_email: safeBody.email })
     .eq('id', safeBody.org_id)
+    .select('id')
+    .maybeSingle()
 
-  if (updateOrgErr) {
+  if (updateOrgErr || !updatedOrg) {
     // revert stripe
     await updateCustomerEmail(c, organization.customer_id, organization.management_email)
-    throw simpleError('critical_error', 'Critical error', { updateOrgErr })
+    throw simpleError('critical_error', 'Critical error', { updateOrgErr, orgId: safeBody.org_id })
   }
 
   return c.json(BRES)

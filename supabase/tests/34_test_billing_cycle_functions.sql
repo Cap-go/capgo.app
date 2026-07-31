@@ -76,51 +76,51 @@ BEGIN
   );
 
   -- ============================================================================
-  -- Test 2: get_orgs_v6 should return current cycle dates (THE BUG FIX)
+  -- Test 2: get_orgs_v7 should return current cycle dates (THE BUG FIX)
   -- ============================================================================
   SELECT subscription_start, subscription_end
   INTO v_org_result
-  FROM get_orgs_v6(v_user_id)
+  FROM get_orgs_v7(v_user_id)
   WHERE gid = v_org_id;
 
   RETURN NEXT ok(
     v_org_result.subscription_start IS NOT NULL,
-    'get_orgs_v6: subscription_start is not null with 2023 subscription'
+    'get_orgs_v7: subscription_start is not null with 2023 subscription'
   );
   
   RETURN NEXT ok(
     v_org_result.subscription_start > '2024-01-01'::timestamptz,
-    'get_orgs_v6: subscription_start is in 2024 or later (not 2023) - BUG FIX VERIFICATION'
+    'get_orgs_v7: subscription_start is in 2024 or later (not 2023) - BUG FIX VERIFICATION'
   );
   
   RETURN NEXT ok(
     v_org_result.subscription_start <= v_now,
-    'get_orgs_v6: subscription_start is not in the future'
+    'get_orgs_v7: subscription_start is not in the future'
   );
   
   RETURN NEXT ok(
     v_org_result.subscription_end > v_now,
-    'get_orgs_v6: subscription_end is in the future'
+    'get_orgs_v7: subscription_end is in the future'
   );
   
   RETURN NEXT cmp_ok(
     v_org_result.subscription_end - v_org_result.subscription_start,
     '>',
     '27 days'::INTERVAL,
-    'get_orgs_v6: billing cycle is at least 27 days'
+    'get_orgs_v7: billing cycle is at least 27 days'
   );
   
   RETURN NEXT cmp_ok(
     v_org_result.subscription_end - v_org_result.subscription_start,
     '<',
     '32 days'::INTERVAL,
-    'get_orgs_v6: billing cycle is less than 32 days'
+    'get_orgs_v7: billing cycle is less than 32 days'
   );
 
-  -- Verify get_orgs_v6 matches get_cycle_info_org
+  -- Verify get_orgs_v7 matches get_cycle_info_org
   RETURN NEXT ok(
     ABS(EXTRACT(EPOCH FROM (v_org_result.subscription_start - v_cycle_info.subscription_anchor_start))) < 86400,
-    'get_orgs_v6: subscription_start matches get_cycle_info_org within 1 day'
+    'get_orgs_v7: subscription_start matches get_cycle_info_org within 1 day'
   );
 
   -- ============================================================================
@@ -165,17 +165,17 @@ BEGIN
   -- Get results with anchor day 28
   SELECT subscription_start, subscription_end
   INTO v_org_result
-  FROM get_orgs_v6(v_user_id)
+  FROM get_orgs_v7(v_user_id)
   WHERE gid = v_org_id;
 
   RETURN NEXT ok(
     v_org_result.subscription_start > '2024-01-01'::timestamptz,
-    'get_orgs_v6 (anchor 28th): subscription_start is in 2024 or later'
+    'get_orgs_v7 (anchor 28th): subscription_start is in 2024 or later'
   );
   
   RETURN NEXT ok(
     EXTRACT(DAY FROM v_org_result.subscription_start) = 28,
-    'get_orgs_v6 (anchor 28th): subscription_start is on the 28th'
+    'get_orgs_v7 (anchor 28th): subscription_start is on the 28th'
   );
 
   -- ============================================================================
@@ -189,17 +189,17 @@ BEGIN
 
   SELECT subscription_start, subscription_end
   INTO v_org_result
-  FROM get_orgs_v6(v_user_id)
+  FROM get_orgs_v7(v_user_id)
   WHERE gid = v_org_id;
 
   RETURN NEXT ok(
     v_org_result.subscription_start > '2024-01-01'::timestamptz,
-    'get_orgs_v6 (anchor 1st): subscription_start is in 2024 or later'
+    'get_orgs_v7 (anchor 1st): subscription_start is in 2024 or later'
   );
   
   RETURN NEXT ok(
     EXTRACT(DAY FROM v_org_result.subscription_start) = 1,
-    'get_orgs_v6 (anchor 1st): subscription_start is on the 1st'
+    'get_orgs_v7 (anchor 1st): subscription_start is on the 1st'
   );
 
   -- ============================================================================
@@ -218,21 +218,21 @@ BEGIN
   INTO v_cycle_info
   FROM get_cycle_info_org(v_org_id);
 
-  -- Get cycle from get_orgs_v6
+  -- Get cycle from get_orgs_v7
   SELECT subscription_start, subscription_end
   INTO v_org_result
-  FROM get_orgs_v6(v_user_id)
+  FROM get_orgs_v7(v_user_id)
   WHERE gid = v_org_id;
 
   -- Verify they match (within 1 second tolerance for timestamp comparison)
   RETURN NEXT ok(
     ABS(EXTRACT(EPOCH FROM (v_org_result.subscription_start - v_cycle_info.subscription_anchor_start))) < 1,
-    'Consistency: get_orgs_v6 start matches get_cycle_info_org start'
+    'Consistency: get_orgs_v7 start matches get_cycle_info_org start'
   );
   
   RETURN NEXT ok(
     ABS(EXTRACT(EPOCH FROM (v_org_result.subscription_end - v_cycle_info.subscription_anchor_end))) < 1,
-    'Consistency: get_orgs_v6 end matches get_cycle_info_org end'
+    'Consistency: get_orgs_v7 end matches get_cycle_info_org end'
   );
 
   -- Verify the cycle is current (not from 2020)

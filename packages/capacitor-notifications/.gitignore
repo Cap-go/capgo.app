@@ -1,0 +1,8 @@
+node_modules
+dist
+.swiftpm
+.build
+android/.gradle
+android/build
+android/local.properties
+local.properties

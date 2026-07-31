@@ -1,0 +1,39 @@
+<!-- Bento event: store-release-validation-needed -->
+<!-- Subject: Validate that {{ event.details.app_name }} is published with Capgo -->
+
+<p>Hi,</p>
+
+{% if event.details.has_android_store_device %}
+<p>
+  Your app {{ event.details.app_name }} has Live Update activity in Capgo, and we have seen an Android store install check in. Google Play does not expose whether the install came from production or a test track, so please validate the production release manually.
+</p>
+{% elsif event.details.has_testflight_device %}
+<p>
+  Your app {{ event.details.app_name }} has Live Update activity in Capgo, but we have only seen TestFlight check-ins so far. Please validate the App Store production release once it is published.
+</p>
+{% else %}
+<p>
+  Your app {{ event.details.app_name }} has Live Update activity in Capgo, but we have not seen a production store install check in with the updater plugin yet.
+</p>
+{% endif %}
+
+<p>
+  When the app is published with Capgo, open the app dashboard and confirm the production release check. This helps you validate that the native production build includes the plugin before production users depend on Live Updates.
+</p>
+
+<p>Before confirming, review this production setup:</p>
+
+<ul>
+  <li>Disable Live Update for emulator builds.</li>
+  <li>Disable Live Update for non-production applications.</li>
+  <li>Confirm the production channel is configured for production users.</li>
+  <li>Confirm the production setup uses the right signing, bundle id, and channel.</li>
+  <li>Keep a development setup with its own default channel for TestFlight or internal builds.</li>
+</ul>
+
+<p>
+  App ID: {{ event.details.app_id }}<br />
+  Organization: {{ event.details.org_name }}
+</p>
+
+<p>Thanks,<br />Capgo</p>

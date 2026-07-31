@@ -42,7 +42,6 @@ const STATUS_FILTERS = ['paid', 'active', 'canceled', 'never_paid', 'all'] as co
 
 type SupabaseClient = ReturnType<typeof createSupabaseServiceClient>
 type OrgRow = Pick<Database['public']['Tables']['orgs']['Row'], 'id' | 'customer_id'>
-type OrgUserRow = Pick<Database['public']['Tables']['org_users']['Row'], 'org_id' | 'user_id' | 'user_right'>
 type RoleBindingRow = Pick<Database['public']['Tables']['role_bindings']['Row'], 'expires_at' | 'org_id' | 'principal_id'>
 type UserEmailRow = Pick<Database['public']['Tables']['users']['Row'], 'email' | 'id'>
 type StatusFilter = typeof STATUS_FILTERS[number]
@@ -140,24 +139,6 @@ function groupOrgsByCustomerId(orgs: OrgRow[]) {
   return orgsByCustomerId
 }
 
-async function fetchOrgUserRows(supabase: SupabaseClient, orgIds: string[]) {
-  const rows: OrgUserRow[] = []
-
-  for (const chunk of chunkItems(orgIds, DB_CHUNK_SIZE)) {
-    const { data, error } = await supabase
-      .from('org_users')
-      .select('org_id, user_id, user_right')
-      .in('org_id', chunk)
-
-    if (error)
-      throw error
-    if (data?.length)
-      rows.push(...data)
-  }
-
-  return rows
-}
-
 async function fetchRoleBindingRows(supabase: SupabaseClient, orgIds: string[]) {
   const rows: RoleBindingRow[] = []
 
@@ -204,13 +185,6 @@ async function fetchOrgMemberEmailsByOrgId(supabase: SupabaseClient, orgIds: str
 
   for (const orgId of orgIds)
     memberIdsByOrgId.set(orgId, new Set())
-
-  const orgUserRows = await fetchOrgUserRows(supabase, orgIds)
-  for (const row of orgUserRows) {
-    if (row.user_right?.startsWith('invite_'))
-      continue
-    memberIdsByOrgId.get(row.org_id)?.add(row.user_id)
-  }
 
   const roleBindingRows = await fetchRoleBindingRows(supabase, orgIds)
   for (const row of roleBindingRows) {

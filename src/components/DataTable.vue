@@ -6,14 +6,17 @@ import DOMPurify from 'dompurify'
 import {
   computed,
   defineComponent,
+  nextTick,
   onMounted,
   onUnmounted,
   ref,
+  useId,
+  useSlots,
   watch,
 } from 'vue'
 import { useI18n } from 'vue-i18n'
 import IconTrash from '~icons/heroicons/trash'
-import IconDown from '~icons/ic/round-keyboard-arrow-down'
+import IconClose from '~icons/heroicons/x-mark'
 import IconPrev from '~icons/ic/round-keyboard-arrow-left'
 import IconNext from '~icons/ic/round-keyboard-arrow-right'
 import IconFastBackward from '~icons/ic/round-keyboard-double-arrow-left'
@@ -31,11 +34,15 @@ interface Props {
   filterText?: string
   filters?: { [key: string]: boolean }
   filterLabels?: { [key: string]: string }
+  /** Extra active filters contributed by the filter-extras slot (e.g. selects). */
+  extraFilterCount?: number
   searchPlaceholder?: string
   showAdd?: boolean
   addButtonTestId?: string
   search?: string
   total: number
+  /** Fixed page size used for last-page / next calculations. Prefer this over inferring from the current page length. */
+  offset?: number
   currentPage: number
   columns: TableColumn[]
   elementList: { [key: string]: any }[]
@@ -47,6 +54,7 @@ interface Props {
 const props = withDefaults(defineProps<Props>(), {
   autoReload: true,
   mobileFixedPagination: true,
+  extraFilterCount: 0,
 })
 const emit = defineEmits([
   'add',
@@ -63,7 +71,13 @@ const emit = defineEmits([
   'plusClick',
   'selectRow',
   'massDelete',
+  'clearExtraFilters',
 ])
+const isFilterModalOpen = ref(false)
+const filterModalBoxRef = ref<HTMLElement | null>(null)
+const filterOpenButtonRef = ref<HTMLButtonElement | null>(null)
+const filterModalTitleId = `${useId()}-filters-title`
+const slots = useSlots()
 const { t } = useI18n()
 const searchVal = ref(props.search ?? '')
 const pendingReset = ref(false)
@@ -71,11 +85,18 @@ const pendingAdd = ref(false)
 // const sorts = ref<TableSort>({})
 // get columns from elementList
 
-const offset = computed(() => {
-  if (!props.elementList)
-    return 0
+// Page size must stay fixed across pages. Inferring it from the current page's
+// row count breaks last-page / next controls when the final page is short
+// (common after deletes).
+const pageSize = computed(() => {
+  if (props.offset && props.offset > 0)
+    return props.offset
+  if (!props.elementList || props.elementList.length === 0)
+    return 1
   return props.elementList.length
 })
+
+const totalPages = computed(() => Math.max(1, Math.ceil(props.total / pageSize.value)))
 
 const selectedRows = ref<boolean[]>(props.elementList.map(_ => false))
 const previousSelectedRow = ref<number | null>(null)
@@ -86,17 +107,95 @@ const filterList = computed(() => {
   return Object.keys(props.filters)
 })
 const filterActivated = computed(() => {
-  if (!props.filters)
-    return []
-  return Object.keys(props.filters).reduce((acc, key) => {
-    if (props.filters![key])
-      acc += 1
-    return acc
-  }, 0)
+  const booleanCount = props.filters
+    ? Object.keys(props.filters).reduce((acc, key) => {
+        if (props.filters![key])
+          acc += 1
+        return acc
+      }, 0)
+    : 0
+  return booleanCount + (props.extraFilterCount ?? 0)
 })
+
+const showFilterMenu = computed(() =>
+  Boolean(props.filterText && (filterList.value.length || slots['filter-extras'])),
+)
 
 function getFilterLabel(filter: string) {
   return props.filterLabels?.[filter] ?? t(filter)
+}
+
+function openFilterModal() {
+  isFilterModalOpen.value = true
+}
+
+function closeFilterModal() {
+  isFilterModalOpen.value = false
+  nextTick(() => {
+    filterOpenButtonRef.value?.focus()
+  })
+}
+
+function getFilterModalFocusable() {
+  const root = filterModalBoxRef.value
+  if (!root)
+    return [] as HTMLElement[]
+  return Array.from(root.querySelectorAll<HTMLElement>(
+    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+  )).filter(el => !el.hasAttribute('disabled') && el.offsetParent !== null)
+}
+
+function onFilterModalKeydown(e: KeyboardEvent) {
+  if (!isFilterModalOpen.value)
+    return
+  if (e.key === 'Escape') {
+    e.preventDefault()
+    closeFilterModal()
+    return
+  }
+  if (e.key !== 'Tab')
+    return
+  const focusable = getFilterModalFocusable()
+  if (!focusable.length)
+    return
+  const first = focusable[0]!
+  const last = focusable[focusable.length - 1]!
+  if (e.shiftKey && document.activeElement === first) {
+    e.preventDefault()
+    last.focus()
+  }
+  else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault()
+    first.focus()
+  }
+}
+
+watch(isFilterModalOpen, async (open) => {
+  if (open) {
+    window.addEventListener('keydown', onFilterModalKeydown)
+    await nextTick()
+    const focusable = getFilterModalFocusable()
+    focusable[0]?.focus()
+  }
+  else {
+    window.removeEventListener('keydown', onFilterModalKeydown)
+  }
+})
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', onFilterModalKeydown)
+})
+
+function clearAllFilters() {
+  // Emit a new filters object so DataTable's filters watcher performs one reload.
+  // Extra filters are cleared without scheduling a second reload.
+  if (props.filters) {
+    const cleared = Object.fromEntries(
+      Object.keys(props.filters).map(key => [key, false]),
+    ) as { [key: string]: boolean }
+    emit('update:filters', cleared)
+  }
+  emit('clearExtraFilters')
 }
 
 function sortClick(key: number) {
@@ -335,13 +434,15 @@ function tooltipIdFor(rowIndex: number, actionIndex: number): string {
 }
 
 const displayElemRange = computed(() => {
-  const begin = (props.currentPage - 1) * props.elementList.length
+  if (props.elementList.length === 0)
+    return '0-0'
+  const begin = (props.currentPage - 1) * pageSize.value
   const end = begin + props.elementList.length
   return `${begin}-${end}`
 })
 
 function canNext() {
-  return props.currentPage < Math.ceil(props.total / offset.value)
+  return props.currentPage < totalPages.value
 }
 function canPrev() {
   return props.currentPage > 1
@@ -356,7 +457,7 @@ async function next() {
 async function fastForward() {
   if (canNext()) {
     emit('fastForward')
-    emit('update:currentPage', Math.ceil(props.total / offset.value))
+    emit('update:currentPage', totalPages.value)
   }
 }
 async function prev() {
@@ -486,10 +587,15 @@ const paginationClass = computed(() => props.mobileFixedPagination
             <span class="hidden text-sm md:block">{{ t("add-one") }}</span>
           </button>
         </div>
-        <div v-if="filterText && filterList.length" class="h-10 d-dropdown">
+        <div v-if="showFilterMenu" class="relative h-10">
           <button
-            tabindex="0"
+            ref="filterOpenButtonRef"
+            type="button"
             class="inline-flex items-center py-1.5 px-3 mr-2 h-full text-sm font-medium text-gray-500 bg-white rounded-md border border-gray-300 cursor-pointer dark:text-white dark:bg-gray-800 dark:border-gray-600 hover:bg-gray-100 focus:ring-4 focus:ring-gray-200 dark:hover:border-gray-600 dark:hover:bg-gray-700 dark:focus:ring-gray-700 focus:outline-hidden"
+            data-test="data-table-filters-open"
+            :aria-expanded="isFilterModalOpen"
+            aria-haspopup="dialog"
+            @click="openFilterModal"
           >
             <div
               v-if="filterActivated"
@@ -498,30 +604,105 @@ const paginationClass = computed(() => props.mobileFixedPagination
               {{ filterActivated }}
             </div>
             <IconFilter class="w-4 h-4 mr-2" />
-            <span class="hidden md:block">{{ t(filterText) }}</span>
-            <IconDown class="hidden w-4 h-4 ml-2 md:block" />
+            <span class="hidden md:block">{{ t(filterText ?? '') }}</span>
           </button>
-          <ul class="max-h-80 w-72 max-w-[calc(100vw-2rem)] overflow-y-auto border border-gray-200 bg-white p-2 shadow-xl d-dropdown-content d-menu rounded-box z-20 dark:border-gray-700 dark:bg-base-200">
-            <li v-for="(f, i) in filterList" :key="i">
+          <Teleport to="body">
+            <div
+              v-if="isFilterModalOpen"
+              class="d-modal d-modal-open"
+              role="dialog"
+              aria-modal="true"
+              :aria-labelledby="filterModalTitleId"
+              data-test="data-table-filters-modal"
+            >
               <div
-                class="flex min-h-10 items-center rounded-md p-2 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600"
+                ref="filterModalBoxRef"
+                class="d-modal-box w-[calc(100vw-2rem)] max-w-md rounded-lg border border-slate-200 bg-white p-0 shadow-2xl dark:border-slate-700 dark:bg-slate-900"
               >
-                <input
-                  :id="`filter-radio-example-${i}`" :checked="filters?.[f]" type="checkbox"
-                  :name="`filter-radio-${i}`"
-                  class="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 dark:bg-gray-700 dark:border-gray-600 dark:ring-offset-gray-800 focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-600 dark:focus:ring-offset-gray-800"
-                  @change="
-                    emit('update:filters', { ...filters, [f]: !filters?.[f] })
-                  "
-                >
-                <label
-                  :for="`filter-radio-example-${i}`"
-                  class="w-full min-w-0 truncate ml-2 text-sm font-medium text-gray-900 rounded-sm cursor-pointer dark:text-gray-300"
-                >{{
-                  getFilterLabel(f) }}</label>
+                <div class="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4 dark:border-slate-800">
+                  <div class="min-w-0">
+                    <h2
+                      :id="filterModalTitleId"
+                      class="text-lg font-semibold leading-7 text-slate-950 dark:text-white"
+                    >
+                      {{ t(filterText ?? 'Filters') }}
+                    </h2>
+                    <p class="mt-1 text-sm leading-5 text-slate-600 dark:text-slate-300">
+                      {{ t('filter-modal-subtitle') }}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-slate-500 transition-colors duration-200 hover:bg-slate-100 hover:text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-azure-500 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
+                    :aria-label="t('close')"
+                    data-test="data-table-filters-close"
+                    @click="closeFilterModal"
+                  >
+                    <IconClose class="h-5 w-5" />
+                  </button>
+                </div>
+
+                <div class="max-h-[min(28rem,60vh)] space-y-5 overflow-y-auto px-5 py-5">
+                  <div v-if="$slots['filter-extras']" class="space-y-4">
+                    <slot name="filter-extras" />
+                  </div>
+                  <div
+                    v-if="$slots['filter-extras'] && filterList.length"
+                    class="border-t border-slate-200 dark:border-slate-700"
+                    role="separator"
+                  />
+                  <fieldset v-if="filterList.length" class="space-y-1">
+                    <legend class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                      {{ t('filter-options') }}
+                    </legend>
+                    <label
+                      v-for="(f, i) in filterList"
+                      :key="i"
+                      :for="`filter-radio-example-${i}`"
+                      class="flex min-h-11 cursor-pointer items-center rounded-md px-2 py-2 transition-colors duration-150 hover:bg-slate-50 dark:hover:bg-slate-800"
+                    >
+                      <input
+                        :id="`filter-radio-example-${i}`"
+                        :checked="filters?.[f]"
+                        type="checkbox"
+                        :name="`filter-radio-${i}`"
+                        class="h-4 w-4 shrink-0 rounded border-gray-300 text-azure-500 focus:ring-2 focus:ring-azure-500 dark:border-gray-600 dark:bg-gray-700 dark:ring-offset-gray-800"
+                        @change="
+                          emit('update:filters', { ...filters, [f]: !filters?.[f] })
+                        "
+                      >
+                      <span class="ml-3 min-w-0 text-sm font-medium text-slate-900 dark:text-slate-200">
+                        {{ getFilterLabel(f) }}
+                      </span>
+                    </label>
+                  </fieldset>
+                </div>
+
+                <div class="flex flex-col-reverse gap-2 border-t border-slate-100 px-5 py-4 sm:flex-row sm:items-center sm:justify-between dark:border-slate-800">
+                  <button
+                    type="button"
+                    class="d-btn d-btn-ghost min-h-11"
+                    data-test="data-table-filters-clear"
+                    :disabled="!filterActivated"
+                    @click="clearAllFilters"
+                  >
+                    {{ t('clear-filters') }}
+                  </button>
+                  <button
+                    type="button"
+                    class="d-btn d-btn-primary min-h-11"
+                    data-test="data-table-filters-done"
+                    @click="closeFilterModal"
+                  >
+                    {{ t('done') }}
+                  </button>
+                </div>
               </div>
-            </li>
-          </ul>
+              <form method="dialog" class="d-modal-backdrop">
+                <button type="button" :aria-label="t('close')" @click="closeFilterModal" />
+              </form>
+            </div>
+          </Teleport>
         </div>
       </div>
       <button
@@ -580,8 +761,12 @@ const paginationClass = computed(() => props.mobileFixedPagination
             <template v-if="true">
               <th v-if="props.massSelect" class="px-4 md:px-6">
                 <input
-                  id="select-rows" :checked="selectedRows[i]" class="scale-checkbox"
-                  type="checkbox" @click="(e: MouseEvent) => { handleCheckboxClick(i, e) }"
+                  :id="`select-row-${i}`"
+                  :checked="selectedRows[i]"
+                  class="scale-checkbox"
+                  type="checkbox"
+                  :aria-label="t('select_all')"
+                  @click="(e: MouseEvent) => { handleCheckboxClick(i, e) }"
                 >
               </th>
               <template v-for="(col, _y) in columns" :key="`${i}_${_y}`">
@@ -642,11 +827,13 @@ const paginationClass = computed(() => props.mobileFixedPagination
                   </div>
                 </td>
                 <td
-                  v-else :class="`${col.class ?? ''} ${!col.mobile ? 'hidden md:table-cell' : ''
+                  v-else
+                  class="overflow-hidden text-ellipsis whitespace-nowrap px-4 py-2 md:py-4 md:px-6"
+                  :class="`${col.class ?? ''} ${!col.mobile ? 'hidden md:table-cell' : ''
                   } ${col.onClick
                     ? 'cursor-pointer hover:underline clickable-cell'
                     : ''
-                  } overflow-hidden text-ellipsis whitespace-nowrap`" class="px-4 py-2 md:py-4 md:px-6"
+                  }`"
                   @click.stop="col.onClick ? col.onClick(elem) : () => { }"
                 >
                   <RenderCell v-if="col.renderFunction" :renderer="col.renderFunction" :item="elem" />

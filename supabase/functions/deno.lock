@@ -8,16 +8,17 @@
     "npm:@logsnag/node@1.0.1": "1.0.1",
     "npm:@standard-schema/spec@^1.1.0": "1.1.0",
     "npm:@supabase/supabase-js@2.106.2": "2.106.2",
+    "npm:@types/pg@*": "8.20.0",
     "npm:@types/pg@8.20.0": "8.20.0",
     "npm:adm-zip@0.5.17": "0.5.17",
-    "npm:arktype@^2.2.0": "2.2.0",
     "npm:cron-schedule@6.0.0": "6.0.0",
     "npm:dayjs@1.11.21": "1.11.21",
     "npm:discord-api-types@~0.38.48": "0.38.48",
-    "npm:drizzle-orm@1.0.0-rc.3": "1.0.0-rc.3_@cloudflare+workers-types@4.20260526.1_@types+pg@8.20.0_arktype@2.2.0_pg@8.21.0",
+    "npm:drizzle-orm@1.0.0-rc.3": "1.0.0-rc.3_@cloudflare+workers-types@4.20260526.1_@types+pg@8.20.0_pg@8.21.0_zod@4.4.3",
     "npm:hono@4.12.23": "4.12.23",
     "npm:pg@8.21.0": "8.21.0",
-    "npm:stripe@22.1.1": "22.1.1"
+    "npm:stripe@22.1.1": "22.1.1",
+    "npm:zod@^4.4.3": "4.4.3"
   },
   "jsr": {
     "@bradenmacdonald/s3-lite-client@0.9.6": {
@@ -28,15 +29,6 @@
     }
   },
   "npm": {
-    "@ark/schema@0.56.0": {
-      "integrity": "sha512-ECg3hox/6Z/nLajxXqNhgPtNdHWC9zNsDyskwO28WinoFEnWow4IsERNz9AnXRhTZJnYIlAJ4uGn3nlLk65vZA==",
-      "dependencies": [
-        "@ark/util"
-      ]
-    },
-    "@ark/util@0.56.0": {
-      "integrity": "sha512-BghfRC8b9pNs3vBoDJhcta0/c1J1rsoS1+HgVUreMFPdhz/CRAKReAu57YEllNaSy98rWAdY1gE+gFup7OXpgA=="
-    },
     "@cloudflare/workers-types@4.20260526.1": {
       "integrity": "sha512-pQZBjD7p6C5R1ZPkSywA2yiZnL/LVfqdPKLQLdbEItro4ekmMuGXQv72vHkHIT3GeZmEgZktMA0JoWn2fBKmXw=="
     },
@@ -115,20 +107,6 @@
     "adm-zip@0.5.17": {
       "integrity": "sha512-+Ut8d9LLqwEvHHJl1+PIHqoyDxFgVN847JTVM3Izi3xHDWPE4UtzzXysMZQs64DMcrJfBeS/uoEP4AD3HQHnQQ=="
     },
-    "arkregex@0.0.5": {
-      "integrity": "sha512-ncYjBdLlh5/QnVsAA8De16Tc9EqmYM7y/WU9j+236KcyYNUXogpz3sC4ATIZYzzLxwI+0sEOaQLEmLmRleaEXw==",
-      "dependencies": [
-        "@ark/util"
-      ]
-    },
-    "arktype@2.2.0": {
-      "integrity": "sha512-t54MZ7ti5BhOEvzEkgKnWvqj+UbDfWig+DHr5I34xatymPusKLS0lQpNJd8M6DzmIto2QGszHfNKoFIT8tMCZQ==",
-      "dependencies": [
-        "@ark/schema",
-        "@ark/util",
-        "arkregex"
-      ]
-    },
     "cron-schedule@6.0.0": {
       "integrity": "sha512-BoZaseYGXOo5j5HUwTaegIog3JJbuH4BbrY9A1ArLjXpy+RWb3mV28F/9Gv1dDA7E2L8kngWva4NWisnLTyfgQ=="
     },
@@ -138,19 +116,19 @@
     "discord-api-types@0.38.48": {
       "integrity": "sha512-WFUE/2o0lBlLeCQonQ+Pu2RqHAqbytBJ2RlXR91gzk05InSS6k9ShzzLYoymrA4c2oRgRKGE7/VqQJNNdGWSxQ=="
     },
-    "drizzle-orm@1.0.0-rc.3_@cloudflare+workers-types@4.20260526.1_@types+pg@8.20.0_arktype@2.2.0_pg@8.21.0": {
+    "drizzle-orm@1.0.0-rc.3_@cloudflare+workers-types@4.20260526.1_@types+pg@8.20.0_pg@8.21.0_zod@4.4.3": {
       "integrity": "sha512-akZOa5UxapFbdBG8IDkfBRpSZJpMHaOJtGgp7oi1oHaiU8S3KN92waHo2l5aRuv1D9tMGYpv3BQFOsiGcNjLTQ==",
       "dependencies": [
         "@cloudflare/workers-types",
         "@types/pg",
-        "arktype",
-        "pg"
+        "pg",
+        "zod"
       ],
       "optionalPeers": [
         "@cloudflare/workers-types",
         "@types/pg",
-        "arktype",
-        "pg"
+        "pg",
+        "zod"
       ]
     },
     "hono@4.12.23": {
@@ -235,6 +213,9 @@
     },
     "xtend@4.0.2": {
       "integrity": "sha512-LKYU1iAXJXUgAXn9URjiu+MWhyUXHsvfp7mcuYm9dSUKK0/CjtrUwFAxD82/mCWbtLsGjFIad0wIsod4zrTAEQ=="
+    },
+    "zod@4.4.3": {
+      "integrity": "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ=="
     }
   },
   "workspace": {
@@ -248,14 +229,14 @@
       "npm:@supabase/supabase-js@2.106.2",
       "npm:@types/pg@8.20.0",
       "npm:adm-zip@0.5.17",
-      "npm:arktype@^2.2.0",
       "npm:cron-schedule@6.0.0",
       "npm:dayjs@1.11.21",
       "npm:discord-api-types@~0.38.48",
       "npm:drizzle-orm@1.0.0-rc.3",
       "npm:hono@4.12.23",
       "npm:pg@8.21.0",
-      "npm:stripe@22.1.1"
+      "npm:stripe@22.1.1",
+      "npm:zod@^4.4.3"
     ]
   }
 }

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { env } from 'node:process'
 import { createClient } from '@supabase/supabase-js'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { BASE_URL, getSupabaseClient, headers, ORG_ID, TEST_EMAIL, USER_ID } from './test-utils.ts'
+import { BASE_URL, getAuthHeaders, getSupabaseClient, ORG_ID, TEST_EMAIL, USER_ID } from './test-utils.ts'
 
 // Test organization for admin credits tests
 const TEST_ORG_ID = randomUUID()
@@ -12,6 +12,7 @@ const ADMIN_EMAIL = 'admin@capgo.app'
 const ADMIN_PASSWORD = 'adminadmin'
 
 let adminHeadersCache: Record<string, string> | null = null
+let nonAdminHeaders: Record<string, string>
 
 async function getAdminHeaders() {
   if (adminHeadersCache)
@@ -50,6 +51,8 @@ async function getAdminHeaders() {
 }
 
 beforeAll(async () => {
+  nonAdminHeaders = await getAuthHeaders()
+
   // Create stripe_info for the test org
   const { error: stripeError } = await getSupabaseClient().from('stripe_info').insert({
     customer_id: TEST_CUSTOMER_ID,
@@ -103,7 +106,7 @@ describe('[POST] /private/admin_credits/grant - Admin Access Control', () => {
   it('should return 400 not_admin when non-admin user tries to grant credits', async () => {
     const response = await fetch(`${BASE_URL}/private/admin_credits/grant`, {
       method: 'POST',
-      headers,
+      headers: nonAdminHeaders,
       body: JSON.stringify({
         org_id: TEST_ORG_ID,
         amount: 100,
@@ -118,7 +121,7 @@ describe('[POST] /private/admin_credits/grant - Admin Access Control', () => {
   it('should return 400 for invalid JSON body (admin check happens first)', async () => {
     const response = await fetch(`${BASE_URL}/private/admin_credits/grant`, {
       method: 'POST',
-      headers,
+      headers: nonAdminHeaders,
       body: 'invalid json',
     })
     // The not_admin check happens before body validation for authenticated users
@@ -130,7 +133,7 @@ describe('[POST] /private/admin_credits/grant - Admin Access Control', () => {
   it('should return 400 when org_id is missing', async () => {
     const response = await fetch(`${BASE_URL}/private/admin_credits/grant`, {
       method: 'POST',
-      headers,
+      headers: nonAdminHeaders,
       body: JSON.stringify({
         amount: 100,
         notes: 'Test grant',
@@ -143,7 +146,7 @@ describe('[POST] /private/admin_credits/grant - Admin Access Control', () => {
   it('should return 400 when amount is missing', async () => {
     const response = await fetch(`${BASE_URL}/private/admin_credits/grant`, {
       method: 'POST',
-      headers,
+      headers: nonAdminHeaders,
       body: JSON.stringify({
         org_id: TEST_ORG_ID,
         notes: 'Test grant',
@@ -156,7 +159,7 @@ describe('[POST] /private/admin_credits/grant - Admin Access Control', () => {
   it('should return 400 when amount is less than 1', async () => {
     const response = await fetch(`${BASE_URL}/private/admin_credits/grant`, {
       method: 'POST',
-      headers,
+      headers: nonAdminHeaders,
       body: JSON.stringify({
         org_id: TEST_ORG_ID,
         amount: 0,
@@ -184,7 +187,7 @@ describe('[GET] /private/admin_credits/search-orgs - Admin Access Control', () =
   it('should return 400 not_admin when non-admin user tries to search orgs', async () => {
     const response = await fetch(`${BASE_URL}/private/admin_credits/search-orgs?q=test`, {
       method: 'GET',
-      headers,
+      headers: nonAdminHeaders,
     })
     expect(response.status).toBe(400)
     const data = await response.json() as { error: string }
@@ -194,7 +197,7 @@ describe('[GET] /private/admin_credits/search-orgs - Admin Access Control', () =
   it('should return 400 not_admin even when search term is empty', async () => {
     const response = await fetch(`${BASE_URL}/private/admin_credits/search-orgs?q=`, {
       method: 'GET',
-      headers,
+      headers: nonAdminHeaders,
     })
     // The not_admin check happens before validating the search term
     expect(response.status).toBe(400)
@@ -205,7 +208,7 @@ describe('[GET] /private/admin_credits/search-orgs - Admin Access Control', () =
   it('should return 400 not_admin even when searching by UUID', async () => {
     const response = await fetch(`${BASE_URL}/private/admin_credits/search-orgs?q=${ORG_ID}`, {
       method: 'GET',
-      headers,
+      headers: nonAdminHeaders,
     })
     expect(response.status).toBe(400)
     const data = await response.json() as { error: string }
@@ -224,7 +227,7 @@ describe('[GET] /private/admin_credits/search-orgs - Admin Access Control', () =
     for (const pattern of injectionPatterns) {
       const response = await fetch(`${BASE_URL}/private/admin_credits/search-orgs?q=${encodeURIComponent(pattern)}`, {
         method: 'GET',
-        headers,
+        headers: nonAdminHeaders,
       })
       expect(response.status).toBe(400)
       const data = await response.json() as { error: string }
@@ -249,7 +252,7 @@ describe('[GET] /private/admin_credits/org-balance/:orgId - Admin Access Control
   it('should return 400 not_admin when non-admin user tries to view org balance', async () => {
     const response = await fetch(`${BASE_URL}/private/admin_credits/org-balance/${TEST_ORG_ID}`, {
       method: 'GET',
-      headers,
+      headers: nonAdminHeaders,
     })
     expect(response.status).toBe(400)
     const data = await response.json() as { error: string }
@@ -260,7 +263,7 @@ describe('[GET] /private/admin_credits/org-balance/:orgId - Admin Access Control
     const nonExistentOrgId = randomUUID()
     const response = await fetch(`${BASE_URL}/private/admin_credits/org-balance/${nonExistentOrgId}`, {
       method: 'GET',
-      headers,
+      headers: nonAdminHeaders,
     })
     // The not_admin check happens before org validation
     expect(response.status).toBe(400)
@@ -271,7 +274,7 @@ describe('[GET] /private/admin_credits/org-balance/:orgId - Admin Access Control
   it('should return 400 not_admin even with invalid UUID format', async () => {
     const response = await fetch(`${BASE_URL}/private/admin_credits/org-balance/invalid-uuid`, {
       method: 'GET',
-      headers,
+      headers: nonAdminHeaders,
     })
     expect(response.status).toBe(400)
     const data = await response.json() as { error: string }
@@ -295,7 +298,7 @@ describe('[GET] /private/admin_credits/grants-history - Admin Access Control', (
   it('should return 400 not_admin when non-admin user tries to view grant history', async () => {
     const response = await fetch(`${BASE_URL}/private/admin_credits/grants-history`, {
       method: 'GET',
-      headers,
+      headers: nonAdminHeaders,
     })
     expect(response.status).toBe(400)
     const data = await response.json() as { error: string }
@@ -368,7 +371,7 @@ describe('admin credits - consistent error responses', () => {
     for (const endpoint of endpoints) {
       const response = await fetch(`${BASE_URL}${endpoint.path}`, {
         method: endpoint.method,
-        headers,
+        headers: nonAdminHeaders,
         body: endpoint.body,
       })
 

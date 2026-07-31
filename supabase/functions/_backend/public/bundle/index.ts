@@ -9,29 +9,31 @@ import { setChannel } from './set_channel.ts'
 import { app as updateMetadataApp } from './update_metadata.ts'
 
 export const app = honoFactory.createApp()
+// Bundle writes authenticate through the primary connection so a just-created key is visible.
+const writeBundleMiddleware = middlewareKey({ usePostgres: true, readOnly: false })
 
 // Add the route for updating bundle metadata
 app.route('/metadata', updateMetadataApp)
 
-app.get('/', middlewareKey(['all', 'write', 'read']), async (c) => {
+app.get('/', middlewareKey(), async (c) => {
   const body = await getBodyOrQuery<GetLatest>(c)
   const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
   return get(c, body, apikey)
 })
 
-app.delete('/', middlewareKey(['all', 'write']), async (c) => {
+app.delete('/', writeBundleMiddleware, async (c) => {
   const body = await getBodyOrQuery<GetLatest>(c)
   const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
   return deleteBundle(c, body, apikey)
 })
 
-app.put('/', middlewareKey(['all', 'write']), async (c) => {
+app.put('/', writeBundleMiddleware, async (c) => {
   const body = await getBodyOrQuery<any>(c)
   const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
   return setChannel(c, body, apikey)
 })
 
-app.post('/', middlewareKey(['all', 'write']), async (c) => {
+app.post('/', writeBundleMiddleware, async (c) => {
   const body = await getBodyOrQuery<any>(c)
   const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
   return createBundle(c, body, apikey)

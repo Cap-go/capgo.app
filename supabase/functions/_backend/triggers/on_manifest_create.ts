@@ -46,6 +46,54 @@ function shouldRetryManifestSizeLookup(size: number, currentFileSize: number | n
   return size <= 0 && !(currentFileSize && currentFileSize > 0)
 }
 
+async function shouldSkipManifestSizeRetry(c: Context, record: Database['public']['Tables']['manifest']['Row'], queue: QueueLogMetadata): Promise<boolean> {
+  if (!record.id)
+    return false
+
+  const { data: currentManifest, error: manifestError } = await supabaseAdmin(c)
+    .from('manifest')
+    .select('file_size, app_version_id')
+    .eq('id', record.id)
+    .maybeSingle()
+
+  if (manifestError) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'error reading current manifest before retry', id: record.id, app_version_id: record.app_version_id, queue, error: manifestError })
+    return false
+  }
+
+  if (!currentManifest) {
+    cloudlog({ requestId: c.get('requestId'), message: 'manifest row already gone, skipping size retry', id: record.id, app_version_id: record.app_version_id, queue })
+    return true
+  }
+
+  if (currentManifest.file_size && currentManifest.file_size > 0) {
+    cloudlog({ requestId: c.get('requestId'), message: 'manifest row already sized, skipping stale queue retry', id: record.id, app_version_id: currentManifest.app_version_id, file_size: currentManifest.file_size, queue })
+    return true
+  }
+
+  const appVersionId = currentManifest.app_version_id ?? record.app_version_id
+  if (!appVersionId)
+    return false
+
+  const { data: appVersion, error: appVersionError } = await supabaseAdmin(c)
+    .from('app_versions')
+    .select('deleted, deleted_at')
+    .eq('id', appVersionId)
+    .maybeSingle()
+
+  if (appVersionError) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'error reading app version before manifest retry', id: record.id, app_version_id: appVersionId, queue, error: appVersionError })
+    return false
+  }
+
+  if (appVersion?.deleted || appVersion?.deleted_at) {
+    cloudlog({ requestId: c.get('requestId'), message: 'app version deleted, skipping manifest size retry', id: record.id, app_version_id: appVersionId, queue })
+    return true
+  }
+
+  return false
+}
+
 async function runManifestUpdateWithRetry(
   c: Context,
   operation: () => Promise<RetryableResult>,
@@ -97,6 +145,8 @@ export async function updateManifestSize(c: Context, record: Database['public'][
     cloudlogErr({ requestId: c.get('requestId'), message: 'getSize failed after retries', id: record.id, app_version_id: record.app_version_id, file_name: record.file_name, s3_path: record.s3_path, attempts, queue, error: lastError, storageDiagnostics: diagnostics })
   }
   if (shouldRetryManifestSizeLookup(size, record.file_size)) {
+    if (await shouldSkipManifestSizeRetry(c, record, queue))
+      return c.json(BRES)
     cloudlogErr({ requestId: c.get('requestId'), message: 'getSize returned 0 after retries', id: record.id, app_version_id: record.app_version_id, file_name: record.file_name, s3_path: record.s3_path, attempts, queue, storageDiagnostics: diagnostics })
     // Return non-2xx so queue_consumer keeps the message and applies its 5-read retry budget.
     throw quickError(503, 'manifest_size_not_found', 'Manifest file size metadata was not found', { attempts, file_name: record.file_name, id: record.id, queue, s3_path: record.s3_path, storageDiagnostics: diagnostics }, lastError, { alert: false })
@@ -139,5 +189,6 @@ export const onManifestCreateTestUtils = {
   isRetryablePostgrestResult,
   runManifestUpdateWithRetry,
   shouldRetryManifestSizeLookup,
+  shouldSkipManifestSizeRetry,
   sizeRetryAttempts: SIZE_RETRY_ATTEMPTS,
 }

@@ -3,6 +3,7 @@ import * as schema from '../supabase/functions/_backend/utils/postgres_schema.ts
 
 const {
   claimNotifOrgOnceMock,
+  closeClientMock,
   cloudlogMock,
   getDrizzleClientMock,
   getPgClientMock,
@@ -12,6 +13,7 @@ const {
   sendNotifOrgMock,
   sendNotifOrgOnceMock,
 } = vi.hoisted(() => ({
+  closeClientMock: vi.fn(),
   claimNotifOrgOnceMock: vi.fn(),
   cloudlogMock: vi.fn(),
   getDrizzleClientMock: vi.fn(),
@@ -43,6 +45,7 @@ vi.mock('../supabase/functions/_backend/utils/pg.ts', async () => {
   const actual = await vi.importActual<typeof import('../supabase/functions/_backend/utils/pg.ts')>('../supabase/functions/_backend/utils/pg.ts')
   return {
     ...actual,
+    closeClient: closeClientMock,
     getDrizzleClient: getDrizzleClientMock,
     getPgClient: getPgClientMock,
     logPgError: logPgErrorMock,
@@ -138,16 +141,17 @@ function createDrizzleStub(options?: {
 describe('sendNotifToOrgMembersOnce', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    closeClientMock.mockResolvedValue(undefined)
     isBentoConfiguredMock.mockReturnValue(true)
     hasNotifOrgClaimMock.mockResolvedValue(false)
-    getPgClientMock.mockReturnValue({} as any)
+    getPgClientMock.mockReturnValue({ id: 'owned-pg-client' } as any)
     getDrizzleClientMock.mockReturnValue(createDrizzleStub({
       adminUsers: [{ id: 'admin-1', email: 'admin@example.com' }],
       kind: 'write-client',
     }))
   })
 
-  it('does not send recipient notifications when the org-level claim already exists', async () => {
+  it('treats an existing org-level claim as already delivered without sending recipients again', async () => {
     hasNotifOrgClaimMock.mockResolvedValue(true)
 
     const { sendNotifToOrgMembersOnce } = await import('../supabase/functions/_backend/utils/org_email_notifications.ts')
@@ -172,8 +176,8 @@ describe('sendNotifToOrgMembersOnce', () => {
     )
     expect(sendNotifOrgOnceMock).not.toHaveBeenCalled()
     expect(claimNotifOrgOnceMock).not.toHaveBeenCalled()
+    expect(closeClientMock).toHaveBeenCalledWith(expect.anything(), { id: 'owned-pg-client' })
   })
-
   it('fails closed when the org-level claim lookup errors', async () => {
     hasNotifOrgClaimMock.mockResolvedValue(null)
 

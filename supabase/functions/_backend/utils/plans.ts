@@ -22,6 +22,7 @@ import {
   set_storage_exceeded,
   supabaseAdmin,
 } from './supabase.ts'
+import { buildOnboardingIntentBentoEventData, parseOrgOnboardingIntent } from './org_onboarding_intent.ts'
 import { sendEventToTracking } from './tracking.ts'
 import { isStripeConfigured } from './utils.ts'
 
@@ -477,7 +478,7 @@ async function userIsAtPlanUsage(c: Context, orgId: string, customerId: string |
 export async function getOrgWithCustomerInfo(c: Context, orgId: string) {
   const { data: org, error: userError } = await supabaseAdmin(c)
     .from('orgs')
-    .select('customer_id, has_usage_credits, name, website, stripe_info(status, subscription_id, subscription_anchor_start, subscription_anchor_end, trial_at)')
+    .select('customer_id, has_usage_credits, name, website, onboarding, stripe_info(status, subscription_id, subscription_anchor_start, subscription_anchor_end, trial_at)')
     .eq('id', orgId)
     .maybeSingle()
   if (userError)
@@ -548,11 +549,13 @@ export async function handleOrgNotificationsAndEvents(c: Context, org: any, orgI
     finalIsGoodPlan = !needsUpgrade
   }
   else if (!is_onboarded && is_onboarding_needed) {
-    const sent = await sendNotifToOrgMembersOnce(c, 'user:need_onboarding', 'onboarding', {
-      org_id: orgId,
-      org_name: org.name ?? '',
-      org_website: org.website ?? null,
-    }, orgId, orgId, drizzleClient)
+    const onboardingIntent = parseOrgOnboardingIntent(org.onboarding)
+    // Once returns true only on the first org claim (not on later cron passes).
+    const sent = await sendNotifToOrgMembersOnce(c, 'user:need_onboarding', 'onboarding', buildOnboardingIntentBentoEventData(c, onboardingIntent, {
+      id: orgId,
+      name: org.name ?? '',
+      website: org.website ?? null,
+    }), orgId, orgId, drizzleClient)
     if (sent) {
       await sendEventToTracking(c, {
         channel: 'usage',
@@ -573,12 +576,13 @@ export async function handleOrgNotificationsAndEvents(c: Context, org: any, orgI
 }
 
 // Update stripe_info with plan status
-export async function updatePlanStatus(c: Context, org: any, is_good_plan: boolean, percentUsage: PlanUsage): Promise<void> {
+export async function updatePlanStatus(c: Context, org: any, finalIsGoodPlan: boolean, isAbovePlan: boolean, percentUsage: PlanUsage): Promise<void> {
   const normalizedUsage = normalizePlanUsage(percentUsage)
   await supabaseAdmin(c)
     .from('stripe_info')
     .update({
-      is_good_plan,
+      is_above_plan: isAbovePlan,
+      is_good_plan: finalIsGoodPlan,
       plan_usage: Math.round(normalizedUsage.total_percent),
     })
     .eq('customer_id', org.customer_id!)
@@ -607,10 +611,12 @@ export async function checkPlanStatusOnly(c: Context, orgId: string, drizzleClie
     return
   }
   const { is_good_plan, percentUsage } = planStatus
+  // Credits can restore final plan eligibility, so retain the raw usage threshold separately.
+  const isAbovePlan = percentUsage.total_percent > 100
 
   // Update plan status in database
   const finalIsGoodPlan = await handleOrgNotificationsAndEvents(c, org, orgId, is_good_plan, percentUsage, drizzleClient)
-  await updatePlanStatus(c, org, finalIsGoodPlan, percentUsage)
+  await updatePlanStatus(c, org, finalIsGoodPlan, isAbovePlan, percentUsage)
 }
 
 // New function for cron_sync_sub - handles subscription sync + events

@@ -1,0 +1,226 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-06-23T13:50:59Z",
+  "title": "Design System: Capgo Console",
+  "extensions": {
+    "colorMeta": {
+      "dusk": {
+        "role": "primary",
+        "displayName": "Dusk Control",
+        "canonical": "#515271",
+        "tonalRamp": ["#292a49", "#333453", "#3d3e5d", "#474867", "#515271", "#656685", "#797a99", "#8384a3"]
+      },
+      "azure": {
+        "role": "secondary",
+        "displayName": "Capgo Azure",
+        "canonical": "#119eff",
+        "tonalRamp": ["#0076d7", "#0080e1", "#008aeb", "#0794f5", "#119eff", "#25b2ff", "#39c6ff", "#43d0ff"]
+      },
+      "teal": {
+        "role": "secondary",
+        "displayName": "Operational Teal",
+        "canonical": "#1FB2A5",
+        "tonalRamp": ["#0d5f58", "#11746b", "#168a7f", "#1a9e92", "#1FB2A5", "#4bc4ba", "#7ed8d0", "#b7ebe6"]
+      },
+      "success": {
+        "role": "tertiary",
+        "displayName": "Health Green",
+        "canonical": "#88d4a6",
+        "tonalRamp": ["#276044", "#3e7b59", "#55976e", "#6eb488", "#88d4a6", "#a6f2c4", "#b0fcce", "#baffd8"]
+      },
+      "warning": {
+        "role": "tertiary",
+        "displayName": "Build Warning Orange",
+        "canonical": "#ff7211",
+        "tonalRamp": ["#d74a00", "#e15400", "#eb5e00", "#f56807", "#ff7211", "#ff8625", "#ff9a39", "#ffa443"]
+      },
+      "muted-blue": {
+        "role": "tertiary",
+        "displayName": "Muted Incident Blue",
+        "canonical": "#456b9a",
+        "tonalRamp": ["#1d4372", "#274d7c", "#315786", "#3b6190", "#456b9a", "#597fae", "#6d93c2", "#779dcc"]
+      },
+      "neutral-dark": {
+        "role": "neutral",
+        "displayName": "Console Dark",
+        "canonical": "#191D24",
+        "tonalRamp": ["#111318", "#15171c", "#191D24", "#1e293b", "#334155", "#64748b", "#cbd5e1", "#f8fafc"]
+      },
+      "white": {
+        "role": "neutral",
+        "displayName": "Base White",
+        "canonical": "#ffffff",
+        "tonalRamp": ["#334155", "#475569", "#64748b", "#cbd5e1", "#e2e8f0", "#f1f5f9", "#f8fafc", "#ffffff"]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "Rare brand or onboarding moments."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Page, dialog, and empty-state headings."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Panel and card headings."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Default product text."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Buttons, tabs, nav rows, fields, and metadata."
+      }
+    },
+    "shadows": [
+      {
+        "name": "soft-control",
+        "value": "0 1px 3px 0 rgba(0, 0, 0, 0.08), 0 1px 2px 0 rgba(0, 0, 0, 0.02)",
+        "purpose": "Low emphasis controls, selected secondary tabs, and subtle hover response."
+      },
+      {
+        "name": "panel",
+        "value": "0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -2px rgba(0, 0, 0, 0.01)",
+        "purpose": "Local overlays and empty-state cards."
+      },
+      {
+        "name": "dialog",
+        "value": "0 20px 25px -5px rgba(0, 0, 0, 0.08), 0 10px 10px -5px rgba(0, 0, 0, 0.01)",
+        "purpose": "Modal and floating layers above a backdrop."
+      }
+    ],
+    "motion": [
+      {
+        "name": "state-fast",
+        "value": "150ms ease-in-out",
+        "purpose": "Default hover, active, and icon color transitions."
+      },
+      {
+        "name": "overlay-standard",
+        "value": "200ms ease-in-out",
+        "purpose": "Mobile sidebar and backdrop transitions."
+      }
+    ],
+    "breakpoints": [
+      { "name": "xs", "value": "480px" },
+      { "name": "sm", "value": "640px" },
+      { "name": "md", "value": "768px" },
+      { "name": "lg", "value": "1024px" },
+      { "name": "xl", "value": "1280px" },
+      { "name": "2xl", "value": "1536px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Steady product action using the existing DaisyUI primary role.",
+      "html": "<button class=\"ds-btn-primary\">Save changes</button>",
+      "css": ".ds-btn-primary { background: var(--color-primary, #515271); color: #fff; border: 0; border-radius: 8px; padding: 10px 16px; font: 600 14px/1.4 Inter, ui-sans-serif, system-ui, sans-serif; cursor: pointer; transition: background-color 150ms ease-in-out, box-shadow 150ms ease-in-out; } .ds-btn-primary:hover { background: #474867; } .ds-btn-primary:focus-visible { outline: 2px solid var(--color-secondary, #119eff); outline-offset: 2px; } .ds-btn-primary:disabled { opacity: .7; cursor: not-allowed; }"
+    },
+    {
+      "name": "Azure Action Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "High-clarity action or selected state using Capgo Azure.",
+      "html": "<button class=\"ds-btn-azure\">Add app</button>",
+      "css": ".ds-btn-azure { background: var(--color-secondary, #119eff); color: #fff; border: 0; border-radius: 8px; padding: 10px 16px; font: 600 14px/1.4 Inter, ui-sans-serif, system-ui, sans-serif; cursor: pointer; transition: background-color 150ms ease-in-out, box-shadow 150ms ease-in-out; } .ds-btn-azure:hover { background: #008aeb; } .ds-btn-azure:focus-visible { outline: 2px solid #119eff; outline-offset: 2px; }"
+    },
+    {
+      "name": "Outline Button",
+      "kind": "button",
+      "refersTo": "button-outline",
+      "description": "Quiet secondary control for reload, cancel, and filter entry points.",
+      "html": "<button class=\"ds-btn-outline\">Reload</button>",
+      "css": ".ds-btn-outline { background: #fff; color: #475569; border: 1px solid #cbd5e1; border-radius: 8px; padding: 8px 12px; font: 500 14px/1.4 Inter, ui-sans-serif, system-ui, sans-serif; cursor: pointer; transition: background-color 150ms ease-in-out, border-color 150ms ease-in-out, color 150ms ease-in-out; } .ds-btn-outline:hover { background: #f1f5f9; border-color: #94a3b8; color: #334155; } .ds-btn-outline:focus-visible { outline: 2px solid #119eff; outline-offset: 2px; }"
+    },
+    {
+      "name": "Sidebar Nav Item",
+      "kind": "nav",
+      "description": "Dark shell navigation row with azure active state.",
+      "html": "<button class=\"ds-sidebar-item ds-sidebar-item-active\"><span class=\"ds-sidebar-icon\"></span><span>Dashboard</span></button>",
+      "css": ".ds-sidebar-item { width: 100%; display: flex; align-items: center; min-height: 44px; gap: 12px; padding: 12px; border: 0; border-radius: 8px; background: transparent; color: #94a3b8; font: 500 14px/1.4 Inter, ui-sans-serif, system-ui, sans-serif; cursor: pointer; transition: background-color 150ms ease-in-out, color 150ms ease-in-out; } .ds-sidebar-item:hover { background: rgba(51,65,85,.5); color: #cbd5e1; } .ds-sidebar-item-active { background: #334155; color: #119eff; cursor: default; } .ds-sidebar-icon { width: 20px; height: 20px; border-radius: 5px; background: currentColor; opacity: .9; } .ds-sidebar-item:focus-visible { outline: 2px solid #119eff; outline-offset: 2px; }"
+    },
+    {
+      "name": "Primary Tab",
+      "kind": "nav",
+      "description": "Open-tab pattern used inside app routes.",
+      "html": "<button class=\"ds-tab ds-tab-active\">Bundles</button>",
+      "css": ".ds-tab { position: relative; display: inline-flex; align-items: center; min-height: 38px; padding: 8px 12px; border: 1px solid transparent; border-radius: 8px 8px 0 0; background: transparent; color: rgba(100,116,139,.85); font: 500 14px/1.4 Inter, ui-sans-serif, system-ui, sans-serif; cursor: pointer; transition: background-color 150ms ease-in-out, color 150ms ease-in-out, border-color 150ms ease-in-out; } .ds-tab:hover { background: rgba(219,234,254,.7); color: #334155; } .ds-tab-active { color: #119eff; background: #eff6ff; border-color: rgba(191,219,254,.7); border-bottom-color: transparent; } .ds-tab:focus-visible { outline: 2px solid #119eff; outline-offset: 2px; }"
+    },
+    {
+      "name": "Content Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "Plain content container for empty states and local panels.",
+      "html": "<section class=\"ds-card\"><h3>Ready to ship</h3><p>Create an app to start managing live updates.</p></section>",
+      "css": ".ds-card { background: #fff; color: #1e293b; border: 1px solid #e2e8f0; border-radius: 16px; padding: 24px; box-shadow: 0 10px 15px -3px rgba(0,0,0,.08), 0 4px 6px -2px rgba(0,0,0,.01); font-family: Inter, ui-sans-serif, system-ui, sans-serif; } .ds-card h3 { margin: 0 0 8px; font-size: 24px; line-height: 1.33; font-weight: 700; letter-spacing: -.01em; } .ds-card p { margin: 0; color: #475569; font-size: 16px; line-height: 1.5; }"
+    },
+    {
+      "name": "Text Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Compact field vocabulary for search, filters, and settings forms.",
+      "html": "<input class=\"ds-input\" placeholder=\"Search apps\" />",
+      "css": ".ds-input { width: 100%; min-height: 40px; background: #fff; color: #1e293b; border: 1px solid #cbd5e1; border-radius: 8px; padding: 8px 12px; font: 400 14px/1.4 Inter, ui-sans-serif, system-ui, sans-serif; transition: border-color 150ms ease-in-out, box-shadow 150ms ease-in-out; } .ds-input::placeholder { color: #475569; } .ds-input:focus { border-color: #119eff; outline: 2px solid rgba(17,158,255,.3); outline-offset: 1px; } .ds-input:disabled { background: #f1f5f9; color: #64748b; cursor: not-allowed; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Release Control Room",
+    "overview": "Capgo Console is operational product software. The system should feel steady under pressure: dark slate navigation, quiet content surfaces, clear focus states, and concise controls that keep the user in the task. It is not trying to sell the product on every screen. It is helping someone ship, inspect, and recover.\n\nThe visual system is restrained by default. Azure is reserved for focus, selection, meaningful state, and the clearest action on a screen. Dusk, slate, and white carry the structure. Cards and shadows exist, but only to separate a repeated object, dialog, empty state, or table tool from its surroundings.",
+    "keyCharacteristics": [
+      "Dense but readable app shell for repeated operational work.",
+      "Dark slate side navigation with azure active state.",
+      "Light content surfaces with slate text and restrained borders.",
+      "Standard product controls: DaisyUI buttons/dialogs, Tailwind utilities, tabs, tables, toggles, and form fields.",
+      "Fast state motion around 150-200ms, used for feedback and navigation only."
+    ],
+    "rules": [
+      {
+        "name": "The Azure Is State Rule",
+        "body": "Azure marks state, focus, selection, or one obvious action. If it is only decoration, remove it.",
+        "section": "colors"
+      },
+      {
+        "name": "The Slate Shell Rule",
+        "body": "Navigation and global chrome stay in slate. Content should not become a rainbow of product areas.",
+        "section": "colors"
+      },
+      {
+        "name": "The Product Scale Rule",
+        "body": "Do not use fluid hero typography in console screens. Fixed rem sizes keep dense UI predictable.",
+        "section": "typography"
+      },
+      {
+        "name": "The Prompt Restraint Rule",
+        "body": "Prompt can carry the brand mark. It must not appear in dense labels, tables, settings controls, or logs.",
+        "section": "typography"
+      },
+      {
+        "name": "The Flat By Default Rule",
+        "body": "Tables, panels, settings groups, and nav rows stay flat at rest. Add a shadow only when a layer floats above the page.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do preserve the dark slate shell and quiet content surface split.",
+      "Do use Capgo Azure for state, selection, focus, and one clear action.",
+      "Do keep console copy concise and operational.",
+      "Do use DaisyUI `d-` prefixed primitives for buttons, dialogs, fields, and interactive controls when they fit.",
+      "Do design tables, logs, and settings for dense data and repeated use.",
+      "Do include loading, empty, disabled, hover, focus, error, and restricted-access states."
+    ],
+    "donts": [
+      "Don't make the console feel like an overdecorated SaaS dashboard.",
+      "Don't make authenticated product screens feel like a marketing-heavy landing page.",
+      "Don't build generic AI card grids, decorative gradients, glass effects, or ornamental animation.",
+      "Don't use large side-stripe borders, gradient text, nested cards, or 32px-plus card radii.",
+      "Don't hide operational state behind vague wizard copy.",
+      "Don't introduce a new color family when slate, dusk, azure, teal, warning, and status colors already cover the role."
+    ]
+  }
+}

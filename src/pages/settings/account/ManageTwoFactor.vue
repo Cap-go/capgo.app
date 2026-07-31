@@ -5,6 +5,7 @@ import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import VueTurnstile from 'vue-turnstile'
+import { formatLocalDate } from '~/services/date'
 import { useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
@@ -59,7 +60,7 @@ const stepLabels = computed(() => [
 const setupDateLabel = computed(() => {
   if (!mfaSetupDate.value)
     return ''
-  return dayjs(mfaSetupDate.value).format('MMMM D, YYYY')
+  return formatLocalDate(mfaSetupDate.value)
 })
 
 watch(captchaToken, (token) => {
@@ -475,11 +476,14 @@ onBeforeUnmount(async () => {
               <p class="text-sm text-slate-500 dark:text-slate-400">
                 {{ t('email-otp-sent') }}
               </p>
+              <label for="mfa-otp-verification-code" class="sr-only">{{ t('verification-code') }}</label>
               <input
+                id="mfa-otp-verification-code"
                 v-model="otpVerificationCode"
                 type="text"
                 inputmode="numeric"
                 :placeholder="t('verification-code')"
+                :aria-label="t('verification-code')"
                 class="d-input w-full"
                 autocomplete="one-time-code"
                 @keydown.enter.prevent="verifyOtpForMfa"
@@ -537,11 +541,14 @@ onBeforeUnmount(async () => {
               <p class="text-sm text-slate-500 dark:text-slate-400">
                 {{ t('mfa-enable-instruction-2') }}
               </p>
+              <label for="mfa-totp-verification-code" class="sr-only">{{ t('verification-code') }}</label>
               <input
+                id="mfa-totp-verification-code"
                 v-model="mfaVerificationCode"
                 type="text"
                 inputmode="numeric"
                 :placeholder="t('verification-code')"
+                :aria-label="t('verification-code')"
                 class="d-input w-full"
                 maxlength="6"
                 autocomplete="one-time-code"

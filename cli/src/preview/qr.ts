@@ -3,9 +3,12 @@ import type { OptionsBase } from '../schemas/base'
 import type { Database } from '../types/supabase.types'
 import { stdout } from 'node:process'
 import { intro, log, outro } from '@clack/prompts'
+import { chmod, mkdir } from 'node:fs/promises'
+import { dirname, resolve } from 'node:path'
 import QRCode from 'qrcode'
+import { buildPreviewWebUrl, type PreviewWebEnv } from './web-url'
 import { check2FAComplianceForApp, checkAppExistsAndHasPermissionOrgErr } from '../api/app'
-import { createSupabaseClient, findSavedKey, formatError, getAppId, getConfig, OrganizationPerm } from '../utils'
+import { createSupabaseClient, findSavedKey, formatError, getAppId, getConfig } from '../utils'
 
 type AppRow = Pick<Database['public']['Tables']['apps']['Row'], 'allow_preview' | 'app_id'>
 type BundleRow = Pick<Database['public']['Tables']['app_versions']['Row'], 'id' | 'name'>
@@ -18,6 +21,10 @@ export interface PreviewQrCommandOptions extends OptionsBase {
   channel?: string
   target?: string
   type?: 'bundle' | 'channel'
+  png?: string
+  url?: boolean
+  webUrl?: boolean
+  previewEnv?: PreviewWebEnv
 }
 
 export type PreviewQrTarget =
@@ -59,6 +66,14 @@ export function buildPreviewQrUrl(target: PreviewQrTarget) {
 
 export async function renderTerminalQrCode(value: string) {
   return QRCode.toString(value, { type: 'utf8', errorCorrectionLevel: 'L' })
+}
+
+export async function renderQrCodePng(value: string, outputPath: string) {
+  const absolutePath = resolve(outputPath)
+  await mkdir(dirname(absolutePath), { recursive: true })
+  await QRCode.toFile(absolutePath, value, { errorCorrectionLevel: 'L', width: 512 })
+  await chmod(absolutePath, 0o600)
+  return absolutePath
 }
 
 async function getAppPreviewState(supabase: CapgoSupabaseClient, appId: string): Promise<AppRow> {
@@ -238,24 +253,53 @@ export async function resolvePreviewQrTarget(
   throw new Error(`No bundle or channel named/id ${options.target} found for app ${appId}`)
 }
 
-export async function printPreviewQrCode(target: PreviewQrTarget) {
-  const url = buildPreviewQrUrl(target)
-  const qrText = await renderTerminalQrCode(url)
+export interface PreviewQrOutputOptions {
+  png?: string
+  url?: boolean
+  webUrl?: boolean
+  previewEnv?: PreviewWebEnv
+}
+
+export function resolvePreviewQrOutputValue(target: PreviewQrTarget, options: PreviewQrOutputOptions = {}) {
+  if (options.webUrl)
+    return buildPreviewWebUrl(target, options.previewEnv ?? 'prod')
+  return buildPreviewQrUrl(target)
+}
+
+export async function printPreviewQrCode(target: PreviewQrTarget, options: PreviewQrOutputOptions = {}) {
+  const deepLink = buildPreviewQrUrl(target)
+  const webUrl = buildPreviewWebUrl(target, options.previewEnv ?? 'prod')
+  const qrValue = resolvePreviewQrOutputValue(target, options)
   const label = target.kind === 'bundle'
     ? `Bundle ${target.bundleName} (${target.versionId})`
     : `Channel ${target.channelName} (${target.channelId})`
 
+  if (options.url) {
+    log.success(`Preview URLs for ${label}`)
+    stdout.write(`\n${webUrl}\n${deepLink}\n\n`)
+    return
+  }
+
+  const qrText = await renderTerminalQrCode(qrValue)
   log.success(`Preview QR for ${label}`)
-  stdout.write(`\n${qrText}\n${url}\n\n`)
+  stdout.write(`\n${qrText}\n${webUrl}\n${deepLink}\n`)
+
+  if (options.png) {
+    const pngPath = await renderQrCodePng(qrValue, options.png)
+    log.info(`QR code PNG written to ${pngPath}`)
+  }
+
+  stdout.write('\n')
 }
 
 export async function printPreviewQrForResolvedTarget(
   supabase: CapgoSupabaseClient,
   appId: string,
   target: PreviewQrTarget,
+  options: PreviewQrOutputOptions = {},
 ) {
   await assertAppAllowsPreview(supabase, appId)
-  await printPreviewQrCode(target)
+  await printPreviewQrCode(target, options)
 }
 
 export async function getPreviewQr(appId: string, target: string | undefined, options: PreviewQrCommandOptions) {
@@ -277,10 +321,15 @@ export async function getPreviewQr(appId: string, target: string | undefined, op
 
   const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
   await check2FAComplianceForApp(supabase, appId)
-  await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, OrganizationPerm.read, false, true)
+  await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'app.read', false, true)
 
   const resolvedTarget = await resolvePreviewQrTarget(supabase, appId, { ...options, target })
-  await printPreviewQrForResolvedTarget(supabase, appId, resolvedTarget)
+  await printPreviewQrForResolvedTarget(supabase, appId, resolvedTarget, {
+    png: options.png,
+    url: options.url,
+    webUrl: options.webUrl,
+    previewEnv: options.previewEnv,
+  })
 
   outro('Done ✅')
 }

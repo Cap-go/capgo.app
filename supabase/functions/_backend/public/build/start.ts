@@ -7,7 +7,7 @@ import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { supabaseAdmin, supabaseApikey } from '../../utils/supabase.ts'
 import { getEnv } from '../../utils/utils.ts'
-import { reserveNativeBuildSlot } from './concurrency.ts'
+import { isNativeBuildConcurrencyLimitError, reserveNativeBuildSlot } from './concurrency.ts'
 
 interface BuilderStartResponse {
   status: string
@@ -244,12 +244,24 @@ export async function startBuild(
 
     const boundAppId = appId
 
-    await reserveNativeBuildSlot(c, {
-      buildRequestId: buildRequest.id,
-      orgId: buildRequest.owner_org,
-      appId: boundAppId,
-      jobId,
-    })
+    try {
+      await reserveNativeBuildSlot(c, {
+        buildRequestId: buildRequest.id,
+        orgId: buildRequest.owner_org,
+        appId: boundAppId,
+        jobId,
+        userId: apikey.user_id,
+      })
+    }
+    catch (error) {
+      // Persist a customer-facing reason on the build row so the dashboard can
+      // show the concurrency/upgrade message instead of leaving a stuck pending job.
+      if (isNativeBuildConcurrencyLimitError(error)) {
+        await markBuildAsFailed(c, jobId, boundAppId, error.message)
+        alreadyMarkedAsFailed = true
+      }
+      throw error
+    }
 
     cloudlog({
       requestId: c.get('requestId'),

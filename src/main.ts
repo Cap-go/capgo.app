@@ -126,7 +126,10 @@ window.addEventListener('vite:preloadError', (event) => {
   handleChunkError(message)
 })
 
-const guestPath = ['/login', '/delete_account', '/confirm-signup', '/forgot_password', '/resend_email', '/onboarding', '/register', '/invitation', '/scan', '/preview/channel', '/sso-callback']
+const guestPath = ['/login', '/delete_account', '/confirm-signup', '/forgot_password', '/resend_email', '/onboarding', '/register', '/invitation', '/scan', '/sso-callback']
+function isGuestRoutePath(path: string) {
+  return guestPath.includes(path) || path === '/preview' || path.startsWith('/preview/')
+}
 
 getRemoteConfig()
 const app = createApp(App)
@@ -134,7 +137,7 @@ CapacitorUpdater.notifyAppReady()
 console.log(`Capgo Version : "${import.meta.env.VITE_APP_VERSION}"`)
 // setup up pages with layouts
 const newRoutes = routes.map((route) => {
-  if (guestPath.includes(route.path)) {
+  if (isGuestRoutePath(route.path)) {
     route.meta ??= {}
     route.meta.layout = 'naked'
   }
@@ -157,6 +160,17 @@ const router = createRouter({
     { path: '/dashboard/settings/organization/plans', redirect: '/settings/organization/plans' },
     { path: '/dashboard/settings/organization/usage', redirect: '/settings/organization/usage' },
     { path: '/p/:package', redirect: to => `/app/${(to.params as { package: string }).package}` },
+    {
+      path: '/p/:package/logs',
+      redirect: (to) => {
+        const { tab: _, ...query } = to.query
+        return {
+          path: `/app/${encodeURIComponent(String((to.params as { package: string }).package))}/logs`,
+          query,
+          hash: to.hash,
+        }
+      },
+    },
     { path: '/dashboard/apikeys', redirect: '/apikeys' },
     { path: '/dashboard/settings/account', redirect: '/settings/account' },
     { path: '/dashboard/settings/change-password', redirect: '/settings/account/change-password' },
@@ -169,7 +183,17 @@ const router = createRouter({
     { path: '/app/p/:package/bundles', redirect: to => `/app/${(to.params as { package: string }).package}` },
     { path: '/app/p/:package/channels', redirect: to => `/app/${(to.params as { package: string }).package}` },
     { path: '/app/p/:package/devices', redirect: to => `/app/${(to.params as { package: string }).package}` },
-    { path: '/app/p/:package/logs', redirect: to => `/app/${(to.params as { package: string }).package}` },
+    {
+      path: '/app/p/:package/logs',
+      redirect: (to) => {
+        const { tab: _, ...query } = to.query
+        return {
+          path: `/app/${encodeURIComponent(String((to.params as { package: string }).package))}/logs`,
+          query,
+          hash: to.hash,
+        }
+      },
+    },
     { path: '/app/package/:package', redirect: to => `/app/${(to.params as { package: string }).package}` },
     { path: '/app/package/:package/settings', redirect: to => `/app/${(to.params as { package: string }).package}` },
     ...setupLayouts(newRoutes),

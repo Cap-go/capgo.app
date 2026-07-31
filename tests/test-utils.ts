@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Database } from '../src/types/supabase.types'
 import { spawnSync } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import process, { env } from 'node:process'
 import { createClient } from '@supabase/supabase-js'
 import { Pool } from 'pg'
@@ -157,6 +158,15 @@ export const APIKEY_TEST_ALL = 'ae6e7458-c46d-4c00-aa3b-153b0b8520ea' // all key
 export const APIKEY_TEST_UPLOAD = 'c591b04e-cf29-4945-b9a0-776d0672061b' // upload key
 export const APIKEY_TEST2_ALL = 'ac4d9a98-ec25-4af8-933c-2aae4aa52b85' // test2 all key (dedicated for statistics)
 export const APIKEY_TEST_HASHED = 'test-hashed-apikey-for-auth-test' // hashed key (plain value, stored as SHA-256 hash in DB)
+export const APIKEY_TEST_ORG_SUPER_ADMIN = APIKEY_TEST_ALL
+export const APIKEY_TEST_APP_UPLOADER = APIKEY_TEST_UPLOAD
+export const APIKEY_TEST2_ORG_SUPER_ADMIN = APIKEY_TEST2_ALL
+export const USER_ID_APIKEY_MANAGEMENT = 'd0f1a2b3-c4d5-4e6f-8a90-b1c2d3e4f506'
+export const USER_EMAIL_APIKEY_MANAGEMENT = 'apikey-management@capgo.app'
+export const ORG_ID_APIKEY_MANAGEMENT = 'f1a2b3c4-d5e6-4f70-8a9b-0c1d2e3f4a50'
+export const APIKEY_MANAGEMENT_ORG_SUPER_ADMIN = 'c9d0e1f2-a3b4-4c5d-8e6f-7a8b9c0d1e25'
+export const APIKEY_MANAGEMENT_APIKEY_MANAGER = 'd1e2f3a4-b5c6-4d7e-8f90-a1b2c3d4e5f6'
+export const APIKEY_MANAGEMENT_APIKEY_MANAGER_ID = 113
 export const ORG_ID = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'
 export const STRIPE_INFO_CUSTOMER_ID = 'cus_Q38uE91NP8Ufqc' // Customer ID for ORG_ID
 export const NON_OWNER_ORG_ID = 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d'
@@ -412,51 +422,16 @@ async function signInAndBuildAuthHeaders(email: string, password: string): Promi
     throw new Error('SUPABASE_URL or SUPABASE_ANON_KEY is missing for auth headers')
   }
 
-  const supabaseFetch = async (url: RequestInfo | URL, options?: RequestInit) => {
-    const maxRetries = 3
-    let lastError: unknown
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
-      try {
-        const response = await fetch(url, options)
-        if (response.status === 503 && attempt < maxRetries - 1) {
-          await new Promise(resolve => setTimeout(resolve, 200 * (attempt + 1)))
-          continue
-        }
-        return response
-      }
-      catch (error) {
-        lastError = error
-        if (attempt < maxRetries - 1) {
-          await new Promise(resolve => setTimeout(resolve, 200 * (attempt + 1)))
-          continue
-        }
-      }
-    }
-    throw lastError ?? new Error('Supabase fetch failed')
-  }
-
   const supabase = createClient<Database>(supabaseBaseUrl, supabaseAnonKey, {
-    global: {
-      fetch: supabaseFetch,
-    },
     auth: {
       persistSession: false,
     },
   })
 
-  const maxLoginRetries = 3
-  let data: any
-  let error: any
-  for (let attempt = 0; attempt < maxLoginRetries; attempt++) {
-    ({ data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    }))
-    if (!error && data?.session?.access_token)
-      break
-    if (attempt < maxLoginRetries - 1)
-      await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1) + Math.random() * 100))
-  }
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email,
+    password,
+  })
 
   if (error || !data.session?.access_token) {
     throw error ?? new Error('Unable to obtain JWT for tests')
@@ -504,38 +479,13 @@ export const headersInternal = {
 }
 
 /**
- * Fetch with automatic retry for transient network failures.
- * Useful for tests that may fail due to edge function cold starts or connection issues.
+ * Send one request. A transient failure is test evidence, not a reason to rerun it.
  */
-export async function fetchWithRetry(
+export async function fetchTestRequest(
   url: string,
   options?: RequestInit,
-  maxRetries = 3,
-  delayMs = 500,
 ): Promise<Response> {
-  let lastError: Error | null = null
-
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      const response = await fetch(url, options)
-      // Only retry on 503 (service unavailable) or network errors
-      if (response.status === 503 && attempt < maxRetries - 1) {
-        await new Promise(resolve => setTimeout(resolve, delayMs * (attempt + 1)))
-        continue
-      }
-      return response
-    }
-    catch (error) {
-      lastError = error as Error
-      // Retry on network errors (fetch failed, socket closed, etc.)
-      if (attempt < maxRetries - 1) {
-        await new Promise(resolve => setTimeout(resolve, delayMs * (attempt + 1)))
-        continue
-      }
-    }
-  }
-
-  throw lastError || new Error(`Failed after ${maxRetries} retries`)
+  return fetch(url, options)
 }
 
 // Cache for prepared apps to avoid repeated seeding
@@ -548,6 +498,13 @@ export interface SeedAppOptions {
   adminUserId?: string
   stripeCustomerId?: string
   planProductId?: string
+}
+export function createIsolatedSeedAppOptions(): Required<Pick<SeedAppOptions, 'orgId' | 'stripeCustomerId'>> {
+  const orgId = randomUUID()
+  return {
+    orgId,
+    stripeCustomerId: `cus_test_${orgId.replaceAll('-', '')}`,
+  }
 }
 
 function getSeedOptionKey(options?: SeedAppOptions): string {
@@ -617,12 +574,10 @@ export async function createAppVersions(
   }, {
     onConflict: 'app_id,name',
   }).select('id,name').single()
-  if (error) {
+  if (error)
     console.error(`Error creating app_version for ${version}:`, error)
-  }
-  if (!data) {
+  if (!data)
     throw new Error(`Error creating app_version for ${version}: no data`)
-  }
   return data
 }
 
@@ -653,47 +608,28 @@ export async function resetAndSeedAppData(appId: string, options?: SeedAppOption
     return await seedPromises.get(promiseKey)!
   }
 
-  // Start seeding process
   const seedPromise = (async () => {
     try {
       const supabase = getSupabaseClient()
+      const rpcParams: Record<string, unknown> = { p_app_id: appId }
+      if (options?.orgId)
+        rpcParams.p_org_id = options.orgId
+      if (options?.userId)
+        rpcParams.p_user_id = options.userId
+      if (options?.adminUserId)
+        rpcParams.p_admin_user_id = options.adminUserId
+      if (options?.stripeCustomerId)
+        rpcParams.p_stripe_customer_id = options.stripeCustomerId
+      if (options?.planProductId)
+        rpcParams.p_plan_product_id = options.planProductId
 
-      // Use a single transaction with retry logic and proper isolation
-      let retries = 3
-      while (retries > 0) {
-        try {
-          // Execute in a transaction with repeatable read isolation
-          const rpcParams: Record<string, unknown> = { p_app_id: appId }
-          if (options?.orgId)
-            rpcParams.p_org_id = options.orgId
-          if (options?.userId)
-            rpcParams.p_user_id = options.userId
-          if (options?.adminUserId)
-            rpcParams.p_admin_user_id = options.adminUserId
-          if (options?.stripeCustomerId)
-            rpcParams.p_stripe_customer_id = options.stripeCustomerId
-          if (options?.planProductId)
-            rpcParams.p_plan_product_id = options.planProductId
+      const { error } = await supabase.rpc('reset_and_seed_app_data' as any, rpcParams)
+      if (error)
+        throw error
 
-          const { error } = await supabase.rpc('reset_and_seed_app_data' as any, rpcParams)
-          if (error) {
-            throw error
-          }
-          const updatedSet = seededApps.get(appId) ?? new Set<string>()
-          updatedSet.add(optionKey)
-          seededApps.set(appId, updatedSet)
-
-          break
-        }
-        catch (error: any) {
-          retries--
-          if (retries === 0) {
-            throw error
-          }
-          // Wait before retry to avoid deadlock with exponential backoff
-          await new Promise(resolve => setTimeout(resolve, 100 * (4 - retries) + Math.random() * 200))
-        }
-      }
+      const updatedSet = seededApps.get(appId) ?? new Set<string>()
+      updatedSet.add(optionKey)
+      seededApps.set(appId, updatedSet)
     }
     finally {
       seedPromises.delete(promiseKey)
@@ -705,92 +641,27 @@ export async function resetAndSeedAppData(appId: string, options?: SeedAppOption
 }
 
 export async function resetAppData(appId: string): Promise<void> {
-  try {
-    const supabase = getSupabaseClient()
+  const { error } = await getSupabaseClient().rpc('reset_app_data' as any, { p_app_id: appId })
+  if (error)
+    throw error
 
-    // Use retry logic for cleanup
-    let retries = 3
-    while (retries > 0) {
-      try {
-        const { error } = await supabase.rpc('reset_app_data' as any, { p_app_id: appId })
-        if (error) {
-          throw error
-        }
-        seededApps.delete(appId)
-        for (const key of Array.from(seedPromises.keys())) {
-          if (key.startsWith(`${appId}::`))
-            seedPromises.delete(key)
-        }
-        break
-      }
-      catch (error: any) {
-        retries--
-        if (retries === 0) {
-          throw error
-        }
-        await new Promise(resolve => setTimeout(resolve, 50 * (4 - retries) + Math.random() * 100))
-      }
-    }
-  }
-  catch (error) {
-    console.warn(`Failed to reset app data for ${appId}:`, error)
-    // Don't throw to avoid test failures during cleanup
+  seededApps.delete(appId)
+  for (const key of Array.from(seedPromises.keys())) {
+    if (key.startsWith(`${appId}::`))
+      seedPromises.delete(key)
   }
 }
 
 export async function resetAndSeedAppDataStats(appId: string): Promise<void> {
-  try {
-    const supabase = getSupabaseClient()
-
-    let retries = 3
-    while (retries > 0) {
-      try {
-        const { error } = await supabase.rpc('reset_and_seed_app_stats_data' as any, { p_app_id: appId })
-        if (error) {
-          throw error
-        }
-
-        break
-      }
-      catch (error: any) {
-        retries--
-        if (retries === 0) {
-          throw error
-        }
-        await new Promise(resolve => setTimeout(resolve, 50 * (4 - retries) + Math.random() * 100))
-      }
-    }
-  }
-  catch (error) {
-    console.warn(`Failed to reset app stats data for ${appId}:`, error)
-  }
+  const { error } = await getSupabaseClient().rpc('reset_and_seed_app_stats_data' as any, { p_app_id: appId })
+  if (error)
+    throw error
 }
 
 export async function resetAppDataStats(appId: string): Promise<void> {
-  try {
-    const supabase = getSupabaseClient()
-
-    let retries = 3
-    while (retries > 0) {
-      try {
-        const { error } = await supabase.rpc('reset_app_stats_data' as any, { p_app_id: appId })
-        if (error) {
-          throw error
-        }
-        break
-      }
-      catch (error: any) {
-        retries--
-        if (retries === 0) {
-          throw error
-        }
-        await new Promise(resolve => setTimeout(resolve, 50 * (4 - retries) + Math.random() * 100))
-      }
-    }
-  }
-  catch (error) {
-    console.warn(`Failed to reset app stats data for ${appId}:`, error)
-  }
+  const { error } = await getSupabaseClient().rpc('reset_app_stats_data' as any, { p_app_id: appId })
+  if (error)
+    throw error
 }
 
 export function getSupabaseClient(): SupabaseClient<Database> {
@@ -801,34 +672,9 @@ export function getSupabaseClient(): SupabaseClient<Database> {
     // Support both env names. Supabase CLI exposes SERVICE_ROLE_KEY, and our wrapper exports
     // SUPABASE_SERVICE_ROLE_KEY + SUPABASE_SERVICE_KEY for convenience.
     const supabaseServiceKey = env.SUPABASE_SERVICE_KEY ?? env.SUPABASE_SERVICE_ROLE_KEY ?? env.SERVICE_ROLE_KEY ?? ''
-    const supabaseFetch = async (url: RequestInfo | URL, options?: RequestInit) => {
-      const maxRetries = 3
-      let lastError: unknown
-      for (let attempt = 0; attempt < maxRetries; attempt++) {
-        try {
-          const response = await fetch(url, options)
-          if (response.status === 503 && attempt < maxRetries - 1) {
-            await new Promise(resolve => setTimeout(resolve, 200 * (attempt + 1)))
-            continue
-          }
-          return response
-        }
-        catch (error) {
-          lastError = error
-          if (attempt < maxRetries - 1) {
-            await new Promise(resolve => setTimeout(resolve, 200 * (attempt + 1)))
-            continue
-          }
-        }
-      }
-      throw lastError ?? new Error('Supabase fetch failed')
-    }
     supabaseClient = createClient<Database>(supabaseUrl, supabaseServiceKey, {
       db: {
         schema: 'public',
-      },
-      global: {
-        fetch: supabaseFetch,
       },
       auth: {
         persistSession: false,
@@ -913,17 +759,13 @@ export function getUpdateBaseData(appId: string): ReturnType<typeof updateAndroi
 }
 
 export async function postUpdate(data: object) {
-  return await fetchWithRetry(
+  return await fetchTestRequest(
     getEndpointUrl('/updates'),
     {
       method: 'POST',
       headers,
       body: JSON.stringify(data),
     },
-    // Supabase Edge can occasionally drop/close sockets under parallel CI load.
-    // Retrying only on 503/network errors makes the test suite substantially less flaky.
-    3,
-    250,
   )
 }
 
@@ -980,8 +822,30 @@ export async function getCronPlanQueueCount(): Promise<number> {
   return Number.parseInt(result[0]?.count || '0')
 }
 
+export async function getCronPlanQueueCountForOrg(orgId: string): Promise<number> {
+  const result = await executeSQL(
+    `SELECT COUNT(*) as count
+     FROM pgmq.q_cron_stat_org
+     WHERE message->'payload'->>'orgId' = $1`,
+    [orgId],
+  )
+  return Number.parseInt(result[0]?.count || '0')
+}
+
 export async function getLatestCronPlanMessage(): Promise<any> {
   const result = await executeSQL('SELECT message FROM pgmq.q_cron_stat_org ORDER BY msg_id DESC LIMIT 1')
+  return result[0]?.message
+}
+
+export async function getLatestCronPlanMessageForOrg(orgId: string): Promise<any> {
+  const result = await executeSQL(
+    `SELECT message
+     FROM pgmq.q_cron_stat_org
+     WHERE message->'payload'->>'orgId' = $1
+     ORDER BY msg_id DESC
+     LIMIT 1`,
+    [orgId],
+  )
   return result[0]?.message
 }
 

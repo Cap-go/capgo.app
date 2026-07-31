@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { BASE_URL, createDirectApiKeyWithBindings, executeSQL, fetchWithRetry, getAuthHeaders, getSupabaseClient, headers, ORG_ID, ORG_ID_2, resetAndSeedAppData, resetAppData, resetAppDataStats, USER_ID, USER_ID_2 } from './test-utils.ts'
+import { BASE_URL, createDirectApiKeyWithBindings, executeSQL, fetchTestRequest, getAuthHeaders, getSupabaseClient, headers, ORG_ID, ORG_ID_2, resetAndSeedAppData, resetAppData, resetAppDataStats, USER_ID, USER_ID_2 } from './test-utils.ts'
 
 function isDuplicateAppCreationError(body: any): boolean {
   if (!body || typeof body !== 'object')
@@ -39,7 +39,7 @@ describe('[DELETE] /app operations', () => {
 
   it('should delete app and all associated data', async () => {
     // Create a test app
-    const createApp = await fetchWithRetry(`${BASE_URL}/app`, {
+    const createApp = await fetchTestRequest(`${BASE_URL}/app`, {
       method: 'POST',
       headers,
       body: JSON.stringify(createBody),
@@ -55,7 +55,7 @@ describe('[DELETE] /app operations', () => {
     await resetAndSeedAppData(APPNAME)
 
     // Delete the app
-    const deleteApp = await fetchWithRetry(`${BASE_URL}/app/${APPNAME}`, {
+    const deleteApp = await fetchTestRequest(`${BASE_URL}/app/${APPNAME}`, {
       method: 'DELETE',
       headers,
     })
@@ -65,28 +65,28 @@ describe('[DELETE] /app operations', () => {
     }
 
     // Verify app is deleted
-    const checkApp = await fetchWithRetry(`${BASE_URL}/app/${APPNAME}`, {
+    const checkApp = await fetchTestRequest(`${BASE_URL}/app/${APPNAME}`, {
       method: 'GET',
       headers,
     })
     expect(checkApp.status).toBe(401)
 
     // Verify version is deleted
-    const checkVersion = await fetchWithRetry(`${BASE_URL}/bundle/${APPNAME}/1.0.0`, {
+    const checkVersion = await fetchTestRequest(`${BASE_URL}/bundle/${APPNAME}/1.0.0`, {
       method: 'GET',
       headers,
     })
     expect(checkVersion.status).toBe(404)
 
     // Verify channel devices are deleted
-    const checkDevices = await fetchWithRetry(`${BASE_URL}/device/${APPNAME}`, {
+    const checkDevices = await fetchTestRequest(`${BASE_URL}/device/${APPNAME}`, {
       method: 'GET',
       headers,
     })
     expect(checkDevices.status).toBe(404)
 
     // Verify channels are deleted
-    const checkChannels = await fetchWithRetry(`${BASE_URL}/channel/${APPNAME}`, {
+    const checkChannels = await fetchTestRequest(`${BASE_URL}/channel/${APPNAME}`, {
       method: 'GET',
       headers,
     })
@@ -342,7 +342,7 @@ describe('/app hashed subkey enforcement', () => {
     expect(data.error).toBe('invalid_subkey')
   })
 
-  it('should reject hashed subkeys on middlewareV2 routes', async () => {
+  it('should reject hashed subkeys on JWT/API-key auth routes', async () => {
     const response = await fetch(`${BASE_URL}/app`, {
       method: 'POST',
       headers: { ...headers, 'x-limited-key-id': String(subkeyId) },
@@ -423,7 +423,6 @@ describe('[POST] /app operations with non-owner user', () => {
         management_email: `no-access-${safeId}@capgo.test`,
         created_by: USER_ID_2,
         customer_id: noAccessCustomerId,
-        use_new_rbac: false,
       },
       {
         id: adminAccessOrgId,
@@ -431,7 +430,6 @@ describe('[POST] /app operations with non-owner user', () => {
         management_email: `admin-access-${safeId}@capgo.test`,
         created_by: USER_ID_2,
         customer_id: adminAccessCustomerId,
-        use_new_rbac: false,
       },
     ])
     if (orgError)
@@ -440,7 +438,7 @@ describe('[POST] /app operations with non-owner user', () => {
     const { error: orgUserError } = await supabase.from('org_users').insert({
       org_id: noAccessOrgId,
       user_id: USER_ID,
-      user_right: 'read',
+      rbac_role_name: 'org_member',
     })
     if (orgUserError)
       throw orgUserError
@@ -496,7 +494,7 @@ describe('[POST] /app operations with non-owner user', () => {
     await supabase.from('stripe_info').delete().in('customer_id', [noAccessCustomerId, adminAccessCustomerId])
   })
 
-  it('should ignore stale legacy org_users rights when creating an app', async () => {
+  it('should ignore stale org_users role metadata when creating an app', async () => {
     const createApp = await fetch(`${BASE_URL}/app`, {
       method: 'POST',
       headers: authHeaders,

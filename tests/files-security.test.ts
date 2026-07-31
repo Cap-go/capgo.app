@@ -4,7 +4,7 @@ import {
   BASE_URL,
   createDirectApiKeyWithBindings,
   executeSQL,
-  fetchWithRetry,
+  fetchTestRequest,
   getEndpointUrl,
   getSupabaseClient,
   USER_ID,
@@ -291,7 +291,7 @@ describe('attachment reads after app deletion', () => {
     expect(readBeforeDelete.status).toBe(200)
     expect(await readBeforeDelete.text()).toBe('delete-me-after-app-delete')
 
-    const deleteResponse = await fetchWithRetry(`${BASE_URL}/app/${appId}`, {
+    const deleteResponse = await fetchTestRequest(`${BASE_URL}/app/${appId}`, {
       method: 'DELETE',
       headers: {
         Authorization: deleteKey!,

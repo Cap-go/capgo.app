@@ -148,10 +148,13 @@ function readExternalInput() {
         External Input Reading Demo
       </h2>
       <div class="flex gap-4 items-center">
+        <label for="demo-external-input" class="sr-only">{{ t('demo-input-placeholder') }}</label>
         <input
+          id="demo-external-input"
           v-model="externalInputValue"
           type="text"
           :placeholder="t('demo-input-placeholder')"
+          :aria-label="t('demo-input-placeholder')"
           class="flex-1 input input-bordered"
         >
         <button
@@ -172,9 +175,11 @@ function readExternalInput() {
         <div>
           <label for="custom-input" class="block mb-2 text-sm font-medium">{{ t('custom-input-field') }}</label>
           <input
+            id="custom-input"
             v-model="customInputValue"
             type="text"
             :placeholder="t('demo-text-placeholder')"
+            :aria-label="t('custom-input-field')"
             class="w-full input input-bordered"
           >
         </div>
@@ -191,16 +196,20 @@ function readExternalInput() {
           <div>
             <label for="first-name" class="block mb-2 text-sm font-medium">{{ t('first-name') }}</label>
             <input
+              id="first-name"
               type="text"
               :placeholder="t('demo-fname-placeholder')"
+              :aria-label="t('first-name')"
               class="w-full input input-bordered"
             >
           </div>
           <div>
             <label for="last-name" class="block mb-2 text-sm font-medium">{{ t('last-name') }}</label>
             <input
+              id="last-name"
               type="text"
               :placeholder="t('demo-lname-placeholder')"
+              :aria-label="t('last-name')"
               class="w-full input input-bordered"
             >
           </div>
@@ -209,15 +218,17 @@ function readExternalInput() {
         <div>
           <label for="email" class="block mb-2 text-sm font-medium">{{ t('email') }}</label>
           <input
+            id="email"
             type="email"
             :placeholder="t('demo-email-placeholder')"
+            :aria-label="t('email')"
             class="w-full input input-bordered"
           >
         </div>
 
         <div>
           <label for="role" class="block mb-2 text-sm font-medium">{{ t('role') }}</label>
-          <select class="w-full select select-bordered">
+          <select id="role" class="w-full select select-bordered" :aria-label="t('role')">
             <option disabled selected>
               {{ t('demo-select-role') }}
             </option>
@@ -245,7 +256,6 @@ function readExternalInput() {
         </div>
       </div>
     </Teleport>
-
     <!-- Code Examples -->
     <div class="p-6 bg-white rounded-lg shadow dark:bg-gray-800">
       <h2 class="mb-4 text-xl font-semibold">

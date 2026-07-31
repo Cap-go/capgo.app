@@ -102,7 +102,7 @@ describe('chart refresh RPCs', () => {
     await getSupabaseClient().from('org_users').insert({
       org_id: orgId,
       user_id: USER_ID,
-      user_right: 'super_admin',
+      rbac_role_name: 'org_super_admin',
     }).throwOnError()
 
     await getSupabaseClient().from('apps').insert([

@@ -49,15 +49,7 @@ export async function getAll(c: Context, apikey: Database['public']['Tables']['a
 
   // If a specific org_id is provided, filter by it
   if (orgId) {
-    // Check if user has access to this organization
-    const hasOrgAccess = await supabaseApikey(c, apikey.key)
-      .rpc('is_member_of_org', {
-        user_id: apikey.user_id,
-        org_id: orgId,
-      })
-      .single()
-
-    if (!hasOrgAccess.data) {
+    if (!(await checkPermission(c, 'org.read', { orgId }))) {
       throw simpleError('user_does_not_have_access_to_this_organization', 'You do not have access to this organization', { org_id: orgId })
     }
 

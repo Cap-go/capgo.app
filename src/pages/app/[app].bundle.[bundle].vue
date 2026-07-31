@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import type { LinkedChannel } from '~/services/bundleLinkedChannels'
+import type { ChannelPromotionTarget } from '~/services/channelPromotion'
 import type { Database } from '~/types/supabase.types'
 import { Capacitor } from '@capacitor/core'
 import { FormKit } from '@formkit/vue'
@@ -15,6 +17,7 @@ import IconTrash from '~icons/heroicons/trash'
 import IconSearch from '~icons/ic/round-search?raw'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconPencil from '~icons/lucide/pencil'
+import { fetchLinkedChannelsForVersion, formatLinkedChannel, unlinkLinkedChannels } from '~/services/bundleLinkedChannels'
 import { findChannelsWithoutPromotionPermission, formatChannelPromotionTargets } from '~/services/channelPromotion'
 import { formatBytes, getChecksumInfo } from '~/services/conversion'
 import { formatDate, formatLocalDate } from '~/services/date'
@@ -52,11 +55,6 @@ const channelSearchVal = ref('')
 const filteredChannels = ref<(Database['public']['Tables']['channels']['Row'])[]>([])
 const promotableChannelIds = ref<Set<number>>(new Set())
 
-interface LinkedChannel {
-  id: number
-  name: string
-}
-
 function canPromoteChannel(channelId: number) {
   return promotableChannelIds.value.has(channelId)
 }
@@ -65,7 +63,7 @@ function getPromotableChannels() {
   return channels.value.filter(channel => canPromoteChannel(channel.id))
 }
 
-function showChannelUnlinkPermissionError(deniedChannels: LinkedChannel[]) {
+function showChannelUnlinkPermissionError(deniedChannels: ChannelPromotionTarget[]) {
   toast.error(t('channel-permission-unlink-required', {
     channels: formatChannelPromotionTargets(deniedChannels),
   }))
@@ -697,16 +695,9 @@ async function didCancel(name: string, askForMethod = true): Promise<boolean | '
   return method
 }
 
-async function unlinkChannels(_appId: string, unlink: { id: number, name: string }[]) {
+async function unlinkChannels(_appId: string, unlink: LinkedChannel[]) {
   // Unlink channels if confirmed
-  if (unlink.length === 0) {
-    return
-  }
-  const { error: updateError } = await supabase
-    .from('channels')
-    .update({ version: null })
-    .in('id', unlink.map(c => c.id))
-
+  const updateError = await unlinkLinkedChannels(unlink)
   if (updateError) {
     toast.error(t('unlink-error'))
     console.error('Channel unlink error:', updateError)
@@ -725,13 +716,9 @@ async function deleteBundle() {
   }
 
   try {
-    const { data: channelFound, error: errorChannel } = await supabase
-      .from('channels')
-      .select('id, name, version!inner(name)') // Ensure version is selected for display
-      .eq('app_id', version.value.app_id)
-      .eq('version', version.value.id)
+    const { data: channelFound, error: errorChannel } = await fetchLinkedChannelsForVersion(version.value.app_id, version.value.id)
 
-    let unlink = [] as { id: number, name: string }[] // Store id and name
+    let unlink = [] as LinkedChannel[]
     if (errorChannel) {
       console.error('Error checking channels:', errorChannel)
       toast.error(t('error-checking-channels'))
@@ -739,7 +726,8 @@ async function deleteBundle() {
     }
 
     if (channelFound && channelFound.length > 0) {
-      const deniedChannels = await findChannelsWithoutPromotionPermission(version.value.app_id, channelFound)
+      const linkedChannels = channelFound as LinkedChannel[]
+      const deniedChannels = await findChannelsWithoutPromotionPermission(version.value.app_id, linkedChannels)
       if (deniedChannels.length > 0) {
         showChannelUnlinkPermissionError(deniedChannels)
         return
@@ -750,7 +738,7 @@ async function deleteBundle() {
       dialogStore.openDialog({
         title: t('want-to-unlink'),
         description: t('channel-bundle-linked', {
-          channels: channelFound.map((ch: any) => `${ch.name} (${ch.version?.name ?? t('channel-builtin')})`).join(', '),
+          channels: linkedChannels.map(formatLinkedChannel).join(', '),
         }),
         buttons: [
           {
@@ -762,7 +750,7 @@ async function deleteBundle() {
             role: 'primary',
             handler: () => {
               shouldUnlink = true
-              unlink = channelFound.map((ch: any) => ({ id: ch.id, name: ch.name })) // Map to id and name
+              unlink = linkedChannels
             },
           },
         ],

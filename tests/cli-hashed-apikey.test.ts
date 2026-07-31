@@ -48,22 +48,6 @@ async function uploadBundleWithHashedKey(
   return sdk.uploadBundle(options)
 }
 
-// Helper to retry SDK operations that may fail due to transient network issues
-async function retryUpload<T extends { success: boolean, error?: string }>(
-  fn: () => Promise<T>,
-  maxRetries = 3,
-): Promise<T> {
-  let lastResult: T | null = null
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    lastResult = await fn()
-    if (lastResult.success || !lastResult.error?.includes('fetch failed')) {
-      return lastResult
-    }
-    await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)))
-  }
-  return lastResult!
-}
-
 describe('cli operations with hashed API key', () => {
   const id = randomUUID()
   const APPNAME = `com.cli_hashed_${id}`
@@ -85,9 +69,9 @@ describe('cli operations with hashed API key', () => {
 
   it('should upload bundle successfully with hashed API key', async () => {
     const semver = getSemver()
-    const result = await retryUpload(() => uploadBundleWithHashedKey(APPNAME, semver, 'production', {
+    const result = await uploadBundleWithHashedKey(APPNAME, semver, 'production', {
       ignoreCompatibilityCheck: true,
-    }))
+    })
 
     expect(result.success).toBe(true)
   }, 30000)

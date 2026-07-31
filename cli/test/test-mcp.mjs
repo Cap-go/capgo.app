@@ -2,8 +2,8 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import process from 'node:process'
-import { Client } from '@modelcontextprotocol/sdk/client'
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
+import { Client } from '@modelcontextprotocol/client'
+import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
 
 const bundlePath = join(process.cwd(), 'dist', 'index.js')
 

@@ -14,6 +14,8 @@ import IconClock from '~icons/heroicons/clock'
 import IconX from '~icons/heroicons/x-circle'
 import IconXMark from '~icons/heroicons/x-mark'
 import Spinner from '~/components/Spinner.vue'
+import { formatLocalDateTimeWithSeconds } from '~/services/date'
+import { formatNumberValue } from '~/services/formatLocale'
 import { useWebhooksStore } from '~/stores/webhooks'
 
 const props = defineProps<{
@@ -100,22 +102,15 @@ function prevPage() {
 function formatDate(dateString: string | null): string {
   if (!dateString)
     return '-'
-  return new Date(dateString).toLocaleString(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  })
+  return formatLocalDateTimeWithSeconds(dateString) || '-'
 }
 
 function formatDuration(ms: number | null): string {
   if (ms === null)
     return '-'
   if (ms < 1000)
-    return `${ms}ms`
-  return `${(ms / 1000).toFixed(2)}s`
+    return `${formatNumberValue(ms)}ms`
+  return `${formatNumberValue(ms / 1000, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}s`
 }
 
 function getStatusColor(status: string): string {
@@ -256,7 +251,7 @@ function formatJson(data: any): string {
                     <span>{{ formatDate(delivery.created_at) }}</span>
                     <span v-if="delivery.response_status">HTTP {{ delivery.response_status }}</span>
                     <span v-if="delivery.duration_ms">{{ formatDuration(delivery.duration_ms) }}</span>
-                    <span>Attempts: {{ delivery.attempt_count }}/{{ delivery.max_attempts }}</span>
+                    <span>{{ t('attempts-count', { current: formatNumberValue(delivery.attempt_count), max: formatNumberValue(delivery.max_attempts) }) }}</span>
                   </div>
                 </div>
 
@@ -324,7 +319,7 @@ function formatJson(data: any): string {
         class="flex items-center justify-between p-4 border-t border-gray-200 dark:border-gray-700 shrink-0"
       >
         <span class="text-sm text-gray-500 dark:text-gray-400">
-          {{ t('showing-deliveries', { count: deliveries.length, total: deliveryPagination.total }) }}
+          {{ t('showing-deliveries', { count: formatNumberValue(deliveries.length), total: formatNumberValue(deliveryPagination.total) }) }}
         </span>
         <div class="flex gap-2">
           <button

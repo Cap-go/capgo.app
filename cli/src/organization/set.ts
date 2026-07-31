@@ -1,5 +1,4 @@
 import type { OrganizationSetOptions, PasswordPolicyConfig } from '../schemas/organization'
-import type { Database } from '../types/supabase.types'
 import { confirm as confirmC, intro, isCancel, log, outro, text } from '@clack/prompts'
 import { checkAlerts } from '../api/update'
 import {
@@ -8,8 +7,70 @@ import {
   createSupabaseClient,
   findSavedKey,
   formatError,
+  resolveCapgoPublicApiHost,
+  resolveConfiguredCapgoPublicApiHost,
   sendEvent,
 } from '../utils'
+
+interface OrganizationUpdatePayload {
+  orgId: string
+  name?: string
+  management_email?: string
+  enforcing_2fa?: boolean
+  password_policy_config?: PasswordPolicyConfig | null
+  require_apikey_expiration?: boolean
+  max_apikey_expiration_days?: number | null
+  enforce_hashed_api_keys?: boolean
+}
+
+interface OrganizationUpdateResponse {
+  data?: {
+    id: string
+    name: string
+    management_email: string
+    enforcing_2fa: boolean
+  }
+  error?: string
+  message?: string
+}
+
+export const resolveConfiguredOrganizationUpdateApiHost = resolveConfiguredCapgoPublicApiHost
+
+export async function resolveOrganizationUpdateApiHost(options: Pick<OrganizationSetOptions, 'supaHost' | 'supaAnon'>, silent: boolean) {
+  return resolveCapgoPublicApiHost(options, silent)
+}
+
+async function updateOrganizationViaApi(apikey: string, payload: OrganizationUpdatePayload, silent: boolean, apiHost: string) {
+  const response = await fetch(`${apiHost}/organization`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+    headers: {
+      'Content-Type': 'application/json',
+      'capgkey': apikey,
+    },
+  })
+
+  const responseText = await response.text()
+  let body: OrganizationUpdateResponse | undefined
+  if (responseText) {
+    try {
+      body = JSON.parse(responseText) as OrganizationUpdateResponse
+    }
+    catch {
+      body = undefined
+    }
+  }
+
+  if (!response.ok) {
+    const errorMessage = body?.message ?? body?.error ?? response.statusText
+    throw new Error(errorMessage || `HTTP ${response.status}`)
+  }
+
+  if (!body?.data)
+    throw new Error('Invalid organization update response')
+
+  return body.data
+}
 
 export async function setOrganizationInternal(
   orgId: string,
@@ -43,6 +104,7 @@ export async function setOrganizationInternal(
     enrichedOptions.supaHost,
     enrichedOptions.supaAnon,
   )
+  const organizationApiHost = await resolveOrganizationUpdateApiHost(enrichedOptions, silent)
   await assertOrgPermission(supabase, enrichedOptions.apikey, 'org.update_settings', orgId, `Insufficient permissions to update organization ${orgId}`, silent)
 
   await check2FAAccessForOrg(supabase, orgId, silent)
@@ -88,7 +150,7 @@ export async function setOrganizationInternal(
         }
 
         // Get current user ID to exclude from member count
-        const { data: currentUserId, error: identityError } = await supabase.rpc('get_identity_apikey_only', { keymode: ['read', 'upload', 'write', 'all'] })
+        const { data: currentUserId, error: identityError } = await supabase.rpc('request_actor_user_id')
 
         if (identityError || !currentUserId) {
           log.error(`Cannot get current user identity: ${identityError ? formatError(identityError) : 'No user ID returned'}`)
@@ -146,13 +208,13 @@ export async function setOrganizationInternal(
       }
     }
 
-    // Update 2FA enforcement setting
-    const { error: twoFaError } = await supabase
-      .from('orgs')
-      .update({ enforcing_2fa: enforce2fa })
-      .eq('id', orgId)
-
-    if (twoFaError) {
+    try {
+      await updateOrganizationViaApi(enrichedOptions.apikey, {
+        orgId,
+        enforcing_2fa: enforce2fa,
+      }, silent, organizationApiHost)
+    }
+    catch (twoFaError) {
       if (!silent)
         log.error(`Could not update 2FA enforcement: ${formatError(twoFaError)}`)
       throw new Error(`Could not update 2FA enforcement: ${formatError(twoFaError)}`)
@@ -240,12 +302,13 @@ export async function setOrganizationInternal(
       require_special: requireSpecial ?? true,
     }
 
-    const { error: policyError } = await supabase
-      .from('orgs')
-      .update({ password_policy_config: policyConfig as unknown as { [key: string]: boolean | number } })
-      .eq('id', orgId)
-
-    if (policyError) {
+    try {
+      await updateOrganizationViaApi(enrichedOptions.apikey, {
+        orgId,
+        password_policy_config: policyConfig,
+      }, silent, organizationApiHost)
+    }
+    catch (policyError) {
       if (!silent)
         log.error(`Could not update password policy: ${formatError(policyError)}`)
       throw new Error(`Could not update password policy: ${formatError(policyError)}`)
@@ -309,7 +372,7 @@ export async function setOrganizationInternal(
       }
     }
 
-    const updateFields: Database['public']['Tables']['orgs']['Update'] = {}
+    const updateFields: OrganizationUpdatePayload = { orgId }
     if (requireApikeyExpiration !== undefined)
       updateFields.require_apikey_expiration = requireApikeyExpiration
     if (maxApikeyExpirationDays !== undefined)
@@ -317,12 +380,10 @@ export async function setOrganizationInternal(
     if (enforceHashedApiKeys !== undefined)
       updateFields.enforce_hashed_api_keys = enforceHashedApiKeys
 
-    const { error: apiKeyError } = await supabase
-      .from('orgs')
-      .update(updateFields)
-      .eq('id', orgId)
-
-    if (apiKeyError) {
+    try {
+      await updateOrganizationViaApi(enrichedOptions.apikey, updateFields, silent, organizationApiHost)
+    }
+    catch (apiKeyError) {
       if (!silent)
         log.error(`Could not update API key settings: ${formatError(apiKeyError)}`)
       throw new Error(`Could not update API key settings: ${formatError(apiKeyError)}`)
@@ -402,15 +463,15 @@ export async function setOrganizationInternal(
   if (!silent)
     log.info(`Updating organization "${orgId}"`)
 
-  const { error: dbError } = await supabase
-    .from('orgs')
-    .update({
+  let updatedOrg: Awaited<ReturnType<typeof updateOrganizationViaApi>>
+  try {
+    updatedOrg = await updateOrganizationViaApi(enrichedOptions.apikey, {
+      orgId,
       name,
       management_email: email,
-    })
-    .eq('id', orgId)
-
-  if (dbError) {
+    }, silent, organizationApiHost)
+  }
+  catch (dbError) {
     if (!silent)
       log.error(`Could not update organization ${formatError(dbError)}`)
     throw new Error(`Could not update organization: ${formatError(dbError)}`)
@@ -433,7 +494,7 @@ export async function setOrganizationInternal(
     outro('Done ✅')
   }
 
-  return { orgId, name, email, enforce2fa: enforce2fa ?? orgData.enforcing_2fa }
+  return { orgId, name: updatedOrg.name, email: updatedOrg.management_email, enforce2fa: enforce2fa ?? updatedOrg.enforcing_2fa }
 }
 
 export async function setOrganization(orgId: string, options: OrganizationSetOptions) {

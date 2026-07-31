@@ -34,7 +34,7 @@ export interface EngineDeps {
   buildProject: (appId: string, platform: Platform) => Promise<{ ok: boolean, error?: string }>
   applyTestChange: (appId: string, baseVersion?: string) => Promise<{ ok: boolean, version?: string, error?: string }>
   uploadBundle: (appId: string, opts: { channelName: string, version: string, delta?: boolean, encrypt?: boolean }) => Promise<{ ok: boolean, error?: string }>
-  getRunDeviceCommand: (platform: Platform) => { command: string }
+  getRunDeviceCommand: (platform: Platform) => { command: string, cwd?: string }
   getGitStatus: (cwd?: string) => GitRepoStatus
 }
 
@@ -216,12 +216,9 @@ export async function decideAdvance(facts: LiveUpdateFacts, deps: EngineDeps, in
     if (input.resumeChoice === 'restart') {
       deps.clearProgress()
       clearSession(appId)
-      mergeSession(appId, { resumeResolved: true })
       facts = { ...facts, progress: null }
     }
-    else {
-      mergeSession(appId, { resumeResolved: true })
-    }
+    mergeSession(appId, { resumeResolved: true })
   }
 
   if (input?.encryptionChoice)
@@ -311,11 +308,11 @@ async function decideAtStep(facts: LiveUpdateFacts, deps: EngineDeps, input?: Li
 
   if (stepNumber === 8 && !session.deviceRunConfirmed) {
     const platform = session.platform ?? progress?.platform ?? facts.platformsDetected[0] ?? 'ios'
-    const { command } = deps.getRunDeviceCommand(platform)
+    const { command, cwd } = deps.getRunDeviceCommand(platform)
     return baseResult(stepNumber, 'run-on-device', 'human_gate', `${title} — run the app on a device or simulator.`, {
       platform,
       human: {
-        instruction: `Run this in your terminal:\n\n${command}\n\nConfirm the baseline app launches, then continue.`,
+        instruction: `Run this in your terminal${cwd ? ' from the selected project directory' : ''}:\n\n${command}\n\nConfirm the baseline app launches, then continue.`,
         resourceUri: 'https://capgo.app/docs/getting-started/onboarding/',
       },
       collect: [{ field: 'deviceRunConfirmed', desc: 'set true once the app is running on device/simulator' }],
@@ -324,7 +321,7 @@ async function decideAtStep(facts: LiveUpdateFacts, deps: EngineDeps, input?: Li
         { deviceRunConfirmed: true },
         `${NEXT_STEP_TOOL}({ deviceRunConfirmed: true })`,
       ),
-      context: { runCommand: command, platform },
+      context: { runCommand: command, ...(cwd ? { projectDir: cwd } : {}), platform },
     })
   }
 
@@ -529,8 +526,12 @@ async function drive(deps: EngineDeps, input?: LiveUpdateNextStepInput): Promise
 
 export async function runStart(deps: EngineDeps): Promise<NextStepResult> {
   const appId = await deps.getAppId()
-  if (appId)
-    mergeSession(appId, { resumeResolved: undefined })
+  if (appId) {
+    const stepDone = progressForApp(appId, deps.loadProgress())?.step_done ?? 0
+    // Fresh starts may create progress during this call; only an existing
+    // checkpoint needs a resume decision.
+    mergeSession(appId, { resumeResolved: stepDone === 0 })
+  }
   return drive(deps)
 }
 

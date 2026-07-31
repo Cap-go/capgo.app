@@ -25,6 +25,7 @@
 // The core stays IO-free: every concrete helper (createCiSecretEntries,
 // detectCiSecretTargets, …, requestBuildInternal) is injected by the driver.
 
+import { consoleWebUrl } from '../../../utils.js'
 import type { BuildCredentials } from '../../../schemas/build.js'
 import type { BuildLogger, BuildRequestOptions, BuildRequestResult } from '../../request.js'
 import type { AsyncCommandRunner, CiSecretDiscovery, CiSecretEntry, CiSecretSetupAdvice, CiSecretTarget, CommandRunner } from '../ci-secrets.js'
@@ -1099,7 +1100,7 @@ export async function runTailEffect<P extends TailEffectProgress>(
           return { progress }
 
         if (result.success) {
-          const url = `https://capgo.app/app/${progress.appId}/builds`
+          const url = consoleWebUrl(`/app/${progress.appId}/builds`)
           // Blank line + queued line — parity with setBuildOutput([..., '', queued]).
           deps.onBuildOutput?.('')
           deps.onBuildOutput?.(`✔ Build queued — ${url}`)

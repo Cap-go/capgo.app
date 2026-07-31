@@ -21,116 +21,70 @@ const pool = new Pool({
 const WEBHOOK_QUEUE_TEST_ORG_ID = randomUUID()
 const webhookName = `Webhook Queue Test ${randomUUID()}`
 const customerId = `cus_webhook_queue_${randomUUID().replace(/-/g, '').slice(0, 20)}`
+const dispatcherQueueName = `webhook_dispatcher_${randomUUID().replace(/-/g, '').slice(0, 12)}`
+const deliveryQueueName = `webhook_delivery_${randomUUID().replace(/-/g, '').slice(0, 12)}`
 
 let createdWebhookId: string | null = null
 
-async function fetchQueueSync(queueName: string, maxRetries = 4) {
-  let lastError: Error | null = null
+async function fetchQueueSync(queueName: string) {
+  const response = await fetch(`${BASE_URL_TRIGGER}/queue_consumer/sync`, {
+    method: 'POST',
+    headers: headersInternal,
+    body: JSON.stringify({
+      queue_name: queueName,
+      wait_for_completion: true,
+    }),
+  })
 
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      const response = await fetch(`${BASE_URL_TRIGGER}/queue_consumer/sync`, {
-        method: 'POST',
-        headers: headersInternal,
-        body: JSON.stringify({ queue_name: queueName }),
-      })
-
-      if (response.status === 202) {
-        expect(await response.json()).toEqual({ status: 'ok' })
-        return
-      }
-
-      lastError = new Error(`queue_consumer/sync returned HTTP ${response.status} for ${queueName}`)
-    }
-    catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error))
-
-      if (attempt === maxRetries - 1) {
-        throw new Error(`queue_consumer/sync network failure for ${queueName}: ${lastError.message}`)
-      }
-    }
-
-    if (attempt < maxRetries - 1)
-      await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)))
-  }
-
-  if (lastError) {
-    throw new Error(`queue_consumer/sync failed for ${queueName}: ${lastError.message}`)
-  }
-
-  throw new Error(`queue_consumer/sync failed for ${queueName}`)
+  expect(response.status).toBe(202)
+  expect(await response.json()).toEqual({ status: 'ok' })
 }
 
-async function waitForDeliveryRecord(webhookId: string, recordId: string, timeoutMs = 10000) {
-  const start = Date.now()
+async function getDeliveryRecord(webhookId: string, recordId: string) {
+  const { rows } = await pool.query(
+    `SELECT *
+     FROM public.webhook_deliveries
+     WHERE webhook_id = $1
+       AND request_payload->'data'->>'record_id' = $2
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [webhookId, recordId],
+  )
 
-  while (Date.now() - start < timeoutMs) {
-    const { rows } = await pool.query(
-      `SELECT *
-       FROM public.webhook_deliveries
-       WHERE webhook_id = $1
-         AND request_payload->'data'->>'record_id' = $2
-       ORDER BY created_at DESC
-       LIMIT 1`,
-      [webhookId, recordId],
-    )
-
-    if (rows[0])
-      return rows[0]
-
-    await new Promise(resolve => setTimeout(resolve, 250))
-  }
-
-  throw new Error(`Timed out waiting for delivery record for webhook ${webhookId} and record ${recordId}`)
+  expect(rows).toHaveLength(1)
+  return rows[0]
 }
 
-async function waitForWebhookDeliveryQueueMessage(deliveryId: string, timeoutMs = 10000) {
-  const start = Date.now()
+async function getWebhookDeliveryQueueMessage(deliveryId: string) {
+  const { rows } = await pool.query<{ msg_id: number | string, message: unknown }>(
+    `SELECT msg_id, message
+     FROM pgmq.q_webhook_delivery
+     WHERE message->'payload'->>'delivery_id' = $1`,
+    [deliveryId],
+  )
 
-  while (Date.now() - start < timeoutMs) {
-    const { rows } = await pool.query(
-      `SELECT count(*) AS count
-       FROM pgmq.q_webhook_delivery
-       WHERE message->'payload'->>'delivery_id' = $1`,
-      [deliveryId],
-    )
-
-    if (Number(rows[0]?.count ?? 0) > 0)
-      return
-
-    await new Promise(resolve => setTimeout(resolve, 250))
-  }
-
-  throw new Error(`Timed out waiting for webhook_delivery queue message for delivery ${deliveryId}`)
+  expect(rows).toHaveLength(1)
+  return rows[0]
 }
 
-async function waitForDeliveryAttempt(deliveryId: string, timeoutMs = 15000) {
-  const start = Date.now()
-  let lastState: Record<string, unknown> | null = null
+async function deleteWebhookDeliveryQueueMessage(msgId: number | string) {
+  await pool.query('SELECT pgmq.delete($1::text, $2::bigint)', ['webhook_delivery', msgId])
+}
 
-  while (Date.now() - start < timeoutMs) {
-    const { data, error } = await (getSupabaseClient() as any)
-      .from('webhook_deliveries')
-      .select('*')
-      .eq('id', deliveryId)
-      .single()
+async function getDeliveryAttempt(deliveryId: string) {
+  const { rows } = await pool.query(
+    'SELECT * FROM public.webhook_deliveries WHERE id = $1',
+    [deliveryId],
+  )
 
-    if (error)
-      throw error
-
-    lastState = data
-
-    if ((data?.attempt_count ?? 0) > 0 && data?.response_status !== null)
-      return data
-
-    await new Promise(resolve => setTimeout(resolve, 250))
-  }
-
-  throw new Error(`Timed out waiting for delivery ${deliveryId} to be attempted: ${JSON.stringify(lastState)}`)
+  expect(rows).toHaveLength(1)
+  return rows[0]
 }
 
 describe('webhook queue processing', () => {
   beforeAll(async () => {
+    await pool.query('SELECT pgmq.create($1)', [dispatcherQueueName])
+    await pool.query('SELECT pgmq.create($1)', [deliveryQueueName])
     const { error: stripeError } = await getSupabaseClient().from('stripe_info').insert({
       customer_id: customerId,
       status: 'succeeded',
@@ -179,10 +133,20 @@ describe('webhook queue processing', () => {
 
     await getSupabaseClient().from('orgs').delete().eq('id', WEBHOOK_QUEUE_TEST_ORG_ID)
     await getSupabaseClient().from('stripe_info').delete().eq('customer_id', customerId)
+    if (createdWebhookId) {
+      await pool.query(`DELETE FROM pgmq.q_webhook_delivery WHERE message->'payload'->>'webhook_id' = $1`, [createdWebhookId])
+      await pool.query(`DELETE FROM pgmq.a_webhook_delivery WHERE message->'payload'->>'webhook_id' = $1`, [createdWebhookId])
+    }
+
+    for (const queueName of [dispatcherQueueName, deliveryQueueName]) {
+      await pool.query(`DELETE FROM pgmq.q_${queueName}`)
+      await pool.query(`DELETE FROM pgmq.a_${queueName}`)
+      await pool.query('SELECT pgmq.drop_queue($1)', [queueName])
+    }
     await pool.end()
   })
 
-  it.concurrent('dispatches and delivers webhook queue messages end to end', { timeout: 30000 }, async () => {
+  it('dispatches and delivers webhook queue messages end to end', async () => {
     if (!createdWebhookId)
       throw new Error('Webhook was not created in setup')
 
@@ -204,16 +168,22 @@ describe('webhook queue processing', () => {
       },
     }
 
-    await pool.query('SELECT pgmq.send($1, $2::jsonb)', ['webhook_dispatcher', JSON.stringify(queueMessage)])
+    await pool.query('SELECT pgmq.send($1, $2::jsonb)', [dispatcherQueueName, JSON.stringify(queueMessage)])
 
-    await fetchQueueSync('webhook_dispatcher')
-    const createdDelivery = await waitForDeliveryRecord(createdWebhookId, recordId)
-    await waitForWebhookDeliveryQueueMessage(createdDelivery.id)
+    await fetchQueueSync(dispatcherQueueName)
+    const createdDelivery = await getDeliveryRecord(createdWebhookId, recordId)
+    const queuedDelivery = await getWebhookDeliveryQueueMessage(createdDelivery.id)
+    await deleteWebhookDeliveryQueueMessage(queuedDelivery.msg_id)
 
     expect(createdDelivery.event_type).toBe('apps.UPDATE')
     expect(createdDelivery.status).toBe('pending')
-    await fetchQueueSync('webhook_delivery')
-    const attemptedDelivery = await waitForDeliveryAttempt(createdDelivery.id)
+
+    await pool.query('SELECT pgmq.send($1, $2::jsonb)', [deliveryQueueName, JSON.stringify(queuedDelivery.message)])
+
+    await fetchQueueSync(deliveryQueueName)
+    const attemptedDelivery = await getDeliveryAttempt(createdDelivery.id)
+    const retryDelivery = await getWebhookDeliveryQueueMessage(createdDelivery.id)
+    await deleteWebhookDeliveryQueueMessage(retryDelivery.msg_id)
 
     expect(attemptedDelivery.status).toBe('pending')
     expect(attemptedDelivery.attempt_count).toBe(1)

@@ -1,32 +1,48 @@
 import type { Context } from 'hono'
-import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
+import type { AuthInfo, MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
-import { type } from 'arktype'
+import { z } from 'zod'
 import { HTTPException } from 'hono/http-exception'
-import { safeParseSchema } from '../../utils/ark_validation.ts'
+import { safeParseSchema } from '../../utils/schema_validation.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
+import { closeClient, getPgClient } from '../../utils/pg.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { createSignedImageUrl, normalizeImagePath } from '../../utils/storage.ts'
 import { getStripeCustomerName, isDeterministicStripeCustomerUpdateError, updateCustomerOrganizationName } from '../../utils/stripe.ts'
 import { apikeyHasOrgRightWithPolicy, supabaseAdmin, supabaseApikey, supabaseClient } from '../../utils/supabase.ts'
 import { normalizeWebsiteUrl } from './website.ts'
 
-const bodySchema = type({
-  'orgId': 'string',
-  'logo?': 'string',
-  'name?': 'string',
-  'website?': 'string | null',
-  'management_email?': 'string.email',
-  'require_apikey_expiration?': 'boolean',
-  'max_apikey_expiration_days?': 'number | null',
-  'enforce_hashed_api_keys?': 'boolean',
-  'enforce_encrypted_bundles?': 'boolean',
-  'required_encryption_key?': 'string | null',
-  'enforcing_2fa?': 'boolean',
+const passwordPolicyMinLengthSchema = z.number().int().min(6).refine(
+  value => value <= 72,
+  { message: 'a value <= 72' },
+)
+
+const passwordPolicyConfigSchema = z.object({
+  enabled: z.boolean(),
+  min_length: passwordPolicyMinLengthSchema,
+  require_uppercase: z.boolean(),
+  require_number: z.boolean(),
+  require_special: z.boolean(),
+})
+
+const bodySchema = z.object({
+  orgId: z.string(),
+  logo: z.string().optional(),
+  name: z.string().optional(),
+  website: z.string().nullable().optional(),
+  management_email: z.email().optional(),
+  require_apikey_expiration: z.boolean().optional(),
+  max_apikey_expiration_days: z.number().nullable().optional(),
+  enforce_hashed_api_keys: z.boolean().optional(),
+  enforce_encrypted_bundles: z.boolean().optional(),
+  required_encryption_key: z.string().nullable().optional(),
+  enforcing_2fa: z.boolean().optional(),
+  password_policy_config: passwordPolicyConfigSchema.nullable().optional(),
 })
 
 type OrgRow = Database['public']['Tables']['orgs']['Row']
 type OrgUpdateFields = Partial<Database['public']['Tables']['orgs']['Update']>
+type PasswordPolicyConfig = z.infer<typeof passwordPolicyConfigSchema>
 
 interface OrganizationPutBody {
   orgId: string
@@ -40,6 +56,110 @@ interface OrganizationPutBody {
   enforce_encrypted_bundles?: boolean
   required_encryption_key?: string | null
   enforcing_2fa?: boolean
+  password_policy_config?: PasswordPolicyConfig | null
+}
+
+interface PgTransactionClient {
+  query: <T = unknown>(text: string, params?: unknown[]) => Promise<{ rows: T[], rowCount?: number | null }>
+  release: () => void
+}
+
+const ORGANIZATION_UPDATE_COLUMNS = {
+  logo: 'logo',
+  name: 'name',
+  website: 'website',
+  management_email: 'management_email',
+  require_apikey_expiration: 'require_apikey_expiration',
+  max_apikey_expiration_days: 'max_apikey_expiration_days',
+  enforce_hashed_api_keys: 'enforce_hashed_api_keys',
+  enforce_encrypted_bundles: 'enforce_encrypted_bundles',
+  required_encryption_key: 'required_encryption_key',
+  enforcing_2fa: 'enforcing_2fa',
+  password_policy_config: 'password_policy_config', // NOSONAR: SQL column identifier, not a credential.
+} as const
+
+function getOrganizationUpdateColumn(field: string) {
+  const column = ORGANIZATION_UPDATE_COLUMNS[field as keyof typeof ORGANIZATION_UPDATE_COLUMNS]
+  if (!column)
+    throw new Error('invalid_organization_update_field')
+  return column
+}
+
+function buildOrganizationUpdateQuery(
+  orgId: string,
+  updateFields: OrgUpdateFields,
+  options?: { expectedCurrentName?: string, expectedCurrentFields?: OrgUpdateFields },
+) {
+  const params: unknown[] = []
+  const assignments: string[] = []
+  for (const [field, value] of Object.entries(updateFields)) {
+    if (value === undefined)
+      continue
+    params.push(value)
+    assignments.push(`${getOrganizationUpdateColumn(field)} = $${params.length}`)
+  }
+
+  params.push(orgId)
+  const conditions = [`id = $${params.length}::uuid`]
+  const addExpectedCondition = (field: string, value: unknown) => {
+    const column = getOrganizationUpdateColumn(field)
+    if (value === null) {
+      conditions.push(`${column} IS NULL`)
+      return
+    }
+    params.push(value)
+    conditions.push(`${column} = $${params.length}`)
+  }
+
+  if (options?.expectedCurrentName !== undefined)
+    addExpectedCondition('name', options.expectedCurrentName)
+  if (options?.expectedCurrentFields) {
+    for (const [field, value] of Object.entries(options.expectedCurrentFields)) {
+      if (value !== undefined)
+        addExpectedCondition(field, value)
+    }
+  }
+
+  const where = conditions.join(' AND ')
+  return assignments.length === 0
+    ? { query: `SELECT * FROM public.orgs WHERE ${where}`, params }
+    : { query: `UPDATE public.orgs SET ${assignments.join(', ')} WHERE ${where} RETURNING *`, params }
+}
+
+async function setOrganizationUpdateAuditActor(
+  c: Context<MiddlewareKeyVariables>,
+  dbClient: PgTransactionClient,
+  auth: AuthInfo,
+) {
+  const isJwt = auth.authType === 'jwt'
+  const claims = isJwt ? auth.claims ?? { sub: auth.userId, role: 'authenticated' } : {}
+  const role = isJwt ? 'authenticated' : 'anon'
+  const subject = isJwt ? auth.userId : ''
+  await dbClient.query(
+    'SELECT set_config($1, $2, true)',
+    ['request.jwt.claim.sub', subject],
+  )
+  await dbClient.query(
+    'SELECT set_config($1, $2, true)',
+    ['request.jwt.claim.role', role],
+  )
+  await dbClient.query(
+    'SELECT set_config($1, $2, true)',
+    ['request.jwt.claims', JSON.stringify(claims)],
+  )
+
+  let requestHeaders: Record<string, string> = {}
+  if (auth.authType === 'apikey') {
+    const apikey = c.get('capgkey') ?? auth.apikey?.key
+    if (!apikey)
+      throw simpleError('cannot_access_organization', 'You can\'t access this organization')
+    requestHeaders = { capgkey: apikey }
+  }
+  await dbClient.query(
+    'SELECT set_config($1, $2, true)',
+    ['request.headers', JSON.stringify(requestHeaders)],
+  )
+  await dbClient.query(isJwt ? 'SET LOCAL ROLE authenticated' : 'SET LOCAL ROLE anon')
 }
 
 function parseOrganizationBody(bodyRaw: unknown): OrganizationPutBody {
@@ -124,6 +244,8 @@ function buildUpdateFields(body: OrganizationPutBody, sanitizedName?: string) {
     updateFields.required_encryption_key = validateRequiredEncryptionKey(body.required_encryption_key)
   if (body.enforcing_2fa !== undefined)
     updateFields.enforcing_2fa = body.enforcing_2fa
+  if (body.password_policy_config !== undefined)
+    updateFields.password_policy_config = body.password_policy_config
   return updateFields
 }
 
@@ -162,35 +284,46 @@ async function enforceSelf2faRequirement(authUserId: string, c: Context<Middlewa
 }
 
 async function updateOrg(
-  supabase: ReturnType<typeof supabaseApikey>,
+  c: Context<MiddlewareKeyVariables>,
+  auth: AuthInfo,
   orgId: string,
   updateFields: OrgUpdateFields,
   options?: { expectedCurrentName?: string, expectedCurrentFields?: OrgUpdateFields },
 ) {
-  let query = supabase
-    .from('orgs')
-    .update(updateFields)
-    .eq('id', orgId)
-  if (options?.expectedCurrentName !== undefined)
-    query = query.eq('name', options.expectedCurrentName)
-  if (options?.expectedCurrentFields) {
-    for (const key of Object.keys(options.expectedCurrentFields) as Array<keyof OrgUpdateFields>) {
-      const fieldValue = options.expectedCurrentFields[key]
-      if (fieldValue === undefined)
-        continue
-      query = fieldValue === null
-        ? query.is(key, null)
-        : query.eq(key, fieldValue)
+  let pgPool: ReturnType<typeof getPgClient> | null = null
+  let dbClient: PgTransactionClient | null = null
+  let transactionStarted = false
+  let data: OrgRow | undefined
+  try {
+    pgPool = getPgClient(c)
+    dbClient = await pgPool.connect() as PgTransactionClient
+    await dbClient.query('BEGIN')
+    transactionStarted = true
+    // Use the primary connection with the request role and claims so RLS and audit triggers remain authoritative.
+    await setOrganizationUpdateAuditActor(c, dbClient, auth)
+    const { query, params } = buildOrganizationUpdateQuery(orgId, updateFields, options)
+    data = (await dbClient.query<OrgRow>(query, params)).rows[0]
+    await dbClient.query('COMMIT')
+  }
+  catch (error) {
+    if (dbClient && transactionStarted) {
+      try {
+        await dbClient.query('ROLLBACK')
+      }
+      catch {
+        // Keep the original database error as the response cause.
+      }
     }
+    throw simpleError('cannot_update_org', 'Cannot update org', {
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+  finally {
+    dbClient?.release()
+    if (pgPool)
+      await closeClient(c, pgPool)
   }
 
-  const { error, data } = await query
-    .select()
-    .maybeSingle()
-
-  if (error) {
-    throw simpleError('cannot_update_org', 'Cannot update org', { error: error.message })
-  }
   if (!data) {
     throw simpleError('cannot_update_org', 'Cannot update org', {
       error: 'org_name_changed',
@@ -259,7 +392,7 @@ function getErrorDetail(error: unknown) {
 
 export async function put(
   c: Context<MiddlewareKeyVariables>,
-  bodyRaw: any,
+  bodyRaw: unknown,
   apikey: Database['public']['Tables']['apikeys']['Row'] | null | undefined,
 ): Promise<Response> {
   const body = parseOrganizationBody(bodyRaw)
@@ -268,12 +401,13 @@ export async function put(
     throw simpleError('cannot_access_organization', 'You can\'t access this organization', { orgId: body.orgId })
   }
 
+  const rawApiKey = apikey?.key ?? c.get('capgkey')
   const supabase = auth.authType === 'jwt' && auth.jwt
     ? supabaseClient(c, auth.jwt)
-    : supabaseApikey(c, apikey?.key)
+    : supabaseApikey(c, rawApiKey)
   const authUserId = auth.userId
 
-  // Auth context is already set by middlewareV2
+  // Auth context is already set by middlewareAuth
   await ensureOrgAccess(c, apikey, body.orgId, supabase)
 
   if (body.enforcing_2fa) {
@@ -291,7 +425,7 @@ export async function put(
     ? await getOrgForNameSync(supabase, body.orgId)
     : null
 
-  const dataOrg: Database['public']['Tables']['orgs']['Row'] = await updateOrg(supabase, body.orgId, updateFields, {
+  const dataOrg: Database['public']['Tables']['orgs']['Row'] = await updateOrg(c, auth, body.orgId, updateFields, {
     expectedCurrentName: shouldSyncStripeName ? currentOrg?.name : undefined,
   })
 
@@ -311,7 +445,7 @@ export async function put(
         const rollbackFields = buildRollbackFields(currentOrg, updateFields)
 
         try {
-          await updateOrg(supabase, body.orgId, rollbackFields, {
+          await updateOrg(c, auth, body.orgId, rollbackFields, {
             expectedCurrentName: dataOrg.name,
             expectedCurrentFields: buildExpectedCurrentFields(dataOrg, updateFields),
           })

@@ -5,7 +5,8 @@ import { lockOnboardingApp, unlockOnboardingApp } from '../../utils/demo.ts'
 import { simpleError } from '../../utils/hono.ts'
 import { cloudlog } from '../../utils/logging.ts'
 import { closeClient, getPgClient, logPgError } from '../../utils/pg.ts'
-import { hasOrgRight, supabaseAdmin } from '../../utils/supabase.ts'
+import { checkPermission } from '../../utils/rbac.ts'
+import { supabaseAdmin } from '../../utils/supabase.ts'
 
 /** Request body for creating a demo app */
 export interface CreateDemoApp {
@@ -855,8 +856,8 @@ export async function createDemoApp(c: Context<MiddlewareKeyVariables>, body: Cr
     throw simpleError('missing_owner_org', 'Missing owner_org', { body })
   }
 
-  // Check if the user is allowed to create an app in this organization
-  if (!(await hasOrgRight(c, body.owner_org, auth.userId, 'write'))) {
+  // Check if the user is allowed to create an app in this organization.
+  if (!(await checkPermission(c, 'org.create_app', { orgId: body.owner_org }))) {
     throw simpleError('cannot_access_organization', 'You can\'t access this organization', { org_id: body.owner_org })
   }
 
@@ -881,7 +882,7 @@ export async function createDemoApp(c: Context<MiddlewareKeyVariables>, body: Cr
     // RLS bypass needed: Demo app creation inserts into multiple tables (apps, app_versions,
     // channels, devices, daily_mau, daily_bandwidth, daily_storage, daily_version, build_requests,
     // manifest, deploy_history) where RLS policies may not grant direct user insert access.
-    // Authorization is enforced at endpoint level via hasOrgRight check above.
+    // Authorization is enforced at endpoint level via checkPermission above.
 
     // Create the demo app
     cloudlog({ requestId, message: 'Demo app created', appData })

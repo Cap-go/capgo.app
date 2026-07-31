@@ -23,6 +23,7 @@ const triggerHeaders = {
 
 describe('version_name statistics tracking', () => {
   let versionId: number
+  let channelId: number
   const versionName = '2.5.0-test'
 
   beforeAll(async () => {
@@ -85,7 +86,7 @@ describe('version_name statistics tracking', () => {
     versionId = version!.id
 
     // Create channel for the app
-    await supabase
+    const { data: channel } = await supabase
       .from('channels')
       .insert({
         name: 'production',
@@ -94,7 +95,11 @@ describe('version_name statistics tracking', () => {
         created_by: '6aa76066-55ef-4238-ade6-0b32334a4097',
         owner_org: ORG_ID_VERSION_NAME,
       })
+      .select('id')
+      .single()
       .throwOnError()
+
+    channelId = channel!.id
   })
 
   afterAll(async () => {
@@ -206,6 +211,108 @@ describe('version_name statistics tracking', () => {
     const result = data![0]
     expect(result.version_name).toBe(versionName)
     expect(result.app_id).toBe(appId)
+  })
+
+  it('should filter read_version_usage by channel_name', async () => {
+    const supabase = getSupabaseClient()
+    const now = new Date()
+    const startDate = new Date(now.getTime() - 24 * 60 * 60 * 1000)
+    const endDate = new Date(now.getTime() + 24 * 60 * 60 * 1000)
+
+    await supabase
+      .from('version_usage')
+      .insert([
+        {
+          app_id: appId,
+          version_name: versionName,
+          action: 'install',
+          timestamp: now.toISOString(),
+          channel_name: 'production',
+        },
+        {
+          app_id: appId,
+          version_name: versionName,
+          action: 'install',
+          timestamp: now.toISOString(),
+          channel_name: 'beta',
+        },
+        {
+          app_id: appId,
+          version_name: versionName,
+          action: 'fail',
+          timestamp: now.toISOString(),
+          channel_name: 'beta',
+        },
+      ])
+      .throwOnError()
+
+    const { data, error } = await supabase.rpc('read_version_usage', {
+      p_app_id: appId,
+      p_period_start: startDate.toISOString().replace('T', ' ').replace('Z', ''),
+      p_period_end: endDate.toISOString().replace('T', ' ').replace('Z', ''),
+      p_channel_name: 'production',
+    })
+
+    expect(error).toBeNull()
+    expect(data).toBeTruthy()
+    expect(data!.length).toBeGreaterThan(0)
+
+    const installs = data!.reduce((total, row) => total + Number(row.install ?? 0), 0)
+    const failures = data!.reduce((total, row) => total + Number(row.fail ?? 0), 0)
+    expect(installs).toBe(1)
+    expect(failures).toBe(0)
+  })
+
+  it('should filter read_version_usage by channel_id after channel rename', async () => {
+    const supabase = getSupabaseClient()
+    const now = new Date()
+    const startDate = new Date(now.getTime() - 24 * 60 * 60 * 1000)
+    const endDate = new Date(now.getTime() + 24 * 60 * 60 * 1000)
+
+    await supabase
+      .from('version_usage')
+      .insert([
+        {
+          app_id: appId,
+          version_name: versionName,
+          action: 'install',
+          timestamp: now.toISOString(),
+          channel_id: channelId,
+          channel_name: 'production',
+        },
+        {
+          app_id: appId,
+          version_name: versionName,
+          action: 'fail',
+          timestamp: now.toISOString(),
+          channel_id: channelId,
+          channel_name: 'production-renamed',
+        },
+        {
+          app_id: appId,
+          version_name: versionName,
+          action: 'fail',
+          timestamp: now.toISOString(),
+          channel_id: channelId + 9999,
+          channel_name: 'production',
+        },
+      ])
+      .throwOnError()
+
+    const { data, error } = await supabase.rpc('read_version_usage', {
+      p_app_id: appId,
+      p_period_start: startDate.toISOString().replace('T', ' ').replace('Z', ''),
+      p_period_end: endDate.toISOString().replace('T', ' ').replace('Z', ''),
+      p_channel_id: channelId,
+    })
+
+    expect(error).toBeNull()
+    expect(data).toBeTruthy()
+
+    const installs = data!.reduce((total, row) => total + Number(row.install ?? 0), 0)
+    const failures = data!.reduce((total, row) => total + Number(row.fail ?? 0), 0)
+    expect(installs).toBe(1)
+    expect(failures).toBe(1)
   })
 
   it('should handle daily_version upsert with version_name correctly', async () => {

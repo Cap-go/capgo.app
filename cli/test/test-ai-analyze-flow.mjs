@@ -9,6 +9,7 @@ import {
   writeLocalAiFile,
   postAnalyzeStreamRequest,
 } from '../src/ai/analyze.ts'
+import { SYSTEM_PROMPT } from '../src/ai/prompt.ts'
 
 let passed = 0
 let failed = 0
@@ -45,6 +46,19 @@ await expectBehavior('matrix: non-TTY + send-logs → auto_upload', { isTTY: fal
 await expectBehavior('matrix: non-TTY + both flags → auto_upload', { isTTY: false, aiAnalyticsFlag: true, sendLogsFlag: true }, 'auto_upload')
 await expectBehavior('matrix: TTY + no flags → ask_then_menu', { isTTY: true, aiAnalyticsFlag: false, sendLogsFlag: false }, 'ask_then_menu')
 await expectBehavior('matrix: non-TTY + no flags → skip', { isTTY: false, aiAnalyticsFlag: false, sendLogsFlag: false }, 'skip')
+
+await test('SYSTEM_PROMPT treats generated Fastlane configuration as Capgo-managed', () => {
+  const requiredInstructions = [
+    'Capgo owns and generates the Fastlane configuration',
+    'Never tell the user to inspect, create, edit, remove, or\notherwise modify `fastlane/Fastfile`',
+    'no project-side change is needed',
+    'Capgo support with the job ID instead of proposing a repository edit',
+  ]
+  for (const instruction of requiredInstructions) {
+    if (!SYSTEM_PROMPT.includes(instruction))
+      throw new Error(`missing Capgo-managed Fastlane instruction: ${instruction}`)
+  }
+})
 
 // ---- writeLocalAiFile ----
 await test('writeLocalAiFile writes prompt + <BUILD_LOG> boundary + logs', async () => {

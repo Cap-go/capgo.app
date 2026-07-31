@@ -11,6 +11,7 @@ import BeakerIcon from '~icons/heroicons/beaker'
 import AdminStatsCard from '~/components/admin/AdminStatsCard.vue'
 import PageLoader from '~/components/PageLoader.vue'
 import { formatLocalDateTime } from '~/services/date'
+import { formatNumberValue } from '~/services/formatLocale'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
 import { showUploadReplicationToast } from '~/services/updateReplicationToast'
 import { useDisplayStore } from '~/stores/display'
@@ -90,7 +91,7 @@ const maxLagMinutes = computed(() => {
     return data.value.max_lag_minutes
   if (data.value.max_lag_seconds === null || data.value.max_lag_seconds === undefined)
     return undefined
-  return Number((data.value.max_lag_seconds / 60).toFixed(2))
+  return Math.round((data.value.max_lag_seconds / 60) * 100) / 100
 })
 
 const checkedAt = computed(() => {
@@ -210,7 +211,7 @@ displayStore.defaultBack = '/dashboard'
               title="Status"
               :value="statusLabel"
               :color-class="statusColor"
-              :subtitle="`Threshold ${thresholdMinutes} min`"
+              :subtitle="`Threshold ${formatNumberValue(thresholdMinutes)} min`"
             />
             <AdminStatsCard
               title="Max lag"
@@ -221,7 +222,7 @@ displayStore.defaultBack = '/dashboard'
             <AdminStatsCard
               title="Active slots"
               :value="activeCount"
-              :subtitle="`Total ${slotCount}`"
+              :subtitle="`Total ${formatNumberValue(slotCount)}`"
             />
             <AdminStatsCard
               title="Last check"
@@ -293,7 +294,7 @@ displayStore.defaultBack = '/dashboard'
                       {{ slot.slot_lag ?? '-' }}
                     </td>
                     <td class="whitespace-nowrap px-4 py-3 text-gray-700 dark:text-gray-200">
-                      {{ slot.lag_minutes ?? '-' }}
+                      {{ slot.lag_minutes === null || slot.lag_minutes === undefined ? '-' : formatNumberValue(slot.lag_minutes, { maximumFractionDigits: 2 }) }}
                     </td>
                     <td class="whitespace-nowrap px-4 py-3">
                       <span

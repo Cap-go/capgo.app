@@ -45,7 +45,7 @@ function setLast30Days() {
     <!-- Daily vs Cumulative -->
     <div class="flex items-center p-1 space-x-1 bg-gray-200 rounded-lg dark:bg-gray-800">
       <button
-        class="flex gap-0.5 justify-center items-center py-1 px-2 text-xs font-medium text-center whitespace-nowrap rounded-md transition-colors cursor-pointer sm:gap-1.5 sm:px-3"
+        class="flex gap-0.5 justify-center items-center h-9 min-h-9 py-1 px-2 text-xs font-medium text-center whitespace-nowrap rounded-md transition-colors cursor-pointer sm:gap-1.5 sm:px-3"
         :class="[!props.showCumulative || !props.useBillingPeriod ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm' : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white']"
         :aria-label="t('daily')"
         @click="setDaily"
@@ -54,7 +54,7 @@ function setLast30Days() {
         <span class="hidden sm:inline">{{ t('daily') }}</span>
       </button>
       <button
-        class="flex gap-0.5 justify-center items-center py-1 px-2 text-xs font-medium text-center whitespace-nowrap rounded-md transition-colors cursor-pointer sm:gap-1.5 sm:px-3"
+        class="flex gap-0.5 justify-center items-center h-9 min-h-9 py-1 px-2 text-xs font-medium text-center whitespace-nowrap rounded-md transition-colors cursor-pointer sm:gap-1.5 sm:px-3"
         :class="[props.showCumulative && props.useBillingPeriod ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm' : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white']"
         :aria-label="t('cumulative')"
         @click="setCumulative"
@@ -67,7 +67,7 @@ function setLast30Days() {
     <!-- Billing Period vs Last 30 Days -->
     <div class="flex items-center p-1 space-x-1 bg-gray-200 rounded-lg dark:bg-gray-800">
       <button
-        class="flex gap-0.5 justify-center items-center py-1 px-2 text-xs font-medium text-center whitespace-nowrap rounded-md transition-colors cursor-pointer sm:gap-1.5 sm:px-3"
+        class="flex gap-0.5 justify-center items-center h-9 min-h-9 py-1 px-2 text-xs font-medium text-center whitespace-nowrap rounded-md transition-colors cursor-pointer sm:gap-1.5 sm:px-3"
         :class="[props.useBillingPeriod ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm' : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white']"
         :aria-label="t('billing-period')"
         @click="setBillingPeriod"
@@ -76,7 +76,7 @@ function setLast30Days() {
         <span class="hidden sm:inline">{{ t('billing-period') }}</span>
       </button>
       <button
-        class="flex gap-0.5 justify-center items-center py-1 px-2 text-xs font-medium text-center whitespace-nowrap rounded-md transition-colors cursor-pointer sm:gap-1.5 sm:px-3"
+        class="flex gap-0.5 justify-center items-center h-9 min-h-9 py-1 px-2 text-xs font-medium text-center whitespace-nowrap rounded-md transition-colors cursor-pointer sm:gap-1.5 sm:px-3"
         :class="[!props.useBillingPeriod ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm' : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white']"
         :aria-label="t('last-30-days')"
         @click="setLast30Days"

@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { createClient } from '@supabase/supabase-js'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
+  executeSQL,
   getSupabaseClient,
   PRODUCT_ID,
   SUPABASE_ANON_KEY,
@@ -57,6 +58,34 @@ function compatTable(client: SupabaseClient<any>) {
   return (client as UntypedClient).from('compatibility_events')
 }
 
+async function createUserOrgBinding(orgId: string, userId: string, roleName: string) {
+  await executeSQL(`
+    INSERT INTO public.role_bindings (
+      principal_type,
+      principal_id,
+      role_id,
+      scope_type,
+      org_id,
+      granted_by,
+      reason,
+      is_direct
+    )
+    SELECT
+      public.rbac_principal_user(),
+      $1::uuid,
+      roles.id,
+      public.rbac_scope_org(),
+      $2::uuid,
+      $1::uuid,
+      'Compatibility events test binding',
+      true
+    FROM public.roles roles
+    WHERE roles.name = $3
+      AND roles.scope_type = public.rbac_scope_org()
+    ON CONFLICT DO NOTHING
+  `, [userId, orgId, roleName])
+}
+
 // The uq_compatibility_events_dedup index covers
 // (app_id, channel_id, platform, current_version_id, previous_version_id) with
 // NULLS NOT DISTINCT, so a synthetic distinct channel_id per row keeps every
@@ -106,6 +135,7 @@ beforeAll(async () => {
 
   // Clean any leftovers from a previous aborted run (best effort).
   await supabase.from('stripe_info').delete().eq('customer_id', STRIPE_CUSTOMER_ID)
+  await supabase.from('role_bindings').delete().eq('org_id', ORG_ID)
   await supabase.from('org_users').delete().eq('org_id', ORG_ID)
   await supabase.from('orgs').delete().eq('id', ORG_ID)
 
@@ -119,15 +149,12 @@ beforeAll(async () => {
   if (stripeError)
     throw stripeError
 
-  // use_new_rbac=false keeps the org on the legacy permission path, where a
-  // super_admin org member resolves app.read (RLS) and app.upload_bundle (RPC).
   const { error: orgError } = await supabase.from('orgs').insert({
     id: ORG_ID,
     customer_id: STRIPE_CUSTOMER_ID,
     name: `Compatibility Events Test Org ${testRunId.slice(0, 8)}`,
     created_by: USER_ID,
     management_email: TEST_EMAIL,
-    use_new_rbac: false,
   })
   if (orgError)
     throw orgError
@@ -135,10 +162,11 @@ beforeAll(async () => {
   const { error: orgUserError } = await supabase.from('org_users').insert({
     org_id: ORG_ID,
     user_id: USER_ID,
-    user_right: 'super_admin',
+    rbac_role_name: 'org_super_admin',
   })
   if (orgUserError)
     throw orgUserError
+  await createUserOrgBinding(ORG_ID, USER_ID, 'org_super_admin')
 
   const { error: appError } = await supabase.from('apps').insert({
     owner_org: ORG_ID,
@@ -158,6 +186,7 @@ afterAll(async () => {
   // app delete cascades compatibility_events, but delete explicitly to be safe.
   await supabase.from('compatibility_events' as any).delete().eq('app_id', APP_ID)
   await supabase.from('apps').delete().eq('app_id', APP_ID)
+  await supabase.from('role_bindings').delete().eq('org_id', ORG_ID)
   await supabase.from('org_users').delete().eq('org_id', ORG_ID)
   await supabase.from('orgs').delete().eq('id', ORG_ID)
   await supabase.from('stripe_info').delete().eq('customer_id', STRIPE_CUSTOMER_ID)

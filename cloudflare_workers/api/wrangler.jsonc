@@ -2,6 +2,9 @@
   "name": "capgo_api",
   "logpush": true,
   "compatibility_date": "2026-04-21",
+  "dependencies_instrumentation": {
+    "enabled": true
+  },
   "main": "./index.ts",
   "compatibility_flags": [
     "nodejs_compat",
@@ -18,6 +21,9 @@
   "env": {
     "prod": {
       "name": "capgo_api-prod",
+      "triggers": {
+        "crons": ["* * * * *"]
+      },
       "ai": {
         "binding": "AI"
       },
@@ -62,6 +68,14 @@
         {
           "binding": "DEVICE_INFO",
           "dataset": "device_info"
+        },
+        {
+          "binding": "NOTIFICATION_REGISTRY",
+          "dataset": "notification_registry"
+        },
+        {
+          "binding": "NOTIFICATION_EVENTS",
+          "dataset": "notification_events"
         }
       ],
       "d1_databases": [
@@ -71,7 +85,25 @@
           "database_id": "81236a0c-db6e-454d-87da-944fa9bc100c"
         }
       ],
-      "kv_namespaces": [{ "binding": "CHANNEL_SELF_STORE", "id": "2860ca0f6b1e416fb8651792895cbffa" }],
+      "queues": {
+        "producers": [
+          {
+            "binding": "NOTIFICATION_QUEUE",
+            "queue": "capgo-native-notifications-prod"
+          }
+        ],
+        "consumers": [
+          {
+            "queue": "capgo-native-notifications-prod",
+            "max_batch_size": 10,
+            "max_batch_timeout": 5,
+            "max_concurrency": 2,
+            "max_retries": 5,
+            "dead_letter_queue": "capgo-native-notifications-prod-dlq"
+          }
+        ]
+      },
+      "kv_namespaces": [{ "binding": "CHANNEL_SELF_STORE", "id": "2860ca0f6b1e416fb8651792895cbffa" }, { "binding": "PLUGIN_NOTIFICATION_QUEUE", "id": "655e307469ba496f9131556709b5a765" }],
       "hyperdrive": [
         {
           "binding": "HYPERDRIVE_CAPGO_DIRECT_EU",
@@ -81,6 +113,9 @@
     },
     "preprod": {
       "name": "capgo_api-preprod",
+      "triggers": {
+        "crons": ["* * * * *"]
+      },
       "ai": {
         "binding": "AI"
       },
@@ -124,6 +159,14 @@
         {
           "binding": "DEVICE_INFO",
           "dataset": "device_info"
+        },
+        {
+          "binding": "NOTIFICATION_REGISTRY",
+          "dataset": "notification_registry"
+        },
+        {
+          "binding": "NOTIFICATION_EVENTS",
+          "dataset": "notification_events"
         }
       ],
       "d1_databases": [
@@ -133,7 +176,25 @@
           "database_id": "81236a0c-db6e-454d-87da-944fa9bc100c"
         }
       ],
-      "kv_namespaces": [{ "binding": "CHANNEL_SELF_STORE", "id": "9c405a5248604951a2a12125799bc21b" }],
+      "queues": {
+        "producers": [
+          {
+            "binding": "NOTIFICATION_QUEUE",
+            "queue": "capgo-native-notifications-preprod"
+          }
+        ],
+        "consumers": [
+          {
+            "queue": "capgo-native-notifications-preprod",
+            "max_batch_size": 10,
+            "max_batch_timeout": 5,
+            "max_concurrency": 2,
+            "max_retries": 5,
+            "dead_letter_queue": "capgo-native-notifications-preprod-dlq"
+          }
+        ]
+      },
+      "kv_namespaces": [{ "binding": "CHANNEL_SELF_STORE", "id": "9c405a5248604951a2a12125799bc21b" }, { "binding": "PLUGIN_NOTIFICATION_QUEUE", "id": "f14b6c6872c14415abee26a09112ab80" }],
       "hyperdrive": [
         {
           "binding": "HYPERDRIVE_CAPGO_DIRECT_EU",
@@ -143,6 +204,9 @@
     },
     "alpha": {
       "name": "capgo_api-alpha",
+      "triggers": {
+        "crons": ["* * * * *"]
+      },
       "ai": {
         "binding": "AI"
       },
@@ -186,6 +250,14 @@
         {
           "binding": "DEVICE_INFO",
           "dataset": "device_info_alpha"
+        },
+        {
+          "binding": "NOTIFICATION_REGISTRY",
+          "dataset": "notification_registry_alpha"
+        },
+        {
+          "binding": "NOTIFICATION_EVENTS",
+          "dataset": "notification_events_alpha"
         }
       ],
       "d1_databases": [
@@ -195,7 +267,25 @@
           "database_id": "81236a0c-db6e-454d-87da-944fa9bc100c"
         }
       ],
-      "kv_namespaces": [{ "binding": "CHANNEL_SELF_STORE", "id": "16a85350d8a246ff857a645c8f51d6ae" }],
+      "queues": {
+        "producers": [
+          {
+            "binding": "NOTIFICATION_QUEUE",
+            "queue": "capgo-native-notifications-alpha"
+          }
+        ],
+        "consumers": [
+          {
+            "queue": "capgo-native-notifications-alpha",
+            "max_batch_size": 10,
+            "max_batch_timeout": 5,
+            "max_concurrency": 2,
+            "max_retries": 5,
+            "dead_letter_queue": "capgo-native-notifications-alpha-dlq"
+          }
+        ]
+      },
+      "kv_namespaces": [{ "binding": "CHANNEL_SELF_STORE", "id": "16a85350d8a246ff857a645c8f51d6ae" }, { "binding": "PLUGIN_NOTIFICATION_QUEUE", "id": "d4442a6f6da448dda2fdcce3b7db8d5a" }],
       "hyperdrive": [
         {
           "binding": "HYPERDRIVE_CAPGO_DIRECT_EU",
@@ -205,13 +295,16 @@
     },
     "local": {
       "name": "capgo_api-local",
+      "triggers": {
+        "crons": ["* * * * *"]
+      },
       "ai": {
         "binding": "AI"
       },
       "vars": {
         "ENV_NAME": "capgo_api-local"
       },
-      "kv_namespaces": [{ "binding": "CHANNEL_SELF_STORE", "id": "00000000000000000000000000000001" }]
+      "kv_namespaces": [{ "binding": "CHANNEL_SELF_STORE", "id": "local-channel-self-store" }, { "binding": "PLUGIN_NOTIFICATION_QUEUE", "id": "local-plugin-notification-queue" }]
     }
   }
 }

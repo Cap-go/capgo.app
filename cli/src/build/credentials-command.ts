@@ -31,6 +31,7 @@ interface SaveCredentialsOptions {
   outputUpload?: boolean
   outputRetention?: string
   skipBuildNumberBump?: boolean
+  skipMarketingVersionBump?: boolean
 
   // iOS options
   certificate?: string
@@ -231,6 +232,12 @@ export async function saveCredentialsCommand(options: SaveCredentialsOptions): P
     }
     else {
       log.info('ℹ️  --skip-build-number-bump not specified, build number will be auto-incremented (default)')
+    }
+    if (options.skipMarketingVersionBump !== undefined) {
+      credentials.SKIP_MARKETING_VERSION_BUMP = parseOptionalBoolean(options.skipMarketingVersionBump) ? 'true' : 'false'
+    }
+    else {
+      log.info('ℹ️  --skip-marketing-version-bump not specified, marketing version will be auto-bumped when already released (default)')
     }
 
     if (platform === 'ios') {
@@ -714,7 +721,7 @@ export async function updateCredentialsCommand(options: SaveCredentialsOptions):
       || options.appleTeamId || options.appleId || options.appleAppSpecificPassword || options.appleAppId)
     const hasAndroidOptions = !!(options.keystore || options.keystoreAlias || options.keystoreKeyPassword
       || options.keystoreStorePassword || options.playConfig || options.androidFlavor || options.inAppUpdatePriority !== undefined)
-    const hasCrossPlatformOptions = options.outputUpload !== undefined || options.outputRetention !== undefined || options.skipBuildNumberBump !== undefined
+    const hasCrossPlatformOptions = options.outputUpload !== undefined || options.outputRetention !== undefined || options.skipBuildNumberBump !== undefined || options.skipMarketingVersionBump !== undefined
 
     let platform = options.platform
     if (!platform) {
@@ -780,6 +787,9 @@ export async function updateCredentialsCommand(options: SaveCredentialsOptions):
 
     if (options.skipBuildNumberBump !== undefined) {
       credentials.SKIP_BUILD_NUMBER_BUMP = parseOptionalBoolean(options.skipBuildNumberBump) ? 'true' : 'false'
+    }
+    if (options.skipMarketingVersionBump !== undefined) {
+      credentials.SKIP_MARKETING_VERSION_BUMP = parseOptionalBoolean(options.skipMarketingVersionBump) ? 'true' : 'false'
     }
 
     if (platform === 'ios') {

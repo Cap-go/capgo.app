@@ -1,15 +1,16 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
-import { type } from 'arktype'
-import { safeParseSchema } from '../../utils/ark_validation.ts'
-import { createHono, middlewareAuth, parseBody, quickError, simpleError, useCors } from '../../utils/hono.ts'
+import { z } from 'zod'
+import { safeParseSchema } from '../../utils/schema_validation.ts'
+import { createHono, parseBody, quickError, simpleError, useCors } from '../../utils/hono.ts'
+import { middlewareAuth } from '../../utils/hono_jwt.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { supabaseClient } from '../../utils/supabase.ts'
 import { version } from '../../utils/version.ts'
 import { runPrelinkUsers } from './prelink-shared.ts'
 
-const bodySchema = type({
-  provider_id: 'string.uuid',
+const bodySchema = z.object({
+  provider_id: z.uuid(),
 })
 
 export const app = createHono('', version)

@@ -84,6 +84,9 @@
 				504EC3001FED79650016851F /* Sources */,
 				504EC3011FED79650016851F /* Frameworks */,
 				504EC3021FED79650016851F /* Resources */,
+				D0FA5F2FE503AAC848EE95CB /* Capgo dSYMs for JWPlayerKit and GoogleCast */,
+				238A4079B1847311FD6EBB53 /* Capgo dSYMs for MuxCore */,
+				2D5A7B87F6AFA3CB48A9B5CB /* Capgo dSYMs for RecaptchaEnterpriseSDK */,
 			);
 			buildRules = (
 			);
@@ -149,6 +152,98 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		D0FA5F2FE503AAC848EE95CB /* Capgo dSYMs for JWPlayerKit and GoogleCast */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(BUILD_DIR)",
+				"$(BUILD_DIR)/../../../../../SourcePackages/artifacts",
+				"$(BUILD_DIR)/../../SourcePackages/artifacts",
+				"$(BUILD_DIR)/../SourcePackages/artifacts",
+				"$(HOME)/Library/Developer/Xcode/DerivedData",
+				"$(PODS_ROOT)",
+				"$(PROJECT_DIR)",
+				"$(SRCROOT)",
+			);
+			name = "Capgo dSYMs for JWPlayerKit and GoogleCast";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(ARCHIVE_PATH)/dSYMs/GoogleCast.framework.dSYM",
+				"$(ARCHIVE_PATH)/dSYMs/JWPlayerKit.framework.dSYM",
+				"$(DWARF_DSYM_FOLDER_PATH)/GoogleCast.framework.dSYM",
+				"$(DWARF_DSYM_FOLDER_PATH)/JWPlayerKit.framework.dSYM",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -u\n\nif [ \"${ACTION:-}\" != \"install\" ]; then\n  exit 0\nfi\n\nlog() { echo \"[CapgoCapacitorJwPlayer dSYMs] $1\"; }\n\nif [ -z \"${DWARF_DSYM_FOLDER_PATH:-}\" ]; then\n  log \"Skipping because DWARF_DSYM_FOLDER_PATH is not set.\"\n  exit 0\nfi\n\nfind_dsym_roots() {\n  for root in \\\n    \"${PODS_ROOT:-}\" \\\n    \"${SRCROOT:-}\" \\\n    \"${PROJECT_DIR:-}\" \\\n    \"${BUILD_DIR:-}/../../../../../SourcePackages/artifacts\" \\\n    \"${BUILD_DIR:-}/../../SourcePackages/artifacts\" \\\n    \"${BUILD_DIR:-}/../SourcePackages/artifacts\" \\\n    \"${HOME:-}/Library/Developer/Xcode/DerivedData\"\n  do\n    [ -d \"$root\" ] || continue\n    printf \"%s\\n\" \"$root\"\n  done\n}\n\nfind_framework_binary_in_roots() {\n  framework=\"$1\"\n  old_ifs=\"$IFS\"\n  IFS='\n'\n  for root in $(find_dsym_roots); do\n    for binary in $(find \"$root\" -type f -path \"*/$framework.framework/$framework\" 2>/dev/null); do\n      case \"$binary\" in\n        *simulator*|*Simulator*) continue ;;\n      esac\n      if [ -f \"$binary\" ]; then\n        printf \"%s\\n\" \"$binary\"\n        IFS=\"$old_ifs\"\n        return 0\n      fi\n    done\n  done\n  IFS=\"$old_ifs\"\n  return 1\n}\n\nfind_framework_binary() {\n  framework=\"$1\"\n  for dir in \\\n    \"${TARGET_BUILD_DIR:-}/${FRAMEWORKS_FOLDER_PATH:-}\" \\\n    \"${BUILT_PRODUCTS_DIR:-}/${FRAMEWORKS_FOLDER_PATH:-}\" \\\n    \"${TARGET_BUILD_DIR:-}/${WRAPPER_NAME:-}/Frameworks\" \\\n    \"${BUILT_PRODUCTS_DIR:-}/${WRAPPER_NAME:-}/Frameworks\" \\\n    \"${TARGET_BUILD_DIR:-}/Frameworks\" \\\n    \"${BUILT_PRODUCTS_DIR:-}/Frameworks\"\n  do\n    [ -n \"$dir\" ] || continue\n    binary=\"$dir/$framework.framework/$framework\"\n    if [ -f \"$binary\" ]; then\n      printf \"%s\\n\" \"$binary\"\n      return 0\n    fi\n  done\n  find_framework_binary_in_roots \"$framework\"\n}\n\ncopy_prebuilt_dsym() {\n  framework=\"$1\"\n  dsym_path=\"$2\"\n  binary=\"$3\"\n  binary_uuid=\"$(dwarfdump --uuid \"$binary\" 2>/dev/null | awk 'NR == 1 {print $2}')\"\n  [ -n \"$binary_uuid\" ] || return 1\n\n  old_ifs=\"$IFS\"\n  IFS='\n'\n  for root in $(find_dsym_roots); do\n    for candidate in $(find \"$root\" -type d -name \"$framework.framework.dSYM\" 2>/dev/null); do\n      if dwarfdump --uuid \"$candidate\" 2>/dev/null | awk '{print $2}' | grep -qi \"^$binary_uuid$\"; then\n        rm -rf \"$dsym_path\"\n        cp -R \"$candidate\" \"$dsym_path\"\n        IFS=\"$old_ifs\"\n        log \"Copied vendor $framework.framework.dSYM.\"\n        return 0\n      fi\n    done\n  done\n  IFS=\"$old_ifs\"\n  return 1\n}\n\ncopy_to_archive() {\n  dsym_path=\"$1\"\n  framework=\"$2\"\n  copy_failed=0\n  for archive_dsyms in \"${ARCHIVE_DSYMS_PATH:-}\" \"${ARCHIVE_PATH:-}/dSYMs\"; do\n    case \"$archive_dsyms\" in\n      \"\"|\"/dSYMs\") continue ;;\n    esac\n    mkdir -p \"$archive_dsyms\"\n    rm -rf \"$archive_dsyms/$framework.framework.dSYM\"\n    if ! cp -R \"$dsym_path\" \"$archive_dsyms/\"; then\n      copy_failed=1\n    fi\n  done\n  return \"$copy_failed\"\n}\n\nmkdir -p \"$DWARF_DSYM_FOLDER_PATH\"\nmissing_dsyms=0\n\nfor framework in JWPlayerKit GoogleCast; do\n  binary=\"$(find_framework_binary \"$framework\" || true)\"\n  if [ -z \"$binary\" ]; then\n    log \"Skipping $framework because a framework binary was not found.\"\n    missing_dsyms=1\n    continue\n  fi\n\n  dsym_path=\"$DWARF_DSYM_FOLDER_PATH/$framework.framework.dSYM\"\n  rm -rf \"$dsym_path\"\n  if copy_prebuilt_dsym \"$framework\" \"$dsym_path\" \"$binary\"; then\n    if ! copy_to_archive \"$dsym_path\" \"$framework\"; then\n      log \"Failed to copy $framework.framework.dSYM into the archive.\"\n      missing_dsyms=1\n    fi\n    continue\n  fi\n\n  if xcrun dsymutil \"$binary\" -o \"$dsym_path\" >/dev/null; then\n    log \"Prepared $framework.framework.dSYM.\"\n    if ! copy_to_archive \"$dsym_path\" \"$framework\"; then\n      log \"Failed to copy $framework.framework.dSYM into the archive.\"\n      missing_dsyms=1\n    fi\n  else\n    log \"Failed to generate $framework.framework.dSYM.\"\n    missing_dsyms=1\n  fi\ndone\n\nexit \"$missing_dsyms\"\n";
+		};
+		238A4079B1847311FD6EBB53 /* Capgo dSYMs for MuxCore */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(BUILD_DIR)",
+				"$(BUILD_DIR)/../../../../../SourcePackages/artifacts",
+				"$(BUILD_DIR)/../../SourcePackages/artifacts",
+				"$(BUILD_DIR)/../SourcePackages/artifacts",
+				"$(HOME)/Library/Developer/Xcode/DerivedData",
+				"$(PODS_ROOT)",
+				"$(PROJECT_DIR)",
+				"$(SRCROOT)",
+			);
+			name = "Capgo dSYMs for MuxCore";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(ARCHIVE_PATH)/dSYMs/MuxCore.framework.dSYM",
+				"$(DWARF_DSYM_FOLDER_PATH)/MuxCore.framework.dSYM",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -u\n\nif [ \"${ACTION:-}\" != \"install\" ]; then\n  exit 0\nfi\n\nlog() { echo \"[CapgoCapacitorMuxPlayer dSYMs] $1\"; }\n\nif [ -z \"${DWARF_DSYM_FOLDER_PATH:-}\" ]; then\n  log \"Skipping because DWARF_DSYM_FOLDER_PATH is not set.\"\n  exit 0\nfi\n\nfind_dsym_roots() {\n  for root in \\\n    \"${PODS_ROOT:-}\" \\\n    \"${SRCROOT:-}\" \\\n    \"${PROJECT_DIR:-}\" \\\n    \"${BUILD_DIR:-}/../../../../../SourcePackages/artifacts\" \\\n    \"${BUILD_DIR:-}/../../SourcePackages/artifacts\" \\\n    \"${BUILD_DIR:-}/../SourcePackages/artifacts\" \\\n    \"${HOME:-}/Library/Developer/Xcode/DerivedData\"\n  do\n    [ -d \"$root\" ] || continue\n    printf \"%s\\n\" \"$root\"\n  done\n}\n\nfind_framework_binary_in_roots() {\n  framework=\"$1\"\n  old_ifs=\"$IFS\"\n  IFS='\n'\n  for root in $(find_dsym_roots); do\n    for binary in $(find \"$root\" -type f -path \"*/$framework.framework/$framework\" 2>/dev/null); do\n      case \"$binary\" in\n        *simulator*|*Simulator*) continue ;;\n      esac\n      if [ -f \"$binary\" ]; then\n        printf \"%s\\n\" \"$binary\"\n        IFS=\"$old_ifs\"\n        return 0\n      fi\n    done\n  done\n  IFS=\"$old_ifs\"\n  return 1\n}\n\nfind_framework_binary() {\n  framework=\"$1\"\n  for dir in \\\n    \"${TARGET_BUILD_DIR:-}/${FRAMEWORKS_FOLDER_PATH:-}\" \\\n    \"${BUILT_PRODUCTS_DIR:-}/${FRAMEWORKS_FOLDER_PATH:-}\" \\\n    \"${TARGET_BUILD_DIR:-}/${WRAPPER_NAME:-}/Frameworks\" \\\n    \"${BUILT_PRODUCTS_DIR:-}/${WRAPPER_NAME:-}/Frameworks\" \\\n    \"${TARGET_BUILD_DIR:-}/Frameworks\" \\\n    \"${BUILT_PRODUCTS_DIR:-}/Frameworks\"\n  do\n    [ -n \"$dir\" ] || continue\n    binary=\"$dir/$framework.framework/$framework\"\n    if [ -f \"$binary\" ]; then\n      printf \"%s\\n\" \"$binary\"\n      return 0\n    fi\n  done\n  find_framework_binary_in_roots \"$framework\"\n}\n\ncopy_prebuilt_dsym() {\n  framework=\"$1\"\n  dsym_path=\"$2\"\n  binary=\"$3\"\n  binary_uuid=\"$(dwarfdump --uuid \"$binary\" 2>/dev/null | awk 'NR == 1 {print $2}')\"\n  [ -n \"$binary_uuid\" ] || return 1\n\n  old_ifs=\"$IFS\"\n  IFS='\n'\n  for root in $(find_dsym_roots); do\n    for candidate in $(find \"$root\" -type d -name \"$framework.framework.dSYM\" 2>/dev/null); do\n      if dwarfdump --uuid \"$candidate\" 2>/dev/null | awk '{print $2}' | grep -qi \"^$binary_uuid$\"; then\n        rm -rf \"$dsym_path\"\n        cp -R \"$candidate\" \"$dsym_path\"\n        IFS=\"$old_ifs\"\n        log \"Copied vendor $framework.framework.dSYM.\"\n        return 0\n      fi\n    done\n  done\n  IFS=\"$old_ifs\"\n  return 1\n}\n\ncopy_to_archive() {\n  dsym_path=\"$1\"\n  framework=\"$2\"\n  for archive_dsyms in \"${ARCHIVE_DSYMS_PATH:-}\" \"${ARCHIVE_PATH:-}/dSYMs\"; do\n    case \"$archive_dsyms\" in\n      \"\"|\"/dSYMs\") continue ;;\n    esac\n    mkdir -p \"$archive_dsyms\"\n    rm -rf \"$archive_dsyms/$framework.framework.dSYM\"\n    cp -R \"$dsym_path\" \"$archive_dsyms/\"\n  done\n}\n\nmkdir -p \"$DWARF_DSYM_FOLDER_PATH\"\n\nfor framework in MuxCore; do\n  binary=\"$(find_framework_binary \"$framework\" || true)\"\n  if [ -z \"$binary\" ]; then\n    log \"Skipping $framework because a framework binary was not found.\"\n    continue\n  fi\n\n  dsym_path=\"$DWARF_DSYM_FOLDER_PATH/$framework.framework.dSYM\"\n  rm -rf \"$dsym_path\"\n  if copy_prebuilt_dsym \"$framework\" \"$dsym_path\" \"$binary\"; then\n    copy_to_archive \"$dsym_path\" \"$framework\"\n    continue\n  fi\n\n  if xcrun dsymutil \"$binary\" -o \"$dsym_path\" >/dev/null; then\n    log \"Prepared $framework.framework.dSYM.\"\n    copy_to_archive \"$dsym_path\" \"$framework\"\n  else\n    log \"Failed to generate $framework.framework.dSYM.\"\n  fi\ndone\n";
+		};
+		2D5A7B87F6AFA3CB48A9B5CB /* Capgo dSYMs for RecaptchaEnterpriseSDK */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(BUILD_DIR)",
+				"$(BUILD_DIR)/../../../../../SourcePackages/artifacts",
+				"$(BUILD_DIR)/../../SourcePackages/artifacts",
+				"$(BUILD_DIR)/../SourcePackages/artifacts",
+				"$(HOME)/Library/Developer/Xcode/DerivedData",
+				"$(PODS_ROOT)",
+				"$(PROJECT_DIR)",
+				"$(SRCROOT)",
+			);
+			name = "Capgo dSYMs for RecaptchaEnterpriseSDK";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(ARCHIVE_PATH)/dSYMs/RecaptchaEnterpriseSDK.framework.dSYM",
+				"$(DWARF_DSYM_FOLDER_PATH)/RecaptchaEnterpriseSDK.framework.dSYM",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -u\n\nif [ \"${ACTION:-}\" != \"install\" ]; then\n  exit 0\nfi\n\nlog() { echo \"[CapgoCapacitorRecaptcha dSYMs] $1\"; }\n\nif [ -z \"${DWARF_DSYM_FOLDER_PATH:-}\" ]; then\n  log \"Skipping because DWARF_DSYM_FOLDER_PATH is not set.\"\n  exit 0\nfi\n\nfind_dsym_roots() {\n  for root in \\\n    \"${PODS_ROOT:-}\" \\\n    \"${SRCROOT:-}\" \\\n    \"${PROJECT_DIR:-}\" \\\n    \"${BUILD_DIR:-}/../../../../../SourcePackages/artifacts\" \\\n    \"${BUILD_DIR:-}/../../SourcePackages/artifacts\" \\\n    \"${BUILD_DIR:-}/../SourcePackages/artifacts\" \\\n    \"${HOME:-}/Library/Developer/Xcode/DerivedData\"\n  do\n    [ -d \"$root\" ] || continue\n    printf \"%s\\n\" \"$root\"\n  done\n}\n\nfind_framework_binary_in_roots() {\n  framework=\"$1\"\n  old_ifs=\"$IFS\"\n  IFS='\n'\n  for root in $(find_dsym_roots); do\n    for binary in $(find \"$root\" -type f -path \"*/$framework.framework/$framework\" 2>/dev/null); do\n      case \"$binary\" in\n        *simulator*|*Simulator*) continue ;;\n      esac\n      if [ -f \"$binary\" ]; then\n        printf \"%s\\n\" \"$binary\"\n        IFS=\"$old_ifs\"\n        return 0\n      fi\n    done\n  done\n  IFS=\"$old_ifs\"\n  return 1\n}\n\nfind_framework_binary() {\n  framework=\"$1\"\n  for dir in \\\n    \"${TARGET_BUILD_DIR:-}/${FRAMEWORKS_FOLDER_PATH:-}\" \\\n    \"${BUILT_PRODUCTS_DIR:-}/${FRAMEWORKS_FOLDER_PATH:-}\" \\\n    \"${TARGET_BUILD_DIR:-}/${WRAPPER_NAME:-}/Frameworks\" \\\n    \"${BUILT_PRODUCTS_DIR:-}/${WRAPPER_NAME:-}/Frameworks\" \\\n    \"${TARGET_BUILD_DIR:-}/Frameworks\" \\\n    \"${BUILT_PRODUCTS_DIR:-}/Frameworks\"\n  do\n    [ -n \"$dir\" ] || continue\n    binary=\"$dir/$framework.framework/$framework\"\n    if [ -f \"$binary\" ]; then\n      printf \"%s\\n\" \"$binary\"\n      return 0\n    fi\n  done\n  find_framework_binary_in_roots \"$framework\"\n}\n\ncopy_prebuilt_dsym() {\n  framework=\"$1\"\n  dsym_path=\"$2\"\n  binary=\"$3\"\n  binary_uuid=\"$(dwarfdump --uuid \"$binary\" 2>/dev/null | awk 'NR == 1 {print $2}')\"\n  [ -n \"$binary_uuid\" ] || return 1\n\n  old_ifs=\"$IFS\"\n  IFS='\n'\n  for root in $(find_dsym_roots); do\n    for candidate in $(find \"$root\" -type d -name \"$framework.framework.dSYM\" 2>/dev/null); do\n      if dwarfdump --uuid \"$candidate\" 2>/dev/null | awk '{print $2}' | grep -qi \"^$binary_uuid$\"; then\n        rm -rf \"$dsym_path\"\n        cp -R \"$candidate\" \"$dsym_path\"\n        IFS=\"$old_ifs\"\n        log \"Copied vendor $framework.framework.dSYM.\"\n        return 0\n      fi\n    done\n  done\n  IFS=\"$old_ifs\"\n  return 1\n}\n\ncopy_to_archive() {\n  dsym_path=\"$1\"\n  framework=\"$2\"\n  for archive_dsyms in \"${ARCHIVE_DSYMS_PATH:-}\" \"${ARCHIVE_PATH:-}/dSYMs\"; do\n    case \"$archive_dsyms\" in\n      \"\"|\"/dSYMs\") continue ;;\n    esac\n    mkdir -p \"$archive_dsyms\"\n    rm -rf \"$archive_dsyms/$framework.framework.dSYM\"\n    cp -R \"$dsym_path\" \"$archive_dsyms/\"\n  done\n}\n\nmkdir -p \"$DWARF_DSYM_FOLDER_PATH\"\n\nfor framework in RecaptchaEnterpriseSDK; do\n  binary=\"$(find_framework_binary \"$framework\" || true)\"\n  if [ -z \"$binary\" ]; then\n    log \"Skipping $framework because a framework binary was not found.\"\n    continue\n  fi\n\n  dsym_path=\"$DWARF_DSYM_FOLDER_PATH/$framework.framework.dSYM\"\n  rm -rf \"$dsym_path\"\n  if copy_prebuilt_dsym \"$framework\" \"$dsym_path\" \"$binary\"; then\n    copy_to_archive \"$dsym_path\" \"$framework\"\n    continue\n  fi\n\n  if xcrun dsymutil \"$binary\" -o \"$dsym_path\" >/dev/null; then\n    log \"Prepared $framework.framework.dSYM.\"\n    copy_to_archive \"$dsym_path\" \"$framework\"\n  else\n    log \"Failed to generate $framework.framework.dSYM.\"\n  fi\ndone\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		504EC3001FED79650016851F /* Sources */ = {
@@ -306,7 +401,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 12.160.5;
+				MARKETING_VERSION = 12.188.2;
 				OTHER_SWIFT_FLAGS = "$(inherited) \"-D\" \"COCOAPODS\" \"-DDEBUG\"";
 				PRODUCT_BUNDLE_IDENTIFIER = ee.forgr.capacitorgo;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -331,7 +426,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 12.160.5;
+				MARKETING_VERSION = 12.188.2;
 				PRODUCT_BUNDLE_IDENTIFIER = ee.forgr.capacitorgo;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "";

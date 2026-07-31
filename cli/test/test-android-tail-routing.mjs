@@ -81,7 +81,7 @@ const GITHUB_TARGET = { provider: 'github', label: 'GitHub Actions repository se
 const GITLAB_TARGET = { provider: 'gitlab', label: 'GitLab CI/CD variables', cli: 'glab' }
 
 const CREDS_SAVED = { savedAt: '2026-06-03T01:00:00.000Z' }
-const BUILD_REQUESTED = { buildUrl: `https://capgo.app/app/${APP_ID}/builds` }
+const BUILD_REQUESTED = { buildUrl: `https://console.capgo.app/app/${APP_ID}/builds` }
 const CI_UPLOADED_GH = { provider: 'github', count: 3 }
 
 // A FULLY-provisioned OAuth progress whose keystore + provisioning gates are all

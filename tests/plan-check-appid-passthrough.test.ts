@@ -94,8 +94,7 @@ describe.skipIf(USE_CLOUDFLARE_WORKERS)('plan-check appid passthrough (RBAC bind
     if (stripeError)
       throw stripeError
 
-    // 3. Org with use_new_rbac = true so check_min_rights routes through
-    //    rbac_check_permission_direct.
+    // 3. Org whose permission checks route through rbac_check_permission_direct.
     const { data: orgRow, error: orgError } = await serviceRoleSupabase
       .from('orgs')
       .insert({
@@ -103,7 +102,6 @@ describe.skipIf(USE_CLOUDFLARE_WORKERS)('plan-check appid passthrough (RBAC bind
         name: `Plan Check Test Org ${SUITE_ID}`,
         management_email: OWNER_EMAIL,
         customer_id: CUSTOMER_ID,
-        use_new_rbac: true,
       })
       .select('id')
       .single()
@@ -113,7 +111,7 @@ describe.skipIf(USE_CLOUDFLARE_WORKERS)('plan-check appid passthrough (RBAC bind
 
     // 4. Two apps in the same org - one the key is allowed for, one it isn't.
     //    Same-org apps prove the rejection comes from app RBAC bindings, not
-    //    from the cross-org check in check_min_rights.
+    //    from the cross-org RBAC check.
     const { data: primaryAppRow, error: primaryAppError } = await serviceRoleSupabase
       .from('apps')
       .insert({

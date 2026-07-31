@@ -19,15 +19,18 @@ import IconUserPlus from '~icons/lucide/user-plus'
 import IconUsers from '~icons/lucide/users-round'
 import IconBack from '~icons/material-symbols/arrow-back-ios-rounded'
 import InviteTeammateModal from '~/components/dashboard/InviteTeammateModal.vue'
+import { formatNumberValue } from '~/services/formatLocale'
+import { createOnboardingAppFromDraft } from '~/services/onboardingAppCreate'
 import { uploadOrgLogoFile } from '~/services/photos'
 import { pushEvent } from '~/services/posthog'
 import { getLocalConfig, useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
+import { clearOnboardingAppDraft, loadOnboardingAppDraft } from '~/utils/onboardingAppDraft'
 
 type OnboardingStep = 'details' | 'logo' | 'invite'
-type OnboardingMode = 'website' | 'name' | null
+type OnboardingMode = 'website' | 'name' | 'app-name' | null
 
 interface InviteTeammateModalRef {
   openDialog: () => void
@@ -76,6 +79,7 @@ const websitePreview = ref<WebsitePreview | null>(null)
 const inviteModalRef = ref<InviteTeammateModalRef | null>(null)
 const logoInputRef = useTemplateRef<HTMLInputElement>('logoInput')
 const isAdditionalOrgFlow = ref(false)
+const appDraft = ref(loadOnboardingAppDraft(main.user?.id ?? main.auth?.id))
 const estimatedUsersIndex = ref<number | null>(null)
 const config = getLocalConfig()
 
@@ -133,7 +137,7 @@ const userCountStops = computed<UserCountStop[]>(() => {
     return planStops
   }
 
-  return fallbackUserCountStops
+  return fallbackUserCountStops.map(stop => ({ ...stop, label: formatUserCount(stop.value, stop.planName === 'Enterprise') }))
 })
 const selectedUserCountStop = computed<UserCountStop | null>(() => {
   if (estimatedUsersIndex.value === null)
@@ -175,9 +179,13 @@ const onboardingBadge = computed(() => isCompactCreateOrgFlow.value
 const onboardingTitle = computed(() => isCompactCreateOrgFlow.value
   ? t('organization-create-title')
   : t('organization-onboarding-title'))
-const onboardingSubtitle = computed(() => isCompactCreateOrgFlow.value
-  ? t('organization-create-subtitle')
-  : t('organization-onboarding-subtitle'))
+const onboardingSubtitle = computed(() => {
+  if (isCompactCreateOrgFlow.value)
+    return t('organization-create-subtitle')
+  if (appDraft.value)
+    return t('organization-onboarding-subtitle-after-app')
+  return t('organization-onboarding-subtitle')
+})
 
 function whiteCardToggleButtonClass(active: boolean) {
   return active
@@ -194,11 +202,12 @@ function whiteCardPrimaryButtonClass() {
 }
 
 function formatUserCount(value: number, plus = false) {
-  if (value >= 1_000_000)
-    return plus ? '1M+' : '1M'
-  if (value >= 1000)
-    return `${value / 1000}K`
-  return String(value)
+  const formatted = formatNumberValue(value, {
+    notation: 'compact',
+    compactDisplay: 'short',
+    maximumFractionDigits: 0,
+  })
+  return plus ? `${formatted}+` : formatted
 }
 
 function getUserCountStopTitle(stop: UserCountStop) {
@@ -263,6 +272,11 @@ function isStepActive(stepId: OnboardingStep) {
 }
 
 async function goBack() {
+  if (appDraft.value && !isAdditionalOrgFlow.value && step.value === 'details') {
+    await router.push('/onboarding/app')
+    return
+  }
+
   if (window.history.length > 1) {
     await router.back()
     return
@@ -281,6 +295,7 @@ async function logoutFromOnboarding() {
   isLoggingOut.value = true
 
   try {
+    clearOnboardingAppDraft(main.user?.id ?? main.auth?.id)
     await main.logout()
     await router.replace('/login')
   }
@@ -562,17 +577,51 @@ function openInviteModal() {
 }
 
 async function finishOnboarding() {
+  const draft = appDraft.value
+  const orgId = activeOrgId.value
+
   try {
     await organizationStore.fetchOrganizations()
-    if (activeOrgId.value)
-      organizationStore.setCurrentOrganization(activeOrgId.value)
+    if (orgId)
+      organizationStore.setCurrentOrganization(orgId)
   }
   catch (error) {
     console.error('Failed to refresh organizations before finishing onboarding', error)
   }
 
+  if (draft && orgId) {
+    isSubmitting.value = true
+    try {
+      const { app, appIdFeedback } = await createOnboardingAppFromDraft(
+        supabase,
+        orgId,
+        draft,
+        activeOrgName.value,
+      )
+      clearOnboardingAppDraft(main.user?.id ?? main.auth?.id)
+      appDraft.value = null
+      if (appIdFeedback)
+        toast.info(appIdFeedback)
+      await router.push(`/app/new?resume=${encodeURIComponent(app.app_id)}&step=choice`)
+      return
+    }
+    catch (error) {
+      console.error('Failed to create app from onboarding draft', error)
+      toast.error(t('app-onboarding-toast-create-error'))
+      return
+    }
+    finally {
+      isSubmitting.value = false
+    }
+  }
+
   await router.push('/app/new')
 }
+
+watch(mode, (nextMode) => {
+  if (nextMode === 'app-name' && appDraft.value)
+    orgNameInput.value = appDraft.value.appName
+})
 
 watch(() => route.query.step, (nextValue) => {
   if (typeof nextValue !== 'string')
@@ -602,14 +651,38 @@ watch([websiteInput, mode], () => {
   websitePreview.value = null
 })
 
+function applyAppDraftDefaults() {
+  if (!appDraft.value || isAdditionalOrgFlow.value)
+    return
+
+  if (!mode.value)
+    mode.value = 'app-name'
+
+  if (mode.value === 'app-name' && !orgNameInput.value.trim())
+    orgNameInput.value = appDraft.value.appName
+}
+
 onMounted(async () => {
   if (!main.auth) {
-    await router.replace('/login?to=/onboarding/organization')
+    await router.replace('/login?to=/onboarding/app')
     return
   }
+
+  await organizationStore.fetchOrganizations()
+  isAdditionalOrgFlow.value = typeof route.query.source === 'string'
+    ? route.query.source === 'org-switcher'
+    : organizationStore.organizations.some(org => !org.role.includes('invite'))
+
+  appDraft.value = loadOnboardingAppDraft(main.user?.id ?? main.auth?.id)
+  if (!appDraft.value && !isAdditionalOrgFlow.value && typeof route.query.org !== 'string') {
+    await router.replace('/onboarding/app')
+    return
+  }
+
   displayStore.NavTitle = t('organization-onboarding-title')
-  displayStore.defaultBack = '/apps'
+  displayStore.defaultBack = appDraft.value ? '/onboarding/app' : '/apps'
   await hydrateOnboardingFromQuery()
+  applyAppDraftDefaults()
 })
 
 onUnmounted(() => {
@@ -623,10 +696,12 @@ onUnmounted(() => {
     <div class="relative mx-auto flex w-full max-w-3xl flex-col gap-4">
       <InviteTeammateModal ref="inviteModalRef" @success="onInviteSuccess" />
       <input
+        id="org-logo-input"
         ref="logoInput"
         type="file"
         accept="image/*"
         class="hidden"
+        :aria-label="t('change-org-picture')"
         @change="onLogoSelected"
       >
 
@@ -738,16 +813,51 @@ onUnmounted(() => {
             </div>
 
             <template v-if="selectedIntent">
+              <div v-if="appDraft" class="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-white/15 dark:bg-slate-950/90">
+                <div class="flex items-center gap-3">
+                  <div class="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-slate-200 text-sm font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                    <span>{{ appDraft.appName.slice(0, 2).toUpperCase() }}</span>
+                  </div>
+                  <div class="min-w-0">
+                    <p class="truncate text-base font-semibold text-slate-950 dark:text-white">
+                      {{ appDraft.appName }}
+                    </p>
+                    <p class="mt-0.5 truncate font-mono text-xs text-slate-500 dark:text-slate-400">
+                      {{ appDraft.appId }}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
               <div class="border-t border-slate-200 pt-6 dark:border-white/15">
                 <h2 class="text-lg font-semibold text-slate-950 dark:text-white">
                   {{ t('organization-onboarding-question') }}
                 </h2>
               </div>
 
-              <div class="grid gap-3 sm:grid-cols-2">
+              <div class="grid gap-3" :class="appDraft ? 'sm:grid-cols-3' : 'sm:grid-cols-2'">
                 <button
+                  v-if="appDraft"
                   type="button"
                   class="group flex min-h-24 items-start gap-3 rounded-xl border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900"
+                  :class="whiteCardToggleButtonClass(mode === 'app-name')"
+                  data-test="onboarding-mode-app-name"
+                  @click="mode = 'app-name'"
+                >
+                  <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-500 text-white">
+                    <IconSmartphone class="h-5 w-5" />
+                  </span>
+                  <span class="min-w-0 flex-1">
+                    <span class="block text-base font-semibold">{{ t('organization-onboarding-mode-app-name', { name: appDraft.appName }) }}</span>
+                    <span class="mt-1 block text-sm leading-6 text-slate-500 dark:text-slate-400">
+                      {{ t('organization-onboarding-mode-app-name-helper') }}
+                    </span>
+                  </span>
+                  <IconCheck v-if="mode === 'app-name'" class="h-5 w-5 shrink-0 text-primary-500" />
+                </button>
+                <button
+                  type="button"
+                  class="group flex min-h-24 items-start gap-3 rounded-xl border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900"
                   :class="whiteCardToggleButtonClass(mode === 'website')"
                   data-test="onboarding-mode-website"
                   @click="mode = 'website'"
@@ -1074,9 +1184,12 @@ onUnmounted(() => {
                 <IconUserPlus class="h-4 w-4" />
                 {{ t('organization-onboarding-open-invite') }}
               </button>
-              <button type="button" class="d-btn min-h-11" :class="whiteCardSecondaryButtonClass()" data-test="onboarding-finish" @click="finishOnboarding">
-                {{ t('organization-onboarding-create-app') }}
-                <IconArrowRight class="h-4 w-4" />
+              <button type="button" class="d-btn min-h-11" :class="whiteCardSecondaryButtonClass()" data-test="onboarding-finish" :disabled="isSubmitting" @click="finishOnboarding">
+                <IconLoader v-if="isSubmitting" class="h-4 w-4 animate-spin" />
+                <template v-else>
+                  {{ appDraft ? t('organization-onboarding-finish-setup') : t('organization-onboarding-create-app') }}
+                  <IconArrowRight class="h-4 w-4" />
+                </template>
               </button>
             </div>
           </div>

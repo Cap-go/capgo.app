@@ -10,6 +10,7 @@ import {
   generateDemoStorageData,
   getDemoDayCount,
 } from '~/services/demoChartData'
+import { hasPositiveSeriesData, resolveUsageDisplaySeries, sumSeries } from '~/services/usageSeries'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import ChartCard from './ChartCard.vue'
 import LineChartStats from './LineChartStats.vue'
@@ -97,23 +98,10 @@ const isDemoMode = computed(() => {
 const effectiveData = computed(() => isDemoMode.value ? demoData.value : props.data as number[])
 const effectiveDataByApp = computed(() => isDemoMode.value ? demoDataByApp.value : props.dataByApp)
 const effectiveAppNames = computed(() => isDemoMode.value ? DEMO_APP_NAMES : props.appNames)
+const displayData = computed(() => resolveUsageDisplaySeries(effectiveData.value, effectiveDataByApp.value))
 
 const total = computed(() => {
-  const dataArray = effectiveData.value
-  const hasData = dataArray.some(val => val !== undefined)
-  const sumValues = (values: number[]) => values.reduce((acc, val) => (typeof val === 'number' ? acc + val : acc), 0)
-
-  if (hasData) {
-    return sumValues(dataArray)
-  }
-
-  if (effectiveDataByApp.value && Object.keys(effectiveDataByApp.value).length > 0) {
-    return Object.values(effectiveDataByApp.value).reduce((totalSum, appValues: any) => {
-      return totalSum + sumValues(appValues)
-    }, 0)
-  }
-
-  return 0
+  return sumSeries(displayData.value)
 })
 
 const lastDayEvolution = computed(() => {
@@ -121,7 +109,7 @@ const lastDayEvolution = computed(() => {
     return calculateDemoEvolution(effectiveData.value)
   }
 
-  const arr = props.data as number[]
+  const arr = displayData.value
   const arrWithoutUndefined = arr.filter((val: any) => val !== undefined)
 
   if (arrWithoutUndefined.length < 2) {
@@ -143,9 +131,7 @@ const lastDayEvolution = computed(() => {
 const hasChartData = computed(() => {
   if (isDemoMode.value)
     return true
-  const dataArray = effectiveData.value
-  // Check if any value in the array is defined and > 0
-  return dataArray.some(val => typeof val === 'number' && val > 0)
+  return hasPositiveSeriesData(displayData.value)
 })
 </script>
 
@@ -174,7 +160,7 @@ const hasChartData = computed(() => {
       :title="title"
       :colors="colors"
       :limits="isDemoMode ? {} : limits"
-      :data="effectiveData"
+      :data="displayData"
       :data-by-app="effectiveDataByApp"
       :app-names="effectiveAppNames"
       :accumulated="accumulated"

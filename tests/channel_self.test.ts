@@ -1,6 +1,7 @@
 import type { SimpleErrorResponse } from '../supabase/functions/_backend/utils/hono.ts'
 import type { DeviceLink, HttpMethod } from './test-utils.ts'
 import { randomUUID } from 'node:crypto'
+import { env } from 'node:process'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { getBaseData, getSupabaseClient, PLUGIN_BASE_URL, resetAndSeedAppData, resetAppData, resetAppDataStats } from './test-utils.ts'
 
@@ -15,6 +16,7 @@ type ChannelsListResponse = ChannelInfo[]
 
 const id = randomUUID()
 const APPNAME = `com.sa.${id}`
+const USE_CLOUDFLARE = env.USE_CLOUDFLARE_WORKERS === 'true'
 
 function getUniqueBaseData(appId: string) {
   const data = getBaseData(appId)
@@ -57,24 +59,10 @@ async function getResponseErrorCode(response: Response) {
 
 type Awaitable<T> = T | PromiseLike<T>
 
-async function withSupabaseRetry<T extends { error?: { message?: string } | null }>(
+async function withSupabaseCall<T extends { error?: { message?: string } | null }>(
   fn: () => Awaitable<T>,
-  retries = 3,
-  delayMs = 200,
 ): Promise<T> {
-  let lastResult: T | null = null
-  for (let attempt = 0; attempt < retries; attempt++) {
-    const result = await Promise.resolve(fn())
-    lastResult = result
-    const message = result.error?.message ?? ''
-    if (!message.includes('fetch failed')) {
-      return result
-    }
-    if (attempt < retries - 1) {
-      await new Promise(resolve => setTimeout(resolve, delayMs * (attempt + 1)))
-    }
-  }
-  return lastResult as T
+  return await Promise.resolve(fn())
 }
 
 beforeAll(async () => {
@@ -657,7 +645,7 @@ it('[POST] with a version that does not exist', async () => {
   expect(responseError).toBeUndefined()
 })
 
-it('[POST] /channel_self creates new channel_device with owner_org', async () => {
+it.skipIf(USE_CLOUDFLARE)('[POST] /channel_self creates new channel_device with owner_org', async () => {
   // This test ensures that when a NEW device sets a channel for the first time,
   // the channel_devices record is created with all required fields including owner_org
   // This specifically tests the INSERT path of the upsert operation
@@ -726,7 +714,7 @@ it('[POST] /channel_self creates new channel_device with owner_org', async () =>
   }
 })
 
-it('[POST] /channel_self with default channel', async () => {
+it.skipIf(USE_CLOUDFLARE)('[POST] /channel_self with default channel', async () => {
   await resetAndSeedAppData(APPNAME)
 
   const data = getUniqueBaseData(APPNAME)
@@ -852,14 +840,14 @@ it('[PUT] /channel_self with all optional fields included', async () => {
   expect(responseJSON.channel).toBe('production')
 })
 
-it('[PUT] /channel_self (with overwrite)', async () => {
+it.skipIf(USE_CLOUDFLARE)('[PUT] /channel_self (with overwrite)', async () => {
   await resetAndSeedAppData(APPNAME)
 
   const data = getUniqueBaseData(APPNAME)
   const deviceId = randomUUID().toLowerCase()
   data.device_id = deviceId
 
-  const { data: noAccessChannel, error: noAccessChannelError } = await withSupabaseRetry(() =>
+  const { data: noAccessChannel, error: noAccessChannelError } = await withSupabaseCall(() =>
     getSupabaseClient()
       .from('channels')
       .select('id, owner_org')
@@ -878,7 +866,7 @@ it('[PUT] /channel_self (with overwrite)', async () => {
   const noAccessId = noAccessChannel.id
   const ownerOrg = noAccessChannel.owner_org
 
-  const { error } = await withSupabaseRetry(() =>
+  const { error } = await withSupabaseCall(() =>
     getSupabaseClient()
       .from('channel_devices')
       .upsert({
@@ -906,7 +894,7 @@ it('[PUT] /channel_self (with overwrite)', async () => {
     expect(channel).toBe('no_access')
   }
   finally {
-    const { error } = await withSupabaseRetry(() =>
+    const { error } = await withSupabaseCall(() =>
       getSupabaseClient()
         .from('channel_devices')
         .delete()
@@ -963,7 +951,7 @@ it('[DELETE] /channel_self (no overwrite)', async () => {
   expect(error).toBe('cannot_override')
 })
 
-it('[DELETE] /channel_self (with overwrite)', async () => {
+it.skipIf(USE_CLOUDFLARE)('[DELETE] /channel_self (with overwrite)', async () => {
   await resetAndSeedAppData(APPNAME)
 
   const data = getUniqueBaseData(APPNAME)
@@ -1003,6 +991,67 @@ it('[DELETE] /channel_self (with overwrite)', async () => {
     expect(error).toBeNull()
     throw e
   }
+})
+
+describe.skipIf(!USE_CLOUDFLARE)('[POST/PUT/DELETE] /channel_self Cloudflare KV behavior', () => {
+  async function expectNoChannelDeviceRow(deviceId: string) {
+    const { count, error } = await getSupabaseClient()
+      .from('channel_devices')
+      .select('*', { count: 'exact', head: true })
+      .eq('device_id', deviceId)
+      .eq('app_id', APPNAME)
+
+    expect(error).toBeNull()
+    expect(count).toBe(0)
+  }
+
+  it('stores old plugin overrides outside channel_devices', async () => {
+    await resetAndSeedAppData(APPNAME)
+
+    const { error: channelUpdateError } = await getSupabaseClient()
+      .from('channels')
+      .update({ allow_device_self_set: true })
+      .eq('name', 'beta')
+      .eq('app_id', APPNAME)
+
+    expect(channelUpdateError).toBeNull()
+
+    const data = getUniqueBaseData(APPNAME)
+    if (!data.device_id)
+      throw new Error('device_id is required')
+    data.plugin_version = '7.0.0'
+    data.channel = 'beta'
+
+    try {
+      const postResponse = await fetchEndpoint('POST', data)
+      expect(postResponse.ok).toBeTruthy()
+      expect(await postResponse.json()).toEqual({ status: 'ok' })
+      await expectNoChannelDeviceRow(data.device_id)
+
+      const putResponse = await fetchEndpoint('PUT', data)
+      expect(putResponse.ok).toBeTruthy()
+      expect(await putResponse.json()).toMatchObject({ channel: 'beta', status: 'override' })
+      await expectNoChannelDeviceRow(data.device_id)
+
+      const deleteResponse = await fetchEndpoint('DELETE', data)
+      expect(deleteResponse.ok).toBeTruthy()
+      expect(await deleteResponse.json()).toEqual({ status: 'ok' })
+      await expectNoChannelDeviceRow(data.device_id)
+
+      const afterDeleteResponse = await fetchEndpoint('PUT', data)
+      expect(afterDeleteResponse.ok).toBeTruthy()
+      expect(await afterDeleteResponse.json()).toMatchObject({ status: 'default' })
+    }
+    finally {
+      const { error: resetError } = await getSupabaseClient()
+        .from('channels')
+        .update({ allow_device_self_set: false })
+        .eq('name', 'beta')
+        .eq('app_id', APPNAME)
+
+      expect(resetError).toBeNull()
+    }
+  })
 })
 
 it('verify channel stays after deleting channel_device', async () => {
@@ -1070,7 +1119,7 @@ it('verify channel stays after deleting channel_device', async () => {
   expect(channelAfter!.name).toBe(channelName)
 })
 
-it('saves default_channel when provided', async () => {
+it.skipIf(USE_CLOUDFLARE)('saves default_channel when provided', async () => {
   const uuid = randomUUID().toLowerCase()
   const testDefaultChannel = 'beta'
 
@@ -1166,7 +1215,7 @@ describe('[POST] /channel_self - new plugin version (>= 7.34.0) behavior', () =>
     }
   })
 
-  it('should leave old channel_devices entry untouched when migrating from old to new version', async () => {
+  it.skipIf(USE_CLOUDFLARE)('should leave old channel_devices entry untouched when migrating from old to new version', async () => {
     const deviceId = randomUUID()
     const data = getUniqueBaseData(APPNAME)
     data.device_id = deviceId

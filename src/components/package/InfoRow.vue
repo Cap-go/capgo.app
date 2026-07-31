@@ -37,7 +37,7 @@ watch(rowInput, useDebounceFn(() => {
       }"
     >
       <div class="flex flex-row">
-        <input v-if="editable" id="inforow-input" v-model="rowInput" class="block p-1 w-full text-gray-900 bg-white rounded-lg border border-gray-300 sm:text-xs md:w-1/2 dark:placeholder-gray-400 dark:text-white dark:bg-gray-700 dark:border-gray-600 focus:border-blue-500 focus:ring-blue-500 dark:focus:border-blue-500 dark:focus:ring-blue-500" :readonly="!!props.readonly">
+        <input v-if="editable" id="inforow-input" v-model="rowInput" :aria-label="props.label" class="block p-1 w-full text-gray-900 bg-white rounded-lg border border-gray-300 sm:text-xs md:w-1/2 dark:placeholder-gray-400 dark:text-white dark:bg-gray-700 dark:border-gray-600 focus:border-blue-500 focus:ring-blue-500 dark:focus:border-blue-500 dark:focus:ring-blue-500" :readonly="!!props.readonly">
         <span v-else> {{ computedValue.value }} </span>
         <div style="margin-left: 0">
           <slot name="start" />

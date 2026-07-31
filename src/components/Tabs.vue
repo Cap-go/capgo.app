@@ -44,9 +44,16 @@ const labelClass = 'hidden md:block text-xs md:text-sm font-medium transition-co
     <div class="min-w-0 pb-0">
       <ul :class="[ulPrimaryClass, noWrap ? noWrapClass : 'flex-wrap']">
         <li v-for="(tab, i) in tabs" :key="i" class="relative mr-2" :class="{ 'z-20': activeTab === tab.key }">
-          <button :class="[buttonPrimaryClass, activeTabColor(tab.key)]" @click="emit('update:activeTab', tab.key)">
+          <button
+            type="button"
+            :aria-current="activeTab === tab.key ? 'page' : undefined"
+            :aria-label="t(tab.label)"
+            :class="[buttonPrimaryClass, activeTabColor(tab.key)]"
+            @click="emit('update:activeTab', tab.key)"
+          >
             <component :is="tab.icon" :class="iconClass" />
             <span :class="labelClass">{{ t(tab.label) }}</span>
+            <span v-if="tab.badge" class="hidden px-1.5 py-0.5 text-[10px] font-semibold uppercase rounded border md:inline border-azure-500/40 bg-azure-500/10 text-azure-700 dark:text-azure-200">{{ t(tab.badge) }}</span>
           </button>
         </li>
       </ul>
@@ -54,9 +61,16 @@ const labelClass = 'hidden md:block text-xs md:text-sm font-medium transition-co
     <div class="relative -mt-px border-t bg-blue-50 dark:bg-slate-800/40 border-blue-200/60 dark:border-blue-800/70" :class="secondaryTabs?.length ? 'z-10' : 'z-0'">
       <ul v-if="secondaryTabs?.length" :class="[ulSecondaryClass, noWrap ? noWrapClass : 'flex-wrap']">
         <li v-for="(tab, i) in secondaryTabs" :key="i" class="mr-2">
-          <button :class="[buttonSecondaryClass, activeTabColor(tab.key, true)]" @click="emit('update:secondaryActiveTab', tab.key)">
+          <button
+            type="button"
+            :aria-current="secondaryActiveTab === tab.key ? 'page' : undefined"
+            :aria-label="t(tab.label)"
+            :class="[buttonSecondaryClass, activeTabColor(tab.key, true)]"
+            @click="emit('update:secondaryActiveTab', tab.key)"
+          >
             <component :is="tab.icon" :class="iconClass" />
             <span :class="labelClass">{{ t(tab.label) }}</span>
+            <span v-if="tab.badge" class="hidden px-1.5 py-0.5 text-[10px] font-semibold uppercase rounded border md:inline border-azure-500/40 bg-azure-500/10 text-azure-700 dark:text-azure-200">{{ t(tab.badge) }}</span>
           </button>
         </li>
       </ul>

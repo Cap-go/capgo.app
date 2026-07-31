@@ -13,7 +13,7 @@ interface UpdateMetadataBody {
   comment?: string
 }
 
-app.post('/', middlewareKey(['all', 'write']), async (c) => {
+app.post('/', middlewareKey(), async (c) => {
   const body = await getBodyOrQuery<UpdateMetadataBody>(c)
   const apikey = c.get('apikey')!
 

@@ -1,6 +1,6 @@
 import { Hono } from 'hono/tiny'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { isUpdateEnumerationLimited, recordUpdateEnumerationMiss, updateEnumerationLimitedResponse } from '../supabase/functions/_backend/utils/updateOracleGuard.ts'
+import { isUpdateEnumerationLimited, recordUpdateEnumerationMiss, updateEnumerationLimitedResponse } from '../supabase/functions/_backend/plugin_runtime/utils/updateOracleGuard.ts'
 
 type CacheKey = Request | string
 

@@ -28,7 +28,7 @@ EXPECTED_TEAM_ID="UVTJ336J2D"
 # Bundle identifier baked into Info.plist; pinned in the designated requirement
 # (must match HELPER_BUNDLE_IDENTIFIER in macos-signing.ts).
 HELPER_IDENTIFIER="app.capgo.cli.helper"
-if [ "$CAPGO_APPLE_TEAM_ID" != "$EXPECTED_TEAM_ID" ]; then
+if [[ "$CAPGO_APPLE_TEAM_ID" != "$EXPECTED_TEAM_ID" ]]; then
   echo "CAPGO_APPLE_TEAM_ID ($CAPGO_APPLE_TEAM_ID) != $EXPECTED_TEAM_ID expected by the CLI verifier." >&2
   echo "Fix the APPLE_TEAM_ID secret or update macos-signing.ts; refusing to sign a helper users can't run." >&2
   exit 1
@@ -48,9 +48,9 @@ for arch in arm64 x64; do
     --wait --timeout 30m --output-format json) || true
   id=$(echo "$out" | jq -r '.id // empty')
   status=$(echo "$out" | jq -r '.status // empty')
-  if [ "$status" != "Accepted" ]; then
+  if [[ "$status" != "Accepted" ]]; then
     echo "Notarization failed for $app (status: ${status:-unknown})" >&2
-    if [ -n "$id" ]; then
+    if [[ -n "$id" ]]; then
       xcrun notarytool log "$id" \
         --key "$APPLE_KEY_PATH" --key-id "$APPLE_KEY_ID" --issuer "$APPLE_ISSUER_ID" >&2 || true
     fi

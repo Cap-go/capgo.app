@@ -10,9 +10,40 @@ const globalId = randomUUID()
 const customerId = `cus_test_${WEBHOOK_TEST_ORG_ID}`
 const webhookApiKey = randomUUID()
 let createdWebhookId: string | null = null
+let createdDeliveryId: string | null = null
 let webhookSecret: string | null = null
 let headers: Record<string, string>
 let webhookApiKeyId: number | null = null
+
+interface WebhookDelivery {
+  id: string
+  event_type: string
+  request_payload: {
+    type?: string
+    event?: string
+    org_id?: string
+    event_id?: string
+    timestamp?: string
+    data?: unknown
+  }
+}
+
+async function getCreatedDelivery(): Promise<WebhookDelivery> {
+  const webhookId = createdWebhookId
+  const deliveryId = createdDeliveryId
+  if (!webhookId || !deliveryId)
+    throw new Error('Webhook delivery was not created')
+
+  const response = await fetch(`${BASE_URL}/webhooks/deliveries?orgId=${WEBHOOK_TEST_ORG_ID}&webhookId=${webhookId}`, { headers })
+  const data = await response.json() as { deliveries: WebhookDelivery[] }
+  expect(response.status, JSON.stringify(data)).toBe(200)
+
+  const delivery = data.deliveries.find(delivery => delivery.id === deliveryId)
+  if (!delivery)
+    throw new Error(`Delivery ${deliveryId} was not returned by the deliveries API`)
+
+  return delivery
+}
 
 /**
  * Verify Standard Webhooks signature using Node.js crypto.
@@ -356,29 +387,17 @@ describe('webhook delivery record creation', () => {
       }),
     })
 
-    expect(response.status).toBe(200)
     const data = await response.json() as { delivery_id: string, success: boolean }
+    expect(response.status, JSON.stringify(data)).toBe(200)
     expect(data.delivery_id).toBeDefined()
     // The delivery will fail since example.com won't accept our webhook
+    createdDeliveryId = data.delivery_id
     expect(data.success).toBe(false)
   })
 
   it('should store the payload in delivery record', async () => {
-    expect(createdWebhookId).not.toBeNull()
+    const delivery = await getCreatedDelivery()
 
-    // Get the latest delivery for this webhook
-    const { data: deliveries, error } = await (getSupabaseClient() as any)
-      .from('webhook_deliveries')
-      .select('*')
-      .eq('webhook_id', createdWebhookId)
-      .order('created_at', { ascending: false })
-      .limit(1)
-
-    expect(error).toBeNull()
-    expect(deliveries).not.toBeNull()
-    expect(deliveries.length).toBe(1)
-
-    const delivery = deliveries[0]
     expect(delivery.request_payload).toBeDefined()
     expect(delivery.request_payload.type).toBe('test.ping')
     expect(delivery.request_payload.event).toBe('test.ping')
@@ -389,14 +408,9 @@ describe('webhook delivery record creation', () => {
   })
 
   it('should record the event type correctly', async () => {
-    const { data: deliveries } = await (getSupabaseClient() as any)
-      .from('webhook_deliveries')
-      .select('event_type')
-      .eq('webhook_id', createdWebhookId)
-      .order('created_at', { ascending: false })
-      .limit(1)
+    const delivery = await getCreatedDelivery()
 
-    expect(deliveries[0].event_type).toBe('test.ping')
+    expect(delivery.event_type).toBe('test.ping')
   })
 })
 

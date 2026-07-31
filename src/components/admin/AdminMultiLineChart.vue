@@ -16,6 +16,7 @@ import { computed } from 'vue'
 import { Line } from 'vue-chartjs'
 import { createChartColorWithOpacity, resolveAccessibleChartColor } from '~/services/chartConfig'
 import { formatLocalDate, formatLocalMonthYear } from '~/services/date'
+import { formatNumberValue } from '~/services/formatLocale'
 
 interface DataSeries {
   label: string
@@ -70,7 +71,7 @@ function formatChartDate(date: string) {
 }
 
 function formatChartValue(value: number) {
-  return `${props.valuePrefix}${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}${props.valueSuffix}`
+  return `${props.valuePrefix}${formatNumberValue(value, { maximumFractionDigits: 2 })}${props.valueSuffix}`
 }
 
 Chart.register(
@@ -206,7 +207,7 @@ const chartOptions = computed<ChartOptions<'line'>>(() => ({
       <span class="loading loading-spinner loading-lg text-primary" />
     </div>
     <div v-else class="w-full h-full">
-      <Line :data="chartData" :options="chartOptions" />
+      <Line class="h-full w-full" :data="chartData" :options="chartOptions" />
     </div>
   </div>
 </template>

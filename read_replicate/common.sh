@@ -98,6 +98,12 @@ ensure_connect_timeout() {
 
 normalize_cloudsql_ssl() {
   local url="$1"
+  if [[ "$url" == *"sslmode=no-verify"* ]]; then
+    echo "==> WARNING: PostgreSQL 17 rejects sslmode=no-verify." >&2
+    echo "==> Downgrading this connection to sslmode=require for this command." >&2
+    printf "%s" "${url/sslmode=no-verify/sslmode=require}"
+    return 0
+  fi
   if [[ "$url" == *"sslmode=verify-full"* ]]; then
     echo "==> WARNING: Google Cloud SQL URLs using IP hosts usually fail with sslmode=verify-full." >&2
     echo "==> Downgrading this connection to sslmode=require for this command." >&2
@@ -156,6 +162,7 @@ load_source_db_url() {
   fi
 
   db_url="${db_url//ssl=false/sslmode=disable}"
+  db_url="$(normalize_cloudsql_ssl "$db_url")"
   printf "%s" "$db_url"
 }
 

@@ -294,13 +294,16 @@ async function login(form: { email: string, password: string }) {
   })
   if (error) {
     isLoading.value = false
-    console.error('error', error)
+    const isExpectedAuthError = error.code === 'invalid_credentials'
+      || error.code === 'captcha_failed'
+    if (!isExpectedAuthError)
+      console.error('Login failed', error)
     setErrors('login-account', [error.message], {})
-    if (error.message.includes('Invalid login credentials')) {
+    if (error.code === 'invalid_credentials' || error.message.includes('Invalid login credentials')) {
       turnstileToken.value = ''
       captchaComponent.value?.reset()
     }
-    if (error.message.includes('captcha')) {
+    if (error.code === 'captcha_failed' || error.message.includes('captcha')) {
       turnstileToken.value = ''
       captchaComponent.value?.reset()
       toast.error(t('captcha-fail'))
@@ -444,6 +447,13 @@ async function goBackToEmail() {
 
   await nextTick()
   focusLoginEmailInput()
+}
+
+async function goToForgotPassword() {
+  await router.push({
+    path: '/forgot_password',
+    state: emailForLogin.value ? { resetEmail: emailForLogin.value } : undefined,
+  })
 }
 
 async function checkAuthUser() {
@@ -605,7 +615,10 @@ async function acceptQuerySession() {
     refresh_token: querySessionRefreshToken.value,
   })
   if (res.error) {
-    console.error('Cannot set auth', res.error)
+    if (res.error.name === 'AuthSessionMissingError')
+      console.warn('Cannot set auth', res.error)
+    else
+      console.error('Cannot set auth', res.error)
     isLoading.value = false
     return
   }
@@ -901,6 +914,7 @@ onMounted(checkLogin)
                       detect it for autofill purposes.
                     -->
                         <input
+                          id="login-username-hidden"
                           type="email"
                           :value="emailForLogin"
                           name="username"
@@ -908,9 +922,9 @@ onMounted(checkLogin)
                           readonly
                           tabindex="-1"
                           aria-hidden="true"
+                          :aria-label="t('email')"
                           style="position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;pointer-events:none;"
                         >
-                        <!-- Show email context -->
                         <div :class="authAccountContextClass">
                           <button
                             type="button"
@@ -993,13 +1007,14 @@ onMounted(checkLogin)
                           >
                             {{ t('create-a-free-account') }}
                           </a>
-                          <router-link
-                            to="/forgot_password"
+                          <button
+                            type="button"
                             data-test="forgot-password"
                             :class="authInlineLinkClass"
+                            @click="goToForgotPassword"
                           >
                             {{ t('forgot') }} {{ t('password') }} ?
-                          </router-link>
+                          </button>
                         </div>
                       </div>
                     </FormKit>

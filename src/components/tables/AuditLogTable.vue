@@ -19,6 +19,8 @@ import { useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useOrganizationStore } from '~/stores/organization'
 
+type AuditActorType = 'user' | 'apikey' | 'system' | 'unknown'
+
 interface AuditLogRow {
   id: number
   created_at: string
@@ -30,6 +32,11 @@ interface AuditLogRow {
   old_record: Record<string, unknown> | null
   new_record: Record<string, unknown> | null
   changed_fields: string[] | null
+  actor_type: AuditActorType
+  actor_user_id: string | null
+  actor_user_email: string | null
+  actor_apikey_id: number | null
+  actor_apikey_name: string | null
 }
 
 interface ExtendedAuditLog extends AuditLogRow {
@@ -127,8 +134,8 @@ const columns: Ref<TableColumn[]> = ref<TableColumn[]>([
     class: 'truncate max-w-8',
   },
   {
-    label: 'email',
-    key: 'user_id',
+    label: 'actor',
+    key: 'actor',
     mobile: false,
     sortable: false,
     class: 'truncate max-w-8',
@@ -230,6 +237,41 @@ function getTableLabel(tableName: string): string {
   }
 }
 
+function getActorTypeLabel(actorType: AuditActorType): string {
+  switch (actorType) {
+    case 'user':
+      return t('user')
+    case 'apikey':
+      return t('api-key')
+    case 'system':
+      return t('automated')
+    default:
+      return t('unknown')
+  }
+}
+
+function getActorUserEmail(item: ExtendedAuditLog): string | null {
+  if (item.actor_type !== 'user')
+    return null
+
+  return item.actor_user_email || item.user?.email || null
+}
+
+function getActorDisplay(item: ExtendedAuditLog): string {
+  if (item.actor_type === 'apikey') {
+    const apiKey = item.actor_apikey_id ? `${t('api-key')} #${item.actor_apikey_id}` : t('api-key')
+    return item.actor_apikey_name ? `${apiKey} (${item.actor_apikey_name})` : apiKey
+  }
+
+  if (item.actor_type === 'system')
+    return t('automated')
+
+  if (item.actor_type === 'user')
+    return getActorUserEmail(item) || item.actor_user_id || item.user_id || '-'
+
+  return t('unknown')
+}
+
 async function openDetails(item: ExtendedAuditLog) {
   selectedLog.value = item
   dialogStore.openDialog({
@@ -255,8 +297,8 @@ function displayValueKey(elem: ExtendedAuditLog, col: TableColumn): string {
       return getTableLabel(elem.table_name)
     case 'operation':
       return getOperationLabel(elem.operation)
-    case 'user_id':
-      return elem.user?.email || '-'
+    case 'actor':
+      return getActorDisplay(elem)
     case 'changed_fields':
       return getChangedFieldsDisplay(elem)
     case 'details':
@@ -314,8 +356,11 @@ async function fetchAuditLogs() {
     const rows = (data ?? []) as ExtendedAuditLog[]
 
     for (const item of rows) {
-      if (item.user_id) {
-        const member = membersMap.value.get(item.user_id)
+      const memberId = item.actor_type === 'user'
+        ? (item.actor_user_id || item.user_id)
+        : null
+      if (memberId) {
+        const member = membersMap.value.get(memberId)
         if (member) {
           item.user = member
         }
@@ -453,10 +498,13 @@ onUnmounted(() => {
             :style="filterDropdownStyle"
             @click.stop
           >
+            <label for="audit-log-filter-search" class="sr-only">{{ t('search') }}</label>
             <input
+              id="audit-log-filter-search"
               v-model="filterSearchVal"
               type="text"
               :placeholder="t('search')"
+              :aria-label="t('search')"
               class="w-full px-3 py-2 mb-2 text-sm border border-gray-300 rounded-md dark:border-gray-600 dark:bg-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
               @click.stop
             >
@@ -581,9 +629,23 @@ onUnmounted(() => {
           </span>
         </div>
 
-        <div v-if="selectedLog.user" class="text-sm text-gray-700 dark:text-gray-300">
-          <span class="font-medium">{{ t('email') }}:</span>
-          {{ selectedLog.user.email }}
+        <div class="space-y-1 text-sm text-gray-700 dark:text-gray-300">
+          <div>
+            <span class="font-medium">{{ t('source') }}:</span>
+            {{ getActorTypeLabel(selectedLog.actor_type) }}
+          </div>
+          <div v-if="selectedLog.actor_type === 'apikey' && selectedLog.actor_apikey_id">
+            <span class="font-medium">{{ t('api-key-id') }}:</span>
+            #{{ selectedLog.actor_apikey_id }}
+          </div>
+          <div v-if="selectedLog.actor_type === 'apikey' && selectedLog.actor_apikey_name">
+            <span class="font-medium">{{ t('api-key-name') }}:</span>
+            {{ selectedLog.actor_apikey_name }}
+          </div>
+          <div v-if="getActorUserEmail(selectedLog)">
+            <span class="font-medium">{{ t('actor-user-email') }}:</span>
+            {{ getActorUserEmail(selectedLog) }}
+          </div>
         </div>
 
         <div v-if="selectedLog.operation === 'UPDATE' && selectedLog.changed_fields?.length">

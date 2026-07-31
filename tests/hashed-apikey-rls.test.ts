@@ -1,8 +1,8 @@
 /**
- * Tests for hashed API key support in RLS functions (get_identity, etc.)
+ * Tests for hashed API key support in RBAC-backed request identity and RLS functions.
  *
- * These tests verify that the PostgreSQL RLS identity functions properly
- * support both plain and hashed API keys. This is critical for CLI usage
+ * These tests verify that the PostgreSQL RBAC request helpers properly support
+ * both plain and hashed API keys. This is critical for CLI usage
  * where the Supabase SDK is used directly with the capgkey header.
  *
  * IMPORTANT: This test uses a completely isolated user (USER_ID_RLS) with its own
@@ -145,6 +145,34 @@ async function execAsRoleWithCapgkey(
   finally {
     client.release(true)
   }
+}
+
+async function insertRlsAppVersion({
+  appId,
+  name,
+  orgId,
+  userId,
+}: {
+  appId: string
+  name: string
+  orgId: string
+  userId: string
+}) {
+  const result = await pool.query(
+    `INSERT INTO public.app_versions (app_id, name, owner_org, user_id, checksum, storage_provider, r2_path, deleted)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, false)
+     RETURNING id`,
+    [
+      appId,
+      name,
+      orgId,
+      userId,
+      `checksum-${name}`,
+      'r2',
+      `orgs/${orgId}/apps/${appId}/${name}.zip`,
+    ],
+  )
+  return Number(result.rows[0].id)
 }
 
 interface ApiKeyAccessOptions {
@@ -290,8 +318,8 @@ async function createEnforcedMemberOrgForUser(userId: string, enforceHashedApiKe
       [orgId, USER_ID_2, `hashed-enforcement-org-${orgId}`, `hashed-enforcement-${orgId}@capgo.test`, enforceHashedApiKeys],
     )
     await client.query(
-      `INSERT INTO public.org_users (org_id, user_id, user_right)
-       VALUES ($1, $2, 'super_admin')`,
+      `INSERT INTO public.org_users (org_id, user_id, rbac_role_name, is_invite)
+       VALUES ($1, $2, public.rbac_role_org_super_admin(), false)`,
       [orgId, userId],
     )
     return orgId
@@ -322,8 +350,8 @@ async function createPendingInviteOrgForUser(userId: string): Promise<string> {
       [orgId, USER_ID_2, `pending-invite-org-${orgId}`, `pending-invite-${orgId}@capgo.test`],
     )
     await client.query(
-      `INSERT INTO public.org_users (org_id, user_id, user_right)
-       VALUES ($1, $2, 'invite_read')`,
+      `INSERT INTO public.org_users (org_id, user_id, rbac_role_name, is_invite)
+       VALUES ($1, $2, public.rbac_role_org_member(), true)`,
       [orgId, userId],
     )
     return orgId
@@ -349,8 +377,8 @@ async function createEnforcedRbacOnlyOrgForUser(userId: string): Promise<string>
   const orgId = randomUUID()
   try {
     await client.query(
-      `INSERT INTO public.orgs (id, created_by, name, management_email, enforce_hashed_api_keys, use_new_rbac)
-       VALUES ($1, $2, $3, $4, true, true)`,
+      `INSERT INTO public.orgs (id, created_by, name, management_email, enforce_hashed_api_keys)
+       VALUES ($1, $2, $3, $4, true)`,
       [orgId, USER_ID_2, `rbac-only-org-${orgId}`, `rbac-only-${orgId}@capgo.test`],
     )
     await client.query(
@@ -397,8 +425,8 @@ async function createEnforcedApikeyPrincipalOrgForKey(apikeyId: number): Promise
   const orgId = randomUUID()
   try {
     await client.query(
-      `INSERT INTO public.orgs (id, created_by, name, management_email, enforce_hashed_api_keys, use_new_rbac)
-       VALUES ($1, $2, $3, $4, true, true)`,
+      `INSERT INTO public.orgs (id, created_by, name, management_email, enforce_hashed_api_keys)
+       VALUES ($1, $2, $3, $4, true)`,
       [orgId, USER_ID_2, `apikey-rbac-org-${orgId}`, `apikey-rbac-${orgId}@capgo.test`],
     )
     await client.query(
@@ -445,8 +473,8 @@ async function createStandaloneOrg(enforceHashedApiKeys = true): Promise<string>
   const orgId = randomUUID()
   try {
     await client.query(
-      `INSERT INTO public.orgs (id, created_by, name, management_email, enforce_hashed_api_keys, use_new_rbac)
-       VALUES ($1, $2, $3, $4, $5, true)`,
+      `INSERT INTO public.orgs (id, created_by, name, management_email, enforce_hashed_api_keys)
+       VALUES ($1, $2, $3, $4, $5)`,
       [orgId, USER_ID_2, `standalone-org-${orgId}`, `standalone-${orgId}@capgo.test`, enforceHashedApiKeys],
     )
     return orgId
@@ -509,36 +537,6 @@ async function deleteStaleAppScopedBindingForUser(userId: string, staleOrgId: st
   }
 }
 
-async function createStaleAppScopedOrgUserForUser(userId: string, staleOrgId: string): Promise<void> {
-  const client = await pool.connect()
-  try {
-    await client.query(
-      `INSERT INTO public.org_users (org_id, user_id, user_right, app_id)
-       VALUES ($1, $2, 'read', $3)`,
-      [staleOrgId, userId, APP_NAME_RLS],
-    )
-  }
-  finally {
-    client.release()
-  }
-}
-
-async function deleteStaleAppScopedOrgUserForUser(userId: string, staleOrgId: string): Promise<void> {
-  const client = await pool.connect()
-  try {
-    await client.query(
-      `DELETE FROM public.org_users
-       WHERE org_id = $1
-         AND user_id = $2
-         AND app_id = $3`,
-      [staleOrgId, userId, APP_NAME_RLS],
-    )
-  }
-  finally {
-    client.release()
-  }
-}
-
 beforeAll(async () => {
   pool = new Pool({ connectionString: POSTGRES_URL })
   const client = await pool.connect()
@@ -574,7 +572,7 @@ afterAll(async () => {
   await pool.end()
 })
 
-describe('get_identity() with hashed API keys', () => {
+describe('request_actor_user_id() with hashed API keys', () => {
   let hashedKey: { id: number, key: string, key_hash: string }
   let plainKey: { id: number, key: string }
 
@@ -590,7 +588,7 @@ describe('get_identity() with hashed API keys', () => {
 
   it('returns user_id for plain API key', async () => {
     const rows = await execWithCapgkey(
-      `SELECT get_identity('{all,write,read,upload}'::key_mode[]) as user_id`,
+      `SELECT public.request_actor_user_id() AS user_id`,
       plainKey.key,
     )
     expect(rows[0].user_id).toBe(RLS_TEST_USER_ID)
@@ -598,7 +596,7 @@ describe('get_identity() with hashed API keys', () => {
 
   it('returns user_id for hashed API key', async () => {
     const rows = await execWithCapgkey(
-      `SELECT get_identity('{all,write,read,upload}'::key_mode[]) as user_id`,
+      `SELECT public.request_actor_user_id() AS user_id`,
       hashedKey.key, // The plain key value - DB should hash and match
     )
     expect(rows[0].user_id).toBe(RLS_TEST_USER_ID)
@@ -606,7 +604,7 @@ describe('get_identity() with hashed API keys', () => {
 
   it('returns NULL for invalid API key', async () => {
     const rows = await execWithCapgkey(
-      `SELECT get_identity('{all,write,read,upload}'::key_mode[]) as user_id`,
+      `SELECT public.request_actor_user_id() AS user_id`,
       'invalid-key-that-does-not-exist',
     )
     expect(rows[0].user_id).toBeNull()
@@ -618,7 +616,7 @@ describe('get_identity() with hashed API keys', () => {
     await setApiKeyExpiration(expiredKey.id, new Date(Date.now() - 24 * 60 * 60 * 1000))
 
     const rows = await execWithCapgkey(
-      `SELECT get_identity('{all,write,read,upload}'::key_mode[]) as user_id`,
+      `SELECT public.request_actor_user_id() AS user_id`,
       expiredKey.key,
     )
     expect(rows[0].user_id).toBeNull()
@@ -632,7 +630,7 @@ describe('get_identity() with hashed API keys', () => {
     await setApiKeyExpiration(futureKey.id, new Date(Date.now() + 24 * 60 * 60 * 1000))
 
     const rows = await execWithCapgkey(
-      `SELECT get_identity('{all,write,read,upload}'::key_mode[]) as user_id`,
+      `SELECT public.request_actor_user_id() AS user_id`,
       futureKey.key,
     )
     expect(rows[0].user_id).toBe(RLS_TEST_USER_ID)
@@ -672,17 +670,17 @@ describe('enforce_hashed_api_keys blocks plaintext capgkey auth on the RLS plane
     }
   })
 
-  it('get_identity rejects a plain API key after hashed enforcement is enabled', async () => {
+  it('request_actor_user_id rejects a plain API key after hashed enforcement is enabled', async () => {
     const rows = await execWithCapgkey(
-      `SELECT get_identity('{all,write,read,upload}'::key_mode[]) AS user_id`,
+      `SELECT public.request_actor_user_id() AS user_id`,
       plainKey.key,
     )
     expect(rows[0].user_id).toBeNull()
   })
 
-  it('get_identity still accepts a hashed API key after hashed enforcement is enabled', async () => {
+  it('request_actor_user_id still accepts a hashed API key after hashed enforcement is enabled', async () => {
     const rows = await execWithCapgkey(
-      `SELECT get_identity('{all,write,read,upload}'::key_mode[]) AS user_id`,
+      `SELECT public.request_actor_user_id() AS user_id`,
       hashedKey.key,
     )
     expect(rows[0].user_id).toBe(RLS_TEST_USER_ID)
@@ -695,7 +693,7 @@ describe('enforce_hashed_api_keys blocks plaintext capgkey auth on the RLS plane
       await setOrgHashedApiKeyEnforcement(suiteOrgId, false)
 
       const rows = await execWithCapgkey(
-        `SELECT get_identity('{all,write,read,upload}'::key_mode[]) AS user_id`,
+        `SELECT public.request_actor_user_id() AS user_id`,
         plainKey.key,
       )
       expect(rows[0].user_id).toBe(RLS_TEST_USER_ID)
@@ -713,7 +711,7 @@ describe('enforce_hashed_api_keys blocks plaintext capgkey auth on the RLS plane
       await setOrgHashedApiKeyEnforcement(suiteOrgId, false)
 
       const rows = await execWithCapgkey(
-        `SELECT get_identity('{all,write,read,upload}'::key_mode[]) AS user_id`,
+        `SELECT public.request_actor_user_id() AS user_id`,
         plainKey.key,
       )
       expect(rows[0].user_id).toBe(RLS_TEST_USER_ID)
@@ -731,7 +729,7 @@ describe('enforce_hashed_api_keys blocks plaintext capgkey auth on the RLS plane
       await setOrgHashedApiKeyEnforcement(suiteOrgId, false)
 
       const rows = await execWithCapgkey(
-        `SELECT get_identity('{all,write,read,upload}'::key_mode[]) AS user_id`,
+        `SELECT public.request_actor_user_id() AS user_id`,
         plainKey.key,
       )
       expect(rows[0].user_id).toBeNull()
@@ -750,33 +748,13 @@ describe('enforce_hashed_api_keys blocks plaintext capgkey auth on the RLS plane
       await createStaleAppScopedBindingForUser(RLS_TEST_USER_ID, staleEnforcedOrgId)
 
       const rows = await execWithCapgkey(
-        `SELECT get_identity('{all,write,read,upload}'::key_mode[]) AS user_id`,
+        `SELECT public.request_actor_user_id() AS user_id`,
         plainKey.key,
       )
       expect(rows[0].user_id).toBe(RLS_TEST_USER_ID)
     }
     finally {
       await deleteStaleAppScopedBindingForUser(RLS_TEST_USER_ID, staleEnforcedOrgId)
-      await setOrgHashedApiKeyEnforcement(suiteOrgId, true)
-      await deleteStandaloneOrg(staleEnforcedOrgId)
-    }
-  })
-
-  it('ignores stale org_id values on app-scoped legacy org_users rows when deriving org enforcement', async () => {
-    const staleEnforcedOrgId = await createStandaloneOrg(true)
-
-    try {
-      await setOrgHashedApiKeyEnforcement(suiteOrgId, false)
-      await createStaleAppScopedOrgUserForUser(RLS_TEST_USER_ID, staleEnforcedOrgId)
-
-      const rows = await execWithCapgkey(
-        `SELECT get_identity('{all,write,read,upload}'::key_mode[]) AS user_id`,
-        plainKey.key,
-      )
-      expect(rows[0].user_id).toBe(RLS_TEST_USER_ID)
-    }
-    finally {
-      await deleteStaleAppScopedOrgUserForUser(RLS_TEST_USER_ID, staleEnforcedOrgId)
       await setOrgHashedApiKeyEnforcement(suiteOrgId, true)
       await deleteStandaloneOrg(staleEnforcedOrgId)
     }
@@ -801,7 +779,7 @@ describe('enforce_hashed_api_keys blocks plaintext capgkey auth on the RLS plane
   })
 })
 
-describe('get_identity_apikey_only() with hashed API keys', () => {
+describe('request_actor_user_id() API-key-only behavior with hashed API keys', () => {
   let hashedKey: { id: number, key: string, key_hash: string }
 
   beforeAll(async () => {
@@ -814,7 +792,7 @@ describe('get_identity_apikey_only() with hashed API keys', () => {
 
   it('returns user_id for hashed API key', async () => {
     const rows = await execWithCapgkey(
-      `SELECT get_identity_apikey_only('{all,write,read,upload}'::key_mode[]) as user_id`,
+      `SELECT public.request_actor_user_id() AS user_id`,
       hashedKey.key,
     )
     expect(rows[0].user_id).toBe(RLS_TEST_USER_ID)
@@ -822,14 +800,14 @@ describe('get_identity_apikey_only() with hashed API keys', () => {
 
   it('returns NULL for invalid API key', async () => {
     const rows = await execWithCapgkey(
-      `SELECT get_identity_apikey_only('{all,write,read,upload}'::key_mode[]) as user_id`,
+      `SELECT public.request_actor_user_id() AS user_id`,
       'invalid-key',
     )
     expect(rows[0].user_id).toBeNull()
   })
 })
 
-describe('get_identity_org_allowed() with hashed API keys', () => {
+describe('rbac_check_permission_request() with org-scoped hashed API keys', () => {
   let hashedKey: { id: number, key: string, key_hash: string }
   let otherOrgKey: { id: number, key: string, key_hash: string }
 
@@ -843,32 +821,32 @@ describe('get_identity_org_allowed() with hashed API keys', () => {
     await deleteApiKey(otherOrgKey.id)
   }, 60000)
 
-  it('returns user_id for hashed API key with matching org', async () => {
+  it('allows a hashed API key with matching org permission', async () => {
     const rows = await execWithCapgkey(
-      `SELECT get_identity_org_allowed('{all,write,read,upload}'::key_mode[], '${ORG_ID_RLS}'::uuid) as user_id`,
+      `SELECT public.rbac_check_permission_request(public.rbac_perm_org_read(), '${ORG_ID_RLS}'::uuid, NULL::character varying, NULL::bigint) AS allowed`,
       hashedKey.key,
     )
-    expect(rows[0].user_id).toBe(RLS_TEST_USER_ID)
+    expect(rows[0].allowed).toBe(true)
   })
 
-  it('returns NULL for hashed API key bound to different org', async () => {
+  it('denies a hashed API key bound to a different org', async () => {
     const rows = await execWithCapgkey(
-      `SELECT get_identity_org_allowed('{all,write,read,upload}'::key_mode[], '${ORG_ID_RLS}'::uuid) as user_id`,
+      `SELECT public.rbac_check_permission_request(public.rbac_perm_org_read(), '${ORG_ID_RLS}'::uuid, NULL::character varying, NULL::bigint) AS allowed`,
       otherOrgKey.key,
     )
-    expect(rows[0].user_id).toBeNull()
+    expect(rows[0].allowed).toBe(false)
   })
 
-  it('returns NULL for invalid API key', async () => {
+  it('denies an invalid API key', async () => {
     const rows = await execWithCapgkey(
-      `SELECT get_identity_org_allowed('{all,write,read,upload}'::key_mode[], '${ORG_ID_RLS}'::uuid) as user_id`,
+      `SELECT public.rbac_check_permission_request(public.rbac_perm_org_read(), '${ORG_ID_RLS}'::uuid, NULL::character varying, NULL::bigint) AS allowed`,
       'invalid-key',
     )
-    expect(rows[0].user_id).toBeNull()
+    expect(rows[0].allowed).toBe(false)
   })
 })
 
-describe('get_identity_org_appid() with hashed API keys', () => {
+describe('rbac_check_permission_request() with app-scoped hashed API keys', () => {
   let hashedKey: { id: number, key: string, key_hash: string }
   let otherOrgKey: { id: number, key: string, key_hash: string }
 
@@ -882,28 +860,28 @@ describe('get_identity_org_appid() with hashed API keys', () => {
     await deleteApiKey(otherOrgKey.id)
   })
 
-  it('returns user_id for hashed API key with matching app', async () => {
+  it('allows a hashed API key with matching app permission', async () => {
     const rows = await execWithCapgkey(
-      `SELECT get_identity_org_appid('{all,write,read,upload}'::key_mode[], '${ORG_ID_RLS}'::uuid, '${APP_NAME_RLS}') as user_id`,
+      `SELECT public.rbac_check_permission_request(public.rbac_perm_app_read(), '${ORG_ID_RLS}'::uuid, '${APP_NAME_RLS}', NULL::bigint) AS allowed`,
       hashedKey.key,
     )
-    expect(rows[0].user_id).toBe(RLS_TEST_USER_ID)
+    expect(rows[0].allowed).toBe(true)
   })
 
-  it('returns NULL for hashed API key without requested app permission', async () => {
+  it('denies a hashed API key without requested app permission', async () => {
     const rows = await execWithCapgkey(
-      `SELECT get_identity_org_appid('{all,write,read,upload}'::key_mode[], '${ORG_ID_RLS}'::uuid, '${APP_NAME_RLS}') as user_id`,
+      `SELECT public.rbac_check_permission_request(public.rbac_perm_app_read(), '${ORG_ID_RLS}'::uuid, '${APP_NAME_RLS}', NULL::bigint) AS allowed`,
       otherOrgKey.key,
     )
-    expect(rows[0].user_id).toBeNull()
+    expect(rows[0].allowed).toBe(false)
   })
 
-  it('returns NULL for invalid API key', async () => {
+  it('denies an invalid API key', async () => {
     const rows = await execWithCapgkey(
-      `SELECT get_identity_org_appid('{all,write,read,upload}'::key_mode[], '${ORG_ID_RLS}'::uuid, '${APP_NAME_RLS}') as user_id`,
+      `SELECT public.rbac_check_permission_request(public.rbac_perm_app_read(), '${ORG_ID_RLS}'::uuid, '${APP_NAME_RLS}', NULL::bigint) AS allowed`,
       'invalid-key',
     )
-    expect(rows[0].user_id).toBeNull()
+    expect(rows[0].allowed).toBe(false)
   })
 })
 
@@ -1039,6 +1017,51 @@ describe('rls policies with hashed api keys (via supabase sdk)', () => {
     expect(data.length).toBeGreaterThan(0)
   })
 
+  it('can regenerate a hashed API key through the public RPC despite direct apikey update denial', async () => {
+    const keyToRotate = await createHashedApiKey('test-rls-sdk-public-regenerate')
+
+    try {
+      const supabase = createClient(
+        process.env.SUPABASE_URL!,
+        process.env.SUPABASE_ANON_KEY!,
+        {
+          global: {
+            headers: { capgkey: keyToRotate.key },
+          },
+        },
+      )
+
+      const { data, error } = await supabase.rpc('regenerate_hashed_apikey' as any, {
+        p_apikey_id: keyToRotate.id,
+      })
+
+      expect(error).toBeNull()
+      const regenerated = data as { id: number, key: string, key_hash: string } | null
+      expect(regenerated?.id).toBe(keyToRotate.id)
+      expect(regenerated?.key).toBeTruthy()
+      expect(regenerated?.key).not.toBe(keyToRotate.key)
+      expect(regenerated?.key_hash).not.toBe(keyToRotate.key_hash)
+
+      const rotatedSupabase = createClient(
+        process.env.SUPABASE_URL!,
+        process.env.SUPABASE_ANON_KEY!,
+        {
+          global: {
+            headers: { capgkey: regenerated!.key },
+          },
+        },
+      )
+
+      const { data: orgs, error: orgError } = await rotatedSupabase.rpc('get_orgs_v7')
+      expect(orgError).toBeNull()
+      expect(Array.isArray(orgs)).toBe(true)
+      expect(orgs.length).toBeGreaterThan(0)
+    }
+    finally {
+      await deleteApiKey(keyToRotate.id)
+    }
+  })
+
   it('cannot access data with invalid API key', async () => {
     const supabase = createClient(
       process.env.SUPABASE_URL!,
@@ -1062,10 +1085,14 @@ describe('rls policies with hashed api keys (via supabase sdk)', () => {
 })
 
 describe('channels rls blocks direct api-key updates', () => {
-  let allKey: { id: number, key: string, key_hash: string } | null = null
+  let allKey: { id: number, key: string, key_hash: string, rbac_id?: string } | null = null
   let writeKey: { id: number, key: string, key_hash: string } | null = null
   let versionId: number | null = null
+  let otherAppVersionId: number | null = null
+  let deletedAppVersionId: number | null = null
   let channelId: number | null = null
+  let appRbacId: string | null = null
+  const otherAppId = `com.rls.rollout.other.${randomUUID().slice(0, 8)}`
   const versionName = `rls-direct-version-${randomUUID().slice(0, 8)}`
   const channelName = `rls-direct-channel-${randomUUID().slice(0, 8)}`
 
@@ -1082,22 +1109,35 @@ describe('channels rls blocks direct api-key updates', () => {
       appId: APP_NAME_RLS,
       appRoleName: 'app_developer',
     })
+    const apiKeyResult = await pool.query('SELECT rbac_id FROM public.apikeys WHERE id = $1', [allKey.id])
+    allKey.rbac_id = apiKeyResult.rows[0].rbac_id
+    const appResult = await pool.query('SELECT id FROM public.apps WHERE app_id = $1', [APP_NAME_RLS])
+    appRbacId = appResult.rows[0].id
 
-    const versionResult = await pool.query(
-      `INSERT INTO public.app_versions (app_id, name, owner_org, user_id, checksum, storage_provider, r2_path, deleted)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, false)
-       RETURNING id`,
+    versionId = await insertRlsAppVersion({
+      appId: APP_NAME_RLS,
+      name: versionName,
+      orgId: ORG_ID_RLS,
+      userId: USER_ID_RLS,
+    })
+
+    await pool.query(
+      `INSERT INTO public.apps (app_id, owner_org, name, icon_url)
+       VALUES ($1, $2, $3, $4)`,
       [
-        APP_NAME_RLS,
-        versionName,
+        otherAppId,
         ORG_ID_RLS,
-        USER_ID_RLS,
-        `checksum-${versionName}`,
-        'r2',
-        `orgs/${ORG_ID_RLS}/apps/${APP_NAME_RLS}/${versionName}.zip`,
+        `RLS Rollout Other ${versionName}`,
+        'role-binding-test-icon',
       ],
     )
-    versionId = Number(versionResult.rows[0].id)
+
+    otherAppVersionId = await insertRlsAppVersion({
+      appId: otherAppId,
+      name: `${versionName}-other-app`,
+      orgId: ORG_ID_RLS,
+      userId: USER_ID_RLS,
+    })
 
     const channelResult = await pool.query(
       `INSERT INTO public.channels (app_id, name, version, owner_org, created_by, public, allow_emulator)
@@ -1122,6 +1162,16 @@ describe('channels rls blocks direct api-key updates', () => {
     if (versionId) {
       await pool.query('DELETE FROM public.app_versions WHERE id = $1', [versionId])
     }
+
+    if (otherAppVersionId) {
+      await pool.query('DELETE FROM public.app_versions WHERE id = $1', [otherAppVersionId])
+    }
+
+    if (deletedAppVersionId) {
+      await pool.query('DELETE FROM public.app_versions WHERE id = $1', [deletedAppVersionId])
+    }
+
+    await pool.query('DELETE FROM public.apps WHERE app_id = $1', [otherAppId])
 
     if (allKey)
       await deleteApiKey(allKey.id)
@@ -1181,6 +1231,458 @@ describe('channels rls blocks direct api-key updates', () => {
       'UPDATE public.channels SET allow_emulator = false WHERE id = $1',
       [channelId],
     )
+  })
+
+  it('requires channel promote permission for direct rollout target changes', async () => {
+    if (!allKey || !allKey.rbac_id || !appRbacId || !channelId || !versionId)
+      throw new Error('RLS channel test setup did not complete')
+
+    await pool.query(
+      `INSERT INTO public.channel_permission_overrides (
+        principal_type, principal_id, channel_id, permission_key, is_allowed
+      ) VALUES (
+        public.rbac_principal_apikey(),
+        $1,
+        $2,
+        public.rbac_perm_channel_promote_bundle(),
+        false
+      )
+      ON CONFLICT (principal_type, principal_id, channel_id, permission_key)
+      DO UPDATE SET is_allowed = excluded.is_allowed`,
+      [allKey.rbac_id, channelId],
+    )
+
+    try {
+      await expect(execWithRoleClaims(
+        'UPDATE public.channels SET rollout_version = $1 WHERE id = $2 RETURNING id, rollout_version',
+        {
+          role: 'anon',
+          claims: {
+            role: 'anon',
+            aud: 'anon',
+          },
+          headers: { capgkey: allKey.key },
+          params: [versionId, channelId],
+        },
+      )).rejects.toThrow(/NO_RIGHTS/)
+
+      const result = await execWithRoleClaims(
+        'UPDATE public.channels SET allow_emulator = true WHERE id = $1 RETURNING id, allow_emulator',
+        {
+          role: 'anon',
+          claims: {
+            role: 'anon',
+            aud: 'anon',
+          },
+          headers: { capgkey: allKey.key },
+          params: [channelId],
+        },
+      )
+
+      expect(result.rowCount).toBe(1)
+      expect(result.rows[0].allow_emulator).toBe(true)
+    }
+    finally {
+      await pool.query(
+        `DELETE FROM public.channel_permission_overrides
+         WHERE principal_type = public.rbac_principal_apikey()
+           AND principal_id = $1
+           AND channel_id = $2
+           AND permission_key = public.rbac_perm_channel_promote_bundle()`,
+        [allKey.rbac_id, channelId],
+      )
+      await pool.query(
+        `DELETE FROM public.role_bindings
+         WHERE principal_type = public.rbac_principal_apikey()
+           AND principal_id = $1
+           AND app_id = $2
+           AND scope_type = public.rbac_scope_app()`,
+        [allKey.rbac_id, appRbacId],
+      )
+      await pool.query(
+        'UPDATE public.channels SET allow_emulator = false, rollout_version = NULL WHERE id = $1',
+        [channelId],
+      )
+    }
+  })
+
+  it('rejects rollout targets from another app', async () => {
+    if (!channelId || !otherAppVersionId)
+      throw new Error('RLS channel test setup did not complete')
+
+    await expect(pool.query(
+      'UPDATE public.channels SET rollout_version = $1 WHERE id = $2 RETURNING id, rollout_version',
+      [otherAppVersionId, channelId],
+    )).rejects.toThrow(/INVALID_ROLLOUT_VERSION/)
+  })
+
+  it('rejects deleted rollout targets', async () => {
+    if (!channelId)
+      throw new Error('RLS channel test setup did not complete')
+
+    deletedAppVersionId = await insertRlsAppVersion({
+      appId: APP_NAME_RLS,
+      name: `deleted-rollout-${Date.now()}`,
+      orgId: ORG_ID_RLS,
+      userId: USER_ID_RLS,
+    })
+    await pool.query('UPDATE public.app_versions SET deleted = true WHERE id = $1', [deletedAppVersionId])
+
+    await expect(pool.query(
+      'UPDATE public.channels SET rollout_version = $1 WHERE id = $2 RETURNING id, rollout_version',
+      [deletedAppVersionId, channelId],
+    )).rejects.toThrow(/INVALID_ROLLOUT_VERSION/)
+  })
+})
+
+describe('channels RLS direct insert separates creation from initial bundle promotion', () => {
+  let createOnlyKey: { id: number, key: string, rbacId: string } | null = null
+  let createOnlyRoleId: string | null = null
+  let ownerOrgId: string | null = null
+  let versionId: number | null = null
+  let rolloutVersionId: number | null = null
+  let foreignVersionId: number | null = null
+  let deletedVersionId: number | null = null
+  let activeChannelId: number | null = null
+  const createdChannelIds: number[] = []
+  const roleName = `channel_create_only_${randomUUID().replaceAll('-', '_')}`
+  const versionName = `rls-insert-version-${randomUUID().slice(0, 8)}`
+  const rolloutVersionName = `rls-insert-rollout-version-${randomUUID().slice(0, 8)}`
+  const foreignAppId = `com.rls.insert.foreign.${randomUUID().slice(0, 8)}`
+  const foreignVersionName = `rls-insert-foreign-version-${randomUUID().slice(0, 8)}`
+  const deletedVersionName = `rls-insert-deleted-version-${randomUUID().slice(0, 8)}`
+  const emptyChannelName = `rls-insert-empty-${randomUUID().slice(0, 8)}`
+  const versionedChannelName = `rls-insert-versioned-${randomUUID().slice(0, 8)}`
+  const rolloutChannelName = `rls-insert-rollout-${randomUUID().slice(0, 8)}`
+  const foreignVersionChannelName = `rls-insert-foreign-${randomUUID().slice(0, 8)}`
+  const deletedVersionChannelName = `rls-insert-deleted-${randomUUID().slice(0, 8)}`
+
+  beforeAll(async () => {
+    const appResult = await pool.query<{ id: string, owner_org: string }>(
+      'SELECT id, owner_org FROM public.apps WHERE app_id = $1 LIMIT 1',
+      [APP_NAME_RLS],
+    )
+    const app = appResult.rows[0]
+    if (!app)
+      throw new Error(`Unable to resolve app ${APP_NAME_RLS} for channel insert RLS test`)
+    ownerOrgId = app.owner_org
+
+    createOnlyRoleId = randomUUID()
+    const key = randomUUID()
+    const keyResult = await pool.query<{ id: number, rbac_id: string }>(
+      `INSERT INTO public.apikeys (user_id, key, name)
+       VALUES ($1, $2, $3)
+       RETURNING id, rbac_id`,
+      [RLS_TEST_USER_ID, key, `Channel create-only RLS ${roleName}`],
+    )
+    const apiKey = keyResult.rows[0]
+    if (!apiKey)
+      throw new Error('Unable to create channel create-only API key')
+
+    createOnlyKey = { id: Number(apiKey.id), key, rbacId: apiKey.rbac_id }
+
+    await pool.query(
+      `INSERT INTO public.roles (id, name, scope_type, description, priority_rank, is_assignable, created_by)
+       VALUES ($1::uuid, $2, public.rbac_scope_app(), $3, 1, true, $4::uuid)`,
+      [createOnlyRoleId, roleName, 'Test role with channel creation only', RLS_TEST_USER_ID],
+    )
+    await pool.query(
+      `INSERT INTO public.role_permissions (role_id, permission_id)
+       SELECT $1::uuid, id
+       FROM public.permissions
+       WHERE key = public.rbac_perm_app_create_channel()`,
+      [createOnlyRoleId],
+    )
+    await pool.query(
+      `INSERT INTO public.role_bindings (
+        principal_type, principal_id, role_id, scope_type, org_id, app_id, granted_by, reason, is_direct
+      )
+       SELECT
+         public.rbac_principal_apikey(),
+         $1::uuid,
+         roles.id,
+         public.rbac_scope_org(),
+         $2::uuid,
+         NULL::uuid,
+         $3::uuid,
+         'Channel insert RLS membership fixture',
+         true
+       FROM public.roles
+       WHERE roles.name = public.rbac_role_org_member()`,
+      [createOnlyKey.rbacId, app.owner_org, RLS_TEST_USER_ID],
+    )
+    await pool.query(
+      `INSERT INTO public.role_bindings (
+        principal_type, principal_id, role_id, scope_type, org_id, app_id, granted_by, reason, is_direct
+      ) VALUES (
+        public.rbac_principal_apikey(),
+        $1::uuid,
+        $2::uuid,
+        public.rbac_scope_app(),
+        $3::uuid,
+        $4::uuid,
+        $5::uuid,
+        'Channel insert RLS create-only fixture',
+        true
+      )`,
+      [createOnlyKey.rbacId, createOnlyRoleId, app.owner_org, app.id, RLS_TEST_USER_ID],
+    )
+
+    versionId = await insertRlsAppVersion({
+      appId: APP_NAME_RLS,
+      name: versionName,
+      orgId: app.owner_org,
+      userId: RLS_TEST_USER_ID,
+    })
+    rolloutVersionId = await insertRlsAppVersion({
+      appId: APP_NAME_RLS,
+      name: rolloutVersionName,
+      orgId: app.owner_org,
+      userId: RLS_TEST_USER_ID,
+    })
+    await pool.query(
+      `INSERT INTO public.apps (app_id, owner_org, name, icon_url)
+       VALUES ($1, $2::uuid, $3, $4)`,
+      [foreignAppId, app.owner_org, `Foreign channel version ${foreignVersionName}`, 'channel-insert-rls-icon'],
+    )
+    foreignVersionId = await insertRlsAppVersion({
+      appId: foreignAppId,
+      name: foreignVersionName,
+      orgId: app.owner_org,
+      userId: RLS_TEST_USER_ID,
+    })
+    deletedVersionId = await insertRlsAppVersion({
+      appId: APP_NAME_RLS,
+      name: deletedVersionName,
+      orgId: app.owner_org,
+      userId: RLS_TEST_USER_ID,
+    })
+    await pool.query('UPDATE public.app_versions SET deleted = true WHERE id = $1', [deletedVersionId])
+
+    const permissionResult = await pool.query<{ can_create: boolean, can_promote: boolean }>(
+      `SELECT
+        public.rbac_check_permission_direct(
+          public.rbac_perm_app_create_channel(),
+          $1::uuid,
+          $2::uuid,
+          $3,
+          NULL::bigint,
+          $4
+        ) AS can_create,
+        public.rbac_check_permission_direct(
+          public.rbac_perm_channel_promote_bundle(),
+          $1::uuid,
+          $2::uuid,
+          $3,
+          NULL::bigint,
+          $4
+        ) AS can_promote`,
+      [RLS_TEST_USER_ID, app.owner_org, APP_NAME_RLS, createOnlyKey.key],
+    )
+    expect(permissionResult.rows[0]).toEqual({ can_create: true, can_promote: false })
+  })
+
+  afterAll(async () => {
+    await pool.query('DELETE FROM public.channels WHERE id = ANY($1::bigint[])', [createdChannelIds])
+
+    const versionIds = [versionId, rolloutVersionId, foreignVersionId, deletedVersionId]
+      .filter((id): id is number => id != null)
+    if (versionIds.length > 0)
+      await pool.query('DELETE FROM public.app_versions WHERE id = ANY($1::bigint[])', [versionIds])
+
+    await pool.query('DELETE FROM public.apps WHERE app_id = $1', [foreignAppId])
+
+    if (createOnlyKey)
+      await pool.query('DELETE FROM public.role_bindings WHERE principal_id = $1::uuid', [createOnlyKey.rbacId])
+
+    if (createOnlyRoleId) {
+      await pool.query('DELETE FROM public.role_permissions WHERE role_id = $1::uuid', [createOnlyRoleId])
+      await pool.query('DELETE FROM public.roles WHERE id = $1::uuid', [createOnlyRoleId])
+    }
+
+    if (createOnlyKey)
+      await deleteApiKey(createOnlyKey.id)
+  })
+
+  it('allows a create-only API key to insert a channel without a version', async () => {
+    if (!createOnlyKey || !ownerOrgId)
+      throw new Error('Channel create-only API key fixture did not initialize')
+
+    const result = await execWithRoleClaims(
+      `INSERT INTO public.channels (app_id, name, version, owner_org, created_by, public)
+       VALUES ($1, $2, NULL, $3::uuid, $4::uuid, false)`,
+      {
+        role: 'anon',
+        claims: { role: 'anon', aud: 'anon' },
+        headers: { capgkey: createOnlyKey.key },
+        params: [APP_NAME_RLS, emptyChannelName, ownerOrgId, RLS_TEST_USER_ID],
+      },
+    )
+
+    expect(result.rowCount).toBe(1)
+    const insertedChannelResult = await pool.query<{ id: number, version: number | null }>(
+      'SELECT id, version FROM public.channels WHERE app_id = $1 AND name = $2',
+      [APP_NAME_RLS, emptyChannelName],
+    )
+    const insertedChannel = insertedChannelResult.rows[0]
+    if (!insertedChannel)
+      throw new Error('Channel create-only insert did not persist')
+
+    expect(insertedChannel.version).toBeNull()
+    createdChannelIds.push(Number(insertedChannel.id))
+  })
+
+  it('denies a create-only API key from inserting a channel with an initial stable bundle', async () => {
+    if (!createOnlyKey || !ownerOrgId || !versionId)
+      throw new Error('Channel create-only fixture did not initialize')
+
+    await expect(execWithRoleClaims(
+      `INSERT INTO public.channels (app_id, name, version, owner_org, created_by, public)
+       VALUES ($1, $2, $3, $4::uuid, $5::uuid, false)
+       RETURNING id`,
+      {
+        role: 'anon',
+        claims: { role: 'anon', aud: 'anon' },
+        headers: { capgkey: createOnlyKey.key },
+        params: [APP_NAME_RLS, versionedChannelName, versionId, ownerOrgId, RLS_TEST_USER_ID],
+      },
+    )).rejects.toThrow(/PERMISSION_DENIED_CHANNEL_PROMOTE_BUNDLE|NO_RIGHTS|row-level security/i)
+  })
+
+  it('denies a create-only API key from inserting a channel with an initial rollout bundle', async () => {
+    if (!createOnlyKey || !ownerOrgId || !rolloutVersionId)
+      throw new Error('Channel create-only fixture did not initialize')
+
+    await expect(execWithRoleClaims(
+      `INSERT INTO public.channels (app_id, name, rollout_version, owner_org, created_by, public)
+       VALUES ($1, $2, $3, $4::uuid, $5::uuid, false)
+       RETURNING id`,
+      {
+        role: 'anon',
+        claims: { role: 'anon', aud: 'anon' },
+        headers: { capgkey: createOnlyKey.key },
+        params: [APP_NAME_RLS, rolloutChannelName, rolloutVersionId, ownerOrgId, RLS_TEST_USER_ID],
+      },
+    )).rejects.toThrow(/PERMISSION_DENIED_CHANNEL_PROMOTE_BUNDLE|NO_RIGHTS|row-level security/i)
+  })
+
+  it('allows active same-app targets after channel promote permission is granted', async () => {
+    if (!createOnlyKey || !createOnlyRoleId || !ownerOrgId || !versionId || !rolloutVersionId)
+      throw new Error('Channel create-only fixture did not initialize')
+
+    await pool.query(
+      `INSERT INTO public.role_permissions (role_id, permission_id)
+       SELECT $1::uuid, id
+       FROM public.permissions
+       WHERE key = public.rbac_perm_channel_promote_bundle()
+       ON CONFLICT DO NOTHING`,
+      [createOnlyRoleId],
+    )
+
+    const stableResult = await execWithRoleClaims(
+      `INSERT INTO public.channels (app_id, name, version, owner_org, created_by, public)
+       VALUES ($1, $2, $3, $4::uuid, $5::uuid, false)`,
+      {
+        role: 'anon',
+        claims: { role: 'anon', aud: 'anon' },
+        headers: { capgkey: createOnlyKey.key },
+        params: [APP_NAME_RLS, versionedChannelName, versionId, ownerOrgId, RLS_TEST_USER_ID],
+      },
+    )
+    expect(stableResult.rowCount).toBe(1)
+    const stableChannelResult = await pool.query<{ id: number, version: number | null }>(
+      'SELECT id, version FROM public.channels WHERE app_id = $1 AND name = $2',
+      [APP_NAME_RLS, versionedChannelName],
+    )
+    const stableChannel = stableChannelResult.rows[0]
+    if (!stableChannel)
+      throw new Error('Channel promotion insert did not persist')
+
+    expect(Number(stableChannel.version)).toBe(versionId)
+    activeChannelId = Number(stableChannel.id)
+    createdChannelIds.push(activeChannelId)
+
+    const rolloutResult = await execWithRoleClaims(
+      `INSERT INTO public.channels (app_id, name, rollout_version, owner_org, created_by, public)
+       VALUES ($1, $2, $3, $4::uuid, $5::uuid, false)`,
+      {
+        role: 'anon',
+        claims: { role: 'anon', aud: 'anon' },
+        headers: { capgkey: createOnlyKey.key },
+        params: [APP_NAME_RLS, rolloutChannelName, rolloutVersionId, ownerOrgId, RLS_TEST_USER_ID],
+      },
+    )
+    expect(rolloutResult.rowCount).toBe(1)
+    const rolloutChannelResult = await pool.query<{ id: number, rollout_version: number | null }>(
+      'SELECT id, rollout_version FROM public.channels WHERE app_id = $1 AND name = $2',
+      [APP_NAME_RLS, rolloutChannelName],
+    )
+    const rolloutChannel = rolloutChannelResult.rows[0]
+    if (!rolloutChannel)
+      throw new Error('Channel rollout promotion insert did not persist')
+
+    expect(Number(rolloutChannel.rollout_version)).toBe(rolloutVersionId)
+    createdChannelIds.push(Number(rolloutChannel.id))
+  })
+
+  it('rejects foreign and deleted stable targets even with channel promote permission', async () => {
+    if (!createOnlyKey || !ownerOrgId || !foreignVersionId || !deletedVersionId)
+      throw new Error('Channel create-only fixture did not initialize')
+
+    for (const [channelName, targetVersionId] of [
+      [foreignVersionChannelName, foreignVersionId],
+      [deletedVersionChannelName, deletedVersionId],
+    ] as const) {
+      await expect(execWithRoleClaims(
+        `INSERT INTO public.channels (app_id, name, version, owner_org, created_by, public)
+         VALUES ($1, $2, $3, $4::uuid, $5::uuid, false)`,
+        {
+          role: 'anon',
+          claims: { role: 'anon', aud: 'anon' },
+          headers: { capgkey: createOnlyKey.key },
+          params: [APP_NAME_RLS, channelName, targetVersionId, ownerOrgId, RLS_TEST_USER_ID],
+        },
+      )).rejects.toThrow(/INVALID_CHANNEL_VERSION/)
+    }
+  })
+
+  it('does not disclose or change stable targets when a raw API key cannot read the channel', async () => {
+    if (!createOnlyKey || !createOnlyRoleId || !activeChannelId || !foreignVersionId || !deletedVersionId)
+      throw new Error('Channel create-only fixture did not initialize')
+
+    await pool.query(
+      `INSERT INTO public.role_permissions (role_id, permission_id)
+       SELECT $1::uuid, id
+       FROM public.permissions
+       WHERE key = public.rbac_perm_channel_update_settings()
+       ON CONFLICT DO NOTHING`,
+      [createOnlyRoleId],
+    )
+
+    const before = await pool.query<{ version: number | null }>(
+      'SELECT version FROM public.channels WHERE id = $1',
+      [activeChannelId],
+    )
+    const stableVersion = before.rows[0]?.version
+
+    for (const targetVersionId of [foreignVersionId, deletedVersionId]) {
+      const result = await execWithRoleClaims(
+        'UPDATE public.channels SET version = $1 WHERE id = $2',
+        {
+          role: 'anon',
+          claims: { role: 'anon', aud: 'anon' },
+          headers: { capgkey: createOnlyKey.key },
+          params: [targetVersionId, activeChannelId],
+        },
+      )
+      expect(result.rowCount).toBe(0)
+    }
+
+    const after = await pool.query<{ version: number | null }>(
+      'SELECT version FROM public.channels WHERE id = $1',
+      [activeChannelId],
+    )
+    expect(after.rows[0]?.version).toBe(stableVersion)
   })
 })
 

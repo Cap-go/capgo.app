@@ -44,6 +44,10 @@ export type AndroidOnboardingStep
     | 'gcp-project-create-name'
   // Phase 4.5 — Pick the Android package name to grant SA access to
     | 'android-package-select'
+  // Phase 4.6 — Verify the chosen package actually exists in the user's Play
+  // Console (apps:search). Generate path only; gates provisioning because the
+  // per-package SA invite 400s on a package that doesn't exist yet.
+    | 'android-app-verify'
   // Phase 5 — Automated provisioning (create project if needed, enable API, SA, key, invite)
     | 'gcp-setup-running'
   // Phase 6 — Save + build
@@ -210,6 +214,11 @@ export interface AndroidOnboardingProgress extends TailProgress {
     playAccountChosen?: PlayDeveloperAccountChoice
     gcpProjectChosen?: GcpProjectChoice
     androidPackageChosen?: AndroidPackageChoice
+    /** Set once the chosen package was verified to exist in the user's Play
+     *  Console (apps:search exact-match), or the user explicitly proceeded past
+     *  a degraded/un-verifiable check. Gates `gcp-setup-running` so the
+     *  per-package SA invite never 400s on a non-existent package. */
+    playAppVerified?: { packageName: string, verified: boolean }
     serviceAccountProvisioned?: ServiceAccountProvisioned
     playInviteProvisioned?: PlayInviteProvisioned
     // ── Post-save "tail" milestones (additive — present only once the
@@ -311,6 +320,7 @@ export const ANDROID_STEP_PROGRESS: Record<AndroidOnboardingStep, number> = {
   'gcp-project-create-name': 60,
 
   'android-package-select': 65,
+  'android-app-verify': 67,
 
   'gcp-setup-running': 70,
 
@@ -390,6 +400,7 @@ export function getAndroidPhaseLabel(step: AndroidOnboardingStep): string {
     case 'gcp-projects-select':
     case 'gcp-project-create-name':
     case 'android-package-select':
+    case 'android-app-verify':
     case 'gcp-setup-running':
       return 'Step 3 of 4 · Google Cloud Project'
     case 'saving-credentials':

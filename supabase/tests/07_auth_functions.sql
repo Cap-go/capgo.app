@@ -1,7 +1,7 @@
 BEGIN;
 
 
-SELECT plan(16);
+SELECT plan(8);
 
 -- Test is_platform_admin wrapper
 SELECT tests.authenticate_as('test_admin');
@@ -74,100 +74,35 @@ SELECT
 
 SELECT tests.clear_authentication();
 
--- Test is_allowed_capgkey
 SELECT
     is(
-        is_allowed_capgkey('ae6e7458-c46d-4c00-aa3b-153b0b8520ea', '{all}'),
-        true,
-        'is_allowed_capgkey test - key exists'
-    );
-
-SELECT
-    is(
-        is_allowed_capgkey('ae6e7458-c46d-4c00-aa3b-153b0b8520ea', '{read}'),
-        true,
-        'is_allowed_capgkey test - key existence is mode-independent after V2 migration'
-    );
-
-SELECT
-    is(
-        is_allowed_capgkey('ae6e7458-c46d-4c00-aa3b-153b0b8520ec', '{all}'),
-        false,
-        'is_allowed_capgkey test - key does not exist'
-    );
-
--- Test is_allowed_capgkey with app_id
-SELECT
-    is(
-        is_allowed_capgkey(
-            'ae6e7458-c46d-4c00-aa3b-153b0b8520ea',
-            '{all}',
-            'com.demo.app'
+        (
+            SELECT count(*)::int
+            FROM pg_proc p
+            JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname = 'public'
+                AND p.proname = 'is_allowed_capgkey'
+                AND pg_get_function_identity_arguments(p.oid) ~ 'key_mode'
         ),
-        true,
-        'is_allowed_capgkey test with app_id - key has app RBAC permission'
+        0,
+        'is_allowed_capgkey old key_mode overloads are removed'
     );
 
 SELECT
     is(
-        is_allowed_capgkey(
-            'ae6e7458-c46d-4c00-aa3b-153b0b8520ea',
-            '{all}',
-            'com.demoadmin.app'
+        (
+            SELECT count(*)::int
+            FROM pg_proc p
+            JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname = 'public'
+                AND p.proname = 'is_allowed_capgkey'
+                AND pg_get_function_identity_arguments(p.oid) IN (
+                    'apikey text, keymode text[]',
+                    'apikey text, keymode text[], appid character varying'
+                )
         ),
-        false,
-        'is_allowed_capgkey test with app_id - user is not app owner'
-    );
-
--- ============================================================================
--- Test is_allowed_capgkey with hashed API keys
--- ============================================================================
--- Test data is seeded in seed.sql:
---   - id=100: hashed key 'test-hashed-apikey-for-auth-test' (all mode)
---   - id=101: expired hashed key 'expired-hashed-key-for-test' (all mode)
---   - id=102: expired plain key 'expired-plain-key-for-test' (all mode)
-
-SELECT
-    is(
-        is_allowed_capgkey('test-hashed-apikey-for-auth-test', '{all}'),
-        true,
-        'is_allowed_capgkey test - hashed key exists'
-    );
-
-SELECT
-    is(
-        is_allowed_capgkey('test-hashed-apikey-for-auth-test', '{read}'),
-        true,
-        'is_allowed_capgkey test - hashed key existence is mode-independent after V2 migration'
-    );
-
-SELECT
-    is(
-        is_allowed_capgkey(
-            'test-hashed-apikey-for-auth-test',
-            '{all}',
-            'com.demo.app'
-        ),
-        true,
-        'is_allowed_capgkey test with app_id - hashed key user is app owner'
-    );
-
--- ============================================================================
--- Test is_allowed_capgkey with expired API keys
--- ============================================================================
-
-SELECT
-    is(
-        is_allowed_capgkey('expired-hashed-key-for-test', '{all}'),
-        false,
-        'is_allowed_capgkey test - expired hashed key should fail'
-    );
-
-SELECT
-    is(
-        is_allowed_capgkey('expired-plain-key-for-test', '{all}'),
-        false,
-        'is_allowed_capgkey test - expired plain key should fail'
+        2,
+        'is_allowed_capgkey keeps only RBAC-backed text[] compatibility wrappers'
     );
 
 -- ============================================================================

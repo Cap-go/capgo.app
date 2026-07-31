@@ -44,7 +44,7 @@ async function getChannel() {
           name,
           public,
           owner_org,
-          version (
+          version:app_versions!channels_version_fkey(
             id,
             name,
             app_id,

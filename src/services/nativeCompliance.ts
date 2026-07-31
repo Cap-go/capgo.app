@@ -3,6 +3,7 @@ import { Capacitor } from '@capacitor/core'
 const nativeExternalPurchaseRestrictedPaths = [
   '/billing',
   '/invitation',
+  '/onboarding/app',
   '/onboarding/invitation',
   '/onboarding/organization',
   '/register',
@@ -40,7 +41,9 @@ export function getNativeExternalPurchaseRedirect(path: string) {
   }
 
   if (
-    normalizedPath === '/onboarding/invitation'
+    normalizedPath === '/onboarding/app'
+    || normalizedPath.startsWith('/onboarding/app/')
+    || normalizedPath === '/onboarding/invitation'
     || normalizedPath.startsWith('/onboarding/invitation/')
     || normalizedPath === '/onboarding/organization'
     || normalizedPath.startsWith('/onboarding/organization/')

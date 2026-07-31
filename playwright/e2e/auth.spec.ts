@@ -49,10 +49,12 @@ test.describe('Authentication', () => {
     await page.waitForURL(/\/(apps|dashboard)(\/|$)/)
   })
 
-  test('should navigate to forgot password page', async ({ page }) => {
-    await continueToPasswordStep(page, 'test@capgo.app')
+  test('should keep email when navigating to forgot password page', async ({ page }) => {
+    const email = 'test@capgo.app'
+    await continueToPasswordStep(page, email)
     await page.click('[data-test="forgot-password"]')
     await expect(page).toHaveURL('/forgot_password')
+    await expect(page.locator('[data-test="email"]')).toHaveValue(email)
   })
 
   test('should navigate to registration page', async ({ page }) => {

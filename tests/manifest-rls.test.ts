@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
-  APIKEY_TEST_ALL,
+  APIKEY_TEST_ORG_SUPER_ADMIN,
   createDirectApiKeyWithBindings,
-  fetchWithRetry,
+  executeSQL,
+  fetchTestRequest,
   getAuthHeaders,
   getAuthHeadersForCredentials,
   getSupabaseClient,
@@ -39,6 +40,65 @@ let readOnlyVersionId: number
 
 const restApiKeyHeaders = {
   'Content-Type': 'application/json',
+}
+
+async function createUserOrgBinding(orgId: string, userId: string, roleName: string) {
+  await executeSQL(`
+    INSERT INTO public.role_bindings (
+      principal_type,
+      principal_id,
+      role_id,
+      scope_type,
+      org_id,
+      granted_by,
+      reason,
+      is_direct
+    )
+    SELECT
+      public.rbac_principal_user(),
+      $1::uuid,
+      roles.id,
+      public.rbac_scope_org(),
+      $2::uuid,
+      $1::uuid,
+      'Manifest RLS test binding',
+      true
+    FROM public.roles roles
+    WHERE roles.name = $3
+      AND roles.scope_type = public.rbac_scope_org()
+    ON CONFLICT DO NOTHING
+  `, [userId, orgId, roleName])
+}
+
+async function createUserAppBinding(orgId: string, userId: string, appId: string, roleName: string) {
+  await executeSQL(`
+    INSERT INTO public.role_bindings (
+      principal_type,
+      principal_id,
+      role_id,
+      scope_type,
+      org_id,
+      app_id,
+      granted_by,
+      reason,
+      is_direct
+    )
+    SELECT
+      public.rbac_principal_user(),
+      $1::uuid,
+      roles.id,
+      public.rbac_scope_app(),
+      $2::uuid,
+      apps.id,
+      $1::uuid,
+      'Manifest RLS test app binding',
+      true
+    FROM public.roles roles
+    INNER JOIN public.apps apps ON apps.app_id = $3
+    WHERE roles.name = $4
+      AND roles.scope_type = public.rbac_scope_app()
+    ON CONFLICT DO NOTHING
+  `, [userId, orgId, appId, roleName])
 }
 
 interface ManifestRow {
@@ -78,7 +138,7 @@ async function fetchManifestRows(headers: Record<string, string>, appVersionId: 
   if (!anonKey)
     throw new Error('SUPABASE_ANON_KEY is missing')
 
-  const response = await fetchWithRetry(getRestManifestUrl({
+  const response = await fetchTestRequest(getRestManifestUrl({
     select: 'id,file_name,file_hash,s3_path,app_version_id',
     app_version_id: `eq.${appVersionId}`,
   }), {
@@ -99,7 +159,7 @@ async function insertManifestRow(headers: Record<string, string>, row: Omit<Mani
   if (!anonKey)
     throw new Error('SUPABASE_ANON_KEY is missing')
 
-  const response = await fetchWithRetry(getRestManifestUrl({
+  const response = await fetchTestRequest(getRestManifestUrl({
     select: 'id,file_name,file_hash,s3_path,app_version_id',
   }), {
     method: 'POST',
@@ -122,7 +182,7 @@ async function deleteManifestRow(headers: Record<string, string>, manifestId: nu
   if (!anonKey)
     throw new Error('SUPABASE_ANON_KEY is missing')
 
-  const response = await fetchWithRetry(getRestManifestUrl({
+  const response = await fetchTestRequest(getRestManifestUrl({
     select: 'id',
     id: `eq.${manifestId}`,
   }), {
@@ -210,8 +270,10 @@ beforeAll(async () => {
   await supabase.from('org_users').insert({
     org_id: READ_ONLY_ORG_ID,
     user_id: USER_ID_NONMEMBER,
-    user_right: 'read',
+    rbac_role_name: 'org_member',
   }).throwOnError()
+  await createUserOrgBinding(READ_ONLY_ORG_ID, USER_ID_NONMEMBER, 'org_member')
+  await createUserAppBinding(READ_ONLY_ORG_ID, USER_ID_NONMEMBER, APP_READ_ONLY, 'app_reader')
 
   await supabase.from('manifest').insert([
     {
@@ -285,7 +347,7 @@ describe('manifest RLS', () => {
     expect(data[0]?.file_name).toBe('other-entry.js')
   })
 
-  it.concurrent('allows a read-only org member to read manifest entries for their own org', async () => {
+  it.concurrent('allows an app reader binding to read manifest entries for its app', async () => {
     const { response, data } = await fetchManifestRows(authHeadersNonMember, readOnlyVersionId)
 
     expect(response.status).toBe(200)
@@ -296,7 +358,7 @@ describe('manifest RLS', () => {
   it.concurrent('allows an API key for the owning org to read manifest entries', async () => {
     const { response, data } = await fetchManifestRows({
       ...restApiKeyHeaders,
-      capgkey: APIKEY_TEST_ALL,
+      capgkey: APIKEY_TEST_ORG_SUPER_ADMIN,
     }, ownVersionId)
 
     expect(response.status).toBe(200)
@@ -327,7 +389,7 @@ describe('manifest RLS', () => {
     expect(JSON.stringify(body).toLowerCase()).toContain('row-level security')
   })
 
-  it('prevents a read-only org member from inserting manifest entries', async () => {
+  it('prevents an app reader binding from inserting manifest entries', async () => {
     const { response, body } = await insertManifestRow(authHeadersNonMember, {
       app_version_id: readOnlyVersionId,
       file_name: 'blocked-readonly.js',
@@ -378,7 +440,7 @@ describe('manifest RLS', () => {
       .throwOnError()
   })
 
-  it('prevents a read-only org member from deleting manifest entries', async () => {
+  it('prevents an app reader binding from deleting manifest entries', async () => {
     const { data: createdRow, error: createError } = await getSupabaseClient()
       .from('manifest')
       .insert({

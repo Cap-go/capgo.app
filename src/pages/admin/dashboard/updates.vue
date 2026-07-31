@@ -10,7 +10,9 @@ import { useRouter } from 'vue-router'
 import AdminFilterBar from '~/components/admin/AdminFilterBar.vue'
 import AdminMultiLineChart from '~/components/admin/AdminMultiLineChart.vue'
 import ChartCard from '~/components/dashboard/ChartCard.vue'
+import DeliveryLatencyPanel from '~/components/dashboard/DeliveryLatencyPanel.vue'
 import PageLoader from '~/components/PageLoader.vue'
+import { formatNumberValue, formatOneDecimal } from '~/services/formatLocale'
 import { useAdminDashboardStore } from '~/stores/adminDashboard'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
@@ -47,6 +49,10 @@ const globalStatsTrendData = ref<Array<{
 }>>([])
 
 const isLoadingGlobalStatsTrend = ref(false)
+const deliveryLatencyDays = computed(() => {
+  const { start, end } = adminStore.activeDateRange
+  return Math.max(1, Math.min(365, Math.ceil((end.getTime() - start.getTime()) / 86_400_000)))
+})
 
 async function loadGlobalStatsTrend() {
   isLoadingGlobalStatsTrend.value = true
@@ -201,7 +207,7 @@ displayStore.defaultBack = '/dashboard'
                   Total Updates Today
                 </p>
                 <p v-if="latestGlobalStats" class="mt-2 text-3xl font-bold text-primary">
-                  {{ latestGlobalStats.updates.toLocaleString() }}
+                  {{ formatNumberValue(latestGlobalStats.updates) }}
                 </p>
                 <p v-else class="mt-2 text-3xl font-bold text-primary">
                   0
@@ -224,7 +230,7 @@ displayStore.defaultBack = '/dashboard'
                   Success Rate
                 </p>
                 <p v-if="latestGlobalStats" class="mt-2 text-3xl font-bold text-success">
-                  {{ latestGlobalStats.success_rate.toFixed(1) }}%
+                  {{ formatOneDecimal(latestGlobalStats.success_rate) }}%
                 </p>
                 <p v-else class="mt-2 text-3xl font-bold text-success">
                   0%
@@ -289,6 +295,8 @@ displayStore.defaultBack = '/dashboard'
               />
             </ChartCard>
           </div>
+
+          <DeliveryLatencyPanel scope="platform" :days="deliveryLatencyDays" hide-period-selector />
         </div>
       </div>
     </div>

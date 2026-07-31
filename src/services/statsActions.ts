@@ -30,9 +30,16 @@ export const statsActionFilters = [
   ['action-download-manifest-file-fail', 'download_manifest_file_fail'],
   ['action-download-manifest-checksum-fail', 'download_manifest_checksum_fail'],
   ['action-download-manifest-brotli-fail', 'download_manifest_brotli_fail'],
+  ['action-finish-download-fail', 'finish_download_fail'],
+  ['action-manifest-path-fail', 'manifest_path_fail'],
   ['action-decrypt-fail', 'decrypt_fail'],
+  ['action-checksum-required', 'checksum_required'],
+  ['action-insufficient-disk-space', 'insufficient_disk_space'],
   ['action-app-moved-to-foreground', 'app_moved_to_foreground'],
   ['action-app-moved-to-background', 'app_moved_to_background'],
+  ['action-app-launch-start', 'app_launch_start'],
+  ['action-app-launch-ready', 'app_launch_ready'],
+  ['action-app-launch-timeout', 'app_launch_timeout'],
   ['action-app-crash', 'app_crash'],
   ['action-app-crash-native', 'app_crash_native'],
   ['action-app-anr', 'app_anr'],
@@ -47,6 +54,8 @@ export const statsActionFilters = [
   ['action-webview-unclean-restart', 'webview_unclean_restart'],
   ['action-webview-render-process-gone', 'webview_render_process_gone'],
   ['action-webview-content-process-terminated', 'webview_content_process_terminated'],
+  ['action-webview-dom-content-loaded', 'webview_dom_content_loaded'],
+  ['action-webview-page-loaded', 'webview_page_loaded'],
   ['action-os-version-changed', 'os_version_changed'],
   ['action-native-app-version-changed', 'native_app_version_changed'],
   ['action-uninstall', 'uninstall'],
@@ -74,17 +83,55 @@ export const statsActionFilters = [
   ['action-set-channel', 'setChannel'],
   ['action-get-channel', 'getChannel'],
   ['action-rate-limited', 'rateLimited'],
+  ['action-rate-limit-reached', 'rate_limit_reached'],
   ['action-disable-auto-update', 'disableAutoUpdate'],
   ['action-invalid-ip', 'InvalidIp'],
   ['action-blocked-by-server-url', 'blocked_by_server_url'],
   ['action-backend-refusal', 'backend_refusal'],
   ['action-custom-id-blocked', 'customIdBlocked'],
+  ['action-set-next', 'set_next'],
 ] as const
 
 export const filterToAction: Record<string, string> = Object.fromEntries(statsActionFilters)
 export const actionToFilter: Record<string, string> = Object.fromEntries(
   statsActionFilters.map(([filterKey, actionValue]) => [actionValue, filterKey]),
 )
+
+const failureActions = new Set<string>([
+  'set_fail',
+  'update_fail',
+  'download_fail',
+  'windows_path_fail',
+  'canonical_path_fail',
+  'directory_path_fail',
+  'unzip_fail',
+  'low_mem_fail',
+  'download_manifest_file_fail',
+  'download_manifest_checksum_fail',
+  'download_manifest_brotli_fail',
+  'decrypt_fail',
+  'app_crash',
+  'app_crash_native',
+  'app_anr',
+  'app_killed_low_memory',
+  'app_killed_excessive_resource_usage',
+  'app_initialization_failure',
+  'webview_javascript_error',
+  'webview_unhandled_rejection',
+  'webview_resource_error',
+  'webview_security_policy_violation',
+  'webview_unclean_restart',
+  'webview_render_process_gone',
+  'webview_content_process_terminated',
+  'cannotGetBundle',
+  'checksum_fail',
+  'blocked_by_server_url',
+  'backend_refusal',
+])
+
+export const failureActionFilterKeys = statsActionFilters
+  .filter(([, actionValue]) => failureActions.has(actionValue))
+  .map(([filterKey]) => filterKey)
 
 export function createActionFilterState(): Record<string, boolean> {
   return Object.fromEntries(statsActionFilters.map(([filterKey]) => [filterKey, false]))

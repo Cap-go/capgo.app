@@ -13,7 +13,6 @@ import {
   getCompatibilityDetails,
   getConfig,
   isCompatible,
-  OrganizationPerm,
 } from '../utils'
 
 interface CompatibilityResult {
@@ -68,7 +67,7 @@ export async function checkCompatibilityInternal(
     supabase,
     enrichedOptions.apikey,
     resolvedAppId,
-    OrganizationPerm.read,
+    'app.read_bundles',
     silent,
     true,
   )

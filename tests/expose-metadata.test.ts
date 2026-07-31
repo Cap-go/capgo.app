@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import {
   APP_NAME,
-  fetchWithRetry,
+  fetchTestRequest,
   getBaseData,
   getEndpointUrl,
   getSupabaseClient,
@@ -18,6 +18,8 @@ import {
 
 const id = randomUUID()
 const APP_NAME_METADATA = `${APP_NAME}.${id}`
+const USE_CLOUDFLARE = process.env.USE_CLOUDFLARE_WORKERS === 'true'
+const describeBackend = describe.skipIf(USE_CLOUDFLARE)
 
 interface UpdateRes {
   error?: string
@@ -30,20 +32,24 @@ interface UpdateRes {
 }
 
 beforeAll(async () => {
+  if (USE_CLOUDFLARE)
+    return
   await resetAndSeedAppData(APP_NAME_METADATA)
 })
 
 afterAll(async () => {
+  if (USE_CLOUDFLARE)
+    return
   await resetAppData(APP_NAME_METADATA)
   await resetAppDataStats(APP_NAME_METADATA)
 })
 
-describe('expose_metadata feature', () => {
+describeBackend('expose_metadata feature', () => {
   const supabase = getSupabaseClient()
 
   describe('[PUT] /app - expose_metadata field', () => {
     it('should set expose_metadata to true via API', async () => {
-      const response = await fetchWithRetry(`${getEndpointUrl('/app')}/${APP_NAME_METADATA}`, {
+      const response = await fetchTestRequest(`${getEndpointUrl('/app')}/${APP_NAME_METADATA}`, {
         method: 'PUT',
         headers,
         body: JSON.stringify({
@@ -74,7 +80,7 @@ describe('expose_metadata feature', () => {
         .eq('app_id', APP_NAME_METADATA)
 
       // Then set to false via API
-      const response = await fetchWithRetry(`${getEndpointUrl('/app')}/${APP_NAME_METADATA}`, {
+      const response = await fetchTestRequest(`${getEndpointUrl('/app')}/${APP_NAME_METADATA}`, {
         method: 'PUT',
         headers,
         body: JSON.stringify({
@@ -100,7 +106,7 @@ describe('expose_metadata feature', () => {
     it('should default expose_metadata to false for new apps', async () => {
       const newAppId = `${APP_NAME}.${randomUUID()}`
 
-      const createResponse = await fetchWithRetry(`${getEndpointUrl('/app')}`, {
+      const createResponse = await fetchTestRequest(`${getEndpointUrl('/app')}`, {
         method: 'POST',
         headers,
         body: JSON.stringify({
@@ -155,7 +161,7 @@ describe('expose_metadata feature', () => {
         })
         .eq('customer_id', STRIPE_INFO_CUSTOMER_ID)
 
-      // Add link and comment to the default version (1.0.0)
+      // Add link and comment to the default version:app_versions!channels_version_fkey(1.0.0)
       const { data, error } = await supabase
         .from('app_versions')
         .update({

@@ -156,14 +156,17 @@ async function logOut() {
 
     <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions?.title === t('log-as')" to="#dialog-v2-content" defer>
       <div class="w-full">
+        <label for="log-as-input" class="sr-only">{{ t('user-email-or-org-id') }}</label>
         <input
+          id="log-as-input"
           v-model="logAsInput"
           type="text"
           :placeholder="t('user-email-or-org-id')"
+          :aria-label="t('user-email-or-org-id')"
           class="p-3 w-full rounded-lg border border-gray-300 dark:text-white dark:bg-gray-800 dark:border-gray-600"
           @keydown.enter="$event.preventDefault()"
         >
       </div>
-    </Teleport>
+    </teleport>
   </div>
 </template>

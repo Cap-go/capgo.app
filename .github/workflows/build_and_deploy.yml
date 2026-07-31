@@ -42,10 +42,10 @@ jobs:
 
   # Tests already passed before tag was created, so just build and deploy
   supabase_deploy:
-    needs: changes
-    if: ${{ needs.changes.outputs.supabase == 'true' }}
+    needs: [changes, read_replica_schema]
+    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.supabase == 'true' && (needs.read_replica_schema.result == 'success' || needs.read_replica_schema.result == 'skipped') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     name: Build code and deploy to Supabase
     permissions:
       contents: read
@@ -72,7 +72,6 @@ jobs:
         run: |
           echo "SUPABASE_DB_PASSWORD=${{ secrets.SUPABASE_DB_PASS_ALPHA }}" >> $GITHUB_ENV
           echo "SUPABASE_PROJECT_ID=${{ secrets.SUPABASE_PROJECT_ID_ALPHA }}" >> $GITHUB_ENV
-
       - name: Set Supabase credentials (PROD)
         if: env.SUPA_ENV == 'PROD'
         run: |
@@ -82,16 +81,8 @@ jobs:
         run: bun install
       - name: Install Supabase CLI
         uses: supabase/setup-cli@v2.0.0
-        # Pinned to 2.98.2 because Supabase CLI v2.99.0 (2026-05-18) ships
-        # release assets with version in the filename (supabase_2.99.0_linux_amd64.tar.gz)
-        # while setup-cli@v2.0.0 hardcodes the unversioned name
-        # (supabase_linux_amd64.tar.gz) for any version >= 1.28.0, causing 404.
-        # Revert to `latest` once setup-cli ships a fix or Supabase restores
-        # the unversioned assets. Tracking: https://github.com/supabase/setup-cli
         with:
-          version: 2.98.2
-      - name: Show Supabase CLI version
-        run: supabase --version
+          version: 2.109.1
       - name: Prepare Supabase
         run: supabase link --project-ref ${{ env.SUPABASE_PROJECT_ID }}
         env:
@@ -103,13 +94,44 @@ jobs:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_TOKEN }}
         run: supabase functions deploy
 
+  read_replica_schema:
+    needs: changes
+    if: ${{ needs.changes.result == 'success' && needs.changes.outputs.supabase == 'true' && !contains(github.ref_name, '-alpha') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    name: Reconcile production read-replica schema
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Setup bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Setup Google Cloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+      - name: Install dependencies
+        run: bun install
+      - name: Reconcile the Google subscriber through server-side Cloud SQL import
+        env:
+          GOOGLE_SERVICE_ACCOUNT_BASE64: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
+        run: |
+          credentials_file="$(mktemp)"
+          trap 'rm -f "$credentials_file"' EXIT
+          printf '%s' "$GOOGLE_SERVICE_ACCOUNT_BASE64" | base64 --decode > "$credentials_file"
+          gcloud auth activate-service-account --key-file="$credentials_file"
+          bun scripts/sync-read-replica-schema.ts
+
   deploy_webapp:
-    needs: [changes, supabase_deploy]
-    if: ${{ always() && needs.changes.result == 'success' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') }}
+    needs: [changes, supabase_deploy, read_replica_schema]
+    if: ${{ always() && needs.changes.result == 'success' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') && (needs.read_replica_schema.result == 'success' || needs.read_replica_schema.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
+    outputs:
+      native_build_needed: ${{ steps.release_check.outputs.native_build_needed }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -134,6 +156,25 @@ jobs:
             echo "ENV=prod" >> $GITHUB_ENV
             echo "CHANNEL=production" >> $GITHUB_ENV
           fi
+      - name: Check if native build is required
+        id: release_check
+        env:
+          CAPGO_TOKEN: ${{ secrets.CAPGO_TOKEN }}
+        run: |
+          set +e
+          bunx @capgo/cli@latest build needed --channel "${{ env.CHANNEL }}"
+          exit_code=$?
+          set -e
+          if [ "$exit_code" -eq 0 ]; then
+            echo "native_build_needed=false" >> "$GITHUB_OUTPUT"
+            echo "Release type: OTA"
+          elif [ "$exit_code" -eq 1 ]; then
+            echo "native_build_needed=true" >> "$GITHUB_OUTPUT"
+            echo "Release type: native"
+          else
+            echo "build needed check failed with exit code $exit_code"
+            exit "$exit_code"
+          fi
       - name: Build
         run: bun ${{ env.ENV == 'prod' && 'build:mobile' || 'build:dev:mobile' }}
         env:
@@ -141,21 +182,19 @@ jobs:
           VITE_FIREBASE_CONFIG: ${{ secrets.VITE_FIREBASE_CONFIG }}
       - name: Generate AI changelog
         id: changelog
-        uses: mistricky/ccc@v0.2.6
-        with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          github_token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
-          model: claude-sonnet-4-5-20250929
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 24
+        continue-on-error: true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: bun run changelog:ai
       - name: Publish CF console
         run: bun run deploy:cloudflare:console:${{ env.ENV }}
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      - name: Deploy to Capgo
-        run: bunx @capgo/cli@latest bundle upload --channel ${{ env.CHANNEL }}  --delta
+      - name: Deploy OTA bundle to Capgo
+        if: steps.release_check.outputs.native_build_needed == 'false'
+        run: bunx @capgo/cli@latest bundle upload --channel ${{ env.CHANNEL }} --delta
         env:
           CAPGO_TOKEN: ${{ secrets.CAPGO_TOKEN }}
       - name: Create GitHub release
@@ -165,18 +204,18 @@ jobs:
           body: |
             ## 🆕 Changelog
 
-            ${{ steps.changelog.outputs.result }}
+            ${{ steps.changelog.outputs.result || '_Changelog was not generated automatically for this release._' }}
 
             ---
 
-            🔗 **Full Changelog**: https://github.com/${{ github.repository }}/compare/${{ steps.changelog.outputs.from_tag }}...${{ steps.changelog.outputs.to_tag }}
+            🔗 **Full Changelog**: https://github.com/${{ github.repository }}/compare/${{ steps.changelog.outputs.from_tag || github.ref_name }}...${{ steps.changelog.outputs.to_tag || github.ref_name }}
           make_latest: true
           token: "${{ secrets.PERSONAL_ACCESS_TOKEN }}"
           prerelease: ${{ contains(github.ref, '-alpha.') }}
 
   deploy_api:
-    needs: [changes, supabase_deploy]
-    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.api == 'true' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') }}
+    needs: [changes, supabase_deploy, read_replica_schema]
+    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.api == 'true' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') && (needs.read_replica_schema.result == 'success' || needs.read_replica_schema.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -205,8 +244,8 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
   deploy_translation_worker:
-    needs: [changes, supabase_deploy]
-    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.translation == 'true' && (needs.supabase_deploy.result == 'success' || (needs.supabase_deploy.result == 'skipped' && needs.changes.outputs.supabase != 'true')) }}
+    needs: [changes, supabase_deploy, read_replica_schema]
+    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.translation == 'true' && (needs.supabase_deploy.result == 'success' || (needs.supabase_deploy.result == 'skipped' && needs.changes.outputs.supabase != 'true')) && (needs.read_replica_schema.result == 'success' || needs.read_replica_schema.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -235,8 +274,8 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
   deploy_files:
-    needs: [changes, supabase_deploy]
-    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.files == 'true' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') }}
+    needs: [changes, supabase_deploy, read_replica_schema]
+    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.files == 'true' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') && (needs.read_replica_schema.result == 'success' || needs.read_replica_schema.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -265,8 +304,8 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
   deploy_plugin_regions:
-    needs: [changes, supabase_deploy]
-    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.plugins == 'true' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') }}
+    needs: [changes, supabase_deploy, read_replica_schema]
+    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.plugins == 'true' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') && (needs.read_replica_schema.result == 'success' || needs.read_replica_schema.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -326,3 +365,93 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+  deploy_native_ios:
+    needs: [changes, supabase_deploy, deploy_webapp]
+    if: ${{ always() && needs.changes.result == 'success' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') && needs.deploy_webapp.result == 'success' && needs.deploy_webapp.outputs.native_build_needed == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.x
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Setup bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Set environment variable
+        run: |
+          if [[ ${{ github.ref }} == *-alpha* ]]; then
+            echo "BUILD_SCRIPT=build:dev" >> $GITHUB_ENV
+          else
+            echo "BUILD_SCRIPT=build" >> $GITHUB_ENV
+          fi
+      - name: Install dependencies
+        run: bun install --frozen-lockfile --linker=hoisted
+      - name: Prepare mobile project
+        run: |
+          bun run ${{ env.BUILD_SCRIPT }}
+          bunx cap sync ios
+      - name: Request iOS build through Capgo CLI
+        env:
+          CAPGO_TOKEN: ${{ secrets.CAPGO_TOKEN }}
+          APP_STORE_CONNECT_TEAM_ID: ${{ secrets.APP_STORE_CONNECT_TEAM_ID }}
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          CAPGO_IOS_PROVISIONING_MAP_BASE64: ${{ secrets.CAPGO_IOS_PROVISIONING_MAP_BASE64 }}
+          APPLE_KEY_ID: ${{ secrets.APPLE_KEY_ID }}
+          APPLE_ISSUER_ID: ${{ secrets.APPLE_ISSUER_ID }}
+          APPLE_KEY_CONTENT: ${{ secrets.APPLE_KEY_CONTENT }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+          BUILD_OUTPUT_UPLOAD_ENABLED: "true"
+          BUILD_OUTPUT_RETENTION_SECONDS: "604800"
+        run: bunx @capgo/cli@latest build request --platform ios --path . --ai-analytics
+
+  deploy_native_android:
+    needs: [changes, supabase_deploy, deploy_webapp]
+    if: ${{ always() && needs.changes.result == 'success' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') && needs.deploy_webapp.result == 'success' && needs.deploy_webapp.outputs.native_build_needed == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.x
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Setup bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Set environment variable
+        run: |
+          if [[ ${{ github.ref }} == *-alpha* ]]; then
+            echo "BUILD_SCRIPT=build:dev" >> $GITHUB_ENV
+          else
+            echo "BUILD_SCRIPT=build" >> $GITHUB_ENV
+          fi
+      - name: Install dependencies
+        run: bun install --frozen-lockfile --linker=hoisted
+      - name: Prepare mobile project
+        run: |
+          bun run ${{ env.BUILD_SCRIPT }}
+          bunx cap sync android
+      - name: Request Android build through Capgo CLI
+        env:
+          CAPGO_TOKEN: ${{ secrets.CAPGO_TOKEN }}
+          ANDROID_KEYSTORE_FILE: ${{ secrets.ANDROID_KEYSTORE_FILE }}
+          PLAY_CONFIG_JSON: ${{ secrets.PLAY_CONFIG_JSON }}
+          KEYSTORE_KEY_ALIAS: ${{ secrets.KEYSTORE_KEY_ALIAS }}
+          KEYSTORE_KEY_PASSWORD: ${{ secrets.KEYSTORE_KEY_PASSWORD }}
+          KEYSTORE_STORE_PASSWORD: ${{ secrets.KEYSTORE_STORE_PASSWORD }}
+          BUILD_OUTPUT_UPLOAD_ENABLED: "true"
+          BUILD_OUTPUT_RETENTION_SECONDS: "604800"
+        run: bunx @capgo/cli@latest build request --platform android --path . --ai-analytics

@@ -13,6 +13,8 @@ import type { CapacitorConfig } from './schemas/config'
 import { loadConfig as loadConfigUntyped, writeConfig as writeConfigUntyped } from '@capacitor/cli/dist/config'
 // @ts-expect-error `@capacitor/cli/dist/util/monorepotools` ships no type declarations
 import { findMonorepoRoot as findMonorepoRootUntyped, findNXMonorepoRoot as findNXMonorepoRootUntyped, isMonorepo as isMonorepoUntyped, isNXMonorepo as isNXMonorepoUntyped } from '@capacitor/cli/dist/util/monorepotools'
+// @ts-expect-error `@capacitor/cli/dist/util/node` ships no type declarations
+import { requireTS as requireTSUntyped } from '@capacitor/cli/dist/util/node'
 
 export interface CapacitorCliConfig {
   app: {
@@ -21,6 +23,7 @@ export interface CapacitorCliConfig {
   }
 }
 
+export const requireTS: (typescript: unknown, filePath: string) => Record<string, unknown> = requireTSUntyped
 export const loadConfig: () => Promise<CapacitorCliConfig> = loadConfigUntyped
 export const writeConfig: (extConfig: CapacitorConfig, extConfigFilePath: string) => Promise<void> = writeConfigUntyped
 export const findMonorepoRoot: (currentPath: string) => string = findMonorepoRootUntyped

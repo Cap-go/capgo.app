@@ -5,6 +5,7 @@ import { Table } from '@sauber/table'
 import { trackEvent } from '../analytics/track'
 import { checkAlerts } from '../api/update'
 import {
+  consoleWebUrl,
   createSupabaseClient,
   findSavedKey,
   formatError,
@@ -48,7 +49,7 @@ function displayOrganizations(data: Organization[], silent: boolean) {
     for (const org of noAccessOrgs) {
       log.warn(`   - ${org.name} (${org.gid})`)
     }
-    log.warn(`\nTo regain access, enable 2FA on your account at https://web.capgo.app/settings/account`)
+    log.warn(`\nTo regain access, enable 2FA on your account at ${consoleWebUrl('/settings/account')}`)
   }
 }
 

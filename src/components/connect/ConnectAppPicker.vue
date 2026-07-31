@@ -35,6 +35,7 @@ const failedIcons = ref<Set<string>>(new Set())
 // App-level roles the key can grant per app (app_admin is the default / recommended).
 const APP_ROLES = [
   { value: 'app_admin', i18n: 'role-app-admin' },
+  { value: 'app_preview', i18n: 'role-app-preview' },
   { value: 'app_developer', i18n: 'role-app-developer' },
   { value: 'app_uploader', i18n: 'role-app-uploader' },
   { value: 'app_reader', i18n: 'role-app-reader' },

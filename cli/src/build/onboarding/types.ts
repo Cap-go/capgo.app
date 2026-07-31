@@ -2,7 +2,7 @@
 
 import type { TailProgress } from './tail-types.js'
 
-export type Platform = 'ios' | 'android'
+export type Platform = 'ios' | 'android' | 'appflow'
 
 // The outcome a wizard app reports to the shell/command when Ink exits, so the
 // caller can print an accurate post-exit message instead of always claiming

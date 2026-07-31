@@ -1,9 +1,10 @@
 import { HTTPException } from 'hono/http-exception'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { __queueConsumerTestUtils__, MAX_QUEUE_READS, messagesArraySchema } from '../supabase/functions/_backend/triggers/queue_consumer.ts'
 import { onManifestCreateTestUtils } from '../supabase/functions/_backend/triggers/on_manifest_create.ts'
+import { onVersionUpdateTestUtils } from '../supabase/functions/_backend/triggers/on_version_update.ts'
 import { s3TestUtils } from '../supabase/functions/_backend/utils/s3.ts'
-import { parseSchema } from '../supabase/functions/_backend/utils/ark_validation.ts'
+import { parseSchema } from '../supabase/functions/_backend/utils/schema_validation.ts'
 
 describe('queue_consumer legacy message compatibility', () => {
   it.concurrent('uses the payload envelope when it is present', () => {
@@ -145,16 +146,120 @@ describe('queue_consumer legacy message compatibility', () => {
       },
     ])).toEqual([])
   })
-
-  it.concurrent('keeps manifest queue batches out of Cloudflare waitUntil', () => {
+  it.concurrent('checkpoints manifest queue deletes without reducing read batch size', () => {
     expect(__queueConsumerTestUtils__.getQueueBatchSize('on_manifest_create', 950)).toBe(950)
     expect(__queueConsumerTestUtils__.getQueueBatchSize('cron_email', 950)).toBe(950)
+    expect(__queueConsumerTestUtils__.getQueueBatchSize('on_version_update', 950)).toBe(40)
+    expect(__queueConsumerTestUtils__.getQueueAckChunkSize('on_manifest_create')).toBe(100)
+    expect(__queueConsumerTestUtils__.getQueueAckChunkSize('cron_email')).toBeNull()
     expect(__queueConsumerTestUtils__.getQueueHttpConcurrency('on_manifest_create')).toBe(100)
     expect(__queueConsumerTestUtils__.getQueueHttpConcurrency('cron_email')).toBe(25)
+    expect(__queueConsumerTestUtils__.getQueueHttpConcurrency('on_version_update')).toBe(10)
     expect(__queueConsumerTestUtils__.getQueueVisibilityTimeout('on_manifest_create')).toBe(900)
     expect(__queueConsumerTestUtils__.getQueueVisibilityTimeout('cron_email')).toBe(120)
+    expect(__queueConsumerTestUtils__.getQueueVisibilityTimeout('on_version_update')).toBe(900)
+    expect(__queueConsumerTestUtils__.getQueueHttpTimeoutMs('on_version_update')).toBe(300_000)
+    expect(__queueConsumerTestUtils__.getQueueMaxReads('on_version_update')).toBe(MAX_QUEUE_READS)
+    expect(__queueConsumerTestUtils__.getQueueMaxReads('on_manifest_create')).toBe(MAX_QUEUE_READS)
+    expect(__queueConsumerTestUtils__.getQueueHttpTimeoutMs('cron_email')).toBe(15_000)
     expect(__queueConsumerTestUtils__.shouldRunQueueSyncInBackground('on_manifest_create')).toBe(false)
     expect(__queueConsumerTestUtils__.shouldRunQueueSyncInBackground('cron_email')).toBe(true)
+  })
+
+  it.concurrent('accepts legacy supabase function_type in queue message schema', () => {
+    const [message] = parseSchema(messagesArraySchema, [
+      {
+        msg_id: 11,
+        read_ct: 0,
+        message: {
+          function_name: 'on_version_update',
+          function_type: 'supabase',
+          payload: { table: 'app_versions', type: 'UPDATE' },
+        },
+      },
+    ])
+    expect(message?.message.function_type).toBe('supabase')
+    expect(__queueConsumerTestUtils__.normalizeQueueFunctionType(message?.message.function_type)).toBe('cloudflare')
+  })
+
+  it.concurrent('routes omitted and legacy supabase function types to cloudflare', () => {
+    expect(__queueConsumerTestUtils__.normalizeQueueFunctionType(null)).toBe('cloudflare')
+    expect(__queueConsumerTestUtils__.normalizeQueueFunctionType(undefined)).toBe('cloudflare')
+    expect(__queueConsumerTestUtils__.normalizeQueueFunctionType('')).toBe('cloudflare')
+    expect(__queueConsumerTestUtils__.normalizeQueueFunctionType('supabase')).toBe('cloudflare')
+    expect(__queueConsumerTestUtils__.normalizeQueueFunctionType('cloudflare')).toBe('cloudflare')
+    expect(__queueConsumerTestUtils__.normalizeQueueFunctionType('cloudflare_pp')).toBe('cloudflare_pp')
+  })
+
+  it.concurrent('strips app version manifest payloads before HTTP dispatch', () => {
+    const body = {
+      record: {
+        id: 1,
+        manifest: [{ file_name: 'index.html' }, { file_name: 'app.js' }],
+        r2_path: 'orgs/x/apps/y/1.0.0.zip',
+      },
+      old_record: {
+        id: 1,
+        manifest: [{ file_name: 'old.html' }],
+        r2_path: null,
+      },
+      table: 'app_versions',
+      type: 'UPDATE',
+    }
+
+    expect(__queueConsumerTestUtils__.prepareQueueHttpBody('on_version_update', body)).toEqual({
+      ...body,
+      record: { ...body.record, manifest: null },
+      old_record: { ...body.old_record, manifest: null },
+    })
+    expect(__queueConsumerTestUtils__.prepareQueueHttpBody('cron_email', body)).toEqual(body)
+  })
+
+  it.concurrent('does not reprocess manifests for already deleted versions', () => {
+    const deletedAt = '2026-07-07T00:40:00.096Z'
+    const appVersionRow = (value: Record<string, unknown>) => value as Parameters<typeof onVersionUpdateTestUtils.getDeletedVersionAction>[0]
+
+    expect(onVersionUpdateTestUtils.getDeletedVersionAction(
+      appVersionRow({ deleted_at: deletedAt, manifest: [{ file_name: 'index.html' }], manifest_count: 1 }),
+      appVersionRow({ deleted_at: deletedAt }),
+    )).toBe('cleanup_manifest')
+    expect(onVersionUpdateTestUtils.getDeletedVersionAction(
+      appVersionRow({ deleted_at: deletedAt, manifest: null, manifest_count: 0 }),
+      appVersionRow({ deleted_at: deletedAt }),
+    )).toBe('skip')
+    expect(onVersionUpdateTestUtils.getDeletedVersionAction(
+      appVersionRow({ deleted_at: deletedAt, manifest: null, manifest_count: 0 }),
+      appVersionRow({ deleted_at: null }),
+    )).toBe('delete')
+    expect(onVersionUpdateTestUtils.getDeletedVersionAction(
+      appVersionRow({ deleted_at: null, manifest: [{ file_name: 'index.html' }], manifest_count: 0 }),
+      appVersionRow({ deleted_at: null }),
+    )).toBe('continue')
+  })
+
+  it.concurrent('uses the shared queue retry budget for Discord failure alerts', () => {
+    const retryBudget = __queueConsumerTestUtils__.getQueueMaxReads('on_version_update')
+    const midRetry = {
+      cf_id: 'cf-version-mid',
+      error_code: 'manifest_cleanup_incomplete',
+      function_name: 'on_version_update',
+      function_type: 'supabase',
+      msg_id: 2,
+      payload_size: 10,
+      read_count: MAX_QUEUE_READS - 1,
+      status: 500,
+      status_text: 'Internal Server Error',
+    }
+    const exhausted = {
+      ...midRetry,
+      cf_id: 'cf-version-done',
+      msg_id: 3,
+      read_count: retryBudget,
+    }
+
+    expect(retryBudget).toBe(MAX_QUEUE_READS)
+    expect(__queueConsumerTestUtils__.getActionableQueueFailures([midRetry], retryBudget)).toEqual([])
+    expect(__queueConsumerTestUtils__.getActionableQueueFailures([exhausted], retryBudget)).toEqual([exhausted])
   })
 
   it.concurrent('alerts Discord after retry budget is exhausted', () => {
@@ -262,134 +367,5 @@ describe('queue_consumer legacy message compatibility', () => {
     expect(details.errorMessage).toBe('Manifest file size metadata was not found')
     expect(details.bodyPreview).toContain('"id":123')
     expect(details.bodyPreview).toContain('"queueName":"on_manifest_create"')
-  })
-
-  it.concurrent('calls the healthcheck URL when the worker succeeds', async () => {
-    const fetchImpl = vi.fn(async () => new Response(null, { status: 200 })) as unknown as typeof fetch
-
-    const reported = await __queueConsumerTestUtils__.maybePingCronHealthcheck(
-      {
-        actionableFailureCount: 0,
-        archivedCount: 0,
-        failedCount: 0,
-        processedCount: 1,
-        readSucceeded: true,
-        skippedCount: 0,
-        success: true,
-        successCount: 1,
-      },
-      'https://example.com/healthcheck',
-      fetchImpl,
-    )
-
-    expect(reported).toBe(true)
-    expect(fetchImpl).toHaveBeenCalledTimes(1)
-    expect(fetchImpl).toHaveBeenCalledWith('https://example.com/healthcheck', expect.objectContaining({
-      method: 'GET',
-    }))
-  })
-
-  it.concurrent('calls the healthcheck start URL when requested', async () => {
-    const fetchImpl = vi.fn(async () => new Response(null, { status: 200 })) as unknown as typeof fetch
-
-    const reported = await __queueConsumerTestUtils__.maybePingCronHealthcheckStart(
-      'https://example.com/healthcheck/',
-      fetchImpl,
-    )
-
-    expect(reported).toBe(true)
-    expect(__queueConsumerTestUtils__.getCronHealthcheckStartUrl('https://example.com/healthcheck/')).toBe('https://example.com/healthcheck/start')
-    expect(fetchImpl).toHaveBeenCalledTimes(1)
-    expect(fetchImpl).toHaveBeenCalledWith('https://example.com/healthcheck/start', expect.objectContaining({
-      method: 'GET',
-    }))
-  })
-
-  it.concurrent('calls the healthcheck URL when successful queue work remains', async () => {
-    const fetchImpl = vi.fn(async () => new Response(null, { status: 200 })) as unknown as typeof fetch
-
-    const reported = await __queueConsumerTestUtils__.maybePingCronHealthcheck(
-      {
-        actionableFailureCount: 0,
-        archivedCount: 0,
-        failedCount: 0,
-        processedCount: 1,
-        readSucceeded: true,
-        skippedCount: 0,
-        success: true,
-        successCount: 1,
-      },
-      'https://example.com/healthcheck',
-      fetchImpl,
-    )
-
-    expect(reported).toBe(true)
-    expect(fetchImpl).toHaveBeenCalledTimes(1)
-  })
-
-  it.concurrent('returns false when the healthcheck URL responds with an error', async () => {
-    const fetchImpl = vi.fn(async () => new Response(null, { status: 500 })) as unknown as typeof fetch
-
-    const reported = await __queueConsumerTestUtils__.maybePingCronHealthcheck(
-      {
-        actionableFailureCount: 0,
-        archivedCount: 0,
-        failedCount: 0,
-        processedCount: 1,
-        readSucceeded: true,
-        skippedCount: 0,
-        success: true,
-        successCount: 1,
-      },
-      'https://example.com/healthcheck',
-      fetchImpl,
-    )
-
-    expect(reported).toBe(false)
-    expect(fetchImpl).toHaveBeenCalledTimes(1)
-  })
-
-  it.concurrent('calls the healthcheck URL for retryable message failures', async () => {
-    const fetchImpl = vi.fn(async () => new Response(null, { status: 200 })) as unknown as typeof fetch
-
-    const reported = await __queueConsumerTestUtils__.maybePingCronHealthcheck(
-      {
-        actionableFailureCount: 0,
-        archivedCount: 0,
-        failedCount: 1,
-        processedCount: 1,
-        readSucceeded: true,
-        skippedCount: 0,
-        success: false,
-        successCount: 0,
-      },
-      'https://example.com/healthcheck',
-      fetchImpl,
-    )
-
-    expect(reported).toBe(true)
-    expect(fetchImpl).toHaveBeenCalledTimes(1)
-  })
-
-  it.concurrent('does not call the healthcheck URL when the worker had actionable failures', async () => {
-    const fetchImpl = vi.fn(async () => new Response(null, { status: 200 })) as unknown as typeof fetch
-
-    const reported = await __queueConsumerTestUtils__.maybePingCronHealthcheck(
-      {
-        actionableFailureCount: 1,
-        archivedCount: 0,
-        failedCount: 1,
-        processedCount: 1,
-        readSucceeded: true,
-        skippedCount: 0,
-        success: false,
-        successCount: 0,
-      },
-      'https://example.com/healthcheck',
-      fetchImpl,
-    )
-
-    expect(reported).toBe(false)
-    expect(fetchImpl).not.toHaveBeenCalled()
   })
 })

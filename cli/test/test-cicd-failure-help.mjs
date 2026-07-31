@@ -110,6 +110,7 @@ await test('uploadSupportLogs returns {id,url} on a 200 with a valid body', asyn
       apikey: 'apikey-abc',
       appId: 'com.app',
       jobId: 'job-1',
+      platform: 'ios',
       gzPath,
     })
     assert.deepEqual(r, { id: 'sup-123', url: 'https://capgo.app/logs/sup-123' })
@@ -119,6 +120,7 @@ await test('uploadSupportLogs returns {id,url} on a 200 with a valid body', asyn
     const body = JSON.parse(captured.init.body)
     assert.equal(body.appId, 'com.app')
     assert.equal(body.jobId, 'job-1')
+    assert.equal(body.platform, 'ios')
     assert.ok(typeof body.gzB64 === 'string' && body.gzB64.length > 0, 'sends base64 bundle')
   }
   finally {

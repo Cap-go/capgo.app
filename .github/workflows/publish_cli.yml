@@ -45,13 +45,25 @@ jobs:
             echo "::error::CAPGO_KEYCHAIN_HELPER_PATH leaked into the release bundle — dead-code elimination failed"
             exit 1
           fi
+      - name: Resolve previous successful CLI release
+        id: changelog_base
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          previous_tag=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 --json tagName,isDraft | jq -r --arg current "$GITHUB_REF_NAME" --arg prefix "cli-" '[.[] | select(.isDraft == false and .tagName != $current and (.tagName | startswith($prefix)))] | first | .tagName // empty')
+          if [ -z "$previous_tag" ]; then
+            echo "::error::No previous successful CLI release found"
+            exit 1
+          fi
+          echo "from_tag=$previous_tag" >> "$GITHUB_OUTPUT"
       - name: Generate AI changelog
         id: changelog
-        uses: mistricky/ccc@v0.2.6
-        with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          github_token: ${{ github.token }}
-          model: claude-sonnet-4-5-20250929
+        continue-on-error: true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          FROM_TAG: ${{ steps.changelog_base.outputs.from_tag }}
+        run: bun run changelog:ai
       - name: Publish CLI to npm
         if: ${{ !contains(github.ref, '-alpha.') }}
         env:
@@ -69,11 +81,11 @@ jobs:
           body: |
             ## 🆕 Changelog
 
-            ${{ steps.changelog.outputs.result }}
+            ${{ steps.changelog.outputs.result || '_Changelog was not generated automatically for this release._' }}
 
             ---
 
-            🔗 **Full Changelog**: https://github.com/${{ github.repository }}/compare/${{ steps.changelog.outputs.from_tag }}...${{ steps.changelog.outputs.to_tag }}
+            🔗 **Full Changelog**: https://github.com/${{ github.repository }}/compare/${{ steps.changelog_base.outputs.from_tag }}...${{ github.ref_name }}
           make_latest: false
           token: "${{ secrets.PERSONAL_ACCESS_TOKEN }}"
           prerelease: ${{ contains(github.ref, '-alpha.') }}

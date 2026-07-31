@@ -26,8 +26,9 @@ import { createTimedFetch, isSupabaseInstrumentationEnabled } from './analytics/
 import { markSnag } from './app/debug'
 import { findMonorepoRoot, findNXMonorepoRoot, isMonorepo, isNXMonorepo } from './capacitor-cli'
 import { getChecksum } from './checksum'
-import { loadConfig, writeConfig } from './config'
+import { loadConfig, loadConfigForWrite, writeConfig } from './config'
 import { isTruthyEnvValue } from './posthog'
+import { safeParseSchema } from './schemas/schema_validation'
 import { nativePackageSchema } from './schemas/common'
 import { formatApiErrorForCli, parseSecurityPolicyError } from './utils/security_policy_errors'
 
@@ -39,11 +40,34 @@ export const defaultHost = 'https://capgo.app'
 export const defaultFileHost = 'https://files.capgo.app'
 export const defaultApiHost = 'https://api.capgo.app'
 export const defaultHostWeb = 'https://console.capgo.app'
+
+/** Build a console web-app URL (settings, builds, connect, etc.). */
+export function consoleWebUrl(path = ''): string {
+  if (!path)
+    return defaultHostWeb
+  return `${defaultHostWeb}${path.startsWith('/') ? path : `/${path}`}`
+}
 export const UPLOAD_TIMEOUT = 120000
 export const ALERT_UPLOAD_SIZE_BYTES = 1024 * 1024 * 20 // 20MB
 export const MAX_UPLOAD_LENGTH_BYTES = 1024 * 1024 * 1024 // 1GB
 export const MAX_CHUNK_SIZE_BYTES = 1024 * 1024 * 99 // 99MB
 export const TUS_UPLOAD_RETRY_DELAYS = [0, 1000, 3000, 5000, 10000]
+// Keep in sync with supabase/functions/_backend/private/set_manifest.ts
+export const MAX_MANIFEST_ENTRIES = 10_000
+
+/** User-facing error when a delta/manifest upload exceeds MAX_MANIFEST_ENTRIES. */
+export function deltaManifestTooLargeMessage(fileCount: number): string {
+  const max = MAX_MANIFEST_ENTRIES.toLocaleString('en-US')
+  const count = fileCount.toLocaleString('en-US')
+  return [
+    `Delta updates cannot upload this bundle: it has ${count} files, and Capgo allows at most ${max} files per delta (manifest) upload.`,
+    'Delta mode tracks and uploads each file individually so devices can download only what changed. Very large file counts are not supported on that path.',
+    'What you can do:',
+    `1. Upload a full zip instead: npx @capgo/cli@latest bundle upload --no-delta`,
+    '2. Or reduce files in your web build output (remove unused assets, avoid copying large trees into dist).',
+    'See https://capgo.app/docs/faq/#are-there-delta-update-file-path-limitations',
+  ].join('\n')
+}
 
 export const PACKNAME = 'package.json'
 
@@ -129,7 +153,7 @@ export async function check2FAAccessForOrg(supabase: SupabaseClient<Database>, o
   }
   if (reject2fa) {
     if (!silent)
-      log.error(`🔐 Access Denied: 2FA Required. Enable 2FA at https://web.capgo.app/settings/account`)
+      log.error(`🔐 Access Denied: 2FA Required. Enable 2FA at ${consoleWebUrl('/settings/account')}`)
     throw new Error('2FA required for this organization')
   }
 }
@@ -194,8 +218,6 @@ interface TrackOptions {
    */
   timestamp?: number | Date
 }
-
-export type { OptionsBase } from './schemas/base'
 
 export function wait(ms: number) {
   return new Promise((resolve) => {
@@ -533,9 +555,9 @@ export async function getDeclaredPackageVersionMap(f: string = findRoot(cwd()), 
   return dependencies
 }
 
-export async function getConfig(silent = false) {
+async function getConfigFrom(loader: () => Promise<ExtConfigPairs | undefined>, silent = false): Promise<ExtConfigPairs> {
   try {
-    const extConfig = await loadConfig()
+    const extConfig = await loader()
     if (!extConfig) {
       const message = 'No capacitor config file found, run `cap init` first'
       if (!silent)
@@ -552,8 +574,17 @@ export async function getConfig(silent = false) {
   }
 }
 
+export function getConfig(silent = false) {
+  return getConfigFrom(loadConfig, silent)
+}
+
+/** Loads the source config that a subsequent mutation will write. */
+export function getConfigForWrite(silent = false) {
+  return getConfigFrom(loadConfigForWrite, silent)
+}
+
 export async function updateConfigbyKey(key: string, newConfig: any): Promise<ExtConfigPairs> {
-  const extConfig = await getConfig()
+  const extConfig = await getConfigForWrite()
 
   if (extConfig?.config) {
     extConfig.config.plugins ??= {}
@@ -603,6 +634,37 @@ export async function getLocalConfig(silent = false) {
 }
 // eslint-disable-next-line regexp/no-unused-capturing-group
 const nativeFileRegex = /([A-Za-z0-9]+)\.(java|swift|kt|scala)$/
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function packageDeclaresNativePlugin(packageJson: unknown): boolean {
+  if (!isRecord(packageJson))
+    return false
+
+  const capacitor = packageJson.capacitor
+  if (isRecord(capacitor) && (capacitor.ios !== undefined || capacitor.android !== undefined))
+    return true
+
+  return false
+}
+
+function dependencyDeclaresNativePlugin(dependencyFolderPath: string): boolean {
+  if (existsSync(join(dependencyFolderPath, 'plugin.xml')))
+    return true
+
+  const packageJsonPath = join(dependencyFolderPath, PACKNAME)
+  if (!existsSync(packageJsonPath))
+    return false
+
+  try {
+    return packageDeclaresNativePlugin(JSON.parse(readFileSync(packageJsonPath, 'utf-8')))
+  }
+  catch {
+    return false
+  }
+}
 
 interface CapgoConfig {
   supaHost?: string
@@ -663,7 +725,7 @@ export async function getRemoteFileConfig() {
   }
 }
 
-function normalizeSupabaseHost(host: string): string {
+export function normalizeSupabaseHost(host: string): string {
   const parsed = new URL(host)
   if (!['http:', 'https:'].includes(parsed.protocol))
     throw new Error('Invalid Supabase host protocol')
@@ -674,6 +736,40 @@ function normalizeSupabaseHost(host: string): string {
 
   const normalizedPath = parsed.pathname.replace(/\/+$/, '')
   return `${parsed.origin}${normalizedPath}`
+}
+
+export function formatCapgoApiErrorBody(body: unknown): string {
+  if (!body || typeof body !== 'object')
+    return ''
+  const record = body as { error?: string, message?: string, status?: string }
+  return [record.error, record.message, record.status].filter(Boolean).join(' | ')
+}
+
+/** Resolve Capgo public API base URL for CLI mutations (app create/update, etc.). */
+export function resolveConfiguredCapgoPublicApiHost(config: {
+  hostApi: string
+  supaHost?: string
+  supaKey?: string
+}): string {
+  if (config.supaHost && config.supaKey && config.hostApi === defaultApiHost)
+    return `${normalizeSupabaseHost(config.supaHost)}/functions/v1`
+
+  return config.hostApi
+}
+
+export async function resolveCapgoPublicApiHost(
+  options?: { supaHost?: string, supaAnon?: string },
+  silent = true,
+): Promise<string> {
+  if (options?.supaHost && options?.supaAnon)
+    return `${normalizeSupabaseHost(options.supaHost)}/functions/v1`
+
+  const localConfig = await getLocalConfig(silent)
+  if (localConfig.supaHost && localConfig.supaKey)
+    return resolveConfiguredCapgoPublicApiHost(localConfig)
+
+  const config = await getRemoteConfig(silent)
+  return config.hostApi
 }
 
 export async function createSupabaseClient(apikey: string, supaHost?: string, supaKey?: string, silent = false, instrument = true, signal?: AbortSignal) {
@@ -705,6 +801,7 @@ export async function createSupabaseClient(apikey: string, supaHost?: string, su
 }
 
 export async function isPayingOrg(supabase: SupabaseClient<Database>, orgId: string): Promise<boolean> {
+  // Keep calling the stable single-arg RPC — old CLIs depend on this signature.
   const { data } = await supabase
     .rpc('is_paying_org', { orgid: orgId })
     .single()
@@ -712,10 +809,31 @@ export async function isPayingOrg(supabase: SupabaseClient<Database>, orgId: str
 }
 
 export async function isTrialOrg(supabase: SupabaseClient<Database>, orgId: string): Promise<number> {
+  // Keep calling the stable single-arg RPC — old CLIs depend on this signature.
   const { data } = await supabase
     .rpc('is_trial_org', { orgid: orgId })
     .single()
   return data || 0
+}
+
+export async function hasOrgUsageCredits(supabase: SupabaseClient<Database>, orgId: string, appId?: string): Promise<boolean> {
+  // New SECURITY DEFINER RPC — do not SELECT orgs.has_usage_credits directly; RLS
+  // can deny app-scoped API keys even when they may upload for that org.
+  const { data } = await supabase
+    .rpc('has_usage_credits_org', appId ? { orgid: orgId, appid: appId } : { orgid: orgId })
+    .single()
+  return data || false
+}
+
+/** Trial upgrade nag is for unpaid trial orgs only — skip when paying or using credits. */
+export function shouldWarnTrialExpiry(options: {
+  trialDays: number
+  isPaying: boolean
+  hasCredits: boolean
+  warning?: boolean
+}): boolean {
+  const { trialDays, isPaying, hasCredits, warning = true } = options
+  return !!warning && trialDays > 0 && !isPaying && !hasCredits
 }
 
 export async function isAllowedActionOrg(supabase: SupabaseClient<Database>, orgId: string): Promise<boolean> {
@@ -731,102 +849,6 @@ export async function isAllowedActionAppIdApiKey(supabase: SupabaseClient<Databa
     .single()
 
   return !!data
-}
-
-export enum OrganizationPerm {
-  none = 0,
-  read = 1,
-  upload = 2,
-  write = 3,
-  admin = 4,
-  super_admin = 5,
-}
-
-export const hasOrganizationPerm = (perm: OrganizationPerm, required: OrganizationPerm): boolean => (perm as number) >= (required as number)
-
-export async function isAllowedAppOrg(supabase: SupabaseClient<Database>, apikey: string, appId: string): Promise<{ okay: true, data: OrganizationPerm } | { okay: false, error: 'INVALID_APIKEY' | 'NO_APP' | 'NO_ORG' }> {
-  const { data, error } = await supabase
-    .rpc('get_org_perm_for_apikey', { apikey, app_id: appId })
-    .single()
-
-  if (error) {
-    log.error('Cannot get permissions for organization!')
-    log.error(formatError(error))
-    throw new Error('Cannot get permissions for organization')
-  }
-
-  const ok = (data as string).includes('perm')
-  if (ok) {
-    let perm = null as (OrganizationPerm | null)
-
-    switch (data as string) {
-      case 'perm_none': {
-        perm = OrganizationPerm.none
-        break
-      }
-      case 'perm_read': {
-        perm = OrganizationPerm.read
-        break
-      }
-      case 'perm_upload': {
-        perm = OrganizationPerm.upload
-        break
-      }
-      case 'perm_write': {
-        perm = OrganizationPerm.write
-        break
-      }
-      case 'perm_admin': {
-        perm = OrganizationPerm.admin
-        break
-      }
-      case 'perm_owner': {
-        perm = OrganizationPerm.super_admin
-        break
-      }
-      default: {
-        if ((data as string).includes('invite')) {
-          log.info('Please accept/deny the organization invitation before trying to access the app')
-          throw new Error('Organization invitation pending')
-        }
-
-        log.error(`Invalid output when fetching organization permission. Response: ${data}`)
-        throw new Error(`Invalid output when fetching organization permission. Response: ${data}`)
-      }
-    }
-
-    return {
-      okay: true,
-      data: perm,
-    }
-  }
-
-  // This means that something went wrong here
-  let functionError = null as 'INVALID_APIKEY' | 'NO_APP' | 'NO_ORG' | null
-
-  switch (data as string) {
-    case 'INVALID_APIKEY': {
-      functionError = 'INVALID_APIKEY'
-      break
-    }
-    case 'NO_APP': {
-      functionError = 'NO_APP'
-      break
-    }
-    case 'NO_ORG': {
-      functionError = 'NO_ORG'
-      break
-    }
-    default: {
-      log.error(`Invalid error when fetching organization permission. Response: ${data}`)
-      throw new Error(`Invalid error when fetching organization permission. Response: ${data}`)
-    }
-  }
-
-  return {
-    okay: false,
-    error: functionError,
-  }
 }
 
 export async function checkRemoteCliMessages(supabase: SupabaseClient<Database>, orgId: string, cliVersion: string) {
@@ -875,19 +897,20 @@ export async function checkPlanValid(supabase: SupabaseClient<Database>, orgId: 
     wait(500)
     throw new Error('Plan upgrade required')
   }
-  const [trialDays, ispaying] = await Promise.all([
+  const [trialDays, ispaying, hasCredits] = await Promise.all([
     isTrialOrg(supabase, orgId),
     isPayingOrg(supabase, orgId),
+    hasOrgUsageCredits(supabase, orgId, appId),
   ])
-  if (trialDays > 0 && warning && !ispaying)
+  if (shouldWarnTrialExpiry({ trialDays, isPaying: ispaying, hasCredits, warning }))
     log.warn(`WARNING !!\nTrial expires in ${trialDays} days, upgrade here: ${config.hostWeb}/settings/organization/plans\n`)
 }
 
 export async function checkPlanValidUpload(supabase: SupabaseClient<Database>, orgId: string, apikey: string, appId?: string, warning = true) {
   const config = await getRemoteConfig()
 
-  // Pass appid so check_min_rights gets the app context. Without it,
-  // RBAC denies API keys with limited_to_apps set and the org-scope
+  // Pass appid so RBAC evaluates the app scope. Without it,
+  // API keys with app-scoped bindings can be rejected and the org-scope
   // plan check returns false even when the plan is healthy. PostgREST
   // routes to the 3-arg overload at runtime; the `as never` cast bypasses
   // a `supabase gen types` quirk that collapses overloads sharing the
@@ -910,11 +933,14 @@ export async function checkPlanValidUpload(supabase: SupabaseClient<Database>, o
     wait(500)
     throw new Error('Plan upgrade required for upload')
   }
-  const [trialDays, ispaying] = await Promise.all([
+  // Trial/paying stay on the legacy single-arg RPCs for old CLI compatibility.
+  // Credits use the new has_usage_credits_org (with optional appid).
+  const [trialDays, ispaying, hasCredits] = await Promise.all([
     isTrialOrg(supabase, orgId),
     isPayingOrg(supabase, orgId),
+    hasOrgUsageCredits(supabase, orgId, appId),
   ])
-  if (trialDays > 0 && warning && !ispaying)
+  if (shouldWarnTrialExpiry({ trialDays, isPaying: ispaying, hasCredits, warning }))
     log.warn(`WARNING !!\nTrial expires in ${trialDays} days, upgrade here: ${config.hostWeb}/settings/organization/plans\n`)
 }
 
@@ -1491,31 +1517,48 @@ export async function deletedFailedVersion(supabase: SupabaseClient<Database>, a
     app_id: appId,
     name,
   }
-  try {
-    const pathFailed = 'private/delete_failed_version'
-    const res = await supabase.functions.invoke(pathFailed, { body: JSON.stringify(data), method: 'DELETE' })
+  const pathFailed = 'private/delete_failed_version'
+  const res = await supabase.functions.invoke(pathFailed, { body: JSON.stringify(data), method: 'DELETE' })
 
-    if (res.error) {
-      if (res.error instanceof FunctionsHttpError) {
-        const errorBody = await res.error.context.json()
-        log.error(`Cannot delete failed version: ${errorBody.status || JSON.stringify(errorBody)}`)
-      }
-      else {
-        log.error(`Cannot delete failed version: ${res.error.message}`)
-      }
-      return
+  if (res.error) {
+    if (res.error instanceof FunctionsHttpError) {
+      const errorBody = await res.error.context.json().catch(() => ({}))
+      throw new Error(errorBody.status || errorBody.message || JSON.stringify(errorBody))
     }
-
-    return res.data?.status
+    throw new Error(res.error.message)
   }
-  catch (error) {
-    if (error instanceof FunctionsHttpError) {
-      const errorBody = await error.context.json()
-      log.error(`Cannot delete failed version: ${errorBody.message || JSON.stringify(errorBody)}`)
+}
+
+export interface VersionManifestEntry {
+  file_name: string
+  s3_path: string
+  file_hash: string
+}
+
+/**
+ * Writes delta manifest rows through the backend (file_size stays 0 until R2 size lookup).
+ * Prefer this over writing app_versions.manifest jsonb — old CLIs still use that legacy path.
+ */
+export async function setVersionManifest(
+  supabase: SupabaseClient<Database>,
+  appId: string,
+  name: string,
+  manifest: VersionManifestEntry[],
+): Promise<void> {
+  const data = {
+    app_id: appId,
+    name,
+    manifest,
+  }
+  const pathSetManifest = 'private/set_manifest'
+  const res = await supabase.functions.invoke(pathSetManifest, { body: JSON.stringify(data) })
+
+  if (res.error) {
+    if (res.error instanceof FunctionsHttpError) {
+      const errorBody = await res.error.context.json().catch(() => ({}))
+      throw new Error(errorBody.error || errorBody.status || errorBody.message || JSON.stringify(errorBody))
     }
-    else {
-      log.error(`Cannot delete failed version: ${formatError(error)}`)
-    }
+    throw new Error(res.error.message)
   }
 }
 
@@ -1634,7 +1677,7 @@ export function show2FADeniedError(organizationName?: string): never {
     log.error(`\nThis organization requires all members to have 2FA enabled.`)
   }
   log.error(`\nTo regain access:`)
-  log.error(`  1. Go to https://web.capgo.app/settings/account`)
+  log.error(`  1. Go to ${consoleWebUrl('/settings/account')}`)
   log.error(`  2. Enable Two-Factor Authentication on your account`)
   log.error(`  3. Try your command again`)
   log.error(`\nFor more information, visit: https://capgo.app/docs/webapp/2fa-enforcement/\n`)
@@ -2044,6 +2087,9 @@ export async function getLocalDependencies(packageJsonPath: string | undefined, 
           catch {
             // If we can't read the package.json, fall back to declared version
           }
+          if (!dependencyDeclaresNativePlugin(dependencyFolderPath))
+            continue
+
           try {
             const files = readDirRecursively(dependencyFolderPath)
             if (files.some(fileName => nativeFileRegex.test(fileName))) {
@@ -2104,7 +2150,7 @@ interface ChannelChecksum {
 export async function getRemoteChecksums(supabase: SupabaseClient<Database>, appId: string, channel: string) {
   const { data, error } = await supabase
     .from('channels')
-    .select(`version(checksum)`)
+    .select(`version:app_versions!channels_version_fkey(checksum)`)
     .eq('name', channel)
     .eq('app_id', appId)
     .single()
@@ -2130,9 +2176,9 @@ export function convertNativePackages(nativePackages: NativePackage[]): Map<stri
 
   // Validate each package using Zod schema
   for (const data of nativePackages) {
-    const result = nativePackageSchema.safeParse(data)
+    const result = safeParseSchema(nativePackageSchema, data)
     if (!result.success) {
-      const errorMsg = result.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join(', ')
+      const errorMsg = result.error.issues.map(i => `${(i.path ?? []).join('.')}: ${i.message}`).join(', ')
       log.error(`Invalid remote native package data: ${errorMsg}`)
       throw new Error(`Invalid remote native package data: ${errorMsg}`)
     }
@@ -2147,7 +2193,7 @@ export function convertNativePackages(nativePackages: NativePackage[]): Map<stri
 export async function getRemoteDependencies(supabase: SupabaseClient<Database>, appId: string, channel: string) {
   const { data: remoteNativePackages, error } = await supabase
     .from('channels')
-    .select(`version ( 
+    .select(`version:app_versions!channels_version_fkey(
             native_packages 
         )`)
     .eq('name', channel)
@@ -2161,7 +2207,7 @@ export async function getRemoteDependencies(supabase: SupabaseClient<Database>, 
   return convertNativePackages(((remoteNativePackages.version as any)?.native_packages as any) ?? [])
 }
 
-export type { Compatibility, CompatibilityDetails, IncompatibilityReason } from './schemas/common'
+export type { Compatibility, CompatibilityDetails } from './schemas/common'
 
 export function getAppId(appId: string | undefined, config: CapacitorConfig | undefined) {
   const finalAppId = appId || config?.plugins?.CapacitorUpdater?.appId || config?.appId

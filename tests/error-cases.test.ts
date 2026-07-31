@@ -4,9 +4,14 @@ import { BASE_URL, getEndpointUrl, headers, resetAndSeedAppData, resetAppData } 
 
 const id = randomUUID()
 const APPNAME = `com.error.test.${id}`
+// Own org: seeding into the shared Demo org exposes this file's permission checks
+// to concurrent files mutating that org (seen as flaky cannot_access_app on delete).
+// A dedicated org needs its own Stripe customer: orgs.customer_id is unique.
+const ORG_ID = randomUUID()
+const STRIPE_CUSTOMER_ID = `cus_error_${id.slice(0, 8)}`
 
 beforeAll(async () => {
-  await resetAndSeedAppData(APPNAME)
+  await resetAndSeedAppData(APPNAME, { orgId: ORG_ID, stripeCustomerId: STRIPE_CUSTOMER_ID })
 })
 
 afterAll(async () => {

@@ -6,7 +6,9 @@ import {
   buildPreviewQrUrl,
   renderTerminalQrCode,
   resolvePreviewQrTarget,
+  resolvePreviewQrOutputValue,
 } from '../src/preview/qr.ts'
+import { buildPreviewWebUrl } from '../src/preview/web-url.ts'
 import { buildBundleUploadPreviewQrOptions } from '../src/bundle/upload-preview-qr.ts'
 
 let failures = 0
@@ -127,6 +129,26 @@ await test('rejects QR when app preview is disabled', async () => {
   await assert.rejects(
     () => assertAppAllowsPreview(supabase, 'com.example.app'),
     /Preview is disabled/,
+  )
+})
+
+
+await test('builds web preview URLs for bundle and channel targets', () => {
+  assert.equal(
+    buildPreviewWebUrl({ appId: 'com.example.app', bundleName: '1.2.3', kind: 'bundle', versionId: 42 }),
+    'https://42-com-0example-0app.preview.capgo.app/',
+  )
+  assert.equal(
+    buildPreviewWebUrl({ appId: 'com.example.app', channelId: 7, channelName: 'production', kind: 'channel' }, 'dev'),
+    'https://c7-com-0example-0app.preview.dev.capgo.app/',
+  )
+})
+
+await test('can target web preview URLs for QR output', () => {
+  const target = { appId: 'com.example.app', bundleName: '1.2.3', kind: 'bundle', versionId: 42 }
+  assert.equal(
+    resolvePreviewQrOutputValue(target, { webUrl: true }),
+    'https://42-com-0example-0app.preview.capgo.app/',
   )
 })
 

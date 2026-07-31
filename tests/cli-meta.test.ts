@@ -4,56 +4,39 @@ import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createTestSDK, uploadBundleSDK } from './cli-sdk-utils'
 import { BASE_PACKAGE_JSON, cleanupCli, getSemver, prepareCli, tempFileFolder } from './cli-utils'
-import { resetAndSeedAppData, resetAppData, resetAppDataStats } from './test-utils'
+import { createIsolatedSeedAppOptions, resetAndSeedAppData, resetAppData, resetAppDataStats } from './test-utils'
 
 async function assertCompatibilityTableColumns(appId: string, column1: string, column2: string, column3: string, column4: string, customPackageJsonPath?: string) {
   // Use custom package.json if provided, otherwise use temp app's package.json
   const packageJsonPath = customPackageJsonPath || join(process.cwd(), 'temp_cli_test', appId, 'package.json')
   const nodeModulesPath = join(process.cwd(), 'node_modules')
 
-  const sdk = createTestSDK()
-  let lastError: unknown
+  const result = await createTestSDK().checkBundleCompatibility({
+    appId,
+    channel: 'production',
+    packageJson: packageJsonPath,
+    nodeModules: nodeModulesPath,
+  })
 
-  for (let attempt = 0; attempt < 5; attempt++) {
-    try {
-      const result = await sdk.checkBundleCompatibility({
-        appId,
-        channel: 'production',
-        packageJson: packageJsonPath,
-        nodeModules: nodeModulesPath,
-      })
+  expect(result.success).toBe(true)
+  expect(result.data).toBeDefined()
 
-      expect(result.success).toBe(true)
-      expect(result.data).toBeDefined()
-
-      // Find the package in the compatibility data
-      const packageEntry = result.data!.find((entry: any) => entry.name === column1)
-      expect(packageEntry).toBeDefined()
-      expect(packageEntry!.localVersion).toContain(column2)
-      expect(packageEntry!.remoteVersion).toContain(column3)
-      // Note: SDK compatibility field structure may differ from CLI output
-      // The ✅/❌ symbols are in the CLI's text rendering, SDK returns the data
-      // We'll check if versions match for compatibility
-      if (column4 === '✅') {
-        // Compatible - versions should match (considering semver resolution)
-        expect(packageEntry!.remoteVersion).toBeDefined()
-      }
-      else {
-        // Incompatible - just verify the entry exists
-        expect(packageEntry!.localVersion).toBeDefined()
-      }
-      return
-    }
-    catch (error) {
-      lastError = error
-      if (attempt === 4)
-        throw error
-
-      await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)))
-    }
+  // Find the package in the compatibility data
+  const packageEntry = result.data!.find((entry: any) => entry.name === column1)
+  expect(packageEntry).toBeDefined()
+  expect(packageEntry!.localVersion).toContain(column2)
+  expect(packageEntry!.remoteVersion).toContain(column3)
+  // Note: SDK compatibility field structure may differ from CLI output
+  // The ✅/❌ symbols are in the CLI's text rendering, SDK returns the data
+  // We'll check if versions match for compatibility
+  if (column4 === '✅') {
+    // Compatible - versions should match (considering semver resolution)
+    expect(packageEntry!.remoteVersion).toBeDefined()
   }
-
-  throw lastError ?? new Error('Compatibility check failed without a captured error')
+  else {
+    // Incompatible - just verify the entry exists
+    expect(packageEntry!.localVersion).toBeDefined()
+  }
 }
 
 async function writeBundleContent(appId: string, marker: string) {
@@ -93,6 +76,7 @@ async function createCustomPackageJson(appId: string, testName: string, dependen
 describe('tests CLI metadata', () => {
   const id = randomUUID()
   const APPNAME = `com.cli_meta_${id}`
+  const seedOptions = createIsolatedSeedAppOptions()
   let installedAndroidVersion = ''
   let installedUpdaterVersion = ''
 
@@ -100,7 +84,7 @@ describe('tests CLI metadata', () => {
     const [androidVersion, updaterVersion] = await Promise.all([
       getInstalledDependencyVersion('@capacitor/android'),
       getInstalledDependencyVersion('@capgo/capacitor-updater'),
-      resetAndSeedAppData(APPNAME),
+      resetAndSeedAppData(APPNAME, seedOptions),
       prepareCli(APPNAME, false, false), // Use main project dependencies instead
     ])
 

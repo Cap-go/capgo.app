@@ -105,19 +105,19 @@ async function handleDeviceOperation<TBody extends Partial<DeviceLink>>(
   }
 }
 
-app.post('/', middlewareKey(['all', 'write']), async (c) => {
+app.post('/', middlewareKey(), async (c) => {
   const body = await parseBody<DeviceLink>(c)
   const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
   return await handleDeviceOperation(c, 'set', body, apikey, post)
 })
 
-app.get('/', middlewareKey(['all', 'write', 'read']), async (c) => {
+app.get('/', middlewareKey(), async (c) => {
   const body = await getBodyOrQuery<DeviceLink>(c)
   const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
   return await handleDeviceOperation(c, 'get', body, apikey, get)
 })
 
-app.delete('/', middlewareKey(['all', 'write']), async (c) => {
+app.delete('/', middlewareKey(), async (c) => {
   const body = await getBodyOrQuery<DeviceLink>(c)
   const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
   return await handleDeviceOperation(c, 'delete', body, apikey, deleteOverride)

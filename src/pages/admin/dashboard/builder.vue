@@ -13,6 +13,7 @@ import AdminMultiLineChart from '~/components/admin/AdminMultiLineChart.vue'
 import AdminStatsCard from '~/components/admin/AdminStatsCard.vue'
 import ChartCard from '~/components/dashboard/ChartCard.vue'
 import PageLoader from '~/components/PageLoader.vue'
+import { formatNumberValue } from '~/services/formatLocale'
 import { logAsUser } from '~/services/logAs'
 import { useAdminDashboardStore } from '~/stores/adminDashboard'
 import { useDisplayStore } from '~/stores/display'
@@ -227,17 +228,17 @@ const latestGlobalStats = computed(() => {
 
 function formatPercent(part: number | undefined, total: number | undefined) {
   if (!part || !total)
-    return '0.0%'
-  return `${(part / total * 100).toFixed(1)}%`
+    return `${formatNumberValue(0, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
+  return `${formatNumberValue(part / total * 100, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
 }
 function formatSeconds(value: number) {
-  return `${value.toFixed(1)} sec`
+  return `${formatNumberValue(value, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} sec`
 }
 function formatTotalSeconds(value: number) {
-  return `${Math.round(value).toLocaleString()} sec`
+  return `${formatNumberValue(Math.round(value))} sec`
 }
 function buildPeriodSubtitle(stats: { builds: number, days: number, totalSeconds: number }) {
-  return `${stats.builds.toLocaleString()} builds across ${stats.days.toLocaleString()} active days, ${formatTotalSeconds(stats.totalSeconds)} total in selected period`
+  return `${formatNumberValue(stats.builds)} builds across ${formatNumberValue(stats.days)} active days, ${formatTotalSeconds(stats.totalSeconds)} total in selected period`
 }
 
 // ---- builder onboarding analytics (builder_analytics) ----
@@ -259,7 +260,7 @@ async function loadData() {
 }
 
 const kpis = computed(() => data.value?.kpis)
-const round1 = (n: number | undefined) => Math.round((n ?? 0) * 10) / 10
+const round1 = (n: number | undefined) => formatNumberValue(n ?? 0, { minimumFractionDigits: 1, maximumFractionDigits: 1 })
 
 const funnelLabels = computed(() => (data.value?.funnel ?? []).map(f => f.label))
 const funnelValues = computed(() => (data.value?.funnel ?? []).map(f => f.reached))
@@ -301,10 +302,10 @@ const journeysShown = computed(() => {
 function fmtDuration(ms: number): string {
   const s = Math.round(ms / 1000)
   if (s < 60)
-    return `${s}s`
+    return `${formatNumberValue(s)}s`
   if (s < 3600)
-    return `${Math.floor(s / 60)}m ${s % 60}s`
-  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`
+    return `${formatNumberValue(Math.floor(s / 60))}m ${formatNumberValue(s % 60)}s`
+  return `${formatNumberValue(Math.floor(s / 3600))}h ${formatNumberValue(Math.floor((s % 3600) / 60))}m`
 }
 
 // PostHog half can be unconfigured or unreachable; surface that instead of silently showing
@@ -328,10 +329,10 @@ function ago(ms: number): string {
     return '-'
   const sec = Math.floor((Date.now() - ms) / 1000)
   if (sec < 3600)
-    return `${Math.max(1, Math.floor(sec / 60))}m ago`
+    return `${formatNumberValue(Math.max(1, Math.floor(sec / 60)))}m ago`
   if (sec < 86400)
-    return `${Math.floor(sec / 3600)}h ago`
-  return `${Math.floor(sec / 86400)}d ago`
+    return `${formatNumberValue(Math.floor(sec / 3600))}h ago`
+  return `${formatNumberValue(Math.floor(sec / 86400))}d ago`
 }
 async function spoof(orgId: string) {
   // Reuse the platform-admin impersonation flow (private/log_as accepts a user id,
@@ -485,7 +486,7 @@ displayStore.defaultBack = '/dashboard'
                 class="flex items-start justify-between gap-3 rounded-md border border-amber-500/40 bg-amber-50 px-3 py-2 dark:bg-amber-900/20"
               >
                 <span class="min-w-0 break-words text-sm text-slate-700 dark:text-slate-200">{{ g.title }}</span>
-                <span class="shrink-0 text-sm font-semibold text-amber-600 dark:text-amber-400">{{ g.count }}×</span>
+                <span class="shrink-0 text-sm font-semibold text-amber-600 dark:text-amber-400">{{ formatNumberValue(g.count) }}×</span>
               </li>
             </ul>
           </ChartCard>
@@ -555,7 +556,7 @@ displayStore.defaultBack = '/dashboard'
               <div class="space-y-2 h-full overflow-y-auto">
                 <div v-for="q in quitItems" :key="q.key" class="flex items-center justify-between gap-3 text-sm">
                   <span class="min-w-0 truncate text-slate-700 dark:text-slate-200">{{ humanStep(q.key) }}</span>
-                  <span class="shrink-0 font-semibold text-slate-500 dark:text-slate-400">{{ q.count }}</span>
+                  <span class="shrink-0 font-semibold text-slate-500 dark:text-slate-400">{{ formatNumberValue(q.count) }}</span>
                 </div>
               </div>
             </ChartCard>
@@ -575,7 +576,7 @@ displayStore.defaultBack = '/dashboard'
               <div class="space-y-2 h-full overflow-y-auto">
                 <div v-for="e in onbErrorCategories" :key="e.key" class="flex items-center justify-between gap-3 text-sm">
                   <span class="min-w-0 truncate text-slate-700 dark:text-slate-200">{{ humanStep(e.key) }}</span>
-                  <span class="shrink-0 font-semibold text-slate-500 dark:text-slate-400">{{ e.count }}</span>
+                  <span class="shrink-0 font-semibold text-slate-500 dark:text-slate-400">{{ formatNumberValue(e.count) }}</span>
                 </div>
               </div>
             </ChartCard>
@@ -617,7 +618,7 @@ displayStore.defaultBack = '/dashboard'
                       <span v-if="g.is_new" class="ml-2 rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-amber-600 dark:text-amber-400">NEW</span>
                     </td>
                     <td class="px-4 py-3 text-right font-semibold text-red-500">
-                      {{ g.count }}
+                      {{ formatNumberValue(g.count) }}
                     </td>
                   </tr>
                 </tbody>
@@ -638,7 +639,7 @@ displayStore.defaultBack = '/dashboard'
                   Organizations
                 </h2>
                 <p class="text-xs text-slate-500 dark:text-slate-400">
-                  {{ orgs.length }} orgs that started builder onboarding or ran builds in this period — scroll for more
+                  {{ formatNumberValue(orgs.length) }} orgs that started builder onboarding or ran builds in this period — scroll for more
                 </p>
               </div>
             </template>
@@ -671,16 +672,18 @@ displayStore.defaultBack = '/dashboard'
                     <td class="px-4 py-3">
                       <span class="font-medium text-slate-900 dark:text-white">{{ o.org_name }}</span>
                       <span v-if="o.used_ai" class="ml-1.5 text-[10px] text-purple-500">AI</span>
-                      <button v-if="o.org_id && !o.org_id.startsWith('app:')" type="button" class="ml-2 text-[11px] font-medium text-blue-500 hover:underline" @click="spoof(o.org_id)">Spoof</button>
+                      <button v-if="o.org_id && !o.org_id.startsWith('app:')" type="button" class="ml-2 text-[11px] font-medium text-blue-500 hover:underline" @click="spoof(o.org_id)">
+                        Spoof
+                      </button>
                     </td>
                     <td class="px-4 py-3 text-right text-slate-700 dark:text-slate-200">
-                      {{ o.completed }}/{{ o.attempts }}
+                      {{ formatNumberValue(o.completed) }}/{{ formatNumberValue(o.attempts) }}
                     </td>
                     <td class="px-4 py-3 text-right text-slate-700 dark:text-slate-200">
-                      {{ o.builds }}
+                      {{ formatNumberValue(o.builds) }}
                     </td>
                     <td class="px-4 py-3 text-right" :class="o.builds_failed ? 'text-red-500' : 'text-slate-400'">
-                      {{ o.builds_failed }}
+                      {{ formatNumberValue(o.builds_failed) }}
                     </td>
                     <td class="px-4 py-3 text-right text-slate-500 dark:text-slate-400">
                       {{ ago(o.last_seen) }}
@@ -713,7 +716,7 @@ displayStore.defaultBack = '/dashboard'
                     Onboarding journeys
                   </h2>
                   <p class="text-xs text-slate-500 dark:text-slate-400">
-                    {{ journeysShown.length }} of {{ journeys.length }} journeys — who started, how far they got, and where they dropped
+                    {{ formatNumberValue(journeysShown.length) }} of {{ formatNumberValue(journeys.length) }} journeys — who started, how far they got, and where they dropped
                   </p>
                 </div>
                 <div class="flex flex-wrap items-center gap-2">
@@ -729,9 +732,15 @@ displayStore.defaultBack = '/dashboard'
                     aria-label="Filter journeys by platform"
                     class="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-900 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
                   >
-                    <option value="">All platforms</option>
-                    <option value="ios">iOS</option>
-                    <option value="android">Android</option>
+                    <option value="">
+                      All platforms
+                    </option>
+                    <option value="ios">
+                      iOS
+                    </option>
+                    <option value="android">
+                      Android
+                    </option>
                   </select>
                   <label class="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
                     <input v-model="journeyQuitOnly" type="checkbox" class="rounded"> Quit only
@@ -743,14 +752,30 @@ displayStore.defaultBack = '/dashboard'
               <table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">
                 <thead class="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:bg-slate-900 dark:text-slate-400">
                   <tr>
-                    <th class="px-3 py-3">Org</th>
-                    <th class="px-3 py-3">App</th>
-                    <th class="px-3 py-3">Platform</th>
-                    <th class="px-3 py-3">Furthest</th>
-                    <th class="px-3 py-3">Last step (where)</th>
-                    <th class="px-3 py-3">Outcome</th>
-                    <th class="px-3 py-3 text-right">Duration</th>
-                    <th class="px-3 py-3 text-right">Started</th>
+                    <th class="px-3 py-3">
+                      Org
+                    </th>
+                    <th class="px-3 py-3">
+                      App
+                    </th>
+                    <th class="px-3 py-3">
+                      Platform
+                    </th>
+                    <th class="px-3 py-3">
+                      Furthest
+                    </th>
+                    <th class="px-3 py-3">
+                      Last step (where)
+                    </th>
+                    <th class="px-3 py-3">
+                      Outcome
+                    </th>
+                    <th class="px-3 py-3 text-right">
+                      Duration
+                    </th>
+                    <th class="px-3 py-3 text-right">
+                      Started
+                    </th>
                   </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
@@ -758,12 +783,22 @@ displayStore.defaultBack = '/dashboard'
                     <td class="px-3 py-3">
                       <span class="font-medium text-slate-900 dark:text-white">{{ j.org_name }}</span>
                       <span v-if="j.used_ai" class="ml-1.5 text-[10px] text-purple-500">AI</span>
-                      <button v-if="j.org_id && !j.org_id.startsWith('app:')" type="button" class="ml-2 text-[11px] font-medium text-blue-500 hover:underline" @click="spoof(j.org_id)">Spoof</button>
+                      <button v-if="j.org_id && !j.org_id.startsWith('app:')" type="button" class="ml-2 text-[11px] font-medium text-blue-500 hover:underline" @click="spoof(j.org_id)">
+                        Spoof
+                      </button>
                     </td>
-                    <td class="px-3 py-3 text-slate-500 dark:text-slate-400">{{ j.app_id }}</td>
-                    <td class="px-3 py-3 capitalize text-slate-500 dark:text-slate-400">{{ j.platform }}</td>
-                    <td class="px-3 py-3 text-slate-700 dark:text-slate-200">{{ j.milestone_label }}</td>
-                    <td class="px-3 py-3 text-slate-700 dark:text-slate-200">{{ humanStep(j.last_step) }}</td>
+                    <td class="px-3 py-3 text-slate-500 dark:text-slate-400">
+                      {{ j.app_id }}
+                    </td>
+                    <td class="px-3 py-3 capitalize text-slate-500 dark:text-slate-400">
+                      {{ j.platform }}
+                    </td>
+                    <td class="px-3 py-3 text-slate-700 dark:text-slate-200">
+                      {{ j.milestone_label }}
+                    </td>
+                    <td class="px-3 py-3 text-slate-700 dark:text-slate-200">
+                      {{ humanStep(j.last_step) }}
+                    </td>
                     <td class="px-3 py-3">
                       <span
                         class="rounded px-2 py-0.5 text-xs font-medium"
@@ -772,8 +807,12 @@ displayStore.defaultBack = '/dashboard'
                         {{ j.outcome === 'completed' ? 'Completed' : 'Quit' }}
                       </span>
                     </td>
-                    <td class="px-3 py-3 text-right text-slate-500 dark:text-slate-400">{{ fmtDuration(j.duration_ms) }}</td>
-                    <td class="px-3 py-3 text-right text-slate-500 dark:text-slate-400">{{ ago(j.started_at) }}</td>
+                    <td class="px-3 py-3 text-right text-slate-500 dark:text-slate-400">
+                      {{ fmtDuration(j.duration_ms) }}
+                    </td>
+                    <td class="px-3 py-3 text-right text-slate-500 dark:text-slate-400">
+                      {{ ago(j.started_at) }}
+                    </td>
                   </tr>
                 </tbody>
               </table>

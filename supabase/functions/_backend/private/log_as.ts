@@ -1,17 +1,18 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
-import { type } from 'arktype'
+import { z } from 'zod'
 import { Hono } from 'hono/tiny'
-import { safeParseSchema } from '../utils/ark_validation.ts'
-import { middlewareAuth, parseBody, simpleError, useCors } from '../utils/hono.ts'
+import { safeParseSchema } from '../utils/schema_validation.ts'
+import { parseBody, simpleError, useCors } from '../utils/hono.ts'
+import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { closeClient, getPgClient } from '../utils/pg.ts'
 import { emptySupabase, supabaseAdmin as useSupabaseAdmin, supabaseClient as useSupabaseClient } from '../utils/supabase.ts'
 
-export const bodySchema = type({
-  'user_id?': 'string',
-  'email?': 'string',
-  'org_id?': 'string',
-  'identifier?': 'string',
+export const bodySchema = z.object({
+  user_id: z.string().optional(),
+  email: z.string().optional(),
+  org_id: z.string().optional(),
+  identifier: z.string().optional(),
 })
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -133,20 +134,6 @@ async function getOrgOwner(c: Context<MiddlewareKeyVariables>, orgId: string): P
           WHERE id = $1
         ),
         current_admins AS (
-          SELECT
-            org_users.user_id,
-            auth.users.email,
-            org_users.created_at AS granted_at
-          FROM target_org
-          JOIN public.org_users
-            ON org_users.org_id = target_org.id
-            AND org_users.user_right = 'super_admin'::public.user_min_right
-            AND org_users.app_id IS NULL
-            AND org_users.channel_id IS NULL
-          JOIN auth.users
-            ON auth.users.id = org_users.user_id
-            AND auth.users.email IS NOT NULL
-          UNION
           SELECT
             role_bindings.principal_id AS user_id,
             auth.users.email,

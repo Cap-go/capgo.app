@@ -20,6 +20,7 @@ import {
   queueWebhookDeliveryWithDelay,
   scheduleRetry,
   updateDeliveryResult,
+  WEBHOOK_MAX_ATTEMPTS,
 } from '../utils/webhook.ts'
 
 export const app = new Hono<MiddlewareKeyVariables>()
@@ -40,7 +41,7 @@ interface DeliveryMessage {
  * 1. Receive delivery data from queue
  * 2. Deliver the webhook to the user's endpoint
  * 3. On success: mark as success
- * 4. On failure: retry with exponential backoff (up to 3 attempts)
+ * 4. On failure: retry with backoff (hard max WEBHOOK_MAX_ATTEMPTS = 5)
  * 5. After max retries: mark as failed and send notification via Bento
  */
 app.post('/', middlewareAPISecret, async (c) => {
@@ -159,7 +160,8 @@ app.post('/', middlewareAPISecret, async (c) => {
     }
 
     // Handle failure
-    const maxAttempts = delivery.max_attempts || 10
+    // HARD RULE: never more than WEBHOOK_MAX_ATTEMPTS (matches MAX_QUEUE_READS).
+    const maxAttempts = Math.min(delivery.max_attempts || WEBHOOK_MAX_ATTEMPTS, WEBHOOK_MAX_ATTEMPTS)
 
     if (attemptCount < maxAttempts) {
       const retryDelaySeconds = await scheduleRetry(

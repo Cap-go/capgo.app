@@ -1,3 +1,4 @@
+import type { Database } from '../../utils/supabase.types.ts'
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
@@ -12,6 +13,7 @@ export interface CreateApp {
   owner_org: string
   icon?: string
   need_onboarding?: boolean
+  created_from_onboarding?: boolean
   existing_app?: boolean
   ios_store_url?: string
   android_store_url?: string
@@ -45,12 +47,14 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: CreateApp):
     retention: 2592000,
     default_upload_channel: 'dev',
     need_onboarding: body.need_onboarding ?? false,
+    // Keep CLI init metrics independent from pending web-onboarding apps.
+    created_from_onboarding: body.created_from_onboarding ?? body.need_onboarding ?? false,
     existing_app: body.existing_app ?? false,
     ios_store_url: body.ios_store_url ?? null,
     android_store_url: body.android_store_url ?? null,
   }
   let pgClient
-  let data: Record<string, any> | undefined
+  let data: Database['public']['Tables']['apps']['Row'] | undefined
   try {
     pgClient = getPgClient(c)
     const result = await pgClient.query(
@@ -62,11 +66,12 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: CreateApp):
          retention,
          default_upload_channel,
          need_onboarding,
+         created_from_onboarding,
          existing_app,
          ios_store_url,
          android_store_url
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING *`,
       [
         dataInsert.owner_org,
@@ -76,6 +81,7 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: CreateApp):
         dataInsert.retention,
         dataInsert.default_upload_channel,
         dataInsert.need_onboarding,
+        dataInsert.created_from_onboarding,
         dataInsert.existing_app,
         dataInsert.ios_store_url,
         dataInsert.android_store_url,

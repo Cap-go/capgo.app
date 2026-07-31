@@ -11,6 +11,7 @@ declare global {
   const WEBHOOK_EVENT_TYPES: typeof import('./stores/webhooks').WEBHOOK_EVENT_TYPES
   const asyncComputed: typeof import('@vueuse/core').asyncComputed
   const autoResetRef: typeof import('@vueuse/core').autoResetRef
+  const buildDemoUpdateDeliveryStats: typeof import('./composables/useUpdateDeliveryStats').buildDemoUpdateDeliveryStats
   const computed: typeof import('vue').computed
   const computedAsync: typeof import('@vueuse/core').computedAsync
   const computedEager: typeof import('@vueuse/core').computedEager
@@ -48,6 +49,7 @@ declare global {
   const injectLocal: typeof import('@vueuse/core').injectLocal
   const isAdminRole: typeof import('./stores/organization').isAdminRole
   const isDefined: typeof import('@vueuse/core').isDefined
+  const isPendingOrganizationInvite: typeof import('./stores/organization').isPendingOrganizationInvite
   const isProxy: typeof import('vue').isProxy
   const isReactive: typeof import('vue').isReactive
   const isReadonly: typeof import('vue').isReadonly
@@ -99,7 +101,7 @@ declare global {
   const resolveComponent: typeof import('vue').resolveComponent
   const resolveRef: typeof import('@vueuse/core').resolveRef
   const resolveUnref: typeof import('@vueuse/core').resolveUnref
-  const roleHasLegacyMinRight: typeof import('./stores/organization').roleHasLegacyMinRight
+  const roleHasOrgRank: typeof import('./stores/organization').roleHasOrgRank
   const shallowReactive: typeof import('vue').shallowReactive
   const shallowReadonly: typeof import('vue').shallowReadonly
   const shallowRef: typeof import('vue').shallowRef
@@ -224,6 +226,7 @@ declare global {
   const useMouseInElement: typeof import('@vueuse/core').useMouseInElement
   const useMousePressed: typeof import('@vueuse/core').useMousePressed
   const useMutationObserver: typeof import('@vueuse/core').useMutationObserver
+  const useNativeObserveStats: typeof import('./composables/useNativeObserveStats').useNativeObserveStats
   const useNavigatorLanguage: typeof import('@vueuse/core').useNavigatorLanguage
   const useNetwork: typeof import('@vueuse/core').useNetwork
   const useNow: typeof import('@vueuse/core').useNow
@@ -292,6 +295,7 @@ declare global {
   const useToString: typeof import('@vueuse/core').useToString
   const useToggle: typeof import('@vueuse/core').useToggle
   const useTransition: typeof import('@vueuse/core').useTransition
+  const useUpdateDeliveryStats: typeof import('./composables/useUpdateDeliveryStats').useUpdateDeliveryStats
   const useUrlSearchParams: typeof import('@vueuse/core').useUrlSearchParams
   const useUserMedia: typeof import('@vueuse/core').useUserMedia
   const useVModel: typeof import('@vueuse/core').useVModel
@@ -336,6 +340,9 @@ declare global {
   export type { CheckDomainResponse } from './composables/useSSORouting'
   import('./composables/useSSORouting')
   // @ts-ignore
+  export type { UpdateDeliveryScope, UpdateDeliveryStatsResponse } from './composables/useUpdateDeliveryStats'
+  import('./composables/useUpdateDeliveryStats')
+  // @ts-ignore
   export type { MetricCategory, DateRangeMode } from './stores/adminDashboard'
   import('./stores/adminDashboard')
   // @ts-ignore
@@ -345,7 +352,7 @@ declare global {
   export type { BreadcrumbItem } from './stores/display'
   import('./stores/display')
   // @ts-ignore
-  export type { PasswordPolicyConfig, Organization, OrganizationRole, ExtendedOrganizationMember, ExtendedOrganizationMembers } from './stores/organization'
+  export type { PasswordPolicyConfig, Organization, OrganizationApp, OrganizationRole, ExtendedOrganizationMember, ExtendedOrganizationMembers } from './stores/organization'
   import('./stores/organization')
   // @ts-ignore
   export type { DeliveryPagination, TestResult, Webhook, WebhookDeliveryVersion } from './stores/webhooks'
@@ -362,6 +369,7 @@ declare module 'vue' {
     readonly WEBHOOK_EVENT_TYPES: UnwrapRef<typeof import('./stores/webhooks')['WEBHOOK_EVENT_TYPES']>
     readonly asyncComputed: UnwrapRef<typeof import('@vueuse/core')['asyncComputed']>
     readonly autoResetRef: UnwrapRef<typeof import('@vueuse/core')['autoResetRef']>
+    readonly buildDemoUpdateDeliveryStats: UnwrapRef<typeof import('./composables/useUpdateDeliveryStats')['buildDemoUpdateDeliveryStats']>
     readonly computed: UnwrapRef<typeof import('vue')['computed']>
     readonly computedAsync: UnwrapRef<typeof import('@vueuse/core')['computedAsync']>
     readonly computedEager: UnwrapRef<typeof import('@vueuse/core')['computedEager']>
@@ -399,6 +407,7 @@ declare module 'vue' {
     readonly injectLocal: UnwrapRef<typeof import('@vueuse/core')['injectLocal']>
     readonly isAdminRole: UnwrapRef<typeof import('./stores/organization')['isAdminRole']>
     readonly isDefined: UnwrapRef<typeof import('@vueuse/core')['isDefined']>
+    readonly isPendingOrganizationInvite: UnwrapRef<typeof import('./stores/organization')['isPendingOrganizationInvite']>
     readonly isProxy: UnwrapRef<typeof import('vue')['isProxy']>
     readonly isReactive: UnwrapRef<typeof import('vue')['isReactive']>
     readonly isReadonly: UnwrapRef<typeof import('vue')['isReadonly']>
@@ -447,7 +456,7 @@ declare module 'vue' {
     readonly refThrottled: UnwrapRef<typeof import('@vueuse/core')['refThrottled']>
     readonly refWithControl: UnwrapRef<typeof import('@vueuse/core')['refWithControl']>
     readonly resolveComponent: UnwrapRef<typeof import('vue')['resolveComponent']>
-    readonly roleHasLegacyMinRight: UnwrapRef<typeof import('./stores/organization')['roleHasLegacyMinRight']>
+    readonly roleHasOrgRank: UnwrapRef<typeof import('./stores/organization')['roleHasOrgRank']>
     readonly shallowReactive: UnwrapRef<typeof import('vue')['shallowReactive']>
     readonly shallowReadonly: UnwrapRef<typeof import('vue')['shallowReadonly']>
     readonly shallowRef: UnwrapRef<typeof import('vue')['shallowRef']>
@@ -572,6 +581,7 @@ declare module 'vue' {
     readonly useMouseInElement: UnwrapRef<typeof import('@vueuse/core')['useMouseInElement']>
     readonly useMousePressed: UnwrapRef<typeof import('@vueuse/core')['useMousePressed']>
     readonly useMutationObserver: UnwrapRef<typeof import('@vueuse/core')['useMutationObserver']>
+    readonly useNativeObserveStats: UnwrapRef<typeof import('./composables/useNativeObserveStats')['useNativeObserveStats']>
     readonly useNavigatorLanguage: UnwrapRef<typeof import('@vueuse/core')['useNavigatorLanguage']>
     readonly useNetwork: UnwrapRef<typeof import('@vueuse/core')['useNetwork']>
     readonly useNow: UnwrapRef<typeof import('@vueuse/core')['useNow']>
@@ -640,6 +650,7 @@ declare module 'vue' {
     readonly useToString: UnwrapRef<typeof import('@vueuse/core')['useToString']>
     readonly useToggle: UnwrapRef<typeof import('@vueuse/core')['useToggle']>
     readonly useTransition: UnwrapRef<typeof import('@vueuse/core')['useTransition']>
+    readonly useUpdateDeliveryStats: UnwrapRef<typeof import('./composables/useUpdateDeliveryStats')['useUpdateDeliveryStats']>
     readonly useUrlSearchParams: UnwrapRef<typeof import('@vueuse/core')['useUrlSearchParams']>
     readonly useUserMedia: UnwrapRef<typeof import('@vueuse/core')['useUserMedia']>
     readonly useVModel: UnwrapRef<typeof import('@vueuse/core')['useVModel']>

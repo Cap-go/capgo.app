@@ -10,6 +10,7 @@ import { cloudlog } from '../utils/logging.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import * as schema from '../utils/postgres_schema.ts'
 import { supabaseAdmin } from '../utils/supabase.ts'
+import { buildOnboardingIntentBentoEventData, parseOrgOnboardingIntent } from '../utils/org_onboarding_intent.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
 import { backgroundTask } from '../utils/utils.ts'
 
@@ -115,14 +116,18 @@ app.post('/', middlewareAPISecret, triggerValidator('apps', 'INSERT'), async (c)
           throw simpleError('error_fetching_organization', 'Error fetching organization', { error })
         }
 
+        const onboardingIntent = parseOrgOnboardingIntent(data.onboarding)
         return {
           cron: '* * * * *',
           event: 'app:created',
           preferenceKey: 'onboarding' as const,
           uniqId: `app:created:${record.app_id}`,
           data: {
-            org_id: ownerOrg,
-            org_name: data.name,
+            ...buildOnboardingIntentBentoEventData(c, onboardingIntent, {
+              id: ownerOrg,
+              name: data.name,
+              website: data.website,
+            }),
             app_name: record.name,
           },
         }

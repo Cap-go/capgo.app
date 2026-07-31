@@ -330,7 +330,7 @@ await test('GAP1: requesting-build emits header + blank + queued lines via onBui
   assertEquals(res.next, 'build-complete', 'success with no entries finishes at build-complete')
   assert(buildLines[0] === `Requesting build for ${APP_ID} (android)...`, 'first build-viewer line is the header (replaces, not the side-log)')
   assert(buildLines.includes(''), 'a blank line precedes the queued line (parity with setBuildOutput([..., \'\', queued]))')
-  assert(buildLines.some(l => /^✔ Build queued — https:\/\/capgo\.app\/app\//.test(l)), 'queued line goes to the build viewer')
+  assert(buildLines.some(l => /^✔ Build queued — https:\/\/console\.capgo\.app\/app\//.test(l)), 'queued line goes to the build viewer')
 })
 
 await test('GAP1: requesting-build emits the no-key 2-line UX via onBuildOutput and finishes at build-complete', async () => {

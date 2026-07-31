@@ -528,18 +528,18 @@ describe('[Integration] Org Email Notifications with Preferences', () => {
   it('should check org member preferences when sending notifications', async () => {
     const supabase = getSupabaseClient()
 
-    // Get org_users to verify the test user is an admin
+    // Get org_users to verify the test user has an admin RBAC role
     const { data: orgUserData } = await supabase
       .from('org_users')
-      .select('user_right')
+      .select('rbac_role_name')
       .eq('org_id', ORG_ID_EMAIL_PREFS)
       .eq('user_id', USER_ID_EMAIL_PREFS)
       .single()
 
-    // User should be admin or super_admin to receive operational emails
+    // User should be org_admin or org_super_admin to receive operational emails
     expect(orgUserData).toBeDefined()
     if (orgUserData) {
-      expect(['admin', 'super_admin']).toContain(orgUserData.user_right)
+      expect(['org_admin', 'org_super_admin']).toContain(orgUserData.rbac_role_name)
     }
   })
 })

@@ -1,12 +1,20 @@
 import type { Context } from 'hono'
+import type { EmailType } from './emailClassification.ts'
 import type { EmailPreferenceKey, EmailPreferences } from './org_email_notifications.ts'
 import type { Database } from './supabase.types.ts'
 import { syncBentoSubscriberTags } from './bento.ts'
+import { classifyEmailAddress } from './emailClassification.ts'
 import { cloudlog } from './logging.ts'
 
 // Legacy tags for general notifications and newsletters
 const NOTIFICATION_TAG = 'notifications_opt_in'
 const NEWSLETTER_TAG = 'newsletter_opt_in'
+
+const EMAIL_TYPE_TAGS: Record<EmailType, string> = {
+  professional: 'email_type:professional',
+  personal: 'email_type:personal',
+  disposable: 'email_type:disposable',
+}
 
 // Email preference disabled tags - when a user opts OUT, we add these tags
 // Bento automations should exclude users with these tags
@@ -30,14 +38,15 @@ const EMAIL_PREF_DISABLED_TAGS: Record<EmailPreferenceKey, string> = {
 
 const ALL_LEGACY_TAGS = [NOTIFICATION_TAG, NEWSLETTER_TAG]
 const ALL_EMAIL_PREF_DISABLED_TAGS = Object.values(EMAIL_PREF_DISABLED_TAGS)
-const ALL_TAGS = [...ALL_LEGACY_TAGS, ...ALL_EMAIL_PREF_DISABLED_TAGS]
+const ALL_EMAIL_TYPE_TAGS = Object.values(EMAIL_TYPE_TAGS)
+const ALL_TAGS = [...ALL_LEGACY_TAGS, ...ALL_EMAIL_PREF_DISABLED_TAGS, ...ALL_EMAIL_TYPE_TAGS]
 
 type UserPreferenceRecord = Database['public']['Tables']['users']['Row'] & {
   email_preferences?: EmailPreferences | null
 }
 
-function buildDesiredTags(record: UserPreferenceRecord | null | undefined) {
-  const tags = new Set<string>()
+function buildDesiredTags(email: string, record: UserPreferenceRecord | null | undefined) {
+  const tags = new Set<string>([EMAIL_TYPE_TAGS[classifyEmailAddress(email)]])
 
   if (record?.enable_notifications)
     tags.add(NOTIFICATION_TAG)
@@ -85,9 +94,17 @@ export async function syncUserPreferenceTags(
     if (!email)
       return
 
-    const currentTags = buildDesiredTags(record)
-    const previousTags = previousEmail === email && previousRecord ? buildDesiredTags(previousRecord) : undefined
+    const currentTags = buildDesiredTags(email, record)
+    const previousTags = previousEmail === email && previousRecord ? buildDesiredTags(email, previousRecord) : undefined
     const segments = buildTagDelta(currentTags, previousTags)
+    if (previousTags) {
+      const emailTypeTag = EMAIL_TYPE_TAGS[classifyEmailAddress(email)]
+      segments.segments = [...new Set([...segments.segments, emailTypeTag])]
+      segments.deleteSegments = [...new Set([
+        ...segments.deleteSegments,
+        ...ALL_EMAIL_TYPE_TAGS.filter(tag => tag !== emailTypeTag),
+      ])]
+    }
     if (segments.segments.length === 0 && segments.deleteSegments.length === 0)
       return
     await syncBentoSubscriberTags(c, { email, ...segments })

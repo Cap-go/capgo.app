@@ -63,7 +63,7 @@ describe('website paid user cookie', () => {
 
   it('clears the cookie when paid access is only from an invite', () => {
     syncWebsitePaidUserCookieFromOrganizations([
-      { paying: true, role: 'invite_read' },
+      { is_invite: true, paying: true, role: 'org_member' },
     ])
 
     expect(cookieWrites).toContain('capgo_paid_user=; Path=/; Max-Age=0; SameSite=Lax; Domain=.capgo.app; Secure')

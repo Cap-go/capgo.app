@@ -52,7 +52,7 @@ import { getInfoInternal } from './app/info'
 import { listAppInternal } from './app/list'
 import { setAppInternal } from './app/set'
 import { setSettingInternal } from './app/setting'
-import { requestBuildInternal } from './build/request'
+import { parseStoreReleaseNotesLocalizedJson, requestBuildInternal } from './build/request'
 import { cleanupBundleInternal } from './bundle/cleanup'
 import { checkCompatibilityInternal } from './bundle/compatibility'
 import { decryptZipInternal } from './bundle/decrypt'
@@ -65,6 +65,7 @@ import { currentBundleInternal } from './channel/currentBundle'
 import { deleteChannelInternal } from './channel/delete'
 import { listChannelsInternal } from './channel/list'
 import { setChannelInternal } from './channel/set'
+import { resolveCapacitorConfigTargetPath, withConfigWriteTarget } from './config'
 import { starAllRepositories as starAllRepositoriesInternal, starRepository } from './github'
 import { createKeyInternal, deleteOldPrivateKeyInternal, saveKeyInternal } from './key'
 import { loginInternal } from './login'
@@ -73,7 +74,7 @@ import { deleteOrganizationInternal } from './organization/delete'
 import { listOrganizationsInternal } from './organization/list'
 import { setOrganizationInternal } from './organization/set'
 import { getUserIdInternal } from './user/account'
-import { createSupabaseClient, findSavedKey, getConfig, getLocalConfig, OrganizationPerm } from './utils'
+import { createSupabaseClient, findSavedKey, getConfig, getLocalConfig } from './utils'
 import { parseSecurityPolicyError } from './utils/security_policy_errors'
 
 export type DoctorInfo = Awaited<ReturnType<typeof getInfoInternal>>
@@ -103,6 +104,17 @@ function createErrorResult<T = void>(error: unknown): SDKResult<T> {
   }
 }
 
+/**
+ * Runs config-writing SDK methods against an app-specific source while Capacitor
+ * continues to load the active root config in dynamic monorepos.
+ */
+async function withCapacitorConfigTarget<T>(capacitorConfig: string | undefined, action: () => Promise<T>): Promise<T> {
+  if (capacitorConfig === undefined)
+    return action()
+
+  return withConfigWriteTarget(resolveCapacitorConfigTargetPath(capacitorConfig), action)
+}
+
 // ============================================================================
 // SDK Class - Main Entry Point
 // ============================================================================
@@ -110,6 +122,8 @@ function createErrorResult<T = void>(error: unknown): SDKResult<T> {
 /**
  * Capgo SDK for programmatic access to all CLI functionality.
  * Use this class to integrate Capgo operations directly into your application.
+ * Config-writing methods accept `capacitorConfig` to target an app-specific
+ * source config in a dynamic monorepo.
  *
  * @example
  * ```typescript
@@ -335,7 +349,7 @@ export class CapgoSDK {
       const supabase = await createSupabaseClient(apikey, this.supaHost, this.supaAnon)
       // silent: no UI output (this runs over a stdio MCP channel). skip2FACheck: this
       // is a read-only "is it registered" probe — the real credential ops enforce 2FA.
-      await checkAppExistsAndHasPermissionOrgErr(supabase, apikey, appId, OrganizationPerm.read, true, true)
+      await checkAppExistsAndHasPermissionOrgErr(supabase, apikey, appId, 'app.read', true, true)
       return { success: true, data: true }
     }
     catch {
@@ -521,43 +535,49 @@ export class CapgoSDK {
    */
   async uploadBundle(options: UploadOptions): Promise<UploadResult> {
     try {
-      // Convert SDK options to internal format
-      const internalOptions: OptionsUpload = {
-        apikey: options.apikey || this.apikey || findSavedKey(true),
-        supaHost: options.supaHost || this.supaHost,
-        supaAnon: options.supaAnon || this.supaAnon,
-        path: options.path,
-        bundle: options.bundle,
-        channel: options.channel,
-        external: options.external,
-        key: options.encrypt !== false, // default true unless explicitly false
-        keyV2: options.encryptionKey,
-        timeout: options.timeout,
-        tus: options.useTus,
-        comment: options.comment,
-        minUpdateVersion: options.minUpdateVersion,
-        autoMinUpdateVersion: options.autoMinUpdateVersion,
-        selfAssign: options.selfAssign,
-        packageJson: options.packageJsonPaths,
-        ignoreMetadataCheck: options.ignoreCompatibilityCheck,
-        codeCheck: !options.disableCodeCheck, // disable if requested, otherwise check
-        zip: options.useZip, // use legacy zip upload if requested
-      }
+      return await withCapacitorConfigTarget(options.capacitorConfig, async () => {
+        // Convert SDK options to internal format
+        const internalOptions: OptionsUpload = {
+          apikey: options.apikey || this.apikey || findSavedKey(true),
+          supaHost: options.supaHost || this.supaHost,
+          supaAnon: options.supaAnon || this.supaAnon,
+          path: options.path,
+          bundle: options.bundle,
+          channel: options.channel,
+          rollout: options.rollout,
+          rolloutPercentageBps: options.rolloutPercentageBps,
+          rolloutCacheTtlSeconds: options.rolloutCacheTtlSeconds,
+          external: options.external,
+          key: options.encrypt !== false, // default true unless explicitly false
+          keyV2: options.encryptionKey,
+          timeout: options.timeout,
+          tus: options.useTus,
+          comment: options.comment,
+          minUpdateVersion: options.minUpdateVersion,
+          autoMinUpdateVersion: options.autoMinUpdateVersion,
+          autoSetBundle: options.autoSetBundle,
+          selfAssign: options.selfAssign,
+          packageJson: options.packageJsonPaths,
+          ignoreMetadataCheck: options.ignoreCompatibilityCheck,
+          codeCheck: !options.disableCodeCheck, // disable if requested, otherwise check
+          zip: options.useZip, // use legacy zip upload if requested
+        }
 
-      // Call internal upload function but suppress CLI behaviors
-      const uploadResponse = await uploadBundleInternal(options.appId, internalOptions, true)
+        // Call internal upload function but suppress CLI behaviors
+        const uploadResponse = await uploadBundleInternal(options.appId, internalOptions, true)
 
-      return {
-        success: uploadResponse.success,
-        bundleId: uploadResponse.bundle,
-        checksum: uploadResponse.checksum ?? null,
-        encryptionMethod: uploadResponse.encryptionMethod,
-        sessionKey: uploadResponse.sessionKey,
-        ivSessionKey: uploadResponse.ivSessionKey,
-        storageProvider: uploadResponse.storageProvider,
-        skipped: uploadResponse.skipped,
-        reason: uploadResponse.reason,
-      }
+        return {
+          success: uploadResponse.success,
+          bundleId: uploadResponse.bundle,
+          checksum: uploadResponse.checksum ?? null,
+          encryptionMethod: uploadResponse.encryptionMethod,
+          sessionKey: uploadResponse.sessionKey,
+          ivSessionKey: uploadResponse.ivSessionKey,
+          storageProvider: uploadResponse.storageProvider,
+          skipped: uploadResponse.skipped,
+          reason: uploadResponse.reason,
+        }
+      })
     }
     catch (error) {
       return createErrorResult(error)
@@ -729,6 +749,12 @@ export class CapgoSDK {
         keystoreKeyPassword: creds?.KEYSTORE_KEY_PASSWORD,
         keystoreStorePassword: creds?.KEYSTORE_STORE_PASSWORD,
         playConfigJson: creds?.PLAY_CONFIG_JSON,
+        submitToStoreReview: options.submitToStoreReview ?? (creds?.CAPGO_STORE_SUBMIT_REVIEW === undefined ? undefined : creds.CAPGO_STORE_SUBMIT_REVIEW === 'true'),
+        storeReleaseName: options.storeReleaseName ?? creds?.CAPGO_STORE_RELEASE_NAME,
+        storeReleaseNotes: options.storeReleaseNotes ?? creds?.CAPGO_STORE_RELEASE_NOTES,
+        storeReleaseNotesLocalized: options.storeReleaseNotesLocalized ?? parseStoreReleaseNotesLocalizedJson(creds?.CAPGO_STORE_RELEASE_NOTES_LOCALIZED),
+        iosTestflightGroups: options.iosTestflightGroups ?? creds?.CAPGO_IOS_TESTFLIGHT_GROUPS,
+        iosAutomaticRelease: options.iosAutomaticRelease ?? (creds?.CAPGO_IOS_AUTOMATIC_RELEASE === undefined ? undefined : creds.CAPGO_IOS_AUTOMATIC_RELEASE === 'true'),
         // Prescan escape hatch: SDK callers own their output channel and cannot
         // pass CLI flags, so expose the gate controls directly.
         prescan: options.prescan,
@@ -843,6 +869,25 @@ export class CapgoSDK {
         emulator: options.emulator,
         device: options.device,
         prod: options.prod,
+        rolloutBundle: options.rolloutBundle,
+        rolloutPercentage: options.rolloutPercentage,
+        rolloutPercentageBps: options.rolloutPercentageBps,
+        rolloutEnable: options.rolloutEnable,
+        rolloutDisable: options.rolloutDisable,
+        rolloutPause: options.rolloutPause,
+        rolloutResume: options.rolloutResume,
+        rolloutRollback: options.rolloutRollback,
+        rolloutPromote: options.rolloutPromote,
+        rolloutCacheTtlSeconds: options.rolloutCacheTtlSeconds,
+        autoPauseEnabled: options.autoPauseEnabled,
+        autoPauseDisabled: options.autoPauseDisabled,
+        autoPauseWindowMinutes: options.autoPauseWindowMinutes,
+        autoPauseFailureRateBps: options.autoPauseFailureRateBps,
+        autoPauseConfidence: options.autoPauseConfidence,
+        autoPauseMinAttempts: options.autoPauseMinAttempts,
+        autoPauseMinFailures: options.autoPauseMinFailures,
+        autoPauseAction: options.autoPauseAction,
+        autoPauseCooldownMinutes: options.autoPauseCooldownMinutes,
         latest: false,
         latestRemote: false,
         packageJson: undefined,
@@ -927,12 +972,14 @@ export class CapgoSDK {
    */
   async generateEncryptionKeys(options?: GenerateKeyOptions): Promise<SDKResult> {
     try {
-      await createKeyInternal({
-        force: options?.force,
-        setupChannel: options?.setupChannel,
-      }, true)
+      return await withCapacitorConfigTarget(options?.capacitorConfig, async () => {
+        await createKeyInternal({
+          force: options?.force,
+          setupChannel: options?.setupChannel,
+        }, true)
 
-      return { success: true }
+        return { success: true }
+      })
     }
     catch (error) {
       return createErrorResult(error)
@@ -944,13 +991,15 @@ export class CapgoSDK {
    */
   async saveEncryptionKey(options?: SaveKeyOptions): Promise<SDKResult> {
     try {
-      await saveKeyInternal({
-        key: options?.keyPath,
-        keyData: options?.keyData,
-        setupChannel: options?.setupChannel,
-      }, true)
+      return await withCapacitorConfigTarget(options?.capacitorConfig, async () => {
+        await saveKeyInternal({
+          key: options?.keyPath,
+          keyData: options?.keyData,
+          setupChannel: options?.setupChannel,
+        }, true)
 
-      return { success: true }
+        return { success: true }
+      })
     }
     catch (error) {
       return createErrorResult(error)
@@ -962,15 +1011,17 @@ export class CapgoSDK {
    */
   async deleteLegacyEncryptionKey(options?: DeleteOldKeyOptions): Promise<SDKResult<{ deleted: boolean }>> {
     try {
-      const deleted = await deleteOldPrivateKeyInternal({
-        force: options?.force,
-        setupChannel: options?.setupChannel,
-      }, true)
+      return await withCapacitorConfigTarget(options?.capacitorConfig, async () => {
+        const deleted = await deleteOldPrivateKeyInternal({
+          force: options?.force,
+          setupChannel: options?.setupChannel,
+        }, true)
 
-      return {
-        success: true,
-        data: { deleted },
-      }
+        return {
+          success: true,
+          data: { deleted },
+        }
+      })
     }
     catch (error) {
       return createErrorResult(error)
@@ -1195,13 +1246,15 @@ export class CapgoSDK {
 
   async setAppSetting(path: string, options: SetSettingOptions): Promise<SDKResult> {
     try {
-      await setSettingInternal(path, {
-        apikey: options.apikey || this.apikey || findSavedKey(true),
-        bool: options.bool,
-        string: options.string,
-      }, true)
+      return await withCapacitorConfigTarget(options.capacitorConfig, async () => {
+        await setSettingInternal(path, {
+          apikey: options.apikey || this.apikey || findSavedKey(true),
+          bool: options.bool,
+          string: options.string,
+        }, true)
 
-      return { success: true }
+        return { success: true }
+      })
     }
     catch (error) {
       return createErrorResult(error)

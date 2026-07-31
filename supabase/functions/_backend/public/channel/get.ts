@@ -33,7 +33,29 @@ async function getAll(c: Context, body: GetDevice, apikey: Database['public']['T
       allow_device,
       allow_dev,
       allow_prod,
-      version (
+
+      rollout_version,
+      rollout_percentage_bps,
+      rollout_enabled,
+      rollout_id,
+      rollout_paused_at,
+      rollout_pause_reason,
+      rollout_cache_ttl_seconds,
+      auto_pause_enabled,
+      auto_pause_window_minutes,
+      auto_pause_failure_rate_bps,
+      auto_pause_confidence,
+      auto_pause_min_attempts,
+      auto_pause_min_failures,
+      auto_pause_action,
+      auto_pause_cooldown_minutes,
+      auto_pause_last_triggered_at,
+      auto_pause_last_checked_at,
+      rollout_version_info:app_versions!channels_rollout_version_fkey(
+        name,
+        id
+      ),
+      version:app_versions!channels_version_fkey(
         name,
         id
       )
@@ -45,11 +67,26 @@ async function getAll(c: Context, body: GetDevice, apikey: Database['public']['T
     throw simpleError('cannot_find_channels', 'Cannot find channels', { supabaseError: dbError })
   }
   return c.json(dataChannels.map((o) => {
-    const { disable_auto_update_under_native, disable_auto_update, ...rest } = o
+    const { disable_auto_update_under_native, disable_auto_update, rollout_percentage_bps, rollout_enabled, rollout_paused_at, rollout_pause_reason, rollout_cache_ttl_seconds, auto_pause_enabled, auto_pause_window_minutes, auto_pause_failure_rate_bps, auto_pause_confidence, auto_pause_min_attempts, auto_pause_min_failures, auto_pause_action, auto_pause_cooldown_minutes, auto_pause_last_triggered_at, auto_pause_last_checked_at, ...rest } = o
     return {
       ...rest,
       disableAutoUpdateUnderNative: disable_auto_update_under_native,
       disableAutoUpdate: disable_auto_update,
+      rolloutPercentageBps: rollout_percentage_bps,
+      rolloutEnabled: rollout_enabled,
+      rolloutPausedAt: rollout_paused_at,
+      rolloutPauseReason: rollout_pause_reason,
+      rolloutCacheTtlSeconds: rollout_cache_ttl_seconds,
+      autoPauseEnabled: auto_pause_enabled,
+      autoPauseWindowMinutes: auto_pause_window_minutes,
+      autoPauseFailureRateBps: auto_pause_failure_rate_bps,
+      autoPauseConfidence: auto_pause_confidence,
+      autoPauseMinAttempts: auto_pause_min_attempts,
+      autoPauseMinFailures: auto_pause_min_failures,
+      autoPauseAction: auto_pause_action,
+      autoPauseCooldownMinutes: auto_pause_cooldown_minutes,
+      autoPauseLastTriggeredAt: auto_pause_last_triggered_at,
+      autoPauseLastCheckedAt: auto_pause_last_checked_at,
     }
   }))
 }
@@ -73,7 +110,29 @@ async function getOne(c: Context, body: GetDevice, apikey: Database['public']['T
     allow_dev,
     allow_prod,
     public,
-    version (
+
+        rollout_version,
+        rollout_percentage_bps,
+        rollout_enabled,
+        rollout_id,
+        rollout_paused_at,
+        rollout_pause_reason,
+        rollout_cache_ttl_seconds,
+        auto_pause_enabled,
+        auto_pause_window_minutes,
+        auto_pause_failure_rate_bps,
+        auto_pause_confidence,
+        auto_pause_min_attempts,
+        auto_pause_min_failures,
+        auto_pause_action,
+        auto_pause_cooldown_minutes,
+        auto_pause_last_triggered_at,
+        auto_pause_last_checked_at,
+        rollout_version_info:app_versions!channels_rollout_version_fkey(
+          name,
+          id
+        ),
+    version:app_versions!channels_version_fkey(
       name,
       id
     )
@@ -85,11 +144,26 @@ async function getOne(c: Context, body: GetDevice, apikey: Database['public']['T
     throw simpleError('cannot_find_version', 'Cannot find version', { supabaseError: dbError })
   }
 
-  const { disable_auto_update_under_native, disable_auto_update, ...rest } = dataChannel
+  const { disable_auto_update_under_native, disable_auto_update, rollout_percentage_bps, rollout_enabled, rollout_paused_at, rollout_pause_reason, rollout_cache_ttl_seconds, auto_pause_enabled, auto_pause_window_minutes, auto_pause_failure_rate_bps, auto_pause_confidence, auto_pause_min_attempts, auto_pause_min_failures, auto_pause_action, auto_pause_cooldown_minutes, auto_pause_last_triggered_at, auto_pause_last_checked_at, ...rest } = dataChannel
   const newObject = {
     ...rest,
     disableAutoUpdateUnderNative: disable_auto_update_under_native,
     disableAutoUpdate: disable_auto_update,
+    rolloutPercentageBps: rollout_percentage_bps,
+    rolloutEnabled: rollout_enabled,
+    rolloutPausedAt: rollout_paused_at,
+    rolloutPauseReason: rollout_pause_reason,
+    rolloutCacheTtlSeconds: rollout_cache_ttl_seconds,
+    autoPauseEnabled: auto_pause_enabled,
+    autoPauseWindowMinutes: auto_pause_window_minutes,
+    autoPauseFailureRateBps: auto_pause_failure_rate_bps,
+    autoPauseConfidence: auto_pause_confidence,
+    autoPauseMinAttempts: auto_pause_min_attempts,
+    autoPauseMinFailures: auto_pause_min_failures,
+    autoPauseAction: auto_pause_action,
+    autoPauseCooldownMinutes: auto_pause_cooldown_minutes,
+    autoPauseLastTriggeredAt: auto_pause_last_triggered_at,
+    autoPauseLastCheckedAt: auto_pause_last_checked_at,
   }
 
   return c.json(newObject)

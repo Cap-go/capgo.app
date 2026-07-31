@@ -17,6 +17,7 @@ import { formatLocalDate } from '~/services/date'
 import { checkPermissions } from '~/services/permissions'
 import { useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
+import { getErrorMessage } from '~/utils/errors'
 
 interface Role {
   id: string
@@ -139,7 +140,7 @@ async function fetchAppDetails() {
 
     ownerOrg.value = data?.owner_org || ''
   }
-  catch (error: any) {
+  catch (error: unknown) {
     console.error('Error fetching app details:', error)
   }
 }
@@ -235,7 +236,7 @@ async function fetchAppRoleBindings() {
 
     roleBindings.value = enrichedBindings
   }
-  catch (error: any) {
+  catch (error: unknown) {
     console.error('Error fetching app role bindings:', error)
     toast.error(t('error-fetching-role-bindings'))
   }
@@ -258,7 +259,7 @@ async function fetchAvailableAppRoles() {
 
     availableAppRoles.value = (data || []) as Role[]
   }
-  catch (error: any) {
+  catch (error: unknown) {
     console.error('Error fetching app roles:', error)
   }
 }
@@ -284,7 +285,7 @@ async function fetchAvailableMembers() {
       email: m.users.email,
     })) as any
   }
-  catch (error: any) {
+  catch (error: unknown) {
     console.error('Error fetching members:', error)
   }
 }
@@ -303,7 +304,7 @@ async function fetchAvailableGroups() {
 
     availableGroups.value = data || []
   }
-  catch (error: any) {
+  catch (error: unknown) {
     console.error('Error fetching groups:', error)
   }
 }
@@ -351,9 +352,9 @@ async function assignRole() {
     isAssignRoleModalOpen.value = false
     await fetchAppRoleBindings()
   }
-  catch (error: any) {
+  catch (error: unknown) {
     console.error('Error assigning role:', error)
-    if (error?.message?.includes('already has a role')) {
+    if (getErrorMessage(error)?.includes('already has a role')) {
       toast.error(t('error-role-already-assigned'))
     }
     else {
@@ -387,7 +388,7 @@ async function handleEditRoleConfirm(newRoleName: string) {
     toast.success(t('permission-changed'))
     await fetchAppRoleBindings()
   }
-  catch (error: any) {
+  catch (error: unknown) {
     console.error('Error changing role:', error)
     toast.error(t('error-assigning-role'))
   }
@@ -421,7 +422,7 @@ async function removeRoleBinding(bindingId: string) {
     toast.success(t('role-removed'))
     await fetchAppRoleBindings()
   }
-  catch (error: any) {
+  catch (error: unknown) {
     console.error('Error removing role:', error)
     toast.error(t('error-removing-role'))
   }
@@ -436,7 +437,7 @@ async function loadAppAccess() {
     try {
       canAssignRoles.value = await checkPermissions('app.update_user_roles', { appId: props.appId })
     }
-    catch (error: any) {
+    catch (error: unknown) {
       console.error('Error checking app role permissions:', error)
       canAssignRoles.value = false
     }
@@ -558,10 +559,10 @@ onMounted(async () => {
 
         <!-- Principal Type -->
         <div class="mt-4 form-control">
-          <label class="label">
+          <label class="label" for="assign-role-principal-type">
             <span class="label-text">{{ t('principal-type') }}</span>
           </label>
-          <select v-model="assignRoleForm.principal_type" class="d-select">
+          <select id="assign-role-principal-type" v-model="assignRoleForm.principal_type" class="d-select" :aria-label="t('principal-type')">
             <option value="user">
               {{ t('user') }}
             </option>
@@ -573,12 +574,12 @@ onMounted(async () => {
 
         <!-- Principal Selection -->
         <div class="mt-4 form-control">
-          <label class="label">
+          <label class="label" for="assign-role-principal-id">
             <span class="label-text">
               {{ assignRoleForm.principal_type === 'user' ? t('select-user') : t('select-group') }}
             </span>
           </label>
-          <select v-model="assignRoleForm.principal_id" class="d-select" required>
+          <select id="assign-role-principal-id" v-model="assignRoleForm.principal_id" class="d-select" required :aria-label="assignRoleForm.principal_type === 'user' ? t('select-user') : t('select-group')">
             <option value="">
               {{ assignRoleForm.principal_type === 'user' ? t('select-user') : t('select-group') }}
             </option>
@@ -603,12 +604,14 @@ onMounted(async () => {
 
         <!-- Reason (optional) -->
         <div class="mt-4 form-control">
-          <label class="label">
+          <label class="label" for="assign-role-reason">
             <span class="label-text">{{ t('reason-optional') }}</span>
           </label>
           <textarea
+            id="assign-role-reason"
             v-model="assignRoleForm.reason"
             :placeholder="t('reason-placeholder')"
+            :aria-label="t('reason-optional')"
             class="d-textarea"
             rows="2"
           />

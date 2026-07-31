@@ -12,6 +12,7 @@ import {
 } from 'chart.js'
 import { computed } from 'vue'
 import { Bar } from 'vue-chartjs'
+import { formatNumberValue } from '~/services/formatLocale'
 
 const props = defineProps({
   labels: {
@@ -69,7 +70,7 @@ const palette = [
 ]
 
 function formatCountValue(value: number) {
-  const formattedValue = value.toLocaleString()
+  const formattedValue = formatNumberValue(value)
   return props.valueSuffix ? `${formattedValue} ${props.valueSuffix}` : formattedValue
 }
 
@@ -115,10 +116,10 @@ const chartOptions = computed<ChartOptions<'bar'>>(() => ({
           if (props.valueMode === 'count')
             return `${context.dataset.label || props.label}: ${formatCountValue(value)}`
 
-          const percent = `${value.toFixed(2)}%`
+          const percent = `${formatNumberValue(value, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`
           if (props.total) {
             const devices = Math.round((value / 100) * props.total)
-            return `${percent} (${devices.toLocaleString()} devices)`
+            return `${percent} (${formatNumberValue(devices)} devices)`
           }
           return percent
         },
@@ -159,7 +160,7 @@ const chartOptions = computed<ChartOptions<'bar'>>(() => ({
       <span class="loading loading-spinner loading-lg text-primary" />
     </div>
     <div v-else class="w-full h-full">
-      <Bar :data="chartData" :options="chartOptions" />
+      <Bar class="h-full w-full" :data="chartData" :options="chartOptions" />
     </div>
   </div>
 </template>

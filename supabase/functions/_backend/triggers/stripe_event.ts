@@ -5,18 +5,19 @@ import type { StripeData, StripeWebhookStatus } from '../utils/stripe.ts'
 import type { Database } from '../utils/supabase.types.ts'
 import { eq, sql } from 'drizzle-orm'
 import { Hono } from 'hono/tiny'
-import { addTagBento, trackBentoEvent } from '../utils/bento.ts'
+import { isBentoConfigured, syncBentoSubscriberTags, trackBentoEvent } from '../utils/bento.ts'
 import { getFallbackCreditProductId } from '../utils/credits.ts'
 import { BRES, quickError, simpleError } from '../utils/hono.ts'
 import { middlewareStripeWebhook } from '../utils/hono_middleware_stripe.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
+import { getOrgAdminMemberEmailsForTags } from '../utils/org_email_notifications.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import * as schema from '../utils/postgres_schema.ts'
 import { groupIdentifyPosthog } from '../utils/posthog.ts'
-import { ensureCustomerMetadata, getCreditCheckoutDetails, syncStripeCustomerCountry } from '../utils/stripe.ts'
+import { ensureCustomerMetadata, getCreditCheckoutDetails, getStripe, syncStripeCustomerCountry } from '../utils/stripe.ts'
 import { customerToSegmentOrg, supabaseAdmin } from '../utils/supabase.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
-import { backgroundTask } from '../utils/utils.ts'
+import { backgroundTask, isStripeConfigured } from '../utils/utils.ts'
 
 export const app = new Hono<MiddlewareKeyVariablesStripe>()
 
@@ -57,6 +58,8 @@ interface RevenueMovement {
 }
 
 type PersistRevenueMovementResult = 'applied' | 'duplicate' | 'missing' | 'stale'
+type BentoSegmentUpdate = { segments: string[], deleteSegments: string[] }
+type BentoSubscriberTagUpdate = { email: string, segments: string[], deleteSegments: string[] }
 
 const ZERO_REVENUE_MOVEMENT: RevenueMovement = {
   currentMrr: 0,
@@ -114,6 +117,34 @@ function isSubscriptionUpdateStatus(
   status: StripeWebhookStatus | null | undefined,
 ): status is StripeWebhookStatus {
   return Boolean(status && SUBSCRIPTION_UPDATE_STATUSES.has(status))
+}
+
+function normalizeBillingEmail(email: string | null | undefined) {
+  const normalized = email?.trim().toLowerCase()
+  return normalized || null
+}
+
+function buildBillingBentoTagUpdates(
+  emails: Array<string | null | undefined>,
+  segments: BentoSegmentUpdate,
+): BentoSubscriberTagUpdate[] {
+  const emailSet = new Set<string>()
+  const updates: BentoSubscriberTagUpdate[] = []
+
+  for (const email of emails) {
+    const normalizedEmail = normalizeBillingEmail(email)
+    if (!normalizedEmail || emailSet.has(normalizedEmail))
+      continue
+
+    emailSet.add(normalizedEmail)
+    updates.push({
+      email: normalizedEmail,
+      segments: [...segments.segments],
+      deleteSegments: [...segments.deleteSegments],
+    })
+  }
+
+  return updates
 }
 
 function getPaidAtUpdate(
@@ -245,6 +276,125 @@ function getPlanByProductId(plans: RevenuePlanRow[], productId: string | null | 
   return plans.find(plan => plan.stripe_id === productId) ?? null
 }
 
+async function lookupOrgCreatorEmail(
+  c: Context,
+  drizzleClient: ReturnType<typeof getDrizzleClient>,
+  org: Org,
+): Promise<string | null> {
+  try {
+    const users = await drizzleClient
+      .select({ email: schema.users.email })
+      .from(schema.users)
+      .where(eq(schema.users.id, org.created_by))
+      .limit(1)
+
+    return users[0]?.email ?? null
+  }
+  catch (error) {
+    cloudlog({ requestId: c.get('requestId'), message: 'lookupOrgCreatorEmail failed', orgId: org.id, userId: org.created_by, error })
+    return null
+  }
+}
+
+async function getStripeCustomerBillingEmail(c: Context, customerId: string): Promise<string | null> {
+  if (!customerId || !isStripeConfigured(c))
+    return null
+
+  try {
+    const customer = await getStripe(c).customers.retrieve(customerId)
+    if ('deleted' in customer && customer.deleted)
+      return null
+
+    return normalizeBillingEmail(customer.email)
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'getStripeCustomerBillingEmail error', customerId, error })
+    return null
+  }
+}
+
+async function getBillingBentoEmails(c: Context, org: Org, customerId: string) {
+  const emails: Array<string | null | undefined> = [org.management_email]
+  const pgClient = getPgClient(c, true)
+
+  try {
+    const drizzleClient = getDrizzleClient(pgClient)
+    const { emails: billingMemberEmails } = await getOrgAdminMemberEmailsForTags(c, org.id, drizzleClient, 'billing')
+    emails.push(...billingMemberEmails)
+
+    const creatorEmail = await lookupOrgCreatorEmail(c, drizzleClient, org)
+    emails.push(creatorEmail)
+  }
+  finally {
+    closeClient(c, pgClient)
+  }
+
+  emails.push(await getStripeCustomerBillingEmail(c, customerId))
+
+  return emails
+}
+
+async function getBillingPlans(c: Context): Promise<PlanRow[]> {
+  const { data: plans, error } = await supabaseAdmin(c)
+    .from('plans')
+    .select()
+
+  if (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'getBillingPlans error', error })
+    throw error
+  }
+
+  return plans ?? []
+}
+
+async function syncBillingBentoTags(
+  c: Context,
+  org: Org,
+  customerId: string,
+  segment: BentoSegmentUpdate,
+) {
+  if (!isBentoConfigured(c))
+    return
+
+  const updates = buildBillingBentoTagUpdates(await getBillingBentoEmails(c, org, customerId), segment)
+  if (updates.length === 0)
+    return
+
+  const synced = await syncBentoSubscriberTags(c, updates)
+  cloudlog({
+    requestId: c.get('requestId'),
+    message: 'syncBillingBentoTags',
+    orgId: org.id,
+    customerId,
+    recipientCount: updates.length,
+    synced: synced !== false,
+  })
+}
+
+async function syncBillingBentoTagsFromStoredStripeInfo(c: Context, org: Org, customerId: string) {
+  if (!isBentoConfigured(c))
+    return
+
+  const { data: stripeInfo, error: stripeInfoError } = await supabaseAdmin(c)
+    .from('stripe_info')
+    .select('price_id, product_id')
+    .eq('customer_id', customerId)
+    .maybeSingle()
+
+  if (stripeInfoError) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'syncBillingBentoTagsFromStoredStripeInfo stripe_info error', customerId, error: stripeInfoError })
+    return
+  }
+  if (!stripeInfo)
+    return
+
+  const plans = await getBillingPlans(c)
+  const plan = plans.find(candidate => candidate.stripe_id === stripeInfo.product_id) ?? null
+  const trialPlanNames = plans.map(candidate => candidate.name)
+  const segment = await customerToSegmentOrg(c, org.id, stripeInfo.price_id, plan, trialPlanNames)
+  await syncBillingBentoTags(c, org, customerId, segment)
+}
+
 function getSubscriptionPlan(plans: RevenuePlanRow[], stripeInfo: StripeInfoRevenueState) {
   if (!stripeInfo || !stripeInfo.status || !REVENUE_SUBSCRIPTION_STATUSES.has(stripeInfo.status) || stripeInfo.is_good_plan === false)
     return null
@@ -355,10 +505,9 @@ function getRevenueChurnReason(
   return getChurnReason(currentStripeInfo, nextStripeInfo)
 }
 
-function shouldTrackOrganizationUpgrade(isUpgrade: boolean, movement: RevenueMovement) {
-  if (isUpgrade)
-    return true
-
+function shouldTrackOrganizationUpgrade(_isUpgrade: boolean, movement: RevenueMovement) {
+  // Only already-paying orgs that move to higher MRR (larger plan / expansion).
+  // monthly->yearly alone is not enough if MRR does not increase.
   return movement.currentMrr > 0 && movement.nextMrr > movement.currentMrr
 }
 
@@ -882,6 +1031,7 @@ async function createdOrUpdated(
     if (paidAt)
       updateData.paid_at = paidAt
     const revenuePlans = await getRevenuePlans(c)
+    const billingPlans = await getBillingPlans(c)
     const revenueMovement = classifyRevenueMovement(currentStripeInfo, updateData, revenuePlans)
     if (shouldTrackOrganizationUpgrade(stripeData.isUpgrade, revenueMovement))
       updateData.upgraded_at = eventOccurredAtIso
@@ -954,11 +1104,11 @@ async function createdOrUpdated(
       await writePaidAtAtomically(c, stripeData.data.customer_id, paidAt)
     }
 
-    const segment = await customerToSegmentOrg(c, org.id, stripeData.data.price_id, plan)
+    const segment = await customerToSegmentOrg(c, org.id, stripeData.data.price_id, plan, billingPlans.map(candidate => candidate.name))
     const isMonthly = plan.price_m_id === stripeData.data.price_id
     const eventName = `user:subscribe_${statusName}:${isMonthly ? 'monthly' : 'yearly'}`
     const subscriptionMetadata = buildSubscriptionEventMetadata(stripeData, plan, previousPlan)
-    await addTagBento(c, org.management_email, segment)
+    await syncBillingBentoTags(c, org, stripeData.data.customer_id, segment)
     const isNewSubscription = status === 'created'
     await sendEventToTracking(c, {
       bento: {
@@ -992,7 +1142,7 @@ async function createdOrUpdated(
   }
   else {
     const segment = await customerToSegmentOrg(c, org.id, stripeData.data.price_id)
-    await addTagBento(c, org.management_email, segment)
+    await syncBillingBentoTags(c, org, stripeData.data.customer_id, segment)
   }
 }
 
@@ -1008,9 +1158,9 @@ async function updateStripeInfo(c: Context, stripeData: StripeData) {
   return false
 }
 
-async function didCancel(c: Context, org: Org) {
+async function didCancel(c: Context, org: Org, customerId: string) {
   const segment = await customerToSegmentOrg(c, org.id, 'canceled')
-  await addTagBento(c, org.management_email, segment)
+  await syncBillingBentoTags(c, org, customerId, segment)
   await sendEventToTracking(c, {
     bento: {
       cron: '* * * * *',
@@ -1039,18 +1189,26 @@ async function didCancel(c: Context, org: Org) {
   }))
 }
 
-async function getOrg(c: Context, stripeData: StripeData) {
+async function getOrgForCustomerId(c: Context, customerId: string): Promise<Org | null> {
   const { error: dbError, data: org } = await supabaseAdmin(c)
     .from('orgs')
-    .select('id, management_email, created_by, name')
-    .eq('customer_id', stripeData.data.customer_id)
-    .single()
+    .select('id, management_email, created_by, name, customer_id')
+    .eq('customer_id', customerId)
+    .maybeSingle()
+
   if (dbError) {
-    throw simpleError('webhook_error_no_org_found', 'Webhook Error: no org found')
+    cloudlogErr({ requestId: c.get('requestId'), message: 'getOrgForCustomerId error', customerId, error: dbError })
+    return null
   }
-  if (!org) {
+
+  return org ?? null
+}
+
+async function getOrg(c: Context, stripeData: StripeData) {
+  const org = await getOrgForCustomerId(c, stripeData.data.customer_id)
+  if (!org)
     throw simpleError('webhook_error_no_org_found', 'Webhook Error: no org found')
-  }
+
   return org
 }
 
@@ -1120,6 +1278,11 @@ app.post('/', middlewareStripeWebhook(), async (c) => {
 
   if (isCustomerProfileEvent(stripeEvent)) {
     await syncStripeCustomerCountry(c, stripeData.data.customer_id)
+    const org = await getOrgForCustomerId(c, stripeData.data.customer_id)
+    if (org) {
+      await ensureCustomerMetadata(c, stripeData.data.customer_id, org.id, org.created_by)
+      await syncBillingBentoTagsFromStoredStripeInfo(c, org, stripeData.data.customer_id)
+    }
     return c.json(BRES)
   }
 
@@ -1232,7 +1395,7 @@ app.post('/', middlewareStripeWebhook(), async (c) => {
         return quickError(404, 'canceled_customer_id_not_found', `canceled: customer_id not found`, { stripeData })
 
       // This is the known subscription being cancelled.
-      await didCancel(c, org)
+      await didCancel(c, org, stripeData.data.customer_id)
     }
     // If it's a different subscription (not the one in DB), ignore it
     // This prevents old subscription webhooks from overwriting newer active subscriptions
@@ -1244,6 +1407,7 @@ app.post('/', middlewareStripeWebhook(), async (c) => {
 })
 
 export const stripeEventTestUtils = {
+  buildBillingBentoTagUpdates,
   buildSubscriptionEventMetadata,
   classifyRevenueMovement,
   getEventDateId,

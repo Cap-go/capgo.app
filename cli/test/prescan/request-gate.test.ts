@@ -7,7 +7,13 @@ import { executePrescan } from '../../src/build/prescan/command'
 import { requestBuildInternal } from '../../src/build/request'
 import { makeProject } from './helpers'
 
+const realFetch = globalThis.fetch
+
 describe('build request rejects contradictory prescan flags', () => {
+  afterEach(() => {
+    globalThis.fetch = realFetch
+  })
+
   it('--prescan-ignore-fatal + --fail-on-warnings fails before any network call', async () => {
     const result = await requestBuildInternal(
       'com.demo.app',
@@ -23,6 +29,9 @@ describe('build request rejects contradictory prescan flags', () => {
   })
 
   it('--no-prescan skips the flag validation (combination is then irrelevant)', async () => {
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({}), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    ) as typeof fetch
     const result = await requestBuildInternal(
       'com.demo.app',
       {
@@ -34,6 +43,8 @@ describe('build request rejects contradictory prescan flags', () => {
         // proving it got PAST flag validation
         path: makeProject({}),
         apikey: 'fake-key-for-test',
+        supaHost: 'https://fake.supabase.co',
+        supaAnon: 'fake-anon',
       } as BuildRequestOptions,
       true,
     )
@@ -63,7 +74,6 @@ describe('play-sa-access probe is gated by PLAY_CONFIG_JSON presence in the thre
     'android/app/build.gradle': 'android {\n  defaultConfig {\n    applicationId "com.demo.app"\n  }\n}\n',
   }
 
-  const realFetch = globalThis.fetch
   afterEach(() => {
     globalThis.fetch = realFetch
   })
@@ -120,8 +130,6 @@ interface GateProbe {
   postedBuildRequest: boolean
   urls: string[]
 }
-
-const realFetch = globalThis.fetch
 
 /**
  * Route all outbound fetch. cli_check_permission returns `permission`; the

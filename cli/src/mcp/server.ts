@@ -1,12 +1,34 @@
 import type { SDKResult } from '../schemas/sdk'
 import process from 'node:process'
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
-import { z } from 'zod'
+import { McpServer } from '@modelcontextprotocol/server'
+import { StdioServerTransport } from '@modelcontextprotocol/server/stdio'
 import pack from '../../package.json'
 import { enableSupabaseInstrumentation, setInvocationSource, trackMcpServerStarted, withMcpToolTracking } from '../analytics/track'
-import { addAppOptionsSchema, cleanupOptionsSchema, getStatsOptionsSchema, requestBuildOptionsSchema, starAllRepositoriesOptionsSchema, starRepoOptionsSchema, updateAppOptionsSchema, updateChannelOptionsSchema, uploadOptionsSchema } from '../schemas/sdk'
+import { parseSchema } from '../schemas/schema_validation'
+import { starAllRepositoriesOptionsSchema, starRepoOptionsSchema, updateChannelOptionsSchema } from '../schemas/sdk'
+import {
+  mcpAddAppInputSchema,
+  mcpAddChannelInputSchema,
+  mcpAddOrganizationInputSchema,
+  mcpCheckCompatibilityInputSchema,
+  mcpCleanupBundlesInputSchema,
+  mcpDeleteAppInputSchema,
+  mcpDeleteBundleInputSchema,
+  mcpDeleteChannelInputSchema,
+  mcpDoctorInputSchema,
+  mcpGenerateEncryptionKeysInputSchema,
+  mcpGetCurrentBundleInputSchema,
+  mcpGetStatsInputSchema,
+  mcpListBundlesInputSchema,
+  mcpListChannelsInputSchema,
+  mcpProbeInputSchema,
+  mcpRequestBuildInputSchema,
+  mcpUpdateAppInputSchema,
+  mcpUpdateChannelInputSchema,
+  mcpUploadBundleInputSchema,
+} from './tool-schemas'
 import { CapgoSDK } from '../sdk'
+import { getConfigWriteTarget, setConfigWriteTarget } from '../config'
 import { clearSavedKey, getLoginState, loginSuccessMessage, logoutMessage, validateAndSaveKey, whoamiMessage } from '../auth/session'
 import { mcpLoginInputSchema, mcpLogoutInputSchema } from '../schemas/auth'
 import { findSavedKeySilent, formatError } from '../utils'
@@ -32,12 +54,31 @@ function formatMcpError<T>(result: SDKResult<T>): { content: Array<{ type: 'text
     isError: true,
   }
 }
-
 /**
  * Start the Capgo MCP (Model Context Protocol) server.
  * This allows AI agents to interact with Capgo Cloud programmatically.
  */
-export async function startMcpServer(): Promise<void> {
+export async function startMcpServer(capacitorConfigTarget?: string): Promise<void> {
+  const previousConfigWriteTarget = getConfigWriteTarget()
+  let restored = false
+  const restoreConfigWriteTarget = () => {
+    if (restored)
+      return
+    restored = true
+    setConfigWriteTarget(previousConfigWriteTarget)
+  }
+
+  setConfigWriteTarget(capacitorConfigTarget)
+  try {
+    await startMcpServerInternal(restoreConfigWriteTarget)
+  }
+  catch (error) {
+    restoreConfigWriteTarget()
+    throw error
+  }
+}
+
+async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Promise<void> {
   // Install the stdout guard FIRST, before any startup code (saved-key lookup, SDK init,
   // lazily imported deps) can emit a stray clack/console line. It reroutes ambient stdout
   // to stderr and returns the ONLY writer allowed to reach the real stdout for JSON-RPC
@@ -59,12 +100,9 @@ export async function startMcpServer(): Promise<void> {
   enableSupabaseInstrumentation()
 
   // Auto-track every tool invocation without touching each registration.
-  const originalTool = server.tool.bind(server)
-  ;(server as unknown as { tool: (...args: any[]) => unknown }).tool = (...args: any[]) => {
-    const handlerIndex = args.length - 1
-    if (typeof args[handlerIndex] === 'function')
-      args[handlerIndex] = withMcpToolTracking(String(args[0]), args[handlerIndex])
-    return (originalTool as (...a: any[]) => unknown)(...args)
+  const originalRegisterTool = server.registerTool.bind(server)
+  ;(server as unknown as { registerTool: typeof server.registerTool }).registerTool = (name: string, config: Parameters<typeof server.registerTool>[1], handler: Parameters<typeof server.registerTool>[2]) => {
+    return originalRegisterTool(name, config, withMcpToolTracking(String(name), handler as any) as typeof handler)
   }
 
   // Initialize the SDK from any saved key. Silent lookup (env -> ~/.capgo -> ./.capgo):
@@ -80,10 +118,11 @@ export async function startMcpServer(): Promise<void> {
   // App Management Tools
   // ============================================================================
 
-  server.tool(
+  server.registerTool(
     'capgo_list_apps',
-    'List all apps registered in your Capgo Cloud account',
-    {},
+    {
+      description: 'List all apps registered in your Capgo Cloud account',
+    },
     async () => {
       const result = await sdk.listApps()
       if (!result.success) {
@@ -98,10 +137,12 @@ export async function startMcpServer(): Promise<void> {
     },
   )
 
-  server.tool(
+  server.registerTool(
     'capgo_add_app',
-    'Register a new app in Capgo Cloud',
-    addAppOptionsSchema.pick({ appId: true, name: true, icon: true }).shape,
+    {
+      description: 'Register a new app in Capgo Cloud',
+      inputSchema: mcpAddAppInputSchema,
+    },
     async ({ appId, name, icon }) => {
       const result = await sdk.addApp({ appId, name, icon })
       if (!result.success) {
@@ -113,10 +154,12 @@ export async function startMcpServer(): Promise<void> {
     },
   )
 
-  server.tool(
+  server.registerTool(
     'capgo_update_app',
-    'Update settings for an existing app in Capgo Cloud',
-    updateAppOptionsSchema.pick({ appId: true, name: true, icon: true, retention: true }).shape,
+    {
+      description: 'Update settings for an existing app in Capgo Cloud',
+      inputSchema: mcpUpdateAppInputSchema,
+    },
     async ({ appId, name, icon, retention }) => {
       const result = await sdk.updateApp({ appId, name, icon, retention })
       if (!result.success) {
@@ -128,11 +171,11 @@ export async function startMcpServer(): Promise<void> {
     },
   )
 
-  server.tool(
+  server.registerTool(
     'capgo_delete_app',
-    'Delete an app from Capgo Cloud',
     {
-      appId: z.string().describe('App ID to delete'),
+      description: 'Delete an app from Capgo Cloud',
+      inputSchema: mcpDeleteAppInputSchema,
     },
     async ({ appId }) => {
       const result = await sdk.deleteApp(appId, true) // skipConfirmation=true for non-interactive
@@ -149,20 +192,41 @@ export async function startMcpServer(): Promise<void> {
   // Bundle Management Tools
   // ============================================================================
 
-  server.tool(
+  server.registerTool(
     'capgo_upload_bundle',
-    'Upload a new app bundle to Capgo Cloud for distribution',
-    uploadOptionsSchema.pick({ appId: true, path: true, bundle: true, channel: true, comment: true, minUpdateVersion: true, autoMinUpdateVersion: true, encrypt: true }).shape,
-    async ({ appId, path, bundle, channel, comment, minUpdateVersion, autoMinUpdateVersion, encrypt }) => {
+    {
+      description: 'Upload a new app bundle to Capgo Cloud for distribution',
+      inputSchema: mcpUploadBundleInputSchema,
+    },
+    async ({
+      appId,
+      path,
+      bundle,
+      channel,
+      rollout,
+      rolloutPercentageBps,
+      rolloutCacheTtlSeconds,
+      comment,
+      minUpdateVersion,
+      autoMinUpdateVersion,
+      autoSetBundle,
+      encrypt,
+      capacitorConfig,
+    }) => {
       const result = await sdk.uploadBundle({
         appId,
         path,
         bundle,
         channel,
+        rollout,
+        rolloutPercentageBps,
+        rolloutCacheTtlSeconds,
         comment,
         minUpdateVersion,
         autoMinUpdateVersion,
+        autoSetBundle,
         encrypt,
+        capacitorConfig,
       })
       if (!result.success) {
         return formatMcpError(result)
@@ -182,10 +246,12 @@ export async function startMcpServer(): Promise<void> {
     },
   )
 
-  server.tool(
+  server.registerTool(
     'capgo_star_repository',
-    'Star a GitHub repository to support Capgo',
-    starRepoOptionsSchema.shape,
+    {
+      description: 'Star a GitHub repository to support Capgo',
+      inputSchema: starRepoOptionsSchema,
+    },
     async ({ repository }) => {
       const result = await sdk.starRepo({ repository })
       if (!result.success) {
@@ -202,10 +268,12 @@ export async function startMcpServer(): Promise<void> {
     },
   )
 
-  server.tool(
+  server.registerTool(
     'capgo_star_all_repositories',
-    'Star the default Capgo repositories on GitHub with a random delay between requests',
-    starAllRepositoriesOptionsSchema.shape,
+    {
+      description: 'Star the default Capgo repositories on GitHub with a random delay between requests',
+      inputSchema: starAllRepositoriesOptionsSchema,
+    },
     async ({ repositories, minDelayMs, maxDelayMs }) => {
       const result = await sdk.starAllRepositories({ repositories, minDelayMs, maxDelayMs })
       if (!result.success) {
@@ -221,11 +289,11 @@ export async function startMcpServer(): Promise<void> {
     },
   )
 
-  server.tool(
+  server.registerTool(
     'capgo_list_bundles',
-    'List all bundles uploaded for an app',
     {
-      appId: z.string().describe('App ID to list bundles for'),
+      description: 'List all bundles uploaded for an app',
+      inputSchema: mcpListBundlesInputSchema,
     },
     async ({ appId }) => {
       const result = await sdk.listBundles(appId)
@@ -241,12 +309,11 @@ export async function startMcpServer(): Promise<void> {
     },
   )
 
-  server.tool(
+  server.registerTool(
     'capgo_delete_bundle',
-    'Delete a specific bundle from Capgo Cloud',
     {
-      appId: z.string().describe('App ID'),
-      bundleId: z.string().describe('Bundle version to delete'),
+      description: 'Delete a specific bundle from Capgo Cloud',
+      inputSchema: mcpDeleteBundleInputSchema,
     },
     async ({ appId, bundleId }) => {
       const result = await sdk.deleteBundle(appId, bundleId)
@@ -259,10 +326,12 @@ export async function startMcpServer(): Promise<void> {
     },
   )
 
-  server.tool(
+  server.registerTool(
     'capgo_cleanup_bundles',
-    'Delete old bundles, keeping only recent versions',
-    cleanupOptionsSchema.pick({ appId: true, keep: true, bundle: true, force: true, ignoreChannel: true }).shape,
+    {
+      description: 'Delete old bundles, keeping only recent versions',
+      inputSchema: mcpCleanupBundlesInputSchema,
+    },
     async ({ appId, keep, bundle, force, ignoreChannel }) => {
       const result = await sdk.cleanupBundles({
         appId,
@@ -287,13 +356,11 @@ export async function startMcpServer(): Promise<void> {
     },
   )
 
-  server.tool(
+  server.registerTool(
     'capgo_check_compatibility',
-    'Check bundle compatibility with a specific channel',
     {
-      appId: z.string().describe('App ID to check'),
-      channel: z.string().describe('Channel to check compatibility with'),
-      packageJson: z.string().optional().describe('Path to package.json for monorepos'),
+      description: 'Check bundle compatibility with a specific channel',
+      inputSchema: mcpCheckCompatibilityInputSchema,
     },
     async ({ appId, channel, packageJson }) => {
       const result = await sdk.checkBundleCompatibility({
@@ -317,11 +384,11 @@ export async function startMcpServer(): Promise<void> {
   // Channel Management Tools
   // ============================================================================
 
-  server.tool(
+  server.registerTool(
     'capgo_list_channels',
-    'List all channels for an app',
     {
-      appId: z.string().describe('App ID to list channels for'),
+      description: 'List all channels for an app',
+      inputSchema: mcpListChannelsInputSchema,
     },
     async ({ appId }) => {
       const result = await sdk.listChannels(appId)
@@ -337,14 +404,11 @@ export async function startMcpServer(): Promise<void> {
     },
   )
 
-  server.tool(
+  server.registerTool(
     'capgo_add_channel',
-    'Create a new distribution channel for an app',
     {
-      appId: z.string().describe('App ID'),
-      channelId: z.string().describe('Channel name to create'),
-      default: z.boolean().optional().describe('Set as default channel'),
-      selfAssign: z.boolean().optional().describe('Allow devices to self-assign to this channel'),
+      description: 'Create a new distribution channel for an app',
+      inputSchema: mcpAddChannelInputSchema,
     },
     async ({ appId, channelId, default: isDefault, selfAssign }) => {
       const result = await sdk.addChannel({
@@ -362,12 +426,14 @@ export async function startMcpServer(): Promise<void> {
     },
   )
 
-  server.tool(
+  server.registerTool(
     'capgo_update_channel',
-    'Update channel settings including linked bundle and targeting options',
-    updateChannelOptionsSchema.pick({ appId: true, channelId: true, bundle: true, state: true, downgrade: true, ios: true, android: true, selfAssign: true, disableAutoUpdate: true, dev: true, emulator: true, device: true, prod: true }).shape,
-    async ({ appId, channelId, bundle, state, downgrade, ios, android, selfAssign, disableAutoUpdate, dev, emulator, device, prod }) => {
-      const result = await sdk.updateChannel({
+    {
+      description: 'Update channel settings including linked bundle and targeting options',
+      inputSchema: mcpUpdateChannelInputSchema,
+    },
+    async ({ appId, channelId, bundle, state, downgrade, ios, android, selfAssign, disableAutoUpdate, dev, emulator, device, prod, rolloutBundle, rolloutPercentage, rolloutPercentageBps, rolloutEnable, rolloutDisable, rolloutPause, rolloutResume, rolloutRollback, rolloutPromote, rolloutCacheTtlSeconds, autoPauseEnabled, autoPauseDisabled, autoPauseWindowMinutes, autoPauseFailureRateBps, autoPauseConfidence, autoPauseMinAttempts, autoPauseMinFailures, autoPauseAction, autoPauseCooldownMinutes }) => {
+      const payload = parseSchema(updateChannelOptionsSchema, {
         appId,
         channelId,
         bundle,
@@ -381,7 +447,27 @@ export async function startMcpServer(): Promise<void> {
         emulator,
         device,
         prod,
+        rolloutBundle,
+        rolloutPercentage,
+        rolloutPercentageBps,
+        rolloutEnable,
+        rolloutDisable,
+        rolloutPause,
+        rolloutResume,
+        rolloutRollback,
+        rolloutPromote,
+        rolloutCacheTtlSeconds,
+        autoPauseEnabled,
+        autoPauseDisabled,
+        autoPauseWindowMinutes,
+        autoPauseFailureRateBps,
+        autoPauseConfidence,
+        autoPauseMinAttempts,
+        autoPauseMinFailures,
+        autoPauseAction,
+        autoPauseCooldownMinutes,
       })
+      const result = await sdk.updateChannel(payload)
       if (!result.success) {
         return formatMcpError(result)
       }
@@ -391,13 +477,11 @@ export async function startMcpServer(): Promise<void> {
     },
   )
 
-  server.tool(
+  server.registerTool(
     'capgo_delete_channel',
-    'Delete a channel from an app',
     {
-      appId: z.string().describe('App ID'),
-      channelId: z.string().describe('Channel name to delete'),
-      deleteBundle: z.boolean().optional().describe('Also delete the bundle linked to this channel'),
+      description: 'Delete a channel from an app',
+      inputSchema: mcpDeleteChannelInputSchema,
     },
     async ({ appId, channelId, deleteBundle }) => {
       const result = await sdk.deleteChannel(channelId, appId, deleteBundle)
@@ -410,12 +494,11 @@ export async function startMcpServer(): Promise<void> {
     },
   )
 
-  server.tool(
+  server.registerTool(
     'capgo_get_current_bundle',
-    'Get the current bundle linked to a specific channel',
     {
-      appId: z.string().describe('App ID'),
-      channelId: z.string().describe('Channel name'),
+      description: 'Get the current bundle linked to a specific channel',
+      inputSchema: mcpGetCurrentBundleInputSchema,
     },
     async ({ appId, channelId }) => {
       const result = await sdk.getCurrentBundle(appId, channelId)
@@ -435,10 +518,11 @@ export async function startMcpServer(): Promise<void> {
   // Organization Management Tools
   // ============================================================================
 
-  server.tool(
+  server.registerTool(
     'capgo_list_organizations',
-    'List all organizations you have access to',
-    {},
+    {
+      description: 'List all organizations you have access to',
+    },
     async () => {
       const result = await sdk.listOrganizations()
       if (!result.success) {
@@ -453,12 +537,11 @@ export async function startMcpServer(): Promise<void> {
     },
   )
 
-  server.tool(
+  server.registerTool(
     'capgo_add_organization',
-    'Create a new organization for team collaboration',
     {
-      name: z.string().describe('Organization name'),
-      email: z.string().describe('Management email for the organization'),
+      description: 'Create a new organization for team collaboration',
+      inputSchema: mcpAddOrganizationInputSchema,
     },
     async ({ name, email }) => {
       const result = await sdk.addOrganization({ name, email })
@@ -481,10 +564,11 @@ export async function startMcpServer(): Promise<void> {
   // Account & Diagnostics Tools
   // ============================================================================
 
-  server.tool(
+  server.registerTool(
     'capgo_get_account_id',
-    'Get the account ID associated with the current API key',
-    {},
+    {
+      description: 'Get the account ID associated with the current API key',
+    },
     async () => {
       const result = await sdk.getAccountId()
       if (!result.success) {
@@ -499,11 +583,11 @@ export async function startMcpServer(): Promise<void> {
     },
   )
 
-  server.tool(
+  server.registerTool(
     'capgo_doctor',
-    'Run diagnostics on the Capgo installation and get system information',
     {
-      packageJson: z.string().optional().describe('Path to package.json for monorepos'),
+      description: 'Run diagnostics on the Capgo installation and get system information',
+      inputSchema: mcpDoctorInputSchema,
     },
     async ({ packageJson }) => {
       const result = await sdk.doctor({ packageJson })
@@ -519,10 +603,12 @@ export async function startMcpServer(): Promise<void> {
     },
   )
 
-  server.tool(
+  server.registerTool(
     'capgo_get_stats',
-    'Get device statistics and logs from Capgo backend for debugging',
-    getStatsOptionsSchema.pick({ appId: true, deviceIds: true, limit: true, rangeStart: true, rangeEnd: true }).shape,
+    {
+      description: 'Get device statistics and logs from Capgo backend for debugging',
+      inputSchema: mcpGetStatsInputSchema,
+    },
     async ({ appId, deviceIds, limit, rangeStart, rangeEnd }) => {
       const result = await sdk.getStats({
         appId,
@@ -547,10 +633,12 @@ export async function startMcpServer(): Promise<void> {
   // Build Management Tools
   // ============================================================================
 
-  server.tool(
+  server.registerTool(
     'capgo_request_build',
-    'Request a native iOS/Android build from Capgo Cloud',
-    requestBuildOptionsSchema.pick({ appId: true, platform: true, path: true, nodeModules: true }).shape,
+    {
+      description: 'Request a native iOS/Android build from Capgo Cloud',
+      inputSchema: mcpRequestBuildInputSchema,
+    },
     async ({ appId, platform, path, nodeModules }) => {
       const result = await sdk.requestBuild({
         appId,
@@ -578,14 +666,14 @@ export async function startMcpServer(): Promise<void> {
   // Encryption Key Tools
   // ============================================================================
 
-  server.tool(
+  server.registerTool(
     'capgo_generate_encryption_keys',
-    'Generate RSA key pair for end-to-end encryption of bundles',
     {
-      force: z.boolean().optional().describe('Overwrite existing keys if they exist'),
+      description: 'Generate RSA key pair for end-to-end encryption of bundles',
+      inputSchema: mcpGenerateEncryptionKeysInputSchema,
     },
-    async ({ force }) => {
-      const result = await sdk.generateEncryptionKeys({ force })
+    async ({ force, capacitorConfig }) => {
+      const result = await sdk.generateEncryptionKeys({ force, capacitorConfig })
       if (!result.success) {
         return formatMcpError(result)
       }
@@ -602,11 +690,11 @@ export async function startMcpServer(): Promise<void> {
   // Probe Tool (no auth required - hits public /updates endpoint)
   // ============================================================================
 
-  server.tool(
+  server.registerTool(
     'capgo_probe',
-    'Probe the Capgo updates endpoint for a local project. Returns whether an OTA update would be delivered and diagnostic details if not. Does not require an API key.',
     {
-      platform: z.enum(['ios', 'android']).describe('Target platform to probe'),
+      description: 'Probe the Capgo updates endpoint for a local project. Returns whether an OTA update would be delivered and diagnostic details if not. Does not require an API key.',
+      inputSchema: mcpProbeInputSchema,
     },
     async ({ platform }) => {
       const result = await sdk.probe({ platform })
@@ -626,10 +714,12 @@ export async function startMcpServer(): Promise<void> {
   // Authentication Tools
   // ============================================================================
 
-  server.tool(
+  server.registerTool(
     'capgo_login',
-    'Sign in to Capgo by saving an API key. Generate a key for your AI at https://console.capgo.app/connect, then call this with it. Authenticates the current MCP session immediately — no restart needed.',
-    mcpLoginInputSchema.shape,
+    {
+      description: 'Sign in to Capgo by saving an API key. Generate a key for your AI at https://console.capgo.app/connect, then call this with it. Authenticates the current MCP session immediately — no restart needed.',
+      inputSchema: mcpLoginInputSchema,
+    },
     async ({ apikey, scope }) => {
       try {
         const { userId } = await validateAndSaveKey(apikey, { local: scope === 'local' })
@@ -660,20 +750,23 @@ export async function startMcpServer(): Promise<void> {
     },
   )
 
-  server.tool(
+  server.registerTool(
     'capgo_whoami',
-    'Report whether the Capgo MCP is signed in, and if so which user and where the key is stored. Validates the saved key against Capgo.',
-    {},
+    {
+      description: 'Report whether the Capgo MCP is signed in, and if so which user and where the key is stored. Validates the saved key against Capgo.',
+    },
     async () => {
       const state = await getLoginState({ validate: true })
       return { content: [{ type: 'text' as const, text: whoamiMessage(state) }] }
     },
   )
 
-  server.tool(
+  server.registerTool(
     'capgo_logout',
-    'Sign out by deleting the saved Capgo API key. Clears the global key (~/.capgo) by default, or the project-local key (./.capgo) with scope "local". Does not unset the CAPGO_TOKEN env var.',
-    mcpLogoutInputSchema.shape,
+    {
+      description: 'Sign out by deleting the saved Capgo API key. Clears the global key (~/.capgo) by default, or the project-local key (./.capgo) with scope "local". Does not unset the CAPGO_TOKEN env var.',
+      inputSchema: mcpLogoutInputSchema,
+    },
     async ({ scope }) => {
       const { cleared } = await clearSavedKey({ local: scope === 'local' })
       // Drop the in-memory key so the main tools de-authenticate immediately.
@@ -703,8 +796,10 @@ export async function startMcpServer(): Promise<void> {
   // Start the server with stdio transport. The stdout guard installed at the top of this
   // function already routed ambient stdout (stray clack/console output from any tool or
   // dependency) to stderr, so only JSON-RPC frames reach the real stdout a strict client
-  // reads; otherwise the transport drops ("Transport closed").
+  // reads; otherwise the transport drops ("Transport closed"). Keep the config target
+  // for this server's lifetime because tool calls happen after the CLI action completes.
   const transport = new StdioServerTransport(process.stdin, transportStdout)
+  transport.onclose = restoreConfigWriteTarget
   await server.connect(transport)
   trackMcpServerStarted(Boolean(savedApiKey))
 }

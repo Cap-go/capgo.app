@@ -20,12 +20,10 @@ function displayApps(data: Database['public']['Tables']['apps']['Row'][]) {
 }
 
 async function getActiveApps(supabase: SupabaseClient<Database>, silent: boolean, orgIds: string[]) {
-  // Scope the list to the caller's orgs. An unfiltered `apps` select makes Postgres
-  // evaluate the per-row RBAC RLS (a recursive role-closure walk via
-  // get_identity_org_appid → rbac_has_permission) across the ENTIRE apps table, which
-  // hits the statement timeout on large databases and surfaces as "Apps not found"
-  // (the underlying "canceling statement due to statement timeout" is swallowed).
-  // Filtering by owner_org first restricts the rows RLS ever evaluates to the caller's.
+  // Scope the list to the caller's orgs. An unfiltered apps select makes Postgres
+  // evaluate per-row RBAC across the entire apps table, which can hit the
+  // statement timeout on large databases and surface as "Apps not found".
+  // Filtering by owner_org first restricts the rows RLS evaluates to the caller's.
   const { data, error } = await withSupabaseSource('apps.list', () => supabase
     .from('apps')
     .select()

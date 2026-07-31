@@ -1,2 +1,3 @@
 [sqlfluff]
+dialect = postgres
 large_file_skip_byte_limit = 0

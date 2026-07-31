@@ -7,27 +7,12 @@ const APPNAME = `com.app.b.${id}`
 const RBAC_APPNAME = `com.app.b.rbac.${id}`
 const RBAC_ORG_ID = randomUUID()
 
-async function putBundleToChannelWithRetry(body: { app_id: string, version_id: number, channel_id: number }, maxRetries = 3): Promise<Response> {
-  let response: Response | undefined
-
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    response = await fetch(`${BASE_URL}/bundle`, {
-      method: 'PUT',
-      headers,
-      body: JSON.stringify(body),
-    })
-
-    if (response.status === 200)
-      return response
-
-    if (attempt < maxRetries - 1)
-      await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)))
-  }
-
-  if (!response)
-    throw new Error('Failed to set bundle to channel: no response received')
-
-  return response
+async function putBundleToChannel(body: { app_id: string, version_id: number, channel_id: number }): Promise<Response> {
+  return fetch(`${BASE_URL}/bundle`, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify(body),
+  })
 }
 
 beforeAll(async () => {
@@ -181,6 +166,49 @@ describe('[DELETE] /bundle operations', () => {
     expect(deleteBundleData.status).toBe('ok')
   })
 
+  it('does not delete a rollout target bundle linked to a channel', async () => {
+    const supabase = getSupabaseClient()
+    const stableVersion = await createAppVersions(`1.0.0-delete-rollout-stable-${id}`, APPNAME)
+    const rolloutVersion = await createAppVersions(`1.0.0-delete-rollout-target-${id}`, APPNAME)
+    const channelName = `delete-rollout-${id}`
+
+    const { error: channelError } = await supabase
+      .from('channels')
+      .insert({
+        app_id: APPNAME,
+        name: channelName,
+        version: stableVersion.id,
+        rollout_version: rolloutVersion.id,
+        rollout_enabled: true,
+        rollout_percentage_bps: 1000,
+        owner_org: ORG_ID,
+        created_by: USER_ID,
+      })
+
+    expect(channelError).toBeNull()
+
+    const deleteBundle = await fetch(`${BASE_URL}/bundle`, {
+      method: 'DELETE',
+      headers,
+      body: JSON.stringify({
+        app_id: APPNAME,
+        version: rolloutVersion.name,
+      }),
+    })
+    const deleteBundleData = await deleteBundle.json() as { error?: string }
+    expect(deleteBundle.status).toBe(400)
+    expect(deleteBundleData.error).toBe('cannot_delete_linked_version')
+
+    const { data: versionAfterDelete, error: versionError } = await supabase
+      .from('app_versions')
+      .select('deleted')
+      .eq('id', rolloutVersion.id)
+      .single()
+
+    expect(versionError).toBeNull()
+    expect(versionAfterDelete?.deleted).toBe(false)
+  })
+
   it('delete all bundles for an app', async () => {
     const deleteAllBundles = await fetch(`${BASE_URL}/bundle`, {
       method: 'DELETE',
@@ -255,7 +283,7 @@ describe('[PUT] /bundle operations - Set bundle to channel', () => {
   })
 
   it('should set bundle to channel successfully', async () => {
-    const response = await putBundleToChannelWithRetry({
+    const response = await putBundleToChannel({
       app_id: APPNAME,
       version_id: versionId,
       channel_id: channelId,
@@ -395,7 +423,6 @@ describe('[PUT] /bundle RBAC channel overrides', () => {
       name: `Bundle RBAC Org ${id}`,
       management_email: `bundle-rbac-${id}@capgo.app`,
       created_by: USER_ID,
-      use_new_rbac: true,
     })
     if (orgError)
       throw orgError
@@ -419,7 +446,7 @@ describe('[PUT] /bundle RBAC channel overrides', () => {
     const { error: memberError } = await supabase.from('org_users').insert({
       org_id: RBAC_ORG_ID,
       user_id: USER_ID,
-      user_right: 'write',
+      rbac_role_name: 'org_member',
     })
     if (memberError)
       throw memberError

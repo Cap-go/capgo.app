@@ -31,6 +31,7 @@ npx @capgo/cli@latest key save --key ./path/to/key.pub
 | **-f** | <code>boolean</code> | Force generate a new one |
 | **--key** | <code>string</code> | Key path to save in Capacitor config |
 | **--key-data** | <code>string</code> | Key data to save in Capacitor config |
+| **--capacitor-config** | <code>string</code> | Capacitor config source to update (useful with dynamic monorepo configs) |
 
 ### <a id="key-create"></a> 🔨 **Create**
 
@@ -54,6 +55,7 @@ npx @capgo/cli@latest key create
 | Param          | Type          | Description          |
 | -------------- | ------------- | -------------------- |
 | **-f** | <code>boolean</code> | Force generate a new one |
+| **--capacitor-config** | <code>string</code> | Capacitor config source to update (useful with dynamic monorepo configs) |
 
 ### <a id="key-delete_old"></a> 🗑️ **Delete_old**
 
@@ -68,4 +70,10 @@ npx @capgo/cli@latest key delete_old
 ```bash
 npx @capgo/cli@latest key delete_old
 ```
+
+**Options:**
+
+| Param          | Type          | Description          |
+| -------------- | ------------- | -------------------- |
+| **--capacitor-config** | <code>string</code> | Capacitor config source to update (useful with dynamic monorepo configs) |
 

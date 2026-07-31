@@ -1,10 +1,12 @@
+import type { ExtConfigPairs } from './config'
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { intro, log, outro, confirm as pConfirm } from '@clack/prompts'
 import { trackEvent } from './analytics/track'
 import { createRSA } from './api/crypto'
 import { checkAlerts } from './api/update'
-import { writeConfigUpdater } from './config'
-import { baseKey, baseKeyPub, baseKeyPubV2, baseKeyV2, getConfig, promptAndSyncCapacitor } from './utils'
+import { getConfigWriteTarget, writeConfigUpdater } from './config'
+import { baseKey, baseKeyPub, baseKeyPubV2, baseKeyV2, getConfigForWrite, promptAndSyncCapacitor } from './utils'
 
 interface SaveOptions {
   key?: string
@@ -15,6 +17,7 @@ interface SaveOptions {
 interface Options {
   force?: boolean
   setupChannel?: boolean
+  keyDir?: string
 }
 
 function ensureCapacitorUpdaterConfig(config: any) {
@@ -28,7 +31,7 @@ export async function saveKeyInternal(options: SaveOptions, silent = false) {
   if (!silent)
     intro('Save keys 🔑')
 
-  const extConfig = await getConfig()
+  const extConfig = await getConfigForWrite()
   const keyPath = options.key || baseKeyPubV2
   let publicKey = options.keyData || ''
 
@@ -82,7 +85,7 @@ export async function deleteOldPrivateKeyInternal(options: Options, silent = fal
   if (!silent)
     intro('Deleting old private key 🗑️')
 
-  const extConfig = await getConfig()
+  const extConfig = await getConfigForWrite()
   const updaterConfig = extConfig?.config?.plugins?.CapacitorUpdater
 
   if (updaterConfig?.privateKey) {
@@ -132,27 +135,31 @@ export async function saveKeyCommand(options: SaveOptions) {
   await saveKeyInternal(options, false)
 }
 
-export async function createKeyInternal(options: Options, silent = false) {
+export async function createKeyInternal(options: Options, silent = false, existingConfig?: ExtConfigPairs) {
   if (!silent)
     intro('Create keys 🔑')
 
   const { publicKey, privateKey } = createRSA()
+  const publicKeyPath = options.keyDir ? join(options.keyDir, baseKeyPubV2) : baseKeyPubV2
+  const privateKeyPath = options.keyDir ? join(options.keyDir, baseKeyV2) : baseKeyV2
 
-  if (existsSync(baseKeyPubV2) && !options.force) {
+  if (existsSync(publicKeyPath) && !options.force) {
     if (!silent)
       log.error('Public Key already exists, use --force to overwrite')
     throw new Error('Public key already exists')
   }
-  writeFileSync(baseKeyPubV2, publicKey)
+  writeFileSync(publicKeyPath, publicKey)
 
-  if (existsSync(baseKeyV2) && !options.force) {
+  if (existsSync(privateKeyPath) && !options.force) {
     if (!silent)
       log.error('Private Key already exists, use --force to overwrite')
     throw new Error('Private key already exists')
   }
-  writeFileSync(baseKeyV2, privateKey)
+  writeFileSync(privateKeyPath, privateKey)
 
-  const extConfig = await getConfig()
+  const extConfig = existingConfig && !getConfigWriteTarget()
+    ? existingConfig
+    : await getConfigForWrite()
 
   if (extConfig) {
     const updaterConfig = ensureCapacitorUpdaterConfig(extConfig.config)
@@ -180,7 +187,7 @@ export async function createKeyInternal(options: Options, silent = false) {
 
   if (!silent) {
     log.success('Your RSA key has been generated')
-    log.success(`Private key saved in ${baseKeyV2}`)
+    log.success(`Private key saved in ${privateKeyPath}`)
     log.success('This key will be used to encrypt your bundle before sending it to Capgo')
     log.success('Keep it safe')
     log.success('Then make it unreadable by Capgo and unmodifiable by anyone')

@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { createPinia, setActivePinia } from 'pinia'
+import { beforeEach, describe, expect, it } from 'vitest'
 import { formatCreditPricingPrice, formatCreditPricingTierLabel, formatIncludedThenPrice, getFirstTierCreditUnitPricing } from '../src/services/creditPricing'
+import { useMainStore } from '../src/stores/main'
 
 const messages: Record<string, string> = {
   'credits-plan-overage': '{included}, then {price}',
@@ -19,8 +21,27 @@ function t(key: string, values: Record<string, string | number> = {}) {
   return template.replaceAll(/\{(\w+)\}/g, (_match, placeholder) => String(values[placeholder] ?? `{${placeholder}}`))
 }
 
+function setAccountFormatLocale(formatLocale: string) {
+  setActivePinia(createPinia())
+  const main = useMainStore()
+  main.user = { format_locale: formatLocale } as typeof main.user
+}
+
+function formatUsd(locale: string, value: number) {
+  return new Intl.NumberFormat(locale, {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 4,
+  }).format(value)
+}
+
 describe('credit pricing UI helpers', () => {
-  it.concurrent('formats first build_time tiers with generic translated labels', () => {
+  beforeEach(() => {
+    setAccountFormatLocale('en-GB')
+  })
+
+  it('formats first build_time tiers with generic translated labels', () => {
     expect(formatCreditPricingTierLabel({
       type: 'build_time',
       step_min: 0,
@@ -28,10 +49,16 @@ describe('credit pricing UI helpers', () => {
       unit_factor: 60,
     }, t)).toBe('Up to 100m')
 
-    expect(formatCreditPricingPrice('build_time', 0.08, t)).toBe('$0.08 per minute')
+    expect(formatCreditPricingPrice('build_time', 0.08, t)).toBe(`${formatUsd('en-GB', 0.08)} per minute`)
   })
 
-  it.concurrent('falls back to generic tier copy for custom org-scoped ranges', () => {
+  it('formats prices from the selected account convention', () => {
+    setAccountFormatLocale('fr-FR')
+
+    expect(formatCreditPricingPrice('build_time', 0.08, t)).toBe(`${formatUsd('fr-FR', 0.08)} per minute`)
+  })
+
+  it('falls back to generic tier copy for custom org-scoped ranges', () => {
     expect(formatCreditPricingTierLabel({
       type: 'build_time',
       step_min: 3000,
@@ -47,7 +74,7 @@ describe('credit pricing UI helpers', () => {
     }, t)).toBe('Over 150m')
   })
 
-  it.concurrent('formats bounded custom ranges with both dynamic endpoints', () => {
+  it('formats bounded custom ranges with both dynamic endpoints', () => {
     expect(formatCreditPricingTierLabel({
       type: 'build_time',
       step_min: 5000,
@@ -56,7 +83,7 @@ describe('credit pricing UI helpers', () => {
     }, t)).toBe('From 84m to 100m')
   })
 
-  it.concurrent('derives the visible first-tier pricing from the shared step list', () => {
+  it('derives the visible first-tier pricing from the shared step list', () => {
     expect(getFirstTierCreditUnitPricing([
       {
         type: 'build_time',
@@ -85,7 +112,7 @@ describe('credit pricing UI helpers', () => {
     })
   })
 
-  it.concurrent('formats plan overage copy from the shared price formatter', () => {
-    expect(formatIncludedThenPrice('build_time', 0.04, t)).toBe('Included in plan, then $0.04 per minute')
+  it('formats plan overage copy from the shared price formatter', () => {
+    expect(formatIncludedThenPrice('build_time', 0.04, t)).toBe(`Included in plan, then ${formatUsd('en-GB', 0.04)} per minute`)
   })
 })

@@ -1,24 +1,39 @@
+import type { DateRangePreset, DateRangeValue } from '~/services/dateRange'
 import { acceptHMRUpdate, defineStore } from 'pinia'
 import { computed, ref } from 'vue'
+import {
+  DEFAULT_DATE_RANGE_PRESET,
+  getDateRangeForPreset as getDateRangeForMode,
+} from '~/services/dateRange'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
 
 export type MetricCategory = 'uploads' | 'distribution' | 'failures' | 'success_rate' | 'platform_overview' | 'org_metrics' | 'mau_trend' | 'success_rate_trend' | 'apps_trend' | 'bundles_trend' | 'deployments_trend' | 'storage_trend' | 'bandwidth_trend' | 'global_stats_trend' | 'plugin_breakdown' | 'trial_organizations' | 'trial_plan_breakdown' | 'onboarding_funnel' | 'cancelled_users' | 'email_type_breakdown' | 'customer_country_breakdown' | 'organization_insights' | 'builder_analytics'
-export type DateRangeMode = '3day' | '7day' | '14day' | '30day' | '90day' | 'quarter' | '6month' | '12month' | 'custom'
 
-interface DateRange {
-  start: Date
-  end: Date
-}
+export type DateRangeMode = DateRangePreset
+export const DEFAULT_DATE_RANGE_MODE = DEFAULT_DATE_RANGE_PRESET
+export { getDateRangeForMode }
+export { DATE_RANGE_DURATIONS_MS } from '~/services/dateRange'
+
+type DateRange = DateRangeValue
 
 interface CachedData {
-  data: any
+  data: unknown
   timestamp: number
+}
+
+interface AdminStatsRequestBody {
+  metric_category: MetricCategory
+  start_date: string
+  end_date: string
+  app_id?: string
+  org_id?: string
+  limit?: number
 }
 
 interface AdminStatsResponse {
   success: boolean
   metric_category: MetricCategory
-  data: any
+  data: unknown
   period: {
     start: string
     end: string
@@ -29,11 +44,8 @@ export const useAdminDashboardStore = defineStore('adminDashboard', () => {
   // Filter state
   const selectedOrgId = ref<string | null>(null)
   const selectedAppId = ref<string | null>(null)
-  const dateRangeMode = ref<DateRangeMode>('30day')
-  const customDateRange = ref<DateRange>({
-    start: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
-    end: new Date(),
-  })
+  const dateRangeMode = ref<DateRangeMode>(DEFAULT_DATE_RANGE_MODE)
+  const customDateRange = ref<DateRange>(getDateRangeForMode(DEFAULT_DATE_RANGE_MODE))
 
   // Cache state (5-minute TTL)
   const CACHE_TTL = 5 * 60 * 1000 // 5 minutes
@@ -49,55 +61,7 @@ export const useAdminDashboardStore = defineStore('adminDashboard', () => {
   const refreshTrigger = ref(0)
 
   function getRollingDateRange(now = new Date()): DateRange {
-    switch (dateRangeMode.value) {
-      case '3day':
-        return {
-          start: new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000),
-          end: now,
-        }
-      case '7day':
-        return {
-          start: new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000),
-          end: now,
-        }
-      case '14day':
-        return {
-          start: new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000),
-          end: now,
-        }
-      case '30day':
-        return {
-          start: new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000),
-          end: now,
-        }
-      case '90day':
-        return {
-          start: new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000),
-          end: now,
-        }
-      case 'quarter':
-        return {
-          start: new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000),
-          end: now,
-        }
-      case '6month':
-        return {
-          start: new Date(now.getTime() - 180 * 24 * 60 * 60 * 1000),
-          end: now,
-        }
-      case '12month':
-        return {
-          start: new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000),
-          end: now,
-        }
-      case 'custom':
-        return customDateRange.value
-      default:
-        return {
-          start: new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000),
-          end: now,
-        }
-    }
+    return getDateRangeForMode(dateRangeMode.value, now, customDateRange.value)
   }
 
   const activeDateRange = computed<DateRange>(() => {
@@ -129,7 +93,7 @@ export const useAdminDashboardStore = defineStore('adminDashboard', () => {
   function clearFilters() {
     selectedOrgId.value = null
     selectedAppId.value = null
-    dateRangeMode.value = '30day'
+    dateRangeMode.value = DEFAULT_DATE_RANGE_MODE
   }
 
   function getCacheKey(category: MetricCategory, range = getRollingDateRange()): string {
@@ -149,6 +113,8 @@ export const useAdminDashboardStore = defineStore('adminDashboard', () => {
     return Date.now() - cached.timestamp < CACHE_TTL
   }
 
+  // Response shape varies by metric_category. Full per-metric runtime schemas are
+  // out of scope here; keep the previous polymorphic return contract.
   async function fetchStats(category: MetricCategory, forceRefresh = false): Promise<any> {
     const requestDateRange = getRollingDateRange()
     const cacheKey = getCacheKey(category, requestDateRange)
@@ -167,7 +133,7 @@ export const useAdminDashboardStore = defineStore('adminDashboard', () => {
       const { start, end } = requestDateRange
       const supabase = useSupabase()
 
-      const body: any = {
+      const body: AdminStatsRequestBody = {
         metric_category: category,
         start_date: start.toISOString(),
         end_date: end.toISOString(),

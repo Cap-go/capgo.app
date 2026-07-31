@@ -20,7 +20,7 @@ const {
   isTrialOrgMock: vi.fn(async () => 0),
   sendEventToTrackingMock: vi.fn(async () => undefined),
   sendNotifToOrgMembersMock: vi.fn(async () => true),
-  sendNotifToOrgMembersOnceMock: vi.fn(async () => true),
+  sendNotifToOrgMembersOnceMock: vi.fn(async (_c: unknown, _event: string, _pref: string, _data: unknown, orgId: string) => !orgId.includes('already-claimed')),
   supabaseAdminMock: vi.fn(),
 }))
 
@@ -64,6 +64,7 @@ vi.mock('../supabase/functions/_backend/utils/tracking.ts', () => ({
 }))
 
 vi.mock('../supabase/functions/_backend/utils/utils.ts', () => ({
+  getEnv: vi.fn((_c: unknown, key: string) => key === 'WEBAPP_URL' ? 'https://console.capgo.app/' : undefined),
   isStripeConfigured: vi.fn(),
 }))
 
@@ -113,23 +114,56 @@ describe('handleOrgNotificationsAndEvents onboarding reminder', () => {
       expect.anything(),
       'user:need_onboarding',
       'onboarding',
-      {
+      expect.objectContaining({
         org_id: orgId,
         org_name: 'Acme Mobile',
         org_website: 'https://acme.example/',
+        onboarding_intent: 'unknown',
+        onboarding_url: 'https://console.capgo.app/apps',
+        onboarding_url_ota: 'https://console.capgo.app/app/new',
+        onboarding_url_builder: 'https://console.capgo.app/apps',
+      }),
+      orgId,
+      orgId,
+      expect.anything(),
+    )
+    expect(trackingCalls(orgId)).toEqual([
+      [
+        expect.anything(),
+        expect.objectContaining({
+          channel: 'usage',
+          event: 'User need onboarding',
+          user_id: orgId,
+        }),
+      ],
+    ])
+  })
+
+  it.concurrent('does not re-emit User need onboarding when the once-helper finds an existing claim', async () => {
+    const { handleOrgNotificationsAndEvents } = await import('../supabase/functions/_backend/utils/plans.ts')
+    const orgId = 'org-onboarding-already-claimed'
+
+    await handleOrgNotificationsAndEvents(
+      createContext(),
+      {
+        customer_id: null,
+        name: 'Acme Mobile',
+        website: 'https://acme.example/',
+        onboarding: null,
       },
       orgId,
-      orgId,
-      expect.anything(),
+      false,
+      {
+        total_percent: 0,
+        mau_percent: 0,
+        bandwidth_percent: 0,
+        storage_percent: 0,
+        build_time_percent: 0,
+      },
+      {} as any,
     )
-    expect(sendEventToTrackingMock).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        channel: 'usage',
-        event: 'User need onboarding',
-        user_id: orgId,
-      }),
-    )
+
+    expect(trackingCalls(orgId)).toHaveLength(0)
   })
 
   it.concurrent('does not send plan usage alerts from stale total percent alone', async () => {

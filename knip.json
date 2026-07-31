@@ -1,6 +1,9 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "ignoreExportsUsedInFile": true,
+  "ignoreDependencies": [
+    "tinbase"
+  ],
   "ignoreIssues": {
     "src/auto-imports.d.ts": [
       "types"
@@ -18,6 +21,9 @@
       "exports"
     ],
     "cli/src/build/onboarding/mcp/session-state.ts": [
+      "exports"
+    ],
+    "playwright/visual-diff.config.ts": [
       "exports"
     ]
   },
@@ -40,8 +46,10 @@
         "benches/**/*.ts!",
         "playwright/e2e/**/*.ts!",
         "playwright/support/**/*.ts!",
+        "playwright/visual-diff.config.ts!",
         "formkit.config.ts!",
-        "formkit.theme.ts!"
+        "formkit.theme.ts!",
+        "playwright/visual-diff.config.ts!"
       ],
       "project": [
         "src/**/*.{ts,vue}!",

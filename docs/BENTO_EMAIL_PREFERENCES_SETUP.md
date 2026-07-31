@@ -44,12 +44,15 @@ For each automation listed below, add a segment filter:
 
 #### 1. Usage Limit Alerts (50%, 70%, 90%)
 
-**Events**: `user:usage_50_percent_of_plan`, `user:usage_70_percent_of_plan`, `user:usage_90_percent_of_plan`, `user:upgrade_to_*`
+**Events**: `user:usage_50_percent_of_plan`, `user:usage_70_percent_of_plan`, `user:usage_90_percent_of_plan`, `user:upgrade_to_*`, `user:native_build_concurrency_limit`
 
 **Filter to add**:
+
 ```text
 Tag does NOT contain: usage_limit_disabled
 ```
+
+`user:native_build_concurrency_limit` is emitted when an org tries to start more concurrent native builds than their plan allows. Event data includes `active_builds`, `limit`, `plan_name`, and `upgrade_url`. Wire a Bento automation to this event when the upgrade email is ready.
 
 #### 2. Credit Usage Alerts
 
@@ -125,7 +128,26 @@ Tag does NOT contain: bundle_deployed_disabled
 
 #### 10. Device Error Notifications
 
-**Events**: `user:update_fail`
+**Events**: `device:upgrade_blocked`, `device:downgrade_blocked`
+
+Emitted from `/updates` when a device is blocked by channel auto-update version policy (upgrade: major/minor/patch/metadata; downgrade: under_native). Delivery uses `sendNotifToOrgMembersCached` with preference key `device_error` (Cloudflare plugin KV queue in production).
+
+**Payload fields** (`event.details`):
+
+| Field | Description |
+|-------|-------------|
+| `app_id` | App identifier |
+| `app_id_url` | Same as `app_id` (for console URL segments) |
+| `device_id` | Device UUID |
+| `platform` | `ios` / `android` / `electron` |
+| `channel_name` | Channel name |
+| `channel_id` | Channel numeric id (console channel link) |
+| `version` | Cloud/channel target bundle version name |
+| `version_build` | Device native version used in the policy check |
+| `version_name` | Device current OTA version name |
+| `reason` | `major` \| `minor` \| `patch` \| `metadata` \| `under_native` |
+
+Bundle / `version_id` numeric IDs are intentionally omitted — build console links from version names in the Bento template.
 
 **Filter to add**:
 ```text

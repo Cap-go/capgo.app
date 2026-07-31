@@ -17,10 +17,9 @@
  */
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from './hono.ts'
-import type { Database } from './supabase.types.ts'
 import { sql } from 'drizzle-orm'
 import { cloudlog, cloudlogErr } from './logging.ts'
-import { closeClient, getDrizzleClient, getPgClient, logPgError } from './pg.ts'
+import { closeClient, getDrizzleClient, getPgClient } from './pg.ts'
 
 // =============================================================================
 // Types
@@ -37,6 +36,7 @@ export type Permission
     | 'org.delete'
     | 'org.read_members'
     | 'org.invite_user'
+    | 'org.manage_apikeys'
     | 'org.update_user_roles'
     | 'org.read_billing'
     | 'org.update_billing'
@@ -52,6 +52,7 @@ export type Permission
     | 'app.create_channel'
     | 'app.read_channels'
     | 'app.read_logs'
+    | 'app.manage_notifications'
     | 'app.manage_devices'
     | 'app.read_devices'
     | 'app.build_native'
@@ -86,109 +87,9 @@ export interface PermissionScope {
   channelId?: number
 }
 
-/**
- * Extended context interface with RBAC information
- */
-export interface RbacContextVariables {
-  rbacEnabled?: boolean
-  resolvedOrgId?: string
-}
-
-// =============================================================================
-// Compatibility Mapping
-// =============================================================================
-
-/**
- * Maps RBAC permissions to user_min_right values for compatibility callers.
- */
-const PERMISSION_TO_LEGACY_RIGHT: Record<Permission, Database['public']['Enums']['user_min_right']> = {
-  // Org permissions
-  'org.read': 'read',
-  'org.create_app': 'admin',
-  'org.update_settings': 'admin',
-  'org.delete': 'super_admin',
-  'org.read_members': 'read',
-  'org.invite_user': 'admin',
-  'org.update_user_roles': 'super_admin',
-  'org.read_billing': 'admin',
-  'org.update_billing': 'super_admin',
-  'org.read_invoices': 'admin',
-  'org.read_audit': 'admin',
-  'org.read_billing_audit': 'super_admin',
-  // App permissions
-  'app.read': 'read',
-  'app.update_settings': 'write',
-  'app.delete': 'admin',
-  'app.read_bundles': 'read',
-  'app.upload_bundle': 'upload',
-  'app.create_channel': 'write',
-  'app.read_channels': 'read',
-  'app.read_logs': 'read',
-  'app.manage_devices': 'write',
-  'app.read_devices': 'read',
-  'app.build_native': 'write',
-  'app.read_audit': 'admin',
-  'app.update_user_roles': 'admin',
-  // Bundle permissions
-  'bundle.delete': 'admin',
-  // Channel permissions
-  'channel.read': 'read',
-  'channel.update_settings': 'write',
-  'channel.delete': 'admin',
-  'channel.read_history': 'read',
-  'channel.promote_bundle': 'write',
-  'channel.rollback_bundle': 'write',
-  'channel.manage_forced_devices': 'write',
-  'channel.read_forced_devices': 'read',
-  'channel.read_audit': 'admin',
-}
-
 // =============================================================================
 // Core Functions
 // =============================================================================
-
-/**
- * Check if RBAC is enabled for an organization.
- * Caches the result in context to avoid repeated queries.
- */
-export async function isRbacEnabledForOrg(
-  c: Context<MiddlewareKeyVariables>,
-  orgId: string | null,
-): Promise<boolean> {
-  // Check cache first
-  const cached = c.get('rbacEnabled')
-  if (cached !== undefined) {
-    return cached
-  }
-
-  if (!orgId) {
-    return false
-  }
-
-  let pgClient
-  try {
-    pgClient = getPgClient(c)
-    const drizzleClient = getDrizzleClient(pgClient)
-
-    const result = await drizzleClient.execute(
-      sql`SELECT public.rbac_is_enabled_for_org(${orgId}::uuid) as enabled`,
-    )
-
-    const enabled = (result.rows[0] as any)?.enabled === true
-    // Cache the result
-    c.set('rbacEnabled', enabled)
-    return enabled
-  }
-  catch (e) {
-    logPgError(c, 'isRbacEnabledForOrg', e)
-    return false
-  }
-  finally {
-    if (pgClient) {
-      closeClient(c, pgClient)
-    }
-  }
-}
 
 /**
  * Main permission check function.
@@ -480,14 +381,6 @@ export async function checkPermissionPg(
 // =============================================================================
 // Utility Functions
 // =============================================================================
-
-/**
- * Get the legacy right equivalent for a permission.
- * Useful for compatibility layers.
- */
-export function getLegacyRightForPermission(permission: Permission): Database['public']['Enums']['user_min_right'] {
-  return PERMISSION_TO_LEGACY_RIGHT[permission]
-}
 
 /**
  * Infer the scope type from a permission key.

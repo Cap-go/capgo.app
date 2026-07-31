@@ -132,6 +132,10 @@ interface BuildLogger {
 #### Output behavior options
 
 - `--no-playstore-upload`: skip Play Store upload for the build, requires `--output-upload`
+- `--submit-to-store-review`: submit after upload instead of leaving a draft/inactive store release. Android completes the Google Play release; iOS submits to TestFlight external review.
+- `--store-release-name <name>`: Android Google Play version_name/release label.
+- `--store-release-notes <notes>`: Google Play changelog and iOS TestFlight What to Test text.
+- `--ios-testflight-groups <groups>`: comma-separated external TestFlight group names or IDs required with `--submit-to-store-review` on iOS.
 - `--output-upload`
 - `--no-output-upload`
 - `--output-retention <duration>`: `1h` to `7d`

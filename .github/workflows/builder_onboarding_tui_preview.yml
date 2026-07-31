@@ -1,5 +1,11 @@
 name: Builder onboarding TUI preview
 
+# NOTE: this job runs on macos-latest, which can sit QUEUED for a while before a
+# runner picks it up. Combined with cancel-in-progress below, several pushes in
+# quick succession can each cancel the previous push's still-queued run before it
+# starts, so none of them ever attach a check to the PR. If that happens, re-run
+# on the PR head manually: Actions -> "Builder onboarding TUI preview" -> Run
+# workflow -> pr_number=<PR>. Let a single push settle to get a PR-attached run.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || inputs.pr_number || github.ref_name }}
   cancel-in-progress: true
@@ -109,6 +115,7 @@ jobs:
         with:
           ref: ${{ steps.pr.outputs.sha }}
           fetch-depth: 0
+          filter: blob:none
           submodules: recursive
           token: ${{ secrets.CLI_MCP_TESTS_TOKEN || secrets.PERSONAL_ACCESS_TOKEN || github.token }}
           persist-credentials: false
@@ -202,6 +209,9 @@ jobs:
       - name: Publish result files to R2
         if: always()
         id: r2
+        # Upload failures (expired R2 creds, bucket policy drift) must not fail a
+        # green TUI suite — the harness steps above already gate correctness.
+        continue-on-error: true
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           R2_RESULTS_UPLOAD_ACCESS_KEY_ID: ${{ secrets.BUILDER_ONBOARDING_TUI_RESULTS_R2_UPLOAD_ACCESS_KEY_ID }}

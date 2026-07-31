@@ -10,6 +10,7 @@ import DeploymentBanner from '~/components/dashboard/DeploymentBanner.vue'
 import DeploymentStatsCard from '~/components/dashboard/DeploymentStatsCard.vue'
 import DevicesStats from '~/components/dashboard/DevicesStats.vue'
 import ReleaseBanner from '~/components/dashboard/ReleaseBanner.vue'
+import StoreReleaseValidationModal from '~/components/dashboard/StoreReleaseValidationModal.vue'
 import UpdateStatsCard from '~/components/dashboard/UpdateStatsCard.vue'
 import { getCapgoVersion, useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
@@ -203,6 +204,7 @@ watchEffect(async () => {
               </div>
             </div>
           </div>
+          <StoreReleaseValidationModal v-if="!appNotFound && !isLoading && app && !showOnboardingBanner" :app-id="id" />
           <DeploymentBanner v-if="!appNotFound" :app-id="id" @deployed="refreshData" />
           <ReleaseBanner v-if="!appNotFound" :app-id="id" />
           <CompatibilityBanner v-if="!appNotFound" :app-id="id" />

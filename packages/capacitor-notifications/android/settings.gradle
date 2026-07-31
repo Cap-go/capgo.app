@@ -1,0 +1,11 @@
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+rootProject.name = 'capgo-capacitor-notifications'
+include ':capacitor-android'
+project(':capacitor-android').projectDir = new File(settingsDir, '../../../node_modules/@capacitor/android/capacitor')

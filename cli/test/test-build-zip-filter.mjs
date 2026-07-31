@@ -306,6 +306,60 @@ await t('generated build zip rewrites bun isolated-store paths to flat node_modu
   }
 })
 
+await t('generated build zip normalizes Windows path separators in ios Package.swift', async () => {
+  const testRoot = mkdtempSync(join(tmpdir(), 'capgo-build-zip-filter-'))
+  const zipPath = join(testRoot, 'build.zip')
+
+  try {
+    writeFile(
+      join(testRoot, 'package.json'),
+      JSON.stringify({
+        dependencies: {
+          '@capacitor/core': '^8.0.0',
+          '@capacitor/app': '^8.0.0',
+        },
+      }, null, 2),
+    )
+
+    writeFile(
+      join(testRoot, 'capacitor.config.json'),
+      JSON.stringify({
+        ios: { path: 'ios' },
+        appId: 'com.example.app',
+        appName: 'Example',
+      }, null, 2),
+    )
+
+    writeFile(
+      join(testRoot, 'ios/App/CapApp-SPM/Package.swift'),
+      'let package = Package(name: "CapApp-SPM", dependencies: [.package(name: "CapacitorApp", path: "..\\..\\..\\node_modules\\@capacitor\\app")])\n',
+    )
+
+    writeFile(join(testRoot, 'www', 'index.html'), '<!doctype html><html></html>')
+    writeFile(
+      join(testRoot, 'node_modules', '@capacitor', 'app', 'package.json'),
+      JSON.stringify({ name: '@capacitor/app', version: '8.0.0' }, null, 2),
+    )
+    writeFile(
+      join(testRoot, 'node_modules', '@capacitor', 'app', 'Package.swift'),
+      'let package = Package(name: "CapacitorApp")\n',
+    )
+
+    await zipDirectory(testRoot, zipPath, 'ios', {
+      ios: { path: 'ios' },
+    })
+
+    const zip = new AdmZip(zipPath)
+    assert.equal(
+      zip.readAsText('ios/App/CapApp-SPM/Package.swift'),
+      'let package = Package(name: "CapApp-SPM", dependencies: [.package(name: "CapacitorApp", path: "../../../node_modules/@capacitor/app")])\n',
+    )
+  }
+  finally {
+    rmSync(testRoot, { recursive: true, force: true })
+  }
+})
+
 await t('generated build zip rewrites bun isolated-store paths to flat node_modules (android settings.gradle)', async () => {
   const testRoot = mkdtempSync(join(tmpdir(), 'capgo-build-zip-filter-'))
   const zipPath = join(testRoot, 'build.zip')

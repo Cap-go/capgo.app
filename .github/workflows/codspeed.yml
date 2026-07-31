@@ -38,6 +38,9 @@ jobs:
       - name: Install dependencies
         run: bun install
 
+      - name: Disable flaky runner apt sources
+        run: sudo rm -f /etc/apt/sources.list.d/azure-cli.list /etc/apt/sources.list.d/azure-cli.sources /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/microsoft-prod.sources
+
       - name: Run benchmarks
         uses: CodSpeedHQ/action@v4
         with:

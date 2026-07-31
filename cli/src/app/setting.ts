@@ -1,7 +1,7 @@
 import type { AppSettingOptions } from '../schemas/app'
 import { intro, log, outro } from '@clack/prompts'
 import { writeConfigUpdater } from '../config'
-import { formatError, getConfig } from '../utils'
+import { formatError, getConfigForWrite } from '../utils'
 
 export async function setSettingInternal(setting: string, options: AppSettingOptions, silent = false) {
   if (!silent)
@@ -26,7 +26,7 @@ export async function setSettingInternal(setting: string, options: AppSettingOpt
   }
 
   try {
-    const config = await getConfig()
+    const config = await getConfigForWrite()
     let baseObj = config.config as any
     const pathElements = setting.split('.')
 

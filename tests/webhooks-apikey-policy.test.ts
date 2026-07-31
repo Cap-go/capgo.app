@@ -68,7 +68,7 @@ beforeAll(async () => {
   const { error: memberError } = await supabase.from('org_users').insert({
     org_id: policyOrgId,
     user_id: policyOwnerUserId,
-    user_right: 'super_admin',
+    rbac_role_name: 'org_super_admin',
   })
   if (memberError)
     throw memberError
@@ -97,7 +97,7 @@ beforeAll(async () => {
   const { error: secondaryMemberError } = await supabase.from('org_users').insert({
     org_id: policySecondaryOrgId,
     user_id: policyOwnerUserId,
-    user_right: 'super_admin',
+    rbac_role_name: 'org_super_admin',
   })
   if (secondaryMemberError)
     throw secondaryMemberError

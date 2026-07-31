@@ -17,19 +17,16 @@ export async function post(c: Context<MiddlewareKeyVariables, any, object>, body
     throw simpleError('invalid_app_id', 'App ID must be a reverse domain string', { app_id: body.app_id })
   }
 
-  // Auth context is already set by middlewareKey
-  if (!(await checkPermission(c, 'app.manage_devices', { appId: body.app_id }))) {
-    throw simpleError('cannot_access_app', 'You can\'t access this app', { app_id: body.app_id })
-  }
-
   if ((body as any).version_id) {
     throw simpleError('invalid_version_id', 'Cannot set version to device, use channel instead')
   }
 
+  const effectiveApikey = apikey.key ?? (c.get('capgkey') as string)
+  const supabase = supabaseApikey(c, effectiveApikey)
+
   // if channel set channel_override to it
   if (body.channel) {
-    const supabase = supabaseApikey(c, apikey.key)
-    // get channel by name
+    // get channel by name through the caller's RBAC-visible scope
     const { data: dataChannel, error: dbError } = await supabase
       .from('channels')
       .select()
@@ -38,6 +35,10 @@ export async function post(c: Context<MiddlewareKeyVariables, any, object>, body
       .single()
     if (dbError || !dataChannel) {
       throw quickError(404, 'channel_not_found', 'Cannot find channel', { dbError })
+    }
+
+    if (!(await checkPermission(c, 'channel.manage_forced_devices', { appId: body.app_id, channelId: dataChannel.id }))) {
+      throw simpleError('cannot_access_channel', 'You can\'t manage forced devices for this channel', { app_id: body.app_id, channel: body.channel })
     }
 
     if (dataChannel.public) {
@@ -59,6 +60,13 @@ export async function post(c: Context<MiddlewareKeyVariables, any, object>, body
     }))) {
       throw quickError(500, 'channel_self_store_error', 'Error syncing channel override store')
     }
+    return c.json(BRES)
   }
+
+  // Auth context is already set by middlewareKey
+  if (!(await checkPermission(c, 'app.manage_devices', { appId: body.app_id }))) {
+    throw simpleError('cannot_access_app', 'You can\'t access this app', { app_id: body.app_id })
+  }
+
   return c.json(BRES)
 }

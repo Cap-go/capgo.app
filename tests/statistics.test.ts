@@ -88,8 +88,8 @@ describe('[GET] /statistics operations with and without subkey', () => {
       method: 'GET',
       headers: headersStats,
     })
-    expect(getOrgStats.status).toBe(200)
     const orgStatsData = await getOrgStats.json()
+    expect(getOrgStats.status, JSON.stringify(orgStatsData)).toBe(200)
     expect(Array.isArray(orgStatsData)).toBe(true)
     expect(hasSeededStats(orgStatsData)).toBe(true)
   })
@@ -336,34 +336,76 @@ describe('[GET] /statistics operations with and without subkey', () => {
   })
 
   it('rejects nested API key creation from API key auth for org bindings', async () => {
-    const createSubkey = await fetch(`${BASE_URL}/apikey`, {
-      method: 'POST',
-      headers: headersStats,
-      body: JSON.stringify({
-        name: 'Nested Stats Org Key',
-        bindings: [{
-          role_name: 'org_member',
-          scope_type: 'org',
-          org_id: ORG_ID_STATS,
-        }],
-      }),
+    const limitedKey = randomUUID()
+    const keyData = await createDirectApiKeyWithBindings({
+      userId: USER_ID_STATS,
+      key: limitedKey,
+      name: `Nested create blocked org ${limitedKey}`,
+      orgId: ORG_ID_STATS,
+      roleName: 'org_member',
     })
-    expect(createSubkey.status).toBe(400)
-    const subkeyData = await createSubkey.json<{ error: string }>()
-    expect(subkeyData.error).toBe('cannot_create_apikey')
+
+    if (!keyData.key)
+      throw new Error('Expected plain API key value')
+
+    try {
+      const createSubkey = await fetch(`${BASE_URL}/apikey`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': keyData.key!,
+        },
+        body: JSON.stringify({
+          name: 'Nested Stats Org Key',
+          bindings: [{
+            role_name: 'org_member',
+            scope_type: 'org',
+            org_id: ORG_ID_STATS,
+          }],
+        }),
+      })
+      expect(createSubkey.status).toBe(400)
+      const subkeyData = await createSubkey.json<{ error: string }>()
+      expect(subkeyData.error).toBe('cannot_create_apikey')
+    }
+    finally {
+      await deleteApikeyById(keyData.id)
+    }
   })
 
   it('rejects nested API key creation from API key auth for app bindings', async () => {
-    const createSubkey = await fetch(`${BASE_URL}/apikey`, {
-      method: 'POST',
-      headers: headersStats,
-      body: JSON.stringify({
-        name: 'Nested Stats App Key',
-        bindings: await appApiKeyBindings(APPNAME, 'app_reader'),
-      }),
+    const limitedKey = randomUUID()
+    const keyData = await createDirectApiKeyWithBindings({
+      userId: USER_ID_STATS,
+      key: limitedKey,
+      name: `Nested create blocked app ${limitedKey}`,
+      orgId: ORG_ID_STATS,
+      roleName: 'org_member',
+      appId: APPNAME,
+      appRoleName: 'app_reader',
     })
-    expect(createSubkey.status).toBe(400)
-    const subkeyData = await createSubkey.json<{ error: string }>()
-    expect(subkeyData.error).toBe('cannot_create_apikey')
+
+    if (!keyData.key)
+      throw new Error('Expected plain API key value')
+
+    try {
+      const createSubkey = await fetch(`${BASE_URL}/apikey`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': keyData.key!,
+        },
+        body: JSON.stringify({
+          name: 'Nested Stats App Key',
+          bindings: await appApiKeyBindings(APPNAME, 'app_reader'),
+        }),
+      })
+      expect(createSubkey.status).toBe(400)
+      const subkeyData = await createSubkey.json<{ error: string }>()
+      expect(subkeyData.error).toBe('cannot_create_apikey')
+    }
+    finally {
+      await deleteApikeyById(keyData.id)
+    }
   })
 })

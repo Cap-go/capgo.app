@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import type { Ref } from 'vue'
 import type { TableColumn } from '../comp_def'
+import { useDebounceFn } from '@vueuse/core'
 import dayjs from 'dayjs'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import { formatDate } from '~/services/date'
-import { actionToFilter, createActionFilterState, filterToAction } from '~/services/statsActions'
+import { getLogDocUrl } from '~/services/logDocLinks'
+import { actionToFilter, createActionFilterState, failureActionFilterKeys, filterToAction } from '~/services/statsActions'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
 
 const props = defineProps<{
@@ -89,8 +91,6 @@ function initializeDateRange(): [Date, Date] {
 }
 
 const range = ref<[Date, Date]>(initializeDateRange())
-const DOC_LOGS = 'https://capgo.app/docs/plugin/debugging/#sent-from-the-backend'
-
 function normalizeMetadata(metadata: LogData['metadata']): Record<string, string> | null {
   if (!metadata)
     return null
@@ -135,9 +135,11 @@ async function copyMetadata(elem: Element) {
     toast.error(t('copy-fail'))
   }
 }
-
+const filterShortcuts = [
+  { label: 'filter-shortcut-all-fail', filters: failureActionFilterKeys },
+]
+let latestDataRequest = 0
 const actionFilters = ref<Record<string, boolean>>(createActionFilterState())
-
 function formatAction(elem: Element): string {
   const filterKey = actionToFilter[elem.action]
   return filterKey ? t(filterKey) : elem.action
@@ -193,14 +195,15 @@ const paginatedRange = computed(() => {
   }
 })
 
-async function getData() {
+async function getData(options: { append?: boolean } = {}) {
+  const append = options.append ?? true
+  const requestId = ++latestDataRequest
   isLoading.value = true
   try {
     const { data: currentSession } = await supabase.auth.getSession()!
     if (!currentSession.session)
       return
     const currentJwt = currentSession.session.access_token
-    // console.log('paginatedRange.value', paginatedRange.value, currentPage.value)
 
     try {
       const response = await fetch(`${defaultApiHost}/private/stats`, {
@@ -226,8 +229,13 @@ async function getData() {
       }
 
       const dataD = await response.json() as LogData[]
-      // console.log('dataD', dataD)
-      elements.value.push(...dataD)
+      if (requestId !== latestDataRequest)
+        return
+
+      if (append)
+        elements.value.push(...dataD)
+      else
+        elements.value = dataD
     }
     catch (err) {
       console.log('Cannot get devices', err)
@@ -236,7 +244,10 @@ async function getData() {
   catch (error) {
     console.error(error)
   }
-  isLoading.value = false
+  finally {
+    if (requestId === latestDataRequest)
+      isLoading.value = false
+  }
 }
 
 function downloadText(filename: string, content: string, mime: string) {
@@ -312,17 +323,17 @@ async function exportCsv() {
   }
 }
 async function refreshData() {
-  // console.log('refreshData')
   try {
     currentPage.value = 1
-    elements.value.length = 0
-    await getData()
+    await getData({ append: false })
   }
   catch (error) {
     console.error(error)
   }
 }
-
+const debouncedRefreshData = useDebounceFn(() => {
+  void refreshData()
+}, 700)
 columns.value = [
   {
     label: t('created-at'),
@@ -349,7 +360,7 @@ columns.value = [
     sortable: true,
     head: true,
     displayFunction: (elem: Element) => formatAction(elem),
-    onClick: () => window.open(DOC_LOGS, '_blank', 'noopener,noreferrer'),
+    onClick: (elem: Element) => window.open(getLogDocUrl(elem.action), '_blank', 'noopener,noreferrer'),
   },
   {
     label: t('version'),
@@ -379,8 +390,7 @@ columns.value = [
 async function reload() {
   try {
     currentPage.value = 1
-    elements.value.length = 0
-    await getData()
+    await getData({ append: false })
   }
   catch (error) {
     console.error(error)
@@ -438,8 +448,8 @@ watch(() => props.deviceId, async () => {
 watch(() => props.actions, async () => {
   await refreshData()
 })
-watch(actionFilters, async () => {
-  await refreshData()
+watch(actionFilters, () => {
+  debouncedRefreshData()
 }, { deep: true })
 watch(range, async () => {
   await refreshData()
@@ -456,6 +466,7 @@ watch(range, async () => {
       v-model:range="range"
       :element-list="elements"
       filter-text="filter-actions"
+      :filter-shortcuts="filterShortcuts"
       :is-loading="isLoading"
       :exportable="true"
       :export-loading="isExporting"

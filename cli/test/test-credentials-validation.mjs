@@ -34,6 +34,9 @@ function assert(condition, message) {
 function validateIosCredentials(credentials) {
   const missingCreds = []
   const distributionMode = credentials.CAPGO_IOS_DISTRIBUTION || 'app_store'
+  if (credentials.CAPGO_STORE_SUBMIT_REVIEW === 'true' && distributionMode !== 'app_store') {
+    missingCreds.push('--submit-to-store-review on iOS requires --ios-distribution app_store')
+  }
 
   if (!credentials.BUILD_CERTIFICATE_BASE64)
     missingCreds.push('BUILD_CERTIFICATE_BASE64')
@@ -55,6 +58,10 @@ function validateIosCredentials(credentials) {
     const hasAppleAppId = !!credentials.APPLE_APP_ID
     const anyAppSpecificField = hasFastlaneUser || hasAppSpecificPassword || hasAppleAppId
     const hasCompleteAppSpecificPassword = hasFastlaneUser && hasAppSpecificPassword && hasAppleAppId
+
+    if (credentials.CAPGO_STORE_SUBMIT_REVIEW === 'true' && !hasCompleteAppleApiKey) {
+      missingCreds.push('App Store Connect API key (APPLE_KEY_ID/APPLE_ISSUER_ID/APPLE_KEY_CONTENT) is required for --submit-to-store-review on iOS')
+    }
 
     if (hasAppleAppId && !/^\d+$/.test(String(credentials.APPLE_APP_ID).trim())) {
       missingCreds.push('APPLE_APP_ID must be the app\'s numeric App Store Connect id (digits only, e.g. 1234567890)')
@@ -89,8 +96,8 @@ function validateIosCredentials(credentials) {
     else if (credentials.BUILD_OUTPUT_UPLOAD_ENABLED !== 'true') {
       missingCreds.push('APPLE_KEY_ID/APPLE_ISSUER_ID/APPLE_KEY_CONTENT or app-specific password or BUILD_OUTPUT_UPLOAD_ENABLED=true')
     }
-    else if (credentials.SKIP_BUILD_NUMBER_BUMP !== 'true') {
-      missingCreds.push('APPLE_KEY_ID/APPLE_ISSUER_ID/APPLE_KEY_CONTENT or app-specific password or --skip-build-number-bump')
+    else if (credentials.SKIP_BUILD_NUMBER_BUMP !== 'true' || credentials.SKIP_MARKETING_VERSION_BUMP !== 'true') {
+      missingCreds.push('APPLE_KEY_ID/APPLE_ISSUER_ID/APPLE_KEY_CONTENT or app-specific password or --skip-build-number-bump and --skip-marketing-version-bump')
     }
     // else: warn only, no error
   }
@@ -152,8 +159,8 @@ await test('iOS validation errors when no API key with output upload but no skip
   assert(missingCreds[0].includes('skip-build-number-bump'), 'Should require skip-build-number-bump')
 })
 
-// Test 2c: iOS - no API key + output upload + skip-build-number-bump → allow (warn only)
-await test('iOS validation allows no API key when output upload and skip-build-number-bump are set', () => {
+// Test 2c: iOS - no API key + output upload + only skip-build-number-bump → error
+await test('iOS validation requires skip-marketing-version-bump without App Store Connect credentials', () => {
   const credentials = {
     BUILD_CERTIFICATE_BASE64: 'cert',
     P12_PASSWORD: 'pass',
@@ -161,7 +168,23 @@ await test('iOS validation allows no API key when output upload and skip-build-n
     APP_STORE_CONNECT_TEAM_ID: 'teamid',
     BUILD_OUTPUT_UPLOAD_ENABLED: 'true',
     SKIP_BUILD_NUMBER_BUMP: 'true',
-    // No API key - should be allowed
+  }
+
+  const missingCreds = validateIosCredentials(credentials)
+  assert(missingCreds.length === 1, `Should have 1 missing credential, got ${missingCreds.length}: ${missingCreds.join(', ')}`)
+  assert(missingCreds[0].includes('skip-marketing-version-bump'), 'Should require skip-marketing-version-bump')
+})
+
+// Test 2d: iOS - no API key + output upload + both skip flags → allow (warn only)
+await test('iOS validation allows output upload without App Store Connect credentials when both version bumps are skipped', () => {
+  const credentials = {
+    BUILD_CERTIFICATE_BASE64: 'cert',
+    P12_PASSWORD: 'pass',
+    CAPGO_IOS_PROVISIONING_MAP: '{"com.test.app":{"profile":"base64","name":"test"}}',
+    APP_STORE_CONNECT_TEAM_ID: 'teamid',
+    BUILD_OUTPUT_UPLOAD_ENABLED: 'true',
+    SKIP_BUILD_NUMBER_BUMP: 'true',
+    SKIP_MARKETING_VERSION_BUMP: 'true',
   }
 
   const missingCreds = validateIosCredentials(credentials)
@@ -404,6 +427,41 @@ await test('iOS validation rejects a non-numeric APPLE_APP_ID', () => {
 
   const missingCreds = validateIosCredentials(credentials)
   assert(missingCreds.some(c => c.includes('APPLE_APP_ID must be the app')), `Should reject non-numeric APPLE_APP_ID, got: ${missingCreds.join(', ')}`)
+})
+
+// Test 17: iOS store review needs App Store Connect API key, not app-specific password
+await test('iOS store review requires App Store Connect API key', () => {
+  const credentials = {
+    BUILD_CERTIFICATE_BASE64: 'cert',
+    CAPGO_IOS_PROVISIONING_MAP: '{"com.test.app":{"profile":"base64","name":"test"}}',
+    APP_STORE_CONNECT_TEAM_ID: 'teamid',
+    FASTLANE_USER: 'dev@example.com',
+    FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD: 'abcd-efgh-ijkl-mnop',
+    APPLE_APP_ID: '1234567890',
+    CAPGO_STORE_SUBMIT_REVIEW: 'true',
+    CAPGO_IOS_TESTFLIGHT_GROUPS: 'External Testers',
+  }
+
+  const missingCreds = validateIosCredentials(credentials)
+  assert(missingCreds.some(c => c.includes('App Store Connect API key')), `Should require App Store Connect API key, got: ${missingCreds.join(', ')}`)
+})
+
+// Test 18: iOS store review is only valid for app_store distribution
+await test('iOS store review rejects ad_hoc distribution', () => {
+  const credentials = {
+    BUILD_CERTIFICATE_BASE64: 'cert',
+    CAPGO_IOS_PROVISIONING_MAP: '{"com.test.app":{"profile":"base64","name":"test"}}',
+    APP_STORE_CONNECT_TEAM_ID: 'teamid',
+    APPLE_KEY_ID: 'keyid',
+    APPLE_ISSUER_ID: 'issuerid',
+    APPLE_KEY_CONTENT: 'keycontent',
+    CAPGO_IOS_DISTRIBUTION: 'ad_hoc',
+    CAPGO_STORE_SUBMIT_REVIEW: 'true',
+    CAPGO_IOS_TESTFLIGHT_GROUPS: 'External Testers',
+  }
+
+  const missingCreds = validateIosCredentials(credentials)
+  assert(missingCreds.some(c => c.includes('--ios-distribution app_store')), `Should reject ad_hoc store review, got: ${missingCreds.join(', ')}`)
 })
 
 // Print summary

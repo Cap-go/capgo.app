@@ -101,10 +101,34 @@ describe('stripe revenue movement classification', () => {
       contractionMrr: 2,
       churnMrr: 0,
     })
-    expect(stripeEventTestUtils.shouldTrackOrganizationUpgrade(true, movement)).toBe(true)
+    expect(stripeEventTestUtils.shouldTrackOrganizationUpgrade(true, movement)).toBe(false)
   })
 
-  it.concurrent('does not track first-time subscriptions as organization upgrades for admin metrics', () => {
+  it.concurrent('tracks paying MRR increases as organization upgrades', () => {
+    const movement = stripeEventTestUtils.classifyRevenueMovement(
+      {
+        is_good_plan: true,
+        paid_at: '2026-04-01T00:00:00.000Z',
+        price_id: 'price_solo_monthly',
+        product_id: 'prod_solo',
+        status: 'succeeded',
+      },
+      {
+        is_good_plan: true,
+        paid_at: '2026-04-01T00:00:00.000Z',
+        price_id: 'price_team_monthly',
+        product_id: 'prod_team',
+        status: 'succeeded',
+      },
+      plans as any,
+    )
+
+    expect(movement.currentMrr).toBeGreaterThan(0)
+    expect(movement.nextMrr).toBeGreaterThan(movement.currentMrr)
+    expect(stripeEventTestUtils.shouldTrackOrganizationUpgrade(false, movement)).toBe(true)
+  })
+
+    it.concurrent('does not track first-time subscriptions as organization upgrades for admin metrics', () => {
     const movement = stripeEventTestUtils.classifyRevenueMovement(
       {
         paid_at: null,
@@ -123,6 +147,8 @@ describe('stripe revenue movement classification', () => {
     )
 
     expect(stripeEventTestUtils.shouldTrackOrganizationUpgrade(false, movement)).toBe(false)
+    // monthly->yearly flag alone is not enough without already-paying MRR
+    expect(stripeEventTestUtils.shouldTrackOrganizationUpgrade(true, movement)).toBe(false)
   })
 
   it.concurrent('records downgrades as contraction MRR', () => {

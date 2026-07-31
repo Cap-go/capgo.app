@@ -1,34 +1,52 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../../utils/hono.ts'
 import type { Database } from '../../../utils/supabase.types.ts'
-import { type } from 'arktype'
-import { safeParseSchema } from '../../../utils/ark_validation.ts'
+import { z } from 'zod'
+import { safeParseSchema } from '../../../utils/schema_validation.ts'
 import { BRES, simpleError } from '../../../utils/hono.ts'
 import { cloudlog } from '../../../utils/logging.ts'
 import { checkPermission } from '../../../utils/rbac.ts'
 import { supabaseApikey } from '../../../utils/supabase.ts'
 
-const inviteBodySchema = type({
-  orgId: 'string',
-  email: 'string.email',
-  invite_type: '"read" | "upload" | "write" | "admin" | "super_admin" | "org_member" | "org_billing_admin" | "org_admin" | "org_super_admin"',
-})
-
 const rbacInviteRoles = ['org_member', 'org_billing_admin', 'org_admin', 'org_super_admin'] as const
-const _legacyInviteRoles = ['read', 'upload', 'write', 'admin', 'super_admin'] as const
 
-type LegacyInviteRole = (typeof _legacyInviteRoles)[number]
 type RbacInviteRole = (typeof rbacInviteRoles)[number]
 
-const legacyToRbac: Partial<Record<LegacyInviteRole, RbacInviteRole>> = {
+const inviteRoleAliases: Record<string, RbacInviteRole> = {
   read: 'org_member',
   upload: 'org_member',
   write: 'org_member',
   admin: 'org_admin',
   super_admin: 'org_super_admin',
+  invite_read: 'org_member',
+  invite_upload: 'org_member',
+  invite_write: 'org_member',
+  invite_admin: 'org_admin',
+  invite_super_admin: 'org_super_admin',
 }
 
-export async function post(c: Context<MiddlewareKeyVariables>, bodyRaw: any, _apikey: Database['public']['Tables']['apikeys']['Row']) {
+const allowedInviteRoles = [...rbacInviteRoles, ...Object.keys(inviteRoleAliases)]
+const allowedInviteRoleSet = new Set<string>(allowedInviteRoles)
+const rbacInviteRoleSet = new Set<string>(rbacInviteRoles)
+const inviteTypeSchema = z.enum(allowedInviteRoles as [string, ...string[]])
+
+const inviteBodySchema = z.object({
+  orgId: z.string(),
+  email: z.email(),
+  invite_type: inviteTypeSchema,
+})
+
+export function normalizeInviteRole(inviteType: string): RbacInviteRole | null {
+  if (!allowedInviteRoleSet.has(inviteType))
+    return null
+
+  if (rbacInviteRoleSet.has(inviteType))
+    return inviteType as RbacInviteRole
+
+  return inviteRoleAliases[inviteType]
+}
+
+export async function post(c: Context<MiddlewareKeyVariables>, bodyRaw: unknown, _apikey: Database['public']['Tables']['apikeys']['Row']) {
   const bodyParsed = safeParseSchema(inviteBodySchema, bodyRaw)
   if (!bodyParsed.success) {
     throw simpleError('invalid_body', 'Invalid body', { error: bodyParsed.error })
@@ -42,11 +60,7 @@ export async function post(c: Context<MiddlewareKeyVariables>, bodyRaw: any, _ap
 
   const supabase = supabaseApikey(c, _apikey?.key)
 
-  const isRbacRole = rbacInviteRoles.includes(body.invite_type as RbacInviteRole)
-  const legacyInviteType = body.invite_type as LegacyInviteRole
-  const rbacRoleName = isRbacRole
-    ? (body.invite_type as RbacInviteRole)
-    : legacyToRbac[legacyInviteType]
+  const rbacRoleName = normalizeInviteRole(body.invite_type)
 
   if (!rbacRoleName)
     throw simpleError('invalid_body', 'Invalid invite type', { invite_type: body.invite_type })

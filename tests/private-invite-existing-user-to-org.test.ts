@@ -17,8 +17,8 @@ async function postInviteExistingUserToOrg(headers: Record<string, string>, body
 
 async function createInviteTestFixture(options?: {
   inviterUserId?: string
-  inviterUserRight?: 'admin' | 'super_admin'
-  invitedUserRight?: `invite_${'read' | 'super_admin'}` | 'read'
+  inviterRoleName?: 'org_admin' | 'org_super_admin'
+  invitedRoleName?: 'org_member' | 'org_super_admin'
 }) {
   const id = randomUUID()
   const orgId = randomUUID()
@@ -26,8 +26,8 @@ async function createInviteTestFixture(options?: {
   const orgEmail = `existing-invite-${id}@capgo.app`
   const supabase = getSupabaseClient()
   const inviterUserId = options?.inviterUserId ?? USER_ID
-  const inviterUserRight = options?.inviterUserRight ?? 'super_admin'
-  const invitedUserRight = options?.invitedUserRight ?? 'invite_read'
+  const inviterRoleName = options?.inviterRoleName ?? 'org_super_admin'
+  const invitedRoleName = options?.invitedRoleName ?? 'org_member'
 
   const { error: stripeError } = await supabase.from('stripe_info').insert({
     customer_id: customerId,
@@ -46,23 +46,28 @@ async function createInviteTestFixture(options?: {
     management_email: orgEmail,
     created_by: USER_ID,
     customer_id: customerId,
-    use_new_rbac: false,
   })
   if (orgError)
     throw orgError
 
-  const { error: orgUsersError } = await supabase.from('org_users').insert([
-    {
-      org_id: orgId,
-      user_id: inviterUserId,
-      user_right: inviterUserRight,
-    },
+  const orgUserRows: Array<{ org_id: string, user_id: string, rbac_role_name: string, is_invite: boolean }> = [
     {
       org_id: orgId,
       user_id: USER_ID_NONMEMBER,
-      user_right: invitedUserRight,
+      rbac_role_name: invitedRoleName,
+      is_invite: true,
     },
-  ])
+  ]
+  if (inviterUserId !== USER_ID) {
+    orgUserRows.unshift({
+      org_id: orgId,
+      user_id: inviterUserId,
+      rbac_role_name: inviterRoleName,
+      is_invite: false,
+    })
+  }
+
+  const { error: orgUsersError } = await supabase.from('org_users').insert(orgUserRows)
   if (orgUsersError)
     throw orgUsersError
 
@@ -71,7 +76,6 @@ async function createInviteTestFixture(options?: {
     orgId,
     supabase,
     cleanup: async () => {
-      await supabase.from('org_users').delete().eq('org_id', orgId)
       await supabase.from('orgs').delete().eq('id', orgId)
       await supabase.from('stripe_info').delete().eq('customer_id', customerId)
     },
@@ -158,7 +162,7 @@ describe('[POST] /private/invite_existing_user_to_org', () => {
     try {
       const { error: updateError } = await fixture.supabase
         .from('org_users')
-        .update({ user_right: 'read' })
+        .update({ is_invite: false })
         .eq('org_id', fixture.orgId)
         .eq('user_id', USER_ID_NONMEMBER)
 
@@ -198,8 +202,8 @@ describe('[POST] /private/invite_existing_user_to_org', () => {
   it.concurrent('returns forbidden when an org admin tries to resend a super admin invite', async () => {
     const fixture = await createInviteTestFixture({
       inviterUserId: USER_ID_2,
-      inviterUserRight: 'admin',
-      invitedUserRight: 'invite_super_admin',
+      inviterRoleName: 'org_admin',
+      invitedRoleName: 'org_super_admin',
     })
     try {
       const response = await postInviteExistingUserToOrg(orgAdminAuthHeaders, {

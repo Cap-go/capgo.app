@@ -35,6 +35,9 @@ npx @capgo/cli@latest bundle upload com.example.app --path ./dist --channel prod
 | **-a** | <code>string</code> | API key to link to your account |
 | **-p** | <code>string</code> | Path of the folder to upload, if not provided it will use the webDir set in capacitor.config |
 | **-c** | <code>string</code> | Channel to link to. Use commas for multiple channels, for example production,beta |
+| **--rollout** | <code>string</code> | Set the uploaded bundle as this channel's rollout target at a percentage from 0 to 100 |
+| **--rollout-percentage-bps** | <code>string</code> | Set the uploaded bundle rollout percentage in basis points from 0 to 10000 |
+| **--rollout-cache-ttl-seconds** | <code>string</code> | Cloudflare rollout decision cache TTL in seconds |
 | **-e** | <code>string</code> | Link to external URL instead of upload to Capgo Cloud |
 | **--iv-session-key** | <code>string</code> | Set the IV and session key for bundle URL external |
 | **--s3-region** | <code>string</code> | Region for your S3 bucket |
@@ -66,11 +69,12 @@ npx @capgo/cli@latest bundle upload com.example.app --path ./dist --channel prod
 | **--tus-chunk-size** | <code>string</code> | Chunk size in bytes for TUS resumable uploads (default: auto) |
 | **--partial** | <code>boolean</code> | [DEPRECATED] Use --delta instead. Upload incremental updates |
 | **--partial-only** | <code>boolean</code> | [DEPRECATED] Use --delta-only instead. Upload only incremental updates, skip full bundle |
-| **--delta** | <code>boolean</code> | Upload delta updates (only changed files) for instant, super-fast updates instead of big zip downloads |
+| **--delta** | <code>boolean</code> | Upload delta updates (only changed files) for instant, super-fast updates instead of big zip downloads. Capgo refuses delta uploads over 10,000 files (delta tracks each file); use --no-delta for a full zip, or reduce files in your web build. |
 | **--delta-only** | <code>boolean</code> | Upload only delta updates without full bundle for maximum speed (useful for large apps) |
 | **--no-delta** | <code>boolean</code> | Disable delta updates even if instant updates are enabled |
 | **--encrypted-checksum** | <code>string</code> | An encrypted checksum (signature). Used only when uploading an external bundle. |
-| **--auto-set-bundle** | <code>boolean</code> | Set the bundle in capacitor.config.json |
+| **--auto-set-bundle** | <code>boolean</code> | Set the bundle version in Capacitor config |
+| **--capacitor-config** | <code>string</code> | Capacitor config source to update (useful with dynamic monorepo configs) |
 | **--dry-upload** | <code>boolean</code> | Dry upload the bundle process: add the row in database without uploading files or updating channels (Used by Capgo for internal testing) |
 | **--package-json** | <code>string</code> | Paths to package.json files for monorepos (comma-separated) |
 | **--node-modules** | <code>string</code> | Paths to node_modules directories for monorepos (comma-separated) |
@@ -81,6 +85,7 @@ npx @capgo/cli@latest bundle upload com.example.app --path ./dist --channel prod
 | **--version-exists-ok** | <code>boolean</code> | Exit successfully if bundle version already exists, useful for CI/CD workflows with monorepos |
 | **--self-assign** | <code>boolean</code> | Allow devices to auto-join this channel (updates channel setting) |
 | **--qr-preview** | <code>boolean</code> | Print a terminal QR code for this bundle preview after upload |
+| **--send-update-notification** | <code>boolean</code> | Send a native update-check notification to devices after updating linked channel bundles |
 | **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
 | **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
 | **--verbose** | <code>boolean</code> | Enable verbose output with detailed logging |

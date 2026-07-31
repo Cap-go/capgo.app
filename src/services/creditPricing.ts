@@ -1,4 +1,5 @@
 import type { Database } from '~/types/supabase.types'
+import { formatNumber } from '~/services/formatLocale'
 
 export type CreditMetricType = Database['public']['Enums']['credit_metric_type']
 
@@ -36,26 +37,23 @@ function toBilledUnits(step: Pick<CreditPricingStep, 'unit_factor'>, rawValue: n
   return Math.ceil(rawValue / factor)
 }
 
-function formatCreditTierAmount(metric: CreditMetricType, billedUnits: number, t: Translate, locale?: string) {
-  const formatter = new Intl.NumberFormat(locale, {
+function formatCreditTierAmount(metric: CreditMetricType, billedUnits: number, t: Translate) {
+  const formattedAmount = formatNumber(billedUnits, {
     maximumFractionDigits: 0,
     notation: metric === 'mau' ? 'compact' : 'standard',
     compactDisplay: 'short',
   })
 
-  if (metric === 'mau')
-    return formatter.format(billedUnits)
-
   if ((metric === 'bandwidth' || metric === 'storage') && billedUnits >= 1024 && billedUnits % 1024 === 0)
-    return `${formatter.format(billedUnits / 1024)} TB`
+    return `${formatNumber(billedUnits / 1024, { maximumFractionDigits: 0 })} TB`
 
   if (metric === 'bandwidth' || metric === 'storage')
-    return `${formatter.format(billedUnits)} GiB`
+    return `${formattedAmount} GiB`
 
   if (metric === 'build_time')
-    return t('minutes-short', { minutes: formatter.format(billedUnits) })
+    return t('minutes-short', { minutes: formattedAmount })
 
-  return formatter.format(billedUnits)
+  return formattedAmount
 }
 
 export function sortCreditPricingSteps(steps: CreditPricingStep[]) {
@@ -80,23 +78,22 @@ export function getFirstTierCreditUnitPricing(steps: CreditPricingStep[]) {
   }, {})
 }
 
-export function formatCreditPriceValue(pricePerUnit: number, locale?: string) {
-  return new Intl.NumberFormat(locale, {
+export function formatCreditPriceValue(pricePerUnit: number) {
+  return formatNumber(pricePerUnit, {
     style: 'currency',
     currency: 'USD',
     minimumFractionDigits: 2,
     maximumFractionDigits: 4,
-  }).format(pricePerUnit)
+  })
 }
 
 export function formatCreditPricingPrice(
   metric: CreditMetricType,
   pricePerUnit: number,
   t: Translate,
-  locale?: string,
 ) {
   return t('credits-pricing-price', {
-    price: formatCreditPriceValue(pricePerUnit, locale),
+    price: formatCreditPriceValue(pricePerUnit),
     unit: t(creditPricingUnitLabelKeys[metric]),
   })
 }
@@ -104,7 +101,6 @@ export function formatCreditPricingPrice(
 export function formatCreditPricingTierLabel(
   step: Pick<CreditPricingStep, 'type' | 'step_min' | 'step_max' | 'unit_factor'>,
   t: Translate,
-  locale?: string,
 ) {
   const minUnits = toBilledUnits(step, step.step_min)
   const maxUnits = toBilledUnits(step, step.step_max)
@@ -112,25 +108,25 @@ export function formatCreditPricingTierLabel(
 
   if (step.step_min === 0) {
     return t('credits-pricing-tier-first', {
-      to: formatCreditTierAmount(step.type, maxUnits, t, locale),
+      to: formatCreditTierAmount(step.type, maxUnits, t),
     })
   }
 
   if (openEnded) {
     return t('credits-pricing-tier-over', {
-      from: formatCreditTierAmount(step.type, minUnits, t, locale),
+      from: formatCreditTierAmount(step.type, minUnits, t),
     })
   }
 
   return t('credits-pricing-tier-range', {
-    from: formatCreditTierAmount(step.type, minUnits, t, locale),
-    to: formatCreditTierAmount(step.type, maxUnits, t, locale),
+    from: formatCreditTierAmount(step.type, minUnits, t),
+    to: formatCreditTierAmount(step.type, maxUnits, t),
   })
 }
 
-export function formatIncludedThenPrice(metric: CreditMetricType, pricePerUnit: number, t: Translate, locale?: string) {
+export function formatIncludedThenPrice(metric: CreditMetricType, pricePerUnit: number, t: Translate) {
   return t('credits-plan-overage', {
     included: t('included-in-plan'),
-    price: formatCreditPricingPrice(metric, pricePerUnit, t, locale),
+    price: formatCreditPricingPrice(metric, pricePerUnit, t),
   })
 }

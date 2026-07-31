@@ -94,7 +94,7 @@ test(`build-complete [dense, bare] fits ${BODY_BUDGET_ROWS}-row budget`, () => {
 })
 test(`build-complete [dense, url only] fits ${BODY_BUDGET_ROWS}-row budget`, () => {
   assertFitsBudget(
-    h(BuildCompleteStep, { uploadSummary: null, buildUrl: 'https://capgo.app/app/com.example.app/builds', dense: true }),
+    h(BuildCompleteStep, { uploadSummary: null, buildUrl: 'https://console.capgo.app/app/com.example.app/builds', dense: true }),
     'build-complete-dense-url',
   )
 })
@@ -102,7 +102,7 @@ test(`build-complete [dense, summary + url] fits ${BODY_BUDGET_ROWS}-row budget`
   assertFitsBudget(
     h(BuildCompleteStep, {
       uploadSummary: 'Uploaded 5 env vars to GitHub Actions',
-      buildUrl: 'https://capgo.app/app/com.example.app/builds',
+      buildUrl: 'https://console.capgo.app/app/com.example.app/builds',
       dense: true,
     }),
     'build-complete-dense-summary-url',
@@ -112,7 +112,7 @@ test(`build-complete [dense, long summary] fits ${BODY_BUDGET_ROWS}-row budget`,
   assertFitsBudget(
     h(BuildCompleteStep, {
       uploadSummary: 'Uploaded 12 build environment variables to the GitHub Actions repository secrets store',
-      buildUrl: 'https://capgo.app/app/com.example.app/builds',
+      buildUrl: 'https://console.capgo.app/app/com.example.app/builds',
       dense: true,
     }),
     'build-complete-dense-long-summary',

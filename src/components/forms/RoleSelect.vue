@@ -39,16 +39,19 @@ const localValue = computed({
 })
 
 const placeholderText = computed(() => props.placeholder || t('select-role'))
+const selectId = useId()
 </script>
 
 <template>
   <div class="form-control">
-    <label v-if="label" class="label">
+    <label v-if="label" class="label" :for="selectId">
       <span class="label-text">{{ label }}</span>
     </label>
     <select
+      :id="selectId"
       v-model="localValue"
       class="d-select"
+      :aria-label="label || placeholderText"
       :disabled="disabled"
       :required="required"
     >

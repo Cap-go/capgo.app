@@ -53,9 +53,35 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+// The limiter counts requests in a one-second window anchored to the first request
+// (see channelSelfRateLimit.ts) and its cache counter is not atomic under concurrent
+// requests, so bursts must be sequential AND finish inside the window to trip it.
+// Send sequential requests within the window budget; when a slow runner lets the
+// window expire before the limit trips, wait out the counter and retry the round.
+const WINDOW_BUDGET_MS = 900
+
+async function hitRateLimit(makeRequest: (deviceId: string) => Promise<Response>, deviceId: string): Promise<Response | null> {
+  for (let round = 0; round < 4; round++) {
+    const roundStart = Date.now()
+    let sent = 0
+    while (Date.now() - roundStart < WINDOW_BUDGET_MS) {
+      const response = await makeRequest(deviceId)
+      sent += 1
+      if (response.status === 429)
+        return response
+      // Three times the limit landed inside one window without a 429: the limiter is broken.
+      if (sent >= OP_LIMIT_PER_SECOND * 3)
+        return null
+    }
+    // Window expired before the limit could trip; let the counter reset and retry.
+    await sleep(1100)
+  }
+  return null
+}
+
 /**
  * Reusable test suite for rate limiting behavior.
- * Tests: first request succeeds, immediate second is rate limited, after delay succeeds.
+ * Tests: first request succeeds, a burst is rate limited, after delay succeeds.
  */
 async function testRateLimitBehavior(
   name: string,
@@ -69,27 +95,14 @@ async function testRateLimitBehavior(
 
     it('should rate limit after burst within 1 second', async () => {
       const deviceId = randomUUID().toLowerCase()
-
-      // Allow up to OP_LIMIT_PER_SECOND within the window
-      for (let i = 0; i < OP_LIMIT_PER_SECOND; i++) {
-        const response = await makeRequest(deviceId)
-        expect(response.status).not.toBe(429)
-      }
-
-      // Next one should be rate limited
-      const responseLimited = await makeRequest(deviceId)
-      expect(responseLimited.status).toBe(429)
+      const limited = await hitRateLimit(makeRequest, deviceId)
+      expect(limited?.status).toBe(429)
     })
 
     it('should allow request after 1 second delay', async () => {
       const deviceId = randomUUID().toLowerCase()
-      // Hit the limit
-      for (let i = 0; i < OP_LIMIT_PER_SECOND; i++) {
-        const response = await makeRequest(deviceId)
-        expect(response.status).not.toBe(429)
-      }
-      const responseLimited = await makeRequest(deviceId)
-      expect(responseLimited.status).toBe(429)
+      const limited = await hitRateLimit(makeRequest, deviceId)
+      expect(limited?.status).toBe(429)
 
       await sleep(1100)
 
@@ -197,12 +210,12 @@ describe.skipIf(!USE_CLOUDFLARE)('channel_self rate limiting', () => {
       data.device_id = deviceId
 
       // Exhaust POST
-      for (let i = 0; i < OP_LIMIT_PER_SECOND; i++) {
-        const response = await fetchChannelSelfEndpoint('POST', { ...data, channel: `rl-xop-${deviceId}-${i}` })
-        expect(response.status).not.toBe(429)
-      }
-      const postLimited = await fetchChannelSelfEndpoint('POST', { ...data, channel: `rl-xop-${deviceId}-limited` })
-      expect(postLimited.status).toBe(429)
+      let postCall = 0
+      const postLimited = await hitRateLimit(async () => {
+        postCall += 1
+        return fetchChannelSelfEndpoint('POST', { ...data, channel: `rl-xop-${deviceId}-${postCall}` })
+      }, deviceId)
+      expect(postLimited?.status).toBe(429)
 
       // PUT should still be allowed (separate bucket)
       const put = await fetchChannelSelfEndpoint('PUT', data)

@@ -1,6 +1,7 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
-import { createHono, middlewareAuth, quickError, useCors } from '../../utils/hono.ts'
+import { createHono, quickError, useCors } from '../../utils/hono.ts'
+import { middlewareAuth } from '../../utils/hono_jwt.ts'
 import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
 import { getPgClient } from '../../utils/pg.ts'
 import { supabaseAdmin } from '../../utils/supabase.ts'
@@ -13,17 +14,11 @@ interface PublicUserSeed {
   last_name: string | null
 }
 
-type OrgMembershipRight
-  = 'read'
-    | 'upload'
-    | 'write'
-    | 'admin'
-    | 'super_admin'
-    | 'invite_read'
-    | 'invite_upload'
-    | 'invite_write'
-    | 'invite_admin'
-    | 'invite_super_admin'
+type OrgRoleName
+  = 'org_member'
+    | 'org_billing_admin'
+    | 'org_admin'
+    | 'org_super_admin'
 
 interface EnsureOrgMembershipResult {
   alreadyMember: boolean
@@ -195,87 +190,28 @@ function buildPublicUserSeed(userId: string, email: string, userMetadata: Record
   }
 }
 
-function isInviteRole(role: string | null | undefined): role is Extract<OrgMembershipRight, `invite_${string}`> {
-  return !!role && role.startsWith('invite_')
-}
-
-function promoteInviteRole(role: Extract<OrgMembershipRight, `invite_${string}`>): Exclude<OrgMembershipRight, `invite_${string}`> {
-  switch (role) {
-    case 'invite_read':
-      return 'read'
-    case 'invite_upload':
-      return 'upload'
-    case 'invite_write':
-      return 'write'
-    case 'invite_admin':
-      return 'admin'
-    case 'invite_super_admin':
-      return 'super_admin'
-  }
-}
-
 async function ensureOrgMembership(
-  admin: ReturnType<typeof supabaseAdmin>,
+  pgClient: ReturnType<typeof getPgClient>,
   requestId: string,
   userId: string,
   orgId: string,
-  fallbackRole: Exclude<OrgMembershipRight, `invite_${string}`> = 'read',
-  allowRetry = true,
+  fallbackRole: OrgRoleName = 'org_member',
 ): Promise<EnsureOrgMembershipResult> {
-  const { data: existingMembership, error: membershipCheckError } = await (admin as any)
-    .from('org_users')
-    .select('id, user_right')
-    .eq('user_id', userId)
-    .eq('org_id', orgId)
-    .maybeSingle()
-
-  if (membershipCheckError) {
-    cloudlogErr({ requestId, message: 'Failed to check existing org membership', userId, orgId, error: membershipCheckError })
-    throw new Error('membership_check_failed')
+  await pgClient.query('begin')
+  try {
+    const membershipResult = await ensureOrgMembershipInTransaction(pgClient, requestId, userId, orgId, fallbackRole)
+    await pgClient.query('commit')
+    return membershipResult
   }
-
-  const currentRight = typeof existingMembership?.user_right === 'string'
-    ? existingMembership.user_right as OrgMembershipRight
-    : null
-
-  if (existingMembership) {
-    if (!isInviteRole(currentRight)) {
-      return { alreadyMember: true }
+  catch (error) {
+    try {
+      await pgClient.query('rollback')
     }
-
-    const promotedRole = promoteInviteRole(currentRight)
-    const { error: promotionError } = await (admin as any)
-      .from('org_users')
-      .update({ user_right: promotedRole })
-      .eq('id', existingMembership.id)
-
-    if (promotionError) {
-      cloudlogErr({ requestId, message: 'Failed to promote invited org membership during SSO provisioning', userId, orgId, fromRole: currentRight, toRole: promotedRole, error: promotionError })
-      throw new Error('membership_promotion_failed')
+    catch (rollbackError) {
+      cloudlogErr({ requestId, message: 'Failed to roll back SSO provisioning transaction', userId, orgId, error: rollbackError })
     }
-
-    return { alreadyMember: false }
+    throw error
   }
-
-  const { error: insertError } = await (admin as any)
-    .from('org_users')
-    .insert({
-      user_id: userId,
-      org_id: orgId,
-      user_right: fallbackRole,
-    })
-
-  if (!insertError) {
-    return { alreadyMember: false }
-  }
-
-  const isDuplicate = insertError.code === '23505' || insertError.message?.toLowerCase().includes('duplicate')
-  if (isDuplicate && allowRetry) {
-    return ensureOrgMembership(admin, requestId, userId, orgId, fallbackRole, false)
-  }
-
-  cloudlogErr({ requestId, message: 'Failed to insert user into org_users during SSO provisioning', userId, orgId, fallbackRole, error: insertError })
-  throw new Error('membership_insert_failed')
 }
 
 async function ensurePublicUserRowExists(
@@ -356,28 +292,108 @@ async function ensureOrgMembershipInTransaction(
   requestId: string,
   userId: string,
   orgId: string,
-  fallbackRole: Exclude<OrgMembershipRight, `invite_${string}`> = 'read',
-): Promise<void> {
-  const promoteExistingInvite = async (membershipId: string, currentRight: OrgMembershipRight | null) => {
-    if (!isInviteRole(currentRight)) {
-      return
+  fallbackRole: OrgRoleName = 'org_member',
+): Promise<EnsureOrgMembershipResult> {
+  const ensureOrgRoleBinding = async (roleName: string, mode: 'replace' | 'repair' = 'replace') => {
+    const roleResult = await pgClient.query<{ id: string }>(
+      `
+        select id
+        from public.roles
+        where name = $1
+          and scope_type = public.rbac_scope_org()
+        limit 1
+      `,
+      [roleName],
+    )
+    const roleId = roleResult.rows[0]?.id
+    if (!roleId) {
+      cloudlogErr({ requestId, message: 'Failed to resolve SSO org RBAC role', userId, orgId, roleName })
+      throw new Error('missing_org_role')
     }
 
-    const promotedRole = promoteInviteRole(currentRight)
+    if (mode === 'repair') {
+      const existingBinding = await pgClient.query<{ id: string }>(
+        `
+          select id
+          from public.role_bindings
+          where principal_type = public.rbac_principal_user()
+            and principal_id = $1
+            and scope_type = public.rbac_scope_org()
+            and org_id = $2
+          limit 1
+        `,
+        [userId, orgId],
+      )
+
+      if (existingBinding.rows[0])
+        return
+    }
+    else {
+      await pgClient.query(
+        `
+          delete from public.role_bindings
+          where principal_type = public.rbac_principal_user()
+            and principal_id = $1
+            and scope_type = public.rbac_scope_org()
+            and org_id = $2
+        `,
+        [userId, orgId],
+      )
+    }
+
     await pgClient.query(
       `
-        update public.org_users
-        set user_right = $1
-        where id = $2
+        insert into public.role_bindings (
+          principal_type,
+          principal_id,
+          role_id,
+          scope_type,
+          org_id,
+          granted_by,
+          reason,
+          is_direct
+        )
+        values (
+          public.rbac_principal_user(),
+          $1,
+          $3,
+          public.rbac_scope_org(),
+          $2,
+          $1,
+          'SSO org membership provisioning',
+          true
+        )
+        on conflict do nothing
       `,
-      [promotedRole, membershipId],
+      [userId, orgId, roleId],
     )
   }
 
-  try {
-    const existingMembership = await pgClient.query<{ id: string, user_right: OrgMembershipRight | null }>(
+  const promoteExistingInvite = async (membershipId: string, isInvite: boolean, roleName: string | null): Promise<EnsureOrgMembershipResult> => {
+    const effectiveRole = roleName ?? fallbackRole
+    if (!isInvite) {
+      await ensureOrgRoleBinding(effectiveRole, 'repair')
+      return { alreadyMember: true }
+    }
+
+    await pgClient.query(
       `
-        select id, user_right
+        update public.org_users
+        set is_invite = false,
+            rbac_role_name = coalesce($1::text, rbac_role_name, $2::text)
+        where id = $3
+      `,
+      [roleName, fallbackRole, membershipId],
+    )
+
+    await ensureOrgRoleBinding(effectiveRole)
+    return { alreadyMember: false }
+  }
+
+  try {
+    const existingMembership = await pgClient.query<{ id: string, is_invite: boolean, rbac_role_name: string | null }>(
+      `
+        select id, is_invite, rbac_role_name
         from public.org_users
         where user_id = $1
           and org_id = $2
@@ -388,26 +404,26 @@ async function ensureOrgMembershipInTransaction(
 
     const existing = existingMembership.rows[0]
     if (existing) {
-      await promoteExistingInvite(existing.id, existing.user_right)
-      return
+      return await promoteExistingInvite(existing.id, existing.is_invite, existing.rbac_role_name)
     }
 
     const insertedMembership = await pgClient.query(
       `
-        insert into public.org_users (user_id, org_id, user_right)
-        values ($1, $2, $3)
+        insert into public.org_users (user_id, org_id, rbac_role_name, is_invite)
+        values ($1, $2, $3, false)
         on conflict do nothing
       `,
       [userId, orgId, fallbackRole],
     )
 
     if ((insertedMembership.rowCount ?? 0) > 0) {
-      return
+      await ensureOrgRoleBinding(fallbackRole)
+      return { alreadyMember: false }
     }
 
-    const racedMembership = await pgClient.query<{ id: string, user_right: OrgMembershipRight | null }>(
+    const racedMembership = await pgClient.query<{ id: string, is_invite: boolean, rbac_role_name: string | null }>(
       `
-        select id, user_right
+        select id, is_invite, rbac_role_name
         from public.org_users
         where user_id = $1
           and org_id = $2
@@ -418,8 +434,7 @@ async function ensureOrgMembershipInTransaction(
 
     const raced = racedMembership.rows[0]
     if (raced) {
-      await promoteExistingInvite(raced.id, raced.user_right)
-      return
+      return await promoteExistingInvite(raced.id, raced.is_invite, raced.rbac_role_name)
     }
 
     throw new Error('membership_insert_failed')
@@ -666,7 +681,7 @@ app.post('/', async (c: Context<MiddlewareKeyVariables>) => {
 
     let membershipResult: EnsureOrgMembershipResult
     try {
-      membershipResult = await ensureOrgMembership(admin, requestId, userId, provider.org_id)
+      membershipResult = await ensureOrgMembership(getSharedPgClient(), requestId, userId, provider.org_id)
     }
     catch {
       return quickError(500, 'provision_failed', 'Failed to provision user to organization')

@@ -46,6 +46,7 @@ export type Permission
     | 'app.create_channel'
     | 'app.read_channels'
     | 'app.read_logs'
+    | 'app.manage_notifications'
     | 'app.manage_devices'
     | 'app.read_devices'
     | 'app.build_native'

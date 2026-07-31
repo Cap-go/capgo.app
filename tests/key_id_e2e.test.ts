@@ -1,10 +1,12 @@
 import { randomUUID } from 'node:crypto'
+import { env } from 'node:process'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { APP_NAME, getBaseData, getEndpointUrl, getSupabaseClient, resetAndSeedAppData, resetAppData, resetAppDataStats } from './test-utils.ts'
 
 const id = randomUUID()
 const APP_NAME_KEY_ID = `${APP_NAME}.${id}`
+const USE_CLOUDFLARE = env.USE_CLOUDFLARE_WORKERS === 'true'
 
 beforeAll(async () => {
   await resetAndSeedAppData(APP_NAME_KEY_ID)
@@ -15,7 +17,7 @@ afterAll(async () => {
   await resetAppDataStats(APP_NAME_KEY_ID)
 })
 
-describe('e2E: /updates endpoint with key_id', () => {
+describe.skipIf(USE_CLOUDFLARE)('e2E: /updates endpoint with key_id', () => {
   const supabase = getSupabaseClient()
 
   it('should accept request WITHOUT key_id (old client)', async () => {
@@ -121,7 +123,7 @@ describe('e2E: /updates endpoint with key_id', () => {
   })
 })
 
-describe('e2E: /stats endpoint with key_id', () => {
+describe.skipIf(USE_CLOUDFLARE)('e2E: /stats endpoint with key_id', () => {
   const supabase = getSupabaseClient()
 
   it('should accept request WITHOUT key_id (old client)', async () => {
@@ -196,7 +198,7 @@ describe('e2E: /stats endpoint with key_id', () => {
   })
 })
 
-describe('e2E: /channel_self endpoint with key_id', () => {
+describe.skipIf(USE_CLOUDFLARE)('e2E: /channel_self endpoint with key_id', () => {
   const supabase = getSupabaseClient()
 
   it('should accept POST request WITHOUT key_id (old client)', async () => {
@@ -294,5 +296,75 @@ describe('e2E: /channel_self endpoint with key_id', () => {
     })
 
     expect(response.status).toBe(200)
+  })
+})
+
+describe.skipIf(!USE_CLOUDFLARE)('e2E: Cloudflare plugin endpoints with key_id', () => {
+  const supabase = getSupabaseClient()
+
+  async function expectNoDeviceRow(deviceId: string) {
+    const { count, error } = await supabase
+      .from('devices')
+      .select('*', { count: 'exact', head: true })
+      .eq('app_id', APP_NAME_KEY_ID)
+      .eq('device_id', deviceId)
+
+    expect(error).toBeNull()
+    expect(count).toBe(0)
+  }
+
+  it('returns /updates success without persisting key_id', async () => {
+    const deviceId = randomUUID().toLowerCase()
+    const baseData = getBaseData(APP_NAME_KEY_ID)
+    baseData.device_id = deviceId
+
+    const response = await fetch(getEndpointUrl('/updates'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...baseData,
+        key_id: 'MIIB',
+      }),
+    })
+
+    expect(response.status).toBe(200)
+    await expectNoDeviceRow(deviceId)
+  })
+
+  it('returns /stats success without persisting key_id', async () => {
+    const deviceId = randomUUID().toLowerCase()
+    const baseData = getBaseData(APP_NAME_KEY_ID)
+    baseData.device_id = deviceId
+
+    const response = await fetch(getEndpointUrl('/stats'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...baseData,
+        action: 'set',
+        key_id: 'TEST',
+      }),
+    })
+
+    expect(response.status).toBe(200)
+    await expectNoDeviceRow(deviceId)
+  })
+
+  it('returns /channel_self success without persisting key_id', async () => {
+    const deviceId = randomUUID().toLowerCase()
+    const baseData = getBaseData(APP_NAME_KEY_ID)
+    baseData.device_id = deviceId
+
+    const response = await fetch(getEndpointUrl('/channel_self'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...baseData,
+        key_id: 'CHAN',
+      }),
+    })
+
+    expect(response.status).toBe(200)
+    await expectNoDeviceRow(deviceId)
   })
 })

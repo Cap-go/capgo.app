@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { HttpResponse, PluginListenerHandle } from '@capacitor/core'
 import type { BarcodeScanErrorEvent, BarcodeScannedEvent, BarcodeScannerOptions } from '@capgo/camera-preview'
-import type { BundleInfo, DownloadEvent, DownloadOptions, PreviewInfo, StartPreviewSessionOptions } from '@capgo/capacitor-updater'
+import type { BundleInfo, DownloadEvent, DownloadOptions, StartPreviewSessionOptions } from '@capgo/capacitor-updater'
 import type { PreviewDeepLink } from '~/services/previewLinks'
 import { Clipboard } from '@capacitor/clipboard'
 import { Capacitor, CapacitorHttp } from '@capacitor/core'
@@ -47,6 +47,7 @@ const isLoadingPreviews = ref(false)
 const previewActionId = ref('')
 const previewActionName = ref('')
 const showOptions = ref(false)
+const pendingPreviewLoad = ref<PendingPreviewLoad | null>(null)
 
 let downloadListener: Awaited<ReturnType<typeof CapacitorUpdater.addListener>> | null = null
 let barcodeScannedListener: PluginListenerHandle | null = null
@@ -82,6 +83,41 @@ interface PreviewSessionMetadata {
   payloadUrl?: string
   name?: string
   source?: string
+}
+
+interface PreviewInfo {
+  bundle?: BundleInfo | null
+  id: string
+  isActive?: boolean
+  name?: string
+  payloadUrl?: string
+  source?: string
+}
+
+interface PreviewManagerUpdater {
+  deletePreview?: (options: { id: string }) => Promise<{ deleted?: boolean }>
+  listPreviews?: () => Promise<{ current?: PreviewInfo | null, liveBundle?: BundleInfo | null, previews: PreviewInfo[] }>
+  resetPreview?: () => Promise<void>
+  setPreview?: (options: { id: string }) => Promise<void>
+  updatePreview?: (options: { id: string }) => Promise<{ preview: PreviewInfo, updated?: boolean }>
+}
+
+type PreviewStartOptions = StartPreviewSessionOptions & Pick<PreviewSessionMetadata, 'name' | 'source'>
+
+const previewManagerUpdater = CapacitorUpdater as typeof CapacitorUpdater & PreviewManagerUpdater
+
+type PreviewLoadSource = 'camera' | 'link'
+
+interface PendingPreviewLoad {
+  appLabel: string
+  detail: string
+  source: PreviewLoadSource
+  start: () => Promise<void>
+  url: string
+}
+
+interface HandleBarcodeScanOptions {
+  nativeConfirmed?: boolean
 }
 
 const PREVIEW_PAYLOAD_PATH = '/.capgo/preview.json'
@@ -223,6 +259,10 @@ const manualActionLabel = computed(() => {
     return 'Start preview'
   return isNativePlatform ? 'Download update' : 'Open update URL'
 })
+const previewConfirmTitle = computed(() => pendingPreviewLoad.value?.source === 'camera' ? 'Load scanned preview?' : 'Load preview?')
+const previewConfirmDescription = computed(() => pendingPreviewLoad.value?.source === 'camera'
+  ? 'A QR code was scanned. Confirm before this preview is downloaded and applied.'
+  : 'The app was opened from a preview link. Confirm before this preview is downloaded and applied.')
 const scannerHint = computed(() => {
   if (isLoading.value)
     return 'Downloading preview…'
@@ -292,15 +332,88 @@ function previewNameFromUrl(value: string) {
   return parsedUrl?.host || 'Preview'
 }
 
+function previewLinkAppLabel(previewLink: PreviewDeepLink) {
+  return previewLink.appId || hostFromUrl(previewLink.payloadUrl) || 'Unknown app'
+}
+
+function previewLinkDetail(previewLink: PreviewDeepLink) {
+  if (previewLink.type === 'channel') {
+    if (previewLink.channelName)
+      return `Channel ${previewLink.channelName}`
+    if (typeof previewLink.channelId === 'number')
+      return `Channel ${previewLink.channelId}`
+    return 'Channel preview'
+  }
+  if (typeof previewLink.versionId === 'number')
+    return `Bundle ${previewLink.versionId}`
+  return 'Bundle preview'
+}
+
+function previewHostDetail(target: PreviewHostTarget | null) {
+  if (!target)
+    return 'Preview payload'
+  if (typeof target.channelId === 'number')
+    return `Channel ${target.channelId}`
+  if (typeof target.versionId === 'number')
+    return `Bundle ${target.versionId}`
+  return 'Preview payload'
+}
+
+function queuePreviewLoad(previewLoad: PendingPreviewLoad) {
+  debugLog('preview load confirmation requested', {
+    appLabel: previewLoad.appLabel,
+    detail: previewLoad.detail,
+    source: previewLoad.source,
+    url: previewLoad.url,
+  })
+  pendingPreviewLoad.value = previewLoad
+  errorMessage.value = ''
+  statusMessage.value = 'Preview detected. Confirm before loading it.'
+  downloadProgress.value = 0
+  showOptions.value = false
+}
+
+async function confirmPreviewLoad() {
+  const previewLoad = pendingPreviewLoad.value
+  if (!previewLoad)
+    return
+
+  pendingPreviewLoad.value = null
+  statusMessage.value = ''
+  debugLog('preview load confirmed', { source: previewLoad.source, url: previewLoad.url })
+  try {
+    await previewLoad.start()
+  }
+  catch (error) {
+    debugWarn('failed to start confirmed preview', error)
+    const message = error instanceof Error ? error.message : String(error)
+    errorMessage.value = `Failed to start preview: ${message}`
+    toast.error(errorMessage.value)
+  }
+}
+
+async function cancelPreviewLoad() {
+  const previewLoad = pendingPreviewLoad.value
+  if (!previewLoad)
+    return
+
+  pendingPreviewLoad.value = null
+  debugLog('preview load canceled', { source: previewLoad.source, url: previewLoad.url })
+  statusMessage.value = previewLoad.source === 'camera' ? '' : 'Preview loading canceled'
+  if (previewLoad.source === 'camera' && isNativePlatform)
+    await startScanner()
+}
+
 onMounted(async () => {
   displayStore.NavTitle = 'Scan QR'
   displayStore.defaultBack = '/login'
   debugLog('scan page mounted', { isNativePlatform, previewQuery: route.query.preview })
 
   const previewLink = Array.isArray(route.query.preview) ? route.query.preview[0] : route.query.preview
+  const nativeConfirmedPreview = route.query.nativeConfirmedPreview === '1'
   if (previewLink) {
-    debugLog('handling preview query parameter', previewLink)
-    await handleBarcodeScan(previewLink)
+    debugLog('handling preview query parameter', { nativeConfirmedPreview, previewLink })
+    await handleBarcodeScan(previewLink, 'link', { nativeConfirmed: nativeConfirmedPreview })
     await refreshSavedPreviews(true)
     return
   }
@@ -340,9 +453,14 @@ async function refreshSavedPreviews(silent = false) {
   if (!isNativePlatform || !previewManagerAvailable.value)
     return
 
+  if (typeof previewManagerUpdater.listPreviews !== 'function') {
+    previewManagerAvailable.value = false
+    return
+  }
+
   isLoadingPreviews.value = true
   try {
-    const result = await CapacitorUpdater.listPreviews()
+    const result = await previewManagerUpdater.listPreviews()
     savedPreviews.value = result.previews
     savedPreviewCurrent.value = result.current ?? null
     savedPreviewLiveBundle.value = result.liveBundle ?? null
@@ -388,8 +506,11 @@ async function runPreviewAction(preview: PreviewInfo | null, actionName: string,
 
 async function switchSavedPreview(preview: PreviewInfo) {
   await runPreviewAction(preview, 'switch', async () => {
+    if (typeof previewManagerUpdater.setPreview !== 'function')
+      throw new Error('Preview manager is not available in this app version')
+
     toast.success(`Opening ${previewLabel(preview)}`)
-    await CapacitorUpdater.setPreview({ id: preview.id })
+    await previewManagerUpdater.setPreview({ id: preview.id })
   })
 }
 
@@ -400,7 +521,10 @@ async function updateSavedPreview(preview: PreviewInfo) {
   }
 
   await runPreviewAction(preview, 'update', async () => {
-    const result = await CapacitorUpdater.updatePreview({ id: preview.id })
+    if (typeof previewManagerUpdater.updatePreview !== 'function')
+      throw new Error('Preview manager is not available in this app version')
+
+    const result = await previewManagerUpdater.updatePreview({ id: preview.id })
     toast.success(result.updated ? `Updated ${previewLabel(result.preview)}` : `${previewLabel(result.preview)} is up to date`)
   })
 }
@@ -412,15 +536,21 @@ async function deleteSavedPreview(preview: PreviewInfo) {
   }
 
   await runPreviewAction(preview, 'delete', async () => {
-    const result = await CapacitorUpdater.deletePreview({ id: preview.id })
+    if (typeof previewManagerUpdater.deletePreview !== 'function')
+      throw new Error('Preview manager is not available in this app version')
+
+    const result = await previewManagerUpdater.deletePreview({ id: preview.id })
     toast.success(result.deleted ? `Deleted ${previewLabel(preview)}` : `Removed ${previewLabel(preview)}`)
   })
 }
 
 async function resetToMainApp() {
   await runPreviewAction(null, 'reset', async () => {
+    if (typeof previewManagerUpdater.resetPreview !== 'function')
+      throw new Error('Preview manager is not available in this app version')
+
     toast.success('Returning to main app')
-    await CapacitorUpdater.resetPreview()
+    await previewManagerUpdater.resetPreview()
   })
 }
 
@@ -627,7 +757,7 @@ async function startScanner() {
       debugLog('handling scanned barcode', { format: barcode.format, value: barcode.value })
       try {
         await stopScanner(false, { keepHandlingBarcode: true })
-        await handleBarcodeScan(barcode.value)
+        await handleBarcodeScan(barcode.value, 'camera')
       }
       catch (error) {
         debugWarn('failed to handle scanned barcode', error)
@@ -675,24 +805,48 @@ async function startScanner() {
   }
 }
 
-async function handleBarcodeScan(scannedValue: string) {
+async function handleBarcodeScan(scannedValue: string, source: PreviewLoadSource = 'link', options: HandleBarcodeScanOptions = {}) {
   const value = scannedValue.trim()
-  debugLog('handleBarcodeScan called', value)
+  const shouldStartNativeConfirmedPreview = isNativePlatform && source === 'link' && options.nativeConfirmed === true
+  debugLog('handleBarcodeScan called', { nativeConfirmed: shouldStartNativeConfirmedPreview, source, value })
   const previewLink = parsePreviewDeepLink(value)
   if (previewLink) {
     debugLog('scan parsed as preview deep link', previewLink)
     scannedUrl.value = value
     manualUrl.value = ''
-    await startPreviewLink(previewLink)
+    if (shouldStartNativeConfirmedPreview) {
+      await startPreviewLink(previewLink)
+      return
+    }
+
+    queuePreviewLoad({
+      appLabel: previewLinkAppLabel(previewLink),
+      detail: previewLinkDetail(previewLink),
+      source,
+      start: () => startPreviewLink(previewLink),
+      url: value,
+    })
     return
   }
 
   const previewPayloadUrl = previewPayloadUrlFromUrl(value)
   if (previewPayloadUrl) {
+    const target = previewHostTargetFromUrl(value)
     debugLog('scan parsed as preview host', { previewPayloadUrl, value })
     scannedUrl.value = value
     manualUrl.value = value
-    await startPreviewPayload(previewPayloadUrl)
+    if (shouldStartNativeConfirmedPreview) {
+      await startPreviewPayload(previewPayloadUrl)
+      return
+    }
+
+    queuePreviewLoad({
+      appLabel: target?.appId || hostFromUrl(value) || 'Unknown app',
+      detail: previewHostDetail(target),
+      source,
+      start: () => startPreviewPayload(previewPayloadUrl),
+      url: value,
+    })
     return
   }
 
@@ -707,11 +861,17 @@ async function handleBarcodeScan(scannedValue: string) {
   scannedUrl.value = value
   manualUrl.value = value
   debugLog('scan parsed as direct HTTP update URL', value)
-  await downloadUpdate(value)
+  queuePreviewLoad({
+    appLabel: hostFromUrl(value) || 'Unknown host',
+    detail: 'Direct update URL',
+    source,
+    start: () => downloadUpdate(value),
+    url: value,
+  })
 }
 
 async function startPreviewSession(metadata: PreviewSessionMetadata = {}) {
-  const options: StartPreviewSessionOptions = {}
+  const options: PreviewStartOptions = {}
   if (metadata.appId)
     options.appId = metadata.appId
   if (metadata.payloadUrl)
@@ -1410,11 +1570,67 @@ async function goBack() {
         </div>
       </section>
     </div>
+
+    <div
+      v-if="pendingPreviewLoad"
+      class="absolute inset-0 z-20 flex items-center justify-center bg-slate-950/85 px-4 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="preview-confirm-title"
+    >
+      <div class="w-full max-w-sm rounded-2xl border border-white/10 bg-slate-900 p-5 text-left shadow-2xl">
+        <div class="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl bg-azure-500/15 text-azure-300">
+          <IconPlay class="h-5 w-5" />
+        </div>
+        <h2 id="preview-confirm-title" class="text-lg font-semibold text-white">
+          {{ previewConfirmTitle }}
+        </h2>
+        <p class="mt-2 text-sm leading-6 text-white/65">
+          {{ previewConfirmDescription }}
+        </p>
+
+        <dl class="mt-5 divide-y divide-white/10 border-y border-white/10">
+          <div class="py-3">
+            <dt class="text-xs font-medium uppercase text-white/40">
+              App
+            </dt>
+            <dd class="mt-1 break-all text-sm font-semibold text-white">
+              {{ pendingPreviewLoad.appLabel }}
+            </dd>
+          </div>
+          <div class="py-3">
+            <dt class="text-xs font-medium uppercase text-white/40">
+              Target
+            </dt>
+            <dd class="mt-1 break-all text-sm text-white/75">
+              {{ pendingPreviewLoad.detail }}
+            </dd>
+          </div>
+        </dl>
+
+        <div class="mt-5 grid grid-cols-2 gap-3">
+          <button
+            type="button"
+            class="inline-flex min-h-11 items-center justify-center rounded-xl border border-white/10 bg-white/5 px-4 text-sm font-semibold text-white/80 transition-colors active:bg-white/10"
+            @click="cancelPreviewLoad"
+          >
+            No
+          </button>
+          <button
+            type="button"
+            class="inline-flex min-h-11 items-center justify-center rounded-xl bg-azure-500 px-4 text-sm font-semibold text-white transition-colors active:bg-azure-600"
+            @click="confirmPreviewLoad"
+          >
+            Load preview
+          </button>
+        </div>
+      </div>
+    </div>
   </main>
 </template>
 
 <style scoped>
-<style scoped > .camera-preview-page {
+.camera-preview-page {
   overscroll-behavior: none;
   touch-action: manipulation;
 }

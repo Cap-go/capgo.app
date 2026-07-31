@@ -5,7 +5,7 @@ import { eq } from 'drizzle-orm'
 import { Hono } from 'hono/tiny'
 import { BRES, middlewareAPISecret, simpleError, triggerValidator } from '../utils/hono.ts'
 import { cloudlog } from '../utils/logging.ts'
-import { normalizeLegacyEncodedManifestFileName } from '../utils/manifest_encoding.ts'
+import { persistVersionManifestEntries } from '../utils/manifest_persist.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import { manifest } from '../utils/postgres_schema.ts'
 import { getPath, s3 } from '../utils/s3.ts'
@@ -62,6 +62,21 @@ function versionUpdateLogFields(
     updated_at: record.updated_at,
     version_name: record.name,
   }
+}
+
+type DeletedVersionAction = 'continue' | 'delete' | 'cleanup_manifest' | 'skip'
+
+function getDeletedVersionAction(
+  record: Database['public']['Tables']['app_versions']['Row'],
+  oldRecord?: Database['public']['Tables']['app_versions']['Row'] | null,
+): DeletedVersionAction {
+  if (!record.deleted_at)
+    return 'continue'
+  if (record.deleted_at !== oldRecord?.deleted_at)
+    return 'delete'
+  if (record.manifest || (record.manifest_count ?? 0) > 0)
+    return 'cleanup_manifest'
+  return 'skip'
 }
 
 function getMetadataBranch(storageProvider: string | null, resolvedR2Path: string | null) {
@@ -142,74 +157,59 @@ async function v2PathSize(c: Context, record: Database['public']['Tables']['app_
 }
 
 /**
- * Persists manifest rows and updates aggregate counters when a version includes a manifest payload.
+ * Reloads `app_versions.manifest` when the queue payload omitted it to stay under size limits.
+ */
+async function ensureVersionManifest(
+  c: Context,
+  record: Database['public']['Tables']['app_versions']['Row'],
+): Promise<Database['public']['Tables']['app_versions']['Row']> {
+  if (record.manifest)
+    return record
+
+  const { data, error } = await supabaseAdmin(c)
+    .from('app_versions')
+    .select('manifest')
+    .eq('id', record.id)
+    .maybeSingle()
+
+  if (error) {
+    cloudlog({ requestId: c.get('requestId'), message: 'error reload app_versions.manifest', error, id: record.id })
+    throw simpleError('manifest_reload_failed', 'Failed to reload app_versions.manifest', { id: record.id }, error)
+  }
+
+  if (!data?.manifest)
+    return record
+
+  cloudlog({
+    requestId: c.get('requestId'),
+    message: 'on_version_update reloaded manifest from database',
+    id: record.id,
+    manifest_entries: getManifestEntryCount(data.manifest),
+  })
+  return { ...record, manifest: data.manifest }
+}
+
+/**
+ * Legacy path: CLI wrote jsonb onto app_versions.manifest; migrate into public.manifest.
+ * New CLIs call /private/set_manifest directly and skip this jsonb hop.
  */
 async function handleManifest(c: Context, record: Database['public']['Tables']['app_versions']['Row']) {
   cloudlog({ requestId: c.get('requestId'), message: 'manifest', manifest: record.manifest })
   const manifestEntries = record.manifest as Database['public']['CompositeTypes']['manifest_entry'][]
+  if (!Array.isArray(manifestEntries))
+    return
 
-  // Check if entries exist
-  const { data: existingEntries } = await supabaseAdmin(c)
-    .from('manifest')
-    .select('id')
-    .eq('app_version_id', record.id)
-    .limit(1)
+  const ownerOrg = await resolveOwnerOrg(c, record)
+  const s3PathPrefix = ownerOrg && record.app_id
+    ? `orgs/${ownerOrg}/apps/${record.app_id}/`
+    : null
 
-  // Only create entries if none exist
-  if (!existingEntries?.length && manifestEntries.length > 0) {
-    const validEntries = manifestEntries
-      .filter(entry => entry.file_name && entry.file_hash && entry.s3_path)
-      .map(entry => ({
-        app_version_id: record.id,
-        file_name: normalizeLegacyEncodedManifestFileName(entry.file_name, entry.s3_path)!,
-        file_hash: entry.file_hash!,
-        s3_path: entry.s3_path!,
-        file_size: 0,
-      }))
-
-    if (validEntries.length > 0) {
-      const { error: insertError } = await supabaseAdmin(c)
-        .from('manifest')
-        .insert(validEntries)
-      if (insertError) {
-        cloudlog({ requestId: c.get('requestId'), message: 'error insert manifest', error: insertError })
-      }
-      else {
-        // Update manifest_count on the version
-        const { error: countError } = await supabaseAdmin(c)
-          .from('app_versions')
-          .update({ manifest_count: validEntries.length })
-          .eq('id', record.id)
-        if (countError)
-          cloudlog({ requestId: c.get('requestId'), message: 'error update manifest_count', error: countError })
-
-        // Increment manifest_bundle_count on the app using raw SQL
-        const pgClient = getPgClient(c, false)
-        try {
-          await pgClient.query(
-            `UPDATE apps
-             SET manifest_bundle_count = manifest_bundle_count + 1,
-                 updated_at = now()
-             WHERE app_id = $1`,
-            [record.app_id],
-          )
-        }
-        catch (error) {
-          cloudlog({ requestId: c.get('requestId'), message: 'error update manifest_bundle_count', error })
-        }
-        finally {
-          await closeClient(c, pgClient)
-        }
-      }
-    }
-  }
-  // delete manifest in app_versions
-  const { error: deleteError } = await supabaseAdmin(c)
-    .from('app_versions')
-    .update({ manifest: null })
-    .eq('id', record.id)
-  if (deleteError)
-    cloudlog({ requestId: c.get('requestId'), message: 'error delete manifest in app_versions', error: deleteError })
+  await persistVersionManifestEntries(
+    c,
+    { id: record.id, app_id: record.app_id },
+    manifestEntries,
+    { clearAppVersionsManifest: true, s3PathPrefix },
+  )
 }
 
 /**
@@ -258,119 +258,199 @@ async function updateIt(c: Context, record: Database['public']['Tables']['app_ve
     }
   }
 
-  // Handle manifest entries
-  if (record.manifest) {
-    await handleManifest(c, record)
-  }
+  // Handle manifest entries (reload when the queue payload omitted the jsonb column)
+  const recordWithManifest = await ensureVersionManifest(c, record)
+  if (recordWithManifest.manifest)
+    await handleManifest(c, recordWithManifest)
 
   return c.json(BRES)
 }
 
+const MANIFEST_TRASH_CONCURRENCY = 10
+
+type ManifestCleanupEntry = {
+  id: number
+  file_hash: string
+  file_name: string
+  s3_path: string | null
+}
+
 /**
- * Deletes manifest rows and moves orphaned S3 assets to the R2 trash prefix.
+ * Trash unreferenced R2 objects first (exist → move to deleted-after-7-days/,
+ * missing → ok), then delete that DB row. Never drop DB tracking before R2 is handled.
+ * Per-file work is committed, so a timeout mid-pass is safe to retry. Leftover rows
+ * after the normal retry budget (MAX_QUEUE_READS=5) are reclaimed by
+ * sweep_deleted_version_manifests. Incomplete work throws so the queue retries;
+ * already-trashed paths are idempotent.
  */
 async function deleteManifest(c: Context, record: Database['public']['Tables']['app_versions']['Row']) {
-  // Delete manifest entries - first get them to delete from S3
-  const pgClient = getPgClient(c, true) // READ-ONLY: deletes use SDK, not Drizzle
-  const drizzleClient = getDrizzleClient(pgClient)
+  const readPgClient = getPgClient(c, true)
+  const drizzleClient = getDrizzleClient(readPgClient)
 
+  let manifestEntries: ManifestCleanupEntry[] = []
   try {
-    const manifestEntries = await drizzleClient
-      .select()
+    manifestEntries = await drizzleClient
+      .select({
+        id: manifest.id,
+        file_hash: manifest.file_hash,
+        file_name: manifest.file_name,
+        s3_path: manifest.s3_path,
+      })
       .from(manifest)
       .where(eq(manifest.app_version_id, record.id))
+  }
+  finally {
+    await closeClient(c, readPgClient)
+  }
 
-    if (manifestEntries && manifestEntries.length > 0) {
-      const manifestCount = manifestEntries.length
+  const startedWithRows = manifestEntries.length > 0
 
-      // Move each unreferenced file to the R2 trash prefix.
-      const promisesMoveToTrash = []
-      for (const entry of manifestEntries) {
-        if (entry.s3_path) {
-          promisesMoveToTrash.push(
-            // First delete the manifest row from database
-            supabaseAdmin(c)
-              .from('manifest')
-              .delete()
-              .eq('id', entry.id)
-              .then(({ error: deleteError }) => {
-                if (deleteError) {
-                  cloudlog({ requestId: c.get('requestId'), message: 'error deleting manifest row', id: entry.id, error: deleteError })
-                  return null // Signal to skip S3 cleanup
-                }
-                // After deleting, check if any other rows still reference this file
-                // This avoids race condition where concurrent deletes both skip S3 cleanup
-                return supabaseAdmin(c)
-                  .from('manifest')
-                  .select('id')
-                  .eq('file_hash', entry.file_hash)
-                  .eq('file_name', entry.file_name)
-                  .limit(1)
-                  .maybeSingle()
-              })
-              .then((v) => {
-                if (!v)
-                  return // Delete failed, skip S3 cleanup
-                if (v.error) {
-                  cloudlog({ requestId: c.get('requestId'), message: 'error checking manifest references', error: v.error })
-                  return // Don't delete S3 if we can't confirm no other references
-                }
-                if (v.data) {
-                  // Other versions still use this file, S3 cleanup not needed
-                  return
-                }
-                // No other versions use this file, move it to the R2 trash prefix.
-                cloudlog({ requestId: c.get('requestId'), message: 'moving manifest file to R2 trash', s3_path: entry.s3_path })
-                return s3.moveObjectToTrash(c, entry.s3_path)
-                  .then((moved) => {
-                    if (!moved) {
-                      throw simpleError('cannot_move_manifest_s3_to_trash', 'Cannot move S3 object for deleted manifest file to trash', { id: entry.id, s3_path: entry.s3_path })
-                    }
-                  })
-              }),
+  if (startedWithRows) {
+    for (let i = 0; i < manifestEntries.length; i += MANIFEST_TRASH_CONCURRENCY) {
+      const batch = manifestEntries.slice(i, i + MANIFEST_TRASH_CONCURRENCY)
+      await Promise.all(batch.map(async (entry) => {
+        const entryPg = getPgClient(c, false)
+        try {
+          await entryPg.query('BEGIN')
+          // Serialize shared-hash cleanup across concurrent deleted versions.
+          // Do NOT use chr(0) as a separator — Postgres raises 54000 "null character not permitted".
+          await entryPg.query(
+            `SELECT pg_advisory_xact_lock(hashtext($1::text), hashtext($2::text))`,
+            [entry.file_hash, entry.file_name],
           )
-        }
-      }
-      await Promise.all(promisesMoveToTrash)
 
-      // After deleting manifest entries, update manifest_count and decrement manifest_bundle_count
-      const updatePgClient = getPgClient(c, false)
-      try {
-        await updatePgClient.query(
-          `UPDATE app_versions SET manifest_count = 0 WHERE id = $1`,
-          [record.id],
-        )
+          if (entry.s3_path) {
+            const refs = await entryPg.query(
+              `SELECT 1 AS ok
+               FROM public.manifest
+               WHERE file_hash = $1
+                 AND file_name = $2
+                 AND app_version_id <> $3
+               LIMIT 1`,
+              [entry.file_hash, entry.file_name, record.id],
+            )
 
-        // Only decrement if this version had manifests
-        if (manifestCount > 0) {
-          await updatePgClient.query(
-            `UPDATE apps
-             SET manifest_bundle_count = GREATEST(manifest_bundle_count - 1, 0),
-                 updated_at = now()
-             WHERE app_id = $1`,
-            [record.app_id],
+            if (refs.rows.length === 0) {
+              const moved = await s3.moveObjectToTrash(c, entry.s3_path)
+              if (!moved) {
+                throw simpleError('cannot_move_manifest_s3_to_trash', 'Cannot move S3 object for deleted manifest file to trash', {
+                  id: entry.id,
+                  s3_path: entry.s3_path,
+                })
+              }
+            }
+          }
+
+          // Only delete the DB row after R2 is handled (or shared and kept).
+          await entryPg.query(
+            `DELETE FROM public.manifest WHERE id = $1`,
+            [entry.id],
           )
+          await entryPg.query('COMMIT')
         }
+        catch (error) {
+          try {
+            await entryPg.query('ROLLBACK')
+          }
+          catch {
+            // ignore rollback errors
+          }
+          throw error
+        }
+        finally {
+          await closeClient(c, entryPg)
+        }
+      }))
+    }
+  }
+
+  const writePgClient = getPgClient(c, false)
+  try {
+    await writePgClient.query('BEGIN')
+    try {
+      const remaining = await writePgClient.query(
+        `SELECT COUNT(*)::int AS count FROM public.manifest WHERE app_version_id = $1`,
+        [record.id],
+      )
+      const remainingCount = Number(remaining.rows[0]?.count ?? 0)
+      if (remainingCount > 0) {
+        throw simpleError('manifest_cleanup_incomplete', 'Manifest rows still present after trash/delete pass', {
+          id: record.id,
+          remainingCount,
+        })
       }
-      catch (error) {
-        cloudlog({ requestId: c.get('requestId'), message: 'error update counters on delete', error })
-      }
-      finally {
-        await closeClient(c, updatePgClient)
-      }
+
+      await writePgClient.query(
+        `WITH prev AS (
+           SELECT id, app_id, manifest_count, (manifest IS NOT NULL) AS has_json
+           FROM public.app_versions
+           WHERE id = $1
+           FOR UPDATE
+         ),
+         upd AS (
+           UPDATE public.app_versions AS av
+           SET manifest_count = 0,
+               manifest = NULL
+           FROM prev
+           WHERE av.id = prev.id
+             AND (prev.manifest_count > 0 OR prev.has_json OR $2::boolean)
+           RETURNING prev.app_id, prev.manifest_count AS prev_count
+         )
+         UPDATE public.apps AS a
+         SET manifest_bundle_count = GREATEST(a.manifest_bundle_count - 1, 0),
+             updated_at = now()
+         FROM upd
+         WHERE a.app_id = upd.app_id
+           AND (upd.prev_count > 0 OR $2::boolean)`,
+        [record.id, startedWithRows],
+      )
+
+      await writePgClient.query('COMMIT')
+    }
+    catch (error) {
+      await writePgClient.query('ROLLBACK')
+      throw error
     }
   }
   catch (error) {
-    cloudlog({ requestId: c.get('requestId'), message: 'error deleting manifest entries', error })
+    cloudlog({ requestId: c.get('requestId'), message: 'error finalizing manifest cleanup', error, id: record.id })
+    throw error
   }
   finally {
-    await closeClient(c, pgClient)
+    await closeClient(c, writePgClient)
   }
 }
 
 export async function deleteIt(c: Context, record: Database['public']['Tables']['app_versions']['Row']) {
   cloudlog({ requestId: c.get('requestId'), message: 'Delete', r2_path: record.r2_path })
 
+  // Manifest files: trash R2 first, then drop DB rows. Must finish before ACK.
+  await deleteManifest(c, record)
+
+  const { data, error: dbError } = await supabaseAdmin(c)
+    .from('app_versions_meta')
+    .select()
+    .eq('id', record.id)
+    .single()
+  if (dbError || !data) {
+    cloudlog({ requestId: c.get('requestId'), message: 'Cannot find version meta', id: record.id })
+  }
+  else {
+    const { error: errorCreateStatsMeta } = await createStatsMeta(c, record.app_id, record.id, -data.size)
+    if (errorCreateStatsMeta)
+      cloudlog({ requestId: c.get('requestId'), message: 'error createStatsMeta', error: errorCreateStatsMeta })
+
+    const { error: errorUpdate } = await supabaseAdmin(c)
+      .from('app_versions_meta')
+      .update({ size: 0 })
+      .eq('id', record.id)
+    if (errorUpdate) {
+      cloudlog({ requestId: c.get('requestId'), message: 'error', error: errorUpdate })
+      throw simpleError('cannot_update_version_meta', 'Cannot update version metadata for deleted version', { id: record.id }, errorUpdate)
+    }
+  }
+
+  // Bundle zip: move to lifecycle trash. Retry via queue if this fails; manifests already cleared.
   if (record.r2_path) {
     let moved = false
     try {
@@ -389,36 +469,12 @@ export async function deleteIt(c: Context, record: Database['public']['Tables'][
     cloudlog({ requestId: c.get('requestId'), message: 'No r2 path for deleted version', id: record.id })
   }
 
-  const { data, error: dbError } = await supabaseAdmin(c)
-    .from('app_versions_meta')
-    .select()
-    .eq('id', record.id)
-    .single()
-  if (dbError || !data) {
-    cloudlog({ requestId: c.get('requestId'), message: 'Cannot find version meta', id: record.id })
-    return c.json(BRES)
-  }
-  const { error: errorCreateStatsMeta } = await createStatsMeta(c, record.app_id, record.id, -data.size)
-  if (errorCreateStatsMeta)
-    cloudlog({ requestId: c.get('requestId'), message: 'error createStatsMeta', error: errorCreateStatsMeta })
-  // set app_versions_meta versionSize = 0
-  const { error: errorUpdate } = await supabaseAdmin(c)
-    .from('app_versions_meta')
-    .update({ size: 0 })
-    .eq('id', record.id)
-  if (errorUpdate) {
-    cloudlog({ requestId: c.get('requestId'), message: 'error', error: errorUpdate })
-    throw simpleError('cannot_update_version_meta', 'Cannot update version metadata for deleted version', { id: record.id }, errorUpdate)
-  }
-
-  await deleteManifest(c, record)
-
   return c.json(BRES)
 }
 
 export const app = new Hono<MiddlewareKeyVariables>()
 
-app.post('/', middlewareAPISecret, triggerValidator('app_versions', 'UPDATE'), (c) => {
+app.post('/', middlewareAPISecret, triggerValidator('app_versions', 'UPDATE'), async (c) => {
   const record = c.get('webhookBody') as Database['public']['Tables']['app_versions']['Row']
   const oldRecord = c.get('oldRecord') as Database['public']['Tables']['app_versions']['Row']
   cloudlog({ requestId: c.get('requestId'), message: 'on_version_update received', ...versionUpdateLogFields(record, oldRecord) })
@@ -428,15 +484,32 @@ app.post('/', middlewareAPISecret, triggerValidator('app_versions', 'UPDATE'), (
     cloudlog({ requestId: c.get('requestId'), message: 'no app_id', record })
     return c.json(BRES)
   }
-  // check if version was soft-deleted (deleted_at was set)
-  if (record.deleted_at && record.deleted_at !== oldRecord.deleted_at)
-    return deleteIt(c, record)
+  // Queue payloads omit app_versions.manifest; reload before deleted-version decisions.
+  let workRecord = record
+  if (!workRecord.manifest)
+    workRecord = await ensureVersionManifest(c, workRecord)
 
-  if (!record.r2_path && !record.manifest) {
-    cloudlog({ requestId: c.get('requestId'), message: 'no r2_path and no manifest, skipping update', ...versionUpdateLogFields(record, oldRecord) })
+  const deletedVersionAction = getDeletedVersionAction(workRecord, oldRecord)
+  if (deletedVersionAction === 'delete')
+    return deleteIt(c, workRecord)
+  if (deletedVersionAction === 'cleanup_manifest') {
+    cloudlog({ requestId: c.get('requestId'), message: 'cleaning manifest for already deleted version', ...versionUpdateLogFields(workRecord, oldRecord) })
+    await deleteManifest(c, workRecord)
+    return c.json(BRES)
+  }
+  if (deletedVersionAction === 'skip')
+    return c.json(BRES)
+
+  if (!workRecord.r2_path && !workRecord.manifest) {
+    cloudlog({ requestId: c.get('requestId'), message: 'no r2_path and no manifest, skipping update', ...versionUpdateLogFields(workRecord, oldRecord) })
     return c.json(BRES)
   }
 
-  cloudlog({ requestId: c.get('requestId'), message: 'Update but not deleted', ...versionUpdateLogFields(record, oldRecord) })
-  return updateIt(c, record)
+  cloudlog({ requestId: c.get('requestId'), message: 'Update but not deleted', ...versionUpdateLogFields(workRecord, oldRecord) })
+  return updateIt(c, workRecord)
 })
+
+export const onVersionUpdateTestUtils = {
+  getDeletedVersionAction,
+  deleteManifest,
+}

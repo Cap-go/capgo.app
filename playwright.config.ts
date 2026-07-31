@@ -87,9 +87,10 @@ export default defineConfig({
   ],
   use: {
     headless,
-    trace: 'on',
-    video: 'on',
-    screenshot: 'on',
+    // CI only uploads artifacts on failure, so recording passing tests just slows the run.
+    trace: isCi ? 'retain-on-failure' : 'on',
+    video: isCi ? 'retain-on-failure' : 'on',
+    screenshot: isCi ? 'only-on-failure' : 'on',
     baseURL: 'http://localhost:5173/',
     viewport: { width: 1280, height: 720 },
     actionTimeout: 30_000,

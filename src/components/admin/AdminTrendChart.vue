@@ -15,6 +15,7 @@ import { computed } from 'vue'
 import { Line } from 'vue-chartjs'
 import { createChartColorWithOpacity, resolveAccessibleChartColor } from '~/services/chartConfig'
 import { formatLocalDate } from '~/services/date'
+import { formatNumberValue } from '~/services/formatLocale'
 
 const props = defineProps({
   data: {
@@ -107,7 +108,7 @@ const chartOptions = computed<ChartOptions<'line'>>(() => ({
       callbacks: {
         label: (context) => {
           const label = context.dataset.label || ''
-          const value = context.parsed.y?.toLocaleString() || '0'
+          const value = formatNumberValue(context.parsed.y ?? 0)
           return `${label}: ${value}`
         },
       },
@@ -135,7 +136,7 @@ const chartOptions = computed<ChartOptions<'line'>>(() => ({
         color: isDark.value ? '#9ca3af' : '#6b7280',
         callback: (value) => {
           if (typeof value === 'number')
-            return value.toLocaleString()
+            return formatNumberValue(value)
           return value
         },
       },
@@ -150,7 +151,7 @@ const chartOptions = computed<ChartOptions<'line'>>(() => ({
       <span class="loading loading-spinner loading-lg text-primary" />
     </div>
     <div v-else class="w-full h-full">
-      <Line :data="chartData" :options="chartOptions" />
+      <Line class="h-full w-full" :data="chartData" :options="chartOptions" />
     </div>
   </div>
 </template>

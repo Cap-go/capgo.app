@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-import { APP_NAME_STATS, fetchWithRetry, getEndpointUrl, headersStats } from './test-utils.ts'
+import { APP_NAME_STATS, fetchTestRequest, getEndpointUrl, headersStats } from './test-utils.ts'
 
 describe('[POST] /private/stats/export', () => {
   it('exports logs as CSV (apikey auth)', async () => {
-    const response = await fetchWithRetry(getEndpointUrl('/private/stats/export'), {
+    const response = await fetchTestRequest(getEndpointUrl('/private/stats/export'), {
       method: 'POST',
       headers: headersStats,
       body: JSON.stringify({
@@ -36,7 +36,7 @@ describe('[POST] /private/stats/export', () => {
   })
 
   it('exports logs as JSON (apikey auth)', async () => {
-    const response = await fetchWithRetry(getEndpointUrl('/private/stats/export'), {
+    const response = await fetchTestRequest(getEndpointUrl('/private/stats/export'), {
       method: 'POST',
       headers: headersStats,
       body: JSON.stringify({

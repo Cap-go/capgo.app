@@ -5,8 +5,7 @@ SELECT plan(5);
 SELECT tests.create_supabase_user('get_org_apikeys_admin', 'get_org_apikeys_admin@test.local');
 SELECT tests.create_supabase_user('get_org_apikeys_member', 'get_org_apikeys_member@test.local');
 SELECT tests.create_supabase_user('get_org_apikeys_owner', 'get_org_apikeys_owner@test.local');
-SELECT tests.create_supabase_user('get_org_apikeys_apikey_only_owner', 'get_org_apikeys_apikey_only_owner@test.local');
-SELECT tests.create_supabase_user('get_org_apikeys_app_limited_owner', 'get_org_apikeys_app_limited_owner@test.local');
+SELECT tests.create_supabase_user('get_org_apikeys_org_bound_owner', 'get_org_apikeys_org_bound_owner@test.local');
 SELECT tests.create_supabase_user('get_org_apikeys_app_bound_owner', 'get_org_apikeys_app_bound_owner@test.local');
 
 INSERT INTO public.users (id, email, created_at, updated_at)
@@ -14,18 +13,16 @@ VALUES
   (tests.get_supabase_uid('get_org_apikeys_admin'), 'get_org_apikeys_admin@test.local', NOW(), NOW()),
   (tests.get_supabase_uid('get_org_apikeys_member'), 'get_org_apikeys_member@test.local', NOW(), NOW()),
   (tests.get_supabase_uid('get_org_apikeys_owner'), 'get_org_apikeys_owner@test.local', NOW(), NOW()),
-  (tests.get_supabase_uid('get_org_apikeys_apikey_only_owner'), 'get_org_apikeys_apikey_only_owner@test.local', NOW(), NOW()),
-  (tests.get_supabase_uid('get_org_apikeys_app_limited_owner'), 'get_org_apikeys_app_limited_owner@test.local', NOW(), NOW()),
+  (tests.get_supabase_uid('get_org_apikeys_org_bound_owner'), 'get_org_apikeys_org_bound_owner@test.local', NOW(), NOW()),
   (tests.get_supabase_uid('get_org_apikeys_app_bound_owner'), 'get_org_apikeys_app_bound_owner@test.local', NOW(), NOW())
 ON CONFLICT (id) DO NOTHING;
 
-INSERT INTO public.orgs (id, created_by, name, management_email, use_new_rbac)
+INSERT INTO public.orgs (id, created_by, name, management_email)
 VALUES (
   '70000000-0000-4000-8000-000000000047',
   tests.get_supabase_uid('get_org_apikeys_admin'),
   'Get org apikeys permission org',
-  'get-org-apikeys@test.local',
-  true
+  'get-org-apikeys@test.local'
 )
 ON CONFLICT (id) DO NOTHING;
 
@@ -49,7 +46,7 @@ SELECT
   '70000000-0000-4000-8000-000000000047',
   tests.get_supabase_uid('get_org_apikeys_admin')
 FROM public.roles r
-WHERE r.name = public.rbac_role_org_admin()
+WHERE r.name = public.rbac_role_org_super_admin()
 ON CONFLICT DO NOTHING;
 
 INSERT INTO public.role_bindings (principal_type, principal_id, role_id, scope_type, org_id, granted_by)
@@ -64,51 +61,12 @@ FROM public.roles r
 WHERE r.name = public.rbac_role_org_member()
 ON CONFLICT DO NOTHING;
 
-SELECT tests.create_v2_apikey(
-  45047,
-  tests.get_supabase_uid('get_org_apikeys_owner'),
-  'get-org-apikeys-key',
-  'get-org-apikeys-key',
-  '70000000-0000-4000-8000-000000000047'::uuid,
-  public.rbac_role_org_member()
-);
-
-SELECT tests.create_v2_apikey(
-  45048,
-  tests.get_supabase_uid('get_org_apikeys_apikey_only_owner'),
-  'get-org-apikeys-apikey-bound-key',
-  'get-org-apikeys-apikey-bound-key'
-);
-
-SELECT tests.create_v2_apikey(
-  45049,
-  tests.get_supabase_uid('get_org_apikeys_app_limited_owner'),
-  'get-org-apikeys-app-limited-key',
-  'get-org-apikeys-app-limited-key',
-  '70000000-0000-4000-8000-000000000047'::uuid,
-  NULL,
-  'com.test.getorgapikeys.app',
-  public.rbac_role_app_reader()
-);
-
-SELECT tests.create_v2_apikey(
-  45050,
-  tests.get_supabase_uid('get_org_apikeys_app_bound_owner'),
-  'get-org-apikeys-app-bound-key',
-  'get-org-apikeys-app-bound-key'
-);
-
-INSERT INTO public.role_bindings (principal_type, principal_id, role_id, scope_type, org_id, granted_by)
-SELECT
-  public.rbac_principal_user(),
-  tests.get_supabase_uid('get_org_apikeys_owner'),
-  r.id,
-  public.rbac_scope_org(),
-  '70000000-0000-4000-8000-000000000047',
-  tests.get_supabase_uid('get_org_apikeys_admin')
-FROM public.roles r
-WHERE r.name = public.rbac_role_org_member()
-ON CONFLICT DO NOTHING;
+INSERT INTO public.apikeys (id, user_id, key, name)
+VALUES
+  (45047, tests.get_supabase_uid('get_org_apikeys_owner'), 'get-org-apikeys-unbound-key', 'get-org-apikeys-unbound-key'),
+  (45048, tests.get_supabase_uid('get_org_apikeys_org_bound_owner'), 'get-org-apikeys-org-bound-key', 'get-org-apikeys-org-bound-key'),
+  (45049, tests.get_supabase_uid('get_org_apikeys_app_bound_owner'), 'get-org-apikeys-app-bound-key', 'get-org-apikeys-app-bound-key')
+ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO public.role_bindings (principal_type, principal_id, role_id, scope_type, org_id, granted_by)
 SELECT
@@ -135,7 +93,7 @@ SELECT
   tests.get_supabase_uid('get_org_apikeys_admin')
 FROM public.roles r
 JOIN public.apikeys ak
-  ON ak.id = 45050
+  ON ak.id = 45049
 WHERE r.name = public.rbac_role_app_developer()
 ON CONFLICT DO NOTHING;
 
@@ -158,8 +116,8 @@ SELECT ok(
     SELECT COUNT(*)
     FROM public.get_org_apikeys('70000000-0000-4000-8000-000000000047'::uuid)
     WHERE id = 45047
-  ) = 1,
-  'get_org_apikeys allows org admins to enumerate relevant API keys'
+  ) = 0,
+  'get_org_apikeys does not enumerate unbound API keys from same owner org'
 );
 
 SELECT ok(
@@ -168,7 +126,7 @@ SELECT ok(
     FROM public.get_org_apikeys('70000000-0000-4000-8000-000000000047'::uuid)
     WHERE id = 45048
   ) = 1,
-  'get_org_apikeys includes keys with direct apikey org bindings even without owner org relation'
+  'get_org_apikeys includes keys with direct apikey org bindings'
 );
 
 SELECT ok(
@@ -177,16 +135,12 @@ SELECT ok(
     FROM public.get_org_apikeys('70000000-0000-4000-8000-000000000047'::uuid)
     WHERE id = 45049
   ) = 1,
-  'get_org_apikeys includes V2 keys bound to apps that belong to the org'
+  'get_org_apikeys includes keys with direct apikey app bindings in the org'
 );
 
 SELECT ok(
-  (
-    SELECT COUNT(*)
-    FROM public.get_org_apikeys('70000000-0000-4000-8000-000000000047'::uuid)
-    WHERE id = 45050
-  ) = 1,
-  'get_org_apikeys includes keys with direct apikey app bindings in the org'
+  NOT has_function_privilege('anon', 'public.get_org_apikeys(uuid)'::regprocedure, 'EXECUTE'),
+  'anon cannot execute get_org_apikeys'
 );
 
 SELECT tests.clear_authentication();

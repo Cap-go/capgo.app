@@ -12,6 +12,18 @@ interface GetLatest {
   page?: number
 }
 
+async function getLinkedChannelVersionIds(c: Context<MiddlewareKeyVariables>, apikey: Database['public']['Tables']['apikeys']['Row'], appId: string) {
+  const { data, error } = await supabaseApikey(c, apikey.key)
+    .from('channels')
+    .select('version, rollout_version')
+    .eq('app_id', appId)
+
+  if (error)
+    throw simpleError('cannot_check_linked_channels', 'Cannot check linked channels', { supabaseError: error })
+
+  return new Set((data ?? []).flatMap(channel => [channel.version, channel.rollout_version]).filter((id): id is number => typeof id === 'number'))
+}
+
 export async function deleteBundle(c: Context<MiddlewareKeyVariables>, body: GetLatest, apikey: Database['public']['Tables']['apikeys']['Row']): Promise<Response> {
   if (!body.app_id) {
     throw simpleError('missing_app_id', 'Missing app_id', { body })
@@ -25,13 +37,27 @@ export async function deleteBundle(c: Context<MiddlewareKeyVariables>, body: Get
   }
 
   if (body.version) {
-    const { data, error: dbError } = await supabaseApikey(c, apikey.key)
+    const supabase = supabaseApikey(c, apikey.key)
+    const { data: version, error: versionError } = await supabase
+      .from('app_versions')
+      .select('id, name')
+      .eq('app_id', body.app_id)
+      .eq('name', body.version)
+      .eq('deleted', false)
+      .single()
+    if (versionError || !version)
+      throw simpleError('cannot_delete_version', 'Cannot delete version', { supabaseError: versionError })
+
+    const linkedVersionIds = await getLinkedChannelVersionIds(c, apikey, body.app_id)
+    if (linkedVersionIds.has(version.id))
+      throw simpleError('cannot_delete_linked_version', 'Cannot delete a bundle linked to a channel', { app_id: body.app_id, version: body.version })
+
+    const { data, error: dbError } = await supabase
       .from('app_versions')
       .update({
         deleted: true,
       })
-      .eq('app_id', body.app_id)
-      .eq('name', body.version)
+      .eq('id', version.id)
       .select()
       .single()
     if (dbError || !data) {
@@ -39,12 +65,18 @@ export async function deleteBundle(c: Context<MiddlewareKeyVariables>, body: Get
     }
   }
   else {
-    const { error: dbError } = await supabaseApikey(c, apikey.key)
+    const linkedVersionIds = await getLinkedChannelVersionIds(c, apikey, body.app_id)
+    let query = supabaseApikey(c, apikey.key)
       .from('app_versions')
       .update({
         deleted: true,
       })
       .eq('app_id', body.app_id)
+
+    if (linkedVersionIds.size > 0)
+      query = query.not('id', 'in', `(${[...linkedVersionIds].join(',')})`)
+
+    const { error: dbError } = await query
     if (dbError) {
       throw simpleError('cannot_delete_all_version', 'Cannot delete all version', { supabaseError: dbError })
     }

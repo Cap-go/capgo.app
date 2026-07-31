@@ -12,6 +12,7 @@ import { createChartScales } from '~/services/chartConfig'
 import { useChartData } from '~/services/chartDataService'
 import { createTooltipConfig, todayLinePlugin, verticalLinePlugin } from '~/services/chartTooltip'
 import { generateChartDayLabels, getChartDateRange, normalizeToStartOfDay } from '~/services/date'
+import { formatNumberValue } from '~/services/formatLocale'
 import { useSupabase } from '~/services/supabase'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useOrganizationStore } from '~/stores/organization'
@@ -254,29 +255,19 @@ const latestVersion = computed(() => {
   return null
 })
 const latestVersionPercentageDisplay = computed(() => {
-  const rawPercentage = latestVersion.value?.share ?? 0
+  const rawPercentage = latestVersion.value?.share
   if (rawPercentage === null || rawPercentage === undefined)
     return ''
 
-  const percentage = typeof rawPercentage === 'number' ? rawPercentage.toString() : rawPercentage
-  const hasSymbol = percentage.includes('%')
+  const numeric = Number(rawPercentage)
+  if (!Number.isFinite(numeric))
+    return ''
 
-  const match = percentage.match(/(\d+(?:\.\d+)?)/)
-  if (!match)
-    return hasSymbol ? percentage : `${percentage}%`
-
-  const numeric = Number(match[1])
-  if (Number.isNaN(numeric))
-    return hasSymbol ? percentage : `${percentage}%`
-
-  const rounded = Number(numeric.toFixed(1))
-  const formatted = Number.isInteger(rounded) ? Math.trunc(rounded).toString() : rounded.toFixed(1)
-  const replaced = percentage.replace(match[1], formatted)
-  return hasSymbol ? replaced : `${formatted}%`
+  return `${formatNumberValue(numeric, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
 })
 const latestVersionCountDisplay = computed(() => {
   const count = latestVersion.value?.count ?? 0
-  return count.toLocaleString()
+  return formatNumberValue(count)
 })
 
 function resolveOrganizationForCurrentContext(): Organization | undefined {
@@ -558,7 +549,9 @@ const chartOptions = computed<ChartOptions<'line'>>(() => {
         const numericValue = typeof tickValue === 'number' ? tickValue : Number(tickValue)
         if (props.accumulated && numericValue > 100)
           return ''
-        const display = Number.isFinite(numericValue) ? numericValue : tickValue
+        const display = Number.isFinite(numericValue)
+          ? formatNumberValue(numericValue, { minimumFractionDigits: 1, maximumFractionDigits: 1 })
+          : tickValue
         return `${display}%`
       },
     }),

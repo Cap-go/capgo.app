@@ -1,16 +1,17 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { cleanupCli, getSemver, prepareCli } from './cli-utils'
 import { uploadBundleSDK } from './cli-sdk-utils'
-import { resetAndSeedAppData, resetAppData, resetAppDataStats } from './test-utils'
+import { cleanupCli, getSemver, prepareCli } from './cli-utils'
+import { createIsolatedSeedAppOptions, resetAndSeedAppData, resetAppData, resetAppDataStats } from './test-utils'
 
 describe('tests CLI old checksum (SDK)', () => {
   const id = randomUUID()
   const APPNAME = `com.cli_old_checksum_${id}`
+  const seedOptions = createIsolatedSeedAppOptions()
   let semver = getSemver()
 
   beforeAll(async () => {
-    await resetAndSeedAppData(APPNAME)
+    await resetAndSeedAppData(APPNAME, seedOptions)
     await prepareCli(APPNAME, true)
   })
   afterAll(async () => {

@@ -1,33 +1,29 @@
 import type { Context } from 'hono'
 import type { AuthInfo, MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
-import { type } from 'arktype'
-import { safeParseSchema } from '../../utils/ark_validation.ts'
+import { z } from 'zod'
+import { safeParseSchema } from '../../utils/schema_validation.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { closeClient, getPgClient } from '../../utils/pg.ts'
 import { supabaseAdmin, supabaseWithAuth } from '../../utils/supabase.ts'
+import { parseOrgOnboardingIntent } from '../../utils/org_onboarding_intent.ts'
 import { normalizeWebsiteUrl } from './website.ts'
 
 const MAX_ESTIMATED_MAU = 1_000_000
 
-const estimatedMauSchema = type('number.integer >= 0').narrow((value, ctx) => {
-  if (value > MAX_ESTIMATED_MAU) {
-    return ctx.reject({
-      expected: `a value <= ${MAX_ESTIMATED_MAU}`,
-      actual: JSON.stringify(value),
-    })
-  }
+const estimatedMauSchema = z.number().int().min(0).refine(
+  value => value <= MAX_ESTIMATED_MAU,
+  { message: `a value <= ${MAX_ESTIMATED_MAU}` },
+)
 
-  return true
+const bodySchema = z.object({
+  name: z.string().min(3),
+  email: z.email().optional(),
+  estimatedMau: estimatedMauSchema.optional(),
+  website: z.string().optional(),
+  intent: z.enum(['ota', 'builder', 'both', 'exploring', 'unknown']).optional(),
 })
 
-const bodySchema = type({
-  'name': 'string >= 3',
-  'email?': 'string.email',
-  'estimatedMau?': estimatedMauSchema,
-  'website?': 'string',
-  'intent?': "'ota' | 'builder' | 'both' | 'exploring' | 'unknown'",
-})
 
 interface PgTransactionClient {
   query: <T = unknown>(text: string, params?: unknown[]) => Promise<{ rows: T[], rowCount?: number | null }>
@@ -148,6 +144,7 @@ async function insertOrgForApiKey(
     management_email: string
     customer_id: string
     website: string | null
+    onboarding: { intent: string }
   },
 ) {
   const apikeyRbacId = auth.apikey?.rbac_id
@@ -196,10 +193,11 @@ async function insertOrgForApiKey(
          created_by,
          management_email,
          customer_id,
-         website
+         website,
+         onboarding
        )
-       VALUES ($1::uuid, $2::varchar, $3::uuid, $4::varchar, $5::varchar, $6::varchar)`,
-      [org.id, org.name, org.created_by, org.management_email, org.customer_id, org.website],
+       VALUES ($1::uuid, $2::varchar, $3::uuid, $4::varchar, $5::varchar, $6::varchar, $7::jsonb)`,
+      [org.id, org.name, org.created_by, org.management_email, org.customer_id, org.website, JSON.stringify(org.onboarding)],
     )
 
     await dbClient.query(
@@ -252,7 +250,7 @@ async function insertOrgForApiKey(
 
 export async function post(
   c: Context<MiddlewareKeyVariables>,
-  bodyRaw: any,
+  bodyRaw: unknown,
   _apikey: Database['public']['Tables']['apikeys']['Row'] | null | undefined,
 ): Promise<Response> {
   const bodyParsed = safeParseSchema(bodySchema, bodyRaw)
@@ -272,6 +270,7 @@ export async function post(
   const ownerEmail = await getOwnerEmail(c, auth)
   const orgId = crypto.randomUUID()
   const pendingCustomerId = await createPendingStripeInfo(c, orgId, estimatedMau)
+  const onboarding = { intent: parseOrgOnboardingIntent({ intent: body.intent }) }
   const newOrg = {
     id: orgId,
     name: body.name,
@@ -279,6 +278,7 @@ export async function post(
     management_email: body.email ?? ownerEmail,
     customer_id: pendingCustomerId,
     website,
+    onboarding,
   }
 
   try {
@@ -288,7 +288,10 @@ export async function post(
     else {
       const { error: errorOrg } = await supabaseWithAuth(c, auth)
         .from('orgs')
-        .insert(newOrg)
+        .insert({
+          ...newOrg,
+          onboarding,
+        })
 
       if (errorOrg) {
         throw simpleError('cannot_create_org', 'Cannot create org', { error: errorOrg.message })

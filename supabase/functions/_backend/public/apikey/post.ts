@@ -1,26 +1,19 @@
 import type { CreateBindingParams } from '../../private/role_bindings.ts'
-import type { AuthInfo } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
+import type { ClientBindingInput } from './scope.ts'
 import { sql } from 'drizzle-orm'
-import { createRoleBindingForPrincipal } from '../../private/role_bindings.ts'
+import { createRoleBindingForPrincipal, lockRbacOrgs } from '../../private/role_bindings.ts'
 import { honoFactory, parseBody, quickError, simpleError } from '../../utils/hono.ts'
-import { middlewareV2 } from '../../utils/hono_middleware.ts'
+import { middlewareAuth } from '../../utils/hono_middleware.ts'
 import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../../utils/pg.ts'
-import { checkPermission } from '../../utils/rbac.ts'
+import { checkPermission, checkPermissionPg } from '../../utils/rbac.ts'
 import { supabaseWithAuth, validateExpirationAgainstOrgPolicies, validateExpirationDate } from '../../utils/supabase.ts'
 import { parseApiKeyGlobalPermissions, replaceApiKeyGlobalPermissions, validateApiKeyGlobalPermissionsForBindings } from './global_permissions.ts'
+import { assertApiKeyManagerCanAssignBindings, ensureApiKeyManagementAllowed, requireApiKeyManagementAuth, sanitizeClientBindings } from './scope.ts'
+import { getErrorStatus } from '../../utils/errors.ts'
 
-interface BindingInput {
-  role_name: string
-  scope_type: 'org' | 'app' | 'channel'
-  org_id: string
-  app_id?: string | null
-  channel_id?: string | number | null
-  reason?: string
-}
-
-type EnrichedBindingInput = BindingInput & { allowSystemRole?: boolean }
+type BindingInput = ClientBindingInput
 type ApiKeyRow = Database['public']['Tables']['apikeys']['Row']
 
 type DrizzleExecutor = Pick<ReturnType<typeof getDrizzleClient>, 'execute'>
@@ -33,7 +26,6 @@ interface CreateApiKeyRecordParams {
 }
 
 const app = honoFactory.createApp()
-const APIKEY_ORG_READER_ROLE = 'apikey_org_reader'
 
 async function createApiKeyRecord(
   db: DrizzleExecutor,
@@ -66,41 +58,40 @@ async function createApiKeyRecord(
   return apiKey
 }
 
-app.post('/', middlewareV2(['all']), async (c) => {
-  const auth = c.get('auth') as AuthInfo
+async function assertCanManageApiKeysForOrgs(
+  c: Parameters<typeof checkPermission>[0],
+  orgIds: string[],
+): Promise<void> {
+  for (const orgId of orgIds) {
+    if (!(await checkPermission(c, 'org.manage_apikeys', { orgId }))) {
+      throw quickError(403, 'forbidden_binding', `Forbidden - API key management rights required for org ${orgId}`)
+    }
+  }
+}
 
-  const body = await parseBody<any>(c)
-
-  const name = body.name ?? ''
-
+app.post('/', middlewareAuth(), async (c) => {
+  const auth = requireApiKeyManagementAuth(c, 'not_authorized', 'API key management requires authentication')
   if (auth.authType !== 'jwt' || !auth.userId) {
     if (auth.authType === 'apikey') {
       throw simpleError('cannot_create_apikey', 'API keys cannot create other API keys')
     }
     throw simpleError('not_authorized', 'Only user sessions can create API keys')
   }
+
+  const authApikey = c.get('apikey') as ApiKeyRow | undefined
+  await ensureApiKeyManagementAllowed(c, auth, authApikey, 'cannot_create_apikey')
+
+  const body = await parseBody<any>(c)
+
+  const name = body.name ?? ''
   const expiresAt = body.expires_at ?? null
   const isHashed = body.hashed === true
 
   // Validate and parse bindings array
-  const bindings: BindingInput[] = Array.isArray(body.bindings) ? body.bindings : []
   if (body.bindings !== undefined && !Array.isArray(body.bindings)) {
     throw simpleError('invalid_bindings', 'bindings must be an array')
   }
-  for (const binding of bindings) {
-    if (!binding || typeof binding !== 'object') {
-      throw simpleError('invalid_bindings', 'Each binding must be an object')
-    }
-    if (typeof binding.role_name !== 'string' || !binding.role_name) {
-      throw simpleError('invalid_bindings', 'Each binding must have a role_name')
-    }
-    if (!['org', 'app', 'channel'].includes(binding.scope_type)) {
-      throw simpleError('invalid_bindings', 'Each binding must have a valid scope_type (org, app, channel)')
-    }
-    if (typeof binding.org_id !== 'string' || !binding.org_id) {
-      throw simpleError('invalid_bindings', 'Each binding must have an org_id')
-    }
-  }
+  const bindings: BindingInput[] = Array.isArray(body.bindings) ? sanitizeClientBindings(body.bindings) : []
 
   const hasBindings = bindings.length > 0
 
@@ -114,7 +105,7 @@ app.post('/', middlewareV2(['all']), async (c) => {
   // Validate expiration date format (throws if invalid)
   validateExpirationDate(expiresAt)
 
-  // Use supabaseWithAuth which handles both JWT and API key authentication
+  // Preserve caller RLS context; the route guard above keeps management JWT-only.
   const supabase = supabaseWithAuth(c, auth)
 
   const resolvedBindings = bindings
@@ -124,17 +115,14 @@ app.post('/', middlewareV2(['all']), async (c) => {
   // Validate expiration against org policies (throws if invalid)
   const allOrgIds = [...new Set(resolvedBindings.map(binding => binding.org_id))]
   await validateExpirationAgainstOrgPolicies(allOrgIds, expiresAt, supabase)
+  await assertApiKeyManagerCanAssignBindings(c, auth, resolvedBindings)
 
   let apikeyData: ApiKeyRow | null = null
 
   let pgClient: ReturnType<typeof getPgClient> | undefined
   try {
     // Check RBAC permission for each unique org in the bindings before creating anything.
-    for (const bindingOrgId of allOrgIds) {
-      if (!(await checkPermission(c, 'org.update_user_roles', { orgId: bindingOrgId }))) {
-        throw quickError(403, 'forbidden_binding', `Forbidden - Admin rights required for org ${bindingOrgId}`)
-      }
-    }
+    await assertCanManageApiKeysForOrgs(c, allOrgIds)
 
     pgClient = getPgClient(c)
     const drizzle = getDrizzleClient(pgClient)
@@ -142,6 +130,17 @@ app.post('/', middlewareV2(['all']), async (c) => {
     const callerPrincipalId = auth.userId
 
     await drizzle.transaction(async (tx) => {
+      const txDrizzle = tx as unknown as ReturnType<typeof getDrizzleClient>
+      await lockRbacOrgs(txDrizzle, allOrgIds)
+
+      const apikeyString = auth.apikey?.key ?? c.get('capgkey') ?? null
+      for (const bindingOrgId of allOrgIds) {
+        if (!(await checkPermissionPg(c, 'org.manage_apikeys', { orgId: bindingOrgId }, txDrizzle, auth.userId, apikeyString))) {
+          throw quickError(403, 'forbidden_binding', `Forbidden - API key management rights required for org ${bindingOrgId}`)
+        }
+      }
+      await assertApiKeyManagerCanAssignBindings(c, auth, resolvedBindings, txDrizzle)
+
       apikeyData = await createApiKeyRecord(tx, {
         userId: auth.userId,
         name,
@@ -153,26 +152,7 @@ app.post('/', middlewareV2(['all']), async (c) => {
         throw new Error('Created API key is missing rbac_id')
       }
 
-      // App-scoped keys still need org.read for CLI warning compatibility, but
-      // must not gain org-wide app reads through org_member.
-      const enrichedBindings: EnrichedBindingInput[] = [...resolvedBindings]
-      const orgsWithOrgBinding = new Set(
-        resolvedBindings.filter(b => b.scope_type === 'org').map(b => b.org_id),
-      )
-      for (const b of resolvedBindings) {
-        if (b.scope_type === 'app' && !orgsWithOrgBinding.has(b.org_id)) {
-          enrichedBindings.push({
-            role_name: APIKEY_ORG_READER_ROLE,
-            scope_type: 'org',
-            org_id: b.org_id,
-            reason: 'API key app-scope org read compatibility',
-            allowSystemRole: true,
-          })
-          orgsWithOrgBinding.add(b.org_id)
-        }
-      }
-
-      for (const binding of enrichedBindings) {
+      for (const binding of resolvedBindings) {
         const bindingParams: CreateBindingParams = {
           principal_type: 'apikey',
           principal_id: apikeyData.rbac_id,
@@ -182,11 +162,9 @@ app.post('/', middlewareV2(['all']), async (c) => {
           app_id: binding.app_id,
           channel_id: binding.channel_id,
           reason: binding.reason,
-          allowSystemRole: binding.allowSystemRole === true,
         }
-
         const result = await createRoleBindingForPrincipal(
-          tx as unknown as ReturnType<typeof getDrizzleClient>,
+          txDrizzle,
           bindingParams,
           auth.userId,
           'jwt',
@@ -200,7 +178,7 @@ app.post('/', middlewareV2(['all']), async (c) => {
             binding,
             error: result.error,
           })
-          throw quickError(result.status as any, 'binding_failed', result.error)
+          throw quickError(result.status, 'binding_failed', result.error)
         }
 
         createdBindings.push(result.data)
@@ -216,8 +194,8 @@ app.post('/', middlewareV2(['all']), async (c) => {
       bindingsCount: createdBindings.length,
     })
   }
-  catch (error: any) {
-    if (error?.status) {
+  catch (error: unknown) {
+    if (getErrorStatus(error)) {
       throw error
     }
     cloudlogErr({

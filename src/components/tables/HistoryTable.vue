@@ -488,6 +488,7 @@ watch([() => props.channelId, () => props.bundleId, () => props.appId], () => {
     :search="search"
     :search-placeholder="t('search-by-name')"
     :total="total"
+    :offset="pageSize"
     :current-page="page"
     :columns="columns"
     :element-list="deployHistory"

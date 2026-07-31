@@ -137,7 +137,7 @@ index.ts / mcp/server.ts ─ on startup: enableSupabaseInstrumentation()
 
 1. `path = new URL(url).pathname` (query string discarded → no filter values, low cardinality).
 2. Strip the `/rest/v1/` prefix.
-3. If the remainder starts with `rpc/`, return `` `rpc:${fnName}` `` (e.g. `rpc:get_org_perm_for_apikey`). RPC names are self-describing, so RPC calls do not need a `source` label.
+3. If the remainder starts with `rpc/`, return `` `rpc:${fnName}` `` (e.g. `rpc:get_current_plan_max`). RPC names are self-describing, so RPC calls do not need a `source` label.
 4. Otherwise return `` `${method} ${table}` `` where `table` is the first path segment (e.g. `GET apps`).
 5. For any path that does not match `/rest/v1/` (defensive — e.g. a storage path), return `` `${method} ${firstSegment}` `` so the value stays bounded.
 

@@ -6,7 +6,7 @@ import { sql } from 'drizzle-orm'
 import { Hono } from 'hono/tiny'
 
 import { getLastMonthAnalyticsWindowStart, getPluginBreakdownCF, readActiveAppsCF, readLastMonthDevicesByPlatformCF, readLastMonthDevicesCF, readLastMonthUpdatesCF } from '../utils/cloudflare.ts'
-import { GLOBAL_STATS_SHARDS, REQUIRED_GLOBAL_STATS_SHARDS } from '../utils/global_stats.ts'
+import { GLOBAL_STATS_SHARDS, REQUIRED_GLOBAL_STATS_SHARDS, USAGE_GLOBAL_STATS_SHARDS } from '../utils/global_stats.ts'
 import { BRES, middlewareAPISecret, quickError } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { logsnagInsights } from '../utils/logsnag.ts'
@@ -15,6 +15,7 @@ import { countAllApps, countAllUpdates, countAllUpdatesExternal, getUpdateStats 
 import { supabaseAdmin } from '../utils/supabase.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
 import { backgroundTask } from '../utils/utils.ts'
+const DAY_IN_MS = 24 * 60 * 60 * 1000
 
 interface PlanTotal { [key: string]: number }
 interface BuildStats {
@@ -35,6 +36,59 @@ interface BuildStats {
   build_count_day_android: number
   daily_metrics_available: boolean
 }
+type AppBuildOnboardingMetrics = Record<string, unknown> & {
+  apps_created: number
+  apps_with_cli_onboarding_builds_24h: number
+  apps_with_manual_builds_24h: number
+}
+type AppBuildOnboardingMetricRow = {
+  created_at: string | Date | null
+  created_from_onboarding: boolean | null
+  onboarding_completed_at: string | Date | null
+  build_count: number | string | null
+}
+
+function parseMetricDate(value: string | Date | null): number | null {
+  if (value instanceof Date) {
+    const time = value.getTime()
+    return Number.isFinite(time) ? time : null
+  }
+  if (!value)
+    return null
+  const time = new Date(value).getTime()
+  return Number.isFinite(time) ? time : null
+}
+
+function summarizeAppBuildOnboardingRows(rows: AppBuildOnboardingMetricRow[]): AppBuildOnboardingMetrics {
+  return rows.reduce<AppBuildOnboardingMetrics>((totals, row) => {
+    totals.apps_created += 1
+
+    const buildCount = Number(row.build_count) || 0
+    if (buildCount <= 2)
+      return totals
+
+    if (row.created_from_onboarding === true) {
+      const createdAt = parseMetricDate(row.created_at)
+      const completedAt = parseMetricDate(row.onboarding_completed_at)
+      const completedWithinFirstDay = createdAt !== null
+        && completedAt !== null
+        && completedAt >= createdAt
+        && completedAt < createdAt + DAY_IN_MS
+      if (completedWithinFirstDay)
+        totals.apps_with_cli_onboarding_builds_24h += 1
+    }
+    else {
+      totals.apps_with_manual_builds_24h += 1
+    }
+
+    return totals
+  }, {
+    apps_created: 0,
+    apps_with_cli_onboarding_builds_24h: 0,
+    apps_with_manual_builds_24h: 0,
+  })
+}
+
 interface DailyWindow {
   prevDayStart: Date
   prevDayEnd: Date
@@ -117,11 +171,15 @@ interface BillingSnapshotRow {
 interface CoreSnapshotCounts {
   onboarded: number
   needUpgrade: number
+  abovePlanWithCredits: number
+  abovePlanWithoutCredits: number
 }
 interface CoreSnapshotRow {
   [key: string]: unknown
   onboarded: number | string | null
   need_upgrade: number | string | null
+  above_plan_with_credits: number | string | null
+  above_plan_without_credits: number | string | null
 }
 interface CustomerIdRow {
   customer_id: string
@@ -133,6 +191,24 @@ interface PastDueOrgStats {
 interface PastDueOrgRow extends CustomerIdRow {
   past_due_at?: string | null
   updated_at?: string | null
+}
+interface SubscriptionAccessSnapshotCounts {
+  active_canceled_orgs: number
+  active_past_due_orgs: number
+}
+interface SubscriptionAccessRow extends CustomerIdRow {
+  created_at?: string | null
+  paid_at?: string | null
+  canceled_at?: string | null
+  past_due_at?: string | null
+  subscription_anchor_end?: string | null
+  status?: string | null
+  is_good_plan?: boolean | null
+}
+interface SubscriptionAccessSnapshotSqlRow {
+  [key: string]: unknown
+  active_canceled_orgs: number | string | null
+  active_past_due_orgs: number | string | null
 }
 const REVENUE_ACTIVE_STRIPE_STATUSES: Database['public']['Enums']['stripe_status'][] = ['succeeded']
 
@@ -216,6 +292,8 @@ function normalizeCoreSnapshotCounts(row: Partial<CoreSnapshotRow> | null | unde
   return {
     onboarded: Number(row?.onboarded) || 0,
     needUpgrade: Number(row?.need_upgrade) || 0,
+    abovePlanWithCredits: Number(row?.above_plan_with_credits) || 0,
+    abovePlanWithoutCredits: Number(row?.above_plan_without_credits) || 0,
   }
 }
 
@@ -223,6 +301,7 @@ const LOGSNAG_INSIGHTS_BACKGROUND_MAX_RETRIES = 4
 const LOGSNAG_INSIGHTS_RETRY_DELAY_SECONDS = 300
 const LOGSNAG_INSIGHTS_QUEUE_NAME = 'admin_stats'
 const LOGSNAG_INSIGHTS_NOTIFICATION_DELAY_SECONDS = 180
+const LOGSNAG_INSIGHTS_RECENT_REPAIR_LOOKBACK_DAYS = 30
 const GLOBAL_STATS_NOTIFICATION_LOCK_NAMESPACE = 'logsnag_insights_notifications'
 const GLOBAL_STATS_NOTIFICATION_LOGSNAG_STEP = 'notifications_logsnag'
 const GLOBAL_STATS_NOTIFICATION_TRACKING_STEP = 'notifications_tracking'
@@ -237,6 +316,7 @@ const GLOBAL_STATS_COMPLETION_MARKERS = [
 ] as const
 const GLOBAL_STATS_SHARD_SET = new Set<string>(GLOBAL_STATS_SHARDS)
 const GLOBAL_STATS_COMPLETION_MARKER_SET = new Set<string>(GLOBAL_STATS_COMPLETION_MARKERS)
+const GLOBAL_STATS_BUILD_AVG_EPSILON = 0.05
 
 type GlobalStatsShard = typeof GLOBAL_STATS_SHARDS[number]
 type GlobalStatsCompletionMarker = typeof GLOBAL_STATS_COMPLETION_MARKERS[number]
@@ -251,6 +331,38 @@ interface LogsnagInsightsPayload {
   retry_count?: unknown
   shard?: unknown
   date_id?: unknown
+}
+
+interface BuildShardStats {
+  totalSeconds: Record<'ios' | 'android', number>
+  avgSeconds: Record<'ios' | 'android', number>
+  counts: Record<'ios' | 'android', number>
+}
+
+interface GlobalStatsRepairRow {
+  dateId: string
+  completedShards: Set<GlobalStatsCompletionMarker>
+  orgs: number
+  bundleStorageGb: number
+  buildTotalSecondsDayIos: number
+  buildTotalSecondsDayAndroid: number
+  buildAvgSecondsDayIos: number
+  buildAvgSecondsDayAndroid: number
+  buildCountDayIos: number
+  buildCountDayAndroid: number
+}
+
+interface GlobalStatsRepairSqlRow {
+  date_id: string
+  completed_shards: unknown
+  orgs: number | string | null
+  bundle_storage_gb: number | string | null
+  build_total_seconds_day_ios: number | string | null
+  build_total_seconds_day_android: number | string | null
+  build_avg_seconds_day_ios: number | string | null
+  build_avg_seconds_day_android: number | string | null
+  build_count_day_ios: number | string | null
+  build_count_day_android: number | string | null
 }
 
 interface ScheduleLogsnagInsightsUpdateOptions {
@@ -341,6 +453,20 @@ function getCompletedDayWindowForDateId(dateId: string): DailyWindow {
     prevDayEnd,
     prevDayDateId: dateId,
   }
+}
+
+function buildRecentGlobalStatsRepairDateIds(anchorDateId: string, lookbackDays = LOGSNAG_INSIGHTS_RECENT_REPAIR_LOOKBACK_DAYS): string[] {
+  const anchor = new Date(`${anchorDateId}T00:00:00.000Z`)
+  if (Number.isNaN(anchor.getTime()))
+    return []
+
+  const dateIds: string[] = []
+  for (let offset = Math.max(0, Math.floor(lookbackDays)); offset >= 0; offset--) {
+    const date = new Date(anchor)
+    date.setUTCDate(anchor.getUTCDate() - offset)
+    dateIds.push(getDateId(date))
+  }
+  return dateIds
 }
 
 function getMetricWindowFromDailyWindow(window: DailyWindow): CurrentDayWindow {
@@ -436,13 +562,14 @@ function getPaidPlanTotal(plans: PlanTotal) {
   return (plans.Solo ?? 0) + (plans.Maker ?? 0) + (plans.Team ?? 0) + (plans.Enterprise ?? 0)
 }
 
-function getPlanConversionRates(plans: PlanTotal, totalOrgs: number): PlanConversionRates {
+function getPlanConversionRates(plans: PlanTotal, payingCount: number): PlanConversionRates {
+  // Plan mix among paying orgs (not all orgs/users). Matches LogSnag insight cards.
   return {
-    solo: calculateConversionRate(plans.Solo, totalOrgs),
-    maker: calculateConversionRate(plans.Maker, totalOrgs),
-    team: calculateConversionRate(plans.Team, totalOrgs),
-    enterprise: calculateConversionRate(plans.Enterprise, totalOrgs),
-    total: calculateConversionRate(getPaidPlanTotal(plans), totalOrgs),
+    solo: calculateConversionRate(plans.Solo, payingCount),
+    maker: calculateConversionRate(plans.Maker, payingCount),
+    team: calculateConversionRate(plans.Team, payingCount),
+    enterprise: calculateConversionRate(plans.Enterprise, payingCount),
+    total: calculateConversionRate(getPaidPlanTotal(plans), payingCount),
   }
 }
 
@@ -554,14 +681,102 @@ function calculatePastDueOrgStats(rows: PastDueOrgRow[], snapshotAt: Date): Past
   }
 }
 
-function hasPersistedPastDueStats(snapshot: Pick<GlobalStatsSnapshotRow, 'past_due_orgs' | 'past_due_orgs_average_days'> | null | undefined): boolean {
-  return (Number(snapshot?.past_due_orgs) || 0) > 0 || (Number(snapshot?.past_due_orgs_average_days) || 0) > 0
+function getEmptySubscriptionAccessSnapshotCounts(): SubscriptionAccessSnapshotCounts {
+  return {
+    active_canceled_orgs: 0,
+    active_past_due_orgs: 0,
+  }
+}
+
+function normalizeSubscriptionAccessSnapshotCounts(
+  row: SubscriptionAccessSnapshotSqlRow | null | undefined,
+): SubscriptionAccessSnapshotCounts {
+  return {
+    active_canceled_orgs: Number(row?.active_canceled_orgs) || 0,
+    active_past_due_orgs: Number(row?.active_past_due_orgs) || 0,
+  }
+}
+
+function isActiveCanceledAtSnapshot(row: SubscriptionAccessRow, snapshotExclusiveEnd: Date): boolean {
+  if (!row.customer_id || row.is_good_plan !== true)
+    return false
+
+  if (!row.paid_at || new Date(row.paid_at).getTime() >= snapshotExclusiveEnd.getTime())
+    return false
+
+  if (!row.canceled_at || new Date(row.canceled_at).getTime() >= snapshotExclusiveEnd.getTime())
+    return false
+
+  if (!row.subscription_anchor_end || new Date(row.subscription_anchor_end).getTime() <= snapshotExclusiveEnd.getTime())
+    return false
+
+  if (row.created_at && new Date(row.created_at).getTime() >= snapshotExclusiveEnd.getTime())
+    return false
+
+  return true
+}
+
+function isActivePastDueAtSnapshot(row: SubscriptionAccessRow, snapshotExclusiveEnd: Date): boolean {
+  if (!row.customer_id || row.is_good_plan !== true)
+    return false
+
+  if (!row.paid_at || new Date(row.paid_at).getTime() >= snapshotExclusiveEnd.getTime())
+    return false
+
+  if (!row.past_due_at || new Date(row.past_due_at).getTime() >= snapshotExclusiveEnd.getTime())
+    return false
+
+  if (!row.subscription_anchor_end || new Date(row.subscription_anchor_end).getTime() <= snapshotExclusiveEnd.getTime())
+    return false
+
+  if (row.canceled_at && new Date(row.canceled_at).getTime() < snapshotExclusiveEnd.getTime())
+    return false
+
+  if (row.status !== 'succeeded')
+    return false
+
+  if (row.created_at && new Date(row.created_at).getTime() >= snapshotExclusiveEnd.getTime())
+    return false
+
+  return true
+}
+
+function calculateSubscriptionAccessSnapshotCounts(
+  rows: SubscriptionAccessRow[],
+  snapshotExclusiveEnd: Date,
+): SubscriptionAccessSnapshotCounts {
+  const activeCanceled = new Set<string>()
+  const activePastDue = new Set<string>()
+
+  for (const row of rows) {
+    if (isActiveCanceledAtSnapshot(row, snapshotExclusiveEnd))
+      activeCanceled.add(row.customer_id)
+    if (isActivePastDueAtSnapshot(row, snapshotExclusiveEnd))
+      activePastDue.add(row.customer_id)
+  }
+
+  return {
+    active_canceled_orgs: activeCanceled.size,
+    active_past_due_orgs: activePastDue.size,
+  }
+}
+
+type MutableSubscriptionHealthSnapshot = Pick<
+  GlobalStatsSnapshotRow,
+  'past_due_orgs' | 'past_due_orgs_average_days' | 'active_canceled_orgs' | 'active_past_due_orgs'
+>
+
+function hasPersistedPastDueStats(snapshot: MutableSubscriptionHealthSnapshot | null | undefined): boolean {
+  return (Number(snapshot?.past_due_orgs) || 0) > 0
+    || (Number(snapshot?.past_due_orgs_average_days) || 0) > 0
+    || (Number(snapshot?.active_canceled_orgs) || 0) > 0
+    || (Number(snapshot?.active_past_due_orgs) || 0) > 0
 }
 
 function shouldRefreshMutablePastDueStats(
   window: DailyWindow,
   referenceDate = new Date(),
-  snapshot?: Pick<GlobalStatsSnapshotRow, 'past_due_orgs' | 'past_due_orgs_average_days'> | null,
+  snapshot?: MutableSubscriptionHealthSnapshot | null,
 ) {
   if (window.prevDayDateId === getDailyWindow(referenceDate).prevDayDateId)
     return true
@@ -1159,8 +1374,8 @@ async function aggregateDailyBuildStats(
     const query = sql`
       SELECT
         platform,
-        SUM(build_time_unit)::bigint AS total_seconds,
-        COALESCE(ROUND(AVG(build_time_unit)::numeric, 1), 0)::float AS avg_seconds,
+        SUM(billable_seconds)::bigint AS total_seconds,
+        COALESCE(ROUND(AVG(billable_seconds)::numeric, 1), 0)::float AS avg_seconds,
         COUNT(*)::int AS total_builds
       FROM build_logs
       WHERE created_at >= ${start}
@@ -1186,6 +1401,59 @@ async function aggregateDailyBuildStats(
   }
 
   return { totalSeconds: totalSecondsByPlatform, avgSeconds: avgSecondsByPlatform, counts: countsByPlatform }
+}
+
+function getCompletedAppBuildOnboardingWindow(window: DailyWindow): DailyWindow {
+  const prevDayStart = new Date(window.prevDayStart.getTime() - DAY_IN_MS)
+  const prevDayEnd = new Date(window.prevDayStart)
+  return {
+    prevDayStart,
+    prevDayEnd,
+    prevDayDateId: getDateId(prevDayStart),
+  }
+}
+
+async function getAppBuildOnboardingMetrics(c: Context, window: DailyWindow): Promise<AppBuildOnboardingMetrics> {
+  const pgClient = getPgClient(c, false)
+  const drizzleClient = getDrizzleClient(pgClient)
+  const dayStartIso = window.prevDayStart.toISOString()
+  const dayEndIso = window.prevDayEnd.toISOString()
+
+  try {
+    const result = await drizzleClient.execute<AppBuildOnboardingMetricRow>(sql`
+      WITH created_apps AS (
+        SELECT app_id, created_at, created_from_onboarding, onboarding_completed_at
+        FROM public.apps
+        WHERE created_at >= ${dayStartIso}::timestamptz
+          AND created_at < ${dayEndIso}::timestamptz
+      )
+      SELECT
+        ca.created_at,
+        ca.created_from_onboarding,
+        ca.onboarding_completed_at,
+        COUNT(br.id)::int AS build_count
+      FROM created_apps ca
+      LEFT JOIN public.build_requests br
+        ON br.app_id = ca.app_id
+        AND br.created_at >= ca.created_at
+        AND br.created_at < ca.created_at + INTERVAL '24 hours'
+        AND br.status = 'succeeded'
+      GROUP BY ca.app_id, ca.created_at, ca.created_from_onboarding, ca.onboarding_completed_at
+    `)
+
+    return summarizeAppBuildOnboardingRows(result.rows)
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'getAppBuildOnboardingMetrics error', dateId: window.prevDayDateId, error })
+    return {
+      apps_created: 0,
+      apps_with_cli_onboarding_builds_24h: 0,
+      apps_with_manual_builds_24h: 0,
+    }
+  }
+  finally {
+    closeClient(c, pgClient)
+  }
 }
 
 async function countDemoSeededApps(c: Context, createdAfterIso: string, createdBeforeIso: string): Promise<number> {
@@ -1272,31 +1540,23 @@ async function getTrialExtensionStats(c: Context, window: CurrentDayWindow): Pro
 }
 
 async function ensureGlobalStatsSnapshotRow(c: Context, dateId: string): Promise<void> {
+  await ensureGlobalStatsSnapshotRows(c, [dateId])
+}
+
+async function ensureGlobalStatsSnapshotRows(c: Context, dateIds: readonly string[]): Promise<void> {
+  if (dateIds.length === 0)
+    return
+
   const db = getPgClient(c)
 
   try {
     await db.query(
-      'INSERT INTO public.global_stats (date_id, apps, updates, stars) VALUES ($1, 0, 0, 0) ON CONFLICT (date_id) DO NOTHING',
-      [dateId],
+      `INSERT INTO public.global_stats (date_id, apps, updates, stars)
+      SELECT DISTINCT date_id, 0, 0, 0
+      FROM unnest($1::text[]) AS input(date_id)
+      ON CONFLICT (date_id) DO NOTHING`,
+      [dateIds],
     )
-  }
-  finally {
-    await closeClient(c, db)
-  }
-}
-
-async function resetGlobalStatsCompletedShards(c: Context, dateId: string): Promise<void> {
-  const db = getPgClient(c)
-
-  try {
-    const result = await db.query(
-      `UPDATE public.global_stats
-      SET completed_shards = '[]'::jsonb
-      WHERE date_id = $1`,
-      [dateId],
-    )
-    if (result.rowCount !== 1)
-      throw new Error(`Expected one global_stats row for ${dateId}, reset ${result.rowCount ?? 0}`)
   }
   finally {
     await closeClient(c, db)
@@ -1354,12 +1614,97 @@ function normalizeCompletedGlobalStatsShards(value: unknown): Set<GlobalStatsCom
   return new Set(parsed.filter((shard): shard is GlobalStatsCompletionMarker => typeof shard === 'string' && GLOBAL_STATS_COMPLETION_MARKER_SET.has(shard)))
 }
 
+function getEmptyBuildShardStats(): BuildShardStats {
+  return {
+    totalSeconds: { ios: 0, android: 0 },
+    avgSeconds: { ios: 0, android: 0 },
+    counts: { ios: 0, android: 0 },
+  }
+}
+
+function normalizeGlobalStatsRepairNumber(value: number | string | null): number {
+  const numericValue = Number(value)
+  return Number.isFinite(numericValue) ? numericValue : 0
+}
+
+function normalizeGlobalStatsRepairRow(row: GlobalStatsRepairSqlRow): GlobalStatsRepairRow {
+  return {
+    dateId: row.date_id,
+    completedShards: normalizeCompletedGlobalStatsShards(row.completed_shards),
+    orgs: normalizeGlobalStatsRepairNumber(row.orgs),
+    bundleStorageGb: normalizeGlobalStatsRepairNumber(row.bundle_storage_gb),
+    buildTotalSecondsDayIos: normalizeGlobalStatsRepairNumber(row.build_total_seconds_day_ios),
+    buildTotalSecondsDayAndroid: normalizeGlobalStatsRepairNumber(row.build_total_seconds_day_android),
+    buildAvgSecondsDayIos: normalizeGlobalStatsRepairNumber(row.build_avg_seconds_day_ios),
+    buildAvgSecondsDayAndroid: normalizeGlobalStatsRepairNumber(row.build_avg_seconds_day_android),
+    buildCountDayIos: normalizeGlobalStatsRepairNumber(row.build_count_day_ios),
+    buildCountDayAndroid: normalizeGlobalStatsRepairNumber(row.build_count_day_android),
+  }
+}
+
+function areGlobalStatsNumbersDifferent(actual: number, expected: number, epsilon = 0): boolean {
+  return Math.abs(actual - expected) > epsilon
+}
+
+function isGlobalStatsBuildShardStale(row: GlobalStatsRepairRow, expectedStats: BuildShardStats): boolean {
+  return areGlobalStatsNumbersDifferent(row.buildTotalSecondsDayIos, expectedStats.totalSeconds.ios)
+    || areGlobalStatsNumbersDifferent(row.buildTotalSecondsDayAndroid, expectedStats.totalSeconds.android)
+    || areGlobalStatsNumbersDifferent(row.buildAvgSecondsDayIos, expectedStats.avgSeconds.ios, GLOBAL_STATS_BUILD_AVG_EPSILON)
+    || areGlobalStatsNumbersDifferent(row.buildAvgSecondsDayAndroid, expectedStats.avgSeconds.android, GLOBAL_STATS_BUILD_AVG_EPSILON)
+    || areGlobalStatsNumbersDifferent(row.buildCountDayIos, expectedStats.counts.ios)
+    || areGlobalStatsNumbersDifferent(row.buildCountDayAndroid, expectedStats.counts.android)
+}
+
+function getGlobalStatsStaleRepairShards(row: GlobalStatsRepairRow, expectedBuildStats: BuildShardStats = getEmptyBuildShardStats()): GlobalStatsShard[] {
+  const staleShards: GlobalStatsShard[] = []
+
+  if (row.completedShards.has('core') && row.orgs <= 0)
+    staleShards.push('core')
+  if (row.completedShards.has('usage_storage') && row.bundleStorageGb <= 0)
+    staleShards.push('usage_storage')
+  if (row.completedShards.has('builds') && isGlobalStatsBuildShardStale(row, expectedBuildStats))
+    staleShards.push('builds')
+
+  return staleShards
+}
+
+function uniqueGlobalStatsShards(shards: readonly GlobalStatsShard[]): GlobalStatsShard[] {
+  return GLOBAL_STATS_SHARDS.filter(shard => shards.includes(shard))
+}
+
+function filterCandidateGlobalStatsShards(shards: readonly GlobalStatsShard[], candidateShards?: readonly GlobalStatsShard[]): GlobalStatsShard[] {
+  if (!candidateShards)
+    return uniqueGlobalStatsShards(shards)
+
+  const candidateShardSet = new Set(candidateShards)
+  return uniqueGlobalStatsShards(shards.filter(shard => candidateShardSet.has(shard)))
+}
+
+function getGlobalStatsRepairShardQueueCandidates(
+  completedShards: ReadonlySet<GlobalStatsCompletionMarker>,
+  staleShards: readonly GlobalStatsShard[] = [],
+  candidateShards?: readonly GlobalStatsShard[],
+): GlobalStatsShard[] {
+  const missingRequiredShards = filterCandidateGlobalStatsShards(getMissingGlobalStatsRequiredShards(completedShards), candidateShards)
+  const staleRequiredShards = filterCandidateGlobalStatsShards(staleShards, candidateShards)
+  if (missingRequiredShards.length > 0 || staleRequiredShards.length > 0)
+    return uniqueGlobalStatsShards([...missingRequiredShards, ...staleRequiredShards])
+
+  const missingShards = candidateShards ? candidateShards.filter(shard => !completedShards.has(shard)) : getMissingGlobalStatsShards(completedShards)
+  return filterCandidateGlobalStatsShards(missingShards, candidateShards)
+}
+
 function getMissingGlobalStatsRequiredShards(completedShards: ReadonlySet<GlobalStatsCompletionMarker>): RequiredGlobalStatsShard[] {
   return REQUIRED_GLOBAL_STATS_SHARDS.filter(shard => !completedShards.has(shard))
 }
 
 function getMissingGlobalStatsShards(completedShards: ReadonlySet<GlobalStatsCompletionMarker>): GlobalStatsShard[] {
   return GLOBAL_STATS_SHARDS.filter(shard => !completedShards.has(shard))
+}
+
+function getGlobalStatsShardQueueCandidates(completedShards: ReadonlySet<GlobalStatsCompletionMarker>): GlobalStatsShard[] {
+  const missingRequiredShards = getMissingGlobalStatsRequiredShards(completedShards)
+  return missingRequiredShards.length > 0 ? missingRequiredShards : getMissingGlobalStatsShards(completedShards)
 }
 
 function hasCompletedGlobalStatsNotifications(completedShards: ReadonlySet<GlobalStatsCompletionMarker>): boolean {
@@ -1371,6 +1716,21 @@ function shouldSkipCompletedGlobalStatsShardRetry(
   shard: GlobalStatsShard,
 ): boolean {
   return shard !== 'notifications' && completedShards.has(shard)
+}
+
+async function shouldSkipGlobalStatsShardUpdate(
+  c: Context,
+  dateId: string,
+  completedShards: ReadonlySet<GlobalStatsCompletionMarker>,
+  shard: GlobalStatsShard,
+): Promise<boolean> {
+  if (!shouldSkipCompletedGlobalStatsShardRetry(completedShards, shard))
+    return false
+
+  if (await readCompletedGlobalStatsRepairShardStale(c, dateId, shard))
+    return false
+
+  return true
 }
 
 function getGlobalStatsNotificationStepAction(
@@ -1572,7 +1932,7 @@ async function queueLogsnagInsightsMessage(
   message: ReturnType<typeof buildLogsnagInsightsRetryMessage> | ReturnType<typeof buildLogsnagInsightsShardMessage>,
   delaySeconds: number,
 ): Promise<number> {
-  const result = await db.query<{ msg_id: number | string }>('SELECT pgmq.send($1, $2::jsonb, $3) AS msg_id', [
+  const result = await db.query<{ msg_id: number | string }>('SELECT pgmq.send($1::text, $2::jsonb, $3::integer) AS msg_id', [
     LOGSNAG_INSIGHTS_QUEUE_NAME,
     JSON.stringify(message),
     delaySeconds,
@@ -1596,14 +1956,19 @@ async function queueLogsnagInsightsShard(c: Context, shard: GlobalStatsShard, da
   }
 }
 
-async function dispatchLogsnagInsightsShards(c: Context, dateId: string): Promise<void> {
-  await ensureGlobalStatsSnapshotRow(c, dateId)
-  await resetGlobalStatsCompletedShards(c, dateId)
+async function queueLogsnagInsightsShards(
+  c: Context,
+  dateId: string,
+  shards: readonly GlobalStatsShard[],
+): Promise<Array<{ shard: GlobalStatsShard, msgId: number, delaySeconds: number }>> {
+  if (shards.length === 0)
+    return []
+
   const db = getPgClient(c)
   const queued: Array<{ shard: GlobalStatsShard, msgId: number, delaySeconds: number }> = []
 
   try {
-    for (const shard of GLOBAL_STATS_SHARDS) {
+    for (const shard of shards) {
       const delaySeconds = getLogsnagInsightsShardDelaySeconds(shard)
       const msgId = await queueLogsnagInsightsMessage(db, buildLogsnagInsightsShardMessage(shard, dateId), delaySeconds)
       queued.push({ shard, msgId, delaySeconds })
@@ -1613,7 +1978,260 @@ async function dispatchLogsnagInsightsShards(c: Context, dateId: string): Promis
     await closeClient(c, db)
   }
 
-  cloudlog({ requestId: c.get('requestId'), message: 'Queued logsnag insights global stats shards', dateId, queued })
+  return queued
+}
+
+async function queueMissingLogsnagInsightsShards(
+  c: Context,
+  dateId: string,
+  completedShards: ReadonlySet<GlobalStatsCompletionMarker>,
+  candidateShards?: readonly GlobalStatsShard[],
+  staleShards: readonly GlobalStatsShard[] = [],
+): Promise<Array<{ shard: GlobalStatsShard, msgId: number, delaySeconds: number }>> {
+  const shardsToQueue = getGlobalStatsRepairShardQueueCandidates(completedShards, staleShards, candidateShards)
+  return queueLogsnagInsightsShards(c, dateId, shardsToQueue)
+}
+
+function getLogsnagInsightsShardQueueKey(shard: GlobalStatsShard, dateId: string): string {
+  return `${dateId}:${getLogsnagInsightsShardFunctionName(shard)}`
+}
+
+async function readQueuedLogsnagInsightsShardKeys(c: Context, dateIds: readonly string[]): Promise<Set<string>> {
+  if (dateIds.length === 0)
+    return new Set()
+
+  const db = getPgClient(c)
+  const functionNames = GLOBAL_STATS_SHARDS.map(shard => getLogsnagInsightsShardFunctionName(shard))
+
+  try {
+    const result = await db.query<{ function_name: string | null, date_id: string | null }>(
+      `SELECT
+        message->>'function_name' AS function_name,
+        message->'payload'->>'date_id' AS date_id
+      FROM pgmq.q_admin_stats
+      WHERE message->>'function_name' = ANY($1::text[])
+        AND message->'payload'->>'date_id' = ANY($2::text[])`,
+      [functionNames, dateIds],
+    )
+
+    return new Set(result.rows.flatMap((row) => {
+      if (!row.function_name || !row.date_id)
+        return []
+      return [`${row.date_id}:${row.function_name}`]
+    }))
+  }
+  finally {
+    await closeClient(c, db)
+  }
+}
+
+async function readGlobalStatsRepairRows(c: Context, dateIds: readonly string[]): Promise<Map<string, GlobalStatsRepairRow>> {
+  if (dateIds.length === 0)
+    return new Map()
+
+  const db = getPgClient(c)
+
+  try {
+    const result = await db.query<GlobalStatsRepairSqlRow>(
+      `SELECT
+        date_id,
+        completed_shards,
+        orgs,
+        bundle_storage_gb,
+        build_total_seconds_day_ios,
+        build_total_seconds_day_android,
+        build_avg_seconds_day_ios,
+        build_avg_seconds_day_android,
+        build_count_day_ios,
+        build_count_day_android
+      FROM public.global_stats
+      WHERE date_id = ANY($1::text[])`,
+      [dateIds],
+    )
+
+    return new Map(result.rows.map((row) => {
+      const repairRow = normalizeGlobalStatsRepairRow(row)
+      return [repairRow.dateId, repairRow]
+    }))
+  }
+  finally {
+    await closeClient(c, db)
+  }
+}
+
+async function readDailyBuildStatsByDate(c: Context, dateIds: readonly string[]): Promise<Map<string, BuildShardStats>> {
+  const uniqueDateIds = Array.from(new Set(dateIds)).sort((a, b) => a.localeCompare(b))
+  if (uniqueDateIds.length === 0)
+    return new Map()
+
+  const start = new Date(`${uniqueDateIds[0]}T00:00:00.000Z`)
+  const end = new Date(`${uniqueDateIds[uniqueDateIds.length - 1]}T00:00:00.000Z`)
+  end.setUTCDate(end.getUTCDate() + 1)
+
+  const db = getPgClient(c, false)
+
+  try {
+    const result = await db.query<{ date_id: string, platform: string, total_seconds: number | string | null, avg_seconds: number | string | null, total_builds: number | string | null }>(
+      `SELECT
+        to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS date_id,
+        platform,
+        COALESCE(SUM(billable_seconds), 0)::bigint AS total_seconds,
+        COALESCE(ROUND(AVG(billable_seconds)::numeric, 1), 0)::float AS avg_seconds,
+        COUNT(*)::int AS total_builds
+      FROM public.build_logs
+      WHERE created_at >= $1
+        AND created_at < $2
+        AND platform IN ('ios', 'android')
+      GROUP BY date_id, platform`,
+      [start, end],
+    )
+
+    const statsByDate = new Map(uniqueDateIds.map(dateId => [dateId, getEmptyBuildShardStats()]))
+    for (const row of result.rows) {
+      if (row.platform !== 'ios' && row.platform !== 'android')
+        continue
+
+      const stats = statsByDate.get(row.date_id) ?? getEmptyBuildShardStats()
+      stats.totalSeconds[row.platform] = normalizeGlobalStatsRepairNumber(row.total_seconds)
+      stats.avgSeconds[row.platform] = normalizeGlobalStatsRepairNumber(row.avg_seconds)
+      stats.counts[row.platform] = normalizeGlobalStatsRepairNumber(row.total_builds)
+      statsByDate.set(row.date_id, stats)
+    }
+
+    return statsByDate
+  }
+  finally {
+    await closeClient(c, db)
+  }
+}
+
+async function readCompletedGlobalStatsRepairShardStale(c: Context, dateId: string, shard: GlobalStatsShard): Promise<boolean> {
+  if (shard !== 'core' && shard !== 'usage_storage' && shard !== 'builds')
+    return false
+
+  const repairRow = (await readGlobalStatsRepairRows(c, [dateId])).get(dateId)
+  if (!repairRow || !repairRow.completedShards.has(shard))
+    return false
+
+  const buildStats = shard === 'builds'
+    ? (await readDailyBuildStatsByDate(c, [dateId])).get(dateId) ?? getEmptyBuildShardStats()
+    : getEmptyBuildShardStats()
+
+  return getGlobalStatsStaleRepairShards(repairRow, buildStats).includes(shard)
+}
+
+async function repairRecentMissingGlobalStatsSnapshots(c: Context, anchorDateId: string): Promise<void> {
+  const dateIds = buildRecentGlobalStatsRepairDateIds(anchorDateId).filter(dateId => dateId !== anchorDateId)
+  if (dateIds.length === 0)
+    return
+
+  const [repairRows, queuedShardKeys] = await Promise.all([
+    readGlobalStatsRepairRows(c, dateIds),
+    readQueuedLogsnagInsightsShardKeys(c, dateIds),
+  ])
+  const missingDateIds = dateIds.filter(dateId => !repairRows.has(dateId))
+  await ensureGlobalStatsSnapshotRows(c, missingDateIds)
+
+  const buildStatsByDate = await readDailyBuildStatsByDate(c, Array.from(repairRows.values()).flatMap((row) => {
+    if (!row.completedShards.has('builds'))
+      return []
+    return [row.dateId]
+  }))
+
+  const queuedByDate: Array<{ dateId: string, staleShards: GlobalStatsShard[], queued: Array<{ shard: GlobalStatsShard, msgId: number, delaySeconds: number }> }> = []
+  for (const dateId of dateIds) {
+    const repairRow = repairRows.get(dateId)
+    const completedShards = repairRow?.completedShards ?? new Set<GlobalStatsCompletionMarker>()
+    const staleShards = repairRow ? getGlobalStatsStaleRepairShards(repairRow, buildStatsByDate.get(dateId) ?? getEmptyBuildShardStats()) : []
+    const shardsToQueue = getGlobalStatsRepairShardQueueCandidates(completedShards, staleShards)
+      .filter(shard => !queuedShardKeys.has(getLogsnagInsightsShardQueueKey(shard, dateId)))
+
+    const queued = await queueLogsnagInsightsShards(c, dateId, shardsToQueue)
+    if (queued.length > 0)
+      queuedByDate.push({ dateId, staleShards, queued })
+  }
+
+  if (missingDateIds.length > 0 || queuedByDate.length > 0) {
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'Repaired recent missing or stale global stats snapshots',
+      anchorDateId,
+      missingDateIds,
+      queuedByDate,
+    })
+  }
+}
+
+async function dispatchMissingLogsnagInsightsShardsFor(
+  c: Context,
+  dateId: string,
+  candidateShards: readonly GlobalStatsShard[] | undefined,
+  noMissingMessage: string,
+  queuedMessage: string,
+): Promise<void> {
+  await ensureGlobalStatsSnapshotRow(c, dateId)
+  const repairRow = (await readGlobalStatsRepairRows(c, [dateId])).get(dateId)
+  const completedShards = repairRow?.completedShards ?? new Set<GlobalStatsCompletionMarker>()
+  const buildStats = repairRow?.completedShards.has('builds')
+    ? (await readDailyBuildStatsByDate(c, [dateId])).get(dateId) ?? getEmptyBuildShardStats()
+    : getEmptyBuildShardStats()
+  const staleShards = repairRow ? getGlobalStatsStaleRepairShards(repairRow, buildStats) : []
+  const queued = await queueMissingLogsnagInsightsShards(c, dateId, completedShards, candidateShards, staleShards)
+  const completedShardNames = Array.from(completedShards).sort((a, b) => a.localeCompare(b))
+
+  if (queued.length === 0) {
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: noMissingMessage,
+      dateId,
+      completedShards: completedShardNames,
+      staleShards,
+    })
+    return
+  }
+
+  cloudlog({
+    requestId: c.get('requestId'),
+    message: queuedMessage,
+    dateId,
+    queued,
+    completedShards: completedShardNames,
+    staleShards,
+  })
+}
+
+async function dispatchMissingLogsnagInsightsShards(c: Context, dateId: string): Promise<void> {
+  await dispatchMissingLogsnagInsightsShardsFor(
+    c,
+    dateId,
+    undefined,
+    'No missing logsnag insights global stats shards to queue',
+    'Queued missing logsnag insights global stats shards',
+  )
+}
+
+async function dispatchMissingLogsnagInsightsUsageShards(c: Context, dateId: string): Promise<void> {
+  await dispatchMissingLogsnagInsightsShardsFor(
+    c,
+    dateId,
+    USAGE_GLOBAL_STATS_SHARDS,
+    'No missing logsnag insights usage shards to queue',
+    'Queued missing logsnag insights usage shards',
+  )
+}
+
+async function dispatchLogsnagInsightsShards(c: Context, dateId: string): Promise<void> {
+  await ensureGlobalStatsSnapshotRow(c, dateId)
+  const completedShards = await readCompletedGlobalStatsShards(c, dateId)
+  const queued = await queueMissingLogsnagInsightsShards(c, dateId, completedShards)
+
+  cloudlog({
+    requestId: c.get('requestId'),
+    message: 'Queued logsnag insights global stats shards',
+    dateId,
+    queued,
+    completedShards: Array.from(completedShards).sort((a, b) => a.localeCompare(b)),
+  })
 }
 async function getBillingSnapshotCounts(c: Context, snapshotExclusiveEnd: Date): Promise<BillingSnapshotCounts> {
   const pgClient = getPgClient(c, false)
@@ -1706,6 +2324,57 @@ async function getBillingSnapshotCounts(c: Context, snapshotExclusiveEnd: Date):
     await closeClient(c, pgClient)
   }
 }
+
+async function getSubscriptionAccessSnapshotCounts(c: Context, snapshotExclusiveEnd: Date): Promise<SubscriptionAccessSnapshotCounts> {
+  const pgClient = getPgClient(c, false)
+  const drizzleClient = getDrizzleClient(pgClient)
+  const snapshotExclusiveEndIso = snapshotExclusiveEnd.toISOString()
+
+  try {
+    const result = await drizzleClient.execute<SubscriptionAccessSnapshotSqlRow>(sql`
+      WITH active_canceled AS (
+        SELECT DISTINCT ON (si.customer_id)
+          si.customer_id
+        FROM public.stripe_info si
+        WHERE si.is_good_plan = true
+          AND si.created_at < ${snapshotExclusiveEndIso}::timestamptz
+          AND si.paid_at IS NOT NULL
+          AND si.paid_at < ${snapshotExclusiveEndIso}::timestamptz
+          AND si.canceled_at IS NOT NULL
+          AND si.canceled_at < ${snapshotExclusiveEndIso}::timestamptz
+          AND si.subscription_anchor_end > ${snapshotExclusiveEndIso}::timestamptz
+        ORDER BY si.customer_id, si.created_at DESC
+      ),
+      active_past_due AS (
+        SELECT DISTINCT ON (si.customer_id)
+          si.customer_id
+        FROM public.stripe_info si
+        WHERE si.is_good_plan = true
+          AND si.created_at < ${snapshotExclusiveEndIso}::timestamptz
+          AND si.paid_at IS NOT NULL
+          AND si.paid_at < ${snapshotExclusiveEndIso}::timestamptz
+          AND si.past_due_at IS NOT NULL
+          AND si.past_due_at < ${snapshotExclusiveEndIso}::timestamptz
+          AND si.subscription_anchor_end > ${snapshotExclusiveEndIso}::timestamptz
+          AND (si.canceled_at IS NULL OR si.canceled_at >= ${snapshotExclusiveEndIso}::timestamptz)
+          AND si.status = 'succeeded'::public.stripe_status
+        ORDER BY si.customer_id, si.created_at DESC
+      )
+      SELECT
+        (SELECT COUNT(*)::int FROM active_canceled) AS active_canceled_orgs,
+        (SELECT COUNT(*)::int FROM active_past_due) AS active_past_due_orgs
+    `)
+
+    return normalizeSubscriptionAccessSnapshotCounts(result.rows[0])
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'subscription access snapshot counts error', error })
+    return getEmptySubscriptionAccessSnapshotCounts()
+  }
+  finally {
+    await closeClient(c, pgClient)
+  }
+}
 async function getCoreSnapshotCounts(c: Context, snapshotExclusiveEnd: Date): Promise<CoreSnapshotCounts> {
   const pgClient = getPgClient(c, false)
   const drizzleClient = getDrizzleClient(pgClient)
@@ -1719,6 +2388,41 @@ async function getCoreSnapshotCounts(c: Context, snapshotExclusiveEnd: Date): Pr
           si.customer_id
         FROM public.stripe_info si
         WHERE si.is_good_plan = false
+          AND si.created_at < ${snapshotExclusiveEndIso}::timestamptz
+          AND (si.plan_calculated_at IS NULL OR si.plan_calculated_at < ${snapshotExclusiveEndIso}::timestamptz)
+          AND (si.paid_at < ${snapshotExclusiveEndIso}::timestamptz OR si.paid_at IS NULL)
+          AND si.status IN (
+            'succeeded'::public.stripe_status,
+            'canceled'::public.stripe_status,
+            'deleted'::public.stripe_status
+          )
+          AND (si.canceled_at IS NULL OR si.canceled_at >= ${snapshotExclusiveEndIso}::timestamptz)
+          AND si.subscription_anchor_end > ${snapshotExclusiveEndIso}::timestamptz
+        ORDER BY si.customer_id, si.created_at DESC
+      ),
+      active_above_plan AS (
+        SELECT DISTINCT ON (si.customer_id)
+          si.customer_id,
+          EXISTS (
+            SELECT 1
+            FROM public.usage_credit_grants g
+            WHERE g.org_id = o.id
+              AND g.granted_at < ${snapshotExclusiveEndIso}::timestamptz
+              AND g.expires_at >= ${snapshotExclusiveEndIso}::timestamptz
+              AND g.credits_total > COALESCE((
+                SELECT SUM(c.credits_used)
+                FROM public.usage_credit_consumptions c
+                WHERE c.grant_id = g.id
+                  AND c.applied_at < ${snapshotExclusiveEndIso}::timestamptz
+              ), 0)
+          ) AS has_usage_credits
+        FROM public.stripe_info si
+        INNER JOIN public.orgs o
+          ON o.customer_id = si.customer_id
+        INNER JOIN public.plans p
+          ON p.stripe_id = si.product_id
+        WHERE si.is_above_plan = true
+          AND p.name <> 'Enterprise'
           AND si.created_at < ${snapshotExclusiveEndIso}::timestamptz
           AND (si.plan_calculated_at IS NULL OR si.plan_calculated_at < ${snapshotExclusiveEndIso}::timestamptz)
           AND (si.paid_at < ${snapshotExclusiveEndIso}::timestamptz OR si.paid_at IS NULL)
@@ -1776,7 +2480,17 @@ async function getCoreSnapshotCounts(c: Context, snapshotExclusiveEnd: Date): Pr
         (
           SELECT COUNT(*)::int
           FROM active_need_upgrade
-        ) AS need_upgrade
+        ) AS need_upgrade,
+        (
+          SELECT COUNT(*)::int
+          FROM active_above_plan
+          WHERE has_usage_credits
+        ) AS above_plan_with_credits,
+        (
+          SELECT COUNT(*)::int
+          FROM active_above_plan
+          WHERE NOT has_usage_credits
+        ) AS above_plan_without_credits
     `)
 
     return normalizeCoreSnapshotCounts(result.rows[0])
@@ -1787,6 +2501,29 @@ async function getCoreSnapshotCounts(c: Context, snapshotExclusiveEnd: Date): Pr
   }
   finally {
     await closeClient(c, pgClient)
+  }
+}
+
+async function countRegisteredUsersForSnapshot(c: Context, snapshotExclusiveEnd: Date): Promise<number> {
+  const db = getPgClient(c, false)
+  const snapshotExclusiveEndIso = snapshotExclusiveEnd.toISOString()
+
+  try {
+    const result = await db.query<{ count: number | string | null }>(`
+      SELECT COUNT(*)::int AS count
+      FROM public.users u
+      WHERE u.created_at < $1::timestamptz
+        AND u.created_via_invite = false
+    `, [snapshotExclusiveEndIso])
+
+    return Number(result.rows[0]?.count) || 0
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'count registered users for snapshot error', error })
+    return 0
+  }
+  finally {
+    await closeClient(c, db)
   }
 }
 
@@ -1861,6 +2598,7 @@ async function countActiveUsersForSnapshot(c: Context, appIds: string[], window:
 async function runCoreGlobalStatsShard(c: Context, window: DailyWindow): Promise<void> {
   const supabase = supabaseAdmin(c)
   const snapshotEndIso = window.prevDayEnd.toISOString()
+  const finalizedAppBuildOnboardingWindow = getCompletedAppBuildOnboardingWindow(window)
   const [
     apps,
     updates,
@@ -1871,15 +2609,12 @@ async function runCoreGlobalStatsShard(c: Context, window: DailyWindow): Promise
     billingSnapshot,
     coreSnapshot,
     actives,
+    finalizedAppBuildOnboardingMetrics,
   ] = await Promise.all([
     countAllApps(c, window.prevDayEnd),
     countAllUpdates(c, window.prevDayEnd),
     countAllUpdatesExternal(c, window.prevDayEnd),
-    supabase
-      .from('users')
-      .select('id', { count: 'exact', head: true })
-      .lt('created_at', snapshotEndIso)
-      .then(res => res.count ?? 0),
+    countRegisteredUsersForSnapshot(c, window.prevDayEnd),
     supabase
       .from('orgs')
       .select('id', { count: 'exact', head: true })
@@ -1892,17 +2627,33 @@ async function runCoreGlobalStatsShard(c: Context, window: DailyWindow): Promise
       apps: appIds.length,
       users: await countActiveUsersForSnapshot(c, appIds, window),
     })),
+    getAppBuildOnboardingMetrics(c, finalizedAppBuildOnboardingWindow),
   ])
 
   const { customers, payingOrgsForConversion, plans } = billingSnapshot
-  const { onboarded, needUpgrade: need_upgrade } = coreSnapshot
+  const {
+    onboarded,
+    needUpgrade: need_upgrade,
+    abovePlanWithCredits: above_plan_with_credits,
+    abovePlanWithoutCredits: above_plan_without_credits,
+  } = coreSnapshot
   const not_paying = users - customers.total - plans.Trial
   const org_conversion_rate = calculateConversionRate(payingOrgsForConversion, orgs)
-  const planConversionRates = getPlanConversionRates(plans, orgs)
+  // Plan upgrade/mix rates use paying orgs as denominator (not total users/orgs).
+  const planConversionRates = getPlanConversionRates(plans, customers.total)
+
+  // apps_created is event-sourced via the global_stats_creates queue so deleted
+  // apps still count for the UTC day. Do not overwrite it from surviving rows.
+  await updateGlobalStatsSnapshot(c, finalizedAppBuildOnboardingWindow.prevDayDateId, {
+    apps_with_cli_onboarding_builds_24h: finalizedAppBuildOnboardingMetrics.apps_with_cli_onboarding_builds_24h,
+    apps_with_manual_builds_24h: finalizedAppBuildOnboardingMetrics.apps_with_manual_builds_24h,
+  })
 
   await updateGlobalStatsSnapshot(c, window.prevDayDateId, {
     apps,
     apps_active: actives.apps,
+    above_plan_with_credits,
+    above_plan_without_credits,
     need_upgrade,
     not_paying,
     onboarded,
@@ -1928,7 +2679,7 @@ async function runCoreGlobalStatsShard(c: Context, window: DailyWindow): Promise
     users_active: actives.users,
   })
 
-  cloudlog({ requestId: c.get('requestId'), message: 'Updated global stats core shard', dateId: window.prevDayDateId, apps, updates, users, orgs })
+  cloudlog({ requestId: c.get('requestId'), message: 'Updated global stats core shard', dateId: window.prevDayDateId, finalizedAppBuildOnboardingDateId: finalizedAppBuildOnboardingWindow.prevDayDateId, apps, updates, users, orgs })
 }
 
 async function getRegistersToday(c: Context, createdAfterIso: string, createdBeforeIso: string): Promise<number> {
@@ -1973,50 +2724,131 @@ async function getBundleStorageGb(c: Context): Promise<number> {
   return Number.isFinite(gigabytes) ? Number(gigabytes.toFixed(2)) : 0
 }
 
-async function runUsageGlobalStatsShard(c: Context, window: DailyWindow): Promise<void> {
-  const metricWindow = getMetricWindowFromDailyWindow(window)
-  const dayStartIso = metricWindow.dayStart.toISOString()
-  const nextDayStartIso = metricWindow.nextDayStart.toISOString()
-  const currentUsageMetricsPromise = (async () => {
-    const [bundleStorageGb, successRate] = await Promise.all([
-      getBundleStorageGb(c),
-      (async () => {
-        const res = await getUpdateStats(c)
-        cloudlog({ requestId: c.get('requestId'), message: 'success_rate', successRate: res.total.success_rate })
-        return res.total.success_rate
-      })(),
-    ])
-    return { bundleStorageGb, successRate }
-  })()
-  const [
-    updatesLastMonth,
-    devicesLastMonth,
-    devicesByPlatform,
-    registersToday,
-    currentUsageMetrics,
-    demoAppsCreated,
-  ] = await Promise.all([
-    readLastMonthUpdatesCF(c, window.prevDayEnd),
-    readLastMonthDevicesCF(c, window.prevDayEnd),
-    readLastMonthDevicesByPlatformCF(c, window.prevDayEnd),
-    getRegistersToday(c, dayStartIso, nextDayStartIso),
-    currentUsageMetricsPromise,
-    countDemoSeededApps(c, dayStartIso, nextDayStartIso),
-  ])
+async function updateUsageGlobalStatsSnapshot(
+  c: Context,
+  window: DailyWindow,
+  message: string,
+  patch: GlobalStatsSnapshotPatch,
+  logContext: Record<string, unknown>,
+): Promise<void> {
+  await updateGlobalStatsSnapshot(c, window.prevDayDateId, patch)
+  cloudlog({
+    requestId: c.get('requestId'),
+    message,
+    dateId: window.prevDayDateId,
+    ...logContext,
+  })
+}
 
-  const snapshotPatch: GlobalStatsSnapshotPatch = {
-    demo_apps_created: demoAppsCreated,
-    devices_last_month: devicesLastMonth,
+async function runUsageUpdatesGlobalStatsShard(c: Context, window: DailyWindow): Promise<void> {
+  const updatesLastMonth = await readLastMonthUpdatesCF(c, window.prevDayEnd)
+  await updateUsageGlobalStatsSnapshot(c, window, 'Updated global stats usage updates shard', { updates_last_month: updatesLastMonth }, { updatesLastMonth })
+}
+
+async function runUsageDevicesGlobalStatsShard(c: Context, window: DailyWindow): Promise<void> {
+  const devicesLastMonth = await readLastMonthDevicesCF(c, window.prevDayEnd)
+  await updateUsageGlobalStatsSnapshot(c, window, 'Updated global stats usage devices shard', { devices_last_month: devicesLastMonth }, { devicesLastMonth })
+}
+
+async function runUsageDevicePlatformsGlobalStatsShard(c: Context, window: DailyWindow): Promise<void> {
+  const devicesByPlatform = await readLastMonthDevicesByPlatformCF(c, window.prevDayEnd)
+  await updateUsageGlobalStatsSnapshot(c, window, 'Updated global stats usage device platforms shard', {
     devices_last_month_android: devicesByPlatform.android,
     devices_last_month_ios: devicesByPlatform.ios,
-    registers_today: registersToday,
-    updates_last_month: updatesLastMonth,
-    bundle_storage_gb: currentUsageMetrics.bundleStorageGb,
-    success_rate: currentUsageMetrics.successRate,
-  }
+  }, { devicesByPlatform })
+}
 
-  await updateGlobalStatsSnapshot(c, window.prevDayDateId, snapshotPatch)
-  cloudlog({ requestId: c.get('requestId'), message: 'Updated global stats usage shard', dateId: window.prevDayDateId, updatesLastMonth, devicesLastMonth, registersToday })
+async function runUsageRegistrationsGlobalStatsShard(c: Context, window: DailyWindow): Promise<void> {
+  const metricWindow = getMetricWindowFromDailyWindow(window)
+  const registersToday = await getRegistersToday(c, metricWindow.dayStart.toISOString(), metricWindow.nextDayStart.toISOString())
+  await updateUsageGlobalStatsSnapshot(c, window, 'Updated global stats usage registrations shard', { registers_today: registersToday }, { registersToday })
+}
+
+async function runUsageStorageGlobalStatsShard(c: Context, window: DailyWindow): Promise<void> {
+  const bundleStorageGb = await getBundleStorageGb(c)
+  await updateUsageGlobalStatsSnapshot(c, window, 'Updated global stats usage storage shard', { bundle_storage_gb: bundleStorageGb }, { bundleStorageGb })
+}
+
+async function runUsageSuccessRateGlobalStatsShard(c: Context, window: DailyWindow): Promise<void> {
+  const res = await getUpdateStats(c)
+  const successRate = res.total.success_rate
+  await updateUsageGlobalStatsSnapshot(c, window, 'Updated global stats usage success rate shard', { success_rate: successRate }, { successRate })
+}
+
+async function runUsageDemoAppsGlobalStatsShard(c: Context, window: DailyWindow): Promise<void> {
+  const metricWindow = getMetricWindowFromDailyWindow(window)
+  const demoAppsCreated = await countDemoSeededApps(c, metricWindow.dayStart.toISOString(), metricWindow.nextDayStart.toISOString())
+  await updateUsageGlobalStatsSnapshot(c, window, 'Updated global stats usage demo apps shard', { demo_apps_created: demoAppsCreated }, { demoAppsCreated })
+}
+
+function getTrailing12mStart(nextDayStart: Date): Date {
+  const year = nextDayStart.getUTCFullYear() - 1
+  const month = nextDayStart.getUTCMonth()
+  const day = nextDayStart.getUTCDate()
+  const clampedDay = Math.min(day, new Date(Date.UTC(year, month + 1, 0)).getUTCDate())
+  return new Date(Date.UTC(
+    year,
+    month,
+    clampedDay,
+    nextDayStart.getUTCHours(),
+    nextDayStart.getUTCMinutes(),
+    nextDayStart.getUTCSeconds(),
+    nextDayStart.getUTCMilliseconds(),
+  ))
+}
+
+async function getUpgradeRate12m(c: Context, nextDayStart: Date): Promise<number> {
+  // Paying -> bigger plan only, via stripe_info.upgraded_at (set when already-paying
+  // MRR increases). Self-contained so multi-day revenue repairs cannot undercount
+  // by reading prior global_stats.upgraded_orgs before those shards finish.
+  const pgClient = getPgClient(c, false)
+  const drizzleClient = getDrizzleClient(pgClient)
+  const snapshotEndIso = nextDayStart.toISOString()
+  const trailing12mStartIso = getTrailing12mStart(nextDayStart).toISOString()
+
+  try {
+    // Paying denominator matches getBillingSnapshotCounts (plans join + lifecycle filters),
+    // not all orgs/users.
+    const result = await drizzleClient.execute(sql`
+      SELECT
+        (
+          SELECT COUNT(DISTINCT si.customer_id)::int
+          FROM public.stripe_info si
+          INNER JOIN public.plans p ON p.stripe_id = si.product_id
+          WHERE si.is_good_plan = true
+            AND si.created_at < ${snapshotEndIso}::timestamptz
+            AND (
+              si.paid_at < ${snapshotEndIso}::timestamptz
+              OR (
+                si.paid_at IS NULL
+                AND si.trial_at <= ${snapshotEndIso}::timestamptz
+              )
+            )
+            AND si.status IN (
+              'succeeded'::public.stripe_status,
+              'canceled'::public.stripe_status,
+              'deleted'::public.stripe_status
+            )
+            AND (si.canceled_at IS NULL OR si.canceled_at >= ${snapshotEndIso}::timestamptz)
+            AND si.subscription_anchor_end > ${snapshotEndIso}::timestamptz
+        ) AS paying,
+        (
+          SELECT COUNT(DISTINCT si.customer_id)::int
+          FROM public.stripe_info si
+          WHERE si.upgraded_at >= ${trailing12mStartIso}::timestamptz
+            AND si.upgraded_at < ${snapshotEndIso}::timestamptz
+        ) AS upgraded_orgs_12m
+    `)
+    const row = result.rows[0] as { paying?: number | string | null, upgraded_orgs_12m?: number | string | null } | undefined
+    return calculateConversionRate(Number(row?.upgraded_orgs_12m) || 0, Number(row?.paying) || 0)
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'getUpgradeRate12m error', error })
+    throw error
+  }
+  finally {
+    closeClient(c, pgClient)
+  }
 }
 
 async function runRevenueGlobalStatsShard(c: Context, window: DailyWindow): Promise<void> {
@@ -2032,8 +2864,10 @@ async function runRevenueGlobalStatsShard(c: Context, window: DailyWindow): Prom
     new_paying_orgs,
     canceled_orgs,
     upgraded_orgs,
+    upgrade_rate_12m,
     trialExtensionStats,
     pastDueOrgStats,
+    subscriptionAccessCounts,
     credits_bought,
     credits_consumed,
   ] = await Promise.all([
@@ -2090,6 +2924,7 @@ async function runRevenueGlobalStatsShard(c: Context, window: DailyWindow): Prom
         }
         return new Set((res.data || []).map(row => row.customer_id)).size
       }),
+    getUpgradeRate12m(c, nextDayStart),
     getTrialExtensionStats(c, metricWindow),
     refreshPastDueStats
       ? (async () => {
@@ -2107,6 +2942,9 @@ async function runRevenueGlobalStatsShard(c: Context, window: DailyWindow): Prom
           return calculatePastDueOrgStats((res.data || []) as PastDueOrgRow[], nextDayStart)
         })()
       : Promise.resolve({ past_due_orgs: 0, past_due_orgs_average_days: 0 }),
+    refreshPastDueStats
+      ? getSubscriptionAccessSnapshotCounts(c, nextDayStart)
+      : Promise.resolve(getEmptySubscriptionAccessSnapshotCounts()),
     supabase
       .from('usage_credit_grants')
       .select('credits_total')
@@ -2154,6 +2992,7 @@ async function runRevenueGlobalStatsShard(c: Context, window: DailyWindow): Prom
     trial_extended_orgs: trialExtensionStats.trial_extended_orgs,
     trial_extended_subscribed_orgs: trialExtensionStats.trial_extended_subscribed_orgs,
     total_revenue: revenue.total_revenue,
+    upgrade_rate_12m,
     upgraded_orgs,
   }
 
@@ -2161,6 +3000,8 @@ async function runRevenueGlobalStatsShard(c: Context, window: DailyWindow): Prom
   if (refreshPastDueStats) {
     snapshotPatch.past_due_orgs = pastDueOrgStats.past_due_orgs
     snapshotPatch.past_due_orgs_average_days = pastDueOrgStats.past_due_orgs_average_days
+    snapshotPatch.active_canceled_orgs = subscriptionAccessCounts.active_canceled_orgs
+    snapshotPatch.active_past_due_orgs = subscriptionAccessCounts.active_past_due_orgs
   }
 
   await updateGlobalStatsSnapshot(c, window.prevDayDateId, snapshotPatch)
@@ -2286,17 +3127,17 @@ async function readGlobalStatsSnapshot(c: Context, dateId: string): Promise<Glob
   return data as GlobalStatsSnapshotRow
 }
 
-async function readGlobalStatsPastDueSnapshot(c: Context, dateId: string): Promise<Pick<GlobalStatsSnapshotRow, 'past_due_orgs' | 'past_due_orgs_average_days'> | null> {
+async function readGlobalStatsPastDueSnapshot(c: Context, dateId: string): Promise<MutableSubscriptionHealthSnapshot | null> {
   const { data, error } = await supabaseAdmin(c)
     .from('global_stats')
-    .select('past_due_orgs, past_due_orgs_average_days')
+    .select('past_due_orgs, past_due_orgs_average_days, active_canceled_orgs, active_past_due_orgs')
     .eq('date_id', dateId)
     .maybeSingle()
 
   if (error)
     throw error
 
-  return data as Pick<GlobalStatsSnapshotRow, 'past_due_orgs' | 'past_due_orgs_average_days'> | null
+  return data as MutableSubscriptionHealthSnapshot | null
 }
 
 function getNumber(value: number | null | undefined): number {
@@ -2477,17 +3318,35 @@ export const logsnagInsightsTestUtils = {
   readLogsnagInsightsPayload,
   REVENUE_ACTIVE_STRIPE_STATUSES,
   LOGSNAG_INSIGHTS_BACKGROUND_MAX_RETRIES,
+  USAGE_GLOBAL_STATS_SHARDS,
   calculatePastDueOrgStats,
+  calculateSubscriptionAccessSnapshotCounts,
+  isActiveCanceledAtSnapshot,
+  isActivePastDueAtSnapshot,
+  normalizeSubscriptionAccessSnapshotCounts,
   shouldRefreshMutablePastDueStats,
   calculateChurnRevenue,
+  calculateConversionRate,
   calculateNrr,
+  getPlanConversionRates,
+  getPaidPlanTotal,
+  getUpgradeRate12m,
+  getTrailing12mStart,
   countUniqueCustomers,
   getCompletedDayWindowForDateId,
   getMetricWindowFromDailyWindow,
+  getCompletedAppBuildOnboardingWindow,
   getMissingGlobalStatsRequiredShards,
   getMissingGlobalStatsShards,
+  getGlobalStatsShardQueueCandidates,
+  getGlobalStatsRepairShardQueueCandidates,
+  getGlobalStatsStaleRepairShards,
+  isGlobalStatsBuildShardStale,
+  getEmptyBuildShardStats,
+  buildRecentGlobalStatsRepairDateIds,
   hasCompletedGlobalStatsNotifications,
   shouldSkipCompletedGlobalStatsShardRetry,
+  summarizeAppBuildOnboardingRows,
   getGlobalStatsNotificationStepAction,
   normalizeCompletedGlobalStatsShards,
   getLogsnagInsightsShardFunctionName,
@@ -2502,6 +3361,7 @@ export const logsnagInsightsTestUtils = {
   isUnpaidAtBillingSnapshot,
   isPaidPlanAtBillingSnapshot,
   normalizeCoreSnapshotCounts,
+  getCoreSnapshotCounts,
   reserveLogsnagInsightsRetry,
   reserveLogsnagInsightsShardRetry,
   scheduleLogsnagInsightsUpdate,
@@ -2512,7 +3372,7 @@ export const app = new Hono<MiddlewareKeyVariables>()
 
 async function runLogsnagInsightsShard(c: Context, shard: GlobalStatsShard, dateId: string): Promise<void> {
   const completedShards = await readCompletedGlobalStatsShards(c, dateId)
-  if (shouldSkipCompletedGlobalStatsShardRetry(completedShards, shard)) {
+  if (await shouldSkipGlobalStatsShardUpdate(c, dateId, completedShards, shard)) {
     cloudlog({
       requestId: c.get('requestId'),
       message: 'Skipping completed logsnag insights shard retry',
@@ -2529,8 +3389,32 @@ async function runLogsnagInsightsShard(c: Context, shard: GlobalStatsShard, date
       await runCoreGlobalStatsShard(c, window)
       await markGlobalStatsShardComplete(c, dateId, shard)
       return
-    case 'usage':
-      await runUsageGlobalStatsShard(c, window)
+    case 'usage_updates':
+      await runUsageUpdatesGlobalStatsShard(c, window)
+      await markGlobalStatsShardComplete(c, dateId, shard)
+      return
+    case 'usage_devices':
+      await runUsageDevicesGlobalStatsShard(c, window)
+      await markGlobalStatsShardComplete(c, dateId, shard)
+      return
+    case 'usage_device_platforms':
+      await runUsageDevicePlatformsGlobalStatsShard(c, window)
+      await markGlobalStatsShardComplete(c, dateId, shard)
+      return
+    case 'usage_registrations':
+      await runUsageRegistrationsGlobalStatsShard(c, window)
+      await markGlobalStatsShardComplete(c, dateId, shard)
+      return
+    case 'usage_storage':
+      await runUsageStorageGlobalStatsShard(c, window)
+      await markGlobalStatsShardComplete(c, dateId, shard)
+      return
+    case 'usage_success_rate':
+      await runUsageSuccessRateGlobalStatsShard(c, window)
+      await markGlobalStatsShardComplete(c, dateId, shard)
+      return
+    case 'usage_demo_apps':
+      await runUsageDemoAppsGlobalStatsShard(c, window)
       await markGlobalStatsShardComplete(c, dateId, shard)
       return
     case 'revenue':
@@ -2601,8 +3485,14 @@ function scheduleLogsnagInsightsShardUpdate(
 }
 
 async function runLogsnagInsightsUpdate(c: Context, dateId = getDailyWindow().prevDayDateId, retryCount = 0): Promise<void> {
+  await repairRecentMissingGlobalStatsSnapshots(c, dateId)
   if (await shouldSkipCompletedLogsnagInsightsRetryDispatch(c, dateId, retryCount))
     return
+
+  if (retryCount > 0) {
+    await dispatchMissingLogsnagInsightsShards(c, dateId)
+    return
+  }
 
   await dispatchLogsnagInsightsShards(c, dateId)
 }
@@ -2653,9 +3543,24 @@ function createLogsnagInsightsShardApp(shard: GlobalStatsShard): Hono<Middleware
   return shardApp
 }
 
+export const logsnagInsightsLegacyUsageApp = new Hono<MiddlewareKeyVariables>()
+
+logsnagInsightsLegacyUsageApp.post('/', middlewareAPISecret, async (c) => {
+  const payload = await readLogsnagInsightsPayload(c)
+  const snapshotDateId = resolveLogsnagInsightsSnapshotDateId(payload)
+  await dispatchMissingLogsnagInsightsUsageShards(c, snapshotDateId)
+  return c.json(BRES, 202)
+})
+
 export const logsnagInsightsShardApps: Record<GlobalStatsShard, Hono<MiddlewareKeyVariables>> = {
   core: createLogsnagInsightsShardApp('core'),
-  usage: createLogsnagInsightsShardApp('usage'),
+  usage_updates: createLogsnagInsightsShardApp('usage_updates'),
+  usage_devices: createLogsnagInsightsShardApp('usage_devices'),
+  usage_device_platforms: createLogsnagInsightsShardApp('usage_device_platforms'),
+  usage_registrations: createLogsnagInsightsShardApp('usage_registrations'),
+  usage_storage: createLogsnagInsightsShardApp('usage_storage'),
+  usage_success_rate: createLogsnagInsightsShardApp('usage_success_rate'),
+  usage_demo_apps: createLogsnagInsightsShardApp('usage_demo_apps'),
   revenue: createLogsnagInsightsShardApp('revenue'),
   plugins: createLogsnagInsightsShardApp('plugins'),
   builds: createLogsnagInsightsShardApp('builds'),

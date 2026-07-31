@@ -40,8 +40,29 @@ function getGitRepoRoot(cwd: string): string {
 }
 
 /**
+ * Resolve a deliberate CI port band when jobs share a runner.
+ *
+ * The default remains path-derived for local worktrees; CI supplies a reserved,
+ * ten-port-aligned band so its jobs never depend on the runner's default ports.
+ */
+function getConfiguredPortOffset(): number | undefined {
+  const raw = process.env.SUPABASE_WORKTREE_PORT_OFFSET
+  if (!raw)
+    return undefined
+
+  if (!/^\d+$/.test(raw))
+    throw new Error('SUPABASE_WORKTREE_PORT_OFFSET must be a non-negative integer.')
+
+  const offset = Number(raw)
+  if (!Number.isSafeInteger(offset) || offset % 10 !== 0 || offset > 11000)
+    throw new Error('SUPABASE_WORKTREE_PORT_OFFSET must be a multiple of 10 no greater than 11000.')
+
+  return offset
+}
+
+/**
  * Returns a deterministic per-worktree Supabase configuration (unique project_id and ports)
- * derived from the git worktree path.
+ * derived from the git worktree path and, when supplied, a CI job instance.
  *
  * This allows running multiple `supabase start` instances in parallel across worktrees
  * without Docker container/volume name collisions or port conflicts.
@@ -49,10 +70,15 @@ function getGitRepoRoot(cwd: string): string {
 export function getSupabaseWorktreeConfig(cwd: string = process.cwd()): SupabaseWorktreeConfig {
   const repoRootRaw = getGitRepoRoot(cwd)
   const repoRoot = realpathSync(resolve(repoRootRaw))
+  const configuredOffset = getConfiguredPortOffset()
+  const instance = process.env.SUPABASE_WORKTREE_INSTANCE?.trim()
+  const identity = [repoRoot, instance, configuredOffset === undefined ? undefined : `ports:${configuredOffset}`]
+    .filter((value): value is string => Boolean(value))
+    .join('\0')
 
-  // Hashing the full path gives stable IDs per worktree directory.
-  const worktreeHash = createHash('sha256').update(repoRoot).digest('hex').slice(0, 8)
-  const offset = (Number.parseInt(worktreeHash.slice(0, 6), 16) % 1000) * 10
+  // Hashing the worktree plus job identity gives isolated Docker resources and generated config.
+  const worktreeHash = createHash('sha256').update(identity).digest('hex').slice(0, 8)
+  const offset = configuredOffset ?? (Number.parseInt(worktreeHash.slice(0, 6), 16) % 1000) * 10
 
   const base = {
     api: 54321,

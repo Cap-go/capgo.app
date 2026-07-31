@@ -1,0 +1,83 @@
+name: Build and publish notifications plugin
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  push:
+    tags:
+      - "notifications-[0-9]*"
+
+permissions: {}
+
+jobs:
+  publish_notifications:
+    runs-on: ubuntu-latest
+    name: Build and publish notifications plugin to npm
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.x
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          filter: blob:none
+      - name: Setup bun
+        run: bash scripts/setup-bun.sh
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Typecheck notifications plugin
+        run: bun run --cwd packages/capacitor-notifications typecheck
+      - name: Build notifications plugin
+        run: bun run --cwd packages/capacitor-notifications build
+      - name: Resolve previous successful notifications release
+        id: changelog_base
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          previous_tag=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 --json tagName,isDraft | jq -r --arg current "$GITHUB_REF_NAME" --arg prefix "notifications-" '[.[] | select(.isDraft == false and .tagName != $current and (.tagName | startswith($prefix)))] | first | .tagName // empty')
+          if [ -z "$previous_tag" ]; then
+            echo "::error::No previous successful notifications release found"
+            exit 1
+          fi
+          echo "from_tag=$previous_tag" >> "$GITHUB_OUTPUT"
+      - name: Generate AI changelog
+        id: changelog
+        continue-on-error: true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          FROM_TAG: ${{ steps.changelog_base.outputs.from_tag }}
+        run: bun run changelog:ai
+      - name: Publish notifications plugin to npm
+        if: ${{ !contains(github.ref, '-alpha.') }}
+        env:
+          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: bun publish --cwd packages/capacitor-notifications --access public
+      - name: Publish notifications plugin to npm with next tag
+        if: ${{ contains(github.ref, '-alpha.') }}
+        env:
+          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: bun publish --cwd packages/capacitor-notifications --tag next --access public
+      - name: Create GitHub release
+        id: create_release
+        uses: softprops/action-gh-release@v2
+        with:
+          body: |
+            ## Changelog
+
+            ${{ steps.changelog.outputs.result || '_Changelog was not generated automatically for this release._' }}
+
+            ---
+
+            Full changelog: https://github.com/${{ github.repository }}/compare/${{ steps.changelog_base.outputs.from_tag }}...${{ github.ref_name }}
+          make_latest: false
+          token: "${{ secrets.PERSONAL_ACCESS_TOKEN }}"
+          prerelease: ${{ contains(github.ref, '-alpha.') }}

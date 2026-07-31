@@ -2,6 +2,9 @@
   "name": "capgo_translation_console",
   "logpush": true,
   "compatibility_date": "2026-04-21",
+  "dependencies_instrumentation": {
+    "enabled": true
+  },
   "main": "./index.ts",
   "compatibility_flags": [
     "nodejs_compat",

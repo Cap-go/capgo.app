@@ -14,6 +14,7 @@ import process from 'node:process'
 
 console.log('🧪 Testing capgo_builder_credentials_manage...\n')
 
+const { safeParseSchema } = await import('../src/schemas/schema_validation.ts')
 const { runCredentialsManage, registerCredentialsManageTool, credentialsManageSchema, KNOWN_CREDENTIAL_KEYS, screenValueFilePath, screenExportPath } = await import('../src/build/onboarding/mcp/credentials-manage.ts')
 const { homedir } = await import('node:os')
 const { join } = await import('node:path')
@@ -235,16 +236,16 @@ await test('remove a field that is not set → nothing to remove, no mutation', 
 // ── registration ──────────────────────────────────────────────────────────────
 await test('registerCredentialsManageTool registers the tool with the right name + schema', async () => {
   const tools = {}
-  const server = { tool: (name, desc, schema, handler) => { tools[name] = { desc, schema, handler } } }
+  const server = { registerTool: (name, config, handler) => { tools[name] = { desc: config.description, schema: config.inputSchema, handler } } }
   registerCredentialsManageTool(server, async () => 'com.acme.app')
   ok(tools.capgo_builder_credentials_manage, 'registers capgo_builder_credentials_manage')
   ok(tools.capgo_builder_credentials_manage.schema === credentialsManageSchema)
-  ok(Object.keys(credentialsManageSchema).includes('valueFile'), 'schema has valueFile')
+  ok(safeParseSchema(credentialsManageSchema, { action: 'set', platform: 'android', key: 'ANDROID_KEYSTORE_FILE', valueFile: '/tmp/test.jks' }).success, 'schema accepts valueFile')
 })
 
 await test('tool description steers the model to onboarding when no creds exist', async () => {
   const tools = {}
-  const server = { tool: (name, desc, _s, handler) => { tools[name] = { desc, handler } } }
+  const server = { registerTool: (name, config, handler) => { tools[name] = { desc: config.description, handler } } }
   registerCredentialsManageTool(server, async () => 'com.acme.app')
   const { desc } = tools.capgo_builder_credentials_manage
   has(desc, 'start_capgo_builder_onboarding')
@@ -254,7 +255,7 @@ await test('tool description steers the model to onboarding when no creds exist'
 
 await test('registered handler returns an MCP text block from runCredentialsManage', async () => {
   const tools = {}
-  const server = { tool: (name, _d, _s, handler) => { tools[name] = handler } }
+  const server = { registerTool: (name, _config, handler) => { tools[name] = handler } }
   const { deps } = makeDeps({ store: {} })
   registerCredentialsManageTool(server, deps.getAppId, deps)
   const res = await tools.capgo_builder_credentials_manage({ action: 'list' })

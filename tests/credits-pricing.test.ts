@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { executeSQL, fetchWithRetry, getAuthHeaders, getAuthHeadersForCredentials, getEndpointUrl, ORG_ID, USER_EMAIL_NONMEMBER, USER_PASSWORD_NONMEMBER } from './test-utils'
+import { executeSQL, fetchTestRequest, getAuthHeaders, getAuthHeadersForCredentials, getEndpointUrl, ORG_ID, USER_EMAIL_NONMEMBER, USER_PASSWORD_NONMEMBER } from './test-utils'
 
 interface CreditStep {
   type: string
@@ -9,7 +9,7 @@ interface CreditStep {
 
 describe('credits pricing API', () => {
   it.concurrent('returns the updated build_time tiers from the shared pricing table', async () => {
-    const response = await fetchWithRetry(getEndpointUrl('/private/credits'))
+    const response = await fetchTestRequest(getEndpointUrl('/private/credits'))
 
     expect(response.status).toBe(200)
 
@@ -22,7 +22,7 @@ describe('credits pricing API', () => {
   })
 
   it.concurrent('preserves not_authorized for org-scoped pricing queries without auth', async () => {
-    const response = await fetchWithRetry(getEndpointUrl(`/private/credits?org_id=${ORG_ID}`))
+    const response = await fetchTestRequest(getEndpointUrl(`/private/credits?org_id=${ORG_ID}`))
 
     expect(response.status).toBe(400)
 
@@ -34,7 +34,7 @@ describe('credits pricing API', () => {
   })
 
   it.concurrent('rejects org-scoped pricing queries for authenticated non-members', async () => {
-    const response = await fetchWithRetry(getEndpointUrl(`/private/credits?org_id=${ORG_ID}`), {
+    const response = await fetchTestRequest(getEndpointUrl(`/private/credits?org_id=${ORG_ID}`), {
       headers: await getAuthHeadersForCredentials(USER_EMAIL_NONMEMBER, USER_PASSWORD_NONMEMBER),
     })
 
@@ -48,7 +48,7 @@ describe('credits pricing API', () => {
   })
 
   it.concurrent('prices build_time overage through the shared calculator endpoint', async () => {
-    const response = await fetchWithRetry(getEndpointUrl('/private/credits'), {
+    const response = await fetchTestRequest(getEndpointUrl('/private/credits'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -81,7 +81,7 @@ describe('credits pricing API', () => {
   })
 
   it.concurrent('rejects negative build_time input', async () => {
-    const response = await fetchWithRetry(getEndpointUrl('/private/credits'), {
+    const response = await fetchTestRequest(getEndpointUrl('/private/credits'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -104,7 +104,7 @@ describe('credits pricing API', () => {
   })
 
   it.concurrent('rejects org-scoped cost calculation for authenticated non-members', async () => {
-    const response = await fetchWithRetry(getEndpointUrl('/private/credits'), {
+    const response = await fetchTestRequest(getEndpointUrl('/private/credits'), {
       method: 'POST',
       headers: await getAuthHeadersForCredentials(USER_EMAIL_NONMEMBER, USER_PASSWORD_NONMEMBER),
       body: JSON.stringify({
@@ -134,7 +134,7 @@ describe('credits pricing API', () => {
     `, ['build_time', 0, 6000, 0.05, 60, ORG_ID])
 
     try {
-      const response = await fetchWithRetry(getEndpointUrl('/private/credits'), {
+      const response = await fetchTestRequest(getEndpointUrl('/private/credits'), {
         method: 'POST',
         headers: await getAuthHeaders(),
         body: JSON.stringify({
@@ -178,7 +178,7 @@ describe('credits pricing API', () => {
     `, ['build_time', 0, 5000, 0.05, 60, ORG_ID])
 
     try {
-      const response = await fetchWithRetry(getEndpointUrl('/private/credits'), {
+      const response = await fetchTestRequest(getEndpointUrl('/private/credits'), {
         method: 'POST',
         headers: await getAuthHeaders(),
         body: JSON.stringify({

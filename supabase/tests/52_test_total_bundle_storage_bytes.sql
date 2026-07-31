@@ -40,8 +40,8 @@ BEGIN
 
   RETURN NEXT IS(
     public.total_bundle_storage_bytes(),
-    before_bytes + 300,
-    'total_bundle_storage_bytes should exclude deleted version bundle and manifest bytes'
+    before_bytes + 100,
+    'total_bundle_storage_bytes should count active version metadata bytes and ignore manifest bytes'
   );
 END;
 $$ LANGUAGE plpgsql;

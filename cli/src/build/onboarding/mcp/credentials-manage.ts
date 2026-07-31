@@ -17,6 +17,7 @@ import { homedir } from 'node:os'
 import { extname, join, resolve, sep } from 'node:path'
 import { cwd } from 'node:process'
 import { z } from 'zod'
+import type { McpRegistrar } from '../../../mcp/registrar.js'
 import { readSafeFileBytes } from '../../../utils/safeWrites.js'
 import {
   loadSavedCredentials,
@@ -272,17 +273,16 @@ export async function runCredentialsManage(input: CredentialsManageInput, deps: 
   }
 }
 
-/** zod shape for the tool's arguments. */
-export const credentialsManageSchema = {
-  action: z.enum(['list', 'export', 'set', 'remove']).describe('list = show which fields are saved (names only); export = write a platform\'s credentials to a local .env; set = add or edit one field; remove = delete one field.'),
-  platform: z.enum(['ios', 'android']).optional().describe('Required for export/set/remove. The platform whose credentials to act on (must already be set up).'),
-  key: z.string().optional().describe('For set/remove: the credential field name (e.g. KEYSTORE_STORE_PASSWORD, ANDROID_KEYSTORE_FILE, PLAY_CONFIG_JSON, P12_PASSWORD).'),
-  value: z.string().optional().describe('For set: the new value to save (never echoed back).'),
-  valueFile: z.string().optional().describe('For set: a path to a credential FILE (.keystore/.jks/.p12/.json/.p8/.cer/.mobileprovision) whose contents are base64-encoded into the value — use for FILE fields like ANDROID_KEYSTORE_FILE, PLAY_CONFIG_JSON, BUILD_CERTIFICATE_BASE64, or APPLE_KEY_CONTENT (the .p8 key). Non-credential files, and files in sensitive dirs (~/.ssh, ~/.aws, ~/.capgo-credentials), are refused.'),
-  path: z.string().optional().describe('For export: the target .env path (must stay inside the project dir). Defaults to .env.capgo.<appId>.<platform> in the project dir.'),
-  overwrite: z.boolean().optional().describe('For export: overwrite the target file if it already exists.'),
-  appId: z.string().optional().describe('App id to target. Defaults to the current Capacitor project.'),
-}
+export const credentialsManageSchema = z.object({
+  action: z.enum(['list', 'export', 'set', 'remove']).describe("list = show which fields are saved (names only); export = write a platform's credentials to a local .env; set = add or edit one field; remove = delete one field."),
+  platform: z.enum(['ios', 'android']).describe('Required for export/set/remove. The platform whose credentials to act on (must already be set up).').optional(),
+  key: z.string().describe('For set/remove: the credential field name (e.g. KEYSTORE_STORE_PASSWORD, ANDROID_KEYSTORE_FILE, PLAY_CONFIG_JSON, P12_PASSWORD).').optional(),
+  value: z.string().describe('For set: the new value to save (never echoed back).').optional(),
+  valueFile: z.string().describe('For set: a path to a credential FILE (.keystore/.jks/.p12/.json/.p8/.cer/.mobileprovision) whose contents are base64-encoded into the value — use for FILE fields like ANDROID_KEYSTORE_FILE, PLAY_CONFIG_JSON, BUILD_CERTIFICATE_BASE64, or APPLE_KEY_CONTENT (the .p8 key). Non-credential files, and files in sensitive dirs (~/.ssh, ~/.aws, ~/.capgo-credentials), are refused.').optional(),
+  path: z.string().describe('For export: the target .env path (must stay inside the project dir). Defaults to .env.capgo.<appId>.<platform> in the project dir.').optional(),
+  overwrite: z.boolean().describe('For export: overwrite the target file if it already exists.').optional(),
+  appId: z.string().describe('App id to target. Defaults to the current Capacitor project.').optional(),
+})
 
 const CREDENTIALS_MANAGE_DESCRIPTION
   = 'Manage Capgo Builder credentials that ALREADY exist for the app: export them to a local .env file, or add / edit / remove a single credential field (list / export / set / remove). '
@@ -292,27 +292,20 @@ const CREDENTIALS_MANAGE_DESCRIPTION
     + 'To replace a keystore / .p12 / service-account FILE, pass valueFile (a path to that credential file); the tool base64-encodes it. '
     + 'Secret values never leave through tool output: export writes them to a 0600 .env file, list shows field NAMES only, and set takes a value (or file) you provide without echoing it back.'
 
-/** Minimal MCP server surface this registers against (mirrors onboarding-tools' McpLike.tool). */
-interface ToolRegistrar {
-  tool: (
-    name: string,
-    description: string,
-    schema: Record<string, unknown>,
-    handler: (args: CredentialsManageInput) => Promise<{ content: Array<{ type: 'text', text: string }> }>,
-  ) => unknown
-}
 
 /** Register `capgo_builder_credentials_manage` on the given MCP server, bound to a getAppId resolver. */
 export function registerCredentialsManageTool(
-  server: ToolRegistrar,
+  server: McpRegistrar,
   getAppId: () => Promise<string | undefined>,
   depsOverride?: CredentialsManageDeps,
 ): void {
   const deps = depsOverride ?? buildCredentialsManageDeps(getAppId)
-  server.tool(
+  server.registerTool(
     'capgo_builder_credentials_manage',
-    CREDENTIALS_MANAGE_DESCRIPTION,
-    credentialsManageSchema,
+    {
+      description: CREDENTIALS_MANAGE_DESCRIPTION,
+      inputSchema: credentialsManageSchema,
+    },
     async (args: CredentialsManageInput) => {
       const text = await runCredentialsManage(args, deps)
       return { content: [{ type: 'text' as const, text }] }

@@ -1,7 +1,7 @@
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
-import { type } from 'arktype'
+import { z } from 'zod'
 import { Hono } from 'hono/tiny'
-import { safeParseSchema } from '../utils/ark_validation.ts'
+import { safeParseSchema } from '../utils/schema_validation.ts'
 import { parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { getEffectivePasswordMinLength, getPasswordPolicyValidationErrors } from '../utils/password_policy.ts'
@@ -24,26 +24,6 @@ interface PasswordPolicy {
   require_special: boolean
 }
 
-const rbacRoleToLegacy: Record<string, 'read' | 'admin' | 'super_admin'> = {
-  org_member: 'read',
-  org_billing_admin: 'read',
-  org_admin: 'admin',
-  org_super_admin: 'super_admin',
-}
-
-const legacyInviteToRbac: Record<string, string> = {
-  read: 'org_member',
-  upload: 'org_member',
-  write: 'org_member',
-  admin: 'org_admin',
-  super_admin: 'org_super_admin',
-  invite_read: 'org_member',
-  invite_upload: 'org_member',
-  invite_write: 'org_member',
-  invite_admin: 'org_admin',
-  invite_super_admin: 'org_super_admin',
-}
-
 // Default password policy (when org has no policy set)
 const DEFAULT_PASSWORD_POLICY: PasswordPolicy = {
   enabled: true,
@@ -54,11 +34,11 @@ const DEFAULT_PASSWORD_POLICY: PasswordPolicy = {
 }
 
 // Base schema for initial validation (without password)
-const baseInvitationSchema = type({
-  'password': 'string',
-  'magic_invite_string': 'string > 0',
-  'opt_for_newsletters': 'boolean',
-  'captchaToken?': 'string > 0',
+const baseInvitationSchema = z.object({
+  password: z.string(),
+  magic_invite_string: z.string().min(1),
+  opt_for_newsletters: z.boolean(),
+  captchaToken: z.string().min(1).optional(),
 })
 
 export const app = new Hono<MiddlewareKeyVariables>()
@@ -171,13 +151,14 @@ async function ensureOrgMembership(
   userId: string,
   invitation: any,
 ) {
-  const rbacRoleName = invitation.rbac_role_name ?? legacyInviteToRbac[invitation.role as keyof typeof legacyInviteToRbac]
+  const rbacRoleName = typeof invitation.rbac_role_name === 'string'
+    ? invitation.rbac_role_name.trim()
+    : ''
 
   if (!rbacRoleName) {
     return quickError(500, 'failed_to_accept_invitation', 'Failed to resolve RBAC role', { error: 'Missing RBAC role name' })
   }
 
-  const legacyRight = rbacRoleToLegacy[rbacRoleName] ?? 'read'
   let rbacRoleId: string | null = null
 
   const { data: role, error: roleError } = await supabaseAdmin
@@ -210,8 +191,8 @@ async function ensureOrgMembership(
     const { error: updateMembershipError } = await supabaseAdmin
       .from('org_users')
       .update({
-        user_right: legacyRight,
         rbac_role_name: rbacRoleName,
+        is_invite: false,
       })
       .eq('user_id', userId)
       .eq('org_id', invitation.org_id)
@@ -226,8 +207,8 @@ async function ensureOrgMembership(
     const { error: insertIntoMainTableError } = await supabaseAdmin.from('org_users').insert({
       user_id: userId,
       org_id: invitation.org_id,
-      user_right: legacyRight,
       rbac_role_name: rbacRoleName,
+      is_invite: false,
     })
 
     if (insertIntoMainTableError) {
@@ -337,7 +318,9 @@ app.post('/', async (c) => {
     }
 
     const userId = session.user?.id ?? existingUser.id
-    await ensureOrgMembership(supabaseAdmin, userId, invitation)
+    const membershipError = await ensureOrgMembership(supabaseAdmin, userId, invitation)
+    if (membershipError)
+      return membershipError
 
     // Remove the invite only after the org membership is created successfully.
     const { error: tmpUserDeleteError } = await supabaseAdmin.from('tmp_users').delete().eq('invite_magic_string', baseBody.magic_invite_string)
@@ -399,10 +382,14 @@ app.post('/', async (c) => {
           ? { captchaToken: body.captchaToken }
           : undefined,
       })
-
       if (!sessionError && session.user?.id) {
-        await ensurePublicUserRowExists(c, supabaseAdmin, session.user.id, invitation, body.opt_for_newsletters)
-        await ensureOrgMembership(supabaseAdmin, session.user.id, invitation)
+        const publicUserError = await ensurePublicUserRowExists(c, supabaseAdmin, session.user.id, invitation, body.opt_for_newsletters)
+        if (publicUserError)
+          return publicUserError
+
+        const membershipError = await ensureOrgMembership(supabaseAdmin, session.user.id, invitation)
+        if (membershipError)
+          return membershipError
 
         const { error: tmpUserDeleteError } = await supabaseAdmin.from('tmp_users').delete().eq('invite_magic_string', body.magic_invite_string)
         if (tmpUserDeleteError) {
@@ -485,8 +472,12 @@ app.post('/', async (c) => {
       return quickError(400, 'sign_in_failed', 'Sign in failed, please retry', { error: sessionError.message })
     }
 
-    await ensureOrgMembership(supabaseAdmin, user.user.id, invitation)
-
+    const membershipError = await ensureOrgMembership(supabaseAdmin, user.user.id, invitation)
+    if (membershipError) {
+      didRollback = true
+      await rollbackCreatedUser(c, user.user.id)
+      return membershipError
+    }
     // Remove the invite only after the account + org membership are created successfully.
     const { error: tmpUserDeleteError } = await supabaseAdmin.from('tmp_users').delete().eq('invite_magic_string', body.magic_invite_string)
     if (tmpUserDeleteError) {

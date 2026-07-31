@@ -28,13 +28,13 @@ export type SecurityPolicyErrorCode = typeof SECURITY_POLICY_ERRORS[keyof typeof
 
 export const SECURITY_POLICY_MESSAGES: Record<string, string> = {
   [SECURITY_POLICY_ERRORS.ORG_REQUIRES_EXPIRING_KEY]:
-    'This organization requires API keys with expiration dates.\n\nPlease generate a new API key with an expiration:\n  1. Go to https://web.capgo.app/dashboard/apikeys\n  2. Create a new API key with an expiration date\n  3. Update your CLI configuration with: capgo login [new-key]\n  4. Try this command again',
+    'This organization requires API keys with expiration dates.\n\nPlease generate a new API key with an expiration:\n  1. Go to https://console.capgo.app/dashboard/apikeys\n  2. Create a new API key with an expiration date\n  3. Update your CLI configuration with: capgo login [new-key]\n  4. Try this command again',
 
   [SECURITY_POLICY_ERRORS.EXPIRATION_REQUIRED]:
-    'This organization requires API keys to have an expiration date.\n\nPlease generate a new API key with an expiration:\n  1. Go to https://web.capgo.app/dashboard/apikeys\n  2. Create a new API key with an expiration date\n  3. Update your CLI configuration with: capgo login [new-key]\n  4. Try this command again',
+    'This organization requires API keys to have an expiration date.\n\nPlease generate a new API key with an expiration:\n  1. Go to https://console.capgo.app/dashboard/apikeys\n  2. Create a new API key with an expiration date\n  3. Update your CLI configuration with: capgo login [new-key]\n  4. Try this command again',
 
   [SECURITY_POLICY_ERRORS.EXPIRATION_EXCEEDS_MAX]:
-    'Your API key expiration date exceeds the maximum allowed by this organization.\n\nPlease generate a new API key with a shorter expiration:\n  1. Go to https://web.capgo.app/dashboard/apikeys\n  2. Create a new API key with a valid expiration date\n  3. Update your CLI configuration with: capgo login [new-key]\n  4. Try this command again',
+    'Your API key expiration date exceeds the maximum allowed by this organization.\n\nPlease generate a new API key with a shorter expiration:\n  1. Go to https://console.capgo.app/dashboard/apikeys\n  2. Create a new API key with a valid expiration date\n  3. Update your CLI configuration with: capgo login [new-key]\n  4. Try this command again',
 }
 
 // ============================================================================

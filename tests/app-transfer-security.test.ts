@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { createClient } from '@supabase/supabase-js'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
+  executeSQL,
   getSupabaseClient,
   ORG_ID,
   resetAndSeedAppData,
@@ -25,6 +26,34 @@ function createAuthClient() {
       persistSession: false,
     },
   })
+}
+
+async function createUserOrgBinding(orgId: string, userId: string, roleName: string) {
+  await executeSQL(`
+    INSERT INTO public.role_bindings (
+      principal_type,
+      principal_id,
+      role_id,
+      scope_type,
+      org_id,
+      granted_by,
+      reason,
+      is_direct
+    )
+    SELECT
+      public.rbac_principal_user(),
+      $1::uuid,
+      roles.id,
+      public.rbac_scope_org(),
+      $2::uuid,
+      $1::uuid,
+      'App transfer test binding',
+      true
+    FROM public.roles roles
+    WHERE roles.name = $3
+      AND roles.scope_type = public.rbac_scope_org()
+    ON CONFLICT DO NOTHING
+  `, [userId, orgId, roleName])
 }
 
 describe('app transfer security', () => {
@@ -54,8 +83,9 @@ describe('app transfer security', () => {
     await supabase.from('org_users').insert({
       org_id: destinationOrgId,
       user_id: USER_ID,
-      user_right: 'super_admin',
+      rbac_role_name: 'org_super_admin',
     }).throwOnError()
+    await createUserOrgBinding(destinationOrgId, USER_ID, 'org_super_admin')
   })
 
   afterAll(async () => {

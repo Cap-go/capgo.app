@@ -11,6 +11,7 @@ import AdminFilterBar from '~/components/admin/AdminFilterBar.vue'
 import AdminMultiLineChart from '~/components/admin/AdminMultiLineChart.vue'
 import ChartCard from '~/components/dashboard/ChartCard.vue'
 import PageLoader from '~/components/PageLoader.vue'
+import { formatNumberValue } from '~/services/formatLocale'
 import { useAdminDashboardStore } from '~/stores/adminDashboard'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
@@ -52,13 +53,18 @@ const globalStatsTrendData = ref<Array<{
   devices_last_month: number
   stars: number
   need_upgrade: number
+  above_plan_with_credits: number | null
+  above_plan_without_credits: number | null
   paying_yearly: number
   paying_monthly: number
   new_paying_orgs: number
   canceled_orgs: number
   upgraded_orgs: number
+  upgrade_rate_12m: number
   past_due_orgs: number
   past_due_orgs_average_days: number
+  active_canceled_orgs: number
+  active_past_due_orgs: number
   mrr: number
   previous_mrr: number
   previous_mrr_solo: number
@@ -79,6 +85,9 @@ const globalStatsTrendData = ref<Array<{
   average_ltv: number
   shortest_ltv: number
   longest_ltv: number
+  paying_orgs_subscription?: number
+  paying_orgs_credits?: number
+  paying_orgs_total?: number
 }>>([])
 
 const isLoadingGlobalStatsTrend = ref(false)
@@ -86,7 +95,7 @@ const isLoadingGlobalStatsTrend = ref(false)
 function toChurnRate(lostRevenue: number, previousMrr: number) {
   if (!Number.isFinite(previousMrr) || previousMrr <= 0)
     return 0
-  return Number(((lostRevenue / previousMrr) * 100).toFixed(2))
+  return Math.round((lostRevenue / previousMrr) * 10000) / 100
 }
 
 async function loadGlobalStatsTrend() {
@@ -186,22 +195,82 @@ const pastDueAverageDaysSeries = computed(() => {
   ]
 })
 
-const upgradeTrendSeries = computed(() => {
+const activeCanceledOrgSeries = computed(() => {
   if (globalStatsTrendData.value.length === 0)
     return []
 
   return [
     {
-      label: t('need-upgrade-trend'),
+      label: t('active-canceled-organizations'),
       data: globalStatsTrendData.value.map(item => ({
         date: item.date,
-        value: item.need_upgrade,
+        value: item.active_canceled_orgs || 0,
+      })),
+      color: '#f97316', // orange
+    },
+  ]
+})
+
+const activePastDueOrgSeries = computed(() => {
+  if (globalStatsTrendData.value.length === 0)
+    return []
+
+  return [
+    {
+      label: t('active-past-due-organizations'),
+      data: globalStatsTrendData.value.map(item => ({
+        date: item.date,
+        value: item.active_past_due_orgs || 0,
+      })),
+      color: '#dc2626', // red
+    },
+  ]
+})
+
+const abovePlanTrendData = computed(() => globalStatsTrendData.value.filter(
+  item => item.above_plan_with_credits !== null && item.above_plan_without_credits !== null,
+))
+
+const upgradeTrendSeries = computed(() => {
+  if (abovePlanTrendData.value.length === 0)
+    return []
+
+  return [
+    {
+      label: t('need-upgrade-trend'),
+      data: abovePlanTrendData.value.map(item => ({
+        date: item.date,
+        value: item.need_upgrade || 0,
+      })),
+      color: '#7c3aed', // violet
+    },
+    {
+      label: t('total-above-plan'),
+      data: abovePlanTrendData.value.map(item => ({
+        date: item.date,
+        value: (item.above_plan_with_credits ?? 0) + (item.above_plan_without_credits ?? 0),
+      })),
+      color: '#2563eb', // blue
+    },
+    {
+      label: t('above-plan-with-credits'),
+      data: abovePlanTrendData.value.map(item => ({
+        date: item.date,
+        value: item.above_plan_with_credits ?? 0,
+      })),
+      color: '#f59e0b', // amber
+    },
+    {
+      label: t('above-plan-without-credits'),
+      data: abovePlanTrendData.value.map(item => ({
+        date: item.date,
+        value: item.above_plan_without_credits ?? 0,
       })),
       color: '#ef4444', // red
     },
     {
       label: t('upgraded-organizations'),
-      data: globalStatsTrendData.value.map(item => ({
+      data: abovePlanTrendData.value.map(item => ({
         date: item.date,
         value: item.upgraded_orgs || 0,
       })),
@@ -216,7 +285,7 @@ const planConversionSeries = computed(() => {
 
   return [
     {
-      label: 'All Paid Plans (%)',
+      label: 'All Paid Plans (% of paying)',
       data: globalStatsTrendData.value.map(item => ({
         date: item.date,
         value: item.plan_total_conversion_rate || 0,
@@ -224,7 +293,7 @@ const planConversionSeries = computed(() => {
       color: '#3b82f6', // blue
     },
     {
-      label: 'Solo Conversion (%)',
+      label: 'Solo (% of paying)',
       data: globalStatsTrendData.value.map(item => ({
         date: item.date,
         value: item.plan_solo_conversion_rate || 0,
@@ -232,7 +301,7 @@ const planConversionSeries = computed(() => {
       color: '#8b5cf6', // purple
     },
     {
-      label: 'Maker Conversion (%)',
+      label: 'Maker (% of paying)',
       data: globalStatsTrendData.value.map(item => ({
         date: item.date,
         value: item.plan_maker_conversion_rate || 0,
@@ -240,7 +309,7 @@ const planConversionSeries = computed(() => {
       color: '#ec4899', // pink
     },
     {
-      label: 'Team Conversion (%)',
+      label: 'Team (% of paying)',
       data: globalStatsTrendData.value.map(item => ({
         date: item.date,
         value: item.plan_team_conversion_rate || 0,
@@ -248,12 +317,28 @@ const planConversionSeries = computed(() => {
       color: '#10b981', // green
     },
     {
-      label: 'Enterprise Conversion (%)',
+      label: 'Enterprise (% of paying)',
       data: globalStatsTrendData.value.map(item => ({
         date: item.date,
         value: item.plan_enterprise_conversion_rate || 0,
       })),
       color: '#f59e0b', // amber
+    },
+  ]
+})
+
+const upgradeRate12mSeries = computed(() => {
+  if (globalStatsTrendData.value.length === 0)
+    return []
+
+  return [
+    {
+      label: t('upgrade-rate-12m'),
+      data: globalStatsTrendData.value.map(item => ({
+        date: item.date,
+        value: item.upgrade_rate_12m || 0,
+      })),
+      color: '#10b981', // green
     },
   ]
 })
@@ -530,6 +615,63 @@ const latestGlobalStats = computed(() => {
   return globalStatsTrendData.value[globalStatsTrendData.value.length - 1]
 })
 
+const totalAbovePlan = computed(() => {
+  const stats = latestGlobalStats.value
+  if (!stats || stats.above_plan_with_credits === null || stats.above_plan_without_credits === null)
+    return null
+  return stats.above_plan_with_credits + stats.above_plan_without_credits
+})
+
+const abovePlanMetricCards = computed(() => {
+  const stats = latestGlobalStats.value
+  return [
+    {
+      key: 'need-upgrade',
+      title: 'Orgs Need Upgrade',
+      description: t('need-upgrade-description'),
+      value: stats ? stats.need_upgrade : 0,
+      emptyDisplay: '0',
+      iconWrapClass: 'bg-error/10',
+      iconClass: 'text-error',
+      valueClass: 'text-error',
+      iconPath: 'M12 9v4m0 4h.01M5.07 19h13.86a2 2 0 001.74-3l-6.93-12a2 2 0 00-3.48 0l-6.93 12a2 2 0 001.74 3z',
+    },
+    {
+      key: 'total-above-plan',
+      title: t('total-above-plan'),
+      description: t('total-above-plan-description'),
+      value: totalAbovePlan.value,
+      emptyDisplay: '—',
+      iconWrapClass: 'bg-info/10',
+      iconClass: 'text-info',
+      valueClass: 'text-info',
+      iconPath: 'M13 7h8m0 0v8m0-8l-8 8-4-4-6 6',
+    },
+    {
+      key: 'above-plan-with-credits',
+      title: t('above-plan-with-credits'),
+      description: t('above-plan-with-credits-description'),
+      value: stats?.above_plan_with_credits ?? null,
+      emptyDisplay: '—',
+      iconWrapClass: 'bg-warning/10',
+      iconClass: 'text-warning',
+      valueClass: 'text-warning',
+      iconPath: 'M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8V7m0 9v1m0-13a9 9 0 110 18 9 9 0 010-18z',
+    },
+    {
+      key: 'above-plan-without-credits',
+      title: t('above-plan-without-credits'),
+      description: t('above-plan-without-credits-description'),
+      value: stats?.above_plan_without_credits ?? null,
+      emptyDisplay: '—',
+      iconWrapClass: 'bg-error/10',
+      iconClass: 'text-error',
+      valueClass: 'text-error',
+      iconPath: 'M12 9v4m0 4h.01M5.07 19h13.86a2 2 0 001.74-3l-6.93-12a2 2 0 00-3.48 0l-6.93 12a2 2 0 001.74 3z',
+    },
+  ]
+})
+
 watch(() => adminStore.activeDateRange, () => {
   loadGlobalStatsTrend()
 }, { deep: true })
@@ -580,7 +722,7 @@ displayStore.defaultBack = '/dashboard'
                   MRR - Monthly Recurring Revenue
                 </p>
                 <p v-if="latestGlobalStats" class="mt-2 text-3xl font-bold text-primary">
-                  ${{ latestGlobalStats.mrr.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }}
+                  ${{ formatNumberValue(latestGlobalStats.mrr, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }}
                 </p>
                 <p v-else class="mt-2 text-3xl font-bold text-primary">
                   $0.00
@@ -603,13 +745,65 @@ displayStore.defaultBack = '/dashboard'
                   ARR - Annual Recurring Revenue Projection
                 </p>
                 <p v-if="latestGlobalStats" class="mt-2 text-3xl font-bold text-success">
-                  ${{ latestGlobalStats.total_revenue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }}
+                  ${{ formatNumberValue(latestGlobalStats.total_revenue, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }}
                 </p>
                 <p v-else class="mt-2 text-3xl font-bold text-success">
                   $0.00
                 </p>
                 <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
                   Projected annual recurring revenue (MRR × 12)
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Paid Organization Breakdown -->
+          <div class="grid grid-cols-1 gap-6 md:grid-cols-3">
+            <div class="flex flex-col justify-between p-6 bg-white border rounded-lg shadow-lg border-slate-300 dark:bg-gray-800 dark:border-slate-900">
+              <div>
+                <p class="text-sm text-slate-600 dark:text-slate-400">
+                  Total Paid Organizations
+                </p>
+                <p v-if="latestGlobalStats" class="mt-2 text-3xl font-bold text-success">
+                  {{ formatNumberValue(latestGlobalStats.paying_orgs_total || latestGlobalStats.paying || 0) }}
+                </p>
+                <p v-else class="mt-2 text-3xl font-bold text-success">
+                  0
+                </p>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  Subscription and/or available credits
+                </p>
+              </div>
+            </div>
+            <div class="flex flex-col justify-between p-6 bg-white border rounded-lg shadow-lg border-slate-300 dark:bg-gray-800 dark:border-slate-900">
+              <div>
+                <p class="text-sm text-slate-600 dark:text-slate-400">
+                  Paid via Subscription
+                </p>
+                <p v-if="latestGlobalStats" class="mt-2 text-3xl font-bold text-primary">
+                  {{ formatNumberValue(latestGlobalStats.paying_orgs_subscription || latestGlobalStats.paying || 0) }}
+                </p>
+                <p v-else class="mt-2 text-3xl font-bold text-primary">
+                  0
+                </p>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  Active subscription organizations
+                </p>
+              </div>
+            </div>
+            <div class="flex flex-col justify-between p-6 bg-white border rounded-lg shadow-lg border-slate-300 dark:bg-gray-800 dark:border-slate-900">
+              <div>
+                <p class="text-sm text-slate-600 dark:text-slate-400">
+                  Paid via Credits
+                </p>
+                <p v-if="latestGlobalStats" class="mt-2 text-3xl font-bold text-accent">
+                  {{ formatNumberValue(latestGlobalStats.paying_orgs_credits || 0) }}
+                </p>
+                <p v-else class="mt-2 text-3xl font-bold text-accent">
+                  0
+                </p>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  Organizations with available credits
                 </p>
               </div>
             </div>
@@ -629,7 +823,7 @@ displayStore.defaultBack = '/dashboard'
                   Total Paying
                 </p>
                 <p v-if="latestGlobalStats" class="mt-2 text-3xl font-bold text-success">
-                  {{ latestGlobalStats.paying.toLocaleString() }}
+                  {{ formatNumberValue(latestGlobalStats.paying) }}
                 </p>
                 <p v-else class="mt-2 text-3xl font-bold text-success">
                   0
@@ -652,7 +846,7 @@ displayStore.defaultBack = '/dashboard'
                   Yearly Subscriptions
                 </p>
                 <p v-if="latestGlobalStats" class="mt-2 text-3xl font-bold text-primary">
-                  {{ (latestGlobalStats.paying_yearly || 0).toLocaleString() }}
+                  {{ formatNumberValue(latestGlobalStats.paying_yearly || 0) }}
                 </p>
                 <p v-else class="mt-2 text-3xl font-bold text-primary">
                   0
@@ -675,7 +869,7 @@ displayStore.defaultBack = '/dashboard'
                   Monthly Subscriptions
                 </p>
                 <p v-if="latestGlobalStats" class="mt-2 text-3xl font-bold text-info">
-                  {{ (latestGlobalStats.paying_monthly || 0).toLocaleString() }}
+                  {{ formatNumberValue(latestGlobalStats.paying_monthly || 0) }}
                 </p>
                 <p v-else class="mt-2 text-3xl font-bold text-info">
                   0
@@ -689,25 +883,30 @@ displayStore.defaultBack = '/dashboard'
 
           <!-- Upgrade Metrics Cards -->
           <div class="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-4">
-            <!-- Organizations Needing Upgrade -->
-            <div class="flex flex-col justify-between p-6 bg-white border rounded-lg shadow-lg border-slate-300 dark:bg-gray-800 dark:border-slate-900">
+            <div
+              v-for="card in abovePlanMetricCards"
+              :key="card.key"
+              class="flex flex-col justify-between p-6 bg-white border rounded-lg shadow-lg border-slate-300 dark:bg-gray-800 dark:border-slate-900"
+            >
               <div class="flex items-start justify-between mb-4">
-                <div class="p-3 rounded-lg bg-error/10">
-                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="w-6 h-6 stroke-current text-error"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v4m0 4h.01M5.07 19h13.86a2 2 0 001.74-3l-6.93-12a2 2 0 00-3.48 0l-6.93 12a2 2 0 001.74 3z" /></svg>
+                <div class="p-3 rounded-lg" :class="card.iconWrapClass">
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="w-6 h-6 stroke-current" :class="card.iconClass">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" :d="card.iconPath" />
+                  </svg>
                 </div>
               </div>
               <div>
                 <p class="text-sm text-slate-600 dark:text-slate-400">
-                  Orgs Need Upgrade
+                  {{ card.title }}
                 </p>
-                <p v-if="latestGlobalStats" class="mt-2 text-3xl font-bold text-error">
-                  {{ latestGlobalStats.need_upgrade.toLocaleString() }}
+                <p v-if="card.value !== null" class="mt-2 text-3xl font-bold" :class="card.valueClass">
+                  {{ formatNumberValue(card.value) }}
                 </p>
-                <p v-else class="mt-2 text-3xl font-bold text-error">
-                  0
+                <p v-else class="mt-2 text-3xl font-bold" :class="card.valueClass">
+                  {{ card.emptyDisplay }}
                 </p>
                 <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  Organizations over plan limits
+                  {{ card.description }}
                 </p>
               </div>
             </div>
@@ -724,13 +923,36 @@ displayStore.defaultBack = '/dashboard'
                   {{ t('upgraded-organizations') }}
                 </p>
                 <p v-if="latestGlobalStats" class="mt-2 text-3xl font-bold text-success">
-                  {{ (latestGlobalStats.upgraded_orgs || 0).toLocaleString() }}
+                  {{ formatNumberValue(latestGlobalStats.upgraded_orgs || 0) }}
                 </p>
                 <p v-else class="mt-2 text-3xl font-bold text-success">
                   0
                 </p>
                 <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
                   {{ t('upgraded-organizations-latest-day') }}
+                </p>
+              </div>
+            </div>
+
+            <!-- 12-Month Upgrade Rate -->
+            <div class="flex flex-col justify-between p-6 bg-white border rounded-lg shadow-lg border-slate-300 dark:bg-gray-800 dark:border-slate-900">
+              <div class="flex items-start justify-between mb-4">
+                <div class="p-3 rounded-lg bg-success/10">
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="w-6 h-6 stroke-current text-success"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>
+                </div>
+              </div>
+              <div>
+                <p class="text-sm text-slate-600 dark:text-slate-400">
+                  {{ t('upgrade-rate-12m') }}
+                </p>
+                <p v-if="latestGlobalStats" class="mt-2 text-3xl font-bold text-success">
+                  {{ formatNumberValue(latestGlobalStats.upgrade_rate_12m || 0, { minimumFractionDigits: 1, maximumFractionDigits: 1 }) }}%
+                </p>
+                <p v-else class="mt-2 text-3xl font-bold text-success">
+                  0.0%
+                </p>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  {{ t('upgrade-rate-12m-description') }}
                 </p>
               </div>
             </div>
@@ -747,7 +969,7 @@ displayStore.defaultBack = '/dashboard'
                   {{ t('past-due-orgs') }}
                 </p>
                 <p v-if="latestGlobalStats" class="mt-2 text-3xl font-bold text-error">
-                  {{ (latestGlobalStats.past_due_orgs || 0).toLocaleString() }}
+                  {{ formatNumberValue(latestGlobalStats.past_due_orgs || 0) }}
                 </p>
                 <p v-else class="mt-2 text-3xl font-bold text-error">
                   0
@@ -770,13 +992,59 @@ displayStore.defaultBack = '/dashboard'
                   {{ t('avg-past-due-days') }}
                 </p>
                 <p v-if="latestGlobalStats" class="mt-2 text-3xl font-bold text-warning">
-                  {{ (latestGlobalStats.past_due_orgs_average_days || 0).toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 }) }}
+                  {{ formatNumberValue(latestGlobalStats.past_due_orgs_average_days || 0, { minimumFractionDigits: 1, maximumFractionDigits: 1 }) }}
                 </p>
                 <p v-else class="mt-2 text-3xl font-bold text-warning">
                   0.0
                 </p>
                 <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
                   {{ t('current-average-delay') }}
+                </p>
+              </div>
+            </div>
+
+            <!-- Active Canceled (Paid Period) -->
+            <div class="flex flex-col justify-between p-6 bg-white border rounded-lg shadow-lg border-slate-300 dark:bg-gray-800 dark:border-slate-900">
+              <div class="flex items-start justify-between mb-4">
+                <div class="p-3 rounded-lg bg-warning/10">
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="w-6 h-6 stroke-current text-warning"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" /></svg>
+                </div>
+              </div>
+              <div>
+                <p class="text-sm text-slate-600 dark:text-slate-400">
+                  {{ t('active-canceled-orgs') }}
+                </p>
+                <p v-if="latestGlobalStats" class="mt-2 text-3xl font-bold text-warning">
+                  {{ formatNumberValue(latestGlobalStats.active_canceled_orgs || 0) }}
+                </p>
+                <p v-else class="mt-2 text-3xl font-bold text-warning">
+                  0
+                </p>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  {{ t('active-canceled-orgs-description') }}
+                </p>
+              </div>
+            </div>
+
+            <!-- Active Past Due (Still Access) -->
+            <div class="flex flex-col justify-between p-6 bg-white border rounded-lg shadow-lg border-slate-300 dark:bg-gray-800 dark:border-slate-900">
+              <div class="flex items-start justify-between mb-4">
+                <div class="p-3 rounded-lg bg-error/10">
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="w-6 h-6 stroke-current text-error"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86l-8.5 14.74A2 2 0 003.55 22h16.9a2 2 0 001.76-3.4l-8.5-14.74a2 2 0 00-3.42 0z" /></svg>
+                </div>
+              </div>
+              <div>
+                <p class="text-sm text-slate-600 dark:text-slate-400">
+                  {{ t('active-past-due-orgs') }}
+                </p>
+                <p v-if="latestGlobalStats" class="mt-2 text-3xl font-bold text-error">
+                  {{ formatNumberValue(latestGlobalStats.active_past_due_orgs || 0) }}
+                </p>
+                <p v-else class="mt-2 text-3xl font-bold text-error">
+                  0
+                </p>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  {{ t('active-past-due-orgs-description') }}
                 </p>
               </div>
             </div>
@@ -834,14 +1102,52 @@ displayStore.defaultBack = '/dashboard'
             </ChartCard>
           </div>
 
+          <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+            <ChartCard
+              :title="t('active-canceled-organizations')"
+              :is-loading="isLoadingGlobalStatsTrend"
+              :has-data="activeCanceledOrgSeries.length > 0"
+            >
+              <AdminMultiLineChart
+                :series="activeCanceledOrgSeries"
+                :is-loading="isLoadingGlobalStatsTrend"
+              />
+            </ChartCard>
+
+            <ChartCard
+              :title="t('active-past-due-organizations')"
+              :is-loading="isLoadingGlobalStatsTrend"
+              :has-data="activePastDueOrgSeries.length > 0"
+            >
+              <AdminMultiLineChart
+                :series="activePastDueOrgSeries"
+                :is-loading="isLoadingGlobalStatsTrend"
+              />
+            </ChartCard>
+          </div>
+
           <div class="grid grid-cols-1 gap-6">
             <ChartCard
-              title="Paid Plan Conversion Rate"
+              title="Paid Plan Mix (of paying)"
               :is-loading="isLoadingGlobalStatsTrend"
               :has-data="planConversionSeries.length > 0"
             >
               <AdminMultiLineChart
                 :series="planConversionSeries"
+                :is-loading="isLoadingGlobalStatsTrend"
+                value-suffix="%"
+              />
+            </ChartCard>
+          </div>
+
+          <div class="grid grid-cols-1 gap-6">
+            <ChartCard
+              :title="t('upgrade-rate-12m')"
+              :is-loading="isLoadingGlobalStatsTrend"
+              :has-data="upgradeRate12mSeries.length > 0"
+            >
+              <AdminMultiLineChart
+                :series="upgradeRate12mSeries"
                 :is-loading="isLoadingGlobalStatsTrend"
                 value-suffix="%"
               />
@@ -976,9 +1282,9 @@ displayStore.defaultBack = '/dashboard'
               />
             </ChartCard>
 
-            <!-- Upgrade Trend -->
+            <!-- Above Plan Trend -->
             <ChartCard
-              :title="t('upgrade-trend')"
+              :title="t('above-plan-trend')"
               :is-loading="isLoadingGlobalStatsTrend"
               :has-data="upgradeTrendSeries.length > 0"
             >

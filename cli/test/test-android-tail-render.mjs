@@ -241,7 +241,7 @@ test('build-complete surfaces the upload summary, workflow path, build url and f
   assertContains(
     h(BuildCompleteStep, {
       uploadSummary: 'Uploaded 5 env vars to GitHub Actions',
-      buildUrl: 'https://capgo.app/app/com.example.app/builds',
+      buildUrl: 'https://console.capgo.app/app/com.example.app/builds',
       workflowWrittenPath: '/repo/.github/workflows/capgo-build.yml',
     }),
     [
@@ -251,7 +251,7 @@ test('build-complete surfaces the upload summary, workflow path, build url and f
       '/repo/.github/workflows/capgo-build.yml',
       'Dispatch it from GitHub Actions to kick off an Android build.',
       'Track your build:',
-      'https://capgo.app/app/com.example.app/builds',
+      'https://console.capgo.app/app/com.example.app/builds',
       'Press Enter to finish',
     ],
     'build-complete-full',

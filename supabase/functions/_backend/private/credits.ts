@@ -3,7 +3,8 @@ import type Stripe from 'stripe'
 import type { AuthInfo, MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
 import { getFallbackCreditProductId } from '../utils/credits.ts'
-import { getClaimsFromJWT, middlewareAuth, parseBody, simpleError, useCors } from '../utils/hono.ts'
+import { parseBody, simpleError, useCors } from '../utils/hono.ts'
+import { getClaimsFromJWT, middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { createOneTimeCheckout, getCreditCheckoutDetails, getStripe, isStripeEmulatorEnabled } from '../utils/stripe.ts'
@@ -66,6 +67,7 @@ interface StartTopUpRequest {
   quantity?: number
   datafastVisitorId?: string
   datafastSessionId?: string
+  affonsoReferral?: string
 }
 
 interface CompleteTopUpRequest {
@@ -76,7 +78,7 @@ interface CompleteTopUpRequest {
 const DEFAULT_TOP_UP_QUANTITY = 100
 const MAX_TOP_UP_QUANTITY = 100000
 
-type AppContext = Context<MiddlewareKeyVariables, any, any>
+type AppContext = Context<MiddlewareKeyVariables>
 
 function sortCreditSteps(steps: CreditStep[]): CreditStep[] {
   return [...steps].sort((a, b) => {
@@ -571,6 +573,7 @@ app.post('/start-top-up', middlewareAuth, async (c) => {
       visitorId: body.datafastVisitorId,
       sessionId: body.datafastSessionId,
     },
+    body.affonsoReferral,
   )
 
   return c.json({ url: checkout.url })

@@ -6,14 +6,14 @@ describe('cloudflare plugin CORS', () => {
     const response = await pluginWorker.fetch(new Request('https://api.capgo.app/updates/manifest_size', {
       method: 'OPTIONS',
       headers: {
-        'origin': 'https://web.capgo.app',
+        'origin': 'https://console.capgo.app',
         'access-control-request-method': 'POST',
         'access-control-request-headers': 'content-type,authorization',
       },
     }))
 
     expect(response.status).toBe(204)
-    expect(response.headers.get('access-control-allow-origin')).toBe('*')
+    expect(response.headers.get('access-control-allow-origin')).toBe('https://console.capgo.app')
     const allowMethods = response.headers.get('access-control-allow-methods')?.toLowerCase()
     const allowHeaders = response.headers.get('access-control-allow-headers')?.toLowerCase()
     expect(allowMethods).toContain('options')

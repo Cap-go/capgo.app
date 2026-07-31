@@ -1,14 +1,16 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Context } from 'hono'
-import type { AuthInfo, MiddlewareKeyVariables } from './hono.ts'
+import type { BillingPlanBentoState } from './billing_bento_tags.ts'
+import type { AuthInfo } from './hono.ts'
 import type { Database } from './supabase.types.ts'
-import type { DeviceWithoutCreatedAt, NativeVersionUsage, Order, ReadDevicesParams, ReadStatsParams, StatsMetadata, VersionUsage } from './types.ts'
+import type { DeviceWithoutCreatedAt, NativeVersionUsage, Order, ReadDevicesParams, ReadStatsInsightsParams, ReadStatsParams, StatsInsightsResult, StatsMetadata, VersionUsage, VersionUsageChannel } from './types.ts'
 import { createClient } from '@supabase/supabase-js'
+import { buildBillingPlanBentoTags } from './billing_bento_tags.ts'
 import { buildNormalizedDeviceForWrite, hasComparableDeviceChanged, nullableString } from './deviceComparison.ts'
 import { simpleError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { closeClient, getPgClient } from './pg.ts'
-import { createCustomer } from './stripe.ts'
+import { emptyStatsInsights, normalizeStatsInsightsResult } from './statsInsights.ts'
 import { Constants } from './supabase.types.ts'
 import { getEnv, isStripeConfigured } from './utils.ts'
 
@@ -207,38 +209,43 @@ export async function getAppsFromSB(c: Context, referenceDate?: Date): Promise<s
   return Array.from(new Set(apps))
 }
 
-export async function updateOrCreateChannel(c: Context, update: Database['public']['Tables']['channels']['Insert']) {
+export async function updateOrCreateChannel(
+  c: Context,
+  update: Database['public']['Tables']['channels']['Insert'],
+  existingChannelId: number | null,
+  preserveVersion = false,
+) {
   cloudlog({ requestId: c.get('requestId'), message: 'updateOrCreateChannel', update })
   if (!update.app_id || !update.name || !update.created_by) {
     cloudlog({ requestId: c.get('requestId'), message: 'missing app_id, name, or created_by' })
-    return Promise.reject(new Error('missing app_id, name, or created_by'))
+    throw new Error('missing app_id, name, or created_by')
   }
 
-  const { data: existingChannel } = await supabaseAdmin(c)
+  const auth = c.get('auth')
+  if (!auth) {
+    throw new Error('missing request auth')
+  }
+
+  const supabase = supabaseWithAuth(c, auth)
+  if (existingChannelId === null) {
+    return supabase
+      .from('channels')
+      .insert(update)
+      .select('id')
+      .single()
+      .throwOnError()
+  }
+
+  // Keep the original creator immutable. Omitted stable versions are read only
+  // for the response shape and must not overwrite a concurrent promotion.
+  const { created_by: _createdBy, version, ...channelUpdate } = update
+  const requestUpdate = preserveVersion ? channelUpdate : { ...channelUpdate, version }
+  return supabase
     .from('channels')
-    .select('*')
+    .update(requestUpdate)
+    .eq('id', existingChannelId)
     .eq('app_id', update.app_id)
     .eq('name', update.name)
-    .single()
-
-  const upsertPayload = {
-    ...update,
-    created_by: existingChannel?.created_by || update.created_by,
-  }
-
-  if (existingChannel) {
-    const fieldsDiffer = Object.keys(upsertPayload).some(key =>
-      (upsertPayload as any)[key] !== (existingChannel as any)[key] && key !== 'created_at' && key !== 'updated_at',
-    )
-    if (!fieldsDiffer) {
-      cloudlog({ requestId: c.get('requestId'), message: 'No fields differ, no update needed' })
-      return Promise.resolve({ error: null, requestId: c.get('requestId') })
-    }
-  }
-
-  return supabaseAdmin(c)
-    .from('channels')
-    .upsert(upsertPayload, { onConflict: 'app_id, name' })
     .throwOnError()
 }
 
@@ -290,53 +297,6 @@ export async function checkAppOwner(c: Context, userId: string | undefined, appI
   }
 }
 
-export async function hasAppRight(c: Context, appId: string | undefined, userid: string, right: Database['public']['Enums']['user_min_right']) {
-  if (!appId)
-    return false
-
-  const { data, error } = await supabaseAdmin(c)
-    .rpc('has_app_right_userid', { appid: appId, right, userid })
-
-  if (error) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'has_app_right_userid error', error })
-    return false
-  }
-
-  return data
-}
-
-export async function hasAppRightApikey(c: Context<MiddlewareKeyVariables, any, object>, appId: string | undefined, userid: string, right: Database['public']['Enums']['user_min_right'], apikey: string | null | undefined) {
-  if (!appId) {
-    cloudlog({ requestId: c.get('requestId'), message: 'hasAppRightApikey - appId is undefined' })
-    return false
-  }
-
-  // For hashed keys, use the capgkey from the request header
-  const effectiveApikey = apikey ?? c.get('capgkey')
-  if (!effectiveApikey) {
-    cloudlog({ requestId: c.get('requestId'), message: 'hasAppRightApikey - no API key available' })
-    return false
-  }
-
-  cloudlog({ requestId: c.get('requestId'), message: 'hasAppRightApikey - calling RPC', appId, userid, right, apikeyPrefix: effectiveApikey?.substring(0, 15) })
-
-  const { data, error } = await supabaseAdmin(c)
-    .rpc('has_app_right_apikey', { appid: appId, right, userid, apikey: effectiveApikey })
-
-  cloudlog({ requestId: c.get('requestId'), message: 'hasAppRightApikey - RPC result', data, hasError: !!error, error })
-
-  if (error) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'has_app_right_apikey error', error, appId, userid, right })
-    return false
-  }
-
-  if (!data) {
-    cloudlog({ requestId: c.get('requestId'), message: 'hasAppRightApikey - permission denied', appId, userid, right, apikeyPrefix: effectiveApikey?.substring(0, 15) })
-  }
-
-  return data
-}
-
 export async function apikeyHasOrgRight(c: Context, key: Database['public']['Tables']['apikeys']['Row'], orgId: string) {
   if (!key.rbac_id)
     return false
@@ -384,44 +344,6 @@ export async function apikeyHasOrgRightWithPolicy(
   }
 
   return { valid: true }
-}
-
-export async function hasOrgRight(c: Context, orgId: string, userId: string, right: Database['public']['Enums']['user_min_right']) {
-  const userRight = await supabaseAdmin(c).rpc('check_min_rights', {
-    min_right: right,
-    org_id: orgId,
-    user_id: userId,
-    channel_id: null as any,
-    app_id: null as any,
-  })
-
-  cloudlog({ requestId: c.get('requestId'), message: 'check_min_rights (hasOrgRight)', userRight })
-
-  if (userRight.error || !userRight.data) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'check_min_rights (hasOrgRight) error', error: userRight.error })
-    return false
-  }
-
-  return userRight.data
-}
-
-export async function hasOrgRightApikey(c: Context, orgId: string, userId: string, right: Database['public']['Enums']['user_min_right'], apikey: string | null | undefined) {
-  const userRight = await supabaseApikey(c, apikey).rpc('check_min_rights', {
-    min_right: right,
-    org_id: orgId,
-    user_id: userId,
-    channel_id: null as any,
-    app_id: null as any,
-  })
-
-  cloudlog({ requestId: c.get('requestId'), message: 'check_min_rights (hasOrgRight)', userRight })
-
-  if (userRight.error || !userRight.data) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'check_min_rights (hasOrgRight) error', error: userRight.error })
-    return false
-  }
-
-  return userRight.data
 }
 
 interface PlanTotal {
@@ -929,7 +851,13 @@ export async function createApiKey(c: Context, userId: string) {
     }
 
     await pgClient.query(
-      `WITH inserted AS (
+      `WITH default_keys(name, org_role_name, app_role_name) AS (
+         VALUES
+           ('default org admin', public.rbac_role_org_admin(), NULL::text),
+           ('default app uploader', public.rbac_role_org_member(), public.rbac_role_app_uploader()),
+           ('default app reader', public.rbac_role_org_member(), public.rbac_role_app_reader())
+       ),
+       inserted AS (
          INSERT INTO public.apikeys (
            user_id,
            key,
@@ -941,8 +869,18 @@ export async function createApiKey(c: Context, userId: string) {
            gen_random_uuid()::text,
            NULL,
            default_key.name
-         FROM (VALUES ('all'), ('upload'), ('read')) AS default_key(name)
+         FROM default_keys AS default_key
          RETURNING user_id, rbac_id, name
+       ),
+       inserted_with_roles AS (
+         SELECT
+           inserted.user_id,
+           inserted.rbac_id,
+           inserted.name,
+           default_keys.org_role_name,
+           default_keys.app_role_name
+         FROM inserted
+         JOIN default_keys USING (name)
        ),
        current_orgs AS (
          SELECT DISTINCT rb.org_id
@@ -978,20 +916,17 @@ export async function createApiKey(c: Context, userId: string) {
          )
          SELECT
            public.rbac_principal_apikey(),
-           inserted.rbac_id,
+           inserted_with_roles.rbac_id,
            roles.id,
            public.rbac_scope_org(),
            current_orgs.org_id,
-           inserted.user_id,
-           'Default API key V2 binding',
+           inserted_with_roles.user_id,
+           'Default API key RBAC org binding',
            true
-         FROM inserted
+         FROM inserted_with_roles
          CROSS JOIN current_orgs
          JOIN public.roles roles
-           ON roles.name = CASE
-             WHEN inserted.name = 'all' THEN public.rbac_role_org_admin()
-             ELSE public.rbac_role_org_member()
-           END
+           ON roles.name = inserted_with_roles.org_role_name
          ON CONFLICT DO NOTHING
        )
        INSERT INTO public.role_bindings (
@@ -1007,24 +942,20 @@ export async function createApiKey(c: Context, userId: string) {
        )
        SELECT
          public.rbac_principal_apikey(),
-         inserted.rbac_id,
+         inserted_with_roles.rbac_id,
          roles.id,
          public.rbac_scope_app(),
          apps.owner_org,
          apps.id,
-         inserted.user_id,
-         'Default API key V2 app binding',
+         inserted_with_roles.user_id,
+         'Default API key RBAC app binding',
          true
-       FROM inserted
+       FROM inserted_with_roles
        JOIN current_orgs ON true
        JOIN public.apps apps ON apps.owner_org = current_orgs.org_id
        JOIN public.roles roles
-         ON roles.name = CASE inserted.name
-           WHEN 'upload' THEN public.rbac_role_app_uploader()
-           WHEN 'read' THEN public.rbac_role_app_reader()
-           ELSE NULL
-         END
-       WHERE inserted.name IN ('upload', 'read')
+         ON roles.name = inserted_with_roles.app_role_name
+       WHERE inserted_with_roles.app_role_name IS NOT NULL
        ON CONFLICT DO NOTHING`,
       [userId],
     )
@@ -1046,6 +977,7 @@ export async function customerToSegmentOrg(
   orgId: string,
   price_id?: string | null,
   plan?: Database['public']['Tables']['plans']['Row'] | null,
+  trialPlanNamesToRemove?: readonly string[] | null,
 ): Promise<{ segments: string[], deleteSegments: string[] }> {
   const segmentsObj = {
     capgo: true,
@@ -1056,7 +988,6 @@ export async function customerToSegmentOrg(
     trial0: false,
     paying: false,
     payingMonthly: plan?.price_m_id === price_id,
-    plan: plan?.name ?? '',
     overuse: false,
     canceled: await isCanceledOrg(c, orgId),
     issueSegment: false,
@@ -1065,9 +996,23 @@ export async function customerToSegmentOrg(
   const trialDaysLeft = await isTrialOrg(c, orgId)
   const paying = await isPayingOrg(c, orgId)
   const canUseMore = await isGoodPlanOrg(c, orgId)
+  let billingPlanState: BillingPlanBentoState = 'none'
+  if (paying)
+    billingPlanState = 'paying'
+  else if (trialDaysLeft > 0)
+    billingPlanState = 'trial'
+  const planTags = buildBillingPlanBentoTags(
+    plan?.name,
+    billingPlanState,
+    trialPlanNamesToRemove,
+  )
 
   if (!segmentsObj.onboarded) {
-    return processSegments(segmentsObj)
+    const segments = processSegments(segmentsObj)
+    return {
+      segments: [...segments.segments, ...planTags.segments],
+      deleteSegments: [...segments.deleteSegments, ...planTags.deleteSegments],
+    }
   }
 
   if (!paying && trialDaysLeft > 1 && trialDaysLeft <= 7) {
@@ -1093,7 +1038,11 @@ export async function customerToSegmentOrg(
     segmentsObj.issueSegment = true
   }
 
-  return processSegments(segmentsObj)
+  const segments = processSegments(segmentsObj)
+  return {
+    segments: [...segments.segments, ...planTags.segments],
+    deleteSegments: [...segments.deleteSegments, ...planTags.deleteSegments],
+  }
 }
 
 function processSegments(segmentsObj: any): { segments: string[], deleteSegments: string[] } {
@@ -1133,77 +1082,6 @@ export async function getDefaultPlan(c: Context) {
   return plan
 }
 
-export async function createStripeCustomer(c: Context, org: Database['public']['Tables']['orgs']['Row']) {
-  const customer = await createCustomer(c, org.management_email, org.created_by, org.id, org.name)
-  const trial_at = new Date()
-  trial_at.setDate(trial_at.getDate() + 15)
-  const plan = org.customer_id?.startsWith('pending_')
-    ? await getStripeCustomer(c, org.customer_id).then(async (pendingStripeInfo) => {
-        if (!pendingStripeInfo?.product_id)
-          return null
-        const { data } = await supabaseAdmin(c)
-          .from('plans')
-          .select()
-          .eq('stripe_id', pendingStripeInfo.product_id)
-          .single()
-        return data
-      })
-    : await getDefaultPlan(c)
-  const selectedPlan = plan ?? await getDefaultPlan(c)
-  if (!selectedPlan) {
-    cloudlog({ requestId: c.get('requestId'), message: 'no default plan' })
-    throw new Error('no default plan')
-  }
-  cloudlog({ requestId: c.get('requestId'), message: 'createInfo', plan: selectedPlan, customer })
-  const { error: createInfoError } = await supabaseAdmin(c)
-    .from('stripe_info')
-    .insert({
-      product_id: selectedPlan.stripe_id,
-      customer_id: customer.id,
-      trial_at: trial_at.toISOString(),
-    })
-  if (createInfoError)
-    cloudlog({ requestId: c.get('requestId'), message: 'createInfoError', createInfoError })
-
-  const { error: updateUserError } = await supabaseAdmin(c)
-    .from('orgs')
-    .update({
-      customer_id: customer.id,
-    })
-    .eq('id', org.id)
-  if (updateUserError)
-    cloudlog({ requestId: c.get('requestId'), message: 'updateUserError', updateUserError })
-  cloudlog({ requestId: c.get('requestId'), message: 'stripe_info done' })
-}
-
-export async function finalizePendingStripeCustomer(c: Context, org: Database['public']['Tables']['orgs']['Row']) {
-  const pendingCustomerId = org.customer_id
-  if (!pendingCustomerId?.startsWith('pending_')) {
-    cloudlog({ requestId: c.get('requestId'), message: 'finalizePendingStripeCustomer: not a pending customer_id', pendingCustomerId })
-    return
-  }
-
-  await createStripeCustomer(c, org)
-
-  const { data: updatedOrg } = await supabaseAdmin(c)
-    .from('orgs')
-    .select('customer_id')
-    .eq('id', org.id)
-    .single()
-
-  if (!updatedOrg?.customer_id || updatedOrg.customer_id.startsWith('pending_')) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'finalizePendingStripeCustomer: org still has pending customer_id, skipping delete' })
-    return
-  }
-
-  const { error: deleteError } = await supabaseAdmin(c)
-    .from('stripe_info')
-    .delete()
-    .eq('customer_id', pendingCustomerId)
-  if (deleteError)
-    cloudlogErr({ requestId: c.get('requestId'), message: 'finalizePendingStripeCustomer: orphan pending stripe_info', deleteError })
-}
-
 export function trackBandwidthUsageSB(
   c: Context,
   deviceId: string,
@@ -1226,8 +1104,10 @@ export function trackVersionUsageSB(
   versionName: string,
   appId: string,
   action: Database['public']['Enums']['version_action'],
+  channel?: VersionUsageChannel | string | null,
 ) {
-  // Type cast needed: version_usage table now has version_name but auto-generated types are stale
+  const channelName = typeof channel === 'string' ? channel : channel?.name
+  const channelId = typeof channel === 'object' && channel ? channel.id : null
   return supabaseAdmin(c)
     .from('version_usage')
     .insert([
@@ -1235,7 +1115,9 @@ export function trackVersionUsageSB(
         version_name: versionName,
         app_id: appId,
         action,
-      } as unknown as { version_id: number, app_id: string, action: typeof action },
+        channel_name: channelName ?? null,
+        channel_id: channelId ?? null,
+      },
     ])
 }
 
@@ -1282,7 +1164,7 @@ export async function trackDevicesSB(c: Context, device: DeviceWithoutCreatedAt)
 
   const { data: existingRow, error } = await client
     .from('devices')
-    .select('version_name, platform, plugin_version, os_version, version_build, custom_id, is_prod, is_emulator, default_channel, key_id')
+    .select('version_name, platform, plugin_version, os_version, version_build, custom_id, is_prod, is_emulator, install_source, default_channel, key_id, country_code')
     .eq('app_id', device.app_id)
     .eq('device_id', device.device_id)
     .maybeSingle()
@@ -1295,8 +1177,13 @@ export async function trackDevicesSB(c: Context, device: DeviceWithoutCreatedAt)
   // This avoids accidental clearing, and lets higher-level callers strip custom_id
   // (e.g., when an app disables device self-setting) without overwriting owner-set values.
   const requestedCustomId = nullableString(device.custom_id)
-  const deviceForWrite: DeviceWithoutCreatedAt = requestedCustomId === null && existingRow
-    ? { ...device, custom_id: existingRow.custom_id ?? '' }
+  const requestedInstallSource = nullableString(device.install_source)
+  const deviceForWrite: DeviceWithoutCreatedAt = existingRow
+    ? {
+        ...device,
+        ...(requestedCustomId === null ? { custom_id: existingRow.custom_id ?? '' } : {}),
+        ...(requestedInstallSource === null ? { install_source: existingRow.install_source ?? undefined } : {}),
+      }
     : device
 
   if (existingRow && !hasComparableDeviceChanged(existingRow, deviceForWrite)) {
@@ -1320,8 +1207,10 @@ export async function trackDevicesSB(c: Context, device: DeviceWithoutCreatedAt)
     version_name: normalizedDevice.version_name ?? deviceForWrite.version_name,
     is_prod: normalizedDevice.is_prod,
     is_emulator: normalizedDevice.is_emulator,
+    ...(requestedInstallSource === null ? {} : { install_source: normalizedDevice.install_source ?? undefined }),
     default_channel: device.default_channel ?? null,
     key_id: normalizedDevice.key_id ?? undefined,
+    country_code: normalizedDevice.country_code ?? undefined,
   } as Database['public']['Tables']['devices']['Insert']
 
   return client
@@ -1362,9 +1251,18 @@ export async function readStatsStorageSB(c: Context, app_id: string, period_star
   return data ?? []
 }
 
-export async function readStatsVersionSB(c: Context, app_id: string, period_start: string, period_end: string): Promise<VersionUsage[]> {
+export async function readStatsVersionSB(c: Context, app_id: string, period_start: string, period_end: string, channel?: VersionUsageChannel | string): Promise<VersionUsage[]> {
+  const channelId = typeof channel === 'object' && channel ? channel.id : null
+  const channelName = typeof channel === 'string' ? channel : channelId ? null : channel?.name
+  const args = {
+    p_app_id: app_id,
+    p_period_start: period_start,
+    p_period_end: period_end,
+    ...(channelName ? { p_channel_name: channelName } : {}),
+    ...(channelId ? { p_channel_id: channelId } : {}),
+  }
   const { data } = await supabaseAdmin(c)
-    .rpc('read_version_usage', { p_app_id: app_id, p_period_start: period_start, p_period_end: period_end })
+    .rpc('read_version_usage', args)
   // Cast to VersionUsage[] - the SQL function returns version_name but auto-generated types are stale
   return (data ?? []) as unknown as VersionUsage[]
 }
@@ -1471,6 +1369,120 @@ export async function readStatsSB(c: Context, params: ReadStatsParams) {
   return data ?? []
 }
 
+export async function readStatsInsightsSB(c: Context, params: ReadStatsInsightsParams): Promise<StatsInsightsResult> {
+  const pgClient = getPgClient(c)
+  const actionValues = params.actions?.length ? params.actions : []
+  const actionFilter = actionValues.length > 0 ? 'AND action = ANY($4::public.stats_action[])' : ''
+  const values = actionValues.length > 0
+    ? [params.app_id, params.start_date, params.end_date, actionValues]
+    : [params.app_id, params.start_date, params.end_date]
+
+  try {
+    const summaryQuery = `
+      SELECT
+        COUNT(*)::text AS total,
+        COUNT(DISTINCT device_id)::text AS device_count,
+        COUNT(DISTINCT action)::text AS action_count
+      FROM public.stats
+      WHERE app_id = $1
+        AND created_at >= $2::timestamptz
+        AND created_at < $3::timestamptz
+        ${actionFilter}
+    `
+
+    const actionsQuery = `
+      SELECT
+        action::text AS action,
+        COUNT(*)::text AS total,
+        COUNT(DISTINCT device_id)::text AS device_count,
+        COUNT(DISTINCT version_name)::text AS version_count,
+        MIN(created_at)::text AS first_seen,
+        MAX(created_at)::text AS last_seen,
+        COALESCE((ARRAY_AGG(version_name ORDER BY created_at DESC))[1], 'unknown') AS latest_version_name,
+        COALESCE((ARRAY_AGG(device_id ORDER BY created_at DESC))[1], '') AS latest_device_id
+      FROM public.stats
+      WHERE app_id = $1
+        AND created_at >= $2::timestamptz
+        AND created_at < $3::timestamptz
+        ${actionFilter}
+      GROUP BY action
+      ORDER BY COUNT(*) DESC
+      LIMIT 20
+    `
+
+    const dailyQuery = `
+      SELECT
+        TO_CHAR(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS date,
+        action::text AS action,
+        COUNT(*)::text AS total
+      FROM public.stats
+      WHERE app_id = $1
+        AND created_at >= $2::timestamptz
+        AND created_at < $3::timestamptz
+        ${actionFilter}
+      GROUP BY 1, 2
+      ORDER BY 1 ASC, COUNT(*) DESC
+    `
+
+    const versionsQuery = `
+      SELECT
+        action::text AS action,
+        COALESCE(NULLIF(version_name, ''), 'unknown') AS version_name,
+        COUNT(*)::text AS total,
+        COUNT(DISTINCT device_id)::text AS device_count,
+        MAX(created_at)::text AS last_seen
+      FROM public.stats
+      WHERE app_id = $1
+        AND created_at >= $2::timestamptz
+        AND created_at < $3::timestamptz
+        ${actionFilter}
+      GROUP BY action, COALESCE(NULLIF(version_name, ''), 'unknown')
+      ORDER BY COUNT(*) DESC
+      LIMIT 30
+    `
+
+    const devicesQuery = `
+      SELECT
+        action::text AS action,
+        device_id,
+        COUNT(*)::text AS total,
+        COALESCE((ARRAY_AGG(version_name ORDER BY created_at DESC))[1], 'unknown') AS version_name,
+        MAX(created_at)::text AS last_seen
+      FROM public.stats
+      WHERE app_id = $1
+        AND created_at >= $2::timestamptz
+        AND created_at < $3::timestamptz
+        ${actionFilter}
+      GROUP BY action, device_id
+      ORDER BY COUNT(*) DESC
+      LIMIT 30
+    `
+
+    const [summaryResult, actionsResult, dailyResult, versionsResult, devicesResult] = await Promise.all([
+      pgClient.query(summaryQuery, values),
+      pgClient.query(actionsQuery, values),
+      pgClient.query(dailyQuery, values),
+      pgClient.query(versionsQuery, values),
+      pgClient.query(devicesQuery, values),
+    ])
+
+    return normalizeStatsInsightsResult({
+      summary: summaryResult.rows[0],
+      actions: actionsResult.rows,
+      daily: dailyResult.rows,
+      versions: versionsResult.rows,
+      devices: devicesResult.rows,
+    })
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading stats insights from Supabase', error })
+    return emptyStatsInsights()
+  }
+  finally {
+    closeClient(c, pgClient)
+  }
+}
+
 /**
  * Query the devices table for an app with search, cursor pagination, and ordering helpers applied.
  */
@@ -1499,6 +1511,14 @@ export async function readDevicesSB(c: Context, params: ReadDevicesParams, custo
       query = query.in('device_id', params.deviceIds)
   }
 
+  if (params.customIds?.length) {
+    cloudlog({ requestId: c.get('requestId'), message: 'customIds', customIds: params.customIds })
+    if (params.customIds.length === 1)
+      query = query.eq('custom_id', params.customIds[0])
+    else
+      query = query.in('custom_id', params.customIds)
+  }
+
   if (params.search) {
     cloudlog({ requestId: c.get('requestId'), message: 'search', search: params.search })
     const searchPattern = buildIlikeContainsPattern(params.search)
@@ -1510,6 +1530,17 @@ export async function readDevicesSB(c: Context, params: ReadDevicesParams, custo
 
   if (params.version_name)
     query = query.eq('version_name', params.version_name)
+
+  if (params.platform)
+    query = query.eq('platform', params.platform)
+
+  if (params.installSources?.length)
+    query = query.in('install_source', params.installSources)
+
+  if (params.updated_at_gt)
+    query = query.gt('updated_at', params.updated_at_gt)
+  if (params.updated_at_lte)
+    query = query.lte('updated_at', params.updated_at_lte)
 
   const devicesOrder = getDevicesOrder(params.order)
 
@@ -1543,6 +1574,32 @@ export async function readDevicesSB(c: Context, params: ReadDevicesParams, custo
   return data ?? []
 }
 
+export async function countInstallSourcesSB(c: Context, app_id: string): Promise<Record<string, number>> {
+  const pgClient = await getPgClient(c)
+  try {
+    const result = await pgClient.query<{ install_source: string, total: string }>(`
+      SELECT install_source, COUNT(*)::text AS total
+      FROM public.devices
+      WHERE app_id = $1
+        AND install_source IS NOT NULL
+        AND install_source != ''
+      GROUP BY install_source
+    `, [app_id])
+
+    return result.rows.reduce<Record<string, number>>((acc, row) => {
+      acc[row.install_source] = Number(row.total)
+      return acc
+    }, {})
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Error counting install sources', error })
+    return {}
+  }
+  finally {
+    closeClient(c, pgClient)
+  }
+}
+
 /**
  * Count how many devices match the supplied filters so pagination totals stay accurate.
  */
@@ -1553,6 +1610,10 @@ export async function countDevicesSB(
   deviceIds: string[] = [],
   versionName?: string,
   search?: string,
+  options?: {
+    platform?: Database['public']['Enums']['platform_os']
+    updatedAt?: { gt?: string, lte?: string }
+  },
 ) {
   let req = supabaseAdmin(c)
     .from('devices')
@@ -1582,6 +1643,13 @@ export async function countDevicesSB(
 
   if (versionName)
     req = req.eq('version_name', versionName)
+
+  if (options?.platform)
+    req = req.eq('platform', options.platform)
+  if (options?.updatedAt?.gt)
+    req = req.gt('updated_at', options.updatedAt.gt)
+  if (options?.updatedAt?.lte)
+    req = req.lte('updated_at', options.updatedAt.lte)
 
   const { count, error } = await req
 
@@ -1680,7 +1748,7 @@ export async function getUpdateStatsSB(c: Context): Promise<UpdateStats> {
  * Uses find_apikey_by_value SQL function to look up both plain-text and hashed keys
  * Expiration is checked after lookup
  */
-export async function checkKey(c: Context, authorization: string | undefined, supabase: SupabaseClient<Database>, allowed: Database['public']['Enums']['key_mode'][]): Promise<Database['public']['Tables']['apikeys']['Row'] | null> {
+export async function checkKey(c: Context, authorization: string | undefined, supabase: SupabaseClient<Database>): Promise<Database['public']['Tables']['apikeys']['Row'] | null> {
   if (!authorization)
     return null
 
@@ -1692,7 +1760,7 @@ export async function checkKey(c: Context, authorization: string | undefined, su
       .single()
 
     if (error || !data) {
-      cloudlog({ requestId: c.get('requestId'), message: 'Invalid apikey', authorizationPrefix: authorization?.substring(0, 8), allowed, error })
+      cloudlog({ requestId: c.get('requestId'), message: 'Invalid apikey', authorizationPrefix: authorization?.substring(0, 8), error })
       return null
     }
 
@@ -1718,7 +1786,6 @@ export async function checkKeyById(
   c: Context,
   id: number,
   supabase: SupabaseClient<Database>,
-  _allowed: Database['public']['Enums']['key_mode'][],
   userId?: string,
 ): Promise<Database['public']['Tables']['apikeys']['Row'] | null> {
   if (!id)

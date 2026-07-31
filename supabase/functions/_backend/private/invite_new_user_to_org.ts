@@ -1,48 +1,32 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Database } from '../utils/supabase.types.ts'
-import { type } from 'arktype'
+import { z } from 'zod'
 import dayjs from 'dayjs'
 import { Hono } from 'hono/tiny'
-import { safeParseSchema } from '../utils/ark_validation.ts'
+import { safeParseSchema } from '../utils/schema_validation.ts'
 import { trackBentoEvent } from '../utils/bento.ts'
 import { verifyCaptchaToken } from '../utils/captcha.ts'
-import { BRES, middlewareAuth, parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
+import { BRES, parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
+import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { supabaseAdmin, supabaseClient } from '../utils/supabase.ts'
 import { getEnv } from '../utils/utils.ts'
 
 // Define the schema for the invite user request
-const inviteUserSchema = type({
-  'email': 'string.email',
-  'org_id': 'string > 0',
-  'invite_type': '"read" | "upload" | "write" | "admin" | "super_admin" | "org_member" | "org_billing_admin" | "org_admin" | "org_super_admin"',
-  'captcha_token?': 'string > 0',
-  'first_name': 'string > 0',
-  'last_name': 'string > 0',
+const inviteUserSchema = z.object({
+  email: z.email(),
+  org_id: z.string().min(1),
+  invite_type: z.enum(['org_member', 'org_billing_admin', 'org_admin', 'org_super_admin']),
+  captcha_token: z.string().min(1).optional(),
+  first_name: z.string().min(1),
+  last_name: z.string().min(1),
 })
 
-const legacyInviteRoles = ['read', 'upload', 'write', 'admin', 'super_admin'] as const
 const rbacInviteRoles = ['org_member', 'org_billing_admin', 'org_admin', 'org_super_admin'] as const
 
-type LegacyInviteRole = (typeof legacyInviteRoles)[number]
 type RbacInviteRole = (typeof rbacInviteRoles)[number]
-
-const rbacRoleToLegacy: Record<RbacInviteRole, Database['public']['Enums']['user_min_right']> = {
-  org_member: 'read',
-  org_billing_admin: 'read',
-  org_admin: 'admin',
-  org_super_admin: 'super_admin',
-}
-
-const legacyRoleToRbac: Partial<Record<LegacyInviteRole, RbacInviteRole>> = {
-  read: 'org_member',
-  upload: 'org_member',
-  write: 'org_member',
-  admin: 'org_admin',
-  super_admin: 'org_super_admin',
-}
 
 const INVITE_RESEND_COOLDOWN_MINUTES = 5
 
@@ -55,13 +39,7 @@ function generateInviteMagicString() {
 function resolveInviteRoles(inviteType: string) {
   if (rbacInviteRoles.includes(inviteType as RbacInviteRole)) {
     const rbacRoleName = inviteType as RbacInviteRole
-    return { legacyInviteType: rbacRoleToLegacy[rbacRoleName], rbacRoleName }
-  }
-
-  if (legacyInviteRoles.includes(inviteType as LegacyInviteRole)) {
-    const legacyInviteType = inviteType as Database['public']['Enums']['user_min_right']
-    const rbacRoleName = legacyRoleToRbac[inviteType as LegacyInviteRole] ?? null
-    return { legacyInviteType, rbacRoleName }
+    return { rbacRoleName }
   }
 
   throw simpleError('invalid_request', 'Invalid invite type')
@@ -86,7 +64,7 @@ async function validateInvite(c: Context, rawBody: any) {
 
   // Verify the user has permission to invite
   // inviting super_admin requires org.update_user_roles, other roles require org.invite_user
-  const isSuperAdminInvite = body.invite_type === 'super_admin' || body.invite_type === 'org_super_admin'
+  const isSuperAdminInvite = body.invite_type === 'org_super_admin'
   const requiredPermission = isSuperAdminInvite ? 'org.update_user_roles' : 'org.invite_user'
   if (!await checkPermission(c, requiredPermission, { orgId: body.org_id })) {
     return quickError(403, 'not_authorized', 'Not authorized', {
@@ -130,7 +108,7 @@ async function validateInvite(c: Context, rawBody: any) {
     return { message: 'Failed to invite user', error: orgError?.message ?? 'Organization not found', status: 500 }
   }
 
-  const { legacyInviteType, rbacRoleName } = resolveInviteRoles(body.invite_type)
+  const { rbacRoleName } = resolveInviteRoles(body.invite_type)
 
   // Get current user ID from JWT
   const authContext = c.get('auth')
@@ -148,7 +126,7 @@ async function validateInvite(c: Context, rawBody: any) {
   if (inviteCreatorUserError) {
     return { message: 'Failed to invite user', error: inviteCreatorUserError.message, status: 500 }
   }
-  return { inviteCreatorUser, org, body, authorization, legacyInviteType, rbacRoleName }
+  return { inviteCreatorUser, org, body, authorization, rbacRoleName }
 }
 
 app.post('/', middlewareAuth, async (c) => {
@@ -163,7 +141,6 @@ app.post('/', middlewareAuth, async (c) => {
     return quickError(404, 'organization_not_found', 'Organization not found')
   }
   const body = res.body
-  const legacyInviteType = res.legacyInviteType
   const rbacRoleName = res.rbacRoleName
   const inviteCreatorUser = res.inviteCreatorUser
   const org = res.org
@@ -209,7 +186,6 @@ app.post('/', middlewareAuth, async (c) => {
         cancelled_at: null,
         first_name: body.first_name,
         last_name: body.last_name,
-        role: legacyInviteType,
         rbac_role_name: rbacRoleName,
         invite_magic_string: generateInviteMagicString(),
       })
@@ -228,7 +204,6 @@ app.post('/', middlewareAuth, async (c) => {
     const { error: createUserError, data: newInvitationData } = await supabaseAdminClient.from('tmp_users').insert({
       email: body.email,
       org_id: body.org_id,
-      role: legacyInviteType,
       rbac_role_name: rbacRoleName,
       first_name: body.first_name,
       last_name: body.last_name,

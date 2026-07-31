@@ -64,12 +64,13 @@ import { contactSupport } from '../support/contact-support.js'
 import { appendInternalLog, getInternalLogPath, startInternalLog } from '../support/internal-log.js'
 import { uploadSupportLogs } from '../support/support-upload.js'
 import { offerSupportUploadBeforeAi } from '../support/support-upload-prompt.js'
-import { assertCliPermission, canPromptInteractively, createSupabaseClient, findSavedKey, getConfig, getOrganizationId, sendEvent, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
+import { assertCliPermission, canPromptInteractively, createSupabaseClient, findSavedKey, getConfig, getOrganizationId, getRemoteConfig, sendEvent, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
 import { mergeCredentials, MIN_OUTPUT_RETENTION_SECONDS, parseInAppUpdatePriority, parseOptionalBoolean, parseOutputRetentionSeconds } from './credentials'
 import { buildProvisioningMap } from './credentials-command'
 import { withCwd } from './cwd'
+import { syncIosMarketingVersion } from './ios-marketing-version'
 import { writeBuildOutputRecord } from './output-record'
-import { getPlatformDirFromCapacitorConfig } from './platform-paths'
+import { getPlatformDirFromCapacitorConfig, normalizeNativeDependencyPathsInText } from './platform-paths'
 import { handleCustomMsg } from './qr.js'
 import { trackBuilderUpload } from './telemetry.js'
 
@@ -201,6 +202,66 @@ function createDefaultLogger(silent: boolean): BuildLogger {
 
 // `withCwd` (the global chdir queue) lives in ./cwd so the prescan context
 // builder shares the same queue — see src/build/cwd.ts.
+
+interface CapgoApiErrorBody {
+  error?: string
+  message?: string
+  moreInfo?: {
+    upgrade_url?: string
+    reason?: string
+    activeBuilds?: number
+    limit?: number
+    planName?: string
+  }
+}
+
+function parseCapgoApiErrorBody(errorText: string): CapgoApiErrorBody | null {
+  try {
+    const parsed = JSON.parse(errorText) as CapgoApiErrorBody
+    if (!parsed || typeof parsed !== 'object')
+      return null
+    return parsed
+  }
+  catch {
+    return null
+  }
+}
+
+/** Surface plan / concurrency limit errors with a clear upgrade CTA, then throw. */
+async function throwIfBuildPlanLimitError(
+  status: number,
+  errorText: string,
+  action: 'request' | 'start',
+  logger: BuildLogger,
+): Promise<void> {
+  if (status !== 429)
+    return
+
+  const body = parseCapgoApiErrorBody(errorText)
+  const errorCode = body?.error
+  if (errorCode !== 'native_build_concurrency_limit_exceeded' && errorCode !== 'need_plan_upgrade')
+    return
+
+  const config = await getRemoteConfig()
+  const upgradeUrl = body?.moreInfo?.upgrade_url || `${config.hostWeb}/settings/organization/plans`
+  const message = body?.message
+    || (errorCode === 'native_build_concurrency_limit_exceeded'
+      ? `Native build concurrency limit reached for your plan. Upgrade here: ${upgradeUrl}`
+      : `Cannot ${action} native build, upgrade plan to continue: ${upgradeUrl}`)
+
+  logger.error(message)
+  if (!message.includes(upgradeUrl))
+    logger.error(`Upgrade here: ${upgradeUrl}`)
+
+  try {
+    const module = await import('open')
+    await module.default(upgradeUrl)
+  }
+  catch {
+    // Ignore browser-open failures in CI / headless environments.
+  }
+  throw new Error(message)
+}
 
 /**
  * Fetch with retry logic for build requests
@@ -742,9 +803,9 @@ async function extractNativeDependencies(
       const spmContent = await readFileAsync(spmPackagePath, 'utf-8')
       // Match lines like: .package(name: "CapacitorApp", path: "../../../node_modules/@capacitor/app")
       // The path can have varying numbers of ../ depending on project structure
-      const spmMatches = spmContent.matchAll(/\.package\s*\([^)]*path:\s*["'](?:\.\.\/)*node_modules\/([^"']+)["']\s*\)/g)
+      const spmMatches = spmContent.matchAll(/\.package\s*\([^)]*path:\s*["'](?:\.\.[\\/])*node_modules[\\/]([^"']+)["']\s*\)/g)
       for (const match of spmMatches) {
-        let pkgPath = match[1]
+        let pkgPath = match[1].replace(/\\/g, '/')
         const lastNmIdx = pkgPath.lastIndexOf('node_modules/')
         if (lastNmIdx !== -1)
           pkgPath = pkgPath.substring(lastNmIdx + 'node_modules/'.length)
@@ -773,7 +834,7 @@ async function extractNativeDependencies(
       for (const podfilePath of uniqPodfiles) {
         const podfileContent = await readFileAsync(podfilePath, 'utf-8')
         // Match lines like: pod 'CapacitorApp', :path => '../../node_modules/@capacitor/app'
-        const podMatches = podfileContent.matchAll(/pod\s+['"][^'"]+['"],\s*:path\s*=>\s*['"](?:\.\.\/)+node_modules\/([^'"]+)['"]/g)
+        const podMatches = podfileContent.matchAll(/pod\s+['"][^'"]+['"],\s*:path\s*=>\s*['"](?:\.\.[\\/])+node_modules[\\/]([^'"]+)['"]/g)
         for (const match of podMatches) {
           let pkgPath = match[1]
           const lastNmIdx = pkgPath.lastIndexOf('node_modules/')
@@ -791,9 +852,9 @@ async function extractNativeDependencies(
       const settingsContent = await readFileAsync(settingsGradlePath, 'utf-8')
       // Match lines like: project(':capacitor-app').projectDir = new File('../node_modules/@capacitor/app/android')
       // Also matches pnpm paths: new File('../node_modules/.pnpm/@pkg@ver/node_modules/@scope/pkg/android')
-      const gradleMatches = settingsContent.matchAll(/new\s+File\s*\(\s*['"]\.\.\/node_modules\/([^'"]+)['"]\s*\)/g)
+      const gradleMatches = settingsContent.matchAll(/new\s+File\s*\(\s*['"]\.\.[\\/]node_modules[\\/]([^'"]+)['"]\s*\)/g)
       for (const match of gradleMatches) {
-        let fullPath = match[1]
+        let fullPath = match[1].replace(/\\/g, '/')
 
         // Normalize pnpm paths: .pnpm/@pkg+name@ver/node_modules/@scope/pkg/android → @scope/pkg
         const lastNodeModulesIdx = fullPath.lastIndexOf('node_modules/')
@@ -1130,7 +1191,8 @@ export async function zipDirectory(projectDir: string, outputPath: string, platf
     if (!textExtensions.has(ext) && basename !== 'Podfile')
       continue
     const original = entry.getData().toString('utf-8')
-    let rewritten = original.replace(pnpmPathPattern, 'node_modules/').replace(bunPathPattern, 'node_modules/')
+    let rewritten = normalizeNativeDependencyPathsInText(original)
+    rewritten = rewritten.replace(pnpmPathPattern, 'node_modules/').replace(bunPathPattern, 'node_modules/')
 
     // pnpm can leave deep relative paths in iOS files like Package.swift and Pods output.
     // Collapse any excessive ../ before project-root ios/ or node_modules/ paths back to
@@ -1186,6 +1248,13 @@ export const NON_CREDENTIAL_KEYS = new Set([
   'BUILD_OUTPUT_UPLOAD_ENABLED',
   'BUILD_OUTPUT_RETENTION_SECONDS',
   'SKIP_BUILD_NUMBER_BUMP',
+  'SKIP_MARKETING_VERSION_BUMP',
+  'CAPGO_STORE_SUBMIT_REVIEW',
+  'CAPGO_STORE_RELEASE_NAME',
+  'CAPGO_STORE_RELEASE_NOTES',
+  'CAPGO_STORE_RELEASE_NOTES_LOCALIZED',
+  'CAPGO_IOS_AUTOMATIC_RELEASE',
+  'CAPGO_IOS_TESTFLIGHT_GROUPS',
   'CAPGO_IOS_SOURCE_DIR',
   'CAPGO_IOS_APP_DIR',
   'CAPGO_IOS_PROJECT_DIR',
@@ -1196,6 +1265,63 @@ export const NON_CREDENTIAL_KEYS = new Set([
   'ANDROID_PROJECT_DIR',
   'CAPGO_ANDROID_FLAVOR',
 ])
+
+type LocalizedReleaseNotes = Record<string, string>
+
+export function parseStoreReleaseNotesLocaleEntries(entries?: string[]): LocalizedReleaseNotes | undefined {
+  if (!entries || entries.length === 0)
+    return undefined
+
+  const localized: LocalizedReleaseNotes = {}
+  for (const entry of entries) {
+    const separatorIndex = entry.indexOf('=')
+    if (separatorIndex <= 0) {
+      throw new Error('--store-release-notes-locale must use locale=notes format, for example: --store-release-notes-locale en-US="Bug fixes"')
+    }
+
+    const locale = entry.slice(0, separatorIndex).trim()
+    const notes = entry.slice(separatorIndex + 1).trim()
+    if (!locale || !notes) {
+      throw new Error('--store-release-notes-locale requires both a locale and non-empty release notes')
+    }
+
+    localized[locale] = notes
+  }
+
+  return Object.keys(localized).length > 0 ? localized : undefined
+}
+
+export function parseStoreReleaseNotesLocalizedJson(value?: string): LocalizedReleaseNotes | undefined {
+  const raw = value?.trim()
+  if (!raw)
+    return undefined
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  }
+  catch (error) {
+    throw new Error(`CAPGO_STORE_RELEASE_NOTES_LOCALIZED must be valid JSON: ${error instanceof Error ? error.message : String(error)}`)
+  }
+
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('CAPGO_STORE_RELEASE_NOTES_LOCALIZED must be a JSON object like {"en-US":"Bug fixes"}')
+  }
+
+  const localized: LocalizedReleaseNotes = {}
+  for (const [locale, notes] of Object.entries(parsed)) {
+    const cleanLocale = locale.trim()
+    if (typeof notes !== 'string' || !notes.trim()) {
+      throw new Error(`CAPGO_STORE_RELEASE_NOTES_LOCALIZED.${cleanLocale || locale} must be a non-empty string`)
+    }
+    if (!cleanLocale) {
+      throw new Error('CAPGO_STORE_RELEASE_NOTES_LOCALIZED cannot contain an empty locale key')
+    }
+    localized[cleanLocale] = notes.trim()
+  }
+
+  return Object.keys(localized).length > 0 ? localized : undefined
+}
 
 /**
  * Split merged credentials into a build options payload and a credentials-only payload.
@@ -1208,6 +1334,11 @@ export function splitPayload(
   buildMode: string,
   cliVersion: string,
 ): { buildOptions: BuildOptionsPayload, buildCredentials: Record<string, string> } {
+  const storeReleaseNotesLocalized = parseStoreReleaseNotesLocalizedJson(mergedCredentials.CAPGO_STORE_RELEASE_NOTES_LOCALIZED)
+  const iosAutomaticRelease = mergedCredentials.CAPGO_IOS_AUTOMATIC_RELEASE === undefined
+    ? undefined
+    : mergedCredentials.CAPGO_IOS_AUTOMATIC_RELEASE === 'true'
+
   const buildOptions: BuildOptionsPayload = {
     platform,
     buildMode: buildMode as 'debug' | 'release',
@@ -1227,6 +1358,13 @@ export function splitPayload(
       ? Number.parseInt(mergedCredentials.BUILD_OUTPUT_RETENTION_SECONDS, 10) || MIN_OUTPUT_RETENTION_SECONDS
       : MIN_OUTPUT_RETENTION_SECONDS,
     skipBuildNumberBump: mergedCredentials.SKIP_BUILD_NUMBER_BUMP === 'true',
+    skipMarketingVersionBump: mergedCredentials.SKIP_MARKETING_VERSION_BUMP === 'true',
+    submitToStoreReview: mergedCredentials.CAPGO_STORE_SUBMIT_REVIEW === 'true',
+    storeReleaseName: mergedCredentials.CAPGO_STORE_RELEASE_NAME,
+    storeReleaseNotes: mergedCredentials.CAPGO_STORE_RELEASE_NOTES,
+    storeReleaseNotesLocalized,
+    iosTestflightGroups: mergedCredentials.CAPGO_IOS_TESTFLIGHT_GROUPS,
+    iosAutomaticRelease,
   }
 
   const buildCredentials: Record<string, string> = {}
@@ -1288,6 +1426,13 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
 
     const platform = await resolveBuildPlatform(options.platform, { silent })
 
+    if (platform === 'ios' && options.syncIosVersion) {
+      const syncResult = syncIosMarketingVersion({ path: projectDir })
+      log.info(syncResult.changed
+        ? `Synced iOS MARKETING_VERSION to ${syncResult.marketingVersion}`
+        : `iOS MARKETING_VERSION is already ${syncResult.marketingVersion}`)
+    }
+
     const host = options.supaHost || 'https://api.capgo.app'
 
     const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
@@ -1318,6 +1463,11 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
 
     // Collect credentials from CLI args (if provided)
     const cliCredentials: Partial<BuildCredentials> = {}
+    const cliStoreReleaseNotesLocalized = {
+      ...(options.storeReleaseNotesLocalized ?? {}),
+      ...(parseStoreReleaseNotesLocaleEntries(options.storeReleaseNotesLocale) ?? {}),
+    }
+    const hasCliStoreReleaseNotesLocalized = Object.keys(cliStoreReleaseNotesLocalized).length > 0
     if (options.buildCertificateBase64)
       cliCredentials.BUILD_CERTIFICATE_BASE64 = options.buildCertificateBase64
     if (options.p12Password)
@@ -1388,6 +1538,24 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
     if (options.skipBuildNumberBump !== undefined) {
       cliCredentials.SKIP_BUILD_NUMBER_BUMP = parseOptionalBoolean(options.skipBuildNumberBump) ? 'true' : 'false'
     }
+    if (options.skipMarketingVersionBump !== undefined) {
+      cliCredentials.SKIP_MARKETING_VERSION_BUMP = parseOptionalBoolean(options.skipMarketingVersionBump) ? 'true' : 'false'
+    }
+    if (options.submitToStoreReview !== undefined) {
+      cliCredentials.CAPGO_STORE_SUBMIT_REVIEW = parseOptionalBoolean(options.submitToStoreReview) ? 'true' : 'false'
+    }
+    if (typeof options.storeReleaseName === 'string' && options.storeReleaseName.trim()) {
+      cliCredentials.CAPGO_STORE_RELEASE_NAME = options.storeReleaseName.trim()
+    }
+    if (typeof options.storeReleaseNotes === 'string' && options.storeReleaseNotes.trim()) {
+      cliCredentials.CAPGO_STORE_RELEASE_NOTES = options.storeReleaseNotes.trim()
+    }
+    if (typeof options.iosTestflightGroups === 'string' && options.iosTestflightGroups.trim()) {
+      cliCredentials.CAPGO_IOS_TESTFLIGHT_GROUPS = options.iosTestflightGroups.trim()
+    }
+    if (options.iosAutomaticRelease !== undefined) {
+      cliCredentials.CAPGO_IOS_AUTOMATIC_RELEASE = parseOptionalBoolean(options.iosAutomaticRelease) ? 'true' : 'false'
+    }
 
     // Merge credentials from all three sources:
     // 1. CLI args (highest priority)
@@ -1399,6 +1567,13 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
       Object.keys(cliCredentials).length > 0 ? cliCredentials : undefined,
     )
 
+    if (mergedCredentials && hasCliStoreReleaseNotesLocalized) {
+      const existingLocalized = parseStoreReleaseNotesLocalizedJson(mergedCredentials.CAPGO_STORE_RELEASE_NOTES_LOCALIZED) ?? {}
+      mergedCredentials.CAPGO_STORE_RELEASE_NOTES_LOCALIZED = JSON.stringify({
+        ...existingLocalized,
+        ...cliStoreReleaseNotesLocalized,
+      })
+    }
     // --no-playstore-upload: null out PLAY_CONFIG_JSON so it never reaches the builder
     if (options.playstoreUpload === false && mergedCredentials) {
       delete mergedCredentials.PLAY_CONFIG_JSON
@@ -1438,7 +1613,6 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
       log.error('  https://capgo.app/docs/cli/cloud-build/credentials/')
       throw new Error('No credentials found. Please provide credentials before building.')
     }
-
     // Validate platform-specific required credentials
     const missingCreds: string[] = []
 
@@ -1456,6 +1630,9 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
       }
       // Write normalized value back so splitPayload picks it up
       mergedCredentials.CAPGO_IOS_DISTRIBUTION = distributionMode
+      if (mergedCredentials.CAPGO_STORE_SUBMIT_REVIEW === 'true' && distributionMode !== 'app_store') {
+        missingCreds.push('--submit-to-store-review on iOS requires --ios-distribution app_store')
+      }
 
       // iOS minimum requirements (all modes)
       if (!mergedCredentials.BUILD_CERTIFICATE_BASE64)
@@ -1497,6 +1674,10 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
         const hasAppleAppId = !!mergedCredentials.APPLE_APP_ID
         const anyAppSpecificField = hasFastlaneUser || hasAppSpecificPassword || hasAppleAppId
         const hasCompleteAppSpecificPassword = hasFastlaneUser && hasAppSpecificPassword && hasAppleAppId
+
+        if (mergedCredentials.CAPGO_STORE_SUBMIT_REVIEW === 'true' && !hasCompleteAppleApiKey) {
+          missingCreds.push('App Store Connect API key (APPLE_KEY_ID/APPLE_ISSUER_ID/APPLE_KEY_CONTENT) is required for --submit-to-store-review on iOS')
+        }
 
         // APPLE_APP_ID is the app's numeric App Store Connect id; a non-numeric
         // value would make the headless TestFlight upload fail with a cryptic
@@ -1545,8 +1726,8 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
         else if (mergedCredentials.BUILD_OUTPUT_UPLOAD_ENABLED !== 'true') {
           missingCreds.push('App Store Connect API key (APPLE_KEY_ID/APPLE_ISSUER_ID/APPLE_KEY_CONTENT) or app-specific password (FASTLANE_USER + FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD + APPLE_APP_ID) or BUILD_OUTPUT_UPLOAD_ENABLED=true (or --output-upload) (build has no output destination - enable either TestFlight upload or Capgo download link)')
         }
-        else if (mergedCredentials.SKIP_BUILD_NUMBER_BUMP !== 'true') {
-          missingCreds.push('App Store Connect API key (APPLE_KEY_ID/APPLE_ISSUER_ID/APPLE_KEY_CONTENT) or app-specific password or --skip-build-number-bump (build numbers cannot be auto-incremented without an App Store Connect API key)')
+        else if (mergedCredentials.SKIP_BUILD_NUMBER_BUMP !== 'true' || mergedCredentials.SKIP_MARKETING_VERSION_BUMP !== 'true') {
+          missingCreds.push('App Store Connect API key (APPLE_KEY_ID/APPLE_ISSUER_ID/APPLE_KEY_CONTENT) or app-specific password or --skip-build-number-bump and --skip-marketing-version-bump (iOS versions cannot be auto-incremented without App Store Connect credentials)')
         }
         else {
           log.warn('⚠️  No App Store Connect API key or app-specific password provided - build will succeed but cannot auto-upload to TestFlight')
@@ -1576,7 +1757,10 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
 
       // PLAY_CONFIG_JSON is optional for build, but required for upload to Play Store
       if (!mergedCredentials.PLAY_CONFIG_JSON) {
-        if (mergedCredentials.BUILD_OUTPUT_UPLOAD_ENABLED !== 'true') {
+        if (mergedCredentials.CAPGO_STORE_SUBMIT_REVIEW === 'true') {
+          missingCreds.push('PLAY_CONFIG_JSON is required for --submit-to-store-review on Android')
+        }
+        else if (mergedCredentials.BUILD_OUTPUT_UPLOAD_ENABLED !== 'true') {
           missingCreds.push('PLAY_CONFIG_JSON or BUILD_OUTPUT_UPLOAD_ENABLED=true (build has no output destination - enable either Play Store upload or Capgo download link)')
         }
         else {
@@ -1620,6 +1804,9 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
       && !(mergedCredentials.APPLE_KEY_ID && mergedCredentials.APPLE_ISSUER_ID && mergedCredentials.APPLE_KEY_CONTENT)
     if (!mergedCredentials.SKIP_BUILD_NUMBER_BUMP && !iosWithoutApiKey) {
       log.info('ℹ️  --skip-build-number-bump not specified, build number will be auto-incremented (default)')
+    }
+    if (!mergedCredentials.SKIP_MARKETING_VERSION_BUMP && platform === 'ios' && !iosWithoutApiKey) {
+      log.info('ℹ️  --skip-marketing-version-bump not specified, marketing version will be auto-bumped when already released (default)')
     }
 
     const { buildOptions: buildOptionsPayload, buildCredentials: buildCredentialsPayload } = splitPayload(
@@ -1749,6 +1936,7 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
 
     if (!response.ok) {
       const errorText = await response.text()
+      await throwIfBuildPlanLimitError(response.status, errorText, 'request', log)
       throw new Error(`Failed to request build: ${response.status} - ${errorText}`)
     }
 
@@ -1984,6 +2172,7 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
 
       if (!startResponse.ok) {
         const errorText = await startResponse.text()
+        await throwIfBuildPlanLimitError(startResponse.status, errorText, 'start', log)
         throw new Error(`Failed to start build: ${startResponse.status} - ${errorText}`)
       }
 

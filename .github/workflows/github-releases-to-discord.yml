@@ -19,10 +19,20 @@ jobs:
           node-version: 24.x
       - name: Checkout
         uses: actions/checkout@v6
+      - name: Resolve release metadata
+        id: release_metadata
+        run: |
+          tag="${{ github.event.release.tag_name }}"
+          case "$tag" in
+            cli-[0-9]*) footer_title="Release $(node -p 'require("./cli/package.json").name')" ;;
+            notifications-[0-9]*) footer_title="Release $(node -p 'require("./packages/capacitor-notifications/package.json").name')" ;;
+            *) footer_title="Release @${{ github.repository }}" ;;
+          esac
+          printf 'footer_title=%s\n' "$footer_title" >> "$GITHUB_OUTPUT"
       - name: GitHub Releases to Discord
         uses: SethCohen/github-releases-to-discord@v1
         with:
           webhook_url: ${{ secrets.WEBHOOK_DISCORD_RELEASE_URL }}
           color: "2105893"
-          footer_title: "Release @${{ github.repository }}"
+          footer_title: ${{ steps.release_metadata.outputs.footer_title }}
           reduce_headings: true

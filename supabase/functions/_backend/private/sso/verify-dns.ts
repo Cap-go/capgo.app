@@ -1,7 +1,8 @@
-import { type } from 'arktype'
-import { safeParseSchema } from '../../utils/ark_validation.ts'
+import { z } from 'zod'
+import { safeParseSchema } from '../../utils/schema_validation.ts'
 import { verifyDnsTxtRecord } from '../../utils/dns-verification.ts'
-import { createHono, middlewareAuth, parseBody, quickError, simpleError, useCors } from '../../utils/hono.ts'
+import { createHono, parseBody, quickError, simpleError, useCors } from '../../utils/hono.ts'
+import { middlewareAuth } from '../../utils/hono_jwt.ts'
 import { cloudlog } from '../../utils/logging.ts'
 import { closeClient, getPgClient } from '../../utils/pg.ts'
 import { requireEnterprisePlan } from '../../utils/plan-gating.ts'
@@ -9,8 +10,8 @@ import { checkPermission } from '../../utils/rbac.ts'
 import { supabaseAdmin } from '../../utils/supabase.ts'
 import { version } from '../../utils/version.ts'
 
-const bodySchema = type({
-  provider_id: 'string.uuid',
+const bodySchema = z.object({
+  provider_id: z.uuid(),
 })
 
 export const app = createHono('', version)

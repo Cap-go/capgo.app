@@ -18,8 +18,13 @@ function hasSupabaseCli(): boolean {
  */
 function getLocalSupabaseCli(repoRoot: string): string | null {
   const binName = process.platform === 'win32' ? 'supabase.exe' : 'supabase'
-  const localBin = resolve(repoRoot, 'node_modules', 'supabase', 'bin', binName)
-  return existsSync(localBin) ? localBin : null
+  // Prefer the package shim Bun/npm expose on PATH (.bin), then legacy bin/ layouts.
+  const candidates = [
+    resolve(repoRoot, 'node_modules', '.bin', binName),
+    resolve(repoRoot, 'node_modules', 'supabase', 'bin', binName),
+    resolve(repoRoot, 'node_modules', 'supabase', 'dist', 'supabase.js'),
+  ]
+  return candidates.find(candidate => existsSync(candidate)) ?? null
 }
 
 /**
@@ -86,7 +91,7 @@ function rewriteConfigToml(raw: string, cfg: ReturnType<typeof getSupabaseWorktr
     db: ports.db,
     'db.pooler': ports.dbPooler,
     studio: ports.studio,
-    inbucket: ports.inbucket,
+    local_smtp: ports.inbucket,
     analytics: ports.analytics,
   }
 
@@ -110,6 +115,37 @@ function rewriteConfigToml(raw: string, cfg: ReturnType<typeof getSupabaseWorktr
   }
 
   return out.join('\n')
+}
+
+function upsertEnvValue(content: string, key: string, value: string): string {
+  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const matcher = new RegExp(`^${escapedKey}=.*$`, 'm')
+  const line = `${key}=${value}`
+
+  if (matcher.test(content))
+    return content.replace(matcher, line)
+
+  return content.endsWith('\n') || content.length === 0
+    ? `${content}${line}\n`
+    : `${content}\n${line}\n`
+}
+
+/**
+ * The checked-in functions env uses Supabase's default API port. Generate a
+ * worktree-specific copy so functions use the same isolated storage endpoint.
+ */
+function ensureFunctionsEnvFile(repoRoot: string, workdir: string, cfg: ReturnType<typeof getSupabaseWorktreeConfig>): string {
+  const sourcePath = resolve(repoRoot, 'supabase', 'functions', '.env')
+  const targetPath = resolve(workdir, 'functions.local.env')
+  const source = existsSync(sourcePath) ? readFileSync(sourcePath, 'utf8') : ''
+  const s3Endpoint = `127.0.0.1:${cfg.ports.api}/storage/v1/s3`
+  let generated = upsertEnvValue(source, 'S3_ENDPOINT', s3Endpoint)
+
+  if (process.env.CLOUDFLARE_FUNCTION_URL)
+    generated = upsertEnvValue(generated, 'CLOUDFLARE_FUNCTION_URL', process.env.CLOUDFLARE_FUNCTION_URL)
+
+  writeFileSync(targetPath, generated)
+  return targetPath
 }
 
 /**
@@ -241,14 +277,70 @@ function parseInlineEnvAssignments(args: string[]): { env: Record<string, string
 /**
  * Run a Supabase CLI command against the current worktree's generated `--workdir`.
  */
-function runSupabase(args: string[], repoRoot: string): number {
-  const { workdir } = ensureWorktreeSupabaseDir(repoRoot)
+function runSupabase(args: string[], repoRoot: string, options: { captureOutput?: boolean } = {}): { status: number, output: string } {
+  const { workdir, cfg } = ensureWorktreeSupabaseDir(repoRoot)
   const supa = getSupabaseCmd(repoRoot)
-  const res = spawnSync(supa.cmd, [...supa.argsPrefix, ...args, '--workdir', workdir], {
-    stdio: 'inherit',
+  const commandArgs = [...args]
+  const isFunctionsServe = commandArgs[0] === 'functions' && commandArgs[1] === 'serve'
+  const hasEnvFile = commandArgs.some(arg => arg === '--env-file' || arg.startsWith('--env-file='))
+
+  if (isFunctionsServe && !hasEnvFile)
+    commandArgs.push('--env-file', ensureFunctionsEnvFile(repoRoot, workdir, cfg))
+
+  // Supabase CLI 2.109+ plpgsql_check warns on intentional STABLE helpers that
+  // call auth.uid()/request headers. Keep emitting warnings, but do not fail CI
+  // on that newly noisy class unless callers ask for --fail-on error.
+  if (
+    commandArgs[0] === 'db'
+    && commandArgs[1] === 'lint'
+    && commandArgs.includes('--fail-on')
+  ) {
+    const failOnIdx = commandArgs.indexOf('--fail-on')
+    if (failOnIdx >= 0 && commandArgs[failOnIdx + 1] === 'warning') {
+      commandArgs[failOnIdx + 1] = 'error'
+    }
+  }
+
+  const res = spawnSync(supa.cmd, [...supa.argsPrefix, ...commandArgs, '--workdir', workdir], {
+    stdio: options.captureOutput ? 'pipe' : 'inherit',
+    encoding: options.captureOutput ? 'utf8' : undefined,
     env: process.env,
   })
-  return res.status ?? 1
+  const stdout = options.captureOutput ? (res.stdout ?? '') : ''
+  const stderr = options.captureOutput ? (res.stderr ?? '') : ''
+  if (options.captureOutput) {
+    if (stdout)
+      process.stdout.write(stdout)
+    if (stderr)
+      process.stderr.write(stderr)
+  }
+  return { status: res.status ?? 1, output: `${stdout}${stderr}` }
+}
+
+function isTransientDockerPortBindFailure(output: string): boolean {
+  return /address already in use/i.test(output)
+    || /failed to bind host port/i.test(output)
+}
+
+/**
+ * `supabase start` can fail on GitHub runners with a transient Docker port bind
+ * (`address already in use`) after a partial start/stop. Retry only that class of
+ * failure so permanent start errors fail fast.
+ */
+function runSupabaseStartWithRetry(args: string[], repoRoot: string): number {
+  const maxAttempts = 3
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const { status, output } = runSupabase(args, repoRoot, { captureOutput: true })
+    if (status === 0)
+      return 0
+    const canRetry = attempt < maxAttempts && isTransientDockerPortBindFailure(output)
+    if (!canRetry)
+      return status
+    console.error(`Supabase start hit a transient Docker port bind (attempt ${attempt}/${maxAttempts}); stopping and retrying...`)
+    runSupabase(['stop', '--no-backup'], repoRoot)
+    spawnSync(process.platform === 'win32' ? 'timeout' : 'sleep', process.platform === 'win32' ? ['/T', '2', '/NOBREAK'] : ['2'])
+  }
+  return 1
 }
 
 /**
@@ -271,9 +363,16 @@ function runWithEnv(cmdArgs: string[], repoRoot: string): number {
     return 2
   }
 
-  // Prefer the worktree-isolated stack, but fall back to legacy `supabase start`
-  // (e.g. CI workflows or older developer habits) so tests keep working.
+  // An explicitly scoped job must never fall back to a default stack: that can
+  // silently make two CI jobs share the same database.
+  const requiresIsolatedStack = Boolean(process.env.SUPABASE_WORKTREE_INSTANCE || process.env.SUPABASE_WORKTREE_PORT_OFFSET)
   const worktreeStatus = getStatusJson(supa, workdir)
+  if (!worktreeStatus.ok && requiresIsolatedStack) {
+    console.error('The isolated Supabase stack is not running. Start it with `bun run supabase:start`.')
+    return 1
+  }
+
+  // Preserve legacy compatibility for unscoped developer commands only.
   const legacyStatus = worktreeStatus.ok ? null : getStatusJson(supa, undefined)
 
   if (!worktreeStatus.ok && !legacyStatus?.ok) {
@@ -320,7 +419,10 @@ function main(): number {
       return runWithEnv(cmdArgs, repoRoot)
     }
 
-    return runSupabase(args, repoRoot)
+    if (args[0] === 'start')
+      return runSupabaseStartWithRetry(args, repoRoot)
+
+    return runSupabase(args, repoRoot).status
   }
   catch (error) {
     console.error(error instanceof Error ? error.message : String(error))

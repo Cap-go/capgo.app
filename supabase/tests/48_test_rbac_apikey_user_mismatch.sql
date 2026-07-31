@@ -13,53 +13,34 @@ VALUES
   (tests.get_supabase_uid('rbac_apikey_mismatch_key_owner'), 'rbac_apikey_mismatch_key_owner@test.local', NOW(), NOW())
 ON CONFLICT (id) DO NOTHING;
 
-INSERT INTO public.orgs (id, created_by, name, management_email, use_new_rbac)
+INSERT INTO public.orgs (id, created_by, name, management_email)
 VALUES (
   '70000000-0000-4000-8000-000000000048',
   tests.get_supabase_uid('rbac_apikey_mismatch_admin'),
   'RBAC API key mismatch org',
-  'rbac-apikey-mismatch@test.local',
-  true
+  'rbac-apikey-mismatch@test.local'
 )
 ON CONFLICT (id) DO NOTHING;
 
-DELETE FROM public.role_bindings
-WHERE principal_type = public.rbac_principal_user()
-  AND principal_id IN (
-    tests.get_supabase_uid('rbac_apikey_mismatch_actor'),
-    tests.get_supabase_uid('rbac_apikey_mismatch_key_owner')
-  )
-  AND scope_type = public.rbac_scope_org()
-  AND org_id = '70000000-0000-4000-8000-000000000048';
+INSERT INTO public.apikeys (id, user_id, key, name)
+VALUES
+  (45148, tests.get_supabase_uid('rbac_apikey_mismatch_key_owner'), 'rbac-apikey-mismatch-key', 'rbac-apikey-mismatch-key'),
+  (45149, tests.get_supabase_uid('rbac_apikey_mismatch_actor'), 'rbac-apikey-mismatch-actor-key', 'rbac-apikey-mismatch-actor-key')
+ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO public.role_bindings (principal_type, principal_id, role_id, scope_type, org_id, granted_by)
 SELECT
-  public.rbac_principal_user(),
-  tests.get_supabase_uid('rbac_apikey_mismatch_actor'),
+  public.rbac_principal_apikey(),
+  ak.rbac_id,
   r.id,
   public.rbac_scope_org(),
   '70000000-0000-4000-8000-000000000048',
   tests.get_supabase_uid('rbac_apikey_mismatch_admin')
 FROM public.roles r
-WHERE r.name = public.rbac_role_org_admin();
-
-SELECT tests.create_v2_apikey(
-  45148,
-  tests.get_supabase_uid('rbac_apikey_mismatch_key_owner'),
-  'rbac-apikey-mismatch-key',
-  'rbac-apikey-mismatch-key',
-  '70000000-0000-4000-8000-000000000048'::uuid,
-  public.rbac_role_org_admin()
-);
-
-SELECT tests.create_v2_apikey(
-  45149,
-  tests.get_supabase_uid('rbac_apikey_mismatch_actor'),
-  'rbac-apikey-mismatch-actor-key',
-  'rbac-apikey-mismatch-actor-key',
-  '70000000-0000-4000-8000-000000000048'::uuid,
-  public.rbac_role_org_admin()
-);
+JOIN public.apikeys ak
+  ON ak.id IN (45148, 45149)
+WHERE r.name = public.rbac_role_org_super_admin()
+ON CONFLICT DO NOTHING;
 
 SELECT ok(
   NOT public.rbac_check_permission_direct(

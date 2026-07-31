@@ -17,7 +17,6 @@ import {
   getCompatibilityDetails,
   getConfig,
   isCompatible,
-  OrganizationPerm,
 } from '../utils'
 
 type VersionChangeType = 'major' | 'minor' | 'patch' | 'prerelease' | 'changed' | 'same' | 'new' | 'removed'
@@ -281,7 +280,7 @@ export async function getBuildNeeded(
     supabase,
     enrichedOptions.apikey,
     resolvedAppId,
-    OrganizationPerm.read,
+    'app.read_bundles',
     true,
     true,
   )

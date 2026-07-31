@@ -1,7 +1,10 @@
+import { formatNumberValue } from '~/services/formatLocale'
+
 export function toFixed(value: number, fixed: number) {
   if (fixed === 0)
     return value
-  return Number.parseFloat(value.toFixed(fixed))
+  const factor = 10 ** fixed
+  return Math.round((value + Number.EPSILON) * factor) / factor
 }
 export function bytesToGb(bytes: number, fixes = 0) {
   return toFixed(Math.round(((bytes / 1024.0 / 1024.0 / 1024.0) + Number.EPSILON) * 100) / 100, fixes)
@@ -23,7 +26,7 @@ export function formatBytes(bytes: number, decimals = 2): string {
   const i = Math.floor(Math.log(bytes) / Math.log(k))
   const index = Math.min(i, sizes.length - 1)
 
-  return `${Number.parseFloat((bytes / k ** index).toFixed(dm))} ${sizes[index]}`
+  return `${formatNumberValue(toFixed(bytes / k ** index, dm), { maximumFractionDigits: dm })} ${sizes[index]}`
 }
 
 export function getDaysBetweenDates(date1: string | Date, date2: string | Date) {

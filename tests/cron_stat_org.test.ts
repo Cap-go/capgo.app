@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { BASE_URL, fetchWithRetry, getBaseData, getSupabaseClient, PRODUCT_ID, postUpdate, TEST_EMAIL, USER_ID } from './test-utils.ts'
+import { BASE_URL, fetchTestRequest, getBaseData, getSupabaseClient, PRODUCT_ID, postUpdate, TEST_EMAIL, USER_ID } from './test-utils.ts'
 
 // Create unique IDs for this test file to avoid parallel test interference
 const id = randomUUID()
@@ -127,7 +127,7 @@ afterAll(async () => {
 
 describe('[POST] /triggers/cron_stat_org', () => {
   it('should return 400 when orgId is missing', async () => {
-    const response = await fetchWithRetry(`${BASE_URL}/triggers/cron_stat_org`, {
+    const response = await fetchTestRequest(`${BASE_URL}/triggers/cron_stat_org`, {
       method: 'POST',
       headers,
       body: JSON.stringify({}),
@@ -162,7 +162,7 @@ describe('[POST] /triggers/cron_stat_org', () => {
     if (error)
       throw error
 
-    const response = await fetchWithRetry(`${BASE_URL}/triggers/cron_stat_org`, {
+    const response = await fetchTestRequest(`${BASE_URL}/triggers/cron_stat_org`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ orgId: TEST_ORG_ID }),
@@ -230,7 +230,7 @@ describe('[POST] /triggers/cron_stat_org', () => {
     if (error)
       throw error
 
-    const response = await fetchWithRetry(`${BASE_URL}/triggers/cron_stat_org`, {
+    const response = await fetchTestRequest(`${BASE_URL}/triggers/cron_stat_org`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ orgId: TEST_ORG_ID }),
@@ -301,7 +301,7 @@ describe('[POST] /triggers/cron_stat_org', () => {
     if (error)
       throw error
 
-    const response = await fetchWithRetry(`${BASE_URL}/triggers/cron_stat_org`, {
+    const response = await fetchTestRequest(`${BASE_URL}/triggers/cron_stat_org`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ orgId: TEST_ORG_ID }),
@@ -371,7 +371,7 @@ describe('[POST] /triggers/cron_stat_org', () => {
       .eq('customer_id', TEST_STRIPE_CUSTOMER_ID)
 
     // Trigger cron to set mau_exceeded
-    await fetchWithRetry(`${BASE_URL}/triggers/cron_stat_org`, {
+    await fetchTestRequest(`${BASE_URL}/triggers/cron_stat_org`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ orgId: TEST_ORG_ID }),
@@ -395,7 +395,7 @@ describe('[POST] /triggers/cron_stat_org', () => {
       .eq('customer_id', TEST_STRIPE_CUSTOMER_ID)
 
     // Trigger cron again
-    const response = await fetchWithRetry(`${BASE_URL}/triggers/cron_stat_org`, {
+    const response = await fetchTestRequest(`${BASE_URL}/triggers/cron_stat_org`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ orgId: TEST_ORG_ID }),
@@ -424,7 +424,7 @@ describe('[POST] /triggers/cron_stat_org', () => {
       .eq('customer_id', TEST_STRIPE_CUSTOMER_ID)
 
     // Trigger cron to set storage_exceeded
-    await fetchWithRetry(`${BASE_URL}/triggers/cron_stat_org`, {
+    await fetchTestRequest(`${BASE_URL}/triggers/cron_stat_org`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ orgId: TEST_ORG_ID }),
@@ -447,7 +447,7 @@ describe('[POST] /triggers/cron_stat_org', () => {
       .eq('customer_id', TEST_STRIPE_CUSTOMER_ID)
 
     // Trigger cron again
-    const response = await fetchWithRetry(`${BASE_URL}/triggers/cron_stat_org`, {
+    const response = await fetchTestRequest(`${BASE_URL}/triggers/cron_stat_org`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ orgId: TEST_ORG_ID }),
@@ -486,7 +486,7 @@ describe('[POST] /triggers/cron_stat_org', () => {
       .eq('customer_id', TEST_STRIPE_CUSTOMER_ID)
 
     // Trigger cron to set bandwidth_exceeded
-    await fetchWithRetry(`${BASE_URL}/triggers/cron_stat_org`, {
+    await fetchTestRequest(`${BASE_URL}/triggers/cron_stat_org`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ orgId: TEST_ORG_ID }),
@@ -510,7 +510,7 @@ describe('[POST] /triggers/cron_stat_org', () => {
       .eq('customer_id', TEST_STRIPE_CUSTOMER_ID)
 
     // Trigger cron again
-    const response = await fetchWithRetry(`${BASE_URL}/triggers/cron_stat_org`, {
+    const response = await fetchTestRequest(`${BASE_URL}/triggers/cron_stat_org`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ orgId: TEST_ORG_ID }),

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { env } from 'node:process'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
-  APIKEY_TEST_ALL,
+  APIKEY_TEST_ORG_SUPER_ADMIN,
   getEndpointUrl,
   ORG_ID,
   resetAndSeedAppData,
@@ -29,7 +29,7 @@ async function createTusUploadViaApi(
   const response = await fetch(getEndpointUrl('/files/upload/attachments'), {
     method: 'POST',
     headers: {
-      'Authorization': APIKEY_TEST_ALL,
+      'Authorization': APIKEY_TEST_ORG_SUPER_ADMIN,
       'Tus-Resumable': TUS_VERSION,
       'Upload-Length': uploadLength.toString(),
       'Upload-Metadata': `filename ${filenameB64}`,
@@ -55,7 +55,7 @@ async function uploadChunk(
   return fetch(uploadUrl, {
     method: 'PATCH',
     headers: {
-      'Authorization': APIKEY_TEST_ALL,
+      'Authorization': APIKEY_TEST_ORG_SUPER_ADMIN,
       'Tus-Resumable': TUS_VERSION,
       'Upload-Offset': offset.toString(),
       'Content-Type': 'application/offset+octet-stream',
@@ -75,7 +75,7 @@ async function checkUploadProgress(uploadUrl: string): Promise<{
   const response = await fetch(uploadUrl, {
     method: 'HEAD',
     headers: {
-      'Authorization': APIKEY_TEST_ALL,
+      'Authorization': APIKEY_TEST_ORG_SUPER_ADMIN,
       'Tus-Resumable': TUS_VERSION,
     },
   })
@@ -353,7 +353,7 @@ describe('tus upload protocol tests', () => {
       const response = await fetch(getEndpointUrl('/files/upload/attachments'), {
         method: 'POST',
         headers: {
-          'Authorization': APIKEY_TEST_ALL,
+          'Authorization': APIKEY_TEST_ORG_SUPER_ADMIN,
           'Tus-Resumable': TUS_VERSION,
           'Upload-Metadata': `filename ${filenameB64}`,
         },
@@ -370,7 +370,7 @@ describe('tus upload protocol tests', () => {
       const response = await fetch(getEndpointUrl('/files/upload/attachments'), {
         method: 'POST',
         headers: {
-          'Authorization': APIKEY_TEST_ALL,
+          'Authorization': APIKEY_TEST_ORG_SUPER_ADMIN,
           'Tus-Resumable': TUS_VERSION,
           'Upload-Length': '1024',
           'Upload-Metadata': `filename ${filenameB64}`,
@@ -388,7 +388,7 @@ describe('tus upload protocol tests', () => {
       const response = await fetch(getEndpointUrl('/files/upload/attachments'), {
         method: 'POST',
         headers: {
-          'Authorization': APIKEY_TEST_ALL,
+          'Authorization': APIKEY_TEST_ORG_SUPER_ADMIN,
           'Tus-Resumable': TUS_VERSION,
           'Upload-Length': '1024',
           'Upload-Metadata': `filename ${filenameB64}`,

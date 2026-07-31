@@ -90,8 +90,10 @@ export function dependencyDiffPath(
   return `/app/${encodeURIComponent(appId)}/bundle/${row.current_version_id}/dependencies?compare=${row.previous_version_id}`
 }
 
-/** Minimal fields the occurrence grouping needs (kept narrow so lightweight
- * callers like the banner can pass a reduced row selection). */
+/**
+ * Minimal fields the occurrence grouping needs, kept narrow so lightweight
+ * callers like the banner can pass a reduced row selection.
+ */
 type GroupableEvent = Pick<
   CompatibilityEventRow,
   'id' | 'platform' | 'channel_id' | 'current_version_id' | 'previous_version_id' | 'source' | 'change_occurred_at' | 'created_at' | 'resolved_at'

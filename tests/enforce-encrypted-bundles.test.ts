@@ -59,7 +59,6 @@ async function createStaleLegacySuperAdminFixture() {
     created_by: USER_ID,
     name: `Encrypted RBAC Stale Org ${id}`,
     management_email: `encrypted-rbac-stale-${id}@capgo.app`,
-    use_new_rbac: true,
   })
   if (orgError)
     throw orgError
@@ -85,7 +84,6 @@ async function createStaleLegacySuperAdminFixture() {
   const { error: memberError } = await supabase.from('org_users').insert({
     org_id: orgId,
     user_id: USER_ID_2,
-    user_right: 'read',
     rbac_role_name: 'org_member',
   })
   if (memberError)
@@ -105,7 +103,7 @@ async function createStaleLegacySuperAdminFixture() {
     scope_type: 'org',
     org_id: orgId,
     granted_by: USER_ID,
-    reason: 'stale legacy super-admin regression',
+    reason: 'stale org_users metadata regression',
     is_direct: true,
   })
   if (bindingError)
@@ -113,7 +111,7 @@ async function createStaleLegacySuperAdminFixture() {
 
   const { error: staleLegacyError } = await supabase
     .from('org_users')
-    .update({ user_right: 'super_admin' })
+    .update({ rbac_role_name: 'org_super_admin' })
     .eq('org_id', orgId)
     .eq('user_id', USER_ID_2)
     .is('app_id', null)
@@ -671,7 +669,7 @@ describe('[Encrypted Bundles Enforcement]', () => {
   })
 
   describe('cleanup RPC authorization', () => {
-    it('rejects stale legacy super_admin when RBAC only grants org_member', async () => {
+    it('rejects stale org_users super_admin metadata when RBAC only grants org_member', async () => {
       const fixture = await createStaleLegacySuperAdminFixture()
       const supabase = getSupabaseClient()
 

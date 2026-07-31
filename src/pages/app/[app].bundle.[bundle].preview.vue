@@ -25,10 +25,11 @@ const browserPreviewUnavailableReason = computed<'missing-manifest' | 'encrypted
   const currentVersion = version.value
   if (!currentVersion)
     return null
-  if (!currentVersion.manifest_count)
-    return 'missing-manifest'
+  // Encryption blocks all Capgo preview paths; check it before missing-manifest.
   if (currentVersion.session_key)
     return 'encrypted'
+  if (!currentVersion.manifest_count)
+    return 'missing-manifest'
   return null
 })
 const browserPreviewAvailable = computed(() => {

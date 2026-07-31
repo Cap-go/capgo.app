@@ -62,11 +62,10 @@ export { channelAddOptionsSchema, channelCurrentBundleOptionsSchema, channelDele
 export type { Channel, ChannelAddOptions, ChannelCurrentBundleOptions, ChannelDeleteOptions, OptionsSetChannel } from './channel'
 
 // Common
-export { compatibilityDetailsSchema, compatibilitySchema, incompatibilityReasonSchema, nativePackageSchema, parsedSecurityErrorSchema } from './common'
+export { compatibilityDetailsSchema, compatibilitySchema, incompatibilityReasonSchema, localizedReleaseNotesSchema, nativePackageSchema, parsedSecurityErrorSchema } from './common'
 export type { Compatibility, CompatibilityDetails, IncompatibilityReason, NativePackage, ParsedSecurityError } from './common'
 
 // Config
-export { capacitorConfigSchema, extConfigPairsSchema } from './config'
 export type { CapacitorConfig, ExtConfigPairs } from './config'
 
 // Organization

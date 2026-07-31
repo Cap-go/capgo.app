@@ -19,7 +19,7 @@ const emit = defineEmits<{ 'update:loading': [value: boolean] }>()
 const { t } = useI18n()
 const supabase = useSupabase()
 
-interface BuildLogRow { created_at: string | null, build_time_unit: number | null }
+interface BuildLogRow { created_at: string | null, billable_seconds: number | null }
 interface BuildTimeResult { minutesPerDay: number[], total: number, evolution: number }
 
 const { isLoading, result } = useBuildCardStats<BuildTimeResult>(props, emit, {
@@ -27,7 +27,7 @@ const { isLoading, result } = useBuildCardStats<BuildTimeResult>(props, emit, {
   load: async (window) => {
     const rows = await fetchAllRows<BuildLogRow>((from, to) => supabase
       .from('build_logs')
-      .select('created_at, build_time_unit')
+      .select('created_at, billable_seconds')
       .eq('app_id', props.appId)
       .gte('created_at', window.startISO)
       .lte('created_at', window.endISO)
@@ -37,12 +37,12 @@ const { isLoading, result } = useBuildCardStats<BuildTimeResult>(props, emit, {
     // Accumulate real build seconds per day, then convert to minutes for display.
     const secondsPerDay = Array.from({ length: window.dayCount }).fill(0) as number[]
     for (const row of rows) {
-      if (!row.created_at || row.build_time_unit == null)
+      if (!row.created_at || row.billable_seconds == null)
         continue
       const dayIndex = dayIndexInWindow(new Date(row.created_at), window.windowStart)
       if (dayIndex < 0 || dayIndex >= window.dayCount)
         continue
-      secondsPerDay[dayIndex] += row.build_time_unit
+      secondsPerDay[dayIndex] += row.billable_seconds
     }
 
     const minutesPerDay = secondsPerDay.map(seconds => Math.round((seconds / 60) * 10) / 10)

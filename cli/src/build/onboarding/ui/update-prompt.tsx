@@ -1,4 +1,4 @@
-import type { FC } from 'react'
+import type { FC, ReactNode } from 'react'
 import type { PlatformPickerLayout } from './frame-fit.js'
 // src/build/onboarding/ui/update-prompt.tsx
 //
@@ -9,8 +9,11 @@ import type { PlatformPickerLayout } from './frame-fit.js'
 // ←/→/Enter driving:
 //   • `cards` — two bordered cards (Update now / Skip) side-by-side.
 //   • `list`  — the shared @inkjs/ui Select, for narrow/short terminals.
-// The actual install + re-exec happens AFTER Ink tears down (see command.ts);
-// this component only collects the decision.
+// Both layouts accept an optional `footer` rendered DIRECTLY below the legend
+// (inside the same flex column) so a caller note — e.g. the analytics opt-out
+// line — sits flush under "← → choose · Enter confirm" instead of floating
+// mid-screen with a gap. The actual install + re-exec happens AFTER Ink tears
+// down (see command.ts); this component only collects the decision.
 import { Select } from '@inkjs/ui'
 import { Box, Text, useInput } from 'ink'
 import React, { useState } from 'react'
@@ -62,9 +65,11 @@ export interface UpdatePromptProps {
   currentVersion: string
   latestVersion: string
   onDecide: (choice: UpdateChoice) => void
+  /** Rendered directly below the legend (flush, no gap). */
+  footer?: ReactNode
 }
 
-export const UpdatePrompt: FC<UpdatePromptProps> = ({ layout, currentVersion, latestVersion, onDecide }) => {
+export const UpdatePrompt: FC<UpdatePromptProps> = ({ layout, currentVersion, latestVersion, onDecide, footer }) => {
   const [selected, setSelected] = useState<UpdateChoice>('update')
   const heading = `A new version of @capgo/cli is available (${currentVersion} → ${latestVersion}). Update now?`
 
@@ -85,7 +90,7 @@ export const UpdatePrompt: FC<UpdatePromptProps> = ({ layout, currentVersion, la
 
   if (layout === 'list') {
     return (
-      <Box flexDirection="column" marginTop={1}>
+      <Box flexDirection="column" flexGrow={1} marginTop={1}>
         <Text bold>{heading}</Text>
         <Select
           options={[
@@ -94,12 +99,15 @@ export const UpdatePrompt: FC<UpdatePromptProps> = ({ layout, currentVersion, la
           ]}
           onChange={value => onDecide(value as UpdateChoice)}
         />
+        <Box flexGrow={1} />
+        {footer}
       </Box>
     )
   }
 
   // Matches PlatformPicker's cards layout: centered heading + cards at the top,
-  // the key legend pinned to the bottom via a flex spacer.
+  // the key legend (and optional footer flush beneath it) pinned to the bottom
+  // via a single flex spacer.
   return (
     <Box flexDirection="column" alignItems="center" flexGrow={1} marginTop={1}>
       <Text bold>{heading}</Text>
@@ -109,6 +117,7 @@ export const UpdatePrompt: FC<UpdatePromptProps> = ({ layout, currentVersion, la
       </Box>
       <Box flexGrow={1} />
       <Text dimColor>←  →  choose   ·   Enter  confirm</Text>
+      {footer}
     </Box>
   )
 }

@@ -3,7 +3,7 @@ title: 🔹 mcp
 description: "🤖 Start the Capgo MCP (Model Context Protocol) server for AI agent integration."
 sidebar_label: mcp
 sidebar:
-  order: 18
+  order: 19
 ---
 
 🤖 Start the Capgo MCP (Model Context Protocol) server for AI agent integration.
@@ -14,7 +14,7 @@ npx @capgo/cli@latest mcp
 
 This command starts an MCP server that exposes Capgo functionality as tools for AI agents.
 The server communicates via stdio and is designed for non-interactive, programmatic use.
-Available tools exposed via MCP:
+Selected tools exposed via MCP:
   - capgo_list_apps, capgo_add_app, capgo_update_app, capgo_delete_app
   - capgo_upload_bundle, capgo_list_bundles, capgo_delete_bundle, capgo_cleanup_bundles
   - capgo_list_channels, capgo_add_channel, capgo_update_channel, capgo_delete_channel
@@ -30,7 +30,7 @@ Example usage with Claude Desktop:
     "mcpServers": {
       "capgo": {
         "command": "npx",
-        "args": ["@capgo/cli", "mcp"]
+        "args": ["@capgo/cli@latest", "mcp"]
       }
     }
   }
@@ -38,6 +38,12 @@ Example usage with Claude Desktop:
 **Example:**
 
 ```bash
-npx @capgo/cli mcp
+npx @capgo/cli@latest mcp
 ```
+
+## <a id="options-mcp"></a> Options (Mcp)
+
+| Param          | Type          | Description          |
+| -------------- | ------------- | -------------------- |
+| **--capacitor-config** | <code>string</code> | Capacitor config source to update (useful with dynamic monorepo configs) |
 

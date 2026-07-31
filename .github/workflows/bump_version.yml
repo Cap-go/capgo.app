@@ -19,8 +19,10 @@ jobs:
       capgo_release_as: ${{ steps.capgo.outputs.release_as }}
       run_cli: ${{ steps.cli.outputs.should_release }}
       cli_release_as: ${{ steps.cli.outputs.release_as }}
+      run_notifications: ${{ steps.notifications.outputs.should_release }}
+      notifications_release_as: ${{ steps.notifications.outputs.release_as }}
       has_migration_changes: ${{ steps.migration_scope.outputs.has_migration_changes }}
-      run_any: ${{ steps.capgo.outputs.should_release == 'true' || steps.cli.outputs.should_release == 'true' }}
+      run_any: ${{ steps.capgo.outputs.should_release == 'true' || steps.cli.outputs.should_release == 'true' || steps.notifications.outputs.should_release == 'true' }}
     steps:
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -30,6 +32,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          filter: blob:none
       - name: Setup bun
         run: bash scripts/setup-bun.sh
       - name: Resolve Capgo release scope
@@ -38,6 +41,9 @@ jobs:
       - name: Resolve CLI release scope
         id: cli
         run: bun scripts/release-scope.ts cli "${{ github.event.before }}" "${{ github.sha }}" >> "$GITHUB_OUTPUT"
+      - name: Resolve notifications plugin release scope
+        id: notifications
+        run: bun scripts/release-scope.ts notifications "${{ github.event.before }}" "${{ github.sha }}" >> "$GITHUB_OUTPUT"
       - name: Resolve migration scope
         id: migration_scope
         run: |
@@ -55,6 +61,7 @@ jobs:
     with:
       run_capgo: ${{ needs.changes.outputs.run_capgo == 'true' }}
       run_cli: ${{ needs.changes.outputs.run_cli == 'true' }}
+      run_notifications: ${{ needs.changes.outputs.run_notifications == 'true' }}
     permissions:
       contents: read
       actions: write
@@ -79,13 +86,14 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          filter: blob:none
           token: "${{ secrets.PERSONAL_ACCESS_TOKEN }}"
       - name: Setup bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
       - name: Install dependencies
-        if: ${{ needs.changes.outputs.run_cli == 'true' }}
+        if: ${{ needs.changes.outputs.run_capgo == 'true' || needs.changes.outputs.run_cli == 'true' || needs.changes.outputs.run_notifications == 'true' }}
         run: bun install --frozen-lockfile
       - name: Git config
         run: |
@@ -109,6 +117,8 @@ jobs:
           CAPGO_RELEASE_AS: ${{ needs.changes.outputs.capgo_release_as }}
           RUN_CLI: ${{ needs.changes.outputs.run_cli }}
           CLI_RELEASE_AS: ${{ needs.changes.outputs.cli_release_as }}
+          RUN_NOTIFICATIONS: ${{ needs.changes.outputs.run_notifications }}
+          NOTIFICATIONS_RELEASE_AS: ${{ needs.changes.outputs.notifications_release_as }}
         run: |
           set -e
 
@@ -155,6 +165,25 @@ jobs:
 
             refresh_graphify_graph
           fi
+
+          if [ "$RUN_NOTIFICATIONS" = "true" ]; then
+            if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+              bunx standard-version --skip.changelog --release-as "$NOTIFICATIONS_RELEASE_AS" --tag-prefix notifications- --packageFiles packages/capacitor-notifications/package.json --bumpFiles packages/capacitor-notifications/package.json
+            else
+              bunx standard-version --skip.changelog --release-as "$NOTIFICATIONS_RELEASE_AS" --prerelease alpha --tag-prefix notifications- --packageFiles packages/capacitor-notifications/package.json --bumpFiles packages/capacitor-notifications/package.json
+            fi
+
+            bun scripts/sync-notifications-package-version.ts
+            git add packages/capacitor-notifications/src/version.ts
+            if ! git diff --cached --quiet; then
+              CURRENT_TAG=$(git describe --tags --exact-match 2>/dev/null || echo "")
+              git commit --amend --no-edit
+
+              if [ -n "$CURRENT_TAG" ]; then
+                git tag -f "$CURRENT_TAG"
+              fi
+            fi
+          fi
       - name: Push to origin
         run: |
           set -e
@@ -182,6 +211,7 @@ jobs:
           ref: main
           token: "${{ secrets.PERSONAL_ACCESS_TOKEN }}"
           fetch-depth: 0
+          filter: blob:none
       - name: Setup bun
         uses: oven-sh/setup-bun@v2
         with:

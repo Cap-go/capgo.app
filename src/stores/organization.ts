@@ -1,5 +1,5 @@
+import type { AuthChangeEvent } from '@supabase/supabase-js'
 import type { ComputedRef, Ref } from 'vue'
-import type { ArrayElement, Concrete, Merge } from '~/services/types'
 import type { Database } from '~/types/supabase.types'
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
@@ -22,7 +22,7 @@ export interface PasswordPolicyConfig {
 
 // Extended organization type with password policy and 2FA fields (from get_orgs_v7)
 // Note: Using get_orgs_v7 return type with explicit JSON parsing for password_policy_config
-type RawOrganization = ArrayElement<Database['public']['Functions']['get_orgs_v7']['Returns']>
+type RawOrganization = Database['public']['Functions']['get_orgs_v7']['Returns'][number]
 export type Organization = Omit<RawOrganization, 'password_policy_config' | 'stats_refresh_requested_at' | 'stats_updated_at'> & {
   logo_storage_path?: string | null
   logo_is_loading?: boolean
@@ -30,18 +30,25 @@ export type Organization = Omit<RawOrganization, 'password_policy_config' | 'sta
   stats_refresh_requested_at: string | null
   stats_updated_at: string | null
 }
+export interface OrganizationApp {
+  app_id: string
+  name: string | null
+  owner_org: string
+  icon_url: string | null
+  icon_storage_path?: string | null
+  icon_url_loading?: boolean
+}
 export type OrganizationRole
-  = Database['public']['Enums']['user_min_right']
-    | 'owner'
+  = 'owner'
     | 'org_member'
     | 'org_billing_admin'
     | 'org_admin'
     | 'org_super_admin'
-export type ExtendedOrganizationMember = Concrete<Merge<ArrayElement<Database['public']['Functions']['get_org_members']['Returns']>, { id: number | string }>>
+type OrgMemberRow = Database['public']['Functions']['get_org_members']['Returns'][number]
+export type ExtendedOrganizationMember = OrgMemberRow & { id: number | string }
 export type ExtendedOrganizationMembers = ExtendedOrganizationMember[]
 type SignedMemberImageCallback = (signedImages: Map<string, string>) => void
-
-type LegacyMinRight = Database['public']['Enums']['user_min_right'] | 'owner'
+type OrgPermissionFloor = 'org_member' | 'org_billing_admin' | 'org_admin' | 'org_super_admin' | 'owner'
 
 // Mapping des rôles RBAC d'organisation vers leurs clés de traduction i18n
 export const RBAC_ORG_ROLE_I18N_KEYS: Record<string, string> = {
@@ -50,7 +57,9 @@ export const RBAC_ORG_ROLE_I18N_KEYS: Record<string, string> = {
   org_billing_admin: 'role-org-billing-admin',
   org_member: 'role-org-member',
   app_admin: 'role-app-admin',
+  app_preview: 'role-app-preview',
   app_developer: 'role-app-developer',
+  app_notifications: 'role-app-notifications',
   app_uploader: 'role-app-uploader',
   app_reader: 'role-app-reader',
   channel_admin: 'role-channel-admin',
@@ -66,79 +75,34 @@ export function getRbacRoleI18nKey(role: string): string | undefined {
   return RBAC_ORG_ROLE_I18N_KEYS[role]
 }
 
-const LEGACY_ROLE_RANK: Record<string, number> = {
-  read: 1,
-  upload: 2,
-  write: 3,
-  admin: 4,
-  super_admin: 5,
+const ORG_ROLE_RANK: Record<string, number> = {
+  org_member: 1,
+  org_billing_admin: 2,
+  org_admin: 3,
+  org_super_admin: 4,
+  owner: 4,
 }
 
-const LEGACY_ROLE_ALIASES: Record<string, string> = {
-  owner: 'super_admin',
-  org_super_admin: 'super_admin',
-  org_admin: 'admin',
-  org_billing_admin: 'read',
-  org_member: 'read',
-  app_admin: 'admin',
-  app_developer: 'write',
-  app_uploader: 'upload',
-  app_reader: 'read',
-}
-
-const LEGACY_TO_RBAC_ORG: Record<string, string> = {
-  super_admin: 'org_super_admin',
-  admin: 'org_admin',
-  write: 'org_member',
-  upload: 'org_member',
-  read: 'org_member',
-}
-
-const LEGACY_TO_RBAC_APP: Record<string, string> = {
-  super_admin: 'app_admin',
-  admin: 'app_admin',
-  write: 'app_developer',
-  upload: 'app_uploader',
-  read: 'app_reader',
-}
-
-function normalizeLegacyRole(role?: string | null) {
+export function roleHasOrgRank(role: string | null | undefined, minRole: 'org_member' | 'org_billing_admin' | 'org_admin' | 'org_super_admin') {
   if (!role)
-    return null
-  const trimmed = role.startsWith('invite_') ? role.slice('invite_'.length) : role
-  return LEGACY_ROLE_ALIASES[trimmed] ?? trimmed
-}
-
-function legacyRoleRank(role?: string | null) {
-  const normalized = normalizeLegacyRole(role)
-  if (!normalized)
-    return null
-  return LEGACY_ROLE_RANK[normalized] ?? null
-}
-
-export function roleHasLegacyMinRight(role: string | null | undefined, minRight: LegacyMinRight) {
-  const roleRank = legacyRoleRank(role)
-  const requiredRank = legacyRoleRank(minRight)
-  if (roleRank === null || requiredRank === null)
     return false
-  return roleRank >= requiredRank
+  return (ORG_ROLE_RANK[role] ?? 0) >= ORG_ROLE_RANK[minRole]
 }
 
 export function isAdminRole(role: string | null | undefined) {
-  return roleHasLegacyMinRight(role, 'admin')
+  return roleHasOrgRank(role, 'org_admin')
 }
 
 export function isSuperAdminRole(role: string | null | undefined) {
-  return roleHasLegacyMinRight(role, 'super_admin')
+  return roleHasOrgRank(role, 'org_super_admin')
 }
 
 function normalizeRbacRole(role: string, scope: 'org' | 'app') {
-  const legacy = normalizeLegacyRole(role)
-  if (!legacy)
-    return role
-  if (scope === 'org')
-    return LEGACY_TO_RBAC_ORG[legacy] ?? role
-  return LEGACY_TO_RBAC_APP[legacy] ?? role
+  if (role === 'owner')
+    return scope === 'org' ? 'org_super_admin' : 'app_admin'
+  if (scope === 'app' && (role === 'org_admin' || role === 'org_super_admin'))
+    return 'app_admin'
+  return role
 }
 
 function matchesRbacRole(role: string, requiredRole: string) {
@@ -148,11 +112,17 @@ function matchesRbacRole(role: string, requiredRole: string) {
     return normalizeRbacRole(role, 'org') === requiredRole
   if (requiredRole.startsWith('app_'))
     return normalizeRbacRole(role, 'app') === requiredRole
-  return normalizeLegacyRole(role) === normalizeLegacyRole(requiredRole)
+  return role === requiredRole
 }
 
-function isSelectableOrganization(role: string) {
-  return !role.includes('invite')
+export function isPendingOrganizationInvite(org: Pick<Organization, 'is_invite' | 'role'>) {
+  if (org.is_invite !== null && org.is_invite !== undefined)
+    return org.is_invite === true
+  return org.role.startsWith('invite')
+}
+
+function isSelectableOrganization(org: Pick<Organization, 'is_invite' | 'role'>) {
+  return !isPendingOrganizationInvite(org)
 }
 
 const supabase = useSupabase()
@@ -161,6 +131,8 @@ export const useOrganizationStore = defineStore('organization', () => {
   const main = useMainStore()
   const _organizations: Ref<Map<string, Organization>> = ref(new Map())
   const _organizationsByAppId: Ref<Map<string, Organization>> = ref(new Map())
+  const _appsByOrgId: Ref<Map<string, OrganizationApp[]>> = ref(new Map())
+  const _appsByAppId: Ref<Map<string, OrganizationApp>> = ref(new Map())
   const _initialLoadPromise = ref(createDeferredPromise<boolean>())
   const _initialized = ref(false)
 
@@ -172,7 +144,7 @@ export const useOrganizationStore = defineStore('organization', () => {
       )
     },
   )
-  const hasOrganizations = computed(() => organizations.value.some(org => isSelectableOrganization(org.role)))
+  const hasOrganizations = computed(() => organizations.value.some(org => isSelectableOrganization(org)))
 
   const getCurrentRole = async (appOwner: string, appId?: string, channelId?: number): Promise<OrganizationRole> => {
     if (_organizations.value.size === 0) {
@@ -203,6 +175,7 @@ export const useOrganizationStore = defineStore('organization', () => {
 
   const STORAGE_KEY = 'capgo_current_org_id'
   let organizationLogoLoadRun = 0
+  let organizationAppIconLoadRun = 0
 
   const getMemberImageKey = (member: { uid?: string | null, id?: number | string | null, email?: string | null }) => {
     return String(member.uid ?? member.id ?? member.email ?? '')
@@ -291,6 +264,65 @@ export const useOrganizationStore = defineStore('organization', () => {
     }
   }
 
+  const appWithImmediateIcon = (app: { app_id: string, name: string | null, owner_org: string, icon_url: string | null }): OrganizationApp => {
+    const { normalized, shouldSign } = resolveImagePath(app.icon_url)
+    return {
+      app_id: app.app_id,
+      name: app.name,
+      owner_org: app.owner_org,
+      icon_url: shouldSign ? '' : normalized || null,
+      icon_storage_path: normalized || null,
+      icon_url_loading: shouldSign,
+    }
+  }
+
+  const updateOrganizationAppIconState = (appId: string, patch: Partial<OrganizationApp>, run: number) => {
+    if (run !== organizationAppIconLoadRun)
+      return
+
+    const app = _appsByAppId.value.get(appId)
+    if (!app)
+      return
+
+    const nextApp = { ...app, ...patch }
+    const nextAppsByAppId = new Map(_appsByAppId.value)
+    nextAppsByAppId.set(appId, nextApp)
+
+    const nextAppsByOrgId = new Map(_appsByOrgId.value)
+    const orgApps = nextAppsByOrgId.get(nextApp.owner_org)
+    if (orgApps)
+      nextAppsByOrgId.set(nextApp.owner_org, orgApps.map(orgApp => orgApp.app_id === appId ? nextApp : orgApp))
+
+    _appsByAppId.value = nextAppsByAppId
+    _appsByOrgId.value = nextAppsByOrgId
+  }
+
+  const loadOrganizationAppIcon = async (app: OrganizationApp, run: number) => {
+    if (!app.icon_url_loading || !app.icon_storage_path)
+      return
+
+    try {
+      const signedIcon = await createSignedImageUrl(app.icon_storage_path)
+      updateOrganizationAppIconState(app.app_id, {
+        icon_url: signedIcon || '',
+        icon_url_loading: false,
+      }, run)
+    }
+    catch (error) {
+      console.warn('Cannot load signed app icon', { appId: app.app_id, error })
+      updateOrganizationAppIconState(app.app_id, { icon_url_loading: false }, run)
+    }
+  }
+
+  const loadOrganizationAppIcons = (sourceApps: OrganizationApp[], run: number) => {
+    for (const app of sourceApps) {
+      loadOrganizationAppIcon(app, run).catch((error) => {
+        console.warn('Cannot load signed app icon', { appId: app.app_id, error })
+        updateOrganizationAppIconState(app.app_id, { icon_url_loading: false }, run)
+      })
+    }
+  }
+
   watch([currentOrganization, stripeEnabled], async ([currentOrganizationRaw, stripeEnabledValue], [previousOrganization]) => {
     if (!currentOrganizationRaw) {
       currentRole.value = null
@@ -345,17 +377,20 @@ export const useOrganizationStore = defineStore('organization', () => {
       return
 
     const organizations = Array.from(organizationsMap.values())
-    const selectableOrganizations = organizations.filter(org => isSelectableOrganization(org.role))
+    const selectableOrganizations = organizations.filter(org => isSelectableOrganization(org))
     const orgIds = selectableOrganizations.map(org => org.gid)
 
     if (orgIds.length === 0) {
+      _appsByOrgId.value = new Map()
+      _appsByAppId.value = new Map()
       _initialLoadPromise.value.resolve(true)
       return
     }
 
+    const appIconLoadRun = ++organizationAppIconLoadRun
     const { error, data: allAppsByOwner } = await supabase
       .from('apps')
-      .select('app_id, owner_org')
+      .select('app_id, name, owner_org, icon_url')
       .in('owner_org', orgIds)
 
     if (error) {
@@ -363,7 +398,12 @@ export const useOrganizationStore = defineStore('organization', () => {
       return
     }
 
+    if (appIconLoadRun !== organizationAppIconLoadRun)
+      return
+
     const organizationsByAppId = new Map<string, Organization>()
+    const appsByOrgId = new Map<string, OrganizationApp[]>()
+    const appsByAppId = new Map<string, OrganizationApp>()
 
     for (const app of allAppsByOwner) {
       // For each app find the org_id that owns said app
@@ -376,14 +416,35 @@ export const useOrganizationStore = defineStore('organization', () => {
       }
 
       organizationsByAppId.set(app.app_id, org)
+
+      const indexedApp = appWithImmediateIcon(app)
+      appsByAppId.set(indexedApp.app_id, indexedApp)
+      const orgApps = appsByOrgId.get(indexedApp.owner_org) ?? []
+      orgApps.push(indexedApp)
+      appsByOrgId.set(indexedApp.owner_org, orgApps)
+    }
+
+    for (const apps of appsByOrgId.values()) {
+      apps.sort((a, b) => (a.name || a.app_id).localeCompare(b.name || b.app_id))
     }
 
     _organizationsByAppId.value = organizationsByAppId
+    _appsByOrgId.value = appsByOrgId
+    _appsByAppId.value = appsByAppId
+    loadOrganizationAppIcons(Array.from(appsByAppId.values()), appIconLoadRun)
     _initialLoadPromise.value.resolve(true)
   })
 
   const getOrgByAppId = (appId: string) => {
     return _organizationsByAppId.value.get(appId)
+  }
+
+  const getAppByAppId = (appId: string) => {
+    return _appsByAppId.value.get(appId)
+  }
+
+  const getAppsByOrgId = (orgId: string) => {
+    return _appsByOrgId.value.get(orgId) ?? []
   }
 
   const awaitInitialLoad = () => {
@@ -430,7 +491,6 @@ export const useOrganizationStore = defineStore('organization', () => {
       })
 
     if (error || data === null) {
-      console.log('Cannot get org members!', error)
       return []
     }
 
@@ -461,13 +521,15 @@ export const useOrganizationStore = defineStore('organization', () => {
       return
 
     if (!_initialized.value) {
-      const listener = supabase.auth.onAuthStateChange((event: any) => {
+      const listener = supabase.auth.onAuthStateChange((event: AuthChangeEvent) => {
         if (event === 'SIGNED_OUT') {
           listener.data.subscription.unsubscribe()
           clearWebsitePaidUserCookie()
           // Remove all from orgs
           _organizations.value = new Map()
           _organizationsByAppId.value = new Map()
+          _appsByOrgId.value = new Map()
+          _appsByAppId.value = new Map()
           _initialLoadPromise.value = createDeferredPromise<boolean>()
           currentOrganization.value = undefined
           currentRole.value = null
@@ -514,7 +576,7 @@ export const useOrganizationStore = defineStore('organization', () => {
     loadOrganizationLogos(mappedData, logoLoadRun)
 
     const selectableOrganizations = mappedData
-      .filter(org => isSelectableOrganization(org.role))
+      .filter(org => isSelectableOrganization(org))
       .sort((a, b) => b.app_count - a.app_count)
 
     const organization = selectableOrganizations[0]
@@ -525,6 +587,8 @@ export const useOrganizationStore = defineStore('organization', () => {
       currentRole.value = null
       currentOrganizationFailed.value = false
       _organizationsByAppId.value = new Map()
+      _appsByOrgId.value = new Map()
+      _appsByAppId.value = new Map()
       _initialLoadPromise.value.resolve(true)
       return
     }
@@ -534,7 +598,7 @@ export const useOrganizationStore = defineStore('organization', () => {
     if (!targetOrgId) {
       const storedOrgId = localStorage.getItem(STORAGE_KEY)
       if (storedOrgId) {
-        const storedOrg = mappedData.find(org => org.gid === storedOrgId && isSelectableOrganization(org.role))
+        const storedOrg = mappedData.find(org => org.gid === storedOrgId && isSelectableOrganization(org))
         if (storedOrg) {
           targetOrgId = storedOrg.gid
         }
@@ -603,7 +667,7 @@ export const useOrganizationStore = defineStore('organization', () => {
   }
 
   const hasPermissionsInRole = (
-    minRight: LegacyMinRight,
+    minRight: OrgPermissionFloor,
     requiredRoles: string[] = [],
     orgId?: string,
     appId?: string,
@@ -619,10 +683,10 @@ export const useOrganizationStore = defineStore('organization', () => {
         return true
     }
 
-    return roleHasLegacyMinRight(role, minRight)
+    return roleHasOrgRank(role, minRight === 'owner' ? 'org_super_admin' : minRight)
   }
 
-  // Check password policy compliance for all org members (for super_admin preview)
+  // Check password policy compliance for all org members in org admin previews.
   const checkPasswordPolicyImpact = async (orgId: string) => {
     const { data, error } = await supabase.rpc('check_org_members_password_policy', {
       org_id: orgId,
@@ -641,7 +705,7 @@ export const useOrganizationStore = defineStore('organization', () => {
   }
 
   const canDeleteOrganization = (orgId?: string) => {
-    return hasPermissionsInRole('super_admin', ['org_super_admin'], orgId)
+    return hasPermissionsInRole('org_super_admin', ['org_super_admin'], orgId)
   }
 
   const deleteOrganization = async (orgId: string) => {
@@ -656,11 +720,10 @@ export const useOrganizationStore = defineStore('organization', () => {
       return { data: null, error: new Error('User not authenticated') }
     }
 
-    // Verify user has super_admin or owner role for this organization
+    // Verify user has org_super_admin or owner role for this organization
     const currentOrg = _organizations.value.get(orgId)
-    console.log('Delete org check:', { orgId, currentOrg, role: currentOrg?.role, userId: currentUserId })
     if (!currentOrg || !canDeleteOrganization(orgId)) {
-      console.error('Permission denied:', { role: currentOrg?.role, required: ['super_admin', 'owner', 'org_super_admin'] })
+      console.error('Permission denied:', { role: currentOrg?.role, required: ['owner', 'org_super_admin'] })
       return { data: null, error: new Error('Insufficient permissions') }
     }
 
@@ -692,6 +755,8 @@ export const useOrganizationStore = defineStore('organization', () => {
     refreshOrganizationLogos,
     dedupFetchOrganizations,
     getOrgByAppId,
+    getAppByAppId,
+    getAppsByOrgId,
     awaitInitialLoad,
     deleteOrganization,
     canDeleteOrganization,

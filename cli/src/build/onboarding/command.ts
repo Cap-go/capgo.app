@@ -37,7 +37,7 @@ export interface OnboardingBuilderOptions {
   enableSelfUpdate?: boolean
 }
 
-type Platform = 'ios' | 'android'
+type Platform = 'ios' | 'android' | 'appflow'
 
 /**
  * Decide which platform to onboard WITHOUT prompting:
@@ -52,7 +52,7 @@ function resolveInitialPlatform(
   options: OnboardingBuilderOptions,
   iosDir: string,
   androidDir: string,
-): Platform | undefined {
+): 'ios' | 'android' | undefined {
   const requested = (options.platform || '').toLowerCase()
   if (requested === 'ios' || requested === 'android')
     return requested
@@ -116,19 +116,41 @@ export async function onboardingBuilderCommand(options: OnboardingBuilderOptions
   let iosBundleIdInitial: string | undefined
   let iosDir = 'ios'
   let androidDir = 'android'
+  let extConfig: Awaited<ReturnType<typeof getConfig>> | undefined
   try {
-    const extConfig = await getConfig()
-    appId = getAppId(undefined, extConfig?.config)
-    iosBundleIdInitial = extConfig?.config?.appId
-    iosDir = getPlatformDirFromCapacitorConfig(extConfig?.config, 'ios')
-    androidDir = getPlatformDirFromCapacitorConfig(extConfig?.config, 'android')
+    // SILENT (getConfig(true)): a non-silent getConfig prints its OWN error on
+    // failure, which would then collide with the message below — two conflicting
+    // logs for one failure. We own the messaging here instead. A throw means a
+    // capacitor.config.* IS present but FAILED to load (syntax/parse error, a
+    // throwing or ESM-only export). The genuine "no Capacitor project" case does
+    // NOT throw — loadConfig returns an empty config object, handled by the
+    // empty-config guard below — so reaching this catch means a real config exists
+    // but could not be read. Surface the underlying error so the user can fix THEIR
+    // config instead of being misdirected to "not a Capacitor project".
+    extConfig = await getConfig(true)
   }
-  catch {
-    // getConfig may throw if not in a Capacitor project
+  catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    log.error(`Found a Capacitor config but could not load it: ${message}`)
+    process.exit(1)
   }
 
+  // Simple guard: `build init` only makes sense inside a Capacitor app. A MISSING
+  // config surfaces as an absent or EMPTY ({}) config object (loadConfig's no-file
+  // fallback) — distinct from the parse-error caught above. Treat both as "not a
+  // Capacitor project" and stop plainly.
+  if (!extConfig?.config || Object.keys(extConfig.config).length === 0) {
+    log.error('This does not look like a Capacitor project. Run `capgo build init` from your app root (the folder with capacitor.config.ts, .js, or .json).')
+    process.exit(1)
+  }
+
+  appId = getAppId(undefined, extConfig.config)
+  iosBundleIdInitial = extConfig.config.appId
+  iosDir = getPlatformDirFromCapacitorConfig(extConfig.config, 'ios')
+  androidDir = getPlatformDirFromCapacitorConfig(extConfig.config, 'android')
+
   if (!appId) {
-    log.error('Could not detect app ID from capacitor.config.ts. Make sure you are in a Capacitor project directory.')
+    log.error('Found a Capacitor config but could not detect the app id. Set "appId" in your capacitor.config.ts and re-run.')
     process.exit(1)
   }
 

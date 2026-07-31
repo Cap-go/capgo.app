@@ -14,6 +14,7 @@ import iconEmail from '~icons/heroicons/envelope?raw'
 import iconFlag from '~icons/heroicons/flag?raw'
 import iconName from '~icons/heroicons/user?raw'
 import { getRecentEmailOtpVerification } from '~/services/emailOtp'
+import { getFormatLocaleOptions, resolveFormatLocale } from '~/services/formatLocale'
 import { pickPhoto, takePhoto } from '~/services/photos'
 import { getCurrentPlanNameOrg, isPayingOrg, useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -23,7 +24,7 @@ import { isSuperAdminRole, useOrganizationStore } from '~/stores/organization'
 // tabs handled by settings layout
 
 const version = import.meta.env.VITE_APP_VERSION
-const { t } = useI18n()
+const { locale, t } = useI18n()
 const supabase = useSupabase()
 const displayStore = useDisplayStore()
 const router = useRouter()
@@ -38,6 +39,7 @@ const deleteAccountCaptchaToken = ref('')
 const deleteAccountCaptchaRef = ref<InstanceType<typeof VueTurnstile> | null>(null)
 const captchaKey = ref(import.meta.env.VITE_CAPTCHA_KEY)
 const organizationsToDelete = ref<string[]>([])
+const formatLocaleOptions = computed(() => getFormatLocaleOptions(locale.value))
 const paidOrganizationsToDelete = ref<Array<{ name: string, planName: string }>>([])
 displayStore.NavTitle = t('account')
 
@@ -418,13 +420,19 @@ async function presentActionSheet() {
   return dialogStore.onDialogDismiss()
 }
 
-async function submit(form: { first_name: string, last_name: string, email: string, country: string }) {
+async function submit(form: { first_name: string, last_name: string, email: string, country: string, discord_username: string, github_username: string, format_locale: string }) {
   if (isLoading.value || !main.user?.id)
     return
+
+  const formatLocale = resolveFormatLocale(form.format_locale)
+  const currentFormatLocale = resolveFormatLocale(main.user?.format_locale)
   if (form.first_name === main.user?.first_name
     && form.last_name === main.user?.last_name
     && form.email === main.user?.email
-    && form.country === main.user?.country) {
+    && form.country === main.user?.country
+    && (form.discord_username || null) === main.user?.discord_username
+    && (form.github_username || null) === main.user?.github_username
+    && formatLocale === currentFormatLocale) {
     return
   }
   isLoading.value = true
@@ -435,6 +443,9 @@ async function submit(form: { first_name: string, last_name: string, email: stri
     last_name: form.last_name,
     email: main.user.email,
     country: form.country,
+    discord_username: form.discord_username || null,
+    github_username: form.github_username || null,
+    format_locale: formatLocale,
   }
 
   if (main.user?.email !== form.email) {
@@ -564,6 +575,34 @@ onMounted(async () => {
                 />
               </div>
             </div>
+            <div class="mt-5 space-y-4 sm:flex sm:items-center sm:space-y-0 sm:space-x-4">
+              <div class="sm:w-1/2">
+                <FormKit
+                  type="text"
+                  name="discord_username"
+                  autocomplete="off"
+                  :disabled="isLoading"
+                  :value="main.user?.discord_username ?? ''"
+                  validation="length:0,32"
+                  enterkeyhint="next"
+                  :label="t('discord-username')"
+                  :help="t('discord-username-help')"
+                />
+              </div>
+              <div class="sm:w-1/2">
+                <FormKit
+                  type="text"
+                  name="github_username"
+                  autocomplete="off"
+                  :disabled="isLoading"
+                  :value="main.user?.github_username ?? ''"
+                  validation="length:0,39"
+                  enterkeyhint="send"
+                  :label="t('github-username')"
+                  :help="t('github-username-help')"
+                />
+              </div>
+            </div>
             <FormKitMessages />
           </section>
           <h3 class="mt-2 mb-5 text-2xl font-bold dark:text-white text-slate-800">
@@ -576,6 +615,27 @@ onMounted(async () => {
             </p>
             <div class="md:ml-6">
               <LangSelector />
+            </div>
+          </section>
+
+          <section class="flex flex-col gap-2 md:flex-row md:items-start items-left">
+            <div class="md:w-48">
+              <p class="dark:text-white text-slate-800">
+                {{ t('date-number-format') }}:
+              </p>
+              <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                {{ t('date-number-format-help') }}
+              </p>
+            </div>
+            <div class="md:ml-6 md:min-w-96">
+              <FormKit
+                type="select"
+                name="format_locale"
+                :disabled="isLoading"
+                :value="resolveFormatLocale(main.user?.format_locale)"
+                :options="formatLocaleOptions"
+                :classes="{ outer: 'mb-0!', input: 'd-select w-full' }"
+              />
             </div>
           </section>
 
@@ -662,16 +722,19 @@ onMounted(async () => {
           Your account will be deleted after 30 days
         </p>
         <div class="mt-6">
-          <label class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+          <label for="delete-account-password" class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">
             {{ t('current-password') }}
           </label>
           <input
+            id="delete-account-password"
             v-model="deleteAccountPassword"
             type="password"
             :placeholder="t('password-placeholder')"
+            :aria-label="t('current-password')"
             class="w-full p-3 border border-gray-300 rounded-lg dark:text-white dark:bg-gray-800 dark:border-gray-600"
             autocomplete="current-password"
             @keydown.enter="$event.preventDefault()"
+          >
           >
         </div>
         <div v-if="captchaKey" class="mt-4">

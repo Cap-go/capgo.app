@@ -10,6 +10,7 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import AdminFilterBar from '~/components/admin/AdminFilterBar.vue'
 import { formatLocalDate, formatLocalDateTime } from '~/services/date'
+import { formatNumberValue } from '~/services/formatLocale'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
 import { useAdminDashboardStore } from '~/stores/adminDashboard'
 import { useDisplayStore } from '~/stores/display'
@@ -49,7 +50,7 @@ interface OrganizationInsightsResponse {
   }
 }
 
-const { locale, t } = useI18n()
+const { t } = useI18n()
 const displayStore = useDisplayStore()
 const mainStore = useMainStore()
 const adminStore = useAdminDashboardStore()
@@ -69,11 +70,11 @@ let loadOrganizationsSequence = 0
 let searchReloadTimer: ReturnType<typeof setTimeout> | undefined
 
 function formatNumber(value: number) {
-  return Number(value || 0).toLocaleString(locale.value || 'en')
+  return formatNumberValue(value)
 }
 
 function formatPercent(value: number) {
-  return `${Number(value || 0).toFixed(1)}%`
+  return `${formatNumberValue(Number(value || 0), { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
 }
 
 function formatBillingTypeLabel(billingType: OrganizationInsight['billing_type']) {
@@ -358,15 +359,21 @@ displayStore.defaultBack = '/dashboard'
             </h3>
 
             <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:min-w-[840px] lg:grid-cols-[minmax(180px,1fr)_minmax(140px,0.7fr)_minmax(150px,0.8fr)_auto] lg:items-center">
+              <label for="admin-orgs-search" class="sr-only">{{ t('search-organizations') }}</label>
               <input
+                id="admin-orgs-search"
                 v-model="searchQuery"
                 type="search"
                 class="w-full d-input d-input-bordered d-input-sm"
                 :placeholder="t('search-organizations')"
+                :aria-label="t('search-organizations')"
               >
 
+              <label for="admin-orgs-plan-filter" class="sr-only">{{ t('all-plans') }}</label>
               <select
+                id="admin-orgs-plan-filter"
                 v-model="selectedPlan"
+                :aria-label="t('all-plans')"
                 class="w-full d-select d-select-bordered d-select-sm"
               >
                 <option value="">
@@ -377,9 +384,12 @@ displayStore.defaultBack = '/dashboard'
                 </option>
               </select>
 
+              <label for="admin-orgs-billing-filter" class="sr-only">{{ t('all-billing-cycles') }}</label>
               <select
+                id="admin-orgs-billing-filter"
                 v-model="selectedBilling"
                 class="w-full d-select d-select-bordered d-select-sm"
+                :aria-label="t('all-billing-cycles')"
               >
                 <option value="all">
                   {{ t('all-billing-cycles') }}

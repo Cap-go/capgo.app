@@ -1,7 +1,7 @@
 BEGIN;
 
 
-SELECT plan(16);
+SELECT plan(15);
 
 SELECT tests.authenticate_as('test_user');
 
@@ -143,16 +143,6 @@ SELECT
         ),
         '6aa76066-55ef-4238-ade6-0b32334a4097',
         'Check if apikey is associated with the correct user'
-    );
-
-SELECT
-    is(
-        get_org_owner_id(
-            'ae6e7458-c46d-4c00-aa3b-153b0b8520ea',
-            'com.demo.app'
-        ),
-        '6aa76066-55ef-4238-ade6-0b32334a4097',
-        'get_org_owner_id test - user exists'
     );
 
 SELECT

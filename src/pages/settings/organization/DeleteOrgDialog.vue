@@ -69,10 +69,13 @@ defineExpose({
   <div>
     <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions?.id === 'delete-org-confirm'" to="#dialog-v2-content" defer>
       <div class="w-full">
+        <label for="delete-org-confirm-input" class="sr-only">{{ t('type-organization-name-to-confirm') }}</label>
         <input
+          id="delete-org-confirm-input"
           v-model="deleteInput"
           type="text"
           :placeholder="t('type-organization-name-to-confirm')"
+          :aria-label="t('type-organization-name-to-confirm')"
           class="p-3 w-full rounded-lg border border-gray-300 dark:text-white dark:bg-gray-800 dark:border-gray-600"
           @keydown.enter="$event.preventDefault()"
         >

@@ -1,5 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
+import process from 'node:process'
 
 export const CAPGO_UPDATER_PACKAGE = '@capgo/capacitor-updater'
 
@@ -75,6 +77,20 @@ function readInstalledPackageVersion(packageJsonPath: string, packageName: strin
     if (parentDir === currentDir)
       break
     currentDir = parentDir
+  }
+
+  if (!process.versions.pnp)
+    return null
+
+  try {
+    const requireFromProject = createRequire(packageJsonPath)
+    const resolvedPackageJsonPath = requireFromProject.resolve(`${packageName}/package.json`)
+    const packageJson = JSON.parse(readFileSync(resolvedPackageJsonPath, 'utf-8')) as { version?: unknown }
+    if (typeof packageJson.version === 'string')
+      return packageJson.version
+  }
+  catch {
+    return null
   }
 
   return null

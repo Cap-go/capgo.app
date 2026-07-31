@@ -16,6 +16,7 @@ import AdminStatsCard from '~/components/admin/AdminStatsCard.vue'
 import ChartCard from '~/components/dashboard/ChartCard.vue'
 import PageLoader from '~/components/PageLoader.vue'
 import { formatLocalDate, formatLocalDateTime } from '~/services/date'
+import { formatNumberValue, formatOneDecimal } from '~/services/formatLocale'
 import { getEmoji } from '~/services/i18n'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
 import { useAdminDashboardStore } from '~/stores/adminDashboard'
@@ -36,10 +37,15 @@ interface OnboardingFunnelData {
   orgs_with_channel: number
   orgs_with_bundle: number
   orgs_subscribed: number
+  orgs_with_production_device: number
+  orgs_with_update_download: number
+  activation_telemetry_available: boolean
   app_conversion_rate: number
   channel_conversion_rate: number
   bundle_conversion_rate: number
   subscription_conversion_rate: number
+  production_device_conversion_rate: number
+  update_download_conversion_rate: number
   trend: Array<{
     date: string
     new_orgs: number
@@ -47,6 +53,8 @@ interface OnboardingFunnelData {
     orgs_created_channel: number
     orgs_created_bundle: number
     orgs_subscribed: number
+    orgs_with_production_device: number
+    orgs_with_update_download: number
   }>
 }
 
@@ -115,10 +123,15 @@ const globalStatsTrendData = ref<Array<{
   plan_team: number
   plan_enterprise: number
   registers_today: number
+  apps_created: number
+  versions_created: number
   demo_apps_created: number
   devices_last_month: number
   trial_extended_orgs: number
   trial_extended_subscribed_orgs: number
+  paying_orgs_subscription?: number
+  paying_orgs_credits?: number
+  paying_orgs_total?: number
 }>>([])
 
 const isLoadingGlobalStatsTrend = ref(false)
@@ -213,7 +226,7 @@ const trialOrganizationsColumns = ref<TableColumn[]>([
         return t('expires-today')
       if (item.days_remaining === 1)
         return `1 ${t('day')}`
-      return `${item.days_remaining} ${t('days')}`
+      return `${formatNumberValue(item.days_remaining)} ${t('days')}`
     },
   },
   {
@@ -566,8 +579,8 @@ const leadingCustomerCountrySubtitle = computed(() => {
 
   return t('admin-users-country-top-country-description', {
     country: getCountryLabel(leadingCustomerCountry.value.country_code),
-    count: leadingCustomerCountry.value.organizations.toLocaleString(),
-    share: leadingCustomerCountry.value.percentage.toFixed(1),
+    count: formatNumberValue(leadingCustomerCountry.value.organizations),
+    share: formatOneDecimal(leadingCustomerCountry.value.percentage),
   })
 })
 
@@ -630,6 +643,38 @@ const registrationsTrendSeries = computed(() => {
   ]
 })
 
+const appsCreatedTrendSeries = computed(() => {
+  if (globalStatsTrendData.value.length === 0)
+    return []
+
+  return [
+    {
+      label: t('admin-apps-created-by-day-series'),
+      data: globalStatsTrendData.value.map(item => ({
+        date: item.date,
+        value: item.apps_created ?? 0,
+      })),
+      color: '#2563eb',
+    },
+  ]
+})
+
+const versionsCreatedTrendSeries = computed(() => {
+  if (globalStatsTrendData.value.length === 0)
+    return []
+
+  return [
+    {
+      label: t('admin-versions-uploaded-by-day-series'),
+      data: globalStatsTrendData.value.map(item => ({
+        date: item.date,
+        value: item.versions_created ?? 0,
+      })),
+      color: '#10b981',
+    },
+  ]
+})
+
 const trialExtensionTrendSeries = computed(() => {
   if (globalStatsTrendData.value.length === 0)
     return []
@@ -665,22 +710,22 @@ const planDistributionData = computed(() => {
     {
       label: 'Solo',
       value: latest.plan_solo,
-      percentage: total > 0 ? ((latest.plan_solo / total) * 100).toFixed(1) : '0',
+      percentage: total > 0 ? formatOneDecimal((latest.plan_solo / total) * 100) : formatOneDecimal(0),
     },
     {
       label: 'Maker',
       value: latest.plan_maker,
-      percentage: total > 0 ? ((latest.plan_maker / total) * 100).toFixed(1) : '0',
+      percentage: total > 0 ? formatOneDecimal((latest.plan_maker / total) * 100) : formatOneDecimal(0),
     },
     {
       label: 'Team',
       value: latest.plan_team,
-      percentage: total > 0 ? ((latest.plan_team / total) * 100).toFixed(1) : '0',
+      percentage: total > 0 ? formatOneDecimal((latest.plan_team / total) * 100) : formatOneDecimal(0),
     },
     {
       label: 'Enterprise',
       value: latest.plan_enterprise,
-      percentage: total > 0 ? ((latest.plan_enterprise / total) * 100).toFixed(1) : '0',
+      percentage: total > 0 ? formatOneDecimal((latest.plan_enterprise / total) * 100) : formatOneDecimal(0),
     },
   ]
 })
@@ -738,6 +783,8 @@ const onboardingFunnelRates = computed(() => {
       channel: 0,
       bundle: 0,
       subscribed: 0,
+      productionDevice: 0,
+      updateDownload: 0,
     }
   }
 
@@ -746,13 +793,74 @@ const onboardingFunnelRates = computed(() => {
   const orgsWithChannel = Number(onboardingFunnelData.value.orgs_with_channel) || 0
   const orgsWithBundle = Number(onboardingFunnelData.value.orgs_with_bundle) || 0
   const orgsSubscribed = Number(onboardingFunnelData.value.orgs_subscribed) || 0
+  const orgsWithProductionDevice = Number(onboardingFunnelData.value.orgs_with_production_device) || 0
+  const orgsWithUpdateDownload = Number(onboardingFunnelData.value.orgs_with_update_download) || 0
 
   return {
     app: totalOrgs > 0 ? (orgsWithApp / totalOrgs) * 100 : 0,
     channel: orgsWithApp > 0 ? (orgsWithChannel / orgsWithApp) * 100 : 0,
     bundle: orgsWithChannel > 0 ? (orgsWithBundle / orgsWithChannel) * 100 : 0,
     subscribed: orgsWithBundle > 0 ? (orgsSubscribed / orgsWithBundle) * 100 : 0,
+    productionDevice: orgsWithBundle > 0 ? (orgsWithProductionDevice / orgsWithBundle) * 100 : 0,
+    updateDownload: orgsWithProductionDevice > 0 ? (orgsWithUpdateDownload / orgsWithProductionDevice) * 100 : 0,
   }
+})
+
+const onboardingFunnelConversionSummaries = computed(() => {
+  const rates = onboardingFunnelRates.value
+  const items = [
+    {
+      key: 'app',
+      value: rates.app,
+      label: t('org-to-app'),
+      colorClass: 'text-purple-500',
+    },
+    {
+      key: 'channel',
+      value: rates.channel,
+      label: t('app-to-channel'),
+      colorClass: 'text-amber-500',
+    },
+    {
+      key: 'bundle',
+      value: rates.bundle,
+      label: t('channel-to-bundle'),
+      colorClass: 'text-emerald-500',
+    },
+  ]
+
+  if (onboardingFunnelData.value?.activation_telemetry_available) {
+    items.push(
+      {
+        key: 'productionDevice',
+        value: rates.productionDevice,
+        label: t('bundle-to-production-device'),
+        colorClass: 'text-pink-500',
+      },
+      {
+        key: 'updateDownload',
+        value: rates.updateDownload,
+        label: t('production-device-to-update-download'),
+        colorClass: 'text-indigo-500',
+      },
+    )
+  }
+
+  items.push({
+    key: 'subscribed',
+    value: rates.subscribed,
+    label: t('bundle-to-subscribed'),
+    colorClass: 'text-rose-500',
+  })
+
+  return items
+})
+
+const onboardingFunnelConversionGridClass = computed(() => {
+  // Keep one row on large screens so rates follow the funnel columns.
+  return onboardingFunnelConversionSummaries.value.length >= 6
+    ? 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-6'
+    : 'grid-cols-2 sm:grid-cols-4'
 })
 
 // Onboarding funnel stages for display
@@ -787,29 +895,43 @@ const onboardingFunnelStages = computed(() => {
       percentage: rates.bundle,
       color: '#10b981', // green
     },
-    {
-      label: t('subscribed'),
-      value: Number(data.orgs_subscribed) || 0,
-      percentage: rates.subscribed,
-      color: '#ef4444', // red
-    },
+    ...(data.activation_telemetry_available
+      ? [
+          {
+            label: t('production-plugin-device'),
+            value: Number(data.orgs_with_production_device) || 0,
+            percentage: rates.productionDevice,
+            color: '#ec4899', // pink
+          },
+          {
+            label: t('completed-update-download'),
+            value: Number(data.orgs_with_update_download) || 0,
+            percentage: rates.updateDownload,
+            color: '#6366f1', // indigo
+          },
+        ]
+      : []),
   ]
 })
 
 // Onboarding funnel trend for multi-line chart
+function normalizeTrendDate(value: string) {
+  return value.includes('T') ? value.split('T')[0] : value
+}
+
 const onboardingFunnelTrendSeries = computed(() => {
   if (!onboardingFunnelData.value || !onboardingFunnelData.value.trend)
     return []
 
   const trend = onboardingFunnelData.value.trend
-  const demoAppsCreatedByDate = new Map(globalStatsTrendData.value.map(item => [item.date, item.demo_apps_created]))
-  const userRegistrationsByDate = new Map(globalStatsTrendData.value.map(item => [item.date, item.registers_today]))
+  const demoAppsCreatedByDate = new Map(globalStatsTrendData.value.map(item => [normalizeTrendDate(item.date), item.demo_apps_created]))
+  const userRegistrationsByDate = new Map(globalStatsTrendData.value.map(item => [normalizeTrendDate(item.date), item.registers_today]))
   return [
     {
       label: t('user-registrations'),
       data: trend.map(item => ({
         date: item.date,
-        value: userRegistrationsByDate.get(item.date) ?? 0,
+        value: userRegistrationsByDate.get(normalizeTrendDate(item.date)) ?? 0,
       })),
       color: '#3b82f6', // blue
     },
@@ -845,11 +967,31 @@ const onboardingFunnelTrendSeries = computed(() => {
       })),
       color: '#10b981', // green
     },
+    ...(onboardingFunnelData.value.activation_telemetry_available
+      ? [
+          {
+            label: t('production-plugin-device-within-7-days'),
+            data: trend.map(item => ({
+              date: item.date,
+              value: item.orgs_with_production_device,
+            })),
+            color: '#ec4899', // pink
+          },
+          {
+            label: t('completed-update-download-within-7-days'),
+            data: trend.map(item => ({
+              date: item.date,
+              value: item.orgs_with_update_download,
+            })),
+            color: '#6366f1', // indigo
+          },
+        ]
+      : []),
     {
       label: t('demo-apps-created'),
       data: trend.map(item => ({
         date: item.date,
-        value: demoAppsCreatedByDate.get(item.date) ?? 0,
+        value: demoAppsCreatedByDate.get(normalizeTrendDate(item.date)) ?? 0,
       })),
       color: '#ef4444', // red
     },
@@ -923,45 +1065,35 @@ displayStore.defaultBack = '/dashboard'
               <span class="loading loading-spinner loading-lg" />
             </div>
             <div v-else-if="onboardingFunnelStages.length > 0" class="space-y-6">
-              <div class="h-64 sm:h-72">
+              <div class="h-72 sm:h-80">
                 <AdminFunnelChart :stages="onboardingFunnelStages" :is-loading="isLoadingOnboardingFunnel" />
               </div>
 
-              <!-- Conversion summary -->
-              <div class="grid grid-cols-2 gap-4 pt-4 mt-4 border-t border-gray-200 sm:grid-cols-4 dark:border-gray-700">
-                <div class="text-center">
-                  <p class="text-2xl font-bold text-purple-500">
-                    {{ onboardingFunnelRates.app.toFixed(1) }}%
+              <!-- Funnel conversion summary: one grid so rates share the funnel column rhythm -->
+              <div
+                class="grid gap-x-2 gap-y-4 pt-4 mt-4 border-t border-gray-200 dark:border-gray-700"
+                :class="onboardingFunnelConversionGridClass"
+              >
+                <div
+                  v-for="item in onboardingFunnelConversionSummaries"
+                  :key="item.key"
+                  class="min-w-0 px-1 text-center"
+                >
+                  <p
+                    class="text-xl font-bold tabular-nums sm:text-2xl"
+                    :class="item.colorClass"
+                  >
+                    {{ formatOneDecimal(item.value) }}%
                   </p>
-                  <p class="text-xs text-gray-500 dark:text-gray-400">
-                    Org → App
-                  </p>
-                </div>
-                <div class="text-center">
-                  <p class="text-2xl font-bold text-amber-500">
-                    {{ onboardingFunnelRates.channel.toFixed(1) }}%
-                  </p>
-                  <p class="text-xs text-gray-500 dark:text-gray-400">
-                    {{ t('app-to-channel') }}
-                  </p>
-                </div>
-                <div class="text-center">
-                  <p class="text-2xl font-bold text-emerald-500">
-                    {{ onboardingFunnelRates.bundle.toFixed(1) }}%
-                  </p>
-                  <p class="text-xs text-gray-500 dark:text-gray-400">
-                    {{ t('channel-to-bundle') }}
-                  </p>
-                </div>
-                <div class="text-center">
-                  <p class="text-2xl font-bold text-rose-500">
-                    {{ onboardingFunnelRates.subscribed.toFixed(1) }}%
-                  </p>
-                  <p class="text-xs text-gray-500 dark:text-gray-400">
-                    {{ t('bundle-to-subscribed') }}
+                  <p class="mt-1 text-[11px] leading-snug text-gray-500 break-words sm:text-xs dark:text-gray-400">
+                    {{ item.label }}
                   </p>
                 </div>
               </div>
+
+              <p v-if="!onboardingFunnelData?.activation_telemetry_available" class="text-sm text-slate-500 dark:text-slate-400">
+                {{ t('activation-telemetry-unavailable') }}
+              </p>
             </div>
             <div v-else class="flex items-center justify-center h-48 text-slate-400">
               {{ t('no-data-available') }}
@@ -981,26 +1113,52 @@ displayStore.defaultBack = '/dashboard'
           </ChartCard>
 
           <!-- Organization Metrics Cards -->
-          <div class="grid grid-cols-1 gap-6 md:grid-cols-2">
-            <!-- Paying Organizations -->
+          <div class="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-4">
             <div class="flex flex-col justify-between p-6 bg-white border rounded-lg shadow-lg border-slate-300 dark:bg-gray-800 dark:border-slate-900">
-              <div class="flex items-start justify-between mb-4">
-                <div class="p-3 rounded-lg bg-success/10">
-                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="w-6 h-6 stroke-current text-success"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                </div>
-              </div>
               <div>
                 <p class="text-sm text-slate-600 dark:text-slate-400">
-                  Paying Organizations
+                  Total Paid Organizations
                 </p>
-                <p v-if="latestGlobalStats" class="mt-2 text-3xl font-bold text-success">
-                  {{ latestGlobalStats.paying.toLocaleString() }}
+                <p v-if="latestGlobalStats" class="mt-2 text-3xl font-bold text-emerald-500">
+                  {{ formatNumberValue(latestGlobalStats.paying_orgs_total || latestGlobalStats.paying || 0) }}
                 </p>
-                <p v-else class="mt-2 text-3xl font-bold text-success">
+                <p v-else class="mt-2 text-3xl font-bold text-emerald-500">
                   0
                 </p>
                 <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  Active paying organizations
+                  Subscription and/or available credits
+                </p>
+              </div>
+            </div>
+            <div class="flex flex-col justify-between p-6 bg-white border rounded-lg shadow-lg border-slate-300 dark:bg-gray-800 dark:border-slate-900">
+              <div>
+                <p class="text-sm text-slate-600 dark:text-slate-400">
+                  Paid via Subscription
+                </p>
+                <p v-if="latestGlobalStats" class="mt-2 text-3xl font-bold text-primary">
+                  {{ formatNumberValue(latestGlobalStats.paying_orgs_subscription || latestGlobalStats.paying || 0) }}
+                </p>
+                <p v-else class="mt-2 text-3xl font-bold text-primary">
+                  0
+                </p>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  Active subscription organizations
+                </p>
+              </div>
+            </div>
+            <div class="flex flex-col justify-between p-6 bg-white border rounded-lg shadow-lg border-slate-300 dark:bg-gray-800 dark:border-slate-900">
+              <div>
+                <p class="text-sm text-slate-600 dark:text-slate-400">
+                  Paid via Credits
+                </p>
+                <p v-if="latestGlobalStats" class="mt-2 text-3xl font-bold text-accent">
+                  {{ formatNumberValue(latestGlobalStats.paying_orgs_credits || 0) }}
+                </p>
+                <p v-else class="mt-2 text-3xl font-bold text-accent">
+                  0
+                </p>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  Organizations with available credits
                 </p>
               </div>
             </div>
@@ -1017,7 +1175,7 @@ displayStore.defaultBack = '/dashboard'
                   Trial Organizations
                 </p>
                 <p v-if="latestGlobalStats" class="mt-2 text-3xl font-bold text-warning">
-                  {{ latestGlobalStats.trial.toLocaleString() }}
+                  {{ formatNumberValue(latestGlobalStats.trial) }}
                 </p>
                 <p v-else class="mt-2 text-3xl font-bold text-warning">
                   0
@@ -1051,7 +1209,7 @@ displayStore.defaultBack = '/dashboard'
                     {{ t('admin-users-email-type-professional') }}
                   </p>
                   <p class="mt-2 text-3xl font-bold text-primary">
-                    {{ emailTypeTotals.professional.toLocaleString() }}
+                    {{ formatNumberValue(emailTypeTotals.professional) }}
                   </p>
                   <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
                     {{ t('admin-users-email-type-professional-description') }}
@@ -1070,7 +1228,7 @@ displayStore.defaultBack = '/dashboard'
                     {{ t('admin-users-email-type-personal') }}
                   </p>
                   <p class="mt-2 text-3xl font-bold text-success">
-                    {{ emailTypeTotals.personal.toLocaleString() }}
+                    {{ formatNumberValue(emailTypeTotals.personal) }}
                   </p>
                   <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
                     {{ t('admin-users-email-type-personal-description') }}
@@ -1089,7 +1247,7 @@ displayStore.defaultBack = '/dashboard'
                     {{ t('admin-users-email-type-disposable') }}
                   </p>
                   <p class="mt-2 text-3xl font-bold text-error">
-                    {{ emailTypeTotals.disposable.toLocaleString() }}
+                    {{ formatNumberValue(emailTypeTotals.disposable) }}
                   </p>
                   <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
                     {{ t('admin-users-email-type-disposable-description') }}
@@ -1230,7 +1388,7 @@ displayStore.defaultBack = '/dashboard'
               <div v-else-if="planDistributionData.length > 0" class="grid grid-cols-2 gap-4 md:grid-cols-4">
                 <div v-for="plan in planDistributionData" :key="plan.label" class="flex flex-col items-center p-4 bg-gray-100 rounded-lg dark:bg-gray-700">
                   <span class="text-sm font-medium text-gray-600 dark:text-gray-400">{{ plan.label }}</span>
-                  <span class="mt-2 text-2xl font-bold">{{ plan.value.toLocaleString() }}</span>
+                  <span class="mt-2 text-2xl font-bold">{{ formatNumberValue(plan.value) }}</span>
                   <span class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ plan.percentage }}%</span>
                 </div>
               </div>
@@ -1288,6 +1446,30 @@ displayStore.defaultBack = '/dashboard'
             >
               <AdminMultiLineChart
                 :series="registrationsTrendSeries"
+                :is-loading="isLoadingGlobalStatsTrend"
+              />
+            </ChartCard>
+
+            <!-- Apps Created by Day -->
+            <ChartCard
+              :title="t('admin-apps-created-by-day')"
+              :is-loading="isLoadingGlobalStatsTrend"
+              :has-data="appsCreatedTrendSeries.length > 0"
+            >
+              <AdminMultiLineChart
+                :series="appsCreatedTrendSeries"
+                :is-loading="isLoadingGlobalStatsTrend"
+              />
+            </ChartCard>
+
+            <!-- Versions Uploaded by Day -->
+            <ChartCard
+              :title="t('admin-versions-uploaded-by-day')"
+              :is-loading="isLoadingGlobalStatsTrend"
+              :has-data="versionsCreatedTrendSeries.length > 0"
+            >
+              <AdminMultiLineChart
+                :series="versionsCreatedTrendSeries"
                 :is-loading="isLoadingGlobalStatsTrend"
               />
             </ChartCard>

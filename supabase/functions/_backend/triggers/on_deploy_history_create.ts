@@ -4,7 +4,7 @@ import { Hono } from 'hono/tiny'
 import { isDemoApp } from '../utils/demo.ts'
 import { BRES, middlewareAPISecret, simpleError, triggerValidator } from '../utils/hono.ts'
 import { cloudlog } from '../utils/logging.ts'
-import { sendEmailToOrgMembers } from '../utils/org_email_notifications.ts'
+import { sendNotifToOrgMembersOnce } from '../utils/org_email_notifications.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import { supabaseAdmin } from '../utils/supabase.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
@@ -67,19 +67,22 @@ app.post('/', middlewareAPISecret, triggerValidator('deploy_history', 'INSERT'),
       notify: false,
     })
 
-    const pgClient = getPgClient(c, true)
-    const drizzleClient = getDrizzleClient(pgClient)
-    try {
-      await backgroundTask(c, sendEmailToOrgMembers(c, 'bundle:deployed', 'bundle_deployed', {
-        org_id: version.owner_org,
-        app_id: record.app_id,
-        bundle_name: version.name,
-        channel_id: record.channel_id,
-      }, version.owner_org, drizzleClient))
-    }
-    finally {
-      closeClient(c, pgClient)
-    }
+    await backgroundTask(c, (async () => {
+      const pgClient = getPgClient(c, true)
+      const drizzleClient = getDrizzleClient(pgClient)
+      try {
+        await sendNotifToOrgMembersOnce(c, 'bundle:deployed', 'bundle_deployed', {
+          org_id: version.owner_org,
+          app_id: record.app_id,
+          bundle_name: version.name,
+          channel_id: record.channel_id,
+          version_id: record.version_id,
+        }, version.owner_org, `bundle:deployed:${record.version_id}:${record.channel_id}`, drizzleClient)
+      }
+      finally {
+        closeClient(c, pgClient)
+      }
+    })())
   }
 
   return c.json(BRES)

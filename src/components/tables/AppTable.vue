@@ -15,6 +15,8 @@ const props = defineProps<{
   apps: (Database['public']['Tables']['apps']['Row'])[]
   deleteButton: boolean
   total?: number
+  /** Fixed page size for server-side pagination controls */
+  offset?: number
   currentPage?: number
   search?: string
   serverSidePagination?: boolean
@@ -192,12 +194,9 @@ const columns = ref<TableColumn[]>([
       if (!roleName)
         return t('unknown')
 
-      // Normalize role (remove invite_ prefix if present)
-      const normalizedRole = roleName.replace(/^invite_/, '')
-
       // Get i18n key and translate, or fallback to human-readable format
-      const i18nKey = getRbacRoleI18nKey(normalizedRole)
-      return i18nKey ? t(i18nKey) : normalizedRole.replaceAll('_', ' ')
+      const i18nKey = getRbacRoleI18nKey(roleName)
+      return i18nKey ? t(i18nKey) : roleName.replaceAll('_', ' ')
     },
   },
   {
@@ -234,6 +233,38 @@ async function openOneVersion(app: Database['public']['Tables']['apps']['Row']) 
   router.push(`/app/${app.app_id}/bundle/${versionData?.id}`)
 }
 
+type SortableApp = Record<string, any>
+
+type SortDirection = 'asc' | 'desc'
+
+function normalizeSortValue(value: any, key: string) {
+  if (key === 'mau')
+    return value ?? 0
+
+  return value ?? ''
+}
+
+function compareSortValues(aVal: any, bVal: any, direction: SortDirection) {
+  if (typeof aVal === 'number' && typeof bVal === 'number') {
+    const numericComparison = aVal - bVal
+    return direction === 'asc' ? numericComparison : -numericComparison
+  }
+
+  const stringComparison = String(aVal).toLowerCase().localeCompare(String(bVal).toLowerCase())
+  return direction === 'asc' ? stringComparison : -stringComparison
+}
+
+function sortAppsByColumn(apps: SortableApp[], sortColumn: TableColumn) {
+  const key = sortColumn.key
+  const direction: SortDirection = sortColumn.sortable === 'asc' ? 'asc' : 'desc'
+
+  return [...apps].sort((a, b) => compareSortValues(
+    normalizeSortValue(a[key], key),
+    normalizeSortValue(b[key], key),
+    direction,
+  ))
+}
+
 // Filter apps based on search term
 const filteredApps = computed(() => {
   // If MAU data isn't loaded yet, return original apps
@@ -258,49 +289,10 @@ const filteredApps = computed(() => {
     })
   }
 
-  // Apply sorting
+  // Apply sorting by the raw value so dates order by ISO timestamps instead of localized labels.
   const sortColumn = columns.value.find(col => col.sortable && typeof col.sortable === 'string')
-  if (sortColumn) {
-    const sorted = [...apps].sort((a, b) => {
-      const key = sortColumn.key
-      // Sort by the raw underlying value rather than the formatted display string,
-      // so date columns (e.g. last_upload_at) order by their ISO timestamp
-      // chronologically instead of by localized label text.
-      let aVal: any = a[key]
-      let bVal: any = b[key]
-
-      // Handle null/undefined values for MAU (should be 0 for numbers)
-      if (key === 'mau') {
-        if (aVal == null)
-          aVal = 0
-        if (bVal == null)
-          bVal = 0
-      }
-      else {
-        if (aVal == null)
-          aVal = ''
-        if (bVal == null)
-          bVal = ''
-      }
-
-      // Numeric comparison for numbers
-      if (typeof aVal === 'number' && typeof bVal === 'number') {
-        return sortColumn.sortable === 'asc' ? aVal - bVal : bVal - aVal
-      }
-
-      // String comparison
-      const aStr = String(aVal).toLowerCase()
-      const bStr = String(bVal).toLowerCase()
-
-      if (sortColumn.sortable === 'asc') {
-        return aStr < bStr ? -1 : aStr > bStr ? 1 : 0
-      }
-      else {
-        return aStr > bStr ? -1 : aStr < bStr ? 1 : 0
-      }
-    })
-    return sorted
-  }
+  if (sortColumn)
+    return sortAppsByColumn(apps, sortColumn)
 
   return apps
 })
@@ -318,6 +310,7 @@ const filteredApps = computed(() => {
         v-model:search="internalSearch"
         :show-add="!isMobile"
         :total="props.total ?? filteredApps.length"
+        :offset="props.offset"
         :element-list="filteredApps"
         :search-placeholder="t('search-by-name-or-app-id')"
         :is-loading="props.isLoading ?? false"

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { createClient } from '@supabase/supabase-js'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { createDirectApiKeyWithBindings, fetchWithRetry, getAuthHeaders, getEndpointUrl, getSupabaseClient, SUPABASE_ANON_KEY, SUPABASE_BASE_URL, TEST_EMAIL, USER_ID } from './test-utils.ts'
+import { createDirectApiKeyWithBindings, fetchTestRequest, getAuthHeaders, getEndpointUrl, getSupabaseClient, SUPABASE_ANON_KEY, SUPABASE_BASE_URL, TEST_EMAIL, USER_ID } from './test-utils.ts'
 
 // This file intentionally runs sequentially because it exercises one webhook
 // lifecycle across create, list, update, test, delivery, and delete steps.
@@ -16,6 +16,8 @@ const webhookAppId = `com.webhooks.${globalId}`
 const webhookName = `Test Webhook ${globalId}`
 const webhookUrl = 'https://example.com/webhook'
 const customerId = `cus_test_${WEBHOOK_TEST_ORG_ID}`
+const USE_CLOUDFLARE = process.env.USE_CLOUDFLARE_WORKERS === 'true'
+const describeBackend = describe.skipIf(USE_CLOUDFLARE)
 
 let createdWebhookId: string | null = null
 let standardWebhookId: string | null = null
@@ -53,6 +55,8 @@ async function getAuthenticatedAnonClient() {
 }
 
 beforeAll(async () => {
+  if (USE_CLOUDFLARE)
+    return
   // Create stripe_info for this test org
   const { error: stripeError } = await getSupabaseClient().from('stripe_info').insert({
     customer_id: customerId,
@@ -79,7 +83,7 @@ beforeAll(async () => {
   const { error: memberError } = await getSupabaseClient().from('org_users').insert({
     org_id: WEBHOOK_TEST_ORG_ID,
     user_id: USER_ID,
-    user_right: 'super_admin',
+    rbac_role_name: 'org_super_admin',
   })
   if (memberError)
     throw memberError
@@ -128,6 +132,8 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
+  if (USE_CLOUDFLARE)
+    return
   // Clean up created webhooks
   // Note: Using type assertion as webhooks table types are not yet generated
   if (createdWebhookId) {
@@ -159,9 +165,9 @@ afterAll(async () => {
   await getSupabaseClient().from('stripe_info').delete().eq('customer_id', customerId)
 }, 60000)
 
-describe('[GET] /webhooks', () => {
+describeBackend('[GET] /webhooks', () => {
   it('list webhooks for organization', async () => {
-    const response = await fetchWithRetry(webhookEndpoint(`?orgId=${WEBHOOK_TEST_ORG_ID}`), {
+    const response = await fetchTestRequest(webhookEndpoint(`?orgId=${WEBHOOK_TEST_ORG_ID}`), {
       headers: webhookHeaders,
     })
     expect(response.status).toBe(200)
@@ -170,7 +176,7 @@ describe('[GET] /webhooks', () => {
   })
 
   it('list webhooks with query-string pagination', async () => {
-    const response = await fetchWithRetry(webhookEndpoint(`?orgId=${WEBHOOK_TEST_ORG_ID}&page=0`), {
+    const response = await fetchTestRequest(webhookEndpoint(`?orgId=${WEBHOOK_TEST_ORG_ID}&page=0`), {
       headers: webhookHeaders,
     })
     expect(response.status).toBe(200)
@@ -179,7 +185,7 @@ describe('[GET] /webhooks', () => {
   })
 
   it('list webhooks with missing orgId', async () => {
-    const response = await fetchWithRetry(webhookEndpoint(), {
+    const response = await fetchTestRequest(webhookEndpoint(), {
       headers: webhookHeaders,
     })
     expect(response.status).toBe(400)
@@ -189,7 +195,7 @@ describe('[GET] /webhooks', () => {
 
   it('list webhooks with invalid orgId', async () => {
     const invalidOrgId = randomUUID()
-    const response = await fetchWithRetry(webhookEndpoint(`?orgId=${invalidOrgId}`), {
+    const response = await fetchTestRequest(webhookEndpoint(`?orgId=${invalidOrgId}`), {
       headers: webhookHeaders,
     })
     expect(response.status).toBe(400)
@@ -199,7 +205,7 @@ describe('[GET] /webhooks', () => {
     if (!appScopedKey || !orgScopedSubkeyId)
       throw new Error('Webhook subkey list prerequisites were not created')
 
-    const response = await fetchWithRetry(webhookEndpoint(`?orgId=${WEBHOOK_TEST_ORG_ID}`), {
+    const response = await fetchTestRequest(webhookEndpoint(`?orgId=${WEBHOOK_TEST_ORG_ID}`), {
       headers: {
         'Content-Type': 'application/json',
         'authorization': appScopedKey,
@@ -214,7 +220,7 @@ describe('[GET] /webhooks', () => {
   })
 })
 
-describe('[POST] /webhooks', () => {
+describeBackend('[POST] /webhooks', () => {
   it('create webhook', async () => {
     const response = await fetch(webhookEndpoint(), {
       method: 'POST',
@@ -262,7 +268,7 @@ describe('[POST] /webhooks', () => {
 
   it('allows console JWT webhook listing through the API', async () => {
     const authHeaders = await getAuthHeaders()
-    const response = await fetchWithRetry(webhookEndpoint(`?orgId=${WEBHOOK_TEST_ORG_ID}`), {
+    const response = await fetchTestRequest(webhookEndpoint(`?orgId=${WEBHOOK_TEST_ORG_ID}`), {
       headers: authHeaders,
     })
 
@@ -511,12 +517,12 @@ describe('[POST] /webhooks', () => {
   })
 })
 
-describe('[GET] /webhooks (single webhook)', () => {
+describeBackend('[GET] /webhooks (single webhook)', () => {
   it('get single webhook by id', async () => {
     if (!createdWebhookId)
       throw new Error('Webhook was not created in previous test')
 
-    const response = await fetchWithRetry(webhookEndpoint(`?orgId=${WEBHOOK_TEST_ORG_ID}&webhookId=${createdWebhookId}`), {
+    const response = await fetchTestRequest(webhookEndpoint(`?orgId=${WEBHOOK_TEST_ORG_ID}&webhookId=${createdWebhookId}`), {
       headers: webhookHeaders,
     })
     expect(response.status).toBe(200)
@@ -530,7 +536,7 @@ describe('[GET] /webhooks (single webhook)', () => {
 
   it('get webhook with invalid webhookId', async () => {
     const invalidWebhookId = randomUUID()
-    const response = await fetchWithRetry(webhookEndpoint(`?orgId=${WEBHOOK_TEST_ORG_ID}&webhookId=${invalidWebhookId}`), {
+    const response = await fetchTestRequest(webhookEndpoint(`?orgId=${WEBHOOK_TEST_ORG_ID}&webhookId=${invalidWebhookId}`), {
       headers: webhookHeaders,
     })
     expect(response.status).toBe(400)
@@ -539,7 +545,7 @@ describe('[GET] /webhooks (single webhook)', () => {
   })
 })
 
-describe('[PUT] /webhooks', () => {
+describeBackend('[PUT] /webhooks', () => {
   it('update webhook name', async () => {
     if (!createdWebhookId)
       throw new Error('Webhook was not created in previous test')
@@ -730,7 +736,7 @@ describe('[PUT] /webhooks', () => {
   })
 })
 
-describe('[POST] /webhooks/test', () => {
+describeBackend('[POST] /webhooks/test', () => {
   it('test webhook', async () => {
     if (!createdWebhookId)
       throw new Error('Webhook was not created in previous test')
@@ -873,12 +879,12 @@ describe('[POST] /webhooks/test', () => {
   })
 })
 
-describe('[GET] /webhooks/deliveries', () => {
+describeBackend('[GET] /webhooks/deliveries', () => {
   it('get webhook deliveries', async () => {
     if (!createdWebhookId)
       throw new Error('Webhook was not created in previous test')
 
-    const response = await fetchWithRetry(webhookEndpoint(`/deliveries?orgId=${WEBHOOK_TEST_ORG_ID}&webhookId=${createdWebhookId}`), {
+    const response = await fetchTestRequest(webhookEndpoint(`/deliveries?orgId=${WEBHOOK_TEST_ORG_ID}&webhookId=${createdWebhookId}`), {
       headers: webhookHeaders,
     })
     expect(response.status).toBe(200)
@@ -894,7 +900,7 @@ describe('[GET] /webhooks/deliveries', () => {
       throw new Error('Webhook was not created in previous test')
 
     const authHeaders = await getAuthHeaders()
-    const response = await fetchWithRetry(webhookEndpoint(`/deliveries?orgId=${WEBHOOK_TEST_ORG_ID}&webhookId=${createdWebhookId}`), {
+    const response = await fetchTestRequest(webhookEndpoint(`/deliveries?orgId=${WEBHOOK_TEST_ORG_ID}&webhookId=${createdWebhookId}`), {
       headers: authHeaders,
     })
 
@@ -920,7 +926,7 @@ describe('[GET] /webhooks/deliveries', () => {
     if (!createdWebhookId)
       throw new Error('Webhook was not created in previous test')
 
-    const response = await fetchWithRetry(webhookEndpoint(`/deliveries?orgId=${WEBHOOK_TEST_ORG_ID}&webhookId=${createdWebhookId}&status=success`), {
+    const response = await fetchTestRequest(webhookEndpoint(`/deliveries?orgId=${WEBHOOK_TEST_ORG_ID}&webhookId=${createdWebhookId}&status=success`), {
       headers: webhookHeaders,
     })
     expect(response.status).toBe(200)
@@ -932,7 +938,7 @@ describe('[GET] /webhooks/deliveries', () => {
     if (!createdWebhookId)
       throw new Error('Webhook was not created in previous test')
 
-    const response = await fetchWithRetry(webhookEndpoint(`/deliveries?orgId=${WEBHOOK_TEST_ORG_ID}&webhookId=${createdWebhookId}&page=0`), {
+    const response = await fetchTestRequest(webhookEndpoint(`/deliveries?orgId=${WEBHOOK_TEST_ORG_ID}&webhookId=${createdWebhookId}&page=0`), {
       headers: webhookHeaders,
     })
     expect(response.status).toBe(200)
@@ -942,7 +948,7 @@ describe('[GET] /webhooks/deliveries', () => {
 
   it('get webhook deliveries with invalid webhookId', async () => {
     const invalidWebhookId = randomUUID()
-    const response = await fetchWithRetry(webhookEndpoint(`/deliveries?orgId=${WEBHOOK_TEST_ORG_ID}&webhookId=${invalidWebhookId}`), {
+    const response = await fetchTestRequest(webhookEndpoint(`/deliveries?orgId=${WEBHOOK_TEST_ORG_ID}&webhookId=${invalidWebhookId}`), {
       headers: webhookHeaders,
     })
     expect(response.status).toBe(400)
@@ -951,7 +957,7 @@ describe('[GET] /webhooks/deliveries', () => {
   })
 
   it('get webhook deliveries with missing body', async () => {
-    const response = await fetchWithRetry(webhookEndpoint('/deliveries'), {
+    const response = await fetchTestRequest(webhookEndpoint('/deliveries'), {
       headers: webhookHeaders,
     })
     expect(response.status).toBe(400)
@@ -960,7 +966,7 @@ describe('[GET] /webhooks/deliveries', () => {
   })
 })
 
-describe('[POST] /webhooks/deliveries/retry', () => {
+describeBackend('[POST] /webhooks/deliveries/retry', () => {
   it('retry delivery with invalid deliveryId', async () => {
     const invalidDeliveryId = randomUUID()
     const response = await fetch(webhookEndpoint('/deliveries/retry'), {
@@ -1152,7 +1158,7 @@ describe('[POST] /webhooks/deliveries/retry', () => {
   })
 })
 
-describe('[DELETE] /webhooks', () => {
+describeBackend('[DELETE] /webhooks', () => {
   it('delete webhook with invalid webhookId', async () => {
     const invalidWebhookId = randomUUID()
     const response = await fetch(webhookEndpoint(`?orgId=${WEBHOOK_TEST_ORG_ID}&webhookId=${invalidWebhookId}`), {

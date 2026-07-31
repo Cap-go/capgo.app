@@ -1,0 +1,2662 @@
+{
+  "columns": [
+    {
+      "default": null,
+      "generated": "",
+      "identity": "d",
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "table": "app_versions",
+      "type": "bigint"
+    },
+    {
+      "default": "now()",
+      "generated": "",
+      "identity": "",
+      "name": "created_at",
+      "notNull": false,
+      "position": 2,
+      "table": "app_versions",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "app_id",
+      "notNull": true,
+      "position": 3,
+      "table": "app_versions",
+      "type": "character varying"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "name",
+      "notNull": true,
+      "position": 4,
+      "table": "app_versions",
+      "type": "character varying"
+    },
+    {
+      "default": "now()",
+      "generated": "",
+      "identity": "",
+      "name": "updated_at",
+      "notNull": false,
+      "position": 5,
+      "table": "app_versions",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "false",
+      "generated": "",
+      "identity": "",
+      "name": "deleted",
+      "notNull": true,
+      "position": 6,
+      "table": "app_versions",
+      "type": "boolean"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "external_url",
+      "notNull": false,
+      "position": 7,
+      "table": "app_versions",
+      "type": "character varying"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "checksum",
+      "notNull": false,
+      "position": 8,
+      "table": "app_versions",
+      "type": "character varying"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "session_key",
+      "notNull": false,
+      "position": 9,
+      "table": "app_versions",
+      "type": "character varying"
+    },
+    {
+      "default": "'r2'::text",
+      "generated": "",
+      "identity": "",
+      "name": "storage_provider",
+      "notNull": true,
+      "position": 10,
+      "table": "app_versions",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "min_update_version",
+      "notNull": false,
+      "position": 11,
+      "table": "app_versions",
+      "type": "character varying"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "native_packages",
+      "notNull": false,
+      "position": 12,
+      "table": "app_versions",
+      "type": "jsonb[]"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "owner_org",
+      "notNull": true,
+      "position": 13,
+      "table": "app_versions",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "user_id",
+      "notNull": false,
+      "position": 14,
+      "table": "app_versions",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "r2_path",
+      "notNull": false,
+      "position": 15,
+      "table": "app_versions",
+      "type": "character varying"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "manifest",
+      "notNull": false,
+      "position": 16,
+      "table": "app_versions",
+      "type": "manifest_entry[]"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "link",
+      "notNull": false,
+      "position": 17,
+      "table": "app_versions",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "comment",
+      "notNull": false,
+      "position": 18,
+      "table": "app_versions",
+      "type": "text"
+    },
+    {
+      "default": "0",
+      "generated": "",
+      "identity": "",
+      "name": "manifest_count",
+      "notNull": true,
+      "position": 19,
+      "table": "app_versions",
+      "type": "integer"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "key_id",
+      "notNull": false,
+      "position": 20,
+      "table": "app_versions",
+      "type": "character varying(20)"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "cli_version",
+      "notNull": false,
+      "position": 21,
+      "table": "app_versions",
+      "type": "character varying"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "deleted_at",
+      "notNull": false,
+      "position": 22,
+      "table": "app_versions",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "created_by_apikey_rbac_id",
+      "notNull": false,
+      "position": 23,
+      "table": "app_versions",
+      "type": "uuid"
+    },
+    {
+      "default": "now()",
+      "generated": "",
+      "identity": "",
+      "name": "created_at",
+      "notNull": false,
+      "position": 1,
+      "table": "apps",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "app_id",
+      "notNull": true,
+      "position": 2,
+      "table": "apps",
+      "type": "character varying"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "icon_url",
+      "notNull": true,
+      "position": 3,
+      "table": "apps",
+      "type": "character varying"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "user_id",
+      "notNull": false,
+      "position": 4,
+      "table": "apps",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "name",
+      "notNull": false,
+      "position": 5,
+      "table": "apps",
+      "type": "character varying"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "last_version",
+      "notNull": false,
+      "position": 6,
+      "table": "apps",
+      "type": "character varying"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "updated_at",
+      "notNull": false,
+      "position": 7,
+      "table": "apps",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "gen_random_uuid()",
+      "generated": "",
+      "identity": "",
+      "name": "id",
+      "notNull": false,
+      "position": 8,
+      "table": "apps",
+      "type": "uuid"
+    },
+    {
+      "default": "'2592000'::bigint",
+      "generated": "",
+      "identity": "",
+      "name": "retention",
+      "notNull": true,
+      "position": 9,
+      "table": "apps",
+      "type": "bigint"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "owner_org",
+      "notNull": true,
+      "position": 10,
+      "table": "apps",
+      "type": "uuid"
+    },
+    {
+      "default": "'production'::character varying",
+      "generated": "",
+      "identity": "",
+      "name": "default_upload_channel",
+      "notNull": true,
+      "position": 11,
+      "table": "apps",
+      "type": "character varying"
+    },
+    {
+      "default": "'{}'::jsonb[]",
+      "generated": "",
+      "identity": "",
+      "name": "transfer_history",
+      "notNull": false,
+      "position": 12,
+      "table": "apps",
+      "type": "jsonb[]"
+    },
+    {
+      "default": "0",
+      "generated": "",
+      "identity": "",
+      "name": "channel_device_count",
+      "notNull": true,
+      "position": 13,
+      "table": "apps",
+      "type": "bigint"
+    },
+    {
+      "default": "0",
+      "generated": "",
+      "identity": "",
+      "name": "manifest_bundle_count",
+      "notNull": true,
+      "position": 14,
+      "table": "apps",
+      "type": "bigint"
+    },
+    {
+      "default": "false",
+      "generated": "",
+      "identity": "",
+      "name": "expose_metadata",
+      "notNull": true,
+      "position": 15,
+      "table": "apps",
+      "type": "boolean"
+    },
+    {
+      "default": "false",
+      "generated": "",
+      "identity": "",
+      "name": "allow_preview",
+      "notNull": true,
+      "position": 16,
+      "table": "apps",
+      "type": "boolean"
+    },
+    {
+      "default": "true",
+      "generated": "",
+      "identity": "",
+      "name": "allow_device_custom_id",
+      "notNull": true,
+      "position": 17,
+      "table": "apps",
+      "type": "boolean"
+    },
+    {
+      "default": "false",
+      "generated": "",
+      "identity": "",
+      "name": "need_onboarding",
+      "notNull": true,
+      "position": 18,
+      "table": "apps",
+      "type": "boolean"
+    },
+    {
+      "default": "false",
+      "generated": "",
+      "identity": "",
+      "name": "existing_app",
+      "notNull": true,
+      "position": 19,
+      "table": "apps",
+      "type": "boolean"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "ios_store_url",
+      "notNull": false,
+      "position": 20,
+      "table": "apps",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "android_store_url",
+      "notNull": false,
+      "position": 21,
+      "table": "apps",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "stats_updated_at",
+      "notNull": false,
+      "position": 22,
+      "table": "apps",
+      "type": "timestamp without time zone"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "stats_refresh_requested_at",
+      "notNull": false,
+      "position": 23,
+      "table": "apps",
+      "type": "timestamp without time zone"
+    },
+    {
+      "default": "900",
+      "generated": "",
+      "identity": "",
+      "name": "build_timeout_seconds",
+      "notNull": true,
+      "position": 24,
+      "table": "apps",
+      "type": "bigint"
+    },
+    {
+      "default": "now()",
+      "generated": "",
+      "identity": "",
+      "name": "build_timeout_updated_at",
+      "notNull": true,
+      "position": 25,
+      "table": "apps",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "true",
+      "generated": "",
+      "identity": "",
+      "name": "block_provider_infra_requests",
+      "notNull": true,
+      "position": 26,
+      "table": "apps",
+      "type": "boolean"
+    },
+    {
+      "default": "0",
+      "generated": "",
+      "identity": "",
+      "name": "rollout_channel_count",
+      "notNull": true,
+      "position": 27,
+      "table": "apps",
+      "type": "bigint"
+    },
+    {
+      "default": "'{}'::character varying[]",
+      "generated": "",
+      "identity": "",
+      "name": "rollout_paused_version_names",
+      "notNull": true,
+      "position": 28,
+      "table": "apps",
+      "type": "character varying[]"
+    },
+    {
+      "default": "false",
+      "generated": "",
+      "identity": "",
+      "name": "created_from_onboarding",
+      "notNull": true,
+      "position": 29,
+      "table": "apps",
+      "type": "boolean"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "onboarding_completed_at",
+      "notNull": false,
+      "position": 30,
+      "table": "apps",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "now()",
+      "generated": "",
+      "identity": "",
+      "name": "created_at",
+      "notNull": false,
+      "position": 1,
+      "table": "channel_devices",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "channel_id",
+      "notNull": true,
+      "position": 2,
+      "table": "channel_devices",
+      "type": "bigint"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "app_id",
+      "notNull": true,
+      "position": 3,
+      "table": "channel_devices",
+      "type": "character varying"
+    },
+    {
+      "default": "now()",
+      "generated": "",
+      "identity": "",
+      "name": "updated_at",
+      "notNull": true,
+      "position": 4,
+      "table": "channel_devices",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "device_id",
+      "notNull": true,
+      "position": 5,
+      "table": "channel_devices",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "d",
+      "name": "id",
+      "notNull": true,
+      "position": 6,
+      "table": "channel_devices",
+      "type": "bigint"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "owner_org",
+      "notNull": true,
+      "position": 7,
+      "table": "channel_devices",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "d",
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "table": "channels",
+      "type": "bigint"
+    },
+    {
+      "default": "now()",
+      "generated": "",
+      "identity": "",
+      "name": "created_at",
+      "notNull": true,
+      "position": 2,
+      "table": "channels",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "name",
+      "notNull": true,
+      "position": 3,
+      "table": "channels",
+      "type": "character varying"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "app_id",
+      "notNull": true,
+      "position": 4,
+      "table": "channels",
+      "type": "character varying"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "version",
+      "notNull": false,
+      "position": 5,
+      "table": "channels",
+      "type": "bigint"
+    },
+    {
+      "default": "now()",
+      "generated": "",
+      "identity": "",
+      "name": "updated_at",
+      "notNull": true,
+      "position": 6,
+      "table": "channels",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "false",
+      "generated": "",
+      "identity": "",
+      "name": "public",
+      "notNull": true,
+      "position": 7,
+      "table": "channels",
+      "type": "boolean"
+    },
+    {
+      "default": "true",
+      "generated": "",
+      "identity": "",
+      "name": "disable_auto_update_under_native",
+      "notNull": true,
+      "position": 8,
+      "table": "channels",
+      "type": "boolean"
+    },
+    {
+      "default": "true",
+      "generated": "",
+      "identity": "",
+      "name": "ios",
+      "notNull": true,
+      "position": 9,
+      "table": "channels",
+      "type": "boolean"
+    },
+    {
+      "default": "true",
+      "generated": "",
+      "identity": "",
+      "name": "android",
+      "notNull": true,
+      "position": 10,
+      "table": "channels",
+      "type": "boolean"
+    },
+    {
+      "default": "false",
+      "generated": "",
+      "identity": "",
+      "name": "allow_device_self_set",
+      "notNull": true,
+      "position": 11,
+      "table": "channels",
+      "type": "boolean"
+    },
+    {
+      "default": "true",
+      "generated": "",
+      "identity": "",
+      "name": "allow_emulator",
+      "notNull": true,
+      "position": 12,
+      "table": "channels",
+      "type": "boolean"
+    },
+    {
+      "default": "true",
+      "generated": "",
+      "identity": "",
+      "name": "allow_dev",
+      "notNull": true,
+      "position": 13,
+      "table": "channels",
+      "type": "boolean"
+    },
+    {
+      "default": "'major'::disable_update",
+      "generated": "",
+      "identity": "",
+      "name": "disable_auto_update",
+      "notNull": true,
+      "position": 14,
+      "table": "channels",
+      "type": "disable_update"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "owner_org",
+      "notNull": true,
+      "position": 15,
+      "table": "channels",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "created_by",
+      "notNull": true,
+      "position": 16,
+      "table": "channels",
+      "type": "uuid"
+    },
+    {
+      "default": "true",
+      "generated": "",
+      "identity": "",
+      "name": "allow_device",
+      "notNull": true,
+      "position": 17,
+      "table": "channels",
+      "type": "boolean"
+    },
+    {
+      "default": "true",
+      "generated": "",
+      "identity": "",
+      "name": "allow_prod",
+      "notNull": true,
+      "position": 18,
+      "table": "channels",
+      "type": "boolean"
+    },
+    {
+      "default": "true",
+      "generated": "",
+      "identity": "",
+      "name": "electron",
+      "notNull": true,
+      "position": 19,
+      "table": "channels",
+      "type": "boolean"
+    },
+    {
+      "default": "gen_random_uuid()",
+      "generated": "",
+      "identity": "",
+      "name": "rbac_id",
+      "notNull": true,
+      "position": 20,
+      "table": "channels",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "rollout_version",
+      "notNull": false,
+      "position": 21,
+      "table": "channels",
+      "type": "bigint"
+    },
+    {
+      "default": "0",
+      "generated": "",
+      "identity": "",
+      "name": "rollout_percentage_bps",
+      "notNull": true,
+      "position": 22,
+      "table": "channels",
+      "type": "integer"
+    },
+    {
+      "default": "false",
+      "generated": "",
+      "identity": "",
+      "name": "rollout_enabled",
+      "notNull": true,
+      "position": 23,
+      "table": "channels",
+      "type": "boolean"
+    },
+    {
+      "default": "gen_random_uuid()",
+      "generated": "",
+      "identity": "",
+      "name": "rollout_id",
+      "notNull": true,
+      "position": 24,
+      "table": "channels",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "rollout_paused_at",
+      "notNull": false,
+      "position": 25,
+      "table": "channels",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "rollout_pause_reason",
+      "notNull": false,
+      "position": 26,
+      "table": "channels",
+      "type": "text"
+    },
+    {
+      "default": "2592000",
+      "generated": "",
+      "identity": "",
+      "name": "rollout_cache_ttl_seconds",
+      "notNull": true,
+      "position": 27,
+      "table": "channels",
+      "type": "integer"
+    },
+    {
+      "default": "false",
+      "generated": "",
+      "identity": "",
+      "name": "auto_pause_enabled",
+      "notNull": true,
+      "position": 28,
+      "table": "channels",
+      "type": "boolean"
+    },
+    {
+      "default": "60",
+      "generated": "",
+      "identity": "",
+      "name": "auto_pause_window_minutes",
+      "notNull": true,
+      "position": 29,
+      "table": "channels",
+      "type": "integer"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "auto_pause_failure_rate_bps",
+      "notNull": false,
+      "position": 30,
+      "table": "channels",
+      "type": "integer"
+    },
+    {
+      "default": "0.9500",
+      "generated": "",
+      "identity": "",
+      "name": "auto_pause_confidence",
+      "notNull": true,
+      "position": 31,
+      "table": "channels",
+      "type": "numeric(5,4)"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "auto_pause_min_attempts",
+      "notNull": false,
+      "position": 32,
+      "table": "channels",
+      "type": "integer"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "auto_pause_min_failures",
+      "notNull": false,
+      "position": 33,
+      "table": "channels",
+      "type": "integer"
+    },
+    {
+      "default": "'pause'::text",
+      "generated": "",
+      "identity": "",
+      "name": "auto_pause_action",
+      "notNull": true,
+      "position": 34,
+      "table": "channels",
+      "type": "text"
+    },
+    {
+      "default": "60",
+      "generated": "",
+      "identity": "",
+      "name": "auto_pause_cooldown_minutes",
+      "notNull": true,
+      "position": 35,
+      "table": "channels",
+      "type": "integer"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "auto_pause_last_triggered_at",
+      "notNull": false,
+      "position": 36,
+      "table": "channels",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "auto_pause_last_checked_at",
+      "notNull": false,
+      "position": 37,
+      "table": "channels",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "nextval('manifest_id_seq'::regclass)",
+      "generated": "",
+      "identity": "",
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "table": "manifest",
+      "type": "integer"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "app_version_id",
+      "notNull": true,
+      "position": 2,
+      "table": "manifest",
+      "type": "bigint"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "file_name",
+      "notNull": true,
+      "position": 3,
+      "table": "manifest",
+      "type": "character varying"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "s3_path",
+      "notNull": true,
+      "position": 4,
+      "table": "manifest",
+      "type": "character varying"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "file_hash",
+      "notNull": true,
+      "position": 5,
+      "table": "manifest",
+      "type": "character varying"
+    },
+    {
+      "default": "0",
+      "generated": "",
+      "identity": "",
+      "name": "file_size",
+      "notNull": false,
+      "position": 6,
+      "table": "manifest",
+      "type": "bigint"
+    },
+    {
+      "default": "now()",
+      "generated": "",
+      "identity": "",
+      "name": "created_at",
+      "notNull": false,
+      "position": 1,
+      "table": "notifications",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "now()",
+      "generated": "",
+      "identity": "",
+      "name": "updated_at",
+      "notNull": false,
+      "position": 2,
+      "table": "notifications",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "now()",
+      "generated": "",
+      "identity": "",
+      "name": "last_send_at",
+      "notNull": true,
+      "position": 3,
+      "table": "notifications",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "'1'::bigint",
+      "generated": "",
+      "identity": "",
+      "name": "total_send",
+      "notNull": true,
+      "position": 4,
+      "table": "notifications",
+      "type": "bigint"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "owner_org",
+      "notNull": true,
+      "position": 5,
+      "table": "notifications",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "event",
+      "notNull": true,
+      "position": 6,
+      "table": "notifications",
+      "type": "character varying(255)"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "uniq_id",
+      "notNull": true,
+      "position": 7,
+      "table": "notifications",
+      "type": "character varying(255)"
+    },
+    {
+      "default": "gen_random_uuid()",
+      "generated": "",
+      "identity": "",
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "table": "onboarding_demo_data",
+      "type": "uuid"
+    },
+    {
+      "default": "now()",
+      "generated": "",
+      "identity": "",
+      "name": "created_at",
+      "notNull": true,
+      "position": 2,
+      "table": "onboarding_demo_data",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "app_id",
+      "notNull": true,
+      "position": 3,
+      "table": "onboarding_demo_data",
+      "type": "character varying"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "owner_org",
+      "notNull": true,
+      "position": 4,
+      "table": "onboarding_demo_data",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "relation_name",
+      "notNull": true,
+      "position": 5,
+      "table": "onboarding_demo_data",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "row_key",
+      "notNull": true,
+      "position": 6,
+      "table": "onboarding_demo_data",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "seed_id",
+      "notNull": true,
+      "position": 7,
+      "table": "onboarding_demo_data",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "d",
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "table": "org_users",
+      "type": "bigint"
+    },
+    {
+      "default": "now()",
+      "generated": "",
+      "identity": "",
+      "name": "created_at",
+      "notNull": false,
+      "position": 2,
+      "table": "org_users",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "now()",
+      "generated": "",
+      "identity": "",
+      "name": "updated_at",
+      "notNull": false,
+      "position": 3,
+      "table": "org_users",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "user_id",
+      "notNull": true,
+      "position": 4,
+      "table": "org_users",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "org_id",
+      "notNull": true,
+      "position": 5,
+      "table": "org_users",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "app_id",
+      "notNull": false,
+      "position": 6,
+      "table": "org_users",
+      "type": "character varying"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "channel_id",
+      "notNull": false,
+      "position": 7,
+      "table": "org_users",
+      "type": "bigint"
+    },
+    {
+      "default": "'org_member'::text",
+      "generated": "",
+      "identity": "",
+      "name": "rbac_role_name",
+      "notNull": false,
+      "position": 8,
+      "table": "org_users",
+      "type": "text"
+    },
+    {
+      "default": "false",
+      "generated": "",
+      "identity": "",
+      "name": "is_invite",
+      "notNull": true,
+      "position": 9,
+      "table": "org_users",
+      "type": "boolean"
+    },
+    {
+      "default": "gen_random_uuid()",
+      "generated": "",
+      "identity": "",
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "table": "orgs",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "created_by",
+      "notNull": true,
+      "position": 2,
+      "table": "orgs",
+      "type": "uuid"
+    },
+    {
+      "default": "now()",
+      "generated": "",
+      "identity": "",
+      "name": "created_at",
+      "notNull": false,
+      "position": 3,
+      "table": "orgs",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "now()",
+      "generated": "",
+      "identity": "",
+      "name": "updated_at",
+      "notNull": false,
+      "position": 4,
+      "table": "orgs",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "logo",
+      "notNull": false,
+      "position": 5,
+      "table": "orgs",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "name",
+      "notNull": true,
+      "position": 6,
+      "table": "orgs",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "management_email",
+      "notNull": true,
+      "position": 7,
+      "table": "orgs",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "customer_id",
+      "notNull": false,
+      "position": 8,
+      "table": "orgs",
+      "type": "character varying"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "stats_updated_at",
+      "notNull": false,
+      "position": 9,
+      "table": "orgs",
+      "type": "timestamp without time zone"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "last_stats_updated_at",
+      "notNull": false,
+      "position": 10,
+      "table": "orgs",
+      "type": "timestamp without time zone"
+    },
+    {
+      "default": "false",
+      "generated": "",
+      "identity": "",
+      "name": "enforcing_2fa",
+      "notNull": true,
+      "position": 11,
+      "table": "orgs",
+      "type": "boolean"
+    },
+    {
+      "default": "'{\"onboarding\": true, \"usage_limit\": true, \"credit_usage\": true, \"device_error\": true, \"weekly_stats\": true, \"monthly_stats\": true, \"bundle_created\": true, \"bundle_deployed\": true, \"deploy_stats_24h\": true, \"billing_period_stats\": true, \"channel_self_rejected\": true}'::jsonb",
+      "generated": "",
+      "identity": "",
+      "name": "email_preferences",
+      "notNull": true,
+      "position": 12,
+      "table": "orgs",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "password_policy_config",
+      "notNull": false,
+      "position": 13,
+      "table": "orgs",
+      "type": "jsonb"
+    },
+    {
+      "default": "false",
+      "generated": "",
+      "identity": "",
+      "name": "enforce_hashed_api_keys",
+      "notNull": true,
+      "position": 14,
+      "table": "orgs",
+      "type": "boolean"
+    },
+    {
+      "default": "false",
+      "generated": "",
+      "identity": "",
+      "name": "require_apikey_expiration",
+      "notNull": true,
+      "position": 15,
+      "table": "orgs",
+      "type": "boolean"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "max_apikey_expiration_days",
+      "notNull": false,
+      "position": 16,
+      "table": "orgs",
+      "type": "integer"
+    },
+    {
+      "default": "false",
+      "generated": "",
+      "identity": "",
+      "name": "enforce_encrypted_bundles",
+      "notNull": true,
+      "position": 17,
+      "table": "orgs",
+      "type": "boolean"
+    },
+    {
+      "default": "NULL::character varying",
+      "generated": "",
+      "identity": "",
+      "name": "required_encryption_key",
+      "notNull": false,
+      "position": 18,
+      "table": "orgs",
+      "type": "character varying(21)"
+    },
+    {
+      "default": "false",
+      "generated": "",
+      "identity": "",
+      "name": "has_usage_credits",
+      "notNull": true,
+      "position": 19,
+      "table": "orgs",
+      "type": "boolean"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "website",
+      "notNull": false,
+      "position": 20,
+      "table": "orgs",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "stats_refresh_requested_at",
+      "notNull": false,
+      "position": 21,
+      "table": "orgs",
+      "type": "timestamp without time zone"
+    },
+    {
+      "default": "'{\"intent\": \"unknown\"}'::jsonb",
+      "generated": "",
+      "identity": "",
+      "name": "onboarding",
+      "notNull": true,
+      "position": 22,
+      "table": "orgs",
+      "type": "jsonb"
+    },
+    {
+      "default": "now()",
+      "generated": "",
+      "identity": "",
+      "name": "created_at",
+      "notNull": true,
+      "position": 1,
+      "table": "stripe_info",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "now()",
+      "generated": "",
+      "identity": "",
+      "name": "updated_at",
+      "notNull": true,
+      "position": 2,
+      "table": "stripe_info",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "subscription_id",
+      "notNull": false,
+      "position": 3,
+      "table": "stripe_info",
+      "type": "character varying"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "customer_id",
+      "notNull": true,
+      "position": 4,
+      "table": "stripe_info",
+      "type": "character varying"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "status",
+      "notNull": false,
+      "position": 5,
+      "table": "stripe_info",
+      "type": "stripe_status"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "product_id",
+      "notNull": true,
+      "position": 6,
+      "table": "stripe_info",
+      "type": "character varying"
+    },
+    {
+      "default": "now()",
+      "generated": "",
+      "identity": "",
+      "name": "trial_at",
+      "notNull": true,
+      "position": 7,
+      "table": "stripe_info",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "price_id",
+      "notNull": false,
+      "position": 8,
+      "table": "stripe_info",
+      "type": "character varying"
+    },
+    {
+      "default": "true",
+      "generated": "",
+      "identity": "",
+      "name": "is_good_plan",
+      "notNull": false,
+      "position": 9,
+      "table": "stripe_info",
+      "type": "boolean"
+    },
+    {
+      "default": "'0'::bigint",
+      "generated": "",
+      "identity": "",
+      "name": "plan_usage",
+      "notNull": false,
+      "position": 10,
+      "table": "stripe_info",
+      "type": "bigint"
+    },
+    {
+      "default": "now()",
+      "generated": "",
+      "identity": "",
+      "name": "subscription_anchor_start",
+      "notNull": true,
+      "position": 11,
+      "table": "stripe_info",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "one_month_ahead()",
+      "generated": "",
+      "identity": "",
+      "name": "subscription_anchor_end",
+      "notNull": true,
+      "position": 12,
+      "table": "stripe_info",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "canceled_at",
+      "notNull": false,
+      "position": 13,
+      "table": "stripe_info",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "false",
+      "generated": "",
+      "identity": "",
+      "name": "mau_exceeded",
+      "notNull": false,
+      "position": 14,
+      "table": "stripe_info",
+      "type": "boolean"
+    },
+    {
+      "default": "false",
+      "generated": "",
+      "identity": "",
+      "name": "storage_exceeded",
+      "notNull": false,
+      "position": 15,
+      "table": "stripe_info",
+      "type": "boolean"
+    },
+    {
+      "default": "false",
+      "generated": "",
+      "identity": "",
+      "name": "bandwidth_exceeded",
+      "notNull": false,
+      "position": 16,
+      "table": "stripe_info",
+      "type": "boolean"
+    },
+    {
+      "default": "nextval('stripe_info_id_seq'::regclass)",
+      "generated": "",
+      "identity": "",
+      "name": "id",
+      "notNull": true,
+      "position": 17,
+      "table": "stripe_info",
+      "type": "integer"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "plan_calculated_at",
+      "notNull": false,
+      "position": 18,
+      "table": "stripe_info",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "false",
+      "generated": "",
+      "identity": "",
+      "name": "build_time_exceeded",
+      "notNull": false,
+      "position": 19,
+      "table": "stripe_info",
+      "type": "boolean"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "upgraded_at",
+      "notNull": false,
+      "position": 20,
+      "table": "stripe_info",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "paid_at",
+      "notNull": false,
+      "position": 21,
+      "table": "stripe_info",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "customer_country",
+      "notNull": false,
+      "position": 22,
+      "table": "stripe_info",
+      "type": "character varying(2)"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "last_stripe_event_at",
+      "notNull": false,
+      "position": 23,
+      "table": "stripe_info",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "past_due_at",
+      "notNull": false,
+      "position": 24,
+      "table": "stripe_info",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "churn_reason",
+      "notNull": false,
+      "position": 25,
+      "table": "stripe_info",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "is_above_plan",
+      "notNull": false,
+      "position": 26,
+      "table": "stripe_info",
+      "type": "boolean"
+    }
+  ],
+  "constraints": [
+    {
+      "definition": "UNIQUE (name, app_id)",
+      "name": "app_versions_name_app_id_key",
+      "table": "app_versions",
+      "type": "u",
+      "valid": true
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "app_versions_pkey",
+      "table": "app_versions",
+      "type": "p",
+      "valid": true
+    },
+    {
+      "definition": "CHECK (build_timeout_seconds >= 300 AND build_timeout_seconds <= 21600)",
+      "name": "apps_build_timeout_seconds_check",
+      "table": "apps",
+      "type": "c",
+      "valid": true
+    },
+    {
+      "definition": "UNIQUE (id)",
+      "name": "apps_id_unique",
+      "table": "apps",
+      "type": "u",
+      "valid": true
+    },
+    {
+      "definition": "PRIMARY KEY (app_id)",
+      "name": "apps_pkey",
+      "table": "apps",
+      "type": "p",
+      "valid": true
+    },
+    {
+      "definition": "UNIQUE (app_id, device_id)",
+      "name": "channel_devices_app_id_device_id_key",
+      "table": "channel_devices",
+      "type": "u",
+      "valid": true
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "channel_devices_pkey",
+      "table": "channel_devices",
+      "type": "p",
+      "valid": true
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "channel_pkey",
+      "table": "channels",
+      "type": "p",
+      "valid": true
+    },
+    {
+      "definition": "CHECK (auto_pause_action = ANY (ARRAY['pause'::text, 'rollback'::text, 'notify'::text]))",
+      "name": "channels_auto_pause_action_check",
+      "table": "channels",
+      "type": "c",
+      "valid": true
+    },
+    {
+      "definition": "CHECK (auto_pause_confidence > 0::numeric AND auto_pause_confidence < 1::numeric)",
+      "name": "channels_auto_pause_confidence_check",
+      "table": "channels",
+      "type": "c",
+      "valid": true
+    },
+    {
+      "definition": "CHECK (auto_pause_cooldown_minutes >= 0 AND auto_pause_cooldown_minutes <= 10080)",
+      "name": "channels_auto_pause_cooldown_minutes_check",
+      "table": "channels",
+      "type": "c",
+      "valid": true
+    },
+    {
+      "definition": "CHECK (auto_pause_failure_rate_bps IS NULL OR auto_pause_failure_rate_bps >= 0 AND auto_pause_failure_rate_bps <= 10000)",
+      "name": "channels_auto_pause_failure_rate_bps_check",
+      "table": "channels",
+      "type": "c",
+      "valid": true
+    },
+    {
+      "definition": "CHECK (auto_pause_min_attempts IS NULL OR auto_pause_min_attempts >= 0)",
+      "name": "channels_auto_pause_min_attempts_check",
+      "table": "channels",
+      "type": "c",
+      "valid": true
+    },
+    {
+      "definition": "CHECK (auto_pause_min_failures IS NULL OR auto_pause_min_failures >= 0)",
+      "name": "channels_auto_pause_min_failures_check",
+      "table": "channels",
+      "type": "c",
+      "valid": true
+    },
+    {
+      "definition": "CHECK (auto_pause_window_minutes > 0 AND auto_pause_window_minutes <= 10080)",
+      "name": "channels_auto_pause_window_minutes_check",
+      "table": "channels",
+      "type": "c",
+      "valid": true
+    },
+    {
+      "definition": "UNIQUE (rbac_id)",
+      "name": "channels_rbac_id_key",
+      "table": "channels",
+      "type": "u",
+      "valid": true
+    },
+    {
+      "definition": "CHECK (rollout_cache_ttl_seconds >= 60 AND rollout_cache_ttl_seconds <= 31536000)",
+      "name": "channels_rollout_cache_ttl_seconds_check",
+      "table": "channels",
+      "type": "c",
+      "valid": true
+    },
+    {
+      "definition": "CHECK (rollout_percentage_bps >= 0 AND rollout_percentage_bps <= 10000)",
+      "name": "channels_rollout_percentage_bps_check",
+      "table": "channels",
+      "type": "c",
+      "valid": true
+    },
+    {
+      "definition": "UNIQUE (name, app_id)",
+      "name": "unique_name_app_id",
+      "table": "channels",
+      "type": "u",
+      "valid": true
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "manifest_pkey",
+      "table": "manifest",
+      "type": "p",
+      "valid": true
+    },
+    {
+      "definition": "PRIMARY KEY (owner_org, event, uniq_id)",
+      "name": "notifications_pkey",
+      "table": "notifications",
+      "type": "p",
+      "valid": true
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "onboarding_demo_data_pkey",
+      "table": "onboarding_demo_data",
+      "type": "p",
+      "valid": true
+    },
+    {
+      "definition": "CHECK (relation_name = ANY (ARRAY['app_versions'::text, 'app_versions_meta'::text, 'manifest'::text, 'channels'::text, 'channel_devices'::text, 'deploy_history'::text, 'devices'::text, 'build_requests'::text]))",
+      "name": "onboarding_demo_data_relation_name_check",
+      "table": "onboarding_demo_data",
+      "type": "c",
+      "valid": true
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "org_users_pkey",
+      "table": "org_users",
+      "type": "p",
+      "valid": true
+    },
+    {
+      "definition": "CHECK (max_apikey_expiration_days IS NULL OR max_apikey_expiration_days >= 1 AND max_apikey_expiration_days <= 365)",
+      "name": "orgs_max_apikey_expiration_days_valid",
+      "table": "orgs",
+      "type": "c",
+      "valid": true
+    },
+    {
+      "definition": "CHECK (jsonb_typeof(onboarding) = 'object'::text AND (NOT onboarding ? 'intent'::text OR ((onboarding ->> 'intent'::text) = ANY (ARRAY['unknown'::text, 'ota'::text, 'builder'::text, 'both'::text, 'exploring'::text]))))",
+      "name": "orgs_onboarding_valid",
+      "table": "orgs",
+      "type": "c",
+      "valid": true
+    },
+    {
+      "definition": "CHECK (password_policy_config IS NULL OR jsonb_typeof(password_policy_config) = 'object'::text AND (NOT password_policy_config ? 'min_length'::text OR jsonb_typeof(password_policy_config -> 'min_length'::text) = 'number'::text AND ((password_policy_config ->> 'min_length'::text)::numeric) = trunc((password_policy_config ->> 'min_length'::text)::numeric) AND ((password_policy_config ->> 'min_length'::text)::numeric) >= 6::numeric AND ((password_policy_config ->> 'min_length'::text)::numeric) <= 72::numeric))",
+      "name": "orgs_password_policy_config_min_length_check",
+      "table": "orgs",
+      "type": "c",
+      "valid": true
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "orgs_pkey",
+      "table": "orgs",
+      "type": "p",
+      "valid": true
+    },
+    {
+      "definition": "CHECK (required_encryption_key IS NULL OR (length(required_encryption_key::text) = ANY (ARRAY[20, 21])))",
+      "name": "orgs_required_encryption_key_valid",
+      "table": "orgs",
+      "type": "c",
+      "valid": true
+    },
+    {
+      "definition": "UNIQUE (customer_id)",
+      "name": "unique customer_id on orgs",
+      "table": "orgs",
+      "type": "u",
+      "valid": true
+    },
+    {
+      "definition": "UNIQUE (name, created_by)",
+      "name": "unique_name_created_by",
+      "table": "orgs",
+      "type": "u",
+      "valid": true
+    },
+    {
+      "definition": "PRIMARY KEY (customer_id)",
+      "name": "stripe_info_pkey",
+      "table": "stripe_info",
+      "type": "p",
+      "valid": true
+    }
+  ],
+  "functions": [
+    {
+      "arguments": "",
+      "definition": "CREATE OR REPLACE FUNCTION public.one_month_ahead()\n RETURNS timestamp without time zone\n LANGUAGE plpgsql\n SET search_path TO ''\nAS $function$\nBEGIN\n   RETURN NOW() + INTERVAL '1 month';\nEND;\n$function$\n",
+      "name": "one_month_ahead"
+    }
+  ],
+  "indexes": [
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX app_versions_cli_version_idx ON public.app_versions USING btree (cli_version)",
+      "name": "app_versions_cli_version_idx",
+      "table": "app_versions",
+      "valid": true
+    },
+    {
+      "constraintOwned": true,
+      "definition": "CREATE UNIQUE INDEX app_versions_name_app_id_key ON public.app_versions USING btree (name, app_id)",
+      "name": "app_versions_name_app_id_key",
+      "table": "app_versions",
+      "valid": true
+    },
+    {
+      "constraintOwned": true,
+      "definition": "CREATE UNIQUE INDEX app_versions_pkey ON public.app_versions USING btree (id)",
+      "name": "app_versions_pkey",
+      "table": "app_versions",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX app_versions_r2_path_idx ON public.app_versions USING btree (r2_path)",
+      "name": "app_versions_r2_path_idx",
+      "table": "app_versions",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX finx_app_versions_owner_org ON public.app_versions USING btree (owner_org)",
+      "name": "finx_app_versions_owner_org",
+      "table": "app_versions",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX idx_app_id_app_versions ON public.app_versions USING btree (app_id)",
+      "name": "idx_app_id_app_versions",
+      "table": "app_versions",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX idx_app_id_name_app_versions ON public.app_versions USING btree (app_id, name)",
+      "name": "idx_app_id_name_app_versions",
+      "table": "app_versions",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX idx_app_versions_created_at ON public.app_versions USING btree (created_at)",
+      "name": "idx_app_versions_created_at",
+      "table": "app_versions",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX idx_app_versions_created_at_app_id ON public.app_versions USING btree (created_at, app_id)",
+      "name": "idx_app_versions_created_at_app_id",
+      "table": "app_versions",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX idx_app_versions_deleted ON public.app_versions USING btree (deleted)",
+      "name": "idx_app_versions_deleted",
+      "table": "app_versions",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX idx_app_versions_deleted_at ON public.app_versions USING btree (deleted_at) WHERE (deleted_at IS NOT NULL)",
+      "name": "idx_app_versions_deleted_at",
+      "table": "app_versions",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX idx_app_versions_deleted_at_id ON public.app_versions USING btree (deleted_at, id) WHERE (deleted = true)",
+      "name": "idx_app_versions_deleted_at_id",
+      "table": "app_versions",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX idx_app_versions_deleted_with_manifest ON public.app_versions USING btree (id) WHERE ((deleted = true) AND (manifest_count > 0))",
+      "name": "idx_app_versions_deleted_with_manifest",
+      "table": "app_versions",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX idx_app_versions_id ON public.app_versions USING btree (id)",
+      "name": "idx_app_versions_id",
+      "table": "app_versions",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX idx_app_versions_name ON public.app_versions USING btree (name)",
+      "name": "idx_app_versions_name",
+      "table": "app_versions",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX idx_app_versions_owner_org_not_deleted ON public.app_versions USING btree (owner_org) WHERE (deleted = false)",
+      "name": "idx_app_versions_owner_org_not_deleted",
+      "table": "app_versions",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX idx_app_versions_retention_cleanup ON public.app_versions USING btree (deleted, created_at, app_id) WHERE (deleted = false)",
+      "name": "idx_app_versions_retention_cleanup",
+      "table": "app_versions",
+      "valid": true
+    },
+    {
+      "constraintOwned": true,
+      "definition": "CREATE UNIQUE INDEX apps_id_unique ON public.apps USING btree (id)",
+      "name": "apps_id_unique",
+      "table": "apps",
+      "valid": true
+    },
+    {
+      "constraintOwned": true,
+      "definition": "CREATE UNIQUE INDEX apps_pkey ON public.apps USING btree (app_id)",
+      "name": "apps_pkey",
+      "table": "apps",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX finx_apps_owner_org ON public.apps USING btree (owner_org)",
+      "name": "finx_apps_owner_org",
+      "table": "apps",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX finx_apps_user_id ON public.apps USING btree (user_id)",
+      "name": "finx_apps_user_id",
+      "table": "apps",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX idx_apps_created_at ON public.apps USING btree (created_at)",
+      "name": "idx_apps_created_at",
+      "table": "apps",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX idx_apps_default_upload_channel ON public.apps USING btree (default_upload_channel)",
+      "name": "idx_apps_default_upload_channel",
+      "table": "apps",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE UNIQUE INDEX idx_apps_owner_org_app_id ON public.apps USING btree (owner_org, app_id)",
+      "name": "idx_apps_owner_org_app_id",
+      "table": "apps",
+      "valid": true
+    },
+    {
+      "constraintOwned": true,
+      "definition": "CREATE UNIQUE INDEX channel_devices_app_id_device_id_key ON public.channel_devices USING btree (app_id, device_id)",
+      "name": "channel_devices_app_id_device_id_key",
+      "table": "channel_devices",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX channel_devices_device_id_idx ON public.channel_devices USING btree (device_id)",
+      "name": "channel_devices_device_id_idx",
+      "table": "channel_devices",
+      "valid": true
+    },
+    {
+      "constraintOwned": true,
+      "definition": "CREATE UNIQUE INDEX channel_devices_pkey ON public.channel_devices USING btree (id)",
+      "name": "channel_devices_pkey",
+      "table": "channel_devices",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX finx_channel_devices_channel_id ON public.channel_devices USING btree (channel_id)",
+      "name": "finx_channel_devices_channel_id",
+      "table": "channel_devices",
+      "valid": true
+    },
+    {
+      "constraintOwned": true,
+      "definition": "CREATE UNIQUE INDEX channel_pkey ON public.channels USING btree (id)",
+      "name": "channel_pkey",
+      "table": "channels",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE UNIQUE INDEX channels_one_public_android_per_app_key ON public.channels USING btree (app_id) WHERE ((public = true) AND (android = true))",
+      "name": "channels_one_public_android_per_app_key",
+      "table": "channels",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE UNIQUE INDEX channels_one_public_electron_per_app_key ON public.channels USING btree (app_id) WHERE ((public = true) AND (electron = true))",
+      "name": "channels_one_public_electron_per_app_key",
+      "table": "channels",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE UNIQUE INDEX channels_one_public_ios_per_app_key ON public.channels USING btree (app_id) WHERE ((public = true) AND (ios = true))",
+      "name": "channels_one_public_ios_per_app_key",
+      "table": "channels",
+      "valid": true
+    },
+    {
+      "constraintOwned": true,
+      "definition": "CREATE UNIQUE INDEX channels_rbac_id_key ON public.channels USING btree (rbac_id)",
+      "name": "channels_rbac_id_key",
+      "table": "channels",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX finx_channels_app_id ON public.channels USING btree (app_id)",
+      "name": "finx_channels_app_id",
+      "table": "channels",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX finx_channels_owner_org ON public.channels USING btree (owner_org)",
+      "name": "finx_channels_owner_org",
+      "table": "channels",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX finx_channels_version ON public.channels USING btree (version)",
+      "name": "finx_channels_version",
+      "table": "channels",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX idx_channels_app_id_name ON public.channels USING btree (app_id, name)",
+      "name": "idx_channels_app_id_name",
+      "table": "channels",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX idx_channels_app_id_version ON public.channels USING btree (app_id, version)",
+      "name": "idx_channels_app_id_version",
+      "table": "channels",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX idx_channels_public_app_id_android ON public.channels USING btree (public, app_id, android)",
+      "name": "idx_channels_public_app_id_android",
+      "table": "channels",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX idx_channels_public_app_id_ios ON public.channels USING btree (public, app_id, ios)",
+      "name": "idx_channels_public_app_id_ios",
+      "table": "channels",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX idx_channels_rollout_targets ON public.channels USING btree (app_id, rollout_version) WHERE (rollout_version IS NOT NULL)",
+      "name": "idx_channels_rollout_targets",
+      "table": "channels",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX idx_channels_rollout_version ON public.channels USING btree (rollout_version) WHERE (rollout_version IS NOT NULL)",
+      "name": "idx_channels_rollout_version",
+      "table": "channels",
+      "valid": true
+    },
+    {
+      "constraintOwned": true,
+      "definition": "CREATE UNIQUE INDEX unique_name_app_id ON public.channels USING btree (name, app_id)",
+      "name": "unique_name_app_id",
+      "table": "channels",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX idx_manifest_app_version_id ON public.manifest USING btree (app_version_id)",
+      "name": "idx_manifest_app_version_id",
+      "table": "manifest",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX idx_manifest_file_hash ON public.manifest USING btree (file_hash)",
+      "name": "idx_manifest_file_hash",
+      "table": "manifest",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX idx_manifest_file_name ON public.manifest USING btree (file_name)",
+      "name": "idx_manifest_file_name",
+      "table": "manifest",
+      "valid": true
+    },
+    {
+      "constraintOwned": true,
+      "definition": "CREATE UNIQUE INDEX manifest_pkey ON public.manifest USING btree (id)",
+      "name": "manifest_pkey",
+      "table": "manifest",
+      "valid": true
+    },
+    {
+      "constraintOwned": true,
+      "definition": "CREATE UNIQUE INDEX notifications_pkey ON public.notifications USING btree (owner_org, event, uniq_id)",
+      "name": "notifications_pkey",
+      "table": "notifications",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX notifications_uniq_id_idx ON public.notifications USING btree (uniq_id)",
+      "name": "notifications_uniq_id_idx",
+      "table": "notifications",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE UNIQUE INDEX onboarding_demo_data_app_relation_row_key_idx ON public.onboarding_demo_data USING btree (app_id, relation_name, row_key)",
+      "name": "onboarding_demo_data_app_relation_row_key_idx",
+      "table": "onboarding_demo_data",
+      "valid": true
+    },
+    {
+      "constraintOwned": true,
+      "definition": "CREATE UNIQUE INDEX onboarding_demo_data_pkey ON public.onboarding_demo_data USING btree (id)",
+      "name": "onboarding_demo_data_pkey",
+      "table": "onboarding_demo_data",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX onboarding_demo_data_seed_id_idx ON public.onboarding_demo_data USING btree (seed_id)",
+      "name": "onboarding_demo_data_seed_id_idx",
+      "table": "onboarding_demo_data",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX finx_org_users_channel_id ON public.org_users USING btree (channel_id)",
+      "name": "finx_org_users_channel_id",
+      "table": "org_users",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX finx_org_users_org_id ON public.org_users USING btree (org_id)",
+      "name": "finx_org_users_org_id",
+      "table": "org_users",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX finx_org_users_user_id ON public.org_users USING btree (user_id)",
+      "name": "finx_org_users_user_id",
+      "table": "org_users",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX org_users_app_id_idx ON public.org_users USING btree (app_id)",
+      "name": "org_users_app_id_idx",
+      "table": "org_users",
+      "valid": true
+    },
+    {
+      "constraintOwned": true,
+      "definition": "CREATE UNIQUE INDEX org_users_pkey ON public.org_users USING btree (id)",
+      "name": "org_users_pkey",
+      "table": "org_users",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX finx_orgs_created_by ON public.orgs USING btree (created_by)",
+      "name": "finx_orgs_created_by",
+      "table": "orgs",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX idx_orgs_customer_id ON public.orgs USING btree (customer_id)",
+      "name": "idx_orgs_customer_id",
+      "table": "orgs",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX idx_orgs_email_preferences ON public.orgs USING gin (email_preferences)",
+      "name": "idx_orgs_email_preferences",
+      "table": "orgs",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX orgs_enforce_hashed_api_keys_true_idx ON public.orgs USING btree (id) WHERE (enforce_hashed_api_keys = true)",
+      "name": "orgs_enforce_hashed_api_keys_true_idx",
+      "table": "orgs",
+      "valid": true
+    },
+    {
+      "constraintOwned": true,
+      "definition": "CREATE UNIQUE INDEX orgs_pkey ON public.orgs USING btree (id)",
+      "name": "orgs_pkey",
+      "table": "orgs",
+      "valid": true
+    },
+    {
+      "constraintOwned": true,
+      "definition": "CREATE UNIQUE INDEX \"unique customer_id on orgs\" ON public.orgs USING btree (customer_id)",
+      "name": "unique customer_id on orgs",
+      "table": "orgs",
+      "valid": true
+    },
+    {
+      "constraintOwned": true,
+      "definition": "CREATE UNIQUE INDEX unique_name_created_by ON public.orgs USING btree (name, created_by)",
+      "name": "unique_name_created_by",
+      "table": "orgs",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX finx_orgs_stripe_info ON public.stripe_info USING btree (product_id)",
+      "name": "finx_orgs_stripe_info",
+      "table": "stripe_info",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX idx_stripe_info_customer_covering ON public.stripe_info USING btree (customer_id) INCLUDE (product_id, subscription_anchor_start, subscription_anchor_end)",
+      "name": "idx_stripe_info_customer_covering",
+      "table": "stripe_info",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX idx_stripe_info_past_due_at ON public.stripe_info USING btree (past_due_at) WHERE (past_due_at IS NOT NULL)",
+      "name": "idx_stripe_info_past_due_at",
+      "table": "stripe_info",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX idx_stripe_info_trial ON public.stripe_info USING btree (trial_at) WHERE (trial_at IS NOT NULL)",
+      "name": "idx_stripe_info_trial",
+      "table": "stripe_info",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE UNIQUE INDEX si_customer_cover_uidx ON public.stripe_info USING btree (customer_id) INCLUDE (status, trial_at, mau_exceeded, storage_exceeded, bandwidth_exceeded)",
+      "name": "si_customer_cover_uidx",
+      "table": "stripe_info",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX si_customer_status_trial_idx ON public.stripe_info USING btree (customer_id, status, trial_at) INCLUDE (mau_exceeded, storage_exceeded, bandwidth_exceeded)",
+      "name": "si_customer_status_trial_idx",
+      "table": "stripe_info",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX stripe_info_paid_at_idx ON public.stripe_info USING btree (paid_at) WHERE (paid_at IS NOT NULL)",
+      "name": "stripe_info_paid_at_idx",
+      "table": "stripe_info",
+      "valid": true
+    },
+    {
+      "constraintOwned": true,
+      "definition": "CREATE UNIQUE INDEX stripe_info_pkey ON public.stripe_info USING btree (customer_id)",
+      "name": "stripe_info_pkey",
+      "table": "stripe_info",
+      "valid": true
+    }
+  ],
+  "sequences": [
+    {
+      "cache": "1",
+      "cycle": false,
+      "increment": "1",
+      "max": "9223372036854775807",
+      "min": "1",
+      "name": "app_versions_id_seq",
+      "ownedColumn": "id",
+      "ownedTable": "app_versions",
+      "start": "1",
+      "type": "bigint"
+    },
+    {
+      "cache": "1",
+      "cycle": false,
+      "increment": "1",
+      "max": "9223372036854775807",
+      "min": "1",
+      "name": "channel_devices_id_seq",
+      "ownedColumn": "id",
+      "ownedTable": "channel_devices",
+      "start": "1",
+      "type": "bigint"
+    },
+    {
+      "cache": "1",
+      "cycle": false,
+      "increment": "1",
+      "max": "9223372036854775807",
+      "min": "1",
+      "name": "channel_id_seq",
+      "ownedColumn": "id",
+      "ownedTable": "channels",
+      "start": "1",
+      "type": "bigint"
+    },
+    {
+      "cache": "1",
+      "cycle": false,
+      "increment": "1",
+      "max": "2147483647",
+      "min": "1",
+      "name": "manifest_id_seq",
+      "ownedColumn": "id",
+      "ownedTable": "manifest",
+      "start": "1",
+      "type": "integer"
+    },
+    {
+      "cache": "1",
+      "cycle": false,
+      "increment": "1",
+      "max": "9223372036854775807",
+      "min": "1",
+      "name": "org_users_id_seq",
+      "ownedColumn": "id",
+      "ownedTable": "org_users",
+      "start": "1",
+      "type": "bigint"
+    },
+    {
+      "cache": "1",
+      "cycle": false,
+      "increment": "1",
+      "max": "2147483647",
+      "min": "1",
+      "name": "stripe_info_id_seq",
+      "ownedColumn": "id",
+      "ownedTable": "stripe_info",
+      "start": "1",
+      "type": "integer"
+    }
+  ],
+  "tables": [
+    {
+      "kind": "r",
+      "name": "app_versions",
+      "reloptions": [
+        "autovacuum_analyze_scale_factor=0.02",
+        "autovacuum_vacuum_scale_factor=0.05"
+      ]
+    },
+    {
+      "kind": "r",
+      "name": "apps",
+      "reloptions": []
+    },
+    {
+      "kind": "r",
+      "name": "channel_devices",
+      "reloptions": []
+    },
+    {
+      "kind": "r",
+      "name": "channels",
+      "reloptions": []
+    },
+    {
+      "kind": "r",
+      "name": "manifest",
+      "reloptions": [
+        "autovacuum_analyze_scale_factor=0.02",
+        "autovacuum_vacuum_scale_factor=0.05"
+      ]
+    },
+    {
+      "kind": "r",
+      "name": "notifications",
+      "reloptions": []
+    },
+    {
+      "kind": "r",
+      "name": "onboarding_demo_data",
+      "reloptions": []
+    },
+    {
+      "kind": "r",
+      "name": "org_users",
+      "reloptions": []
+    },
+    {
+      "kind": "r",
+      "name": "orgs",
+      "reloptions": []
+    },
+    {
+      "kind": "r",
+      "name": "stripe_info",
+      "reloptions": []
+    }
+  ],
+  "types": [
+    {
+      "definition": [
+        "major",
+        "minor",
+        "patch",
+        "version_number",
+        "none"
+      ],
+      "kind": "e",
+      "name": "disable_update"
+    },
+    {
+      "definition": [
+        {
+          "name": "file_name",
+          "position": 1,
+          "type": "character varying"
+        },
+        {
+          "name": "s3_path",
+          "position": 2,
+          "type": "character varying"
+        },
+        {
+          "name": "file_hash",
+          "position": 3,
+          "type": "character varying"
+        }
+      ],
+      "kind": "c",
+      "name": "manifest_entry"
+    },
+    {
+      "definition": [
+        "created",
+        "succeeded",
+        "updated",
+        "failed",
+        "deleted",
+        "canceled"
+      ],
+      "kind": "e",
+      "name": "stripe_status"
+    }
+  ],
+  "version": 1
+}

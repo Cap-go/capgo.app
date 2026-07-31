@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { actionToFilter, filterToAction, statsActionFilters } from '~/services/statsActions'
-import { ALLOWED_STATS_ACTIONS } from '../supabase/functions/_backend/plugins/stats_actions.ts'
+import { ALLOWED_STATS_ACTIONS } from '../supabase/functions/_backend/plugin_runtime/plugins/stats_actions.ts'
 
 const HEALTH_STATS_ACTIONS = [
   'app_crash',
@@ -10,6 +10,9 @@ const HEALTH_STATS_ACTIONS = [
   'app_killed_excessive_resource_usage',
   'app_initialization_failure',
   'app_memory_warning',
+  'app_launch_start',
+  'app_launch_ready',
+  'app_launch_timeout',
   'webview_javascript_error',
   'webview_unhandled_rejection',
   'webview_resource_error',
@@ -17,6 +20,8 @@ const HEALTH_STATS_ACTIONS = [
   'webview_unclean_restart',
   'webview_render_process_gone',
   'webview_content_process_terminated',
+  'webview_dom_content_loaded',
+  'webview_page_loaded',
 ] as const
 
 const NATIVE_VERSION_STATS_ACTIONS = [

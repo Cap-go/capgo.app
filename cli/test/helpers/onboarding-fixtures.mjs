@@ -107,14 +107,14 @@ export function staticStepFixtures() {
     // NOTE: ish.ErrorStep is deliberately NOT here — it's unbounded and scrolls
     // (see header). Only its compact form renders inline, and that's ~20 rows.
     fi('ios-no-platform', h(ish.NoPlatformStep, { iosDir: 'apps/mobile/platforms/ios-native', addIosCommand: 'npx cap add ios', syncIosCommand: 'npx cap sync ios', onChange: noop, ...C }), false),
-    fi('ios-build-complete', h(ish.BuildCompleteStep, { buildUrl: `https://capgo.app/app/${LONG_APP_ID}/builds`, ciSecretUploadSummary: 'Uploaded 12 secrets to GitHub Actions repository secrets', buildRequestCommand: `npx @capgo/cli build --app ${LONG_APP_ID}`, ...C }), false),
+    fi('ios-build-complete', h(ish.BuildCompleteStep, { buildUrl: `https://console.capgo.app/app/${LONG_APP_ID}/builds`, ciSecretUploadSummary: 'Uploaded 12 secrets to GitHub Actions repository secrets', buildRequestCommand: `npx @capgo/cli build --app ${LONG_APP_ID}`, ...C }), false),
     fi('ios-platform-select', h(ish.PlatformSelectStep, { appId: LONG_APP_ID, onChange: noop, ...C })),
     fi('ios-adding-platform', h(ish.AddingPlatformStep, { addIosCommand: 'npx cap add ios', doctorCommand: 'npx @capgo/cli doctor', ...C }), false),
     // ── shared (rendered by the Android app) ─────────────────────────────────
     fi('welcome', h(ish.WelcomeStep), false),
     f('no-platform', h(ash.NoPlatformStep, { androidDir: 'apps/mobile/platforms/android-native', ...C }), false),
     f('credentials-exist-choose', h(ash.CredentialsExistStep, { appId: 'com.x.y', onChoose: noop, ...C })),
-    f('build-complete', h(ash.BuildCompleteStep, { uploadSummary: null, buildUrl: 'https://capgo.app/app/com.example.app/builds', ...C }), false),
+    f('build-complete', h(ash.BuildCompleteStep, { uploadSummary: null, buildUrl: 'https://console.capgo.app/app/com.example.app/builds', ...C }), false),
     f('error', h(ash.ErrorStep, { message: LONG_ERR, onChoose: noop, ...C })),
     // ── ci ──────────────────────────────────────────────────────────────────
     f('ci-secrets-setup', h(androidCi.CiSecretsSetupStep, { advice: CI_ADVICE, onChoose: noop, ...C })),

@@ -1,90 +1,50 @@
 # Read Replica Scripts
 
-These scripts manage the Supabase -> Google Cloud SQL read-replica subscriber.
-Google handles replication from that Cloud SQL instance to downstream regional
-replicas, so these scripts intentionally target only one Google database.
+These scripts manage the Supabase-to-Google Cloud SQL subscriber. Google then
+replicates this subscriber to the regional read replicas, so reconciliation
+always targets only this database.
 
-## Required Env
+## Release reconciliation
 
-Credentials are loaded from `internal/cloudflare/.env.prod`.
+The release job rebuilds the selected schema catalog from the checked-out local
+migrations through Tinbase/PGlite. It never reads
+`schema_replicate.catalog.json` as a release input.
 
-| Variable | Description |
-| --- | --- |
-| `MAIN_SUPABASE_DB_URL` | Supabase source PostgreSQL URL |
-| `READ_REPLICATE_GOOGLE_EU1` | Google Cloud SQL subscriber PostgreSQL URL |
+Before primary Supabase migrations run, the job reads the bounded subscriber
+catalog through Cloud SQL Data API and builds the complete reconciliation plan.
+For an approved non-empty plan, the job writes one `BEGIN`/DDL/`COMMIT`
+transaction to the dedicated private Cloud Storage bucket, invokes Cloud SQL's
+server-side import as its existing `postgres` user, removes that object, and
+then re-reads the catalog. The bucket grants the CI service account only
+bucket-scoped object access and the Cloud SQL service agent only read access.
+Any skipped, unsupported, or non-transactional change stops the release before
+it can mutate either database.
 
-Optional overrides:
+This path has no direct PostgreSQL connection from GitHub Actions, no runner IP
+allowlist, no temporary Worker, and no database-side helper, database role,
+privilege, or object-owner setup.
 
-| Variable | Description |
-| --- | --- |
-| `READ_REPLICA_TARGET_ENV` | Env key to use if more than one Google DB URL exists |
-| `READ_REPLICA_PUBLICATION_NAME` | Publication name on Supabase |
-| `READ_REPLICA_SUBSCRIPTION_NAME` | Subscription name on Google |
-| `READ_REPLICA_SLOT_NAME` | Slot name on Supabase |
-| `READ_REPLICA_FULL_RESET=1` | Allow full target reset in `replicate_to_replica.sh` |
-| `READ_REPLICA_SUBSCRIPTION_ONLY=1` | Recreate only the subscription |
+Verification is directional rather than exact schema equality. The subscriber must
+contain every required publisher object, but it may retain safe legacy
+subscriber-only nullable/default-backed columns, supporting types, sequences,
+functions, and ordinary non-unique indexes. The release stops on incompatible or
+missing publisher objects, extra tables or constraints, unique indexes, and
+subscriber-only required columns that can reject replicated rows.
 
-If subscription name is not provided, scripts discover it from `pg_subscription`.
-If exactly one subscription exists, it is used. If multiple subscriptions exist,
-the script exits instead of guessing.
+| GitHub repository secret | Value                               |
+| ------------------------ | ----------------------------------- |
+| `GOOGLE_SERVICE_ACCOUNT` | Base64-encoded service-account JSON |
 
-## Commands
-
-Prepare or update the source publication without dropping subscriptions or slots:
-
-```bash
-bun run readreplicate:setup-source
-```
-
-Generate the replica schema SQL from Supabase:
-
-```bash
-bun run readreplicate:prepare
-```
-
-Check that the committed replica schema matches the current database schema:
+The project, instance, database, and import configuration are fixed in the
+sync script, not supplied as GitHub variables.
 
 ```bash
-bun run readreplicate:check-schema
+bun scripts/sync-read-replica-schema.ts
 ```
 
-Recreate the Google subscription:
+For a no-write check of the local catalog, live subscriber catalog, and complete
+plan preflight:
 
 ```bash
-bun run readreplicate:replica
+bun scripts/sync-read-replica-schema.ts --dry-run
 ```
-
-Re-sync one table only:
-
-```bash
-bun run readreplicate:add-table channels
-```
-
-Check and recreate missing indexes on the Google subscriber:
-
-```bash
-bun run readreplicate:indexes
-```
-
-Inspect subscription, slot, lag, and per-table states:
-
-```bash
-bun run readreplicate:status
-```
-
-Update the source password used by the Google subscription:
-
-```bash
-READ_REPLICA_PASSWORD='new-password' bash read_replicate/update_readreplica_passwords.sh
-```
-
-## Notes
-
-- `replicate_setup_source.sh` no longer drops publications or replication slots.
-- `replicate_to_replica.sh` defaults to subscription-only mode unless you choose
-  full reset interactively or set `READ_REPLICA_FULL_RESET=1`.
-- `replicate_add_table.sh` disables the subscription, reloads only the requested
-  table on the Google subscriber, refreshes the publication with `copy_data =
-  false`, then re-enables the subscription.
-- `schema_replicate.sql` is intentionally limited to tables replicated into the
-  Google subscriber. It excludes foreign keys, triggers, and RLS policies.

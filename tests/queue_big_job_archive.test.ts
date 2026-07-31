@@ -90,41 +90,23 @@ describe('queue_big_job_archive', () => {
     const initialCount = result.rows[0].count
     expect(Number.parseInt(initialCount)).toBe(MESSAGE_COUNT)
 
-    async function fetchSyncWithRetry(maxRetries = 5) {
-      for (let attempt = 0; attempt < maxRetries; attempt++) {
-        const response = await fetch(`${BASE_URL_TRIGGER}/queue_consumer/sync`, {
-          method: 'POST',
-          headers: headersInternal,
-          body: JSON.stringify({ queue_name: tmpQueueName, batch_size: SYNC_BATCH_SIZE }),
-        })
+    async function fetchSync() {
+      const response = await fetch(`${BASE_URL_TRIGGER}/queue_consumer/sync`, {
+        method: 'POST',
+        headers: headersInternal,
+        body: JSON.stringify({
+          queue_name: tmpQueueName,
+          batch_size: SYNC_BATCH_SIZE,
+          wait_for_completion: true,
+        }),
+      })
 
-        if (response.status === 202) {
-          expect(await response.json()).toEqual({ status: 'ok' })
-          return
-        }
-
-        const errorBody = await response.text()
-        console.error('Queue consumer error:', errorBody)
-        // Backoff for transient worker/resource-limit errors.
-        await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)))
-      }
-
-      throw new Error(`queue_consumer/sync failed after retries (batch_size=${SYNC_BATCH_SIZE})`)
+      expect(response.status).toBe(202)
+      expect(await response.json()).toEqual({ status: 'ok' })
     }
 
-    async function waitForQueueToDecrease(previousCount: number, timeoutMs = 20000) {
-      const start = Date.now()
-      while (Date.now() - start < timeoutMs) {
-        const { rows } = await pool.query(`SELECT count(*) as count FROM pgmq.q_${tmpQueueName}`)
-        const currentCount = Number.parseInt(rows[0].count)
-        if (currentCount < previousCount)
-          return currentCount
-        await new Promise(resolve => setTimeout(resolve, 200))
-      }
-      throw new Error(`Queue did not decrease within ${timeoutMs}ms (previousCount=${previousCount})`)
-    }
-
-    // Process the queue in smaller batches to avoid edge runtime resource limits.
+    // Each awaited sync archives one bounded batch, so completion is observable
+    // immediately without racing background Worker work.
     let remaining = MESSAGE_COUNT
     let safety = 0
     while (remaining > 0) {
@@ -132,9 +114,11 @@ describe('queue_big_job_archive', () => {
       if (safety > 20)
         throw new Error(`Safety break: too many sync iterations (remaining=${remaining})`)
 
-      const prev = remaining
-      await fetchSyncWithRetry()
-      remaining = await waitForQueueToDecrease(prev)
+      const previousCount = remaining
+      await fetchSync()
+      const { rows } = await pool.query(`SELECT count(*) as count FROM pgmq.q_${tmpQueueName}`)
+      remaining = Number.parseInt(rows[0].count)
+      expect(remaining).toBeLessThan(previousCount)
     }
 
     // Verify queue is empty after processing

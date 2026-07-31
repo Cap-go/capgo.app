@@ -1,11 +1,11 @@
 import type { Context } from 'hono'
-import type { ValidationIssue } from '../../utils/ark_validation.ts'
+import type { ValidationIssue } from '../../utils/schema_validation.ts'
 import type { AuthInfo } from '../../utils/hono.ts'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc.js'
-import { createSchema, makeIssue, safeParseSchema } from '../../utils/ark_validation.ts'
+import { createSchema, makeIssue, safeParseSchema } from '../../utils/schema_validation.ts'
 import { honoFactory, quickError, simpleError, useCors } from '../../utils/hono.ts'
-import { middlewareV2 } from '../../utils/hono_middleware.ts'
+import { middlewareAuth } from '../../utils/hono_middleware.ts'
 import { cloudlog } from '../../utils/logging.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { getRetryablePostgrestStatus, isRetryablePostgrestError, isRetryablePostgrestResult, retryWithBackoff } from '../../utils/retry.ts'
@@ -18,7 +18,7 @@ dayjs.extend(utc)
 
 export const app = honoFactory.createApp()
 app.use('*', useCors)
-app.use('*', middlewareV2(['all', 'read']))
+app.use('*', middlewareAuth())
 
 function accumulateNumbers(values: number[]): number[] {
   return values.reduce<number[]>((result, value) => {
@@ -161,6 +161,9 @@ interface AppOwnerOrgRow {
 const STATS_QUERY_RETRY_ATTEMPTS = 3
 const STATS_QUERY_RETRY_DELAY_MS = 250
 const STORAGE_BYTE_HOURS_PAGE_SIZE = 1000
+// PostgREST max_rows is 1000. Org dashboards return apps × days and must paginate
+// or bandwidth/MAU for later app_ids are silently dropped while /app/:id still works.
+const APP_METRICS_PAGE_SIZE = 1000
 
 // Helper to get authenticated supabase client based on auth type
 function getAuthenticatedSupabase(c: Context, auth: AuthInfo) {
@@ -273,12 +276,73 @@ async function getStatsAppOwnerOrgOrThrow(
   return ownerOrg
 }
 
+async function fetchAppMetricsRows(
+  c: Context,
+  supabase: ReturnType<typeof supabaseClient>,
+  params: {
+    orgId: string
+    appId?: string | null
+    startDate: string
+    endDate: string
+  },
+): Promise<QueryResult<AppMetricRow[]>> {
+  const rows: AppMetricRow[] = []
+
+  for (let pageStart = 0; ; pageStart += APP_METRICS_PAGE_SIZE) {
+    const { data, error, status } = await executeStatsQueryWithRetry<AppMetricRow[]>(
+      c,
+      params.appId ? 'get_app_metrics_for_app' : 'get_app_metrics_for_org',
+      async () => {
+        // Org dashboards return apps × days. Without range pagination, PostgREST
+        // max_rows (1000) silently drops later app_ids — single-app RPC still works
+        // because it filters inside SQL before the row limit applies.
+        const query = params.appId
+          ? supabase.rpc('get_app_metrics' as any, {
+              p_org_id: params.orgId,
+              p_app_id: params.appId,
+              p_start_date: params.startDate,
+              p_end_date: params.endDate,
+            })
+          : supabase.rpc('get_app_metrics', {
+              org_id: params.orgId,
+              start_date: params.startDate,
+              end_date: params.endDate,
+            })
+
+        return await (query as any)
+          .order('app_id', { ascending: true })
+          .order('date', { ascending: true })
+          .range(pageStart, pageStart + APP_METRICS_PAGE_SIZE - 1) as QueryResult<AppMetricRow[]>
+      },
+    )
+
+    if (error)
+      return { data: null, error, status }
+
+    rows.push(...(data ?? []))
+    if ((data?.length ?? 0) < APP_METRICS_PAGE_SIZE)
+      break
+  }
+
+  return { data: rows, error: null }
+}
+
+function metricDayNumber(metricDate: string, from: Date, graphDays: number): number | null {
+  const dayNumber = dayjs(metricDate).utc().startOf('day').diff(dayjs(from).utc().startOf('day'), 'day')
+  if (dayNumber < 0 || dayNumber >= graphDays)
+    return null
+  return dayNumber
+}
+
 export const statisticsTestUtils = {
+  APP_METRICS_PAGE_SIZE,
   executeStatsQueryWithRetry,
+  fetchAppMetricsRows,
   getMissingAppStatsError,
   getRetryableStatus: getRetryablePostgrestStatus,
   isRetryableStatsError,
   getStatsAppOwnerOrgOrThrow,
+  metricDayNumber,
   resolveAppOwnerOrg,
 }
 
@@ -390,32 +454,12 @@ async function getNormalStats(c: Context, appId: string | null, ownerOrg: string
   const startDate = dayjs(from).utc().format('YYYY-MM-DD')
   const endDate = dayjs(to).utc().format('YYYY-MM-DD')
 
-  let rawMetrics: AppMetricRow[] | null
-  let metricsError: unknown
-
-  if (appId) {
-    ({ data: rawMetrics, error: metricsError } = await executeStatsQueryWithRetry<AppMetricRow[]>(
-      c,
-      'get_app_metrics_for_app',
-      async () => await supabase.rpc('get_app_metrics' as any, {
-        p_org_id: ownerOrgId!,
-        p_app_id: appId,
-        p_start_date: startDate,
-        p_end_date: endDate,
-      }) as QueryResult<AppMetricRow[]>,
-    ))
-  }
-  else {
-    ({ data: rawMetrics, error: metricsError } = await executeStatsQueryWithRetry<AppMetricRow[]>(
-      c,
-      'get_app_metrics_for_org',
-      async () => await supabase.rpc('get_app_metrics', {
-        org_id: ownerOrgId!,
-        start_date: startDate,
-        end_date: endDate,
-      }) as QueryResult<AppMetricRow[]>,
-    ))
-  }
+  const { data: rawMetrics, error: metricsError } = await fetchAppMetricsRows(c, supabase, {
+    orgId: ownerOrgId!,
+    appId,
+    startDate,
+    endDate,
+  })
 
   if (metricsError)
     return { data: null, error: metricsError }
@@ -478,36 +522,20 @@ async function getNormalStats(c: Context, appId: string | null, ownerOrg: string
     .forEach((arrItem) => {
       const sortedArrItem = arrItem.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
       cloudlog({ requestId: c.get('requestId'), message: 'sortedArrItem', data: sortedArrItem })
-      arrItem?.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()).forEach((item, i) => {
-        if (item.date) {
-          const dayNumber = i
-          if (mau[dayNumber])
-            mau[dayNumber] += item.mau
-          else
-            mau[dayNumber] = item.mau
+      sortedArrItem.forEach((item) => {
+        if (!item.date)
+          return
+        const dayNumber = metricDayNumber(item.date, from, graphDays)
+        if (dayNumber === null)
+          return
 
-          const storageVal = item.storage
-          if (storage[dayNumber])
-            storage[dayNumber] += storageVal
-          else
-            storage[dayNumber] = storageVal
+        mau[dayNumber] = (mau[dayNumber] ?? 0) + item.mau
+        storage[dayNumber] = (storage[dayNumber] ?? 0) + item.storage
+        bandwidth[dayNumber] = (bandwidth[dayNumber] ?? 0) + (item.bandwidth ?? 0)
+        buildTime[dayNumber] = (buildTime[dayNumber] ?? 0) + (item.build_time_unit ?? 0)
 
-          const bandwidthVal = item.bandwidth ?? 0
-          if (bandwidth[dayNumber])
-            bandwidth[dayNumber] += bandwidthVal
-          else
-            bandwidth[dayNumber] = bandwidthVal
-
-          const buildTimeVal = item.build_time_unit ?? 0
-          if (buildTime[dayNumber])
-            buildTime[dayNumber] += buildTimeVal
-          else
-            buildTime[dayNumber] = buildTimeVal
-
-          if (isDashboard) {
-            gets[dayNumber] = item.get
-          }
-        }
+        if (isDashboard)
+          gets[dayNumber] = (gets[dayNumber] ?? 0) + item.get
       })
     })
 
@@ -576,36 +604,20 @@ async function getNormalStats(c: Context, appId: string | null, ownerOrg: string
       let appGets = isDashboard ? createUndefinedArray(graphDays) as number[] : []
 
       // Process metrics for this app (same logic as aggregated version)
-      appMetrics.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()).forEach((item, i) => {
-        if (item.date) {
-          const dayNumber = i
-          if (appMau[dayNumber])
-            appMau[dayNumber] += item.mau
-          else
-            appMau[dayNumber] = item.mau
+      appMetrics.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()).forEach((item) => {
+        if (!item.date)
+          return
+        const dayNumber = metricDayNumber(item.date, from, graphDays)
+        if (dayNumber === null)
+          return
 
-          const storageVal = item.storage
-          if (appStorage[dayNumber])
-            appStorage[dayNumber] += storageVal
-          else
-            appStorage[dayNumber] = storageVal
+        appMau[dayNumber] = (appMau[dayNumber] ?? 0) + item.mau
+        appStorage[dayNumber] = (appStorage[dayNumber] ?? 0) + item.storage
+        appBandwidth[dayNumber] = (appBandwidth[dayNumber] ?? 0) + (item.bandwidth ?? 0)
+        appBuildTime[dayNumber] = (appBuildTime[dayNumber] ?? 0) + (item.build_time_unit ?? 0)
 
-          const bandwidthVal = item.bandwidth ?? 0
-          if (appBandwidth[dayNumber])
-            appBandwidth[dayNumber] += bandwidthVal
-          else
-            appBandwidth[dayNumber] = bandwidthVal
-
-          const buildTimeVal = item.build_time_unit ?? 0
-          if (appBuildTime[dayNumber])
-            appBuildTime[dayNumber] += buildTimeVal
-          else
-            appBuildTime[dayNumber] = buildTimeVal
-
-          if (isDashboard) {
-            appGets[dayNumber] = item.get
-          }
-        }
+        if (isDashboard)
+          appGets[dayNumber] = (appGets[dayNumber] ?? 0) + item.get
       })
 
       // Accumulate data if requested (default behavior for backward compatibility)

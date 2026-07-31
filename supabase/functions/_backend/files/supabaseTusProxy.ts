@@ -7,6 +7,84 @@ import { ALLOWED_HEADERS, ALLOWED_METHODS, EXPOSED_HEADERS, MAX_UPLOAD_LENGTH_BY
 const BUCKET_NAME = 'capgo'
 const SUPABASE_TIMEOUT = 1000 * 60 * 5 // 5 minutes for large uploads
 
+function firstForwardedHeaderValue(value: string | undefined): string | undefined {
+  return value?.split(',')[0]?.trim() || undefined
+}
+
+function normalizeHttpOrigin(value: string | undefined): string | undefined {
+  if (!value)
+    return undefined
+
+  try {
+    const url = new URL(value)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:')
+      return undefined
+    return url.origin
+  }
+  catch {
+    return undefined
+  }
+}
+
+function normalizeForwardedProto(value: string | undefined): 'http' | 'https' | undefined {
+  const proto = firstForwardedHeaderValue(value)
+  return proto === 'http' || proto === 'https' ? proto : undefined
+}
+
+function isLocalHost(host: string | undefined): boolean {
+  return !!host && /^(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::\d+)?$/i.test(host)
+}
+
+function isLocalSupabaseUrl(url: string): boolean {
+  if (url.includes('kong:8000'))
+    return true
+
+  try {
+    return isLocalHost(new URL(url).host)
+  }
+  catch {
+    return false
+  }
+}
+
+function buildLocalForwardedBaseUrl(c: Context): string | undefined {
+  let forwardedHost = firstForwardedHeaderValue(c.req.header('X-Forwarded-Host'))
+  const forwardedPort = firstForwardedHeaderValue(c.req.header('X-Forwarded-Port'))
+  const hostHeader = firstForwardedHeaderValue(c.req.header('Host'))
+  const forwardedProto = normalizeForwardedProto(c.req.header('X-Forwarded-Proto')) ?? 'http'
+
+  if (forwardedHost && !forwardedHost.includes(':')) {
+    const hostPort = hostHeader?.includes(':') ? hostHeader.split(':').pop() : undefined
+    forwardedHost = `${forwardedHost}:${forwardedPort || hostPort || '54321'}`
+  }
+
+  if (forwardedHost)
+    return normalizeHttpOrigin(`${forwardedProto}://${forwardedHost}`)
+
+  if (hostHeader)
+    return normalizeHttpOrigin(`${forwardedProto}://${hostHeader}`)
+
+  return undefined
+}
+
+function resolveUploadLocationBaseUrl(c: Context, supabaseUrl: string): string {
+  const normalizedSupabaseUrl = supabaseUrl.replace(/\/$/, '')
+  const publicUrl = normalizeHttpOrigin(getEnv(c, 'PUBLIC_URL'))
+  if (publicUrl)
+    return publicUrl
+
+  const requestOrigin = normalizeHttpOrigin(c.req.url)
+  const isLocalDev = isLocalSupabaseUrl(normalizedSupabaseUrl)
+
+  if (!isLocalDev)
+    return requestOrigin || normalizeHttpOrigin(normalizedSupabaseUrl) || normalizedSupabaseUrl
+
+  return buildLocalForwardedBaseUrl(c)
+    || requestOrigin
+    || normalizeHttpOrigin(normalizedSupabaseUrl)
+    || normalizedSupabaseUrl
+}
+
 /**
  * UTF-8 safe base64 encoding
  * Uses TextEncoder to handle Unicode characters properly
@@ -79,40 +157,7 @@ function rewriteLocationHeader(c: Context, supabaseLocation: string): string {
   }
 
   const supabaseUrl = getEnv(c, 'SUPABASE_URL')
-  const isLocalDev = supabaseUrl.includes('kong:8000')
-
-  let forwardedHost = c.req.header('X-Forwarded-Host')
-  const forwardedPort = c.req.header('X-Forwarded-Port')
-  const forwardedProtoRaw = c.req.header('X-Forwarded-Proto')
-  const forwardedProto = forwardedProtoRaw?.split(',')[0]?.trim() || (isLocalDev ? 'http' : 'https')
-  const hostHeader = c.req.header('Host')
-
-  if (isLocalDev && forwardedHost && !forwardedHost.includes(':')) {
-    // X-Forwarded-Host sometimes omits the port. Prefer X-Forwarded-Port, then Host header.
-    const portToUse = forwardedPort
-      || (hostHeader && hostHeader.includes(':') ? hostHeader.split(':').pop() : undefined)
-      || '54321'
-    forwardedHost = `${forwardedHost}:${portToUse}`
-  }
-
-  cloudlog({ requestId, message: 'rewriteLocationHeader debug', supabaseUrl, forwardedHost, forwardedProto, isLocalDev })
-
-  let baseUrl: string
-  if (forwardedHost) {
-    baseUrl = `${forwardedProto}://${forwardedHost}`
-  }
-  else if (isLocalDev) {
-    // Best-effort fallback; callers should generally send Host / X-Forwarded-* so we preserve the correct worktree port.
-    baseUrl = `http://${hostHeader || 'localhost:54321'}`
-  }
-  else {
-    cloudlog({
-      requestId,
-      message: 'rewriteLocationHeader - WARNING: Using SUPABASE_URL as fallback. Consider setting X-Forwarded-Host.',
-      supabaseUrl,
-    })
-    baseUrl = supabaseUrl
-  }
+  const baseUrl = resolveUploadLocationBaseUrl(c, supabaseUrl)
 
   cloudlog({ requestId, message: 'rewriteLocationHeader result', baseUrl })
   return `${baseUrl}/functions/v1/files/upload/attachments/${uploadId}`

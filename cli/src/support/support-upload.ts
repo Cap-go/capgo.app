@@ -6,6 +6,7 @@ export interface SupportUploadInput {
   apikey: string
   appId?: string
   jobId?: string
+  platform?: 'ios' | 'android'
   // Path to the already-gzipped bundle (the .log.gz writeSupportBundleFiles produced).
   gzPath: string
 }
@@ -35,7 +36,7 @@ export async function uploadSupportLogs(input: SupportUploadInput): Promise<Supp
         'capgkey': input.apikey,
         'content-type': 'application/json',
       },
-      body: JSON.stringify({ appId: input.appId, jobId: input.jobId, gzB64 }),
+      body: JSON.stringify({ appId: input.appId, jobId: input.jobId, platform: input.platform, gzB64 }),
       // Short timeout: this is an optional nicety; the attach fallback always works.
       signal: AbortSignal.timeout(15_000),
     })

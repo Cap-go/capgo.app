@@ -1,4 +1,5 @@
 import { i18n } from '~/modules/i18n'
+import { getFormatLocale, resolveFormatLocale } from '~/services/formatLocale'
 
 const ZONELESS_ISO_DATETIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/
 const DATE_ONLY_RE = /^(\d{4})-(\d{2})-(\d{2})$/
@@ -33,61 +34,81 @@ function parseDatePreservingUtc(date: Date | string | undefined | null): Date | 
   return Number.isNaN(parsed.getTime()) ? null : parsed
 }
 
-/**
- * Get the current app locale for date formatting
- */
-function getAppLocale(): string {
-  return i18n.global.locale.value || 'en'
+export function resolveDateLocale(formatLocale?: string | null): string {
+  return resolveFormatLocale(formatLocale)
 }
 
+export function getDateLocale(): string {
+  return getFormatLocale()
+}
 /**
- * Format a date using the app's locale (e.g., "12/15/2025" in English, "15/12/2025" in French)
+ * Format a date using the account date and number convention.
  */
 export function formatLocalDate(date: Date | string | undefined | null): string {
   const d = parseDatePreservingUtc(date)
   if (!d)
     return ''
-  return d.toLocaleDateString(getAppLocale())
+  return d.toLocaleDateString(getDateLocale())
 }
 
 /**
- * Format a date with month name and day using the app's locale (e.g., "December 15" in English, "15 décembre" in French)
+ * Format a date with month name and day using the account date and number convention.
  */
 export function formatLocalDateLong(date: Date | string | undefined | null): string {
   const d = parseDatePreservingUtc(date)
   if (!d)
     return ''
-  return d.toLocaleDateString(getAppLocale(), { month: 'long', day: 'numeric' })
+  return d.toLocaleDateString(getDateLocale(), { month: 'long', day: 'numeric' })
 }
 
 /**
- * Format a compact date for dense chart axes using the app's locale (e.g., "Dec 15" in English, "15 déc." in French)
+ * Format a compact date for dense chart axes using the account date and number convention.
  */
 export function formatLocalDateShort(date: Date | string | undefined | null): string {
   const d = parseDatePreservingUtc(date)
   if (!d)
     return ''
-  return d.toLocaleDateString(getAppLocale(), { month: 'short', day: 'numeric' })
+  return d.toLocaleDateString(getDateLocale(), { month: 'short', day: 'numeric' })
 }
 
 /**
- * Format a month/year bucket using the app's locale (e.g., "Dec 2025" in English, "déc. 2025" in French)
+ * Format a time using the account date and number convention.
+ */
+export function formatLocalTime(date: Date | string | undefined | null): string {
+  const d = parseDatePreservingUtc(date)
+  if (!d)
+    return ''
+  return d.toLocaleTimeString(getDateLocale(), { hour: 'numeric', minute: '2-digit' })
+}
+
+/**
+ * Format a month/year bucket using the account date and number convention.
  */
 export function formatLocalMonthYear(date: Date | string | undefined | null): string {
   const d = parseDatePreservingUtc(date)
   if (!d)
     return ''
-  return d.toLocaleDateString(getAppLocale(), { month: 'short', year: 'numeric' })
+  return d.toLocaleDateString(getDateLocale(), { month: 'short', year: 'numeric' })
 }
 
 /**
- * Format a date/time using the app's locale (e.g., "Dec 15, 2025, 3:45 PM" in English)
+ * Format a date/time using the account date and number convention.
  */
 export function formatLocalDateTime(date: Date | string | undefined | null): string {
   const d = parseDatePreservingUtc(date)
   if (!d)
     return ''
-  return d.toLocaleString(getAppLocale(), { dateStyle: 'medium', timeStyle: 'short' })
+  return d.toLocaleString(getDateLocale(), { dateStyle: 'medium', timeStyle: 'short' })
+}
+
+/**
+ * Format a date/time with seconds using the account date and number convention.
+ */
+export function formatLocalDateTimeWithSeconds(date: Date | string | undefined | null): string {
+  const d = parseDatePreservingUtc(date)
+  if (!d)
+    return ''
+  return d.toLocaleString(getDateLocale(), { dateStyle: 'medium', timeStyle: 'medium' })
 }
 
 export function formatUtcDateTimeAsLocal(date: Date | string | undefined | null): string {

@@ -6,13 +6,13 @@ import AdmZip from 'adm-zip'
 import { describe, expect, it } from 'vitest'
 import { generateEncryptionKeysSDK, uploadBundleSDK } from './cli-sdk-utils'
 import { cleanupCli, getSemver, prepareCli, tempFileFolder } from './cli-utils'
-import { getSupabaseClient, getUpdate, getUpdateBaseData, resetAndSeedAppData, resetAppData, resetAppDataStats, responseOk } from './test-utils'
+import { createIsolatedSeedAppOptions, getSupabaseClient, getUpdate, getUpdateBaseData, resetAndSeedAppData, resetAppData, resetAppDataStats, responseOk } from './test-utils'
 
-describe.concurrent('test key generation', () => {
-  it.concurrent('test key generation', async () => {
+describe('test key generation', () => {
+  it('test key generation', async () => {
     const id = randomUUID()
     const APPNAME = `com.cli_new_encryption_${id}`
-    await resetAndSeedAppData(APPNAME)
+    await resetAndSeedAppData(APPNAME, createIsolatedSeedAppOptions())
     await prepareCli(APPNAME)
 
     try {
@@ -42,7 +42,7 @@ describe.concurrent('test key generation', () => {
   })
 })
 
-describe.concurrent('tests CLI encryption encrypt/upload/download/decrypt', () => {
+describe('tests CLI encryption encrypt/upload/download/decrypt', () => {
   function getPublicKeyFingerprint(publicKey: string) {
     return publicKey
       .replace(/-----BEGIN (RSA )?PUBLIC KEY-----/g, '')
@@ -177,12 +177,12 @@ describe.concurrent('tests CLI encryption encrypt/upload/download/decrypt', () =
     }
   }
 
-  it.concurrent('test upload bundle with auto encryption', async () => {
+  it('test upload bundle with auto encryption', async () => {
     const id = randomUUID()
     const APPNAME = `com.cli_new_encryption_auto_${id}`
     let semver = getSemver()
 
-    await resetAndSeedAppData(APPNAME)
+    await resetAndSeedAppData(APPNAME, createIsolatedSeedAppOptions())
     await prepareCli(APPNAME)
 
     try {
@@ -211,12 +211,12 @@ describe.concurrent('tests CLI encryption encrypt/upload/download/decrypt', () =
     }
   }, 60000)
 
-  it.concurrent('test upload bundle with custom key data', async () => {
+  it('test upload bundle with custom key data', async () => {
     const id = randomUUID()
     const APPNAME = `com.cli_new_encryption_keydata_${id}`
     let semver = getSemver()
 
-    await resetAndSeedAppData(APPNAME)
+    await resetAndSeedAppData(APPNAME, createIsolatedSeedAppOptions())
     await prepareCli(APPNAME)
 
     try {
@@ -244,12 +244,12 @@ describe.concurrent('tests CLI encryption encrypt/upload/download/decrypt', () =
     }
   }, 60000)
 
-  it.concurrent('test upload bundle with custom key path', async () => {
+  it('test upload bundle with custom key path', async () => {
     const id = randomUUID()
     const APPNAME = `com.cli_new_encryption_keypath_${id}`
     let semver = getSemver()
 
-    await resetAndSeedAppData(APPNAME)
+    await resetAndSeedAppData(APPNAME, createIsolatedSeedAppOptions())
     await prepareCli(APPNAME)
 
     try {
@@ -283,13 +283,13 @@ describe.concurrent('tests CLI encryption encrypt/upload/download/decrypt', () =
   }, 60000)
 })
 
-describe.concurrent('tests CLI upload no encryption', () => {
-  it.concurrent('test upload without encryption NEW', async () => {
+describe('tests CLI upload no encryption', () => {
+  it('test upload without encryption NEW', async () => {
     const id = randomUUID()
     const APPNAME = `com.cli_no_encryption_${id}`
     let semver = getSemver()
 
-    await resetAndSeedAppData(APPNAME)
+    await resetAndSeedAppData(APPNAME, createIsolatedSeedAppOptions())
     await prepareCli(APPNAME)
 
     try {

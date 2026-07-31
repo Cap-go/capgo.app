@@ -10,7 +10,7 @@ import Icons from 'unplugin-icons/vite'
 import Components from 'unplugin-vue-components/vite'
 import VueMacros from 'unplugin-vue-macros/vite'
 // import veauryVitePlugins from 'veaury/vite/index'
-import { defineConfig } from 'vite'
+import { defineConfig, type Plugin } from 'vite'
 import devtoolsJson from 'vite-plugin-devtools-json'
 import EnvironmentPlugin from 'vite-plugin-environment'
 import VueDevTools from 'vite-plugin-vue-devtools'
@@ -27,6 +27,72 @@ function getUrl(key = 'base_domain'): string {
     return `http://${getRightKey(key)}`
   else
     return `https://${getRightKey(key)}`
+}
+
+type FaviconTheme = {
+  iconPrefix: string
+  maskColor: string
+  themeColor: string
+}
+
+const productionFaviconTheme: FaviconTheme = {
+  iconPrefix: '',
+  maskColor: '#00aba9',
+  themeColor: '#ffffff',
+}
+
+const faviconThemes: Record<string, FaviconTheme> = {
+  main: productionFaviconTheme,
+  prod: productionFaviconTheme,
+  production: productionFaviconTheme,
+  development: {
+    iconPrefix: '-development',
+    maskColor: '#119eff',
+    themeColor: '#119eff',
+  },
+  alpha: {
+    iconPrefix: '-development',
+    maskColor: '#119eff',
+    themeColor: '#119eff',
+  },
+  preprod: {
+    iconPrefix: '-preprod',
+    maskColor: '#f59e0b',
+    themeColor: '#f59e0b',
+  },
+  local: {
+    iconPrefix: '-local',
+    maskColor: '#22c55e',
+    themeColor: '#22c55e',
+  },
+}
+
+function getFaviconTheme(isLocalDevServer = false): FaviconTheme {
+  const branchTheme = faviconThemes[branch]
+  // Plain `bun run dev` keeps branch=main and points at live config.
+  if (isLocalDevServer && (!branchTheme || branchTheme === productionFaviconTheme))
+    return faviconThemes.development
+
+  return branchTheme ?? productionFaviconTheme
+}
+
+function envFaviconPlugin(): Plugin {
+  return {
+    name: 'capgo-env-favicon',
+    transformIndexHtml(html, context) {
+      const theme = getFaviconTheme(Boolean(context.server))
+      const prefix = theme.iconPrefix
+
+      return html
+        .replace('href="/favicon.svg"', `href="/favicon${prefix}.svg"`)
+        .replace('href="/favicon.png"', `href="/favicon${prefix}.png"`)
+        .replace('href="/pwa-192x192.png"', `href="/pwa${prefix}-192x192.png"`)
+        .replace('href="/manifest.webmanifest"', `href="/manifest${prefix}.webmanifest"`)
+        .replace('color="#00aba9"', `color="${theme.maskColor}"`)
+        .replace('content="#00aba9"', `content="${theme.maskColor}"`)
+        .replace('content="#ffffff"', `content="${theme.themeColor}"`)
+    },
+  }
 }
 
 const locales: string[] = []
@@ -46,6 +112,7 @@ export default defineConfig({
     },
   },
   plugins: [
+    envFaviconPlugin(),
     tailwindcss(),
     formkit({}),
     devtoolsJson(),

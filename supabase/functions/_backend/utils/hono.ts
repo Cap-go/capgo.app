@@ -3,7 +3,6 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import type { Bindings } from './cloudflare.ts'
 import type { DeletePayload, InsertPayload, UpdatePayload } from './supabase.ts'
 import type { Database } from './supabase.types.ts'
-import { createClient } from '@supabase/supabase-js'
 import { getRuntimeKey } from 'hono/adapter'
 import { cors } from 'hono/cors'
 import { createFactory } from 'hono/factory'
@@ -32,53 +31,12 @@ export interface JWTClaims {
   }
 }
 
-const claimsClients = new Map<string, ReturnType<typeof createClient<Database>>>()
-
-function getClaimsClient(supabaseUrl: string, supabaseAnonKey: string) {
-  const cacheKey = `${supabaseUrl}|${supabaseAnonKey.substring(0, 8)}`
-  const cached = claimsClients.get(cacheKey)
-  if (cached) {
-    return cached
-  }
-
-  const client = createClient<Database>(supabaseUrl, supabaseAnonKey, {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-      detectSessionInUrl: false,
-    },
-  })
-  claimsClients.set(cacheKey, client)
-  return client
-}
-
-/**
- * Decode JWT claims through Supabase Auth `getClaims()`.
- */
-export async function getClaimsFromJWT(c: Context, jwt: string): Promise<JWTClaims | null> {
-  try {
-    const token = jwt.startsWith('Bearer ') ? jwt.slice(7) : jwt
-    const supabaseUrl = getEnv(c, 'SUPABASE_URL').replace(/\/$/, '')
-    const supabaseAnonKey = getEnv(c, 'SUPABASE_ANON_KEY')
-
-    const authClient = getClaimsClient(supabaseUrl, supabaseAnonKey).auth
-    const { data, error } = await authClient.getClaims(token)
-    if (error || !data?.claims) {
-      return null
-    }
-
-    return data.claims as JWTClaims
-  }
-  catch {
-    return null
-  }
-}
-
 export interface AuthInfo {
   userId: string
   authType: 'apikey' | 'jwt'
   apikey: Database['public']['Tables']['apikeys']['Row'] | null
   jwt: string | null
+  claims?: JWTClaims
 }
 
 export interface MiddlewareKeyVariables {
@@ -93,16 +51,122 @@ export interface MiddlewareKeyVariables {
     APISecret?: string
     auth?: AuthInfo
     subkey?: Database['public']['Tables']['apikeys']['Row']
-    webhookBody?: any
-    oldRecord?: any
+    webhookBody?: unknown
+    oldRecord?: unknown
     // RBAC context variables
     rbacEnabled?: boolean
     resolvedOrgId?: string
+    skipSupabaseStatsFallback?: boolean
+    skipSupabaseNotificationWrites?: boolean
+    queuePluginNotifications?: boolean
+    deliverPluginNotificationsInProcess?: boolean
+    skipChannelSelfPostgresFallback?: boolean
+    requireReadReplica?: boolean
   }
 }
 
+const CAPGO_CONSOLE_SUBDOMAIN = 'console'
+
+const DEFAULT_CORS_ALLOWED_ORIGINS = new Set([
+  ...['capgo.app', 'preprod.capgo.app', 'development.capgo.app'].map(domain => `https://${CAPGO_CONSOLE_SUBDOMAIN}.${domain}`),
+  'https://capgo.app',
+  'https://preprod.capgo.app',
+  'https://development.capgo.app',
+])
+
+function normalizeHttpOrigin(origin: string) {
+  try {
+    const parsed = new URL(origin)
+    if (!['http:', 'https:'].includes(parsed.protocol))
+      return ''
+    return parsed.origin
+  }
+  catch {
+    return ''
+  }
+}
+
+function normalizeCustomOrigin(origin: string) {
+  try {
+    const parsed = new URL(origin)
+    if (['http:', 'https:'].includes(parsed.protocol))
+      return ''
+    if (!parsed.hostname)
+      return ''
+    return `${parsed.protocol}//${parsed.host}`
+  }
+  catch {
+    return ''
+  }
+}
+
+function normalizeNativeOrigin(origin: string) {
+  try {
+    const parsed = new URL(origin)
+    if (!['capacitor:', 'ionic:', 'localhost:'].includes(parsed.protocol))
+      return ''
+    if (parsed.hostname !== 'localhost')
+      return ''
+    return normalizeCustomOrigin(origin)
+  }
+  catch {
+    return ''
+  }
+}
+
+function normalizeConfiguredCorsOrigin(origin: string) {
+  return normalizeHttpOrigin(origin) || normalizeCustomOrigin(origin)
+}
+
+function isLocalHttpOrigin(origin: string) {
+  try {
+    const parsed = new URL(origin)
+    if (!['http:', 'https:'].includes(parsed.protocol))
+      return false
+    return ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname)
+  }
+  catch {
+    return false
+  }
+}
+
+function getConfiguredCorsAllowedOrigins(c: Context) {
+  return [
+    getEnv(c, 'WEBAPP_URL'),
+    ...getEnv(c, 'CORS_ALLOWED_ORIGINS').split(','),
+  ]
+    .map(origin => normalizeConfiguredCorsOrigin(origin.trim()))
+    .filter(Boolean)
+}
+
+export function getAllowedCorsOrigin(origin: string, c: Context) {
+  const nativeOrigin = normalizeNativeOrigin(origin)
+  if (nativeOrigin)
+    return nativeOrigin
+
+  const httpOrigin = normalizeHttpOrigin(origin)
+  const configuredOrigins = getConfiguredCorsAllowedOrigins(c)
+
+  if (httpOrigin) {
+    if (isLocalHttpOrigin(origin))
+      return httpOrigin
+
+    if (DEFAULT_CORS_ALLOWED_ORIGINS.has(httpOrigin))
+      return httpOrigin
+
+    if (configuredOrigins.includes(httpOrigin))
+      return httpOrigin
+  }
+
+  const customOrigin = normalizeCustomOrigin(origin)
+  if (customOrigin && configuredOrigins.includes(customOrigin))
+    return customOrigin
+
+  return null
+}
+
 export const useCors = cors({
-  origin: '*',
+  origin: getAllowedCorsOrigin,
   allowHeaders: ['Content-Type', 'Authorization', 'X-Capgo-Spoof-Admin-Authorization', 'capgkey', 'capgo_api', 'x-api-key', 'x-limited-key-id', 'apisecret', 'apikey', 'x-client-info'],
   allowMethods: ['POST', 'GET', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
 })
@@ -145,7 +209,7 @@ export function triggerValidator(
   })
 }
 
-export async function getBodyOrQuery<T>(c: Context<MiddlewareKeyVariables, any, any>) {
+export async function getBodyOrQuery<T>(c: Context<MiddlewareKeyVariables>) {
   let body: T
   try {
     body = await c.req.json<T>()
@@ -166,32 +230,6 @@ export async function getBodyOrQuery<T>(c: Context<MiddlewareKeyVariables, any, 
   return body
 }
 
-export const middlewareAuth = honoFactory.createMiddleware(async (c, next) => {
-  const authorization = c.req.header('authorization')
-  if (!authorization) {
-    cloudlog({ requestId: c.get('requestId'), message: 'Cannot find authorization', query: c.req.query() })
-    return quickError(401, 'no_jwt_apikey_or_subkey', 'No JWT, apikey or subkey provided')
-  }
-  c.set('authorization', authorization)
-
-  // Decode JWT claims via Supabase Auth `getClaims()`.
-  const claims = await getClaimsFromJWT(c, authorization)
-  if (!claims || !claims.sub) {
-    cloudlog({ requestId: c.get('requestId'), message: 'Invalid JWT claims' })
-    throw simpleError('invalid_jwt', 'Invalid JWT')
-  }
-
-  // Set auth context for RBAC
-  c.set('auth', {
-    userId: claims.sub,
-    authType: 'jwt',
-    apikey: null,
-    jwt: authorization,
-  } as AuthInfo)
-
-  await next()
-})
-
 export const middlewareAPISecret = honoFactory.createMiddleware(async (c, next) => {
   const authorizationSecret = c.req.header('apisecret')
   const API_SECRET = getEnv(c, 'API_SECRET')
@@ -210,6 +248,22 @@ export const middlewareAPISecret = honoFactory.createMiddleware(async (c, next) 
 })
 
 export const BRES = { status: 'ok' }
+export const API_CONTENT_SECURITY_POLICY = [
+  'default-src \'none\'',
+  'base-uri \'none\'',
+  'form-action \'none\'',
+  'frame-ancestors \'none\'',
+  'object-src \'none\'',
+  'script-src \'none\'',
+  'style-src \'none\'',
+  'img-src \'none\'',
+  'connect-src \'none\'',
+  'upgrade-insecure-requests',
+].join('; ')
+
+function isPreviewHost(hostname: string) {
+  return /^[^.]+\.preview(?:\.[^.]+)?\.(?:capgo\.app|usecapgo\.com)$/i.test(hostname)
+}
 
 export function createHono(functionName: string, _version: string) {
   let appGlobal
@@ -219,34 +273,43 @@ export function createHono(functionName: string, _version: string) {
   else {
     appGlobal = new Hono<MiddlewareKeyVariables>()
   }
+
+  // Plugin hot paths (/updates|/stats|/channel_self and the CF plugin worker).
+  // HAR/CPU inspect showed middleware + logging dominating non-DB request cost.
+  const pluginHotPath = functionName === 'plugin'
+    || functionName === 'updates'
+    || functionName === 'stats'
+    || functionName === 'channel_self'
+
   appGlobal.use('*', (c, next): Promise<any> => {
     // ADD HEADER TO IDENTIFY WORKER SOURCE
     const name = `${getEnv(c, 'ENV_NAME') || functionName}-${CapgoVersion}`
     c.header('X-Worker-Source', name)
+    const hostname = new URL(c.req.url).hostname
+    if (!isPreviewHost(hostname))
+      c.header('Content-Security-Policy', API_CONTENT_SECURITY_POLICY)
     return next()
   })
 
-  appGlobal.use('*', logger())
-  // Use platform-specific request IDs, fallback to generated UUID
+  // Skip hono's access logger on plugin hot paths — it serializes every request
+  // on millions of device calls/day.
+  if (!pluginHotPath)
+    appGlobal.use('*', logger())
+  // Use platform-specific request IDs, fallback to generated UUID.
+  // Do not cloudlog inside the generator: it runs on every request (incl. cf-ray).
   appGlobal.use('*', requestId({
     generator: (c) => {
       // Cloudflare provides the Ray ID in the cf-ray header
       // Check this first as it's our primary deployment target
       const cfRay = c.req.header('cf-ray')
-      if (cfRay) {
-        cloudlog({ message: 'requestId source: cf-ray', cfRay })
+      if (cfRay)
         return cfRay
-      }
       // Supabase Edge Functions provide SB_EXECUTION_ID
       const sbExecutionId = getEnv(c, 'SB_EXECUTION_ID')
-      if (sbExecutionId) {
-        cloudlog({ message: 'requestId source: SB_EXECUTION_ID', sbExecutionId })
+      if (sbExecutionId)
         return sbExecutionId
-      }
       // Fallback to crypto.randomUUID() if not on any known platform
-      const uuid = crypto.randomUUID()
-      cloudlog({ message: 'requestId source: crypto.randomUUID()', uuid })
-      return uuid
+      return crypto.randomUUID()
     },
   }))
 
@@ -266,7 +329,7 @@ export function createHono(functionName: string, _version: string) {
 }
 
 export function createAllCatch(appGlobal: Hono<MiddlewareKeyVariables>, functionName: string) {
-  appGlobal.all('*', (c) => {
+  appGlobal.all('*', useCors, (c) => {
     cloudlog({ requestId: c.get('requestId'), functionName, message: 'Not found', url: c.req.url })
     return c.json({ error: 'not_found', message: 'Not found' }, 404)
   })
@@ -276,15 +339,15 @@ export function createAllCatch(appGlobal: Hono<MiddlewareKeyVariables>, function
 export interface SimpleErrorResponse {
   error: string
   message: string
-  cause?: any
-  moreInfo?: any
+  cause?: unknown
+  moreInfo?: Record<string, unknown>
 }
 
-export function simpleError200(c: Context, errorCode: string, message: string, moreInfo: any = {}) {
+export function simpleError200(c: Context, errorCode: string, message: string, moreInfo: Record<string, unknown> = {}) {
   return simpleErrorWithStatus(c, 200, errorCode, message, moreInfo)
 }
 
-export function simpleErrorWithStatus(c: Context, status: ContentfulStatusCode, errorCode: string, message: string, moreInfo: any = {}) {
+export function simpleErrorWithStatus(c: Context, status: ContentfulStatusCode, errorCode: string, message: string, moreInfo: Record<string, unknown> = {}) {
   const res: SimpleErrorResponse = {
     error: errorCode,
     message,
@@ -298,7 +361,7 @@ export interface QuickErrorOptions {
   alert?: boolean
 }
 
-export function quickError(status: number, errorCode: string, message: string, moreInfo: any = {}, cause?: any, options: QuickErrorOptions = {}): never {
+export function quickError(status: ContentfulStatusCode | number, errorCode: string, message: string, moreInfo: Record<string, unknown> = {}, cause?: unknown, options: QuickErrorOptions = {}): never {
   // Store error details in cause so onError can extract them
   const errorDetails = {
     error: errorCode,
@@ -308,7 +371,7 @@ export function quickError(status: number, errorCode: string, message: string, m
     suppressDiscordAlert: options.alert === false,
   }
   // Throw a simple HTTPException - onError will create the response with X-Request-Id header
-  throw new HTTPException(status as any, {
+  throw new HTTPException(status as ContentfulStatusCode, {
     message,
     cause: errorDetails,
   })
@@ -325,7 +388,7 @@ export function quickError(status: number, errorCode: string, message: string, m
  * echo of whatever the client submitted and means any future field added to
  * the request schema (sensitive or not) silently lands in the error payload.
  */
-export function simpleRateLimit(moreInfo: any = {}, cause?: any): never {
+export function simpleRateLimit(moreInfo: Record<string, unknown> = {}, cause?: unknown): never {
   const status = 429
   const message = 'Too many requests'
   const errorCode = 'too_many_requests'
@@ -333,7 +396,7 @@ export function simpleRateLimit(moreInfo: any = {}, cause?: any): never {
   return quickError(status, errorCode, message, moreInfo, cause)
 }
 
-export function simpleError(errorCode: string, message: string, moreInfo: any = {}, cause?: any): never {
+export function simpleError(errorCode: string, message: string, moreInfo: Record<string, unknown> = {}, cause?: unknown): never {
   if (errorCode === 'invalid_jwt') {
     return quickError(401, errorCode, message, moreInfo, cause)
   }
@@ -344,11 +407,13 @@ export function parseBody<T>(c: Context) {
   // IMPORTANT: c.req.json() consumes the request body.
   // Supabase/CF error reporters may try to read the body later for alerts and log
   // "Body already consumed". Parsing from a clone keeps the original readable.
-  return c.req.raw.clone().json<T>().catch((e) => {
+  return c.req.raw.clone().json<T>().catch((e: unknown) => {
     throw simpleError('invalid_json_parse_body', 'Invalid JSON body', { e })
   }).then((body) => {
-    if ((body as any).device_id) {
-      (body as any).device_id = (body as any).device_id.toLowerCase()
+    if (body && typeof body === 'object' && 'device_id' in body) {
+      const record = body as { device_id?: unknown }
+      if (typeof record.device_id === 'string')
+        record.device_id = record.device_id.toLowerCase()
     }
     return body
   })

@@ -1,6 +1,7 @@
 import type { Database } from '../../utils/supabase.types.ts'
 import type { RequestBuildBody } from './request.ts'
 import type { BuildStatusParams } from './status.ts'
+import type { SupportLogsBody } from './support_logs.ts'
 import {
   ALLOWED_HEADERS,
   ALLOWED_METHODS,
@@ -13,12 +14,12 @@ import { getBodyOrQuery, honoFactory } from '../../utils/hono.ts'
 import { middlewareKey } from '../../utils/hono_middleware.ts'
 import { aiAnalyzeDeprecated } from './ai_analyze.ts'
 import { aiAnalyzeStreamBuild } from './ai_analyze_stream.ts'
-import { uploadSupportLogs } from './support_logs.ts'
 import { cancelBuild } from './cancel.ts'
 import { streamBuildLogs } from './logs.ts'
 import { requestBuild } from './request.ts'
 import { startBuild } from './start.ts'
 import { getBuildStatus } from './status.ts'
+import { uploadSupportLogs } from './support_logs.ts'
 import { tusProxy } from './upload.ts'
 
 export const app = honoFactory.createApp()
@@ -88,10 +89,10 @@ app.post('/ai_analyze_stream', middlewareKey(['all', 'write']), async (c) => {
 })
 
 // POST /build/support_logs - Upload gzipped support logs; returns a 30-day download link.
-// (No app-ownership check on purpose: onboarding failures can reference apps that
-// were never registered — the authenticated account is the abuse anchor.)
+// Registered apps require app.build_native; unregistered onboarding apps require
+// a current organization create-capability binding.
 app.post('/support_logs', middlewareKey(['all', 'write']), async (c) => {
-  const body = await getBodyOrQuery<{ appId?: string, jobId?: string, gzB64: string }>(c)
+  const body = await getBodyOrQuery<SupportLogsBody>(c)
   if (!body || typeof body.gzB64 !== 'string' || body.gzB64.length === 0) {
     throw new Error('gzB64 is required in request body')
   }

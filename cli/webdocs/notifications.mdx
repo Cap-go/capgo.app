@@ -1,0 +1,37 @@
+---
+title: 🔹 notifications
+description: "🔔 Set up Capgo native notifications in your Capacitor app."
+sidebar_label: notifications
+sidebar:
+  order: 16
+---
+
+🔔 Set up Capgo native notifications in your Capacitor app.
+
+
+### <a id="notifications-setup"></a> ⚙️ **Setup**
+
+```bash
+npx @capgo/cli@latest notifications setup
+```
+
+Install the Capgo notifications plugin, add Capacitor config, create a helper file, and run Capacitor sync.
+Before sending production notifications, configure Android and iOS push credentials in the Capgo app Notifications tab.
+
+**Example:**
+
+```bash
+npx @capgo/cli@latest notifications setup com.example.app
+```
+
+**Options:**
+
+| Param          | Type          | Description          |
+| -------------- | ------------- | -------------------- |
+| **--server-url** | <code>string</code> | Capgo API server URL |
+| **--file** | <code>string</code> | Helper file to create (default: src/capgo-notifications.ts) |
+| **--force** | <code>boolean</code> | Overwrite the helper file if it already exists |
+| **--no-install** | <code>boolean</code> | Skip installing the notifications package |
+| **--no-sync** | <code>boolean</code> | Skip Capacitor sync |
+| **--capacitor-config** | <code>string</code> | Capacitor config source to update (useful with dynamic monorepo configs) |
+

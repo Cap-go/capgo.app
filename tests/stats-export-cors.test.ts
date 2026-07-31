@@ -14,7 +14,7 @@ describe('[OPTIONS] /private/stats/export', () => {
     })
 
     expect(res.status).toBe(204)
-    expect(res.headers.get('access-control-allow-origin')).toBe('*')
+    expect(res.headers.get('access-control-allow-origin')).toBe('http://localhost:5173')
     expect(res.headers.get('access-control-allow-methods')).toContain('OPTIONS')
     expect(res.headers.get('access-control-allow-headers')?.toLowerCase()).toContain('authorization')
   })

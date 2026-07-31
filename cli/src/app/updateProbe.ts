@@ -475,6 +475,11 @@ const errorHints: Record<string, { cause: string, fix: string, docsUrl?: string 
     cause: 'Plugin version is too old for safe builtin revert.',
     fix: 'Run npm install @capgo/capacitor-updater@latest, then npx cap sync, and rebuild native.',
   },
+  provider_infrastructure_request_blocked: {
+    cause: 'Update requests from known provider infrastructure networks are intentionally blocked.',
+    fix: 'Retry from a normal client device network or test through the same updater path used by users.',
+    docsUrl: commonProblemsDocsUrl,
+  },
   on_premise_app: {
     cause: 'App is either flagged as on-premise or does not exist in Capgo Cloud.',
     fix: 'Check that the app_id is registered in Capgo (capgo app add). If it is an on-premise app, configure plugins.CapacitorUpdater.updateUrl to point to your on-prem update endpoint.',

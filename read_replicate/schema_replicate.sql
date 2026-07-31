@@ -3,7 +3,7 @@ BEGIN;
 DROP TABLE IF EXISTS public.channel_devices, public.manifest, public.onboarding_demo_data, public.app_versions, public.channels, public.apps, public.notifications, public.org_users, public.orgs, public.stripe_info CASCADE;
 DROP SEQUENCE IF EXISTS public.app_versions_id_seq, public.channel_devices_id_seq, public.channel_id_seq, public.manifest_id_seq, public.org_users_id_seq, public.stripe_info_id_seq CASCADE;
 DROP FUNCTION IF EXISTS public.one_month_ahead();
-DROP TYPE IF EXISTS public.manifest_entry, public.disable_update, public.user_min_right, public.stripe_status;
+DROP TYPE IF EXISTS public.manifest_entry, public.disable_update, public.stripe_status;
 
 --
 --
@@ -44,24 +44,6 @@ CREATE TYPE public.stripe_status AS ENUM (
     'failed',
     'deleted',
     'canceled'
-);
-
-
---
--- Name: user_min_right; Type: TYPE; Schema: public; Owner: -
---
-
-CREATE TYPE public.user_min_right AS ENUM (
-    'invite_read',
-    'invite_upload',
-    'invite_write',
-    'invite_admin',
-    'invite_super_admin',
-    'read',
-    'upload',
-    'write',
-    'admin',
-    'super_admin'
 );
 
 
@@ -117,8 +99,15 @@ CREATE TABLE public.apps (
     stats_refresh_requested_at timestamp without time zone,
     build_timeout_seconds bigint DEFAULT 900 NOT NULL,
     build_timeout_updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    block_provider_infra_requests boolean DEFAULT true NOT NULL,
+    rollout_channel_count bigint DEFAULT 0 NOT NULL,
+    rollout_paused_version_names character varying[] DEFAULT '{}'::character varying[] NOT NULL,
+    created_from_onboarding boolean DEFAULT false NOT NULL,
+    onboarding_completed_at timestamp with time zone,
     CONSTRAINT apps_build_timeout_seconds_check CHECK (((build_timeout_seconds >= 300) AND (build_timeout_seconds <= 21600)))
 );
+
+ALTER TABLE ONLY public.apps REPLICA IDENTITY FULL;
 
 
 --
@@ -147,9 +136,12 @@ CREATE TABLE public.app_versions (
     manifest_count integer DEFAULT 0 NOT NULL,
     key_id character varying(20),
     cli_version character varying,
-    deleted_at timestamp with time zone
+    deleted_at timestamp with time zone,
+    created_by_apikey_rbac_id uuid
 )
 WITH (autovacuum_vacuum_scale_factor='0.05', autovacuum_analyze_scale_factor='0.02');
+
+ALTER TABLE ONLY public.app_versions REPLICA IDENTITY FULL;
 
 
 --
@@ -179,6 +171,8 @@ CREATE TABLE public.channel_devices (
     id bigint NOT NULL,
     owner_org uuid NOT NULL
 );
+
+ALTER TABLE ONLY public.channel_devices REPLICA IDENTITY FULL;
 
 
 --
@@ -212,15 +206,43 @@ CREATE TABLE public.channels (
     android boolean DEFAULT true NOT NULL,
     allow_device_self_set boolean DEFAULT false NOT NULL,
     allow_emulator boolean DEFAULT true NOT NULL,
-    allow_device boolean DEFAULT true NOT NULL,
     allow_dev boolean DEFAULT true NOT NULL,
-    allow_prod boolean DEFAULT true NOT NULL,
     disable_auto_update public.disable_update DEFAULT 'major'::public.disable_update NOT NULL,
     owner_org uuid NOT NULL,
     created_by uuid NOT NULL,
+    allow_device boolean DEFAULT true NOT NULL,
+    allow_prod boolean DEFAULT true NOT NULL,
+    electron boolean DEFAULT true NOT NULL,
     rbac_id uuid DEFAULT gen_random_uuid() NOT NULL,
-    electron boolean DEFAULT true NOT NULL
+    rollout_version bigint,
+    rollout_percentage_bps integer DEFAULT 0 NOT NULL,
+    rollout_enabled boolean DEFAULT false NOT NULL,
+    rollout_id uuid DEFAULT gen_random_uuid() NOT NULL,
+    rollout_paused_at timestamp with time zone,
+    rollout_pause_reason text,
+    rollout_cache_ttl_seconds integer DEFAULT 2592000 NOT NULL,
+    auto_pause_enabled boolean DEFAULT false NOT NULL,
+    auto_pause_window_minutes integer DEFAULT 60 NOT NULL,
+    auto_pause_failure_rate_bps integer,
+    auto_pause_confidence numeric(5,4) DEFAULT 0.9500 NOT NULL,
+    auto_pause_min_attempts integer,
+    auto_pause_min_failures integer,
+    auto_pause_action text DEFAULT 'pause'::text NOT NULL,
+    auto_pause_cooldown_minutes integer DEFAULT 60 NOT NULL,
+    auto_pause_last_triggered_at timestamp with time zone,
+    auto_pause_last_checked_at timestamp with time zone,
+    CONSTRAINT channels_auto_pause_action_check CHECK ((auto_pause_action = ANY (ARRAY['pause'::text, 'rollback'::text, 'notify'::text]))),
+    CONSTRAINT channels_auto_pause_confidence_check CHECK (((auto_pause_confidence > (0)::numeric) AND (auto_pause_confidence < (1)::numeric))),
+    CONSTRAINT channels_auto_pause_cooldown_minutes_check CHECK (((auto_pause_cooldown_minutes >= 0) AND (auto_pause_cooldown_minutes <= 10080))),
+    CONSTRAINT channels_auto_pause_failure_rate_bps_check CHECK (((auto_pause_failure_rate_bps IS NULL) OR ((auto_pause_failure_rate_bps >= 0) AND (auto_pause_failure_rate_bps <= 10000)))),
+    CONSTRAINT channels_auto_pause_min_attempts_check CHECK (((auto_pause_min_attempts IS NULL) OR (auto_pause_min_attempts >= 0))),
+    CONSTRAINT channels_auto_pause_min_failures_check CHECK (((auto_pause_min_failures IS NULL) OR (auto_pause_min_failures >= 0))),
+    CONSTRAINT channels_auto_pause_window_minutes_check CHECK (((auto_pause_window_minutes > 0) AND (auto_pause_window_minutes <= 10080))),
+    CONSTRAINT channels_rollout_cache_ttl_seconds_check CHECK (((rollout_cache_ttl_seconds >= 60) AND (rollout_cache_ttl_seconds <= 31536000))),
+    CONSTRAINT channels_rollout_percentage_bps_check CHECK (((rollout_percentage_bps >= 0) AND (rollout_percentage_bps <= 10000)))
 );
+
+ALTER TABLE ONLY public.channels REPLICA IDENTITY FULL;
 
 
 --
@@ -250,6 +272,8 @@ CREATE TABLE public.manifest (
     file_size bigint DEFAULT 0
 )
 WITH (autovacuum_vacuum_scale_factor='0.05', autovacuum_analyze_scale_factor='0.02');
+
+ALTER TABLE ONLY public.manifest REPLICA IDENTITY FULL;
 
 
 --
@@ -315,8 +339,8 @@ CREATE TABLE public.org_users (
     org_id uuid NOT NULL,
     app_id character varying,
     channel_id bigint,
-    user_right public.user_min_right,
-    rbac_role_name text
+    rbac_role_name text DEFAULT 'org_member'::text,
+    is_invite boolean DEFAULT false NOT NULL
 );
 
 
@@ -349,13 +373,12 @@ CREATE TABLE public.orgs (
     customer_id character varying,
     stats_updated_at timestamp without time zone,
     last_stats_updated_at timestamp without time zone,
-    use_new_rbac boolean DEFAULT true NOT NULL,
     enforcing_2fa boolean DEFAULT false NOT NULL,
     email_preferences jsonb DEFAULT '{"onboarding": true, "usage_limit": true, "credit_usage": true, "device_error": true, "weekly_stats": true, "monthly_stats": true, "bundle_created": true, "bundle_deployed": true, "deploy_stats_24h": true, "billing_period_stats": true, "channel_self_rejected": true}'::jsonb NOT NULL,
+    password_policy_config jsonb,
     enforce_hashed_api_keys boolean DEFAULT false NOT NULL,
     require_apikey_expiration boolean DEFAULT false NOT NULL,
     max_apikey_expiration_days integer,
-    password_policy_config jsonb,
     enforce_encrypted_bundles boolean DEFAULT false NOT NULL,
     required_encryption_key character varying(21) DEFAULT NULL::character varying,
     has_usage_credits boolean DEFAULT false NOT NULL,
@@ -367,6 +390,8 @@ CREATE TABLE public.orgs (
     CONSTRAINT orgs_password_policy_config_min_length_check CHECK (((password_policy_config IS NULL) OR ((jsonb_typeof(password_policy_config) = 'object'::text) AND ((NOT (password_policy_config ? 'min_length'::text)) OR ((jsonb_typeof((password_policy_config -> 'min_length'::text)) = 'number'::text) AND (((password_policy_config ->> 'min_length'::text))::numeric = trunc(((password_policy_config ->> 'min_length'::text))::numeric)) AND ((((password_policy_config ->> 'min_length'::text))::numeric >= (6)::numeric) AND (((password_policy_config ->> 'min_length'::text))::numeric <= (72)::numeric))))))),
     CONSTRAINT orgs_required_encryption_key_valid CHECK (((required_encryption_key IS NULL) OR (length((required_encryption_key)::text) = ANY (ARRAY[20, 21]))))
 );
+
+ALTER TABLE ONLY public.orgs REPLICA IDENTITY FULL;
 
 
 --
@@ -398,8 +423,11 @@ CREATE TABLE public.stripe_info (
     customer_country character varying(2),
     last_stripe_event_at timestamp with time zone,
     past_due_at timestamp with time zone,
-    churn_reason text
+    churn_reason text,
+    is_above_plan boolean
 );
+
+ALTER TABLE ONLY public.stripe_info REPLICA IDENTITY FULL;
 
 
 --
@@ -474,6 +502,14 @@ ALTER TABLE ONLY public.apps
 
 ALTER TABLE ONLY public.channel_devices
     ADD CONSTRAINT channel_devices_app_id_device_id_key UNIQUE (app_id, device_id);
+
+
+--
+-- Name: channel_devices channel_devices_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.channel_devices
+    ADD CONSTRAINT channel_devices_pkey PRIMARY KEY (id);
 
 
 --
@@ -628,13 +664,6 @@ CREATE INDEX finx_apps_user_id ON public.apps USING btree (user_id);
 
 
 --
--- Name: finx_channel_devices_app_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX finx_channel_devices_app_id ON public.channel_devices USING btree (app_id);
-
-
---
 -- Name: finx_channel_devices_channel_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -705,24 +734,10 @@ CREATE INDEX idx_app_id_app_versions ON public.app_versions USING btree (app_id)
 
 
 --
--- Name: idx_app_id_device_id_channel_id_channel_devices; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE UNIQUE INDEX idx_app_id_device_id_channel_id_channel_devices ON public.channel_devices USING btree (app_id, device_id, channel_id);
-
-
---
 -- Name: idx_app_id_name_app_versions; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_app_id_name_app_versions ON public.app_versions USING btree (app_id, name);
-
-
---
--- Name: idx_app_id_public_channel; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_app_id_public_channel ON public.channels USING btree (app_id, public);
 
 
 --
@@ -754,17 +769,24 @@ CREATE INDEX idx_app_versions_deleted_at ON public.app_versions USING btree (del
 
 
 --
+-- Name: idx_app_versions_deleted_at_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_app_versions_deleted_at_id ON public.app_versions USING btree (deleted_at, id) WHERE (deleted = true);
+
+
+--
+-- Name: idx_app_versions_deleted_with_manifest; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_app_versions_deleted_with_manifest ON public.app_versions USING btree (id) WHERE ((deleted = true) AND (manifest_count > 0));
+
+
+--
 -- Name: idx_app_versions_id; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_app_versions_id ON public.app_versions USING btree (id);
-
-
---
--- Name: idx_app_versions_key_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_app_versions_key_id ON public.app_versions USING btree (key_id) WHERE (key_id IS NOT NULL);
 
 
 --
@@ -789,10 +811,24 @@ CREATE INDEX idx_app_versions_retention_cleanup ON public.app_versions USING btr
 
 
 --
+-- Name: idx_apps_created_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_apps_created_at ON public.apps USING btree (created_at);
+
+
+--
 -- Name: idx_apps_default_upload_channel; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_apps_default_upload_channel ON public.apps USING btree (default_upload_channel);
+
+
+--
+-- Name: idx_apps_owner_org_app_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_apps_owner_org_app_id ON public.apps USING btree (owner_org, app_id);
 
 
 --
@@ -821,6 +857,20 @@ CREATE INDEX idx_channels_public_app_id_android ON public.channels USING btree (
 --
 
 CREATE INDEX idx_channels_public_app_id_ios ON public.channels USING btree (public, app_id, ios);
+
+
+--
+-- Name: idx_channels_rollout_targets; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_channels_rollout_targets ON public.channels USING btree (app_id, rollout_version) WHERE (rollout_version IS NOT NULL);
+
+
+--
+-- Name: idx_channels_rollout_version; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_channels_rollout_version ON public.channels USING btree (rollout_version) WHERE (rollout_version IS NOT NULL);
 
 
 --
@@ -873,13 +923,6 @@ CREATE INDEX idx_stripe_info_past_due_at ON public.stripe_info USING btree (past
 
 
 --
--- Name: idx_stripe_info_status_plan; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_stripe_info_status_plan ON public.stripe_info USING btree (status, is_good_plan) WHERE ((status = 'succeeded'::public.stripe_status) AND (is_good_plan = true));
-
-
---
 -- Name: idx_stripe_info_trial; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -922,10 +965,10 @@ CREATE INDEX orgs_enforce_hashed_api_keys_true_idx ON public.orgs USING btree (i
 
 
 --
--- Name: orgs_updated_at_id_idx; Type: INDEX; Schema: public; Owner: -
+-- Name: si_customer_cover_uidx; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX orgs_updated_at_id_idx ON public.orgs USING btree (updated_at DESC) INCLUDE (id) WHERE (customer_id IS NOT NULL);
+CREATE UNIQUE INDEX si_customer_cover_uidx ON public.stripe_info USING btree (customer_id) INCLUDE (status, trial_at, mau_exceeded, storage_exceeded, bandwidth_exceeded);
 
 
 --

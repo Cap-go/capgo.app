@@ -15,6 +15,7 @@ import AdminStatsCard from '~/components/admin/AdminStatsCard.vue'
 import ChartCard from '~/components/dashboard/ChartCard.vue'
 import PageLoader from '~/components/PageLoader.vue'
 import { formatLocalDate } from '~/services/date'
+import { formatNumberValue } from '~/services/formatLocale'
 import { useAdminDashboardStore } from '~/stores/adminDashboard'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
@@ -134,7 +135,7 @@ const versionCountShown = computed(() => versionEntries.value.length)
 const versionTrendPoints = computed(() => pluginBreakdown.value?.trend ?? [])
 
 function formatPercent(value: number) {
-  return `${Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}%`
+  return `${formatNumberValue(Number(value || 0), { maximumFractionDigits: 2 })}%`
 }
 
 function getTopBreakdownEntries(
@@ -354,7 +355,7 @@ displayStore.defaultBack = '/dashboard'
                       </div>
                     </td>
                     <td class="px-4 py-4 text-right font-semibold text-slate-700 dark:text-slate-200">
-                      {{ entry.device_count.toLocaleString() }}
+                      {{ formatNumberValue(entry.device_count) }}
                     </td>
                     <td class="px-4 py-4">
                       <div v-if="entry.top_apps.length > 0" class="min-w-[16rem] space-y-2">
@@ -365,7 +366,7 @@ displayStore.defaultBack = '/dashboard'
                         >
                           <span class="min-w-0 break-all font-medium text-slate-700 dark:text-slate-200">{{ app.app_id }}</span>
                           <span class="shrink-0 text-xs text-slate-500 dark:text-slate-400">
-                            {{ app.device_count.toLocaleString() }} ({{ formatPercent(app.share) }})
+                            {{ formatNumberValue(app.device_count) }} ({{ formatPercent(app.share) }})
                           </span>
                         </div>
                       </div>

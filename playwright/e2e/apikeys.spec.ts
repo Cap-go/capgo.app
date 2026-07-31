@@ -9,6 +9,12 @@ const INHERITED_ORG_ID = randomUUID()
 const INHERITED_APP_ID = `com.apikeys.e2e.${randomUUID().replaceAll('-', '').slice(0, 12)}`
 const INHERITED_CUSTOMER_ID = `cus_apikeys_e2e_${randomUUID().replaceAll('-', '').slice(0, 12)}`
 
+interface RoleBindingWithRole {
+  scope_type: string
+  app_id: string | null
+  roles: { name: string } | { name: string }[] | null
+}
+
 function uniqueKeyName(prefix: string) {
   return `${prefix} ${Date.now().toString(36)}`
 }
@@ -160,11 +166,30 @@ test.describe('API Key Management', () => {
       stripeCustomerId: INHERITED_CUSTOMER_ID,
     })
     const supabase = getSupabaseClient()
-    const { error } = await supabase.rpc('rbac_enable_for_org', {
-      p_org_id: INHERITED_ORG_ID,
-      p_granted_by: USER_ID,
-    })
-    expect(error).toBeNull()
+    const { data: role, error: roleError } = await supabase
+      .from('roles')
+      .select('id')
+      .eq('name', 'org_super_admin')
+      .single()
+    expect(roleError).toBeNull()
+    expect(role).not.toBeNull()
+
+    const { data: binding, error: bindingError } = await supabase
+      .from('role_bindings')
+      .update({
+        role_id: role!.id,
+        granted_by: USER_ID,
+        reason: 'Playwright API key test org super admin',
+        is_direct: true,
+      })
+      .eq('principal_type', 'user')
+      .eq('principal_id', USER_ID)
+      .eq('scope_type', 'org')
+      .eq('org_id', INHERITED_ORG_ID)
+      .select('id')
+      .single()
+    expect(bindingError).toBeNull()
+    expect(binding).not.toBeNull()
   })
 
   test.afterAll(async () => {
@@ -229,6 +254,79 @@ test.describe('API Key Management', () => {
 
     await page.mouse.click(5, 5)
     await page.getByRole('button', { name: 'Cancel' }).click()
+  })
+
+  test('should create and preserve an app-only preview key', async ({ page }) => {
+    const keyName = uniqueKeyName('App Preview')
+    const dialog = await openCreateKeyDialog(page)
+    await selectOnlyOrgForCreation(page, dialog, INHERITED_ORG_ID)
+
+    const appOnlyScope = dialog.locator('[data-test="create-key-app-only-scope"]')
+    await appOnlyScope.check()
+    await expect(appOnlyScope).toBeChecked()
+    await expect(dialog.locator('[data-test^="create-key-org-role-"]')).toHaveCount(0)
+
+    await fillApiKeyName(page, dialog, keyName)
+    await dialog.locator('[data-test="create-key-add-app"]').click()
+    const seededAppOption = dialog.locator('label', { hasText: INHERITED_APP_ID }).first()
+    await expect(seededAppOption).toBeVisible()
+    await seededAppOption.locator('[data-test="create-key-app-checkbox"]').check()
+
+    const selectedApp = dialog.locator('[data-test="create-key-selected-app"]', { hasText: 'Seeded App' }).first()
+    await expect(selectedApp).toBeVisible()
+    const roleSelect = selectedApp.locator('[data-test="create-key-app-role-select"]')
+    await roleSelect.selectOption('app_preview')
+    await page.mouse.click(5, 5)
+
+    await page.getByRole('button', { name: 'Create' }).click()
+    await expect(page.getByText('Added new API key successfully').first()).toBeVisible()
+    const keyRow = await expectApiKeyRow(page, keyName)
+    await expect(keyRow).toContainText('App Preview')
+    await expect(keyRow.locator('td').nth(1)).toContainText('-')
+
+    await page.reload()
+    const reloadedKeyRow = await expectApiKeyRow(page, keyName)
+    await expect(reloadedKeyRow).toContainText('App Preview')
+    await expect(reloadedKeyRow.locator('td').nth(1)).toContainText('-')
+
+    const supabase = getSupabaseClient()
+    const { data: key, error: keyError } = await supabase
+      .from('apikeys')
+      .select('id, rbac_id')
+      .eq('name', keyName)
+      .single()
+    expect(keyError).toBeNull()
+    expect(key?.rbac_id).toBeTruthy()
+
+    const assertAppOnlyBindings = async () => {
+      const { data: bindings, error: bindingsError } = await supabase
+        .from('role_bindings')
+        .select('scope_type, app_id, roles(name)')
+        .eq('principal_type', 'apikey')
+        .eq('principal_id', key!.rbac_id)
+      expect(bindingsError).toBeNull()
+
+      const normalized = ((bindings ?? []) as unknown as RoleBindingWithRole[]).map(binding => ({
+        scope_type: binding.scope_type,
+        app_id: binding.app_id,
+        role_name: Array.isArray(binding.roles) ? binding.roles[0]?.name : binding.roles?.name,
+      }))
+      expect(normalized).toEqual([
+        expect.objectContaining({ scope_type: 'app', role_name: 'app_preview' }),
+      ])
+    }
+
+    await assertAppOnlyBindings()
+
+    await keyRow.locator('[data-test^="edit-key-"]').click()
+    const editDialog = page.locator('#dialog-v2-content')
+    await expect(editDialog.locator('[data-test="create-key-app-only-scope"]')).toBeChecked()
+    await expect(editDialog.locator('[data-test^="create-key-org-role-"]')).toHaveCount(0)
+    await expect(editDialog.locator('[data-test="create-key-app-role-select"]')).toHaveValue('app_preview')
+    await page.getByRole('button', { name: 'Confirm' }).click()
+    await expect(page.locator('[data-test="toast"]')).toContainText('API key updated')
+
+    await assertAppOnlyBindings()
   })
 
   test('should edit API key rights', async ({ page }) => {
@@ -296,14 +394,14 @@ test.describe('API Key Management', () => {
 
     await createRbacApiKey(page, keyName)
 
-    const keyRow = page.locator('tr', { hasText: keyName })
-    await expect(keyRow).toHaveCount(1)
+    const keyCell = page.getByText(keyName, { exact: true })
+    await expect(keyCell).toBeVisible()
+    const keyRow = keyCell.locator('xpath=ancestor::tr[1]')
 
     await keyRow.locator('[data-test^="delete-key-"]').click()
     await page.getByRole('button', { name: 'Delete' }).click()
 
-    const toast = page.locator('[data-test="toast"]')
-    await expect(toast).toContainText('API key has been successfully deleted')
-    await expect(page.locator('tr', { hasText: keyName })).toHaveCount(0)
+    await expect(page.getByText('API key has been successfully deleted', { exact: true })).toBeVisible()
+    await expect(page.getByText(keyName, { exact: true })).toHaveCount(0)
   })
 })

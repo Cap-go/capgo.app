@@ -3,6 +3,7 @@ import type { Database } from '~/types/supabase.types'
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { useSupabase } from '~/services/supabase'
+import { errorMessage } from '~/utils/errors'
 import { useOrganizationStore } from './organization'
 
 export interface DeliveryPagination {
@@ -49,9 +50,11 @@ function buildWebhookFunctionPath(path: string, params: Record<string, string | 
   return queryString ? `${path}?${queryString}` : path
 }
 
-function getFunctionErrorMessage(error: { message?: string } | null | undefined, fallback: string) {
-  return error?.message || fallback
+function getFunctionErrorMessage(error: unknown, fallback: string) {
+  return errorMessage(error, fallback)
 }
+
+const VALID_WEBHOOK_EVENT_VALUES: readonly string[] = WEBHOOK_EVENT_TYPES.map(e => e.value)
 
 export const useWebhooksStore = defineStore('webhooks', () => {
   const webhooks: Ref<Webhook[]> = ref([])
@@ -156,8 +159,7 @@ export const useWebhooksStore = defineStore('webhooks', () => {
     }
 
     // Validate events
-    const validEvents = WEBHOOK_EVENT_TYPES.map(e => e.value)
-    const invalidEvents = webhookData.events.filter(e => !validEvents.includes(e as any))
+    const invalidEvents = webhookData.events.filter(e => !VALID_WEBHOOK_EVENT_VALUES.includes(e))
     if (invalidEvents.length > 0) {
       return { success: false, error: `Invalid event types: ${invalidEvents.join(', ')}` }
     }
@@ -186,8 +188,8 @@ export const useWebhooksStore = defineStore('webhooks', () => {
 
       return { success: true, webhook: data?.webhook }
     }
-    catch (err: any) {
-      return { success: false, error: err?.message || 'Error creating webhook' }
+    catch (err: unknown) {
+      return { success: false, error: errorMessage(err, 'Error creating webhook') }
     }
   }
 
@@ -229,8 +231,7 @@ export const useWebhooksStore = defineStore('webhooks', () => {
 
     // Validate events if provided
     if (webhookData.events) {
-      const validEvents = WEBHOOK_EVENT_TYPES.map(e => e.value)
-      const invalidEvents = webhookData.events.filter(e => !validEvents.includes(e as any))
+      const invalidEvents = webhookData.events.filter(e => !VALID_WEBHOOK_EVENT_VALUES.includes(e))
       if (invalidEvents.length > 0) {
         return { success: false, error: `Invalid event types: ${invalidEvents.join(', ')}` }
       }
@@ -260,8 +261,8 @@ export const useWebhooksStore = defineStore('webhooks', () => {
 
       return { success: true, webhook: data?.webhook }
     }
-    catch (err: any) {
-      return { success: false, error: err?.message || 'Error updating webhook' }
+    catch (err: unknown) {
+      return { success: false, error: errorMessage(err, 'Error updating webhook') }
     }
   }
 
@@ -292,8 +293,8 @@ export const useWebhooksStore = defineStore('webhooks', () => {
 
       return { success: true }
     }
-    catch (err: any) {
-      return { success: false, error: err?.message || 'Error deleting webhook' }
+    catch (err: unknown) {
+      return { success: false, error: errorMessage(err, 'Error deleting webhook') }
     }
   }
 
@@ -334,14 +335,14 @@ export const useWebhooksStore = defineStore('webhooks', () => {
 
       return data
     }
-    catch (err: any) {
+    catch (err: unknown) {
       return {
         success: false,
         status: null,
         duration_ms: null,
         response_preview: null,
         delivery_id: '',
-        message: err?.message || 'Error testing webhook',
+        message: errorMessage(err, 'Error testing webhook'),
       }
     }
   }
@@ -416,8 +417,8 @@ export const useWebhooksStore = defineStore('webhooks', () => {
 
       return { success: true }
     }
-    catch (err: any) {
-      return { success: false, error: err?.message || 'Error retrying delivery' }
+    catch (err: unknown) {
+      return { success: false, error: errorMessage(err, 'Error retrying delivery') }
     }
   }
 

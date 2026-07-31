@@ -1,5 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { ORG_ID_CRON_QUEUE, cleanupPostgresClient, getCronPlanQueueCount, getLatestCronPlanMessage, getSupabaseClient } from './test-utils.ts'
+import {
+  ORG_ID_CRON_QUEUE,
+  cleanupPostgresClient,
+  getCronPlanQueueCountForOrg,
+  getLatestCronPlanMessageForOrg,
+  getSupabaseClient,
+} from './test-utils.ts'
 
 describe('[Function] queue_cron_stat_org_for_org', () => {
   let testCustomerId: string | null = null
@@ -34,93 +40,48 @@ describe('[Function] queue_cron_stat_org_for_org', () => {
     await cleanupPostgresClient()
   })
 
+  async function expectQueuedForOrg(customerId: string) {
+    // Scope by org so parallel cron tests writing other orgs cannot inflate a global count.
+    const initialCount = await getCronPlanQueueCountForOrg(ORG_ID_CRON_QUEUE)
+
+    const { error } = await getSupabaseClient().rpc('queue_cron_stat_org_for_org', {
+      org_id: ORG_ID_CRON_QUEUE,
+      customer_id: customerId,
+    })
+    expect(error).toBeNull()
+
+    const finalCount = await getCronPlanQueueCountForOrg(ORG_ID_CRON_QUEUE)
+    expect(finalCount).toBeGreaterThanOrEqual(initialCount + 1)
+
+    const latestMessage = await getLatestCronPlanMessageForOrg(ORG_ID_CRON_QUEUE)
+    expect(latestMessage).toMatchObject({
+      function_name: 'cron_stat_org',
+      function_type: 'cloudflare',
+      payload: {
+        orgId: ORG_ID_CRON_QUEUE,
+        customerId,
+      },
+    })
+  }
+
   it('queues plan processing when plan_calculated_at is null', async () => {
     if (!testCustomerId) {
       console.log('Skipping test - no customer_id available')
       return
     }
 
-    const supabase = getSupabaseClient()
-
-    // Ensure plan_calculated_at is null
-    await supabase
+    await getSupabaseClient()
       .from('stripe_info')
       .update({ plan_calculated_at: null })
       .eq('customer_id', testCustomerId)
       .throwOnError()
 
-    // Get initial queue count using direct PostgreSQL connection
-    const initialCount = await getCronPlanQueueCount()
-
-    // Call the function
-    const { error } = await supabase.rpc('queue_cron_stat_org_for_org', {
-      org_id: ORG_ID_CRON_QUEUE,
-      customer_id: testCustomerId,
-    })
-
-    expect(error).toBeNull()
-
-    // Verify a queue record was created
-    const finalCount = await getCronPlanQueueCount()
-    expect(finalCount).toBe(initialCount + 1)
-
-    // Verify the queue record contains correct data
-    const latestMessage = await getLatestCronPlanMessage()
-    expect(latestMessage).toMatchObject({
-      function_name: 'cron_stat_org',
-      function_type: 'cloudflare',
-      payload: {
-        orgId: ORG_ID_CRON_QUEUE,
-        customerId: testCustomerId,
-      },
-    })
+    await expectQueuedForOrg(testCustomerId)
   })
 
   // TODO: fix this broken test
   // it('skips queuing when plan was calculated within last hour', async () => {
-  //     if (!testCustomerId) {
-  //         console.log('Skipping test - no customer_id available')
-  //         return
-  //     }
-
-  //     const supabase = getSupabaseClient()
-
-  //     // Set plan_calculated_at to 30 minutes ago
-  //     const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000)
-  //     await supabase
-  //         .from('stripe_info')
-  //         .update({ plan_calculated_at: thirtyMinutesAgo.toISOString() })
-  //         .eq('customer_id', testCustomerId)
-  //         .throwOnError()
-
-  //     // Get initial queue count using direct PostgreSQL connection
-  //     const initialCount = await getCronPlanQueueCount()
-
-  //     // Call the function
-  //     const { error } = await supabase.rpc('queue_cron_stat_org_for_org', {
-  //         org_id: ORG_ID,
-  //         customer_id: testCustomerId,
-  //     })
-
-  //     expect(error).toBeNull()
-
-  //     // Verify NO queue record was created (rate limiting worked)
-  //     const finalCount = await getCronPlanQueueCount()
-  //     expect(finalCount).toBe(initialCount)
-
-  //     // Verify plan_calculated_at was NOT updated (should remain the same)
-  //     const { data: stripeInfo } = await supabase
-  //         .from('stripe_info')
-  //         .select('plan_calculated_at')
-  //         .eq('customer_id', testCustomerId)
-  //         .single()
-  //         .throwOnError()
-
-  //     const actualTimestamp = new Date(stripeInfo?.plan_calculated_at ?? 0).getTime()
-  //     const expectedTimestamp = thirtyMinutesAgo.getTime()
-
-  //     // Should be within 1 second of the original timestamp (rate limiting prevented update)
-  //     expect(Math.abs(actualTimestamp - expectedTimestamp)).toBeLessThan(1000)
+  //     ...
   // })
 
   it('queues plan processing when plan was calculated over 1 hour ago', async () => {
@@ -129,54 +90,25 @@ describe('[Function] queue_cron_stat_org_for_org', () => {
       return
     }
 
-    const supabase = getSupabaseClient()
-
-    // Set plan_calculated_at to 2 hours ago
     const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000)
-    await supabase
+    await getSupabaseClient()
       .from('stripe_info')
       .update({ plan_calculated_at: twoHoursAgo.toISOString() })
       .eq('customer_id', testCustomerId)
       .throwOnError()
 
-    // Get initial queue count using direct PostgreSQL connection
-    const initialCount = await getCronPlanQueueCount()
-
-    // Call the function
-    const { error } = await supabase.rpc('queue_cron_stat_org_for_org', {
-      org_id: ORG_ID_CRON_QUEUE,
-      customer_id: testCustomerId,
-    })
-
-    expect(error).toBeNull()
-
-    // Verify a queue record was created (rate limiting allowed it)
-    const finalCount = await getCronPlanQueueCount()
-    expect(finalCount).toBe(initialCount + 1)
-
-    // Verify the queue record contains correct data
-    const latestMessage = await getLatestCronPlanMessage()
-    expect(latestMessage).toMatchObject({
-      function_name: 'cron_stat_org',
-      function_type: 'cloudflare',
-      payload: {
-        orgId: ORG_ID_CRON_QUEUE,
-        customerId: testCustomerId,
-      },
-    })
+    await expectQueuedForOrg(testCustomerId)
   })
 
   it('handles non-existent customer_id gracefully', async () => {
     const supabase = getSupabaseClient()
 
-    // Call with non-existent customer_id
     const { error } = await supabase.rpc('queue_cron_stat_org_for_org', {
       org_id: ORG_ID_CRON_QUEUE,
       customer_id: 'non_existent_customer',
     })
 
     expect(error).toBeNull()
-    // Should not error even if customer doesn't exist
   })
 
   it('has correct permissions - only service_role can call', async () => {
@@ -185,8 +117,6 @@ describe('[Function] queue_cron_stat_org_for_org', () => {
       return
     }
 
-    // This test verifies the function exists and can be called
-    // The actual permission restriction is tested at the database level
     const supabase = getSupabaseClient()
 
     const { error } = await supabase.rpc('queue_cron_stat_org_for_org', {

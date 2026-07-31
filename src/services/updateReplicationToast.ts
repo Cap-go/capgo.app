@@ -44,7 +44,7 @@ function getCurrentTimeZone(): string | null {
   if (typeof Intl === 'undefined')
     return null
 
-  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
+  const timeZone = new Intl.DateTimeFormat().resolvedOptions().timeZone
   return timeZone || null
 }
 

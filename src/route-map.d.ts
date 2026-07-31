@@ -283,6 +283,34 @@ declare module 'vue-router/auto-routes' {
       { app: ParamValue<false> },
       | never
     >,
+    '/app/[app].logs.insights': RouteRecordInfo<
+      '/app/[app].logs.insights',
+      '/app/:app/logs/insights',
+      { app: ParamValue<true> },
+      { app: ParamValue<false> },
+      | never
+    >,
+    '/app/[app].notifications': RouteRecordInfo<
+      '/app/[app].notifications',
+      '/app/:app/notifications',
+      { app: ParamValue<true> },
+      { app: ParamValue<false> },
+      | never
+    >,
+    '/app/[app].observe': RouteRecordInfo<
+      '/app/[app].observe',
+      '/app/:app/observe',
+      { app: ParamValue<true> },
+      { app: ParamValue<false> },
+      | never
+    >,
+    '/app/[app].observe.plugins': RouteRecordInfo<
+      '/app/[app].observe.plugins',
+      '/app/:app/observe/plugins',
+      { app: ParamValue<true> },
+      { app: ParamValue<false> },
+      | never
+    >,
     '/app/modules': RouteRecordInfo<
       '/app/modules',
       '/app/modules',
@@ -374,6 +402,13 @@ declare module 'vue-router/auto-routes' {
       Record<never, never>,
       | never
     >,
+    '/onboarding/app': RouteRecordInfo<
+      '/onboarding/app',
+      '/onboarding/app',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
     '/onboarding/invitation': RouteRecordInfo<
       '/onboarding/invitation',
       '/onboarding/invitation',
@@ -391,6 +426,13 @@ declare module 'vue-router/auto-routes' {
     '/onboarding/set_password': RouteRecordInfo<
       '/onboarding/set_password',
       '/onboarding/set_password',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
+    '/preview/bundle': RouteRecordInfo<
+      '/preview/bundle',
+      '/preview/bundle',
       Record<never, never>,
       Record<never, never>,
       | never
@@ -877,6 +919,38 @@ declare module 'vue-router/auto-routes' {
       pathParamNames:
         | 'app'
     }
+    'src/pages/app/[app].logs.insights.vue': {
+      routes:
+        | '/app/[app].logs.insights'
+      views:
+        | never
+      pathParamNames:
+        | 'app'
+    }
+    'src/pages/app/[app].notifications.vue': {
+      routes:
+        | '/app/[app].notifications'
+      views:
+        | never
+      pathParamNames:
+        | 'app'
+    }
+    'src/pages/app/[app].observe.vue': {
+      routes:
+        | '/app/[app].observe'
+      views:
+        | never
+      pathParamNames:
+        | 'app'
+    }
+    'src/pages/app/[app].observe.plugins.vue': {
+      routes:
+        | '/app/[app].observe.plugins'
+      views:
+        | never
+      pathParamNames:
+        | 'app'
+    }
     'src/pages/app/modules.vue': {
       routes:
         | '/app/modules'
@@ -981,6 +1055,14 @@ declare module 'vue-router/auto-routes' {
       pathParamNames:
         | never
     }
+    'src/pages/onboarding/app.vue': {
+      routes:
+        | '/onboarding/app'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
     'src/pages/onboarding/invitation.vue': {
       routes:
         | '/onboarding/invitation'
@@ -1000,6 +1082,14 @@ declare module 'vue-router/auto-routes' {
     'src/pages/onboarding/set_password.vue': {
       routes:
         | '/onboarding/set_password'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
+    'src/pages/preview/bundle.vue': {
+      routes:
+        | '/preview/bundle'
       views:
         | never
       pathParamNames:

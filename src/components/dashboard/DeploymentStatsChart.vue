@@ -21,6 +21,8 @@ import { createLegendConfig, createStackedChartScales } from '~/services/chartCo
 import { createTooltipConfig, todayLinePlugin, verticalLinePlugin } from '~/services/chartTooltip'
 import { generateMonthDays, getDaysInCurrentMonth } from '~/services/date'
 import { useOrganizationStore } from '~/stores/organization'
+import { createChartLegendItems } from './chartLegend'
+import ChartLegend from './ChartLegend.vue'
 
 const props = defineProps({
   title: { type: String, default: '' },
@@ -51,6 +53,7 @@ const DAY_IN_MS = 1000 * 60 * 60 * 24
 // Determine mode based on which data is provided
 const isChannelMode = computed(() => Object.keys(props.dataByChannel).length > 0)
 const isAppMode = computed(() => Object.keys(props.dataByApp).length > 0)
+const hasBreakdownData = computed(() => isChannelMode.value || isAppMode.value)
 
 // Create a reverse mapping from channel/app name to ID for tooltip clicks
 const idByLabel = computed(() => {
@@ -295,6 +298,7 @@ const chartData = computed<ChartData<any>>(() => {
 
     const baseDataset: any = {
       label: nameMapping[itemId] || itemId,
+      breakdownId: itemId,
       data: processed.display,
       backgroundColor,
       borderColor,
@@ -320,6 +324,8 @@ const chartData = computed<ChartData<any>>(() => {
     datasets,
   }
 })
+
+const legendItems = computed(() => hasBreakdownData.value ? createChartLegendItems(chartData.value.datasets, 'breakdownId') : [])
 
 const todayLineOptions = computed(() => {
   if (!props.useBillingPeriod)
@@ -348,27 +354,15 @@ const todayLineOptions = computed(() => {
 })
 
 const chartOptions = computed(() => {
-  // Determine dataset count from the active mode
-  let datasetCount = 0
-  if (isChannelMode.value) {
-    datasetCount = Object.keys(props.dataByChannel).length
-  }
-  else if (isAppMode.value) {
-    datasetCount = Object.keys(props.dataByApp).length
-  }
-
-  const hasMultipleDatasets = datasetCount > 0
-  const stacked = hasMultipleDatasets
-
   return {
     maintainAspectRatio: false,
-    scales: createStackedChartScales(isDark.value, stacked),
+    scales: createStackedChartScales(isDark.value, hasBreakdownData.value),
     plugins: {
-      legend: createLegendConfig(isDark.value, hasMultipleDatasets),
+      legend: createLegendConfig(isDark.value, false),
       title: {
         display: false,
       },
-      tooltip: createTooltipConfig(hasMultipleDatasets, props.accumulated, props.useBillingPeriod ? cycleStart : false, tooltipClickHandler.value),
+      tooltip: createTooltipConfig(hasBreakdownData.value, props.accumulated, props.useBillingPeriod ? cycleStart : false, tooltipClickHandler.value),
       todayLine: todayLineOptions.value,
     },
   }
@@ -382,18 +376,23 @@ const barPlugins = sharedPlugins as unknown as Plugin<'bar'>[]
 </script>
 
 <template>
-  <div class="w-full h-full">
-    <Line
-      v-if="accumulated"
-      :data="chartData"
-      :options="lineChartOptions"
-      :plugins="linePlugins"
-    />
-    <Bar
-      v-else
-      :data="chartData"
-      :options="barChartOptions"
-      :plugins="barPlugins"
-    />
+  <div class="flex min-h-full flex-col">
+    <div class="min-h-[16rem] flex-1">
+      <Line
+        v-if="accumulated"
+        :data="chartData"
+        :options="lineChartOptions"
+        height="auto"
+        :plugins="linePlugins"
+      />
+      <Bar
+        v-else
+        :data="chartData"
+        :options="barChartOptions"
+        height="auto"
+        :plugins="barPlugins"
+      />
+    </div>
+    <ChartLegend :items="legendItems" />
   </div>
 </template>

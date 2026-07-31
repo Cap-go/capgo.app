@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto'
-import { type } from 'arktype'
+import { z } from 'zod'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { safeParseSchema } from '../supabase/functions/_backend/utils/ark_validation.ts'
+import { safeParseSchema } from '../supabase/functions/_backend/utils/schema_validation.ts'
 
-import { BASE_URL, createDirectApiKeyWithBindings, fetchWithRetry, getAuthHeaders, getSupabaseClient, TEST_EMAIL, USER_ID } from './test-utils.ts'
+import { BASE_URL, createDirectApiKeyWithBindings, executeSQL, fetchTestRequest, getAuthHeaders, getSupabaseClient, TEST_EMAIL, USER_ID } from './test-utils.ts'
 
 const ORG_ID = randomUUID()
 const globalId = randomUUID()
@@ -12,24 +12,29 @@ const customerId = `cus_audit_${ORG_ID}`
 const APIKEY_AUDIT_APP_ID = `com.audit.logs.${globalId.replace(/-/g, '')}`
 
 // Schema for audit log response
-const auditLogSchema = type({
-  id: 'number',
-  created_at: 'string',
-  table_name: 'string',
-  record_id: 'string',
-  operation: 'string',
-  user_id: 'string | null',
-  org_id: 'string',
-  old_record: 'unknown',
-  new_record: 'unknown',
-  changed_fields: 'string[] | null',
+const auditLogSchema = z.object({
+  id: z.number(),
+  created_at: z.string(),
+  table_name: z.string(),
+  record_id: z.string(),
+  operation: z.string(),
+  user_id: z.string().nullable(),
+  org_id: z.string(),
+  old_record: z.unknown(),
+  new_record: z.unknown(),
+  changed_fields: z.array(z.string()).nullable(),
+  actor_type: z.enum(['user', 'apikey', 'system', 'unknown']),
+  actor_user_id: z.string().nullable(),
+  actor_user_email: z.string().nullable(),
+  actor_apikey_id: z.number().nullable(),
+  actor_apikey_name: z.string().nullable(),
 })
 
-const auditLogsResponseSchema = type({
-  data: auditLogSchema.array(),
-  total: 'number',
-  page: 'number',
-  limit: 'number',
+const auditLogsResponseSchema = z.object({
+  data: z.array(auditLogSchema),
+  total: z.number(),
+  page: z.number(),
+  limit: z.number(),
 })
 
 interface AuditLog {
@@ -43,6 +48,11 @@ interface AuditLog {
   old_record: unknown
   new_record: unknown
   changed_fields: string[] | null
+  actor_type: 'user' | 'apikey' | 'system' | 'unknown'
+  actor_user_id: string | null
+  actor_user_email: string | null
+  actor_apikey_id: number | null
+  actor_apikey_name: string | null
 }
 
 function parseAuditLogsResponse(value: unknown) {
@@ -52,6 +62,7 @@ function parseAuditLogsResponse(value: unknown) {
 let authHeaders: Record<string, string>
 let apiKeyAuthHeaders: Record<string, string>
 let apiKeyId: number | null = null
+let actorUserEmail: string
 
 async function waitForAuditLog(
   url: string,
@@ -63,7 +74,7 @@ async function waitForAuditLog(
   let lastBody: unknown = null
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const response = await fetchWithRetry(url, {
+    const response = await fetchTestRequest(url, {
       headers: authHeaders,
     })
     lastStatus = response.status
@@ -88,6 +99,15 @@ async function waitForAuditLog(
 beforeAll(async () => {
   authHeaders = await getAuthHeaders()
 
+  const { data: actorUser, error: actorUserError } = await getSupabaseClient()
+    .from('users')
+    .select('email')
+    .eq('id', USER_ID)
+    .single()
+  if (actorUserError || !actorUser)
+    throw actorUserError ?? new Error('Failed to load audit actor user')
+  actorUserEmail = actorUser.email
+
   // Create stripe_info for this test org
   const { error: stripeError } = await getSupabaseClient().from('stripe_info').insert({
     customer_id: customerId,
@@ -107,8 +127,6 @@ beforeAll(async () => {
     management_email: TEST_EMAIL,
     created_by: USER_ID,
     customer_id: customerId,
-    // This suite keeps the classic org membership path enabled while API keys use V2 bindings.
-    use_new_rbac: false,
   })
   if (error)
     throw error
@@ -118,7 +136,7 @@ beforeAll(async () => {
   const { error: memberError } = await getSupabaseClient().from('org_users').insert({
     org_id: ORG_ID,
     user_id: USER_ID,
-    user_right: 'super_admin',
+    rbac_role_name: 'org_super_admin',
   })
   if (memberError)
     throw memberError
@@ -168,7 +186,7 @@ afterAll(async () => {
 
 describe('[GET] /organization/audit', () => {
   it('get audit logs for organization', async () => {
-    const response = await fetchWithRetry(`${BASE_URL}/organization/audit?orgId=${ORG_ID}`, {
+    const response = await fetchTestRequest(`${BASE_URL}/organization/audit?orgId=${ORG_ID}`, {
       headers: authHeaders,
     })
     expect(response.status).toBe(200)
@@ -183,7 +201,7 @@ describe('[GET] /organization/audit', () => {
   })
 
   it('get audit logs with pagination', async () => {
-    const response = await fetchWithRetry(`${BASE_URL}/organization/audit?orgId=${ORG_ID}&page=0&limit=10`, {
+    const response = await fetchTestRequest(`${BASE_URL}/organization/audit?orgId=${ORG_ID}&page=0&limit=10`, {
       headers: authHeaders,
     })
     expect(response.status).toBe(200)
@@ -197,7 +215,7 @@ describe('[GET] /organization/audit', () => {
   })
 
   it('get audit logs filtered by table name', async () => {
-    const response = await fetchWithRetry(`${BASE_URL}/organization/audit?orgId=${ORG_ID}&tableName=orgs`, {
+    const response = await fetchTestRequest(`${BASE_URL}/organization/audit?orgId=${ORG_ID}&tableName=orgs`, {
       headers: authHeaders,
     })
     expect(response.status).toBe(200)
@@ -213,7 +231,7 @@ describe('[GET] /organization/audit', () => {
   })
 
   it('get audit logs filtered by operation', async () => {
-    const response = await fetchWithRetry(`${BASE_URL}/organization/audit?orgId=${ORG_ID}&operation=INSERT`, {
+    const response = await fetchTestRequest(`${BASE_URL}/organization/audit?orgId=${ORG_ID}&operation=INSERT`, {
       headers: authHeaders,
     })
     expect(response.status).toBe(200)
@@ -229,7 +247,7 @@ describe('[GET] /organization/audit', () => {
   })
 
   it('get audit logs with combined filters', async () => {
-    const response = await fetchWithRetry(`${BASE_URL}/organization/audit?orgId=${ORG_ID}&tableName=orgs&operation=INSERT`, {
+    const response = await fetchTestRequest(`${BASE_URL}/organization/audit?orgId=${ORG_ID}&tableName=orgs&operation=INSERT`, {
       headers: authHeaders,
     })
     expect(response.status).toBe(200)
@@ -245,7 +263,7 @@ describe('[GET] /organization/audit', () => {
   })
 
   it('limit is capped at 100', async () => {
-    const response = await fetchWithRetry(`${BASE_URL}/organization/audit?orgId=${ORG_ID}&limit=200`, {
+    const response = await fetchTestRequest(`${BASE_URL}/organization/audit?orgId=${ORG_ID}&limit=200`, {
       headers: authHeaders,
     })
     expect(response.status).toBe(200)
@@ -259,7 +277,7 @@ describe('[GET] /organization/audit', () => {
   })
 
   it('get audit logs with missing orgId returns error', async () => {
-    const response = await fetchWithRetry(`${BASE_URL}/organization/audit`, {
+    const response = await fetchTestRequest(`${BASE_URL}/organization/audit`, {
       headers: authHeaders,
     })
     expect(response.status).toBe(400)
@@ -269,12 +287,42 @@ describe('[GET] /organization/audit', () => {
 
   it('get audit logs with invalid orgId returns error', async () => {
     const invalidOrgId = randomUUID()
-    const response = await fetchWithRetry(`${BASE_URL}/organization/audit?orgId=${invalidOrgId}`, {
+    const response = await fetchTestRequest(`${BASE_URL}/organization/audit?orgId=${invalidOrgId}`, {
       headers: authHeaders,
     })
     expect(response.status).toBe(400)
     const responseData = await response.json() as { error: string }
     expect(responseData.error).toBe('invalid_org_id')
+  })
+
+  it('audit logs keep org and user snapshots without foreign keys', async () => {
+    const orphanOrgId = randomUUID()
+    const orphanUserId = randomUUID()
+    const rows = await executeSQL(
+      `
+      INSERT INTO public.audit_logs (
+        table_name,
+        record_id,
+        operation,
+        user_id,
+        org_id,
+        actor_type,
+        actor_user_id,
+        actor_user_email
+      )
+      VALUES ('orgs', $1::text, 'DELETE', $2::uuid, $1::uuid, 'user', $2::uuid, $3::text)
+      RETURNING id, org_id, user_id, actor_type, actor_user_email
+      `,
+      [orphanOrgId, orphanUserId, 'deleted-user@example.com'],
+    )
+
+    expect(rows).toHaveLength(1)
+    expect(rows[0].org_id).toBe(orphanOrgId)
+    expect(rows[0].user_id).toBe(orphanUserId)
+    expect(rows[0].actor_type).toBe('user')
+    expect(rows[0].actor_user_email).toBe('deleted-user@example.com')
+
+    await executeSQL('DELETE FROM public.audit_logs WHERE id = $1', [rows[0].id])
   })
 })
 
@@ -293,13 +341,15 @@ describe('audit log triggers', () => {
     await new Promise(resolve => setTimeout(resolve, 100))
 
     // Fetch audit logs for this org
-    const response = await fetchWithRetry(`${BASE_URL}/organization/audit?orgId=${ORG_ID}&tableName=orgs&operation=UPDATE`, {
+    const response = await fetchTestRequest(`${BASE_URL}/organization/audit?orgId=${ORG_ID}&tableName=orgs&operation=UPDATE`, {
       headers: authHeaders,
     })
     expect(response.status).toBe(200)
     const responseData = await response.json()
     const safe = parseAuditLogsResponse(responseData)
     expect(safe.success).toBe(true)
+    if (safe.success)
+      expect(safe.data.data.length).toBeGreaterThan(0)
 
     if (safe.success && safe.data.data.length > 0) {
       const latestUpdate = safe.data.data[0]
@@ -307,6 +357,9 @@ describe('audit log triggers', () => {
       expect(latestUpdate.table_name).toBe('orgs')
       expect(latestUpdate.record_id).toBe(ORG_ID)
       expect(latestUpdate.org_id).toBe(ORG_ID)
+      expect(latestUpdate.actor_type).toBe('system')
+      expect(latestUpdate.actor_user_id).toBeNull()
+      expect(latestUpdate.actor_user_email).toBeNull()
       // Changed fields should include 'name' and 'updated_at'
       expect(Array.isArray(latestUpdate.changed_fields)).toBe(true)
       expect(latestUpdate.changed_fields).toContain('name')
@@ -343,7 +396,7 @@ describe('audit log triggers', () => {
       .insert({
         org_id: ORG_ID,
         user_id: anotherUser.id,
-        user_right: 'read',
+        rbac_role_name: 'org_member',
       })
     expect(insertError).toBeNull()
 
@@ -351,7 +404,7 @@ describe('audit log triggers', () => {
     await new Promise(resolve => setTimeout(resolve, 100))
 
     // Fetch audit logs
-    const response = await fetchWithRetry(`${BASE_URL}/organization/audit?orgId=${ORG_ID}&tableName=org_users&operation=INSERT`, {
+    const response = await fetchTestRequest(`${BASE_URL}/organization/audit?orgId=${ORG_ID}&tableName=org_users&operation=INSERT`, {
       headers: authHeaders,
     })
     expect(response.status).toBe(200)
@@ -399,7 +452,7 @@ describe('audit log triggers', () => {
       .insert({
         org_id: ORG_ID,
         user_id: anotherUser.id,
-        user_right: 'read',
+        rbac_role_name: 'org_member',
       })
     expect(insertError).toBeNull()
 
@@ -418,7 +471,7 @@ describe('audit log triggers', () => {
     await new Promise(resolve => setTimeout(resolve, 100))
 
     // Fetch audit logs for DELETE
-    const response = await fetchWithRetry(`${BASE_URL}/organization/audit?orgId=${ORG_ID}&tableName=org_users&operation=DELETE`, {
+    const response = await fetchTestRequest(`${BASE_URL}/organization/audit?orgId=${ORG_ID}&tableName=org_users&operation=DELETE`, {
       headers: authHeaders,
     })
     expect(response.status).toBe(200)
@@ -438,7 +491,7 @@ describe('audit log triggers', () => {
 })
 
 // These tests verify that audit logs are created when using API key authentication
-// This was a bug where CLI/API users were not logged because get_identity() didn't check API keys
+// This was a bug where CLI/API users were not logged because request identity resolution missed API keys.
 describe('audit logs for app_versions via API key', () => {
   const testVersionName = `99.0.0-audit-test-${randomUUID()}`
   let createdVersionId: number | null = null
@@ -454,7 +507,7 @@ describe('audit logs for app_versions via API key', () => {
 
   it('app_version INSERT via API creates audit log with user_id from API key', async () => {
     // Create a bundle via the API (uses API key authentication)
-    const response = await fetchWithRetry(`${BASE_URL}/bundle`, {
+    const response = await fetchTestRequest(`${BASE_URL}/bundle`, {
       method: 'POST',
       headers: apiKeyAuthHeaders,
       body: JSON.stringify({
@@ -475,7 +528,7 @@ describe('audit logs for app_versions via API key', () => {
     await new Promise(resolve => setTimeout(resolve, 200))
 
     // Fetch audit logs for the dedicated test org
-    const auditResponse = await fetchWithRetry(`${BASE_URL}/organization/audit?orgId=${ORG_ID}&tableName=app_versions&operation=INSERT`, {
+    const auditResponse = await fetchTestRequest(`${BASE_URL}/organization/audit?orgId=${ORG_ID}&tableName=app_versions&operation=INSERT`, {
       headers: authHeaders,
     })
     expect(auditResponse.status).toBe(200)
@@ -496,10 +549,18 @@ describe('audit logs for app_versions via API key', () => {
         expect(versionAuditLog.org_id).toBe(ORG_ID)
         // This is the key assertion: user_id should be set from the API key
         expect(versionAuditLog.user_id).toBe(USER_ID)
+        expect(versionAuditLog.actor_type).toBe('apikey')
+        expect(versionAuditLog.actor_user_id).toBe(USER_ID)
+        expect(versionAuditLog.actor_user_email).toBe(actorUserEmail)
+        expect(versionAuditLog.actor_apikey_id).toBe(apiKeyId)
+        expect(versionAuditLog.actor_apikey_name).toContain('audit-api-key-')
         expect(versionAuditLog.old_record).toBeNull()
         expect(versionAuditLog.new_record).toBeTruthy()
         if (versionAuditLog.new_record && typeof versionAuditLog.new_record === 'object') {
           expect((versionAuditLog.new_record as Record<string, unknown>).name).toBe(testVersionName)
+          // Fat columns must stay out of audit TOAST to protect primary DB memory.
+          expect((versionAuditLog.new_record as Record<string, unknown>).manifest).toBeUndefined()
+          expect((versionAuditLog.new_record as Record<string, unknown>).native_packages).toBeUndefined()
         }
       }
     }
@@ -513,7 +574,7 @@ describe('audit logs for app_versions via API key', () => {
     }
 
     // Update the bundle via the API - note: endpoint requires version_id (number), not version name
-    const response = await fetchWithRetry(`${BASE_URL}/bundle/metadata`, {
+    const response = await fetchTestRequest(`${BASE_URL}/bundle/metadata`, {
       method: 'POST',
       headers: apiKeyAuthHeaders,
       body: JSON.stringify({
@@ -535,6 +596,10 @@ describe('audit logs for app_versions via API key', () => {
     expect(updateAuditLog.org_id).toBe(ORG_ID)
     // user_id should be set from the API key
     expect(updateAuditLog.user_id).toBe(USER_ID)
+    expect(updateAuditLog.actor_type).toBe('apikey')
+    expect(updateAuditLog.actor_user_id).toBe(USER_ID)
+    expect(updateAuditLog.actor_user_email).toBe(actorUserEmail)
+    expect(updateAuditLog.actor_apikey_id).toBe(apiKeyId)
     expect(updateAuditLog.old_record).toBeTruthy()
     expect(updateAuditLog.new_record).toBeTruthy()
     // changed_fields should include 'comment'
@@ -552,7 +617,7 @@ describe('audit logs for app_versions via API key', () => {
     const versionIdToDelete = createdVersionId
 
     // Delete the bundle via the API - note: this is a soft-delete (sets deleted=true)
-    const response = await fetchWithRetry(`${BASE_URL}/bundle`, {
+    const response = await fetchTestRequest(`${BASE_URL}/bundle`, {
       method: 'DELETE',
       headers: apiKeyAuthHeaders,
       body: JSON.stringify({
@@ -567,7 +632,7 @@ describe('audit logs for app_versions via API key', () => {
     await new Promise(resolve => setTimeout(resolve, 200))
 
     // Fetch audit logs for UPDATE operations (soft-delete creates UPDATE, not DELETE)
-    const auditResponse = await fetchWithRetry(`${BASE_URL}/organization/audit?orgId=${ORG_ID}&tableName=app_versions&operation=UPDATE`, {
+    const auditResponse = await fetchTestRequest(`${BASE_URL}/organization/audit?orgId=${ORG_ID}&tableName=app_versions&operation=UPDATE`, {
       headers: authHeaders,
     })
     expect(auditResponse.status).toBe(200)
@@ -576,7 +641,7 @@ describe('audit logs for app_versions via API key', () => {
     expect(safe.success).toBe(true)
 
     if (safe.success) {
-      // Find the audit log for our soft-deleted version (look for 'deleted' in changed_fields)
+      // Find the audit log for our soft-deleted version:app_versions!channels_version_fkey(look for 'deleted' in changed_fields)
       const deleteAuditLog = safe.data.data.find(
         log => log.record_id === versionIdToDelete.toString()
           && log.changed_fields?.includes('deleted'),
@@ -589,6 +654,10 @@ describe('audit logs for app_versions via API key', () => {
         expect(deleteAuditLog.org_id).toBe(ORG_ID)
         // user_id should be set from the API key
         expect(deleteAuditLog.user_id).toBe(USER_ID)
+        expect(deleteAuditLog.actor_type).toBe('apikey')
+        expect(deleteAuditLog.actor_user_id).toBe(USER_ID)
+        expect(deleteAuditLog.actor_user_email).toBe(actorUserEmail)
+        expect(deleteAuditLog.actor_apikey_id).toBe(apiKeyId)
         // Both old and new record should exist for UPDATE
         expect(deleteAuditLog.old_record).toBeTruthy()
         expect(deleteAuditLog.new_record).toBeTruthy()
@@ -682,7 +751,7 @@ describe('audit logs for channel promotions via API key bundle flow', () => {
     }
     const promotionChannelId = channelId
 
-    const response = await fetchWithRetry(`${BASE_URL}/bundle`, {
+    const response = await fetchTestRequest(`${BASE_URL}/bundle`, {
       method: 'PUT',
       headers: apiKeyAuthHeaders,
       body: JSON.stringify({
@@ -703,6 +772,10 @@ describe('audit logs for channel promotions via API key bundle flow', () => {
     expect(promotionAuditLog.table_name).toBe('channels')
     expect(promotionAuditLog.org_id).toBe(ORG_ID)
     expect(promotionAuditLog.user_id).toBe(USER_ID)
+    expect(promotionAuditLog.actor_type).toBe('apikey')
+    expect(promotionAuditLog.actor_user_id).toBe(USER_ID)
+    expect(promotionAuditLog.actor_user_email).toBe(actorUserEmail)
+    expect(promotionAuditLog.actor_apikey_id).toBe(apiKeyId)
     expect(promotionAuditLog.changed_fields).toContain('version')
 
     if (promotionAuditLog.new_record && typeof promotionAuditLog.new_record === 'object') {

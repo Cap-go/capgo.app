@@ -11,6 +11,7 @@ import { env, getRuntimeKey } from 'hono/adapter'
 declare const EdgeRuntime: { waitUntil?: (promise: Promise<any>) => void } | undefined
 
 export const fetchLimit = 50
+export const WAIT_FOR_COMPLETION_HEADER = 'x-capgo-wait-for-completion'
 
 // Regex for Zod validation of an app id
 export const reverseDomainRegex = /^[a-z0-9]+(\.[\w-]+)+$/i
@@ -163,12 +164,30 @@ export interface Segments {
   issueSegment: boolean
 }
 
+let limitedAppsCacheKey: string | undefined
+let limitedAppsById: Map<string, LimitedApp> | undefined
+
+function getLimitedAppsById(limits: string): Map<string, LimitedApp> {
+  if (limits === limitedAppsCacheKey && limitedAppsById)
+    return limitedAppsById
+
+  const apps = JSON.parse(limits) as LimitedApp[]
+  // Preserve first-match semantics of the previous apps.find(...) lookup.
+  const byId = new Map<string, LimitedApp>()
+  for (const app of apps) {
+    if (!byId.has(app.id))
+      byId.set(app.id, app)
+  }
+  limitedAppsCacheKey = limits
+  limitedAppsById = byId
+  return limitedAppsById
+}
+
 export function isLimited(c: Context, id: string) {
   const limits = getEnv(c, 'LIMITED_APPS')
   if (!limits)
     return false
-  const apps = JSON.parse(limits) as LimitedApp[]
-  const app = apps.find(a => a.id === id)
+  const app = getLimitedAppsById(limits).get(id)
   if (!app || app.ignore === 0)
     return false
   if (app.ignore === 1)
@@ -178,7 +197,8 @@ export function isLimited(c: Context, id: string) {
 }
 
 export function backgroundTask(c: Context, p: any) {
-  if (getEnv(c, 'CAPGO_PREVENT_BACKGROUND_FUNCTIONS') === 'true') {
+  const waitForCompletion = c.req.header(WAIT_FOR_COMPLETION_HEADER) === 'true' && Boolean(c.get('APISecret'))
+  if (waitForCompletion || getEnv(c, 'CAPGO_PREVENT_BACKGROUND_FUNCTIONS') === 'true') {
     return p
   }
   if (getRuntimeKey() === 'workerd') {

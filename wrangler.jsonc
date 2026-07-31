@@ -1,6 +1,9 @@
 {
   "name": "capgo-webapp",
   "compatibility_date": "2026-04-21",
+  "dependencies_instrumentation": {
+    "enabled": true
+  },
   "compatibility_flags": [
     "nodejs_compat"
   ],

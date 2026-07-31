@@ -22,7 +22,7 @@ export async function checkVersionNotUsedInChannel(
     .from('channels')
     .select()
     .eq('app_id', appid)
-    .eq('version', versionData.id)
+    .or(`version.eq.${versionData.id},rollout_version.eq.${versionData.id}`)
 
   if (channelName)
     query = query.eq('name', channelName)
@@ -66,9 +66,21 @@ export async function checkVersionNotUsedInChannel(
     const s = silent ? null : spinner()
     s?.start(`Unlinking channel ${channel.name}`)
 
+    const patch: Database['public']['Tables']['channels']['Update'] = {}
+    if (channel.version === versionData.id) {
+      patch.version = null
+    }
+    if (channel.rollout_version === versionData.id) {
+      patch.rollout_version = null
+      patch.rollout_enabled = false
+      patch.rollout_percentage_bps = 0
+      patch.rollout_paused_at = null
+      patch.rollout_pause_reason = null
+    }
+
     const { error: errorChannelUpdate } = await supabase
       .from('channels')
-      .update({ version: null })
+      .update(patch)
       .eq('id', channel.id)
 
     if (errorChannelUpdate) {
@@ -94,7 +106,7 @@ export function createChannel(
     .single()
 }
 
-export function delChannel(supabase: SupabaseClient<Database>, name: string, appId: string, _userId: string) {
+export function delChannel(supabase: SupabaseClient<Database>, name: string, appId: string) {
   return supabase
     .from('channels')
     .delete()
@@ -112,20 +124,13 @@ export function findChannel(supabase: SupabaseClient<Database>, appId: string, n
     .single()
 }
 
-export function delChannelDevices(supabase: SupabaseClient<Database>, appId: string, channelId: number) {
-  return supabase
-    .from('channel_devices')
-    .delete()
-    .eq('app_id', appId)
-    .eq('channel_id', channelId)
-}
 
 export function findBundleIdByChannelName(supabase: SupabaseClient<Database>, appId: string, name: string) {
   return supabase
     .from('channels')
     .select(`
       id,
-      version (id, name)
+      version:app_versions!channels_version_fkey(id, name)
     `)
     .eq('app_id', appId)
     .eq('name', name)
@@ -190,7 +195,7 @@ export async function getActiveChannels(
       created_at,
       created_by,
       app_id,
-      version (id, name)
+      version:app_versions!channels_version_fkey(id, name)
     `)
     .eq('app_id', appid)
     .order('created_at', { ascending: false })

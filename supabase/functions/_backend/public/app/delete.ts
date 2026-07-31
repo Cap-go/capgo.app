@@ -135,8 +135,8 @@ export async function deleteApp(c: Context<MiddlewareKeyVariables>, appId: strin
       .delete()
       .eq('app_id', appId),
 
-    // Delete org_users with this app_id (user-facing, has RLS)
-    supabase
+    // App deletion is already authorized above; app-scoped membership cleanup is internal.
+    admin
       .from('org_users')
       .delete()
       .eq('app_id', appId),

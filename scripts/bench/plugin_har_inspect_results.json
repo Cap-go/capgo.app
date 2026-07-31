@@ -1,0 +1,133 @@
+{
+  "generatedAt": "2026-07-23T11:33:02.201Z",
+  "note": "Without DB bindings, valid-shape /updates|/stats|/channel_self exercise middleware+parse+validation+early handler path (often fail after validation). Invalid paths stay pure CPU. Use --har for waterfall import.",
+  "bundle": {
+    "uploadKiB": 428.82,
+    "gzipKiB": 126.31
+  },
+  "summary": {
+    "cold_ok": {
+      "status": 200,
+      "wallMs": 112.95098999999982,
+      "cpuMs": 102.488,
+      "responseBytes": 15
+    },
+    "ok_get": {
+      "status": [
+        200
+      ],
+      "iters": 50,
+      "medianCpuMs": 0.183,
+      "p95CpuMs": 1.546,
+      "medianWallMs": 0.6322499999998854,
+      "p95WallMs": 1.4454809999999725,
+      "medianResponseBytes": 15
+    },
+    "updates_valid_shape": {
+      "status": [
+        500
+      ],
+      "iters": 50,
+      "medianCpuMs": 0.408,
+      "p95CpuMs": 1.679,
+      "medianWallMs": 1.0345459999998639,
+      "p95WallMs": 1.7096509999998943,
+      "medianResponseBytes": 65
+    },
+    "updates_invalid": {
+      "status": [
+        400
+      ],
+      "iters": 50,
+      "medianCpuMs": 0.17,
+      "p95CpuMs": 1.331,
+      "medianWallMs": 0.8213620000001356,
+      "p95WallMs": 1.4802830000000995,
+      "medianResponseBytes": 404
+    },
+    "stats_valid_shape": {
+      "status": [
+        500
+      ],
+      "iters": 50,
+      "medianCpuMs": 0.236,
+      "p95CpuMs": 1.141,
+      "medianWallMs": 0.877755999999863,
+      "p95WallMs": 1.3962910000000193,
+      "medianResponseBytes": 65
+    },
+    "channel_self_valid_shape": {
+      "status": [
+        200
+      ],
+      "iters": 50,
+      "medianCpuMs": 1.02,
+      "p95CpuMs": 1.893,
+      "medianWallMs": 7.4600900000000365,
+      "p95WallMs": 9.65058699999986,
+      "medianResponseBytes": 103
+    }
+  },
+  "rankedByMedianCpuMs": [
+    {
+      "name": "channel_self_valid_shape",
+      "status": [
+        200
+      ],
+      "iters": 50,
+      "medianCpuMs": 1.02,
+      "p95CpuMs": 1.893,
+      "medianWallMs": 7.4600900000000365,
+      "p95WallMs": 9.65058699999986,
+      "medianResponseBytes": 103
+    },
+    {
+      "name": "updates_valid_shape",
+      "status": [
+        500
+      ],
+      "iters": 50,
+      "medianCpuMs": 0.408,
+      "p95CpuMs": 1.679,
+      "medianWallMs": 1.0345459999998639,
+      "p95WallMs": 1.7096509999998943,
+      "medianResponseBytes": 65
+    },
+    {
+      "name": "stats_valid_shape",
+      "status": [
+        500
+      ],
+      "iters": 50,
+      "medianCpuMs": 0.236,
+      "p95CpuMs": 1.141,
+      "medianWallMs": 0.877755999999863,
+      "p95WallMs": 1.3962910000000193,
+      "medianResponseBytes": 65
+    },
+    {
+      "name": "ok_get",
+      "status": [
+        200
+      ],
+      "iters": 50,
+      "medianCpuMs": 0.183,
+      "p95CpuMs": 1.546,
+      "medianWallMs": 0.6322499999998854,
+      "p95WallMs": 1.4454809999999725,
+      "medianResponseBytes": 15
+    },
+    {
+      "name": "updates_invalid",
+      "status": [
+        400
+      ],
+      "iters": 50,
+      "medianCpuMs": 0.17,
+      "p95CpuMs": 1.331,
+      "medianWallMs": 0.8213620000001356,
+      "p95WallMs": 1.4802830000000995,
+      "medianResponseBytes": 404
+    }
+  ]
+}

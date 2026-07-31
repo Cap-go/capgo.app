@@ -12,8 +12,10 @@ import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconAlertTriangle from '~icons/lucide/alert-triangle'
 import IconCheckCircle from '~icons/lucide/check-circle'
 import IconTrendingUp from '~icons/lucide/trending-up'
+import PeriodDaySelector from '~/components/dashboard/PeriodDaySelector.vue'
 import { createTooltipConfig } from '~/services/chartTooltip'
 import { formatDistanceToNow, formatLocalDate, formatLocalDateShort } from '~/services/date'
+import { formatNumberValue } from '~/services/formatLocale'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
 import { useAppDetailStore } from '~/stores/appDetail'
 import { useDisplayStore } from '~/stores/display'
@@ -27,20 +29,23 @@ interface Channel {
 interface ChannelStatsResponse {
   labels: string[]
   datasets: Array<{ label: string, data: number[], metaCounts?: number[] }>
+  dailyTotals: number[]
   latestVersion: {
     name: string
     percentage: string
   }
   currentVersion: string
   currentVersionReleasedAt: string | null
+  period: {
+    requested_days: number
+    actual_days: number
+    start: string
+    end: string
+    start_reason: 'requested_days' | 'current_version_release'
+  }
   deploymentHistory: Array<{ version_name: string, deployed_at: string }>
   lastDeploymentAt: string | null
   totalDeployments: number
-  deploymentWindowCounts: {
-    h24: number
-    h72: number
-    d7: number
-  }
   totals: {
     total_devices: number
     devices_on_current: number
@@ -106,10 +111,11 @@ const id = ref<number>(0)
 const loading = ref(true)
 const statsLoading = ref(true)
 const channel = ref<Database['public']['Tables']['channels']['Row'] & Channel>()
+type PeriodDayOption = 1 | 3 | 7 | 30
+const days = ref<PeriodDayOption>(30)
 const stats = ref<ChannelStatsResponse | null>(null)
-const days = ref(3)
-
 const bundleIdCache = ref<Record<string, number>>({})
+let latestStatsRequest = 0
 const versionByLabel = computed(() => {
   const mapping: Record<string, string> = {}
   const datasets = stats.value?.datasets ?? []
@@ -160,7 +166,7 @@ const statusType = computed<ChannelAdoptionStatus>(() => {
 })
 
 const statusMessage = computed(() => {
-  const percent = percentOnCurrent.value.toFixed(1)
+  const percent = formatNumberValue(percentOnCurrent.value, { minimumFractionDigits: 1, maximumFractionDigits: 1 })
   switch (statusType.value) {
     case 'loading':
       return t('loading-statistics')
@@ -193,13 +199,17 @@ const currentVersionDeployLabel = computed(() => {
 
 function formatPercent(value: number) {
   if (!Number.isFinite(value))
-    return '0.0%'
+    return `${formatNumberValue(0, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
 
-  return `${value.toFixed(1)}%`
+  return `${formatNumberValue(value, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
 }
 
 function formatPercentRange(start: number, end: number) {
   return `${formatPercent(start)} -> ${formatPercent(end)}`
+}
+
+function formatCount(value: number | null | undefined) {
+  return formatNumberValue(Math.round(value ?? 0))
 }
 
 function formatShortDate(value: string | null | undefined) {
@@ -220,14 +230,42 @@ const currentVersionDataset = computed(() => {
   return stats.value.datasets.find(dataset => dataset.label === stats.value?.currentVersion) ?? null
 })
 
-const requestedDays = computed(() => days.value === 1 ? 2 : days.value)
-const selectedPeriodLabel = computed(() => days.value === 1
-  ? t('today-vs-yesterday')
-  : t('last-n-days', { days: days.value }))
+const selectedPeriodLabel = computed(() => {
+  if (days.value === 1)
+    return t('last-one-day')
+
+  const period = stats.value?.period
+  if (period?.start_reason === 'current_version_release') {
+    const key = period.actual_days === 1 ? 'since-current-release-one-day' : 'since-current-release-days'
+    return t(key, { days: period.actual_days })
+  }
+
+  return t('last-n-days', { days: days.value })
+})
+const periodTimespanLabel = computed(() => {
+  const labels = stats.value?.labels ?? []
+  if (labels.length > 0)
+    return `${formatShortDate(labels[0])} - ${formatShortDate(labels[labels.length - 1])}`
+
+  const period = stats.value?.period
+  if (period)
+    return `${formatShortDate(period.start)} - ${formatShortDate(period.end)}`
+
+  return '-'
+})
+
+async function selectPeriod(option: PeriodDayOption) {
+  if (days.value === option)
+    return
+
+  days.value = option
+  await fetchStats()
+}
 
 const periodSummary = computed(() => {
   const dataset = currentVersionDataset.value
   const labels = stats.value?.labels ?? []
+  const datasets = stats.value?.datasets ?? []
 
   if (!dataset || labels.length === 0)
     return null
@@ -247,17 +285,35 @@ const periodSummary = computed(() => {
   if (normalizedShares.length === 0)
     return null
 
+  const dailyTotalAt = (index: number) => {
+    const rawTotal = stats.value?.dailyTotals?.[index]
+    const backendTotal = typeof rawTotal === 'number' ? rawTotal : Number(rawTotal)
+    if (Number.isFinite(backendTotal))
+      return Math.max(0, Math.round(backendTotal))
+
+    return datasets.reduce((sum, currentDataset) => {
+      const rawValue = currentDataset.metaCounts?.[index]
+      const numeric = typeof rawValue === 'number' ? rawValue : Number(rawValue)
+      return sum + (Number.isFinite(numeric) ? Math.max(0, Math.round(numeric)) : 0)
+    }, 0)
+  }
+
+  const latestIndex = normalizedShares.length - 1
   const startShare = normalizedShares[0] ?? 0
-  const latestShare = normalizedShares[normalizedShares.length - 1] ?? 0
+  const latestShare = normalizedShares[latestIndex] ?? 0
   const changeShare = latestShare - startShare
+  const periodTotal = labels.reduce((sum, _, index) => sum + dailyTotalAt(index), 0)
 
   return {
     startShare,
     startCount: normalizedCounts[0] ?? 0,
+    startTotal: dailyTotalAt(0),
     latestShare,
-    latestCount: normalizedCounts[normalizedCounts.length - 1] ?? 0,
+    latestCount: normalizedCounts[latestIndex] ?? 0,
+    latestTotal: dailyTotalAt(latestIndex),
+    periodTotal,
     startDateLabel: formatShortDate(labels[0]),
-    latestDateLabel: formatShortDate(labels[labels.length - 1]),
+    latestDateLabel: formatShortDate(labels[latestIndex]),
     changeShare,
   }
 })
@@ -266,7 +322,12 @@ const statusDetail = computed(() => {
   if (!stats.value || totalDevices.value <= 0)
     return ''
 
-  const base = `${Math.round(devicesOnCurrent.value)} / ${Math.round(totalDevices.value)} ${t('devices-on-current-version-status')}`
+  const base = t('current-version-check-ins-in-period', {
+    current: formatCount(devicesOnCurrent.value),
+    total: formatCount(totalDevices.value),
+    period: selectedPeriodLabel.value,
+    range: periodTimespanLabel.value,
+  })
   if (statusType.value !== 'ramping')
     return base
 
@@ -334,16 +395,6 @@ const chartData = computed<ChartData<'line'>>(() => {
   }
 })
 
-const currentVersionColor = computed(() => {
-  const current = stats.value?.currentVersion
-  if (!current || !stats.value?.datasets?.length)
-    return null
-  const index = stats.value.datasets.findIndex(dataset => dataset.label === current)
-  if (index < 0)
-    return null
-  return chartPalette[index % chartPalette.length]
-})
-
 const chartOptions = computed<ChartOptions<'line'>>(() => ({
   responsive: true,
   maintainAspectRatio: false,
@@ -404,7 +455,7 @@ async function getChannel() {
           name,
           public,
           owner_org,
-          version (
+          version:app_versions!channels_version_fkey(
             id,
             name,
             app_id,
@@ -451,11 +502,13 @@ async function fetchStats() {
   if (!id.value || !channel.value)
     return
 
+  const requestId = ++latestStatsRequest
   statsLoading.value = true
   try {
     const { data: sessionData } = await supabase.auth.getSession()
     if (!sessionData.session) {
-      toast.error(t('not-authenticated'))
+      if (requestId === latestStatsRequest)
+        toast.error(t('not-authenticated'))
       return
     }
 
@@ -468,9 +521,12 @@ async function fetchStats() {
       body: JSON.stringify({
         channel_id: id.value,
         app_id: packageId.value,
-        days: requestedDays.value,
+        days: days.value,
       }),
     })
+
+    if (requestId !== latestStatsRequest)
+      return
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}))
@@ -480,14 +536,19 @@ async function fetchStats() {
     }
 
     const result: ChannelStatsResponse = await response.json()
+    if (requestId !== latestStatsRequest)
+      return
     stats.value = result
   }
   catch (error) {
+    if (requestId !== latestStatsRequest)
+      return
     console.error('Error fetching channel stats:', error)
     toast.error(t('failed-to-fetch-statistics'))
   }
   finally {
-    statsLoading.value = false
+    if (requestId === latestStatsRequest)
+      statsLoading.value = false
   }
 }
 
@@ -512,7 +573,26 @@ watchEffect(async () => {
     <PageLoader v-if="loading" />
     <div v-else-if="channel" class="w-full h-full px-4 pt-0 mx-auto mb-8 sm:px-6 md:pt-8 lg:px-8 max-w-9xl max-h-fit">
       <div class="flex flex-col gap-6">
-        <!-- Status Banner -->
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div class="min-w-0">
+            <h3 class="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+              {{ t('selected-period') }}
+            </h3>
+            <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">
+              {{ selectedPeriodLabel }} · {{ periodTimespanLabel }}
+            </p>
+            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              {{ t('selected-period-applies-to-stats') }}
+            </p>
+          </div>
+          <PeriodDaySelector
+            :model-value="days"
+            :labels="{ 30: 'max-period' }"
+            @update:model-value="selectPeriod"
+          />
+        </div>
+
+        <!-- Selected Period Adoption Status -->
         <div
           class="p-4 border rounded-lg shadow-sm"
           :class="{
@@ -577,119 +657,74 @@ watchEffect(async () => {
           </div>
         </div>
 
-        <!-- Stats Overview Cards -->
-        <div class="space-y-4">
-          <div>
-            <div class="mb-3">
-              <h3 class="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-                {{ t('latest-snapshot') }}
-              </h3>
-              <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                {{ t('channel-stats-latest-snapshot-help') }}
-              </p>
-            </div>
-
-            <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
-              <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
-                <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
-                  <span
-                    class="w-2.5 h-2.5 rounded-full"
-                    :style="currentVersionColor ? { backgroundColor: currentVersionColor.border } : undefined"
-                  />
-                  <IconTrendingUp class="w-4 h-4" />
-                  {{ t('current-channel-version') }}
-                </div>
-                <div class="mt-2 text-lg font-semibold text-slate-900 dark:text-white">
-                  {{ stats?.currentVersion || '-' }}
-                </div>
-                <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  {{ t('released') }}: {{ currentVersionDeployLabel }}
-                </div>
-              </div>
-
-              <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
-                <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
-                  <IconCheckCircle class="w-4 h-4" />
-                  {{ t('adoption-in-latest-snapshot') }}
-                </div>
-                <div class="mt-2 text-lg font-semibold" :class="adoptionRateColorClass">
-                  {{ formatPercent(stats?.totals.percent_on_current ?? 0) }}
-                </div>
-                <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  {{ t('adoption-in-latest-snapshot-help', { version: stats?.currentVersion || '-', total: totalDevices.toLocaleString() }) }}
-                </div>
-              </div>
-
-              <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
-                <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
-                  <IconAlertCircle class="w-4 h-4" />
-                  {{ t('devices-on-current-version') }}
-                </div>
-                <div class="mt-2 text-lg font-semibold text-slate-900 dark:text-white">
-                  {{ devicesOnCurrent.toLocaleString() }}
-                </div>
-                <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  {{ t('devices-on-current-version-help', { current: devicesOnCurrent.toLocaleString(), total: totalDevices.toLocaleString(), version: stats?.currentVersion || '-' }) }}
-                </div>
-              </div>
-            </div>
+        <!-- Selected Period Overview Cards -->
+        <div>
+          <div class="mb-3">
+            <h3 class="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+              {{ t('selected-period-overview') }}
+            </h3>
+            <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">
+              {{ t('selected-period-overview-help', { period: selectedPeriodLabel, range: periodTimespanLabel, version: stats?.currentVersion || '-' }) }}
+            </p>
           </div>
 
-          <div>
-            <div class="mb-3">
-              <h3 class="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-                {{ t('selected-period') }}: {{ selectedPeriodLabel }}
-              </h3>
-              <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                {{ t('channel-stats-period-help') }}
-              </p>
+          <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+              <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
+                <IconAlertCircle class="w-4 h-4" />
+                {{ t('period-check-ins') }}
+              </div>
+              <div class="mt-2 text-lg font-semibold text-slate-900 dark:text-white">
+                {{ formatCount(periodSummary?.periodTotal) }}
+              </div>
+              <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                {{ t('period-check-ins-help', { count: formatCount(periodSummary?.periodTotal), period: selectedPeriodLabel }) }}
+              </div>
             </div>
 
-            <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
-              <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
-                <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
-                  <IconCheckCircle class="w-4 h-4" />
-                  {{ t('start-of-selected-period') }}
-                </div>
-                <div class="mt-2 text-lg font-semibold text-slate-900 dark:text-white">
-                  {{ formatPercent(periodSummary?.startShare ?? 0) }}
-                </div>
-                <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  {{ t('start-of-selected-period-help', { date: periodSummary?.startDateLabel ?? '-', count: (periodSummary?.startCount ?? 0).toLocaleString(), version: stats?.currentVersion || '-' }) }}
-                </div>
+            <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+              <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
+                <IconCheckCircle class="w-4 h-4" />
+                {{ t('start-of-selected-period') }}
               </div>
-
-              <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
-                <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
-                  <IconCheckCircle class="w-4 h-4" />
-                  {{ t('latest-day-in-selected-period') }}
-                </div>
-                <div class="mt-2 text-lg font-semibold text-slate-900 dark:text-white">
-                  {{ formatPercent(periodSummary?.latestShare ?? 0) }}
-                </div>
-                <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  {{ t('latest-day-in-selected-period-help', { date: periodSummary?.latestDateLabel ?? '-', count: (periodSummary?.latestCount ?? 0).toLocaleString(), version: stats?.currentVersion || '-' }) }}
-                </div>
+              <div class="mt-2 text-lg font-semibold text-slate-900 dark:text-white">
+                {{ formatPercent(periodSummary?.startShare ?? 0) }}
               </div>
+              <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                {{ t('start-of-selected-period-help', { date: periodSummary?.startDateLabel ?? '-', count: formatCount(periodSummary?.startCount), total: formatCount(periodSummary?.startTotal), version: stats?.currentVersion || '-' }) }}
+              </div>
+            </div>
 
-              <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
-                <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
-                  <IconTrendingUp class="w-4 h-4" />
-                  {{ t('adoption-over-selected-period') }}
-                </div>
-                <div
-                  class="mt-2 text-lg font-semibold"
-                  :class="{
-                    'text-emerald-600 dark:text-emerald-400': (periodSummary?.changeShare ?? 0) > 0,
-                    'text-rose-600 dark:text-rose-400': (periodSummary?.changeShare ?? 0) < 0,
-                    'text-slate-900 dark:text-white': (periodSummary?.changeShare ?? 0) === 0,
-                  }"
-                >
-                  {{ formatPercentRange(periodSummary?.startShare ?? 0, periodSummary?.latestShare ?? 0) }}
-                </div>
-                <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  {{ t('adoption-over-selected-period-help', { start: periodSummary?.startDateLabel ?? '-', end: periodSummary?.latestDateLabel ?? '-', version: stats?.currentVersion || '-' }) }}
-                </div>
+            <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+              <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
+                <IconCheckCircle class="w-4 h-4" />
+                {{ t('latest-day-in-selected-period') }}
+              </div>
+              <div class="mt-2 text-lg font-semibold" :class="adoptionRateColorClass">
+                {{ formatPercent(periodSummary?.latestShare ?? 0) }}
+              </div>
+              <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                {{ t('latest-day-in-selected-period-help', { date: periodSummary?.latestDateLabel ?? '-', count: formatCount(periodSummary?.latestCount), total: formatCount(periodSummary?.latestTotal), version: stats?.currentVersion || '-' }) }}
+              </div>
+            </div>
+
+            <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+              <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
+                <IconTrendingUp class="w-4 h-4" />
+                {{ t('period-change') }}
+              </div>
+              <div
+                class="mt-2 text-lg font-semibold"
+                :class="{
+                  'text-emerald-600 dark:text-emerald-400': (periodSummary?.changeShare ?? 0) > 0,
+                  'text-rose-600 dark:text-rose-400': (periodSummary?.changeShare ?? 0) < 0,
+                  'text-slate-900 dark:text-white': (periodSummary?.changeShare ?? 0) === 0,
+                }"
+              >
+                {{ formatPercentRange(periodSummary?.startShare ?? 0, periodSummary?.latestShare ?? 0) }}
+              </div>
+              <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                {{ t('period-change-help', { start: periodSummary?.startDateLabel ?? '-', end: periodSummary?.latestDateLabel ?? '-', version: stats?.currentVersion || '-' }) }}
               </div>
             </div>
           </div>
@@ -697,27 +732,14 @@ watchEffect(async () => {
 
         <!-- Chart -->
         <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
-          <div class="flex items-center justify-between mb-4">
+          <div class="mb-4">
             <h3 class="text-lg font-semibold text-slate-900 dark:text-white">
               {{ t('device-version-adoption-over-time') }}
             </h3>
-            <div class="flex items-center gap-2">
-              <button
-                v-for="d in [1, 3, 7]"
-                :key="d"
-                class="px-3 py-1 text-sm transition-colors rounded-md"
-                :class="days === d
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600'"
-                @click="days = d; fetchStats()"
-              >
-                {{ d }} {{ t('days') }}
-              </button>
-            </div>
           </div>
 
           <p class="mb-4 text-sm text-slate-600 dark:text-slate-300">
-            {{ t('channel-stats-help') }}
+            {{ t('channel-stats-help', { period: selectedPeriodLabel, range: periodTimespanLabel }) }}
           </p>
 
           <div v-if="statsLoading" class="flex items-center justify-center h-64">

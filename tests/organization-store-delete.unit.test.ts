@@ -100,7 +100,6 @@ describe('organization store deleteOrganization', () => {
     store.getAllOrgs().set(orgId, {
       gid: orgId,
       role: 'org_super_admin',
-      use_new_rbac: true,
     } as any)
 
     const result = await store.deleteOrganization(orgId)
@@ -118,7 +117,6 @@ describe('organization store deleteOrganization', () => {
     store.getAllOrgs().set(orgId, {
       gid: orgId,
       role: 'org_admin',
-      use_new_rbac: true,
     } as any)
 
     const result = await store.deleteOrganization(orgId)
@@ -130,22 +128,28 @@ describe('organization store deleteOrganization', () => {
 })
 
 describe('organization role helpers', () => {
-  it('treats RBAC org roles as their legacy equivalents', async () => {
-    const { isAdminRole, isSuperAdminRole, roleHasLegacyMinRight } = await import('../src/stores/organization.ts')
+  it('checks RBAC org role hierarchy', async () => {
+    const { isAdminRole, isSuperAdminRole, roleHasOrgRank } = await import('../src/stores/organization.ts')
 
-    expect(isAdminRole('admin')).toBe(true)
     expect(isAdminRole('org_admin')).toBe(true)
     expect(isAdminRole('org_super_admin')).toBe(true)
     expect(isAdminRole('org_member')).toBe(false)
 
-    expect(isSuperAdminRole('super_admin')).toBe(true)
     expect(isSuperAdminRole('org_super_admin')).toBe(true)
     expect(isSuperAdminRole('owner')).toBe(true)
     expect(isSuperAdminRole('org_admin')).toBe(false)
 
-    expect(roleHasLegacyMinRight('invite_org_super_admin', 'super_admin')).toBe(true)
-    expect(roleHasLegacyMinRight('invite_org_admin', 'admin')).toBe(true)
-    expect(roleHasLegacyMinRight('org_billing_admin', 'admin')).toBe(false)
+    expect(roleHasOrgRank('org_super_admin', 'org_admin')).toBe(true)
+    expect(roleHasOrgRank('org_billing_admin', 'org_admin')).toBe(false)
+  })
+
+  it.concurrent('detects pending invites from is_invite before role text', async () => {
+    const { isPendingOrganizationInvite } = await import('../src/stores/organization.ts')
+
+    expect(isPendingOrganizationInvite({ role: 'org_member', is_invite: true } as any)).toBe(true)
+    expect(isPendingOrganizationInvite({ role: 'invite_admin', is_invite: false } as any)).toBe(false)
+    expect(isPendingOrganizationInvite({ role: 'invite_admin' } as any)).toBe(true)
+    expect(isPendingOrganizationInvite({ role: 'org_admin' } as any)).toBe(false)
   })
 })
 

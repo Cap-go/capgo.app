@@ -2,7 +2,8 @@ import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc.js'
 import { Hono } from 'hono/tiny'
-import { middlewareAuth, parseBody, simpleError, useCors } from '../utils/hono.ts'
+import { parseBody, simpleError, useCors } from '../utils/hono.ts'
+import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { readDeviceVersionCounts, readStatsVersion } from '../utils/stats.ts'
@@ -31,6 +32,44 @@ interface DeploymentHistoryEntry {
   deployed_at: string
 }
 
+type StatsPeriodStartReason = 'requested_days' | 'current_version_release'
+const supportedPeriodDays = [1, 3, 7, 30] as const
+type StatsPeriodDays = typeof supportedPeriodDays[number]
+
+function normalizeStatsPeriodDays(days: number | undefined): StatsPeriodDays | null {
+  const requestedDays = days ?? 30
+  if (!Number.isInteger(requestedDays) || !supportedPeriodDays.includes(requestedDays as StatsPeriodDays))
+    return null
+
+  return requestedDays as StatsPeriodDays
+}
+
+function getStatsPeriod(requestedDays: StatsPeriodDays, endDate: Date, currentVersionReleasedAt: string | null | undefined) {
+  const end = dayjs(endDate).utc().startOf('day')
+  const requestedStart = end.subtract(requestedDays - 1, 'day')
+  let start = requestedStart
+  let startReason: StatsPeriodStartReason = 'requested_days'
+
+  if (requestedDays >= 30 && currentVersionReleasedAt) {
+    const releaseStart = dayjs(currentVersionReleasedAt).utc().startOf('day')
+    if (releaseStart.isValid() && releaseStart.isAfter(requestedStart) && !releaseStart.isAfter(end)) {
+      start = releaseStart
+      startReason = 'current_version_release'
+    }
+  }
+
+  const labels = generateDateLabels(start.toDate(), end.toDate())
+
+  return {
+    startDate: start.toDate(),
+    endDate,
+    labels,
+    requestedDays,
+    actualDays: labels.length,
+    startReason,
+  }
+}
+
 function generateDateLabels(from: Date, to: Date) {
   const start = dayjs(from).utc().startOf('day')
   const end = dayjs(to).utc().startOf('day')
@@ -43,6 +82,20 @@ function generateDateLabels(from: Date, to: Date) {
   while (cursor.isBefore(end) || cursor.isSame(end)) {
     labels.push(cursor.format('YYYY-MM-DD'))
     cursor = cursor.add(1, 'day')
+  }
+
+  return labels
+}
+
+function trimTrailingEmptyLabels(labels: string[], countsByDate: Record<string, Record<string, number>>) {
+  if (labels.length <= 1)
+    return labels
+
+  for (let index = labels.length - 1; index >= 0; index--) {
+    const label = labels[index]
+    const total = Object.values(countsByDate[label] ?? {}).reduce((sum, value) => sum + Math.round(value ?? 0), 0)
+    if (total > 0)
+      return labels.slice(0, index + 1)
   }
 
   return labels
@@ -99,6 +152,51 @@ function selectRecentChannelVersions(
     .slice(0, limit)
     .map(([versionName]) => versionName)
 }
+const otherVersionsLabel = 'Other versions'
+
+function getDailyTotal(counts: Record<string, number> | undefined) {
+  return Object.values(counts ?? {}).reduce((sum, value) => sum + Math.round(value ?? 0), 0)
+}
+
+function getUniqueVersionNames(dailyVersion: AppUsageByVersion[], currentVersionName: string) {
+  const versionNames = new Set<string>()
+  if (currentVersionName)
+    versionNames.add(currentVersionName)
+
+  dailyVersion.forEach((row) => {
+    if (row.version_name)
+      versionNames.add(row.version_name)
+  })
+
+  return [...versionNames]
+}
+
+function createChartCountsByDate(
+  labels: string[],
+  countsByDate: Record<string, Record<string, number>>,
+  selectedVersions: string[],
+  allVersions: string[],
+) {
+  const visibleVersions = selectedVersions.filter((version, index, versions) => version && versions.indexOf(version) === index)
+  const hiddenVersions = allVersions.filter(version => !visibleVersions.includes(version))
+  const hasOtherVersions = hiddenVersions.some(version => labels.some(label => (countsByDate[label]?.[version] ?? 0) > 0))
+  const chartVersions = hasOtherVersions ? [...visibleVersions, otherVersionsLabel] : visibleVersions
+  const chartCountsByDate: Record<string, Record<string, number>> = {}
+
+  labels.forEach((label) => {
+    chartCountsByDate[label] = {}
+    visibleVersions.forEach((version) => {
+      chartCountsByDate[label][version] = Math.max(0, Math.round(countsByDate[label]?.[version] ?? 0))
+    })
+    if (hasOtherVersions) {
+      chartCountsByDate[label][otherVersionsLabel] = hiddenVersions.reduce((sum, version) => {
+        return sum + Math.max(0, Math.round(countsByDate[label]?.[version] ?? 0))
+      }, 0)
+    }
+  })
+
+  return { versions: chartVersions, countsByDate: chartCountsByDate }
+}
 
 function getLatestCounts(labels: string[], countsByDate: Record<string, Record<string, number>>) {
   if (labels.length === 0)
@@ -129,8 +227,9 @@ app.post('/', middlewareAuth, async (c) => {
   if (!body.channel_id || !body.app_id) {
     throw simpleError('missing_params', 'channel_id and app_id are required')
   }
-
-  const days = Math.min(Math.max(body.days ?? 3, 1), 7)
+  const days = normalizeStatsPeriodDays(body.days)
+  if (!days)
+    throw simpleError('invalid_days', 'days must be one of 1, 3, 7, or 30')
 
   if (!(await checkPermission(c, 'app.read', { appId: body.app_id }))) {
     throw simpleError('app_access_denied', 'You can\'t access this app', { app_id: body.app_id })
@@ -146,7 +245,7 @@ app.post('/', middlewareAuth, async (c) => {
 
     const { data: channelData, error: channelError } = await supabase
       .from('channels')
-      .select('id, name, version, updated_at, version (name)')
+      .select('id, name, version, version (name, created_at)')
       .eq('id', body.channel_id)
       .eq('app_id', body.app_id)
       .single()
@@ -158,7 +257,6 @@ app.post('/', middlewareAuth, async (c) => {
     const currentVersionName = (channelData.version as any)?.name ?? ''
 
     const endDate = dayjs().utc().endOf('day').toDate()
-    const startDate = dayjs().utc().startOf('day').subtract(days - 1, 'day').toDate()
 
     const { data: deployHistory, error: deployError } = await supabase
       .from('deploy_history')
@@ -195,11 +293,11 @@ app.post('/', middlewareAuth, async (c) => {
     const currentVersionRelease = deploymentHistory
       .filter(entry => entry.version_name === currentVersionName)
       .sort((a, b) => dayjs(b.deployed_at).valueOf() - dayjs(a.deployed_at).valueOf())[0]
+    const currentVersionCreatedAt = (channelData.version as any)?.created_at
     const currentVersionReleasedAt = currentVersionRelease?.deployed_at
-      ?? (channelData.updated_at ? dayjs(channelData.updated_at).utc().toISOString() : null)
-
-    const labels = generateDateLabels(startDate, endDate)
-
+      ?? (currentVersionCreatedAt ? dayjs(currentVersionCreatedAt).utc().toISOString() : null)
+    const period = getStatsPeriod(days, endDate, currentVersionReleasedAt)
+    const { startDate } = period
     const usageRows = await readStatsVersion(
       c,
       body.app_id,
@@ -218,50 +316,36 @@ app.post('/', middlewareAuth, async (c) => {
       })
       .filter(row => row.version_name)
 
+    const allVersionNames = getUniqueVersionNames(dailyVersion, currentVersionName)
+    const rawAllCountsByDate = buildDailyReportedCountsByName(dailyVersion, period.labels, allVersionNames)
+    const labels = trimTrailingEmptyLabels(period.labels, rawAllCountsByDate)
+    const allCountsByDate = fillMissingDailyCounts(rawAllCountsByDate, labels, allVersionNames)
+
     const currentCounts = await readDeviceVersionCounts(c, body.app_id, channelData.name)
 
-    const versions = selectRecentChannelVersions(deploymentHistory, currentVersionName, currentCounts, 10)
+    const selectedVersions = selectRecentChannelVersions(deploymentHistory, currentVersionName, currentCounts, 10)
+    const chartCounts = createChartCountsByDate(labels, allCountsByDate, selectedVersions, allVersionNames)
 
-    const filteredDailyVersion = dailyVersion.filter(row => versions.includes(row.version_name))
-    const rawCountsByDate = buildDailyReportedCountsByName(filteredDailyVersion, labels, versions)
-    const countsByDate = fillMissingDailyCounts(rawCountsByDate, labels, versions)
-
-    const activeVersions = versions.filter((version) => {
+    const activeVersions = chartCounts.versions.filter((version) => {
       if (version === currentVersionName)
         return true
-      return labels.some(label => (countsByDate[label]?.[version] ?? 0) > 0)
+      return labels.some(label => (chartCounts.countsByDate[label]?.[version] ?? 0) > 0)
     })
 
-    const percentagesByDate = convertCountsToPercentagesByName(countsByDate, labels, activeVersions)
-    const datasets = createPercentageDatasetsByName(activeVersions, labels, percentagesByDate, countsByDate)
+    const percentagesByDate = convertCountsToPercentagesByName(chartCounts.countsByDate, labels, activeVersions)
+    const datasets = createPercentageDatasetsByName(activeVersions, labels, percentagesByDate, chartCounts.countsByDate)
+    const dailyTotals = labels.map(label => getDailyTotal(allCountsByDate[label]))
 
-    const latestDailyCounts = getLatestCounts(labels, countsByDate)
-    const currentCountTotal = Object.values(currentCounts).reduce((sum, val) => sum + Math.round(val ?? 0), 0)
-    const totalsSource = currentCountTotal > 0 ? currentCounts : latestDailyCounts
-    const totalDevices = Object.values(totalsSource).reduce((sum, val) => sum + Math.round(val ?? 0), 0)
-    const devicesOnCurrent = currentVersionName ? Math.round(totalsSource[currentVersionName] ?? 0) : 0
+    const latestDailyCounts = getLatestCounts(labels, allCountsByDate)
+    const totalDevices = getDailyTotal(latestDailyCounts)
+    const devicesOnCurrent = currentVersionName ? Math.round(latestDailyCounts[currentVersionName] ?? 0) : 0
     const percentOnCurrent = totalDevices > 0 ? Math.round((devicesOnCurrent / totalDevices) * 1000) / 10 : 0
     const deploymentHistorySorted = [...deploymentHistory].sort((a, b) => dayjs(b.deployed_at).valueOf() - dayjs(a.deployed_at).valueOf())
-
-    const deploymentWindowCounts = { h24: 0, h72: 0, d7: 0 }
-    if (currentVersionName && labels.length > 0) {
-      const lastIndex = labels.length - 1
-      const getCountAt = (index: number) => {
-        const label = labels[index]
-        return Math.round(countsByDate[label]?.[currentVersionName] ?? 0)
-      }
-      deploymentWindowCounts.h24 = getCountAt(lastIndex)
-      deploymentWindowCounts.h72 = Math.max(0, lastIndex - 2) <= lastIndex
-        ? labels.slice(Math.max(0, lastIndex - 2), lastIndex + 1).reduce((sum, label) => sum + Math.round(countsByDate[label]?.[currentVersionName] ?? 0), 0)
-        : 0
-      deploymentWindowCounts.d7 = Math.max(0, lastIndex - 6) <= lastIndex
-        ? labels.slice(Math.max(0, lastIndex - 6), lastIndex + 1).reduce((sum, label) => sum + Math.round(countsByDate[label]?.[currentVersionName] ?? 0), 0)
-        : 0
-    }
 
     return c.json({
       labels,
       datasets,
+      dailyTotals,
       latestVersion: {
         name: currentVersionName,
         percentage: percentOnCurrent.toFixed(1),
@@ -271,10 +355,12 @@ app.post('/', middlewareAuth, async (c) => {
       deploymentHistory: deploymentHistorySorted.slice(0, 10),
       lastDeploymentAt: deploymentHistorySorted[0]?.deployed_at ?? null,
       totalDeployments: deploymentHistorySorted.length,
-      deploymentWindowCounts: {
-        h24: deploymentWindowCounts.h24,
-        h72: deploymentWindowCounts.h72,
-        d7: deploymentWindowCounts.d7,
+      period: {
+        requested_days: period.requestedDays,
+        actual_days: labels.length,
+        start: dayjs.utc(labels[0] ?? period.startDate).startOf('day').toISOString(),
+        end: dayjs.utc(labels[labels.length - 1] ?? period.endDate).endOf('day').toISOString(),
+        start_reason: period.startReason,
       },
       totals: {
         total_devices: totalDevices,
@@ -297,4 +383,7 @@ export const channelStatsTestUtils = {
   convertCountsToPercentagesByName,
   selectRecentChannelVersions,
   getLatestCounts,
+  getStatsPeriod,
+  normalizeStatsPeriodDays,
+  trimTrailingEmptyLabels,
 }

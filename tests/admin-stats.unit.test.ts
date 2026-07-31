@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { adminStatsBodySchema, MAX_ADMIN_STATS_LIMIT, MAX_ADMIN_STATS_OFFSET } from '../supabase/functions/_backend/private/admin_stats.ts'
-import { safeParseSchema } from '../supabase/functions/_backend/utils/ark_validation.ts'
+import { safeParseSchema } from '../supabase/functions/_backend/utils/schema_validation.ts'
 import { buildPluginBreakdownResult, normalizeAnalyticsLimit } from '../supabase/functions/_backend/utils/cloudflare.ts'
 
 describe('admin stats validation', () => {
@@ -144,5 +144,15 @@ describe('buildPluginBreakdownResult', () => {
         ],
       },
     ])
+  })
+})
+
+import { normalizeAdminStatsDate } from '../supabase/functions/_backend/utils/pg.ts'
+
+describe('normalizeAdminStatsDate', () => {
+  it.concurrent('normalizes Date objects and ISO timestamps to YYYY-MM-DD', () => {
+    expect(normalizeAdminStatsDate(new Date('2026-06-20T15:30:00.000Z'))).toBe('2026-06-20')
+    expect(normalizeAdminStatsDate('2026-06-20T00:00:00.000Z')).toBe('2026-06-20')
+    expect(normalizeAdminStatsDate('2026-06-20')).toBe('2026-06-20')
   })
 })

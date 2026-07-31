@@ -1,34 +1,40 @@
 import type { Context } from 'hono'
 import type { AuthInfo } from '../../utils/hono.ts'
-import { type } from 'arktype'
-import { safeParseSchema } from '../../utils/ark_validation.ts'
+import { z } from 'zod'
+import { numberLikeSchema, safeParseSchema } from '../../utils/schema_validation.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
-import { apikeyHasOrgRightWithPolicy, hasOrgRightApikey, supabaseWithAuth } from '../../utils/supabase.ts'
+import { checkPermission } from '../../utils/rbac.ts'
+import { apikeyHasOrgRightWithPolicy, supabaseWithAuth } from '../../utils/supabase.ts'
 
-const bodySchema = type({
-  'orgId': 'string',
-  'tableName?': 'string',
-  'operation?': 'string',
-  'page?': 'number | string.numeric.parse',
-  'limit?': 'number | string.numeric.parse',
+const bodySchema = z.object({
+  orgId: z.string(),
+  tableName: z.string().optional(),
+  operation: z.string().optional(),
+  page: numberLikeSchema.optional(),
+  limit: numberLikeSchema.optional(),
 })
 
-const auditLogSchema = type({
-  id: 'number',
-  created_at: 'string',
-  table_name: 'string',
-  record_id: 'string',
-  operation: 'string',
-  user_id: 'string | null',
-  org_id: 'string',
-  old_record: 'unknown',
-  new_record: 'unknown',
-  changed_fields: 'string[] | null',
+const auditLogSchema = z.object({
+  id: z.number(),
+  created_at: z.string(),
+  table_name: z.string(),
+  record_id: z.string(),
+  operation: z.string(),
+  user_id: z.string().nullable(),
+  org_id: z.string(),
+  old_record: z.unknown(),
+  new_record: z.unknown(),
+  changed_fields: z.array(z.string()).nullable(),
+  actor_type: z.enum(['user', 'apikey', 'system', 'unknown']),
+  actor_user_id: z.string().nullable(),
+  actor_user_email: z.string().nullable(),
+  actor_apikey_id: z.number().nullable(),
+  actor_apikey_name: z.string().nullable(),
 })
 
-const auditLogsSchema = auditLogSchema.array()
+const auditLogsSchema = z.array(auditLogSchema)
 
-export async function getAuditLogs(c: Context, bodyRaw: any): Promise<Response> {
+export async function getAuditLogs(c: Context, bodyRaw: unknown): Promise<Response> {
   const bodyParsed = safeParseSchema(bodySchema, bodyRaw)
   if (!bodyParsed.success) {
     throw simpleError('invalid_body', 'Invalid body', { error: bodyParsed.error })
@@ -55,29 +61,11 @@ export async function getAuditLogs(c: Context, bodyRaw: any): Promise<Response> 
       throw simpleError('invalid_org_id', 'You can\'t access this organization', { org_id: body.orgId })
     }
 
-    // Separate check: API key scope is not enough; user must have super_admin rights.
-    const capgkey = c.get('capgkey')
-    if (!capgkey || typeof capgkey !== 'string') {
-      throw simpleError('not_authorized', 'Not authorized')
-    }
-    const hasRight = await hasOrgRightApikey(c, body.orgId, auth.userId, 'super_admin', capgkey)
-    if (!hasRight) {
-      throw simpleError('invalid_org_id', 'You can\'t access this organization', { org_id: body.orgId })
-    }
   }
-  else {
-    const { data: hasRight, error: rightsError } = await supabase.rpc('check_min_rights', {
-      min_right: 'super_admin',
-      org_id: body.orgId,
-      user_id: auth.userId,
-      channel_id: null as any,
-      app_id: null as any,
-    })
 
-    // Validate org access (super_admin required by RLS)
-    if (rightsError || !hasRight) {
-      throw simpleError('invalid_org_id', 'You can\'t access this organization', { org_id: body.orgId })
-    }
+  // Audit logs are readable through the dedicated RBAC audit permission.
+  if (!(await checkPermission(c, 'org.read_audit', { orgId: body.orgId }))) {
+    throw simpleError('invalid_org_id', 'You can\'t access this organization', { org_id: body.orgId })
   }
 
   const limit = Math.min(body.limit ?? 50, 100)

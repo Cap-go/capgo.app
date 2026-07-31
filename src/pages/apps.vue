@@ -18,6 +18,7 @@ const supabase = useSupabase()
 const { t } = useI18n()
 const displayStore = useDisplayStore()
 type AppRow = Database['public']['Tables']['apps']['Row']
+type AppIconSource = AppRow | Database['public']['Functions']['get_org_apps_with_last_upload']['Returns'][number]
 type AppRowWithIconState = AppRow & { icon_url_loading?: boolean, last_upload_at?: string | null }
 const apps = ref<AppRowWithIconState[]>([])
 const currentPage = ref(1)
@@ -35,10 +36,21 @@ const lacksSecurityAccess = computed(() => {
   return lacks2FA || lacksPassword
 })
 
-function appWithImmediateIcon(app: AppRow) {
-  const { normalized, shouldSign } = resolveImagePath(app.icon_url)
+function normalizeAppRow(app: AppIconSource): AppRow {
   return {
     ...app,
+    created_from_onboarding: 'created_from_onboarding' in app ? app.created_from_onboarding : false,
+    onboarding_completed_at: 'onboarding_completed_at' in app ? app.onboarding_completed_at : null,
+    rollout_channel_count: 'rollout_channel_count' in app ? app.rollout_channel_count : 0,
+    rollout_paused_version_names: 'rollout_paused_version_names' in app ? app.rollout_paused_version_names : [],
+  }
+}
+
+function appWithImmediateIcon(app: AppIconSource) {
+  const appRow = normalizeAppRow(app)
+  const { normalized, shouldSign } = resolveImagePath(appRow.icon_url)
+  return {
+    ...appRow,
     icon_url: shouldSign ? '' : normalized,
     icon_url_loading: shouldSign,
   }
@@ -56,25 +68,26 @@ function updateAppIconState(appId: string, patch: Partial<AppRowWithIconState>, 
   }
 }
 
-async function loadAppIcon(app: AppRow, runId: number) {
-  const { shouldSign } = resolveImagePath(app.icon_url)
+async function loadAppIcon(app: AppIconSource, runId: number) {
+  const appRow = normalizeAppRow(app)
+  const { shouldSign } = resolveImagePath(appRow.icon_url)
   if (!shouldSign)
     return
 
   try {
-    const signedIcon = await createSignedImageUrl(app.icon_url)
-    updateAppIconState(app.app_id, {
+    const signedIcon = await createSignedImageUrl(appRow.icon_url)
+    updateAppIconState(appRow.app_id, {
       icon_url: signedIcon || '',
       icon_url_loading: false,
     }, runId)
   }
   catch (error) {
-    console.warn('Cannot load signed app icon', { appId: app.app_id, error })
-    updateAppIconState(app.app_id, { icon_url_loading: false }, runId)
+    console.warn('Cannot load signed app icon', { appId: appRow.app_id, error })
+    updateAppIconState(appRow.app_id, { icon_url_loading: false }, runId)
   }
 }
 
-function loadAppIcons(sourceApps: AppRow[], runId: number) {
+function loadAppIcons(sourceApps: AppIconSource[], runId: number) {
   for (const app of sourceApps) {
     loadAppIcon(app, runId).catch((error) => {
       console.warn('Cannot load signed app icon', { appId: app.app_id, error })
@@ -201,6 +214,7 @@ displayStore.defaultBack = '/apps'
               :search="searchQuery"
               :apps="apps"
               :total="totalApps"
+              :offset="pageSize"
               :delete-button="!organizationStore.currentOrganizationFailed"
               :server-side-pagination="true"
               :is-loading="isTableLoading"

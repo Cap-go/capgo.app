@@ -30,7 +30,7 @@ vi.mock('../supabase/functions/_backend/utils/hono.ts', () => ({
 }))
 
 vi.mock('../supabase/functions/_backend/utils/hono_middleware.ts', () => ({
-  middlewareV2: () => async (_c: unknown, next: () => Promise<void>) => next(),
+  middlewareAuth: () => async (_c: unknown, next: () => Promise<void>) => next(),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({
@@ -118,23 +118,31 @@ function createPublicApiSupabase(pluginVersion: string | null = '7.33.0') {
   }
 }
 
-function createPrivateSupabase(pluginVersion: string | null = '7.33.0') {
+function createPrivateSupabase(
+  pluginVersion: string | null = '7.33.0',
+  channelDeviceOverride: { app_id: string, channel_id: number, owner_org: string } | null = { app_id: 'com.test.app', channel_id: 42, owner_org: 'org-test' },
+) {
   const upsertMock = vi.fn(async () => ({ error: null }))
   const deleteResult = { error: null }
-  const deleteChain = {
+  const channelDevicesTable = {
+    upsert: upsertMock,
+    select() {
+      return this
+    },
     delete() {
       return this
     },
     eq() {
       return this
     },
+    maybeSingle: vi.fn(async () => ({ data: channelDeviceOverride, error: null })),
     then(resolve: (value: { error: null }) => unknown) {
       return Promise.resolve(resolve(deleteResult))
     },
   }
 
   return {
-    deleteChain,
+    channelDevicesTable,
     upsertMock,
     client: {
       from(table: string) {
@@ -142,12 +150,8 @@ function createPrivateSupabase(pluginVersion: string | null = '7.33.0') {
           return createChannelSelect()
         if (table === 'devices')
           return createDeviceSelect(pluginVersion)
-        if (table === 'channel_devices') {
-          return {
-            upsert: upsertMock,
-            ...deleteChain,
-          }
-        }
+        if (table === 'channel_devices')
+          return channelDevicesTable
         throw new Error(`Unexpected table: ${table}`)
       },
     },
@@ -240,6 +244,11 @@ describe('channel device override KV sync', () => {
       device_id: '11111111-1111-4111-8111-111111111111',
     })
 
+    expect(checkPermissionMock).toHaveBeenCalledWith(expect.anything(), 'channel.manage_forced_devices', {
+      appId: 'com.test.app',
+      channelId: 42,
+    })
+
     expect(privateSupabase.upsertMock).toHaveBeenCalledWith({
       app_id: 'com.test.app',
       channel_id: 42,
@@ -252,6 +261,23 @@ describe('channel device override KV sync', () => {
       device_id: '11111111-1111-4111-8111-111111111111',
       owner_org: 'org-test',
     })
+  })
+
+  it('rejects dashboard channel override writes without channel forced-device permission', async () => {
+    const privateSupabase = createPrivateSupabase()
+    supabaseWithAuthMock.mockReturnValue(privateSupabase.client)
+    checkPermissionMock.mockResolvedValue(false)
+    const { setChannelDeviceOverride } = await import('../supabase/functions/_backend/private/channel_device.ts')
+    const c = createContext()
+
+    await expect(setChannelDeviceOverride(c as any, {
+      app_id: 'com.test.app',
+      channel_id: 42,
+      device_id: '11111111-1111-4111-8111-111111111111',
+    })).rejects.toThrow('Permission denied: channel.manage_forced_devices')
+
+    expect(privateSupabase.upsertMock).not.toHaveBeenCalled()
+    expect(syncLegacyChannelSelfOverrideForDeviceMock).not.toHaveBeenCalled()
   })
 
   it('fails dashboard channel override writes when KV sync fails', async () => {
@@ -277,6 +303,11 @@ describe('channel device override KV sync', () => {
     await deleteChannelDeviceOverride(c as any, {
       app_id: 'com.test.app',
       device_id: '11111111-1111-4111-8111-111111111111',
+    })
+
+    expect(checkPermissionMock).toHaveBeenCalledWith(expect.anything(), 'channel.manage_forced_devices', {
+      appId: 'com.test.app',
+      channelId: 42,
     })
 
     expect(syncLegacyChannelSelfOverrideDeleteForDeviceMock).toHaveBeenCalledWith(

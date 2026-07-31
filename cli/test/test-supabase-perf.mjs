@@ -85,20 +85,13 @@ try {
   }
   const findPerfEvent = reqs => reqs.find(r => r.url.endsWith('/private/events') && JSON.parse(r.init.body).event === 'Supabase Call')
 
-  // success path → ok:true, operation, channel cli-perf, command_path
+  // fast success path → no Supabase Call event (volume guard)
   trackCommandInvoked('bundle upload', { flags: [], positional_arg_count: 0 })
   let reqs = stubPerf()
   const tf3 = createTimedFetch()
   await withSupabaseSource('apps.list', () => tf3('https://db.co/rest/v1/apps?select=*', { method: 'GET' }))
   await flushAnalytics()
-  let ev = JSON.parse(findPerfEvent(reqs).init.body)
-  assert.equal(ev.event, 'Supabase Call')
-  assert.equal(ev.channel, 'cli-perf')
-  assert.equal(ev.tags.operation, 'GET apps')
-  assert.equal(ev.tags.ok, true)
-  assert.equal(ev.tags.source, 'apps.list')
-  assert.equal(ev.tags.command_path, 'bundle upload')
-  assert.equal(ev.tags.error_category, undefined, 'no error_category on success')
+  assert.equal(findPerfEvent(reqs), undefined, 'fast success => no perf event')
 
   // HTTP failure path → ok:false, error_category from status (504 => timeout)
   reqs = []
@@ -108,12 +101,38 @@ try {
       return new Response('', { status: 504 })
     return new Response('{}', { status: 200 })
   }
-  await tf3('https://db.co/rest/v1/rpc/get_user_id', { method: 'POST' })
+  await withSupabaseSource('apps.list', () => tf3('https://db.co/rest/v1/rpc/get_user_id', { method: 'POST' }))
   await flushAnalytics()
-  ev = JSON.parse(findPerfEvent(reqs).init.body)
+  let ev = JSON.parse(findPerfEvent(reqs).init.body)
+  assert.equal(ev.event, 'Supabase Call')
+  assert.equal(ev.channel, 'cli-perf')
   assert.equal(ev.tags.ok, false)
   assert.equal(ev.tags.operation, 'rpc:get_user_id')
+  assert.equal(ev.tags.source, 'apps.list')
+  assert.equal(ev.tags.command_path, 'bundle upload')
   assert.equal(ev.tags.error_category, 'timeout')
+
+  // slow success path → still emitted with slow:true
+  reqs = []
+  const realNow = Date.now
+  let now = realNow()
+  Date.now = () => now
+  try {
+    globalThis.fetch = async (url, init) => {
+      reqs.push({ url: String(url), init })
+      now += SLOW_THRESHOLD_MS + 1
+      return new Response('{}', { status: 200 })
+    }
+    await withSupabaseSource('apps.list', () => tf3('https://db.co/rest/v1/apps?select=*', { method: 'GET' }))
+    await flushAnalytics()
+    ev = JSON.parse(findPerfEvent(reqs).init.body)
+    assert.equal(ev.tags.ok, true)
+    assert.equal(ev.tags.slow, true)
+    assert.equal(ev.tags.operation, 'GET apps')
+  }
+  finally {
+    Date.now = realNow
+  }
 
   process.env.CAPGO_TOKEN = originalToken
   if (originalDisable !== undefined) process.env.CAPGO_DISABLE_TELEMETRY = originalDisable
@@ -148,15 +167,31 @@ try {
   await flushAnalytics()
   assert.equal(findPerf(creqs), undefined, 'disabled => no perf event')
 
-  // enabled: timed fetch attached → Supabase Call event with operation
+  // enabled + fast success: timed fetch attached, but no event (volume guard)
   enableSupabaseInstrumentation()
   creqs = stubClient()
   sb = await createSupabaseClient('perf-key', 'https://db.co', 'anon')
   await sb.from('demo').select('*')
   await flushAnalytics()
+  assert.equal(findPerf(creqs), undefined, 'enabled fast success => no perf event')
+
+  // enabled + HTTP failure: Supabase Call event with operation
+  creqs = []
+  globalThis.fetch = async (url, init) => {
+    creqs.push({ url: String(url), init })
+    if (String(url).endsWith('/private/config'))
+      return new Response(JSON.stringify({ supaHost: 'https://db.co', supaKey: 'anon' }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    if (String(url).includes('/rest/v1/'))
+      return new Response('', { status: 500, headers: { 'Content-Type': 'application/json' } })
+    return new Response('{}', { status: 200 })
+  }
+  sb = await createSupabaseClient('perf-key', 'https://db.co', 'anon')
+  await sb.from('demo').select('*')
+  await flushAnalytics()
   const cev = findPerf(creqs)
-  assert.ok(cev, 'enabled => perf event')
+  assert.ok(cev, 'enabled failure => perf event')
   assert.equal(JSON.parse(cev.init.body).tags.operation, 'GET demo')
+  assert.equal(JSON.parse(cev.init.body).tags.ok, false)
 
   // recursion guard: org-resolver must build an UNinstrumented client
   let capturedInstrument
@@ -176,9 +211,17 @@ try {
   assert.equal(orgId, 'org-x')
   assert.equal(capturedInstrument, false, 'org-resolver must create an uninstrumented client')
 
-  // --- Task 6: source label flows into the event ---
+  // --- Task 6: source label flows into failed events ---
   process.env.CAPGO_TOKEN = 'perf-key'
-  let lreqs = stubClient()
+  let lreqs = []
+  globalThis.fetch = async (url, init) => {
+    lreqs.push({ url: String(url), init })
+    if (String(url).endsWith('/private/config'))
+      return new Response(JSON.stringify({ supaHost: 'https://db.co', supaKey: 'anon' }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    if (String(url).includes('/rest/v1/'))
+      return new Response('', { status: 503, headers: { 'Content-Type': 'application/json' } })
+    return new Response('{}', { status: 200 })
+  }
   enableSupabaseInstrumentation()
   const lsb = await createSupabaseClient('perf-key', 'https://db.co', 'anon')
   await withSupabaseSource('apps.list', () => lsb
@@ -187,10 +230,11 @@ try {
     .order('created_at', { ascending: false }))
   await flushAnalytics()
   const lev = findPerf(lreqs)
-  assert.ok(lev, 'labeled query emits a perf event')
+  assert.ok(lev, 'labeled failed query emits a perf event')
   const ltags = JSON.parse(lev.init.body).tags
   assert.equal(ltags.source, 'apps.list')
   assert.equal(ltags.operation, 'GET apps')
+  assert.equal(ltags.ok, false)
 
   // --- Codex P2: perf telemetry uses the key from the request's capgkey header ---
   // (so events fire for --apikey usage, not just env / saved-file keys)
@@ -198,7 +242,7 @@ try {
   const hreqs = []
   globalThis.fetch = async (url, init) => {
     hreqs.push({ url: String(url), init })
-    return new Response('{}', { status: 200 })
+    return new Response('', { status: 500 })
   }
   const tfHeader = createTimedFetch()
   await tfHeader('https://db.co/rest/v1/apps?select=*', { method: 'GET', headers: { capgkey: 'header-key' } })
@@ -213,7 +257,7 @@ try {
   const mreqs = []
   globalThis.fetch = async (url, init) => {
     mreqs.push({ url: String(url), init })
-    return new Response('{}', { status: 200 })
+    return new Response('', { status: 500 })
   }
   const tickMs = () => new Promise(r => setTimeout(r, 5))
   const tfMcp = createTimedFetch()

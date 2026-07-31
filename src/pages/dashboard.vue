@@ -1,12 +1,21 @@
 <script setup lang="ts">
+import type { Tab } from '~/components/comp_def'
 import type { Database } from '~/types/supabase.types'
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
+import IconBell from '~icons/heroicons/bell'
+import IconChart from '~icons/heroicons/chart-bar'
+import IconTimer from '~icons/lucide/timer'
+import DeliveryLatencyPanel from '~/components/dashboard/DeliveryLatencyPanel.vue'
+import OrgNotificationStatsPanel from '~/components/dashboard/OrgNotificationStatsPanel.vue'
+import Tabs from '~/components/Tabs.vue'
 import { useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
 import { useOrganizationStore } from '~/stores/organization'
+
+type DashboardTab = 'usage' | 'delivery' | 'notifications'
 
 const route = useRoute('/dashboard')
 const organizationStore = useOrganizationStore()
@@ -15,12 +24,17 @@ const supabase = useSupabase()
 const { t } = useI18n()
 const displayStore = useDisplayStore()
 const apps = ref<Database['public']['Tables']['apps']['Row'][]>([])
-// Scroll container ref - used to reset scroll when a blocking overlay activates
 const scrollContainer = ref<HTMLElement | null>(null)
+const activeTab = ref<DashboardTab>('usage')
 
 const { currentOrganization } = storeToRefs(organizationStore)
 
-// Check if user lacks security compliance (2FA or password) - don't load data in this case
+const dashboardTabs = computed<Tab[]>(() => [
+  { label: 'dashboard-tab-usage', icon: IconChart, key: 'usage' },
+  { label: 'update-delivery-latency', icon: IconTimer, key: 'delivery', badge: 'beta' },
+  { label: 'notifications', icon: IconBell, key: 'notifications', badge: 'beta' },
+])
+
 const lacksSecurityAccess = computed(() => {
   const org = organizationStore.currentOrganization
   const lacks2FA = org?.enforcing_2fa === true && org?.['2fa_has_access'] === false
@@ -28,7 +42,6 @@ const lacksSecurityAccess = computed(() => {
   return lacks2FA || lacksPassword
 })
 
-// Only show empty state overlay if user has no apps AND is not in a failed/restricted state
 const hasNoApps = computed(() => {
   return apps.value.length === 0
     && !isLoading.value
@@ -36,20 +49,12 @@ const hasNoApps = computed(() => {
     && !lacksSecurityAccess.value
 })
 
-// Payment failed state (subscription required)
 const paymentFailed = computed(() => {
   return organizationStore.currentOrganizationFailed && !lacksSecurityAccess.value
 })
 
-// Should blur the content (either no apps OR payment failed)
 const shouldBlurContent = computed(() => hasNoApps.value || paymentFailed.value)
 
-// Locking the scroll container with `overflow-hidden` preserves its current
-// scrollTop. If the user had already scrolled (e.g. before the overlay resolved,
-// or after switching to a failed org), the absolutely-positioned overlay would
-// stay anchored to the top of the scroll content and end up above the viewport,
-// out of reach. Reset the scroll position when the overlay activates so it stays
-// centered in view.
 watch(shouldBlurContent, (blur) => {
   if (blur && scrollContainer.value)
     scrollContainer.value.scrollTop = 0
@@ -58,7 +63,6 @@ watch(shouldBlurContent, (blur) => {
 async function getMyApps() {
   await organizationStore.awaitInitialLoad()
 
-  // Don't fetch apps if user lacks security access - data would be rejected anyway
   if (lacksSecurityAccess.value) {
     apps.value = []
     return
@@ -94,28 +98,57 @@ onMounted(async () => {
 })
 displayStore.NavTitle = t('dashboard')
 displayStore.defaultBack = '/apps'
+
+function handleTab(key: string) {
+  if (key === 'usage' || key === 'delivery' || key === 'notifications')
+    activeTab.value = key
+}
 </script>
 
 <template>
-  <div>
-    <div class="overflow-hidden pb-4 h-full">
+  <div class="flex flex-col flex-1 h-full min-h-0 overflow-hidden">
+    <Tabs
+      v-if="!lacksSecurityAccess"
+      :tabs="dashboardTabs"
+      :active-tab="activeTab"
+      no-wrap
+      @update:active-tab="handleTab"
+    />
+
+    <main class="relative flex flex-1 w-full min-h-0 mt-0 overflow-hidden bg-blue-50 dark:bg-slate-800/40">
       <div
         ref="scrollContainer"
-        class="relative px-4 pt-2 mx-auto mb-8 w-full h-full sm:px-6 md:pt-8 lg:px-8 max-w-9xl max-h-fit"
+        class="relative flex-1 w-full min-h-0 px-4 pt-2 mx-auto mb-8 sm:px-6 md:pt-8 lg:px-8 max-w-9xl"
         :class="shouldBlurContent ? 'overflow-hidden' : 'overflow-y-auto'"
       >
-        <!-- Only show FailedCard for security access issues (2FA/password) -->
         <FailedCard v-if="lacksSecurityAccess" />
 
-        <!-- Trial subscription banner -->
-        <TrialBanner />
+        <TrialBanner v-if="!lacksSecurityAccess" />
 
-        <!-- Dashboard content - blurred when no apps or payment failed -->
         <div :class="{ 'blur-sm pointer-events-none select-none': shouldBlurContent }">
-          <Usage v-if="!lacksSecurityAccess" :force-demo="paymentFailed" />
+          <Usage
+            v-if="!lacksSecurityAccess && activeTab === 'usage'"
+            :force-demo="paymentFailed"
+          />
+
+          <div v-else-if="!lacksSecurityAccess && activeTab === 'delivery'" class="mb-6">
+            <DeliveryLatencyPanel
+              :key="['org', currentOrganization?.gid || ''].join(':')"
+              scope="org"
+              :org-id="currentOrganization?.gid || ''"
+              :force-demo="paymentFailed"
+            />
+          </div>
+
+          <div v-else-if="!lacksSecurityAccess && activeTab === 'notifications'" class="mb-6">
+            <OrgNotificationStatsPanel
+              :key="['org-notif', currentOrganization?.gid || ''].join(':')"
+              :org-id="currentOrganization?.gid || ''"
+              :force-demo="paymentFailed"
+            />
+          </div>
         </div>
 
-        <!-- Overlay for empty state (no apps) -->
         <div
           v-if="hasNoApps"
           class="flex absolute inset-0 z-10 flex-col justify-center items-center bg-white/60 dark:bg-gray-900/60"
@@ -137,9 +170,8 @@ displayStore.defaultBack = '/apps'
           </div>
         </div>
 
-        <!-- Overlay for payment failure -->
         <PaymentRequiredModal v-if="paymentFailed" />
       </div>
-    </div>
+    </main>
   </div>
 </template>

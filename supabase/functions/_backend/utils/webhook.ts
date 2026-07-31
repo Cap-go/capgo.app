@@ -16,9 +16,14 @@ export interface WebhookPayload {
     table: string
     operation: string
     record_id: string
-    old_record: any | null
-    new_record: any | null
+    old_record: Record<string, unknown> | null
+    new_record: Record<string, unknown> | null
     changed_fields: string[] | null
+    actor_type?: 'user' | 'apikey' | 'system' | 'unknown'
+    actor_user_id?: string | null
+    actor_user_email?: string | null
+    actor_apikey_id?: number | null
+    actor_apikey_name?: string | null
   }
 }
 
@@ -66,10 +71,15 @@ export interface AuditLogData {
   operation: string
   org_id: string
   record_id: string
-  old_record: any | null
-  new_record: any | null
+  old_record: Record<string, unknown> | null
+  new_record: Record<string, unknown> | null
   changed_fields: string[] | null
   user_id: string | null
+  actor_type?: 'user' | 'apikey' | 'system' | 'unknown'
+  actor_user_id?: string | null
+  actor_user_email?: string | null
+  actor_apikey_id?: number | null
+  actor_apikey_name?: string | null
   created_at: string
 }
 
@@ -84,20 +94,23 @@ export const WEBHOOK_EVENT_TYPES = [
 
 export type WebhookEventType = typeof WEBHOOK_EVENT_TYPES[number]
 
+export function isWebhookEventType(value: string): value is WebhookEventType {
+  return (WEBHOOK_EVENT_TYPES as readonly string[]).includes(value)
+}
+
 const WEBHOOK_DELIVERY_TIMEOUT_MS = 20000
 const WEBHOOK_RESPONSE_BODY_LIMIT_BYTES = 10000
-const WEBHOOK_MAX_RETRY_AFTER_SECONDS = 24 * 60 * 60
+const WEBHOOK_MAX_RETRY_AFTER_SECONDS = 2 * 60 * 60
+// HARD RULE: same ceiling as MAX_QUEUE_READS — never more than 5 delivery attempts.
+export const WEBHOOK_MAX_ATTEMPTS = 5
 const WEBHOOK_RETRY_THROTTLE_STATUSES = new Set([429, 502, 504])
+// Delays for retries after attempts 1..4 (5th attempt is terminal). Every value
+// must stay <= WEBHOOK_MAX_RETRY_AFTER_SECONDS.
 const WEBHOOK_RETRY_DELAYS_SECONDS = [
   5,
   5 * 60,
   30 * 60,
   2 * 60 * 60,
-  5 * 60 * 60,
-  10 * 60 * 60,
-  14 * 60 * 60,
-  20 * 60 * 60,
-  24 * 60 * 60,
 ]
 
 interface WebhookLogUrlMetadata {
@@ -172,6 +185,11 @@ export function buildWebhookPayload(auditLogData: AuditLogData): WebhookPayload 
       old_record: auditLogData.old_record,
       new_record: auditLogData.new_record,
       changed_fields: auditLogData.changed_fields,
+      actor_type: auditLogData.actor_type ?? (auditLogData.user_id ? 'user' : 'unknown'),
+      actor_user_id: auditLogData.actor_user_id ?? auditLogData.user_id,
+      actor_user_email: auditLogData.actor_user_email ?? null,
+      actor_apikey_id: auditLogData.actor_apikey_id ?? null,
+      actor_apikey_name: auditLogData.actor_apikey_name ?? null,
     },
   }
 }
@@ -821,7 +839,7 @@ export async function queueWebhookDeliveryWithDelay(
   try {
     // pgmq.send with delay parameter
     await db.query(
-      'SELECT pgmq.send($1, $2::jsonb, $3)',
+      'SELECT pgmq.send($1::text, $2::jsonb, $3::integer)',
       ['webhook_delivery', JSON.stringify(message), delaySeconds],
     )
     cloudlog({

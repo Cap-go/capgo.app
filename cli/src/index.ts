@@ -15,6 +15,7 @@ import { setApp } from './app/set'
 import { setSetting } from './app/setting'
 import { clearCredentialsCommand, listCredentialsCommand, migrateCredentialsCommand, saveCredentialsCommand, updateCredentialsCommand } from './build/credentials-command'
 import { manageCredentialsCommand } from './build/credentials-manage'
+import { syncIosMarketingVersionCommand } from './build/ios-marketing-version'
 import { lastOutputCommand } from './build/last-output-command'
 import { checkBuildNeeded } from './build/needed'
 import type { OnboardingBuilderOptions } from './build/onboarding/command'
@@ -37,6 +38,7 @@ import { currentBundle } from './channel/currentBundle'
 import { deleteChannel } from './channel/delete'
 import { listChannels } from './channel/list'
 import { setChannel } from './channel/set'
+import { getConfigWriteTarget, resolveCapacitorConfigTargetPath, setConfigWriteTarget } from './config'
 import { generateDocs } from './docs'
 import { defaultStarRepo } from './github'
 import { starAllRepositoriesCommand, starRepositoryCommand } from './github-command'
@@ -45,6 +47,7 @@ import { finishActiveCliReplay } from './init/replay'
 import { createKey, deleteOldKey, saveKeyCommand } from './key'
 import { login } from './login'
 import { startMcpServer } from './mcp/server'
+import { setupNotifications } from './notifications/setup'
 import { addOrganization, deleteOrganization, listMembers, listOrganizations, setOrganization } from './organization'
 import { capturePosthogException, getCommandPath, shouldCapturePosthogException } from './posthog'
 import { getPreviewQr } from './preview/qr'
@@ -60,6 +63,7 @@ const optionDescriptions = {
   supaAnon: `Custom Supabase anon key (for self-hosting)`,
   packageJson: `Paths to package.json files for monorepos (comma-separated)`,
   nodeModules: `Paths to node_modules directories for monorepos (comma-separated)`,
+  capacitorConfig: `Capacitor config source to update (useful with dynamic monorepo configs)`,
   verbose: `Enable verbose output with detailed logging`,
 }
 
@@ -72,6 +76,7 @@ program
   .name(pack.name)
   .description(`📦 Manage packages and bundle versions in Capgo Cloud`)
   .version(pack.version, '-v, --version', `output the current version`)
+  .option('--capacitor-config <path>', optionDescriptions.capacitorConfig)
 
 // Turn on client-side Supabase perf tracking for the CLI. (Off by default so
 // the SDK bundle, which transitively imports createSupabaseClient, stays clean.)
@@ -80,13 +85,20 @@ enableSupabaseInstrumentation()
 let currentCommandPath = 'unknown'
 
 program.hook('preAction', (_thisCommand, actionCommand) => {
+  setConfigWriteTarget(resolveCapacitorConfigTargetPath(actionCommand.optsWithGlobals().capacitorConfig))
   currentCommandPath = getCommandPath(actionCommand)
   applyCommandAnalyticsOptOut(currentCommandPath, actionCommand.opts())
   trackCommandInvoked(currentCommandPath, extractCommandContext(actionCommand))
 })
 
 program.hook('postAction', (_thisCommand, actionCommand) => {
-  trackCommandSucceeded(getCommandPath(actionCommand))
+  try {
+    trackCommandSucceeded(getCommandPath(actionCommand))
+  }
+  finally {
+    if (getCommandPath(actionCommand) !== 'mcp')
+      setConfigWriteTarget()
+  }
 })
 
 program
@@ -104,6 +116,9 @@ Example: npx @capgo/cli@latest init YOUR_API_KEY com.example.app`)
   .option('-i, --icon <icon>', `App icon path for display in Capgo Cloud`)
   .option('--supa-host <supaHost>', optionDescriptions.supaHost)
   .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+  .option('--package-json <path>', 'Package JSON for the Capacitor app to onboard (useful in monorepos)')
+  .option('--main-file <path>', 'Application entry file to update (useful in monorepos)')
+  .option('--capacitor-config <path>', optionDescriptions.capacitorConfig)
   .option('--no-analytics', 'Disable init analytics and terminal replay for this run')
 
 const run = program
@@ -182,6 +197,10 @@ Examples:
   .option('--bundle <bundle>', `Bundle name or id to preview`)
   .option('--channel <channel>', `Channel name or id to preview`)
   .addOption(new Option('--type <type>', `Type for positional target`).choices(['bundle', 'channel']))
+  .option('--png <path>', `Write the preview QR code as a PNG image to the given file path`)
+  .option('--url', `Print preview URLs only (web and deep link), without a terminal QR code`)
+  .option('--web-url', `Encode the web preview URL in the QR code and PNG instead of the capgo:// deep link`)
+  .addOption(new Option('--preview-env <env>', `Preview web URL environment`).choices(['prod', 'preprod', 'dev']).default('prod'))
   .option('--supa-host <supaHost>', optionDescriptions.supaHost)
   .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
 
@@ -204,6 +223,9 @@ Example: npx @capgo/cli@latest bundle upload com.example.app --path ./dist --cha
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
   .option('-p, --path <path>', `Path of the folder to upload, if not provided it will use the webDir set in capacitor.config`)
   .option('-c, --channel <channel>', `Channel to link to. Use commas for multiple channels, for example production,beta`)
+  .option('--rollout <rollout>', `Set the uploaded bundle as this channel's rollout target at a percentage from 0 to 100`, value => Number.parseFloat(value))
+  .option('--rollout-percentage-bps <rolloutPercentageBps>', `Set the uploaded bundle rollout percentage in basis points from 0 to 10000`, value => Number.parseInt(value, 10))
+  .option('--rollout-cache-ttl-seconds <rolloutCacheTtlSeconds>', `Cloudflare rollout decision cache TTL in seconds`, value => Number.parseInt(value, 10))
   .option('-e, --external <url>', `Link to external URL instead of upload to Capgo Cloud`)
   .option('--iv-session-key <key>', `Set the IV and session key for bundle URL external`)
   .option('--s3-region <region>', `Region for your S3 bucket`)
@@ -238,11 +260,12 @@ Example: npx @capgo/cli@latest bundle upload com.example.app --path ./dist --cha
   .option('--tus-chunk-size <tusChunkSize>', `Chunk size in bytes for TUS resumable uploads (default: auto)`)
   .option('--partial', `[DEPRECATED] Use --delta instead. Upload incremental updates`)
   .option('--partial-only', `[DEPRECATED] Use --delta-only instead. Upload only incremental updates, skip full bundle`)
-  .option('--delta', `Upload delta updates (only changed files) for instant, super-fast updates instead of big zip downloads`)
+  .option('--delta', `Upload delta updates (only changed files) for instant, super-fast updates instead of big zip downloads. Capgo refuses delta uploads over 10,000 files (delta tracks each file); use --no-delta for a full zip, or reduce files in your web build.`)
   .option('--delta-only', `Upload only delta updates without full bundle for maximum speed (useful for large apps)`)
   .option('--no-delta', `Disable delta updates even if instant updates are enabled`)
   .option('--encrypted-checksum <encryptedChecksum>', `An encrypted checksum (signature). Used only when uploading an external bundle.`)
-  .option('--auto-set-bundle', `Set the bundle in capacitor.config.json`)
+  .option('--auto-set-bundle', `Set the bundle version in Capacitor config`)
+  .option('--capacitor-config <path>', optionDescriptions.capacitorConfig)
   .option('--dry-upload', `Dry upload the bundle process: add the row in database without uploading files or updating channels (Used by Capgo for internal testing)`)
   .option('--package-json <packageJson>', optionDescriptions.packageJson)
   .option('--node-modules <nodeModules>', optionDescriptions.nodeModules)
@@ -253,6 +276,7 @@ Example: npx @capgo/cli@latest bundle upload com.example.app --path ./dist --cha
   .option('--version-exists-ok', `Exit successfully if bundle version already exists, useful for CI/CD workflows with monorepos`)
   .option('--self-assign', `Allow devices to auto-join this channel (updates channel setting)`)
   .option('--qr-preview', `Print a terminal QR code for this bundle preview after upload`)
+  .option('--send-update-notification', `Send a native update-check notification to devices after updating linked channel bundles`)
   .option('--supa-host <supaHost>', optionDescriptions.supaHost)
   .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
   .option('--verbose', optionDescriptions.verbose)
@@ -437,6 +461,7 @@ Specify setting path (e.g., plugins.CapacitorUpdater.defaultChannel) with --stri
 Example: npx @capgo/cli@latest app setting plugins.CapacitorUpdater.defaultChannel --string "Production"`)
   .option('--bool <bool>', `A value for the setting to modify as a boolean, ex: --bool true`)
   .option('--string <string>', `A value for the setting to modify as a string, ex: --string "Production"`)
+  .option('--capacitor-config <path>', optionDescriptions.capacitorConfig)
   .action(setSetting)
 
 app
@@ -451,12 +476,22 @@ Example: npx @capgo/cli@latest app set com.example.app --name "Updated App" --re
     await setApp(appId, options)
   })
   .option('-n, --name <name>', `App name for display in Capgo Cloud`)
-  .option('-i, --icon <icon>', `App icon path for display in Capgo Cloud`)
+  .option('-i, --icon <icon>', `Local image file path (png, jpg, webp, svg) used as the app icon in Capgo Cloud`)
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
   .option('-r, --retention <retention>', `Days to keep old bundles (0 = infinite, default: 0)`)
   .option('--expose-metadata <exposeMetadata>', `Expose bundle metadata (link and comment) to the plugin (true/false, default: false)`)
   .option('--preview', `Enable bundle and channel preview QR codes for this app`)
   .option('--no-preview', `Disable bundle and channel preview QR codes for this app`)
+  .option('--allow-device-custom-id', `Allow devices to set a custom device ID for this app`)
+  .option('--no-allow-device-custom-id', `Disallow custom device IDs for this app`)
+  .option('--block-provider-infra-requests', `Block provider infrastructure requests for this app`)
+  .option('--no-block-provider-infra-requests', `Allow provider infrastructure requests for this app`)
+  .option('--build-timeout-minutes <minutes>', `Native build timeout in minutes (5-360, default: 15)`)
+  .option('--ios-store-url <url>', `iOS App Store URL for this app`)
+  .option('--android-store-url <url>', `Google Play Store URL for this app`)
+  .option('--default-upload-channel <channel>', `Default upload channel name for this app`)
+  .option('--default-download-channel <channel>', `Default download channel name for this app (sets channel public=true)`)
+  .option('--disable-download-channels', `Disable Capgo download channels for this app (sets all channels public=false)`)
   .option('--supa-host <supaHost>', optionDescriptions.supaHost)
   .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
 
@@ -544,6 +579,25 @@ Example: npx @capgo/cli@latest channel set production com.example.app --bundle 1
   .option('--self-assign', `Allow device to self-assign to this channel`)
   .option('--no-self-assign', `Disable devices to self-assign to this channel`)
   .option('--disable-auto-update <disableAutoUpdate>', `Block updates by type: major, minor, metadata, patch, or none (allows all)`)
+  .option('--rollout-bundle <rolloutBundle>', `Bundle version to release gradually on this channel`)
+  .option('--rollout-percentage <rolloutPercentage>', `Rollout percentage from 0 to 100`, value => Number.parseFloat(value))
+  .option('--rollout-percentage-bps <rolloutPercentageBps>', `Rollout percentage in basis points from 0 to 10000`, value => Number.parseInt(value, 10))
+  .option('--rollout-enable', `Enable the configured rollout`)
+  .option('--rollout-disable', `Disable the configured rollout`)
+  .option('--rollout-pause', `Pause rollout exposure without rolling back selected devices`)
+  .option('--rollout-resume', `Resume a paused rollout`)
+  .option('--rollout-rollback', `Clear rollout state and return devices to stable`)
+  .option('--rollout-promote', `Promote rollout target to stable and clear rollout state`)
+  .option('--rollout-cache-ttl-seconds <rolloutCacheTtlSeconds>', `Cloudflare rollout decision cache TTL in seconds`, value => Number.parseInt(value, 10))
+  .option('--auto-pause-enabled', `Enable rollout auto-pause policy`)
+  .option('--auto-pause-disabled', `Disable rollout auto-pause policy`)
+  .option('--auto-pause-window-minutes <autoPauseWindowMinutes>', `Stats window for rollout auto-pause`, value => Number.parseInt(value, 10))
+  .option('--auto-pause-failure-rate-bps <autoPauseFailureRateBps>', `Failure-rate threshold in basis points`, value => Number.parseInt(value, 10))
+  .option('--auto-pause-confidence <autoPauseConfidence>', `Confidence level between 0 and 1`, value => Number.parseFloat(value))
+  .option('--auto-pause-min-attempts <autoPauseMinAttempts>', `Minimum install plus fail attempts before auto-pause can trigger`, value => Number.parseInt(value, 10))
+  .option('--auto-pause-min-failures <autoPauseMinFailures>', `Minimum failures before auto-pause can trigger`, value => Number.parseInt(value, 10))
+  .option('--auto-pause-action <autoPauseAction>', `Auto-pause action: pause, rollback, or notify`)
+  .option('--auto-pause-cooldown-minutes <autoPauseCooldownMinutes>', `Cooldown before auto-pause can trigger again`, value => Number.parseInt(value, 10))
   .option('--dev', `Allow sending update to development devices`)
   .option('--no-dev', `Disable sending update to development devices`)
   .option('--prod', `Allow sending update to production devices`)
@@ -553,6 +607,7 @@ Example: npx @capgo/cli@latest channel set production com.example.app --bundle 1
   .option('--device', `Allow sending update to physical devices`)
   .option('--no-device', `Disable sending update to physical devices`)
   .option('--qr-preview', `Print a terminal QR code for this channel preview after updating it`)
+  .option('--send-update-notification', `Send a native update-check notification to devices after updating the linked channel bundle`)
   .option('--package-json <packageJson>', optionDescriptions.packageJson)
   .option('--ignore-metadata-check', `Ignore checking node_modules compatibility if present in the bundle`)
   .option('--supa-host <supaHost>', optionDescriptions.supaHost)
@@ -573,6 +628,7 @@ Example: npx @capgo/cli@latest key save --key ./path/to/key.pub`)
   .option('-f, --force', `Force generate a new one`)
   .option('--key <key>', `Key path to save in Capacitor config`)
   .option('--key-data <keyData>', `Key data to save in Capacitor config`)
+  .option('--capacitor-config <path>', optionDescriptions.capacitorConfig)
 
 key
   .command('create')
@@ -585,6 +641,7 @@ NEVER commit the private key - store it securely!
 Example: npx @capgo/cli@latest key create`)
   .action(createKey)
   .option('-f, --force', `Force generate a new one`)
+  .option('--capacitor-config <path>', optionDescriptions.capacitorConfig)
 
 key
   .command('delete_old')
@@ -592,6 +649,7 @@ key
 
 Example: npx @capgo/cli@latest key delete_old`)
   .action(deleteOldKey)
+  .option('--capacitor-config <path>', optionDescriptions.capacitorConfig)
 
 const account = program
   .command('account')
@@ -877,12 +935,22 @@ Example: npx @capgo/cli@latest build request com.example.app --platform ios --pa
   .option('--android-flavor <flavor>', 'Android: Product flavor to build (e.g. production). Required if your project has multiple flavors.')
   .option('--in-app-update-priority <priority>', 'Android: Google Play in-app update priority for this release (integer 0–5; higher = more urgent). See https://developer.android.com/guide/playcore/in-app-updates. Precedence: CLI > env > saved credentials')
   .option('--no-playstore-upload', 'Skip Play Store upload for this build (nulls out saved play config). Requires --output-upload.')
+  .option('--submit-to-store-review', 'After upload, submit the store release for review instead of leaving it as a draft/inactive build. Android marks the Play release completed; iOS submits the processed TestFlight build to App Store review.')
+  .option('--store-release-name <name>', 'Store release name/version label. Android sends this as the Google Play version_name; iOS uses it as the App Store version when creating or reusing the editable version.')
+  .option('--store-release-notes <notes>', 'Default store release notes. Android uses this as the Play changelog; iOS uses it as the fallback App Store What\'s New text.')
+  .option('--store-release-notes-locale <locale=notes>', 'Localized store release notes (repeatable), for example --store-release-notes-locale en-US="Bug fixes" --store-release-notes-locale fr-FR="Corrections".', collect, [])
+  .option('--ios-testflight-groups <groups>', 'iOS: optional comma-separated TestFlight external group names or IDs for external beta distribution.')
+  .option('--ios-automatic-release', 'iOS: automatically release the App Store version after Apple approval. Default is manual release.')
+  .option('--no-ios-automatic-release', 'iOS: keep the App Store version waiting for manual release after Apple approval.')
   .option('--output-upload', 'Override output upload behavior for this build only (enable). Precedence: CLI > env > saved credentials')
   .option('--no-output-upload', 'Override output upload behavior for this build only (disable). Precedence: CLI > env > saved credentials')
   .option('--output-retention <duration>', 'Override output link TTL for this build only (1h to 7d). Examples: 1h, 6h, 2d. Precedence: CLI > env > saved credentials')
   .option('--output-record <path>', 'After a successful build, write a JSON record (jobId, status, outputUrl, qrCodeAscii, qrCodePngPath, finishedAt) to <path>. A PNG QR code is also written next to it as <path>.qr.png. Read fields back with `build last-output`.')
   .option('--skip-build-number-bump', 'Skip automatic build number/version code incrementing. Uses whatever version is already in the project files.')
   .option('--no-skip-build-number-bump', 'Override saved credentials to re-enable automatic build number incrementing for this build only.')
+  .option('--skip-marketing-version-bump', 'Skip automatic marketing version (CFBundleShortVersionString / versionName) bump when the app is already released.')
+  .option('--no-skip-marketing-version-bump', 'Override saved credentials to re-enable automatic marketing version bump for this build only.')
+  .option('--sync-ios-version', 'iOS: sync Xcode MARKETING_VERSION from package.json before uploading the project.')
   .option('--ai-analytics', 'On build failure, send logs to Capgo AI for diagnosis. In interactive terminals this skips the upfront confirmation; in CI this auto-uploads and prints the analysis to stderr.')
   .option('--no-prescan', 'Skip the automatic pre-build scan')
   .option('--prescan-ignore-fatal', 'Run the pre-build scan but never block the build (report only)')
@@ -893,6 +961,15 @@ Example: npx @capgo/cli@latest build request com.example.app --platform ios --pa
   .option('--supa-host <supaHost>', optionDescriptions.supaHost)
   .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
   .option('--verbose', optionDescriptions.verbose)
+
+build
+  .command('sync-ios-version')
+  .description(`Sync the local iOS Xcode MARKETING_VERSION from package.json.
+
+Example: npx @capgo/cli@latest build sync-ios-version --path .`)
+  .option('--path <path>', 'Path to the project directory (default: current directory)')
+  .option('--check', 'Check only; exit non-zero when MARKETING_VERSION is out of sync')
+  .action(syncIosMarketingVersionCommand)
 
 build
   .command('prescan [appId]')
@@ -1029,6 +1106,8 @@ Local storage (per-project):
   .option('--output-retention <duration>', 'Output link TTL: 1h to 7d (default: 1h). Examples: 1h, 6h, 2d')
   .option('--skip-build-number-bump', 'Skip automatic build number/version code incrementing on future builds')
   .option('--no-skip-build-number-bump', 'Re-enable automatic build number incrementing (default behavior)')
+  .option('--skip-marketing-version-bump', 'Skip automatic marketing version bump on future builds when the app is already released')
+  .option('--no-skip-marketing-version-bump', 'Re-enable automatic marketing version bump (default behavior)')
 
 buildCredentials
   .command('list')
@@ -1099,6 +1178,8 @@ Examples:
   .option('--output-retention <duration>', 'Output link TTL: 1h to 7d. Examples: 1h, 6h, 2d')
   .option('--skip-build-number-bump', 'Skip automatic build number/version code incrementing on future builds')
   .option('--no-skip-build-number-bump', 'Re-enable automatic build number incrementing (default behavior)')
+  .option('--skip-marketing-version-bump', 'Skip automatic marketing version bump on future builds when the app is already released')
+  .option('--no-skip-marketing-version-bump', 'Re-enable automatic marketing version bump (default behavior)')
 
 buildCredentials
   .command('manage')
@@ -1132,6 +1213,23 @@ Example:
   .option('--local', 'Migrate from local .capgo-credentials.json instead of global')
 
 program
+  .command('notifications')
+  .description(`🔔 Set up Capgo native notifications in your Capacitor app.`)
+  .command('setup [appId]')
+  .description(`Install the Capgo notifications plugin, add Capacitor config, create a helper file, and run Capacitor sync.
+
+Before sending production notifications, configure Android and iOS push credentials in the Capgo app Notifications tab.
+
+Example: npx @capgo/cli@latest notifications setup com.example.app`)
+  .action(setupNotifications)
+  .option('--server-url <serverUrl>', 'Capgo API server URL')
+  .option('--file <file>', 'Helper file to create (default: src/capgo-notifications.ts)')
+  .option('--force', 'Overwrite the helper file if it already exists')
+  .option('--no-install', 'Skip installing the notifications package')
+  .option('--no-sync', 'Skip Capacitor sync')
+  .option('--capacitor-config <path>', optionDescriptions.capacitorConfig)
+
+program
   .command('probe')
   .description(`🔎 Probe the Capgo updates endpoint to check if an update is available for your app.
 
@@ -1157,7 +1255,7 @@ program
 This command starts an MCP server that exposes Capgo functionality as tools for AI agents.
 The server communicates via stdio and is designed for non-interactive, programmatic use.
 
-Available tools exposed via MCP:
+Selected tools exposed via MCP:
   - capgo_list_apps, capgo_add_app, capgo_update_app, capgo_delete_app
   - capgo_upload_bundle, capgo_list_bundles, capgo_delete_bundle, capgo_cleanup_bundles
   - capgo_list_channels, capgo_add_channel, capgo_update_channel, capgo_delete_channel
@@ -1174,14 +1272,15 @@ Example usage with Claude Desktop:
     "mcpServers": {
       "capgo": {
         "command": "npx",
-        "args": ["@capgo/cli", "mcp"]
+        "args": ["@capgo/cli@latest", "mcp"]
       }
     }
   }
 
-Example: npx @capgo/cli mcp`)
+Example: npx @capgo/cli@latest mcp`)
+  .option('--capacitor-config <path>', optionDescriptions.capacitorConfig)
   .action(async () => {
-    await startMcpServer()
+    await startMcpServer(getConfigWriteTarget())
   })
 
 program.exitOverride()

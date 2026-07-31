@@ -210,9 +210,9 @@ export interface GoogleSignInStepProps {
 // dense" tier. That tier depended on the parent measuring leftover rows and
 // feeding a flag back, which kept tripping the too-small guard; it's gone.
 const SIGN_IN_TRUST = 'Sign in with Google so Capgo can set up Play Store publishing on your account — your tokens never reach Capgo\'s servers.'
-const SIGN_IN_INTRO = 'We\'ll open Google\'s consent screen. The two access requests are:'
+const SIGN_IN_INTRO = 'We\'ll open Google\'s consent screen. The access requests are:'
 
-// The two consent scopes — shared so the wording is identical in both forms.
+// The consent scopes — shared so the wording is identical in both forms.
 function SignInBullets() {
   return (
     <>
@@ -229,6 +229,13 @@ function SignInBullets() {
         <Text bold>Google Play Developer access</Text>
         {' '}
         — to invite that service account to your Play Console with release-only permissions
+      </Text>
+      <Text>
+        •
+        {' '}
+        <Text bold>Play app list</Text>
+        {' '}
+        — Google words this one &quot;see metrics and data&quot;; we only list your apps to check the one you&apos;re building exists (optional — declining just skips that check)
       </Text>
     </>
   )
@@ -282,18 +289,19 @@ export const GoogleSignInLearnMoreStep: FC<GoogleSignInLearnMoreStepProps> = ({ 
       <Box flexDirection="column" marginLeft={2}>
         <Text bold>Can Capgo touch other GCP projects on my account?</Text>
         <Text>
-          The scope allows it, but this CLI only calls APIs against the project you&apos;ll pick on the next screen. It creates one service account named
-          {' '}
+          The scope allows it, but the CLI only touches the project you pick: it creates one service account (
           <Text color="cyan">capgo-native-build</Text>
-          {' '}
-          in that one project and stops.
+          ) there and stops.
         </Text>
         <Newline />
         <Text bold>Will Capgo upload anything to Play Store without me knowing?</Text>
-        <Text>No. The flow invites one service account into one app (the package you confirm) with release-only permissions. Future builds use that service account, not your OAuth tokens.</Text>
+        <Text>No. It invites one service account into one app with release-only permissions. Future builds use that service account, not your OAuth tokens.</Text>
         <Newline />
         <Text bold>Can Capgo employees access my Google account?</Text>
-        <Text>No. The refresh token never leaves your machine. Capgo&apos;s servers only serve the OAuth client ID — they never see your tokens. When provisioning finishes, the CLI asks Google to revoke that token, so even your local copy stops working.</Text>
+        <Text>No. The refresh token never leaves your machine and Capgo&apos;s servers never see it. When provisioning finishes, the CLI asks Google to revoke it.</Text>
+        <Newline />
+        <Text bold>Why does Google mention &quot;metrics and data&quot;?</Text>
+        <Text>Google&apos;s wording for the Play Reporting permission. We only list your apps&apos; package names to confirm your app exists — declining just skips that check.</Text>
         <Newline />
         <Text bold>What if I change my mind later?</Text>
         <Text>
@@ -303,7 +311,7 @@ export const GoogleSignInLearnMoreStep: FC<GoogleSignInLearnMoreStepProps> = ({ 
           , or just delete the service account in Google Cloud. Neither needs Capgo&apos;s involvement.
         </Text>
         <Newline />
-        <Text dimColor>Capgo passed Google&apos;s OAuth verification on 2026-05-02 for these scopes. Source code: github.com/Cap-go/capgo</Text>
+        <Text dimColor>Google-verified OAuth app (2026-05-02) · source: github.com/Cap-go/capgo</Text>
       </Box>
       <Newline />
       <Select options={[{ label: '← Back to sign-in', value: 'back' }]} onChange={onBack} />

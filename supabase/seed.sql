@@ -42,6 +42,9 @@ DECLARE
     admin_bandwidth_overage_id uuid;
     demo_mau_overage_id uuid;
 BEGIN
+    -- Tinbase evaluates seed statements as anon. This service-role-only seed
+    -- helper marks its trusted channel targets for the promotion trigger.
+    PERFORM pg_catalog.set_config('capgo.seed_channel_targets', 'true', true);
     -- Suppress cascade notices during truncation
     SET LOCAL client_min_messages = WARNING;
 
@@ -55,6 +58,7 @@ BEGIN
     TRUNCATE TABLE "public"."usage_credit_transactions" CASCADE;
     TRUNCATE TABLE "public"."usage_credit_consumptions" CASCADE;
     TRUNCATE TABLE "public"."usage_overage_events" CASCADE;
+    TRUNCATE TABLE "public"."org_id_tombstones";
     -- RBAC tables: must truncate in order to respect foreign keys
     TRUNCATE TABLE "public"."role_bindings" RESTART IDENTITY CASCADE;
     TRUNCATE TABLE "public"."group_members" RESTART IDENTITY CASCADE;
@@ -74,6 +78,7 @@ BEGIN
     ('00000000-0000-0000-0000-000000000000', 'f6a7b8c9-d0e1-4f2a-9b3c-4d5e6f708193', 'authenticated', 'authenticated', 'encrypted@capgo.app', '$2a$10$0CErXxryZPucjJWq3O7qXeTJgN.tnNU5XCZy9pXKDWRi/aS9W7UFi', NOW(), NOW(), 'oljikwwipqrkwilfsyte', NOW(), '', NULL, '', '', NULL, NOW(), '{"provider": "email", "providers": ["email"]}', '{"test_identifier": "test_encrypted"}', 'f', NOW(), NOW(), NULL, NULL, '', '', NULL, '', 0, NULL, '', NULL),
     ('00000000-0000-0000-0000-000000000000', '9f1a2b3c-4d5e-4f60-8a7b-1c2d3e4f5061', 'authenticated', 'authenticated', 'emailprefs@capgo.app', '$2a$10$0CErXxryZPucjJWq3O7qXeTJgN.tnNU5XCZy9pXKDWRi/aS9W7UFi', NOW(), NOW(), 'oljikwwipqrkwilfsytp', NOW(), '', NULL, '', '', NULL, NOW(), '{"provider": "email", "providers": ["email"]}', '{"test_identifier": "test_email_prefs"}', 'f', NOW(), NOW(), NULL, NULL, '', '', NULL, '', 0, NULL, '', NULL),
     ('00000000-0000-0000-0000-000000000000', 'af1a2b3c-4d5e-4f60-8a7b-1c2d3e4f5062', 'authenticated', 'authenticated', 'apikey-expiration@capgo.app', '$2a$10$0CErXxryZPucjJWq3O7qXeTJgN.tnNU5XCZy9pXKDWRi/aS9W7UFi', NOW(), NOW(), 'oljikwwipqrkwilfsytq', NOW(), '', NULL, '', '', NULL, NOW(), '{"provider": "email", "providers": ["email"]}', '{"test_identifier": "test_apikey_expiration"}', 'f', NOW(), NOW(), NULL, NULL, '', '', NULL, '', 0, NULL, '', NULL),
+    ('00000000-0000-0000-0000-000000000000', 'd0f1a2b3-c4d5-4e6f-8a90-b1c2d3e4f506', 'authenticated', 'authenticated', 'apikey-management@capgo.app', '$2a$10$0CErXxryZPucjJWq3O7qXeTJgN.tnNU5XCZy9pXKDWRi/aS9W7UFi', NOW(), NOW(), 'oljikwwipqrkwilfsytm', NOW(), '', NULL, '', '', NULL, NOW(), '{"provider": "email", "providers": ["email"]}', '{"test_identifier": "test_apikey_management"}', 'f', NOW(), NOW(), NULL, NULL, '', '', NULL, '', 0, NULL, '', NULL),
     ('00000000-0000-0000-0000-000000000000', 'b7a1d9f4-7b8f-4e3c-8f2b-1a2b3c4d5e6f', 'authenticated', 'authenticated', 'delete-user-stale@capgo.app', '$2a$10$0CErXxryZPucjJWq3O7qXeTJgN.tnNU5XCZy9pXKDWRi/aS9W7UFi', NOW(), NOW(), 'oljikwwipqrkwilfsyu1', NOW(), '', NULL, '', '', NULL, NOW() - interval '10 minutes', '{"provider": "email", "providers": ["email"]}', '{"test_identifier": "test_delete_user_stale"}', 'f', NOW(), NOW(), NULL, NULL, '', '', NULL, '', 0, NULL, '', NULL),
     ('00000000-0000-0000-0000-000000000000', 'c8b2e0f5-8c90-4f4d-9f3c-2b3c4d5e6f70', 'authenticated', 'authenticated', 'delete-user-fresh@capgo.app', '$2a$10$0CErXxryZPucjJWq3O7qXeTJgN.tnNU5XCZy9pXKDWRi/aS9W7UFi', NOW(), NOW(), 'oljikwwipqrkwilfsyu2', NOW(), '', NULL, '', '', NULL, NOW(), '{"provider": "email", "providers": ["email"]}', '{"test_identifier": "test_delete_user_fresh"}', 'f', NOW(), NOW(), NULL, NULL, '', '', NULL, '', 0, NULL, '', NULL);
 
@@ -261,7 +266,8 @@ BEGIN
     (NOW(), NOW(), 'sub_cron_app', 'cus_cron_app_test_123', 'succeeded', 'prod_LQIregjtNduh4q', CURRENT_DATE + interval '15 days', NULL, 't', 2, NOW() - interval '15 days', NOW() + interval '15 days', false, false, false, false),
     (NOW(), NOW(), 'sub_cron_integration', 'cus_cron_integration_test_123', 'succeeded', 'prod_LQIregjtNduh4q', CURRENT_DATE + interval '15 days', NULL, 't', 2, NOW() - interval '15 days', NOW() + interval '15 days', false, false, false, false),
     (NOW(), NOW(), 'sub_cron_queue', 'cus_cron_queue_test_123', 'succeeded', 'prod_LQIregjtNduh4q', CURRENT_DATE + interval '15 days', NULL, 't', 2, NOW() - interval '15 days', NOW() + interval '15 days', false, false, false, false),
-    (NOW(), NOW(), 'sub_overage', 'cus_overage_test_123', 'succeeded', 'prod_LQIregjtNduh4q', CURRENT_DATE + interval '15 days', NULL, 't', 2, NOW() - interval '15 days', NOW() + interval '15 days', false, false, false, false);
+    (NOW(), NOW(), 'sub_overage', 'cus_overage_test_123', 'succeeded', 'prod_LQIregjtNduh4q', CURRENT_DATE + interval '15 days', NULL, 't', 2, NOW() - interval '15 days', NOW() + interval '15 days', false, false, false, false),
+    (NOW(), NOW(), 'sub_apikey_management', 'cus_apikey_management_test_123', 'succeeded', 'prod_LQIregjtNduh4q', CURRENT_DATE + interval '15 days', NULL, 't', 2, NOW() - interval '15 days', NOW() + interval '15 days', false, false, false, false);
 
     INSERT INTO "public"."users" ("created_at", "image_url", "first_name", "last_name", "country", "email", "id", "updated_at", "enable_notifications", "opt_for_newsletters") VALUES
     ('2022-06-03 05:54:15+00', '', 'admin', 'Capgo', NULL, 'admin@capgo.app', 'c591b04e-cf29-4945-b9a0-776d0672061a', NOW(), 't', 't'),
@@ -274,29 +280,29 @@ BEGIN
     ('2022-06-03 05:54:15+00', '', 'encrypted', 'Capgo', NULL, 'encrypted@capgo.app', 'f6a7b8c9-d0e1-4f2a-9b3c-4d5e6f708193', NOW(), 't', 't'),
     ('2022-06-03 05:54:15+00', '', 'emailprefs', 'Capgo', NULL, 'emailprefs@capgo.app', '9f1a2b3c-4d5e-4f60-8a7b-1c2d3e4f5061', NOW(), 't', 't'),
     ('2022-06-03 05:54:15+00', '', 'apikey', 'expiration', NULL, 'apikey-expiration@capgo.app', 'af1a2b3c-4d5e-4f60-8a7b-1c2d3e4f5062', NOW(), 't', 't'),
+    ('2022-06-03 05:54:15+00', '', 'apikey', 'management', NULL, 'apikey-management@capgo.app', 'd0f1a2b3-c4d5-4e6f-8a90-b1c2d3e4f506', NOW(), 't', 't'),
     ('2022-06-03 05:54:15+00', '', 'delete', 'stale', NULL, 'delete-user-stale@capgo.app', 'b7a1d9f4-7b8f-4e3c-8f2b-1a2b3c4d5e6f', NOW(), 't', 't'),
     ('2022-06-03 05:54:15+00', '', 'delete', 'fresh', NULL, 'delete-user-fresh@capgo.app', 'c8b2e0f5-8c90-4f4d-9f3c-2b3c4d5e6f70', NOW(), 't', 't');
 
     ALTER TABLE public.orgs DISABLE TRIGGER generate_org_user_stripe_info_on_org_create;
-    INSERT INTO "public"."orgs" ("id", "created_by", "created_at", "updated_at", "logo", "name", "management_email", "customer_id", "use_new_rbac") VALUES
-    ('22dbad8a-b885-4309-9b3b-a09f8460fb6d', 'c591b04e-cf29-4945-b9a0-776d0672061a', NOW(), NOW(), '', 'Admin org', 'admin@capgo.app', 'cus_Pa0k8TO6HVln6A', false),
-    ('046a36ac-e03c-4590-9257-bd6c9dba9ee8', '6aa76066-55ef-4238-ade6-0b32334a4097', NOW(), NOW(), '', 'Demo org', 'test@capgo.app', 'cus_Q38uE91NP8Ufqc', false),
-    ('34a8c55d-2d0f-4652-a43f-684c7a9403ac', '6f0d1a2e-59ed-4769-b9d7-4d9615b28fe5', NOW(), NOW(), '', 'Test2 org', 'test2@capgo.app', 'cus_Pa0f3M6UCQ8g5Q', false),
-    ('a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d', '6f0d1a2e-59ed-4769-b9d7-4d9615b28fe5', NOW(), NOW(), '', 'Non-Owner Org', 'test2@capgo.app', 'cus_NonOwner', false),
-    ('b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e', '7a1b2c3d-4e5f-4a6b-7c8d-9e0f1a2b3c4d', NOW(), NOW(), '', 'Stats Test Org', 'stats@capgo.app', 'cus_StatsTest', false),
-    ('c3d4e5f6-a7b8-4c9d-8e0f-1a2b3c4d5e6f', '8b2c3d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5e', NOW(), NOW(), '', 'RLS Test Org', 'rls@capgo.app', 'cus_RLSTest', false),
-    ('d5e6f7a8-b9c0-4d1e-8f2a-3b4c5d6e7f80', '8b2c3d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5e', NOW(), NOW(), '', 'RLS 2FA Test Org', 'rls@capgo.app', 'cus_2fa_rls_test_123', false),
-    ('f6a7b8c9-d0e1-4f2a-9b3c-4d5e6f7a8b92', 'e5f6a7b8-c9d0-4e1f-8a2b-3c4d5e6f7a81', NOW(), NOW(), '', 'CLI Hashed Test Org', 'cli_hashed@capgo.app', 'cus_cli_hashed_test_123', false),
-    ('a7b8c9d0-e1f2-4a3b-9c4d-5e6f7a8b9ca4', 'f6a7b8c9-d0e1-4f2a-9b3c-4d5e6f708193', NOW(), NOW(), '', 'Encrypted Test Org', 'encrypted@capgo.app', 'cus_encrypted_test_123', false),
-    ('aa1b2c3d-4e5f-4a60-9b7c-1d2e3f4a5061', '9f1a2b3c-4d5e-4f60-8a7b-1c2d3e4f5061', NOW(), NOW(), '', 'Email Prefs Test Org', 'emailprefs@capgo.app', 'cus_email_prefs_test_123', false),
-    ('b1c2d3e4-f5a6-4b70-8c9d-0e1f2a3b4c5d', '6aa76066-55ef-4238-ade6-0b32334a4097', NOW(), NOW(), '', 'Cron App Test Org', 'test@capgo.app', 'cus_cron_app_test_123', false),
-    ('c2d3e4f5-a6b7-4c80-9d0e-1f2a3b4c5d6e', '6aa76066-55ef-4238-ade6-0b32334a4097', NOW(), NOW(), '', 'Cron Integration Test Org', 'test@capgo.app', 'cus_cron_integration_test_123', false),
-    ('d3e4f5a6-b7c8-4d90-8e1f-2a3b4c5d6e7f', '6aa76066-55ef-4238-ade6-0b32334a4097', NOW(), NOW(), '', 'Cron Queue Test Org', 'test@capgo.app', 'cus_cron_queue_test_123', false),
-    ('e4f5a6b7-c8d9-4ea0-9f1a-2b3c4d5e6f70', '6aa76066-55ef-4238-ade6-0b32334a4097', NOW(), NOW(), '', 'Overage Test Org', 'test@capgo.app', 'cus_overage_test_123', false),
-    ('e5f6a7b8-c9d0-4e1f-9a2b-3c4d5e6f7a82', '6aa76066-55ef-4238-ade6-0b32334a4097', NOW(), NOW(), '', 'Private Error Test Org', 'test@capgo.app', NULL, false);
+    INSERT INTO "public"."orgs" ("id", "created_by", "created_at", "updated_at", "logo", "name", "management_email", "customer_id") VALUES
+    ('22dbad8a-b885-4309-9b3b-a09f8460fb6d', 'c591b04e-cf29-4945-b9a0-776d0672061a', NOW(), NOW(), '', 'Admin org', 'admin@capgo.app', 'cus_Pa0k8TO6HVln6A'),
+    ('046a36ac-e03c-4590-9257-bd6c9dba9ee8', '6aa76066-55ef-4238-ade6-0b32334a4097', NOW(), NOW(), '', 'Demo org', 'test@capgo.app', 'cus_Q38uE91NP8Ufqc'),
+    ('34a8c55d-2d0f-4652-a43f-684c7a9403ac', '6f0d1a2e-59ed-4769-b9d7-4d9615b28fe5', NOW(), NOW(), '', 'Test2 org', 'test2@capgo.app', 'cus_Pa0f3M6UCQ8g5Q'),
+    ('a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d', '6f0d1a2e-59ed-4769-b9d7-4d9615b28fe5', NOW(), NOW(), '', 'Non-Owner Org', 'test2@capgo.app', 'cus_NonOwner'),
+    ('b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e', '7a1b2c3d-4e5f-4a6b-7c8d-9e0f1a2b3c4d', NOW(), NOW(), '', 'Stats Test Org', 'stats@capgo.app', 'cus_StatsTest'),
+    ('c3d4e5f6-a7b8-4c9d-8e0f-1a2b3c4d5e6f', '8b2c3d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5e', NOW(), NOW(), '', 'RLS Test Org', 'rls@capgo.app', 'cus_RLSTest'),
+    ('d5e6f7a8-b9c0-4d1e-8f2a-3b4c5d6e7f80', '8b2c3d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5e', NOW(), NOW(), '', 'RLS 2FA Test Org', 'rls@capgo.app', 'cus_2fa_rls_test_123'),
+    ('f6a7b8c9-d0e1-4f2a-9b3c-4d5e6f7a8b92', 'e5f6a7b8-c9d0-4e1f-8a2b-3c4d5e6f7a81', NOW(), NOW(), '', 'CLI Hashed Test Org', 'cli_hashed@capgo.app', 'cus_cli_hashed_test_123'),
+    ('a7b8c9d0-e1f2-4a3b-9c4d-5e6f7a8b9ca4', 'f6a7b8c9-d0e1-4f2a-9b3c-4d5e6f708193', NOW(), NOW(), '', 'Encrypted Test Org', 'encrypted@capgo.app', 'cus_encrypted_test_123'),
+    ('aa1b2c3d-4e5f-4a60-9b7c-1d2e3f4a5061', '9f1a2b3c-4d5e-4f60-8a7b-1c2d3e4f5061', NOW(), NOW(), '', 'Email Prefs Test Org', 'emailprefs@capgo.app', 'cus_email_prefs_test_123'),
+    ('b1c2d3e4-f5a6-4b70-8c9d-0e1f2a3b4c5d', '6aa76066-55ef-4238-ade6-0b32334a4097', NOW(), NOW(), '', 'Cron App Test Org', 'test@capgo.app', 'cus_cron_app_test_123'),
+    ('c2d3e4f5-a6b7-4c80-9d0e-1f2a3b4c5d6e', '6aa76066-55ef-4238-ade6-0b32334a4097', NOW(), NOW(), '', 'Cron Integration Test Org', 'test@capgo.app', 'cus_cron_integration_test_123'),
+    ('d3e4f5a6-b7c8-4d90-8e1f-2a3b4c5d6e7f', '6aa76066-55ef-4238-ade6-0b32334a4097', NOW(), NOW(), '', 'Cron Queue Test Org', 'test@capgo.app', 'cus_cron_queue_test_123'),
+    ('e4f5a6b7-c8d9-4ea0-9f1a-2b3c4d5e6f70', '6aa76066-55ef-4238-ade6-0b32334a4097', NOW(), NOW(), '', 'Overage Test Org', 'test@capgo.app', 'cus_overage_test_123'),
+    ('e5f6a7b8-c9d0-4e1f-9a2b-3c4d5e6f7a82', '6aa76066-55ef-4238-ade6-0b32334a4097', NOW(), NOW(), '', 'Private Error Test Org', 'test@capgo.app', NULL),
+    ('f1a2b3c4-d5e6-4f70-8a9b-0c1d2e3f4a50', 'd0f1a2b3-c4d5-4e6f-8a90-b1c2d3e4f506', NOW(), NOW(), '', 'API Key Management Test Org', 'apikey-management@capgo.app', 'cus_apikey_management_test_123');
     ALTER TABLE public.orgs ENABLE TRIGGER generate_org_user_stripe_info_on_org_create;
-
-    UPDATE public.orgs SET use_new_rbac = true WHERE id = '046a36ac-e03c-4590-9257-bd6c9dba9ee8';
 
     INSERT INTO public.usage_credit_grants (
       org_id,
@@ -500,54 +506,92 @@ BEGIN
         jsonb_build_object('overage_event_id', demo_mau_overage_id, 'metric', 'mau')
       );
 
-    INSERT INTO "public"."org_users" ("org_id", "user_id", "user_right", "app_id", "channel_id") VALUES
-    ('22dbad8a-b885-4309-9b3b-a09f8460fb6d', 'c591b04e-cf29-4945-b9a0-776d0672061a', 'super_admin'::"public"."user_min_right", null, null),
-    ('046a36ac-e03c-4590-9257-bd6c9dba9ee8', '6aa76066-55ef-4238-ade6-0b32334a4097', 'super_admin'::"public"."user_min_right", null, null),
-    ('34a8c55d-2d0f-4652-a43f-684c7a9403ac', '6f0d1a2e-59ed-4769-b9d7-4d9615b28fe5', 'super_admin'::"public"."user_min_right", null, null),
-    ('046a36ac-e03c-4590-9257-bd6c9dba9ee8', '6f0d1a2e-59ed-4769-b9d7-4d9615b28fe5', 'upload'::"public"."user_min_right", null, null),
-    ('a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d', '6aa76066-55ef-4238-ade6-0b32334a4097', 'read'::"public"."user_min_right", null, null),
-    ('b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e', '7a1b2c3d-4e5f-4a6b-7c8d-9e0f1a2b3c4d', 'super_admin'::"public"."user_min_right", null, null),
-    ('c3d4e5f6-a7b8-4c9d-8e0f-1a2b3c4d5e6f', '8b2c3d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5e', 'super_admin'::"public"."user_min_right", null, null),
-    ('d5e6f7a8-b9c0-4d1e-8f2a-3b4c5d6e7f80', '8b2c3d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5e', 'super_admin'::"public"."user_min_right", null, null),
-    ('f6a7b8c9-d0e1-4f2a-9b3c-4d5e6f7a8b92', 'e5f6a7b8-c9d0-4e1f-8a2b-3c4d5e6f7a81', 'super_admin'::"public"."user_min_right", null, null),
-    ('046a36ac-e03c-4590-9257-bd6c9dba9ee8', 'c591b04e-cf29-4945-b9a0-776d0672061a', 'admin'::"public"."user_min_right", null, null),
-    ('34a8c55d-2d0f-4652-a43f-684c7a9403ac', '6aa76066-55ef-4238-ade6-0b32334a4097', 'write'::"public"."user_min_right", null, null),
-    ('a7b8c9d0-e1f2-4a3b-9c4d-5e6f7a8b9ca4', 'f6a7b8c9-d0e1-4f2a-9b3c-4d5e6f708193', 'super_admin'::"public"."user_min_right", null, null),
-    ('aa1b2c3d-4e5f-4a60-9b7c-1d2e3f4a5061', '9f1a2b3c-4d5e-4f60-8a7b-1c2d3e4f5061', 'super_admin'::"public"."user_min_right", null, null),
-    ('b1c2d3e4-f5a6-4b70-8c9d-0e1f2a3b4c5d', '6aa76066-55ef-4238-ade6-0b32334a4097', 'super_admin'::"public"."user_min_right", null, null),
-    ('c2d3e4f5-a6b7-4c80-9d0e-1f2a3b4c5d6e', '6aa76066-55ef-4238-ade6-0b32334a4097', 'super_admin'::"public"."user_min_right", null, null),
-    ('d3e4f5a6-b7c8-4d90-8e1f-2a3b4c5d6e7f', '6aa76066-55ef-4238-ade6-0b32334a4097', 'super_admin'::"public"."user_min_right", null, null),
-    ('e4f5a6b7-c8d9-4ea0-9f1a-2b3c4d5e6f70', '6aa76066-55ef-4238-ade6-0b32334a4097', 'super_admin'::"public"."user_min_right", null, null),
-    ('e5f6a7b8-c9d0-4e1f-9a2b-3c4d5e6f7a82', '6aa76066-55ef-4238-ade6-0b32334a4097', 'super_admin'::"public"."user_min_right", null, null);
+    INSERT INTO "public"."org_users" ("org_id", "user_id", "rbac_role_name", "app_id", "channel_id", "is_invite") VALUES
+    ('22dbad8a-b885-4309-9b3b-a09f8460fb6d', 'c591b04e-cf29-4945-b9a0-776d0672061a', public.rbac_role_org_super_admin(), null, null, false),
+    ('046a36ac-e03c-4590-9257-bd6c9dba9ee8', '6aa76066-55ef-4238-ade6-0b32334a4097', public.rbac_role_org_super_admin(), null, null, false),
+    ('34a8c55d-2d0f-4652-a43f-684c7a9403ac', '6f0d1a2e-59ed-4769-b9d7-4d9615b28fe5', public.rbac_role_org_super_admin(), null, null, false),
+    ('046a36ac-e03c-4590-9257-bd6c9dba9ee8', '6f0d1a2e-59ed-4769-b9d7-4d9615b28fe5', public.rbac_role_org_member(), null, null, false),
+    ('a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d', '6aa76066-55ef-4238-ade6-0b32334a4097', public.rbac_role_org_member(), null, null, false),
+    ('b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e', '7a1b2c3d-4e5f-4a6b-7c8d-9e0f1a2b3c4d', public.rbac_role_org_super_admin(), null, null, false),
+    ('c3d4e5f6-a7b8-4c9d-8e0f-1a2b3c4d5e6f', '8b2c3d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5e', public.rbac_role_org_super_admin(), null, null, false),
+    ('d5e6f7a8-b9c0-4d1e-8f2a-3b4c5d6e7f80', '8b2c3d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5e', public.rbac_role_org_super_admin(), null, null, false),
+    ('f6a7b8c9-d0e1-4f2a-9b3c-4d5e6f7a8b92', 'e5f6a7b8-c9d0-4e1f-8a2b-3c4d5e6f7a81', public.rbac_role_org_super_admin(), null, null, false),
+    ('046a36ac-e03c-4590-9257-bd6c9dba9ee8', 'c591b04e-cf29-4945-b9a0-776d0672061a', public.rbac_role_org_admin(), null, null, false),
+    ('34a8c55d-2d0f-4652-a43f-684c7a9403ac', '6aa76066-55ef-4238-ade6-0b32334a4097', public.rbac_role_org_member(), null, null, false),
+    ('a7b8c9d0-e1f2-4a3b-9c4d-5e6f7a8b9ca4', 'f6a7b8c9-d0e1-4f2a-9b3c-4d5e6f708193', public.rbac_role_org_super_admin(), null, null, false),
+    ('aa1b2c3d-4e5f-4a60-9b7c-1d2e3f4a5061', '9f1a2b3c-4d5e-4f60-8a7b-1c2d3e4f5061', public.rbac_role_org_super_admin(), null, null, false),
+    ('b1c2d3e4-f5a6-4b70-8c9d-0e1f2a3b4c5d', '6aa76066-55ef-4238-ade6-0b32334a4097', public.rbac_role_org_super_admin(), null, null, false),
+    ('c2d3e4f5-a6b7-4c80-9d0e-1f2a3b4c5d6e', '6aa76066-55ef-4238-ade6-0b32334a4097', public.rbac_role_org_super_admin(), null, null, false),
+    ('d3e4f5a6-b7c8-4d90-8e1f-2a3b4c5d6e7f', '6aa76066-55ef-4238-ade6-0b32334a4097', public.rbac_role_org_super_admin(), null, null, false),
+    ('e4f5a6b7-c8d9-4ea0-9f1a-2b3c4d5e6f70', '6aa76066-55ef-4238-ade6-0b32334a4097', public.rbac_role_org_super_admin(), null, null, false),
+    ('e5f6a7b8-c9d0-4e1f-9a2b-3c4d5e6f7a82', '6aa76066-55ef-4238-ade6-0b32334a4097', public.rbac_role_org_super_admin(), null, null, false),
+    ('f1a2b3c4-d5e6-4f70-8a9b-0c1d2e3f4a50', 'd0f1a2b3-c4d5-4e6f-8a90-b1c2d3e4f506', public.rbac_role_org_super_admin(), null, null, false);
+
+    INSERT INTO public.role_bindings (
+      principal_type,
+      principal_id,
+      role_id,
+      scope_type,
+      org_id,
+      granted_by,
+      reason,
+      is_direct
+    )
+    SELECT
+      public.rbac_principal_user(),
+      ou.user_id,
+      roles.id,
+      public.rbac_scope_org(),
+      ou.org_id,
+      ou.user_id,
+      'Seeded user RBAC binding',
+      true
+    FROM public.org_users ou
+    JOIN public.roles roles
+      ON roles.name = ou.rbac_role_name
+      AND roles.scope_type = public.rbac_scope_org()
+    WHERE ou.is_invite IS NOT TRUE
+      AND ou.app_id IS NULL
+      AND ou.channel_id IS NULL
+    ON CONFLICT DO NOTHING;
 
     INSERT INTO "public"."apikeys" ("id", "created_at", "user_id", "key", "updated_at", "name") VALUES
-    (1, NOW(), 'c591b04e-cf29-4945-b9a0-776d0672061a', 'c591b04e-cf29-4945-b9a0-776d0672061e', NOW(), 'admin upload'),
-    (2, NOW(), 'c591b04e-cf29-4945-b9a0-776d0672061a', '67eeaff4-ae4c-49a6-8eb1-0875f5369de1', NOW(), 'admin read'),
-    (3, NOW(), 'c591b04e-cf29-4945-b9a0-776d0672061a', 'ae6e7458-c46d-4c00-aa3b-153b0b8520eb', NOW(), 'admin all'),
-    (4, NOW(), '6aa76066-55ef-4238-ade6-0b32334a4097', 'c591b04e-cf29-4945-b9a0-776d0672061b', NOW(), 'test upload'),
-    (5, NOW(), '6aa76066-55ef-4238-ade6-0b32334a4097', '67eeaff4-ae4c-49a6-8eb1-0875f5369de0', NOW(), 'test read'),
-    (6, NOW(), '6aa76066-55ef-4238-ade6-0b32334a4097', 'ae6e7458-c46d-4c00-aa3b-153b0b8520ea', NOW(), 'test all'),
-    (7, NOW(), '6aa76066-55ef-4238-ade6-0b32334a4097', '985640ce-4031-4cfd-8095-d1d1066b6b3b', NOW(), 'test write'),
-    (8, NOW(), '6f0d1a2e-59ed-4769-b9d7-4d9615b28fe5', 'ab4d9a98-ec25-4af8-933c-2aae4aa52b85', NOW(), 'test2 upload'),
-    (9, NOW(), '6f0d1a2e-59ed-4769-b9d7-4d9615b28fe5', 'ac4d9a98-ec25-4af8-933c-2aae4aa52b85', NOW(), 'test2 all'),
+    (1, NOW(), 'c591b04e-cf29-4945-b9a0-776d0672061a', 'c591b04e-cf29-4945-b9a0-776d0672061e', NOW(), 'admin app uploader'),
+    (2, NOW(), 'c591b04e-cf29-4945-b9a0-776d0672061a', '67eeaff4-ae4c-49a6-8eb1-0875f5369de1', NOW(), 'admin app reader'),
+    (3, NOW(), 'c591b04e-cf29-4945-b9a0-776d0672061a', 'ae6e7458-c46d-4c00-aa3b-153b0b8520eb', NOW(), 'admin org super admin'),
+    (4, NOW(), '6aa76066-55ef-4238-ade6-0b32334a4097', 'c591b04e-cf29-4945-b9a0-776d0672061b', NOW(), 'test app uploader'),
+    (5, NOW(), '6aa76066-55ef-4238-ade6-0b32334a4097', '67eeaff4-ae4c-49a6-8eb1-0875f5369de0', NOW(), 'test app reader'),
+    (6, NOW(), '6aa76066-55ef-4238-ade6-0b32334a4097', 'ae6e7458-c46d-4c00-aa3b-153b0b8520ea', NOW(), 'test org super admin'),
+    (7, NOW(), '6aa76066-55ef-4238-ade6-0b32334a4097', '985640ce-4031-4cfd-8095-d1d1066b6b3b', NOW(), 'test app developer'),
+    (8, NOW(), '6f0d1a2e-59ed-4769-b9d7-4d9615b28fe5', 'ab4d9a98-ec25-4af8-933c-2aae4aa52b85', NOW(), 'test2 app uploader'),
+    (9, NOW(), '6f0d1a2e-59ed-4769-b9d7-4d9615b28fe5', 'ac4d9a98-ec25-4af8-933c-2aae4aa52b85', NOW(), 'test2 org super admin'),
     -- Dedicated test keys for apikeys.test.ts to avoid interference with other tests
     (10, NOW(), '6aa76066-55ef-4238-ade6-0b32334a4097', '8b2c3d4e-5f6a-4c7b-8d9e-0f1a2b3c4d5f', NOW(), 'apikey test get by id'),
     (11, NOW(), '6aa76066-55ef-4238-ade6-0b32334a4097', '8b2c3d4e-5f6a-4c7b-8d9e-0f1a2b3c4d5g', NOW(), 'apikey test update name'),
-    (12, NOW(), '6aa76066-55ef-4238-ade6-0b32334a4097', '8b2c3d4e-5f6a-4c7b-8d9e-0f1a2b3c4d5a', NOW(), 'apikey test update all'),
+    (12, NOW(), '6aa76066-55ef-4238-ade6-0b32334a4097', '8b2c3d4e-5f6a-4c7b-8d9e-0f1a2b3c4d5a', NOW(), 'apikey test update org super admin'),
     (13, NOW(), '6aa76066-55ef-4238-ade6-0b32334a4097', '8b2c3d4e-5f6a-4c7b-8d9e-0f1a2b3c4d5d', NOW(), 'apikey test update apps'),
     -- Dedicated user and API key for statistics tests
-    (14, NOW(), '7a1b2c3d-4e5f-4a6b-7c8d-9e0f1a2b3c4d', '8b2c3d4e-5f6a-4c7b-8d9e-0f1a2b3c4d5e', NOW(), 'stats test all'),
+    (14, NOW(), '7a1b2c3d-4e5f-4a6b-7c8d-9e0f1a2b3c4d', '8b2c3d4e-5f6a-4c7b-8d9e-0f1a2b3c4d5e', NOW(), 'stats test org super admin'),
     -- Dedicated user and API key for RLS hashed apikey tests (isolated to prevent interference)
-    (15, NOW(), '8b2c3d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5e', '9c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f', NOW(), 'rls test all'),
+    (15, NOW(), '8b2c3d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5e', '9c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f', NOW(), 'rls test org super admin'),
     -- Dedicated user and API key for CLI hashed apikey tests (isolated to prevent interference)
-    (110, NOW(), 'e5f6a7b8-c9d0-4e1f-8a2b-3c4d5e6f7a81', 'a7b8c9d0-e1f2-4a3b-8c4d-5e6f7a8b9c03', NOW(), 'cli hashed test all'),
+    (110, NOW(), 'e5f6a7b8-c9d0-4e1f-8a2b-3c4d5e6f7a81', 'a7b8c9d0-e1f2-4a3b-8c4d-5e6f7a8b9c03', NOW(), 'cli hashed test org super admin'),
     -- Dedicated user and API key for encrypted bundles tests (isolated to prevent interference)
-    (111, NOW(), 'f6a7b8c9-d0e1-4f2a-9b3c-4d5e6f708193', 'b8c9d0e1-f2a3-4b4c-9d5e-6f7a8b9c0d14', NOW(), 'encrypted test all');
+    (111, NOW(), 'f6a7b8c9-d0e1-4f2a-9b3c-4d5e6f708193', 'b8c9d0e1-f2a3-4b4c-9d5e-6f7a8b9c0d14', NOW(), 'encrypted test org super admin');
+
+    PERFORM set_config('capgo.skip_apikey_trigger', 'true', true);
+
+    INSERT INTO "public"."apikeys" ("id", "created_at", "user_id", "key", "updated_at", "name") VALUES
+    -- Dedicated user and API keys for apikeys.test.ts API-key compatibility management
+    (112, NOW(), 'd0f1a2b3-c4d5-4e6f-8a90-b1c2d3e4f506', 'c9d0e1f2-a3b4-4c5d-8e6f-7a8b9c0d1e25', NOW(), 'apikey management test org super admin'),
+    (113, NOW(), 'd0f1a2b3-c4d5-4e6f-8a90-b1c2d3e4f506', 'd1e2f3a4-b5c6-4d7e-8f90-a1b2c3d4e5f6', NOW(), 'apikey management test apikey_manager');
+
+    PERFORM set_config('capgo.skip_apikey_trigger', 'false', true);
 
     -- Hashed API key for testing (hash of 'test-hashed-apikey-for-auth-test')
     -- Used by 07_auth_functions.sql tests
     INSERT INTO "public"."apikeys" ("id", "created_at", "user_id", "key", "key_hash", "updated_at", "name") VALUES
-    (100, NOW(), '6aa76066-55ef-4238-ade6-0b32334a4097', NULL, encode(extensions.digest('test-hashed-apikey-for-auth-test', 'sha256'), 'hex'), NOW(), 'test hashed all');
+    (100, NOW(), '6aa76066-55ef-4238-ade6-0b32334a4097', NULL, encode(extensions.digest('test-hashed-apikey-for-auth-test', 'sha256'), 'hex'), NOW(), 'test hashed org super admin');
 
     -- Expired hashed API key for testing (expired 1 day ago)
     INSERT INTO "public"."apikeys" ("id", "created_at", "user_id", "key", "key_hash", "updated_at", "name", "expires_at") VALUES
@@ -565,28 +609,30 @@ BEGIN
     (NOW(), 'com.encrypted.app', '', 'Encrypted Test App', '1.0.0', NOW(), 'a7b8c9d0-e1f2-4a3b-9c4d-5e6f7a8b9ca4', 'f6a7b8c9-d0e1-4f2a-9b3c-4d5e6f708193'),
     (NOW(), 'com.test2.app', '', 'Test2 App', '1.0.0', NOW(), '34a8c55d-2d0f-4652-a43f-684c7a9403ac', '6f0d1a2e-59ed-4769-b9d7-4d9615b28fe5');
 
-    WITH seed_key_modes (id, key_kind) AS (
+    WITH seed_key_roles (id, org_role_name) AS (
       VALUES
-        (1, 'upload'),
-        (2, 'read'),
-        (3, 'all'),
-        (4, 'upload'),
-        (5, 'read'),
-        (6, 'all'),
-        (7, 'write'),
-        (8, 'upload'),
-        (9, 'all'),
-        (10, 'upload'),
-        (11, 'read'),
-        (12, 'all'),
-        (13, 'write'),
-        (14, 'all'),
-        (15, 'all'),
-        (100, 'all'),
-        (101, 'all'),
-        (102, 'all'),
-        (110, 'all'),
-        (111, 'all')
+        (1, public.rbac_role_org_member()),
+        (2, public.rbac_role_org_member()),
+        (3, public.rbac_role_org_super_admin()),
+        (4, public.rbac_role_org_member()),
+        (5, public.rbac_role_org_member()),
+        (6, public.rbac_role_org_super_admin()),
+        (7, public.rbac_role_org_member()),
+        (8, public.rbac_role_org_member()),
+        (9, public.rbac_role_org_super_admin()),
+        (10, public.rbac_role_org_member()),
+        (11, public.rbac_role_org_member()),
+        (12, public.rbac_role_org_super_admin()),
+        (13, public.rbac_role_org_member()),
+        (14, public.rbac_role_org_super_admin()),
+        (15, public.rbac_role_org_super_admin()),
+        (100, public.rbac_role_org_super_admin()),
+        (101, public.rbac_role_org_super_admin()),
+        (102, public.rbac_role_org_super_admin()),
+        (110, public.rbac_role_org_super_admin()),
+        (111, public.rbac_role_org_super_admin()),
+        (112, public.rbac_role_org_super_admin()),
+        (113, public.rbac_role_apikey_manager())
     )
     INSERT INTO public.role_bindings (
       principal_type,
@@ -607,29 +653,27 @@ BEGIN
       ak.user_id,
       'Seeded API key V2 org binding',
       true
-    FROM seed_key_modes key_modes
-    JOIN public.apikeys ak ON ak.id = key_modes.id
+    FROM seed_key_roles key_roles
+    JOIN public.apikeys ak ON ak.id = key_roles.id
     JOIN public.org_users org_memberships
       ON org_memberships.user_id = ak.user_id
-      AND (org_memberships.user_right IS NULL OR org_memberships.user_right::text NOT LIKE 'invite_%')
+      AND org_memberships.is_invite IS NOT TRUE
     JOIN public.roles roles
-      ON roles.name = CASE
-        WHEN key_modes.key_kind = 'all' THEN public.rbac_role_org_super_admin()
-        ELSE public.rbac_role_org_member()
-      END
+      ON roles.name = key_roles.org_role_name
+      AND roles.scope_type = public.rbac_scope_org()
     ON CONFLICT DO NOTHING;
 
-    WITH seed_key_modes (id, key_kind) AS (
+    WITH seed_key_roles (id, app_role_name) AS (
       VALUES
-        (1, 'upload'),
-        (2, 'read'),
-        (4, 'upload'),
-        (5, 'read'),
-        (7, 'write'),
-        (8, 'upload'),
-        (10, 'upload'),
-        (11, 'read'),
-        (13, 'write')
+        (1, public.rbac_role_app_uploader()),
+        (2, public.rbac_role_app_reader()),
+        (4, public.rbac_role_app_uploader()),
+        (5, public.rbac_role_app_reader()),
+        (7, public.rbac_role_app_developer()),
+        (8, public.rbac_role_app_uploader()),
+        (10, public.rbac_role_app_uploader()),
+        (11, public.rbac_role_app_reader()),
+        (13, public.rbac_role_app_developer())
     )
     INSERT INTO public.role_bindings (
       principal_type,
@@ -652,18 +696,15 @@ BEGIN
       ak.user_id,
       'Seeded API key V2 app binding',
       true
-    FROM seed_key_modes key_modes
-    JOIN public.apikeys ak ON ak.id = key_modes.id
+    FROM seed_key_roles key_roles
+    JOIN public.apikeys ak ON ak.id = key_roles.id
     JOIN public.org_users org_memberships
       ON org_memberships.user_id = ak.user_id
-      AND (org_memberships.user_right IS NULL OR org_memberships.user_right::text NOT LIKE 'invite_%')
+      AND org_memberships.is_invite IS NOT TRUE
     JOIN public.apps apps ON apps.owner_org = org_memberships.org_id
     JOIN public.roles roles
-      ON roles.name = CASE key_modes.key_kind
-        WHEN 'write' THEN public.rbac_role_app_developer()
-        WHEN 'upload' THEN public.rbac_role_app_uploader()
-        ELSE public.rbac_role_app_reader()
-      END
+      ON roles.name = key_roles.app_role_name
+      AND roles.scope_type = public.rbac_scope_app()
     ON CONFLICT DO NOTHING;
 
     INSERT INTO "public"."app_versions" ("id", "created_at", "app_id", "name", "r2_path", "updated_at", "deleted", "external_url", "checksum", "session_key", "storage_provider", "owner_org", "user_id", "comment", "link") VALUES
@@ -709,7 +750,7 @@ BEGIN
 
     -- Drop replicated orgs but keet the the seed ones
     DELETE from "public"."orgs" where POSITION('organization' in orgs.name)=1;
-    PERFORM setval('public.apikeys_id_seq', 111, true);
+    PERFORM setval('public.apikeys_id_seq', 113, true);
     PERFORM setval('public.app_versions_id_seq', 16, true);
     PERFORM setval('public.channel_id_seq', 6, false);
     PERFORM setval('public.deploy_history_id_seq', 5, false);
@@ -757,6 +798,11 @@ BEGIN
   --  insert a fix device id for test
   INSERT INTO public.devices (updated_at, device_id, version_name, app_id, platform, plugin_version, os_version, version_build, custom_id, is_prod, is_emulator) VALUES
     (NOW(), '00000000-0000-0000-0000-000000000000', '1.0.0', 'com.demo.app', 'android', '4.15.3', '9', '1.223.0', '', 't', 't');
+
+  INSERT INTO public.devices (updated_at, device_id, version_name, app_id, platform, plugin_version, os_version, version_build, custom_id, is_prod, is_emulator) VALUES
+    (NOW(), '00000000-0000-0000-0000-000000000010', '1.0.0', 'com.demo.app', 'ios', '4.15.3', '16.0', '1.0.0', 'observe-plugin-4-ios', 't', 'f'),
+    (NOW(), '00000000-0000-0000-0000-000000000011', '1.0.1', 'com.demo.app', 'android', '4.15.3', '14', '1.0.1', 'observe-plugin-4-android', 't', 'f'),
+    (NOW(), '00000000-0000-0000-0000-000000000012', '1.0.0', 'com.demo.app', 'electron', '7.0.0', 'Linux 5.15', '1.0.0', 'observe-plugin-7-electron', 't', 'f');
 
   INSERT INTO public.stats (created_at, action, device_id, version_name, app_id) VALUES
     (NOW(), 'get'::"public"."stats_action", random_uuid, '1.0.0', 'com.demo.app'),
@@ -906,6 +952,7 @@ DECLARE
   production_channel_id bigint; beta_channel_id bigint; development_channel_id bigint; no_access_channel_id bigint; electron_only_channel_id bigint;
 BEGIN
   PERFORM pg_advisory_xact_lock(hashtext(p_app_id));
+  EXECUTE 'DELETE FROM public.org_id_tombstones WHERE org_id = $1' USING org_id;
   PERFORM public.reset_app_data(p_app_id);
   -- Ensure the base Stripe customer and org exist so FK inserts are stable between tests
   INSERT INTO public.stripe_info (
@@ -952,7 +999,7 @@ BEGIN
     build_time_exceeded = EXCLUDED.build_time_exceeded,
     updated_at = NOW();
 
-  INSERT INTO public.orgs (id, created_by, created_at, updated_at, logo, name, management_email, customer_id, use_new_rbac)
+  INSERT INTO public.orgs (id, created_by, created_at, updated_at, logo, name, management_email, customer_id)
   VALUES (
     org_id,
     user_id,
@@ -961,8 +1008,7 @@ BEGIN
     '',
     org_name,
     'test@capgo.app',
-    stripe_customer_id,
-    false
+    stripe_customer_id
   )
   ON CONFLICT (id) DO UPDATE SET
     customer_id = EXCLUDED.customer_id,
@@ -971,8 +1017,8 @@ BEGIN
     updated_at = NOW();
 
   EXECUTE $sql$
-    INSERT INTO public.org_users (org_id, user_id, user_right)
-    SELECT $1, $2, 'super_admin'
+    INSERT INTO public.org_users (org_id, user_id, rbac_role_name, is_invite)
+    SELECT $1, $2, public.rbac_role_org_super_admin(), false
     WHERE NOT EXISTS (
       SELECT 1 FROM public.org_users ou
       WHERE ou.org_id = $1 AND ou.user_id = $2
@@ -980,13 +1026,34 @@ BEGIN
   $sql$ USING org_id, user_id;
 
   EXECUTE $sql2$
-    INSERT INTO public.org_users (org_id, user_id, user_right)
-    SELECT $1, $2, 'super_admin'
+    INSERT INTO public.org_users (org_id, user_id, rbac_role_name, is_invite)
+    SELECT $1, $2, public.rbac_role_org_super_admin(), false
     WHERE NOT EXISTS (
       SELECT 1 FROM public.org_users ou
       WHERE ou.org_id = $1 AND ou.user_id = $2
     )
   $sql2$ USING org_id, admin_user_id;
+
+  -- API keys use bindings-priority: a key with its own role_bindings can only reach
+  -- orgs it is bound to. Clone each owner key's Demo-org binding onto this org so
+  -- apikey-authed tests work against dedicated per-file orgs too. Skip orgs with
+  -- apikey expiration policies: their triggers reject bindings for non-expiring keys.
+  EXECUTE $sql3$
+    INSERT INTO public.role_bindings (principal_type, principal_id, role_id, scope_type, org_id, granted_by, reason, is_direct)
+    SELECT rb.principal_type, rb.principal_id, rb.role_id, rb.scope_type, $1, rb.granted_by, 'Seeded API key V2 org binding (per-app org)', true
+    FROM public.role_bindings rb
+    JOIN public.apikeys ak ON ak.rbac_id = rb.principal_id
+    WHERE rb.principal_type = public.rbac_principal_apikey()
+      AND rb.scope_type = public.rbac_scope_org()
+      AND rb.org_id = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'::uuid
+      AND ak.user_id IN ($2, $3)
+      AND NOT EXISTS (
+        SELECT 1 FROM public.orgs o
+        WHERE o.id = $1
+          AND (o.require_apikey_expiration OR o.max_apikey_expiration_days IS NOT NULL)
+      )
+    ON CONFLICT DO NOTHING
+  $sql3$ USING org_id, user_id, admin_user_id;
 
   INSERT INTO public.apps (created_at, app_id, icon_url, name, last_version, updated_at, owner_org, user_id)
   VALUES (NOW(), p_app_id, '', 'Seeded App', '1.0.0', NOW(), org_id, user_id);
@@ -1149,9 +1216,6 @@ GRANT ALL ON FUNCTION "public"."reset_and_seed_app_stats_data" ("p_app_id" chara
 
 -- Seed data
 DO $$
-DECLARE
-    v_migration_result jsonb;
-    v_org RECORD;
 BEGIN
     -- Execute seeding functions
     PERFORM public.reset_and_seed_data();
@@ -1171,6 +1235,7 @@ BEGIN
       (public.rbac_perm_org_read_members(), public.rbac_scope_org(), 'Read org membership list'),
       (public.rbac_perm_org_invite_user(), public.rbac_scope_org(), 'Invite or add members to org'),
       (public.rbac_perm_org_update_user_roles(), public.rbac_scope_org(), 'Change org/member roles'),
+      (public.rbac_perm_org_manage_apikeys(), public.rbac_scope_org(), 'Manage API keys for the org without assigning user roles'),
       (public.rbac_perm_org_read_billing(), public.rbac_scope_org(), 'Read org billing settings'),
       (public.rbac_perm_org_update_billing(), public.rbac_scope_org(), 'Update org billing settings'),
       (public.rbac_perm_org_read_invoices(), public.rbac_scope_org(), 'Read invoices'),
@@ -1184,6 +1249,7 @@ BEGIN
       (public.rbac_perm_app_create_channel(), public.rbac_scope_app(), 'Create channels'),
       (public.rbac_perm_app_read_channels(), public.rbac_scope_app(), 'List/read channels'),
       (public.rbac_perm_app_read_logs(), public.rbac_scope_app(), 'Read app logs/metrics'),
+      ('app.manage_notifications', public.rbac_scope_app(), 'Manage notification campaigns, badge updates, recipient lookup, and delivery stats for an app'),
       (public.rbac_perm_app_manage_devices(), public.rbac_scope_app(), 'Manage devices at app scope'),
       (public.rbac_perm_app_read_devices(), public.rbac_scope_app(), 'Read devices at app scope'),
       (public.rbac_perm_app_build_native(), public.rbac_scope_app(), 'Trigger native builds'),
@@ -1207,10 +1273,11 @@ BEGIN
     INSERT INTO public.role_permissions (role_id, permission_id)
     SELECT r.id, p.id FROM public.roles r
     JOIN public.permissions p ON p.key IN (
-      public.rbac_perm_org_read(), public.rbac_perm_org_create_app(), public.rbac_perm_org_update_settings(), public.rbac_perm_org_delete(), public.rbac_perm_org_read_members(), public.rbac_perm_org_invite_user(), public.rbac_perm_org_update_user_roles(),
+      public.rbac_perm_org_read(), public.rbac_perm_org_create_app(), public.rbac_perm_org_update_settings(), public.rbac_perm_org_delete(), public.rbac_perm_org_read_members(), public.rbac_perm_org_invite_user(), public.rbac_perm_org_update_user_roles(), public.rbac_perm_org_manage_apikeys(),
       public.rbac_perm_org_read_billing(), public.rbac_perm_org_update_billing(), public.rbac_perm_org_read_invoices(), public.rbac_perm_org_read_audit(), public.rbac_perm_org_read_billing_audit(),
       public.rbac_perm_app_read(), public.rbac_perm_app_update_settings(), public.rbac_perm_app_delete(), public.rbac_perm_app_read_bundles(), public.rbac_perm_app_upload_bundle(),
       public.rbac_perm_app_create_channel(), public.rbac_perm_app_read_channels(), public.rbac_perm_app_read_logs(), public.rbac_perm_app_manage_devices(), public.rbac_perm_app_read_devices(),
+      'app.manage_notifications',
       public.rbac_perm_app_build_native(), public.rbac_perm_app_read_audit(), public.rbac_perm_app_update_user_roles(), public.rbac_perm_app_transfer(), public.rbac_perm_bundle_delete(),
       public.rbac_perm_channel_read(), public.rbac_perm_channel_update_settings(), public.rbac_perm_channel_delete(), public.rbac_perm_channel_read_history(),
       public.rbac_perm_channel_promote_bundle(), public.rbac_perm_channel_rollback_bundle(), public.rbac_perm_channel_manage_forced_devices(), public.rbac_perm_channel_read_forced_devices(), public.rbac_perm_channel_read_audit()
@@ -1222,10 +1289,11 @@ BEGIN
     INSERT INTO public.role_permissions (role_id, permission_id)
     SELECT r.id, p.id FROM public.roles r
     JOIN public.permissions p ON p.key IN (
-      public.rbac_perm_org_read(), public.rbac_perm_org_create_app(), public.rbac_perm_org_update_settings(), public.rbac_perm_org_read_members(), public.rbac_perm_org_invite_user(), public.rbac_perm_org_update_user_roles(),
+      public.rbac_perm_org_read(), public.rbac_perm_org_create_app(), public.rbac_perm_org_update_settings(), public.rbac_perm_org_read_members(), public.rbac_perm_org_invite_user(), public.rbac_perm_org_update_user_roles(), public.rbac_perm_org_manage_apikeys(),
       public.rbac_perm_org_read_billing(), public.rbac_perm_org_read_invoices(), public.rbac_perm_org_read_audit(), public.rbac_perm_org_read_billing_audit(),
       public.rbac_perm_app_read(), public.rbac_perm_app_update_settings(), public.rbac_perm_app_read_bundles(), public.rbac_perm_app_upload_bundle(),
       public.rbac_perm_app_create_channel(), public.rbac_perm_app_read_channels(), public.rbac_perm_app_read_logs(), public.rbac_perm_app_manage_devices(), public.rbac_perm_app_read_devices(),
+      'app.manage_notifications',
       public.rbac_perm_app_build_native(), public.rbac_perm_app_read_audit(), public.rbac_perm_app_update_user_roles(),
       public.rbac_perm_channel_read(), public.rbac_perm_channel_update_settings(), public.rbac_perm_channel_read_history(),
       public.rbac_perm_channel_promote_bundle(), public.rbac_perm_channel_rollback_bundle(), public.rbac_perm_channel_manage_forced_devices(), public.rbac_perm_channel_read_forced_devices(), public.rbac_perm_channel_read_audit()
@@ -1264,6 +1332,7 @@ BEGIN
     JOIN public.permissions p ON p.key IN (
       public.rbac_perm_app_read(), public.rbac_perm_app_update_settings(), public.rbac_perm_app_read_bundles(), public.rbac_perm_app_upload_bundle(),
       public.rbac_perm_app_create_channel(), public.rbac_perm_app_read_channels(), public.rbac_perm_app_read_logs(), public.rbac_perm_app_manage_devices(),
+      'app.manage_notifications',
       public.rbac_perm_app_read_devices(), public.rbac_perm_app_build_native(), public.rbac_perm_app_read_audit(), public.rbac_perm_app_update_user_roles(), public.rbac_perm_bundle_delete(),
       public.rbac_perm_channel_read(), public.rbac_perm_channel_update_settings(), public.rbac_perm_channel_delete(), public.rbac_perm_channel_read_history(),
       public.rbac_perm_channel_promote_bundle(), public.rbac_perm_channel_rollback_bundle(), public.rbac_perm_channel_manage_forced_devices(), public.rbac_perm_channel_read_forced_devices(), public.rbac_perm_channel_read_audit()
@@ -1271,32 +1340,138 @@ BEGIN
     WHERE r.name = public.rbac_role_app_admin()
     ON CONFLICT DO NOTHING;
 
-    -- app_developer: upload, manage devices, but no deletion
+    -- app_developer: upload/promote bundles and manage devices, but no direct channel setting updates
     INSERT INTO public.role_permissions (role_id, permission_id)
     SELECT r.id, p.id FROM public.roles r
     JOIN public.permissions p ON p.key IN (
-      public.rbac_perm_app_read(), public.rbac_perm_app_read_bundles(), public.rbac_perm_app_upload_bundle(), public.rbac_perm_app_read_channels(), public.rbac_perm_app_read_logs(),
+      public.rbac_perm_app_read(), public.rbac_perm_app_read_bundles(), public.rbac_perm_app_upload_bundle(), public.rbac_perm_app_create_channel(), public.rbac_perm_app_read_channels(), public.rbac_perm_app_read_logs(),
+      'app.manage_notifications',
       public.rbac_perm_app_manage_devices(), public.rbac_perm_app_read_devices(), public.rbac_perm_app_build_native(), public.rbac_perm_app_read_audit(),
-      public.rbac_perm_channel_read(), public.rbac_perm_channel_update_settings(), public.rbac_perm_channel_read_history(),
+      public.rbac_perm_channel_read(), public.rbac_perm_channel_read_history(),
       public.rbac_perm_channel_promote_bundle(), public.rbac_perm_channel_rollback_bundle(), public.rbac_perm_channel_manage_forced_devices(), public.rbac_perm_channel_read_forced_devices(), public.rbac_perm_channel_read_audit()
     )
     WHERE r.name = public.rbac_role_app_developer()
     ON CONFLICT DO NOTHING;
 
-    -- app_uploader: upload only
+    -- app_notifications: notification send, recipient lookup, badge, campaign, and stats access only
+    INSERT INTO public.role_permissions (role_id, permission_id)
+    SELECT r.id, p.id FROM public.roles r
+    JOIN public.permissions p ON p.key = 'app.manage_notifications'
+    WHERE r.name = 'app_notifications'
+    ON CONFLICT DO NOTHING;
+
+    -- app_uploader: upload only plus channel promote without settings writes
     INSERT INTO public.role_permissions (role_id, permission_id)
     SELECT r.id, p.id FROM public.roles r
     JOIN public.permissions p ON p.key IN (
-      public.rbac_perm_app_read(), public.rbac_perm_app_read_bundles(), public.rbac_perm_app_upload_bundle(), public.rbac_perm_app_read_channels(), public.rbac_perm_app_read_logs(), public.rbac_perm_app_read_devices(), public.rbac_perm_app_read_audit()
+      public.rbac_perm_app_read(), public.rbac_perm_app_read_bundles(), public.rbac_perm_app_upload_bundle(), public.rbac_perm_app_read_channels(), public.rbac_perm_app_read_logs(), public.rbac_perm_app_read_devices(), public.rbac_perm_app_read_audit(),
+      public.rbac_perm_channel_read(), public.rbac_perm_channel_promote_bundle()
     )
     WHERE r.name = public.rbac_role_app_uploader()
     ON CONFLICT DO NOTHING;
 
-    -- app_reader: read-only
+    -- app_preview: app-scoped bootstrap permissions. Channel lifecycle access is
+    -- granted only through a system-managed channel_preview binding after creation.
     INSERT INTO public.role_permissions (role_id, permission_id)
     SELECT r.id, p.id FROM public.roles r
     JOIN public.permissions p ON p.key IN (
-      public.rbac_perm_app_read(), public.rbac_perm_app_read_bundles(), public.rbac_perm_app_read_channels(), public.rbac_perm_app_read_logs(), public.rbac_perm_app_read_devices(), public.rbac_perm_app_read_audit()
+      public.rbac_perm_app_read(), public.rbac_perm_app_read_bundles(), public.rbac_perm_app_upload_bundle(),
+      public.rbac_perm_app_create_channel()
+    )
+    WHERE r.name = 'app_preview'
+    ON CONFLICT DO NOTHING;
+
+    INSERT INTO public.roles (name, scope_type, description, priority_rank, is_assignable, created_by)
+    VALUES (
+      public.rbac_role_apikey_manager(),
+      public.rbac_scope_org(),
+      'Manage API keys for CI/CD without org role assignment rights',
+      78,
+      true,
+      NULL
+    )
+    ON CONFLICT (name) DO UPDATE
+    SET
+      scope_type = EXCLUDED.scope_type,
+      description = EXCLUDED.description,
+      priority_rank = EXCLUDED.priority_rank,
+      is_assignable = EXCLUDED.is_assignable;
+
+    -- apikey_manager: manage API keys and read org policy metadata without role assignment rights
+    INSERT INTO public.role_permissions (role_id, permission_id)
+    SELECT r.id, p.id FROM public.roles r
+    JOIN public.permissions p ON p.key IN (
+      public.rbac_perm_org_manage_apikeys(),
+      public.rbac_perm_org_read()
+    )
+    WHERE r.name = public.rbac_role_apikey_manager()
+    ON CONFLICT DO NOTHING;
+
+    INSERT INTO public.roles (name, scope_type, description, priority_rank, is_assignable, created_by)
+    VALUES
+      (
+        'channel_preview',
+        public.rbac_scope_channel(),
+        'Preview deployment lifecycle for a channel created by an app-preview API key',
+        68,
+        false,
+        NULL
+      ),
+      (
+        public.rbac_role_channel_developer(),
+        public.rbac_scope_channel(),
+        'Developer access to a channel: promote and rollback bundles without settings writes',
+        58,
+        true,
+        NULL
+      ),
+      (
+        public.rbac_role_channel_uploader(),
+        public.rbac_scope_channel(),
+        'Upload-only access to a channel: read metadata and promote bundles',
+        57,
+        true,
+        NULL
+      )
+    ON CONFLICT (name) DO UPDATE
+    SET
+      scope_type = EXCLUDED.scope_type,
+      description = EXCLUDED.description,
+      priority_rank = EXCLUDED.priority_rank,
+      is_assignable = EXCLUDED.is_assignable;
+
+    INSERT INTO public.role_permissions (role_id, permission_id)
+    SELECT r.id, p.id FROM public.roles r
+    JOIN public.permissions p ON p.key IN (
+      public.rbac_perm_channel_read(), public.rbac_perm_channel_read_history(), public.rbac_perm_channel_promote_bundle(),
+      public.rbac_perm_channel_rollback_bundle(), public.rbac_perm_channel_manage_forced_devices(), public.rbac_perm_channel_read_forced_devices(), public.rbac_perm_channel_read_audit()
+    )
+    WHERE r.name = public.rbac_role_channel_developer()
+    ON CONFLICT DO NOTHING;
+
+    INSERT INTO public.role_permissions (role_id, permission_id)
+    SELECT r.id, p.id FROM public.roles r
+    JOIN public.permissions p ON p.key IN (
+      public.rbac_perm_channel_read(), public.rbac_perm_channel_promote_bundle()
+    )
+    WHERE r.name = public.rbac_role_channel_uploader()
+    ON CONFLICT DO NOTHING;
+
+    -- channel_preview: system-managed access for the channel its app_preview key created
+    INSERT INTO public.role_permissions (role_id, permission_id)
+    SELECT r.id, p.id FROM public.roles r
+    JOIN public.permissions p ON p.key IN (
+      public.rbac_perm_channel_read(), public.rbac_perm_channel_promote_bundle(), public.rbac_perm_channel_delete()
+    )
+    WHERE r.name = 'channel_preview'
+    ON CONFLICT DO NOTHING;
+
+    -- app_reader: read-only app access plus read-only access to every channel in the app
+    INSERT INTO public.role_permissions (role_id, permission_id)
+    SELECT r.id, p.id FROM public.roles r
+    JOIN public.permissions p ON p.key IN (
+      public.rbac_perm_app_read(), public.rbac_perm_app_read_bundles(), public.rbac_perm_app_read_channels(), public.rbac_perm_app_read_logs(), public.rbac_perm_app_read_devices(), public.rbac_perm_app_read_audit(),
+      public.rbac_perm_channel_read(), public.rbac_perm_channel_read_history(), public.rbac_perm_channel_read_forced_devices(), public.rbac_perm_channel_read_audit()
     )
     WHERE r.name = public.rbac_role_app_reader()
     ON CONFLICT DO NOTHING;
@@ -1321,21 +1496,107 @@ BEGIN
     WHERE r.name = public.rbac_role_channel_reader()
     ON CONFLICT DO NOTHING;
 
+
+    -- Ensure dedicated apikey management test keys retain explicit RBAC bindings
+    -- after permission repopulation (seed_key_roles insert can be skipped silently).
+    DELETE FROM public.role_bindings rb
+    USING public.apikeys ak
+    WHERE rb.principal_type = public.rbac_principal_apikey()
+      AND rb.principal_id = ak.rbac_id
+      AND rb.scope_type = public.rbac_scope_org()
+      AND ak.id IN (112, 113);
+
+    INSERT INTO public.role_bindings (
+      principal_type,
+      principal_id,
+      role_id,
+      scope_type,
+      org_id,
+      granted_by,
+      reason,
+      is_direct
+    )
+    SELECT
+      public.rbac_principal_apikey(),
+      ak.rbac_id,
+      roles.id,
+      public.rbac_scope_org(),
+      'f1a2b3c4-d5e6-4f70-8a9b-0c1d2e3f4a50'::uuid,
+      ak.user_id,
+      'Seeded apikey management test binding',
+      true
+    FROM public.apikeys ak
+    JOIN (
+      VALUES
+        (112::bigint, public.rbac_role_org_super_admin()),
+        (113::bigint, public.rbac_role_apikey_manager())
+    ) AS management_keys (apikey_id, role_name)
+      ON management_keys.apikey_id = ak.id
+    JOIN public.roles roles
+      ON roles.scope_type = public.rbac_scope_org()
+      AND roles.name = management_keys.role_name
+    WHERE ak.rbac_id IS NOT NULL;
+
     RAISE NOTICE 'RBAC permissions populated: % permissions, % role_permissions',
       (SELECT COUNT(*) FROM public.permissions),
       (SELECT COUNT(*) FROM public.role_permissions);
 
-    -- Migrate org_users to RBAC role_bindings for all test orgs
-    RAISE NOTICE 'Migrating org_users to RBAC role_bindings...';
-
-    FOR v_org IN SELECT id, name FROM public.orgs ORDER BY created_at
-    LOOP
-        SELECT public.rbac_migrate_org_users_to_bindings(v_org.id) INTO v_migration_result;
-        RAISE NOTICE 'Org [%] "%": %', v_org.id, v_org.name, v_migration_result;
-    END LOOP;
-
-    RAISE NOTICE 'RBAC migration completed successfully';
+    RAISE NOTICE 'RBAC seed completed successfully';
 EXCEPTION WHEN OTHERS THEN
     RAISE NOTICE 'Seeding failed: %', SQLERRM;
     RAISE;
+END $$;
+-- Repair dedicated apikey management test bindings after seed DO block completes.
+DELETE FROM public.role_bindings rb
+USING public.apikeys ak
+WHERE rb.principal_type = public.rbac_principal_apikey()
+  AND rb.principal_id = ak.rbac_id
+  AND rb.scope_type = public.rbac_scope_org()
+  AND ak.id IN (112, 113);
+
+INSERT INTO public.role_bindings (
+  principal_type,
+  principal_id,
+  role_id,
+  scope_type,
+  org_id,
+  granted_by,
+  reason,
+  is_direct
+)
+SELECT
+  public.rbac_principal_apikey(),
+  ak.rbac_id,
+  roles.id,
+  public.rbac_scope_org(),
+  'f1a2b3c4-d5e6-4f70-8a9b-0c1d2e3f4a50'::uuid,
+  ak.user_id,
+  'Seeded apikey management test binding',
+  true
+FROM public.apikeys ak
+JOIN (
+  VALUES
+    (112::bigint, public.rbac_role_org_super_admin()),
+    (113::bigint, public.rbac_role_apikey_manager())
+) AS management_keys (apikey_id, role_name)
+  ON management_keys.apikey_id = ak.id
+JOIN public.roles roles
+  ON roles.scope_type = public.rbac_scope_org()
+  AND roles.name = management_keys.role_name
+WHERE ak.rbac_id IS NOT NULL;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM public.apikeys ak
+    JOIN public.role_bindings rb
+      ON rb.principal_type = public.rbac_principal_apikey()
+      AND rb.principal_id = ak.rbac_id
+    JOIN public.roles r ON r.id = rb.role_id
+    WHERE ak.id = 113
+      AND r.name = public.rbac_role_apikey_manager()
+  ) THEN
+    RAISE EXCEPTION 'seed verification failed: apikey 113 missing apikey_manager binding';
+  END IF;
 END $$;

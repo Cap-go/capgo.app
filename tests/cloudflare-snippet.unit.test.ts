@@ -74,7 +74,7 @@ describe('cloudflare plugin snippet on-prem fallback', () => {
     expect(cache.put).not.toHaveBeenCalled()
   })
 
-  it('caches on-prem only after all fallback workers agree', async () => {
+  it('caches on-prem after primary + one confirming fallback agree', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const cache = buildCache()
     vi.stubGlobal('caches', { default: cache })
@@ -128,7 +128,7 @@ describe('cloudflare plugin snippet on-prem fallback', () => {
     expect(putKeys.some(key => key.includes('/__internal__/onprem-cache-v2/'))).toBe(false)
   })
 
-  it('requires every configured fallback worker to confirm on-prem', async () => {
+  it('does not cache on-prem when a confirming fallback fails before another on-prem hit', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const cache = buildCache()
     vi.stubGlobal('caches', { default: cache })
@@ -139,6 +139,41 @@ describe('cloudflare plugin snippet on-prem fallback', () => {
       }
 
       const target = new URL(String(url))
+      // SA on-prem, NA 5xx, EU on-prem — must not cache after partial outage.
+      if (target.origin === 'https://plugin.sa.capgo.app' || target.origin === 'https://plugin.eu.capgo.app') {
+        return new Response(JSON.stringify({ error: 'on_premise_app', message: 'On-premise app detected' }), {
+          status: 429,
+          headers: { 'Cache-Control': 'public, max-age=60' },
+        })
+      }
+      if (target.origin === 'https://plugin.na.capgo.app') {
+        return new Response('upstream error', { status: 502 })
+      }
+      throw new Error(`Unexpected fetch target ${target.href}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const response = await snippet.fetch(buildRequest('/updates', { app_id: 'com.external.app' }, 'GRU'))
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ status: 'ok' })
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+    const putKeys = cache.put.mock.calls.map(([key]) => key instanceof Request ? key.url : String(key))
+    expect(putKeys.some(key => key.includes('/__internal__/onprem-cache-v2/'))).toBe(false)
+  })
+
+  it('caches on-prem after one confirming fallback worker (not full mesh)', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const cache = buildCache()
+    vi.stubGlobal('caches', { default: cache })
+
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      if (url instanceof Request) {
+        return new Response(JSON.stringify({ status: 'ok' }), { status: 200 })
+      }
+
+      const target = new URL(String(url))
+      // SA primary + NA confirm both on-prem — should finalize without needing EU.
       if (target.origin === 'https://plugin.sa.capgo.app' || target.origin === 'https://plugin.na.capgo.app') {
         return new Response(JSON.stringify({ error: 'on_premise_app', message: 'On-premise app detected' }), {
           status: 429,
@@ -151,12 +186,12 @@ describe('cloudflare plugin snippet on-prem fallback', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    const response = await snippet.fetch(buildRequest('/updates', { app_id: 'com.cloud.valid' }, 'GRU'))
+    const response = await snippet.fetch(buildRequest('/updates', { app_id: 'com.external.app' }, 'GRU'))
 
-    expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ status: 'ok' })
-    expect(fetchMock).toHaveBeenCalledTimes(4)
+    expect(response.status).toBe(429)
+    expect(response.headers.get('X-Onprem-App-Id')).toBe('com.external.app')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
     const putKeys = cache.put.mock.calls.map(([key]) => key instanceof Request ? key.url : String(key))
-    expect(putKeys.some(key => key.includes('/__internal__/onprem-cache-v2/'))).toBe(false)
+    expect(putKeys.some(key => key.includes('/__internal__/onprem-cache-v2/'))).toBe(true)
   })
 })

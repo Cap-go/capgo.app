@@ -1,4 +1,5 @@
 import type { Context } from 'hono'
+import { readFileSync } from 'node:fs'
 import { Hono } from 'hono/tiny'
 import { describe, expect, it, vi } from 'vitest'
 import { logsnagInsightsTestUtils } from '../supabase/functions/_backend/triggers/logsnag_insights.ts'
@@ -50,6 +51,26 @@ describe('logsnag revenue metric helpers', () => {
     )).toBe(1)
   })
 
+  it.concurrent('clamps trailing 12-month start for leap-day ends', () => {
+    const start = logsnagInsightsTestUtils.getTrailing12mStart(new Date('2024-02-29T00:00:00.000Z'))
+    expect(start.toISOString()).toBe('2023-02-28T00:00:00.000Z')
+  })
+
+  it.concurrent('computes plan conversion rates against paying orgs, not all users/orgs', () => {
+    const rates = logsnagInsightsTestUtils.getPlanConversionRates(
+      { Solo: 15, Maker: 10, Team: 0, Enterprise: 0, Trial: 50 },
+      25,
+    )
+    expect(rates).toEqual({
+      solo: 60,
+      maker: 40,
+      team: 0,
+      enterprise: 0,
+      total: 100,
+    })
+    expect(logsnagInsightsTestUtils.calculateConversionRate(15, 200)).toBe(7.5)
+  })
+
   it.concurrent('builds UTC calendar-day bounds', () => {
     const { dayStart, nextDayStart, dayDateId } = logsnagInsightsTestUtils.getCurrentDayWindow(new Date('2026-03-24T18:45:12.000Z'))
 
@@ -75,10 +96,78 @@ describe('logsnag revenue metric helpers', () => {
     expect(dayDateId).toBe('2026-03-24')
   })
 
+  it.concurrent('delays app build onboarding metrics until the full 24h cohort can complete', () => {
+    const coreWindow = logsnagInsightsTestUtils.getCompletedDayWindowForDateId('2026-03-24')
+    const finalizedWindow = logsnagInsightsTestUtils.getCompletedAppBuildOnboardingWindow(coreWindow)
+
+    expect(finalizedWindow.prevDayStart.toISOString()).toBe('2026-03-23T00:00:00.000Z')
+    expect(finalizedWindow.prevDayEnd.toISOString()).toBe('2026-03-24T00:00:00.000Z')
+    expect(finalizedWindow.prevDayDateId).toBe('2026-03-23')
+  })
+
+  it.concurrent('summarizes app build onboarding daily cohorts', () => {
+    expect(logsnagInsightsTestUtils.summarizeAppBuildOnboardingRows([
+      {
+        created_at: '2026-03-24T10:00:00.000Z',
+        created_from_onboarding: true,
+        onboarding_completed_at: '2026-03-25T09:59:59.999Z',
+        build_count: 3,
+      },
+      {
+        created_at: '2026-03-24T10:00:00.000Z',
+        created_from_onboarding: true,
+        onboarding_completed_at: '2026-03-25T10:00:00.000Z',
+        build_count: 4,
+      },
+      {
+        created_at: '2026-03-24T10:00:00.000Z',
+        created_from_onboarding: true,
+        onboarding_completed_at: '2026-03-24T11:00:00.000Z',
+        build_count: 2,
+      },
+      {
+        created_at: '2026-03-24T10:00:00.000Z',
+        created_from_onboarding: false,
+        onboarding_completed_at: null,
+        build_count: '3',
+      },
+    ])).toEqual({
+      apps_created: 4,
+      apps_with_cli_onboarding_builds_24h: 1,
+      apps_with_manual_builds_24h: 1,
+    })
+  })
+
+  it.concurrent('builds a bounded recent repair window for missing global stats days', () => {
+    expect(logsnagInsightsTestUtils.buildRecentGlobalStatsRepairDateIds('2026-06-29', 2)).toEqual([
+      '2026-06-27',
+      '2026-06-28',
+      '2026-06-29',
+    ])
+    expect(logsnagInsightsTestUtils.buildRecentGlobalStatsRepairDateIds('2026-03-01', 2)).toEqual([
+      '2026-02-27',
+      '2026-02-28',
+      '2026-03-01',
+    ])
+  })
+
+  it.concurrent('keeps total bundle storage on version metadata instead of manifest rows', () => {
+    const migration = readFileSync(new URL('../supabase/migrations/20260708000000_prod_baseline.sql', import.meta.url), 'utf8')
+    const definition = migration.match(/CREATE OR REPLACE FUNCTION "public"\."total_bundle_storage_bytes"\(\) RETURNS bigint[\s\S]*?\$\$;/)?.[0]
+    const grant = migration.match(/GRANT (?:ALL|EXECUTE) ON FUNCTION "public"\."total_bundle_storage_bytes"\(\) TO "service_role";/)?.[0]
+
+    expect(definition).toBeDefined()
+    expect(grant).toBeDefined()
+    expect(definition!).toContain('public.app_versions_meta')
+    expect(definition!).toContain('public.app_versions')
+    expect(definition!).not.toContain('public.manifest')
+    expect(definition!).not.toContain('file_size')
+  })
+
   it.concurrent('detects missing global stats shards before notifications', () => {
     expect(logsnagInsightsTestUtils.getMissingGlobalStatsRequiredShards(new Set())).toEqual([
       'core',
-      'usage',
+      ...logsnagInsightsTestUtils.USAGE_GLOBAL_STATS_SHARDS,
       'revenue',
       'plugins',
       'builds',
@@ -89,7 +178,7 @@ describe('logsnag revenue metric helpers', () => {
 
     const completed = logsnagInsightsTestUtils.normalizeCompletedGlobalStatsShards([
       'core',
-      'usage',
+      ...logsnagInsightsTestUtils.USAGE_GLOBAL_STATS_SHARDS,
       'plugins',
       'builds',
       'retention',
@@ -100,10 +189,11 @@ describe('logsnag revenue metric helpers', () => {
     ])
 
     expect(logsnagInsightsTestUtils.getMissingGlobalStatsRequiredShards(completed)).toEqual(['revenue'])
+    expect(logsnagInsightsTestUtils.getGlobalStatsShardQueueCandidates(completed)).toEqual(['revenue'])
 
     const ready = logsnagInsightsTestUtils.normalizeCompletedGlobalStatsShards([
       'core',
-      'usage',
+      ...logsnagInsightsTestUtils.USAGE_GLOBAL_STATS_SHARDS,
       'revenue',
       'plugins',
       'builds',
@@ -113,6 +203,21 @@ describe('logsnag revenue metric helpers', () => {
     ])
     expect(logsnagInsightsTestUtils.getMissingGlobalStatsRequiredShards(ready)).toEqual([])
     expect(logsnagInsightsTestUtils.getMissingGlobalStatsShards(ready)).toEqual(['notifications'])
+    expect(logsnagInsightsTestUtils.getGlobalStatsShardQueueCandidates(ready)).toEqual(['notifications'])
+
+    const legacyUsage = logsnagInsightsTestUtils.normalizeCompletedGlobalStatsShards([
+      'core',
+      'usage',
+      'revenue',
+      'plugins',
+      'builds',
+      'retention',
+      'paid_products',
+      'ltv',
+    ])
+    expect(logsnagInsightsTestUtils.getMissingGlobalStatsRequiredShards(legacyUsage)).toEqual([
+      ...logsnagInsightsTestUtils.USAGE_GLOBAL_STATS_SHARDS,
+    ])
 
     const sent = logsnagInsightsTestUtils.normalizeCompletedGlobalStatsShards([
       ...ready,
@@ -121,10 +226,81 @@ describe('logsnag revenue metric helpers', () => {
     expect(logsnagInsightsTestUtils.getMissingGlobalStatsShards(sent)).toEqual([])
   })
 
+  it.concurrent('requeues stale completed global stats shards before notifications', () => {
+    const ready = logsnagInsightsTestUtils.normalizeCompletedGlobalStatsShards([
+      'core',
+      ...logsnagInsightsTestUtils.USAGE_GLOBAL_STATS_SHARDS,
+      'revenue',
+      'plugins',
+      'builds',
+      'retention',
+      'paid_products',
+      'ltv',
+    ])
+    const staleRow = {
+      dateId: '2026-06-17',
+      completedShards: ready,
+      orgs: 0,
+      bundleStorageGb: 0,
+      buildTotalSecondsDayIos: 1908,
+      buildTotalSecondsDayAndroid: 0,
+      buildAvgSecondsDayIos: 59.6,
+      buildAvgSecondsDayAndroid: 0,
+      buildCountDayIos: 32,
+      buildCountDayAndroid: 0,
+    }
+    const expectedBuildStats = {
+      totalSeconds: { ios: 3816, android: 0 },
+      avgSeconds: { ios: 119.3, android: 0 },
+      counts: { ios: 32, android: 0 },
+    }
+
+    const staleShards = logsnagInsightsTestUtils.getGlobalStatsStaleRepairShards(staleRow, expectedBuildStats)
+
+    expect(staleShards).toEqual(['core', 'usage_storage', 'builds'])
+    expect(logsnagInsightsTestUtils.getGlobalStatsRepairShardQueueCandidates(ready, staleShards)).toEqual(['core', 'usage_storage', 'builds'])
+    expect(logsnagInsightsTestUtils.getGlobalStatsRepairShardQueueCandidates(ready)).toEqual(['notifications'])
+  })
+
+  it.concurrent('keeps fresh completed global stats shards eligible for notifications', () => {
+    const ready = logsnagInsightsTestUtils.normalizeCompletedGlobalStatsShards([
+      'core',
+      ...logsnagInsightsTestUtils.USAGE_GLOBAL_STATS_SHARDS,
+      'revenue',
+      'plugins',
+      'builds',
+      'retention',
+      'paid_products',
+      'ltv',
+    ])
+    const freshRow = {
+      dateId: '2026-06-17',
+      completedShards: ready,
+      orgs: 6639,
+      bundleStorageGb: 489.89,
+      buildTotalSecondsDayIos: 3816,
+      buildTotalSecondsDayAndroid: 0,
+      buildAvgSecondsDayIos: 119.3,
+      buildAvgSecondsDayAndroid: 0,
+      buildCountDayIos: 32,
+      buildCountDayAndroid: 0,
+    }
+    const expectedBuildStats = {
+      totalSeconds: { ios: 3816, android: 0 },
+      avgSeconds: { ios: 119.3, android: 0 },
+      counts: { ios: 32, android: 0 },
+    }
+
+    const staleShards = logsnagInsightsTestUtils.getGlobalStatsStaleRepairShards(freshRow, expectedBuildStats)
+
+    expect(staleShards).toEqual([])
+    expect(logsnagInsightsTestUtils.getGlobalStatsRepairShardQueueCandidates(ready, staleShards)).toEqual(['notifications'])
+  })
+
   it.concurrent('detects completed global stats notifications for idempotent retries', () => {
     const ready = logsnagInsightsTestUtils.normalizeCompletedGlobalStatsShards([
       'core',
-      'usage',
+      ...logsnagInsightsTestUtils.USAGE_GLOBAL_STATS_SHARDS,
       'revenue',
       'plugins',
       'builds',
@@ -156,14 +332,38 @@ describe('logsnag revenue metric helpers', () => {
     ])
 
     expect(logsnagInsightsTestUtils.shouldSkipCompletedGlobalStatsShardRetry(completed, 'core')).toBe(true)
-    expect(logsnagInsightsTestUtils.shouldSkipCompletedGlobalStatsShardRetry(completed, 'usage')).toBe(false)
+    expect(logsnagInsightsTestUtils.shouldSkipCompletedGlobalStatsShardRetry(completed, 'usage_updates')).toBe(false)
     expect(logsnagInsightsTestUtils.shouldSkipCompletedGlobalStatsShardRetry(completed, 'notifications')).toBe(false)
+  })
+
+  it.concurrent('derives only missing global stats shards for partial dispatcher retries', () => {
+    const partial = logsnagInsightsTestUtils.normalizeCompletedGlobalStatsShards([
+      'core',
+      ...logsnagInsightsTestUtils.USAGE_GLOBAL_STATS_SHARDS,
+      'revenue',
+    ])
+
+    expect(logsnagInsightsTestUtils.getMissingGlobalStatsRequiredShards(partial)).toEqual([
+      'plugins',
+      'builds',
+      'retention',
+      'paid_products',
+      'ltv',
+    ])
+    expect(logsnagInsightsTestUtils.getMissingGlobalStatsShards(partial)).toEqual([
+      'plugins',
+      'builds',
+      'retention',
+      'paid_products',
+      'ltv',
+      'notifications',
+    ])
   })
 
   it.concurrent('uses notification claim markers to avoid replaying claimed sends', () => {
     const ready = logsnagInsightsTestUtils.normalizeCompletedGlobalStatsShards([
       'core',
-      'usage',
+      ...logsnagInsightsTestUtils.USAGE_GLOBAL_STATS_SHARDS,
       'revenue',
       'plugins',
       'builds',
@@ -270,6 +470,65 @@ describe('logsnag revenue metric helpers', () => {
     })
   })
 
+  it.concurrent('counts active canceled and active past due orgs at a snapshot boundary', () => {
+    const snapshotEnd = new Date('2026-03-25T00:00:00.000Z')
+
+    expect(logsnagInsightsTestUtils.calculateSubscriptionAccessSnapshotCounts([
+      {
+        customer_id: 'cus_canceled_active',
+        is_good_plan: true,
+        paid_at: '2026-01-01T00:00:00.000Z',
+        canceled_at: '2026-03-20T00:00:00.000Z',
+        subscription_anchor_end: '2026-04-01T00:00:00.000Z',
+      },
+      {
+        customer_id: 'cus_canceled_expired',
+        is_good_plan: true,
+        paid_at: '2026-01-01T00:00:00.000Z',
+        canceled_at: '2026-03-20T00:00:00.000Z',
+        subscription_anchor_end: '2026-03-24T00:00:00.000Z',
+      },
+      {
+        customer_id: 'cus_past_due_active',
+        is_good_plan: true,
+        status: 'succeeded',
+        paid_at: '2026-01-01T00:00:00.000Z',
+        past_due_at: '2026-03-22T00:00:00.000Z',
+        subscription_anchor_end: '2026-04-01T00:00:00.000Z',
+      },
+      {
+        customer_id: 'cus_past_due_canceled',
+        is_good_plan: true,
+        status: 'succeeded',
+        paid_at: '2026-01-01T00:00:00.000Z',
+        past_due_at: '2026-03-22T00:00:00.000Z',
+        canceled_at: '2026-03-23T00:00:00.000Z',
+        subscription_anchor_end: '2026-04-01T00:00:00.000Z',
+      },
+      {
+        customer_id: 'cus_past_due_stale_status',
+        is_good_plan: true,
+        status: 'canceled',
+        paid_at: '2026-01-01T00:00:00.000Z',
+        past_due_at: '2026-03-22T00:00:00.000Z',
+        subscription_anchor_end: '2026-04-01T00:00:00.000Z',
+      },
+    ], snapshotEnd)).toEqual({
+      active_canceled_orgs: 2,
+      active_past_due_orgs: 1,
+    })
+  })
+
+  it.concurrent('normalizes subscription access snapshot SQL rows', () => {
+    expect(logsnagInsightsTestUtils.normalizeSubscriptionAccessSnapshotCounts({
+      active_canceled_orgs: '3',
+      active_past_due_orgs: null,
+    })).toEqual({
+      active_canceled_orgs: 3,
+      active_past_due_orgs: 0,
+    })
+  })
+
   it.concurrent('only refreshes mutable past-due stats for the current daily snapshot or an empty first fill', () => {
     const currentWindow = logsnagInsightsTestUtils.getCompletedDayWindowForDateId('2026-03-24')
     const replayReferenceDate = new Date('2026-03-26T00:00:00.000Z')
@@ -285,12 +544,12 @@ describe('logsnag revenue metric helpers', () => {
     expect(logsnagInsightsTestUtils.shouldRefreshMutablePastDueStats(
       currentWindow,
       replayReferenceDate,
-      { past_due_orgs: 0, past_due_orgs_average_days: 0 },
+      { past_due_orgs: 0, past_due_orgs_average_days: 0, active_canceled_orgs: 0, active_past_due_orgs: 0 },
     )).toBe(true)
     expect(logsnagInsightsTestUtils.shouldRefreshMutablePastDueStats(
       currentWindow,
       replayReferenceDate,
-      { past_due_orgs: 2, past_due_orgs_average_days: 3.8 },
+      { past_due_orgs: 2, past_due_orgs_average_days: 3.8, active_canceled_orgs: 0, active_past_due_orgs: 0 },
     )).toBe(false)
   })
 
@@ -372,11 +631,36 @@ describe('logsnag revenue metric helpers', () => {
     expect(logsnagInsightsTestUtils.normalizeCoreSnapshotCounts({
       onboarded: '7',
       need_upgrade: null,
-    })).toEqual({ onboarded: 7, needUpgrade: 0 })
+      above_plan_with_credits: '4',
+      above_plan_without_credits: null,
+    })).toEqual({
+      onboarded: 7,
+      needUpgrade: 0,
+      abovePlanWithCredits: 4,
+      abovePlanWithoutCredits: 0,
+    })
 
-    expect(logsnagInsightsTestUtils.normalizeCoreSnapshotCounts(null)).toEqual({ onboarded: 0, needUpgrade: 0 })
+    expect(logsnagInsightsTestUtils.normalizeCoreSnapshotCounts(null)).toEqual({
+      onboarded: 0,
+      needUpgrade: 0,
+      abovePlanWithCredits: 0,
+      abovePlanWithoutCredits: 0,
+    })
   })
 
+  it.concurrent('reconstructs above-plan credit state at the replayed snapshot boundary', () => {
+    const source = readFileSync(new URL('../supabase/functions/_backend/triggers/logsnag_insights.ts', import.meta.url), 'utf8')
+    const coreSnapshotQuery = source.match(/async function getCoreSnapshotCounts[\s\S]*?async function runCoreGlobalStatsShard/)?.[0] ?? ''
+
+    expect(coreSnapshotQuery).toContain('public.usage_credit_grants')
+    expect(coreSnapshotQuery).toContain('public.usage_credit_consumptions')
+    expect(coreSnapshotQuery).toContain('g.granted_at < ${snapshotExclusiveEndIso}::timestamptz')
+    expect(coreSnapshotQuery).toContain('g.expires_at >= ${snapshotExclusiveEndIso}::timestamptz')
+    expect(coreSnapshotQuery).toContain('c.applied_at < ${snapshotExclusiveEndIso}::timestamptz')
+    expect(coreSnapshotQuery).toContain('si.is_above_plan = true')
+    expect(coreSnapshotQuery).not.toContain('si.plan_usage > 100')
+    expect(coreSnapshotQuery).not.toContain('o.has_usage_credits')
+  })
   it.concurrent('normalizes logsnag insights retry payload counts', () => {
     expect(logsnagInsightsTestUtils.normalizeLogsnagInsightsRetryCount('2')).toBe(2)
     expect(logsnagInsightsTestUtils.normalizeLogsnagInsightsRetryCount(2.8)).toBe(2)
@@ -407,6 +691,7 @@ describe('logsnag revenue metric helpers', () => {
 
   it.concurrent('builds shard messages as distinct queue HTTP calls', () => {
     expect(logsnagInsightsTestUtils.getLogsnagInsightsShardFunctionName('revenue')).toBe('logsnag_insights_revenue')
+    expect(logsnagInsightsTestUtils.getLogsnagInsightsShardFunctionName('usage_updates')).toBe('logsnag_insights_usage_updates')
     expect(logsnagInsightsTestUtils.buildLogsnagInsightsShardMessage('revenue', '2026-03-24')).toEqual({
       function_name: 'logsnag_insights_revenue',
       function_type: 'cloudflare',
@@ -426,6 +711,8 @@ describe('logsnag revenue metric helpers', () => {
 
   it.concurrent('normalizes global stats shard and date payloads', () => {
     expect(logsnagInsightsTestUtils.normalizeLogsnagInsightsShard('core')).toBe('core')
+    expect(logsnagInsightsTestUtils.normalizeLogsnagInsightsShard('usage_updates')).toBe('usage_updates')
+    expect(logsnagInsightsTestUtils.normalizeLogsnagInsightsShard('usage')).toBeNull()
     expect(logsnagInsightsTestUtils.normalizeLogsnagInsightsShard('bad')).toBeNull()
     expect(logsnagInsightsTestUtils.normalizeGlobalStatsDateId('2026-03-24')).toBe('2026-03-24')
     expect(logsnagInsightsTestUtils.normalizeGlobalStatsDateId('2026-02-30')).toBeNull()

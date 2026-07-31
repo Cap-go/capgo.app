@@ -53,7 +53,10 @@ async function markHealthy(hostname, colo, workerUrl) {
   try {
     const cache = caches.default
     const key = getCircuitBreakerCacheKey(hostname, colo, workerUrl)
-    await cache.delete(key)
+    // Only delete when a breaker entry exists — avoid Cache API write on every success.
+    const cached = await cache.match(key)
+    if (cached)
+      await cache.delete(key)
   }
   catch {
     // Ignore errors - cache miss is fine
@@ -248,23 +251,27 @@ async function setPlanUpgradeCache(hostname, appId, endpoint, method, responseBo
   }
 }
 
-async function extractAppId(request, url) {
+function extractAppIdFromBodyBytes(requestBody) {
+  if (!requestBody)
+    return null
+  try {
+    const body = JSON.parse(new TextDecoder().decode(requestBody))
+    return body.app_id ?? null
+  }
+  catch {
+    return null
+  }
+}
+
+function extractAppIdFromRequest(request, url, requestBody) {
   const method = request.method
   // For GET and DELETE on /channel_self, app_id is in query params
   if ((method === 'DELETE' || method === 'GET') && matchesEndpoint(url.pathname, '/channel_self')) {
     return url.searchParams.get('app_id')
   }
-  // For POST and PUT methods, app_id is in the body
-  if (method === 'POST' || method === 'PUT') {
-    try {
-      const clonedRequest = request.clone()
-      const body = await clonedRequest.json()
-      return body.app_id
-    }
-    catch {
-      return null
-    }
-  }
+  // For POST and PUT methods, app_id is in the body (already buffered once).
+  if (method === 'POST' || method === 'PUT')
+    return extractAppIdFromBodyBytes(requestBody)
   // For other HTTP methods (PATCH, OPTIONS, HEAD, etc.), on-prem caching is
   // intentionally skipped as these endpoints don't use those methods
   return null
@@ -276,12 +283,17 @@ export default {
     const method = request.method
     const hostname = url.hostname
 
+    // Buffer POST/PUT body once — reused for app_id parse and regional fallbacks.
+    const requestBody = method === 'POST' || method === 'PUT'
+      ? await request.arrayBuffer()
+      : undefined
+
     // Check on-prem cache for cacheable endpoints BEFORE routing to workers
     let appId = null
     let endpoint = null
     if (isCacheableEndpoint(url.pathname)) {
       endpoint = getEndpointName(url.pathname)
-      appId = await extractAppId(request, url)
+      appId = extractAppIdFromRequest(request, url, requestBody)
 
       if (appId) {
         const cachedPlanUpgrade = await getPlanUpgradeCache(hostname, appId, endpoint, method)
@@ -677,13 +689,12 @@ export default {
     const pathWithQuery = url.pathname + url.search
 
     const fallbackUrls = zoneFallbackUrls[zone] || [WORKER_URL.EUROPE]
-    const requestBody = method === 'POST' || method === 'PUT'
-      ? await request.clone().arrayBuffer()
-      : undefined
     let pendingOnPrem = null
     let onPremConfirmations = 0
     let successfulFallbacks = 0
     let fallbackFailure = false
+    // After first on-prem hit, confirm with at most one more healthy worker (not the full mesh).
+    let onPremConfirmPending = false
 
     for (let index = 0; index < fallbackUrls.length; index++) {
       const workerUrl = fallbackUrls[index]
@@ -735,11 +746,26 @@ export default {
                 headers: response.headers,
                 workerUrl,
               }
-              if (index < fallbackUrls.length - 1) {
-                console.log(`${workerUrl} returned on-prem for ${appId}; trying fallback worker before finalizing`)
+              // Confirm with one extra healthy worker when available; otherwise finalize.
+              if (onPremConfirmations === 1 && index < fallbackUrls.length - 1) {
+                onPremConfirmPending = true
+                console.log(`${workerUrl} returned on-prem for ${appId}; confirming with one fallback worker`)
                 continue
               }
-              continue
+              // Never cache after a skipped/failed configured fallback (partial outage).
+              if (fallbackFailure) {
+                console.log(`On-prem seen after fallback failure for ${appId}; not caching`)
+                continue
+              }
+              console.log(`On-prem confirmed (${onPremConfirmations}) for ${appId}`)
+              return await buildOnPremResponse(hostname, appId, endpoint, method, pendingOnPrem.responseBody, pendingOnPrem.status, pendingOnPrem.headers)
+            }
+
+            // A non-on-prem response during confirm means do not cache on-prem.
+            if (onPremConfirmPending) {
+              console.log(`${workerUrl} disagreed on on-prem for ${appId}; serving cloud response`)
+              onPremConfirmPending = false
+              pendingOnPrem = null
             }
 
             if (isPlanUpgradeResponse(response.status, responseBody)) {
@@ -773,7 +799,7 @@ export default {
       }
     }
 
-    // Skipped/failed fallback workers are not counted as agreement because a partial outage can reflect stale replicas.
+    // If we only got on-prem responses (and maybe failed to confirm), cache when all successes agreed.
     if (pendingOnPrem && !fallbackFailure && successfulFallbacks > 0 && onPremConfirmations === successfulFallbacks) {
       console.log(`All ${onPremConfirmations}/${successfulFallbacks} successful fallback workers returned on-prem for ${appId}`)
       return await buildOnPremResponse(hostname, appId, endpoint, method, pendingOnPrem.responseBody, pendingOnPrem.status, pendingOnPrem.headers)
@@ -787,6 +813,14 @@ export default {
     }
 
     // No worker produced a usable non-on-prem response, so try the original request as last resort.
+    // Body was consumed into requestBody — rebuild Request when needed.
+    if (requestBody) {
+      return fetch(new Request(request.url, {
+        method: request.method,
+        headers: request.headers,
+        body: requestBody.slice(0),
+      }))
+    }
     return fetch(request)
   },
 }

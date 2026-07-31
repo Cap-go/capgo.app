@@ -19,7 +19,8 @@ import { closeSync, mkdirSync, openSync } from 'node:fs'
 import { open, stat } from 'node:fs/promises'
 import { Buffer } from 'node:buffer'
 import { dirname } from 'node:path'
-import { z } from 'zod'
+import type { McpRegistrar } from '../../../mcp/registrar.js'
+import { cancelCapgoBuildInputSchema, capgoBuildLogsInputSchema, capgoBuildWaitInputSchema, startCapgoBuildInputSchema } from './build-tool-schemas.js'
 import { getLogCapturePath } from '../../../ai/log-capture.js'
 import { defaultBuildRecordPath, readBuildOutputRecord, removeBuildOutputRecord } from '../../output-record.js'
 import type { BuildChild, BuildJobDeps, BuildJobResult } from './build-job.js'
@@ -27,15 +28,7 @@ import { buildLogs, cancelBuild, startBuild, waitBuild } from './build-job.js'
 import type { NextStepResult, Platform } from './contract.js'
 import { ONBOARDING_RULES, renderResult } from './contract.js'
 
-/** Minimal shape of the MCP server's tool registrar (matches McpServer.tool / McpLike). */
-interface ToolRegistrar {
-  tool: (
-    name: string,
-    description: string,
-    schema: Record<string, unknown>,
-    handler: (args: any) => Promise<{ content: Array<{ type: 'text', text: string }> }>,
-  ) => unknown
-}
+
 
 /** Per-(appId, platform) local log file path, kept filesystem-safe. */
 function buildLogPath(appId: string, platform: Platform): string {
@@ -235,14 +228,16 @@ const MAX_LOG_CHARS = 8000
  * buildJobDeps; injectable fakes in tests).
  */
 export function registerBuildTools(
-  server: ToolRegistrar,
+  server: McpRegistrar,
   getAppId: () => Promise<string | undefined>,
   deps: BuildJobDeps,
 ): void {
-  server.tool(
+  server.registerTool(
     'start_capgo_build',
-    'Start the first cloud build for this app on the given platform. The build runs in Capgo\'s cloud and takes a few minutes; this returns immediately with a job_id you use to track it. Idempotent — if a build for this app and platform is already running, it returns that same job_id instead of starting another.',
-    { platform: z.enum(['ios', 'android']).describe('The platform to build: "ios" or "android".') },
+    {
+      description: 'Start the first cloud build for this app on the given platform. The build runs in Capgo\'s cloud and takes a few minutes; this returns immediately with a job_id you use to track it. Idempotent — if a build for this app and platform is already running, it returns that same job_id instead of starting another.',
+      inputSchema: startCapgoBuildInputSchema,
+    },
     async (args: { platform: Platform }) => {
       const appId = await getAppId()
       if (!appId) {
@@ -253,12 +248,11 @@ export function registerBuildTools(
     },
   )
 
-  server.tool(
+  server.registerTool(
     'capgo_build_wait',
-    'Wait for a running cloud build to finish. Blocks for up to timeout_seconds and returns the moment the build completes, fails, or is cancelled; if it\'s still building when the time is up, it returns status "running" — call this again to keep waiting. This is the main way to make progress on a build.',
     {
-      job_id: z.string().describe('The job_id returned by start_capgo_build.'),
-      timeout_seconds: z.number().int().min(1).max(59).optional().describe('How long to wait this call, in seconds. Default 40, maximum 59 (kept under the MCP tool-call timeout). Pass a larger value to wait longer in one call; the build keeps running regardless.'),
+      description: 'Wait for a running cloud build to finish. Blocks for up to timeout_seconds and returns the moment the build completes, fails, or is cancelled; if it\'s still building when the time is up, it returns status "running" — call this again to keep waiting. This is the main way to make progress on a build.',
+      inputSchema: capgoBuildWaitInputSchema,
     },
     async (args: { job_id: string, timeout_seconds?: number }) => {
       const r = await waitBuild(deps, { jobId: args.job_id, timeoutSeconds: args.timeout_seconds })
@@ -266,12 +260,11 @@ export function registerBuildTools(
     },
   )
 
-  server.tool(
+  server.registerTool(
     'capgo_build_logs',
-    'Fetch new build log output since cursor, to summarize progress or explain a failure. Returns the new text, the next cursor, and whether the log is complete. The user can already watch the full live logs locally — use this only when you need to read the logs yourself. Logs may contain sensitive build output: summarize, don\'t paste them verbatim.',
     {
-      job_id: z.string().describe('The job_id returned by start_capgo_build.'),
-      cursor: z.number().int().min(0).optional().describe('Where to read from. Pass 0 the first time, then the next_cursor from the previous call to get only new lines.'),
+      description: 'Fetch new build log output since cursor, to summarize progress or explain a failure. Returns the new text, the next cursor, and whether the log is complete. The user can already watch the full live logs locally — use this only when you need to read the logs yourself. Logs may contain sensitive build output: summarize, don\'t paste them verbatim.',
+      inputSchema: capgoBuildLogsInputSchema,
     },
     async (args: { job_id: string, cursor?: number }) => {
       const r = await buildLogs(deps, { jobId: args.job_id, cursor: args.cursor })
@@ -282,10 +275,12 @@ export function registerBuildTools(
     },
   )
 
-  server.tool(
+  server.registerTool(
     'cancel_capgo_build',
-    'Cancel a running cloud build. Stops watching the build locally and returns. Only use this if the user explicitly asks to stop the build.',
-    { job_id: z.string().describe('The job_id returned by start_capgo_build.') },
+    {
+      description: 'Cancel a running cloud build. Stops watching the build locally and returns. Only use this if the user explicitly asks to stop the build.',
+      inputSchema: cancelCapgoBuildInputSchema,
+    },
     async (args: { job_id: string }) => {
       const r = await cancelBuild(deps, { jobId: args.job_id })
       return text(renderCancel(r))

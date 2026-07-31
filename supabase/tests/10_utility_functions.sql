@@ -2,7 +2,7 @@
 BEGIN;
 
 
-SELECT plan(11);
+SELECT plan(8);
 
 -- Test get_user_id
 SELECT
@@ -34,37 +34,22 @@ SELECT
         'get_user_id test - malformed key returns null'
     );
 
--- Test get_org_owner_id with app_id
 SELECT
     results_eq(
-        'SELECT get_org_owner_id(''ae6e7458-c46d-4c00-aa3b-153b0b8520eb'', ''com.demoadmin.app'')',
-        $$VALUES ('c591b04e-cf29-4945-b9a0-776d0672061a'::uuid)$$,
-        'get_org_owner_id test with app_id - correct user ID'
-    );
-
-SELECT
-    throws_ok(
-        'SELECT get_org_owner_id(''ae6e7458-c46d-4c00-aa3b-153b0b8520bb'', ''com.demoadmin.app'')',
-        'NO_RIGHTS',
-        'get_org_owner_id test with app_id - user does not have rights'
-    );
-
--- Test get_org_owner_id negative cases
-SELECT
-    throws_ok(
-        'SELECT get_org_owner_id(''invalid-api-key'', ''com.demoadmin.app'')',
-        'NO_RIGHTS',
-        'get_org_owner_id test - invalid apikey throws NO_RIGHTS'
-    );
-
-SELECT
-    throws_ok(
-        'SELECT get_org_owner_id(''ae6e7458-c46d-4c00-aa3b-153b0b8520eb'', ''non-existent-app'')',
-        'NO_RIGHTS',
-        'get_org_owner_id test - non-existent app throws NO_RIGHTS'
+        $$
+            SELECT count(*)::int
+            FROM pg_proc p
+            JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname = 'public'
+                AND p.proname = 'get_org_owner_id'
+        $$,
+        $$VALUES (0)$$,
+        'get_org_owner_id old API key owner helper is removed'
     );
 
 -- Test get_user_main_org_id_by_app_id
+SELECT tests.authenticate_as('test_admin');
+
 SELECT
     results_eq(
         'SELECT get_user_main_org_id_by_app_id(''com.demoadmin.app'')',

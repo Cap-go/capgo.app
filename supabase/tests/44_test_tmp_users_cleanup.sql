@@ -2,7 +2,6 @@ BEGIN;
 
 SELECT plan(5);
 
--- Ensure cleanup function exists and is wired into the cron runner.
 SELECT ok(
     to_regprocedure('public.cleanup_tmp_users()') IS NOT NULL,
     'cleanup_tmp_users exists'
@@ -24,14 +23,10 @@ SELECT ok(
     'cron_tasks contains cleanup_tmp_users per-minute task'
 );
 
--- Insert 3 invitations:
--- 1) Old invite (8 days) should be deleted
--- 2) Fresh invite (2 days) should remain
--- 3) Old created_at but recently updated_at should remain (resend semantics)
 INSERT INTO public.tmp_users (
     email,
     org_id,
-    role,
+    rbac_role_name,
     invite_magic_string,
     future_uuid,
     first_name,
@@ -43,7 +38,7 @@ VALUES
 (
     'tmp_cleanup_old@capgo.app',
     '22dbad8a-b885-4309-9b3b-a09f8460fb6d',
-    'read'::public.user_min_right,
+    public.rbac_role_org_member(),
     'tmp_cleanup_old_magic',
     gen_random_uuid(),
     'Tmp',
@@ -54,7 +49,7 @@ VALUES
 (
     'tmp_cleanup_fresh@capgo.app',
     '22dbad8a-b885-4309-9b3b-a09f8460fb6d',
-    'read'::public.user_min_right,
+    public.rbac_role_org_member(),
     'tmp_cleanup_fresh_magic',
     gen_random_uuid(),
     'Tmp',
@@ -65,7 +60,7 @@ VALUES
 (
     'tmp_cleanup_resend@capgo.app',
     '22dbad8a-b885-4309-9b3b-a09f8460fb6d',
-    'read'::public.user_min_right,
+    public.rbac_role_org_member(),
     'tmp_cleanup_resend_magic',
     gen_random_uuid(),
     'Tmp',
@@ -100,7 +95,7 @@ SELECT is(
         WHERE invite_magic_string = 'tmp_cleanup_resend_magic'
     ),
     1,
-    'cleanup_tmp_users keeps invites with recent updated_at (resend)'
+    'cleanup_tmp_users keeps invites with recent updated_at'
 );
 
 SELECT tests.clear_authentication();

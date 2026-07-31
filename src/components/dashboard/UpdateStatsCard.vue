@@ -7,6 +7,7 @@ import GlobeAltIcon from '~icons/heroicons/globe-alt'
 import XCircleIcon from '~icons/heroicons/x-circle'
 import UpdateStatsChart from '~/components/dashboard/UpdateStatsChart.vue'
 import { calculateDemoEvolution, calculateDemoTotal, generateDemoUpdateStatsData } from '~/services/demoChartData'
+import { formatNumberValue } from '~/services/formatLocale'
 import { useSupabase } from '~/services/supabase'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useOrganizationStore } from '~/stores/organization'
@@ -392,30 +393,30 @@ onMounted(async () => {
             <div class="w-3 h-3 rounded-full" style="background-color: hsl(210, 65%, 55%)" />
             <div
               class="flex gap-1 items-center min-w-0 text-xs text-slate-600 dark:text-slate-300 sm:text-sm"
-              :aria-label="`${actionDisplayNames.requested}: ${effectiveTotalRequested.toLocaleString()}`"
+              :aria-label="`${actionDisplayNames.requested}: ${formatNumberValue(effectiveTotalRequested)}`"
             >
               <GlobeAltIcon class="w-3.5 h-3.5 sm:w-4 sm:h-4" aria-hidden="true" />
-              <span>{{ effectiveTotalRequested.toLocaleString() }}</span>
+              <span>{{ formatNumberValue(effectiveTotalRequested) }}</span>
             </div>
           </div>
           <div class="flex gap-2 items-center">
             <div class="w-3 h-3 rounded-full" style="background-color: hsl(135, 55%, 50%)" />
             <div
               class="flex gap-1 items-center min-w-0 text-xs text-slate-600 dark:text-slate-300 sm:text-sm"
-              :aria-label="`${actionDisplayNames.install}: ${effectiveTotalInstalled.toLocaleString()}`"
+              :aria-label="`${actionDisplayNames.install}: ${formatNumberValue(effectiveTotalInstalled)}`"
             >
               <ArrowDownOnSquareIcon class="w-3.5 h-3.5 sm:w-4 sm:h-4" aria-hidden="true" />
-              <span>{{ effectiveTotalInstalled.toLocaleString() }}</span>
+              <span>{{ formatNumberValue(effectiveTotalInstalled) }}</span>
             </div>
           </div>
           <div class="flex gap-2 items-center">
             <div class="w-3 h-3 rounded-full" style="background-color: hsl(0, 50%, 60%)" />
             <div
               class="flex gap-1 items-center min-w-0 text-xs text-slate-600 dark:text-slate-300 sm:text-sm"
-              :aria-label="`${actionDisplayNames.fail}: ${effectiveTotalFailed.toLocaleString()}`"
+              :aria-label="`${actionDisplayNames.fail}: ${formatNumberValue(effectiveTotalFailed)}`"
             >
               <XCircleIcon class="w-3.5 h-3.5 sm:w-4 sm:h-4" aria-hidden="true" />
-              <span>{{ effectiveTotalFailed.toLocaleString() }}</span>
+              <span>{{ formatNumberValue(effectiveTotalFailed) }}</span>
             </div>
           </div>
         </div>

@@ -26,7 +26,19 @@ const captchaKey = ref(import.meta.env.VITE_CAPTCHA_KEY)
 
 const isLoading = ref(false)
 const isLoadingMain = ref(true)
+const initialEmail = ref('')
+const initialFormValue = computed(() => ({ email: initialEmail.value }))
 const cardDescription = computed(() => step.value === 1 ? t('enter-your-email-add') : t('enter-your-new-passw'))
+
+if (typeof history !== 'undefined') {
+  const currentHistoryState = history.state as Record<string, unknown> | null
+  if (typeof currentHistoryState?.resetEmail === 'string') {
+    initialEmail.value = currentHistoryState.resetEmail
+    const nextHistoryState = { ...currentHistoryState }
+    delete nextHistoryState.resetEmail
+    history.replaceState(nextHistoryState, '')
+  }
+}
 
 function getRecoveryParams() {
   const hashParams = new URLSearchParams(route.hash.replace('#', ''))
@@ -184,7 +196,7 @@ watchEffect(() => {
       <Spinner size="w-14 h-14" class="my-auto" />
     </div>
 
-    <FormKit v-else id="forgot-password" type="form" :actions="false" @submit="submit">
+    <FormKit v-else id="forgot-password" type="form" :actions="false" :value="initialFormValue" @submit="submit">
       <div class="space-y-5 text-slate-500 dark:text-slate-300">
         <div v-if="step === 1">
           <FormKit
@@ -279,16 +291,18 @@ watchEffect(() => {
       <div>
         <label for="mfa-code" class="block mb-2 text-sm font-medium">{{ t('enter-2fa-code') }}</label>
         <input
+          id="mfa-code"
           v-model="mfaCode"
           type="text"
           placeholder="123456"
+          :aria-label="t('enter-2fa-code')"
           class="w-full input input-bordered"
           maxlength="6"
           inputmode="numeric"
         >
-      </div>
-      <div class="text-sm text-gray-500">
-        {{ t('enter-the-6-digit-code-from-your-authenticator-app') }}
+        <div class="text-sm text-gray-500">
+          {{ t('enter-the-6-digit-code-from-your-authenticator-app') }}
+        </div>
       </div>
     </div>
   </Teleport>

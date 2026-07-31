@@ -4,6 +4,7 @@ const WEBSITE_PAID_USER_COOKIE_NAME = 'capgo_paid_user'
 const WEBSITE_PAID_USER_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30
 
 interface WebsiteAuthOrganization {
+  is_invite?: boolean | null
   paying?: boolean | null
   role?: string | null
 }
@@ -90,7 +91,7 @@ export function setWebsitePaidUserCookie(isPaidUser: boolean) {
 
 export function syncWebsitePaidUserCookieFromOrganizations(organizations: WebsiteAuthOrganization[]) {
   const hasPaidOrganization = organizations.some((organization) => {
-    return !organization.role?.includes('invite') && !!organization.paying
+    return organization.is_invite !== true && !!organization.paying
   })
 
   setWebsitePaidUserCookie(hasPaidOrganization)

@@ -377,9 +377,8 @@ async function fetchGroupMembers() {
 }
 
 function getRoleDisplayName(roleName: string): string {
-  const normalized = roleName.replace(/^invite_/, '')
-  const i18nKey = getRbacRoleI18nKey(normalized)
-  return i18nKey ? t(i18nKey) : normalized.replaceAll('_', ' ')
+  const i18nKey = getRbacRoleI18nKey(roleName)
+  return i18nKey ? t(i18nKey) : roleName.replaceAll('_', ' ')
 }
 
 function getAppName(appId: string) {
@@ -515,49 +514,98 @@ async function saveGroup() {
   }
 }
 
+function requireCurrentUserId() {
+  if (!main.user?.id)
+    throw new Error('No user')
+
+  return main.user.id
+}
+
+function requireRoleId(roleName: string) {
+  const roleId = getRoleIdByName(roleName)
+  if (!roleId)
+    throw new Error('Role not found')
+
+  return roleId
+}
+
+async function deleteRoleBinding(bindingId: string) {
+  const { error } = await supabase.from('role_bindings').delete().eq('id', bindingId)
+  if (error)
+    throw error
+}
+
+async function updateRoleBinding(bindingId: string, roleId: string) {
+  const { error } = await supabase.from('role_bindings').update({ role_id: roleId }).eq('id', bindingId)
+  if (error)
+    throw error
+}
+
+async function insertGroupRoleBinding(roleId: string, scopeType: 'org' | 'app', appId: string | null) {
+  const { error } = await supabase.from('role_bindings').insert({
+    principal_type: 'group',
+    principal_id: group.value!.id,
+    role_id: roleId,
+    scope_type: scopeType,
+    org_id: group.value!.org_id,
+    app_id: appId,
+    channel_id: null,
+    granted_by: requireCurrentUserId(),
+    reason: null,
+    is_direct: true,
+  })
+  if (error)
+    throw error
+}
+
 async function saveGroupOrgRole() {
   const existing = groupOrgBinding.value
   const targetRoleName = selectedOrgRole.value
 
   if (!targetRoleName) {
-    if (existing) {
-      const { error } = await supabase.from('role_bindings').delete().eq('id', existing.id)
-      if (error)
-        throw error
-    }
+    if (existing)
+      await deleteRoleBinding(existing.id)
     return
   }
 
-  if (existing && existing.role_name === targetRoleName)
+  if (existing?.role_name === targetRoleName)
     return
 
-  const roleId = getRoleIdByName(targetRoleName)
-  if (!roleId)
-    throw new Error('Role not found')
-
+  const roleId = requireRoleId(targetRoleName)
   if (existing) {
-    const { error } = await supabase.from('role_bindings').update({ role_id: roleId }).eq('id', existing.id)
-    if (error)
-      throw error
+    await updateRoleBinding(existing.id, roleId)
+    return
   }
-  else {
-    if (!main.user?.id)
-      throw new Error('No user')
 
-    const { error } = await supabase.from('role_bindings').insert({
-      principal_type: 'group',
-      principal_id: group.value!.id,
-      role_id: roleId,
-      scope_type: 'org',
-      org_id: group.value!.org_id,
-      app_id: null,
-      channel_id: null,
-      granted_by: main.user.id,
-      reason: null,
-      is_direct: true,
-    })
-    if (error)
-      throw error
+  await insertGroupRoleBinding(roleId, 'org', null)
+}
+
+async function deleteRemovedAppBindings(existing: RoleBinding[], pending: Record<string, string>) {
+  for (const binding of existing) {
+    if (!binding.app_id || !(binding.app_id in pending))
+      await deleteRoleBinding(binding.id)
+  }
+}
+
+async function upsertGroupAppBinding(existing: RoleBinding[], appId: string, roleName: string) {
+  const roleId = getRoleIdByName(roleName)
+  if (!roleId)
+    return
+
+  const existingBinding = existing.find((binding: RoleBinding) => binding.app_id === appId)
+  if (!existingBinding) {
+    await insertGroupRoleBinding(roleId, 'app', appId)
+    return
+  }
+
+  if (existingBinding.role_name !== roleName)
+    await updateRoleBinding(existingBinding.id, roleId)
+}
+
+async function upsertPendingAppBindings(existing: RoleBinding[], pending: Record<string, string>) {
+  for (const [appId, roleName] of Object.entries(pending)) {
+    if (roleName)
+      await upsertGroupAppBinding(existing, appId, roleName)
   }
 }
 
@@ -565,55 +613,8 @@ async function syncAppBindings() {
   const existing = groupAppBindings.value
   const pending = pendingAppBindings.value
 
-  // Delete bindings for apps no longer selected
-  for (const binding of existing) {
-    if (!binding.app_id || !(binding.app_id in pending)) {
-      const { error } = await supabase.from('role_bindings').delete().eq('id', binding.id)
-      if (error)
-        throw error
-    }
-  }
-
-  // Upsert bindings for pending apps
-  for (const appId of Object.keys(pending)) {
-    const roleName = pending[appId] as string
-    if (!roleName)
-      continue
-
-    const roleId = getRoleIdByName(roleName)
-    if (!roleId)
-      continue
-
-    const existingBinding = existing.find((b: RoleBinding) => b.app_id === appId)
-
-    if (existingBinding) {
-      if (existingBinding.role_name !== roleName) {
-        const { error } = await supabase.from('role_bindings').update({ role_id: roleId }).eq('id', existingBinding.id)
-        if (error)
-          throw error
-      }
-    }
-    else {
-      if (!main.user?.id)
-        throw new Error('No user')
-
-      const { error } = await supabase.from('role_bindings').insert({
-        principal_type: 'group',
-        principal_id: group.value!.id,
-        role_id: roleId,
-        scope_type: 'app',
-        org_id: group.value!.org_id,
-        app_id: appId,
-        channel_id: null,
-        granted_by: main.user.id,
-        reason: null,
-        is_direct: true,
-      })
-      if (error)
-        throw error
-    }
-  }
-
+  await deleteRemovedAppBindings(existing, pending)
+  await upsertPendingAppBindings(existing, pending)
   await fetchRoleBindings()
 }
 
@@ -747,26 +748,30 @@ async function removeMemberFromGroup(userId: string) {
             </h2>
             <div class="space-y-4 max-w-lg">
               <div>
-                <label class="block mb-1 text-sm font-medium dark:text-white text-slate-800">
+                <label for="group-edit-name" class="block mb-1 text-sm font-medium dark:text-white text-slate-800">
                   {{ t('name') }} *
                 </label>
                 <input
+                  id="group-edit-name"
                   v-model="editName"
                   type="text"
                   class="w-full d-input d-input-bordered"
                   :placeholder="t('group-name')"
+                  :aria-label="t('name')"
                   :disabled="isSubmitting"
                 >
               </div>
               <div>
-                <label class="block mb-1 text-sm font-medium dark:text-white text-slate-800">
+                <label for="group-edit-description" class="block mb-1 text-sm font-medium dark:text-white text-slate-800">
                   {{ t('description') }}
                 </label>
                 <input
+                  id="group-edit-description"
                   v-model="editDescription"
                   type="text"
                   class="w-full d-input d-input-bordered"
                   :placeholder="t('description')"
+                  :aria-label="t('description')"
                   :disabled="isSubmitting"
                 >
               </div>
@@ -891,9 +896,14 @@ async function removeMemberFromGroup(userId: string) {
                   <span class="flex-1 text-sm font-medium dark:text-white text-slate-800 truncate">
                     {{ getAppName(appId) }}
                   </span>
+                  <label :for="`group-app-role-${appId}`" class="sr-only">
+                    {{ getAppName(appId) }} {{ t('select-role') }}
+                  </label>
                   <select
+                    :id="`group-app-role-${appId}`"
                     class="d-select d-select-sm d-select-bordered"
                     :value="pendingAppBindings[appId] || ''"
+                    :aria-label="t('select-role')"
                     :disabled="isSubmitting"
                     @change="onAppRoleChange(appId, $event)"
                   >

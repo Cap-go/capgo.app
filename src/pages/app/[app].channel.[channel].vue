@@ -3,7 +3,7 @@ import type { Database } from '~/types/supabase.types'
 import { FormKit } from '@formkit/vue'
 import { greaterOrEqual, parse } from '@std/semver'
 import { computedAsync, onClickOutside } from '@vueuse/core'
-import { ref, watchEffect } from 'vue'
+import { computed, ref, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
@@ -26,6 +26,11 @@ import { useDisplayStore } from '~/stores/display'
 
 interface Channel {
   version: Database['public']['Tables']['app_versions']['Row']
+  rollout_version_info?: Pick<Database['public']['Tables']['app_versions']['Row'], 'id' | 'name'> | null
+}
+
+interface NotificationQueueResponse {
+  queued?: boolean
 }
 
 type ChannelUpdate = Database['public']['Tables']['channels']['Update']
@@ -38,12 +43,27 @@ type EditableChannelKey = 'allow_dev'
   | 'disable_auto_update_under_native'
   | 'electron'
   | 'ios'
+  | 'rollout_cache_ttl_seconds'
+  | 'rollout_enabled'
+  | 'rollout_paused_at'
+  | 'rollout_pause_reason'
+  | 'rollout_percentage_bps'
+  | 'rollout_version'
+  | 'auto_pause_enabled'
+  | 'auto_pause_window_minutes'
+  | 'auto_pause_failure_rate_bps'
+  | 'auto_pause_confidence'
+  | 'auto_pause_min_attempts'
+  | 'auto_pause_min_failures'
+  | 'auto_pause_action'
+  | 'auto_pause_cooldown_minutes'
   | 'version'
 
 // Bundle link dialog state
 const bundleLinkVersions = ref<Database['public']['Tables']['app_versions']['Row'][]>([])
 const bundleLinkSearchVal = ref('')
 const bundleLinkSearchMode = ref(false)
+const bundleLinkMode = ref<'stable' | 'rollout'>('stable')
 
 const main = useMainStore()
 const route = useRoute('/app/[app].channel.[channel]')
@@ -57,18 +77,59 @@ const packageId = ref<string>('')
 const id = ref<number>(0)
 const loading = ref(true)
 const channel = ref<Database['public']['Tables']['channels']['Row'] & Channel>()
+const rolloutConfigured = computed(() => !!channel.value?.rollout_version)
+const rolloutPercentage = computed(() => (channel.value?.rollout_percentage_bps ?? 0) / 100)
+const rolloutStatusLabel = computed(() => {
+  if (!rolloutConfigured.value)
+    return t('not-configured')
+  if (channel.value?.rollout_paused_at)
+    return t('paused')
+  return channel.value?.rollout_enabled ? t('enabled') : t('disabled')
+})
+const rolloutStatusClass = computed(() => {
+  if (!rolloutConfigured.value || !channel.value?.rollout_enabled) {
+    return 'border-slate-300 bg-slate-50 text-slate-700 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300'
+  }
+  if (channel.value.rollout_paused_at) {
+    return 'border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800/70 dark:bg-amber-950/30 dark:text-amber-200'
+  }
+  return 'border-sky-300 bg-sky-50 text-sky-800 dark:border-sky-800/70 dark:bg-sky-950/30 dark:text-sky-200'
+})
+const rolloutPercentageText = computed(() => `${rolloutPercentage.value.toLocaleString(undefined, { maximumFractionDigits: 2 })}%`)
+const rolloutProgressClass = computed(() => {
+  if (!rolloutConfigured.value || !channel.value?.rollout_enabled)
+    return 'bg-slate-300 dark:bg-slate-600'
+  if (channel.value.rollout_paused_at)
+    return 'bg-amber-500 dark:bg-amber-400'
+  return 'bg-sky-500 dark:bg-sky-400'
+})
+const rolloutProgressStyle = computed(() => {
+  const percentage = Math.max(0, Math.min(100, rolloutPercentage.value))
+  return `width: ${percentage}%`
+})
+const showRolloutSettings = computed(() => !!channel.value?.rollout_enabled)
+const showRolloutEnableRow = computed(() => !!channel.value && !channel.value.rollout_enabled)
 
 const canUpdateChannelSettings = computedAsync(async () => {
-  if (!packageId.value)
+  if (!packageId.value || !id.value)
     return false
-  return await checkPermissions('channel.update_settings', { appId: packageId.value })
+  return await checkPermissions('channel.update_settings', { appId: packageId.value, channelId: id.value })
 }, false)
+const rolloutControlsDisabled = computed(() => !canUpdateChannelSettings.value)
+const rolloutActionsDisabled = computed(() => rolloutControlsDisabled.value || !rolloutConfigured.value)
+const rolloutPauseDisabled = computed(() => rolloutActionsDisabled.value || !channel.value?.rollout_enabled)
 
 const canPromoteBundle = computedAsync(async () => {
   if (!id.value)
     return false
   return await checkPermissions('channel.promote_bundle', { channelId: id.value })
 }, false)
+const rolloutTargetActionsDisabled = computed(() => !canPromoteBundle.value || !rolloutConfigured.value)
+const rolloutEnableDisabled = computed(() => {
+  if (!channel.value)
+    return true
+  return channel.value.rollout_version ? rolloutControlsDisabled.value : !canPromoteBundle.value
+})
 
 const showDebugSection = ref(false)
 
@@ -105,7 +166,7 @@ async function getChannel(force = false) {
           name,
           public,
           owner_org,
-          version (
+          version:app_versions!channels_version_fkey(
             id,
             name,
             app_id,
@@ -114,6 +175,26 @@ async function getChannel(force = false) {
             storage_provider,
             link,
             comment
+          ),
+          rollout_version,
+          rollout_percentage_bps,
+          rollout_enabled,
+          rollout_id,
+          rollout_paused_at,
+          rollout_pause_reason,
+          rollout_cache_ttl_seconds,
+          auto_pause_enabled,
+          auto_pause_window_minutes,
+          auto_pause_failure_rate_bps,
+          auto_pause_confidence,
+          auto_pause_min_attempts,
+          auto_pause_min_failures,
+          auto_pause_action,
+          auto_pause_cooldown_minutes,
+          auto_pause_last_triggered_at,
+          rollout_version_info:app_versions!channels_rollout_version_fkey(
+            id,
+            name
           ),
           created_at,
           app_id,
@@ -150,8 +231,10 @@ async function getChannel(force = false) {
   }
 }
 
-async function saveChannelChange<K extends EditableChannelKey>(key: K, val: ChannelUpdate[K]) {
-  const canUpdate = key === 'version'
+async function saveChannelChanges(update: ChannelUpdate) {
+  const changesStableVersion = Object.prototype.hasOwnProperty.call(update, 'version')
+  const changesRolloutVersion = Object.prototype.hasOwnProperty.call(update, 'rollout_version')
+  const canUpdate = changesStableVersion || changesRolloutVersion
     ? canPromoteBundle.value
     : canUpdateChannelSettings.value
 
@@ -163,17 +246,18 @@ async function saveChannelChange<K extends EditableChannelKey>(key: K, val: Chan
   if (!id.value || !channel.value)
     return false
 
-  // Validate version ID if updating version field
-  if (key === 'version' && (val === undefined || (val !== null && typeof val !== 'number'))) {
-    console.error('Invalid version ID:', val)
+  if (Object.prototype.hasOwnProperty.call(update, 'version') && (update.version === undefined || (update.version !== null && typeof update.version !== 'number'))) {
+    console.error('Invalid version ID:', update.version)
+    toast.error(t('error-invalid-version'))
+    return false
+  }
+  if (Object.prototype.hasOwnProperty.call(update, 'rollout_version') && (update.rollout_version === undefined || (update.rollout_version !== null && typeof update.rollout_version !== 'number'))) {
+    console.error('Invalid rollout version ID:', update.rollout_version)
     toast.error(t('error-invalid-version'))
     return false
   }
 
   try {
-    const update = {
-      [key]: val,
-    } as ChannelUpdate
     const { error } = await supabase
       .from('channels')
       .update(update)
@@ -183,16 +267,92 @@ async function saveChannelChange<K extends EditableChannelKey>(key: K, val: Chan
       console.error('no channel update', error)
       return false
     }
-    else {
-      await getChannel(true)
-      toast.info(t('cloud-replication-delay'))
-      return true
-    }
+
+    await getChannel(true)
+    toast.info(t('cloud-replication-delay'))
+    return true
   }
   catch (error) {
     console.error(error)
     return false
   }
+}
+
+async function saveChannelChange<K extends EditableChannelKey>(key: K, val: ChannelUpdate[K]) {
+  return await saveChannelChanges({ [key]: val } as ChannelUpdate)
+}
+
+async function notificationAuthHeaders() {
+  const { data } = await supabase.auth.getSession()
+  const token = data.session?.access_token
+  if (!token)
+    throw new Error(t('not-authenticated'))
+  return Object.fromEntries([
+    ['Authorization', `Bearer ${token}`],
+    ['Content-Type', 'application/json'],
+  ])
+}
+
+async function notificationFetch<T>(path: string, init: RequestInit = {}) {
+  const response = await fetch(`${defaultApiHost}/notifications${path}`, {
+    ...init,
+    headers: {
+      ...(await notificationAuthHeaders()),
+      ...(init.headers || {}),
+    },
+  })
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({})) as { error?: string, message?: string }
+    throw new Error(body.message || body.error || t('notification-action-error'))
+  }
+  return await response.json() as T
+}
+
+async function queueChannelUpdateNotification() {
+  if (!channel.value)
+    return
+
+  const response = await notificationFetch<NotificationQueueResponse>('/update-check', {
+    method: 'POST',
+    body: JSON.stringify({
+      appId: packageId.value,
+      target: { broadcast: true },
+      channel: channel.value.name,
+    }),
+  })
+  if (!response.queued)
+    throw new Error(t('notification-queue-unavailable'))
+  toast.success(t('notification-update-push-success'))
+}
+
+async function askUpdateNotificationAfterBundleChange() {
+  if (!channel.value)
+    return
+
+  dialogStore.openDialog({
+    title: t('notification-send-update-title'),
+    description: t('notification-send-update-description', { channel: channel.value.name }),
+    buttons: [
+      {
+        text: t('button-cancel'),
+        role: 'cancel',
+      },
+      {
+        text: t('notification-send-update-action'),
+        role: 'primary',
+        handler: async () => {
+          try {
+            await queueChannelUpdateNotification()
+          }
+          catch (error) {
+            console.error(error)
+            toast.error(error instanceof Error ? error.message : t('notification-action-error'))
+          }
+        },
+      },
+    ],
+  })
+  await dialogStore.onDialogDismiss()
 }
 
 watchEffect(async () => {
@@ -266,8 +426,22 @@ async function handleVersionLink(appVersion: Database['public']['Tables']['app_v
   else {
     toast.info(t('bundle-compatible-with-channel', { channel: channel.value.name }))
   }
-  await saveChannelChange('version', appVersion.id)
-  toast.success(t('linked-bundle'))
+  if (bundleLinkMode.value === 'rollout') {
+    const saved = await saveChannelChanges({
+      rollout_version: appVersion.id,
+      rollout_enabled: true,
+    })
+    if (saved) {
+      toast.success(t('rollout-target-linked'))
+      await askUpdateNotificationAfterBundleChange()
+    }
+    return
+  }
+
+  if (await saveChannelChange('version', appVersion.id)) {
+    toast.success(t('linked-bundle'))
+    await askUpdateNotificationAfterBundleChange()
+  }
 }
 
 async function handleUnlink() {
@@ -288,7 +462,8 @@ async function handleUnlink() {
         text: t('continue'),
         role: 'primary',
         handler: async () => {
-          await saveChannelChange('version', null)
+          if (await saveChannelChange('version', null))
+            await askUpdateNotificationAfterBundleChange()
         },
       },
     ],
@@ -313,7 +488,8 @@ async function handleRevert() {
         text: t('confirm'),
         role: 'primary',
         handler: async () => {
-          await saveChannelChange('version', null)
+          if (await saveChannelChange('version', null))
+            await askUpdateNotificationAfterBundleChange()
         },
       },
     ],
@@ -361,6 +537,98 @@ async function openSelectVersion() {
   })
 
   await dialogStore.onDialogDismiss()
+}
+
+async function openSelectStableVersion() {
+  bundleLinkMode.value = 'stable'
+  await openSelectVersion()
+}
+
+async function openSelectRolloutVersion() {
+  bundleLinkMode.value = 'rollout'
+  await openSelectVersion()
+}
+
+async function enableRollout() {
+  if (!channel.value)
+    return
+  if (!channel.value.rollout_version) {
+    await openSelectRolloutVersion()
+    return
+  }
+  await saveChannelChange('rollout_enabled', true as any)
+}
+
+async function saveRolloutPercentage(value: string) {
+  const percentage = Number.parseFloat(value)
+  if (Number.isNaN(percentage) || percentage < 0 || percentage > 100) {
+    toast.error(t('invalid-rollout-percentage'))
+    return
+  }
+  await saveChannelChange('rollout_percentage_bps', Math.round(percentage * 100) as any)
+}
+
+async function saveIntegerField(key: EditableChannelKey, value: string, min: number, max: number, nullable = false) {
+  const trimmedValue = value.trim()
+  if (!trimmedValue && nullable) {
+    await saveChannelChange(key, null as any)
+    return
+  }
+
+  const parsedValue = Number(trimmedValue)
+  if (!Number.isInteger(parsedValue) || parsedValue < min || parsedValue > max) {
+    toast.error(t('error-update-channel'))
+    return
+  }
+
+  await saveChannelChange(key, parsedValue as any)
+}
+
+async function saveAutoPauseFailureRate(value: string) {
+  await saveIntegerField('auto_pause_failure_rate_bps', value, 0, 10000, true)
+}
+
+async function saveAutoPauseConfidence(value: string) {
+  const confidence = Number(value.trim())
+  if (!Number.isFinite(confidence) || confidence <= 0 || confidence >= 1) {
+    toast.error(t('error-update-channel'))
+    return
+  }
+
+  await saveChannelChange('auto_pause_confidence', Number(confidence.toFixed(4)) as any)
+}
+
+async function rollbackRollout() {
+  if (await saveChannelChanges({
+    rollout_version: null,
+    rollout_enabled: false,
+    rollout_percentage_bps: 0,
+    rollout_paused_at: null,
+    rollout_pause_reason: null,
+  })) {
+    await askUpdateNotificationAfterBundleChange()
+  }
+}
+
+async function promoteRollout() {
+  if (!channel.value?.rollout_version)
+    return
+  if (await saveChannelChanges({
+    version: channel.value.rollout_version,
+    rollout_version: null,
+    rollout_enabled: false,
+    rollout_percentage_bps: 0,
+    rollout_paused_at: null,
+    rollout_pause_reason: null,
+  })) {
+    await askUpdateNotificationAfterBundleChange()
+  }
+}
+
+async function toggleRolloutPause() {
+  await saveChannelChanges(channel.value?.rollout_paused_at
+    ? { rollout_paused_at: null, rollout_pause_reason: null }
+    : { rollout_paused_at: new Date().toISOString(), rollout_pause_reason: t('manual-rollout-pause') })
 }
 
 async function refreshFilteredVersions() {
@@ -637,7 +905,7 @@ async function copyCurlCommand() {
                   v-if="channel"
                   class="p-1 transition-colors border border-gray-200 rounded-md dark:border-gray-700 hover:bg-gray-50 hover:border-gray-300 dark:hover:border-gray-600 dark:hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:border-gray-200 dark:disabled:hover:border-gray-700"
                   :disabled="!canPromoteBundle"
-                  @click="openSelectVersion()"
+                  @click="openSelectStableVersion()"
                 >
                   <Settings class="w-4 h-4 text-gray-500 dark:text-gray-400 hover:text-blue-500 dark:hover:text-blue-400" />
                 </button>
@@ -667,6 +935,227 @@ async function copyCurlCommand() {
             <InfoRow v-if="channel.version.comment" :label="t('bundle-comment')">
               {{ channel.version.comment }}
             </InfoRow>
+            <InfoRow v-if="showRolloutEnableRow" :label="t('progressive-rollout')" :value="t('disabled')">
+              <button class="d-btn d-btn-sm d-btn-outline" :disabled="rolloutEnableDisabled" @click="enableRollout()">
+                {{ t('enable') }}
+              </button>
+            </InfoRow>
+            <div v-if="showRolloutSettings" class="px-4 py-5 sm:px-6">
+              <section class="space-y-6" aria-labelledby="rollout-settings-title">
+                <div class="space-y-4">
+                  <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div class="min-w-0 space-y-1">
+                      <h2 id="rollout-settings-title" class="text-base font-semibold text-slate-950 dark:text-white">
+                        {{ t('progressive-rollout') }}
+                      </h2>
+                      <p v-if="channel.rollout_pause_reason" class="text-xs text-amber-700 dark:text-amber-300">
+                        {{ channel.rollout_pause_reason }}
+                      </p>
+                    </div>
+                    <span class="inline-flex min-h-9 items-center self-start rounded-md border px-3 text-xs font-semibold" :class="rolloutStatusClass">
+                      {{ rolloutStatusLabel }}
+                    </span>
+                  </div>
+
+                  <dl class="grid border-y border-slate-200 text-sm dark:border-slate-700 sm:grid-cols-2 sm:divide-x sm:divide-slate-200 sm:dark:divide-slate-700">
+                    <div class="py-3 sm:px-4 sm:first:pl-0">
+                      <dt class="text-xs font-medium text-slate-500 dark:text-slate-400">
+                        {{ t('rollout-target') }}
+                      </dt>
+                      <dd class="mt-1 font-semibold text-slate-900 dark:text-white">
+                        {{ channel?.rollout_version_info?.name ?? t('not-configured') }}
+                      </dd>
+                    </div>
+                    <div class="border-t border-slate-200 py-3 dark:border-slate-700 sm:border-t-0 sm:px-4">
+                      <dt class="text-xs font-medium text-slate-500 dark:text-slate-400">
+                        {{ t('rollout-percentage') }}
+                      </dt>
+                      <dd class="mt-1 font-semibold text-slate-900 dark:text-white">
+                        {{ rolloutPercentageText }}
+                      </dd>
+                    </div>
+                  </dl>
+                </div>
+
+                <div class="space-y-3">
+                  <div class="h-1.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-900">
+                    <div class="h-full rounded-full transition-[width] duration-200" :class="rolloutProgressClass" :style="rolloutProgressStyle" />
+                  </div>
+
+                  <div class="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+                    <div class="grid gap-3 sm:grid-cols-2">
+                      <label class="space-y-1.5">
+                        <span class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('rollout-percentage') }}</span>
+                        <div class="flex min-h-11 items-center rounded-md border border-slate-200 bg-white px-3 focus-within:border-sky-400 focus-within:ring-2 focus-within:ring-sky-100 dark:border-slate-700 dark:bg-slate-900 dark:focus-within:border-sky-700 dark:focus-within:ring-sky-950">
+                          <input
+                            class="w-full bg-transparent text-sm font-medium text-slate-900 outline-none disabled:cursor-not-allowed disabled:opacity-40 dark:text-white"
+                            type="number"
+                            min="0"
+                            max="100"
+                            step="0.01"
+                            :aria-label="t('rollout-percentage')"
+                            :disabled="rolloutControlsDisabled"
+                            :value="rolloutPercentage"
+                            @change="saveRolloutPercentage(($event.target as HTMLInputElement).value)"
+                          >
+                          <span class="text-sm text-slate-400 dark:text-slate-500">%</span>
+                        </div>
+                      </label>
+                      <label class="space-y-1.5">
+                        <span class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('cache-ttl-seconds') }}</span>
+                        <input
+                          class="min-h-11 w-full rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-900 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-700 dark:focus:ring-sky-950"
+                          type="number"
+                          min="60"
+                          max="31536000"
+                          step="60"
+                          :aria-label="t('cache-ttl-seconds')"
+                          :disabled="rolloutControlsDisabled"
+                          :value="channel.rollout_cache_ttl_seconds"
+                          @change="saveIntegerField('rollout_cache_ttl_seconds', ($event.target as HTMLInputElement).value, 60, 31536000)"
+                        >
+                      </label>
+                    </div>
+
+                    <div class="flex flex-wrap gap-2 lg:justify-end">
+                      <button class="min-h-11 d-btn d-btn-ghost" :disabled="!canPromoteBundle" @click="openSelectRolloutVersion()">
+                        {{ t('set-rollout-target') }}
+                      </button>
+                      <button class="min-h-11 d-btn d-btn-outline" :disabled="rolloutActionsDisabled" @click="saveChannelChange('rollout_enabled', !channel.rollout_enabled as any)">
+                        {{ channel.rollout_enabled ? t('disable') : t('enable') }}
+                      </button>
+                      <button class="min-h-11 d-btn d-btn-outline" :disabled="rolloutPauseDisabled" @click="toggleRolloutPause()">
+                        {{ channel.rollout_paused_at ? t('resume') : t('pause') }}
+                      </button>
+                      <button class="min-h-11 d-btn d-btn-primary" :disabled="rolloutTargetActionsDisabled" @click="promoteRollout()">
+                        {{ t('promote') }}
+                      </button>
+                      <button class="min-h-11 capitalize d-btn d-btn-error d-btn-ghost" :disabled="rolloutTargetActionsDisabled" @click="rollbackRollout()">
+                        {{ t('rollback') }}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="border-t border-slate-200 pt-5 dark:border-slate-700/80">
+                  <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <h3 class="text-sm font-semibold text-slate-900 dark:text-white">
+                      {{ t('auto-pause') }}
+                    </h3>
+                    <label class="inline-flex min-h-11 items-center gap-3 text-sm font-medium text-slate-700 dark:text-slate-200">
+                      <input
+                        class="d-toggle d-toggle-sm"
+                        type="checkbox"
+                        :checked="channel.auto_pause_enabled"
+                        :disabled="rolloutControlsDisabled"
+                        @change="saveChannelChange('auto_pause_enabled', !channel.auto_pause_enabled as any)"
+                      >
+                      <span>{{ channel.auto_pause_enabled ? t('enabled') : t('disabled') }}</span>
+                    </label>
+                  </div>
+
+                  <div v-if="channel.auto_pause_enabled" class="grid w-full gap-3 text-left sm:grid-cols-2 xl:grid-cols-4">
+                    <label class="space-y-1.5">
+                      <span class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('failure-rate-bps') }}</span>
+                      <input
+                        class="min-h-11 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-700 dark:focus:ring-sky-950"
+                        type="number"
+                        min="0"
+                        max="10000"
+                        :aria-label="t('failure-rate-bps')"
+                        :disabled="rolloutControlsDisabled"
+                        :value="channel.auto_pause_failure_rate_bps ?? ''"
+                        @change="saveAutoPauseFailureRate(($event.target as HTMLInputElement).value)"
+                      >
+                    </label>
+                    <label class="space-y-1.5">
+                      <span class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('auto-pause-action') }}</span>
+                      <select
+                        class="min-h-11 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-700 dark:focus:ring-sky-950"
+                        :aria-label="t('auto-pause-action')"
+                        :disabled="rolloutControlsDisabled"
+                        :value="channel.auto_pause_action"
+                        @change="saveChannelChange('auto_pause_action', ($event.target as HTMLSelectElement).value as any)"
+                      >
+                        <option value="pause">
+                          {{ t('pause') }}
+                        </option>
+                        <option value="rollback">
+                          {{ t('rollback') }}
+                        </option>
+                        <option value="notify">
+                          {{ t('notify') }}
+                        </option>
+                      </select>
+                    </label>
+                    <label class="space-y-1.5">
+                      <span class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('window-minutes') }}</span>
+                      <input
+                        class="min-h-11 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-700 dark:focus:ring-sky-950"
+                        type="number"
+                        min="1"
+                        max="10080"
+                        :aria-label="t('window-minutes')"
+                        :disabled="rolloutControlsDisabled"
+                        :value="channel.auto_pause_window_minutes"
+                        @change="saveIntegerField('auto_pause_window_minutes', ($event.target as HTMLInputElement).value, 1, 10080)"
+                      >
+                    </label>
+                    <label class="space-y-1.5">
+                      <span class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('confidence') }}</span>
+                      <input
+                        class="min-h-11 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-700 dark:focus:ring-sky-950"
+                        type="number"
+                        min="0.0001"
+                        max="0.9999"
+                        step="0.0001"
+                        :aria-label="t('confidence')"
+                        :disabled="rolloutControlsDisabled"
+                        :value="channel.auto_pause_confidence"
+                        @change="saveAutoPauseConfidence(($event.target as HTMLInputElement).value)"
+                      >
+                    </label>
+                    <label class="space-y-1.5">
+                      <span class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('min-attempts') }}</span>
+                      <input
+                        class="min-h-11 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-700 dark:focus:ring-sky-950"
+                        type="number"
+                        min="0"
+                        :aria-label="t('min-attempts')"
+                        :disabled="rolloutControlsDisabled"
+                        :value="channel.auto_pause_min_attempts ?? ''"
+                        @change="saveIntegerField('auto_pause_min_attempts', ($event.target as HTMLInputElement).value, 0, Number.MAX_SAFE_INTEGER, true)"
+                      >
+                    </label>
+                    <label class="space-y-1.5">
+                      <span class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('min-failures') }}</span>
+                      <input
+                        class="min-h-11 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-700 dark:focus:ring-sky-950"
+                        type="number"
+                        min="0"
+                        :aria-label="t('min-failures')"
+                        :disabled="rolloutControlsDisabled"
+                        :value="channel.auto_pause_min_failures ?? ''"
+                        @change="saveIntegerField('auto_pause_min_failures', ($event.target as HTMLInputElement).value, 0, Number.MAX_SAFE_INTEGER, true)"
+                      >
+                    </label>
+                    <label class="space-y-1.5">
+                      <span class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('cooldown-minutes') }}</span>
+                      <input
+                        class="min-h-11 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-700 dark:focus:ring-sky-950"
+                        type="number"
+                        min="0"
+                        max="10080"
+                        :aria-label="t('cooldown-minutes')"
+                        :disabled="rolloutControlsDisabled"
+                        :value="channel.auto_pause_cooldown_minutes"
+                        @change="saveIntegerField('auto_pause_cooldown_minutes', ($event.target as HTMLInputElement).value, 0, 10080)"
+                      >
+                    </label>
+                  </div>
+                </div>
+              </section>
+            </div>
             <InfoRow :label="t('channel-is-public')">
               <div class="flex items-center justify-end w-full gap-3 text-right">
                 <span
@@ -888,11 +1377,11 @@ async function copyCurlCommand() {
           <!-- Current Bundle Info -->
           <div class="flex flex-col gap-1 px-1">
             <div class="text-sm font-medium text-gray-500 dark:text-gray-400">
-              {{ t('current-bundle') }}
+              {{ bundleLinkMode === 'rollout' ? t('current-rollout-target') : t('current-bundle') }}
             </div>
             <div class="flex items-center gap-2 text-base font-semibold text-gray-900 dark:text-white">
               <div class="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-              {{ currentChannelVersion?.name || t('unknown') }}
+              {{ bundleLinkMode === 'rollout' ? (channel?.rollout_version_info?.name || t('not-configured')) : (currentChannelVersion?.name || t('unknown')) }}
             </div>
           </div>
 

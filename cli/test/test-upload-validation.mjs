@@ -5,6 +5,8 @@
  */
 
 import { canParse } from '@std/semver'
+import { optionsUploadSchema } from '../src/schemas/bundle.ts'
+import { safeParseSchema } from '../src/schemas/schema_validation.ts'
 
 // This is the actual regex from utils.ts line 40
 const regexSemver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-z-][0-9a-z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-z-][0-9a-z-]*))*))?(?:\+([0-9a-z-]+(?:\.[0-9a-z-]+)*))?$/i
@@ -68,6 +70,40 @@ for (const version of shouldPass) {
     allPassed = false
   }
 }
+
+console.log('✓ Testing rollout upload options...\n')
+
+const validRolloutOptions = safeParseSchema(optionsUploadSchema, {
+  apikey: 'test-key',
+  rollout: 12.5,
+  rolloutPercentageBps: 1250,
+  rolloutCacheTtlSeconds: 3600,
+})
+if (!validRolloutOptions.success) {
+  console.error('  ❌ VALIDATION FAILURE!')
+  console.error('     Upload rollout options should accept percentage, basis points, and cache TTL')
+  allPassed = false
+}
+else {
+  console.log('  ✅ Rollout upload options are accepted\n')
+}
+
+const invalidRolloutOptions = [
+  { apikey: 'test-key', rollout: -1 },
+  { apikey: 'test-key', rollout: 100.1 },
+  { apikey: 'test-key', rolloutPercentageBps: 10001 },
+  { apikey: 'test-key', rolloutCacheTtlSeconds: 59 },
+]
+for (const options of invalidRolloutOptions) {
+  const result = safeParseSchema(optionsUploadSchema, options)
+  if (result.success) {
+    console.error(`  ❌ VALIDATION FAILURE! Expected rejection for ${JSON.stringify(options)}`)
+    allPassed = false
+  }
+}
+
+if (allPassed)
+  console.log('  ✅ Invalid rollout upload options are rejected\n')
 
 console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
 

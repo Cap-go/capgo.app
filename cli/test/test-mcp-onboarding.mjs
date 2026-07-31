@@ -105,11 +105,14 @@ await test('decideStart: not authenticated → login human_gate via capgo_login'
   eq(r.next.tool, 'capgo_login', 'next action should call capgo_login')
 })
 
-await test('decideStart: both platforms → choice with two options', async () => {
+await test('decideStart: both platforms → choice with ios/android options (no Appflow card)', async () => {
   const r = await decideStart(facts(), null, minimalFakeDeps())
   eq(r.kind, 'choice')
   eq(r.state, 'platform-select')
   eq(r.options.length, 2)
+  ok(r.options.some(o => o.value === 'ios'), 'offers iOS')
+  ok(r.options.some(o => o.value === 'android'), 'offers Android')
+  ok(!r.options.some(o => o.value === 'appflow'), 'must NOT offer the Appflow picker option (gate-only now)')
   ok(r.roadmap.length >= 3, 'first decision should carry the roadmap')
 })
 
@@ -204,7 +207,8 @@ function fakeServer() {
   const tools = {}
   return {
     tools,
-    tool(name, _desc, _schema, handler) { tools[name] = { handler } },
+    registerTool(name, _config, handler) { tools[name] = { handler } },
+    registerPrompt() {},
   }
 }
 

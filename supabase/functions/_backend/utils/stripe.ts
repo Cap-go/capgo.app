@@ -412,15 +412,19 @@ export async function syncStripeCustomerCountry(c: Context, customerId: string |
 
 export async function cancelSubscription(c: Context, customerId: string) {
   if (!isStripeConfigured(c))
-    return Promise.resolve()
-  const allSubscriptions = await getStripe(c).subscriptions.list({
-    customer: customerId,
-  })
-  return Promise.all(
-    allSubscriptions.data.map(sub => getStripe(c).subscriptions.cancel(sub.id)),
-  ).catch((err) => {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'cancelSubscription', error: err })
-  })
+    return
+
+  for await (const subscription of getStripe(c).subscriptions.list({ customer: customerId, status: 'all' })) {
+    if (subscription.status === 'canceled' || subscription.status === 'incomplete_expired')
+      continue
+
+    try {
+      await getStripe(c).subscriptions.cancel(subscription.id)
+    }
+    catch (error) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'cancelSubscription item', error, subscriptionId: subscription.id, customerId })
+    }
+  }
 }
 
 async function getStoredPlanPriceId(c: Context, planId: string, recurrence: string): Promise<string | null> {
@@ -527,7 +531,15 @@ function getDatafastAttributionMetadata(attribution?: DatafastAttribution): Reco
   }
 }
 
-export async function createCheckout(c: Context, customerId: string, recurrence: string, planId: string, successUrl: string, cancelUrl: string, clientReferenceId?: string, attributionId?: string, datafastAttribution?: DatafastAttribution) {
+function getAffonsoReferralMetadata(affonsoReferral?: string | null): Record<string, string> {
+  // Affonso expects the referral cookie value on Stripe Checkout session metadata.
+  // Stripe metadata values are capped at 500 characters; omit invalid/empty values.
+  if (typeof affonsoReferral !== 'string' || !affonsoReferral || affonsoReferral.length > 500)
+    return {}
+  return { affonso_referral: affonsoReferral }
+}
+
+export async function createCheckout(c: Context, customerId: string, recurrence: string, planId: string, successUrl: string, cancelUrl: string, clientReferenceId?: string, attributionId?: string, datafastAttribution?: DatafastAttribution, affonsoReferral?: string | null) {
   if (!isStripeConfigured(c))
     return { url: '' }
   const prices = await getPriceIds(c, planId, recurrence)
@@ -537,6 +549,7 @@ export async function createCheckout(c: Context, customerId: string, recurrence:
   const metadata = {
     ...(attributionId ? { attribution_id: attributionId } : {}),
     ...getDatafastAttributionMetadata(datafastAttribution),
+    ...getAffonsoReferralMetadata(affonsoReferral),
   }
   const allowedSuccessUrl = getAllowedRedirectUrl(c, successUrl, 'success_url')
   const allowedCancelUrl = getAllowedRedirectUrl(c, cancelUrl, 'cancel_url')
@@ -599,6 +612,7 @@ export async function createOneTimeCheckout(
   cancelUrl: string,
   clientReferenceId?: string,
   datafastAttribution?: DatafastAttribution,
+  affonsoReferral?: string | null,
 ) {
   if (!isStripeConfigured(c))
     return { url: '' }
@@ -645,6 +659,7 @@ export async function createOneTimeCheckout(
       orgId: clientReferenceId ?? '',
       intendedQuantity: String(quantity),
       ...getDatafastAttributionMetadata(datafastAttribution),
+      ...getAffonsoReferralMetadata(affonsoReferral),
     },
   })
   return { url: session.url }

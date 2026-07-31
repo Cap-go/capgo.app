@@ -66,4 +66,4 @@ jobs:
           P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
           BUILD_OUTPUT_UPLOAD_ENABLED: "true"
           BUILD_OUTPUT_RETENTION_SECONDS: "604800"
-        run: bunx @capgo/cli@latest build request --platform ios --path . --ai-analytics
+        run: bunx @capgo/cli@latest build request --platform ios --path . --sync-ios-version --ai-analytics

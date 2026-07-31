@@ -11,7 +11,6 @@ import {
   getBundleVersion,
   getConfig,
   getOrganizationId,
-  OrganizationPerm,
   sendEvent,
 } from '../utils'
 
@@ -83,7 +82,7 @@ export async function unlinkDeviceInternal(
       supabase,
       enrichedOptions.apikey,
       resolvedAppId,
-      OrganizationPerm.write,
+      'bundle.delete',
       silent,
       true,
     )

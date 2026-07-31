@@ -89,7 +89,7 @@ const tabs = computed<Tab[]>(() => {
       label: 'documentation',
       icon: IconDoc,
       key: '#',
-      onClick: () => window.open('https://docs.capgo.app', '_blank', 'noopener,noreferrer'),
+      onClick: () => window.open('https://capgo.app/docs', '_blank', 'noopener,noreferrer'),
       redirect: true,
     },
     {

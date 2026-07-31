@@ -25,7 +25,6 @@ async function setupTestOrg() {
     created_by: USER_ID,
     name: TEST_ORG_NAME,
     management_email: TEST_ORG_EMAIL,
-    use_new_rbac: true,
   })
   if (orgError)
     throw orgError
@@ -46,11 +45,11 @@ async function setupTestOrg() {
   if (orgToStripeError)
     throw orgToStripeError
 
-  // Add the test user as super_admin in the org (legacy membership for checkPermission fallback)
+  // Add the test user as super_admin in the org so the RBAC checks can create keys there.
   const { error: ouError } = await supabase.from('org_users').insert({
     org_id: TEST_ORG_ID,
     user_id: USER_ID,
-    user_right: 'super_admin',
+    rbac_role_name: 'org_super_admin',
   })
   if (ouError)
     throw ouError
@@ -284,26 +283,12 @@ describe.skipIf(USE_CLOUDFLARE)('[POST] /apikey with atomic bindings', () => {
     expect(downgradedPermissionRows).toEqual([])
   })
 
-  it('requires explicit V2 bindings', async () => {
+  it('requires explicit RBAC bindings', async () => {
     const response = await fetch(getEndpointUrl('/apikey'), {
       method: 'POST',
       headers: authHeaders,
       body: JSON.stringify({
         name: `missing-bindings-key-${TEST_ID.slice(0, 8)}`,
-      }),
-    })
-
-    const data = await response.json() as { error: string }
-    expect(response.status).toBe(400)
-    expect(data.error).toBe('bindings_required')
-  })
-
-  it('rejects creating an API key without bindings', async () => {
-    const response = await fetch(getEndpointUrl('/apikey'), {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify({
-        name: `no-bindings-${TEST_ID.slice(0, 8)}`,
       }),
     })
 

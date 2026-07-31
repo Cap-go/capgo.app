@@ -31,7 +31,7 @@ function goToCredits() {
   <button
     v-if="props.creditsOnly"
     type="button"
-    class="d-btn flex items-center w-full p-4 text-left transition-all duration-200 border cursor-pointer bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800 hover:border-blue-300 dark:hover:border-blue-700 rounded-xl group"
+    class="d-btn flex h-auto min-h-[4.5rem] items-center w-full p-4 text-left transition-all duration-200 border cursor-pointer bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800 hover:border-blue-300 dark:hover:border-blue-700 rounded-xl group"
     @click="goToCredits"
   >
     <!-- Icon -->
@@ -63,7 +63,7 @@ function goToCredits() {
   <button
     v-else
     type="button"
-    class="d-btn flex items-center w-full p-4 text-left transition-all duration-200 border cursor-pointer bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-700 rounded-xl group"
+    class="d-btn flex h-auto min-h-[4.5rem] items-center w-full p-4 text-left transition-all duration-200 border cursor-pointer bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-700 rounded-xl group"
     @click="goToCredits"
   >
     <!-- Icon -->

@@ -44,6 +44,7 @@ import type { IosEffectDeps } from '../ios/flow.js'
 import type { TailEffectDeps } from '../tail/flow.js'
 import type { OnboardingStep } from '../types.js'
 import type { Platform } from './contract.js'
+import type { AppflowProgress } from '../appflow/types.js'
 
 /**
  * The iOS driver-held transient state — the exact `IosEffectDeps['carried']`
@@ -126,6 +127,25 @@ export interface OnboardingSessionState {
    * onboarding" always re-asks.
    */
   resumeResolvedFor?: Platform
+  /**
+   * The Appflow migration's in-flight progress (token, org/app selection, the
+   * per-platform mapped Capgo creds collected so far, completed steps, and the
+   * migration-entry gate answer). The appflow flow is driven through the neutral
+   * PlatformFlow contract and — unlike ios/android — has no on-disk progress
+   * loader, so its cross-call state lives here, process-local, exactly like the
+   * iOS/tail carried transients. HOLDS SECRETS (token, cert/keystore bytes,
+   * service-account JSON, app-specific password): it must NEVER serialize into a
+   * tool result / progress.json / log. A server restart loses it and the
+   * migration re-runs from the explain step (the flow self-heals via the token
+   * cache). NON-PERSISTED by design.
+   */
+  appflowProgress?: AppflowProgress
+  /**
+   * The one-time "Are you migrating from Ionic Appflow?" gate answer for a
+   * single-platform (ios/android) entry. Set once the user answers so a resume /
+   * bare next_step never re-prompts. NON-SECRET (a yes/no decision).
+   */
+  appflowGate?: 'asked-yes' | 'asked-no'
 }
 
 const registry = new Map<string, OnboardingSessionState>()
@@ -198,6 +218,28 @@ export function getResumeResolvedFor(appId: string): Platform | undefined {
 export function setResumeResolvedFor(appId: string, platform: Platform | undefined): void {
   const session = getSession(appId)
   registry.set(appId, { ...session, resumeResolvedFor: platform })
+}
+
+/** Read the in-flight Appflow migration progress for `appId`, or undefined when none. */
+export function getAppflowProgress(appId: string): AppflowProgress | undefined {
+  return registry.get(appId)?.appflowProgress
+}
+
+/** Store (or, with `undefined`, clear) the in-flight Appflow migration progress for `appId`. */
+export function setAppflowProgress(appId: string, progress: AppflowProgress | undefined): void {
+  const session = getSession(appId)
+  registry.set(appId, { ...session, appflowProgress: progress })
+}
+
+/** Read the one-time "migrating from Appflow?" gate answer for `appId`, or undefined when unasked. */
+export function getAppflowGate(appId: string): 'asked-yes' | 'asked-no' | undefined {
+  return registry.get(appId)?.appflowGate
+}
+
+/** Record the one-time "migrating from Appflow?" gate answer for `appId`. */
+export function setAppflowGate(appId: string, gate: 'asked-yes' | 'asked-no' | undefined): void {
+  const session = getSession(appId)
+  registry.set(appId, { ...session, appflowGate: gate })
 }
 
 /**

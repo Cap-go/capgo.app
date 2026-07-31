@@ -166,6 +166,62 @@ describe('onError PostHog capture', () => {
     })
   })
 
+  it('suppresses backend alerts for queue retries before the retry budget is exhausted', async () => {
+    const { onError } = await import('../supabase/functions/_backend/utils/on_error.ts')
+
+    const response = await onError('api')(new HTTPException(500, {
+      cause: {
+        error: 'analytics_engine_failed',
+        message: 'Analytics Engine temporarily failed',
+        moreInfo: {},
+      },
+    }), createContext(new Request('https://api.capgo.app/triggers/cron_stat_app', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-capgo-queue-max-reads': '5',
+        'x-capgo-queue-name': 'cron_stat_app',
+        'x-capgo-queue-read-count': '1',
+      },
+      body: JSON.stringify({ appId: 'com.example.app', orgId: 'org-id' }),
+    })))
+
+    expect(backgroundTaskMock).not.toHaveBeenCalled()
+    expect(sendDiscordAlert500Mock).not.toHaveBeenCalled()
+    expect(capturePosthogExceptionMock).not.toHaveBeenCalled()
+    expect(response.status).toBe(500)
+  })
+
+  it('keeps backend alerts for queue retries that exhausted the retry budget', async () => {
+    const { onError } = await import('../supabase/functions/_backend/utils/on_error.ts')
+
+    const response = await onError('api')(new HTTPException(500, {
+      cause: {
+        error: 'analytics_engine_failed',
+        message: 'Analytics Engine still failed',
+        moreInfo: {},
+      },
+    }), createContext(new Request('https://api.capgo.app/triggers/cron_stat_app', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-capgo-queue-max-reads': '5',
+        'x-capgo-queue-name': 'cron_stat_app',
+        'x-capgo-queue-read-count': '5',
+      },
+      body: JSON.stringify({ appId: 'com.example.app', orgId: 'org-id' }),
+    })))
+
+    expect(backgroundTaskMock).toHaveBeenCalledTimes(2)
+    expect(sendDiscordAlert500Mock).toHaveBeenCalledOnce()
+    expect(capturePosthogExceptionMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      functionName: 'api',
+      kind: 'http_exception',
+      status: 500,
+    }))
+    expect(response.status).toBe(500)
+  })
+
   it('skips PostHog capture for client HTTP exceptions', async () => {
     const { onError } = await import('../supabase/functions/_backend/utils/on_error.ts')
 

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { getPlatformDirFromCapacitorConfig, normalizeRelPath } from '../src/build/platform-paths.ts'
+import { getPlatformDirFromCapacitorConfig, normalizeNativeDependencyPathsInText, normalizeRelPath } from '../src/build/platform-paths.ts'
 
 function t(name, fn) {
   try {
@@ -46,5 +46,25 @@ t('getPlatformDirFromCapacitorConfig falls back on "."', () => {
     'android',
   )
 })
+
+
+t('normalizeNativeDependencyPathsInText fixes Windows separators in SPM paths', () => {
+  const input = 'let package = Package(dependencies: [.package(name: "CapacitorApp", path: "..\\..\\..\\node_modules\\@capacitor\\app")])'
+  const expected = 'let package = Package(dependencies: [.package(name: "CapacitorApp", path: "../../../node_modules/@capacitor/app")])'
+  assert.equal(normalizeNativeDependencyPathsInText(input), expected)
+})
+
+t('normalizeNativeDependencyPathsInText fixes Windows separators in CocoaPods and Gradle paths', () => {
+  const input = [
+    "pod 'CapacitorApp', :path => '..\\node_modules\\@capacitor\\app'",
+    "project(':capacitor-app').projectDir = new File('..\\node_modules\\@capacitor\\app\\android')",
+  ].join('\n')
+  const expected = [
+    "pod 'CapacitorApp', :path => '../node_modules/@capacitor/app'",
+    "project(':capacitor-app').projectDir = new File('../node_modules/@capacitor/app/android')",
+  ].join('\n')
+  assert.equal(normalizeNativeDependencyPathsInText(input), expected)
+})
+
 
 process.stdout.write('OK\n')

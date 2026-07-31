@@ -51,6 +51,12 @@ function clearCredentialEnvVars() {
     'FASTLANE_USER',
     'FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD',
     'APPLE_APP_ID',
+    'CAPGO_STORE_SUBMIT_REVIEW',
+    'CAPGO_STORE_RELEASE_NAME',
+    'CAPGO_STORE_RELEASE_NOTES',
+    'CAPGO_STORE_RELEASE_NOTES_LOCALIZED',
+    'CAPGO_IOS_TESTFLIGHT_GROUPS',
+    'CAPGO_IOS_AUTOMATIC_RELEASE',
   ]
   for (const key of credKeys) {
     delete process.env[key]

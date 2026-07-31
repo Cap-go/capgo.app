@@ -1,27 +1,15 @@
-import type { AuthInfo } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import { BRES, honoFactory, quickError, simpleError } from '../../utils/hono.ts'
-import { middlewareV2 } from '../../utils/hono_middleware.ts'
-import { supabaseWithAuth } from '../../utils/supabase.ts'
-import { apiKeyHasLimitedScope } from './scope.ts'
+import { middlewareAuth } from '../../utils/hono_middleware.ts'
+import { deleteOwnedApiKeyByIdentifier, ensureApiKeyCanManageTargetOrgIds, ensureApiKeyManagementAllowed, getApiKeyBindingOrgIds, isValidApiKeyIdFormat, requireApiKeyManagementAuth, selectOwnedApiKeyByIdentifier } from './scope.ts'
 
 const app = honoFactory.createApp()
 
-// Validate id format to prevent PostgREST filter injection
-// ID must be a valid UUID or numeric string
-function isValidIdFormat(id: string): boolean {
-  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-  const numericRegex = /^\d+$/
-  return uuidRegex.test(id) || numericRegex.test(id)
-}
-
-app.delete('/:id', middlewareV2(['all']), async (c) => {
-  const auth = c.get('auth') as AuthInfo
+app.delete('/:id', middlewareAuth(), async (c) => {
+  const auth = requireApiKeyManagementAuth(c, 'not_authorized', 'API key management requires authentication')
   const authApikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row'] | undefined
 
-  if (auth.authType === 'apikey' && await apiKeyHasLimitedScope(c, authApikey)) {
-    throw quickError(401, 'cannot_delete_apikey', 'You cannot do that as a limited API key', { apikeyId: authApikey?.id })
-  }
+  await ensureApiKeyManagementAllowed(c, auth, authApikey, 'cannot_delete_apikey')
 
   const id = c.req.param('id')
   if (!id) {
@@ -29,37 +17,20 @@ app.delete('/:id', middlewareV2(['all']), async (c) => {
   }
 
   // Validate id format to prevent PostgREST filter injection
-  if (!isValidIdFormat(id)) {
+  if (!isValidApiKeyIdFormat(id)) {
     throw simpleError('invalid_id_format', 'API key ID must be a valid UUID or number')
   }
 
-  // Use supabaseWithAuth which handles both JWT and API key authentication
-  const supabase = supabaseWithAuth(c, auth)
-
-  const baseQuery = supabase
-    .from('apikeys')
-    .select('*')
-    .eq('user_id', auth.userId)
-
-  const apikeyQuery = /^\d+$/.test(id)
-    ? baseQuery.eq('id', Number(id))
-    : baseQuery.eq('key', id)
-
-  const { data: apikey, error: apikeyError } = await apikeyQuery.single()
+  const { data: apikey, error: apikeyError } = await selectOwnedApiKeyByIdentifier(c, auth, id)
   if (!apikey || apikeyError) {
     throw quickError(404, 'api_key_not_found', 'API key not found', { supabaseError: apikeyError })
   }
+  if (auth.authType === 'apikey' && authApikey?.id === apikey.id) {
+    throw quickError(401, 'cannot_delete_apikey', 'API keys cannot delete themselves', { apikeyId: authApikey.id })
+  }
+  await ensureApiKeyCanManageTargetOrgIds(c, auth, authApikey, apikey.rbac_id ? await getApiKeyBindingOrgIds(c, apikey.rbac_id) : [], 'cannot_delete_apikey')
 
-  const deleteBaseQuery = supabase
-    .from('apikeys')
-    .delete()
-    .eq('user_id', auth.userId)
-
-  const deleteQuery = /^\d+$/.test(id)
-    ? deleteBaseQuery.eq('id', Number(id))
-    : deleteBaseQuery.eq('key', id)
-
-  const { error } = await deleteQuery
+  const { error } = await deleteOwnedApiKeyByIdentifier(c, auth, id)
 
   if (error) {
     throw quickError(500, 'failed_to_delete_apikey', 'Failed to delete API key', { supabaseError: error })

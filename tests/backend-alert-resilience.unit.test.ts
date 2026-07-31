@@ -477,4 +477,37 @@ describe('backend alert resilience helpers', () => {
       status: 'skipped',
     })
   })
+
+  it('passes the queue retry budget to dispatched trigger requests', async () => {
+    const { http_post_helper, MAX_QUEUE_READS } = await import('../supabase/functions/_backend/triggers/queue_consumer.ts')
+    const originalFetch = globalThis.fetch
+    let dispatchedHeaders: Record<string, string> = {}
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      dispatchedHeaders = init?.headers as Record<string, string>
+      return new Response(JSON.stringify({ status: 'ok' }), { status: 200 })
+    })
+    globalThis.fetch = fetchMock as typeof fetch
+
+    try {
+      await http_post_helper({
+        env: { API_SECRET: 'testsecret' },
+        get: (key: string) => key === 'requestId' ? 'request-id' : undefined,
+      } as any, 'cron_stat_app', 'cloudflare', {
+        appId: 'com.example.app',
+        orgId: 'org-id',
+      }, 'cf-id', {
+        msgId: 1271329,
+        queueName: 'cron_stat_app',
+        readCount: 1,
+      }, 'https://api.capgo.app/triggers/cron_stat_app')
+    }
+    finally {
+      globalThis.fetch = originalFetch
+    }
+
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(dispatchedHeaders['x-capgo-queue-name']).toBe('cron_stat_app')
+    expect(dispatchedHeaders['x-capgo-queue-read-count']).toBe('1')
+    expect(dispatchedHeaders['x-capgo-queue-max-reads']).toBe(String(MAX_QUEUE_READS))
+  })
 })

@@ -1,0 +1,181 @@
+{
+  "generatedAt": "2026-07-23T09:15:36.949Z",
+  "gitHead": "2903707a094d73b80f46ad02e98cfdb8bcb64861",
+  "bundle": {
+    "uploadBytes": 446679,
+    "gzipBytes": 132147,
+    "outputBytes": 446678,
+    "topPackagesBytesInOutput": {
+      "npm:drizzle-orm": 130934,
+      "npm:pg": 45323,
+      "npm:hono": 27326,
+      "npm:@jsr/bradenmacdonald__s3-lite-client": 22447,
+      "backend:utils/pg.ts": 20821,
+      "backend:utils/update.ts": 16092,
+      "npm:pg-protocol": 14010,
+      "backend:plugins/channel_self.ts": 11654,
+      "backend:utils/postgres_schema.ts": 9524,
+      "npm:cron-schedule": 8019,
+      "backend:utils/s3.ts": 7792,
+      "npm:pg-pool": 7385,
+      "npm:pg-types": 6237,
+      "npm:zod": 5898,
+      "backend:plugins/stats.ts": 5820,
+      "backend:utils/org_email_notifications.ts": 5802,
+      "backend:utils/plugin_schemas/update_request.zod.compiled.ts": 4814,
+      "backend:utils/cloudflare.ts": 4760,
+      "backend:utils/plugin_validation.ts": 4630,
+      "backend:utils/hono.ts": 4314,
+      "backend:utils/on_error.ts": 4100,
+      "npm:@jsr/std__semver": 3955,
+      "backend:utils/notifications.ts": 3946,
+      "backend:utils/channelSelfStore.ts": 3872,
+      "backend:utils/invalids_ip.ts": 3764,
+      "npm:pg-connection-string": 3707,
+      "backend:utils/plugin_notification_queue.ts": 3239,
+      "backend:utils/updateOracleGuard.ts": 3226,
+      "backend:utils/manifest_size.ts": 3010,
+      "backend:utils/rollout.ts": 2905,
+      "backend:utils/channelSelfRateLimit.ts": 2784,
+      "npm:pg-cloudflare": 2735,
+      "backend:utils/utils.ts": 2724,
+      "backend:utils/posthog.ts": 2715,
+      "npm:pgpass": 2706,
+      "backend:utils/discord.ts": 2675,
+      "backend:utils/plugin_stats.ts": 2514,
+      "backend:utils/plugin_parser.ts": 2287,
+      "backend:utils/api_version.ts": 1969,
+      "backend:plugins/stats_actions.ts": 1840
+    },
+    "focusPackagesBytesInOutput": {
+      "npm:drizzle-orm": 130934,
+      "npm:cron-schedule": 8019,
+      "npm:pg": 45323,
+      "npm:hono": 27326,
+      "npm:@jsr/bradenmacdonald__s3-lite-client": 22447,
+      "npm:@jsr/std__semver": 3955,
+      "backend:utils/ark_validation.ts": 697,
+      "backend:utils/cloudflare.ts": 4760,
+      "backend:utils/pg.ts": 20821,
+      "ecosystem:@supabase": 0,
+      "ecosystem:arktype": 0,
+      "ecosystem:stripe": 0
+    }
+  },
+  "importCosts": [
+    {
+      "specifier": "arktype",
+      "ms": 165.736469,
+      "heapUsedDeltaMB": 14.293914794921875,
+      "rssDeltaMB": 43.71875,
+      "heapUsedMB": 17.810684204101562,
+      "rssMB": 89.1484375
+    },
+    {
+      "specifier": "stripe",
+      "ms": 45.723754,
+      "heapUsedDeltaMB": 3.5422897338867188,
+      "rssDeltaMB": 17.75390625,
+      "heapUsedMB": 7.059059143066406,
+      "rssMB": 63.01171875
+    },
+    {
+      "specifier": "drizzle-orm",
+      "ms": 48.821723000000006,
+      "heapUsedDeltaMB": 17.942970275878906,
+      "rssDeltaMB": 32.46484375,
+      "heapUsedMB": 21.45977783203125,
+      "rssMB": 77.73046875
+    },
+    {
+      "specifier": "dayjs",
+      "ms": 0.8535590000000006,
+      "heapUsedDeltaMB": 0.078399658203125,
+      "rssDeltaMB": 0.5,
+      "heapUsedMB": 3.5951690673828125,
+      "rssMB": 45.75
+    },
+    {
+      "specifier": "@supabase/supabase-js",
+      "ms": 24.825903000000004,
+      "heapUsedDeltaMB": 2.7370147705078125,
+      "rssDeltaMB": 11.66796875,
+      "heapUsedMB": 6.2538909912109375,
+      "rssMB": 56.88671875
+    },
+    {
+      "specifier": "pg",
+      "ms": 19.839886999999997,
+      "heapUsedDeltaMB": 1.483612060546875,
+      "rssDeltaMB": 11.359375,
+      "heapUsedMB": 5.0003662109375,
+      "rssMB": 56.60546875
+    },
+    {
+      "specifier": "cron-schedule",
+      "ms": 5.406326000000002,
+      "heapUsedDeltaMB": 0.36772918701171875,
+      "rssDeltaMB": 1.48828125,
+      "heapUsedMB": 3.884552001953125,
+      "rssMB": 46.671875
+    },
+    {
+      "specifier": "hono",
+      "ms": 10.329436,
+      "heapUsedDeltaMB": 0.9991455078125,
+      "rssDeltaMB": 8.5,
+      "heapUsedMB": 4.515899658203125,
+      "rssMB": 53.72265625
+    }
+  ],
+  "microBenches": [
+    {
+      "name": "stats_action_array_includes",
+      "iterations": 200000,
+      "ms": 4.803441000000021,
+      "nsPerOp": 24.017205000000104,
+      "opsPerSec": 41636818.27256734,
+      "checksum": 200000
+    },
+    {
+      "name": "stats_action_set_has",
+      "iterations": 200000,
+      "ms": 1.3017459999998664,
+      "nsPerOp": 6.508729999999332,
+      "opsPerSec": 153639803.7712584,
+      "checksum": 200000
+    },
+    {
+      "name": "limited_apps_json_parse_every_call",
+      "iterations": 200000,
+      "ms": 1008.3045709999999,
+      "nsPerOp": 5041.522854999999,
+      "opsPerSec": 198352.76537688138,
+      "checksum": 3400000
+    },
+    {
+      "name": "limited_apps_cached_map_lookup",
+      "iterations": 200000,
+      "ms": 3.9851669999998194,
+      "nsPerOp": 19.925834999999097,
+      "opsPerSec": 50186102.61502443,
+      "checksum": 3400000
+    },
+    {
+      "name": "allowed_actions_join_every_error",
+      "iterations": 20000,
+      "ms": 23.676281000000017,
+      "nsPerOp": 1183.8140500000009,
+      "opsPerSec": 844727.2610086012,
+      "checksum": 21180000
+    },
+    {
+      "name": "allowed_actions_join_cached",
+      "iterations": 20000,
+      "ms": 0.273721999999907,
+      "nsPerOp": 13.68609999999535,
+      "opsPerSec": 73066834.233298,
+      "checksum": 21180000
+    }
+  ]
+}

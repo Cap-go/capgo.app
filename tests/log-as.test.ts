@@ -1,9 +1,9 @@
 import { Buffer } from 'node:buffer'
+import { randomUUID } from 'node:crypto'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { getAuthHeadersForCredentials, getEndpointUrl, getSupabaseClient, ORG_ID_2, USER_ADMIN_EMAIL, USER_ID, USER_ID_2, USER_ID_STATS } from './test-utils.ts'
 
 let adminHeaders: Record<string, string>
-const STALE_CREATED_BY_ORG_ID = 'f7a8b9c0-d1e2-4f3a-9b4c-5d6e7f8a9b05'
 
 function getJwtSub(jwt: string): string {
   const payload = JSON.parse(Buffer.from(jwt.split('.')[1], 'base64url').toString('utf8')) as { sub?: string }
@@ -29,52 +29,66 @@ async function callLogAs(body: Record<string, string>) {
 
 async function seedStaleCreatedByOrg() {
   const supabase = getSupabaseClient()
+  const staleCreatedByOrgId = randomUUID()
 
   const { error: cleanupError } = await supabase
     .from('orgs')
     .delete()
-    .eq('id', STALE_CREATED_BY_ORG_ID)
+    .eq('id', staleCreatedByOrgId)
   expect(cleanupError).toBeNull()
 
   const { error: stripeInfoCleanupError } = await supabase
     .from('stripe_info')
     .delete()
-    .eq('customer_id', `pending_${STALE_CREATED_BY_ORG_ID}`)
+    .eq('customer_id', `pending_${staleCreatedByOrgId}`)
   expect(stripeInfoCleanupError).toBeNull()
 
   const { error: orgError } = await supabase
     .from('orgs')
     .insert({
-      id: STALE_CREATED_BY_ORG_ID,
+      id: staleCreatedByOrgId,
       created_by: USER_ID,
-      name: 'Log as stale created_by org',
-      management_email: 'log-as-stale-owner@capgo.app',
-      use_new_rbac: true,
+      name: `Log as stale created_by org ${staleCreatedByOrgId}`,
+      management_email: `log-as-stale-owner-${staleCreatedByOrgId}@capgo.app`,
     })
   expect(orgError).toBeNull()
 
+  const { data: superAdminRole, error: roleError } = await supabase
+    .from('roles')
+    .select('id')
+    .eq('name', 'org_super_admin')
+    .eq('scope_type', 'org')
+    .single()
+  expect(roleError).toBeNull()
+  expect(superAdminRole?.id).toBeTruthy()
+
   const { error: currentAdminError } = await supabase
-    .from('org_users')
+    .from('role_bindings')
     .insert({
-      org_id: STALE_CREATED_BY_ORG_ID,
-      user_id: USER_ID_2,
-      user_right: 'super_admin',
+      principal_type: 'user',
+      principal_id: USER_ID_2,
+      role_id: superAdminRole!.id,
+      scope_type: 'org',
+      org_id: staleCreatedByOrgId,
+      granted_by: USER_ID_2,
     })
   expect(currentAdminError).toBeNull()
 
   const { error: staleLegacyError } = await supabase
     .from('org_users')
     .delete()
-    .eq('org_id', STALE_CREATED_BY_ORG_ID)
+    .eq('org_id', staleCreatedByOrgId)
     .eq('user_id', USER_ID)
   expect(staleLegacyError).toBeNull()
 
   const { error: staleBindingError } = await supabase
     .from('role_bindings')
     .delete()
-    .eq('org_id', STALE_CREATED_BY_ORG_ID)
+    .eq('org_id', staleCreatedByOrgId)
     .eq('principal_id', USER_ID)
   expect(staleBindingError).toBeNull()
+
+  return staleCreatedByOrgId
 }
 
 describe('[POST] /private/log_as', () => {
@@ -101,9 +115,9 @@ describe('[POST] /private/log_as', () => {
   })
 
   it('impersonates a current organization owner when created_by is stale', async () => {
-    await seedStaleCreatedByOrg()
+    const staleCreatedByOrgId = await seedStaleCreatedByOrg()
 
-    const jwt = await callLogAs({ org_id: STALE_CREATED_BY_ORG_ID })
+    const jwt = await callLogAs({ org_id: staleCreatedByOrgId })
 
     expect(getJwtSub(jwt)).toBe(USER_ID_2)
   })

@@ -19,9 +19,35 @@ app.post('/', middlewareAPISecret, triggerValidator('orgs', 'DELETE'), async (c)
 
   cloudlog({ requestId: c.get('requestId'), message: 'org delete', record })
 
-  // Cancel subscription if customer_id exists
   if (record.customer_id) {
-    cancelSubscription(c, record.customer_id)
+    try {
+      await cancelSubscription(c, record.customer_id)
+    }
+    catch (error) {
+      cloudlog({ requestId: c.get('requestId'), message: 'failed to cancel Stripe subscriptions during org delete', error, customer_id: record.customer_id })
+    }
+
+    const { error: stripeInfoDeleteError } = await supabaseAdmin(c)
+      .from('stripe_info')
+      .delete()
+      .eq('customer_id', record.customer_id)
+
+    if (stripeInfoDeleteError) {
+      cloudlog({ requestId: c.get('requestId'), message: 'failed to delete stripe_info during org delete', error: stripeInfoDeleteError, customer_id: record.customer_id })
+    }
+    else {
+      cloudlog({ requestId: c.get('requestId'), message: 'deleted stripe_info during org delete', customer_id: record.customer_id })
+    }
+  }
+
+  const pendingCustomerId = `pending_${record.id}`
+  const { error: pendingStripeInfoDeleteError } = await supabaseAdmin(c)
+    .from('stripe_info')
+    .delete()
+    .eq('customer_id', pendingCustomerId)
+
+  if (pendingStripeInfoDeleteError) {
+    cloudlog({ requestId: c.get('requestId'), message: 'failed to delete pending stripe_info during org delete', error: pendingStripeInfoDeleteError, customer_id: pendingCustomerId })
   }
 
   // Delete all organization images from storage

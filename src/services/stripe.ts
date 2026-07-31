@@ -29,10 +29,11 @@ async function presentActionSheetOpen(url: string) {
 }
 export function openBlank(link: string) {
   console.log('openBlank', link)
-  if (Capacitor.getPlatform() === 'ios')
+  if (Capacitor.getPlatform() === 'ios') {
     presentActionSheetOpen(link)
-  else
-    window.open(link, '_blank')
+    return true
+  }
+  return Boolean(globalThis.open(link, '_blank'))
 }
 export async function openPortal(orgId: string, t: ComposerTranslation) {
   let url = ''
@@ -46,7 +47,7 @@ export async function openPortal(orgId: string, t: ComposerTranslation) {
   // datafast_visitor_id
 
   const prem = supabase.functions.invoke('private/stripe_portal', {
-    body: JSON.stringify({ callbackUrl: window.location.href, orgId }),
+    body: JSON.stringify({ callbackUrl: globalThis.location.href, orgId }),
   }).then(({ data }) => {
     if (data?.url) {
       url = data.url
@@ -97,13 +98,25 @@ export async function getDatafastAttribution() {
   }
 }
 
+export async function getAffonsoReferral() {
+  try {
+    const referral = await getCookieValue('affonso_referral')
+    // Stripe metadata values are capped at 500 characters.
+    return referral && referral.length <= 500 ? referral : ''
+  }
+  catch {
+    return ''
+  }
+}
+
 export async function openCheckout(priceId: string, successUrl: string, cancelUrl: string, isYear: boolean, orgId: string) {
   //   console.log('openCheckout')
   const supabase = useSupabase()
   const session = await supabase.auth.getSession()
   if (!session)
-    return
+    return false
   const datafastAttribution = await getDatafastAttribution()
+  const affonsoReferral = await getAffonsoReferral()
   try {
     const resp = await supabase.functions.invoke('private/stripe_checkout', {
       body: JSON.stringify({
@@ -115,14 +128,17 @@ export async function openCheckout(priceId: string, successUrl: string, cancelUr
         attributionId: datafastAttribution.visitorId,
         datafastVisitorId: datafastAttribution.visitorId,
         datafastSessionId: datafastAttribution.sessionId,
+        affonsoReferral,
       }),
     })
     if (!resp.error && resp.data?.url)
-      openBlank(resp.data.url)
+      return openBlank(resp.data.url)
+    return false
   }
   catch (error) {
     console.error(error)
     toast.error('Cannot get your checkout')
+    return false
   }
 }
 
@@ -131,6 +147,7 @@ export async function startCreditTopUp(orgId: string, quantity = 100) {
     return
   const supabase = useSupabase()
   const datafastAttribution = await getDatafastAttribution()
+  const affonsoReferral = await getAffonsoReferral()
   try {
     const { data, error } = await supabase.functions.invoke('private/credits/start-top-up', {
       body: JSON.stringify({
@@ -138,13 +155,14 @@ export async function startCreditTopUp(orgId: string, quantity = 100) {
         quantity,
         datafastVisitorId: datafastAttribution.visitorId,
         datafastSessionId: datafastAttribution.sessionId,
+        affonsoReferral,
       }),
     })
     if (error || !data?.url) {
       console.error('Failed to start credit top-up', error ?? data)
       throw error ?? new Error('Missing checkout URL')
     }
-    window.location.href = data.url
+    globalThis.location.href = data.url
   }
   catch (error) {
     console.error('Cannot start credit top-up checkout', error)

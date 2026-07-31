@@ -6,7 +6,7 @@ import {
   PLATFORM_CARDS_MIN_ROWS,
   pickPlatformLayout,
 } from '../src/build/onboarding/ui/frame-fit.ts'
-import { platformKeyAction } from '../src/build/onboarding/ui/platform-picker.tsx'
+import { cardKeyAction, platformKeyAction } from '../src/build/onboarding/ui/platform-picker.tsx'
 
 let passed = 0
 let failed = 0
@@ -40,26 +40,55 @@ test('tiny terminal → list', () => {
   eq(pickPlatformLayout(20, 8), 'list')
 })
 
-// ── platformKeyAction ────────────────────────────────────────────────────────
-test('left / h / 1 → select iOS', () => {
-  eq(platformKeyAction('', { leftArrow: true }), { type: 'select', platform: 'ios' })
-  eq(platformKeyAction('h', {}), { type: 'select', platform: 'ios' })
-  eq(platformKeyAction('1', {}), { type: 'select', platform: 'ios' })
+// ── platformKeyAction (arrows MOVE across the iOS + Android cards) ────────────
+test('left / h → move -1', () => {
+  eq(platformKeyAction('', { leftArrow: true }), { type: 'move', delta: -1 })
+  eq(platformKeyAction('h', {}), { type: 'move', delta: -1 })
 })
-test('right / l / 2 → select Android', () => {
-  eq(platformKeyAction('', { rightArrow: true }), { type: 'select', platform: 'android' })
-  eq(platformKeyAction('l', {}), { type: 'select', platform: 'android' })
-  eq(platformKeyAction('2', {}), { type: 'select', platform: 'android' })
+test('right / l → move +1', () => {
+  eq(platformKeyAction('', { rightArrow: true }), { type: 'move', delta: 1 })
+  eq(platformKeyAction('l', {}), { type: 'move', delta: 1 })
 })
-test('Enter → confirm', () => {
+test('number keys jump to a specific card', () => {
+  eq(platformKeyAction('1', {}), { type: 'jump', platform: 'ios' })
+  eq(platformKeyAction('2', {}), { type: 'jump', platform: 'android' })
+})
+test('3 / a (former Appflow jumps) are no longer recognized → null', () => {
+  eq(platformKeyAction('3', {}), null)
+  eq(platformKeyAction('a', {}), null)
+})
+test('Enter → confirm (wins over arrows)', () => {
   eq(platformKeyAction('', { return: true }), { type: 'confirm' })
-})
-test('Enter wins over arrows when both set', () => {
   eq(platformKeyAction('', { return: true, leftArrow: true }), { type: 'confirm' })
 })
 test('unrelated key → null', () => {
   eq(platformKeyAction('x', {}), null)
   eq(platformKeyAction('', {}), null)
+})
+
+// ── cardKeyAction (generic CardChooser) ──────────────────────────────────────
+test('left / h → move -1', () => {
+  eq(cardKeyAction('', { leftArrow: true }, 2), { type: 'move', delta: -1 })
+  eq(cardKeyAction('h', {}, 2), { type: 'move', delta: -1 })
+})
+test('right / l → move +1', () => {
+  eq(cardKeyAction('', { rightArrow: true }, 2), { type: 'move', delta: 1 })
+  eq(cardKeyAction('l', {}, 2), { type: 'move', delta: 1 })
+})
+test('number in range → jump to that card', () => {
+  eq(cardKeyAction('1', {}, 2), { type: 'jump', index: 0 })
+  eq(cardKeyAction('2', {}, 2), { type: 'jump', index: 1 })
+})
+test('number out of range → null', () => {
+  eq(cardKeyAction('3', {}, 2), null)
+  eq(cardKeyAction('0', {}, 2), null)
+})
+test('Enter → confirm (wins over arrows)', () => {
+  eq(cardKeyAction('', { return: true }, 2), { type: 'confirm' })
+  eq(cardKeyAction('', { return: true, rightArrow: true }, 2), { type: 'confirm' })
+})
+test('unrelated key → null', () => {
+  eq(cardKeyAction('x', {}, 2), null)
 })
 
 console.log(`\n${passed} passed, ${failed} failed`)

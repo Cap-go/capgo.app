@@ -521,7 +521,7 @@ await test('runIosEffect throws for a NON-tail, not-yet-implemented effect step 
 // parity — existing files unaffected).
 
 const CREDS_SAVED = { savedAt: '2026-06-03T01:00:00.000Z' }
-const BUILD_REQUESTED = { buildUrl: `https://capgo.app/app/${APP_ID}/builds` }
+const BUILD_REQUESTED = { buildUrl: `https://console.capgo.app/app/${APP_ID}/builds` }
 const CI_UPLOADED_GH = { provider: 'github', count: 3 }
 
 /** A fully-provisioned create-new progress: cert + profile persisted, so without

@@ -21,7 +21,7 @@ import { app as files_config } from './files_config.ts'
 import { parseUploadMetadata } from './parse.ts'
 import { DEFAULT_RETRY_PARAMS, RetryBucket } from './retry.ts'
 import { supabaseTusCreateHandler, supabaseTusHeadHandler, supabaseTusPatchHandler } from './supabaseTusProxy.ts'
-import { ALLOWED_HEADERS, ALLOWED_METHODS, buildFileHttpMetadata, EXPOSED_HEADERS, getSafeAttachmentReadCandidateKeys, headFirstExistingAttachmentCandidate, isRetryableDurableObjectResetError, MAX_UPLOAD_LENGTH_BYTES, parseAppScopedAttachmentPath, toBase64, TUS_EXTENSIONS, TUS_VERSION, withNoTransformCacheControl, X_CHECKSUM_SHA256, X_UPLOAD_HANDLER_RETRYABLE } from './util.ts'
+import { ALLOWED_HEADERS, ALLOWED_METHODS, buildFileHttpMetadata, EXPOSED_HEADERS, getSafeAttachmentReadCandidateKeys, headFirstExistingAttachmentCandidate, isRetryableDurableObjectResetError, MAX_UPLOAD_LENGTH_BYTES, NO_TRANSFORM_CACHE_CONTROL, parseAppScopedAttachmentPath, toBase64, TUS_EXTENSIONS, TUS_VERSION, withNoTransformCacheControl, X_CHECKSUM_SHA256, X_UPLOAD_HANDLER_RETRYABLE } from './util.ts'
 
 const DO_CALL_TIMEOUT = 1000 * 60 * 30 // 30 minutes
 const DO_FETCH_RETRY_ATTEMPTS = 3
@@ -30,6 +30,8 @@ const DO_FETCH_RETRY_DELAY_MS = 250
 const ATTACHMENT_PREFIX = 'attachments'
 const ATTACHMENT_PLAN_LIMIT: Array<'mau' | 'bandwidth' | 'storage'> = ['mau', 'bandwidth', 'storage']
 const TUS_UPLOAD_CONTENT_TYPE = 'application/offset+octet-stream'
+const FILE_READ_CACHE_CONTROL = 'public, max-age=31536000, immutable'
+const TRACKING_QUERY_PARAMS = ['device_id']
 
 export const app = new Hono<MiddlewareKeyVariables>()
 
@@ -254,8 +256,17 @@ async function fetchUploadHandlerWithRetry(
   throw lastError ?? new Error('Durable Object upload fetch failed')
 }
 
+function withFileReadCacheControl(cacheControl: string | null | undefined): string {
+  const normalizedCacheControl = cacheControl?.trim().toLowerCase()
+  if (!normalizedCacheControl || normalizedCacheControl === NO_TRANSFORM_CACHE_CONTROL) {
+    return withNoTransformCacheControl(FILE_READ_CACHE_CONTROL)
+  }
+
+  return withNoTransformCacheControl(cacheControl)
+}
+
 function ensureNoTransformResponse(response: Response): Response {
-  const cacheControl = withNoTransformCacheControl(response.headers.get('cache-control'))
+  const cacheControl = withFileReadCacheControl(response.headers.get('cache-control'))
   if (cacheControl === response.headers.get('cache-control')) {
     return response
   }
@@ -271,7 +282,7 @@ function ensureNoTransformResponse(response: Response): Response {
 
 function withAttachmentResponseHeaders(response: Response, fileId: string): Response {
   const headers = new Headers(response.headers)
-  headers.set('cache-control', withNoTransformCacheControl(headers.get('cache-control')))
+  headers.set('cache-control', withFileReadCacheControl(headers.get('cache-control')))
   headers.set('content-disposition', `attachment; filename="${fileId}"`)
 
   return new Response(response.body, {
@@ -417,7 +428,11 @@ async function getHandler(c: Context): Promise<Response> {
   const rawFileId = getRawAttachmentRouteId(c)
   const candidateKeys = getSafeAttachmentReadCandidateKeys(fileId, rawFileId)
   const cacheUrl = new URL(c.req.url)
+  for (const queryParam of TRACKING_QUERY_PARAMS) {
+    cacheUrl.searchParams.delete(queryParam)
+  }
   cacheUrl.searchParams.set('range', c.req.header('range') || '')
+  cacheUrl.searchParams.sort()
   const cacheKey = new Request(cacheUrl, c.req)
   let response = await cache.match(cacheKey)
   if (response != null) {
@@ -517,7 +532,7 @@ function objectHeaders(object: R2Object): Headers {
   object.writeHttpMetadata(headers)
   // Prevent CDN transformations (auto-minify, email obfuscation, etc.) that modify
   // bytes in transit, breaking checksum verification on devices.
-  headers.set('cache-control', withNoTransformCacheControl(headers.get('cache-control')))
+  headers.set('cache-control', withFileReadCacheControl(headers.get('cache-control')))
   headers.set('etag', object.httpEtag)
 
   // the sha256 checksum was provided to R2 in the upload
@@ -1036,7 +1051,7 @@ async function checkWriteAppAccess(c: Context, next: Next) {
 }
 
 app.options(`/upload/${ATTACHMENT_PREFIX}`, optionsHandler)
-app.post(`/upload/${ATTACHMENT_PREFIX}`, middlewareKey(['all', 'write', 'upload'], true, false), setKeyFromMetadata, checkWriteAppAccess, (c) => {
+app.post(`/upload/${ATTACHMENT_PREFIX}`, middlewareKey({ usePostgres: true, readOnly: false, rateLimitScope: 'upload' }), setKeyFromMetadata, checkWriteAppAccess, (c) => {
   if (getRuntimeKey() !== 'workerd') {
     return supabaseTusCreateHandler(c)
   }
@@ -1047,7 +1062,7 @@ app.options(`/upload/${ATTACHMENT_PREFIX}/:id{.+}`, optionsHandler)
 // Combined GET/HEAD handler for TUS uploads - Hono tiny routes HEAD to GET
 app.get(
   `/upload/${ATTACHMENT_PREFIX}/:id{.+}`,
-  middlewareKey(['all', 'write', 'upload'], true, false),
+  middlewareKey({ usePostgres: true, readOnly: false, rateLimitScope: 'upload' }),
   setKeyFromIdParam,
   checkWriteAppAccess,
   (c) => {
@@ -1069,7 +1084,7 @@ app.get(
   },
 )
 app.get(`/read/${ATTACHMENT_PREFIX}/:id{.+}`, setKeyFromIdParam, getHandler)
-app.patch(`/upload/${ATTACHMENT_PREFIX}/:id{.+}`, middlewareKey(['all', 'write', 'upload'], true, false), setKeyFromIdParam, checkWriteAppAccess, (c) => {
+app.patch(`/upload/${ATTACHMENT_PREFIX}/:id{.+}`, middlewareKey({ usePostgres: true, readOnly: false, rateLimitScope: 'upload' }), setKeyFromIdParam, checkWriteAppAccess, (c) => {
   if (getRuntimeKey() !== 'workerd') {
     return supabaseTusPatchHandler(c)
   }

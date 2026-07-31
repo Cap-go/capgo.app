@@ -1,20 +1,16 @@
 -- Test RLS Policies
 -- This file tests all Row Level Security policies in the database
 BEGIN;
-
--- Plan the number of tests
-SELECT plan(46);
-
--- Test app_versions policies
+SELECT plan(70);
 SELECT
     policies_are(
         'public',
         'app_versions',
         ARRAY[
-            'Allow all for auth (super_admin+)',
+            'Allow RBAC app_versions super-admin access',
             'Allow for auth, api keys (read+)',
-            'Allow insert for api keys (write,all,upload) (upload+)',
-            'Allow update for auth and api keys',
+            'Allow RBAC app_versions insert',
+            'Allow RBAC app_versions update',
             'Prevent non 2FA access'
         ],
         'app_versions should have correct policies'
@@ -26,10 +22,10 @@ SELECT
         'public',
         'apps',
         ARRAY[
-            'Allow all for auth (super_admin+)',
+            'Allow RBAC apps super-admin access',
             'Allow for auth, api keys (read+)',
-            'Allow insert for apikey (write,all) (admin+)',
-            'Allow update for auth, api keys (write, all) (admin+)',
+            'Allow RBAC apps insert',
+            'Allow RBAC apps update',
             'Prevent non 2FA access'
         ],
         'apps should have correct policies'
@@ -40,7 +36,7 @@ SELECT
     policies_are(
         'public',
         'global_stats',
-        ARRAY[]::text [],
+        ARRAY['Allow none to select']::text [],
         'global_stats should have correct policies'
     );
 
@@ -61,14 +57,40 @@ SELECT
         'public',
         'channel_devices',
         ARRAY[
-            'Allow delete for auth, api keys (write+)',
-            'Allow insert for auth (write+)',
+            'Allow RBAC channel_devices delete',
+            'Allow RBAC channel_devices insert',
             'Allow read for auth, api keys (read+)',
-            'Allow update for auth, api keys (write+)',
+            'Allow RBAC channel_devices update',
             'Prevent non 2FA access'
         ],
         'channel_devices should have correct policies'
     );
+SELECT
+    is(
+        (
+            SELECT confdeltype::text
+            FROM pg_constraint
+            WHERE conrelid = 'public.channel_devices'::regclass
+              AND conname = 'channel_devices_channel_id_fkey'
+        ),
+        'c',
+        'channel_devices should cascade when a channel is deleted'
+    );
+
+SELECT
+    is(
+        (
+            SELECT array_agg(policy_role::text ORDER BY policy_role::text)
+            FROM pg_policies
+            CROSS JOIN unnest(roles) AS policy_role
+            WHERE schemaname = 'public'
+              AND tablename = 'channel_devices'
+              AND policyname = 'Allow RBAC channel_devices insert'
+        ),
+        ARRAY['anon', 'authenticated']::text[],
+        'channel_devices insert should allow anon API-key and authenticated JWT traffic'
+    );
+
 
 -- Test channel_permission_overrides policies
 SELECT
@@ -124,6 +146,74 @@ SELECT
         'public RLS should not have duplicate permissive policies for the same table operation'
     );
 
+SELECT
+    is(
+        (
+            SELECT count(*)
+            FROM (
+                SELECT role_name
+                FROM pg_policies
+                CROSS JOIN LATERAL unnest(roles) AS role_name
+                WHERE schemaname = 'public'
+                  AND tablename = 'channel_devices'
+                  AND permissive = 'PERMISSIVE'
+                  AND cmd = 'SELECT'
+                  AND role_name IN ('anon', 'authenticated')
+                GROUP BY role_name
+                HAVING count(*) > 1
+            ) duplicate_channel_devices_select_roles
+        ),
+        0::bigint,
+        'channel_devices should have one permissive SELECT policy per API role'
+    );
+
+SELECT
+    is(
+        (
+            SELECT count(*)
+            FROM (
+                SELECT role_name
+                FROM pg_policies
+                CROSS JOIN LATERAL unnest(roles) AS role_name
+                WHERE schemaname = 'public'
+                  AND tablename = 'sso_providers'
+                  AND permissive = 'PERMISSIVE'
+                  AND cmd = 'SELECT'
+                  AND role_name IN ('anon', 'authenticated')
+                GROUP BY role_name
+                HAVING count(*) > 1
+            ) duplicate_sso_provider_select_roles
+        ),
+        0::bigint,
+        'sso_providers should have one permissive SELECT policy per API role'
+    );
+
+SELECT
+    is(
+        (
+            SELECT count(*)
+            FROM pg_indexes
+            WHERE schemaname = 'public'
+              AND tablename = 'manifest'
+              AND indexname IN ('manifest_file_hash_idx', 'manifest_file_name_idx')
+        ),
+        0::bigint,
+        'manifest should not retain redundant single-column indexes'
+    );
+
+SELECT
+    is(
+        (
+            SELECT count(*)
+            FROM pg_indexes
+            WHERE schemaname = 'public'
+              AND tablename = 'manifest'
+              AND indexname IN ('idx_manifest_file_hash', 'idx_manifest_file_name')
+        ),
+        2::bigint,
+        'manifest should retain the supported single-column indexes'
+    );
+
 -- Test orgs policies
 SELECT
     policies_are(
@@ -133,10 +223,54 @@ SELECT
             'Allow insert org for user',
             'Allow org delete for super_admin',
             'Allow select for auth, api keys (read+)',
-            'Allow update for auth (admin+)',
+            'Allow org settings update via RBAC',
             'Prevent non 2FA access'
         ],
         'orgs should have correct policies'
+    );
+
+SELECT
+    is(
+        (
+            SELECT count(*)
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'orgs'
+              AND column_name = 'use_new_rbac'
+        ),
+        0::bigint,
+        'orgs should not keep the old RBAC opt-in column'
+    );
+
+SELECT
+    is(
+        (
+            SELECT (COALESCE(qual, '') || COALESCE(with_check, '')) !~ 'key_mode|all,write'
+            FROM pg_policies
+            WHERE
+                schemaname = 'public'
+                AND tablename = 'orgs'
+                AND policyname = 'Allow org settings update via RBAC'
+        ),
+        true,
+        'orgs update policy should use named RBAC instead of legacy key modes'
+    );
+
+SELECT
+    is(
+        COALESCE(
+            (
+                SELECT roles @> ARRAY['anon'::name, 'authenticated'::name]
+                FROM pg_policies
+                WHERE
+                    schemaname = 'public'
+                    AND tablename = 'orgs'
+                    AND policyname = 'Allow org settings update via RBAC'
+            ),
+            false
+        ),
+        true,
+        'orgs update policy should support API-key anon RLS and authenticated users'
     );
 
 -- Test apikey_global_permissions policies
@@ -246,13 +380,51 @@ SELECT
         'public',
         'channels',
         ARRAY[
-            'Allow delete for auth (admin+) (all apikey)',
-            'Allow insert for auth, api keys (write, all) (admin+)',
+            'Allow RBAC channels delete',
+            'Allow RBAC channels insert',
             'Allow select for auth, api keys (read+)',
-            'Allow update for auth, api keys (write, all) (write+)',
+            'Allow RBAC channels update',
             'Prevent non 2FA access'
         ],
         'channels should have correct policies'
+    );
+
+SELECT
+    ok(
+        (
+            SELECT (
+                COALESCE(qual, '')
+                || ' '
+                || COALESCE(with_check, '')
+            ) ~ 'rbac_perm_channel_update_settings'
+            AND (
+                COALESCE(qual, '')
+                || ' '
+                || COALESCE(with_check, '')
+            ) !~ 'rbac_perm_app_update_settings'
+            FROM pg_policies
+            WHERE schemaname = 'public'
+              AND tablename = 'channels'
+              AND policyname = 'Allow RBAC channels update'
+        ),
+        'channels update policy should honor channel-scoped update permission'
+    );
+
+SELECT
+    ok(
+        NOT EXISTS (
+            SELECT 1
+            FROM
+                public.role_permissions
+            JOIN public.roles
+                ON roles.id = role_permissions.role_id
+            JOIN public.permissions
+                ON permissions.id = role_permissions.permission_id
+            WHERE
+                roles.name = public.rbac_role_app_developer()
+                AND permissions.key = public.rbac_perm_channel_update_settings()
+        ),
+        'app developer role should not mutate channel settings through direct RLS'
     );
 
 -- Test stripe_info policies
@@ -347,7 +519,7 @@ SELECT
         'deploy_history',
         ARRAY[
             'Allow users to view deploy history for their org',
-            'Allow users with write permissions to insert deploy history',
+            'Deny insert via RBAC',
             'Deny delete on deploy history',
             'Prevent update on deploy history'
         ],
@@ -416,7 +588,9 @@ SELECT
         ARRAY[
             'Allow owner to delete own apikeys',
             'Allow owner to select own apikeys',
-            'Allow owner to update own apikeys',
+            'Deny anon delete on apikeys',
+            'Deny anon select on apikeys',
+            'Deny client update on apikeys',
             'Deny client insert on apikeys',
             'Prevent non 2FA access'
         ],
@@ -531,7 +705,7 @@ SELECT
     policy_cmd_is(
         'public',
         'app_versions',
-        'Allow all for auth (super_admin+)',
+        'Allow RBAC app_versions super-admin access',
         'DELETE',
         'Delete policy on app_versions should be for DELETE command'
     );
@@ -549,7 +723,7 @@ SELECT
     policy_cmd_is(
         'public',
         'channel_devices',
-        'Allow insert for auth (write+)',
+        'Allow RBAC channel_devices insert',
         'INSERT',
         'Insert policy on channel_devices should be for INSERT command'
     );
@@ -558,9 +732,228 @@ SELECT
     policy_cmd_is(
         'public',
         'orgs',
-        'Allow update for auth (admin+)',
+        'Allow org settings update via RBAC',
         'UPDATE',
         'Update policy on orgs should be for UPDATE command'
+    );
+
+SELECT
+    is(
+        (
+            SELECT count(*)
+            FROM pg_policies
+            WHERE schemaname IN ('public', 'storage')
+              AND (
+                COALESCE(qual, '')
+                || ' '
+                || COALESCE(with_check, '')
+              ) ~ 'check_min_rights|get_identity|has_app_right|matches_app_storage_apikey_owner|rbac_legacy|rbac_org_role_for_legacy|rbac_permission_for_legacy|key_mode'
+        ),
+        0::bigint,
+        'user-facing RLS policies should not call old rights helpers or key-mode checks'
+    );
+
+SELECT
+    is(
+        (
+            SELECT count(*)
+            FROM pg_proc p
+            JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname IN ('public', 'capgo_private')
+              AND p.proname IN (
+                'app_versions_has_app_permission',
+                'matches_app_storage_apikey_owner',
+                'check_min_rights',
+                'check_min_rights_legacy',
+                'check_min_rights_legacy_no_password_policy',
+                'get_identity',
+                'get_identity_apikey_only',
+                'get_identity_for_apikey_creation',
+                'get_identity_org_allowed',
+                'get_identity_org_allowed_apikey_only',
+                'get_identity_org_appid',
+                'get_org_owner_id',
+                'has_app_right',
+                'has_app_right_apikey',
+                'has_app_right_userid',
+                'force_org_rbac_enabled',
+                'invite_user_to_org',
+                'modify_permissions_tmp',
+                'rbac_legacy_right_for_org_role',
+                'rbac_legacy_right_for_permission',
+                'rbac_legacy_role_hint',
+                'rbac_org_role_for_legacy_right',
+                'rbac_permission_for_legacy',
+                'request_read_key_modes',
+                'transform_role_to_invite',
+                'transform_role_to_non_invite',
+                'apikey_permission_for_keymode',
+                'rbac_migrate_org_users_to_bindings',
+                'rbac_preview_migration',
+                'rbac_enable_for_org',
+                'rbac_rollback_org',
+                'rbac_is_enabled_for_org'
+              )
+        ),
+        0::bigint,
+        'old rights helper functions should be deleted'
+    );
+
+SELECT
+    is(
+        (
+            SELECT count(*)
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND (
+                (table_name = 'org_users' AND column_name = 'user_right')
+                OR (table_name = 'tmp_users' AND column_name = 'role')
+              )
+        ),
+        0::bigint,
+        'old org membership rights columns should be deleted'
+    );
+
+SELECT
+    is(
+        (
+            SELECT count(*)
+            FROM pg_type t
+            JOIN pg_namespace n ON n.oid = t.typnamespace
+            WHERE n.nspname = 'public'
+              AND t.typname IN ('key_mode', 'user_min_right')
+        ),
+        0::bigint,
+        'old API key mode and org right enum types should be deleted'
+    );
+
+SELECT
+    is(
+        (
+            SELECT count(*)
+            FROM pg_proc p
+            JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE p.prokind = 'f'
+              AND n.nspname IN ('public', 'capgo_private')
+              AND pg_get_functiondef(p.oid) ~ 'check_min_rights|get_identity|has_app_right|rbac_legacy|rbac_org_role_for_legacy|rbac_permission_for_legacy|transform_role_to|request_read_key_modes|apikey_permission_for_keymode|user_right|key_mode'
+        ),
+        0::bigint,
+        'SQL functions should not reference old rights helpers, key modes, or org rights columns'
+    );
+
+SELECT
+    is(
+        (
+            SELECT count(*)
+            FROM pg_proc p
+            JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE p.prokind = 'f'
+              AND n.nspname = 'public'
+              AND p.proname IN (
+                'audit_logs_allowed_orgs',
+                'get_user_main_org_id_by_app_id',
+                'request_has_app_read_access',
+                'request_has_org_read_access',
+                'usage_credit_readable_org_ids'
+              )
+              AND pg_get_functiondef(p.oid) ~ 'check_min_rights|get_identity|has_app_right|rbac_legacy|rbac_org_role_for_legacy|rbac_permission_for_legacy|key_mode|user_min_right'
+        ),
+        0::bigint,
+        'RLS helper functions should be RBAC-only'
+    );
+
+SELECT
+    is(
+        (
+            SELECT permissive
+            FROM pg_policies
+            WHERE schemaname = 'public'
+              AND tablename = 'apikeys'
+              AND policyname = 'Deny client update on apikeys'
+        ),
+        'RESTRICTIVE',
+        'apikeys direct update deny should be restrictive'
+    );
+
+SELECT
+    is(
+        (
+            SELECT permissive
+            FROM pg_policies
+            WHERE schemaname = 'public'
+              AND tablename = 'apikeys'
+              AND policyname = 'Deny anon select on apikeys'
+        ),
+        'RESTRICTIVE',
+        'apikeys anon select deny should be restrictive'
+    );
+
+SELECT
+    is(
+        (
+            SELECT permissive
+            FROM pg_policies
+            WHERE schemaname = 'public'
+              AND tablename = 'apikeys'
+              AND policyname = 'Deny anon delete on apikeys'
+        ),
+        'RESTRICTIVE',
+        'apikeys anon delete deny should be restrictive'
+    );
+
+SELECT
+    is(
+        (
+            SELECT count(*)
+            FROM pg_policies
+            WHERE schemaname = 'public'
+              AND tablename = 'apikeys'
+              AND cmd IN ('UPDATE', 'ALL')
+              AND permissive = 'PERMISSIVE'
+              AND roles && ARRAY['anon', 'authenticated']::name[]
+        ),
+        0::bigint,
+        'apikeys should have no permissive user-facing update policy'
+    );
+
+SELECT
+    is(
+        (
+            SELECT count(*)
+            FROM pg_namespace
+            WHERE nspname = 'capgo_private'
+        ),
+        0::bigint,
+        'capgo_private schema should not exist'
+    );
+
+SELECT
+    is(
+        (
+            SELECT
+                has_function_privilege('anon', 'public.get_orgs_v7(uuid)'::regprocedure, 'EXECUTE')::text
+                || ','
+                || has_function_privilege('authenticated', 'public.get_orgs_v7(uuid)'::regprocedure, 'EXECUTE')::text
+                || ','
+                || has_function_privilege('service_role', 'public.get_orgs_v7(uuid)'::regprocedure, 'EXECUTE')::text
+        ),
+        'false,false,true',
+        'get_orgs_v7(userid) should be executable only by service_role'
+    );
+
+SELECT
+    is(
+        (
+            SELECT count(*)
+            FROM pg_proc proc
+            JOIN LATERAL unnest(proc.proallargtypes, proc.proargmodes, proc.proargnames)
+              WITH ORDINALITY AS args(type_oid, arg_mode, arg_name, ordinality) ON true
+            WHERE proc.oid IN ('public.get_orgs_v7()'::regprocedure, 'public.get_orgs_v7(uuid)'::regprocedure)
+              AND args.arg_mode = 't'
+              AND args.arg_name = 'is_invite'
+        ),
+        2::bigint,
+        'get_orgs_v7 overloads should expose explicit invite state'
     );
 
 -- Complete the tests

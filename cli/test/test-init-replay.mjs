@@ -378,7 +378,8 @@ assert.equal(applyRawCommandAnalyticsOptOut(['node', 'capgo', 'bundle', 'upload'
     assert.ok(replay, 'replay starts for stale meta send test')
 
     stdout.write('before stale send\r\n')
-    await new Promise(resolve => setTimeout(resolve, 40))
+    for (let attempt = 0; attempt < 20 && !staleSendStarted; attempt++)
+      await new Promise(resolve => setTimeout(resolve, 10))
     assert.equal(staleSendStarted, true, 'first snapshot send starts before resize')
 
     cols = 100

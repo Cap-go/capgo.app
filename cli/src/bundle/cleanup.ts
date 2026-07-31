@@ -20,7 +20,6 @@ import {
   getAppId,
   getConfig,
   getHumanDate,
-  OrganizationPerm,
   resolveUserIdFromApiKey,
 } from '../utils'
 
@@ -82,7 +81,7 @@ export async function cleanupBundleInternal(appId: string, options: BundleCleanu
   const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
   await check2FAComplianceForApp(supabase, appId, silent)
   await resolveUserIdFromApiKey(supabase, options.apikey)
-  await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, OrganizationPerm.write, silent, true)
+  await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'bundle.delete', silent, true)
 
   if (!silent)
     log.info('Querying all available versions in Capgo')

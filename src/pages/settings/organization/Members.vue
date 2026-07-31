@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import type { TableColumn } from '~/components/comp_def'
 import type { ExtendedOrganizationMember } from '~/stores/organization'
-import type { Database } from '~/types/supabase.types'
 
 import { computedAsync } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
@@ -18,7 +17,7 @@ import RoleSelect from '~/components/forms/RoleSelect.vue'
 import SearchInput from '~/components/forms/SearchInput.vue'
 import { checkPermissions } from '~/services/permissions'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
-import { useSupabase } from '~/services/supabase'
+import { defaultApiHost, useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import { getRbacRoleI18nKey, isAdminRole, isSuperAdminRole, useOrganizationStore } from '~/stores/organization'
@@ -76,7 +75,7 @@ interface RoleBinding {
 }
 
 // Permission modal state
-const selectedPermission = ref<Database['public']['Enums']['user_min_right'] | string | undefined>()
+const selectedPermission = ref<string | undefined>()
 const selectedPermissionForm = ref('')
 const isInvitePermissionModal = ref(false)
 
@@ -175,15 +174,12 @@ const appAccessRoleTouched = ref(false)
 function isInviteMember(member: OrganizationMemberRow) {
   if (member.is_invite || member.is_tmp)
     return true
-  if (typeof member.role === 'string')
-    return member.role.includes('invite')
   return false
 }
 
 function getMemberRoleLabel(member: OrganizationMemberRow) {
-  const normalizedRole = member.role.replace(/^invite_/, '')
-  const i18nKey = getRbacRoleI18nKey(normalizedRole)
-  return i18nKey ? t(i18nKey) : normalizedRole.replaceAll('_', ' ')
+  const i18nKey = getRbacRoleI18nKey(member.role)
+  return i18nKey ? t(i18nKey) : member.role.replaceAll('_', ' ')
 }
 
 function renderRoleCell(member: OrganizationMemberRow) {
@@ -276,14 +272,13 @@ const appAccessBindingByAppId = computed(() => {
 function getInheritedAppAccessLabel(roleName?: string): string | null {
   if (!roleName)
     return null
-  const normalizedRole = roleName.replace(/^invite_/, '')
-  if (normalizedRole === 'org_billing_admin')
+  if (roleName === 'org_billing_admin')
     return t('app-access-none')
-  if (normalizedRole === 'org_member')
+  if (roleName === 'org_member')
     return t('app-access-none')
-  if (normalizedRole === 'org_admin')
+  if (roleName === 'org_admin')
     return t('app-access-inherited', { role: getRoleDisplayName('app_admin') })
-  if (normalizedRole === 'org_super_admin')
+  if (roleName === 'org_super_admin')
     return t('app-access-inherited', { role: getRoleDisplayName('app_admin') })
   return null
 }
@@ -383,8 +378,7 @@ columns.value = [
         visible: (member: OrganizationMemberRow) => {
           if (!canUpdateUserRoles.value || isInviteMember(member))
             return false
-          const normalizedRole = member.role.replace(/^invite_/, '')
-          return !['org_super_admin', 'org_admin'].includes(normalizedRole)
+          return !['org_super_admin', 'org_admin'].includes(member.role)
         },
         onClick: (member: OrganizationMemberRow) => {
           openAppAccessModal(member)
@@ -494,12 +488,9 @@ function validateEmail(email: string) {
     )
 }
 
-async function showPermModal(invite: boolean, onConfirm?: (permission: Database['public']['Enums']['user_min_right'] | string) => Promise<boolean>, currentRole?: string): Promise<Database['public']['Enums']['user_min_right'] | string | undefined> {
-  const normalizedRole = currentRole?.replace(/^invite_/, '')
-  const initialRole = normalizedRole ? normalizedRole.trim().toLowerCase().replace(/\s+/g, '_') : ''
-  selectedPermission.value = initialRole
-    ? initialRole as Database['public']['Enums']['user_min_right']
-    : undefined
+async function showPermModal(invite: boolean, onConfirm?: (permission: string) => Promise<boolean>, currentRole?: string): Promise<string | undefined> {
+  const initialRole = currentRole ? currentRole.trim().toLowerCase().replace(/\s+/g, '_') : ''
+  selectedPermission.value = initialRole || undefined
   selectedPermissionForm.value = initialRole
   isInvitePermissionModal.value = invite
 
@@ -614,9 +605,7 @@ async function showInviteModal() {
   })
 }
 
-async function sendInvitation(email: string, type: Database['public']['Enums']['user_min_right'] | string): Promise<boolean> {
-  console.log(`Invite ${email} with perm ${type}`)
-
+async function sendInvitation(email: string, type: string): Promise<boolean> {
   const orgId = currentOrganization.value?.gid
   if (!orgId) {
     toast.error('Organization ID not found.')
@@ -653,68 +642,66 @@ async function sendInvitation(email: string, type: Database['public']['Enums']['
   }
 }
 
-async function handleSendInvitationOutput(output: string, email: string, type: Database['public']['Enums']['user_min_right'] | string): Promise<boolean> {
-  console.log('Output: ', output)
+async function handleExistingUserInviteNotification(output: string, email: string, hasPendingInvite: boolean, orgId?: string) {
+  if (!orgId || !shouldAttemptExistingUserInviteNotification(output, hasPendingInvite))
+    return false
+
+  const notified = await notifyExistingUserInvite(supabase, email, orgId)
+  if (!notified) {
+    console.warn('Failed to send invite email notification')
+    toast.warning(t('org-invite-email-notification-failed'))
+    return false
+  }
+
+  toast.success(t('org-invited-user'))
+  return true
+}
+
+async function handleMissingInviteEmail(email: string, type: string) {
+  if (!captchaKey.value) {
+    toast.error(t('cannot_invite_user_without_account'))
+    return false
+  }
+
+  await showInviteNewUserDialog(email, type)
+  return true
+}
+
+async function handleSendInvitationOutput(output: string, email: string, type: string): Promise<boolean> {
   if (!output)
     return false
 
-  const orgId = currentOrganization.value?.gid
   const existingMember = members.value.find(member => member.email.toLowerCase() === email.toLowerCase())
   const hasPendingInvite = existingMember ? isInviteMember(existingMember) : false
+  if (await handleExistingUserInviteNotification(output, email, hasPendingInvite, currentOrganization.value?.gid))
+    return true
 
-  if (orgId && shouldAttemptExistingUserInviteNotification(output, hasPendingInvite)) {
-    const notified = await notifyExistingUserInvite(supabase, email, orgId)
-    if (!notified) {
-      console.warn('Failed to send invite email notification')
-      toast.warning(t('org-invite-email-notification-failed'))
-    }
-    else {
+  switch (output) {
+    case 'OK':
       toast.success(t('org-invited-user'))
       return true
-    }
-  }
-
-  if (output === 'OK') {
-    toast.success(t('org-invited-user'))
-    return true
-  }
-  else if (output === 'TOO_RECENT_INVITATION_CANCELATION') {
-    toast.error(t('too-recent-invitation-cancelation'))
-    return false
-  }
-  else if (output === 'NO_EMAIL') {
-    if (captchaKey.value) {
-      await showInviteNewUserDialog(email, type)
-      return true
-    }
-    else {
-      toast.error(t('cannot_invite_user_without_account'))
+    case 'TOO_RECENT_INVITATION_CANCELATION':
+      toast.error(t('too-recent-invitation-cancelation'))
       return false
-    }
-  }
-  else if (output === 'ALREADY_INVITED') {
-    toast.error(t('user-already-invited'))
-    return false
-  }
-  else if (output === 'CAN_NOT_INVITE_OWNER') {
-    toast.error(t('cannot-invite-owner'))
-    return false
-  }
-  else if (output === 'NO_RIGHTS' || output === 'NO_RIGHTS_FOR_SUPER_ADMIN') {
-    toast.error(t('no-permission'))
-    return false
-  }
-  else if (output === 'RBAC_NOT_ENABLED') {
-    toast.error(t('invitation-failed'))
-    return false
-  }
-  else if (output === 'ROLE_NOT_FOUND') {
-    toast.error(t('invitation-failed'))
-    return false
-  }
-  else {
-    toast.warning(`${t('unexpected-invitation-response')}: ${output}`)
-    return false
+    case 'NO_EMAIL':
+      return await handleMissingInviteEmail(email, type)
+    case 'ALREADY_INVITED':
+      toast.error(t('user-already-invited'))
+      return false
+    case 'CAN_NOT_INVITE_OWNER':
+      toast.error(t('cannot-invite-owner'))
+      return false
+    case 'NO_RIGHTS':
+    case 'NO_RIGHTS_FOR_SUPER_ADMIN':
+      toast.error(t('no-permission'))
+      return false
+    case 'RBAC_NOT_ENABLED':
+    case 'ROLE_NOT_FOUND':
+      toast.error(t('invitation-failed'))
+      return false
+    default:
+      toast.warning(`${t('unexpected-invitation-response')}: ${output}`)
+      return false
   }
 }
 
@@ -804,14 +791,15 @@ async function cannotDeleteOwner() {
                     return false
                   }
 
-                  // get member from id
-                  const selectedUser = members.value.filter(m => m.id === selectedUserToDelegateAdmin.value)[0]
-                  // set user to super admin
+                  const selectedUser = members.value.find(m => m.id === selectedUserToDelegateAdmin.value)
+                  const currentMember = members.value.find(m => m.uid === main.user?.id)
+                  if (!selectedUser || !currentMember) {
+                    toast.error(t('something-went-wrong-try-again-later'))
+                    return false
+                  }
+
                   _changeMemberPermission(selectedUser, 'org_super_admin')
                   selectedUserToDelegateAdmin.value = null
-                  // get current member
-                  const currentMember = members.value.filter(m => m.uid === main.user?.id)[0]
-                  // delete current member from org
                   _deleteMember(currentMember)
                   // redirect to /app
                   router.push('/apps')
@@ -827,79 +815,101 @@ async function cannotDeleteOwner() {
   })
 }
 
+function handleDeleteMemberRoleError(error: { message: string }) {
+  console.error('Error deleting RBAC member: ', error)
+
+  if (error.message.includes('CANNOT_REMOVE_LAST_SUPER_ADMIN')) {
+    toast.error(t('cannot-remove-last-super-admin'))
+    return
+  }
+  if (error.message.includes('CANNOT_CHANGE_OWNER_ROLE')) {
+    toast.error(t('cannot-change-owner-role'))
+    return
+  }
+  if (error.message.includes('NO_PERMISSION_TO_UPDATE_ROLES')) {
+    toast.error(t('no-permission'))
+    return
+  }
+
+  toast.error(`${t('cannot-delete-member')}: ${error.message}`)
+}
+
+async function deleteRbacMember(member: OrganizationMemberRow) {
+  const orgId = currentOrganization.value?.gid
+  if (!orgId) {
+    toast.error(t('cannot-delete-member'))
+    return false
+  }
+
+  const { data: currentSession } = await supabase.auth.getSession()
+  const currentJwt = currentSession.session?.access_token
+  if (!currentJwt) {
+    toast.error(t('cannot-delete-member'))
+    return false
+  }
+
+  const response = await fetch(`${defaultApiHost}/organization/members`, {
+    method: 'DELETE',
+    headers: {
+      'Content-Type': 'application/json',
+      'authorization': `Bearer ${currentJwt}`,
+    },
+    body: JSON.stringify({
+      orgId,
+      email: member.email,
+    }),
+  })
+
+  if (!response.ok) {
+    const errorBody = await response.json().catch(() => null) as { error?: string, message?: string } | null
+    handleDeleteMemberRoleError({ message: errorBody?.error ?? errorBody?.message ?? response.statusText })
+    return false
+  }
+
+  const data = await response.json().catch(() => null) as { status?: string } | null
+  if (data?.status !== 'ok') {
+    console.error('Unexpected delete member response:', data)
+    toast.error(t('cannot-delete-member'))
+    return false
+  }
+
+  return true
+}
+
+async function deletePersistedMember(member: OrganizationMemberRow) {
+  return await deleteRbacMember(member)
+}
+
+async function refreshAfterMemberDeletion(member: OrganizationMemberRow) {
+  if (member.uid !== main.user?.id) {
+    await reloadData()
+    return
+  }
+
+  await organizationStore.fetchOrganizations()
+  try {
+    organizationStore.setCurrentOrganizationToMain()
+  }
+  catch {
+    organizationStore.setCurrentOrganizationToFirst()
+  }
+}
+
 async function _deleteMember(member: OrganizationMemberRow) {
   isLoading.value = true
 
   try {
     if (member.is_tmp) {
-      // Handle invitation rescinding for temporary users
       await rescindInvitation(member.email)
+      return
     }
-    else {
-      if (member.aid === -1) {
-        const orgId = currentOrganization.value?.gid
-        if (!orgId) {
-          toast.error(t('cannot-delete-member'))
-          return
-        }
 
-        const { data, error } = await supabase.rpc('delete_org_member_role', {
-          p_org_id: orgId,
-          p_user_id: member.uid,
-        })
+    const deleted = await deletePersistedMember(member)
+    if (!deleted)
+      return
 
-        if (error) {
-          console.error('Error deleting RBAC member: ', error)
-          if (error.message.includes('CANNOT_REMOVE_LAST_SUPER_ADMIN')) {
-            toast.error(t('cannot-remove-last-super-admin'))
-          }
-          else if (error.message.includes('CANNOT_CHANGE_OWNER_ROLE')) {
-            toast.error(t('cannot-change-owner-role'))
-          }
-          else if (error.message.includes('NO_PERMISSION_TO_UPDATE_ROLES')) {
-            toast.error(t('no-permission'))
-          }
-          else {
-            toast.error(`${t('cannot-delete-member')}: ${error.message}`)
-          }
-          return
-        }
-
-        if (data !== 'OK') {
-          console.error('Unexpected RPC response:', data)
-          toast.error(t('cannot-delete-member'))
-          return
-        }
-      }
-      else {
-        const { error } = await supabase
-          .from('org_users')
-          .delete()
-          .eq('id', member.aid)
-
-        if (error) {
-          console.error('Error deleting member: ', error)
-          toast.error(`${t('cannot-delete-member')}: ${error.message}`)
-          return
-        }
-      }
-
-      toast.success(t('member-deleted'))
-
-      if (member.uid === main.user?.id) {
-        console.log('Current user deleted themselves from the org.')
-        await organizationStore.fetchOrganizations()
-        try {
-          organizationStore.setCurrentOrganizationToMain()
-        }
-        catch {
-          organizationStore.setCurrentOrganizationToFirst()
-        }
-      }
-      else {
-        await reloadData()
-      }
-    }
+    toast.success(t('member-deleted'))
+    await refreshAfterMemberDeletion(member)
   }
   catch (error) {
     console.error('Deletion failed:', error)
@@ -918,7 +928,6 @@ async function deleteMember(member: OrganizationMemberRow) {
   }
 
   else if (await didCancel()) {
-    console.log('Member deletion cancelled.')
     return
   }
 
@@ -1027,7 +1036,7 @@ async function updateRbacInviteRole(member: OrganizationMemberRow, perm: string)
   }
 }
 
-async function _changeMemberPermission(member: OrganizationMemberRow, perm: Database['public']['Enums']['user_min_right'] | string) {
+async function _changeMemberPermission(member: OrganizationMemberRow, perm: string) {
   isLoading.value = true
   try {
     if (!currentOrganization.value) {
@@ -1050,15 +1059,12 @@ async function _changeMemberPermission(member: OrganizationMemberRow, perm: Data
     isLoading.value = false
   }
 }
-
 async function changeMemberPermission(member: OrganizationMemberRow) {
   const isInvite = isInviteMember(member)
   const perm = await showPermModal(isInvite, undefined, member.role)
 
-  if (!perm) {
-    console.log('Permission change cancelled.')
+  if (!perm)
     return
-  }
 
   _changeMemberPermission(member, perm)
 }
@@ -1102,8 +1108,8 @@ function canDelete(member: OrganizationMemberRow) {
   return currentUserIsAdmin
 }
 
-function handlePermissionSelection(permission: Database['public']['Enums']['user_min_right'] | string, _invite: boolean) {
-  selectedPermission.value = permission as any
+function handlePermissionSelection(permission: string, _invite: boolean) {
+  selectedPermission.value = permission
 }
 
 function handleFormKitPermissionSelection(value: string | undefined) {
@@ -1118,10 +1124,10 @@ function delegateSuperAdmin(value: unknown) {
   selectedUserToDelegateAdmin.value = value
 }
 
-async function showInviteNewUserDialog(email: string, roleType: Database['public']['Enums']['user_min_right'] | string) {
+async function showInviteNewUserDialog(email: string, roleType: string) {
   // Reset form state
   inviteUserEmail.value = email
-  inviteUserRole.value = roleType.replace(/_/g, ' ')
+  inviteUserRole.value = roleType.replaceAll('_', ' ')
   inviteUserOrgId.value = currentOrganization.value?.gid ?? ''
   inviteUserFirstName.value = ''
   inviteUserLastName.value = ''
@@ -1161,9 +1167,8 @@ async function showInviteNewUserDialog(email: string, roleType: Database['public
 function getRoleDisplayName(roleName?: string): string {
   if (!roleName)
     return t('none')
-  const normalizedRole = roleName.replace(/^invite_/, '')
-  const i18nKey = getRbacRoleI18nKey(normalizedRole)
-  return i18nKey ? t(i18nKey) : normalizedRole.replaceAll('_', ' ')
+  const i18nKey = getRbacRoleI18nKey(roleName)
+  return i18nKey ? t(i18nKey) : roleName.replaceAll('_', ' ')
 }
 
 async function fetchAppAccessApps() {
@@ -1295,21 +1300,84 @@ async function openAppAccessModal(member: OrganizationMemberRow) {
   appAccessMember.value = null
 }
 
-async function handleAppAccessAssign() {
+interface AppAccessAssignInput {
+  member: OrganizationMemberRow
+  orgId: string
+  roleName: string
+  appIds: string[]
+}
+
+function getAppAccessAssignInput(): AppAccessAssignInput | null {
   if (!appAccessMember.value || !currentOrganization.value) {
     toast.error(t('no-permission'))
-    return false
+    return null
   }
 
   if (appAccessSelectedAppIds.value.length === 0) {
     toast.error(t('select-app'))
-    return false
+    return null
   }
 
   if (!appAccessSelectedRole.value) {
     toast.error(t('please-select-permission'))
-    return false
+    return null
   }
+
+  return {
+    member: appAccessMember.value,
+    orgId: currentOrganization.value.gid,
+    roleName: appAccessSelectedRole.value,
+    appIds: [...appAccessSelectedAppIds.value],
+  }
+}
+
+async function upsertAppAccessBinding(input: AppAccessAssignInput, appId: string, bindingMap: Map<string, RoleBinding>) {
+  const existingBinding = bindingMap.get(appId)
+  if (existingBinding?.role_name === input.roleName)
+    return 'skipped'
+
+  if (existingBinding) {
+    const { error } = await supabase.functions.invoke(`private/role_bindings/${existingBinding.id}`, {
+      method: 'PATCH',
+      body: { role_name: input.roleName },
+    })
+    if (error)
+      throw error
+    return 'updated'
+  }
+
+  const { error } = await supabase.functions.invoke('private/role_bindings', {
+    method: 'POST',
+    body: {
+      principal_type: 'user',
+      principal_id: input.member.uid,
+      role_name: input.roleName,
+      scope_type: 'app',
+      org_id: input.orgId,
+      app_id: appId,
+      channel_id: null,
+    },
+  })
+  if (error)
+    throw error
+
+  return 'created'
+}
+
+function showAppAccessAssignResult(createdCount: number, updatedCount: number) {
+  if (updatedCount > 0) {
+    toast.success(t('permission-changed'))
+    return
+  }
+
+  if (createdCount > 0)
+    toast.success(t('role-assigned'))
+}
+
+async function handleAppAccessAssign() {
+  const input = getAppAccessAssignInput()
+  if (!input)
+    return false
 
   isAppAccessSubmitting.value = true
   updateAppAccessSaveButton()
@@ -1318,54 +1386,17 @@ async function handleAppAccessAssign() {
     let createdCount = 0
     let updatedCount = 0
 
-    for (const appId of appAccessSelectedAppIds.value) {
-      const existingBinding = bindingMap.get(appId)
-      if (existingBinding && existingBinding.role_name === appAccessSelectedRole.value) {
-        continue
-      }
-
-      if (existingBinding) {
-        const { error: updateError } = await supabase.functions.invoke(`private/role_bindings/${existingBinding.id}`, {
-          method: 'PATCH',
-          body: { role_name: appAccessSelectedRole.value },
-        })
-
-        if (updateError)
-          throw updateError
-
-        updatedCount += 1
-      }
-      else {
-        const { error } = await supabase.functions.invoke('private/role_bindings', {
-          method: 'POST',
-          body: {
-            principal_type: 'user',
-            principal_id: appAccessMember.value.uid,
-            role_name: appAccessSelectedRole.value,
-            scope_type: 'app',
-            org_id: currentOrganization.value.gid,
-            app_id: appId,
-            channel_id: null,
-          },
-        })
-
-        if (error)
-          throw error
-
-        createdCount += 1
-      }
+    for (const appId of input.appIds) {
+      const result = await upsertAppAccessBinding(input, appId, bindingMap)
+      createdCount += result === 'created' ? 1 : 0
+      updatedCount += result === 'updated' ? 1 : 0
     }
 
-    if (updatedCount > 0) {
-      toast.success(t('permission-changed'))
-    }
-    else if (createdCount > 0) {
-      toast.success(t('role-assigned'))
-    }
-    await fetchMemberAppBindings(appAccessMember.value)
+    showAppAccessAssignResult(createdCount, updatedCount)
+    await fetchMemberAppBindings(input.member)
     return true
   }
-  catch (error: any) {
+  catch (error: unknown) {
     console.error('Error assigning app role:', error)
     toast.error(t('error-assigning-role'))
     return false
@@ -1398,8 +1429,7 @@ async function handleInviteNewUserSubmit() {
   isSubmittingInvite.value = true
 
   try {
-    // Extract the actual role without 'invite_' prefix
-    const inviteType = inviteUserRole.value.replace(/\s+/g, '_').replace('invite_', '')
+    const inviteType = inviteUserRole.value.replace(/\s+/g, '_')
 
     const { error } = await supabase.functions.invoke('private/invite_new_user_to_org', {
       body: {
@@ -1470,7 +1500,11 @@ async function handleInviteNewUserSubmit() {
     <!-- Teleport for email input dialog -->
     <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions?.title === t('insert-invite-email')" defer to="#dialog-v2-content">
       <div class="w-full">
+        <label for="member-invite-email-input" class="sr-only">
+          {{ t('email') }}
+        </label>
         <input
+          id="member-invite-email-input"
           v-model="emailInput"
           type="email"
           :placeholder="t('email')"
@@ -1486,10 +1520,11 @@ async function handleInviteNewUserSubmit() {
         <form @submit.prevent="handleInviteNewUserSubmit">
           <!-- Email (not editable) -->
           <div class="mb-4">
-            <label for="email" class="block mb-1 text-sm font-medium text-gray-700 dark:text-gray-300">
+            <label for="invite-user-email" class="block mb-1 text-sm font-medium text-gray-700 dark:text-gray-300">
               {{ t('email') }}
             </label>
             <input
+              id="invite-user-email"
               v-model="inviteUserEmail"
               type="email"
               disabled
@@ -1499,10 +1534,11 @@ async function handleInviteNewUserSubmit() {
 
           <!-- Role (not editable) -->
           <div class="mb-4">
-            <label for="role" class="block mb-1 text-sm font-medium text-gray-700 dark:text-gray-300">
+            <label for="invite-user-role" class="block mb-1 text-sm font-medium text-gray-700 dark:text-gray-300">
               {{ t('role') }}
             </label>
             <input
+              id="invite-user-role"
               v-model="inviteUserRole"
               type="text"
               disabled
@@ -1512,10 +1548,11 @@ async function handleInviteNewUserSubmit() {
 
           <!-- First Name -->
           <div class="mb-4">
-            <label for="first-name" class="block mb-1 text-sm font-medium text-gray-700 dark:text-gray-300">
+            <label for="invite-user-first-name" class="block mb-1 text-sm font-medium text-gray-700 dark:text-gray-300">
               {{ t('first-name') }}
             </label>
             <input
+              id="invite-user-first-name"
               v-model="inviteUserFirstName"
               type="text"
               class="w-full px-4 py-2 border border-gray-300 rounded-lg dark:bg-gray-800 dark:border-gray-600"
@@ -1524,10 +1561,11 @@ async function handleInviteNewUserSubmit() {
 
           <!-- Last Name -->
           <div class="mb-4">
-            <label for="last-name" class="block mb-1 text-sm font-medium text-gray-700 dark:text-gray-300">
+            <label for="invite-user-last-name" class="block mb-1 text-sm font-medium text-gray-700 dark:text-gray-300">
               {{ t('last-name') }}
             </label>
             <input
+              id="invite-user-last-name"
               v-model="inviteUserLastName"
               type="text"
               class="w-full px-4 py-2 border border-gray-300 rounded-lg dark:bg-gray-800 dark:border-gray-600"
@@ -1536,9 +1574,9 @@ async function handleInviteNewUserSubmit() {
 
           <!-- Captcha -->
           <div class="mt-4 mb-4">
-            <label for="captcha" class="block mb-1 text-sm font-medium text-gray-700 dark:text-gray-300">
+            <span class="block mb-1 text-sm font-medium text-gray-700 dark:text-gray-300">
               {{ t('captcha') }}
-            </label>
+            </span>
             <VueTurnstile v-if="captchaKey" ref="captchaElement" v-model="captchaToken" size="flexible" :site-key="captchaKey" />
             <div v-else class="py-3 text-sm text-center text-gray-600 border border-gray-300 border-dashed rounded-lg dark:text-gray-400 dark:border-gray-600">
               {{ t('captcha-not-available') }}
@@ -1688,7 +1726,11 @@ async function handleInviteNewUserSubmit() {
       <div class="w-full">
         <div class="flex mb-5 overflow-hidden md:w-auto">
           <div class="relative w-full">
+            <label for="admin-delegation-search" class="sr-only">
+              {{ t('search-by-name-or-email') }}
+            </label>
             <input
+              id="admin-delegation-search"
               v-model="searchUserForAdminDelegation"
               type="text"
               :placeholder="t('search-by-name-or-email')"

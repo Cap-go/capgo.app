@@ -28,21 +28,19 @@ VALUES (
 )
 ON CONFLICT (id) DO NOTHING;
 
-INSERT INTO public.orgs (id, created_by, name, management_email, use_new_rbac)
+INSERT INTO public.orgs (id, created_by, name, management_email)
 VALUES
   (
     '71000000-0000-4000-8000-000000000056',
     tests.get_supabase_uid('apikey_v2_scope_owner'),
     'API key V2 scope org A',
-    'apikey-v2-scope-a@test.local',
-    true
+    'apikey-v2-scope-a@test.local'
   ),
   (
     '72000000-0000-4000-8000-000000000056',
     tests.get_supabase_uid('apikey_v2_scope_owner'),
     'API key V2 scope org B',
-    'apikey-v2-scope-b@test.local',
-    true
+    'apikey-v2-scope-b@test.local'
   )
 ON CONFLICT (id) DO NOTHING;
 
@@ -205,19 +203,45 @@ INSERT INTO public.org_users (
   user_id,
   org_id,
   app_id,
-  user_right
+  rbac_role_name,
+  is_invite
 )
 VALUES (
   tests.get_supabase_uid('apikey_v2_scope_legacy_user'),
   '71000000-0000-4000-8000-000000000056'::uuid,
   'com.test.apikeyv2scope.target',
-  'upload'::public.user_min_right
-);
+  public.rbac_role_app_uploader(),
+  false
+)
+ON CONFLICT DO NOTHING;
 
-DELETE FROM public.role_bindings
-WHERE principal_type = public.rbac_principal_user()
-  AND principal_id = tests.get_supabase_uid('apikey_v2_scope_legacy_user')
-  AND org_id = '71000000-0000-4000-8000-000000000056'::uuid;
+INSERT INTO public.role_bindings (
+  principal_type,
+  principal_id,
+  role_id,
+  scope_type,
+  org_id,
+  app_id,
+  granted_by,
+  reason,
+  is_direct
+)
+SELECT
+  public.rbac_principal_user(),
+  tests.get_supabase_uid('apikey_v2_scope_legacy_user'),
+  roles.id,
+  public.rbac_scope_app(),
+  apps.owner_org,
+  apps.id,
+  tests.get_supabase_uid('apikey_v2_scope_owner'),
+  'pgTAP app uploader role binding',
+  true
+FROM public.roles
+INNER JOIN public.apps
+  ON apps.app_id = 'com.test.apikeyv2scope.target'
+WHERE roles.name = public.rbac_role_app_uploader()
+  AND roles.scope_type = public.rbac_scope_app()
+ON CONFLICT DO NOTHING;
 
 INSERT INTO public.app_versions (
   id,
@@ -572,19 +596,32 @@ SELECT is(
 SELECT set_config('request.method', '', true);
 
 SELECT ok(
-  position(
-    'rbac_check_permission_direct'
-    in pg_get_functiondef('public.app_versions_readable_app_ids()'::regprocedure)
-  ) = 0,
-  'app_versions readable app helper does not use per-app RBAC checks'
+  (
+    SELECT position('find_apikey_by_value' in helper_def) > 0
+      AND position('rbac_perm_app_read_bundles' in helper_def) > 0
+      AND position('role_closure' in helper_def) > 0
+    FROM (
+      SELECT regexp_replace(
+        pg_get_functiondef('public.app_versions_readable_app_ids()'::regprocedure),
+        '\s+',
+        ' ',
+        'g'
+      ) AS helper_def
+    ) helper
+  ),
+  'app_versions readable helper resolves API keys through RBAC bundle-read role closure'
 );
 
 SELECT ok(
-  position(
-    'rbac_check_permission_direct'
-    in pg_get_functiondef('public.app_versions_has_app_permission(public.user_min_right,uuid,character varying,uuid,text)'::regprocedure)
-  ) = 0,
-  'app_versions targeted permission helper does not call generic per-app RBAC checks'
+  to_regtype('public.user_min_right') IS NULL
+  AND NOT EXISTS (
+    SELECT 1
+    FROM pg_proc AS procedures
+    INNER JOIN pg_namespace AS namespaces ON namespaces.oid = procedures.pronamespace
+    WHERE namespaces.nspname = 'public'
+      AND procedures.proname = 'app_versions_has_app_permission'
+  ),
+  'legacy app_versions permission helper and right enum are removed'
 );
 
 SELECT ok(
@@ -596,61 +633,79 @@ SELECT ok(
 );
 
 SELECT ok(
-  position(
-    'app_versions_readable_app_ids'
-    in (
-      SELECT pg_get_expr(polqual, polrelid)
+  (
+    SELECT position('CASE WHEN' in normalized_expr) > 0
+      AND position('request.method' in normalized_expr) > 0
+      AND position('PATCH' in normalized_expr) > 0
+      AND position('THEN' in normalized_expr) > 0
+      AND position('ELSE' in normalized_expr) > position('THEN' in normalized_expr)
+      AND position('rbac_check_permission_request' in normalized_expr) > position('THEN' in normalized_expr)
+      AND position('rbac_check_permission_request' in normalized_expr) < position('ELSE' in normalized_expr)
+      AND position('app_versions_readable_app_ids' in substring(normalized_expr from position('ELSE' in normalized_expr))) > 0
+      AND position('rbac_check_permission_request' in substring(normalized_expr from position('ELSE' in normalized_expr))) = 0
+    FROM (
+      SELECT regexp_replace(pg_get_expr(polqual, polrelid), '\s+', ' ', 'g') AS normalized_expr
       FROM pg_policy
       WHERE polrelid = 'public.app_versions'::regclass
         AND polname = 'Allow for auth, api keys (read+)'
-    )
-  ) = 0,
-  'app_versions select policy does not materialize every readable app during targeted writes'
+    ) policy
+  ),
+  'app_versions select policy uses RBAC target checks only behind the write-method guard'
 );
 
+SELECT tests.authenticate_as_service_role();
+SELECT set_config('request.headers', '{}', true);
+
 SELECT ok(
-  public.app_versions_has_app_permission(
-    'upload'::public.user_min_right,
+  public.rbac_check_permission_direct(
+    public.rbac_perm_app_upload_bundle(),
+    NULL::uuid,
     '71000000-0000-4000-8000-000000000056'::uuid,
     'com.test.apikeyv2scope.target',
-    NULL::uuid,
+    NULL::bigint,
     'apikey-v2-scope-upload-key'
   ),
-  'targeted app_versions permission helper allows upload API key on its app'
+  'app uploader API key can upload to its app'
 );
 
 SELECT ok(
-  NOT public.app_versions_has_app_permission(
-    'upload'::public.user_min_right,
+  NOT public.rbac_check_permission_direct(
+    public.rbac_perm_app_upload_bundle(),
+    NULL::uuid,
     '71000000-0000-4000-8000-000000000056'::uuid,
     'com.test.apikeyv2scope.sibling',
-    NULL::uuid,
+    NULL::bigint,
     'apikey-v2-scope-upload-key'
   ),
-  'targeted app_versions permission helper keeps upload API key app-scoped'
+  'app uploader API key remains app-scoped'
 );
 
 SELECT ok(
-  public.app_versions_has_app_permission(
-    'upload'::public.user_min_right,
+  public.rbac_check_permission_direct(
+    public.rbac_perm_app_upload_bundle(),
+    tests.get_supabase_uid('apikey_v2_scope_legacy_user'),
     '71000000-0000-4000-8000-000000000056'::uuid,
     'com.test.apikeyv2scope.target',
-    tests.get_supabase_uid('apikey_v2_scope_legacy_user'),
+    NULL::bigint,
     NULL::text
   ),
-  'targeted app_versions permission helper keeps legacy org_users upload access for authenticated users'
+  'app uploader role grants upload access on its app'
 );
 
 SELECT ok(
-  NOT public.app_versions_has_app_permission(
-    'upload'::public.user_min_right,
+  NOT public.rbac_check_permission_direct(
+    public.rbac_perm_app_upload_bundle(),
+    tests.get_supabase_uid('apikey_v2_scope_legacy_user'),
     '71000000-0000-4000-8000-000000000056'::uuid,
     'com.test.apikeyv2scope.sibling',
-    tests.get_supabase_uid('apikey_v2_scope_legacy_user'),
+    NULL::bigint,
     NULL::text
   ),
-  'targeted app_versions permission helper keeps legacy org_users app scope bounded'
+  'app uploader role remains app-scoped'
 );
+
+SELECT tests.clear_authentication();
+SELECT set_config('request.headers', '{"capgkey":"apikey-v2-scope-upload-key"}', true);
 
 SELECT is(
   (
@@ -666,26 +721,30 @@ SELECT is(
 SELECT tests.clear_authentication();
 SELECT set_config('request.headers', '{}', true);
 
+SELECT tests.authenticate_as_service_role();
+
 SELECT ok(
-  public.check_min_rights(
-    'upload'::public.user_min_right,
+  public.rbac_check_permission_direct(
+    public.rbac_perm_app_upload_bundle(),
     tests.get_supabase_uid('apikey_v2_scope_upload_user'),
     '71000000-0000-4000-8000-000000000056'::uuid,
     'com.test.apikeyv2scope.target',
-    NULL::bigint
+    NULL::bigint,
+    NULL::text
   ),
-  'JWT upload-only fixture has upload permission'
+  'JWT upload-only fixture has app.upload_bundle permission'
 );
 
 SELECT ok(
-  NOT public.check_min_rights(
-    'write'::public.user_min_right,
+  NOT public.rbac_check_permission_direct(
+    public.rbac_perm_app_update_settings(),
     tests.get_supabase_uid('apikey_v2_scope_upload_user'),
     '71000000-0000-4000-8000-000000000056'::uuid,
     'com.test.apikeyv2scope.target',
-    NULL::bigint
+    NULL::bigint,
+    NULL::text
   ),
-  'JWT upload-only fixture does not have write permission'
+  'JWT upload-only fixture does not have app.update_settings permission'
 );
 
 SELECT tests.authenticate_as('apikey_v2_scope_upload_user');
@@ -698,8 +757,8 @@ WITH updated_rows AS (
 )
 SELECT is(
   (SELECT count(*)::int FROM updated_rows),
-  0,
-  'authenticated upload-only user cannot update app_versions through write-only JWT path'
+  1,
+  'authenticated app uploader can update a non-deleted version through RBAC'
 );
 
 SELECT tests.clear_authentication();
@@ -714,7 +773,7 @@ WITH updated_rows AS (
 SELECT is(
   (SELECT count(*)::int FROM updated_rows),
   1,
-  'upload-scoped API key can update app_versions through old upload path'
+  'upload-scoped API key can update app_versions through RBAC'
 );
 
 SELECT tests.clear_authentication();
@@ -772,38 +831,35 @@ END $$;
 
 SELECT is(
   current_setting('tests.channel_devices_apikey_insert_sqlstate', true),
-  '42501',
-  'API keys cannot directly insert channel_devices through JWT-only RLS'
+  'success',
+  'app-admin API key can insert channel_devices through RBAC'
 );
 
-SELECT is(
-  (
-    SELECT prorettype::regtype::text
-    FROM pg_proc
-    WHERE oid = to_regprocedure('public.get_identity(public.key_mode[])')
-  ),
-  'uuid',
-  'legacy get_identity(key_mode[]) keeps uuid return shape'
+SELECT ok(
+  to_regtype('public.key_mode') IS NULL,
+  'legacy key_mode enum is removed'
 );
 
-SELECT is(
-  (
-    SELECT prorettype::regtype::text
-    FROM pg_proc
-    WHERE oid = to_regprocedure('public.get_identity_org_allowed(public.key_mode[],uuid)')
+SELECT ok(
+  NOT EXISTS (
+    SELECT 1
+    FROM pg_proc AS procedures
+    INNER JOIN pg_namespace AS namespaces ON namespaces.oid = procedures.pronamespace
+    WHERE namespaces.nspname = 'public'
+      AND procedures.proname = 'get_identity'
   ),
-  'uuid',
-  'legacy get_identity_org_allowed(key_mode[], uuid) keeps uuid return shape'
+  'legacy get_identity helpers are removed'
 );
 
-SELECT is(
-  (
-    SELECT prorettype::regtype::text
-    FROM pg_proc
-    WHERE oid = to_regprocedure('public.get_identity_org_appid(public.key_mode[],uuid,character varying)')
+SELECT ok(
+  NOT EXISTS (
+    SELECT 1
+    FROM pg_proc AS procedures
+    INNER JOIN pg_namespace AS namespaces ON namespaces.oid = procedures.pronamespace
+    WHERE namespaces.nspname = 'public'
+      AND procedures.proname IN ('get_identity_org_allowed', 'get_identity_org_appid')
   ),
-  'uuid',
-  'legacy get_identity_org_appid(key_mode[], uuid, app_id) keeps uuid return shape'
+  'legacy scoped identity helpers are removed'
 );
 
 SELECT is(

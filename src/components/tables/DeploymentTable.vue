@@ -7,6 +7,7 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import { formatDate } from '~/services/date'
+import { getLogDocUrl } from '~/services/logDocLinks'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
 
 const props = defineProps<{
@@ -124,8 +125,6 @@ async function refreshData() {
   }
 }
 
-const DOC_LOGS = 'https://capgo.app/docs/plugin/debugging/#sent-from-the-backend'
-
 function getActionDisplay(action: string): string {
   const actionMap: Record<string, string> = {
     set: t('action-set'),
@@ -157,7 +156,7 @@ columns.value = [
     class: 'truncate max-w-8',
     sortable: true,
     displayFunction: (elem: Element) => getActionDisplay(elem.action),
-    onClick: () => window.open(DOC_LOGS, '_blank', 'noopener,noreferrer'),
+    onClick: (elem: Element) => window.open(getLogDocUrl(elem.action), '_blank', 'noopener,noreferrer'),
   },
   {
     label: t('version'),

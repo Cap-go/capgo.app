@@ -1,5 +1,4 @@
 export type {
-  CompatibilitySummary,
   IncompatibilityReason,
   NativePackage,
   PackageComparison,

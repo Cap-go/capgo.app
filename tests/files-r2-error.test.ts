@@ -3,6 +3,10 @@ import { describe, expect, it, vi } from 'vitest'
 const retryGetMock = vi.fn()
 const retryHeadMock = vi.fn()
 
+vi.mock('cloudflare:workers', () => ({
+  DurableObject: class DurableObjectMock {},
+  WorkerEntrypoint: class WorkerEntrypointMock {},
+}))
 vi.mock('hono/adapter', async (importOriginal) => {
   const actual = await importOriginal<typeof import('hono/adapter')>()
   return {
@@ -65,18 +69,26 @@ describe('files R2 error handling', () => {
     expect(data.error).toBe('upstream_unavailable')
   })
 
-  it('should add no-transform on cached responses', async () => {
+  it('should add immutable cache control and strip tracking params on cached responses', async () => {
     vi.resetModules()
     retryHeadMock.mockResolvedValue(null)
     retryGetMock.mockResolvedValue(null)
 
+    const matchMock = vi.fn(async (request: Request) => {
+      const cacheUrl = new URL(request.url)
+      expect(cacheUrl.searchParams.get('device_id')).toBeNull()
+      expect(cacheUrl.searchParams.get('key')).toBe('checksum')
+      expect(cacheUrl.searchParams.get('range')).toBe('')
+      return new Response('cached zip bytes', {
+        headers: {
+          'content-type': 'application/zip',
+        },
+      })
+    })
+
     globalThis.caches = {
       default: {
-        match: async () => new Response('cached zip bytes', {
-          headers: {
-            'content-type': 'application/zip',
-          },
-        }),
+        match: matchMock,
         put: async () => { },
       },
     } as any
@@ -89,7 +101,7 @@ describe('files R2 error handling', () => {
     appGlobal.route('/', files)
     createAllCatch(appGlobal, 'files')
 
-    const request = new Request('http://localhost/read/attachments/test.zip')
+    const request = new Request('http://localhost/read/attachments/test.zip?device_id=device-1&key=checksum')
     const response = await appGlobal.fetch(
       request,
       {
@@ -99,7 +111,8 @@ describe('files R2 error handling', () => {
     )
 
     expect(response.status).toBe(200)
-    expect(response.headers.get('cache-control')).toBe('no-transform')
+    expect(response.headers.get('cache-control')).toBe('public, max-age=31536000, immutable, no-transform')
+    expect(matchMock).toHaveBeenCalledTimes(1)
   })
 
   it('should persist no-transform in file metadata written to R2', async () => {
@@ -114,5 +127,38 @@ describe('files R2 error handling', () => {
       cacheControl: 'public, max-age=3600, no-transform',
       contentType: 'application/zip',
     })
+  })
+})
+
+describe('files worker cache keys', () => {
+  it('should strip tracking params and preserve file identity params', async () => {
+    const { filesWorkerCacheTestUtils } = await import('../cloudflare_workers/files/index.ts')
+
+    const cacheKey = filesWorkerCacheTestUtils.buildWorkersCacheKey(
+      new Request('https://api.capgo.app/files/read/attachments/orgs/test/apps/app/bundle.zip?device_id=device-1&key=checksum'),
+    )
+
+    expect(cacheKey).toBe('/files-cache/files/read/attachments/orgs/test/apps/app/bundle.zip?key=checksum')
+  })
+
+  it('should include preview host in cache keys', async () => {
+    const { filesWorkerCacheTestUtils } = await import('../cloudflare_workers/files/index.ts')
+
+    const cacheKey = filesWorkerCacheTestUtils.buildWorkersCacheKey(
+      new Request('https://app-123.preview.capgo.app/index.html?b=2&a=1'),
+    )
+
+    expect(cacheKey).toBe('/preview-cache/app-123.preview.capgo.app/index.html?a=1&b=2')
+  })
+
+  it('should bypass channel preview and range requests', async () => {
+    const { filesWorkerCacheTestUtils } = await import('../cloudflare_workers/files/index.ts')
+
+    expect(filesWorkerCacheTestUtils.buildWorkersCacheKey(
+      new Request('https://c12-app.preview.capgo.app/index.html'),
+    )).toBeNull()
+    expect(filesWorkerCacheTestUtils.buildWorkersCacheKey(
+      new Request('https://api.capgo.app/files/read/attachments/test.zip', { headers: { range: 'bytes=0-99' } }),
+    )).toBeNull()
   })
 })

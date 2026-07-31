@@ -53,3 +53,21 @@ export function getPlatformDirFromCapacitorConfig(capConfig: any, platform: 'ios
   }
   return platform
 }
+
+/**
+ * Normalize Windows path separators inside native dependency path literals.
+ * Capacitor CLI on Windows writes backslashes into SPM Package.swift, CocoaPods
+ * Podfiles, and Gradle settings — Swift treats `\` as escape sequences and SPM
+ * resolution fails on macOS builders.
+ */
+export function normalizeNativeDependencyPathsInText(content: string): string {
+  const normalizePathBody = (pathBody: string) => pathBody.replace(/\\/g, '/')
+
+  return content
+    .replace(/(path:\s*["'])((?:[^"'\\]|\\.)*)(["'])/g, (_match, open: string, pathBody: string, close: string) =>
+      `${open}${normalizePathBody(pathBody)}${close}`)
+    .replace(/(:path\s*=>\s*["'])((?:[^"'\\]|\\.)*)(["'])/g, (_match, open: string, pathBody: string, close: string) =>
+      `${open}${normalizePathBody(pathBody)}${close}`)
+    .replace(/(new\s+File\s*\(\s*["'])((?:[^"'\\]|\\.)*)(["']\s*\))/g, (_match, open: string, pathBody: string, close: string) =>
+      `${open}${normalizePathBody(pathBody)}${close}`)
+}

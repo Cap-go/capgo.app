@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Database } from '../types/supabase.types'
 import { log } from '@clack/prompts'
-import { getPMAndCommand, isAllowedAppOrg, OrganizationPerm, show2FADeniedError } from '../utils'
+import { formatCapgoApiErrorBody, getPMAndCommand, hasCliPermission, resolveCapgoPublicApiHost, show2FADeniedError } from '../utils'
 
 export async function checkAppExists(supabase: SupabaseClient<Database>, appid: string) {
   const { data: app } = await supabase
@@ -98,23 +98,34 @@ export async function findAppInOrganization(
 }
 
 export async function completePendingOnboardingApp(
-  supabase: SupabaseClient<Database>,
+  _supabase: SupabaseClient<Database>,
   orgId: string,
   appId: string,
+  apikey: string,
+  options?: { supaHost?: string, supaAnon?: string },
 ): Promise<void> {
-  const { data, error } = await supabase
-    .from('apps')
-    .update({ need_onboarding: false })
-    .select('app_id')
-    .eq('owner_org', orgId)
-    .eq('app_id', appId)
-    .eq('need_onboarding', true)
+  // Prefer Capgo API host (or self-hosted /functions/v1) with the API key so
+  // org.create_app keys can finish pending onboarding without app.update_settings.
+  const apiHost = await resolveCapgoPublicApiHost(options)
+  const response = await fetch(`${apiHost}/app/${encodeURIComponent(appId)}`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': apikey,
+      'capgkey': apikey,
+    },
+    body: JSON.stringify({
+      need_onboarding: false,
+    }),
+  })
 
-  if (error) {
-    throw new Error(`Could not complete onboarding for app ${appId}: ${error.message}`)
+  const data = await response.json().catch(() => null)
+  if (!response.ok) {
+    const details = formatCapgoApiErrorBody(data) || `HTTP ${response.status}`
+    throw new Error(`Could not complete onboarding for app ${appId}: ${details}`)
   }
 
-  if (!data?.length) {
+  if (!(data as { app_id?: string } | null)?.app_id) {
     throw new Error(`Could not complete onboarding for app ${appId} in org ${orgId}: app was not found or is no longer pending onboarding`)
   }
 }
@@ -162,57 +173,43 @@ export async function checkAppExistsAndHasPermissionOrgErr(
   supabase: SupabaseClient<Database>,
   apikey: string,
   appid: string,
-  requiredPermission: OrganizationPerm,
+  requiredPermissionKey: string,
   silent = false,
   skip2FACheck = false,
+  channelId?: number | null,
 ) {
   const pm = getPMAndCommand()
+  const isChannelScopedPermission = channelId != null && requiredPermissionKey.startsWith('channel.')
 
   // Check 2FA compliance first (unless already checked earlier)
   if (!skip2FACheck)
     await check2FAComplianceForApp(supabase, appid, silent)
 
-  const permissions = await isAllowedAppOrg(supabase, apikey, appid)
-  if (!permissions.okay) {
-    switch (permissions.error) {
-      case 'INVALID_APIKEY': {
-        const msg = 'Invalid apikey, such apikey does not exists!'
-        if (!silent)
-          log.error(msg)
-        throw new Error(msg)
-      }
-      case 'NO_APP': {
-        const msg = `App ${appid} does not exist, run first \`${pm.runner} @capgo/cli app add ${appid}\` to create it`
-        if (!silent)
-          log.error(msg)
-        throw new Error(msg)
-      }
-      case 'NO_ORG': {
-        const msg = 'Could not find organization, please contact support to resolve this!'
-        if (!silent)
-          log.error(msg)
-        throw new Error(msg)
-      }
-    }
-  }
-
-  const remotePermNumber = permissions.data as number
-  const requiredPermNumber = requiredPermission as number
-
-  if (requiredPermNumber > remotePermNumber) {
-    const msg = `Insuficcent permissions for app ${appid}. Current permission: ${OrganizationPerm[permissions.data]}, required for this action: ${OrganizationPerm[requiredPermission]}.`
+  if (!isChannelScopedPermission && !(await checkAppExists(supabase, appid))) {
+    const msg = `App ${appid} does not exist, run first \`${pm.runner} @capgo/cli app add ${appid}\` to create it`
     if (!silent)
       log.error(msg)
     throw new Error(msg)
   }
 
-  return permissions.data
+  if (!(await hasCliPermission(supabase, apikey, requiredPermissionKey, { appId: appid, channelId: channelId ?? null }))) {
+    const msg = `Insufficient permissions for app ${appid}. Required RBAC permission for this action: ${requiredPermissionKey}.`
+    if (!silent)
+      log.error(msg)
+    throw new Error(msg)
+  }
+
+  return true
 }
 
 export type { AppOptions as Options } from '../schemas/app'
 
 export const newIconPath = 'assets/icon.png'
 export const defaultAppIconPath = 'public/capgo.png'
+
+export function resolveAppSetIconPath(explicitIcon?: string): string | undefined {
+  return explicitIcon
+}
 
 export function getAppIconStoragePath(organizationUid: string, appId: string) {
   return `org/${organizationUid}/${appId}/icon`

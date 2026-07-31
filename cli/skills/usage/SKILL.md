@@ -19,6 +19,7 @@ TanStack Intent skills should stay focused and under the validator line limit, s
 - Prefer `npx @capgo/cli@latest ...` in user-facing examples in this repo.
 - Many commands can infer `appId` and related config from the current Capacitor project.
 - Shared public flags commonly include `-a, --apikey <apikey>` and `--verbose` on commands that support verbose output.
+- `--capacitor-config <path>` is a global option for dynamic monorepos: Capacitor still loads the active root config, while config-writing commands update the selected app-specific source file. On `mcp`, the target remains active for the server lifetime so config-writing MCP tools use the same source.
 
 ## Use this skill for quick routing
 
@@ -42,7 +43,7 @@ TanStack Intent skills should stay focused and under the validator line limit, s
 
 ### Docs and agent integrations
 
-- `mcp`: start the Capgo MCP server for AI-agent integrations.
+- `mcp`: start the Capgo MCP server for AI-agent integrations; pass `--capacitor-config <path>` when its config-writing tools should target an app-specific source.
 
 ### GitHub support commands
 

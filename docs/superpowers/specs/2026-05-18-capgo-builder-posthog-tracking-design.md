@@ -189,7 +189,7 @@ The CLI already has `capgo/cli/src/posthog.ts`, but it is scoped to exception ca
 
 ### Why reuse `/private/events` instead of a new endpoint
 
-The existing `/private/events` Hono handler (lines 79–162 of `events.ts`) already implements every concern the spec needed for a new endpoint: auth via `middlewareV2`, org resolution via `resolveTrackingUserId` (verifies the caller can post for that org), app_id permission check from `tags.app_id`, sendEventToTracking with org grouping. Adding a second endpoint would duplicate ~80 lines of working code. The CLI helper just POSTs with `event: 'Builder Onboarding Step'` and the new event flows through the same code path.
+The existing `/private/events` Hono handler (lines 79–162 of `events.ts`) already implements every concern the spec needed for a new endpoint: shared JWT/API-key auth, org resolution via `resolveTrackingUserId` (verifies the caller can post for that org), app_id permission check from `tags.app_id`, sendEventToTracking with org grouping. Adding a second endpoint would duplicate ~80 lines of working code. The CLI helper just POSTs with `event: 'Builder Onboarding Step'` and the new event flows through the same code path.
 
 ### Why `build_started` does not need capgo_builder changes
 

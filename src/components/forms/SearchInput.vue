@@ -6,17 +6,25 @@ interface Props {
   placeholder?: string
   disabled?: boolean
   class?: string
+  inputId?: string
+  ariaLabel?: string
 }
 
 const props = withDefaults(defineProps<Props>(), {
   placeholder: 'Search...',
   disabled: false,
   class: '',
+  inputId: undefined,
+  ariaLabel: undefined,
 })
 
 const emit = defineEmits<{
   'update:modelValue': [value: string]
 }>()
+
+const generatedInputId = useId()
+const resolvedInputId = computed(() => props.inputId ?? generatedInputId)
+const resolvedAriaLabel = computed(() => props.ariaLabel ?? props.placeholder)
 
 const localValue = computed({
   get: () => props.modelValue,
@@ -26,10 +34,13 @@ const localValue = computed({
 
 <template>
   <div class="relative w-full">
+    <label :for="resolvedInputId" class="sr-only">{{ resolvedAriaLabel }}</label>
     <input
+      :id="resolvedInputId"
       v-model="localValue"
       type="text"
       :placeholder="placeholder"
+      :aria-label="resolvedAriaLabel"
       :disabled="disabled"
       class="w-full pl-10 d-input" :class="[props.class]"
     >

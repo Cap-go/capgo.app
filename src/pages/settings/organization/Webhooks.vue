@@ -17,6 +17,7 @@ import IconX from '~icons/heroicons/x-circle'
 import Spinner from '~/components/Spinner.vue'
 import WebhookDeliveryLog from '~/components/WebhookDeliveryLog.vue'
 import WebhookForm from '~/components/WebhookForm.vue'
+import { formatLocalDateTime } from '~/services/date'
 import { checkPermissions } from '~/services/permissions'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
@@ -181,13 +182,7 @@ function getEventLabel(eventValue: string): string {
 }
 
 function formatDate(dateString: string): string {
-  return new Date(dateString).toLocaleDateString(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+  return formatLocalDateTime(dateString) || '-'
 }
 
 async function copySecret(secret: string) {

@@ -215,9 +215,8 @@ async function fetchRoleBindings() {
 }
 
 function getRoleDisplayName(roleName: string): string {
-  const normalized = roleName.replace(/^invite_/, '')
-  const i18nKey = getRbacRoleI18nKey(normalized)
-  return i18nKey ? t(i18nKey) : normalized.replaceAll('_', ' ')
+  const i18nKey = getRbacRoleI18nKey(roleName)
+  return i18nKey ? t(i18nKey) : roleName.replaceAll('_', ' ')
 }
 
 function getGroupOrgRoleName(groupId: string): string | null {

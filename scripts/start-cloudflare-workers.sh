@@ -18,9 +18,17 @@ NC='\033[0m' # No Color
 run_supabase_status_env() {
   # Prefer the repo wrapper so worktrees get isolated Supabase stacks.
   if command -v bun >/dev/null 2>&1; then
-    bun run supabase:status -- -o env 2>/dev/null && return 0
+    if bun run supabase:status -- -o env 2>/dev/null; then
+      return 0
+    fi
   fi
-  # Fall back to raw CLI (CI uses this by default).
+
+  # A scoped job must never discover another job's default Supabase stack.
+  if [[ -n "${SUPABASE_WORKTREE_INSTANCE:-}" || -n "${SUPABASE_WORKTREE_PORT_OFFSET:-}" ]]; then
+    return 1
+  fi
+
+  # Legacy fallback for unscoped developer commands.
   if command -v supabase >/dev/null 2>&1; then
     supabase status -o env 2>/dev/null && return 0
   fi
@@ -60,6 +68,7 @@ SUPABASE_ANON_KEY_FROM_STATUS="$(get_supabase_status_var 'ANON_KEY|PUBLISHABLE_K
 SUPABASE_URL="${SUPABASE_URL:-${SUPABASE_URL_FROM_STATUS}}"
 SUPABASE_DB_URL="${SUPABASE_DB_URL:-${SUPABASE_DB_URL_FROM_STATUS}}"
 MAIN_SUPABASE_DB_URL="${MAIN_SUPABASE_DB_URL:-${SUPABASE_DB_URL_FROM_STATUS}}"
+LOCAL_READ_REPLICA_SUPABASE_DB_URL="${LOCAL_READ_REPLICA_SUPABASE_DB_URL:-${SUPABASE_DB_URL}}"
 SUPABASE_SERVICE_ROLE_KEY="${SUPABASE_SERVICE_ROLE_KEY:-${SUPABASE_SERVICE_ROLE_KEY_FROM_STATUS}}"
 SUPABASE_ANON_KEY="${SUPABASE_ANON_KEY:-${SUPABASE_ANON_KEY_FROM_STATUS}}"
 
@@ -69,76 +78,107 @@ if [ -z "${SUPABASE_SERVICE_ROLE_KEY}" ] || [ -z "${SUPABASE_ANON_KEY}" ] || [ -
   exit 1
 fi
 
-# Cloudflare local testing defaults.
-CLOUDFLARE_FUNCTION_URL="${CLOUDFLARE_FUNCTION_URL:-http://127.0.0.1:8787}"
+# Cloudflare local testing defaults. Each isolated test process gets its own port
+# band, while a zero offset preserves the familiar local endpoints.
+WORKER_PORT_OFFSET="${CLOUDFLARE_WORKER_PORT_OFFSET:-0}"
+if ! [[ "${WORKER_PORT_OFFSET}" =~ ^[0-9]+$ ]]; then
+  echo "CLOUDFLARE_WORKER_PORT_OFFSET must be a non-negative integer." >&2
+  exit 1
+fi
+WORKER_PORT_OFFSET=$((10#${WORKER_PORT_OFFSET}))
+if (( WORKER_PORT_OFFSET > 50000 )); then
+  echo "CLOUDFLARE_WORKER_PORT_OFFSET is too large." >&2
+  exit 1
+fi
+
+CLOUDFLARE_API_PORT=$((8787 + WORKER_PORT_OFFSET))
+CLOUDFLARE_PLUGIN_PORT=$((8788 + WORKER_PORT_OFFSET))
+CLOUDFLARE_FILES_PORT=$((8789 + WORKER_PORT_OFFSET))
+CLOUDFLARE_FUNCTION_URL="${CLOUDFLARE_FUNCTION_URL:-http://127.0.0.1:${CLOUDFLARE_API_PORT}}"
 STRIPE_WEBHOOK_SECRET="${STRIPE_WEBHOOK_SECRET:-testsecret}"
-API_INSPECTOR_PORT="${API_INSPECTOR_PORT:-9230}"
-PLUGIN_INSPECTOR_PORT="${PLUGIN_INSPECTOR_PORT:-9231}"
-FILES_INSPECTOR_PORT="${FILES_INSPECTOR_PORT:-9232}"
+API_INSPECTOR_PORT="${API_INSPECTOR_PORT:-$((9230 + WORKER_PORT_OFFSET))}"
+PLUGIN_INSPECTOR_PORT="${PLUGIN_INSPECTOR_PORT:-$((9231 + WORKER_PORT_OFFSET))}"
+FILES_INSPECTOR_PORT="${FILES_INSPECTOR_PORT:-$((9232 + WORKER_PORT_OFFSET))}"
 
-# In CI/linux, `host.docker.internal` is unreliable. Prefer localhost (mapped ports).
-S3_ENDPOINT_TO_USE="${S3_ENDPOINT:-127.0.0.1:9000}"
+if [[ -n "${CLOUDFLARE_PERSIST_DIR:-}" ]]; then
+  PERSIST_DIR="${CLOUDFLARE_PERSIST_DIR}"
+  if [[ "${PERSIST_DIR}" != /* ]]; then
+    PERSIST_DIR="${ROOT_DIR}/${PERSIST_DIR}"
+  fi
+elif (( WORKER_PORT_OFFSET == 0 )); then
+  PERSIST_DIR="${ROOT_DIR}/.wrangler-shared"
+else
+  PERSIST_DIR="${ROOT_DIR}/.wrangler-shared-${WORKER_PORT_OFFSET}"
+fi
+mkdir -p "${PERSIST_DIR}"
 
-cat >> "${RUNTIME_ENV_FILE}" <<EOF
+# Route worker S3 calls through the selected isolated Supabase API endpoint.
+S3_ENDPOINT_TO_USE="${S3_ENDPOINT:-${SUPABASE_URL%/}/storage/v1/s3}"
+
+API_PID=''
+PLUGIN_PID=''
+FILES_PID=''
+cleanup() {
+  local pid
+  echo -e "\n${YELLOW}Stopping workers...${NC}"
+  for pid in "${API_PID}" "${PLUGIN_PID}" "${FILES_PID}"; do
+    if [[ -z "${pid}" ]]; then
+      continue
+    fi
+    if kill -0 "${pid}" 2>/dev/null; then
+      kill "${pid}" 2>/dev/null || true
+    fi
+    wait "${pid}" 2>/dev/null || true
+  done
+  rm -f "${RUNTIME_ENV_FILE}" 2>/dev/null || true
+  echo -e "${GREEN}All workers stopped${NC}"
+}
+trap cleanup EXIT INT TERM
+
+cat >> "${RUNTIME_ENV_FILE}" <<ENV_EOF
 MAIN_SUPABASE_DB_URL=${MAIN_SUPABASE_DB_URL}
 SUPABASE_DB_URL=${SUPABASE_DB_URL}
+LOCAL_READ_REPLICA_SUPABASE_DB_URL=${LOCAL_READ_REPLICA_SUPABASE_DB_URL}
 SUPABASE_URL=${SUPABASE_URL}
 SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
 SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
 CLOUDFLARE_FUNCTION_URL=${CLOUDFLARE_FUNCTION_URL}
 STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
 S3_ENDPOINT=${S3_ENDPOINT_TO_USE}
+# Worker requests must keep the isolated Storage API host instead of their own host.
+S3_REWRITE_LOCAL_ENDPOINT=false
 RATE_LIMIT_API_KEY=999999
 RATE_LIMIT_FAILED_AUTH=999999
 RATE_LIMIT_CHANNEL_SELF_IP=999999
-EOF
+ENV_EOF
 
-# Kill any existing wrangler processes
-echo -e "${YELLOW}Cleaning up existing wrangler processes...${NC}"
-pkill -f "wrangler dev" || true
-sleep 2
-
-# Start API worker on port 8787
-echo -e "${GREEN}Starting API worker on port 8787...${NC}"
-(cd "${ROOT_DIR}/cloudflare_workers/api" && bunx wrangler dev --local -c wrangler.jsonc --port 8787 --inspector-port "${API_INSPECTOR_PORT}" --env-file="${RUNTIME_ENV_FILE}" --env=local --persist-to "${ROOT_DIR}/.wrangler-shared") &
+# Start API worker on its isolated port.
+echo -e "${GREEN}Starting API worker on port ${CLOUDFLARE_API_PORT}...${NC}"
+(cd "${ROOT_DIR}/cloudflare_workers/api" && exec bunx wrangler dev --local -c wrangler.jsonc --port "${CLOUDFLARE_API_PORT}" --inspector-port "${API_INSPECTOR_PORT}" --env-file="${RUNTIME_ENV_FILE}" --env=local --persist-to "${PERSIST_DIR}") &
 API_PID=$!
 
-# Wait a bit for the first worker to start
+# Wait a bit for the first worker to start.
 sleep 3
 
-# Start Plugin worker on port 8788
-echo -e "${GREEN}Starting Plugin worker on port 8788...${NC}"
-(cd "${ROOT_DIR}/cloudflare_workers/plugin" && bunx wrangler dev --local -c wrangler.jsonc --port 8788 --inspector-port "${PLUGIN_INSPECTOR_PORT}" --env-file="${RUNTIME_ENV_FILE}" --env=local --persist-to "${ROOT_DIR}/.wrangler-shared") &
+# Start Plugin worker on its isolated port.
+echo -e "${GREEN}Starting Plugin worker on port ${CLOUDFLARE_PLUGIN_PORT}...${NC}"
+(cd "${ROOT_DIR}/cloudflare_workers/plugin" && exec bunx wrangler dev --local -c wrangler.jsonc --port "${CLOUDFLARE_PLUGIN_PORT}" --inspector-port "${PLUGIN_INSPECTOR_PORT}" --env-file="${RUNTIME_ENV_FILE}" --env=local --persist-to "${PERSIST_DIR}") &
 PLUGIN_PID=$!
 
-# Wait a bit for the second worker to start
+# Wait a bit for the second worker to start.
 sleep 3
 
-# Start Files worker on port 8789
-echo -e "${GREEN}Starting Files worker on port 8789...${NC}"
-(cd "${ROOT_DIR}/cloudflare_workers/files" && bunx wrangler dev --local -c wrangler.jsonc --port 8789 --inspector-port "${FILES_INSPECTOR_PORT}" --env-file="${RUNTIME_ENV_FILE}" --env=local --persist-to "${ROOT_DIR}/.wrangler-shared") &
+# Start Files worker on its isolated port.
+echo -e "${GREEN}Starting Files worker on port ${CLOUDFLARE_FILES_PORT}...${NC}"
+(cd "${ROOT_DIR}/cloudflare_workers/files" && exec bunx wrangler dev --local -c wrangler.jsonc --port "${CLOUDFLARE_FILES_PORT}" --inspector-port "${FILES_INSPECTOR_PORT}" --env-file="${RUNTIME_ENV_FILE}" --env=local --persist-to "${PERSIST_DIR}") &
 FILES_PID=$!
 
 echo -e "${GREEN}All workers started!${NC}"
-echo "API Worker PID: $API_PID (http://127.0.0.1:8787)"
-echo "Plugin Worker PID: $PLUGIN_PID (http://127.0.0.1:8788)"
-echo "Files Worker PID: $FILES_PID (http://127.0.0.1:8789)"
-echo ""
-
+echo "API Worker PID: ${API_PID} (http://127.0.0.1:${CLOUDFLARE_API_PORT})"
+echo "Plugin Worker PID: ${PLUGIN_PID} (http://127.0.0.1:${CLOUDFLARE_PLUGIN_PORT})"
+echo "Files Worker PID: ${FILES_PID} (http://127.0.0.1:${CLOUDFLARE_FILES_PORT})"
 echo ""
 echo "Press Ctrl+C to stop all workers"
 
-# Function to cleanup on exit
-cleanup() {
-  echo -e "\n${YELLOW}Stopping workers...${NC}"
-  kill $API_PID $PLUGIN_PID $FILES_PID 2>/dev/null || true
-  pkill -f "wrangler dev" || true
-  rm -f "${RUNTIME_ENV_FILE}" 2>/dev/null || true
-  echo -e "${GREEN}All workers stopped${NC}"
-}
-
-# Trap SIGINT and SIGTERM
-trap cleanup EXIT INT TERM
-
-# Wait for all background processes
+# Wait for all background processes.
 wait

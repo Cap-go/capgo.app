@@ -68,7 +68,7 @@ INSERT INTO public.audit_logs (
 )
 VALUES
 (
-    now() - interval '91 days',
+    now() - interval '31 days',
     'audit_log_retention_test',
     'audit-log-retention-old',
     'INSERT',
@@ -79,7 +79,7 @@ VALUES
     ARRAY['retention_probe']::text []
 ),
 (
-    now() - interval '89 days',
+    now() - interval '29 days',
     'audit_log_retention_test',
     'audit-log-retention-fresh',
     'INSERT',
@@ -101,7 +101,7 @@ SELECT is(
             AND table_name = 'audit_log_retention_test'
     ),
     0,
-    'cleanup_old_audit_logs deletes rows older than 90 days'
+    'cleanup_old_audit_logs deletes rows older than 30 days'
 );
 
 SELECT is(
@@ -113,7 +113,7 @@ SELECT is(
             AND table_name = 'audit_log_retention_test'
     ),
     1,
-    'cleanup_old_audit_logs keeps rows newer than 90 days'
+    'cleanup_old_audit_logs keeps rows newer than 30 days'
 );
 
 SELECT tests.clear_authentication();

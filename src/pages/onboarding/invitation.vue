@@ -13,7 +13,7 @@ import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
-import { useOrganizationStore } from '~/stores/organization'
+import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
 import { clearPendingInviteSkip, rememberPendingInviteSkip } from '~/utils/pendingInviteSkip'
 
 const route = useRoute()
@@ -49,7 +49,7 @@ const targetPath = computed(() => {
 })
 
 function getPendingInviteOrganizations() {
-  return organizationStore.organizations.filter(org => org.role.startsWith('invite'))
+  return organizationStore.organizations.filter(org => isPendingOrganizationInvite(org))
 }
 
 function getCurrentUserId() {

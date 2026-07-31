@@ -8,19 +8,19 @@ import { post } from './post.ts'
 
 export const app = honoFactory.createApp()
 
-app.post('/', middlewareKey(['all', 'write']), async (c) => {
+app.post('/', middlewareKey(), async (c) => {
   const body = await parseBody<ChannelSet>(c)
   const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
   return post(c, body, apikey)
 })
 
-app.get('/', middlewareKey(['all', 'write', 'read']), async (c) => {
+app.get('/', middlewareKey(), async (c) => {
   const body = await getBodyOrQuery<ChannelSet>(c)
   const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
   return get(c, body, apikey)
 })
 
-app.delete('/', middlewareKey(['all', 'write']), async (c) => {
+app.delete('/', middlewareKey(), async (c) => {
   const body = await getBodyOrQuery<ChannelSet>(c)
   const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
   return deleteChannel(c, body, apikey)

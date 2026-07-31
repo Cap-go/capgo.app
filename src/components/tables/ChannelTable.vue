@@ -14,6 +14,7 @@ import IconTrash from '~icons/heroicons/trash'
 import { formatDate } from '~/services/date'
 import { checkPermissions } from '~/services/permissions'
 import { useSupabase } from '~/services/supabase'
+import { refetchIfPageOutOfRange } from '~/services/tablePagination'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
@@ -52,12 +53,7 @@ const filters = ref()
 const newChannelName = ref('')
 const canPromoteChannel = ref<Record<number, boolean>>({})
 const canReadChannel = ref<Record<number, boolean>>({})
-
-const canDeleteChannel = computedAsync(async () => {
-  if (!props.appId)
-    return false
-  return await checkPermissions('channel.delete', { appId: props.appId })
-}, false)
+const canDeleteChannel = ref<Record<number, boolean>>({})
 
 const canCreateChannel = computedAsync(async () => {
   if (!props.appId)
@@ -104,6 +100,7 @@ async function getData() {
   isLoading.value = true
   canPromoteChannel.value = {}
   canReadChannel.value = {}
+  canDeleteChannel.value = {}
   try {
     let req = supabase
       .from('channels')
@@ -112,7 +109,7 @@ async function getData() {
           name,
           app_id,
           public,
-          version (
+          version:app_versions!channels_version_fkey(
             id,
             name,
             created_at,
@@ -137,10 +134,11 @@ async function getData() {
     const { data: dataVersions, count } = await req
     if (!dataVersions)
       return
+    total.value = count ?? 0
+    if (await refetchIfPageOutOfRange(currentPage, total.value, offset, getData))
+      return
     elements.value.length = 0
     elements.value.push(...dataVersions as any)
-    // console.log('count', count)
-    total.value = count ?? 0
     if (count === 0) {
       showAddModal()
     }
@@ -170,26 +168,27 @@ async function getData() {
   isLoading.value = false
 }
 async function refreshData(keepCurrentPage = false) {
-  // console.log('refreshData')
   try {
-    const page = currentPage.value
     if (!keepCurrentPage)
       currentPage.value = 1
 
     elements.value.length = 0
+    // getData clamps currentPage when deletes leave it past the last page
     await getData()
-    if (keepCurrentPage)
-      currentPage.value = page
   }
   catch (error) {
     console.error(error)
   }
 }
 async function deleteOne(one: Element) {
-  // console.log('deleteBundle', bundle)
+  if (!(await checkPermissions('channel.delete', { appId: props.appId, channelId: one.id }))) {
+    toast.error(t('no-permission'))
+    return false
+  }
+
   dialogStore.openDialog({
     title: t('alert-confirm-delete'),
-    description: `${t('alert-not-reverse-message')} ${t('alert-delete-message')} ${name}?`,
+    description: `${t('alert-not-reverse-message')} ${t('alert-delete-message')} ${one.name}?`,
     buttons: [
       {
         text: t('button-cancel'),
@@ -200,18 +199,6 @@ async function deleteOne(one: Element) {
         role: 'danger',
         handler: async () => {
           try {
-            // First delete channel_devices
-            const { error: delDevicesError } = await supabase
-              .from('channel_devices')
-              .delete()
-              .eq('channel_id', one.id)
-
-            if (delDevicesError) {
-              toast.error(t('cannot-delete-channel'))
-              return
-            }
-
-            // Then delete the channel
             const { error: delChanError } = await supabase
               .from('channels')
               .delete()
@@ -240,25 +227,30 @@ async function loadChannelPermissions(rows: Element[]) {
   if (!rows.length) {
     canPromoteChannel.value = {}
     canReadChannel.value = {}
+    canDeleteChannel.value = {}
     return
   }
 
   const entries = await Promise.all(rows.map(async (row) => {
-    const [canRead, canPromote] = await Promise.all([
+    const [canRead, canPromote, canDelete] = await Promise.all([
       checkPermissions('channel.read', { channelId: row.id }),
       checkPermissions('channel.promote_bundle', { channelId: row.id }),
+      checkPermissions('channel.delete', { appId: props.appId, channelId: row.id }),
     ])
-    return { id: row.id, canRead, canPromote }
+    return { id: row.id, canRead, canPromote, canDelete }
   }))
 
   const nextPromote: Record<number, boolean> = {}
   const nextRead: Record<number, boolean> = {}
+  const nextDelete: Record<number, boolean> = {}
   for (const entry of entries) {
     nextRead[entry.id] = entry.canRead
     nextPromote[entry.id] = entry.canPromote
+    nextDelete[entry.id] = entry.canDelete
   }
   canPromoteChannel.value = nextPromote
   canReadChannel.value = nextRead
+  canDeleteChannel.value = nextDelete
 }
 
 columns.value = [
@@ -314,15 +306,15 @@ columns.value = [
     actions: [
       {
         icon: IconSettings,
-        disabled: (elem: Element) => !canPromoteChannel.value[elem.id],
-        title: (elem: Element) => (!canPromoteChannel.value[elem.id]
-          ? t('channel-permission-associate-required')
-          : ''),
+        disabled: (elem: Element) => !canReadChannel.value[elem.id],
+        title: (elem: Element) => (canReadChannel.value[elem.id]
+          ? ''
+          : t('channel-permission-read-required')),
         onClick: (elem: Element) => openOne(elem),
       },
       {
         icon: IconTrash,
-        visible: () => canDeleteChannel.value,
+        visible: (elem: Element) => !!canDeleteChannel.value[elem.id],
         onClick: (elem: Element) => deleteOne(elem),
       },
     ],
@@ -387,7 +379,7 @@ watch(props, async () => {
   <div>
     <DataTable
       v-model:filters="filters" v-model:columns="columns" v-model:current-page="currentPage" v-model:search="search"
-      :total="total" :element-list="elements"
+      :total="total" :offset="offset" :element-list="elements"
       show-add
       filter-text="Filters"
       :is-loading="isLoading"

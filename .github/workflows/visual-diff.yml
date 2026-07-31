@@ -1,0 +1,151 @@
+name: Visual diff
+
+concurrency:
+  group: visual-diff-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - labeled
+      - unlabeled
+      - edited
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      requested: ${{ steps.check.outputs.requested }}
+    steps:
+      - name: Detect visual diff request
+        id: check
+        env:
+          PR_LABELS: ${{ toJson(github.event.pull_request.labels) }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          requested=false
+          if printf '%s' "$PR_LABELS" | grep -Eq '"name"[[:space:]]*:[[:space:]]*"visual-change"'; then
+            requested=true
+          elif printf '%s' "$PR_BODY" | grep -q '<!-- visual-diff:required -->'; then
+            requested=true
+          fi
+          echo "requested=${requested}" >> "$GITHUB_OUTPUT"
+
+  visual-diff:
+    needs: check
+    if: needs.check.outputs.requested == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    name: Generate visual diff report
+    permissions:
+      contents: read
+      pull-requests: write # Upsert the sticky visual diff PR comment only in this job
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.x
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          filter: blob:none
+
+      - name: Setup bun
+        run: bash scripts/setup-bun.sh
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Install Playwright browser
+        run: bunx playwright install --with-deps chromium
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@v2
+        with:
+          version: 2.109.1
+
+      - name: Link Supabase templates
+        run: ln -sfn supabase/templates templates
+
+      - name: Run visual diff pipeline
+        timeout-minutes: 15
+        run: |
+          bun scripts/visual-diff.ts run \
+            --base "${{ github.event.pull_request.base.sha }}" \
+            --head "${{ github.event.pull_request.head.sha }}"
+
+      - name: Upload visual diff report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: visual-diff-report-${{ github.event.pull_request.head.sha }}
+          path: |
+            .context/visual-diff/report/
+            .context/visual-diff/logs/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Comment visual diff summary on PR
+        if: always()
+        uses: actions/github-script@v8
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          JOB_STATUS: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ARTIFACT_NAME: visual-diff-report-${{ github.event.pull_request.head.sha }}
+        with:
+          script: |
+            const fs = require('node:fs')
+            const path = require('node:path')
+            const marker = '<!-- capgo-visual-diff -->'
+            const issue_number = context.payload.pull_request.number
+            const summaryPath = path.join(process.env.GITHUB_WORKSPACE, '.context/visual-diff/report/summary.md')
+            const ok = process.env.JOB_STATUS === 'success'
+            const summary = fs.existsSync(summaryPath)
+              ? fs.readFileSync(summaryPath, 'utf8').trim()
+              : 'Visual diff did not produce a report. Check the workflow logs and artifacts.'
+
+            const body = [
+              marker,
+              `## Visual diff ${ok ? 'passed' : 'failed'}`,
+              '',
+              summary,
+              '',
+              `Commit: \`${process.env.HEAD_SHA}\``,
+              `[Download the HTML report from workflow artifacts](${process.env.RUN_URL}) (artifact: \`${process.env.ARTIFACT_NAME}\`).`,
+              '',
+              'Open `index.html` from the artifact for side-by-side before/after/diff screenshots.',
+            ].join('\n')
+
+            const { owner, repo } = context.repo
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100,
+            })
+            const existing = comments.find(comment => comment.body?.includes(marker))
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              })
+            }
+            else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body,
+              })
+            }

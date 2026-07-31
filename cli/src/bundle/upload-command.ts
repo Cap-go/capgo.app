@@ -1,6 +1,7 @@
 import type { OptionsUpload } from './upload_interface'
 import { onboardingBuilderCommand } from '../build/onboarding/command'
 import { requestBuildCommand } from '../build/request'
+import { sendUpdateNotificationsForChannels } from '../notifications/send-update'
 import { getPreviewQr } from '../preview/qr'
 import { uploadBundle } from './upload'
 import { buildBundleUploadPreviewQrOptions } from './upload-preview-qr'
@@ -13,9 +14,21 @@ import { buildBundleUploadPreviewQrOptions } from './upload-preview-qr'
  */
 export async function handleBundleUploadCommand(appId: string, options: OptionsUpload): Promise<void> {
   const result = await uploadBundle(appId, options)
+  const resolvedAppId = result?.appId || appId
   if (options.qrPreview && result?.bundle && result.reason !== 'DRY_UPLOAD' && !result.builderAction)
-    await getPreviewQr(appId, undefined, buildBundleUploadPreviewQrOptions(options, result.bundle))
+    await getPreviewQr(resolvedAppId, undefined, buildBundleUploadPreviewQrOptions(options, result.bundle))
 
+  if (options.sendUpdateNotification && result?.success && !result.skipped && result.updatedChannels?.length && !result.builderAction) {
+    try {
+      await sendUpdateNotificationsForChannels({
+        appId: resolvedAppId,
+        apikey: options.apikey,
+        channels: result.updatedChannels,
+        verbose: options.verbose,
+      })
+    }
+    catch {}
+  }
   if (!result?.builderAction)
     return
 
@@ -24,5 +37,5 @@ export async function handleBundleUploadCommand(appId: string, options: OptionsU
   else
     // Don't forward options.path — for `bundle upload` it's the web asset dir,
     // but `build request` treats `path` as the Capacitor project root.
-    await requestBuildCommand(appId ?? '', { apikey: options.apikey, supaHost: options.supaHost, supaAnon: options.supaAnon })
+    await requestBuildCommand(resolvedAppId, { apikey: options.apikey, supaHost: options.supaHost, supaAnon: options.supaAnon })
 }
