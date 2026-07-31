@@ -317,6 +317,15 @@ replica_region_name() {
   sanitize_identifier_part "$host_part"
 }
 
+
+# psql with statement/lock timeouts disabled (large COPY / INDEX on manifest).
+psql_no_timeout() {
+  local url="$1"
+  shift
+  PGOPTIONS="${PGOPTIONS:+${PGOPTIONS} }-c statement_timeout=0 -c lock_timeout=0" \
+    psql-17 "$url" "$@"
+}
+
 discover_publication_name() {
   local existing
   local count

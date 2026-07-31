@@ -197,7 +197,8 @@ dump_table() {
   local dump_file="${DUMP_DIR}/${table_name}.csv.gz"
 
   echo "    [${table_name}] Dumping from source..."
-  psql-17 "$SOURCE_DB_URL" -c "\\COPY public.${table_name} TO STDOUT WITH (FORMAT csv, HEADER)" | gzip > "$dump_file"
+  # manifest (and similar) exceed Supabase statement_timeout on a full COPY.
+  psql_no_timeout "$SOURCE_DB_URL" -v ON_ERROR_STOP=1     -c "\\COPY public.${table_name} TO STDOUT WITH (FORMAT csv, HEADER)"     | gzip > "$dump_file"
   echo "    [${table_name}] Dump complete: $(du -h "$dump_file" | cut -f1)"
 }
 
@@ -217,7 +218,7 @@ restore_table() {
   " | psql-17 "$REPLICA_TARGET_DB_URL" 2>/dev/null || true
 
   echo "    [${table_name}] Truncating and loading..."
-  psql-17 "$REPLICA_TARGET_DB_URL" -c "TRUNCATE TABLE public.${table_name};"
+  psql_no_timeout "$REPLICA_TARGET_DB_URL" -v ON_ERROR_STOP=1 -c "TRUNCATE TABLE public.${table_name};"
   gunzip -c "$dump_file" | psql-17 "$REPLICA_TARGET_DB_URL" -c "\\COPY public.${table_name} FROM STDIN WITH (FORMAT csv, HEADER)"
 
   echo "    [${table_name}] Recreating indexes..."
@@ -225,7 +226,7 @@ restore_table() {
     | awk 'BEGIN{RS=";"} /CREATE.*INDEX/{print $0 ";"}' \
     | while read -r idx_sql; do
       if [[ -n "$idx_sql" ]]; then
-        psql-17 "$REPLICA_TARGET_DB_URL" -c "$idx_sql" 2>/dev/null || true
+        psql_no_timeout "$REPLICA_TARGET_DB_URL" -c "$idx_sql" 2>/dev/null || true
       fi
     done
 
