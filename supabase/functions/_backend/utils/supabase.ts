@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Context } from 'hono'
+import { HTTPException } from 'hono/http-exception'
 import type { BillingPlanBentoState } from './billing_bento_tags.ts'
 import type { AuthInfo } from './hono.ts'
 import type { Database } from './supabase.types.ts'
@@ -1762,7 +1763,7 @@ export async function checkKey(c: Context, authorization: string | undefined, su
     if (error) {
       // Kong/PostgREST overload must not look like a bad key (flaky 401s in CI).
       const message = error.message ?? ''
-      if (message.includes('invalid response was received from the upstream server') || message.includes('502') || message.includes('503') || message.includes('upstream')) {
+      if (message.includes('invalid response was received from the upstream server')) {
         cloudlog({ requestId: c.get('requestId'), message: 'Apikey lookup upstream failure', authorizationPrefix: authorization?.substring(0, 8), error })
         throw quickError(503, 'upstream_unavailable', 'Upstream unavailable', { error: message })
       }
@@ -1783,6 +1784,8 @@ export async function checkKey(c: Context, authorization: string | undefined, su
     return data
   }
   catch (error) {
+    if (error instanceof HTTPException)
+      throw error
     cloudlog({ requestId: c.get('requestId'), message: 'checkKey error', error })
     return null
   }
