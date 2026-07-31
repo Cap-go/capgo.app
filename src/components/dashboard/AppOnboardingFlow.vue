@@ -23,7 +23,7 @@ import IconStore from '~icons/lucide/store'
 import IconTerminal from '~icons/lucide/terminal'
 import IconUsers from '~icons/lucide/users-round'
 import { createDefaultApiKey, findUsablePlainApiKey } from '~/services/apikeys'
-import { invokeCapgoApi } from '~/services/capgoApi'
+import { getCapgoApiErrorCode, invokeCapgoApi } from '~/services/capgoApi'
 import { pushEvent } from '~/services/posthog'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
 import { getLocalConfig, isLocal, useSupabase } from '~/services/supabase'
@@ -643,7 +643,8 @@ async function createOrganizationAndApp() {
 
     if (error || !data?.id) {
       console.error('Error creating organization during unified onboarding', error)
-      toast.error((error as { code?: string } | null)?.code === '23505'
+      const errorCode = await getCapgoApiErrorCode(error)
+      toast.error(errorCode === '23505'
         ? t('org-with-this-name-exists')
         : t('cannot-create-org'))
       return

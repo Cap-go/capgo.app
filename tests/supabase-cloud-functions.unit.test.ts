@@ -40,6 +40,10 @@ describe('supabase cloud function allowlist', () => {
     expect(buildCapgoCloudSupabaseDeployArgs(['triggers', 'ok'])).toEqual(['triggers', 'ok'])
   })
 
+  it('rejects an empty Capgo cloud deploy selection', () => {
+    expect(() => buildCapgoCloudSupabaseDeployArgs([])).toThrow('CAPGO_CLOUD_SUPABASE_FUNCTIONS must not be empty')
+  })
+
   it('skips Capgo-cloud-only unused local functions while keeping allowlisted ones', () => {
     const local = listLocalSupabaseFunctions()
     expect(local).toContain('triggers')

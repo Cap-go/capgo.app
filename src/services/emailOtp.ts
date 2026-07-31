@@ -50,6 +50,8 @@ export async function verifyEmailOtp(
   token: string,
 ) {
   return await invokeCapgoApi('private/verify_email_otp', {
+    allowAnonymous: true,
+    client: supabase,
     body: { token: token.replaceAll(' ', '') },
   })
 }

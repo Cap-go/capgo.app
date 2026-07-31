@@ -21,6 +21,7 @@ import { app as native_observe_stats } from '../../supabase/functions/_backend/p
 import { app as plans } from '../../supabase/functions/_backend/private/plans.ts'
 import { app as publicStats } from '../../supabase/functions/_backend/private/public_stats.ts'
 import { app as replay } from '../../supabase/functions/_backend/private/replay.ts'
+import { app as role_bindings } from '../../supabase/functions/_backend/private/role_bindings.ts'
 import { app as set_manifest } from '../../supabase/functions/_backend/private/set_manifest.ts'
 import { app as set_org_email } from '../../supabase/functions/_backend/private/set_org_email.ts'
 import { app as sso_check_domain } from '../../supabase/functions/_backend/private/sso/check-domain.ts'
@@ -38,6 +39,7 @@ import { app as stripe_portal } from '../../supabase/functions/_backend/private/
 import { app as update_delivery_stats } from '../../supabase/functions/_backend/private/update_delivery_stats.ts'
 import { app as validate_password_compliance } from '../../supabase/functions/_backend/private/validate_password_compliance.ts'
 import { app as verify_email_otp } from '../../supabase/functions/_backend/private/verify_email_otp.ts'
+import { app as website_preview } from '../../supabase/functions/_backend/private/website_preview.ts'
 import { app as apikey } from '../../supabase/functions/_backend/public/apikey/index.ts'
 import { app as appEndpoint } from '../../supabase/functions/_backend/public/app/index.ts'
 import { app as build } from '../../supabase/functions/_backend/public/build/index.ts'
@@ -144,6 +146,8 @@ appPrivate.route('/latency', latency)
 appPrivate.route('/replay', replay)
 appPrivate.route('/events', events)
 appPrivate.route('/groups', groups)
+appPrivate.route('/role_bindings', role_bindings)
+appPrivate.route('/website_preview', website_preview)
 appPrivate.route('/sso/check-domain', sso_check_domain)
 appPrivate.route('/sso/check-enforcement', sso_check_enforcement)
 appPrivate.route('/sso/providers', sso_providers)

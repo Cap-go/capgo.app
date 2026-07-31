@@ -1,3 +1,5 @@
+import type { SupabaseClient } from '@supabase/supabase-js'
+import type { Database } from '~/types/supabase.types'
 import { FunctionsHttpError } from '@supabase/supabase-js'
 
 export interface CapgoApiInvokeOptions {
@@ -6,21 +8,33 @@ export interface CapgoApiInvokeOptions {
   headers?: Record<string, string>
   /** Use the anon key when there is no user session (public bootstrap endpoints). */
   allowAnonymous?: boolean
+  /** Prefer caller-provided client for session/auth context. */
+  client?: SupabaseClient<Database>
 }
 
 function normalizeApiHost(host: string | undefined): string {
   return (host ?? '').replace(/\/+$/, '')
 }
 
-/** Capgo-managed Supabase hosts (cloud). Self-host / local use a different origin. */
+function parseHostname(supaHost: string): string | null {
+  try {
+    const withProtocol = /:\/\//.test(supaHost) ? supaHost : `https://${supaHost}`
+    return new URL(withProtocol).hostname.toLowerCase()
+  }
+  catch {
+    return null
+  }
+}
+
+/** Capgo-managed Supabase hosts (cloud). Match hostname exactly. */
 export function isCapgoManagedSupabaseHost(supaHost?: string): boolean {
-  if (!supaHost)
+  const hostname = supaHost ? parseHostname(supaHost) : null
+  if (!hostname)
     return false
-  const host = normalizeApiHost(supaHost).toLowerCase()
-  return host.includes('sb.capgo.app')
-    || host.includes('xvwzpoazmxkqosrdewyv')
-    || host.includes('ibwjdnhknbkcqfbabwei')
-    || host.includes('aucsybvnhavogdmzwtcw')
+  return hostname === 'sb.capgo.app'
+    || hostname === 'xvwzpoazmxkqosrdewyv.supabase.co'
+    || hostname === 'ibwjdnhknbkcqfbabwei.supabase.co'
+    || hostname === 'aucsybvnhavogdmzwtcw.supabase.co'
 }
 
 function serializeBody(body: CapgoApiInvokeOptions['body']): BodyInit | undefined {
@@ -38,6 +52,18 @@ function serializeBody(body: CapgoApiInvokeOptions['body']): BodyInit | undefine
   return JSON.stringify(body)
 }
 
+export async function getCapgoApiErrorCode(error: unknown): Promise<string | undefined> {
+  if (error instanceof FunctionsHttpError && error.context instanceof Response) {
+    const body = await error.context.clone().json().catch(() => null) as { code?: string, error?: string } | null
+    if (typeof body?.code === 'string')
+      return body.code
+    if (typeof body?.error === 'string')
+      return body.error
+  }
+  const code = (error as { code?: unknown } | null)?.code
+  return typeof code === 'string' ? code : undefined
+}
+
 /**
  * Call Capgo Cloudflare API with the same { data, error } shape as
  * supabase.functions.invoke. Capgo cloud console traffic uses VITE_API_HOST.
@@ -48,11 +74,11 @@ export async function invokeCapgoApi<T = any>(
   options: CapgoApiInvokeOptions = {},
 ): Promise<{ data: T | null, error: Error | null }> {
   const { getLocalConfig, useSupabase } = await import('./supabase')
-  const supabase = useSupabase()
+  const supabase = options.client ?? useSupabase()
   const config = getLocalConfig()
 
   if (!isCapgoManagedSupabaseHost(config.supaHost)) {
-    const { allowAnonymous: _allowAnonymous, ...invokeOptions } = options
+    const { allowAnonymous: _allowAnonymous, client: _client, ...invokeOptions } = options
     return supabase.functions.invoke(path, {
       method: invokeOptions.method,
       body: invokeOptions.body ?? undefined,

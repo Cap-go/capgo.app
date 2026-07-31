@@ -9,17 +9,13 @@ import process from 'node:process'
  * Forever:
  * - `triggers` — Postgres pg_net → /functions/v1/triggers/queue_consumer/sync
  *
- * Deprecated (CLI still used supabase.functions.invoke for these until the
- * Capgo CLI migration ships and old CLIs age out). Keep Capgo-cloud publish
- * until 2026-10-28 (~3 months after console+CLI migrate to api.capgo.app /
- * files.capgo.app). After that date remove them from this allowlist and delete
- * the Capgo cloud Supabase deployments.
+ * Deprecated for legacy Capgo CLIs that still call supabase.functions.invoke
+ * on sb.capgo.app. Keep Capgo-cloud publish until 2026-10-28; new CLI uses
+ * api.capgo.app / files.capgo.app. Capgo cloud console uses VITE_API_HOST.
+ * Self-host / local consoles keep supabase.functions.invoke → /functions/v1.
  * - `bundle`, `channel`, `files`, `private`
  *
- * Console-only invoke targets were migrated to VITE_API_HOST (Cloudflare) and
- * are no longer published on Capgo cloud Supabase:
- * - apikey, app, organization, statistics, webhooks
- *
+ * Capgo cloud deploy deletes every other local function name (skip-list).
  * Self-hosted installs still deploy every function under supabase/functions/.
  */
 export const CAPGO_CLOUD_SUPABASE_FUNCTIONS_CLI_DEPRECATION_UNTIL = '2026-10-28'

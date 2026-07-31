@@ -105,7 +105,13 @@ jobs:
           # Self-host installs are unaffected (they deploy every local function).
           SKIPPED=($(bun scripts/supabase-cloud-functions.ts skip-list))
           for fn in "${SKIPPED[@]}"; do
-            supabase functions delete "$fn" || true
+            if ! out=$(supabase functions delete "$fn" 2>&1); then
+              if echo "$out" | grep -qiE 'not found|does not exist|404|Function not found'; then
+                continue
+              fi
+              echo "$out" >&2
+              exit 1
+            fi
           done
 
   read_replica_schema:

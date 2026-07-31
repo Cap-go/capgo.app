@@ -19,7 +19,7 @@ import IconUserPlus from '~icons/lucide/user-plus'
 import IconUsers from '~icons/lucide/users-round'
 import IconBack from '~icons/material-symbols/arrow-back-ios-rounded'
 import InviteTeammateModal from '~/components/dashboard/InviteTeammateModal.vue'
-import { invokeCapgoApi } from '~/services/capgoApi'
+import { getCapgoApiErrorCode, invokeCapgoApi } from '~/services/capgoApi'
 import { formatNumberValue } from '~/services/formatLocale'
 import { createOnboardingAppFromDraft } from '~/services/onboardingAppCreate'
 import { uploadOrgLogoFile } from '~/services/photos'
@@ -429,7 +429,8 @@ async function createOrganization() {
 
     if (error || !data?.id) {
       console.error('Error creating organization during onboarding', error)
-      toast.error((error as { code?: string } | null)?.code === '23505'
+      const errorCode = await getCapgoApiErrorCode(error)
+      toast.error(errorCode === '23505'
         ? t('org-with-this-name-exists')
         : t('cannot-create-org'))
       return

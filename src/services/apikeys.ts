@@ -66,6 +66,7 @@ export async function createDefaultApiKey(
       ]
 
   return invokeCapgoApi('apikey', {
+    client: supabase,
     method: 'POST',
     body: {
       name,
@@ -122,6 +123,7 @@ export async function createAiApiKey(
   const globalPermissions = role === 'admin' && options.allowOrgCreate ? ['org.create'] : undefined
 
   return invokeCapgoApi('apikey', {
+    client: supabase,
     method: 'POST',
     body: {
       name,

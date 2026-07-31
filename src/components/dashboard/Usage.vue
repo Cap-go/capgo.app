@@ -481,7 +481,7 @@ async function getAppStats(rangeStart: Date, rangeEnd: Date) {
     }
 
     const dateRange = `?from=${rangeStart.toISOString()}&to=${rangeEnd.toISOString()}&noAccumulate=true`
-    const response = await invokeCapgoApi(`statistics/app/${props.appId}/${dateRange}`, {
+    const response = await invokeCapgoApi(`statistics/app/${props.appId}${dateRange}`, {
       method: 'GET',
     })
 

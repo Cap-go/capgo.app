@@ -674,8 +674,18 @@ interface CapgoConfig {
   hostFilesApi: string
   hostApi: string
 }
+let cachedRemoteConfigPromise: Promise<CapgoConfig> | null = null
+
 export async function getRemoteConfig(silent = false, signal?: AbortSignal) {
   // call host + /api/get_config and parse the result as json using fetch
+  if (!signal) {
+    cachedRemoteConfigPromise ??= loadRemoteConfig(silent)
+    return cachedRemoteConfigPromise
+  }
+  return loadRemoteConfig(silent, signal)
+}
+
+async function loadRemoteConfig(silent = false, signal?: AbortSignal) {
   const localConfig = await getLocalConfig(silent)
   try {
     const response = await fetch(`${localConfig.hostApi}/private/config`, signal ? { signal } : {})
@@ -745,15 +755,20 @@ export function formatCapgoApiErrorBody(body: unknown): string {
   return [record.error, record.message, record.status].filter(Boolean).join(' | ')
 }
 
-/** Capgo-managed Supabase hosts (cloud). Self-host uses a different origin. */
+/** Capgo-managed Supabase hosts (cloud). Match hostname exactly. */
 export function isCapgoManagedSupabaseHost(supaHost?: string): boolean {
   if (!supaHost)
     return false
-  const host = normalizeSupabaseHost(supaHost).toLowerCase()
-  return host.includes('sb.capgo.app')
-    || host.includes('xvwzpoazmxkqosrdewyv')
-    || host.includes('ibwjdnhknbkcqfbabwei')
-    || host.includes('aucsybvnhavogdmzwtcw')
+  try {
+    const hostname = new URL(normalizeSupabaseHost(supaHost)).hostname.toLowerCase()
+    return hostname === 'sb.capgo.app'
+      || hostname === 'xvwzpoazmxkqosrdewyv.supabase.co'
+      || hostname === 'ibwjdnhknbkcqfbabwei.supabase.co'
+      || hostname === 'aucsybvnhavogdmzwtcw.supabase.co'
+  }
+  catch {
+    return false
+  }
 }
 
 /**
