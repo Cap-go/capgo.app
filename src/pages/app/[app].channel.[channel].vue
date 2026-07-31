@@ -343,13 +343,19 @@ async function askUpdateNotificationAfterBundleChange() {
   if (!channel.value)
     return
 
+  const routePath = route.path
   const appId = packageId.value
   const channelName = channel.value.name
   if (!appId || !channelName)
     return
   if (!(await isPushUpdateReady(appId)))
     return
-  if (packageId.value !== appId || channel.value?.name !== channelName)
+  if (
+    route.path !== routePath
+    || !route.path.includes('/channel/')
+    || packageId.value !== appId
+    || channel.value?.name !== channelName
+  )
     return
 
   dialogStore.openDialog({
