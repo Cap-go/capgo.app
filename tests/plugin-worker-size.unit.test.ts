@@ -2,6 +2,9 @@ import { execFileSync } from 'node:child_process'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
+const SCRIPT_TIMEOUT_MS = 100_000
+const TEST_TIMEOUT_MS = 120_000
+
 describe('plugin worker size budget', () => {
   it('keeps the Cloudflare plugin worker within +15% of the committed size baseline', () => {
     let output = ''
@@ -10,6 +13,7 @@ describe('plugin worker size budget', () => {
         cwd: resolve('.'),
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: SCRIPT_TIMEOUT_MS,
       })
     }
     catch (error) {
@@ -22,5 +26,5 @@ describe('plugin worker size budget', () => {
     if (output)
       console.log(output)
     expect(output).toContain('Plugin worker size vs baseline:')
-  }, 120_000)
+  }, TEST_TIMEOUT_MS)
 })

@@ -15,7 +15,7 @@
  */
 
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
@@ -23,6 +23,8 @@ const ROOT = resolve(import.meta.dirname, '..')
 const BASELINE_PATH = join(ROOT, 'scripts/bench/plugin_worker_size_baseline.json')
 const WARN_PCT = 5
 const FAIL_PCT = 15
+const WRANGLER_TIMEOUT_MS = 90_000
+const GIT_TIMEOUT_MS = 10_000
 
 interface SizeBaseline {
   generatedAt: string
@@ -47,40 +49,51 @@ function gitHead(): string {
   const result = spawnSync('git', ['rev-parse', 'HEAD'], {
     cwd: ROOT,
     encoding: 'utf8',
+    timeout: GIT_TIMEOUT_MS,
   })
   return result.status === 0 ? result.stdout.trim() : 'unknown'
 }
 
 function measurePluginWorkerSize(): MeasuredSize {
   const outDir = mkdtempSync(join(tmpdir(), 'capgo-plugin-size-'))
-  const result = spawnSync('bunx', [
-    'wrangler',
-    'deploy',
-    '--config',
-    'cloudflare_workers/plugin/wrangler.jsonc',
-    '--env=local',
-    '--dry-run',
-    '--minify',
-    `--outdir=${outDir}`,
-  ], {
-    cwd: ROOT,
-    encoding: 'utf8',
-    maxBuffer: 32 * 1024 * 1024,
-  })
-  if (result.status !== 0) {
-    throw new Error(`wrangler dry-run failed:\n${result.stdout}\n${result.stderr}`)
+  try {
+    const result = spawnSync('bunx', [
+      'wrangler',
+      'deploy',
+      '--config',
+      'cloudflare_workers/plugin/wrangler.jsonc',
+      '--env=local',
+      '--dry-run',
+      '--minify',
+      `--outdir=${outDir}`,
+    ], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      maxBuffer: 32 * 1024 * 1024,
+      timeout: WRANGLER_TIMEOUT_MS,
+    })
+    if (result.error)
+      throw new Error(`wrangler dry-run failed to start: ${result.error.message}`)
+    if (result.signal)
+      throw new Error(`wrangler dry-run killed by signal ${result.signal} (timeout ${WRANGLER_TIMEOUT_MS}ms?)`)
+    if (result.status !== 0) {
+      throw new Error(`wrangler dry-run failed:\n${result.stdout}\n${result.stderr}`)
+    }
+    const uploadMatch = result.stdout.match(/Total Upload:\s*([\d.]+)\s*KiB\s*\/\s*gzip:\s*([\d.]+)\s*KiB/)
+    if (!uploadMatch) {
+      throw new Error(`Could not parse wrangler upload size from output:\n${result.stdout}`)
+    }
+    const uploadKiB = Number.parseFloat(uploadMatch[1])
+    const gzipKiB = Number.parseFloat(uploadMatch[2])
+    return {
+      uploadKiB,
+      gzipKiB,
+      uploadBytes: Math.round(uploadKiB * 1024),
+      gzipBytes: Math.round(gzipKiB * 1024),
+    }
   }
-  const uploadMatch = result.stdout.match(/Total Upload:\s*([\d.]+)\s*KiB\s*\/\s*gzip:\s*([\d.]+)\s*KiB/)
-  if (!uploadMatch) {
-    throw new Error(`Could not parse wrangler upload size from output:\n${result.stdout}`)
-  }
-  const uploadKiB = Number.parseFloat(uploadMatch[1])
-  const gzipKiB = Number.parseFloat(uploadMatch[2])
-  return {
-    uploadKiB,
-    gzipKiB,
-    uploadBytes: Math.round(uploadKiB * 1024),
-    gzipBytes: Math.round(gzipKiB * 1024),
+  finally {
+    rmSync(outDir, { recursive: true, force: true })
   }
 }
 
