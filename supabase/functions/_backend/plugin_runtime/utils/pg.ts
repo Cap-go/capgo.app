@@ -449,53 +449,162 @@ export function getDrizzleClient(db: PluginPgClient, options?: { logger?: boolea
   return drizzle({ client: db, logger: options?.logger ?? true })
 }
 
-// Helper to extract detailed error information from pg errors
-export function logPgError(c: Context, functionName: string, error: unknown) {
-  const e = error as Error & {
-    code?: string
-    errno?: number
-    syscall?: string
-    address?: string
-    port?: number
-    severity?: string
-    detail?: string
-    hint?: string
-    position?: string
-    routine?: string
-    file?: string
-    line?: string
-    column?: string
+const POSTGRES_ERROR_FIELDS = [
+  // PostgreSQL server errors (node-postgres DatabaseError)
+  'severity',
+  'code',
+  'detail',
+  'hint',
+  'position',
+  'internalPosition',
+  'internalQuery',
+  'where',
+  'schema',
+  'table',
+  'column',
+  'dataType',
+  'constraint',
+  'file',
+  'line',
+  'routine',
+
+  // Network, socket, and TLS errors
+  'errno',
+  'syscall',
+  'address',
+  'port',
+  'host',
+  'hostname',
+  'library',
+  'function',
+  'reason',
+  'opensslErrorStack',
+
+  // Driver/runtime errors
+  'status',
+  'statusCode',
+  'command',
+  'query',
+] as const
+
+const MAX_POSTGRES_ERROR_CAUSE_DEPTH = 8
+
+function readErrorProperty(error: object, key: PropertyKey): unknown {
+  try {
+    return Reflect.get(error, key)
+  }
+  catch (propertyError) {
+    return `[unreadable property: ${propertyError instanceof Error ? propertyError.message : String(propertyError)}]`
+  }
+}
+
+function serializePrimitiveErrorValue(value: unknown): unknown {
+  if (typeof value === 'bigint')
+    return value.toString()
+  if (typeof value === 'symbol')
+    return value.toString()
+  if (typeof value === 'function')
+    return `[function ${value.name || 'anonymous'}]`
+  return value
+}
+
+/**
+ * Serialize the complete Drizzle/node-postgres cause chain for Cloudflare logs.
+ *
+ * Error fields such as `code`, `severity`, and `routine` are not reliably
+ * enumerable, while Drizzle wraps the original driver error in `cause`. Read
+ * both explicitly so transient replica/Hyperdrive failures retain their
+ * PostgreSQL SQLSTATE and network diagnostics.
+ */
+export function serializePostgresError(
+  error: unknown,
+  seen = new WeakSet<object>(),
+  depth = 0,
+): Record<string, unknown> {
+  if (error === null || (typeof error !== 'object' && typeof error !== 'function')) {
+    return {
+      type: error === null ? 'null' : typeof error,
+      value: serializePrimitiveErrorValue(error),
+    }
   }
 
+  if (seen.has(error))
+    return { type: error.constructor?.name ?? 'Object', circular: true }
+
+  if (depth >= MAX_POSTGRES_ERROR_CAUSE_DEPTH)
+    return { type: error.constructor?.name ?? 'Object', truncated: true }
+
+  seen.add(error)
+
+  const serialized: Record<string, unknown> = {
+    type: error.constructor?.name ?? 'Object',
+  }
+  const name = readErrorProperty(error, 'name')
+  const message = readErrorProperty(error, 'message')
+  const stack = readErrorProperty(error, 'stack')
+
+  if (name !== undefined)
+    serialized.name = serializePrimitiveErrorValue(name)
+  if (message !== undefined)
+    serialized.message = serializePrimitiveErrorValue(message)
+  if (stack !== undefined)
+    serialized.stack = serializePrimitiveErrorValue(stack)
+
+  for (const field of POSTGRES_ERROR_FIELDS) {
+    const value = readErrorProperty(error, field)
+    if (value !== undefined)
+      serialized[field] = serializePrimitiveErrorValue(value)
+  }
+
+  const params = readErrorProperty(error, 'params')
+  if (Array.isArray(params)) {
+    // Query parameters can contain credentials or other user-provided secrets.
+    // The affected app is logged explicitly by the caller instead.
+    serialized.parameterCount = params.length
+  }
+
+  const aggregateErrors = readErrorProperty(error, 'errors')
+  if (Array.isArray(aggregateErrors)) {
+    serialized.errors = aggregateErrors.map(nestedError => serializePostgresError(nestedError, seen, depth + 1))
+  }
+
+  const cause = readErrorProperty(error, 'cause')
+  if (cause !== undefined)
+    serialized.cause = serializePostgresError(cause, seen, depth + 1)
+
+  return serialized
+}
+
+export function logPgError(
+  c: Context,
+  functionName: string,
+  error: unknown,
+  diagnostics: Record<string, unknown> = {},
+) {
+  const cf = c.req.raw.cf
+
+  // TODO(plugin-db-debug): Reduce this payload after the intermittent
+  // getAppOwnerPostgres replica/Hyperdrive failure has been identified.
   cloudlogErr({
     requestId: c.get('requestId'),
     message: `${functionName} - PostgreSQL Error`,
-    error: {
-      // Basic error info
-      message: e.message,
-      name: e.name,
-      stack: e.stack,
-
-      // PostgreSQL-specific error codes
-      code: e.code, // e.g., '57P01' for connection termination, 'ECONNREFUSED', 'ETIMEDOUT'
-      severity: e.severity,
-      detail: e.detail,
-      hint: e.hint,
-
-      // Network-level errors
-      errno: e.errno, // System error number
-      syscall: e.syscall, // System call that failed (e.g., 'connect', 'read', 'write')
-      address: e.address, // IP address
-      port: e.port, // Port number
-
-      // Query position info
-      position: e.position,
-      routine: e.routine,
-
-      // File info for debugging
-      file: e.file,
-      line: e.line,
-      column: e.column,
+    error: serializePostgresError(error),
+    diagnostics: {
+      version: 1,
+      functionName,
+      databaseSource: c.get('databaseSource') ?? c.res.headers.get('X-Database-Source') ?? 'unknown',
+      workerSource: c.res.headers.get('X-Worker-Source') ?? 'unknown',
+      runtime: getRuntimeKey(),
+      request: {
+        method: c.req.method,
+        path: c.req.path,
+        rayId: c.req.header('cf-ray') ?? c.get('requestId'),
+        userAgent: c.req.header('user-agent'),
+        colo: cf?.colo,
+        continent: cf?.continent,
+        country: cf?.country,
+      },
+      ...diagnostics,
     },
   })
 }
@@ -1168,7 +1277,10 @@ export async function getAppOwnerPostgres(
     return appOwner as AppOwnerPostgresResult
   }
   catch (e: unknown) {
-    logPgError(c, 'getAppOwnerPostgres', e)
+    logPgError(c, 'getAppOwnerPostgres', e, {
+      appId,
+      planActions: actions,
+    })
     return null
   }
 }
