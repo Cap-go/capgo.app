@@ -317,6 +317,66 @@ replica_region_name() {
   sanitize_identifier_part "$host_part"
 }
 
+
+# Terminate any walsender holding the slot, then drop it. Retries until inactive.
+drop_source_slot_with_retry() {
+  local slot_name="${1:-${REPLICA_SLOT_NAME}}"
+  local source_url="${2:-${SOURCE_DB_URL}}"
+  local max_attempts="${3:-15}"
+
+  if [[ -z "$slot_name" || -z "$source_url" ]]; then
+    echo "Error: drop_source_slot_with_retry requires slot name and source URL"
+    exit 1
+  fi
+
+  echo "==> Dropping source slot ${slot_name} if present..."
+  psql-17 "$source_url" -v ON_ERROR_STOP=1 \
+    -v slot_name="$slot_name" \
+    -v max_attempts="$max_attempts" <<'SQL'
+DO $$
+DECLARE
+  target_slot text := :'slot_name';
+  max_attempts int := :'max_attempts'::int;
+  slot record;
+  attempt int := 0;
+BEGIN
+  LOOP
+    attempt := attempt + 1;
+    SELECT slot_name, active, active_pid
+    INTO slot
+    FROM pg_replication_slots
+    WHERE slot_name = target_slot;
+
+    IF slot.slot_name IS NULL THEN
+      RAISE NOTICE 'No source slot named %', target_slot;
+      RETURN;
+    END IF;
+
+    IF NOT COALESCE(slot.active, false) THEN
+      PERFORM pg_drop_replication_slot(slot.slot_name);
+      RAISE NOTICE 'Dropped slot: %', slot.slot_name;
+      RETURN;
+    END IF;
+
+    RAISE NOTICE 'Slot % still active (pid %, attempt %/%)',
+      slot.slot_name, slot.active_pid, attempt, max_attempts;
+
+    IF slot.active_pid IS NOT NULL THEN
+      PERFORM pg_terminate_backend(slot.active_pid);
+    END IF;
+
+    IF attempt >= max_attempts THEN
+      RAISE EXCEPTION 'replication slot % still active for PID % after % attempts',
+        slot.slot_name, slot.active_pid, attempt;
+    END IF;
+
+    PERFORM pg_sleep(2);
+  END LOOP;
+END
+$$;
+SQL
+}
+
 discover_publication_name() {
   local existing
   local count
