@@ -8,10 +8,10 @@ REPLICA_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPLICA_ENV_FILE="${REPLICA_ENV_FILE:-${REPLICA_SCRIPT_DIR}/../internal/cloudflare/.env.prod}"
 
 # Capgo production defaults for the single Google Cloud SQL eu-2 subscriber.
-# DB URLs come from .env.prod; names are fixed so bun scripts need zero exports.
+# DB URLs come from .env.prod; pub/sub/region are fixed so bun scripts need zero exports.
+# Slot name is discovered from the live subscription when present (fallback: <sub>_slot).
 : "${READ_REPLICA_PUBLICATION_NAME:=capgo_google_eu_2_pub}"
 : "${READ_REPLICA_SUBSCRIPTION_NAME:=capgo_google_eu_2}"
-: "${READ_REPLICA_SLOT_NAME:=capgo_google_eu_2_slot}"
 : "${READ_REPLICA_REGION:=eu_2}"
 
 REPLICA_TABLES=(
@@ -371,7 +371,12 @@ discover_subscription() {
       WHERE subname = '${REPLICA_SUBSCRIPTION_NAME}'
       LIMIT 1;
     " 2>/dev/null || true)
-    REPLICA_SLOT_NAME="${READ_REPLICA_SLOT_NAME:-${slotname:-${REPLICA_SUBSCRIPTION_NAME}_slot}}"
+    # Prefer the live subscription slot when present; only then fall back.
+    if [[ -n "$slotname" ]]; then
+      REPLICA_SLOT_NAME="$slotname"
+    else
+      REPLICA_SLOT_NAME="${READ_REPLICA_SLOT_NAME:-${REPLICA_SUBSCRIPTION_NAME}_slot}"
+    fi
     return 0
   fi
 
@@ -386,7 +391,11 @@ discover_subscription() {
     subname="${rows%%|*}"
     slotname="${rows#*|}"
     REPLICA_SUBSCRIPTION_NAME="$subname"
-    REPLICA_SLOT_NAME="${READ_REPLICA_SLOT_NAME:-${slotname:-${subname}_slot}}"
+    if [[ -n "$slotname" ]]; then
+      REPLICA_SLOT_NAME="$slotname"
+    else
+      REPLICA_SLOT_NAME="${READ_REPLICA_SLOT_NAME:-${subname}_slot}"
+    fi
     return 0
   fi
 
