@@ -75,7 +75,7 @@ app.post('/', middlewareAuth(), async (c) => {
   if (body.installSourceCounts)
     return c.json({ installSources: await countInstallSources(c, body.appId) })
   if (body.count)
-    return c.json({ count: await countDevices(c, body.appId, body.customIdMode ?? false, devicesIds, body.versionName, body.search?.trim(), body.updated_at_gt, body.updated_at_lte) })
+    return c.json({ count: await countDevices(c, body.appId, body.customIdMode ?? false, devicesIds, body.versionName, body.search?.trim(), { gt: body.updated_at_gt, lte: body.updated_at_lte }) })
   return c.json(await readDevices(c, {
     app_id: body.appId,
     version_name: body.versionName,

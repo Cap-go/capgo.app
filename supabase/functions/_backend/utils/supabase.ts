@@ -1607,8 +1607,7 @@ export async function countDevicesSB(
   deviceIds: string[] = [],
   versionName?: string,
   search?: string,
-  updated_at_gt?: string,
-  updated_at_lte?: string,
+  updatedAt?: { gt?: string, lte?: string },
 ) {
   let req = supabaseAdmin(c)
     .from('devices')
@@ -1639,10 +1638,10 @@ export async function countDevicesSB(
   if (versionName)
     req = req.eq('version_name', versionName)
 
-  if (updated_at_gt)
-    req = req.gt('updated_at', updated_at_gt)
-  if (updated_at_lte)
-    req = req.lte('updated_at', updated_at_lte)
+  if (updatedAt?.gt)
+    req = req.gt('updated_at', updatedAt.gt)
+  if (updatedAt?.lte)
+    req = req.lte('updated_at', updatedAt.lte)
 
   const { count, error } = await req
 

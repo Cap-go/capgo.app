@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { DateRangePreset } from '~/services/dateRange'
+import type { DateRangePreset, RollingDateRangePreset } from '~/services/dateRange'
 import { VueDatePicker } from '@vuepic/vue-datepicker'
 import { onClickOutside, onKeyStroke, useMediaQuery, useMutationObserver } from '@vueuse/core'
 import { computed, onMounted, ref, watch } from 'vue'
@@ -8,12 +8,12 @@ import CalendarDaysIcon from '~icons/heroicons/calendar-days'
 import ChevronDownIcon from '~icons/heroicons/chevron-down'
 import { formatLocalDateTime } from '~/services/date'
 import {
+  DATE_RANGE_PRESET_GROUPS,
+  DATE_RANGE_PRESET_LABEL_KEYS,
   DEFAULT_DATE_RANGE_PRESET,
   getDateRangeForPreset,
 } from '~/services/dateRange'
 import '@vuepic/vue-datepicker/dist/main.css'
-
-type PresetMode = Exclude<DateRangePreset, 'custom'>
 
 const props = withDefaults(defineProps<{
   modelValue?: [Date, Date] | null
@@ -41,7 +41,7 @@ const isDark = ref(false)
 function syncThemeFromHtml() {
   const root = document.documentElement
   isDark.value = root.classList.contains('dark')
-    || root.getAttribute('data-theme') === 'capgodark'
+    || root.dataset.theme === 'capgodark'
 }
 onMounted(syncThemeFromHtml)
 useMutationObserver(
@@ -51,7 +51,7 @@ useMutationObserver(
 )
 
 interface PresetOption {
-  mode: PresetMode
+  mode: RollingDateRangePreset
   label: string
 }
 interface PresetGroup {
@@ -59,36 +59,15 @@ interface PresetGroup {
   items: PresetOption[]
 }
 
-const presetGroups = computed((): PresetGroup[] => [
-  {
-    key: 'hours',
-    items: [
-      { mode: '30min', label: t('last-30-minutes') },
-      { mode: '1h', label: t('last-1-hour') },
-      { mode: '6h', label: t('last-6-hours') },
-      { mode: '12h', label: t('last-12-hours') },
-      { mode: '24h', label: t('last-24-hours') },
-    ],
-  },
-  {
-    key: 'days',
-    items: [
-      { mode: '3day', label: t('3-days') },
-      { mode: '7day', label: t('7-days') },
-      { mode: '14day', label: t('14-days') },
-      { mode: '30day', label: t('30-days') },
-      { mode: '90day', label: t('90-days') },
-    ],
-  },
-  {
-    key: 'months',
-    items: [
-      { mode: 'quarter', label: t('last-quarter') },
-      { mode: '6month', label: t('last-6-months') },
-      { mode: '12month', label: t('last-12-months') },
-    ],
-  },
-])
+const presetGroups = computed((): PresetGroup[] =>
+  DATE_RANGE_PRESET_GROUPS.map(group => ({
+    key: group.key,
+    items: group.modes.map(mode => ({
+      mode,
+      label: t(DATE_RANGE_PRESET_LABEL_KEYS[mode]),
+    })),
+  })),
+)
 
 const allPresets = computed(() => presetGroups.value.flatMap(g => g.items))
 
@@ -96,6 +75,11 @@ const isOpen = ref(false)
 const pickerContainer = ref<HTMLElement | null>(null)
 const draftMode = ref<DateRangePreset>(props.mode)
 const pickerRange = ref<Date[] | null>(null)
+
+const boundFields = computed(() => [
+  { id: 'start', label: t('start'), value: pickerRange.value?.[0] },
+  { id: 'end', label: t('end'), value: pickerRange.value?.[1] },
+])
 
 const multiCalendarConfig = computed(() => ({
   count: isWide.value ? 2 : 1,
@@ -157,7 +141,7 @@ function togglePicker() {
   isOpen.value = true
 }
 
-function selectPreset(mode: PresetMode) {
+function selectPreset(mode: RollingDateRangePreset) {
   draftMode.value = mode
   const range = getDateRangeForPreset(mode)
   pickerRange.value = [range.start, range.end]
@@ -228,12 +212,12 @@ function presetButtonClass(active: boolean) {
       />
     </button>
 
-    <div
+    <dialog
       v-if="isOpen"
       id="date-range-picker-popover"
-      role="dialog"
+      open
       :aria-label="`${t('date-range')}: ${triggerLabel}`"
-      class="date-range-popover absolute right-0 top-full z-50 mt-2 w-[min(46rem,calc(100vw-1.5rem))] overflow-hidden rounded-lg border shadow-[0_12px_40px_-12px_rgba(15,23,42,0.35)]"
+      class="date-range-popover absolute right-0 top-full z-50 m-0 mt-2 w-[min(46rem,calc(100vw-1.5rem))] overflow-hidden rounded-lg border p-0 shadow-[0_12px_40px_-12px_rgba(15,23,42,0.35)]"
       :class="isDark
         ? 'border-slate-700 bg-slate-950 text-slate-100 shadow-[0_16px_48px_-12px_rgba(0,0,0,0.65)]'
         : 'border-slate-200 bg-white text-slate-800'"
@@ -307,47 +291,25 @@ function presetButtonClass(active: boolean) {
         :class="isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-200 bg-slate-50'"
       >
         <div class="grid flex-1 grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-3">
-          <div>
+          <div v-for="field in boundFields" :key="field.id">
             <div
-              id="date-range-start-label"
+              :id="`date-range-${field.id}-label`"
               class="mb-1 text-[11px] font-medium tracking-wide uppercase"
               :class="isDark ? 'text-slate-400' : 'text-slate-500'"
             >
-              {{ t('start') }}
+              {{ field.label }}
             </div>
             <div
               class="flex h-9 items-center gap-2 rounded-md border px-2.5"
               :class="isDark ? 'border-slate-600 bg-slate-950' : 'border-slate-200 bg-white'"
-              aria-labelledby="date-range-start-label"
+              :aria-labelledby="`date-range-${field.id}-label`"
             >
               <CalendarDaysIcon class="h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden="true" />
               <span
                 class="truncate font-mono text-[13px] tabular-nums"
                 :class="isDark ? 'text-slate-100' : 'text-slate-800'"
               >
-                {{ pickerRange?.[0] instanceof Date ? formatLocalDateTime(pickerRange[0]) : '—' }}
-              </span>
-            </div>
-          </div>
-          <div>
-            <div
-              id="date-range-end-label"
-              class="mb-1 text-[11px] font-medium tracking-wide uppercase"
-              :class="isDark ? 'text-slate-400' : 'text-slate-500'"
-            >
-              {{ t('end') }}
-            </div>
-            <div
-              class="flex h-9 items-center gap-2 rounded-md border px-2.5"
-              :class="isDark ? 'border-slate-600 bg-slate-950' : 'border-slate-200 bg-white'"
-              aria-labelledby="date-range-end-label"
-            >
-              <CalendarDaysIcon class="h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden="true" />
-              <span
-                class="truncate font-mono text-[13px] tabular-nums"
-                :class="isDark ? 'text-slate-100' : 'text-slate-800'"
-              >
-                {{ pickerRange?.[1] instanceof Date ? formatLocalDateTime(pickerRange[1]) : '—' }}
+                {{ field.value instanceof Date ? formatLocalDateTime(field.value) : '—' }}
               </span>
             </div>
           </div>
@@ -361,11 +323,23 @@ function presetButtonClass(active: boolean) {
           {{ t('apply') }}
         </button>
       </div>
-    </div>
+    </dialog>
   </div>
 </template>
 
 <style scoped>
+dialog.date-range-popover {
+  position: absolute;
+  inset: auto;
+  max-width: none;
+  max-height: none;
+  color: inherit;
+}
+
+dialog.date-range-popover::backdrop {
+  display: none;
+}
+
 .date-range-calendar :deep(.dp__main) {
   font-family: inherit;
 }

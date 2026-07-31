@@ -951,8 +951,7 @@ export async function countDevicesCF(
   deviceIds: string[] = [],
   versionName?: string,
   search?: string,
-  updated_at_gt?: string,
-  updated_at_lte?: string,
+  updatedAt?: { gt?: string, lte?: string },
 ) {
   // Use Analytics Engine DEVICE_INFO for counting devices
   const conditions = [`index1 = '${escapeSqlString(app_id)}'`]
@@ -981,10 +980,10 @@ export async function countDevicesCF(
   if (versionName)
     conditions.push(`blob2 = '${escapeSqlString(versionName)}'`)
 
-  if (updated_at_gt)
-    conditions.push(`timestamp > toDateTime('${escapeSqlString(formatDateCF(updated_at_gt))}')`)
-  if (updated_at_lte)
-    conditions.push(`timestamp <= toDateTime('${escapeSqlString(formatDateCF(updated_at_lte))}')`)
+  if (updatedAt?.gt)
+    conditions.push(`timestamp > toDateTime('${escapeSqlString(formatDateCF(updatedAt.gt))}')`)
+  if (updatedAt?.lte)
+    conditions.push(`timestamp <= toDateTime('${escapeSqlString(formatDateCF(updatedAt.lte))}')`)
 
   const query = `SELECT COUNT(DISTINCT blob1) AS total
 FROM device_info

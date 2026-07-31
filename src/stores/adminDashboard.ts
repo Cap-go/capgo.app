@@ -2,7 +2,6 @@ import type { DateRangePreset, DateRangeValue } from '~/services/dateRange'
 import { acceptHMRUpdate, defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import {
-  DATE_RANGE_DURATIONS_MS,
   DEFAULT_DATE_RANGE_PRESET,
   getDateRangeForPreset as getDateRangeForMode,
 } from '~/services/dateRange'
@@ -12,7 +11,8 @@ export type MetricCategory = 'uploads' | 'distribution' | 'failures' | 'success_
 
 export type DateRangeMode = DateRangePreset
 export const DEFAULT_DATE_RANGE_MODE = DEFAULT_DATE_RANGE_PRESET
-export { DATE_RANGE_DURATIONS_MS, getDateRangeForMode }
+export { getDateRangeForMode }
+export { DATE_RANGE_DURATIONS_MS } from '~/services/dateRange'
 
 type DateRange = DateRangeValue
 
