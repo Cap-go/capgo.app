@@ -17,6 +17,7 @@ export function useAppPage(options: UseAppPageOptions) {
   const supabase = useSupabase()
   const displayStore = useDisplayStore()
   const app = ref<Database['public']['Tables']['apps']['Row']>()
+  let loadGeneration = 0
 
   async function loadAppInfo() {
     try {
@@ -25,29 +26,42 @@ export function useAppPage(options: UseAppPageOptions) {
         .select()
         .eq('app_id', id.value)
         .single()
-      app.value = dataApp || app.value
+      return dataApp
     }
     catch (error) {
       console.error(error)
+      return null
     }
   }
 
-  async function refreshData() {
+  async function refreshData(generation: number) {
     isLoading.value = true
     try {
-      await loadAppInfo()
+      const dataApp = await loadAppInfo()
+      if (generation !== loadGeneration)
+        return
+      if (dataApp)
+        app.value = dataApp
     }
     catch (error) {
+      if (generation !== loadGeneration)
+        return
       console.error(error)
     }
-    isLoading.value = false
+    finally {
+      if (generation === loadGeneration)
+        isLoading.value = false
+    }
   }
 
   watchEffect(async () => {
     if (route.params.app && lastPath.value !== route.path) {
       lastPath.value = route.path
       id.value = route.params.app as string
-      await refreshData()
+      const generation = ++loadGeneration
+      await refreshData(generation)
+      if (generation !== loadGeneration)
+        return
       displayStore.NavTitle = options.navTitle ?? ''
       displayStore.defaultBack = '/apps'
     }

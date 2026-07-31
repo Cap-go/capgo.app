@@ -69,7 +69,8 @@ const isOrgUnpaid = computed(() => {
 
 // Check if we're on a settings page (which should not show the payment modal)
 const isOnSettingsPage = computed(() => {
-  return /^\/app\/[^/]+\/settings(?:\/|$)/.test(route.path)
+  // Only the settings root is payment-exempt. Access stays gated like before.
+  return /^\/app\/[^/]+\/settings\/?$/.test(route.path)
 })
 
 // Show payment overlay only when org is unpaid AND not on settings page
