@@ -116,12 +116,16 @@ function createOrgRow(overrides: Partial<OrgRow> & Pick<OrgRow, 'id' | 'name' | 
 }
 
 function createOrgSelectBuilder(data: OrgRow) {
-  return {
+  const builder = {
+    data,
     select: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
     is: vi.fn().mockReturnThis(),
     single: vi.fn().mockResolvedValue({ data, error: null }),
+    maybeSingle: vi.fn().mockResolvedValue({ data, error: null }),
   }
+  pendingOrganizationSelects.push(builder)
+  return builder
 }
 
 interface OrganizationUpdateBuilder {
@@ -134,6 +138,10 @@ interface OrganizationUpdateBuilder {
   maybeSingle: Mock<() => Promise<{ data: Partial<OrgRow> | null, error: { message: string } | null }>>
 }
 
+const pendingOrganizationSelects: Array<{
+  data: OrgRow
+  maybeSingle: () => Promise<{ data: OrgRow | null, error: { message: string } | null }>
+}> = []
 const pendingOrganizationUpdates: OrganizationUpdateBuilder[] = []
 let organizationUpdateQueryMock: ReturnType<typeof vi.fn>
 
@@ -170,6 +178,19 @@ function recordDirectOrganizationUpdate(builder: OrganizationUpdateBuilder, text
 
 function mockOrganizationUpdates() {
   const query = vi.fn(async (text: string, params?: unknown[]) => {
+    if (text.includes('strip_html')) {
+      const raw = String(params?.[0] ?? '')
+      return { rows: [{ strip_html: raw.replace(/<[^>]*>/g, '') }] }
+    }
+    if (text.startsWith('SELECT * FROM public.orgs')) {
+      const builder = pendingOrganizationSelects.shift()
+      if (!builder)
+        return { rows: [] }
+      const { data, error } = await builder.maybeSingle()
+      if (error)
+        throw new Error(error.message)
+      return { rows: data ? [data] : [] }
+    }
     if (text.startsWith('UPDATE public.orgs')) {
       const builder = pendingOrganizationUpdates.shift()
       if (!builder)
@@ -212,6 +233,7 @@ describe('organization put Stripe sync', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     pendingOrganizationUpdates.length = 0
+    pendingOrganizationSelects.length = 0
     closeClientMock.mockResolvedValue(undefined)
     mockOrganizationUpdates()
     checkPermissionMock.mockResolvedValue(true)
@@ -470,7 +492,6 @@ describe('organization put Stripe sync', () => {
 
     expect(response.status).toBe(200)
     expect(getStripeCustomerNameMock).toHaveBeenCalledWith(expect.anything(), 'cus_123')
-    expect(from).toHaveBeenCalledTimes(1)
     expect(getOrganizationUpdateCalls()).toHaveLength(1)
   })
 
@@ -547,7 +568,6 @@ describe('organization put Stripe sync', () => {
       error: 'connection reset',
       stripeSyncState: 'unknown',
     })
-    expect(from).toHaveBeenCalledTimes(1)
     expect(getOrganizationUpdateCalls()).toHaveLength(1)
   })
 

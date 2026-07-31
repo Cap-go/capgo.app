@@ -255,8 +255,10 @@ async function sanitizeOrgNameForSync(
 ) {
   // Direct SQL avoids Kong/PostgREST upstream flakes under parallel test load.
   const pgPool = getPgClient(c)
+  let client: Awaited<ReturnType<typeof pgPool.connect>> | null = null
   try {
-    const result = await pgPool.query<{ strip_html: string | null }>(
+    client = await pgPool.connect()
+    const result = await client.query<{ strip_html: string | null }>(
       'SELECT public.strip_html($1) AS strip_html',
       [name],
     )
@@ -277,7 +279,8 @@ async function sanitizeOrgNameForSync(
     return sanitizedName
   }
   finally {
-    closeClient(c, pgPool)
+    client?.release()
+    await closeClient(c, pgPool)
   }
 }
 
@@ -376,8 +379,10 @@ async function getOrgForNameSync(
 ): Promise<OrgRow> {
   // Direct SQL avoids Kong/PostgREST upstream flakes under parallel test load.
   const pgPool = getPgClient(c)
+  let client: Awaited<ReturnType<typeof pgPool.connect>> | null = null
   try {
-    const result = await pgPool.query<OrgRow>(
+    client = await pgPool.connect()
+    const result = await client.query<OrgRow>(
       'SELECT * FROM public.orgs WHERE id = $1::uuid LIMIT 1',
       [orgId],
     )
@@ -388,7 +393,8 @@ async function getOrgForNameSync(
     return data
   }
   finally {
-    closeClient(c, pgPool)
+    client?.release()
+    await closeClient(c, pgPool)
   }
 }
 

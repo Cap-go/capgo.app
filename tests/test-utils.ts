@@ -568,6 +568,8 @@ export async function createAppVersions(
   // Bypass PostgREST/Kong for seed writes. Under shard parallelism Kong returns
   // "An invalid response was received from the upstream server" and Vitest sees
   // intermittent "no data" failures (backend shard 5/6 + stats.download_fail).
+  // On conflict: DO NOTHING — never UPDATE ready bundles (trigger UPDATE OF
+  // storage_provider/r2_path/session_key raises bundle_already_ready).
   const ownerOrg = values.owner_org ?? (await executeSQL(
     'SELECT owner_org FROM public.apps WHERE app_id = $1 LIMIT 1',
     [appId],
@@ -584,26 +586,14 @@ export async function createAppVersions(
   const comment = values.comment ?? null
   const userId = values.user_id ?? null
 
-  const rows = await executeSQL(
+  const inserted = await executeSQL(
     `INSERT INTO public.app_versions (
        app_id, name, owner_org, deleted, external_url, checksum, session_key,
        storage_provider, min_update_version, r2_path, link, comment, user_id
      ) VALUES (
        $1, $2, $3::uuid, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::uuid
      )
-     ON CONFLICT (name, app_id) DO UPDATE SET
-       owner_org = EXCLUDED.owner_org,
-       deleted = EXCLUDED.deleted,
-       external_url = EXCLUDED.external_url,
-       checksum = EXCLUDED.checksum,
-       session_key = EXCLUDED.session_key,
-       storage_provider = EXCLUDED.storage_provider,
-       min_update_version = EXCLUDED.min_update_version,
-       r2_path = EXCLUDED.r2_path,
-       link = EXCLUDED.link,
-       comment = EXCLUDED.comment,
-       user_id = COALESCE(EXCLUDED.user_id, public.app_versions.user_id),
-       updated_at = now()
+     ON CONFLICT (name, app_id) DO NOTHING
      RETURNING id, name`,
     [
       appId,
@@ -622,7 +612,10 @@ export async function createAppVersions(
     ],
   )
 
-  const data = rows[0]
+  const data = inserted[0] ?? (await executeSQL(
+    'SELECT id, name FROM public.app_versions WHERE app_id = $1 AND name = $2 LIMIT 1',
+    [appId, version],
+  ))[0]
   if (!data)
     throw new Error(`Error creating app_version for ${version}: no data`)
   return { id: Number(data.id), name: String(data.name) }
