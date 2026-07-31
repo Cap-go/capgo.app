@@ -755,14 +755,15 @@ export async function updateWithPG(
     }
   }
   if (version.name === 'builtin' && greaterOrEqual(parse(plugin_version), parse('6.2.0'))) {
-    if (body.version_name === 'builtin' && version.name === 'builtin') {
+    // plugin_parser rewrites version_name "builtin" -> version_build, so we cannot
+    // compare version_name === "builtin" here. Store binary => names match build;
+    // OTA bundle => version_name is the live bundle and differs from version_build.
+    if (version_name === version_build) {
       return updateError200(c, 'already_on_builtin', 'Already on builtin')
     }
-    else {
-      return updateError200(c, 'already_on_builtin', 'Already on builtin', {
-        version: 'builtin',
-      })
-    }
+    // Kill-switch: tell plugin to reset to the store binary (no error/kind).
+    await sendStatsAndDevice(c, device, [{ action: 'get', versionName: 'builtin' }])
+    return c.json({ version: 'builtin' }, 200)
   }
   else if (version.name === 'builtin' && !greaterOrEqual(parse(plugin_version), parse('6.2.0'))) {
     return updateError200(c, 'revert_to_builtin_plugin_version_too_old', 'revert_to_builtin used, but plugin version is too old')

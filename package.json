@@ -1,7 +1,7 @@
 {
   "name": "capgo-app",
   "type": "module",
-  "version": "12.206.5",
+  "version": "12.206.6",
   "private": true,
   "workspaces": [
     "cli",
@@ -14,6 +14,8 @@
     "readreplicate:replica": "bash read_replicate/replicate_to_replica.sh",
     "readreplicate:indexes": "bash read_replicate/replicate_ensure_indexes.sh",
     "readreplicate:status": "bash read_replicate/replicate_status.sh",
+    "readreplicate:upgrade:teardown": "bash read_replicate/replicate_upgrade_teardown.sh",
+    "readreplicate:upgrade:reconnect": "READ_REPLICA_FULL_RESET=1 bash read_replicate/replicate_to_replica.sh",
     "readreplicate:check-schema": "bash scripts/check-read-replica-schema.sh",
     "readreplicate:sync-schema": "bun scripts/sync-read-replica-schema.ts",
     "supabase:reset-postgres-config": "bash scripts/reset_supabase_postgres_config_defaults.sh",
@@ -80,6 +82,7 @@
     "test:coverage:all": "bun run cli:build && bun run supabase:with-env -- bunx vitest run --coverage.enabled=true tests/*",
     "test:all": "bun run cli:build && bun run supabase:with-env -- bunx vitest run tests/*",
     "check:plugin-runtime": "bun scripts/check_plugin_runtime_isolation.mjs",
+    "check:plugin-worker-size": "bun scripts/check_plugin_worker_size.ts",
     "test:unit": "vitest run tests/*.unit.test.ts",
     "test:db": "bash scripts/test-db-tinbase.sh",
     "test:backend:integration": "bun run supabase:with-env -- bunx vitest run --exclude=tests/*.unit.test.ts --exclude=tests/cli*",

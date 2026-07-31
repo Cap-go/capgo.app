@@ -369,7 +369,7 @@ watchEffect(async () => {
 })
 
 function goToDefaultChannelSettings() {
-  router.push(`/app/${route.params.app}/info`)
+  router.push(`/app/${route.params.app}/settings`)
 }
 
 const currentChannelVersion = computed(() => {

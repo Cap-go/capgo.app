@@ -21,6 +21,8 @@ declare module 'vue' {
     AppAccess: typeof import('./components/dashboard/AppAccess.vue')['default']
     AppNotFoundModal: typeof import('./components/AppNotFoundModal.vue')['default']
     AppOnboardingFlow: typeof import('./components/dashboard/AppOnboardingFlow.vue')['default']
+    AppPageFrame: typeof import('./components/dashboard/AppPageFrame.vue')['default']
+    AppPageNotFound: typeof import('./components/dashboard/AppPageNotFound.vue')['default']
     AppSetting: typeof import('./components/dashboard/AppSetting.vue')['default']
     AppTable: typeof import('./components/tables/AppTable.vue')['default']
     AuditLogTable: typeof import('./components/tables/AuditLogTable.vue')['default']

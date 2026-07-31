@@ -57,39 +57,8 @@ drop_target_subscription() {
 }
 
 drop_source_slot() {
-  echo "==> Dropping source slot ${REPLICA_SLOT_NAME} if present..."
-  psql-17 "$SOURCE_DB_URL" -v ON_ERROR_STOP=0 <<SQL
-DO \$\$
-DECLARE
-  slot record;
-BEGIN
-  SELECT slot_name, active, active_pid
-  INTO slot
-  FROM pg_replication_slots
-  WHERE slot_name = '${REPLICA_SLOT_NAME}';
-
-  IF slot.slot_name IS NOT NULL THEN
-    RAISE NOTICE 'Found replication slot: % (active: %)', slot.slot_name, slot.active;
-
-    IF slot.active AND slot.active_pid IS NOT NULL THEN
-      PERFORM pg_terminate_backend(slot.active_pid);
-      PERFORM pg_sleep(2);
-    END IF;
-
-    BEGIN
-      PERFORM pg_drop_replication_slot(slot.slot_name);
-      RAISE NOTICE 'Dropped slot: %', slot.slot_name;
-    EXCEPTION WHEN OTHERS THEN
-      RAISE NOTICE 'Could not drop slot: %', SQLERRM;
-    END;
-  ELSE
-    RAISE NOTICE 'No source slot named ${REPLICA_SLOT_NAME}';
-  END IF;
-END
-\$\$;
-SQL
+  drop_source_slot_with_retry "${REPLICA_SLOT_NAME}" "${SOURCE_DB_URL}"
 }
-
 source_slot_exists() {
   local exists
   exists=$(psql-17 "$SOURCE_DB_URL" -t -A -c "
@@ -194,11 +163,54 @@ SQL
 
 dump_table() {
   local table_name="$1"
+  local expected_count="${2:-}"
   local dump_file="${DUMP_DIR}/${table_name}.csv.gz"
+  local rows_file="${dump_file}.rows"
 
   echo "    [${table_name}] Dumping from source..."
-  psql-17 "$SOURCE_DB_URL" -c "\\COPY public.${table_name} TO STDOUT WITH (FORMAT csv, HEADER)" | gzip > "$dump_file"
+  # manifest (and similar) exceed Supabase statement_timeout on a full COPY.
+  # Do NOT validate dumps with wc -l: CSV fields can contain newlines.
+  rm -f "$dump_file" "$rows_file"
+  psql_no_timeout "$SOURCE_DB_URL" -v ON_ERROR_STOP=1 \
+    -c "\COPY public.${table_name} TO STDOUT WITH (FORMAT csv, HEADER)" \
+    | gzip > "$dump_file"
+
+  if ! gzip -t "$dump_file" 2>/dev/null || [[ ! -s "$dump_file" ]]; then
+    echo "Error: dump for ${table_name} is missing or corrupt"
+    rm -f "$dump_file" "$rows_file"
+    exit 1
+  fi
+
+  if [[ -n "$expected_count" ]]; then
+    printf '%s\n' "$expected_count" > "$rows_file"
+  fi
+
   echo "    [${table_name}] Dump complete: $(du -h "$dump_file" | cut -f1)"
+}
+
+table_count() {
+  local url="$1"
+  local table_name="$2"
+  psql_no_timeout "$url" -t -A -v ON_ERROR_STOP=1 -c "
+    SELECT COUNT(*)::bigint
+    FROM public.${table_name};
+  "
+}
+
+# Reuse dump only when gzip is healthy and sidecar row marker matches source count.
+# Never use wc -l on CSV (embedded newlines break that check).
+dump_reusable() {
+  local table_name="$1"
+  local expected="$2"
+  local dump_file="${DUMP_DIR}/${table_name}.csv.gz"
+  local rows_file="${dump_file}.rows"
+  local marked
+
+  [[ -f "$dump_file" && -f "$rows_file" ]] || return 1
+  gzip -t "$dump_file" 2>/dev/null || return 1
+  [[ -s "$dump_file" ]] || return 1
+  marked=$(tr -d '[:space:]' < "$rows_file")
+  [[ "$marked" == "$expected" ]]
 }
 
 restore_table() {
@@ -217,20 +229,84 @@ restore_table() {
   " | psql-17 "$REPLICA_TARGET_DB_URL" 2>/dev/null || true
 
   echo "    [${table_name}] Truncating and loading..."
-  psql-17 "$REPLICA_TARGET_DB_URL" -c "TRUNCATE TABLE public.${table_name};"
-  gunzip -c "$dump_file" | psql-17 "$REPLICA_TARGET_DB_URL" -c "\\COPY public.${table_name} FROM STDIN WITH (FORMAT csv, HEADER)"
+  psql_no_timeout "$REPLICA_TARGET_DB_URL" -v ON_ERROR_STOP=1 -c "TRUNCATE TABLE public.${table_name};"
+  gunzip -c "$dump_file" | psql_no_timeout "$REPLICA_TARGET_DB_URL" -v ON_ERROR_STOP=1 \
+    -c "\COPY public.${table_name} FROM STDIN WITH (FORMAT csv, HEADER)"
 
   echo "    [${table_name}] Recreating indexes..."
   awk "/CREATE (UNIQUE )?INDEX.*ON public\.${table_name}/,/;/" "${SCRIPT_DIR}/schema_replicate.sql" \
     | awk 'BEGIN{RS=";"} /CREATE.*INDEX/{print $0 ";"}' \
     | while read -r idx_sql; do
       if [[ -n "$idx_sql" ]]; then
-        psql-17 "$REPLICA_TARGET_DB_URL" -c "$idx_sql" 2>/dev/null || true
+        psql_no_timeout "$REPLICA_TARGET_DB_URL" -c "$idx_sql" 2>/dev/null || true
       fi
     done
 
-  COUNT=$(psql-17 "$REPLICA_TARGET_DB_URL" -t -A -c "SELECT COUNT(*) FROM public.${table_name};")
+  COUNT=$(table_count "$REPLICA_TARGET_DB_URL" "$table_name")
   echo "    [${table_name}] Restored: ${COUNT} rows"
+}
+
+target_table_exists() {
+  local table_name="$1"
+  psql-17 "$REPLICA_TARGET_DB_URL" -t -A -c "SELECT to_regclass('public.${table_name}') IS NOT NULL;" | grep -q t
+}
+
+replica_schema_present() {
+  local table
+  for table in "${REPLICA_TABLES[@]}"; do
+    target_table_exists "$table" || return 1
+  done
+  return 0
+}
+
+# Resume-friendly sync: skip when source/target counts already match.
+# Reuse a complete dump file when present; otherwise dump then restore.
+sync_table() {
+  local table_name="$1"
+  local source_count
+  local target_count
+  local source_after
+
+  source_count=$(table_count "$SOURCE_DB_URL" "$table_name")
+  if target_table_exists "$table_name"; then
+    target_count=$(table_count "$REPLICA_TARGET_DB_URL" "$table_name")
+  else
+    target_count=-1
+  fi
+
+  if [[ "$target_count" == "$source_count" ]]; then
+    echo "    [${table_name}] Already synced (${source_count} rows) — skipping"
+    return 0
+  fi
+
+  echo "    [${table_name}] Needs sync (source=${source_count} target=${target_count})"
+
+  if dump_reusable "$table_name" "$source_count"; then
+    echo "    [${table_name}] Reusing dump marked for ${source_count} rows"
+  else
+    dump_table "$table_name" "$source_count"
+  fi
+
+  restore_table "$table_name"
+  target_count=$(table_count "$REPLICA_TARGET_DB_URL" "$table_name")
+  source_after=$(table_count "$SOURCE_DB_URL" "$table_name")
+
+  # Accept snapshot match (pre-dump count) or live match (writes during copy).
+  if [[ "$target_count" == "$source_count" || "$target_count" == "$source_after" ]]; then
+    echo "    [${table_name}] Sync ok (target=${target_count} source_now=${source_after})"
+    return 0
+  fi
+
+  echo "    [${table_name}] Count drift after restore (target=${target_count} snapshot=${source_count} source_now=${source_after}); retrying once"
+  source_count="$source_after"
+  dump_table "$table_name" "$source_count"
+  restore_table "$table_name"
+  target_count=$(table_count "$REPLICA_TARGET_DB_URL" "$table_name")
+  source_after=$(table_count "$SOURCE_DB_URL" "$table_name")
+  if [[ "$target_count" != "$source_count" && "$target_count" != "$source_after" ]]; then
+    echo "Error: ${table_name} restore count ${target_count} != source ${source_after}"
+    exit 1
+  fi
 }
 
 drop_target_subscription
@@ -240,7 +316,7 @@ if [[ "$SUBSCRIPTION_ONLY" == "true" ]]; then
   ensure_publication_tables
   create_subscription
 else
-  echo "==> Full reset mode: resetting replica-managed schema and data."
+  echo "==> Full reset mode: syncing missing/outdated replica tables (resumable)."
   ensure_publication_tables
   ensure_source_slot_before_copy
 
@@ -249,24 +325,27 @@ CREATE SCHEMA IF NOT EXISTS public;
 GRANT ALL ON SCHEMA public TO PUBLIC;
 SQL
 
-  psql-17 "$REPLICA_TARGET_DB_URL" -v ON_ERROR_STOP=1 -f "${SCRIPT_DIR}/schema_replicate.sql"
-
   DUMP_DIR="${SCRIPT_DIR}/dumps"
   mkdir -p "$DUMP_DIR"
 
-  echo "==> Copying priority tables..."
+  if replica_schema_present; then
+    echo "==> Replica schema already present — skipping destructive schema reload (resume)."
+  else
+    echo "==> Applying replica schema (destructive first-time load)..."
+    psql-17 "$REPLICA_TARGET_DB_URL" -v ON_ERROR_STOP=1 -f "${SCRIPT_DIR}/schema_replicate.sql"
+  fi
+
+  echo "==> Syncing priority tables..."
   for table in "${REPLICA_PRIORITY_TABLES[@]}"; do
     if psql-17 "$SOURCE_DB_URL" -t -A -c "SELECT to_regclass('public.${table}') IS NOT NULL;" | grep -q t; then
-      dump_table "$table"
-      restore_table "$table"
+      sync_table "$table"
     fi
   done
 
-  echo "==> Copying deferred tables..."
+  echo "==> Syncing deferred tables..."
   for table in "${REPLICA_DEFERRED_TABLES[@]}"; do
     if psql-17 "$SOURCE_DB_URL" -t -A -c "SELECT to_regclass('public.${table}') IS NOT NULL;" | grep -q t; then
-      dump_table "$table"
-      restore_table "$table"
+      sync_table "$table"
     fi
   done
 

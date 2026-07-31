@@ -1,5 +1,5 @@
 // register vue composition api globally
-import type { Router } from 'vue-router'
+import type { RouteLocationNormalized, Router } from 'vue-router'
 import { CapacitorUpdater } from '@capgo/capacitor-updater'
 import { setupLayouts } from 'virtual:generated-layouts'
 import { createApp } from 'vue'
@@ -127,6 +127,15 @@ window.addEventListener('vite:preloadError', (event) => {
 })
 
 const guestPath = ['/login', '/delete_account', '/confirm-signup', '/forgot_password', '/resend_email', '/onboarding', '/register', '/invitation', '/scan', '/sso-callback']
+
+function redirectAppPath(suffix: string) {
+  return (to: RouteLocationNormalized) => ({
+    path: `/app/${encodeURIComponent(String((to.params as { app: string }).app))}${suffix}`,
+    query: to.query,
+    hash: to.hash,
+  })
+}
+
 function isGuestRoutePath(path: string) {
   return guestPath.includes(path) || path === '/preview' || path.startsWith('/preview/')
 }
@@ -165,7 +174,7 @@ const router = createRouter({
       redirect: (to) => {
         const { tab: _, ...query } = to.query
         return {
-          path: `/app/${encodeURIComponent(String((to.params as { package: string }).package))}/logs`,
+          path: `/app/${encodeURIComponent(String((to.params as { package: string }).package))}/observe/logs`,
           query,
           hash: to.hash,
         }
@@ -188,14 +197,35 @@ const router = createRouter({
       redirect: (to) => {
         const { tab: _, ...query } = to.query
         return {
-          path: `/app/${encodeURIComponent(String((to.params as { package: string }).package))}/logs`,
+          path: `/app/${encodeURIComponent(String((to.params as { package: string }).package))}/observe/logs`,
           query,
           hash: to.hash,
         }
       },
     },
-    { path: '/app/package/:package', redirect: to => `/app/${(to.params as { package: string }).package}` },
-    { path: '/app/package/:package/settings', redirect: to => `/app/${(to.params as { package: string }).package}` },
+    {
+      path: '/app/package/:package',
+      redirect: to => ({
+        path: `/app/${encodeURIComponent(String((to.params as { package: string }).package))}`,
+        query: to.query,
+        hash: to.hash,
+      }),
+    },
+    {
+      path: '/app/package/:package/settings',
+      redirect: to => ({
+        path: `/app/${encodeURIComponent(String((to.params as { package: string }).package))}/settings`,
+        query: to.query,
+        hash: to.hash,
+      }),
+    },
+    // Legacy app tab URLs after settings/observe revamp
+    { path: '/app/:app/info', redirect: redirectAppPath('/settings') },
+    { path: '/app/:app/access', redirect: redirectAppPath('/settings/access') },
+    { path: '/app/:app/logs/insights', redirect: redirectAppPath('/observe/updater') },
+    { path: '/app/:app/logs', redirect: redirectAppPath('/observe/logs') },
+    { path: '/app/:app/compatibility', redirect: redirectAppPath('/observe/compatibility') },
+    { path: '/app/:app/observe', redirect: redirectAppPath('/observe/native') },
     ...setupLayouts(newRoutes),
   ],
   history: createWebHistory(import.meta.env.BASE_URL),
