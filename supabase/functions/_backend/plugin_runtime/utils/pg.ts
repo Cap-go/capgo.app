@@ -508,21 +508,12 @@ function describeThrownValue(value: unknown): string {
 
 function readErrorProperty(error: object, key: PropertyKey): unknown {
   try {
-    let current: object | null = error
-    for (let depth = 0; current && depth < MAX_POSTGRES_LOG_VALUE_DEPTH; depth++) {
-      // Never inherit attacker-added fields from the two global base prototypes.
-      if (current === Object.prototype || current === Function.prototype)
-        return undefined
-
-      const descriptor = Object.getOwnPropertyDescriptor(current, key)
-      if (descriptor) {
-        if ('value' in descriptor)
-          return descriptor.value
-        return '[accessor property omitted]'
-      }
-      current = Object.getPrototypeOf(current)
-    }
-    return undefined
+    const descriptor = Object.getOwnPropertyDescriptor(error, key)
+    if (!descriptor)
+      return undefined
+    if ('value' in descriptor)
+      return descriptor.value
+    return '[accessor property omitted]'
   }
   catch (propertyError) {
     return `[unreadable property: ${describeThrownValue(propertyError)}]`
@@ -712,8 +703,9 @@ export function serializePostgresError(
     const message = readErrorProperty(error, 'message')
     const stack = readErrorProperty(error, 'stack')
 
-    if (name !== undefined)
-      serialized.name = serializePostgresLogValue(name)
+    serialized.name = name === undefined
+      ? getObjectType(error)
+      : serializePostgresLogValue(name)
     if (message !== undefined)
       serialized.message = serializePostgresLogValue(message)
     if (stack !== undefined)

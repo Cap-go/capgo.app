@@ -236,6 +236,10 @@ describe('plugin PostgreSQL error logging', () => {
     expect(Object.prototype.hasOwnProperty.call(query, '__proto__')).toBe(false)
     expect(Object.prototype.hasOwnProperty.call(query, 'constructor')).toBe(false)
     expect(Object.prototype.hasOwnProperty.call(query, 'prototype')).toBe(false)
+
+    const inheritedError = Object.create({ code: 'POLLUTED' })
+    inheritedError.message = 'failed'
+    expect(serializePostgresError(inheritedError)).not.toHaveProperty('code')
   })
 
   it('does not invoke accessors while serializing structured fields', () => {
