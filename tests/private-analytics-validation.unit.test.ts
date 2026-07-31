@@ -161,7 +161,10 @@ describe('private analytics route validation', () => {
       [],
       '2.0.0',
       undefined,
-      'android',
+      {
+        platform: 'android',
+        updatedAt: { gt: undefined, lte: undefined },
+      },
     )
   })
 })
