@@ -494,8 +494,6 @@ export async function updateWithPG(
     }
     // TODO: check why this event is send with wrong version_name
     await sendStatsAndDevice(c, device, [{ action: 'noNew', versionName: version.name }])
-    if (version.name === 'builtin')
-      return updateError200(c, 'already_on_builtin', 'Already on builtin')
     return updateError200(c, 'no_new_version_available', 'No new version available')
   }
 
@@ -667,9 +665,13 @@ export async function updateWithPG(
     }
   }
   if (version.name === 'builtin' && greaterOrEqual(parse(plugin_version), parse('6.2.0'))) {
-    // Channel kill-switch / revert: success payload with version builtin and NO error/kind,
-    // so the plugin reaches its builtin reset path (_reset / setNextBundle).
-    // (Already-on-builtin is handled above via version_name === version.name.)
+    // plugin_parser rewrites version_name "builtin" -> version_build, so we cannot
+    // compare version_name === "builtin" here. Store binary => names match build;
+    // OTA bundle => version_name is the live bundle and differs from version_build.
+    if (version_name === version_build) {
+      return updateError200(c, 'already_on_builtin', 'Already on builtin')
+    }
+    // Kill-switch: tell plugin to reset to the store binary (no error/kind).
     await sendStatsAndDevice(c, device, [{ action: 'get', versionName: 'builtin' }])
     return c.json({ version: 'builtin' }, 200)
   }
