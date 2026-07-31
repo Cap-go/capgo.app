@@ -499,22 +499,30 @@ function redactPostgresLogText(value: string): string {
 }
 
 function describeThrownValue(value: unknown): string {
-  try {
-    if (value instanceof Error) {
-      const message = Reflect.get(value, 'message')
-      if (typeof message === 'string')
-        return message
-    }
+  if (typeof value === 'string')
+    return redactPostgresLogText(value)
+  if (value === null || typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint' || typeof value === 'symbol')
     return String(value)
-  }
-  catch {
-    return 'unknown error'
-  }
+  return 'object thrown'
 }
 
 function readErrorProperty(error: object, key: PropertyKey): unknown {
   try {
-    return Reflect.get(error, key)
+    let current: object | null = error
+    for (let depth = 0; current && depth < MAX_POSTGRES_LOG_VALUE_DEPTH; depth++) {
+      // Never inherit attacker-added fields from the two global base prototypes.
+      if (current === Object.prototype || current === Function.prototype)
+        return undefined
+
+      const descriptor = Object.getOwnPropertyDescriptor(current, key)
+      if (descriptor) {
+        if ('value' in descriptor)
+          return descriptor.value
+        return '[accessor property omitted]'
+      }
+      current = Object.getPrototypeOf(current)
+    }
+    return undefined
   }
   catch (propertyError) {
     return `[unreadable property: ${describeThrownValue(propertyError)}]`

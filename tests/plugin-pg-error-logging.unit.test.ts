@@ -179,17 +179,20 @@ describe('plugin PostgreSQL error logging', () => {
     expect(serializePostgresError('connection reset')).toEqual({ type: 'string', value: 'connection reset' })
     expect(serializePostgresError(42n)).toEqual({ type: 'bigint', value: '42' })
 
+    let getterCalled = false
     const hostileError = new Error('hostile property')
     Object.defineProperty(hostileError, 'code', {
       get() {
+        getterCalled = true
         throw new Error('getter exploded')
       },
     })
 
     expect(serializePostgresError(hostileError)).toMatchObject({
       message: 'hostile property',
-      code: '[unreadable property: getter exploded]',
+      code: '[accessor property omitted]',
     })
+    expect(getterCalled).toBe(false)
   })
 
   it('bounds cyclic structured PostgreSQL fields and remains JSON serializable', () => {
@@ -255,7 +258,10 @@ describe('plugin PostgreSQL error logging', () => {
 
   it('redacts Drizzle parameter lines from messages and stacks', () => {
     const error = new Error('Failed query: SELECT $1\nparams: super-secret-token')
-    error.stack = 'Error: Failed query\nparams: super-secret-token\n    at query.ts:1:1'
+    Object.defineProperty(error, 'stack', {
+      configurable: true,
+      value: 'Error: Failed query\nparams: super-secret-token\n    at query.ts:1:1',
+    })
 
     const serialized = serializePostgresError(error)
     expect(serialized.message).toBe('Failed query: SELECT $1\nparams: [redacted]')
