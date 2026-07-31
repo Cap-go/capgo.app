@@ -333,6 +333,7 @@ export async function updateWithPG(
   if (!app_id || !device_id || !version_build || !version_name || !platform) {
     return updateError200(c, 'missing_info', 'Cannot find device_id or app_id')
   }
+  const coerce = tryParse(fixSemver(body.version_build))
 
   // Overlap owner lookup with default-channel prefetch on a second Hyperdrive
   // client when app-status cache already says cloud. Cuts Request Duration by
@@ -342,7 +343,7 @@ export async function updateWithPG(
   let prefetchedChannel: Awaited<ReturnType<typeof requestInfosChannelPostgres>> | null = null
   const startOwner = performance.now()
   const ownerPromise = getAppOwnerPostgres(c, app_id, drizzleClient, PLAN_LIMIT)
-  const channelPrefetchPromise = cachedStatus === 'cloud'
+  const channelPrefetchPromise = cachedStatus === 'cloud' && coerce
     ? (async () => {
         try {
           const prefetchClient = await getPgClient(c, true)
@@ -417,8 +418,7 @@ export async function updateWithPG(
   const isDeprecated = isDeprecatedPluginVersion(pluginVersion)
   // Ensure there is manifest and the plugin version support manifest fetching (v5.10.0+, v6.25.0+, v7.0.35+)
   const fetchManifestEntries = manifestBundleCount > 0 && !isDeprecatedPluginVersion(pluginVersion, undefined, undefined, BROTLI_MIN_UPDATER_VERSION_V7)
-  const coerce = tryParse(fixSemver(body.version_build))
-  if (!coerce) {
+    if (!coerce) {
     // get app owner with app_id
     await backgroundTask(c, sendNotifOrgCached(c, 'user:semver_issue', {
       app_id,
