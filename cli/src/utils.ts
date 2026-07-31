@@ -674,32 +674,43 @@ interface CapgoConfig {
   hostFilesApi: string
   hostApi: string
 }
-let cachedRemoteConfigPromise: Promise<CapgoConfig> | null = null
+let cachedRemoteConfig: CapgoConfig | null = null
+let remoteConfigInFlight: Promise<CapgoConfig> | null = null
 
 export async function getRemoteConfig(silent = false, signal?: AbortSignal) {
   // call host + /api/get_config and parse the result as json using fetch
-  if (!signal) {
-    cachedRemoteConfigPromise ??= loadRemoteConfig(silent)
-    return cachedRemoteConfigPromise
-  }
-  return loadRemoteConfig(silent, signal)
-}
+  if (!signal && cachedRemoteConfig)
+    return cachedRemoteConfig
+  if (!signal && remoteConfigInFlight)
+    return remoteConfigInFlight
 
-async function loadRemoteConfig(silent = false, signal?: AbortSignal) {
-  const localConfig = await getLocalConfig(silent)
-  try {
-    const response = await fetch(`${localConfig.hostApi}/private/config`, signal ? { signal } : {})
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`)
+  const run = (async () => {
+    const localConfig = await getLocalConfig(silent)
+    try {
+      const response = await fetch(`${localConfig.hostApi}/private/config`, signal ? { signal } : {})
+      if (!response.ok)
+        throw new Error(`HTTP error! status: ${response.status}`)
+      const data = await response.json() as CapgoConfig
+      const merged = { ...data, ...localConfig } as CapgoConfig
+      if (!signal)
+        cachedRemoteConfig = merged
+      return merged
     }
-    const data = await response.json() as CapgoConfig
-    return { ...data, ...localConfig } as CapgoConfig
-  }
-  catch {
-    if (!silent)
-      log.info(`Local config ${formatError(localConfig)}`)
-    return localConfig
-  }
+    catch {
+      if (!silent)
+        log.info(`Local config ${formatError(localConfig)}`)
+      // Do not cache fallbacks — a later call can recover after a transient failure.
+      return localConfig
+    }
+    finally {
+      if (!signal)
+        remoteConfigInFlight = null
+    }
+  })()
+
+  if (!signal)
+    remoteConfigInFlight = run
+  return run
 }
 
 interface CapgoFilesConfig {
