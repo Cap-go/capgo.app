@@ -10,9 +10,10 @@ import { cloudlog } from '../../utils/logging.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { getRetryablePostgrestStatus, isRetryablePostgrestError, isRetryablePostgrestResult, retryWithBackoff } from '../../utils/retry.ts'
 import { readNativeVersionUsage } from '../../utils/stats.ts'
+import { generateDateLabels } from '../../utils/stats_date_range.ts'
 import { supabaseApikey, supabaseClient } from '../../utils/supabase.ts'
 import { isStripeConfigured } from '../../utils/utils.ts'
-import { buildDailyReportedCountsByName, convertCountsToPercentagesByName, fillMissingDailyCounts } from '../../utils/version_stats_helpers.ts'
+import { buildDailyReportedCountsByName, convertCountsToPercentagesByName, createDatasetsByName, fillMissingDailyCounts } from '../../utils/version_stats_helpers.ts'
 
 dayjs.extend(utc)
 
@@ -810,41 +811,7 @@ function getActiveVersionsByName(versions: string[], counts: { [date: string]: {
   )
 }
 
-// Create datasets for Chart.js (by version_name - no lookup needed)
-function createDatasetsByName(
-  versions: string[],
-  dates: string[],
-  percentages: { [date: string]: { [version: string]: number } },
-  counts: { [date: string]: { [version: string]: number } },
-) {
-  return versions.map((version) => {
-    const percentageData = dates.map(date => percentages[date][version] ?? 0)
-    const countData = dates.map(date => Math.max(0, Math.round(counts[date][version] ?? 0)))
 
-    return {
-      label: version,
-      data: percentageData,
-      metaCounts: countData,
-    }
-  })
-}
-
-function generateDateLabels(from: Date, to: Date) {
-  const start = dayjs(from).utc().startOf('day')
-  const end = dayjs(to).utc().startOf('day')
-
-  if (start.isAfter(end))
-    return []
-
-  const labels: string[] = []
-  let cursor = start
-  while (cursor.isBefore(end) || cursor.isSame(end)) {
-    labels.push(cursor.format('YYYY-MM-DD'))
-    cursor = cursor.add(1, 'day')
-  }
-
-  return labels
-}
 
 function fillMissingDailyData(datasets: { label: string, data: number[] }[], labels: string[]) {
   if (datasets.length === 0 || labels.length === 0)

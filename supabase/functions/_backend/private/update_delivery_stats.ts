@@ -12,6 +12,7 @@ import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
 import { closeClient, getPgClient, logPgError } from '../utils/pg.ts'
 import { checkPermission } from '../utils/rbac.ts'
+import { generateDateLabels } from '../utils/stats_date_range.ts'
 import { supabaseAdmin, supabaseClient as useSupabaseClient } from '../utils/supabase.ts'
 
 dayjs.extend(utc)
@@ -225,20 +226,6 @@ function normalizeScope(value: unknown): UpdateDeliveryScope | null {
   return null
 }
 
-function generateDateLabels(from: Date, to: Date) {
-  const start = dayjs(from).utc().startOf('day')
-  const end = dayjs(to).utc().startOf('day')
-  if (start.isAfter(end))
-    return [] as string[]
-
-  const labels: string[] = []
-  let cursor = start
-  while (cursor.isBefore(end) || cursor.isSame(end)) {
-    labels.push(cursor.format('YYYY-MM-DD'))
-    cursor = cursor.add(1, 'day')
-  }
-  return labels
-}
 
 function toCount(value: NumericValue) {
   const numeric = Number(value ?? 0)

@@ -2,6 +2,7 @@ import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import { HTTPException } from 'hono/http-exception'
+import { requireEffectiveApikey } from '../../utils/effective_apikey.ts'
 import { BRES, simpleError } from '../../utils/hono.ts'
 import { closeClient, getPgClient, logPgError } from '../../utils/pg.ts'
 import { checkPermission } from '../../utils/rbac.ts'
@@ -46,14 +47,6 @@ interface PreviewVersionRow {
 
 interface OwnerOrgRow {
   owner_org: string
-}
-
-function getEffectiveApikey(c: Context<MiddlewareKeyVariables>, apikey: Database['public']['Tables']['apikeys']['Row']) {
-  const effectiveApikey = apikey.key ?? c.get('capgkey')
-  if (!effectiveApikey) {
-    throw simpleError('cannot_access_app', 'You can\'t access this app')
-  }
-  return effectiveApikey
 }
 
 async function loadPreviewChannelForUpdate(dbClient: PgQueryClient, body: ChannelSet) {
@@ -168,7 +161,7 @@ async function deletePreviewChannelAndBundle(
   body: ChannelSet,
   apikey: Database['public']['Tables']['apikeys']['Row'],
 ) {
-  const effectiveApikey = getEffectiveApikey(c, apikey)
+  const effectiveApikey = requireEffectiveApikey(c, apikey, 'cannot_access_app', 'You can\'t access this app')
   const pgClient = getPgClient(c)
   let dbClient: PgQueryClient | null = null
   let transactionStarted = false

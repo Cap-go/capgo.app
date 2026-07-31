@@ -3,6 +3,7 @@ import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import type { DeviceLink } from './delete.ts'
 import { syncLegacyChannelSelfOverrideForDevice } from '../../utils/channelSelfStore.ts'
+import { getEffectiveApikey } from '../../utils/effective_apikey.ts'
 import { BRES, quickError, simpleError } from '../../utils/hono.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { supabaseApikey, updateOrCreateChannelDevice } from '../../utils/supabase.ts'
@@ -21,7 +22,7 @@ export async function post(c: Context<MiddlewareKeyVariables, any, object>, body
     throw simpleError('invalid_version_id', 'Cannot set version to device, use channel instead')
   }
 
-  const effectiveApikey = apikey.key ?? (c.get('capgkey') as string)
+  const effectiveApikey = getEffectiveApikey(c, apikey) as string
   const supabase = supabaseApikey(c, effectiveApikey)
 
   // if channel set channel_override to it

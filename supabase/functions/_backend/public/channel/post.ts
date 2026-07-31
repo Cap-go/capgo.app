@@ -2,6 +2,7 @@ import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import { HTTPException } from 'hono/http-exception'
+import { requireEffectiveApikey } from '../../utils/effective_apikey.ts'
 import { BRES, simpleError } from '../../utils/hono.ts'
 import { cloudlogErr } from '../../utils/logging.ts'
 import { closeClient, getDrizzleClient, getPgClient, logPgError } from '../../utils/pg.ts'
@@ -259,10 +260,13 @@ async function createAndPromoteChannelInTransaction(
   versionName: string,
   apikey: Database['public']['Tables']['apikeys']['Row'],
 ): Promise<CreatedChannel> {
-  const effectiveApikey = apikey.key ?? c.get('capgkey')
-  if (!effectiveApikey) {
-    throw simpleError('cannot_set_bundle_to_channel', 'Cannot set bundle to channel', { error: 'Missing API key context for audit logging' })
-  }
+  const effectiveApikey = requireEffectiveApikey(
+    c,
+    apikey,
+    'cannot_set_bundle_to_channel',
+    'Cannot set bundle to channel',
+    { error: 'Missing API key context for audit logging' },
+  )
 
   const pgClient = getPgClient(c)
   let dbClient: PgQueryClient | null = null

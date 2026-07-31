@@ -120,3 +120,32 @@ export function convertCountsToPercentagesByName(
 
   return percentages
 }
+
+export interface VersionChartDataset {
+  label: string
+  data: number[]
+  metaCounts: number[]
+}
+
+/** Chart.js datasets: percentage series plus raw counts in metaCounts. */
+export function createPercentageDatasetsByName(
+  versions: string[],
+  dates: string[],
+  percentagesByDate: DailyVersionMap,
+  countsByDate: DailyVersionMap,
+): VersionChartDataset[] {
+  return versions.map((version) => {
+    const percentageData = dates.map(date => percentagesByDate[date]?.[version] ?? 0)
+    const countData = dates.map(date => Math.max(0, Math.round(countsByDate[date]?.[version] ?? 0)))
+
+    return {
+      label: version,
+      data: percentageData,
+      metaCounts: countData,
+    }
+  })
+}
+
+/** Alias used by public statistics routes/tests. */
+export const createDatasetsByName = createPercentageDatasetsByName
+

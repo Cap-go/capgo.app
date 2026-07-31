@@ -7,8 +7,9 @@ import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { readDeviceVersionCounts, readStatsVersion } from '../utils/stats.ts'
+import { generateDateLabels } from '../utils/stats_date_range.ts'
 import { supabaseWithAuth } from '../utils/supabase.ts'
-import { buildDailyReportedCountsByName, convertCountsToPercentagesByName, fillMissingDailyCounts } from '../utils/version_stats_helpers.ts'
+import { buildDailyReportedCountsByName, convertCountsToPercentagesByName, createPercentageDatasetsByName, fillMissingDailyCounts } from '../utils/version_stats_helpers.ts'
 
 dayjs.extend(utc)
 
@@ -70,22 +71,6 @@ function getStatsPeriod(requestedDays: StatsPeriodDays, endDate: Date, currentVe
   }
 }
 
-function generateDateLabels(from: Date, to: Date) {
-  const start = dayjs(from).utc().startOf('day')
-  const end = dayjs(to).utc().startOf('day')
-
-  if (start.isAfter(end))
-    return [] as string[]
-
-  const labels: string[] = []
-  let cursor = start
-  while (cursor.isBefore(end) || cursor.isSame(end)) {
-    labels.push(cursor.format('YYYY-MM-DD'))
-    cursor = cursor.add(1, 'day')
-  }
-
-  return labels
-}
 
 function trimTrailingEmptyLabels(labels: string[], countsByDate: Record<string, Record<string, number>>) {
   if (labels.length <= 1)
@@ -101,23 +86,6 @@ function trimTrailingEmptyLabels(labels: string[], countsByDate: Record<string, 
   return labels
 }
 
-function createPercentageDatasetsByName(
-  versions: string[],
-  dates: string[],
-  percentagesByDate: { [date: string]: { [version: string]: number } },
-  countsByDate: { [date: string]: { [version: string]: number } },
-) {
-  return versions.map((version) => {
-    const percentageData = dates.map(date => percentagesByDate[date]?.[version] ?? 0)
-    const countData = dates.map(date => Math.round(countsByDate[date]?.[version] ?? 0))
-
-    return {
-      label: version,
-      data: percentageData,
-      metaCounts: countData,
-    }
-  })
-}
 
 function selectRecentChannelVersions(
   deploymentHistory: DeploymentHistoryEntry[],
