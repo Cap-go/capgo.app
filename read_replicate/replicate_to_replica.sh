@@ -198,7 +198,10 @@ dump_table() {
 
   echo "    [${table_name}] Dumping from source..."
   # manifest (and similar) exceed Supabase statement_timeout on a full COPY.
-  psql_no_timeout "$SOURCE_DB_URL" -v ON_ERROR_STOP=1     -c "\\COPY public.${table_name} TO STDOUT WITH (FORMAT csv, HEADER)"     | gzip > "$dump_file"
+  psql_no_timeout "$SOURCE_DB_URL" -v ON_ERROR_STOP=1 \
+    -c "\COPY public.${table_name} TO STDOUT WITH (FORMAT csv, HEADER)" \
+    | gzip > "$dump_file"
+
   echo "    [${table_name}] Dump complete: $(du -h "$dump_file" | cut -f1)"
 }
 
