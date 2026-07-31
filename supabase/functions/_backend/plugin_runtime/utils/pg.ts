@@ -583,8 +583,8 @@ export function logPgError(
 ) {
   const cf = c.req.raw.cf
 
-  // TODO(plugin-db-debug): Reduce this payload after the intermittent
-  // getAppOwnerPostgres replica/Hyperdrive failure has been identified.
+  // This deliberately verbose payload is temporary while investigating the
+  // intermittent getAppOwnerPostgres replica/Hyperdrive failure.
   cloudlogErr({
     requestId: c.get('requestId'),
     message: `${functionName} - PostgreSQL Error`,
