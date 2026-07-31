@@ -80,6 +80,7 @@
     "test:coverage:all": "bun run cli:build && bun run supabase:with-env -- bunx vitest run --coverage.enabled=true tests/*",
     "test:all": "bun run cli:build && bun run supabase:with-env -- bunx vitest run tests/*",
     "check:plugin-runtime": "bun scripts/check_plugin_runtime_isolation.mjs",
+    "check:plugin-worker-size": "bun scripts/check_plugin_worker_size.ts",
     "test:unit": "vitest run tests/*.unit.test.ts",
     "test:db": "bash scripts/test-db-tinbase.sh",
     "test:backend:integration": "bun run supabase:with-env -- bunx vitest run --exclude=tests/*.unit.test.ts --exclude=tests/cli*",
