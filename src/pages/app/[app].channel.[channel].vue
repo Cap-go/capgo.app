@@ -355,8 +355,9 @@ async function askUpdateNotificationAfterBundleChange() {
     || !route.path.includes('/channel/')
     || packageId.value !== appId
     || channel.value?.name !== channelName
-  )
+  ) {
     return
+  }
 
   dialogStore.openDialog({
     title: t('notification-send-update-title'),
