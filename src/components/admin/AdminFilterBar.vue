@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { DateRangeMode } from '~/stores/adminDashboard'
-import { ref, watch } from 'vue'
+import { useMutationObserver } from '@vueuse/core'
+import { onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import ArrowPathIconSolid from '~icons/heroicons/arrow-path-solid'
 import DateRangePicker from '~/components/DateRangePicker.vue'
@@ -17,6 +18,20 @@ const rangeValue = ref<[Date, Date] | null>([
   adminStore.activeDateRange.start,
   adminStore.activeDateRange.end,
 ])
+const isDark = ref(false)
+
+function syncThemeFromHtml() {
+  const root = document.documentElement
+  isDark.value = root.classList.contains('dark')
+    || root.dataset.theme === 'capgodark'
+}
+
+onMounted(syncThemeFromHtml)
+useMutationObserver(
+  document.documentElement,
+  syncThemeFromHtml,
+  { attributes: true, attributeFilter: ['class', 'data-theme'] },
+)
 
 function syncFromStore() {
   rangeMode.value = adminStore.dateRangeMode
@@ -40,10 +55,17 @@ function onApply(payload: { start: Date, end: Date, mode: DateRangeMode }) {
 
 function handleRefresh() {
   adminStore.invalidateCache()
+  syncFromStore()
 }
 
 watch(
-  () => [adminStore.dateRangeMode, adminStore.customDateRange.start.getTime(), adminStore.customDateRange.end.getTime()] as const,
+  () => [
+    adminStore.dateRangeMode,
+    adminStore.customDateRange.start.getTime(),
+    adminStore.customDateRange.end.getTime(),
+    adminStore.activeDateRange.start.getTime(),
+    adminStore.activeDateRange.end.getTime(),
+  ] as const,
   syncFromStore,
 )
 </script>
@@ -59,7 +81,10 @@ watch(
 
       <button
         type="button"
-        class="inline-flex h-9 w-9 cursor-pointer items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 shadow-sm transition-colors duration-150 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500/40 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
+        class="inline-flex h-9 w-9 cursor-pointer items-center justify-center rounded-md border shadow-sm transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500/40"
+        :class="isDark
+          ? 'border-slate-600 bg-slate-900 text-slate-300 hover:bg-slate-800'
+          : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'"
         :aria-label="t('reload')"
         @click="handleRefresh"
       >

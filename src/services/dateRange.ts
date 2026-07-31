@@ -16,6 +16,8 @@ export type DateRangePreset
 
 export type RollingDateRangePreset = Exclude<DateRangePreset, 'custom'>
 
+export type DateRangePresetGroupKey = 'hours' | 'days' | 'months'
+
 export const DEFAULT_DATE_RANGE_PRESET = '24h' as const satisfies RollingDateRangePreset
 
 /** Rolling window lengths for preset modes (ms before `now`). */
@@ -53,7 +55,7 @@ export const DATE_RANGE_PRESET_LABEL_KEYS: Record<RollingDateRangePreset, string
 }
 
 /** Sidebar groups shown in the Cloudflare-style range picker. */
-export const DATE_RANGE_PRESET_GROUPS: { key: string, modes: RollingDateRangePreset[] }[] = [
+export const DATE_RANGE_PRESET_GROUPS: { key: DateRangePresetGroupKey, modes: RollingDateRangePreset[] }[] = [
   { key: 'hours', modes: ['30min', '1h', '6h', '12h', '24h'] },
   { key: 'days', modes: ['3day', '7day', '14day', '30day', '90day'] },
   { key: 'months', modes: ['quarter', '6month', '12month'] },
@@ -79,4 +81,53 @@ export function getDateRangeForPreset(
     start: new Date(now.getTime() - DATE_RANGE_DURATIONS_MS[mode]),
     end: now,
   }
+}
+
+/** Clamp a range into optional min/max bounds. */
+export function clampDateRange(
+  range: DateRangeValue,
+  minDate?: Date | null,
+  maxDate?: Date | null,
+): DateRangeValue {
+  let start = range.start.getTime()
+  let end = range.end.getTime()
+  if (end < start)
+    [start, end] = [end, start]
+  if (minDate)
+    start = Math.max(start, minDate.getTime())
+  if (maxDate)
+    end = Math.min(end, maxDate.getTime())
+  if (end < start)
+    end = start
+  return { start: new Date(start), end: new Date(end) }
+}
+
+/**
+ * Infer a rolling preset when start/end look like "last X ending near now".
+ * Falls back to `custom` when no preset matches within tolerance.
+ */
+export function inferDateRangePreset(
+  start: Date,
+  end: Date,
+  now = new Date(),
+  toleranceMs = 2 * 60 * 1000,
+): DateRangePreset {
+  const endDelta = Math.abs(end.getTime() - now.getTime())
+  if (endDelta > toleranceMs)
+    return 'custom'
+
+  const duration = end.getTime() - start.getTime()
+  if (duration <= 0)
+    return 'custom'
+
+  let best: RollingDateRangePreset | null = null
+  let bestDelta = Number.POSITIVE_INFINITY
+  for (const mode of Object.keys(DATE_RANGE_DURATIONS_MS) as RollingDateRangePreset[]) {
+    const delta = Math.abs(DATE_RANGE_DURATIONS_MS[mode] - duration)
+    if (delta <= toleranceMs && delta < bestDelta) {
+      best = mode
+      bestDelta = delta
+    }
+  }
+  return best ?? 'custom'
 }

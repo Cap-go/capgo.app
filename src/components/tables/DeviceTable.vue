@@ -128,6 +128,13 @@ function getSearchTerm() {
 }
 
 function getDateRangePayload() {
+  if (dateRangeMode.value !== 'custom') {
+    const rolling = getDateRangeForPreset(dateRangeMode.value)
+    return {
+      updated_at_gt: rolling.start.toISOString(),
+      updated_at_lte: rolling.end.toISOString(),
+    }
+  }
   if (!dateRange.value)
     return {}
   return {

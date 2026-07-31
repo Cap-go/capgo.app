@@ -1,13 +1,14 @@
 <script setup lang="ts">
-import type { DateRangePreset, RollingDateRangePreset } from '~/services/dateRange'
+import type { DateRangePreset, DateRangePresetGroupKey, RollingDateRangePreset } from '~/services/dateRange'
 import { VueDatePicker } from '@vuepic/vue-datepicker'
 import { onClickOutside, onKeyStroke, useMediaQuery, useMutationObserver } from '@vueuse/core'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import CalendarDaysIcon from '~icons/heroicons/calendar-days'
 import ChevronDownIcon from '~icons/heroicons/chevron-down'
 import { formatLocalDateTime } from '~/services/date'
 import {
+  clampDateRange,
   DATE_RANGE_PRESET_GROUPS,
   DATE_RANGE_PRESET_LABEL_KEYS,
   DEFAULT_DATE_RANGE_PRESET,
@@ -36,6 +37,9 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const isWide = useMediaQuery('(min-width: 768px)')
+const baseId = useId()
+const triggerId = `${baseId}-trigger`
+const popoverId = `${baseId}-popover`
 
 const isDark = ref(false)
 function syncThemeFromHtml() {
@@ -53,10 +57,20 @@ useMutationObserver(
 interface PresetOption {
   mode: RollingDateRangePreset
   label: string
+  disabled: boolean
 }
 interface PresetGroup {
-  key: string
+  key: DateRangePresetGroupKey
   items: PresetOption[]
+}
+
+function isPresetAllowed(mode: RollingDateRangePreset) {
+  const range = getDateRangeForPreset(mode)
+  if (props.minDate && range.start.getTime() < props.minDate.getTime())
+    return false
+  if (props.maxDate && range.end.getTime() > props.maxDate.getTime())
+    return false
+  return true
 }
 
 const presetGroups = computed((): PresetGroup[] =>
@@ -65,6 +79,7 @@ const presetGroups = computed((): PresetGroup[] =>
     items: group.modes.map(mode => ({
       mode,
       label: t(DATE_RANGE_PRESET_LABEL_KEYS[mode]),
+      disabled: !isPresetAllowed(mode),
     })),
   })),
 )
@@ -72,9 +87,11 @@ const presetGroups = computed((): PresetGroup[] =>
 const allPresets = computed(() => presetGroups.value.flatMap(g => g.items))
 
 const isOpen = ref(false)
-const pickerContainer = ref<HTMLElement | null>(null)
+const triggerRef = ref<HTMLButtonElement | null>(null)
+const popoverRef = ref<HTMLDialogElement | null>(null)
 const draftMode = ref<DateRangePreset>(props.mode)
 const pickerRange = ref<Date[] | null>(null)
+const popoverStyle = ref<Record<string, string>>({})
 
 const boundFields = computed(() => [
   { id: 'start', label: t('start'), value: pickerRange.value?.[0] },
@@ -107,48 +124,116 @@ function isCompleteRange(range: Date[] | null): range is [Date, Date] {
     && range[1] instanceof Date
     && !Number.isNaN(range[0].getTime())
     && !Number.isNaN(range[1].getTime())
+    && range[0].getTime() <= range[1].getTime()
 }
 
 const canApply = computed(() => isCompleteRange(pickerRange.value))
 
-onClickOutside(pickerContainer, () => {
+function updatePopoverPosition() {
+  const trigger = triggerRef.value
+  if (!trigger)
+    return
+  const rect = trigger.getBoundingClientRect()
+  popoverStyle.value = {
+    top: `${Math.round(rect.bottom + 8)}px`,
+    right: `${Math.round(window.innerWidth - rect.right)}px`,
+  }
+}
+
+function closePicker() {
+  if (!isOpen.value)
+    return
   isOpen.value = false
+  nextTick(() => triggerRef.value?.focus())
+}
+
+async function openPicker() {
+  syncDraftFromProps()
+  updatePopoverPosition()
+  isOpen.value = true
+  await nextTick()
+  updatePopoverPosition()
+  popoverRef.value?.querySelector<HTMLElement>('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')?.focus()
+}
+
+onClickOutside(popoverRef, (event) => {
+  const target = event.target as Node | null
+  if (target && triggerRef.value?.contains(target))
+    return
+  closePicker()
 })
 
 onKeyStroke('Escape', (e) => {
   if (!isOpen.value)
     return
   e.preventDefault()
-  isOpen.value = false
+  closePicker()
+})
+
+function onViewportChange() {
+  if (isOpen.value)
+    updatePopoverPosition()
+}
+
+onMounted(() => {
+  window.addEventListener('resize', onViewportChange)
+  window.addEventListener('scroll', onViewportChange, true)
+})
+onUnmounted(() => {
+  window.removeEventListener('resize', onViewportChange)
+  window.removeEventListener('scroll', onViewportChange, true)
 })
 
 function syncDraftFromProps() {
   draftMode.value = props.mode
-  if (props.modelValue?.[0] && props.modelValue?.[1]) {
-    pickerRange.value = [new Date(props.modelValue[0]), new Date(props.modelValue[1])]
+  // Rolling presets always refresh from "now" so an open dashboard cannot apply a stale window.
+  if (props.mode !== 'custom') {
+    const range = clampDateRange(getDateRangeForPreset(props.mode), props.minDate, props.maxDate)
+    pickerRange.value = [range.start, range.end]
     return
   }
-  const range = getDateRangeForPreset(props.mode === 'custom' ? DEFAULT_DATE_RANGE_PRESET : props.mode)
+  if (props.modelValue?.[0] && props.modelValue?.[1]) {
+    const range = clampDateRange(
+      { start: new Date(props.modelValue[0]), end: new Date(props.modelValue[1]) },
+      props.minDate,
+      props.maxDate,
+    )
+    pickerRange.value = [range.start, range.end]
+    return
+  }
+  const range = clampDateRange(getDateRangeForPreset(DEFAULT_DATE_RANGE_PRESET), props.minDate, props.maxDate)
   pickerRange.value = [range.start, range.end]
 }
 
 function togglePicker() {
-  if (isOpen.value) {
-    isOpen.value = false
-    return
-  }
-  syncDraftFromProps()
-  isOpen.value = true
+  if (isOpen.value)
+    closePicker()
+  else
+    void openPicker()
 }
 
 function selectPreset(mode: RollingDateRangePreset) {
+  if (!isPresetAllowed(mode))
+    return
   draftMode.value = mode
-  const range = getDateRangeForPreset(mode)
+  const range = clampDateRange(getDateRangeForPreset(mode), props.minDate, props.maxDate)
   pickerRange.value = [range.start, range.end]
 }
 
 function onRangeUpdate(value: Date[] | null) {
-  pickerRange.value = value
+  if (!value) {
+    pickerRange.value = value
+    draftMode.value = 'custom'
+    return
+  }
+  const [rawStart, rawEnd] = value
+  if (!(rawStart instanceof Date) || !(rawEnd instanceof Date)) {
+    pickerRange.value = value
+    draftMode.value = 'custom'
+    return
+  }
+  const range = clampDateRange({ start: rawStart, end: rawEnd }, props.minDate, props.maxDate)
+  pickerRange.value = [range.start, range.end]
   draftMode.value = 'custom'
 }
 
@@ -156,11 +241,30 @@ function apply() {
   if (!isCompleteRange(pickerRange.value))
     return
 
-  const [start, end] = pickerRange.value
+  const mode = draftMode.value
+  let start: Date
+  let end: Date
+
+  if (mode !== 'custom') {
+    // Recompute rolling presets at apply time so delayed Apply still means "last X until now".
+    const fresh = clampDateRange(getDateRangeForPreset(mode), props.minDate, props.maxDate)
+    start = fresh.start
+    end = fresh.end
+  }
+  else {
+    const clamped = clampDateRange(
+      { start: pickerRange.value[0], end: pickerRange.value[1] },
+      props.minDate,
+      props.maxDate,
+    )
+    start = clamped.start
+    end = clamped.end
+  }
+
   emit('update:modelValue', [start, end])
-  emit('update:mode', draftMode.value)
-  emit('apply', { start, end, mode: draftMode.value })
-  isOpen.value = false
+  emit('update:mode', mode)
+  emit('apply', { start, end, mode })
+  closePicker()
 }
 
 watch(() => props.mode, (mode) => {
@@ -168,7 +272,12 @@ watch(() => props.mode, (mode) => {
     draftMode.value = mode
 })
 
-function presetButtonClass(active: boolean) {
+function presetButtonClass(active: boolean, disabled: boolean) {
+  if (disabled) {
+    return isDark.value
+      ? 'cursor-not-allowed text-slate-600 opacity-50'
+      : 'cursor-not-allowed text-slate-400 opacity-50'
+  }
   if (active) {
     return isDark.value
       ? 'bg-white font-medium text-slate-900'
@@ -181,10 +290,11 @@ function presetButtonClass(active: boolean) {
 </script>
 
 <template>
-  <div ref="pickerContainer" class="relative">
-    <label for="date-range-picker-trigger" class="sr-only">{{ t('date-range') }}</label>
+  <div class="relative">
+    <label :for="triggerId" class="sr-only">{{ t('date-range') }}</label>
     <button
-      id="date-range-picker-trigger"
+      :id="triggerId"
+      ref="triggerRef"
       type="button"
       class="group inline-flex cursor-pointer items-center gap-2 rounded-md border px-3 text-sm font-medium shadow-sm transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500/40"
       :class="[
@@ -196,7 +306,7 @@ function presetButtonClass(active: boolean) {
       :aria-label="`${t('date-range')}: ${triggerLabel}`"
       aria-haspopup="dialog"
       :aria-expanded="isOpen"
-      aria-controls="date-range-picker-popover"
+      :aria-controls="popoverId"
       @click="togglePicker"
     >
       <CalendarDaysIcon
@@ -212,125 +322,128 @@ function presetButtonClass(active: boolean) {
       />
     </button>
 
-    <dialog
-      v-if="isOpen"
-      id="date-range-picker-popover"
-      open
-      :aria-label="`${t('date-range')}: ${triggerLabel}`"
-      class="date-range-popover absolute right-0 top-full z-50 m-0 mt-2 w-[min(46rem,calc(100vw-1.5rem))] overflow-hidden rounded-lg border p-0 shadow-[0_12px_40px_-12px_rgba(15,23,42,0.35)]"
-      :class="isDark
-        ? 'border-slate-700 bg-slate-950 text-slate-100 shadow-[0_16px_48px_-12px_rgba(0,0,0,0.65)]'
-        : 'border-slate-200 bg-white text-slate-800'"
-    >
-      <div class="flex flex-col md:flex-row">
-        <div
-          class="flex w-full shrink-0 flex-col md:w-44 md:border-b-0 md:border-r"
-          :class="isDark ? 'border-b border-slate-700' : 'border-b border-slate-200'"
-        >
-          <div class="max-h-64 overflow-y-auto p-2 md:max-h-[22.5rem]">
-            <template v-for="(group, groupIndex) in presetGroups" :key="group.key">
+    <Teleport to="body">
+      <dialog
+        v-if="isOpen"
+        :id="popoverId"
+        ref="popoverRef"
+        open
+        :aria-label="`${t('date-range')}: ${triggerLabel}`"
+        class="date-range-popover fixed z-[100] m-0 w-[min(46rem,calc(100vw-1.5rem))] overflow-hidden rounded-lg border p-0 shadow-[0_12px_40px_-12px_rgba(15,23,42,0.35)]"
+        :class="isDark
+          ? 'border-slate-700 bg-slate-950 text-slate-100 shadow-[0_16px_48px_-12px_rgba(0,0,0,0.65)]'
+          : 'border-slate-200 bg-white text-slate-800'"
+        :style="popoverStyle"
+      >
+        <div class="flex flex-col md:flex-row">
+          <div
+            class="flex w-full shrink-0 flex-col md:w-44 md:border-b-0 md:border-r"
+            :class="isDark ? 'border-b border-slate-700' : 'border-b border-slate-200'"
+          >
+            <div class="max-h-64 overflow-y-auto p-2 md:max-h-[22.5rem]">
+              <template v-for="(group, groupIndex) in presetGroups" :key="group.key">
+                <div
+                  v-if="groupIndex > 0"
+                  class="my-1.5 border-t"
+                  :class="isDark ? 'border-slate-800' : 'border-slate-100'"
+                  aria-hidden="true"
+                />
+                <div class="flex flex-col gap-0.5">
+                  <button
+                    v-for="preset in group.items"
+                    :key="preset.mode"
+                    type="button"
+                    class="rounded-md px-3 py-1.5 text-left text-sm whitespace-nowrap transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500/40"
+                    :class="presetButtonClass(draftMode === preset.mode, preset.disabled)"
+                    :aria-pressed="draftMode === preset.mode"
+                    :disabled="preset.disabled"
+                    @click="selectPreset(preset.mode)"
+                  >
+                    {{ preset.label }}
+                  </button>
+                </div>
+              </template>
+
               <div
-                v-if="groupIndex > 0"
                 class="my-1.5 border-t"
                 :class="isDark ? 'border-slate-800' : 'border-slate-100'"
                 aria-hidden="true"
               />
-              <div class="flex flex-col gap-0.5">
-                <button
-                  v-for="preset in group.items"
-                  :key="preset.mode"
-                  type="button"
-                  class="cursor-pointer rounded-md px-3 py-1.5 text-left text-sm whitespace-nowrap transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500/40"
-                  :class="presetButtonClass(draftMode === preset.mode)"
-                  :aria-pressed="draftMode === preset.mode"
-                  @click="selectPreset(preset.mode)"
-                >
-                  {{ preset.label }}
-                </button>
-              </div>
-            </template>
-
-            <div
-              class="my-1.5 border-t"
-              :class="isDark ? 'border-slate-800' : 'border-slate-100'"
-              aria-hidden="true"
-            />
-            <button
-              type="button"
-              class="w-full cursor-pointer rounded-md px-3 py-1.5 text-left text-sm whitespace-nowrap transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500/40"
-              :class="presetButtonClass(draftMode === 'custom')"
-              :aria-pressed="draftMode === 'custom'"
-              @click="draftMode = 'custom'"
-            >
-              {{ t('custom') }}
-            </button>
-          </div>
-        </div>
-
-        <div class="date-range-calendar min-w-0 flex-1 p-2 md:p-3">
-          <VueDatePicker
-            :key="isDark ? 'dark' : 'light'"
-            :model-value="pickerRange"
-            inline
-            range
-            :multi-calendars="multiCalendarConfig"
-            hide-month-year-select
-            :formats="{ month: 'MMM yyyy', year: 'yyyy' }"
-            :time-config="{ enableTimePicker: true, timePickerInline: false }"
-            :dark="isDark"
-            :min-date="minDate"
-            :max-date="maxDate ?? new Date()"
-            :action-row="{ showSelect: false, showCancel: false, showNow: false, showPreview: false }"
-            @update:model-value="onRangeUpdate"
-          />
-        </div>
-      </div>
-
-      <div
-        class="flex flex-col gap-3 border-t px-3 py-3 sm:flex-row sm:items-end sm:justify-between sm:px-4"
-        :class="isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-200 bg-slate-50'"
-      >
-        <div class="grid flex-1 grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-3">
-          <div v-for="field in boundFields" :key="field.id">
-            <div
-              :id="`date-range-${field.id}-label`"
-              class="mb-1 text-[11px] font-medium tracking-wide uppercase"
-              :class="isDark ? 'text-slate-400' : 'text-slate-500'"
-            >
-              {{ field.label }}
-            </div>
-            <div
-              class="flex h-9 items-center gap-2 rounded-md border px-2.5"
-              :class="isDark ? 'border-slate-600 bg-slate-950' : 'border-slate-200 bg-white'"
-              :aria-labelledby="`date-range-${field.id}-label`"
-            >
-              <CalendarDaysIcon class="h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden="true" />
-              <span
-                class="truncate font-mono text-[13px] tabular-nums"
-                :class="isDark ? 'text-slate-100' : 'text-slate-800'"
+              <button
+                type="button"
+                class="w-full cursor-pointer rounded-md px-3 py-1.5 text-left text-sm whitespace-nowrap transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500/40"
+                :class="presetButtonClass(draftMode === 'custom', false)"
+                :aria-pressed="draftMode === 'custom'"
+                @click="draftMode = 'custom'"
               >
-                {{ field.value instanceof Date ? formatLocalDateTime(field.value) : '—' }}
-              </span>
+                {{ t('custom') }}
+              </button>
             </div>
           </div>
+
+          <div class="date-range-calendar min-w-0 flex-1 p-2 md:p-3">
+            <VueDatePicker
+              :key="isDark ? 'dark' : 'light'"
+              :model-value="pickerRange"
+              inline
+              range
+              :multi-calendars="multiCalendarConfig"
+              hide-month-year-select
+              :formats="{ month: 'MMM yyyy', year: 'yyyy' }"
+              :time-config="{ enableTimePicker: true, timePickerInline: false }"
+              :dark="isDark"
+              :min-date="minDate"
+              :max-date="maxDate ?? new Date()"
+              :action-row="{ showSelect: false, showCancel: false, showNow: false, showPreview: false }"
+              @update:model-value="onRangeUpdate"
+            />
+          </div>
         </div>
-        <button
-          type="button"
-          class="inline-flex h-9 min-h-9 cursor-pointer items-center justify-center rounded-md bg-azure-500 px-4 text-sm font-semibold text-white transition-colors duration-150 hover:bg-azure-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500/50 disabled:cursor-not-allowed disabled:opacity-40"
-          :disabled="!canApply"
-          @click="apply"
+
+        <div
+          class="flex flex-col gap-3 border-t px-3 py-3 sm:flex-row sm:items-end sm:justify-between sm:px-4"
+          :class="isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-200 bg-slate-50'"
         >
-          {{ t('apply') }}
-        </button>
-      </div>
-    </dialog>
+          <div class="grid flex-1 grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-3">
+            <div v-for="field in boundFields" :key="field.id">
+              <div
+                :id="`${baseId}-${field.id}-label`"
+                class="mb-1 text-[11px] font-medium tracking-wide uppercase"
+                :class="isDark ? 'text-slate-400' : 'text-slate-500'"
+              >
+                {{ field.label }}
+              </div>
+              <div
+                class="flex h-9 items-center gap-2 rounded-md border px-2.5"
+                :class="isDark ? 'border-slate-600 bg-slate-950' : 'border-slate-200 bg-white'"
+                :aria-labelledby="`${baseId}-${field.id}-label`"
+              >
+                <CalendarDaysIcon class="h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden="true" />
+                <span
+                  class="truncate font-mono text-[13px] tabular-nums"
+                  :class="isDark ? 'text-slate-100' : 'text-slate-800'"
+                >
+                  {{ field.value instanceof Date ? formatLocalDateTime(field.value) : '—' }}
+                </span>
+              </div>
+            </div>
+          </div>
+          <button
+            type="button"
+            class="inline-flex h-9 min-h-9 cursor-pointer items-center justify-center rounded-md bg-azure-500 px-4 text-sm font-semibold text-white transition-colors duration-150 hover:bg-azure-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500/50 disabled:cursor-not-allowed disabled:opacity-40"
+            :disabled="!canApply"
+            @click="apply"
+          >
+            {{ t('apply') }}
+          </button>
+        </div>
+      </dialog>
+    </Teleport>
   </div>
 </template>
 
 <style scoped>
 dialog.date-range-popover {
-  position: absolute;
-  inset: auto;
   max-width: none;
   max-height: none;
   color: inherit;

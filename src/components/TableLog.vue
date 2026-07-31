@@ -15,7 +15,7 @@ import IconDownload from '~icons/lucide/download'
 import IconFilter from '~icons/system-uicons/filtering'
 import IconReload from '~icons/tabler/reload'
 import DateRangePicker from '~/components/DateRangePicker.vue'
-import { getDateRangeForPreset } from '~/services/dateRange'
+import { getDateRangeForPreset, inferDateRangePreset } from '~/services/dateRange'
 
 interface Props {
   isLoading?: boolean
@@ -157,8 +157,10 @@ watch(() => props.range, (newRange) => {
   }
   if (rangesEqual(newRange, preciseDates.value))
     return
-  preciseDates.value = [new Date(newRange[0]), new Date(newRange[1])]
-  rangeMode.value = 'custom'
+  const start = new Date(newRange[0])
+  const end = new Date(newRange[1])
+  preciseDates.value = [start, end]
+  rangeMode.value = inferDateRangePreset(start, end)
 }, { immediate: true })
 
 function displayValueKey(elem: any, col: TableColumn | undefined) {
@@ -234,7 +236,7 @@ function loadFromUrlParams() {
     const end = new Date(endParam)
     if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())) {
       preciseDates.value = [start, end]
-      rangeMode.value = 'custom'
+      rangeMode.value = inferDateRangePreset(start, end)
       emit('update:range', preciseDates.value)
     }
   }
