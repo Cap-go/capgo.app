@@ -139,8 +139,13 @@ function isCompleteRange(range: Date[] | null): range is [Date, Date] {
 
 const canApply = computed(() => isCompleteRange(pickerRange.value))
 
-/** Fresh upper bound for the calendar; avoids disabling presets via a stale prop Date. */
-const effectiveMaxDate = computed(() => props.maxDate ?? new Date())
+/** Fresh upper bound for the calendar; recompute when opening so fallback `now` is not cached. */
+const effectiveMaxDate = computed(() => {
+  if (props.maxDate)
+    return props.maxDate
+  // Depend on isOpen so each open gets a current upper bound.
+  return isOpen.value ? new Date() : undefined
+})
 
 function updatePopoverPosition() {
   const trigger = triggerRef.value

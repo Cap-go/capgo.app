@@ -2,7 +2,7 @@
 import type { TableColumn } from './comp_def'
 import type { DateRangePreset } from '~/services/dateRange'
 import { FormKit } from '@formkit/vue'
-import { useDebounceFn } from '@vueuse/core'
+import { useDebounceFn, useNow } from '@vueuse/core'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import IconDown from '~icons/ic/round-keyboard-arrow-down'
@@ -15,7 +15,7 @@ import IconDownload from '~icons/lucide/download'
 import IconFilter from '~icons/system-uicons/filtering'
 import IconReload from '~icons/tabler/reload'
 import DateRangePicker from '~/components/DateRangePicker.vue'
-import { getDateRangeForPreset, inferDateRangePreset } from '~/services/dateRange'
+import { clampDateRange, getDateRangeForPreset, inferDateRangePreset } from '~/services/dateRange'
 
 interface Props {
   isLoading?: boolean
@@ -107,7 +107,14 @@ const filterButtonLabel = computed(() => {
 })
 const preciseDates = ref<[Date, Date] | null>(null)
 const rangeMode = ref<DateRangePreset>('1h')
-const logsMinDate = computed(() => new Date(Date.now() - 30 * 24 * 60 * 60 * 1000))
+const now = useNow({ interval: 60_000 })
+const logsMinDate = computed(() => new Date(now.value.getTime() - 30 * 24 * 60 * 60 * 1000))
+
+function clampLogsRange(start: Date, end: Date): [Date, Date] {
+  const clamped = clampDateRange({ start, end }, logsMinDate.value)
+  return [clamped.start, clamped.end]
+}
+
 const autoReload = computed(() => props.autoReload ?? true)
 
 function requestReload() {
@@ -156,10 +163,9 @@ watch(() => props.range, (newRange) => {
       preciseDates.value = null
     return
   }
-  if (rangesEqual(newRange, preciseDates.value))
+  const [start, end] = clampLogsRange(new Date(newRange[0]), new Date(newRange[1]))
+  if (rangesEqual([start, end], preciseDates.value))
     return
-  const start = new Date(newRange[0])
-  const end = new Date(newRange[1])
   preciseDates.value = [start, end]
   rangeMode.value = inferDateRangePreset(start, end)
 }, { immediate: true })
@@ -236,8 +242,9 @@ function loadFromUrlParams() {
     const start = new Date(startParam)
     const end = new Date(endParam)
     if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())) {
-      preciseDates.value = [start, end]
-      rangeMode.value = inferDateRangePreset(start, end)
+      const clamped = clampLogsRange(start, end)
+      preciseDates.value = clamped
+      rangeMode.value = inferDateRangePreset(clamped[0], clamped[1])
       emit('update:range', preciseDates.value)
     }
   }
