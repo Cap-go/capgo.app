@@ -82,9 +82,11 @@ async function checkKeyPg(
       return null
     }
 
-    // Convert to the expected format
+    // Convert to the expected format.
+    // drizzle execute can return numeric ids as strings; keep number so
+    // authApikey.id === existingApikey.id self-update checks work.
     return {
-      id: apiKey.id,
+      id: Number(apiKey.id),
       created_at: apiKey.created_at,
       user_id: apiKey.user_id,
       key: apiKey.key,
