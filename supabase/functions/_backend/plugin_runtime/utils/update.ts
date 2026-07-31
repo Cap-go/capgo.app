@@ -359,7 +359,12 @@ export async function updateWithPG(
   appOwner = await ownerPromise
   if (pathTiming)
     pathTiming.ownerMs = Math.round(performance.now() - startOwner)
-  prefetchedChannel = await channelPrefetchPromise
+  try {
+    prefetchedChannel = await channelPrefetchPromise
+  }
+  catch {
+    prefetchedChannel = null
+  }
   // if version_build is not semver, then make it semver
   const device = makeDevice(body, appOwner?.allow_device_custom_id)
   if (!appOwner) {
@@ -555,6 +560,7 @@ export async function updateWithPG(
         path: 'updates',
         outcome: 'no_new_version',
         requestInfosMs,
+        channelPrefetchHit: pathTiming?.channelPrefetchHit ?? false,
         app_id,
       })
     }
@@ -812,6 +818,7 @@ export async function updateWithPG(
       path: 'updates',
       outcome: 'new_version',
       requestInfosMs,
+      channelPrefetchHit: pathTiming?.channelPrefetchHit ?? false,
       manifestFetchMs,
       bundleUrlMs,
       manifestCount: manifest.length,

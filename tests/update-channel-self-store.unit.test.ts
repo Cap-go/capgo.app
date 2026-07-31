@@ -9,7 +9,7 @@ const getChannelSelfOverrideMock = vi.fn()
 
 ;(globalThis as any).EdgeRuntime = undefined
 
-const getAppStatusMock = vi.fn(() => Promise.resolve({ status: null, allow_device_custom_id: true, block_provider_infra_requests: false, cacheHit: false }))
+const getAppStatusMock = vi.fn(async (): Promise<{ status: 'cloud' | 'onprem' | 'cancelled' | null, allow_device_custom_id: boolean, block_provider_infra_requests: boolean, cacheHit: boolean }> => ({ status: null, allow_device_custom_id: true, block_provider_infra_requests: false, cacheHit: false }))
 
 vi.mock('../supabase/functions/_backend/plugin_runtime/utils/appStatus.ts', () => ({
   getAppStatus: getAppStatusMock,
@@ -187,7 +187,7 @@ describe('updates channel_self store override routing', () => {
         android: true,
         electron: false,
       },
-    })
+    } as any)
     getAppOwnerPostgresMock.mockResolvedValue({
       allow_device_custom_id: true,
       channel_device_count: 0,

@@ -1,5 +1,5 @@
 import type { Context } from 'hono'
-import { CacheHelper } from './cache.ts'
+import { CACHE_PUT_TIMEOUT_MS, CacheHelper } from './cache.ts'
 import { backgroundTask, isStripeConfigured } from './utils.ts'
 
 const APP_STATUS_CACHE_PATH = '/.app-status-v3'
@@ -42,7 +42,7 @@ export function setAppStatus(c: Context, appId: string, status: AppStatus, allow
       allow_device_custom_id: allowDeviceCustomId,
       block_provider_infra_requests: blockProviderInfraRequests,
     }
-    await cacheEntry.helper.putJson(cacheEntry.request, payload, APP_STATUS_CACHE_TTL_SECONDS)
+    await cacheEntry.helper.putJson(cacheEntry.request, payload, APP_STATUS_CACHE_TTL_SECONDS, { timeoutMs: CACHE_PUT_TIMEOUT_MS })
   })
 }
 

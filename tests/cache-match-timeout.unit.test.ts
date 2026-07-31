@@ -106,7 +106,7 @@ describe('CacheHelper.putJson timeout', () => {
 
     const helper = new CacheHelper(makeContext())
     const key = helper.buildRequest('/.track-device-cache', { app_id: 'com.test.app', device_id: 'd1' })
-    const pending = helper.putJson(key, { ok: true }, 60)
+    const pending = helper.putJson(key, { ok: true }, 60, { timeoutMs: CACHE_PUT_TIMEOUT_MS })
     await vi.advanceTimersByTimeAsync(CACHE_PUT_TIMEOUT_MS + 1)
     await expect(pending).resolves.toBeUndefined()
   })

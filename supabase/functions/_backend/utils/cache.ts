@@ -113,12 +113,14 @@ export class CacheHelper {
   }
 
   /**
-   * Write JSON to Cache API. On timeout or error, fail open so waitUntil work
-   * (device tracking, app status) cannot stretch Workers Wall Time P999.
+   * Write JSON to Cache API.
+   * Pass `timeoutMs` for best-effort waitUntil caches (device/MAU). Omit it for
+   * rate-limit counters that must finish the write before treating it as recorded.
    */
   async putJson(key: Request, payload: unknown, ttlSeconds: number, options?: { timeoutMs?: number }) {
-    const timeoutMs = options?.timeoutMs ?? CACHE_PUT_TIMEOUT_MS
-    const result = await withTimeout(this.putJsonUnbound(key, payload, ttlSeconds), timeoutMs)
+    if (options?.timeoutMs == null)
+      return this.putJsonUnbound(key, payload, ttlSeconds)
+    const result = await withTimeout(this.putJsonUnbound(key, payload, ttlSeconds), options.timeoutMs)
     if (result === TIMEOUT)
       return
   }
