@@ -37,6 +37,11 @@ describe('capacitor-version: capacitorMajor', () => {
     expect(capacitorMajor(dir)).toBe(8)
   })
 
+  it('prefers dependencies over devDependencies for the same package', () => {
+    const dir = makeProject({ 'package.json': pkg({ '@capacitor/core': '^8.0.0' }, { '@capacitor/core': '^7.0.0' }) })
+    expect(capacitorMajor(dir)).toBe(8)
+  })
+
   it('returns null when package.json is absent', () => {
     const dir = makeProject({})
     expect(capacitorMajor(dir)).toBeNull()

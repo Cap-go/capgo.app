@@ -1840,6 +1840,7 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
     // the dashboard + skewed "Build requested" telemetry).
     if (options.prescan === true) {
       const { executePrescan, runPrescanGate } = await import('./prescan/command')
+      const { enforcedCounts } = await import('./prescan/enforcement')
       const {
         decision: gateDecision,
         report: gateReport,
@@ -1878,17 +1879,18 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
       // funnel — run volume, block rate, and which checks fire — not just blocks.
       {
         const pc = gateReport?.counts
+        const ec = gateReport ? enforcedCounts(gateReport) : undefined
         const prescanResult = gateCrashed
           ? 'crashed'
           : !pc
               ? 'skipped'
               : gateDecision === 'block'
                 ? 'blocked'
-                : options.prescanIgnoreFatal && pc.error > 0
+                : options.prescanIgnoreFatal && (ec?.error ?? pc.error) > 0
                   ? 'bypassed'
                   : gateInformationOnlyFindings > 0
                     ? 'information-only'
-                    : pc.warning > 0 ? 'warned' : 'clean'
+                    : (ec?.warning ?? pc.warning) > 0 ? 'warned' : 'clean'
         await sendEvent(options.apikey, {
           channel: 'native-builder',
           event: 'Prescan run',

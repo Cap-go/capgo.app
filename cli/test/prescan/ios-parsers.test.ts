@@ -14,6 +14,7 @@ import {
 import {
   readBuildConfigs,
   readBuildSetting,
+  readMinimumIosDeploymentTarget,
   readTargetConfigs,
   resolvePlistValue,
 } from '../../src/build/prescan/ios-pbxsettings'
@@ -418,6 +419,26 @@ describe('ios-pbxsettings: readTargetConfigs', () => {
   })
 })
 
+describe('ios-pbxsettings: readMinimumIosDeploymentTarget', () => {
+  it('does not fall back to an extension deployment target when app linkage is missing', () => {
+    const pbx = `{
+      objects = {
+        APP /* App */ = { isa = PBXNativeTarget; buildConfigurationList = MISSING; name = App; productType = "com.apple.product-type.application"; };
+        EXT /* Share */ = { isa = PBXNativeTarget; buildConfigurationList = EXT_LIST; name = Share; productType = "com.apple.product-type.app-extension"; };
+        EXT_DEBUG /* Debug */ = {
+          isa = XCBuildConfiguration;
+          buildSettings = {
+            IPHONEOS_DEPLOYMENT_TARGET = 11.0;
+          };
+          name = Debug;
+        };
+        EXT_LIST /* Build configuration list for PBXNativeTarget "Share" */ = { isa = XCConfigurationList; buildConfigurations = ( EXT_DEBUG ); };
+      };
+    }`
+    expect(readMinimumIosDeploymentTarget(pbx)).toBeNull()
+  })
+})
+
 // Real-shaped pbxproj mirroring the tutorial-app's distinctive build settings
 // (real bundle id, AppIcon name, version pair, Cap8 deployment target) so the
 // grounding assertions below are self-contained and REAL on CI.
@@ -570,7 +591,7 @@ describe('ios-entitlements: readAppEntitlements', () => {
   })
   it('reads the app target CODE_SIGN_ENTITLEMENTS path before the Capacitor default', () => {
     const custom = entitlements('<key>com.apple.developer.healthkit</key><true/>')
-    const pbx = FIXTURE_PBX.replace(
+    const pbx = FIXTURE_PBX.replaceAll(
       'CODE_SIGN_STYLE = Automatic;',
       'CODE_SIGN_STYLE = Automatic;\n\t\t\t\tCODE_SIGN_ENTITLEMENTS = Config/Custom.entitlements;',
     )
@@ -582,6 +603,7 @@ describe('ios-entitlements: readAppEntitlements', () => {
     const app = readAppEntitlements(dir, 'com.demo.app')
     expect(app?.raw).toBe(custom)
   })
+
   it('reads the typed accessors off the raw text', () => {
     const raw = entitlements(`
       <key>aps-environment</key><string>development</string>

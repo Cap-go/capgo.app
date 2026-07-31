@@ -415,7 +415,7 @@ describe('ios/spm-deployment-target-consistency', () => {
   it('warns when pbxproj target < Package.swift min (the dangerous direction)', async () => {
     const ctx = makeCtx({
       projectDir: makeProject(cleanSpmFiles({
-        'ios/App/App.xcodeproj/project.pbxproj': pbxproj('14.0'),
+        'ios/App/App.xcodeproj/project.pbxproj': pbxprojWithDeploymentTargets('14.0', '14.0'),
       })),
     })
     const f = await spmDeploymentTargetConsistency.run(ctx)
@@ -435,7 +435,7 @@ describe('ios/spm-deployment-target-consistency', () => {
   it('is clean when pbxproj target > Package.swift min', async () => {
     const ctx = makeCtx({
       projectDir: makeProject(cleanSpmFiles({
-        'ios/App/App.xcodeproj/project.pbxproj': pbxproj('16.0'),
+        'ios/App/App.xcodeproj/project.pbxproj': pbxprojWithDeploymentTargets('16.0', '16.0'),
       })),
     })
     expect(await spmDeploymentTargetConsistency.run(ctx)).toEqual([])

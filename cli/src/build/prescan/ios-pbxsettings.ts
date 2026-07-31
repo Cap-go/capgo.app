@@ -189,7 +189,7 @@ export function readTargetConfigs(pbxContent: string): TargetConfigs[] {
   })
 }
 
-/** Lowest explicit iOS deployment target across project and application configs. */
+/** Lowest explicit iOS deployment target across linked project and application configs. */
 export function readMinimumIosDeploymentTarget(pbxContent: string): number | null {
   const values: number[] = []
   const add = (raw: string | undefined): void => {
@@ -208,12 +208,6 @@ export function readMinimumIosDeploymentTarget(pbxContent: string): number | nul
     if (target.productType !== APPLICATION_PRODUCT_TYPE)
       continue
     for (const config of configs)
-      add(config.settings.IPHONEOS_DEPLOYMENT_TARGET)
-  }
-  // Degraded/minimal pbxproj fixtures may omit the project/target linkage.
-  // Preserve the old best-effort behavior when no scoped value was discoverable.
-  if (values.length === 0) {
-    for (const config of readBuildConfigs(pbxContent))
       add(config.settings.IPHONEOS_DEPLOYMENT_TARGET)
   }
   return values.length > 0 ? Math.min(...values) : null
