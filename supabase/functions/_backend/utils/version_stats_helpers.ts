@@ -146,6 +146,3 @@ export function createPercentageDatasetsByName(
   })
 }
 
-/** Alias used by public statistics routes/tests. */
-export const createDatasetsByName = createPercentageDatasetsByName
-

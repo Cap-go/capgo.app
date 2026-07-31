@@ -13,7 +13,7 @@ import { readNativeVersionUsage } from '../../utils/stats.ts'
 import { generateDateLabels } from '../../utils/stats_date_range.ts'
 import { supabaseApikey, supabaseClient } from '../../utils/supabase.ts'
 import { isStripeConfigured } from '../../utils/utils.ts'
-import { buildDailyReportedCountsByName, convertCountsToPercentagesByName, createDatasetsByName, fillMissingDailyCounts } from '../../utils/version_stats_helpers.ts'
+import { buildDailyReportedCountsByName, convertCountsToPercentagesByName, createPercentageDatasetsByName, fillMissingDailyCounts } from '../../utils/version_stats_helpers.ts'
 
 dayjs.extend(utc)
 
@@ -689,7 +689,7 @@ async function getBundleUsage(appId: string, from: Date, to: Date, shouldGetLate
   const filledCounts = fillMissingDailyCounts(dailyCounts, dates, versions)
   const dailyPercentages = convertCountsToPercentagesByName(filledCounts, dates, versions)
   const activeVersions = getActiveVersionsByName(versions, filledCounts)
-  const datasets = createDatasetsByName(activeVersions, dates, dailyPercentages, filledCounts)
+  const datasets = createPercentageDatasetsByName(activeVersions, dates, dailyPercentages, filledCounts)
 
   if (shouldGetLatestVersion) {
     const latestVersion = getLatestDayVersionShare(activeVersions, dates, filledCounts)
@@ -788,7 +788,7 @@ async function getNativeVersionUsage(c: Context, appId: string, from: Date, to: 
   const dailyCounts = buildNativeVersionCounts(nativeVersionUsage, dates, seriesNames)
   const dailyPercentages = convertCountsToPercentagesByName(dailyCounts, dates, seriesNames)
   const activeVersions = getActiveVersionsByName(seriesNames, dailyCounts)
-  const datasets = createDatasetsByName(activeVersions, dates, dailyPercentages, dailyCounts)
+  const datasets = createPercentageDatasetsByName(activeVersions, dates, dailyPercentages, dailyCounts)
   const latestVersion = getLatestDayVersionShare(activeVersions, dates, dailyCounts)
 
   return {
@@ -847,7 +847,7 @@ export const bundleUsageTestUtils = {
   fillMissingDailyCounts,
   convertCountsToPercentagesByName,
   getActiveVersionsByName,
-  createDatasetsByName,
+  createDatasetsByName: createPercentageDatasetsByName,
   getLatestDayVersionShare,
 }
 
