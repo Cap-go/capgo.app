@@ -317,7 +317,8 @@ describe('ios/entitlements-aps-environment-vs-mode', () => {
       credentials: { CAPGO_IOS_PROVISIONING_MAP: mapWith(profileXml('<key>aps-environment</key><string>production</string>')) },
     })
     const f = await apsEnvironmentVsMode.run(ctx)
-    expect(f.some(x => x.severity === 'error')).toBe(true)
+    expect(f).toHaveLength(1)
+    expect(f[0]?.severity).toBe('error')
   })
 
   it('errors on development+app_store when UIBackgroundModes declares remote-notification', async () => {

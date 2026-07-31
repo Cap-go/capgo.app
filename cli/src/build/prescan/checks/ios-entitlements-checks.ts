@@ -203,8 +203,14 @@ export const apsEnvironmentVsMode: PrescanCheck = {
     if (value === null)
       return []
 
+    const primaryProfile = primaryProvisioningProfile(ctx)
+    const profileValue = primaryProfile
+      ? profileEntitlementsOf(primaryProfile.base64)['aps-environment']
+      : undefined
+    const profileMismatch = typeof profileValue === 'string' && profileValue !== value
+
     const findings: Finding[] = []
-    if (ctx.distributionMode === 'app_store' && value === 'development') {
+    if (ctx.distributionMode === 'app_store' && value === 'development' && !profileMismatch) {
       // The default Capacitor App.entitlements ships aps-environment=development.
       // On a push-free app this is a benign leftover the cloud builder neither
       // rewrites nor fails the archive on — so it must NOT hard-block an App Store
@@ -222,7 +228,7 @@ export const apsEnvironmentVsMode: PrescanCheck = {
         fix: 'Set aps-environment=production in App.entitlements and use a production push profile (or remove aps-environment if the app does not use push)',
       })
     }
-    else if (ctx.distributionMode === 'ad_hoc' && value === 'production') {
+    else if (ctx.distributionMode === 'ad_hoc' && value === 'production' && !profileMismatch) {
       findings.push({
         id: 'ios/entitlements-aps-environment-vs-mode',
         severity: 'warning',
@@ -234,21 +240,14 @@ export const apsEnvironmentVsMode: PrescanCheck = {
 
     // When a provisioning map is present, the profile's aps-environment must agree
     // with the app's declared value.
-    const primaryProfile = primaryProvisioningProfile(ctx)
-    if (primaryProfile) {
-      for (const { bundleId, base64 } of [primaryProfile]) {
-        const profileEnt = profileEntitlementsOf(base64)
-        const profileValue = profileEnt['aps-environment']
-        if (typeof profileValue === 'string' && profileValue !== value) {
-          findings.push({
-            id: 'ios/entitlements-aps-environment-vs-mode',
-            severity: 'error',
-            title: `aps-environment differs between App.entitlements and the provisioning profile for "${bundleId}"`,
-            detail: `app: ${value} — profile: ${profileValue}`,
-            fix: 'Align aps-environment in App.entitlements with the push profile (or regenerate the profile)',
-          })
-        }
-      }
+    if (primaryProfile && profileMismatch) {
+      findings.push({
+        id: 'ios/entitlements-aps-environment-vs-mode',
+        severity: 'error',
+        title: `aps-environment differs between App.entitlements and the provisioning profile for "${primaryProfile.bundleId}"`,
+        detail: `app: ${value} — profile: ${profileValue}`,
+        fix: 'Align aps-environment in App.entitlements with the push profile (or regenerate the profile)',
+      })
     }
     return findings
   },

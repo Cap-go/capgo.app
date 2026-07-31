@@ -37,7 +37,7 @@ function makePbx(opts: {
 } = {}): string {
   const renderSettings = (s: Record<string, string>): string =>
     Object.entries(s)
-      .map(([k, v]) => `\t\t\t\t${k} = ${/[\s,]/.test(v) ? `"${v}"` : v};`)
+      .map(([k, v]) => `\t\t\t\t${k} = ${v === '' || /[\s,]/.test(v) ? `"${v}"` : v};`)
       .join('\n')
 
   const projectSettings = opts.projectSettings ?? { IPHONEOS_DEPLOYMENT_TARGET: '15.0', SDKROOT: 'iphoneos' }

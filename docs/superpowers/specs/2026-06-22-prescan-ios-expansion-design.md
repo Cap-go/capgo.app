@@ -392,15 +392,14 @@ the grounding project scans clean.)
 
 Lowest value / highest FP, in trim order (cut top-down):
 1. `ios/plist-background-modes-sanity` (high FP, research-flagged).
-2. `ios/plist-iphoneos-required` (cosmetic structural sanity; Capacitor always sets it).
-3. `ios/plist-display-name` (cosmetic; grounding passes via literal).
-4. `ios/xcode-multiple-app-targets` (rare; bad-merge only).
-5. `ios/entitlements-app-groups-format` (format-only; rare in Capacitor apps).
-6. `ios/capacitor-allow-navigation-wildcard` (security smell, not build-breaking).
-7. `ios/spm-deployment-target-consistency` (warning-only; pbxproj≥spm usually fine).
-8. `ios/plist-orientations-present` (Apple lenient on iPhone orientations).
+2. `ios/plist-display-name` (cosmetic; grounding passes via literal).
+3. `ios/xcode-multiple-app-targets` (rare; bad-merge only).
+4. `ios/entitlements-app-groups-format` (format-only; rare in Capacitor apps).
+5. `ios/capacitor-allow-navigation-wildcard` (security smell, not build-breaking).
+6. `ios/spm-deployment-target-consistency` (warning-only; pbxproj≥spm usually fine).
+7. `ios/plist-orientations-present` (Apple lenient on iPhone orientations).
 
-Cutting 1-8 → 25 iOS checks (within target). Recommended: ship all 33 (each grounded,
+Cutting 1-7 → 26 iOS checks (within target). Recommended: ship all 33 (each grounded,
 clean against the real project).
 
 ---
