@@ -47,6 +47,11 @@ describe('capacitor-version: capacitorMajor', () => {
     expect(capacitorMajor(dir)).toBeNull()
   })
 
+  it('returns null when a Capacitor dependency range is not a string (never throws)', () => {
+    const dir = makeProject({ 'package.json': JSON.stringify({ dependencies: { '@capacitor/core': 8 } }) })
+    expect(capacitorMajor(dir)).toBeNull()
+  })
+
   it('returns null when no capacitor dependency is present', () => {
     const dir = makeProject({ 'package.json': pkg({ react: '^19.0.0' }) })
     expect(capacitorMajor(dir)).toBeNull()

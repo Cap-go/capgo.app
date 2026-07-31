@@ -268,7 +268,7 @@ describe('ios/xcode-deployment-target-capacitor', () => {
   })
   it('reads the app-target value too (target below floor errors even if project-level is fine)', async () => {
     const low = { IPHONEOS_DEPLOYMENT_TARGET: '11.0', PRODUCT_BUNDLE_IDENTIFIER: 'app.capgo.plugin.TutorialBuild', DEVELOPMENT_TEAM: 'UVTJ336J2D', CODE_SIGN_STYLE: 'Automatic', SWIFT_VERSION: '5.0' }
-    const dir = projectWith(makePbx({ targetDebug: { ...low }, targetRelease: { ...low }, projectSettings: { SDKROOT: 'iphoneos' } }))
+    const dir = projectWith(makePbx({ targetDebug: { ...low }, targetRelease: { ...low }, projectSettings: { IPHONEOS_DEPLOYMENT_TARGET: '15.0', SDKROOT: 'iphoneos' } }))
     const findings = await deploymentTargetCapacitor.run(ctx(dir))
     expect(findings.length).toBe(1)
     expect(findings[0].severity).toBe('error')

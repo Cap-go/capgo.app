@@ -200,7 +200,13 @@ Local = reads only project files. None of the new checks are `remote`. `appliesT
 predicates are exact. Severity given as `error`/`warning`; "error-on-upload" means
 `willUploadToAppStore(ctx) ? error : warning`.
 
-### 2.A Info.plist / App Store (file: `checks/ios-plist-store.ts`)
+All 33 checks in this expansion carry the hard-coded enforcement instant
+`2026-08-14T00:00:00.000Z`. Before that instant, findings retain their real
+severity and remain visible in terminal/JSON/telemetry, but are information-only
+for outcome decisions. Critical output explicitly says that builds will fail
+starting at the deadline. Existing prescan checks are not deferred.
+
+### 2.A Info.plist / App Store (file: `checks/ios-plist-checks.ts`)
 
 | id | sev | local | appliesTo (exact) | detection (algorithm/regex) | fix |
 |----|-----|-------|-------------------|------------------------------|-----|
@@ -208,13 +214,12 @@ predicates are exact. Severity given as `error`/`warning`; "error-on-upload" mea
 | `ios/plist-version-short-format` | error | local | iOS; Info.plist exists | `v=resolvePlistValue(plistString(raw,'CFBundleShortVersionString'),pbx)`. null→(SKIP — presence owned by infoplist-sanity, see §5). `'$('`→skip. Else validate `/^\d+(\.\d+){0,2}$/`. Fail→error with value (ITMS-90060). | Set MARKETING_VERSION to ≤3 dot-separated integers (e.g. 1.4.2). |
 | `ios/plist-version-build-format` | error | local | iOS; Info.plist exists | `v=resolvePlistValue(plistString(raw,'CFBundleVersion'),pbx)`. null→SKIP. `'$('`→skip. Else `/^\d+(\.\d+){0,2}$/`. Fail→error. Do NOT require monotonic/ordering (needs ASC history). | Set CURRENT_PROJECT_VERSION numeric, ≤3 integers (e.g. 42 or 1.4.42). |
 | `ios/plist-encryption-compliance` | warning | local | `willUploadToAppStore(ctx)` | `plistHasKey(raw,'ITSAppUsesNonExemptEncryption')===false` → warning. Do NOT assert which value is correct. | Add `ITSAppUsesNonExemptEncryption=<false/>` (most Capacitor apps) to stop the per-upload Missing Compliance prompt. |
-| `ios/plist-ats-arbitrary-loads` | warning (→error on upload+dev-config) | local | iOS; Info.plist exists | `d=plistDictBlock(raw,'NSAppTransportSecurity')`; null→[]. If `plistBool(d,'NSAllowsArbitraryLoads')===true`→finding. Escalate to **error** when `willUploadToAppStore(ctx) && (ctx.config?.server?.cleartext===true || ctx.config?.server?.url)`. | Remove NSAllowsArbitraryLoads (or `<false/>`); use scoped NSExceptionDomains; remove server.url/cleartext before release. |
-| `ios/plist-launch-storyboard` | error | local | iOS; Info.plist exists | `ok = plistHasKey(raw,'UILaunchStoryboardName') || plistHasKey(raw,'UILaunchScreen')`. !ok→error (ITMS-90475/90096). (Drop the optional storyboard-file-existence sub-check — higher FP, low value.) | Add `UILaunchStoryboardName=LaunchScreen` (Capacitor default) or a UILaunchScreen dict. |
+| `ios/plist-ats-arbitrary-loads` | warning (→error on upload+dev-config) | local | iOS; Info.plist exists | `d=plistDictBlock(raw,'NSAppTransportSecurity')`; null→[]. If `plistBool(d,'NSAllowsArbitraryLoads')===true`→finding. Escalate to **error** when `willUploadToAppStore(ctx) && (ctx.config?.server?.cleartext===true \|\| ctx.config?.server?.url)`. | Remove NSAllowsArbitraryLoads (or `<false/>`); use scoped NSExceptionDomains; remove server.url/cleartext before release. |
+| `ios/plist-launch-storyboard` | error | local | iOS; Info.plist exists | `ok = plistHasKey(raw,'UILaunchStoryboardName') \|\| plistHasKey(raw,'UILaunchScreen')`. !ok→error (ITMS-90475/90096). (Drop the optional storyboard-file-existence sub-check — higher FP, low value.) | Add `UILaunchStoryboardName=LaunchScreen` (Capacitor default) or a UILaunchScreen dict. |
 | `ios/plist-orientations-multitasking` | warning | local | iOS; Info.plist exists; `TARGETED_DEVICE_FAMILY` (readBuildSetting) contains `2`; NOT `plistBool(raw,'UIRequiresFullScreen')===true` | `ipad = plistArrayStrings(raw,'UISupportedInterfaceOrientations~ipad')` (fallback to non-suffixed only if `~ipad` key entirely absent). Missing any of the four `UIInterfaceOrientation{Portrait,PortraitUpsideDown,LandscapeLeft,LandscapeRight}`→warning listing missing. SCOPE STRICTLY to `~ipad` (grounding iPhone array is missing PortraitUpsideDown → would FP). (ITMS-90474). | Add all four to `~ipad`, or add `UIRequiresFullScreen=<true/>`. |
 | `ios/plist-orientations-present` | warning | local | iOS; Info.plist exists | `arr=plistArrayStrings(raw,'UISupportedInterfaceOrientations')`. Key absent OR zero entries→warning. Present-but-invalid token (not one of the four constants)→warning naming the bad token. | Declare ≥1 valid UIInterfaceOrientation* value. |
 | `ios/plist-display-name` | warning | local | iOS; Info.plist exists | `disp=resolvePlistValue(plistString(raw,'CFBundleDisplayName'),pbx)`; `name=resolvePlistValue(plistString(raw,'CFBundleName'),pbx)`. Warning only if BOTH null/empty after resolution OR both still `'$('` with no pbx match. Grounding passes (literal CFBundleDisplayName). | Set CFBundleDisplayName or ensure PRODUCT_NAME resolves. |
 | `ios/plist-background-modes-sanity` | warning | local | iOS; Info.plist has `UIBackgroundModes` | `modes=plistArrayStrings(raw,'UIBackgroundModes')`; empty→[]. (a) any token ∉ {audio,location,voip,fetch,remote-notification,processing,bluetooth-central,bluetooth-peripheral,external-accessory,newsstand-content}→warning (invalid mode). (b) `location` present but no `NSLocation*UsageDescription` key in plist→warning (2.5.4). Gate (b) to `willUploadToAppStore(ctx)`. Do NOT hard-error on audio/location presence. | Remove unused background modes; add matching usage strings/capabilities. |
-| `ios/plist-iphoneos-required` | warning | local | iOS; Info.plist exists | `b=plistBool(raw,'LSRequiresIPhoneOS')`. Key absent→warning "missing". `b===false`→warning. Grounding `<true/>`→pass. | Add `LSRequiresIPhoneOS=<true/>`. |
 
 Notes:
 - `ios/plist-deployment-target` from research #1 is CUT (see §5): no real ASC
@@ -245,20 +250,20 @@ Notes:
 
 | id | sev | local | appliesTo (exact) | detection | fix |
 |----|-----|-------|-------------------|-----------|-----|
-| `ios/entitlements-vs-profile-capability` | error | local | `hasMap(ctx)` AND `readAppEntitlements(projectDir)!==null` | For each mapped profile parse `profileEntitlements` (parsed GENERICALLY — every key in the profile Entitlements dict, by sibling value tag string/bool/array; the old fixed ~10-key allowlist was an app-vs-profile asymmetry that false-positived granted-but-non-allowlisted capabilities like App Attest / Sign in with Apple / Siri) + app entitlements. Build app capability-key set EXCLUDING `aps-environment` (own check), `get-task-allow`, `application-identifier`, `*.team-identifier` (auto-managed). For each app key, profile must grant it: bool/string→same key present; array keys (application-groups, associated-domains, keychain-access-groups, icloud-container-identifiers) → every app member ⊆ profile list, BUT a profile wildcard member (`*`, `$(VAR)*`, OR the RESOLVED-team form `<teamid>.*`) covers all. App members carry the `$(AppIdentifierPrefix)`/`$(TeamIdentifierPrefix)` variable while the profile carries the resolved 10-char team prefix — both are stripped before the subset compare so suffixes match. One error per missing/under-covered key naming key + bundle id. (Covers iCloud — see §5, iCloud-specific check folded in.) | Enable the capability for this App ID in the portal, regenerate the profile, re-save creds; or remove the unused entitlement. |
+| `ios/entitlements-vs-profile-capability` | error | local | primary app profile exists AND `readAppEntitlements(projectDir)!==null` | Resolve the app target's `CODE_SIGN_ENTITLEMENTS` path (fall back to `ios/App/App/App.entitlements` only when absent), then compare only with the provisioning-map entry matching `ctx.appId`; extension/watch profiles are excluded. Parse `profileEntitlements` generically (every key in the profile Entitlements dict, by sibling value tag string/bool/array). Build app capability-key set excluding `aps-environment`, `get-task-allow`, `application-identifier`, `*.team-identifier` (auto-managed). For each app key, profile must grant it: bool/string→same key present; array keys → every app member ⊆ profile list, but a wildcard member covers all. | Enable the capability for this App ID in the portal, regenerate the profile, re-save creds; or remove the unused entitlement. |
 | `ios/entitlements-aps-environment-vs-mode` | warning/**error** | local | `readAppEntitlements` has `aps-environment` AND `ctx.distributionMode` set | `v=entString(raw,'aps-environment')`. `distributionMode==='app_store' && v==='development'`→**warning** by default (the default Capacitor leftover is benign on a push-free app and the cloud builder neither rewrites entitlements nor fails the archive on it), escalating to **error** only with independent push evidence (Info.plist `UIBackgroundModes` contains `remote-notification`). `distributionMode==='ad_hoc' && v==='production'`→**warning** (ad_hoc may use prod APNs). If `hasMap`: cross-check profile `aps-environment`; app≠profile→**error** (a mapped profile granting `production` while the app declares `development` is a real signing mismatch). Grounding (development, no mode→appliesTo false unless mode set; with app_store→**warning**, NOT a build-blocking error — restores the clean-scan baseline). | Set aps-environment=production for App Store/TestFlight push, or remove aps-environment if the app does not use push. |
-| `ios/entitlements-associated-domains-format` | warning | local | `readAppEntitlements` has non-empty `com.apple.developer.associated-domains` | Per `<string>`: require `/^(applinks|webcredentials|activitycontinuation|appclips):[a-z0-9.-]+(\?mode=(developer|managed))?$/i`. Flag entries containing `://`, starting `http`, containing `/`, containing spaces, or unknown service prefix. Don't flag the `service:*` managed-wildcard form. | Use `service:domain` (e.g. `applinks:example.com`) — no scheme/path/trailing slash. |
+| `ios/entitlements-associated-domains-format` | warning | local | `readAppEntitlements` has non-empty `com.apple.developer.associated-domains` | Per `<string>`: require `/^(applinks\|webcredentials\|activitycontinuation\|appclips):[a-z0-9.-]+(\?mode=(developer\|managed))?$/i`. Flag entries containing `://`, starting `http`, containing `/`, containing spaces, or unknown service prefix. Don't flag the `service:*` managed-wildcard form. | Use `service:domain` (e.g. `applinks:example.com`) — no scheme/path/trailing slash. |
 | `ios/entitlements-app-groups-format` | warning | local | `readAppEntitlements` has non-empty `com.apple.security.application-groups` | Per `<string>`: warn if it does not start with `group.`, or contains uppercase/whitespace/illegal chars. Pure format (subset coverage handled by entitlements-vs-profile). | Rename to `group.<reverse-dns>` and register in the portal. |
 
 ### 2.D Capacitor config (file: `checks/ios-capacitor-config.ts`)
 
 | id | sev | local | appliesTo (exact) | detection | fix |
 |----|-----|-------|-------------------|-----------|-----|
-| `ios/capacitor-server-url-shipped` | error (→warning if not uploading) | local | iOS; `typeof ctx.config?.server?.url === 'string' && server.url !== ''` | Non-empty server.url→finding. Detail escalates when dev target: `http://` (non-https), RFC1918 IP (`10.`/`172.(1[6-9]|2\d|3[01]).`/`192.168.`), `localhost`/`127.0.0.1`, or tunnel host (`*.ngrok.io`/`*.trycloudflare.com`/`*.loca.lt`). Severity `error` when `willUploadToAppStore(ctx)` else `warning` (research note: optionally always-error; we gate hard error to upload to limit dev-scan noise). | Remove server.url live-reload block before production; build web assets + `npx cap sync`. |
+| `ios/capacitor-server-url-shipped` | error (→warning if not uploading) | local | iOS; `typeof ctx.config?.server?.url === 'string' && server.url !== ''` | Non-empty server.url→finding. Detail escalates when dev target: `http://` (non-https), RFC1918 IP (`10.`/`172.(1[6-9]\|2\d\|3[01]).`/`192.168.`), `localhost`/`127.0.0.1`, or tunnel host (`*.ngrok.io`/`*.trycloudflare.com`/`*.loca.lt`). Severity `error` when `willUploadToAppStore(ctx)` else `warning` (research note: optionally always-error; we gate hard error to upload to limit dev-scan noise). | Remove server.url live-reload block before production; build web assets + `npx cap sync`. |
 | `ios/capacitor-server-cleartext` | warning (→error w/ http url) | local | iOS; `ctx.config?.server?.cleartext === true` | `cleartext===true`→warning. Escalate to **error** when `server.url` present AND starts `http://`. | Remove/`false` server.cleartext for production; use https or a scoped ATS exception. |
 | `ios/capacitor-allow-navigation-wildcard` | warning | local | iOS; `Array.isArray(ctx.config?.server?.allowNavigation)` and it contains a wildcard-only/public-suffix-wildcard entry | For each entry flag `*` and `*.<publicsuffix>` (e.g. `*.com`,`*.io`) with no specific host. Do NOT flag `*.example.com` or concrete hosts. One finding listing offenders. | Restrict allowNavigation to specific hosts; remove blanket `*`. |
 
-### 2.E Pods / SPM (file: `checks/ios-deps.ts`)
+### 2.E Pods / SPM (file: `checks/ios-pods-assets.ts`)
 
 Layout discriminator up front: CocoaPods = `readTextIfExists(ios/App/Podfile)!==null`;
 SPM = `readTextIfExists(ios/App/CapApp-SPM/Package.swift)!==null`. Pods checks
@@ -267,13 +272,13 @@ Grounding is SPM-only → all Pods checks early-return.
 
 | id | sev | local | appliesTo (exact) | detection | fix |
 |----|-----|-------|-------------------|-----------|-----|
-| `ios/pods-not-installed` | error | local | iOS; `ios/App/Podfile` exists | `podsDir=existsSync(ios/App/Pods)`; `ws=existsSync(ios/App/App.xcworkspace)`. `!podsDir || !ws`→error (distinguish the two sub-cases in detail). Do NOT fire when Podfile absent (SPM; cap-sync-stale owns missing-Podfile). | `npx cap sync ios` (or `pod install`); commit Pods/ + App.xcworkspace. |
+| `ios/pods-not-installed` | warning | local | iOS; `ios/App/Podfile` exists | `podsDir=existsSync(ios/App/Pods)`; `ws=existsSync(ios/App/App.xcworkspace)`. `!podsDir \|\| !ws`→warning (distinguish the two sub-cases in detail). Do NOT fire when Podfile absent (SPM; cap-sync-stale owns missing-Podfile). | `npx cap sync ios` (or `pod install`); commit Pods/ + App.xcworkspace. |
 | `ios/pods-lock-missing` | warning | local | iOS; `ios/App/Podfile` exists | `readTextIfExists(ios/App/Podfile.lock)===null`→warning. Separate from pods-not-installed. | `pod install`; commit Podfile.lock. |
 | `ios/pods-capacitor-missing` | error | local | iOS; `ios/App/Podfile` exists | Podfile text NOT matching `/pod\s+['"]Capacitor['"]/`→error (core not wired). Optional lower-confidence detail: plugins from `capacitorPluginDeps` whose PascalCase pod (`@capacitor/camera`→`CapacitorCamera`) is absent from the Podfile — keep as DETAIL only (community plugins have non-standard pod names). | `npx cap sync ios` then `pod install`. |
 | `ios/spm-package-resolved-missing` | error | local | iOS; `ios/App/CapApp-SPM/Package.swift` exists | Neither `ios/App/App.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved` NOR `ios/App/CapApp-SPM/Package.resolved` exists→error. Grounding has the xcodeproj one→pass. | `xcodebuild -resolvePackageDependencies` or open in Xcode; commit Package.resolved. |
 | `ios/spm-capacitor-dependency-missing` | error | local | iOS; `ios/App/CapApp-SPM/Package.swift` exists | Package.swift text NOT matching `/capacitor-swift-pm/` OR NOT matching `/\.product\(name:\s*['"]Capacitor['"]/`→error. (File header "DO NOT MODIFY ... managed by Capacitor CLI" → stable to regex.) Grounding matches both→pass. | `npx cap sync ios` to regenerate Package.swift. |
 
-### 2.F App icons / assets (file: `checks/ios-appicon-checks.ts`)
+### 2.F App icons / assets (file: `checks/ios-pods-assets.ts`)
 
 Merges research #1 `ios/plist-app-icon` and research #4's three appicon checks into a
 clean 3-way split. `readContentsJson` (§1.5) is the shared parse-safety net.
@@ -321,12 +326,11 @@ Parsing helpers:
 - `capacitor-version.ts` — shared capacitorMajor (extracted from android-project.ts)
 
 Check modules:
-- `checks/ios-plist-store.ts` — 11 checks (§2.A)
+- `checks/ios-plist-checks.ts` — 10 checks (§2.A)
 - `checks/ios-xcode.ts` — 7 checks (§2.B)
 - `checks/ios-entitlements-checks.ts` — 4 checks (§2.C)
 - `checks/ios-capacitor-config.ts` — 3 checks (§2.D)
-- `checks/ios-deps.ts` — 5 checks (§2.E)
-- `checks/ios-appicon-checks.ts` — 4 checks (§2.F, incl. spm-deployment-consistency)
+- `checks/ios-pods-assets.ts` — 9 checks (§2.E-F, incl. spm-deployment-consistency)
 
 `registry.ts` changes: import each exported check and append to `ALL_CHECKS` under
 new grouping comments (`// ios info.plist / app store`, `// ios xcode project`,
@@ -339,18 +343,18 @@ from `../capacitor-version`.
 - Current iOS checks: 10 (p12-opens, p12-expiry, asc-key-valid, asc-key-access,
   profile-expiry, profile-bundle-match, profile-type-vs-mode, cert-profile-pairing,
   targets-covered, infoplist-sanity). Plus shared/* that also run on iOS.
-- NEW iOS checks: **34**
-  - Info.plist / App Store: 11
+- NEW iOS checks: **33**
+  - Info.plist / App Store: 10
   - Xcode project: 7
   - Entitlements/capabilities: 4
   - Capacitor config: 3
   - Pods/SPM: 5
   - App icons/assets: 4 (incl. spm-deployment-consistency)
-- **Total iOS after expansion: 44.**
+- **Total iOS after expansion: 43.**
 
-(34 exceeds the 18-28 target; if trimming is desired, the lowest-value
+(33 exceeds the 18-28 target; if trimming is desired, the lowest-value
 high-FP/cosmetic 6-8 are flagged in §6 as "optional trims" — cutting those lands
-at ~26-28. Recommended baseline ships all 34: each is grounded, low/medium FP, and
+at ~26-28. Recommended baseline ships all 33: each is grounded, low/medium FP, and
 the grounding project scans clean.)
 
 ---
@@ -396,7 +400,7 @@ Lowest value / highest FP, in trim order (cut top-down):
 7. `ios/spm-deployment-target-consistency` (warning-only; pbxproj≥spm usually fine).
 8. `ios/plist-orientations-present` (Apple lenient on iPhone orientations).
 
-Cutting 1-8 → 26 iOS checks (within target). Recommended: ship all 34 (each grounded,
+Cutting 1-8 → 25 iOS checks (within target). Recommended: ship all 33 (each grounded,
 clean against the real project).
 
 ---

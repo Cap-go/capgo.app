@@ -374,6 +374,10 @@ describe('ios-pbxsettings: resolvePlistValue ($()->pbxproj substitution)', () =>
   it('does not substitute a value that merely contains a $() among other text', () => {
     expect(resolvePlistValue('prefix-$(MARKETING_VERSION)', FIXTURE_PBX)).toBe('prefix-$(MARKETING_VERSION)')
   })
+  it('does not resolve malformed references with mismatched delimiters', () => {
+    expect(resolvePlistValue('$(MARKETING_VERSION}', FIXTURE_PBX)).toBe('$(MARKETING_VERSION}')
+    expect(resolvePlistValue('${MARKETING_VERSION)', FIXTURE_PBX)).toBe('${MARKETING_VERSION)')
+  })
 })
 
 describe('ios-pbxsettings: readBuildConfigs', () => {
@@ -563,6 +567,20 @@ describe('ios-entitlements: readAppEntitlements', () => {
   })
   it('returns null when the entitlements file is absent', () => {
     expect(readAppEntitlements(makeProject({}))).toBeNull()
+  })
+  it('reads the app target CODE_SIGN_ENTITLEMENTS path before the Capacitor default', () => {
+    const custom = entitlements('<key>com.apple.developer.healthkit</key><true/>')
+    const pbx = FIXTURE_PBX.replace(
+      'CODE_SIGN_STYLE = Automatic;',
+      'CODE_SIGN_STYLE = Automatic;\n\t\t\t\tCODE_SIGN_ENTITLEMENTS = Config/Custom.entitlements;',
+    )
+    const dir = makeProject({
+      'ios/App/App.xcodeproj/project.pbxproj': pbx,
+      'ios/App/Config/Custom.entitlements': custom,
+      'ios/App/App/App.entitlements': entitlements('<key>aps-environment</key><string>development</string>'),
+    })
+    const app = readAppEntitlements(dir, 'com.demo.app')
+    expect(app?.raw).toBe(custom)
   })
   it('reads the typed accessors off the raw text', () => {
     const raw = entitlements(`

@@ -1840,7 +1840,12 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
     // the dashboard + skewed "Build requested" telemetry).
     if (options.prescan === true) {
       const { executePrescan, runPrescanGate } = await import('./prescan/command')
-      const { decision: gateDecision, report: gateReport, crashed: gateCrashed } = await runPrescanGate(
+      const {
+        decision: gateDecision,
+        report: gateReport,
+        crashed: gateCrashed,
+        informationOnlyFindings: gateInformationOnlyFindings,
+      } = await runPrescanGate(
         {
           enabled: true,
           ignoreFatal: options.prescanIgnoreFatal,
@@ -1877,9 +1882,13 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
           ? 'crashed'
           : !pc
               ? 'skipped'
-              : pc.error > 0
-                  ? (options.prescanIgnoreFatal ? 'bypassed' : 'blocked')
-                  : pc.warning > 0 ? (options.failOnWarnings ? 'blocked' : 'warned') : 'clean'
+              : gateDecision === 'block'
+                ? 'blocked'
+                : options.prescanIgnoreFatal && pc.error > 0
+                  ? 'bypassed'
+                  : gateInformationOnlyFindings > 0
+                    ? 'information-only'
+                    : pc.warning > 0 ? 'warned' : 'clean'
         await sendEvent(options.apikey, {
           channel: 'native-builder',
           event: 'Prescan run',
@@ -1895,6 +1904,7 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
             'warnings': String(pc?.warning ?? 0),
             'finding-ids': gateReport ? gateReport.findings.filter(finding => finding.severity !== 'info').map(finding => finding.id).join(',').slice(0, 200) : '',
             'bypassed': String(prescanResult === 'bypassed'),
+            'information-only-findings': String(gateInformationOnlyFindings),
           },
           notify: false,
         }).catch(() => {})

@@ -1,7 +1,7 @@
 // test/prescan/engine.test.ts
 import { describe, expect, it } from 'bun:test'
 import { decideOutcome, runPrescan } from '../../src/build/prescan/engine'
-import { ALL_CHECKS } from '../../src/build/prescan/registry'
+import { ALL_CHECKS, IOS_PRESCAN_EXPANSION_ENFORCE_AFTER } from '../../src/build/prescan/registry'
 import type { PrescanCheck, ScanContext } from '../../src/build/prescan/types'
 import { makeP12, makeProfileXmlWithCert, makeProject } from './helpers'
 
@@ -21,6 +21,17 @@ describe('runPrescan', () => {
     expect(report.counts.error).toBe(1)
   })
 
+  it('copies a check enforcement date onto its findings', async () => {
+    const report = await runPrescan(baseCtx, [
+      check({
+        id: 'rollout',
+        enforceAfter: IOS_PRESCAN_EXPANSION_ENFORCE_AFTER,
+        run: async () => [{ id: 'rollout', severity: 'error', title: 'bad' }],
+      }),
+    ])
+    expect(report.findings[0]?.enforceAfter).toBe(IOS_PRESCAN_EXPANSION_ENFORCE_AFTER)
+  })
+
   it('isolates crashing checks as info findings', async () => {
     const report = await runPrescan(baseCtx, [
       check({ id: 'boom', run: async () => { throw new Error('kaput') } }),
@@ -29,6 +40,17 @@ describe('runPrescan', () => {
     const crash = report.findings.find(f => f.id === 'prescan/check-crashed')
     expect(crash?.severity).toBe('info')
     expect(crash?.detail).toContain('kaput')
+  })
+
+  it('keeps crashes from rollout checks information only until their deadline', async () => {
+    const report = await runPrescan(baseCtx, [
+      check({
+        id: 'rollout-boom',
+        enforceAfter: IOS_PRESCAN_EXPANSION_ENFORCE_AFTER,
+        run: async () => { throw new Error('kaput') },
+      }),
+    ])
+    expect(report.findings[0]?.enforceAfter).toBe(IOS_PRESCAN_EXPANSION_ENFORCE_AFTER)
   })
 
   it('skips remote checks without supabase and reports one info finding', async () => {
@@ -66,6 +88,52 @@ describe('decideOutcome', () => {
   it('blocks warnings with failOnWarnings', () => expect(decideOutcome(report(0, 1), { failOnWarnings: true })).toBe('block'))
   it('ignoreFatal always proceeds', () => {
     expect(decideOutcome(report(5, 5), { ignoreFatal: true })).toBe('proceed')
+  })
+
+  it('treats rollout findings as information only before their enforcement date', () => {
+    const graceReport = {
+      findings: [{
+        id: 'ios/new-check',
+        severity: 'error' as const,
+        title: 'critical problem',
+        enforceAfter: IOS_PRESCAN_EXPANSION_ENFORCE_AFTER,
+      }],
+      counts: { error: 1, warning: 0, info: 0 },
+      skippedRemote: 0,
+      durationMs: 0,
+      checksRun: 1,
+    }
+    expect(decideOutcome(graceReport, { now: new Date('2026-08-13T23:59:59.999Z') })).toBe('proceed')
+  })
+
+  it('enforces rollout findings at the exact deadline', () => {
+    const graceReport = {
+      findings: [{
+        id: 'ios/new-check',
+        severity: 'error' as const,
+        title: 'critical problem',
+        enforceAfter: IOS_PRESCAN_EXPANSION_ENFORCE_AFTER,
+      }],
+      counts: { error: 1, warning: 0, info: 0 },
+      skippedRemote: 0,
+      durationMs: 0,
+      checksRun: 1,
+    }
+    expect(decideOutcome(graceReport, { now: new Date(IOS_PRESCAN_EXPANSION_ENFORCE_AFTER) })).toBe('block')
+  })
+
+  it('still blocks an existing enforced error during the rollout window', () => {
+    const mixedReport = {
+      findings: [
+        { id: 'ios/new-check', severity: 'error' as const, title: 'new', enforceAfter: IOS_PRESCAN_EXPANSION_ENFORCE_AFTER },
+        { id: 'ios/existing-check', severity: 'error' as const, title: 'existing' },
+      ],
+      counts: { error: 2, warning: 0, info: 0 },
+      skippedRemote: 0,
+      durationMs: 0,
+      checksRun: 2,
+    }
+    expect(decideOutcome(mixedReport, { now: new Date('2026-08-01T00:00:00.000Z') })).toBe('block')
   })
 })
 
@@ -126,6 +194,13 @@ describe('registry', () => {
       // 2 store-access checks
       'android/play-sa-access', 'ios/asc-key-access',
     ]) expect(ids).toContain(expected)
+  })
+
+  it('defers exactly the 33 iOS expansion checks until the hard-coded deadline', () => {
+    const deferred = ALL_CHECKS.filter(check => check.enforceAfter === IOS_PRESCAN_EXPANSION_ENFORCE_AFTER)
+    expect(deferred.length).toBe(33)
+    expect(deferred.every(check => check.id.startsWith('ios/'))).toBe(true)
+    expect(ALL_CHECKS.find(check => check.id === 'ios/p12-opens')?.enforceAfter).toBeUndefined()
   })
 })
 

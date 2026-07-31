@@ -24,7 +24,7 @@ export function capacitorMajor(projectDir: string): number | null {
     return null
   }
   const range = deps['@capacitor/core'] ?? deps['@capacitor/ios'] ?? deps['@capacitor/android']
-  if (!range)
+  if (typeof range !== 'string')
     return null
   const m = range.match(/(\d+)/)
   return m ? Number(m[1]) : null

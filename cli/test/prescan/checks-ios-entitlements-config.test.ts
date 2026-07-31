@@ -58,6 +58,12 @@ function mapWith(xml: string, bundleId = 'com.demo.app'): string {
   return JSON.stringify({ [bundleId]: { profile: b64(xml), name: 'Test Profile' } })
 }
 
+function mapWithEntries(entries: Record<string, string>): string {
+  return JSON.stringify(Object.fromEntries(
+    Object.entries(entries).map(([bundleId, xml]) => [bundleId, { profile: b64(xml), name: `${bundleId} Profile` }]),
+  ))
+}
+
 /** ScanContext with an App.entitlements file written to a temp project dir. */
 function ctxWithEntitlements(entitlementsBody: string, extra: Partial<ScanContext> = {}): ScanContext {
   const dir = makeProject({ 'ios/App/App/App.entitlements': entitlementsFile(entitlementsBody) })
@@ -107,6 +113,48 @@ describe('ios/entitlements-vs-profile-capability', () => {
       { credentials: { CAPGO_IOS_PROVISIONING_MAP: mapWith(profileXml('<key>com.apple.developer.healthkit</key><true/>')) } },
     )
     expect(await entitlementsVsProfileCapability.run(ctx)).toEqual([])
+  })
+
+  it('compares app entitlements only with the primary app profile', async () => {
+    const ctx = ctxWithEntitlements(
+      '<key>com.apple.developer.healthkit</key><true/>',
+      {
+        credentials: {
+          CAPGO_IOS_PROVISIONING_MAP: mapWithEntries({
+            'com.demo.app': profileXml('<key>com.apple.developer.healthkit</key><true/>'),
+            'com.demo.app.share': profileXml('', 'com.demo.app.share'),
+          }),
+        },
+      },
+    )
+    expect(await entitlementsVsProfileCapability.run(ctx)).toEqual([])
+  })
+
+  it('uses a custom CODE_SIGN_ENTITLEMENTS path for capability checks', async () => {
+    const pbx = `// !$*UTF8*$!
+{
+  objects = {
+    AAA1 /* App */ = { isa = PBXNativeTarget; buildConfigurationList = LIST_APP; name = App; productType = "com.apple.product-type.application"; };
+    CFG_APP_RELEASE /* Release */ = {
+      isa = XCBuildConfiguration;
+      buildSettings = {
+        CODE_SIGN_ENTITLEMENTS = Config/Custom.entitlements;
+        PRODUCT_BUNDLE_IDENTIFIER = com.demo.app;
+      };
+      name = Release;
+    };
+    LIST_APP /* Build configuration list for PBXNativeTarget "App" */ = { isa = XCConfigurationList; buildConfigurations = ( CFG_APP_RELEASE ); defaultConfigurationName = Release; };
+  };
+}`
+    const ctx = makeCtx({
+      projectDir: makeProject({
+        'ios/App/App.xcodeproj/project.pbxproj': pbx,
+        'ios/App/Config/Custom.entitlements': entitlementsFile('<key>com.apple.developer.healthkit</key><true/>'),
+      }),
+      credentials: { CAPGO_IOS_PROVISIONING_MAP: mapWith(profileXml('')) },
+    })
+    expect(entitlementsVsProfileCapability.appliesTo?.(ctx)).toBe(true)
+    expect((await entitlementsVsProfileCapability.run(ctx))[0]?.severity).toBe('error')
   })
 
   it('errors when an app app-group member is not covered by the profile list', async () => {

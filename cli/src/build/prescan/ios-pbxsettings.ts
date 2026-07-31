@@ -16,6 +16,8 @@
 import type { PbxTarget } from '../pbxproj-parser'
 import { findSignableTargets } from '../pbxproj-parser'
 
+const APPLICATION_PRODUCT_TYPE = 'com.apple.product-type.application'
+
 export interface BuildConfig {
   name: string
   settings: Record<string, string>
@@ -77,7 +79,6 @@ function eachConfigBlock(pbxContent: string): { id: string, name: string, settin
   return out
 }
 
-/** IDs of the configs referenced by the PBXProject's buildConfigurationList. */
 /** IDs of the configs referenced by the PBXProject's buildConfigurationList. */
 function projectLevelConfigIds(pbxContent: string): Set<string> {
   // The PBXProject block nests `attributes = { TargetAttributes = { ... } }`,
@@ -142,10 +143,12 @@ export function readBuildSetting(pbxContent: string, name: string): string | nul
  * contains a `$()` among other text is left untouched (not a clean reference).
  */
 export function resolvePlistValue(rawValue: string, pbxContent: string): string {
-  const m = rawValue.match(/^\$[({]([A-Z0-9_]+)[)}]$/i)
-  if (!m)
+  const parenthesized = rawValue.match(/^\$\(([A-Z0-9_]+)\)$/i)
+  const braced = rawValue.match(/^\$\{([A-Z0-9_]+)\}$/i)
+  const variable = parenthesized?.[1] ?? braced?.[1]
+  if (!variable)
     return rawValue
-  return readBuildSetting(pbxContent, m[1]) ?? rawValue
+  return readBuildSetting(pbxContent, variable) ?? rawValue
 }
 
 /**
@@ -184,4 +187,34 @@ export function readTargetConfigs(pbxContent: string): TargetConfigs[] {
       .map(b => ({ name: b.name, settings: b.settings }))
     return { target, configs }
   })
+}
+
+/** Lowest explicit iOS deployment target across project and application configs. */
+export function readMinimumIosDeploymentTarget(pbxContent: string): number | null {
+  const values: number[] = []
+  const add = (raw: string | undefined): void => {
+    if (raw === undefined)
+      return
+    const value = Number.parseFloat(raw)
+    if (!Number.isNaN(value))
+      values.push(value)
+  }
+
+  for (const config of readBuildConfigs(pbxContent)) {
+    if (config.isProjectLevel)
+      add(config.settings.IPHONEOS_DEPLOYMENT_TARGET)
+  }
+  for (const { target, configs } of readTargetConfigs(pbxContent)) {
+    if (target.productType !== APPLICATION_PRODUCT_TYPE)
+      continue
+    for (const config of configs)
+      add(config.settings.IPHONEOS_DEPLOYMENT_TARGET)
+  }
+  // Degraded/minimal pbxproj fixtures may omit the project/target linkage.
+  // Preserve the old best-effort behavior when no scoped value was discoverable.
+  if (values.length === 0) {
+    for (const config of readBuildConfigs(pbxContent))
+      add(config.settings.IPHONEOS_DEPLOYMENT_TARGET)
+  }
+  return values.length > 0 ? Math.min(...values) : null
 }

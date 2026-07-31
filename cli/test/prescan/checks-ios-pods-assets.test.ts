@@ -90,6 +90,33 @@ function pbxproj(deploymentTarget = '15.0', iconName = 'AppIcon'): string {
 }`
 }
 
+function pbxprojWithDeploymentTargets(projectTarget: string, appTarget: string): string {
+  return `// !$*UTF8*$!
+{
+  objects = {
+    AAA1 /* App */ = { isa = PBXNativeTarget; buildConfigurationList = LIST_APP; name = App; productType = "com.apple.product-type.application"; };
+    PROJ /* Project object */ = { isa = PBXProject; buildConfigurationList = LIST_PROJECT; targets = ( AAA1 ); };
+    CFG_PROJECT_RELEASE /* Release */ = {
+      isa = XCBuildConfiguration;
+      buildSettings = {
+        IPHONEOS_DEPLOYMENT_TARGET = ${projectTarget};
+      };
+      name = Release;
+    };
+    CFG_APP_RELEASE /* Release */ = {
+      isa = XCBuildConfiguration;
+      buildSettings = {
+        IPHONEOS_DEPLOYMENT_TARGET = ${appTarget};
+        PRODUCT_BUNDLE_IDENTIFIER = app.capgo.plugin.TutorialBuild;
+      };
+      name = Release;
+    };
+    LIST_PROJECT /* Build configuration list for PBXProject "App" */ = { isa = XCConfigurationList; buildConfigurations = ( CFG_PROJECT_RELEASE ); defaultConfigurationName = Release; };
+    LIST_APP /* Build configuration list for PBXNativeTarget "App" */ = { isa = XCConfigurationList; buildConfigurations = ( CFG_APP_RELEASE ); defaultConfigurationName = Release; };
+  };
+}`
+}
+
 const APPICON_CONTENTS_1024 = `{
   "images": [
     {
@@ -393,6 +420,16 @@ describe('ios/spm-deployment-target-consistency', () => {
     })
     const f = await spmDeploymentTargetConsistency.run(ctx)
     expect(f.some(x => x.severity === 'warning' && x.id === 'ios/spm-deployment-target-consistency')).toBe(true)
+  })
+
+  it('warns when the app target is below Package.swift even if the project target is higher', async () => {
+    const ctx = makeCtx({
+      projectDir: makeProject(cleanSpmFiles({
+        'ios/App/App.xcodeproj/project.pbxproj': pbxprojWithDeploymentTargets('16.0', '14.0'),
+      })),
+    })
+    const findings = await spmDeploymentTargetConsistency.run(ctx)
+    expect(findings.some(x => x.severity === 'warning' && x.id === 'ios/spm-deployment-target-consistency')).toBe(true)
   })
 
   it('is clean when pbxproj target > Package.swift min', async () => {

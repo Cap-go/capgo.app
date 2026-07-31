@@ -16,7 +16,7 @@ import type { PbxTarget } from '../../pbxproj-parser'
 import type { Finding, PrescanCheck, ScanContext } from '../types'
 import { findSignableTargets, readPbxproj } from '../../pbxproj-parser'
 import { capacitorMajor } from '../capacitor-version'
-import { readBuildConfigs, readBuildSetting, readTargetConfigs } from '../ios-pbxsettings'
+import { readBuildConfigs, readMinimumIosDeploymentTarget, readTargetConfigs } from '../ios-pbxsettings'
 import { willUploadToAppStore } from '../upload-intent'
 import { parseProvisioningMap } from './ios-profiles'
 
@@ -45,16 +45,12 @@ function capacitorDeploymentFloor(major: number): number {
 }
 
 /**
- * Lowest PRESENT IPHONEOS_DEPLOYMENT_TARGET across the project-level config and
- * each app target (Release-preferred via readBuildSetting), parsed as a float;
- * null when the key is absent everywhere (inherited — cannot judge).
+ * Lowest PRESENT IPHONEOS_DEPLOYMENT_TARGET across every project-level and app
+ * target build config, parsed as a float; null when the key is absent everywhere
+ * (inherited — cannot judge).
  */
 function presentDeploymentTarget(pbxContent: string): number | null {
-  const raw = readBuildSetting(pbxContent, 'IPHONEOS_DEPLOYMENT_TARGET')
-  if (raw === null)
-    return null
-  const n = Number.parseFloat(raw)
-  return Number.isNaN(n) ? null : n
+  return readMinimumIosDeploymentTarget(pbxContent)
 }
 
 export const deploymentTargetCapacitor: PrescanCheck = {

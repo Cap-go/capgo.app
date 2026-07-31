@@ -2,6 +2,7 @@
 import type { Finding, PrescanReport, Severity } from '../../src/build/prescan/types'
 import { describe, expect, it } from 'bun:test'
 import { exitCodeFor, runPrescanGate, validateFlags } from '../../src/build/prescan/command'
+import { IOS_PRESCAN_EXPANSION_ENFORCE_AFTER } from '../../src/build/prescan/registry'
 
 describe('validateFlags', () => {
   it('rejects ignore-fatal + fail-on-warnings', () => {
@@ -21,6 +22,15 @@ describe('exitCodeFor', () => {
   it('0 on warnings by default', () => expect(exitCodeFor(counts(0, 2), {})).toBe(0))
   it('2 on warnings with failOnWarnings', () => expect(exitCodeFor(counts(0, 2), { failOnWarnings: true })).toBe(2))
   it('0 always with ignoreFatal', () => expect(exitCodeFor(counts(3, 3), { ignoreFatal: true })).toBe(0))
+  it('0 for a deferred critical finding before the deadline', () => {
+    const findings: Finding[] = [{
+      id: 'ios/new-check',
+      severity: 'error',
+      title: 'critical',
+      enforceAfter: IOS_PRESCAN_EXPANSION_ENFORCE_AFTER,
+    }]
+    expect(exitCodeFor(counts(1, 0), { now: new Date('2026-08-01T00:00:00.000Z') }, findings)).toBe(0)
+  })
 })
 
 /** Capture everything written to process.stdout during fn (clack writes raw to stdout). */
@@ -60,6 +70,19 @@ describe('runPrescanGate', () => {
   it('blocks on errors', async () => {
     const r = await runPrescanGate({ enabled: true, silent: true }, async () => fakeReport(1, 0))
     expect(r.decision).toBe('block')
+  })
+  it('prints a critical information-only error and proceeds during rollout', async () => {
+    const printed: string[] = []
+    const report = fakeReport(1, 0)
+    report.findings[0].enforceAfter = IOS_PRESCAN_EXPANSION_ENFORCE_AFTER
+    const r = await runPrescanGate({
+      enabled: true,
+      now: new Date('2026-08-01T00:00:00.000Z'),
+      print: message => printed.push(message),
+    }, async () => report)
+    expect(r.decision).toBe('proceed')
+    expect(printed.join('\n')).toContain('CRITICAL — INFORMATION ONLY')
+    expect(printed.join('\n')).toContain('will fail builds starting 2026-08-14 00:00 UTC')
   })
   it('proceeds on errors with ignoreFatal', async () => {
     const r = await runPrescanGate({ enabled: true, ignoreFatal: true, silent: true }, async () => fakeReport(1, 0))

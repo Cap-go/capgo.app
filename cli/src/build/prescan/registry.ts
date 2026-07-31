@@ -84,6 +84,30 @@ import { bundleIdConsistency, capSyncStale, nodeLinkerLayout } from './checks/sh
 import { apikeyPermission, appExists } from './checks/shared-remote'
 import { ascKeyAccess, playSaAccess } from './checks/store-access'
 
+/** New iOS expansion checks become build-blocking at this UTC instant. */
+export const IOS_PRESCAN_EXPANSION_ENFORCE_AFTER = '2026-08-14T00:00:00.000Z'
+
+const IOS_EXPANSION_CHECKS: PrescanCheck[] = [
+  // ios plist (Info.plist / App Store)
+  plistBundleIdFormat, plistVersionShortFormat, plistVersionBuildFormat,
+  plistEncryptionCompliance, plistAtsArbitraryLoads, plistLaunchStoryboard,
+  plistOrientationsMultitasking, plistOrientationsPresent, plistDisplayName,
+  plistBackgroundModesSanity,
+  // ios xcode (project / build settings)
+  deploymentTargetCapacitor, signingTeam, bundleIdMismatchAcrossConfigs,
+  enableBitcodeLeftover, swiftVersionSanity, noAppTarget,
+  multipleAppTargets,
+  // ios entitlements / capabilities
+  entitlementsVsProfileCapability, apsEnvironmentVsMode,
+  associatedDomainsFormat, appGroupsFormat,
+  // ios capacitor config
+  serverUrlShipped, serverCleartext, allowNavigationWildcard,
+  // ios pods / spm / app icons
+  podsNotInstalled, podsLockMissing, podsCapacitorMissing,
+  spmPackageResolvedMissing, spmCapacitorDependencyMissing, appiconEmptyOrPlaceholder,
+  appiconReferencedFileMissing, appiconMarketingMissing, spmDeploymentTargetConsistency,
+].map(check => ({ ...check, enforceAfter: IOS_PRESCAN_EXPANSION_ENFORCE_AFTER }))
+
 export const ALL_CHECKS: PrescanCheck[] = [
   // shared
   apikeyPermission, appExists, credentialsSaved,
@@ -106,22 +130,5 @@ export const ALL_CHECKS: PrescanCheck[] = [
   sdkFloors, targetSdkPlay, minSdkCapacitor, versionFields,
   // store-access (remote)
   playSaAccess, ascKeyAccess,
-  // ios plist (Info.plist / App Store)
-  plistBundleIdFormat, plistVersionShortFormat, plistVersionBuildFormat,
-  plistEncryptionCompliance, plistAtsArbitraryLoads, plistLaunchStoryboard,
-  plistOrientationsMultitasking, plistOrientationsPresent, plistDisplayName,
-  plistBackgroundModesSanity,
-  // ios xcode (project / build settings)
-  deploymentTargetCapacitor, signingTeam, bundleIdMismatchAcrossConfigs,
-  enableBitcodeLeftover, swiftVersionSanity, noAppTarget,
-  multipleAppTargets,
-  // ios entitlements / capabilities
-  entitlementsVsProfileCapability, apsEnvironmentVsMode,
-  associatedDomainsFormat, appGroupsFormat,
-  // ios capacitor config
-  serverUrlShipped, serverCleartext, allowNavigationWildcard,
-  // ios pods / spm / app icons
-  podsNotInstalled, podsLockMissing, podsCapacitorMissing,
-  spmPackageResolvedMissing, spmCapacitorDependencyMissing, appiconEmptyOrPlaceholder,
-  appiconReferencedFileMissing, appiconMarketingMissing, spmDeploymentTargetConsistency,
+  ...IOS_EXPANSION_CHECKS,
 ]

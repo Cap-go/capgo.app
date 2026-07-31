@@ -35,7 +35,7 @@ import type { Finding, PrescanCheck, ScanContext } from '../types'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { appIconSetDir, hasMarketingIcon, readContentsJson } from '../ios-appicon'
-import { readBuildSetting } from '../ios-pbxsettings'
+import { readMinimumIosDeploymentTarget } from '../ios-pbxsettings'
 import { readPbxproj } from '../../pbxproj-parser'
 import { readTextIfExists } from '../gradle'
 
@@ -358,17 +358,14 @@ export const spmDeploymentTargetConsistency: PrescanCheck = {
     const pbx = readPbxproj(ctx.projectDir)
     if (pbx === null)
       return false
-    return readBuildSetting(pbx, 'IPHONEOS_DEPLOYMENT_TARGET') !== null
+    return readMinimumIosDeploymentTarget(pbx) !== null
   },
   async run(ctx): Promise<Finding[]> {
     const pbx = pbxContent(ctx)
     if (pbx === null)
       return []
-    const raw = readBuildSetting(pbx, 'IPHONEOS_DEPLOYMENT_TARGET')
-    if (raw === null)
-      return []
-    const pbxTarget = Number.parseFloat(raw)
-    if (Number.isNaN(pbxTarget))
+    const pbxTarget = readMinimumIosDeploymentTarget(pbx)
+    if (pbxTarget === null)
       return []
 
     const packageSwift = readTextIfExists(packageSwiftPath(ctx.projectDir))
