@@ -160,6 +160,20 @@ describe('plugin PostgreSQL error logging', () => {
     })
   })
 
+  it('bounds large aggregate connection errors and records omitted entries', () => {
+    const aggregateError = new AggregateError(
+      Array.from({ length: 55 }, (_, index) => new Error(`connection-${index}`)),
+      'All connection attempts failed',
+    )
+    const serialized = serializePostgresError(aggregateError)
+    const errors = serialized.errors as Record<string, unknown>[]
+
+    expect(errors).toHaveLength(51)
+    expect(errors[0]).toMatchObject({ message: 'connection-0' })
+    expect(errors[49]).toMatchObject({ message: 'connection-49' })
+    expect(errors[50]).toEqual({ type: 'truncated', omitted: 5 })
+  })
+
   it('keeps primitive throws and hostile properties safe to log', () => {
     expect(serializePostgresError(null)).toEqual({ type: 'null', value: null })
     expect(serializePostgresError('connection reset')).toEqual({ type: 'string', value: 'connection reset' })
@@ -227,6 +241,8 @@ describe('plugin PostgreSQL error logging', () => {
         }),
       }),
       diagnostics: {
+        appId: 'co.spencer.app',
+        planActions: ['mau'],
         version: 1,
         functionName: 'getAppOwnerPostgres',
         databaseSource: 'HYPERDRIVE_CAPGO_READ_EU',
@@ -240,13 +256,6 @@ describe('plugin PostgreSQL error logging', () => {
           colo: 'FRA',
           continent: 'EU',
           country: 'BE',
-        },
-        context: {
-          appId: 'co.spencer.app',
-          functionName: 'caller-cannot-override',
-          planActions: ['mau'],
-          request: { method: 'DELETE' },
-          version: 999,
         },
       },
     }))

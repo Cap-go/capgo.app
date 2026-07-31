@@ -645,7 +645,16 @@ export function serializePostgresError(
 
     const aggregateErrors = readErrorProperty(error, 'errors')
     if (Array.isArray(aggregateErrors)) {
-      serialized.errors = aggregateErrors.map(nestedError => serializePostgresError(nestedError, seen, depth + 1))
+      const errors: Record<string, unknown>[] = aggregateErrors
+        .slice(0, MAX_POSTGRES_LOG_ARRAY_ITEMS)
+        .map(nestedError => serializePostgresError(nestedError, seen, depth + 1))
+      if (aggregateErrors.length > MAX_POSTGRES_LOG_ARRAY_ITEMS) {
+        errors.push({
+          type: 'truncated',
+          omitted: aggregateErrors.length - MAX_POSTGRES_LOG_ARRAY_ITEMS,
+        })
+      }
+      serialized.errors = errors
     }
 
     const cause = readErrorProperty(error, 'cause')
@@ -670,6 +679,12 @@ export function logPgError(
   diagnostics: Record<string, unknown> = {},
 ) {
   const cf = c.req.raw.cf
+  const serializedDiagnostics = serializePostgresLogValue(diagnostics)
+  const callerDiagnostics = serializedDiagnostics !== null
+    && typeof serializedDiagnostics === 'object'
+    && !Array.isArray(serializedDiagnostics)
+    ? serializedDiagnostics as Record<string, unknown>
+    : { context: serializedDiagnostics }
 
   // This deliberately verbose payload is temporary while investigating the
   // intermittent getAppOwnerPostgres replica/Hyperdrive failure.
@@ -678,6 +693,7 @@ export function logPgError(
     message: `${functionName} - PostgreSQL Error`,
     error: serializePostgresError(error),
     diagnostics: {
+      ...callerDiagnostics,
       version: 1,
       functionName,
       databaseSource: c.get('databaseSource') ?? c.res.headers.get('X-Database-Source') ?? 'unknown',
@@ -692,7 +708,6 @@ export function logPgError(
         continent: cf?.continent,
         country: cf?.country,
       },
-      context: serializePostgresLogValue(diagnostics),
     },
   })
 }
