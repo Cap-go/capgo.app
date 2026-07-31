@@ -462,6 +462,8 @@ describe('[POST] /updates', () => {
       expect(json.error).toBeUndefined()
       expect(json.kind).toBeUndefined()
 
+      // Device on store binary: plugin sends version_name "builtin" (rewritten to
+      // version_build) or already reports version_name === version_build.
       const alreadyOnBuiltin = getBaseData(APP_NAME_UPDATE)
       alreadyOnBuiltin.version_name = 'builtin'
       const upToDateResponse = await postUpdate(alreadyOnBuiltin)
@@ -469,6 +471,14 @@ describe('[POST] /updates', () => {
       const upToDateJson = await upToDateResponse.json<UpdateRes>()
       expect(upToDateJson.error).toBe('already_on_builtin')
       expect(upToDateJson.kind).toBe('up_to_date')
+
+      const alreadyOnNativeBuild = getBaseData(APP_NAME_UPDATE)
+      alreadyOnNativeBuild.version_name = alreadyOnNativeBuild.version_build
+      const nativeResponse = await postUpdate(alreadyOnNativeBuild)
+      expect(nativeResponse.status).toBe(200)
+      const nativeJson = await nativeResponse.json<UpdateRes>()
+      expect(nativeJson.error).toBe('already_on_builtin')
+      expect(nativeJson.kind).toBe('up_to_date')
     }
     finally {
       await supabase
