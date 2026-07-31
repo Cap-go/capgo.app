@@ -109,7 +109,7 @@ const tooltipClickHandler = computed<TooltipClickHandler | undefined>(() => {
         params.set('end', endOfDay.toISOString())
       }
 
-      router.push(`/app/${props.appId}/logs?${params.toString()}`)
+      router.push(`/app/${props.appId}/observe/logs?${params.toString()}`)
     },
     appIdByLabel: actionIdByLabel,
   }
