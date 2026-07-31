@@ -492,6 +492,11 @@ const MAX_POSTGRES_LOG_VALUE_DEPTH = 4
 const MAX_POSTGRES_LOG_ARRAY_ITEMS = 50
 const MAX_POSTGRES_LOG_OBJECT_KEYS = 50
 const POSTGRES_LOG_REDACTED_KEYS = new Set(['bindings', 'parameters', 'params', 'values'])
+const POSTGRES_LOG_UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+
+function redactPostgresLogText(value: string): string {
+  return value.replace(/(^|[\r\n])params:[^\r\n]*/gi, '$1params: [redacted]')
+}
 
 function describeThrownValue(value: unknown): string {
   try {
@@ -516,13 +521,29 @@ function readErrorProperty(error: object, key: PropertyKey): unknown {
   }
 }
 
-function getObjectType(value: object): string {
-  const constructor = readErrorProperty(value, 'constructor')
-  if (constructor && (typeof constructor === 'object' || typeof constructor === 'function')) {
-    const constructorName = readErrorProperty(constructor, 'name')
-    if (typeof constructorName === 'string' && constructorName)
-      return constructorName
+function readOwnLogProperty(value: object, key: PropertyKey): unknown {
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)
+    if (!descriptor)
+      return '[unreadable property: missing own descriptor]'
+    if ('value' in descriptor)
+      return descriptor.value
+    return '[accessor property omitted]'
   }
+  catch (propertyError) {
+    return `[unreadable property: ${describeThrownValue(propertyError)}]`
+  }
+}
+
+function getObjectType(value: object): string {
+  if (Array.isArray(value))
+    return 'Array'
+  if (value instanceof AggregateError)
+    return 'AggregateError'
+  if (value instanceof Error)
+    return 'Error'
+  if (typeof value === 'function')
+    return 'Function'
   return 'Object'
 }
 
@@ -531,6 +552,8 @@ function serializePostgresLogValue(
   seen = new WeakSet<object>(),
   depth = 0,
 ): unknown {
+  if (typeof value === 'string')
+    return redactPostgresLogText(value)
   if (typeof value === 'bigint')
     return value.toString()
   if (typeof value === 'symbol')
@@ -566,17 +589,27 @@ function serializePostgresLogValue(
       return `[unreadable object: ${describeThrownValue(keyError)}]`
     }
 
-    const serialized: Record<string, unknown> = {}
+    // A null-prototype record plus explicit unsafe-key filtering prevents
+    // attacker-controlled diagnostic keys from invoking `__proto__` setters
+    // here or in less defensive downstream log processors.
+    const serialized: Record<string, unknown> = Object.create(null)
+    const blockedKeys: string[] = []
     for (const key of keys.slice(0, MAX_POSTGRES_LOG_OBJECT_KEYS)) {
+      if (POSTGRES_LOG_UNSAFE_KEYS.has(key.toLowerCase())) {
+        blockedKeys.push(key)
+        continue
+      }
       // Structured query objects can carry bound values under these keys.
       // Keep the query text and shape, but never copy parameter values to logs.
       serialized[key] = POSTGRES_LOG_REDACTED_KEYS.has(key.toLowerCase())
         ? '[redacted]'
-        : serializePostgresLogValue(readErrorProperty(value, key), seen, depth + 1)
+        : serializePostgresLogValue(readOwnLogProperty(value, key), seen, depth + 1)
     }
 
     if (keys.length > MAX_POSTGRES_LOG_OBJECT_KEYS)
       serialized.__truncatedKeys = keys.length - MAX_POSTGRES_LOG_OBJECT_KEYS
+    if (blockedKeys.length)
+      serialized.__blockedKeys = blockedKeys
 
     return serialized
   }

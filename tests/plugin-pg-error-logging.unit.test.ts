@@ -212,6 +212,57 @@ describe('plugin PostgreSQL error logging', () => {
     expect(JSON.stringify(serialized)).not.toContain('must-not-appear-in-logs')
   })
 
+  it('blocks prototype-pollution keys without changing object prototypes', () => {
+    const maliciousQuery = JSON.parse(`{
+      "__proto__": { "polluted": true },
+      "constructor": { "prototype": { "polluted": true } },
+      "prototype": { "polluted": true },
+      "text": "SELECT 1"
+    }`)
+    const serialized = serializePostgresError(Object.assign(new Error('query failed'), {
+      query: maliciousQuery,
+    }))
+    const query = serialized.query as Record<string, unknown>
+
+    expect(({} as { polluted?: boolean }).polluted).toBeUndefined()
+    expect(Object.getPrototypeOf(query)).toBeNull()
+    expect(query).toMatchObject({
+      text: 'SELECT 1',
+      __blockedKeys: ['__proto__', 'constructor', 'prototype'],
+    })
+    expect(Object.prototype.hasOwnProperty.call(query, '__proto__')).toBe(false)
+    expect(Object.prototype.hasOwnProperty.call(query, 'constructor')).toBe(false)
+    expect(Object.prototype.hasOwnProperty.call(query, 'prototype')).toBe(false)
+  })
+
+  it('does not invoke accessors while serializing structured fields', () => {
+    let getterCalled = false
+    const query = { text: 'SELECT 1' } as Record<string, unknown>
+    Object.defineProperty(query, 'hostile', {
+      enumerable: true,
+      get() {
+        getterCalled = true
+        return 'must-not-be-read'
+      },
+    })
+
+    const serialized = serializePostgresError(Object.assign(new Error('query failed'), { query }))
+    expect(getterCalled).toBe(false)
+    expect(serialized).toMatchObject({
+      query: { hostile: '[accessor property omitted]' },
+    })
+  })
+
+  it('redacts Drizzle parameter lines from messages and stacks', () => {
+    const error = new Error('Failed query: SELECT $1\nparams: super-secret-token')
+    error.stack = 'Error: Failed query\nparams: super-secret-token\n    at query.ts:1:1'
+
+    const serialized = serializePostgresError(error)
+    expect(serialized.message).toBe('Failed query: SELECT $1\nparams: [redacted]')
+    expect(serialized.stack).toBe('Error: Failed query\nparams: [redacted]\n    at query.ts:1:1')
+    expect(JSON.stringify(serialized)).not.toContain('super-secret-token')
+  })
+
   it('logs filterable Worker, replica, request, and app diagnostics', () => {
     const postgresError = Object.assign(new Error('server closed the connection unexpectedly'), {
       code: '57P01',
@@ -259,6 +310,30 @@ describe('plugin PostgreSQL error logging', () => {
         },
       },
     }))
+  })
+
+  it('blocks prototype-pollution keys in caller diagnostics', () => {
+    const maliciousDiagnostics = JSON.parse(`{
+      "__proto__": { "polluted": true },
+      "constructor": { "prototype": { "polluted": true } },
+      "prototype": { "polluted": true },
+      "appId": "co.safe.app"
+    }`)
+
+    logPgError(createContext(), 'getAppOwnerPostgres', new Error('failed'), maliciousDiagnostics)
+
+    const payload = cloudlogErrMock.mock.calls[0][0]
+    expect(({} as { polluted?: boolean }).polluted).toBeUndefined()
+    expect(Object.getPrototypeOf(payload.diagnostics)).toBe(Object.prototype)
+    expect(payload.diagnostics).toMatchObject({
+      appId: 'co.safe.app',
+      __blockedKeys: ['__proto__', 'constructor', 'prototype'],
+      version: 1,
+      functionName: 'getAppOwnerPostgres',
+    })
+    expect(Object.prototype.hasOwnProperty.call(payload.diagnostics, '__proto__')).toBe(false)
+    expect(Object.prototype.hasOwnProperty.call(payload.diagnostics, 'constructor')).toBe(false)
+    expect(Object.prototype.hasOwnProperty.call(payload.diagnostics, 'prototype')).toBe(false)
   })
 
   it('bounds circular and excessively deep cause chains', () => {
