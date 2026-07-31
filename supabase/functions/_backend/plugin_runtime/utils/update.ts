@@ -326,29 +326,40 @@ export async function updateWithPG(
   // Overlap owner lookup with default-channel prefetch on a second Hyperdrive
   // client when app-status cache already says cloud. Cuts Request Duration by
   // one serial replica RTT on the common path (CF chart != waitUntil).
-  const startOwner = performance.now()
+  // Prefetch failures must never block owner — degrade to serial requestInfos.
   let appOwner: Awaited<ReturnType<typeof getAppOwnerPostgres>>
   let prefetchedChannel: Awaited<ReturnType<typeof requestInfosChannelPostgres>> | null = null
-  if (cachedStatus === 'cloud') {
-    const prefetchClient = await getPgClient(c, true)
-    try {
-      const drizzlePrefetch = getDrizzleClient(prefetchClient, { logger: false })
-      const [appOwnerParallel, channelParallel] = await Promise.all([
-        getAppOwnerPostgres(c, app_id, drizzleClient, PLAN_LIMIT),
-        requestInfosChannelPostgres(c, platform, app_id, defaultChannel, drizzlePrefetch, false, false),
-      ])
-      appOwner = appOwnerParallel
-      prefetchedChannel = channelParallel ?? null
-    }
-    finally {
-      await closeClient(c, prefetchClient)
-    }
-  }
-  else {
-    appOwner = await getAppOwnerPostgres(c, app_id, drizzleClient, PLAN_LIMIT)
-  }
+  const startOwner = performance.now()
+  const ownerPromise = getAppOwnerPostgres(c, app_id, drizzleClient, PLAN_LIMIT)
+  const channelPrefetchPromise = cachedStatus === 'cloud'
+    ? (async () => {
+        try {
+          const prefetchClient = await getPgClient(c, true)
+          try {
+            const drizzlePrefetch = getDrizzleClient(prefetchClient, { logger: false })
+            return await requestInfosChannelPostgres(
+              c,
+              platform,
+              app_id,
+              defaultChannel,
+              drizzlePrefetch,
+              false,
+              false,
+            )
+          }
+          finally {
+            await closeClient(c, prefetchClient)
+          }
+        }
+        catch {
+          return null
+        }
+      })()
+    : Promise.resolve(null)
+  appOwner = await ownerPromise
   if (pathTiming)
     pathTiming.ownerMs = Math.round(performance.now() - startOwner)
+  prefetchedChannel = await channelPrefetchPromise
   // if version_build is not semver, then make it semver
   const device = makeDevice(body, appOwner?.allow_device_custom_id)
   if (!appOwner) {

@@ -1076,13 +1076,18 @@ export function requestInfosPostgres(options: RequestInfosPostgresOptions) {
         // both override + default channel are needed so the two RTTs overlap.
         const needsParallelClients = shouldQueryChannelOverride || typeof channelSelfOverrideChannelId === 'number'
         if (needsParallelClients && getRuntimeKey() === 'workerd') {
-          const parallelClient = await getPgClient(c, true)
           try {
-            const drizzleParallel = getDrizzleClient(parallelClient, { logger: false })
-            return await runPair(drizzleClient, drizzleParallel)
+            const parallelClient = await getPgClient(c, true)
+            try {
+              const drizzleParallel = getDrizzleClient(parallelClient, { logger: false })
+              return await runPair(drizzleClient, drizzleParallel)
+            }
+            finally {
+              await closeClient(c, parallelClient)
+            }
           }
-          finally {
-            await closeClient(c, parallelClient)
+          catch {
+            // Latency opt only — fall back to serial queries on the primary client.
           }
         }
         return await runPair(drizzleClient, drizzleClient)
