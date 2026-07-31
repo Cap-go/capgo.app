@@ -384,7 +384,6 @@ END
 $$;
 SQL
 }
-}
 
 discover_publication_name() {
   local existing
