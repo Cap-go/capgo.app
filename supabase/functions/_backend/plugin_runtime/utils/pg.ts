@@ -488,24 +488,104 @@ const POSTGRES_ERROR_FIELDS = [
 ] as const
 
 const MAX_POSTGRES_ERROR_CAUSE_DEPTH = 8
+const MAX_POSTGRES_LOG_VALUE_DEPTH = 4
+const MAX_POSTGRES_LOG_ARRAY_ITEMS = 50
+const MAX_POSTGRES_LOG_OBJECT_KEYS = 50
+const POSTGRES_LOG_REDACTED_KEYS = new Set(['bindings', 'parameters', 'params', 'values'])
+
+function describeThrownValue(value: unknown): string {
+  try {
+    if (value instanceof Error) {
+      const message = Reflect.get(value, 'message')
+      if (typeof message === 'string')
+        return message
+    }
+    return String(value)
+  }
+  catch {
+    return 'unknown error'
+  }
+}
 
 function readErrorProperty(error: object, key: PropertyKey): unknown {
   try {
     return Reflect.get(error, key)
   }
   catch (propertyError) {
-    return `[unreadable property: ${propertyError instanceof Error ? propertyError.message : String(propertyError)}]`
+    return `[unreadable property: ${describeThrownValue(propertyError)}]`
   }
 }
 
-function serializePrimitiveErrorValue(value: unknown): unknown {
+function getObjectType(value: object): string {
+  const constructor = readErrorProperty(value, 'constructor')
+  if (constructor && (typeof constructor === 'object' || typeof constructor === 'function')) {
+    const constructorName = readErrorProperty(constructor, 'name')
+    if (typeof constructorName === 'string' && constructorName)
+      return constructorName
+  }
+  return 'Object'
+}
+
+function serializePostgresLogValue(
+  value: unknown,
+  seen = new WeakSet<object>(),
+  depth = 0,
+): unknown {
   if (typeof value === 'bigint')
     return value.toString()
   if (typeof value === 'symbol')
     return value.toString()
-  if (typeof value === 'function')
-    return `[function ${value.name || 'anonymous'}]`
-  return value
+  if (typeof value === 'function') {
+    const functionName = readErrorProperty(value, 'name')
+    return `[function ${typeof functionName === 'string' && functionName ? functionName : 'anonymous'}]`
+  }
+  if (value === null || typeof value !== 'object')
+    return value
+
+  if (seen.has(value))
+    return '[circular]'
+  if (depth >= MAX_POSTGRES_LOG_VALUE_DEPTH)
+    return `[truncated ${getObjectType(value)}]`
+
+  seen.add(value)
+  try {
+    if (Array.isArray(value)) {
+      const serialized = value
+        .slice(0, MAX_POSTGRES_LOG_ARRAY_ITEMS)
+        .map(item => serializePostgresLogValue(item, seen, depth + 1))
+      if (value.length > MAX_POSTGRES_LOG_ARRAY_ITEMS)
+        serialized.push(`[truncated ${value.length - MAX_POSTGRES_LOG_ARRAY_ITEMS} items]`)
+      return serialized
+    }
+
+    let keys: string[]
+    try {
+      keys = Object.keys(value)
+    }
+    catch (keyError) {
+      return `[unreadable object: ${describeThrownValue(keyError)}]`
+    }
+
+    const serialized: Record<string, unknown> = {}
+    for (const key of keys.slice(0, MAX_POSTGRES_LOG_OBJECT_KEYS)) {
+      // Structured query objects can carry bound values under these keys.
+      // Keep the query text and shape, but never copy parameter values to logs.
+      serialized[key] = POSTGRES_LOG_REDACTED_KEYS.has(key.toLowerCase())
+        ? '[redacted]'
+        : serializePostgresLogValue(readErrorProperty(value, key), seen, depth + 1)
+    }
+
+    if (keys.length > MAX_POSTGRES_LOG_OBJECT_KEYS)
+      serialized.__truncatedKeys = keys.length - MAX_POSTGRES_LOG_OBJECT_KEYS
+
+    return serialized
+  }
+  catch (serializationError) {
+    return `[unserializable ${getObjectType(value)}: ${describeThrownValue(serializationError)}]`
+  }
+  finally {
+    seen.delete(value)
+  }
 }
 
 /**
@@ -524,55 +604,63 @@ export function serializePostgresError(
   if (error === null || (typeof error !== 'object' && typeof error !== 'function')) {
     return {
       type: error === null ? 'null' : typeof error,
-      value: serializePrimitiveErrorValue(error),
+      value: serializePostgresLogValue(error),
     }
   }
 
   if (seen.has(error))
-    return { type: error.constructor?.name ?? 'Object', circular: true }
+    return { type: getObjectType(error), circular: true }
 
   if (depth >= MAX_POSTGRES_ERROR_CAUSE_DEPTH)
-    return { type: error.constructor?.name ?? 'Object', truncated: true }
+    return { type: getObjectType(error), truncated: true }
 
   seen.add(error)
-
   const serialized: Record<string, unknown> = {
-    type: error.constructor?.name ?? 'Object',
+    type: getObjectType(error),
   }
-  const name = readErrorProperty(error, 'name')
-  const message = readErrorProperty(error, 'message')
-  const stack = readErrorProperty(error, 'stack')
+  try {
+    const name = readErrorProperty(error, 'name')
+    const message = readErrorProperty(error, 'message')
+    const stack = readErrorProperty(error, 'stack')
 
-  if (name !== undefined)
-    serialized.name = serializePrimitiveErrorValue(name)
-  if (message !== undefined)
-    serialized.message = serializePrimitiveErrorValue(message)
-  if (stack !== undefined)
-    serialized.stack = serializePrimitiveErrorValue(stack)
+    if (name !== undefined)
+      serialized.name = serializePostgresLogValue(name)
+    if (message !== undefined)
+      serialized.message = serializePostgresLogValue(message)
+    if (stack !== undefined)
+      serialized.stack = serializePostgresLogValue(stack)
 
-  for (const field of POSTGRES_ERROR_FIELDS) {
-    const value = readErrorProperty(error, field)
-    if (value !== undefined)
-      serialized[field] = serializePrimitiveErrorValue(value)
+    for (const field of POSTGRES_ERROR_FIELDS) {
+      const value = readErrorProperty(error, field)
+      if (value !== undefined)
+        serialized[field] = serializePostgresLogValue(value)
+    }
+
+    const params = readErrorProperty(error, 'params')
+    if (Array.isArray(params)) {
+      // Query parameters can contain credentials or other user-provided secrets.
+      // The affected app is logged explicitly by the caller instead.
+      serialized.parameterCount = params.length
+    }
+
+    const aggregateErrors = readErrorProperty(error, 'errors')
+    if (Array.isArray(aggregateErrors)) {
+      serialized.errors = aggregateErrors.map(nestedError => serializePostgresError(nestedError, seen, depth + 1))
+    }
+
+    const cause = readErrorProperty(error, 'cause')
+    if (cause !== undefined)
+      serialized.cause = serializePostgresError(cause, seen, depth + 1)
+
+    return serialized
   }
-
-  const params = readErrorProperty(error, 'params')
-  if (Array.isArray(params)) {
-    // Query parameters can contain credentials or other user-provided secrets.
-    // The affected app is logged explicitly by the caller instead.
-    serialized.parameterCount = params.length
+  catch (serializationError) {
+    serialized.serializationFailure = describeThrownValue(serializationError)
+    return serialized
   }
-
-  const aggregateErrors = readErrorProperty(error, 'errors')
-  if (Array.isArray(aggregateErrors)) {
-    serialized.errors = aggregateErrors.map(nestedError => serializePostgresError(nestedError, seen, depth + 1))
+  finally {
+    seen.delete(error)
   }
-
-  const cause = readErrorProperty(error, 'cause')
-  if (cause !== undefined)
-    serialized.cause = serializePostgresError(cause, seen, depth + 1)
-
-  return serialized
 }
 
 export function logPgError(
@@ -604,7 +692,7 @@ export function logPgError(
         continent: cf?.continent,
         country: cf?.country,
       },
-      ...diagnostics,
+      context: serializePostgresLogValue(diagnostics),
     },
   })
 }

@@ -146,6 +146,58 @@ describe('plugin PostgreSQL error logging', () => {
     })
   })
 
+  it('serializes a shared aggregate error independently in each branch', () => {
+    const sharedError = Object.assign(new Error('connection reset'), {
+      code: 'ECONNRESET',
+    })
+    const aggregateError = new AggregateError([sharedError, sharedError], 'All connection attempts failed')
+
+    expect(serializePostgresError(aggregateError)).toMatchObject({
+      errors: [
+        { message: 'connection reset', code: 'ECONNRESET' },
+        { message: 'connection reset', code: 'ECONNRESET' },
+      ],
+    })
+  })
+
+  it('keeps primitive throws and hostile properties safe to log', () => {
+    expect(serializePostgresError(null)).toEqual({ type: 'null', value: null })
+    expect(serializePostgresError('connection reset')).toEqual({ type: 'string', value: 'connection reset' })
+    expect(serializePostgresError(42n)).toEqual({ type: 'bigint', value: '42' })
+
+    const hostileError = new Error('hostile property')
+    Object.defineProperty(hostileError, 'code', {
+      get() {
+        throw new Error('getter exploded')
+      },
+    })
+
+    expect(serializePostgresError(hostileError)).toMatchObject({
+      message: 'hostile property',
+      code: '[unreadable property: getter exploded]',
+    })
+  })
+
+  it('bounds cyclic structured PostgreSQL fields and remains JSON serializable', () => {
+    const query: Record<string, unknown> = {
+      text: 'SELECT $1',
+      values: ['must-not-appear-in-logs'],
+    }
+    query.self = query
+    const postgresError = Object.assign(new Error('query failed'), { query })
+    const serialized = serializePostgresError(postgresError)
+
+    expect(serialized).toMatchObject({
+      query: {
+        text: 'SELECT $1',
+        self: '[circular]',
+        values: '[redacted]',
+      },
+    })
+    expect(() => JSON.stringify(serialized)).not.toThrow()
+    expect(JSON.stringify(serialized)).not.toContain('must-not-appear-in-logs')
+  })
+
   it('logs filterable Worker, replica, request, and app diagnostics', () => {
     const postgresError = Object.assign(new Error('server closed the connection unexpectedly'), {
       code: '57P01',
@@ -158,7 +210,10 @@ describe('plugin PostgreSQL error logging', () => {
 
     logPgError(createContext(), 'getAppOwnerPostgres', drizzleError, {
       appId: 'co.spencer.app',
+      functionName: 'caller-cannot-override',
       planActions: ['mau'],
+      request: { method: 'DELETE' },
+      version: 999,
     })
 
     expect(cloudlogErrMock).toHaveBeenCalledWith(expect.objectContaining({
@@ -186,8 +241,13 @@ describe('plugin PostgreSQL error logging', () => {
           continent: 'EU',
           country: 'BE',
         },
-        appId: 'co.spencer.app',
-        planActions: ['mau'],
+        context: {
+          appId: 'co.spencer.app',
+          functionName: 'caller-cannot-override',
+          planActions: ['mau'],
+          request: { method: 'DELETE' },
+          version: 999,
+        },
       },
     }))
   })
