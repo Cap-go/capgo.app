@@ -203,8 +203,22 @@ const router = createRouter({
         }
       },
     },
-    { path: '/app/package/:package', redirect: to => `/app/${(to.params as { package: string }).package}` },
-    { path: '/app/package/:package/settings', redirect: to => `/app/${(to.params as { package: string }).package}/settings` },
+    {
+      path: '/app/package/:package',
+      redirect: to => ({
+        path: `/app/${encodeURIComponent(String((to.params as { package: string }).package))}`,
+        query: to.query,
+        hash: to.hash,
+      }),
+    },
+    {
+      path: '/app/package/:package/settings',
+      redirect: to => ({
+        path: `/app/${encodeURIComponent(String((to.params as { package: string }).package))}/settings`,
+        query: to.query,
+        hash: to.hash,
+      }),
+    },
     // Legacy app tab URLs after settings/observe revamp
     { path: '/app/:app/info', redirect: redirectAppPath('/settings') },
     { path: '/app/:app/access', redirect: redirectAppPath('/settings/access') },

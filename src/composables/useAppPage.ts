@@ -40,13 +40,13 @@ export function useAppPage(options: UseAppPageOptions) {
       const dataApp = await loadAppInfo()
       if (generation !== loadGeneration)
         return
-      if (dataApp)
-        app.value = dataApp
+      app.value = dataApp || undefined
     }
     catch (error) {
       if (generation !== loadGeneration)
         return
       console.error(error)
+      app.value = undefined
     }
     finally {
       if (generation === loadGeneration)

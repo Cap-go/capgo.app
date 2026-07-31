@@ -21,6 +21,14 @@ test.describe('Observe sections', () => {
     await expect(pluginsTab).toBeVisible()
     await expect(updaterTab).toHaveAttribute('aria-current', 'page')
 
+    await logsTab.click()
+    await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/logs$/)
+    await expect(logsTab).toHaveAttribute('aria-current', 'page')
+
+    await compatibilityTab.click()
+    await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/compatibility$/)
+    await expect(compatibilityTab).toHaveAttribute('aria-current', 'page')
+
     await pluginsTab.click()
     await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/plugins$/)
     await expect(pluginsTab).toHaveAttribute('aria-current', 'page')

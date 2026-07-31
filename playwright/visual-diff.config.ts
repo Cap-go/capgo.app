@@ -23,7 +23,9 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
   { slug: 'channels', path: '/app/com.demo.app/channels', auth: true },
   { slug: 'devices', path: '/app/com.demo.app/devices', auth: true },
   { slug: 'observe', path: '/app/com.demo.app/observe/updater', auth: true },
+  { slug: 'observe-logs', path: '/app/com.demo.app/observe/logs', auth: true },
   { slug: 'observe-native', path: '/app/com.demo.app/observe/native', auth: true },
+  { slug: 'observe-compatibility', path: '/app/com.demo.app/observe/compatibility', auth: true },
   { slug: 'observe-plugins', path: '/app/com.demo.app/observe/plugins', auth: true },
   {
     slug: 'api-keys-app-preview',
