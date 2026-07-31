@@ -29,7 +29,7 @@ function isValidPluginNotificationItem(item: unknown): item is PluginNotificatio
 }
 
 type PluginNotificationSendResult = boolean | { sent: false, lastSendAt: string }
-type PluginNotificationItemResult = { status: 'delivered' } | { status: 'failed' } | { lastSendAt: string, status: 'throttled' }
+export type PluginNotificationItemResult = { status: 'delivered' } | { status: 'failed' } | { lastSendAt: string, status: 'throttled' }
 
 function getPluginNotificationItemResult(result: PluginNotificationSendResult): PluginNotificationItemResult {
   if (result === true)
@@ -82,13 +82,18 @@ async function processPluginNotifications(c: Context, items: PluginNotificationQ
   return { processed, failed, throttled, results }
 }
 
-export const app = new Hono<MiddlewareKeyVariables>()
+export interface PluginNotificationDeliveryResult {
+  processed: number
+  failed: number
+  throttled: number
+  invalid: number
+  results: PluginNotificationItemResult[]
+}
 
-app.post('/', middlewareAPISecret, async (c) => {
-  const body = await parseBody<PluginNotificationBatchBody>(c)
-  const rawItems = Array.isArray(body.items) ? body.items : []
-  if (rawItems.length === 0)
-    return c.json({ ...BRES, processed: 0, failed: 0, throttled: 0, results: [] })
+export async function deliverQueuedPluginNotifications(
+  c: Context,
+  rawItems: PluginNotificationQueueItem[],
+): Promise<PluginNotificationDeliveryResult> {
   if (rawItems.length > MAX_PLUGIN_NOTIFICATION_BATCH)
     throw simpleError('too_many_items', 'Too many plugin notification items', { max: MAX_PLUGIN_NOTIFICATION_BATCH, count: rawItems.length })
 
@@ -98,11 +103,23 @@ app.post('/', middlewareAPISecret, async (c) => {
     cloudlog({ requestId: c.get('requestId'), message: 'Plugin notification batch contained invalid items', invalid })
   }
   if (items.length === 0)
-    return c.json({ ...BRES, processed: 0, failed: 0, throttled: 0, results: [], invalid })
+    return { processed: 0, failed: 0, throttled: 0, invalid, results: [] }
 
   const result = await processPluginNotifications(c, items)
+  return { ...result, invalid }
+}
+
+export const app = new Hono<MiddlewareKeyVariables>()
+
+app.post('/', middlewareAPISecret, async (c) => {
+  const body = await parseBody<PluginNotificationBatchBody>(c)
+  const rawItems = Array.isArray(body.items) ? body.items : []
+  if (rawItems.length === 0)
+    return c.json({ ...BRES, processed: 0, failed: 0, throttled: 0, results: [], invalid: 0 })
+
+  const result = await deliverQueuedPluginNotifications(c, rawItems)
   if (result.failed > 0) {
-    throw quickError(500, 'plugin_notification_batch_failed', 'Plugin notification batch failed', { ...result, invalid }, undefined, { alert: false })
+    throw quickError(500, 'plugin_notification_batch_failed', 'Plugin notification batch failed', result, undefined, { alert: false })
   }
-  return c.json({ ...BRES, ...result, invalid })
+  return c.json({ ...BRES, ...result })
 })
