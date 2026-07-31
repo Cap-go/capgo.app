@@ -2,6 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushQueuedPluginNotifications } from '../supabase/functions/_backend/utils/plugin_notification_flush.ts'
 import { PLUGIN_NOTIFICATION_QUEUE_PREFIX } from '../supabase/functions/_backend/utils/plugin_notification_queue.ts'
 
+const deliverMock = vi.hoisted(() => vi.fn())
+vi.mock('../supabase/functions/_backend/triggers/plugin_notifications.ts', () => ({
+  deliverQueuedPluginNotifications: (...args: unknown[]) => deliverMock(...args),
+}))
+
 const originalApiSecret = process.env.API_SECRET
 const originalCloudflareFunctionUrl = process.env.CLOUDFLARE_FUNCTION_URL
 
@@ -33,6 +38,18 @@ function createStore(seed: Record<string, string>) {
   }
 }
 
+
+function createContext(env: Record<string, unknown>, inProcess = false) {
+  return {
+    env,
+    get: (key: string) => {
+      if (key === 'deliverPluginNotificationsInProcess')
+        return inProcess
+      return 'request-id'
+    },
+  } as any
+}
+
 function queueItem(eventName: string) {
   return JSON.stringify({
     type: 'org',
@@ -48,6 +65,7 @@ function queueItem(eventName: string) {
 
 describe('plugin notification flush', () => {
   afterEach(() => {
+    deliverMock.mockReset()
     vi.unstubAllGlobals()
     if (originalApiSecret === undefined)
       delete process.env.API_SECRET
@@ -60,10 +78,7 @@ describe('plugin notification flush', () => {
   })
 
   it('fails when the KV queue binding is missing', async () => {
-    await expect(flushQueuedPluginNotifications({
-      env: {},
-      get: () => 'request-id',
-    } as any)).rejects.toThrow('Plugin notification KV queue missing')
+    await expect(flushQueuedPluginNotifications(createContext({}))).rejects.toThrow('Plugin notification KV queue missing')
   })
 
   it('deletes delivered queue items and keeps failed items for retry', async () => {
@@ -83,12 +98,9 @@ describe('plugin notification flush', () => {
     process.env.API_SECRET = 'secret'
     process.env.CLOUDFLARE_FUNCTION_URL = 'https://api.capgo.test'
 
-    const result = await flushQueuedPluginNotifications({
-      env: {
-        PLUGIN_NOTIFICATION_QUEUE: store,
-      },
-      get: () => 'request-id',
-    } as any)
+    const result = await flushQueuedPluginNotifications(createContext({
+      PLUGIN_NOTIFICATION_QUEUE: store,
+    }))
 
     expect(result).toMatchObject({ scanned: 2, transferred: 1, deleted: 1, failed: 1 })
     expect(store.values.has(successKey)).toBe(false)
@@ -113,17 +125,60 @@ describe('plugin notification flush', () => {
     process.env.API_SECRET = 'secret'
     process.env.CLOUDFLARE_FUNCTION_URL = 'https://api.capgo.test'
 
-    const result = await flushQueuedPluginNotifications({
-      env: {
-        PLUGIN_NOTIFICATION_QUEUE: store,
-      },
-      get: () => 'request-id',
-    } as any)
+    const result = await flushQueuedPluginNotifications(createContext({
+      PLUGIN_NOTIFICATION_QUEUE: store,
+    }))
 
     expect(result).toMatchObject({ scanned: 1, transferred: 1, deleted: 1, failed: 0 })
     expect(store.values.has(throttledKey)).toBe(false)
     const throttlePut = store.puts.find(({ key }) => key.startsWith('plugin:notif:throttle:v1:'))
     expect(throttlePut?.options?.expirationTtl).toBeGreaterThanOrEqual(60)
     expect(Array.from(store.values.keys()).filter(key => key.startsWith('plugin:notif:processing:v1:'))).toEqual([])
+  })
+
+  it('delivers in-process when the scheduled flush flag is set', async () => {
+    const successKey = `${PLUGIN_NOTIFICATION_QUEUE_PREFIX}org:org-1:success:hash`
+    const store = createStore({
+      [successKey]: queueItem('success'),
+    })
+    deliverMock.mockResolvedValue({
+      processed: 1,
+      failed: 0,
+      throttled: 0,
+      invalid: 0,
+      results: [{ status: 'delivered' }],
+    })
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await flushQueuedPluginNotifications(createContext({
+      PLUGIN_NOTIFICATION_QUEUE: store,
+    }, true))
+
+    expect(result).toMatchObject({ scanned: 1, transferred: 1, deleted: 1, failed: 0 })
+    expect(store.values.has(successKey)).toBe(false)
+    expect(deliverMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('logs the trigger URL when HTTP transfer fails', async () => {
+    const failedKey = `${PLUGIN_NOTIFICATION_QUEUE_PREFIX}org:org-1:failed:hash`
+    const store = createStore({
+      [failedKey]: queueItem('failed'),
+    })
+    const fetchMock = vi.fn(async () => new Response('error code: 522', { status: 522, statusText: '' }))
+    vi.stubGlobal('fetch', fetchMock)
+    process.env.API_SECRET = 'secret'
+    process.env.CLOUDFLARE_FUNCTION_URL = 'https://broken.example'
+
+    const result = await flushQueuedPluginNotifications(createContext({
+      PLUGIN_NOTIFICATION_QUEUE: store,
+    }))
+
+    expect(result).toMatchObject({ scanned: 1, transferred: 0, deleted: 0, failed: 1 })
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://broken.example/triggers/plugin_notifications',
+      expect.objectContaining({ method: 'POST' }),
+    )
   })
 })

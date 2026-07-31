@@ -210,6 +210,7 @@ app.route('/triggers', appTriggers)
 app.route('/private', appPrivate)
 
 appScheduled.post('/flush-plugin-notifications', async (c) => {
+  c.set('deliverPluginNotificationsInProcess', true)
   const result = await flushQueuedPluginNotifications(c)
   return c.json({ ...BRES, ...result })
 })
