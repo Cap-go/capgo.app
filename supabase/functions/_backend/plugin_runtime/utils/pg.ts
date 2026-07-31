@@ -524,7 +524,7 @@ function readOwnLogProperty(value: object, key: PropertyKey): unknown {
   try {
     const descriptor = Object.getOwnPropertyDescriptor(value, key)
     if (!descriptor)
-      return '[unreadable property: missing own descriptor]'
+      return undefined
     if ('value' in descriptor)
       return descriptor.value
     return '[accessor property omitted]'

@@ -174,6 +174,18 @@ describe('plugin PostgreSQL error logging', () => {
     expect(errors[50]).toEqual({ type: 'truncated', omitted: 5 })
   })
 
+  it('represents sparse aggregate slots as undefined', () => {
+    const errors = new Array(2)
+    errors[1] = new Error('connection failed')
+
+    expect(serializePostgresError(new AggregateError(errors))).toMatchObject({
+      errors: [
+        { type: 'undefined', value: undefined },
+        { message: 'connection failed' },
+      ],
+    })
+  })
+
   it('keeps primitive throws and hostile properties safe to log', () => {
     expect(serializePostgresError(null)).toEqual({ type: 'null', value: null })
     expect(serializePostgresError('connection reset')).toEqual({ type: 'string', value: 'connection reset' })
