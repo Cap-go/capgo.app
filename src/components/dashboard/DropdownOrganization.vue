@@ -324,17 +324,6 @@ function acronym(name: string) {
   return (first + second).toUpperCase()
 }
 
-function onOrgItemKeydown(org: Organization, e: KeyboardEvent) {
-  if (e.target !== e.currentTarget)
-    return
-
-  if (e.key !== 'Enter' && e.key !== ' ')
-    return
-
-  e.preventDefault()
-  onOrganizationClick(org)
-}
-
 watch(
   () => route.query.invite_org,
   (inviteOrg) => {
@@ -403,16 +392,13 @@ watch(
             class="block px-1 my-1 rounded-lg"
             :class="isSelected(org) ? 'bg-gray-700/80' : ''"
           >
-            <div
-              class="flex items-center gap-2 px-3 py-3 text-white rounded-md cursor-pointer hover:bg-gray-600"
-              :aria-current="isSelected(org) ? 'true' : undefined"
-              role="button"
-              tabindex="0"
-              @click="onOrganizationClick(org)"
-              @keydown="onOrgItemKeydown(org, $event)"
-            >
-              <div
-                class="flex flex-1 items-center min-w-0 text-left"
+            <div class="flex items-center gap-2 px-3 py-3 text-white rounded-md hover:bg-gray-600">
+              <button
+                type="button"
+                class="flex flex-1 items-center min-w-0 text-left cursor-pointer"
+                :aria-current="isSelected(org) ? 'true' : undefined"
+                :aria-label="org.name"
+                @click="onOrganizationClick(org)"
               >
                 <img
                   v-if="org.logo"
@@ -436,7 +422,7 @@ watch(
                   {{ acronym(org.name) }}
                 </div>
                 <span class="block truncate">{{ org.name }}</span>
-              </div>
+              </button>
               <div class="flex items-center justify-end min-w-0 shrink-0">
                 <span
                   v-if="isInvitation(org)"
