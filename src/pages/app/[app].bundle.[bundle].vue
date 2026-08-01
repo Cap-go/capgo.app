@@ -329,7 +329,7 @@ async function handleChannelLink(chan: Database['public']['Tables']['channels'][
         return
     }
     else if (localDependencies.length === 0 || finalCompatibility.length === 0) {
-      toast.info('ignore-compatibility')
+      toast.info(t('ignore-compatibility'))
     }
     else {
       toast.info(t('bundle-compatible-with-channel', { channel: chan.name }))
