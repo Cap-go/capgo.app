@@ -552,14 +552,6 @@ watch([selectedPlatform, selectedVersionName], () => {
 
 <template>
   <div>
-    <div class="flex justify-end px-3 pt-3">
-      <DateRangePicker
-        v-model="dateRange"
-        v-model:mode="dateRangeMode"
-        compact
-        @apply="refreshData()"
-      />
-    </div>
     <DataTable
       v-model:filters="filters" v-model:columns="columns" v-model:current-page="currentPage" v-model:search="search"
       :total="total" :offset="offset" :element-list="elements"
@@ -573,6 +565,14 @@ watch([selectedPlatform, selectedVersionName], () => {
       @reset="refreshData()"
       @clear-extra-filters="clearExtraFilters"
     >
+      <template #toolbar-extras>
+        <DateRangePicker
+          v-model="dateRange"
+          v-model:mode="dateRangeMode"
+          compact
+          @apply="refreshData()"
+        />
+      </template>
       <template #filter-extras>
         <fieldset>
           <legend class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">

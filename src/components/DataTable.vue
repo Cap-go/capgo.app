@@ -566,8 +566,8 @@ const paginationClass = computed(() => props.mobileFixedPagination
 
 <template>
   <div class="pb-4 overflow-x-auto md:pb-0">
-    <div class="flex items-start justify-between p-3 pb-4 md:items-center">
-      <div class="flex h-10 md:mb-0">
+    <div class="flex flex-wrap items-center justify-between gap-2 p-3 pb-4 overflow-visible">
+      <div class="flex h-10 items-center">
         <button
           class="inline-flex items-center py-1.5 px-3 mr-2 text-sm font-medium text-gray-500 bg-white rounded-md border border-gray-300 cursor-pointer dark:text-white dark:bg-gray-800 dark:border-gray-600 hover:bg-gray-100 focus:ring-4 focus:ring-gray-200 dark:hover:border-gray-600 dark:hover:bg-gray-700 dark:focus:ring-gray-700 focus:outline-hidden"
           type="button" @click="handleResetClick"
@@ -722,13 +722,18 @@ const paginationClass = computed(() => props.mobileFixedPagination
       >
         <IconTrash class="h-6 text-red-500" />
       </button>
-      <div class="flex overflow-hidden md:w-auto">
-        <FormKit
-          v-model="searchVal" :placeholder="searchPlaceholder" :prefix-icon="IconSearch"
-          :disabled="isLoading" enterkeyhint="send" :classes="{
-            outer: 'mb-0! md:w-96',
-          }"
-        />
+      <div class="flex h-10 min-w-0 flex-1 items-center justify-end gap-2 overflow-visible md:flex-none">
+        <div v-if="$slots['toolbar-extras']" class="flex h-10 shrink-0 items-center">
+          <slot name="toolbar-extras" />
+        </div>
+        <div class="min-w-0 overflow-hidden md:w-auto">
+          <FormKit
+            v-model="searchVal" :placeholder="searchPlaceholder" :prefix-icon="IconSearch"
+            :disabled="isLoading" enterkeyhint="send" :classes="{
+              outer: 'mb-0! md:w-96',
+            }"
+          />
+        </div>
       </div>
     </div>
     <div class="block">
