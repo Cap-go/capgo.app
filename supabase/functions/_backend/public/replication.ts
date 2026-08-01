@@ -524,7 +524,7 @@ app.get('/', async (c) => {
 
     try {
       replicaPgClient = getPgClient(c, true)
-      const replicaSource = String(c.get('databaseSource') ?? c.res.headers.get('X-Database-Source') ?? '')
+      const replicaSource = c.res.headers.get('X-Database-Source') ?? ''
       if (!isReplicaDatabaseSource(replicaSource)) {
         subscription = skippedSubscription('no_replica_connection')
         dataCanary = skippedDataCanary('no_replica_connection')
