@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { GitHubProfile } from '~/services/githubProfile'
 import type { Database } from '~/types/supabase.types'
 import { Capacitor } from '@capacitor/core'
 import { setErrors } from '@formkit/core'
@@ -15,6 +16,7 @@ import iconFlag from '~icons/heroicons/flag?raw'
 import iconName from '~icons/heroicons/user?raw'
 import { getRecentEmailOtpVerification } from '~/services/emailOtp'
 import { getFormatLocaleOptions, resolveFormatLocale } from '~/services/formatLocale'
+import { getGitHubProfile, GitHubProfileError } from '~/services/githubProfile'
 import { pickPhoto, takePhoto } from '~/services/photos'
 import { getCurrentPlanNameOrg, isPayingOrg, useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -41,7 +43,83 @@ const captchaKey = ref(import.meta.env.VITE_CAPTCHA_KEY)
 const organizationsToDelete = ref<string[]>([])
 const formatLocaleOptions = computed(() => getFormatLocaleOptions(locale.value))
 const paidOrganizationsToDelete = ref<Array<{ name: string, planName: string }>>([])
+const githubUsername = ref(main.user?.github_username ?? '')
+const githubUsernameInput = ref('')
+const githubProfile = ref<GitHubProfile | null>(null)
+const githubProfileLoading = ref(false)
+const githubProfileSaving = ref(false)
+const githubProfileError = ref('')
 displayStore.NavTitle = t('account')
+
+function resetGitHubProfileDialog() {
+  githubProfile.value = null
+  githubProfileError.value = ''
+}
+
+function closeGitHubProfileDialog() {
+  resetGitHubProfileDialog()
+  dialogStore.closeDialog({ text: t('button-cancel'), role: 'cancel' })
+}
+
+function openGitHubProfileDialog() {
+  resetGitHubProfileDialog()
+  githubUsernameInput.value = githubUsername.value
+  dialogStore.openDialog({
+    id: 'github-profile',
+    title: t('github-username'),
+    description: t('github-username-dialog-description'),
+    size: 'sm',
+    buttons: [],
+  })
+}
+
+async function findGitHubProfile() {
+  githubProfileError.value = ''
+  githubProfileLoading.value = true
+  try {
+    githubProfile.value = await getGitHubProfile(githubUsernameInput.value)
+  }
+  catch (error) {
+    githubProfile.value = null
+    if (error instanceof GitHubProfileError) {
+      githubProfileError.value = t(`github-username-error-${error.code}`)
+    }
+    else {
+      githubProfileError.value = t('github-username-error-request_failed')
+    }
+  }
+  finally {
+    githubProfileLoading.value = false
+  }
+}
+
+async function confirmGitHubProfile() {
+  if (!githubProfile.value || !main.user?.id || githubProfileSaving.value)
+    return
+
+  githubProfileSaving.value = true
+  const { data: user, error } = await supabase
+    .from('users')
+    .update({
+      github_id: githubProfile.value.id,
+      github_username: githubProfile.value.login,
+    })
+    .eq('id', main.user.id)
+    .select()
+    .single()
+
+  githubProfileSaving.value = false
+  if (error || !user) {
+    githubProfileError.value = t('account-error')
+    return
+  }
+
+  main.user = user
+  githubUsername.value = user.github_username ?? ''
+  toast.success(t('account-updated-succ'))
+  dialogStore.closeDialog({ text: t('confirm'), role: 'primary' })
+  resetGitHubProfileDialog()
+}
 
 async function redirectToEmailVerification() {
   await router.push({
@@ -420,7 +498,7 @@ async function presentActionSheet() {
   return dialogStore.onDialogDismiss()
 }
 
-async function submit(form: { first_name: string, last_name: string, email: string, country: string, discord_username: string, github_username: string, format_locale: string }) {
+async function submit(form: { first_name: string, last_name: string, email: string, country: string, discord_username: string, format_locale: string }) {
   if (isLoading.value || !main.user?.id)
     return
 
@@ -431,7 +509,6 @@ async function submit(form: { first_name: string, last_name: string, email: stri
     && form.email === main.user?.email
     && form.country === main.user?.country
     && (form.discord_username || null) === main.user?.discord_username
-    && (form.github_username || null) === main.user?.github_username
     && formatLocale === currentFormatLocale) {
     return
   }
@@ -444,7 +521,6 @@ async function submit(form: { first_name: string, last_name: string, email: stri
     email: main.user.email,
     country: form.country,
     discord_username: form.discord_username || null,
-    github_username: form.github_username || null,
     format_locale: formatLocale,
   }
 
@@ -594,12 +670,14 @@ onMounted(async () => {
                   type="text"
                   name="github_username"
                   autocomplete="off"
+                  v-model="githubUsername"
                   :disabled="isLoading"
-                  :value="main.user?.github_username ?? ''"
-                  validation="length:0,39"
+                  readonly
                   enterkeyhint="send"
                   :label="t('github-username')"
                   :help="t('github-username-help')"
+                  :placeholder="t('github-username-select')"
+                  @click="openGitHubProfileDialog"
                 />
               </div>
             </div>
@@ -747,6 +825,71 @@ onMounted(async () => {
             size="flexible"
             :site-key="captchaKey"
           />
+        </div>
+      </div>
+    </Teleport>
+
+    <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions?.id === 'github-profile'" to="#dialog-v2-content" defer>
+      <div>
+        <template v-if="!githubProfile">
+          <label for="github-username-input" class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+            {{ t('github-username') }}
+          </label>
+          <input
+            id="github-username-input"
+            v-model="githubUsernameInput"
+            type="text"
+            autocomplete="off"
+            maxlength="39"
+            class="w-full p-3 border border-gray-300 rounded-lg dark:text-white dark:bg-gray-800 dark:border-gray-600"
+            :placeholder="t('github-username-placeholder')"
+            @keydown.enter.prevent="findGitHubProfile"
+          >
+        </template>
+
+        <div v-else class="flex items-center gap-4 rounded-lg border border-slate-200 p-4 dark:border-slate-700">
+          <img :src="githubProfile.avatarUrl" :alt="githubProfile.login" class="w-16 h-16 rounded-full" width="64" height="64">
+          <div class="min-w-0">
+            <p class="truncate font-semibold text-gray-900 dark:text-white">
+              {{ githubProfile.name || githubProfile.login }}
+            </p>
+            <p class="text-sm text-gray-500 dark:text-gray-400">
+              @{{ githubProfile.login }}
+            </p>
+          </div>
+        </div>
+
+        <p v-if="githubProfile" class="mt-4 text-sm text-gray-600 dark:text-gray-300">
+          {{ t('github-username-confirm-description') }}
+        </p>
+        <p v-if="githubProfileError" class="mt-3 text-sm text-red-600 dark:text-red-400">
+          {{ githubProfileError }}
+        </p>
+
+        <div class="flex justify-end gap-3 mt-6">
+          <button type="button" class="d-btn d-btn-ghost" :disabled="githubProfileLoading || githubProfileSaving" @click="closeGitHubProfileDialog">
+            {{ t('github-username-reject') }}
+          </button>
+          <button
+            v-if="githubProfile"
+            type="button"
+            class="d-btn d-btn-primary"
+            :disabled="githubProfileSaving"
+            @click="confirmGitHubProfile"
+          >
+            <Spinner v-if="githubProfileSaving" size="w-4 h-4" />
+            <span v-else>{{ t('github-username-confirm') }}</span>
+          </button>
+          <button
+            v-else
+            type="button"
+            class="d-btn d-btn-primary"
+            :disabled="githubProfileLoading || !githubUsernameInput.trim()"
+            @click="findGitHubProfile"
+          >
+            <Spinner v-if="githubProfileLoading" size="w-4 h-4" />
+            <span v-else>{{ t('next') }}</span>
+          </button>
         </div>
       </div>
     </Teleport>
