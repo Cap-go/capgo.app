@@ -11,6 +11,7 @@ import {
   stripGradleComments,
 } from '../gradle'
 import { readAndroidManifest, stripXmlComments } from '../manifest'
+import { capacitorMajor } from '../capacitor-version'
 import { willUploadToPlay } from '../upload-intent'
 
 function hasCordovaPlugins(ctx: ScanContext): boolean {
@@ -534,26 +535,6 @@ export const targetSdkPlay: PrescanCheck = {
 
 const CAP_MINSDK_FLOORS: Record<number, number> = { 6: 22, 7: 23, 8: 24 }
 const CAP_MINSDK_DEFAULT = 24
-
-/** Major version of @capacitor/core or @capacitor/android from package.json, or null. */
-function capacitorMajor(projectDir: string): number | null {
-  const raw = readTextIfExists(join(projectDir, 'package.json'))
-  if (raw === null)
-    return null
-  let deps: Record<string, string>
-  try {
-    const pkg = JSON.parse(raw) as { dependencies?: Record<string, string>, devDependencies?: Record<string, string> }
-    deps = { ...pkg.devDependencies, ...pkg.dependencies }
-  }
-  catch {
-    return null
-  }
-  const range = deps['@capacitor/core'] ?? deps['@capacitor/android']
-  if (!range)
-    return null
-  const m = range.match(/(\d+)/)
-  return m ? Number(m[1]) : null
-}
 
 function capacitorMinSdkFloor(major: number): number {
   return CAP_MINSDK_FLOORS[major] ?? CAP_MINSDK_DEFAULT

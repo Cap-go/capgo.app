@@ -2,17 +2,7 @@
 import type { Finding, PrescanCheck } from '../types'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-
-/**
- * Extract a top-level <string> value for a key without relying on sibling ordering.
- * Targeted regexes are deliberate here: plist sibling order is lost in
- * fast-xml-parser's object mode, so full-tree parsing buys nothing for the
- * shallow string keys this check inspects.
- */
-function plistStringValue(raw: string, key: string): string | null {
-  const re = new RegExp(`<key>${key}</key>\\s*<string>([\\s\\S]*?)</string>`)
-  return raw.match(re)?.[1] ?? null
-}
+import { plistString } from './ios-plist-read'
 
 // RFC 3986/1738 scheme grammar - no underscores. Exported so the Android
 // deep-link check (manifest.ts re-exports this) validates schemes with the
@@ -71,7 +61,7 @@ export const infoplistSanity: PrescanCheck = {
     for (const key of PURPOSE_KEYS) {
       if (!raw.includes(`<key>${key}</key>`))
         continue
-      const value = plistStringValue(raw, key)
+      const value = plistString(raw, key)
       if (value === null || PLACEHOLDERS.has(value.trim().toLowerCase()) || value.trim().length < 8) {
         findings.push({
           id: 'ios/infoplist-sanity',
