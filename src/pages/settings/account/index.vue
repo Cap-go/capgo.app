@@ -925,7 +925,7 @@ onMounted(async () => {
 
         <div class="flex justify-end gap-3 mt-6">
           <button type="button" class="d-btn d-btn-ghost" :disabled="githubProfileLoading || githubProfileSaving" @click="closeGitHubProfileDialog">
-            {{ t('github-username-reject') }}
+            {{ t('button-cancel') }}
           </button>
           <button
             v-if="!githubProfile && githubUsername"
