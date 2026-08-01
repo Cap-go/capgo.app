@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { DateRangeMode } from '~/stores/adminDashboard'
 import { useMutationObserver } from '@vueuse/core'
-import { onMounted, ref, watch } from 'vue'
+import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import ArrowPathIconSolid from '~icons/heroicons/arrow-path-solid'
 import DateRangePicker from '~/components/DateRangePicker.vue'
@@ -19,14 +19,24 @@ const rangeValue = ref<[Date, Date] | null>([
   adminStore.activeDateRange.end,
 ])
 const isDark = ref(false)
+let prefersDarkQuery: MediaQueryList | null = null
 
 function syncThemeFromHtml() {
   const root = document.documentElement
+  const theme = root.dataset.theme
+  prefersDarkQuery ??= window.matchMedia('(prefers-color-scheme: dark)')
   isDark.value = root.classList.contains('dark')
-    || root.dataset.theme === 'capgodark'
+    || theme === 'capgodark'
+    || (theme !== 'capgolight' && prefersDarkQuery.matches)
 }
 
-onMounted(syncThemeFromHtml)
+onMounted(() => {
+  syncThemeFromHtml()
+  prefersDarkQuery?.addEventListener('change', syncThemeFromHtml)
+})
+onUnmounted(() => {
+  prefersDarkQuery?.removeEventListener('change', syncThemeFromHtml)
+})
 useMutationObserver(
   document.documentElement,
   syncThemeFromHtml,
