@@ -4,7 +4,7 @@ import type { DeviceComparable } from './deviceComparison.ts'
 import type { StatsInsightRawAction, StatsInsightRawDaily, StatsInsightRawDevice, StatsInsightRawSummary, StatsInsightRawVersion } from './statsInsights.ts'
 import type { Database } from './supabase.types.ts'
 import type { DeviceRes, DeviceWithoutCreatedAt, NativeVersionUsage, ReadDevicesParams, ReadStatsInsightsParams, ReadStatsParams, StatsInsightsResult, StatsMetadata, VersionUsage, VersionUsageChannel } from './types.ts'
-import { CacheHelper } from './cache.ts'
+import { CACHE_PUT_TIMEOUT_MS, CacheHelper } from './cache.ts'
 import { hasComparableDeviceChanged, toComparableDevice } from './deviceComparison.ts'
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
 import { emptyStatsInsights, normalizeStatsInsightsResult } from './statsInsights.ts'
@@ -135,13 +135,11 @@ export async function trackDeviceUsageCF(c: Context, device_id: string, app_id: 
       version_build: normalizedVersionBuild,
     })
 
-    // Check if device/version was already tracked for the current day
-    if (usageCache.available) {
-      const cachedUsage = await usageCache.matchJson<{ t: number }>(usageCacheRequest)
-      if (cachedUsage) {
-        // Device/version already tracked for this day, skip write
-        return
-      }
+    // Always await matchJson (resolves Cache API); .available is sync-racy.
+    const cachedUsage = await usageCache.matchJson<{ t: number }>(usageCacheRequest)
+    if (cachedUsage) {
+      // Device/version already tracked for this day, skip write
+      return
     }
 
     const platformValue = getUsagePlatformValue(normalizedPlatform)
@@ -153,10 +151,8 @@ export async function trackDeviceUsageCF(c: Context, device_id: string, app_id: 
       indexes: [app_id],
     })
 
-    // Cache the write for this native version during the current day
-    if (usageCache.available) {
-      await usageCache.putJson(usageCacheRequest, { t: Date.now() }, TRACK_DEVICE_USAGE_CACHE_MAX_AGE_SECONDS)
-    }
+    // Cache the write for this native version during the current day (put timed out).
+    await usageCache.putJson(usageCacheRequest, { t: Date.now() }, TRACK_DEVICE_USAGE_CACHE_MAX_AGE_SECONDS, { timeoutMs: CACHE_PUT_TIMEOUT_MS })
   }
   catch {
     const platformValue = getUsagePlatformValue(normalizedPlatform)
@@ -310,7 +306,9 @@ type DeviceCachePayload = DeviceComparable & {
 }
 
 export async function trackDevicesCF(c: Context, device: DeviceWithoutCreatedAt) {
-  cloudlog({ requestId: c.get('requestId'), message: 'trackDevicesCF', device })
+  // Runs under waitUntil — Cache I/O here stretches Workers Wall Time charts.
+  const start = performance.now()
+  let outcome: 'cache_hit' | 'wrote' | 'error' = 'wrote'
 
   // Analytics Engine DEVICE_INFO is required for tracking devices
   if (!c.env.DEVICE_INFO) {
@@ -324,10 +322,10 @@ export async function trackDevicesCF(c: Context, device: DeviceWithoutCreatedAt)
       app_id: device.app_id,
       device_id: device.device_id,
     })
-    const cachedDevice = trackDeviceCache.available
-      ? await trackDeviceCache.matchJson<DeviceCachePayload>(trackDeviceCacheRequest)
-      : null
+    // Do not gate on helper.available — it is sync-racy before ensureCache resolves.
+    const cachedDevice = await trackDeviceCache.matchJson<DeviceCachePayload>(trackDeviceCacheRequest)
     if (cachedDevice && !hasComparableDeviceChanged(cachedDevice, device)) {
+      outcome = 'cache_hit'
       cloudlog({
         requestId: c.get('requestId'),
         message: 'Cache hit – device unchanged, skipping write',
@@ -341,7 +339,7 @@ export async function trackDevicesCF(c: Context, device: DeviceWithoutCreatedAt)
 
     const comparableDevice = toComparableDevice(device)
 
-    // Write to Analytics Engine - this is the primary store now
+    // Write to Analytics Engine - this is the primary store now (sync; needs no waitUntil)
     cloudlog({ requestId: c.get('requestId'), message: 'Writing to Analytics Engine DEVICE_INFO' })
     // Platform: 0 = android, 1 = ios, 2 = electron
     const platformLower = comparableDevice.platform?.toLowerCase()
@@ -367,19 +365,29 @@ export async function trackDevicesCF(c: Context, device: DeviceWithoutCreatedAt)
       indexes: [device.app_id],
     })
 
-    // Update cache
-    if (trackDeviceCache.available) {
-      const cachePayload: DeviceCachePayload = {
-        ...comparableDevice,
-        app_id: device.app_id,
-        device_id: device.device_id,
-        cached_at: new Date().toISOString(),
-      }
-      await trackDeviceCache.putJson(trackDeviceCacheRequest, cachePayload, TRACK_DEVICE_CACHE_MAX_AGE_SECONDS)
+    const cachePayload: DeviceCachePayload = {
+      ...comparableDevice,
+      app_id: device.app_id,
+      device_id: device.device_id,
+      cached_at: new Date().toISOString(),
     }
+    await trackDeviceCache.putJson(trackDeviceCacheRequest, cachePayload, TRACK_DEVICE_CACHE_MAX_AGE_SECONDS, { timeoutMs: CACHE_PUT_TIMEOUT_MS })
   }
   catch (e) {
+    outcome = 'error'
     cloudlogErr({ requestId: c.get('requestId'), message: 'Error tracking device', error: serializeError(e), device })
+  }
+  finally {
+    const ms = Math.round(performance.now() - start)
+    if (ms >= 20) {
+      cloudlog({
+        requestId: c.get('requestId'),
+        message: 'trackDevicesCF_timing',
+        ms,
+        outcome,
+        app_id: device.app_id,
+      })
+    }
   }
 }
 
