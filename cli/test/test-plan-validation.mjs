@@ -83,6 +83,50 @@ await test('surfaces plan RPC errors instead of reporting an invalid plan', asyn
   assert(thrown.message.includes('Cannot validate plan'), `Unexpected error: ${thrown.message}`)
 })
 
+await test('falls back to organization validation when the app-aware RPC is unavailable', async () => {
+  const calls = []
+  const supabase = {
+    rpc: (name, args) => {
+      calls.push({ name, args })
+      if (name === 'is_allowed_action_org_action') {
+        return Promise.resolve({
+          data: null,
+          error: {
+            code: 'PGRST202',
+            message: 'Could not find the function in the schema cache',
+          },
+        })
+      }
+      return {
+        single: async () => ({ data: true, error: null }),
+      }
+    },
+  }
+
+  const allowed = await utils.isAllowedPlanActions(
+    supabase,
+    'org-id',
+    ['storage'],
+    'com.example.app',
+  )
+
+  assertEquals(allowed, true)
+  assertEquals(calls, [
+    {
+      name: 'is_allowed_action_org_action',
+      args: {
+        orgid: 'org-id',
+        actions: ['storage'],
+        appid: 'com.example.app',
+      },
+    },
+    {
+      name: 'is_allowed_action_org',
+      args: { orgid: 'org-id' },
+    },
+  ])
+})
+
 await test('surfaces organization plan RPC errors instead of reporting an invalid plan', async () => {
   const supabase = {
     rpc: () => ({

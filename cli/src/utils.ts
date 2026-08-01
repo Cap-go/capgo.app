@@ -856,8 +856,14 @@ export async function isAllowedPlanActions(
   const { data, error } = appId
     ? await supabase.rpc('is_allowed_action_org_action', { orgid: orgId, actions, appid: appId })
     : await supabase.rpc('is_allowed_action_org_action', { orgid: orgId, actions })
-  if (error)
+  if (error) {
+    // Older servers may not expose the app-aware overload in PostgREST's
+    // schema cache. Preserve their org-scoped behavior without hiding any
+    // permission, transport, or database errors from supported servers.
+    if (appId && error.code === 'PGRST202')
+      return isAllowedActionOrg(supabase, orgId)
     throw new Error(`Cannot validate plan: ${formatError(error)}`)
+  }
 
   return data === true
 }
