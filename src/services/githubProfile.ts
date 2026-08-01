@@ -17,7 +17,7 @@ export function normalizeGitHubUsername(username: string) {
 
 export async function getGitHubProfile(username: string): Promise<GitHubProfile> {
   const normalizedUsername = normalizeGitHubUsername(username)
-  if (!/^[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,37}[a-z\d]$/i.test(normalizedUsername))
+  if (!/^(?:[a-z\d]|[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,37}[a-z\d])$/i.test(normalizedUsername))
     throw new GitHubProfileError('invalid_username')
 
   let timeout: ReturnType<typeof setTimeout> | undefined

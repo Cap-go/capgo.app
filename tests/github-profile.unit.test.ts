@@ -27,6 +27,16 @@ describe('github profile lookup', () => {
     expect(fetchMock).toHaveBeenCalledWith('https://api.github.com/users/octocat', expect.any(Object))
   })
 
+  it('accepts a one-character GitHub username', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      id: 42,
+      login: 'a',
+      avatar_url: 'https://avatars.githubusercontent.com/u/42?v=4',
+    })))
+
+    await expect(getGitHubProfile('a')).resolves.toMatchObject({ id: 42, login: 'a' })
+  })
+
   it('rejects invalid and unknown usernames with user-facing error codes', async () => {
     await expect(getGitHubProfile('invalid_username')).rejects.toMatchObject({ code: 'invalid_username' } satisfies Partial<GitHubProfileError>)
     await expect(getGitHubProfile('foo--bar')).rejects.toMatchObject({ code: 'invalid_username' } satisfies Partial<GitHubProfileError>)

@@ -73,6 +73,7 @@ function openGitHubProfileDialog() {
     description: t('github-username-dialog-description'),
     size: 'sm',
     buttons: [],
+    preventAccidentalClose: true,
   })
 }
 
