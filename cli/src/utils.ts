@@ -843,6 +843,7 @@ export async function isAllowedActionOrg(supabase: SupabaseClient<Database>, org
   return !!data
 }
 
+/** Validate every metered plan action while preserving app-scoped RBAC context. */
 export async function isAllowedActionForApp(supabase: SupabaseClient<Database>, orgId: string, appId: string): Promise<boolean> {
   // Check every metered action to preserve the general "good plan" gate while
   // giving app-scoped API keys the app context required by RBAC.
