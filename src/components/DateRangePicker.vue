@@ -336,7 +336,7 @@ function presetButtonClass(active: boolean, disabled: boolean) {
         ref="popoverRef"
         open
         :aria-label="`${t('date-range')}: ${triggerLabel}`"
-        class="date-range-popover fixed z-[100] m-0 w-[min(46rem,calc(100vw-1.5rem))] overflow-hidden rounded-lg border p-0"
+        class="date-range-popover fixed z-[100] m-0 w-[min(48rem,calc(100vw-1.5rem))] overflow-hidden rounded-lg border p-0"
         :data-capgo-surface="isDark ? 'dark' : 'light'"
         :style="popoverStyle"
       >
@@ -573,20 +573,32 @@ function presetButtonClass(active: boolean, disabled: boolean) {
 .date-range-calendar {
   /* Single surface: calendar paints on the popover bg, no nested card. */
   background: var(--drp-bg) !important;
+  min-width: 0;
+  overflow: hidden;
   padding: 0.5rem 0.75rem 0.25rem;
 }
 
 .date-range-calendar :deep(.dp__main),
+.date-range-calendar :deep(.dp--main),
 .date-range-calendar :deep(.dp--menu),
 .date-range-calendar :deep(.dp__menu) {
   font-family: inherit;
   width: 100%;
+  max-width: 100%;
   min-width: 0 !important;
   border-radius: 0 !important;
   background: var(--drp-bg) !important;
   color: var(--drp-cal-text) !important;
   box-shadow: none !important;
   border: none !important;
+  box-sizing: border-box;
+}
+
+.date-range-calendar :deep(.dp--flex-display) {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .date-range-calendar :deep(.dp__theme_light),
@@ -622,9 +634,10 @@ function presetButtonClass(active: boolean, disabled: boolean) {
   --dp-range-between-border-radius: 0;
   --dp-menu-padding: 0;
   --dp-calendar-wrap-padding: 0;
-  --dp-multi-calendars-spacing: 0.75rem;
+  /* Spacing handled by our divider; library gap would overflow the pane. */
+  --dp-multi-calendars-spacing: 0;
   --dp-row-margin: 0;
-  --dp-cell-size: 36px;
+  --dp-cell-size: 34px;
   --dp-cell-padding: 2px;
   --dp-month-year-row-height: 36px;
   --dp-month-year-row-button-size: 32px;
@@ -726,14 +739,31 @@ function presetButtonClass(active: boolean, disabled: boolean) {
   border-color: var(--drp-border) !important;
 }
 
-/* Second month sits on the same surface — subtle divider, no floating panel. */
-.date-range-calendar :deep(.dp__instance_calendar + .dp__instance_calendar),
-.date-range-calendar :deep(.dp--instance-calendar + .dp--instance-calendar),
+/* Dual months share the pane evenly — never spill past the popover edge. */
+.date-range-calendar :deep(.dp__instance_calendar),
+.date-range-calendar :deep(.dp--instance-calendar) {
+  flex: 1 1 0 !important;
+  width: auto !important;
+  max-width: 100%;
+  min-width: 0 !important;
+  box-sizing: border-box;
+}
+
 .date-range-calendar :deep(.dp__calendar_next),
-.date-range-calendar :deep(.dp--calendar-next) {
-  margin-inline-start: 0.75rem !important;
+.date-range-calendar :deep(.dp--calendar-next),
+.date-range-calendar :deep(.dp__instance_calendar + .dp__instance_calendar),
+.date-range-calendar :deep(.dp--instance-calendar + .dp--instance-calendar) {
+  margin-inline-start: 0 !important;
   padding-inline-start: 0.75rem !important;
   border-inline-start: 1px solid var(--drp-divider);
+}
+
+.date-range-calendar :deep(.dp__calendar),
+.date-range-calendar :deep(.dp--calendar),
+.date-range-calendar :deep(.dp__calendar_wrap) {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 @media (prefers-reduced-motion: reduce) {
