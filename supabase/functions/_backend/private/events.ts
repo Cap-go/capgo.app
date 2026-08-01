@@ -290,6 +290,7 @@ async function buildBundleIncompatibleBentoEvent(
     updateStrategy = channelRow?.disable_auto_update ?? null
   }
   const skippedForMetadata = updateStrategy === 'version_number'
+  const apikeyId = c.get('apikey')?.id
 
   await backgroundTask(c, trackPosthogEvent(c, {
     event: BUNDLE_INCOMPATIBLE_EMAIL_EVENT,
@@ -303,6 +304,7 @@ async function buildBundleIncompatibleBentoEvent(
       app_id: appId,
       ...(incompatibleChannel ? { channel_name: incompatibleChannel } : {}),
     },
+    nonPersonTags: apikeyId === undefined ? undefined : { apikey_id: apikeyId },
   }))
 
   if (skippedForMetadata)
