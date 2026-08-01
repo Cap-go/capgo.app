@@ -43,15 +43,17 @@ export function addAuthenticatedApiKeyIdToTrackingPayload(
   payload: SendEventToTrackingPayload,
   apikeyId: number | undefined,
 ): SendEventToTrackingPayload {
-  if (apikeyId === undefined)
-    return payload
-
   const hasCallerProvidedApiKeyId = payload.tags && Object.hasOwn(payload.tags, 'apikey_id')
   const { apikey_id: _callerProvidedApiKeyId, ...tags } = payload.tags ?? {}
+  const payloadWithoutCallerApiKeyId = hasCallerProvidedApiKeyId
+    ? { ...payload, tags }
+    : payload
+
+  if (apikeyId === undefined)
+    return payloadWithoutCallerApiKeyId
 
   return {
-    ...payload,
-    ...(hasCallerProvidedApiKeyId ? { tags } : {}),
+    ...payloadWithoutCallerApiKeyId,
     nonPersonTags: { ...payload.nonPersonTags, apikey_id: apikeyId },
   }
 }
