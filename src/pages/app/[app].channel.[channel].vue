@@ -450,8 +450,8 @@ async function handleVersionLink(appVersion: Database['public']['Tables']['app_v
     if (await dialogStore.onDialogDismiss())
       return
   }
-  else if (localDependencies.length === 0) {
-    toast.info('ignore-compatibility')
+  else if (localDependencies.length === 0 || finalCompatibility.length === 0) {
+    toast.info(t('ignore-compatibility'))
   }
   else {
     toast.info(t('bundle-compatible-with-channel', { channel: channel.value.name }))
