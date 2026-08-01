@@ -12,7 +12,7 @@ import { trackPosthogEvent } from '../utils/posthog.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { broadcastCLIEvent } from '../utils/realtime_broadcast.ts'
 import { supabaseWithAuth } from '../utils/supabase.ts'
-import { sendEventToTracking } from '../utils/tracking.ts'
+import { addAuthenticatedApiKeyIdToTrackingPayload, sendEventToTracking } from '../utils/tracking.ts'
 import { backgroundTask } from '../utils/utils.ts'
 
 // PostHog event recording whether the org-member incompatibility email was sent
@@ -397,15 +397,12 @@ app.post('/', middlewareAuth(), async (c) => {
   // Exactly one of these is ever set (distinct event names); `??` picks the active one.
   const bentoEvent = onboardingBentoEvent ?? builderBentoEvent ?? bundleIncompatibleBentoEvent
   const apikeyId = c.get('apikey')?.id
-  await sendEventToTracking(c, {
+  await sendEventToTracking(c, addAuthenticatedApiKeyIdToTrackingPayload({
     ...trackedBody,
     bento: bentoEvent,
     sentToBento: Boolean(bentoEvent),
     groups: verifiedOrgId ? { organization: verifiedOrgId } : undefined,
-    // Use the authenticated record id, rather than a caller-provided tag, and
-    // keep it out of PostHog person properties.
-    nonPersonTags: apikeyId === undefined ? undefined : { apikey_id: apikeyId },
-  })
+  }, apikeyId))
 
   return c.json(BRES)
 })

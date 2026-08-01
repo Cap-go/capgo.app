@@ -39,6 +39,23 @@ export interface SendEventToTrackingOptions {
   strict?: boolean
 }
 
+export function addAuthenticatedApiKeyIdToTrackingPayload(
+  payload: SendEventToTrackingPayload,
+  apikeyId: number | undefined,
+): SendEventToTrackingPayload {
+  if (apikeyId === undefined)
+    return payload
+
+  const hasCallerProvidedApiKeyId = payload.tags && Object.hasOwn(payload.tags, 'apikey_id')
+  const { apikey_id: _callerProvidedApiKeyId, ...tags } = payload.tags ?? {}
+
+  return {
+    ...payload,
+    ...(hasCallerProvidedApiKeyId ? { tags } : {}),
+    nonPersonTags: { ...payload.nonPersonTags, apikey_id: apikeyId },
+  }
+}
+
 async function runTrackedCall(c: Context, provider: string, task: () => Promise<unknown>, strict = false) {
   try {
     const result = await task()

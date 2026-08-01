@@ -76,6 +76,20 @@ afterEach(() => {
 })
 
 describe('sendEventToTracking', () => {
+  it('uses the authenticated API key ID instead of a caller-provided tag', async () => {
+    const { addAuthenticatedApiKeyIdToTrackingPayload } = await import('../supabase/functions/_backend/utils/tracking.ts')
+
+    const payload = addAuthenticatedApiKeyIdToTrackingPayload({
+      channel: 'usage',
+      event: 'Tracked Event',
+      notify: false,
+      tags: { apikey_id: 'caller-supplied', app_id: 'app-id' },
+    }, 87015)
+
+    expect(payload.tags).toEqual({ app_id: 'app-id' })
+    expect(payload.nonPersonTags).toEqual({ apikey_id: 87015 })
+  })
+
   it('runs all tracking providers in the background by default', async () => {
     const { sendEventToTracking } = await import('../supabase/functions/_backend/utils/tracking.ts')
 
