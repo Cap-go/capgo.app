@@ -422,26 +422,24 @@ watch(
                 >
                   {{ acronym(org.name) }}
                 </div>
-                <span class="block truncate">{{ org.name }}</span>
-              </button>
-              <div class="flex items-center justify-end min-w-0 shrink-0">
+                <span class="block truncate min-w-0">{{ org.name }}</span>
                 <span
                   v-if="isInvitation(org)"
-                  class="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium rounded-full border border-amber-400/25 bg-amber-500/8 text-amber-200"
+                  class="inline-flex items-center gap-1 px-2 py-0.5 ml-auto text-[10px] font-medium rounded-full border border-amber-400/25 bg-amber-500/8 text-amber-200 shrink-0"
                 >
                   <span class="size-1.5 rounded-full bg-amber-300" />
                   {{ t('sso-status-pending') }}
                 </span>
-                <button
-                  v-else
-                  type="button"
-                  class="d-btn d-btn-ghost d-btn-sm d-btn-square size-8 min-h-0 border-none text-slate-300 hover:bg-slate-500/30 hover:text-white"
-                  :aria-label="`${t('settings')} ${org.name}`"
-                  @click="openOrganizationSettings(org, $event)"
-                >
-                  <IconSettings class="size-4" />
-                </button>
-              </div>
+              </button>
+              <button
+                v-if="!isInvitation(org)"
+                type="button"
+                class="d-btn d-btn-ghost d-btn-sm d-btn-square size-8 min-h-0 border-none text-slate-300 hover:bg-slate-500/30 hover:text-white shrink-0"
+                :aria-label="`${t('settings')} ${org.name}`"
+                @click="openOrganizationSettings(org, $event)"
+              >
+                <IconSettings class="size-4" />
+              </button>
             </div>
             <div v-if="!isInvitation(org)" class="pb-2 pl-8 pr-1">
               <div v-if="getOrgApps(org).length > 0" class="space-y-1">
