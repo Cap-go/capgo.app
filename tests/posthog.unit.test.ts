@@ -83,6 +83,24 @@ describe('posthog helper', () => {
     expect(body.properties.$set).toEqual({ app_id: 'app-id' })
   })
 
+  it('sends non-person API key context only with the event', async () => {
+    const { trackPosthogEvent } = await import('../supabase/functions/_backend/utils/posthog.ts')
+
+    await trackPosthogEvent(createContext(), {
+      event: 'Tracked Event',
+      channel: 'usage',
+      nonPersonTags: { apikey_id: 87015 },
+      user_id: 'user-id',
+      tags: { app_id: 'app-id' },
+    })
+
+    const request = fetchMock.mock.calls[0]
+    const body = JSON.parse(request?.[1]?.body as string)
+
+    expect(body.properties.apikey_id).toBe(87015)
+    expect(body.properties.$set).not.toHaveProperty('apikey_id')
+  })
+
   it('can send historical events without updating person properties', async () => {
     const { trackPosthogEvent } = await import('../supabase/functions/_backend/utils/posthog.ts')
 
