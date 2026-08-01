@@ -722,15 +722,15 @@ const paginationClass = computed(() => props.mobileFixedPagination
       >
         <IconTrash class="h-6 text-red-500" />
       </button>
-      <div class="flex h-10 min-w-0 flex-1 items-center justify-end gap-2 overflow-visible md:flex-none">
-        <div v-if="$slots['toolbar-extras']" class="flex h-10 shrink-0 items-center">
+      <div class="flex w-full min-w-0 flex-col items-stretch gap-2 overflow-visible sm:w-auto sm:flex-1 sm:flex-row sm:items-center sm:justify-end md:flex-none">
+        <div v-if="$slots['toolbar-extras']" class="flex h-10 shrink-0 items-center self-end sm:self-auto">
           <slot name="toolbar-extras" />
         </div>
-        <div class="min-w-0 overflow-hidden md:w-auto">
+        <div class="min-w-0 w-full overflow-hidden sm:flex-1 md:w-auto md:flex-none">
           <FormKit
             v-model="searchVal" :placeholder="searchPlaceholder" :prefix-icon="IconSearch"
             :disabled="isLoading" enterkeyhint="send" :classes="{
-              outer: 'mb-0! md:w-96',
+              outer: 'mb-0! w-full md:w-96',
             }"
           />
         </div>
