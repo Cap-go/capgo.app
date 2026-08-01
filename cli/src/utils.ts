@@ -837,22 +837,25 @@ export function shouldWarnTrialExpiry(options: {
 }
 
 export async function isAllowedActionOrg(supabase: SupabaseClient<Database>, orgId: string): Promise<boolean> {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .rpc('is_allowed_action_org', { orgid: orgId })
     .single()
-  return !!data
+  if (error)
+    throw new Error(`Cannot validate plan: ${formatError(error)}`)
+
+  return data === true
 }
 
-/** Validate every metered plan action while preserving app-scoped RBAC context. */
-export async function isAllowedActionForApp(supabase: SupabaseClient<Database>, orgId: string, appId: string): Promise<boolean> {
-  // Check every metered action to preserve the general "good plan" gate while
-  // giving app-scoped API keys the app context required by RBAC.
-  const args = {
-    orgid: orgId,
-    appid: appId,
-    actions: ['mau', 'storage', 'bandwidth', 'build_time'],
-  } as never
-  const { data, error } = await supabase.rpc('is_allowed_action_org_action', args)
+/** Validate metered plan actions while preserving app-scoped RBAC context when available. */
+export async function isAllowedPlanActions(
+  supabase: SupabaseClient<Database>,
+  orgId: string,
+  actions: Database['public']['Enums']['action_type'][],
+  appId?: string,
+): Promise<boolean> {
+  const { data, error } = appId
+    ? await supabase.rpc('is_allowed_action_org_action', { orgid: orgId, actions, appid: appId })
+    : await supabase.rpc('is_allowed_action_org_action', { orgid: orgId, actions })
   if (error)
     throw new Error(`Cannot validate plan: ${formatError(error)}`)
 
@@ -893,7 +896,9 @@ export async function checkRemoteCliMessages(supabase: SupabaseClient<Database>,
 export async function checkPlanValid(supabase: SupabaseClient<Database>, orgId: string, appId?: string, warning = true) {
   const config = await getRemoteConfig()
 
-  const validPlan = await (appId ? isAllowedActionForApp(supabase, orgId, appId) : isAllowedActionOrg(supabase, orgId))
+  const validPlan = await (appId
+    ? isAllowedPlanActions(supabase, orgId, ['mau', 'storage', 'bandwidth', 'build_time'], appId)
+    : isAllowedActionOrg(supabase, orgId))
   if (!validPlan) {
     log.error(`You need to upgrade your plan to continue to use capgo.\n Upgrade here: ${config.hostWeb}/settings/organization/plans\n`)
     wait(100)
@@ -916,20 +921,7 @@ export async function checkPlanValid(supabase: SupabaseClient<Database>, orgId: 
 export async function checkPlanValidUpload(supabase: SupabaseClient<Database>, orgId: string, appId?: string, warning = true) {
   const config = await getRemoteConfig()
 
-  // Pass appid so RBAC evaluates the app scope. Without it,
-  // API keys with app-scoped bindings can be rejected and the org-scope
-  // plan check returns false even when the plan is healthy. PostgREST
-  // routes to the 3-arg overload at runtime; the `as never` cast bypasses
-  // a `supabase gen types` quirk that collapses overloads sharing the
-  // same name (the 3-arg signature exists in the DB but is not emitted
-  // by the generator).
-  const args = { orgid: orgId, actions: ['storage'], appid: appId } as never
-  const { data: validPlan, error: validPlanError } = await supabase.rpc('is_allowed_action_org_action', args)
-  if (validPlanError) {
-    const message = `Cannot validate upload plan: ${formatError(validPlanError)}`
-    log.error(message)
-    throw new Error(message)
-  }
+  const validPlan = await isAllowedPlanActions(supabase, orgId, ['storage'], appId)
   if (!validPlan) {
     log.error(`You need to upgrade your plan to continue to use capgo.\n Upgrade here: ${config.hostWeb}/settings/organization/plans\n`)
     wait(100)

@@ -33,7 +33,7 @@ function assertEquals(actual, expected, message) {
 }
 
 await test('checks an app-scoped key through the app-aware plan RPC', async () => {
-  assert(typeof utils.isAllowedActionForApp === 'function', 'Expected isAllowedActionForApp to be exported')
+  assert(typeof utils.isAllowedPlanActions === 'function', 'Expected isAllowedPlanActions to be exported')
 
   const calls = []
   const supabase = {
@@ -43,9 +43,10 @@ await test('checks an app-scoped key through the app-aware plan RPC', async () =
     },
   }
 
-  const allowed = await utils.isAllowedActionForApp(
+  const allowed = await utils.isAllowedPlanActions(
     supabase,
     'org-id',
+    ['mau', 'storage', 'bandwidth', 'build_time'],
     'com.example.app',
   )
 
@@ -54,14 +55,14 @@ await test('checks an app-scoped key through the app-aware plan RPC', async () =
     name: 'is_allowed_action_org_action',
     args: {
       orgid: 'org-id',
-      appid: 'com.example.app',
       actions: ['mau', 'storage', 'bandwidth', 'build_time'],
+      appid: 'com.example.app',
     },
   }])
 })
 
 await test('surfaces plan RPC errors instead of reporting an invalid plan', async () => {
-  assert(typeof utils.isAllowedActionForApp === 'function', 'Expected isAllowedActionForApp to be exported')
+  assert(typeof utils.isAllowedPlanActions === 'function', 'Expected isAllowedPlanActions to be exported')
 
   const supabase = {
     rpc: async () => ({
@@ -72,13 +73,35 @@ await test('surfaces plan RPC errors instead of reporting an invalid plan', asyn
 
   let thrown
   try {
-    await utils.isAllowedActionForApp(supabase, 'org-id', 'com.example.app')
+    await utils.isAllowedPlanActions(supabase, 'org-id', ['storage'], 'com.example.app')
   }
   catch (error) {
     thrown = error
   }
 
   assert(thrown instanceof Error, 'Expected the RPC error to be thrown')
+  assert(thrown.message.includes('Cannot validate plan'), `Unexpected error: ${thrown.message}`)
+})
+
+await test('surfaces organization plan RPC errors instead of reporting an invalid plan', async () => {
+  const supabase = {
+    rpc: () => ({
+      single: async () => ({
+        data: null,
+        error: { message: 'organization lookup failed' },
+      }),
+    }),
+  }
+
+  let thrown
+  try {
+    await utils.isAllowedActionOrg(supabase, 'org-id')
+  }
+  catch (error) {
+    thrown = error
+  }
+
+  assert(thrown instanceof Error, 'Expected the organization RPC error to be thrown')
   assert(thrown.message.includes('Cannot validate plan'), `Unexpected error: ${thrown.message}`)
 })
 
