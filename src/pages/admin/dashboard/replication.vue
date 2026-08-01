@@ -40,6 +40,7 @@ interface SubscriptionHealth {
     subname: string
     enabled: boolean
     has_apply_worker: boolean
+    has_recent_receipt: boolean
     apply_lag_seconds: number | null
     last_msg_receipt_time: string | null
     status: 'ok' | 'ko'
@@ -168,6 +169,8 @@ const canarySubtitle = computed(() => {
     return canary.reasons.join(', ')
   const primary = canary.primary_count == null ? '-' : formatNumberValue(canary.primary_count)
   const replica = canary.replica_count == null ? '-' : formatNumberValue(canary.replica_count)
+  if (canary.status === 'skipped')
+    return canary.reasons.join(', ') || 'skipped'
   const cacheLabel = canary.cached ? 'cached' : 'fresh'
   return `${canary.table}: ${primary} / ${replica} (${cacheLabel})`
 })
@@ -361,7 +364,7 @@ displayStore.defaultBack = '/dashboard'
                         {{ sub.apply_lag_seconds == null ? '-' : formatNumberValue(sub.apply_lag_seconds, { maximumFractionDigits: 1 }) }}
                       </td>
                       <td class="whitespace-nowrap px-4 py-3">
-                        <span class="badge" :class="sub.status === 'ok' ? 'badge-success' : 'badge-error'">
+                        <span class="d-badge" :class="sub.status === 'ok' ? 'd-badge-success' : 'd-badge-error'">
                           {{ sub.status.toUpperCase() }}
                         </span>
                       </td>
@@ -400,7 +403,7 @@ displayStore.defaultBack = '/dashboard'
                 </div>
                 <div class="flex justify-between gap-4">
                   <span>Cache</span>
-                  <span class="font-semibold">{{ data.data_canary?.cached ? 'cached' : 'fresh' }}</span>
+                  <span class="font-semibold">{{ data.data_canary?.status === 'skipped' ? 'skipped' : (data.data_canary?.cached ? 'cached' : 'fresh') }}</span>
                 </div>
                 <div class="flex justify-between gap-4">
                   <span>Notes</span>
@@ -478,8 +481,8 @@ displayStore.defaultBack = '/dashboard'
                     </td>
                     <td class="whitespace-nowrap px-4 py-3">
                       <span
-                        class="badge"
-                        :class="slot.status === 'ok' ? 'badge-success' : 'badge-error'"
+                        class="d-badge"
+                        :class="slot.status === 'ok' ? 'd-badge-success' : 'd-badge-error'"
                       >
                         {{ slot.status.toUpperCase() }}
                       </span>

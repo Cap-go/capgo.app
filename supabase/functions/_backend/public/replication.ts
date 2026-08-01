@@ -37,6 +37,7 @@ export interface SubscriptionWorkerRow {
   subname: string
   subenabled: boolean
   has_apply_worker: boolean
+  has_recent_receipt: boolean
   apply_lag_seconds: number | null
   last_msg_receipt_time: string | null
 }
@@ -49,6 +50,7 @@ export interface SubscriptionHealthResult {
     subname: string
     enabled: boolean
     has_apply_worker: boolean
+    has_recent_receipt: boolean
     apply_lag_seconds: number | null
     last_msg_receipt_time: string | null
     status: SlotStatus
@@ -131,17 +133,23 @@ export function evaluateSubscriptionHealth(
 
   const subscriptions = rows.map((row) => {
     const reasons: string[] = []
-    if (!row.subenabled)
+    if (!row.subenabled) {
       reasons.push('subscription_disabled')
-    if (!row.has_apply_worker)
-      reasons.push('no_apply_worker')
-    if (row.apply_lag_seconds !== null && row.apply_lag_seconds > thresholdSeconds)
-      reasons.push('apply_lag_threshold_exceeded')
+    }
+    else {
+      if (!row.has_apply_worker)
+        reasons.push('no_apply_worker')
+      if (!row.has_recent_receipt)
+        reasons.push('no_recent_receipt')
+      if (row.apply_lag_seconds !== null && row.apply_lag_seconds > thresholdSeconds)
+        reasons.push('apply_lag_threshold_exceeded')
+    }
 
     return {
       subname: row.subname,
       enabled: row.subenabled,
       has_apply_worker: row.has_apply_worker,
+      has_recent_receipt: row.has_recent_receipt,
       apply_lag_seconds: row.apply_lag_seconds,
       last_msg_receipt_time: row.last_msg_receipt_time,
       status: (reasons.length > 0 ? 'ko' : 'ok') as SlotStatus,
@@ -149,17 +157,19 @@ export function evaluateSubscriptionHealth(
     }
   })
 
-  const hasHealthy = subscriptions.some(sub => sub.status === 'ok')
-  const reasons = hasHealthy
+  // Disabled leftovers are ignored. Every enabled subscription must be healthy.
+  const enabled = subscriptions.filter(sub => sub.enabled)
+  const allEnabledHealthy = enabled.length > 0 && enabled.every(sub => sub.status === 'ok')
+  const reasons = allEnabledHealthy
     ? []
-    : [...new Set(subscriptions.flatMap(sub => sub.reasons))]
+    : [...new Set((enabled.length ? enabled : subscriptions).flatMap(sub => sub.reasons))]
 
   return {
-    status: hasHealthy ? 'ok' : 'ko',
+    status: allEnabledHealthy ? 'ok' : 'ko',
     checked_at: checkedAt,
     threshold_seconds: thresholdSeconds,
     subscriptions,
-    reasons: reasons.length > 0 ? reasons : (hasHealthy ? [] : ['subscription_unhealthy']),
+    reasons: reasons.length > 0 ? reasons : ['subscription_unhealthy'],
   }
 }
 
@@ -299,7 +309,8 @@ async function querySubscriptionHealth(
     SELECT
       s.subname,
       s.subenabled,
-      COALESCE(bool_or(ss.pid IS NOT NULL AND ss.last_msg_receipt_time IS NOT NULL), false) AS has_apply_worker,
+      COALESCE(bool_or(ss.pid IS NOT NULL), false) AS has_apply_worker,
+      COALESCE(bool_or(ss.last_msg_receipt_time IS NOT NULL), false) AS has_recent_receipt,
       MAX(EXTRACT(EPOCH FROM (now() - ss.last_msg_receipt_time)))
         FILTER (WHERE ss.last_msg_receipt_time IS NOT NULL) AS apply_lag_seconds,
       MAX(ss.last_msg_receipt_time) AS last_msg_receipt_time
@@ -313,6 +324,7 @@ async function querySubscriptionHealth(
     subname: String(row.subname),
     subenabled: Boolean(row.subenabled),
     has_apply_worker: Boolean(row.has_apply_worker),
+    has_recent_receipt: Boolean(row.has_recent_receipt),
     apply_lag_seconds: toNumber(row.apply_lag_seconds),
     last_msg_receipt_time: row.last_msg_receipt_time
       ? new Date(row.last_msg_receipt_time).toISOString()
@@ -406,7 +418,7 @@ async function getCachedDataCanary(
         reasons: result.reasons,
       }
       setDataCanaryMemoryEntry(cacheKey, cacheEntry)
-      await cacheHelper.putJson(cacheRequest, cacheEntry, DATA_CANARY_TTL_SECONDS)
+      await cacheHelper.putJson(cacheRequest, cacheEntry, DATA_CANARY_TTL_SECONDS, { timeoutMs: DATA_CANARY_CACHE_TIMEOUT_MS })
       const { expiresAt: _expiresAt, ...payload } = cacheEntry
       return { ...payload, cached: false }
     })
@@ -531,8 +543,12 @@ app.get('/', async (c) => {
       }
       else {
         const replicaDrizzle = getDrizzleClient(replicaPgClient)
-        subscription = await querySubscriptionHealth(replicaDrizzle, thresholdSeconds)
-        dataCanary = await getCachedDataCanary(c, drizzleClient, replicaDrizzle, replicaSource)
+        const [subscriptionResult, canaryResult] = await Promise.all([
+          querySubscriptionHealth(replicaDrizzle, thresholdSeconds),
+          getCachedDataCanary(c, drizzleClient, replicaDrizzle, replicaSource),
+        ])
+        subscription = subscriptionResult
+        dataCanary = canaryResult
       }
     }
     catch (error) {

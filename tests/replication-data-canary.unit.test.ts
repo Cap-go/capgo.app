@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import {
   clearDataCanaryCacheForTests,
   evaluateAppVersionsCanary,
@@ -38,6 +38,7 @@ describe('replication data canary evaluation', () => {
         subname: 'capgo_google_eu_2',
         subenabled: false,
         has_apply_worker: false,
+        has_recent_receipt: false,
         apply_lag_seconds: null,
         last_msg_receipt_time: null,
       },
@@ -45,6 +46,7 @@ describe('replication data canary evaluation', () => {
         subname: 'capgo_google_eu_2_sub',
         subenabled: true,
         has_apply_worker: true,
+        has_recent_receipt: true,
         apply_lag_seconds: 2,
         last_msg_receipt_time: '2026-08-01T07:00:00.000Z',
       },
@@ -54,15 +56,37 @@ describe('replication data canary evaluation', () => {
     expect(result.subscriptions.find(s => s.subname === 'capgo_google_eu_2_sub')?.status).toBe('ok')
   })
 
-  it('marks enabled subscription without apply worker as ko', () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(new Date('2026-08-01T07:00:00Z'))
+  it('fails when any enabled subscription is unhealthy', () => {
+    const result = evaluateSubscriptionHealth([
+      {
+        subname: 'capgo_google_eu_2',
+        subenabled: true,
+        has_apply_worker: false,
+        has_recent_receipt: false,
+        apply_lag_seconds: null,
+        last_msg_receipt_time: null,
+      },
+      {
+        subname: 'capgo_google_eu_2_sub',
+        subenabled: true,
+        has_apply_worker: true,
+        has_recent_receipt: true,
+        apply_lag_seconds: 2,
+        last_msg_receipt_time: '2026-08-01T07:00:00.000Z',
+      },
+    ])
 
+    expect(result.status).toBe('ko')
+    expect(result.reasons).toContain('no_apply_worker')
+  })
+
+  it('marks enabled subscription without apply worker as ko', () => {
     const result = evaluateSubscriptionHealth([
       {
         subname: 'capgo_google_eu_2_sub',
         subenabled: true,
         has_apply_worker: false,
+        has_recent_receipt: false,
         apply_lag_seconds: null,
         last_msg_receipt_time: null,
       },
@@ -70,7 +94,22 @@ describe('replication data canary evaluation', () => {
 
     expect(result.status).toBe('ko')
     expect(result.reasons).toContain('no_apply_worker')
-    vi.useRealTimers()
+  })
+
+  it('marks enabled subscription with pid but no receipt as ko', () => {
+    const result = evaluateSubscriptionHealth([
+      {
+        subname: 'capgo_google_eu_2_sub',
+        subenabled: true,
+        has_apply_worker: true,
+        has_recent_receipt: false,
+        apply_lag_seconds: null,
+        last_msg_receipt_time: null,
+      },
+    ])
+
+    expect(result.status).toBe('ko')
+    expect(result.reasons).toContain('no_recent_receipt')
   })
 
   it('marks apply lag above threshold as ko', () => {
@@ -79,6 +118,7 @@ describe('replication data canary evaluation', () => {
         subname: 'capgo_google_eu_2_sub',
         subenabled: true,
         has_apply_worker: true,
+        has_recent_receipt: true,
         apply_lag_seconds: 400,
         last_msg_receipt_time: '2026-08-01T06:50:00.000Z',
       },
