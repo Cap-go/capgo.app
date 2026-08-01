@@ -242,12 +242,12 @@ function onOrganizationClick(org: Organization) {
   }
 
   organizationStore.setCurrentOrganization(org.gid)
-  // if current path is not home, redirect to the org home page
-  // route.params.app
+  closeDropdown()
+  // Org row opens the org global dashboard; settings gear opens org settings.
+  // When already on dashboard, the watch on currentOrganization in
+  // organization.ts will trigger data reload via main.updateDashboard().
   if (router.currentRoute.value.path !== '/dashboard')
-    router.push(`/dashboard`)
-  // Note: When already on dashboard, the watch on currentOrganization in
-  // organization.ts will trigger data reload via main.updateDashboard()
+    router.push('/dashboard')
 }
 
 async function createNewOrg() {
@@ -324,31 +324,14 @@ function acronym(name: string) {
   return (first + second).toUpperCase()
 }
 
-function onOrgItemClick(org: Organization, e: MouseEvent) {
-  if (isSelected(org)) {
-    e.preventDefault()
-    e.stopPropagation()
-    return
-  }
-  onOrganizationClick(org)
-}
-
-function isRowInteractive(org: Organization) {
-  return isInvitation(org) || !isSelected(org)
-}
-
 function onOrgItemKeydown(org: Organization, e: KeyboardEvent) {
   if (e.target !== e.currentTarget)
-    return
-
-  if (!isRowInteractive(org))
     return
 
   if (e.key !== 'Enter' && e.key !== ' ')
     return
 
   e.preventDefault()
-  closeDropdown()
   onOrganizationClick(org)
 }
 
@@ -421,12 +404,11 @@ watch(
             :class="isSelected(org) ? 'bg-gray-700/80' : ''"
           >
             <div
-              class="flex items-center gap-2 px-3 py-3 text-white rounded-md"
-              :class="isRowInteractive(org) ? 'cursor-pointer hover:bg-gray-600' : 'cursor-default'"
+              class="flex items-center gap-2 px-3 py-3 text-white rounded-md cursor-pointer hover:bg-gray-600"
               :aria-current="isSelected(org) ? 'true' : undefined"
-              :role="isRowInteractive(org) ? 'button' : undefined"
-              :tabindex="isRowInteractive(org) ? 0 : -1"
-              @click="onOrgItemClick(org, $event)"
+              role="button"
+              tabindex="0"
+              @click="onOrganizationClick(org)"
               @keydown="onOrgItemKeydown(org, $event)"
             >
               <div
