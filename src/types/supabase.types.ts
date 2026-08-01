@@ -3346,6 +3346,7 @@ export type Database = {
           enable_notifications: boolean
           first_name: string | null
           format_locale: string | null
+          github_id: number | null
           github_username: string | null
           id: string
           image_url: string | null
@@ -3364,6 +3365,7 @@ export type Database = {
           enable_notifications?: boolean
           first_name?: string | null
           format_locale?: string | null
+          github_id?: number | null
           github_username?: string | null
           id: string
           image_url?: string | null
@@ -3382,6 +3384,7 @@ export type Database = {
           enable_notifications?: boolean
           first_name?: string | null
           format_locale?: string | null
+          github_id?: number | null
           github_username?: string | null
           id?: string
           image_url?: string | null
