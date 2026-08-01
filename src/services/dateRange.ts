@@ -20,6 +20,9 @@ export type DateRangePresetGroupKey = 'hours' | 'days' | 'months'
 
 export const DEFAULT_DATE_RANGE_PRESET = '24h' as const satisfies RollingDateRangePreset
 
+/** Default rolling window for devices / logs table toolbars. */
+export const TABLE_DATE_RANGE_DEFAULT = '30min' as const satisfies RollingDateRangePreset
+
 /** Rolling window lengths for preset modes (ms before `now`). */
 export const DATE_RANGE_DURATIONS_MS: Record<RollingDateRangePreset, number> = {
   '30min': 30 * 60 * 1000,

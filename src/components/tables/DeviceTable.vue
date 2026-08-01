@@ -8,7 +8,7 @@ import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import DateRangePicker from '~/components/DateRangePicker.vue'
 import { formatDate } from '~/services/date'
-import { DEFAULT_DATE_RANGE_PRESET, getDateRangeForPreset } from '~/services/dateRange'
+import { getDateRangeForPreset, TABLE_DATE_RANGE_DEFAULT } from '~/services/dateRange'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
 
 const props = defineProps<{
@@ -42,9 +42,9 @@ const filters = ref({
   Override: false,
   CustomId: false,
 })
-const initialRange = getDateRangeForPreset(DEFAULT_DATE_RANGE_PRESET)
+const initialRange = getDateRangeForPreset(TABLE_DATE_RANGE_DEFAULT)
 const dateRange = ref<[Date, Date] | null>([initialRange.start, initialRange.end])
-const dateRangeMode = ref<DateRangePreset>(DEFAULT_DATE_RANGE_PRESET)
+const dateRangeMode = ref<DateRangePreset>(TABLE_DATE_RANGE_DEFAULT)
 const selectedPlatform = ref<'' | PlatformOs>('')
 const selectedVersionName = ref(props.versionName ?? '')
 const bundleNames = ref<string[]>([])
