@@ -25,6 +25,7 @@ describe('format locale helpers', () => {
       enable_notifications: true,
       first_name: 'Test',
       format_locale: 'fr-FR',
+      github_id: null,
       github_username: null,
       id: '00000000-0000-0000-0000-000000000000',
       image_url: null,

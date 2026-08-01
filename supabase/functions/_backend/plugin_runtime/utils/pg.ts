@@ -449,53 +449,322 @@ export function getDrizzleClient(db: PluginPgClient, options?: { logger?: boolea
   return drizzle({ client: db, logger: options?.logger ?? true })
 }
 
-// Helper to extract detailed error information from pg errors
-export function logPgError(c: Context, functionName: string, error: unknown) {
-  const e = error as Error & {
-    code?: string
-    errno?: number
-    syscall?: string
-    address?: string
-    port?: number
-    severity?: string
-    detail?: string
-    hint?: string
-    position?: string
-    routine?: string
-    file?: string
-    line?: string
-    column?: string
+const POSTGRES_ERROR_FIELDS = [
+  // PostgreSQL server errors (node-postgres DatabaseError)
+  'severity',
+  'code',
+  'detail',
+  'hint',
+  'position',
+  'internalPosition',
+  'internalQuery',
+  'where',
+  'schema',
+  'table',
+  'column',
+  'dataType',
+  'constraint',
+  'file',
+  'line',
+  'routine',
+
+  // Network, socket, and TLS errors
+  'errno',
+  'syscall',
+  'address',
+  'port',
+  'host',
+  'hostname',
+  'library',
+  'function',
+  'reason',
+  'opensslErrorStack',
+
+  // Driver/runtime errors
+  'status',
+  'statusCode',
+  'command',
+  'query',
+] as const
+
+const MAX_POSTGRES_ERROR_CAUSE_DEPTH = 8
+const MAX_POSTGRES_LOG_VALUE_DEPTH = 4
+const MAX_POSTGRES_LOG_ARRAY_ITEMS = 50
+const MAX_POSTGRES_LOG_OBJECT_KEYS = 50
+const POSTGRES_LOG_REDACTED_KEYS = new Set(['bindings', 'parameters', 'params', 'values'])
+const POSTGRES_LOG_UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+
+function redactPostgresLogText(value: string): string {
+  return value.replace(/(^|[\r\n])params:[^\r\n]*/gi, '$1params: [redacted]')
+}
+
+function describeThrownValue(value: unknown): string {
+  if (typeof value === 'string')
+    return redactPostgresLogText(value)
+  if (value === null || value === undefined || typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint' || typeof value === 'symbol')
+    return String(value)
+  return 'object thrown'
+}
+
+function readErrorProperty(error: object, key: PropertyKey): unknown {
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(error, key)
+    if (!descriptor)
+      return undefined
+    if ('value' in descriptor)
+      return descriptor.value
+    return '[accessor property omitted]'
+  }
+  catch (propertyError) {
+    return `[unreadable property: ${describeThrownValue(propertyError)}]`
+  }
+}
+
+function getObjectType(value: object): string {
+  if (Array.isArray(value))
+    return 'Array'
+  if (value instanceof AggregateError)
+    return 'AggregateError'
+  if (value instanceof Error)
+    return 'Error'
+  if (typeof value === 'function')
+    return 'Function'
+  return 'Object'
+}
+
+function getLogArrayLength(value: unknown[]): number {
+  const length = readErrorProperty(value, 'length')
+  return typeof length === 'number' && Number.isSafeInteger(length) && length > 0
+    ? length
+    : 0
+}
+
+function serializePostgresLogArray(
+  value: unknown[],
+  seen: WeakSet<object>,
+  depth: number,
+): unknown[] {
+  const totalLength = getLogArrayLength(value)
+  const boundedLength = Math.min(totalLength, MAX_POSTGRES_LOG_ARRAY_ITEMS)
+  const serialized: unknown[] = []
+  for (let index = 0; index < boundedLength; index++)
+    serialized.push(serializePostgresLogValue(readErrorProperty(value, index), seen, depth + 1))
+
+  if (totalLength > boundedLength)
+    serialized.push(`[truncated ${totalLength - boundedLength} items]`)
+  return serialized
+}
+
+function serializePostgresLogObject(
+  value: object,
+  seen: WeakSet<object>,
+  depth: number,
+): unknown {
+  let keys: string[]
+  try {
+    keys = Object.keys(value)
+  }
+  catch (keyError) {
+    return `[unreadable object: ${describeThrownValue(keyError)}]`
   }
 
+  // A null-prototype record plus explicit unsafe-key filtering prevents
+  // attacker-controlled diagnostic keys from invoking `__proto__` setters
+  // here or in less defensive downstream log processors.
+  const serialized: Record<string, unknown> = Object.create(null)
+  const blockedKeys: string[] = []
+  for (const key of keys.slice(0, MAX_POSTGRES_LOG_OBJECT_KEYS)) {
+    if (POSTGRES_LOG_UNSAFE_KEYS.has(key.toLowerCase())) {
+      blockedKeys.push(key)
+      continue
+    }
+    // Structured query objects can carry bound values under these keys.
+    // Keep the query text and shape, but never copy parameter values to logs.
+    serialized[key] = POSTGRES_LOG_REDACTED_KEYS.has(key.toLowerCase())
+      ? '[redacted]'
+      : serializePostgresLogValue(readErrorProperty(value, key), seen, depth + 1)
+  }
+
+  if (keys.length > MAX_POSTGRES_LOG_OBJECT_KEYS)
+    serialized.__truncatedKeys = keys.length - MAX_POSTGRES_LOG_OBJECT_KEYS
+  if (blockedKeys.length)
+    serialized.__blockedKeys = blockedKeys
+
+  return serialized
+}
+
+function serializePostgresLogValue(
+  value: unknown,
+  seen = new WeakSet<object>(),
+  depth = 0,
+): unknown {
+  if (typeof value === 'string')
+    return redactPostgresLogText(value)
+  if (typeof value === 'bigint')
+    return value.toString()
+  if (typeof value === 'symbol')
+    return value.toString()
+  if (typeof value === 'function') {
+    const functionName = readErrorProperty(value, 'name')
+    return `[function ${typeof functionName === 'string' && functionName ? functionName : 'anonymous'}]`
+  }
+  if (value === null || typeof value !== 'object')
+    return value
+
+  if (seen.has(value))
+    return '[circular]'
+  if (depth >= MAX_POSTGRES_LOG_VALUE_DEPTH)
+    return `[truncated ${getObjectType(value)}]`
+
+  seen.add(value)
+  try {
+    return Array.isArray(value)
+      ? serializePostgresLogArray(value, seen, depth)
+      : serializePostgresLogObject(value, seen, depth)
+  }
+  catch (serializationError) {
+    return `[unserializable ${getObjectType(value)}: ${describeThrownValue(serializationError)}]`
+  }
+  finally {
+    seen.delete(value)
+  }
+}
+
+function serializePostgresAggregateErrors(
+  aggregateErrors: unknown[],
+  seen: WeakSet<object>,
+  depth: number,
+): Record<string, unknown>[] {
+  const totalLength = getLogArrayLength(aggregateErrors)
+  const boundedLength = Math.min(totalLength, MAX_POSTGRES_LOG_ARRAY_ITEMS)
+  const errors: Record<string, unknown>[] = []
+  for (let index = 0; index < boundedLength; index++) {
+    errors.push(serializePostgresError(
+      readErrorProperty(aggregateErrors, index),
+      seen,
+      depth + 1,
+    ))
+  }
+  if (totalLength > boundedLength) {
+    errors.push({
+      type: 'truncated',
+      omitted: totalLength - boundedLength,
+    })
+  }
+  return errors
+}
+
+/**
+ * Serialize the complete Drizzle/node-postgres cause chain for Cloudflare logs.
+ *
+ * Error fields such as `code`, `severity`, and `routine` are not reliably
+ * enumerable, while Drizzle wraps the original driver error in `cause`. Read
+ * both explicitly so transient replica/Hyperdrive failures retain their
+ * PostgreSQL SQLSTATE and network diagnostics.
+ */
+export function serializePostgresError(
+  error: unknown,
+  seen = new WeakSet<object>(),
+  depth = 0,
+): Record<string, unknown> {
+  if (error === null || (typeof error !== 'object' && typeof error !== 'function')) {
+    return {
+      type: error === null ? 'null' : typeof error,
+      value: serializePostgresLogValue(error),
+    }
+  }
+
+  if (seen.has(error))
+    return { type: getObjectType(error), circular: true }
+
+  if (depth >= MAX_POSTGRES_ERROR_CAUSE_DEPTH)
+    return { type: getObjectType(error), truncated: true }
+
+  seen.add(error)
+  const serialized: Record<string, unknown> = {
+    type: getObjectType(error),
+  }
+  try {
+    const name = readErrorProperty(error, 'name')
+    const message = readErrorProperty(error, 'message')
+    const stack = readErrorProperty(error, 'stack')
+
+    serialized.name = name === undefined
+      ? getObjectType(error)
+      : serializePostgresLogValue(name)
+    if (message !== undefined)
+      serialized.message = serializePostgresLogValue(message)
+    if (stack !== undefined)
+      serialized.stack = serializePostgresLogValue(stack)
+
+    for (const field of POSTGRES_ERROR_FIELDS) {
+      const value = readErrorProperty(error, field)
+      if (value !== undefined)
+        serialized[field] = serializePostgresLogValue(value)
+    }
+
+    const params = readErrorProperty(error, 'params')
+    if (Array.isArray(params)) {
+      // Query parameters can contain credentials or other user-provided secrets.
+      // The affected app is logged explicitly by the caller instead.
+      serialized.parameterCount = params.length
+    }
+
+    const aggregateErrors = readErrorProperty(error, 'errors')
+    if (Array.isArray(aggregateErrors))
+      serialized.errors = serializePostgresAggregateErrors(aggregateErrors, seen, depth)
+
+    const cause = readErrorProperty(error, 'cause')
+    if (cause !== undefined)
+      serialized.cause = serializePostgresError(cause, seen, depth + 1)
+
+    return serialized
+  }
+  catch (serializationError) {
+    serialized.serializationFailure = describeThrownValue(serializationError)
+    return serialized
+  }
+  finally {
+    seen.delete(error)
+  }
+}
+
+export function logPgError(
+  c: Context,
+  functionName: string,
+  error: unknown,
+  diagnostics: Record<string, unknown> = {},
+) {
+  const cf = c.req.raw.cf
+  const serializedDiagnostics = serializePostgresLogValue(diagnostics)
+  const callerDiagnostics = serializedDiagnostics !== null
+    && typeof serializedDiagnostics === 'object'
+    && !Array.isArray(serializedDiagnostics)
+    ? serializedDiagnostics as Record<string, unknown>
+    : { context: serializedDiagnostics }
+
+  // This deliberately verbose payload is temporary while investigating the
+  // intermittent getAppOwnerPostgres replica/Hyperdrive failure.
   cloudlogErr({
     requestId: c.get('requestId'),
     message: `${functionName} - PostgreSQL Error`,
-    error: {
-      // Basic error info
-      message: e.message,
-      name: e.name,
-      stack: e.stack,
-
-      // PostgreSQL-specific error codes
-      code: e.code, // e.g., '57P01' for connection termination, 'ECONNREFUSED', 'ETIMEDOUT'
-      severity: e.severity,
-      detail: e.detail,
-      hint: e.hint,
-
-      // Network-level errors
-      errno: e.errno, // System error number
-      syscall: e.syscall, // System call that failed (e.g., 'connect', 'read', 'write')
-      address: e.address, // IP address
-      port: e.port, // Port number
-
-      // Query position info
-      position: e.position,
-      routine: e.routine,
-
-      // File info for debugging
-      file: e.file,
-      line: e.line,
-      column: e.column,
+    error: serializePostgresError(error),
+    diagnostics: {
+      ...callerDiagnostics,
+      version: 1,
+      functionName,
+      databaseSource: c.get('databaseSource') ?? c.res.headers.get('X-Database-Source') ?? 'unknown',
+      workerSource: c.res.headers.get('X-Worker-Source') ?? 'unknown',
+      runtime: getRuntimeKey(),
+      request: {
+        method: c.req.method,
+        path: c.req.path,
+        rayId: c.req.header('cf-ray') ?? c.get('requestId'),
+        userAgent: c.req.header('user-agent'),
+        colo: cf?.colo,
+        continent: cf?.continent,
+        country: cf?.country,
+      },
     },
   })
 }
@@ -1196,7 +1465,10 @@ export async function getAppOwnerPostgres(
     return appOwner as AppOwnerPostgresResult
   }
   catch (e: unknown) {
-    logPgError(c, 'getAppOwnerPostgres', e)
+    logPgError(c, 'getAppOwnerPostgres', e, {
+      appId,
+      planActions: actions,
+    })
     return null
   }
 }
