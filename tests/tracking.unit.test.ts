@@ -94,6 +94,7 @@ describe('sendEventToTracking', () => {
       notify: false,
       sentToBento: true,
       tags: { app_id: 'app-id' },
+      nonPersonTags: { apikey_id: 87015 },
     })
 
     expect(backgroundTaskMock).toHaveBeenCalledTimes(2)
@@ -101,6 +102,7 @@ describe('sendEventToTracking', () => {
     expect(posthogMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       event: 'Tracked Event',
       ip: '1.2.3.4',
+      nonPersonTags: { apikey_id: 87015 },
       user_id: 'org-id',
     }))
     expect(notifToOrgMembersMock).toHaveBeenCalledWith(
