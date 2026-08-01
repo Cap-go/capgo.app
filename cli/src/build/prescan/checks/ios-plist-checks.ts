@@ -71,6 +71,9 @@ function hasDevServerConfig(ctx: ScanContext): boolean {
 }
 
 const MARKETING_VERSION_RE = /^\d+\.\d+(?:\.\d+)?$/
+// Apple's current CFBundleVersion contract allows one to three integer
+// components and explicitly lists "0" as valid. Do not add legacy per-segment
+// digit limits: the builder's fallback is a long, one-part timestamp.
 const BUILD_VERSION_RE = /^\d+(?:\.\d+){0,2}$/
 // Reverse-DNS, >=2 segments, no space/underscore/wildcard.
 const BUNDLE_ID_RE = /^[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)+$/i
@@ -149,7 +152,7 @@ export const plistVersionShortFormat: PrescanCheck = {
         severity: 'error',
         title: `CFBundleShortVersionString "${r}" is not a valid version (ITMS-90060)`,
         detail: 'The marketing version must be two or three dot-separated integers (e.g. 1.4 or 1.4.2) — no letters or pre-release suffixes.',
-        fix: 'Set MARKETING_VERSION to two or three dot-separated integers (e.g. 1.4.2).',
+        fix: 'Set CFBundleShortVersionString or its build setting to two or three dot-separated integers (e.g. 1.4.2).',
       }]
     }
     return []

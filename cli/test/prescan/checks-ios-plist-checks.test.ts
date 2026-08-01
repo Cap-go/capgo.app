@@ -172,7 +172,7 @@ describe('ios/plist-version-short-format', () => {
   })
   it('errors on a one-part version rejected by the builder auto-bump', async () => {
     const f = await plistVersionShortFormat.run(ctxFor(`<key>CFBundleShortVersionString</key><string>1</string>`))
-    expect(f.some(x => x.severity === 'error')).toBe(true)
+    expect(f.some(x => x.id === 'ios/plist-version-short-format' && x.severity === 'error')).toBe(true)
   })
 })
 
@@ -188,6 +188,12 @@ describe('ios/plist-version-build-format', () => {
   it('passes a numeric build (42)', async () => {
     const f = await plistVersionBuildFormat.run(ctxFor(`<key>CFBundleVersion</key><string>42</string>`))
     expect(f).toEqual([])
+  })
+  it('passes zero and the builder timestamp fallback allowed by Apple', async () => {
+    const zero = await plistVersionBuildFormat.run(ctxFor(`<key>CFBundleVersion</key><string>0</string>`))
+    const timestamp = await plistVersionBuildFormat.run(ctxFor(`<key>CFBundleVersion</key><string>20260801070000</string>`))
+    expect(zero).toEqual([])
+    expect(timestamp).toEqual([])
   })
 })
 
