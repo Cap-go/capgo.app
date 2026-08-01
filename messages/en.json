@@ -1302,7 +1302,6 @@
   "github-username-error-request_failed": "We could not load that GitHub profile. Please try again.",
   "github-username-help": "Your username without the at sign.",
   "github-username-placeholder": "octocat",
-  "github-username-reject": "No",
   "github-username-select": "Select a GitHub username",
   "global": "Global",
   "go-back": "Go back",
