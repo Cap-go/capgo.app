@@ -328,7 +328,7 @@ async function handleChannelLink(chan: Database['public']['Tables']['channels'][
       if (await dialogStore.onDialogDismiss())
         return
     }
-    else if (localDependencies.length === 0) {
+    else if (localDependencies.length === 0 || finalCompatibility.length === 0) {
       toast.info('ignore-compatibility')
     }
     else {

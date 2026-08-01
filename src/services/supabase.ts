@@ -647,10 +647,10 @@ export async function findBestPlan(stats: Database['public']['Functions']['find_
   return data
 }
 
-export function convertNativePackages(nativePackages: { name: string, version: string }[]) {
-  if (!nativePackages) {
-    throw new Error(`Error parsing native packages, perhaps the metadata does not exist in Capgo?`)
-  }
+export function convertNativePackages(nativePackages: { name: string, version: string }[] | null | undefined) {
+  // Missing metadata is normal for older bundles / empty channels — treat as empty.
+  if (!nativePackages)
+    return new Map<string, { name: string, version: string }>()
 
   // Check types
   nativePackages.forEach((data) => {
@@ -688,9 +688,11 @@ export async function getRemoteDependencies(appId: string, channel: string) {
     throw new Error(error.message)
   }
   const version = remoteNativePackages.version as { native_packages?: unknown } | null
-  const nativePackages = version?.native_packages
-  if (!Array.isArray(nativePackages))
-    throw new Error('Error parsing native packages, perhaps the metadata does not exist in Capgo?')
+  // Channel may have no linked version, or an older version without metadata.
+  // Match CLI: fall back to [] so linking still works.
+  const nativePackages = Array.isArray(version?.native_packages)
+    ? version.native_packages
+    : []
   return convertNativePackages(nativePackages as { name: string, version: string }[])
 }
 
@@ -717,6 +719,14 @@ export function isCompatible(pkg: Compatibility): boolean {
 
 export async function checkCompatibilityNativePackages(appId: string, channel: string, nativePackages: { name: string, version: string }[]) {
   const mappedRemoteNativePackages = await getRemoteDependencies(appId, channel)
+
+  // Nothing on the channel to compare against → skip gate (same as missing local metadata).
+  if (mappedRemoteNativePackages.size === 0) {
+    return {
+      finalCompatibility: [] as Compatibility[],
+      localDependencies: nativePackages,
+    }
+  }
 
   const finalDependencies: Compatibility[] = nativePackages
     .map((local) => {
