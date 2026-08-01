@@ -35,7 +35,7 @@ export async function getGitHubProfile(username: string): Promise<GitHubProfile>
 
   if (response.status === 404)
     throw new GitHubProfileError('not_found')
-  if (response.headers.get('x-ratelimit-remaining') === '0')
+  if (response.status === 429 || (response.status === 403 && (response.headers.get('x-ratelimit-remaining') === '0' || response.headers.has('retry-after'))))
     throw new GitHubProfileError('rate_limited')
   if (!response.ok)
     throw new GitHubProfileError('request_failed')

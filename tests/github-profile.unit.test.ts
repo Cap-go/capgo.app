@@ -35,6 +35,19 @@ describe('github profile lookup', () => {
 
     globalThis.fetch = vi.fn().mockResolvedValue(new Response(null, { status: 403, headers: { 'x-ratelimit-remaining': '0' } }))
     await expect(getGitHubProfile('octocat')).rejects.toMatchObject({ code: 'rate_limited' } satisfies Partial<GitHubProfileError>)
+
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response(null, { status: 429, headers: { 'retry-after': '60' } }))
+    await expect(getGitHubProfile('octocat')).rejects.toMatchObject({ code: 'rate_limited' } satisfies Partial<GitHubProfileError>)
+  })
+
+  it('accepts a successful response that consumes the last available request', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      id: 42,
+      login: 'octocat',
+      avatar_url: 'https://avatars.githubusercontent.com/u/42?v=4',
+    }), { headers: { 'x-ratelimit-remaining': '0' } }))
+
+    await expect(getGitHubProfile('octocat')).resolves.toMatchObject({ id: 42, login: 'octocat' })
   })
 
   it('reports request failures from GitHub and malformed profile responses', async () => {
