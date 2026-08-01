@@ -32,6 +32,9 @@ describe('github profile lookup', () => {
 
     globalThis.fetch = vi.fn().mockResolvedValue(new Response(null, { status: 404 }))
     await expect(getGitHubProfile('octocat')).rejects.toMatchObject({ code: 'not_found' } satisfies Partial<GitHubProfileError>)
+
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response(null, { status: 403, headers: { 'x-ratelimit-remaining': '0' } }))
+    await expect(getGitHubProfile('octocat')).rejects.toMatchObject({ code: 'rate_limited' } satisfies Partial<GitHubProfileError>)
   })
 
   it('reports request failures from GitHub and malformed profile responses', async () => {

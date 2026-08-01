@@ -6,7 +6,7 @@ export interface GitHubProfile {
 }
 
 export class GitHubProfileError extends Error {
-  constructor(public readonly code: 'invalid_username' | 'not_found' | 'request_failed') {
+  constructor(public readonly code: 'invalid_username' | 'not_found' | 'rate_limited' | 'request_failed') {
     super(code)
   }
 }
@@ -26,6 +26,7 @@ export async function getGitHubProfile(username: string): Promise<GitHubProfile>
       headers: {
         accept: 'application/vnd.github+json',
       },
+      signal: AbortSignal.timeout(10_000),
     })
   }
   catch {
@@ -34,6 +35,8 @@ export async function getGitHubProfile(username: string): Promise<GitHubProfile>
 
   if (response.status === 404)
     throw new GitHubProfileError('not_found')
+  if (response.headers.get('x-ratelimit-remaining') === '0')
+    throw new GitHubProfileError('rate_limited')
   if (!response.ok)
     throw new GitHubProfileError('request_failed')
 

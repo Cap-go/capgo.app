@@ -1298,6 +1298,7 @@
   "github-username-dialog-description": "Enter your GitHub username and we will verify the profile before saving it.",
   "github-username-error-invalid_username": "Enter a valid GitHub username.",
   "github-username-error-not_found": "We could not find that GitHub profile.",
+  "github-username-error-rate_limited": "GitHub is temporarily rate limited. Please try again later.",
   "github-username-error-request_failed": "We could not load that GitHub profile. Please try again.",
   "github-username-help": "Your username without the at sign.",
   "github-username-placeholder": "octocat",

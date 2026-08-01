@@ -919,6 +919,7 @@ onMounted(async () => {
             v-if="!githubProfile && githubUsername"
             type="button"
             class="d-btn d-btn-error"
+            :aria-label="t('button-remove')"
             :disabled="githubProfileLoading || githubProfileSaving"
             @click="clearGitHubProfile"
           >
