@@ -267,7 +267,7 @@ function openLogs(action: string) {
     return
 
   router.push({
-    path: `/app/${appRouteSegment.value}/logs`,
+    path: `/app/${appRouteSegment.value}/observe/logs`,
     query: {
       action,
       start: stats.value.period.start,

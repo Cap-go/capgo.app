@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { CACHE_MATCH_TIMEOUT_MS, CacheHelper } from '../supabase/functions/_backend/plugin_runtime/utils/cache.ts'
+import { CACHE_MATCH_TIMEOUT_MS, CACHE_PUT_TIMEOUT_MS, CacheHelper } from '../supabase/functions/_backend/plugin_runtime/utils/cache.ts'
 
 function makeContext() {
   return {
@@ -74,5 +74,40 @@ describe('CacheHelper.matchJson timeout', () => {
     const helper = new CacheHelper(makeContext())
     const key = helper.buildRequest('/.app-status-v3', { app_id: 'com.test.app' })
     await expect(helper.matchJson(key)).resolves.toBeNull()
+  })
+})
+
+describe('CacheHelper.putJson timeout', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  it('writes when Cache API put is fast', async () => {
+    const put = vi.fn().mockResolvedValue(undefined)
+    stubCaches({
+      match: vi.fn(),
+      put,
+    })
+
+    const helper = new CacheHelper(makeContext())
+    const key = helper.buildRequest('/.track-device-cache', { app_id: 'com.test.app', device_id: 'd1' })
+    await helper.putJson(key, { ok: true }, 60)
+    expect(put).toHaveBeenCalledOnce()
+  })
+
+  it('fails open when Cache API put stalls past timeout', async () => {
+    vi.useFakeTimers()
+    const put = vi.fn().mockImplementation(() => new Promise(() => {}))
+    stubCaches({
+      match: vi.fn(),
+      put,
+    })
+
+    const helper = new CacheHelper(makeContext())
+    const key = helper.buildRequest('/.track-device-cache', { app_id: 'com.test.app', device_id: 'd1' })
+    const pending = helper.putJson(key, { ok: true }, 60, { timeoutMs: CACHE_PUT_TIMEOUT_MS })
+    await vi.advanceTimersByTimeAsync(CACHE_PUT_TIMEOUT_MS + 1)
+    await expect(pending).resolves.toBeUndefined()
   })
 })

@@ -18,7 +18,7 @@ import { simpleError200 } from './hono.ts'
 import { cloudlog } from './logging.ts'
 import { sendNotifOrgCached } from './notifications.ts'
 import { sendNotifToOrgMembersCached } from './org_email_notifications.ts'
-import { closeClient, getAppBlockProviderInfraRequestsPostgres, getAppOwnerPostgres, getDrizzleClient, getPgClient, requestInfosPostgres, requestManifestEntriesPostgres, setReplicationLagHeader } from './pg.ts'
+import { closeClient, getAppBlockProviderInfraRequestsPostgres, getAppOwnerPostgres, getDrizzleClient, getPgClient, requestInfosChannelDevicePostgres, requestInfosChannelPostgres, requestInfosPostgres, requestManifestEntriesPostgres, setReplicationLagHeader } from './pg.ts'
 import { makeDevice } from './plugin_parser.ts'
 import { createStatsBandwidth, createStatsMau, createStatsVersion, onPremStats, sendStatsAndDevice } from './plugin_stats.ts'
 import { getClientIP } from './rate_limit.ts'
@@ -28,6 +28,9 @@ import { isUpdateEnumerationLimited, recordUpdateEnumerationMiss, updateEnumerat
 import { backgroundTask, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, fixSemver, isDeprecatedPluginVersion, isInternalVersionName } from './utils.ts'
 
 const PLAN_LIMIT: Array<'mau' | 'bandwidth' | 'storage'> = ['mau', 'bandwidth']
+// Bound speculative channel prefetch wait so a hung second Hyperdrive client
+// cannot stall /updates after owner is already ready.
+const CHANNEL_PREFETCH_WAIT_MS = 50
 const CHANNEL_SELF_STORE_MIN_V5 = '5.34.0'
 const CHANNEL_SELF_STORE_MIN_V6 = '6.34.0'
 const CHANNEL_SELF_STORE_MIN_V7 = '7.34.0'
@@ -275,6 +278,8 @@ async function getStoredChannelSelfOverride(c: Context, appId: string, deviceId:
 
 export interface UpdatePathTiming {
   ownerMs?: number
+  requestInfosMs?: number
+  channelPrefetchHit?: boolean
 }
 
 export async function updateWithPG(
@@ -321,8 +326,49 @@ export async function updateWithPG(
       return providerBlockedResponse
   }
 
+  // Reject obviously invalid payloads before starting speculative DB work.
+  if (body.version_build === 'unknown') {
+    return updateError200(c, 'unknown_version_build', 'Version build is unknown, cannot proceed with update', { body })
+  }
+  if (!app_id || !device_id || !version_build || !version_name || !platform) {
+    return updateError200(c, 'missing_info', 'Cannot find device_id or app_id')
+  }
+  const coerce = tryParse(fixSemver(body.version_build))
+
+  // Overlap owner lookup with default-channel prefetch on a second Hyperdrive
+  // client when app-status cache already says cloud. Cuts Request Duration by
+  // one serial replica RTT on the common path (CF chart != waitUntil).
+  // Prefetch failures must never block owner — degrade to serial requestInfos.
+  let appOwner: Awaited<ReturnType<typeof getAppOwnerPostgres>>
+  let prefetchedChannel: Awaited<ReturnType<typeof requestInfosChannelPostgres>> | null = null
   const startOwner = performance.now()
-  const appOwner = await getAppOwnerPostgres(c, app_id, drizzleClient, PLAN_LIMIT)
+  const ownerPromise = getAppOwnerPostgres(c, app_id, drizzleClient, PLAN_LIMIT)
+  const channelPrefetchPromise = cachedStatus === 'cloud' && coerce
+    ? (async () => {
+        try {
+          const prefetchClient = await getPgClient(c, true)
+          try {
+            const drizzlePrefetch = getDrizzleClient(prefetchClient, { logger: false })
+            return await requestInfosChannelPostgres(
+              c,
+              platform,
+              app_id,
+              defaultChannel,
+              drizzlePrefetch,
+              false,
+              false,
+            )
+          }
+          finally {
+            await closeClient(c, prefetchClient)
+          }
+        }
+        catch {
+          return null
+        }
+      })()
+    : Promise.resolve(null)
+  appOwner = await ownerPromise
   if (pathTiming)
     pathTiming.ownerMs = Math.round(performance.now() - startOwner)
   // if version_build is not semver, then make it semver
@@ -372,11 +418,7 @@ export async function updateWithPG(
   const isDeprecated = isDeprecatedPluginVersion(pluginVersion)
   // Ensure there is manifest and the plugin version support manifest fetching (v5.10.0+, v6.25.0+, v7.0.35+)
   const fetchManifestEntries = manifestBundleCount > 0 && !isDeprecatedPluginVersion(pluginVersion, undefined, undefined, BROTLI_MIN_UPDATER_VERSION_V7)
-  if (body.version_build === 'unknown') {
-    return updateError200(c, 'unknown_version_build', 'Version build is unknown, cannot proceed with update', { body })
-  }
-  const coerce = tryParse(fixSemver(body.version_build))
-  if (!coerce) {
+    if (!coerce) {
     // get app owner with app_id
     await backgroundTask(c, sendNotifOrgCached(c, 'user:semver_issue', {
       app_id,
@@ -408,36 +450,83 @@ export async function updateWithPG(
       app_id_url: app_id,
     }, appOwner.owner_org, app_id, '0 0 * * 1', appOwner.orgs.management_email, drizzleClient))
   }
-  if (!app_id || !device_id || !version_build || !version_name || !platform) {
-    return updateError200(c, 'missing_info', 'Cannot find device_id or app_id')
-  }
-
   await backgroundTask(c, createStatsMau(c, device_id, app_id, appOwner.owner_org, platform, version_build))
 
 
   // Only query link/comment if plugin supports it (v5.35.0+, v6.35.0+, v7.35.0+, v8.35.0+) AND app has expose_metadata enabled
   const needsMetadata = appOwner.expose_metadata && !isDeprecatedPluginVersion(pluginVersion, '5.35.0', '6.35.0', '7.35.0', '8.35.0')
 
+  // Consume prefetch only after owner gates. Bound wait so a stalled second
+  // client cannot hold /updates; fail open to serial requestInfos.
+  try {
+    let settled = false
+    prefetchedChannel = await Promise.race([
+      channelPrefetchPromise.then((value) => {
+        settled = true
+        return value
+      }),
+      new Promise<null>((resolve) => {
+        setTimeout(() => resolve(null), CHANNEL_PREFETCH_WAIT_MS)
+      }),
+    ])
+    if (!settled)
+      prefetchedChannel = null
+  }
+  catch {
+    prefetchedChannel = null
+  }
+
   const startRequestInfos = performance.now()
-  const requestedInto = await requestInfosPostgres({
-    c,
-    platform,
-    app_id,
-    device_id,
-    defaultChannel,
-    drizzleClient,
-    channelDeviceCount: effectiveChannelDeviceCount,
-    manifestBundleCount,
-    // Skip channel-query json_agg (P999 on up-to-date). New-version path loads
-    // via indexed manifest.app_version_id fetch started right after this check.
-    includeManifest: false,
-    rolloutChannelCount,
-    rolloutPausedVersionNames,
-    currentVersionName: version_name,
-    includeMetadata: needsMetadata,
-    channelSelfOverrideChannelId: channelSelfOverride?.channel_id.id,
-  })
+  const isPausedRolloutVersion = Array.isArray(rolloutPausedVersionNames) && rolloutPausedVersionNames.includes(version_name)
+  const shouldUseRolloutPath = (rolloutChannelCount ?? 0) > 0 || isPausedRolloutVersion
+  const canUseChannelPrefetch = Boolean(
+    prefetchedChannel
+    && !needsMetadata
+    && !shouldUseRolloutPath
+    && !channelSelfOverride,
+  )
+  let requestedInto: Awaited<ReturnType<typeof requestInfosPostgres>>
+  if (canUseChannelPrefetch) {
+    let channelOverride: Awaited<ReturnType<typeof requestInfosChannelDevicePostgres>> | null = null
+    if (effectiveChannelDeviceCount > 0) {
+      channelOverride = await requestInfosChannelDevicePostgres(
+        c,
+        app_id,
+        device_id,
+        drizzleClient,
+        false,
+        false,
+      ) ?? null
+    }
+    requestedInto = { channelData: prefetchedChannel, channelOverride }
+    if (pathTiming)
+      pathTiming.channelPrefetchHit = true
+  }
+  else {
+    requestedInto = await requestInfosPostgres({
+      c,
+      platform,
+      app_id,
+      device_id,
+      defaultChannel,
+      drizzleClient,
+      channelDeviceCount: effectiveChannelDeviceCount,
+      manifestBundleCount,
+      // Skip channel-query json_agg (P999 on up-to-date). New-version path loads
+      // via indexed manifest.app_version_id fetch started right after this check.
+      includeManifest: false,
+      rolloutChannelCount,
+      rolloutPausedVersionNames,
+      currentVersionName: version_name,
+      includeMetadata: needsMetadata,
+      channelSelfOverrideChannelId: channelSelfOverride?.channel_id.id,
+    })
+    if (pathTiming)
+      pathTiming.channelPrefetchHit = false
+  }
   const requestInfosMs = Math.round(performance.now() - startRequestInfos)
+  if (pathTiming)
+    pathTiming.requestInfosMs = requestInfosMs
   const { channelOverride } = requestedInto
   let { channelData } = requestedInto
 
@@ -489,6 +578,7 @@ export async function updateWithPG(
         path: 'updates',
         outcome: 'no_new_version',
         requestInfosMs,
+        channelPrefetchHit: pathTiming?.channelPrefetchHit ?? false,
         app_id,
       })
     }
@@ -665,14 +755,15 @@ export async function updateWithPG(
     }
   }
   if (version.name === 'builtin' && greaterOrEqual(parse(plugin_version), parse('6.2.0'))) {
-    if (body.version_name === 'builtin' && version.name === 'builtin') {
+    // plugin_parser rewrites version_name "builtin" -> version_build, so we cannot
+    // compare version_name === "builtin" here. Store binary => names match build;
+    // OTA bundle => version_name is the live bundle and differs from version_build.
+    if (version_name === version_build) {
       return updateError200(c, 'already_on_builtin', 'Already on builtin')
     }
-    else {
-      return updateError200(c, 'already_on_builtin', 'Already on builtin', {
-        version: 'builtin',
-      })
-    }
+    // Kill-switch: tell plugin to reset to the store binary (no error/kind).
+    await sendStatsAndDevice(c, device, [{ action: 'get', versionName: 'builtin' }])
+    return c.json({ version: 'builtin' }, 200)
   }
   else if (version.name === 'builtin' && !greaterOrEqual(parse(plugin_version), parse('6.2.0'))) {
     return updateError200(c, 'revert_to_builtin_plugin_version_too_old', 'revert_to_builtin used, but plugin version is too old')
@@ -746,6 +837,7 @@ export async function updateWithPG(
       path: 'updates',
       outcome: 'new_version',
       requestInfosMs,
+      channelPrefetchHit: pathTiming?.channelPrefetchHit ?? false,
       manifestFetchMs,
       bundleUrlMs,
       manifestCount: manifest.length,
@@ -793,6 +885,8 @@ export async function update(c: Context, body: AppInfos) {
         appStatusMs,
         pgClientMs,
         ownerMs: pathTiming.ownerMs ?? 0,
+        requestInfosMs: pathTiming.requestInfosMs ?? 0,
+        channelPrefetchHit: pathTiming.channelPrefetchHit ?? false,
         replicationLagMs,
         databaseSource: c.get('databaseSource') ?? c.res.headers.get('X-Database-Source') ?? null,
         app_id: body.app_id,

@@ -101,7 +101,7 @@ function determinePreviewState() {
 }
 
 function goToAppSettings() {
-  router.push(`/app/${packageId.value}/info`)
+  router.push(`/app/${packageId.value}/settings`)
 }
 
 watchEffect(async () => {

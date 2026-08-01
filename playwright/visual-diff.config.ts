@@ -18,6 +18,8 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
   { slug: 'dashboard', path: '/dashboard', auth: true },
   { slug: 'apps', path: '/apps', auth: true },
   { slug: 'app-overview', path: '/app/com.demo.app', auth: true },
+  { slug: 'app-settings', path: '/app/com.demo.app/settings', auth: true },
+  { slug: 'app-settings-access', path: '/app/com.demo.app/settings/access', auth: true },
   { slug: 'channels', path: '/app/com.demo.app/channels', auth: true },
   {
     slug: 'devices',
@@ -38,7 +40,10 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
       await page.locator('[data-test="device-platform-filter"]').waitFor({ state: 'visible' })
     },
   },
-  { slug: 'observe', path: '/app/com.demo.app/observe', auth: true },
+  { slug: 'observe', path: '/app/com.demo.app/observe/updater', auth: true },
+  { slug: 'observe-logs', path: '/app/com.demo.app/observe/logs', auth: true },
+  { slug: 'observe-native', path: '/app/com.demo.app/observe/native', auth: true },
+  { slug: 'observe-compatibility', path: '/app/com.demo.app/observe/compatibility', auth: true },
   { slug: 'observe-plugins', path: '/app/com.demo.app/observe/plugins', auth: true },
   {
     slug: 'api-keys-app-preview',

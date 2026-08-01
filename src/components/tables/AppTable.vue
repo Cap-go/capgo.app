@@ -213,7 +213,7 @@ const columns = ref<TableColumn[]>([
 ])
 
 function openSettings(app: Database['public']['Tables']['apps']['Row']) {
-  router.push(`/app/${app.app_id}/info`)
+  router.push(`/app/${app.app_id}/settings`)
 }
 
 function openPackage(app: Database['public']['Tables']['apps']['Row']) {

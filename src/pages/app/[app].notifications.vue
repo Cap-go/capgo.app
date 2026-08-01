@@ -811,7 +811,7 @@ watch(activeNotificationTab, () => {
                       <IconCheckCircle v-else class="w-4 h-4" aria-hidden="true" />
                       {{ t('notification-save-settings') }}
                     </button>
-                    <button class="d-btn d-btn-sm d-btn-primary" :disabled="isSaving || !settings.pushUpdateEnabled" @click="pushUpdateNow">
+                    <button class="d-btn d-btn-sm d-btn-primary" :disabled="isSaving || configuredProviders === 0 || !settings.pushUpdateEnabled" @click="pushUpdateNow">
                       <span v-if="isSaving" class="d-loading d-loading-spinner d-loading-xs" />
                       <IconZap v-else class="w-4 h-4" aria-hidden="true" />
                       {{ t('notification-push-update-now') }}
@@ -854,7 +854,7 @@ watch(activeNotificationTab, () => {
                     <h2 class="text-base font-semibold text-slate-950 dark:text-white">
                       {{ t('notification-create-broadcast') }}
                     </h2>
-                    <button class="self-start d-btn d-btn-sm d-btn-primary sm:self-auto" :disabled="isSaving || !campaignForm.name.trim() || (!campaignForm.title.trim() && !campaignForm.body.trim())" @click="createBroadcast">
+                    <button class="self-start d-btn d-btn-sm d-btn-primary sm:self-auto" :disabled="isSaving || configuredProviders === 0 || !campaignForm.name.trim() || (!campaignForm.title.trim() && !campaignForm.body.trim())" @click="createBroadcast">
                       <span v-if="isSaving" class="d-loading d-loading-spinner d-loading-xs" />
                       <IconSend v-else class="w-4 h-4" aria-hidden="true" />
                       {{ t('notification-create-broadcast') }}
@@ -944,7 +944,7 @@ watch(activeNotificationTab, () => {
                       <span class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ t('notification-message-body') }}</span>
                       <textarea v-model="sendBody" class="w-full d-textarea d-textarea-bordered min-h-24" :placeholder="t('notification-message-body')" />
                     </label>
-                    <button class="w-full d-btn d-btn-sm d-btn-primary" :disabled="isSaving || !sendExternalId.trim()" @click="sendTest">
+                    <button class="w-full d-btn d-btn-sm d-btn-primary" :disabled="isSaving || configuredProviders === 0 || !sendExternalId.trim()" @click="sendTest">
                       <span v-if="isSaving" class="d-loading d-loading-spinner d-loading-xs" />
                       <IconSend v-else class="w-4 h-4" aria-hidden="true" />
                       {{ t('notification-send-test') }}
