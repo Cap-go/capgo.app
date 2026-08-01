@@ -239,7 +239,7 @@ export async function setChannelInternal(channel: string, appId: string, options
     throw new Error(`Cannot get organization id for channel ${channel}`)
   }
 
-  await checkPlanValid(supabase, orgId, options.apikey, appId)
+  await checkPlanValid(supabase, orgId, appId)
 
   const channelPayload: Database['public']['Tables']['channels']['Insert'] = {
     created_by: userId,
