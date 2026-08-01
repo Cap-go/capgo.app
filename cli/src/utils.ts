@@ -843,12 +843,19 @@ export async function isAllowedActionOrg(supabase: SupabaseClient<Database>, org
   return !!data
 }
 
-export async function isAllowedActionAppIdApiKey(supabase: SupabaseClient<Database>, appId: string, apikey: string): Promise<boolean> {
-  const { data } = await supabase
-    .rpc('is_allowed_action', { apikey, appid: appId })
-    .single()
+export async function isAllowedActionForApp(supabase: SupabaseClient<Database>, orgId: string, appId: string): Promise<boolean> {
+  // Check every metered action to preserve the general "good plan" gate while
+  // giving app-scoped API keys the app context required by RBAC.
+  const args = {
+    orgid: orgId,
+    appid: appId,
+    actions: ['mau', 'storage', 'bandwidth', 'build_time'],
+  } as never
+  const { data, error } = await supabase.rpc('is_allowed_action_org_action', args)
+  if (error)
+    throw new Error(`Cannot validate plan: ${formatError(error)}`)
 
-  return !!data
+  return data === true
 }
 
 export async function checkRemoteCliMessages(supabase: SupabaseClient<Database>, orgId: string, cliVersion: string) {
@@ -882,11 +889,10 @@ export async function checkRemoteCliMessages(supabase: SupabaseClient<Database>,
   }
 }
 
-export async function checkPlanValid(supabase: SupabaseClient<Database>, orgId: string, apikey: string, appId?: string, warning = true) {
+export async function checkPlanValid(supabase: SupabaseClient<Database>, orgId: string, appId?: string, warning = true) {
   const config = await getRemoteConfig()
 
-  // isAllowedActionAppIdApiKey was updated in the orgs_v3 migration to work with the new system
-  const validPlan = await (appId ? isAllowedActionAppIdApiKey(supabase, appId, apikey) : isAllowedActionOrg(supabase, orgId))
+  const validPlan = await (appId ? isAllowedActionForApp(supabase, orgId, appId) : isAllowedActionOrg(supabase, orgId))
   if (!validPlan) {
     log.error(`You need to upgrade your plan to continue to use capgo.\n Upgrade here: ${config.hostWeb}/settings/organization/plans\n`)
     wait(100)
@@ -906,7 +912,7 @@ export async function checkPlanValid(supabase: SupabaseClient<Database>, orgId: 
     log.warn(`WARNING !!\nTrial expires in ${trialDays} days, upgrade here: ${config.hostWeb}/settings/organization/plans\n`)
 }
 
-export async function checkPlanValidUpload(supabase: SupabaseClient<Database>, orgId: string, apikey: string, appId?: string, warning = true) {
+export async function checkPlanValidUpload(supabase: SupabaseClient<Database>, orgId: string, appId?: string, warning = true) {
   const config = await getRemoteConfig()
 
   // Pass appid so RBAC evaluates the app scope. Without it,
