@@ -243,10 +243,20 @@ export async function unspoofUser() {
     return false
   }
 
-  const supabase = useSupabase()
-  const { data, error } = await supabase.auth.setSession({ access_token: restoredAdminSession.jwt, refresh_token: restoredAdminSession.refreshToken })
+  if (restoredAdminSession !== spoofedAdminSession)
+    saveSpoofedAdminSession(restoredAdminSession)
 
-  if (error || !data.session)
+  const supabase = useSupabase()
+  let data: { session?: unknown } | null | undefined
+  let error: unknown
+  try {
+    ({ data, error } = await supabase.auth.setSession({ access_token: restoredAdminSession.jwt, refresh_token: restoredAdminSession.refreshToken }))
+  }
+  catch {
+    return false
+  }
+
+  if (error || !data?.session)
     return false
 
   clearSpoof()

@@ -81,6 +81,10 @@ describe('spoof session storage', () => {
       access_token: 'fresh-admin-jwt',
       refresh_token: 'fresh-admin-refresh-token',
     })
+    expect(localStorage.setItem).toHaveBeenCalledWith(
+      expect.stringContaining('.spoof_admin_jwt'),
+      JSON.stringify({ jwt: 'fresh-admin-jwt', refreshToken: 'fresh-admin-refresh-token' }),
+    )
     expect(isSpoofed()).toBe(false)
   })
 
@@ -105,6 +109,19 @@ describe('spoof session storage', () => {
 
   it('keeps spoof recovery storage when restoring the admin session fails', async () => {
     const setSession = vi.fn().mockResolvedValue({ data: { session: null }, error: new Error('session write failed') })
+    mocks.createClient.mockReturnValueOnce({ auth: { setSession } })
+
+    const { isSpoofed, saveSpoof, unspoofUser } = await import('../src/services/supabase.ts')
+
+    saveSpoof(createJwt(Math.floor(Date.now() / 1000) + 300), 'admin-refresh-token')
+
+    await expect(unspoofUser()).resolves.toBe(false)
+
+    expect(isSpoofed()).toBe(true)
+  })
+
+  it('keeps spoof recovery storage when restoring the admin session throws', async () => {
+    const setSession = vi.fn().mockRejectedValue(new Error('session write failed'))
     mocks.createClient.mockReturnValueOnce({ auth: { setSession } })
 
     const { isSpoofed, saveSpoof, unspoofUser } = await import('../src/services/supabase.ts')
