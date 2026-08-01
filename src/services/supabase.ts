@@ -100,6 +100,11 @@ function shouldRefreshSpoofedAdminJwt(jwt: string) {
   return expiresAt - Date.now() / 1000 <= SPOOF_ADMIN_TOKEN_REFRESH_WINDOW_SECONDS
 }
 
+function isSpoofedAdminJwtUsable(jwt: string) {
+  const expiresAt = getJwtExpiresAt(jwt)
+  return expiresAt !== null && expiresAt > Date.now() / 1000
+}
+
 function createSpoofAdminSupabase() {
   return createClient<Database>(getSupabaseHost(), config.supaKey, {
     auth: {
@@ -227,7 +232,12 @@ export async function unspoofUser() {
   if (!spoofedAdminSession)
     return false
 
-  const restoredAdminSession = await refreshSpoofedAdminSession(spoofedAdminSession).catch(() => null)
+  // A refresh token may have been invalidated while its paired access token is
+  // still valid. Restore that access token directly so stopping impersonation
+  // does not strand the user in the spoofed session.
+  const restoredAdminSession = isSpoofedAdminJwtUsable(spoofedAdminSession.jwt)
+    ? spoofedAdminSession
+    : await refreshSpoofedAdminSession(spoofedAdminSession).catch(() => null)
   if (!restoredAdminSession) {
     clearSpoof()
     return false
@@ -235,11 +245,11 @@ export async function unspoofUser() {
 
   const supabase = useSupabase()
   const { data, error } = await supabase.auth.setSession({ access_token: restoredAdminSession.jwt, refresh_token: restoredAdminSession.refreshToken })
-  clearSpoof()
 
   if (error || !data.session)
     return false
 
+  clearSpoof()
   return true
 }
 
