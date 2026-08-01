@@ -111,6 +111,7 @@ async function confirmGitHubProfile() {
   if (!githubProfile.value || !main.user?.id || githubProfileSaving.value)
     return
 
+  const dialogGeneration = githubProfileLookupGeneration
   githubProfileSaving.value = true
   const { data: user, error } = await supabase
     .from('users')
@@ -131,6 +132,9 @@ async function confirmGitHubProfile() {
 
   main.user = user
   githubUsername.value = user.github_username ?? ''
+  if (dialogGeneration !== githubProfileLookupGeneration)
+    return
+
   toast.success(t('account-updated-succ'))
   dialogStore.closeDialog({ text: t('confirm'), role: 'primary' })
   resetGitHubProfileDialog()

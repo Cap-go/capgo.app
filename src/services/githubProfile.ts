@@ -21,16 +21,28 @@ export async function getGitHubProfile(username: string): Promise<GitHubProfile>
     throw new GitHubProfileError('invalid_username')
 
   let response: Response
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  const signal = typeof AbortSignal.timeout === 'function'
+    ? AbortSignal.timeout(10_000)
+    : (() => {
+        const controller = new AbortController()
+        timeout = setTimeout(() => controller.abort(), 10_000)
+        return controller.signal
+      })()
   try {
     response = await fetch(`https://api.github.com/users/${encodeURIComponent(normalizedUsername)}`, {
       headers: {
         accept: 'application/vnd.github+json',
       },
-      signal: AbortSignal.timeout(10_000),
+      signal,
     })
   }
   catch {
     throw new GitHubProfileError('request_failed')
+  }
+  finally {
+    if (timeout)
+      clearTimeout(timeout)
   }
 
   if (response.status === 404)
