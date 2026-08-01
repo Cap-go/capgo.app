@@ -99,56 +99,47 @@ async function waitForAuditLog(
 beforeAll(async () => {
   authHeaders = await getAuthHeaders()
 
-  const { data: actorUser, error: actorUserError } = await getSupabaseClient()
-    .from('users')
-    .select('email')
-    .eq('id', USER_ID)
-    .single()
-  if (actorUserError || !actorUser)
-    throw actorUserError ?? new Error('Failed to load audit actor user')
+  // Seed via SQL to avoid Kong/PostgREST upstream flakes under CF shard load.
+  const [actorUser] = await executeSQL(
+    'SELECT email FROM public.users WHERE id = $1::uuid LIMIT 1',
+    [USER_ID],
+  )
+  if (!actorUser?.email) {
+    throw new Error(`Failed to load audit actor user for id=${USER_ID}: no rows`)
+  }
   actorUserEmail = actorUser.email
 
-  // Create stripe_info for this test org
-  const { error: stripeError } = await getSupabaseClient().from('stripe_info').insert({
-    customer_id: customerId,
-    status: 'succeeded',
-    product_id: 'prod_LQIregjtNduh4q',
-    subscription_id: `sub_${globalId}`,
-    trial_at: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString(),
-    is_good_plan: true,
-  })
-  if (stripeError)
-    throw stripeError
+  const trialAt = new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString()
+  await executeSQL(
+    `INSERT INTO public.stripe_info (
+       customer_id, status, product_id, subscription_id, trial_at, is_good_plan
+     ) VALUES ($1, 'succeeded', 'prod_LQIregjtNduh4q', $2, $3::timestamptz, true)`,
+    [customerId, `sub_${globalId}`, trialAt],
+  )
 
-  // Create test organization (this should trigger an INSERT audit log via the trigger)
-  const { error } = await getSupabaseClient().from('orgs').insert({
-    id: ORG_ID,
-    name,
-    management_email: TEST_EMAIL,
-    created_by: USER_ID,
-    customer_id: customerId,
-  })
-  if (error)
-    throw error
+  // Org insert still triggers INSERT audit logs via DB triggers.
+  await executeSQL(
+    `INSERT INTO public.orgs (
+       id, name, management_email, created_by, customer_id
+     ) VALUES ($1::uuid, $2, $3, $4::uuid, $5)`,
+    [ORG_ID, name, TEST_EMAIL, USER_ID, customerId],
+  )
 
-  // Ensure the creator is a member; org creation side-effects can be async in CI.
-  // The /organization/audit endpoint requires super_admin rights.
-  const { error: memberError } = await getSupabaseClient().from('org_users').insert({
-    org_id: ORG_ID,
-    user_id: USER_ID,
-    rbac_role_name: 'org_super_admin',
-  })
-  if (memberError)
-    throw memberError
+  await executeSQL(
+    `INSERT INTO public.org_users (org_id, user_id, rbac_role_name)
+     SELECT $1::uuid, $2::uuid, 'org_super_admin'
+     WHERE NOT EXISTS (
+       SELECT 1 FROM public.org_users
+       WHERE org_id = $1::uuid AND user_id = $2::uuid
+     )`,
+    [ORG_ID, USER_ID],
+  )
 
-  const { error: appError } = await getSupabaseClient().from('apps').insert({
-    app_id: APIKEY_AUDIT_APP_ID,
-    name: `Audit API App ${globalId}`,
-    icon_url: 'https://example.com/icon.png',
-    owner_org: ORG_ID,
-  })
-  if (appError)
-    throw appError
+  await executeSQL(
+    `INSERT INTO public.apps (app_id, name, icon_url, owner_org)
+     VALUES ($1, $2, 'https://example.com/icon.png', $3::uuid)`,
+    [APIKEY_AUDIT_APP_ID, `Audit API App ${globalId}`, ORG_ID],
+  )
 
   const apiKeyData = await createDirectApiKeyWithBindings({
     userId: USER_ID,
@@ -171,17 +162,14 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
-  // Clean up: delete audit logs first (they reference the org)
-  await getSupabaseClient().from('audit_logs').delete().eq('org_id', ORG_ID)
-
-  // Clean up test organization and stripe_info
+  await executeSQL('DELETE FROM public.audit_logs WHERE org_id = $1::uuid', [ORG_ID])
   if (apiKeyId !== null)
-    await getSupabaseClient().from('apikeys').delete().eq('id', apiKeyId)
-  await getSupabaseClient().from('app_versions').delete().eq('app_id', APIKEY_AUDIT_APP_ID)
-  await getSupabaseClient().from('apps').delete().eq('app_id', APIKEY_AUDIT_APP_ID)
-  await getSupabaseClient().from('org_users').delete().eq('org_id', ORG_ID)
-  await getSupabaseClient().from('orgs').delete().eq('id', ORG_ID)
-  await getSupabaseClient().from('stripe_info').delete().eq('customer_id', customerId)
+    await executeSQL('DELETE FROM public.apikeys WHERE id = $1', [apiKeyId])
+  await executeSQL('DELETE FROM public.app_versions WHERE app_id = $1', [APIKEY_AUDIT_APP_ID])
+  await executeSQL('DELETE FROM public.apps WHERE app_id = $1', [APIKEY_AUDIT_APP_ID])
+  await executeSQL('DELETE FROM public.org_users WHERE org_id = $1::uuid', [ORG_ID])
+  await executeSQL('DELETE FROM public.orgs WHERE id = $1::uuid', [ORG_ID])
+  await executeSQL('DELETE FROM public.stripe_info WHERE customer_id = $1', [customerId])
 }, 60_000)
 
 describe('[GET] /organization/audit', () => {

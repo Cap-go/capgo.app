@@ -1,0 +1,7 @@
+{
+  "generatedAt": "2026-07-31T10:44:27.260Z",
+  "gitHead": "b5a9950529c77acd521446a3c7e3d50f090348a9",
+  "note": "Committed CF plugin worker size budget (wrangler dry-run --minify, env=local). Update with: bun run check:plugin-worker-size -- --update-baseline",
+  "uploadBytes": 437443,
+  "gzipBytes": 128512
+}

@@ -461,6 +461,13 @@ describe('ios/capacitor-server-url-shipped', () => {
     expect(local[0]?.detail).toBeTruthy()
   })
 
+  it('does not expose the configured URL in report output', async () => {
+    const sensitiveUrl = 'https://user:password@example.com/app?token=secret'
+    const findings = await serverUrlShipped.run(ctxConfig({ url: sensitiveUrl }))
+    expect(JSON.stringify(findings)).not.toContain(sensitiveUrl)
+    expect(JSON.stringify(findings)).not.toContain('token=secret')
+  })
+
   it('grounding config (no server) scans clean', async () => {
     expect(await serverUrlShipped.run(ctxConfig(undefined))).toEqual([])
   })
@@ -482,6 +489,13 @@ describe('ios/capacitor-server-cleartext', () => {
 
   it('escalates to error when a http:// server.url is also present', async () => {
     expect((await serverCleartext.run(ctxConfig({ cleartext: true, url: 'http://example.com' })))[0]?.severity).toBe('error')
+  })
+
+  it('does not expose a cleartext server URL in report output', async () => {
+    const sensitiveUrl = 'http://user:password@example.com/app?token=secret'
+    const findings = await serverCleartext.run(ctxConfig({ cleartext: true, url: sensitiveUrl }))
+    expect(JSON.stringify(findings)).not.toContain(sensitiveUrl)
+    expect(JSON.stringify(findings)).not.toContain('token=secret')
   })
 })
 

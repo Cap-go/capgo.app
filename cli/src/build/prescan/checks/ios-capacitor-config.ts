@@ -52,8 +52,8 @@ export const serverUrlShipped: PrescanCheck = {
     const uploading = willUploadToAppStore(ctx)
     const reason = devTargetReason(url)
     const detail = reason
-      ? `server.url=${url} (${reason}) — this ships a live-reload/remote endpoint into the build`
-      : `server.url=${url} — this ships a remote endpoint into the build instead of the bundled web assets`
+      ? `server.url ${reason} — this ships a live-reload/remote endpoint into the build`
+      : 'server.url ships a remote endpoint into the build instead of the bundled web assets'
     return [{
       id: 'ios/capacitor-server-url-shipped',
       severity: uploading ? 'error' : 'warning',
@@ -77,7 +77,7 @@ export const serverCleartext: PrescanCheck = {
       id: 'ios/capacitor-server-cleartext',
       severity: httpUrl ? 'error' : 'warning',
       title: 'capacitor.config server.cleartext is enabled — arbitrary cleartext HTTP traffic is allowed',
-      detail: httpUrl ? `paired with a cleartext server.url (${url})` : undefined,
+      detail: httpUrl ? 'paired with a cleartext http:// server.url' : undefined,
       fix: 'Remove server.cleartext (or set it false) for production; use https or a scoped ATS exception',
     }]
   },
