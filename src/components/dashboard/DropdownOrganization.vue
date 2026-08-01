@@ -235,6 +235,8 @@ async function refreshOrganizationLogosIfNeeded(force = false) {
 }
 
 function onOrganizationClick(org: Organization) {
+  closeDropdown()
+
   // Check if the user is invited to the organization
   if (isPendingOrganizationInvite(org)) {
     handleOrganizationInvitation(org)
@@ -242,7 +244,6 @@ function onOrganizationClick(org: Organization) {
   }
 
   organizationStore.setCurrentOrganization(org.gid)
-  closeDropdown()
   // Org row opens the org global dashboard; settings gear opens org settings.
   // When already on dashboard, the watch on currentOrganization in
   // organization.ts will trigger data reload via main.updateDashboard().
@@ -395,7 +396,7 @@ watch(
             <div class="flex items-center gap-2 px-3 py-3 text-white rounded-md hover:bg-gray-600">
               <button
                 type="button"
-                class="flex flex-1 items-center min-w-0 text-left cursor-pointer"
+                class="d-btn d-btn-ghost d-btn-sm h-auto min-h-0 flex-1 items-center justify-start min-w-0 border-none px-0 shadow-none text-white hover:bg-transparent"
                 :aria-current="isSelected(org) ? 'true' : undefined"
                 :aria-label="org.name"
                 @click="onOrganizationClick(org)"
@@ -434,7 +435,7 @@ watch(
                 <button
                   v-else
                   type="button"
-                  class="flex items-center justify-center size-8 rounded-md cursor-pointer text-slate-300 transition-colors hover:bg-slate-500/30 hover:text-white"
+                  class="d-btn d-btn-ghost d-btn-sm d-btn-square size-8 min-h-0 border-none text-slate-300 hover:bg-slate-500/30 hover:text-white"
                   :aria-label="`${t('settings')} ${org.name}`"
                   @click="openOrganizationSettings(org, $event)"
                 >
