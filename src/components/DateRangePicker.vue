@@ -381,7 +381,7 @@ function presetButtonClass(active: boolean, disabled: boolean) {
             </div>
           </div>
 
-          <div class="date-range-calendar min-w-0 flex-1 p-2 md:p-3">
+          <div class="date-range-calendar min-w-0 flex-1">
             <VueDatePicker
               :key="isDark ? 'dark' : 'light'"
               :model-value="pickerRange"
@@ -435,7 +435,7 @@ function presetButtonClass(active: boolean, disabled: boolean) {
 </template>
 
 <style scoped>
-/* Shared surface tokens — contrast first (WCAG AA). One surface in dark mode. */
+/* Shared surface tokens — contrast first (WCAG AA). One flat surface; no nested calendar card. */
 .date-range-trigger[data-capgo-surface='light'],
 .date-range-popover[data-capgo-surface='light'] {
   --drp-bg: #ffffff;
@@ -475,7 +475,7 @@ function presetButtonClass(active: boolean, disabled: boolean) {
   --drp-preset-hover: #1e293b;
   --drp-preset-active-bg: #f8fafc;
   --drp-preset-active-text: #0f172a;
-  --drp-field-bg: #020617;
+  --drp-field-bg: #0b1220;
   --drp-field-border: #475569;
   --drp-shadow: 0 16px 48px -12px rgb(0 0 0 / 0.65);
   --drp-cal-text: #f1f5f9;
@@ -485,7 +485,7 @@ function presetButtonClass(active: boolean, disabled: boolean) {
   --drp-cal-icon: #cbd5e1;
   --drp-cal-between: rgb(17 158 255 / 0.28);
   --drp-cal-between-text: #f8fafc;
-  --drp-cal-input-bg: #020617;
+  --drp-cal-input-bg: #0b1220;
 }
 
 .date-range-trigger {
@@ -571,72 +571,99 @@ function presetButtonClass(active: boolean, disabled: boolean) {
 }
 
 .date-range-calendar {
+  /* Single surface: calendar paints on the popover bg, no nested card. */
   background: var(--drp-bg) !important;
+  padding: 0.5rem 0.75rem 0.25rem;
 }
 
-.date-range-calendar :deep(.dp__main) {
+.date-range-calendar :deep(.dp__main),
+.date-range-calendar :deep(.dp--menu),
+.date-range-calendar :deep(.dp__menu) {
   font-family: inherit;
-  background: transparent !important;
+  width: 100%;
+  min-width: 0 !important;
+  border-radius: 0 !important;
+  background: var(--drp-bg) !important;
   color: var(--drp-cal-text) !important;
+  box-shadow: none !important;
+  border: none !important;
 }
 
 .date-range-calendar :deep(.dp__theme_light),
-.date-range-calendar :deep(.dp__theme_dark) {
-  --dp-background-color: transparent;
+.date-range-calendar :deep(.dp__theme_dark),
+.date-range-calendar :deep(.dp--theme-light),
+.date-range-calendar :deep(.dp--theme-dark) {
+  /* Match popover exactly — never the library dark #212121 panel. */
+  --dp-background-color: var(--drp-bg);
   --dp-text-color: var(--drp-cal-text);
   --dp-hover-color: var(--drp-cal-hover);
   --dp-hover-text-color: var(--drp-cal-text);
   --dp-hover-icon-color: var(--drp-cal-icon);
   --dp-primary-color: var(--color-azure-500);
   --dp-primary-text-color: #ffffff;
-  --dp-secondary-color: var(--drp-border);
+  --dp-secondary-color: var(--drp-cal-muted);
   --dp-border-color: transparent;
   --dp-menu-border-color: transparent;
   --dp-border-color-hover: transparent;
+  --dp-border-color-focus: transparent;
   --dp-disabled-color: transparent;
   --dp-disabled-color-text: var(--drp-cal-muted);
-  --dp-scroll-bar-background: transparent;
+  --dp-scroll-bar-background: var(--drp-bg);
   --dp-scroll-bar-color: var(--drp-border);
   --dp-success-color: var(--color-azure-500);
   --dp-success-color-disabled: var(--drp-cal-muted);
   --dp-icon-color: var(--drp-cal-icon);
   --dp-danger-color: #f87171;
+  --dp-tooltip-color: var(--drp-bg);
   --dp-highlight-color: var(--drp-cal-between);
   --dp-range-between-dates-background-color: var(--drp-cal-between);
   --dp-range-between-dates-text-color: var(--drp-cal-between-text);
+  --dp-range-between-border-color: transparent;
   --dp-range-between-border-radius: 0;
+  --dp-menu-padding: 0;
+  --dp-calendar-wrap-padding: 0;
+  --dp-multi-calendars-spacing: 0.75rem;
+  --dp-row-margin: 0;
   --dp-cell-size: 36px;
   --dp-cell-padding: 2px;
-  --dp-row-margin: 0;
   --dp-month-year-row-height: 36px;
   --dp-month-year-row-button-size: 32px;
   --dp-button-height: 32px;
   --dp-font-size: 0.875rem;
+  --dp-border-radius: 0;
 }
 
 .date-range-calendar :deep(.dp__menu),
+.date-range-calendar :deep(.dp--menu),
 .date-range-calendar :deep(.dp__menu_inner),
+.date-range-calendar :deep(.dp--menu-inner),
 .date-range-calendar :deep(.dp__instance_calendar),
+.date-range-calendar :deep(.dp--instance-calendar),
 .date-range-calendar :deep(.dp__calendar),
+.date-range-calendar :deep(.dp--calendar),
 .date-range-calendar :deep(.dp__calendar_wrap),
 .date-range-calendar :deep(.dp__calendar_header),
+.date-range-calendar :deep(.dp--calendar-header),
 .date-range-calendar :deep(.dp__calendar_row),
+.date-range-calendar :deep(.dp--calendar-row),
 .date-range-calendar :deep(.dp__month_year_row),
 .date-range-calendar :deep(.dp__time_picker_inline_container),
+.date-range-calendar :deep(.dp--time-picker-inline-container),
 .date-range-calendar :deep(.dp--tp-wrap),
 .date-range-calendar :deep(.dp__overlay),
+.date-range-calendar :deep(.dp--overlay),
 .date-range-calendar :deep(.dp__overlay_container) {
-  background: transparent !important;
+  background: var(--drp-bg) !important;
   border: none !important;
   box-shadow: none !important;
   color: var(--drp-cal-text) !important;
+  border-radius: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
 }
 
-.date-range-calendar :deep(.dp__menu) {
-  padding: 0;
-}
-
-.date-range-calendar :deep(.dp__calendar_header_item) {
+.date-range-calendar :deep(.dp__calendar_header_item),
+.date-range-calendar :deep(.dp--calendar-header-item) {
   font-size: 0.7rem;
   font-weight: 600;
   text-transform: uppercase;
@@ -644,30 +671,33 @@ function presetButtonClass(active: boolean, disabled: boolean) {
   color: var(--drp-cal-header) !important;
 }
 
-.date-range-calendar :deep(.dp__cell_inner) {
+.date-range-calendar :deep(.dp__cell_inner),
+.date-range-calendar :deep(.dp--cell-inner) {
   border-radius: 0.375rem;
   font-weight: 500;
   color: var(--drp-cal-text);
 }
 
 .date-range-calendar :deep(.dp__cell_offset),
-.date-range-calendar :deep(.dp__cell_disabled) {
+.date-range-calendar :deep(.dp__cell_disabled),
+.date-range-calendar :deep(.dp--cell-offset),
+.date-range-calendar :deep(.dp--cell-disabled) {
   color: var(--drp-cal-muted) !important;
 }
 
 .date-range-calendar :deep(.dp__range_start .dp__cell_inner),
 .date-range-calendar :deep(.dp__range_end .dp__cell_inner),
-.date-range-calendar :deep(.dp__active_date .dp__cell_inner) {
+.date-range-calendar :deep(.dp__active_date .dp__cell_inner),
+.date-range-calendar :deep(.dp--range-border-start .dp--cell-inner),
+.date-range-calendar :deep(.dp--range-border-end .dp--cell-inner),
+.date-range-calendar :deep(.dp--active .dp--cell-inner) {
   background: var(--color-azure-500) !important;
   color: #fff !important;
   font-weight: 600;
 }
 
-.date-range-calendar :deep(.dp__instance_calendar) {
-  padding: 0 0.25rem;
-}
-
-.date-range-calendar :deep(.dp__calendar_header_separator) {
+.date-range-calendar :deep(.dp__calendar_header_separator),
+.date-range-calendar :deep(.dp--calendar-header-separator) {
   display: none;
 }
 
@@ -677,18 +707,33 @@ function presetButtonClass(active: boolean, disabled: boolean) {
   color: var(--drp-cal-text) !important;
 }
 
-.date-range-calendar :deep(.dp__action_row) {
+.date-range-calendar :deep(.dp__action_row),
+.date-range-calendar :deep(.dp--action-row) {
   display: none;
 }
 
 .date-range-calendar :deep(.dp__time_display),
+.date-range-calendar :deep(.dp--time-display),
 .date-range-calendar :deep(.dp__input),
+.date-range-calendar :deep(.dp--input),
 .date-range-calendar :deep(.dp__time_input),
 .date-range-calendar :deep(.dp__pm_am_button),
-.date-range-calendar :deep(.dp__overlay) {
+.date-range-calendar :deep(.dp--pm-am-button),
+.date-range-calendar :deep(.dp__overlay),
+.date-range-calendar :deep(.dp--overlay) {
   background: var(--drp-cal-input-bg) !important;
   color: var(--drp-cal-text) !important;
   border-color: var(--drp-border) !important;
+}
+
+/* Second month sits on the same surface — subtle divider, no floating panel. */
+.date-range-calendar :deep(.dp__instance_calendar + .dp__instance_calendar),
+.date-range-calendar :deep(.dp--instance-calendar + .dp--instance-calendar),
+.date-range-calendar :deep(.dp__calendar_next),
+.date-range-calendar :deep(.dp--calendar-next) {
+  margin-inline-start: 0.75rem !important;
+  padding-inline-start: 0.75rem !important;
+  border-inline-start: 1px solid var(--drp-divider);
 }
 
 @media (prefers-reduced-motion: reduce) {
