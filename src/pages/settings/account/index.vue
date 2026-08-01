@@ -111,6 +111,7 @@ async function confirmGitHubProfile() {
   if (!githubProfile.value || !main.user?.id || githubProfileSaving.value)
     return
 
+  const userId = main.user.id
   const dialogGeneration = githubProfileLookupGeneration
   githubProfileSaving.value = true
   const { data: user, error } = await supabase
@@ -119,11 +120,14 @@ async function confirmGitHubProfile() {
       github_id: githubProfile.value.id,
       github_username: githubProfile.value.login,
     })
-    .eq('id', main.user.id)
+    .eq('id', userId)
     .select()
     .single()
 
   githubProfileSaving.value = false
+  if (main.user?.id !== userId)
+    return
+
   if (error || !user) {
     githubProfile.value = null
     githubProfileError.value = t('account-error')
@@ -144,6 +148,7 @@ async function clearGitHubProfile() {
   if (!main.user?.id || githubProfileSaving.value)
     return
 
+  const userId = main.user.id
   githubProfileSaving.value = true
   const { data: user, error } = await supabase
     .from('users')
@@ -151,11 +156,14 @@ async function clearGitHubProfile() {
       github_id: null,
       github_username: null,
     })
-    .eq('id', main.user.id)
+    .eq('id', userId)
     .select()
     .single()
 
   githubProfileSaving.value = false
+  if (main.user?.id !== userId)
+    return
+
   if (error || !user) {
     githubProfileError.value = t('account-error')
     return
