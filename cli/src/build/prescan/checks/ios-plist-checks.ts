@@ -70,7 +70,8 @@ function hasDevServerConfig(ctx: ScanContext): boolean {
   return s.cleartext === true || (typeof s.url === 'string' && s.url.length > 0)
 }
 
-const VERSION_RE = /^\d+(?:\.\d+){0,2}$/
+const MARKETING_VERSION_RE = /^\d+\.\d+(?:\.\d+)?$/
+const BUILD_VERSION_RE = /^\d+(?:\.\d+){0,2}$/
 // Reverse-DNS, >=2 segments, no space/underscore/wildcard.
 const BUNDLE_ID_RE = /^[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)+$/i
 
@@ -142,13 +143,13 @@ export const plistVersionShortFormat: PrescanCheck = {
     const r = resolvePlistValue(v, pbx(ctx.projectDir))
     if (isUnresolvedRef(r))
       return []
-    if (!VERSION_RE.test(r)) {
+    if (!MARKETING_VERSION_RE.test(r)) {
       return [{
         id: 'ios/plist-version-short-format',
         severity: 'error',
         title: `CFBundleShortVersionString "${r}" is not a valid version (ITMS-90060)`,
-        detail: 'The marketing version must be ≤3 dot-separated integers (e.g. 1.4.2) — no letters or pre-release suffixes.',
-        fix: 'Set MARKETING_VERSION to ≤3 dot-separated integers (e.g. 1.4.2).',
+        detail: 'The marketing version must be two or three dot-separated integers (e.g. 1.4 or 1.4.2) — no letters or pre-release suffixes.',
+        fix: 'Set MARKETING_VERSION to two or three dot-separated integers (e.g. 1.4.2).',
       }]
     }
     return []
@@ -169,7 +170,7 @@ export const plistVersionBuildFormat: PrescanCheck = {
     const r = resolvePlistValue(v, pbx(ctx.projectDir))
     if (isUnresolvedRef(r))
       return []
-    if (!VERSION_RE.test(r)) {
+    if (!BUILD_VERSION_RE.test(r)) {
       return [{
         id: 'ios/plist-version-build-format',
         severity: 'error',

@@ -166,6 +166,14 @@ describe('ios/plist-version-short-format', () => {
     const f = await plistVersionShortFormat.run(ctxFor(`<key>CFBundleShortVersionString</key><string>1.4.2</string>`))
     expect(f).toEqual([])
   })
+  it('passes a legacy two-part version supported by the builder auto-bump', async () => {
+    const f = await plistVersionShortFormat.run(ctxFor(`<key>CFBundleShortVersionString</key><string>1.5</string>`))
+    expect(f).toEqual([])
+  })
+  it('errors on a one-part version rejected by the builder auto-bump', async () => {
+    const f = await plistVersionShortFormat.run(ctxFor(`<key>CFBundleShortVersionString</key><string>1</string>`))
+    expect(f.some(x => x.severity === 'error')).toBe(true)
+  })
 })
 
 describe('ios/plist-version-build-format', () => {
