@@ -6,6 +6,7 @@ import { cwd, exit } from 'node:process'
 import { intro, log, outro } from '@clack/prompts'
 import { createSupabaseClient, findSavedKeySilent, sendEvent } from '../../utils'
 import { buildScanContext } from './context'
+import { enforcedCounts, informationOnlyFindings } from './enforcement'
 import { decideOutcome, runPrescan } from './engine'
 import { resolveWarningGate } from './prompt'
 import { ALL_CHECKS } from './registry'
@@ -23,6 +24,8 @@ export interface PrescanCommandOptions {
   verbose?: boolean
   supaHost?: string
   supaAnon?: string
+  /** Test seam for hard-coded rollout deadlines; defaults to the current time. */
+  now?: Date
   /**
    * pre-merged credentials (CLI flags + env + saved file) when invoked from
    * build request's gate — the scan must validate the exact set the build
@@ -36,12 +39,13 @@ export function validateFlags(opts: Pick<PrescanCommandOptions, 'failOnWarnings'
     throw new Error('--ignore-fatal and --fail-on-warnings are contradictory — pick one')
 }
 
-export function exitCodeFor(counts: Record<Severity, number>, opts: OutcomeOptions): number {
+export function exitCodeFor(counts: Record<Severity, number>, opts: OutcomeOptions, findings: PrescanReport['findings'] = []): number {
   if (opts.ignoreFatal)
     return 0
-  if (counts.error > 0)
+  const enforced = enforcedCounts({ counts, findings }, opts.now)
+  if (enforced.error > 0)
     return 1
-  if (counts.warning > 0 && opts.failOnWarnings)
+  if (enforced.warning > 0 && opts.failOnWarnings)
     return 2
   return 0
 }
@@ -90,28 +94,31 @@ export async function prescanCommand(appId: string | undefined, options: Prescan
     console.log(renderJsonReport(report))
   }
   else {
-    log.message(renderTerminalReport(report, { verbose: options.verbose }))
+    log.message(renderTerminalReport(report, { verbose: options.verbose, now: options.now }))
     const outcome = decideOutcome(report, options)
     outro(outcome === 'block' ? 'Prescan found blocking problems — fix them before building.' : 'Prescan finished.')
   }
   if (apikeyUsedForScan) {
+    const enforced = enforcedCounts(report, options.now)
+    const informationOnly = informationOnlyFindings(report, options.now).length
     await sendEvent(apikeyUsedForScan, {
       channel: 'build',
       event: 'Prescan run',
       icon: '🛡️',
       tags: {
         'source': 'standalone',
-        'result': report.counts.error > 0 ? (options.ignoreFatal ? 'bypassed' : 'blocked') : report.counts.warning > 0 ? (options.failOnWarnings ? 'blocked' : 'warned') : 'clean',
+        'result': enforced.error > 0 ? (options.ignoreFatal ? 'bypassed' : 'blocked') : enforced.warning > 0 ? (options.failOnWarnings ? 'blocked' : 'warned') : informationOnly > 0 ? 'information-only' : 'clean',
         'app-id': appId ?? 'unknown',
         'platform': options.platform ?? 'unknown',
         'errors': String(report.counts.error),
         'warnings': String(report.counts.warning),
         'finding-ids': report.findings.filter(f => f.severity !== 'info').map(f => f.id).join(',').slice(0, 200),
+        'information-only-findings': String(informationOnly),
       },
       notify: false,
     }, options.verbose).catch(() => {})
   }
-  exit(exitCodeFor(report.counts, options))
+  exit(exitCodeFor(report.counts, options, report.findings))
 }
 
 export interface PrescanGateOptions {
@@ -121,6 +128,8 @@ export interface PrescanGateOptions {
   /** test seam; defaults to canPromptInteractively() (via resolveWarningGate) at call time */
   interactive?: boolean
   silent?: boolean
+  /** Test seam for hard-coded rollout deadlines; defaults to the current time. */
+  now?: Date
   /**
    * Output sink for the report / crash notice. Callers that own the terminal
    * (Ink onboarding, SDK, MCP stdio) pass their BuildLogger here; raw clack
@@ -136,6 +145,7 @@ export interface PrescanGateResult {
   /** null when the gate was disabled or the scan crashed (no scan ran) */
   report: PrescanReport | null
   crashed: boolean
+  informationOnlyFindings: number
 }
 
 /**
@@ -148,7 +158,7 @@ export async function runPrescanGate(
   scan: () => Promise<PrescanReport>,
 ): Promise<PrescanGateResult> {
   if (!opts.enabled)
-    return { decision: 'proceed', report: null, crashed: false }
+    return { decision: 'proceed', report: null, crashed: false, informationOnlyFindings: 0 }
   const noop = (): void => {}
   const print = opts.print ?? (opts.silent ? noop : (msg: string) => log.message(msg))
   const warn = opts.warn ?? (opts.silent ? noop : (msg: string) => log.warn(msg))
@@ -158,15 +168,15 @@ export async function runPrescanGate(
   }
   catch (e) {
     warn(`prescan crashed and was skipped: ${e instanceof Error ? e.message : String(e)}`)
-    return { decision: 'proceed', report: null, crashed: true }
+    return { decision: 'proceed', report: null, crashed: true, informationOnlyFindings: 0 }
   }
   if (report.findings.length > 0)
-    print(renderTerminalReport(report, {}))
-  const outcome = decideOutcome(report, { ignoreFatal: opts.ignoreFatal, failOnWarnings: opts.failOnWarnings })
+    print(renderTerminalReport(report, { now: opts.now }))
+  const outcome = decideOutcome(report, { ignoreFatal: opts.ignoreFatal, failOnWarnings: opts.failOnWarnings, now: opts.now })
   let decision: 'proceed' | 'block'
   if (outcome === 'ask')
     decision = opts.interactive === false ? 'proceed' : await resolveWarningGate('ask', { silent: opts.silent })
   else
     decision = outcome
-  return { decision, report, crashed: false }
+  return { decision, report, crashed: false, informationOnlyFindings: informationOnlyFindings(report, opts.now).length }
 }

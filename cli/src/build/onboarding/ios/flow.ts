@@ -772,6 +772,9 @@ function synthesizeProfileFromAscSummary(
         ? 'ad_hoc'
         : 'unknown') as DiscoveredProfile['profileType'],
     certificateSha1s: [identity.sha1],
+    // No entitlements dict in an ASC profile summary — the field is required on
+    // MobileprovisionDetail, so populate it with an empty map.
+    profileEntitlements: {},
     profileBase64: summary.profileContent,
   } as DiscoveredProfile & { profileBase64: string }
 }
@@ -3086,6 +3089,7 @@ export async function runIosEffect(
           expirationDate: detail.expirationDate,
           profileType: detail.profileType as DiscoveredProfile['profileType'],
           certificateSha1s: detail.certificateSha1s,
+          profileEntitlements: detail.profileEntitlements,
         }
         const matches = deps.carried?.importMatches ?? []
         const injectedMatches = matches.map(m => m.identity.sha1 === chosenIdentity.sha1

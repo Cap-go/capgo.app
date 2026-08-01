@@ -9,6 +9,8 @@ export type Platform = 'ios' | 'android'
 export interface Finding {
   id: string
   severity: Severity
+  /** Finding stays visible but is information-only until this UTC instant. */
+  enforceAfter?: string
   /**
    * detail/fix/title are printed to the terminal and serialized into --json reports
    * (routinely captured in CI logs): they must NEVER contain credential material
@@ -36,6 +38,8 @@ export interface ScanContext {
 export interface PrescanCheck {
   id: string
   platforms: Platform[]
+  /** Findings from this check stay information-only until this UTC instant. */
+  enforceAfter?: string
   /** requires ctx.supabase; skipped (with notice) when absent */
   remote?: boolean
   appliesTo?: (ctx: ScanContext) => boolean
@@ -55,4 +59,6 @@ export type PrescanOutcome = 'proceed' | 'ask' | 'block'
 export interface OutcomeOptions {
   failOnWarnings?: boolean
   ignoreFatal?: boolean
+  /** Test seam for hard-coded rollout deadlines; defaults to the current time. */
+  now?: Date
 }
