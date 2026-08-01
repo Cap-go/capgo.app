@@ -470,6 +470,14 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: ChannelSet,
     channel.rollout_paused_at = null
     channel.rollout_pause_reason = null
   }
+
+  // Disabling progressive rollout unlinks the second bundle so both stay connected only while rollout is active.
+  if (body.rolloutEnabled === false && body.rolloutVersion === undefined && !body.rollback && !body.promoteToStable) {
+    channel.rollout_version = null
+    channel.rollout_paused_at = null
+    channel.rollout_pause_reason = null
+  }
+
   if (!existingChannel && requestedVersionName) {
     const createdChannel = await createAndPromoteChannelInTransaction(c, channel, requestedVersionName, apikey)
     return c.json({ ...BRES, ...createdChannel })

@@ -424,8 +424,13 @@ export async function setChannelInternal(channel: string, appId: string, options
 
   if (rolloutEnable != null)
     channelPayload.rollout_enabled = !!rolloutEnable
-  if (rolloutDisable)
+  if (rolloutDisable) {
+    bundleLinkChanged = bundleLinkChanged || existingChannel.rollout_version != null
     channelPayload.rollout_enabled = false
+    channelPayload.rollout_version = null
+    channelPayload.rollout_paused_at = null
+    channelPayload.rollout_pause_reason = null
+  }
 
   if (rolloutPause) {
     channelPayload.rollout_paused_at = new Date().toISOString()

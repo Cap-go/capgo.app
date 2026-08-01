@@ -583,7 +583,7 @@ Example: npx @capgo/cli@latest channel set production com.example.app --bundle 1
   .option('--rollout-percentage <rolloutPercentage>', `Rollout percentage from 0 to 100`, value => Number.parseFloat(value))
   .option('--rollout-percentage-bps <rolloutPercentageBps>', `Rollout percentage in basis points from 0 to 10000`, value => Number.parseInt(value, 10))
   .option('--rollout-enable', `Enable the configured rollout`)
-  .option('--rollout-disable', `Disable the configured rollout`)
+  .option('--rollout-disable', `Disable the configured rollout and unlink the rollout bundle`)
   .option('--rollout-pause', `Pause rollout exposure without rolling back selected devices`)
   .option('--rollout-resume', `Resume a paused rollout`)
   .option('--rollout-rollback', `Clear rollout state and return devices to stable`)

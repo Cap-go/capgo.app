@@ -234,7 +234,13 @@ async function getChannel(force = false) {
 async function saveChannelChanges(update: ChannelUpdate) {
   const changesStableVersion = Object.prototype.hasOwnProperty.call(update, 'version')
   const changesRolloutVersion = Object.prototype.hasOwnProperty.call(update, 'rollout_version')
-  const canUpdate = changesStableVersion || changesRolloutVersion
+  // Disable unlinks the rollout target; keep that on channel settings permission like the enable/disable toggle.
+  const isDisableRolloutUnlink = update.rollout_enabled === false
+    && Object.prototype.hasOwnProperty.call(update, 'rollout_version')
+    && update.rollout_version === null
+    && !Object.prototype.hasOwnProperty.call(update, 'version')
+    && !Object.prototype.hasOwnProperty.call(update, 'rollout_percentage_bps')
+  const canUpdate = (changesStableVersion || (changesRolloutVersion && !isDisableRolloutUnlink))
     ? canPromoteBundle.value
     : canUpdateChannelSettings.value
 
@@ -587,6 +593,17 @@ async function enableRollout() {
     return
   }
   await saveChannelChange('rollout_enabled', true as any)
+}
+
+async function disableRollout() {
+  if (await saveChannelChanges({
+    rollout_enabled: false,
+    rollout_version: null,
+    rollout_paused_at: null,
+    rollout_pause_reason: null,
+  })) {
+    await askUpdateNotificationAfterBundleChange()
+  }
 }
 
 async function saveRolloutPercentage(value: string) {
@@ -1051,7 +1068,7 @@ async function copyCurlCommand() {
                       <button class="min-h-11 d-btn d-btn-ghost" :disabled="!canPromoteBundle" @click="openSelectRolloutVersion()">
                         {{ t('set-rollout-target') }}
                       </button>
-                      <button class="min-h-11 d-btn d-btn-outline" :disabled="rolloutActionsDisabled" @click="saveChannelChange('rollout_enabled', !channel.rollout_enabled as any)">
+                      <button class="min-h-11 d-btn d-btn-outline" :disabled="rolloutActionsDisabled" @click="channel.rollout_enabled ? disableRollout() : enableRollout()">
                         {{ channel.rollout_enabled ? t('disable') : t('enable') }}
                       </button>
                       <button class="min-h-11 d-btn d-btn-outline" :disabled="rolloutPauseDisabled" @click="toggleRolloutPause()">
