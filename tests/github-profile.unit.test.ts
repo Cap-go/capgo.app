@@ -29,6 +29,7 @@ describe('github profile lookup', () => {
 
   it('rejects invalid and unknown usernames with user-facing error codes', async () => {
     await expect(getGitHubProfile('invalid_username')).rejects.toMatchObject({ code: 'invalid_username' } satisfies Partial<GitHubProfileError>)
+    await expect(getGitHubProfile('foo--bar')).rejects.toMatchObject({ code: 'invalid_username' } satisfies Partial<GitHubProfileError>)
 
     globalThis.fetch = vi.fn().mockResolvedValue(new Response(null, { status: 404 }))
     await expect(getGitHubProfile('octocat')).rejects.toMatchObject({ code: 'not_found' } satisfies Partial<GitHubProfileError>)

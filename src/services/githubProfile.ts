@@ -17,10 +17,9 @@ export function normalizeGitHubUsername(username: string) {
 
 export async function getGitHubProfile(username: string): Promise<GitHubProfile> {
   const normalizedUsername = normalizeGitHubUsername(username)
-  if (!/^[a-z\d](?:[a-z\d-]{0,37}[a-z\d])?$/i.test(normalizedUsername))
+  if (!/^[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,37}[a-z\d]$/i.test(normalizedUsername))
     throw new GitHubProfileError('invalid_username')
 
-  let response: Response
   let timeout: ReturnType<typeof setTimeout> | undefined
   const signal = typeof AbortSignal.timeout === 'function'
     ? AbortSignal.timeout(10_000)
@@ -30,48 +29,42 @@ export async function getGitHubProfile(username: string): Promise<GitHubProfile>
         return controller.signal
       })()
   try {
-    response = await fetch(`https://api.github.com/users/${encodeURIComponent(normalizedUsername)}`, {
+    const response = await fetch(`https://api.github.com/users/${encodeURIComponent(normalizedUsername)}`, {
       headers: {
         accept: 'application/vnd.github+json',
       },
       signal,
     })
+    if (response.status === 404)
+      throw new GitHubProfileError('not_found')
+    if (response.status === 429 || (response.status === 403 && (response.headers.get('x-ratelimit-remaining') === '0' || response.headers.has('retry-after'))))
+      throw new GitHubProfileError('rate_limited')
+    if (!response.ok)
+      throw new GitHubProfileError('request_failed')
+
+    const profile = await response.json() as {
+      id?: unknown
+      login?: unknown
+      name?: unknown
+      avatar_url?: unknown
+    }
+    if (!profile || typeof profile !== 'object' || typeof profile.id !== 'number' || typeof profile.login !== 'string' || typeof profile.avatar_url !== 'string')
+      throw new GitHubProfileError('request_failed')
+
+    return {
+      id: profile.id,
+      login: profile.login,
+      name: typeof profile.name === 'string' ? profile.name : null,
+      avatarUrl: profile.avatar_url,
+    }
   }
-  catch {
+  catch (error) {
+    if (error instanceof GitHubProfileError)
+      throw error
     throw new GitHubProfileError('request_failed')
   }
   finally {
     if (timeout)
       clearTimeout(timeout)
-  }
-
-  if (response.status === 404)
-    throw new GitHubProfileError('not_found')
-  if (response.status === 429 || (response.status === 403 && (response.headers.get('x-ratelimit-remaining') === '0' || response.headers.has('retry-after'))))
-    throw new GitHubProfileError('rate_limited')
-  if (!response.ok)
-    throw new GitHubProfileError('request_failed')
-
-  let profile: {
-    id?: unknown
-    login?: unknown
-    name?: unknown
-    avatar_url?: unknown
-  }
-  try {
-    profile = await response.json()
-  }
-  catch {
-    throw new GitHubProfileError('request_failed')
-  }
-
-  if (!profile || typeof profile !== 'object' || typeof profile.id !== 'number' || typeof profile.login !== 'string' || typeof profile.avatar_url !== 'string')
-    throw new GitHubProfileError('request_failed')
-
-  return {
-    id: profile.id,
-    login: profile.login,
-    name: typeof profile.name === 'string' ? profile.name : null,
-    avatarUrl: profile.avatar_url,
   }
 }
