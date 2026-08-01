@@ -94,14 +94,15 @@ describe('spoof session storage', () => {
     mocks.createClient.mockReturnValueOnce({ auth: { refreshSession, setSession } })
 
     const { isSpoofed, saveSpoof, unspoofUser } = await import('../src/services/supabase.ts')
+    const validJwt = createJwt(Math.floor(Date.now() / 1000) + 300)
 
-    saveSpoof(createJwt(Math.floor(Date.now() / 1000) + 300), 'stale-refresh-token')
+    saveSpoof(validJwt, 'stale-refresh-token')
 
     await expect(unspoofUser()).resolves.toBe(true)
 
     expect(refreshSession).not.toHaveBeenCalled()
     expect(setSession).toHaveBeenCalledWith({
-      access_token: expect.any(String),
+      access_token: validJwt,
       refresh_token: 'stale-refresh-token',
     })
     expect(isSpoofed()).toBe(false)
@@ -154,6 +155,11 @@ describe('spoof session storage', () => {
 
     await expect(unspoofUser()).resolves.toBe(false)
 
+    expect(refreshSession).toHaveBeenCalledWith({ refresh_token: 'stale-refresh-token' })
+    expect(setSession).toHaveBeenCalledWith({
+      access_token: 'fresh-admin-jwt',
+      refresh_token: 'fresh-admin-refresh-token',
+    })
     expect(localStorage.setItem).toHaveBeenCalledWith(
       expect.stringContaining('.spoof_admin_jwt'),
       JSON.stringify({ jwt: 'fresh-admin-jwt', refreshToken: 'fresh-admin-refresh-token' }),
