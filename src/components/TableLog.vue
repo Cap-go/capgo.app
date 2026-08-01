@@ -15,7 +15,7 @@ import IconDownload from '~icons/lucide/download'
 import IconFilter from '~icons/system-uicons/filtering'
 import IconReload from '~icons/tabler/reload'
 import DateRangePicker from '~/components/DateRangePicker.vue'
-import { clampDateRange, getDateRangeForPreset, inferDateRangePreset } from '~/services/dateRange'
+import { clampDateRange, getDateRangeForPreset, inferDateRangePreset, TABLE_DATE_RANGE_DEFAULT } from '~/services/dateRange'
 
 interface Props {
   isLoading?: boolean
@@ -106,7 +106,7 @@ const filterButtonLabel = computed(() => {
   return filterActivated.value ? `${label} (${filterActivated.value})` : label
 })
 const preciseDates = ref<[Date, Date] | null>(null)
-const rangeMode = ref<DateRangePreset>('1h')
+const rangeMode = ref<DateRangePreset>(TABLE_DATE_RANGE_DEFAULT)
 const now = useNow({ interval: 60_000 })
 const logsMinDate = computed(() => new Date(now.value.getTime() - 30 * 24 * 60 * 60 * 1000))
 
@@ -249,9 +249,9 @@ function loadFromUrlParams() {
     }
   }
   else if (!preciseDates.value) {
-    const initial = getDateRangeForPreset('1h')
+    const initial = getDateRangeForPreset(TABLE_DATE_RANGE_DEFAULT)
     preciseDates.value = [initial.start, initial.end]
-    rangeMode.value = '1h'
+    rangeMode.value = TABLE_DATE_RANGE_DEFAULT
   }
 
   const hasSortParam = props.columns.some(col => params.has(`sort_${col.key}`))
