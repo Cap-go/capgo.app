@@ -98,10 +98,11 @@ describe('sendEventToTracking', () => {
       event: 'Tracked Event',
       notify: false,
       tags: { apikey_id: 'caller-supplied', app_id: 'app-id' },
+      nonPersonTags: { apikey_id: 'caller-supplied', cli_version: '8.31.3' },
     }, undefined)
 
     expect(payload.tags).toEqual({ app_id: 'app-id' })
-    expect(payload.nonPersonTags).toBeUndefined()
+    expect(payload.nonPersonTags).toEqual({ cli_version: '8.31.3' })
   })
 
   it('runs all tracking providers in the background by default', async () => {
