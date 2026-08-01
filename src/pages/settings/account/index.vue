@@ -49,11 +49,14 @@ const githubProfile = ref<GitHubProfile | null>(null)
 const githubProfileLoading = ref(false)
 const githubProfileSaving = ref(false)
 const githubProfileError = ref('')
+let githubProfileLookupGeneration = 0
 displayStore.NavTitle = t('account')
 
 function resetGitHubProfileDialog() {
+  githubProfileLookupGeneration += 1
   githubProfile.value = null
   githubProfileError.value = ''
+  githubProfileLoading.value = false
 }
 
 function closeGitHubProfileDialog() {
@@ -77,12 +80,19 @@ async function findGitHubProfile() {
   if (githubProfileLoading.value)
     return
 
+  const lookupGeneration = githubProfileLookupGeneration
+  const username = githubUsernameInput.value
   githubProfileError.value = ''
   githubProfileLoading.value = true
   try {
-    githubProfile.value = await getGitHubProfile(githubUsernameInput.value)
+    const profile = await getGitHubProfile(username)
+    if (lookupGeneration === githubProfileLookupGeneration)
+      githubProfile.value = profile
   }
   catch (error) {
+    if (lookupGeneration !== githubProfileLookupGeneration)
+      return
+
     githubProfile.value = null
     if (error instanceof GitHubProfileError) {
       githubProfileError.value = t(`github-username-error-${error.code}`)
@@ -92,7 +102,8 @@ async function findGitHubProfile() {
     }
   }
   finally {
-    githubProfileLoading.value = false
+    if (lookupGeneration === githubProfileLookupGeneration)
+      githubProfileLoading.value = false
   }
 }
 
@@ -113,6 +124,7 @@ async function confirmGitHubProfile() {
 
   githubProfileSaving.value = false
   if (error || !user) {
+    githubProfile.value = null
     githubProfileError.value = t('account-error')
     return
   }
@@ -121,6 +133,34 @@ async function confirmGitHubProfile() {
   githubUsername.value = user.github_username ?? ''
   toast.success(t('account-updated-succ'))
   dialogStore.closeDialog({ text: t('confirm'), role: 'primary' })
+  resetGitHubProfileDialog()
+}
+
+async function clearGitHubProfile() {
+  if (!main.user?.id || githubProfileSaving.value)
+    return
+
+  githubProfileSaving.value = true
+  const { data: user, error } = await supabase
+    .from('users')
+    .update({
+      github_id: null,
+      github_username: null,
+    })
+    .eq('id', main.user.id)
+    .select()
+    .single()
+
+  githubProfileSaving.value = false
+  if (error || !user) {
+    githubProfileError.value = t('account-error')
+    return
+  }
+
+  main.user = user
+  githubUsername.value = ''
+  toast.success(t('account-updated-succ'))
+  dialogStore.closeDialog({ text: t('button-remove'), role: 'danger' })
   resetGitHubProfileDialog()
 }
 
@@ -845,7 +885,8 @@ onMounted(async () => {
             type="text"
             autocomplete="off"
             maxlength="39"
-            class="w-full p-3 border border-gray-300 rounded-lg dark:text-white dark:bg-gray-800 dark:border-gray-600"
+            class="d-input w-full"
+            :disabled="githubProfileLoading || githubProfileSaving"
             :placeholder="t('github-username-placeholder')"
             @keydown.enter.prevent="findGitHubProfile"
           >
@@ -873,6 +914,16 @@ onMounted(async () => {
         <div class="flex justify-end gap-3 mt-6">
           <button type="button" class="d-btn d-btn-ghost" :disabled="githubProfileLoading || githubProfileSaving" @click="closeGitHubProfileDialog">
             {{ t('github-username-reject') }}
+          </button>
+          <button
+            v-if="!githubProfile && githubUsername"
+            type="button"
+            class="d-btn d-btn-error"
+            :disabled="githubProfileLoading || githubProfileSaving"
+            @click="clearGitHubProfile"
+          >
+            <Spinner v-if="githubProfileSaving" size="w-4 h-4" />
+            <span v-else>{{ t('button-remove') }}</span>
           </button>
           <button
             v-if="githubProfile"

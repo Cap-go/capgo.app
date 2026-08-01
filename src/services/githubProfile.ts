@@ -37,14 +37,20 @@ export async function getGitHubProfile(username: string): Promise<GitHubProfile>
   if (!response.ok)
     throw new GitHubProfileError('request_failed')
 
-  const profile = await response.json() as {
+  let profile: {
     id?: unknown
     login?: unknown
     name?: unknown
     avatar_url?: unknown
   }
+  try {
+    profile = await response.json()
+  }
+  catch {
+    throw new GitHubProfileError('request_failed')
+  }
 
-  if (typeof profile.id !== 'number' || typeof profile.login !== 'string' || typeof profile.avatar_url !== 'string')
+  if (!profile || typeof profile !== 'object' || typeof profile.id !== 'number' || typeof profile.login !== 'string' || typeof profile.avatar_url !== 'string')
     throw new GitHubProfileError('request_failed')
 
   return {

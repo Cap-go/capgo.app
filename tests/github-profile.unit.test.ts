@@ -40,6 +40,12 @@ describe('github profile lookup', () => {
 
     globalThis.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ name: 'Missing required fields' })))
     await expect(getGitHubProfile('octocat')).rejects.toMatchObject({ code: 'request_failed' } satisfies Partial<GitHubProfileError>)
+
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response('not json'))
+    await expect(getGitHubProfile('octocat')).rejects.toMatchObject({ code: 'request_failed' } satisfies Partial<GitHubProfileError>)
+
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response('null'))
+    await expect(getGitHubProfile('octocat')).rejects.toMatchObject({ code: 'request_failed' } satisfies Partial<GitHubProfileError>)
   })
 
   it('trims usernames before validating them', () => {
