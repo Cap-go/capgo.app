@@ -24,8 +24,7 @@ export async function getGitHubProfile(username: string): Promise<GitHubProfile>
   try {
     response = await fetch(`https://api.github.com/users/${encodeURIComponent(normalizedUsername)}`, {
       headers: {
-        'accept': 'application/vnd.github+json',
-        'X-GitHub-Api-Version': '2022-11-28',
+        accept: 'application/vnd.github+json',
       },
     })
   }

@@ -74,6 +74,9 @@ function openGitHubProfileDialog() {
 }
 
 async function findGitHubProfile() {
+  if (githubProfileLoading.value)
+    return
+
   githubProfileError.value = ''
   githubProfileLoading.value = true
   try {
@@ -667,10 +670,10 @@ onMounted(async () => {
               </div>
               <div class="sm:w-1/2">
                 <FormKit
+                  v-model="githubUsername"
                   type="text"
                   name="github_username"
                   autocomplete="off"
-                  v-model="githubUsername"
                   :disabled="isLoading"
                   readonly
                   enterkeyhint="send"
@@ -678,6 +681,7 @@ onMounted(async () => {
                   :help="t('github-username-help')"
                   :placeholder="t('github-username-select')"
                   @click="openGitHubProfileDialog"
+                  @keydown.enter.prevent="openGitHubProfileDialog"
                 />
               </div>
             </div>

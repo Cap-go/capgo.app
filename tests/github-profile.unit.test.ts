@@ -34,6 +34,14 @@ describe('github profile lookup', () => {
     await expect(getGitHubProfile('octocat')).rejects.toMatchObject({ code: 'not_found' } satisfies Partial<GitHubProfileError>)
   })
 
+  it('reports request failures from GitHub and malformed profile responses', async () => {
+    globalThis.fetch = vi.fn().mockRejectedValue(new Error('Network unavailable'))
+    await expect(getGitHubProfile('octocat')).rejects.toMatchObject({ code: 'request_failed' } satisfies Partial<GitHubProfileError>)
+
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ name: 'Missing required fields' })))
+    await expect(getGitHubProfile('octocat')).rejects.toMatchObject({ code: 'request_failed' } satisfies Partial<GitHubProfileError>)
+  })
+
   it('trims usernames before validating them', () => {
     expect(normalizeGitHubUsername('  octocat  ')).toBe('octocat')
   })
