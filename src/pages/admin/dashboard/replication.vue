@@ -32,6 +32,36 @@ interface ReplicationSlotLag {
   reasons: string[]
 }
 
+interface SubscriptionHealth {
+  status: 'ok' | 'ko' | 'skipped'
+  checked_at: string
+  threshold_seconds: number
+  subscriptions: Array<{
+    subname: string
+    enabled: boolean
+    has_apply_worker: boolean
+    apply_lag_seconds: number | null
+    last_msg_receipt_time: string | null
+    status: 'ok' | 'ko'
+    reasons: string[]
+  }>
+  reasons: string[]
+}
+
+interface DataCanary {
+  status: 'ok' | 'ko' | 'skipped'
+  table: string
+  primary_count: number | null
+  replica_count: number | null
+  diff: number | null
+  diff_percent: number | null
+  threshold_percent: number
+  checked_at: string
+  expires_at: string
+  cached: boolean
+  reasons: string[]
+}
+
 interface ReplicationStatusResponse {
   status: 'ok' | 'ko'
   threshold_seconds: number
@@ -44,6 +74,8 @@ interface ReplicationStatusResponse {
   max_lag_minutes?: number | null
   max_lag_slot: string | null
   slots: ReplicationSlotLag[]
+  subscription?: SubscriptionHealth
+  data_canary?: DataCanary
   error?: string
   message?: string
   error_message?: string
@@ -98,6 +130,46 @@ const checkedAt = computed(() => {
   if (!data.value?.checked_at)
     return '-'
   return formatLocalDateTime(data.value.checked_at)
+})
+
+const subscriptionStatus = computed(() => data.value?.subscription?.status?.toUpperCase() ?? '-')
+const subscriptionColor = computed(() => {
+  const status = data.value?.subscription?.status
+  if (status === 'ok')
+    return 'text-emerald-500'
+  if (status === 'ko')
+    return 'text-rose-500'
+  return 'text-slate-500'
+})
+const subscriptionSubtitle = computed(() => {
+  const sub = data.value?.subscription
+  if (!sub)
+    return 'No subscription data'
+  if (sub.reasons.length)
+    return sub.reasons.join(', ')
+  const healthy = sub.subscriptions.find(item => item.status === 'ok')
+  return healthy?.subname ?? `${sub.subscriptions.length} subscription(s)`
+})
+
+const canaryStatus = computed(() => data.value?.data_canary?.status?.toUpperCase() ?? '-')
+const canaryColor = computed(() => {
+  const status = data.value?.data_canary?.status
+  if (status === 'ok')
+    return 'text-emerald-500'
+  if (status === 'ko')
+    return 'text-rose-500'
+  return 'text-slate-500'
+})
+const canarySubtitle = computed(() => {
+  const canary = data.value?.data_canary
+  if (!canary)
+    return 'No canary data'
+  if (canary.reasons.length)
+    return canary.reasons.join(', ')
+  const primary = canary.primary_count == null ? '-' : formatNumberValue(canary.primary_count)
+  const replica = canary.replica_count == null ? '-' : formatNumberValue(canary.replica_count)
+  const cacheLabel = canary.cached ? 'cached' : 'fresh'
+  return `${canary.table}: ${primary} / ${replica} (${cacheLabel})`
 })
 
 async function loadReplicationStatus() {
@@ -176,7 +248,7 @@ displayStore.defaultBack = '/dashboard'
               {{ t('replication') }}
             </h1>
             <p class="text-sm text-slate-500 dark:text-slate-300">
-              Logical replication slot lag monitoring
+              Slot lag, subscription workers, and app_versions count canary
             </p>
           </div>
           <div class="flex flex-wrap gap-2">
@@ -206,12 +278,24 @@ displayStore.defaultBack = '/dashboard'
         <PageLoader v-else-if="isLoading && !data" />
 
         <div v-else-if="data" class="space-y-6">
-          <div class="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-4">
+          <div class="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
             <AdminStatsCard
               title="Status"
               :value="statusLabel"
               :color-class="statusColor"
               :subtitle="`Threshold ${formatNumberValue(thresholdMinutes)} min`"
+            />
+            <AdminStatsCard
+              title="Subscription"
+              :value="subscriptionStatus"
+              :color-class="subscriptionColor"
+              :subtitle="subscriptionSubtitle"
+            />
+            <AdminStatsCard
+              title="Data canary"
+              :value="canaryStatus"
+              :color-class="canaryColor"
+              :subtitle="canarySubtitle"
             />
             <AdminStatsCard
               title="Max lag"
@@ -228,6 +312,102 @@ displayStore.defaultBack = '/dashboard'
               title="Last check"
               :value="checkedAt"
             />
+          </div>
+
+          <div class="grid grid-cols-1 gap-6 xl:grid-cols-2">
+            <div class="rounded-lg border border-slate-300 bg-white shadow-lg dark:border-slate-900 dark:bg-gray-800">
+              <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+                  Subscription workers
+                </h2>
+                <p class="text-xs text-gray-500 dark:text-gray-400">
+                  Live apply worker check on the read replica
+                </p>
+              </div>
+              <div v-if="!(data.subscription?.subscriptions?.length)" class="px-6 py-8 text-sm text-gray-500 dark:text-gray-400">
+                {{ data.subscription?.reasons?.join(', ') || 'No subscription rows' }}
+              </div>
+              <div v-else class="-mx-4 overflow-x-auto sm:mx-0">
+                <table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">
+                  <thead class="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:bg-slate-900 dark:text-slate-400">
+                    <tr>
+                      <th scope="col" class="px-4 py-3">
+                        Name
+                      </th>
+                      <th scope="col" class="px-4 py-3">
+                        Worker
+                      </th>
+                      <th scope="col" class="px-4 py-3">
+                        Lag (s)
+                      </th>
+                      <th scope="col" class="px-4 py-3">
+                        Status
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                    <tr
+                      v-for="sub in data.subscription?.subscriptions ?? []"
+                      :key="sub.subname"
+                      class="transition hover:bg-slate-50 dark:hover:bg-slate-700/60"
+                    >
+                      <td class="whitespace-nowrap px-4 py-3 font-semibold text-gray-900 dark:text-white">
+                        {{ sub.subname }}
+                      </td>
+                      <td class="whitespace-nowrap px-4 py-3 text-gray-700 dark:text-gray-200">
+                        {{ sub.has_apply_worker ? 'Yes' : 'No' }}
+                      </td>
+                      <td class="whitespace-nowrap px-4 py-3 text-gray-700 dark:text-gray-200">
+                        {{ sub.apply_lag_seconds == null ? '-' : formatNumberValue(sub.apply_lag_seconds, { maximumFractionDigits: 1 }) }}
+                      </td>
+                      <td class="whitespace-nowrap px-4 py-3">
+                        <span class="badge" :class="sub.status === 'ok' ? 'badge-success' : 'badge-error'">
+                          {{ sub.status.toUpperCase() }}
+                        </span>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="rounded-lg border border-slate-300 bg-white shadow-lg dark:border-slate-900 dark:bg-gray-800">
+              <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+                  app_versions canary
+                </h2>
+                <p class="text-xs text-gray-500 dark:text-gray-400">
+                  Count compare cached at most every 5 minutes
+                </p>
+              </div>
+              <div class="space-y-3 px-6 py-6 text-sm text-gray-700 dark:text-gray-200">
+                <div class="flex justify-between gap-4">
+                  <span>Primary</span>
+                  <span class="font-semibold">{{ data.data_canary?.primary_count == null ? '-' : formatNumberValue(data.data_canary.primary_count) }}</span>
+                </div>
+                <div class="flex justify-between gap-4">
+                  <span>Replica</span>
+                  <span class="font-semibold">{{ data.data_canary?.replica_count == null ? '-' : formatNumberValue(data.data_canary.replica_count) }}</span>
+                </div>
+                <div class="flex justify-between gap-4">
+                  <span>Diff</span>
+                  <span class="font-semibold">
+                    {{ data.data_canary?.diff == null ? '-' : formatNumberValue(data.data_canary.diff) }}
+                    <template v-if="data.data_canary?.diff_percent != null">
+                      ({{ formatNumberValue((data.data_canary.diff_percent || 0) * 100, { maximumFractionDigits: 2 }) }}%)
+                    </template>
+                  </span>
+                </div>
+                <div class="flex justify-between gap-4">
+                  <span>Cache</span>
+                  <span class="font-semibold">{{ data.data_canary?.cached ? 'cached' : 'fresh' }}</span>
+                </div>
+                <div class="flex justify-between gap-4">
+                  <span>Notes</span>
+                  <span class="text-xs text-gray-500 dark:text-gray-400">{{ data.data_canary?.reasons?.length ? data.data_canary.reasons.join(', ') : '-' }}</span>
+                </div>
+              </div>
+            </div>
           </div>
 
           <div class="rounded-lg border border-slate-300 bg-white shadow-lg dark:border-slate-900 dark:bg-gray-800">
