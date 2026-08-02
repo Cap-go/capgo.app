@@ -190,7 +190,7 @@ export async function setChannelInternal(channel: string, appId: string, options
   }
 
   const hasStableBundlePromotion = bundle != null || latest === true || latestRemote === true
-  const hasRolloutTargetChange = rolloutBundle != null || rolloutRollback === true || rolloutPromote === true || rolloutDisable === true
+  const hasRolloutTargetChange = rolloutBundle != null || rolloutRollback === true || rolloutPromote === true
   const hasRolloutConfiguration = rolloutPercentage != null
     || rolloutPercentageBps != null
     || rolloutEnable != null
@@ -227,9 +227,11 @@ export async function setChannelInternal(channel: string, appId: string, options
     throw new Error(`Cannot find channel ${channel}`)
   }
 
+  // Disable unlinks only when a rollout bundle is linked; match API promote gating.
+  const disableUnlinksRollout = rolloutDisable === true && existingChannel.rollout_version != null
   if (hasSettingsUpdate)
     await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'channel.update_settings', silent, true, existingChannel.id)
-  if (hasBundlePromotion)
+  if (hasBundlePromotion || disableUnlinksRollout)
     await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'channel.promote_bundle', silent, true, existingChannel.id)
 
   const orgId = existingChannel.owner_org
