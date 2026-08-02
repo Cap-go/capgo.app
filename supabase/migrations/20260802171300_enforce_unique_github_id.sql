@@ -21,5 +21,14 @@ BEGIN
 END
 $$;
 
+-- Production operators must prebuild this index concurrently with
+-- scripts/ops/users_github_id_unique_index.sql before applying the migration.
+-- The fallback keeps fresh local/test databases self-contained; on production
+-- CREATE INDEX IF NOT EXISTS is a no-op, and the constraint attachment below
+-- only holds the table lock briefly.
+CREATE UNIQUE INDEX IF NOT EXISTS users_github_id_key
+ON public.users (github_id);
+
 ALTER TABLE public.users
-ADD CONSTRAINT users_github_id_key UNIQUE (github_id);
+ADD CONSTRAINT users_github_id_key
+UNIQUE USING INDEX users_github_id_key;
