@@ -2,15 +2,15 @@
  * Backfill public.users.github_id from existing GitHub usernames.
  *
  * Dry run:
- *   GITHUB_TOKEN=... bun run admin:backfill-github-user-ids
+ *   bun run admin:backfill-github-user-ids
  *
  * Apply:
- *   GITHUB_TOKEN=... bun run admin:backfill-github-user-ids --apply
+ *   bun run admin:backfill-github-user-ids --apply
  *
  * Optional:
- *   GITHUB_TOKEN=... bun run admin:backfill-github-user-ids --apply --limit=100
- *   GITHUB_TOKEN=... bun run admin:backfill-github-user-ids --cursor=<user-uuid>
- *   GITHUB_TOKEN=... bun run admin:backfill-github-user-ids --env-file=./internal/cloudflare/.env.preprod
+ *   bun run admin:backfill-github-user-ids --apply --limit=100
+ *   bun run admin:backfill-github-user-ids --cursor=<user-uuid>
+ *   bun run admin:backfill-github-user-ids --env-file=./internal/cloudflare/.env.preprod
  */
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
@@ -57,7 +57,7 @@ function printHelp() {
   console.log(`Backfill public.users.github_id from existing GitHub usernames.
 
 Usage:
-  GITHUB_TOKEN=... bun run admin:backfill-github-user-ids [options]
+  bun run admin:backfill-github-user-ids [options]
 
 Options:
   --apply                 Update only rows still missing github_id. Default: dry run.
@@ -69,10 +69,12 @@ Options:
   --help                  Show this help.
 
 Required env:
-  SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, GITHUB_TOKEN
+  SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 
-GITHUB_TOKEN can be supplied in the env file or inherited from your shell. The script
-does not write usernames and never overwrites an existing github_id.`)
+Optional env:
+  GITHUB_TOKEN             Raises GitHub's API rate limit from 60 to 5,000 requests/hour.
+
+The script does not write usernames and never overwrites an existing github_id.`)
 }
 
 function parseNonNegativeInteger(value: string | null, label: string, fallback: number) {
@@ -86,10 +88,7 @@ function parseNonNegativeInteger(value: string | null, label: string, fallback: 
 }
 
 function getGitHubToken(env: Record<string, string | undefined>) {
-  const token = process.env.GITHUB_TOKEN?.trim() || env.GITHUB_TOKEN?.trim()
-  if (!token)
-    throw new Error('Missing GITHUB_TOKEN. Set it in the shell or the selected env file.')
-  return token
+  return process.env.GITHUB_TOKEN?.trim() || env.GITHUB_TOKEN?.trim() || null
 }
 
 async function sleep(ms: number) {
@@ -97,12 +96,12 @@ async function sleep(ms: number) {
     await new Promise(resolve => setTimeout(resolve, ms))
 }
 
-async function lookupGitHubUser(username: string, token: string): Promise<GitHubUser | null> {
+async function lookupGitHubUser(username: string, token: string | null): Promise<GitHubUser | null> {
   const response = await fetch(`${GITHUB_API_URL}/users/${encodeURIComponent(username)}`, {
     headers: {
       'accept': 'application/vnd.github+json',
-      'authorization': `Bearer ${token}`,
       'x-github-api-version': '2022-11-28',
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
     },
     signal: AbortSignal.timeout(15_000),
   })
