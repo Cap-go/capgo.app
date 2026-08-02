@@ -107,6 +107,7 @@
     "admin:backfill-plugin-version-ladder": "bun scripts/backfill_plugin_version_ladder.ts",
     "admin:backfill-missing-app-icons": "bun scripts/backfill_missing_app_icons.ts",
     "admin:backfill-missing-store-urls": "bun scripts/backfill_missing_store_urls.ts",
+    "admin:backfill-github-user-ids": "bun scripts/backfill_github_user_ids.ts",
     "stripe:backfill-retention-metrics": "bun scripts/backfill_retention_metrics.ts",
     "stripe:backfill-org-conversion-rate": "bun scripts/backfill_org_conversion_rate_trend.ts",
     "stripe:backfill-upgrade-rate-12m": "bun scripts/backfill_upgrade_rate_12m.ts",
