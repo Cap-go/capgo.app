@@ -1,12 +1,30 @@
 -- Required pre-deploy step: build the GitHub identity index without blocking
 -- writes. Run this file with psql, which executes each statement in autocommit
--- mode. In SQL Editor, run the CREATE INDEX statement alone, then run the
--- validation block separately. CREATE INDEX CONCURRENTLY cannot run inside a
--- transaction.
+-- mode and supports the conditional recovery command below. In SQL Editor,
+-- check for and drop an invalid same-named index first, then run the CREATE
+-- INDEX statement and validation block separately. CREATE INDEX CONCURRENTLY
+-- cannot run inside a transaction.
 --
 -- Example (psql):
 --   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
 --     -f scripts/ops/users_github_id_unique_index.sql
+
+-- A failed concurrent build leaves an invalid same-named index. Generate a
+-- concurrent drop only for that recoverable state; valid indexes remain intact.
+SELECT format(
+  'DROP INDEX CONCURRENTLY %I.%I',
+  index_namespace.nspname,
+  idx.relname
+)
+FROM pg_catalog.pg_class AS idx
+JOIN pg_catalog.pg_namespace AS index_namespace
+  ON index_namespace.oid = idx.relnamespace
+JOIN pg_catalog.pg_index AS index_meta
+  ON index_meta.indexrelid = idx.oid
+WHERE index_namespace.nspname = 'public'
+  AND idx.relname = 'users_github_id_key'
+  AND NOT index_meta.indisvalid
+\gexec
 
 CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS users_github_id_key
   ON public.users (github_id);
