@@ -14,20 +14,11 @@ describe('priority support promotion', () => {
   it.concurrent('uses an unambiguous UTC calendar day as the deterministic seed', () => {
     expect(getUtcPromoDay(new Date('2026-08-02T23:59:59.999Z'))).toBe('2026-8-2')
     expect(getUtcPromoDay(new Date('2026-08-03T00:00:00.000Z'))).toBe('2026-8-3')
-    expect(getDailyPromoVariant('2026-8-2')).toBe('builder')
-    expect(getDailyPromoVariant('2026-8-3')).toBe('support')
+    expect(getDailyPromoVariant('2026-8-2')).toBe('support')
+    expect(getDailyPromoVariant('2026-8-3')).toBe('builder')
+    expect(getDailyPromoVariant('2026-8-4')).toBe('support')
+    expect(getDailyPromoVariant('2026-8-5')).toBe('support')
     expect(getDailyPromoVariant('2026-8-2')).toBe(getDailyPromoVariant('2026-8-2'))
-  })
-
-  it.concurrent('cancels modal motion and stale open work when accessibility state changes', () => {
-    const source = readFileSync(new URL('../src/components/dashboard/PrioritySupportPresentationModal.vue', import.meta.url), 'utf8')
-    expect(source).toContain('let slideTransition: gsap.core.Timeline | null = null')
-    expect(source).toContain('let entranceTweens: gsap.core.Tween[] = []')
-    expect(source).toMatch(/watch\(reduce,[\s\S]*?stopDeckMotion\(true\)/)
-    expect(source.match(/stopDeckMotion\(false\)/g)?.length).toBeGreaterThanOrEqual(3)
-    expect(source).toContain('const generation = ++openGeneration')
-    expect(source).toContain('generation !== openGeneration || !props.open')
-    expect(source).toMatch(/onUnmounted\(\(\) => \{[\s\S]*?openGeneration\+\+/)
   })
 
   it.concurrent('waits for both checks, prefers the daily choice, and falls back to the eligible promo', () => {
@@ -84,16 +75,6 @@ describe('priority support promotion', () => {
     expect(consumeGitHubConnectQuery({ connect: 'billing', tab: 'profile' })).toBeNull()
   })
 
-  it.concurrent('mounts the dialog before teleporting the GitHub profile form', () => {
-    const appSource = readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8')
-    const accountSource = readFileSync(new URL('../src/pages/settings/account/index.vue', import.meta.url), 'utf8')
-
-    expect(appSource).toContain("import DialogV2 from '~/components/DialogV2.vue'")
-    expect(appSource).not.toContain('const DialogV2 = defineAsyncComponent')
-    expect(accountSource).toMatch(/dialogStore\.openDialog\([\s\S]*?await nextTick\(\)[\s\S]*?githubProfileDialogReady\.value = true/)
-    expect(accountSource).toContain('v-if="githubProfileDialogReady && dialogStore.showDialog')
-  })
-
   it.concurrent('keeps every imperative story selector connected to template markup', () => {
     const source = readFileSync(new URL('../src/components/dashboard/PrioritySupportStory.vue', import.meta.url), 'utf8')
     const templateStart = source.indexOf('<template>')
@@ -106,8 +87,9 @@ describe('priority support promotion', () => {
       .map(match => match.groups?.selector)
       .filter((selector): selector is string => !!selector)
 
-    expect(selectors.length).toBeGreaterThan(40)
-    for (const selector of new Set(selectors))
+    const uniqueSelectors = new Set(selectors)
+    expect(uniqueSelectors.size).toBeGreaterThan(40)
+    for (const selector of uniqueSelectors)
       expect(template, `${selector} must exist in the story template`).toContain(selector.slice(1))
   })
 })

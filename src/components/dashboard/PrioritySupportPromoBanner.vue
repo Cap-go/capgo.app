@@ -44,7 +44,14 @@ function openModal() {
 
 function linkGithub() {
   open.value = false
-  router.push({ path: '/settings/account', query: { connect: 'github' } })
+  router.push({
+    path: '/settings/account',
+    query: {
+      connect: 'github',
+      from: 'priority-support',
+      tab: 'profile',
+    },
+  })
 }
 
 watch(isEligible, (eligible) => {

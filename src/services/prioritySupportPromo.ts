@@ -23,6 +23,11 @@ export function getDailyPromoVariant(utcDay: string): PromoVariant {
   let hash = 2166136261
   for (const character of utcDay)
     hash = Math.imul(hash ^ character.charCodeAt(0), 16777619)
+  hash ^= hash >>> 16
+  hash = Math.imul(hash, 0x85EBCA6B)
+  hash ^= hash >>> 13
+  hash = Math.imul(hash, 0xC2B2AE35)
+  hash ^= hash >>> 16
   return (hash >>> 0) % 2 === 0 ? 'support' : 'builder'
 }
 

@@ -258,7 +258,7 @@ watchEffect(async () => {
           <ReleaseBanner v-if="!appNotFound" :app-id="id" />
           <CompatibilityBanner v-if="!appNotFound" :app-id="id" />
 
-          <!-- Deterministic daily rotation keeps promos fresh; eligibility falls back to the available variant. -->
+          <!-- Deterministic daily selection keeps promos fresh; eligibility falls back to the available variant. -->
           <template v-if="!appNotFound">
             <PrioritySupportPromoBanner
               :app-id="id"
