@@ -466,8 +466,7 @@ defineExpose({
    -->
   <div
     v-if="showBanner"
-    class="mb-4 flex flex-col gap-4 rounded-lg border border-blue-200/80 bg-blue-100/40 px-5 py-3 shadow-sm animate-fade-in dark:border-blue-700/70 dark:bg-[#121b3a] sm:flex-row sm:items-center sm:justify-between"
-    style="--animate-fade-in-offset: -10px"
+    class="mb-4 flex flex-col gap-4 rounded-lg border border-blue-200/80 bg-blue-100/40 px-5 py-3 shadow-sm animate-fade-in animate-fade-in-from-10 dark:border-blue-700/70 dark:bg-[#121b3a] sm:flex-row sm:items-center sm:justify-between"
   >
     <!-- Left side: Info icon and message -->
     <div class="flex items-center gap-3">

@@ -867,6 +867,11 @@ onBeforeUnmount(stopStory)
 </template>
 
 <style scoped>
+/*
+ * This timed desktop/GitHub scene intentionally keeps named, scoped state selectors.
+ * GSAP addresses these states throughout one coordinated timeline; utility classes
+ * would obscure that contract and make visual-state cleanup substantially less safe.
+ */
 .pss-story {
   position: relative;
   z-index: 1;

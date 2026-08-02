@@ -371,6 +371,10 @@ html {
   animation: fade-in 0.3s ease-out;
 }
 
+.animate-fade-in-from-10 {
+  --animate-fade-in-offset: -10px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-fade-in {
     animation: none;
