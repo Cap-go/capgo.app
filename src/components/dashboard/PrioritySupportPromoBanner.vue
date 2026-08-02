@@ -46,11 +46,7 @@ function linkGithub() {
   open.value = false
   router.push({
     path: '/settings/account',
-    query: {
-      connect: 'github',
-      from: 'priority-support',
-      tab: 'profile',
-    },
+    query: { connect: 'github' },
   })
 }
 

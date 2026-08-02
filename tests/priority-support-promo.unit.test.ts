@@ -68,9 +68,10 @@ describe('priority support promotion', () => {
   })
 
   it.concurrent('consumes only the GitHub handoff query and preserves unrelated state', () => {
-    expect(consumeGitHubConnectQuery({ connect: 'github', from: 'priority-support', tab: 'profile' })).toEqual({
-      from: 'priority-support',
-      tab: 'profile',
+    expect(consumeGitHubConnectQuery({ connect: 'github' })).toEqual({})
+    expect(consumeGitHubConnectQuery({ connect: 'github', keep: 'yes', list: ['a', 'b'] })).toEqual({
+      keep: 'yes',
+      list: ['a', 'b'],
     })
     expect(consumeGitHubConnectQuery({ connect: 'billing', tab: 'profile' })).toBeNull()
   })
