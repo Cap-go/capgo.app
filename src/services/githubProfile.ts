@@ -15,13 +15,6 @@ export function normalizeGitHubUsername(username: string) {
   return username.trim()
 }
 
-export function isGitHubAccountAlreadyLinkedError(error: unknown): boolean {
-  return typeof error === 'object'
-    && error !== null
-    && 'code' in error
-    && error.code === '23505'
-}
-
 export async function getGitHubProfile(username: string): Promise<GitHubProfile> {
   const normalizedUsername = normalizeGitHubUsername(username)
   if (!/^(?:[a-z\d]|[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,37}[a-z\d])$/i.test(normalizedUsername))

@@ -16,7 +16,7 @@ import iconFlag from '~icons/heroicons/flag?raw'
 import iconName from '~icons/heroicons/user?raw'
 import { getRecentEmailOtpVerification } from '~/services/emailOtp'
 import { getFormatLocaleOptions, resolveFormatLocale } from '~/services/formatLocale'
-import { getGitHubProfile, GitHubProfileError, isGitHubAccountAlreadyLinkedError } from '~/services/githubProfile'
+import { getGitHubProfile, GitHubProfileError } from '~/services/githubProfile'
 import { pickPhoto, takePhoto } from '~/services/photos'
 import { getCurrentPlanNameOrg, isPayingOrg, useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -131,9 +131,7 @@ async function confirmGitHubProfile() {
 
   if (error || !user) {
     githubProfile.value = null
-    githubProfileError.value = isGitHubAccountAlreadyLinkedError(error)
-      ? t('github-username-error-already_linked')
-      : t('account-error')
+    githubProfileError.value = t('account-error')
     return
   }
 
