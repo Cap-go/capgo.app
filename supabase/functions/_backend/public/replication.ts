@@ -53,7 +53,7 @@ export interface SubscriptionHealthResult {
     has_recent_receipt: boolean
     apply_lag_seconds: number | null
     last_msg_receipt_time: string | null
-    status: SlotStatus
+    status: SlotStatus | 'disabled'
     reasons: string[]
   }>
   reasons: string[]
@@ -103,7 +103,7 @@ export function evaluateAppVersionsCanary(
   const diffPercent = baseline === 0 ? 0 : diff / baseline
   const reasons: string[] = []
 
-  if (primaryCount > 0 && replicaCount === 0)
+  if (replicaCount === 0)
     reasons.push('replica_empty')
   else if (diffPercent > thresholdPercent)
     reasons.push('count_mismatch')
@@ -132,22 +132,30 @@ export function evaluateSubscriptionHealth(
   }
 
   const subscriptions = rows.map((row) => {
-    const reasons: string[] = []
     if (!row.subenabled) {
-      reasons.push('subscription_disabled')
+      return {
+        subname: row.subname,
+        enabled: false,
+        has_apply_worker: row.has_apply_worker,
+        has_recent_receipt: row.has_recent_receipt,
+        apply_lag_seconds: row.apply_lag_seconds,
+        last_msg_receipt_time: row.last_msg_receipt_time,
+        status: 'disabled' as const,
+        reasons: ['subscription_disabled'],
+      }
     }
-    else {
-      if (!row.has_apply_worker)
-        reasons.push('no_apply_worker')
-      if (!row.has_recent_receipt)
-        reasons.push('no_recent_receipt')
-      if (row.apply_lag_seconds !== null && row.apply_lag_seconds > thresholdSeconds)
-        reasons.push('apply_lag_threshold_exceeded')
-    }
+
+    const reasons: string[] = []
+    if (!row.has_apply_worker)
+      reasons.push('no_apply_worker')
+    if (!row.has_recent_receipt)
+      reasons.push('no_recent_receipt')
+    if (row.apply_lag_seconds !== null && row.apply_lag_seconds > thresholdSeconds)
+      reasons.push('apply_lag_threshold_exceeded')
 
     return {
       subname: row.subname,
-      enabled: row.subenabled,
+      enabled: true,
       has_apply_worker: row.has_apply_worker,
       has_recent_receipt: row.has_recent_receipt,
       apply_lag_seconds: row.apply_lag_seconds,
@@ -569,10 +577,12 @@ app.get('/', async (c) => {
       subscription.status === 'ko',
       dataCanary.status === 'ko',
     ]
+    // Intentionally includes subscription + canary: /replication is the admin health probe.
     const overallStatus: SlotStatus = failingChecks.some(Boolean) ? 'ko' : 'ok'
 
     const response = {
       status: overallStatus,
+      slot_status: slotStatus,
       estimation_source: mode,
       threshold_seconds: thresholdSeconds,
       threshold_minutes: Number((thresholdSeconds / 60).toFixed(2)),
@@ -609,6 +619,7 @@ app.get('/', async (c) => {
       max_lag_minutes: null,
       max_lag_slot: null,
       slots: [],
+      slot_status: 'ko',
       subscription: skippedSubscription('replication_lag_error'),
       data_canary: skippedDataCanary('replication_lag_error'),
     }, 500)

@@ -25,6 +25,13 @@ describe('replication data canary evaluation', () => {
     })
   })
 
+  it('rejects empty replica even when primary is empty', () => {
+    expect(evaluateAppVersionsCanary(0, 0)).toMatchObject({
+      status: 'ko',
+      reasons: ['replica_empty'],
+    })
+  })
+
   it('rejects count drift above threshold', () => {
     expect(evaluateAppVersionsCanary(1000, 900)).toMatchObject({
       status: 'ko',
@@ -53,6 +60,7 @@ describe('replication data canary evaluation', () => {
     ])
 
     expect(result.status).toBe('ok')
+    expect(result.subscriptions.find(s => s.subname === 'capgo_google_eu_2')?.status).toBe('disabled')
     expect(result.subscriptions.find(s => s.subname === 'capgo_google_eu_2_sub')?.status).toBe('ok')
   })
 

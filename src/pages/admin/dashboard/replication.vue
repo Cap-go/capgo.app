@@ -43,7 +43,7 @@ interface SubscriptionHealth {
     has_recent_receipt: boolean
     apply_lag_seconds: number | null
     last_msg_receipt_time: string | null
-    status: 'ok' | 'ko'
+    status: 'ok' | 'ko' | 'disabled'
     reasons: string[]
   }>
   reasons: string[]
@@ -364,8 +364,11 @@ displayStore.defaultBack = '/dashboard'
                         {{ sub.apply_lag_seconds == null ? '-' : formatNumberValue(sub.apply_lag_seconds, { maximumFractionDigits: 1 }) }}
                       </td>
                       <td class="whitespace-nowrap px-4 py-3">
-                        <span class="d-badge" :class="sub.status === 'ok' ? 'd-badge-success' : 'd-badge-error'">
-                          {{ sub.status.toUpperCase() }}
+                        <span
+                          class="d-badge"
+                          :class="!sub.enabled ? 'd-badge-neutral' : sub.status === 'ok' ? 'd-badge-success' : 'd-badge-error'"
+                        >
+                          {{ sub.enabled ? sub.status.toUpperCase() : 'DISABLED' }}
                         </span>
                       </td>
                     </tr>
@@ -403,7 +406,7 @@ displayStore.defaultBack = '/dashboard'
                 </div>
                 <div class="flex justify-between gap-4">
                   <span>Cache</span>
-                  <span class="font-semibold">{{ data.data_canary?.status === 'skipped' ? 'skipped' : (data.data_canary?.cached ? 'cached' : 'fresh') }}</span>
+                  <span class="font-semibold">{{ !data.data_canary ? '-' : data.data_canary.status === 'skipped' ? 'skipped' : (data.data_canary.cached ? 'cached' : 'fresh') }}</span>
                 </div>
                 <div class="flex justify-between gap-4">
                   <span>Notes</span>
