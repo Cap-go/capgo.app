@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { defineAsyncComponent, watch } from 'vue'
+import DialogV2 from '~/components/DialogV2.vue'
 
 const Toast = defineAsyncComponent(() => import('~/components/Toast.vue'))
-const DialogV2 = defineAsyncComponent(() => import('~/components/DialogV2.vue'))
 
 const route = useRoute()
 const display = useDisplayStore()

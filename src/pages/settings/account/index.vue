@@ -5,7 +5,7 @@ import { Capacitor } from '@capacitor/core'
 import { setErrors } from '@formkit/core'
 import { FormKit, FormKitMessages, reset } from '@formkit/vue'
 import dayjs from 'dayjs'
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
@@ -50,11 +50,13 @@ const githubProfile = ref<GitHubProfile | null>(null)
 const githubProfileLoading = ref(false)
 const githubProfileSaving = ref(false)
 const githubProfileError = ref('')
+const githubProfileDialogReady = ref(false)
 let githubProfileLookupGeneration = 0
 displayStore.NavTitle = t('account')
 
 function resetGitHubProfileDialog() {
   githubProfileLookupGeneration += 1
+  githubProfileDialogReady.value = false
   githubProfile.value = null
   githubProfileError.value = ''
   githubProfileLoading.value = false
@@ -65,8 +67,9 @@ function closeGitHubProfileDialog() {
   dialogStore.closeDialog({ text: t('button-cancel'), role: 'cancel' })
 }
 
-function openGitHubProfileDialog() {
+async function openGitHubProfileDialog() {
   resetGitHubProfileDialog()
+  const dialogGeneration = githubProfileLookupGeneration
   githubUsernameInput.value = githubUsername.value
   dialogStore.openDialog({
     id: 'github-profile',
@@ -76,6 +79,10 @@ function openGitHubProfileDialog() {
     buttons: [],
     preventAccidentalClose: true,
   })
+  await nextTick()
+  if (dialogGeneration !== githubProfileLookupGeneration || !dialogStore.showDialog || dialogStore.dialogOptions?.id !== 'github-profile')
+    return
+  githubProfileDialogReady.value = true
 }
 
 async function findGitHubProfile() {
@@ -622,7 +629,7 @@ onMounted(async () => {
   const query = consumeGitHubConnectQuery(route.query)
   if (query) {
     await router.replace({ query })
-    openGitHubProfileDialog()
+    await openGitHubProfileDialog()
   }
 })
 </script>
@@ -894,7 +901,7 @@ onMounted(async () => {
       </div>
     </Teleport>
 
-    <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions?.id === 'github-profile'" to="#dialog-v2-content" defer>
+    <Teleport v-if="githubProfileDialogReady && dialogStore.showDialog && dialogStore.dialogOptions?.id === 'github-profile'" to="#dialog-v2-content" defer>
       <div>
         <template v-if="!githubProfile">
           <label for="github-username-input" class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">

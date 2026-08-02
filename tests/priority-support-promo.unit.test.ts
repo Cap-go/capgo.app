@@ -84,6 +84,16 @@ describe('priority support promotion', () => {
     expect(consumeGitHubConnectQuery({ connect: 'billing', tab: 'profile' })).toBeNull()
   })
 
+  it.concurrent('mounts the dialog before teleporting the GitHub profile form', () => {
+    const appSource = readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8')
+    const accountSource = readFileSync(new URL('../src/pages/settings/account/index.vue', import.meta.url), 'utf8')
+
+    expect(appSource).toContain("import DialogV2 from '~/components/DialogV2.vue'")
+    expect(appSource).not.toContain('const DialogV2 = defineAsyncComponent')
+    expect(accountSource).toMatch(/dialogStore\.openDialog\([\s\S]*?await nextTick\(\)[\s\S]*?githubProfileDialogReady\.value = true/)
+    expect(accountSource).toContain('v-if="githubProfileDialogReady && dialogStore.showDialog')
+  })
+
   it.concurrent('keeps every imperative story selector connected to template markup', () => {
     const source = readFileSync(new URL('../src/components/dashboard/PrioritySupportStory.vue', import.meta.url), 'utf8')
     const templateStart = source.indexOf('<template>')
