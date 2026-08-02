@@ -1,6 +1,6 @@
 import type { GitHubProfileError } from '../src/services/githubProfile'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { getGitHubProfile, normalizeGitHubUsername } from '../src/services/githubProfile'
+import { getGitHubProfile, isGitHubAccountAlreadyLinkedError, normalizeGitHubUsername } from '../src/services/githubProfile'
 
 const originalFetch = globalThis.fetch
 
@@ -9,6 +9,19 @@ afterEach(() => {
 })
 
 describe('github profile lookup', () => {
+  it('recognizes a PostgREST unique violation as an already-linked GitHub account', () => {
+    expect(isGitHubAccountAlreadyLinkedError({ code: '23505' })).toBe(true)
+  })
+
+  it('does not treat malformed or unrelated errors as an already-linked GitHub account', () => {
+    expect(isGitHubAccountAlreadyLinkedError(null)).toBe(false)
+    expect(isGitHubAccountAlreadyLinkedError(undefined)).toBe(false)
+    expect(isGitHubAccountAlreadyLinkedError('23505')).toBe(false)
+    expect(isGitHubAccountAlreadyLinkedError({})).toBe(false)
+    expect(isGitHubAccountAlreadyLinkedError({ code: 23505 })).toBe(false)
+    expect(isGitHubAccountAlreadyLinkedError({ code: '42501' })).toBe(false)
+  })
+
   it('normalizes the entered username and requests the public GitHub API', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       id: 42,
