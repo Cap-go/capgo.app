@@ -24,10 +24,10 @@ SELECT format(
   idx.relname
 )
 FROM pg_catalog.pg_class AS idx
-JOIN pg_catalog.pg_namespace AS index_namespace
-  ON index_namespace.oid = idx.relnamespace
-JOIN pg_catalog.pg_index AS index_meta
-  ON index_meta.indexrelid = idx.oid
+INNER JOIN pg_catalog.pg_namespace AS index_namespace
+  ON idx.relnamespace = index_namespace.oid
+INNER JOIN pg_catalog.pg_index AS index_meta
+  ON idx.oid = index_meta.indexrelid
 WHERE index_namespace.nspname = 'public'
   AND idx.relname = 'users_github_id_key'
   AND NOT index_meta.indisvalid
@@ -41,20 +41,20 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1
     FROM pg_catalog.pg_class AS idx
-    JOIN pg_catalog.pg_namespace AS idx_ns
-      ON idx_ns.oid = idx.relnamespace
-    JOIN pg_catalog.pg_index AS index_meta
-      ON index_meta.indexrelid = idx.oid
-    JOIN pg_catalog.pg_class AS indexed_table
-      ON indexed_table.oid = index_meta.indrelid
-    JOIN pg_catalog.pg_namespace AS table_ns
-      ON table_ns.oid = indexed_table.relnamespace
-    JOIN pg_catalog.pg_attribute AS indexed_column
-      ON indexed_column.attrelid = indexed_table.oid
+    INNER JOIN pg_catalog.pg_namespace AS idx_ns
+      ON idx.relnamespace = idx_ns.oid
+    INNER JOIN pg_catalog.pg_index AS index_meta
+      ON idx.oid = index_meta.indexrelid
+    INNER JOIN pg_catalog.pg_class AS indexed_table
+      ON index_meta.indrelid = indexed_table.oid
+    INNER JOIN pg_catalog.pg_namespace AS table_ns
+      ON indexed_table.relnamespace = table_ns.oid
+    INNER JOIN pg_catalog.pg_attribute AS indexed_column
+      ON indexed_table.oid = indexed_column.attrelid
       AND indexed_column.attname = 'github_id'
       AND NOT indexed_column.attisdropped
-    JOIN pg_catalog.pg_am AS access_method
-      ON access_method.oid = idx.relam
+    INNER JOIN pg_catalog.pg_am AS access_method
+      ON idx.relam = access_method.oid
     WHERE idx_ns.nspname = 'public'
       AND idx.relname = 'users_github_id_key'
       AND table_ns.nspname = 'public'

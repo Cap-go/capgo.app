@@ -77,16 +77,16 @@ SELECT ok(
   EXISTS (
     SELECT 1
     FROM pg_catalog.pg_constraint AS unique_constraint
-    JOIN pg_catalog.pg_index AS index_meta
-      ON index_meta.indexrelid = unique_constraint.conindid
-    JOIN pg_catalog.pg_attribute AS indexed_column
-      ON indexed_column.attrelid = unique_constraint.conrelid
+    INNER JOIN pg_catalog.pg_index AS index_meta
+      ON unique_constraint.conindid = index_meta.indexrelid
+    INNER JOIN pg_catalog.pg_attribute AS indexed_column
+      ON unique_constraint.conrelid = indexed_column.attrelid
       AND indexed_column.attname = 'github_id'
       AND NOT indexed_column.attisdropped
-    JOIN pg_catalog.pg_class AS idx
-      ON idx.oid = index_meta.indexrelid
-    JOIN pg_catalog.pg_am AS access_method
-      ON access_method.oid = idx.relam
+    INNER JOIN pg_catalog.pg_class AS idx
+      ON index_meta.indexrelid = idx.oid
+    INNER JOIN pg_catalog.pg_am AS access_method
+      ON idx.relam = access_method.oid
     WHERE unique_constraint.conrelid = 'public.users'::regclass
       AND unique_constraint.conname = 'users_github_id_key'
       AND index_meta.indisvalid
