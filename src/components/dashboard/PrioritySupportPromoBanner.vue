@@ -188,25 +188,4 @@ watch(
 .dark .priority-support-banner:hover .priority-support-cta {
   background: #f8fafc;
 }
-
-@keyframes fade-in {
-  from {
-    opacity: 0;
-    transform: translateY(-8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.animate-fade-in {
-  animation: fade-in 0.3s ease-out;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .animate-fade-in {
-    animation: none;
-  }
-}
 </style>

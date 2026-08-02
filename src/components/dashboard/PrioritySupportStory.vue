@@ -89,7 +89,13 @@ function startStory() {
     return
 
   storyContext = gsap.context(() => {
-    const find = <T extends Element>(selector: string) => root.querySelector<T>(selector)
+    const missingSelectors: string[] = []
+    const find = <T extends Element>(selector: string) => {
+      const element = root.querySelector<T>(selector)
+      if (!element)
+        missingSelectors.push(selector)
+      return element
+    }
     const userMachine = find<HTMLElement>('.pss-user-machine')
     const supportMachine = find<HTMLElement>('.pss-support-machine')
     const pointer = find<HTMLElement>('.pss-pointer')
@@ -154,8 +160,10 @@ function startStory() {
     const threadTrack = find<HTMLElement>('.pss-support-thread-track')
     const dockIcons = Array.from(root.querySelectorAll<HTMLElement>('.pss-dock-icon'))
 
-    if (!userMachine || !supportMachine || !pointer || !pointerRing || !userBrowser || !userBrowserIcon || !userAddress || !userIssuesCount || !titleInput || !titleCopy || !titleCaret || !bodyInput || !bodyCopy || !bodyCaret || !submitIssue || !composer || !createdIssue || !botComment || !priorityEvent || !createdEntitlement || !notification || !supportMail || !supportMailIcon || !supportCode || !supportCodeIcon || !supportBrowser || !supportBrowserIcon || !supportAddress || !supportIssuesCount || !thinking || !hacking || !openingPr || !matrix || !prView || !supportIssuesTab || !mergeButton || !mergeReady || !confirmMerge || !confirmButton || !mergedState || !prOpenPill || !prMergedPill || !prOpenMeta || !prMergedMeta || !mergeBox || !issuesList || !priorityIssueRow || !issueView || !supportReply || !replyStack || !replyComposer || !replyDraft || !replyCaret || !postedReply || !closeButton || !openPill || !closedPill || !closedEvent || !thanksComment || !threadViewport || !threadTrack)
+    if (!userMachine || !supportMachine || !pointer || !pointerRing || !userBrowser || !userBrowserIcon || !userAddress || !userIssuesCount || !titleInput || !titleCopy || !titleCaret || !bodyInput || !bodyCopy || !bodyCaret || !submitIssue || !composer || !createdIssue || !botComment || !priorityEvent || !createdEntitlement || !notification || !supportMail || !supportMailIcon || !supportCode || !supportCodeIcon || !supportBrowser || !supportBrowserIcon || !supportAddress || !supportIssuesCount || !thinking || !hacking || !openingPr || !matrix || !prView || !supportIssuesTab || !mergeButton || !mergeReady || !confirmMerge || !confirmButton || !mergedState || !prOpenPill || !prMergedPill || !prOpenMeta || !prMergedMeta || !mergeBox || !issuesList || !priorityIssueRow || !issueView || !supportReply || !replyStack || !replyComposer || !replyDraft || !replyCaret || !postedReply || !closeButton || !openPill || !closedPill || !closedEvent || !thanksComment || !threadViewport || !threadTrack) {
+      console.warn('[PrioritySupportStory] Required story elements are missing; animation skipped.', missingSelectors)
       return
+    }
 
     const pointFor = (target: HTMLElement) => {
       const rootRect = root.getBoundingClientRect()
@@ -1358,17 +1366,6 @@ onBeforeUnmount(stopStory)
 .pss-bot-card header {
   background: rgba(17, 158, 255, 0.1);
 }
-.pss-priority-label {
-  display: table;
-  margin: 0 8px 7px;
-  border-radius: 999px;
-  padding: 2px 6px;
-  background: #0b5cad;
-  color: #cce8ff;
-  font-size: 8px;
-  font-style: normal;
-  font-weight: 700;
-}
 .pss-issue-sidebar {
   display: flex;
   flex-direction: column;
@@ -1938,6 +1935,7 @@ onBeforeUnmount(stopStory)
 .pss-merge-box {
   position: relative;
   min-height: 130px;
+  overflow: hidden;
   border: 1px solid #238636;
   border-radius: 7px;
   padding: 9px;
@@ -1994,11 +1992,14 @@ onBeforeUnmount(stopStory)
   position: absolute;
   z-index: 4;
   inset: 38px 8px 8px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
   border: 1px solid #30363d;
   border-radius: 6px;
-  padding: 8px;
+  padding: 10px;
   background: #161b22;
-  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.38);
+  box-shadow: none;
 }
 .pss-confirm-merge b,
 .pss-confirm-merge span {
@@ -2017,20 +2018,22 @@ onBeforeUnmount(stopStory)
 .pss-merged-state {
   position: absolute;
   inset: 45px 10px auto;
-  display: grid;
-  gap: 5px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border: 0;
   border-radius: 6px;
-  padding: 10px;
-  background: rgba(130, 80, 223, 0.18);
-  text-align: center;
+  padding: 11px;
+  background: rgba(130, 80, 223, 0.14);
+  text-align: left;
 }
 .pss-merged-state b {
   color: #d2a8ff;
-  font-size: 11px;
+  font-size: 9px;
 }
 .pss-merged-state span {
   color: #8b949e;
-  font-size: 8px;
+  font-size: 7px;
 }
 .pss-support-issue {
   padding: 0 13px;
@@ -2047,20 +2050,16 @@ onBeforeUnmount(stopStory)
   left: 0;
   background: #8250df !important;
 }
-.pss-resolution-timeline {
-  display: grid;
-  gap: 9px;
-  max-width: 92%;
-  padding-top: 10px;
-}
 .pss-reply-stack {
   position: relative;
-  min-height: 101px;
+  display: grid;
+  min-height: 94px;
   flex: 1;
 }
 .pss-reply-stack > .pss-comment-card {
-  position: absolute;
-  inset: 0;
+  position: relative;
+  inset: auto;
+  grid-area: 1 / 1;
 }
 .pss-reply-composer {
   border-color: #8b949e;
@@ -2199,10 +2198,6 @@ onBeforeUnmount(stopStory)
   color: #58a6ff;
   font-size: 8px;
 }
-.pss-merge-box {
-  min-height: 130px;
-  overflow: hidden;
-}
 .pss-merge-state {
   position: absolute;
   inset: 9px;
@@ -2240,31 +2235,11 @@ onBeforeUnmount(stopStory)
 .pss-merge-ready > p span {
   color: #3fb950;
 }
-.pss-confirm-merge {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  border: 1px solid #30363d;
-  border-radius: 6px;
-  padding: 10px;
-  background: #161b22;
-  box-shadow: none;
-}
 .pss-confirm-merge code {
   border-radius: 3px;
   padding: 1px 3px;
   background: #30363d;
   color: #e6edf3;
-}
-.pss-merged-state {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  border: 0;
-  border-radius: 6px;
-  padding: 11px;
-  background: rgba(130, 80, 223, 0.14);
-  text-align: left;
 }
 .pss-merged-state .pss-merged-icon {
   display: grid;
@@ -2281,15 +2256,6 @@ onBeforeUnmount(stopStory)
   display: grid;
   gap: 4px;
 }
-.pss-merged-state b {
-  color: #d2a8ff;
-  font-size: 9px;
-}
-.pss-merged-state span {
-  color: #8b949e;
-  font-size: 7px;
-}
-
 .pss-issues-toolbar {
   display: flex;
   height: 46px;
@@ -2499,15 +2465,6 @@ onBeforeUnmount(stopStory)
 .pss-merged-event strong {
   color: #58a6ff;
 }
-.pss-reply-stack {
-  display: grid;
-  min-height: 94px;
-}
-.pss-reply-stack > .pss-comment-card {
-  position: relative;
-  inset: auto;
-  grid-area: 1 / 1;
-}
 .pss-posted-reply {
   align-self: start;
 }
@@ -2624,9 +2581,6 @@ onBeforeUnmount(stopStory)
   }
   .pss-pr-summary {
     display: none;
-  }
-  .pss-resolution-timeline {
-    max-width: 100%;
   }
   .pss-issues-list-head,
   .pss-support-issue-row aside em {

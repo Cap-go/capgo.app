@@ -11,13 +11,13 @@ import {
 } from '../src/services/prioritySupportPromo'
 
 describe('priority support promotion', () => {
-  it('uses an unambiguous UTC calendar day as the deterministic seed', () => {
+  it.concurrent('uses an unambiguous UTC calendar day as the deterministic seed', () => {
     expect(getUtcPromoDay(new Date('2026-08-02T23:59:59.999Z'))).toBe('2026-8-2')
     expect(getUtcPromoDay(new Date('2026-08-03T00:00:00.000Z'))).toBe('2026-8-3')
     expect(getDailyPromoVariant('2026-8-2')).toBe(getDailyPromoVariant('2026-8-2'))
   })
 
-  it('waits for both checks, prefers the daily choice, and falls back to the eligible promo', () => {
+  it.concurrent('waits for both checks, prefers the daily choice, and falls back to the eligible promo', () => {
     expect(choosePromoVariant('support', {
       supportEligible: true,
       builderEligible: true,
@@ -44,7 +44,7 @@ describe('priority support promotion', () => {
     })).toBe('support')
   })
 
-  it('includes paying and active-trial organizations in the support experience', () => {
+  it.concurrent('includes paying and active-trial organizations in the support experience', () => {
     expect(isPrioritySupportEligible({ paying: true, trial_left: 0 })).toBe(true)
     expect(isPrioritySupportEligible({ paying: false, trial_left: 4 })).toBe(true)
     expect(isPrioritySupportEligible({ paying: false, trial_left: 0 })).toBe(false)
@@ -52,7 +52,7 @@ describe('priority support promotion', () => {
     expect(isPrioritySupportTrial({ paying: true, trial_left: 4 })).toBe(false)
   })
 
-  it('fails closed without blocking promo arbitration when organization loading rejects', async () => {
+  it.concurrent('fails closed without blocking promo arbitration when organization loading rejects', async () => {
     const failure = new Error('organization load failed')
     const onError = vi.fn()
     await expect(resolvePrioritySupportEligibility(
@@ -63,7 +63,7 @@ describe('priority support promotion', () => {
     expect(onError).toHaveBeenCalledWith(failure)
   })
 
-  it('consumes only the GitHub handoff query and preserves unrelated state', () => {
+  it.concurrent('consumes only the GitHub handoff query and preserves unrelated state', () => {
     expect(consumeGitHubConnectQuery({ connect: 'github', from: 'priority-support', tab: 'profile' })).toEqual({
       from: 'priority-support',
       tab: 'profile',
@@ -71,10 +71,14 @@ describe('priority support promotion', () => {
     expect(consumeGitHubConnectQuery({ connect: 'billing', tab: 'profile' })).toBeNull()
   })
 
-  it('keeps every imperative story selector connected to template markup', () => {
+  it.concurrent('keeps every imperative story selector connected to template markup', () => {
     const source = readFileSync(new URL('../src/components/dashboard/PrioritySupportStory.vue', import.meta.url), 'utf8')
-    const script = source.slice(0, source.indexOf('<template>'))
-    const template = source.slice(source.indexOf('<template>'), source.indexOf('<style scoped>'))
+    const templateStart = source.indexOf('<template>')
+    const styleStart = source.indexOf('<style scoped>')
+    expect(templateStart).toBeGreaterThan(-1)
+    expect(styleStart).toBeGreaterThan(templateStart)
+    const script = source.slice(0, templateStart)
+    const template = source.slice(templateStart, styleStart)
     const selectors = Array.from(script.matchAll(/(?:find<[^>]+>|querySelectorAll<[^>]+>)\('(?<selector>\.pss-[^']+)'\)/g))
       .map(match => match.groups?.selector)
       .filter((selector): selector is string => !!selector)

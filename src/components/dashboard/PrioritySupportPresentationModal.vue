@@ -121,7 +121,7 @@ function enter(index: number) {
     startIssuePulse(slide)
 }
 
-function go(to: number, direction: number) {
+async function go(to: number, direction: number) {
   if (animating || to < 0 || to >= SLIDE_COUNT || to === cur.value)
     return
 
@@ -135,25 +135,19 @@ function go(to: number, direction: number) {
 
   if (reduce) {
     fromSlide.classList.remove('show')
-    fromSlide.setAttribute('aria-hidden', 'true')
-    fromSlide.inert = true
     gsap.set(fromSlide, { zIndex: 1, autoAlpha: 0 })
     toSlide.classList.add('show')
-    toSlide.setAttribute('aria-hidden', 'false')
-    toSlide.inert = false
     gsap.set(toSlide, { zIndex: 2, autoAlpha: 1, xPercent: 0 })
     cur.value = to
     track('priority_support_slide_viewed', { slide: to + 1 })
     enter(to)
+    await nextTick()
     focusSlideHeading(toSlide)
     return
   }
 
   animating = true
   toSlide.classList.add('show')
-  toSlide.setAttribute('aria-hidden', 'false')
-  toSlide.inert = false
-  fromSlide.inert = true
   gsap.set(toSlide, { zIndex: 2, autoAlpha: 1, xPercent: direction > 0 ? 100 : -100 })
   gsap.set(fromSlide, { zIndex: 2, autoAlpha: 1, xPercent: 0 })
   cur.value = to
@@ -161,7 +155,6 @@ function go(to: number, direction: number) {
   const timeline = gsap.timeline({
     onComplete() {
       fromSlide.classList.remove('show')
-      fromSlide.setAttribute('aria-hidden', 'true')
       gsap.set(fromSlide, { zIndex: 1, autoAlpha: 0, xPercent: 0 })
       gsap.set(toSlide, { zIndex: 2 })
       animating = false
@@ -170,6 +163,7 @@ function go(to: number, direction: number) {
   timeline.to(fromSlide, { xPercent: direction > 0 ? -100 : 100, duration: 0.42, ease: 'power2.inOut' }, 0)
   timeline.to(toSlide, { xPercent: 0, duration: 0.42, ease: 'power2.inOut' }, 0)
   enter(to)
+  await nextTick()
   focusSlideHeading(toSlide)
 }
 
@@ -226,8 +220,6 @@ function initDeck() {
   const slides = getSlides()
   slides.forEach((slide, index) => {
     slide.classList.toggle('show', index === 0)
-    slide.setAttribute('aria-hidden', index === 0 ? 'false' : 'true')
-    slide.inert = index !== 0
     gsap.set(slide, { autoAlpha: index === 0 ? 1 : 0, xPercent: 0, zIndex: index === 0 ? 2 : 1 })
   })
   cur.value = 0

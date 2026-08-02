@@ -467,6 +467,7 @@ defineExpose({
   <div
     v-if="showBanner"
     class="mb-4 flex flex-col gap-4 rounded-lg border border-blue-200/80 bg-blue-100/40 px-5 py-3 shadow-sm animate-fade-in dark:border-blue-700/70 dark:bg-[#121b3a] sm:flex-row sm:items-center sm:justify-between"
+    style="--animate-fade-in-offset: -10px"
   >
     <!-- Left side: Info icon and message -->
     <div class="flex items-center gap-3">
@@ -527,20 +528,3 @@ defineExpose({
     </div>
   </Teleport>
 </template>
-
-<style scoped>
-@keyframes fade-in {
-  from {
-    opacity: 0;
-    transform: translateY(-10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.animate-fade-in {
-  animation: fade-in 0.3s ease-out;
-}
-</style>
