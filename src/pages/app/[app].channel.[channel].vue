@@ -234,13 +234,8 @@ async function getChannel(force = false) {
 async function saveChannelChanges(update: ChannelUpdate) {
   const changesStableVersion = Object.prototype.hasOwnProperty.call(update, 'version')
   const changesRolloutVersion = Object.prototype.hasOwnProperty.call(update, 'rollout_version')
-  // Disable unlinks the rollout target; keep that on channel settings permission like the enable/disable toggle.
-  const isDisableRolloutUnlink = update.rollout_enabled === false
-    && Object.prototype.hasOwnProperty.call(update, 'rollout_version')
-    && update.rollout_version === null
-    && !Object.prototype.hasOwnProperty.call(update, 'version')
-    && !Object.prototype.hasOwnProperty.call(update, 'rollout_percentage_bps')
-  const canUpdate = (changesStableVersion || (changesRolloutVersion && !isDisableRolloutUnlink))
+  // Unlinking rollout_version (including disable) requires promote_bundle — matches refresh_channel_rollout_id.
+  const canUpdate = changesStableVersion || changesRolloutVersion
     ? canPromoteBundle.value
     : canUpdateChannelSettings.value
 
@@ -1068,7 +1063,7 @@ async function copyCurlCommand() {
                       <button class="min-h-11 d-btn d-btn-ghost" :disabled="!canPromoteBundle" @click="openSelectRolloutVersion()">
                         {{ t('set-rollout-target') }}
                       </button>
-                      <button class="min-h-11 d-btn d-btn-outline" :disabled="rolloutActionsDisabled" @click="channel.rollout_enabled ? disableRollout() : enableRollout()">
+                      <button class="min-h-11 d-btn d-btn-outline" :disabled="channel.rollout_enabled ? rolloutTargetActionsDisabled : rolloutEnableDisabled" @click="channel.rollout_enabled ? disableRollout() : enableRollout()">
                         {{ channel.rollout_enabled ? t('disable') : t('enable') }}
                       </button>
                       <button class="min-h-11 d-btn d-btn-outline" :disabled="rolloutPauseDisabled" @click="toggleRolloutPause()">

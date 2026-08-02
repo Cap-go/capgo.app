@@ -190,7 +190,7 @@ export async function setChannelInternal(channel: string, appId: string, options
   }
 
   const hasStableBundlePromotion = bundle != null || latest === true || latestRemote === true
-  const hasRolloutTargetChange = rolloutBundle != null || rolloutRollback === true || rolloutPromote === true
+  const hasRolloutTargetChange = rolloutBundle != null || rolloutRollback === true || rolloutPromote === true || rolloutDisable === true
   const hasRolloutConfiguration = rolloutPercentage != null
     || rolloutPercentageBps != null
     || rolloutEnable != null

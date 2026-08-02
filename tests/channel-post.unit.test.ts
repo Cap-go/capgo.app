@@ -358,12 +358,58 @@ describe('public channel post', () => {
     }, apiKey())
 
     expect(checkPermission).toHaveBeenCalledWith(c, 'channel.update_settings', { appId: 'com.test.disable-rollout', channelId: 42 })
-    expect(checkPermission).not.toHaveBeenCalledWith(c, 'channel.promote_bundle', expect.anything())
+    expect(checkPermission).toHaveBeenCalledWith(c, 'channel.promote_bundle', { appId: 'com.test.disable-rollout', channelId: 42 })
     expect(updateOrCreateChannel).toHaveBeenCalledWith(c, expect.objectContaining({
       rollout_enabled: false,
       rollout_version: null,
       rollout_paused_at: null,
       rollout_pause_reason: null,
+    }), 42, true)
+  })
+
+  it('forces unlink on disable even when rolloutVersion is also sent', async () => {
+    supabaseAdmin.mockImplementation(() => buildAdminChain({
+      existingChannelId: 42,
+      existingChannelVersion: 123,
+      existingRolloutVersion: 456,
+      versionId: 789,
+    }))
+    const { post } = await import('../supabase/functions/_backend/public/channel/post.ts')
+    const c = context()
+
+    await post(c, {
+      app_id: 'com.test.disable-with-version',
+      channel: 'production',
+      rolloutEnabled: false,
+      rolloutVersion: '2.0.0',
+    }, apiKey())
+
+    expect(updateOrCreateChannel).toHaveBeenCalledWith(c, expect.objectContaining({
+      rollout_enabled: false,
+      rollout_version: null,
+    }), 42, true)
+  })
+
+  it('does not require promote when disabling with no linked rollout bundle', async () => {
+    supabaseAdmin.mockImplementation(() => buildAdminChain({
+      existingChannelId: 42,
+      existingChannelVersion: 123,
+      existingRolloutVersion: null,
+    }))
+    const { post } = await import('../supabase/functions/_backend/public/channel/post.ts')
+    const c = context()
+
+    await post(c, {
+      app_id: 'com.test.disable-no-rollout',
+      channel: 'production',
+      rolloutEnabled: false,
+    }, apiKey())
+
+    expect(checkPermission).toHaveBeenCalledWith(c, 'channel.update_settings', { appId: 'com.test.disable-no-rollout', channelId: 42 })
+    expect(checkPermission).not.toHaveBeenCalledWith(c, 'channel.promote_bundle', expect.anything())
+    expect(updateOrCreateChannel).toHaveBeenCalledWith(c, expect.objectContaining({
+      rollout_enabled: false,
+      rollout_version: null,
     }), 42, true)
   })
 
