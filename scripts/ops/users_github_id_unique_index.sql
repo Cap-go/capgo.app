@@ -9,6 +9,13 @@
 --   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
 --     -f scripts/ops/users_github_id_unique_index.sql
 
+-- Keep recovery, creation, and validation in one serialized session. An
+-- invalid index can also be a concurrent build that another deploy is still
+-- running, so a second invocation must wait instead of dropping it.
+SELECT pg_catalog.pg_advisory_lock(
+    pg_catalog.hashtextextended('public.users_github_id_key', 0)
+);
+
 -- A failed concurrent build leaves an invalid same-named index. Generate a
 -- concurrent drop only for that recoverable state; valid indexes remain intact.
 SELECT format(
@@ -71,3 +78,7 @@ BEGIN
   END IF;
 END
 $$;
+
+SELECT pg_catalog.pg_advisory_unlock(
+    pg_catalog.hashtextextended('public.users_github_id_key', 0)
+);

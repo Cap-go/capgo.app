@@ -24,9 +24,22 @@ $$;
 
 -- Production operators must prebuild this index concurrently with
 -- scripts/ops/users_github_id_unique_index.sql before applying the migration.
--- The fallback keeps fresh local/test databases self-contained; on production
--- CREATE INDEX IF NOT EXISTS is a no-op, and the constraint attachment below
--- only holds the table lock briefly.
+-- Refuse the blocking fallback on every populated database. Fresh local/test
+-- databases are empty here, so they remain self-contained without allowing a
+-- missed production pre-deploy step to silently lock writes.
+DO $$
+BEGIN
+  IF pg_catalog.to_regclass('public.users_github_id_key') IS NULL
+    AND EXISTS (SELECT 1 FROM public.users LIMIT 1)
+  THEN
+    RAISE EXCEPTION '%',
+      'Prebuild public.users_github_id_key concurrently with '
+      || 'scripts/ops/users_github_id_unique_index.sql before applying '
+      || 'this migration to a populated database.';
+  END IF;
+END
+$$;
+
 CREATE UNIQUE INDEX IF NOT EXISTS users_github_id_key
 ON public.users (github_id);
 
