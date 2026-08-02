@@ -580,6 +580,9 @@ async function handleQuerySessionHandoff(accessToken: string, refreshToken: stri
   // the referrer is missing or external (shared/leaked session links).
   if (isCapgoDomainReferrer(document.referrer)) {
     await acceptQuerySession()
+    // setSession failed: tokens remain in memory — show confirm so user can retry
+    if (querySessionAccessToken.value)
+      hasQuerySession.value = true
     return
   }
 
