@@ -15,7 +15,8 @@ import { pushEvent } from '~/services/posthog'
 import { getLocalConfig, useSupabase } from '~/services/supabase'
 import { useOrganizationStore } from '~/stores/organization'
 
-const props = defineProps<{ appId: string }>()
+const props = defineProps<{ appId: string, active: boolean }>()
+const emit = defineEmits<{ eligibility: [eligible: boolean], ready: [ready: boolean] }>()
 
 const { t } = useI18n()
 const config = getLocalConfig()
@@ -42,9 +43,13 @@ function openModal() {
 async function checkEligibility() {
   const token = ++reqToken
   eligible.value = false
+  emit('eligibility', false)
+  emit('ready', false)
   const appId = props.appId
-  if (!appId)
+  if (!appId) {
+    emit('ready', true)
     return
+  }
   try {
     // currentOrganization is unreliable on app-based URLs (the app may belong
     // to an org other than the selected one), so resolve the app's owning org
@@ -64,13 +69,15 @@ async function checkEligibility() {
     if (error || (count ?? 0) > 0)
       return
     eligible.value = true
-    if (!shownTracked) {
-      shownTracked = true
-      track('builder_promo_banner_shown')
-    }
   }
   catch (e) {
     console.error('[BuilderPromoBanner] eligibility check failed', e)
+  }
+  finally {
+    if (token === reqToken) {
+      emit('eligibility', eligible.value)
+      emit('ready', true)
+    }
   }
 }
 
@@ -83,12 +90,26 @@ watch(
   },
   { immediate: true },
 )
+
+watch(
+  () => [props.active, eligible.value] as const,
+  ([active, isEligible]) => {
+    if (active && isEligible && !shownTracked) {
+      shownTracked = true
+      track('builder_promo_banner_shown')
+    }
+    else if (!active) {
+      shownTracked = false
+    }
+  },
+  { immediate: true },
+)
 </script>
 
 <template>
   <div>
     <div
-      v-if="eligible"
+      v-if="active && eligible"
       class="animate-fade-in mb-4 flex cursor-pointer flex-col gap-4 rounded-lg border border-blue-200/80 bg-blue-100/40 px-5 py-3 shadow-sm transition-shadow hover:shadow-md dark:border-blue-700/70 dark:bg-[#121b3a] sm:flex-row sm:items-center sm:justify-between"
       role="button"
       tabindex="0"

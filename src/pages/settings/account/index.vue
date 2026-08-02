@@ -18,6 +18,7 @@ import { getRecentEmailOtpVerification } from '~/services/emailOtp'
 import { getFormatLocaleOptions, resolveFormatLocale } from '~/services/formatLocale'
 import { getGitHubProfile, GitHubProfileError } from '~/services/githubProfile'
 import { pickPhoto, takePhoto } from '~/services/photos'
+import { consumeGitHubConnectQuery } from '~/services/prioritySupportPromo'
 import { getCurrentPlanNameOrg, isPayingOrg, useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
@@ -614,7 +615,14 @@ async function submit(form: { first_name: string, last_name: string, email: stri
 onMounted(async () => {
   // Auto-redirect to Manage 2FA page if setup2fa query param is present
   if (route.query.setup2fa === 'true') {
-    router.replace('/settings/account/manage-2fa?setup2fa=true')
+    await router.replace('/settings/account/manage-2fa?setup2fa=true')
+    return
+  }
+
+  const query = consumeGitHubConnectQuery(route.query)
+  if (query) {
+    await router.replace({ query })
+    openGitHubProfileDialog()
   }
 })
 </script>

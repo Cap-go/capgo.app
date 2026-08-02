@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { Database } from '~/types/supabase.types'
-import { computed, ref, watchEffect } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watchEffect } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import IconCheck from '~icons/lucide/check'
 import AppNotFoundModal from '~/components/AppNotFoundModal.vue'
@@ -12,6 +12,7 @@ import DevicesStats from '~/components/dashboard/DevicesStats.vue'
 import ReleaseBanner from '~/components/dashboard/ReleaseBanner.vue'
 import StoreReleaseValidationModal from '~/components/dashboard/StoreReleaseValidationModal.vue'
 import UpdateStatsCard from '~/components/dashboard/UpdateStatsCard.vue'
+import { choosePromoVariant, getDailyPromoVariant, getUtcPromoDay } from '~/services/prioritySupportPromo'
 import { getCapgoVersion, useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
@@ -34,6 +35,54 @@ const displayStore = useDisplayStore()
 const app = ref<Database['public']['Tables']['apps']['Row']>()
 const usageComponent = ref()
 const appNotFound = ref(false)
+const utcPromoDay = ref(getUtcPromoDay())
+let promoDayTimer: ReturnType<typeof setTimeout> | undefined
+
+function refreshUtcPromoDay() {
+  utcPromoDay.value = getUtcPromoDay()
+}
+
+function schedulePromoDayRefresh() {
+  if (promoDayTimer)
+    clearTimeout(promoDayTimer)
+
+  const now = new Date()
+  const nextUtcMidnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1)
+  promoDayTimer = setTimeout(() => {
+    refreshUtcPromoDay()
+    schedulePromoDayRefresh()
+  }, nextUtcMidnight - now.getTime() + 50)
+}
+
+function refreshPromoDayWhenVisible() {
+  if (document.visibilityState !== 'visible')
+    return
+  refreshUtcPromoDay()
+  schedulePromoDayRefresh()
+}
+
+onMounted(() => {
+  schedulePromoDayRefresh()
+  document.addEventListener('visibilitychange', refreshPromoDayWhenVisible)
+})
+
+onBeforeUnmount(() => {
+  if (promoDayTimer)
+    clearTimeout(promoDayTimer)
+  document.removeEventListener('visibilitychange', refreshPromoDayWhenVisible)
+})
+
+const dailyPromoVariant = computed(() => getDailyPromoVariant(utcPromoDay.value))
+const supportPromoEligible = ref(false)
+const builderPromoEligible = ref(false)
+const supportPromoReady = ref(false)
+const builderPromoReady = ref(false)
+const activePromoVariant = computed(() => choosePromoVariant(dailyPromoVariant.value, {
+  supportEligible: supportPromoEligible.value,
+  builderEligible: builderPromoEligible.value,
+  supportReady: supportPromoReady.value,
+  builderReady: builderPromoReady.value,
+}))
 const onboardingTourStep = ref(0)
 const onboardingTour = [
   {
@@ -209,8 +258,22 @@ watchEffect(async () => {
           <ReleaseBanner v-if="!appNotFound" :app-id="id" />
           <CompatibilityBanner v-if="!appNotFound" :app-id="id" />
 
-          <!-- Capgo Builder promo banner (only for valid apps with no native build yet) -->
-          <BuilderPromoBanner v-if="!appNotFound" :app-id="id" />
+          <!-- Deterministic daily rotation keeps promos fresh; eligibility falls back to the available variant. -->
+          <template v-if="!appNotFound">
+            <PrioritySupportPromoBanner
+              :app-id="id"
+              :active="activePromoVariant === 'support'"
+              :assigned-variant="dailyPromoVariant"
+              @eligibility="supportPromoEligible = $event"
+              @ready="supportPromoReady = $event"
+            />
+            <BuilderPromoBanner
+              :app-id="id"
+              :active="activePromoVariant === 'builder'"
+              @eligibility="builderPromoEligible = $event"
+              @ready="builderPromoReady = $event"
+            />
+          </template>
 
           <Usage
             v-if="!lacksSecurityAccess"
