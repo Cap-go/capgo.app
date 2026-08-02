@@ -29,6 +29,9 @@ let animating = false
 let issuePulse: gsap.core.Timeline | null = null
 let issuePulseTarget: HTMLElement | null = null
 let issuePulseRing: HTMLElement | null = null
+let slideTransition: gsap.core.Timeline | null = null
+let entranceTweens: gsap.core.Tween[] = []
+let openGeneration = 0
 let previousBodyOverflow = ''
 let opener: HTMLElement | null = null
 
@@ -92,6 +95,36 @@ function stopSlideAnimations(index: number) {
     stopIssuePulse()
 }
 
+function stopEntranceTweens() {
+  const targets = new Set<Element>()
+  for (const tween of entranceTweens) {
+    for (const target of tween.targets()) {
+      if (target instanceof Element)
+        targets.add(target)
+    }
+    tween.kill()
+  }
+  entranceTweens = []
+  if (targets.size)
+    gsap.set([...targets], { clearProps: 'opacity,visibility,transform' })
+}
+
+function stopDeckMotion(settleCurrentSlide: boolean) {
+  stopEntranceTweens()
+  slideTransition?.kill()
+  slideTransition = null
+  animating = false
+
+  if (!settleCurrentSlide)
+    return
+
+  getSlides().forEach((slide, index) => {
+    const isCurrent = index === cur.value
+    slide.classList.toggle('show', isCurrent)
+    gsap.set(slide, { zIndex: isCurrent ? 2 : 1, autoAlpha: isCurrent ? 1 : 0, xPercent: 0 })
+  })
+}
+
 function focusSlideHeading(slide: HTMLElement) {
   if (!props.open || !slide.isConnected)
     return
@@ -104,6 +137,7 @@ function enter(index: number) {
   if (!slide)
     return
 
+  stopEntranceTweens()
   if (!reduce.value) {
     const copy = [
       slide.querySelector('h2'),
@@ -111,11 +145,13 @@ function enter(index: number) {
       ...Array.from(slide.querySelectorAll('.ps-item')),
       slide.querySelector('.ps-chip'),
     ].filter(Boolean) as Element[]
-    gsap.from(copy, { autoAlpha: 0, y: 14, duration: 0.6, stagger: 0.1, ease: 'power3.out', clearProps: 'all' })
-    gsap.from(slide.querySelector('.ps-left-artifact'), { autoAlpha: 0, y: 12, duration: 0.5, clearProps: 'all' })
+    entranceTweens.push(gsap.from(copy, { autoAlpha: 0, y: 14, duration: 0.6, stagger: 0.1, ease: 'power3.out', clearProps: 'all' }))
+    const artifact = slide.querySelector('.ps-left-artifact')
+    if (artifact)
+      entranceTweens.push(gsap.from(artifact, { autoAlpha: 0, y: 12, duration: 0.5, clearProps: 'all' }))
     const cta = slide.querySelector('.ps-cta-wrap')
     if (cta)
-      gsap.from(cta, { autoAlpha: 0, duration: 0.32, delay: 0.28, ease: 'power1.out', clearProps: 'all' })
+      entranceTweens.push(gsap.from(cta, { autoAlpha: 0, duration: 0.32, delay: 0.28, ease: 'power1.out', clearProps: 'all' }))
   }
 
   if (index === 1)
@@ -153,16 +189,17 @@ async function go(to: number, direction: number) {
   gsap.set(fromSlide, { zIndex: 2, autoAlpha: 1, xPercent: 0 })
   cur.value = to
   track('priority_support_slide_viewed', { slide: to + 1 })
-  const timeline = gsap.timeline({
+  slideTransition = gsap.timeline({
     onComplete() {
       fromSlide.classList.remove('show')
       gsap.set(fromSlide, { zIndex: 1, autoAlpha: 0, xPercent: 0 })
       gsap.set(toSlide, { zIndex: 2 })
+      slideTransition = null
       animating = false
     },
   })
-  timeline.to(fromSlide, { xPercent: direction > 0 ? -100 : 100, duration: 0.42, ease: 'power2.inOut' }, 0)
-  timeline.to(toSlide, { xPercent: 0, duration: 0.42, ease: 'power2.inOut' }, 0)
+  slideTransition.to(fromSlide, { xPercent: direction > 0 ? -100 : 100, duration: 0.42, ease: 'power2.inOut' }, 0)
+  slideTransition.to(toSlide, { xPercent: 0, duration: 0.42, ease: 'power2.inOut' }, 0)
   enter(to)
   await nextTick()
   focusSlideHeading(toSlide)
@@ -218,6 +255,7 @@ function onKeydown(event: KeyboardEvent) {
 }
 
 function initDeck() {
+  stopDeckMotion(false)
   const slides = getSlides()
   slides.forEach((slide, index) => {
     slide.classList.toggle('show', index === 0)
@@ -230,6 +268,7 @@ function initDeck() {
 }
 
 watch(() => props.open, async (open) => {
+  const generation = ++openGeneration
   if (open) {
     opener = document.activeElement instanceof HTMLElement ? document.activeElement : null
     previousBodyOverflow = document.body.style.overflow
@@ -237,11 +276,14 @@ watch(() => props.open, async (open) => {
     window.addEventListener('keydown', onKeydown)
     track('priority_support_promo_opened')
     await nextTick()
+    if (generation !== openGeneration || !props.open)
+      return
     initDeck()
     modalEl.value?.focus()
   }
   else {
     stopIssuePulse()
+    stopDeckMotion(false)
     document.body.style.overflow = previousBodyOverflow
     window.removeEventListener('keydown', onKeydown)
     opener?.focus()
@@ -253,6 +295,7 @@ watch(reduce, (isReduced) => {
     return
   if (isReduced) {
     stopIssuePulse()
+    stopDeckMotion(true)
     return
   }
   if (cur.value === 1) {
@@ -263,7 +306,9 @@ watch(reduce, (isReduced) => {
 })
 
 onUnmounted(() => {
+  openGeneration++
   stopIssuePulse()
+  stopDeckMotion(false)
   document.body.style.overflow = previousBodyOverflow
   window.removeEventListener('keydown', onKeydown)
 })

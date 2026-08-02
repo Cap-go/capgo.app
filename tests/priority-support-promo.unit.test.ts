@@ -14,7 +14,20 @@ describe('priority support promotion', () => {
   it.concurrent('uses an unambiguous UTC calendar day as the deterministic seed', () => {
     expect(getUtcPromoDay(new Date('2026-08-02T23:59:59.999Z'))).toBe('2026-8-2')
     expect(getUtcPromoDay(new Date('2026-08-03T00:00:00.000Z'))).toBe('2026-8-3')
+    expect(getDailyPromoVariant('2026-8-2')).toBe('builder')
+    expect(getDailyPromoVariant('2026-8-3')).toBe('support')
     expect(getDailyPromoVariant('2026-8-2')).toBe(getDailyPromoVariant('2026-8-2'))
+  })
+
+  it.concurrent('cancels modal motion and stale open work when accessibility state changes', () => {
+    const source = readFileSync(new URL('../src/components/dashboard/PrioritySupportPresentationModal.vue', import.meta.url), 'utf8')
+    expect(source).toContain('let slideTransition: gsap.core.Timeline | null = null')
+    expect(source).toContain('let entranceTweens: gsap.core.Tween[] = []')
+    expect(source).toMatch(/watch\(reduce,[\s\S]*?stopDeckMotion\(true\)/)
+    expect(source.match(/stopDeckMotion\(false\)/g)?.length).toBeGreaterThanOrEqual(3)
+    expect(source).toContain('const generation = ++openGeneration')
+    expect(source).toContain('generation !== openGeneration || !props.open')
+    expect(source).toMatch(/onUnmounted\(\(\) => \{[\s\S]*?openGeneration\+\+/)
   })
 
   it.concurrent('waits for both checks, prefers the daily choice, and falls back to the eligible promo', () => {
