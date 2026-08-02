@@ -1297,6 +1297,7 @@
   "github-username-confirm-description": "Is this the GitHub profile you want to use?",
   "github-username-dialog-description": "Enter your GitHub username and we will verify the profile before saving it.",
   "github-username-error-invalid_username": "Enter a valid GitHub username.",
+  "github-username-error-already_linked": "This GitHub account is already linked to another Capgo account.",
   "github-username-error-not_found": "We could not find that GitHub profile.",
   "github-username-error-rate_limited": "GitHub is temporarily rate limited. Please try again later.",
   "github-username-error-request_failed": "We could not load that GitHub profile. Please try again.",

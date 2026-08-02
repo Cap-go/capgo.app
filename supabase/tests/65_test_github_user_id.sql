@@ -24,7 +24,8 @@ VALUES
     'github_id_unique_second@test.local',
     NOW(),
     NOW()
-  );
+  )
+ON CONFLICT (id) DO NOTHING;
 
 SELECT ok(
   EXISTS (
