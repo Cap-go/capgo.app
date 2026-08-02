@@ -19,6 +19,7 @@ export function getUtcPromoDay(now = new Date()) {
 }
 
 export function getDailyPromoVariant(utcDay: string): PromoVariant {
+  // Repeats are intentional: forced alternation would make the date-seeded choice predictable.
   let hash = 2166136261
   for (const character of utcDay)
     hash = Math.imul(hash ^ character.charCodeAt(0), 16777619)

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useMediaQuery } from '@vueuse/core'
 import { gsap } from 'gsap'
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -10,7 +11,7 @@ const { t } = useI18n()
 const rootEl = ref<HTMLElement | null>(null)
 const matrixEl = ref<HTMLCanvasElement | null>(null)
 const storyComplete = ref(false)
-const reduce = typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches
+const reduce = useMediaQuery('(prefers-reduced-motion: reduce)')
 const emailAccount = computed(() => t(props.supportTier === 'trial' ? 'priority-support-story-email-trial-body' : 'priority-support-story-email-paying-body'))
 
 let storyContext: gsap.Context | null = null
@@ -73,7 +74,7 @@ function stopStory() {
 }
 
 function replayStory() {
-  if (!props.active || reduce || !storyTimeline)
+  if (!props.active || reduce.value || !storyTimeline)
     return
 
   storyComplete.value = false
@@ -350,7 +351,7 @@ function startStory() {
     resetVisualState()
     timeline.call(resetVisualState, [], 0)
 
-    if (reduce) {
+    if (reduce.value) {
       timeline.kill()
       storyTimeline = null
       gsap.set(userMachine, { autoAlpha: 0 })
@@ -485,7 +486,7 @@ function startStory() {
   }, root)
 }
 
-watch(() => props.active, async (active) => {
+watch([() => props.active, reduce], async ([active]) => {
   if (!active) {
     stopStory()
     return

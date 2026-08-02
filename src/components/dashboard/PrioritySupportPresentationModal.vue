@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useMediaQuery } from '@vueuse/core'
 import { gsap } from 'gsap'
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -13,7 +14,7 @@ const emit = defineEmits<{ close: [], linkGithub: [] }>()
 
 const { t } = useI18n()
 const config = getLocalConfig()
-const reduce = typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches
+const reduce = useMediaQuery('(prefers-reduced-motion: reduce)')
 
 const SLIDE_COUNT = 3
 const cur = ref(0)
@@ -54,7 +55,7 @@ function startIssuePulse(slide: HTMLElement) {
   stopIssuePulse()
   const button = slide.querySelector<HTMLElement>('.ps-new-issue')
   const ring = button?.querySelector<HTMLElement>('.ps-new-issue-pulse')
-  if (!button || !ring || reduce)
+  if (!button || !ring || reduce.value)
     return
 
   issuePulseTarget = button
@@ -103,7 +104,7 @@ function enter(index: number) {
   if (!slide)
     return
 
-  if (!reduce) {
+  if (!reduce.value) {
     const copy = [
       slide.querySelector('h2'),
       slide.querySelector('.ps-lead'),
@@ -133,7 +134,7 @@ async function go(to: number, direction: number) {
 
   stopSlideAnimations(cur.value)
 
-  if (reduce) {
+  if (reduce.value) {
     fromSlide.classList.remove('show')
     gsap.set(fromSlide, { zIndex: 1, autoAlpha: 0 })
     toSlide.classList.add('show')
@@ -246,6 +247,20 @@ watch(() => props.open, async (open) => {
     opener?.focus()
   }
 }, { immediate: true })
+
+watch(reduce, (isReduced) => {
+  if (!props.open)
+    return
+  if (isReduced) {
+    stopIssuePulse()
+    return
+  }
+  if (cur.value === 1) {
+    const slide = getSlides()[1]
+    if (slide)
+      startIssuePulse(slide)
+  }
+})
 
 onUnmounted(() => {
   stopIssuePulse()
@@ -1129,8 +1144,9 @@ onUnmounted(() => {
   }
   .ps-grid--story {
     grid-template-columns: 1fr;
+    grid-template-rows: 1fr;
   }
-  .ps-grid--story .ps-right {
+  .ps-grid--story .ps-left--story {
     display: none;
   }
   .ps-left--browser,
