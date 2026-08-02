@@ -17,6 +17,7 @@ import mfaIcon from '~icons/simple-icons/2fas?raw'
 import { hideLoader } from '~/services/loader'
 import { autoAuth, defaultApiHost, hashEmail, useSupabase } from '~/services/supabase'
 import { openSupport } from '~/services/support'
+import { isCapgoDomainReferrer } from '~/utils/capgoReferrer'
 
 const route = useRoute('/login')
 const supabase = useSupabase()
@@ -566,6 +567,15 @@ async function checkLogin() {
 
       querySessionAccessToken.value = accessToken
       querySessionRefreshToken.value = refreshToken
+
+      // Landing/register handoff from Capgo domains is expected; skip the
+      // confirm step that causes onboarding drop-off. Keep confirmation when
+      // the referrer is missing or external (shared/leaked session links).
+      if (isCapgoDomainReferrer(document.referrer)) {
+        await acceptQuerySession()
+        return
+      }
+
       hasQuerySession.value = true
       isLoading.value = false
       hideLoader()
