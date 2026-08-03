@@ -16,6 +16,7 @@ export type IncompatibilityReason
     | 'ios_code_changed'
     | 'android_code_changed'
     | 'both_platforms_changed'
+    | 'platform_checksum_metadata_changed'
 
 export type PackageStatus = 'added' | 'removed' | 'changed' | 'unchanged'
 
@@ -35,7 +36,8 @@ export interface PackageComparison {
   /**
    * True when iOS and/or Android checksum fields exist on only one side.
    * Common when switching Capgo CLI versions: older CLIs did not record them.
-   * This alone is not an incompatibility.
+   * Still surfaced as incompatible so a real native bump in the same upload is not hidden;
+   * the console warns it may be a CLI false alarm.
    */
   platformChecksumMetadataChanged: boolean
 }
@@ -112,8 +114,7 @@ function getIncompatibilityReasons(
   if (candidate.requested_version && baseline.requested_version && candidate.requested_version.trim() !== baseline.requested_version.trim())
     reasons.push('requested_version_changed')
 
-  // Only compare checksums when both sides actually recorded them. A one-sided
-  // presence is CLI metadata drift, not a native code change.
+  // Compare checksums only when both sides recorded them.
   const iosChanged = hasPlatformChecksum(candidate.ios_checksum) && hasPlatformChecksum(baseline.ios_checksum) && candidate.ios_checksum !== baseline.ios_checksum
   const androidChanged = hasPlatformChecksum(candidate.android_checksum) && hasPlatformChecksum(baseline.android_checksum) && candidate.android_checksum !== baseline.android_checksum
 
@@ -123,6 +124,12 @@ function getIncompatibilityReasons(
     reasons.push('ios_code_changed')
   else if (androidChanged)
     reasons.push('android_code_changed')
+
+  // One-sided iOS/Android checksum fields: still incompatible so we never silently
+  // pass a same-version native bump that rode along with a CLI metadata change.
+  // The dashboard warns this may be a Capgo CLI false alarm.
+  if (didPlatformChecksumMetadataChange(candidate, baseline))
+    reasons.push('platform_checksum_metadata_changed')
 
   return reasons
 }

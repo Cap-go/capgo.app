@@ -117,8 +117,7 @@ const sameVersionChecksumChanges = computed(() => comparisons.value.some((entry)
   return platformChecksumDiffs(entry).length > 0
 }))
 
-// One-sided iOS/Android checksum fields: usually Capgo CLI upgrade/downgrade metadata,
-// not a real native code change. Surface that so users don't treat it as incompatible.
+// One-sided iOS/Android checksum fields still count as incompatible; warn it may be a CLI false alarm.
 const cliPlatformChecksumMetadataDrift = computed(() =>
   compareVersionId.value ? hasPlatformChecksumMetadataDrift(comparisons.value) : false,
 )
@@ -163,6 +162,8 @@ function reasonLabel(reason: IncompatibilityReason): string {
       return t('compat-reason-android-changed')
     case 'both_platforms_changed':
       return t('compat-reason-both-changed')
+    case 'platform_checksum_metadata_changed':
+      return t('compat-reason-platform-checksum-metadata')
     default:
       return reason
   }
@@ -249,7 +250,8 @@ function filteredReasons(entry: PackageComparison) {
       && reason !== 'requested_version_changed'
       && reason !== 'ios_code_changed'
       && reason !== 'android_code_changed'
-      && reason !== 'both_platforms_changed')
+      && reason !== 'both_platforms_changed'
+      && reason !== 'platform_checksum_metadata_changed')
     .map(reasonLabel)
 }
 
@@ -632,17 +634,21 @@ watch(bundleRouteKey, async (key) => {
                               </span>
                             </p>
 
+                            <p v-if="entry.platformChecksumMetadataChanged" class="text-amber-700 dark:text-amber-300">
+                              {{ t('compat-reason-platform-checksum-metadata') }}
+                            </p>
+                            <p
+                              v-if="entry.platformChecksumMetadataChanged"
+                              data-test="dependencies-cli-checksum-row-hint"
+                              class="text-amber-700 dark:text-amber-300"
+                            >
+                              {{ t('dependencies-cli-checksum-row-hint') }}
+                            </p>
+
                             <p v-if="filteredReasons(entry).length > 0">
                               {{ filteredReasons(entry).join(', ') }}
                             </p>
                           </div>
-                          <p
-                            v-else-if="entry.platformChecksumMetadataChanged"
-                            data-test="dependencies-cli-checksum-row-hint"
-                            class="mt-1 text-xs text-amber-700 dark:text-amber-300"
-                          >
-                            {{ t('dependencies-cli-checksum-row-hint') }}
-                          </p>
                         </td>
                         <td class="px-6 py-4 text-sm whitespace-nowrap">
                           <span class="px-2 py-1 text-xs font-medium rounded-full" :class="STATUS_STYLES[entry.status].pill">

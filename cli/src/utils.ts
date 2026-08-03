@@ -2264,8 +2264,9 @@ export function getCompatibilityDetails(pkg: Compatibility): CompatibilityDetail
   }
 
   // Check checksum changes (even if versions match, native code could have changed)
-  const iosChanged = pkg.localIosChecksum && pkg.remoteIosChecksum && pkg.localIosChecksum !== pkg.remoteIosChecksum
-  const androidChanged = pkg.localAndroidChecksum && pkg.remoteAndroidChecksum && pkg.localAndroidChecksum !== pkg.remoteAndroidChecksum
+  const hasChecksum = (value: string | undefined) => typeof value === 'string' && value.trim().length > 0
+  const iosChanged = hasChecksum(pkg.localIosChecksum) && hasChecksum(pkg.remoteIosChecksum) && pkg.localIosChecksum !== pkg.remoteIosChecksum
+  const androidChanged = hasChecksum(pkg.localAndroidChecksum) && hasChecksum(pkg.remoteAndroidChecksum) && pkg.localAndroidChecksum !== pkg.remoteAndroidChecksum
 
   if (iosChanged && androidChanged) {
     reasons.push('both_platforms_changed')
@@ -2276,6 +2277,13 @@ export function getCompatibilityDetails(pkg: Compatibility): CompatibilityDetail
   else if (androidChanged) {
     reasons.push('android_code_changed')
   }
+
+  // One-sided platform checksums (CLI old↔new metadata). Still incompatible so a
+  // real same-version native bump is not silently passed; message warns of CLI drift.
+  const iosOneSided = hasChecksum(pkg.localIosChecksum) !== hasChecksum(pkg.remoteIosChecksum)
+  const androidOneSided = hasChecksum(pkg.localAndroidChecksum) !== hasChecksum(pkg.remoteAndroidChecksum)
+  if (iosOneSided || androidOneSided)
+    reasons.push('platform_checksum_metadata_changed')
 
   const messages: string[] = []
   const isIncompatibleReason = (reason: IncompatibilityReason) => reason !== 'requested_version_changed'
@@ -2295,6 +2303,9 @@ export function getCompatibilityDetails(pkg: Compatibility): CompatibilityDetail
         break
       case 'both_platforms_changed':
         messages.push('iOS and Android native code changed')
+        break
+      case 'platform_checksum_metadata_changed':
+        messages.push('iOS/Android checksum metadata appeared or disappeared (may be Capgo CLI change — verify native code)')
         break
       case 'new_plugin':
         messages.push('new plugin (requires app store update)')

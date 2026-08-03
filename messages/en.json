@@ -1098,7 +1098,7 @@
   "dependencies-status-full": "Showing all dependencies for this bundle.",
   "dependencies-status-removed": "Removed",
   "dependencies-status-unchanged": "Unchanged",
-  "dependencies-same-version-changed-hint": "Some packages changed only by native checksum while the version text stayed the same. If you recently switched Capgo CLI versions, checksum algorithms can differ and look like a false incompatibility.",
+  "dependencies-same-version-changed-hint": "Some packages changed only by native checksum while the version text stayed the same. If you recently switched Capgo CLI versions, this can be a false alarm — still verify native code.",
   "dependencies-summary-packages": "Packages",
   "dependencies-summary-versions": "Unique versions",
   "dependencies-total-packages": "Total packages",
@@ -2612,7 +2612,8 @@
   "native": "Native",
   "start": "Start",
   "end": "End",
-  "dependencies-cli-checksum-metadata-hint": "iOS and Android checksums appeared or disappeared between these bundles. That usually means a Capgo CLI upgrade or downgrade (older CLIs did not record them) — not a real native code change by itself.",
-  "dependencies-cli-checksum-row-hint": "iOS/Android checksum metadata changed with the Capgo CLI — not a native code change by itself.",
-  "compat-fix-cli-checksum-tip": "If iOS/Android checksums are new on one bundle and missing on the other, you likely changed Capgo CLI version. Older CLIs did not store those fields — that alone is not a real native incompatibility."
+  "dependencies-cli-checksum-metadata-hint": "Warning: iOS/Android checksums appeared or disappeared between these bundles. That often happens when switching Capgo CLI versions (false alarm possible) — still verify nothing native changed in the same upload.",
+  "dependencies-cli-checksum-row-hint": "Possible false alarm: Capgo CLI metadata change. Confirm native code did not also change.",
+  "compat-fix-cli-checksum-tip": "If iOS/Android checksums are new on one bundle and missing on the other, it may be a Capgo CLI change (false alarm possible). Still treat it seriously if you also changed native code in that upload.",
+  "compat-reason-platform-checksum-metadata": "iOS/Android checksum metadata changed (may be Capgo CLI — verify native code)"
 }
