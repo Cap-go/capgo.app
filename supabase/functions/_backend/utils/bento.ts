@@ -37,7 +37,7 @@ function getBentoHeaders(c: Context) {
   }
 }
 
-async function bentoFetch(c: Context, path: string, siteUuid: string, body: any) {
+async function bentoFetch(c: Context, path: string, siteUuid: string, body: any, signal?: AbortSignal) {
   const headers = getBentoHeaders(c)
   if (!headers)
     return null
@@ -49,6 +49,7 @@ async function bentoFetch(c: Context, path: string, siteUuid: string, body: any)
     method: 'POST',
     headers,
     body: JSON.stringify(body),
+    signal,
   })
 
   if (!response.ok) {
@@ -124,6 +125,7 @@ export async function addTagBento(c: Context, email: string, segments: { segment
 export async function syncBentoSubscriberTags(
   c: Context,
   update: { email: string, segments: string[], deleteSegments: string[] } | Array<{ email: string, segments: string[], deleteSegments: string[] }>,
+  signal?: AbortSignal,
 ) {
   if (!isBentoConfigured(c))
     return
@@ -150,7 +152,7 @@ export async function syncBentoSubscriberTags(
     for (let i = 0; i < subscribers.length; i += chunkSize) {
       const chunk = subscribers.slice(i, i + chunkSize)
       const payload = { subscribers: chunk }
-      const res = await bentoFetch(c, 'batch/subscribers', siteUuid, payload) as { results?: number, failed?: number, errors?: unknown }
+      const res = await bentoFetch(c, 'batch/subscribers', siteUuid, payload, signal) as { results?: number, failed?: number, errors?: unknown }
       if (res?.failed && res.failed > 0) {
         cloudlogErr({ requestId: c.get('requestId'), message: 'syncBentoSubscriberTags', error: res })
         return false
@@ -164,7 +166,7 @@ export async function syncBentoSubscriberTags(
   }
 }
 
-export async function unsubscribeBento(c: Context, email: string) {
+export async function unsubscribeBento(c: Context, email: string, signal?: AbortSignal) {
   if (!isBentoConfigured(c))
     return
 
@@ -175,7 +177,7 @@ export async function unsubscribeBento(c: Context, email: string) {
       email,
     }
 
-    const result = await bentoFetch(c, 'fetch/commands', siteUuid, { command })
+    const result = await bentoFetch(c, 'fetch/commands', siteUuid, { command }, signal)
 
     cloudlog({ requestId: c.get('requestId'), message: 'unsubscribeBento', email, result })
     return true

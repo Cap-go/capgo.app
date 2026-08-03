@@ -28,10 +28,15 @@ const {
       c: unknown,
       update: { deleteSegments: string[], email: string, segments: string[] }
         | Array<{ deleteSegments: string[], email: string, segments: string[] }>,
+      signal?: AbortSignal,
     ) => Promise<boolean | undefined>>(async () => true),
     syncUserPreferenceTagsMock: vi.fn(async () => undefined),
     trackBentoEventMock: vi.fn(async () => true as boolean | undefined),
-    unsubscribeBentoMock: vi.fn(async () => true as boolean | undefined),
+    unsubscribeBentoMock: vi.fn<(
+      c: unknown,
+      email: string,
+      signal?: AbortSignal,
+    ) => Promise<boolean | undefined>>(async () => true),
   }
 })
 
@@ -288,9 +293,9 @@ describe('first-organization lifecycle on user registration', () => {
       deleteSegments: [LIFECYCLE_TAG],
       email: 'new.user@example.com',
       segments: [SUPPRESSION_TAG],
-    }])
+    }], expect.any(AbortSignal))
     expect(trackBentoEventMock).not.toHaveBeenCalled()
-    expect(unsubscribeBentoMock).toHaveBeenCalledWith(expect.anything(), 'new.user@example.com')
+    expect(unsubscribeBentoMock).toHaveBeenCalledWith(expect.anything(), 'new.user@example.com', expect.any(AbortSignal))
   })
 
   it('suppresses an invite-created profile when deletion is scheduled during provisioning', async () => {
@@ -308,8 +313,8 @@ describe('first-organization lifecycle on user registration', () => {
       deleteSegments: [LIFECYCLE_TAG],
       email: 'new.user@example.com',
       segments: [SUPPRESSION_TAG],
-    }])
-    expect(unsubscribeBentoMock).toHaveBeenCalledWith(expect.anything(), 'new.user@example.com')
+    }], expect.any(AbortSignal))
+    expect(unsubscribeBentoMock).toHaveBeenCalledWith(expect.anything(), 'new.user@example.com', expect.any(AbortSignal))
     expect(trackBentoEventMock).not.toHaveBeenCalled()
   })
 
@@ -323,12 +328,12 @@ describe('first-organization lifecycle on user registration', () => {
       deleteSegments: [LIFECYCLE_TAG],
       email: 'new.user@example.com',
       segments: [SUPPRESSION_TAG],
-    }])
+    }], expect.any(AbortSignal))
     expect(trackBentoEventMock).not.toHaveBeenCalled()
     expect(pgQueryMock).toHaveBeenCalledOnce()
     expect(createApiKeyMock).not.toHaveBeenCalled()
     expect(syncUserPreferenceTagsMock).not.toHaveBeenCalled()
-    expect(unsubscribeBentoMock).toHaveBeenCalledWith(expect.anything(), 'new.user@example.com')
+    expect(unsubscribeBentoMock).toHaveBeenCalledWith(expect.anything(), 'new.user@example.com', expect.any(AbortSignal))
     expect(syncBentoSubscriberTagsMock.mock.invocationCallOrder[0])
       .toBeLessThan(unsubscribeBentoMock.mock.invocationCallOrder[0])
   })
@@ -340,7 +345,7 @@ describe('first-organization lifecycle on user registration', () => {
     const response = await postUser()
 
     expect(response.status).toBe(500)
-    expect(unsubscribeBentoMock).toHaveBeenCalledWith(expect.anything(), 'new.user@example.com')
+    expect(unsubscribeBentoMock).toHaveBeenCalledWith(expect.anything(), 'new.user@example.com', expect.any(AbortSignal))
     expect(createApiKeyMock).not.toHaveBeenCalled()
     expect(syncUserPreferenceTagsMock).not.toHaveBeenCalled()
   })
@@ -375,8 +380,8 @@ describe('first-organization lifecycle on user registration', () => {
       deleteSegments: [LIFECYCLE_TAG],
       email: 'new.user@example.com',
       segments: [SUPPRESSION_TAG],
-    }])
-    expect(unsubscribeBentoMock).toHaveBeenCalledWith(expect.anything(), 'new.user@example.com')
+    }], expect.any(AbortSignal))
+    expect(unsubscribeBentoMock).toHaveBeenCalledWith(expect.anything(), 'new.user@example.com', expect.any(AbortSignal))
     expect(trackBentoEventMock).not.toHaveBeenCalled()
   })
 
@@ -492,11 +497,11 @@ describe('first-organization lifecycle on user registration', () => {
       deleteSegments: [LIFECYCLE_TAG],
       email: 'new.user@example.com',
       segments: [SUPPRESSION_TAG],
-    }])
+    }], expect.any(AbortSignal))
     expect(trackBentoEventMock).not.toHaveBeenCalled()
     expect(createApiKeyMock).toHaveBeenCalledOnce()
     expect(syncUserPreferenceTagsMock).toHaveBeenCalledOnce()
-    expect(unsubscribeBentoMock).toHaveBeenCalledWith(expect.anything(), 'new.user@example.com')
+    expect(unsubscribeBentoMock).toHaveBeenCalledWith(expect.anything(), 'new.user@example.com', expect.any(AbortSignal))
   })
 
   it('suppresses and unsubscribes when deletion is scheduled after the entry event', async () => {
@@ -514,10 +519,10 @@ describe('first-organization lifecycle on user registration', () => {
       deleteSegments: [LIFECYCLE_TAG],
       email: 'new.user@example.com',
       segments: [SUPPRESSION_TAG],
-    }])
+    }], expect.any(AbortSignal))
     expect(trackBentoEventMock.mock.invocationCallOrder[0])
       .toBeLessThan(syncBentoSubscriberTagsMock.mock.invocationCallOrder[1]!)
-    expect(unsubscribeBentoMock).toHaveBeenCalledWith(expect.anything(), 'new.user@example.com')
+    expect(unsubscribeBentoMock).toHaveBeenCalledWith(expect.anything(), 'new.user@example.com', expect.any(AbortSignal))
   })
 
   it('removes awaiting state when org access appears after the entry event', async () => {
@@ -558,8 +563,8 @@ describe('first-organization lifecycle on user registration', () => {
       deleteSegments: [LIFECYCLE_TAG],
       email: 'new.user@example.com',
       segments: [SUPPRESSION_TAG],
-    }])
-    expect(unsubscribeBentoMock).toHaveBeenCalledWith(expect.anything(), 'new.user@example.com')
+    }], expect.any(AbortSignal))
+    expect(unsubscribeBentoMock).toHaveBeenCalledWith(expect.anything(), 'new.user@example.com', expect.any(AbortSignal))
   })
 
   it('fails the handler for retry when the entry event returns false', async () => {
@@ -577,8 +582,8 @@ describe('first-organization lifecycle on user registration', () => {
       deleteSegments: [LIFECYCLE_TAG],
       email: 'new.user@example.com',
       segments: [SUPPRESSION_TAG],
-    }])
-    expect(unsubscribeBentoMock).toHaveBeenCalledWith(expect.anything(), 'new.user@example.com')
+    }], expect.any(AbortSignal))
+    expect(unsubscribeBentoMock).toHaveBeenCalledWith(expect.anything(), 'new.user@example.com', expect.any(AbortSignal))
   })
 
   it('succeeds as a no-op when Bento is not configured', async () => {
@@ -748,10 +753,10 @@ describe('first-organization lifecycle on direct org access', () => {
       deleteSegments: [LIFECYCLE_TAG],
       email: 'current.user@example.com',
       segments: [SUPPRESSION_TAG],
-    }])
+    }], expect.any(AbortSignal))
     expect(trackBentoEventMock.mock.invocationCallOrder[0])
       .toBeLessThan(syncBentoSubscriberTagsMock.mock.invocationCallOrder[1]!)
-    expect(unsubscribeBentoMock).toHaveBeenCalledWith(expect.anything(), 'current.user@example.com')
+    expect(unsubscribeBentoMock).toHaveBeenCalledWith(expect.anything(), 'current.user@example.com', expect.any(AbortSignal))
   })
 
   it('suppresses without emitting joined-org state when deletion is already scheduled', async () => {
@@ -765,9 +770,9 @@ describe('first-organization lifecycle on direct org access', () => {
       deleteSegments: [LIFECYCLE_TAG],
       email: 'current.user@example.com',
       segments: [SUPPRESSION_TAG],
-    }])
+    }], expect.any(AbortSignal))
     expect(trackBentoEventMock).not.toHaveBeenCalled()
-    expect(unsubscribeBentoMock).toHaveBeenCalledWith(expect.anything(), 'current.user@example.com')
+    expect(unsubscribeBentoMock).toHaveBeenCalledWith(expect.anything(), 'current.user@example.com', expect.any(AbortSignal))
   })
 
   it('destroys the checked-out Workerd client before joined-org Bento requests', async () => {
@@ -887,7 +892,9 @@ describe('first-organization lifecycle on direct org access', () => {
 
   it.each([
     ['tag delivery returns false', () => syncBentoSubscriberTagsMock.mockResolvedValueOnce(false), false],
+    ['tag delivery throws', () => syncBentoSubscriberTagsMock.mockRejectedValueOnce(new Error('Bento unavailable')), false],
     ['fact event returns false', () => trackBentoEventMock.mockResolvedValueOnce(false), true],
+    ['fact event throws', () => trackBentoEventMock.mockRejectedValueOnce(new Error('Bento unavailable')), true],
   ])('reconciles deletion after ambiguous joined-org %s', async (_label, configureFailure, eventAttempted) => {
     pgQueryMock
       .mockResolvedValueOnce({ rows: [activeBinding()] })
@@ -902,8 +909,8 @@ describe('first-organization lifecycle on direct org access', () => {
       deleteSegments: [LIFECYCLE_TAG],
       email: 'current.user@example.com',
       segments: [SUPPRESSION_TAG],
-    }])
-    expect(unsubscribeBentoMock).toHaveBeenCalledWith(expect.anything(), 'current.user@example.com')
+    }], expect.any(AbortSignal))
+    expect(unsubscribeBentoMock).toHaveBeenCalledWith(expect.anything(), 'current.user@example.com', expect.any(AbortSignal))
   })
 
   it('succeeds as a no-op when Bento is not configured', async () => {

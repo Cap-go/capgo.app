@@ -13,7 +13,6 @@ export const BENTO_REGISTERED_WITHOUT_ORG_EVENT = 'user:registered_without_org'
 export const BENTO_JOINED_ORG_EVENT = 'user:joined_org'
 
 const BENTO_DELETED_USER_OPERATION_TIMEOUT_MS = 2_000
-const BENTO_DELETED_USER_OPERATION_TIMED_OUT = Symbol('bento-deleted-user-operation-timed-out')
 
 interface CurrentRoleBinding {
   email: string | null
@@ -41,25 +40,40 @@ function ensureBentoDelivery(result: boolean | undefined, operation: string) {
     quickError(500, 'bento_lifecycle_delivery_failed', 'Bento lifecycle delivery failed', { operation })
 }
 
-async function runDeletedUserBentoOperation<T>(operation: string, promise: Promise<T>) {
-  let timeoutId: ReturnType<typeof setTimeout> | undefined
+async function runDeletedUserBentoOperation<T>(
+  operation: string,
+  parentSignal: AbortSignal | undefined,
+  startOperation: (signal: AbortSignal) => Promise<T>,
+) {
+  const controller = new AbortController()
+  let parentAborted = parentSignal?.aborted ?? false
+  let timedOut = false
+  const abortFromParent = () => {
+    parentAborted = true
+    controller.abort()
+  }
+  if (parentAborted)
+    controller.abort()
+  else
+    parentSignal?.addEventListener('abort', abortFromParent, { once: true })
+
+  const timeoutId = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, BENTO_DELETED_USER_OPERATION_TIMEOUT_MS)
   try {
-    const result = await Promise.race([
-      promise,
-      new Promise<typeof BENTO_DELETED_USER_OPERATION_TIMED_OUT>((resolve) => {
-        timeoutId = setTimeout(
-          () => resolve(BENTO_DELETED_USER_OPERATION_TIMED_OUT),
-          BENTO_DELETED_USER_OPERATION_TIMEOUT_MS,
-        )
-      }),
-    ])
-    if (result === BENTO_DELETED_USER_OPERATION_TIMED_OUT)
+    // Await the aborted fetch's settlement before starting the next mutation;
+    // a timeout must not leave a detached suppression request behind.
+    const result = await startOperation(controller.signal)
+    if (timedOut)
       throw new Error(`${operation} timed out`)
+    if (parentAborted)
+      throw new Error(`${operation} aborted`)
     return result
   }
   finally {
-    if (timeoutId !== undefined)
-      clearTimeout(timeoutId)
+    clearTimeout(timeoutId)
+    parentSignal?.removeEventListener('abort', abortFromParent)
   }
 }
 
@@ -72,23 +86,36 @@ async function setAwaitingFirstOrgTag(c: Context, email: string, awaiting: boole
   ensureBentoDelivery(result, awaiting ? 'add_awaiting_first_org_tag' : 'remove_awaiting_first_org_tag')
 }
 
-export async function syncBentoFirstOrgOnEmailChange(c: Context, oldEmail: string, newEmail: string) {
+export async function syncBentoFirstOrgOnEmailChange(
+  c: Context,
+  oldEmail: string,
+  newEmail: string,
+  signal?: AbortSignal,
+) {
   const aliases = [...new Set([oldEmail, newEmail].map(normalizeBentoEmail).filter(Boolean))]
-  return await syncBentoSubscriberTags(c, aliases.map(email => ({
+  const updates = aliases.map(email => ({
     email,
     segments: [BENTO_FIRST_ORG_RECOVERY_SUPPRESSED_TAG],
     deleteSegments: [BENTO_AWAITING_FIRST_ORG_TAG],
-  })))
+  }))
+  return signal
+    ? await syncBentoSubscriberTags(c, updates, signal)
+    : await syncBentoSubscriberTags(c, updates)
 }
 
-export async function suppressAndUnsubscribeDeletedUserRecovery(c: Context, email: string) {
+export async function suppressAndUnsubscribeDeletedUserRecovery(
+  c: Context,
+  email: string,
+  signal?: AbortSignal,
+) {
   let suppressionResult: boolean | undefined
   let suppressionError: unknown
   let suppressionThrew = false
   try {
     suppressionResult = await runDeletedUserBentoOperation(
       'suppress deleted user recovery',
-      syncBentoFirstOrgOnEmailChange(c, email, email),
+      signal,
+      signal => syncBentoFirstOrgOnEmailChange(c, email, email, signal),
     )
   }
   catch (error) {
@@ -104,7 +131,8 @@ export async function suppressAndUnsubscribeDeletedUserRecovery(c: Context, emai
   try {
     unsubscribeResult = await runDeletedUserBentoOperation(
       'unsubscribe deleted user recovery',
-      unsubscribeBento(c, email),
+      signal,
+      signal => unsubscribeBento(c, email, signal),
     )
   }
   catch (error) {

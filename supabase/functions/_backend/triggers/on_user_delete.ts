@@ -12,7 +12,6 @@ import { supabaseAdmin } from '../utils/supabase.ts'
 export const app = new Hono<MiddlewareKeyVariables>()
 
 const BENTO_USER_DELETE_TIMEOUT_MS = 5_000
-const BENTO_USER_DELETE_TIMED_OUT = Symbol('bento-user-delete-timed-out')
 
 interface RbacBinding {
   org_id?: string | null
@@ -278,13 +277,14 @@ function buildCleanupPromises(
 async function suppressDeletedUserInBento(
   c: Context,
   record: Database['public']['Tables']['users']['Row'],
+  signal?: AbortSignal,
 ) {
   if (!record.email)
     return true
 
   const email = normalizeBentoEmail(record.email)
   try {
-    await suppressAndUnsubscribeDeletedUserRecovery(c, email)
+    await suppressAndUnsubscribeDeletedUserRecovery(c, email, signal)
     return true
   }
   catch (error) {
@@ -297,26 +297,18 @@ async function suppressDeletedUserInBentoWithinBudget(
   c: Context,
   record: Database['public']['Tables']['users']['Row'],
 ) {
-  let timeoutId: ReturnType<typeof setTimeout> | undefined
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), BENTO_USER_DELETE_TIMEOUT_MS)
   try {
-    const result = await Promise.race([
-      suppressDeletedUserInBento(c, record),
-      new Promise<typeof BENTO_USER_DELETE_TIMED_OUT>((resolve) => {
-        timeoutId = setTimeout(() => resolve(BENTO_USER_DELETE_TIMED_OUT), BENTO_USER_DELETE_TIMEOUT_MS)
-      }),
-    ])
-    if (result === BENTO_USER_DELETE_TIMED_OUT) {
-      // The original promise may finish after this response, but it can only
-      // add permanent suppression and then unsubscribe. Both operations are
-      // idempotent and remain safe when the queue retries this message.
+    const result = await suppressDeletedUserInBento(c, record, controller.signal)
+    if (controller.signal.aborted) {
       logFailure(c, 'Bento user deletion cleanup timed out')
       return false
     }
     return result
   }
   finally {
-    if (timeoutId !== undefined)
-      clearTimeout(timeoutId)
+    clearTimeout(timeoutId)
   }
 }
 

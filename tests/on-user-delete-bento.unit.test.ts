@@ -8,8 +8,16 @@ const {
 } = vi.hoisted(() => ({
   cancelSubscriptionMock: vi.fn(async () => undefined as boolean | undefined),
   supabaseAdminMock: vi.fn(),
-  syncBentoSubscriberTagsMock: vi.fn(async () => true as boolean | undefined),
-  unsubscribeBentoMock: vi.fn(async () => true as boolean | undefined),
+  syncBentoSubscriberTagsMock: vi.fn<(
+    c: unknown,
+    update: unknown,
+    signal?: AbortSignal,
+  ) => Promise<boolean | undefined>>(async () => true),
+  unsubscribeBentoMock: vi.fn<(
+    c: unknown,
+    email: string,
+    signal?: AbortSignal,
+  ) => Promise<boolean | undefined>>(async () => true),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/bento.ts', () => ({
@@ -133,8 +141,8 @@ describe('user deletion Bento recovery safety', () => {
       deleteSegments: ['onboarding:awaiting_first_org'],
       email: 'deleted.user@example.com',
       segments: ['onboarding:first_org_recovery_suppressed'],
-    }])
-    expect(unsubscribeBentoMock).toHaveBeenCalledWith(expect.anything(), 'deleted.user@example.com')
+    }], expect.any(AbortSignal))
+    expect(unsubscribeBentoMock).toHaveBeenCalledWith(expect.anything(), 'deleted.user@example.com', expect.any(AbortSignal))
     expect(syncBentoSubscriberTagsMock.mock.invocationCallOrder[0])
       .toBeLessThan(unsubscribeBentoMock.mock.invocationCallOrder[0])
     expect(cancelSubscriptionMock).not.toHaveBeenCalled()
@@ -212,7 +220,21 @@ describe('user deletion Bento recovery safety', () => {
   it('still submits unsubscribe and returns a retryable failure when suppression hangs', async () => {
     vi.useFakeTimers()
     try {
-      syncBentoSubscriberTagsMock.mockImplementationOnce(async () => await new Promise<boolean>(() => {}))
+      const lifecycleTrace: string[] = []
+      let suppressionSignal: AbortSignal | undefined
+      syncBentoSubscriberTagsMock.mockImplementationOnce(async (_c, _update, signal) => await new Promise<boolean>((resolve) => {
+        suppressionSignal = signal
+        lifecycleTrace.push('suppression:started')
+        signal?.addEventListener('abort', () => {
+          lifecycleTrace.push('suppression:aborted')
+          resolve(false)
+        }, { once: true })
+      }))
+      unsubscribeBentoMock.mockImplementationOnce(async () => {
+        expect(suppressionSignal?.aborted).toBe(true)
+        lifecycleTrace.push('unsubscribe:started')
+        return true
+      })
 
       const responsePromise = postDelete()
       await vi.advanceTimersByTimeAsync(2_001)
@@ -221,6 +243,11 @@ describe('user deletion Bento recovery safety', () => {
       expect(response.status).toBe(500)
       expect(unsubscribeBentoMock).toHaveBeenCalledOnce()
       expect(supabaseAdminMock).toHaveBeenCalled()
+      expect(lifecycleTrace).toEqual([
+        'suppression:started',
+        'suppression:aborted',
+        'unsubscribe:started',
+      ])
     }
     finally {
       vi.useRealTimers()
@@ -230,7 +257,11 @@ describe('user deletion Bento recovery safety', () => {
   it('bounds a hanging unsubscribe and returns a retryable failure', async () => {
     vi.useFakeTimers()
     try {
-      unsubscribeBentoMock.mockImplementationOnce(async () => await new Promise<boolean>(() => {}))
+      let unsubscribeSignal: AbortSignal | undefined
+      unsubscribeBentoMock.mockImplementationOnce(async (_c, _email, signal) => await new Promise<boolean>((resolve) => {
+        unsubscribeSignal = signal
+        signal?.addEventListener('abort', () => resolve(false), { once: true })
+      }))
 
       const responsePromise = postDelete()
       await vi.advanceTimersByTimeAsync(2_001)
@@ -239,6 +270,7 @@ describe('user deletion Bento recovery safety', () => {
       expect(response.status).toBe(500)
       expect(syncBentoSubscriberTagsMock).toHaveBeenCalledOnce()
       expect(unsubscribeBentoMock).toHaveBeenCalledOnce()
+      expect(unsubscribeSignal?.aborted).toBe(true)
     }
     finally {
       vi.useRealTimers()
