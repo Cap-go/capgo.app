@@ -72,6 +72,7 @@ describe('changeEmailBento', () => {
 
   it.each([
     ['no command was queued', { results: 0 }],
+    ['more than the single command was reported', { results: 2 }],
     ['the response is missing its queued count', {}],
     ['the queued count has the wrong type', { results: '1' }],
   ])('returns false when %s', async (_label, body) => {

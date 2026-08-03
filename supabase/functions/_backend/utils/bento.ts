@@ -138,7 +138,7 @@ export async function changeEmailBento(c: Context, oldEmail: string, newEmail: s
       query: normalizedNewEmail,
     }
     const result = await bentoFetch(c, 'fetch/commands', siteUuid, { command }) as { results?: unknown } | null
-    if (!result || typeof result.results !== 'number' || !Number.isInteger(result.results) || result.results <= 0) {
+    if (!result || result.results !== 1) {
       cloudlogErr({
         requestId: c.get('requestId'),
         message: 'changeEmailBento command was not queued',
