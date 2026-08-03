@@ -19,7 +19,7 @@ function colorEnabledByDefault(): boolean {
   return Boolean(stdout.isTTY) && !env.NO_COLOR
 }
 
-export function renderTerminalReport(report: PrescanReport, opts: { verbose?: boolean, color?: boolean, now?: Date } = {}): string {
+export function renderTerminalReport(report: PrescanReport, opts: { verbose?: boolean, color?: boolean, now?: Date, ignoreFatal?: boolean } = {}): string {
   const enabled = opts.color ?? colorEnabledByDefault()
   const now = opts.now ?? new Date()
   // Wrap whole semantic units only (badge / id / detail / fix / summary) so substring
@@ -40,7 +40,7 @@ export function renderTerminalReport(report: PrescanReport, opts: { verbose?: bo
         lines.push(paint(ANSI.dim, `         fix: ${f.fix}`))
       if (f.docsUrl)
         lines.push(paint(ANSI.dim, `         docs: ${f.docsUrl}`))
-      if (informationOnly && f.enforceAfter) {
+      if (informationOnly && f.enforceAfter && !(opts.ignoreFatal && sev === 'error')) {
         const impact = sev === 'error'
           ? 'this critical finding is information only now and will fail builds'
           : 'this finding is information only now and can affect build outcomes'
@@ -56,6 +56,7 @@ export function renderTerminalReport(report: PrescanReport, opts: { verbose?: bo
   const summaryCodes = error > 0 ? ANSI.red : warning > 0 ? ANSI.yellow : ANSI.dim
   lines.push(paint(summaryCodes, summary))
   const deferred = informationOnlyFindings(report, now)
+    .filter(finding => !(opts.ignoreFatal && finding.severity === 'error'))
   if (deferred.length > 0)
     lines.push(paint(ANSI.dim, `rollout: ${deferred.length} finding(s) are information only until their enforcement deadline`))
   if (opts.verbose)
