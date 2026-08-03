@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'bun:test'
 import forge from 'node-forge'
 import { MAX_CREDENTIAL_B64_CHARS } from '../../src/build/prescan/checks/blob-limit'
-import { ascKeyValid, openP12, p12Expiry, p12Opens } from '../../src/build/prescan/checks/ios-certs'
+import { ascKeyValid, openP12, p12Expiry, p12LegacyEncryption, p12Opens } from '../../src/build/prescan/checks/ios-certs'
 import { makeChainP12, makeCtx, makeP12 } from './helpers'
 
 function ctxWith(creds: Record<string, string>) {
@@ -23,6 +23,38 @@ describe('ios/p12-opens', () => {
   it('errors on garbage base64', async () => {
     const f = await p12Opens.run(ctxWith({ BUILD_CERTIFICATE_BASE64: 'not-a-p12', P12_PASSWORD: '' }))
     expect(f[0]?.severity).toBe('error')
+  })
+})
+
+describe('ios/p12-legacy-encryption', () => {
+  it('passes legacy PBESv1 3DES with a SHA-1 MAC', async () => {
+    const p12 = makeP12()
+    expect(await p12LegacyEncryption.run(ctxWith({ BUILD_CERTIFICATE_BASE64: p12.base64, P12_PASSWORD: p12.password }))).toEqual([])
+  })
+
+  it('errors on PBES2 AES encryption even though the password is valid', async () => {
+    const p12 = makeP12({ algorithm: 'aes256' })
+    expect(await p12Opens.run(ctxWith({ BUILD_CERTIFICATE_BASE64: p12.base64, P12_PASSWORD: p12.password }))).toEqual([])
+
+    const findings = await p12LegacyEncryption.run(ctxWith({ BUILD_CERTIFICATE_BASE64: p12.base64, P12_PASSWORD: p12.password }))
+    expect(findings).toHaveLength(1)
+    expect(findings[0]?.severity).toBe('error')
+    expect(findings[0]?.title).toContain('macOS build runner')
+    expect(findings[0]?.detail).toContain('PBES2/AES')
+    expect(findings[0]?.fix).toContain('PBESv1 SHA-1/3DES')
+  })
+
+  it('errors on a SHA-256 MAC even when private-key encryption is legacy 3DES', async () => {
+    const p12 = makeP12({ macAlgorithm: 'sha256' })
+    expect(await p12Opens.run(ctxWith({ BUILD_CERTIFICATE_BASE64: p12.base64, P12_PASSWORD: p12.password }))).toEqual([])
+
+    const findings = await p12LegacyEncryption.run(ctxWith({ BUILD_CERTIFICATE_BASE64: p12.base64, P12_PASSWORD: p12.password }))
+    expect(findings).toHaveLength(1)
+    expect(findings[0]?.detail).toContain('SHA-256 MAC')
+  })
+
+  it('defers malformed files to ios/p12-opens instead of duplicating its error', async () => {
+    expect(await p12LegacyEncryption.run(ctxWith({ BUILD_CERTIFICATE_BASE64: 'not-a-p12', P12_PASSWORD: '' }))).toEqual([])
   })
 })
 
