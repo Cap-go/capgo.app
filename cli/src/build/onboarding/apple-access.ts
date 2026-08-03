@@ -67,7 +67,8 @@ function safeErrorField(value: unknown, credentialValues: string[]): string | un
 /**
  * Probe App Store Connect for app access. Never throws - every failure shape is
  * returned as `{ ok: false, kind }` so the prescan check can self-classify the
- * severity (auth-error -> error, no-app-access -> error, network -> info).
+ * severity from the HTTP status and sanitized Apple reason. Network failures
+ * remain distinguishable so prescan can surface them as warnings.
  */
 export async function assertAscAccess(opts: AssertAscAccessOptions): Promise<AscAccessResult> {
   const fetchImpl = opts.fetchImpl ?? globalThis.fetch.bind(globalThis)

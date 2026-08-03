@@ -2,20 +2,21 @@
 //
 // Group C - remote store-access checks. They reach Google Play / App Store
 // Connect to confirm the upload credentials actually have access to the target
-// app BEFORE the build runs (fastlane's exact auth paths), turning a slow
-// upload-time failure into a fast prescan error.
+// app BEFORE the build runs. These probes use related store API endpoints, not
+// Fastlane's exact upload path, so endpoint-specific denials stay warnings.
 //
 // They are NOT marked `remote: true`: the engine's remote-skip predicate keys
 // off `ctx.supabase` (Capgo's backend), which is the wrong signal here. Instead
 // they gate on intent-to-upload via `appliesTo` (willUploadToPlay /
-// willUploadToAppStore) and self-classify offline/transport failures as `info`
-// so an offline scan degrades to non-blocking notices.
+// willUploadToAppStore) and self-classify offline/transport failures as warnings
+// so users see that verification did not complete without treating it as proof
+// that the upload itself will fail.
 //
 // SECRET-HANDLING (mandatory): PLAY_CONFIG_JSON / APPLE_KEY_CONTENT /
 // APPLE_KEY_ID / APPLE_ISSUER_ID raw values NEVER appear in Finding
 // title/detail/fix. The injected validators only surface safe copy (SA email,
-// package name, Apple's human-readable error wording); for token-error we keep
-// the finding terse and do not echo the validator message verbatim.
+// package name, sanitized Apple error fields); for Play token-error we keep the
+// finding terse and do not echo the validator message verbatim.
 import type { ValidateOptions, ValidationResult } from '../../onboarding/android/service-account-validation.js'
 import type { AscAccessResult, AssertAscAccessOptions } from '../../onboarding/apple-access.js'
 import type { Finding, PrescanCheck, ScanContext } from '../types'
