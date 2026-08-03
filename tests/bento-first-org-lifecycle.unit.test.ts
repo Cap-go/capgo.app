@@ -195,6 +195,17 @@ describe('first-organization lifecycle on user registration', () => {
     expect(pgQueryMock).toHaveBeenCalledTimes(3)
   })
 
+  it('returns a retryable failure when default API-key provisioning times out on a lock', async () => {
+    createApiKeyMock.mockRejectedValueOnce(Object.assign(new Error('lock timeout'), { code: '55P03' }))
+
+    const response = await postUser()
+
+    expect(response.status).toBe(500)
+    expect(syncUserPreferenceTagsMock).not.toHaveBeenCalled()
+    expect(syncBentoSubscriberTagsMock).not.toHaveBeenCalled()
+    expect(trackBentoEventMock).not.toHaveBeenCalled()
+  })
+
   it('destroys each checked-out Workerd client before the following Bento request', async () => {
     const lifecycleTrace: string[] = []
     let queryNumber = 0

@@ -44,7 +44,7 @@ describe('createApiKey account-deletion serialization', () => {
   it('locks the public profile and rolls back before API-key reads when deletion is scheduled', async () => {
     pgQueryMock.mockImplementation(async (query: unknown) => {
       const sql = normalizedQuery(query)
-      if (sql === 'BEGIN' || sql === 'ROLLBACK')
+      if (sql === 'BEGIN' || sql === 'ROLLBACK' || sql.startsWith('SET LOCAL lock_timeout'))
         return { rowCount: null, rows: [] }
       if (sql.includes('SELECT id FROM public.users'))
         return { rowCount: 1, rows: [{ id: USER_ID }] }
@@ -58,6 +58,7 @@ describe('createApiKey account-deletion serialization', () => {
     const queries = pgQueryMock.mock.calls.map(([query]) => normalizedQuery(query))
     expect(queries).toEqual([
       'BEGIN',
+      `SET LOCAL lock_timeout = '5s'`,
       'SELECT id FROM public.users WHERE id = $1::uuid FOR UPDATE',
       'SELECT EXISTS ( SELECT 1 FROM public.to_delete_accounts WHERE account_id = $1::uuid ) AS deletion_scheduled',
       'ROLLBACK',
@@ -71,7 +72,7 @@ describe('createApiKey account-deletion serialization', () => {
   it('continues default-key provisioning only after the deletion guard is clear', async () => {
     pgQueryMock.mockImplementation(async (query: unknown) => {
       const sql = normalizedQuery(query)
-      if (sql === 'BEGIN' || sql === 'COMMIT')
+      if (sql === 'BEGIN' || sql === 'COMMIT' || sql.startsWith('SET LOCAL lock_timeout'))
         return { rowCount: null, rows: [] }
       if (sql.includes('SELECT id FROM public.users'))
         return { rowCount: 1, rows: [{ id: USER_ID }] }
@@ -95,6 +96,29 @@ describe('createApiKey account-deletion serialization', () => {
     expect(insertIndex).toBeGreaterThan(guardIndex)
     expect(queries.at(-1)).toBe('COMMIT')
     expect(pgConnectMock).toHaveBeenCalledOnce()
+    expect(pgReleaseMock).toHaveBeenCalledWith(true)
+    expect(closeClientMock).toHaveBeenCalledOnce()
+  })
+
+  it('rolls back, destroys the client, and propagates a lock timeout for queue retry', async () => {
+    const lockTimeout = Object.assign(new Error('canceling statement due to lock timeout'), { code: '55P03' })
+    pgQueryMock.mockImplementation(async (query: unknown) => {
+      const sql = normalizedQuery(query)
+      if (sql === 'BEGIN' || sql === 'ROLLBACK' || sql.startsWith('SET LOCAL lock_timeout'))
+        return { rowCount: null, rows: [] }
+      if (sql.includes('SELECT id FROM public.users'))
+        throw lockTimeout
+      throw new Error(`Unexpected query: ${sql}`)
+    })
+
+    await expect(createApiKey(context(), USER_ID)).rejects.toBe(lockTimeout)
+
+    expect(pgQueryMock.mock.calls.map(([query]) => normalizedQuery(query))).toEqual([
+      'BEGIN',
+      `SET LOCAL lock_timeout = '5s'`,
+      'SELECT id FROM public.users WHERE id = $1::uuid FOR UPDATE',
+      'ROLLBACK',
+    ])
     expect(pgReleaseMock).toHaveBeenCalledWith(true)
     expect(closeClientMock).toHaveBeenCalledOnce()
   })

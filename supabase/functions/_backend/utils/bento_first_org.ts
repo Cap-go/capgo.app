@@ -129,7 +129,7 @@ async function getFirstOrgDatabaseState(pgPool: ReturnType<typeof getPgClient>, 
   }
 }
 
-export async function prepareBentoFirstOrgOnUserCreate(
+export async function prepareNewUserProvisioning(
   c: Context<MiddlewareKeyVariables>,
   user: Database['public']['Tables']['users']['Row'],
 ) {

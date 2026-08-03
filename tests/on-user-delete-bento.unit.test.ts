@@ -6,7 +6,7 @@ const {
   syncBentoFirstOrgOnEmailChangeMock,
   unsubscribeBentoMock,
 } = vi.hoisted(() => ({
-  cancelSubscriptionMock: vi.fn(async () => undefined),
+  cancelSubscriptionMock: vi.fn(async () => undefined as boolean | undefined),
   supabaseAdminMock: vi.fn(),
   syncBentoFirstOrgOnEmailChangeMock: vi.fn(async () => true as boolean | undefined),
   unsubscribeBentoMock: vi.fn(async () => true as boolean | undefined),
@@ -41,8 +41,8 @@ const { app } = await import('../supabase/functions/_backend/triggers/on_user_de
 
 const USER_ID = '11111111-1111-4111-8111-111111111111'
 
-function queryBuilder(data: unknown[] = []) {
-  const result = Promise.resolve({ data, error: null })
+function queryBuilder(data: unknown[] = [], error: unknown = null) {
+  const result = Promise.resolve({ data, error })
   const builder = {
     eq: vi.fn(),
     in: vi.fn(),
@@ -119,6 +119,7 @@ function postDelete() {
 describe('user deletion Bento recovery safety', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    cancelSubscriptionMock.mockResolvedValue(undefined)
     syncBentoFirstOrgOnEmailChangeMock.mockResolvedValue(true)
     unsubscribeBentoMock.mockResolvedValue(true)
     const emptyBuilder = queryBuilder()
@@ -158,6 +159,28 @@ describe('user deletion Bento recovery safety', () => {
 
   it('completes subscription cleanup before returning a retryable Bento failure', async () => {
     syncBentoFirstOrgOnEmailChangeMock.mockResolvedValue(false)
+    configureSingleOrgCleanup()
+
+    const response = await postDelete()
+
+    expect(response.status).toBe(500)
+    expect(cancelSubscriptionMock).toHaveBeenCalledWith(expect.anything(), 'cus_deleted_user')
+  })
+
+  it('returns a retryable failure when an RBAC lookup fails', async () => {
+    const failedBuilder = queryBuilder([], new Error('Database unavailable'))
+    supabaseAdminMock.mockReturnValue({
+      from: vi.fn(() => failedBuilder),
+    })
+
+    const response = await postDelete()
+
+    expect(response.status).toBe(500)
+    expect(cancelSubscriptionMock).not.toHaveBeenCalled()
+  })
+
+  it('returns a retryable failure when Stripe cleanup reports a failure', async () => {
+    cancelSubscriptionMock.mockResolvedValue(false)
     configureSingleOrgCleanup()
 
     const response = await postDelete()

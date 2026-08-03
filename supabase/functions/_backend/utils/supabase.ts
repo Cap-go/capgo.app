@@ -801,6 +801,7 @@ export async function createApiKey(c: Context, userId: string) {
     pgClient = await pgPool.connect()
     await pgClient.query('BEGIN')
     inTransaction = true
+    await pgClient.query(`SET LOCAL lock_timeout = '5s'`)
 
     // Serialize with delete_user(). Its to_delete_accounts FK check takes a
     // KEY SHARE lock on public.users, which conflicts with this UPDATE lock.
@@ -989,6 +990,10 @@ export async function createApiKey(c: Context, userId: string) {
       await pgClient.query('ROLLBACK').catch(() => {})
     }
     cloudlogErr({ requestId: c.get('requestId'), message: 'createApiKey error', userId, error })
+    // A lock timeout is transient: let the queue retry instead of permanently
+    // acknowledging user provisioning without a default API key.
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === '55P03')
+      throw error
   }
   finally {
     // Workerd keeps request-scoped Pools open, so destroy the checked-out

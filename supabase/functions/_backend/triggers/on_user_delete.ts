@@ -331,9 +331,9 @@ async function suppressDeletedUserInBentoWithinBudget(
   }
 }
 
-function finishDeleteUserResponse(c: Context, bentoCleanupSucceeded: boolean) {
-  if (!bentoCleanupSucceeded)
-    quickError(500, 'bento_user_delete_failed', 'Bento user deletion cleanup failed')
+function finishDeleteUserResponse(c: Context, bentoCleanupSucceeded: boolean, resourceCleanupSucceeded: boolean) {
+  if (!bentoCleanupSucceeded || !resourceCleanupSucceeded)
+    quickError(500, 'user_delete_cleanup_failed', 'User deletion cleanup failed')
   return c.json(BRES)
 }
 
@@ -343,22 +343,32 @@ async function deleteUserImages(
   userId: string,
 ) {
   try {
-    const { data: files } = await supabase
+    const { data: files, error: listError } = await supabase
       .storage
       .from('images')
       .list(userId)
+    if (listError) {
+      logFailure(c, 'user image listing failed', listError)
+      return false
+    }
 
     if (files && files.length > 0) {
       const filePaths = files.map(file => `${userId}/${file.name}`)
-      await supabase
+      const { error: removeError } = await supabase
         .storage
         .from('images')
         .remove(filePaths)
+      if (removeError) {
+        logFailure(c, 'user image deletion failed', removeError)
+        return false
+      }
       cloudlog({ requestId: c.get('requestId'), message: 'deleted user images', count: files.length, user_id: userId })
     }
+    return true
   }
   catch (error) {
     cloudlog({ requestId: c.get('requestId'), message: 'error deleting user images', error, user_id: userId })
+    return false
   }
 }
 
@@ -371,28 +381,28 @@ async function cleanupDeletedUserResources(c: Context, record: Database['public'
   // 1. Find organizations where this user is the only RBAC super admin
   const directRbacBindings = await fetchDirectRbacBindings(c, supabase, record.id)
   if (!directRbacBindings)
-    return
+    return false
 
   const groupIds = await fetchUserGroupIds(c, supabase, record.id)
   if (!groupIds)
-    return
+    return false
 
   const groupRbacBindings = await fetchGroupRbacBindings(c, supabase, groupIds)
   if (!groupRbacBindings)
-    return
+    return false
 
   const orgIds = collectCandidateOrgIds(directRbacBindings, groupRbacBindings, now)
   if (orgIds.length === 0)
-    return
+    return true
 
   // For each org where user is super admin, check if they are the only one
   const rbacUserAdmins = await fetchRbacUserAdmins(c, supabase, orgIds)
   if (!rbacUserAdmins)
-    return
+    return false
 
   const rbacGroupAdmins = await fetchRbacGroupAdmins(c, supabase, orgIds)
   if (!rbacGroupAdmins)
-    return
+    return false
 
   const activeGroupBindings = rbacGroupAdmins.filter(binding => isBindingActive(binding, now))
   const rbacGroupIds = activeGroupBindings
@@ -401,7 +411,7 @@ async function cleanupDeletedUserResources(c: Context, record: Database['public'
 
   const groupMembers = await fetchGroupMembers(c, supabase, rbacGroupIds)
   if (!groupMembers)
-    return
+    return false
 
   const groupMembersByGroup = buildGroupMembersByGroup(groupMembers)
   const orgAdminUsers = buildOrgAdminUsers(
@@ -414,17 +424,32 @@ async function cleanupDeletedUserResources(c: Context, record: Database['public'
   const singleSuperAdminOrgs = getSingleSuperAdminOrgs(orgIds, orgAdminUsers, record.id)
 
   if (singleSuperAdminOrgs.length === 0)
-    return
+    return true
 
-  const { data: orgs } = await supabaseAdmin(c)
+  const { data: orgs, error: orgLookupError } = await supabaseAdmin(c)
     .from('orgs')
     .select('id, customer_id, management_email')
     .in('id', singleSuperAdminOrgs)
+  if (orgLookupError) {
+    logFailure(c, 'organization cleanup lookup failed', orgLookupError)
+    return false
+  }
 
   const promises = buildCleanupPromises(c, orgs ?? null)
   promises.push(deleteUserImages(c, supabase, record.id))
 
-  await Promise.all(promises)
+  let cleanupResults: unknown[]
+  try {
+    cleanupResults = await Promise.all(promises)
+  }
+  catch (error) {
+    logFailure(c, 'user resource cleanup failed', error)
+    return false
+  }
+  if (cleanupResults.includes(false)) {
+    logFailure(c, 'user resource cleanup reported a failure')
+    return false
+  }
 
   // 4. Track performance metrics
   const endTime = Date.now()
@@ -436,6 +461,7 @@ async function cleanupDeletedUserResources(c: Context, record: Database['public'
     duration_ms: duration,
     user_id: record.id,
   })
+  return true
 }
 
 // on_user_delete - this is called 30 days before the user is actually deleted.
@@ -443,11 +469,11 @@ async function cleanupDeletedUserResources(c: Context, record: Database['public'
 // slow Bento request cannot consume the queue handler's entire 15-second
 // budget before Stripe cancellation begins.
 async function deleteUser(c: Context, record: Database['public']['Tables']['users']['Row']) {
-  const [bentoCleanupSucceeded] = await Promise.all([
+  const [bentoCleanupSucceeded, resourceCleanupSucceeded] = await Promise.all([
     suppressDeletedUserInBentoWithinBudget(c, record),
     cleanupDeletedUserResources(c, record),
   ])
-  return finishDeleteUserResponse(c, bentoCleanupSucceeded)
+  return finishDeleteUserResponse(c, bentoCleanupSucceeded, resourceCleanupSucceeded)
 }
 
 app.post('/', middlewareAPISecret, triggerValidator('users', 'DELETE'), async (c) => {

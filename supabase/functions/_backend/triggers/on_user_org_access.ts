@@ -1,11 +1,10 @@
-import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Database } from '../utils/supabase.types.ts'
-import { Hono } from 'hono/tiny'
 import { z } from 'zod'
 import { syncBentoFirstOrgOnRoleBindingWrite } from '../utils/bento_first_org.ts'
-import { BRES, middlewareAPISecret, simpleError, triggerValidator } from '../utils/hono.ts'
+import { BRES, createHono, middlewareAPISecret, simpleError, triggerValidator } from '../utils/hono.ts'
+import { version } from '../utils/version.ts'
 
-export const app = new Hono<MiddlewareKeyVariables>()
+export const app = createHono('', version)
 
 app.post('/', middlewareAPISecret, triggerValidator('role_bindings', ['INSERT', 'UPDATE']), async (c) => {
   const record = c.get('webhookBody') as Partial<Database['public']['Tables']['role_bindings']['Row']>

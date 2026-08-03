@@ -1,7 +1,7 @@
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Database } from '../utils/supabase.types.ts'
 import { Hono } from 'hono/tiny'
-import { normalizeBentoEmail, prepareBentoFirstOrgOnUserCreate, syncBentoFirstOrgOnUserCreate } from '../utils/bento_first_org.ts'
+import { normalizeBentoEmail, prepareNewUserProvisioning, syncBentoFirstOrgOnUserCreate } from '../utils/bento_first_org.ts'
 import { BRES, middlewareAPISecret, triggerValidator } from '../utils/hono.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { createApiKey } from '../utils/supabase.ts'
@@ -16,7 +16,7 @@ app.post('/', middlewareAPISecret, triggerValidator('users', 'INSERT'), async (c
   // Configured Bento failures deliberately fail this queue message. Its
   // lifecycle tag writes are idempotent, and retrying avoids silently losing
   // the only recovery enrollment for a newly registered user.
-  const shouldProvisionUser = await prepareBentoFirstOrgOnUserCreate(c, record)
+  const shouldProvisionUser = await prepareNewUserProvisioning(c, record)
   if (!shouldProvisionUser)
     return c.json(BRES)
 
