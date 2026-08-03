@@ -72,8 +72,9 @@ export function makeP12(opts: {
     const digestInfo = macData[0]!.value as forge.asn1.Asn1[]
     const digestAlgorithm = digestInfo[0]!.value as forge.asn1.Asn1[]
     const macSalt = forge.util.createBuffer(macData[1]!.value as string)
+    const macIterations = forge.asn1.derToInteger(macData[2]!.value as string)
     const md = forge.md.sha256.create()
-    const macKey = forge.pkcs12.generateKey(password, macSalt, 3, 2048, 32, md)
+    const macKey = forge.pkcs12.generateKey(password, macSalt, 3, macIterations, 32, md)
     const mac = forge.hmac.create()
     mac.start(md, macKey)
     mac.update(authSafeBytes)

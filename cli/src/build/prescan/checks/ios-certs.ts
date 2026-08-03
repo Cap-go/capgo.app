@@ -65,7 +65,7 @@ function legacyP12CompatibilityProblems(base64: string): string[] {
     problems.push(macAlgorithm === forge.pki.oids.sha256 ? 'SHA-256 MAC' : 'non-SHA-1 MAC')
   if (oids.has(PBES2_OID))
     problems.push('PBES2/AES encryption')
-  if (!oids.has(PBESV1_SHA1_3DES_OID))
+  else if (!oids.has(PBESV1_SHA1_3DES_OID))
     problems.push('missing PBESv1 SHA-1/3DES private-key encryption')
   return problems
 }
