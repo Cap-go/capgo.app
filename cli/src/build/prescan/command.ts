@@ -94,7 +94,7 @@ export async function prescanCommand(appId: string | undefined, options: Prescan
     console.log(renderJsonReport(report))
   }
   else {
-    log.message(renderTerminalReport(report, { verbose: options.verbose, now: options.now }))
+    log.message(renderTerminalReport(report, { verbose: options.verbose, now: options.now, ignoreFatal: options.ignoreFatal }))
     const outcome = decideOutcome(report, options)
     outro(outcome === 'block' ? 'Prescan found blocking problems — fix them before building.' : 'Prescan finished.')
   }
@@ -171,7 +171,7 @@ export async function runPrescanGate(
     return { decision: 'proceed', report: null, crashed: true, informationOnlyFindings: 0 }
   }
   if (report.findings.length > 0)
-    print(renderTerminalReport(report, { now: opts.now }))
+    print(renderTerminalReport(report, { now: opts.now, ignoreFatal: opts.ignoreFatal }))
   const outcome = decideOutcome(report, { ignoreFatal: opts.ignoreFatal, failOnWarnings: opts.failOnWarnings, now: opts.now })
   let decision: 'proceed' | 'block'
   if (outcome === 'ask')

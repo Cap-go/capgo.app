@@ -99,6 +99,20 @@ describe('runPrescanGate', () => {
     const r = await runPrescanGate({ enabled: true, ignoreFatal: true, silent: true }, async () => fakeReport(1, 0))
     expect(r.decision).toBe('proceed')
   })
+  it('hides deferred critical rollout deadlines with ignoreFatal', async () => {
+    const printed: string[] = []
+    const report = fakeReport(1, 0)
+    report.findings[0].enforceAfter = IOS_PRESCAN_EXPANSION_ENFORCE_AFTER
+    const r = await runPrescanGate({
+      enabled: true,
+      ignoreFatal: true,
+      now: new Date('2026-08-01T00:00:00.000Z'),
+      print: message => printed.push(message),
+    }, async () => report)
+    expect(r.decision).toBe('proceed')
+    expect(printed.join('\n')).toContain('CRITICAL — INFORMATION ONLY')
+    expect(printed.join('\n')).not.toContain('will fail builds starting 2026-08-14 00:00 UTC')
+  })
   it('proceeds (non-interactive) on warnings', async () => {
     const r = await runPrescanGate({ enabled: true, interactive: false, silent: true }, async () => fakeReport(0, 1))
     expect(r.decision).toBe('proceed')
