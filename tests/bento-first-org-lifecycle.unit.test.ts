@@ -201,6 +201,7 @@ describe('first-organization lifecycle on user registration', () => {
     const response = await postUser()
 
     expect(response.status).toBe(500)
+    expect(createApiKeyMock).toHaveBeenCalledOnce()
     expect(syncUserPreferenceTagsMock).not.toHaveBeenCalled()
     expect(syncBentoSubscriberTagsMock).not.toHaveBeenCalled()
     expect(trackBentoEventMock).not.toHaveBeenCalled()
