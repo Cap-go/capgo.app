@@ -25,7 +25,8 @@ const {
     sendEventToTrackingMock: vi.fn(async () => undefined),
     syncBentoSubscriberTagsMock: vi.fn<(
       c: unknown,
-      update: { deleteSegments: string[], email: string, segments: string[] },
+      update: { deleteSegments: string[], email: string, segments: string[] }
+        | Array<{ deleteSegments: string[], email: string, segments: string[] }>,
     ) => Promise<boolean | undefined>>(async () => true),
     syncUserPreferenceTagsMock: vi.fn(async () => undefined),
     trackBentoEventMock: vi.fn(async () => true as boolean | undefined),
@@ -69,11 +70,18 @@ const USER_ID = '11111111-1111-4111-8111-111111111111'
 const REGISTERED_AT = '2026-08-03T08:30:00.000Z'
 const JOINED_AT = '2026-08-03T09:15:00.000Z'
 const LIFECYCLE_TAG = 'onboarding:awaiting_first_org'
+const SUPPRESSION_TAG = 'onboarding:first_org_recovery_suppressed'
 const ORG_ID = '22222222-2222-4222-8222-222222222222'
 const ROLE_BINDING_ID = '33333333-3333-4333-8333-333333333333'
 
 type ExpectedLifecycleModule = typeof bentoFirstOrgLifecycle & {
+  syncBentoFirstOrgOnEmailChange: (c: never, oldEmail: string, newEmail: string) => Promise<boolean | undefined>
   syncBentoFirstOrgOnRoleBindingWrite: (c: never, roleBindingId: string) => Promise<void>
+}
+
+async function suppressEmailAliases(oldEmail: string, newEmail: string) {
+  return await (bentoFirstOrgLifecycle as ExpectedLifecycleModule)
+    .syncBentoFirstOrgOnEmailChange({ get: vi.fn(() => 'request-id') } as never, oldEmail, newEmail)
 }
 
 async function syncRoleBinding(roleBindingId = ROLE_BINDING_ID) {
@@ -273,9 +281,10 @@ describe('first-organization lifecycle on user registration', () => {
       })
     syncBentoSubscriberTagsMock.mockImplementation(async (_c, update) => {
       await Promise.resolve()
-      if (update.segments.includes(LIFECYCLE_TAG))
+      const updates = Array.isArray(update) ? update : [update]
+      if (updates.some(item => item.segments.includes(LIFECYCLE_TAG)))
         lifecycleTrace.push('tag:add')
-      if (update.deleteSegments.includes(LIFECYCLE_TAG))
+      if (updates.some(item => item.deleteSegments.includes(LIFECYCLE_TAG)))
         lifecycleTrace.push('tag:remove')
       return true
     })
@@ -345,6 +354,107 @@ describe('first-organization lifecycle on user registration', () => {
 
     expect(response.status).toBe(200)
     expect(trackBentoEventMock).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('first-organization recovery suppression on email changes', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    pgConnectMock.mockImplementation(async () => ({ query: pgQueryMock, release: pgReleaseMock }))
+    pgReleaseMock.mockImplementation(() => undefined)
+    closeClientMock.mockResolvedValue(undefined)
+    getPgClientMock.mockImplementation(() => ({ connect: pgConnectMock, query: pgQueryMock }))
+    pgQueryMock.mockResolvedValue({ rows: [] })
+    syncBentoSubscriberTagsMock.mockResolvedValue(true)
+    trackBentoEventMock.mockResolvedValue(true)
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('suppresses both unique normalized aliases and clears awaiting state in one batch', async () => {
+    await expect(suppressEmailAliases(' Old.User@Example.COM ', ' New.User@Example.COM ')).resolves.toBe(true)
+
+    expect(syncBentoSubscriberTagsMock).toHaveBeenCalledOnce()
+    expect(syncBentoSubscriberTagsMock).toHaveBeenCalledWith(expect.anything(), [
+      {
+        deleteSegments: [LIFECYCLE_TAG],
+        email: 'old.user@example.com',
+        segments: [SUPPRESSION_TAG],
+      },
+      {
+        deleteSegments: [LIFECYCLE_TAG],
+        email: 'new.user@example.com',
+        segments: [SUPPRESSION_TAG],
+      },
+    ])
+  })
+
+  it('deduplicates the same normalized alias within a batch', async () => {
+    await expect(suppressEmailAliases(' Same.User@Example.COM ', 'same.user@example.com')).resolves.toBe(true)
+
+    expect(syncBentoSubscriberTagsMock).toHaveBeenCalledWith(expect.anything(), [{
+      deleteSegments: [LIFECYCLE_TAG],
+      email: 'same.user@example.com',
+      segments: [SUPPRESSION_TAG],
+    }])
+  })
+
+  it('returns false for configured delivery failure and undefined when unconfigured', async () => {
+    syncBentoSubscriberTagsMock.mockResolvedValueOnce(false)
+    await expect(suppressEmailAliases('a@example.com', 'b@example.com')).resolves.toBe(false)
+
+    syncBentoSubscriberTagsMock.mockResolvedValueOnce(undefined)
+    await expect(suppressEmailAliases('a@example.com', 'b@example.com')).resolves.toBeUndefined()
+  })
+
+  it('keeps suppression monotonic across reversed, repeated, and chained alias changes', async () => {
+    await suppressEmailAliases('A@Example.com', 'b@example.com')
+    await suppressEmailAliases('b@example.com', 'A@example.com')
+    await suppressEmailAliases('a@example.com', 'b@example.com')
+    await suppressEmailAliases('b@example.com', 'c@example.com')
+    await suppressEmailAliases('C@example.com', 'c@example.com')
+
+    expect(syncBentoSubscriberTagsMock).toHaveBeenCalledTimes(5)
+    const expectedAliasBatches = [
+      ['a@example.com', 'b@example.com'],
+      ['b@example.com', 'a@example.com'],
+      ['a@example.com', 'b@example.com'],
+      ['b@example.com', 'c@example.com'],
+      ['c@example.com'],
+    ]
+    const requestedAliases = new Set<string>()
+    for (const [index, [, rawUpdate]] of syncBentoSubscriberTagsMock.mock.calls.entries()) {
+      const updates = Array.isArray(rawUpdate) ? rawUpdate : [rawUpdate]
+      expect(updates.map(update => update.email)).toEqual(expectedAliasBatches[index])
+      expect(new Set(updates.map(update => update.email)).size).toBe(updates.length)
+      for (const update of updates) {
+        requestedAliases.add(update.email)
+        expect(update.segments).toEqual([SUPPRESSION_TAG])
+        expect(update.deleteSegments).toEqual([LIFECYCLE_TAG])
+        expect(update.deleteSegments).not.toContain(SUPPRESSION_TAG)
+      }
+    }
+    expect(requestedAliases).toEqual(new Set(['a@example.com', 'b@example.com', 'c@example.com']))
+  })
+
+  it('never removes permanent suppression when signup later adds awaiting state', async () => {
+    await suppressEmailAliases('old@example.com', 'new@example.com')
+    const response = await postUser(userRecord({ email: 'new@example.com' }))
+
+    expect(response.status).toBe(200)
+    expect(syncBentoSubscriberTagsMock).toHaveBeenCalledTimes(2)
+    expect(syncBentoSubscriberTagsMock).toHaveBeenNthCalledWith(2, expect.anything(), {
+      deleteSegments: [],
+      email: 'new@example.com',
+      segments: [LIFECYCLE_TAG],
+    })
+    for (const [, rawUpdate] of syncBentoSubscriberTagsMock.mock.calls) {
+      const updates = Array.isArray(rawUpdate) ? rawUpdate : [rawUpdate]
+      for (const update of updates)
+        expect(update.deleteSegments).not.toContain(SUPPRESSION_TAG)
+    }
   })
 })
 

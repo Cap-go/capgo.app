@@ -1,22 +1,20 @@
+import { readFile } from 'node:fs/promises'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const {
-  changeEmailBentoMock,
   cleanStoredImageMetadataMock,
   createApiKeyMock,
-  syncBentoSubscriberTagsMock,
+  syncBentoFirstOrgOnEmailChangeMock,
   syncUserPreferenceTagsMock,
 } = vi.hoisted(() => ({
-  changeEmailBentoMock: vi.fn(async () => true as boolean | undefined),
   cleanStoredImageMetadataMock: vi.fn(async () => undefined),
   createApiKeyMock: vi.fn(async () => undefined),
-  syncBentoSubscriberTagsMock: vi.fn(async () => true),
+  syncBentoFirstOrgOnEmailChangeMock: vi.fn(async () => true as boolean | undefined),
   syncUserPreferenceTagsMock: vi.fn(async () => undefined),
 }))
 
-vi.mock('../supabase/functions/_backend/utils/bento.ts', () => ({
-  changeEmailBento: changeEmailBentoMock,
-  syncBentoSubscriberTags: syncBentoSubscriberTagsMock,
+vi.mock('../supabase/functions/_backend/utils/bento_first_org.ts', () => ({
+  syncBentoFirstOrgOnEmailChange: syncBentoFirstOrgOnEmailChangeMock,
 }))
 
 vi.mock('../supabase/functions/_backend/utils/hono.ts', async () => {
@@ -83,23 +81,36 @@ async function postUpdate(record: ReturnType<typeof userRecord>, oldRecord: Retu
 describe('user update Bento subscriber identity', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    changeEmailBentoMock.mockResolvedValue(true)
+    syncBentoFirstOrgOnEmailChangeMock.mockResolvedValue(true)
   })
 
-  it('queues the identity move without racing even a simultaneous preference change', async () => {
+  it('suppresses both aliases before applying a simultaneous preference change', async () => {
+    const lifecycleTrace: string[] = []
+    syncBentoFirstOrgOnEmailChangeMock.mockImplementation(async () => {
+      lifecycleTrace.push('aliases:suppressed')
+    })
+    syncUserPreferenceTagsMock.mockImplementation(async () => {
+      lifecycleTrace.push('preferences:synced')
+    })
     const oldRecord = userRecord(' Old.User@Example.COM ', { enable_notifications: false })
     const record = userRecord(' New.User@Example.COM ', { enable_notifications: true })
 
     const response = await postUpdate(record, oldRecord)
 
     expect(response.status).toBe(200)
-    expect(changeEmailBentoMock).toHaveBeenCalledWith(
+    expect(lifecycleTrace).toEqual(['aliases:suppressed', 'preferences:synced'])
+    expect(syncBentoFirstOrgOnEmailChangeMock).toHaveBeenCalledWith(
       expect.anything(),
       'old.user@example.com',
       'new.user@example.com',
     )
-    expect(syncUserPreferenceTagsMock).not.toHaveBeenCalled()
-    expect(syncBentoSubscriberTagsMock).not.toHaveBeenCalled()
+    expect(syncUserPreferenceTagsMock).toHaveBeenCalledWith(
+      expect.anything(),
+      record.email,
+      record,
+      oldRecord,
+      oldRecord.email,
+    )
   })
 
   it('keeps the existing preference sync and sends no command when the email is unchanged', async () => {
@@ -109,7 +120,7 @@ describe('user update Bento subscriber identity', () => {
     const response = await postUpdate(record, oldRecord)
 
     expect(response.status).toBe(200)
-    expect(changeEmailBentoMock).not.toHaveBeenCalled()
+    expect(syncBentoFirstOrgOnEmailChangeMock).not.toHaveBeenCalled()
     expect(syncUserPreferenceTagsMock).toHaveBeenCalledWith(
       expect.anything(),
       record.email,
@@ -126,13 +137,20 @@ describe('user update Bento subscriber identity', () => {
     const response = await postUpdate(record, oldRecord)
 
     expect(response.status).toBe(200)
-    expect(changeEmailBentoMock).not.toHaveBeenCalled()
+    expect(syncBentoFirstOrgOnEmailChangeMock).not.toHaveBeenCalled()
+    expect(syncUserPreferenceTagsMock).toHaveBeenCalledWith(
+      expect.anything(),
+      record.email,
+      record,
+      oldRecord,
+      oldRecord.email,
+    )
   })
 
   it.each([
-    ['returns false', () => changeEmailBentoMock.mockResolvedValueOnce(false)],
-    ['throws', () => changeEmailBentoMock.mockRejectedValueOnce(new Error('Bento unavailable'))],
-  ])('fails before preference sync when configured Bento %s', async (_label, configureFailure) => {
+    ['returns false', () => syncBentoFirstOrgOnEmailChangeMock.mockResolvedValueOnce(false)],
+    ['throws', () => syncBentoFirstOrgOnEmailChangeMock.mockRejectedValueOnce(new Error('Bento unavailable'))],
+  ])('returns 5xx before preference sync when suppression delivery %s', async (_label, configureFailure) => {
     configureFailure()
 
     const response = await postUpdate(userRecord('new@example.com'), userRecord('old@example.com'))
@@ -149,18 +167,38 @@ describe('user update Bento subscriber identity', () => {
     const response = await postUpdate(record, oldRecord)
 
     expect(response.status).toBe(500)
-    expect(changeEmailBentoMock).not.toHaveBeenCalled()
+    expect(syncBentoFirstOrgOnEmailChangeMock).not.toHaveBeenCalled()
     expect(syncUserPreferenceTagsMock).not.toHaveBeenCalled()
   })
 
-  it('succeeds without writing either subscriber address when Bento is not configured', async () => {
-    changeEmailBentoMock.mockResolvedValue(undefined)
+  it('continues preference sync when suppression is an unconfigured no-op', async () => {
+    syncBentoFirstOrgOnEmailChangeMock.mockResolvedValue(undefined)
     const record = userRecord('new@example.com')
     const oldRecord = userRecord('old@example.com')
 
     const response = await postUpdate(record, oldRecord)
 
     expect(response.status).toBe(200)
-    expect(syncUserPreferenceTagsMock).not.toHaveBeenCalled()
+    expect(syncUserPreferenceTagsMock).toHaveBeenCalledWith(
+      expect.anything(),
+      record.email,
+      record,
+      oldRecord,
+      oldRecord.email,
+    )
+  })
+
+  it('contains no legacy Bento email migration command or helper', async () => {
+    const [bentoSource, triggerSource] = await Promise.all([
+      readFile(new URL('../supabase/functions/_backend/utils/bento.ts', import.meta.url), 'utf8'),
+      readFile(new URL('../supabase/functions/_backend/triggers/on_user_update.ts', import.meta.url), 'utf8'),
+    ])
+    const legacyCommand = ['change', 'email'].join('_')
+    const legacyHelper = ['change', 'Email', 'Bento'].join('')
+
+    expect(bentoSource).not.toContain(legacyCommand)
+    expect(bentoSource).not.toContain(legacyHelper)
+    expect(triggerSource).not.toContain(legacyCommand)
+    expect(triggerSource).not.toContain(legacyHelper)
   })
 })

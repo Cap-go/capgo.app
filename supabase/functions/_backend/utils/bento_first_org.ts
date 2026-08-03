@@ -6,6 +6,9 @@ import { quickError } from './hono.ts'
 import { closeClient, getPgClient } from './pg.ts'
 
 export const BENTO_AWAITING_FIRST_ORG_TAG = 'onboarding:awaiting_first_org'
+// Permanent safety opt-out: never remove this tag. The Bento recovery workflow
+// must require it to be absent immediately before sending a recovery email.
+export const BENTO_FIRST_ORG_RECOVERY_SUPPRESSED_TAG = 'onboarding:first_org_recovery_suppressed'
 export const BENTO_REGISTERED_WITHOUT_ORG_EVENT = 'user:registered_without_org'
 export const BENTO_JOINED_ORG_EVENT = 'user:joined_org'
 
@@ -37,6 +40,15 @@ async function setAwaitingFirstOrgTag(c: Context, email: string, awaiting: boole
     deleteSegments: awaiting ? [] : [BENTO_AWAITING_FIRST_ORG_TAG],
   })
   ensureBentoDelivery(result, awaiting ? 'add_awaiting_first_org_tag' : 'remove_awaiting_first_org_tag')
+}
+
+export async function syncBentoFirstOrgOnEmailChange(c: Context, oldEmail: string, newEmail: string) {
+  const aliases = [...new Set([oldEmail, newEmail].map(normalizedEmail).filter(Boolean))]
+  return await syncBentoSubscriberTags(c, aliases.map(email => ({
+    email,
+    segments: [BENTO_FIRST_ORG_RECOVERY_SUPPRESSED_TAG],
+    deleteSegments: [BENTO_AWAITING_FIRST_ORG_TAG],
+  })))
 }
 
 async function hasActiveDirectOrgAccess(pgPool: ReturnType<typeof getPgClient>, userId: string) {

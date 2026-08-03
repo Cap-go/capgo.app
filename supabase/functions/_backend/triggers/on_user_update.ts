@@ -1,7 +1,7 @@
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Database } from '../utils/supabase.types.ts'
 import { Hono } from 'hono/tiny'
-import { changeEmailBento } from '../utils/bento.ts'
+import { syncBentoFirstOrgOnEmailChange } from '../utils/bento_first_org.ts'
 import { BRES, middlewareAPISecret, quickError, simpleError, triggerValidator } from '../utils/hono.ts'
 import { cleanStoredImageMetadata } from '../utils/image.ts'
 import { cloudlog } from '../utils/logging.ts'
@@ -33,17 +33,11 @@ app.post('/', middlewareAPISecret, triggerValidator('users', 'UPDATE'), async (c
   const newEmail = record.email.trim().toLowerCase()
   const oldEmail = oldRecord?.email?.trim().toLowerCase()
   if (oldEmail && oldEmail !== newEmail) {
-    const changeEmailResult = await changeEmailBento(c, oldEmail, newEmail)
-    if (changeEmailResult === false)
-      quickError(500, 'bento_change_email_failed', 'Bento email change failed')
-    // Bento only acknowledges that change_email was queued; applying it is asynchronous.
-    // Do not sync preferences to either address here because that can race the move and
-    // create or update the wrong subscriber. Existing preference and lifecycle tags move
-    // with the subscriber; simultaneous preference changes wait for a later non-email update.
+    const suppressionResult = await syncBentoFirstOrgOnEmailChange(c, oldEmail, newEmail)
+    if (suppressionResult === false)
+      quickError(500, 'bento_first_org_suppression_failed', 'Bento first-organization recovery suppression failed')
   }
-  else {
-    await syncUserPreferenceTags(c, record.email, record, oldRecord, oldRecord?.email)
-  }
+  await syncUserPreferenceTags(c, record.email, record, oldRecord, oldRecord?.email)
 
   return c.json(BRES)
 })
