@@ -3,23 +3,28 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const {
   closeClientMock,
   createApiKeyMock,
+  getPgClientMock,
   pgQueryMock,
   sendEventToTrackingMock,
   syncBentoSubscriberTagsMock,
   syncUserPreferenceTagsMock,
   trackBentoEventMock,
-} = vi.hoisted(() => ({
-  closeClientMock: vi.fn(async () => undefined),
-  createApiKeyMock: vi.fn(async () => undefined),
-  pgQueryMock: vi.fn<(query: string, params?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }>>(async () => ({ rows: [] })),
-  sendEventToTrackingMock: vi.fn(async () => undefined),
-  syncBentoSubscriberTagsMock: vi.fn<(
-    c: unknown,
-    update: { deleteSegments: string[], email: string, segments: string[] },
-  ) => Promise<boolean | undefined>>(async () => true),
-  syncUserPreferenceTagsMock: vi.fn(async () => undefined),
-  trackBentoEventMock: vi.fn(async () => true as boolean | undefined),
-}))
+} = vi.hoisted(() => {
+  const pgQueryMock = vi.fn<(query: string, params?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }>>(async () => ({ rows: [] }))
+  return {
+    closeClientMock: vi.fn(async () => undefined),
+    createApiKeyMock: vi.fn(async () => undefined),
+    getPgClientMock: vi.fn(() => ({ query: pgQueryMock })),
+    pgQueryMock,
+    sendEventToTrackingMock: vi.fn(async () => undefined),
+    syncBentoSubscriberTagsMock: vi.fn<(
+      c: unknown,
+      update: { deleteSegments: string[], email: string, segments: string[] },
+    ) => Promise<boolean | undefined>>(async () => true),
+    syncUserPreferenceTagsMock: vi.fn(async () => undefined),
+    trackBentoEventMock: vi.fn(async () => true as boolean | undefined),
+  }
+})
 
 vi.mock('../supabase/functions/_backend/utils/bento.ts', () => ({
   syncBentoSubscriberTags: syncBentoSubscriberTagsMock,
@@ -36,7 +41,7 @@ vi.mock('../supabase/functions/_backend/utils/hono.ts', async () => {
 
 vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
   closeClient: closeClientMock,
-  getPgClient: vi.fn(() => ({ query: pgQueryMock })),
+  getPgClient: getPgClientMock,
 }))
 
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
@@ -125,6 +130,8 @@ async function postUser(record = userRecord()) {
 describe('first-organization lifecycle on user registration', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    closeClientMock.mockResolvedValue(undefined)
+    getPgClientMock.mockImplementation(() => ({ query: pgQueryMock }))
     pgQueryMock.mockResolvedValue({ rows: [] })
     syncBentoSubscriberTagsMock.mockResolvedValue(true)
     trackBentoEventMock.mockResolvedValue(true)
@@ -154,6 +161,42 @@ describe('first-organization lifecycle on user registration', () => {
       'user:registered_without_org',
     )
     expect(pgQueryMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('closes each short-lived access pool before the following Bento request', async () => {
+    const lifecycleTrace: string[] = []
+    let queryNumber = 0
+    pgQueryMock.mockImplementation(async () => {
+      lifecycleTrace.push(`query:${++queryNumber}`)
+      return { rows: [] }
+    })
+    closeClientMock.mockImplementation(async () => {
+      await Promise.resolve()
+      lifecycleTrace.push('pool:closed')
+    })
+    syncBentoSubscriberTagsMock.mockImplementation(async () => {
+      lifecycleTrace.push('tag:add')
+      return true
+    })
+    trackBentoEventMock.mockImplementation(async () => {
+      lifecycleTrace.push('event:entry')
+      return true
+    })
+
+    const response = await postUser()
+
+    expect(response.status).toBe(200)
+    expect(lifecycleTrace).toEqual([
+      'query:1',
+      'pool:closed',
+      'tag:add',
+      'query:2',
+      'pool:closed',
+      'event:entry',
+    ])
+    expect(getPgClientMock).toHaveBeenCalledTimes(2)
+    expect(getPgClientMock.mock.results[0]?.value).not.toBe(getPgClientMock.mock.results[1]?.value)
+    expect(closeClientMock).toHaveBeenCalledTimes(2)
   })
 
   it('skips entry and removes a stale lifecycle tag for invite-created profiles', async () => {
@@ -196,8 +239,8 @@ describe('first-organization lifecycle on user registration', () => {
     expect(trackBentoEventMock).toHaveBeenCalledTimes(1)
 
     const normalizedQuery = String(pgQueryMock.mock.calls[0]?.[0]).replace(/\s+/g, ' ')
-    expect(normalizedQuery).toContain("principal_type = 'user'")
-    expect(normalizedQuery).toContain("scope_type = 'org'")
+    expect(normalizedQuery).toContain('principal_type = \'user\'')
+    expect(normalizedQuery).toContain('scope_type = \'org\'')
     expect(normalizedQuery).toContain('is_direct IS TRUE')
     expect(normalizedQuery).toContain('org_id IS NOT NULL')
     expect(normalizedQuery).toContain('(expires_at IS NULL OR expires_at > pg_catalog.now())')
@@ -223,16 +266,24 @@ describe('first-organization lifecycle on user registration', () => {
         lifecycleTrace.push('tag:remove')
       return true
     })
+    closeClientMock.mockImplementation(async () => {
+      await Promise.resolve()
+      lifecycleTrace.push('pool:closed')
+    })
 
     const response = await postUser()
 
     expect(response.status).toBe(200)
     expect(lifecycleTrace).toEqual([
       'query:no-access',
+      'pool:closed',
       'tag:add',
       'query:access-found',
+      'pool:closed',
       'tag:remove',
     ])
+    expect(getPgClientMock).toHaveBeenCalledTimes(2)
+    expect(closeClientMock).toHaveBeenCalledTimes(2)
     expect(pgQueryMock).toHaveBeenCalledTimes(2)
     expect(syncBentoSubscriberTagsMock).toHaveBeenCalledTimes(2)
     expect(syncBentoSubscriberTagsMock).toHaveBeenNthCalledWith(1, expect.anything(), {
@@ -282,6 +333,8 @@ describe('first-organization lifecycle on user registration', () => {
 describe('first-organization lifecycle on direct org access', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    closeClientMock.mockResolvedValue(undefined)
+    getPgClientMock.mockImplementation(() => ({ query: pgQueryMock }))
     pgQueryMock.mockResolvedValue({ rows: [activeBinding()] })
     syncBentoSubscriberTagsMock.mockResolvedValue(true)
     trackBentoEventMock.mockResolvedValue(true)

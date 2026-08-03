@@ -41,7 +41,16 @@ const roleBindingRecord = {
   scope_type: 'org',
 }
 
-function requestRoleBindingWrite(type: 'INSERT' | 'UPDATE') {
+function requestRoleBindingWrite(type: 'INSERT' | 'UPDATE', apiSecret: string | null = API_SECRET) {
+  const headers: Record<string, string> = {
+    'content-type': 'application/json',
+    'x-capgo-queue-max-reads': '5',
+    'x-capgo-queue-name': 'on_user_org_access',
+    'x-capgo-queue-read-count': '1',
+  }
+  if (apiSecret !== null)
+    headers.apisecret = apiSecret
+
   return apiWorker.fetch(new Request('https://api.capgo.app/triggers/on_user_org_access', {
     body: JSON.stringify({
       old_record: type === 'UPDATE' ? roleBindingRecord : null,
@@ -50,13 +59,7 @@ function requestRoleBindingWrite(type: 'INSERT' | 'UPDATE') {
       table: 'role_bindings',
       type,
     }),
-    headers: {
-      'apisecret': API_SECRET,
-      'content-type': 'application/json',
-      'x-capgo-queue-max-reads': '5',
-      'x-capgo-queue-name': 'on_user_org_access',
-      'x-capgo-queue-read-count': '1',
-    },
+    headers,
     method: 'POST',
   }))
 }
@@ -95,9 +98,19 @@ describe('first-organization lifecycle trigger route', () => {
     expect(syncBentoFirstOrgOnRoleBindingWriteMock).toHaveBeenCalledOnce()
   })
 
+  it.each([
+    ['a missing API secret', null],
+    ['an invalid API secret', 'wrong-secret'],
+  ])('rejects %s before invoking the lifecycle helper', async (_label, apiSecret) => {
+    const response = await requestRoleBindingWrite('INSERT', apiSecret)
+
+    expect(response.status).toBe(400)
+    expect(syncBentoFirstOrgOnRoleBindingWriteMock).not.toHaveBeenCalled()
+  })
+
   it('registers the same route in the Supabase trigger router', async () => {
     const source = await readFile(new URL('../supabase/functions/triggers/index.ts', import.meta.url), 'utf8')
 
-    expect(source).toContain("appGlobal.route('/on_user_org_access', on_user_org_access)")
+    expect(source).toContain('appGlobal.route(\'/on_user_org_access\', on_user_org_access)')
   })
 })

@@ -1,7 +1,8 @@
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Database } from '../utils/supabase.types.ts'
 import { Hono } from 'hono/tiny'
-import { BRES, middlewareAPISecret, simpleError, triggerValidator } from '../utils/hono.ts'
+import { changeEmailBento } from '../utils/bento.ts'
+import { BRES, middlewareAPISecret, quickError, simpleError, triggerValidator } from '../utils/hono.ts'
 import { cleanStoredImageMetadata } from '../utils/image.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { createApiKey } from '../utils/supabase.ts'
@@ -22,12 +23,23 @@ app.post('/', middlewareAPISecret, triggerValidator('users', 'UPDATE'), async (c
     throw simpleError('no_id', 'No id', { record })
   }
   await createApiKey(c, record.id)
-  await syncUserPreferenceTags(c, record.email, record, oldRecord, oldRecord?.email)
 
   const newImagePath = record.image_url
   const oldImagePath = oldRecord?.image_url
   if (newImagePath && newImagePath !== oldImagePath) {
     await cleanStoredImageMetadata(c, newImagePath)
+  }
+
+  const newEmail = record.email.trim().toLowerCase()
+  const oldEmail = oldRecord?.email?.trim().toLowerCase()
+  if (oldEmail && oldEmail !== newEmail) {
+    const changeEmailResult = await changeEmailBento(c, oldEmail, newEmail)
+    if (changeEmailResult === false)
+      quickError(500, 'bento_change_email_failed', 'Bento email change failed')
+    await syncUserPreferenceTags(c, newEmail, record, oldRecord, newEmail)
+  }
+  else {
+    await syncUserPreferenceTags(c, record.email, record, oldRecord, oldRecord?.email)
   }
 
   return c.json(BRES)

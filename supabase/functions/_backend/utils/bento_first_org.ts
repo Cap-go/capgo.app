@@ -9,8 +9,6 @@ export const BENTO_AWAITING_FIRST_ORG_TAG = 'onboarding:awaiting_first_org'
 export const BENTO_REGISTERED_WITHOUT_ORG_EVENT = 'user:registered_without_org'
 export const BENTO_JOINED_ORG_EVENT = 'user:joined_org'
 
-type PgClient = ReturnType<typeof getPgClient>
-
 interface CurrentRoleBinding {
   email: string | null
   granted_at: string
@@ -41,20 +39,26 @@ async function setAwaitingFirstOrgTag(c: Context, email: string, awaiting: boole
   ensureBentoDelivery(result, awaiting ? 'add_awaiting_first_org_tag' : 'remove_awaiting_first_org_tag')
 }
 
-async function hasActiveDirectOrgAccess(pgClient: PgClient, userId: string) {
-  const result = await pgClient.query<{ id: string }>(
-    `SELECT id
-     FROM public.role_bindings
-     WHERE principal_type = 'user'
-       AND principal_id = $1::uuid
-       AND scope_type = 'org'
-       AND org_id IS NOT NULL
-       AND is_direct IS TRUE
-       AND (expires_at IS NULL OR expires_at > pg_catalog.now())
-     LIMIT 1`,
-    [userId],
-  )
-  return result.rows.length > 0
+async function hasActiveDirectOrgAccess(c: Context, userId: string) {
+  const pgClient = getPgClient(c)
+  try {
+    const result = await pgClient.query<{ id: string }>(
+      `SELECT id
+       FROM public.role_bindings
+       WHERE principal_type = 'user'
+         AND principal_id = $1::uuid
+         AND scope_type = 'org'
+         AND org_id IS NOT NULL
+         AND is_direct IS TRUE
+         AND (expires_at IS NULL OR expires_at > pg_catalog.now())
+       LIMIT 1`,
+      [userId],
+    )
+    return result.rows.length > 0
+  }
+  finally {
+    await closeClient(c, pgClient)
+  }
 }
 
 export async function syncBentoFirstOrgOnUserCreate(
@@ -68,30 +72,24 @@ export async function syncBentoFirstOrgOnUserCreate(
     return
   }
 
-  const pgClient = getPgClient(c)
-  try {
-    if (await hasActiveDirectOrgAccess(pgClient, user.id)) {
-      await setAwaitingFirstOrgTag(c, email, false)
-      return
-    }
-
-    await setAwaitingFirstOrgTag(c, email, true)
-
-    if (await hasActiveDirectOrgAccess(pgClient, user.id)) {
-      await setAwaitingFirstOrgTag(c, email, false)
-      return
-    }
-
-    const result = await trackBentoEvent(c, email, {
-      user_id: user.id,
-      registered_at: user.created_at,
-      created_via_invite: false,
-    }, BENTO_REGISTERED_WITHOUT_ORG_EVENT)
-    ensureBentoDelivery(result, 'registered_without_org_event')
+  if (await hasActiveDirectOrgAccess(c, user.id)) {
+    await setAwaitingFirstOrgTag(c, email, false)
+    return
   }
-  finally {
-    await closeClient(c, pgClient)
+
+  await setAwaitingFirstOrgTag(c, email, true)
+
+  if (await hasActiveDirectOrgAccess(c, user.id)) {
+    await setAwaitingFirstOrgTag(c, email, false)
+    return
   }
+
+  const result = await trackBentoEvent(c, email, {
+    user_id: user.id,
+    registered_at: user.created_at,
+    created_via_invite: false,
+  }, BENTO_REGISTERED_WITHOUT_ORG_EVENT)
+  ensureBentoDelivery(result, 'registered_without_org_event')
 }
 
 export async function syncBentoFirstOrgOnRoleBindingWrite(

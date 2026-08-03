@@ -77,4 +77,15 @@ describe('syncUserPreferenceTags email type', () => {
       deleteSegments: expect.arrayContaining(['email_type:professional', 'email_type:disposable']),
     }))
   })
+
+  it('syncs only the moved subscriber when the previous address is the new identity', async () => {
+    const context = createContext()
+
+    await syncUserPreferenceTags(context, 'new@company.com', record, record, 'new@company.com')
+
+    expect(syncBentoSubscriberTagsMock).toHaveBeenCalledOnce()
+    expect(syncBentoSubscriberTagsMock).toHaveBeenCalledWith(context, expect.objectContaining({
+      email: 'new@company.com',
+    }))
+  })
 })

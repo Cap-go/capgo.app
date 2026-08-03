@@ -121,6 +121,39 @@ export async function addTagBento(c: Context, email: string, segments: { segment
   }
 }
 
+export async function changeEmailBento(c: Context, oldEmail: string, newEmail: string) {
+  if (!isBentoConfigured(c))
+    return
+
+  const normalizedOldEmail = oldEmail.trim().toLowerCase()
+  const normalizedNewEmail = newEmail.trim().toLowerCase()
+  if (normalizedOldEmail === normalizedNewEmail)
+    return true
+
+  try {
+    const siteUuid = getEnv(c, 'BENTO_SITE_UUID')
+    const command = {
+      command: 'change_email',
+      email: normalizedOldEmail,
+      query: normalizedNewEmail,
+    }
+    const result = await bentoFetch(c, 'fetch/commands', siteUuid, { command })
+
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'changeEmailBento',
+      oldEmail: normalizedOldEmail,
+      newEmail: normalizedNewEmail,
+      result,
+    })
+    return true
+  }
+  catch (e) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'changeEmailBento error', error: serializeError(e) })
+    return false
+  }
+}
+
 export async function syncBentoSubscriberTags(
   c: Context,
   update: { email: string, segments: string[], deleteSegments: string[] } | Array<{ email: string, segments: string[], deleteSegments: string[] }>,
