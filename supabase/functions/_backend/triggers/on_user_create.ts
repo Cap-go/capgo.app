@@ -2,6 +2,7 @@ import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Database } from '../utils/supabase.types.ts'
 import { Hono } from 'hono/tiny'
 import { BRES, middlewareAPISecret, triggerValidator } from '../utils/hono.ts'
+import { syncBentoFirstOrgOnUserCreate } from '../utils/bento_first_org.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { createApiKey } from '../utils/supabase.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
@@ -15,6 +16,7 @@ app.post('/', middlewareAPISecret, triggerValidator('users', 'INSERT'), async (c
   await createApiKey(c, record.id)
   cloudlog({ requestId: c.get('requestId'), message: 'createCustomer stripe' })
   await syncUserPreferenceTags(c, record.email, record)
+  await syncBentoFirstOrgOnUserCreate(c, record)
   // "User Joined" should represent a self-signup (technical user expected to onboard),
   // not an account created by accepting an org invite.
   await sendEventToTracking(c, {
