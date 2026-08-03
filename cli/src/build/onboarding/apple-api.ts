@@ -20,7 +20,9 @@ export function generateJwt(
   return jwt.sign(
     {
       iss: issuerId,
-      exp: now + 1199, // ~20 minutes
+      // Stay below Apple's 20-minute maximum so small local clock skew does
+      // not make the token appear too long-lived and trigger a false 401.
+      exp: now + 15 * 60,
       aud: 'appstoreconnect-v1',
     },
     p8Content,
