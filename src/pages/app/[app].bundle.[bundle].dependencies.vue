@@ -10,7 +10,7 @@ import IconCheckCircle from '~icons/heroicons/check-circle'
 import IconPuzzle from '~icons/heroicons/puzzle-piece'
 import IconSearch from '~icons/ic/round-search?raw'
 import IconAlertCircle from '~icons/lucide/alert-circle'
-import { comparePackages, summarizeCompatibility } from '~/services/bundleCompatibility'
+import { comparePackages, hasPlatformChecksumMetadataDrift, summarizeCompatibility } from '~/services/bundleCompatibility'
 import { useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
 
@@ -116,6 +116,20 @@ const sameVersionChecksumChanges = computed(() => comparisons.value.some((entry)
 
   return platformChecksumDiffs(entry).length > 0
 }))
+
+// One-sided iOS/Android checksum fields: usually Capgo CLI upgrade/downgrade metadata,
+// not a real native code change. Surface that so users don't treat it as incompatible.
+const cliPlatformChecksumMetadataDrift = computed(() =>
+  compareVersionId.value ? hasPlatformChecksumMetadataDrift(comparisons.value) : false,
+)
+
+const cliChecksumHint = computed(() => {
+  if (cliPlatformChecksumMetadataDrift.value)
+    return t('dependencies-cli-checksum-metadata-hint')
+  if (sameVersionChecksumChanges.value)
+    return t('dependencies-same-version-changed-hint')
+  return ''
+})
 
 const compareStatusMessage = computed(() => {
   if (!nativePackages.value.length)
@@ -532,8 +546,12 @@ watch(bundleRouteKey, async (key) => {
               <p v-if="compareStatusMessage" class="mt-2 text-xs text-slate-500 dark:text-slate-400">
                 {{ compareStatusMessage }}
               </p>
-              <p v-if="sameVersionChecksumChanges" class="mt-1 text-xs text-amber-700 dark:text-amber-300">
-                {{ t('dependencies-same-version-changed-hint') }}
+              <p
+                v-if="cliChecksumHint"
+                data-test="dependencies-cli-checksum-hint"
+                class="mt-1 text-xs text-amber-700 dark:text-amber-300"
+              >
+                {{ cliChecksumHint }}
               </p>
 
               <div class="px-2 pb-2 relative">
@@ -618,6 +636,13 @@ watch(bundleRouteKey, async (key) => {
                               {{ filteredReasons(entry).join(', ') }}
                             </p>
                           </div>
+                          <p
+                            v-else-if="entry.platformChecksumMetadataChanged"
+                            data-test="dependencies-cli-checksum-row-hint"
+                            class="mt-1 text-xs text-amber-700 dark:text-amber-300"
+                          >
+                            {{ t('dependencies-cli-checksum-row-hint') }}
+                          </p>
                         </td>
                         <td class="px-6 py-4 text-sm whitespace-nowrap">
                           <span class="px-2 py-1 text-xs font-medium rounded-full" :class="STATUS_STYLES[entry.status].pill">

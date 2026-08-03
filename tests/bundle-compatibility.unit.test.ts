@@ -1,6 +1,6 @@
 import type { NativePackage } from '../src/services/bundleCompatibility'
 import { describe, expect, it } from 'vitest'
-import { comparePackages, summarizeCompatibility } from '../src/services/bundleCompatibility'
+import { comparePackages, hasPlatformChecksumMetadataDrift, summarizeCompatibility } from '../src/services/bundleCompatibility'
 
 function pkg(name: string, version: string, extra: Partial<NativePackage> = {}): NativePackage {
   return { name, version, ...extra }
@@ -116,7 +116,41 @@ describe('comparePackages', () => {
       [pkg('a', '1.0.0', { ios_checksum: 'i2' })],
       [pkg('a', '1.0.0')],
     )
-    expect(byName('a', result).compatible).toBe(true)
+    const a = byName('a', result)
+    expect(a.compatible).toBe(true)
+    expect(a.platformChecksumMetadataChanged).toBe(true)
+    expect(a.reasons).toEqual([])
+  })
+
+  it.concurrent('treats empty checksum strings as absent metadata', () => {
+    const result = comparePackages(
+      [pkg('a', '1.0.0', { ios_checksum: 'real', android_checksum: 'd' })],
+      [pkg('a', '1.0.0', { ios_checksum: '', android_checksum: '   ' })],
+    )
+    const a = byName('a', result)
+    expect(a.compatible).toBe(true)
+    expect(a.reasons).toEqual([])
+    expect(a.platformChecksumMetadataChanged).toBe(true)
+  })
+
+  it.concurrent('flags metadata drift when both iOS and Android checksums newly appear', () => {
+    const result = comparePackages(
+      [pkg('a', '1.0.0', { ios_checksum: 'i', android_checksum: 'd' })],
+      [pkg('a', '1.0.0')],
+    )
+    const a = byName('a', result)
+    expect(a.compatible).toBe(true)
+    expect(a.platformChecksumMetadataChanged).toBe(true)
+    expect(hasPlatformChecksumMetadataDrift(result)).toBe(true)
+  })
+
+  it.concurrent('does not flag metadata drift when checksums match on both sides', () => {
+    const result = comparePackages(
+      [pkg('a', '1.0.0', { ios_checksum: 'i', android_checksum: 'd' })],
+      [pkg('a', '1.0.0', { ios_checksum: 'i', android_checksum: 'd' })],
+    )
+    expect(byName('a', result).platformChecksumMetadataChanged).toBe(false)
+    expect(hasPlatformChecksumMetadataDrift(result)).toBe(false)
   })
 
   it.concurrent('orders changes first, then added, removed, unchanged, then by name', () => {

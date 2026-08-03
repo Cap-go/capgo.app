@@ -7,5 +7,6 @@ export type {
 
 export {
   compareNativePackages as comparePackages,
+  hasPlatformChecksumMetadataDrift,
   summarizeBundleCompatibility as summarizeCompatibility,
 } from '../../supabase/functions/_backend/utils/bundle_compatibility.ts'

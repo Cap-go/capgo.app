@@ -570,6 +570,12 @@ watchEffect(async () => {
                 <p class="pt-4 text-sm leading-relaxed text-slate-600 dark:text-slate-300">
                   {{ t('compat-fix-explanation') }}
                 </p>
+                <p
+                  data-test="compatibility-cli-checksum-tip"
+                  class="mt-3 text-sm leading-relaxed text-amber-800 dark:text-amber-200"
+                >
+                  {{ t('compat-fix-cli-checksum-tip') }}
+                </p>
 
                 <h3 class="mt-4 text-xs font-semibold tracking-wide uppercase text-slate-400 dark:text-slate-500">
                   {{ t('compat-fix-how-title') }}
