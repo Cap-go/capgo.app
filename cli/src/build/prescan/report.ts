@@ -56,6 +56,7 @@ export function renderTerminalReport(report: PrescanReport, opts: { verbose?: bo
   const summaryCodes = error > 0 ? ANSI.red : warning > 0 ? ANSI.yellow : ANSI.dim
   lines.push(paint(summaryCodes, summary))
   const deferred = informationOnlyFindings(report, now)
+    .filter(finding => !(opts.ignoreFatal && finding.severity === 'error'))
   if (deferred.length > 0)
     lines.push(paint(ANSI.dim, `rollout: ${deferred.length} finding(s) are information only until their enforcement deadline`))
   if (opts.verbose)

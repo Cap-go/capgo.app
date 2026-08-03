@@ -109,9 +109,11 @@ describe('runPrescanGate', () => {
       now: new Date('2026-08-01T00:00:00.000Z'),
       print: message => printed.push(message),
     }, async () => report)
+    const output = printed.join('\n')
     expect(r.decision).toBe('proceed')
-    expect(printed.join('\n')).toContain('CRITICAL — INFORMATION ONLY')
-    expect(printed.join('\n')).not.toContain('will fail builds starting 2026-08-14 00:00 UTC')
+    expect(output).toContain('CRITICAL — INFORMATION ONLY')
+    expect(output).not.toContain('will fail builds starting 2026-08-14 00:00 UTC')
+    expect(output).not.toContain('rollout:')
   })
   it('proceeds (non-interactive) on warnings', async () => {
     const r = await runPrescanGate({ enabled: true, interactive: false, silent: true }, async () => fakeReport(0, 1))
