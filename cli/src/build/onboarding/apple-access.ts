@@ -46,8 +46,8 @@ interface AscProviderFailure {
 
 export type AscAccessResult
   = | { ok: true }
-    | { ok: false, kind: 'no-app-access' | 'auth-error' | 'network', message: string }
-      & AscProviderFailure
+    | ({ ok: false, kind: 'no-app-access' | 'auth-error' | 'network', message: string }
+      & AscProviderFailure)
 
 const NETWORKY_RE = /timeout|timed out|network|fetch failed|aborted|ENOTFOUND|EAI_AGAIN|ECONNRESET|ECONNREFUSED/i
 const MAX_ERROR_FIELD_LENGTH = 500

@@ -114,6 +114,19 @@ describe('assertAscAccess', () => {
     }
   })
 
+  it('does not infer auth failure from 403 text on an HTTP 500 response', async () => {
+    const fetchImpl = (async () => jsonResponse(500, {
+      errors: [{ status: '500', code: 'INTERNAL_ERROR', title: 'Upstream HTTP 403', detail: 'Retry later.' }],
+    })) as unknown as typeof fetch
+    const res = await assertAscAccess({ ...creds, bundleId: 'com.demo.app', fetchImpl })
+    expect(res).toMatchObject({
+      ok: false,
+      kind: 'network',
+      status: 500,
+      code: 'INTERNAL_ERROR',
+    })
+  })
+
   it('network when the provided signal is already aborted (no fetch fires)', async () => {
     let fetchCalled = false
     const fetchImpl = (async () => {

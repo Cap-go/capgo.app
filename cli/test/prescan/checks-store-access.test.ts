@@ -13,6 +13,7 @@ import { describe, expect, it } from 'bun:test'
 import forge from 'node-forge'
 import {
   ASC_PRESCAN_AUTH_ENFORCE_AFTER,
+  classifyAscAuthFinding,
   makeAscKeyAccess,
   makePlaySaAccess,
   playSaAccess,
@@ -400,6 +401,23 @@ describe('ios/asc-key-access', () => {
     expect(findings[0]!.title).toContain('HTTP 503')
     expect(findings[0]!.detail).toContain('SERVICE_UNAVAILABLE')
     expect(findings[0]!.detail).toContain('Try again later')
+  })
+
+  it('classifies a non-auth HTTP status independently without losing its status', () => {
+    const finding = classifyAscAuthFinding({
+      ok: false,
+      kind: 'auth-error',
+      message: 'Upstream mentioned HTTP 403 while returning HTTP 500.',
+      status: 500,
+      code: 'INTERNAL_ERROR',
+      title: 'Internal error',
+      detail: 'Retry later.',
+    })
+    expect(finding).toMatchObject({
+      severity: 'warning',
+      title: 'App Store Connect preflight returned HTTP 500',
+    })
+    expect(finding.detail).toContain('INTERNAL_ERROR')
   })
 
   it('skips cleanly (no finding) when APPLE_KEY_CONTENT does not decode to a PEM', async () => {

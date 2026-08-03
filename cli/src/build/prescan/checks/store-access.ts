@@ -66,6 +66,58 @@ function isDefinitiveAuthFailure(result: Extract<AscAccessResult, { ok: false }>
     || ASC_AUTH_TEXT_RE.test(`${result.title ?? ''} ${result.detail ?? ''}`)
 }
 
+/** Classify an ASC auth result without depending on scan context or I/O. */
+export function classifyAscAuthFinding(result: Extract<AscAccessResult, { ok: false }>): Finding {
+  const reason = ascReason(result)
+  if (isAgreementFailure(result)) {
+    return {
+      id: 'ios/asc-key-access',
+      severity: 'error',
+      enforceAfter: ASC_PRESCAN_AUTH_ENFORCE_AFTER,
+      title: 'Apple requires an App Store Connect agreement (HTTP 403)',
+      detail: reason,
+      fix: 'Ask the Account Holder to accept pending agreements in App Store Connect → Business, then retry.',
+    }
+  }
+  if (isDefinitiveAuthFailure(result)) {
+    return {
+      id: 'ios/asc-key-access',
+      severity: 'error',
+      enforceAfter: ASC_PRESCAN_AUTH_ENFORCE_AFTER,
+      title: `App Store Connect authentication failed during preflight (HTTP ${result.status})`,
+      detail: reason,
+      fix: ASC_FIX,
+    }
+  }
+  if (result.status === 403) {
+    return {
+      id: 'ios/asc-key-access',
+      severity: 'warning',
+      title: 'Apple denied the App Store Connect preflight request (HTTP 403)',
+      detail: `${reason} This /v1/apps probe differs from the TestFlight upload path, so the build may still succeed.`,
+      fix: 'Review Apple\'s reason and confirm the key can access the target app. Use --fail-on-warnings only if this probe must be strict.',
+    }
+  }
+  if (result.status !== undefined) {
+    return {
+      id: 'ios/asc-key-access',
+      severity: 'warning',
+      title: `App Store Connect preflight returned HTTP ${result.status}`,
+      detail: reason,
+      fix: 'Retry the preflight. The build will still attempt the upload because this response does not prove the credentials are invalid.',
+    }
+  }
+  // A local signing failure has no HTTP status. It is definitive because the
+  // CLI could not construct a token from the supplied key material.
+  return {
+    id: 'ios/asc-key-access',
+    severity: 'error',
+    title: 'Could not authenticate the App Store Connect API key',
+    detail: reason,
+    fix: ASC_FIX,
+  }
+}
+
 /** Injectable validator type so tests can supply a fake without any network. */
 type PlayValidator = (opts: ValidateOptions) => Promise<ValidationResult>
 type AscAsserter = (opts: AssertAscAccessOptions) => Promise<AscAccessResult>
@@ -216,47 +268,8 @@ export function makeAscKeyAccess(asserter: AscAsserter): PrescanCheck {
         return []
 
       switch (result.kind) {
-        case 'auth-error': {
-          const reason = ascReason(result)
-          if (isAgreementFailure(result)) {
-            return [{
-              id: 'ios/asc-key-access',
-              severity: 'error',
-              enforceAfter: ASC_PRESCAN_AUTH_ENFORCE_AFTER,
-              title: 'Apple requires an App Store Connect agreement (HTTP 403)',
-              detail: reason,
-              fix: 'Ask the Account Holder to accept pending agreements in App Store Connect → Business, then retry.',
-            }]
-          }
-          if (isDefinitiveAuthFailure(result)) {
-            return [{
-              id: 'ios/asc-key-access',
-              severity: 'error',
-              enforceAfter: ASC_PRESCAN_AUTH_ENFORCE_AFTER,
-              title: `App Store Connect authentication failed during preflight (HTTP ${result.status})`,
-              detail: reason,
-              fix: ASC_FIX,
-            }]
-          }
-          if (result.status === 403) {
-            return [{
-              id: 'ios/asc-key-access',
-              severity: 'warning',
-              title: 'Apple denied the App Store Connect preflight request (HTTP 403)',
-              detail: `${reason} This /v1/apps probe differs from the TestFlight upload path, so the build may still succeed.`,
-              fix: 'Review Apple\'s reason and confirm the key can access the target app. Use --fail-on-warnings only if this probe must be strict.',
-            }]
-          }
-          // A local signing failure has no HTTP status. It is definitive because
-          // the CLI could not construct a token from the supplied key material.
-          return [{
-            id: 'ios/asc-key-access',
-            severity: 'error',
-            title: 'Could not authenticate the App Store Connect API key',
-            detail: reason,
-            fix: ASC_FIX,
-          }]
-        }
+        case 'auth-error':
+          return [classifyAscAuthFinding(result)]
         case 'no-app-access':
           // 2xx but the project bundle id is absent from /apps -> warning.
           return [{
