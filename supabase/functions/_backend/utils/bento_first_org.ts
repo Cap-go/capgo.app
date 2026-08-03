@@ -12,7 +12,7 @@ export const BENTO_FIRST_ORG_RECOVERY_SUPPRESSED_TAG = 'onboarding:first_org_rec
 export const BENTO_REGISTERED_WITHOUT_ORG_EVENT = 'user:registered_without_org'
 export const BENTO_JOINED_ORG_EVENT = 'user:joined_org'
 
-const BENTO_DELETED_USER_OPERATION_TIMEOUT_MS = 2_000
+export const BENTO_DELETED_USER_OPERATION_TIMEOUT_MS = 2_000
 
 interface CurrentRoleBinding {
   email: string | null
@@ -179,7 +179,19 @@ async function runBentoMutationWithFirstOrgReconciliation(
 
   // Reconcile even after an ambiguous provider failure: Bento may have
   // accepted the mutation before Capgo lost the response.
-  const state = await reconcileFirstOrgStateAfterBentoMutation(c, pgPool, userId, email)
+  let state: Awaited<ReturnType<typeof reconcileFirstOrgStateAfterBentoMutation>>
+  try {
+    state = await reconcileFirstOrgStateAfterBentoMutation(c, pgPool, userId, email)
+  }
+  catch (reconciliationError) {
+    if (!mutationSucceeded) {
+      throw new AggregateError(
+        [mutationError, reconciliationError],
+        'Bento mutation and first-organization reconciliation failed',
+      )
+    }
+    throw reconciliationError
+  }
   if (!mutationSucceeded)
     throw mutationError
   return state

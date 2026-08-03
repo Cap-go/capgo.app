@@ -43,6 +43,7 @@ vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
 }))
 
 const { app } = await import('../supabase/functions/_backend/triggers/on_user_delete.ts')
+const { BENTO_DELETED_USER_OPERATION_TIMEOUT_MS } = await import('../supabase/functions/_backend/utils/bento_first_org.ts')
 
 const USER_ID = '11111111-1111-4111-8111-111111111111'
 
@@ -244,7 +245,7 @@ describe('user deletion Bento recovery safety', () => {
       })
 
       const responsePromise = postDelete()
-      await vi.advanceTimersByTimeAsync(2_001)
+      await vi.advanceTimersByTimeAsync(BENTO_DELETED_USER_OPERATION_TIMEOUT_MS + 1)
 
       const response = await responsePromise
       expect(response.status).toBe(500)
@@ -272,7 +273,7 @@ describe('user deletion Bento recovery safety', () => {
       }))
 
       const responsePromise = postDelete()
-      await vi.advanceTimersByTimeAsync(2_001)
+      await vi.advanceTimersByTimeAsync(BENTO_DELETED_USER_OPERATION_TIMEOUT_MS + 1)
 
       const response = await responsePromise
       expect(response.status).toBe(500)

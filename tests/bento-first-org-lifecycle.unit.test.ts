@@ -913,6 +913,30 @@ describe('first-organization lifecycle on direct org access', () => {
     expect(unsubscribeBentoMock).toHaveBeenCalledWith(expect.anything(), 'current.user@example.com', expect.any(AbortSignal))
   })
 
+  it('preserves both errors when a Bento mutation and deletion reconciliation fail', async () => {
+    const mutationError = new Error('Bento mutation unavailable')
+    const reconciliationError = new Error('Bento reconciliation unavailable')
+    pgQueryMock
+      .mockResolvedValueOnce({ rows: [activeBinding()] })
+      .mockResolvedValueOnce({ rows: [firstOrgDatabaseState(true)] })
+      .mockResolvedValueOnce({ rows: [firstOrgDatabaseState(false, false)] })
+    syncBentoSubscriberTagsMock
+      .mockRejectedValueOnce(mutationError)
+      .mockRejectedValueOnce(reconciliationError)
+
+    const result = syncRoleBinding()
+
+    await expect(result).rejects.toMatchObject({
+      errors: [mutationError, reconciliationError],
+      message: 'Bento mutation and first-organization reconciliation failed',
+    })
+    expect(unsubscribeBentoMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'current.user@example.com',
+      expect.any(AbortSignal),
+    )
+  })
+
   it('succeeds as a no-op when Bento is not configured', async () => {
     syncBentoSubscriberTagsMock.mockResolvedValue(undefined)
     trackBentoEventMock.mockResolvedValue(undefined)
