@@ -581,8 +581,10 @@ async function handleQuerySessionHandoff(accessToken: string, refreshToken: stri
   if (isCapgoDomainReferrer(document.referrer)) {
     await acceptQuerySession()
     // setSession failed: tokens remain in memory — show confirm so user can retry
-    if (querySessionAccessToken.value)
+    if (querySessionAccessToken.value) {
       hasQuerySession.value = true
+      hideLoader()
+    }
     return
   }
 
