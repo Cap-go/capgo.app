@@ -29,8 +29,41 @@ import { willUploadToAppStore, willUploadToPlay } from '../upload-intent'
 /** 7s per-request budget so the fetch aborts cleanly before the engine's 10s race. */
 const STORE_ACCESS_TIMEOUT_MS = 7000
 
+/** ASC authentication failures become build-blocking after a 14-day rollout. */
+export const ASC_PRESCAN_AUTH_ENFORCE_AFTER = '2026-08-17T00:00:00.000Z'
+
 const PLAY_FIX = 'Invite the service-account email in Play Console -> Users and permissions, then grant it release access for this app.'
 const ASC_FIX = 'App Store Connect rejected the API key - check the Key ID / Issuer ID / .p8 and that the key has Admin or Developer access (or sign the pending agreement).'
+const ASC_AGREEMENT_CODES = new Set([
+  'FORBIDDEN.REQUIRED_AGREEMENTS_MISSING_OR_EXPIRED',
+  'FORBIDDEN_ERROR.PLA_NOT_ACCEPTED',
+])
+const ASC_AUTH_CODE_RE = /(?:^|[._-])(NOT_AUTHORIZED|UNAUTHORIZED|AUTHENTICATION(?:_ERROR)?|INVALID_(?:TOKEN|CREDENTIALS?))(?:$|[._-])/i
+const ASC_AUTH_TEXT_RE = /authentication credentials? (?:are )?(?:missing or invalid)|invalid (?:bearer )?token|token (?:is )?(?:invalid|expired)/i
+
+function ascReason(result: Extract<AscAccessResult, { ok: false }>): string {
+  const heading = [result.code ? `[${result.code}]` : '', result.title ?? ''].filter(Boolean).join(' ')
+  return [heading, result.detail].filter(Boolean).join(' - ') || result.message
+}
+
+function isAgreementFailure(result: Extract<AscAccessResult, { ok: false }>): boolean {
+  return Boolean(
+    result.status === 403
+    && (
+      (result.code && ASC_AGREEMENT_CODES.has(result.code))
+      || /\bPLA_NOT_ACCEPTED\b|required agreement|program license agreement/i.test(`${result.code ?? ''} ${result.title ?? ''} ${result.detail ?? ''}`)
+    ),
+  )
+}
+
+function isDefinitiveAuthFailure(result: Extract<AscAccessResult, { ok: false }>): boolean {
+  if (result.status === 401)
+    return true
+  if (result.status !== 403)
+    return false
+  return ASC_AUTH_CODE_RE.test(result.code ?? '')
+    || ASC_AUTH_TEXT_RE.test(`${result.title ?? ''} ${result.detail ?? ''}`)
+}
 
 /** Injectable validator type so tests can supply a fake without any network. */
 type PlayValidator = (opts: ValidateOptions) => Promise<ValidationResult>
@@ -182,16 +215,47 @@ export function makeAscKeyAccess(asserter: AscAsserter): PrescanCheck {
         return []
 
       switch (result.kind) {
-        case 'auth-error':
-          // 401/403 incl. the agreements branch. The helper's message reuses
-          // verifyApiKey's copy (no credential material).
+        case 'auth-error': {
+          const reason = ascReason(result)
+          if (isAgreementFailure(result)) {
+            return [{
+              id: 'ios/asc-key-access',
+              severity: 'error',
+              enforceAfter: ASC_PRESCAN_AUTH_ENFORCE_AFTER,
+              title: 'Apple requires an App Store Connect agreement (HTTP 403)',
+              detail: reason,
+              fix: 'Ask the Account Holder to accept pending agreements in App Store Connect → Business, then retry.',
+            }]
+          }
+          if (isDefinitiveAuthFailure(result)) {
+            return [{
+              id: 'ios/asc-key-access',
+              severity: 'error',
+              enforceAfter: ASC_PRESCAN_AUTH_ENFORCE_AFTER,
+              title: `App Store Connect authentication failed during preflight (HTTP ${result.status})`,
+              detail: reason,
+              fix: ASC_FIX,
+            }]
+          }
+          if (result.status === 403) {
+            return [{
+              id: 'ios/asc-key-access',
+              severity: 'warning',
+              title: 'Apple denied the App Store Connect preflight request (HTTP 403)',
+              detail: `${reason} This /v1/apps probe differs from the TestFlight upload path, so the build may still succeed.`,
+              fix: 'Review Apple\'s reason and confirm the key can access the target app. Use --fail-on-warnings only if this probe must be strict.',
+            }]
+          }
+          // A local signing failure has no HTTP status. It is definitive because
+          // the CLI could not construct a token from the supplied key material.
           return [{
             id: 'ios/asc-key-access',
             severity: 'error',
-            title: 'App Store Connect rejected the API key',
-            detail: result.message,
+            title: 'Could not authenticate the App Store Connect API key',
+            detail: reason,
             fix: ASC_FIX,
           }]
+        }
         case 'no-app-access':
           // 2xx but the project bundle id is absent from /apps -> warning.
           return [{
@@ -204,9 +268,13 @@ export function makeAscKeyAccess(asserter: AscAsserter): PrescanCheck {
         case 'network':
           return [{
             id: 'ios/asc-key-access',
-            severity: 'info',
-            title: 'Could not verify App Store Connect access (network error or timeout)',
-            detail: 'The build will still attempt the upload; this check is best-effort and skipped offline.',
+            severity: 'warning',
+            title: result.status
+              ? `App Store Connect preflight returned HTTP ${result.status}`
+              : 'Could not verify App Store Connect access (network error or timeout)',
+            detail: result.status
+              ? `${ascReason(result)} The build will still attempt the upload.`
+              : 'The build will still attempt the upload; retry when network access is available.',
           }]
         default:
           return []
