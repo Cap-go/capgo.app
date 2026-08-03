@@ -1,6 +1,7 @@
 import type { Compatibility } from '../cli/src/schemas/common.ts'
 import { describe, expect, it } from 'vitest'
 import { summarizeUploadCompatibility } from '../cli/src/bundle/compatibility.ts'
+import { getCompatibilityDetails } from '../cli/src/utils.ts'
 
 // Fixtures mirroring the cases getCompatibilityDetails() classifies.
 const compatibleSameVersion: Compatibility = {
@@ -86,5 +87,38 @@ describe('summarizeUploadCompatibility', () => {
     ])
     expect(summary.incompatibleCount).toBe(2)
     expect(summary.reasons).toEqual(['version_mismatch'])
+  })
+
+  it.concurrent('flags one-sided iOS/Android checksum metadata as incompatible CLI drift', () => {
+    const oneSided: Compatibility = {
+      name: 'cli-metadata',
+      localVersion: '1.0.0',
+      remoteVersion: '1.0.0',
+      localIosChecksum: 'aaa',
+      localAndroidChecksum: 'bbb',
+    }
+    const details = getCompatibilityDetails(oneSided)
+    expect(details.compatible).toBe(false)
+    expect(details.reasons).toEqual(['platform_checksum_metadata_changed'])
+    expect(details.message).toContain('Capgo CLI')
+
+    expect(summarizeUploadCompatibility([oneSided])).toEqual({
+      result: 'incompatible',
+      incompatibleCount: 1,
+      reasons: ['platform_checksum_metadata_changed'],
+    })
+  })
+
+  it.concurrent('treats whitespace-only remote checksums as absent metadata', () => {
+    const whitespaceRemote: Compatibility = {
+      name: 'cli-metadata-ws',
+      localVersion: '1.0.0',
+      remoteVersion: '1.0.0',
+      localIosChecksum: 'aaa',
+      remoteIosChecksum: '   ',
+    }
+    const details = getCompatibilityDetails(whitespaceRemote)
+    expect(details.compatible).toBe(false)
+    expect(details.reasons).toEqual(['platform_checksum_metadata_changed'])
   })
 })
