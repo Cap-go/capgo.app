@@ -26,9 +26,9 @@ const props = withDefaults(defineProps<{
 const discordUsername = defineModel<string>('discordUsername', { required: true })
 
 const { t } = useI18n()
-const githubDialog = useTemplateRef('githubDialog')
+const githubDialog = useTemplateRef<InstanceType<typeof GitHubProfileDialog>>('githubDialog')
 
-const githubUsername = computed(() => unref(githubDialog.value?.githubUsername) ?? '')
+const githubUsername = computed((): string => unref(githubDialog.value?.githubUsername) ?? '')
 
 const supportBenefits = computed(() => [
   { icon: IconBadgeCheck, label: t('organization-onboarding-support-benefit-match') },
