@@ -86,35 +86,19 @@ describe('user update Bento subscriber identity', () => {
     changeEmailBentoMock.mockResolvedValue(true)
   })
 
-  it('moves the identity before syncing preferences only on the normalized new address', async () => {
-    const lifecycleTrace: string[] = []
-    changeEmailBentoMock.mockImplementation(async () => {
-      lifecycleTrace.push('identity:move')
-      return true
-    })
-    syncUserPreferenceTagsMock.mockImplementation(async () => {
-      lifecycleTrace.push('preferences:sync')
-    })
-    const oldRecord = userRecord(' Old.User@Example.COM ')
-    const record = userRecord(' New.User@Example.COM ')
+  it('queues the identity move without racing even a simultaneous preference change', async () => {
+    const oldRecord = userRecord(' Old.User@Example.COM ', { enable_notifications: false })
+    const record = userRecord(' New.User@Example.COM ', { enable_notifications: true })
 
     const response = await postUpdate(record, oldRecord)
 
     expect(response.status).toBe(200)
-    expect(lifecycleTrace).toEqual(['identity:move', 'preferences:sync'])
     expect(changeEmailBentoMock).toHaveBeenCalledWith(
       expect.anything(),
       'old.user@example.com',
       'new.user@example.com',
     )
-    expect(syncUserPreferenceTagsMock).toHaveBeenCalledOnce()
-    expect(syncUserPreferenceTagsMock).toHaveBeenCalledWith(
-      expect.anything(),
-      'new.user@example.com',
-      record,
-      oldRecord,
-      'new.user@example.com',
-    )
+    expect(syncUserPreferenceTagsMock).not.toHaveBeenCalled()
     expect(syncBentoSubscriberTagsMock).not.toHaveBeenCalled()
   })
 
@@ -169,7 +153,7 @@ describe('user update Bento subscriber identity', () => {
     expect(syncUserPreferenceTagsMock).not.toHaveBeenCalled()
   })
 
-  it('continues preference sync when Bento is not configured', async () => {
+  it('succeeds without writing either subscriber address when Bento is not configured', async () => {
     changeEmailBentoMock.mockResolvedValue(undefined)
     const record = userRecord('new@example.com')
     const oldRecord = userRecord('old@example.com')
@@ -177,12 +161,6 @@ describe('user update Bento subscriber identity', () => {
     const response = await postUpdate(record, oldRecord)
 
     expect(response.status).toBe(200)
-    expect(syncUserPreferenceTagsMock).toHaveBeenCalledWith(
-      expect.anything(),
-      'new@example.com',
-      record,
-      oldRecord,
-      'new@example.com',
-    )
+    expect(syncUserPreferenceTagsMock).not.toHaveBeenCalled()
   })
 })

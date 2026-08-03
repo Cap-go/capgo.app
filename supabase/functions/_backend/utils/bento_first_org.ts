@@ -39,8 +39,8 @@ async function setAwaitingFirstOrgTag(c: Context, email: string, awaiting: boole
   ensureBentoDelivery(result, awaiting ? 'add_awaiting_first_org_tag' : 'remove_awaiting_first_org_tag')
 }
 
-async function hasActiveDirectOrgAccess(c: Context, userId: string) {
-  const pgClient = getPgClient(c)
+async function hasActiveDirectOrgAccess(pgPool: ReturnType<typeof getPgClient>, userId: string) {
+  const pgClient = await pgPool.connect()
   try {
     const result = await pgClient.query<{ id: string }>(
       `SELECT id
@@ -57,7 +57,7 @@ async function hasActiveDirectOrgAccess(c: Context, userId: string) {
     return result.rows.length > 0
   }
   finally {
-    await closeClient(c, pgClient)
+    pgClient.release(true)
   }
 }
 
@@ -72,24 +72,30 @@ export async function syncBentoFirstOrgOnUserCreate(
     return
   }
 
-  if (await hasActiveDirectOrgAccess(c, user.id)) {
-    await setAwaitingFirstOrgTag(c, email, false)
-    return
+  const pgPool = getPgClient(c)
+  try {
+    if (await hasActiveDirectOrgAccess(pgPool, user.id)) {
+      await setAwaitingFirstOrgTag(c, email, false)
+      return
+    }
+
+    await setAwaitingFirstOrgTag(c, email, true)
+
+    if (await hasActiveDirectOrgAccess(pgPool, user.id)) {
+      await setAwaitingFirstOrgTag(c, email, false)
+      return
+    }
+
+    const result = await trackBentoEvent(c, email, {
+      user_id: user.id,
+      registered_at: user.created_at,
+      created_via_invite: false,
+    }, BENTO_REGISTERED_WITHOUT_ORG_EVENT)
+    ensureBentoDelivery(result, 'registered_without_org_event')
   }
-
-  await setAwaitingFirstOrgTag(c, email, true)
-
-  if (await hasActiveDirectOrgAccess(c, user.id)) {
-    await setAwaitingFirstOrgTag(c, email, false)
-    return
+  finally {
+    await closeClient(c, pgPool)
   }
-
-  const result = await trackBentoEvent(c, email, {
-    user_id: user.id,
-    registered_at: user.created_at,
-    created_via_invite: false,
-  }, BENTO_REGISTERED_WITHOUT_ORG_EVENT)
-  ensureBentoDelivery(result, 'registered_without_org_event')
 }
 
 export async function syncBentoFirstOrgOnRoleBindingWrite(

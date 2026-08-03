@@ -36,7 +36,10 @@ app.post('/', middlewareAPISecret, triggerValidator('users', 'UPDATE'), async (c
     const changeEmailResult = await changeEmailBento(c, oldEmail, newEmail)
     if (changeEmailResult === false)
       quickError(500, 'bento_change_email_failed', 'Bento email change failed')
-    await syncUserPreferenceTags(c, newEmail, record, oldRecord, newEmail)
+    // Bento only acknowledges that change_email was queued; applying it is asynchronous.
+    // Do not sync preferences to either address here because that can race the move and
+    // create or update the wrong subscriber. Existing preference and lifecycle tags move
+    // with the subscriber; simultaneous preference changes wait for a later non-email update.
   }
   else {
     await syncUserPreferenceTags(c, record.email, record, oldRecord, oldRecord?.email)

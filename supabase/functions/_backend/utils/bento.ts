@@ -137,7 +137,15 @@ export async function changeEmailBento(c: Context, oldEmail: string, newEmail: s
       email: normalizedOldEmail,
       query: normalizedNewEmail,
     }
-    const result = await bentoFetch(c, 'fetch/commands', siteUuid, { command })
+    const result = await bentoFetch(c, 'fetch/commands', siteUuid, { command }) as { results?: unknown } | null
+    if (!result || typeof result.results !== 'number' || !Number.isInteger(result.results) || result.results <= 0) {
+      cloudlogErr({
+        requestId: c.get('requestId'),
+        message: 'changeEmailBento command was not queued',
+        error: result,
+      })
+      return false
+    }
 
     cloudlog({
       requestId: c.get('requestId'),

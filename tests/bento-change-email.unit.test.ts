@@ -44,7 +44,7 @@ describe('changeEmailBento', () => {
   })
 
   it('moves the normalized subscriber identity with the Bento change_email command', async () => {
-    const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }))
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ results: 1 }), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
 
     await expect(changeEmail(' Old.User@Example.COM ', ' New.User@Example.COM ')).resolves.toBe(true)
@@ -66,6 +66,16 @@ describe('changeEmailBento', () => {
 
   it('returns false when configured Bento rejects the identity move', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('unavailable', { status: 503 })))
+
+    await expect(changeEmail('old@example.com', 'new@example.com')).resolves.toBe(false)
+  })
+
+  it.each([
+    ['no command was queued', { results: 0 }],
+    ['the response is missing its queued count', {}],
+    ['the queued count has the wrong type', { results: '1' }],
+  ])('returns false when %s', async (_label, body) => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(body), { status: 200 })))
 
     await expect(changeEmail('old@example.com', 'new@example.com')).resolves.toBe(false)
   })
