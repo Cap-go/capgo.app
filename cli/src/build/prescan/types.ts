@@ -25,6 +25,8 @@ export interface Finding {
 export interface ScanContext {
   appId: string
   platform: Platform
+  /** Operating system running the prescan, used for host-specific local checks. */
+  hostPlatform: NodeJS.Platform
   projectDir: string
   config?: CapacitorConfig
   /** merged credentials, env-var style keys (BUILD_CERTIFICATE_BASE64, ANDROID_KEYSTORE_FILE, ...) */

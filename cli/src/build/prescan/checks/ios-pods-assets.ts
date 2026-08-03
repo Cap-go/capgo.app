@@ -53,6 +53,10 @@ function hasPodfile(ctx: ScanContext): boolean {
   return existsSync(podfilePath(ctx.projectDir))
 }
 
+function hasMacOSPodfile(ctx: ScanContext): boolean {
+  return ctx.hostPlatform === 'darwin' && hasPodfile(ctx)
+}
+
 function hasPackageSwift(ctx: ScanContext): boolean {
   return existsSync(packageSwiftPath(ctx.projectDir))
 }
@@ -84,7 +88,7 @@ function uploading(ctx: ScanContext): boolean {
 export const podsNotInstalled: PrescanCheck = {
   id: 'ios/pods-not-installed',
   platforms: ['ios'],
-  appliesTo: hasPodfile,
+  appliesTo: hasMacOSPodfile,
   async run(ctx): Promise<Finding[]> {
     const appDir = join(ctx.projectDir, 'ios', 'App')
     const podsDir = existsSync(join(appDir, 'Pods'))
@@ -112,7 +116,7 @@ export const podsNotInstalled: PrescanCheck = {
 export const podsLockMissing: PrescanCheck = {
   id: 'ios/pods-lock-missing',
   platforms: ['ios'],
-  appliesTo: hasPodfile,
+  appliesTo: hasMacOSPodfile,
   async run(ctx): Promise<Finding[]> {
     if (readTextIfExists(join(ctx.projectDir, 'ios', 'App', 'Podfile.lock')) !== null)
       return []
