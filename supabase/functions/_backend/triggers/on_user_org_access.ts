@@ -12,7 +12,11 @@ interface RoleBindingWritePayload {
 export const app = new Hono<MiddlewareKeyVariables>()
 
 app.post('/', middlewareAPISecret, async (c) => {
-  const payload = await parseBody<RoleBindingWritePayload>(c)
+  const body = await parseBody<unknown>(c)
+  if (body === null || typeof body !== 'object' || Array.isArray(body))
+    throw simpleError('invalid_payload', 'Expected a JSON object', { payload: body })
+
+  const payload = body as RoleBindingWritePayload
   if (payload.table !== 'role_bindings')
     throw simpleError('table_not_match', 'Not role_bindings', { payload })
   if (payload.type !== 'INSERT' && payload.type !== 'UPDATE')

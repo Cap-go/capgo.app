@@ -106,10 +106,10 @@ describe('user update Bento subscriber identity', () => {
     )
     expect(syncUserPreferenceTagsMock).toHaveBeenCalledWith(
       expect.anything(),
-      record.email,
+      'new.user@example.com',
       record,
       oldRecord,
-      oldRecord.email,
+      'old.user@example.com',
     )
   })
 
@@ -123,10 +123,10 @@ describe('user update Bento subscriber identity', () => {
     expect(syncBentoFirstOrgOnEmailChangeMock).not.toHaveBeenCalled()
     expect(syncUserPreferenceTagsMock).toHaveBeenCalledWith(
       expect.anything(),
-      record.email,
+      'same@example.com',
       record,
       oldRecord,
-      oldRecord.email,
+      'same@example.com',
     )
   })
 
@@ -140,10 +140,10 @@ describe('user update Bento subscriber identity', () => {
     expect(syncBentoFirstOrgOnEmailChangeMock).not.toHaveBeenCalled()
     expect(syncUserPreferenceTagsMock).toHaveBeenCalledWith(
       expect.anything(),
-      record.email,
+      'same.user@example.com',
       record,
       oldRecord,
-      oldRecord.email,
+      'same.user@example.com',
     )
   })
 
@@ -159,11 +159,17 @@ describe('user update Bento subscriber identity', () => {
     expect(syncUserPreferenceTagsMock).not.toHaveBeenCalled()
   })
 
-  it('suppresses both aliases before image cleanup even when cleanup fails', async () => {
+  it('syncs preferences with canonical aliases before image cleanup even when cleanup fails', async () => {
     const lifecycleTrace: string[] = []
     syncBentoFirstOrgOnEmailChangeMock.mockImplementationOnce(async () => {
       lifecycleTrace.push('aliases:suppressed')
       return true
+    })
+    syncUserPreferenceTagsMock.mockImplementationOnce(async () => {
+      lifecycleTrace.push('preferences:synced')
+    })
+    createApiKeyMock.mockImplementationOnce(async () => {
+      lifecycleTrace.push('api-key:created')
     })
     cleanStoredImageMetadataMock.mockImplementationOnce(async () => {
       lifecycleTrace.push('image:cleanup')
@@ -175,20 +181,29 @@ describe('user update Bento subscriber identity', () => {
     const response = await postUpdate(record, oldRecord)
 
     expect(response.status).toBe(500)
-    expect(lifecycleTrace).toEqual(['aliases:suppressed', 'image:cleanup'])
+    expect(lifecycleTrace).toEqual(['aliases:suppressed', 'preferences:synced', 'api-key:created', 'image:cleanup'])
     expect(syncBentoFirstOrgOnEmailChangeMock).toHaveBeenCalledWith(
       expect.anything(),
       'old@example.com',
       'new@example.com',
     )
-    expect(syncUserPreferenceTagsMock).not.toHaveBeenCalled()
+    expect(syncUserPreferenceTagsMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'new@example.com',
+      record,
+      oldRecord,
+      'old@example.com',
+    )
   })
 
-  it('suppresses both aliases before API key creation even when API key creation fails', async () => {
+  it('syncs preferences before API key creation even when API key creation fails', async () => {
     const lifecycleTrace: string[] = []
     syncBentoFirstOrgOnEmailChangeMock.mockImplementationOnce(async () => {
       lifecycleTrace.push('aliases:suppressed')
       return true
+    })
+    syncUserPreferenceTagsMock.mockImplementationOnce(async () => {
+      lifecycleTrace.push('preferences:synced')
     })
     createApiKeyMock.mockImplementationOnce(async () => {
       lifecycleTrace.push('api-key:create')
@@ -198,9 +213,15 @@ describe('user update Bento subscriber identity', () => {
     const response = await postUpdate(userRecord('new@example.com'), userRecord('old@example.com'))
 
     expect(response.status).toBe(500)
-    expect(lifecycleTrace).toEqual(['aliases:suppressed', 'api-key:create'])
+    expect(lifecycleTrace).toEqual(['aliases:suppressed', 'preferences:synced', 'api-key:create'])
     expect(cleanStoredImageMetadataMock).not.toHaveBeenCalled()
-    expect(syncUserPreferenceTagsMock).not.toHaveBeenCalled()
+    expect(syncUserPreferenceTagsMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'new@example.com',
+      expect.anything(),
+      expect.anything(),
+      'old@example.com',
+    )
   })
 
   it('continues preference sync when suppression is an unconfigured no-op', async () => {
@@ -213,10 +234,10 @@ describe('user update Bento subscriber identity', () => {
     expect(response.status).toBe(200)
     expect(syncUserPreferenceTagsMock).toHaveBeenCalledWith(
       expect.anything(),
-      record.email,
+      'new@example.com',
       record,
       oldRecord,
-      oldRecord.email,
+      'old@example.com',
     )
   })
 

@@ -41,7 +41,7 @@ const roleBindingRecord = {
   scope_type: 'org',
 }
 
-function requestRoleBindingWrite(type: 'INSERT' | 'UPDATE', apiSecret: string | null = API_SECRET) {
+function requestPayload(payload: unknown, apiSecret: string | null = API_SECRET) {
   const headers: Record<string, string> = {
     'content-type': 'application/json',
     'x-capgo-queue-max-reads': '5',
@@ -52,16 +52,20 @@ function requestRoleBindingWrite(type: 'INSERT' | 'UPDATE', apiSecret: string | 
     headers.apisecret = apiSecret
 
   return apiWorker.fetch(new Request('https://api.capgo.app/triggers/on_user_org_access', {
-    body: JSON.stringify({
-      old_record: type === 'UPDATE' ? roleBindingRecord : null,
-      record: roleBindingRecord,
-      schema: 'public',
-      table: 'role_bindings',
-      type,
-    }),
+    body: JSON.stringify(payload),
     headers,
     method: 'POST',
   }))
+}
+
+function requestRoleBindingWrite(type: 'INSERT' | 'UPDATE', apiSecret: string | null = API_SECRET) {
+  return requestPayload({
+    old_record: type === 'UPDATE' ? roleBindingRecord : null,
+    record: roleBindingRecord,
+    schema: 'public',
+    table: 'role_bindings',
+    type,
+  }, apiSecret)
 }
 
 describe('first-organization lifecycle trigger route', () => {
@@ -105,6 +109,22 @@ describe('first-organization lifecycle trigger route', () => {
     const response = await requestRoleBindingWrite('INSERT', apiSecret)
 
     expect(response.status).toBe(400)
+    expect(syncBentoFirstOrgOnRoleBindingWriteMock).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['null', null],
+    ['an array', []],
+    ['a string', 'role_bindings'],
+    ['a number', 42],
+    ['a boolean', false],
+  ])('rejects %s JSON payload with a controlled validation error', async (_label, payload) => {
+    const response = await requestPayload(payload)
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toMatchObject({
+      error: 'invalid_payload',
+    })
     expect(syncBentoFirstOrgOnRoleBindingWriteMock).not.toHaveBeenCalled()
   })
 

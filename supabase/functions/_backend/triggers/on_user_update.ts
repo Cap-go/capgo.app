@@ -31,6 +31,8 @@ app.post('/', middlewareAPISecret, triggerValidator('users', 'UPDATE'), async (c
       quickError(500, 'bento_first_org_suppression_failed', 'Bento first-organization recovery suppression failed')
   }
 
+  await syncUserPreferenceTags(c, newEmail, record, oldRecord, oldEmail)
+
   await createApiKey(c, record.id)
 
   const newImagePath = record.image_url
@@ -38,8 +40,6 @@ app.post('/', middlewareAPISecret, triggerValidator('users', 'UPDATE'), async (c
   if (newImagePath && newImagePath !== oldImagePath) {
     await cleanStoredImageMetadata(c, newImagePath)
   }
-
-  await syncUserPreferenceTags(c, record.email, record, oldRecord, oldRecord?.email)
 
   return c.json(BRES)
 })
