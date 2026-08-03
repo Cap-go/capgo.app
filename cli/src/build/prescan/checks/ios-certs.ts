@@ -13,19 +13,69 @@ type CertBag = forge.pkcs12.Bag
 const SHA1_OID = '1.3.14.3.2.26'
 const PBES2_OID = '1.2.840.113549.1.5.13'
 const PBESV1_SHA1_3DES_OID = '1.2.840.113549.1.12.1.3'
+const AES_CBC_OIDS = new Set([
+  '2.16.840.1.101.3.4.1.2',
+  '2.16.840.1.101.3.4.1.22',
+  '2.16.840.1.101.3.4.1.42',
+])
 
-function collectOids(node: forge.asn1.Asn1, oids: Set<string>, depth = 0): void {
+class MalformedP12Error extends Error {
+  constructor() {
+    super('malformed PKCS12 ASN.1')
+    this.name = 'MalformedP12Error'
+  }
+}
+
+interface PrivateKeyEncryption {
+  algorithmOid: string
+  encryptionSchemeOid: string | null
+}
+
+function asn1Children(node: forge.asn1.Asn1 | undefined): forge.asn1.Asn1[] {
+  return node && Array.isArray(node.value) ? node.value : []
+}
+
+function asn1Oid(node: forge.asn1.Asn1 | undefined): string | null {
+  if (!node || node.type !== forge.asn1.Type.OID || typeof node.value !== 'string')
+    return null
+  try {
+    return forge.asn1.derToOid(node.value)
+  }
+  catch {
+    return null
+  }
+}
+
+function privateKeyEncryptionFromSafeBag(node: forge.asn1.Asn1): PrivateKeyEncryption | null {
+  const bag = asn1Children(node)
+  if (asn1Oid(bag[0]) !== forge.pki.oids.pkcs8ShroudedKeyBag)
+    return null
+  const encryptedPrivateKeyInfo = asn1Children(bag[1])[0]
+  const algorithmIdentifier = asn1Children(encryptedPrivateKeyInfo)[0]
+  const algorithm = asn1Children(algorithmIdentifier)
+  const algorithmOid = asn1Oid(algorithm[0])
+  if (!algorithmOid)
+    return null
+  const pbes2Params = asn1Children(algorithm[1])
+  const encryptionScheme = asn1Children(pbes2Params[1])
+  return { algorithmOid, encryptionSchemeOid: asn1Oid(encryptionScheme[0]) }
+}
+
+function collectPrivateKeyEncryptions(node: forge.asn1.Asn1, result: PrivateKeyEncryption[], depth = 0): void {
   if (depth > 32)
     return
-  if (node.type === forge.asn1.Type.OID && typeof node.value === 'string')
-    oids.add(forge.asn1.derToOid(node.value))
+  const encryption = privateKeyEncryptionFromSafeBag(node)
+  if (encryption) {
+    result.push(encryption)
+    return // Never interpret encrypted private-key bytes as nested ASN.1.
+  }
   if (Array.isArray(node.value)) {
     for (const child of node.value)
-      collectOids(child, oids, depth + 1)
+      collectPrivateKeyEncryptions(child, result, depth + 1)
   }
   else if (node.type === forge.asn1.Type.OCTETSTRING && node.value.length > 0) {
     try {
-      collectOids(forge.asn1.fromDer(node.value), oids, depth + 1)
+      collectPrivateKeyEncryptions(forge.asn1.fromDer(node.value), result, depth + 1)
     }
     catch {
       // Most OCTET STRING values are encrypted bytes or certificate fields,
@@ -46,28 +96,44 @@ function p12MacAlgorithm(pfx: forge.asn1.Asn1): string | null {
   const algorithmIdentifier = digestInfo.value[0]
   if (!algorithmIdentifier || !Array.isArray(algorithmIdentifier.value))
     return null
-  const oid = algorithmIdentifier.value[0]
-  if (!oid || oid.type !== forge.asn1.Type.OID || typeof oid.value !== 'string')
-    return null
-  return forge.asn1.derToOid(oid.value)
+  return asn1Oid(algorithmIdentifier.value[0])
+}
+
+function parseP12Asn1(base64: string): forge.asn1.Asn1 {
+  try {
+    return forge.asn1.fromDer(forge.util.decode64(base64))
+  }
+  catch {
+    throw new MalformedP12Error()
+  }
 }
 
 function legacyP12CompatibilityProblems(base64: string): string[] {
   assertCredentialBlobSize(base64, 'certificate')
-  const der = forge.util.decode64(base64)
-  const pfx = forge.asn1.fromDer(der)
-  const oids = new Set<string>()
-  collectOids(pfx, oids)
+  const pfx = parseP12Asn1(base64)
+  const privateKeyEncryptions: PrivateKeyEncryption[] = []
+  collectPrivateKeyEncryptions(pfx, privateKeyEncryptions)
 
-  const problems: string[] = []
+  const problems = new Set<string>()
   const macAlgorithm = p12MacAlgorithm(pfx)
   if (macAlgorithm !== SHA1_OID)
-    problems.push(macAlgorithm === forge.pki.oids.sha256 ? 'SHA-256 MAC' : 'non-SHA-1 MAC')
-  if (oids.has(PBES2_OID))
-    problems.push('PBES2/AES encryption')
-  else if (!oids.has(PBESV1_SHA1_3DES_OID))
-    problems.push('missing PBESv1 SHA-1/3DES private-key encryption')
-  return problems
+    problems.add(macAlgorithm === forge.pki.oids.sha256 ? 'SHA-256 MAC' : 'non-SHA-1 MAC')
+  if (privateKeyEncryptions.length === 0) {
+    problems.add('missing PBESv1 SHA-1/3DES private-key encryption')
+  }
+  for (const encryption of privateKeyEncryptions) {
+    if (encryption.algorithmOid === PBESV1_SHA1_3DES_OID)
+      continue
+    if (encryption.algorithmOid === PBES2_OID) {
+      problems.add(AES_CBC_OIDS.has(encryption.encryptionSchemeOid ?? '')
+        ? 'PBES2/AES private-key encryption'
+        : 'PBES2 private-key encryption')
+    }
+    else {
+      problems.add('unsupported private-key encryption')
+    }
+  }
+  return [...problems]
 }
 
 function bagLocalKeyIdHex(bag: CertBag): string | null {
@@ -189,8 +255,10 @@ export const p12LegacyEncryption: PrescanCheck = {
     try {
       problems = legacyP12CompatibilityProblems(ctx.credentials!.BUILD_CERTIFICATE_BASE64)
     }
-    catch {
-      return [] // p12-opens owns malformed/invalid P12 failures
+    catch (error) {
+      if (error instanceof MalformedP12Error)
+        return [] // p12-opens owns malformed/invalid P12 failures
+      throw error
     }
     if (problems.length === 0)
       return []
