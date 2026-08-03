@@ -227,9 +227,11 @@ export async function setChannelInternal(channel: string, appId: string, options
     throw new Error(`Cannot find channel ${channel}`)
   }
 
+  // Disable unlinks only when a rollout bundle is linked; match API promote gating.
+  const disableUnlinksRollout = rolloutDisable === true && existingChannel.rollout_version != null
   if (hasSettingsUpdate)
     await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'channel.update_settings', silent, true, existingChannel.id)
-  if (hasBundlePromotion)
+  if (hasBundlePromotion || disableUnlinksRollout)
     await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'channel.promote_bundle', silent, true, existingChannel.id)
 
   const orgId = existingChannel.owner_org
@@ -424,8 +426,13 @@ export async function setChannelInternal(channel: string, appId: string, options
 
   if (rolloutEnable != null)
     channelPayload.rollout_enabled = !!rolloutEnable
-  if (rolloutDisable)
+  if (rolloutDisable) {
+    bundleLinkChanged = bundleLinkChanged || existingChannel.rollout_version != null
     channelPayload.rollout_enabled = false
+    channelPayload.rollout_version = null
+    channelPayload.rollout_paused_at = null
+    channelPayload.rollout_pause_reason = null
+  }
 
   if (rolloutPause) {
     channelPayload.rollout_paused_at = new Date().toISOString()
