@@ -129,11 +129,11 @@ describe('first-organization lifecycle trigger route', () => {
   })
 
   it.each([
-    ['table_not_match', { old_record: null, record: roleBindingRecord, schema: 'public', table: 'users', type: 'INSERT' }],
-    ['type_not_match', { old_record: null, record: roleBindingRecord, schema: 'public', table: 'role_bindings', type: 'DELETE' }],
-    ['invalid_payload', { old_record: null, record: {}, schema: 'public', table: 'role_bindings', type: 'INSERT' }],
-    ['invalid_payload', { old_record: null, record: { ...roleBindingRecord, id: 'not-a-uuid' }, schema: 'public', table: 'role_bindings', type: 'UPDATE' }],
-  ])('rejects unsupported role-binding payloads with %s', async (error, payload) => {
+    ['a different table', 'table_not_match', { old_record: null, record: roleBindingRecord, schema: 'public', table: 'users', type: 'INSERT' }],
+    ['a delete event', 'type_not_match', { old_record: null, record: roleBindingRecord, schema: 'public', table: 'role_bindings', type: 'DELETE' }],
+    ['a missing record ID', 'invalid_payload', { old_record: null, record: {}, schema: 'public', table: 'role_bindings', type: 'INSERT' }],
+    ['a malformed record ID', 'invalid_payload', { old_record: null, record: { ...roleBindingRecord, id: 'not-a-uuid' }, schema: 'public', table: 'role_bindings', type: 'UPDATE' }],
+  ])('rejects %s with a controlled validation error', async (_label, error, payload) => {
     const response = await requestPayload(payload)
 
     expect(response.status).toBe(400)

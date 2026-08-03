@@ -1,7 +1,7 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from './hono.ts'
 import type { Database } from './supabase.types.ts'
-import { syncBentoSubscriberTags, trackBentoEvent } from './bento.ts'
+import { syncBentoSubscriberTags, trackBentoEvent, unsubscribeBento } from './bento.ts'
 import { quickError } from './hono.ts'
 import { closeClient, getPgClient } from './pg.ts'
 
@@ -22,6 +22,11 @@ interface CurrentRoleBinding {
   principal_id: string
   principal_type: string
   scope_type: string
+}
+
+export interface FirstOrgRegistrationState {
+  has_active_direct_org_access: boolean
+  user_is_recovery_eligible: boolean
 }
 
 export function normalizeBentoEmail(email: string) {
@@ -51,22 +56,70 @@ export async function syncBentoFirstOrgOnEmailChange(c: Context, oldEmail: strin
   })))
 }
 
-async function hasActiveDirectOrgAccess(pgPool: ReturnType<typeof getPgClient>, userId: string) {
+async function suppressDeletedUserRecovery(c: Context, email: string) {
+  let suppressionResult: boolean | undefined
+  let suppressionError: unknown
+  let suppressionThrew = false
+  try {
+    suppressionResult = await syncBentoFirstOrgOnEmailChange(c, email, email)
+  }
+  catch (error) {
+    suppressionError = error
+    suppressionThrew = true
+  }
+
+  // Keep unsubscribe as the final Bento mutation for an identity that is
+  // already scheduled for deletion, even if suppression delivery throws.
+  let unsubscribeResult: boolean | undefined
+  let unsubscribeError: unknown
+  let unsubscribeThrew = false
+  try {
+    unsubscribeResult = await unsubscribeBento(c, email)
+  }
+  catch (error) {
+    unsubscribeError = error
+    unsubscribeThrew = true
+  }
+
+  if (suppressionThrew)
+    throw suppressionError
+  if (unsubscribeThrew)
+    throw unsubscribeError
+  ensureBentoDelivery(suppressionResult, 'suppress_deleted_user_recovery')
+  ensureBentoDelivery(unsubscribeResult, 'unsubscribe_deleted_user_recovery')
+}
+
+async function getFirstOrgDatabaseState(pgPool: ReturnType<typeof getPgClient>, userId: string) {
   const pgClient = await pgPool.connect()
   try {
-    const result = await pgClient.query<{ id: string }>(
-      `SELECT id
-       FROM public.role_bindings
-       WHERE principal_type = 'user'
-         AND principal_id = $1::uuid
-         AND scope_type = 'org'
-         AND org_id IS NOT NULL
-         AND is_direct IS TRUE
-         AND (expires_at IS NULL OR expires_at > pg_catalog.now())
-       LIMIT 1`,
+    const result = await pgClient.query<FirstOrgRegistrationState>(
+      `SELECT
+         EXISTS (
+           SELECT 1
+           FROM public.users AS users
+           WHERE users.id = $1::uuid
+             AND NOT EXISTS (
+               SELECT 1
+               FROM public.to_delete_accounts AS deleted
+               WHERE deleted.account_id = users.id
+             )
+         ) AS user_is_recovery_eligible,
+         EXISTS (
+           SELECT 1
+           FROM public.role_bindings
+           WHERE principal_type = 'user'
+             AND principal_id = $1::uuid
+             AND scope_type = 'org'
+             AND org_id IS NOT NULL
+             AND is_direct IS TRUE
+             AND (expires_at IS NULL OR expires_at > pg_catalog.now())
+         ) AS has_active_direct_org_access`,
       [userId],
     )
-    return result.rows.length > 0
+    return result.rows[0] ?? {
+      has_active_direct_org_access: false,
+      user_is_recovery_eligible: false,
+    }
   }
   finally {
     // General-backend Pools are request-scoped and closeClient intentionally
@@ -76,27 +129,53 @@ async function hasActiveDirectOrgAccess(pgPool: ReturnType<typeof getPgClient>, 
   }
 }
 
+export async function prepareBentoFirstOrgOnUserCreate(
+  c: Context<MiddlewareKeyVariables>,
+  user: Database['public']['Tables']['users']['Row'],
+) {
+  const email = normalizeBentoEmail(user.email)
+  const pgPool = getPgClient(c)
+  try {
+    const state = await getFirstOrgDatabaseState(pgPool, user.id)
+    if (!state.user_is_recovery_eligible) {
+      await suppressDeletedUserRecovery(c, email)
+      return false
+    }
+    return true
+  }
+  finally {
+    await closeClient(c, pgPool)
+  }
+}
+
 export async function syncBentoFirstOrgOnUserCreate(
   c: Context<MiddlewareKeyVariables>,
   user: Database['public']['Tables']['users']['Row'],
 ) {
   const email = normalizeBentoEmail(user.email)
-
-  if (user.created_via_invite) {
-    await setAwaitingFirstOrgTag(c, email, false)
-    return
-  }
-
   const pgPool = getPgClient(c)
   try {
-    if (await hasActiveDirectOrgAccess(pgPool, user.id)) {
+    // Provisioning can overlap account deletion. Re-read eligibility before
+    // every lifecycle branch so no invite/access shortcut can mutate Bento
+    // after the deletion handler's final unsubscribe.
+    const postProvisionState = await getFirstOrgDatabaseState(pgPool, user.id)
+    if (!postProvisionState.user_is_recovery_eligible) {
+      await suppressDeletedUserRecovery(c, email)
+      return
+    }
+    if (user.created_via_invite || postProvisionState.has_active_direct_org_access) {
       await setAwaitingFirstOrgTag(c, email, false)
       return
     }
 
     await setAwaitingFirstOrgTag(c, email, true)
 
-    if (await hasActiveDirectOrgAccess(pgPool, user.id)) {
+    const finalState = await getFirstOrgDatabaseState(pgPool, user.id)
+    if (!finalState.user_is_recovery_eligible) {
+      await suppressDeletedUserRecovery(c, email)
+      return
+    }
+    if (finalState.has_active_direct_org_access) {
       await setAwaitingFirstOrgTag(c, email, false)
       return
     }

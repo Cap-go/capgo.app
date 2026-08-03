@@ -11,6 +11,7 @@ const {
   syncBentoSubscriberTagsMock,
   syncUserPreferenceTagsMock,
   trackBentoEventMock,
+  unsubscribeBentoMock,
 } = vi.hoisted(() => {
   const pgQueryMock = vi.fn<(query: string, params?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }>>(async () => ({ rows: [] }))
   const pgReleaseMock = vi.fn<(destroy?: Error | boolean) => void>(() => undefined)
@@ -30,12 +31,14 @@ const {
     ) => Promise<boolean | undefined>>(async () => true),
     syncUserPreferenceTagsMock: vi.fn(async () => undefined),
     trackBentoEventMock: vi.fn(async () => true as boolean | undefined),
+    unsubscribeBentoMock: vi.fn(async () => true as boolean | undefined),
   }
 })
 
 vi.mock('../supabase/functions/_backend/utils/bento.ts', () => ({
   syncBentoSubscriberTags: syncBentoSubscriberTagsMock,
   trackBentoEvent: trackBentoEventMock,
+  unsubscribeBento: unsubscribeBentoMock,
 }))
 
 vi.mock('../supabase/functions/_backend/utils/hono.ts', async () => {
@@ -104,6 +107,13 @@ function activeBinding(overrides: Record<string, unknown> = {}) {
   }
 }
 
+function firstOrgDatabaseState(hasActiveDirectOrgAccess = false, userIsRecoveryEligible = true) {
+  return {
+    has_active_direct_org_access: hasActiveDirectOrgAccess,
+    user_is_recovery_eligible: userIsRecoveryEligible,
+  }
+}
+
 function userRecord(overrides: Record<string, unknown> = {}) {
   return {
     ban_time: null,
@@ -148,9 +158,10 @@ describe('first-organization lifecycle on user registration', () => {
     pgReleaseMock.mockImplementation(() => undefined)
     closeClientMock.mockResolvedValue(undefined)
     getPgClientMock.mockImplementation(() => ({ connect: pgConnectMock, query: pgQueryMock }))
-    pgQueryMock.mockResolvedValue({ rows: [] })
+    pgQueryMock.mockResolvedValue({ rows: [firstOrgDatabaseState()] })
     syncBentoSubscriberTagsMock.mockResolvedValue(true)
     trackBentoEventMock.mockResolvedValue(true)
+    unsubscribeBentoMock.mockResolvedValue(true)
   })
 
   afterEach(() => {
@@ -166,6 +177,11 @@ describe('first-organization lifecycle on user registration', () => {
       email: 'new.user@example.com',
       segments: [LIFECYCLE_TAG],
     })
+    expect(syncUserPreferenceTagsMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'new.user@example.com',
+      expect.objectContaining({ id: USER_ID }),
+    )
     expect(trackBentoEventMock).toHaveBeenCalledWith(
       expect.anything(),
       'new.user@example.com',
@@ -176,7 +192,7 @@ describe('first-organization lifecycle on user registration', () => {
       },
       'user:registered_without_org',
     )
-    expect(pgQueryMock).toHaveBeenCalledTimes(2)
+    expect(pgQueryMock).toHaveBeenCalledTimes(3)
   })
 
   it('destroys each checked-out Workerd client before the following Bento request', async () => {
@@ -184,7 +200,7 @@ describe('first-organization lifecycle on user registration', () => {
     let queryNumber = 0
     pgQueryMock.mockImplementation(async () => {
       lifecycleTrace.push(`query:${++queryNumber}`)
-      return { rows: [] }
+      return { rows: [firstOrgDatabaseState()] }
     })
     // Workerd closeClient is intentionally a no-op. This test must prove the
     // checked-out clients are released without relying on pool shutdown.
@@ -207,17 +223,20 @@ describe('first-organization lifecycle on user registration', () => {
     expect(lifecycleTrace).toEqual([
       'query:1',
       'client:released:true',
-      'tag:add',
       'query:2',
+      'client:released:true',
+      'tag:add',
+      'query:3',
       'client:released:true',
       'event:entry',
     ])
-    expect(getPgClientMock).toHaveBeenCalledOnce()
-    expect(pgConnectMock).toHaveBeenCalledTimes(2)
-    expect(pgReleaseMock).toHaveBeenCalledTimes(2)
+    expect(getPgClientMock).toHaveBeenCalledTimes(2)
+    expect(pgConnectMock).toHaveBeenCalledTimes(3)
+    expect(pgReleaseMock).toHaveBeenCalledTimes(3)
     expect(pgReleaseMock).toHaveBeenNthCalledWith(1, true)
     expect(pgReleaseMock).toHaveBeenNthCalledWith(2, true)
-    expect(closeClientMock).toHaveBeenCalledOnce()
+    expect(pgReleaseMock).toHaveBeenNthCalledWith(3, true)
+    expect(closeClientMock).toHaveBeenCalledTimes(2)
   })
 
   it('skips entry and removes a stale lifecycle tag for invite-created profiles', async () => {
@@ -230,11 +249,63 @@ describe('first-organization lifecycle on user registration', () => {
       segments: [],
     })
     expect(trackBentoEventMock).not.toHaveBeenCalled()
-    expect(pgQueryMock).not.toHaveBeenCalled()
+    expect(pgQueryMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('suppresses an invite-created profile when deletion is scheduled during provisioning', async () => {
+    pgQueryMock
+      .mockResolvedValueOnce({ rows: [firstOrgDatabaseState()] })
+      .mockResolvedValueOnce({ rows: [firstOrgDatabaseState(false, false)] })
+
+    const response = await postUser(userRecord({ created_via_invite: true }))
+
+    expect(response.status).toBe(200)
+    expect(createApiKeyMock).toHaveBeenCalledOnce()
+    expect(syncUserPreferenceTagsMock).toHaveBeenCalledOnce()
+    expect(syncBentoSubscriberTagsMock).toHaveBeenCalledOnce()
+    expect(syncBentoSubscriberTagsMock).toHaveBeenCalledWith(expect.anything(), [{
+      deleteSegments: [LIFECYCLE_TAG],
+      email: 'new.user@example.com',
+      segments: [SUPPRESSION_TAG],
+    }])
+    expect(unsubscribeBentoMock).toHaveBeenCalledWith(expect.anything(), 'new.user@example.com')
+    expect(trackBentoEventMock).not.toHaveBeenCalled()
+  })
+
+  it('permanently suppresses recovery when a delayed create message finds deletion scheduled', async () => {
+    pgQueryMock.mockResolvedValue({ rows: [firstOrgDatabaseState(false, false)] })
+
+    const response = await postUser()
+
+    expect(response.status).toBe(200)
+    expect(syncBentoSubscriberTagsMock).toHaveBeenCalledWith(expect.anything(), [{
+      deleteSegments: [LIFECYCLE_TAG],
+      email: 'new.user@example.com',
+      segments: [SUPPRESSION_TAG],
+    }])
+    expect(trackBentoEventMock).not.toHaveBeenCalled()
+    expect(pgQueryMock).toHaveBeenCalledOnce()
+    expect(createApiKeyMock).not.toHaveBeenCalled()
+    expect(syncUserPreferenceTagsMock).not.toHaveBeenCalled()
+    expect(unsubscribeBentoMock).toHaveBeenCalledWith(expect.anything(), 'new.user@example.com')
+    expect(syncBentoSubscriberTagsMock.mock.invocationCallOrder[0])
+      .toBeLessThan(unsubscribeBentoMock.mock.invocationCallOrder[0])
+  })
+
+  it('still attempts the final unsubscribe when deletion suppression throws', async () => {
+    pgQueryMock.mockResolvedValue({ rows: [firstOrgDatabaseState(false, false)] })
+    syncBentoSubscriberTagsMock.mockRejectedValueOnce(new Error('Bento unavailable'))
+
+    const response = await postUser()
+
+    expect(response.status).toBe(500)
+    expect(unsubscribeBentoMock).toHaveBeenCalledWith(expect.anything(), 'new.user@example.com')
+    expect(createApiKeyMock).not.toHaveBeenCalled()
+    expect(syncUserPreferenceTagsMock).not.toHaveBeenCalled()
   })
 
   it('skips entry and removes a stale tag when active direct org access already exists', async () => {
-    pgQueryMock.mockResolvedValue({ rows: [{ id: 'binding-1' }] })
+    pgQueryMock.mockResolvedValue({ rows: [firstOrgDatabaseState(true)] })
 
     const response = await postUser()
 
@@ -245,7 +316,27 @@ describe('first-organization lifecycle on user registration', () => {
       segments: [],
     })
     expect(trackBentoEventMock).not.toHaveBeenCalled()
-    expect(pgQueryMock).toHaveBeenCalledTimes(1)
+    expect(pgQueryMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('suppresses an existing organization member when deletion is scheduled during provisioning', async () => {
+    pgQueryMock
+      .mockResolvedValueOnce({ rows: [firstOrgDatabaseState(true)] })
+      .mockResolvedValueOnce({ rows: [firstOrgDatabaseState(false, false)] })
+
+    const response = await postUser()
+
+    expect(response.status).toBe(200)
+    expect(createApiKeyMock).toHaveBeenCalledOnce()
+    expect(syncUserPreferenceTagsMock).toHaveBeenCalledOnce()
+    expect(syncBentoSubscriberTagsMock).toHaveBeenCalledOnce()
+    expect(syncBentoSubscriberTagsMock).toHaveBeenCalledWith(expect.anything(), [{
+      deleteSegments: [LIFECYCLE_TAG],
+      email: 'new.user@example.com',
+      segments: [SUPPRESSION_TAG],
+    }])
+    expect(unsubscribeBentoMock).toHaveBeenCalledWith(expect.anything(), 'new.user@example.com')
+    expect(trackBentoEventMock).not.toHaveBeenCalled()
   })
 
   it('restricts the active-access check to active direct user-to-org bindings', async () => {
@@ -261,6 +352,8 @@ describe('first-organization lifecycle on user registration', () => {
 
     const normalizedQuery = String(pgQueryMock.mock.calls[0]?.[0]).replace(/\s+/g, ' ')
     expect(normalizedQuery).toContain('principal_type = \'user\'')
+    expect(normalizedQuery).toContain('FROM public.users AS users')
+    expect(normalizedQuery).toContain('FROM public.to_delete_accounts AS deleted')
     expect(normalizedQuery).toContain('scope_type = \'org\'')
     expect(normalizedQuery).toContain('is_direct IS TRUE')
     expect(normalizedQuery).toContain('org_id IS NOT NULL')
@@ -272,12 +365,16 @@ describe('first-organization lifecycle on user registration', () => {
     const lifecycleTrace: string[] = []
     pgQueryMock
       .mockImplementationOnce(async () => {
-        lifecycleTrace.push('query:no-access')
-        return { rows: [] }
+        lifecycleTrace.push('query:preflight-no-access')
+        return { rows: [firstOrgDatabaseState()] }
+      })
+      .mockImplementationOnce(async () => {
+        lifecycleTrace.push('query:post-provision-no-access')
+        return { rows: [firstOrgDatabaseState()] }
       })
       .mockImplementationOnce(async () => {
         lifecycleTrace.push('query:access-found')
-        return { rows: [{ id: 'binding-after-tag' }] }
+        return { rows: [firstOrgDatabaseState(true)] }
       })
     syncBentoSubscriberTagsMock.mockImplementation(async (_c, update) => {
       await Promise.resolve()
@@ -299,19 +396,22 @@ describe('first-organization lifecycle on user registration', () => {
 
     expect(response.status).toBe(200)
     expect(lifecycleTrace).toEqual([
-      'query:no-access',
+      'query:preflight-no-access',
+      'client:released:true',
+      'query:post-provision-no-access',
       'client:released:true',
       'tag:add',
       'query:access-found',
       'client:released:true',
       'tag:remove',
     ])
-    expect(getPgClientMock).toHaveBeenCalledOnce()
-    expect(pgConnectMock).toHaveBeenCalledTimes(2)
+    expect(getPgClientMock).toHaveBeenCalledTimes(2)
+    expect(pgConnectMock).toHaveBeenCalledTimes(3)
     expect(pgReleaseMock).toHaveBeenNthCalledWith(1, true)
     expect(pgReleaseMock).toHaveBeenNthCalledWith(2, true)
-    expect(closeClientMock).toHaveBeenCalledOnce()
-    expect(pgQueryMock).toHaveBeenCalledTimes(2)
+    expect(pgReleaseMock).toHaveBeenNthCalledWith(3, true)
+    expect(closeClientMock).toHaveBeenCalledTimes(2)
+    expect(pgQueryMock).toHaveBeenCalledTimes(3)
     expect(syncBentoSubscriberTagsMock).toHaveBeenCalledTimes(2)
     expect(syncBentoSubscriberTagsMock).toHaveBeenNthCalledWith(1, expect.anything(), {
       deleteSegments: [],
@@ -324,6 +424,31 @@ describe('first-organization lifecycle on user registration', () => {
       segments: [],
     })
     expect(trackBentoEventMock).not.toHaveBeenCalled()
+  })
+
+  it('suppresses recovery when deletion is scheduled after the tag write', async () => {
+    pgQueryMock
+      .mockResolvedValueOnce({ rows: [firstOrgDatabaseState()] })
+      .mockResolvedValueOnce({ rows: [firstOrgDatabaseState()] })
+      .mockResolvedValueOnce({ rows: [firstOrgDatabaseState(false, false)] })
+
+    const response = await postUser()
+
+    expect(response.status).toBe(200)
+    expect(syncBentoSubscriberTagsMock).toHaveBeenNthCalledWith(1, expect.anything(), {
+      deleteSegments: [],
+      email: 'new.user@example.com',
+      segments: [LIFECYCLE_TAG],
+    })
+    expect(syncBentoSubscriberTagsMock).toHaveBeenNthCalledWith(2, expect.anything(), [{
+      deleteSegments: [LIFECYCLE_TAG],
+      email: 'new.user@example.com',
+      segments: [SUPPRESSION_TAG],
+    }])
+    expect(trackBentoEventMock).not.toHaveBeenCalled()
+    expect(createApiKeyMock).toHaveBeenCalledOnce()
+    expect(syncUserPreferenceTagsMock).toHaveBeenCalledOnce()
+    expect(unsubscribeBentoMock).toHaveBeenCalledWith(expect.anything(), 'new.user@example.com')
   })
 
   it.each([
@@ -364,7 +489,7 @@ describe('first-organization recovery suppression on email changes', () => {
     pgReleaseMock.mockImplementation(() => undefined)
     closeClientMock.mockResolvedValue(undefined)
     getPgClientMock.mockImplementation(() => ({ connect: pgConnectMock, query: pgQueryMock }))
-    pgQueryMock.mockResolvedValue({ rows: [] })
+    pgQueryMock.mockResolvedValue({ rows: [firstOrgDatabaseState()] })
     syncBentoSubscriberTagsMock.mockResolvedValue(true)
     trackBentoEventMock.mockResolvedValue(true)
   })
