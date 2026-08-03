@@ -222,16 +222,23 @@ describe('user deletion Bento recovery safety', () => {
     try {
       const lifecycleTrace: string[] = []
       let suppressionSignal: AbortSignal | undefined
-      syncBentoSubscriberTagsMock.mockImplementationOnce(async (_c, _update, signal) => await new Promise<boolean>((resolve) => {
+      let suppressionSettled = false
+      syncBentoSubscriberTagsMock.mockImplementationOnce(async (_c, _update, signal) => {
         suppressionSignal = signal
         lifecycleTrace.push('suppression:started')
-        signal?.addEventListener('abort', () => {
-          lifecycleTrace.push('suppression:aborted')
-          resolve(false)
-        }, { once: true })
-      }))
+        await new Promise<void>((resolve) => {
+          signal?.addEventListener('abort', () => {
+            lifecycleTrace.push('suppression:aborted')
+            queueMicrotask(resolve)
+          }, { once: true })
+        })
+        suppressionSettled = true
+        lifecycleTrace.push('suppression:settled')
+        return false
+      })
       unsubscribeBentoMock.mockImplementationOnce(async () => {
         expect(suppressionSignal?.aborted).toBe(true)
+        expect(suppressionSettled).toBe(true)
         lifecycleTrace.push('unsubscribe:started')
         return true
       })
@@ -246,6 +253,7 @@ describe('user deletion Bento recovery safety', () => {
       expect(lifecycleTrace).toEqual([
         'suppression:started',
         'suppression:aborted',
+        'suppression:settled',
         'unsubscribe:started',
       ])
     }
