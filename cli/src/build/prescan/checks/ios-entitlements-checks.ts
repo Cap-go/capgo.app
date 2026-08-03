@@ -156,7 +156,9 @@ export const entitlementsVsProfileCapability: PrescanCheck = {
         if (isArray) {
           const appMembers = entArray(app.raw, key)
           const profileValue = profileEnt[key]
-          const profileMembers = Array.isArray(profileValue) ? profileValue : []
+          const profileMembers = Array.isArray(profileValue)
+            ? profileValue
+            : typeof profileValue === 'string' ? [profileValue] : []
           if (profileMembers.some(isWildcardMember))
             continue
           // Compare on the prefix-normalized suffix: app members carry the
