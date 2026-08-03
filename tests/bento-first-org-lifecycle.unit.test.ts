@@ -13,7 +13,10 @@ const {
   createApiKeyMock: vi.fn(async () => undefined),
   pgQueryMock: vi.fn<(query: string, params?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }>>(async () => ({ rows: [] })),
   sendEventToTrackingMock: vi.fn(async () => undefined),
-  syncBentoSubscriberTagsMock: vi.fn(async () => true as boolean | undefined),
+  syncBentoSubscriberTagsMock: vi.fn<(
+    c: unknown,
+    update: { deleteSegments: string[], email: string, segments: string[] },
+  ) => Promise<boolean | undefined>>(async () => true),
   syncUserPreferenceTagsMock: vi.fn(async () => undefined),
   trackBentoEventMock: vi.fn(async () => true as boolean | undefined),
 }))
@@ -202,13 +205,36 @@ describe('first-organization lifecycle on user registration', () => {
   })
 
   it('removes the tag and skips entry when org access appears after the tag write', async () => {
+    const lifecycleTrace: string[] = []
     pgQueryMock
-      .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [{ id: 'binding-after-tag' }] })
+      .mockImplementationOnce(async () => {
+        lifecycleTrace.push('query:no-access')
+        return { rows: [] }
+      })
+      .mockImplementationOnce(async () => {
+        lifecycleTrace.push('query:access-found')
+        return { rows: [{ id: 'binding-after-tag' }] }
+      })
+    syncBentoSubscriberTagsMock.mockImplementation(async (_c, update) => {
+      await Promise.resolve()
+      if (update.segments.includes(LIFECYCLE_TAG))
+        lifecycleTrace.push('tag:add')
+      if (update.deleteSegments.includes(LIFECYCLE_TAG))
+        lifecycleTrace.push('tag:remove')
+      return true
+    })
 
     const response = await postUser()
 
     expect(response.status).toBe(200)
+    expect(lifecycleTrace).toEqual([
+      'query:no-access',
+      'tag:add',
+      'query:access-found',
+      'tag:remove',
+    ])
+    expect(pgQueryMock).toHaveBeenCalledTimes(2)
+    expect(syncBentoSubscriberTagsMock).toHaveBeenCalledTimes(2)
     expect(syncBentoSubscriberTagsMock).toHaveBeenNthCalledWith(1, expect.anything(), {
       deleteSegments: [],
       email: 'new.user@example.com',
@@ -309,7 +335,37 @@ describe('first-organization lifecycle on direct org access', () => {
     await syncRoleBinding()
 
     expect(syncBentoSubscriberTagsMock).toHaveBeenCalledTimes(2)
+    expect(syncBentoSubscriberTagsMock).toHaveBeenNthCalledWith(1, expect.anything(), {
+      deleteSegments: [LIFECYCLE_TAG],
+      email: 'current.user@example.com',
+      segments: [],
+    })
+    expect(syncBentoSubscriberTagsMock).toHaveBeenNthCalledWith(2, expect.anything(), {
+      deleteSegments: [LIFECYCLE_TAG],
+      email: 'current.user@example.com',
+      segments: [],
+    })
     expect(trackBentoEventMock).toHaveBeenCalledTimes(2)
+    const factData = {
+      joined_at: JOINED_AT,
+      org_id: ORG_ID,
+      role_binding_id: ROLE_BINDING_ID,
+      user_id: USER_ID,
+    }
+    expect(trackBentoEventMock).toHaveBeenNthCalledWith(
+      1,
+      expect.anything(),
+      'current.user@example.com',
+      factData,
+      'user:joined_org',
+    )
+    expect(trackBentoEventMock).toHaveBeenNthCalledWith(
+      2,
+      expect.anything(),
+      'current.user@example.com',
+      factData,
+      'user:joined_org',
+    )
   })
 
   it.each([
