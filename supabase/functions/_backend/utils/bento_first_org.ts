@@ -78,12 +78,16 @@ async function runDeletedUserBentoOperation<T>(
 }
 
 async function setAwaitingFirstOrgTag(c: Context, email: string, awaiting: boolean) {
+  // Bento imports subscriber updates asynchronously. A terminal transition
+  // must therefore add the monotonic suppression tag in the same update that
+  // removes awaiting state: a delayed registration import may re-add awaiting,
+  // but it can never remove suppression and re-enable the recovery send gate.
   const result = await syncBentoSubscriberTags(c, {
     email,
-    segments: awaiting ? [BENTO_AWAITING_FIRST_ORG_TAG] : [],
+    segments: awaiting ? [BENTO_AWAITING_FIRST_ORG_TAG] : [BENTO_FIRST_ORG_RECOVERY_SUPPRESSED_TAG],
     deleteSegments: awaiting ? [] : [BENTO_AWAITING_FIRST_ORG_TAG],
   })
-  ensureBentoDelivery(result, awaiting ? 'add_awaiting_first_org_tag' : 'remove_awaiting_first_org_tag')
+  ensureBentoDelivery(result, awaiting ? 'add_awaiting_first_org_tag' : 'suppress_first_org_recovery')
 }
 
 export async function syncBentoFirstOrgOnEmailChange(
