@@ -6,6 +6,8 @@
 // biome-ignore lint: disable
 export {}
 declare global {
+  const DATE_RANGE_DURATIONS_MS: typeof import('./stores/adminDashboard').DATE_RANGE_DURATIONS_MS
+  const DEFAULT_DATE_RANGE_MODE: typeof import('./stores/adminDashboard').DEFAULT_DATE_RANGE_MODE
   const EffectScope: typeof import('vue').EffectScope
   const RBAC_ORG_ROLE_I18N_KEYS: typeof import('./stores/organization').RBAC_ORG_ROLE_I18N_KEYS
   const WEBHOOK_EVENT_TYPES: typeof import('./stores/webhooks').WEBHOOK_EVENT_TYPES
@@ -42,6 +44,7 @@ declare global {
   const getCurrentInstance: typeof import('vue').getCurrentInstance
   const getCurrentScope: typeof import('vue').getCurrentScope
   const getCurrentWatcher: typeof import('vue').getCurrentWatcher
+  const getDateRangeForMode: typeof import('./stores/adminDashboard').getDateRangeForMode
   const getRbacRoleI18nKey: typeof import('./stores/organization').getRbacRoleI18nKey
   const h: typeof import('vue').h
   const ignorableWatch: typeof import('@vueuse/core').ignorableWatch
@@ -365,6 +368,8 @@ import { UnwrapRef } from 'vue'
 declare module 'vue' {
   interface GlobalComponents {}
   interface ComponentCustomProperties {
+    readonly DATE_RANGE_DURATIONS_MS: UnwrapRef<typeof import('./stores/adminDashboard')['DATE_RANGE_DURATIONS_MS']>
+    readonly DEFAULT_DATE_RANGE_MODE: UnwrapRef<typeof import('./stores/adminDashboard')['DEFAULT_DATE_RANGE_MODE']>
     readonly EffectScope: UnwrapRef<typeof import('vue')['EffectScope']>
     readonly RBAC_ORG_ROLE_I18N_KEYS: UnwrapRef<typeof import('./stores/organization')['RBAC_ORG_ROLE_I18N_KEYS']>
     readonly WEBHOOK_EVENT_TYPES: UnwrapRef<typeof import('./stores/webhooks')['WEBHOOK_EVENT_TYPES']>
@@ -401,6 +406,7 @@ declare module 'vue' {
     readonly getCurrentInstance: UnwrapRef<typeof import('vue')['getCurrentInstance']>
     readonly getCurrentScope: UnwrapRef<typeof import('vue')['getCurrentScope']>
     readonly getCurrentWatcher: UnwrapRef<typeof import('vue')['getCurrentWatcher']>
+    readonly getDateRangeForMode: UnwrapRef<typeof import('./stores/adminDashboard')['getDateRangeForMode']>
     readonly getRbacRoleI18nKey: UnwrapRef<typeof import('./stores/organization')['getRbacRoleI18nKey']>
     readonly h: UnwrapRef<typeof import('vue')['h']>
     readonly ignorableWatch: UnwrapRef<typeof import('@vueuse/core')['ignorableWatch']>
