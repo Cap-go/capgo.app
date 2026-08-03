@@ -129,13 +129,13 @@ export interface AscAuthClassification {
 export function classifyAscAuthError(err: any): AscAuthClassification {
   const status = typeof err?.status === 'number' ? err.status : undefined
   const code = typeof err?.code === 'string' ? err.code : undefined
-  const is401 = status === 401 || err?.message?.includes('401')
-  const is403 = status === 403 || err?.message?.includes('403')
+  const is401 = status === 401
+  const is403 = status === 403
   const isAgreements = Boolean(is403 && (code === 'FORBIDDEN.REQUIRED_AGREEMENTS_MISSING_OR_EXPIRED' || code === 'FORBIDDEN_ERROR.PLA_NOT_ACCEPTED' || /\bPLA_NOT_ACCEPTED\b|required agreement|program license agreement/i.test(err?.message ?? '')))
   return {
     is401or403: Boolean(is401 || is403),
     isAgreements,
-    status: status ?? (is403 ? 403 : is401 ? 401 : undefined),
+    status,
     code,
     message: isAgreements ? ASC_AGREEMENTS_MESSAGE : ASC_KEY_REJECTED_MESSAGE,
   }

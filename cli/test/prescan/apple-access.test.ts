@@ -53,16 +53,30 @@ describe('assertAscAccess', () => {
     const fetchImpl = (async () => jsonResponse(401, { errors: [{ status: '401', code: 'NOT_AUTHORIZED', title: 'Authentication failed', detail: 'bad token' }] })) as unknown as typeof fetch
     const res = await assertAscAccess({ ...creds, bundleId: 'com.demo.app', fetchImpl })
     expect(res.ok).toBe(false)
-    if (!res.ok)
+    if (!res.ok) {
       expect(res.kind).toBe('auth-error')
+      expect(res).toMatchObject({
+        status: 401,
+        code: 'NOT_AUTHORIZED',
+        title: 'Authentication failed',
+        detail: 'bad token',
+      })
+    }
   })
 
   it('auth-error on 403', async () => {
     const fetchImpl = (async () => jsonResponse(403, { errors: [{ status: '403', code: 'FORBIDDEN', title: 'Forbidden', detail: 'no access' }] })) as unknown as typeof fetch
     const res = await assertAscAccess({ ...creds, fetchImpl })
     expect(res.ok).toBe(false)
-    if (!res.ok)
+    if (!res.ok) {
       expect(res.kind).toBe('auth-error')
+      expect(res).toMatchObject({
+        status: 403,
+        code: 'FORBIDDEN',
+        title: 'Forbidden',
+        detail: 'no access',
+      })
+    }
   })
 
   it('auth-error on 403 agreements branch (REQUIRED_AGREEMENTS_MISSING_OR_EXPIRED) with agreements copy', async () => {
@@ -89,8 +103,28 @@ describe('assertAscAccess', () => {
     const fetchImpl = (async () => jsonResponse(503, { errors: [{ status: '503', code: 'X', title: 'Service Unavailable', detail: 'down' }] })) as unknown as typeof fetch
     const res = await assertAscAccess({ ...creds, fetchImpl })
     expect(res.ok).toBe(false)
-    if (!res.ok)
+    if (!res.ok) {
       expect(res.kind).toBe('network')
+      expect(res).toMatchObject({
+        status: 503,
+        code: 'X',
+        title: 'Service Unavailable',
+        detail: 'down',
+      })
+    }
+  })
+
+  it('does not infer auth failure from 403 text on an HTTP 500 response', async () => {
+    const fetchImpl = (async () => jsonResponse(500, {
+      errors: [{ status: '500', code: 'INTERNAL_ERROR', title: 'Upstream HTTP 403', detail: 'Retry later.' }],
+    })) as unknown as typeof fetch
+    const res = await assertAscAccess({ ...creds, bundleId: 'com.demo.app', fetchImpl })
+    expect(res).toMatchObject({
+      ok: false,
+      kind: 'network',
+      status: 500,
+      code: 'INTERNAL_ERROR',
+    })
   })
 
   it('network when the provided signal is already aborted (no fetch fires)', async () => {
@@ -116,6 +150,27 @@ describe('assertAscAccess', () => {
       expect(res.message).not.toContain(p8Pem)
       expect(res.message).not.toContain('BEGIN')
       expect(res.message.toLowerCase()).not.toContain('bearer')
+    }
+  })
+
+  it('redacts credential identifiers and secret-looking values from Apple error fields', async () => {
+    const fetchImpl = (async () => jsonResponse(403, {
+      errors: [{
+        status: '403',
+        code: 'FORBIDDEN',
+        title: `Key ${creds.keyId} was denied`,
+        detail: `issuer ${creds.issuerId}\ntoken=super-secret-value`,
+      }],
+    })) as unknown as typeof fetch
+    const res = await assertAscAccess({ ...creds, fetchImpl })
+    expect(res.ok).toBe(false)
+    if (!res.ok) {
+      const serialized = JSON.stringify(res)
+      expect(serialized).not.toContain(creds.keyId)
+      expect(serialized).not.toContain(creds.issuerId)
+      expect(serialized).not.toContain('super-secret-value')
+      expect(res.title).toContain('[REDACTED IDENTIFIER]')
+      expect(res.detail).not.toContain('\n')
     }
   })
 })

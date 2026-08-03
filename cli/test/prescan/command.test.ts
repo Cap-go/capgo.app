@@ -2,6 +2,7 @@
 import type { Finding, PrescanReport, Severity } from '../../src/build/prescan/types'
 import { describe, expect, it } from 'bun:test'
 import { exitCodeFor, runPrescanGate, validateFlags } from '../../src/build/prescan/command'
+import { ASC_PRESCAN_AUTH_ENFORCE_AFTER } from '../../src/build/prescan/checks/store-access'
 import { IOS_PRESCAN_EXPANSION_ENFORCE_AFTER } from '../../src/build/prescan/registry'
 
 describe('validateFlags', () => {
@@ -30,6 +31,16 @@ describe('exitCodeFor', () => {
       enforceAfter: IOS_PRESCAN_EXPANSION_ENFORCE_AFTER,
     }]
     expect(exitCodeFor(counts(1, 0), { now: new Date('2026-08-01T00:00:00.000Z') }, findings)).toBe(0)
+  })
+  it('ASC auth finding becomes blocking exactly at the rollout deadline', () => {
+    const findings: Finding[] = [{
+      id: 'ios/asc-key-access',
+      severity: 'error',
+      title: 'authentication failed',
+      enforceAfter: ASC_PRESCAN_AUTH_ENFORCE_AFTER,
+    }]
+    expect(exitCodeFor(counts(1, 0), { now: new Date('2026-08-16T23:59:59.999Z') }, findings)).toBe(0)
+    expect(exitCodeFor(counts(1, 0), { now: new Date(ASC_PRESCAN_AUTH_ENFORCE_AFTER) }, findings)).toBe(1)
   })
 })
 
