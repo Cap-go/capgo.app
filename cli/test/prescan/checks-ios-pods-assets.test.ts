@@ -160,6 +160,11 @@ function cleanPodsFiles(extra: Record<string, string> = {}): Record<string, stri
 // ---------------------------------------------------------------------------
 
 describe('ios/pods-not-installed', () => {
+  it.each(['win32', 'linux'] as const)('does NOT apply on %s', (hostPlatform) => {
+    const ctx = makeCtx({ projectDir: makeProject(cleanPodsFiles()), hostPlatform })
+    expect(podsNotInstalled.appliesTo?.(ctx) ?? true).toBe(false)
+  })
+
   it('does NOT apply to an SPM project (no Podfile)', () => {
     const ctx = makeCtx({ projectDir: makeProject(cleanSpmFiles()) })
     expect(podsNotInstalled.appliesTo?.(ctx) ?? true).toBe(false)
@@ -190,6 +195,11 @@ describe('ios/pods-not-installed', () => {
 })
 
 describe('ios/pods-lock-missing', () => {
+  it.each(['win32', 'linux'] as const)('does NOT apply on %s', (hostPlatform) => {
+    const ctx = makeCtx({ projectDir: makeProject(cleanPodsFiles()), hostPlatform })
+    expect(podsLockMissing.appliesTo?.(ctx) ?? true).toBe(false)
+  })
+
   it('is clean when Podfile.lock exists', async () => {
     const ctx = makeCtx({ projectDir: makeProject(cleanPodsFiles()) })
     expect(await podsLockMissing.run(ctx)).toEqual([])
