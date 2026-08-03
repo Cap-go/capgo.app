@@ -139,4 +139,25 @@ describe('assertAscAccess', () => {
       expect(res.message.toLowerCase()).not.toContain('bearer')
     }
   })
+
+  it('redacts credential identifiers and secret-looking values from Apple error fields', async () => {
+    const fetchImpl = (async () => jsonResponse(403, {
+      errors: [{
+        status: '403',
+        code: 'FORBIDDEN',
+        title: `Key ${creds.keyId} was denied`,
+        detail: `issuer ${creds.issuerId}\ntoken=super-secret-value`,
+      }],
+    })) as unknown as typeof fetch
+    const res = await assertAscAccess({ ...creds, fetchImpl })
+    expect(res.ok).toBe(false)
+    if (!res.ok) {
+      const serialized = JSON.stringify(res)
+      expect(serialized).not.toContain(creds.keyId)
+      expect(serialized).not.toContain(creds.issuerId)
+      expect(serialized).not.toContain('super-secret-value')
+      expect(res.title).toContain('[REDACTED IDENTIFIER]')
+      expect(res.detail).not.toContain('\n')
+    }
+  })
 })
