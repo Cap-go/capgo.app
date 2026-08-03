@@ -72,6 +72,22 @@ Tag does NOT contain: credit_usage_disabled
 Tag does NOT contain: onboarding_disabled
 ```
 
+#### 3a. First-Organization Recovery
+
+**Entry event**: `user:registered_without_org`
+
+Capgo adds `onboarding:awaiting_first_org` when a direct registration still has no active organization access. Creating or joining an organization removes that tag. A normalized email-address change permanently adds `onboarding:first_org_recovery_suppressed` to both the old and new Bento aliases so asynchronous subscriber updates can never send this recovery email to a stale address.
+
+After the workflow delay, add a final decision immediately before the send step. All three conditions must still be true:
+
+```text
+Tag contains: onboarding:awaiting_first_org
+Tag does NOT contain: onboarding:first_org_recovery_suppressed
+Tag does NOT contain: onboarding_disabled
+```
+
+Do not check the suppression tag only when the workflow starts. It is a monotonic safety opt-out that can be added while the workflow is waiting.
+
 #### 4. Weekly Statistics
 
 **Events**: `user:weekly_stats`
@@ -159,6 +175,7 @@ Tag does NOT contain: device_error_disabled
 After configuring Bento, verify the following:
 
 - [ ] Each automation has the correct exclusion filter for its disabled tag
+- [ ] The first-organization recovery workflow re-checks `onboarding:awaiting_first_org`, `onboarding:first_org_recovery_suppressed`, and `onboarding_disabled` immediately before sending
 - [ ] Test by disabling a preference for a test user and confirming they don't receive that email type
 - [ ] Test by re-enabling the preference and confirming they DO receive that email type
 - [ ] Verify existing users without the `email_preferences` column still receive emails (tags default to not present = enabled)
