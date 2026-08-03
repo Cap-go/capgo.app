@@ -53,16 +53,30 @@ describe('assertAscAccess', () => {
     const fetchImpl = (async () => jsonResponse(401, { errors: [{ status: '401', code: 'NOT_AUTHORIZED', title: 'Authentication failed', detail: 'bad token' }] })) as unknown as typeof fetch
     const res = await assertAscAccess({ ...creds, bundleId: 'com.demo.app', fetchImpl })
     expect(res.ok).toBe(false)
-    if (!res.ok)
+    if (!res.ok) {
       expect(res.kind).toBe('auth-error')
+      expect(res).toMatchObject({
+        status: 401,
+        code: 'NOT_AUTHORIZED',
+        title: 'Authentication failed',
+        detail: 'bad token',
+      })
+    }
   })
 
   it('auth-error on 403', async () => {
     const fetchImpl = (async () => jsonResponse(403, { errors: [{ status: '403', code: 'FORBIDDEN', title: 'Forbidden', detail: 'no access' }] })) as unknown as typeof fetch
     const res = await assertAscAccess({ ...creds, fetchImpl })
     expect(res.ok).toBe(false)
-    if (!res.ok)
+    if (!res.ok) {
       expect(res.kind).toBe('auth-error')
+      expect(res).toMatchObject({
+        status: 403,
+        code: 'FORBIDDEN',
+        title: 'Forbidden',
+        detail: 'no access',
+      })
+    }
   })
 
   it('auth-error on 403 agreements branch (REQUIRED_AGREEMENTS_MISSING_OR_EXPIRED) with agreements copy', async () => {
@@ -89,8 +103,15 @@ describe('assertAscAccess', () => {
     const fetchImpl = (async () => jsonResponse(503, { errors: [{ status: '503', code: 'X', title: 'Service Unavailable', detail: 'down' }] })) as unknown as typeof fetch
     const res = await assertAscAccess({ ...creds, fetchImpl })
     expect(res.ok).toBe(false)
-    if (!res.ok)
+    if (!res.ok) {
       expect(res.kind).toBe('network')
+      expect(res).toMatchObject({
+        status: 503,
+        code: 'X',
+        title: 'Service Unavailable',
+        detail: 'down',
+      })
+    }
   })
 
   it('network when the provided signal is already aborted (no fetch fires)', async () => {
