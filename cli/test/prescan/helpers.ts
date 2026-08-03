@@ -17,7 +17,7 @@ export function makeProject(files: Record<string, string>): string {
 }
 
 export function makeCtx(partial: Partial<ScanContext> & { projectDir: string }): ScanContext {
-  return { appId: 'com.demo.app', platform: 'ios', ...partial }
+  return { appId: 'com.demo.app', platform: 'ios', hostPlatform: 'darwin', ...partial }
 }
 
 export interface MadeP12 {
