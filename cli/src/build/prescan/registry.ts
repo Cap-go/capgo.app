@@ -34,7 +34,7 @@ import {
   versionFields,
 } from './checks/android-project'
 import { credentialsSaved } from './checks/credentials'
-import { ascKeyValid, p12Expiry, p12Opens } from './checks/ios-certs'
+import { ascKeyValid, p12Expiry, p12LegacyEncryption, p12Opens } from './checks/ios-certs'
 import { infoplistSanity } from './checks/ios-plist'
 import { certProfilePairing, profileBundleMatch, profileExpiry, profileTypeVsMode, targetsCovered } from './checks/ios-profiles'
 import {
@@ -87,6 +87,9 @@ import { ascKeyAccess, playSaAccess } from './checks/store-access'
 /** New iOS expansion checks become build-blocking at this UTC instant. */
 export const IOS_PRESCAN_EXPANSION_ENFORCE_AFTER = '2026-08-14T00:00:00.000Z'
 
+/** Legacy P12 encryption becomes mandatory for macOS runner compatibility at this UTC instant. */
+export const IOS_P12_LEGACY_ENFORCE_AFTER = '2026-08-17T00:00:00.000Z'
+
 const IOS_EXPANSION_CHECKS: PrescanCheck[] = [
   // ios plist (Info.plist / App Store)
   plistBundleIdFormat, plistVersionShortFormat, plistVersionBuildFormat,
@@ -113,7 +116,8 @@ export const ALL_CHECKS: PrescanCheck[] = [
   apikeyPermission, appExists, credentialsSaved,
   capSyncStale, nodeLinkerLayout, bundleIdConsistency,
   // ios certs / profiles / plist
-  p12Opens, p12Expiry, profileExpiry, profileBundleMatch, profileTypeVsMode,
+  p12Opens, { ...p12LegacyEncryption, enforceAfter: IOS_P12_LEGACY_ENFORCE_AFTER },
+  p12Expiry, profileExpiry, profileBundleMatch, profileTypeVsMode,
   certProfilePairing, targetsCovered, infoplistSanity, ascKeyValid,
   // android keystore / project
   keystoreOpens, keystoreExpiry, cordovaVarsPresent, gradlePropsHeuristics,

@@ -43,7 +43,13 @@ export function certDerFromP12(p12: MadeP12): Buffer {
 }
 
 /** Self-signed cert + key wrapped in a password-protected P12 (pure node-forge, no binaries). */
-export function makeP12(opts: { password?: string, notAfter?: Date, cn?: string } = {}): MadeP12 {
+export function makeP12(opts: {
+  password?: string
+  notAfter?: Date
+  cn?: string
+  algorithm?: '3des' | 'aes256'
+  macAlgorithm?: 'sha1' | 'sha256'
+} = {}): MadeP12 {
   const password = opts.password ?? 'test-pass'
   const keys = forge.pki.rsa.generateKeyPair(2048)
   const cert = forge.pki.createCertificate()
@@ -56,7 +62,25 @@ export function makeP12(opts: { password?: string, notAfter?: Date, cn?: string 
   cert.setIssuer(attrs)
   cert.sign(keys.privateKey, forge.md.sha256.create())
 
-  const p12Asn1 = forge.pkcs12.toPkcs12Asn1(keys.privateKey, [cert], password, { algorithm: '3des' })
+  const p12Asn1 = forge.pkcs12.toPkcs12Asn1(keys.privateKey, [cert], password, { algorithm: opts.algorithm ?? '3des' })
+  if (opts.macAlgorithm === 'sha256') {
+    const pfx = p12Asn1.value as forge.asn1.Asn1[]
+    const authSafeContentInfo = pfx[1]!.value as forge.asn1.Asn1[]
+    const authSafeWrapper = authSafeContentInfo[1]!.value as forge.asn1.Asn1[]
+    const authSafeBytes = authSafeWrapper[0]!.value as string
+    const macData = pfx[2]!.value as forge.asn1.Asn1[]
+    const digestInfo = macData[0]!.value as forge.asn1.Asn1[]
+    const digestAlgorithm = digestInfo[0]!.value as forge.asn1.Asn1[]
+    const macSalt = forge.util.createBuffer(macData[1]!.value as string)
+    const macIterations = forge.asn1.derToInteger(macData[2]!.value as string)
+    const md = forge.md.sha256.create()
+    const macKey = forge.pkcs12.generateKey(password, macSalt, 3, macIterations, 32, md)
+    const mac = forge.hmac.create()
+    mac.start(md, macKey)
+    mac.update(authSafeBytes)
+    digestAlgorithm[0]!.value = forge.asn1.oidToDer(forge.pki.oids.sha256).getBytes()
+    digestInfo[1]!.value = mac.getMac().getBytes()
+  }
   const der = forge.asn1.toDer(p12Asn1).getBytes()
   const base64 = forge.util.encode64(der)
 

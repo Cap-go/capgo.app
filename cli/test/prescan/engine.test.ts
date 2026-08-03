@@ -1,7 +1,7 @@
 // test/prescan/engine.test.ts
 import { describe, expect, it } from 'bun:test'
 import { decideOutcome, runPrescan } from '../../src/build/prescan/engine'
-import { ALL_CHECKS, IOS_PRESCAN_EXPANSION_ENFORCE_AFTER } from '../../src/build/prescan/registry'
+import { ALL_CHECKS, IOS_P12_LEGACY_ENFORCE_AFTER, IOS_PRESCAN_EXPANSION_ENFORCE_AFTER } from '../../src/build/prescan/registry'
 import type { PrescanCheck, ScanContext } from '../../src/build/prescan/types'
 import { makeP12, makeProfileXmlWithCert, makeProject } from './helpers'
 
@@ -150,14 +150,14 @@ describe('fixture helpers', () => {
 })
 
 describe('registry', () => {
-  it('contains all 80 checks with unique ids', () => {
+  it('contains all 81 checks with unique ids', () => {
     const ids = ALL_CHECKS.map(c => c.id)
     expect(new Set(ids).size).toBe(ids.length)
-    expect(ids.length).toBe(80)
+    expect(ids.length).toBe(81)
     for (const expected of [
       'shared/apikey-permission', 'shared/app-exists', 'shared/credentials-saved',
       'shared/cap-sync-stale', 'shared/node-linker-layout', 'shared/bundle-id-consistency',
-      'ios/p12-opens', 'ios/p12-expiry', 'ios/profile-expiry', 'ios/profile-bundle-match',
+      'ios/p12-opens', 'ios/p12-legacy-encryption', 'ios/p12-expiry', 'ios/profile-expiry', 'ios/profile-bundle-match',
       'ios/profile-type-vs-mode', 'ios/cert-profile-pairing', 'ios/targets-covered',
       'ios/infoplist-sanity', 'ios/asc-key-valid',
       // 10 ios plist checks
@@ -201,6 +201,26 @@ describe('registry', () => {
     expect(deferred.length).toBe(33)
     expect(deferred.every(check => check.id.startsWith('ios/'))).toBe(true)
     expect(ALL_CHECKS.find(check => check.id === 'ios/p12-opens')?.enforceAfter).toBeUndefined()
+  })
+
+  it('makes legacy P12 encryption fatal after its dedicated 14-day rollout', () => {
+    expect(IOS_P12_LEGACY_ENFORCE_AFTER).toBe('2026-08-17T00:00:00.000Z')
+    expect(ALL_CHECKS.find(check => check.id === 'ios/p12-legacy-encryption')?.enforceAfter).toBe(IOS_P12_LEGACY_ENFORCE_AFTER)
+
+    const rolloutReport = {
+      findings: [{
+        id: 'ios/p12-legacy-encryption',
+        severity: 'error' as const,
+        title: 'modern P12',
+        enforceAfter: IOS_P12_LEGACY_ENFORCE_AFTER,
+      }],
+      counts: { error: 1, warning: 0, info: 0 },
+      skippedRemote: 0,
+      durationMs: 0,
+      checksRun: 1,
+    }
+    expect(decideOutcome(rolloutReport, { now: new Date('2026-08-16T23:59:59.999Z') })).toBe('proceed')
+    expect(decideOutcome(rolloutReport, { now: new Date(IOS_P12_LEGACY_ENFORCE_AFTER) })).toBe('block')
   })
 })
 
