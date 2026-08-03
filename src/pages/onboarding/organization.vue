@@ -393,6 +393,7 @@ async function saveSupportUsernames() {
   if (!main.user?.id)
     return
 
+  const userId = main.user.id
   const nextDiscordUsername = discordUsername.value.trim() || null
   if (nextDiscordUsername === (main.user.discord_username || null))
     return
@@ -402,16 +403,18 @@ async function saveSupportUsernames() {
     .update({
       discord_username: nextDiscordUsername,
     })
-    .eq('id', main.user.id)
+    .eq('id', userId)
     .select()
     .single()
 
   if (error || !user) {
     console.error('Failed to save support usernames during onboarding', error)
-    return
+    toast.error(t('organization-onboarding-support-usernames-save-failed'))
+    throw error ?? new Error('support_usernames_save_failed')
   }
 
-  main.user = user
+  if (main.user?.id === user.id)
+    main.user = user
 }
 
 async function createOrganization() {
@@ -442,7 +445,13 @@ async function createOrganization() {
   isSubmitting.value = true
 
   try {
-    await saveSupportUsernames()
+    try {
+      await saveSupportUsernames()
+    }
+    catch (error) {
+      console.error('Stopping organization create after support username save failure', error)
+      return
+    }
 
     const normalizedWebsite = mode.value === 'website'
       ? websitePreview.value?.website
@@ -1063,7 +1072,7 @@ onUnmounted(() => {
                   </div>
                 </div>
 
-                <OnboardingSupportUsernames v-model:discord-username="discordUsername" />
+                <OnboardingSupportUsernames v-model:discord-username="discordUsername" :is-new-user-onboarding="!isAdditionalOrgFlow" />
 
                 <div class="flex flex-col-reverse gap-3 border-t border-slate-200 pt-4 sm:flex-row sm:justify-between dark:border-white/15">
                   <button type="button" class="d-btn min-h-11" :class="whiteCardSecondaryButtonClass()" @click="goBack">
