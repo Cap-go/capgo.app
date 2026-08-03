@@ -10,6 +10,66 @@ export interface OpenedP12 {
 
 type CertBag = forge.pkcs12.Bag
 
+const SHA1_OID = '1.3.14.3.2.26'
+const PBES2_OID = '1.2.840.113549.1.5.13'
+const PBESV1_SHA1_3DES_OID = '1.2.840.113549.1.12.1.3'
+
+function collectOids(node: forge.asn1.Asn1, oids: Set<string>, depth = 0): void {
+  if (depth > 32)
+    return
+  if (node.type === forge.asn1.Type.OID && typeof node.value === 'string')
+    oids.add(forge.asn1.derToOid(node.value))
+  if (Array.isArray(node.value)) {
+    for (const child of node.value)
+      collectOids(child, oids, depth + 1)
+  }
+  else if (node.type === forge.asn1.Type.OCTETSTRING && node.value.length > 0) {
+    try {
+      collectOids(forge.asn1.fromDer(node.value), oids, depth + 1)
+    }
+    catch {
+      // Most OCTET STRING values are encrypted bytes or certificate fields,
+      // not nested ASN.1. Only descend when forge can decode the whole value.
+    }
+  }
+}
+
+function p12MacAlgorithm(pfx: forge.asn1.Asn1): string | null {
+  if (!Array.isArray(pfx.value))
+    return null
+  const macData = pfx.value[2]
+  if (!macData || !Array.isArray(macData.value))
+    return null
+  const digestInfo = macData.value[0]
+  if (!digestInfo || !Array.isArray(digestInfo.value))
+    return null
+  const algorithmIdentifier = digestInfo.value[0]
+  if (!algorithmIdentifier || !Array.isArray(algorithmIdentifier.value))
+    return null
+  const oid = algorithmIdentifier.value[0]
+  if (!oid || oid.type !== forge.asn1.Type.OID || typeof oid.value !== 'string')
+    return null
+  return forge.asn1.derToOid(oid.value)
+}
+
+function legacyP12CompatibilityProblems(base64: string): string[] {
+  assertCredentialBlobSize(base64, 'certificate')
+  const der = forge.util.decode64(base64)
+  const pfx = forge.asn1.fromDer(der)
+  const oids = new Set<string>()
+  collectOids(pfx, oids)
+
+  const problems: string[] = []
+  const macAlgorithm = p12MacAlgorithm(pfx)
+  if (macAlgorithm !== SHA1_OID)
+    problems.push(macAlgorithm === forge.pki.oids.sha256 ? 'SHA-256 MAC' : 'non-SHA-1 MAC')
+  if (oids.has(PBES2_OID))
+    problems.push('PBES2/AES encryption')
+  if (!oids.has(PBESV1_SHA1_3DES_OID))
+    problems.push('missing PBESv1 SHA-1/3DES private-key encryption')
+  return problems
+}
+
 function bagLocalKeyIdHex(bag: CertBag): string | null {
   const attr = (bag.attributes as Record<string, unknown[]> | undefined)?.localKeyId?.[0]
   return typeof attr === 'string' ? forge.util.bytesToHex(attr) : null
@@ -117,6 +177,30 @@ export const p12Opens: PrescanCheck = {
         fix: 'Re-export the .p12 and re-run `build credentials save` with the correct --p12-password',
       }]
     }
+  },
+}
+
+export const p12LegacyEncryption: PrescanCheck = {
+  id: 'ios/p12-legacy-encryption',
+  platforms: ['ios'],
+  appliesTo: ctx => has(ctx, 'BUILD_CERTIFICATE_BASE64'),
+  async run(ctx): Promise<Finding[]> {
+    let problems: string[]
+    try {
+      problems = legacyP12CompatibilityProblems(ctx.credentials!.BUILD_CERTIFICATE_BASE64)
+    }
+    catch {
+      return [] // p12-opens owns malformed/invalid P12 failures
+    }
+    if (problems.length === 0)
+      return []
+    return [{
+      id: 'ios/p12-legacy-encryption',
+      severity: 'error',
+      title: 'The P12 certificate uses encryption that the macOS build runner cannot import',
+      detail: `Detected ${problems.join(' and ')}. Fastlane security import may report a wrong password even when the password is correct.`,
+      fix: 'Re-export the .p12 with PBESv1 SHA-1/3DES encryption and a SHA-1 MAC, then re-run `build credentials save`.',
+    }]
   },
 }
 
