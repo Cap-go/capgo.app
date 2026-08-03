@@ -159,15 +159,47 @@ describe('user update Bento subscriber identity', () => {
     expect(syncUserPreferenceTagsMock).not.toHaveBeenCalled()
   })
 
-  it('does not move the subscriber when earlier image cleanup fails', async () => {
-    cleanStoredImageMetadataMock.mockRejectedValueOnce(new Error('Storage unavailable'))
+  it('suppresses both aliases before image cleanup even when cleanup fails', async () => {
+    const lifecycleTrace: string[] = []
+    syncBentoFirstOrgOnEmailChangeMock.mockImplementationOnce(async () => {
+      lifecycleTrace.push('aliases:suppressed')
+      return true
+    })
+    cleanStoredImageMetadataMock.mockImplementationOnce(async () => {
+      lifecycleTrace.push('image:cleanup')
+      throw new Error('Storage unavailable')
+    })
     const oldRecord = userRecord('old@example.com', { image_url: 'old/avatar.png' })
     const record = userRecord('new@example.com', { image_url: 'new/avatar.png' })
 
     const response = await postUpdate(record, oldRecord)
 
     expect(response.status).toBe(500)
-    expect(syncBentoFirstOrgOnEmailChangeMock).not.toHaveBeenCalled()
+    expect(lifecycleTrace).toEqual(['aliases:suppressed', 'image:cleanup'])
+    expect(syncBentoFirstOrgOnEmailChangeMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'old@example.com',
+      'new@example.com',
+    )
+    expect(syncUserPreferenceTagsMock).not.toHaveBeenCalled()
+  })
+
+  it('suppresses both aliases before API key creation even when API key creation fails', async () => {
+    const lifecycleTrace: string[] = []
+    syncBentoFirstOrgOnEmailChangeMock.mockImplementationOnce(async () => {
+      lifecycleTrace.push('aliases:suppressed')
+      return true
+    })
+    createApiKeyMock.mockImplementationOnce(async () => {
+      lifecycleTrace.push('api-key:create')
+      throw new Error('Database unavailable')
+    })
+
+    const response = await postUpdate(userRecord('new@example.com'), userRecord('old@example.com'))
+
+    expect(response.status).toBe(500)
+    expect(lifecycleTrace).toEqual(['aliases:suppressed', 'api-key:create'])
+    expect(cleanStoredImageMetadataMock).not.toHaveBeenCalled()
     expect(syncUserPreferenceTagsMock).not.toHaveBeenCalled()
   })
 

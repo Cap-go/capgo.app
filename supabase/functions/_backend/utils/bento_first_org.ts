@@ -114,52 +114,58 @@ export async function syncBentoFirstOrgOnRoleBindingWrite(
   c: Context<MiddlewareKeyVariables>,
   roleBindingId: string,
 ) {
-  const pgClient = getPgClient(c)
-  let binding: CurrentRoleBinding | undefined
+  const pgPool = getPgClient(c)
   try {
-    const result = await pgClient.query<CurrentRoleBinding>(
-      `SELECT
-         binding.id,
-         binding.principal_type,
-         binding.principal_id,
-         binding.scope_type,
-         binding.org_id,
-         binding.granted_at,
-         binding.is_direct,
-         (binding.expires_at IS NULL OR binding.expires_at > pg_catalog.now()) AS is_active,
-         users.email
-       FROM public.role_bindings AS binding
-       LEFT JOIN public.users AS users
-         ON users.id = binding.principal_id
-       WHERE binding.id = $1::uuid
-       LIMIT 1`,
-      [roleBindingId],
-    )
-    binding = result.rows[0]
+    let binding: CurrentRoleBinding | undefined
+    const pgClient = await pgPool.connect()
+    try {
+      const result = await pgClient.query<CurrentRoleBinding>(
+        `SELECT
+           binding.id,
+           binding.principal_type,
+           binding.principal_id,
+           binding.scope_type,
+           binding.org_id,
+           binding.granted_at,
+           binding.is_direct,
+           (binding.expires_at IS NULL OR binding.expires_at > pg_catalog.now()) AS is_active,
+           users.email
+         FROM public.role_bindings AS binding
+         LEFT JOIN public.users AS users
+           ON users.id = binding.principal_id
+         WHERE binding.id = $1::uuid
+         LIMIT 1`,
+        [roleBindingId],
+      )
+      binding = result.rows[0]
+    }
+    finally {
+      pgClient.release(true)
+    }
+
+    if (
+      !binding
+      || binding.principal_type !== 'user'
+      || binding.scope_type !== 'org'
+      || !binding.org_id
+      || binding.is_direct !== true
+      || binding.is_active !== true
+      || !binding.email
+    ) {
+      return
+    }
+
+    const email = normalizedEmail(binding.email)
+    await setAwaitingFirstOrgTag(c, email, false)
+    const result = await trackBentoEvent(c, email, {
+      user_id: binding.principal_id,
+      org_id: binding.org_id,
+      role_binding_id: binding.id,
+      joined_at: binding.granted_at,
+    }, BENTO_JOINED_ORG_EVENT)
+    ensureBentoDelivery(result, 'joined_org_event')
   }
   finally {
-    await closeClient(c, pgClient)
+    await closeClient(c, pgPool)
   }
-
-  if (
-    !binding
-    || binding.principal_type !== 'user'
-    || binding.scope_type !== 'org'
-    || !binding.org_id
-    || binding.is_direct !== true
-    || binding.is_active !== true
-    || !binding.email
-  ) {
-    return
-  }
-
-  const email = normalizedEmail(binding.email)
-  await setAwaitingFirstOrgTag(c, email, false)
-  const result = await trackBentoEvent(c, email, {
-    user_id: binding.principal_id,
-    org_id: binding.org_id,
-    role_binding_id: binding.id,
-    joined_at: binding.granted_at,
-  }, BENTO_JOINED_ORG_EVENT)
-  ensureBentoDelivery(result, 'joined_org_event')
 }

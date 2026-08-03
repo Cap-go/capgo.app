@@ -496,6 +496,45 @@ describe('first-organization lifecycle on direct org access', () => {
     )
   })
 
+  it('destroys the checked-out Workerd client before joined-org Bento requests', async () => {
+    const lifecycleTrace: string[] = []
+    pgQueryMock.mockImplementation(async () => {
+      lifecycleTrace.push('binding:queried')
+      return { rows: [activeBinding()] }
+    })
+    // Workerd closeClient is intentionally a no-op. The checked-out client
+    // must be destroyed explicitly before any external Bento request starts.
+    closeClientMock.mockImplementation(async () => undefined)
+    pgReleaseMock.mockImplementation((destroy) => {
+      lifecycleTrace.push(`client:released:${destroy}`)
+    })
+    syncBentoSubscriberTagsMock.mockImplementation(async () => {
+      lifecycleTrace.push('tag:remove')
+      return true
+    })
+    trackBentoEventMock.mockImplementation(async () => {
+      lifecycleTrace.push('event:joined')
+      return true
+    })
+
+    await syncRoleBinding()
+
+    expect(lifecycleTrace).toEqual([
+      'binding:queried',
+      'client:released:true',
+      'tag:remove',
+      'event:joined',
+    ])
+    expect(getPgClientMock).toHaveBeenCalledOnce()
+    expect(pgConnectMock).toHaveBeenCalledOnce()
+    expect(pgReleaseMock).toHaveBeenCalledOnce()
+    expect(pgReleaseMock).toHaveBeenCalledWith(true)
+    expect(closeClientMock).toHaveBeenCalledOnce()
+    expect(closeClientMock).toHaveBeenCalledWith(expect.anything(), getPgClientMock.mock.results[0]?.value)
+    expect(trackBentoEventMock.mock.invocationCallOrder[0])
+      .toBeLessThan(closeClientMock.mock.invocationCallOrder[0]!)
+  })
+
   it.each([
     ['deleted binding', null],
     ['expired binding', activeBinding({ is_active: false })],

@@ -22,13 +22,6 @@ app.post('/', middlewareAPISecret, triggerValidator('users', 'UPDATE'), async (c
     cloudlog({ requestId: c.get('requestId'), message: 'No id' })
     throw simpleError('no_id', 'No id', { record })
   }
-  await createApiKey(c, record.id)
-
-  const newImagePath = record.image_url
-  const oldImagePath = oldRecord?.image_url
-  if (newImagePath && newImagePath !== oldImagePath) {
-    await cleanStoredImageMetadata(c, newImagePath)
-  }
 
   const newEmail = record.email.trim().toLowerCase()
   const oldEmail = oldRecord?.email?.trim().toLowerCase()
@@ -37,6 +30,15 @@ app.post('/', middlewareAPISecret, triggerValidator('users', 'UPDATE'), async (c
     if (suppressionResult === false)
       quickError(500, 'bento_first_org_suppression_failed', 'Bento first-organization recovery suppression failed')
   }
+
+  await createApiKey(c, record.id)
+
+  const newImagePath = record.image_url
+  const oldImagePath = oldRecord?.image_url
+  if (newImagePath && newImagePath !== oldImagePath) {
+    await cleanStoredImageMetadata(c, newImagePath)
+  }
+
   await syncUserPreferenceTags(c, record.email, record, oldRecord, oldRecord?.email)
 
   return c.json(BRES)
