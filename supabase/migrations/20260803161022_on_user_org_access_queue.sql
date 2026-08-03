@@ -4,9 +4,11 @@
 -- Execution model:
 -- - Where: row-level AFTER INSERT / activation-relevant UPDATE trigger on
 --   public.role_bindings.
--- - Frequency: once for each new row that currently grants active direct
---   organization access. Non-qualifying rows are rejected by the trigger WHEN
---   clause before the trigger function runs.
+-- - Frequency: once for each qualifying INSERT or activation-relevant UPDATE.
+--   Qualifying-to-qualifying updates are deliberate: tag removal is
+--   idempotent, the joined event is an at-least-once fact, and a later write
+--   can self-heal a previously exhausted delivery. Non-qualifying rows are
+--   rejected by the trigger WHEN clause before the trigger function runs.
 -- - Roles: any role allowed to write role_bindings; the existing generic
 --   trigger function runs as SECURITY DEFINER.
 -- - Cardinality: O(1) pgmq.send per qualifying row. The trigger performs no
@@ -47,11 +49,42 @@ EXECUTE FUNCTION public.trigger_http_queue_post_to_function(
     'on_user_org_access'
 );
 
-UPDATE public.cron_tasks
-SET
-    target = (target::jsonb || '["on_user_org_access"]'::jsonb)::text,
-    updated_at = pg_catalog.now()
-WHERE
-    name = 'high_frequency_queues'
-    AND task_type = 'function_queue'::public.cron_task_type
-    AND NOT (target::jsonb ? 'on_user_org_access');
+DO $$
+DECLARE
+    high_frequency_task_type public.cron_task_type;
+    high_frequency_target jsonb;
+BEGIN
+    SELECT cron.task_type, cron.target::jsonb
+    INTO high_frequency_task_type, high_frequency_target
+    FROM public.cron_tasks AS cron
+    WHERE cron.name = 'high_frequency_queues'
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION
+            'Required cron task high_frequency_queues is missing';
+    END IF;
+
+    IF high_frequency_task_type
+        IS DISTINCT FROM 'function_queue'::public.cron_task_type THEN
+        RAISE EXCEPTION
+            'Cron task high_frequency_queues must use task type function_queue';
+    END IF;
+
+    IF pg_catalog.jsonb_typeof(high_frequency_target)
+        IS DISTINCT FROM 'array' THEN
+        RAISE EXCEPTION
+            'Cron task high_frequency_queues target must be a JSON array';
+    END IF;
+
+    IF NOT (high_frequency_target ? 'on_user_org_access') THEN
+        UPDATE public.cron_tasks
+        SET
+            target = (
+                high_frequency_target || '["on_user_org_access"]'::jsonb
+            )::text,
+            updated_at = pg_catalog.now()
+        WHERE name = 'high_frequency_queues';
+    END IF;
+END;
+$$;

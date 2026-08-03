@@ -76,7 +76,11 @@ Tag does NOT contain: onboarding_disabled
 
 **Entry event**: `user:registered_without_org`
 
+**Exit or goal event**: `user:joined_org`
+
 Capgo adds `onboarding:awaiting_first_org` when a direct registration still has no active organization access. Creating or joining an organization removes that tag. A normalized email-address change permanently adds `onboarding:first_org_recovery_suppressed` to both the old and new Bento aliases so asynchronous subscriber updates can never send this recovery email to a stale address.
+
+Configure the workflow to enroll each subscriber at most once. Queue delivery is at least once, so both lifecycle events can repeat for the same user. Treat `user:joined_org` as a fact used to exit or complete the workflow, not as another entry trigger; the subscriber-level enrollment rule makes repeated `user:registered_without_org` facts harmless.
 
 After the workflow delay, add a final decision immediately before the send step. All three conditions must still be true:
 

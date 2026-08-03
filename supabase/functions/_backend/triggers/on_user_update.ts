@@ -1,7 +1,7 @@
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Database } from '../utils/supabase.types.ts'
 import { Hono } from 'hono/tiny'
-import { syncBentoFirstOrgOnEmailChange } from '../utils/bento_first_org.ts'
+import { normalizeBentoEmail, syncBentoFirstOrgOnEmailChange } from '../utils/bento_first_org.ts'
 import { BRES, middlewareAPISecret, quickError, simpleError, triggerValidator } from '../utils/hono.ts'
 import { cleanStoredImageMetadata } from '../utils/image.ts'
 import { cloudlog } from '../utils/logging.ts'
@@ -23,8 +23,8 @@ app.post('/', middlewareAPISecret, triggerValidator('users', 'UPDATE'), async (c
     throw simpleError('no_id', 'No id', { record })
   }
 
-  const newEmail = record.email.trim().toLowerCase()
-  const oldEmail = oldRecord?.email?.trim().toLowerCase()
+  const newEmail = normalizeBentoEmail(record.email)
+  const oldEmail = oldRecord?.email ? normalizeBentoEmail(oldRecord.email) : undefined
   if (oldEmail && oldEmail !== newEmail) {
     const suppressionResult = await syncBentoFirstOrgOnEmailChange(c, oldEmail, newEmail)
     if (suppressionResult === false)

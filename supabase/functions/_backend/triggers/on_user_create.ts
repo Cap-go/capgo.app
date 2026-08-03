@@ -16,6 +16,9 @@ app.post('/', middlewareAPISecret, triggerValidator('users', 'INSERT'), async (c
   await createApiKey(c, record.id)
   cloudlog({ requestId: c.get('requestId'), message: 'createCustomer stripe' })
   await syncUserPreferenceTags(c, record.email, record)
+  // Configured Bento failures deliberately fail this queue message. Its
+  // lifecycle tag writes are idempotent, and retrying avoids silently losing
+  // the only recovery enrollment for a newly registered user.
   await syncBentoFirstOrgOnUserCreate(c, record)
   // "User Joined" should represent a self-signup (technical user expected to onboard),
   // not an account created by accepting an org invite.

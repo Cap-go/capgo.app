@@ -14,6 +14,7 @@ const {
 }))
 
 vi.mock('../supabase/functions/_backend/utils/bento_first_org.ts', () => ({
+  normalizeBentoEmail: (email: string) => email.trim().toLowerCase(),
   syncBentoFirstOrgOnEmailChange: syncBentoFirstOrgOnEmailChangeMock,
 }))
 

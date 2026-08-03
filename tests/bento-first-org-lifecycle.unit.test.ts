@@ -92,7 +92,7 @@ async function syncRoleBinding(roleBindingId = ROLE_BINDING_ID) {
 function activeBinding(overrides: Record<string, unknown> = {}) {
   return {
     email: ' Current.User@Example.COM ',
-    granted_at: JOINED_AT,
+    granted_at: new Date(JOINED_AT),
     id: ROLE_BINDING_ID,
     is_active: true,
     is_direct: true,
@@ -248,7 +248,7 @@ describe('first-organization lifecycle on user registration', () => {
     expect(pgQueryMock).toHaveBeenCalledTimes(1)
   })
 
-  it('does not count an expired pending invitation as active access', async () => {
+  it('restricts the active-access check to active direct user-to-org bindings', async () => {
     const response = await postUser()
 
     expect(response.status).toBe(200)

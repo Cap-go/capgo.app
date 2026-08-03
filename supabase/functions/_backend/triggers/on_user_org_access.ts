@@ -1,29 +1,18 @@
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
+import type { Database } from '../utils/supabase.types.ts'
 import { Hono } from 'hono/tiny'
+import { z } from 'zod'
 import { syncBentoFirstOrgOnRoleBindingWrite } from '../utils/bento_first_org.ts'
-import { BRES, middlewareAPISecret, parseBody, simpleError } from '../utils/hono.ts'
-
-interface RoleBindingWritePayload {
-  record?: { id?: string | null } | null
-  table?: string
-  type?: string
-}
+import { BRES, middlewareAPISecret, simpleError, triggerValidator } from '../utils/hono.ts'
 
 export const app = new Hono<MiddlewareKeyVariables>()
 
-app.post('/', middlewareAPISecret, async (c) => {
-  const body = await parseBody<unknown>(c)
-  if (body === null || typeof body !== 'object' || Array.isArray(body))
-    throw simpleError('invalid_payload', 'Expected a JSON object', { payload: body })
+app.post('/', middlewareAPISecret, triggerValidator('role_bindings', ['INSERT', 'UPDATE']), async (c) => {
+  const record = c.get('webhookBody') as Partial<Database['public']['Tables']['role_bindings']['Row']>
+  const bindingId = z.uuid().safeParse(record.id)
+  if (!bindingId.success)
+    throw simpleError('invalid_payload', 'Invalid role binding id', { id: record.id })
 
-  const payload = body as RoleBindingWritePayload
-  if (payload.table !== 'role_bindings')
-    throw simpleError('table_not_match', 'Not role_bindings', { payload })
-  if (payload.type !== 'INSERT' && payload.type !== 'UPDATE')
-    throw simpleError('type_not_match', 'Not INSERT or UPDATE', { payload })
-  if (!payload.record?.id)
-    throw simpleError('invalid_payload', 'Missing role binding id', { payload })
-
-  await syncBentoFirstOrgOnRoleBindingWrite(c, payload.record.id)
+  await syncBentoFirstOrgOnRoleBindingWrite(c, bindingId.data)
   return c.json(BRES)
 })

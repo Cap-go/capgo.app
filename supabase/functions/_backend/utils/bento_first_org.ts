@@ -14,7 +14,7 @@ export const BENTO_JOINED_ORG_EVENT = 'user:joined_org'
 
 interface CurrentRoleBinding {
   email: string | null
-  granted_at: string
+  granted_at: Date
   id: string
   is_active: boolean
   is_direct: boolean
@@ -24,7 +24,7 @@ interface CurrentRoleBinding {
   scope_type: string
 }
 
-function normalizedEmail(email: string) {
+export function normalizeBentoEmail(email: string) {
   return email.trim().toLowerCase()
 }
 
@@ -43,7 +43,7 @@ async function setAwaitingFirstOrgTag(c: Context, email: string, awaiting: boole
 }
 
 export async function syncBentoFirstOrgOnEmailChange(c: Context, oldEmail: string, newEmail: string) {
-  const aliases = [...new Set([oldEmail, newEmail].map(normalizedEmail).filter(Boolean))]
+  const aliases = [...new Set([oldEmail, newEmail].map(normalizeBentoEmail).filter(Boolean))]
   return await syncBentoSubscriberTags(c, aliases.map(email => ({
     email,
     segments: [BENTO_FIRST_ORG_RECOVERY_SUPPRESSED_TAG],
@@ -69,6 +69,9 @@ async function hasActiveDirectOrgAccess(pgPool: ReturnType<typeof getPgClient>, 
     return result.rows.length > 0
   }
   finally {
+    // General-backend Pools are request-scoped and closeClient intentionally
+    // does not end them in workerd. Destroy the checked-out socket at the query
+    // boundary so it cannot survive across Bento I/O or request teardown.
     pgClient.release(true)
   }
 }
@@ -77,7 +80,7 @@ export async function syncBentoFirstOrgOnUserCreate(
   c: Context<MiddlewareKeyVariables>,
   user: Database['public']['Tables']['users']['Row'],
 ) {
-  const email = normalizedEmail(user.email)
+  const email = normalizeBentoEmail(user.email)
 
   if (user.created_via_invite) {
     await setAwaitingFirstOrgTag(c, email, false)
@@ -140,6 +143,8 @@ export async function syncBentoFirstOrgOnRoleBindingWrite(
       binding = result.rows[0]
     }
     finally {
+      // See hasActiveDirectOrgAccess: destroy this request-scoped socket before
+      // the handler crosses the network boundary into Bento.
       pgClient.release(true)
     }
 
@@ -155,13 +160,13 @@ export async function syncBentoFirstOrgOnRoleBindingWrite(
       return
     }
 
-    const email = normalizedEmail(binding.email)
+    const email = normalizeBentoEmail(binding.email)
     await setAwaitingFirstOrgTag(c, email, false)
     const result = await trackBentoEvent(c, email, {
       user_id: binding.principal_id,
       org_id: binding.org_id,
       role_binding_id: binding.id,
-      joined_at: binding.granted_at,
+      joined_at: binding.granted_at.toISOString(),
     }, BENTO_JOINED_ORG_EVENT)
     ensureBentoDelivery(result, 'joined_org_event')
   }

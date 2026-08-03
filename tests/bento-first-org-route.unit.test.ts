@@ -128,7 +128,22 @@ describe('first-organization lifecycle trigger route', () => {
     expect(syncBentoFirstOrgOnRoleBindingWriteMock).not.toHaveBeenCalled()
   })
 
+  it.each([
+    ['table_not_match', { old_record: null, record: roleBindingRecord, schema: 'public', table: 'users', type: 'INSERT' }],
+    ['type_not_match', { old_record: null, record: roleBindingRecord, schema: 'public', table: 'role_bindings', type: 'DELETE' }],
+    ['invalid_payload', { old_record: null, record: {}, schema: 'public', table: 'role_bindings', type: 'INSERT' }],
+    ['invalid_payload', { old_record: null, record: { ...roleBindingRecord, id: 'not-a-uuid' }, schema: 'public', table: 'role_bindings', type: 'UPDATE' }],
+  ])('rejects unsupported role-binding payloads with %s', async (error, payload) => {
+    const response = await requestPayload(payload)
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toMatchObject({ error })
+    expect(syncBentoFirstOrgOnRoleBindingWriteMock).not.toHaveBeenCalled()
+  })
+
   it('registers the same route in the Supabase trigger router', async () => {
+    // Importing this deployment entry point evaluates Deno.serve and starts a
+    // server, so verify its static wiring without executing the module.
     const source = await readFile(new URL('../supabase/functions/triggers/index.ts', import.meta.url), 'utf8')
 
     expect(source).toContain('appGlobal.route(\'/on_user_org_access\', on_user_org_access)')

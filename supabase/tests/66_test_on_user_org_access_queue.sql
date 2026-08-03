@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(19);
+SELECT plan(20);
 
 CREATE OR REPLACE FUNCTION pg_temp.on_user_org_access_messages(
     p_binding_id uuid
@@ -547,6 +547,29 @@ SELECT is(
         WHERE rb.id = '66000000-0000-4000-8000-000000000002'::uuid
     ),
     'expired-to-active UPDATE queues the exact generic old/new envelope'
+);
+
+DO $$
+BEGIN
+    PERFORM pg_temp.delete_on_user_org_access_messages(
+        '66000000-0000-4000-8000-000000000002'::uuid
+    );
+END;
+$$;
+
+UPDATE public.role_bindings
+SET expires_at = pg_catalog.now() + interval '1 day'
+WHERE id = '66000000-0000-4000-8000-000000000002'::uuid;
+
+SELECT is(
+    (
+        SELECT count(*)
+        FROM pg_temp.on_user_org_access_messages(
+            '66000000-0000-4000-8000-000000000002'::uuid
+        )
+    ),
+    1::bigint,
+    'active-to-active UPDATE queues again for self-healing delivery'
 );
 
 UPDATE public.role_bindings

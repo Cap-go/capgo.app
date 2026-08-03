@@ -62,13 +62,20 @@ describe('syncUserPreferenceTags email type', () => {
       deleteSegments: expect.arrayContaining(['email_type:personal', 'email_type:disposable']),
     }))
 
+    interface SubscriberUpdate {
+      deleteSegments: string[]
+      segments: string[]
+    }
     const calls = syncBentoSubscriberTagsMock.mock.calls as unknown as Array<[
       unknown,
-      { deleteSegments: string[], segments: string[] },
+      SubscriberUpdate | SubscriberUpdate[],
     ]>
-    for (const [, update] of calls) {
-      expect(update.segments).not.toContain(SUPPRESSION_TAG)
-      expect(update.deleteSegments).not.toContain(SUPPRESSION_TAG)
+    for (const [, rawUpdate] of calls) {
+      const updates = Array.isArray(rawUpdate) ? rawUpdate : [rawUpdate]
+      for (const update of updates) {
+        expect(update.segments).not.toContain(SUPPRESSION_TAG)
+        expect(update.deleteSegments).not.toContain(SUPPRESSION_TAG)
+      }
     }
   })
 
