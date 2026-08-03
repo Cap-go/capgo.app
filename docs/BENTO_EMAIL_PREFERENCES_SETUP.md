@@ -91,6 +91,7 @@ Tag does NOT contain: onboarding_disabled
 ```
 
 Do not check the suppression tag only when the workflow starts. It is a monotonic safety opt-out that can be added while the workflow is waiting.
+Keep this recovery email non-transactional so Bento's global unsubscribe state remains a delivery gate.
 
 #### 4. Weekly Statistics
 

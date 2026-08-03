@@ -3,7 +3,7 @@ import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Database } from '../utils/supabase.types.ts'
 import { Hono } from 'hono/tiny'
 import { unsubscribeBento } from '../utils/bento.ts'
-import { normalizeBentoEmail, syncBentoFirstOrgOnEmailChange } from '../utils/bento_first_org.ts'
+import { normalizeBentoEmail, suppressAndUnsubscribeDeletedUserRecovery } from '../utils/bento_first_org.ts'
 import { BRES, middlewareAPISecret, quickError, triggerValidator } from '../utils/hono.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { cancelSubscription } from '../utils/stripe.ts'
@@ -283,25 +283,14 @@ async function suppressDeletedUserInBento(
     return true
 
   const email = normalizeBentoEmail(record.email)
-  let suppressionSucceeded = false
   try {
-    suppressionSucceeded = await syncBentoFirstOrgOnEmailChange(c, email, email) !== false
+    await suppressAndUnsubscribeDeletedUserRecovery(c, email)
+    return true
   }
   catch (error) {
-    logFailure(c, 'Bento user deletion suppression failed', error)
+    logFailure(c, 'Bento user deletion cleanup failed', error)
+    return false
   }
-
-  // Unsubscribe last so a preceding subscriber-tag upsert cannot race and
-  // become the final Bento mutation for this deleted identity.
-  let unsubscribeSucceeded = false
-  try {
-    unsubscribeSucceeded = await unsubscribeBento(c, email) !== false
-  }
-  catch (error) {
-    logFailure(c, 'Bento user deletion unsubscribe failed', error)
-  }
-
-  return suppressionSucceeded && unsubscribeSucceeded
 }
 
 async function suppressDeletedUserInBentoWithinBudget(

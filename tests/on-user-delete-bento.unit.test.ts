@@ -3,22 +3,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const {
   cancelSubscriptionMock,
   supabaseAdminMock,
-  syncBentoFirstOrgOnEmailChangeMock,
+  syncBentoSubscriberTagsMock,
   unsubscribeBentoMock,
 } = vi.hoisted(() => ({
   cancelSubscriptionMock: vi.fn(async () => undefined as boolean | undefined),
   supabaseAdminMock: vi.fn(),
-  syncBentoFirstOrgOnEmailChangeMock: vi.fn(async () => true as boolean | undefined),
+  syncBentoSubscriberTagsMock: vi.fn(async () => true as boolean | undefined),
   unsubscribeBentoMock: vi.fn(async () => true as boolean | undefined),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/bento.ts', () => ({
+  syncBentoSubscriberTags: syncBentoSubscriberTagsMock,
+  trackBentoEvent: vi.fn(),
   unsubscribeBento: unsubscribeBentoMock,
-}))
-
-vi.mock('../supabase/functions/_backend/utils/bento_first_org.ts', () => ({
-  normalizeBentoEmail: (email: string) => email.trim().toLowerCase(),
-  syncBentoFirstOrgOnEmailChange: syncBentoFirstOrgOnEmailChangeMock,
 }))
 
 vi.mock('../supabase/functions/_backend/utils/hono.ts', async () => {
@@ -120,7 +117,7 @@ describe('user deletion Bento recovery safety', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     cancelSubscriptionMock.mockResolvedValue(undefined)
-    syncBentoFirstOrgOnEmailChangeMock.mockResolvedValue(true)
+    syncBentoSubscriberTagsMock.mockResolvedValue(true)
     unsubscribeBentoMock.mockResolvedValue(true)
     const emptyBuilder = queryBuilder()
     supabaseAdminMock.mockReturnValue({
@@ -132,20 +129,20 @@ describe('user deletion Bento recovery safety', () => {
     const response = await postDelete()
 
     expect(response.status).toBe(200)
-    expect(syncBentoFirstOrgOnEmailChangeMock).toHaveBeenCalledWith(
-      expect.anything(),
-      'deleted.user@example.com',
-      'deleted.user@example.com',
-    )
+    expect(syncBentoSubscriberTagsMock).toHaveBeenCalledWith(expect.anything(), [{
+      deleteSegments: ['onboarding:awaiting_first_org'],
+      email: 'deleted.user@example.com',
+      segments: ['onboarding:first_org_recovery_suppressed'],
+    }])
     expect(unsubscribeBentoMock).toHaveBeenCalledWith(expect.anything(), 'deleted.user@example.com')
-    expect(syncBentoFirstOrgOnEmailChangeMock.mock.invocationCallOrder[0])
+    expect(syncBentoSubscriberTagsMock.mock.invocationCallOrder[0])
       .toBeLessThan(unsubscribeBentoMock.mock.invocationCallOrder[0])
     expect(cancelSubscriptionMock).not.toHaveBeenCalled()
   })
 
   it.each([
-    ['suppression', () => syncBentoFirstOrgOnEmailChangeMock.mockResolvedValue(false)],
-    ['suppression exception', () => syncBentoFirstOrgOnEmailChangeMock.mockRejectedValue(new Error('Bento unavailable'))],
+    ['suppression', () => syncBentoSubscriberTagsMock.mockResolvedValue(false)],
+    ['suppression exception', () => syncBentoSubscriberTagsMock.mockRejectedValue(new Error('Bento unavailable'))],
     ['unsubscribe', () => unsubscribeBentoMock.mockResolvedValue(false)],
     ['unsubscribe exception', () => unsubscribeBentoMock.mockRejectedValue(new Error('Bento unavailable'))],
   ])('fails for queue retry when Bento %s cleanup fails', async (_label, fail) => {
@@ -154,11 +151,14 @@ describe('user deletion Bento recovery safety', () => {
     const response = await postDelete()
 
     expect(response.status).toBe(500)
+    expect(unsubscribeBentoMock).toHaveBeenCalledOnce()
+    expect(syncBentoSubscriberTagsMock.mock.invocationCallOrder[0])
+      .toBeLessThan(unsubscribeBentoMock.mock.invocationCallOrder[0])
     expect(supabaseAdminMock).toHaveBeenCalled()
   })
 
   it('completes subscription cleanup before returning a retryable Bento failure', async () => {
-    syncBentoFirstOrgOnEmailChangeMock.mockResolvedValue(false)
+    syncBentoSubscriberTagsMock.mockResolvedValue(false)
     configureSingleOrgCleanup()
 
     const response = await postDelete()
@@ -191,7 +191,7 @@ describe('user deletion Bento recovery safety', () => {
 
   it('runs subscription cleanup while Bento suppression is still pending', async () => {
     let resolveSuppression!: (value: boolean) => void
-    syncBentoFirstOrgOnEmailChangeMock.mockImplementationOnce(async () => await new Promise<boolean>((resolve) => {
+    syncBentoSubscriberTagsMock.mockImplementationOnce(async () => await new Promise<boolean>((resolve) => {
       resolveSuppression = resolve
     }))
     configureSingleOrgCleanup()
@@ -209,16 +209,17 @@ describe('user deletion Bento recovery safety', () => {
     expect(unsubscribeBentoMock).toHaveBeenCalledOnce()
   })
 
-  it('returns a retryable failure when Bento exceeds its deletion budget', async () => {
+  it('still submits unsubscribe and returns a retryable failure when suppression hangs', async () => {
     vi.useFakeTimers()
     try {
-      syncBentoFirstOrgOnEmailChangeMock.mockImplementationOnce(async () => await new Promise<boolean>(() => {}))
+      syncBentoSubscriberTagsMock.mockImplementationOnce(async () => await new Promise<boolean>(() => {}))
 
       const responsePromise = postDelete()
-      await vi.advanceTimersByTimeAsync(5_001)
+      await vi.advanceTimersByTimeAsync(2_001)
 
       const response = await responsePromise
       expect(response.status).toBe(500)
+      expect(unsubscribeBentoMock).toHaveBeenCalledOnce()
       expect(supabaseAdminMock).toHaveBeenCalled()
     }
     finally {
@@ -226,8 +227,26 @@ describe('user deletion Bento recovery safety', () => {
     }
   })
 
+  it('bounds a hanging unsubscribe and returns a retryable failure', async () => {
+    vi.useFakeTimers()
+    try {
+      unsubscribeBentoMock.mockImplementationOnce(async () => await new Promise<boolean>(() => {}))
+
+      const responsePromise = postDelete()
+      await vi.advanceTimersByTimeAsync(2_001)
+
+      const response = await responsePromise
+      expect(response.status).toBe(500)
+      expect(syncBentoSubscriberTagsMock).toHaveBeenCalledOnce()
+      expect(unsubscribeBentoMock).toHaveBeenCalledOnce()
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('continues as a no-op when Bento is not configured', async () => {
-    syncBentoFirstOrgOnEmailChangeMock.mockResolvedValue(undefined)
+    syncBentoSubscriberTagsMock.mockResolvedValue(undefined)
     unsubscribeBentoMock.mockResolvedValue(undefined)
 
     const response = await postDelete()

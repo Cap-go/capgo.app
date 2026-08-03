@@ -12,6 +12,9 @@ export const BENTO_FIRST_ORG_RECOVERY_SUPPRESSED_TAG = 'onboarding:first_org_rec
 export const BENTO_REGISTERED_WITHOUT_ORG_EVENT = 'user:registered_without_org'
 export const BENTO_JOINED_ORG_EVENT = 'user:joined_org'
 
+const BENTO_DELETED_USER_OPERATION_TIMEOUT_MS = 2_000
+const BENTO_DELETED_USER_OPERATION_TIMED_OUT = Symbol('bento-deleted-user-operation-timed-out')
+
 interface CurrentRoleBinding {
   email: string | null
   granted_at: Date
@@ -38,6 +41,28 @@ function ensureBentoDelivery(result: boolean | undefined, operation: string) {
     quickError(500, 'bento_lifecycle_delivery_failed', 'Bento lifecycle delivery failed', { operation })
 }
 
+async function runDeletedUserBentoOperation<T>(operation: string, promise: Promise<T>) {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined
+  try {
+    const result = await Promise.race([
+      promise,
+      new Promise<typeof BENTO_DELETED_USER_OPERATION_TIMED_OUT>((resolve) => {
+        timeoutId = setTimeout(
+          () => resolve(BENTO_DELETED_USER_OPERATION_TIMED_OUT),
+          BENTO_DELETED_USER_OPERATION_TIMEOUT_MS,
+        )
+      }),
+    ])
+    if (result === BENTO_DELETED_USER_OPERATION_TIMED_OUT)
+      throw new Error(`${operation} timed out`)
+    return result
+  }
+  finally {
+    if (timeoutId !== undefined)
+      clearTimeout(timeoutId)
+  }
+}
+
 async function setAwaitingFirstOrgTag(c: Context, email: string, awaiting: boolean) {
   const result = await syncBentoSubscriberTags(c, {
     email,
@@ -56,25 +81,31 @@ export async function syncBentoFirstOrgOnEmailChange(c: Context, oldEmail: strin
   })))
 }
 
-async function suppressDeletedUserRecovery(c: Context, email: string) {
+export async function suppressAndUnsubscribeDeletedUserRecovery(c: Context, email: string) {
   let suppressionResult: boolean | undefined
   let suppressionError: unknown
   let suppressionThrew = false
   try {
-    suppressionResult = await syncBentoFirstOrgOnEmailChange(c, email, email)
+    suppressionResult = await runDeletedUserBentoOperation(
+      'suppress deleted user recovery',
+      syncBentoFirstOrgOnEmailChange(c, email, email),
+    )
   }
   catch (error) {
     suppressionError = error
     suppressionThrew = true
   }
 
-  // Keep unsubscribe as the final Bento mutation for an identity that is
-  // already scheduled for deletion, even if suppression delivery throws.
+  // Submit unsubscribe after suppression for an identity that is already
+  // scheduled for deletion, even if suppression delivery throws.
   let unsubscribeResult: boolean | undefined
   let unsubscribeError: unknown
   let unsubscribeThrew = false
   try {
-    unsubscribeResult = await unsubscribeBento(c, email)
+    unsubscribeResult = await runDeletedUserBentoOperation(
+      'unsubscribe deleted user recovery',
+      unsubscribeBento(c, email),
+    )
   }
   catch (error) {
     unsubscribeError = error
@@ -87,6 +118,43 @@ async function suppressDeletedUserRecovery(c: Context, email: string) {
     throw unsubscribeError
   ensureBentoDelivery(suppressionResult, 'suppress_deleted_user_recovery')
   ensureBentoDelivery(unsubscribeResult, 'unsubscribe_deleted_user_recovery')
+}
+
+async function reconcileFirstOrgStateAfterBentoMutation(
+  c: Context,
+  pgPool: ReturnType<typeof getPgClient>,
+  userId: string,
+  email: string,
+) {
+  const state = await getFirstOrgDatabaseState(pgPool, userId)
+  if (!state.user_is_recovery_eligible)
+    await suppressAndUnsubscribeDeletedUserRecovery(c, email)
+  return state
+}
+
+async function runBentoMutationWithFirstOrgReconciliation(
+  c: Context,
+  pgPool: ReturnType<typeof getPgClient>,
+  userId: string,
+  email: string,
+  mutate: () => Promise<void>,
+) {
+  let mutationSucceeded = false
+  let mutationError: unknown
+  try {
+    await mutate()
+    mutationSucceeded = true
+  }
+  catch (error) {
+    mutationError = error
+  }
+
+  // Reconcile even after an ambiguous provider failure: Bento may have
+  // accepted the mutation before Capgo lost the response.
+  const state = await reconcileFirstOrgStateAfterBentoMutation(c, pgPool, userId, email)
+  if (!mutationSucceeded)
+    throw mutationError
+  return state
 }
 
 async function getFirstOrgDatabaseState(pgPool: ReturnType<typeof getPgClient>, userId: string) {
@@ -138,7 +206,7 @@ export async function prepareNewUserProvisioning(
   try {
     const state = await getFirstOrgDatabaseState(pgPool, user.id)
     if (!state.user_is_recovery_eligible) {
-      await suppressDeletedUserRecovery(c, email)
+      await suppressAndUnsubscribeDeletedUserRecovery(c, email)
       return false
     }
     return true
@@ -155,37 +223,70 @@ export async function syncBentoFirstOrgOnUserCreate(
   const email = normalizeBentoEmail(user.email)
   const pgPool = getPgClient(c)
   try {
-    // Provisioning can overlap account deletion. Re-read eligibility before
-    // every lifecycle branch so no invite/access shortcut can mutate Bento
-    // after the deletion handler's final unsubscribe.
+    // Provisioning can overlap account deletion. Read before lifecycle work
+    // and reconcile after each terminal mutation so recovery stays fail closed.
     const postProvisionState = await getFirstOrgDatabaseState(pgPool, user.id)
     if (!postProvisionState.user_is_recovery_eligible) {
-      await suppressDeletedUserRecovery(c, email)
+      await suppressAndUnsubscribeDeletedUserRecovery(c, email)
       return
     }
     if (user.created_via_invite || postProvisionState.has_active_direct_org_access) {
-      await setAwaitingFirstOrgTag(c, email, false)
+      await runBentoMutationWithFirstOrgReconciliation(
+        c,
+        pgPool,
+        user.id,
+        email,
+        async () => await setAwaitingFirstOrgTag(c, email, false),
+      )
       return
     }
 
-    await setAwaitingFirstOrgTag(c, email, true)
-
-    const finalState = await getFirstOrgDatabaseState(pgPool, user.id)
-    if (!finalState.user_is_recovery_eligible) {
-      await suppressDeletedUserRecovery(c, email)
+    const finalState = await runBentoMutationWithFirstOrgReconciliation(
+      c,
+      pgPool,
+      user.id,
+      email,
+      async () => await setAwaitingFirstOrgTag(c, email, true),
+    )
+    if (!finalState.user_is_recovery_eligible)
       return
-    }
     if (finalState.has_active_direct_org_access) {
-      await setAwaitingFirstOrgTag(c, email, false)
+      await runBentoMutationWithFirstOrgReconciliation(
+        c,
+        pgPool,
+        user.id,
+        email,
+        async () => await setAwaitingFirstOrgTag(c, email, false),
+      )
       return
     }
 
-    const result = await trackBentoEvent(c, email, {
-      user_id: user.id,
-      registered_at: user.created_at,
-      created_via_invite: false,
-    }, BENTO_REGISTERED_WITHOUT_ORG_EVENT)
-    ensureBentoDelivery(result, 'registered_without_org_event')
+    // This read deliberately follows the final registration-side Bento
+    // mutation. If deletion committed first, suppress and unsubscribe here;
+    // if it commits later, the queued deletion worker submits cleanup afterward.
+    const settledState = await runBentoMutationWithFirstOrgReconciliation(
+      c,
+      pgPool,
+      user.id,
+      email,
+      async () => {
+        const result = await trackBentoEvent(c, email, {
+          user_id: user.id,
+          registered_at: user.created_at,
+          created_via_invite: false,
+        }, BENTO_REGISTERED_WITHOUT_ORG_EVENT)
+        ensureBentoDelivery(result, 'registered_without_org_event')
+      },
+    )
+    if (settledState.user_is_recovery_eligible && settledState.has_active_direct_org_access) {
+      await runBentoMutationWithFirstOrgReconciliation(
+        c,
+        pgPool,
+        user.id,
+        email,
+        async () => await setAwaitingFirstOrgTag(c, email, false),
+      )
+    }
   }
   finally {
     await closeClient(c, pgPool)
@@ -240,14 +341,28 @@ export async function syncBentoFirstOrgOnRoleBindingWrite(
     }
 
     const email = normalizeBentoEmail(binding.email)
-    await setAwaitingFirstOrgTag(c, email, false)
-    const result = await trackBentoEvent(c, email, {
-      user_id: binding.principal_id,
-      org_id: binding.org_id,
-      role_binding_id: binding.id,
-      joined_at: binding.granted_at.toISOString(),
-    }, BENTO_JOINED_ORG_EVENT)
-    ensureBentoDelivery(result, 'joined_org_event')
+    const preMutationState = await getFirstOrgDatabaseState(pgPool, binding.principal_id)
+    if (!preMutationState.user_is_recovery_eligible) {
+      await suppressAndUnsubscribeDeletedUserRecovery(c, email)
+      return
+    }
+
+    await runBentoMutationWithFirstOrgReconciliation(
+      c,
+      pgPool,
+      binding.principal_id,
+      email,
+      async () => {
+        await setAwaitingFirstOrgTag(c, email, false)
+        const result = await trackBentoEvent(c, email, {
+          user_id: binding.principal_id,
+          org_id: binding.org_id,
+          role_binding_id: binding.id,
+          joined_at: binding.granted_at.toISOString(),
+        }, BENTO_JOINED_ORG_EVENT)
+        ensureBentoDelivery(result, 'joined_org_event')
+      },
+    )
   }
   finally {
     await closeClient(c, pgPool)
