@@ -19,6 +19,7 @@ const AES_CBC_OIDS = new Set([
   '2.16.840.1.101.3.4.1.42',
 ])
 
+/** Marks malformed outer PFX input that the existing p12-opens check owns. */
 class MalformedP12Error extends Error {
   constructor() {
     super('malformed PKCS12 ASN.1')
@@ -31,10 +32,12 @@ interface PrivateKeyEncryption {
   encryptionSchemeOid: string | null
 }
 
+/** Return constructed ASN.1 children, or an empty list for primitive nodes. */
 function asn1Children(node: forge.asn1.Asn1 | undefined): forge.asn1.Asn1[] {
   return node && Array.isArray(node.value) ? node.value : []
 }
 
+/** Decode an ASN.1 OID node without letting malformed OID bytes crash the scan. */
 function asn1Oid(node: forge.asn1.Asn1 | undefined): string | null {
   if (!node || node.type !== forge.asn1.Type.OID || typeof node.value !== 'string')
     return null
@@ -46,6 +49,7 @@ function asn1Oid(node: forge.asn1.Asn1 | undefined): string | null {
   }
 }
 
+/** Read the encryption algorithm attached to a PKCS8ShroudedKeyBag only. */
 function privateKeyEncryptionFromSafeBag(node: forge.asn1.Asn1): PrivateKeyEncryption | null {
   const bag = asn1Children(node)
   if (asn1Oid(bag[0]) !== forge.pki.oids.pkcs8ShroudedKeyBag)
@@ -61,6 +65,7 @@ function privateKeyEncryptionFromSafeBag(node: forge.asn1.Asn1): PrivateKeyEncry
   return { algorithmOid, encryptionSchemeOid: asn1Oid(encryptionScheme[0]) }
 }
 
+/** Find encrypted private-key bags through the nested PKCS#12 ContentInfo layers. */
 function collectPrivateKeyEncryptions(node: forge.asn1.Asn1, result: PrivateKeyEncryption[], depth = 0): void {
   if (depth > 32)
     return
@@ -84,6 +89,7 @@ function collectPrivateKeyEncryptions(node: forge.asn1.Asn1, result: PrivateKeyE
   }
 }
 
+/** Read the PFX MAC digest algorithm from the optional MacData block. */
 function p12MacAlgorithm(pfx: forge.asn1.Asn1): string | null {
   if (!Array.isArray(pfx.value))
     return null
@@ -99,6 +105,7 @@ function p12MacAlgorithm(pfx: forge.asn1.Asn1): string | null {
   return asn1Oid(algorithmIdentifier.value[0])
 }
 
+/** Parse the outer PFX while tagging malformed input for p12-opens to report. */
 function parseP12Asn1(base64: string): forge.asn1.Asn1 {
   try {
     return forge.asn1.fromDer(forge.util.decode64(base64))
@@ -108,6 +115,7 @@ function parseP12Asn1(base64: string): forge.asn1.Asn1 {
   }
 }
 
+/** List runner-incompatible MAC and private-key encryption choices in a P12. */
 function legacyP12CompatibilityProblems(base64: string): string[] {
   assertCredentialBlobSize(base64, 'certificate')
   const pfx = parseP12Asn1(base64)
