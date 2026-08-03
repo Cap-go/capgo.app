@@ -150,14 +150,14 @@ describe('fixture helpers', () => {
 })
 
 describe('registry', () => {
-  it('contains all 80 checks with unique ids', () => {
+  it('contains all 81 checks with unique ids', () => {
     const ids = ALL_CHECKS.map(c => c.id)
     expect(new Set(ids).size).toBe(ids.length)
-    expect(ids.length).toBe(80)
+    expect(ids.length).toBe(81)
     for (const expected of [
       'shared/apikey-permission', 'shared/app-exists', 'shared/credentials-saved',
       'shared/cap-sync-stale', 'shared/node-linker-layout', 'shared/bundle-id-consistency',
-      'ios/p12-opens', 'ios/p12-expiry', 'ios/profile-expiry', 'ios/profile-bundle-match',
+      'ios/p12-opens', 'ios/p12-legacy-encryption', 'ios/p12-expiry', 'ios/profile-expiry', 'ios/profile-bundle-match',
       'ios/profile-type-vs-mode', 'ios/cert-profile-pairing', 'ios/targets-covered',
       'ios/infoplist-sanity', 'ios/asc-key-valid',
       // 10 ios plist checks
