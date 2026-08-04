@@ -418,7 +418,6 @@ export async function createDirectApiKeyWithBindings(options: {
   }
 }
 
-
 let cachedAuthHeaders: Record<string, string> | null = null
 let authHeadersPromise: Promise<Record<string, string>> | null = null
 
@@ -861,10 +860,10 @@ export async function getPostgresClient(): Promise<Pool> {
   return pool
 }
 
-export async function executeSQL(query: string, params?: any[]): Promise<any> {
+export async function executeSQL<T = any>(query: string, params?: any[]): Promise<T[]> {
   const client = await getPostgresClient()
   const result = await client.query(query, params || [])
-  return result.rows
+  return result.rows as T[]
 }
 
 export async function getCronPlanQueueCount(): Promise<number> {
