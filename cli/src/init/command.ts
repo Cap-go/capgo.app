@@ -28,6 +28,7 @@ import { showReplicationProgress } from '../replicationProgress'
 import { formatRunnerCommand, splitRunnerCommand } from '../runner-command'
 import { copyToClipboard, revealInFinder } from '../support/clipboard'
 import { contactSupport } from '../support/contact-support'
+import { isChannelAlreadyExistsError } from './channel-conflict'
 import { appendInternalLog, getInternalLogPath, startInternalLog } from '../support/internal-log'
 import { uploadSupportLogs } from '../support/support-upload'
 import { consoleWebUrl, createSupabaseClient, defaultApiHost, findBuildCommandForProjectType, findMainFile, findMainFileForProjectType, findProjectType, findRoot, findSavedKey, findSavedKeySilent, formatError, getAllPackagesDependencies, getAppId, getBundleVersion, getConfig, getConfigForWrite, getLocalConfig, getNativeProjectResetAdvice, getOrganizationListWithPermission, getPackageScripts, getPMAndCommand, hasCliPermission, PACKNAME, projectIsMonorepo, resolveUserIdFromApiKey, updateConfigbyKey, updateConfigUpdater, validateIosUpdaterSync } from '../utils'
@@ -55,9 +56,13 @@ interface InitTargetPaths {
 
 export type RunDeviceCancelHandler = () => Promise<never>
 const importInject = 'import { CapacitorUpdater } from \'@capgo/capacitor-updater\''
+const requireInject = 'const { CapacitorUpdater } = require(\'@capgo/capacitor-updater\')'
 const codeInject = 'CapacitorUpdater.notifyAppReady()'
+const notifyAppReadyComment = '// Confirm this bundle started successfully so Capgo can keep it instead of rolling back to the previous bundle.'
 // create regex to find line who start by 'import ' and end by ' from '
 const regexImport = /import.*from.*/g
+const updaterImportPattern = /import\s*\{\s*CapacitorUpdater\s*\}\s*from\s*['"]@capgo\/capacitor-updater['"]/g
+const updaterRequirePattern = /(?:const|let|var)\s*(?:\{\s*CapacitorUpdater\s*\}|CapacitorUpdater)\s*=\s*require\(\s*['"]@capgo\/capacitor-updater['"]\s*\)/g
 const defaultChannel = 'production'
 const channelNameRegex = /^[\w.-]+$/
 const appIdRegex = /^[a-z0-9]+(?:\.[\w-]+)+$/i
@@ -754,6 +759,120 @@ function buildCodeDiffLines(beforeContent: string, afterContent: string, context
   return diffLines
 }
 
+function getInitCodeInjection(filePath: string): string {
+  const updaterImport = path.extname(filePath) === '.cjs' ? requireInject : importInject
+  return `${updaterImport};\n\n${getInitCodeCall()}`
+}
+
+function getInitCodeCall(): string {
+  return `${notifyAppReadyComment}\n${codeInject};`
+}
+
+function skipInitLeadingTrivia(content: string, startIndex: number): number {
+  let index = startIndex
+  while (index < content.length) {
+    const char = content[index]
+    if (char === '\uFEFF' || char === ' ' || char === '\t' || char === '\r' || char === '\n') {
+      index++
+    }
+    else if (content.startsWith('//', index)) {
+      const lineEnd = content.indexOf('\n', index + 2)
+      index = lineEnd === -1 ? content.length : lineEnd + 1
+    }
+    else if (content.startsWith('/*', index)) {
+      const commentEnd = content.indexOf('*/', index + 2)
+      if (commentEnd === -1)
+        break
+      index = commentEnd + 2
+    }
+    else {
+      break
+    }
+  }
+  return index
+}
+
+function skipInitDirectiveLineSuffix(content: string, startIndex: number): number {
+  let index = startIndex
+  while (content[index] === ' ' || content[index] === '\t')
+    index++
+
+  if (content.startsWith('//', index)) {
+    const lineEnd = content.indexOf('\n', index + 2)
+    return lineEnd === -1 ? content.length : lineEnd + 1
+  }
+  if (content.startsWith('/*', index)) {
+    const commentEnd = content.indexOf('*/', index + 2)
+    if (commentEnd === -1)
+      return index
+    return skipInitDirectiveLineSuffix(content, commentEnd + 2)
+  }
+  if (content.startsWith('\r\n', index))
+    return index + 2
+  if (content[index] === '\n')
+    return index + 1
+  return index
+}
+
+function insertInitCodeAfterPrologue(content: string, codeToInject: string): string {
+  let insertionIndex = 0
+  if (content.startsWith('#!')) {
+    const firstLineEnd = content.indexOf('\n')
+    insertionIndex = firstLineEnd === -1 ? content.length : firstLineEnd + 1
+  }
+
+  // Framework directives can follow a BOM, whitespace, or comments. Keep that
+  // complete prologue ahead of the injected import so their semantics remain intact.
+  const directivePattern = /^(['"])(?:use client|use server|use strict)\1;?/
+  while (true) {
+    const directiveStart = skipInitLeadingTrivia(content, insertionIndex)
+    const directive = content.slice(directiveStart).match(directivePattern)
+    if (!directive)
+      break
+    insertionIndex = skipInitDirectiveLineSuffix(content, directiveStart + directive[0].length)
+  }
+
+  const before = content.slice(0, insertionIndex)
+  const after = content.slice(insertionIndex)
+  const separatorBefore = before.length > 0 && !before.endsWith('\n') ? '\n' : ''
+  const separatorAfter = after.length > 0 ? '\n\n' : '\n'
+  return `${before}${separatorBefore}${codeToInject}${separatorAfter}${after}`
+}
+
+function getExistingUpdaterBinding(filePath: string, content: string): string | undefined {
+  return path.extname(filePath) === '.cjs'
+    ? content.match(updaterRequirePattern)?.pop()
+    : content.match(updaterImportPattern)?.pop()
+}
+
+export function injectInitCode(filePath: string, currentContent: string): string {
+  const existingUpdaterBinding = getExistingUpdaterBinding(filePath, currentContent)
+  if (existingUpdaterBinding)
+    return currentContent.replace(existingUpdaterBinding, `${existingUpdaterBinding}\n${getInitCodeCall()}`)
+
+  const lastImport = currentContent.match(regexImport)?.pop()
+  const codeToInject = getInitCodeInjection(filePath)
+  if (lastImport) {
+    // No trailing `\n`: the original file already has newlines after the
+    // import, so adding one would create a spurious blank diff line.
+    return currentContent.replace(lastImport, `${lastImport}\n${codeToInject}`)
+  }
+
+  return insertInitCodeAfterPrologue(currentContent, codeToInject)
+}
+
+function getNuxtUpdaterPluginContent(): string {
+  return [
+    `import { CapacitorUpdater } from '@capgo/capacitor-updater'`,
+    ``,
+    `export default defineNuxtPlugin(() => {`,
+    `  ${notifyAppReadyComment}`,
+    `  CapacitorUpdater.notifyAppReady()`,
+    `})`,
+    ``,
+  ].join('\n')
+}
+
 function readTmpObj() {
   tmpObject ??= readdirSync(tmp.tmpdir)
     .map((name) => { return { name, full: `${tmp.tmpdir}/${name}` } })
@@ -1036,21 +1155,19 @@ async function runCapacitorPlatformAdd(platformName: 'ios' | 'android', runner: 
     ? `Running: ${command}`
     : `Running in ${commandCwd}: ${command}`
   spinner.start(runMessage)
+  spinner.stop()
 
-  let parsedRunner: { command: string, args: string[] }
-  try {
-    parsedRunner = splitRunnerCommand(runner)
-  }
-  catch (error) {
+  const result = await streamCommandInInitPanel({
+    title: `Adding ${platformName.toUpperCase()} native project`,
+    runner,
+    args: ['cap', 'add', platformName],
+    cwd: commandCwd,
+  })
+  await delay(result.success ? 750 : 3500)
+  clearInitStreamingOutput()
+  if (!result.success) {
     spinner.stop(`Could not add ${platformName} automatically ❌`)
-    pLog.error(formatError(error))
-    return false
-  }
-
-  const result = await runInheritedCommand(parsedRunner.command, [...parsedRunner.args, 'cap', 'add', platformName], { cwd: commandCwd })
-  if (result.error || result.status !== 0) {
-    spinner.stop(`Could not add ${platformName} automatically ❌`)
-    pLog.error(formatInheritedCommandFailure(result))
+    pLog.error(result.error?.message ?? 'Unknown error while adding the native platform')
     return false
   }
 
@@ -1702,22 +1819,35 @@ async function runNativeResetCommand(platformRunner: string, nativePlatform: Pla
   const resetSpinner = pSpinner()
   resetSpinner.start(`Running: ${resetAdvice.command}`)
   try {
-    const parsedRunner = splitRunnerCommand(platformRunner)
     rmSync(nativePlatform, { recursive: true, force: true })
+    resetSpinner.stop()
 
-    const addResult = await runInheritedCommand(parsedRunner.command, [...parsedRunner.args, 'cap', 'add', nativePlatform])
-    if (addResult.error || addResult.status !== 0)
-      throw addResult.error ?? new Error(`cap add ${nativePlatform} failed with ${formatInheritedCommandFailure(addResult)}`)
+    const addResult = await streamCommandInInitPanel({
+      title: `Recreating ${nativePlatform.toUpperCase()} native project`,
+      runner: platformRunner,
+      args: ['cap', 'add', nativePlatform],
+    })
+    if (!addResult.success)
+      throw addResult.error ?? new Error(`cap add ${nativePlatform} failed`)
 
-    const syncResult = await runInheritedCommand(parsedRunner.command, [...parsedRunner.args, 'cap', 'sync', nativePlatform])
-    if (syncResult.error || syncResult.status !== 0)
-      throw syncResult.error ?? new Error(`cap sync ${nativePlatform} failed with ${formatInheritedCommandFailure(syncResult)}`)
+    const syncResult = await streamCommandInInitPanel({
+      title: `Syncing ${nativePlatform.toUpperCase()} native project`,
+      runner: platformRunner,
+      args: ['cap', 'sync', nativePlatform],
+    })
+    if (!syncResult.success)
+      throw syncResult.error ?? new Error(`cap sync ${nativePlatform} failed`)
 
+    await delay(750)
     resetSpinner.stop(successMessage)
   }
   catch (err) {
+    await delay(3500)
     resetSpinner.stop(failureMessage)
     pLog.error(formatError(err))
+  }
+  finally {
+    clearInitStreamingOutput()
   }
 }
 
@@ -2314,49 +2444,74 @@ async function addAppStep(organization: Organization, apikey: string, appId: str
 async function addChannelStep(orgId: string, apikey: string, appId: string) {
   const pm = getPMAndCommand()
   pLog.success(`✅ App ${appId} added — accessible to all members of your organization`)
-  pLog.info(`💡 A channel is a release track — it controls which users get which updates.`)
-  pLog.info(`   Nothing goes live until you release a native build with Capacitor Updater to the stores.`)
-  pLog.info(`   Most apps just need one: "production". You can add more later.`)
-  pLog.info(`   Learn more: https://capgo.app/docs/live-updates/channels/`)
-  let channelName = globalChannelName
-  const channelChoice = await pSelect({
-    message: 'Which channel name do you want to use?',
-    options: [
-      { value: 'default', label: `✅ Use "${defaultChannel}"` },
-      { value: 'custom', label: '✏️ Choose a custom name' },
-    ],
-  })
-  await cancelCommand(channelChoice, orgId, apikey)
-
-  if (channelChoice === 'custom') {
-    const selectedChannelName = await pText({
-      message: 'Enter the channel name to use for onboarding:',
-      placeholder: 'e.g. staging, beta, dev',
-      validate: validateChannelName,
+  pLog.info(`💡 Keep in mind: Capgo cannot deliver updates to app versions that don’t include Capacitor Updater.`)
+  pLog.info(``)
+  pLog.info(`A channel is a release track that controls which users get which updates.`)
+  pLog.info(`Most apps only need one: "production". You can add more later.`)
+  pLog.info(`Learn more: https://capgo.app/docs/live-updates/channels/`)
+  while (true) {
+    let channelName = globalChannelName
+    const channelChoice = await pSelect({
+      message: 'Which channel name do you want to use?',
+      options: [
+        { value: 'default', label: `✅ Use "${defaultChannel}"` },
+        { value: 'custom', label: '✏️ Choose a custom name' },
+      ],
     })
-    await cancelCommand(selectedChannelName, orgId, apikey)
-    channelName = (selectedChannelName as string).trim()
-  }
+    await cancelCommand(channelChoice, orgId, apikey)
 
-  globalChannelName = channelName
-  const s = pSpinner()
-  s.start(`Running: ${pm.runner} @capgo/cli@latest channel add ${channelName} ${appId} --default`)
-  try {
-    const addChannelRes = await addChannelInternal(channelName, appId, {
-      default: true,
-      apikey,
-    }, true)
-    if (!addChannelRes)
-      s.stop(`Channel already added ✅`)
-    else
-      s.stop(`Channel add done ✅`)
+    if (channelChoice === 'default') {
+      channelName = defaultChannel
+    }
+    else {
+      const selectedChannelName = await pText({
+        message: 'Enter the channel name to use for onboarding:',
+        placeholder: 'e.g. staging, beta, dev',
+        validate: validateChannelName,
+      })
+      await cancelCommand(selectedChannelName, orgId, apikey)
+      channelName = (selectedChannelName as string).trim()
+    }
+
+    globalChannelName = channelName
+    const s = pSpinner()
+    s.start(`Running: ${pm.runner} @capgo/cli@latest channel add ${channelName} ${appId} --default`)
+    try {
+      const addChannelRes = await addChannelInternal(channelName, appId, {
+        default: true,
+        apikey,
+      }, true)
+      if (!addChannelRes)
+        s.stop(`Channel already added ✅`)
+      else
+        s.stop(`Channel add done ✅`)
+      await markStep(orgId, apikey, 'add-channel', appId)
+      return channelName
+    }
+    catch (error) {
+      if (!isChannelAlreadyExistsError(error)) {
+        s.stop(`Channel creation failed ❌`)
+        throw error
+      }
+
+      s.stop(`Channel already exists`)
+
+      const existingChannelChoice = await pSelect({
+        message: `The channel "${channelName}" already exists. What would you like to do?`,
+        options: [
+          { value: 'use-existing', label: '✅ Use the existing channel' },
+          { value: 'change', label: '✏️ Choose a different channel name' },
+        ],
+      })
+      await cancelCommand(existingChannelChoice, orgId, apikey)
+
+      if (existingChannelChoice === 'use-existing') {
+        pLog.success(`Using existing channel "${channelName}" ✅`)
+        await markStep(orgId, apikey, 'add-channel', appId)
+        return channelName
+      }
+    }
   }
-  catch (error) {
-    s.stop(`Channel creation failed ❌`)
-    throw error
-  }
-  await markStep(orgId, apikey, 'add-channel', appId)
-  return channelName
 }
 
 function rememberPackageJsonPath(packageJsonPath: string): void {
@@ -2681,163 +2836,130 @@ async function addUpdaterStep(orgId: string, apikey: string, appId: string) {
 }
 
 async function addCodeStep(orgId: string, apikey: string, appId: string) {
-  const addCodeChoice = await pSelect({
-    message: `Add the Capacitor Updater import to your main file?`,
-    options: [
-      { value: 'yes', label: '✅ Yes, add it' },
-      { value: 'no', label: '❌ No, I\'ll do it manually' },
-    ],
-  })
-  await cancelCommand(addCodeChoice, orgId, apikey)
+  const packageJsonPath = path.resolve(globalPathToPackageJson ?? join(findRoot(cwd()), PACKNAME))
+  const projectDir = dirname(packageJsonPath)
+  const resolveProjectFilePath = (filePath: string) => path.isAbsolute(filePath) ? filePath : join(projectDir, filePath)
+  const projectType = await findProjectType({ quiet: true, packageJsonPath })
+  let filePath: string
+  let currentContent: string
+  let created = false
+  let createNuxtPlugin = false
+
+  if (!globalMainFilePath && (projectType === 'nuxtjs-js' || projectType === 'nuxtjs-ts')) {
+    const extension = projectType === 'nuxtjs-ts' ? 'ts' : 'js'
+    filePath = join(projectDir, 'plugins', `capacitorUpdater.client.${extension}`)
+    created = !existsSync(filePath)
+    currentContent = created ? '' : readFileSync(filePath, 'utf8')
+    createNuxtPlugin = true
+  }
+  else {
+    let mainFilePath: string | null = globalMainFilePath ?? null
+    if (!mainFilePath && projectType === 'unknown') {
+      mainFilePath = await findMainFile(true, projectDir)
+    }
+    else if (!mainFilePath) {
+      const isTypeScript = projectType.endsWith('-ts')
+      const projectTypeMainFile = findMainFileForProjectType(projectType, isTypeScript, projectDir)
+      mainFilePath = projectTypeMainFile ? resolveProjectFilePath(projectTypeMainFile) : projectTypeMainFile
+    }
+
+    if (!mainFilePath || !existsSync(mainFilePath)) {
+      const userProvidedPath = await pText({
+        message: `Provide the correct relative path to your main file (JS or TS):`,
+        validate: (value) => {
+          if (!value || !existsSync(resolveProjectFilePath(value)))
+            return 'File does not exist. Please provide a valid path.'
+        },
+      })
+      if (pIsCancel(userProvidedPath)) {
+        pCancel('Operation cancelled.')
+        return await exitAfterFinishingReplay(1)
+      }
+      mainFilePath = resolveProjectFilePath(userProvidedPath as string)
+    }
+
+    filePath = mainFilePath
+    currentContent = readFileSync(filePath, 'utf8')
+  }
+
+  const getCanAutoInject = () => !createNuxtPlugin || created || currentContent.includes(codeInject)
+  const getNewContent = () => createNuxtPlugin ? getNuxtUpdaterPluginContent() : injectInitCode(filePath, currentContent)
+
+  let newContent = getNewContent()
+  let alreadyConfigured = currentContent.includes(codeInject)
+  let canAutoInject = getCanAutoInject()
+  let previewDiff: InitCodeDiff
+  let addCodeChoice: string | symbol
+
+  while (true) {
+    previewDiff = {
+      filePath: formatInitFilePath(filePath),
+      created,
+      lines: !alreadyConfigured && canAutoInject ? buildCodeDiffLines(currentContent, newContent, CODE_DIFF_CONTEXT_LINES) : [],
+      note: alreadyConfigured
+        ? 'Already contains CapacitorUpdater.notifyAppReady() — no change needed'
+        : !canAutoInject
+            ? 'An existing Nuxt updater plugin will not be overwritten automatically'
+            : undefined,
+    }
+    // Show the exact proposed edit in the same screen as the confirmation.
+    setInitCodeDiff(previewDiff)
+    addCodeChoice = await pSelect({
+      message: `Add the Capacitor Updater import to your main file?`,
+      options: [
+        { value: 'yes', label: '✅ Yes, add it' },
+        { value: 'no', label: '❌ No, I\'ll do it manually' },
+      ],
+    })
+    await cancelCommand(addCodeChoice, orgId, apikey)
+
+    if (addCodeChoice !== 'yes' || alreadyConfigured)
+      break
+
+    const fileExists = existsSync(filePath)
+    const latestContent = fileExists ? readFileSync(filePath, 'utf8') : ''
+    if (latestContent === currentContent && created === !fileExists)
+      break
+
+    pLog.warn(`${formatInitFilePath(filePath)} changed while you reviewed the diff. Showing an updated preview.`)
+    currentContent = latestContent
+    created = !fileExists
+    newContent = getNewContent()
+    alreadyConfigured = currentContent.includes(codeInject)
+    canAutoInject = getCanAutoInject()
+  }
 
   if (addCodeChoice === 'yes') {
-    const s = pSpinner()
-    s.start(`Adding @capacitor-updater to your main file`)
-
-    const packageJsonPath = path.resolve(globalPathToPackageJson ?? join(findRoot(cwd()), PACKNAME))
-    const projectDir = dirname(packageJsonPath)
-    const resolveProjectFilePath = (filePath: string) => path.isAbsolute(filePath) ? filePath : join(projectDir, filePath)
-    const projectType = await findProjectType({ quiet: true, packageJsonPath })
-    if (!globalMainFilePath && (projectType === 'nuxtjs-js' || projectType === 'nuxtjs-ts')) {
-      // Nuxt.js specific logic
-      const nuxtDir = join(projectDir, 'plugins')
-      if (!existsSync(nuxtDir)) {
-        mkdirSync(nuxtDir, { recursive: true })
+    if (!canAutoInject) {
+      pLog.warn(`An existing Nuxt updater plugin was not changed automatically.`)
+      pLog.info(`Add this plugin code manually:\n\n${getNuxtUpdaterPluginContent()}`)
+      await markStep(orgId, apikey, 'add-code-manual', appId)
+    }
+    else if (!alreadyConfigured) {
+      const s = pSpinner()
+      s.start(`Adding @capacitor-updater to your main file`)
+      if (created) {
+        mkdirSync(dirname(filePath), { recursive: true })
       }
-      let nuxtFilePath
-      if (projectType === 'nuxtjs-ts') {
-        nuxtFilePath = join(nuxtDir, 'capacitorUpdater.client.ts')
-      }
-      else {
-        nuxtFilePath = join(nuxtDir, 'capacitorUpdater.client.js')
-      }
-      const nuxtFileLines = [
-        `import { CapacitorUpdater } from '@capgo/capacitor-updater'`,
-        ``,
-        `export default defineNuxtPlugin(() => {`,
-        `  CapacitorUpdater.notifyAppReady()`,
-        `})`,
-        ``,
-      ]
-      const nuxtFileContent = nuxtFileLines.join('\n')
-      const nuxtDisplayPath = formatInitFilePath(nuxtFilePath)
-      if (existsSync(nuxtFilePath)) {
-        const currentContent = readFileSync(nuxtFilePath, 'utf8')
-        if (currentContent.includes('CapacitorUpdater.notifyAppReady()')) {
-          s.stop()
-          globalCodeDiff = {
-            filePath: nuxtDisplayPath,
-            created: false,
-            lines: [],
-            note: 'Already contains CapacitorUpdater.notifyAppReady() — no change needed',
-          }
-        }
-        else {
-          writeFileSync(nuxtFilePath, nuxtFileContent, 'utf8')
-          s.stop()
-          globalCodeDiff = {
-            filePath: nuxtDisplayPath,
-            created: false,
-            lines: buildCodeDiffLines(currentContent, nuxtFileContent, CODE_DIFF_CONTEXT_LINES),
-          }
-        }
-      }
-      else {
-        writeFileSync(nuxtFilePath, nuxtFileContent, 'utf8')
-        s.stop()
-        globalCodeDiff = {
-          filePath: nuxtDisplayPath,
-          created: true,
-          lines: buildCodeDiffLines('', nuxtFileContent, CODE_DIFF_CONTEXT_LINES),
-        }
-      }
+      writeFileSync(filePath, newContent, 'utf8')
+      s.stop()
+      globalCodeDiff = previewDiff
       setInitCodeDiff(globalCodeDiff)
     }
     else {
-      // Handle other project types
-      let mainFilePath: string | null = globalMainFilePath ?? null
-      if (!mainFilePath && projectType === 'unknown') {
-        mainFilePath = await findMainFile(true, projectDir)
-      }
-      else if (!mainFilePath) {
-        const isTypeScript = projectType.endsWith('-ts')
-        const projectTypeMainFile = findMainFileForProjectType(projectType, isTypeScript, projectDir)
-        mainFilePath = projectTypeMainFile ? resolveProjectFilePath(projectTypeMainFile) : projectTypeMainFile
-      }
-
-      // Open main file and inject codeInject
-      if (!mainFilePath || !existsSync(mainFilePath)) {
-        s.stop('Cannot find main file to install Updater plugin', 'neutral')
-        const userProvidedPath = await pText({
-          message: `Provide the correct relative path to your main file (JS or TS):`,
-          validate: (value) => {
-            if (!value || !existsSync(resolveProjectFilePath(value)))
-              return 'File does not exist. Please provide a valid path.'
-          },
-        })
-        if (pIsCancel(userProvidedPath)) {
-          pCancel('Operation cancelled.')
-          return await exitAfterFinishingReplay(1)
-        }
-        mainFilePath = resolveProjectFilePath(userProvidedPath as string)
-      }
-      const mainFile = readFileSync(mainFilePath, 'utf8')
-      const mainFileContent = mainFile.toString()
-      const matches = mainFileContent.match(regexImport)
-      const last = matches?.pop()
-
-      if (!last) {
-        s.stop('Cannot auto-inject code', 'neutral')
-        pLog.warn(`❌ Cannot find import statements in ${mainFilePath}`)
-        pLog.info(`💡 You'll need to add the code manually`)
-        pLog.info(`📝 Add this to your main file:`)
-        pLog.info(`   ${importInject}`)
-        pLog.info(`   ${codeInject}`)
-        pLog.info(`📚 Or follow: https://capgo.app/docs/getting-started/add-an-app/`)
-
-        const continueAnyway = await pConfirm({
-          message: `Continue without auto-injecting the code? (You'll add it manually)`,
-        })
-        await cancelCommand(continueAnyway, orgId, apikey)
-
-        if (!continueAnyway) {
-          pOutro(`Bye 👋\n💡 You can resume the onboarding anytime by running the same command again`)
-          return await exitAfterFinishingReplay()
-        }
-
-        pLog.info(`⏭️  Skipping auto-injection - remember to add the code manually!`)
-        await markStep(orgId, apikey, 'add-code-manual', appId)
-      }
-      else if (mainFileContent.includes(codeInject)) {
-        s.stop()
-        globalCodeDiff = {
-          filePath: formatInitFilePath(mainFilePath),
-          created: false,
-          lines: [],
-          note: 'Already contains CapacitorUpdater.notifyAppReady() — no change needed',
-        }
-        setInitCodeDiff(globalCodeDiff)
-      }
-      else {
-        // Note: no trailing `\n` — the original file already has newlines after
-        // `last`, so adding one here would create a spurious blank line that
-        // shows up as an added `+` line in the diff panel.
-        const newMainFileContent = mainFileContent.replace(last, `${last}\n${importInject};\n\n${codeInject};`)
-        writeFileSync(mainFilePath, newMainFileContent, 'utf8')
-        s.stop()
-        globalCodeDiff = {
-          filePath: formatInitFilePath(mainFilePath),
-          created: false,
-          lines: buildCodeDiffLines(mainFileContent, newMainFileContent, CODE_DIFF_CONTEXT_LINES),
-        }
-        setInitCodeDiff(globalCodeDiff)
-      }
+      globalCodeDiff = previewDiff
     }
 
     await markStep(orgId, apikey, 'add-code', appId)
   }
   else {
-    pLog.info(`Add to your main file the following code:\n\n${importInject};\n\n${codeInject};\n`)
+    setInitCodeDiff(undefined)
+    const manualCode = createNuxtPlugin
+      ? getNuxtUpdaterPluginContent()
+      : getExistingUpdaterBinding(filePath, currentContent)
+        ? getInitCodeCall()
+        : getInitCodeInjection(filePath)
+    pLog.info(`${createNuxtPlugin ? 'Add this plugin code manually:' : 'Add to your main file the following code:'}\n\n${manualCode}\n`)
   }
 }
 
@@ -3099,26 +3221,33 @@ async function addEncryptionStep(orgId: string, apikey: string, appId: string) {
  */
 async function streamCommandInInitPanel(params: {
   title: string
-  runner: string // e.g. "npx", "bunx", "yarn dlx"
+  runner?: string // e.g. "npx", "bunx", "yarn dlx"
+  command?: string // e.g. "npm", "pnpm", "yarn", "bun"
   args: string[]
   cwd?: string
 }): Promise<{ success: boolean, error?: Error }> {
+  const commandPrefix = params.command ?? params.runner ?? ''
+  const displayCommand = `${commandPrefix} ${params.args.join(' ')}`.trim()
+  // Show the panel before command resolution so even invalid command setup is
+  // rendered by Ink rather than surfacing as a bare terminal error.
+  startInitStreamingOutput({ title: params.title, command: displayCommand })
+
   // `pm.runner` can contain a space ("yarn dlx", "pnpm exec"). `spawn`
   // without `shell:true` can't handle that, and `shell:true` brings
   // quoting risk, so we split the runner into its own head + tail args.
-  let runnerCommand
+  let runnerCommand: { command: string, args: string[] }
   try {
-    runnerCommand = splitRunnerCommand(params.runner)
+    runnerCommand = params.command
+      ? { command: params.command, args: [] }
+      : splitRunnerCommand(params.runner ?? '')
   }
   catch (error) {
-    return { success: false, error: error instanceof Error ? error : new Error(String(error)) }
+    const resolvedError = error instanceof Error ? error : new Error(String(error))
+    updateInitStreamingStatus('error', resolvedError.message)
+    return { success: false, error: resolvedError }
   }
   const { command: runnerCmd, args: runnerArgs } = runnerCommand
   const fullArgs = [...runnerArgs, ...params.args]
-  const displayCommand = `${params.runner} ${params.args.join(' ')}`
-
-  startInitStreamingOutput({ title: params.title, command: displayCommand })
-
   const appendChunk = (chunk: { toString: (encoding: string) => string } | string) => {
     const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8')
     // Capacitor CLI output mixes \r\n and bare \n; split on both but keep
@@ -3134,9 +3263,9 @@ async function streamCommandInInitPanel(params: {
     let child
     try {
       child = spawn(runnerCmd, fullArgs, {
-        // stdin ignored — cap sync is non-interactive. stdout/stderr piped
-        // so Node can read them without touching the parent TTY that Ink
-        // is actively rendering into.
+        // Onboarding commands that use this helper must be non-interactive.
+        // Keep stdin ignored and capture stdout/stderr so no child process
+        // touches the parent TTY while Ink is actively rendering into it.
         cwd: params.cwd,
         stdio: ['ignore', 'pipe', 'pipe'],
       })
@@ -3363,6 +3492,7 @@ async function ensureUpdaterReadyBeforeSync(pm: PackageManagerInfo, orgId: strin
 
 async function runBuildAndSyncLoop(
   platform: PlatformChoice,
+  buildCommand: string,
   buildAndSyncCommand: string,
   buildAndSyncCwd: string,
   packageJsonPath: string,
@@ -3382,9 +3512,36 @@ async function runBuildAndSyncLoop(
       : `Running in ${buildAndSyncCwd}: ${buildAndSyncCommand}`
     spinner.stop(runMessage, 'neutral')
     try {
-      const result = await runInheritedShellCommand(buildAndSyncCommand, { cwd: buildAndSyncCwd })
-      if (result.error || result.status !== 0)
-        throw result.error ?? new Error(`Build or sync command failed with ${formatInheritedCommandFailure(result)}`)
+      const buildResult = await streamCommandInInitPanel({
+        title: 'Building web assets',
+        command: pm.pm,
+        args: ['run', buildCommand],
+        cwd: buildAndSyncCwd,
+      })
+      if (!buildResult.success) {
+        await delay(3500)
+        clearInitStreamingOutput()
+        throw buildResult.error ?? new Error('Build command failed')
+      }
+
+      // Keep the completed build output visible long enough for users to
+      // understand that the next streamed command is the native sync.
+      await delay(1500)
+
+      const syncResult = await streamCommandInInitPanel({
+        title: `Syncing ${platform.toUpperCase()} native project`,
+        runner: pm.runner,
+        args: ['cap', 'sync', platform],
+        cwd: buildAndSyncCwd,
+      })
+      if (!syncResult.success) {
+        await delay(3500)
+        clearInitStreamingOutput()
+        throw syncResult.error ?? new Error('Capacitor sync command failed')
+      }
+
+      await delay(1500)
+      clearInitStreamingOutput()
     }
     catch (error) {
       pLog.error('Build or sync failed ❌')
@@ -3420,7 +3577,7 @@ async function runProjectBuildAndSync(appId: string, platform: PlatformChoice, o
     return handleMissingBuildScript(buildCommand, appId, platform, orgId, apikey, pm)
 
   const buildAndSyncCommand = `${pm.pm} run ${buildCommand} && ${pm.runner} cap sync ${platform}`
-  await runBuildAndSyncLoop(platform, buildAndSyncCommand, projectDir, packageJsonPath, pm, orgId, apikey)
+  await runBuildAndSyncLoop(platform, buildCommand, buildAndSyncCommand, projectDir, packageJsonPath, pm, orgId, apikey)
   return 'completed'
 }
 
@@ -3448,11 +3605,6 @@ async function buildProjectStep(orgId: string, apikey: string, appId: string, pl
 export function runPackageRunnerSync(runner: string, args: string[], options: Parameters<typeof spawnSync>[2]) {
   const parsedRunner = splitRunnerCommand(runner)
   return spawnSync(parsedRunner.command, [...parsedRunner.args, ...args], options)
-}
-
-async function runPackageRunnerInherited(runner: string, args: string[], options: Pick<InheritedCommandOptions, 'cwd'> = {}) {
-  const parsedRunner = splitRunnerCommand(runner)
-  return runInheritedCommand(parsedRunner.command, [...parsedRunner.args, ...args], options)
 }
 
 interface InheritedCommandResult {
@@ -3592,20 +3744,6 @@ async function runPtyInheritedCommand(command: string, args: string[], options: 
       stdin.resume()
     }
   })
-}
-
-function runInheritedShellCommand(command: string, options: Pick<InheritedCommandOptions, 'cwd'> = {}) {
-  const shellCommand = platform === 'win32' ? (env.ComSpec || 'cmd.exe') : '/bin/sh'
-  const shellArgs = platform === 'win32' ? ['/d', '/s', '/c', command] : ['-c', command]
-  return runInheritedCommand(shellCommand, shellArgs, options)
-}
-
-function formatInheritedCommandFailure(result: InheritedCommandResult) {
-  if (result.error)
-    return formatError(result.error)
-  if (result.signal)
-    return `signal ${result.signal}`
-  return `exit code ${result.status ?? 'unknown'}`
 }
 
 function getSpawnOutputText(output: string | Buffer | null | undefined): string {
@@ -4136,21 +4274,30 @@ async function runDeviceStep(orgId: string, apikey: string, appId: string, platf
       ? `Running: ${runCommand.command}`
       : `Running in ${projectDir}: ${runCommand.command}`
     s.start(runMessage)
+    s.stop()
 
-    let runResult: InheritedCommandResult | undefined
+    let runResult: Awaited<ReturnType<typeof streamCommandInInitPanel>> | undefined
     let runError: Error | undefined
     try {
-      runResult = await runPackageRunnerInherited(pm.runner, runCommand.args, { cwd: projectDir })
+      runResult = await streamCommandInInitPanel({
+        title: `Running on ${platform.toUpperCase()} device`,
+        runner: pm.runner,
+        args: runCommand.args,
+        cwd: projectDir,
+      })
+      await delay(runResult.success ? 750 : 3500)
+      clearInitStreamingOutput()
     }
     catch (error) {
       runError = error instanceof Error ? error : new Error(String(error))
+      clearInitStreamingOutput()
     }
-    const runFailed = runError || runResult?.error || runResult?.status !== 0
+    const runFailed = runError || !runResult?.success
 
     if (runFailed) {
       const platformName = platform === 'ios' ? 'iOS' : 'Android'
       s.stop(`App failed to start ❌`)
-      appendInternalLog(`app run failed (${platformName}): ${(runError || runResult?.error) ? formatError(runError ?? runResult?.error) : `exit status ${runResult?.status ?? 'unknown'}`}`)
+      appendInternalLog(`app run failed (${platformName}): ${(runError || runResult?.error) ? formatError(runError ?? runResult?.error) : 'unknown error'}`)
       if (runError || runResult?.error)
         pLog.error(formatError(runError ?? runResult?.error))
       pLog.error(`The app failed to start on your ${platformName} device.`)
@@ -4162,9 +4309,17 @@ async function runDeviceStep(orgId: string, apikey: string, appId: string, platf
       if (!pIsCancel(openIDE) && openIDE) {
         const s2 = pSpinner()
         s2.start(`Opening ${platform === 'ios' ? 'Xcode' : 'Android Studio'}...`)
+        s2.stop()
         try {
-          const openResult = await runPackageRunnerInherited(pm.runner, ['cap', 'open', platform], { cwd: projectDir })
-          if (openResult.error || openResult.status !== 0) {
+          const openResult = await streamCommandInInitPanel({
+            title: `Opening ${platform === 'ios' ? 'Xcode' : 'Android Studio'}`,
+            runner: pm.runner,
+            args: ['cap', 'open', platform],
+            cwd: projectDir,
+          })
+          await delay(openResult.success ? 750 : 3500)
+          clearInitStreamingOutput()
+          if (!openResult.success) {
             s2.stop(`Could not open ${platform === 'ios' ? 'Xcode' : 'Android Studio'} ❌`)
             if (openResult.error)
               pLog.error(formatError(openResult.error))

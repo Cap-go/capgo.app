@@ -11,6 +11,7 @@ import { sendEvent } from '~/services/tracking'
 import { clearWebsitePaidUserCookie, setWebsitePaidUserCookie } from '~/services/websiteAuthCookie'
 import { useMainStore } from '~/stores/main'
 import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
+import { getOnboardingResumeRedirect, isNewOnboardingUser } from '~/utils/onboardingRedirect'
 import { hasPendingInviteSkip } from '~/utils/pendingInviteSkip'
 import { getPlans, isPlatformAdmin } from './../services/supabase'
 
@@ -228,6 +229,39 @@ async function guard(
     return organizationStore.organizations.some(org => isPendingOrganizationInvite(org))
   }
 
+  async function getPendingOnboardingRedirect(organizationsLoaded: boolean) {
+    if (!organizationsLoaded)
+      return null
+    if (!isNewOnboardingUser(sessionUser?.created_at))
+      return null
+
+    const selectableOrganizations = organizationStore.organizations.filter(org => !isPendingOrganizationInvite(org))
+    if (selectableOrganizations.length !== 1)
+      return null
+
+    const { data: apps, error } = await supabase
+      .from('apps')
+      .select('app_id, need_onboarding')
+      .eq('owner_org', selectableOrganizations[0].gid)
+      .limit(2)
+
+    if (error) {
+      console.error('Cannot resolve onboarding redirect', error)
+      return null
+    }
+
+    const app = apps?.[0]
+    return getOnboardingResumeRedirect({
+      appId: app?.need_onboarding ? app.app_id : null,
+      appCount: apps?.length ?? 0,
+      createdAt: sessionUser?.created_at,
+      organizationCount: selectableOrganizations.length,
+      path: to.path,
+      resumeAppId: typeof to.query.resume === 'string' ? to.query.resume : null,
+      userId: sessionUser?.id,
+    })
+  }
+
   if (hasAuth && sessionUser) {
     const authConfirmedAt = main.auth?.email_confirmed_at
     if (!main.auth || main.auth.id !== sessionUser.id || authConfirmedAt !== sessionUser.email_confirmed_at) {
@@ -317,6 +351,10 @@ async function guard(
       }
     }
 
+    const onboardingRedirect = await getPendingOnboardingRedirect(organizationsLoaded)
+    if (onboardingRedirect)
+      return next(onboardingRedirect)
+
     getPlans().then((pls) => {
       main.plans = pls
     })
@@ -394,6 +432,10 @@ async function guard(
         },
       })
     }
+
+    const onboardingRedirect = await getPendingOnboardingRedirect(organizationsLoaded)
+    if (onboardingRedirect)
+      return next(onboardingRedirect)
 
     // Check if user is trying to access admin routes
     if (isAdminRoute) {
