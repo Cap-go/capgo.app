@@ -802,7 +802,7 @@ async function seedDemoData() {
       throw error
     }
 
-    router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}?tour=1&refresh=true`)
+    router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}?refresh=true`)
   }
   catch (error) {
     console.error('Cannot seed demo data', error)
