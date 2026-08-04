@@ -3212,8 +3212,8 @@ async function getNativeNotificationGlobalStats(c: Context, window: DailyWindow)
     const row = result.rows[0] ?? { apps: 0, providers: 0, campaigns: 0, campaigns_day: 0 }
 
     const [dayRows, monthRows] = await Promise.all([
-      readGlobalNotificationStatsCF(c, { since: window.prevDayStart, until: window.prevDayEnd }),
-      readGlobalNotificationStatsCF(c, { since: lastMonthStart, until: window.prevDayEnd }),
+      readGlobalNotificationStatsCF(c, { since: window.prevDayStart, until: window.prevDayEnd, throwOnError: true }),
+      readGlobalNotificationStatsCF(c, { since: lastMonthStart, until: window.prevDayEnd, throwOnError: true }),
     ])
 
     return {

@@ -638,8 +638,13 @@ export async function readGlobalNotificationStatsCF(c: Context<MiddlewareKeyVari
   until?: Date
   throwOnError?: boolean
 }) {
-  if (!getEnv(c, 'CF_ANALYTICS_TOKEN') || !getEnv(c, 'CF_ACCOUNT_ANALYTICS_ID'))
+  if (!getEnv(c, 'CF_ANALYTICS_TOKEN') || !getEnv(c, 'CF_ACCOUNT_ANALYTICS_ID')) {
+    const error = new Error('Cloudflare Analytics Engine is not configured for notification stats')
+    cloudlogErr({ requestId: c.get('requestId'), message: 'readGlobalNotificationStatsCF missing credentials', error: serializeError(error) })
+    if (params.throwOnError)
+      throw error
     return [] as NativeNotificationStatsRow[]
+  }
   const query = buildGlobalNotificationStatsQuery({
     dataset: getEventsDataset(c),
     since: params.since,

@@ -6,6 +6,7 @@ meta:
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
 import AdminFilterBar from '~/components/admin/AdminFilterBar.vue'
 import AdminMultiLineChart from '~/components/admin/AdminMultiLineChart.vue'
 import AdminStatsCard from '~/components/admin/AdminStatsCard.vue'
@@ -14,6 +15,7 @@ import PageLoader from '~/components/PageLoader.vue'
 import { formatNumberValue } from '~/services/formatLocale'
 import { useAdminDashboardStore } from '~/stores/adminDashboard'
 import { useDisplayStore } from '~/stores/display'
+import { useMainStore } from '~/stores/main'
 
 interface GlobalStatsTrendPoint {
   date: string
@@ -30,7 +32,9 @@ interface GlobalStatsTrendPoint {
 }
 
 const { t } = useI18n()
+const router = useRouter()
 const displayStore = useDisplayStore()
+const mainStore = useMainStore()
 const adminStore = useAdminDashboardStore()
 
 const isLoading = ref(true)
@@ -119,15 +123,24 @@ const campaignsDaySeries = computed(() => {
 })
 
 watch(() => adminStore.activeDateRange, () => {
-  loadGlobalStatsTrend()
+  if (mainStore.isAdmin)
+    loadGlobalStatsTrend()
 })
 
 watch(() => adminStore.refreshTrigger, () => {
-  loadGlobalStatsTrend()
+  if (mainStore.isAdmin)
+    loadGlobalStatsTrend()
 })
 
 onMounted(async () => {
+  if (!mainStore.isAdmin) {
+    console.error('Non-admin user attempted to access admin notifications')
+    router.push('/dashboard')
+    return
+  }
+
   displayStore.NavTitle = t('notifications')
+  displayStore.defaultBack = '/dashboard'
   await loadGlobalStatsTrend()
   isLoading.value = false
 })

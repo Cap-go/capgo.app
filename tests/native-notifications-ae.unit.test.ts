@@ -3,6 +3,7 @@ import {
   buildNotificationBadgeStateQuery,
   buildNotificationRegistryLookupQuery,
   buildGlobalNotificationStatsQuery,
+  readGlobalNotificationStatsCF,
   buildNotificationStatsQuery,
   createNotificationDeliveryEventProof,
   createNotificationEventProof,
@@ -226,6 +227,17 @@ describe('native notification AE registry', () => {
     expect(query).toContain("timestamp < toDateTime('2026-08-04 00:00:00')")
     expect(query).toContain('GROUP BY blob1')
     expect(query).not.toContain('index1')
+  })
+
+  it.concurrent('throws when global notification stats require AE credentials', async () => {
+    await expect(readGlobalNotificationStatsCF({
+      get: () => 'test-request',
+      env: {},
+    } as any, {
+      since: new Date('2026-08-03T00:00:00Z'),
+      until: new Date('2026-08-04T00:00:00Z'),
+      throwOnError: true,
+    })).rejects.toThrow(/not configured/)
   })
 
   it.concurrent('rejects campaign stats spanning multiple apps', () => {
