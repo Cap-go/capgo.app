@@ -17,8 +17,9 @@ import { computed, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { pushEvent } from '~/services/posthog'
-import { getLocalConfig } from '~/services/supabase'
-import { useOrganizationStore } from '~/stores/organization'
+import { getLocalConfig, useSupabase } from '~/services/supabase'
+import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
+import { shouldShowBuilderPromo } from '~/utils/builderPromoVisibility'
 
 const { t } = useI18n()
 const organizationStore = useOrganizationStore()
@@ -33,6 +34,7 @@ const rightPupil = ref({ x: 0, y: 0 })
 
 const currentOrg = computed(() => organizationStore.currentOrganization)
 const config = getLocalConfig()
+const supabase = useSupabase()
 const hideExternalPurchaseFlows = isNativeAppStoreContext()
 
 function trackBannerEvent(eventName: string) {
@@ -74,8 +76,48 @@ const hasApps = computed(() => {
   return (org?.app_count ?? 0) > 0
 })
 
+const onboardingAppOrgId = computed(() => {
+  const selectableOrganizations = organizationStore.organizations.filter(org => !isPendingOrganizationInvite(org))
+  const organization = selectableOrganizations[0]
+  if (selectableOrganizations.length !== 1 || organization?.app_count !== 1)
+    return undefined
+
+  return organization.gid
+})
+
+const shouldShowTrialBanner = ref(true)
+let onboardingAppRequest = 0
+
+watch(onboardingAppOrgId, async (orgId) => {
+  const request = ++onboardingAppRequest
+  shouldShowTrialBanner.value = !orgId
+
+  if (!orgId)
+    return
+
+  const { data, error } = await supabase
+    .from('apps')
+    .select('need_onboarding')
+    .eq('owner_org', orgId)
+    .limit(1)
+
+  if (request !== onboardingAppRequest)
+    return
+
+  if (error || !data?.[0]) {
+    shouldShowTrialBanner.value = true
+    return
+  }
+
+  shouldShowTrialBanner.value = shouldShowBuilderPromo({
+    organizationCount: 1,
+    appCount: 1,
+    appNeedsOnboarding: data[0].need_onboarding,
+  })
+}, { immediate: true })
+
 const showBanner = computed(() => {
-  return !hideExternalPurchaseFlows && isTrial.value && isAccountOldEnough.value && hasApps.value
+  return !hideExternalPurchaseFlows && isTrial.value && isAccountOldEnough.value && hasApps.value && shouldShowTrialBanner.value
 })
 
 // Whether we need the time tick running — true when the account-age check

@@ -36,6 +36,7 @@ import {
   clearOnboardingAppDraft,
   loadOnboardingAppDraft,
 } from '~/utils/onboardingAppDraft'
+import { allowOnboardingDashboardExploration } from '~/utils/onboardingRedirect'
 import { slugifyOnboardingSegment } from '~/utils/onboardingSlug'
 import AppOnboardingIconInput from './AppOnboardingIconInput.vue'
 
@@ -847,10 +848,12 @@ function goToInstallStep() {
   flowStep.value = 'install'
 }
 
-async function openDashboard() {
-  // Skipping the CLI step should still populate the app with demo data
-  // so the dashboard is usable to explore Capgo before a real upload.
-  await seedDemoData()
+function openDashboard() {
+  if (!createdApp.value)
+    return
+
+  allowOnboardingDashboardExploration(onboardingUserId.value, createdApp.value.app_id)
+  router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}`)
 }
 
 onMounted(async () => {
@@ -1504,16 +1507,21 @@ watch(appName, (value) => {
 
         <div v-else-if="!props.preOrg && flowStep === 'install' && createdApp">
           <div class="space-y-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900/95">
-            <div>
-              <p class="text-sm font-semibold text-primary-500 dark:text-slate-300">
-                {{ t('app-onboarding-install-badge') }}
-              </p>
-              <h2 class="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
-                {{ t('app-onboarding-install-title') }}
-              </h2>
-              <p class="mt-2 max-w-2xl text-sm leading-6 text-slate-600 dark:text-slate-300">
-                {{ t('app-onboarding-install-subtitle') }}
-              </p>
+            <div class="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <p class="text-sm font-semibold text-primary-500 dark:text-slate-300">
+                  {{ t('app-onboarding-install-badge') }}
+                </p>
+                <h2 class="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
+                  {{ t('app-onboarding-install-title') }}
+                </h2>
+                <p class="mt-2 max-w-2xl text-sm leading-6 text-slate-600 dark:text-slate-300">
+                  {{ t('app-onboarding-install-subtitle') }}
+                </p>
+              </div>
+              <button type="button" class="d-btn min-h-11" :class="whiteCardSecondaryButtonClass()" @click="openDashboard">
+                {{ t('app-onboarding-explore-dashboard') }}
+              </button>
             </div>
 
             <div
