@@ -709,7 +709,7 @@ app.post('/', async (c) => {
   if (blocked)
     return blocked
 
-  // Rate limit: max 5 set per second per device+app, and same set max once per 5 seconds
+  // Rate limit: max 10 set per second per device+app, and same set max once per 5 seconds
   return await runChannelSelfDeviceOperation(
     c,
     bodyParsed,
@@ -733,7 +733,7 @@ app.put('/', async (c) => {
   if (blocked)
     return blocked
 
-  // Rate limit: max 5 get per second per device+app
+  // Rate limit: max 10 get per second per device+app
   return await runChannelSelfDeviceOperation(
     c,
     bodyParsed,
@@ -755,7 +755,7 @@ app.delete('/', async (c) => {
   if (blocked)
     return blocked
 
-  // Rate limit: max 5 delete per second per device+app
+  // Rate limit: max 10 delete per second per device+app
   return await runChannelSelfDeviceOperation(
     c,
     bodyParsed,
@@ -777,7 +777,7 @@ app.get('/', async (c) => {
   if (blocked)
     return blocked
 
-  // Rate limit: max 5 list per second per device+app (if device_id is provided)
+  // Rate limit: max 10 list per second per device+app (if device_id is provided)
   if (bodyRaw.device_id) {
     const rateLimitStatus = await isChannelSelfRateLimited(c, bodyParsed.app_id, bodyRaw.device_id, 'list')
     if (rateLimitStatus.limited) {

@@ -14,7 +14,7 @@ const CHANNEL_SELF_IP_RATE_PATH = '/.channel-self-ip-rate'
 // TTL for operation-level rate limit (1 second)
 const OP_RATE_TTL_SECONDS = 1
 // Operation-level rate limit per second
-const OP_RATE_LIMIT_PER_SECOND = 5
+const OP_RATE_LIMIT_PER_SECOND = 10
 // TTL for same channel set rate limit (5 seconds)
 const SAME_SET_RATE_TTL_SECONDS = 5
 // TTL for IP-based rate limit (per minute)
@@ -110,7 +110,7 @@ function getChannelSelfIpRateLimit(c: Context): number {
  * Check if a device should be rate limited for a channel operation.
  *
  * Rate limiting rules:
- * 1. Same device+app+operation cannot be done more than 5 times per second
+ * 1. Same device+app+operation cannot be done more than 10 times per second
  * 2. For 'set' operation: Same device+app+channel combination cannot be set more than once in 5 seconds
  *
  * @returns true if the request should be rate limited, false otherwise
@@ -122,7 +122,7 @@ export async function isChannelSelfRateLimited(
   operation: ChannelSelfOperation,
   channel?: string,
 ): Promise<ChannelSelfRateLimitStatus> {
-  // Check operation-level rate limit (5 requests per second per device+app+operation)
+  // Check operation-level rate limit (10 requests per second per device+app+operation)
   const opRateEntry = buildOperationRateRequest(c, appId, deviceId, operation)
   const cached = await opRateEntry.helper.matchJson<OperationRateLimitCache>(opRateEntry.request)
   if (cached) {
@@ -232,7 +232,7 @@ export async function recordChannelSelfRequest(
   const timestamp = Date.now()
   const entry: RateLimitEntry = { timestamp }
 
-  // Record operation-level rate limit (allows up to 5 operations per second)
+  // Record operation-level rate limit (allows up to 10 operations per second)
   const opRateEntry = buildOperationRateRequest(c, appId, deviceId, operation)
   const existing = await opRateEntry.helper.matchJson<OperationRateLimitCache>(opRateEntry.request)
   const now = Date.now()

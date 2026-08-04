@@ -5,7 +5,7 @@ import { BASE_URL, getBaseData, headers, PLUGIN_BASE_URL, resetAndSeedAppData, r
 
 // Rate limiting uses Cloudflare Workers Cache API, which isn't available in Supabase Edge Functions
 const USE_CLOUDFLARE = env.USE_CLOUDFLARE_WORKERS === 'true'
-const OP_LIMIT_PER_SECOND = 5
+const OP_LIMIT_PER_SECOND = 10
 
 const id = randomUUID()
 const APPNAME = `com.ratelimit.${id}`
