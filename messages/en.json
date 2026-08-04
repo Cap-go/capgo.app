@@ -1098,7 +1098,7 @@
   "dependencies-status-full": "Showing all dependencies for this bundle.",
   "dependencies-status-removed": "Removed",
   "dependencies-status-unchanged": "Unchanged",
-  "dependencies-same-version-changed-hint": "Some packages changed only by native checksum while the version text stayed the same.",
+  "dependencies-same-version-changed-hint": "Some packages changed only by native checksum while the version text stayed the same. If you recently switched Capgo CLI versions, this can be a false alarm — still verify native code.",
   "dependencies-summary-packages": "Packages",
   "dependencies-summary-versions": "Unique versions",
   "dependencies-total-packages": "Total packages",
@@ -2628,5 +2628,9 @@
   "updater": "Updater",
   "native": "Native",
   "start": "Start",
-  "end": "End"
+  "end": "End",
+  "dependencies-cli-checksum-metadata-hint": "Warning: iOS/Android checksums appeared or disappeared between these bundles. That often happens when switching Capgo CLI versions (false alarm possible) — still verify nothing native changed in the same upload.",
+  "dependencies-cli-checksum-row-hint": "Possible false alarm: Capgo CLI metadata change. Confirm native code did not also change.",
+  "compat-fix-cli-checksum-tip": "If iOS/Android checksums are new on one bundle and missing on the other, it may be a Capgo CLI change (false alarm possible). Still treat it seriously if you also changed native code in that upload.",
+  "compat-reason-platform-checksum-metadata": "iOS/Android checksum metadata changed (may be Capgo CLI — verify native code)"
 }
