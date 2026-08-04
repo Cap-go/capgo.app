@@ -77,6 +77,7 @@ declare module 'vue' {
     LineChartStats: typeof import('./components/dashboard/LineChartStats.vue')['default']
     LogTable: typeof import('./components/tables/LogTable.vue')['default']
     Navbar: typeof import('./components/Navbar.vue')['default']
+    OnboardingExploreBanner: typeof import('./components/dashboard/OnboardingExploreBanner.vue')['default']
     OnboardingSupportUsernames: typeof import('./components/dashboard/OnboardingSupportUsernames.vue')['default']
     OrgEmailNotificationsPanel: typeof import('./components/dashboard/OrgEmailNotificationsPanel.vue')['default']
     OrgNotificationStatsPanel: typeof import('./components/dashboard/OrgNotificationStatsPanel.vue')['default']
