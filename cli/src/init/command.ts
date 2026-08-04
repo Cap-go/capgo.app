@@ -2027,7 +2027,9 @@ async function checkPrerequisitesStep(
       await cancelCommand(installedNow, orgId, apikey)
 
       if (!installedNow) {
-        pLog.info(`📱 Continuing with Android development only`)
+        pLog.info(nativePlatforms.android
+          ? `📱 Continuing with Android development only`
+          : `📱 Continuing without an iOS development environment`)
       }
     }
   }
@@ -2049,7 +2051,9 @@ async function checkPrerequisitesStep(
       await cancelCommand(installedNow, orgId, apikey)
 
       if (!installedNow) {
-        pLog.info(`📱 Continuing with iOS development only`)
+        pLog.info(nativePlatforms.ios
+          ? `📱 Continuing with iOS development only`
+          : `📱 Continuing without an Android development environment`)
       }
     }
   }
@@ -4856,6 +4860,8 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
           }
         }
       }
+
+      nativePlatforms = getNativePlatformAvailability(extConfig?.config, selectedProjectDir)
     }
   }
 
