@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { describe, expect, it, vi } from 'vitest'
+import { allowOnboardingDashboardExploration } from '../src/utils/onboardingRedirect'
 
 interface MockFetchResponse {
   ok: boolean
@@ -7,14 +8,20 @@ interface MockFetchResponse {
 }
 
 function createUsersQuery(userRecord: Record<string, unknown>) {
+  const query = {
+    limit: vi.fn(async () => ({
+      data: [],
+      error: null,
+    })),
+    maybeSingle: vi.fn(async () => ({
+      data: userRecord,
+      error: null,
+    })),
+  }
+
   return {
     select: vi.fn(() => ({
-      eq: vi.fn(() => ({
-        maybeSingle: vi.fn(async () => ({
-          data: userRecord,
-          error: null,
-        })),
-      })),
+      eq: vi.fn(() => query),
     })),
   }
 }
@@ -95,11 +102,25 @@ function createTestContext() {
     ok: true,
     json: async () => ({ success: true }),
   }))
-  const mockFrom = vi.fn(() => createUsersQuery(userRecord))
+  const mockApps: Array<{ app_id: string, need_onboarding: boolean }> = []
+  const mockFrom = vi.fn((table: string) => {
+    if (table === 'apps') {
+      return {
+        select: vi.fn(() => ({
+          eq: vi.fn(() => ({
+            limit: vi.fn(async () => ({ data: mockApps, error: null })),
+          })),
+        })),
+      }
+    }
+
+    return createUsersQuery(userRecord)
+  })
 
   return {
     mainStore,
     mockCreateSignedImageUrl,
+    mockApps,
     mockFetch,
     mockFrom,
     mockGetAuthenticatorAssuranceLevel,
@@ -230,6 +251,70 @@ describe('auth guard SSO provisioning', () => {
       expect(context.organizationStore.fetchOrganizations).toHaveBeenCalled()
       expect(next).toHaveBeenCalledWith()
       expect(next).not.toHaveBeenCalledWith('/onboarding/app')
+    })
+  })
+
+  it.concurrent('redirects an eligible user to resume their pending app onboarding', async () => {
+    await withTestContext(async (context) => {
+      context.mockApps.push({ app_id: 'com.test.pending-onboarding', need_onboarding: true })
+      context.mockGetSession.mockResolvedValue({
+        data: {
+          session: {
+            access_token: 'token-123',
+            user: {
+              id: 'user-789',
+              email: 'user@managed.test',
+              created_at: '2026-08-04T14:01:00.000Z',
+              email_confirmed_at: '2026-04-15T10:00:00.000Z',
+              app_metadata: { provider: 'email', providers: ['email'] },
+            },
+          },
+        },
+      })
+      const guard = await getGuard()
+      const next = vi.fn()
+
+      await guard(
+        { path: '/dashboard', fullPath: '/dashboard', meta: { middleware: 'auth' }, query: {} },
+        { path: '/login', fullPath: '/login', meta: {}, query: {} },
+        next,
+      )
+
+      expect(next).toHaveBeenCalledWith({
+        path: '/app/new',
+        query: { resume: 'com.test.pending-onboarding' },
+      })
+    })
+  })
+
+  it.concurrent('allows an eligible user to explore the dashboard until refresh', async () => {
+    await withTestContext(async (context) => {
+      context.mockApps.push({ app_id: 'com.test.pending-onboarding', need_onboarding: true })
+      context.mockGetSession.mockResolvedValue({
+        data: {
+          session: {
+            access_token: 'token-123',
+            user: {
+              id: 'user-456',
+              email: 'user@managed.test',
+              created_at: '2026-08-04T14:01:00.000Z',
+              email_confirmed_at: '2026-04-15T10:00:00.000Z',
+              app_metadata: { provider: 'email', providers: ['email'] },
+            },
+          },
+        },
+      })
+      allowOnboardingDashboardExploration('user-456')
+      const guard = await getGuard()
+      const next = vi.fn()
+
+      await guard(
+        { path: '/dashboard', fullPath: '/dashboard', meta: { middleware: 'auth' }, query: {} },
+        { path: '/login', fullPath: '/login', meta: {}, query: {} },
+        next,
+      )
+
+      expect(next).toHaveBeenCalledWith()
     })
   })
 
