@@ -13,8 +13,8 @@ export function buildRateLimitInfo(resetAt?: number) {
   }
 }
 
-/** Default client/edge backoff for sticky on-prem / cancelled plugin responses (24h). */
-export const DEFAULT_ON_PREMISE_RETRY_AFTER_SECONDS = 60 * 60 * 24
+/** Default client/edge backoff for sticky on-prem / cancelled plugin responses (1h). */
+export const DEFAULT_ON_PREMISE_RETRY_AFTER_SECONDS = 60 * 60
 
 export function getOnPremiseRetryAfterSeconds(c: Context): number {
   const envLimit = getEnv(c, 'RATE_LIMIT_ON_PREMISE_RETRY_AFTER_SECONDS')

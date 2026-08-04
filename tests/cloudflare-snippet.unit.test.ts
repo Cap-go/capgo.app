@@ -200,17 +200,17 @@ describe('cloudflare plugin snippet on-prem fallback', () => {
     const cache = buildCache()
     vi.stubGlobal('caches', { default: cache })
 
-    const resetAt = Date.now() + 86_400_000
+    const resetAt = Date.now() + 3_600_000
     const fetchMock = vi.fn(async () => {
       return new Response(JSON.stringify({
         error: 'on_premise_app',
         message: 'On-premise app detected',
-        moreInfo: { rateLimitResetAt: resetAt, retryAfterSeconds: 86400 },
+        moreInfo: { rateLimitResetAt: resetAt, retryAfterSeconds: 3600 },
       }), {
         status: 429,
         headers: {
-          'Cache-Control': 'public, max-age=86400',
-          'Retry-After': '86400',
+          'Cache-Control': 'public, max-age=3600',
+          'Retry-After': '3600',
           'X-RateLimit-Reset': String(Math.ceil(resetAt / 1000)),
         },
       })
@@ -220,14 +220,14 @@ describe('cloudflare plugin snippet on-prem fallback', () => {
     const body = { app_id: 'com.external.app' }
     const first = await snippet.fetch(buildRequest('/updates', body))
     expect(first.status).toBe(429)
-    expect(first.headers.get('Retry-After')).toBe('86400')
+    expect(first.headers.get('Retry-After')).toBe('3600')
     expect(first.headers.get('X-RateLimit-Reset')).toBe(String(Math.ceil(resetAt / 1000)))
     expect(cache.put).toHaveBeenCalledTimes(1)
 
     const second = await snippet.fetch(buildRequest('/updates', body))
     expect(second.status).toBe(429)
     expect(second.headers.get('Retry-After')).toBeTruthy()
-    expect(Number.parseInt(second.headers.get('Retry-After') || '0', 10)).toBeGreaterThan(86000)
+    expect(Number.parseInt(second.headers.get('Retry-After') || '0', 10)).toBeGreaterThan(3500)
     expect(second.headers.get('X-RateLimit-Reset')).toBe(String(Math.ceil(resetAt / 1000)))
     // Second request must be served from edge cache — no extra worker fetch.
     expect(fetchMock).toHaveBeenCalledTimes(2)
