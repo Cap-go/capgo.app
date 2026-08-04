@@ -5156,7 +5156,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
         : false
       const hasAppAccess = !savedOrg || !resumedSnapshot.appId
         ? true
-        : Boolean(await findAppInOrganization(supabase, savedOrg.gid, resumedSnapshot.appId))
+        : Boolean(await findAppInOrganization(supabase, savedOrg.gid, resumedSnapshot.appId).catch(() => null))
 
       if (!savedOrg) {
         pLog.warn(`Previously used organization "${resumedSnapshot.orgName}" is no longer available. Please select a new one.`)
