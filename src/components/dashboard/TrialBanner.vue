@@ -77,12 +77,12 @@ const hasApps = computed(() => {
 })
 
 const onboardingAppOrgId = computed(() => {
-  const org = currentOrg.value
-  const selectableOrganizationCount = organizationStore.organizations.filter(org => !isPendingOrganizationInvite(org)).length
-  if (!org || selectableOrganizationCount !== 1 || org.app_count !== 1)
+  const selectableOrganizations = organizationStore.organizations.filter(org => !isPendingOrganizationInvite(org))
+  const organization = selectableOrganizations[0]
+  if (selectableOrganizations.length !== 1 || organization?.app_count !== 1)
     return undefined
 
-  return org.gid
+  return organization.gid
 })
 
 const shouldShowTrialBanner = ref(true)
@@ -90,7 +90,7 @@ let onboardingAppRequest = 0
 
 watch(onboardingAppOrgId, async (orgId) => {
   const request = ++onboardingAppRequest
-  shouldShowTrialBanner.value = true
+  shouldShowTrialBanner.value = !orgId
 
   if (!orgId)
     return
@@ -101,8 +101,13 @@ watch(onboardingAppOrgId, async (orgId) => {
     .eq('owner_org', orgId)
     .limit(1)
 
-  if (request !== onboardingAppRequest || error || !data?.[0])
+  if (request !== onboardingAppRequest)
     return
+
+  if (error || !data?.[0]) {
+    shouldShowTrialBanner.value = true
+    return
+  }
 
   shouldShowTrialBanner.value = shouldShowBuilderPromo({
     organizationCount: 1,
