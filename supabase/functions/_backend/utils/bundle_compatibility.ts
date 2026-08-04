@@ -16,6 +16,7 @@ export type IncompatibilityReason
     | 'ios_code_changed'
     | 'android_code_changed'
     | 'both_platforms_changed'
+    | 'platform_checksum_metadata_changed'
 
 export type PackageStatus = 'added' | 'removed' | 'changed' | 'unchanged'
 
@@ -32,6 +33,13 @@ export interface PackageComparison {
   status: PackageStatus
   compatible: boolean
   reasons: IncompatibilityReason[]
+  /**
+   * True when iOS and/or Android checksum fields exist on only one side.
+   * Common when switching Capgo CLI versions: older CLIs did not record them.
+   * Still surfaced as incompatible so a real native bump in the same upload is not hidden;
+   * the console warns it may be a CLI false alarm.
+   */
+  platformChecksumMetadataChanged: boolean
 }
 
 export interface CompatibilitySummary {
@@ -68,6 +76,26 @@ function versionsIntersect(candidate: string, baseline: string): boolean {
   }
 }
 
+/** Empty / whitespace checksums are treated as absent (legacy / partial metadata). */
+export function hasPlatformChecksum(value: string | null | undefined): boolean {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
+/**
+ * Detects CLI metadata shape drift: platform checksums present on only one side.
+ * Older Capgo CLIs omitted `ios_checksum` / `android_checksum`; newer ones record them.
+ */
+export function didPlatformChecksumMetadataChange(
+  candidate: NativePackage | undefined,
+  baseline: NativePackage | undefined,
+): boolean {
+  if (!candidate || !baseline)
+    return false
+  const iosOneSided = hasPlatformChecksum(candidate.ios_checksum) !== hasPlatformChecksum(baseline.ios_checksum)
+  const androidOneSided = hasPlatformChecksum(candidate.android_checksum) !== hasPlatformChecksum(baseline.android_checksum)
+  return iosOneSided || androidOneSided
+}
+
 function getIncompatibilityReasons(
   candidate: NativePackage | undefined,
   baseline: NativePackage | undefined,
@@ -86,8 +114,9 @@ function getIncompatibilityReasons(
   if (candidate.requested_version && baseline.requested_version && candidate.requested_version.trim() !== baseline.requested_version.trim())
     reasons.push('requested_version_changed')
 
-  const iosChanged = candidate.ios_checksum != null && baseline.ios_checksum != null && candidate.ios_checksum !== baseline.ios_checksum
-  const androidChanged = candidate.android_checksum != null && baseline.android_checksum != null && candidate.android_checksum !== baseline.android_checksum
+  // Compare checksums only when both sides recorded them.
+  const iosChanged = hasPlatformChecksum(candidate.ios_checksum) && hasPlatformChecksum(baseline.ios_checksum) && candidate.ios_checksum !== baseline.ios_checksum
+  const androidChanged = hasPlatformChecksum(candidate.android_checksum) && hasPlatformChecksum(baseline.android_checksum) && candidate.android_checksum !== baseline.android_checksum
 
   if (iosChanged && androidChanged)
     reasons.push('both_platforms_changed')
@@ -95,6 +124,12 @@ function getIncompatibilityReasons(
     reasons.push('ios_code_changed')
   else if (androidChanged)
     reasons.push('android_code_changed')
+
+  // One-sided iOS/Android checksum fields: still incompatible so we never silently
+  // pass a same-version native bump that rode along with a CLI metadata change.
+  // The dashboard warns this may be a Capgo CLI false alarm.
+  if (didPlatformChecksumMetadataChange(candidate, baseline))
+    reasons.push('platform_checksum_metadata_changed')
 
   return reasons
 }
@@ -142,6 +177,7 @@ export function compareNativePackages(
       status: statusFor(candidate, baseline, reasons),
       compatible: !reasons.some(isIncompatibleReason),
       reasons,
+      platformChecksumMetadataChanged: didPlatformChecksumMetadataChange(candidate, baseline),
     }
   }).sort((a, b) => {
     const byStatus = STATUS_ORDER[a.status] - STATUS_ORDER[b.status]
@@ -156,6 +192,11 @@ export function summarizeBundleCompatibility(comparisons: readonly PackageCompar
     incompatibleCount: offenders.length,
     offenders,
   }
+}
+
+/** True when any package shows one-sided iOS/Android checksum metadata (CLI shape drift). */
+export function hasPlatformChecksumMetadataDrift(comparisons: readonly PackageComparison[]): boolean {
+  return comparisons.some(entry => entry.platformChecksumMetadataChanged)
 }
 
 export function selectCurrentDeploymentPair(

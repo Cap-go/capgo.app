@@ -23,6 +23,22 @@ function jsonResponse(status: number, body: unknown): Response {
 }
 
 describe('assertAscAccess', () => {
+  it('mints App Store Connect tokens with a 15-minute lifetime', async () => {
+    let authorization = ''
+    const fetchImpl = (async (_url: string, init?: RequestInit) => {
+      authorization = new Headers(init?.headers).get('Authorization') ?? ''
+      return jsonResponse(200, { data: [] })
+    }) as unknown as typeof fetch
+
+    const res = await assertAscAccess({ ...creds, fetchImpl })
+
+    expect(res.ok).toBe(true)
+    expect(authorization).toMatch(/^Bearer /)
+    const token = authorization.replace(/^Bearer /, '')
+    const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString()) as { iat: number, exp: number }
+    expect(payload.exp - payload.iat).toBe(15 * 60)
+  })
+
   it('ok=true when the bundle id is present in /apps results', async () => {
     let calledUrl = ''
     const fetchImpl = (async (url: string) => {

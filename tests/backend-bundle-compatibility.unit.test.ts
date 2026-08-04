@@ -55,7 +55,23 @@ describe('backend bundle compatibility helpers', () => {
       status: 'changed',
       compatible: false,
       reasons: ['both_platforms_changed'],
+      platformChecksumMetadataChanged: false,
     })
+  })
+
+  it.concurrent('flags iOS/Android checksum metadata when it only appears after a CLI upgrade', () => {
+    const comparisons = compareNativePackages(
+      [pkg('@capgo/native', '1.0.0', { ios_checksum: 'new-ios', android_checksum: 'new-android' })],
+      [pkg('@capgo/native', '1.0.0')],
+    )
+
+    expect(comparisons[0]).toMatchObject({
+      status: 'changed',
+      compatible: false,
+      reasons: ['platform_checksum_metadata_changed'],
+      platformChecksumMetadataChanged: true,
+    })
+    expect(summarizeBundleCompatibility(comparisons).compatible).toBe(false)
   })
 
   it.concurrent('flags requested version constraint changes as metadata when resolved versions match', () => {

@@ -15,7 +15,8 @@ import UpdateStatsCard from '~/components/dashboard/UpdateStatsCard.vue'
 import { getCapgoVersion, useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
-import { useOrganizationStore } from '~/stores/organization'
+import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
+import { shouldShowBuilderPromo } from '~/utils/builderPromoVisibility'
 
 const id = ref('')
 const route = useRoute('/app/[app]')
@@ -32,6 +33,7 @@ const isLoading = ref(false)
 const supabase = useSupabase()
 const displayStore = useDisplayStore()
 const app = ref<Database['public']['Tables']['apps']['Row']>()
+const appCount = ref<number | null>(null)
 const usageComponent = ref()
 const appNotFound = ref(false)
 const onboardingTourStep = ref(0)
@@ -59,6 +61,17 @@ const appOrganization = computed(() => {
   return organizationStore.getOrgByAppId(id.value) ?? organizationStore.currentOrganization
 })
 const showOnboardingBanner = computed(() => app.value?.need_onboarding === true)
+const selectableOrganizationCount = computed(() => organizationStore.organizations.filter(org => !isPendingOrganizationInvite(org)).length)
+const showBuilderPromo = computed(() => {
+  if (appCount.value === null)
+    return false
+
+  return shouldShowBuilderPromo({
+    organizationCount: selectableOrganizationCount.value,
+    appCount: appCount.value,
+    appNeedsOnboarding: showOnboardingBanner.value,
+  })
+})
 const showOnboardingTour = computed(() => showOnboardingBanner.value && route.query.tour === '1')
 const tourEntry = computed(() => onboardingTour[onboardingTourStep.value] ?? onboardingTour[0])
 
@@ -71,6 +84,8 @@ const lacksSecurityAccess = computed(() => {
 })
 
 async function loadAppInfo() {
+  app.value = undefined
+  appCount.value = null
   try {
     await organizationStore.awaitInitialLoad()
     const { data: dataApp, error } = await supabase
@@ -81,14 +96,12 @@ async function loadAppInfo() {
 
     if (error || !dataApp) {
       appNotFound.value = true
-      app.value = undefined
       return
     }
 
     const appId = id.value
     const subscriptionStart = appOrganization.value?.subscription_start
     appNotFound.value = false
-    app.value = dataApp
 
     const [
       capgoVersionResult,
@@ -96,6 +109,7 @@ async function loadAppInfo() {
       devicesCount,
       bundlesCount,
       channelsCount,
+      ownerAppCount,
     ] = await Promise.all([
       getCapgoVersion(appId, dataApp.last_version),
       main.getTotalStatsByApp(appId, subscriptionStart),
@@ -111,11 +125,18 @@ async function loadAppInfo() {
         .select('*', { count: 'exact', head: true })
         .eq('app_id', appId)
         .then(({ count }) => count ?? 0),
+      supabase
+        .from('apps')
+        .select('app_id', { count: 'exact', head: true })
+        .eq('owner_org', dataApp.owner_org)
+        .then(({ count, error: appCountError }) => appCountError ? null : count ?? 0),
     ])
 
     if (id.value !== appId)
       return
 
+    app.value = dataApp
+    appCount.value = ownerAppCount
     capgoVersion.value = capgoVersionResult
     updatesNb.value = updatesCount
     devicesNb.value = devicesCount
@@ -210,7 +231,7 @@ watchEffect(async () => {
           <CompatibilityBanner v-if="!appNotFound" :app-id="id" />
 
           <!-- Capgo Builder promo banner (only for valid apps with no native build yet) -->
-          <BuilderPromoBanner v-if="!appNotFound" :app-id="id" />
+          <BuilderPromoBanner v-if="!appNotFound && app && showBuilderPromo" :app-id="id" />
 
           <Usage
             v-if="!lacksSecurityAccess"
