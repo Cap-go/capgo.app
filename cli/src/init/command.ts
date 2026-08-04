@@ -233,7 +233,7 @@ let globalAutoTestChange: InitAutoTestChange | undefined
 
 const CODE_DIFF_CONTEXT_LINES = 5
 
-function getNativePlatformAvailability(config?: CapacitorConfigSnapshot, rootDir = cwd()) {
+export function getNativePlatformAvailability(config?: CapacitorConfigSnapshot, rootDir = cwd()) {
   const iosDir = getPlatformDirFromCapacitorConfig(config, 'ios')
   const androidDir = getPlatformDirFromCapacitorConfig(config, 'android')
   return {
@@ -2081,7 +2081,11 @@ async function selectOrganizationForInit(
   return organization
 }
 
-async function checkPrerequisitesStep(orgId: string, apikey: string) {
+async function checkPrerequisitesStep(
+  orgId: string,
+  apikey: string,
+  nativePlatforms: ReturnType<typeof getNativePlatformAvailability>,
+) {
   pLog.info(`📋 Checking development environment prerequisites`)
   pLog.info(`   For mobile development, you need at least one platform setup`)
 
@@ -2099,21 +2103,21 @@ async function checkPrerequisitesStep(orgId: string, apikey: string) {
 
   const hasAndroidStudio = androidPaths.some(path => path && existsSync(path))
 
-  if (hasXcode) {
+  if (nativePlatforms.ios && hasXcode) {
     pLog.success(`✅ Xcode detected - iOS development ready`)
   }
-  else if (platform === 'darwin') {
+  else if (nativePlatforms.ios && platform === 'darwin') {
     pLog.warn(`⚠️  Xcode not found`)
   }
 
-  if (hasAndroidStudio) {
+  if (nativePlatforms.android && hasAndroidStudio) {
     pLog.success(`✅ Android SDK detected - Android development ready`)
   }
-  else {
+  else if (nativePlatforms.android) {
     pLog.warn(`⚠️  Android SDK not found`)
   }
 
-  if (!hasXcode && !hasAndroidStudio) {
+  if ((nativePlatforms.ios && !hasXcode) && (nativePlatforms.android && !hasAndroidStudio)) {
     pLog.error(`❌ No development environment detected`)
     pLog.info(``)
     pLog.info(`📱 To develop mobile apps with Capacitor, you need:`)
@@ -2135,7 +2139,7 @@ async function checkPrerequisitesStep(orgId: string, apikey: string) {
 
     pLog.warn(`⚠️  Continuing without development environment - you'll need to set it up later`)
   }
-  else if (!hasXcode && platform === 'darwin') {
+  else if (nativePlatforms.ios && !hasXcode && platform === 'darwin') {
     const wantsIos = await pConfirm({
       message: `Xcode is not installed. Do you plan to develop for iOS?`,
       initialValue: false,
@@ -2147,17 +2151,21 @@ async function checkPrerequisitesStep(orgId: string, apikey: string) {
       pLog.info(`💡 After installing Xcode, you can continue the onboarding`)
 
       const installedNow = await pConfirm({
-        message: `Have you installed Xcode? (Choose No to continue with Android only)`,
+        message: nativePlatforms.android
+          ? `Have you installed Xcode? (Choose No to continue with Android only)`
+          : `Have you installed Xcode? (Choose No to continue without iOS development)`,
         initialValue: false,
       })
       await cancelCommand(installedNow, orgId, apikey)
 
       if (!installedNow) {
-        pLog.info(`📱 Continuing with Android development only`)
+        pLog.info(nativePlatforms.android
+          ? `📱 Continuing with Android development only`
+          : `📱 Continuing without an iOS development environment`)
       }
     }
   }
-  else if (!hasAndroidStudio) {
+  else if (nativePlatforms.android && !hasAndroidStudio) {
     const wantsAndroid = await pConfirm({
       message: `Android SDK is not installed. Do you plan to develop for Android?`,
       initialValue: false,
@@ -2169,13 +2177,17 @@ async function checkPrerequisitesStep(orgId: string, apikey: string) {
       pLog.info(`💡 After installing Android Studio, set up the Android SDK`)
 
       const installedNow = await pConfirm({
-        message: `Have you installed Android Studio? (Choose No to continue with iOS only)`,
+        message: nativePlatforms.ios
+          ? `Have you installed Android Studio? (Choose No to continue with iOS only)`
+          : `Have you installed Android Studio? (Choose No to continue without Android development)`,
         initialValue: false,
       })
       await cancelCommand(installedNow, orgId, apikey)
 
       if (!installedNow) {
-        pLog.info(`📱 Continuing with iOS development only`)
+        pLog.info(nativePlatforms.ios
+          ? `📱 Continuing with iOS development only`
+          : `📱 Continuing without an Android development environment`)
       }
     }
   }
@@ -4928,6 +4940,12 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
   await reloadSelectedProjectConfig()
   // Warn if this doesn't look like a Capacitor project
   const hasCapacitorConfig = Boolean(globalCapacitorConfigPath) || capacitorConfigFiles.some(file => existsSync(join(selectedProjectDir, file)))
+  let nativePlatforms: ReturnType<typeof getNativePlatformAvailability> = {
+    iosDir: 'ios',
+    androidDir: 'android',
+    ios: true,
+    android: true,
+  }
   if (!hasCapacitorConfig) {
     pLog.warn('⚠️  No capacitor.config.* found in the selected project directory.')
     pLog.info(`   Capgo requires a Capacitor project. Selected project: ${selectedProjectDir}`)
@@ -4945,10 +4963,10 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
     }
   }
   else {
-    const availablePlatforms = getNativePlatformAvailability(extConfig?.config, selectedProjectDir)
-    if (!availablePlatforms.ios && !availablePlatforms.android) {
+    nativePlatforms = getNativePlatformAvailability(extConfig?.config, selectedProjectDir)
+    if (!nativePlatforms.ios && !nativePlatforms.android) {
       const { pm, capAddAndroid, capAddIos } = getInitRecoveryCommands()
-      pLog.warn(`⚠️  No native platform directories found (${availablePlatforms.iosDir}/ or ${availablePlatforms.androidDir}/).`)
+      pLog.warn(`⚠️  No native platform directories found (${nativePlatforms.iosDir}/ or ${nativePlatforms.androidDir}/).`)
       pLog.info(`   Suggested commands: ${capAddIos} or ${capAddAndroid}`)
       const continueWithout = await pSelect({
         message: 'How do you want to continue?',
@@ -5001,6 +5019,8 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
           }
         }
       }
+
+      nativePlatforms = getNativePlatformAvailability(extConfig?.config, selectedProjectDir)
     }
   }
 
@@ -5138,7 +5158,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
   try {
     if (stepToSkip < 1) {
       renderCurrentStep(1)
-      await checkPrerequisitesStep(orgId, options.apikey)
+      await checkPrerequisitesStep(orgId, options.apikey, nativePlatforms)
       appId = await addAppStep(organization, options.apikey, appId, options)
       globalAppId = appId
       markStepDone(1)
