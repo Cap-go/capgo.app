@@ -18,7 +18,8 @@ import { useI18n } from 'vue-i18n'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { pushEvent } from '~/services/posthog'
 import { getLocalConfig } from '~/services/supabase'
-import { useOrganizationStore } from '~/stores/organization'
+import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
+import { shouldShowBuilderPromo } from '~/utils/builderPromoVisibility'
 
 const { t } = useI18n()
 const organizationStore = useOrganizationStore()
@@ -74,8 +75,23 @@ const hasApps = computed(() => {
   return (org?.app_count ?? 0) > 0
 })
 
+const shouldShowTrialBanner = computed(() => {
+  const org = currentOrg.value
+  if (!org)
+    return false
+
+  const apps = organizationStore.getAppsByOrgId(org.gid)
+  const selectableOrganizationCount = organizationStore.organizations.filter(org => !isPendingOrganizationInvite(org)).length
+
+  return shouldShowBuilderPromo({
+    organizationCount: selectableOrganizationCount,
+    appCount: apps.length,
+    appNeedsOnboarding: apps[0]?.need_onboarding === true,
+  })
+})
+
 const showBanner = computed(() => {
-  return !hideExternalPurchaseFlows && isTrial.value && isAccountOldEnough.value && hasApps.value
+  return !hideExternalPurchaseFlows && isTrial.value && isAccountOldEnough.value && hasApps.value && shouldShowTrialBanner.value
 })
 
 // Whether we need the time tick running — true when the account-age check
