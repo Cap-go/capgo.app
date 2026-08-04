@@ -86,6 +86,12 @@ t('init code injection preserves framework directives before imports', () => {
   assert.match(updated, /CapacitorUpdater\.notifyAppReady\(\);/)
 })
 
+t('init code injection preserves directives after BOM and leading comments', () => {
+  const updated = injectInitCode('src/main.tsx', `\uFEFF/* generated file */\n\n'use client'\nexport default function App() {}\n`)
+
+  assert.match(updated, /^\uFEFF\/\* generated file \*\/\n\n'use client'\nimport \{ CapacitorUpdater \}/)
+})
+
 t('init code injection uses CommonJS syntax for .cjs files without imports', () => {
   const updated = injectInitCode('scripts/start.cjs', 'console.log(\'ready\')\n')
 

@@ -768,13 +768,17 @@ function insertInitCodeAfterPrologue(content: string, codeToInject: string): str
     insertionIndex = firstLineEnd === -1 ? content.length : firstLineEnd + 1
   }
 
-  // Framework directives such as Next.js's 'use client' must remain before imports.
+  // Framework directives can follow a BOM, whitespace, or comments. Keep that
+  // complete prologue ahead of the injected import so their semantics remain intact.
+  const leadingTriviaPattern = /^(?:\uFEFF|[\t \r\n]|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*(?:\r?\n|$))*/
   const directivePattern = /^[\t ]*(['"])(?:use client|use server|use strict)\1;?[\t ]*(?:\r?\n|$)/
   while (true) {
-    const directive = content.slice(insertionIndex).match(directivePattern)
+    const remainingContent = content.slice(insertionIndex)
+    const leadingTrivia = remainingContent.match(leadingTriviaPattern)?.[0] ?? ''
+    const directive = remainingContent.slice(leadingTrivia.length).match(directivePattern)
     if (!directive)
       break
-    insertionIndex += directive[0].length
+    insertionIndex += leadingTrivia.length + directive[0].length
   }
 
   const before = content.slice(0, insertionIndex)
@@ -794,6 +798,18 @@ export function injectInitCode(filePath: string, currentContent: string): string
   }
 
   return insertInitCodeAfterPrologue(currentContent, codeToInject)
+}
+
+function getNuxtUpdaterPluginContent(): string {
+  return [
+    `import { CapacitorUpdater } from '@capgo/capacitor-updater'`,
+    ``,
+    `export default defineNuxtPlugin(() => {`,
+    `  ${notifyAppReadyComment}`,
+    `  CapacitorUpdater.notifyAppReady()`,
+    `})`,
+    ``,
+  ].join('\n')
 }
 
 function readTmpObj() {
@@ -2706,20 +2722,12 @@ async function addCodeStep(orgId: string, apikey: string, appId: string) {
     currentContent = readFileSync(filePath, 'utf8')
   }
 
-  const getNewContent = () => createNuxtPlugin
-    ? [
-        `import { CapacitorUpdater } from '@capgo/capacitor-updater'`,
-        ``,
-        `export default defineNuxtPlugin(() => {`,
-        `  ${notifyAppReadyComment}`,
-        `  CapacitorUpdater.notifyAppReady()`,
-        `})`,
-        ``,
-      ].join('\n')
-    : injectInitCode(filePath, currentContent)
+  const getCanAutoInject = () => !createNuxtPlugin || created || currentContent.includes(codeInject)
+  const getNewContent = () => createNuxtPlugin ? getNuxtUpdaterPluginContent() : injectInitCode(filePath, currentContent)
 
   let newContent = getNewContent()
   let alreadyConfigured = currentContent.includes(codeInject)
+  let canAutoInject = getCanAutoInject()
   let previewDiff: InitCodeDiff
   let addCodeChoice: string | symbol
 
@@ -2727,10 +2735,12 @@ async function addCodeStep(orgId: string, apikey: string, appId: string) {
     previewDiff = {
       filePath: formatInitFilePath(filePath),
       created,
-      lines: !alreadyConfigured ? buildCodeDiffLines(currentContent, newContent, CODE_DIFF_CONTEXT_LINES) : [],
+      lines: !alreadyConfigured && canAutoInject ? buildCodeDiffLines(currentContent, newContent, CODE_DIFF_CONTEXT_LINES) : [],
       note: alreadyConfigured
         ? 'Already contains CapacitorUpdater.notifyAppReady() — no change needed'
-        : undefined,
+        : !canAutoInject
+            ? 'An existing Nuxt updater plugin will not be overwritten automatically'
+            : undefined,
     }
     // Show the exact proposed edit in the same screen as the confirmation.
     setInitCodeDiff(previewDiff)
@@ -2756,10 +2766,16 @@ async function addCodeStep(orgId: string, apikey: string, appId: string) {
     created = !fileExists
     newContent = getNewContent()
     alreadyConfigured = currentContent.includes(codeInject)
+    canAutoInject = getCanAutoInject()
   }
 
   if (addCodeChoice === 'yes') {
-    if (!alreadyConfigured) {
+    if (!canAutoInject) {
+      pLog.warn(`An existing Nuxt updater plugin was not changed automatically.`)
+      pLog.info(`Add this plugin code manually:\n\n${getNuxtUpdaterPluginContent()}`)
+      await markStep(orgId, apikey, 'add-code-manual', appId)
+    }
+    else if (!alreadyConfigured) {
       const s = pSpinner()
       s.start(`Adding @capacitor-updater to your main file`)
       if (created) {
