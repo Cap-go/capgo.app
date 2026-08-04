@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { NativePackage } from '~/services/bundleCompatibility'
 import type { CompatibilityEventGroup, CompatibilityEventRow } from '~/services/compatibilityEvents'
 import type { Database } from '~/types/supabase.types'
 import { computed, onUnmounted, ref, watch, watchEffect } from 'vue'
@@ -10,7 +11,6 @@ import IconArrowRight from '~icons/lucide/arrow-right'
 import IconCheckCircle from '~icons/lucide/check-circle'
 import IconChevronRight from '~icons/lucide/chevron-right'
 import IconExternalLink from '~icons/lucide/external-link'
-import type { NativePackage } from '~/services/bundleCompatibility'
 import { comparePackages, hasPlatformChecksumMetadataDrift } from '~/services/bundleCompatibility'
 import { dependencyDiffPath, groupCompatibilityEvents, platformLabel } from '~/services/compatibilityEvents'
 import { formatLocalDateTime } from '~/services/date'
