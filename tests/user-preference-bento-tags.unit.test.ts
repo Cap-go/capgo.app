@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { syncUserPreferenceTags } from '../supabase/functions/_backend/utils/user_preferences.ts'
 
 const syncBentoSubscriberTagsMock = vi.hoisted(() => vi.fn(async () => true))
+const SUPPRESSION_TAG = 'onboarding:first_org_recovery_suppressed'
 
 vi.mock('../supabase/functions/_backend/utils/bento.ts', () => ({
   syncBentoSubscriberTags: syncBentoSubscriberTagsMock,
@@ -60,6 +61,22 @@ describe('syncUserPreferenceTags email type', () => {
       segments: ['email_type:professional'],
       deleteSegments: expect.arrayContaining(['email_type:personal', 'email_type:disposable']),
     }))
+
+    interface SubscriberUpdate {
+      deleteSegments: string[]
+      segments: string[]
+    }
+    const calls = syncBentoSubscriberTagsMock.mock.calls as unknown as Array<[
+      unknown,
+      SubscriberUpdate | SubscriberUpdate[],
+    ]>
+    for (const [, rawUpdate] of calls) {
+      const updates = Array.isArray(rawUpdate) ? rawUpdate : [rawUpdate]
+      for (const update of updates) {
+        expect(update.segments).not.toContain(SUPPRESSION_TAG)
+        expect(update.deleteSegments).not.toContain(SUPPRESSION_TAG)
+      }
+    }
   })
 
   it('backfills the email type tag for a same-address preference update', async () => {

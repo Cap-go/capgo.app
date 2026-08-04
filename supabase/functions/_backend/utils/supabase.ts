@@ -1,14 +1,16 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Context } from 'hono'
-import { HTTPException } from 'hono/http-exception'
+// @ts-types="npm:@types/pg"
+import type { PoolClient } from 'pg'
 import type { BillingPlanBentoState } from './billing_bento_tags.ts'
 import type { AuthInfo } from './hono.ts'
 import type { Database } from './supabase.types.ts'
 import type { DeviceWithoutCreatedAt, NativeVersionUsage, Order, ReadDevicesParams, ReadStatsInsightsParams, ReadStatsParams, StatsInsightsResult, StatsMetadata, VersionUsage, VersionUsageChannel } from './types.ts'
 import { createClient } from '@supabase/supabase-js'
+import { HTTPException } from 'hono/http-exception'
 import { buildBillingPlanBentoTags } from './billing_bento_tags.ts'
 import { buildNormalizedDeviceForWrite, hasComparableDeviceChanged, nullableString } from './deviceComparison.ts'
-import { simpleError, quickError } from './hono.ts'
+import { quickError, simpleError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { closeClient, getPgClient } from './pg.ts'
 import { emptyStatsInsights, normalizeStatsInsightsResult } from './statsInsights.ts'
@@ -792,18 +794,39 @@ export async function createApiKey(c: Context, userId: string) {
     return
   }
 
-  const pgClient = getPgClient(c)
+  const pgPool = getPgClient(c)
+  let pgClient: PoolClient | undefined
   let inTransaction = false
   try {
+    pgClient = await pgPool.connect()
     await pgClient.query('BEGIN')
     inTransaction = true
+    await pgClient.query(`SET LOCAL lock_timeout = '5s'`)
 
+    // Serialize with delete_user(). Its to_delete_accounts FK check takes a
+    // KEY SHARE lock on public.users, which conflicts with this UPDATE lock.
+    // The separate query below therefore gets a fresh READ COMMITTED snapshot
+    // after any in-flight deletion transaction has finished.
     const userLockResult = await pgClient.query(
-      'SELECT id FROM auth.users WHERE id = $1::uuid FOR UPDATE',
+      'SELECT id FROM public.users WHERE id = $1::uuid FOR UPDATE',
       [userId],
     )
     if (userLockResult.rowCount === 0) {
       cloudlogErr({ requestId: c.get('requestId'), message: 'createApiKey error', userId, error: 'user not found' })
+      await pgClient.query('ROLLBACK')
+      return
+    }
+
+    const deletionResult = await pgClient.query<{ deletion_scheduled: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1
+         FROM public.to_delete_accounts
+         WHERE account_id = $1::uuid
+       ) AS deletion_scheduled`,
+      [userId],
+    )
+    if (deletionResult.rows[0]?.deletion_scheduled) {
+      cloudlog({ requestId: c.get('requestId'), message: 'createApiKey skipped, account deletion scheduled', userId })
       await pgClient.query('ROLLBACK')
       return
     }
@@ -963,13 +986,21 @@ export async function createApiKey(c: Context, userId: string) {
     await pgClient.query('COMMIT')
   }
   catch (error) {
-    if (inTransaction) {
+    if (inTransaction && pgClient) {
       await pgClient.query('ROLLBACK').catch(() => {})
     }
     cloudlogErr({ requestId: c.get('requestId'), message: 'createApiKey error', userId, error })
+    // A lock timeout is transient: let the queue retry instead of permanently
+    // acknowledging user provisioning without a default API key.
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === '55P03')
+      throw error
   }
   finally {
-    closeClient(c, pgClient)
+    // Workerd keeps request-scoped Pools open, so destroy the checked-out
+    // socket explicitly after the transaction and then close the Pool where
+    // the runtime supports it.
+    pgClient?.release(true)
+    closeClient(c, pgPool)
   }
 }
 
