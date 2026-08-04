@@ -13,7 +13,9 @@ import IconDiscord from '~icons/ic/round-discord'
 import IconScanQrCode from '~icons/lucide/scan-qr-code'
 import IconApiKey from '~icons/mdi/shield-key'
 import IconAppStore from '~icons/simple-icons/appstore'
+import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
+import { allowOnboardingDashboardExploration, getOnboardingResumeAppId } from '~/utils/onboardingRedirect'
 import DropdownProfile from '../components/dashboard/DropdownProfile.vue'
 
 const props = defineProps <{
@@ -22,6 +24,7 @@ const props = defineProps <{
 
 const emit = defineEmits(['closeSidebar'])
 const main = useMainStore()
+const dialogStore = useDialogV2Store()
 const router = useRouter()
 const { t } = useI18n()
 const sidebar = useTemplateRef('sidebar')
@@ -52,7 +55,42 @@ function isTabActive(tab: string) {
     return currentPath === tabPath || currentPath.startsWith(`${tabPath}/`)
   })
 }
-function openTab(tab: Tab) {
+async function openTab(tab: Tab) {
+  const onboardingUserId = main.user?.id ?? main.auth?.id
+  const resumeQueryAppId = typeof route.query.resume === 'string' ? route.query.resume : null
+  const isPendingOnboardingResume = route.path === '/app/new'
+    && !!resumeQueryAppId
+  const onboardingResumeAppId = isPendingOnboardingResume
+    ? resumeQueryAppId
+    : getOnboardingResumeAppId(onboardingUserId)
+  const requiresOnboardingExplorationConfirmation = tab.key === '/dashboard'
+    && !!onboardingResumeAppId
+
+  if (tab.key === '/apikeys' && isPendingOnboardingResume)
+    allowOnboardingDashboardExploration(onboardingUserId, onboardingResumeAppId)
+
+  if (requiresOnboardingExplorationConfirmation) {
+    emit('closeSidebar')
+    dialogStore.openDialog({
+      title: t('app-onboarding-explore-dashboard-confirm-title'),
+      description: t('app-onboarding-explore-dashboard-confirm-description'),
+      buttons: [
+        { text: t('app-onboarding-continue-setup'), role: 'secondary' },
+        { text: t('app-onboarding-explore-dashboard'), role: 'primary' },
+      ],
+    })
+    const wasCanceled = await dialogStore.onDialogDismiss()
+    if (wasCanceled)
+      return
+    if (dialogStore.lastButtonRole === 'secondary') {
+      return router.push({ path: '/app/new', query: { resume: onboardingResumeAppId } })
+    }
+    if (dialogStore.lastButtonRole !== 'primary')
+      return
+
+    allowOnboardingDashboardExploration(onboardingUserId, onboardingResumeAppId)
+  }
+
   if (tab.onClick)
     tab.onClick(tab.key)
   else
