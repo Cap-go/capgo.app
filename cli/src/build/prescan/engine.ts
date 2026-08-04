@@ -1,5 +1,6 @@
 // src/build/prescan/engine.ts
 import type { Finding, OutcomeOptions, PrescanCheck, PrescanOutcome, PrescanReport, ScanContext, Severity } from './types'
+import { enforcedCounts } from './enforcement'
 
 interface EngineOptions { checkTimeoutMs?: number }
 
@@ -71,7 +72,10 @@ async function runIsolated(check: PrescanCheck, ctx: ScanContext, timeoutMs: num
     }]), timeoutMs)
   })
   try {
-    return await Promise.race([check.run(ctx), timeout])
+    const findings = await Promise.race([check.run(ctx), timeout])
+    if (!check.enforceAfter)
+      return findings
+    return findings.map(finding => ({ ...finding, enforceAfter: finding.enforceAfter ?? check.enforceAfter }))
   }
   catch (error) {
     return [{
@@ -79,6 +83,7 @@ async function runIsolated(check: PrescanCheck, ctx: ScanContext, timeoutMs: num
       severity: 'info',
       title: `Check ${check.id} crashed and was skipped`,
       detail: sanitizeCrashDetail(error),
+      enforceAfter: check.enforceAfter,
     }]
   }
   finally {
@@ -86,9 +91,10 @@ async function runIsolated(check: PrescanCheck, ctx: ScanContext, timeoutMs: num
   }
 }
 
-export function decideOutcome(report: Pick<PrescanReport, 'counts'>, options: OutcomeOptions): PrescanOutcome {
+export function decideOutcome(report: Pick<PrescanReport, 'counts' | 'findings'>, options: OutcomeOptions): PrescanOutcome {
   if (options.ignoreFatal) return 'proceed'
-  if (report.counts.error > 0) return 'block'
-  if (report.counts.warning > 0) return options.failOnWarnings ? 'block' : 'ask'
+  const counts = enforcedCounts(report, options.now)
+  if (counts.error > 0) return 'block'
+  if (counts.warning > 0) return options.failOnWarnings ? 'block' : 'ask'
   return 'proceed'
 }

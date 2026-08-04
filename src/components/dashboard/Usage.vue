@@ -1001,7 +1001,7 @@ onBeforeUnmount(() => {
       <!-- Daily vs Cumulative Switch -->
       <div class="flex items-center p-1 space-x-1 bg-gray-200 rounded-lg dark:bg-gray-800">
         <button
-          class="flex gap-0.5 justify-center items-center py-1 px-2 text-xs font-medium text-center whitespace-nowrap rounded-md transition-colors cursor-pointer sm:gap-1.5 sm:px-3"
+          class="flex gap-0.5 justify-center items-center h-9 min-h-9 py-1 px-2 text-xs font-medium text-center whitespace-nowrap rounded-md transition-colors cursor-pointer sm:gap-1.5 sm:px-3"
           :class="[!showCumulative || !useBillingPeriod ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm' : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white']"
           :aria-label="t('daily')"
           @click="showCumulative = false"
@@ -1010,7 +1010,7 @@ onBeforeUnmount(() => {
           <span class="hidden sm:inline">{{ t('daily') }}</span>
         </button>
         <button
-          class="flex gap-0.5 justify-center items-center py-1 px-2 text-xs font-medium text-center whitespace-nowrap rounded-md transition-colors cursor-pointer sm:gap-1.5 sm:px-3"
+          class="flex gap-0.5 justify-center items-center h-9 min-h-9 py-1 px-2 text-xs font-medium text-center whitespace-nowrap rounded-md transition-colors cursor-pointer sm:gap-1.5 sm:px-3"
           :class="[
             showCumulative && useBillingPeriod
               ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
@@ -1027,7 +1027,7 @@ onBeforeUnmount(() => {
       <!-- Billing Period vs Last 30 Days Switch -->
       <div class="flex items-center p-1 space-x-1 bg-gray-200 rounded-lg dark:bg-gray-800">
         <button
-          class="flex gap-0.5 justify-center items-center py-1 px-2 text-xs font-medium text-center whitespace-nowrap rounded-md transition-colors cursor-pointer sm:gap-1.5 sm:px-3" :class="[useBillingPeriod ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm' : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white']"
+          class="flex gap-0.5 justify-center items-center h-9 min-h-9 py-1 px-2 text-xs font-medium text-center whitespace-nowrap rounded-md transition-colors cursor-pointer sm:gap-1.5 sm:px-3" :class="[useBillingPeriod ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm' : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white']"
           :aria-label="t('billing-period')"
           @click="useBillingPeriod = true"
         >
@@ -1035,7 +1035,7 @@ onBeforeUnmount(() => {
           <span class="hidden sm:inline">{{ t('billing-period') }}</span>
         </button>
         <button
-          class="flex gap-0.5 justify-center items-center py-1 px-2 text-xs font-medium text-center whitespace-nowrap rounded-md transition-colors cursor-pointer sm:gap-1.5 sm:px-3" :class="[!useBillingPeriod ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm' : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white']"
+          class="flex gap-0.5 justify-center items-center h-9 min-h-9 py-1 px-2 text-xs font-medium text-center whitespace-nowrap rounded-md transition-colors cursor-pointer sm:gap-1.5 sm:px-3" :class="[!useBillingPeriod ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm' : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white']"
           :aria-label="t('last-30-days')"
           @click="useBillingPeriod = false"
         >
@@ -1137,7 +1137,7 @@ onBeforeUnmount(() => {
           <div class="inline-flex shrink-0 items-center rounded-lg bg-slate-100 p-1 dark:bg-slate-800" :aria-label="t('storage-chart-mode')">
             <button
               type="button"
-              class="rounded-md px-2.5 py-1 text-xs font-semibold transition-colors"
+              class="h-9 min-h-9 rounded-md px-2.5 py-1 text-xs font-semibold transition-colors"
               :class="storageUsageMode === 'total' ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'"
               @click="storageUsageMode = 'total'"
             >
@@ -1145,7 +1145,7 @@ onBeforeUnmount(() => {
             </button>
             <button
               type="button"
-              class="rounded-md px-2.5 py-1 text-xs font-semibold transition-colors"
+              class="h-9 min-h-9 rounded-md px-2.5 py-1 text-xs font-semibold transition-colors"
               :class="storageUsageMode === 'hourly' ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'"
               @click="storageUsageMode = 'hourly'"
             >

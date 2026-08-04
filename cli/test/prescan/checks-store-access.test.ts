@@ -12,6 +12,8 @@ import { generateKeyPairSync } from 'node:crypto'
 import { describe, expect, it } from 'bun:test'
 import forge from 'node-forge'
 import {
+  ASC_PRESCAN_AUTH_ENFORCE_AFTER,
+  classifyAscAuthFinding,
   makeAscKeyAccess,
   makePlaySaAccess,
   playSaAccess,
@@ -299,18 +301,65 @@ describe('ios/asc-key-access', () => {
     expect(received!.bundleId).toBe('com.demo.app')
   })
 
-  it('auth-error -> error (reuses helper message)', async () => {
+  it('HTTP 401 -> deferred error with Apple reason and a 14-day deadline', async () => {
     const fakeAssert = async (): Promise<AscAccessResult> => ({
       ok: false,
       kind: 'auth-error',
-      message: 'API key verification failed. Please check the Key ID / Issuer ID / .p8.',
+      message: 'API key verification failed.',
+      status: 401,
+      code: 'NOT_AUTHORIZED',
+      title: 'Authentication credentials are missing or invalid.',
+      detail: 'Provide a properly configured bearer token.',
     })
     const check = makeAscKeyAccess(fakeAssert)
     const findings = await check.run(iosCtx())
     expect(findings.length).toBe(1)
     expect(findings[0]!.severity).toBe('error')
     expect(findings[0]!.id).toBe('ios/asc-key-access')
-    expect(findings[0]!.detail).toContain('verification failed')
+    expect(findings[0]!.title).toContain('HTTP 401')
+    expect(findings[0]!.detail).toContain('NOT_AUTHORIZED')
+    expect(findings[0]!.detail).toContain('properly configured bearer token')
+    expect(findings[0]!.enforceAfter).toBe(ASC_PRESCAN_AUTH_ENFORCE_AFTER)
+    expect(ASC_PRESCAN_AUTH_ENFORCE_AFTER).toBe('2026-08-17T00:00:00.000Z')
+  })
+
+  it('known agreement HTTP 403 -> deferred error with targeted guidance', async () => {
+    const fakeAssert = async (): Promise<AscAccessResult> => ({
+      ok: false,
+      kind: 'auth-error',
+      message: 'Apple requires an agreement.',
+      status: 403,
+      code: 'FORBIDDEN.REQUIRED_AGREEMENTS_MISSING_OR_EXPIRED',
+      title: 'A required agreement is missing.',
+      detail: 'The Account Holder must accept the agreement.',
+    })
+    const findings = await makeAscKeyAccess(fakeAssert).run(iosCtx())
+    expect(findings[0]).toMatchObject({
+      severity: 'error',
+      enforceAfter: ASC_PRESCAN_AUTH_ENFORCE_AFTER,
+    })
+    expect(findings[0]!.title).toContain('HTTP 403')
+    expect(findings[0]!.detail).toContain('REQUIRED_AGREEMENTS_MISSING_OR_EXPIRED')
+    expect(findings[0]!.fix).toContain('Account Holder')
+  })
+
+  it('unknown HTTP 403 -> warning with Apple reason because the probe differs from upload', async () => {
+    const fakeAssert = async (): Promise<AscAccessResult> => ({
+      ok: false,
+      kind: 'auth-error',
+      message: 'API key verification failed.',
+      status: 403,
+      code: 'FORBIDDEN.SOME_NEW_REASON',
+      title: 'This operation is forbidden.',
+      detail: 'The caller cannot list this resource.',
+    })
+    const findings = await makeAscKeyAccess(fakeAssert).run(iosCtx())
+    expect(findings[0]!.severity).toBe('warning')
+    expect(findings[0]!.title).toContain('HTTP 403')
+    expect(findings[0]!.detail).toContain('FORBIDDEN.SOME_NEW_REASON')
+    expect(findings[0]!.detail).toContain('cannot list this resource')
+    expect(findings[0]!.detail).toContain('differs from the TestFlight upload path')
+    expect(findings[0]!.enforceAfter).toBeUndefined()
   })
 
   it('no-app-access (2xx but bundle id absent) -> warning', async () => {
@@ -325,7 +374,7 @@ describe('ios/asc-key-access', () => {
     expect(findings[0]!.severity).toBe('warning')
   })
 
-  it('network -> info (offline degrades to non-blocking)', async () => {
+  it('network/timeout -> warning', async () => {
     const fakeAssert = async (): Promise<AscAccessResult> => ({
       ok: false,
       kind: 'network',
@@ -334,7 +383,41 @@ describe('ios/asc-key-access', () => {
     const check = makeAscKeyAccess(fakeAssert)
     const findings = await check.run(iosCtx())
     expect(findings.length).toBe(1)
-    expect(findings[0]!.severity).toBe('info')
+    expect(findings[0]!.severity).toBe('warning')
+  })
+
+  it('HTTP 5xx -> warning with the sanitized Apple reason', async () => {
+    const fakeAssert = async (): Promise<AscAccessResult> => ({
+      ok: false,
+      kind: 'network',
+      message: 'App Store Connect returned HTTP 503.',
+      status: 503,
+      code: 'SERVICE_UNAVAILABLE',
+      title: 'Service unavailable',
+      detail: 'Try again later.',
+    })
+    const findings = await makeAscKeyAccess(fakeAssert).run(iosCtx())
+    expect(findings[0]!.severity).toBe('warning')
+    expect(findings[0]!.title).toContain('HTTP 503')
+    expect(findings[0]!.detail).toContain('SERVICE_UNAVAILABLE')
+    expect(findings[0]!.detail).toContain('Try again later')
+  })
+
+  it('classifies a non-auth HTTP status independently without losing its status', () => {
+    const finding = classifyAscAuthFinding({
+      ok: false,
+      kind: 'auth-error',
+      message: 'Upstream mentioned HTTP 403 while returning HTTP 500.',
+      status: 500,
+      code: 'INTERNAL_ERROR',
+      title: 'Internal error',
+      detail: 'Retry later.',
+    })
+    expect(finding).toMatchObject({
+      severity: 'warning',
+      title: 'App Store Connect preflight returned HTTP 500',
+    })
+    expect(finding.detail).toContain('INTERNAL_ERROR')
   })
 
   it('skips cleanly (no finding) when APPLE_KEY_CONTENT does not decode to a PEM', async () => {

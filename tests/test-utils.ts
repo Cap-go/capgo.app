@@ -292,7 +292,18 @@ export async function createDirectApiKeyWithBindings(options: {
   expiresAt?: string | null
   hashed?: boolean
 }) {
-  const supabase = getSupabaseClient()
+  // Direct SQL avoids Kong/PostgREST upstream flakes under parallel CI shards.
+  // Inserts run as DB owner, so apikeys_force_server_key does not rewrite the key.
+  // Auth middleware only treats Authorization values as API keys when they are UUIDs,
+  // so plain keys must be UUIDs (PostgREST+authenticator used to force that).
+  const userId = options.userId ?? USER_ID
+  const roleName = options.roleName ?? 'org_admin'
+  const appRoleName = options.appRoleName ?? 'app_admin'
+  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+  // Always persist/auth with a UUID secret. middlewareAuth only treats
+  // Authorization values as API keys when isUUID(header) is true.
+  const plainKey = uuidRe.test(options.key) ? options.key : randomUUID()
+
   let apiKey: {
     id: number
     key: string | null
@@ -301,110 +312,108 @@ export async function createDirectApiKeyWithBindings(options: {
     expires_at: string | null
   } | null = null
 
-  if (options.hashed) {
-    const [insertedKey] = await executeSQL(
-      `INSERT INTO public.apikeys (user_id, key, key_hash, name, expires_at)
-       VALUES ($1, NULL, encode(extensions.digest($2, 'sha256'), 'hex'), $3, $4)
-       RETURNING id, key, rbac_id, user_id, expires_at`,
-      [options.userId ?? USER_ID, options.key, options.name, options.expiresAt ?? null],
-    )
-    apiKey = insertedKey
-      ? {
-          id: Number(insertedKey.id),
-          key: insertedKey.key,
-          rbac_id: insertedKey.rbac_id,
-          user_id: insertedKey.user_id,
-          expires_at: insertedKey.expires_at,
-        }
-      : null
-  }
-  else {
-    const { data, error: apiKeyError } = await supabase
-      .from('apikeys')
-      .insert({
-        user_id: options.userId ?? USER_ID,
-        key: options.key,
-        key_hash: null,
-        name: options.name,
-        expires_at: options.expiresAt ?? null,
-      })
-      .select('id, key, rbac_id, user_id, expires_at')
-      .single()
-
-    if (apiKeyError)
-      throw apiKeyError
-
-    apiKey = data
-  }
-
-  if (!apiKey)
-    throw new Error('Unable to create API key')
-
   try {
-    const bindingRows: Database['public']['Tables']['role_bindings']['Insert'][] = []
-    const { data: orgRole, error: orgRoleError } = await supabase
-      .from('roles')
-      .select('id')
-      .eq('name', options.roleName ?? 'org_admin')
-      .single()
-    if (orgRoleError || !orgRole)
-      throw orgRoleError ?? new Error('Unable to resolve org role')
-
-    bindingRows.push({
-      principal_type: 'apikey',
-      principal_id: apiKey.rbac_id,
-      role_id: orgRole.id,
-      scope_type: 'org',
-      org_id: options.orgId,
-      granted_by: apiKey.user_id,
-      reason: 'Test API key binding',
-      is_direct: true,
-    })
-
-    if (options.appId) {
-      const { data: app, error: appError } = await supabase
-        .from('apps')
-        .select('id, owner_org')
-        .eq('app_id', options.appId)
-        .single()
-      if (appError || !app?.id || !app.owner_org)
-        throw appError ?? new Error(`Unable to resolve app ${options.appId}`)
-      if (app.owner_org !== options.orgId)
-        throw new Error(`App ${options.appId} belongs to org ${app.owner_org}, expected ${options.orgId}`)
-
-      const { data: appRole, error: appRoleError } = await supabase
-        .from('roles')
-        .select('id')
-        .eq('name', options.appRoleName ?? 'app_admin')
-        .single()
-      if (appRoleError || !appRole)
-        throw appRoleError ?? new Error('Unable to resolve app role')
-
-      bindingRows.push({
-        principal_type: 'apikey',
-        principal_id: apiKey.rbac_id,
-        role_id: appRole.id,
-        scope_type: 'app',
-        org_id: options.orgId,
-        app_id: app.id,
-        granted_by: apiKey.user_id,
-        reason: 'Test API key app binding',
-        is_direct: true,
-      })
+    if (options.hashed) {
+      const [insertedKey] = await executeSQL(
+        `INSERT INTO public.apikeys (user_id, key, key_hash, name, expires_at)
+         VALUES ($1::uuid, NULL, encode(extensions.digest($2, 'sha256'), 'hex'), $3, $4)
+         RETURNING id, key, rbac_id, user_id, expires_at`,
+        [userId, plainKey, options.name, options.expiresAt ?? null],
+      )
+      apiKey = insertedKey
+        ? {
+            id: Number(insertedKey.id),
+            // Return plaintext secret for hashed keys (column key is null).
+            key: plainKey,
+            rbac_id: String(insertedKey.rbac_id),
+            user_id: String(insertedKey.user_id),
+            expires_at: insertedKey.expires_at,
+          }
+        : null
+    }
+    else {
+      const [insertedKey] = await executeSQL(
+        `INSERT INTO public.apikeys (user_id, key, key_hash, name, expires_at)
+         VALUES ($1::uuid, $2, NULL, $3, $4)
+         RETURNING id, key, rbac_id, user_id, expires_at`,
+        [userId, plainKey, options.name, options.expiresAt ?? null],
+      )
+      apiKey = insertedKey
+        ? {
+            id: Number(insertedKey.id),
+            key: insertedKey.key,
+            rbac_id: String(insertedKey.rbac_id),
+            user_id: String(insertedKey.user_id),
+            expires_at: insertedKey.expires_at,
+          }
+        : null
     }
 
-    const { error: bindingError } = await supabase
-      .from('role_bindings')
-      .insert(bindingRows)
-    if (bindingError)
-      throw bindingError
+    if (!apiKey)
+      throw new Error('Unable to create API key')
+
+    const [orgRole] = await executeSQL(
+      `SELECT id FROM public.roles
+       WHERE name = $1 AND scope_type = 'org'
+       LIMIT 1`,
+      [roleName],
+    )
+    if (!orgRole?.id)
+      throw new Error(`Unable to resolve org role ${roleName}`)
+
+    await executeSQL(
+      `INSERT INTO public.role_bindings (
+         principal_type, principal_id, role_id, scope_type, org_id,
+         granted_by, reason, is_direct
+       ) VALUES (
+         'apikey', $1::uuid, $2::uuid, 'org', $3::uuid, $4::uuid,
+         'Test API key binding', true
+       )`,
+      [apiKey.rbac_id, orgRole.id, options.orgId, apiKey.user_id],
+    )
+
+    if (options.appId) {
+      const [app] = await executeSQL(
+        'SELECT id, owner_org FROM public.apps WHERE app_id = $1 LIMIT 1',
+        [options.appId],
+      )
+      if (!app?.id || !app.owner_org)
+        throw new Error(`Unable to resolve app ${options.appId}`)
+      if (String(app.owner_org) !== options.orgId)
+        throw new Error(`App ${options.appId} belongs to org ${app.owner_org}, expected ${options.orgId}`)
+
+      const [appRole] = await executeSQL(
+        `SELECT id FROM public.roles
+         WHERE name = $1 AND scope_type = 'app'
+         LIMIT 1`,
+        [appRoleName],
+      )
+      if (!appRole?.id)
+        throw new Error(`Unable to resolve app role ${appRoleName}`)
+
+      await executeSQL(
+        `INSERT INTO public.role_bindings (
+           principal_type, principal_id, role_id, scope_type, org_id, app_id,
+           granted_by, reason, is_direct
+         ) VALUES (
+           'apikey', $1::uuid, $2::uuid, 'app', $3::uuid, $4::uuid,
+           $5::uuid, 'Test API key app binding', true
+         )`,
+        [apiKey.rbac_id, appRole.id, options.orgId, app.id, apiKey.user_id],
+      )
+    }
 
     return apiKey
   }
   catch (error) {
-    const { error: cleanupError } = await supabase.from('apikeys').delete().eq('id', apiKey.id)
-    if (cleanupError)
-      console.warn(`Failed to clean up API key ${apiKey.id} after binding setup error:`, cleanupError)
+    if (apiKey?.id) {
+      try {
+        await executeSQL('DELETE FROM public.apikeys WHERE id = $1', [apiKey.id])
+      }
+      catch (cleanupError) {
+        console.warn(`Failed to clean up API key ${apiKey.id} after binding setup error:`, cleanupError)
+      }
+    }
     throw error
   }
 }
@@ -565,20 +574,60 @@ export async function createAppVersions(
   appId: string,
   values: Partial<Database['public']['Tables']['app_versions']['Insert']> = {},
 ) {
-  const supabase = getSupabaseClient()
-  const { error, data } = await supabase.from('app_versions').upsert({
-    app_id: appId,
-    name: version,
-    owner_org: ORG_ID,
-    ...values,
-  }, {
-    onConflict: 'app_id,name',
-  }).select('id,name').single()
-  if (error)
-    console.error(`Error creating app_version for ${version}:`, error)
+  // Bypass PostgREST/Kong for seed writes. Under shard parallelism Kong returns
+  // "An invalid response was received from the upstream server" and Vitest sees
+  // intermittent "no data" failures (backend shard 5/6 + stats.download_fail).
+  // On conflict: DO NOTHING — never UPDATE ready bundles (trigger UPDATE OF
+  // storage_provider/r2_path/session_key raises bundle_already_ready).
+  const ownerOrg = values.owner_org ?? (await executeSQL(
+    'SELECT owner_org FROM public.apps WHERE app_id = $1 LIMIT 1',
+    [appId],
+  ))[0]?.owner_org ?? ORG_ID
+
+  const deleted = values.deleted ?? false
+  const externalUrl = values.external_url ?? null
+  const checksum = values.checksum ?? null
+  const sessionKey = values.session_key ?? null
+  const storageProvider = values.storage_provider ?? 'r2'
+  const minUpdateVersion = values.min_update_version ?? null
+  const r2Path = values.r2_path ?? null
+  const link = values.link ?? null
+  const comment = values.comment ?? null
+  const userId = values.user_id ?? null
+
+  const inserted = await executeSQL(
+    `INSERT INTO public.app_versions (
+       app_id, name, owner_org, deleted, external_url, checksum, session_key,
+       storage_provider, min_update_version, r2_path, link, comment, user_id
+     ) VALUES (
+       $1, $2, $3::uuid, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::uuid
+     )
+     ON CONFLICT (name, app_id) DO NOTHING
+     RETURNING id, name`,
+    [
+      appId,
+      version,
+      ownerOrg,
+      deleted,
+      externalUrl,
+      checksum,
+      sessionKey,
+      storageProvider,
+      minUpdateVersion,
+      r2Path,
+      link,
+      comment,
+      userId,
+    ],
+  )
+
+  const data = inserted[0] ?? (await executeSQL(
+    'SELECT id, name FROM public.app_versions WHERE app_id = $1 AND name = $2 LIMIT 1',
+    [appId, version],
+  ))[0]
   if (!data)
     throw new Error(`Error creating app_version for ${version}: no data`)
-  return data
+  return { id: Number(data.id), name: String(data.name) }
 }
 
 export function getBaseData(appId: string): Partial<ReturnType<typeof makeBaseData>> {
@@ -811,10 +860,10 @@ export async function getPostgresClient(): Promise<Pool> {
   return pool
 }
 
-export async function executeSQL(query: string, params?: any[]): Promise<any> {
+export async function executeSQL<T = any>(query: string, params?: any[]): Promise<T[]> {
   const client = await getPostgresClient()
   const result = await client.query(query, params || [])
-  return result.rows
+  return result.rows as T[]
 }
 
 export async function getCronPlanQueueCount(): Promise<number> {

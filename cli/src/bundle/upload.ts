@@ -1232,7 +1232,7 @@ export async function uploadBundleInternal(preAppid: string, options: OptionsUpl
   if (options.verbose)
     log.info(`[Verbose] Remote CLI messages checked`)
 
-  await checkPlanValidUpload(supabase, orgId, apikey, appid, true)
+  await checkPlanValidUpload(supabase, orgId, appid, true)
   if (options.verbose)
     log.info(`[Verbose] Plan validation passed`)
   if (options.verbose)

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { NativePackage } from '~/services/bundleCompatibility'
 import type { CompatibilityEventGroup, CompatibilityEventRow } from '~/services/compatibilityEvents'
 import type { Database } from '~/types/supabase.types'
 import { computed, onUnmounted, ref, watch, watchEffect } from 'vue'
@@ -10,6 +11,7 @@ import IconArrowRight from '~icons/lucide/arrow-right'
 import IconCheckCircle from '~icons/lucide/check-circle'
 import IconChevronRight from '~icons/lucide/chevron-right'
 import IconExternalLink from '~icons/lucide/external-link'
+import { comparePackages, hasPlatformChecksumMetadataDrift } from '~/services/bundleCompatibility'
 import { dependencyDiffPath, groupCompatibilityEvents, platformLabel } from '~/services/compatibilityEvents'
 import { formatLocalDateTime } from '~/services/date'
 import { checkPermissions } from '~/services/permissions'
@@ -35,6 +37,7 @@ const app = ref<Database['public']['Tables']['apps']['Row']>()
 const events = ref<CompatibilityEventRow[]>([])
 const existingChannelIds = ref<Set<number>>(new Set())
 const existingVersionIds = ref<Set<number>>(new Set())
+const versionNativePackages = ref<Map<number, NativePackage[]>>(new Map())
 // Channels whose disable_auto_update_under_native guard is OFF: a rollback can
 // reach devices already on a newer native build, so the confirm dialog warns.
 const guardOffChannelIds = ref<Set<number>>(new Set())
@@ -63,6 +66,27 @@ const visibleGroups = computed<CompatibilityEventGroup[]>(() => {
 // Whether the app currently has any live incompatibility, which is when the
 // "what this means / how to fix it" guidance + Capgo Builder CTA are relevant.
 const hasUnresolved = computed(() => groupedEvents.value.some(group => !group.resolved))
+
+// Only show the CLI checksum tip when an unresolved event's version pair actually
+// has one-sided iOS/Android checksum metadata (not for every native incompatibility).
+const showCliChecksumTip = computed(() => {
+  if (!hasUnresolved.value)
+    return false
+  for (const group of groupedEvents.value) {
+    if (group.resolved)
+      continue
+    const event = group.representative
+    if (event.current_version_id == null || event.previous_version_id == null)
+      continue
+    const current = versionNativePackages.value.get(event.current_version_id)
+    const previous = versionNativePackages.value.get(event.previous_version_id)
+    if (!current || !previous)
+      continue
+    if (hasPlatformChecksumMetadataDrift(comparePackages(current, previous)))
+      return true
+  }
+  return false
+})
 
 const config = getLocalConfig()
 // Docs that explain why native changes can't ship over-the-air.
@@ -321,20 +345,26 @@ async function loadExistingVersions() {
     .filter((versionId): versionId is number => versionId !== null))]
   if (versionIds.length === 0) {
     existingVersionIds.value = new Set()
+    versionNativePackages.value = new Map()
     return
   }
   const { data, error } = await supabase
     .from('app_versions')
-    .select('id')
+    .select('id, native_packages')
     .eq('app_id', id.value)
     .eq('deleted', false)
     .in('id', versionIds)
   if (error) {
     console.error('[Compatibility] Error checking bundles:', error)
     existingVersionIds.value = new Set()
+    versionNativePackages.value = new Map()
     return
   }
   existingVersionIds.value = new Set((data ?? []).map(version => version.id))
+  versionNativePackages.value = new Map((data ?? []).map(version => [
+    version.id,
+    (version.native_packages as unknown as NativePackage[] | null) ?? [],
+  ]))
 }
 
 function openBundle(versionId: number) {
@@ -569,6 +599,13 @@ watchEffect(async () => {
               <div v-show="guidanceOpen" class="px-5 pb-5 border-t border-slate-100 dark:border-slate-800">
                 <p class="pt-4 text-sm leading-relaxed text-slate-600 dark:text-slate-300">
                   {{ t('compat-fix-explanation') }}
+                </p>
+                <p
+                  v-if="showCliChecksumTip"
+                  data-test="compatibility-cli-checksum-tip"
+                  class="mt-3 text-sm leading-relaxed text-amber-800 dark:text-amber-200"
+                >
+                  {{ t('compat-fix-cli-checksum-tip') }}
                 </p>
 
                 <h3 class="mt-4 text-xs font-semibold tracking-wide uppercase text-slate-400 dark:text-slate-500">

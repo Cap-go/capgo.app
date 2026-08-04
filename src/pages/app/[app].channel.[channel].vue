@@ -234,6 +234,7 @@ async function getChannel(force = false) {
 async function saveChannelChanges(update: ChannelUpdate) {
   const changesStableVersion = Object.prototype.hasOwnProperty.call(update, 'version')
   const changesRolloutVersion = Object.prototype.hasOwnProperty.call(update, 'rollout_version')
+  // Unlinking rollout_version (including disable) requires promote_bundle — matches refresh_channel_rollout_id.
   const canUpdate = changesStableVersion || changesRolloutVersion
     ? canPromoteBundle.value
     : canUpdateChannelSettings.value
@@ -308,16 +309,13 @@ async function notificationFetch<T>(path: string, init: RequestInit = {}) {
   return await response.json() as T
 }
 
-async function queueChannelUpdateNotification() {
-  if (!channel.value)
-    return
-
+async function queueChannelUpdateNotification(appId: string, channelName: string) {
   const response = await notificationFetch<NotificationQueueResponse>('/update-check', {
     method: 'POST',
     body: JSON.stringify({
-      appId: packageId.value,
+      appId,
       target: { broadcast: true },
-      channel: channel.value.name,
+      channel: channelName,
     }),
   })
   if (!response.queued)
@@ -325,13 +323,46 @@ async function queueChannelUpdateNotification() {
   toast.success(t('notification-update-push-success'))
 }
 
+async function isPushUpdateReady(appId: string) {
+  try {
+    const query = encodeURIComponent(appId)
+    const [settings, providersResponse] = await Promise.all([
+      notificationFetch<{ pushUpdateEnabled: boolean }>(`/settings?app_id=${query}`),
+      notificationFetch<{ data: Array<{ status: string }> }>(`/providers?app_id=${query}`),
+    ])
+    if (!settings.pushUpdateEnabled)
+      return false
+    return (providersResponse.data || []).some(provider => provider.status === 'configured')
+  }
+  catch {
+    // No permission, network error, or notifications unavailable — skip prompt.
+    return false
+  }
+}
+
 async function askUpdateNotificationAfterBundleChange() {
   if (!channel.value)
     return
 
+  const routePath = route.path
+  const appId = packageId.value
+  const channelName = channel.value.name
+  if (!appId || !channelName)
+    return
+  if (!(await isPushUpdateReady(appId)))
+    return
+  if (
+    route.path !== routePath
+    || !route.path.includes('/channel/')
+    || packageId.value !== appId
+    || channel.value?.name !== channelName
+  ) {
+    return
+  }
+
   dialogStore.openDialog({
     title: t('notification-send-update-title'),
-    description: t('notification-send-update-description', { channel: channel.value.name }),
+    description: t('notification-send-update-description', { channel: channelName }),
     buttons: [
       {
         text: t('button-cancel'),
@@ -342,7 +373,7 @@ async function askUpdateNotificationAfterBundleChange() {
         role: 'primary',
         handler: async () => {
           try {
-            await queueChannelUpdateNotification()
+            await queueChannelUpdateNotification(appId, channelName)
           }
           catch (error) {
             console.error(error)
@@ -369,7 +400,7 @@ watchEffect(async () => {
 })
 
 function goToDefaultChannelSettings() {
-  router.push(`/app/${route.params.app}/info`)
+  router.push(`/app/${route.params.app}/settings`)
 }
 
 const currentChannelVersion = computed(() => {
@@ -420,8 +451,8 @@ async function handleVersionLink(appVersion: Database['public']['Tables']['app_v
     if (await dialogStore.onDialogDismiss())
       return
   }
-  else if (localDependencies.length === 0) {
-    toast.info('ignore-compatibility')
+  else if (localDependencies.length === 0 || finalCompatibility.length === 0) {
+    toast.info(t('ignore-compatibility'))
   }
   else {
     toast.info(t('bundle-compatible-with-channel', { channel: channel.value.name }))
@@ -557,6 +588,17 @@ async function enableRollout() {
     return
   }
   await saveChannelChange('rollout_enabled', true as any)
+}
+
+async function disableRollout() {
+  if (await saveChannelChanges({
+    rollout_enabled: false,
+    rollout_version: null,
+    rollout_paused_at: null,
+    rollout_pause_reason: null,
+  })) {
+    await askUpdateNotificationAfterBundleChange()
+  }
 }
 
 async function saveRolloutPercentage(value: string) {
@@ -1021,7 +1063,7 @@ async function copyCurlCommand() {
                       <button class="min-h-11 d-btn d-btn-ghost" :disabled="!canPromoteBundle" @click="openSelectRolloutVersion()">
                         {{ t('set-rollout-target') }}
                       </button>
-                      <button class="min-h-11 d-btn d-btn-outline" :disabled="rolloutActionsDisabled" @click="saveChannelChange('rollout_enabled', !channel.rollout_enabled as any)">
+                      <button class="min-h-11 d-btn d-btn-outline" :disabled="channel.rollout_enabled ? (rolloutTargetActionsDisabled || rolloutControlsDisabled) : rolloutEnableDisabled" @click="channel.rollout_enabled ? disableRollout() : enableRollout()">
                         {{ channel.rollout_enabled ? t('disable') : t('enable') }}
                       </button>
                       <button class="min-h-11 d-btn d-btn-outline" :disabled="rolloutPauseDisabled" @click="toggleRolloutPause()">

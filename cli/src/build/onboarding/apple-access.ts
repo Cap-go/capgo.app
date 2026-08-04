@@ -11,6 +11,7 @@
 // Authorization header, or any credential field value - only Apple's
 // human-readable error copy (or the shared verifyApiKey wording).
 import { appendInternalLog, safeHeaders } from '../../support/internal-log.js'
+import { redactSecrets } from '../../support/redact.js'
 import {
   AppleApiHttpError,
   classifyAscAuthError,
@@ -35,16 +36,39 @@ export interface AssertAscAccessOptions {
   fetchImpl?: typeof fetch
 }
 
+interface AscProviderFailure {
+  /** Apple HTTP status and sanitized structured error fields, when available. */
+  status?: number
+  code?: string
+  title?: string
+  detail?: string
+}
+
 export type AscAccessResult
   = | { ok: true }
-    | { ok: false, kind: 'no-app-access' | 'auth-error' | 'network', message: string }
+    | ({ ok: false, kind: 'no-app-access' | 'auth-error' | 'network', message: string }
+      & AscProviderFailure)
 
 const NETWORKY_RE = /timeout|timed out|network|fetch failed|aborted|ENOTFOUND|EAI_AGAIN|ECONNRESET|ECONNREFUSED/i
+const MAX_ERROR_FIELD_LENGTH = 500
+
+function safeErrorField(value: unknown, credentialValues: string[]): string | undefined {
+  if (typeof value !== 'string')
+    return undefined
+  let safe = redactSecrets(value)
+  for (const credential of credentialValues) {
+    if (credential)
+      safe = safe.replaceAll(credential, '[REDACTED IDENTIFIER]')
+  }
+  safe = safe.replace(/\p{Cc}+/gu, ' ').replace(/\s+/g, ' ').trim()
+  return safe ? safe.slice(0, MAX_ERROR_FIELD_LENGTH) : undefined
+}
 
 /**
  * Probe App Store Connect for app access. Never throws - every failure shape is
  * returned as `{ ok: false, kind }` so the prescan check can self-classify the
- * severity (auth-error -> error, no-app-access -> error, network -> info).
+ * severity from the HTTP status and sanitized Apple reason. Network failures
+ * remain distinguishable so prescan can surface them as warnings.
  */
 export async function assertAscAccess(opts: AssertAscAccessOptions): Promise<AscAccessResult> {
   const fetchImpl = opts.fetchImpl ?? globalThis.fetch.bind(globalThis)
@@ -93,10 +117,17 @@ export async function assertAscAccess(opts: AssertAscAccessOptions): Promise<Asc
         first?.code,
       )
       const cls = classifyAscAuthError(httpErr)
+      const credentialValues = [opts.keyId, opts.issuerId]
+      const providerFailure: AscProviderFailure = {
+        status: res.status,
+        code: safeErrorField(first?.code, credentialValues),
+        title: safeErrorField(first?.title, credentialValues),
+        detail: safeErrorField(first?.detail, credentialValues),
+      }
       if (cls.is401or403)
-        return { ok: false, kind: 'auth-error', message: cls.message }
-      // 5xx / 429 / other transport-ish HTTP: non-blocking info upstream.
-      return { ok: false, kind: 'network', message: `App Store Connect returned HTTP ${res.status}.` }
+        return { ok: false, kind: 'auth-error', message: cls.message, ...providerFailure }
+      // 5xx / 429 / other transport-ish HTTP: warning upstream.
+      return { ok: false, kind: 'network', message: `App Store Connect returned HTTP ${res.status}.`, ...providerFailure }
     }
 
     appendInternalLog(`apple-access GET ${path}: HTTP ${res.status} | ${safeHeaders(res.headers)}`)

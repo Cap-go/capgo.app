@@ -11,6 +11,8 @@ import { fetchLimit, isValidAppId } from '../../utils/utils.ts'
 interface GetDevice {
   app_id: string
   device_id?: string
+  /** Exact custom_id match (trimmed). Returns the paginated list shape. */
+  custom_id?: string | null
   customIdMode?: boolean
   /** Cursor for pagination - pass nextCursor from previous response */
   cursor?: string
@@ -88,6 +90,22 @@ function parseDevicesOrder(order: string | undefined) {
   if (order !== 'asc' && order !== 'desc')
     throw simpleError('invalid_order', 'order must be asc or desc', { order })
   return [{ key: 'updated_at', sortable: order as 'asc' | 'desc' }]
+}
+
+export function parseCustomIdFilter(customId: string | null | undefined): string | undefined {
+  // Only omit when the query/body field is absent. Explicit null must fail validation.
+  if (customId === undefined)
+    return undefined
+  if (typeof customId !== 'string')
+    throw simpleError('invalid_custom_id', 'custom_id must be a string', { custom_id: customId })
+
+  const trimmed = customId.trim()
+  if (!trimmed)
+    throw simpleError('invalid_custom_id', 'custom_id must not be empty', { custom_id: customId })
+  if (trimmed.length > 36)
+    throw simpleError('invalid_custom_id', 'custom_id must be at most 36 characters', { custom_id: customId })
+
+  return trimmed
 }
 
 export function filterDeviceKeys(devices: DeviceRes[]) {
@@ -170,6 +188,7 @@ export async function get(c: Context, body: GetDevice, apikey: Database['public'
     return c.json(dataDevice)
   }
   else {
+    const customIdFilter = parseCustomIdFilter(body.custom_id)
     const updatedAtGt = parseUpdatedAtFilter(body.updated_at)
     const order = parseDevicesOrder(body.order)
     const limit = body.limit == null ? fetchLimit : Number(body.limit)
@@ -179,6 +198,7 @@ export async function get(c: Context, body: GetDevice, apikey: Database['public'
 
     const res = await readDevices(c, {
       app_id: body.app_id,
+      customIds: customIdFilter ? [customIdFilter] : undefined,
       cursor: body.cursor,
       limit,
       updated_at_gt: updatedAtGt,

@@ -938,6 +938,7 @@ export async function createSupabaseClient(apikey: string, supaHost?: string, su
 }
 
 export async function isPayingOrg(supabase: SupabaseClient<Database>, orgId: string): Promise<boolean> {
+  // Keep calling the stable single-arg RPC — old CLIs depend on this signature.
   const { data } = await supabase
     .rpc('is_paying_org', { orgid: orgId })
     .single()
@@ -945,25 +946,63 @@ export async function isPayingOrg(supabase: SupabaseClient<Database>, orgId: str
 }
 
 export async function isTrialOrg(supabase: SupabaseClient<Database>, orgId: string): Promise<number> {
+  // Keep calling the stable single-arg RPC — old CLIs depend on this signature.
   const { data } = await supabase
     .rpc('is_trial_org', { orgid: orgId })
     .single()
   return data || 0
 }
 
-export async function isAllowedActionOrg(supabase: SupabaseClient<Database>, orgId: string): Promise<boolean> {
+export async function hasOrgUsageCredits(supabase: SupabaseClient<Database>, orgId: string, appId?: string): Promise<boolean> {
+  // New SECURITY DEFINER RPC — do not SELECT orgs.has_usage_credits directly; RLS
+  // can deny app-scoped API keys even when they may upload for that org.
   const { data } = await supabase
-    .rpc('is_allowed_action_org', { orgid: orgId })
+    .rpc('has_usage_credits_org', appId ? { orgid: orgId, appid: appId } : { orgid: orgId })
     .single()
-  return !!data
+  return data || false
 }
 
-export async function isAllowedActionAppIdApiKey(supabase: SupabaseClient<Database>, appId: string, apikey: string): Promise<boolean> {
-  const { data } = await supabase
-    .rpc('is_allowed_action', { apikey, appid: appId })
-    .single()
+/** Trial upgrade nag is for unpaid trial orgs only — skip when paying or using credits. */
+export function shouldWarnTrialExpiry(options: {
+  trialDays: number
+  isPaying: boolean
+  hasCredits: boolean
+  warning?: boolean
+}): boolean {
+  const { trialDays, isPaying, hasCredits, warning = true } = options
+  return !!warning && trialDays > 0 && !isPaying && !hasCredits
+}
 
-  return !!data
+export async function isAllowedActionOrg(supabase: SupabaseClient<Database>, orgId: string): Promise<boolean> {
+  const { data, error } = await supabase
+    .rpc('is_allowed_action_org', { orgid: orgId })
+    .single()
+  if (error)
+    throw new Error(`Cannot validate plan: ${formatError(error)}`)
+
+  return data === true
+}
+
+/** Validate metered plan actions while preserving app-scoped RBAC context when available. */
+export async function isAllowedPlanActions(
+  supabase: SupabaseClient<Database>,
+  orgId: string,
+  actions: Database['public']['Enums']['action_type'][],
+  appId?: string,
+): Promise<boolean> {
+  const { data, error } = appId
+    ? await supabase.rpc('is_allowed_action_org_action', { orgid: orgId, actions, appid: appId })
+    : await supabase.rpc('is_allowed_action_org_action', { orgid: orgId, actions })
+  if (error) {
+    // Older servers may not expose the app-aware overload in PostgREST's
+    // schema cache. Preserve their org-scoped behavior without hiding any
+    // permission, transport, or database errors from supported servers.
+    if (appId && error.code === 'PGRST202')
+      return isAllowedActionOrg(supabase, orgId)
+    throw new Error(`Cannot validate plan: ${formatError(error)}`)
+  }
+
+  return data === true
 }
 
 export async function checkRemoteCliMessages(supabase: SupabaseClient<Database>, orgId: string, cliVersion: string) {
@@ -997,11 +1036,12 @@ export async function checkRemoteCliMessages(supabase: SupabaseClient<Database>,
   }
 }
 
-export async function checkPlanValid(supabase: SupabaseClient<Database>, orgId: string, apikey: string, appId?: string, warning = true) {
+export async function checkPlanValid(supabase: SupabaseClient<Database>, orgId: string, appId?: string, warning = true) {
   const config = await getRemoteConfig()
 
-  // isAllowedActionAppIdApiKey was updated in the orgs_v3 migration to work with the new system
-  const validPlan = await (appId ? isAllowedActionAppIdApiKey(supabase, appId, apikey) : isAllowedActionOrg(supabase, orgId))
+  const validPlan = await (appId
+    ? isAllowedPlanActions(supabase, orgId, ['mau', 'storage', 'bandwidth', 'build_time'], appId)
+    : isAllowedActionOrg(supabase, orgId))
   if (!validPlan) {
     log.error(`You need to upgrade your plan to continue to use capgo.\n Upgrade here: ${config.hostWeb}/settings/organization/plans\n`)
     wait(100)
@@ -1012,31 +1052,19 @@ export async function checkPlanValid(supabase: SupabaseClient<Database>, orgId: 
     wait(500)
     throw new Error('Plan upgrade required')
   }
-  const [trialDays, ispaying] = await Promise.all([
+  const [trialDays, ispaying, hasCredits] = await Promise.all([
     isTrialOrg(supabase, orgId),
     isPayingOrg(supabase, orgId),
+    hasOrgUsageCredits(supabase, orgId, appId),
   ])
-  if (trialDays > 0 && warning && !ispaying)
+  if (shouldWarnTrialExpiry({ trialDays, isPaying: ispaying, hasCredits, warning }))
     log.warn(`WARNING !!\nTrial expires in ${trialDays} days, upgrade here: ${config.hostWeb}/settings/organization/plans\n`)
 }
 
-export async function checkPlanValidUpload(supabase: SupabaseClient<Database>, orgId: string, apikey: string, appId?: string, warning = true) {
+export async function checkPlanValidUpload(supabase: SupabaseClient<Database>, orgId: string, appId?: string, warning = true) {
   const config = await getRemoteConfig()
 
-  // Pass appid so RBAC evaluates the app scope. Without it,
-  // API keys with app-scoped bindings can be rejected and the org-scope
-  // plan check returns false even when the plan is healthy. PostgREST
-  // routes to the 3-arg overload at runtime; the `as never` cast bypasses
-  // a `supabase gen types` quirk that collapses overloads sharing the
-  // same name (the 3-arg signature exists in the DB but is not emitted
-  // by the generator).
-  const args = { orgid: orgId, actions: ['storage'], appid: appId } as never
-  const { data: validPlan, error: validPlanError } = await supabase.rpc('is_allowed_action_org_action', args)
-  if (validPlanError) {
-    const message = `Cannot validate upload plan: ${formatError(validPlanError)}`
-    log.error(message)
-    throw new Error(message)
-  }
+  const validPlan = await isAllowedPlanActions(supabase, orgId, ['storage'], appId)
   if (!validPlan) {
     log.error(`You need to upgrade your plan to continue to use capgo.\n Upgrade here: ${config.hostWeb}/settings/organization/plans\n`)
     wait(100)
@@ -1047,11 +1075,14 @@ export async function checkPlanValidUpload(supabase: SupabaseClient<Database>, o
     wait(500)
     throw new Error('Plan upgrade required for upload')
   }
-  const [trialDays, ispaying] = await Promise.all([
+  // Trial/paying stay on the legacy single-arg RPCs for old CLI compatibility.
+  // Credits use the new has_usage_credits_org (with optional appid).
+  const [trialDays, ispaying, hasCredits] = await Promise.all([
     isTrialOrg(supabase, orgId),
     isPayingOrg(supabase, orgId),
+    hasOrgUsageCredits(supabase, orgId, appId),
   ])
-  if (trialDays > 0 && warning && !ispaying)
+  if (shouldWarnTrialExpiry({ trialDays, isPaying: ispaying, hasCredits, warning }))
     log.warn(`WARNING !!\nTrial expires in ${trialDays} days, upgrade here: ${config.hostWeb}/settings/organization/plans\n`)
 }
 
@@ -2384,8 +2415,9 @@ export function getCompatibilityDetails(pkg: Compatibility): CompatibilityDetail
   }
 
   // Check checksum changes (even if versions match, native code could have changed)
-  const iosChanged = pkg.localIosChecksum && pkg.remoteIosChecksum && pkg.localIosChecksum !== pkg.remoteIosChecksum
-  const androidChanged = pkg.localAndroidChecksum && pkg.remoteAndroidChecksum && pkg.localAndroidChecksum !== pkg.remoteAndroidChecksum
+  const hasChecksum = (value: string | undefined) => typeof value === 'string' && value.trim().length > 0
+  const iosChanged = hasChecksum(pkg.localIosChecksum) && hasChecksum(pkg.remoteIosChecksum) && pkg.localIosChecksum !== pkg.remoteIosChecksum
+  const androidChanged = hasChecksum(pkg.localAndroidChecksum) && hasChecksum(pkg.remoteAndroidChecksum) && pkg.localAndroidChecksum !== pkg.remoteAndroidChecksum
 
   if (iosChanged && androidChanged) {
     reasons.push('both_platforms_changed')
@@ -2396,6 +2428,13 @@ export function getCompatibilityDetails(pkg: Compatibility): CompatibilityDetail
   else if (androidChanged) {
     reasons.push('android_code_changed')
   }
+
+  // One-sided platform checksums (CLI old↔new metadata). Still incompatible so a
+  // real same-version native bump is not silently passed; message warns of CLI drift.
+  const iosOneSided = hasChecksum(pkg.localIosChecksum) !== hasChecksum(pkg.remoteIosChecksum)
+  const androidOneSided = hasChecksum(pkg.localAndroidChecksum) !== hasChecksum(pkg.remoteAndroidChecksum)
+  if (iosOneSided || androidOneSided)
+    reasons.push('platform_checksum_metadata_changed')
 
   const messages: string[] = []
   const isIncompatibleReason = (reason: IncompatibilityReason) => reason !== 'requested_version_changed'
@@ -2415,6 +2454,9 @@ export function getCompatibilityDetails(pkg: Compatibility): CompatibilityDetail
         break
       case 'both_platforms_changed':
         messages.push('iOS and Android native code changed')
+        break
+      case 'platform_checksum_metadata_changed':
+        messages.push('iOS/Android checksum metadata appeared or disappeared (may be Capgo CLI change — verify native code)')
         break
       case 'new_plugin':
         messages.push('new plugin (requires app store update)')

@@ -2,11 +2,80 @@
 import { describe, expect, it } from 'bun:test'
 import forge from 'node-forge'
 import { MAX_CREDENTIAL_B64_CHARS } from '../../src/build/prescan/checks/blob-limit'
-import { ascKeyValid, openP12, p12Expiry, p12Opens } from '../../src/build/prescan/checks/ios-certs'
+import { ascKeyValid, openP12, p12Expiry, p12LegacyEncryption, p12Opens } from '../../src/build/prescan/checks/ios-certs'
 import { makeChainP12, makeCtx, makeP12 } from './helpers'
 
 function ctxWith(creds: Record<string, string>) {
   return makeCtx({ projectDir: '/tmp', platform: 'ios', credentials: creds })
+}
+
+function asn1Children(node: forge.asn1.Asn1): forge.asn1.Asn1[] {
+  return Array.isArray(node.value) ? node.value : []
+}
+
+function asn1Oid(node: forge.asn1.Asn1 | undefined): string | null {
+  if (!node || node.type !== forge.asn1.Type.OID || typeof node.value !== 'string')
+    return null
+  return forge.asn1.derToOid(node.value)
+}
+
+function mutateSafeBag(root: forge.asn1.Asn1, bagOid: string, mutate: (bag: forge.asn1.Asn1) => void): boolean {
+  const children = asn1Children(root)
+  if (asn1Oid(children[0]) === bagOid) {
+    mutate(root)
+    return true
+  }
+  for (const child of children) {
+    if (mutateSafeBag(child, bagOid, mutate))
+      return true
+  }
+  if (root.type === forge.asn1.Type.OCTETSTRING && typeof root.value === 'string') {
+    try {
+      const nested = forge.asn1.fromDer(root.value)
+      if (mutateSafeBag(nested, bagOid, mutate)) {
+        root.value = forge.asn1.toDer(nested).getBytes()
+        return true
+      }
+    }
+    catch {
+      // Encrypted and certificate OCTET STRING values are not nested ASN.1.
+    }
+  }
+  return false
+}
+
+function mutatePrivateKeyEncryption(
+  base64: string,
+  algorithmOid: string,
+  encryptionSchemeOid?: string,
+  unrelatedLegacyOidInCertBag = false,
+): string {
+  const pfx = forge.asn1.fromDer(forge.util.decode64(base64))
+  const foundKeyBag = mutateSafeBag(pfx, forge.pki.oids.pkcs8ShroudedKeyBag, (keyBag) => {
+    const encryptedPrivateKeyInfo = asn1Children(asn1Children(keyBag)[1]!)[0]!
+    const algorithmIdentifier = asn1Children(encryptedPrivateKeyInfo)[0]!
+    const algorithm = asn1Children(algorithmIdentifier)
+    algorithm[0]!.value = forge.asn1.oidToDer(algorithmOid).getBytes()
+    if (encryptionSchemeOid) {
+      const pbes2Params = asn1Children(algorithm[1]!)
+      const encryptionScheme = asn1Children(pbes2Params[1]!)
+      encryptionScheme[0]!.value = forge.asn1.oidToDer(encryptionSchemeOid).getBytes()
+    }
+  })
+  if (!foundKeyBag)
+    throw new Error('fixture has no shrouded private-key bag')
+  if (unrelatedLegacyOidInCertBag) {
+    const foundCertBag = mutateSafeBag(pfx, forge.pki.oids.certBag, (certBag) => {
+      const attributes = asn1Children(certBag)[2]!
+      asn1Children(attributes).push(forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.SEQUENCE, true, [
+        forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.OID, false, forge.asn1.oidToDer('1.2.840.113549.1.12.1.3').getBytes()),
+        forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.SET, true, []),
+      ]))
+    })
+    if (!foundCertBag)
+      throw new Error('fixture has no certificate bag')
+  }
+  return forge.util.encode64(forge.asn1.toDer(pfx).getBytes())
 }
 
 describe('ios/p12-opens', () => {
@@ -23,6 +92,62 @@ describe('ios/p12-opens', () => {
   it('errors on garbage base64', async () => {
     const f = await p12Opens.run(ctxWith({ BUILD_CERTIFICATE_BASE64: 'not-a-p12', P12_PASSWORD: '' }))
     expect(f[0]?.severity).toBe('error')
+  })
+})
+
+describe('ios/p12-legacy-encryption', () => {
+  it('passes legacy PBESv1 3DES with a SHA-1 MAC', async () => {
+    const p12 = makeP12()
+    expect(await p12LegacyEncryption.run(ctxWith({ BUILD_CERTIFICATE_BASE64: p12.base64, P12_PASSWORD: p12.password }))).toEqual([])
+  })
+
+  it('errors on PBES2 AES encryption even though the password is valid', async () => {
+    const p12 = makeP12({ algorithm: 'aes256' })
+    expect(await p12Opens.run(ctxWith({ BUILD_CERTIFICATE_BASE64: p12.base64, P12_PASSWORD: p12.password }))).toEqual([])
+
+    const findings = await p12LegacyEncryption.run(ctxWith({ BUILD_CERTIFICATE_BASE64: p12.base64, P12_PASSWORD: p12.password }))
+    expect(findings).toHaveLength(1)
+    expect(findings[0]?.severity).toBe('error')
+    expect(findings[0]?.title).toContain('macOS build runner')
+    expect(findings[0]?.detail).toContain('PBES2/AES')
+    expect(findings[0]?.fix).toContain('PBESv1 SHA-1/3DES')
+  })
+
+  it('identifies a non-AES PBES2 private-key scheme without calling it AES', async () => {
+    const p12 = makeP12({ algorithm: 'aes256' })
+    const base64 = mutatePrivateKeyEncryption(p12.base64, '1.2.840.113549.1.5.13', '1.2.840.113549.3.2')
+
+    const findings = await p12LegacyEncryption.run(ctxWith({ BUILD_CERTIFICATE_BASE64: base64, P12_PASSWORD: p12.password }))
+    expect(findings).toHaveLength(1)
+    expect(findings[0]?.detail).toContain('PBES2 private-key encryption')
+    expect(findings[0]?.detail).not.toContain('PBES2/AES')
+  })
+
+  it('does not let a legacy OID in a certificate bag hide incompatible private-key encryption', async () => {
+    const p12 = makeP12({ algorithm: '3des' })
+    const base64 = mutatePrivateKeyEncryption(p12.base64, '1.2.3.4', undefined, true)
+
+    const findings = await p12LegacyEncryption.run(ctxWith({ BUILD_CERTIFICATE_BASE64: base64, P12_PASSWORD: p12.password }))
+    expect(findings).toHaveLength(1)
+    expect(findings[0]?.detail).toContain('unsupported private-key encryption')
+  })
+
+  it('errors on a SHA-256 MAC even when private-key encryption is legacy 3DES', async () => {
+    const p12 = makeP12({ macAlgorithm: 'sha256' })
+    expect(await p12Opens.run(ctxWith({ BUILD_CERTIFICATE_BASE64: p12.base64, P12_PASSWORD: p12.password }))).toEqual([])
+
+    const findings = await p12LegacyEncryption.run(ctxWith({ BUILD_CERTIFICATE_BASE64: p12.base64, P12_PASSWORD: p12.password }))
+    expect(findings).toHaveLength(1)
+    expect(findings[0]?.detail).toContain('SHA-256 MAC')
+  })
+
+  it('defers malformed files to ios/p12-opens instead of duplicating its error', async () => {
+    expect(await p12LegacyEncryption.run(ctxWith({ BUILD_CERTIFICATE_BASE64: 'not-a-p12', P12_PASSWORD: '' }))).toEqual([])
+  })
+
+  it('does not suppress non-parsing failures', async () => {
+    const huge = 'A'.repeat(MAX_CREDENTIAL_B64_CHARS + 1)
+    await expect(p12LegacyEncryption.run(ctxWith({ BUILD_CERTIFICATE_BASE64: huge, P12_PASSWORD: '' }))).rejects.toThrow('limit 10 MB')
   })
 })
 

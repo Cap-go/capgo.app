@@ -79,7 +79,7 @@ DUMP_FILE="${DUMP_DIR}/${TABLE_NAME}.csv.gz"
 SCHEMA_FILE="${DUMP_DIR}/${TABLE_NAME}_schema.sql"
 
 echo "==> Exporting source data..."
-psql-17 "$SOURCE_DB_URL" -c "\\COPY public.${TABLE_NAME} TO STDOUT WITH (FORMAT csv, HEADER)" | gzip > "$DUMP_FILE"
+psql_no_timeout "$SOURCE_DB_URL" -v ON_ERROR_STOP=1 -c "\\COPY public.${TABLE_NAME} TO STDOUT WITH (FORMAT csv, HEADER)" | gzip > "$DUMP_FILE"
 ROW_COUNT=$(gunzip -c "$DUMP_FILE" | wc -l | tr -d ' ')
 ROW_COUNT=$((ROW_COUNT - 1))
 echo "    Exported ${ROW_COUNT} rows."
@@ -150,7 +150,7 @@ else
 fi
 
 echo "==> Importing source data into target..."
-gunzip -c "$DUMP_FILE" | psql-17 "$REPLICA_TARGET_DB_URL" -v ON_ERROR_STOP=1 -c "\\COPY public.${TABLE_NAME} FROM STDIN WITH (FORMAT csv, HEADER)"
+gunzip -c "$DUMP_FILE" | psql_no_timeout "$REPLICA_TARGET_DB_URL" -v ON_ERROR_STOP=1 -c "\\COPY public.${TABLE_NAME} FROM STDIN WITH (FORMAT csv, HEADER)"
 
 IMPORTED_COUNT=$(psql-17 "$REPLICA_TARGET_DB_URL" -t -A -c "SELECT COUNT(*) FROM public.${TABLE_NAME};")
 echo "    Imported ${IMPORTED_COUNT} rows."

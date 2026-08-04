@@ -18,6 +18,7 @@ import { formatBytes } from '~/services/conversion'
 import { formatDate } from '~/services/date'
 import { checkPermissions } from '~/services/permissions'
 import { useSupabase } from '~/services/supabase'
+import { refetchIfPageOutOfRange } from '~/services/tablePagination'
 import { useDialogV2Store } from '~/stores/dialogv2'
 
 const props = defineProps<{
@@ -247,10 +248,12 @@ async function getData() {
     const { data: dataVersions, count } = await req
     if (!dataVersions)
       return
+    total.value = count ?? 0
+    if (await refetchIfPageOutOfRange(currentPage, total.value, offset, getData))
+      return
     const enhancedVersions = await enhanceVersionElems(dataVersions)
     await fetchChannelsForVersions(enhancedVersions)
     elements.value = enhancedVersions as any
-    total.value = count ?? 0
   }
   catch (error) {
     console.error(error)
@@ -612,6 +615,7 @@ watch(props, async () => {
       <DataTable
         v-model:filters="filters" v-model:columns="columns" v-model:current-page="currentPage" v-model:search="search"
         :total="total"
+        :offset="offset"
         :show-add="!isMobile"
         :element-list="elements"
         filter-text="Filters"

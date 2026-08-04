@@ -77,7 +77,8 @@ describe('buildReadDevicesCFQuery', () => {
       limit: 1,
     }, true)
 
-    expect(query).toContain('blob5 != \'\'')
+    expect(query).toContain("custom_id != ''")
+    expect(query).not.toContain("blob5 != ''")
     expect(query).not.toContain('blob10')
   })
 
@@ -150,7 +151,39 @@ describe('buildReadDevicesCFQuery', () => {
     expect(outerFilterIndex).toBeGreaterThan(groupByIndex)
   })
 
+  it.concurrent('filters devices by latest aggregated platform and version after grouping', () => {
+    const query = buildReadDevicesCFQuery({
+      app_id: 'com.example.app',
+      platform: 'ios',
+      version_name: '1.2.3',
+      limit: 1,
+    }, false)
+
+    const groupByIndex = query.indexOf('GROUP BY blob1')
+    const outerWhereIndex = query.indexOf('WHERE platform = 1 AND version_name = \'1.2.3\'')
+    const altOuterWhereIndex = query.indexOf('WHERE version_name = \'1.2.3\' AND platform = 1')
+
+    expect(query).not.toContain(`blob2 = '1.2.3'`)
+    expect(Math.max(outerWhereIndex, altOuterWhereIndex)).toBeGreaterThan(groupByIndex)
+  })
+
+  it.concurrent('applies search against latest aggregated device fields after grouping', () => {
+    const query = buildReadDevicesCFQuery({
+      app_id: 'com.example.app',
+      platform: 'android',
+      search: 'abc',
+      limit: 1,
+    }, false)
+
+    const groupByIndex = query.indexOf('GROUP BY blob1')
+    const searchIndex = query.indexOf(`position('abc' IN toLower(device_id))`)
+
+    expect(query).not.toContain(`toLower(blob1)`)
+    expect(searchIndex).toBeGreaterThan(groupByIndex)
+    expect(query.indexOf('platform = 0')).toBeGreaterThan(groupByIndex)
+  })
 })
+
 describe('countDevicesCF', () => {
   it('does not read install source blob on default device counts', async () => {
     let query = ''
@@ -307,6 +340,21 @@ describe('readDevicesSB', () => {
     }, false)
 
     expect(query.in).toHaveBeenCalledWith('install_source', ['app_store', 'testflight'])
+  })
+
+  it('applies platform and version_name filters together', async () => {
+    const { client, query } = createReadDevicesQueryMock()
+    vi.mocked(createClient).mockReturnValue(client as unknown as ReturnType<typeof createClient>)
+
+    await readDevicesSB(createContextMock() as unknown as Context, {
+      app_id: 'com.example.app',
+      platform: 'android',
+      version_name: '2.0.0',
+      limit: 1,
+    }, false)
+
+    expect(query.eq).toHaveBeenCalledWith('platform', 'android')
+    expect(query.eq).toHaveBeenCalledWith('version_name', '2.0.0')
   })
 
   it('filters devices with updated_at greater than the provided timestamp', async () => {

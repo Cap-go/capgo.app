@@ -43,6 +43,23 @@ describe('renderTerminalReport', () => {
     expect(out).toContain('1 error')
     expect(out).toContain('1 warning')
   })
+
+  it('keeps a deferred error visibly critical while explaining the information-only window', () => {
+    const deferred: PrescanReport = {
+      ...report,
+      findings: [{
+        id: 'ios/new-check',
+        severity: 'error',
+        title: 'New critical check failed',
+        enforceAfter: '2026-08-14T00:00:00.000Z',
+      }],
+      counts: { error: 1, warning: 0, info: 0 },
+    }
+    const out = renderTerminalReport(deferred, { color: false, now: new Date('2026-08-01T00:00:00.000Z') })
+    expect(out).toContain('CRITICAL — INFORMATION ONLY')
+    expect(out).toContain('will fail builds starting 2026-08-14 00:00 UTC')
+    expect(out).toContain('1 error')
+  })
 })
 
 describe('renderJsonReport', () => {
@@ -55,5 +72,20 @@ describe('renderJsonReport', () => {
       detail: 'expired 2026-01-01', fix: 'Renew and re-save credentials',
     })
     expect(parsed.checksRun).toBe(20)
+  })
+
+  it('serializes the hard-coded enforcement date for rollout-aware consumers', () => {
+    const deferred: PrescanReport = {
+      ...report,
+      findings: [{
+        id: 'ios/new-check',
+        severity: 'error',
+        title: 'New critical check failed',
+        enforceAfter: '2026-08-14T00:00:00.000Z',
+      }],
+      counts: { error: 1, warning: 0, info: 0 },
+    }
+    const parsed = JSON.parse(renderJsonReport(deferred))
+    expect(parsed.findings[0].enforceAfter).toBe('2026-08-14T00:00:00.000Z')
   })
 })

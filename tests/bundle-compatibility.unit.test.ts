@@ -1,6 +1,6 @@
 import type { NativePackage } from '../src/services/bundleCompatibility'
 import { describe, expect, it } from 'vitest'
-import { comparePackages, summarizeCompatibility } from '../src/services/bundleCompatibility'
+import { comparePackages, hasPlatformChecksumMetadataDrift, summarizeCompatibility } from '../src/services/bundleCompatibility'
 
 function pkg(name: string, version: string, extra: Partial<NativePackage> = {}): NativePackage {
   return { name, version, ...extra }
@@ -111,12 +111,58 @@ describe('comparePackages', () => {
     expect(a.reasons).toEqual(['version_mismatch', 'ios_code_changed'])
   })
 
-  it.concurrent('ignores checksum when only one side has it', () => {
+  it.concurrent('flags one-sided checksum as incompatible metadata change (possible CLI false alarm)', () => {
     const result = comparePackages(
       [pkg('a', '1.0.0', { ios_checksum: 'i2' })],
       [pkg('a', '1.0.0')],
     )
-    expect(byName('a', result).compatible).toBe(true)
+    const a = byName('a', result)
+    expect(a.status).toBe('changed')
+    expect(a.compatible).toBe(false)
+    expect(a.platformChecksumMetadataChanged).toBe(true)
+    expect(a.reasons).toEqual(['platform_checksum_metadata_changed'])
+  })
+
+  it.concurrent('treats empty checksum strings as absent and still flags metadata change', () => {
+    const result = comparePackages(
+      [pkg('a', '1.0.0', { ios_checksum: 'real', android_checksum: 'd' })],
+      [pkg('a', '1.0.0', { ios_checksum: '', android_checksum: '   ' })],
+    )
+    const a = byName('a', result)
+    expect(a.compatible).toBe(false)
+    expect(a.reasons).toEqual(['platform_checksum_metadata_changed'])
+    expect(a.platformChecksumMetadataChanged).toBe(true)
+  })
+
+  it.concurrent('flags when both iOS and Android checksums newly appear', () => {
+    const result = comparePackages(
+      [pkg('a', '1.0.0', { ios_checksum: 'i', android_checksum: 'd' })],
+      [pkg('a', '1.0.0')],
+    )
+    const a = byName('a', result)
+    expect(a.compatible).toBe(false)
+    expect(a.platformChecksumMetadataChanged).toBe(true)
+    expect(a.reasons).toEqual(['platform_checksum_metadata_changed'])
+    expect(hasPlatformChecksumMetadataDrift(result)).toBe(true)
+  })
+
+  it.concurrent('keeps version mismatch when CLI checksum metadata also appears', () => {
+    const result = comparePackages(
+      [pkg('a', '2.0.0', { ios_checksum: 'i', android_checksum: 'd' })],
+      [pkg('a', '1.0.0')],
+    )
+    const a = byName('a', result)
+    expect(a.compatible).toBe(false)
+    expect(a.reasons).toEqual(['version_mismatch', 'platform_checksum_metadata_changed'])
+  })
+
+  it.concurrent('does not flag metadata drift when checksums match on both sides', () => {
+    const result = comparePackages(
+      [pkg('a', '1.0.0', { ios_checksum: 'i', android_checksum: 'd' })],
+      [pkg('a', '1.0.0', { ios_checksum: 'i', android_checksum: 'd' })],
+    )
+    expect(byName('a', result).platformChecksumMetadataChanged).toBe(false)
+    expect(hasPlatformChecksumMetadataDrift(result)).toBe(false)
   })
 
   it.concurrent('orders changes first, then added, removed, unchanged, then by name', () => {

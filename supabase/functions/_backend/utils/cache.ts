@@ -4,7 +4,30 @@ import { cloudlogErr, serializeError } from './logging.ts'
 
 const CACHE_METHOD = 'GET'
 
+/** Hot-path Cache API reads must not block /updates P999 when CF Cache stalls. */
+export const CACHE_MATCH_TIMEOUT_MS = 20
+/** Cache puts also run under waitUntil and inflate Workers Wall Time charts. */
+export const CACHE_PUT_TIMEOUT_MS = 20
+
 type CacheLike = Cache & { default?: Cache, open?: (cacheName: string) => Promise<Cache> }
+
+const TIMEOUT = Symbol('cache-timeout')
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | typeof TIMEOUT> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<typeof TIMEOUT>((resolve) => {
+        timer = setTimeout(() => resolve(TIMEOUT), timeoutMs)
+      }),
+    ])
+  }
+  finally {
+    if (timer !== undefined)
+      clearTimeout(timer)
+  }
+}
 
 async function resolveGlobalCache(): Promise<Cache | null> {
   if (typeof caches === 'undefined')
@@ -30,19 +53,13 @@ export type CacheKeyParams = Record<string, string>
 
 export class CacheHelper {
   private cache: Cache | null = null
-  private cachePromise: Promise<Cache | null>
+  private cachePromise: Promise<Cache | null> | null = null
 
-  constructor(private context: Context) {
-    this.cachePromise = resolveGlobalCache().then((cache) => {
-      this.cache = cache
-      return cache
-    })
-  }
+  constructor(private context: Context) {}
 
   private async ensureCache(): Promise<Cache | null> {
-    if (this.cache === null) {
-      await this.cachePromise
-    }
+    this.cachePromise ??= resolveGlobalCache()
+    this.cache = await this.cachePromise
     return this.cache
   }
 
@@ -60,11 +77,24 @@ export class CacheHelper {
     return new Request(url.toString(), { method: CACHE_METHOD })
   }
 
-  async matchJson<T>(key: Request): Promise<T | null> {
-    const cache = await this.ensureCache()
-    if (!cache)
+  /**
+   * Read JSON from Cache API. On timeout or error, fail open with null so hot
+   * paths (app status, manifest rows) continue via DB/cold logic instead of
+   * hanging the worker wall clock.
+   */
+  async matchJson<T>(key: Request, options?: { timeoutMs?: number }): Promise<T | null> {
+    const timeoutMs = options?.timeoutMs ?? CACHE_MATCH_TIMEOUT_MS
+    const result = await withTimeout(this.matchJsonUnbound<T>(key), timeoutMs)
+    if (result === TIMEOUT)
       return null
+    return result
+  }
+
+  private async matchJsonUnbound<T>(key: Request): Promise<T | null> {
     try {
+      const cache = await this.ensureCache()
+      if (!cache)
+        return null
       const cachedResponse = await cache.match(key)
       if (!cachedResponse)
         return null
@@ -76,16 +106,29 @@ export class CacheHelper {
     }
   }
 
-  async putJson(key: Request, payload: unknown, ttlSeconds: number) {
-    const cache = await this.ensureCache()
-    if (!cache)
+  /**
+   * Write JSON to Cache API.
+   * Pass `timeoutMs` for best-effort waitUntil caches (device/MAU). Omit it for
+   * rate-limit counters that must finish the write before treating it as recorded.
+   */
+  async putJson(key: Request, payload: unknown, ttlSeconds: number, options?: { timeoutMs?: number }) {
+    if (options?.timeoutMs == null)
+      return this.putJsonUnbound(key, payload, ttlSeconds)
+    const result = await withTimeout(this.putJsonUnbound(key, payload, ttlSeconds), options.timeoutMs)
+    if (result === TIMEOUT)
       return
-    const headers = new Headers({
-      'Content-Type': 'application/json',
-      'Cache-Control': this.buildCacheControl(ttlSeconds),
-    })
-    const response = new Response(JSON.stringify(payload), { headers })
+  }
+
+  private async putJsonUnbound(key: Request, payload: unknown, ttlSeconds: number) {
     try {
+      const cache = await this.ensureCache()
+      if (!cache)
+        return
+      const headers = new Headers({
+        'Content-Type': 'application/json',
+        'Cache-Control': this.buildCacheControl(ttlSeconds),
+      })
+      const response = new Response(JSON.stringify(payload), { headers })
       await cache.put(key, response.clone())
     }
     catch (error) {

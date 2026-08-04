@@ -17,6 +17,7 @@ import mfaIcon from '~icons/simple-icons/2fas?raw'
 import { hideLoader } from '~/services/loader'
 import { autoAuth, defaultApiHost, hashEmail, useSupabase } from '~/services/supabase'
 import { openSupport } from '~/services/support'
+import { isCapgoDomainReferrer } from '~/utils/capgoReferrer'
 
 const route = useRoute('/login')
 const supabase = useSupabase()
@@ -545,6 +546,53 @@ async function openScan() {
   router.push('/scan')
 }
 
+async function acceptQuerySession() {
+  isLoading.value = true
+  const res = await supabase.auth.setSession({
+    access_token: querySessionAccessToken.value,
+    refresh_token: querySessionRefreshToken.value,
+  })
+  if (res.error) {
+    if (res.error.name === 'AuthSessionMissingError')
+      console.warn('Cannot set auth', res.error)
+    else
+      console.error('Cannot set auth', res.error)
+    isLoading.value = false
+    return
+  }
+
+  hasQuerySession.value = false
+  querySessionAccessToken.value = ''
+  querySessionRefreshToken.value = ''
+  nextLogin()
+}
+
+async function handleQuerySessionHandoff(accessToken: string, refreshToken: string, parsedUrl: URL) {
+  parsedUrl.searchParams.delete('access_token')
+  parsedUrl.searchParams.delete('refresh_token')
+  globalThis.history.replaceState({}, '', parsedUrl.toString())
+
+  querySessionAccessToken.value = accessToken
+  querySessionRefreshToken.value = refreshToken
+
+  // Landing/register handoff from Capgo domains is expected; skip the
+  // confirm step that causes onboarding drop-off. Keep confirmation when
+  // the referrer is missing or external (shared/leaked session links).
+  if (isCapgoDomainReferrer(document.referrer)) {
+    await acceptQuerySession()
+    // setSession failed: tokens remain in memory — show confirm so user can retry
+    if (querySessionAccessToken.value) {
+      hasQuerySession.value = true
+      hideLoader()
+    }
+    return
+  }
+
+  hasQuerySession.value = true
+  isLoading.value = false
+  hideLoader()
+}
+
 async function checkLogin() {
   try {
     const parsedUrl = new URL(route.fullPath, globalThis.location.origin)
@@ -559,16 +607,8 @@ async function checkLogin() {
     const accessToken = params.get('access_token')
     const refreshToken = params.get('refresh_token')
 
-    if (!!accessToken && !!refreshToken) {
-      parsedUrl.searchParams.delete('access_token')
-      parsedUrl.searchParams.delete('refresh_token')
-      globalThis.history.replaceState({}, '', parsedUrl.toString())
-
-      querySessionAccessToken.value = accessToken
-      querySessionRefreshToken.value = refreshToken
-      hasQuerySession.value = true
-      isLoading.value = false
-      hideLoader()
+    if (accessToken && refreshToken) {
+      await handleQuerySessionHandoff(accessToken, refreshToken, parsedUrl)
       return
     }
 
@@ -606,27 +646,6 @@ async function checkLogin() {
   finally {
     isCheckingSavedSession.value = false
   }
-}
-
-async function acceptQuerySession() {
-  isLoading.value = true
-  const res = await supabase.auth.setSession({
-    access_token: querySessionAccessToken.value,
-    refresh_token: querySessionRefreshToken.value,
-  })
-  if (res.error) {
-    if (res.error.name === 'AuthSessionMissingError')
-      console.warn('Cannot set auth', res.error)
-    else
-      console.error('Cannot set auth', res.error)
-    isLoading.value = false
-    return
-  }
-
-  hasQuerySession.value = false
-  querySessionAccessToken.value = ''
-  querySessionRefreshToken.value = ''
-  nextLogin()
 }
 
 function declineQuerySession() {

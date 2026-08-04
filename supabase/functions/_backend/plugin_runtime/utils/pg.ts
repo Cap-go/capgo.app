@@ -254,11 +254,20 @@ async function getCachedReplicaLag(c: Context, pool: PluginPgClient): Promise<Re
  * Set replication lag headers on hot plugin responses using a 60-second cache.
  */
 export async function setReplicationLagHeader(c: Context, pool: PluginPgClient): Promise<void> {
-  const status = await getCachedReplicaLag(c, pool)
-  safeSetResponseHeader(c, 'X-Replication-Lag', status.status)
-  if (status.max_lag_seconds !== null) {
-    safeSetResponseHeader(c, 'X-Replication-Lag-Seconds', String(Math.round(status.max_lag_seconds)))
+  // Hot path: only use in-memory lag. Cold Cache API / DB probe runs in background
+  // so a miss cannot add another Hyperdrive RTT to /updates P999.
+  const cacheKey = getReplicationLagCacheKey(c)
+  const memoryEntry = getFreshReplicationLagMemoryEntry(cacheKey)
+  if (memoryEntry) {
+    safeSetResponseHeader(c, 'X-Replication-Lag', memoryEntry.status)
+    if (memoryEntry.max_lag_seconds !== null) {
+      safeSetResponseHeader(c, 'X-Replication-Lag-Seconds', String(Math.round(memoryEntry.max_lag_seconds)))
+    }
+    return
   }
+
+  safeSetResponseHeader(c, 'X-Replication-Lag', 'unknown')
+  backgroundTask(c, getCachedReplicaLag(c, pool))
 }
 
 /**
@@ -310,7 +319,6 @@ function getReadOnlyDatabaseURL(c: Context, dbRegion: string | undefined): strin
     return null
 
   setDatabaseSource(c, selectedRoute.binding)
-  cloudlog({ requestId: c.get('requestId'), message: `Using ${selectedRoute.binding} for read-only` })
   return c.env[selectedRoute.binding].connectionString
 }
 
@@ -323,7 +331,6 @@ function getLocalReadOnlyDatabaseURL(c: Context): string | null {
     return null
 
   setDatabaseSource(c, 'local_read_replica')
-  cloudlog({ requestId: c.get('requestId'), message: 'Using LOCAL_READ_REPLICA_SUPABASE_DB_URL for read-only' })
   return fixSupabaseHost(getEnv(c, 'LOCAL_READ_REPLICA_SUPABASE_DB_URL'))
 }
 
@@ -342,30 +349,25 @@ export function getDatabaseURL(c: Context, readOnly = false): string {
   }
 
   if (readOnly && shouldRequireReadReplica(c)) {
-    cloudlog({ requestId: c.get('requestId'), message: 'Read replica is required for this endpoint' })
     throw new Error('Read replica is required for this endpoint')
   }
 
   if (c.env.HYPERDRIVE_CAPGO_DIRECT_EU && !shouldSkipDirectHyperdriveFallback(c)) {
     setDatabaseSource(c, 'HYPERDRIVE_CAPGO_DIRECT_EU')
-    cloudlog({ requestId: c.get('requestId'), message: `Using HYPERDRIVE_CAPGO_DIRECT_EU for ${readOnly ? 'read-only' : 'read-write'}` })
     return c.env.HYPERDRIVE_CAPGO_DIRECT_EU.connectionString
   }
 
   if (c.env.HYPERDRIVE_CAPGO_DIRECT_EU) {
-    cloudlog({ requestId: c.get('requestId'), message: 'Skipping HYPERDRIVE_CAPGO_DIRECT_EU fallback for this endpoint' })
   }
 
   // Main DB write poller EU region in supabase
   if (existInEnv(c, 'MAIN_SUPABASE_DB_URL')) {
     setDatabaseSource(c, 'sb_pooler_main')
-    cloudlog({ requestId: c.get('requestId'), message: 'Using MAIN_SUPABASE_DB_URL for read-write' })
     return getEnv(c, 'MAIN_SUPABASE_DB_URL')
   }
 
   // Default Supabase direct connection used for testing or if no other option is available
   setDatabaseSource(c, 'direct')
-  cloudlog({ requestId: c.get('requestId'), message: 'Using Direct Supabase for read-write' })
   return fixSupabaseHost(getEnv(c, 'SUPABASE_DB_URL'))
 }
 
@@ -400,8 +402,6 @@ export async function getPgClient(c: Context, readOnly = false): Promise<PluginP
   const requestId = c.get('requestId')
   const appName = c.res.headers.get('X-Worker-Source') ?? 'unknown source'
   const dbName = String(c.get('databaseSource') ?? c.res.headers.get('X-Database-Source') ?? 'unknown source')
-  cloudlog({ requestId, message: 'SUPABASE_DB_URL selected', dbName, appName, readOnly })
-
   const isPooler = dbName.startsWith('sb_pooler')
   const readOnlyOptions = readOnly && !isPooler ? '-c default_transaction_read_only=on' : undefined
   const isWorkerd = getRuntimeKey() === 'workerd'
@@ -449,53 +449,322 @@ export function getDrizzleClient(db: PluginPgClient, options?: { logger?: boolea
   return drizzle({ client: db, logger: options?.logger ?? true })
 }
 
-// Helper to extract detailed error information from pg errors
-export function logPgError(c: Context, functionName: string, error: unknown) {
-  const e = error as Error & {
-    code?: string
-    errno?: number
-    syscall?: string
-    address?: string
-    port?: number
-    severity?: string
-    detail?: string
-    hint?: string
-    position?: string
-    routine?: string
-    file?: string
-    line?: string
-    column?: string
+const POSTGRES_ERROR_FIELDS = [
+  // PostgreSQL server errors (node-postgres DatabaseError)
+  'severity',
+  'code',
+  'detail',
+  'hint',
+  'position',
+  'internalPosition',
+  'internalQuery',
+  'where',
+  'schema',
+  'table',
+  'column',
+  'dataType',
+  'constraint',
+  'file',
+  'line',
+  'routine',
+
+  // Network, socket, and TLS errors
+  'errno',
+  'syscall',
+  'address',
+  'port',
+  'host',
+  'hostname',
+  'library',
+  'function',
+  'reason',
+  'opensslErrorStack',
+
+  // Driver/runtime errors
+  'status',
+  'statusCode',
+  'command',
+  'query',
+] as const
+
+const MAX_POSTGRES_ERROR_CAUSE_DEPTH = 8
+const MAX_POSTGRES_LOG_VALUE_DEPTH = 4
+const MAX_POSTGRES_LOG_ARRAY_ITEMS = 50
+const MAX_POSTGRES_LOG_OBJECT_KEYS = 50
+const POSTGRES_LOG_REDACTED_KEYS = new Set(['bindings', 'parameters', 'params', 'values'])
+const POSTGRES_LOG_UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+
+function redactPostgresLogText(value: string): string {
+  return value.replace(/(^|[\r\n])params:[^\r\n]*/gi, '$1params: [redacted]')
+}
+
+function describeThrownValue(value: unknown): string {
+  if (typeof value === 'string')
+    return redactPostgresLogText(value)
+  if (value === null || value === undefined || typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint' || typeof value === 'symbol')
+    return String(value)
+  return 'object thrown'
+}
+
+function readErrorProperty(error: object, key: PropertyKey): unknown {
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(error, key)
+    if (!descriptor)
+      return undefined
+    if ('value' in descriptor)
+      return descriptor.value
+    return '[accessor property omitted]'
+  }
+  catch (propertyError) {
+    return `[unreadable property: ${describeThrownValue(propertyError)}]`
+  }
+}
+
+function getObjectType(value: object): string {
+  if (Array.isArray(value))
+    return 'Array'
+  if (value instanceof AggregateError)
+    return 'AggregateError'
+  if (value instanceof Error)
+    return 'Error'
+  if (typeof value === 'function')
+    return 'Function'
+  return 'Object'
+}
+
+function getLogArrayLength(value: unknown[]): number {
+  const length = readErrorProperty(value, 'length')
+  return typeof length === 'number' && Number.isSafeInteger(length) && length > 0
+    ? length
+    : 0
+}
+
+function serializePostgresLogArray(
+  value: unknown[],
+  seen: WeakSet<object>,
+  depth: number,
+): unknown[] {
+  const totalLength = getLogArrayLength(value)
+  const boundedLength = Math.min(totalLength, MAX_POSTGRES_LOG_ARRAY_ITEMS)
+  const serialized: unknown[] = []
+  for (let index = 0; index < boundedLength; index++)
+    serialized.push(serializePostgresLogValue(readErrorProperty(value, index), seen, depth + 1))
+
+  if (totalLength > boundedLength)
+    serialized.push(`[truncated ${totalLength - boundedLength} items]`)
+  return serialized
+}
+
+function serializePostgresLogObject(
+  value: object,
+  seen: WeakSet<object>,
+  depth: number,
+): unknown {
+  let keys: string[]
+  try {
+    keys = Object.keys(value)
+  }
+  catch (keyError) {
+    return `[unreadable object: ${describeThrownValue(keyError)}]`
   }
 
+  // A null-prototype record plus explicit unsafe-key filtering prevents
+  // attacker-controlled diagnostic keys from invoking `__proto__` setters
+  // here or in less defensive downstream log processors.
+  const serialized: Record<string, unknown> = Object.create(null)
+  const blockedKeys: string[] = []
+  for (const key of keys.slice(0, MAX_POSTGRES_LOG_OBJECT_KEYS)) {
+    if (POSTGRES_LOG_UNSAFE_KEYS.has(key.toLowerCase())) {
+      blockedKeys.push(key)
+      continue
+    }
+    // Structured query objects can carry bound values under these keys.
+    // Keep the query text and shape, but never copy parameter values to logs.
+    serialized[key] = POSTGRES_LOG_REDACTED_KEYS.has(key.toLowerCase())
+      ? '[redacted]'
+      : serializePostgresLogValue(readErrorProperty(value, key), seen, depth + 1)
+  }
+
+  if (keys.length > MAX_POSTGRES_LOG_OBJECT_KEYS)
+    serialized.__truncatedKeys = keys.length - MAX_POSTGRES_LOG_OBJECT_KEYS
+  if (blockedKeys.length)
+    serialized.__blockedKeys = blockedKeys
+
+  return serialized
+}
+
+function serializePostgresLogValue(
+  value: unknown,
+  seen = new WeakSet<object>(),
+  depth = 0,
+): unknown {
+  if (typeof value === 'string')
+    return redactPostgresLogText(value)
+  if (typeof value === 'bigint')
+    return value.toString()
+  if (typeof value === 'symbol')
+    return value.toString()
+  if (typeof value === 'function') {
+    const functionName = readErrorProperty(value, 'name')
+    return `[function ${typeof functionName === 'string' && functionName ? functionName : 'anonymous'}]`
+  }
+  if (value === null || typeof value !== 'object')
+    return value
+
+  if (seen.has(value))
+    return '[circular]'
+  if (depth >= MAX_POSTGRES_LOG_VALUE_DEPTH)
+    return `[truncated ${getObjectType(value)}]`
+
+  seen.add(value)
+  try {
+    return Array.isArray(value)
+      ? serializePostgresLogArray(value, seen, depth)
+      : serializePostgresLogObject(value, seen, depth)
+  }
+  catch (serializationError) {
+    return `[unserializable ${getObjectType(value)}: ${describeThrownValue(serializationError)}]`
+  }
+  finally {
+    seen.delete(value)
+  }
+}
+
+function serializePostgresAggregateErrors(
+  aggregateErrors: unknown[],
+  seen: WeakSet<object>,
+  depth: number,
+): Record<string, unknown>[] {
+  const totalLength = getLogArrayLength(aggregateErrors)
+  const boundedLength = Math.min(totalLength, MAX_POSTGRES_LOG_ARRAY_ITEMS)
+  const errors: Record<string, unknown>[] = []
+  for (let index = 0; index < boundedLength; index++) {
+    errors.push(serializePostgresError(
+      readErrorProperty(aggregateErrors, index),
+      seen,
+      depth + 1,
+    ))
+  }
+  if (totalLength > boundedLength) {
+    errors.push({
+      type: 'truncated',
+      omitted: totalLength - boundedLength,
+    })
+  }
+  return errors
+}
+
+/**
+ * Serialize the complete Drizzle/node-postgres cause chain for Cloudflare logs.
+ *
+ * Error fields such as `code`, `severity`, and `routine` are not reliably
+ * enumerable, while Drizzle wraps the original driver error in `cause`. Read
+ * both explicitly so transient replica/Hyperdrive failures retain their
+ * PostgreSQL SQLSTATE and network diagnostics.
+ */
+export function serializePostgresError(
+  error: unknown,
+  seen = new WeakSet<object>(),
+  depth = 0,
+): Record<string, unknown> {
+  if (error === null || (typeof error !== 'object' && typeof error !== 'function')) {
+    return {
+      type: error === null ? 'null' : typeof error,
+      value: serializePostgresLogValue(error),
+    }
+  }
+
+  if (seen.has(error))
+    return { type: getObjectType(error), circular: true }
+
+  if (depth >= MAX_POSTGRES_ERROR_CAUSE_DEPTH)
+    return { type: getObjectType(error), truncated: true }
+
+  seen.add(error)
+  const serialized: Record<string, unknown> = {
+    type: getObjectType(error),
+  }
+  try {
+    const name = readErrorProperty(error, 'name')
+    const message = readErrorProperty(error, 'message')
+    const stack = readErrorProperty(error, 'stack')
+
+    serialized.name = name === undefined
+      ? getObjectType(error)
+      : serializePostgresLogValue(name)
+    if (message !== undefined)
+      serialized.message = serializePostgresLogValue(message)
+    if (stack !== undefined)
+      serialized.stack = serializePostgresLogValue(stack)
+
+    for (const field of POSTGRES_ERROR_FIELDS) {
+      const value = readErrorProperty(error, field)
+      if (value !== undefined)
+        serialized[field] = serializePostgresLogValue(value)
+    }
+
+    const params = readErrorProperty(error, 'params')
+    if (Array.isArray(params)) {
+      // Query parameters can contain credentials or other user-provided secrets.
+      // The affected app is logged explicitly by the caller instead.
+      serialized.parameterCount = params.length
+    }
+
+    const aggregateErrors = readErrorProperty(error, 'errors')
+    if (Array.isArray(aggregateErrors))
+      serialized.errors = serializePostgresAggregateErrors(aggregateErrors, seen, depth)
+
+    const cause = readErrorProperty(error, 'cause')
+    if (cause !== undefined)
+      serialized.cause = serializePostgresError(cause, seen, depth + 1)
+
+    return serialized
+  }
+  catch (serializationError) {
+    serialized.serializationFailure = describeThrownValue(serializationError)
+    return serialized
+  }
+  finally {
+    seen.delete(error)
+  }
+}
+
+export function logPgError(
+  c: Context,
+  functionName: string,
+  error: unknown,
+  diagnostics: Record<string, unknown> = {},
+) {
+  const cf = c.req.raw.cf
+  const serializedDiagnostics = serializePostgresLogValue(diagnostics)
+  const callerDiagnostics = serializedDiagnostics !== null
+    && typeof serializedDiagnostics === 'object'
+    && !Array.isArray(serializedDiagnostics)
+    ? serializedDiagnostics as Record<string, unknown>
+    : { context: serializedDiagnostics }
+
+  // This deliberately verbose payload is temporary while investigating the
+  // intermittent getAppOwnerPostgres replica/Hyperdrive failure.
   cloudlogErr({
     requestId: c.get('requestId'),
     message: `${functionName} - PostgreSQL Error`,
-    error: {
-      // Basic error info
-      message: e.message,
-      name: e.name,
-      stack: e.stack,
-
-      // PostgreSQL-specific error codes
-      code: e.code, // e.g., '57P01' for connection termination, 'ECONNREFUSED', 'ETIMEDOUT'
-      severity: e.severity,
-      detail: e.detail,
-      hint: e.hint,
-
-      // Network-level errors
-      errno: e.errno, // System error number
-      syscall: e.syscall, // System call that failed (e.g., 'connect', 'read', 'write')
-      address: e.address, // IP address
-      port: e.port, // Port number
-
-      // Query position info
-      position: e.position,
-      routine: e.routine,
-
-      // File info for debugging
-      file: e.file,
-      line: e.line,
-      column: e.column,
+    error: serializePostgresError(error),
+    diagnostics: {
+      ...callerDiagnostics,
+      version: 1,
+      functionName,
+      databaseSource: c.get('databaseSource') ?? c.res.headers.get('X-Database-Source') ?? 'unknown',
+      workerSource: c.res.headers.get('X-Worker-Source') ?? 'unknown',
+      runtime: getRuntimeKey(),
+      request: {
+        method: c.req.method,
+        path: c.req.path,
+        rayId: c.req.header('cf-ray') ?? c.get('requestId'),
+        userAgent: c.req.header('user-agent'),
+        colo: cf?.colo,
+        continent: cf?.continent,
+        country: cf?.country,
+      },
     },
   })
 }
@@ -641,7 +910,6 @@ export function requestInfosChannelDevicePostgres(
     ))
     .groupBy(channelDevicesAlias.device_id, channelDevicesAlias.app_id, channelAlias.id, versionAlias.id)
     .limit(1)
-  cloudlog({ requestId: c.get('requestId'), message: 'channelDevice Query:', channelDeviceQuery: channelDevice.toSQL() })
 
   return channelDevice.then(data => data.at(0))
 }
@@ -676,7 +944,6 @@ export async function getEffectiveDeviceChannelNamePostgres(
       ))
       .limit(1)
 
-    cloudlog({ requestId: c.get('requestId'), message: 'stats channel self override Query:', channelQuery: channelQuery.toSQL() })
     const channel = await channelQuery.then(data => data.at(0))
     return channel?.name ? channel : null
   }
@@ -698,7 +965,6 @@ export async function getEffectiveDeviceChannelNamePostgres(
       .where(and(eq(channelDevicesAlias.device_id, device_id), eq(channelDevicesAlias.app_id, app_id)))
       .limit(1)
 
-    cloudlog({ requestId: c.get('requestId'), message: 'stats channel override Query:', channelQuery: channelQuery.toSQL() })
     const channel = await channelQuery.then(data => data.at(0))
     if (channel?.name)
       return channel
@@ -727,7 +993,6 @@ export async function getEffectiveDeviceChannelNamePostgres(
       .orderBy(channelAlias.name, channelAlias.id)
       .limit(1)
 
-    cloudlog({ requestId: c.get('requestId'), message: 'stats channel Query:', channelQuery: channelQuery.toSQL(), fallbackChannelName: channelName })
     const channel = await channelQuery.then(data => data.at(0))
     return channel?.name ? channel : null
   }
@@ -770,7 +1035,6 @@ export function requestInfosChannelByIdPostgres(
     ))
     .groupBy(channelAlias.id, versionAlias.id)
     .limit(1)
-  cloudlog({ requestId: c.get('requestId'), message: 'channel self override Query:', channelSelfOverrideQuery: channel.toSQL() })
 
   return channel.then(data => data.at(0))
 }
@@ -825,18 +1089,29 @@ export function requestInfosChannelPostgres(
     .groupBy(channelAlias.id, versionAlias.id)
     .orderBy(channelAlias.name, channelAlias.id)
     .limit(1)
-  cloudlog({ requestId: c.get('requestId'), message: 'channel Query:', channelQuery: channelQuery.toSQL() })
   const channel = channelQuery.then(data => data.at(0))
 
   return channel
 }
 
-export function requestManifestEntriesPostgres(
+const MANIFEST_ROWS_CACHE_PATH = '/.manifest-rows-v1'
+const MANIFEST_ROWS_CACHE_TTL_SECONDS = 60
+
+type ManifestRow = { file_name: string, file_hash: string, s3_path: string }
+
+export async function requestManifestEntriesPostgres(
   c: Context,
   versionId: number,
   drizzleClient: ReturnType<typeof getDrizzleClient>,
-) {
-  const manifestQuery = drizzleClient
+): Promise<ManifestRow[]> {
+  // Cache raw rows by version id (not final download URLs — those embed device_id).
+  const helper = new CacheHelper(c)
+  const cacheKey = helper.buildRequest(MANIFEST_ROWS_CACHE_PATH, { version_id: String(versionId) })
+  const cached = await helper.matchJson<ManifestRow[]>(cacheKey)
+  if (cached)
+    return cached
+
+  const rows = await drizzleClient
     .select({
       file_name: schema.manifest.file_name,
       file_hash: schema.manifest.file_hash,
@@ -845,10 +1120,9 @@ export function requestManifestEntriesPostgres(
     .from(schema.manifest)
     .where(eq(schema.manifest.app_version_id, versionId))
 
-  cloudlog({ requestId: c.get('requestId'), message: 'rollout manifest Query:', manifestQuery: manifestQuery.toSQL() })
-  // Drizzle builders are thenables and re-execute SQL on every await/catch.
-  // Return one Promise so overlap-start + later await share a single query.
-  return manifestQuery.execute()
+  // Fire-and-forget put; Cache API size limits may reject huge manifests.
+  void helper.putJson(cacheKey, rows, MANIFEST_ROWS_CACHE_TTL_SECONDS)
+  return rows
 }
 
 export function requestInfosChannelByIdPostgresRollout(
@@ -875,7 +1149,6 @@ export function requestInfosChannelByIdPostgresRollout(
     ))
     .limit(1)
 
-  cloudlog({ requestId: c.get('requestId'), message: 'channel self override rollout Query:', channelSelfOverrideQuery: channel.toSQL() })
   return channel.then(data => data.at(0))
 }
 
@@ -904,7 +1177,6 @@ export function requestInfosChannelDevicePostgresRollout(
     ))
     .limit(1)
 
-  cloudlog({ requestId: c.get('requestId'), message: 'channelDevice rollout Query:', channelDeviceQuery: channelDevice.toSQL() })
   return channelDevice.then(data => data.at(0))
 }
 
@@ -951,7 +1223,6 @@ export function requestInfosChannelPostgresRollout(
     .orderBy(channelAlias.name, channelAlias.id)
     .limit(1)
 
-  cloudlog({ requestId: c.get('requestId'), message: 'channel rollout Query:', channelQuery: channelQuery.toSQL() })
   return channelQuery.then(data => data.at(0))
 }
 
@@ -1048,26 +1319,53 @@ export function requestInfosPostgres(options: RequestInfosPostgresOptions) {
   const shouldUseRolloutPath = (rolloutChannelCount ?? 0) > 0 || isPausedRolloutVersion
 
   if (!shouldUseRolloutPath) {
-    let channelDevice: ReturnType<typeof requestInfosChannelByIdPostgres> | ReturnType<typeof requestInfosChannelDevicePostgres> | Promise<null>
+    const runPair = async (
+      deviceClient: typeof drizzleClient,
+      channelClient: typeof drizzleClient,
+    ) => {
+      let channelDevice: ReturnType<typeof requestInfosChannelByIdPostgres> | ReturnType<typeof requestInfosChannelDevicePostgres> | Promise<null>
 
-    if (typeof channelSelfOverrideChannelId === 'number') {
-      channelDevice = requestInfosChannelByIdPostgres(c, app_id, channelSelfOverrideChannelId, drizzleClient, shouldFetchManifest, includeMetadata)
+      if (typeof channelSelfOverrideChannelId === 'number') {
+        channelDevice = requestInfosChannelByIdPostgres(c, app_id, channelSelfOverrideChannelId, deviceClient, shouldFetchManifest, includeMetadata)
+      }
+      else if (shouldQueryChannelOverride) {
+        channelDevice = requestInfosChannelDevicePostgres(c, app_id, device_id, deviceClient, shouldFetchManifest, includeMetadata)
+      }
+      else {
+        channelDevice = Promise.resolve(null)
+      }
+      const channel = requestInfosChannelPostgres(c, platform, app_id, defaultChannel, channelClient, shouldFetchManifest, includeMetadata)
+      const [channelOverride, channelData] = await Promise.all([channelDevice, channel])
+      return { channelData, channelOverride }
     }
-    else if (shouldQueryChannelOverride) {
-      channelDevice = requestInfosChannelDevicePostgres(c, app_id, device_id, drizzleClient, shouldFetchManifest, includeMetadata)
-    }
-    else {
-      cloudlog({ requestId: c.get('requestId'), message: 'Skipping channel device override query' })
-      channelDevice = Promise.resolve(null)
-    }
-    const channel = requestInfosChannelPostgres(c, platform, app_id, defaultChannel, drizzleClient, shouldFetchManifest, includeMetadata)
 
-    return Promise.all([channelDevice, channel])
-      .then(([channelOverride, channelData]) => ({ channelData, channelOverride }))
-      .catch((e) => {
+    return (async () => {
+      try {
+        // Single pg.Client serializes queries; use a second Hyperdrive client when
+        // both override + default channel are needed so the two RTTs overlap.
+        const needsParallelClients = shouldQueryChannelOverride || typeof channelSelfOverrideChannelId === 'number'
+        if (needsParallelClients && getRuntimeKey() === 'workerd') {
+          try {
+            const parallelClient = await getPgClient(c, true)
+            try {
+              const drizzleParallel = getDrizzleClient(parallelClient, { logger: false })
+              return await runPair(drizzleClient, drizzleParallel)
+            }
+            finally {
+              await closeClient(c, parallelClient)
+            }
+          }
+          catch {
+            // Latency opt only — fall back to serial queries on the primary client.
+          }
+        }
+        return await runPair(drizzleClient, drizzleClient)
+      }
+      catch (e) {
         logPgError(c, 'requestInfosPostgres', e)
         throw e
-      })
+      }
+    })()
   }
 
   let channelDevice: ReturnType<typeof requestInfosChannelByIdPostgresRollout> | ReturnType<typeof requestInfosChannelDevicePostgresRollout> | Promise<null>
@@ -1078,7 +1376,6 @@ export function requestInfosPostgres(options: RequestInfosPostgresOptions) {
     channelDevice = requestInfosChannelDevicePostgresRollout(c, app_id, device_id, drizzleClient, includeMetadata)
   }
   else {
-    cloudlog({ requestId: c.get('requestId'), message: 'Skipping channel device override rollout query' })
     channelDevice = Promise.resolve(null)
   }
   const channel = requestInfosChannelPostgresRollout(c, platform, app_id, defaultChannel, drizzleClient, includeMetadata)
@@ -1168,7 +1465,10 @@ export async function getAppOwnerPostgres(
     return appOwner as AppOwnerPostgresResult
   }
   catch (e: unknown) {
-    logPgError(c, 'getAppOwnerPostgres', e)
+    logPgError(c, 'getAppOwnerPostgres', e, {
+      appId,
+      planActions: actions,
+    })
     return null
   }
 }

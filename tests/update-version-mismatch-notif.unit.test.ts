@@ -35,7 +35,9 @@ vi.mock('../supabase/functions/_backend/plugin_runtime/utils/pg.ts', () => ({
   closeClient: vi.fn(() => Promise.resolve()),
   getAppOwnerPostgres: getAppOwnerPostgresMock,
   getDrizzleClient: vi.fn(() => ({})),
-  getPgClient: vi.fn(() => ({ client: 'pg' })),
+  getPgClient: vi.fn(() => Promise.resolve({ client: 'pg' })),
+  requestInfosChannelDevicePostgres: vi.fn(() => Promise.resolve(null)),
+  requestInfosChannelPostgres: vi.fn(() => Promise.resolve(null)),
   requestInfosPostgres: requestInfosPostgresMock,
   setReplicationLagHeader: vi.fn(() => Promise.resolve()),
 }))

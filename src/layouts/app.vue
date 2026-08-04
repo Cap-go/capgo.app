@@ -4,11 +4,11 @@ import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import PaymentRequiredModal from '~/components/PaymentRequiredModal.vue'
 import Tabs from '~/components/Tabs.vue'
+import { appSettingsTabs } from '~/constants/appSettingsTabs'
 import { appTabs as baseAppTabs } from '~/constants/appTabs'
 import { bundleTabs } from '~/constants/bundleTabs'
 import { channelTabs } from '~/constants/channelTabs'
 import { deviceTabs } from '~/constants/deviceTabs'
-import { logTabs } from '~/constants/logTabs'
 import { observeTabs } from '~/constants/observeTabs'
 import { useOrganizationStore } from '~/stores/organization'
 
@@ -62,19 +62,20 @@ watch(appId, async (targetAppId) => {
 
 const appTabs = computed<Tab[]>(() => baseAppTabs)
 
-// Check if org payment has failed - only show info tab in this case
+// Check if org payment has failed - only show settings tab in this case
 const isOrgUnpaid = computed(() => {
   return organizationStore.currentOrganizationFailed
 })
 
-// Check if we're on the info page (which should not show the payment modal)
-const isOnInfoPage = computed(() => {
-  return route.path.endsWith('/info')
+// Check if we're on a settings page (which should not show the payment modal)
+const isOnSettingsPage = computed(() => {
+  // Only the settings root is payment-exempt. Access stays gated like before.
+  return /^\/app\/[^/]+\/settings\/?$/.test(route.path)
 })
 
-// Show payment overlay only when org is unpaid AND not on info page
+// Show payment overlay only when org is unpaid AND not on settings page
 const showPaymentOverlay = computed(() => {
-  return !isResolvingAppOrganization.value && isOrgUnpaid.value && !isOnInfoPage.value
+  return !isResolvingAppOrganization.value && isOrgUnpaid.value && !isOnSettingsPage.value
 })
 
 // Detect resource type from route (channel, device, or bundle)
@@ -100,9 +101,9 @@ const tabs = computed<Tab[]>(() => {
   if (!appRouteSegment.value)
     return appTabs.value
 
-  // Filter tabs when org is unpaid - only show info tab
+  // Filter tabs when org is unpaid - only show settings tab
   const availableTabs = isOrgUnpaid.value
-    ? appTabs.value.filter(tab => tab.key === '/info')
+    ? appTabs.value.filter(tab => tab.key === '/settings')
     : appTabs.value
 
   return availableTabs.map(tab => ({
@@ -111,10 +112,10 @@ const tabs = computed<Tab[]>(() => {
   }))
 })
 const appSectionType = computed(() => {
-  if (/^\/app\/[^/]+\/logs(?:\/|$)/.test(route.path))
-    return 'logs'
   if (/^\/app\/[^/]+\/observe(?:\/|$)/.test(route.path))
     return 'observe'
+  if (/^\/app\/[^/]+\/settings(?:\/|$)/.test(route.path))
+    return 'settings'
   return null
 })
 
@@ -125,10 +126,10 @@ const secondaryTabBasePath = computed(() => {
     return ''
   if (resourceType.value && resourceId.value)
     return `/app/${appRouteSegment.value}/${resourceType.value}/${resourceId.value}`
-  if (secondaryTabType.value === 'logs')
-    return `/app/${appRouteSegment.value}/logs`
   if (secondaryTabType.value === 'observe')
     return `/app/${appRouteSegment.value}/observe`
+  if (secondaryTabType.value === 'settings')
+    return `/app/${appRouteSegment.value}/settings`
   return ''
 })
 
@@ -137,8 +138,8 @@ const tabsConfig: Record<string, Tab[]> = {
   channel: channelTabs,
   device: deviceTabs,
   bundle: bundleTabs,
-  logs: logTabs,
   observe: observeTabs,
+  settings: appSettingsTabs,
 }
 
 // Generate secondary tabs with full paths for the current resource or app section
@@ -167,8 +168,10 @@ const activeTab = computed(() => {
   if (!appRouteSegment.value)
     return tabs.value[0]?.key ?? ''
 
-  if (appSectionType.value === 'logs')
-    return `/app/${appRouteSegment.value}/logs/insights`
+  if (appSectionType.value === 'observe')
+    return `/app/${appRouteSegment.value}/observe/updater`
+  if (appSectionType.value === 'settings')
+    return `/app/${appRouteSegment.value}/settings`
   // If on a resource detail page (bundle/channel/device), keep parent tab active
   if (resourceType.value) {
     const parentTab = parentTabMap[resourceType.value]

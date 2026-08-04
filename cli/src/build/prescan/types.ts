@@ -9,6 +9,8 @@ export type Platform = 'ios' | 'android'
 export interface Finding {
   id: string
   severity: Severity
+  /** Finding stays visible but is information-only until this UTC instant. */
+  enforceAfter?: string
   /**
    * detail/fix/title are printed to the terminal and serialized into --json reports
    * (routinely captured in CI logs): they must NEVER contain credential material
@@ -23,6 +25,8 @@ export interface Finding {
 export interface ScanContext {
   appId: string
   platform: Platform
+  /** Operating system running the prescan, used for host-specific local checks. */
+  hostPlatform: NodeJS.Platform
   projectDir: string
   config?: CapacitorConfig
   /** merged credentials, env-var style keys (BUILD_CERTIFICATE_BASE64, ANDROID_KEYSTORE_FILE, ...) */
@@ -36,6 +40,8 @@ export interface ScanContext {
 export interface PrescanCheck {
   id: string
   platforms: Platform[]
+  /** Findings from this check stay information-only until this UTC instant. */
+  enforceAfter?: string
   /** requires ctx.supabase; skipped (with notice) when absent */
   remote?: boolean
   appliesTo?: (ctx: ScanContext) => boolean
@@ -55,4 +61,6 @@ export type PrescanOutcome = 'proceed' | 'ask' | 'block'
 export interface OutcomeOptions {
   failOnWarnings?: boolean
   ignoreFatal?: boolean
+  /** Test seam for hard-coded rollout deadlines; defaults to the current time. */
+  now?: Date
 }

@@ -577,38 +577,59 @@ export async function readNotificationRegistrationsCF(c: Context<MiddlewareKeyVa
   }
 }
 
+export const MAX_ORG_NOTIFICATION_STATS_APPS = 64
+
 export function buildNotificationStatsQuery(params: {
   dataset: string
-  appId: string
+  appId?: string
+  appIds?: string[]
   campaignId?: string
   days?: number
   now?: Date
 }) {
-  const days = Math.min(Math.max(Math.trunc(params.days ?? 30), 1), 92)
+  const rawDays = Number(params.days)
+  const days = Number.isFinite(rawDays) ? Math.min(Math.max(Math.trunc(rawDays), 1), 92) : 30
   const since = new Date((params.now?.getTime() ?? Date.now()) - days * 24 * 60 * 60 * 1000)
-  const appIndex = escapeSqlString(getNotificationEventIndex(params.appId))
-  const indexCondition = params.campaignId
-    ? `index1 = '${escapeSqlString(getNotificationEventIndex(params.appId, params.campaignId))}' AND blob2 = '${escapeSqlString(params.campaignId)}'`
-    : `(index1 = '${appIndex}' OR startsWith(index1, '${appIndex}:'))`
+  const appIds = (params.appIds?.length
+    ? params.appIds
+    : (params.appId ? [params.appId] : [])).filter(Boolean)
+  if (!appIds.length)
+    throw new Error('buildNotificationStatsQuery requires appId or appIds')
+
+  let indexCondition: string
+  if (params.campaignId) {
+    if (appIds.length !== 1)
+      throw new Error('campaign_id stats require a single appId')
+    indexCondition = `index1 = '${escapeSqlString(getNotificationEventIndex(appIds[0]!, params.campaignId))}' AND blob2 = '${escapeSqlString(params.campaignId)}'`
+  }
+  else {
+    indexCondition = appIds.map((appId) => {
+      const appIndex = escapeSqlString(getNotificationEventIndex(appId))
+      return `(index1 = '${appIndex}' OR startsWith(index1, '${appIndex}:'))`
+    }).join(' OR ')
+  }
 
   return `SELECT blob1 AS event, COUNT(DISTINCT if(blob9 = '', concat(toString(timestamp), ':', blob1, ':', blob3, ':', blob4), blob9)) AS count\n`
     + `FROM ${params.dataset}\n`
     + `WHERE timestamp >= toDateTime('${formatDateCF(since)}')\n`
-    + `  AND ${indexCondition}\n`
+    + `  AND (${indexCondition})\n`
     + `GROUP BY blob1\n`
     + `ORDER BY count DESC`
 }
 
 export async function readNotificationStatsCF(c: Context<MiddlewareKeyVariables>, params: {
-  appId: string
+  appId?: string
+  appIds?: string[]
   campaignId?: string
   days?: number
+  throwOnError?: boolean
 }) {
   if (!getEnv(c, 'CF_ANALYTICS_TOKEN') || !getEnv(c, 'CF_ACCOUNT_ANALYTICS_ID'))
     return [] as NativeNotificationStatsRow[]
   const query = buildNotificationStatsQuery({
     dataset: getEventsDataset(c),
     appId: params.appId,
+    appIds: params.appIds,
     campaignId: params.campaignId,
     days: params.days,
   })
@@ -617,6 +638,8 @@ export async function readNotificationStatsCF(c: Context<MiddlewareKeyVariables>
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'readNotificationStatsCF error', error: serializeError(error) })
+    if (params.throwOnError)
+      throw error
     return [] as NativeNotificationStatsRow[]
   }
 }

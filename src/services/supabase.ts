@@ -101,6 +101,11 @@ function shouldRefreshSpoofedAdminJwt(jwt: string) {
   return expiresAt - Date.now() / 1000 <= SPOOF_ADMIN_TOKEN_REFRESH_WINDOW_SECONDS
 }
 
+function isSpoofedAdminJwtUsable(jwt: string) {
+  const expiresAt = getJwtExpiresAt(jwt)
+  return expiresAt !== null && expiresAt > Date.now() / 1000
+}
+
 function createSpoofAdminSupabase() {
   return createClient<Database>(getSupabaseHost(), config.supaKey, {
     auth: {
@@ -228,19 +233,34 @@ export async function unspoofUser() {
   if (!spoofedAdminSession)
     return false
 
-  const restoredAdminSession = await refreshSpoofedAdminSession(spoofedAdminSession).catch(() => null)
+  // A refresh token may have been invalidated while its paired access token is
+  // still valid. Restore that access token directly so stopping impersonation
+  // does not strand the user in the spoofed session.
+  const restoredAdminSession = isSpoofedAdminJwtUsable(spoofedAdminSession.jwt)
+    ? spoofedAdminSession
+    : await refreshSpoofedAdminSession(spoofedAdminSession).catch(() => null)
   if (!restoredAdminSession) {
     clearSpoof()
     return false
   }
 
-  const supabase = useSupabase()
-  const { data, error } = await supabase.auth.setSession({ access_token: restoredAdminSession.jwt, refresh_token: restoredAdminSession.refreshToken })
-  clearSpoof()
+  if (restoredAdminSession !== spoofedAdminSession)
+    saveSpoofedAdminSession(restoredAdminSession)
 
-  if (error || !data.session)
+  const supabase = useSupabase()
+  let data: { session?: unknown } | null | undefined
+  let error: unknown
+  try {
+    ({ data, error } = await supabase.auth.setSession({ access_token: restoredAdminSession.jwt, refresh_token: restoredAdminSession.refreshToken }))
+  }
+  catch {
+    return false
+  }
+
+  if (error || !data?.session)
     return false
 
+  clearSpoof()
   return true
 }
 
@@ -647,10 +667,10 @@ export async function findBestPlan(stats: Database['public']['Functions']['find_
   return data
 }
 
-export function convertNativePackages(nativePackages: { name: string, version: string }[]) {
-  if (!nativePackages) {
-    throw new Error(`Error parsing native packages, perhaps the metadata does not exist in Capgo?`)
-  }
+export function convertNativePackages(nativePackages: { name: string, version: string }[] | null | undefined) {
+  // Missing metadata is normal for older bundles / empty channels — treat as empty.
+  if (!nativePackages)
+    return new Map<string, { name: string, version: string }>()
 
   // Check types
   nativePackages.forEach((data) => {
@@ -688,9 +708,11 @@ export async function getRemoteDependencies(appId: string, channel: string) {
     throw new Error(error.message)
   }
   const version = remoteNativePackages.version as { native_packages?: unknown } | null
-  const nativePackages = version?.native_packages
-  if (!Array.isArray(nativePackages))
-    throw new Error('Error parsing native packages, perhaps the metadata does not exist in Capgo?')
+  // Channel may have no linked version, or an older version without metadata.
+  // Match CLI: fall back to [] so linking still works.
+  const nativePackages = Array.isArray(version?.native_packages)
+    ? version.native_packages
+    : []
   return convertNativePackages(nativePackages as { name: string, version: string }[])
 }
 
@@ -717,6 +739,14 @@ export function isCompatible(pkg: Compatibility): boolean {
 
 export async function checkCompatibilityNativePackages(appId: string, channel: string, nativePackages: { name: string, version: string }[]) {
   const mappedRemoteNativePackages = await getRemoteDependencies(appId, channel)
+
+  // Nothing on the channel to compare against → skip gate (same as missing local metadata).
+  if (mappedRemoteNativePackages.size === 0) {
+    return {
+      finalCompatibility: [] as Compatibility[],
+      localDependencies: nativePackages,
+    }
+  }
 
   const finalDependencies: Compatibility[] = nativePackages
     .map((local) => {
