@@ -2252,10 +2252,11 @@ async function addAppStep(organization: Organization, apikey: string, appId: str
 async function addChannelStep(orgId: string, apikey: string, appId: string) {
   const pm = getPMAndCommand()
   pLog.success(`✅ App ${appId} added — accessible to all members of your organization`)
-  pLog.info(`💡 A channel is a release track — it controls which users get which updates.`)
-  pLog.info(`   Nothing goes live until you release a native build with Capacitor Updater to the stores.`)
-  pLog.info(`   Most apps just need one: "production". You can add more later.`)
-  pLog.info(`   Learn more: https://capgo.app/docs/live-updates/channels/`)
+  pLog.info(`💡 Keep in mind: Capgo cannot deliver updates to app versions that don’t include Capacitor Updater.`)
+  pLog.info(``)
+  pLog.info(`A channel is a release track that controls which users get which updates.`)
+  pLog.info(`Most apps only need one: "production". You can add more later.`)
+  pLog.info(`Learn more: https://capgo.app/docs/live-updates/channels/`)
   while (true) {
     let channelName = globalChannelName
     const channelChoice = await pSelect({
