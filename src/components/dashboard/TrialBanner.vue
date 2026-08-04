@@ -17,7 +17,7 @@ import { computed, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { pushEvent } from '~/services/posthog'
-import { getLocalConfig } from '~/services/supabase'
+import { getLocalConfig, useSupabase } from '~/services/supabase'
 import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
 import { shouldShowBuilderPromo } from '~/utils/builderPromoVisibility'
 
@@ -34,6 +34,7 @@ const rightPupil = ref({ x: 0, y: 0 })
 
 const currentOrg = computed(() => organizationStore.currentOrganization)
 const config = getLocalConfig()
+const supabase = useSupabase()
 const hideExternalPurchaseFlows = isNativeAppStoreContext()
 
 function trackBannerEvent(eventName: string) {
@@ -75,20 +76,40 @@ const hasApps = computed(() => {
   return (org?.app_count ?? 0) > 0
 })
 
-const shouldShowTrialBanner = computed(() => {
+const onboardingAppOrgId = computed(() => {
   const org = currentOrg.value
-  if (!org)
-    return false
-
-  const apps = organizationStore.getAppsByOrgId(org.gid)
   const selectableOrganizationCount = organizationStore.organizations.filter(org => !isPendingOrganizationInvite(org)).length
+  if (!org || selectableOrganizationCount !== 1 || org.app_count !== 1)
+    return undefined
 
-  return shouldShowBuilderPromo({
-    organizationCount: selectableOrganizationCount,
-    appCount: apps.length,
-    appNeedsOnboarding: apps[0]?.need_onboarding === true,
-  })
+  return org.gid
 })
+
+const shouldShowTrialBanner = ref(true)
+let onboardingAppRequest = 0
+
+watch(onboardingAppOrgId, async (orgId) => {
+  const request = ++onboardingAppRequest
+  shouldShowTrialBanner.value = true
+
+  if (!orgId)
+    return
+
+  const { data, error } = await supabase
+    .from('apps')
+    .select('need_onboarding')
+    .eq('owner_org', orgId)
+    .limit(1)
+
+  if (request !== onboardingAppRequest || error || !data?.[0])
+    return
+
+  shouldShowTrialBanner.value = shouldShowBuilderPromo({
+    organizationCount: 1,
+    appCount: 1,
+    appNeedsOnboarding: data[0].need_onboarding,
+  })
+}, { immediate: true })
 
 const showBanner = computed(() => {
   return !hideExternalPurchaseFlows && isTrial.value && isAccountOldEnough.value && hasApps.value && shouldShowTrialBanner.value
