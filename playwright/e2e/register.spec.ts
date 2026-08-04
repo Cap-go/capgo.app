@@ -41,7 +41,7 @@ test.describe('Registration', () => {
 
     await expectProtectedRouteRedirect(page, '/apps', /\/onboarding\/app/, '[data-test="onboarding-logout"]')
 
-    await page.click('[data-test="onboarding-mode-app-name"]')
+    await expect(page.locator('[data-test="onboarding-org-name"]')).toHaveValue(appName)
     await expect(page.locator('[data-test="onboarding-create-org"]')).toBeEnabled()
     await page.click('[data-test="onboarding-create-org"]')
 
