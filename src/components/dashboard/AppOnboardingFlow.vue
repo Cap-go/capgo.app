@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import type { Database } from '~/types/supabase.types'
-import { FormKit } from '@formkit/vue'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
@@ -39,6 +38,7 @@ import {
   loadOnboardingAppDraft,
 } from '~/utils/onboardingAppDraft'
 import { slugifyOnboardingSegment } from '~/utils/onboardingSlug'
+import AppOnboardingIconInput from './AppOnboardingIconInput.vue'
 
 const props = defineProps<{
   onboarding: boolean
@@ -1191,13 +1191,8 @@ watch(suggestedAppId, (value) => {
                 </div>
 
                 <div>
-                  <FormKit
-                    type="file"
+                  <AppOnboardingIconInput
                     :label="t('app-onboarding-icon-label')"
-                    accept="image/*"
-                    outer-class="mt-0"
-                    label-class="text-sm font-medium text-slate-800 dark:text-slate-200"
-                    input-class="mt-2 block w-full min-h-11 text-sm text-slate-600 file:mr-3 file:min-h-9 file:rounded-lg file:border-0 file:bg-slate-100 file:px-3 file:text-sm file:font-medium file:text-slate-700 dark:text-slate-300 dark:file:bg-slate-800 dark:file:text-slate-200"
                     @update:model-value="onSelectIconFormKit"
                   />
                   <p class="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">
