@@ -16,7 +16,7 @@ describe('support usernames prompt onboarding guard', () => {
     ])).toBe(false)
   })
 
-  it.concurrent('allows the prompt after onboarding has progressed', () => {
+  it.concurrent('allows the prompt for multiple organizations and after onboarding has progressed', () => {
     expect(isOnboardingOrganizationSet([{ app_count: 2 }])).toBe(false)
     expect(isOnboardingOrganizationSet([{ app_count: 0 }, { app_count: 0 }])).toBe(false)
   })

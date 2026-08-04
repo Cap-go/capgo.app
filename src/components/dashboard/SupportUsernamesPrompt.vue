@@ -37,6 +37,9 @@ const isOnboarding = computed(() => {
   if (organizationStore.organizations.length === 0 || organizations.length === 0)
     return true
 
+  if (organizations.length !== 1)
+    return isOnboardingOrganizationSet(organizations)
+
   const organization = organizations[0]
   const apps = organizationStore.getAppsByOrgId(organization.gid)
 
