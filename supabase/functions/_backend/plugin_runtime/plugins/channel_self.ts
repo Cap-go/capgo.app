@@ -709,7 +709,7 @@ app.post('/', async (c) => {
   if (blocked)
     return blocked
 
-  // Rate limit: max 5 set per second per device+app, and same set max once per 60 seconds
+  // Rate limit: max 5 set per second per device+app, and same set max once per 5 seconds
   return await runChannelSelfDeviceOperation(
     c,
     bodyParsed,

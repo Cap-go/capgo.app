@@ -155,8 +155,8 @@ describe.skipIf(!USE_CLOUDFLARE)('channel_self rate limiting', () => {
     return fetchGetChannels(data as any)
   })
 
-  describe('same channel 60-second rate limit', () => {
-    it('should rate limit same channel set within 60 seconds', async () => {
+  describe('same channel 5-second rate limit', () => {
+    it('should rate limit same channel set within 5 seconds', async () => {
       const deviceId = randomUUID().toLowerCase()
       const data = getBaseData(APPNAME)
       data.device_id = deviceId
@@ -168,7 +168,7 @@ describe.skipIf(!USE_CLOUDFLARE)('channel_self rate limiting', () => {
       await sleep(1100) // Wait for op-level rate limit to expire
 
       const response2 = await fetchChannelSelfEndpoint('POST', data)
-      expect(response2.status).toBe(429) // Still rate limited by 60-second rule
+      expect(response2.status).toBe(429) // Still rate limited by 5-second same-set rule
     })
 
     it('should allow set with different channel after 1 second', async () => {
