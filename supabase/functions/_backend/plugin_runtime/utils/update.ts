@@ -15,6 +15,7 @@ import { getRuntimeKey } from 'hono/adapter'
 import { getAppStatus, setAppStatus } from './appStatus.ts'
 import { getBundleUrl, getManifestUrl } from './downloadUrl.ts'
 import { simpleError200 } from './hono.ts'
+import { onPremiseAppResponse } from './rateLimitInfo.ts'
 import { cloudlog } from './logging.ts'
 import { sendNotifOrgCached } from './notifications.ts'
 import { sendNotifToOrgMembersCached } from './org_email_notifications.ts'
@@ -314,7 +315,7 @@ export async function updateWithPG(
     const device = makeDevice(body, cachedAppStatus.allow_device_custom_id)
     cloudlog({ requestId: c.get('requestId'), message: 'Cannot update, upgrade plan to continue to update', id: app_id })
     await sendStatsAndDevice(c, device, [{ action: 'needPlanUpgrade' }])
-    return c.json({ error: 'on_premise_app', message: 'On-premise app detected' }, 429)
+    return onPremiseAppResponse(c)
   }
   const existingUpdateEnumerationLimit = await isUpdateEnumerationLimited(c)
   if (existingUpdateEnumerationLimit.limited)
@@ -395,7 +396,7 @@ export async function updateWithPG(
       device_id,
       app_id_url: app_id,
     }, appOwner.owner_org, app_id, '0 0 * * 1', appOwner.orgs.management_email, drizzleClient)) // Weekly on Monday
-    return c.json({ error: 'on_premise_app', message: 'On-premise app detected' }, 429)
+    return onPremiseAppResponse(c)
   }
   await setAppStatus(
     c,

@@ -5,6 +5,7 @@ import { getRuntimeKey } from 'hono/adapter'
 import { createIfNotExistStoreInfo, trackBandwidthUsageCF, trackDevicesCF, trackDeviceUsageCF, trackLogsCF, trackLogsCFExternal, trackVersionUsageCF, updateStoreApp } from './cloudflare.ts'
 import { normalizeDeviceCountryCode } from './deviceComparison.ts'
 import { simpleError200 } from './hono.ts'
+import { onPremiseAppResponse } from './rateLimitInfo.ts'
 import { cloudlog } from './logging.ts'
 import { logSkippedSupabaseWrite, shouldSkipSupabaseStatsFallback } from './supabase_write_guard.ts'
 import { backgroundTask, isInternalVersionName } from './utils.ts'
@@ -132,7 +133,7 @@ export async function onPremStats(c: Context, app_id: string, action: string, de
     getStatsLogDimensions(c, device),
   )
   cloudlog({ requestId: c.get('requestId'), message: 'App is external (onPremise), returning 429', app_id: device.app_id, country: c.req.raw.cf?.country, user_agent: c.req.raw.headers.get('user-agent') })
-  return c.json({ error: 'on_premise_app', message: 'On-premise app detected' }, 429)
+  return onPremiseAppResponse(c)
 }
 
 export function createStatsBandwidth(c: Context, device_id: string, app_id: string, file_size: number) {

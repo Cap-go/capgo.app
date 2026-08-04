@@ -4,6 +4,7 @@ import { CacheHelper } from './cache.ts'
 import { cloudlog } from './logging.ts'
 import { getClientIP } from './rate_limit.ts'
 import { getEnv } from './utils.ts'
+import { onPremiseAppResponse } from './rateLimitInfo.ts'
 
 const UPDATE_ENUMERATION_SLOT_PATH = '/rate-limit/update-enumeration/slot'
 const UPDATE_ENUMERATION_LIMIT_PATH = '/rate-limit/update-enumeration/limited'
@@ -212,5 +213,5 @@ export async function recordUpdateEnumerationMiss(c: Context, appId: string): Pr
 }
 
 export function updateEnumerationLimitedResponse(c: Context) {
-  return c.json({ error: 'on_premise_app' }, 429)
+  return onPremiseAppResponse(c)
 }

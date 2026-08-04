@@ -12,7 +12,8 @@
 const TIMEOUT_MS = 3000 // 3 seconds - matches plugin timeout
 const CIRCUIT_RESET_MS = 5 * 60 * 1000 // 5 minutes before retrying unhealthy worker
 
-// On-prem and plan-upgrade caching rely on worker-provided Cache-Control headers
+// On-prem and plan-upgrade caching use worker Cache-Control, with Retry-After as TTL fallback.
+// Cached responses keep Retry-After / X-RateLimit-Reset so clients and edge skip the worker.
 
 // Helper to build cache keys using actual hostname to avoid DNS lookups on fake .internal domains
 function getCircuitBreakerCacheKey(hostname, colo, workerUrl) {
@@ -136,35 +137,98 @@ async function getPlanUpgradeCache(hostname, appId, endpoint, method) {
   }
 }
 
-function getCacheTtlSeconds(headers) {
-  const cacheControl = headers.get('Cache-Control') || headers.get('cache-control')
-  if (!cacheControl)
-    return null
-
-  const directives = cacheControl.split(',').map(part => part.trim().toLowerCase())
-  if (directives.includes('no-store'))
-    return null
-
-  const sMaxAge = directives.find(part => part.startsWith('s-maxage='))
-  if (sMaxAge) {
-    const seconds = Number.parseInt(sMaxAge.split('=')[1] || '', 10)
-    if (Number.isFinite(seconds) && seconds > 0)
-      return seconds
+function getRetryAfterSeconds(headers, responseBody) {
+  const header = headers.get('Retry-After') || headers.get('retry-after')
+  if (header) {
+    const seconds = Number.parseFloat(header.trim())
+    if (Number.isFinite(seconds) && seconds >= 0)
+      return Math.floor(seconds)
   }
 
-  const maxAge = directives.find(part => part.startsWith('max-age='))
-  if (maxAge) {
-    const seconds = Number.parseInt(maxAge.split('=')[1] || '', 10)
-    if (Number.isFinite(seconds) && seconds > 0)
-      return seconds
+  const moreInfo = responseBody && typeof responseBody === 'object' ? responseBody.moreInfo : null
+  const fromMoreInfo = moreInfo && typeof moreInfo.retryAfterSeconds === 'number'
+    ? moreInfo.retryAfterSeconds
+    : null
+  if (typeof fromMoreInfo === 'number' && Number.isFinite(fromMoreInfo) && fromMoreInfo >= 0)
+    return Math.floor(fromMoreInfo)
+
+  if (responseBody && typeof responseBody.retryAfterSeconds === 'number'
+    && Number.isFinite(responseBody.retryAfterSeconds) && responseBody.retryAfterSeconds >= 0) {
+    return Math.floor(responseBody.retryAfterSeconds)
   }
 
   return null
 }
 
+function getCacheTtlSeconds(headers, responseBody) {
+  const cacheControl = headers.get('Cache-Control') || headers.get('cache-control')
+  if (cacheControl) {
+    const directives = cacheControl.split(',').map(part => part.trim().toLowerCase())
+    if (directives.includes('no-store'))
+      return null
+
+    const sMaxAge = directives.find(part => part.startsWith('s-maxage='))
+    if (sMaxAge) {
+      const seconds = Number.parseInt(sMaxAge.split('=')[1] || '', 10)
+      if (Number.isFinite(seconds) && seconds > 0)
+        return seconds
+    }
+
+    const maxAge = directives.find(part => part.startsWith('max-age='))
+    if (maxAge) {
+      const seconds = Number.parseInt(maxAge.split('=')[1] || '', 10)
+      if (Number.isFinite(seconds) && seconds > 0)
+        return seconds
+    }
+  }
+
+  // Fall back to Retry-After so on_premise / plan-upgrade responses still edge-cache
+  // and skip the worker for the client backoff window.
+  const retryAfter = getRetryAfterSeconds(headers, responseBody)
+  if (typeof retryAfter === 'number' && retryAfter > 0)
+    return retryAfter
+
+  return null
+}
+
+/**
+ * Keep rate-limit headers accurate when serving a cached 429.
+ * Recompute Retry-After from X-RateLimit-Reset (unix seconds) or body moreInfo.
+ */
+function withFreshRateLimitHeaders(cachedResponse) {
+  const headers = new Headers(cachedResponse.headers)
+  const nowSec = Math.floor(Date.now() / 1000)
+
+  const resetHeader = headers.get('X-RateLimit-Reset') || headers.get('x-ratelimit-reset')
+  let remaining = null
+  if (resetHeader) {
+    const resetAtSec = Number.parseInt(resetHeader, 10)
+    if (Number.isFinite(resetAtSec))
+      remaining = Math.max(0, resetAtSec - nowSec)
+  }
+
+  if (remaining === null) {
+    const retryAfter = getRetryAfterSeconds(headers, null)
+    if (typeof retryAfter === 'number')
+      remaining = retryAfter
+  }
+
+  if (typeof remaining === 'number') {
+    headers.set('Retry-After', String(remaining))
+    if (!headers.has('X-RateLimit-Reset') && remaining > 0)
+      headers.set('X-RateLimit-Reset', String(nowSec + remaining))
+  }
+
+  return new Response(cachedResponse.body, {
+    status: cachedResponse.status,
+    statusText: cachedResponse.statusText,
+    headers,
+  })
+}
+
 async function setOnPremCache(hostname, appId, endpoint, method, responseBody, status, responseHeaders) {
   try {
-    const cacheTtl = getCacheTtlSeconds(responseHeaders)
+    const cacheTtl = getCacheTtlSeconds(responseHeaders, responseBody)
     if (!cacheTtl) {
       console.log(`On-prem cache SKIP for ${appId}/${endpoint}/${method} (missing cache TTL)`)
       return
@@ -178,6 +242,12 @@ async function setOnPremCache(hostname, appId, endpoint, method, responseBody, s
     headers.set('X-Onprem-Cached', 'true')
     headers.set('X-Onprem-App-Id', appId)
     headers.set('X-Onprem-Ttl', String(cacheTtl))
+    // Ensure Retry-After is stored even when only present in JSON moreInfo.
+    const retryAfter = getRetryAfterSeconds(headers, responseBody)
+    if (typeof retryAfter === 'number' && !headers.has('Retry-After'))
+      headers.set('Retry-After', String(retryAfter))
+    if (responseBody && responseBody.moreInfo && typeof responseBody.moreInfo.rateLimitResetAt === 'number' && !headers.has('X-RateLimit-Reset'))
+      headers.set('X-RateLimit-Reset', String(Math.ceil(responseBody.moreInfo.rateLimitResetAt / 1000)))
 
     // Store the response cache
     const key = getOnPremCacheKey(hostname, appId, endpoint, method)
@@ -224,7 +294,7 @@ async function buildOnPremResponse(hostname, appId, endpoint, method, responseBo
 
 async function setPlanUpgradeCache(hostname, appId, endpoint, method, responseBody, status, responseHeaders) {
   try {
-    const cacheTtl = getCacheTtlSeconds(responseHeaders)
+    const cacheTtl = getCacheTtlSeconds(responseHeaders, responseBody)
     if (!cacheTtl) {
       console.log(`Plan-upgrade cache SKIP for ${appId}/${endpoint}/${method} (missing cache TTL)`)
       return
@@ -298,11 +368,11 @@ export default {
       if (appId) {
         const cachedPlanUpgrade = await getPlanUpgradeCache(hostname, appId, endpoint, method)
         if (cachedPlanUpgrade) {
-          return cachedPlanUpgrade
+          return withFreshRateLimitHeaders(cachedPlanUpgrade)
         }
         const cachedResponse = await getOnPremCache(hostname, appId, endpoint, method)
         if (cachedResponse) {
-          return cachedResponse
+          return withFreshRateLimitHeaders(cachedResponse)
         }
       }
     }
