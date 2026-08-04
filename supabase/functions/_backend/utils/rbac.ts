@@ -18,6 +18,8 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from './hono.ts'
 import { sql } from 'drizzle-orm'
+import { HTTPException } from 'hono/http-exception'
+import { quickError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { closeClient, getDrizzleClient, getPgClient } from './pg.ts'
 
@@ -85,6 +87,39 @@ export interface PermissionScope {
   orgId?: string
   appId?: string
   channelId?: number
+}
+
+/**
+ * Permission helpers must never map infrastructure failures to "denied".
+ * Callers treat `false` as ACL deny (403). Transient Hyperdrive/Postgres errors
+ * must surface as 503 so clients (especially TUS) can retry.
+ */
+function throwPermissionCheckUnavailable(
+  c: Context<MiddlewareKeyVariables>,
+  permission: Permission,
+  scope: PermissionScope,
+  error: unknown,
+  source: 'checkPermission' | 'checkPermissionPg',
+): never {
+  if (error instanceof HTTPException)
+    throw error
+
+  cloudlogErr({
+    requestId: c.get('requestId'),
+    message: `${source} error`,
+    error,
+    permission,
+    scope,
+  })
+
+  quickError(
+    503,
+    'upstream_unavailable',
+    'Permission check temporarily unavailable',
+    { permission, scope },
+    error,
+    { alert: false },
+  )
 }
 
 // =============================================================================
@@ -205,14 +240,7 @@ export async function checkPermission(
     return allowed
   }
   catch (e) {
-    cloudlogErr({
-      requestId: c.get('requestId'),
-      message: 'checkPermission error',
-      error: e,
-      permission,
-      scope,
-    })
-    return false
+    return throwPermissionCheckUnavailable(c, permission, scope, e, 'checkPermission')
   }
   finally {
     if (pgClient) {
@@ -367,14 +395,7 @@ export async function checkPermissionPg(
     return allowed
   }
   catch (e) {
-    cloudlogErr({
-      requestId: c.get('requestId'),
-      message: 'checkPermissionPg error',
-      error: e,
-      permission,
-      scope,
-    })
-    return false
+    return throwPermissionCheckUnavailable(c, permission, scope, e, 'checkPermissionPg')
   }
 }
 
