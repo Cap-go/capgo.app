@@ -323,12 +323,59 @@ function isTransientDockerPortBindFailure(output: string): boolean {
 }
 
 /**
+ * Keep worktree host ports out of the kernel ephemeral pool.
+ *
+ * CI offsets land in 32k–60k, which overlaps Linux's default local port range.
+ * Without reserving them, outbound sockets can steal a Supabase port and make
+ * `docker` fail with "address already in use" on an otherwise idle runner.
+ */
+function reserveWorktreePortsFromEphemeralPool(repoRoot: string): void {
+  if (process.platform !== 'linux')
+    return
+  if (!process.env.SUPABASE_WORKTREE_PORT_OFFSET && !process.env.CI)
+    return
+
+  const { cfg } = ensureWorktreeSupabaseDir(repoRoot)
+  const ports = Object.values(cfg.ports).filter(port => Number.isFinite(port)).sort((a, b) => a - b)
+  if (ports.length === 0)
+    return
+
+  const reserved = ports.join(',')
+  const result = spawnSync('sudo', ['sysctl', '-w', `net.ipv4.ip_local_reserved_ports=${reserved}`], {
+    encoding: 'utf8',
+  })
+  if ((result.status ?? 1) !== 0) {
+    const fallback = spawnSync('sysctl', ['-w', `net.ipv4.ip_local_reserved_ports=${reserved}`], {
+      encoding: 'utf8',
+    })
+    if ((fallback.status ?? 1) !== 0) {
+      console.warn(`Could not reserve Supabase ports from the ephemeral pool: ${reserved}`)
+      return
+    }
+  }
+  console.error(`Reserved Supabase worktree ports from ephemeral pool: ${reserved}`)
+}
+
+function freeHostPorts(ports: number[]): void {
+  if (process.platform === 'win32' || ports.length === 0)
+    return
+
+  for (const port of ports) {
+    spawnSync('fuser', ['-k', `${port}/tcp`], { stdio: 'ignore' })
+  }
+}
+
+/**
  * `supabase start` can fail on GitHub runners with a transient Docker port bind
  * (`address already in use`) after a partial start/stop. Retry only that class of
  * failure so permanent start errors fail fast.
  */
 function runSupabaseStartWithRetry(args: string[], repoRoot: string): number {
-  const maxAttempts = 3
+  const { cfg } = ensureWorktreeSupabaseDir(repoRoot)
+  const ports = Object.values(cfg.ports).filter(port => Number.isFinite(port))
+  reserveWorktreePortsFromEphemeralPool(repoRoot)
+
+  const maxAttempts = 5
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const { status, output } = runSupabase(args, repoRoot, { captureOutput: true })
     if (status === 0)
@@ -338,6 +385,7 @@ function runSupabaseStartWithRetry(args: string[], repoRoot: string): number {
       return status
     console.error(`Supabase start hit a transient Docker port bind (attempt ${attempt}/${maxAttempts}); stopping and retrying...`)
     runSupabase(['stop', '--no-backup'], repoRoot)
+    freeHostPorts(ports)
     spawnSync(process.platform === 'win32' ? 'timeout' : 'sleep', process.platform === 'win32' ? ['/T', '2', '/NOBREAK'] : ['2'])
   }
   return 1
