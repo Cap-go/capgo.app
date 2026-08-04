@@ -37,7 +37,17 @@ const isOnboarding = computed(() => {
   if (organizationStore.organizations.length === 0 || organizations.length === 0)
     return true
 
-  return isOnboardingOrganizationSet(organizations)
+  const organization = organizations[0]
+  const apps = organizationStore.getAppsByOrgId(organization.gid)
+
+  // App state is loaded asynchronously. Hide the prompt until all apps have been evaluated.
+  if (apps.length < organization.app_count)
+    return true
+
+  return isOnboardingOrganizationSet([{
+    app_count: organization.app_count,
+    all_apps_need_onboarding: apps.length > 0 && apps.every(app => app.need_onboarding),
+  }])
 })
 
 const blockedPath = computed(() => {

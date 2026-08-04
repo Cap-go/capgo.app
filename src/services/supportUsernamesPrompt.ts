@@ -12,8 +12,9 @@ export function hasSupportUsernames(user: { discord_username?: string | null, gi
   return Boolean(user?.discord_username && user?.github_username)
 }
 
-export function isOnboardingOrganizationSet(organizations: Array<{ app_count: number }>) {
-  return organizations.length === 1 && organizations[0].app_count <= 1
+export function isOnboardingOrganizationSet(organizations: Array<{ app_count: number, all_apps_need_onboarding?: boolean }>) {
+  return organizations.length === 1
+    && (organizations[0].app_count <= 1 || organizations[0].all_apps_need_onboarding === true)
 }
 
 export function isSupportUsernamesPromptDismissedForever(userId: string) {
