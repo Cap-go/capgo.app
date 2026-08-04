@@ -1036,6 +1036,7 @@ async function runCapacitorPlatformAdd(platformName: 'ios' | 'android', runner: 
     ? `Running: ${command}`
     : `Running in ${commandCwd}: ${command}`
   spinner.start(runMessage)
+  spinner.stop()
 
   const result = await streamCommandInInitPanel({
     title: `Adding ${platformName.toUpperCase()} native project`,
@@ -1637,6 +1638,7 @@ async function runNativeResetCommand(platformRunner: string, nativePlatform: Pla
   resetSpinner.start(`Running: ${resetAdvice.command}`)
   try {
     rmSync(nativePlatform, { recursive: true, force: true })
+    resetSpinner.stop()
 
     const addResult = await streamCommandInInitPanel({
       title: `Recreating ${nativePlatform.toUpperCase()} native project`,
@@ -4098,6 +4100,7 @@ async function runDeviceStep(orgId: string, apikey: string, appId: string, platf
       ? `Running: ${runCommand.command}`
       : `Running in ${projectDir}: ${runCommand.command}`
     s.start(runMessage)
+    s.stop()
 
     let runResult: Awaited<ReturnType<typeof streamCommandInInitPanel>> | undefined
     let runError: Error | undefined
@@ -4132,6 +4135,7 @@ async function runDeviceStep(orgId: string, apikey: string, appId: string, platf
       if (!pIsCancel(openIDE) && openIDE) {
         const s2 = pSpinner()
         s2.start(`Opening ${platform === 'ios' ? 'Xcode' : 'Android Studio'}...`)
+        s2.stop()
         try {
           const openResult = await streamCommandInInitPanel({
             title: `Opening ${platform === 'ios' ? 'Xcode' : 'Android Studio'}`,
