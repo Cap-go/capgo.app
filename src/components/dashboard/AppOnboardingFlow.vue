@@ -1416,15 +1416,17 @@ watch(suggestedAppId, (value) => {
         </div>
 
         <div v-else-if="flowStep === 'setup' && createdApp" class="space-y-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900/95">
-          <p class="text-sm font-semibold text-primary-500 dark:text-slate-300">
-            {{ t('unified-onboarding-step-setup') }}
-          </p>
-          <h2 class="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
-            {{ setupTitle }}
-          </h2>
-          <p class="mt-2 max-w-2xl text-sm leading-6 text-slate-600 dark:text-slate-300">
-            {{ setupSubtitle }}
-          </p>
+          <div>
+            <p class="text-sm font-semibold text-primary-500 dark:text-slate-300">
+              {{ t('unified-onboarding-step-setup') }}
+            </p>
+            <h2 class="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
+              {{ setupTitle }}
+            </h2>
+            <p class="mt-2 max-w-2xl text-sm leading-6 text-slate-600 dark:text-slate-300">
+              {{ setupSubtitle }}
+            </p>
+          </div>
 
           <div
             class="group relative cursor-pointer rounded-2xl bg-slate-950 p-5 pr-14 ring-1 ring-white/10 transition hover:ring-white/20"
@@ -1467,7 +1469,7 @@ watch(suggestedAppId, (value) => {
 
           <div class="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-end">
             <button class="d-btn min-h-11" :class="whiteCardPrimaryButtonClass()" @click="openDashboard">
-              {{ t('app-onboarding-install-later') }}
+              {{ t('app-onboarding-explore-dashboard') }}
               <IconArrowRight class="h-4 w-4" />
             </button>
           </div>
@@ -1601,7 +1603,7 @@ watch(suggestedAppId, (value) => {
                 {{ t('button-back') }}
               </button>
               <button class="d-btn min-h-11" :class="whiteCardPrimaryButtonClass()" @click="openDashboard">
-                {{ t('app-onboarding-install-later') }}
+                {{ t('app-onboarding-explore-dashboard') }}
                 <IconArrowRight class="h-4 w-4" />
               </button>
             </div>
