@@ -767,6 +767,52 @@ function getInitCodeCall(): string {
   return `${notifyAppReadyComment}\n${codeInject};`
 }
 
+function skipInitLeadingTrivia(content: string, startIndex: number): number {
+  let index = startIndex
+  while (index < content.length) {
+    const char = content[index]
+    if (char === '\uFEFF' || char === ' ' || char === '\t' || char === '\r' || char === '\n') {
+      index++
+    }
+    else if (content.startsWith('//', index)) {
+      const lineEnd = content.indexOf('\n', index + 2)
+      index = lineEnd === -1 ? content.length : lineEnd + 1
+    }
+    else if (content.startsWith('/*', index)) {
+      const commentEnd = content.indexOf('*/', index + 2)
+      if (commentEnd === -1)
+        break
+      index = commentEnd + 2
+    }
+    else {
+      break
+    }
+  }
+  return index
+}
+
+function skipInitDirectiveLineSuffix(content: string, startIndex: number): number {
+  let index = startIndex
+  while (content[index] === ' ' || content[index] === '\t')
+    index++
+
+  if (content.startsWith('//', index)) {
+    const lineEnd = content.indexOf('\n', index + 2)
+    return lineEnd === -1 ? content.length : lineEnd + 1
+  }
+  if (content.startsWith('/*', index)) {
+    const commentEnd = content.indexOf('*/', index + 2)
+    if (commentEnd === -1)
+      return index
+    return skipInitDirectiveLineSuffix(content, commentEnd + 2)
+  }
+  if (content.startsWith('\r\n', index))
+    return index + 2
+  if (content[index] === '\n')
+    return index + 1
+  return index
+}
+
 function insertInitCodeAfterPrologue(content: string, codeToInject: string): string {
   let insertionIndex = 0
   if (content.startsWith('#!')) {
@@ -776,15 +822,13 @@ function insertInitCodeAfterPrologue(content: string, codeToInject: string): str
 
   // Framework directives can follow a BOM, whitespace, or comments. Keep that
   // complete prologue ahead of the injected import so their semantics remain intact.
-  const leadingTriviaPattern = /^(?:\uFEFF|[\t \r\n]|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*(?:\r?\n|$))*/
-  const directivePattern = /^[\t ]*(['"])(?:use client|use server|use strict)\1;?[\t ]*(?:(?:\/\/[^\r\n]*)|(?:\/\*[\s\S]*?\*\/))*[\t ]*(?:\r?\n|$)/
+  const directivePattern = /^(['"])(?:use client|use server|use strict)\1;?/
   while (true) {
-    const remainingContent = content.slice(insertionIndex)
-    const leadingTrivia = remainingContent.match(leadingTriviaPattern)?.[0] ?? ''
-    const directive = remainingContent.slice(leadingTrivia.length).match(directivePattern)
+    const directiveStart = skipInitLeadingTrivia(content, insertionIndex)
+    const directive = content.slice(directiveStart).match(directivePattern)
     if (!directive)
       break
-    insertionIndex += leadingTrivia.length + directive[0].length
+    insertionIndex = skipInitDirectiveLineSuffix(content, directiveStart + directive[0].length)
   }
 
   const before = content.slice(0, insertionIndex)
