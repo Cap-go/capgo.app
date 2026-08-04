@@ -853,11 +853,10 @@ function goToInstallStep() {
   flowStep.value = 'install'
 }
 
-function openDashboard() {
-  if (!createdApp.value)
-    return
-
-  router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}`)
+async function openDashboard() {
+  // Skipping the CLI step should still populate the app with demo data
+  // so the dashboard is usable to explore Capgo before a real upload.
+  await seedDemoData()
 }
 
 onMounted(async () => {
@@ -1468,9 +1467,12 @@ watch(suggestedAppId, (value) => {
           </div>
 
           <div class="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-end">
-            <button class="d-btn min-h-11" :class="whiteCardPrimaryButtonClass()" @click="openDashboard">
-              {{ t('app-onboarding-explore-dashboard') }}
-              <IconArrowRight class="h-4 w-4" />
+            <button class="d-btn min-h-11" :class="whiteCardPrimaryButtonClass()" :disabled="isSeedingDemo" @click="openDashboard">
+              <IconLoader v-if="isSeedingDemo" class="h-4 w-4 animate-spin" />
+              <template v-else>
+                {{ t('app-onboarding-explore-dashboard') }}
+                <IconArrowRight class="h-4 w-4" />
+              </template>
             </button>
           </div>
         </div>
@@ -1599,12 +1601,15 @@ watch(suggestedAppId, (value) => {
             </div>
 
             <div class="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <button class="d-btn min-h-11" :class="whiteCardSecondaryButtonClass()" @click="flowStep = 'choice'">
+              <button class="d-btn min-h-11" :class="whiteCardSecondaryButtonClass()" :disabled="isSeedingDemo" @click="flowStep = 'choice'">
                 {{ t('button-back') }}
               </button>
-              <button class="d-btn min-h-11" :class="whiteCardPrimaryButtonClass()" @click="openDashboard">
-                {{ t('app-onboarding-explore-dashboard') }}
-                <IconArrowRight class="h-4 w-4" />
+              <button class="d-btn min-h-11" :class="whiteCardPrimaryButtonClass()" :disabled="isSeedingDemo" @click="openDashboard">
+                <IconLoader v-if="isSeedingDemo" class="h-4 w-4 animate-spin" />
+                <template v-else>
+                  {{ t('app-onboarding-explore-dashboard') }}
+                  <IconArrowRight class="h-4 w-4" />
+                </template>
               </button>
             </div>
           </div>
