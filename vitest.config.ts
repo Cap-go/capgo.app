@@ -1,9 +1,11 @@
 import path from 'node:path'
 import { cwd } from 'node:process'
+import vue from '@vitejs/plugin-vue'
 import { loadEnv } from 'vite'
 import { defineConfig } from 'vitest/config'
 
 export default defineConfig(({ mode }) => ({
+  plugins: [vue()],
   resolve: {
     alias: {
       '@capgo/cli/sdk': path.resolve(cwd(), 'cli/src/sdk.ts'),
