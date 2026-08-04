@@ -838,10 +838,14 @@ function insertInitCodeAfterPrologue(content: string, codeToInject: string): str
   return `${before}${separatorBefore}${codeToInject}${separatorAfter}${after}`
 }
 
+function getExistingUpdaterBinding(filePath: string, content: string): string | undefined {
+  return path.extname(filePath) === '.cjs'
+    ? content.match(updaterRequirePattern)?.pop()
+    : content.match(updaterImportPattern)?.pop()
+}
+
 export function injectInitCode(filePath: string, currentContent: string): string {
-  const existingUpdaterBinding = path.extname(filePath) === '.cjs'
-    ? currentContent.match(updaterRequirePattern)?.pop()
-    : currentContent.match(updaterImportPattern)?.pop()
+  const existingUpdaterBinding = getExistingUpdaterBinding(filePath, currentContent)
   if (existingUpdaterBinding)
     return currentContent.replace(existingUpdaterBinding, `${existingUpdaterBinding}\n${getInitCodeCall()}`)
 
@@ -2850,7 +2854,12 @@ async function addCodeStep(orgId: string, apikey: string, appId: string) {
   }
   else {
     setInitCodeDiff(undefined)
-    pLog.info(`${createNuxtPlugin ? 'Add this plugin code manually:' : 'Add to your main file the following code:'}\n\n${createNuxtPlugin ? getNuxtUpdaterPluginContent() : getInitCodeInjection(filePath)}\n`)
+    const manualCode = createNuxtPlugin
+      ? getNuxtUpdaterPluginContent()
+      : getExistingUpdaterBinding(filePath, currentContent)
+        ? getInitCodeCall()
+        : getInitCodeInjection(filePath)
+    pLog.info(`${createNuxtPlugin ? 'Add this plugin code manually:' : 'Add to your main file the following code:'}\n\n${manualCode}\n`)
   }
 }
 
