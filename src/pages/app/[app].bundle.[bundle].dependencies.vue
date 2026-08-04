@@ -10,7 +10,7 @@ import IconCheckCircle from '~icons/heroicons/check-circle'
 import IconPuzzle from '~icons/heroicons/puzzle-piece'
 import IconSearch from '~icons/ic/round-search?raw'
 import IconAlertCircle from '~icons/lucide/alert-circle'
-import { comparePackages, summarizeCompatibility } from '~/services/bundleCompatibility'
+import { comparePackages, hasPlatformChecksumMetadataDrift, summarizeCompatibility } from '~/services/bundleCompatibility'
 import { useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
 
@@ -117,6 +117,19 @@ const sameVersionChecksumChanges = computed(() => comparisons.value.some((entry)
   return platformChecksumDiffs(entry).length > 0
 }))
 
+// One-sided iOS/Android checksum fields still count as incompatible; warn it may be a CLI false alarm.
+const cliPlatformChecksumMetadataDrift = computed(() =>
+  compareVersionId.value ? hasPlatformChecksumMetadataDrift(comparisons.value) : false,
+)
+
+const cliChecksumHint = computed(() => {
+  if (cliPlatformChecksumMetadataDrift.value)
+    return t('dependencies-cli-checksum-metadata-hint')
+  if (sameVersionChecksumChanges.value)
+    return t('dependencies-same-version-changed-hint')
+  return ''
+})
+
 const compareStatusMessage = computed(() => {
   if (!nativePackages.value.length)
     return ''
@@ -149,6 +162,8 @@ function reasonLabel(reason: IncompatibilityReason): string {
       return t('compat-reason-android-changed')
     case 'both_platforms_changed':
       return t('compat-reason-both-changed')
+    case 'platform_checksum_metadata_changed':
+      return t('compat-reason-platform-checksum-metadata')
     default:
       return reason
   }
@@ -235,7 +250,8 @@ function filteredReasons(entry: PackageComparison) {
       && reason !== 'requested_version_changed'
       && reason !== 'ios_code_changed'
       && reason !== 'android_code_changed'
-      && reason !== 'both_platforms_changed')
+      && reason !== 'both_platforms_changed'
+      && reason !== 'platform_checksum_metadata_changed')
     .map(reasonLabel)
 }
 
@@ -532,8 +548,12 @@ watch(bundleRouteKey, async (key) => {
               <p v-if="compareStatusMessage" class="mt-2 text-xs text-slate-500 dark:text-slate-400">
                 {{ compareStatusMessage }}
               </p>
-              <p v-if="sameVersionChecksumChanges" class="mt-1 text-xs text-amber-700 dark:text-amber-300">
-                {{ t('dependencies-same-version-changed-hint') }}
+              <p
+                v-if="cliChecksumHint"
+                data-test="dependencies-cli-checksum-hint"
+                class="mt-1 text-xs text-amber-700 dark:text-amber-300"
+              >
+                {{ cliChecksumHint }}
               </p>
 
               <div class="px-2 pb-2 relative">
@@ -612,6 +632,17 @@ watch(bundleRouteKey, async (key) => {
                               <span v-else :title="`${diff.baseline} → ${diff.candidate}`">
                                 {{ t('dependencies-checksum-diff-android', { before: hideHash(diff.baseline), after: hideHash(diff.candidate) }) }}
                               </span>
+                            </p>
+
+                            <p v-if="entry.platformChecksumMetadataChanged" class="text-amber-700 dark:text-amber-300">
+                              {{ t('compat-reason-platform-checksum-metadata') }}
+                            </p>
+                            <p
+                              v-if="entry.platformChecksumMetadataChanged"
+                              data-test="dependencies-cli-checksum-row-hint"
+                              class="text-amber-700 dark:text-amber-300"
+                            >
+                              {{ t('dependencies-cli-checksum-row-hint') }}
                             </p>
 
                             <p v-if="filteredReasons(entry).length > 0">

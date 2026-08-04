@@ -123,6 +123,7 @@ const globalStatsTrendData = ref<Array<{
   plan_team: number
   plan_enterprise: number
   registers_today: number
+  new_paying_orgs: number
   apps_created: number
   versions_created: number
   demo_apps_created: number
@@ -639,6 +640,24 @@ const registrationsTrendSeries = computed(() => {
         value: item.registers_today,
       })),
       color: '#3b82f6', // blue
+    },
+  ]
+})
+
+const registrationToSubscriptionConversionSeries = computed(() => {
+  if (globalStatsTrendData.value.length === 0)
+    return []
+
+  return [
+    {
+      label: t('registration-to-subscription-conversion'),
+      data: globalStatsTrendData.value.map(item => ({
+        date: item.date,
+        value: item.registers_today > 0
+          ? (item.new_paying_orgs / item.registers_today) * 100
+          : 0,
+      })),
+      color: '#8b5cf6', // violet
     },
   ]
 })
@@ -1447,6 +1466,19 @@ displayStore.defaultBack = '/dashboard'
               <AdminMultiLineChart
                 :series="registrationsTrendSeries"
                 :is-loading="isLoadingGlobalStatsTrend"
+              />
+            </ChartCard>
+
+            <!-- Registration to Subscription Conversion -->
+            <ChartCard
+              :title="t('registration-to-subscription-conversion')"
+              :is-loading="isLoadingGlobalStatsTrend"
+              :has-data="registrationToSubscriptionConversionSeries.length > 0"
+            >
+              <AdminMultiLineChart
+                :series="registrationToSubscriptionConversionSeries"
+                :is-loading="isLoadingGlobalStatsTrend"
+                value-suffix="%"
               />
             </ChartCard>
 
