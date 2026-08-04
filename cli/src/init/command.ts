@@ -5151,23 +5151,31 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
     else {
       const savedOrg = allOrganizations.find(org => org.gid === resumedSnapshot.orgId)
       const blocked2fa = savedOrg?.enforcing_2fa && !savedOrg['2fa_has_access']
-      const hasCreateAppPermission = savedOrg
+      const hasCreateAppPermission = savedOrg && !resumedSnapshot.appId
         ? await hasCliPermission(supabase, options.apikey, 'org.create_app', { orgId: savedOrg.gid })
         : false
+      const hasAppAccess = !savedOrg || !resumedSnapshot.appId
+        ? true
+        : Boolean(await findAppInOrganization(supabase, savedOrg.gid, resumedSnapshot.appId))
 
       if (!savedOrg) {
         pLog.warn(`Previously used organization "${resumedSnapshot.orgName}" is no longer available. Please select a new one.`)
         organization = await selectOrganizationForInit(supabase, options.apikey)
         await discardResumedState()
       }
-      else if (!hasCreateAppPermission) {
-        pLog.warn(`You no longer have permission to create an app in "${savedOrg.name}". Please select a different organization.`)
-        organization = await selectOrganizationForInit(supabase, options.apikey)
-        await discardResumedState()
-      }
       else if (blocked2fa) {
         pLog.warn(`Organization "${savedOrg.name}" now requires 2FA. Enable it at ${consoleWebUrl('/settings/account')}`)
         pLog.warn('Please select a different organization or enable 2FA and try again.')
+        organization = await selectOrganizationForInit(supabase, options.apikey)
+        await discardResumedState()
+      }
+      else if (!hasAppAccess) {
+        pLog.warn(`Previously used app "${resumedSnapshot.appId}" is no longer available. Please select a different organization.`)
+        organization = await selectOrganizationForInit(supabase, options.apikey)
+        await discardResumedState()
+      }
+      else if (!hasCreateAppPermission && !resumedSnapshot.appId) {
+        pLog.warn(`You no longer have permission to create an app in "${savedOrg.name}". Please select a different organization.`)
         organization = await selectOrganizationForInit(supabase, options.apikey)
         await discardResumedState()
       }
