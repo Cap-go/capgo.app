@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   buildNotificationBadgeStateQuery,
   buildNotificationRegistryLookupQuery,
+  buildGlobalNotificationStatsQuery,
   buildNotificationStatsQuery,
   createNotificationDeliveryEventProof,
   createNotificationEventProof,
@@ -211,6 +212,20 @@ describe('native notification AE registry', () => {
 
   it.concurrent('rejects stats query without any app id', () => {
     expect(() => buildNotificationStatsQuery({ dataset: 'notification_events' })).toThrow()
+  })
+
+  it.concurrent('builds global notification stats query for a day window', () => {
+    const query = buildGlobalNotificationStatsQuery({
+      dataset: 'notification_events',
+      since: new Date('2026-08-03T00:00:00Z'),
+      until: new Date('2026-08-04T00:00:00Z'),
+    })
+
+    expect(query).toContain('FROM notification_events')
+    expect(query).toContain("timestamp >= toDateTime('2026-08-03 00:00:00')")
+    expect(query).toContain("timestamp < toDateTime('2026-08-04 00:00:00')")
+    expect(query).toContain('GROUP BY blob1')
+    expect(query).not.toContain('index1')
   })
 
   it.concurrent('rejects campaign stats spanning multiple apps', () => {

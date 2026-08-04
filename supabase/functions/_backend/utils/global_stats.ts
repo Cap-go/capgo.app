@@ -22,4 +22,5 @@ export const REQUIRED_GLOBAL_STATS_SHARDS = [
 export const GLOBAL_STATS_SHARDS = [
   ...REQUIRED_GLOBAL_STATS_SHARDS,
   'notifications',
+  'native_notifications',
 ] as const

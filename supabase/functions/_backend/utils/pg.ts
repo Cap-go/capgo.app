@@ -1624,6 +1624,16 @@ export interface AdminGlobalStatsTrend {
   paying_orgs_subscription: number
   paying_orgs_credits: number
   paying_orgs_total: number
+  notifications_apps: number
+  notifications_providers: number
+  notifications_campaigns: number
+  notifications_campaigns_day: number
+  notifications_sent_day: number
+  notifications_received_day: number
+  notifications_opened_day: number
+  notifications_failed_day: number
+  notifications_sent_last_month: number
+  notifications_opened_last_month: number
 }
 
 export async function getAdminGlobalStatsTrend(
@@ -1774,7 +1784,17 @@ export async function getAdminGlobalStatsTrend(
         COALESCE(NULLIF(to_jsonb(gs) ->> 'live_updates_active_paying_clients_60d', '')::int, 0)::int AS live_updates_active_paying_clients_60d,
         COALESCE(NULLIF(to_jsonb(gs) ->> 'paying_orgs_subscription', '')::int, gs.paying::int, 0)::int AS paying_orgs_subscription,
         COALESCE(NULLIF(to_jsonb(gs) ->> 'paying_orgs_credits', '')::int, 0)::int AS paying_orgs_credits,
-        COALESCE(NULLIF(to_jsonb(gs) ->> 'paying_orgs_total', '')::int, gs.paying::int, 0)::int AS paying_orgs_total
+        COALESCE(NULLIF(to_jsonb(gs) ->> 'paying_orgs_total', '')::int, gs.paying::int, 0)::int AS paying_orgs_total,
+        COALESCE(NULLIF(to_jsonb(gs) ->> 'notifications_apps', '')::int, 0)::int AS notifications_apps,
+        COALESCE(NULLIF(to_jsonb(gs) ->> 'notifications_providers', '')::int, 0)::int AS notifications_providers,
+        COALESCE(NULLIF(to_jsonb(gs) ->> 'notifications_campaigns', '')::int, 0)::int AS notifications_campaigns,
+        COALESCE(NULLIF(to_jsonb(gs) ->> 'notifications_campaigns_day', '')::int, 0)::int AS notifications_campaigns_day,
+        COALESCE(NULLIF(to_jsonb(gs) ->> 'notifications_sent_day', '')::int, 0)::int AS notifications_sent_day,
+        COALESCE(NULLIF(to_jsonb(gs) ->> 'notifications_received_day', '')::int, 0)::int AS notifications_received_day,
+        COALESCE(NULLIF(to_jsonb(gs) ->> 'notifications_opened_day', '')::int, 0)::int AS notifications_opened_day,
+        COALESCE(NULLIF(to_jsonb(gs) ->> 'notifications_failed_day', '')::int, 0)::int AS notifications_failed_day,
+        COALESCE(NULLIF(to_jsonb(gs) ->> 'notifications_sent_last_month', '')::int, 0)::int AS notifications_sent_last_month,
+        COALESCE(NULLIF(to_jsonb(gs) ->> 'notifications_opened_last_month', '')::int, 0)::int AS notifications_opened_last_month
       FROM completed_stats gs
       LEFT JOIN completed_stats prev ON prev.date_id = (
         CASE
@@ -1907,6 +1927,16 @@ export async function getAdminGlobalStatsTrend(
       paying_orgs_subscription: Number(row.paying_orgs_subscription) || 0,
       paying_orgs_credits: Number(row.paying_orgs_credits) || 0,
       paying_orgs_total: Number(row.paying_orgs_total) || 0,
+      notifications_apps: Number(row.notifications_apps) || 0,
+      notifications_providers: Number(row.notifications_providers) || 0,
+      notifications_campaigns: Number(row.notifications_campaigns) || 0,
+      notifications_campaigns_day: Number(row.notifications_campaigns_day) || 0,
+      notifications_sent_day: Number(row.notifications_sent_day) || 0,
+      notifications_received_day: Number(row.notifications_received_day) || 0,
+      notifications_opened_day: Number(row.notifications_opened_day) || 0,
+      notifications_failed_day: Number(row.notifications_failed_day) || 0,
+      notifications_sent_last_month: Number(row.notifications_sent_last_month) || 0,
+      notifications_opened_last_month: Number(row.notifications_opened_last_month) || 0,
     }))
 
     if (data.length > 0) {

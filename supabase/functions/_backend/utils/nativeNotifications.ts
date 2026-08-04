@@ -617,6 +617,45 @@ export function buildNotificationStatsQuery(params: {
     + `ORDER BY count DESC`
 }
 
+
+export function buildGlobalNotificationStatsQuery(params: {
+  dataset: string
+  since: Date
+  until?: Date
+}) {
+  const untilClause = params.until
+    ? `\n  AND timestamp < toDateTime('${formatDateCF(params.until)}')`
+    : ''
+  return `SELECT blob1 AS event, COUNT(DISTINCT if(blob9 = '', concat(toString(timestamp), ':', blob1, ':', blob3, ':', blob4), blob9)) AS count\n`
+    + `FROM ${params.dataset}\n`
+    + `WHERE timestamp >= toDateTime('${formatDateCF(params.since)}')${untilClause}\n`
+    + `GROUP BY blob1\n`
+    + `ORDER BY count DESC`
+}
+
+export async function readGlobalNotificationStatsCF(c: Context<MiddlewareKeyVariables>, params: {
+  since: Date
+  until?: Date
+  throwOnError?: boolean
+}) {
+  if (!getEnv(c, 'CF_ANALYTICS_TOKEN') || !getEnv(c, 'CF_ACCOUNT_ANALYTICS_ID'))
+    return [] as NativeNotificationStatsRow[]
+  const query = buildGlobalNotificationStatsQuery({
+    dataset: getEventsDataset(c),
+    since: params.since,
+    until: params.until,
+  })
+  try {
+    return await runQueryToCFA<NativeNotificationStatsRow>(c, query)
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'readGlobalNotificationStatsCF error', error: serializeError(error) })
+    if (params.throwOnError)
+      throw error
+    return [] as NativeNotificationStatsRow[]
+  }
+}
+
 export async function readNotificationStatsCF(c: Context<MiddlewareKeyVariables>, params: {
   appId?: string
   appIds?: string[]
