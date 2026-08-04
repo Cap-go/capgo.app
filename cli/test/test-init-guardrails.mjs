@@ -13,6 +13,7 @@ import {
   getInitSuggestedOtaVersion,
   getInitUpdaterPluginConfig,
   getResumedOnboardingAccessError,
+  getNativePlatformAvailability,
   injectInitCode,
   isOnlyAllowedInitAutoTestChange,
   revertInitAutoTestChangeContent,
@@ -50,6 +51,19 @@ t('git status helper skips non-git folders', () => {
     assert.equal(status.inRepo, false)
     assert.equal(status.clean, true)
     assert.deepEqual(status.entries, [])
+  })
+})
+
+t('native platform availability honors custom Capacitor platform directories', () => {
+  withTempDir((root) => {
+    mkdirSync(join(root, 'native', 'android-app'), { recursive: true })
+    const availability = getNativePlatformAvailability({
+      ios: { path: 'native/apple-app' },
+      android: { path: 'native/android-app' },
+    }, root)
+
+    assert.equal(availability.ios, false)
+    assert.equal(availability.android, true)
   })
 })
 
