@@ -14,7 +14,6 @@ import IconGlobe from '~icons/lucide/globe-2'
 import IconLayers from '~icons/lucide/layers'
 import IconLoader from '~icons/lucide/loader-2'
 import IconPackage from '~icons/lucide/package'
-import IconPencil from '~icons/lucide/pencil-line'
 import IconRefresh from '~icons/lucide/refresh-cw'
 import IconSmartphone from '~icons/lucide/smartphone'
 import IconSparkles from '~icons/lucide/sparkles'
@@ -58,7 +57,6 @@ const config = getLocalConfig()
 type AppRow = Database['public']['Tables']['apps']['Row']
 type StandardFlowStep = 'details' | 'choice' | 'install' | 'setup'
 type PreOrgFlowStep = 'intent' | 'details' | 'organization' | 'setup'
-type OrgOnboardingMode = 'app-name' | 'name' | null
 
 interface UserCountStop {
   value: number
@@ -89,8 +87,8 @@ const appIdSuggestions = ref<string[]>([])
 const appIdFeedback = ref('')
 const hasEditedAppId = ref(false)
 const selectedIntent = ref<string | null>(null)
-const orgMode = ref<OrgOnboardingMode>(null)
 const orgNameInput = ref('')
+const hasEditedOrgName = ref(false)
 const estimatedUsersIndex = ref<number | null>(null)
 
 const intentOptions = [
@@ -214,9 +212,8 @@ const userCountStops = computed<UserCountStop[]>(() => {
   return planStops.length === planNameOrder.length ? planStops : fallbackUserCountStops
 })
 const selectedUserCountStop = computed<UserCountStop | null>(() => estimatedUsersIndex.value === null ? null : userCountStops.value[Math.min(estimatedUsersIndex.value, userCountStops.value.length - 1)] ?? null)
-const canShowOrgDetails = computed(() => orgMode.value !== null)
 const canCreatePreOrgOrganization = computed(() => {
-  if (!orgMode.value || !orgNameInput.value.trim())
+  if (!orgNameInput.value.trim())
     return false
   if (existingApp.value === true)
     return selectedUserCountStop.value !== null
@@ -601,9 +598,6 @@ function continuePreOrgDetails() {
   if (!ensureValidAppId())
     return
 
-  if (!orgMode.value)
-    orgMode.value = 'app-name'
-
   flowStep.value = 'organization'
 }
 
@@ -613,12 +607,12 @@ async function createOrganizationAndApp() {
     return
   }
 
-  if (!canCreatePreOrgOrganization.value) {
-    toast.error(t('organization-onboarding-mode-required'))
+  const orgName = orgNameInput.value.trim()
+  if (!orgName) {
+    toast.error(t('org-name-required'))
     return
   }
 
-  const orgName = orgNameInput.value.trim()
   const estimatedMau = existingApp.value === true
     ? selectedUserCountStop.value?.value
     : userCountStops.value[0]?.value
@@ -903,16 +897,6 @@ watch(existingApp, (value) => {
   appIdFeedback.value = ''
 })
 
-watch(orgMode, (value) => {
-  if (value === 'app-name')
-    orgNameInput.value = appName.value.trim()
-})
-
-watch(appName, (value) => {
-  if (orgMode.value === 'app-name')
-    orgNameInput.value = value.trim()
-})
-
 watch(existingAppSetup, (value) => {
   if (value === 'manual')
     resetStoreImportState()
@@ -921,6 +905,11 @@ watch(existingAppSetup, (value) => {
 watch(suggestedAppId, (value) => {
   if (!hasEditedAppId.value && !createdApp.value)
     manualAppId.value = value
+}, { immediate: true })
+
+watch(appName, (value) => {
+  if (!hasEditedOrgName.value)
+    orgNameInput.value = value.trim()
 }, { immediate: true })
 </script>
 
@@ -1277,140 +1266,105 @@ watch(suggestedAppId, (value) => {
                 {{ t('unified-onboarding-step-organization') }}
               </p>
               <h2 class="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
-                {{ t('organization-onboarding-question') }}
+                {{ t('unified-onboarding-organization-title') }}
               </h2>
+              <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                {{ t('unified-onboarding-organization-helper') }}
+              </p>
             </div>
 
-            <div class="grid gap-3 sm:grid-cols-2">
-              <button
-                type="button"
-                class="group flex min-h-24 items-start gap-3 rounded-xl border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900"
-                :class="whiteCardToggleButtonClass(orgMode === 'app-name')"
-                data-test="onboarding-mode-app-name"
-                @click="orgMode = 'app-name'"
+            <div>
+              <label for="onboarding-org-name-input" class="text-sm font-medium text-slate-800 dark:text-slate-200">
+                {{ t('organization-name') }}
+              </label>
+              <input
+                id="onboarding-org-name-input"
+                v-model="orgNameInput"
+                type="text"
+                :placeholder="t('organization-name')"
+                data-test="onboarding-org-name"
+                autocomplete="organization"
+                autofocus
+                class="d-input mt-2 min-h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-base text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/10 sm:text-sm dark:border-white/20 dark:bg-slate-950/90 dark:text-white dark:placeholder:text-slate-500 dark:focus:border-primary-500 dark:focus:ring-primary-500/30"
+                @input="hasEditedOrgName = true"
               >
-                <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-500 text-white">
-                  <IconSmartphone class="h-5 w-5" />
-                </span>
-                <span class="min-w-0 flex-1">
-                  <span class="block text-base font-semibold">{{ t('organization-onboarding-mode-app-name', { name: appName || t('app-onboarding-preview-placeholder') }) }}</span>
-                  <span class="mt-1 block text-sm leading-6 text-slate-500 dark:text-slate-400">
-                    {{ t('organization-onboarding-mode-app-name-helper') }}
-                  </span>
-                </span>
-                <IconCheck v-if="orgMode === 'app-name'" class="h-5 w-5 shrink-0 text-primary-500" />
-              </button>
-              <button
-                type="button"
-                class="group flex min-h-24 items-start gap-3 rounded-xl border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900"
-                :class="whiteCardToggleButtonClass(orgMode === 'name')"
-                data-test="onboarding-mode-name"
-                @click="orgMode = 'name'"
-              >
-                <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-900 text-white dark:bg-white dark:text-slate-950">
-                  <IconPencil class="h-5 w-5" />
-                </span>
-                <span class="min-w-0 flex-1">
-                  <span class="block text-base font-semibold">{{ t('organization-onboarding-mode-name') }}</span>
-                  <span class="mt-1 block text-sm leading-6 text-slate-500 dark:text-slate-400">
-                    {{ t('organization-onboarding-mode-name-helper') }}
-                  </span>
-                </span>
-                <IconCheck v-if="orgMode === 'name'" class="h-5 w-5 shrink-0 text-primary-500" />
-              </button>
             </div>
 
-            <template v-if="canShowOrgDetails">
-              <div>
-                <label for="onboarding-org-name-input" class="text-sm font-medium text-slate-800 dark:text-slate-200">
-                  {{ t('organization-name') }}
-                </label>
-                <input
-                  id="onboarding-org-name-input"
-                  v-model="orgNameInput"
-                  type="text"
-                  :placeholder="t('organization-name')"
-                  data-test="onboarding-org-name"
-                  class="mt-2 min-h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-base text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/10 sm:text-sm dark:border-white/20 dark:bg-slate-950/90 dark:text-white dark:placeholder:text-slate-500 dark:focus:border-primary-500 dark:focus:ring-primary-500/30"
-                >
-              </div>
+            <div v-if="existingApp === true">
+              <p id="estimated-users-label" class="flex items-center gap-2 text-sm font-medium text-slate-800 dark:text-slate-200">
+                <IconUsers class="h-4 w-4 text-primary-500" />
+                {{ t('organization-onboarding-existing-users-label') }}
+              </p>
+              <p id="estimated-users-help" class="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
+                {{ t('organization-onboarding-existing-users-helper') }}
+              </p>
 
-              <div v-if="existingApp === true">
-                <p id="estimated-users-label" class="flex items-center gap-2 text-sm font-medium text-slate-800 dark:text-slate-200">
-                  <IconUsers class="h-4 w-4 text-primary-500" />
-                  {{ t('organization-onboarding-existing-users-label') }}
-                </p>
-                <p id="estimated-users-help" class="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
-                  {{ t('organization-onboarding-existing-users-helper') }}
-                </p>
-
-                <div
-                  id="estimated-users"
-                  class="mt-3 grid gap-2 sm:grid-cols-2"
-                  role="radiogroup"
-                  aria-labelledby="estimated-users-label"
-                  aria-describedby="estimated-users-help"
-                  data-test="onboarding-estimated-users"
+              <div
+                id="estimated-users"
+                class="mt-3 grid gap-2 sm:grid-cols-2"
+                role="radiogroup"
+                aria-labelledby="estimated-users-label"
+                aria-describedby="estimated-users-help"
+                data-test="onboarding-estimated-users"
+              >
+                <label
+                  v-for="(stop, index) in userCountStops"
+                  :key="`${stop.planName}-${stop.value}`"
+                  class="group cursor-pointer"
+                  :data-value="stop.value"
+                  data-test="onboarding-estimated-users-option"
                 >
-                  <label
-                    v-for="(stop, index) in userCountStops"
-                    :key="`${stop.planName}-${stop.value}`"
-                    class="group cursor-pointer"
-                    :data-value="stop.value"
-                    data-test="onboarding-estimated-users-option"
+                  <input
+                    type="radio"
+                    name="estimated-users"
+                    class="peer sr-only"
+                    :value="index"
+                    :checked="isUserCountStopSelected(index)"
+                    @change="selectUserCountStop(index)"
                   >
-                    <input
-                      type="radio"
-                      name="estimated-users"
-                      class="peer sr-only"
-                      :value="index"
-                      :checked="isUserCountStopSelected(index)"
-                      @change="selectUserCountStop(index)"
-                    >
-                    <span
-                      class="flex min-h-16 items-center justify-between gap-3 rounded-xl border p-3 text-left transition peer-focus-visible:outline-none peer-focus-visible:ring-2 peer-focus-visible:ring-primary-500 peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-white dark:peer-focus-visible:ring-offset-slate-900"
-                      :class="isUserCountStopSelected(index)
-                        ? 'border-primary-500 bg-slate-100 text-slate-950 ring-2 ring-primary-500/15 dark:border-primary-500/80 dark:bg-primary-500/25 dark:text-white dark:ring-primary-500/30'
-                        : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50 dark:border-white/15 dark:bg-slate-950/90 dark:text-slate-200 dark:hover:border-white/30 dark:hover:bg-slate-900'"
-                    >
-                      <span class="min-w-0">
-                        <span class="block text-sm font-semibold">
-                          {{ getUserCountStopTitle(stop) }}
-                        </span>
-                        <span class="mt-1 block text-xs text-slate-500 dark:text-slate-400">
-                          {{ t('organization-onboarding-plan-match') }}: {{ stop.planName }}
-                        </span>
+                  <span
+                    class="flex min-h-16 items-center justify-between gap-3 rounded-xl border p-3 text-left transition peer-focus-visible:outline-none peer-focus-visible:ring-2 peer-focus-visible:ring-primary-500 peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-white dark:peer-focus-visible:ring-offset-slate-900"
+                    :class="isUserCountStopSelected(index)
+                      ? 'border-primary-500 bg-slate-100 text-slate-950 ring-2 ring-primary-500/15 dark:border-primary-500/80 dark:bg-primary-500/25 dark:text-white dark:ring-primary-500/30'
+                      : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50 dark:border-white/15 dark:bg-slate-950/90 dark:text-slate-200 dark:hover:border-white/30 dark:hover:bg-slate-900'"
+                  >
+                    <span class="min-w-0">
+                      <span class="block text-sm font-semibold">
+                        {{ getUserCountStopTitle(stop) }}
                       </span>
-                      <span
-                        class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border transition"
-                        :class="isUserCountStopSelected(index) ? 'border-primary-500 bg-primary-500 text-white' : 'border-slate-300 bg-white text-transparent group-hover:border-slate-400 dark:border-white/20 dark:bg-slate-900'"
-                        aria-hidden="true"
-                      >
-                        <IconCheck class="h-3.5 w-3.5" />
+                      <span class="mt-1 block text-xs text-slate-500 dark:text-slate-400">
+                        {{ t('organization-onboarding-plan-match') }}: {{ stop.planName }}
                       </span>
                     </span>
-                  </label>
-                </div>
+                    <span
+                      class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border transition"
+                      :class="isUserCountStopSelected(index) ? 'border-primary-500 bg-primary-500 text-white' : 'border-slate-300 bg-white text-transparent group-hover:border-slate-400 dark:border-white/20 dark:bg-slate-900'"
+                      aria-hidden="true"
+                    >
+                      <IconCheck class="h-3.5 w-3.5" />
+                    </span>
+                  </span>
+                </label>
               </div>
+            </div>
 
-              <div class="flex flex-col-reverse gap-3 border-t border-slate-200 pt-6 sm:flex-row sm:items-center sm:justify-between dark:border-white/15">
-                <button type="button" class="d-btn min-h-12" :class="whiteCardSecondaryButtonClass()" @click="flowStep = 'details'">
-                  {{ t('button-back') }}
-                </button>
-                <button
-                  type="button"
-                  class="d-btn min-h-12"
-                  :class="whiteCardPrimaryButtonClass()"
-                  data-test="onboarding-create-org"
-                  :disabled="!canCreatePreOrgOrganization || isSubmitting"
-                  @click="createOrganizationAndApp()"
-                >
-                  <IconLoader v-if="isSubmitting" class="h-4 w-4 animate-spin" />
-                  <span v-else>{{ t('unified-onboarding-continue-organization') }}</span>
-                  <IconArrowRight v-if="!isSubmitting" class="h-4 w-4" />
-                </button>
-              </div>
-            </template>
+            <div class="flex flex-col-reverse gap-3 border-t border-slate-200 pt-6 sm:flex-row sm:items-center sm:justify-between dark:border-white/15">
+              <button type="button" class="d-btn min-h-12" :class="whiteCardSecondaryButtonClass()" @click="flowStep = 'details'">
+                {{ t('button-back') }}
+              </button>
+              <button
+                type="button"
+                class="d-btn min-h-12"
+                :class="whiteCardPrimaryButtonClass()"
+                data-test="onboarding-create-org"
+                :disabled="!canCreatePreOrgOrganization || isSubmitting"
+                @click="createOrganizationAndApp()"
+              >
+                <IconLoader v-if="isSubmitting" class="h-4 w-4 animate-spin" />
+                <span v-else>{{ t('unified-onboarding-continue-organization') }}</span>
+                <IconArrowRight v-if="!isSubmitting" class="h-4 w-4" />
+              </button>
+            </div>
           </div>
         </div>
 
