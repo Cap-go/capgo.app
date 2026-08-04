@@ -328,7 +328,7 @@ async function fetchAppMetricsRows(
 }
 
 function metricDayNumber(metricDate: string, from: Date, graphDays: number): number | null {
-  const dayNumber = dayjs(metricDate).utc().startOf('day').diff(dayjs(from).utc().startOf('day'), 'day')
+  const dayNumber = dayjs.utc(metricDate).startOf('day').diff(dayjs(from).utc().startOf('day'), 'day')
   if (dayNumber < 0 || dayNumber >= graphDays)
     return null
   return dayNumber

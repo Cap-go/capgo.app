@@ -406,7 +406,7 @@
   "app-onboarding-icon-label": "App icon",
   "app-onboarding-icon-preview-alt": "App icon preview",
   "app-onboarding-install-badge": "CLI onboarding",
-  "app-onboarding-install-later": "I'll do the CLI later",
+  "app-onboarding-install-later": "Explore the Capgo dashboard",
   "app-onboarding-install-ready-title": "App created",
   "app-onboarding-install-subtitle": "Run the init command in the app project. The upcoming CLI change can detect this pending app and reuse it instead of creating a second app in Capgo.",
   "app-onboarding-install-title": "Finish setup in your app",
