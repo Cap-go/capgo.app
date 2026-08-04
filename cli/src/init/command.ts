@@ -1036,21 +1036,19 @@ async function runCapacitorPlatformAdd(platformName: 'ios' | 'android', runner: 
     ? `Running: ${command}`
     : `Running in ${commandCwd}: ${command}`
   spinner.start(runMessage)
+  spinner.stop()
 
-  let parsedRunner: { command: string, args: string[] }
-  try {
-    parsedRunner = splitRunnerCommand(runner)
-  }
-  catch (error) {
+  const result = await streamCommandInInitPanel({
+    title: `Adding ${platformName.toUpperCase()} native project`,
+    runner,
+    args: ['cap', 'add', platformName],
+    cwd: commandCwd,
+  })
+  await delay(result.success ? 750 : 3500)
+  clearInitStreamingOutput()
+  if (!result.success) {
     spinner.stop(`Could not add ${platformName} automatically ❌`)
-    pLog.error(formatError(error))
-    return false
-  }
-
-  const result = await runInheritedCommand(parsedRunner.command, [...parsedRunner.args, 'cap', 'add', platformName], { cwd: commandCwd })
-  if (result.error || result.status !== 0) {
-    spinner.stop(`Could not add ${platformName} automatically ❌`)
-    pLog.error(formatInheritedCommandFailure(result))
+    pLog.error(result.error?.message ?? 'Unknown error while adding the native platform')
     return false
   }
 
@@ -1639,22 +1637,35 @@ async function runNativeResetCommand(platformRunner: string, nativePlatform: Pla
   const resetSpinner = pSpinner()
   resetSpinner.start(`Running: ${resetAdvice.command}`)
   try {
-    const parsedRunner = splitRunnerCommand(platformRunner)
     rmSync(nativePlatform, { recursive: true, force: true })
+    resetSpinner.stop()
 
-    const addResult = await runInheritedCommand(parsedRunner.command, [...parsedRunner.args, 'cap', 'add', nativePlatform])
-    if (addResult.error || addResult.status !== 0)
-      throw addResult.error ?? new Error(`cap add ${nativePlatform} failed with ${formatInheritedCommandFailure(addResult)}`)
+    const addResult = await streamCommandInInitPanel({
+      title: `Recreating ${nativePlatform.toUpperCase()} native project`,
+      runner: platformRunner,
+      args: ['cap', 'add', nativePlatform],
+    })
+    if (!addResult.success)
+      throw addResult.error ?? new Error(`cap add ${nativePlatform} failed`)
 
-    const syncResult = await runInheritedCommand(parsedRunner.command, [...parsedRunner.args, 'cap', 'sync', nativePlatform])
-    if (syncResult.error || syncResult.status !== 0)
-      throw syncResult.error ?? new Error(`cap sync ${nativePlatform} failed with ${formatInheritedCommandFailure(syncResult)}`)
+    const syncResult = await streamCommandInInitPanel({
+      title: `Syncing ${nativePlatform.toUpperCase()} native project`,
+      runner: platformRunner,
+      args: ['cap', 'sync', nativePlatform],
+    })
+    if (!syncResult.success)
+      throw syncResult.error ?? new Error(`cap sync ${nativePlatform} failed`)
 
+    await delay(750)
     resetSpinner.stop(successMessage)
   }
   catch (err) {
+    await delay(3500)
     resetSpinner.stop(failureMessage)
     pLog.error(formatError(err))
+  }
+  finally {
+    clearInitStreamingOutput()
   }
 }
 
@@ -3037,26 +3048,33 @@ async function addEncryptionStep(orgId: string, apikey: string, appId: string) {
  */
 async function streamCommandInInitPanel(params: {
   title: string
-  runner: string // e.g. "npx", "bunx", "yarn dlx"
+  runner?: string // e.g. "npx", "bunx", "yarn dlx"
+  command?: string // e.g. "npm", "pnpm", "yarn", "bun"
   args: string[]
   cwd?: string
 }): Promise<{ success: boolean, error?: Error }> {
+  const commandPrefix = params.command ?? params.runner ?? ''
+  const displayCommand = `${commandPrefix} ${params.args.join(' ')}`.trim()
+  // Show the panel before command resolution so even invalid command setup is
+  // rendered by Ink rather than surfacing as a bare terminal error.
+  startInitStreamingOutput({ title: params.title, command: displayCommand })
+
   // `pm.runner` can contain a space ("yarn dlx", "pnpm exec"). `spawn`
   // without `shell:true` can't handle that, and `shell:true` brings
   // quoting risk, so we split the runner into its own head + tail args.
-  let runnerCommand
+  let runnerCommand: { command: string, args: string[] }
   try {
-    runnerCommand = splitRunnerCommand(params.runner)
+    runnerCommand = params.command
+      ? { command: params.command, args: [] }
+      : splitRunnerCommand(params.runner ?? '')
   }
   catch (error) {
-    return { success: false, error: error instanceof Error ? error : new Error(String(error)) }
+    const resolvedError = error instanceof Error ? error : new Error(String(error))
+    updateInitStreamingStatus('error', resolvedError.message)
+    return { success: false, error: resolvedError }
   }
   const { command: runnerCmd, args: runnerArgs } = runnerCommand
   const fullArgs = [...runnerArgs, ...params.args]
-  const displayCommand = `${params.runner} ${params.args.join(' ')}`
-
-  startInitStreamingOutput({ title: params.title, command: displayCommand })
-
   const appendChunk = (chunk: { toString: (encoding: string) => string } | string) => {
     const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8')
     // Capacitor CLI output mixes \r\n and bare \n; split on both but keep
@@ -3072,9 +3090,9 @@ async function streamCommandInInitPanel(params: {
     let child
     try {
       child = spawn(runnerCmd, fullArgs, {
-        // stdin ignored — cap sync is non-interactive. stdout/stderr piped
-        // so Node can read them without touching the parent TTY that Ink
-        // is actively rendering into.
+        // Onboarding commands that use this helper must be non-interactive.
+        // Keep stdin ignored and capture stdout/stderr so no child process
+        // touches the parent TTY while Ink is actively rendering into it.
         cwd: params.cwd,
         stdio: ['ignore', 'pipe', 'pipe'],
       })
@@ -3301,6 +3319,7 @@ async function ensureUpdaterReadyBeforeSync(pm: PackageManagerInfo, orgId: strin
 
 async function runBuildAndSyncLoop(
   platform: PlatformChoice,
+  buildCommand: string,
   buildAndSyncCommand: string,
   buildAndSyncCwd: string,
   packageJsonPath: string,
@@ -3320,9 +3339,36 @@ async function runBuildAndSyncLoop(
       : `Running in ${buildAndSyncCwd}: ${buildAndSyncCommand}`
     spinner.stop(runMessage, 'neutral')
     try {
-      const result = await runInheritedShellCommand(buildAndSyncCommand, { cwd: buildAndSyncCwd })
-      if (result.error || result.status !== 0)
-        throw result.error ?? new Error(`Build or sync command failed with ${formatInheritedCommandFailure(result)}`)
+      const buildResult = await streamCommandInInitPanel({
+        title: 'Building web assets',
+        command: pm.pm,
+        args: ['run', buildCommand],
+        cwd: buildAndSyncCwd,
+      })
+      if (!buildResult.success) {
+        await delay(3500)
+        clearInitStreamingOutput()
+        throw buildResult.error ?? new Error('Build command failed')
+      }
+
+      // Keep the completed build output visible long enough for users to
+      // understand that the next streamed command is the native sync.
+      await delay(1500)
+
+      const syncResult = await streamCommandInInitPanel({
+        title: `Syncing ${platform.toUpperCase()} native project`,
+        runner: pm.runner,
+        args: ['cap', 'sync', platform],
+        cwd: buildAndSyncCwd,
+      })
+      if (!syncResult.success) {
+        await delay(3500)
+        clearInitStreamingOutput()
+        throw syncResult.error ?? new Error('Capacitor sync command failed')
+      }
+
+      await delay(1500)
+      clearInitStreamingOutput()
     }
     catch (error) {
       pLog.error('Build or sync failed ❌')
@@ -3358,7 +3404,7 @@ async function runProjectBuildAndSync(appId: string, platform: PlatformChoice, o
     return handleMissingBuildScript(buildCommand, appId, platform, orgId, apikey, pm)
 
   const buildAndSyncCommand = `${pm.pm} run ${buildCommand} && ${pm.runner} cap sync ${platform}`
-  await runBuildAndSyncLoop(platform, buildAndSyncCommand, projectDir, packageJsonPath, pm, orgId, apikey)
+  await runBuildAndSyncLoop(platform, buildCommand, buildAndSyncCommand, projectDir, packageJsonPath, pm, orgId, apikey)
   return 'completed'
 }
 
@@ -3386,11 +3432,6 @@ async function buildProjectStep(orgId: string, apikey: string, appId: string, pl
 export function runPackageRunnerSync(runner: string, args: string[], options: Parameters<typeof spawnSync>[2]) {
   const parsedRunner = splitRunnerCommand(runner)
   return spawnSync(parsedRunner.command, [...parsedRunner.args, ...args], options)
-}
-
-async function runPackageRunnerInherited(runner: string, args: string[], options: Pick<InheritedCommandOptions, 'cwd'> = {}) {
-  const parsedRunner = splitRunnerCommand(runner)
-  return runInheritedCommand(parsedRunner.command, [...parsedRunner.args, ...args], options)
 }
 
 interface InheritedCommandResult {
@@ -3530,20 +3571,6 @@ async function runPtyInheritedCommand(command: string, args: string[], options: 
       stdin.resume()
     }
   })
-}
-
-function runInheritedShellCommand(command: string, options: Pick<InheritedCommandOptions, 'cwd'> = {}) {
-  const shellCommand = platform === 'win32' ? (env.ComSpec || 'cmd.exe') : '/bin/sh'
-  const shellArgs = platform === 'win32' ? ['/d', '/s', '/c', command] : ['-c', command]
-  return runInheritedCommand(shellCommand, shellArgs, options)
-}
-
-function formatInheritedCommandFailure(result: InheritedCommandResult) {
-  if (result.error)
-    return formatError(result.error)
-  if (result.signal)
-    return `signal ${result.signal}`
-  return `exit code ${result.status ?? 'unknown'}`
 }
 
 function getSpawnOutputText(output: string | Buffer | null | undefined): string {
@@ -4074,21 +4101,30 @@ async function runDeviceStep(orgId: string, apikey: string, appId: string, platf
       ? `Running: ${runCommand.command}`
       : `Running in ${projectDir}: ${runCommand.command}`
     s.start(runMessage)
+    s.stop()
 
-    let runResult: InheritedCommandResult | undefined
+    let runResult: Awaited<ReturnType<typeof streamCommandInInitPanel>> | undefined
     let runError: Error | undefined
     try {
-      runResult = await runPackageRunnerInherited(pm.runner, runCommand.args, { cwd: projectDir })
+      runResult = await streamCommandInInitPanel({
+        title: `Running on ${platform.toUpperCase()} device`,
+        runner: pm.runner,
+        args: runCommand.args,
+        cwd: projectDir,
+      })
+      await delay(runResult.success ? 750 : 3500)
+      clearInitStreamingOutput()
     }
     catch (error) {
       runError = error instanceof Error ? error : new Error(String(error))
+      clearInitStreamingOutput()
     }
-    const runFailed = runError || runResult?.error || runResult?.status !== 0
+    const runFailed = runError || !runResult?.success
 
     if (runFailed) {
       const platformName = platform === 'ios' ? 'iOS' : 'Android'
       s.stop(`App failed to start ❌`)
-      appendInternalLog(`app run failed (${platformName}): ${(runError || runResult?.error) ? formatError(runError ?? runResult?.error) : `exit status ${runResult?.status ?? 'unknown'}`}`)
+      appendInternalLog(`app run failed (${platformName}): ${(runError || runResult?.error) ? formatError(runError ?? runResult?.error) : 'unknown error'}`)
       if (runError || runResult?.error)
         pLog.error(formatError(runError ?? runResult?.error))
       pLog.error(`The app failed to start on your ${platformName} device.`)
@@ -4100,9 +4136,17 @@ async function runDeviceStep(orgId: string, apikey: string, appId: string, platf
       if (!pIsCancel(openIDE) && openIDE) {
         const s2 = pSpinner()
         s2.start(`Opening ${platform === 'ios' ? 'Xcode' : 'Android Studio'}...`)
+        s2.stop()
         try {
-          const openResult = await runPackageRunnerInherited(pm.runner, ['cap', 'open', platform], { cwd: projectDir })
-          if (openResult.error || openResult.status !== 0) {
+          const openResult = await streamCommandInInitPanel({
+            title: `Opening ${platform === 'ios' ? 'Xcode' : 'Android Studio'}`,
+            runner: pm.runner,
+            args: ['cap', 'open', platform],
+            cwd: projectDir,
+          })
+          await delay(openResult.success ? 750 : 3500)
+          clearInitStreamingOutput()
+          if (!openResult.success) {
             s2.stop(`Could not open ${platform === 'ios' ? 'Xcode' : 'Android Studio'} ❌`)
             if (openResult.error)
               pLog.error(formatError(openResult.error))
