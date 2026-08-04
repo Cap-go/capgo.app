@@ -33,6 +33,7 @@ describe('assertAscAccess', () => {
     const res = await assertAscAccess({ ...creds, fetchImpl })
 
     expect(res.ok).toBe(true)
+    expect(authorization).toMatch(/^Bearer /)
     const token = authorization.replace(/^Bearer /, '')
     const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString()) as { iat: number, exp: number }
     expect(payload.exp - payload.iat).toBe(15 * 60)
