@@ -2255,7 +2255,7 @@ async function addChannelStep(orgId: string, apikey: string, appId: string) {
   pLog.info(``)
   pLog.info(`A channel is a release track that controls which users get which updates.`)
   pLog.info(`Most apps only need one: "production". You can add more later.`)
-  pLog.info(`   Learn more: https://capgo.app/docs/live-updates/channels/`)
+  pLog.info(`Learn more: https://capgo.app/docs/live-updates/channels/`)
   let channelName = globalChannelName
   const channelChoice = await pSelect({
     message: 'Which channel name do you want to use?',
