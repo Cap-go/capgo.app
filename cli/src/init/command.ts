@@ -60,6 +60,8 @@ const codeInject = 'CapacitorUpdater.notifyAppReady()'
 const notifyAppReadyComment = '// Confirm this bundle started successfully so Capgo can keep it instead of rolling back to the previous bundle.'
 // create regex to find line who start by 'import ' and end by ' from '
 const regexImport = /import.*from.*/g
+const updaterImportPattern = /import\s*\{\s*CapacitorUpdater\s*\}\s*from\s*['"]@capgo\/capacitor-updater['"]/g
+const updaterRequirePattern = /(?:const|let|var)\s*(?:\{\s*CapacitorUpdater\s*\}|CapacitorUpdater)\s*=\s*require\(\s*['"]@capgo\/capacitor-updater['"]\s*\)/g
 const defaultChannel = 'production'
 const channelNameRegex = /^[\w.-]+$/
 const appIdRegex = /^[a-z0-9]+(?:\.[\w-]+)+$/i
@@ -758,7 +760,11 @@ function buildCodeDiffLines(beforeContent: string, afterContent: string, context
 
 function getInitCodeInjection(filePath: string): string {
   const updaterImport = path.extname(filePath) === '.cjs' ? requireInject : importInject
-  return `${updaterImport};\n\n${notifyAppReadyComment}\n${codeInject};`
+  return `${updaterImport};\n\n${getInitCodeCall()}`
+}
+
+function getInitCodeCall(): string {
+  return `${notifyAppReadyComment}\n${codeInject};`
 }
 
 function insertInitCodeAfterPrologue(content: string, codeToInject: string): string {
@@ -771,7 +777,7 @@ function insertInitCodeAfterPrologue(content: string, codeToInject: string): str
   // Framework directives can follow a BOM, whitespace, or comments. Keep that
   // complete prologue ahead of the injected import so their semantics remain intact.
   const leadingTriviaPattern = /^(?:\uFEFF|[\t \r\n]|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*(?:\r?\n|$))*/
-  const directivePattern = /^[\t ]*(['"])(?:use client|use server|use strict)\1;?[\t ]*(?:\r?\n|$)/
+  const directivePattern = /^[\t ]*(['"])(?:use client|use server|use strict)\1;?[\t ]*(?:(?:\/\/[^\r\n]*)|(?:\/\*[\s\S]*?\*\/))*[\t ]*(?:\r?\n|$)/
   while (true) {
     const remainingContent = content.slice(insertionIndex)
     const leadingTrivia = remainingContent.match(leadingTriviaPattern)?.[0] ?? ''
@@ -789,6 +795,12 @@ function insertInitCodeAfterPrologue(content: string, codeToInject: string): str
 }
 
 export function injectInitCode(filePath: string, currentContent: string): string {
+  const existingUpdaterBinding = path.extname(filePath) === '.cjs'
+    ? currentContent.match(updaterRequirePattern)?.pop()
+    : currentContent.match(updaterImportPattern)?.pop()
+  if (existingUpdaterBinding)
+    return currentContent.replace(existingUpdaterBinding, `${existingUpdaterBinding}\n${getInitCodeCall()}`)
+
   const lastImport = currentContent.match(regexImport)?.pop()
   const codeToInject = getInitCodeInjection(filePath)
   if (lastImport) {
@@ -2794,7 +2806,7 @@ async function addCodeStep(orgId: string, apikey: string, appId: string) {
   }
   else {
     setInitCodeDiff(undefined)
-    pLog.info(`Add to your main file the following code:\n\n${getInitCodeInjection(filePath)}\n`)
+    pLog.info(`${createNuxtPlugin ? 'Add this plugin code manually:' : 'Add to your main file the following code:'}\n\n${createNuxtPlugin ? getNuxtUpdaterPluginContent() : getInitCodeInjection(filePath)}\n`)
   }
 }
 
