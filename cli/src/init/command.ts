@@ -2293,9 +2293,12 @@ async function addChannelStep(orgId: string, apikey: string, appId: string) {
       return channelName
     }
     catch (error) {
-      s.stop(`Channel creation failed ❌`)
-      if (!isChannelAlreadyExistsError(error))
+      if (!isChannelAlreadyExistsError(error)) {
+        s.stop(`Channel creation failed ❌`)
         throw error
+      }
+
+      s.stop(`Channel already exists`)
 
       const existingChannelChoice = await pSelect({
         message: `The channel "${channelName}" already exists. What would you like to do?`,
