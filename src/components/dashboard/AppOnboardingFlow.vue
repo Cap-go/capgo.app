@@ -1256,8 +1256,8 @@ watch(suggestedAppId, (value) => {
                     <code class="block whitespace-pre-wrap break-all text-sm">
                       <span class="text-slate-500">npx</span>
                       <span class="text-sky-300"> @capgo/cli@latest</span>
-                      <span class="mr-1 font-bold text-violet-300"> {{ cliSubcommand }}</span>
-                      <span class="text-emerald-300"> {{ apiKey ?? '[APIKEY]' }}</span>
+                      <span class="font-bold text-violet-300">&nbsp;{{ cliSubcommand }}</span>
+                      <span class="text-emerald-300">&nbsp;{{ apiKey ?? '[APIKEY]' }}</span>
                       <template v-for="(arg, index) in cliCommandArgs" :key="`${arg}-${index}`">
                         <span :class="index % 2 === 0 ? 'text-amber-300' : 'text-cyan-300'"> {{ arg }}</span>
                       </template>
@@ -1415,22 +1415,16 @@ watch(suggestedAppId, (value) => {
         </div>
 
         <div v-else-if="flowStep === 'setup' && createdApp" class="space-y-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900/95">
-          <div class="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <p class="text-sm font-semibold text-primary-500 dark:text-slate-300">
-                {{ t('unified-onboarding-step-setup') }}
-              </p>
-              <h2 class="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
-                {{ setupTitle }}
-              </h2>
-              <p class="mt-2 max-w-2xl text-sm leading-6 text-slate-600 dark:text-slate-300">
-                {{ setupSubtitle }}
-              </p>
-            </div>
-            <button class="d-btn min-h-11" :class="whiteCardSecondaryButtonClass()" :disabled="isSeedingDemo" @click="openDashboard">
-              <IconLoader v-if="isSeedingDemo" class="h-4 w-4 animate-spin" />
-              {{ t('app-onboarding-open-dashboard') }}
-            </button>
+          <div>
+            <p class="text-sm font-semibold text-primary-500 dark:text-slate-300">
+              {{ t('unified-onboarding-step-setup') }}
+            </p>
+            <h2 class="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
+              {{ setupTitle }}
+            </h2>
+            <p class="mt-2 max-w-2xl text-sm leading-6 text-slate-600 dark:text-slate-300">
+              {{ setupSubtitle }}
+            </p>
           </div>
 
           <div
@@ -1446,8 +1440,8 @@ watch(suggestedAppId, (value) => {
             <code class="block whitespace-pre-wrap break-all text-sm">
               <span class="text-slate-500">npx</span>
               <span class="text-sky-300"> @capgo/cli@latest</span>
-              <span class="mr-1 font-bold text-violet-300"> {{ cliSubcommand }}</span>
-              <span class="text-emerald-300"> {{ apiKey ?? '[APIKEY]' }}</span>
+              <span class="font-bold text-violet-300">&nbsp;{{ cliSubcommand }}</span>
+              <span class="text-emerald-300">&nbsp;{{ apiKey ?? '[APIKEY]' }}</span>
               <template v-for="(arg, index) in cliCommandArgs" :key="`${arg}-${index}`">
                 <span :class="index % 2 === 0 ? 'text-amber-300' : 'text-cyan-300'"> {{ arg }}</span>
               </template>
@@ -1476,7 +1470,7 @@ watch(suggestedAppId, (value) => {
             <button class="d-btn min-h-11" :class="whiteCardPrimaryButtonClass()" :disabled="isSeedingDemo" @click="openDashboard">
               <IconLoader v-if="isSeedingDemo" class="h-4 w-4 animate-spin" />
               <template v-else>
-                {{ t('app-onboarding-install-later') }}
+                {{ t('app-onboarding-explore-dashboard') }}
                 <IconArrowRight class="h-4 w-4" />
               </template>
             </button>
@@ -1556,22 +1550,16 @@ watch(suggestedAppId, (value) => {
 
         <div v-else-if="!props.preOrg && flowStep === 'install' && createdApp">
           <div class="space-y-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900/95">
-            <div class="flex flex-wrap items-start justify-between gap-4">
-              <div>
-                <p class="text-sm font-semibold text-primary-500 dark:text-slate-300">
-                  {{ t('app-onboarding-install-badge') }}
-                </p>
-                <h2 class="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
-                  {{ t('app-onboarding-install-title') }}
-                </h2>
-                <p class="mt-2 max-w-2xl text-sm leading-6 text-slate-600 dark:text-slate-300">
-                  {{ t('app-onboarding-install-subtitle') }}
-                </p>
-              </div>
-              <button class="d-btn min-h-11" :class="whiteCardSecondaryButtonClass()" :disabled="isSeedingDemo" @click="openDashboard">
-                <IconLoader v-if="isSeedingDemo" class="h-4 w-4 animate-spin" />
-                {{ t('app-onboarding-open-dashboard') }}
-              </button>
+            <div>
+              <p class="text-sm font-semibold text-primary-500 dark:text-slate-300">
+                {{ t('app-onboarding-install-badge') }}
+              </p>
+              <h2 class="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
+                {{ t('app-onboarding-install-title') }}
+              </h2>
+              <p class="mt-2 max-w-2xl text-sm leading-6 text-slate-600 dark:text-slate-300">
+                {{ t('app-onboarding-install-subtitle') }}
+              </p>
             </div>
 
             <div
@@ -1586,8 +1574,8 @@ watch(suggestedAppId, (value) => {
               <code class="block whitespace-pre-wrap break-all text-sm">
                 <span class="text-slate-500">npx</span>
                 <span class="text-sky-300"> @capgo/cli@latest</span>
-                <span class="mr-1 font-bold text-violet-300"> {{ cliSubcommand }}</span>
-                <span class="text-emerald-300"> {{ apiKey ?? '[APIKEY]' }}</span>
+                <span class="font-bold text-violet-300">&nbsp;{{ cliSubcommand }}</span>
+                <span class="text-emerald-300">&nbsp;{{ apiKey ?? '[APIKEY]' }}</span>
                 <template v-for="(arg, index) in cliCommandArgs" :key="`${arg}-${index}`">
                   <span :class="index % 2 === 0 ? 'text-amber-300' : 'text-cyan-300'"> {{ arg }}</span>
                 </template>
@@ -1619,7 +1607,7 @@ watch(suggestedAppId, (value) => {
               <button class="d-btn min-h-11" :class="whiteCardPrimaryButtonClass()" :disabled="isSeedingDemo" @click="openDashboard">
                 <IconLoader v-if="isSeedingDemo" class="h-4 w-4 animate-spin" />
                 <template v-else>
-                  {{ t('app-onboarding-install-later') }}
+                  {{ t('app-onboarding-explore-dashboard') }}
                   <IconArrowRight class="h-4 w-4" />
                 </template>
               </button>
