@@ -58,6 +58,7 @@ await t('channel conflict detector matches the channel name uniqueness error', (
   assert.equal(isChannelAlreadyExistsError(new Error('Cannot create channel: duplicate key value violates unique constraint "unique_name_app_id" | Code: 23505')), true)
   assert.equal(isChannelAlreadyExistsError({ code: '23505', message: 'duplicate key value violates unique constraint "unique_name_app_id"' }), true)
   assert.equal(isChannelAlreadyExistsError({ code: '23505' }), false)
+  assert.equal(isChannelAlreadyExistsError(new Error('duplicate key value violates unique constraint "channels_public_platform_key"')), false)
   assert.equal(isChannelAlreadyExistsError(new Error('network unavailable')), false)
 })
 

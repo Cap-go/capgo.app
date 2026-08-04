@@ -17,5 +17,4 @@ export function isChannelAlreadyExistsError(error: unknown): boolean {
   })().toLowerCase()
 
   return errorMessage.includes('unique_name_app_id')
-    || (errorMessage.includes('duplicate key') && errorMessage.includes('channel'))
 }
