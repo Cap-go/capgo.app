@@ -7,11 +7,13 @@ import OnboardingSupportUsernames from '~/components/dashboard/OnboardingSupport
 import { useSupabase } from '~/services/supabase'
 import {
   dismissSupportUsernamesPromptForever,
+  isOnboardingOrganizationSet,
   markSupportUsernamesPromptShown,
   shouldShowSupportUsernamesPrompt,
 } from '~/services/supportUsernamesPrompt'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
+import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
 
 const PROMPT_DELAY_MS = 2500
 
@@ -20,11 +22,23 @@ const route = useRoute()
 const main = useMainStore()
 const supabase = useSupabase()
 const dialogStore = useDialogV2Store()
+const organizationStore = useOrganizationStore()
 
 const isOpen = ref(false)
 const isSaving = ref(false)
 const discordUsername = ref('')
 let showTimer: ReturnType<typeof setTimeout> | undefined
+
+const isOnboarding = computed(() => {
+  const organizations = organizationStore.organizations
+    .filter(org => !isPendingOrganizationInvite(org))
+
+  // Organization state is loaded asynchronously. Hide the prompt until it is known that the user is past onboarding.
+  if (organizationStore.organizations.length === 0 || organizations.length === 0)
+    return true
+
+  return isOnboardingOrganizationSet(organizations)
+})
 
 const blockedPath = computed(() => {
   const path = route.path
@@ -43,7 +57,7 @@ function syncDiscordFromUser() {
 }
 
 function canOpenPrompt() {
-  if (blockedPath.value || dialogStore.showDialog || isOpen.value)
+  if (isOnboarding.value || blockedPath.value || dialogStore.showDialog || isOpen.value)
     return false
   return shouldShowSupportUsernamesPrompt(main.user)
 }
@@ -129,11 +143,13 @@ async function saveAndClose() {
 }
 
 watch(
-  () => [main.user?.id, main.user?.discord_username, main.user?.github_username, route.path, dialogStore.showDialog] as const,
+  () => [main.user?.id, main.user?.discord_username, main.user?.github_username, route.path, dialogStore.showDialog, isOnboarding.value] as const,
   () => {
-    if (!shouldShowSupportUsernamesPrompt(main.user) || blockedPath.value) {
+    if (isOnboarding.value || !shouldShowSupportUsernamesPrompt(main.user) || blockedPath.value) {
       if (showTimer)
         clearTimeout(showTimer)
+      if (isOnboarding.value)
+        closePrompt()
       return
     }
     schedulePrompt()

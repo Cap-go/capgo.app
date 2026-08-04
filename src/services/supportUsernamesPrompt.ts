@@ -12,6 +12,10 @@ export function hasSupportUsernames(user: { discord_username?: string | null, gi
   return Boolean(user?.discord_username && user?.github_username)
 }
 
+export function isOnboardingOrganizationSet(organizations: Array<{ app_count: number }>) {
+  return organizations.length === 1 && organizations[0].app_count <= 1
+}
+
 export function isSupportUsernamesPromptDismissedForever(userId: string) {
   if (typeof localStorage === 'undefined')
     return false
