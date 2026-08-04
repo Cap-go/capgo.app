@@ -28,6 +28,7 @@ import { showReplicationProgress } from '../replicationProgress'
 import { formatRunnerCommand, splitRunnerCommand } from '../runner-command'
 import { copyToClipboard, revealInFinder } from '../support/clipboard'
 import { contactSupport } from '../support/contact-support'
+import { isChannelAlreadyExistsError } from './channel-conflict'
 import { appendInternalLog, getInternalLogPath, startInternalLog } from '../support/internal-log'
 import { uploadSupportLogs } from '../support/support-upload'
 import { consoleWebUrl, createSupabaseClient, defaultApiHost, findBuildCommandForProjectType, findMainFile, findMainFileForProjectType, findProjectType, findRoot, findSavedKey, findSavedKeySilent, formatError, getAllPackagesDependencies, getAppId, getBundleVersion, getConfig, getConfigForWrite, getLocalConfig, getNativeProjectResetAdvice, getOrganizationListWithPermission, getPackageScripts, getPMAndCommand, hasCliPermission, PACKNAME, projectIsMonorepo, resolveUserIdFromApiKey, updateConfigbyKey, updateConfigUpdater, validateIosUpdaterSync } from '../utils'
@@ -2385,45 +2386,69 @@ async function addChannelStep(orgId: string, apikey: string, appId: string) {
   pLog.info(`A channel is a release track that controls which users get which updates.`)
   pLog.info(`Most apps only need one: "production". You can add more later.`)
   pLog.info(`Learn more: https://capgo.app/docs/live-updates/channels/`)
-  let channelName = globalChannelName
-  const channelChoice = await pSelect({
-    message: 'Which channel name do you want to use?',
-    options: [
-      { value: 'default', label: `✅ Use "${defaultChannel}"` },
-      { value: 'custom', label: '✏️ Choose a custom name' },
-    ],
-  })
-  await cancelCommand(channelChoice, orgId, apikey)
-
-  if (channelChoice === 'custom') {
-    const selectedChannelName = await pText({
-      message: 'Enter the channel name to use for onboarding:',
-      placeholder: 'e.g. staging, beta, dev',
-      validate: validateChannelName,
+  while (true) {
+    let channelName = globalChannelName
+    const channelChoice = await pSelect({
+      message: 'Which channel name do you want to use?',
+      options: [
+        { value: 'default', label: `✅ Use "${defaultChannel}"` },
+        { value: 'custom', label: '✏️ Choose a custom name' },
+      ],
     })
-    await cancelCommand(selectedChannelName, orgId, apikey)
-    channelName = (selectedChannelName as string).trim()
-  }
+    await cancelCommand(channelChoice, orgId, apikey)
 
-  globalChannelName = channelName
-  const s = pSpinner()
-  s.start(`Running: ${pm.runner} @capgo/cli@latest channel add ${channelName} ${appId} --default`)
-  try {
-    const addChannelRes = await addChannelInternal(channelName, appId, {
-      default: true,
-      apikey,
-    }, true)
-    if (!addChannelRes)
-      s.stop(`Channel already added ✅`)
-    else
-      s.stop(`Channel add done ✅`)
+    if (channelChoice === 'default') {
+      channelName = defaultChannel
+    }
+    else {
+      const selectedChannelName = await pText({
+        message: 'Enter the channel name to use for onboarding:',
+        placeholder: 'e.g. staging, beta, dev',
+        validate: validateChannelName,
+      })
+      await cancelCommand(selectedChannelName, orgId, apikey)
+      channelName = (selectedChannelName as string).trim()
+    }
+
+    globalChannelName = channelName
+    const s = pSpinner()
+    s.start(`Running: ${pm.runner} @capgo/cli@latest channel add ${channelName} ${appId} --default`)
+    try {
+      const addChannelRes = await addChannelInternal(channelName, appId, {
+        default: true,
+        apikey,
+      }, true)
+      if (!addChannelRes)
+        s.stop(`Channel already added ✅`)
+      else
+        s.stop(`Channel add done ✅`)
+      await markStep(orgId, apikey, 'add-channel', appId)
+      return channelName
+    }
+    catch (error) {
+      if (!isChannelAlreadyExistsError(error)) {
+        s.stop(`Channel creation failed ❌`)
+        throw error
+      }
+
+      s.stop(`Channel already exists`)
+
+      const existingChannelChoice = await pSelect({
+        message: `The channel "${channelName}" already exists. What would you like to do?`,
+        options: [
+          { value: 'use-existing', label: '✅ Use the existing channel' },
+          { value: 'change', label: '✏️ Choose a different channel name' },
+        ],
+      })
+      await cancelCommand(existingChannelChoice, orgId, apikey)
+
+      if (existingChannelChoice === 'use-existing') {
+        pLog.success(`Using existing channel "${channelName}" ✅`)
+        await markStep(orgId, apikey, 'add-channel', appId)
+        return channelName
+      }
+    }
   }
-  catch (error) {
-    s.stop(`Channel creation failed ❌`)
-    throw error
-  }
-  await markStep(orgId, apikey, 'add-channel', appId)
-  return channelName
 }
 
 function rememberPackageJsonPath(packageJsonPath: string): void {

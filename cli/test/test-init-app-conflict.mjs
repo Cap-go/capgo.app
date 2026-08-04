@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { findAppInOrganization } from '../src/api/app.ts'
 import { buildAppIdConflictSuggestions, isAppAlreadyExistsError } from '../src/init/app-conflict.ts'
+import { isChannelAlreadyExistsError } from '../src/init/channel-conflict.ts'
 
 let failures = 0
 
@@ -51,6 +52,14 @@ await t('app conflict detector matches duplicate app errors', () => {
   assert.equal(isAppAlreadyExistsError({ code: '23505', message: 'duplicate key value violates unique constraint' }), true)
   assert.equal(isAppAlreadyExistsError(new Error('23505')), true)
   assert.equal(isAppAlreadyExistsError(new Error('network unavailable')), false)
+})
+
+await t('channel conflict detector matches the channel name uniqueness error', () => {
+  assert.equal(isChannelAlreadyExistsError(new Error('Cannot create channel: duplicate key value violates unique constraint "unique_name_app_id" | Code: 23505')), true)
+  assert.equal(isChannelAlreadyExistsError({ code: '23505', message: 'duplicate key value violates unique constraint "unique_name_app_id"' }), true)
+  assert.equal(isChannelAlreadyExistsError({ code: '23505' }), false)
+  assert.equal(isChannelAlreadyExistsError(new Error('duplicate key value violates unique constraint "channels_public_platform_key"')), false)
+  assert.equal(isChannelAlreadyExistsError(new Error('network unavailable')), false)
 })
 
 await t('app conflict suggestions are based on the current app ID', () => {
