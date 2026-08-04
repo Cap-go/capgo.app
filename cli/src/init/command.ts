@@ -1185,7 +1185,62 @@ interface ResumeResult {
   appId?: string
 }
 
-async function tryResumeOnboarding(apikey: string, initialTargets: InitTargetPaths, initialCwd: string): Promise<ResumeResult | undefined> {
+export function getResumedOnboardingAccessError(
+  resume: ResumeResult,
+  organization: Organization | undefined,
+  hasCreateAppPermission: boolean,
+  hasAppAccess: boolean,
+): string | undefined {
+  if (!organization)
+    return `Previously used organization "${resume.orgName}" is no longer available to this API key. Starting fresh.`
+
+  const blocked2fa = organization.enforcing_2fa && !organization['2fa_has_access']
+  if (blocked2fa)
+    return `Organization "${organization.name}" now requires 2FA. Starting fresh.`
+
+  if (resume.appId && !hasAppAccess)
+    return `Previously used app "${resume.appId}" is no longer available to this API key. Starting fresh.`
+
+  // A checkpoint with an app ID has already completed app creation, so it
+  // needs current app access rather than the org-level create permission.
+  if (!resume.appId && !hasCreateAppPermission)
+    return `This API key no longer has permission to create apps in "${organization.name}". Starting fresh.`
+}
+
+async function validateResumedOnboardingAccess(
+  supabase: Awaited<ReturnType<typeof createSupabaseClient>>,
+  apikey: string,
+  resume: ResumeResult,
+): Promise<string | undefined> {
+  try {
+    const { error: orgError, data: organizations } = await supabase.rpc('get_orgs_v7')
+    if (orgError || !organizations)
+      return 'Could not verify whether the saved onboarding organization is still available. Starting fresh.'
+
+    const organization = organizations.find(org => org.gid === resume.orgId)
+    const hasCreateAppPermission = organization && !resume.appId
+      ? await hasCliPermission(supabase, apikey, 'org.create_app', { orgId: organization.gid })
+      : false
+    const hasAppAccess = !organization || !resume.appId
+      ? true
+      : Boolean(await findAppInOrganization(supabase, organization.gid, resume.appId))
+
+    return getResumedOnboardingAccessError(resume, organization, hasCreateAppPermission, hasAppAccess)
+  }
+  catch {
+    if (resume.appId)
+      return `Could not verify whether the saved app "${resume.appId}" is still available. Starting fresh.`
+
+    return 'Could not verify whether the saved onboarding organization is still available. Starting fresh.'
+  }
+}
+
+async function tryResumeOnboarding(
+  apikey: string,
+  initialTargets: InitTargetPaths,
+  initialCwd: string,
+  supabase: Awaited<ReturnType<typeof createSupabaseClient>>,
+): Promise<ResumeResult | undefined> {
   try {
     const rawData = readFileSync(getTmpObjectPath(), 'utf-8')
     if (!rawData || rawData.length === 0)
@@ -1212,6 +1267,14 @@ async function tryResumeOnboarding(apikey: string, initialTargets: InitTargetPat
     if (!orgId || !step_done) {
       pLog.warn('⚠️  Found previous onboarding progress, but it was saved in an older format.')
       pLog.info('   Starting fresh. Your previous progress cannot be resumed.')
+      return undefined
+    }
+
+    const resume: ResumeResult = { stepDone: step_done, orgId, orgName, appId: savedAppId }
+    const accessError = await validateResumedOnboardingAccess(supabase, apikey, resume)
+    if (accessError) {
+      pLog.warn(accessError)
+      cleanupStepsDone()
       return undefined
     }
 
@@ -1330,7 +1393,7 @@ async function tryResumeOnboarding(apikey: string, initialTargets: InitTargetPat
         }
         setInitEncryptionSummary(globalEncryptionSummary)
       }
-      return { stepDone: step_done, orgId, orgName, appId: savedAppId }
+      return resume
     }
 
     // User chose to start over — delete the saved progress and drop any
@@ -4732,7 +4795,23 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
     }
   }
 
-  let resumed = await tryResumeOnboarding(options.apikey, initialTargets, initialCwd)
+  const log = pSpinner()
+  if (!doLoginExists() || apikeyCommand) {
+    log.start(`Running: ${pm.runner} @capgo/cli@latest login ***`)
+    try {
+      await loginInternal(options.apikey, options, true)
+      log.stop('Login Done ✅')
+    }
+    catch (error) {
+      log.stop('Login failed ❌')
+      throw error
+    }
+  }
+
+  const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
+  await resolveUserIdFromApiKey(supabase, options.apikey)
+
+  let resumed = await tryResumeOnboarding(options.apikey, initialTargets, initialCwd, supabase)
   let stepToSkip = resumed?.stepDone ?? 0
 
   await ensureGitRepoCleanBeforeInit(stepToSkip > 0 ? globalAutoTestChange : undefined)
@@ -4853,22 +4932,6 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
   appId = getAppId(initialAppId, extConfig?.config)
 
   appId ??= await askForAppId('Enter your appId:')
-
-  const log = pSpinner()
-  if (!doLoginExists() || apikeyCommand) {
-    log.start(`Running: ${pm.runner} @capgo/cli@latest login ***`)
-    try {
-      await loginInternal(options.apikey, options, true)
-      log.stop('Login Done ✅')
-    }
-    catch (error) {
-      log.stop('Login failed ❌')
-      throw error
-    }
-  }
-
-  const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
-  await resolveUserIdFromApiKey(supabase, options.apikey)
 
   // A failed remote checkpoint (organization access, role, or 2FA) restarts
   // onboarding at step 0 using only the caller's original project targets.

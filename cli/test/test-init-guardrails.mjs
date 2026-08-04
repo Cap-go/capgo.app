@@ -12,6 +12,7 @@ import {
   getInitOtaVersionBase,
   getInitSuggestedOtaVersion,
   getInitUpdaterPluginConfig,
+  getResumedOnboardingAccessError,
   isOnlyAllowedInitAutoTestChange,
   revertInitAutoTestChangeContent,
   runInheritedCommand,
@@ -122,6 +123,18 @@ t('guided ota version suggestions stay on major zero when native baseline is pin
 
   assert.equal(getInitOtaVersionBase('0.2.3'), '0.2.3')
   assert.equal(getInitSuggestedOtaVersion('0.2.3'), '0.2.4')
+})
+
+t('resuming onboarding requires the current key to retain saved org and app access', () => {
+  const resume = { stepDone: 4, orgId: 'org_123', orgName: 'Saved org', appId: 'com.example.app' }
+  const organization = { gid: 'org_123', name: 'Saved org' }
+
+  assert.match(getResumedOnboardingAccessError(resume, undefined, false, false), /organization.*no longer available/i)
+  assert.equal(getResumedOnboardingAccessError(resume, organization, false, true), undefined)
+  assert.match(getResumedOnboardingAccessError(resume, organization, true, false), /app.*no longer available/i)
+  assert.equal(getResumedOnboardingAccessError(resume, organization, true, true), undefined)
+  assert.match(getResumedOnboardingAccessError({ ...resume, appId: undefined }, organization, false, true), /permission to create apps/i)
+  assert.match(getResumedOnboardingAccessError(resume, { ...organization, enforcing_2fa: true, '2fa_has_access': false }, true, true), /requires 2FA/i)
 })
 
 t('auto html onboarding changes can be applied and reverted', () => {
