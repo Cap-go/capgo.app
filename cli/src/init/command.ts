@@ -55,9 +55,13 @@ interface InitTargetPaths {
 
 export type RunDeviceCancelHandler = () => Promise<never>
 const importInject = 'import { CapacitorUpdater } from \'@capgo/capacitor-updater\''
+const requireInject = 'const { CapacitorUpdater } = require(\'@capgo/capacitor-updater\')'
 const codeInject = 'CapacitorUpdater.notifyAppReady()'
+const notifyAppReadyComment = '// Confirm this bundle started successfully so Capgo can keep it instead of rolling back to the previous bundle.'
 // create regex to find line who start by 'import ' and end by ' from '
 const regexImport = /import.*from.*/g
+const updaterImportPattern = /import\s*\{\s*CapacitorUpdater\s*\}\s*from\s*['"]@capgo\/capacitor-updater['"]/g
+const updaterRequirePattern = /(?:const|let|var)\s*(?:\{\s*CapacitorUpdater\s*\}|CapacitorUpdater)\s*=\s*require\(\s*['"]@capgo\/capacitor-updater['"]\s*\)/g
 const defaultChannel = 'production'
 const channelNameRegex = /^[\w.-]+$/
 const appIdRegex = /^[a-z0-9]+(?:\.[\w-]+)+$/i
@@ -752,6 +756,120 @@ function buildCodeDiffLines(beforeContent: string, afterContent: string, context
     })
   }
   return diffLines
+}
+
+function getInitCodeInjection(filePath: string): string {
+  const updaterImport = path.extname(filePath) === '.cjs' ? requireInject : importInject
+  return `${updaterImport};\n\n${getInitCodeCall()}`
+}
+
+function getInitCodeCall(): string {
+  return `${notifyAppReadyComment}\n${codeInject};`
+}
+
+function skipInitLeadingTrivia(content: string, startIndex: number): number {
+  let index = startIndex
+  while (index < content.length) {
+    const char = content[index]
+    if (char === '\uFEFF' || char === ' ' || char === '\t' || char === '\r' || char === '\n') {
+      index++
+    }
+    else if (content.startsWith('//', index)) {
+      const lineEnd = content.indexOf('\n', index + 2)
+      index = lineEnd === -1 ? content.length : lineEnd + 1
+    }
+    else if (content.startsWith('/*', index)) {
+      const commentEnd = content.indexOf('*/', index + 2)
+      if (commentEnd === -1)
+        break
+      index = commentEnd + 2
+    }
+    else {
+      break
+    }
+  }
+  return index
+}
+
+function skipInitDirectiveLineSuffix(content: string, startIndex: number): number {
+  let index = startIndex
+  while (content[index] === ' ' || content[index] === '\t')
+    index++
+
+  if (content.startsWith('//', index)) {
+    const lineEnd = content.indexOf('\n', index + 2)
+    return lineEnd === -1 ? content.length : lineEnd + 1
+  }
+  if (content.startsWith('/*', index)) {
+    const commentEnd = content.indexOf('*/', index + 2)
+    if (commentEnd === -1)
+      return index
+    return skipInitDirectiveLineSuffix(content, commentEnd + 2)
+  }
+  if (content.startsWith('\r\n', index))
+    return index + 2
+  if (content[index] === '\n')
+    return index + 1
+  return index
+}
+
+function insertInitCodeAfterPrologue(content: string, codeToInject: string): string {
+  let insertionIndex = 0
+  if (content.startsWith('#!')) {
+    const firstLineEnd = content.indexOf('\n')
+    insertionIndex = firstLineEnd === -1 ? content.length : firstLineEnd + 1
+  }
+
+  // Framework directives can follow a BOM, whitespace, or comments. Keep that
+  // complete prologue ahead of the injected import so their semantics remain intact.
+  const directivePattern = /^(['"])(?:use client|use server|use strict)\1;?/
+  while (true) {
+    const directiveStart = skipInitLeadingTrivia(content, insertionIndex)
+    const directive = content.slice(directiveStart).match(directivePattern)
+    if (!directive)
+      break
+    insertionIndex = skipInitDirectiveLineSuffix(content, directiveStart + directive[0].length)
+  }
+
+  const before = content.slice(0, insertionIndex)
+  const after = content.slice(insertionIndex)
+  const separatorBefore = before.length > 0 && !before.endsWith('\n') ? '\n' : ''
+  const separatorAfter = after.length > 0 ? '\n\n' : '\n'
+  return `${before}${separatorBefore}${codeToInject}${separatorAfter}${after}`
+}
+
+function getExistingUpdaterBinding(filePath: string, content: string): string | undefined {
+  return path.extname(filePath) === '.cjs'
+    ? content.match(updaterRequirePattern)?.pop()
+    : content.match(updaterImportPattern)?.pop()
+}
+
+export function injectInitCode(filePath: string, currentContent: string): string {
+  const existingUpdaterBinding = getExistingUpdaterBinding(filePath, currentContent)
+  if (existingUpdaterBinding)
+    return currentContent.replace(existingUpdaterBinding, `${existingUpdaterBinding}\n${getInitCodeCall()}`)
+
+  const lastImport = currentContent.match(regexImport)?.pop()
+  const codeToInject = getInitCodeInjection(filePath)
+  if (lastImport) {
+    // No trailing `\n`: the original file already has newlines after the
+    // import, so adding one would create a spurious blank diff line.
+    return currentContent.replace(lastImport, `${lastImport}\n${codeToInject}`)
+  }
+
+  return insertInitCodeAfterPrologue(currentContent, codeToInject)
+}
+
+function getNuxtUpdaterPluginContent(): string {
+  return [
+    `import { CapacitorUpdater } from '@capgo/capacitor-updater'`,
+    ``,
+    `export default defineNuxtPlugin(() => {`,
+    `  ${notifyAppReadyComment}`,
+    `  CapacitorUpdater.notifyAppReady()`,
+    `})`,
+    ``,
+  ].join('\n')
 }
 
 function readTmpObj() {
@@ -2630,163 +2748,130 @@ async function addUpdaterStep(orgId: string, apikey: string, appId: string) {
 }
 
 async function addCodeStep(orgId: string, apikey: string, appId: string) {
-  const addCodeChoice = await pSelect({
-    message: `Add the Capacitor Updater import to your main file?`,
-    options: [
-      { value: 'yes', label: '✅ Yes, add it' },
-      { value: 'no', label: '❌ No, I\'ll do it manually' },
-    ],
-  })
-  await cancelCommand(addCodeChoice, orgId, apikey)
+  const packageJsonPath = path.resolve(globalPathToPackageJson ?? join(findRoot(cwd()), PACKNAME))
+  const projectDir = dirname(packageJsonPath)
+  const resolveProjectFilePath = (filePath: string) => path.isAbsolute(filePath) ? filePath : join(projectDir, filePath)
+  const projectType = await findProjectType({ quiet: true, packageJsonPath })
+  let filePath: string
+  let currentContent: string
+  let created = false
+  let createNuxtPlugin = false
+
+  if (!globalMainFilePath && (projectType === 'nuxtjs-js' || projectType === 'nuxtjs-ts')) {
+    const extension = projectType === 'nuxtjs-ts' ? 'ts' : 'js'
+    filePath = join(projectDir, 'plugins', `capacitorUpdater.client.${extension}`)
+    created = !existsSync(filePath)
+    currentContent = created ? '' : readFileSync(filePath, 'utf8')
+    createNuxtPlugin = true
+  }
+  else {
+    let mainFilePath: string | null = globalMainFilePath ?? null
+    if (!mainFilePath && projectType === 'unknown') {
+      mainFilePath = await findMainFile(true, projectDir)
+    }
+    else if (!mainFilePath) {
+      const isTypeScript = projectType.endsWith('-ts')
+      const projectTypeMainFile = findMainFileForProjectType(projectType, isTypeScript, projectDir)
+      mainFilePath = projectTypeMainFile ? resolveProjectFilePath(projectTypeMainFile) : projectTypeMainFile
+    }
+
+    if (!mainFilePath || !existsSync(mainFilePath)) {
+      const userProvidedPath = await pText({
+        message: `Provide the correct relative path to your main file (JS or TS):`,
+        validate: (value) => {
+          if (!value || !existsSync(resolveProjectFilePath(value)))
+            return 'File does not exist. Please provide a valid path.'
+        },
+      })
+      if (pIsCancel(userProvidedPath)) {
+        pCancel('Operation cancelled.')
+        return await exitAfterFinishingReplay(1)
+      }
+      mainFilePath = resolveProjectFilePath(userProvidedPath as string)
+    }
+
+    filePath = mainFilePath
+    currentContent = readFileSync(filePath, 'utf8')
+  }
+
+  const getCanAutoInject = () => !createNuxtPlugin || created || currentContent.includes(codeInject)
+  const getNewContent = () => createNuxtPlugin ? getNuxtUpdaterPluginContent() : injectInitCode(filePath, currentContent)
+
+  let newContent = getNewContent()
+  let alreadyConfigured = currentContent.includes(codeInject)
+  let canAutoInject = getCanAutoInject()
+  let previewDiff: InitCodeDiff
+  let addCodeChoice: string | symbol
+
+  while (true) {
+    previewDiff = {
+      filePath: formatInitFilePath(filePath),
+      created,
+      lines: !alreadyConfigured && canAutoInject ? buildCodeDiffLines(currentContent, newContent, CODE_DIFF_CONTEXT_LINES) : [],
+      note: alreadyConfigured
+        ? 'Already contains CapacitorUpdater.notifyAppReady() — no change needed'
+        : !canAutoInject
+            ? 'An existing Nuxt updater plugin will not be overwritten automatically'
+            : undefined,
+    }
+    // Show the exact proposed edit in the same screen as the confirmation.
+    setInitCodeDiff(previewDiff)
+    addCodeChoice = await pSelect({
+      message: `Add the Capacitor Updater import to your main file?`,
+      options: [
+        { value: 'yes', label: '✅ Yes, add it' },
+        { value: 'no', label: '❌ No, I\'ll do it manually' },
+      ],
+    })
+    await cancelCommand(addCodeChoice, orgId, apikey)
+
+    if (addCodeChoice !== 'yes' || alreadyConfigured)
+      break
+
+    const fileExists = existsSync(filePath)
+    const latestContent = fileExists ? readFileSync(filePath, 'utf8') : ''
+    if (latestContent === currentContent && created === !fileExists)
+      break
+
+    pLog.warn(`${formatInitFilePath(filePath)} changed while you reviewed the diff. Showing an updated preview.`)
+    currentContent = latestContent
+    created = !fileExists
+    newContent = getNewContent()
+    alreadyConfigured = currentContent.includes(codeInject)
+    canAutoInject = getCanAutoInject()
+  }
 
   if (addCodeChoice === 'yes') {
-    const s = pSpinner()
-    s.start(`Adding @capacitor-updater to your main file`)
-
-    const packageJsonPath = path.resolve(globalPathToPackageJson ?? join(findRoot(cwd()), PACKNAME))
-    const projectDir = dirname(packageJsonPath)
-    const resolveProjectFilePath = (filePath: string) => path.isAbsolute(filePath) ? filePath : join(projectDir, filePath)
-    const projectType = await findProjectType({ quiet: true, packageJsonPath })
-    if (!globalMainFilePath && (projectType === 'nuxtjs-js' || projectType === 'nuxtjs-ts')) {
-      // Nuxt.js specific logic
-      const nuxtDir = join(projectDir, 'plugins')
-      if (!existsSync(nuxtDir)) {
-        mkdirSync(nuxtDir, { recursive: true })
+    if (!canAutoInject) {
+      pLog.warn(`An existing Nuxt updater plugin was not changed automatically.`)
+      pLog.info(`Add this plugin code manually:\n\n${getNuxtUpdaterPluginContent()}`)
+      await markStep(orgId, apikey, 'add-code-manual', appId)
+    }
+    else if (!alreadyConfigured) {
+      const s = pSpinner()
+      s.start(`Adding @capacitor-updater to your main file`)
+      if (created) {
+        mkdirSync(dirname(filePath), { recursive: true })
       }
-      let nuxtFilePath
-      if (projectType === 'nuxtjs-ts') {
-        nuxtFilePath = join(nuxtDir, 'capacitorUpdater.client.ts')
-      }
-      else {
-        nuxtFilePath = join(nuxtDir, 'capacitorUpdater.client.js')
-      }
-      const nuxtFileLines = [
-        `import { CapacitorUpdater } from '@capgo/capacitor-updater'`,
-        ``,
-        `export default defineNuxtPlugin(() => {`,
-        `  CapacitorUpdater.notifyAppReady()`,
-        `})`,
-        ``,
-      ]
-      const nuxtFileContent = nuxtFileLines.join('\n')
-      const nuxtDisplayPath = formatInitFilePath(nuxtFilePath)
-      if (existsSync(nuxtFilePath)) {
-        const currentContent = readFileSync(nuxtFilePath, 'utf8')
-        if (currentContent.includes('CapacitorUpdater.notifyAppReady()')) {
-          s.stop()
-          globalCodeDiff = {
-            filePath: nuxtDisplayPath,
-            created: false,
-            lines: [],
-            note: 'Already contains CapacitorUpdater.notifyAppReady() — no change needed',
-          }
-        }
-        else {
-          writeFileSync(nuxtFilePath, nuxtFileContent, 'utf8')
-          s.stop()
-          globalCodeDiff = {
-            filePath: nuxtDisplayPath,
-            created: false,
-            lines: buildCodeDiffLines(currentContent, nuxtFileContent, CODE_DIFF_CONTEXT_LINES),
-          }
-        }
-      }
-      else {
-        writeFileSync(nuxtFilePath, nuxtFileContent, 'utf8')
-        s.stop()
-        globalCodeDiff = {
-          filePath: nuxtDisplayPath,
-          created: true,
-          lines: buildCodeDiffLines('', nuxtFileContent, CODE_DIFF_CONTEXT_LINES),
-        }
-      }
+      writeFileSync(filePath, newContent, 'utf8')
+      s.stop()
+      globalCodeDiff = previewDiff
       setInitCodeDiff(globalCodeDiff)
     }
     else {
-      // Handle other project types
-      let mainFilePath: string | null = globalMainFilePath ?? null
-      if (!mainFilePath && projectType === 'unknown') {
-        mainFilePath = await findMainFile(true, projectDir)
-      }
-      else if (!mainFilePath) {
-        const isTypeScript = projectType.endsWith('-ts')
-        const projectTypeMainFile = findMainFileForProjectType(projectType, isTypeScript, projectDir)
-        mainFilePath = projectTypeMainFile ? resolveProjectFilePath(projectTypeMainFile) : projectTypeMainFile
-      }
-
-      // Open main file and inject codeInject
-      if (!mainFilePath || !existsSync(mainFilePath)) {
-        s.stop('Cannot find main file to install Updater plugin', 'neutral')
-        const userProvidedPath = await pText({
-          message: `Provide the correct relative path to your main file (JS or TS):`,
-          validate: (value) => {
-            if (!value || !existsSync(resolveProjectFilePath(value)))
-              return 'File does not exist. Please provide a valid path.'
-          },
-        })
-        if (pIsCancel(userProvidedPath)) {
-          pCancel('Operation cancelled.')
-          return await exitAfterFinishingReplay(1)
-        }
-        mainFilePath = resolveProjectFilePath(userProvidedPath as string)
-      }
-      const mainFile = readFileSync(mainFilePath, 'utf8')
-      const mainFileContent = mainFile.toString()
-      const matches = mainFileContent.match(regexImport)
-      const last = matches?.pop()
-
-      if (!last) {
-        s.stop('Cannot auto-inject code', 'neutral')
-        pLog.warn(`❌ Cannot find import statements in ${mainFilePath}`)
-        pLog.info(`💡 You'll need to add the code manually`)
-        pLog.info(`📝 Add this to your main file:`)
-        pLog.info(`   ${importInject}`)
-        pLog.info(`   ${codeInject}`)
-        pLog.info(`📚 Or follow: https://capgo.app/docs/getting-started/add-an-app/`)
-
-        const continueAnyway = await pConfirm({
-          message: `Continue without auto-injecting the code? (You'll add it manually)`,
-        })
-        await cancelCommand(continueAnyway, orgId, apikey)
-
-        if (!continueAnyway) {
-          pOutro(`Bye 👋\n💡 You can resume the onboarding anytime by running the same command again`)
-          return await exitAfterFinishingReplay()
-        }
-
-        pLog.info(`⏭️  Skipping auto-injection - remember to add the code manually!`)
-        await markStep(orgId, apikey, 'add-code-manual', appId)
-      }
-      else if (mainFileContent.includes(codeInject)) {
-        s.stop()
-        globalCodeDiff = {
-          filePath: formatInitFilePath(mainFilePath),
-          created: false,
-          lines: [],
-          note: 'Already contains CapacitorUpdater.notifyAppReady() — no change needed',
-        }
-        setInitCodeDiff(globalCodeDiff)
-      }
-      else {
-        // Note: no trailing `\n` — the original file already has newlines after
-        // `last`, so adding one here would create a spurious blank line that
-        // shows up as an added `+` line in the diff panel.
-        const newMainFileContent = mainFileContent.replace(last, `${last}\n${importInject};\n\n${codeInject};`)
-        writeFileSync(mainFilePath, newMainFileContent, 'utf8')
-        s.stop()
-        globalCodeDiff = {
-          filePath: formatInitFilePath(mainFilePath),
-          created: false,
-          lines: buildCodeDiffLines(mainFileContent, newMainFileContent, CODE_DIFF_CONTEXT_LINES),
-        }
-        setInitCodeDiff(globalCodeDiff)
-      }
+      globalCodeDiff = previewDiff
     }
 
     await markStep(orgId, apikey, 'add-code', appId)
   }
   else {
-    pLog.info(`Add to your main file the following code:\n\n${importInject};\n\n${codeInject};\n`)
+    setInitCodeDiff(undefined)
+    const manualCode = createNuxtPlugin
+      ? getNuxtUpdaterPluginContent()
+      : getExistingUpdaterBinding(filePath, currentContent)
+        ? getInitCodeCall()
+        : getInitCodeInjection(filePath)
+    pLog.info(`${createNuxtPlugin ? 'Add this plugin code manually:' : 'Add to your main file the following code:'}\n\n${manualCode}\n`)
   }
 }
 

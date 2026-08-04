@@ -12,6 +12,7 @@ import {
   getInitOtaVersionBase,
   getInitSuggestedOtaVersion,
   getInitUpdaterPluginConfig,
+  injectInitCode,
   isOnlyAllowedInitAutoTestChange,
   revertInitAutoTestChangeContent,
   runInheritedCommand,
@@ -76,6 +77,39 @@ t('dirty git status prompt keeps clean repo as the recommended path', () => {
   assert.match(options[0]?.hint ?? '', /recommended/)
   assert.equal(options[1]?.value, 'continue-dirty')
   assert.match(options[1]?.hint ?? '', /not recommended/)
+})
+
+t('init code injection preserves framework directives before imports', () => {
+  const updated = injectInitCode('src/main.tsx', `'use client'\n\nexport default function App() {}\n`)
+
+  assert.match(updated, /^'use client'\nimport \{ CapacitorUpdater \}/)
+  assert.match(updated, /CapacitorUpdater\.notifyAppReady\(\);/)
+})
+
+t('init code injection preserves directives after BOM and leading comments', () => {
+  const updated = injectInitCode('src/main.tsx', `\uFEFF/* generated file */\n\n'use client'\nexport default function App() {}\n`)
+
+  assert.match(updated, /^\uFEFF\/\* generated file \*\/\n\n'use client'\nimport \{ CapacitorUpdater \}/)
+})
+
+t('init code injection preserves directives with trailing comments', () => {
+  const updated = injectInitCode('src/main.tsx', `'use client' // required by Next.js\nexport default function App() {}\n`)
+
+  assert.match(updated, /^'use client' \/\/ required by Next\.js\nimport \{ CapacitorUpdater \}/)
+})
+
+t('init code injection uses CommonJS syntax for .cjs files without imports', () => {
+  const updated = injectInitCode('scripts/start.cjs', 'console.log(\'ready\')\n')
+
+  assert.match(updated, /^const \{ CapacitorUpdater \} = require\('@capgo\/capacitor-updater'\);/)
+  assert.doesNotMatch(updated, /^import /m)
+})
+
+t('init code injection reuses an existing CommonJS updater binding', () => {
+  const updated = injectInitCode('scripts/start.cjs', `const { CapacitorUpdater } = require('@capgo/capacitor-updater')\nconsole.log('ready')\n`)
+
+  assert.equal((updated.match(/const \{ CapacitorUpdater \}/g) ?? []).length, 1)
+  assert.match(updated, /CapacitorUpdater\.notifyAppReady\(\);/)
 })
 
 t('git status helper reports git status failures inside a repo', () => {
