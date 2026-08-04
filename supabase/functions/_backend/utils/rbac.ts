@@ -89,18 +89,93 @@ export interface PermissionScope {
   channelId?: number
 }
 
+const TRANSIENT_NODE_ERROR_CODES = new Set([
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ECONNABORTED',
+  'ETIMEDOUT',
+  'ENETUNREACH',
+  'EHOSTUNREACH',
+  'EPIPE',
+  'EAI_AGAIN',
+  'ENOTFOUND',
+])
+
+// Postgres SQLSTATE classes/codes that mean the connection itself failed.
+const TRANSIENT_PG_SQLSTATES = new Set([
+  '08000', // connection_exception
+  '08001', // sqlclient_unable_to_establish_sqlconnection
+  '08003', // connection_does_not_exist
+  '08004', // sqlserver_rejected_establishment_of_sqlconnection
+  '08006', // connection_failure
+  '08007', // transaction_resolution_unknown
+  '08P01', // protocol_violation
+  '57P01', // admin_shutdown
+  '57P02', // crash_shutdown
+  '57P03', // cannot_connect_now
+  '53300', // too_many_connections
+  '53400', // configuration_limit_exceeded
+])
+
+const TRANSIENT_ERROR_MESSAGE_RE = /connection (?:terminated|ended|closed|refused|reset)|timeout exceeded when trying to connect|connect(?:ion)? timed? ?out|network(?: |_)?error|socket hang up|hyperdrive|too many clients already/i
+
+function readErrorField(error: unknown, key: string): unknown {
+  if (!error || typeof error !== 'object')
+    return undefined
+  return (error as Record<string, unknown>)[key]
+}
+
+/**
+ * Walk Drizzle/node-postgres cause chains for connection/timeout signals.
+ * Invalid query params (e.g. bad UUID cast 22P02) are NOT transient — those
+ * must keep looking like ACL deny so authz endpoints stay stable.
+ */
+function isTransientPermissionCheckError(error: unknown, depth = 0): boolean {
+  if (!error || depth > 6)
+    return false
+
+  if (typeof error === 'string')
+    return TRANSIENT_ERROR_MESSAGE_RE.test(error)
+
+  const code = readErrorField(error, 'code')
+  if (typeof code === 'string') {
+    if (TRANSIENT_NODE_ERROR_CODES.has(code) || TRANSIENT_PG_SQLSTATES.has(code))
+      return true
+  }
+
+  const message = readErrorField(error, 'message')
+  if (typeof message === 'string' && TRANSIENT_ERROR_MESSAGE_RE.test(message))
+    return true
+
+  const errno = readErrorField(error, 'errno')
+  if (typeof errno === 'string' && TRANSIENT_NODE_ERROR_CODES.has(errno))
+    return true
+
+  const cause = readErrorField(error, 'cause')
+  if (cause !== undefined && isTransientPermissionCheckError(cause, depth + 1))
+    return true
+
+  const errors = readErrorField(error, 'errors')
+  if (Array.isArray(errors)) {
+    return errors.some(entry => isTransientPermissionCheckError(entry, depth + 1))
+  }
+
+  return false
+}
+
 /**
  * Permission helpers must never map infrastructure failures to "denied".
- * Callers treat `false` as ACL deny (403). Transient Hyperdrive/Postgres errors
- * must surface as 503 so clients (especially TUS) can retry.
+ * Callers treat `false` as ACL deny (401/403). Transient Hyperdrive/Postgres
+ * errors must surface as 503 so clients (especially TUS) can retry.
+ * Non-transient query failures (invalid UUID, etc.) still deny.
  */
-function throwPermissionCheckUnavailable(
+function handlePermissionCheckError(
   c: Context<MiddlewareKeyVariables>,
   permission: Permission,
   scope: PermissionScope,
   error: unknown,
   source: 'checkPermission' | 'checkPermissionPg',
-): never {
+): false {
   if (error instanceof HTTPException)
     throw error
 
@@ -110,16 +185,21 @@ function throwPermissionCheckUnavailable(
     error,
     permission,
     scope,
+    transient: isTransientPermissionCheckError(error),
   })
 
-  quickError(
-    503,
-    'upstream_unavailable',
-    'Permission check temporarily unavailable',
-    { permission, scope },
-    error,
-    { alert: false },
-  )
+  if (isTransientPermissionCheckError(error)) {
+    quickError(
+      503,
+      'upstream_unavailable',
+      'Permission check temporarily unavailable',
+      { permission, scope },
+      error,
+      { alert: false },
+    )
+  }
+
+  return false
 }
 
 // =============================================================================
@@ -240,7 +320,7 @@ export async function checkPermission(
     return allowed
   }
   catch (e) {
-    return throwPermissionCheckUnavailable(c, permission, scope, e, 'checkPermission')
+    return handlePermissionCheckError(c, permission, scope, e, 'checkPermission')
   }
   finally {
     if (pgClient) {
@@ -395,7 +475,7 @@ export async function checkPermissionPg(
     return allowed
   }
   catch (e) {
-    return throwPermissionCheckUnavailable(c, permission, scope, e, 'checkPermissionPg')
+    return handlePermissionCheckError(c, permission, scope, e, 'checkPermissionPg')
   }
 }
 
