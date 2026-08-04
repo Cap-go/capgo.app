@@ -55,6 +55,7 @@ interface InitTargetPaths {
 
 export type RunDeviceCancelHandler = () => Promise<never>
 const importInject = 'import { CapacitorUpdater } from \'@capgo/capacitor-updater\''
+const requireInject = 'const { CapacitorUpdater } = require(\'@capgo/capacitor-updater\')'
 const codeInject = 'CapacitorUpdater.notifyAppReady()'
 const notifyAppReadyComment = '// Confirm this bundle started successfully so Capgo can keep it instead of rolling back to the previous bundle.'
 // create regex to find line who start by 'import ' and end by ' from '
@@ -753,6 +754,46 @@ function buildCodeDiffLines(beforeContent: string, afterContent: string, context
     })
   }
   return diffLines
+}
+
+function getInitCodeInjection(filePath: string): string {
+  const updaterImport = path.extname(filePath) === '.cjs' ? requireInject : importInject
+  return `${updaterImport};\n\n${notifyAppReadyComment}\n${codeInject};`
+}
+
+function insertInitCodeAfterPrologue(content: string, codeToInject: string): string {
+  let insertionIndex = 0
+  if (content.startsWith('#!')) {
+    const firstLineEnd = content.indexOf('\n')
+    insertionIndex = firstLineEnd === -1 ? content.length : firstLineEnd + 1
+  }
+
+  // Framework directives such as Next.js's 'use client' must remain before imports.
+  const directivePattern = /^[\t ]*(['"])(?:use client|use server|use strict)\1;?[\t ]*(?:\r?\n|$)/
+  while (true) {
+    const directive = content.slice(insertionIndex).match(directivePattern)
+    if (!directive)
+      break
+    insertionIndex += directive[0].length
+  }
+
+  const before = content.slice(0, insertionIndex)
+  const after = content.slice(insertionIndex)
+  const separatorBefore = before.length > 0 && !before.endsWith('\n') ? '\n' : ''
+  const separatorAfter = after.length > 0 ? '\n\n' : '\n'
+  return `${before}${separatorBefore}${codeToInject}${separatorAfter}${after}`
+}
+
+export function injectInitCode(filePath: string, currentContent: string): string {
+  const lastImport = currentContent.match(regexImport)?.pop()
+  const codeToInject = getInitCodeInjection(filePath)
+  if (lastImport) {
+    // No trailing `\n`: the original file already has newlines after the
+    // import, so adding one would create a spurious blank diff line.
+    return currentContent.replace(lastImport, `${lastImport}\n${codeToInject}`)
+  }
+
+  return insertInitCodeAfterPrologue(currentContent, codeToInject)
 }
 
 function readTmpObj() {
@@ -2625,23 +2666,15 @@ async function addCodeStep(orgId: string, apikey: string, appId: string) {
   const projectType = await findProjectType({ quiet: true, packageJsonPath })
   let filePath: string
   let currentContent: string
-  let newContent: string | undefined
   let created = false
+  let createNuxtPlugin = false
 
   if (!globalMainFilePath && (projectType === 'nuxtjs-js' || projectType === 'nuxtjs-ts')) {
     const extension = projectType === 'nuxtjs-ts' ? 'ts' : 'js'
     filePath = join(projectDir, 'plugins', `capacitorUpdater.client.${extension}`)
     created = !existsSync(filePath)
     currentContent = created ? '' : readFileSync(filePath, 'utf8')
-    newContent = [
-      `import { CapacitorUpdater } from '@capgo/capacitor-updater'`,
-      ``,
-      `export default defineNuxtPlugin(() => {`,
-      `  ${notifyAppReadyComment}`,
-      `  CapacitorUpdater.notifyAppReady()`,
-      `})`,
-      ``,
-    ].join('\n')
+    createNuxtPlugin = true
   }
   else {
     let mainFilePath: string | null = globalMainFilePath ?? null
@@ -2671,68 +2704,62 @@ async function addCodeStep(orgId: string, apikey: string, appId: string) {
 
     filePath = mainFilePath
     currentContent = readFileSync(filePath, 'utf8')
-    const lastImport = currentContent.match(regexImport)?.pop()
-    if (lastImport) {
-      // No trailing `\n`: the original file already has newlines after the
-      // import, so adding one would create a spurious blank diff line.
-      newContent = currentContent.replace(lastImport, `${lastImport}\n${importInject};\n\n${notifyAppReadyComment}\n${codeInject};`)
-    }
-    else {
-      // An entry file does not need an existing import for us to add one. Keep
-      // a shebang first when present so executable JavaScript files stay valid.
-      const codeToInject = `${importInject};\n\n${notifyAppReadyComment}\n${codeInject};`
-      if (currentContent.startsWith('#!')) {
-        const firstLineEnd = currentContent.indexOf('\n')
-        const shebang = firstLineEnd === -1 ? currentContent : currentContent.slice(0, firstLineEnd)
-        const remainder = firstLineEnd === -1 ? '' : currentContent.slice(firstLineEnd + 1)
-        newContent = `${shebang}\n${codeToInject}${remainder ? `\n\n${remainder}` : '\n'}`
-      }
-      else {
-        newContent = `${codeToInject}${currentContent ? `\n\n${currentContent}` : '\n'}`
-      }
-    }
   }
 
-  const alreadyConfigured = currentContent.includes(codeInject)
-  const previewDiff: InitCodeDiff = {
-    filePath: formatInitFilePath(filePath),
-    created,
-    lines: newContent && !alreadyConfigured ? buildCodeDiffLines(currentContent, newContent, CODE_DIFF_CONTEXT_LINES) : [],
-    note: alreadyConfigured
-      ? 'Already contains CapacitorUpdater.notifyAppReady() — no change needed'
-      : undefined,
+  const getNewContent = () => createNuxtPlugin
+    ? [
+        `import { CapacitorUpdater } from '@capgo/capacitor-updater'`,
+        ``,
+        `export default defineNuxtPlugin(() => {`,
+        `  ${notifyAppReadyComment}`,
+        `  CapacitorUpdater.notifyAppReady()`,
+        `})`,
+        ``,
+      ].join('\n')
+    : injectInitCode(filePath, currentContent)
+
+  let newContent = getNewContent()
+  let alreadyConfigured = currentContent.includes(codeInject)
+  let previewDiff: InitCodeDiff
+  let addCodeChoice: string | symbol
+
+  while (true) {
+    previewDiff = {
+      filePath: formatInitFilePath(filePath),
+      created,
+      lines: !alreadyConfigured ? buildCodeDiffLines(currentContent, newContent, CODE_DIFF_CONTEXT_LINES) : [],
+      note: alreadyConfigured
+        ? 'Already contains CapacitorUpdater.notifyAppReady() — no change needed'
+        : undefined,
+    }
+    // Show the exact proposed edit in the same screen as the confirmation.
+    setInitCodeDiff(previewDiff)
+    addCodeChoice = await pSelect({
+      message: `Add the Capacitor Updater import to your main file?`,
+      options: [
+        { value: 'yes', label: '✅ Yes, add it' },
+        { value: 'no', label: '❌ No, I\'ll do it manually' },
+      ],
+    })
+    await cancelCommand(addCodeChoice, orgId, apikey)
+
+    if (addCodeChoice !== 'yes' || alreadyConfigured)
+      break
+
+    const fileExists = existsSync(filePath)
+    const latestContent = fileExists ? readFileSync(filePath, 'utf8') : ''
+    if (latestContent === currentContent && created === !fileExists)
+      break
+
+    pLog.warn(`${formatInitFilePath(filePath)} changed while you reviewed the diff. Showing an updated preview.`)
+    currentContent = latestContent
+    created = !fileExists
+    newContent = getNewContent()
+    alreadyConfigured = currentContent.includes(codeInject)
   }
-  // Show the exact proposed edit in the same screen as the confirmation.
-  setInitCodeDiff(previewDiff)
-  const addCodeChoice = await pSelect({
-    message: `Add the Capacitor Updater import to your main file?`,
-    options: [
-      { value: 'yes', label: '✅ Yes, add it' },
-      { value: 'no', label: '❌ No, I\'ll do it manually' },
-    ],
-  })
-  await cancelCommand(addCodeChoice, orgId, apikey)
 
   if (addCodeChoice === 'yes') {
-    if (!newContent) {
-      pLog.warn(`❌ Cannot find import statements in ${filePath}`)
-      pLog.info(`💡 You'll need to add the code manually`)
-      pLog.info(`📝 Add this to your main file:`)
-      pLog.info(`   ${importInject}`)
-      pLog.info(`   ${notifyAppReadyComment}`)
-      pLog.info(`   ${codeInject}`)
-      pLog.info(`📚 Or follow: https://capgo.app/docs/getting-started/add-an-app/`)
-      const continueAnyway = await pConfirm({
-        message: `Continue without auto-injecting the code? (You'll add it manually)`,
-      })
-      await cancelCommand(continueAnyway, orgId, apikey)
-      if (!continueAnyway) {
-        pOutro(`Bye 👋\n💡 You can resume the onboarding anytime by running the same command again`)
-        return await exitAfterFinishingReplay()
-      }
-      await markStep(orgId, apikey, 'add-code-manual', appId)
-    }
-    else if (!alreadyConfigured) {
+    if (!alreadyConfigured) {
       const s = pSpinner()
       s.start(`Adding @capacitor-updater to your main file`)
       if (created) {
@@ -2751,7 +2778,7 @@ async function addCodeStep(orgId: string, apikey: string, appId: string) {
   }
   else {
     setInitCodeDiff(undefined)
-    pLog.info(`Add to your main file the following code:\n\n${importInject};\n\n${notifyAppReadyComment}\n${codeInject};\n`)
+    pLog.info(`Add to your main file the following code:\n\n${getInitCodeInjection(filePath)}\n`)
   }
 }
 

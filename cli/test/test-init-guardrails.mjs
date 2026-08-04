@@ -12,6 +12,7 @@ import {
   getInitOtaVersionBase,
   getInitSuggestedOtaVersion,
   getInitUpdaterPluginConfig,
+  injectInitCode,
   isOnlyAllowedInitAutoTestChange,
   revertInitAutoTestChangeContent,
   runInheritedCommand,
@@ -76,6 +77,20 @@ t('dirty git status prompt keeps clean repo as the recommended path', () => {
   assert.match(options[0]?.hint ?? '', /recommended/)
   assert.equal(options[1]?.value, 'continue-dirty')
   assert.match(options[1]?.hint ?? '', /not recommended/)
+})
+
+t('init code injection preserves framework directives before imports', () => {
+  const updated = injectInitCode('src/main.tsx', `'use client'\n\nexport default function App() {}\n`)
+
+  assert.match(updated, /^'use client'\nimport \{ CapacitorUpdater \}/)
+  assert.match(updated, /CapacitorUpdater\.notifyAppReady\(\);/)
+})
+
+t('init code injection uses CommonJS syntax for .cjs files without imports', () => {
+  const updated = injectInitCode('scripts/start.cjs', 'console.log(\'ready\')\n')
+
+  assert.match(updated, /^const \{ CapacitorUpdater \} = require\('@capgo\/capacitor-updater'\);/)
+  assert.doesNotMatch(updated, /^import /m)
 })
 
 t('git status helper reports git status failures inside a repo', () => {
