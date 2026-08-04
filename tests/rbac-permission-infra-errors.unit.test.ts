@@ -169,4 +169,61 @@ describe('rbac permission infra errors', () => {
       'capgo_test_key',
     )).resolves.toBe(false)
   })
+
+  it('checkPermission allows JWT auth through the non-rbac_id query path', async () => {
+    executeMock.mockResolvedValueOnce({ rows: [{ allowed: true }] })
+
+    await expect(checkPermission(
+      makeContext({
+        userId: '00000000-0000-4000-8000-000000000001',
+        authType: 'jwt',
+        apikey: null,
+      }),
+      'app.upload_bundle',
+      { appId: 'ai.offthetools.app' },
+    )).resolves.toBe(true)
+  })
+
+  it('checkPermission surfaces statement timeouts on the JWT path as 503', async () => {
+    executeMock.mockRejectedValueOnce(Object.assign(
+      new Error('canceling statement due to statement timeout'),
+      { code: '57014' },
+    ))
+
+    await expect(checkPermission(
+      makeContext({
+        userId: '00000000-0000-4000-8000-000000000001',
+        authType: 'jwt',
+        apikey: null,
+      }),
+      'org.invite_user',
+      { orgId: '00000000-0000-4000-8000-000000000099' },
+    )).rejects.toMatchObject({
+      status: 503,
+      cause: { error: 'upstream_unavailable' },
+    })
+  })
+
+  it('checkPermissionPg surfaces statement timeouts as 503 on the non-rbac_id path', async () => {
+    executeMock.mockRejectedValueOnce(Object.assign(
+      new Error('canceling statement due to statement timeout'),
+      { code: '57014' },
+    ))
+
+    await expect(checkPermissionPg(
+      makeContext({
+        userId: '00000000-0000-4000-8000-000000000001',
+        authType: 'jwt',
+        apikey: null,
+      }),
+      'app.upload_bundle',
+      { appId: 'ai.offthetools.app' },
+      getDrizzleClientMock() as any,
+      '00000000-0000-4000-8000-000000000001',
+      null,
+    )).rejects.toMatchObject({
+      status: 503,
+      cause: { error: 'upstream_unavailable' },
+    })
+  })
 })

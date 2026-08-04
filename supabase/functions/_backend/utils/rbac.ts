@@ -115,9 +115,10 @@ const TRANSIENT_PG_SQLSTATES = new Set([
   '57P03', // cannot_connect_now
   '53300', // too_many_connections
   '53400', // configuration_limit_exceeded
+  '57014', // query_canceled (statement_timeout / lock_timeout)
 ])
 
-const TRANSIENT_ERROR_MESSAGE_RE = /connection (?:terminated|ended|closed|refused|reset)|timeout exceeded when trying to connect|connect(?:ion)? timed? ?out|network(?: |_)?error|socket hang up|hyperdrive|too many clients already/i
+const TRANSIENT_ERROR_MESSAGE_RE = /connection (?:terminated|ended|closed|refused|reset)|timeout exceeded when trying to connect|connect(?:ion)? timed? ?out|canceling statement due to (?:statement|lock) timeout|network(?: |_)?error|socket hang up|hyperdrive|too many clients already/i
 
 function readErrorField(error: unknown, key: string): unknown {
   if (!error || typeof error !== 'object')
@@ -179,16 +180,18 @@ function handlePermissionCheckError(
   if (error instanceof HTTPException)
     throw error
 
+  const transient = isTransientPermissionCheckError(error)
+
   cloudlogErr({
     requestId: c.get('requestId'),
     message: `${source} error`,
     error,
     permission,
     scope,
-    transient: isTransientPermissionCheckError(error),
+    transient,
   })
 
-  if (isTransientPermissionCheckError(error)) {
+  if (transient) {
     quickError(
       503,
       'upstream_unavailable',
