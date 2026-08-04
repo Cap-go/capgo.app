@@ -2021,7 +2021,9 @@ async function checkPrerequisitesStep(
       pLog.info(`💡 After installing Xcode, you can continue the onboarding`)
 
       const installedNow = await pConfirm({
-        message: `Have you installed Xcode? (Choose No to continue with Android only)`,
+        message: nativePlatforms.android
+          ? `Have you installed Xcode? (Choose No to continue with Android only)`
+          : `Have you installed Xcode? (Choose No to continue without iOS development)`,
         initialValue: false,
       })
       await cancelCommand(installedNow, orgId, apikey)
@@ -2045,7 +2047,9 @@ async function checkPrerequisitesStep(
       pLog.info(`💡 After installing Android Studio, set up the Android SDK`)
 
       const installedNow = await pConfirm({
-        message: `Have you installed Android Studio? (Choose No to continue with iOS only)`,
+        message: nativePlatforms.ios
+          ? `Have you installed Android Studio? (Choose No to continue with iOS only)`
+          : `Have you installed Android Studio? (Choose No to continue without Android development)`,
         initialValue: false,
       })
       await cancelCommand(installedNow, orgId, apikey)
