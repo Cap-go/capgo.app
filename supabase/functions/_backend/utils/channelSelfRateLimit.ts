@@ -6,7 +6,7 @@ import { getEnv } from './utils.ts'
 
 // Cache path for operation-level rate limiting (short per-second window)
 const CHANNEL_SELF_OP_RATE_PATH = '/.channel-self-op-rate'
-// Cache path for same-channel rate limiting (60 seconds for identical sets)
+// Cache path for same-channel rate limiting (5 seconds for identical sets)
 const CHANNEL_SELF_SAME_SET_PATH = '/.channel-self-same-set'
 // Cache path for IP-based rate limiting (per minute)
 const CHANNEL_SELF_IP_RATE_PATH = '/.channel-self-ip-rate'
@@ -15,8 +15,8 @@ const CHANNEL_SELF_IP_RATE_PATH = '/.channel-self-ip-rate'
 const OP_RATE_TTL_SECONDS = 1
 // Operation-level rate limit per second
 const OP_RATE_LIMIT_PER_SECOND = 5
-// TTL for same channel set rate limit (60 seconds)
-const SAME_SET_RATE_TTL_SECONDS = 60
+// TTL for same channel set rate limit (5 seconds)
+const SAME_SET_RATE_TTL_SECONDS = 5
 // TTL for IP-based rate limit (per minute)
 const IP_RATE_TTL_SECONDS = 60
 
@@ -111,7 +111,7 @@ function getChannelSelfIpRateLimit(c: Context): number {
  *
  * Rate limiting rules:
  * 1. Same device+app+operation cannot be done more than 5 times per second
- * 2. For 'set' operation: Same device+app+channel combination cannot be set more than once in 60 seconds
+ * 2. For 'set' operation: Same device+app+channel combination cannot be set more than once in 5 seconds
  *
  * @returns true if the request should be rate limited, false otherwise
  */
@@ -153,12 +153,12 @@ export async function isChannelSelfRateLimited(
     }
   }
 
-  // For 'set' operation: also check same-set rate limit (same device+app+channel within 60 seconds)
+  // For 'set' operation: also check same-set rate limit (same device+app+channel within 5 seconds)
   if (operation === 'set' && channel) {
     const sameSetEntry = buildSameSetRequest(c, appId, deviceId, channel)
     const cachedSet = await sameSetEntry.helper.matchJson<RateLimitEntry>(sameSetEntry.request)
     if (cachedSet) {
-      // Same exact set was done within the last 60 seconds - rate limit
+      // Same exact set was done within the last 5 seconds - rate limit
       return { limited: true, resetAt: cachedSet.timestamp + SAME_SET_RATE_TTL_SECONDS * 1000 }
     }
   }
@@ -258,7 +258,7 @@ export async function recordChannelSelfRequest(
   const opCounter: RateLimitCounter = { count, resetAt }
   await opRateEntry.helper.putJson(opRateEntry.request, opCounter, ttlSeconds)
 
-  // For 'set' operation: also record same-set rate limit (60 seconds TTL)
+  // For 'set' operation: also record same-set rate limit (5 seconds TTL)
   if (operation === 'set' && channel) {
     const sameSetEntry = buildSameSetRequest(c, appId, deviceId, channel)
     await sameSetEntry.helper.putJson(sameSetEntry.request, entry, SAME_SET_RATE_TTL_SECONDS)
