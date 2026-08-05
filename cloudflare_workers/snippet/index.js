@@ -225,6 +225,7 @@ async function withFreshRateLimitHeaders(cachedResponse) {
       json.moreInfo.retryAfterSeconds = remaining
       if (typeof resetAtSec === 'number')
         json.moreInfo.rateLimitResetAt = resetAtSec * 1000
+      headers.delete('Content-Length')
       body = JSON.stringify(json)
     }
     else {

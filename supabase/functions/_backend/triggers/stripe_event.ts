@@ -1143,13 +1143,18 @@ async function createdOrUpdated(
 
     // Clear edge on-prem / plan-upgrade caches only on real recovery / plan-change
     // transitions — not on every subscription.updated renewal/metadata webhook.
+    // past_due is stored as status=succeeded + past_due_at set (see toStripeInfoUpdate).
     const previousStatus = currentStripeInfo?.status ?? null
+    const recoveredFromPastDue = Boolean(currentStripeInfo?.past_due_at)
+      && status !== 'past_due'
+      && (status === 'succeeded' || status === 'updated')
     const shouldPurgePluginEdgeCaches = Boolean(paidAt)
       || status === 'created'
       || Boolean(stripeData.isUpgrade)
+      || recoveredFromPastDue
       || (
         (status === 'succeeded' || status === 'updated')
-        && (previousStatus === 'past_due' || previousStatus === 'canceled' || previousStatus === 'deleted')
+        && (previousStatus === 'canceled' || previousStatus === 'deleted')
       )
     if (shouldPurgePluginEdgeCaches) {
       await backgroundTask(c, Promise.all([

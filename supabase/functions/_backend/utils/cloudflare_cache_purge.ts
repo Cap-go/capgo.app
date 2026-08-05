@@ -1,10 +1,12 @@
 import type { Context } from 'hono'
 import { getRuntimeKey } from 'hono/adapter'
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
-import { supabaseAdmin } from './supabase.ts'
+import { closeClient, getPgClient } from './pg.ts'
 import { getEnv } from './utils.ts'
 
 const CLOUDFLARE_API_BASE = 'https://api.cloudflare.com/client/v4'
+/** Cloudflare purge_cache by tags accepts at most 100 tags per request. */
+const CF_PURGE_TAG_BATCH_SIZE = 100
 
 function parseZoneIds(raw: string): string[] {
   return raw
@@ -42,39 +44,43 @@ async function purgeByTags(c: Context, tags: string[]) {
     return
   }
 
-  const body = JSON.stringify({ tags })
   const headers = {
     'Authorization': `Bearer ${token}`,
     'Content-Type': 'application/json',
     'User-Agent': 'Capgo/1.0',
   }
 
-  await Promise.all(zoneIds.map(async (zoneId) => {
-    try {
-      const response = await fetch(`${CLOUDFLARE_API_BASE}/zones/${zoneId}/purge_cache`, {
-        method: 'POST',
-        headers,
-        body,
-      })
+  for (let offset = 0; offset < tags.length; offset += CF_PURGE_TAG_BATCH_SIZE) {
+    const batch = tags.slice(offset, offset + CF_PURGE_TAG_BATCH_SIZE)
+    const body = JSON.stringify({ tags: batch })
 
-      if (!response.ok) {
-        const error = await response.json().catch(() => null)
-        cloudlogErr({ requestId: c.get('requestId'), message: 'Cloudflare cache purge failed', zoneId, status: response.status, error })
-        return
+    await Promise.all(zoneIds.map(async (zoneId) => {
+      try {
+        const response = await fetch(`${CLOUDFLARE_API_BASE}/zones/${zoneId}/purge_cache`, {
+          method: 'POST',
+          headers,
+          body,
+        })
+
+        if (!response.ok) {
+          const error = await response.json().catch(() => null)
+          cloudlogErr({ requestId: c.get('requestId'), message: 'Cloudflare cache purge failed', zoneId, status: response.status, error, tagCount: batch.length })
+          return
+        }
+
+        const result = await response.json().catch(() => null) as { success?: boolean } | null
+        if (result?.success === false) {
+          cloudlogErr({ requestId: c.get('requestId'), message: 'Cloudflare cache purge returned error', zoneId, result, tagCount: batch.length })
+          return
+        }
+
+        cloudlog({ requestId: c.get('requestId'), message: 'Cloudflare cache purged by tag', zoneId, tagCount: batch.length, tagOffset: offset })
       }
-
-      const result = await response.json().catch(() => null) as { success?: boolean } | null
-      if (result?.success === false) {
-        cloudlogErr({ requestId: c.get('requestId'), message: 'Cloudflare cache purge returned error', zoneId, result })
-        return
+      catch (error) {
+        cloudlogErr({ requestId: c.get('requestId'), message: 'Cloudflare cache purge error', zoneId, error: serializeError(error) })
       }
-
-      cloudlog({ requestId: c.get('requestId'), message: 'Cloudflare cache purged by tag', zoneId, tags })
-    }
-    catch (error) {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'Cloudflare cache purge error', zoneId, error: serializeError(error) })
-    }
-  }))
+    }))
+  }
 }
 
 /**
@@ -96,38 +102,24 @@ export async function purgePlanCache(c: Context, appId: string) {
 }
 
 /**
- * List all app_ids for an org with pagination (PostgREST default page is 1000).
+ * List all app_ids for an org (single SQL via pg — no PostgREST page cap).
  */
 async function listOrgAppIds(c: Context, orgId: string): Promise<string[] | null> {
-  const pageSize = 1000
-  const appIds: string[] = []
-
-  for (let from = 0; ; from += pageSize) {
-    const { data: apps, error } = await supabaseAdmin(c)
-      .from('apps')
-      .select('app_id')
-      .eq('owner_org', orgId)
-      .order('app_id', { ascending: true })
-      .range(from, from + pageSize - 1)
-
-    if (error) {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to fetch apps for org cache purge', orgId, error })
-      return null
-    }
-
-    if (!apps || apps.length === 0)
-      break
-
-    for (const app of apps) {
-      if (app.app_id)
-        appIds.push(app.app_id)
-    }
-
-    if (apps.length < pageSize)
-      break
+  const pg = getPgClient(c, true)
+  try {
+    const result = await pg.query<{ app_id: string }>(
+      'SELECT app_id FROM public.apps WHERE owner_org = $1::uuid ORDER BY app_id',
+      [orgId],
+    )
+    return result.rows.map(row => row.app_id).filter(Boolean)
   }
-
-  return appIds
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to fetch apps for org cache purge', orgId, error: serializeError(error) })
+    return null
+  }
+  finally {
+    closeClient(c, pg)
+  }
 }
 
 async function purgeCacheTagsForOrg(
@@ -146,7 +138,7 @@ async function purgeCacheTagsForOrg(
   }
 
   const tags = appIds.map(buildTag)
-  cloudlog({ requestId: c.get('requestId'), message: `Purging ${logLabel} cache for org apps`, orgId, appCount: appIds.length })
+  cloudlog({ requestId: c.get('requestId'), message: `Purging ${logLabel} cache for org apps`, orgId, appCount: appIds.length, tagBatches: Math.ceil(tags.length / CF_PURGE_TAG_BATCH_SIZE) })
   await purgeByTags(c, tags)
 }
 
