@@ -21,6 +21,8 @@ const props = defineProps<{
   search?: string
   serverSidePagination?: boolean
   isLoading?: boolean
+  addDisabled?: boolean
+  addTooltip?: string
 }>()
 const emit = defineEmits([
   'addApp',
@@ -309,6 +311,8 @@ const filteredApps = computed(() => {
         v-model:current-page="internalCurrentPage"
         v-model:search="internalSearch"
         :show-add="!isMobile"
+        :add-disabled="props.addDisabled"
+        :add-tooltip="props.addTooltip"
         :total="props.total ?? filteredApps.length"
         :offset="props.offset"
         :element-list="filteredApps"

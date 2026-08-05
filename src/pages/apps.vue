@@ -4,6 +4,7 @@ import { storeToRefs } from 'pinia'
 import { computed, ref, watch, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
+import { checkPermissions } from '~/services/permissions'
 import { createSignedImageUrl, resolveImagePath } from '~/services/storage'
 import { useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
@@ -26,6 +27,7 @@ const pageSize = 10
 const totalApps = ref(0)
 const searchQuery = ref('')
 const { currentOrganization } = storeToRefs(organizationStore)
+const canCreateApp = ref(false)
 let appIconLoadRun = 0
 
 // Check if user lacks security compliance (2FA or password) - don't load data in this case
@@ -118,6 +120,8 @@ async function getMyApps() {
       return
     }
 
+    canCreateApp.value = await checkPermissions('org.create_app', { orgId: currentGid })
+
     const offset = (currentPage.value - 1) * pageSize
 
     // Fetch the page via an RPC that derives each app's real last-upload time
@@ -202,7 +206,12 @@ displayStore.defaultBack = '/apps'
               {{ t('add-your-first-app-t') }}
             </p>
             <div class="flex flex-col gap-3 mt-5 sm:flex-row sm:items-center">
-              <button class="d-btn d-btn-primary" @click="router.push('/app/new')">
+              <button
+                :disabled="!canCreateApp"
+                :title="!canCreateApp ? t('cannot-add-app-no-permission') : undefined"
+                class="d-btn d-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+                @click="router.push('/app/new')"
+              >
                 {{ t('start-onboarding') }}
               </button>
             </div>
@@ -218,6 +227,8 @@ displayStore.defaultBack = '/apps'
               :delete-button="!organizationStore.currentOrganizationFailed"
               :server-side-pagination="true"
               :is-loading="isTableLoading"
+              :add-disabled="!canCreateApp"
+              :add-tooltip="t('cannot-add-app-no-permission')"
               @add-app="router.push('/app/new')"
               @update:current-page="(page) => { currentPage = page; getMyApps() }"
               @update:search="(query) => { searchQuery = query; currentPage = 1; getMyApps() }"
