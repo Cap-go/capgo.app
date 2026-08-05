@@ -189,7 +189,9 @@ describe('organization store refreshOrganizationLogos', () => {
     expect(store.currentOrganization?.logo_storage_path).toBe('org/org-refresh/logo/current.png')
     expect(mockUpdateDashboard).not.toHaveBeenCalled()
   })
+})
 
+describe('organization store fetchOrganizations', () => {
   it.concurrent('fetches organizations with the auth session when the public profile is unavailable', async () => {
     mainStore.user = undefined
     mockCreateSignedImageUrl.mockResolvedValueOnce('')
