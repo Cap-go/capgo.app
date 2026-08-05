@@ -1507,7 +1507,7 @@ watch(appName, (value) => {
 
         <div v-else-if="!props.preOrg && flowStep === 'install' && createdApp">
           <div class="space-y-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900/95">
-            <div class="flex flex-wrap items-start justify-between gap-4">
+            <div>
               <div>
                 <p class="text-sm font-semibold text-primary-500 dark:text-slate-300">
                   {{ t('app-onboarding-install-badge') }}
@@ -1519,9 +1519,6 @@ watch(appName, (value) => {
                   {{ t('app-onboarding-install-subtitle') }}
                 </p>
               </div>
-              <button type="button" class="d-btn min-h-11" :class="whiteCardSecondaryButtonClass()" @click="openDashboard">
-                {{ t('app-onboarding-explore-dashboard') }}
-              </button>
             </div>
 
             <div
