@@ -338,9 +338,14 @@ app.post('/', async (c) => {
         }
 
         if (result.isOnprem) {
-          // Same app_id for the whole batch — return the public on-prem 429 so
-          // edge can Cache-Control / Retry-After and skip the worker.
-          return onPremiseAppResponse(c)
+          // Keep batch HTTP 200 + per-event results for backward compatibility.
+          // Single-event path still returns onPremiseAppResponse (429 + headers).
+          results.push({
+            status: 'error',
+            error: 'on_premise_app',
+            message: 'On-premise app detected',
+            index: i,
+          })
         }
         else if (result.success) {
           results.push({ status: 'ok', index: i })

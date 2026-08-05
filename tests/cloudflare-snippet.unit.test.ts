@@ -227,8 +227,12 @@ describe('cloudflare plugin snippet on-prem fallback', () => {
     const second = await snippet.fetch(buildRequest('/updates', body))
     expect(second.status).toBe(429)
     expect(second.headers.get('Retry-After')).toBeTruthy()
-    expect(Number.parseInt(second.headers.get('Retry-After') || '0', 10)).toBeGreaterThan(3500)
+    const retryAfter = Number.parseInt(second.headers.get('Retry-After') || '0', 10)
+    expect(retryAfter).toBeGreaterThan(3500)
     expect(second.headers.get('X-RateLimit-Reset')).toBe(String(Math.ceil(resetAt / 1000)))
+    expect(second.headers.get('Cache-Control')).toBe(`public, max-age=${retryAfter}`)
+    const secondBody = await second.json() as { moreInfo?: { retryAfterSeconds?: number } }
+    expect(secondBody.moreInfo?.retryAfterSeconds).toBe(retryAfter)
     // Second request must be served from edge cache — no extra worker fetch.
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })

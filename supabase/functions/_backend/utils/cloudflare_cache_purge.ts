@@ -96,30 +96,66 @@ export async function purgePlanCache(c: Context, appId: string) {
 }
 
 /**
+ * List all app_ids for an org with pagination (PostgREST default page is 1000).
+ */
+async function listOrgAppIds(c: Context, orgId: string): Promise<string[] | null> {
+  const pageSize = 1000
+  const appIds: string[] = []
+
+  for (let from = 0; ; from += pageSize) {
+    const { data: apps, error } = await supabaseAdmin(c)
+      .from('apps')
+      .select('app_id')
+      .eq('owner_org', orgId)
+      .order('app_id', { ascending: true })
+      .range(from, from + pageSize - 1)
+
+    if (error) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to fetch apps for org cache purge', orgId, error })
+      return null
+    }
+
+    if (!apps || apps.length === 0)
+      break
+
+    for (const app of apps) {
+      if (app.app_id)
+        appIds.push(app.app_id)
+    }
+
+    if (apps.length < pageSize)
+      break
+  }
+
+  return appIds
+}
+
+async function purgeCacheTagsForOrg(
+  c: Context,
+  orgId: string,
+  buildTag: (appId: string) => string,
+  logLabel: string,
+) {
+  const appIds = await listOrgAppIds(c, orgId)
+  if (appIds === null)
+    return
+
+  if (appIds.length === 0) {
+    cloudlog({ requestId: c.get('requestId'), message: `No apps found for org ${logLabel} cache purge`, orgId })
+    return
+  }
+
+  const tags = appIds.map(buildTag)
+  cloudlog({ requestId: c.get('requestId'), message: `Purging ${logLabel} cache for org apps`, orgId, appCount: appIds.length })
+  await purgeByTags(c, tags)
+}
+
+/**
  * Purge plan-upgrade cache for all apps in an organization.
  * Call this when a subscription payment succeeds.
  */
 export async function purgePlanCacheForOrg(c: Context, orgId: string) {
-  // Get all app_ids for this org
-  const { data: apps, error } = await supabaseAdmin(c)
-    .from('apps')
-    .select('app_id')
-    .eq('owner_org', orgId)
-
-  if (error) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to fetch apps for org cache purge', orgId, error })
-    return
-  }
-
-  if (!apps || apps.length === 0) {
-    cloudlog({ requestId: c.get('requestId'), message: 'No apps found for org cache purge', orgId })
-    return
-  }
-
-  // Build tags for all apps in the org
-  const tags = apps.map(app => buildPlanCacheTag(app.app_id))
-  cloudlog({ requestId: c.get('requestId'), message: 'Purging plan cache for org apps', orgId, appCount: apps.length })
-  await purgeByTags(c, tags)
+  await purgeCacheTagsForOrg(c, orgId, buildPlanCacheTag, 'plan')
 }
 
 /**
@@ -128,23 +164,5 @@ export async function purgePlanCacheForOrg(c: Context, orgId: string) {
  * are not stuck on cached on_premise_app 429s for the full Retry-After TTL.
  */
 export async function purgeOnPremCacheForOrg(c: Context, orgId: string) {
-  const { data: apps, error } = await supabaseAdmin(c)
-    .from('apps')
-    .select('app_id')
-    .eq('owner_org', orgId)
-
-  if (error) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to fetch apps for org on-prem cache purge', orgId, error })
-    return
-  }
-
-  if (!apps || apps.length === 0) {
-    cloudlog({ requestId: c.get('requestId'), message: 'No apps found for org on-prem cache purge', orgId })
-    return
-  }
-
-  const tags = apps.map(app => buildOnPremCacheTag(app.app_id))
-  cloudlog({ requestId: c.get('requestId'), message: 'Purging on-prem cache for org apps', orgId, appCount: apps.length })
-  await purgeByTags(c, tags)
+  await purgeCacheTagsForOrg(c, orgId, buildOnPremCacheTag, 'on-prem')
 }
-

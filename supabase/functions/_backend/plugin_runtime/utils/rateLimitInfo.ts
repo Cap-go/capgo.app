@@ -40,6 +40,8 @@ export function onPremiseAppResponse(c: Context) {
   const resetAt = Date.now() + retryAfterSeconds * 1000
   const moreInfo = buildRateLimitInfo(resetAt)
 
+  // Retry-After is relative; X-RateLimit-Reset is absolute. The edge snippet
+  // rewrites Retry-After + Cache-Control from the reset on every cache HIT.
   c.header('Retry-After', String(retryAfterSeconds))
   c.header('X-RateLimit-Reset', String(Math.ceil(resetAt / 1000)))
   c.header('Cache-Control', `public, max-age=${retryAfterSeconds}`)

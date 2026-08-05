@@ -193,22 +193,49 @@ function getCacheTtlSeconds(headers, responseBody) {
 
 /**
  * Keep rate-limit headers accurate when serving a cached 429.
- * Recompute Retry-After from X-RateLimit-Reset (unix seconds).
+ * Recompute Retry-After / Cache-Control from X-RateLimit-Reset (unix seconds),
+ * and refresh moreInfo.retryAfterSeconds in the JSON body when present.
  */
-function withFreshRateLimitHeaders(cachedResponse) {
+async function withFreshRateLimitHeaders(cachedResponse) {
   const headers = new Headers(cachedResponse.headers)
   const nowSec = Math.floor(Date.now() / 1000)
+  let remaining = null
+  let resetAtSec = null
 
   const resetHeader = headers.get('X-RateLimit-Reset') || headers.get('x-ratelimit-reset')
   if (resetHeader) {
-    const resetAtSec = Number.parseInt(resetHeader, 10)
-    if (Number.isFinite(resetAtSec)) {
-      headers.set('Retry-After', String(Math.max(0, resetAtSec - nowSec)))
-      headers.set('X-RateLimit-Reset', String(resetAtSec))
+    const parsed = Number.parseInt(resetHeader, 10)
+    if (Number.isFinite(parsed)) {
+      resetAtSec = parsed
+      remaining = Math.max(0, parsed - nowSec)
+      headers.set('Retry-After', String(remaining))
+      headers.set('X-RateLimit-Reset', String(parsed))
+      if (remaining <= 0)
+        headers.set('Cache-Control', 'private, no-store')
+      else
+        headers.set('Cache-Control', `public, max-age=${remaining}`)
     }
   }
 
-  return new Response(cachedResponse.body, {
+  let body = cachedResponse.body
+  try {
+    const text = await cachedResponse.clone().text()
+    const json = JSON.parse(text)
+    if (json && typeof json === 'object' && json.moreInfo && typeof json.moreInfo === 'object' && typeof remaining === 'number') {
+      json.moreInfo.retryAfterSeconds = remaining
+      if (typeof resetAtSec === 'number')
+        json.moreInfo.rateLimitResetAt = resetAtSec * 1000
+      body = JSON.stringify(json)
+    }
+    else {
+      body = text
+    }
+  }
+  catch {
+    // Keep original body stream when JSON rewrite is not possible.
+  }
+
+  return new Response(body, {
     status: cachedResponse.status,
     statusText: cachedResponse.statusText,
     headers,
@@ -336,7 +363,16 @@ function extractAppIdFromBodyBytes(requestBody) {
     return null
   try {
     const body = JSON.parse(new TextDecoder().decode(requestBody))
-    return body.app_id ?? null
+    if (Array.isArray(body)) {
+      // /stats batch: first event app_id (handler enforces one app_id per batch)
+      const first = body[0]
+      if (first && typeof first === 'object' && typeof first.app_id === 'string' && first.app_id)
+        return first.app_id
+      return null
+    }
+    if (body && typeof body === 'object')
+      return body.app_id ?? null
+    return null
   }
   catch {
     return null
@@ -378,11 +414,11 @@ export default {
       if (appId) {
         const cachedPlanUpgrade = await getPlanUpgradeCache(hostname, appId, endpoint, method)
         if (cachedPlanUpgrade) {
-          return withFreshRateLimitHeaders(cachedPlanUpgrade)
+          return await withFreshRateLimitHeaders(cachedPlanUpgrade)
         }
         const cachedResponse = await getOnPremCache(hostname, appId, endpoint, method)
         if (cachedResponse) {
-          return withFreshRateLimitHeaders(cachedResponse)
+          return await withFreshRateLimitHeaders(cachedResponse)
         }
       }
     }

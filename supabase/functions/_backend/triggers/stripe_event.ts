@@ -1141,12 +1141,22 @@ async function createdOrUpdated(
       },
     }))
 
-    // Clear edge on-prem / plan-upgrade caches so devices recover immediately
-    // after payment instead of waiting out Retry-After / Cache-Control TTL.
-    await backgroundTask(c, Promise.all([
-      purgePlanCacheForOrg(c, org.id),
-      purgeOnPremCacheForOrg(c, org.id),
-    ]))
+    // Clear edge on-prem / plan-upgrade caches only on real recovery / plan-change
+    // transitions — not on every subscription.updated renewal/metadata webhook.
+    const previousStatus = currentStripeInfo?.status ?? null
+    const shouldPurgePluginEdgeCaches = Boolean(paidAt)
+      || status === 'created'
+      || Boolean(stripeData.isUpgrade)
+      || (
+        (status === 'succeeded' || status === 'updated')
+        && (previousStatus === 'past_due' || previousStatus === 'canceled' || previousStatus === 'deleted')
+      )
+    if (shouldPurgePluginEdgeCaches) {
+      await backgroundTask(c, Promise.all([
+        purgePlanCacheForOrg(c, org.id),
+        purgeOnPremCacheForOrg(c, org.id),
+      ]))
+    }
   }
   else {
     const segment = await customerToSegmentOrg(c, org.id, stripeData.data.price_id)
