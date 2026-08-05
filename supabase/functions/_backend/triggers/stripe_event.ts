@@ -17,6 +17,7 @@ import { groupIdentifyPosthog } from '../utils/posthog.ts'
 import { ensureCustomerMetadata, getCreditCheckoutDetails, getStripe, syncStripeCustomerCountry } from '../utils/stripe.ts'
 import { customerToSegmentOrg, supabaseAdmin } from '../utils/supabase.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
+import { purgeOnPremCacheForOrg, purgePlanCacheForOrg } from '../utils/cloudflare_cache_purge.ts'
 import { backgroundTask, isStripeConfigured } from '../utils/utils.ts'
 
 export const app = new Hono<MiddlewareKeyVariablesStripe>()
@@ -1139,6 +1140,13 @@ async function createdOrUpdated(
         subscription_status_name: statusName,
       },
     }))
+
+    // Clear edge on-prem / plan-upgrade caches so devices recover immediately
+    // after payment instead of waiting out Retry-After / Cache-Control TTL.
+    await backgroundTask(c, Promise.all([
+      purgePlanCacheForOrg(c, org.id),
+      purgeOnPremCacheForOrg(c, org.id),
+    ]))
   }
   else {
     const segment = await customerToSegmentOrg(c, org.id, stripeData.data.price_id)

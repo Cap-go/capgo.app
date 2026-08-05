@@ -306,7 +306,7 @@ export async function updateWithPG(
   if (cachedStatus === 'onprem') {
     const updateEnumerationLimit = await recordUpdateEnumerationMiss(c, app_id)
     if (updateEnumerationLimit.limited)
-      return updateEnumerationLimitedResponse(c)
+      return updateEnumerationLimitedResponse(c, updateEnumerationLimit.resetAt)
 
     const device = makeDevice(body, cachedAppStatus.allow_device_custom_id)
     return onPremStats(c, app_id, 'get', device)
@@ -319,7 +319,7 @@ export async function updateWithPG(
   }
   const existingUpdateEnumerationLimit = await isUpdateEnumerationLimited(c)
   if (existingUpdateEnumerationLimit.limited)
-    return updateEnumerationLimitedResponse(c)
+    return updateEnumerationLimitedResponse(c, existingUpdateEnumerationLimit.resetAt)
 
   if (!cachedAppStatus.cacheHit) {
     const providerBlockedResponse = await providerInfrastructureColdCacheBlockResponse(c, app_id, drizzleClient)
@@ -377,7 +377,7 @@ export async function updateWithPG(
   if (!appOwner) {
     const updateEnumerationLimit = await recordUpdateEnumerationMiss(c, app_id)
     if (updateEnumerationLimit.limited)
-      return updateEnumerationLimitedResponse(c)
+      return updateEnumerationLimitedResponse(c, updateEnumerationLimit.resetAt)
 
     await setAppStatus(c, app_id, 'onprem', true, cachedAppStatus.block_provider_infra_requests)
     return onPremStats(c, app_id, 'get', device)

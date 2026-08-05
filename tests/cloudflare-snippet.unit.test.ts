@@ -233,5 +233,4 @@ describe('cloudflare plugin snippet on-prem fallback', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
-
 })

@@ -1167,7 +1167,7 @@ batchTestDescribe('[POST] /stats batch operations', () => {
     expect(responseData.message).toBe('All events in a batch must have the same app_id')
   })
 
-  batchTestIt('should return on_premise_app error for batch with non-existent app', async () => {
+  batchTestIt('should return on_premise_app 429 for batch with non-existent app', async () => {
     const uuid1 = randomUUID().toLowerCase()
     const uuid2 = randomUUID().toLowerCase()
 
@@ -1190,19 +1190,12 @@ batchTestDescribe('[POST] /stats batch operations', () => {
       device_id: uuid2,
     }
 
-    // Send batch request with non-existent app
+    // Send batch request with non-existent app — top-level 429 with backoff headers
     const response = await postStats([baseData1, baseData2])
-    expect(response.status).toBe(200)
+    expect(response.status).toBe(429)
+    expect(response.headers.get('Retry-After')).toBeTruthy()
 
-    const responseData = await response.json<BatchStatsRes>()
-    expect(responseData.status).toBe('ok')
-    expect(responseData.results).toBeDefined()
-    expect(responseData.results).toHaveLength(2)
-
-    // Both events should return on_premise_app error
-    expect(responseData.results![0].status).toBe('error')
-    expect(responseData.results![0].error).toBe('on_premise_app')
-    expect(responseData.results![1].status).toBe('error')
-    expect(responseData.results![1].error).toBe('on_premise_app')
+    const responseData = await response.json<{ error: string }>()
+    expect(responseData.error).toBe('on_premise_app')
   })
 })

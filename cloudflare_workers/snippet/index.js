@@ -193,30 +193,19 @@ function getCacheTtlSeconds(headers, responseBody) {
 
 /**
  * Keep rate-limit headers accurate when serving a cached 429.
- * Recompute Retry-After from X-RateLimit-Reset (unix seconds) or body moreInfo.
+ * Recompute Retry-After from X-RateLimit-Reset (unix seconds).
  */
 function withFreshRateLimitHeaders(cachedResponse) {
   const headers = new Headers(cachedResponse.headers)
   const nowSec = Math.floor(Date.now() / 1000)
 
   const resetHeader = headers.get('X-RateLimit-Reset') || headers.get('x-ratelimit-reset')
-  let remaining = null
   if (resetHeader) {
     const resetAtSec = Number.parseInt(resetHeader, 10)
-    if (Number.isFinite(resetAtSec))
-      remaining = Math.max(0, resetAtSec - nowSec)
-  }
-
-  if (remaining === null) {
-    const retryAfter = getRetryAfterSeconds(headers, null)
-    if (typeof retryAfter === 'number')
-      remaining = retryAfter
-  }
-
-  if (typeof remaining === 'number') {
-    headers.set('Retry-After', String(remaining))
-    if (!headers.has('X-RateLimit-Reset') && remaining > 0)
-      headers.set('X-RateLimit-Reset', String(nowSec + remaining))
+    if (Number.isFinite(resetAtSec)) {
+      headers.set('Retry-After', String(Math.max(0, resetAtSec - nowSec)))
+      headers.set('X-RateLimit-Reset', String(resetAtSec))
+    }
   }
 
   return new Response(cachedResponse.body, {
@@ -224,6 +213,31 @@ function withFreshRateLimitHeaders(cachedResponse) {
     statusText: cachedResponse.statusText,
     headers,
   })
+}
+
+/** Persist absolute reset + Cache-Control so Cache API TTL and client countdown stay correct. */
+function applyEdgeRateLimitCacheHeaders(headers, responseBody, cacheTtl) {
+  headers.set('Cache-Control', `public, max-age=${cacheTtl}`)
+
+  const nowSec = Math.floor(Date.now() / 1000)
+  const retryAfter = getRetryAfterSeconds(headers, responseBody)
+  const fromBodyReset = responseBody && responseBody.moreInfo
+    && typeof responseBody.moreInfo.rateLimitResetAt === 'number'
+    ? Math.ceil(responseBody.moreInfo.rateLimitResetAt / 1000)
+    : null
+
+  if (typeof fromBodyReset === 'number' && Number.isFinite(fromBodyReset)) {
+    headers.set('X-RateLimit-Reset', String(fromBodyReset))
+    headers.set('Retry-After', String(Math.max(0, fromBodyReset - nowSec)))
+    return
+  }
+
+  if (typeof retryAfter === 'number') {
+    if (!headers.has('Retry-After'))
+      headers.set('Retry-After', String(retryAfter))
+    if (!headers.has('X-RateLimit-Reset'))
+      headers.set('X-RateLimit-Reset', String(nowSec + retryAfter))
+  }
 }
 
 async function setOnPremCache(hostname, appId, endpoint, method, responseBody, status, responseHeaders) {
@@ -242,12 +256,7 @@ async function setOnPremCache(hostname, appId, endpoint, method, responseBody, s
     headers.set('X-Onprem-Cached', 'true')
     headers.set('X-Onprem-App-Id', appId)
     headers.set('X-Onprem-Ttl', String(cacheTtl))
-    // Ensure Retry-After is stored even when only present in JSON moreInfo.
-    const retryAfter = getRetryAfterSeconds(headers, responseBody)
-    if (typeof retryAfter === 'number' && !headers.has('Retry-After'))
-      headers.set('Retry-After', String(retryAfter))
-    if (responseBody && responseBody.moreInfo && typeof responseBody.moreInfo.rateLimitResetAt === 'number' && !headers.has('X-RateLimit-Reset'))
-      headers.set('X-RateLimit-Reset', String(Math.ceil(responseBody.moreInfo.rateLimitResetAt / 1000)))
+    applyEdgeRateLimitCacheHeaders(headers, responseBody, cacheTtl)
 
     // Store the response cache
     const key = getOnPremCacheKey(hostname, appId, endpoint, method)
@@ -309,6 +318,7 @@ async function setPlanUpgradeCache(hostname, appId, endpoint, method, responseBo
     headers.set('X-Plan-Upgrade-Cached', 'true')
     headers.set('X-Plan-Upgrade-App-Id', appId)
     headers.set('X-Plan-Upgrade-Ttl', String(cacheTtl))
+    applyEdgeRateLimitCacheHeaders(headers, responseBody, cacheTtl)
     const response = new Response(JSON.stringify(responseBody), {
       status,
       headers,

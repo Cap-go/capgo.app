@@ -4,7 +4,7 @@ import { CacheHelper } from './cache.ts'
 import { cloudlog } from './logging.ts'
 import { getClientIP } from './rate_limit.ts'
 import { getEnv } from './utils.ts'
-import { onPremiseAppResponse } from './rateLimitInfo.ts'
+import { buildRateLimitInfo } from './rateLimitInfo.ts'
 
 const UPDATE_ENUMERATION_SLOT_PATH = '/rate-limit/update-enumeration/slot'
 const UPDATE_ENUMERATION_LIMIT_PATH = '/rate-limit/update-enumeration/limited'
@@ -212,6 +212,27 @@ export async function recordUpdateEnumerationMiss(c: Context, appId: string): Pr
   return { limited, resetAt: missState.resetAt }
 }
 
-export function updateEnumerationLimitedResponse(c: Context) {
-  return onPremiseAppResponse(c)
+/**
+ * IP-scoped enumeration block disguised as on_premise_app (oracle-safe).
+ * Must not use public Cache-Control — that would let the snippet cache the 429
+ * under the requested app_id and serve it to every client of a valid app.
+ */
+export function updateEnumerationLimitedResponse(c: Context, resetAt?: number) {
+  const resolvedResetAt = (typeof resetAt === 'number' && Number.isFinite(resetAt) && resetAt > Date.now())
+    ? resetAt
+    : Date.now() + UPDATE_ENUMERATION_TTL_SECONDS * 1000
+  const moreInfo = buildRateLimitInfo(resolvedResetAt)
+  const retryAfterSeconds = typeof moreInfo.retryAfterSeconds === 'number'
+    ? moreInfo.retryAfterSeconds
+    : UPDATE_ENUMERATION_TTL_SECONDS
+
+  c.header('Retry-After', String(Math.max(0, Math.floor(retryAfterSeconds))))
+  c.header('X-RateLimit-Reset', String(Math.ceil(resolvedResetAt / 1000)))
+  c.header('Cache-Control', 'private, no-store')
+
+  return c.json({
+    error: 'on_premise_app',
+    message: 'On-premise app detected',
+    moreInfo,
+  }, 429)
 }

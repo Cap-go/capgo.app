@@ -19,17 +19,21 @@ export const DEFAULT_ON_PREMISE_RETRY_AFTER_SECONDS = 60 * 60
 export function getOnPremiseRetryAfterSeconds(c: Context): number {
   const envLimit = getEnv(c, 'RATE_LIMIT_ON_PREMISE_RETRY_AFTER_SECONDS')
   if (envLimit) {
-    const parsed = Number.parseInt(envLimit, 10)
-    if (!Number.isNaN(parsed) && parsed > 0)
+    const trimmed = envLimit.trim()
+    const parsed = Number(trimmed)
+    if (/^\d+$/.test(trimmed) && Number.isSafeInteger(parsed) && parsed > 0)
       return parsed
   }
   return DEFAULT_ON_PREMISE_RETRY_AFTER_SECONDS
 }
 
 /**
- * Canonical 429 for on-prem / cancelled / enumeration-limited plugin responses.
+ * Canonical 429 for on-prem / cancelled plugin responses.
  * Sets Retry-After + Cache-Control so clients and the edge snippet skip the worker
  * until the backoff window expires.
+ *
+ * Do not use for IP-scoped guards (e.g. update enumeration): those must stay
+ * `private, no-store` so they cannot poison the app-keyed public edge cache.
  */
 export function onPremiseAppResponse(c: Context) {
   const retryAfterSeconds = getOnPremiseRetryAfterSeconds(c)

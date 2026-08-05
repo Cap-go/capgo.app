@@ -121,3 +121,30 @@ export async function purgePlanCacheForOrg(c: Context, orgId: string) {
   cloudlog({ requestId: c.get('requestId'), message: 'Purging plan cache for org apps', orgId, appCount: apps.length })
   await purgeByTags(c, tags)
 }
+
+/**
+ * Purge on-prem cache for all apps in an organization.
+ * Call this when a subscription payment succeeds so cancelled→valid apps
+ * are not stuck on cached on_premise_app 429s for the full Retry-After TTL.
+ */
+export async function purgeOnPremCacheForOrg(c: Context, orgId: string) {
+  const { data: apps, error } = await supabaseAdmin(c)
+    .from('apps')
+    .select('app_id')
+    .eq('owner_org', orgId)
+
+  if (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to fetch apps for org on-prem cache purge', orgId, error })
+    return
+  }
+
+  if (!apps || apps.length === 0) {
+    cloudlog({ requestId: c.get('requestId'), message: 'No apps found for org on-prem cache purge', orgId })
+    return
+  }
+
+  const tags = apps.map(app => buildOnPremCacheTag(app.app_id))
+  cloudlog({ requestId: c.get('requestId'), message: 'Purging on-prem cache for org apps', orgId, appCount: apps.length })
+  await purgeByTags(c, tags)
+}
+
