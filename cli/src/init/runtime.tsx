@@ -95,6 +95,11 @@ export interface InitStreamingOutput {
   lines: string[]
   status: InitStreamingOutputStatus
   statusMessage?: string
+  onCancel?: () => void
+  continuePrompt?: {
+    message: string
+    resolve: (value: void | symbol) => void
+  }
 }
 
 export interface InitRuntimeState {
@@ -116,7 +121,6 @@ const listeners = new Set<() => void>()
 let inkApp: ReturnType<typeof render> | undefined
 let started = false
 let keepAliveTimer: ReturnType<typeof setInterval> | undefined
-
 function emit() {
   listeners.forEach(listener => listener())
 }
@@ -157,7 +161,7 @@ export function ensureInitInkSession() {
     getSnapshot: getInitSnapshot,
     subscribe,
     updatePromptError,
-  }))
+  }), { exitOnCtrlC: false })
   keepAliveTimer ??= setInterval(() => {}, 1000)
 }
 
@@ -258,7 +262,7 @@ export function setInitEncryptionSummary(summary?: InitEncryptionSummary) {
   updateState(current => ({ ...current, encryptionSummary: summary }))
 }
 
-export function startInitStreamingOutput(params: { title: string, command: string }) {
+export function startInitStreamingOutput(params: { title: string, command: string, onCancel?: () => void }) {
   ensureInitInkSession()
   updateState(current => ({
     ...current,
@@ -268,6 +272,7 @@ export function startInitStreamingOutput(params: { title: string, command: strin
       lines: [],
       status: 'running',
       statusMessage: undefined,
+      onCancel: params.onCancel,
     },
   }))
 }
@@ -300,6 +305,34 @@ export function updateInitStreamingStatus(status: InitStreamingOutputStatus, sta
         statusMessage,
       },
     }
+  })
+}
+
+export function waitForInitStreamingContinue(message: string): Promise<void | symbol> {
+  ensureInitInkSession()
+  return new Promise((resolve) => {
+    updateState((current) => {
+      if (!current.streamingOutput)
+        return current
+      return {
+        ...current,
+        streamingOutput: {
+          ...current.streamingOutput,
+          continuePrompt: {
+            message,
+            resolve: (value) => {
+              updateState(active => ({
+                ...active,
+                streamingOutput: active.streamingOutput
+                  ? { ...active.streamingOutput, continuePrompt: undefined }
+                  : undefined,
+              }))
+              resolve(value)
+            },
+          },
+        },
+      }
+    })
   })
 }
 

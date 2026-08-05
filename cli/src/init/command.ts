@@ -1,5 +1,6 @@
 import type { Buffer } from 'node:buffer'
 import type { ExistingOrganizationApp, Options, PendingOnboardingApp } from '../api/app'
+import type { UploadReporter } from '../bundle/upload'
 import type { Organization } from '../utils'
 import type { InitCodeDiff, InitEncryptionPhase, InitEncryptionSummary } from './runtime'
 import { spawn, spawnSync } from 'node:child_process'
@@ -28,14 +29,14 @@ import { showReplicationProgress } from '../replicationProgress'
 import { formatRunnerCommand, splitRunnerCommand } from '../runner-command'
 import { copyToClipboard, revealInFinder } from '../support/clipboard'
 import { contactSupport } from '../support/contact-support'
-import { isChannelAlreadyExistsError } from './channel-conflict'
 import { appendInternalLog, getInternalLogPath, startInternalLog } from '../support/internal-log'
 import { uploadSupportLogs } from '../support/support-upload'
 import { consoleWebUrl, createSupabaseClient, defaultApiHost, findBuildCommandForProjectType, findMainFile, findMainFileForProjectType, findProjectType, findRoot, findSavedKey, findSavedKeySilent, formatError, getAllPackagesDependencies, getAppId, getBundleVersion, getConfig, getConfigForWrite, getLocalConfig, getNativeProjectResetAdvice, getOrganizationListWithPermission, getPackageScripts, getPMAndCommand, hasCliPermission, PACKNAME, projectIsMonorepo, resolveUserIdFromApiKey, updateConfigbyKey, updateConfigUpdater, validateIosUpdaterSync } from '../utils'
 import { buildAppIdConflictSuggestions, isAppAlreadyExistsError } from './app-conflict'
+import { isChannelAlreadyExistsError } from './channel-conflict'
 import { cancel as pCancel, confirm as pConfirm, intro as pIntro, isCancel as pIsCancel, log as pLog, outro as pOutro, select as pSelect, spinner as pSpinner, text as pText } from './prompts'
 import { finishActiveCliReplay, getActiveCliReplaySessionId, isCliTelemetryDisabled, startInitReplay } from './replay'
-import { appendInitStreamingLine, clearInitStreamingOutput, setInitCodeDiff, setInitEncryptionSummary, setInitVersionWarning, startInitStreamingOutput, stopInitInkSession, updateInitStreamingStatus } from './runtime'
+import { appendInitStreamingLine, clearInitStreamingOutput, INIT_CANCEL, pushInitLog, setInitCodeDiff, setInitEncryptionSummary, setInitVersionWarning, startInitStreamingOutput, stopInitInkSession, updateInitStreamingStatus, waitForInitStreamingContinue } from './runtime'
 import { formatInitResumeMessage, initOnboardingSteps, renderInitOnboardingComplete, renderInitOnboardingFrame, renderInitOnboardingWelcome } from './ui'
 import { CAPGO_UPDATER_PACKAGE, getUpdaterInstallState } from './updater'
 
@@ -657,7 +658,9 @@ async function runInitContactSupport(failureText: string, supportPlatform?: Plat
           return false
         if (choice === 'view') {
           pLog.info(`Logs to be sent: ${logPath}`)
-          try { await open(logPath) }
+          try {
+            await open(logPath)
+          }
           catch { /* best-effort: just the path above */ }
           continue
         }
@@ -4682,7 +4685,38 @@ async function uploadStep(orgId: string, apikey: string, appId: string, newVersi
       globalNodeModulesPath = isMonorepo ? nodeModulesPath : undefined
 
       let uploadRes: Awaited<ReturnType<typeof uploadBundleInternal>> | undefined
+      const appendUploadOutput = (message: string, prefix = '') => {
+        for (const line of message.split(/\r?\n/)) {
+          if (line)
+            appendInitStreamingLine(`${prefix}${line}`)
+        }
+      }
+      const uploadReporter: UploadReporter = {
+        info: message => appendUploadOutput(message),
+        warn: message => appendUploadOutput(message, '⚠ '),
+        error: message => appendUploadOutput(message, '✖ '),
+        success: message => appendUploadOutput(message, '✓ '),
+        intro: message => appendUploadOutput(message),
+        outro: message => appendUploadOutput(message, '✓ '),
+        spinner: () => ({
+          start: message => updateInitStreamingStatus('running', message),
+          message: message => updateInitStreamingStatus('running', message),
+          stop: (message) => {
+            if (message)
+              appendUploadOutput(message, '✓ ')
+          },
+          error: message => appendUploadOutput(message, '✖ '),
+        }),
+      }
       try {
+        s.stop()
+        startInitStreamingOutput({
+          title: `Uploading ${appId}@${newVersion} to Capgo`,
+          command: `bundle upload ${appId} --channel ${globalChannelName} --bundle ${newVersion}`,
+          onCancel: () => {
+            void cancelCommand(INIT_CANCEL, orgId, apikey)
+          },
+        })
         const previousCwd = cwd()
         try {
           chdir(selectedProjectDir)
@@ -4696,35 +4730,69 @@ async function uploadStep(orgId: string, apikey: string, appId: string, newVersi
             ignoreChecksumCheck: true,
             // Onboarding owns replication UX after the upload spinner stops.
             showReplicationProgress: false,
-          }, false)
+          }, true, uploadReporter)
         }
         finally {
           chdir(previousCwd)
         }
+        if (uploadRes?.success) {
+          updateInitStreamingStatus('success', 'Upload complete')
+          await delay(750)
+          clearInitStreamingOutput()
+        }
+        else {
+          updateInitStreamingStatus('error', 'Bundle upload did not complete successfully.')
+        }
       }
-      catch (error) {
-        s.stop('Upload failed ❌')
-        pLog.error(formatError(error))
-        await selectRecoveryOption(orgId, apikey, 'Bundle upload failed. What do you want to do?', [
+  catch (error) {
+    const failureText = formatError(error)
+    updateInitStreamingStatus('error', failureText)
+    const continueResult = await waitForInitStreamingContinue('Press Enter to continue, or Ctrl+C to cancel.')
+        clearInitStreamingOutput()
+        if (pIsCancel(continueResult)) {
+          await cancelCommand(continueResult, orgId, apikey)
+          return
+        }
+        await selectRecoveryOption(orgId, apikey, `Upload failed: ${failureText}\nWhat do you want to do?`, [
           { value: 'retry', label: 'Retry bundle upload' },
-        ], formatError(error), supportPlatform)
+        ], failureText, supportPlatform)
         continue
       }
-      if (!uploadRes?.success) {
-        s.stop('Upload failed ❌')
+  if (!uploadRes?.success) {
+    const continueResult = await waitForInitStreamingContinue('Press Enter to continue, or Ctrl+C to cancel.')
+        clearInitStreamingOutput()
+        if (pIsCancel(continueResult)) {
+          await cancelCommand(continueResult, orgId, apikey)
+          return
+        }
         await selectRecoveryOption(orgId, apikey, 'Bundle upload failed. What do you want to do?', [
           { value: 'retry', label: 'Retry bundle upload' },
         ], 'Bundle upload did not complete successfully.', supportPlatform)
         continue
       }
 
-      s.stop(`✅ Update v${newVersion} uploaded successfully!`)
+      startInitStreamingOutput({
+        title: 'Replicating your updated bundle across Capgo\'s global servers.',
+        command: 'Waiting for global OTA propagation',
+        onCancel: () => {
+          void cancelCommand(INIT_CANCEL, orgId, apikey)
+        },
+      })
       await showReplicationProgress({
-        title: 'Replicating your updated bundle in onboarding regions.',
+        title: 'Replicating your updated bundle across Capgo\'s global servers.',
         completeMessage: 'Update replication is now fully propagated.',
         interactive: !!stdin.isTTY && !!stdout.isTTY,
+        reporter: {
+          info: message => appendInitStreamingLine(message),
+          spinner: () => ({
+            start: message => updateInitStreamingStatus('running', message),
+            message: message => updateInitStreamingStatus('running', message),
+            stop: message => updateInitStreamingStatus('success', message),
+          }),
+        },
       })
-      pLog.info(`🎉 Your updated bundle is now available on Capgo`)
+      clearInitStreamingOutput()
+      pushInitLog('🎉 Your updated bundle is now available on Capgo', 'green')
       break
     }
   }

@@ -3,12 +3,13 @@ import type { CapacitorConfig } from '../config'
 import type { UploadBundleResult } from '../schemas/bundle'
 import type { Database } from '../types/supabase.types'
 import type { Compatibility, manifestType } from '../utils'
+import type { UploadReporter, UploadSpinner } from './reporter'
 import type { OptionsUpload } from './upload_interface'
 import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { cwd } from 'node:process'
 import { S3Client } from '@bradenmacdonald/s3-lite-client'
-import { intro, log, outro, confirm as pConfirm, isCancel as pIsCancel, select as pSelect, spinner as spinnerC } from '@clack/prompts'
+import { confirm as pConfirm, isCancel as pIsCancel, select as pSelect } from '@clack/prompts'
 import { greaterOrEqual, parse } from '@std/semver'
 // Native fetch is available in Node.js >= 18
 import pack from '../../package.json'
@@ -29,6 +30,7 @@ import { maybePromptBuilderCta, shouldBlockIncompatibleUpload } from './builder-
 import { checkIndexPosition, searchInDirectory } from './check'
 import { summarizeUploadCompatibility } from './compatibility'
 import { prepareBundlePartialFiles, uploadPartial } from './partial'
+import { clackUploadReporter, getUploadReporter, runWithUploadReporter } from './reporter'
 import { formatUploadChannels, getChannelsToAssignByChecksum, parseUploadChannels } from './upload-channels'
 
 type SupabaseType = Awaited<ReturnType<typeof createSupabaseClient>>
@@ -37,8 +39,16 @@ type localConfigType = Awaited<ReturnType<typeof getLocalConfig>>
 type UploadTargetChannel = Pick<Database['public']['Tables']['channels']['Row'], 'id' | 'public' | 'version' | 'rollout_version'>
 
 export type { UploadBundleResult }
+export type { UploadReporter, UploadSpinner }
 
 const UPLOAD_CANCELLED_BY_USER = 'Upload cancelled by user'
+
+const log = {
+  info: (message: string) => getUploadReporter().info(message),
+  warn: (message: string) => getUploadReporter().warn(message),
+  error: (message: string) => getUploadReporter().error(message),
+  success: (message: string) => getUploadReporter().success(message),
+}
 
 function uploadFail(message: string): never {
   log.error(message)
@@ -170,7 +180,7 @@ async function verifyCompatibility(supabase: SupabaseType, pm: pmType, options: 
 
   // We only check compatibility IF the channel exists
   if (!channelError && channelData && channelData.version && (channelData.version as any).native_packages && !ignoreMetadataCheck) {
-    const spinner = spinnerC()
+    const spinner = getUploadReporter().spinner()
     spinner.start(`Checking bundle compatibility with channel ${channel}`)
     const {
       finalCompatibility: finalCompatibilityWithChannel,
@@ -293,7 +303,7 @@ async function checkVersionExists(supabase: SupabaseType, appid: string, bundle:
   if (appVersion) {
     if (versionExistsOk) {
       log.warn(`Version ${bundle} already exists - exiting gracefully due to --silent-fail option`)
-      outro('Bundle version already exists - exiting gracefully 🎉')
+      getUploadReporter().outro('Bundle version already exists - exiting gracefully 🎉')
       return true
     }
 
@@ -363,7 +373,7 @@ async function getChannelsToAssignAfterChecksumCheck(supabase: SupabaseType, app
   const remoteChecksums = new Map<string, string | null>()
 
   for (const targetChannel of channels) {
-    const s = spinnerC()
+    const s = getUploadReporter().spinner()
     s.start(`Checking bundle checksum compatibility with channel ${targetChannel}`)
     const remoteChecksum = await getRemoteChecksums(supabase, appid, targetChannel)
     remoteChecksums.set(targetChannel, remoteChecksum)
@@ -407,7 +417,7 @@ async function prepareBundleFile(path: string, options: OptionsUpload, apikey: s
   const keyV2 = options.keyV2
   const noKey = options.key === false
 
-  const s = spinnerC()
+  const s = getUploadReporter().spinner()
   s.start(`Zipping bundle from ${path}`)
   zipped = await zipFile(path)
   s.message(`Calculating checksum`)
@@ -530,7 +540,7 @@ async function prepareBundleFile(path: string, options: OptionsUpload, apikey: s
 }
 
 async function uploadBundleToCapgoCloud(apikey: string, supabase: SupabaseType, appid: string, bundle: string, orgId: string, zipped: Buffer, options: OptionsUpload, tusChunkSize: number) {
-  const spinner = spinnerC()
+  const spinner = getUploadReporter().spinner()
   spinner.start(`Uploading Bundle`)
   const startTime = performance.now()
   let isTus = false
@@ -918,7 +928,6 @@ async function setVersionInChannel(
   requireChannelAssignment = false,
   selfAssign?: boolean,
 ): Promise<boolean> {
-
   const canPromoteTargetChannel = targetChannel !== null
     && await hasCliPermission(supabase, apikey, 'channel.promote_bundle', { appId: appid, channelId: targetChannel.id })
   const canCreateChannel = targetChannel === null
@@ -1084,12 +1093,16 @@ export async function getDefaultUploadChannel(appId: string, supabase: SupabaseT
   return data.default_upload_channel
 }
 
-export async function uploadBundleInternal(preAppid: string, options: OptionsUpload, silent = false): Promise<UploadBundleResult> {
+export async function uploadBundleInternal(preAppid: string, options: OptionsUpload, silent = false, reporter?: UploadReporter): Promise<UploadBundleResult> {
+  return runWithUploadReporter(reporter, () => uploadBundleInternalWithReporter(preAppid, options, silent))
+}
+
+async function uploadBundleInternalWithReporter(preAppid: string, options: OptionsUpload, silent: boolean): Promise<UploadBundleResult> {
   if (!silent)
-    intro(`Uploading with CLI version ${pack.version}`)
+    getUploadReporter().intro(`Uploading with CLI version ${pack.version}`)
   let sessionKey: Buffer | undefined
   const pm = getPMAndCommand()
-  await checkAlerts()
+  await checkAlerts(getUploadReporter())
 
   const { s3Region, s3Apikey, s3Apisecret, s3BucketName, s3Endpoint, s3Port, s3SSL } = options
 
@@ -1514,7 +1527,6 @@ export async function uploadBundleInternal(preAppid: string, options: OptionsUpl
   if (options.delta && manifest.length > MAX_MANIFEST_ENTRIES)
     uploadFail(deltaManifestTooLargeMessage(manifest.length))
 
-
   if (options.verbose)
     log.info(`[Verbose] Creating version record in database...`)
 
@@ -1527,7 +1539,7 @@ export async function uploadBundleInternal(preAppid: string, options: OptionsUpl
     if (options.verbose)
       log.info(`[Verbose] Dry upload mode: skipping bundle publishing and channel assignment`)
     if (!silent)
-      outro('Dry upload saved bundle metadata without uploading files or updating channels')
+      getUploadReporter().outro('Dry upload saved bundle metadata without uploading files or updating channels')
     return {
       success: true,
       appId: appid,
@@ -1698,7 +1710,7 @@ export async function uploadBundleInternal(preAppid: string, options: OptionsUpl
   if (options.verbose)
     log.info(`[Verbose] Checking app permissions...`)
 
-  await checkAppExistsAndHasPermissionOrgErr(supabase, apikey, appid, 'app.upload_bundle', false, true)
+  await checkAppExistsAndHasPermissionOrgErr(supabase, apikey, appid, 'app.upload_bundle', silent, true)
   const canDeleteBundle = await hasCliPermission(supabase, apikey, 'bundle.delete', { appId: appid })
 
   if (options.verbose) {
@@ -1854,7 +1866,7 @@ export async function uploadBundleInternal(preAppid: string, options: OptionsUpl
   }
 
   if (!silent && !result.skipped)
-    outro('Time to share your update to the world 🌍')
+    getUploadReporter().outro('Time to share your update to the world 🌍')
 
   return result
 }
@@ -1963,7 +1975,11 @@ async function maybePromptStarCapgoRepo() {
   }
 }
 
-export async function uploadBundle(appid: string, options: OptionsUpload) {
+export async function uploadBundle(appid: string, options: OptionsUpload): Promise<UploadBundleResult> {
+  return runWithUploadReporter(clackUploadReporter, () => uploadBundleWithReporter(appid, options))
+}
+
+async function uploadBundleWithReporter(appid: string, options: OptionsUpload): Promise<UploadBundleResult> {
   try {
     checkValidOptions(options)
     const result = await uploadBundleInternal(appid, options)

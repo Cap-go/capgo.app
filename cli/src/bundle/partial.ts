@@ -8,13 +8,19 @@ import { join, posix, win32 } from 'node:path'
 import { cwd } from 'node:process'
 import { buffer as readBuffer } from 'node:stream/consumers'
 import { createBrotliCompress } from 'node:zlib'
-import { log, spinner as spinnerC } from '@clack/prompts'
 import { parse } from '@std/semver'
 // @ts-expect-error - No type definitions available for micromatch
 import * as micromatch from 'micromatch'
 import * as tus from 'tus-js-client'
 import { encryptChecksum, encryptChecksumV3, encryptSource } from '../api/crypto'
 import { BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, deltaManifestTooLargeMessage, findRoot, generateManifest, getContentType, getInstalledVersion, getLocalConfig, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, sendEvent, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
+import { getUploadReporter } from './reporter'
+
+const log = {
+  info: (message: string) => getUploadReporter().info(message),
+  warn: (message: string) => getUploadReporter().warn(message),
+  error: (message: string) => getUploadReporter().error(message),
+}
 
 // Check if file already exists on server (bypass cache and force storage lookup)
 async function fileExists(localConfig: any, filename: string): Promise<boolean> {
@@ -128,7 +134,7 @@ export async function prepareBundlePartialFiles(
   finalKeyData: string,
   supportsHexChecksum: boolean = false,
 ) {
-  const spinner = spinnerC()
+  const spinner = getUploadReporter().spinner()
   spinner.start(encryptionMethod !== 'v2' ? 'Generating the update manifest' : `Generating the update manifest with ${supportsHexChecksum ? 'V3' : 'V2'} encryption`)
   const manifest = await generateManifest(path)
 
@@ -197,7 +203,7 @@ export async function uploadPartial(
   encryptionOptions: PartialEncryptionOptions | undefined,
   options: OptionsUpload,
 ): Promise<any[] | null> {
-  const spinner = spinnerC()
+  const spinner = getUploadReporter().spinner()
   spinner.start('Preparing partial update with TUS protocol')
   const startTime = performance.now()
   const localConfig = await getLocalConfig()
@@ -233,7 +239,6 @@ export async function uploadPartial(
 
   if (manifest.length > MAX_MANIFEST_ENTRIES)
     throw new Error(deltaManifestTooLargeMessage(manifest.length))
-
 
   let uploadedFiles = 0
   const totalFiles = manifest.length
