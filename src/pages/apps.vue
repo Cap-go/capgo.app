@@ -165,7 +165,8 @@ async function getMyApps() {
       loadAppIcons(rows, currentRun)
   }
   finally {
-    isTableLoading.value = false
+    if (appIconLoadRun === currentRun)
+      isTableLoading.value = false
   }
 }
 
