@@ -1,16 +1,18 @@
 import { createPinia, setActivePinia } from 'pinia'
-import { readFile } from 'node:fs/promises'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ref } from 'vue'
 
 const mockEq = vi.fn()
 const mockDelete = vi.fn(() => ({ eq: mockEq }))
+const mockAppDeleteEq = vi.fn()
+const mockAppDelete = vi.fn(() => ({ eq: mockAppDeleteEq }))
 const mockIn = vi.fn()
 const mockSelect = vi.fn(() => ({ in: mockIn }))
 const mockFrom = vi.fn((table: string) => {
   if (table === 'apps') {
     return {
       select: mockSelect,
+      delete: mockAppDelete,
     }
   }
 
@@ -77,21 +79,23 @@ vi.mock('../src/stores/dashboardApps.ts', () => ({
   }),
 }))
 
-describe('organization store deleteOrganization', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-    setActivePinia(createPinia())
-    mainStore.auth = { id: 'auth-user-123' }
-    mainStore.user = { id: 'user-123' }
-    mainStore.isAdmin = false
-    mockEq.mockResolvedValue({ data: null, error: null })
-    mockIn.mockResolvedValue({ data: [], error: null })
-    vi.stubGlobal('localStorage', {
-      getItem: vi.fn(),
-      setItem: vi.fn(),
-      removeItem: vi.fn(),
-    })
+beforeEach(() => {
+  vi.clearAllMocks()
+  setActivePinia(createPinia())
+  mainStore.auth = { id: 'auth-user-123' }
+  mainStore.user = { id: 'user-123' }
+  mainStore.isAdmin = false
+  mockEq.mockResolvedValue({ data: null, error: null })
+  mockAppDeleteEq.mockResolvedValue({ data: null, error: null })
+  mockIn.mockResolvedValue({ data: [], error: null })
+  vi.stubGlobal('localStorage', {
+    getItem: vi.fn(),
+    setItem: vi.fn(),
+    removeItem: vi.fn(),
   })
+})
+
+describe('organization store deleteOrganization', () => {
 
   it('allows org deletion for org_super_admin roles', async () => {
     const { useOrganizationStore } = await import('../src/stores/organization.ts')
@@ -129,7 +133,11 @@ describe('organization store deleteOrganization', () => {
 })
 
 describe('organization store removeApp', () => {
-  it('removes a deleted app from every selector index', async () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+  })
+
+  it('removes a successfully deleted app from every selector index and updates the organization count', async () => {
     const orgId = 'org-deleted-app'
     const appId = 'com.test.deleted-app'
     mockRpc.mockResolvedValue({
@@ -162,19 +170,57 @@ describe('organization store removeApp', () => {
     await store.fetchOrganizations()
     await vi.waitFor(() => expect(store.getAppByAppId(appId)).toBeDefined())
 
-    store.removeApp(appId)
+    const { error } = await store.deleteApp(appId)
 
+    expect(error).toBeNull()
+    expect(mockAppDeleteEq).toHaveBeenCalledWith('app_id', appId)
     expect(store.getAppByAppId(appId)).toBeUndefined()
     expect(store.getOrgByAppId(appId)).toBeUndefined()
     expect(store.getAppsByOrgId(orgId)).toEqual([])
+    expect(store.organizations.find(org => org.gid === orgId)?.app_count).toBe(0)
   })
-})
 
-describe('app settings deletion', () => {
-  it('removes the app from the organization store after a successful deletion', async () => {
-    const source = await readFile('src/components/dashboard/AppSetting.vue', 'utf8')
+  it('keeps selector state intact when app deletion fails', async () => {
+    const orgId = 'org-failed-app-delete'
+    const appId = 'com.test.failed-app-delete'
+    mockRpc.mockResolvedValue({
+      data: [{
+        gid: orgId,
+        role: 'owner',
+        app_count: 1,
+        created_by: 'owner-123',
+        name: 'Failed App Delete Org',
+        logo: null,
+        password_policy_config: null,
+        enforcing_2fa: false,
+        '2fa_has_access': true,
+        password_has_access: true,
+        paying: true,
+        trial_left: 0,
+        can_use_more: true,
+      }],
+      error: null,
+    })
+    mockIn.mockImplementation((_column: string, orgIds: string[]) => Promise.resolve({
+      data: orgIds.includes(orgId)
+        ? [{ app_id: appId, name: 'Failed App Delete', owner_org: orgId, need_onboarding: false, icon_url: null }]
+        : [],
+      error: null,
+    }))
+    const deleteError = new Error('Database deletion failed')
+    mockAppDeleteEq.mockResolvedValue({ data: null, error: deleteError })
 
-    expect(source).toMatch(/else\s*\{\s*organizationStore\.removeApp\(props\.appId\)/)
+    const { useOrganizationStore } = await import('../src/stores/organization.ts')
+    const store = useOrganizationStore()
+    await store.fetchOrganizations()
+    await vi.waitFor(() => expect(store.getAppByAppId(appId)).toBeDefined())
+
+    const { error } = await store.deleteApp(appId)
+
+    expect(error).toBe(deleteError)
+    expect(store.getAppByAppId(appId)).toBeDefined()
+    expect(store.getAppsByOrgId(orgId)).toHaveLength(1)
+    expect(store.organizations.find(org => org.gid === orgId)?.app_count).toBe(1)
   })
 })
 

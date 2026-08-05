@@ -465,6 +465,24 @@ export const useOrganizationStore = defineStore('organization', () => {
     const nextAppsByOrgId = new Map(_appsByOrgId.value)
     nextAppsByOrgId.set(app.owner_org, (nextAppsByOrgId.get(app.owner_org) ?? []).filter(item => item.app_id !== appId))
     _appsByOrgId.value = nextAppsByOrgId
+
+    const organization = _organizations.value.get(app.owner_org)
+    if (!organization)
+      return
+
+    organization.app_count = Math.max(0, organization.app_count - 1)
+  }
+
+  const deleteApp = async (appId: string) => {
+    const { error } = await supabase
+      .from('apps')
+      .delete()
+      .eq('app_id', appId)
+
+    if (!error)
+      removeApp(appId)
+
+    return { error }
   }
 
   const awaitInitialLoad = () => {
@@ -778,6 +796,7 @@ export const useOrganizationStore = defineStore('organization', () => {
     getAppByAppId,
     getAppsByOrgId,
     removeApp,
+    deleteApp,
     awaitInitialLoad,
     deleteOrganization,
     canDeleteOrganization,

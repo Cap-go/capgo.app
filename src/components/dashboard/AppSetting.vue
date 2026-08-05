@@ -212,16 +212,12 @@ async function deleteApp() {
     if (errorIcon)
       toast.error(t('cannot-delete-app-icon'))
 
-    const { error: dbAppError } = await supabase
-      .from('apps')
-      .delete()
-      .eq('app_id', props.appId)
+    const { error: dbAppError } = await organizationStore.deleteApp(props.appId)
     if (dbAppError) {
       toast.error(t('cannot-delete-app'))
     }
 
     else {
-      organizationStore.removeApp(props.appId)
       toast.success(t('app-deleted'))
     }
 
