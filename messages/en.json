@@ -618,6 +618,7 @@
   "bundle-not-found": "Bundle not found",
   "bundle-not-found-description": "This bundle could not be found. It might have been deleted or you might not have access to it.",
   "bundle-number": "Bundle number",
+  "bundle-assigned-to-this-channel": "Bundle assigned to this channel",
   "bundle_uploads": "Bundle uploads",
   "bundles": "Bundles",
   "bundles-deleted": "Bundle deleted",
