@@ -859,7 +859,8 @@ async function matchReadyTranslationPayload(request: Request) {
     return null
 
   try {
-    return await cached.json() as TranslationMessagesResponsePayload
+    const payload = await cached.json() as TranslationMessagesResponsePayload
+    return { ...payload, messages: vueI18nMessageCatalog(payload.messages) }
   }
   catch {
     return null

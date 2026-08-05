@@ -2,9 +2,9 @@ import { describe, expect, it, vi } from 'vitest'
 import translationWorker, { __translationWorkerTestUtils__ } from '../cloudflare_workers/translation/index.ts'
 import sourceMessages from '../messages/en.json'
 
-function stubWorkerCache() {
+function stubWorkerCache(matchedResponse: Response | null = null) {
   const cache = {
-    match: vi.fn(async () => null),
+    match: vi.fn(async () => matchedResponse),
     put: vi.fn(async () => undefined),
   }
   Object.defineProperty(globalThis, 'caches', {
@@ -154,6 +154,24 @@ describe('translation queue helpers', () => {
       status: 'ready',
     })
     expect(queue.send).not.toHaveBeenCalled()
+  })
+
+  it('sanitizes legacy ready translation cache hits', async () => {
+    stubWorkerCache(new Response(JSON.stringify({
+      checksum: 'checksum',
+      messages: { 'discord-username-help': 'Sans le signe @.' },
+      model: 'model',
+      status: 'ready',
+    })))
+    const response = await translationWorker.fetch(new Request('https://api.capgo.app/translation/messages', {
+      body: JSON.stringify({ targetLanguage: 'fr' }),
+      headers: { 'Content-Type': 'application/json' },
+      method: 'POST',
+    }), {} as any)
+    const payload = await response.json() as { messages: Record<string, string> }
+
+    expect(response.status).toBe(200)
+    expect(payload.messages['discord-username-help']).toBe('Sans le signe {\'@\'}.')
   })
 
   it('serves the last saved translation and queues a refresh when the checksum changed', async () => {
