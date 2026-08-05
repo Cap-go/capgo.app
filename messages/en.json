@@ -655,6 +655,7 @@
   "cannot-change-default-download-channel": "Cannot change the default download channel right now.",
   "cannot-change-default-upload-channel": "Cannot change default upload channel, please check the browser console",
   "cannot-change-expose-metadata": "Cannot change expose metadata setting, please check the browser console",
+  "cannot-add-app-no-permission": "You do not have permission to add apps in this organization.",
   "cannot-change-name": "Cannot change name, please check the browser console",
   "cannot-change-owner-role": "You cannot change the organization owner's role.",
   "cannot-change-permission": "Cannot change permissions, check browser console",

@@ -4,6 +4,7 @@ import { storeToRefs } from 'pinia'
 import { computed, ref, watch, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
+import { checkPermissions } from '~/services/permissions'
 import { createSignedImageUrl, resolveImagePath } from '~/services/storage'
 import { useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
@@ -26,6 +27,7 @@ const pageSize = 10
 const totalApps = ref(0)
 const searchQuery = ref('')
 const { currentOrganization } = storeToRefs(organizationStore)
+const canCreateApp = ref(false)
 let appIconLoadRun = 0
 
 // Check if user lacks security compliance (2FA or password) - don't load data in this case
@@ -98,6 +100,7 @@ function loadAppIcons(sourceApps: AppIconSource[], runId: number) {
 
 async function getMyApps() {
   const currentRun = ++appIconLoadRun
+  canCreateApp.value = false
   isTableLoading.value = true
   try {
     await organizationStore.awaitInitialLoad()
@@ -117,6 +120,12 @@ async function getMyApps() {
       totalApps.value = 0
       return
     }
+
+    const hasCreateAppPermission = await checkPermissions('org.create_app', { orgId: currentGid })
+    if (appIconLoadRun !== currentRun || organizationStore.currentOrganization?.gid !== currentGid)
+      return
+
+    canCreateApp.value = hasCreateAppPermission
 
     const offset = (currentPage.value - 1) * pageSize
 
@@ -156,7 +165,8 @@ async function getMyApps() {
       loadAppIcons(rows, currentRun)
   }
   finally {
-    isTableLoading.value = false
+    if (appIconLoadRun === currentRun)
+      isTableLoading.value = false
   }
 }
 
@@ -202,9 +212,16 @@ displayStore.defaultBack = '/apps'
               {{ t('add-your-first-app-t') }}
             </p>
             <div class="flex flex-col gap-3 mt-5 sm:flex-row sm:items-center">
-              <button class="d-btn d-btn-primary" @click="router.push('/app/new')">
+              <button
+                :aria-describedby="!canCreateApp ? 'cannot-add-app-no-permission' : undefined"
+                :aria-disabled="!canCreateApp"
+                :title="!canCreateApp ? t('cannot-add-app-no-permission') : undefined"
+                class="d-btn d-btn-primary aria-disabled:cursor-not-allowed aria-disabled:border-gray-300 aria-disabled:bg-gray-200 aria-disabled:text-gray-500 dark:aria-disabled:border-gray-700 dark:aria-disabled:bg-gray-700 dark:aria-disabled:text-gray-400"
+                @click="canCreateApp && router.push('/app/new')"
+              >
                 {{ t('start-onboarding') }}
               </button>
+              <span v-if="!canCreateApp" id="cannot-add-app-no-permission" class="sr-only">{{ t('cannot-add-app-no-permission') }}</span>
             </div>
           </div>
           <!-- App table - always visible even when payment failed -->
@@ -218,6 +235,8 @@ displayStore.defaultBack = '/apps'
               :delete-button="!organizationStore.currentOrganizationFailed"
               :server-side-pagination="true"
               :is-loading="isTableLoading"
+              :add-disabled="!canCreateApp"
+              :add-tooltip="t('cannot-add-app-no-permission')"
               @add-app="router.push('/app/new')"
               @update:current-page="(page) => { currentPage = page; getMyApps() }"
               @update:search="(query) => { searchQuery = query; currentPage = 1; getMyApps() }"
