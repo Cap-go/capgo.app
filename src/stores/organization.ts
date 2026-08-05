@@ -595,20 +595,15 @@ export const useOrganizationStore = defineStore('organization', () => {
       return
     }
 
-    // Try to restore from localStorage first
-    let targetOrgId = currentOrganization.value?.gid
-    if (!targetOrgId) {
+    let selectedOrganization = currentOrganization.value
+      ? selectableOrganizations.find(org => org.gid === currentOrganization.value?.gid)
+      : undefined
+    if (!selectedOrganization) {
       const storedOrgId = localStorage.getItem(STORAGE_KEY)
-      if (storedOrgId) {
-        const storedOrg = mappedData.find(org => org.gid === storedOrgId && isSelectableOrganization(org))
-        if (storedOrg) {
-          targetOrgId = storedOrg.gid
-        }
-      }
+      if (storedOrgId)
+        selectedOrganization = selectableOrganizations.find(org => org.gid === storedOrgId)
     }
-
-    targetOrgId ||= organization.gid
-    currentOrganization.value = mappedData.find(org => org.gid === targetOrgId) as Organization | undefined
+    currentOrganization.value = selectedOrganization ?? organization
     // Don't mark as failed if user lacks 2FA or password access - the data is redacted and unreliable
     const lacks2FAAccess = currentOrganization.value?.enforcing_2fa === true && currentOrganization.value?.['2fa_has_access'] === false
     const lacksPasswordAccess = currentOrganization.value?.password_policy_config?.enabled && currentOrganization.value?.password_has_access === false
