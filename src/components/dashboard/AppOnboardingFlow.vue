@@ -74,6 +74,11 @@ const isCliCommandVisible = ref(false)
 const apiKey = ref<string | null>(null)
 const createdApp = ref<AppRow | null>(null)
 const flowStep = ref<StandardFlowStep | PreOrgFlowStep>('details')
+const showLanguageSelector = computed(() => (
+  (props.preOrg && !createdApp.value)
+  || (flowStep.value === 'setup' && Boolean(createdApp.value))
+  || (!props.preOrg && flowStep.value === 'install' && Boolean(createdApp.value))
+))
 const selectedIconFile = ref<File | null>(null)
 const localIconPreview = ref('')
 const storeIconPreview = ref('')
@@ -1575,6 +1580,10 @@ watch(appName, (value) => {
               </button>
             </div>
           </div>
+        </div>
+
+        <div v-if="showLanguageSelector" class="flex justify-end pt-2">
+          <LangSelector />
         </div>
       </div>
     </div>
