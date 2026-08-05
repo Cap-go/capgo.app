@@ -4,6 +4,7 @@ import type {
 } from '@std/semver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Buffer } from 'node:buffer'
+import type { UploadSpinner } from './bundle/reporter'
 import type { CapacitorConfig, ExtConfigPairs } from './config'
 import type { Compatibility, CompatibilityDetails, IncompatibilityReason, NativePackage } from './schemas/common'
 import type { Database } from './types/supabase.types'
@@ -13,7 +14,7 @@ import { homedir, platform as osPlatform } from 'node:os'
 import path, { dirname, join, relative, resolve, sep } from 'node:path'
 import { cwd, env, stdin, stdout } from 'node:process'
 import { findInstallCommand, findPackageManagerRunner, findPackageManagerType } from '@capgo/find-package-manager'
-import { confirm as confirmC, isCancel, log, select, spinner as spinnerC } from '@clack/prompts'
+import { confirm as confirmC, isCancel, log as clackLog, select, spinner as spinnerC } from '@clack/prompts'
 import { canParse, format, lessThan, parse, parseRange, rangeIntersects } from '@std/semver'
 import { createClient, FunctionsHttpError } from '@supabase/supabase-js'
 import AdmZip from 'adm-zip'
@@ -22,6 +23,7 @@ import { isCI } from 'ci-info'
 import prettyjson from 'prettyjson'
 import * as tus from 'tus-js-client'
 import { getGlobalAnalyticsProps } from './analytics/global-props'
+import { getActiveUploadReporter } from './bundle/reporter'
 import { createTimedFetch, isSupabaseInstrumentationEnabled } from './analytics/supabase-perf'
 import { markSnag } from './app/debug'
 import { findMonorepoRoot, findNXMonorepoRoot, isMonorepo, isNXMonorepo } from './capacitor-cli'
@@ -31,6 +33,21 @@ import { isTruthyEnvValue } from './posthog'
 import { safeParseSchema } from './schemas/schema_validation'
 import { nativePackageSchema } from './schemas/common'
 import { formatApiErrorForCli, parseSecurityPolicyError } from './utils/security_policy_errors'
+
+function reportUploadContext(level: 'error' | 'info' | 'success' | 'warn', message: string) {
+  const reporter = getActiveUploadReporter()
+  if (reporter)
+    reporter[level](message)
+  else
+    clackLog[level](message)
+}
+
+const log = {
+  error: (message: string) => reportUploadContext('error', message),
+  info: (message: string) => reportUploadContext('info', message),
+  success: (message: string) => reportUploadContext('success', message),
+  warn: (message: string) => reportUploadContext('warn', message),
+}
 
 export const baseKey = '.capgo_key'
 export const baseKeyV2 = '.capgo_key_v2'
@@ -1449,7 +1466,7 @@ export async function zipFileWindows(filePath: string): Promise<Buffer> {
   return zip.toBuffer()
 }
 
-export async function uploadTUS(apikey: string, data: Buffer, orgId: string, appId: string, name: string, spinner: ReturnType<typeof spinnerC>, localConfig: CapgoConfig, chunkSize: number): Promise<boolean> {
+export async function uploadTUS(apikey: string, data: Buffer, orgId: string, appId: string, name: string, spinner: UploadSpinner, localConfig: CapgoConfig, chunkSize: number): Promise<boolean> {
   return new Promise((resolve, reject) => {
     sendEvent(apikey, {
       channel: 'app',

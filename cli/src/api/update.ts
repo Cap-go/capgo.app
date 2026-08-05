@@ -9,6 +9,10 @@ export interface VersionCheckResult {
   majorVersion: string
 }
 
+interface AlertsReporter {
+  warn: (message: string) => void
+}
+
 export async function checkVersionStatus(): Promise<VersionCheckResult> {
   const latest = await getLatestVersion('@capgo/cli') ?? ''
   const major = latest?.split('.')[0] ?? ''
@@ -20,10 +24,10 @@ export async function checkVersionStatus(): Promise<VersionCheckResult> {
   }
 }
 
-export async function checkAlerts() {
+export async function checkAlerts(reporter: AlertsReporter = { warn: message => log.warning(message) }) {
   const { isOutdated, currentVersion, latestVersion, majorVersion } = await checkVersionStatus()
   if (isOutdated) {
-    log.warning(`🚨 You are using @capgo/cli@${currentVersion} it's not the latest version.
+    reporter.warn(`🚨 You are using @capgo/cli@${currentVersion} it's not the latest version.
 Please use @capgo/cli@${latestVersion}" or @capgo/cli@${majorVersion} to keep up to date with the latest features and bug fixes.`,
     )
   }

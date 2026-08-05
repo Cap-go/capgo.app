@@ -1,8 +1,10 @@
 import type { InitCodeDiff, InitEncryptionSummary, InitRuntimeState, InitStreamingOutput } from '../runtime'
+import { exit } from 'node:process'
 import { Alert } from '@inkjs/ui'
-import { Box, Text, useStdout } from 'ink'
+import { Box, Text, useInput, useStdout } from 'ink'
 import Spinner from 'ink-spinner'
 import React, { useSyncExternalStore } from 'react'
+import { INIT_CANCEL } from '../runtime'
 import { CurrentStepSection, InitHeader, ProgressSection, PromptArea, ScreenIntro, SpinnerArea } from './components'
 
 function StreamingOutputPanel({ output, width, rows }: Readonly<{ output: InitStreamingOutput, width: number, rows: number }>) {
@@ -16,6 +18,25 @@ function StreamingOutputPanel({ output, width, rows }: Readonly<{ output: InitSt
       : output.status === 'error'
         ? 'red'
         : 'cyan'
+
+  useInput((input, key) => {
+    const continuePrompt = output.continuePrompt
+    if (key.ctrl && input === 'c') {
+      if (continuePrompt) {
+        continuePrompt.resolve(INIT_CANCEL)
+      }
+      else if (output.onCancel) {
+        output.onCancel?.()
+      }
+      else {
+        exit(130)
+      }
+      return
+    }
+    if (continuePrompt && key.return)
+      continuePrompt.resolve()
+  })
+
   return (
     <Box flexDirection="column" marginTop={1} width={width} borderStyle="round" borderColor={borderColor} paddingX={1}>
       <Text color={borderColor} bold>{output.title}</Text>
@@ -56,12 +77,7 @@ function StreamingOutputPanel({ output, width, rows }: Readonly<{ output: InitSt
                 <Text color="cyan"><Spinner type="dots" /></Text>
                 <Text>
                   {' '}
-                  Running...
-                  {' '}
-                  (
-                  {output.lines.length}
-                  {' '}
-                  lines)
+                  {output.statusMessage ?? 'Running...'}
                 </Text>
               </Box>
             )
@@ -69,14 +85,14 @@ function StreamingOutputPanel({ output, width, rows }: Readonly<{ output: InitSt
               <Text color={borderColor} bold>
                 {output.status === 'success' ? '✓ ' : '✖ '}
                 {output.statusMessage ?? (output.status === 'success' ? 'Done' : 'Failed')}
-                {' '}
-                (
-                {output.lines.length}
-                {' '}
-                lines)
               </Text>
             )}
       </Box>
+      {output.continuePrompt && (
+        <Box flexDirection="column" marginTop={1}>
+          <Text bold>{output.continuePrompt.message}</Text>
+        </Box>
+      )}
     </Box>
   )
 }
