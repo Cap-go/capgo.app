@@ -216,9 +216,9 @@ async function deleteApp() {
       .from('apps')
       .delete()
       .eq('app_id', props.appId)
-    if (dbAppError)
+    if (dbAppError) {
       toast.error(t('cannot-delete-app'))
-
+    }
     else {
       await organizationStore.fetchOrganizations()
       toast.success(t('app-deleted'))

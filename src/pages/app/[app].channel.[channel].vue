@@ -939,8 +939,8 @@ async function copyCurlCommand() {
             <InfoRow :label="t('name')">
               {{ channel.name }}
             </InfoRow>
-            <!-- Bundle Number -->
-            <InfoRow :label="t('bundle-number')" :is-link="channel && !isInternalVersionName((channel.version.name))">
+            <!-- Bundle assigned to this channel -->
+            <InfoRow :label="t('bundle-assigned-to-this-channel')" label-class="font-bold" :is-link="channel && !isInternalVersionName((channel.version.name))">
               <div class="flex items-center gap-2">
                 <span class="cursor-pointer" @click="openBundle()">{{ channel.version.name }}</span>
                 <button
