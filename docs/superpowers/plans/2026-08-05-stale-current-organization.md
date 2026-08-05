@@ -65,7 +65,7 @@ it('falls back when the selected organization disappears during refresh', async 
 Run:
 
 ```bash
-bun test:unit tests/organization-store-delete.unit.test.ts
+bunx vitest run tests/organization-store-delete.unit.test.ts
 ```
 
 Expected: the new assertion fails because `currentOrganization` is undefined
@@ -100,7 +100,7 @@ currentOrganization.value = selectedOrganization ?? organization
 Run:
 
 ```bash
-bun test:unit tests/organization-store-delete.unit.test.ts
+bunx vitest run tests/organization-store-delete.unit.test.ts
 ```
 
 Expected: all tests in the file pass with zero failures.
