@@ -221,4 +221,41 @@ describe('organization store refreshOrganizationLogos', () => {
     expect(store.organizations).toHaveLength(1)
     expect(store.currentOrganization?.gid).toBe('org-auth-fallback')
   })
+
+  it('falls back when the selected organization disappears during refresh', async () => {
+    const organizationA = {
+      'gid': 'org-a',
+      'role': 'org_super_admin',
+      'app_count': 1,
+      'created_by': 'owner-123',
+      'name': 'Organization A',
+      'logo': null,
+      'password_policy_config': null,
+      'enforcing_2fa': false,
+      '2fa_has_access': true,
+      'password_has_access': true,
+      'paying': true,
+      'trial_left': 0,
+      'can_use_more': true,
+    }
+    const organizationB = {
+      ...organizationA,
+      gid: 'org-b',
+      name: 'Organization B',
+    }
+    mockRpc
+      .mockResolvedValueOnce({ data: [organizationA], error: null })
+      .mockResolvedValueOnce({ data: [organizationB], error: null })
+
+    const { useOrganizationStore } = await import('../src/stores/organization.ts')
+    const store = useOrganizationStore(createPinia())
+
+    await store.fetchOrganizations()
+    expect(store.currentOrganization?.gid).toBe('org-a')
+
+    await store.fetchOrganizations()
+
+    expect(store.organizations.map(org => org.gid)).toEqual(['org-b'])
+    expect(store.currentOrganization?.gid).toBe('org-b')
+  })
 })
