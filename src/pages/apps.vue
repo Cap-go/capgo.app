@@ -209,7 +209,7 @@ displayStore.defaultBack = '/apps'
               <button
                 :disabled="!canCreateApp"
                 :title="!canCreateApp ? t('cannot-add-app-no-permission') : undefined"
-                class="d-btn d-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+                class="d-btn d-btn-primary disabled:cursor-not-allowed disabled:border-gray-300 disabled:bg-gray-200 disabled:text-gray-500 dark:disabled:border-gray-700 dark:disabled:bg-gray-700 dark:disabled:text-gray-400"
                 @click="router.push('/app/new')"
               >
                 {{ t('start-onboarding') }}
