@@ -1145,8 +1145,8 @@ async function createdOrUpdated(
     // transitions — not on every subscription.updated renewal/metadata webhook.
     // past_due is stored as status=succeeded + past_due_at set (see toStripeInfoUpdate).
     const previousStatus = currentStripeInfo?.status ?? null
+    // past_due returns earlier in this function, so status here is never past_due.
     const recoveredFromPastDue = Boolean(currentStripeInfo?.past_due_at)
-      && status !== 'past_due'
       && (status === 'succeeded' || status === 'updated')
     const shouldPurgePluginEdgeCaches = Boolean(paidAt)
       || status === 'created'
