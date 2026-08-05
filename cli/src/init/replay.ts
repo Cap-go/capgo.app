@@ -369,7 +369,7 @@ function buildTerminalImageDataUrl(frame: TerminalReplayFrame) {
     `<svg xmlns="http://www.w3.org/2000/svg" width="${frame.width}" height="${frame.height}" viewBox="0 0 ${frame.width} ${frame.height}">`,
     `<rect width="${frame.width}" height="${frame.height}" fill="#0d1117"/>`,
     `<foreignObject width="${frame.width}" height="${frame.height}">`,
-    '<div xmlns="http://www.w3.org/1999/xhtml" style="box-sizing:border-box;width:100%;height:100%;padding:16px;background:#0d1117;color:#d6deeb;overflow:hidden;font:14px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;">',
+    `<div xmlns="http://www.w3.org/1999/xhtml" style="box-sizing:border-box;width:100%;height:100%;padding:16px;background:#0d1117;color:#d6deeb;overflow:hidden;font:14px/${REPLAY_LINE_HEIGHT_PX}px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;"><style>pre{margin:0;font:inherit}</style>`,
     frame.html,
     '</div></foreignObject></svg>',
   ].join('')
