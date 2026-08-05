@@ -219,8 +219,10 @@ async function deleteApp() {
     if (dbAppError)
       toast.error(t('cannot-delete-app'))
 
-    else
+    else {
+      await organizationStore.fetchOrganizations()
       toast.success(t('app-deleted'))
+    }
 
     // return to home
     router.push('/apps')
