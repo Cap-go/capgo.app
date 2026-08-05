@@ -133,10 +133,6 @@ describe('organization store deleteOrganization', () => {
 })
 
 describe('organization store removeApp', () => {
-  beforeEach(() => {
-    setActivePinia(createPinia())
-  })
-
   it('removes a successfully deleted app from every selector index and updates the organization count', async () => {
     const orgId = 'org-deleted-app'
     const appId = 'com.test.deleted-app'
