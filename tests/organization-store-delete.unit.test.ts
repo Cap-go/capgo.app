@@ -4,15 +4,12 @@ import { ref } from 'vue'
 
 const mockEq = vi.fn()
 const mockDelete = vi.fn(() => ({ eq: mockEq }))
-const mockAppDeleteEq = vi.fn()
-const mockAppDelete = vi.fn(() => ({ eq: mockAppDeleteEq }))
 const mockIn = vi.fn()
 const mockSelect = vi.fn(() => ({ in: mockIn }))
 const mockFrom = vi.fn((table: string) => {
   if (table === 'apps') {
     return {
       select: mockSelect,
-      delete: mockAppDelete,
     }
   }
 
@@ -79,23 +76,21 @@ vi.mock('../src/stores/dashboardApps.ts', () => ({
   }),
 }))
 
-beforeEach(() => {
-  vi.clearAllMocks()
-  setActivePinia(createPinia())
-  mainStore.auth = { id: 'auth-user-123' }
-  mainStore.user = { id: 'user-123' }
-  mainStore.isAdmin = false
-  mockEq.mockResolvedValue({ data: null, error: null })
-  mockAppDeleteEq.mockResolvedValue({ data: null, error: null })
-  mockIn.mockResolvedValue({ data: [], error: null })
-  vi.stubGlobal('localStorage', {
-    getItem: vi.fn(),
-    setItem: vi.fn(),
-    removeItem: vi.fn(),
-  })
-})
-
 describe('organization store deleteOrganization', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    setActivePinia(createPinia())
+    mainStore.auth = { id: 'auth-user-123' }
+    mainStore.user = { id: 'user-123' }
+    mainStore.isAdmin = false
+    mockEq.mockResolvedValue({ data: null, error: null })
+    mockIn.mockResolvedValue({ data: [], error: null })
+    vi.stubGlobal('localStorage', {
+      getItem: vi.fn(),
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    })
+  })
 
   it('allows org deletion for org_super_admin roles', async () => {
     const { useOrganizationStore } = await import('../src/stores/organization.ts')
@@ -129,94 +124,6 @@ describe('organization store deleteOrganization', () => {
     expect(result.error).toBeInstanceOf(Error)
     expect(result.error?.message).toBe('Insufficient permissions')
     expect(mockFrom).not.toHaveBeenCalled()
-  })
-})
-
-describe('organization store removeApp', () => {
-  it('removes a successfully deleted app from every selector index and updates the organization count', async () => {
-    const orgId = 'org-deleted-app'
-    const appId = 'com.test.deleted-app'
-    mockRpc.mockResolvedValue({
-      data: [{
-        gid: orgId,
-        role: 'owner',
-        app_count: 1,
-        created_by: 'owner-123',
-        name: 'Deleted App Org',
-        logo: null,
-        password_policy_config: null,
-        enforcing_2fa: false,
-        '2fa_has_access': true,
-        password_has_access: true,
-        paying: true,
-        trial_left: 0,
-        can_use_more: true,
-      }],
-      error: null,
-    })
-    mockIn.mockImplementation((_column: string, orgIds: string[]) => Promise.resolve({
-      data: orgIds.includes(orgId)
-        ? [{ app_id: appId, name: 'Deleted App', owner_org: orgId, need_onboarding: false, icon_url: null }]
-        : [],
-      error: null,
-    }))
-
-    const { useOrganizationStore } = await import('../src/stores/organization.ts')
-    const store = useOrganizationStore()
-    await store.fetchOrganizations()
-    await vi.waitFor(() => expect(store.getAppByAppId(appId)).toBeDefined())
-
-    const { error } = await store.deleteApp(appId)
-
-    expect(error).toBeNull()
-    expect(mockAppDeleteEq).toHaveBeenCalledWith('app_id', appId)
-    expect(store.getAppByAppId(appId)).toBeUndefined()
-    expect(store.getOrgByAppId(appId)).toBeUndefined()
-    expect(store.getAppsByOrgId(orgId)).toEqual([])
-    expect(store.organizations.find(org => org.gid === orgId)?.app_count).toBe(0)
-  })
-
-  it('keeps selector state intact when app deletion fails', async () => {
-    const orgId = 'org-failed-app-delete'
-    const appId = 'com.test.failed-app-delete'
-    mockRpc.mockResolvedValue({
-      data: [{
-        gid: orgId,
-        role: 'owner',
-        app_count: 1,
-        created_by: 'owner-123',
-        name: 'Failed App Delete Org',
-        logo: null,
-        password_policy_config: null,
-        enforcing_2fa: false,
-        '2fa_has_access': true,
-        password_has_access: true,
-        paying: true,
-        trial_left: 0,
-        can_use_more: true,
-      }],
-      error: null,
-    })
-    mockIn.mockImplementation((_column: string, orgIds: string[]) => Promise.resolve({
-      data: orgIds.includes(orgId)
-        ? [{ app_id: appId, name: 'Failed App Delete', owner_org: orgId, need_onboarding: false, icon_url: null }]
-        : [],
-      error: null,
-    }))
-    const deleteError = new Error('Database deletion failed')
-    mockAppDeleteEq.mockResolvedValue({ data: null, error: deleteError })
-
-    const { useOrganizationStore } = await import('../src/stores/organization.ts')
-    const store = useOrganizationStore()
-    await store.fetchOrganizations()
-    await vi.waitFor(() => expect(store.getAppByAppId(appId)).toBeDefined())
-
-    const { error } = await store.deleteApp(appId)
-
-    expect(error).toBe(deleteError)
-    expect(store.getAppByAppId(appId)).toBeDefined()
-    expect(store.getAppsByOrgId(orgId)).toHaveLength(1)
-    expect(store.organizations.find(org => org.gid === orgId)?.app_count).toBe(1)
   })
 })
 
@@ -283,7 +190,7 @@ describe('organization store refreshOrganizationLogos', () => {
     expect(mockUpdateDashboard).not.toHaveBeenCalled()
   })
 
-  it('fetches organizations with the auth session when the public profile is unavailable', async () => {
+  it.concurrent('fetches organizations with the auth session when the public profile is unavailable', async () => {
     mainStore.user = undefined
     mockCreateSignedImageUrl.mockResolvedValueOnce('')
     mockRpc.mockResolvedValueOnce({

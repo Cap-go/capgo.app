@@ -449,42 +449,6 @@ export const useOrganizationStore = defineStore('organization', () => {
     return _appsByOrgId.value.get(orgId) ?? []
   }
 
-  const removeApp = (appId: string) => {
-    const app = _appsByAppId.value.get(appId)
-    if (!app)
-      return
-
-    const nextOrganizationsByAppId = new Map(_organizationsByAppId.value)
-    nextOrganizationsByAppId.delete(appId)
-    _organizationsByAppId.value = nextOrganizationsByAppId
-
-    const nextAppsByAppId = new Map(_appsByAppId.value)
-    nextAppsByAppId.delete(appId)
-    _appsByAppId.value = nextAppsByAppId
-
-    const nextAppsByOrgId = new Map(_appsByOrgId.value)
-    nextAppsByOrgId.set(app.owner_org, (nextAppsByOrgId.get(app.owner_org) ?? []).filter(item => item.app_id !== appId))
-    _appsByOrgId.value = nextAppsByOrgId
-
-    const organization = _organizations.value.get(app.owner_org)
-    if (!organization)
-      return
-
-    organization.app_count = Math.max(0, organization.app_count - 1)
-  }
-
-  const deleteApp = async (appId: string) => {
-    const { error } = await supabase
-      .from('apps')
-      .delete()
-      .eq('app_id', appId)
-
-    if (!error)
-      removeApp(appId)
-
-    return { error }
-  }
-
   const awaitInitialLoad = () => {
     return _initialLoadPromise.value.promise
   }
@@ -795,8 +759,6 @@ export const useOrganizationStore = defineStore('organization', () => {
     getOrgByAppId,
     getAppByAppId,
     getAppsByOrgId,
-    removeApp,
-    deleteApp,
     awaitInitialLoad,
     deleteOrganization,
     canDeleteOrganization,
