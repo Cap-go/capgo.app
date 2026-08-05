@@ -123,7 +123,7 @@ describe('translation queue helpers', () => {
     const now = Math.floor(Date.now() / 1000)
     const latestReadyEntry = {
       checksum: 'previous-checksum',
-      messages: JSON.stringify({ account: 'Compte' }),
+      messages: JSON.stringify({ 'account': 'Compte', 'discord-username-help': 'Sans le signe @.' }),
       model: 'model',
       next_batch_index: 1,
       status: 'ready',
@@ -149,7 +149,7 @@ describe('translation queue helpers', () => {
     expect(response.headers.get('x-capgo-translation-stale')).toBe('1')
     expect(payload).toEqual({
       checksum: 'previous-checksum',
-      messages: { account: 'Compte' },
+      messages: { 'account': 'Compte', 'discord-username-help': 'Sans le signe {\'@\'}.' },
       model: 'model',
       status: 'ready',
     })
