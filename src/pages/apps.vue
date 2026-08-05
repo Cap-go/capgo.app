@@ -100,6 +100,7 @@ function loadAppIcons(sourceApps: AppIconSource[], runId: number) {
 
 async function getMyApps() {
   const currentRun = ++appIconLoadRun
+  canCreateApp.value = false
   isTableLoading.value = true
   try {
     await organizationStore.awaitInitialLoad()
@@ -120,7 +121,11 @@ async function getMyApps() {
       return
     }
 
-    canCreateApp.value = await checkPermissions('org.create_app', { orgId: currentGid })
+    const hasCreateAppPermission = await checkPermissions('org.create_app', { orgId: currentGid })
+    if (appIconLoadRun !== currentRun || organizationStore.currentOrganization?.gid !== currentGid)
+      return
+
+    canCreateApp.value = hasCreateAppPermission
 
     const offset = (currentPage.value - 1) * pageSize
 
@@ -207,13 +212,15 @@ displayStore.defaultBack = '/apps'
             </p>
             <div class="flex flex-col gap-3 mt-5 sm:flex-row sm:items-center">
               <button
-                :disabled="!canCreateApp"
+                :aria-describedby="!canCreateApp ? 'cannot-add-app-no-permission' : undefined"
+                :aria-disabled="!canCreateApp"
                 :title="!canCreateApp ? t('cannot-add-app-no-permission') : undefined"
-                class="d-btn d-btn-primary disabled:cursor-not-allowed disabled:border-gray-300 disabled:bg-gray-200 disabled:text-gray-500 dark:disabled:border-gray-700 dark:disabled:bg-gray-700 dark:disabled:text-gray-400"
-                @click="router.push('/app/new')"
+                class="d-btn d-btn-primary aria-disabled:cursor-not-allowed aria-disabled:border-gray-300 aria-disabled:bg-gray-200 aria-disabled:text-gray-500 dark:aria-disabled:border-gray-700 dark:aria-disabled:bg-gray-700 dark:aria-disabled:text-gray-400"
+                @click="canCreateApp && router.push('/app/new')"
               >
                 {{ t('start-onboarding') }}
               </button>
+              <span v-if="!canCreateApp" id="cannot-add-app-no-permission" class="sr-only">{{ t('cannot-add-app-no-permission') }}</span>
             </div>
           </div>
           <!-- App table - always visible even when payment failed -->

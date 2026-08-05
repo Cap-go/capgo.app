@@ -79,6 +79,7 @@ const isFilterModalOpen = ref(false)
 const filterModalBoxRef = ref<HTMLElement | null>(null)
 const filterOpenButtonRef = ref<HTMLButtonElement | null>(null)
 const filterModalTitleId = `${useId()}-filters-title`
+const addTooltipId = `${useId()}-add-tooltip`
 const slots = useSlots()
 const { t } = useI18n()
 const searchVal = ref(props.search ?? '')
@@ -581,17 +582,20 @@ const paginationClass = computed(() => props.mobileFixedPagination
           <Spinner v-else size="w-[16.8px] h-[16.8px] m-1 mr-2" />
           <span class="hidden text-sm md:block">{{ t("reload") }}</span>
         </button>
-        <div v-if="showAdd" :title="addDisabled ? addTooltip : undefined" class="p-px mr-2 rounded-lg from-cyan-500 to-purple-500 bg-linear-to-r">
+        <div v-if="showAdd" class="p-px mr-2 rounded-lg from-cyan-500 to-purple-500 bg-linear-to-r">
           <button
             :data-test="addButtonTestId"
-            :disabled="addDisabled"
-            class="inline-flex items-center py-1.5 px-3 text-sm font-medium text-gray-500 bg-white rounded-md cursor-pointer dark:text-white dark:bg-gray-800 hover:bg-gray-100 focus:ring-4 focus:ring-gray-200 dark:hover:bg-gray-700 dark:focus:ring-gray-700 focus:outline-hidden disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400 disabled:hover:bg-gray-100 dark:disabled:bg-gray-700 dark:disabled:text-gray-500 dark:disabled:hover:bg-gray-700"
+            :aria-describedby="addDisabled && addTooltip ? addTooltipId : undefined"
+            :aria-disabled="addDisabled"
+            :title="addDisabled ? addTooltip : undefined"
+            class="inline-flex items-center py-1.5 px-3 text-sm font-medium text-gray-500 bg-white rounded-md cursor-pointer dark:text-white dark:bg-gray-800 hover:bg-gray-100 focus:ring-4 focus:ring-gray-200 dark:hover:bg-gray-700 dark:focus:ring-gray-700 focus:outline-hidden aria-disabled:cursor-not-allowed aria-disabled:bg-gray-100 aria-disabled:text-gray-400 aria-disabled:hover:bg-gray-100 dark:aria-disabled:bg-gray-700 dark:aria-disabled:text-gray-500 dark:aria-disabled:hover:bg-gray-700"
             type="button" @click="handleAddClick"
           >
             <plusOutline v-if="!isAdding" class="m-1 md:mr-2" />
             <Spinner v-else size="w-[16.8px] h-[16.8px] m-1 mr-2" />
             <span class="hidden text-sm md:block">{{ t("add-one") }}</span>
           </button>
+          <span v-if="addDisabled && addTooltip" :id="addTooltipId" class="sr-only">{{ addTooltip }}</span>
         </div>
         <div v-if="showFilterMenu" class="relative h-10">
           <button
