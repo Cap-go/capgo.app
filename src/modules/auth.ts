@@ -205,6 +205,13 @@ async function guard(
     }
   }
 
+  async function loadPlansIfNeeded() {
+    if (main.plans.length > 0)
+      return
+
+    main.plans = await getPlans()
+  }
+
   function shouldRedirectToOrgOnboarding() {
     if (to.path.startsWith('/onboarding/app'))
       return false
@@ -318,6 +325,16 @@ async function guard(
       await updateUser(main, supabase)
     }
 
+    sendEvent({
+      channel: 'user-login',
+      event: 'User Login',
+      icon: '✅',
+      user_id: main.auth?.id,
+      notify: false,
+    }).catch()
+
+    await loadPlansIfNeeded()
+
     const organizationsLoaded = await tryLoadOrganizations(() => organizationStore.fetchOrganizations())
     if (shouldRedirectToPendingInviteOnboarding(organizationsLoaded)) {
       return next({
@@ -355,10 +372,6 @@ async function guard(
     if (onboardingRedirect)
       return next(onboardingRedirect)
 
-    getPlans().then((pls) => {
-      main.plans = pls
-    })
-
     try {
       // isPlatformAdmin() is the only frontend admin-rights source.
       main.isAdmin = await isPlatformAdmin()
@@ -369,14 +382,6 @@ async function guard(
       console.error('Failed to resolve platform admin status:', error)
       main.isAdmin = false
     }
-
-    sendEvent({
-      channel: 'user-login',
-      event: 'User Login',
-      icon: '✅',
-      user_id: main.auth?.id,
-      notify: false,
-    }).catch()
 
     next()
     hideLoader()
@@ -400,6 +405,8 @@ async function guard(
       hideLoader()
       return next(getPostRestorePath(to))
     }
+
+    await loadPlansIfNeeded()
 
     let organizationsLoaded = await tryLoadOrganizations(() => organizationStore.dedupFetchOrganizations())
     if (shouldRedirectToPendingInviteOnboarding(organizationsLoaded)) {
