@@ -1344,6 +1344,7 @@ export default {
 export const __translationWorkerTestUtils__ = {
   buildBatches,
   claimedTranslationBatchIndex,
+  escapeVueI18nAtSigns,
   isReadyTranslationFresh,
   isTranslationBatchLeaseExpired,
   keepTranslation,

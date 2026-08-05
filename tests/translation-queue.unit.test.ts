@@ -42,6 +42,20 @@ describe('translation queue helpers', () => {
     expect(__translationWorkerTestUtils__.keepTranslation('Used {count} times', 'Utilise plusieurs fois')).toBe('Used {count} times')
   })
 
+  it.concurrent('escapes raw and adjacent at signs for Vue i18n', () => {
+    expect(__translationWorkerTestUtils__.escapeVueI18nAtSigns('Sans le signe @.')).toBe('Sans le signe {\'@\'}.')
+    expect(__translationWorkerTestUtils__.escapeVueI18nAtSigns('@@capgo/cli@latest')).toBe('{\'@\'}{\'@\'}capgo/cli{\'@\'}latest')
+  })
+
+  it.concurrent('preserves escaped at signs across repeated passes', () => {
+    const escaped = 'Sans le signe {\'@\'}.'
+
+    expect(__translationWorkerTestUtils__.escapeVueI18nAtSigns(escaped)).toBe(escaped)
+    expect(__translationWorkerTestUtils__.escapeVueI18nAtSigns(
+      __translationWorkerTestUtils__.escapeVueI18nAtSigns('Sans le signe @.'),
+    )).toBe(escaped)
+  })
+
   it.concurrent('normalizes invalid queued batch indexes to the first batch', () => {
     expect(__translationWorkerTestUtils__.normalizeBatchIndex(-1)).toBe(0)
     expect(__translationWorkerTestUtils__.normalizeBatchIndex(1.5)).toBe(0)
