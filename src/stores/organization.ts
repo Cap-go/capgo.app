@@ -449,6 +449,24 @@ export const useOrganizationStore = defineStore('organization', () => {
     return _appsByOrgId.value.get(orgId) ?? []
   }
 
+  const removeApp = (appId: string) => {
+    const app = _appsByAppId.value.get(appId)
+    if (!app)
+      return
+
+    const nextOrganizationsByAppId = new Map(_organizationsByAppId.value)
+    nextOrganizationsByAppId.delete(appId)
+    _organizationsByAppId.value = nextOrganizationsByAppId
+
+    const nextAppsByAppId = new Map(_appsByAppId.value)
+    nextAppsByAppId.delete(appId)
+    _appsByAppId.value = nextAppsByAppId
+
+    const nextAppsByOrgId = new Map(_appsByOrgId.value)
+    nextAppsByOrgId.set(app.owner_org, (nextAppsByOrgId.get(app.owner_org) ?? []).filter(item => item.app_id !== appId))
+    _appsByOrgId.value = nextAppsByOrgId
+  }
+
   const awaitInitialLoad = () => {
     return _initialLoadPromise.value.promise
   }
@@ -759,6 +777,7 @@ export const useOrganizationStore = defineStore('organization', () => {
     getOrgByAppId,
     getAppByAppId,
     getAppsByOrgId,
+    removeApp,
     awaitInitialLoad,
     deleteOrganization,
     canDeleteOrganization,

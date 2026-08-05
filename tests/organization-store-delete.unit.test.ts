@@ -1,4 +1,5 @@
 import { createPinia, setActivePinia } from 'pinia'
+import { readFile } from 'node:fs/promises'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ref } from 'vue'
 
@@ -127,6 +128,56 @@ describe('organization store deleteOrganization', () => {
   })
 })
 
+describe('organization store removeApp', () => {
+  it('removes a deleted app from every selector index', async () => {
+    const orgId = 'org-deleted-app'
+    const appId = 'com.test.deleted-app'
+    mockRpc.mockResolvedValue({
+      data: [{
+        gid: orgId,
+        role: 'owner',
+        app_count: 1,
+        created_by: 'owner-123',
+        name: 'Deleted App Org',
+        logo: null,
+        password_policy_config: null,
+        enforcing_2fa: false,
+        '2fa_has_access': true,
+        password_has_access: true,
+        paying: true,
+        trial_left: 0,
+        can_use_more: true,
+      }],
+      error: null,
+    })
+    mockIn.mockImplementation((_column: string, orgIds: string[]) => Promise.resolve({
+      data: orgIds.includes(orgId)
+        ? [{ app_id: appId, name: 'Deleted App', owner_org: orgId, need_onboarding: false, icon_url: null }]
+        : [],
+      error: null,
+    }))
+
+    const { useOrganizationStore } = await import('../src/stores/organization.ts')
+    const store = useOrganizationStore()
+    await store.fetchOrganizations()
+    await vi.waitFor(() => expect(store.getAppByAppId(appId)).toBeDefined())
+
+    store.removeApp(appId)
+
+    expect(store.getAppByAppId(appId)).toBeUndefined()
+    expect(store.getOrgByAppId(appId)).toBeUndefined()
+    expect(store.getAppsByOrgId(orgId)).toEqual([])
+  })
+})
+
+describe('app settings deletion', () => {
+  it('removes the app from the organization store after a successful deletion', async () => {
+    const source = await readFile('src/components/dashboard/AppSetting.vue', 'utf8')
+
+    expect(source).toMatch(/else\s*\{\s*organizationStore\.removeApp\(props\.appId\)/)
+  })
+})
+
 describe('organization role helpers', () => {
   it('checks RBAC org role hierarchy', async () => {
     const { isAdminRole, isSuperAdminRole, roleHasOrgRank } = await import('../src/stores/organization.ts')
@@ -190,7 +241,7 @@ describe('organization store refreshOrganizationLogos', () => {
     expect(mockUpdateDashboard).not.toHaveBeenCalled()
   })
 
-  it.concurrent('fetches organizations with the auth session when the public profile is unavailable', async () => {
+  it('fetches organizations with the auth session when the public profile is unavailable', async () => {
     mainStore.user = undefined
     mockCreateSignedImageUrl.mockResolvedValueOnce('')
     mockRpc.mockResolvedValueOnce({
