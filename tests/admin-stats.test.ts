@@ -4,7 +4,7 @@ import { Hono } from 'hono/tiny'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { logsnagInsightsTestUtils } from '../supabase/functions/_backend/triggers/logsnag_insights.ts'
 import { REQUIRED_GLOBAL_STATS_SHARDS } from '../supabase/functions/_backend/utils/global_stats.ts'
-import { BASE_URL, executeSQL, fetchTestRequest, getAuthHeadersForCredentials, getEndpointUrl, getSupabaseClient, POSTGRES_URL, PRODUCT_ID, resetAndSeedAppData, resetAppData, TEST_EMAIL, USER_ADMIN_EMAIL, USER_ID } from './test-utils.ts'
+import { BASE_URL, executeSQL, fetchTestRequest, getAuthHeadersForCredentials, getEndpointUrl, getSupabaseClient, POSTGRES_URL, PRODUCT_ID, resetAndSeedAppData, resetAppData, TEST_EMAIL, USER_ADMIN_EMAIL, USER_ID, USER_PASSWORD_HASH } from './test-utils.ts'
 
 const DAY_IN_MS = 24 * 60 * 60 * 1000
 const NOW = Date.now()
@@ -56,6 +56,16 @@ const ONBOARDING_LATE_SUBSCRIPTION_APP_CREATED_AT = '2026-02-02T14:00:00.000Z'
 const ONBOARDING_LATE_SUBSCRIPTION_CHANNEL_CREATED_AT = '2026-02-03T14:00:00.000Z'
 const ONBOARDING_LATE_SUBSCRIPTION_BUNDLE_CREATED_AT = '2026-02-04T14:00:00.000Z'
 const ONBOARDING_LATE_SUBSCRIPTION_PAID_AT = '2026-02-10T14:00:00.000Z'
+const ONBOARDING_REGISTER_USER_IDS = [
+  randomUUID(),
+  randomUUID(),
+  randomUUID(),
+  randomUUID(),
+] as const
+const ONBOARDING_INVITE_USER_ID = randomUUID()
+const ONBOARDING_INVITE_ORG_ID = randomUUID()
+const ONBOARDING_INVITE_CUSTOMER_ID = `cus_admin_stats_onboarding_invite_${ONBOARDING_INVITE_ORG_ID.slice(0, 8)}`
+const ONBOARDING_REGISTER_CREATED_AT = '2026-02-01T09:00:00.000Z'
 const GLOBAL_STATS_TREND_DATES = ['2099-12-30', '2099-12-31', '2100-01-01'] as const
 
 async function getCoreSnapshotCountsAt(snapshotExclusiveEnd: Date) {
@@ -351,9 +361,60 @@ beforeAll(async () => {
       subscription_anchor_start: '2026-02-10T00:00:00.000Z',
       subscription_anchor_end: '2026-03-10T00:00:00.000Z',
     },
+    {
+      customer_id: ONBOARDING_INVITE_CUSTOMER_ID,
+      status: 'succeeded',
+      product_id: soloPlan.stripe_id,
+      price_id: soloPlan.price_m_id,
+      subscription_id: null,
+      trial_at: '2026-02-20T00:00:00.000Z',
+      paid_at: null,
+      is_good_plan: true,
+      plan_usage: 2,
+      subscription_anchor_start: '2026-02-01T00:00:00.000Z',
+      subscription_anchor_end: '2026-03-01T00:00:00.000Z',
+    },
   ])
   if (stripeError)
     throw stripeError
+
+  for (const [index, userId] of ONBOARDING_REGISTER_USER_IDS.entries()) {
+    const email = `admin-stats-onboarding-register-${index}-${userId.slice(0, 8)}@capgo.app`
+    await executeSQL(
+      `INSERT INTO auth.users (id, email, encrypted_password, email_confirmed_at, created_at, updated_at, raw_user_meta_data)
+       VALUES ($1, $2, $3, $4::timestamptz, $4::timestamptz, $4::timestamptz, '{}'::jsonb)
+       ON CONFLICT (id) DO NOTHING`,
+      [userId, email, USER_PASSWORD_HASH, ONBOARDING_REGISTER_CREATED_AT],
+    )
+    await executeSQL(
+      `INSERT INTO public.users (id, email, created_at, updated_at, created_via_invite)
+       VALUES ($1, $2, $3::timestamptz, $3::timestamptz, false)
+       ON CONFLICT (id) DO UPDATE SET
+         email = EXCLUDED.email,
+         created_at = EXCLUDED.created_at,
+         updated_at = EXCLUDED.updated_at,
+         created_via_invite = EXCLUDED.created_via_invite`,
+      [userId, email, ONBOARDING_REGISTER_CREATED_AT],
+    )
+  }
+
+  const inviteEmail = `admin-stats-onboarding-invite-${ONBOARDING_INVITE_USER_ID.slice(0, 8)}@capgo.app`
+  await executeSQL(
+    `INSERT INTO auth.users (id, email, encrypted_password, email_confirmed_at, created_at, updated_at, raw_user_meta_data)
+     VALUES ($1, $2, $3, $4::timestamptz, $4::timestamptz, $4::timestamptz, '{}'::jsonb)
+     ON CONFLICT (id) DO NOTHING`,
+    [ONBOARDING_INVITE_USER_ID, inviteEmail, USER_PASSWORD_HASH, ONBOARDING_REGISTER_CREATED_AT],
+  )
+  await executeSQL(
+    `INSERT INTO public.users (id, email, created_at, updated_at, created_via_invite)
+     VALUES ($1, $2, $3::timestamptz, $3::timestamptz, true)
+     ON CONFLICT (id) DO UPDATE SET
+       email = EXCLUDED.email,
+       created_at = EXCLUDED.created_at,
+       updated_at = EXCLUDED.updated_at,
+       created_via_invite = EXCLUDED.created_via_invite`,
+    [ONBOARDING_INVITE_USER_ID, inviteEmail, ONBOARDING_REGISTER_CREATED_AT],
+  )
 
   const { error: orgError } = await supabase.from('orgs').insert([
     {
@@ -409,6 +470,14 @@ beforeAll(async () => {
       management_email: TEST_EMAIL,
       customer_id: ONBOARDING_LATE_SUBSCRIPTION_CUSTOMER_ID,
       created_at: ONBOARDING_LATE_SUBSCRIPTION_CREATED_AT,
+    },
+    {
+      id: ONBOARDING_INVITE_ORG_ID,
+      name: `Admin Stats Onboarding Invite ${ONBOARDING_INVITE_ORG_ID.slice(0, 8)}`,
+      created_by: ONBOARDING_INVITE_USER_ID,
+      management_email: inviteEmail,
+      customer_id: ONBOARDING_INVITE_CUSTOMER_ID,
+      created_at: ONBOARDING_ORG_CREATED_AT,
     },
   ])
   if (orgError)
@@ -562,11 +631,66 @@ beforeAll(async () => {
   })
   if (orgUserError)
     throw orgUserError
+
+  await executeSQL(
+    `INSERT INTO public.role_bindings (
+       principal_type, principal_id, role_id, scope_type, org_id,
+       granted_by, granted_at, reason, is_direct
+     )
+     SELECT
+       public.rbac_principal_user(),
+       $1::uuid,
+       roles.id,
+       public.rbac_scope_org(),
+       $2::uuid,
+       $1::uuid,
+       $3::timestamptz,
+       'Accepted invitation',
+       true
+     FROM public.roles
+     WHERE roles.name = public.rbac_role_org_member()
+       AND roles.scope_type = public.rbac_scope_org()
+     LIMIT 1
+     ON CONFLICT DO NOTHING`,
+    [ONBOARDING_INVITE_USER_ID, ONBOARDING_ORG_ID, ONBOARDING_REGISTER_CREATED_AT],
+  )
+
+  await executeSQL(
+    `INSERT INTO public.role_bindings (
+       principal_type, principal_id, role_id, scope_type, org_id,
+       granted_by, granted_at, reason, is_direct
+     )
+     SELECT
+       public.rbac_principal_user(),
+       $1::uuid,
+       roles.id,
+       public.rbac_scope_org(),
+       $2::uuid,
+       $1::uuid,
+       $3::timestamptz,
+       'Accepted invitation',
+       true
+     FROM public.roles
+     WHERE roles.name = public.rbac_role_org_member()
+       AND roles.scope_type = public.rbac_scope_org()
+     LIMIT 1
+     ON CONFLICT DO NOTHING`,
+    [USER_ID, ONBOARDING_INVITE_ORG_ID, ONBOARDING_REGISTER_CREATED_AT],
+  )
 }, 90000)
 
 afterAll(async () => {
   const supabase = getSupabaseClient()
 
+  await executeSQL(
+    `DELETE FROM public.role_bindings
+     WHERE reason = 'Accepted invitation'
+       AND (
+         (principal_id = $1::uuid AND org_id = $2::uuid)
+         OR (principal_id = $3::uuid AND org_id = $4::uuid)
+       )`,
+    [ONBOARDING_INVITE_USER_ID, ONBOARDING_ORG_ID, USER_ID, ONBOARDING_INVITE_ORG_ID],
+  )
   await supabase.from('org_users').delete().eq('org_id', TRIAL_ORG_ID).eq('user_id', USER_ID)
   await supabase.from('build_logs').delete().eq('org_id', TRIAL_ORG_ID).eq('build_id', INSIGHTS_BUILD_ID)
   await supabase.from('daily_build_time').delete().eq('app_id', TRIAL_APP_ID).eq('date', INSIGHTS_DATE)
@@ -576,8 +700,16 @@ afterAll(async () => {
   await supabase.from('channels').delete().in('app_id', [ONBOARDING_APP_ID, ONBOARDING_LATE_SUBSCRIPTION_APP_ID])
   await supabase.from('app_versions').delete().in('app_id', [TRIAL_APP_ID, ONBOARDING_APP_ID, ONBOARDING_LATE_SUBSCRIPTION_APP_ID])
   await supabase.from('apps').delete().in('app_id', [TRIAL_APP_ID, ONBOARDING_APP_ID, ONBOARDING_LATE_SUBSCRIPTION_APP_ID])
-  await supabase.from('orgs').delete().in('id', [TRIAL_ORG_ID, ATTENTION_SORT_HEALTHY_ORG_ID, CANCELLED_YEARLY_ORG_ID, CANCELLED_MONTHLY_ORG_ID, ONBOARDING_ORG_ID, ONBOARDING_NO_BUNDLE_ORG_ID, ONBOARDING_LATE_SUBSCRIPTION_ORG_ID])
-  await supabase.from('stripe_info').delete().in('customer_id', [TRIAL_CUSTOMER_ID, ATTENTION_SORT_HEALTHY_CUSTOMER_ID, CANCELLED_YEARLY_CUSTOMER_ID, CANCELLED_MONTHLY_CUSTOMER_ID, ONBOARDING_CUSTOMER_ID, ONBOARDING_NO_BUNDLE_CUSTOMER_ID, ONBOARDING_LATE_SUBSCRIPTION_CUSTOMER_ID])
+  await supabase.from('orgs').delete().in('id', [TRIAL_ORG_ID, ATTENTION_SORT_HEALTHY_ORG_ID, CANCELLED_YEARLY_ORG_ID, CANCELLED_MONTHLY_ORG_ID, ONBOARDING_ORG_ID, ONBOARDING_NO_BUNDLE_ORG_ID, ONBOARDING_LATE_SUBSCRIPTION_ORG_ID, ONBOARDING_INVITE_ORG_ID])
+  await supabase.from('stripe_info').delete().in('customer_id', [TRIAL_CUSTOMER_ID, ATTENTION_SORT_HEALTHY_CUSTOMER_ID, CANCELLED_YEARLY_CUSTOMER_ID, CANCELLED_MONTHLY_CUSTOMER_ID, ONBOARDING_CUSTOMER_ID, ONBOARDING_NO_BUNDLE_CUSTOMER_ID, ONBOARDING_LATE_SUBSCRIPTION_CUSTOMER_ID, ONBOARDING_INVITE_CUSTOMER_ID])
+  await executeSQL(
+    'DELETE FROM public.users WHERE id = ANY($1::uuid[])',
+    [[...ONBOARDING_REGISTER_USER_IDS, ONBOARDING_INVITE_USER_ID]],
+  )
+  await executeSQL(
+    'DELETE FROM auth.users WHERE id = ANY($1::uuid[])',
+    [[...ONBOARDING_REGISTER_USER_IDS, ONBOARDING_INVITE_USER_ID]],
+  )
 }, 90000)
 
 describe('global stats core snapshots', () => {
@@ -955,6 +1087,7 @@ describe('/private/admin_stats', () => {
     const payload = await response.json() as {
       success: boolean
       data: {
+        total_registrations: number
         total_orgs: number
         orgs_with_app: number
         orgs_with_channel: number
@@ -963,18 +1096,30 @@ describe('/private/admin_stats', () => {
         orgs_with_production_device: number
         orgs_with_update_download: number
         activation_telemetry_available: boolean
+        total_invite_registrations: number
+        total_org_joins_invite_register: number
+        total_org_joins_existing_account: number
+        org_conversion_rate: number
         subscription_conversion_rate: number
         trend: Array<{
           date: string
+          new_registrations: number
           new_orgs: number
           orgs_subscribed: number
           orgs_with_production_device: number
           orgs_with_update_download: number
         }>
+        invite_trend: Array<{
+          date: string
+          invite_registrations: number
+          org_joins_invite_register: number
+          org_joins_existing_account: number
+        }>
       }
     }
 
     expect(payload.success).toBe(true)
+    expect(payload.data.total_registrations).toBe(4)
     expect(payload.data.total_orgs).toBe(3)
     expect(payload.data.orgs_with_app).toBe(2)
     expect(payload.data.orgs_with_channel).toBe(2)
@@ -983,14 +1128,26 @@ describe('/private/admin_stats', () => {
     expect(payload.data.orgs_with_production_device).toBe(0)
     expect(payload.data.orgs_with_update_download).toBe(0)
     expect(payload.data.activation_telemetry_available).toBe(false)
+    expect(payload.data.org_conversion_rate).toBe(75)
     expect(payload.data.subscription_conversion_rate).toBe(50)
+    expect(payload.data.total_invite_registrations).toBe(1)
+    expect(payload.data.total_org_joins_invite_register).toBe(1)
+    expect(payload.data.total_org_joins_existing_account).toBe(1)
     expect(payload.data.trend).toHaveLength(1)
     expect(payload.data.trend[0]).toMatchObject({
       date: '2026-02-01',
+      new_registrations: 4,
       new_orgs: 3,
       orgs_subscribed: 1,
       orgs_with_production_device: 0,
       orgs_with_update_download: 0,
+    })
+    expect(payload.data.invite_trend).toHaveLength(1)
+    expect(payload.data.invite_trend[0]).toMatchObject({
+      date: '2026-02-01',
+      invite_registrations: 1,
+      org_joins_invite_register: 1,
+      org_joins_existing_account: 1,
     })
   })
 
@@ -1000,12 +1157,32 @@ describe('/private/admin_stats', () => {
 
     const supabase = getSupabaseClient()
     const orgId = randomUUID()
+    const registerUserId = randomUUID()
     const suffix = orgId.replaceAll('-', '').slice(0, 12)
     const appId = `com.admin.stats.onboardinghistory.${suffix}`
     const customerId = `cus_admin_stats_onboarding_history_${suffix}`
     const orgCreatedAt = '2098-07-01T10:00:00.000Z'
+    const registerCreatedAt = '2098-07-01T09:00:00.000Z'
+    const registerEmail = `admin-stats-onboarding-history-${suffix}@capgo.app`
 
     try {
+      await executeSQL(
+        `INSERT INTO auth.users (id, email, encrypted_password, email_confirmed_at, created_at, updated_at, raw_user_meta_data)
+         VALUES ($1, $2, $3, $4::timestamptz, $4::timestamptz, $4::timestamptz, '{}'::jsonb)
+         ON CONFLICT (id) DO NOTHING`,
+        [registerUserId, registerEmail, USER_PASSWORD_HASH, registerCreatedAt],
+      )
+      await executeSQL(
+        `INSERT INTO public.users (id, email, created_at, updated_at, created_via_invite)
+         VALUES ($1, $2, $3::timestamptz, $3::timestamptz, false)
+         ON CONFLICT (id) DO UPDATE SET
+           email = EXCLUDED.email,
+           created_at = EXCLUDED.created_at,
+           updated_at = EXCLUDED.updated_at,
+           created_via_invite = EXCLUDED.created_via_invite`,
+        [registerUserId, registerEmail, registerCreatedAt],
+      )
+
       const { error: stripeError } = await supabase.from('stripe_info').insert({
         customer_id: customerId,
         status: 'succeeded',
@@ -1024,8 +1201,8 @@ describe('/private/admin_stats', () => {
       const { error: orgError } = await supabase.from('orgs').insert({
         id: orgId,
         name: `Admin Stats Onboarding History ${suffix}`,
-        created_by: USER_ID,
-        management_email: TEST_EMAIL,
+        created_by: registerUserId,
+        management_email: registerEmail,
         customer_id: customerId,
         created_at: orgCreatedAt,
       })
@@ -1048,7 +1225,7 @@ describe('/private/admin_stats', () => {
           app_id: appId,
           name: '1.0.0',
           owner_org: orgId,
-          user_id: USER_ID,
+          user_id: registerUserId,
           storage_provider: 'r2-direct',
           created_at: '2098-07-04T10:00:00.000Z',
         })
@@ -1063,7 +1240,7 @@ describe('/private/admin_stats', () => {
         name: 'production',
         app_id: appId,
         version: firstVersion.id,
-        created_by: USER_ID,
+        created_by: registerUserId,
         owner_org: orgId,
         created_at: '2098-07-03T10:00:00.000Z',
       })
@@ -1076,7 +1253,7 @@ describe('/private/admin_stats', () => {
           app_id: appId,
           name: '2.0.0',
           owner_org: orgId,
-          user_id: USER_ID,
+          user_id: registerUserId,
           storage_provider: 'r2-direct',
           created_at: '2098-07-12T10:00:00.000Z',
         })
@@ -1109,13 +1286,16 @@ describe('/private/admin_stats', () => {
       const payload = await response.json() as {
         success: boolean
         data: {
+          total_registrations: number
           total_orgs: number
           orgs_with_app: number
           orgs_with_channel: number
           orgs_with_bundle: number
           orgs_subscribed: number
+          org_conversion_rate: number
           trend: Array<{
             date: string
+            new_registrations: number
             orgs_created_bundle: number
             orgs_subscribed: number
           }>
@@ -1123,14 +1303,17 @@ describe('/private/admin_stats', () => {
       }
 
       expect(payload.success).toBe(true)
+      expect(payload.data.total_registrations).toBe(1)
       expect(payload.data.total_orgs).toBe(1)
       expect(payload.data.orgs_with_app).toBe(1)
       expect(payload.data.orgs_with_channel).toBe(1)
       expect(payload.data.orgs_with_bundle).toBe(1)
       expect(payload.data.orgs_subscribed).toBe(1)
+      expect(payload.data.org_conversion_rate).toBe(100)
       expect(payload.data.trend).toHaveLength(1)
       expect(payload.data.trend[0]).toMatchObject({
         date: '2098-07-01',
+        new_registrations: 1,
         orgs_created_bundle: 1,
         orgs_subscribed: 1,
       })
@@ -1141,6 +1324,8 @@ describe('/private/admin_stats', () => {
       await supabase.from('apps').delete().eq('app_id', appId)
       await supabase.from('orgs').delete().eq('id', orgId)
       await supabase.from('stripe_info').delete().eq('customer_id', customerId)
+      await executeSQL('DELETE FROM public.users WHERE id = $1', [registerUserId])
+      await executeSQL('DELETE FROM auth.users WHERE id = $1', [registerUserId])
     }
   })
 
