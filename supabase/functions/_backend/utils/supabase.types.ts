@@ -1576,6 +1576,16 @@ export type Database = {
           need_upgrade: number | null
           new_paying_orgs: number
           not_paying: number | null
+          notifications_apps: number
+          notifications_campaigns: number
+          notifications_campaigns_day: number
+          notifications_failed_day: number
+          notifications_opened_day: number
+          notifications_opened_last_month: number
+          notifications_providers: number
+          notifications_received_day: number
+          notifications_sent_day: number
+          notifications_sent_last_month: number
           nrr: number
           onboarded: number | null
           org_conversion_rate: number
@@ -1675,6 +1685,16 @@ export type Database = {
           need_upgrade?: number | null
           new_paying_orgs?: number
           not_paying?: number | null
+          notifications_apps?: number
+          notifications_campaigns?: number
+          notifications_campaigns_day?: number
+          notifications_failed_day?: number
+          notifications_opened_day?: number
+          notifications_opened_last_month?: number
+          notifications_providers?: number
+          notifications_received_day?: number
+          notifications_sent_day?: number
+          notifications_sent_last_month?: number
           nrr?: number
           onboarded?: number | null
           org_conversion_rate?: number
@@ -1774,6 +1794,16 @@ export type Database = {
           need_upgrade?: number | null
           new_paying_orgs?: number
           not_paying?: number | null
+          notifications_apps?: number
+          notifications_campaigns?: number
+          notifications_campaigns_day?: number
+          notifications_failed_day?: number
+          notifications_opened_day?: number
+          notifications_opened_last_month?: number
+          notifications_providers?: number
+          notifications_received_day?: number
+          notifications_sent_day?: number
+          notifications_sent_last_month?: number
           nrr?: number
           onboarded?: number | null
           org_conversion_rate?: number
