@@ -3119,6 +3119,10 @@ export interface AdminOnboardingFunnel {
   orgs_with_production_device: number
   orgs_with_update_download: number
   activation_telemetry_available: boolean
+  // Invite join metrics (team invites)
+  total_invite_registrations: number
+  total_org_joins_invite_register: number
+  total_org_joins_existing_account: number
   // Conversion rates
   org_conversion_rate: number
   app_conversion_rate: number
@@ -3138,6 +3142,12 @@ export interface AdminOnboardingFunnel {
     orgs_subscribed: number
     orgs_with_production_device: number
     orgs_with_update_download: number
+  }>
+  invite_trend: Array<{
+    date: string
+    invite_registrations: number
+    org_joins_invite_register: number
+    org_joins_existing_account: number
   }>
 }
 
@@ -3340,9 +3350,51 @@ export async function getAdminOnboardingFunnel(
         AND ${onboardingBundleEligibility}
     `
 
-    const [trendResult, activationCohortResult] = await Promise.all([
+    const inviteTrendQuery = sql`
+      WITH date_series AS (
+        SELECT generate_series(
+          ${start_date}::timestamptz::date,
+          (${end_date}::timestamptz::date - 1),
+          '1 day'::interval
+        )::date as date
+      ),
+      daily_invite_registrations AS (
+        SELECT created_at::date as date, COUNT(*)::int as invite_registrations
+        FROM public.users
+        WHERE created_at >= ${start_date}::timestamp
+          AND created_at < ${end_date}::timestamp
+          AND created_via_invite = true
+        GROUP BY created_at::date
+      ),
+      daily_invite_org_joins AS (
+        SELECT
+          rb.granted_at::date as date,
+          COUNT(*) FILTER (WHERE u.created_via_invite = true)::int as org_joins_invite_register,
+          COUNT(*) FILTER (WHERE COALESCE(u.created_via_invite, false) = false)::int as org_joins_existing_account
+        FROM public.role_bindings rb
+        INNER JOIN public.users u ON u.id = rb.principal_id
+        WHERE rb.reason = 'Accepted invitation'
+          AND rb.principal_type = public.rbac_principal_user()
+          AND rb.scope_type = public.rbac_scope_org()
+          AND rb.granted_at >= ${start_date}::timestamp
+          AND rb.granted_at < ${end_date}::timestamp
+        GROUP BY rb.granted_at::date
+      )
+      SELECT
+        ds.date,
+        COALESCE(diregs.invite_registrations, 0) as invite_registrations,
+        COALESCE(dijoins.org_joins_invite_register, 0) as org_joins_invite_register,
+        COALESCE(dijoins.org_joins_existing_account, 0) as org_joins_existing_account
+      FROM date_series ds
+      LEFT JOIN daily_invite_registrations diregs ON diregs.date = ds.date
+      LEFT JOIN daily_invite_org_joins dijoins ON dijoins.date = ds.date
+      ORDER BY ds.date ASC
+    `
+
+    const [trendResult, activationCohortResult, inviteTrendResult] = await Promise.all([
       drizzleClient.execute(trendQuery),
       drizzleClient.execute(activationCohortQuery),
+      drizzleClient.execute(inviteTrendQuery),
     ])
 
     const activationCohorts: AdminOnboardingActivationCohort[] = []
@@ -3389,6 +3441,20 @@ export async function getAdminOnboardingFunnel(
       }
     })
 
+    const inviteTrend = inviteTrendResult.rows.map((row: any) => {
+      const date = row.date instanceof Date ? row.date.toISOString().split('T')[0] : String(row.date)
+      return {
+        date,
+        invite_registrations: Number(row.invite_registrations) || 0,
+        org_joins_invite_register: Number(row.org_joins_invite_register) || 0,
+        org_joins_existing_account: Number(row.org_joins_existing_account) || 0,
+      }
+    })
+
+    const totalInviteRegistrations = inviteTrend.reduce((sum, row) => sum + row.invite_registrations, 0)
+    const totalOrgJoinsInviteRegister = inviteTrend.reduce((sum, row) => sum + row.org_joins_invite_register, 0)
+    const totalOrgJoinsExistingAccount = inviteTrend.reduce((sum, row) => sum + row.org_joins_existing_account, 0)
+
     const result: AdminOnboardingFunnel = {
       total_registrations: totalRegistrations,
       total_orgs: totalOrgs,
@@ -3399,6 +3465,9 @@ export async function getAdminOnboardingFunnel(
       orgs_with_production_device: activationMetrics.orgs_with_production_device,
       orgs_with_update_download: activationMetrics.orgs_with_update_download,
       activation_telemetry_available: activationTelemetry.available,
+      total_invite_registrations: totalInviteRegistrations,
+      total_org_joins_invite_register: totalOrgJoinsInviteRegister,
+      total_org_joins_existing_account: totalOrgJoinsExistingAccount,
       org_conversion_rate: totalRegistrations > 0 ? (totalOrgs / totalRegistrations) * 100 : 0,
       app_conversion_rate: totalOrgs > 0 ? (orgsWithApp / totalOrgs) * 100 : 0,
       channel_conversion_rate: orgsWithApp > 0 ? (orgsWithChannel / orgsWithApp) * 100 : 0,
@@ -3407,6 +3476,7 @@ export async function getAdminOnboardingFunnel(
       production_device_conversion_rate: orgsWithBundle > 0 ? (activationMetrics.orgs_with_production_device / orgsWithBundle) * 100 : 0,
       update_download_conversion_rate: activationMetrics.orgs_with_production_device > 0 ? (activationMetrics.orgs_with_update_download / activationMetrics.orgs_with_production_device) * 100 : 0,
       trend,
+      invite_trend: inviteTrend,
     }
 
     cloudlog({ requestId: c.get('requestId'), message: 'getAdminOnboardingFunnel result', result })
@@ -3425,6 +3495,9 @@ export async function getAdminOnboardingFunnel(
       orgs_with_production_device: 0,
       orgs_with_update_download: 0,
       activation_telemetry_available: false,
+      total_invite_registrations: 0,
+      total_org_joins_invite_register: 0,
+      total_org_joins_existing_account: 0,
       org_conversion_rate: 0,
       app_conversion_rate: 0,
       channel_conversion_rate: 0,
@@ -3433,6 +3506,7 @@ export async function getAdminOnboardingFunnel(
       production_device_conversion_rate: 0,
       update_download_conversion_rate: 0,
       trend: [],
+      invite_trend: [],
     }
   }
 }

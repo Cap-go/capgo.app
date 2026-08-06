@@ -41,6 +41,9 @@ interface OnboardingFunnelData {
   orgs_with_production_device: number
   orgs_with_update_download: number
   activation_telemetry_available: boolean
+  total_invite_registrations: number
+  total_org_joins_invite_register: number
+  total_org_joins_existing_account: number
   org_conversion_rate: number
   app_conversion_rate: number
   channel_conversion_rate: number
@@ -58,6 +61,12 @@ interface OnboardingFunnelData {
     orgs_subscribed: number
     orgs_with_production_device: number
     orgs_with_update_download: number
+  }>
+  invite_trend: Array<{
+    date: string
+    invite_registrations: number
+    org_joins_invite_register: number
+    org_joins_existing_account: number
   }>
 }
 
@@ -1045,6 +1054,39 @@ const onboardingFunnelTrendSeries = computed(() => {
   ]
 })
 
+const inviteJoinTrendSeries = computed(() => {
+  const inviteTrend = onboardingFunnelData.value?.invite_trend
+  if (!inviteTrend || inviteTrend.length === 0)
+    return []
+
+  return [
+    {
+      label: t('invite-registrations'),
+      data: inviteTrend.map(item => ({
+        date: item.date,
+        value: Number(item.invite_registrations) || 0,
+      })),
+      color: '#f97316', // orange
+    },
+    {
+      label: t('org-joins-invite-register'),
+      data: inviteTrend.map(item => ({
+        date: item.date,
+        value: Number(item.org_joins_invite_register) || 0,
+      })),
+      color: '#06b6d4', // cyan
+    },
+    {
+      label: t('org-joins-existing-account'),
+      data: inviteTrend.map(item => ({
+        date: item.date,
+        value: Number(item.org_joins_existing_account) || 0,
+      })),
+      color: '#a855f7', // purple
+    },
+  ]
+})
+
 watch(() => adminStore.activeDateRange, () => {
   loadGlobalStatsTrend()
   loadOnboardingFunnel()
@@ -1147,6 +1189,21 @@ displayStore.defaultBack = '/dashboard'
           >
             <AdminMultiLineChart
               :series="onboardingFunnelTrendSeries"
+              :is-loading="isLoadingOnboardingFunnel"
+            />
+          </ChartCard>
+
+          <!-- Invite Join Trend Chart -->
+          <ChartCard
+            :title="t('invite-join-trend')"
+            :is-loading="isLoadingOnboardingFunnel"
+            :has-data="inviteJoinTrendSeries.length > 0"
+          >
+            <p class="mb-3 text-sm text-slate-500 dark:text-slate-400">
+              {{ t('invite-join-trend-description') }}
+            </p>
+            <AdminMultiLineChart
+              :series="inviteJoinTrendSeries"
               :is-loading="isLoadingOnboardingFunnel"
             />
           </ChartCard>

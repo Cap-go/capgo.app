@@ -631,11 +631,66 @@ beforeAll(async () => {
   })
   if (orgUserError)
     throw orgUserError
+
+  await executeSQL(
+    `INSERT INTO public.role_bindings (
+       principal_type, principal_id, role_id, scope_type, org_id,
+       granted_by, granted_at, reason, is_direct
+     )
+     SELECT
+       public.rbac_principal_user(),
+       $1::uuid,
+       roles.id,
+       public.rbac_scope_org(),
+       $2::uuid,
+       $1::uuid,
+       $3::timestamptz,
+       'Accepted invitation',
+       true
+     FROM public.roles
+     WHERE roles.name = public.rbac_role_org_member()
+       AND roles.scope_type = public.rbac_scope_org()
+     LIMIT 1
+     ON CONFLICT DO NOTHING`,
+    [ONBOARDING_INVITE_USER_ID, ONBOARDING_ORG_ID, ONBOARDING_REGISTER_CREATED_AT],
+  )
+
+  await executeSQL(
+    `INSERT INTO public.role_bindings (
+       principal_type, principal_id, role_id, scope_type, org_id,
+       granted_by, granted_at, reason, is_direct
+     )
+     SELECT
+       public.rbac_principal_user(),
+       $1::uuid,
+       roles.id,
+       public.rbac_scope_org(),
+       $2::uuid,
+       $1::uuid,
+       $3::timestamptz,
+       'Accepted invitation',
+       true
+     FROM public.roles
+     WHERE roles.name = public.rbac_role_org_member()
+       AND roles.scope_type = public.rbac_scope_org()
+     LIMIT 1
+     ON CONFLICT DO NOTHING`,
+    [USER_ID, ONBOARDING_INVITE_ORG_ID, ONBOARDING_REGISTER_CREATED_AT],
+  )
 }, 90000)
 
 afterAll(async () => {
   const supabase = getSupabaseClient()
 
+  await executeSQL(
+    `DELETE FROM public.role_bindings
+     WHERE reason = 'Accepted invitation'
+       AND (
+         (principal_id = $1::uuid AND org_id = $2::uuid)
+         OR (principal_id = $3::uuid AND org_id = $4::uuid)
+       )`,
+    [ONBOARDING_INVITE_USER_ID, ONBOARDING_ORG_ID, USER_ID, ONBOARDING_INVITE_ORG_ID],
+  )
   await supabase.from('org_users').delete().eq('org_id', TRIAL_ORG_ID).eq('user_id', USER_ID)
   await supabase.from('build_logs').delete().eq('org_id', TRIAL_ORG_ID).eq('build_id', INSIGHTS_BUILD_ID)
   await supabase.from('daily_build_time').delete().eq('app_id', TRIAL_APP_ID).eq('date', INSIGHTS_DATE)
@@ -1041,6 +1096,9 @@ describe('/private/admin_stats', () => {
         orgs_with_production_device: number
         orgs_with_update_download: number
         activation_telemetry_available: boolean
+        total_invite_registrations: number
+        total_org_joins_invite_register: number
+        total_org_joins_existing_account: number
         org_conversion_rate: number
         subscription_conversion_rate: number
         trend: Array<{
@@ -1050,6 +1108,12 @@ describe('/private/admin_stats', () => {
           orgs_subscribed: number
           orgs_with_production_device: number
           orgs_with_update_download: number
+        }>
+        invite_trend: Array<{
+          date: string
+          invite_registrations: number
+          org_joins_invite_register: number
+          org_joins_existing_account: number
         }>
       }
     }
@@ -1066,6 +1130,9 @@ describe('/private/admin_stats', () => {
     expect(payload.data.activation_telemetry_available).toBe(false)
     expect(payload.data.org_conversion_rate).toBe(75)
     expect(payload.data.subscription_conversion_rate).toBe(50)
+    expect(payload.data.total_invite_registrations).toBe(1)
+    expect(payload.data.total_org_joins_invite_register).toBe(1)
+    expect(payload.data.total_org_joins_existing_account).toBe(1)
     expect(payload.data.trend).toHaveLength(1)
     expect(payload.data.trend[0]).toMatchObject({
       date: '2026-02-01',
@@ -1074,6 +1141,13 @@ describe('/private/admin_stats', () => {
       orgs_subscribed: 1,
       orgs_with_production_device: 0,
       orgs_with_update_download: 0,
+    })
+    expect(payload.data.invite_trend).toHaveLength(1)
+    expect(payload.data.invite_trend[0]).toMatchObject({
+      date: '2026-02-01',
+      invite_registrations: 1,
+      org_joins_invite_register: 1,
+      org_joins_existing_account: 1,
     })
   })
 
