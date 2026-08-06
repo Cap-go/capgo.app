@@ -3481,6 +3481,7 @@ export async function getAdminTrialPlanBreakdown(
 
 // Admin Onboarding Funnel
 export interface AdminOnboardingFunnel {
+  total_registrations: number
   total_orgs: number
   orgs_with_app: number
   orgs_with_channel: number
@@ -3490,6 +3491,7 @@ export interface AdminOnboardingFunnel {
   orgs_with_update_download: number
   activation_telemetry_available: boolean
   // Conversion rates
+  org_conversion_rate: number
   app_conversion_rate: number
   channel_conversion_rate: number
   bundle_conversion_rate: number
@@ -3499,6 +3501,7 @@ export interface AdminOnboardingFunnel {
   // Trend data
   trend: Array<{
     date: string
+    new_registrations: number
     new_orgs: number
     orgs_created_app: number
     orgs_created_channel: number
@@ -3538,13 +3541,22 @@ export async function getAdminOnboardingFunnel(
       )
     `
 
-    // Get total funnel counts for orgs created in the date range
+    // Get total funnel counts for self-serve registrations and orgs they create
     const funnelQuery = sql`
-      WITH orgs_in_range AS (
-        SELECT id, customer_id, created_at, created_at::date as created_date
-        FROM orgs
+      WITH registrations_in_range AS (
+        SELECT id, created_at, created_at::date as created_date
+        FROM public.users
         WHERE created_at >= ${start_date}::timestamp
           AND created_at < ${end_date}::timestamp
+          AND created_via_invite = false
+      ),
+      orgs_in_range AS (
+        SELECT o.id, o.customer_id, o.created_at, o.created_at::date as created_date
+        FROM orgs o
+        INNER JOIN public.users u ON u.id = o.created_by
+        WHERE o.created_at >= ${start_date}::timestamp
+          AND o.created_at < ${end_date}::timestamp
+          AND u.created_via_invite = false
       ),
       orgs_with_apps AS (
         SELECT DISTINCT o.id, o.created_date
@@ -3572,6 +3584,7 @@ export async function getAdminOnboardingFunnel(
           AND si.paid_at < o.created_at + interval '7 days'
       )
       SELECT
+        (SELECT COUNT(*)::int FROM registrations_in_range) as total_registrations,
         (SELECT COUNT(*)::int FROM orgs_in_range) as total_orgs,
         (SELECT COUNT(*)::int FROM orgs_with_apps) as orgs_with_app,
         (SELECT COUNT(*)::int FROM orgs_with_channels) as orgs_with_channel,
@@ -3582,6 +3595,7 @@ export async function getAdminOnboardingFunnel(
     const funnelResult = await drizzleClient.execute(funnelQuery)
     const funnelRow = funnelResult.rows[0] as any || {}
 
+    const totalRegistrations = Number(funnelRow.total_registrations) || 0
     const totalOrgs = Number(funnelRow.total_orgs) || 0
     const orgsWithApp = Number(funnelRow.orgs_with_app) || 0
     const orgsWithChannel = Number(funnelRow.orgs_with_channel) || 0
@@ -3597,19 +3611,31 @@ export async function getAdminOnboardingFunnel(
           '1 day'::interval
         )::date as date
       ),
-      daily_orgs AS (
-        SELECT created_at::date as date, COUNT(*)::int as new_orgs
-        FROM orgs
+      daily_registrations AS (
+        SELECT created_at::date as date, COUNT(*)::int as new_registrations
+        FROM public.users
         WHERE created_at >= ${start_date}::timestamp
           AND created_at < ${end_date}::timestamp
+          AND created_via_invite = false
         GROUP BY created_at::date
+      ),
+      daily_orgs AS (
+        SELECT o.created_at::date as date, COUNT(*)::int as new_orgs
+        FROM orgs o
+        INNER JOIN public.users u ON u.id = o.created_by
+        WHERE o.created_at >= ${start_date}::timestamp
+          AND o.created_at < ${end_date}::timestamp
+          AND u.created_via_invite = false
+        GROUP BY o.created_at::date
       ),
       daily_apps AS (
         SELECT o.created_at::date as date, COUNT(DISTINCT o.id)::int as orgs_created_app
         FROM orgs o
+        INNER JOIN public.users u ON u.id = o.created_by
         INNER JOIN apps a ON a.owner_org = o.id
         WHERE o.created_at >= ${start_date}::timestamp
           AND o.created_at < ${end_date}::timestamp
+          AND u.created_via_invite = false
           AND a.created_at >= o.created_at
           AND a.created_at < o.created_at + interval '7 days'
         GROUP BY o.created_at::date
@@ -3617,10 +3643,12 @@ export async function getAdminOnboardingFunnel(
       daily_channels AS (
         SELECT o.created_at::date as date, COUNT(DISTINCT o.id)::int as orgs_created_channel
         FROM orgs o
+        INNER JOIN public.users u ON u.id = o.created_by
         INNER JOIN apps a ON a.owner_org = o.id
         INNER JOIN channels c ON c.app_id = a.app_id
         WHERE o.created_at >= ${start_date}::timestamp
           AND o.created_at < ${end_date}::timestamp
+          AND u.created_via_invite = false
           AND c.created_at >= o.created_at
           AND c.created_at < o.created_at + interval '7 days'
         GROUP BY o.created_at::date
@@ -3628,19 +3656,23 @@ export async function getAdminOnboardingFunnel(
       daily_bundles AS (
         SELECT o.created_at::date as date, COUNT(DISTINCT o.id)::int as orgs_created_bundle
         FROM orgs o
+        INNER JOIN public.users u ON u.id = o.created_by
         INNER JOIN apps a ON a.owner_org = o.id
         WHERE o.created_at >= ${start_date}::timestamp
           AND o.created_at < ${end_date}::timestamp
+          AND u.created_via_invite = false
           AND ${onboardingBundleEligibility}
         GROUP BY o.created_at::date
       ),
       daily_subscriptions AS (
         SELECT o.created_at::date as date, COUNT(DISTINCT o.id)::int as orgs_subscribed
         FROM orgs o
+        INNER JOIN public.users u ON u.id = o.created_by
         INNER JOIN apps a ON a.owner_org = o.id
         INNER JOIN stripe_info si ON si.customer_id = o.customer_id
         WHERE o.created_at >= ${start_date}::timestamp
           AND o.created_at < ${end_date}::timestamp
+          AND u.created_via_invite = false
           AND ${onboardingBundleEligibility}
           AND si.paid_at IS NOT NULL
           AND si.paid_at >= o.created_at
@@ -3649,12 +3681,14 @@ export async function getAdminOnboardingFunnel(
       )
       SELECT
         ds.date,
+        COALESCE(dregs.new_registrations, 0) as new_registrations,
         COALESCE(dorgs.new_orgs, 0) as new_orgs,
         COALESCE(dapps.orgs_created_app, 0) as orgs_created_app,
         COALESCE(dchannels.orgs_created_channel, 0) as orgs_created_channel,
         COALESCE(dbundles.orgs_created_bundle, 0) as orgs_created_bundle,
         COALESCE(dsubscriptions.orgs_subscribed, 0) as orgs_subscribed
       FROM date_series ds
+      LEFT JOIN daily_registrations dregs ON dregs.date = ds.date
       LEFT JOIN daily_orgs dorgs ON dorgs.date = ds.date
       LEFT JOIN daily_apps dapps ON dapps.date = ds.date
       LEFT JOIN daily_channels dchannels ON dchannels.date = ds.date
@@ -3669,9 +3703,11 @@ export async function getAdminOnboardingFunnel(
         o.created_at as created_at,
         a.app_id as app_id
       FROM orgs o
+      INNER JOIN public.users u ON u.id = o.created_by
       INNER JOIN apps a ON a.owner_org = o.id
       WHERE o.created_at >= ${start_date}::timestamp
         AND o.created_at < ${end_date}::timestamp
+        AND u.created_via_invite = false
         AND ${onboardingBundleEligibility}
     `
 
@@ -3713,6 +3749,7 @@ export async function getAdminOnboardingFunnel(
       const activationTrend = activationMetrics.trend_by_date.get(date)
       return {
         date,
+        new_registrations: Number(row.new_registrations) || 0,
         new_orgs: Number(row.new_orgs) || 0,
         orgs_created_app: Number(row.orgs_created_app) || 0,
         orgs_created_channel: Number(row.orgs_created_channel) || 0,
@@ -3724,6 +3761,7 @@ export async function getAdminOnboardingFunnel(
     })
 
     const result: AdminOnboardingFunnel = {
+      total_registrations: totalRegistrations,
       total_orgs: totalOrgs,
       orgs_with_app: orgsWithApp,
       orgs_with_channel: orgsWithChannel,
@@ -3732,6 +3770,7 @@ export async function getAdminOnboardingFunnel(
       orgs_with_production_device: activationMetrics.orgs_with_production_device,
       orgs_with_update_download: activationMetrics.orgs_with_update_download,
       activation_telemetry_available: activationTelemetry.available,
+      org_conversion_rate: totalRegistrations > 0 ? (totalOrgs / totalRegistrations) * 100 : 0,
       app_conversion_rate: totalOrgs > 0 ? (orgsWithApp / totalOrgs) * 100 : 0,
       channel_conversion_rate: orgsWithApp > 0 ? (orgsWithChannel / orgsWithApp) * 100 : 0,
       bundle_conversion_rate: orgsWithChannel > 0 ? (orgsWithBundle / orgsWithChannel) * 100 : 0,
@@ -3748,6 +3787,7 @@ export async function getAdminOnboardingFunnel(
   catch (e: unknown) {
     logPgError(c, 'getAdminOnboardingFunnel', e)
     return {
+      total_registrations: 0,
       total_orgs: 0,
       orgs_with_app: 0,
       orgs_with_channel: 0,
@@ -3756,6 +3796,7 @@ export async function getAdminOnboardingFunnel(
       orgs_with_production_device: 0,
       orgs_with_update_download: 0,
       activation_telemetry_available: false,
+      org_conversion_rate: 0,
       app_conversion_rate: 0,
       channel_conversion_rate: 0,
       bundle_conversion_rate: 0,
