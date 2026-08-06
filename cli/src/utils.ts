@@ -86,6 +86,25 @@ export function deltaManifestTooLargeMessage(fileCount: number): string {
   ].join('\n')
 }
 
+/**
+ * Stable `name` for the error thrown when the standard (non-TUS) upload hits its
+ * wall-clock timeout. Kept typed and constant so error tracking groups every
+ * occurrence into a single issue instead of one duplicate per CLI version.
+ */
+export const UPLOAD_TIMEOUT_ERROR_NAME = 'BundleUploadTimeoutError'
+
+/** User-facing error when the standard HTTP PUT upload exceeds its wall-clock timeout. */
+export function uploadTimeoutMessage(timeoutMs: number): string {
+  const seconds = Math.round(timeoutMs / 1000)
+  return [
+    `Bundle upload timed out after ${seconds}s.`,
+    `The standard upload has to finish the whole transfer within this window and does not retry, so a large bundle or a slow connection can trip it.`,
+    `What you can do:`,
+    `1. Retry with the resumable upload, which uploads in chunks and retries automatically: npx @capgo/cli@latest bundle upload --tus`,
+    `2. Or raise the limit for the standard upload: npx @capgo/cli@latest bundle upload --timeout <milliseconds>`,
+  ].join('\n')
+}
+
 export const PACKNAME = 'package.json'
 
 export type ArrayElement<ArrayType extends readonly unknown[]>
