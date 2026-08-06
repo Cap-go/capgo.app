@@ -1405,15 +1405,13 @@ and/or to Capgo storage as a time-limited download link (--output-upload).
     after build completion. Build outputs may optionally be uploaded for time-limited download links.
 📋 PREREQUISITE: Save credentials first with:
    `npx @capgo/cli@latest build credentials save --appId <app-id> --platform <ios|android>`
+Android AAB only (no Play upload): npx @capgo/cli@latest build request com.example.app --platform android --no-playstore-upload --output-upload
+iOS IPA only (no TestFlight upload): npx @capgo/cli@latest build request com.example.app --platform ios --ios-distribution ad_hoc --output-upload
 
 **Example:**
 
 ```bash
 npx @capgo/cli@latest build request com.example.app --platform ios --path .
-# Android AAB only (no Play upload):
-npx @capgo/cli@latest build request com.example.app --platform android --no-playstore-upload --output-upload
-# iOS IPA only (no TestFlight upload):
-npx @capgo/cli@latest build request com.example.app --platform ios --ios-distribution ad_hoc --output-upload
 ```
 
 **Options:**
@@ -1435,7 +1433,7 @@ npx @capgo/cli@latest build request com.example.app --platform ios --ios-distrib
 | **--app-store-connect-team-id** | <code>string</code> | iOS: App Store Connect Team ID |
 | **--ios-scheme** | <code>string</code> | iOS: Xcode scheme to build (default: App) |
 | **--ios-target** | <code>string</code> | iOS: Xcode target for reading build settings (default: same as scheme) |
-| **--ios-distribution** | <code>string</code> | iOS: Distribution mode. `app_store` (default) uploads to TestFlight/App Store; `ad_hoc` skips store upload and builds an Ad Hoc IPA. Use `ad_hoc` with `--output-upload` when the App Store app does not exist yet or you only need an IPA download. |
+| **--ios-distribution** | <code>string</code> | iOS: Distribution mode. app_store (default) uploads to TestFlight/App Store; ad_hoc skips store upload and builds an Ad Hoc IPA for device install. Use ad_hoc with --output-upload when the App Store app does not exist yet or you only need an IPA download. |
 | **--ios-provisioning-profile** | <code>string</code> | iOS: Provisioning profile path or bundleId=path mapping (repeatable) |
 | **--android-keystore-file** | <code>string</code> | Android: Base64-encoded keystore file |
 | **--keystore-key-alias** | <code>string</code> | Android: Keystore key alias |
