@@ -15,6 +15,15 @@ describe('app onboarding API key loading state', () => {
     expect(onboardingSource).toMatch(/async function copyCliCommand\(\) \{\s+if \(!apiKey\.value\)\s+return/)
   })
 
+  it.concurrent('renders ready commands as native DaisyUI buttons', () => {
+    expect(onboardingSource.match(/<button\s+v-if="apiKey"/g)).toHaveLength(3)
+    expect(onboardingSource).not.toContain(':role="apiKey ? \'button\' : \'status\'"')
+  })
+
+  it.concurrent('keeps builder API keys exclusively in the API key flag', () => {
+    expect(onboardingSource.match(/<span v-if="!usesBuilderSetupCommand" class="text-emerald-300">&nbsp;\{\{ apiKey \}\}<\/span>/g)).toHaveLength(3)
+  })
+
   it.concurrent('provides concise loading copy in the English locale', () => {
     expect(englishMessages['app-onboarding-command-apikey-loading']).toBe('Creating your secure API key…')
   })
