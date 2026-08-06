@@ -99,6 +99,8 @@ export const buildRequestOptionsSchema = optionsBaseSchema.extend({
   aiAnalysisMode: z.enum(['auto-prompt', 'caller-handled', 'skip']).optional(),
   prescan: z.boolean().optional(),
   prescanIgnoreFatal: z.boolean().optional(),
+  prescanSkip: z.array(z.string()).optional(),
+  prescanWarn: z.array(z.string()).optional(),
   failOnWarnings: z.boolean().optional(),
   builderJourneyId: z.string().optional(),
 })

@@ -54,6 +54,7 @@ appGlobal.route('/logsnag_insights_retention', logsnagInsightsShardApps.retentio
 appGlobal.route('/logsnag_insights_paid_products', logsnagInsightsShardApps.paid_products)
 appGlobal.route('/logsnag_insights_ltv', logsnagInsightsShardApps.ltv)
 appGlobal.route('/logsnag_insights_notifications', logsnagInsightsShardApps.notifications)
+appGlobal.route('/logsnag_insights_native_notifications', logsnagInsightsShardApps.native_notifications)
 appGlobal.route('/on_channel_update', on_channel_update)
 appGlobal.route('/on_user_create', on_user_create)
 appGlobal.route('/on_user_update', on_user_update)

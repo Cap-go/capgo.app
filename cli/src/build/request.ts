@@ -1870,6 +1870,8 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
           credentials: mergedCredentials as Record<string, string>,
           androidFlavor: options.androidFlavor,
           iosDist: options.iosDistribution,
+          skip: options.prescanSkip,
+          warn: options.prescanWarn,
           supaHost: options.supaHost,
           supaAnon: options.supaAnon,
         })).report,
