@@ -17,8 +17,13 @@ describe('app onboarding API key loading state', () => {
   })
 
   it.concurrent('renders a resumed app without waiting for API key provisioning', () => {
+    const resumeLoader = onboardingSource.slice(
+      onboardingSource.indexOf('async function loadResumeApp()'),
+      onboardingSource.indexOf('async function importStoreMetadata('),
+    )
     const mountedFlow = onboardingSource.slice(onboardingSource.indexOf('onMounted(async () => {'))
 
+    expect(resumeLoader).not.toContain('ensureApiKey')
     expect(mountedFlow.indexOf('const resumed = await loadResumeApp()'))
       .toBeLessThan(mountedFlow.indexOf('void ensureApiKey().catch'))
     expect(mountedFlow).not.toContain('await ensureApiKey()')

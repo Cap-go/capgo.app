@@ -396,13 +396,6 @@ async function loadResumeApp() {
   if (resumeStep.value === 'setup') {
     flowStep.value = 'setup'
     hydrateIntentFromCurrentOrg()
-    try {
-      await ensureApiKey()
-    }
-    catch (error) {
-      console.error('Cannot ensure API key', error)
-      toast.error(t('app-onboarding-toast-apikey-error'))
-    }
   }
   else {
     flowStep.value = resumeStep.value === 'choice' ? 'choice' : 'install'

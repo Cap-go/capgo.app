@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Make resume API-key provisioning nonblocking
+## Task 1: Make resume API-key provisioning nonblocking
 
 **Files:**
 - Modify: `src/components/dashboard/AppOnboardingFlow.vue:864-890`
@@ -22,7 +22,12 @@ Add an assertion that the mounted flow contains this order and does not await ke
 
 ```ts
 it.concurrent('renders a resumed app without waiting for API key provisioning', () => {
+  const resumeLoader = onboardingSource.slice(
+    onboardingSource.indexOf('async function loadResumeApp()'),
+    onboardingSource.indexOf('async function importStoreMetadata('),
+  )
   const mountedFlow = onboardingSource.slice(onboardingSource.indexOf('onMounted(async () => {'))
+  expect(resumeLoader).not.toContain('ensureApiKey')
   expect(mountedFlow.indexOf('const resumed = await loadResumeApp()'))
     .toBeLessThan(mountedFlow.indexOf('void ensureApiKey().catch'))
   expect(mountedFlow).not.toContain('await ensureApiKey()')
