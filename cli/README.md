@@ -1459,6 +1459,8 @@ npx @capgo/cli@latest build request com.example.app --platform ios --path .
 | **--ai-analytics** | <code>boolean</code> | On build failure, send logs to Capgo AI for diagnosis. In interactive terminals this skips the upfront confirmation; in CI this auto-uploads and prints the analysis to stderr. |
 | **--no-prescan** | <code>boolean</code> | Skip the automatic pre-build scan |
 | **--prescan-ignore-fatal** | <code>boolean</code> | Run the pre-build scan but never block the build (report only) |
+| **--prescan-skip** | <code>string</code> | Skip specific prescan check(s) by id (repeatable or comma-separated). Other checks still run. |
+| **--prescan-warn** | <code>string</code> | Downgrade specific prescan check(s) to warning by id (repeatable or comma-separated). Check still runs. |
 | **--fail-on-warnings** | <code>boolean</code> | Treat prescan warnings as fatal |
 | **--send-logs-to-support** | <code>boolean</code> | On a CI/CD build failure, automatically upload the build logs to Capgo support (no email required). Capgo support is notified and will follow up by email. Additive to --ai-analytics. |
 | **--send-logs** | <code>boolean</code> | Deprecated alias for --send-logs-to-support |
@@ -1509,6 +1511,8 @@ Checks credentials (expiry, passwords, profile pairing), project state (cap sync
 | **--json** | <code>boolean</code> | Output a machine-readable JSON report |
 | **--fail-on-warnings** | <code>boolean</code> | Exit non-zero when warnings are found (CI) |
 | **--ignore-fatal** | <code>boolean</code> | Diagnostic mode: report everything but always exit 0 |
+| **--skip** | <code>string</code> | Skip specific check(s) by id (repeatable or comma-separated) |
+| **--warn** | <code>string</code> | Downgrade specific check(s) to warning by id (repeatable or comma-separated) |
 | **--verbose** | <code>boolean</code> | Enable verbose output with detailed logging |
 | **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
 | **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |

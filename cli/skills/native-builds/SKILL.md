@@ -7,6 +7,22 @@ description: Use when working with Capgo Cloud native iOS and Android build requ
 
 Use this skill for Capgo Cloud native iOS and Android build workflows.
 
+## Build prescan overrides
+
+Before `build request` uploads, Capgo runs a local/remote **prescan**. Prefer per-check overrides over disabling the whole scan:
+
+- `--prescan-skip <checkId>` — do not run that check (repeatable / comma-separated)
+- `--prescan-warn <checkId>` — still run it, but downgrade findings to warning
+- `--no-prescan` / `--prescan-ignore-fatal` — global escapes; use only when necessary
+
+Example (intentional Capacitor `server.url` / Next.js shell):
+
+```bash
+npx @capgo/cli@latest build request <appId> --platform ios --prescan-skip ios/capacitor-server-url-shipped
+```
+
+Standalone: `build prescan` accepts `--skip` / `--warn`. Full catalog: `webdocs/prescan-checks.mdx`.
+
 ## Onboarding (automated iOS setup)
 
 ### `build init` (alias: `build onboarding`)
