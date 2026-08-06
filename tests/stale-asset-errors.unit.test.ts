@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { getErrorMessage, isKnownCrawlerNoiseErrorMessage, isStaleAssetErrorMessage, shouldSuppressPostHogExceptionEvent } from '../src/services/staleAssetErrors'
+import { getErrorMessage, isKnownCrawlerNoiseErrorMessage, isStaleAssetErrorMessage, isTransientNetworkErrorMessage, shouldSuppressPostHogExceptionEvent } from '../src/services/staleAssetErrors'
 
 describe('stale asset error helpers', () => {
   it('matches the stale asset errors currently seen in PostHog', () => {
@@ -23,6 +23,38 @@ describe('stale asset error helpers', () => {
     expect(isKnownCrawlerNoiseErrorMessage('Object Not Found Matching Id:2, MethodName:update, ParamCount:4')).toBe(true)
     expect(isKnownCrawlerNoiseErrorMessage('Non-Error promise rejection captured with value: Object Not Found Matching Id:5')).toBe(true)
     expect(isKnownCrawlerNoiseErrorMessage('Cannot read properties of null (reading \'save\')')).toBe(false)
+  })
+
+  it('matches the transient browser network failures seen across engines', () => {
+    expect(isTransientNetworkErrorMessage('Failed to fetch')).toBe(true)
+    expect(isTransientNetworkErrorMessage('Load failed')).toBe(true)
+    expect(isTransientNetworkErrorMessage('NetworkError when attempting to fetch resource.')).toBe(true)
+    // Wrapped by downloadUrl's non-TypeError fallback path
+    expect(isTransientNetworkErrorMessage('downloadUrl error: NetworkError when attempting to fetch resource.')).toBe(true)
+    expect(isTransientNetworkErrorMessage('downloadUrl error: Failed to fetch')).toBe(true)
+  })
+
+  it('does not match richer messages that merely start with the same words', () => {
+    expect(isTransientNetworkErrorMessage('Failed to fetch organization insights')).toBe(false)
+    expect(isTransientNetworkErrorMessage('Failed to fetch dynamically imported module: https://console.capgo.app/assets/dashboard.js')).toBe(false)
+    expect(isTransientNetworkErrorMessage('downloadUrl error: HTTP 500')).toBe(false)
+    expect(isTransientNetworkErrorMessage(undefined)).toBe(false)
+  })
+
+  it('suppresses transient browser network exception events in PostHog', () => {
+    expect(shouldSuppressPostHogExceptionEvent({
+      event: '$exception',
+      properties: {
+        $exception_list: [{ value: 'Failed to fetch' }],
+      },
+    })).toBe(true)
+
+    expect(shouldSuppressPostHogExceptionEvent({
+      event: '$exception',
+      properties: {
+        $exception_values: ['downloadUrl error: NetworkError when attempting to fetch resource.'],
+      },
+    })).toBe(true)
   })
 
   it('extracts useful messages from arbitrary rejection values', () => {
