@@ -137,9 +137,12 @@ describe('stripe portal URL cache', () => {
     await confirmHandler(0)()
     await openPortal('org-b', t)
     await confirmHandler(1)()
+    await openPortal('org-a', t)
+    await confirmHandler(2)()
 
     expect(mocks.invokeCapgoApi).toHaveBeenCalledTimes(2)
     expect(mocks.openWindow).toHaveBeenNthCalledWith(1, 'https://portal.example/org-a', '_blank')
     expect(mocks.openWindow).toHaveBeenNthCalledWith(2, 'https://portal.example/org-b', '_blank')
+    expect(mocks.openWindow).toHaveBeenNthCalledWith(3, 'https://portal.example/org-a', '_blank')
   })
 })

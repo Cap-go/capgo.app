@@ -38,13 +38,13 @@ export function openBlank(link: string) {
 }
 
 const PORTAL_URL_CACHE_TTL_MS = 3 * 60 * 1000
-let portalUrlCache: { orgId: string, url: string, createdAt: number } | undefined
+const portalUrlCache = new Map<string, { url: string, createdAt: number }>()
 
 export async function openPortal(orgId: string, t: ComposerTranslation) {
   const dialogStore = useDialogV2Store()
-  const cachedUrl = portalUrlCache?.orgId === orgId
-    && Date.now() - portalUrlCache.createdAt < PORTAL_URL_CACHE_TTL_MS
-    ? portalUrlCache.url
+  const cachedEntry = portalUrlCache.get(orgId)
+  const cachedUrl = cachedEntry && Date.now() - cachedEntry.createdAt < PORTAL_URL_CACHE_TTL_MS
+    ? cachedEntry.url
     : ''
   const portalUrl = cachedUrl
     ? Promise.resolve(cachedUrl)
@@ -53,7 +53,7 @@ export async function openPortal(orgId: string, t: ComposerTranslation) {
       }).then(({ data }) => {
         const url = data?.url || ''
         if (url)
-          portalUrlCache = { orgId, url, createdAt: Date.now() }
+          portalUrlCache.set(orgId, { url, createdAt: Date.now() })
         return url
       }, () => '')
 
