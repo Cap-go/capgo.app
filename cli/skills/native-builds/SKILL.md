@@ -131,13 +131,13 @@ interface BuildLogger {
 
 #### Output behavior options
 
-- `--no-playstore-upload`: skip Play Store upload for the build, requires `--output-upload`
+- `--output-upload`: upload the finished IPA/APK/AAB to Capgo storage and print a time-limited download link (and QR)
+- `--no-output-upload`: skip Capgo storage upload (no download link); store upload can still happen when store credentials are set
+- `--no-playstore-upload`: Android — skip Google Play upload for this build (ignores saved Play credentials). Requires `--output-upload`. Use when the Play app does not exist yet or you only need the AAB download
 - `--submit-to-store-review`: submit after upload instead of leaving a draft/inactive store release. Android completes the Google Play release; iOS submits to TestFlight external review.
 - `--store-release-name <name>`: Android Google Play version_name/release label.
 - `--store-release-notes <notes>`: Google Play changelog and iOS TestFlight What to Test text.
 - `--ios-testflight-groups <groups>`: comma-separated external TestFlight group names or IDs required with `--submit-to-store-review` on iOS.
-- `--output-upload`
-- `--no-output-upload`
 - `--output-retention <duration>`: `1h` to `7d`
 - `--skip-build-number-bump`
 - `--no-skip-build-number-bump`

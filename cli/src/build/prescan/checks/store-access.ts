@@ -33,7 +33,7 @@ const STORE_ACCESS_TIMEOUT_MS = 7000
 /** ASC authentication failures become build-blocking after a 14-day rollout. */
 export const ASC_PRESCAN_AUTH_ENFORCE_AFTER = '2026-08-17T00:00:00.000Z'
 
-const PLAY_FIX = 'Invite the service-account email in Play Console -> Users and permissions, then grant it release access for this app.'
+const PLAY_FIX = 'Invite the service-account email in Play Console → Users and permissions and grant release access for this app. If the Play app does not exist yet and you only need the AAB, re-run with --no-playstore-upload --output-upload.'
 const ASC_FIX = 'App Store Connect rejected the API key - check the Key ID / Issuer ID / .p8 and that the key has Admin or Developer access (or sign the pending agreement).'
 const ASC_AGREEMENT_CODES = new Set([
   'FORBIDDEN.REQUIRED_AGREEMENTS_MISSING_OR_EXPIRED',
@@ -182,7 +182,7 @@ export function makePlaySaAccess(validator: PlayValidator): PrescanCheck {
           return [{
             id: 'android/play-sa-access',
             severity: effective.ambiguous ? 'warning' : 'error',
-            title: 'The Play service account cannot access this app',
+            title: 'Play Store upload blocked: app missing or service account has no access',
             detail: result.message,
             fix: PLAY_FIX,
           }]

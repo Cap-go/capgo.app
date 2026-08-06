@@ -897,8 +897,9 @@ build
   .command('request [appId]')
   .description(`Request a native build from Capgo Cloud.
 
-This command will zip your project directory and upload it to Capgo for building.
-The build will be processed and sent directly to app stores.
+This command zips your project and uploads it to Capgo for a remote native build.
+By default the finished artifact can go to the app store (when store credentials are saved)
+and/or to Capgo storage as a time-limited download link (--output-upload).
 
  🔒 SECURITY: Credentials are never stored on Capgo servers. They are auto-deleted
     after build completion. Build outputs may optionally be uploaded for time-limited download links.
@@ -906,7 +907,8 @@ The build will be processed and sent directly to app stores.
 📋 PREREQUISITE: Save credentials first with:
    \`npx @capgo/cli build credentials save --appId <app-id> --platform <ios|android>\`
 
-Example: npx @capgo/cli@latest build request com.example.app --platform ios --path .`)
+Example: npx @capgo/cli@latest build request com.example.app --platform ios --path .
+Android AAB only (no Play upload): npx @capgo/cli@latest build request com.example.app --platform android --no-playstore-upload --output-upload`)
   .action(requestBuildCommand)
   .option('--path <path>', `Path to the project directory to build (default: current directory)`)
   .option('--node-modules <nodeModules>', optionDescriptions.nodeModules)
@@ -934,7 +936,7 @@ Example: npx @capgo/cli@latest build request com.example.app --platform ios --pa
   .option('--play-config-json <json>', 'Android: Base64-encoded Google Play service account JSON')
   .option('--android-flavor <flavor>', 'Android: Product flavor to build (e.g. production). Required if your project has multiple flavors.')
   .option('--in-app-update-priority <priority>', 'Android: Google Play in-app update priority for this release (integer 0–5; higher = more urgent). See https://developer.android.com/guide/playcore/in-app-updates. Precedence: CLI > env > saved credentials')
-  .option('--no-playstore-upload', 'Skip Play Store upload for this build (nulls out saved play config). Requires --output-upload.')
+  .option('--no-playstore-upload', 'Android: do not upload the AAB/APK to Google Play for this build (ignores saved Play credentials). Use when the Play app does not exist yet, or you only want a Capgo download link. Requires --output-upload.')
   .option('--submit-to-store-review', 'After upload, submit the store release for review instead of leaving it as a draft/inactive build. Android marks the Play release completed; iOS submits the processed TestFlight build to App Store review.')
   .option('--store-release-name <name>', 'Store release name/version label. Android sends this as the Google Play version_name; iOS uses it as the App Store version when creating or reusing the editable version.')
   .option('--store-release-notes <notes>', 'Default store release notes. Android uses this as the Play changelog; iOS uses it as the fallback App Store What\'s New text.')
@@ -942,8 +944,8 @@ Example: npx @capgo/cli@latest build request com.example.app --platform ios --pa
   .option('--ios-testflight-groups <groups>', 'iOS: optional comma-separated TestFlight external group names or IDs for external beta distribution.')
   .option('--ios-automatic-release', 'iOS: automatically release the App Store version after Apple approval. Default is manual release.')
   .option('--no-ios-automatic-release', 'iOS: keep the App Store version waiting for manual release after Apple approval.')
-  .option('--output-upload', 'Override output upload behavior for this build only (enable). Precedence: CLI > env > saved credentials')
-  .option('--no-output-upload', 'Override output upload behavior for this build only (disable). Precedence: CLI > env > saved credentials')
+  .option('--output-upload', 'Upload the finished IPA/APK/AAB to Capgo storage and print a time-limited download link (and QR). Use with --no-playstore-upload when you only need the AAB and are not publishing to Play yet. Precedence: CLI > env > saved credentials')
+  .option('--no-output-upload', 'Do not upload the finished IPA/APK/AAB to Capgo storage (no download link). Store upload still happens when Play/TestFlight credentials are configured. Precedence: CLI > env > saved credentials')
   .option('--output-retention <duration>', 'Override output link TTL for this build only (1h to 7d). Examples: 1h, 6h, 2d. Precedence: CLI > env > saved credentials')
   .option('--output-record <path>', 'After a successful build, write a JSON record (jobId, status, outputUrl, qrCodeAscii, qrCodePngPath, finishedAt) to <path>. A PNG QR code is also written next to it as <path>.qr.png. Read fields back with `build last-output`.')
   .option('--skip-build-number-bump', 'Skip automatic build number/version code incrementing. Uses whatever version is already in the project files.')

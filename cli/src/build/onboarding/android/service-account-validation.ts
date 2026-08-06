@@ -464,7 +464,7 @@ export async function validateServiceAccountJson(opts: ValidateOptions): Promise
       ok: false,
       kind: 'no-app-access',
       serviceAccountEmail: key.client_email,
-      message: `Service account "${key.client_email}" cannot access package "${opts.packageName}" on Google Play (${probe.detail}). Open Play Console → Users and permissions, invite the service account email, and grant access to this app.`,
+      message: `Service account "${key.client_email}" cannot access package "${opts.packageName}" on Google Play (${probe.detail}). Create the app in Play Console (if it does not exist yet) and invite this service account under Users and permissions, or skip Play upload and get the AAB via Capgo with --no-playstore-upload --output-upload.`,
     }
   }
   return {
