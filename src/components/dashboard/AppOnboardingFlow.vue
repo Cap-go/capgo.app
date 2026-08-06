@@ -1266,7 +1266,7 @@ watch(appName, (value) => {
                     <IconCopy class="absolute right-4 top-4 h-5 w-5 text-muted-blue-300 transition group-hover:text-white" />
                   </button>
                   <div v-else class="rounded-xl bg-slate-950 p-4 pr-14 ring-1 ring-white/10" role="status">
-                    <div class="flex min-h-6 items-center gap-3 text-sm text-slate-300" aria-live="polite">
+                    <div class="flex min-h-6 items-center gap-3 text-sm text-slate-300">
                       <Spinner size="w-5 h-5" />
                       <span>{{ t('app-onboarding-command-apikey-loading') }}</span>
                     </div>
@@ -1419,7 +1419,7 @@ watch(appName, (value) => {
             <IconCopy class="absolute right-4 top-4 h-5 w-5 text-muted-blue-300 transition group-hover:text-white" />
           </button>
           <div v-else class="rounded-2xl bg-slate-950 p-5 pr-14 ring-1 ring-white/10" role="status">
-            <div class="flex min-h-6 items-center gap-3 text-sm text-slate-300" aria-live="polite">
+            <div class="flex min-h-6 items-center gap-3 text-sm text-slate-300">
               <Spinner size="w-5 h-5" />
               <span>{{ t('app-onboarding-command-apikey-loading') }}</span>
             </div>
@@ -1559,7 +1559,7 @@ watch(appName, (value) => {
               <IconCopy class="absolute right-4 top-4 h-5 w-5 text-muted-blue-300 transition group-hover:text-white" />
             </button>
             <div v-else class="rounded-2xl bg-slate-950 p-5 pr-14 ring-1 ring-white/10" role="status">
-              <div class="flex min-h-6 items-center gap-3 text-sm text-slate-300" aria-live="polite">
+              <div class="flex min-h-6 items-center gap-3 text-sm text-slate-300">
                 <Spinner size="w-5 h-5" />
                 <span>{{ t('app-onboarding-command-apikey-loading') }}</span>
               </div>
