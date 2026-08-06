@@ -56,15 +56,12 @@ watch(() => props.appId, () => {
 </script>
 
 <template>
-  <div
+  <button
     v-if="unresolvedCount > 0"
+    type="button"
     data-test="compatibility-banner"
-    role="button"
-    tabindex="0"
-    class="mb-4 overflow-hidden transition-colors border rounded-lg cursor-pointer border-amber-200 bg-amber-50 hover:bg-amber-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 dark:bg-amber-900/20 dark:border-amber-800 dark:hover:bg-amber-900/30"
+    class="block w-full mb-4 overflow-hidden text-left transition-colors border rounded-lg cursor-pointer border-amber-200 bg-amber-50 hover:bg-amber-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 dark:bg-amber-900/20 dark:border-amber-800 dark:hover:bg-amber-900/30"
     @click="viewCompatibility"
-    @keydown.enter.prevent="viewCompatibility"
-    @keydown.space.prevent="viewCompatibility"
   >
     <div class="flex items-center justify-between p-4">
       <div class="flex items-center gap-3">
@@ -82,14 +79,13 @@ watch(() => props.appId, () => {
         </div>
       </div>
 
-      <button
+      <!-- Visual affordance only: the whole card is the button, so this is a span. -->
+      <span
         data-test="compatibility-banner-view"
-        tabindex="-1"
-        class="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white transition-colors rounded-md bg-amber-600 hover:bg-amber-700 shrink-0"
-        @click.stop="viewCompatibility"
+        class="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white rounded-md bg-amber-600 shrink-0"
       >
         {{ t('compatibility-view-details') }}
-      </button>
+      </span>
     </div>
-  </div>
+  </button>
 </template>

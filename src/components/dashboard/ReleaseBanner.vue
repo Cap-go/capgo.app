@@ -108,15 +108,12 @@ watch(() => [props.appId, organizationStore.currentOrganization?.gid], () => {
 </script>
 
 <template>
-  <div
+  <button
     v-if="hasRecentRelease"
+    type="button"
     data-test="release-banner"
-    role="button"
-    tabindex="0"
-    class="mb-4 overflow-hidden transition-colors border rounded-lg cursor-pointer border-emerald-200 bg-emerald-50 hover:bg-emerald-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 dark:bg-emerald-900/20 dark:border-emerald-800 dark:hover:bg-emerald-900/30"
+    class="block w-full mb-4 overflow-hidden text-left transition-colors border rounded-lg cursor-pointer border-emerald-200 bg-emerald-50 hover:bg-emerald-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 dark:bg-emerald-900/20 dark:border-emerald-800 dark:hover:bg-emerald-900/30"
     @click="viewStats"
-    @keydown.enter.prevent="viewStats"
-    @keydown.space.prevent="viewStats"
   >
     <div class="flex items-center justify-between p-4">
       <div class="flex items-center gap-3">
@@ -136,16 +133,15 @@ watch(() => [props.appId, organizationStore.currentOrganization?.gid], () => {
         </div>
       </div>
 
-      <button
+      <!-- Visual affordance only: the whole card is the button, so this is a span. -->
+      <span
         v-if="defaultChannelId"
         data-test="release-banner-view"
-        tabindex="-1"
-        class="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white transition-colors rounded-md bg-emerald-600 hover:bg-emerald-700 shrink-0"
-        @click.stop="viewStats"
+        class="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white rounded-md bg-emerald-600 shrink-0"
       >
         <IconTrendingUp class="w-4 h-4" />
         {{ t('view-adoption') }}
-      </button>
+      </span>
     </div>
-  </div>
+  </button>
 </template>
