@@ -52,7 +52,16 @@ async function init() {
   }
 }
 
-watch(currentOrganization, () => init())
+watch(() => currentOrganization.value?.gid, (orgId, previousOrgId) => {
+  if (!orgId || orgId === previousOrgId)
+    return
+  if (lacksSecurityAccess.value)
+    return
+  // Refresh the app count for the newly selected org without toggling the
+  // full-page loader — flipping isLoading would remount AppOnboardingFlow and
+  // discard whatever the user had already typed into the setup form.
+  void fetchAppsCount()
+})
 
 onMounted(() => {
   displayStore.NavTitle = ''

@@ -180,6 +180,7 @@ const canCreateOrganization = computed(() => {
 const hasExistingOrganization = computed(() => organizationStore.organizations.some(org => !org.role.includes('invite')))
 const inviteSuccessCount = computed(() => sentInvites.value.length)
 const isCompactCreateOrgFlow = computed(() => isAdditionalOrgFlow.value)
+const canCreateCompactOrganization = computed(() => !!main.auth && !isSubmitting.value && !!orgNameInput.value.trim())
 const onboardingBadge = computed(() => isCompactCreateOrgFlow.value
   ? t('organization-create-badge')
   : t('organization-onboarding-badge'))
@@ -416,6 +417,60 @@ async function saveSupportUsernames() {
 
   if (main.user?.id === user.id)
     main.user = user
+}
+
+async function createCompactOrganization() {
+  if (isSubmitting.value || !main.auth)
+    return
+
+  const orgName = orgNameInput.value.trim()
+  if (!orgName) {
+    toast.error(t('org-name-required'))
+    return
+  }
+
+  isSubmitting.value = true
+
+  try {
+    // Additional orgs created from the switcher skip the new-user wizard
+    // (intent gate, MAU picker, logo, invite). The backend defaults the
+    // estimated MAU and onboarding intent when they are omitted.
+    const { data, error } = await invokeCapgoApi('organization', {
+      method: 'POST',
+      body: {
+        name: orgName,
+        email: main.auth.email ?? '',
+      },
+    })
+
+    if (error || !data?.id) {
+      console.error('Error creating organization from switcher', error)
+      const errorCode = await getCapgoApiErrorCode(error)
+      toast.error(errorCode === '23505'
+        ? t('org-with-this-name-exists')
+        : t('cannot-create-org'))
+      return
+    }
+
+    toast.success(t('org-created-successfully'))
+
+    try {
+      await organizationStore.fetchOrganizations()
+      organizationStore.setCurrentOrganization(data.id)
+    }
+    catch (error) {
+      console.error('Failed to refresh organizations after compact create', error)
+      toast.error(t('organization-onboarding-refresh-failed'))
+    }
+
+    const target = typeof route.query.to === 'string' && route.query.to && !route.query.to.startsWith('/onboarding/')
+      ? route.query.to
+      : '/dashboard'
+    await router.push(target)
+  }
+  finally {
+    isSubmitting.value = false
+  }
 }
 
 async function createOrganization() {
@@ -787,7 +842,7 @@ onUnmounted(() => {
             {{ onboardingSubtitle }}
           </p>
 
-          <nav class="mt-6" :aria-label="t('organization-onboarding-step-details')">
+          <nav v-if="!isCompactCreateOrgFlow" class="mt-6" :aria-label="t('organization-onboarding-step-details')">
             <ol class="flex items-center gap-2">
               <li
                 v-for="(entry, index) in onboardingSteps"
@@ -822,7 +877,44 @@ onUnmounted(() => {
         </header>
 
         <div v-if="step === 'details'" class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5 dark:border-white/15 dark:bg-slate-900/95">
-          <div class="space-y-6">
+          <div v-if="isCompactCreateOrgFlow" class="space-y-5">
+            <div>
+              <label for="onboarding-org-name-input" class="text-sm font-medium text-slate-800 dark:text-slate-200">
+                {{ t('organization-name') }}
+              </label>
+              <input
+                id="onboarding-org-name-input"
+                v-model="orgNameInput"
+                type="text"
+                :placeholder="t('organization-name')"
+                data-test="onboarding-org-name"
+                class="mt-2 min-h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-base text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/10 sm:text-sm dark:border-white/20 dark:bg-slate-950/90 dark:text-white dark:placeholder:text-slate-500 dark:focus:border-primary-500 dark:focus:ring-primary-500/30"
+                @keydown.enter.prevent="createCompactOrganization"
+              >
+              <p class="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">
+                {{ t('organization-create-name-helper') }}
+              </p>
+            </div>
+
+            <div class="flex flex-col-reverse gap-3 border-t border-slate-200 pt-4 sm:flex-row sm:justify-between dark:border-white/15">
+              <button type="button" class="d-btn min-h-11" :class="whiteCardSecondaryButtonClass()" @click="goBack">
+                {{ t('cancel') }}
+              </button>
+              <button
+                type="button"
+                class="d-btn min-h-11"
+                :class="whiteCardPrimaryButtonClass()"
+                data-test="onboarding-create-org"
+                :disabled="!canCreateCompactOrganization"
+                @click="createCompactOrganization"
+              >
+                <span v-if="!isSubmitting">{{ t('organization-create-submit') }}</span>
+                <IconArrowRight v-if="!isSubmitting" class="h-4 w-4" />
+                <IconLoader v-else class="h-4 w-4 animate-spin" />
+              </button>
+            </div>
+          </div>
+          <div v-else class="space-y-6">
             <div>
               <h2 class="text-lg font-semibold text-slate-950 dark:text-white">
                 {{ t('organization-onboarding-intent-question') }}

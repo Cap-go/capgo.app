@@ -287,6 +287,49 @@ describe('auth guard SSO provisioning', () => {
     })
   })
 
+  it.concurrent('stops bouncing an eligible user back to /app/new once they leave the resume flow', async () => {
+    await withTestContext(async (context) => {
+      context.mockApps.push({ app_id: 'com.test.pending-onboarding', need_onboarding: true })
+      context.mockGetSession.mockResolvedValue({
+        data: {
+          session: {
+            access_token: 'token-123',
+            user: {
+              id: 'user-leaves-onboarding',
+              email: 'user@managed.test',
+              created_at: '2026-08-04T14:01:00.000Z',
+              email_confirmed_at: '2026-04-15T10:00:00.000Z',
+              app_metadata: { provider: 'email', providers: ['email'] },
+            },
+          },
+        },
+      })
+      const guard = await getGuard()
+
+      // Leaving /app/new (Back, breadcrumb, sidebar tab) is respected instead
+      // of being reverted straight back to the setup flow.
+      const leave = vi.fn()
+      await guard(
+        { path: '/apps', fullPath: '/apps', meta: { middleware: 'auth' }, query: {} },
+        { path: '/app/new', fullPath: '/app/new?resume=com.test.pending-onboarding', query: { resume: 'com.test.pending-onboarding' } },
+        leave,
+      )
+      expect(leave).toHaveBeenCalledWith()
+      expect(leave).not.toHaveBeenCalledWith(expect.objectContaining({ path: '/app/new' }))
+
+      // A subsequent navigation (even one that no longer starts from /app/new,
+      // e.g. after a reload) also stays put thanks to the persisted grant.
+      const later = vi.fn()
+      await guard(
+        { path: '/settings/account', fullPath: '/settings/account', meta: { middleware: 'auth' }, query: {} },
+        { path: '/apps', fullPath: '/apps', query: {} },
+        later,
+      )
+      expect(later).toHaveBeenCalledWith()
+      expect(later).not.toHaveBeenCalledWith(expect.objectContaining({ path: '/app/new' }))
+    })
+  })
+
   it.concurrent('loads plans before redirecting a newly authenticated user into onboarding', async () => {
     await withTestContext(async (context) => {
       const loadedPlans = [{ name: 'Solo' }]

@@ -11,7 +11,7 @@ import { sendEvent } from '~/services/tracking'
 import { clearWebsitePaidUserCookie, setWebsitePaidUserCookie } from '~/services/websiteAuthCookie'
 import { useMainStore } from '~/stores/main'
 import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
-import { getOnboardingResumeRedirect, isNewOnboardingUser } from '~/utils/onboardingRedirect'
+import { allowOnboardingDashboardExploration, canExploreOnboardingDashboard, getOnboardingResumeRedirect, isNewOnboardingUser } from '~/utils/onboardingRedirect'
 import { hasPendingInviteSkip } from '~/utils/pendingInviteSkip'
 import { getPlans, isPlatformAdmin } from './../services/supabase'
 
@@ -240,6 +240,17 @@ async function guard(
     if (!organizationsLoaded)
       return null
     if (!isNewOnboardingUser(sessionUser?.created_at))
+      return null
+
+    // Leaving the resume flow on purpose (Back, breadcrumb, sidebar tab) is a
+    // clear signal the user wants out. Persist the exploration grant so the
+    // guard stops bouncing them back to /app/new on every navigation.
+    if (from.path === '/app/new' && to.path !== '/app/new') {
+      const resumeAppId = typeof from.query.resume === 'string' ? from.query.resume : null
+      allowOnboardingDashboardExploration(sessionUser?.id, resumeAppId)
+    }
+
+    if (canExploreOnboardingDashboard(sessionUser?.id))
       return null
 
     const selectableOrganizations = organizationStore.organizations.filter(org => !isPendingOrganizationInvite(org))

@@ -1759,6 +1759,7 @@
   "org-with-this-name-exists": "You have already created an organization with this name!",
   "organization": "Organization",
   "organization-create-badge": "New organization",
+  "organization-create-name-helper": "Just pick a name to get started. You can add a logo and invite teammates later from organization settings.",
   "organization-create-submit": "Create organization",
   "organization-create-subtitle": "Set up another organization without going through onboarding again.",
   "organization-create-title": "Create a new organization",
