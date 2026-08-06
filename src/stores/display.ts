@@ -171,9 +171,12 @@ export const useDisplayStore = defineStore('display', () => {
             if (currentCacheOrgId.value !== requestOrgId)
               return
 
-            if (!error) {
-              appNameCache.value.set(appId, data?.name ?? null)
-              if (data?.name && lastPath.value)
+            if (!error && data === null) {
+              appNameCache.value.set(appId, null)
+            }
+            else if (!error && data?.name) {
+              appNameCache.value.set(appId, data.name)
+              if (lastPath.value)
                 updatePathTitle(lastPath.value)
             }
           }

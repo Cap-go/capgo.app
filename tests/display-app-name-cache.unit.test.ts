@@ -11,7 +11,7 @@ vi.mock('~/services/supabase', () => ({
 }))
 
 interface LookupResult {
-  data: { name: string } | null
+  data: { name: string | null } | null
   error: unknown
 }
 
@@ -52,6 +52,23 @@ describe('display app-name lookups', () => {
     display.updatePathTitle('/app/com.missing.app')
 
     expect(mockMaybeSingle).toHaveBeenCalledTimes(1)
+  })
+
+  it('retries when the app row exists but its name is not ready', async () => {
+    const lookup = deferredLookup()
+    mockMaybeSingle
+      .mockReturnValueOnce(lookup.promise)
+      .mockReturnValue(new Promise(() => {}))
+
+    const { useDisplayStore } = await import('../src/stores/display.ts')
+    const display = useDisplayStore()
+
+    display.updatePathTitle('/app/com.pending.app')
+    lookup.resolve({ data: { name: null }, error: null })
+    await flushPromises()
+    display.updatePathTitle('/app/com.pending.app')
+
+    expect(mockMaybeSingle).toHaveBeenCalledTimes(2)
   })
 
   it('ignores a missing result from the previous organization', async () => {
