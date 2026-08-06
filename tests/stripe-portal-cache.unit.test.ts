@@ -126,6 +126,26 @@ describe('stripe portal URL cache', () => {
     expect(mocks.openWindow).toHaveBeenLastCalledWith('https://portal.example/two', '_blank')
   })
 
+  it('fetches a fresh URL when the callback URL changes', async () => {
+    mocks.invokeCapgoApi
+      .mockResolvedValueOnce({ data: { url: 'https://portal.example/billing' }, error: null })
+      .mockResolvedValueOnce({ data: { url: 'https://portal.example/settings' }, error: null })
+    const { openPortal } = await import('../src/services/stripe')
+    const t = ((key: string) => key) as never
+
+    await openPortal('org-a', t)
+    await confirmHandler(0)()
+    globalThis.location.href = 'https://app.example/settings'
+    await openPortal('org-a', t)
+    await confirmHandler(1)()
+
+    expect(mocks.invokeCapgoApi).toHaveBeenCalledTimes(2)
+    expect(mocks.invokeCapgoApi).toHaveBeenLastCalledWith('private/stripe_portal', {
+      body: JSON.stringify({ callbackUrl: 'https://app.example/settings', orgId: 'org-a' }),
+    })
+    expect(mocks.openWindow).toHaveBeenLastCalledWith('https://portal.example/settings', '_blank')
+  })
+
   it('never reuses a cached URL for another organization', async () => {
     mocks.invokeCapgoApi
       .mockResolvedValueOnce({ data: { url: 'https://portal.example/org-a' }, error: null })

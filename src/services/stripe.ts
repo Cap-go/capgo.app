@@ -38,22 +38,28 @@ export function openBlank(link: string) {
 }
 
 const PORTAL_URL_CACHE_TTL_MS = 3 * 60 * 1000
-const portalUrlCache = new Map<string, { url: string, createdAt: number }>()
+const portalUrlCache = new Map<string, { url: string, callbackUrl: string, createdAt: number }>()
 
 export async function openPortal(orgId: string, t: ComposerTranslation) {
   const dialogStore = useDialogV2Store()
+  const now = Date.now()
+  for (const [cachedOrgId, entry] of portalUrlCache) {
+    if (now - entry.createdAt >= PORTAL_URL_CACHE_TTL_MS)
+      portalUrlCache.delete(cachedOrgId)
+  }
+  const callbackUrl = globalThis.location.href
   const cachedEntry = portalUrlCache.get(orgId)
-  const cachedUrl = cachedEntry && Date.now() - cachedEntry.createdAt < PORTAL_URL_CACHE_TTL_MS
+  const cachedUrl = cachedEntry?.callbackUrl === callbackUrl
     ? cachedEntry.url
     : ''
   const portalUrl = cachedUrl
     ? Promise.resolve(cachedUrl)
     : invokeCapgoApi('private/stripe_portal', {
-        body: JSON.stringify({ callbackUrl: globalThis.location.href, orgId }),
+        body: JSON.stringify({ callbackUrl, orgId }),
       }).then(({ data }) => {
         const url = data?.url || ''
         if (url)
-          portalUrlCache.set(orgId, { url, createdAt: Date.now() })
+          portalUrlCache.set(orgId, { url, callbackUrl, createdAt: Date.now() })
         return url
       }, () => '')
 
