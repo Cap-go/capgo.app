@@ -10,7 +10,7 @@ import {
 } from '../scripts/supabase-cloud-functions'
 
 describe('supabase cloud function allowlist', () => {
-  it('keeps pg_net triggers forever and CLI-deprecated functions until sunset', () => {
+  it.concurrent('keeps pg_net triggers forever and CLI-deprecated functions until sunset', () => {
     expect([...CAPGO_CLOUD_SUPABASE_FUNCTIONS_FOREVER]).toEqual(['triggers'])
     expect([...CAPGO_CLOUD_SUPABASE_FUNCTIONS_CLI_DEPRECATION]).toEqual([
       'bundle',
@@ -29,22 +29,22 @@ describe('supabase cloud function allowlist', () => {
     expect(buildCapgoCloudSupabaseDeployArgs()).toEqual([...CAPGO_CLOUD_SUPABASE_FUNCTIONS])
   })
 
-  it('no longer publishes console-only invoke targets on Capgo cloud Supabase', () => {
+  it.concurrent('no longer publishes console-only invoke targets on Capgo cloud Supabase', () => {
     for (const name of ['apikey', 'app', 'organization', 'statistics', 'webhooks'] as const) {
       expect(CAPGO_CLOUD_SUPABASE_FUNCTIONS).not.toContain(name)
       expect(listCapgoCloudSkippedSupabaseFunctions()).toContain(name)
     }
   })
 
-  it('builds deploy args from an explicit list', () => {
+  it.concurrent('builds deploy args from an explicit list', () => {
     expect(buildCapgoCloudSupabaseDeployArgs(['triggers', 'ok'])).toEqual(['triggers', 'ok'])
   })
 
-  it('rejects an empty Capgo cloud deploy selection', () => {
+  it.concurrent('rejects an empty Capgo cloud deploy selection', () => {
     expect(() => buildCapgoCloudSupabaseDeployArgs([])).toThrow('CAPGO_CLOUD_SUPABASE_FUNCTIONS must not be empty')
   })
 
-  it('skips Capgo-cloud-only unused local functions while keeping allowlisted ones', () => {
+  it.concurrent('skips Capgo-cloud-only unused local functions while keeping allowlisted ones', () => {
     const local = listLocalSupabaseFunctions()
     expect(local).toContain('triggers')
     expect(local).toContain('private')
