@@ -55,10 +55,17 @@ export function isRetryableInvokeError(error: unknown): boolean {
       || message.includes('Failed to send a request to the Edge Function'))
 }
 
+/** Uniform fraction in [0, 1) from the crypto RNG (Math.random is flagged by static analysis). */
+function jitterFraction(): number {
+  const buffer = new Uint32Array(1)
+  globalThis.crypto.getRandomValues(buffer)
+  return buffer[0] / 2 ** 32
+}
+
 /** Exponential backoff with full jitter, capped, so retries don't stampede a recovering backend. */
 export function retryBackoffMs(attempt: number): number {
   const exponential = Math.min(3000, 300 * 2 ** attempt)
-  return Math.round(exponential / 2 + Math.random() * (exponential / 2))
+  return Math.round(exponential / 2 + jitterFraction() * (exponential / 2))
 }
 
 function sleep(ms: number): Promise<void> {
