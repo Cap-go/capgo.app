@@ -4,7 +4,7 @@
  * numbered lists (`1.`), bullet lists (`-` / `*`), and plain paragraphs.
  *
  * No external dep — uses raw ANSI escape sequences. Falls back to the input
- * unchanged when stdout is not a TTY so the output stays grep-able / pipeable.
+ * unchanged when stdout is not a TTY, so output remains grep-able and pipeable.
  *
  * Foreground colors only, deliberately: terminal themes vary (dark, light,
  * blue…), so background "chips" can't look right everywhere.
