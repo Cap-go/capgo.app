@@ -182,7 +182,9 @@ export function makePlaySaAccess(validator: PlayValidator): PrescanCheck {
           return [{
             id: 'android/play-sa-access',
             severity: effective.ambiguous ? 'warning' : 'error',
-            title: 'Play Store upload blocked: app missing or service account has no access',
+            title: effective.ambiguous
+              ? 'Play Store access could not be verified: app missing or service account has no access'
+              : 'Play Store upload blocked: app missing or service account has no access',
             detail: result.message,
             fix: PLAY_FIX,
           }]

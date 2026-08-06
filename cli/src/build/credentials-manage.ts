@@ -216,7 +216,7 @@ const CREDENTIAL_KNOWLEDGE: Record<string, FieldKnowledge> = {
     scope: 'shared',
     type: 'boolean',
     category: 'configuration',
-    explain: 'When true, the build worker uploads the resulting IPA/APK/AAB to Capgo storage and emits a time-limited download link (and a QR code). Independent of store upload: you can enable this with --no-playstore-upload to get only the AAB download when the Play app does not exist yet. When false, Capgo skips the download link and the artifact only goes to the app store (if store credentials are set).',
+    explain: 'When true, the build worker uploads the resulting IPA/APK/AAB to Capgo storage and emits a time-limited download link (and a QR code). Independent of store upload: pair --no-playstore-upload --output-upload to get only the AAB download when the Play app does not exist yet. When false, Capgo skips the download link and the artifact only goes to the app store (if store credentials are set).',
   },
   BUILD_OUTPUT_RETENTION_SECONDS: {
     scope: 'shared',

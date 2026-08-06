@@ -905,7 +905,7 @@ and/or to Capgo storage as a time-limited download link (--output-upload).
     after build completion. Build outputs may optionally be uploaded for time-limited download links.
 
 📋 PREREQUISITE: Save credentials first with:
-   \`npx @capgo/cli build credentials save --appId <app-id> --platform <ios|android>\`
+   \`npx @capgo/cli@latest build credentials save --appId <app-id> --platform <ios|android>\`
 
 Example: npx @capgo/cli@latest build request com.example.app --platform ios --path .
 Android AAB only (no Play upload): npx @capgo/cli@latest build request com.example.app --platform android --no-playstore-upload --output-upload

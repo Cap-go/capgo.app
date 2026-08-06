@@ -1404,7 +1404,7 @@ and/or to Capgo storage as a time-limited download link (--output-upload).
  🔒 SECURITY: Credentials are never stored on Capgo servers. They are auto-deleted
     after build completion. Build outputs may optionally be uploaded for time-limited download links.
 📋 PREREQUISITE: Save credentials first with:
-   `npx @capgo/cli build credentials save --appId <app-id> --platform <ios|android>`
+   `npx @capgo/cli@latest build credentials save --appId <app-id> --platform <ios|android>`
 
 **Example:**
 
