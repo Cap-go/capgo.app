@@ -15,7 +15,7 @@ import {
 import { computed } from 'vue'
 import { Line } from 'vue-chartjs'
 import { createChartColorWithOpacity, resolveAccessibleChartColor } from '~/services/chartConfig'
-import { formatLocalDate, formatLocalMonthYear } from '~/services/date'
+import { formatLocalDate, formatLocalDateTime, formatLocalMonthYear } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
 
 interface DataSeries {
@@ -34,7 +34,7 @@ const props = defineProps({
     default: false,
   },
   dateGranularity: {
-    type: String as () => 'day' | 'month',
+    type: String as () => 'day' | 'month' | 'hour',
     default: 'day',
   },
   valuePrefix: {
@@ -66,6 +66,11 @@ function formatChartDate(date: string) {
     const formattedMonth = formatLocalMonthYear(date)
     if (formattedMonth)
       return formattedMonth
+  }
+  if (props.dateGranularity === 'hour') {
+    const formattedHour = formatLocalDateTime(date)
+    if (formattedHour)
+      return formattedHour
   }
   return formatLocalDate(date) || date
 }

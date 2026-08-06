@@ -100,6 +100,29 @@ interface BuilderAnalytics {
   posthog_connected: boolean
 }
 
+interface BuilderCapacityLive {
+  workers_total: number
+  workers_online: number
+  used: number
+  free: number
+  waiting: number
+  offline: number
+  builder_reachable: boolean
+}
+interface BuilderCapacityHourPoint {
+  date: string
+  workers: number
+  used: number
+  free: number
+  waiting: number
+}
+interface BuilderCapacity {
+  live: BuilderCapacityLive
+  hourly: BuilderCapacityHourPoint[]
+  capacity_events: number
+  runs_sampled: number
+}
+
 const { t } = useI18n()
 const displayStore = useDisplayStore()
 const mainStore = useMainStore()
@@ -241,6 +264,37 @@ function buildPeriodSubtitle(stats: { builds: number, days: number, totalSeconds
   return `${formatNumberValue(stats.builds)} builds across ${formatNumberValue(stats.days)} active days, ${formatTotalSeconds(stats.totalSeconds)} total in selected period`
 }
 
+// ---- builder capacity (live pool + hourly free/used) ----
+const isLoadingCapacity = ref(false)
+const capacity = ref<BuilderCapacity | null>(null)
+
+async function loadCapacity() {
+  isLoadingCapacity.value = true
+  try {
+    capacity.value = (await adminStore.fetchStats('builder_capacity')) || null
+  }
+  catch (error) {
+    console.error('[Admin Builder] Error loading builder capacity:', error)
+    capacity.value = null
+  }
+  finally {
+    isLoadingCapacity.value = false
+  }
+}
+
+const capacityLive = computed(() => capacity.value?.live)
+const capacityHourlySeries = computed(() => {
+  const hourly = capacity.value?.hourly ?? []
+  if (!hourly.length)
+    return []
+  return [
+    { label: 'Workers', color: '#64748b', data: hourly.map(d => ({ date: d.date, value: d.workers })) },
+    { label: 'Used', color: '#ef4444', data: hourly.map(d => ({ date: d.date, value: d.used })) },
+    { label: 'Free', color: '#10b981', data: hourly.map(d => ({ date: d.date, value: d.free })) },
+  ]
+})
+const hasCapacityHourly = computed(() => capacityHourlySeries.value.some(s => s.data.some(p => p.value > 0)))
+
 // ---- builder onboarding analytics (builder_analytics) ----
 const isLoadingData = ref(false)
 const data = ref<BuilderAnalytics | null>(null)
@@ -349,7 +403,7 @@ async function spoof(orgId: string) {
 
 // ---- shared lifecycle ----
 async function loadAll() {
-  await Promise.all([loadGlobalStatsTrend(), loadData()])
+  await Promise.all([loadCapacity(), loadGlobalStatsTrend(), loadData()])
 }
 
 function sendNonAdminBack() {
@@ -388,6 +442,70 @@ displayStore.defaultBack = '/dashboard'
         <PageLoader v-if="isLoading" />
 
         <div v-else class="space-y-6">
+          <!-- ===================== Live builder capacity ===================== -->
+          <div class="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5">
+            <AdminStatsCard
+              title="Available builders"
+              :value="capacityLive?.free ?? 0"
+              color-class="text-emerald-500"
+              :is-loading="isLoadingCapacity"
+              :subtitle="capacityLive?.builder_reachable ? `${capacityLive?.workers_online ?? 0} online` : 'Builder unreachable'"
+            />
+            <AdminStatsCard
+              title="Running builders"
+              :value="capacityLive?.used ?? 0"
+              color-class="text-red-500"
+              :is-loading="isLoadingCapacity"
+              subtitle="Busy online runners"
+            />
+            <AdminStatsCard
+              title="Online workers"
+              :value="capacityLive?.workers_online ?? 0"
+              color-class="text-[#119eff]"
+              :is-loading="isLoadingCapacity"
+              :subtitle="`${capacityLive?.workers_total ?? 0} registered`"
+            />
+            <AdminStatsCard
+              title="Waiting jobs"
+              :value="capacityLive?.waiting ?? 0"
+              color-class="text-amber-500"
+              :is-loading="isLoadingCapacity"
+              subtitle="Queued for a runner"
+            />
+            <AdminStatsCard
+              title="Offline workers"
+              :value="capacityLive?.offline ?? 0"
+              color-class="text-slate-500"
+              :is-loading="isLoadingCapacity"
+              subtitle="Registered but offline"
+            />
+          </div>
+
+          <div class="grid grid-cols-1 gap-6">
+            <ChartCard
+              title="Builder usage by hour"
+              :is-loading="isLoadingCapacity"
+              :has-data="hasCapacityHourly"
+              no-data-message="No capacity events or build intervals in this period yet"
+            >
+              <template #header>
+                <div class="flex flex-col gap-1">
+                  <h2 class="text-2xl font-semibold leading-tight dark:text-white text-slate-600">
+                    Builder usage by hour
+                  </h2>
+                  <p class="text-xs text-slate-500 dark:text-slate-400">
+                    Free vs used reconstructed from worker +/− events and build start/end intervals
+                  </p>
+                </div>
+              </template>
+              <AdminMultiLineChart
+                :series="capacityHourlySeries"
+                :is-loading="isLoadingCapacity"
+                date-granularity="hour"
+              />
+            </ChartCard>
+          </div>
+
           <!-- ===================== Build volume overview (global_stats) ===================== -->
           <div class="grid grid-cols-1 gap-6">
             <ChartCard
