@@ -22,10 +22,13 @@ describe('app onboarding API key loading state', () => {
       onboardingSource.indexOf('async function importStoreMetadata('),
     )
     const mountedFlow = onboardingSource.slice(onboardingSource.indexOf('onMounted(async () => {'))
+    const resumeLoadIndex = mountedFlow.indexOf('const resumed = await loadResumeApp()')
+    const apiKeyProvisioningIndex = mountedFlow.indexOf('void ensureApiKey().catch')
 
     expect(resumeLoader).not.toContain('ensureApiKey')
-    expect(mountedFlow.indexOf('const resumed = await loadResumeApp()'))
-      .toBeLessThan(mountedFlow.indexOf('void ensureApiKey().catch'))
+    expect(resumeLoadIndex).toBeGreaterThanOrEqual(0)
+    expect(apiKeyProvisioningIndex).toBeGreaterThanOrEqual(0)
+    expect(resumeLoadIndex).toBeLessThan(apiKeyProvisioningIndex)
     expect(mountedFlow).not.toContain('await ensureApiKey()')
   })
 

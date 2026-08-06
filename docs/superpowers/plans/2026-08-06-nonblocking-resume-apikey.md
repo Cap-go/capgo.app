@@ -71,7 +71,7 @@ Expected: every command exits successfully and no generated-file changes remain.
 
 ```bash
 git add docs/superpowers/specs/2026-08-06-nonblocking-resume-apikey-design.md docs/superpowers/plans/2026-08-06-nonblocking-resume-apikey.md src/components/dashboard/AppOnboardingFlow.vue tests/app-onboarding-apikey-loading.unit.test.ts
-git commit -m "fix(onboarding): avoid blocking on API key creation"
+git commit -m "fix(onboarding): keep setup resume nonblocking"
 git push origin wolny/onboarding-apikey-loading
 ```
 
