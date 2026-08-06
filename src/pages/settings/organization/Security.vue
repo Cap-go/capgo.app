@@ -14,6 +14,7 @@ import IconLock from '~icons/heroicons/lock-closed'
 import IconShield from '~icons/heroicons/shield-check'
 import IconUser from '~icons/heroicons/user'
 import SsoConfiguration from '~/components/organizations/SsoConfiguration.vue'
+import { invokeCapgoApi } from '~/services/capgoApi'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { checkPermissions } from '~/services/permissions'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
@@ -216,7 +217,7 @@ async function updateOrganizationSecuritySettings(body: Record<string, unknown>)
   if (!currentOrganization.value?.gid)
     return { error: new Error('missing_organization') }
 
-  return supabase.functions.invoke('organization', {
+  return invokeCapgoApi('organization', {
     method: 'PUT',
     body: {
       orgId: currentOrganization.value.gid,

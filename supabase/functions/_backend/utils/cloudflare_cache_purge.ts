@@ -1,10 +1,12 @@
 import type { Context } from 'hono'
 import { getRuntimeKey } from 'hono/adapter'
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
-import { supabaseAdmin } from './supabase.ts'
+import { closeClient, getPgClient } from './pg.ts'
 import { getEnv } from './utils.ts'
 
 const CLOUDFLARE_API_BASE = 'https://api.cloudflare.com/client/v4'
+/** Cloudflare purge_cache by tags accepts at most 100 tags per request. */
+const CF_PURGE_TAG_BATCH_SIZE = 100
 
 function parseZoneIds(raw: string): string[] {
   return raw
@@ -42,39 +44,43 @@ async function purgeByTags(c: Context, tags: string[]) {
     return
   }
 
-  const body = JSON.stringify({ tags })
   const headers = {
     'Authorization': `Bearer ${token}`,
     'Content-Type': 'application/json',
     'User-Agent': 'Capgo/1.0',
   }
 
-  await Promise.all(zoneIds.map(async (zoneId) => {
-    try {
-      const response = await fetch(`${CLOUDFLARE_API_BASE}/zones/${zoneId}/purge_cache`, {
-        method: 'POST',
-        headers,
-        body,
-      })
+  for (let offset = 0; offset < tags.length; offset += CF_PURGE_TAG_BATCH_SIZE) {
+    const batch = tags.slice(offset, offset + CF_PURGE_TAG_BATCH_SIZE)
+    const body = JSON.stringify({ tags: batch })
 
-      if (!response.ok) {
-        const error = await response.json().catch(() => null)
-        cloudlogErr({ requestId: c.get('requestId'), message: 'Cloudflare cache purge failed', zoneId, status: response.status, error })
-        return
+    await Promise.all(zoneIds.map(async (zoneId) => {
+      try {
+        const response = await fetch(`${CLOUDFLARE_API_BASE}/zones/${zoneId}/purge_cache`, {
+          method: 'POST',
+          headers,
+          body,
+        })
+
+        if (!response.ok) {
+          const error = await response.json().catch(() => null)
+          cloudlogErr({ requestId: c.get('requestId'), message: 'Cloudflare cache purge failed', zoneId, status: response.status, error, tagCount: batch.length })
+          return
+        }
+
+        const result = await response.json().catch(() => null) as { success?: boolean } | null
+        if (result?.success === false) {
+          cloudlogErr({ requestId: c.get('requestId'), message: 'Cloudflare cache purge returned error', zoneId, result, tagCount: batch.length })
+          return
+        }
+
+        cloudlog({ requestId: c.get('requestId'), message: 'Cloudflare cache purged by tag', zoneId, tagCount: batch.length, tagOffset: offset })
       }
-
-      const result = await response.json().catch(() => null) as { success?: boolean } | null
-      if (result?.success === false) {
-        cloudlogErr({ requestId: c.get('requestId'), message: 'Cloudflare cache purge returned error', zoneId, result })
-        return
+      catch (error) {
+        cloudlogErr({ requestId: c.get('requestId'), message: 'Cloudflare cache purge error', zoneId, error: serializeError(error) })
       }
-
-      cloudlog({ requestId: c.get('requestId'), message: 'Cloudflare cache purged by tag', zoneId, tags })
-    }
-    catch (error) {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'Cloudflare cache purge error', zoneId, error: serializeError(error) })
-    }
-  }))
+    }))
+  }
 }
 
 /**
@@ -96,28 +102,62 @@ export async function purgePlanCache(c: Context, appId: string) {
 }
 
 /**
+ * List all app_ids for an org (single SQL via pg — no PostgREST page cap).
+ * Uses the primary DB: this runs from Stripe payment-recovery invalidation, not
+ * the plugin hot path. Replica lag here would skip tags and leave stale 429s.
+ * Plugin endpoints must keep using the read replica exclusively.
+ */
+async function listOrgAppIds(c: Context, orgId: string): Promise<string[] | null> {
+  const pg = getPgClient(c)
+  try {
+    const result = await pg.query<{ app_id: string }>(
+      'SELECT app_id FROM public.apps WHERE owner_org = $1::uuid ORDER BY app_id',
+      [orgId],
+    )
+    return result.rows.map(row => row.app_id).filter(Boolean)
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to fetch apps for org cache purge', orgId, error: serializeError(error) })
+    return null
+  }
+  finally {
+    closeClient(c, pg)
+  }
+}
+
+async function purgeCacheTagsForOrg(
+  c: Context,
+  orgId: string,
+  buildTag: (appId: string) => string,
+  logLabel: string,
+) {
+  const appIds = await listOrgAppIds(c, orgId)
+  if (appIds === null)
+    return
+
+  if (appIds.length === 0) {
+    cloudlog({ requestId: c.get('requestId'), message: `No apps found for org ${logLabel} cache purge`, orgId })
+    return
+  }
+
+  const tags = appIds.map(buildTag)
+  cloudlog({ requestId: c.get('requestId'), message: `Purging ${logLabel} cache for org apps`, orgId, appCount: appIds.length, tagBatches: Math.ceil(tags.length / CF_PURGE_TAG_BATCH_SIZE) })
+  await purgeByTags(c, tags)
+}
+
+/**
  * Purge plan-upgrade cache for all apps in an organization.
  * Call this when a subscription payment succeeds.
  */
 export async function purgePlanCacheForOrg(c: Context, orgId: string) {
-  // Get all app_ids for this org
-  const { data: apps, error } = await supabaseAdmin(c)
-    .from('apps')
-    .select('app_id')
-    .eq('owner_org', orgId)
+  await purgeCacheTagsForOrg(c, orgId, buildPlanCacheTag, 'plan')
+}
 
-  if (error) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to fetch apps for org cache purge', orgId, error })
-    return
-  }
-
-  if (!apps || apps.length === 0) {
-    cloudlog({ requestId: c.get('requestId'), message: 'No apps found for org cache purge', orgId })
-    return
-  }
-
-  // Build tags for all apps in the org
-  const tags = apps.map(app => buildPlanCacheTag(app.app_id))
-  cloudlog({ requestId: c.get('requestId'), message: 'Purging plan cache for org apps', orgId, appCount: apps.length })
-  await purgeByTags(c, tags)
+/**
+ * Purge on-prem cache for all apps in an organization.
+ * Call this when a subscription payment succeeds so cancelled→valid apps
+ * are not stuck on cached on_premise_app 429s for the full Retry-After TTL.
+ */
+export async function purgeOnPremCacheForOrg(c: Context, orgId: string) {
+  await purgeCacheTagsForOrg(c, orgId, buildOnPremCacheTag, 'on-prem')
 }

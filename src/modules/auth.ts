@@ -11,6 +11,7 @@ import { sendEvent } from '~/services/tracking'
 import { clearWebsitePaidUserCookie, setWebsitePaidUserCookie } from '~/services/websiteAuthCookie'
 import { useMainStore } from '~/stores/main'
 import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
+import { getOnboardingResumeRedirect, isNewOnboardingUser } from '~/utils/onboardingRedirect'
 import { hasPendingInviteSkip } from '~/utils/pendingInviteSkip'
 import { getPlans, isPlatformAdmin } from './../services/supabase'
 
@@ -204,6 +205,13 @@ async function guard(
     }
   }
 
+  async function loadPlansIfNeeded() {
+    if (main.plans.length > 0)
+      return
+
+    main.plans = await getPlans()
+  }
+
   function shouldRedirectToOrgOnboarding() {
     if (to.path.startsWith('/onboarding/app'))
       return false
@@ -226,6 +234,39 @@ async function guard(
     if (hasPendingInviteSkip(sessionUser?.id ?? main.auth?.id))
       return false
     return organizationStore.organizations.some(org => isPendingOrganizationInvite(org))
+  }
+
+  async function getPendingOnboardingRedirect(organizationsLoaded: boolean) {
+    if (!organizationsLoaded)
+      return null
+    if (!isNewOnboardingUser(sessionUser?.created_at))
+      return null
+
+    const selectableOrganizations = organizationStore.organizations.filter(org => !isPendingOrganizationInvite(org))
+    if (selectableOrganizations.length !== 1)
+      return null
+
+    const { data: apps, error } = await supabase
+      .from('apps')
+      .select('app_id, need_onboarding')
+      .eq('owner_org', selectableOrganizations[0].gid)
+      .limit(2)
+
+    if (error) {
+      console.error('Cannot resolve onboarding redirect', error)
+      return null
+    }
+
+    const app = apps?.[0]
+    return getOnboardingResumeRedirect({
+      appId: app?.need_onboarding ? app.app_id : null,
+      appCount: apps?.length ?? 0,
+      createdAt: sessionUser?.created_at,
+      organizationCount: selectableOrganizations.length,
+      path: to.path,
+      resumeAppId: typeof to.query.resume === 'string' ? to.query.resume : null,
+      userId: sessionUser?.id,
+    })
   }
 
   if (hasAuth && sessionUser) {
@@ -284,6 +325,16 @@ async function guard(
       await updateUser(main, supabase)
     }
 
+    sendEvent({
+      channel: 'user-login',
+      event: 'User Login',
+      icon: '✅',
+      user_id: main.auth?.id,
+      notify: false,
+    }).catch()
+
+    await loadPlansIfNeeded()
+
     const organizationsLoaded = await tryLoadOrganizations(() => organizationStore.fetchOrganizations())
     if (shouldRedirectToPendingInviteOnboarding(organizationsLoaded)) {
       return next({
@@ -317,9 +368,9 @@ async function guard(
       }
     }
 
-    getPlans().then((pls) => {
-      main.plans = pls
-    })
+    const onboardingRedirect = await getPendingOnboardingRedirect(organizationsLoaded)
+    if (onboardingRedirect)
+      return next(onboardingRedirect)
 
     try {
       // isPlatformAdmin() is the only frontend admin-rights source.
@@ -331,14 +382,6 @@ async function guard(
       console.error('Failed to resolve platform admin status:', error)
       main.isAdmin = false
     }
-
-    sendEvent({
-      channel: 'user-login',
-      event: 'User Login',
-      icon: '✅',
-      user_id: main.auth?.id,
-      notify: false,
-    }).catch()
 
     next()
     hideLoader()
@@ -362,6 +405,8 @@ async function guard(
       hideLoader()
       return next(getPostRestorePath(to))
     }
+
+    await loadPlansIfNeeded()
 
     let organizationsLoaded = await tryLoadOrganizations(() => organizationStore.dedupFetchOrganizations())
     if (shouldRedirectToPendingInviteOnboarding(organizationsLoaded)) {
@@ -394,6 +439,10 @@ async function guard(
         },
       })
     }
+
+    const onboardingRedirect = await getPendingOnboardingRedirect(organizationsLoaded)
+    if (onboardingRedirect)
+      return next(onboardingRedirect)
 
     // Check if user is trying to access admin routes
     if (isAdminRoute) {

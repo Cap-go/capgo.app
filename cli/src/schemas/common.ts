@@ -49,6 +49,7 @@ export const incompatibilityReasonSchema = z.enum([
   'ios_code_changed',
   'android_code_changed',
   'both_platforms_changed',
+  'platform_checksum_metadata_changed',
 ])
 
 export type IncompatibilityReason = z.infer<typeof incompatibilityReasonSchema>

@@ -34,6 +34,7 @@ export interface OrganizationApp {
   app_id: string
   name: string | null
   owner_org: string
+  need_onboarding: boolean
   icon_url: string | null
   icon_storage_path?: string | null
   icon_url_loading?: boolean
@@ -264,12 +265,13 @@ export const useOrganizationStore = defineStore('organization', () => {
     }
   }
 
-  const appWithImmediateIcon = (app: { app_id: string, name: string | null, owner_org: string, icon_url: string | null }): OrganizationApp => {
+  const appWithImmediateIcon = (app: { app_id: string, name: string | null, owner_org: string, need_onboarding: boolean, icon_url: string | null }): OrganizationApp => {
     const { normalized, shouldSign } = resolveImagePath(app.icon_url)
     return {
       app_id: app.app_id,
       name: app.name,
       owner_org: app.owner_org,
+      need_onboarding: app.need_onboarding,
       icon_url: shouldSign ? '' : normalized || null,
       icon_storage_path: normalized || null,
       icon_url_loading: shouldSign,
@@ -390,7 +392,7 @@ export const useOrganizationStore = defineStore('organization', () => {
     const appIconLoadRun = ++organizationAppIconLoadRun
     const { error, data: allAppsByOwner } = await supabase
       .from('apps')
-      .select('app_id, name, owner_org, icon_url')
+      .select('app_id, name, owner_org, need_onboarding, icon_url')
       .in('owner_org', orgIds)
 
     if (error) {
@@ -593,20 +595,15 @@ export const useOrganizationStore = defineStore('organization', () => {
       return
     }
 
-    // Try to restore from localStorage first
-    let targetOrgId = currentOrganization.value?.gid
-    if (!targetOrgId) {
+    let selectedOrganization = currentOrganization.value
+      ? selectableOrganizations.find(org => org.gid === currentOrganization.value?.gid)
+      : undefined
+    if (!selectedOrganization) {
       const storedOrgId = localStorage.getItem(STORAGE_KEY)
-      if (storedOrgId) {
-        const storedOrg = mappedData.find(org => org.gid === storedOrgId && isSelectableOrganization(org))
-        if (storedOrg) {
-          targetOrgId = storedOrg.gid
-        }
-      }
+      if (storedOrgId)
+        selectedOrganization = selectableOrganizations.find(org => org.gid === storedOrgId)
     }
-
-    targetOrgId ||= organization.gid
-    currentOrganization.value = mappedData.find(org => org.gid === targetOrgId) as Organization | undefined
+    currentOrganization.value = selectedOrganization ?? organization
     // Don't mark as failed if user lacks 2FA or password access - the data is redacted and unreliable
     const lacks2FAAccess = currentOrganization.value?.enforcing_2fa === true && currentOrganization.value?.['2fa_has_access'] === false
     const lacksPasswordAccess = currentOrganization.value?.password_policy_config?.enabled && currentOrganization.value?.password_has_access === false

@@ -15,6 +15,7 @@ import IconTrash from '~icons/heroicons/trash'
 import IconWrench from '~icons/heroicons/wrench'
 import RoleSelect from '~/components/forms/RoleSelect.vue'
 import SearchInput from '~/components/forms/SearchInput.vue'
+import { invokeCapgoApi } from '~/services/capgoApi'
 import { checkPermissions } from '~/services/permissions'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
@@ -1215,7 +1216,7 @@ async function fetchMemberAppBindings(member: OrganizationMemberRow) {
   if (!currentOrganization.value)
     return
   try {
-    const { data, error } = await supabase.functions.invoke(`private/role_bindings/${currentOrganization.value.gid}`, {
+    const { data, error } = await invokeCapgoApi(`private/role_bindings/${currentOrganization.value.gid}`, {
       method: 'GET',
     })
 
@@ -1337,7 +1338,7 @@ async function upsertAppAccessBinding(input: AppAccessAssignInput, appId: string
     return 'skipped'
 
   if (existingBinding) {
-    const { error } = await supabase.functions.invoke(`private/role_bindings/${existingBinding.id}`, {
+    const { error } = await invokeCapgoApi(`private/role_bindings/${existingBinding.id}`, {
       method: 'PATCH',
       body: { role_name: input.roleName },
     })
@@ -1346,7 +1347,7 @@ async function upsertAppAccessBinding(input: AppAccessAssignInput, appId: string
     return 'updated'
   }
 
-  const { error } = await supabase.functions.invoke('private/role_bindings', {
+  const { error } = await invokeCapgoApi('private/role_bindings', {
     method: 'POST',
     body: {
       principal_type: 'user',
@@ -1431,7 +1432,7 @@ async function handleInviteNewUserSubmit() {
   try {
     const inviteType = inviteUserRole.value.replace(/\s+/g, '_')
 
-    const { error } = await supabase.functions.invoke('private/invite_new_user_to_org', {
+    const { error } = await invokeCapgoApi('private/invite_new_user_to_org', {
       body: {
         email: inviteUserEmail.value,
         org_id: inviteUserOrgId.value,

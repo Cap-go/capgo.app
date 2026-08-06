@@ -1,5 +1,6 @@
 import type { Buffer } from 'node:buffer'
 import type { ExistingOrganizationApp, Options, PendingOnboardingApp } from '../api/app'
+import type { UploadReporter } from '../bundle/upload'
 import type { Organization } from '../utils'
 import type { InitCodeDiff, InitEncryptionPhase, InitEncryptionSummary } from './runtime'
 import { spawn, spawnSync } from 'node:child_process'
@@ -32,9 +33,10 @@ import { appendInternalLog, getInternalLogPath, startInternalLog } from '../supp
 import { uploadSupportLogs } from '../support/support-upload'
 import { consoleWebUrl, createSupabaseClient, defaultApiHost, findBuildCommandForProjectType, findMainFile, findMainFileForProjectType, findProjectType, findRoot, findSavedKey, findSavedKeySilent, formatError, getAllPackagesDependencies, getAppId, getBundleVersion, getConfig, getConfigForWrite, getLocalConfig, getNativeProjectResetAdvice, getOrganizationListWithPermission, getPackageScripts, getPMAndCommand, hasCliPermission, PACKNAME, projectIsMonorepo, resolveUserIdFromApiKey, updateConfigbyKey, updateConfigUpdater, validateIosUpdaterSync } from '../utils'
 import { buildAppIdConflictSuggestions, isAppAlreadyExistsError } from './app-conflict'
+import { isChannelAlreadyExistsError } from './channel-conflict'
 import { cancel as pCancel, confirm as pConfirm, intro as pIntro, isCancel as pIsCancel, log as pLog, outro as pOutro, select as pSelect, spinner as pSpinner, text as pText } from './prompts'
 import { finishActiveCliReplay, getActiveCliReplaySessionId, isCliTelemetryDisabled, startInitReplay } from './replay'
-import { appendInitStreamingLine, clearInitStreamingOutput, setInitCodeDiff, setInitEncryptionSummary, setInitVersionWarning, startInitStreamingOutput, stopInitInkSession, updateInitStreamingStatus } from './runtime'
+import { appendInitStreamingLine, clearInitStreamingOutput, INIT_CANCEL, pushInitLog, setInitCodeDiff, setInitEncryptionSummary, setInitVersionWarning, startInitStreamingOutput, stopInitInkSession, updateInitStreamingStatus, waitForInitStreamingContinue } from './runtime'
 import { formatInitResumeMessage, initOnboardingSteps, renderInitOnboardingComplete, renderInitOnboardingFrame, renderInitOnboardingWelcome } from './ui'
 import { CAPGO_UPDATER_PACKAGE, getUpdaterInstallState } from './updater'
 
@@ -55,9 +57,13 @@ interface InitTargetPaths {
 
 export type RunDeviceCancelHandler = () => Promise<never>
 const importInject = 'import { CapacitorUpdater } from \'@capgo/capacitor-updater\''
+const requireInject = 'const { CapacitorUpdater } = require(\'@capgo/capacitor-updater\')'
 const codeInject = 'CapacitorUpdater.notifyAppReady()'
+const notifyAppReadyComment = '// Confirm this bundle started successfully so Capgo can keep it instead of rolling back to the previous bundle.'
 // create regex to find line who start by 'import ' and end by ' from '
 const regexImport = /import.*from.*/g
+const updaterImportPattern = /import\s*\{\s*CapacitorUpdater\s*\}\s*from\s*['"]@capgo\/capacitor-updater['"]/g
+const updaterRequirePattern = /(?:const|let|var)\s*(?:\{\s*CapacitorUpdater\s*\}|CapacitorUpdater)\s*=\s*require\(\s*['"]@capgo\/capacitor-updater['"]\s*\)/g
 const defaultChannel = 'production'
 const channelNameRegex = /^[\w.-]+$/
 const appIdRegex = /^[a-z0-9]+(?:\.[\w-]+)+$/i
@@ -228,7 +234,7 @@ let globalAutoTestChange: InitAutoTestChange | undefined
 
 const CODE_DIFF_CONTEXT_LINES = 5
 
-function getNativePlatformAvailability(config?: CapacitorConfigSnapshot, rootDir = cwd()) {
+export function getNativePlatformAvailability(config?: CapacitorConfigSnapshot, rootDir = cwd()) {
   const iosDir = getPlatformDirFromCapacitorConfig(config, 'ios')
   const androidDir = getPlatformDirFromCapacitorConfig(config, 'android')
   return {
@@ -652,7 +658,9 @@ async function runInitContactSupport(failureText: string, supportPlatform?: Plat
           return false
         if (choice === 'view') {
           pLog.info(`Logs to be sent: ${logPath}`)
-          try { await open(logPath) }
+          try {
+            await open(logPath)
+          }
           catch { /* best-effort: just the path above */ }
           continue
         }
@@ -752,6 +760,120 @@ function buildCodeDiffLines(beforeContent: string, afterContent: string, context
     })
   }
   return diffLines
+}
+
+function getInitCodeInjection(filePath: string): string {
+  const updaterImport = path.extname(filePath) === '.cjs' ? requireInject : importInject
+  return `${updaterImport};\n\n${getInitCodeCall()}`
+}
+
+function getInitCodeCall(): string {
+  return `${notifyAppReadyComment}\n${codeInject};`
+}
+
+function skipInitLeadingTrivia(content: string, startIndex: number): number {
+  let index = startIndex
+  while (index < content.length) {
+    const char = content[index]
+    if (char === '\uFEFF' || char === ' ' || char === '\t' || char === '\r' || char === '\n') {
+      index++
+    }
+    else if (content.startsWith('//', index)) {
+      const lineEnd = content.indexOf('\n', index + 2)
+      index = lineEnd === -1 ? content.length : lineEnd + 1
+    }
+    else if (content.startsWith('/*', index)) {
+      const commentEnd = content.indexOf('*/', index + 2)
+      if (commentEnd === -1)
+        break
+      index = commentEnd + 2
+    }
+    else {
+      break
+    }
+  }
+  return index
+}
+
+function skipInitDirectiveLineSuffix(content: string, startIndex: number): number {
+  let index = startIndex
+  while (content[index] === ' ' || content[index] === '\t')
+    index++
+
+  if (content.startsWith('//', index)) {
+    const lineEnd = content.indexOf('\n', index + 2)
+    return lineEnd === -1 ? content.length : lineEnd + 1
+  }
+  if (content.startsWith('/*', index)) {
+    const commentEnd = content.indexOf('*/', index + 2)
+    if (commentEnd === -1)
+      return index
+    return skipInitDirectiveLineSuffix(content, commentEnd + 2)
+  }
+  if (content.startsWith('\r\n', index))
+    return index + 2
+  if (content[index] === '\n')
+    return index + 1
+  return index
+}
+
+function insertInitCodeAfterPrologue(content: string, codeToInject: string): string {
+  let insertionIndex = 0
+  if (content.startsWith('#!')) {
+    const firstLineEnd = content.indexOf('\n')
+    insertionIndex = firstLineEnd === -1 ? content.length : firstLineEnd + 1
+  }
+
+  // Framework directives can follow a BOM, whitespace, or comments. Keep that
+  // complete prologue ahead of the injected import so their semantics remain intact.
+  const directivePattern = /^(['"])(?:use client|use server|use strict)\1;?/
+  while (true) {
+    const directiveStart = skipInitLeadingTrivia(content, insertionIndex)
+    const directive = content.slice(directiveStart).match(directivePattern)
+    if (!directive)
+      break
+    insertionIndex = skipInitDirectiveLineSuffix(content, directiveStart + directive[0].length)
+  }
+
+  const before = content.slice(0, insertionIndex)
+  const after = content.slice(insertionIndex)
+  const separatorBefore = before.length > 0 && !before.endsWith('\n') ? '\n' : ''
+  const separatorAfter = after.length > 0 ? '\n\n' : '\n'
+  return `${before}${separatorBefore}${codeToInject}${separatorAfter}${after}`
+}
+
+function getExistingUpdaterBinding(filePath: string, content: string): string | undefined {
+  return path.extname(filePath) === '.cjs'
+    ? content.match(updaterRequirePattern)?.pop()
+    : content.match(updaterImportPattern)?.pop()
+}
+
+export function injectInitCode(filePath: string, currentContent: string): string {
+  const existingUpdaterBinding = getExistingUpdaterBinding(filePath, currentContent)
+  if (existingUpdaterBinding)
+    return currentContent.replace(existingUpdaterBinding, `${existingUpdaterBinding}\n${getInitCodeCall()}`)
+
+  const lastImport = currentContent.match(regexImport)?.pop()
+  const codeToInject = getInitCodeInjection(filePath)
+  if (lastImport) {
+    // No trailing `\n`: the original file already has newlines after the
+    // import, so adding one would create a spurious blank diff line.
+    return currentContent.replace(lastImport, `${lastImport}\n${codeToInject}`)
+  }
+
+  return insertInitCodeAfterPrologue(currentContent, codeToInject)
+}
+
+function getNuxtUpdaterPluginContent(): string {
+  return [
+    `import { CapacitorUpdater } from '@capgo/capacitor-updater'`,
+    ``,
+    `export default defineNuxtPlugin(() => {`,
+    `  ${notifyAppReadyComment}`,
+    `  CapacitorUpdater.notifyAppReady()`,
+    `})`,
+    ``,
+  ].join('\n')
 }
 
 function readTmpObj() {
@@ -1036,21 +1158,19 @@ async function runCapacitorPlatformAdd(platformName: 'ios' | 'android', runner: 
     ? `Running: ${command}`
     : `Running in ${commandCwd}: ${command}`
   spinner.start(runMessage)
+  spinner.stop()
 
-  let parsedRunner: { command: string, args: string[] }
-  try {
-    parsedRunner = splitRunnerCommand(runner)
-  }
-  catch (error) {
+  const result = await streamCommandInInitPanel({
+    title: `Adding ${platformName.toUpperCase()} native project`,
+    runner,
+    args: ['cap', 'add', platformName],
+    cwd: commandCwd,
+  })
+  await delay(result.success ? 750 : 3500)
+  clearInitStreamingOutput()
+  if (!result.success) {
     spinner.stop(`Could not add ${platformName} automatically ❌`)
-    pLog.error(formatError(error))
-    return false
-  }
-
-  const result = await runInheritedCommand(parsedRunner.command, [...parsedRunner.args, 'cap', 'add', platformName], { cwd: commandCwd })
-  if (result.error || result.status !== 0) {
-    spinner.stop(`Could not add ${platformName} automatically ❌`)
-    pLog.error(formatInheritedCommandFailure(result))
+    pLog.error(result.error?.message ?? 'Unknown error while adding the native platform')
     return false
   }
 
@@ -1185,7 +1305,62 @@ interface ResumeResult {
   appId?: string
 }
 
-async function tryResumeOnboarding(apikey: string, initialTargets: InitTargetPaths, initialCwd: string): Promise<ResumeResult | undefined> {
+export function getResumedOnboardingAccessError(
+  resume: ResumeResult,
+  organization: Organization | undefined,
+  hasCreateAppPermission: boolean,
+  hasAppAccess: boolean,
+): string | undefined {
+  if (!organization)
+    return `Previously used organization "${resume.orgName}" is no longer available to this API key. Starting fresh.`
+
+  const blocked2fa = organization.enforcing_2fa && !organization['2fa_has_access']
+  if (blocked2fa)
+    return `Organization "${organization.name}" now requires 2FA. Starting fresh.`
+
+  if (resume.appId && !hasAppAccess)
+    return `Previously used app "${resume.appId}" is no longer available to this API key. Starting fresh.`
+
+  // A checkpoint with an app ID has already completed app creation, so it
+  // needs current app access rather than the org-level create permission.
+  if (!resume.appId && !hasCreateAppPermission)
+    return `This API key no longer has permission to create apps in "${organization.name}". Starting fresh.`
+}
+
+async function validateResumedOnboardingAccess(
+  supabase: Awaited<ReturnType<typeof createSupabaseClient>>,
+  apikey: string,
+  resume: ResumeResult,
+): Promise<string | undefined> {
+  try {
+    const { error: orgError, data: organizations } = await supabase.rpc('get_orgs_v7')
+    if (orgError || !organizations)
+      return 'Could not verify whether the saved onboarding organization is still available. Starting fresh.'
+
+    const organization = organizations.find(org => org.gid === resume.orgId)
+    const hasCreateAppPermission = organization && !resume.appId
+      ? await hasCliPermission(supabase, apikey, 'org.create_app', { orgId: organization.gid })
+      : false
+    const hasAppAccess = !organization || !resume.appId
+      ? true
+      : Boolean(await findAppInOrganization(supabase, organization.gid, resume.appId))
+
+    return getResumedOnboardingAccessError(resume, organization, hasCreateAppPermission, hasAppAccess)
+  }
+  catch {
+    if (resume.appId)
+      return `Could not verify whether the saved app "${resume.appId}" is still available. Starting fresh.`
+
+    return 'Could not verify whether the saved onboarding organization is still available. Starting fresh.'
+  }
+}
+
+async function tryResumeOnboarding(
+  apikey: string,
+  initialTargets: InitTargetPaths,
+  initialCwd: string,
+  supabase: Awaited<ReturnType<typeof createSupabaseClient>>,
+): Promise<ResumeResult | undefined> {
   try {
     const rawData = readFileSync(getTmpObjectPath(), 'utf-8')
     if (!rawData || rawData.length === 0)
@@ -1212,6 +1387,14 @@ async function tryResumeOnboarding(apikey: string, initialTargets: InitTargetPat
     if (!orgId || !step_done) {
       pLog.warn('⚠️  Found previous onboarding progress, but it was saved in an older format.')
       pLog.info('   Starting fresh. Your previous progress cannot be resumed.')
+      return undefined
+    }
+
+    const resume: ResumeResult = { stepDone: step_done, orgId, orgName, appId: savedAppId }
+    const accessError = await validateResumedOnboardingAccess(supabase, apikey, resume)
+    if (accessError) {
+      pLog.warn(accessError)
+      cleanupStepsDone()
       return undefined
     }
 
@@ -1330,7 +1513,7 @@ async function tryResumeOnboarding(apikey: string, initialTargets: InitTargetPat
         }
         setInitEncryptionSummary(globalEncryptionSummary)
       }
-      return { stepDone: step_done, orgId, orgName, appId: savedAppId }
+      return resume
     }
 
     // User chose to start over — delete the saved progress and drop any
@@ -1639,22 +1822,35 @@ async function runNativeResetCommand(platformRunner: string, nativePlatform: Pla
   const resetSpinner = pSpinner()
   resetSpinner.start(`Running: ${resetAdvice.command}`)
   try {
-    const parsedRunner = splitRunnerCommand(platformRunner)
     rmSync(nativePlatform, { recursive: true, force: true })
+    resetSpinner.stop()
 
-    const addResult = await runInheritedCommand(parsedRunner.command, [...parsedRunner.args, 'cap', 'add', nativePlatform])
-    if (addResult.error || addResult.status !== 0)
-      throw addResult.error ?? new Error(`cap add ${nativePlatform} failed with ${formatInheritedCommandFailure(addResult)}`)
+    const addResult = await streamCommandInInitPanel({
+      title: `Recreating ${nativePlatform.toUpperCase()} native project`,
+      runner: platformRunner,
+      args: ['cap', 'add', nativePlatform],
+    })
+    if (!addResult.success)
+      throw addResult.error ?? new Error(`cap add ${nativePlatform} failed`)
 
-    const syncResult = await runInheritedCommand(parsedRunner.command, [...parsedRunner.args, 'cap', 'sync', nativePlatform])
-    if (syncResult.error || syncResult.status !== 0)
-      throw syncResult.error ?? new Error(`cap sync ${nativePlatform} failed with ${formatInheritedCommandFailure(syncResult)}`)
+    const syncResult = await streamCommandInInitPanel({
+      title: `Syncing ${nativePlatform.toUpperCase()} native project`,
+      runner: platformRunner,
+      args: ['cap', 'sync', nativePlatform],
+    })
+    if (!syncResult.success)
+      throw syncResult.error ?? new Error(`cap sync ${nativePlatform} failed`)
 
+    await delay(750)
     resetSpinner.stop(successMessage)
   }
   catch (err) {
+    await delay(3500)
     resetSpinner.stop(failureMessage)
     pLog.error(formatError(err))
+  }
+  finally {
+    clearInitStreamingOutput()
   }
 }
 
@@ -1951,7 +2147,11 @@ async function selectOrganizationForInit(
   return organization
 }
 
-async function checkPrerequisitesStep(orgId: string, apikey: string) {
+async function checkPrerequisitesStep(
+  orgId: string,
+  apikey: string,
+  nativePlatforms: ReturnType<typeof getNativePlatformAvailability>,
+) {
   pLog.info(`📋 Checking development environment prerequisites`)
   pLog.info(`   For mobile development, you need at least one platform setup`)
 
@@ -1969,21 +2169,21 @@ async function checkPrerequisitesStep(orgId: string, apikey: string) {
 
   const hasAndroidStudio = androidPaths.some(path => path && existsSync(path))
 
-  if (hasXcode) {
+  if (nativePlatforms.ios && hasXcode) {
     pLog.success(`✅ Xcode detected - iOS development ready`)
   }
-  else if (platform === 'darwin') {
+  else if (nativePlatforms.ios && platform === 'darwin') {
     pLog.warn(`⚠️  Xcode not found`)
   }
 
-  if (hasAndroidStudio) {
+  if (nativePlatforms.android && hasAndroidStudio) {
     pLog.success(`✅ Android SDK detected - Android development ready`)
   }
-  else {
+  else if (nativePlatforms.android) {
     pLog.warn(`⚠️  Android SDK not found`)
   }
 
-  if (!hasXcode && !hasAndroidStudio) {
+  if ((nativePlatforms.ios && !hasXcode) && (nativePlatforms.android && !hasAndroidStudio)) {
     pLog.error(`❌ No development environment detected`)
     pLog.info(``)
     pLog.info(`📱 To develop mobile apps with Capacitor, you need:`)
@@ -2005,7 +2205,7 @@ async function checkPrerequisitesStep(orgId: string, apikey: string) {
 
     pLog.warn(`⚠️  Continuing without development environment - you'll need to set it up later`)
   }
-  else if (!hasXcode && platform === 'darwin') {
+  else if (nativePlatforms.ios && !hasXcode && platform === 'darwin') {
     const wantsIos = await pConfirm({
       message: `Xcode is not installed. Do you plan to develop for iOS?`,
       initialValue: false,
@@ -2017,17 +2217,21 @@ async function checkPrerequisitesStep(orgId: string, apikey: string) {
       pLog.info(`💡 After installing Xcode, you can continue the onboarding`)
 
       const installedNow = await pConfirm({
-        message: `Have you installed Xcode? (Choose No to continue with Android only)`,
+        message: nativePlatforms.android
+          ? `Have you installed Xcode? (Choose No to continue with Android only)`
+          : `Have you installed Xcode? (Choose No to continue without iOS development)`,
         initialValue: false,
       })
       await cancelCommand(installedNow, orgId, apikey)
 
       if (!installedNow) {
-        pLog.info(`📱 Continuing with Android development only`)
+        pLog.info(nativePlatforms.android
+          ? `📱 Continuing with Android development only`
+          : `📱 Continuing without an iOS development environment`)
       }
     }
   }
-  else if (!hasAndroidStudio) {
+  else if (nativePlatforms.android && !hasAndroidStudio) {
     const wantsAndroid = await pConfirm({
       message: `Android SDK is not installed. Do you plan to develop for Android?`,
       initialValue: false,
@@ -2039,13 +2243,17 @@ async function checkPrerequisitesStep(orgId: string, apikey: string) {
       pLog.info(`💡 After installing Android Studio, set up the Android SDK`)
 
       const installedNow = await pConfirm({
-        message: `Have you installed Android Studio? (Choose No to continue with iOS only)`,
+        message: nativePlatforms.ios
+          ? `Have you installed Android Studio? (Choose No to continue with iOS only)`
+          : `Have you installed Android Studio? (Choose No to continue without Android development)`,
         initialValue: false,
       })
       await cancelCommand(installedNow, orgId, apikey)
 
       if (!installedNow) {
-        pLog.info(`📱 Continuing with iOS development only`)
+        pLog.info(nativePlatforms.ios
+          ? `📱 Continuing with iOS development only`
+          : `📱 Continuing without an Android development environment`)
       }
     }
   }
@@ -2251,49 +2459,74 @@ async function addAppStep(organization: Organization, apikey: string, appId: str
 async function addChannelStep(orgId: string, apikey: string, appId: string) {
   const pm = getPMAndCommand()
   pLog.success(`✅ App ${appId} added — accessible to all members of your organization`)
-  pLog.info(`💡 A channel is a release track — it controls which users get which updates.`)
-  pLog.info(`   Nothing goes live until you release a native build with Capacitor Updater to the stores.`)
-  pLog.info(`   Most apps just need one: "production". You can add more later.`)
-  pLog.info(`   Learn more: https://capgo.app/docs/live-updates/channels/`)
-  let channelName = globalChannelName
-  const channelChoice = await pSelect({
-    message: 'Which channel name do you want to use?',
-    options: [
-      { value: 'default', label: `✅ Use "${defaultChannel}"` },
-      { value: 'custom', label: '✏️ Choose a custom name' },
-    ],
-  })
-  await cancelCommand(channelChoice, orgId, apikey)
-
-  if (channelChoice === 'custom') {
-    const selectedChannelName = await pText({
-      message: 'Enter the channel name to use for onboarding:',
-      placeholder: 'e.g. staging, beta, dev',
-      validate: validateChannelName,
+  pLog.info(`💡 Keep in mind: Capgo cannot deliver updates to app versions that don’t include Capacitor Updater.`)
+  pLog.info(``)
+  pLog.info(`A channel is a release track that controls which users get which updates.`)
+  pLog.info(`Most apps only need one: "production". You can add more later.`)
+  pLog.info(`Learn more: https://capgo.app/docs/live-updates/channels/`)
+  while (true) {
+    let channelName = globalChannelName
+    const channelChoice = await pSelect({
+      message: 'Which channel name do you want to use?',
+      options: [
+        { value: 'default', label: `✅ Use "${defaultChannel}"` },
+        { value: 'custom', label: '✏️ Choose a custom name' },
+      ],
     })
-    await cancelCommand(selectedChannelName, orgId, apikey)
-    channelName = (selectedChannelName as string).trim()
-  }
+    await cancelCommand(channelChoice, orgId, apikey)
 
-  globalChannelName = channelName
-  const s = pSpinner()
-  s.start(`Running: ${pm.runner} @capgo/cli@latest channel add ${channelName} ${appId} --default`)
-  try {
-    const addChannelRes = await addChannelInternal(channelName, appId, {
-      default: true,
-      apikey,
-    }, true)
-    if (!addChannelRes)
-      s.stop(`Channel already added ✅`)
-    else
-      s.stop(`Channel add done ✅`)
+    if (channelChoice === 'default') {
+      channelName = defaultChannel
+    }
+    else {
+      const selectedChannelName = await pText({
+        message: 'Enter the channel name to use for onboarding:',
+        placeholder: 'e.g. staging, beta, dev',
+        validate: validateChannelName,
+      })
+      await cancelCommand(selectedChannelName, orgId, apikey)
+      channelName = (selectedChannelName as string).trim()
+    }
+
+    globalChannelName = channelName
+    const s = pSpinner()
+    s.start(`Running: ${pm.runner} @capgo/cli@latest channel add ${channelName} ${appId} --default`)
+    try {
+      const addChannelRes = await addChannelInternal(channelName, appId, {
+        default: true,
+        apikey,
+      }, true)
+      if (!addChannelRes)
+        s.stop(`Channel already added ✅`)
+      else
+        s.stop(`Channel add done ✅`)
+      await markStep(orgId, apikey, 'add-channel', appId)
+      return channelName
+    }
+    catch (error) {
+      if (!isChannelAlreadyExistsError(error)) {
+        s.stop(`Channel creation failed ❌`)
+        throw error
+      }
+
+      s.stop(`Channel already exists`)
+
+      const existingChannelChoice = await pSelect({
+        message: `The channel "${channelName}" already exists. What would you like to do?`,
+        options: [
+          { value: 'use-existing', label: '✅ Use the existing channel' },
+          { value: 'change', label: '✏️ Choose a different channel name' },
+        ],
+      })
+      await cancelCommand(existingChannelChoice, orgId, apikey)
+
+      if (existingChannelChoice === 'use-existing') {
+        pLog.success(`Using existing channel "${channelName}" ✅`)
+        await markStep(orgId, apikey, 'add-channel', appId)
+        return channelName
+      }
+    }
   }
-  catch (error) {
-    s.stop(`Channel creation failed ❌`)
-    throw error
-  }
-  await markStep(orgId, apikey, 'add-channel', appId)
-  return channelName
 }
 
 function rememberPackageJsonPath(packageJsonPath: string): void {
@@ -2618,163 +2851,130 @@ async function addUpdaterStep(orgId: string, apikey: string, appId: string) {
 }
 
 async function addCodeStep(orgId: string, apikey: string, appId: string) {
-  const addCodeChoice = await pSelect({
-    message: `Add the Capacitor Updater import to your main file?`,
-    options: [
-      { value: 'yes', label: '✅ Yes, add it' },
-      { value: 'no', label: '❌ No, I\'ll do it manually' },
-    ],
-  })
-  await cancelCommand(addCodeChoice, orgId, apikey)
+  const packageJsonPath = path.resolve(globalPathToPackageJson ?? join(findRoot(cwd()), PACKNAME))
+  const projectDir = dirname(packageJsonPath)
+  const resolveProjectFilePath = (filePath: string) => path.isAbsolute(filePath) ? filePath : join(projectDir, filePath)
+  const projectType = await findProjectType({ quiet: true, packageJsonPath })
+  let filePath: string
+  let currentContent: string
+  let created = false
+  let createNuxtPlugin = false
+
+  if (!globalMainFilePath && (projectType === 'nuxtjs-js' || projectType === 'nuxtjs-ts')) {
+    const extension = projectType === 'nuxtjs-ts' ? 'ts' : 'js'
+    filePath = join(projectDir, 'plugins', `capacitorUpdater.client.${extension}`)
+    created = !existsSync(filePath)
+    currentContent = created ? '' : readFileSync(filePath, 'utf8')
+    createNuxtPlugin = true
+  }
+  else {
+    let mainFilePath: string | null = globalMainFilePath ?? null
+    if (!mainFilePath && projectType === 'unknown') {
+      mainFilePath = await findMainFile(true, projectDir)
+    }
+    else if (!mainFilePath) {
+      const isTypeScript = projectType.endsWith('-ts')
+      const projectTypeMainFile = findMainFileForProjectType(projectType, isTypeScript, projectDir)
+      mainFilePath = projectTypeMainFile ? resolveProjectFilePath(projectTypeMainFile) : projectTypeMainFile
+    }
+
+    if (!mainFilePath || !existsSync(mainFilePath)) {
+      const userProvidedPath = await pText({
+        message: `Provide the correct relative path to your main file (JS or TS):`,
+        validate: (value) => {
+          if (!value || !existsSync(resolveProjectFilePath(value)))
+            return 'File does not exist. Please provide a valid path.'
+        },
+      })
+      if (pIsCancel(userProvidedPath)) {
+        pCancel('Operation cancelled.')
+        return await exitAfterFinishingReplay(1)
+      }
+      mainFilePath = resolveProjectFilePath(userProvidedPath as string)
+    }
+
+    filePath = mainFilePath
+    currentContent = readFileSync(filePath, 'utf8')
+  }
+
+  const getCanAutoInject = () => !createNuxtPlugin || created || currentContent.includes(codeInject)
+  const getNewContent = () => createNuxtPlugin ? getNuxtUpdaterPluginContent() : injectInitCode(filePath, currentContent)
+
+  let newContent = getNewContent()
+  let alreadyConfigured = currentContent.includes(codeInject)
+  let canAutoInject = getCanAutoInject()
+  let previewDiff: InitCodeDiff
+  let addCodeChoice: string | symbol
+
+  while (true) {
+    previewDiff = {
+      filePath: formatInitFilePath(filePath),
+      created,
+      lines: !alreadyConfigured && canAutoInject ? buildCodeDiffLines(currentContent, newContent, CODE_DIFF_CONTEXT_LINES) : [],
+      note: alreadyConfigured
+        ? 'Already contains CapacitorUpdater.notifyAppReady() — no change needed'
+        : !canAutoInject
+            ? 'An existing Nuxt updater plugin will not be overwritten automatically'
+            : undefined,
+    }
+    // Show the exact proposed edit in the same screen as the confirmation.
+    setInitCodeDiff(previewDiff)
+    addCodeChoice = await pSelect({
+      message: `Add the Capacitor Updater import to your main file?`,
+      options: [
+        { value: 'yes', label: '✅ Yes, add it' },
+        { value: 'no', label: '❌ No, I\'ll do it manually' },
+      ],
+    })
+    await cancelCommand(addCodeChoice, orgId, apikey)
+
+    if (addCodeChoice !== 'yes' || alreadyConfigured)
+      break
+
+    const fileExists = existsSync(filePath)
+    const latestContent = fileExists ? readFileSync(filePath, 'utf8') : ''
+    if (latestContent === currentContent && created === !fileExists)
+      break
+
+    pLog.warn(`${formatInitFilePath(filePath)} changed while you reviewed the diff. Showing an updated preview.`)
+    currentContent = latestContent
+    created = !fileExists
+    newContent = getNewContent()
+    alreadyConfigured = currentContent.includes(codeInject)
+    canAutoInject = getCanAutoInject()
+  }
 
   if (addCodeChoice === 'yes') {
-    const s = pSpinner()
-    s.start(`Adding @capacitor-updater to your main file`)
-
-    const packageJsonPath = path.resolve(globalPathToPackageJson ?? join(findRoot(cwd()), PACKNAME))
-    const projectDir = dirname(packageJsonPath)
-    const resolveProjectFilePath = (filePath: string) => path.isAbsolute(filePath) ? filePath : join(projectDir, filePath)
-    const projectType = await findProjectType({ quiet: true, packageJsonPath })
-    if (!globalMainFilePath && (projectType === 'nuxtjs-js' || projectType === 'nuxtjs-ts')) {
-      // Nuxt.js specific logic
-      const nuxtDir = join(projectDir, 'plugins')
-      if (!existsSync(nuxtDir)) {
-        mkdirSync(nuxtDir, { recursive: true })
+    if (!canAutoInject) {
+      pLog.warn(`An existing Nuxt updater plugin was not changed automatically.`)
+      pLog.info(`Add this plugin code manually:\n\n${getNuxtUpdaterPluginContent()}`)
+      await markStep(orgId, apikey, 'add-code-manual', appId)
+    }
+    else if (!alreadyConfigured) {
+      const s = pSpinner()
+      s.start(`Adding @capacitor-updater to your main file`)
+      if (created) {
+        mkdirSync(dirname(filePath), { recursive: true })
       }
-      let nuxtFilePath
-      if (projectType === 'nuxtjs-ts') {
-        nuxtFilePath = join(nuxtDir, 'capacitorUpdater.client.ts')
-      }
-      else {
-        nuxtFilePath = join(nuxtDir, 'capacitorUpdater.client.js')
-      }
-      const nuxtFileLines = [
-        `import { CapacitorUpdater } from '@capgo/capacitor-updater'`,
-        ``,
-        `export default defineNuxtPlugin(() => {`,
-        `  CapacitorUpdater.notifyAppReady()`,
-        `})`,
-        ``,
-      ]
-      const nuxtFileContent = nuxtFileLines.join('\n')
-      const nuxtDisplayPath = formatInitFilePath(nuxtFilePath)
-      if (existsSync(nuxtFilePath)) {
-        const currentContent = readFileSync(nuxtFilePath, 'utf8')
-        if (currentContent.includes('CapacitorUpdater.notifyAppReady()')) {
-          s.stop()
-          globalCodeDiff = {
-            filePath: nuxtDisplayPath,
-            created: false,
-            lines: [],
-            note: 'Already contains CapacitorUpdater.notifyAppReady() — no change needed',
-          }
-        }
-        else {
-          writeFileSync(nuxtFilePath, nuxtFileContent, 'utf8')
-          s.stop()
-          globalCodeDiff = {
-            filePath: nuxtDisplayPath,
-            created: false,
-            lines: buildCodeDiffLines(currentContent, nuxtFileContent, CODE_DIFF_CONTEXT_LINES),
-          }
-        }
-      }
-      else {
-        writeFileSync(nuxtFilePath, nuxtFileContent, 'utf8')
-        s.stop()
-        globalCodeDiff = {
-          filePath: nuxtDisplayPath,
-          created: true,
-          lines: buildCodeDiffLines('', nuxtFileContent, CODE_DIFF_CONTEXT_LINES),
-        }
-      }
+      writeFileSync(filePath, newContent, 'utf8')
+      s.stop()
+      globalCodeDiff = previewDiff
       setInitCodeDiff(globalCodeDiff)
     }
     else {
-      // Handle other project types
-      let mainFilePath: string | null = globalMainFilePath ?? null
-      if (!mainFilePath && projectType === 'unknown') {
-        mainFilePath = await findMainFile(true, projectDir)
-      }
-      else if (!mainFilePath) {
-        const isTypeScript = projectType.endsWith('-ts')
-        const projectTypeMainFile = findMainFileForProjectType(projectType, isTypeScript, projectDir)
-        mainFilePath = projectTypeMainFile ? resolveProjectFilePath(projectTypeMainFile) : projectTypeMainFile
-      }
-
-      // Open main file and inject codeInject
-      if (!mainFilePath || !existsSync(mainFilePath)) {
-        s.stop('Cannot find main file to install Updater plugin', 'neutral')
-        const userProvidedPath = await pText({
-          message: `Provide the correct relative path to your main file (JS or TS):`,
-          validate: (value) => {
-            if (!value || !existsSync(resolveProjectFilePath(value)))
-              return 'File does not exist. Please provide a valid path.'
-          },
-        })
-        if (pIsCancel(userProvidedPath)) {
-          pCancel('Operation cancelled.')
-          return await exitAfterFinishingReplay(1)
-        }
-        mainFilePath = resolveProjectFilePath(userProvidedPath as string)
-      }
-      const mainFile = readFileSync(mainFilePath, 'utf8')
-      const mainFileContent = mainFile.toString()
-      const matches = mainFileContent.match(regexImport)
-      const last = matches?.pop()
-
-      if (!last) {
-        s.stop('Cannot auto-inject code', 'neutral')
-        pLog.warn(`❌ Cannot find import statements in ${mainFilePath}`)
-        pLog.info(`💡 You'll need to add the code manually`)
-        pLog.info(`📝 Add this to your main file:`)
-        pLog.info(`   ${importInject}`)
-        pLog.info(`   ${codeInject}`)
-        pLog.info(`📚 Or follow: https://capgo.app/docs/getting-started/add-an-app/`)
-
-        const continueAnyway = await pConfirm({
-          message: `Continue without auto-injecting the code? (You'll add it manually)`,
-        })
-        await cancelCommand(continueAnyway, orgId, apikey)
-
-        if (!continueAnyway) {
-          pOutro(`Bye 👋\n💡 You can resume the onboarding anytime by running the same command again`)
-          return await exitAfterFinishingReplay()
-        }
-
-        pLog.info(`⏭️  Skipping auto-injection - remember to add the code manually!`)
-        await markStep(orgId, apikey, 'add-code-manual', appId)
-      }
-      else if (mainFileContent.includes(codeInject)) {
-        s.stop()
-        globalCodeDiff = {
-          filePath: formatInitFilePath(mainFilePath),
-          created: false,
-          lines: [],
-          note: 'Already contains CapacitorUpdater.notifyAppReady() — no change needed',
-        }
-        setInitCodeDiff(globalCodeDiff)
-      }
-      else {
-        // Note: no trailing `\n` — the original file already has newlines after
-        // `last`, so adding one here would create a spurious blank line that
-        // shows up as an added `+` line in the diff panel.
-        const newMainFileContent = mainFileContent.replace(last, `${last}\n${importInject};\n\n${codeInject};`)
-        writeFileSync(mainFilePath, newMainFileContent, 'utf8')
-        s.stop()
-        globalCodeDiff = {
-          filePath: formatInitFilePath(mainFilePath),
-          created: false,
-          lines: buildCodeDiffLines(mainFileContent, newMainFileContent, CODE_DIFF_CONTEXT_LINES),
-        }
-        setInitCodeDiff(globalCodeDiff)
-      }
+      globalCodeDiff = previewDiff
     }
 
     await markStep(orgId, apikey, 'add-code', appId)
   }
   else {
-    pLog.info(`Add to your main file the following code:\n\n${importInject};\n\n${codeInject};\n`)
+    setInitCodeDiff(undefined)
+    const manualCode = createNuxtPlugin
+      ? getNuxtUpdaterPluginContent()
+      : getExistingUpdaterBinding(filePath, currentContent)
+        ? getInitCodeCall()
+        : getInitCodeInjection(filePath)
+    pLog.info(`${createNuxtPlugin ? 'Add this plugin code manually:' : 'Add to your main file the following code:'}\n\n${manualCode}\n`)
   }
 }
 
@@ -3036,26 +3236,33 @@ async function addEncryptionStep(orgId: string, apikey: string, appId: string) {
  */
 async function streamCommandInInitPanel(params: {
   title: string
-  runner: string // e.g. "npx", "bunx", "yarn dlx"
+  runner?: string // e.g. "npx", "bunx", "yarn dlx"
+  command?: string // e.g. "npm", "pnpm", "yarn", "bun"
   args: string[]
   cwd?: string
 }): Promise<{ success: boolean, error?: Error }> {
+  const commandPrefix = params.command ?? params.runner ?? ''
+  const displayCommand = `${commandPrefix} ${params.args.join(' ')}`.trim()
+  // Show the panel before command resolution so even invalid command setup is
+  // rendered by Ink rather than surfacing as a bare terminal error.
+  startInitStreamingOutput({ title: params.title, command: displayCommand })
+
   // `pm.runner` can contain a space ("yarn dlx", "pnpm exec"). `spawn`
   // without `shell:true` can't handle that, and `shell:true` brings
   // quoting risk, so we split the runner into its own head + tail args.
-  let runnerCommand
+  let runnerCommand: { command: string, args: string[] }
   try {
-    runnerCommand = splitRunnerCommand(params.runner)
+    runnerCommand = params.command
+      ? { command: params.command, args: [] }
+      : splitRunnerCommand(params.runner ?? '')
   }
   catch (error) {
-    return { success: false, error: error instanceof Error ? error : new Error(String(error)) }
+    const resolvedError = error instanceof Error ? error : new Error(String(error))
+    updateInitStreamingStatus('error', resolvedError.message)
+    return { success: false, error: resolvedError }
   }
   const { command: runnerCmd, args: runnerArgs } = runnerCommand
   const fullArgs = [...runnerArgs, ...params.args]
-  const displayCommand = `${params.runner} ${params.args.join(' ')}`
-
-  startInitStreamingOutput({ title: params.title, command: displayCommand })
-
   const appendChunk = (chunk: { toString: (encoding: string) => string } | string) => {
     const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8')
     // Capacitor CLI output mixes \r\n and bare \n; split on both but keep
@@ -3071,9 +3278,9 @@ async function streamCommandInInitPanel(params: {
     let child
     try {
       child = spawn(runnerCmd, fullArgs, {
-        // stdin ignored — cap sync is non-interactive. stdout/stderr piped
-        // so Node can read them without touching the parent TTY that Ink
-        // is actively rendering into.
+        // Onboarding commands that use this helper must be non-interactive.
+        // Keep stdin ignored and capture stdout/stderr so no child process
+        // touches the parent TTY while Ink is actively rendering into it.
         cwd: params.cwd,
         stdio: ['ignore', 'pipe', 'pipe'],
       })
@@ -3300,6 +3507,7 @@ async function ensureUpdaterReadyBeforeSync(pm: PackageManagerInfo, orgId: strin
 
 async function runBuildAndSyncLoop(
   platform: PlatformChoice,
+  buildCommand: string,
   buildAndSyncCommand: string,
   buildAndSyncCwd: string,
   packageJsonPath: string,
@@ -3319,9 +3527,36 @@ async function runBuildAndSyncLoop(
       : `Running in ${buildAndSyncCwd}: ${buildAndSyncCommand}`
     spinner.stop(runMessage, 'neutral')
     try {
-      const result = await runInheritedShellCommand(buildAndSyncCommand, { cwd: buildAndSyncCwd })
-      if (result.error || result.status !== 0)
-        throw result.error ?? new Error(`Build or sync command failed with ${formatInheritedCommandFailure(result)}`)
+      const buildResult = await streamCommandInInitPanel({
+        title: 'Building web assets',
+        command: pm.pm,
+        args: ['run', buildCommand],
+        cwd: buildAndSyncCwd,
+      })
+      if (!buildResult.success) {
+        await delay(3500)
+        clearInitStreamingOutput()
+        throw buildResult.error ?? new Error('Build command failed')
+      }
+
+      // Keep the completed build output visible long enough for users to
+      // understand that the next streamed command is the native sync.
+      await delay(1500)
+
+      const syncResult = await streamCommandInInitPanel({
+        title: `Syncing ${platform.toUpperCase()} native project`,
+        runner: pm.runner,
+        args: ['cap', 'sync', platform],
+        cwd: buildAndSyncCwd,
+      })
+      if (!syncResult.success) {
+        await delay(3500)
+        clearInitStreamingOutput()
+        throw syncResult.error ?? new Error('Capacitor sync command failed')
+      }
+
+      await delay(1500)
+      clearInitStreamingOutput()
     }
     catch (error) {
       pLog.error('Build or sync failed ❌')
@@ -3357,7 +3592,7 @@ async function runProjectBuildAndSync(appId: string, platform: PlatformChoice, o
     return handleMissingBuildScript(buildCommand, appId, platform, orgId, apikey, pm)
 
   const buildAndSyncCommand = `${pm.pm} run ${buildCommand} && ${pm.runner} cap sync ${platform}`
-  await runBuildAndSyncLoop(platform, buildAndSyncCommand, projectDir, packageJsonPath, pm, orgId, apikey)
+  await runBuildAndSyncLoop(platform, buildCommand, buildAndSyncCommand, projectDir, packageJsonPath, pm, orgId, apikey)
   return 'completed'
 }
 
@@ -3385,11 +3620,6 @@ async function buildProjectStep(orgId: string, apikey: string, appId: string, pl
 export function runPackageRunnerSync(runner: string, args: string[], options: Parameters<typeof spawnSync>[2]) {
   const parsedRunner = splitRunnerCommand(runner)
   return spawnSync(parsedRunner.command, [...parsedRunner.args, ...args], options)
-}
-
-async function runPackageRunnerInherited(runner: string, args: string[], options: Pick<InheritedCommandOptions, 'cwd'> = {}) {
-  const parsedRunner = splitRunnerCommand(runner)
-  return runInheritedCommand(parsedRunner.command, [...parsedRunner.args, ...args], options)
 }
 
 interface InheritedCommandResult {
@@ -3529,20 +3759,6 @@ async function runPtyInheritedCommand(command: string, args: string[], options: 
       stdin.resume()
     }
   })
-}
-
-function runInheritedShellCommand(command: string, options: Pick<InheritedCommandOptions, 'cwd'> = {}) {
-  const shellCommand = platform === 'win32' ? (env.ComSpec || 'cmd.exe') : '/bin/sh'
-  const shellArgs = platform === 'win32' ? ['/d', '/s', '/c', command] : ['-c', command]
-  return runInheritedCommand(shellCommand, shellArgs, options)
-}
-
-function formatInheritedCommandFailure(result: InheritedCommandResult) {
-  if (result.error)
-    return formatError(result.error)
-  if (result.signal)
-    return `signal ${result.signal}`
-  return `exit code ${result.status ?? 'unknown'}`
 }
 
 function getSpawnOutputText(output: string | Buffer | null | undefined): string {
@@ -4073,21 +4289,30 @@ async function runDeviceStep(orgId: string, apikey: string, appId: string, platf
       ? `Running: ${runCommand.command}`
       : `Running in ${projectDir}: ${runCommand.command}`
     s.start(runMessage)
+    s.stop()
 
-    let runResult: InheritedCommandResult | undefined
+    let runResult: Awaited<ReturnType<typeof streamCommandInInitPanel>> | undefined
     let runError: Error | undefined
     try {
-      runResult = await runPackageRunnerInherited(pm.runner, runCommand.args, { cwd: projectDir })
+      runResult = await streamCommandInInitPanel({
+        title: `Running on ${platform.toUpperCase()} device`,
+        runner: pm.runner,
+        args: runCommand.args,
+        cwd: projectDir,
+      })
+      await delay(runResult.success ? 750 : 3500)
+      clearInitStreamingOutput()
     }
     catch (error) {
       runError = error instanceof Error ? error : new Error(String(error))
+      clearInitStreamingOutput()
     }
-    const runFailed = runError || runResult?.error || runResult?.status !== 0
+    const runFailed = runError || !runResult?.success
 
     if (runFailed) {
       const platformName = platform === 'ios' ? 'iOS' : 'Android'
       s.stop(`App failed to start ❌`)
-      appendInternalLog(`app run failed (${platformName}): ${(runError || runResult?.error) ? formatError(runError ?? runResult?.error) : `exit status ${runResult?.status ?? 'unknown'}`}`)
+      appendInternalLog(`app run failed (${platformName}): ${(runError || runResult?.error) ? formatError(runError ?? runResult?.error) : 'unknown error'}`)
       if (runError || runResult?.error)
         pLog.error(formatError(runError ?? runResult?.error))
       pLog.error(`The app failed to start on your ${platformName} device.`)
@@ -4099,9 +4324,17 @@ async function runDeviceStep(orgId: string, apikey: string, appId: string, platf
       if (!pIsCancel(openIDE) && openIDE) {
         const s2 = pSpinner()
         s2.start(`Opening ${platform === 'ios' ? 'Xcode' : 'Android Studio'}...`)
+        s2.stop()
         try {
-          const openResult = await runPackageRunnerInherited(pm.runner, ['cap', 'open', platform], { cwd: projectDir })
-          if (openResult.error || openResult.status !== 0) {
+          const openResult = await streamCommandInInitPanel({
+            title: `Opening ${platform === 'ios' ? 'Xcode' : 'Android Studio'}`,
+            runner: pm.runner,
+            args: ['cap', 'open', platform],
+            cwd: projectDir,
+          })
+          await delay(openResult.success ? 750 : 3500)
+          clearInitStreamingOutput()
+          if (!openResult.success) {
             s2.stop(`Could not open ${platform === 'ios' ? 'Xcode' : 'Android Studio'} ❌`)
             if (openResult.error)
               pLog.error(formatError(openResult.error))
@@ -4452,7 +4685,38 @@ async function uploadStep(orgId: string, apikey: string, appId: string, newVersi
       globalNodeModulesPath = isMonorepo ? nodeModulesPath : undefined
 
       let uploadRes: Awaited<ReturnType<typeof uploadBundleInternal>> | undefined
+      const appendUploadOutput = (message: string, prefix = '') => {
+        for (const line of message.split(/\r?\n/)) {
+          if (line)
+            appendInitStreamingLine(`${prefix}${line}`)
+        }
+      }
+      const uploadReporter: UploadReporter = {
+        info: message => appendUploadOutput(message),
+        warn: message => appendUploadOutput(message, '⚠ '),
+        error: message => appendUploadOutput(message, '✖ '),
+        success: message => appendUploadOutput(message, '✓ '),
+        intro: message => appendUploadOutput(message),
+        outro: message => appendUploadOutput(message, '✓ '),
+        spinner: () => ({
+          start: message => updateInitStreamingStatus('running', message),
+          message: message => updateInitStreamingStatus('running', message),
+          stop: (message) => {
+            if (message)
+              appendUploadOutput(message, '✓ ')
+          },
+          error: message => appendUploadOutput(message, '✖ '),
+        }),
+      }
       try {
+        s.stop()
+        startInitStreamingOutput({
+          title: `Uploading ${appId}@${newVersion} to Capgo`,
+          command: `bundle upload ${appId} --channel ${globalChannelName} --bundle ${newVersion}`,
+          onCancel: () => {
+            void cancelCommand(INIT_CANCEL, orgId, apikey)
+          },
+        })
         const previousCwd = cwd()
         try {
           chdir(selectedProjectDir)
@@ -4466,35 +4730,69 @@ async function uploadStep(orgId: string, apikey: string, appId: string, newVersi
             ignoreChecksumCheck: true,
             // Onboarding owns replication UX after the upload spinner stops.
             showReplicationProgress: false,
-          }, false)
+          }, true, uploadReporter)
         }
         finally {
           chdir(previousCwd)
         }
+        if (uploadRes?.success) {
+          updateInitStreamingStatus('success', 'Upload complete')
+          await delay(750)
+          clearInitStreamingOutput()
+        }
+        else {
+          updateInitStreamingStatus('error', 'Bundle upload did not complete successfully.')
+        }
       }
-      catch (error) {
-        s.stop('Upload failed ❌')
-        pLog.error(formatError(error))
-        await selectRecoveryOption(orgId, apikey, 'Bundle upload failed. What do you want to do?', [
+  catch (error) {
+    const failureText = formatError(error)
+    updateInitStreamingStatus('error', failureText)
+    const continueResult = await waitForInitStreamingContinue('Press Enter to continue, or Ctrl+C to cancel.')
+        clearInitStreamingOutput()
+        if (pIsCancel(continueResult)) {
+          await cancelCommand(continueResult, orgId, apikey)
+          return
+        }
+        await selectRecoveryOption(orgId, apikey, `Upload failed: ${failureText}\nWhat do you want to do?`, [
           { value: 'retry', label: 'Retry bundle upload' },
-        ], formatError(error), supportPlatform)
+        ], failureText, supportPlatform)
         continue
       }
-      if (!uploadRes?.success) {
-        s.stop('Upload failed ❌')
+  if (!uploadRes?.success) {
+    const continueResult = await waitForInitStreamingContinue('Press Enter to continue, or Ctrl+C to cancel.')
+        clearInitStreamingOutput()
+        if (pIsCancel(continueResult)) {
+          await cancelCommand(continueResult, orgId, apikey)
+          return
+        }
         await selectRecoveryOption(orgId, apikey, 'Bundle upload failed. What do you want to do?', [
           { value: 'retry', label: 'Retry bundle upload' },
         ], 'Bundle upload did not complete successfully.', supportPlatform)
         continue
       }
 
-      s.stop(`✅ Update v${newVersion} uploaded successfully!`)
+      startInitStreamingOutput({
+        title: 'Replicating your updated bundle across Capgo\'s global servers.',
+        command: 'Waiting for global OTA propagation',
+        onCancel: () => {
+          void cancelCommand(INIT_CANCEL, orgId, apikey)
+        },
+      })
       await showReplicationProgress({
-        title: 'Replicating your updated bundle in onboarding regions.',
+        title: 'Replicating your updated bundle across Capgo\'s global servers.',
         completeMessage: 'Update replication is now fully propagated.',
         interactive: !!stdin.isTTY && !!stdout.isTTY,
+        reporter: {
+          info: message => appendInitStreamingLine(message),
+          spinner: () => ({
+            start: message => updateInitStreamingStatus('running', message),
+            message: message => updateInitStreamingStatus('running', message),
+            stop: message => updateInitStreamingStatus('success', message),
+          }),
+        },
       })
-      pLog.info(`🎉 Your updated bundle is now available on Capgo`)
+      clearInitStreamingOutput()
+      pushInitLog('🎉 Your updated bundle is now available on Capgo', 'green')
       break
     }
   }
@@ -4732,7 +5030,23 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
     }
   }
 
-  let resumed = await tryResumeOnboarding(options.apikey, initialTargets, initialCwd)
+  const log = pSpinner()
+  if (!doLoginExists() || apikeyCommand) {
+    log.start(`Running: ${pm.runner} @capgo/cli@latest login ***`)
+    try {
+      await loginInternal(options.apikey, options, true)
+      log.stop('Login Done ✅')
+    }
+    catch (error) {
+      log.stop('Login failed ❌')
+      throw error
+    }
+  }
+
+  const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
+  await resolveUserIdFromApiKey(supabase, options.apikey)
+
+  let resumed = await tryResumeOnboarding(options.apikey, initialTargets, initialCwd, supabase)
   let stepToSkip = resumed?.stepDone ?? 0
 
   await ensureGitRepoCleanBeforeInit(stepToSkip > 0 ? globalAutoTestChange : undefined)
@@ -4773,6 +5087,12 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
   await reloadSelectedProjectConfig()
   // Warn if this doesn't look like a Capacitor project
   const hasCapacitorConfig = Boolean(globalCapacitorConfigPath) || capacitorConfigFiles.some(file => existsSync(join(selectedProjectDir, file)))
+  let nativePlatforms: ReturnType<typeof getNativePlatformAvailability> = {
+    iosDir: 'ios',
+    androidDir: 'android',
+    ios: true,
+    android: true,
+  }
   if (!hasCapacitorConfig) {
     pLog.warn('⚠️  No capacitor.config.* found in the selected project directory.')
     pLog.info(`   Capgo requires a Capacitor project. Selected project: ${selectedProjectDir}`)
@@ -4790,10 +5110,10 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
     }
   }
   else {
-    const availablePlatforms = getNativePlatformAvailability(extConfig?.config, selectedProjectDir)
-    if (!availablePlatforms.ios && !availablePlatforms.android) {
+    nativePlatforms = getNativePlatformAvailability(extConfig?.config, selectedProjectDir)
+    if (!nativePlatforms.ios && !nativePlatforms.android) {
       const { pm, capAddAndroid, capAddIos } = getInitRecoveryCommands()
-      pLog.warn(`⚠️  No native platform directories found (${availablePlatforms.iosDir}/ or ${availablePlatforms.androidDir}/).`)
+      pLog.warn(`⚠️  No native platform directories found (${nativePlatforms.iosDir}/ or ${nativePlatforms.androidDir}/).`)
       pLog.info(`   Suggested commands: ${capAddIos} or ${capAddAndroid}`)
       const continueWithout = await pSelect({
         message: 'How do you want to continue?',
@@ -4846,6 +5166,8 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
           }
         }
       }
+
+      nativePlatforms = getNativePlatformAvailability(extConfig?.config, selectedProjectDir)
     }
   }
 
@@ -4853,22 +5175,6 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
   appId = getAppId(initialAppId, extConfig?.config)
 
   appId ??= await askForAppId('Enter your appId:')
-
-  const log = pSpinner()
-  if (!doLoginExists() || apikeyCommand) {
-    log.start(`Running: ${pm.runner} @capgo/cli@latest login ***`)
-    try {
-      await loginInternal(options.apikey, options, true)
-      log.stop('Login Done ✅')
-    }
-    catch (error) {
-      log.stop('Login failed ❌')
-      throw error
-    }
-  }
-
-  const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
-  await resolveUserIdFromApiKey(supabase, options.apikey)
 
   // A failed remote checkpoint (organization access, role, or 2FA) restarts
   // onboarding at step 0 using only the caller's original project targets.
@@ -4913,23 +5219,31 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
     else {
       const savedOrg = allOrganizations.find(org => org.gid === resumedSnapshot.orgId)
       const blocked2fa = savedOrg?.enforcing_2fa && !savedOrg['2fa_has_access']
-      const hasCreateAppPermission = savedOrg
+      const hasCreateAppPermission = savedOrg && !resumedSnapshot.appId
         ? await hasCliPermission(supabase, options.apikey, 'org.create_app', { orgId: savedOrg.gid })
         : false
+      const hasAppAccess = !savedOrg || !resumedSnapshot.appId
+        ? true
+        : Boolean(await findAppInOrganization(supabase, savedOrg.gid, resumedSnapshot.appId).catch(() => null))
 
       if (!savedOrg) {
         pLog.warn(`Previously used organization "${resumedSnapshot.orgName}" is no longer available. Please select a new one.`)
         organization = await selectOrganizationForInit(supabase, options.apikey)
         await discardResumedState()
       }
-      else if (!hasCreateAppPermission) {
-        pLog.warn(`You no longer have permission to create an app in "${savedOrg.name}". Please select a different organization.`)
-        organization = await selectOrganizationForInit(supabase, options.apikey)
-        await discardResumedState()
-      }
       else if (blocked2fa) {
         pLog.warn(`Organization "${savedOrg.name}" now requires 2FA. Enable it at ${consoleWebUrl('/settings/account')}`)
         pLog.warn('Please select a different organization or enable 2FA and try again.')
+        organization = await selectOrganizationForInit(supabase, options.apikey)
+        await discardResumedState()
+      }
+      else if (!hasAppAccess) {
+        pLog.warn(`Previously used app "${resumedSnapshot.appId}" is no longer available. Please select a different organization.`)
+        organization = await selectOrganizationForInit(supabase, options.apikey)
+        await discardResumedState()
+      }
+      else if (!hasCreateAppPermission && !resumedSnapshot.appId) {
+        pLog.warn(`You no longer have permission to create an app in "${savedOrg.name}". Please select a different organization.`)
         organization = await selectOrganizationForInit(supabase, options.apikey)
         await discardResumedState()
       }
@@ -4983,7 +5297,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
   try {
     if (stepToSkip < 1) {
       renderCurrentStep(1)
-      await checkPrerequisitesStep(orgId, options.apikey)
+      await checkPrerequisitesStep(orgId, options.apikey, nativePlatforms)
       appId = await addAppStep(organization, options.apikey, appId, options)
       globalAppId = appId
       markStepDone(1)

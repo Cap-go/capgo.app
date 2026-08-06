@@ -2,6 +2,7 @@
 import type { Finding, PrescanReport, Severity } from '../../src/build/prescan/types'
 import { describe, expect, it } from 'bun:test'
 import { exitCodeFor, runPrescanGate, validateFlags } from '../../src/build/prescan/command'
+import { ASC_PRESCAN_AUTH_ENFORCE_AFTER } from '../../src/build/prescan/checks/store-access'
 import { IOS_PRESCAN_EXPANSION_ENFORCE_AFTER } from '../../src/build/prescan/registry'
 
 describe('validateFlags', () => {
@@ -30,6 +31,16 @@ describe('exitCodeFor', () => {
       enforceAfter: IOS_PRESCAN_EXPANSION_ENFORCE_AFTER,
     }]
     expect(exitCodeFor(counts(1, 0), { now: new Date('2026-08-01T00:00:00.000Z') }, findings)).toBe(0)
+  })
+  it('ASC auth finding becomes blocking exactly at the rollout deadline', () => {
+    const findings: Finding[] = [{
+      id: 'ios/asc-key-access',
+      severity: 'error',
+      title: 'authentication failed',
+      enforceAfter: ASC_PRESCAN_AUTH_ENFORCE_AFTER,
+    }]
+    expect(exitCodeFor(counts(1, 0), { now: new Date('2026-08-16T23:59:59.999Z') }, findings)).toBe(0)
+    expect(exitCodeFor(counts(1, 0), { now: new Date(ASC_PRESCAN_AUTH_ENFORCE_AFTER) }, findings)).toBe(1)
   })
 })
 
@@ -87,6 +98,22 @@ describe('runPrescanGate', () => {
   it('proceeds on errors with ignoreFatal', async () => {
     const r = await runPrescanGate({ enabled: true, ignoreFatal: true, silent: true }, async () => fakeReport(1, 0))
     expect(r.decision).toBe('proceed')
+  })
+  it('hides deferred critical rollout deadlines with ignoreFatal', async () => {
+    const printed: string[] = []
+    const report = fakeReport(1, 0)
+    report.findings[0].enforceAfter = IOS_PRESCAN_EXPANSION_ENFORCE_AFTER
+    const r = await runPrescanGate({
+      enabled: true,
+      ignoreFatal: true,
+      now: new Date('2026-08-01T00:00:00.000Z'),
+      print: message => printed.push(message),
+    }, async () => report)
+    const output = printed.join('\n')
+    expect(r.decision).toBe('proceed')
+    expect(output).toContain('CRITICAL — INFORMATION ONLY')
+    expect(output).not.toContain('will fail builds starting 2026-08-14 00:00 UTC')
+    expect(output).not.toContain('rollout:')
   })
   it('proceeds (non-interactive) on warnings', async () => {
     const r = await runPrescanGate({ enabled: true, interactive: false, silent: true }, async () => fakeReport(0, 1))

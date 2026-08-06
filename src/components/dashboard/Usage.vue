@@ -10,6 +10,7 @@ import BanknotesIcon from '~icons/heroicons/banknotes'
 import CalendarDaysIcon from '~icons/heroicons/calendar-days'
 import ChartBarIcon from '~icons/heroicons/chart-bar'
 import InformationInfo from '~icons/heroicons/information-circle'
+import { invokeCapgoApi } from '~/services/capgoApi'
 import { bytesToGb, getDaysBetweenDates } from '~/services/conversion'
 import {
   CHART_REFRESH_POLL_MS,
@@ -25,7 +26,7 @@ import {
 } from '~/services/dashboardRefresh'
 import { formatLocalDate, formatLocalDateTime, formatUtcDateTimeAsLocal } from '~/services/date'
 import { DEMO_APP_NAMES, generateDemoBandwidthData, generateDemoMauData, generateDemoStorageData } from '~/services/demoChartData'
-import { getPlans, useSupabase } from '~/services/supabase'
+import { getPlans } from '~/services/supabase'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
@@ -479,9 +480,8 @@ async function getAppStats(rangeStart: Date, rangeEnd: Date) {
       }
     }
 
-    const supabase = useSupabase()
     const dateRange = `?from=${rangeStart.toISOString()}&to=${rangeEnd.toISOString()}&noAccumulate=true`
-    const response = await supabase.functions.invoke(`statistics/app/${props.appId}/${dateRange}`, {
+    const response = await invokeCapgoApi(`statistics/app/${props.appId}${dateRange}`, {
       method: 'GET',
     })
 

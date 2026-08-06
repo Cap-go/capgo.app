@@ -13,6 +13,7 @@ import transfer from '~icons/mingcute/transfer-horizontal-line?raw&width=36&heig
 import gearSix from '~icons/ph/gear-six?raw'
 import iconName from '~icons/ph/user?raw'
 import Toggle from '~/components/Toggle.vue'
+import { invokeCapgoApi } from '~/services/capgoApi'
 import { checkPermissions } from '~/services/permissions'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
 import { useSupabase } from '~/services/supabase'
@@ -216,11 +217,13 @@ async function deleteApp() {
       .from('apps')
       .delete()
       .eq('app_id', props.appId)
-    if (dbAppError)
+    if (dbAppError) {
       toast.error(t('cannot-delete-app'))
-
-    else
+    }
+    else {
+      await organizationStore.fetchOrganizations()
       toast.success(t('app-deleted'))
+    }
 
     // return to home
     router.push('/apps')
@@ -412,7 +415,7 @@ async function importIconFromStore() {
   isImportingStoreIcon.value = true
 
   try {
-    const { data, error } = await supabase.functions.invoke('app/store-metadata', {
+    const { data, error } = await invokeCapgoApi('app/store-metadata', {
       method: 'POST',
       body: { url: storeImportUrl.value },
     })

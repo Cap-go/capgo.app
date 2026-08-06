@@ -8,6 +8,7 @@ import IconChevronDown from '~icons/lucide/chevron-down'
 import IconLoader from '~icons/lucide/loader-2'
 import InviteTeammateModal from '~/components/dashboard/InviteTeammateModal.vue'
 import { createDefaultApiKey, findUsablePlainApiKey } from '~/services/apikeys'
+import { invokeCapgoApi } from '~/services/capgoApi'
 import { pushEvent } from '~/services/posthog'
 import { getLocalConfig, isLocal, useSupabase } from '~/services/supabase'
 import { sendEvent } from '~/services/tracking'
@@ -167,7 +168,7 @@ async function createDemoApp() {
     }).catch()
     pushEvent('user:onboarding-create-demo-app', config.supaHost, { org_id: orgId })
 
-    const { data, error } = await supabase.functions.invoke('app/demo', {
+    const { data, error } = await invokeCapgoApi('app/demo', {
       method: 'POST',
       body: {
         owner_org: orgId,

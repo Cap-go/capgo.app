@@ -19,6 +19,8 @@ import IconUserPlus from '~icons/lucide/user-plus'
 import IconUsers from '~icons/lucide/users-round'
 import IconBack from '~icons/material-symbols/arrow-back-ios-rounded'
 import InviteTeammateModal from '~/components/dashboard/InviteTeammateModal.vue'
+import OnboardingSupportUsernames from '~/components/dashboard/OnboardingSupportUsernames.vue'
+import { getCapgoApiErrorCode, invokeCapgoApi } from '~/services/capgoApi'
 import { formatNumberValue } from '~/services/formatLocale'
 import { createOnboardingAppFromDraft } from '~/services/onboardingAppCreate'
 import { uploadOrgLogoFile } from '~/services/photos'
@@ -68,6 +70,11 @@ const step = ref<OnboardingStep>('details')
 const mode = ref<OnboardingMode>(null)
 const websiteInput = ref('')
 const orgNameInput = ref('')
+const discordUsername = ref(main.user?.discord_username ?? '')
+watch(() => main.user?.discord_username, (value) => {
+  if (!discordUsername.value && value)
+    discordUsername.value = value
+})
 const createdOrgId = ref('')
 const isSubmitting = ref(false)
 const isUploadingLogo = ref(false)
@@ -358,7 +365,7 @@ async function fetchWebsitePreview() {
 
   isLoadingWebsitePreview.value = true
   try {
-    const { data, error } = await supabase.functions.invoke('private/website_preview', {
+    const { data, error } = await invokeCapgoApi('private/website_preview', {
       body: {
         website: websiteInput.value.trim(),
       },
@@ -381,6 +388,34 @@ async function fetchWebsitePreview() {
 
 function deriveNameFromWebsitePreview(hostname: string) {
   return deriveOrgNameFromWebsite(hostname || websiteHostname.value)
+}
+
+async function saveSupportUsernames() {
+  if (!main.user?.id)
+    return
+
+  const userId = main.user.id
+  const nextDiscordUsername = discordUsername.value.trim() || null
+  if (nextDiscordUsername === (main.user.discord_username || null))
+    return
+
+  const { data: user, error } = await supabase
+    .from('users')
+    .update({
+      discord_username: nextDiscordUsername,
+    })
+    .eq('id', userId)
+    .select()
+    .single()
+
+  if (error || !user) {
+    console.error('Failed to save support usernames during onboarding', error)
+    toast.error(t('organization-onboarding-support-usernames-save-failed'))
+    throw error ?? new Error('support_usernames_save_failed')
+  }
+
+  if (main.user?.id === user.id)
+    main.user = user
 }
 
 async function createOrganization() {
@@ -411,11 +446,19 @@ async function createOrganization() {
   isSubmitting.value = true
 
   try {
+    try {
+      await saveSupportUsernames()
+    }
+    catch (error) {
+      console.error('Stopping organization create after support username save failure', error)
+      return
+    }
+
     const normalizedWebsite = mode.value === 'website'
       ? websitePreview.value?.website
       : undefined
 
-    const { data, error } = await supabase.functions.invoke('organization', {
+    const { data, error } = await invokeCapgoApi('organization', {
       method: 'POST',
       body: {
         name: orgName,
@@ -428,7 +471,8 @@ async function createOrganization() {
 
     if (error || !data?.id) {
       console.error('Error creating organization during onboarding', error)
-      toast.error(error?.code === '23505'
+      const errorCode = await getCapgoApiErrorCode(error)
+      toast.error(errorCode === '23505'
         ? t('org-with-this-name-exists')
         : t('cannot-create-org'))
       return
@@ -1029,6 +1073,8 @@ onUnmounted(() => {
                     </label>
                   </div>
                 </div>
+
+                <OnboardingSupportUsernames v-model:discord-username="discordUsername" :is-new-user-onboarding="!isAdditionalOrgFlow" />
 
                 <div class="flex flex-col-reverse gap-3 border-t border-slate-200 pt-4 sm:flex-row sm:justify-between dark:border-white/15">
                   <button type="button" class="d-btn min-h-11" :class="whiteCardSecondaryButtonClass()" @click="goBack">

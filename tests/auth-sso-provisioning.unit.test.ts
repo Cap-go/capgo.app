@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { describe, expect, it, vi } from 'vitest'
+import { allowOnboardingDashboardExploration } from '../src/utils/onboardingRedirect'
 
 interface MockFetchResponse {
   ok: boolean
@@ -7,14 +8,20 @@ interface MockFetchResponse {
 }
 
 function createUsersQuery(userRecord: Record<string, unknown>) {
+  const query = {
+    limit: vi.fn(async () => ({
+      data: [],
+      error: null,
+    })),
+    maybeSingle: vi.fn(async () => ({
+      data: userRecord,
+      error: null,
+    })),
+  }
+
   return {
     select: vi.fn(() => ({
-      eq: vi.fn(() => ({
-        maybeSingle: vi.fn(async () => ({
-          data: userRecord,
-          error: null,
-        })),
-      })),
+      eq: vi.fn(() => query),
     })),
   }
 }
@@ -88,18 +95,32 @@ function createTestContext() {
   const mockSendEvent = vi.fn().mockResolvedValue(undefined)
   const mockHideLoader = vi.fn()
   const mockCreateSignedImageUrl = vi.fn(async (value: string) => value)
-  const mockGetPlans = vi.fn(async () => [])
+  const mockGetPlans = vi.fn<() => Promise<any[]>>(async () => [])
   const mockIsPlatformAdmin = vi.fn(async () => false)
   const mockSetWebsitePaidUserCookie = vi.fn()
   const mockFetch = vi.fn<(...args: unknown[]) => Promise<MockFetchResponse>>(async () => ({
     ok: true,
     json: async () => ({ success: true }),
   }))
-  const mockFrom = vi.fn(() => createUsersQuery(userRecord))
+  const mockApps: Array<{ app_id: string, need_onboarding: boolean }> = []
+  const mockFrom = vi.fn((table: string) => {
+    if (table === 'apps') {
+      return {
+        select: vi.fn(() => ({
+          eq: vi.fn(() => ({
+            limit: vi.fn(async () => ({ data: mockApps, error: null })),
+          })),
+        })),
+      }
+    }
+
+    return createUsersQuery(userRecord)
+  })
 
   return {
     mainStore,
     mockCreateSignedImageUrl,
+    mockApps,
     mockFetch,
     mockFrom,
     mockGetAuthenticatorAssuranceLevel,
@@ -230,6 +251,170 @@ describe('auth guard SSO provisioning', () => {
       expect(context.organizationStore.fetchOrganizations).toHaveBeenCalled()
       expect(next).toHaveBeenCalledWith()
       expect(next).not.toHaveBeenCalledWith('/onboarding/app')
+    })
+  })
+
+  it.concurrent('redirects an eligible user to resume their pending app onboarding', async () => {
+    await withTestContext(async (context) => {
+      context.mockApps.push({ app_id: 'com.test.pending-onboarding', need_onboarding: true })
+      context.mockGetSession.mockResolvedValue({
+        data: {
+          session: {
+            access_token: 'token-123',
+            user: {
+              id: 'user-789',
+              email: 'user@managed.test',
+              created_at: '2026-08-04T14:01:00.000Z',
+              email_confirmed_at: '2026-04-15T10:00:00.000Z',
+              app_metadata: { provider: 'email', providers: ['email'] },
+            },
+          },
+        },
+      })
+      const guard = await getGuard()
+      const next = vi.fn()
+
+      await guard(
+        { path: '/dashboard', fullPath: '/dashboard', meta: { middleware: 'auth' }, query: {} },
+        { path: '/login', fullPath: '/login', meta: {}, query: {} },
+        next,
+      )
+
+      expect(next).toHaveBeenCalledWith({
+        path: '/app/new',
+        query: { resume: 'com.test.pending-onboarding' },
+      })
+    })
+  })
+
+  it.concurrent('loads plans before redirecting a newly authenticated user into onboarding', async () => {
+    await withTestContext(async (context) => {
+      const loadedPlans = [{ name: 'Solo' }]
+      context.mockApps.push({ app_id: 'com.test.pending-onboarding', need_onboarding: true })
+      context.mockGetPlans.mockResolvedValue(loadedPlans)
+      context.mockGetSession.mockResolvedValue({
+        data: {
+          session: {
+            access_token: 'token-123',
+            user: {
+              id: 'user-plans-onboarding',
+              email: 'user@managed.test',
+              created_at: '2026-08-04T14:01:00.000Z',
+              email_confirmed_at: '2026-04-15T10:00:00.000Z',
+              app_metadata: { provider: 'email', providers: ['email'] },
+            },
+          },
+        },
+      })
+      const guard = await getGuard()
+      const next = vi.fn()
+
+      await guard(
+        { path: '/dashboard', fullPath: '/dashboard', meta: { middleware: 'auth' }, query: {} },
+        { path: '/login', fullPath: '/login', meta: {}, query: {} },
+        next,
+      )
+
+      expect(next).toHaveBeenCalledWith({
+        path: '/app/new',
+        query: { resume: 'com.test.pending-onboarding' },
+      })
+      expect(context.mockGetPlans).toHaveBeenCalledOnce()
+      expect(context.mainStore.plans).toEqual(loadedPlans)
+    })
+  })
+
+  it.concurrent('tracks a successful login before redirecting the user into onboarding', async () => {
+    await withTestContext(async (context) => {
+      context.mockApps.push({ app_id: 'com.test.pending-onboarding', need_onboarding: true })
+      context.mockGetSession.mockResolvedValue({
+        data: {
+          session: {
+            access_token: 'token-123',
+            user: {
+              id: 'user-login-tracking',
+              email: 'user@managed.test',
+              created_at: '2026-08-04T14:01:00.000Z',
+              email_confirmed_at: '2026-04-15T10:00:00.000Z',
+              app_metadata: { provider: 'email', providers: ['email'] },
+            },
+          },
+        },
+      })
+      const guard = await getGuard()
+      const next = vi.fn()
+
+      await guard(
+        { path: '/dashboard', fullPath: '/dashboard', meta: { middleware: 'auth' }, query: {} },
+        { path: '/login', fullPath: '/login', meta: {}, query: {} },
+        next,
+      )
+
+      expect(next).toHaveBeenCalledWith({
+        path: '/app/new',
+        query: { resume: 'com.test.pending-onboarding' },
+      })
+      expect(context.mockSendEvent).toHaveBeenCalledOnce()
+      expect(context.mockSendEvent).toHaveBeenCalledWith(expect.objectContaining({
+        channel: 'user-login',
+        event: 'User Login',
+        user_id: 'user-login-tracking',
+      }))
+    })
+  })
+
+  it.concurrent('retries loading plans on a later authenticated navigation when the store is empty', async () => {
+    await withTestContext(async (context) => {
+      const loadedPlans = [{ name: 'Solo' }]
+      context.mainStore.auth = {
+        id: 'user-123',
+        email: 'user@managed.test',
+        email_confirmed_at: '2026-04-15T10:00:00.000Z',
+      }
+      context.mockGetPlans.mockResolvedValue(loadedPlans)
+      const guard = await getGuard()
+      const next = vi.fn()
+
+      await guard(
+        { path: '/settings/organization/plans', fullPath: '/settings/organization/plans', meta: { middleware: 'auth' }, query: {} },
+        { path: '/dashboard', fullPath: '/dashboard', meta: { middleware: 'auth' }, query: {} },
+        next,
+      )
+
+      expect(next).toHaveBeenCalledWith()
+      expect(context.mockGetPlans).toHaveBeenCalledOnce()
+      expect(context.mainStore.plans).toEqual(loadedPlans)
+    })
+  })
+
+  it.concurrent('allows an eligible user to explore the dashboard until refresh', async () => {
+    await withTestContext(async (context) => {
+      context.mockApps.push({ app_id: 'com.test.pending-onboarding', need_onboarding: true })
+      context.mockGetSession.mockResolvedValue({
+        data: {
+          session: {
+            access_token: 'token-123',
+            user: {
+              id: 'user-456',
+              email: 'user@managed.test',
+              created_at: '2026-08-04T14:01:00.000Z',
+              email_confirmed_at: '2026-04-15T10:00:00.000Z',
+              app_metadata: { provider: 'email', providers: ['email'] },
+            },
+          },
+        },
+      })
+      allowOnboardingDashboardExploration('user-456')
+      const guard = await getGuard()
+      const next = vi.fn()
+
+      await guard(
+        { path: '/dashboard', fullPath: '/dashboard', meta: { middleware: 'auth' }, query: {} },
+        { path: '/login', fullPath: '/login', meta: {}, query: {} },
+        next,
+      )
+
+      expect(next).toHaveBeenCalledWith()
     })
   })
 

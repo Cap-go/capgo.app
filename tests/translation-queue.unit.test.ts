@@ -2,9 +2,9 @@ import { describe, expect, it, vi } from 'vitest'
 import translationWorker, { __translationWorkerTestUtils__ } from '../cloudflare_workers/translation/index.ts'
 import sourceMessages from '../messages/en.json'
 
-function stubWorkerCache() {
+function stubWorkerCache(matchedResponse: Response | null = null) {
   const cache = {
-    match: vi.fn(async () => null),
+    match: vi.fn(async () => matchedResponse),
     put: vi.fn(async () => undefined),
   }
   Object.defineProperty(globalThis, 'caches', {
@@ -40,6 +40,20 @@ describe('translation queue helpers', () => {
 
   it.concurrent('keeps source text when translation drops a placeholder', () => {
     expect(__translationWorkerTestUtils__.keepTranslation('Used {count} times', 'Utilise plusieurs fois')).toBe('Used {count} times')
+  })
+
+  it.concurrent('escapes raw and adjacent at signs for Vue i18n', () => {
+    expect(__translationWorkerTestUtils__.escapeVueI18nAtSigns('Sans le signe @.')).toBe('Sans le signe {\'@\'}.')
+    expect(__translationWorkerTestUtils__.escapeVueI18nAtSigns('@@capgo/cli@latest')).toBe('{\'@\'}{\'@\'}capgo/cli{\'@\'}latest')
+  })
+
+  it.concurrent('preserves escaped at signs across repeated passes', () => {
+    const escaped = 'Sans le signe {\'@\'}.'
+
+    expect(__translationWorkerTestUtils__.escapeVueI18nAtSigns(escaped)).toBe(escaped)
+    expect(__translationWorkerTestUtils__.escapeVueI18nAtSigns(
+      __translationWorkerTestUtils__.escapeVueI18nAtSigns('Sans le signe @.'),
+    )).toBe(escaped)
   })
 
   it.concurrent('normalizes invalid queued batch indexes to the first batch', () => {
@@ -109,7 +123,7 @@ describe('translation queue helpers', () => {
     const now = Math.floor(Date.now() / 1000)
     const latestReadyEntry = {
       checksum: 'previous-checksum',
-      messages: JSON.stringify({ account: 'Compte' }),
+      messages: JSON.stringify({ 'account': 'Compte', 'discord-username-help': 'Sans le signe @.' }),
       model: 'model',
       next_batch_index: 1,
       status: 'ready',
@@ -135,11 +149,29 @@ describe('translation queue helpers', () => {
     expect(response.headers.get('x-capgo-translation-stale')).toBe('1')
     expect(payload).toEqual({
       checksum: 'previous-checksum',
-      messages: { account: 'Compte' },
+      messages: { 'account': 'Compte', 'discord-username-help': 'Sans le signe {\'@\'}.' },
       model: 'model',
       status: 'ready',
     })
     expect(queue.send).not.toHaveBeenCalled()
+  })
+
+  it('sanitizes legacy ready translation cache hits', async () => {
+    stubWorkerCache(new Response(JSON.stringify({
+      checksum: 'checksum',
+      messages: { 'discord-username-help': 'Sans le signe @.' },
+      model: 'model',
+      status: 'ready',
+    })))
+    const response = await translationWorker.fetch(new Request('https://api.capgo.app/translation/messages', {
+      body: JSON.stringify({ targetLanguage: 'fr' }),
+      headers: { 'Content-Type': 'application/json' },
+      method: 'POST',
+    }), {} as any)
+    const payload = await response.json() as { messages: Record<string, string> }
+
+    expect(response.status).toBe(200)
+    expect(payload.messages['discord-username-help']).toBe('Sans le signe {\'@\'}.')
   })
 
   it('serves the last saved translation and queues a refresh when the checksum changed', async () => {

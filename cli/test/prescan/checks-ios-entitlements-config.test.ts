@@ -183,6 +183,14 @@ describe('ios/entitlements-vs-profile-capability', () => {
     expect(await entitlementsVsProfileCapability.run(ctx)).toEqual([])
   })
 
+  it('treats a scalar profile wildcard (*) as covering all app members', async () => {
+    const ctx = ctxWithEntitlements(
+      '<key>com.apple.developer.associated-domains</key><array><string>applinks:example.com</string></array>',
+      { credentials: { CAPGO_IOS_PROVISIONING_MAP: mapWith(profileXml('<key>com.apple.developer.associated-domains</key><string>*</string>')) } },
+    )
+    expect(await entitlementsVsProfileCapability.run(ctx)).toEqual([])
+  })
+
   it('treats a $(AppIdentifierPrefix)* profile member as covering all app members', async () => {
     const ctx = ctxWithEntitlements(
       '<key>keychain-access-groups</key><array><string>TEAM123456.com.demo.app</string></array>',

@@ -1228,7 +1228,7 @@ describe('[POST] /channel_self - new plugin version (>= 7.34.0) behavior', () =>
       .eq('app_id', APPNAME)
 
     // Also enable it for a second channel so the migration request can avoid
-    // the "same set max once per 60 seconds" limiter (keyed by channel).
+    // the "same set max once per 1 second" limiter (keyed by channel).
     await getSupabaseClient()
       .from('channels')
       .update({ allow_device_self_set: true })

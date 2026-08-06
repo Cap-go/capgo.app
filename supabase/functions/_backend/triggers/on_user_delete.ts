@@ -3,12 +3,15 @@ import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Database } from '../utils/supabase.types.ts'
 import { Hono } from 'hono/tiny'
 import { unsubscribeBento } from '../utils/bento.ts'
-import { BRES, middlewareAPISecret, triggerValidator } from '../utils/hono.ts'
+import { normalizeBentoEmail, suppressAndUnsubscribeDeletedUserRecovery } from '../utils/bento_first_org.ts'
+import { BRES, middlewareAPISecret, quickError, triggerValidator } from '../utils/hono.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { cancelSubscription } from '../utils/stripe.ts'
 import { supabaseAdmin } from '../utils/supabase.ts'
 
 export const app = new Hono<MiddlewareKeyVariables>()
+
+const BENTO_USER_DELETE_TIMEOUT_MS = 5_000
 
 interface RbacBinding {
   org_id?: string | null
@@ -253,7 +256,6 @@ function getSingleSuperAdminOrgs(
 function buildCleanupPromises(
   c: Context,
   orgs: Array<{ customer_id: string | null, management_email: string | null }> | null,
-  record: Database['public']['Tables']['users']['Row'],
 ) {
   const promises: Promise<unknown>[] = []
   if (orgs && orgs.length > 0) {
@@ -269,11 +271,51 @@ function buildCleanupPromises(
     }
   }
 
-  if (record.email) {
-    promises.push(unsubscribeBento(c, record.email))
-  }
-
   return promises
+}
+
+async function suppressDeletedUserInBento(
+  c: Context,
+  record: Database['public']['Tables']['users']['Row'],
+  signal?: AbortSignal,
+) {
+  if (!record.email)
+    return true
+
+  const email = normalizeBentoEmail(record.email)
+  try {
+    await suppressAndUnsubscribeDeletedUserRecovery(c, email, signal)
+    return true
+  }
+  catch (error) {
+    logFailure(c, 'Bento user deletion cleanup failed', error)
+    return false
+  }
+}
+
+async function suppressDeletedUserInBentoWithinBudget(
+  c: Context,
+  record: Database['public']['Tables']['users']['Row'],
+) {
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), BENTO_USER_DELETE_TIMEOUT_MS)
+  try {
+    const result = await suppressDeletedUserInBento(c, record, controller.signal)
+    if (controller.signal.aborted) {
+      logFailure(c, 'Bento user deletion cleanup timed out')
+      return false
+    }
+    return result
+  }
+  finally {
+    clearTimeout(timeoutId)
+  }
+}
+
+function finishDeleteUserResponse(c: Context, bentoCleanupSucceeded: boolean, resourceCleanupSucceeded: boolean) {
+  if (!bentoCleanupSucceeded || !resourceCleanupSucceeded)
+    quickError(500, 'user_delete_cleanup_failed', 'User deletion cleanup failed')
+  return c.json(BRES)
 }
 
 async function deleteUserImages(
@@ -282,28 +324,36 @@ async function deleteUserImages(
   userId: string,
 ) {
   try {
-    const { data: files } = await supabase
+    const { data: files, error: listError } = await supabase
       .storage
       .from('images')
       .list(userId)
+    if (listError) {
+      logFailure(c, 'user image listing failed', listError)
+      return false
+    }
 
     if (files && files.length > 0) {
       const filePaths = files.map(file => `${userId}/${file.name}`)
-      await supabase
+      const { error: removeError } = await supabase
         .storage
         .from('images')
         .remove(filePaths)
+      if (removeError) {
+        logFailure(c, 'user image deletion failed', removeError)
+        return false
+      }
       cloudlog({ requestId: c.get('requestId'), message: 'deleted user images', count: files.length, user_id: userId })
     }
+    return true
   }
   catch (error) {
     cloudlog({ requestId: c.get('requestId'), message: 'error deleting user images', error, user_id: userId })
+    return false
   }
 }
 
-// on_user_delete - this is called 30 days before the user is actually deleted
-// This function is used to cancel the subscriptions of the user's organizations
-async function deleteUser(c: Context, record: Database['public']['Tables']['users']['Row']) {
+async function cleanupDeletedUserResources(c: Context, record: Database['public']['Tables']['users']['Row']) {
   // Process user deletion with timeout protection
   const startTime = Date.now()
   const supabase = supabaseAdmin(c)
@@ -311,35 +361,29 @@ async function deleteUser(c: Context, record: Database['public']['Tables']['user
 
   // 1. Find organizations where this user is the only RBAC super admin
   const directRbacBindings = await fetchDirectRbacBindings(c, supabase, record.id)
-  if (!directRbacBindings) {
-    return c.json(BRES)
-  }
+  if (!directRbacBindings)
+    return false
 
   const groupIds = await fetchUserGroupIds(c, supabase, record.id)
-  if (!groupIds) {
-    return c.json(BRES)
-  }
+  if (!groupIds)
+    return false
 
   const groupRbacBindings = await fetchGroupRbacBindings(c, supabase, groupIds)
-  if (!groupRbacBindings) {
-    return c.json(BRES)
-  }
+  if (!groupRbacBindings)
+    return false
 
   const orgIds = collectCandidateOrgIds(directRbacBindings, groupRbacBindings, now)
-  if (orgIds.length === 0) {
-    return c.json(BRES)
-  }
+  if (orgIds.length === 0)
+    return true
 
   // For each org where user is super admin, check if they are the only one
   const rbacUserAdmins = await fetchRbacUserAdmins(c, supabase, orgIds)
-  if (!rbacUserAdmins) {
-    return c.json(BRES)
-  }
+  if (!rbacUserAdmins)
+    return false
 
   const rbacGroupAdmins = await fetchRbacGroupAdmins(c, supabase, orgIds)
-  if (!rbacGroupAdmins) {
-    return c.json(BRES)
-  }
+  if (!rbacGroupAdmins)
+    return false
 
   const activeGroupBindings = rbacGroupAdmins.filter(binding => isBindingActive(binding, now))
   const rbacGroupIds = activeGroupBindings
@@ -347,9 +391,8 @@ async function deleteUser(c: Context, record: Database['public']['Tables']['user
     .filter((groupId): groupId is string => Boolean(groupId))
 
   const groupMembers = await fetchGroupMembers(c, supabase, rbacGroupIds)
-  if (!groupMembers) {
-    return c.json(BRES)
-  }
+  if (!groupMembers)
+    return false
 
   const groupMembersByGroup = buildGroupMembersByGroup(groupMembers)
   const orgAdminUsers = buildOrgAdminUsers(
@@ -361,19 +404,33 @@ async function deleteUser(c: Context, record: Database['public']['Tables']['user
 
   const singleSuperAdminOrgs = getSingleSuperAdminOrgs(orgIds, orgAdminUsers, record.id)
 
-  if (singleSuperAdminOrgs.length === 0) {
-    return c.json(BRES)
-  }
+  if (singleSuperAdminOrgs.length === 0)
+    return true
 
-  const { data: orgs } = await supabaseAdmin(c)
+  const { data: orgs, error: orgLookupError } = await supabaseAdmin(c)
     .from('orgs')
     .select('id, customer_id, management_email')
     .in('id', singleSuperAdminOrgs)
+  if (orgLookupError) {
+    logFailure(c, 'organization cleanup lookup failed', orgLookupError)
+    return false
+  }
 
-  const promises = buildCleanupPromises(c, orgs ?? null, record)
+  const promises = buildCleanupPromises(c, orgs ?? null)
   promises.push(deleteUserImages(c, supabase, record.id))
 
-  await Promise.all(promises)
+  let cleanupResults: unknown[]
+  try {
+    cleanupResults = await Promise.all(promises)
+  }
+  catch (error) {
+    logFailure(c, 'user resource cleanup failed', error)
+    return false
+  }
+  if (cleanupResults.includes(false)) {
+    logFailure(c, 'user resource cleanup reported a failure')
+    return false
+  }
 
   // 4. Track performance metrics
   const endTime = Date.now()
@@ -385,8 +442,19 @@ async function deleteUser(c: Context, record: Database['public']['Tables']['user
     duration_ms: duration,
     user_id: record.id,
   })
+  return true
+}
 
-  return c.json(BRES)
+// on_user_delete - this is called 30 days before the user is actually deleted.
+// Start provider cleanup and core subscription/image cleanup together so a
+// slow Bento request cannot consume the queue handler's entire 15-second
+// budget before Stripe cancellation begins.
+async function deleteUser(c: Context, record: Database['public']['Tables']['users']['Row']) {
+  const [bentoCleanupSucceeded, resourceCleanupSucceeded] = await Promise.all([
+    suppressDeletedUserInBentoWithinBudget(c, record),
+    cleanupDeletedUserResources(c, record),
+  ])
+  return finishDeleteUserResponse(c, bentoCleanupSucceeded, resourceCleanupSucceeded)
 }
 
 app.post('/', middlewareAPISecret, triggerValidator('users', 'DELETE'), async (c) => {

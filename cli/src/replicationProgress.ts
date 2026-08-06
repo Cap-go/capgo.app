@@ -6,12 +6,27 @@ interface DeploymentRegion {
   label: string
 }
 
+export interface ReplicationProgressReporter {
+  info: (message: string) => void
+  spinner: () => {
+    start: (message: string) => void
+    message: (message: string) => void
+    stop: (message: string) => void
+  }
+}
+
+const clackReplicationReporter: ReplicationProgressReporter = {
+  info: message => log.info(message),
+  spinner: spinnerC,
+}
+
 export interface ReplicationProgressOptions {
   interactive?: boolean
   totalMs?: number
   updateIntervalMs?: number
   title?: string
   completeMessage?: string
+  reporter?: ReplicationProgressReporter
 }
 
 const DEPLOYMENT_REGIONS: DeploymentRegion[] = [
@@ -105,6 +120,7 @@ export function showReplicationProgress({
   updateIntervalMs = DEFAULT_UPDATE_INTERVAL_MS,
   title = 'Replicating your bundle in all regions...',
   completeMessage = 'Your update is now available worldwide.',
+  reporter,
 }: ReplicationProgressOptions = {}): Promise<void> {
   if (!interactive || totalMs <= 0)
     return Promise.resolve()
@@ -113,10 +129,11 @@ export function showReplicationProgress({
   if (!regions.length)
     return Promise.resolve()
 
-  log.info(title)
-  log.info(`Regions: ${regions.map(r => r.label).join(' • ')}`)
+  const progressReporter = reporter ?? clackReplicationReporter
+  progressReporter.info(title)
+  progressReporter.info(`Regions: ${regions.map(r => r.label).join(' • ')}`)
 
-  const spinner = spinnerC()
+  const spinner = progressReporter.spinner()
   const startedAt = Date.now()
   const totalRegions = regions.length
   let intervalId: ReturnType<typeof setInterval> | null = null

@@ -1,6 +1,7 @@
 import type { Router } from 'vue-router'
 import { FunctionsHttpError } from '@supabase/supabase-js'
 import { toast } from 'vue-sonner'
+import { invokeCapgoApi } from '~/services/capgoApi'
 import { getSpoofedAdminJwt, isSpoofed, saveSpoof, useSupabase } from './supabase'
 
 async function getErrorMessage(error: unknown) {
@@ -47,7 +48,7 @@ export async function logAsUser(identifier: string, router: Router) {
     if (spoofedAdminJwt)
       invokeOptions.headers = { Authorization: `Bearer ${spoofedAdminJwt}` }
 
-    const { data, error } = await supabase.functions.invoke('private/log_as', invokeOptions)
+    const { data, error } = await invokeCapgoApi<{ jwt?: string, refreshToken?: string }>('private/log_as', invokeOptions)
 
     if (error)
       throw new Error(await getErrorMessage(error))

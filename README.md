@@ -77,8 +77,12 @@ We support both deployments for practical reasons:
 
 In production, we route most traffic through Cloudflare Workers for cost and
 scale, while Supabase remains the reference backend and the default for
-self-hosted deployments. Private endpoints and trigger/CRON workloads still run
-on Supabase in production.
+self-hosted deployments. Capgo cloud console and current CLI calls go to the
+Cloudflare API hosts (`VITE_API_HOST` / `hostApi`). Capgo cloud still publishes
+a small Supabase function allowlist for Postgres `pg_net` (`triggers`) and for
+legacy CLI compatibility via `/functions/v1` through 2026-10-28. Self-hosted
+deployments keep using `/functions/v1`. Plugin hot paths and other unused Capgo
+cloud endpoints are not published on Supabase.
 
 ## Project structure (self-hosting map)
 
@@ -448,7 +452,28 @@ Seed the secret for functions:
 supabase secrets set --env-file supabase/functions/.env
 ```
 
-Push the functions to the cloud:
+### Deploy Capgo Cloud Supabase functions
+
+Capgo Cloud (prod / preprod / alpha) only publishes allowlisted Supabase
+functions from `scripts/supabase-cloud-functions.ts`:
+
+- `triggers` forever (`pg_net` queue consumer)
+- `bundle`, `channel`, `files`, `private` until **2026-10-28** (old Capgo CLI
+  still called these via `supabase.functions.invoke` on `sb.capgo.app`; new
+  CLI uses `api.capgo.app` / `files.capgo.app`)
+
+Console Capgo-cloud traffic uses Cloudflare (`VITE_API_HOST`); self-host / local
+consoles keep `supabase.functions.invoke`. Capgo cloud deploy also deletes
+functions outside the allowlist (`skip-list` / `delete-args`).
+
+```bash
+bun run deploy:supabase:prod
+# or: bunx supabase functions deploy $(bun scripts/supabase-cloud-functions.ts deploy-args) --project-ref <ref>
+```
+
+### Deploy self-hosted Supabase functions
+
+Self-hosted installs should keep deploying every function:
 
 ```bash
 supabase functions deploy

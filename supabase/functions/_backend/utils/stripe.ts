@@ -414,6 +414,7 @@ export async function cancelSubscription(c: Context, customerId: string) {
   if (!isStripeConfigured(c))
     return
 
+  let succeeded = true
   for await (const subscription of getStripe(c).subscriptions.list({ customer: customerId, status: 'all' })) {
     if (subscription.status === 'canceled' || subscription.status === 'incomplete_expired')
       continue
@@ -422,9 +423,11 @@ export async function cancelSubscription(c: Context, customerId: string) {
       await getStripe(c).subscriptions.cancel(subscription.id)
     }
     catch (error) {
+      succeeded = false
       cloudlogErr({ requestId: c.get('requestId'), message: 'cancelSubscription item', error, subscriptionId: subscription.id, customerId })
     }
   }
+  return succeeded
 }
 
 async function getStoredPlanPriceId(c: Context, planId: string, recurrence: string): Promise<string | null> {

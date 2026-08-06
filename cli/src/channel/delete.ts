@@ -3,15 +3,7 @@ import { intro, log, outro } from '@clack/prompts'
 import { check2FAComplianceForApp, checkAppExistsAndHasPermissionOrgErr } from '../api/app'
 import { delChannel, findBundleIdByChannelName, findChannel } from '../api/channels'
 import { deleteAppVersion } from '../api/versions'
-import {
-  createSupabaseClient,
-  findSavedKey,
-  formatError,
-  getAppId,
-  getConfig,
-  hasCliPermission,
-  sendEvent,
-} from '../utils'
+import { createSupabaseClient, findSavedKey, formatError, getAppId, getConfig, hasCliPermission, invokeCapgoCliApi, sendEvent } from '../utils'
 
 export async function deleteChannelInternal(channelId: string, appId: string, options: ChannelDeleteOptions, silent = false) {
   if (!silent)
@@ -65,13 +57,16 @@ export async function deleteChannelInternal(channelId: string, appId: string, op
     if (!silent)
       log.info(`Deleting preview channel ${appId}#${channelId} and its bundle from Capgo`)
 
-    const { error } = await supabase.functions.invoke('channel', {
+    const { error } = await invokeCapgoCliApi('channel', {
+      apikey: options.apikey!,
       method: 'DELETE',
-      body: JSON.stringify({
+      body: {
         app_id: appId,
         channel: channelId,
         delete_bundle: true,
-      }),
+      },
+      supaHost: options.supaHost,
+      supaAnon: options.supaAnon,
     })
     if (error) {
       const message = `Cannot delete preview channel and bundle: ${formatError(error)}`

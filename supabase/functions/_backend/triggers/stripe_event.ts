@@ -17,6 +17,7 @@ import { groupIdentifyPosthog } from '../utils/posthog.ts'
 import { ensureCustomerMetadata, getCreditCheckoutDetails, getStripe, syncStripeCustomerCountry } from '../utils/stripe.ts'
 import { customerToSegmentOrg, supabaseAdmin } from '../utils/supabase.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
+import { purgeOnPremCacheForOrg, purgePlanCacheForOrg } from '../utils/cloudflare_cache_purge.ts'
 import { backgroundTask, isStripeConfigured } from '../utils/utils.ts'
 
 export const app = new Hono<MiddlewareKeyVariablesStripe>()
@@ -1139,6 +1140,28 @@ async function createdOrUpdated(
         subscription_status_name: statusName,
       },
     }))
+
+    // Clear edge on-prem / plan-upgrade caches only on real recovery / plan-change
+    // transitions — not on every subscription.updated renewal/metadata webhook.
+    // past_due is stored as status=succeeded + past_due_at set (see toStripeInfoUpdate).
+    const previousStatus = currentStripeInfo?.status ?? null
+    // past_due returns earlier in this function, so status here is never past_due.
+    const recoveredFromPastDue = Boolean(currentStripeInfo?.past_due_at)
+      && (status === 'succeeded' || status === 'updated')
+    const shouldPurgePluginEdgeCaches = Boolean(paidAt)
+      || status === 'created'
+      || Boolean(stripeData.isUpgrade)
+      || recoveredFromPastDue
+      || (
+        (status === 'succeeded' || status === 'updated')
+        && (previousStatus === 'canceled' || previousStatus === 'deleted')
+      )
+    if (shouldPurgePluginEdgeCaches) {
+      await backgroundTask(c, Promise.all([
+        purgePlanCacheForOrg(c, org.id),
+        purgeOnPremCacheForOrg(c, org.id),
+      ]))
+    }
   }
   else {
     const segment = await customerToSegmentOrg(c, org.id, stripeData.data.price_id)

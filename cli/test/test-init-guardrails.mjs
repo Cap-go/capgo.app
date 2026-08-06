@@ -12,6 +12,9 @@ import {
   getInitOtaVersionBase,
   getInitSuggestedOtaVersion,
   getInitUpdaterPluginConfig,
+  getResumedOnboardingAccessError,
+  getNativePlatformAvailability,
+  injectInitCode,
   isOnlyAllowedInitAutoTestChange,
   revertInitAutoTestChangeContent,
   runInheritedCommand,
@@ -51,6 +54,19 @@ t('git status helper skips non-git folders', () => {
   })
 })
 
+t('native platform availability honors custom Capacitor platform directories', () => {
+  withTempDir((root) => {
+    mkdirSync(join(root, 'native', 'android-app'), { recursive: true })
+    const availability = getNativePlatformAvailability({
+      ios: { path: 'native/apple-app' },
+      android: { path: 'native/android-app' },
+    }, root)
+
+    assert.equal(availability.ios, false)
+    assert.equal(availability.android, true)
+  })
+})
+
 t('git status helper detects clean and dirty repos', () => {
   withTempDir((root) => {
     execSync('git init', { cwd: root, stdio: 'ignore' })
@@ -76,6 +92,39 @@ t('dirty git status prompt keeps clean repo as the recommended path', () => {
   assert.match(options[0]?.hint ?? '', /recommended/)
   assert.equal(options[1]?.value, 'continue-dirty')
   assert.match(options[1]?.hint ?? '', /not recommended/)
+})
+
+t('init code injection preserves framework directives before imports', () => {
+  const updated = injectInitCode('src/main.tsx', `'use client'\n\nexport default function App() {}\n`)
+
+  assert.match(updated, /^'use client'\nimport \{ CapacitorUpdater \}/)
+  assert.match(updated, /CapacitorUpdater\.notifyAppReady\(\);/)
+})
+
+t('init code injection preserves directives after BOM and leading comments', () => {
+  const updated = injectInitCode('src/main.tsx', `\uFEFF/* generated file */\n\n'use client'\nexport default function App() {}\n`)
+
+  assert.match(updated, /^\uFEFF\/\* generated file \*\/\n\n'use client'\nimport \{ CapacitorUpdater \}/)
+})
+
+t('init code injection preserves directives with trailing comments', () => {
+  const updated = injectInitCode('src/main.tsx', `'use client' // required by Next.js\nexport default function App() {}\n`)
+
+  assert.match(updated, /^'use client' \/\/ required by Next\.js\nimport \{ CapacitorUpdater \}/)
+})
+
+t('init code injection uses CommonJS syntax for .cjs files without imports', () => {
+  const updated = injectInitCode('scripts/start.cjs', 'console.log(\'ready\')\n')
+
+  assert.match(updated, /^const \{ CapacitorUpdater \} = require\('@capgo\/capacitor-updater'\);/)
+  assert.doesNotMatch(updated, /^import /m)
+})
+
+t('init code injection reuses an existing CommonJS updater binding', () => {
+  const updated = injectInitCode('scripts/start.cjs', `const { CapacitorUpdater } = require('@capgo/capacitor-updater')\nconsole.log('ready')\n`)
+
+  assert.equal((updated.match(/const \{ CapacitorUpdater \}/g) ?? []).length, 1)
+  assert.match(updated, /CapacitorUpdater\.notifyAppReady\(\);/)
 })
 
 t('git status helper reports git status failures inside a repo', () => {
@@ -122,6 +171,18 @@ t('guided ota version suggestions stay on major zero when native baseline is pin
 
   assert.equal(getInitOtaVersionBase('0.2.3'), '0.2.3')
   assert.equal(getInitSuggestedOtaVersion('0.2.3'), '0.2.4')
+})
+
+t('resuming onboarding requires the current key to retain saved org and app access', () => {
+  const resume = { stepDone: 4, orgId: 'org_123', orgName: 'Saved org', appId: 'com.example.app' }
+  const organization = { gid: 'org_123', name: 'Saved org' }
+
+  assert.match(getResumedOnboardingAccessError(resume, undefined, false, false), /organization.*no longer available/i)
+  assert.equal(getResumedOnboardingAccessError(resume, organization, false, true), undefined)
+  assert.match(getResumedOnboardingAccessError(resume, organization, true, false), /app.*no longer available/i)
+  assert.equal(getResumedOnboardingAccessError(resume, organization, true, true), undefined)
+  assert.match(getResumedOnboardingAccessError({ ...resume, appId: undefined }, organization, false, true), /permission to create apps/i)
+  assert.match(getResumedOnboardingAccessError(resume, { ...organization, enforcing_2fa: true, '2fa_has_access': false }, true, true), /requires 2FA/i)
 })
 
 t('auto html onboarding changes can be applied and reverted', () => {

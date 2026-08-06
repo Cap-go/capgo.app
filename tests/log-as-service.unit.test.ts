@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   getSpoofedAdminJwt: vi.fn(),
+  invokeCapgoApi: vi.fn(),
   isSpoofed: vi.fn(),
   saveSpoof: vi.fn(),
   toast: {
@@ -25,6 +26,14 @@ vi.mock('../src/services/supabase.ts', () => ({
   useSupabase: mocks.useSupabase,
 }))
 
+vi.mock('../src/services/capgoApi.ts', () => ({
+  invokeCapgoApi: mocks.invokeCapgoApi,
+}))
+
+vi.mock('~/services/capgoApi', () => ({
+  invokeCapgoApi: mocks.invokeCapgoApi,
+}))
+
 function createRouter() {
   return {
     replace: vi.fn(() => Promise.resolve()),
@@ -32,7 +41,6 @@ function createRouter() {
 }
 
 function useSupabaseMock() {
-  const invoke = vi.fn()
   const getSession = vi.fn()
   const setSession = vi.fn()
 
@@ -41,18 +49,16 @@ function useSupabaseMock() {
       getSession,
       setSession,
     },
-    functions: {
-      invoke,
-    },
   })
 
-  return { getSession, invoke, setSession }
+  return { getSession, setSession }
 }
 
 describe('logAsUser', () => {
   let consoleError: ReturnType<typeof vi.spyOn>
 
   beforeEach(() => {
+    vi.resetModules()
     vi.clearAllMocks()
     vi.useFakeTimers()
     mocks.toast.loading.mockReturnValue('toast-id')
@@ -65,17 +71,17 @@ describe('logAsUser', () => {
   })
 
   it('keeps the current spoofed session untouched when the next spoof request fails', async () => {
-    const { getSession, invoke, setSession } = useSupabaseMock()
+    const { getSession, setSession } = useSupabaseMock()
     mocks.isSpoofed.mockReturnValue(true)
     mocks.getSpoofedAdminJwt.mockResolvedValue('admin-jwt')
-    invoke.mockResolvedValue({ data: null, error: new Error('User does not exist') })
+    mocks.invokeCapgoApi.mockResolvedValue({ data: null, error: new Error('User does not exist') })
 
     const { logAsUser } = await import('../src/services/logAs.ts')
 
     await expect(logAsUser('missing-target', createRouter())).rejects.toThrow('User does not exist')
 
     expect(mocks.getSpoofedAdminJwt).toHaveBeenCalledOnce()
-    expect(invoke).toHaveBeenCalledWith('private/log_as', {
+    expect(mocks.invokeCapgoApi).toHaveBeenCalledWith('private/log_as', {
       body: { identifier: 'missing-target' },
       headers: { Authorization: 'Bearer admin-jwt' },
     })
@@ -85,17 +91,17 @@ describe('logAsUser', () => {
   })
 
   it('switches between spoofed users without replacing the stored admin backup', async () => {
-    const { getSession, invoke, setSession } = useSupabaseMock()
+    const { getSession, setSession } = useSupabaseMock()
     mocks.isSpoofed.mockReturnValue(true)
     mocks.getSpoofedAdminJwt.mockResolvedValue('admin-jwt')
-    invoke.mockResolvedValue({ data: { jwt: 'new-user-jwt', refreshToken: 'new-user-refresh' }, error: null })
+    mocks.invokeCapgoApi.mockResolvedValue({ data: { jwt: 'new-user-jwt', refreshToken: 'new-user-refresh' }, error: null })
     setSession.mockResolvedValue({ data: { session: {} }, error: null })
 
     const { logAsUser } = await import('../src/services/logAs.ts')
 
     await logAsUser('next-target', createRouter())
 
-    expect(invoke).toHaveBeenCalledWith('private/log_as', {
+    expect(mocks.invokeCapgoApi).toHaveBeenCalledWith('private/log_as', {
       body: { identifier: 'next-target' },
       headers: { Authorization: 'Bearer admin-jwt' },
     })
@@ -105,9 +111,9 @@ describe('logAsUser', () => {
   })
 
   it('stores the current admin session when starting a spoof from the admin account', async () => {
-    const { getSession, invoke, setSession } = useSupabaseMock()
+    const { getSession, setSession } = useSupabaseMock()
     mocks.isSpoofed.mockReturnValue(false)
-    invoke.mockResolvedValue({ data: { jwt: 'user-jwt', refreshToken: 'user-refresh' }, error: null })
+    mocks.invokeCapgoApi.mockResolvedValue({ data: { jwt: 'user-jwt', refreshToken: 'user-refresh' }, error: null })
     getSession.mockResolvedValue({
       data: {
         session: {
@@ -124,7 +130,7 @@ describe('logAsUser', () => {
     await logAsUser('target-user', createRouter())
 
     expect(mocks.getSpoofedAdminJwt).not.toHaveBeenCalled()
-    expect(invoke).toHaveBeenCalledWith('private/log_as', {
+    expect(mocks.invokeCapgoApi).toHaveBeenCalledWith('private/log_as', {
       body: { identifier: 'target-user' },
     })
     expect(mocks.saveSpoof).toHaveBeenCalledWith('admin-jwt', 'admin-refresh')

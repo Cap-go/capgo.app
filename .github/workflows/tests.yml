@@ -306,7 +306,8 @@ jobs:
       contents: read
       actions: write
     concurrency:
-      group: capgo-local-services-backend-${{ github.repository }}-${{ matrix.shard }}
+      # Isolate by event_name so push + pull_request on the same branch do not cancel pending jobs.
+      group: capgo-local-services-backend-${{ github.event_name }}-${{ github.repository }}-${{ matrix.shard }}
       cancel-in-progress: false
     env:
       SUPABASE_WORKTREE_INSTANCE: backend-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard_id }}
@@ -442,7 +443,8 @@ jobs:
     permissions:
       contents: read
     concurrency:
-      group: capgo-local-services-backend-sql-${{ github.repository }}
+      # Isolate by event_name so push + pull_request on the same branch do not cancel pending jobs.
+      group: capgo-local-services-backend-sql-${{ github.event_name }}-${{ github.repository }}
       cancel-in-progress: false
     env:
       SUPABASE_WORKTREE_INSTANCE: backend-sql-${{ github.run_id }}-${{ github.run_attempt }}
@@ -526,7 +528,8 @@ jobs:
     permissions:
       contents: read
     concurrency:
-      group: capgo-local-services-backend-sql-catalog-${{ github.repository }}
+      # Isolate by event_name so push + pull_request on the same branch do not cancel pending jobs.
+      group: capgo-local-services-backend-sql-catalog-${{ github.event_name }}-${{ github.repository }}
       cancel-in-progress: false
     env:
       SUPABASE_WORKTREE_INSTANCE: backend-sql-catalog-${{ github.run_id }}-${{ github.run_attempt }}
@@ -606,7 +609,8 @@ jobs:
     permissions:
       contents: read
     concurrency:
-      group: capgo-local-services-cloudflare-${{ github.repository }}-${{ matrix.shard }}
+      # Isolate by event_name so push + pull_request on the same branch do not cancel pending jobs.
+      group: capgo-local-services-cloudflare-${{ github.event_name }}-${{ github.repository }}-${{ matrix.shard }}
       cancel-in-progress: false
     env:
       SUPABASE_WORKTREE_INSTANCE: cloudflare-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard_id }}
@@ -755,7 +759,8 @@ jobs:
     permissions:
       contents: read
     concurrency:
-      group: capgo-local-services-playwright-${{ github.repository }}-${{ matrix.shard }}
+      # Isolate by event_name so push + pull_request on the same branch do not cancel pending jobs.
+      group: capgo-local-services-playwright-${{ github.event_name }}-${{ github.repository }}-${{ matrix.shard }}
       cancel-in-progress: false
     strategy:
       fail-fast: false
@@ -1203,7 +1208,8 @@ jobs:
       contents: read
       actions: write
     concurrency:
-      group: capgo-local-services-cli-${{ github.repository }}
+      # Isolate by event_name so push + pull_request on the same branch do not cancel pending jobs.
+      group: capgo-local-services-cli-${{ github.event_name }}-${{ github.repository }}
       cancel-in-progress: false
     env:
       SUPABASE_WORKTREE_INSTANCE: cli-${{ github.run_id }}-${{ github.run_attempt }}

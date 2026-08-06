@@ -194,4 +194,47 @@ describe('cloudflare plugin snippet on-prem fallback', () => {
     const putKeys = cache.put.mock.calls.map(([key]) => key instanceof Request ? key.url : String(key))
     expect(putKeys.some(key => key.includes('/__internal__/onprem-cache-v2/'))).toBe(true)
   })
+
+  it('retains Retry-After on cached on-prem responses and skips the worker', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const cache = buildCache()
+    vi.stubGlobal('caches', { default: cache })
+
+    const resetAt = Date.now() + 3_600_000
+    const fetchMock = vi.fn(async () => {
+      return new Response(JSON.stringify({
+        error: 'on_premise_app',
+        message: 'On-premise app detected',
+        moreInfo: { rateLimitResetAt: resetAt, retryAfterSeconds: 3600 },
+      }), {
+        status: 429,
+        headers: {
+          'Cache-Control': 'public, max-age=3600',
+          'Retry-After': '3600',
+          'X-RateLimit-Reset': String(Math.ceil(resetAt / 1000)),
+        },
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const body = { app_id: 'com.external.app' }
+    const first = await snippet.fetch(buildRequest('/updates', body))
+    expect(first.status).toBe(429)
+    expect(first.headers.get('Retry-After')).toBe('3600')
+    expect(first.headers.get('X-RateLimit-Reset')).toBe(String(Math.ceil(resetAt / 1000)))
+    expect(cache.put).toHaveBeenCalledTimes(1)
+
+    const second = await snippet.fetch(buildRequest('/updates', body))
+    expect(second.status).toBe(429)
+    expect(second.headers.get('Retry-After')).toBeTruthy()
+    const retryAfter = Number.parseInt(second.headers.get('Retry-After') || '0', 10)
+    expect(retryAfter).toBeGreaterThan(3500)
+    expect(second.headers.get('X-RateLimit-Reset')).toBe(String(Math.ceil(resetAt / 1000)))
+    expect(second.headers.get('Cache-Control')).toBe(`public, max-age=${retryAfter}`)
+    const secondBody = await second.json() as { moreInfo?: { retryAfterSeconds?: number } }
+    expect(secondBody.moreInfo?.retryAfterSeconds).toBe(retryAfter)
+    // Second request must be served from edge cache — no extra worker fetch.
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
 })

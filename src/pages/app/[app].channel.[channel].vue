@@ -234,6 +234,7 @@ async function getChannel(force = false) {
 async function saveChannelChanges(update: ChannelUpdate) {
   const changesStableVersion = Object.prototype.hasOwnProperty.call(update, 'version')
   const changesRolloutVersion = Object.prototype.hasOwnProperty.call(update, 'rollout_version')
+  // Unlinking rollout_version (including disable) requires promote_bundle — matches refresh_channel_rollout_id.
   const canUpdate = changesStableVersion || changesRolloutVersion
     ? canPromoteBundle.value
     : canUpdateChannelSettings.value
@@ -589,6 +590,17 @@ async function enableRollout() {
   await saveChannelChange('rollout_enabled', true as any)
 }
 
+async function disableRollout() {
+  if (await saveChannelChanges({
+    rollout_enabled: false,
+    rollout_version: null,
+    rollout_paused_at: null,
+    rollout_pause_reason: null,
+  })) {
+    await askUpdateNotificationAfterBundleChange()
+  }
+}
+
 async function saveRolloutPercentage(value: string) {
   const percentage = Number.parseFloat(value)
   if (Number.isNaN(percentage) || percentage < 0 || percentage > 100) {
@@ -927,13 +939,14 @@ async function copyCurlCommand() {
             <InfoRow :label="t('name')">
               {{ channel.name }}
             </InfoRow>
-            <!-- Bundle Number -->
-            <InfoRow :label="t('bundle-number')" :is-link="channel && !isInternalVersionName((channel.version.name))">
-              <div class="flex items-center gap-2">
-                <span class="cursor-pointer" @click="openBundle()">{{ channel.version.name }}</span>
+            <!-- Bundle assigned to this channel -->
+            <InfoRow :label="t('bundle-assigned-to-this-channel')" class="sm:items-center" label-class="text-base! leading-5 font-bold! lg:whitespace-nowrap" :is-link="channel && !isInternalVersionName((channel.version.name))">
+              <div class="flex items-center gap-3">
+                <span class="text-base leading-5 cursor-pointer" @click="openBundle()">{{ channel.version.name }}</span>
                 <button
                   v-if="channel"
-                  class="p-1 transition-colors border border-gray-200 rounded-md dark:border-gray-700 hover:bg-gray-50 hover:border-gray-300 dark:hover:border-gray-600 dark:hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:border-gray-200 dark:disabled:hover:border-gray-700"
+                  class="relative p-0 d-btn d-btn-outline size-6 min-h-6 before:absolute before:-inset-2.5 before:content-['']"
+                  :aria-label="t('select-stable-bundle')"
                   :disabled="!canPromoteBundle"
                   @click="openSelectStableVersion()"
                 >
@@ -1051,7 +1064,7 @@ async function copyCurlCommand() {
                       <button class="min-h-11 d-btn d-btn-ghost" :disabled="!canPromoteBundle" @click="openSelectRolloutVersion()">
                         {{ t('set-rollout-target') }}
                       </button>
-                      <button class="min-h-11 d-btn d-btn-outline" :disabled="rolloutActionsDisabled" @click="saveChannelChange('rollout_enabled', !channel.rollout_enabled as any)">
+                      <button class="min-h-11 d-btn d-btn-outline" :disabled="channel.rollout_enabled ? (rolloutTargetActionsDisabled || rolloutControlsDisabled) : rolloutEnableDisabled" @click="channel.rollout_enabled ? disableRollout() : enableRollout()">
                         {{ channel.rollout_enabled ? t('disable') : t('enable') }}
                       </button>
                       <button class="min-h-11 d-btn d-btn-outline" :disabled="rolloutPauseDisabled" @click="toggleRolloutPause()">

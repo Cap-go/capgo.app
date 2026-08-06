@@ -1,11 +1,10 @@
 <script setup lang="ts">
-import type { GitHubProfile } from '~/services/githubProfile'
 import type { Database } from '~/types/supabase.types'
 import { Capacitor } from '@capacitor/core'
 import { setErrors } from '@formkit/core'
 import { FormKit, FormKitMessages, reset } from '@formkit/vue'
 import dayjs from 'dayjs'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, unref, useTemplateRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
@@ -14,9 +13,9 @@ import IconVersion from '~icons/heroicons/arrow-path'
 import iconEmail from '~icons/heroicons/envelope?raw'
 import iconFlag from '~icons/heroicons/flag?raw'
 import iconName from '~icons/heroicons/user?raw'
+import GitHubProfileDialog from '~/components/dashboard/GitHubProfileDialog.vue'
 import { getRecentEmailOtpVerification } from '~/services/emailOtp'
 import { getFormatLocaleOptions, resolveFormatLocale } from '~/services/formatLocale'
-import { getGitHubProfile, GitHubProfileError } from '~/services/githubProfile'
 import { pickPhoto, takePhoto } from '~/services/photos'
 import { getCurrentPlanNameOrg, isPayingOrg, useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -43,138 +42,11 @@ const captchaKey = ref(import.meta.env.VITE_CAPTCHA_KEY)
 const organizationsToDelete = ref<string[]>([])
 const formatLocaleOptions = computed(() => getFormatLocaleOptions(locale.value))
 const paidOrganizationsToDelete = ref<Array<{ name: string, planName: string }>>([])
-const githubUsername = ref(main.user?.github_username ?? '')
-const githubUsernameInput = ref('')
-const githubProfile = ref<GitHubProfile | null>(null)
-const githubProfileLoading = ref(false)
-const githubProfileSaving = ref(false)
-const githubProfileError = ref('')
-let githubProfileLookupGeneration = 0
-displayStore.NavTitle = t('account')
-
-function resetGitHubProfileDialog() {
-  githubProfileLookupGeneration += 1
-  githubProfile.value = null
-  githubProfileError.value = ''
-  githubProfileLoading.value = false
-}
-
-function closeGitHubProfileDialog() {
-  resetGitHubProfileDialog()
-  dialogStore.closeDialog({ text: t('button-cancel'), role: 'cancel' })
-}
+const githubDialog = useTemplateRef('githubDialog')
+const githubUsername = computed(() => unref(githubDialog.value?.githubUsername) ?? '')
 
 function openGitHubProfileDialog() {
-  resetGitHubProfileDialog()
-  githubUsernameInput.value = githubUsername.value
-  dialogStore.openDialog({
-    id: 'github-profile',
-    title: t('github-username'),
-    description: t('github-username-dialog-description'),
-    size: 'sm',
-    buttons: [],
-    preventAccidentalClose: true,
-  })
-}
-
-async function findGitHubProfile() {
-  if (githubProfileLoading.value)
-    return
-
-  const lookupGeneration = githubProfileLookupGeneration
-  const username = githubUsernameInput.value
-  githubProfileError.value = ''
-  githubProfileLoading.value = true
-  try {
-    const profile = await getGitHubProfile(username)
-    if (lookupGeneration === githubProfileLookupGeneration)
-      githubProfile.value = profile
-  }
-  catch (error) {
-    if (lookupGeneration !== githubProfileLookupGeneration)
-      return
-
-    githubProfile.value = null
-    if (error instanceof GitHubProfileError) {
-      githubProfileError.value = t(`github-username-error-${error.code}`)
-    }
-    else {
-      githubProfileError.value = t('github-username-error-request_failed')
-    }
-  }
-  finally {
-    if (lookupGeneration === githubProfileLookupGeneration)
-      githubProfileLoading.value = false
-  }
-}
-
-async function confirmGitHubProfile() {
-  if (!githubProfile.value || !main.user?.id || githubProfileSaving.value)
-    return
-
-  const userId = main.user.id
-  const dialogGeneration = githubProfileLookupGeneration
-  githubProfileSaving.value = true
-  const { data: user, error } = await supabase
-    .from('users')
-    .update({
-      github_id: githubProfile.value.id,
-      github_username: githubProfile.value.login,
-    })
-    .eq('id', userId)
-    .select()
-    .single()
-
-  githubProfileSaving.value = false
-  if (main.user?.id !== userId)
-    return
-
-  if (error || !user) {
-    githubProfile.value = null
-    githubProfileError.value = t('account-error')
-    return
-  }
-
-  main.user = user
-  githubUsername.value = user.github_username ?? ''
-  if (dialogGeneration !== githubProfileLookupGeneration)
-    return
-
-  toast.success(t('account-updated-succ'))
-  dialogStore.closeDialog({ text: t('confirm'), role: 'primary' })
-  resetGitHubProfileDialog()
-}
-
-async function clearGitHubProfile() {
-  if (!main.user?.id || githubProfileSaving.value)
-    return
-
-  const userId = main.user.id
-  githubProfileSaving.value = true
-  const { data: user, error } = await supabase
-    .from('users')
-    .update({
-      github_id: null,
-      github_username: null,
-    })
-    .eq('id', userId)
-    .select()
-    .single()
-
-  githubProfileSaving.value = false
-  if (main.user?.id !== userId)
-    return
-
-  if (error || !user) {
-    githubProfileError.value = t('account-error')
-    return
-  }
-
-  main.user = user
-  githubUsername.value = ''
-  toast.success(t('account-updated-succ'))
-  dialogStore.closeDialog({ text: t('button-remove'), role: 'danger' })
-  resetGitHubProfileDialog()
+  githubDialog.value?.openGitHubProfileDialog()
 }
 
 async function redirectToEmailVerification() {
@@ -723,9 +595,9 @@ onMounted(async () => {
               </div>
               <div class="sm:w-1/2">
                 <FormKit
-                  v-model="githubUsername"
                   type="text"
                   name="github_username"
+                  :model-value="githubUsername"
                   autocomplete="off"
                   :disabled="isLoading"
                   readonly
@@ -886,82 +758,7 @@ onMounted(async () => {
       </div>
     </Teleport>
 
-    <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions?.id === 'github-profile'" to="#dialog-v2-content" defer>
-      <div>
-        <template v-if="!githubProfile">
-          <label for="github-username-input" class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">
-            {{ t('github-username') }}
-          </label>
-          <input
-            id="github-username-input"
-            v-model="githubUsernameInput"
-            type="text"
-            autocomplete="off"
-            maxlength="39"
-            class="d-input w-full"
-            :disabled="githubProfileLoading || githubProfileSaving"
-            :placeholder="t('github-username-placeholder')"
-            @keydown.enter.prevent="findGitHubProfile"
-          >
-        </template>
-
-        <div v-else class="flex items-center gap-4 rounded-lg border border-slate-200 p-4 dark:border-slate-700">
-          <img :src="githubProfile.avatarUrl" :alt="githubProfile.login" class="w-16 h-16 rounded-full" width="64" height="64">
-          <div class="min-w-0">
-            <p class="truncate font-semibold text-gray-900 dark:text-white">
-              {{ githubProfile.name || githubProfile.login }}
-            </p>
-            <p class="text-sm text-gray-500 dark:text-gray-400">
-              @{{ githubProfile.login }}
-            </p>
-          </div>
-        </div>
-
-        <p v-if="githubProfile" class="mt-4 text-sm text-gray-600 dark:text-gray-300">
-          {{ t('github-username-confirm-description') }}
-        </p>
-        <p v-if="githubProfileError" class="mt-3 text-sm text-red-600 dark:text-red-400">
-          {{ githubProfileError }}
-        </p>
-
-        <div class="flex justify-end gap-3 mt-6">
-          <button type="button" class="d-btn d-btn-ghost" :disabled="githubProfileLoading || githubProfileSaving" @click="closeGitHubProfileDialog">
-            {{ t('button-cancel') }}
-          </button>
-          <button
-            v-if="!githubProfile && githubUsername"
-            type="button"
-            class="d-btn d-btn-error"
-            :aria-label="t('button-remove')"
-            :disabled="githubProfileLoading || githubProfileSaving"
-            @click="clearGitHubProfile"
-          >
-            <Spinner v-if="githubProfileSaving" size="w-4 h-4" />
-            <span v-else>{{ t('button-remove') }}</span>
-          </button>
-          <button
-            v-if="githubProfile"
-            type="button"
-            class="d-btn d-btn-primary"
-            :disabled="githubProfileSaving"
-            @click="confirmGitHubProfile"
-          >
-            <Spinner v-if="githubProfileSaving" size="w-4 h-4" />
-            <span v-else>{{ t('github-username-confirm') }}</span>
-          </button>
-          <button
-            v-else
-            type="button"
-            class="d-btn d-btn-primary"
-            :disabled="githubProfileLoading || !githubUsernameInput.trim()"
-            @click="findGitHubProfile"
-          >
-            <Spinner v-if="githubProfileLoading" size="w-4 h-4" />
-            <span v-else>{{ t('next') }}</span>
-          </button>
-        </div>
-      </div>
-    </Teleport>
+    <GitHubProfileDialog ref="githubDialog" dialog-id="github-profile" />
   </div>
 </template>
 

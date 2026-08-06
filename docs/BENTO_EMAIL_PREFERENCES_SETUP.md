@@ -72,6 +72,27 @@ Tag does NOT contain: credit_usage_disabled
 Tag does NOT contain: onboarding_disabled
 ```
 
+#### 3a. First-Organization Recovery
+
+**Entry event**: `user:registered_without_org`
+
+**Exit or goal event**: `user:joined_org`
+
+Capgo adds `onboarding:awaiting_first_org` when a direct registration still has no active organization access. When Capgo observes active direct organization access, it removes that tag and permanently adds `onboarding:first_org_recovery_suppressed` in the same subscriber update. The permanent tag keeps recovery disabled even if Bento applies an older asynchronous registration import afterward. A normalized email-address change permanently adds the same suppression tag to both the old and new Bento aliases so asynchronous subscriber updates can never send this recovery email to a stale address. Deleting a user applies the same permanent suppression and unsubscribes the Bento subscriber before organization-dependent cleanup can return.
+
+Configure the workflow to enroll each subscriber at most once. Queue delivery is at least once, so both lifecycle events can repeat for the same user. Treat `user:joined_org` as a fact used to exit or complete the workflow, not as another entry trigger; the subscriber-level enrollment rule makes repeated `user:registered_without_org` facts harmless.
+
+After the workflow delay, add a final decision immediately before the send step. All three conditions must still be true:
+
+```text
+Tag contains: onboarding:awaiting_first_org
+Tag does NOT contain: onboarding:first_org_recovery_suppressed
+Tag does NOT contain: onboarding_disabled
+```
+
+Do not check the suppression tag only when the workflow starts. It is a monotonic safety opt-out that can be added while the workflow is waiting.
+Keep this recovery email non-transactional so Bento's global unsubscribe state remains a delivery gate.
+
 #### 4. Weekly Statistics
 
 **Events**: `user:weekly_stats`
@@ -159,6 +180,7 @@ Tag does NOT contain: device_error_disabled
 After configuring Bento, verify the following:
 
 - [ ] Each automation has the correct exclusion filter for its disabled tag
+- [ ] The first-organization recovery workflow re-checks `onboarding:awaiting_first_org`, `onboarding:first_org_recovery_suppressed`, and `onboarding_disabled` immediately before sending
 - [ ] Test by disabling a preference for a test user and confirming they don't receive that email type
 - [ ] Test by re-enabling the preference and confirming they DO receive that email type
 - [ ] Verify existing users without the `email_preferences` column still receive emails (tags default to not present = enabled)
