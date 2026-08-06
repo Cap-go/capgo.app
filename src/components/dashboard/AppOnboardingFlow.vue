@@ -879,16 +879,14 @@ onMounted(async () => {
     await organizationStore.awaitInitialLoad()
     await main.awaitInitialLoad()
 
-    try {
-      await ensureApiKey()
-    }
-    catch (error) {
-      console.error('Cannot ensure API key', error)
-      toast.error(t('app-onboarding-toast-apikey-error'))
-    }
     const resumed = await loadResumeApp()
     if (!resumed)
       flowStep.value = 'details'
+
+    void ensureApiKey().catch((error) => {
+      console.error('Cannot ensure API key', error)
+      toast.error(t('app-onboarding-toast-apikey-error'))
+    })
   }
   finally {
     isLoading.value = false

@@ -16,6 +16,14 @@ describe('app onboarding API key loading state', () => {
     expect(onboardingSource).toContain('if (!apiKey.value)')
   })
 
+  it.concurrent('renders a resumed app without waiting for API key provisioning', () => {
+    const mountedFlow = onboardingSource.slice(onboardingSource.indexOf('onMounted(async () => {'))
+
+    expect(mountedFlow.indexOf('const resumed = await loadResumeApp()'))
+      .toBeLessThan(mountedFlow.indexOf('void ensureApiKey().catch'))
+    expect(mountedFlow).not.toContain('await ensureApiKey()')
+  })
+
   it.concurrent('renders ready commands as native DaisyUI buttons', () => {
     expect(onboardingSource).toMatch(/<button\s+v-if="apiKey"/)
     expect(onboardingSource).not.toContain(':role="apiKey ? \'button\' : \'status\'"')
