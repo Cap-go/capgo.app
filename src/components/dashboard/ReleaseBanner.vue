@@ -110,7 +110,13 @@ watch(() => [props.appId, organizationStore.currentOrganization?.gid], () => {
 <template>
   <div
     v-if="hasRecentRelease"
-    class="mb-4 overflow-hidden border rounded-lg border-emerald-200 bg-emerald-50 dark:bg-emerald-900/20 dark:border-emerald-800"
+    data-test="release-banner"
+    role="button"
+    tabindex="0"
+    class="mb-4 overflow-hidden transition-colors border rounded-lg cursor-pointer border-emerald-200 bg-emerald-50 hover:bg-emerald-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 dark:bg-emerald-900/20 dark:border-emerald-800 dark:hover:bg-emerald-900/30"
+    @click="viewStats"
+    @keydown.enter.prevent="viewStats"
+    @keydown.space.prevent="viewStats"
   >
     <div class="flex items-center justify-between p-4">
       <div class="flex items-center gap-3">
@@ -132,8 +138,10 @@ watch(() => [props.appId, organizationStore.currentOrganization?.gid], () => {
 
       <button
         v-if="defaultChannelId"
+        data-test="release-banner-view"
+        tabindex="-1"
         class="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white transition-colors rounded-md bg-emerald-600 hover:bg-emerald-700 shrink-0"
-        @click="viewStats"
+        @click.stop="viewStats"
       >
         <IconTrendingUp class="w-4 h-4" />
         {{ t('view-adoption') }}
