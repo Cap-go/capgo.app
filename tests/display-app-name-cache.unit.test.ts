@@ -10,6 +10,19 @@ vi.mock('~/services/supabase', () => ({
   useSupabase: () => ({ from: mockFrom }),
 }))
 
+interface LookupResult {
+  data: { name: string } | null
+  error: unknown
+}
+
+function deferredLookup() {
+  let resolve: (result: LookupResult) => void = () => {}
+  const promise = new Promise<LookupResult>((resolvePromise) => {
+    resolve = resolvePromise
+  })
+  return { promise, resolve }
+}
+
 async function flushPromises() {
   await Promise.resolve()
   await Promise.resolve()
@@ -23,11 +36,9 @@ describe('display app-name lookups', () => {
   })
 
   it('caches a successful missing-app lookup without retrying it', async () => {
-    let resolveLookup: (result: { data: null, error: null }) => void = () => {}
+    const lookup = deferredLookup()
     mockMaybeSingle
-      .mockImplementationOnce(() => new Promise((resolve) => {
-        resolveLookup = resolve
-      }))
+      .mockReturnValueOnce(lookup.promise)
       .mockReturnValue(new Promise(() => {}))
 
     const { useDisplayStore } = await import('../src/stores/display.ts')
@@ -36,11 +47,52 @@ describe('display app-name lookups', () => {
     display.updatePathTitle('/app/com.missing.app')
     expect(mockMaybeSingle).toHaveBeenCalledTimes(1)
 
-    resolveLookup({ data: null, error: null })
+    lookup.resolve({ data: null, error: null })
     await flushPromises()
     display.updatePathTitle('/app/com.missing.app')
 
     expect(mockMaybeSingle).toHaveBeenCalledTimes(1)
+  })
+
+  it('ignores a missing result from the previous organization', async () => {
+    const oldLookup = deferredLookup()
+    mockMaybeSingle
+      .mockReturnValueOnce(oldLookup.promise)
+      .mockReturnValue(new Promise(() => {}))
+
+    const { useDisplayStore } = await import('../src/stores/display.ts')
+    const display = useDisplayStore()
+
+    display.clearCachesForOrg('org-one')
+    display.updatePathTitle('/app/com.shared.app')
+    display.clearCachesForOrg('org-two')
+
+    oldLookup.resolve({ data: null, error: null })
+    await flushPromises()
+    display.updatePathTitle('/app/com.shared.app')
+
+    expect(mockMaybeSingle).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not let an old request clear the new organization request', async () => {
+    const oldLookup = deferredLookup()
+    mockMaybeSingle
+      .mockReturnValueOnce(oldLookup.promise)
+      .mockReturnValue(new Promise(() => {}))
+
+    const { useDisplayStore } = await import('../src/stores/display.ts')
+    const display = useDisplayStore()
+
+    display.clearCachesForOrg('org-one')
+    display.updatePathTitle('/app/com.shared.app')
+    display.clearCachesForOrg('org-two')
+    display.updatePathTitle('/app/com.shared.app')
+
+    oldLookup.resolve({ data: null, error: new Error('lookup failed') })
+    await flushPromises()
+    display.updatePathTitle('/app/com.shared.app')
+
+    expect(mockMaybeSingle).toHaveBeenCalledTimes(2)
   })
 
   it('does not resolve the reserved new-app route as an app id', async () => {

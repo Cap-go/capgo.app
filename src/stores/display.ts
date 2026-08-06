@@ -159,6 +159,7 @@ export const useDisplayStore = defineStore('display', () => {
       // Kick off fetch if we still don't have a name
       if (appId !== 'new' && !hasCachedName && !appNameResolver.value(appId) && !pendingFetches.has(appId)) {
         const supabase = useSupabase()
+        const requestOrgId = currentCacheOrgId.value
         const fetchPromise = (async () => {
           try {
             const { data, error } = await supabase
@@ -166,6 +167,9 @@ export const useDisplayStore = defineStore('display', () => {
               .select('name')
               .eq('app_id', appId)
               .maybeSingle()
+
+            if (currentCacheOrgId.value !== requestOrgId)
+              return
 
             if (!error) {
               appNameCache.value.set(appId, data?.name ?? null)
@@ -176,11 +180,12 @@ export const useDisplayStore = defineStore('display', () => {
           catch {
             // Ignore lookup failures; a later route update may retry.
           }
-          finally {
-            pendingFetches.delete(appId)
-          }
         })()
         pendingFetches.set(appId, fetchPromise)
+        void fetchPromise.then(() => {
+          if (pendingFetches.get(appId) === fetchPromise)
+            pendingFetches.delete(appId)
+        })
       }
 
       // Additional segments after the app id (e.g., bundle, channel)
