@@ -254,7 +254,7 @@ async function openChangePlan(plan: Database['public']['Tables']['plans']['Row']
   // get the current url
   isSubscribeLoading.value[index] = true
   if (plan.stripe_id) {
-    const checkoutIsYearly = plan.price_y === plan.price_m ? false : isYearly.value
+    const checkoutIsYearly = hasYearlyDiscount(plan) ? isYearly.value : false
     if (isSafariBrowser()) {
       const shouldContinue = await openSafariStripeCheckout(plan, checkoutIsYearly)
       if (!shouldContinue) {
@@ -271,8 +271,12 @@ async function openChangePlan(plan: Database['public']['Tables']['plans']['Row']
   isSubscribeLoading.value[index] = false
 }
 
+function hasYearlyDiscount(plan: Database['public']['Tables']['plans']['Row']): boolean {
+  return plan.price_y > 0 && Math.round(plan.price_y / 12) < plan.price_m
+}
+
 function getPrice(plan: Database['public']['Tables']['plans']['Row'], t: 'm' | 'y'): number {
-  if (t === 'm' || plan.price_y === plan.price_m) {
+  if (t === 'm' || !hasYearlyDiscount(plan)) {
     return plan.price_m
   }
   else {
@@ -576,7 +580,7 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
               <span class="ml-1 text-sm font-medium text-gray-500 dark:text-gray-400">/{{ t('mo') }}</span>
             </div>
             <p v-if="isYearlyPlan(p, segmentVal)" class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              {{ p.price_m !== p.price_y ? t('billed-annually-at') : t('billed-monthly-at') }} ${{ p.price_y }}
+              {{ hasYearlyDiscount(p) ? t('billed-annually-at') : t('billed-monthly-at') }} ${{ hasYearlyDiscount(p) ? p.price_y : p.price_m }}
             </p>
           </div>
 
