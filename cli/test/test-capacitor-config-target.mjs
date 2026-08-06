@@ -76,6 +76,24 @@ try {
   webDir: 'factory-www',
 })
 `
+  const javascriptConfigSource = `/** @type {import('@capacitor/cli').CapacitorConfig} */
+const config = {
+  appId: 'com.example.javascript',
+  appName: 'JavaScript app',
+  webDir: 'javascript-www',
+  plugins: {
+    JsOnlyPlugin: {
+      enabled: true,
+    },
+    CapacitorUpdater: {
+      appId: 'com.example.javascript',
+      jsOnly: true,
+    },
+  },
+}
+
+module.exports = config
+`
   const appDir = join(root, 'apps', 'qr-code-reader')
   mkdirSync(configDir, { recursive: true })
   mkdirSync(directoryTarget)
@@ -86,14 +104,16 @@ try {
   writeFileSync(multiPartConfigTarget, 'export default {}\n')
   writeFileSync(configTarget, configTargetSource)
   writeFileSync(jsonConfigTarget, JSON.stringify({ appId: 'com.example.json', appName: 'JSON app', webDir: 'json-www' }))
-  writeFileSync(javascriptConfigTarget, 'module.exports = {}\n')
+  writeFileSync(javascriptConfigTarget, javascriptConfigSource)
   writeFileSync(factoryConfigTarget, factoryConfigSource)
   writeFileSync(join(configDir, 'not-a-capacitor-config.ts'), 'export default {}\n')
+  writeFileSync(join(configDir, 'capacitor.config.esm.mjs'), 'export default {}\n')
   writeFileSync(outsideConfigTarget, 'export default {}\n')
   assert.equal(resolveCapacitorConfigTargetPath('./env-configs/capacitor.config.qr-code-reader.production.ts', root), multiPartConfigTarget)
   assert.equal(resolveCapacitorConfigTargetPath('./env-configs/capacitor.config.qr-code-reader.ts', root), configTarget)
   assert.equal(resolveCapacitorConfigTargetPath('./env-configs/capacitor.config.json-target.json', root), jsonConfigTarget)
-  assert.throws(() => resolveCapacitorConfigTargetPath('./env-configs/capacitor.config.javascript.js', root), /\.ts or capacitor\.config\.\*\.json/)
+  assert.equal(resolveCapacitorConfigTargetPath('./env-configs/capacitor.config.javascript.js', root), javascriptConfigTarget)
+  assert.throws(() => resolveCapacitorConfigTargetPath('./env-configs/capacitor.config.esm.mjs', root), /\.ts, capacitor\.config\.\*\.js, or capacitor\.config\.\*\.json/)
   assert.throws(() => resolveCapacitorConfigTargetPath(relative(root, outsideConfigTarget), root), /must stay within the current working directory/)
   assert.throws(() => resolveCapacitorConfigTargetPath(outsideConfigTarget, root), /must stay within the current working directory/)
   const outsideLink = join(root, 'outside-link')
@@ -110,6 +130,11 @@ try {
     const factoryConfigWriteSnapshot = await loadConfigForWrite()
     assert.equal(factoryConfigWriteSnapshot.config.appId, 'com.example.factory')
     assert.equal(factoryConfigWriteSnapshot.config.webDir, 'factory-www')
+    setConfigWriteTarget(javascriptConfigTarget)
+    const javascriptConfigWriteSnapshot = await loadConfigForWrite()
+    assert.equal(javascriptConfigWriteSnapshot.config.appId, 'com.example.javascript')
+    assert.equal(javascriptConfigWriteSnapshot.config.webDir, 'javascript-www')
+    assert.equal(javascriptConfigWriteSnapshot.config.plugins.CapacitorUpdater.jsOnly, true)
     setConfigWriteTarget(jsonConfigTarget)
     const jsonConfigSnapshot = await getConfig()
     assert.equal(jsonConfigSnapshot.config.appId, 'com.example.root')
@@ -189,6 +214,34 @@ try {
   assert.match(writtenTargetConfig, /targetOnly:\s*true/)
   assert.match(writtenTargetConfig, /autoUpdate:\s*false/)
   assert.doesNotMatch(writtenTargetConfig, /RootOnlyPlugin/)
+  assert.equal(readFileSync(rootConfig, 'utf8'), rootConfigSource)
+
+  // Capacitor's own writeConfig silently no-ops on `.js`, so exercise a real write
+  // through the CLI and confirm the `capacitor.config.js` target is actually updated.
+  const javascriptCommand = spawnSync('node', [
+    join(cliRoot, 'dist/index.js'),
+    'app',
+    'setting',
+    'plugins.CapacitorUpdater.autoUpdate',
+    '--bool',
+    'false',
+    '--capacitor-config',
+    javascriptConfigTarget,
+  ], {
+    cwd: root,
+    encoding: 'utf8',
+    env: { ...process.env, CAPGO_DISABLE_TELEMETRY: 'true' },
+  })
+
+  assert.equal(javascriptCommand.status, 0, `${javascriptCommand.stdout}\n${javascriptCommand.stderr}`)
+  const writtenJavascriptConfig = readFileSync(javascriptConfigTarget, 'utf8')
+  assert.match(writtenJavascriptConfig, /module\.exports = config/)
+  assert.match(writtenJavascriptConfig, /appId:\s*'com\.example\.javascript'/)
+  assert.match(writtenJavascriptConfig, /webDir:\s*'javascript-www'/)
+  assert.match(writtenJavascriptConfig, /JsOnlyPlugin/)
+  assert.match(writtenJavascriptConfig, /jsOnly:\s*true/)
+  assert.match(writtenJavascriptConfig, /autoUpdate:\s*false/)
+  assert.doesNotMatch(writtenJavascriptConfig, /RootOnlyPlugin/)
   assert.equal(readFileSync(rootConfig, 'utf8'), rootConfigSource)
 
   const notificationHelper = join(root, 'src', 'capgo-notifications.ts')
