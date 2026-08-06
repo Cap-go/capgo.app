@@ -879,11 +879,11 @@ onUnmounted(() => {
         <div v-if="step === 'details'" class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5 dark:border-white/15 dark:bg-slate-900/95">
           <div v-if="isCompactCreateOrgFlow" class="space-y-5">
             <div>
-              <label for="onboarding-org-name-input" class="text-sm font-medium text-slate-800 dark:text-slate-200">
+              <label for="onboarding-org-name-compact" class="text-sm font-medium text-slate-800 dark:text-slate-200">
                 {{ t('organization-name') }}
               </label>
               <input
-                id="onboarding-org-name-input"
+                id="onboarding-org-name-compact"
                 v-model="orgNameInput"
                 type="text"
                 :placeholder="t('organization-name')"
