@@ -139,7 +139,7 @@ export async function assertAscAccess(opts: AssertAscAccessOptions): Promise<Asc
         return {
           ok: false,
           kind: 'no-app-access',
-          message: `The App Store Connect API key cannot see an app with bundle id ${opts.bundleId}.`,
+          message: `The App Store Connect API key cannot see an app with bundle id ${opts.bundleId}. Create it in App Store Connect, or skip TestFlight and get an IPA with --ios-distribution ad_hoc --output-upload.`,
         }
       }
     }

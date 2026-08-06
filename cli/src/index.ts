@@ -908,7 +908,8 @@ and/or to Capgo storage as a time-limited download link (--output-upload).
    \`npx @capgo/cli build credentials save --appId <app-id> --platform <ios|android>\`
 
 Example: npx @capgo/cli@latest build request com.example.app --platform ios --path .
-Android AAB only (no Play upload): npx @capgo/cli@latest build request com.example.app --platform android --no-playstore-upload --output-upload`)
+Android AAB only (no Play upload): npx @capgo/cli@latest build request com.example.app --platform android --no-playstore-upload --output-upload
+iOS IPA only (no TestFlight upload): npx @capgo/cli@latest build request com.example.app --platform ios --ios-distribution ad_hoc --output-upload`)
   .action(requestBuildCommand)
   .option('--path <path>', `Path to the project directory to build (default: current directory)`)
   .option('--node-modules <nodeModules>', optionDescriptions.nodeModules)
@@ -926,7 +927,7 @@ Android AAB only (no Play upload): npx @capgo/cli@latest build request com.examp
   .option('--app-store-connect-team-id <id>', 'iOS: App Store Connect Team ID')
   .option('--ios-scheme <scheme>', 'iOS: Xcode scheme to build (default: App)')
   .option('--ios-target <target>', 'iOS: Xcode target for reading build settings (default: same as scheme)')
-  .addOption(new Option('--ios-distribution <mode>', 'iOS: Distribution mode').choices(['app_store', 'ad_hoc']).default('app_store'))
+  .addOption(new Option('--ios-distribution <mode>', 'iOS: Distribution mode. app_store (default) uploads to TestFlight/App Store; ad_hoc skips store upload and builds an Ad Hoc IPA for device install. Use ad_hoc with --output-upload when the App Store app does not exist yet or you only need an IPA download.').choices(['app_store', 'ad_hoc']).default('app_store'))
   .option('--ios-provisioning-profile <mapping>', 'iOS: Provisioning profile path or bundleId=path mapping (repeatable)', collect, [])
   // Android credential CLI options (can also be set via env vars or saved credentials)
   .option('--android-keystore-file <keystore>', 'Android: Base64-encoded keystore file')
@@ -944,7 +945,7 @@ Android AAB only (no Play upload): npx @capgo/cli@latest build request com.examp
   .option('--ios-testflight-groups <groups>', 'iOS: optional comma-separated TestFlight external group names or IDs for external beta distribution.')
   .option('--ios-automatic-release', 'iOS: automatically release the App Store version after Apple approval. Default is manual release.')
   .option('--no-ios-automatic-release', 'iOS: keep the App Store version waiting for manual release after Apple approval.')
-  .option('--output-upload', 'Upload the finished IPA/APK/AAB to Capgo storage and print a time-limited download link (and QR). Use with --no-playstore-upload when you only need the AAB and are not publishing to Play yet. Precedence: CLI > env > saved credentials')
+  .option('--output-upload', 'Upload the finished IPA/APK/AAB to Capgo storage and print a time-limited download link (and QR). Use with --no-playstore-upload (Android) or --ios-distribution ad_hoc (iOS) when you only need the artifact and are not publishing to the store yet. Precedence: CLI > env > saved credentials')
   .option('--no-output-upload', 'Do not upload the finished IPA/APK/AAB to Capgo storage (no download link). Store upload still happens when Play/TestFlight credentials are configured. Precedence: CLI > env > saved credentials')
   .option('--output-retention <duration>', 'Override output link TTL for this build only (1h to 7d). Examples: 1h, 6h, 2d. Precedence: CLI > env > saved credentials')
   .option('--output-record <path>', 'After a successful build, write a JSON record (jobId, status, outputUrl, qrCodeAscii, qrCodePngPath, finishedAt) to <path>. A PNG QR code is also written next to it as <path>.qr.png. Read fields back with `build last-output`.')

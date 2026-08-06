@@ -116,7 +116,7 @@ interface BuildLogger {
 - `--app-store-connect-team-id <id>`
 - `--ios-scheme <scheme>`
 - `--ios-target <target>`
-- `--ios-distribution <mode>`: `app_store` or `ad_hoc`
+- `--ios-distribution <mode>`: `app_store` (default, uploads to TestFlight) or `ad_hoc` (skips store upload; use with `--output-upload` for IPA-only when the App Store app does not exist yet)
 - `--ios-provisioning-profile <mapping>`: repeatable path or `bundleId=path`
 
 #### Android request options
@@ -131,7 +131,7 @@ interface BuildLogger {
 
 #### Output behavior options
 
-- `--output-upload`: upload the finished IPA/APK/AAB to Capgo storage and print a time-limited download link (and QR)
+- `--output-upload`: upload the finished IPA/APK/AAB to Capgo storage and print a time-limited download link (and QR). Pair with `--no-playstore-upload` (Android) or `--ios-distribution ad_hoc` (iOS) for artifact-only builds
 - `--no-output-upload`: skip Capgo storage upload (no download link); store upload can still happen when store credentials are set
 - `--no-playstore-upload`: Android — skip Google Play upload for this build (ignores saved Play credentials). Requires `--output-upload`. Use when the Play app does not exist yet or you only need the AAB download
 - `--submit-to-store-review`: submit after upload instead of leaving a draft/inactive store release. Android completes the Google Play release; iOS submits to TestFlight external review.

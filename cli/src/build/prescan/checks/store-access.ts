@@ -277,7 +277,7 @@ export function makeAscKeyAccess(asserter: AscAsserter): PrescanCheck {
             severity: 'warning',
             title: 'The App Store Connect API key cannot see this app',
             detail: result.message,
-            fix: 'Confirm the app exists in App Store Connect and the API key role can access it, or fix the bundle identifier.',
+            fix: 'Confirm the app exists in App Store Connect and the API key role can access it, or fix the bundle identifier. If you only need an IPA download (no TestFlight), re-run with --ios-distribution ad_hoc --output-upload.',
           }]
         case 'network':
           return [{
