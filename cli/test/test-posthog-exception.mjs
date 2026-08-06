@@ -65,7 +65,10 @@ try {
   assert.equal(body.properties.error_kind, 'unhandled_error')
   assert.equal(body.properties.status, 1)
   assert.match(body.properties.distinct_id, /^cli:[^:]+:bundle upload$/)
-  assert.match(body.properties.$exception_fingerprint, /cli:[^:]+:bundle upload:unhandled_error:Error:runUpload:/)
+  // Fingerprint must NOT include the CLI version, so the same bug stays one
+  // error-tracking issue across releases.
+  assert.equal(body.properties.$exception_fingerprint, 'bundle upload:unhandled_error:Error:runUpload:<cwd>/src/index.ts:1')
+  assert.doesNotMatch(body.properties.$exception_fingerprint, /cli:/)
   assert.equal(body.properties.$exception_list[0].type, 'Error')
   assert.equal(body.properties.$exception_list[0].value, 'boom')
   assert.equal(body.properties.$exception_list[0].mechanism.handled, true)
