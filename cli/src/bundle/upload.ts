@@ -1237,7 +1237,13 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   if (options.verbose)
     log.info(`[Verbose] Target channel${channels.length > 1 ? 's' : ''}: ${channelLabel}`)
 
-  // Now if it does exist we will fetch the org id
+  // Verify the app exists and this key may upload BEFORE the org lookup, so a
+  // missing app or bad key yields an actionable message (e.g. run `app add`)
+  // instead of the opaque "Cannot get organization id" thrown below.
+  if (options.verbose)
+    log.info(`[Verbose] Checking app existence and upload permission...`)
+  await checkAppExistsAndHasPermissionOrgErr(supabase, apikey, appid, 'app.upload_bundle', silent, true)
+
   const orgId = await getOrganizationId(supabase, appid)
   if (options.verbose)
     log.info(`[Verbose] Organization ID: ${orgId}`)
@@ -1718,11 +1724,8 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
       log.info(`[Verbose] Version record updated successfully`)
   }
 
-  // Check we have app access to this appId
-  if (options.verbose)
-    log.info(`[Verbose] Checking app permissions...`)
-
-  await checkAppExistsAndHasPermissionOrgErr(supabase, apikey, appid, 'app.upload_bundle', silent, true)
+  // App existence + upload permission are verified up-front (before the org
+  // lookup), so here we only need the delete-permission probe.
   const canDeleteBundle = await hasCliPermission(supabase, apikey, 'bundle.delete', { appId: appid })
 
   if (options.verbose) {

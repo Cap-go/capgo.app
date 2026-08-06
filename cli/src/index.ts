@@ -49,7 +49,7 @@ import { login } from './login'
 import { startMcpServer } from './mcp/server'
 import { setupNotifications } from './notifications/setup'
 import { addOrganization, deleteOrganization, listMembers, listOrganizations, setOrganization } from './organization'
-import { capturePosthogException, getCommandPath, shouldCapturePosthogException } from './posthog'
+import { capturePosthogException, getCommandPath, isExpectedUserError, shouldCapturePosthogException } from './posthog'
 import { getPreviewQr } from './preview/qr'
 import { probe } from './probe'
 import { testRunDeviceCommand } from './run/device'
@@ -1304,7 +1304,10 @@ void (async () => {
         await flushAnalytics()
         exit(0)
       }
-      const capturePromise = shouldCapturePosthogException(error)
+      // Skip exception capture for Commander control-flow and for expected user
+      // errors (bad/missing key, app not created) — those are still counted by
+      // trackCommandFailed below, but they are not CLI bugs worth an issue.
+      const capturePromise = shouldCapturePosthogException(error) && !isExpectedUserError(error)
         ? capturePosthogException({
           error,
           functionName: currentCommandPath,
@@ -1323,12 +1326,16 @@ void (async () => {
       await Promise.all([capturePromise, flushAnalytics(), finishActiveCliReplay().catch(() => {})])
       exit(exitCode)
     }
-    const capturePromise = capturePosthogException({
-      error,
-      functionName: currentCommandPath,
-      kind: 'unhandled_error',
-      status: 1,
-    })
+    // Expected user errors (bad/missing key, app not created) are counted via
+    // trackCommandFailed but never captured as exceptions — they are not bugs.
+    const capturePromise = isExpectedUserError(error)
+      ? Promise.resolve(false)
+      : capturePosthogException({
+        error,
+        functionName: currentCommandPath,
+        kind: 'unhandled_error',
+        status: 1,
+      })
     // For non-Commander errors, show full error details
     log.error(`Error: ${formatError(error)}`)
     trackCommandFailed(currentCommandPath, { errorCategory: categorizeCliError(error), exitCode: 1 })

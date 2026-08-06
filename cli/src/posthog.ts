@@ -180,6 +180,51 @@ export function shouldCapturePosthogException(error: unknown) {
   return !getCommanderCode(error)?.startsWith('commander.')
 }
 
+// Lowercased markers for expected user-configuration failures (bad/missing API
+// key, app not created yet). These are surfaced with the backend error codes or
+// the CLI's own wording — matched case-insensitively against the error message.
+const EXPECTED_USER_ERROR_MARKERS = [
+  'invalid_apikey',
+  'invalid apikey',
+  'no_key_provided',
+  'no key provided',
+  'invalid api key or insufficient permissions',
+  'does not exist, run first',
+]
+
+function getErrorStatus(error: unknown): number | undefined {
+  if (!error || typeof error !== 'object')
+    return undefined
+  const candidate = error as { status?: unknown, statusCode?: unknown, context?: { status?: unknown } }
+  if (typeof candidate.status === 'number')
+    return candidate.status
+  if (typeof candidate.statusCode === 'number')
+    return candidate.statusCode
+  // supabase-js FunctionsHttpError keeps the upstream Response on `.context`.
+  const contextStatus = candidate.context && typeof candidate.context === 'object'
+    ? (candidate.context as { status?: unknown }).status
+    : undefined
+  return typeof contextStatus === 'number' ? contextStatus : undefined
+}
+
+/**
+ * Expected user-configuration failures: a bad or missing API key (401
+ * `invalid_apikey` / `no_key_provided`) or an app that has not been created
+ * yet. These are real user errors, not CLI bugs — they are still counted via
+ * `trackCommandFailed`, but must NOT be sent to error tracking as exceptions.
+ */
+export function isExpectedUserError(error: unknown) {
+  const message = (error instanceof Error
+    ? error.message
+    : typeof error === 'string' ? error : '').toLowerCase()
+
+  if (EXPECTED_USER_ERROR_MARKERS.some(marker => message.includes(marker)))
+    return true
+
+  // A 401 from any Capgo endpoint is an auth/config problem on the caller side.
+  return getErrorStatus(error) === 401
+}
+
 export function getCommandPath(command: Command) {
   const names: string[] = []
   let current: Command | null | undefined = command
@@ -213,8 +258,11 @@ export async function capturePosthogException(payload: CapturePosthogExceptionPa
   const distinctId = `cli:${pack.version}:${payload.functionName}`
   const frames = parseExceptionFrames(serializedError.stack, payload.functionName)
   const topFrame = frames[0]
+  // Keep the CLI version OUT of the fingerprint so the same error stays one
+  // issue across releases instead of re-fingerprinting into a fresh issue on
+  // every version bump. The version is still reported via `cli_version` below.
   const fingerprint = [
-    distinctId,
+    `cli:${payload.functionName}`,
     payload.kind,
     serializedError.name || 'Error',
     topFrame?.function || payload.functionName,

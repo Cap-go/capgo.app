@@ -5,6 +5,7 @@ import { Command } from 'commander'
 import {
   capturePosthogException,
   getCommandPath,
+  isExpectedUserError,
   shouldCapturePosthogException,
 } from '../src/posthog.ts'
 
@@ -65,7 +66,10 @@ try {
   assert.equal(body.properties.error_kind, 'unhandled_error')
   assert.equal(body.properties.status, 1)
   assert.match(body.properties.distinct_id, /^cli:[^:]+:bundle upload$/)
-  assert.match(body.properties.$exception_fingerprint, /cli:[^:]+:bundle upload:unhandled_error:Error:runUpload:/)
+  // Fingerprint must NOT include the CLI version, so one error stays one issue
+  // across releases (the version is still reported via cli_version below).
+  assert.match(body.properties.$exception_fingerprint, /^cli:bundle upload:unhandled_error:Error:runUpload:/)
+  assert.equal(body.properties.cli_version, body.properties.distinct_id.split(':')[1])
   assert.equal(body.properties.$exception_list[0].type, 'Error')
   assert.equal(body.properties.$exception_list[0].value, 'boom')
   assert.equal(body.properties.$exception_list[0].mechanism.handled, true)
@@ -131,6 +135,17 @@ try {
   assert.equal(shouldCapturePosthogException({ code: 'commander.helpDisplayed' }), false)
   assert.equal(shouldCapturePosthogException({ code: 'ENOENT' }), true)
   assert.equal(shouldCapturePosthogException(new Error('boom')), true)
+
+  // Expected user errors must be skipped by exception capture (they are still
+  // counted via trackCommandFailed at the call site).
+  assert.equal(isExpectedUserError(new Error('Invalid API key or insufficient permissions.')), true)
+  assert.equal(isExpectedUserError(new Error('invalid_apikey')), true)
+  assert.equal(isExpectedUserError(new Error('no_key_provided')), true)
+  assert.equal(isExpectedUserError(new Error('App com.example does not exist, run first `npx @capgo/cli app add com.example` to create it')), true)
+  assert.equal(isExpectedUserError({ context: { status: 401 } }), true)
+  assert.equal(isExpectedUserError({ status: 401 }), true)
+  assert.equal(isExpectedUserError(new Error('Cannot get organization id for app id com.example')), false)
+  assert.equal(isExpectedUserError(new Error('boom')), false)
 
   console.log('CLI PostHog exception capture tests passed')
 }
