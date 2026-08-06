@@ -20,6 +20,7 @@ import IconUsers from '~icons/lucide/users-round'
 import IconBack from '~icons/material-symbols/arrow-back-ios-rounded'
 import InviteTeammateModal from '~/components/dashboard/InviteTeammateModal.vue'
 import OnboardingSupportUsernames from '~/components/dashboard/OnboardingSupportUsernames.vue'
+import { getCapgoApiErrorCode, invokeCapgoApi } from '~/services/capgoApi'
 import { formatNumberValue } from '~/services/formatLocale'
 import { createOnboardingAppFromDraft } from '~/services/onboardingAppCreate'
 import { uploadOrgLogoFile } from '~/services/photos'
@@ -364,7 +365,7 @@ async function fetchWebsitePreview() {
 
   isLoadingWebsitePreview.value = true
   try {
-    const { data, error } = await supabase.functions.invoke('private/website_preview', {
+    const { data, error } = await invokeCapgoApi('private/website_preview', {
       body: {
         website: websiteInput.value.trim(),
       },
@@ -457,7 +458,7 @@ async function createOrganization() {
       ? websitePreview.value?.website
       : undefined
 
-    const { data, error } = await supabase.functions.invoke('organization', {
+    const { data, error } = await invokeCapgoApi('organization', {
       method: 'POST',
       body: {
         name: orgName,
@@ -470,7 +471,8 @@ async function createOrganization() {
 
     if (error || !data?.id) {
       console.error('Error creating organization during onboarding', error)
-      toast.error(error?.code === '23505'
+      const errorCode = await getCapgoApiErrorCode(error)
+      toast.error(errorCode === '23505'
         ? t('org-with-this-name-exists')
         : t('cannot-create-org'))
       return

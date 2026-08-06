@@ -10,6 +10,7 @@ import IconArrowRight from '~icons/lucide/arrow-right'
 import IconCheckCircle from '~icons/lucide/check-circle'
 import CreditsCta from '~/components/CreditsCta.vue'
 import RbacPermissionOnlyModal from '~/components/RbacPermissionOnlyModal.vue'
+import { invokeCapgoApi } from '~/services/capgoApi'
 import { formatIncludedThenPrice } from '~/services/creditPricing'
 import { formatNumberValue } from '~/services/formatLocale'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
@@ -163,7 +164,7 @@ async function prefetchStripeCheckoutUrl(plan: Database['public']['Tables']['pla
   const datafastAttribution = await getDatafastAttribution()
   const affonsoReferral = await getAffonsoReferral()
   try {
-    const resp = await supabase.functions.invoke('private/stripe_checkout', {
+    const resp = await invokeCapgoApi('private/stripe_checkout', {
       body: JSON.stringify({
         priceId: plan.stripe_id,
         successUrl,

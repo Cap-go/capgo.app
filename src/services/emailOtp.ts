@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Database } from '~/types/supabase.types'
 import dayjs from 'dayjs'
+import { invokeCapgoApi } from '~/services/capgoApi'
 
 const EMAIL_OTP_VALIDITY_WINDOW_HOURS = 1
 
@@ -48,7 +49,8 @@ export async function verifyEmailOtp(
   supabase: SupabaseClient<Database>,
   token: string,
 ) {
-  return await supabase.functions.invoke('private/verify_email_otp', {
+  return await invokeCapgoApi('private/verify_email_otp', {
+    client: supabase,
     body: { token: token.replaceAll(' ', '') },
   })
 }

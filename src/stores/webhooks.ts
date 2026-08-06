@@ -2,7 +2,7 @@ import type { Ref } from 'vue'
 import type { Database } from '~/types/supabase.types'
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { useSupabase } from '~/services/supabase'
+import { invokeCapgoApi } from '~/services/capgoApi'
 import { errorMessage } from '~/utils/errors'
 import { useOrganizationStore } from './organization'
 
@@ -36,8 +36,6 @@ export const WEBHOOK_EVENT_TYPES = [
   { value: 'org_users', label: 'Member Changes', description: 'When members are added or removed' },
   { value: 'orgs', label: 'Organization Changes', description: 'When organization settings are updated' },
 ] as const
-
-const supabase = useSupabase()
 
 function buildWebhookFunctionPath(path: string, params: Record<string, string | number | undefined>) {
   const query = new URLSearchParams()
@@ -78,7 +76,7 @@ export const useWebhooksStore = defineStore('webhooks', () => {
 
     isLoading.value = true
     try {
-      const { data, error } = await supabase.functions.invoke(buildWebhookFunctionPath('webhooks', { orgId }), {
+      const { data, error } = await invokeCapgoApi(buildWebhookFunctionPath('webhooks', { orgId }), {
         method: 'GET',
       })
 
@@ -111,7 +109,7 @@ export const useWebhooksStore = defineStore('webhooks', () => {
     }
 
     try {
-      const { data, error } = await supabase.functions.invoke(buildWebhookFunctionPath('webhooks', { orgId, webhookId }), {
+      const { data, error } = await invokeCapgoApi(buildWebhookFunctionPath('webhooks', { orgId, webhookId }), {
         method: 'GET',
       })
 
@@ -165,7 +163,7 @@ export const useWebhooksStore = defineStore('webhooks', () => {
     }
 
     try {
-      const { data, error } = await supabase.functions.invoke('webhooks', {
+      const { data, error } = await invokeCapgoApi('webhooks', {
         method: 'POST',
         body: {
           orgId,
@@ -238,7 +236,7 @@ export const useWebhooksStore = defineStore('webhooks', () => {
     }
 
     try {
-      const { data, error } = await supabase.functions.invoke('webhooks', {
+      const { data, error } = await invokeCapgoApi('webhooks', {
         method: 'PUT',
         body: {
           orgId,
@@ -279,7 +277,7 @@ export const useWebhooksStore = defineStore('webhooks', () => {
     }
 
     try {
-      const { error } = await supabase.functions.invoke('webhooks', {
+      const { error } = await invokeCapgoApi('webhooks', {
         method: 'DELETE',
         body: { orgId, webhookId },
       })
@@ -317,7 +315,7 @@ export const useWebhooksStore = defineStore('webhooks', () => {
     }
 
     try {
-      const { data, error } = await supabase.functions.invoke('webhooks/test', {
+      const { data, error } = await invokeCapgoApi('webhooks/test', {
         method: 'POST',
         body: { orgId, webhookId },
       })
@@ -362,7 +360,7 @@ export const useWebhooksStore = defineStore('webhooks', () => {
 
     isLoadingDeliveries.value = true
     try {
-      const { data, error } = await supabase.functions.invoke(buildWebhookFunctionPath('webhooks/deliveries', {
+      const { data, error } = await invokeCapgoApi(buildWebhookFunctionPath('webhooks/deliveries', {
         orgId,
         webhookId,
         page,
@@ -399,7 +397,7 @@ export const useWebhooksStore = defineStore('webhooks', () => {
     }
 
     try {
-      const { error } = await supabase.functions.invoke('webhooks/deliveries/retry', {
+      const { error } = await invokeCapgoApi('webhooks/deliveries/retry', {
         method: 'POST',
         body: { orgId, deliveryId },
       })

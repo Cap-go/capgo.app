@@ -7,20 +7,7 @@ import { findChannel } from '../api/channels'
 import { sendUpdateNotificationsForChannels } from '../notifications/send-update'
 import { printPreviewQrForResolvedTarget, resolveChannelPreviewTarget } from '../preview/qr'
 import { formatTable } from '../terminal-table'
-import {
-  checkCompatibilityNativePackages,
-  checkPlanValid,
-  createSupabaseClient,
-  findSavedKey,
-  getAppId,
-  getBundleVersion,
-  getCompatibilityDetails,
-  getConfig,
-  isCompatible,
-  resolveUserIdFromApiKey,
-  sendEvent,
-  updateOrCreateChannel,
-} from '../utils'
+import { checkCompatibilityNativePackages, checkPlanValid, createSupabaseClient, findSavedKey, getAppId, getBundleVersion, getCompatibilityDetails, getConfig, invokeCapgoCliApi, isCompatible, resolveUserIdFromApiKey, sendEvent, updateOrCreateChannel } from '../utils'
 
 /**
  * Display a compatibility table for the given packages
@@ -616,13 +603,16 @@ export async function setChannelInternal(channel: string, appId: string, options
   }
 
   if (hasStableBundlePromotion && !hasSettingsUpdate) {
-    const { error } = await supabase.functions.invoke('bundle', {
+    const { error } = await invokeCapgoCliApi('bundle', {
+      apikey: options.apikey!,
       method: 'PUT',
-      body: JSON.stringify({
+      body: {
         app_id: appId,
         version_id: channelPayload.version,
         channel_id: existingChannel.id,
-      }),
+      },
+      supaHost: options.supaHost,
+      supaAnon: options.supaAnon,
     })
     if (error) {
       if (!silent)

@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { setErrors } from '@formkit/core'
 import { FormKit, FormKitMessages } from '@formkit/vue'
+import { FunctionsHttpError } from '@supabase/supabase-js'
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import VueTurnstile from 'vue-turnstile'
 import iconPassword from '~icons/heroicons/key?raw'
+import { invokeCapgoApi } from '~/services/capgoApi'
 import { useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
@@ -108,23 +110,21 @@ async function verifyPassword(form: { current_password: string }) {
     }
 
     // Call the backend to validate password compliance
-    const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/private/validate_password_compliance`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${(await supabase.auth.getSession()).data.session?.access_token}`,
-      },
-      body: JSON.stringify({
+    const { data: compliancePayload, error: complianceInvokeError } = await invokeCapgoApi<{ error?: string, message?: string }>('private/validate_password_compliance', {
+      body: {
         email: user.email,
         password: form.current_password,
         org_id: orgId,
         ...(turnstileToken.value ? { captcha_token: turnstileToken.value } : {}),
-      }),
+      },
     })
 
-    const result: { error?: string, message?: string } = await response.json()
+    let result: { error?: string, message?: string } = compliancePayload ?? {}
+    if (complianceInvokeError instanceof FunctionsHttpError && complianceInvokeError.context instanceof Response) {
+      result = await complianceInvokeError.context.json().catch(() => result) as { error?: string, message?: string }
+    }
 
-    if (!response.ok) {
+    if (complianceInvokeError) {
       if (result.error === 'captcha_failed') {
         toast.error(t('captcha-fail'))
         resetCaptcha()
