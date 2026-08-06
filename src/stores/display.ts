@@ -24,7 +24,7 @@ export const useDisplayStore = defineStore('display', () => {
   const bundleNameCache = ref(new Map<string, string>())
   const deviceNameCache = ref(new Map<string, string>())
   const resolverReady = ref(false)
-  const appNameCache = ref(new Map<string, string>())
+  const appNameCache = ref(new Map<string, string | null>())
   const pendingFetches = new Map<string, Promise<void>>()
   // Track which org the caches belong to
   const currentCacheOrgId = ref<string | null>(null)
@@ -145,6 +145,7 @@ export const useDisplayStore = defineStore('display', () => {
       breadcrumbs.push({ path: '/apps', name: 'apps' })
 
       // App name entry
+      const hasCachedName = appNameCache.value.has(appId)
       const cachedName = appNameCache.value.get(appId)
       const resolvedName = appNameResolver.value(appId)
         ?? cachedName
@@ -156,29 +157,38 @@ export const useDisplayStore = defineStore('display', () => {
       })
 
       // Kick off fetch if we still don't have a name
-      if (!cachedName && !appNameResolver.value(appId) && !pendingFetches.has(appId)) {
+      if (appId !== 'new' && !hasCachedName && !appNameResolver.value(appId) && !pendingFetches.has(appId)) {
         const supabase = useSupabase()
+        const requestOrgId = currentCacheOrgId.value
         const fetchPromise = (async () => {
           try {
-            const { data } = await supabase
+            const { data, error } = await supabase
               .from('apps')
               .select('name')
               .eq('app_id', appId)
               .maybeSingle()
 
-            if (data?.name)
+            if (currentCacheOrgId.value !== requestOrgId)
+              return
+
+            if (!error && data === null) {
+              appNameCache.value.set(appId, null)
+            }
+            else if (!error && data?.name) {
               appNameCache.value.set(appId, data.name)
+              if (lastPath.value)
+                updatePathTitle(lastPath.value)
+            }
           }
           catch {
-            // ignore missing names
-          }
-          finally {
-            pendingFetches.delete(appId)
-            if (lastPath.value)
-              updatePathTitle(lastPath.value)
+            // Ignore lookup failures; a later route update may retry.
           }
         })()
         pendingFetches.set(appId, fetchPromise)
+        void fetchPromise.then(() => {
+          if (pendingFetches.get(appId) === fetchPromise)
+            pendingFetches.delete(appId)
+        })
       }
 
       // Additional segments after the app id (e.g., bundle, channel)
