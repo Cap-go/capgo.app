@@ -27,14 +27,14 @@ function createGuardApp() {
 
     const limit = await recordUpdateEnumerationMiss(c, body.app_id)
     if (limit.limited)
-      return updateEnumerationLimitedResponse(c)
+      return updateEnumerationLimitedResponse(c, limit.resetAt)
 
     return c.json({ status: 'recorded' })
   })
   app.post('/limited', async (c) => {
     const limit = await isUpdateEnumerationLimited(c)
     if (limit.limited)
-      return updateEnumerationLimitedResponse(c)
+      return updateEnumerationLimitedResponse(c, limit.resetAt)
 
     return c.json({ status: 'not_limited' })
   })
@@ -79,6 +79,10 @@ describe('update enumeration guard', () => {
       body: JSON.stringify({ app_id: 'com.missing.second' }),
     }))
     expect(blocked.status).toBe(429)
+    expect(blocked.headers.get('Cache-Control')).toBe('private, no-store')
+    const retryAfter = Number.parseInt(blocked.headers.get('Retry-After') || '0', 10)
+    expect(retryAfter).toBeGreaterThan(0)
+    expect(retryAfter).toBeLessThanOrEqual(60 * 15)
     await expect(blocked.json()).resolves.toMatchObject({ error: 'on_premise_app' })
   })
 
@@ -132,6 +136,7 @@ describe('update enumeration guard', () => {
       headers,
     }))
     expect(blocked.status).toBe(429)
+    expect(blocked.headers.get('Cache-Control')).toBe('private, no-store')
     await expect(blocked.json()).resolves.toMatchObject({ error: 'on_premise_app' })
   })
 

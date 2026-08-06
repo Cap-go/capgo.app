@@ -1190,7 +1190,7 @@ batchTestDescribe('[POST] /stats batch operations', () => {
       device_id: uuid2,
     }
 
-    // Send batch request with non-existent app
+    // Batch keeps HTTP 200 + per-event errors for backward compatibility.
     const response = await postStats([baseData1, baseData2])
     expect(response.status).toBe(200)
 
@@ -1199,7 +1199,6 @@ batchTestDescribe('[POST] /stats batch operations', () => {
     expect(responseData.results).toBeDefined()
     expect(responseData.results).toHaveLength(2)
 
-    // Both events should return on_premise_app error
     expect(responseData.results![0].status).toBe('error')
     expect(responseData.results![0].error).toBe('on_premise_app')
     expect(responseData.results![1].status).toBe('error')

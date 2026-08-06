@@ -20,7 +20,7 @@ import { convertQueryToBody, makeDevice, parsePluginBody } from '../utils/plugin
 import { sendStatsAndDevice } from '../utils/plugin_stats.ts'
 import { channelSelfGetRequestSchema, channelSelfRequestSchema, isDevicePlatform } from '../utils/plugin_validation.ts'
 import { getClientIP } from '../utils/rate_limit.ts'
-import { buildRateLimitInfo } from '../utils/rateLimitInfo.ts'
+import { buildRateLimitInfo, onPremiseAppResponse } from '../utils/rateLimitInfo.ts'
 import { logSkippedSupabaseWrite, shouldSkipChannelSelfPostgresFallback } from '../utils/supabase_write_guard.ts'
 import { backgroundTask, isDeprecatedPluginVersion, isLimited } from '../utils/utils.ts'
 
@@ -116,11 +116,11 @@ async function assertChannelSelfCachedStatus(
 ) {
   if (cachedAppStatus.status === 'onprem') {
     cloudlog({ requestId: c.get('requestId'), message: `Channel_self cache hit (${operationLabel}), app marked onprem`, app_id: appId })
-    return c.json({ error: 'on_premise_app', message: 'On-premise app detected' }, 429)
+    return onPremiseAppResponse(c)
   }
   if (cachedAppStatus.status === 'cancelled') {
     await sendStatsAndDevice(c, device, [{ action: 'needPlanUpgrade' }])
-    return c.json({ error: 'on_premise_app', message: 'On-premise app detected' }, 429)
+    return onPremiseAppResponse(c)
   }
 }
 
@@ -137,7 +137,7 @@ async function assertChannelSelfAppOwnerPlanValid(
   if (!appOwner) {
     cloudlog({ requestId: c.get('requestId'), message: `On-premise app detected in channel_self ${operationLabel}, returning 429`, app_id: appId })
     await setAppStatus(c, appId, 'onprem', true, cachedBlockProviderInfraRequests)
-    return { response: c.json({ error: 'on_premise_app', message: 'On-premise app detected' }, 429) }
+    return { response: onPremiseAppResponse(c) }
   }
 
   if (!appOwner.plan_valid) {
@@ -160,7 +160,7 @@ async function assertChannelSelfAppOwnerPlanValid(
       drizzleClient,
     )) // Weekly on Monday
 
-    return { response: c.json({ error: 'on_premise_app', message: 'On-premise app detected' }, 429) }
+    return { response: onPremiseAppResponse(c) }
   }
 
   await setAppStatus(c, appId, 'cloud', appOwner.allow_device_custom_id, appOwner.block_provider_infra_requests)
@@ -565,7 +565,7 @@ async function listCompatibleChannels(c: Context, drizzleClient: ReturnType<type
       return blocked
 
     // App doesn't exist in database - normalize response to avoid oracle
-    return c.json({ error: 'on_premise_app', message: 'On-premise app detected' }, 429)
+    return onPremiseAppResponse(c)
   }
   const appOwner = await getAppOwnerPostgres(c, app_id, drizzleClient as ReturnType<typeof getDrizzleClient>, PLAN_MAU_ACTIONS)
   const device = makeDevice(body, appOwner?.allow_device_custom_id)
@@ -709,7 +709,7 @@ app.post('/', async (c) => {
   if (blocked)
     return blocked
 
-  // Rate limit: max 5 set per second per device+app, and same set max once per 5 seconds
+  // Rate limit: max 10 set per second per device+app, and same set max once per 1 second
   return await runChannelSelfDeviceOperation(
     c,
     bodyParsed,
@@ -733,7 +733,7 @@ app.put('/', async (c) => {
   if (blocked)
     return blocked
 
-  // Rate limit: max 5 get per second per device+app
+  // Rate limit: max 10 get per second per device+app
   return await runChannelSelfDeviceOperation(
     c,
     bodyParsed,
@@ -755,7 +755,7 @@ app.delete('/', async (c) => {
   if (blocked)
     return blocked
 
-  // Rate limit: max 5 delete per second per device+app
+  // Rate limit: max 10 delete per second per device+app
   return await runChannelSelfDeviceOperation(
     c,
     bodyParsed,
@@ -777,7 +777,7 @@ app.get('/', async (c) => {
   if (blocked)
     return blocked
 
-  // Rate limit: max 5 list per second per device+app (if device_id is provided)
+  // Rate limit: max 10 list per second per device+app (if device_id is provided)
   if (bodyRaw.device_id) {
     const rateLimitStatus = await isChannelSelfRateLimited(c, bodyParsed.app_id, bodyRaw.device_id, 'list')
     if (rateLimitStatus.limited) {
