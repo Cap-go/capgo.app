@@ -181,19 +181,6 @@ test.describe('Subscription Checkout', () => {
     await page.addInitScript((nextOrgId) => {
       localStorage.setItem('capgo_current_org_id', nextOrgId)
     }, orgId)
-    await page.addInitScript(() => {
-      ;(window as Window & { __lastOpenedUrl?: string | null }).__lastOpenedUrl = null
-      window.open = ((url?: string | URL | null) => {
-        const normalizedUrl = typeof url === 'string'
-          ? url
-          : url instanceof URL
-            ? url.toString()
-            : null
-        ;(window as Window & { __lastOpenedUrl?: string | null }).__lastOpenedUrl = normalizedUrl
-        return null
-      }) as typeof window.open
-    })
-
     await page.login('test@capgo.app', USER_PASSWORD)
     await page.goto('/settings/organization/plans')
 
@@ -206,14 +193,16 @@ test.describe('Subscription Checkout', () => {
     await expect(planCard.getByRole('button', { name: 'Upgrade' })).toBeEnabled()
     await planCard.locator('[data-test="plan-action-button"]').click()
 
-    const escapedStripeOrigin = STRIPE_EMULATOR_URL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    let checkoutUrl = ''
-    await expect.poll(async () => {
-      checkoutUrl = await page.evaluate(() => (window as Window & { __lastOpenedUrl?: string | null }).__lastOpenedUrl ?? '')
-      return checkoutUrl
-    }).toMatch(new RegExp(`${escapedStripeOrigin}/checkout/`))
+    // Web checkout opens a confirm dialog with a real target=_blank link.
+    const confirmLink = page.getByRole('link', { name: 'Confirm' })
+    await expect(confirmLink).toBeVisible()
+    const checkoutUrl = await confirmLink.getAttribute('href')
+    expect(checkoutUrl).toBeTruthy()
 
-    await page.goto(checkoutUrl)
+    const escapedStripeOrigin = STRIPE_EMULATOR_URL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    expect(checkoutUrl!).toMatch(new RegExp(`${escapedStripeOrigin}/checkout/`))
+
+    await page.goto(checkoutUrl!)
     await expect(page).toHaveURL(new RegExp(`${escapedStripeOrigin}/checkout/`))
     await page.getByRole('button', { name: /^Pay / }).click()
 

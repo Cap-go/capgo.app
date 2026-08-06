@@ -56,8 +56,8 @@ async function presentBlockedPopupFallback(url: string) {
 export async function openBlank(link: string) {
   console.log('openBlank', link)
   if (Capacitor.getPlatform() === 'ios') {
-    await presentActionSheetOpen(link)
-    return true
+    // presentActionSheetOpen resolves true when dismissed/canceled
+    return !(await presentActionSheetOpen(link))
   }
   const opened = globalThis.open(link, '_blank')
   if (opened)
