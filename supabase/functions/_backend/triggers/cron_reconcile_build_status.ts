@@ -13,6 +13,7 @@ import {
   TERMINAL_BUILD_STATUSES,
 } from '../utils/build_timeout.ts'
 import { emitBuildTransitionEvent } from '../utils/build_tracking.ts'
+import { isoFromBuilderTimestamp } from '../utils/builder_capacity.ts'
 import { BRES, middlewareAPISecret } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { recordBuildTime, supabaseAdmin } from '../utils/supabase.ts'
@@ -225,6 +226,8 @@ app.post('/', middlewareAPISecret, async (c) => {
           status: effectiveStatus,
           last_error: effectiveError,
           runner_wait_seconds: runnerWaitSeconds,
+          started_at: isoFromBuilderTimestamp(builderJob.job.started_at) ?? undefined,
+          completed_at: isoFromBuilderTimestamp(effectiveCompletedAt) ?? undefined,
           updated_at: new Date().toISOString(),
         })
         .eq('id', build.id)

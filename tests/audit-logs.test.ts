@@ -361,6 +361,123 @@ describe('audit log triggers', () => {
     }
   })
 
+  it('organization and app bookkeeping update rows do not create audit logs', async () => {
+    const bookkeepingOrgId = randomUUID()
+    const bookkeepingAppId = `com.audit.bookkeeping.${bookkeepingOrgId.replace(/-/g, '')}`
+    const bookkeepingCustomerId = `cus_audit_bookkeeping_${bookkeepingOrgId}`
+    const trialAt = new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString()
+
+    await executeSQL(
+      `INSERT INTO public.stripe_info (
+         customer_id, status, product_id, subscription_id, trial_at, is_good_plan
+       ) VALUES ($1, 'succeeded', 'prod_LQIregjtNduh4q', $2, $3::timestamptz, true)`,
+      [bookkeepingCustomerId, `sub_bookkeeping_${bookkeepingOrgId}`, trialAt],
+    )
+    await executeSQL(
+      `INSERT INTO public.orgs (
+         id, name, management_email, created_by, customer_id
+       ) VALUES ($1::uuid, $2, $3, $4::uuid, $5)`,
+      [bookkeepingOrgId, `Audit Bookkeeping Org ${bookkeepingOrgId}`, TEST_EMAIL, USER_ID, bookkeepingCustomerId],
+    )
+    await executeSQL(
+      `INSERT INTO public.apps (app_id, name, icon_url, owner_org)
+       VALUES ($1, $2, 'https://example.com/icon.png', $3::uuid)`,
+      [bookkeepingAppId, `Audit Bookkeeping App ${bookkeepingOrgId}`, bookkeepingOrgId],
+    )
+
+    const [orgRow] = await executeSQL(
+      'SELECT id::text AS id FROM public.orgs WHERE id = $1::uuid',
+      [bookkeepingOrgId],
+    )
+    const [appRow] = await executeSQL(
+      'SELECT app_id FROM public.apps WHERE app_id = $1',
+      [bookkeepingAppId],
+    )
+    expect(orgRow?.id).toBe(bookkeepingOrgId)
+    expect(appRow?.app_id).toBe(bookkeepingAppId)
+
+    async function countOrgUpdates() {
+      const rows = await executeSQL(
+        `SELECT COUNT(*)::integer AS count
+         FROM public.audit_logs
+         WHERE org_id = $1::uuid
+           AND table_name = 'orgs'
+           AND operation = 'UPDATE'`,
+        [bookkeepingOrgId],
+      )
+      return rows[0]?.count ?? 0
+    }
+
+    async function countAppUpdates() {
+      const rows = await executeSQL(
+        `SELECT COUNT(*)::integer AS count
+         FROM public.audit_logs
+         WHERE org_id = $1::uuid
+           AND table_name = 'apps'
+           AND record_id = $2
+           AND operation = 'UPDATE'`,
+        [bookkeepingOrgId, bookkeepingAppId],
+      )
+      return rows[0]?.count ?? 0
+    }
+
+    const beforeOrg = await countOrgUpdates()
+    const beforeApp = await countAppUpdates()
+
+    const { error: orgStatsError } = await getSupabaseClient()
+      .from('orgs')
+      .update({ stats_updated_at: new Date().toISOString() })
+      .eq('id', bookkeepingOrgId)
+    expect(orgStatsError).toBeNull()
+
+    const { error: orgRefreshError } = await getSupabaseClient()
+      .from('orgs')
+      .update({
+        stats_refresh_requested_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', bookkeepingOrgId)
+    expect(orgRefreshError).toBeNull()
+
+    const { error: orgUpdatedAtError } = await getSupabaseClient()
+      .from('orgs')
+      .update({ updated_at: new Date().toISOString() })
+      .eq('id', bookkeepingOrgId)
+    expect(orgUpdatedAtError).toBeNull()
+
+    const { error: appStatsError } = await getSupabaseClient()
+      .from('apps')
+      .update({ stats_updated_at: new Date().toISOString() })
+      .eq('app_id', bookkeepingAppId)
+    expect(appStatsError).toBeNull()
+
+    const { error: appRefreshError } = await getSupabaseClient()
+      .from('apps')
+      .update({
+        stats_refresh_requested_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('app_id', bookkeepingAppId)
+    expect(appRefreshError).toBeNull()
+
+    await executeSQL(
+      `UPDATE public.apps
+       SET updated_at = now()
+       WHERE app_id = $1`,
+      [bookkeepingAppId],
+    )
+
+    await new Promise(resolve => setTimeout(resolve, 100))
+
+    expect(await countOrgUpdates()).toBe(beforeOrg)
+    expect(await countAppUpdates()).toBe(beforeApp)
+
+    await executeSQL('DELETE FROM public.audit_logs WHERE org_id = $1::uuid', [bookkeepingOrgId])
+    await executeSQL('DELETE FROM public.apps WHERE app_id = $1', [bookkeepingAppId])
+    await executeSQL('DELETE FROM public.orgs WHERE id = $1::uuid', [bookkeepingOrgId])
+    await executeSQL('DELETE FROM public.stripe_info WHERE customer_id = $1', [bookkeepingCustomerId])
+  })
+
   it('org_users INSERT creates audit log', async () => {
     // Get another user to add to the org
     const { data: anotherUser, error: userError } = await getSupabaseClient()

@@ -8,8 +8,9 @@ import { createSupabaseClient, findSavedKeySilent, sendEvent } from '../../utils
 import { buildScanContext } from './context'
 import { enforcedCounts, informationOnlyFindings } from './enforcement'
 import { decideOutcome, runPrescan } from './engine'
+import { parsePrescanOverrides, validateOverrideIds } from './overrides'
 import { resolveWarningGate } from './prompt'
-import { ALL_CHECKS } from './registry'
+import { ALL_CHECKS, ALL_CHECK_IDS } from './registry'
 import { renderJsonReport, renderTerminalReport } from './report'
 
 export interface PrescanCommandOptions {
@@ -32,6 +33,10 @@ export interface PrescanCommandOptions {
    * will use, not a fresh saved-file/env merge.
    */
   credentials?: Record<string, string>
+  /** Check ids to skip entirely (repeatable / comma-separated). */
+  skip?: string[] | string
+  /** Check ids whose findings are downgraded to warning (repeatable / comma-separated). */
+  warn?: string[] | string
 }
 
 export function validateFlags(opts: Pick<PrescanCommandOptions, 'failOnWarnings' | 'ignoreFatal'>): void {
@@ -81,7 +86,9 @@ export async function executePrescan(appId: string | undefined, options: Prescan
     supabase,
     credentials: options.credentials,
   })
-  const report = await runPrescan(ctx, ALL_CHECKS)
+  const overrides = parsePrescanOverrides({ skip: options.skip, warn: options.warn })
+  validateOverrideIds(overrides, ALL_CHECK_IDS)
+  const report = await runPrescan(ctx, ALL_CHECKS, { overrides })
   return { report, apikey }
 }
 

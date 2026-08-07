@@ -7,6 +7,7 @@ import {
   getCommandPath,
   shouldCapturePosthogException,
 } from '../src/posthog.ts'
+import { CliUserError } from '../src/shared/cli-user-error.ts'
 
 const originalFetch = globalThis.fetch
 const originalEnv = {
@@ -65,7 +66,10 @@ try {
   assert.equal(body.properties.error_kind, 'unhandled_error')
   assert.equal(body.properties.status, 1)
   assert.match(body.properties.distinct_id, /^cli:[^:]+:bundle upload$/)
-  assert.match(body.properties.$exception_fingerprint, /cli:[^:]+:bundle upload:unhandled_error:Error:runUpload:/)
+  // Fingerprint must NOT include the CLI version, so the same bug stays one
+  // error-tracking issue across releases.
+  assert.equal(body.properties.$exception_fingerprint, 'bundle upload:unhandled_error:Error:runUpload:<cwd>/src/index.ts:1')
+  assert.doesNotMatch(body.properties.$exception_fingerprint, /cli:/)
   assert.equal(body.properties.$exception_list[0].type, 'Error')
   assert.equal(body.properties.$exception_list[0].value, 'boom')
   assert.equal(body.properties.$exception_list[0].mechanism.handled, true)
@@ -131,6 +135,17 @@ try {
   assert.equal(shouldCapturePosthogException({ code: 'commander.helpDisplayed' }), false)
   assert.equal(shouldCapturePosthogException({ code: 'ENOENT' }), true)
   assert.equal(shouldCapturePosthogException(new Error('boom')), true)
+
+  // Expected user-facing CLI failures must never open an error tracking issue,
+  // regardless of the (dynamic) channel context attached to them.
+  assert.equal(shouldCapturePosthogException(new CliUserError('Channel does not have a bundle linked', { appId: 'com.example.app', channel: 'production' })), false)
+  assert.equal(shouldCapturePosthogException(new CliUserError('Missing API key')), false)
+  // Two failures on different channels must be treated identically (one issue,
+  // not one per channel), since the channel name lives in context, not the message.
+  assert.equal(
+    new CliUserError('Channel does not have a bundle linked', { channel: 'production' }).message,
+    new CliUserError('Channel does not have a bundle linked', { channel: 'canary' }).message,
+  )
 
   console.log('CLI PostHog exception capture tests passed')
 }

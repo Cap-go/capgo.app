@@ -55,8 +55,10 @@ export function displayBundles(
   if (silent)
     return
 
-  if (!data.length)
-    throw new Error('No bundle found')
+  if (!data.length) {
+    log.info('No bundles found')
+    return
+  }
 
   const t = new Table()
   t.theme = Table.roundTheme
