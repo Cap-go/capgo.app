@@ -2,7 +2,7 @@
 import type { NativePackage } from '~/services/bundleCompatibility'
 import type { CompatibilityEventGroup, CompatibilityEventRow } from '~/services/compatibilityEvents'
 import type { Database } from '~/types/supabase.types'
-import { computed, onUnmounted, ref, watch, watchEffect } from 'vue'
+import { computed, nextTick, onUnmounted, ref, watch, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
@@ -49,8 +49,39 @@ const memberInfo = ref<Map<string, MemberInfo>>(new Map())
 const showUnresolvedOnly = ref(true)
 
 const acceptDialogId = 'compatibility-accept-event'
+// Id on the dialog's primary button so we can toggle its disabled state as the
+// user types the reason (the shared dialog store holds the buttons array).
+const acceptSubmitButtonId = 'compatibility-accept-submit'
 const acceptReason = ref('')
+const acceptReasonError = ref('')
 const acceptTargetIds = ref<number[]>([])
+const acceptReasonInput = ref<HTMLTextAreaElement | null>(null)
+
+const acceptDialogOpen = computed(() =>
+  dialogStore.showDialog && dialogStore.dialogOptions?.id === acceptDialogId)
+
+// The reason is mandatory. Rather than let the user click a live "Accept" button
+// and bounce them with a toast (the dead-click others reported), keep the button
+// disabled until there is a reason, and clear the inline error as they type.
+watch(acceptReason, (value) => {
+  if (!acceptDialogOpen.value)
+    return
+  const submitButton = dialogStore.dialogOptions.buttons?.find(button => button.id === acceptSubmitButtonId)
+  if (submitButton)
+    submitButton.disabled = value.trim().length === 0
+  if (value.trim().length > 0)
+    acceptReasonError.value = ''
+})
+
+// Autofocus the reason field when the accept dialog opens so it is obvious what
+// the dialog is waiting for.
+watch(acceptDialogOpen, async (open) => {
+  if (!open)
+    return
+  acceptReasonError.value = ''
+  await nextTick()
+  acceptReasonInput.value?.focus()
+})
 
 // One logical change can produce one event per platform (the channel may be the
 // default for ios, android and electron at once). Group those rows so the table
@@ -483,6 +514,7 @@ async function acknowledgeEvents(eventIds: number[], note: string) {
 function openAcceptDialog(group: CompatibilityEventGroup) {
   acceptTargetIds.value = group.unresolvedEvents.map(event => event.id)
   acceptReason.value = ''
+  acceptReasonError.value = ''
 
   dialogStore.openDialog({
     id: acceptDialogId,
@@ -496,13 +528,20 @@ function openAcceptDialog(group: CompatibilityEventGroup) {
         role: 'cancel',
       },
       {
+        id: acceptSubmitButtonId,
         text: t('compatibility-accept'),
         role: 'primary',
         preventClose: true,
+        // Starts disabled: the reason is empty on open, and the acceptReason
+        // watcher re-enables it once a reason is typed.
+        disabled: true,
         handler: async () => {
           const note = acceptReason.value.trim()
           if (note.length === 0) {
-            toast.error(t('compatibility-reason-required'))
+            // Belt-and-braces: the button is disabled while empty, but if it is
+            // ever reached, show the error inline on the field, not as a toast.
+            acceptReasonError.value = t('compatibility-reason-required')
+            acceptReasonInput.value?.focus()
             return false
           }
           const targetIds = acceptTargetIds.value
@@ -880,15 +919,32 @@ watchEffect(async () => {
       <div class="space-y-2">
         <label class="block text-sm font-medium text-slate-800 dark:text-slate-100" for="compatibility-accept-reason">
           {{ t('compatibility-reason') }}
+          <span class="text-red-500" aria-hidden="true">*</span>
         </label>
         <textarea
           id="compatibility-accept-reason"
+          ref="acceptReasonInput"
           v-model="acceptReason"
           data-test="compatibility-accept-reason"
           rows="3"
-          class="w-full px-3 py-2 text-sm border rounded-md border-slate-300 focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+          required
+          aria-required="true"
+          :aria-invalid="acceptReasonError ? 'true' : undefined"
+          aria-describedby="compatibility-accept-reason-error"
+          class="w-full px-3 py-2 text-sm border rounded-md focus:ring-blue-500 dark:bg-slate-800 dark:text-slate-100"
+          :class="acceptReasonError
+            ? 'border-red-500 focus:border-red-500'
+            : 'border-slate-300 focus:border-blue-500 dark:border-slate-600'"
           :placeholder="t('compatibility-reason-placeholder')"
         />
+        <p
+          v-if="acceptReasonError"
+          id="compatibility-accept-reason-error"
+          data-test="compatibility-accept-reason-error"
+          class="text-sm text-red-600 dark:text-red-400"
+        >
+          {{ acceptReasonError }}
+        </p>
       </div>
     </Teleport>
 

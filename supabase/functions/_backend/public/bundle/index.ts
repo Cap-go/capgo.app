@@ -1,7 +1,9 @@
 import type { Database } from '../../utils/supabase.types.ts'
+import type { AiBumpLevelBody } from './ai_bump_level.ts'
 import type { GetLatest } from './get.ts'
 import { getBodyOrQuery, honoFactory } from '../../utils/hono.ts'
 import { middlewareKey } from '../../utils/hono_middleware.ts'
+import { aiBumpLevel } from './ai_bump_level.ts'
 import { createBundle } from './create.ts'
 import { deleteBundle } from './delete.ts'
 import { get } from './get.ts'
@@ -37,4 +39,10 @@ app.post('/', writeBundleMiddleware, async (c) => {
   const body = await getBodyOrQuery<any>(c)
   const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
   return createBundle(c, body, apikey)
+})
+
+app.post('/ai_bump_level', writeBundleMiddleware, async (c) => {
+  const body = await getBodyOrQuery<AiBumpLevelBody>(c)
+  const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
+  return aiBumpLevel(c, body, apikey)
 })

@@ -26,6 +26,13 @@ const TRANSIENT_NETWORK_ERROR_PATTERNS = [
   /^(?:.*: )?NetworkError when attempting to fetch resource\.?$/i,
 ]
 
+// vue-router throws this when a lazy route component fails to load (e.g. a stale
+// chunk 404 during a deploy). It can also surface if a navigation races the
+// automatic reload we trigger for stale chunks, so we treat it as a chunk error.
+const COMPONENT_RESOLUTION_ERROR_PATTERNS = [
+  /Couldn't resolve component/i,
+]
+
 export function isStaleAssetErrorMessage(message: string | undefined): boolean {
   if (!message)
     return false
@@ -45,6 +52,13 @@ export function isTransientNetworkErrorMessage(message: string | undefined): boo
     return false
 
   return TRANSIENT_NETWORK_ERROR_PATTERNS.some(pattern => pattern.test(message))
+}
+
+export function isComponentResolutionErrorMessage(message: string | undefined): boolean {
+  if (!message)
+    return false
+
+  return COMPONENT_RESOLUTION_ERROR_PATTERNS.some(pattern => pattern.test(message))
 }
 
 interface PostHogExceptionLike {

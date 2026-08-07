@@ -7,6 +7,7 @@
 import { canParse } from '@std/semver'
 import { optionsUploadSchema } from '../src/schemas/bundle.ts'
 import { safeParseSchema } from '../src/schemas/schema_validation.ts'
+import { UPLOAD_TIMEOUT, uploadTimeoutMessage } from '../src/utils.ts'
 
 // This is the actual regex from utils.ts line 40
 const regexSemver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-z-][0-9a-z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-z-][0-9a-z-]*))*))?(?:\+([0-9a-z-]+(?:\.[0-9a-z-]+)*))?$/i
@@ -104,6 +105,33 @@ for (const options of invalidRolloutOptions) {
 
 if (allPassed)
   console.log('  ✅ Invalid rollout upload options are rejected\n')
+
+console.log('✓ Testing standard-upload timeout message...\n')
+
+// The message must tell the user a timeout fired and point at the workarounds,
+// instead of surfacing the raw "This operation was aborted" AbortError.
+const defaultTimeoutMessage = uploadTimeoutMessage(UPLOAD_TIMEOUT)
+const requiredHints = [
+  '120s', // names the elapsed wall-clock budget (UPLOAD_TIMEOUT = 120000ms)
+  'timed out', // states it was a timeout
+  '--tus', // points at the resumable workaround
+  '--timeout', // points at the raise-the-limit workaround
+]
+for (const hint of requiredHints) {
+  if (!defaultTimeoutMessage.includes(hint)) {
+    console.error(`  ❌ Timeout message is missing the "${hint}" hint`)
+    allPassed = false
+  }
+}
+
+// A custom --timeout should be reflected (in seconds) in the message.
+if (!uploadTimeoutMessage(300000).includes('300s')) {
+  console.error('  ❌ Timeout message should reflect a custom --timeout value')
+  allPassed = false
+}
+
+if (allPassed)
+  console.log('  ✅ Timeout message names the budget and points at --timeout / --tus\n')
 
 console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { getErrorMessage, isKnownCrawlerNoiseErrorMessage, isStaleAssetErrorMessage, isTransientNetworkErrorMessage, shouldSuppressPostHogExceptionEvent } from '../src/services/staleAssetErrors'
+import { getErrorMessage, isComponentResolutionErrorMessage, isKnownCrawlerNoiseErrorMessage, isStaleAssetErrorMessage, isTransientNetworkErrorMessage, shouldSuppressPostHogExceptionEvent } from '../src/services/staleAssetErrors'
 
 describe('stale asset error helpers', () => {
   it('matches the stale asset errors currently seen in PostHog', () => {
@@ -55,6 +55,13 @@ describe('stale asset error helpers', () => {
         $exception_values: ['downloadUrl error: NetworkError when attempting to fetch resource.'],
       },
     })).toBe(true)
+  })
+
+  it('matches the vue-router component-resolution error caused by stale chunks', () => {
+    expect(isComponentResolutionErrorMessage('Couldn\'t resolve component "default" at "/app/:app/device/:device"')).toBe(true)
+    expect(isComponentResolutionErrorMessage(new Error('Couldn\'t resolve component "default" at "/app/:app"').message)).toBe(true)
+    expect(isComponentResolutionErrorMessage('Navigation cancelled from "/" to "/apps" with a new navigation.')).toBe(false)
+    expect(isComponentResolutionErrorMessage(undefined)).toBe(false)
   })
 
   it('extracts useful messages from arbitrary rejection values', () => {

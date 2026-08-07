@@ -4,8 +4,6 @@
 // to warning so the rest of the scan still runs and reports.
 import type { Finding, PrescanCheck, Severity } from './types'
 
-export type PrescanOverrideMode = 'skip' | 'warn'
-
 export interface PrescanOverrides {
   /** Check ids that must not run. */
   skip: Set<string>

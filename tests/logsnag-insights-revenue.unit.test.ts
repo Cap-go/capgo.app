@@ -56,6 +56,23 @@ describe('logsnag revenue metric helpers', () => {
     expect(start.toISOString()).toBe('2023-02-28T00:00:00.000Z')
   })
 
+  it.concurrent('computes upgrade_rate_12m from upgrade events over paying orgs only', () => {
+    // Daily shard: prior upgraded_orgs sum + today / paying (not users/orgs).
+    const priorUpgradedOrgs12m = 101
+    const todayUpgradedOrgs = 0
+    const paying = 1161
+    const allOrgs = 7749
+
+    expect(logsnagInsightsTestUtils.calculateConversionRate(
+      priorUpgradedOrgs12m + todayUpgradedOrgs,
+      paying,
+    )).toBe(8.7)
+    expect(logsnagInsightsTestUtils.calculateConversionRate(
+      priorUpgradedOrgs12m + todayUpgradedOrgs,
+      allOrgs,
+    )).toBe(1.3)
+  })
+
   it.concurrent('computes plan conversion rates against paying orgs, not all users/orgs', () => {
     const rates = logsnagInsightsTestUtils.getPlanConversionRates(
       { Solo: 15, Maker: 10, Team: 0, Enterprise: 0, Trial: 50 },

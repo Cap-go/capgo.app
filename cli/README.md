@@ -422,6 +422,7 @@ npx @capgo/cli@latest bundle upload com.example.app --path ./dist --channel prod
 | **--no-delta** | <code>boolean</code> | Disable delta updates even if instant updates are enabled |
 | **--encrypted-checksum** | <code>string</code> | An encrypted checksum (signature). Used only when uploading an external bundle. |
 | **--auto-set-bundle** | <code>boolean</code> | Set the bundle version in Capacitor config |
+| **--auto-bump** | <code>string</code> | Auto-increment bundle version from the latest remote channel/app version. Level: major, minor (default), patch|fix, or metadata (prerelease) |
 | **--capacitor-config** | <code>string</code> | Capacitor config source to update (useful with dynamic monorepo configs) |
 | **--dry-upload** | <code>boolean</code> | Dry upload the bundle process: add the row in database without uploading files or updating channels (Used by Capgo for internal testing) |
 | **--package-json** | <code>string</code> | Paths to package.json files for monorepos (comma-separated) |
@@ -1405,15 +1406,13 @@ and/or to Capgo storage as a time-limited download link (--output-upload).
     after build completion. Build outputs may optionally be uploaded for time-limited download links.
 📋 PREREQUISITE: Save credentials first with:
    `npx @capgo/cli@latest build credentials save --appId <app-id> --platform <ios|android>`
+Android AAB only (no Play upload): npx @capgo/cli@latest build request com.example.app --platform android --no-playstore-upload --output-upload
+iOS IPA only (no TestFlight upload): npx @capgo/cli@latest build request com.example.app --platform ios --ios-distribution ad_hoc --output-upload
 
 **Example:**
 
 ```bash
 npx @capgo/cli@latest build request com.example.app --platform ios --path .
-# Android AAB only (no Play upload):
-npx @capgo/cli@latest build request com.example.app --platform android --no-playstore-upload --output-upload
-# iOS IPA only (no TestFlight upload):
-npx @capgo/cli@latest build request com.example.app --platform ios --ios-distribution ad_hoc --output-upload
 ```
 
 **Options:**
@@ -1435,7 +1434,7 @@ npx @capgo/cli@latest build request com.example.app --platform ios --ios-distrib
 | **--app-store-connect-team-id** | <code>string</code> | iOS: App Store Connect Team ID |
 | **--ios-scheme** | <code>string</code> | iOS: Xcode scheme to build (default: App) |
 | **--ios-target** | <code>string</code> | iOS: Xcode target for reading build settings (default: same as scheme) |
-| **--ios-distribution** | <code>string</code> | iOS: Distribution mode. `app_store` (default) uploads to TestFlight/App Store; `ad_hoc` skips store upload and builds an Ad Hoc IPA. Use `ad_hoc` with `--output-upload` when the App Store app does not exist yet or you only need an IPA download. |
+| **--ios-distribution** | <code>string</code> | iOS: Distribution mode. app_store (default) uploads to TestFlight/App Store; ad_hoc skips store upload and builds an Ad Hoc IPA for device install. Use ad_hoc with --output-upload when the App Store app does not exist yet or you only need an IPA download. |
 | **--ios-provisioning-profile** | <code>string</code> | iOS: Provisioning profile path or bundleId=path mapping (repeatable) |
 | **--android-keystore-file** | <code>string</code> | Android: Base64-encoded keystore file |
 | **--keystore-key-alias** | <code>string</code> | Android: Keystore key alias |
@@ -1516,8 +1515,8 @@ Checks credentials (expiry, passwords, profile pairing), project state (cap sync
 | **--json** | <code>boolean</code> | Output a machine-readable JSON report |
 | **--fail-on-warnings** | <code>boolean</code> | Exit non-zero when warnings are found (CI) |
 | **--ignore-fatal** | <code>boolean</code> | Diagnostic mode: report everything but always exit 0 |
-| **--skip** | <code>string</code> | Skip specific check(s) by id (repeatable or comma-separated) |
-| **--warn** | <code>string</code> | Downgrade specific check(s) to warning by id (repeatable or comma-separated) |
+| **--skip** | <code>string</code> | Skip specific check(s) by id (repeatable or comma-separated). Alias of --prescan-skip on build request. |
+| **--warn** | <code>string</code> | Downgrade specific check(s) to warning by id (repeatable or comma-separated). Alias of --prescan-warn on build request. |
 | **--verbose** | <code>boolean</code> | Enable verbose output with detailed logging |
 | **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
 | **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |

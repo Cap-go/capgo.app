@@ -94,7 +94,7 @@ await t('verifyApiKey: genuine 401 NOT_AUTHORIZED still gets the credential chec
   withFetch(401, NOT_AUTHORIZED_401, async () => {
     const err = await captureThrow(() => verifyApiKey('fake-token'))
     assert.ok(err, 'expected verifyApiKey to throw on 401')
-    assert.match(err.message, /API key verification failed/i)
+    assert.match(err.message, /Apple rejected the App Store Connect API key/i)
     assert.match(err.message, /The \.p8 file is correct/i)
     assert.doesNotMatch(err.message, /required agreement/i)
   }))
