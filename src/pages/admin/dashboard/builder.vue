@@ -4,7 +4,7 @@ meta:
 </route>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import AdminBarChart from '~/components/admin/AdminBarChart.vue'
@@ -271,7 +271,7 @@ const capacity = ref<BuilderCapacity | null>(null)
 async function loadCapacity() {
   isLoadingCapacity.value = true
   try {
-    capacity.value = (await adminStore.fetchStats('builder_capacity')) || null
+    capacity.value = (await adminStore.fetchStats('builder_capacity', true)) || null
   }
   catch (error) {
     console.error('[Admin Builder] Error loading builder capacity:', error)
@@ -415,8 +415,26 @@ async function spoof(orgId: string) {
 }
 
 // ---- shared lifecycle ----
+const CAPACITY_POLL_MS = 30_000
+let capacityPollTimer: ReturnType<typeof setInterval> | null = null
+
+function startCapacityPolling() {
+  stopCapacityPolling()
+  capacityPollTimer = setInterval(() => {
+    void loadCapacity()
+  }, CAPACITY_POLL_MS)
+}
+
+function stopCapacityPolling() {
+  if (!capacityPollTimer)
+    return
+  clearInterval(capacityPollTimer)
+  capacityPollTimer = null
+}
+
 async function loadAll() {
   void loadCapacity()
+  startCapacityPolling()
   await Promise.all([loadGlobalStatsTrend(), loadData()])
 }
 
@@ -441,6 +459,10 @@ onMounted(async () => {
   isLoading.value = true
   await loadAll()
   isLoading.value = false
+})
+
+onUnmounted(() => {
+  stopCapacityPolling()
 })
 
 displayStore.NavTitle = t('builder')

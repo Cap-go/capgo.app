@@ -11,10 +11,6 @@ COMMENT ON COLUMN public.build_requests.started_at IS
 COMMENT ON COLUMN public.build_requests.completed_at IS
   'Builder-reported job completion (UTC). Used for capacity reconstruction.';
 
-CREATE INDEX IF NOT EXISTS idx_build_requests_started_at
-  ON public.build_requests USING btree (started_at)
-  WHERE started_at IS NOT NULL;
-
 CREATE INDEX IF NOT EXISTS idx_build_requests_run_interval
   ON public.build_requests USING btree (started_at, completed_at)
   WHERE started_at IS NOT NULL;

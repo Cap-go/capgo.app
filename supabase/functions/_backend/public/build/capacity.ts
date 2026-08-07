@@ -1,4 +1,5 @@
 import type { Context } from 'hono'
+import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import { timingSafeEqual } from 'hono/utils/buffer'
 import { z } from 'zod'
 import { recordBuilderCapacityIfChanged } from '../../utils/builder_capacity.ts'
@@ -11,14 +12,14 @@ const bodySchema = z.object({
   source: z.string().min(1).max(64).optional(),
 })
 
-async function assertBuilderApiKey(c: Context) {
+async function assertBuilderApiKey(c: Context<MiddlewareKeyVariables>) {
   const provided = c.req.header('x-api-key') || c.req.header('apikey') || ''
   const expected = getEnv(c, 'BUILDER_API_KEY')
   if (!expected || !provided || !(await timingSafeEqual(provided, expected)))
     throw quickError(401, 'invalid_builder_api_key', 'Invalid builder API key')
 }
 
-export async function reportBuilderCapacity(c: Context) {
+export async function reportBuilderCapacity(c: Context<MiddlewareKeyVariables>) {
   await assertBuilderApiKey(c)
   const body = await parseBody<z.infer<typeof bodySchema>>(c)
   const parsed = bodySchema.safeParse(body)

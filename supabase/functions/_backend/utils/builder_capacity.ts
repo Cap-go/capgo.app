@@ -79,6 +79,7 @@ export function isoFromBuilderTimestamp(value: number | null | undefined): strin
   return new Date(ms).toISOString()
 }
 
+/** Requires `events` sorted ascending by `created_at` (then id). */
 export function workersAt(events: BuilderCapacityEvent[], atMs: number): number {
   let workers = 0
   for (const event of events) {
@@ -206,6 +207,7 @@ async function fetchBuilderLive(c: Context): Promise<{
       const response = await fetch(`${builderUrl}/gitlab-emulator/runners`, {
         method: 'GET',
         headers: { 'x-api-key': builderApiKey },
+        signal: AbortSignal.timeout(5_000),
       })
       if (response.ok) {
         const body = await response.json() as BuilderRunnersResponse
@@ -235,7 +237,10 @@ async function fetchBuilderLive(c: Context): Promise<{
       })
     }
 
-    const okResponse = await fetch(`${builderUrl}/ok`, { method: 'GET' })
+    const okResponse = await fetch(`${builderUrl}/ok`, {
+      method: 'GET',
+      signal: AbortSignal.timeout(5_000),
+    })
     if (!okResponse.ok) {
       cloudlogErr({
         requestId: c.get('requestId'),
@@ -373,22 +378,22 @@ async function loadCapacityEvents(
       delta: number
     }>(
       `WITH baseline AS (
-         SELECT created_at, workers_total, delta
+         SELECT id, created_at, workers_total, delta
          FROM public.builder_capacity_events
          WHERE created_at < $1::timestamptz
          ORDER BY created_at DESC, id DESC
          LIMIT 1
        ),
        window_events AS (
-         SELECT created_at, workers_total, delta
+         SELECT id, created_at, workers_total, delta
          FROM public.builder_capacity_events
          WHERE created_at >= $1::timestamptz
            AND created_at <= $2::timestamptz
        )
-       SELECT * FROM baseline
+       SELECT id, created_at, workers_total, delta FROM baseline
        UNION ALL
-       SELECT * FROM window_events
-       ORDER BY created_at ASC`,
+       SELECT id, created_at, workers_total, delta FROM window_events
+       ORDER BY created_at ASC, id ASC`,
       [startIso, endIso],
     )
     return rows.map(row => ({

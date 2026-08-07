@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
+  isoFromBuilderTimestamp,
   maxConcurrentUsed,
+  msFromBuilderTimestamp,
   reconstructHourlyCapacity,
   workersAt,
 } from '../supabase/functions/_backend/utils/builder_capacity.ts'
@@ -27,6 +29,15 @@ describe('builder capacity reconstruction', () => {
       { started_at: Date.parse('2026-08-06T10:30:00.000Z'), completed_at: Date.parse('2026-08-06T11:10:00.000Z') },
     ], hourStart, hourEnd)
     expect(used).toBe(2)
+  })
+
+  it.concurrent('maxConcurrentUsed treats null completed_at as still running through the window end', () => {
+    const hourStart = Date.parse('2026-08-06T10:00:00.000Z')
+    const hourEnd = Date.parse('2026-08-06T11:00:00.000Z')
+    const used = maxConcurrentUsed([
+      { started_at: Date.parse('2026-08-06T10:15:00.000Z'), completed_at: null },
+    ], hourStart, hourEnd)
+    expect(used).toBe(1)
   })
 
   it.concurrent('reconstructHourlyCapacity builds free = workers - used', () => {
@@ -62,7 +73,6 @@ describe('builder capacity reconstruction', () => {
         { created_at: Date.parse('2026-08-06T00:00:00.000Z'), workers_total: 2, delta: 2 },
       ],
       [
-        // Runs for the whole day; only the clipped 10:30-11:30 window matters.
         { started_at: Date.parse('2026-08-06T00:00:00.000Z'), completed_at: Date.parse('2026-08-06T23:00:00.000Z') },
         { started_at: Date.parse('2026-08-06T10:45:00.000Z'), completed_at: Date.parse('2026-08-06T11:15:00.000Z') },
       ],
@@ -70,10 +80,8 @@ describe('builder capacity reconstruction', () => {
       '2026-08-06T11:30:00.000Z',
     )
     expect(hourly).toHaveLength(2)
-    // First bin is 10:00 label but clipped to 10:30-11:00 → both runs overlap → used 2
     expect(hourly[0].used).toBe(2)
     expect(hourly[0].free).toBe(0)
-    // Second bin clipped to 11:00-11:30: both overlap until 11:15 → used 2
     expect(hourly[1].used).toBe(2)
     expect(hourly[1].free).toBe(0)
   })
@@ -89,5 +97,18 @@ describe('builder capacity reconstruction', () => {
     )
     expect(hourly).toHaveLength(1)
     expect(hourly[0]).toMatchObject({ workers: 0, used: 0, free: 0 })
+  })
+
+  it.concurrent('timestamp helpers accept builder epoch ms and reject invalid values', () => {
+    expect(msFromBuilderTimestamp(1_700_000_000_000)).toBe(1_700_000_000_000)
+    expect(msFromBuilderTimestamp(null)).toBeNull()
+    expect(msFromBuilderTimestamp(Number.NaN)).toBeNull()
+    expect(isoFromBuilderTimestamp(0)).toBe('1970-01-01T00:00:00.000Z')
+    expect(isoFromBuilderTimestamp(undefined)).toBeNull()
+  })
+
+  it.concurrent('reconstructHourlyCapacity returns [] for inverted or invalid ranges', () => {
+    expect(reconstructHourlyCapacity([], [], '2026-08-06T12:00:00.000Z', '2026-08-06T10:00:00.000Z')).toEqual([])
+    expect(reconstructHourlyCapacity([], [], 'not-a-date', '2026-08-06T10:00:00.000Z')).toEqual([])
   })
 })
