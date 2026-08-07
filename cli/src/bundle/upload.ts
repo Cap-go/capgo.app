@@ -25,7 +25,9 @@ import { showReplicationProgress } from '../replicationProgress'
 import { formatTable } from '../terminal-table'
 import { usesAlwaysDirectUpdate } from '../updaterConfig'
 import { baseKeyV2, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, canPromptInteractively, checkCompatibilityCloud, checkPlanValidUpload, checkRemoteCliMessages, createSupabaseClient, deletedFailedVersion, deltaManifestTooLargeMessage, findRoot, findSavedKey, formatError, getAppId, getBundleVersion, getCompatibilityDetails, getConfig, getInstalledVersion, getLocalConfig, getLocalDependencies, getOrganizationId, getPMAndCommand, getRemoteChecksums, getRemoteFileConfig, hasCliPermission, invokeCapgoCliApi, isCompatible, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, regexSemver, resolveUserIdFromApiKey, sendEvent, setVersionManifest, updateConfigUpdater, updateOrCreateChannel, updateOrCreateVersion, UPLOAD_TIMEOUT, uploadTUS, uploadUrl, zipFile } from '../utils'
-import { getVersionSuggestions, interactiveVersionBump } from '../versionHelpers'
+import type { AutoBumpLevel } from '../versionHelpers'
+import { autoBumpVersionBy, getVersionSuggestions, interactiveVersionBump, normalizeAutoBumpInput } from '../versionHelpers'
+import { resolveAutoBumpLevelFromAi } from './auto-bump-ai'
 import { maybePromptBuilderCta, shouldBlockIncompatibleUpload } from './builder-cta'
 import { checkIndexPosition, searchInDirectory } from './check'
 import { summarizeUploadCompatibility } from './compatibility'
@@ -753,6 +755,87 @@ async function getVersionIdForChannelUpdate(supabase: SupabaseType, apikey: stri
   return versionId
 }
 
+
+async function versionExistsOnRemote(supabase: SupabaseType, appid: string, bundle: string): Promise<boolean> {
+  const { data: appVersion, error: appVersionError } = await supabase
+    .rpc('exist_app_versions', { appid, name_version: bundle })
+    .single()
+
+  if (appVersionError)
+    uploadFail(`Cannot check if version ${bundle} already exists ${formatError(appVersionError)}`)
+
+  return !!appVersion
+}
+
+async function getLatestRemoteAppVersion(supabase: SupabaseType, appid: string): Promise<string | null> {
+  // Include deleted versions: Capgo forbids reusing deleted names (exist_app_versions
+  // still treats them as occupied), so occupancy must drive the auto-bump base.
+  const { data, error } = await supabase
+    .from('app_versions')
+    .select('name')
+    .eq('app_id', appid)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (error) {
+    log.warn(`Cannot fetch latest remote version ${formatError(error)}`)
+    return null
+  }
+
+  return data?.name ?? null
+}
+
+async function findFreeAutoBumpCandidate(
+  supabase: SupabaseType,
+  appid: string,
+  startCandidate: string,
+  level: AutoBumpLevel,
+  baseVersion: string,
+): Promise<string> {
+  let candidate = startCandidate
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const exists = await versionExistsOnRemote(supabase, appid, candidate)
+    if (!exists) {
+      if (candidate !== baseVersion)
+        log.info(`🔢 Auto-bumped (${level}) version from ${baseVersion} to ${candidate}`)
+      return candidate
+    }
+    candidate = autoBumpVersionBy(candidate, level)
+  }
+
+  uploadFail(`Could not find a free ${level}-bumped version after 100 attempts (started from ${baseVersion})`)
+}
+
+async function resolveAutoBumpVersion(
+  supabase: SupabaseType,
+  appid: string,
+  channels: string[],
+  localBundle: string,
+  level: AutoBumpLevel,
+): Promise<string> {
+  const primaryChannel = channels[0]
+  const linked = await getLinkedBundleOnChannel(supabase, appid, primaryChannel)
+  let baseVersion = linked?.name ?? null
+
+  if (baseVersion) {
+    log.info(`📦 Auto-bump base from channel ${primaryChannel}: ${baseVersion}`)
+  }
+  else {
+    baseVersion = await getLatestRemoteAppVersion(supabase, appid)
+    if (baseVersion)
+      log.info(`📦 Auto-bump base from latest remote app version: ${baseVersion}`)
+  }
+
+  if (!baseVersion) {
+    log.info(`ℹ️ No remote versions found for auto-bump, keeping local version ${localBundle}`)
+    return findFreeAutoBumpCandidate(supabase, appid, localBundle, level, localBundle)
+  }
+
+  const candidate = autoBumpVersionBy(baseVersion, level)
+  return findFreeAutoBumpCandidate(supabase, appid, candidate, level, baseVersion)
+}
+
 // It is really important that this function never terminates the program, it should always return.
 async function getLinkedBundleOnChannel(supabase: SupabaseType, appid: string, channel: string): Promise<LinkedChannelVersion> {
   const { data, error } = await supabase
@@ -1180,24 +1263,19 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   if (options.verbose)
     log.info(`[Verbose] App ID: ${appid}, Build path: ${path}`)
 
-  const bundle = await getBundle(extConfig.config, options)
+  if (normalizeAutoBumpInput(options.autoBump) && options.bundle)
+    uploadFail('Cannot use --bundle (-b) and --auto-bump together. Omit --bundle to auto-increment from the latest remote version.')
+
+  let bundle = await getBundle(extConfig.config, options)
   if (options.verbose)
     log.info(`[Verbose] Bundle version: ${bundle}`)
 
   const defaultStorageProvider: Exclude<UploadBundleResult['storageProvider'], undefined> = options.external ? 'external' : 'r2-direct'
   let encryptionMethod: UploadBundleResult['encryptionMethod'] = 'none'
 
-  if (options.autoSetBundle) {
-    await updateConfigUpdater({ version: bundle })
-    if (options.verbose)
-      log.info(`[Verbose] Auto-set bundle version in ${extConfig.path}`)
-  }
-
   checkNotifyAppReady(options, path)
   if (options.verbose)
     log.info(`[Verbose] Code check passed (notifyAppReady found and index.html present)`)
-
-  log.info(`Upload ${appid}@${bundle} started from path "${path}" to Capgo cloud`)
 
   const localConfig = await getLocalConfig()
   if (options.verbose)
@@ -1252,6 +1330,42 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   if (options.verbose)
     log.info(`[Verbose] Trial check completed`)
 
+  const autoBumpInput = normalizeAutoBumpInput(options.autoBump)
+  if (autoBumpInput) {
+    let level: AutoBumpLevel
+    if (autoBumpInput === 'ai') {
+      const decision = await resolveAutoBumpLevelFromAi({
+        supabase,
+        appid,
+        channels,
+        path,
+        apikey,
+        options: {
+          supaHost: options.supaHost,
+          supaAnon: options.supaAnon,
+        },
+      })
+      log.info(`🤖 AI auto-bump chose ${decision.level}: ${decision.reason}`)
+      level = decision.level
+    }
+    else {
+      level = autoBumpInput
+    }
+    if (options.verbose)
+      log.info(`[Verbose] Resolving auto-bump (${level}) version from channel/app remote versions...`)
+    bundle = await resolveAutoBumpVersion(supabase, appid, channels, bundle, level)
+    if (options.verbose)
+      log.info(`[Verbose] Bundle version after auto-bump: ${bundle}`)
+  }
+
+  if (options.autoSetBundle) {
+    await updateConfigUpdater({ version: bundle })
+    if (options.verbose)
+      log.info(`[Verbose] Auto-set bundle version in ${extConfig.path}`)
+  }
+
+  log.info(`Upload ${appid}@${bundle} started from path "${path}" to Capgo cloud`)
+
   if (options.verbose)
     log.info(`[Verbose] Checking if version ${bundle} already exists...`)
 
@@ -1278,7 +1392,9 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   // If we got a new version string, retry with that version
   if (typeof versionExistsResult === 'string') {
     log.info(`Retrying upload with new version: ${versionExistsResult}`)
-    return uploadBundleInternal(preAppid, { ...options, bundle: versionExistsResult }, silent)
+    // Clear autoBump: retry already chose an explicit bundle; keeping autoBump
+    // would trip the user-facing --bundle + --auto-bump guard.
+    return uploadBundleInternal(preAppid, { ...options, bundle: versionExistsResult, autoBump: undefined }, silent)
   }
 
   if (options.external && !options.external.startsWith('https://')) {

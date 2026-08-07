@@ -1,6 +1,6 @@
 import { exit } from 'node:process'
 import { log } from '@clack/prompts'
-import { Option, program } from 'commander'
+import { InvalidArgumentError, Option, program } from 'commander'
 import pack from '../package.json'
 import { categorizeCliError } from './analytics/error-category'
 import { applyCommandAnalyticsOptOut, applyRawCommandAnalyticsOptOut } from './analytics/opt-out'
@@ -55,6 +55,7 @@ import { probe } from './probe'
 import { testRunDeviceCommand } from './run/device'
 import { getUserId } from './user/account'
 import { formatError } from './utils'
+import { normalizeAutoBumpInput } from './versionHelpers'
 
 // Common option descriptions used across multiple commands
 const optionDescriptions = {
@@ -265,6 +266,15 @@ Example: npx @capgo/cli@latest bundle upload com.example.app --path ./dist --cha
   .option('--no-delta', `Disable delta updates even if instant updates are enabled`)
   .option('--encrypted-checksum <encryptedChecksum>', `An encrypted checksum (signature). Used only when uploading an external bundle.`)
   .option('--auto-set-bundle', `Set the bundle version in Capacitor config`)
+  .addOption(new Option('--auto-bump [level]', `Auto-increment bundle version from the latest remote channel/app version. Level: major, minor (default), patch|fix, metadata (prerelease), or ai`)
+    .preset('minor')
+    .argParser((value: string) => {
+      const level = normalizeAutoBumpInput(value)
+      if (!level) {
+        throw new InvalidArgumentError(`Invalid --auto-bump level "${value}". Allowed: major, minor, patch, fix, metadata, ai.`)
+      }
+      return level
+    }))
   .option('--capacitor-config <path>', optionDescriptions.capacitorConfig)
   .option('--dry-upload', `Dry upload the bundle process: add the row in database without uploading files or updating channels (Used by Capgo for internal testing)`)
   .option('--package-json <packageJson>', optionDescriptions.packageJson)

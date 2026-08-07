@@ -202,7 +202,7 @@ export async function startBuild(
     // Security: Check if user has permission to manage builds for the supplied app
     // before validating builder job ownership.
     if (!(await checkPermission(c, 'app.build_native', { appId }))) {
-      const errorMsg = 'You do not have permission to start builds for this app'
+      const errorMsg = 'Capgo permission denied: you do not have app.build_native to start builds for this app.'
       cloudlogErr({
         requestId: c.get('requestId'),
         message: 'Unauthorized start build',
@@ -231,7 +231,7 @@ export async function startBuild(
     }
 
     if (!buildRequest) {
-      const errorMsg = 'You do not have permission to start builds for this app'
+      const errorMsg = 'Build request not found for this app and job.'
       cloudlogErr({
         requestId: c.get('requestId'),
         message: 'Unauthorized start build (job/app mismatch or missing)',

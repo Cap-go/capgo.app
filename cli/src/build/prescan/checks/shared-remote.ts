@@ -16,14 +16,15 @@ export const apikeyPermission: PrescanCheck = {
       channel_id: null,
     })
     if (error) {
-      return [{ id: 'shared/apikey-permission', severity: 'info', title: 'Could not verify build permission (network/API error)', detail: error.message }]
+      return [{ id: 'shared/apikey-permission', severity: 'info', title: 'Could not verify Capgo build permission (network/API error)', detail: error.message }]
     }
     if (data !== true) {
       return [{
         id: 'shared/apikey-permission',
         severity: 'error',
-        title: `This apikey lacks the app.build_native permission for ${ctx.appId}`,
-        fix: 'Use an apikey from the org that owns the app (role with native-build rights), or fix the appId',
+        title: `Capgo could not authorize app.build_native for ${ctx.appId}`,
+        detail: 'Capgo could not authorize the requested permission for this API key and app.',
+        fix: 'Use a Capgo apikey from the org that owns the app (role with native-build rights), or fix the appId',
       }]
     }
     return []
@@ -47,9 +48,9 @@ export const appExists: PrescanCheck = {
       return [{
         id: 'shared/app-exists',
         severity: 'error',
-        title: `App ${ctx.appId} is not visible to this apikey`,
-        detail: 'Either the app does not exist or it belongs to an org this key cannot access',
-        fix: `Create it (npx @capgo/cli app add ${ctx.appId}) or pass the right appId / apikey`,
+        title: `Capgo: app ${ctx.appId} is not visible to this Capgo API key`,
+        detail: 'Either the app does not exist in Capgo or it belongs to an org this Capgo key cannot access.',
+        fix: `Create it (npx @capgo/cli@latest app add ${ctx.appId}) or pass the right appId / Capgo apikey`,
       }]
     }
     return []

@@ -18,15 +18,25 @@ import Layouts from 'vite-plugin-vue-layouts'
 import WebfontDownload from 'vite-plugin-webfont-dl'
 import { VueRouterAutoImports } from 'vue-router/unplugin'
 import VueRouter from 'vue-router/vite'
+import keys from './configs.json'
 import pack from './package.json'
 import { branch, getRightKey } from './scripts/utils.mjs'
 import 'vitest/config'
 
-function getUrl(key = 'base_domain'): string {
+const PROD_SUPABASE_PROXY_PATH = '/__supabase/'
+const useProdSupabaseProxy = process.env.CAPGO_PROD_SUPABASE_PROXY === 'true'
+
+type FrontendConfigKey = 'api_domain' | 'base_domain' | 'captcha_key' | 'supa_anon' | 'supa_url'
+
+function getFrontendKey(key: FrontendConfigKey): string {
+  return useProdSupabaseProxy ? keys[key].prod : getRightKey(key)
+}
+
+function getUrl(key: 'api_domain' | 'base_domain' = 'base_domain'): string {
   if (branch === 'local')
-    return `http://${getRightKey(key)}`
+    return `http://${getFrontendKey(key)}`
   else
-    return `https://${getRightKey(key)}`
+    return `https://${getFrontendKey(key)}`
 }
 
 type FaviconTheme = {
@@ -102,6 +112,37 @@ readdirSync('./messages/')
       locales.push(file.split('.')[0])
   })
 
+const frontendEnvironmentVariables: Record<string, string> = {
+  locales: locales.join(','),
+  VITE_APP_VERSION: pack.version,
+  VITE_SUPABASE_ANON_KEY: getFrontendKey('supa_anon'),
+  VITE_SUPABASE_PROXY_PATH: useProdSupabaseProxy ? PROD_SUPABASE_PROXY_PATH : '',
+  VITE_SUPABASE_URL: getFrontendKey('supa_url'),
+  VITE_APP_URL: getUrl(),
+  VITE_API_HOST: getUrl('api_domain'),
+  VITE_CAPTCHA_KEY: getFrontendKey('captcha_key'),
+  VITE_BRANCH: branch,
+  package_dependencies: JSON.stringify(pack.dependencies),
+  domain: getUrl(),
+}
+
+function frontendEnvironmentPlugin(): Plugin {
+  if (!useProdSupabaseProxy)
+    return EnvironmentPlugin(frontendEnvironmentVariables, { defineOn: 'import.meta.env' })
+
+  return {
+    name: 'capgo-prod-supabase-environment',
+    config() {
+      return {
+        define: Object.fromEntries(
+          Object.entries(frontendEnvironmentVariables)
+            .map(([key, value]) => [`import.meta.env.${key}`, JSON.stringify(value)]),
+        ),
+      }
+    },
+  }
+}
+
 export default defineConfig({
   define: {
     __VUE_OPTIONS_API__: 'true',
@@ -133,18 +174,7 @@ export default defineConfig({
         IconsResolver(),
       ],
     }),
-    EnvironmentPlugin({
-      locales: locales.join(','),
-      VITE_APP_VERSION: pack.version,
-      VITE_SUPABASE_ANON_KEY: getRightKey('supa_anon'),
-      VITE_SUPABASE_URL: getRightKey('supa_url'),
-      VITE_APP_URL: `${getUrl()}`,
-      VITE_API_HOST: `${getUrl('api_domain')}`,
-      VITE_CAPTCHA_KEY: getRightKey('captcha_key'),
-      VITE_BRANCH: branch,
-      package_dependencies: JSON.stringify(pack.dependencies),
-      domain: getUrl(),
-    }, { defineOn: 'import.meta.env' }),
+    frontendEnvironmentPlugin(),
 
     // https://github.com/vuejs/router
     VueRouter({
@@ -197,9 +227,23 @@ export default defineConfig({
   ],
 
   server: {
+    host: useProdSupabaseProxy ? '127.0.0.1' : undefined,
     fs: {
       strict: true,
     },
+    proxy: useProdSupabaseProxy
+      ? {
+          [PROD_SUPABASE_PROXY_PATH.slice(0, -1)]: {
+            target: keys.supa_url.prod,
+            changeOrigin: true,
+            headers: {
+              origin: new URL(keys.supa_url.prod).origin,
+            },
+            rewrite: requestPath => requestPath.replace(/^\/__supabase/, ''),
+            ws: true,
+          },
+        }
+      : undefined,
   },
 
   optimizeDeps: {

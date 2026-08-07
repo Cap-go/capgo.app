@@ -67,24 +67,32 @@ export async function openBlank(link: string) {
   // Async callers often lose the user-gesture; offer a confirm link fallback.
   return presentBlockedPopupFallback(link)
 }
+
+const PORTAL_URL_CACHE_TTL_MS = 3 * 60 * 1000
+const portalUrlCache = new Map<string, { url: string, callbackUrl: string, createdAt: number }>()
+
 export async function openPortal(orgId: string, t: ComposerTranslation) {
-  let url = ''
-  const supabase = useSupabase()
   const dialogStore = useDialogV2Store()
-
-  const session = await supabase.auth.getSession()
-  if (!session)
-    return
-
-  // datafast_visitor_id
-
-  const prem = invokeCapgoApi('private/stripe_portal', {
-    body: JSON.stringify({ callbackUrl: globalThis.location.href, orgId }),
-  }).then(({ data }) => {
-    if (data?.url) {
-      url = data.url
-    }
-  })
+  const now = Date.now()
+  for (const [cachedOrgId, entry] of portalUrlCache) {
+    if (now - entry.createdAt >= PORTAL_URL_CACHE_TTL_MS)
+      portalUrlCache.delete(cachedOrgId)
+  }
+  const callbackUrl = globalThis.location.href
+  const cachedEntry = portalUrlCache.get(orgId)
+  const cachedUrl = cachedEntry?.callbackUrl === callbackUrl
+    ? cachedEntry.url
+    : ''
+  const portalUrl = cachedUrl
+    ? Promise.resolve(cachedUrl)
+    : invokeCapgoApi('private/stripe_portal', {
+        body: JSON.stringify({ callbackUrl, orgId }),
+      }).then(({ data }) => {
+        const url = data?.url || ''
+        if (url)
+          portalUrlCache.set(orgId, { url, callbackUrl, createdAt: Date.now() })
+        return url
+      }, () => '')
 
   dialogStore.openDialog({
     title: t('open-your-portal'),
@@ -99,7 +107,7 @@ export async function openPortal(orgId: string, t: ComposerTranslation) {
         id: 'confirm-button',
         role: 'primary',
         handler: async () => {
-          await prem
+          const url = await portalUrl
           if (url)
             await openBlank(url)
           else

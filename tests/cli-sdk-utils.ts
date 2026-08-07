@@ -285,14 +285,14 @@ async function getAuthorizedApp(
 ) {
   const apiKey = await getApiKeyRecord(apikey)
   if (!apiKey)
-    return { error: 'Invalid API key or insufficient permissions.' as const }
+    return { error: 'Capgo authentication failed: invalid Capgo API key or insufficient Capgo permissions.' as const }
 
   const app = await getAppRecord(appId)
   if (!app)
     return { error: `App ${appId} does not exist` as const }
 
   if (!(await apiKeyHasAnyAppPermission(apikey, apiKey, app, requiredPermissions)))
-    return { error: 'Invalid API key or insufficient permissions.' as const }
+    return { error: 'Capgo authentication failed: invalid Capgo API key or insufficient Capgo permissions.' as const }
 
   return { apiKey, app } as const
 }
@@ -300,7 +300,7 @@ async function getAuthorizedApp(
 async function getAppsForApiKey(apikey: string, requiredPermissions: RbacPermissionKey[]) {
   const apiKey = await getApiKeyRecord(apikey)
   if (!apiKey)
-    return { error: 'Invalid API key or insufficient permissions.' as const }
+    return { error: 'Capgo authentication failed: invalid Capgo API key or insufficient Capgo permissions.' as const }
 
   const { data, error } = await getSupabaseClient()
     .from('apps')
@@ -706,7 +706,7 @@ export function createTestSDK(apikey: string = APIKEY_TEST_ORG_SUPER_ADMIN) {
   }) => {
     const apiKey = await getApiKeyRecord(apikey)
     if (!apiKey)
-      return { success: false, error: 'Invalid API key or insufficient permissions.' }
+      return { success: false, error: 'Capgo authentication failed: invalid Capgo API key or insufficient Capgo permissions.' }
 
     const app = await getAppRecord(appId)
     if (!app)
@@ -729,9 +729,9 @@ export function createTestSDK(apikey: string = APIKEY_TEST_ORG_SUPER_ADMIN) {
       || prod != null
 
     if (hasSettingsUpdate && !(await apiKeyHasAnyChannelPermission(apikey, apiKey, app, existingChannel.id, ['channel.update_settings'])))
-      return { success: false, error: 'Invalid API key or insufficient permissions.' }
+      return { success: false, error: 'Capgo authentication failed: invalid Capgo API key or insufficient Capgo permissions.' }
     if (hasBundlePromotion && !(await apiKeyHasAnyChannelPermission(apikey, apiKey, app, existingChannel.id, ['channel.promote_bundle'])))
-      return { success: false, error: 'Invalid API key or insufficient permissions.' }
+      return { success: false, error: 'Capgo authentication failed: invalid Capgo API key or insufficient Capgo permissions.' }
 
     if (state && !['default', 'normal'].includes(state))
       return { success: false, error: 'Unknown state' }
@@ -770,7 +770,7 @@ export function createTestSDK(apikey: string = APIKEY_TEST_ORG_SUPER_ADMIN) {
   ;(sdk as any).deleteChannel = async (channelId: string, appId: string) => {
     const apiKey = await getApiKeyRecord(apikey)
     if (!apiKey)
-      return { success: false, error: 'Invalid API key or insufficient permissions.' }
+      return { success: false, error: 'Capgo authentication failed: invalid Capgo API key or insufficient Capgo permissions.' }
 
     const app = await getAppRecord(appId)
     if (!app)
@@ -781,7 +781,7 @@ export function createTestSDK(apikey: string = APIKEY_TEST_ORG_SUPER_ADMIN) {
       return { success: false, error: 'Channel not found' }
 
     if (!(await apiKeyHasAnyChannelPermission(apikey, apiKey, app, existingChannel.id, ['channel.delete'])))
-      return { success: false, error: 'Invalid API key or insufficient permissions.' }
+      return { success: false, error: 'Capgo authentication failed: invalid Capgo API key or insufficient Capgo permissions.' }
 
     const { error } = await getSupabaseClient()
       .from('channels')
@@ -797,7 +797,7 @@ export function createTestSDK(apikey: string = APIKEY_TEST_ORG_SUPER_ADMIN) {
   ;(sdk as any).getCurrentBundle = async (appId: string, channelId: string) => {
     const apiKey = await getApiKeyRecord(apikey)
     if (!apiKey)
-      return { success: false, error: 'Invalid API key or insufficient permissions.' }
+      return { success: false, error: 'Capgo authentication failed: invalid Capgo API key or insufficient Capgo permissions.' }
 
     const app = await getAppRecord(appId)
     if (!app)
@@ -808,7 +808,7 @@ export function createTestSDK(apikey: string = APIKEY_TEST_ORG_SUPER_ADMIN) {
       return { success: false, error: `Channel ${channelId} not found for app ${appId}` }
 
     if (!(await apiKeyHasAnyChannelPermission(apikey, apiKey, app, channel.id, ['channel.read'])))
-      return { success: false, error: 'Invalid API key or insufficient permissions.' }
+      return { success: false, error: 'Capgo authentication failed: invalid Capgo API key or insufficient Capgo permissions.' }
 
     const version = await getChannelVersionRecord(appId, channelId)
     if (!version)
