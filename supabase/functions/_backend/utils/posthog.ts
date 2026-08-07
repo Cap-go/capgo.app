@@ -33,8 +33,6 @@ export async function trackPosthogEvent(c: Context, payload: PostHogCapturePaylo
   }
 
   const host = getEnv(c, 'POSTHOG_API_HOST') || POSTHOG_CAPTURE_URL
-  const posthogUrl = getPostHogCaptureUrl(host)
-
   const distinctId = payload.user_id || payload.distinct_id || 'anonymous'
 
   const hasGroups = payload.groups && Object.keys(payload.groups).length > 0
@@ -64,6 +62,7 @@ export async function trackPosthogEvent(c: Context, payload: PostHogCapturePaylo
   const controller = payload.timeoutMs ? new AbortController() : undefined
   const timeoutId = controller ? setTimeout(() => controller.abort(), payload.timeoutMs) : undefined
   try {
+    const posthogUrl = getPostHogCaptureUrl(host)
     const res = await fetch(posthogUrl, {
       method: 'POST',
       headers: {
@@ -160,6 +159,9 @@ export async function capturePosthogReplaySnapshot(c: Context, payload: PostHogR
     await trackPosthogEvent(c, {
       channel: 'cli',
       event: '$identify',
+      // Resizes emit another rrweb Meta event. Keep retries backend-only while
+      // letting PostHog deduplicate them into one identify event per session.
+      nonPersonTags: { $insert_id: `cli-replay-identify:${payload.sessionId}` },
       personProperties: { email: payload.userEmail },
       timeoutMs: POSTHOG_IDENTIFY_TIMEOUT_MS,
       user_id: payload.userId,
@@ -389,8 +391,6 @@ export async function groupIdentifyPosthog(c: Context, payload: PostHogGroupIden
   }
 
   const host = getEnv(c, 'POSTHOG_API_HOST') || POSTHOG_CAPTURE_URL
-  const posthogUrl = getPostHogCaptureUrl(host)
-
   const body = {
     api_key: apiKey,
     event: '$groupidentify',
@@ -404,6 +404,7 @@ export async function groupIdentifyPosthog(c: Context, payload: PostHogGroupIden
   }
 
   try {
+    const posthogUrl = getPostHogCaptureUrl(host)
     const res = await fetch(posthogUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

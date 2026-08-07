@@ -161,6 +161,7 @@ describe('posthog helper', () => {
     expect(identifyRequest?.[0]).toBe('https://eu.i.posthog.com/capture/')
     expect(identifyBody.event).toBe('$identify')
     expect(identifyBody.distinct_id).toBe('user-id')
+    expect(identifyBody.properties.$insert_id).toBe('cli-replay-identify:init-session')
     expect(identifyBody.properties.$set).toEqual({ email: 'user@example.com' })
     expect(identifyBody.properties).not.toHaveProperty('email')
     expect(identifyRequest?.[1]?.signal).toBeInstanceOf(AbortSignal)
@@ -243,6 +244,32 @@ describe('posthog helper', () => {
     expect(fetchMock.mock.calls[0]?.[0]).toBe('https://eu.i.posthog.com/s/')
   })
 
+  it('uses one deterministic insert ID for meta events repeated after resize', async () => {
+    const { capturePosthogReplaySnapshot } = await import('../supabase/functions/_backend/utils/posthog.ts')
+    const payload = {
+      currentUrl: 'capgo-cli://init',
+      distinctId: 'user-id',
+      events: [{ type: 4 }],
+      lib: '@capgo/cli',
+      libVersion: '8.9.0',
+      sessionId: 'init-session',
+      timestamp: '2026-06-16T00:00:00.000Z',
+      userEmail: 'user@example.com',
+      userId: 'user-id',
+      windowId: 'window-id',
+    }
+
+    await capturePosthogReplaySnapshot(createContext(), payload)
+    await capturePosthogReplaySnapshot(createContext(), payload)
+
+    const identifyBodies = [fetchMock.mock.calls[0], fetchMock.mock.calls[2]]
+      .map(call => JSON.parse(call?.[1]?.body as string))
+    expect(identifyBodies.map(body => body.properties.$insert_id)).toEqual([
+      'cli-replay-identify:init-session',
+      'cli-replay-identify:init-session',
+    ])
+  })
+
   it('still records when replay identification times out', async () => {
     vi.useFakeTimers()
     fetchMock
@@ -290,6 +317,28 @@ describe('posthog helper', () => {
       windowId: 'window-id',
     })).resolves.toBe(false)
 
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('fails safely when event tracking receives an invalid PostHog host', async () => {
+    const { trackPosthogEvent } = await import('../supabase/functions/_backend/utils/posthog.ts')
+    envState.posthogApiHost = '://bad-host'
+
+    await expect(trackPosthogEvent(createContext(), {
+      event: 'test-event',
+      user_id: 'user-id',
+    })).resolves.toBe(false)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('fails safely when group identification receives an invalid PostHog host', async () => {
+    const { groupIdentifyPosthog } = await import('../supabase/functions/_backend/utils/posthog.ts')
+    envState.posthogApiHost = '://bad-host'
+
+    await expect(groupIdentifyPosthog(createContext(), {
+      groupKey: 'org-id',
+      groupType: 'organization',
+    })).resolves.toBe(false)
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
