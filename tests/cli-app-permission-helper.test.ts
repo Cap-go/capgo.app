@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const hasCliPermissionMock = vi.hoisted(() => vi.fn())
 
 vi.mock('../cli/src/utils', () => ({
+  appAddHintMessage: (appId: string) => `App ${appId} does not exist`,
   getPMAndCommand: () => ({ runner: 'bunx' }),
   hasCliPermission: hasCliPermissionMock,
   show2FADeniedError: vi.fn(() => {
