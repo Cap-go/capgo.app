@@ -99,6 +99,7 @@ const allPresets = computed(() => presetGroups.value.flatMap(g => g.items))
 const isOpen = ref(false)
 const triggerRef = ref<HTMLButtonElement | null>(null)
 const popoverRef = ref<HTMLDialogElement | null>(null)
+const returnFocusTarget = ref<HTMLElement | null>(null)
 const draftMode = ref<DateRangePreset>(props.mode)
 const pickerRange = ref<Date[] | null>(null)
 const popoverStyle = ref<Record<string, string>>({})
@@ -162,10 +163,13 @@ function closePicker() {
   if (!isOpen.value)
     return
   isOpen.value = false
-  nextTick(() => triggerRef.value?.focus())
+  const target = returnFocusTarget.value?.isConnected ? returnFocusTarget.value : triggerRef.value
+  returnFocusTarget.value = null
+  nextTick(() => target?.focus())
 }
 
-async function openPicker() {
+async function openPicker(invoker?: HTMLElement) {
+  returnFocusTarget.value = invoker ?? triggerRef.value
   syncDraftFromProps()
   updatePopoverPosition()
   isOpen.value = true
@@ -173,6 +177,8 @@ async function openPicker() {
   updatePopoverPosition()
   popoverRef.value?.querySelector<HTMLElement>('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')?.focus()
 }
+
+defineExpose({ openPicker })
 
 onClickOutside(popoverRef, (event) => {
   const target = event.target as Node | null

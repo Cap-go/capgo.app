@@ -119,6 +119,7 @@ const filterActivated = computed(() => {
     : 0
   return booleanCount + (props.extraFilterCount ?? 0)
 })
+const hasActiveViewFilters = computed(() => Boolean(searchVal.value.trim()) || filterActivated.value > 0)
 
 const showFilterMenu = computed(() =>
   Boolean(props.filterText && (filterList.value.length || slots['filter-extras'])),
@@ -199,6 +200,13 @@ function clearAllFilters() {
     emit('update:filters', cleared)
   }
   emit('clearExtraFilters')
+}
+
+function clearViewFilters() {
+  searchVal.value = ''
+  emit('update:search', '')
+  emit('update:currentPage', 1)
+  clearAllFilters()
 }
 
 function sortClick(key: number) {
@@ -866,7 +874,13 @@ const paginationClass = computed(() => props.mobileFixedPagination
               :colspan="columns.length + (props.massSelect ? 1 : 0)"
               class="px-4 py-2 text-center text-gray-500 md:py-4 md:px-6 dark:text-gray-400"
             >
-              {{ t("no_elements_found") }}
+              <slot
+                name="empty-state"
+                :clear-filters="clearViewFilters"
+                :has-active-filters="hasActiveViewFilters"
+              >
+                {{ t("no_elements_found") }}
+              </slot>
             </td>
           </tr>
         </tbody>
