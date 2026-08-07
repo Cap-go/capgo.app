@@ -28,10 +28,10 @@ watch(() => organizationStore.currentOrganization?.gid, async (orgId) => {
     .eq('id', orgId)
     .maybeSingle()
 
-  if (currentRun !== billingLookupRun || error || !data?.stripe_info)
+  if (currentRun !== billingLookupRun || error || !data)
     return
 
-  paidAt.value = data.stripe_info.paid_at
+  paidAt.value = data.stripe_info?.paid_at ?? null
 }, { immediate: true })
 
 function goToPlans() {
