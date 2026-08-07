@@ -71,6 +71,16 @@ t('command probe rejects executables whose version check fails', () => {
   assert.equal(result.status, 7)
 })
 
+t('command probe times out an unresponsive executable', () => {
+  const result = probeExecutable(process.execPath, {
+    args: ['-e', 'setTimeout(() => {}, 1_000)'],
+    timeoutMs: 20,
+  })
+
+  assert.equal(result.available, false)
+  assert.equal(result.error?.code, 'ETIMEDOUT')
+})
+
 t('package manager probes and commands share the Corepack environment', () => {
   const commandEnvironment = { PATH: '/usr/bin' }
 

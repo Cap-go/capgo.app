@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Executable and process-settlement regression tests
+## Task 1: Executable and process-settlement regression tests
 
 **Files:**
 - Create: `cli/src/init/command-execution.ts`
@@ -28,7 +28,7 @@ Expected: FAIL because `cli/src/init/command-execution.ts` does not exist.
 
 - [ ] **Step 3: Implement the minimal probing and metadata functions**
 
-Use direct `spawnSync(command, ['--version'], { cwd, env, stdio: 'ignore' })`. Treat any returned spawn error as unavailable; a started process is available regardless of its exit status. Define explicit metadata for `npm`, `pnpm`, `yarn`, and `bun`, and filter alternatives using the same probe.
+Use direct `spawnSync(command, ['--version'], { cwd, env, stdio: 'ignore', timeout })`. Treat spawn errors, timeouts, signals, and nonzero exit statuses as unavailable so a rejecting Corepack shim is not offered as a working alternative. Define explicit metadata for `npm`, `pnpm`, `yarn`, and `bun`, and filter alternatives using the same probe.
 
 - [ ] **Step 4: Run the focused test and verify GREEN**
 
@@ -56,7 +56,7 @@ Run: `bun cli/test/test-init-guardrails.mjs`
 
 Expected: PASS.
 
-### Task 2: Onboarding integration and alternative selection
+## Task 2: Onboarding integration and alternative selection
 
 **Files:**
 - Modify: `cli/src/init/command.ts:3237-3312`
@@ -87,7 +87,7 @@ Run: `bun cli/test/test-init-guardrails.mjs`
 
 Expected: PASS with all init guardrail tests.
 
-### Task 3: Repository validation and publication
+## Task 3: Repository validation and publication
 
 **Files:**
 - Verify all changed implementation, test, and documentation files.
@@ -116,7 +116,7 @@ Stage only intended files, commit with Conventional Commits, and push `wolny/fix
 
 - [ ] **Step 5: Open a ready-for-review PR**
 
-Create a non-draft PR targeting `main` with the root cause, behavior change, and exact validation commands in its body.
+Create a non-draft PR targeting `main` with `Summary (AI generated)`, `Motivation (AI generated)`, `Business Impact (AI generated)`, and `Test Plan (AI generated)` sections in its body.
 
 - [ ] **Step 6: Run the `pr-ready` workflow**
 

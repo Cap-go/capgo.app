@@ -15,6 +15,7 @@ export interface ExecutableProbeOptions {
   args?: string[]
   cwd?: string
   env?: NodeJS.ProcessEnv
+  timeoutMs?: number
 }
 
 export interface ExecutableProbeResult {
@@ -37,6 +38,7 @@ const packageManagerRunners: Record<SupportedPackageManager, PackageManagerRunne
 }
 
 const supportedPackageManagers = Object.keys(packageManagerRunners) as SupportedPackageManager[]
+const defaultExecutableProbeTimeoutMs = 5_000
 
 export function createMissingExecutableError(command: string, executablePath = process.env.PATH ?? ''): NodeJS.ErrnoException {
   const error = new Error(`Cannot find executable "${command}" in PATH (${executablePath || 'empty'}). Install it or select another package manager.`) as NodeJS.ErrnoException
@@ -61,6 +63,7 @@ export function probeExecutable(command: string, options: ExecutableProbeOptions
       ...options.env,
     },
     stdio: ['ignore', 'pipe', 'ignore'],
+    timeout: options.timeoutMs ?? defaultExecutableProbeTimeoutMs,
   })
 
   if (result.error)
