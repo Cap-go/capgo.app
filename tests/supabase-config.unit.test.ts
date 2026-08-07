@@ -1,6 +1,6 @@
 import type { CapgoConfig } from '~/services/supabase'
 import { describe, expect, it } from 'vitest'
-import { mergeRemoteConfig } from '~/services/supabase'
+import { mergeRemoteConfig, resolveSupabaseHost } from '~/services/supabase'
 
 describe('supabase config merging', () => {
   const localConfig: CapgoConfig = {
@@ -34,5 +34,12 @@ describe('supabase config merging', () => {
     const merged = mergeRemoteConfig(localConfig, {})
 
     expect(merged).toEqual(localConfig)
+  })
+})
+
+describe('supabase host resolution', () => {
+  it.concurrent('keeps the configured Supabase host when the proxy option is disabled', () => {
+    expect(resolveSupabaseHost('https://sb.capgo.app/', '')).toBe('https://sb.capgo.app')
+    expect(resolveSupabaseHost('https://sb.capgo.app/', undefined)).toBe('https://sb.capgo.app')
   })
 })

@@ -283,15 +283,8 @@ const planConversionSeries = computed(() => {
   if (globalStatsTrendData.value.length === 0)
     return []
 
+  // No "All Paid Plans" series: with paying as denom that line is always ~100%.
   return [
-    {
-      label: 'All Paid Plans (% of paying)',
-      data: globalStatsTrendData.value.map(item => ({
-        date: item.date,
-        value: item.plan_total_conversion_rate || 0,
-      })),
-      color: '#3b82f6', // blue
-    },
     {
       label: 'Solo (% of paying)',
       data: globalStatsTrendData.value.map(item => ({

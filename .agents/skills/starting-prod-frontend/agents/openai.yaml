@@ -1,0 +1,6 @@
+interface:
+  display_name: "Start Production Frontend"
+  short_description: "Start the local frontend against production"
+  default_prompt: "Use $starting-prod-frontend to start the local frontend against production and report its URL."
+policy:
+  allow_implicit_invocation: false
