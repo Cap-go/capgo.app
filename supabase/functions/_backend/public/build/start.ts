@@ -231,7 +231,7 @@ export async function startBuild(
     }
 
     if (!buildRequest) {
-      const errorMsg = 'Capgo permission denied: you do not have app.build_native to start builds for this app.'
+      const errorMsg = 'Build request not found for this app and job.'
       cloudlogErr({
         requestId: c.get('requestId'),
         message: 'Unauthorized start build (job/app mismatch or missing)',

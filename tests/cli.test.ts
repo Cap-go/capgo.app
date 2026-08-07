@@ -548,12 +548,7 @@ describe('tests CLI upload options in parallel', () => {
         apikey: createdPlainKey as string,
       })
       expect(result.success).toBe(false)
-      // Error message can vary - either explicit org mismatch or generic permission error
-      expect(
-        result.error?.includes('Cannot get organization id for app id')
-        || result.error?.includes('Capgo authentication failed')
-        || result.error?.includes('Invalid API key or insufficient permissions'),
-      ).toBe(true)
+      expect(result.error).toBe('Capgo authentication failed: invalid Capgo API key or insufficient Capgo permissions.')
     }
     finally {
       if (createdApikeyId !== null)

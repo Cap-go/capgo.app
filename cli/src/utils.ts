@@ -1940,7 +1940,12 @@ export async function resolveUserIdFromApiKey(supabase: SupabaseClient<Database>
 
   const userId = (dataUser || '').toString()
 
-  if (!userId || userIdError) {
+  if (userIdError) {
+    if (!silent)
+      log.error(userIdError.message)
+    throw userIdError
+  }
+  if (!userId) {
     if (!silent)
       log.error(`Capgo authentication failed: invalid Capgo API key or insufficient Capgo permissions.`)
     throw new Error('Capgo authentication failed: invalid Capgo API key or insufficient Capgo permissions.')

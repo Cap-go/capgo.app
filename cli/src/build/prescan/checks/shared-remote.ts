@@ -22,8 +22,8 @@ export const apikeyPermission: PrescanCheck = {
       return [{
         id: 'shared/apikey-permission',
         severity: 'error',
-        title: `Capgo rejected this API key: missing app.build_native permission for ${ctx.appId}`,
-        detail: 'Your Capgo API key authenticated, but it lacks native-build rights for this app.',
+        title: `Capgo could not authorize app.build_native for ${ctx.appId}`,
+        detail: 'Capgo could not authorize the requested permission for this API key and app.',
         fix: 'Use a Capgo apikey from the org that owns the app (role with native-build rights), or fix the appId',
       }]
     }
