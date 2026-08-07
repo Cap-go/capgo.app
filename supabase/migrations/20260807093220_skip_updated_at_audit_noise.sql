@@ -1,4 +1,23 @@
 -- Skip audit_logs for pure updated_at bumps on every audited table, and keep
+-- apps/orgs stats refresh bookkeeping silent.
+--
+-- Execution model (audit_log_trigger):
+-- - Where: AFTER INSERT/UPDATE/DELETE row trigger on orgs, apps, channels,
+--   app_versions, org_users.
+-- - Frequency: once per mutating row statement on those tables (not per RLS
+--   candidate row). Hot-path plugin endpoints do not write these tables.
+-- - Roles: runs as SECURITY DEFINER for authenticated, anon (API key), and
+--   service_role writers that mutate audited rows.
+-- - Cardinality: bounded by the mutating statement row count; identifier
+--   lookups use primary keys (orgs.id, apps.app_id, channels.id,
+--   app_versions.id, org_users.id).
+-- - Indexes used by cleanup: idx_audit_logs_created_at, idx_audit_logs_operation,
+--   idx_audit_logs_table_name for batched ctid deletes ordered by created_at.
+--
+-- Historical noise is removed via a runtime-budgeted function. Migration applies
+-- a small deployment budget; cron_tasks drains the remainder.
+
+-- Skip audit_logs for pure updated_at bumps on every audited table, and keep
 -- apps/orgs stats refresh bookkeeping silent. Delete matching historical rows
 -- in bounded batches so Capgo-EU audit_logs cleanup stays resumable.
 
@@ -150,26 +169,49 @@ BEGIN
 
   END IF;
 
-  CASE TG_TABLE_NAME
-    WHEN 'orgs' THEN
-      v_org_id := COALESCE(NEW.id, OLD.id);
-      v_record_id := COALESCE(NEW.id, OLD.id)::text;
-    WHEN 'apps' THEN
-      v_org_id := COALESCE(NEW.owner_org, OLD.owner_org);
-      v_record_id := COALESCE(NEW.app_id, OLD.app_id)::text;
-    WHEN 'channels' THEN
-      v_org_id := COALESCE(NEW.owner_org, OLD.owner_org);
-      v_record_id := COALESCE(NEW.id, OLD.id)::text;
-    WHEN 'app_versions' THEN
-      v_org_id := COALESCE(NEW.owner_org, OLD.owner_org);
-      v_record_id := COALESCE(NEW.id, OLD.id)::text;
-    WHEN 'org_users' THEN
-      v_org_id := COALESCE(NEW.org_id, OLD.org_id);
-      v_record_id := COALESCE(NEW.id, OLD.id)::text;
-    ELSE
-      v_org_id := NULL;
-      v_record_id := NULL;
-  END CASE;
+  IF TG_OP = 'DELETE' THEN
+    CASE TG_TABLE_NAME
+      WHEN 'orgs' THEN
+        v_org_id := OLD.id;
+        v_record_id := OLD.id::text;
+      WHEN 'apps' THEN
+        v_org_id := OLD.owner_org;
+        v_record_id := OLD.app_id::text;
+      WHEN 'channels' THEN
+        v_org_id := OLD.owner_org;
+        v_record_id := OLD.id::text;
+      WHEN 'app_versions' THEN
+        v_org_id := OLD.owner_org;
+        v_record_id := OLD.id::text;
+      WHEN 'org_users' THEN
+        v_org_id := OLD.org_id;
+        v_record_id := OLD.id::text;
+      ELSE
+        v_org_id := NULL;
+        v_record_id := NULL;
+    END CASE;
+  ELSE
+    CASE TG_TABLE_NAME
+      WHEN 'orgs' THEN
+        v_org_id := NEW.id;
+        v_record_id := NEW.id::text;
+      WHEN 'apps' THEN
+        v_org_id := NEW.owner_org;
+        v_record_id := NEW.app_id::text;
+      WHEN 'channels' THEN
+        v_org_id := NEW.owner_org;
+        v_record_id := NEW.id::text;
+      WHEN 'app_versions' THEN
+        v_org_id := NEW.owner_org;
+        v_record_id := NEW.id::text;
+      WHEN 'org_users' THEN
+        v_org_id := NEW.org_id;
+        v_record_id := NEW.id::text;
+      ELSE
+        v_org_id := NULL;
+        v_record_id := NULL;
+    END CASE;
+  END IF;
 
   IF v_org_id IS NOT NULL THEN
     INSERT INTO public.audit_logs (
@@ -203,29 +245,40 @@ BEGIN
     );
   END IF;
 
-  RETURN COALESCE(NEW, OLD);
+  IF TG_OP = 'DELETE' THEN
+    RETURN OLD;
+  END IF;
+
+  RETURN NEW;
 END;
 $$;
 
 
 ALTER FUNCTION "public"."audit_log_trigger"() OWNER TO "postgres";
 
-
--- Remove historical bookkeeping noise that the trigger now skips.
--- Batched to avoid a single WAL/lock storm on large audit_logs tables.
-DO $$
+CREATE OR REPLACE FUNCTION "public"."cleanup_audit_logs_bookkeeping_noise"(
+  "max_batches" integer DEFAULT 100,
+  "batch_size" integer DEFAULT 1000,
+  "max_runtime_ms" integer DEFAULT 15000
+) RETURNS bigint
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
 DECLARE
   batch_no integer := 0;
   deleted_batch integer;
   deleted_total bigint := 0;
-  v_batch_size integer := 1000;
-  v_max_batches integer := 1000000;
+  v_max_batches integer := GREATEST(1, COALESCE(max_batches, 100));
+  v_batch_size integer := GREATEST(1, COALESCE(batch_size, 1000));
+  v_max_runtime_ms integer := GREATEST(1000, COALESCE(max_runtime_ms, 15000));
+  started_at timestamptz := pg_catalog.clock_timestamp();
 BEGIN
   PERFORM pg_catalog.set_config('statement_timeout', '0', true);
 
   LOOP
     batch_no := batch_no + 1;
     EXIT WHEN batch_no > v_max_batches;
+    EXIT WHEN (EXTRACT(EPOCH FROM (pg_catalog.clock_timestamp() - started_at)) * 1000) >= v_max_runtime_ms;
 
     DELETE FROM public.audit_logs
     WHERE ctid IN (
@@ -234,14 +287,12 @@ BEGIN
       WHERE al.operation = 'UPDATE'
         AND al.changed_fields IS NOT NULL
         AND (
-          -- Pure updated_at-only rows on any audited table
           NOT EXISTS (
             SELECT 1
             FROM pg_catalog.unnest(al.changed_fields) AS changed_field(field_name)
             WHERE changed_field.field_name IS DISTINCT FROM 'updated_at'
           )
           OR (
-            -- Stats refresh bookkeeping on apps/orgs
             al.table_name = ANY (ARRAY['apps', 'orgs']::text[])
             AND al.changed_fields && ARRAY['stats_refresh_requested_at', 'stats_updated_at']::text[]
             AND NOT EXISTS (
@@ -263,9 +314,64 @@ BEGIN
   END LOOP;
 
   RAISE NOTICE
-    'skip_updated_at_audit_noise: deleted=% batches=% batch_size=%',
+    'cleanup_audit_logs_bookkeeping_noise: deleted=% batches=%/% batch_size=% runtime_ms=% budget_ms=%',
     deleted_total,
     LEAST(batch_no, v_max_batches),
-    v_batch_size;
+    v_max_batches,
+    v_batch_size,
+    (EXTRACT(EPOCH FROM (pg_catalog.clock_timestamp() - started_at)) * 1000)::bigint,
+    v_max_runtime_ms;
+
+  RETURN deleted_total;
 END;
 $$;
+
+ALTER FUNCTION "public"."cleanup_audit_logs_bookkeeping_noise"("max_batches" integer, "batch_size" integer, "max_runtime_ms" integer) OWNER TO "postgres";
+REVOKE ALL ON FUNCTION "public"."cleanup_audit_logs_bookkeeping_noise"("max_batches" integer, "batch_size" integer, "max_runtime_ms" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."cleanup_audit_logs_bookkeeping_noise"("max_batches" integer, "batch_size" integer, "max_runtime_ms" integer) TO "service_role";
+
+-- Small deployment-budget pass only; remaining rows drain via cron_tasks.
+SELECT public.cleanup_audit_logs_bookkeeping_noise(10, 1000, 5000);
+
+INSERT INTO public.cron_tasks (
+  name,
+  description,
+  task_type,
+  target,
+  batch_size,
+  payload,
+  second_interval,
+  minute_interval,
+  hour_interval,
+  run_at_hour,
+  run_at_minute,
+  run_at_second,
+  run_on_dow,
+  run_on_day,
+  enabled
+) VALUES (
+  'cleanup_audit_logs_bookkeeping_noise',
+  'Delete updated_at-only and apps/orgs stats-refresh audit_logs noise in bounded batches',
+  'function',
+  'public.cleanup_audit_logs_bookkeeping_noise()',
+  NULL,
+  NULL,
+  NULL,
+  NULL,
+  1,
+  NULL,
+  15,
+  NULL,
+  NULL,
+  NULL,
+  true
+)
+ON CONFLICT (name) DO UPDATE
+SET
+  description = EXCLUDED.description,
+  task_type = EXCLUDED.task_type,
+  target = EXCLUDED.target,
+  hour_interval = EXCLUDED.hour_interval,
+  run_at_minute = EXCLUDED.run_at_minute,
+  enabled = true,
+  updated_at = pg_catalog.now();
