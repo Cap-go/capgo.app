@@ -216,6 +216,8 @@ jobs:
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
       - name: Sync generated schema and types
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_TOKEN }}
@@ -235,10 +237,19 @@ jobs:
             exit 0
           fi
 
+          # Gate the auto-sync on its own output: the regenerated types are only
+          # trustworthy if they still compile against the backend that consumes
+          # them. Prod is often behind local migrations, so a regenerated types
+          # file can drop columns the code still references. Fail the job here
+          # instead of pushing an unverified commit that reddens `main` for the
+          # next contributor.
+          echo "Schema/types drift detected; verifying regenerated types compile against the codebase."
+          bun typecheck
+
           git config --local user.name "github-actions[bot]"
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git add supabase/schemas/prod.sql src/types/supabase.types.ts supabase/functions/_backend/utils/supabase.types.ts
-          git commit -m "chore(auto-sync): update supabase schema and generated types [skip ci]"
+          git commit -m "chore(auto-sync): update supabase schema and generated types"
 
           remote_repo="https://x-access-token:${{ secrets.PERSONAL_ACCESS_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git"
           git push "$remote_repo" HEAD:main

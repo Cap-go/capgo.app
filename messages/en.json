@@ -389,6 +389,7 @@
   "app-onboarding-choice-real-badge": "Real app",
   "app-onboarding-choice-real-subtitle": "Continue with the CLI and finish the real setup in your codebase. Capgo will reuse",
   "app-onboarding-choice-real-title": "Install Capgo in your project",
+  "app-onboarding-command-apikey-loading": "Creating your secure API key…",
   "app-onboarding-command-copy": "Copy CLI install command",
   "app-onboarding-command-help": "Advanced option. Most users should keep following the guided onboarding here.",
   "app-onboarding-command-hide": "Hide",

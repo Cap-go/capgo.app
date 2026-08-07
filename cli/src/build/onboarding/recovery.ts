@@ -42,7 +42,7 @@ export function getBuildOnboardingRecoveryAdvice(
     )
     docs.add('https://appstoreconnect.apple.com/agreements')
   }
-  else if (lower.includes('api key verification failed') || lower.includes('401') || lower.includes('403')) {
+  else if (lower.includes('api key verification failed') || lower.includes('apple rejected the app store connect') || lower.includes('401') || lower.includes('403')) {
     summary.push(
       'Apple rejected the App Store Connect credentials.',
       'Double-check the .p8 file, Key ID, Issuer ID, and that the key still has Admin or Developer access.',
