@@ -4,7 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { getTodayLimit } from '~/services/buildCharts'
 import { createLegendConfig, createStackedChartScales } from '~/services/chartConfig'
 import { createTooltipConfig } from '~/services/chartTooltip'
-import { generateMonthDays } from '~/services/date'
+import { generateMonthDays, normalizeToUtcStartOfDay } from '~/services/date'
 import { useOrganizationStore } from '~/stores/organization'
 
 interface BuildChartConfigProps {
@@ -23,9 +23,7 @@ export function useBuildChartConfig(props: BuildChartConfigProps, options: { sta
 
   function resolveCycle(field: 'subscription_start' | 'subscription_end') {
     const org = organizationStore.getOrgByAppId(props.appId) ?? organizationStore.currentOrganization
-    const date = new Date(org?.[field] ?? new Date())
-    date.setHours(0, 0, 0, 0)
-    return date
+    return normalizeToUtcStartOfDay(new Date(org?.[field] ?? new Date()))
   }
   const cycleStart = computed(() => resolveCycle('subscription_start'))
   const cycleEnd = computed(() => resolveCycle('subscription_end'))

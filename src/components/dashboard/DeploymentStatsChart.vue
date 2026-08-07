@@ -19,7 +19,7 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { createLegendConfig, createStackedChartScales } from '~/services/chartConfig'
 import { createTooltipConfig, todayLinePlugin, verticalLinePlugin } from '~/services/chartTooltip'
-import { generateMonthDays, getDaysInCurrentMonth } from '~/services/date'
+import { generateMonthDays, getDaysInCurrentMonth, normalizeToUtcStartOfDay } from '~/services/date'
 import { useOrganizationStore } from '~/stores/organization'
 import { createChartLegendItems } from './chartLegend'
 import ChartLegend from './ChartLegend.vue'
@@ -42,11 +42,8 @@ const isDark = useDark()
 const { t } = useI18n()
 const router = useRouter()
 const organizationStore = useOrganizationStore()
-const cycleStart = new Date(organizationStore.currentOrganization?.subscription_start ?? new Date())
-const cycleEnd = new Date(organizationStore.currentOrganization?.subscription_end ?? new Date())
-// Reset to start of day for consistent date handling
-cycleStart.setHours(0, 0, 0, 0)
-cycleEnd.setHours(0, 0, 0, 0)
+const cycleStart = normalizeToUtcStartOfDay(new Date(organizationStore.currentOrganization?.subscription_start ?? new Date()))
+const cycleEnd = normalizeToUtcStartOfDay(new Date(organizationStore.currentOrganization?.subscription_end ?? new Date()))
 
 const DAY_IN_MS = 1000 * 60 * 60 * 24
 
@@ -110,8 +107,7 @@ function getTodayLimit(labelCount: number) {
   if (!props.useBillingPeriod)
     return labelCount - 1
 
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
+  const today = normalizeToUtcStartOfDay()
 
   // If cycle end is today or in the past, show all data
   if (cycleEnd <= today)

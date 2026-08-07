@@ -141,14 +141,49 @@ export function normalizeToStartOfDay(date: Date) {
   return normalized
 }
 
+/**
+ * Start of the UTC calendar day.
+ * Dashboard daily stats (daily_mau, daily_version, CF Analytics) are bucketed in UTC,
+ * so chart ranges and API date params must use UTC day boundaries — not the browser's local midnight.
+ */
+export function normalizeToUtcStartOfDay(date: Date = new Date()) {
+  const normalized = new Date(date)
+  normalized.setUTCHours(0, 0, 0, 0)
+  return normalized
+}
+
+export function addUtcDays(date: Date, days: number) {
+  const next = new Date(date)
+  next.setUTCDate(next.getUTCDate() + days)
+  return next
+}
+
+/**
+ * YYYY-MM-DD for API / DB date filters using the UTC calendar day.
+ * Never derive this from local midnight via toISOString() — that shifts the day for viewers east of UTC.
+ */
+export function formatUtcDateParam(date: Date | string = new Date()) {
+  const parsed = typeof date === 'string'
+    ? (DATE_ONLY_RE.test(date) ? new Date(`${date}T00:00:00.000Z`) : new Date(date))
+    : new Date(date)
+  if (Number.isNaN(parsed.getTime()))
+    return ''
+  return parsed.toISOString().slice(0, 10)
+}
+
+/** Local Date with the same Y-M-D as the UTC calendar day (for localized chart labels). */
+export function utcCalendarDayAsLocalDate(date: Date) {
+  return new Date(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate())
+}
+
 function getDatesInRange(startDate: Date, endDate: Date) {
   const dates = []
-  const currentDate = normalizeToStartOfDay(startDate)
-  const normalizedEndDate = normalizeToStartOfDay(endDate)
+  const currentDate = normalizeToUtcStartOfDay(startDate)
+  const normalizedEndDate = normalizeToUtcStartOfDay(endDate)
 
   while (currentDate.getTime() <= normalizedEndDate.getTime()) {
-    dates.push(new Date(currentDate))
-    currentDate.setDate(currentDate.getDate() + 1)
+    dates.push(utcCalendarDayAsLocalDate(currentDate))
+    currentDate.setUTCDate(currentDate.getUTCDate() + 1)
   }
 
   return dates
@@ -156,16 +191,13 @@ function getDatesInRange(startDate: Date, endDate: Date) {
 
 export function getChartDateRange(useBillingPeriod: boolean, billingStart?: Date | string | null, billingEnd?: Date | string | null) {
   if (useBillingPeriod) {
-    const startDate = parseDatePreservingUtc(billingStart) ?? new Date()
-    const endDate = parseDatePreservingUtc(billingEnd) ?? new Date()
-    startDate.setHours(0, 0, 0, 0)
-    endDate.setHours(0, 0, 0, 0)
+    const startDate = normalizeToUtcStartOfDay(parseDatePreservingUtc(billingStart) ?? new Date())
+    const endDate = normalizeToUtcStartOfDay(parseDatePreservingUtc(billingEnd) ?? new Date())
     return { startDate, endDate }
   }
 
-  const endDate = normalizeToStartOfDay(new Date())
-  const startDate = new Date(endDate)
-  startDate.setDate(startDate.getDate() - 29)
+  const endDate = normalizeToUtcStartOfDay(new Date())
+  const startDate = addUtcDays(endDate, -29)
   return { startDate, endDate }
 }
 

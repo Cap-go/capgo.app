@@ -3,6 +3,7 @@ import type { Database } from '~/types/supabase.types'
 import colors from 'tailwindcss/colors'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { addUtcDays, normalizeToUtcStartOfDay } from '~/services/date'
 import {
   calculateDemoEvolution,
   calculateDemoTotal,
@@ -47,13 +48,13 @@ const props = defineProps({
 
 // Helper function to filter 30-day data to billing period
 function filterToBillingPeriod(fullData: number[], last30DaysStart: Date, billingStart: Date) {
-  const currentDate = new Date()
+  const currentDate = normalizeToUtcStartOfDay()
 
   // Calculate billing period length
   let currentBillingDay: number
 
-  if (billingStart.getDate() === 1) {
-    currentBillingDay = currentDate.getDate()
+  if (billingStart.getUTCDate() === 1) {
+    currentBillingDay = currentDate.getUTCDate()
   }
   else {
     const billingStartDay = billingStart.getUTCDate()
@@ -68,8 +69,7 @@ function filterToBillingPeriod(fullData: number[], last30DaysStart: Date, billin
 
   // Map 30-day data to billing period
   for (let i = 0; i < 30; i++) {
-    const dataDate = new Date(last30DaysStart)
-    dataDate.setDate(dataDate.getDate() + i)
+    const dataDate = addUtcDays(last30DaysStart, i)
 
     // Check if this date falls within current billing period
     if (dataDate >= billingStart && dataDate <= currentDate) {
@@ -154,16 +154,12 @@ async function calculateStats(forceRefetch = false) {
     const orgChanged = currentCacheOrgId.value !== currentOrgId
     currentCacheOrgId.value = currentOrgId
 
-    // Always work with last 30 days of data
+    // Always work with last 30 UTC days of data
     const last30DaysEnd = new Date()
-    const last30DaysStart = new Date()
-    last30DaysStart.setDate(last30DaysStart.getDate() - 29) // 30 days including today
-    last30DaysStart.setHours(0, 0, 0, 0)
-    last30DaysEnd.setHours(23, 59, 59, 999)
+    const last30DaysStart = addUtcDays(normalizeToUtcStartOfDay(), -29)
 
     // Get billing period dates for filtering
-    const billingStart = new Date(organizationStore.currentOrganization?.subscription_start ?? new Date())
-    billingStart.setHours(0, 0, 0, 0)
+    const billingStart = normalizeToUtcStartOfDay(new Date(organizationStore.currentOrganization?.subscription_start ?? new Date()))
 
     // Determine target apps
     const localAppNames: { [appId: string]: string } = {}

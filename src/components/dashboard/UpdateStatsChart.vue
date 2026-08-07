@@ -19,7 +19,7 @@ import { Bar, Line } from 'vue-chartjs'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { createLegendConfig, createStackedChartScales } from '~/services/chartConfig'
-import { generateMonthDays, getDaysInCurrentMonth } from '~/services/date'
+import { generateMonthDays, getDaysInCurrentMonth, normalizeToUtcStartOfDay } from '~/services/date'
 import { useOrganizationStore } from '~/stores/organization'
 import { createTooltipConfig, todayLinePlugin, verticalLinePlugin } from '../../services/chartTooltip'
 
@@ -45,15 +45,11 @@ const effectiveOrganization = computed(() => {
   return organizationStore.currentOrganization
 })
 const cycleStart = computed(() => {
-  const start = new Date(effectiveOrganization.value?.subscription_start ?? new Date())
-  start.setHours(0, 0, 0, 0)
-  return start
+  return normalizeToUtcStartOfDay(new Date(effectiveOrganization.value?.subscription_start ?? new Date()))
 })
 const cycleEnd = computed(() => {
-  const end = new Date(effectiveOrganization.value?.subscription_end ?? new Date())
-  end.setHours(0, 0, 0, 0)
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
+  const end = normalizeToUtcStartOfDay(new Date(effectiveOrganization.value?.subscription_end ?? new Date()))
+  const today = normalizeToUtcStartOfDay()
   return end < today ? today : end
 })
 
@@ -151,8 +147,7 @@ function getTodayLimit(labelCount: number) {
   if (!props.useBillingPeriod)
     return labelCount - 1
 
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
+  const today = normalizeToUtcStartOfDay()
 
   // If cycle end is today or in the past, show all data
   if (cycleEnd.value <= today)

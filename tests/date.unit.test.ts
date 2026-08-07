@@ -7,11 +7,15 @@ import {
   formatLocalDateTimeWithSeconds,
   formatLocalMonthYear,
   formatLocalTime,
+  formatUtcDateParam,
   formatUtcDateTimeAsLocal,
   generateChartDayLabels,
   generateMonthDays,
+  getChartDateRange,
   getDateLocale,
+  normalizeToUtcStartOfDay,
   resolveDateLocale,
+  utcCalendarDayAsLocalDate,
 } from '../src/services/date'
 import { useMainStore } from '../src/stores/main'
 
@@ -89,24 +93,49 @@ describe('date helpers', () => {
   })
 
   it('generates localized labels for chart date ranges', () => {
-    const startDate = new Date(2026, 0, 31)
-    const endDate = new Date(2026, 1, 2)
+    const startDate = new Date(Date.UTC(2026, 0, 31))
+    const endDate = new Date(Date.UTC(2026, 1, 2))
 
     expect(generateChartDayLabels(true, startDate, endDate)).toEqual([
-      formatLocalDateShort(startDate),
-      formatLocalDateShort(new Date(2026, 1, 1)),
-      formatLocalDateShort(endDate),
+      formatLocalDateShort(utcCalendarDayAsLocalDate(startDate)),
+      formatLocalDateShort(utcCalendarDayAsLocalDate(new Date(Date.UTC(2026, 1, 1)))),
+      formatLocalDateShort(utcCalendarDayAsLocalDate(endDate)),
     ])
   })
 
   it('generates localized labels for billing-cycle charts', () => {
-    const cycleStart = new Date(2026, 2, 30)
-    const cycleEnd = new Date(2026, 3, 1)
+    const cycleStart = new Date(Date.UTC(2026, 2, 30))
+    const cycleEnd = new Date(Date.UTC(2026, 3, 1))
 
     expect(generateMonthDays(true, cycleStart, cycleEnd)).toEqual([
-      formatLocalDateShort(cycleStart),
-      formatLocalDateShort(new Date(2026, 2, 31)),
-      formatLocalDateShort(cycleEnd),
+      formatLocalDateShort(utcCalendarDayAsLocalDate(cycleStart)),
+      formatLocalDateShort(utcCalendarDayAsLocalDate(new Date(Date.UTC(2026, 2, 31)))),
+      formatLocalDateShort(utcCalendarDayAsLocalDate(cycleEnd)),
     ])
+  })
+
+  it('formats UTC date params without shifting for local midnight east of UTC', () => {
+    // Europe-like: local Aug 7 00:00 is still Aug 6 in UTC for positive offsets.
+    // formatUtcDateParam must use the instant's UTC calendar day, not local→ISO.
+    const europeLocalMidnight = new Date('2026-08-06T22:00:00.000Z') // CEST Aug 7 00:00
+    expect(formatUtcDateParam(europeLocalMidnight)).toBe('2026-08-06')
+
+    const utcMidnight = new Date('2026-08-07T00:00:00.000Z')
+    expect(formatUtcDateParam(utcMidnight)).toBe('2026-08-07')
+    expect(formatUtcDateParam(normalizeToUtcStartOfDay(europeLocalMidnight))).toBe('2026-08-06')
+  })
+
+  it('builds last-30-days chart ranges on UTC midnight boundaries', () => {
+    const range = getChartDateRange(false)
+    expect(range.endDate.getUTCHours()).toBe(0)
+    expect(range.endDate.getUTCMinutes()).toBe(0)
+    expect(range.startDate.getUTCHours()).toBe(0)
+    expect(formatUtcDateParam(range.endDate)).toBe(formatUtcDateParam(normalizeToUtcStartOfDay(new Date())))
+    const daySpan = Math.round((range.endDate.getTime() - range.startDate.getTime()) / (24 * 60 * 60 * 1000))
+    expect(daySpan).toBe(29)
+  })
+
+  it('keeps formatUtcDateParam stable for date-only strings', () => {
+    expect(formatUtcDateParam('2026-08-07')).toBe('2026-08-07')
   })
 })
