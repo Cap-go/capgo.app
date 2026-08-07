@@ -1341,7 +1341,13 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   if (options.verbose)
     log.info(`[Verbose] Target channel${channels.length > 1 ? 's' : ''}: ${channelLabel}`)
 
-  // Now if it does exist we will fetch the org id
+  // Verify the app exists and this key may upload BEFORE the org lookup, so a
+  // missing app or bad key yields an actionable message (e.g. run `app add`)
+  // instead of the opaque "Cannot get organization id" thrown below.
+  if (options.verbose)
+    log.info(`[Verbose] Checking app existence and upload permission...`)
+  await checkAppExistsAndHasPermissionOrgErr(supabase, apikey, appid, 'app.upload_bundle', silent, true)
+
   const orgId = await getOrganizationId(supabase, appid)
   if (options.verbose)
     log.info(`[Verbose] Organization ID: ${orgId}`)

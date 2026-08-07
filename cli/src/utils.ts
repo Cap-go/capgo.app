@@ -2062,8 +2062,9 @@ export async function getOrganizationId(supabase: SupabaseClient<Database>, appI
     .single()
 
   if (!data || error) {
-    log.error(`Cannot get organization id for app id ${appId}`)
-    formatError(error)
+    // Surface the underlying PostgREST cause instead of discarding it — a bare
+    // "Cannot get organization id" leaves both users and triage with no signal.
+    log.error(`Cannot get organization id for app id ${appId}: ${formatError(error)}`)
     throw new Error(`Cannot get organization id for app id ${appId}`)
   }
   return data.owner_org
