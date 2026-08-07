@@ -14,7 +14,7 @@ import { invokeCapgoApi } from '~/services/capgoApi'
 import { formatIncludedThenPrice } from '~/services/creditPricing'
 import { formatNumberValue } from '~/services/formatLocale'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
-import { shouldShowExpiredTrialPlansState } from '~/services/paymentRequired'
+import { resolveBillingPaidAt, shouldShowExpiredTrialPlansState, shouldShowPlanFailureBanner } from '~/services/paymentRequired'
 import { checkPermissions } from '~/services/permissions'
 import { getAffonsoReferral, getDatafastAttribution, openCheckout } from '~/services/stripe'
 import { getCreditUnitPricing, getCurrentPlanNameOrg, useSupabase } from '~/services/supabase'
@@ -48,14 +48,19 @@ const showAdminModal = ref(false)
 const { currentOrganization } = storeToRefs(organizationStore)
 const creditUnitPrices = ref<Partial<Record<Database['public']['Enums']['credit_metric_type'], number>>>({})
 const paidAt = ref<string | null | undefined>(undefined)
+const billingLookupFailed = ref(false)
 const showExpiredTrialState = computed(() => {
   return shouldShowExpiredTrialPlansState(organizationStore.currentOrganizationFailed, isMobile, paidAt.value)
+})
+const showPlanFailureBanner = computed(() => {
+  return shouldShowPlanFailureBanner(organizationStore.currentOrganizationFailed, isMobile, paidAt.value, billingLookupFailed.value)
 })
 
 let billingLookupRun = 0
 watch(() => currentOrganization.value?.gid, async (orgId) => {
   const currentRun = ++billingLookupRun
   paidAt.value = undefined
+  billingLookupFailed.value = false
 
   if (isMobile || !orgId)
     return
@@ -66,10 +71,16 @@ watch(() => currentOrganization.value?.gid, async (orgId) => {
     .eq('id', orgId)
     .maybeSingle()
 
-  if (currentRun !== billingLookupRun || error || !data)
+  if (currentRun !== billingLookupRun)
     return
 
-  paidAt.value = data.stripe_info?.paid_at ?? null
+  if (error || !data) {
+    billingLookupFailed.value = true
+    console.error('Failed to load organization billing history', { orgId, error })
+    return
+  }
+
+  paidAt.value = resolveBillingPaidAt(data.stripe_info)
 }, { immediate: true })
 
 interface PlanFeature {
@@ -559,16 +570,20 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
       </div>
 
       <!-- Error Message -->
-      <div v-if="organizationStore.currentOrganizationFailed && !showExpiredTrialState" class="px-4 py-2 mb-4 font-medium text-center text-white bg-red-500 rounded-lg shrink-0">
+      <div v-if="showPlanFailureBanner" class="px-4 py-2 mb-4 font-medium text-center text-white bg-red-500 rounded-lg shrink-0">
         {{ t('plan-failed') }}
       </div>
 
-      <template v-if="!showExpiredTrialState">
+      <div
+        v-if="!isMobile"
+        class="flex flex-col shrink-0"
+        :class="showExpiredTrialState ? 'order-2 mt-6' : 'order-0 mb-6'"
+      >
         <!-- Credits CTA: shows info banner for credits-only orgs, upsell CTA for others -->
-        <CreditsCta v-if="!isMobile" class="mb-6 shrink-0" :credits-only="isCreditsOnly" />
+        <CreditsCta class="shrink-0" :credits-only="isCreditsOnly" />
 
         <!-- Expert as a Service CTA -->
-        <div v-if="!isMobile" class="mb-6 shrink-0">
+        <div class="mt-6 shrink-0">
           <div class="flex flex-col gap-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900/70 sm:flex-row sm:items-center sm:justify-between">
             <div class="min-w-0 flex-1">
               <p class="text-sm font-semibold text-slate-900 dark:text-white">
@@ -589,10 +604,10 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
             </a>
           </div>
         </div>
-      </template>
+      </div>
 
       <!-- Plans Grid -->
-      <div class="grid content-start min-h-0 grid-cols-1 gap-4 p-1 overflow-y-auto md:grid-cols-2 xl:grid-cols-4 grow">
+      <div class="grid content-start min-h-0 grid-cols-1 gap-4 p-1 overflow-y-auto md:grid-cols-2 xl:grid-cols-4 grow" :class="showExpiredTrialState ? 'order-1' : 'order-0'">
         <div
           v-for="(p, index) in mainStore.plans"
           :key="p.price_m"
@@ -678,36 +693,8 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
         </div>
       </div>
 
-      <template v-if="showExpiredTrialState">
-        <!-- Credits CTA: shows info banner for credits-only orgs, upsell CTA for others -->
-        <CreditsCta v-if="!isMobile" class="mt-6 shrink-0" :credits-only="isCreditsOnly" />
-
-        <!-- Expert as a Service CTA -->
-        <div v-if="!isMobile" class="mt-6 shrink-0">
-          <div class="flex flex-col gap-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900/70 sm:flex-row sm:items-center sm:justify-between">
-            <div class="min-w-0 flex-1">
-              <p class="text-sm font-semibold text-slate-900 dark:text-white">
-                {{ t('expert-service-title') }}
-              </p>
-              <p class="mt-1 max-w-3xl text-xs leading-5 text-slate-600 dark:text-slate-300">
-                {{ t('expert-service-desc') }}
-              </p>
-            </div>
-            <a
-              class="d-btn d-btn-sm h-auto min-h-10 w-full shrink-0 justify-center gap-2 whitespace-nowrap rounded-lg border-none bg-blue-600 px-4 text-xs font-semibold text-white hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600 sm:w-auto"
-              href="https://capgo.app/premium-support/"
-              rel="noopener noreferrer"
-              target="_blank"
-            >
-              {{ t('expert-service-cta') }}
-              <IconArrowRight class="h-3.5 w-3.5" aria-hidden="true" />
-            </a>
-          </div>
-        </div>
-      </template>
-
       <!-- Footer / Contact -->
-      <div v-if="!isMobile" class="mt-4 text-xs text-center text-gray-500 dark:text-gray-400 shrink-0">
+      <div v-if="!isMobile" class="order-3 mt-4 text-xs text-center text-gray-500 dark:text-gray-400 shrink-0">
         {{ t('plan-page-warn').replace('%ORG_NAME%', currentOrganization?.name ?? '') }}
         <a class="text-blue-600 hover:underline" href="https://capgo.app/docs/docs/webapp/payment/">{{ t('plan-page-warn-2') }}</a>
       </div>

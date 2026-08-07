@@ -101,21 +101,25 @@ Add these keys to `messages/en.json` in alphabetical order:
 
 - [ ] **Step 2: Load billing history with organization-switch protection**
 
-Import `shouldShowExpiredTrialCopy`, then add billing state beside the existing refs:
+Import the shared billing-state helpers, then add billing state beside the existing refs. Keep the banner neutral while the lookup is pending, but preserve the existing failure presentation when the lookup itself fails:
 
 ```ts
-import { shouldShowExpiredTrialCopy } from '~/services/paymentRequired'
+import { resolveBillingPaidAt, shouldShowExpiredTrialPlansState, shouldShowPlanFailureBanner } from '~/services/paymentRequired'
 
 const paidAt = ref<string | null | undefined>(undefined)
+const billingLookupFailed = ref(false)
 const showExpiredTrialState = computed(() => {
-  return organizationStore.currentOrganizationFailed
-    && shouldShowExpiredTrialCopy(isMobile, paidAt.value)
+  return shouldShowExpiredTrialPlansState(organizationStore.currentOrganizationFailed, isMobile, paidAt.value)
+})
+const showPlanFailureBanner = computed(() => {
+  return shouldShowPlanFailureBanner(organizationStore.currentOrganizationFailed, isMobile, paidAt.value, billingLookupFailed.value)
 })
 
 let billingLookupRun = 0
 watch(() => currentOrganization.value?.gid, async (orgId) => {
   const currentRun = ++billingLookupRun
   paidAt.value = undefined
+  billingLookupFailed.value = false
 
   if (isMobile || !orgId)
     return
@@ -126,10 +130,16 @@ watch(() => currentOrganization.value?.gid, async (orgId) => {
     .eq('id', orgId)
     .maybeSingle()
 
-  if (currentRun !== billingLookupRun || error || !data)
+  if (currentRun !== billingLookupRun)
     return
 
-  paidAt.value = data.stripe_info?.paid_at ?? null
+  if (error || !data) {
+    billingLookupFailed.value = true
+    console.error('Failed to load organization billing history', { orgId, error })
+    return
+  }
+
+  paidAt.value = resolveBillingPaidAt(data.stripe_info)
 }, { immediate: true })
 ```
 
