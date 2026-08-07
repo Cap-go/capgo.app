@@ -17,6 +17,7 @@ export interface CapgoConfig {
   supaHost: string
   supaKey: string
   supbaseId: string
+  supaProxyPath?: string
   host: string
   hostWeb: string
   stripeEnabled?: boolean
@@ -32,6 +33,7 @@ export function getLocalConfig() {
     supaHost: import.meta.env.VITE_SUPABASE_URL as string,
     supaKey: import.meta.env.VITE_SUPABASE_ANON_KEY as string,
     supbaseId: import.meta.env.VITE_SUPABASE_URL?.split('//')[1].split('.')[0].split(':')[0] as string,
+    supaProxyPath: import.meta.env.VITE_SUPABASE_PROXY_PATH as string | undefined,
     host: import.meta.env.VITE_APP_URL as string,
     hostWeb: import.meta.env.LANDING_URL as string,
     stripeEnabled: stripeEnabledEnv === undefined ? true : stripeEnabledEnv !== 'false',
@@ -159,10 +161,16 @@ export async function getRemoteConfig() {
 }
 
 export function getSupabaseHost(): string {
-  let host = config.supaHost
-  while (host.endsWith('/'))
-    host = host.slice(0, -1)
-  return host
+  return resolveSupabaseHost(config.supaHost, config.supaProxyPath)
+}
+
+export function resolveSupabaseHost(supaHost: string, proxyPath?: string, runtimeOrigin = globalThis.location?.origin): string {
+  const normalizedHost = supaHost.replace(/\/+$/, '')
+  if (!proxyPath || !runtimeOrigin)
+    return normalizedHost
+
+  const normalizedProxyPath = `/${proxyPath.replace(/^\/+|\/+$/g, '')}/`
+  return new URL(normalizedProxyPath, runtimeOrigin).href
 }
 
 export function useSupabase() {
