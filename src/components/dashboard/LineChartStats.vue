@@ -3,27 +3,15 @@ import type { ChartData, ChartOptions, Plugin } from 'chart.js'
 import type { AnnotationOptions } from '../../services/chartAnnotations'
 import type { TooltipClickHandler } from '../../services/chartTooltip'
 import { useDark } from '@vueuse/core'
-import {
-  BarController,
-  BarElement,
-  CategoryScale,
-  Chart,
-  Filler,
-  LinearScale,
-  LineController,
-  LineElement,
-  PointElement,
-  Tooltip,
-} from 'chart.js'
 import { computed } from 'vue'
 import { Bar, Line } from 'vue-chartjs'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
-import { useOrgBillingCycleChart } from '~/composables/useOrgBillingCycleChart'
+import { useCurrentOrgBillingCycleChart } from '~/composables/useOrgBillingCycleChart'
 import { createLegendConfig, createStackedChartScales } from '~/services/chartConfig'
 import { createTodayLineOptions, getSafeChartHue } from '~/services/chartTodayLine'
+import { registerDashboardCharts } from '~/services/dashboardChartRegister'
 import { generateMonthDays, getCurrentDayMonth, getDaysInCurrentMonth } from '~/services/date'
-import { useOrganizationStore } from '~/stores/organization'
 import { inlineAnnotationPlugin } from '../../services/chartAnnotations'
 import { createTooltipConfig, todayLinePlugin, verticalLinePlugin } from '../../services/chartTooltip'
 import { createChartLegendItems } from './chartLegend'
@@ -51,54 +39,32 @@ const props = defineProps({
     default: () => ({}),
   },
 })
+
+registerDashboardCharts()
+
 const isDark = useDark()
 const { t } = useI18n()
 const router = useRouter()
-const organizationStore = useOrganizationStore()
-const chartCycle = useOrgBillingCycleChart(
-  () => props.useBillingPeriod,
-  () => organizationStore.currentOrganization?.subscription_start,
-  () => organizationStore.currentOrganization?.subscription_end,
-)
+const chartCycle = useCurrentOrgBillingCycleChart(() => props.useBillingPeriod)
 const cycleStart = chartCycle.resolveCycleStart()
 const cycleEnd = chartCycle.resolveCycleEnd()
 const { todayLimit } = chartCycle
 
-// Create a reverse mapping from app name to app ID for tooltip clicks
-const appIdByLabel = computed(() => {
-  const mapping: Record<string, string> = {}
-  // appNames prop is { appId: appName }, we need { appName: appId }
-  Object.entries(props.appNames as Record<string, string>).forEach(([appId, appName]) => {
-    mapping[appName] = appId
-  })
-  return mapping
+const tooltipClickHandler = computed<TooltipClickHandler>(() => {
+  const appIdByLabel: Record<string, string> = {}
+  for (const [appId, appName] of Object.entries(props.appNames as Record<string, string>))
+    appIdByLabel[appName] = appId
+  return {
+    onAppClick: (appId: string) => router.push(`/app/${appId}`),
+    appIdByLabel,
+  }
 })
 
-// Click handler for tooltip items - navigates to app detail page
-const tooltipClickHandler = computed<TooltipClickHandler>(() => ({
-  onAppClick: (appId: string) => {
-    router.push(`/app/${appId}`)
-  },
-  appIdByLabel: appIdByLabel.value,
-}))
-
-// View mode is now controlled by parent component
 const viewMode = computed(() => props.accumulated ? 'cumulative' : 'daily')
 
 function monthdays() {
   return generateMonthDays(props.useBillingPeriod, cycleStart, cycleEnd)
 }
-Chart.register(
-  Tooltip,
-  BarController,
-  BarElement,
-  LineController,
-  PointElement,
-  CategoryScale,
-  LinearScale,
-  LineElement,
-  Filler,
-)
 
 const accumulateData = computed(() => {
   const monthDay = getCurrentDayMonth()

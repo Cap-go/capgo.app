@@ -2,27 +2,16 @@
 import type { ChartData, ChartOptions, Plugin } from 'chart.js'
 import type { TooltipClickHandler } from '~/services/chartTooltip'
 import { useDark } from '@vueuse/core'
-import {
-  BarController,
-  BarElement,
-  CategoryScale,
-  Chart,
-  LinearScale,
-  LineController,
-  LineElement,
-  PointElement,
-  Tooltip,
-} from 'chart.js'
 import { computed } from 'vue'
 import { Bar, Line } from 'vue-chartjs'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
-import { useOrgBillingCycleChart } from '~/composables/useOrgBillingCycleChart'
+import { useCurrentOrgBillingCycleChart } from '~/composables/useOrgBillingCycleChart'
 import { createLegendConfig, createStackedChartScales } from '~/services/chartConfig'
 import { createTodayLineOptions, generateAppChartColors, getSafeChartHue } from '~/services/chartTodayLine'
 import { createTooltipConfig, todayLinePlugin, verticalLinePlugin } from '~/services/chartTooltip'
+import { registerDashboardCharts } from '~/services/dashboardChartRegister'
 import { generateMonthDays, getDaysInCurrentMonth } from '~/services/date'
-import { useOrganizationStore } from '~/stores/organization'
 import { createChartLegendItems } from './chartLegend'
 import ChartLegend from './ChartLegend.vue'
 
@@ -40,74 +29,52 @@ const props = defineProps({
   accumulated: { type: Boolean, default: false },
 })
 
+registerDashboardCharts()
+
 const isDark = useDark()
 const { t } = useI18n()
 const router = useRouter()
-const organizationStore = useOrganizationStore()
-const chartCycle = useOrgBillingCycleChart(
-  () => props.useBillingPeriod,
-  () => organizationStore.currentOrganization?.subscription_start,
-  () => organizationStore.currentOrganization?.subscription_end,
-)
+const chartCycle = useCurrentOrgBillingCycleChart(() => props.useBillingPeriod)
 const cycleStart = chartCycle.resolveCycleStart()
 const cycleEnd = chartCycle.resolveCycleEnd()
 const { todayLimit, transformDailySeries } = chartCycle
 
-// Determine mode based on which data is provided
 const isChannelMode = computed(() => Object.keys(props.dataByChannel).length > 0)
 const isAppMode = computed(() => Object.keys(props.dataByApp).length > 0)
 const hasBreakdownData = computed(() => isChannelMode.value || isAppMode.value)
 
-// Create a reverse mapping from channel/app name to ID for tooltip clicks
 const idByLabel = computed(() => {
   const mapping: Record<string, string> = {}
   if (isChannelMode.value) {
-    Object.entries(props.channelNames as Record<string, string>).forEach(([channelId, channelName]) => {
+    for (const [channelId, channelName] of Object.entries(props.channelNames as Record<string, string>))
       mapping[channelName] = channelId
-    })
   }
   else if (isAppMode.value) {
-    Object.entries(props.appNames as Record<string, string>).forEach(([appId, appName]) => {
+    for (const [appId, appName] of Object.entries(props.appNames as Record<string, string>))
       mapping[appName] = appId
-    })
   }
   return mapping
 })
 
-// Click handler for tooltip items - navigates to channel page (channel mode) or app page (app mode)
 const tooltipClickHandler = computed<TooltipClickHandler | undefined>(() => {
   if (isChannelMode.value) {
     return {
       onAppClick: (channelId: string) => {
         const appId = (props.channelAppIds as Record<string, string>)[channelId]
-        if (appId) {
+        if (appId)
           router.push(`/app/${appId}/channel/${channelId}`)
-        }
       },
       appIdByLabel: idByLabel.value,
     }
   }
-  else if (isAppMode.value) {
+  if (isAppMode.value) {
     return {
-      onAppClick: (appId: string) => {
-        router.push(`/app/${appId}`)
-      },
+      onAppClick: (appId: string) => router.push(`/app/${appId}`),
       appIdByLabel: idByLabel.value,
     }
   }
   return undefined
 })
-
-Chart.register(
-  Tooltip,
-  BarController,
-  BarElement,
-  LineController,
-  LineElement,
-  PointElement,
-  CategoryScale,
-  LinearScale,
-)
 
 function monthdays() {
   return generateMonthDays(props.useBillingPeriod, cycleStart, cycleEnd)

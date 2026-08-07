@@ -2,6 +2,7 @@ import type { MaybeRefOrGetter } from 'vue'
 import { toValue } from 'vue'
 import { getTodayLimit, transformSeries } from '~/services/buildCharts'
 import { normalizeToUtcStartOfDay } from '~/services/date'
+import { useOrganizationStore } from '~/stores/organization'
 
 /**
  * Shared UTC billing-cycle helpers for dashboard daily charts.
@@ -36,4 +37,14 @@ export function useOrgBillingCycleChart(
     todayLimit,
     transformDailySeries,
   }
+}
+
+/** Convenience wrapper for charts scoped to the current organization. */
+export function useCurrentOrgBillingCycleChart(useBillingPeriod: MaybeRefOrGetter<boolean>) {
+  const organizationStore = useOrganizationStore()
+  return useOrgBillingCycleChart(
+    useBillingPeriod,
+    () => organizationStore.currentOrganization?.subscription_start,
+    () => organizationStore.currentOrganization?.subscription_end,
+  )
 }

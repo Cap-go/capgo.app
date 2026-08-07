@@ -2,17 +2,6 @@
 import type { ChartData, ChartOptions, Plugin } from 'chart.js'
 import type { TooltipClickHandler } from '~/services/chartTooltip'
 import { useDark } from '@vueuse/core'
-import {
-  BarController,
-  BarElement,
-  CategoryScale,
-  Chart,
-  LinearScale,
-  LineController,
-  LineElement,
-  PointElement,
-  Tooltip,
-} from 'chart.js'
 import dayjs from 'dayjs'
 import { computed } from 'vue'
 import { Bar, Line } from 'vue-chartjs'
@@ -21,6 +10,7 @@ import { useRouter } from 'vue-router'
 import { useOrgBillingCycleChart } from '~/composables/useOrgBillingCycleChart'
 import { createLegendConfig, createStackedChartScales } from '~/services/chartConfig'
 import { createTodayLineOptions } from '~/services/chartTodayLine'
+import { registerDashboardCharts } from '~/services/dashboardChartRegister'
 import { generateMonthDays, getDaysInCurrentMonth } from '~/services/date'
 import { useOrganizationStore } from '~/stores/organization'
 import { createTooltipConfig, todayLinePlugin, verticalLinePlugin } from '../../services/chartTooltip'
@@ -36,6 +26,8 @@ const props = defineProps({
   accumulated: { type: Boolean, default: false },
   appId: { type: String, default: '' },
 })
+
+registerDashboardCharts()
 
 const isDark = useDark()
 const { t } = useI18n()
@@ -110,17 +102,6 @@ const tooltipClickHandler = computed<TooltipClickHandler | undefined>(() => {
     appIdByLabel: actionIdByLabel,
   }
 })
-
-Chart.register(
-  Tooltip,
-  BarController,
-  BarElement,
-  LineController,
-  LineElement,
-  PointElement,
-  CategoryScale,
-  LinearScale,
-)
 
 const ACTION_STYLES: Record<string, { barBackground: string, barBorder: string, lineBackground: string, lineBorder: string }> = {
   requested: {
