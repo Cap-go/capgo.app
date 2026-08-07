@@ -1,12 +1,13 @@
 import type { PackageManagerRunner, PackageManagerType } from '@capgo/find-package-manager'
 import type { ChildProcess } from 'node:child_process'
+import { findInstallCommand } from '@capgo/find-package-manager'
 import { spawnSync } from 'node:child_process'
 
 export type SupportedPackageManager = Exclude<PackageManagerType, 'unknown'>
 
 export interface PackageManagerInfo {
   pm: SupportedPackageManager
-  command: 'install'
+  command: ReturnType<typeof findInstallCommand>
   installCommand: string
   runner: PackageManagerRunner
 }
@@ -86,10 +87,15 @@ export function probePackageManagerCommand(commandLine: string, options: Executa
   if (!probe.available || commandLine !== 'yarn dlx')
     return probe
 
-  return {
-    ...probe,
-    available: probe.status === 0 && supportsYarnDlx(probe.stdout?.trim() ?? ''),
+  if (!supportsYarnDlx(probe.stdout?.trim() ?? '')) {
+    return {
+      ...probe,
+      available: false,
+      error: new Error('Runner "yarn dlx" requires Yarn 2 or newer.'),
+    }
   }
+
+  return probe
 }
 
 export function getAvailablePackageManagers(
@@ -100,10 +106,11 @@ export function getAvailablePackageManagers(
 }
 
 export function getPackageManagerInfo(pm: SupportedPackageManager): PackageManagerInfo {
+  const command = findInstallCommand(pm)
   return {
     pm,
-    command: 'install',
-    installCommand: `${pm} install`,
+    command,
+    installCommand: `${pm} ${command}`,
     runner: packageManagerRunners[pm],
   }
 }

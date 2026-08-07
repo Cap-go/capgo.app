@@ -3283,7 +3283,9 @@ async function streamCommandInInitPanel(params: {
     }
   }
 
-  const executableProbe = probeExecutable(runnerCmd, { cwd: params.cwd })
+  const executableProbe = params.runner
+    ? probePackageManagerCommand(params.runner, { cwd: params.cwd })
+    : probeExecutable(runnerCmd, { cwd: params.cwd })
   if (!executableProbe.available) {
     const error = executableProbe.error?.code === 'ENOENT'
       ? createMissingExecutableError(runnerCmd)
@@ -3359,8 +3361,6 @@ async function selectAvailablePackageManager(
   orgId: string,
   apikey: string,
 ): Promise<PackageManagerInfo> {
-  preparePackageManagerCommandEnvironment(env)
-
   if (detectedPackageManager.pm === 'unknown')
     throw createMissingExecutableError('unknown', env.PATH)
 
@@ -3369,6 +3369,7 @@ async function selectAvailablePackageManager(
   if (!missingExecutable)
     return detectedPackageManager
 
+  preparePackageManagerCommandEnvironment(env)
   const alternatives = getAvailablePackageManagers(detectedPackageManager.pm, isAvailable)
   if (alternatives.length === 0)
     throw createMissingExecutableError(missingExecutable, env.PATH)
