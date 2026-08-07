@@ -508,7 +508,7 @@ export async function fetchTestRequest(
  */
 export async function warmEdgeEndpoint(
   path: string,
-  options: RequestInit = { method: 'POST', headers: { 'Content-Type': 'application/json', 'apisecret': 'testsecret' }, body: '{}' },
+  options: RequestInit = { method: 'POST', headers: { 'Content-Type': 'application/json', 'apisecret': API_SECRET }, body: '{}' },
 ): Promise<void> {
   const url = path.startsWith('http') ? path : getEndpointUrl(path)
   for (let attempt = 1; attempt <= 5; attempt++) {

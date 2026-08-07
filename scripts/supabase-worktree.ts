@@ -330,7 +330,9 @@ function getCloudflareWorkerPorts(): number[] {
     return []
 
   const offset = Number(raw)
-  if (!Number.isSafeInteger(offset) || offset < 0)
+  // Match scripts/start-cloudflare-workers.sh / cloudflare-test-config.ts so we never
+  // freeHostPorts() derived ports from an invalid offset before the launcher rejects it.
+  if (!Number.isSafeInteger(offset) || offset < 0 || offset > 50_000)
     return []
 
   // wrangler worker ports + inspector ports from scripts/start-cloudflare-workers.sh

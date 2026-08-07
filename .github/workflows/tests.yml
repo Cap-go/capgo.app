@@ -430,7 +430,7 @@ jobs:
       - name: Run backend integration tests
         env:
           VITEST_SHARD: ${{ matrix.shard }}
-        run: bun run supabase:with-env -- bunx vitest run --exclude=tests/*.unit.test.ts --exclude=tests/cli* --exclude=tests/read-replica-schema-catalog.test.ts --exclude=tests/updates* --exclude=tests/stats* --exclude=tests/channel_self* $(sed 's|^|--exclude=|' tests/tinbase-db-tests.txt | tr '\n' ' ') --shard="$VITEST_SHARD"
+        run: bun run supabase:with-env -- bunx vitest run --exclude=tests/*.unit.test.ts --exclude=tests/cli* --exclude=tests/read-replica-schema-catalog.test.ts --exclude=tests/updates* --exclude=tests/stats* --exclude=tests/channel_self* --exclude=tests/channel-rate-limit.test.ts $(sed 's|^|--exclude=|' tests/tinbase-db-tests.txt | tr '\n' ' ') --shard="$VITEST_SHARD"
       - name: Show Edge server logs after backend test failure
         if: failure() && steps.bootstrap_edge_server.outputs.log_path != ''
         run: |
@@ -478,7 +478,9 @@ jobs:
         uses: actions/cache@v5 # v5
         with:
           path: ${{ env.DENO_DIR }}
-          key: my_cache_key
+          key: deno-${{ runner.os }}-${{ hashFiles('supabase/functions/deno.lock') }}
+          restore-keys: |
+            deno-${{ runner.os }}-
       - name: Checkout repository
         uses: actions/checkout@v6 # v6
         with:
@@ -497,19 +499,10 @@ jobs:
         run: ln -sfn supabase/templates templates
       - name: Stop this job's Supabase stack
         run: bun scripts/supabase-worktree.ts stop --no-backup || true
-      - name: Run Supabase Start (deps install in background)
-        run: |
-          (
-            set -e
-            bun install
-          ) > "${RUNNER_TEMP}/deps-install.log" 2>&1 &
-          deps_install_pid=$!
-          bun scripts/supabase-worktree.ts start -x imgproxy,studio,mailpit,realtime,postgres-meta,supavisor,logflare,vector
-          if ! wait "${deps_install_pid}"; then
-            echo "::error::Dependency install failed"
-            cat "${RUNNER_TEMP}/deps-install.log"
-            exit 1
-          fi
+      - name: Install dependencies
+        run: bun install
+      - name: Run Supabase Start
+        run: bun scripts/supabase-worktree.ts start -x imgproxy,studio,mailpit,realtime,postgres-meta,supavisor,logflare,vector
       - name: Export isolated Supabase endpoints
         run: |
           bun scripts/supabase-worktree.ts with-env bun -e 'const apiUrl = new URL(process.env.SUPABASE_URL ?? ""); const dbUrl = process.env.SUPABASE_DB_URL ?? ""; if (!apiUrl.host || !dbUrl) throw new Error("Isolated Supabase status is missing API_URL or DB_URL."); console.log(`SUPABASE_FUNCTIONS_HEALTH_URL=http-get://${apiUrl.host}/functions/v1/ok`); console.log(`MAIN_SUPABASE_DB_URL=${dbUrl}`)' >> "$GITHUB_ENV"
@@ -548,7 +541,7 @@ jobs:
             done
           done
       - name: Run backend plugin integration tests (serial)
-        run: bun run supabase:with-env -- bunx vitest run tests/updates*.test.ts tests/stats*.test.ts tests/channel_self*.test.ts --exclude=tests/*.unit.test.ts --no-file-parallelism --maxWorkers=1 --maxConcurrency=1
+        run: bun run supabase:with-env -- bunx vitest run tests/updates*.test.ts tests/stats*.test.ts tests/channel_self*.test.ts tests/channel-rate-limit.test.ts --exclude=tests/*.unit.test.ts --exclude=tests/stats-export-cors.test.ts --no-file-parallelism --maxWorkers=1 --maxConcurrency=1
       - name: Show Edge server logs after backend plugin test failure
         if: failure() && steps.bootstrap_edge_server.outputs.log_path != ''
         run: |
@@ -813,19 +806,10 @@ jobs:
         run: ln -sfn supabase/templates templates
       - name: Stop this job's Supabase stack
         run: bun scripts/supabase-worktree.ts stop --no-backup || true
-      - name: Run Supabase Start (deps install in background)
-        run: |
-          (
-            set -e
-            bun install
-          ) > "${RUNNER_TEMP}/deps-install.log" 2>&1 &
-          deps_install_pid=$!
-          bun scripts/supabase-worktree.ts start -x imgproxy,studio,mailpit,realtime,postgres-meta,supavisor,logflare,vector
-          if ! wait "${deps_install_pid}"; then
-            echo "::warning::Background dependency install failed (often OOM during Docker start retries); retrying after Supabase is up"
-            cat "${RUNNER_TEMP}/deps-install.log" || true
-            bun install
-          fi
+      - name: Install dependencies
+        run: bun install
+      - name: Run Supabase Start
+        run: bun scripts/supabase-worktree.ts start -x imgproxy,studio,mailpit,realtime,postgres-meta,supavisor,logflare,vector
       - name: Export isolated test endpoints
         run: |
           {
@@ -928,19 +912,10 @@ jobs:
         run: ln -sfn supabase/templates templates
       - name: Stop this job's Supabase stack
         run: bun scripts/supabase-worktree.ts stop --no-backup || true
-      - name: Run Supabase Start (deps install in background)
-        run: |
-          (
-            set -e
-            bun install
-          ) > "${RUNNER_TEMP}/deps-install.log" 2>&1 &
-          deps_install_pid=$!
-          bun scripts/supabase-worktree.ts start -x imgproxy,studio,mailpit,realtime,postgres-meta,supavisor,logflare,vector
-          if ! wait "${deps_install_pid}"; then
-            echo "::warning::Background dependency install failed (often OOM during Docker start retries); retrying after Supabase is up"
-            cat "${RUNNER_TEMP}/deps-install.log" || true
-            bun install
-          fi
+      - name: Install dependencies
+        run: bun install
+      - name: Run Supabase Start
+        run: bun scripts/supabase-worktree.ts start -x imgproxy,studio,mailpit,realtime,postgres-meta,supavisor,logflare,vector
       - name: Export isolated test endpoints
         run: |
           {

@@ -1,9 +1,9 @@
 <script setup lang="ts">
+import type { LocationQueryRaw } from 'vue-router'
 import type { DateRangeMode } from '~/stores/adminDashboard'
 import { useMutationObserver } from '@vueuse/core'
 import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { LocationQueryRaw } from 'vue-router'
 import { useRoute, useRouter } from 'vue-router'
 import ArrowPathIconSolid from '~icons/heroicons/arrow-path-solid'
 import DateRangePicker from '~/components/DateRangePicker.vue'

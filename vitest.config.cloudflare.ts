@@ -31,6 +31,7 @@ export default defineConfig(({ mode }) => ({
       'tests/updates*.test.ts',
       'tests/stats*.test.ts',
       'tests/channel_self*.test.ts',
+      'tests/channel-rate-limit.test.ts',
     ],
     environment: 'node',
     watch: false,

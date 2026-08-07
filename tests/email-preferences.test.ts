@@ -1,7 +1,7 @@
 import type { EmailPreferences } from '../supabase/functions/_backend/utils/org_email_notifications.ts'
 import { randomUUID } from 'node:crypto'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { APP_NAME, BASE_URL, getSupabaseClient, ORG_ID_EMAIL_PREFS, resetAndSeedAppData, resetAppData, STRIPE_CUSTOMER_ID_EMAIL_PREFS, USER_EMAIL_EMAIL_PREFS, USER_ID_EMAIL_PREFS } from './test-utils.ts'
+import { APP_NAME, BASE_URL, getSupabaseClient, ORG_ID_EMAIL_PREFS, resetAndSeedAppData, resetAppData, STRIPE_CUSTOMER_ID_EMAIL_PREFS, USER_EMAIL_EMAIL_PREFS, USER_ID_EMAIL_PREFS, warmEdgeEndpoint } from './test-utils.ts'
 
 const id = randomUUID()
 const APPNAME_PREFS = `${APP_NAME}.ep.${id}`
@@ -54,22 +54,15 @@ beforeAll(async () => {
   })
 
   // Warm cron_email so the first preference assertion does not race a cold Deno isolate (502).
-  for (let attempt = 1; attempt <= 5; attempt++) {
-    const warm = await fetch(`${BASE_URL}/triggers/cron_email`, {
-      method: 'POST',
-      headers: triggerHeaders,
-      body: JSON.stringify({
-        email: USER_EMAIL_EMAIL_PREFS,
-        appId: APPNAME_PREFS,
-        type: 'monthly_create_stats',
-      }),
-    })
-    const body = await warm.text().catch(() => '')
-    if (warm.status !== 502 && warm.status !== 503)
-      break
-    console.error(`[email-preferences] cron_email warm attempt=${attempt} status=${warm.status} body=${body.slice(0, 400)}`)
-    await new Promise(resolve => setTimeout(resolve, 500 * attempt))
-  }
+  await warmEdgeEndpoint(`${BASE_URL}/triggers/cron_email`, {
+    method: 'POST',
+    headers: triggerHeaders,
+    body: JSON.stringify({
+      email: USER_EMAIL_EMAIL_PREFS,
+      appId: APPNAME_PREFS,
+      type: 'monthly_create_stats',
+    }),
+  })
 })
 
 beforeEach(async () => {
