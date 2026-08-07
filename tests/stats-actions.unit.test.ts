@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { actionToFilter, filterToAction, statsActionFilters } from '~/services/statsActions'
+import { actionToFilter, filterToAction, observeActionFilterKeys, statsActionFilters, updateActionFilterKeys } from '~/services/statsActions'
 import { ALLOWED_STATS_ACTIONS } from '../supabase/functions/_backend/plugin_runtime/plugins/stats_actions.ts'
 
 const HEALTH_STATS_ACTIONS = [
@@ -27,6 +27,11 @@ const HEALTH_STATS_ACTIONS = [
 const NATIVE_VERSION_STATS_ACTIONS = [
   'os_version_changed',
   'native_app_version_changed',
+] as const
+
+const OBSERVE_EXTRA_ACTIONS = [
+  'app_moved_to_foreground',
+  'app_moved_to_background',
 ] as const
 
 describe('stats action filters', () => {
@@ -59,5 +64,22 @@ describe('stats action filters', () => {
       expect(filterKey).toBeTruthy()
       expect(filterToAction[filterKey]).toBe(action)
     }
+  })
+
+  it('splits update process filters and observe filters without overlap', () => {
+    const observeActions = [
+      ...HEALTH_STATS_ACTIONS,
+      ...NATIVE_VERSION_STATS_ACTIONS,
+      ...OBSERVE_EXTRA_ACTIONS,
+    ]
+    const observeKeys = observeActions.map(action => actionToFilter[action])
+
+    expect(observeActionFilterKeys).toEqual(expect.arrayContaining(observeKeys))
+    expect(observeActionFilterKeys).toHaveLength(observeKeys.length)
+
+    const observeKeySet = new Set(observeActionFilterKeys)
+    const updateKeySet = new Set(updateActionFilterKeys)
+    expect([...observeKeySet].some(key => updateKeySet.has(key))).toBe(false)
+    expect(observeActionFilterKeys.length + updateActionFilterKeys.length).toBe(statsActionFilters.length)
   })
 })
