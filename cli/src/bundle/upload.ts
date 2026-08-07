@@ -25,7 +25,8 @@ import { showReplicationProgress } from '../replicationProgress'
 import { formatTable } from '../terminal-table'
 import { usesAlwaysDirectUpdate } from '../updaterConfig'
 import { baseKeyV2, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, canPromptInteractively, checkCompatibilityCloud, checkPlanValidUpload, checkRemoteCliMessages, createSupabaseClient, deletedFailedVersion, deltaManifestTooLargeMessage, findRoot, findSavedKey, formatError, getAppId, getBundleVersion, getCompatibilityDetails, getConfig, getInstalledVersion, getLocalConfig, getLocalDependencies, getOrganizationId, getPMAndCommand, getRemoteChecksums, getRemoteFileConfig, hasCliPermission, invokeCapgoCliApi, isCompatible, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, regexSemver, resolveUserIdFromApiKey, sendEvent, setVersionManifest, updateConfigUpdater, updateOrCreateChannel, updateOrCreateVersion, UPLOAD_TIMEOUT, uploadTUS, uploadUrl, zipFile } from '../utils'
-import { autoBumpMinorVersion, getVersionSuggestions, interactiveVersionBump } from '../versionHelpers'
+import type { AutoBumpLevel } from '../versionHelpers'
+import { autoBumpVersionBy, getVersionSuggestions, interactiveVersionBump, normalizeAutoBumpLevel } from '../versionHelpers'
 import { maybePromptBuilderCta, shouldBlockIncompatibleUpload } from './builder-cta'
 import { checkIndexPosition, searchInDirectory } from './check'
 import { summarizeUploadCompatibility } from './compatibility'
@@ -788,6 +789,7 @@ async function resolveAutoBumpVersion(
   appid: string,
   channels: string[],
   localBundle: string,
+  level: AutoBumpLevel,
 ): Promise<string> {
   const primaryChannel = channels[0]
   const linked = await getLinkedBundleOnChannel(supabase, appid, primaryChannel)
@@ -807,17 +809,17 @@ async function resolveAutoBumpVersion(
     return localBundle
   }
 
-  let candidate = autoBumpMinorVersion(baseVersion)
+  let candidate = autoBumpVersionBy(baseVersion, level)
   for (let attempt = 0; attempt < 100; attempt++) {
     const exists = await versionExistsOnRemote(supabase, appid, candidate)
     if (!exists) {
-      log.info(`🔢 Auto-bumped version from ${baseVersion} to ${candidate}`)
+      log.info(`🔢 Auto-bumped (${level}) version from ${baseVersion} to ${candidate}`)
       return candidate
     }
-    candidate = autoBumpMinorVersion(candidate)
+    candidate = autoBumpVersionBy(candidate, level)
   }
 
-  uploadFail(`Could not find a free minor-bumped version after 100 attempts (started from ${baseVersion})`)
+  uploadFail(`Could not find a free ${level}-bumped version after 100 attempts (started from ${baseVersion})`)
 }
 
 // It is really important that this function never terminates the program, it should always return.
@@ -1247,7 +1249,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   if (options.verbose)
     log.info(`[Verbose] App ID: ${appid}, Build path: ${path}`)
 
-  if (options.autoBump && options.bundle)
+  if (normalizeAutoBumpLevel(options.autoBump) && options.bundle)
     uploadFail('Cannot use --bundle (-b) and --auto-bump together. Omit --bundle to auto-increment from the latest remote version.')
 
   let bundle = await getBundle(extConfig.config, options)
@@ -1314,10 +1316,11 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   if (options.verbose)
     log.info(`[Verbose] Trial check completed`)
 
-  if (options.autoBump) {
+  const autoBumpLevel = normalizeAutoBumpLevel(options.autoBump)
+  if (autoBumpLevel) {
     if (options.verbose)
-      log.info(`[Verbose] Resolving auto-bump version from channel/app remote versions...`)
-    bundle = await resolveAutoBumpVersion(supabase, appid, channels, bundle)
+      log.info(`[Verbose] Resolving auto-bump (${autoBumpLevel}) version from channel/app remote versions...`)
+    bundle = await resolveAutoBumpVersion(supabase, appid, channels, bundle, autoBumpLevel)
     if (options.verbose)
       log.info(`[Verbose] Bundle version after auto-bump: ${bundle}`)
   }
