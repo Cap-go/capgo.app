@@ -35,7 +35,7 @@ import { uploadSupportLogs } from '../support/support-upload'
 import { consoleWebUrl, createSupabaseClient, defaultApiHost, findBuildCommandForProjectType, findMainFile, findMainFileForProjectType, findProjectType, findRoot, findSavedKey, findSavedKeySilent, formatError, getAllPackagesDependencies, getAppId, getBundleVersion, getConfig, getConfigForWrite, getLocalConfig, getNativeProjectResetAdvice, getOrganizationListWithPermission, getPackageScripts, getPMAndCommand, hasCliPermission, PACKNAME, projectIsMonorepo, resolveUserIdFromApiKey, setPMAndCommand, updateConfigbyKey, updateConfigUpdater, validateIosUpdaterSync } from '../utils'
 import { buildAppIdConflictSuggestions, isAppAlreadyExistsError } from './app-conflict'
 import { isChannelAlreadyExistsError } from './channel-conflict'
-import { createMissingExecutableError, getAvailablePackageManagers, getMissingPackageManagerExecutable, getPackageManagerInfo, preparePackageManagerCommandEnvironment, probeExecutable, probePackageManagerCommand, waitForCommandResult } from './command-execution'
+import { createMissingExecutableError, getAvailablePackageManagers, getMissingPackageManagerExecutable, getPackageManagerInfo, preparePackageManagerCommandEnvironment, probeExecutable, probePackageManagerCommand, resolveExecutableProbeError, waitForCommandResult } from './command-execution'
 import { cancel as pCancel, confirm as pConfirm, intro as pIntro, isCancel as pIsCancel, log as pLog, outro as pOutro, select as pSelect, spinner as pSpinner, text as pText } from './prompts'
 import { finishActiveCliReplay, getActiveCliReplaySessionId, isCliTelemetryDisabled, startInitReplay } from './replay'
 import { appendInitStreamingLine, clearInitStreamingOutput, INIT_CANCEL, pushInitLog, setInitCodeDiff, setInitEncryptionSummary, setInitVersionWarning, startInitStreamingOutput, stopInitInkSession, updateInitStreamingStatus, waitForInitStreamingContinue } from './runtime'
@@ -3283,13 +3283,11 @@ async function streamCommandInInitPanel(params: {
     }
   }
 
-  const executableProbe = params.runner
-    ? probePackageManagerCommand(params.runner, { cwd: params.cwd })
-    : probeExecutable(runnerCmd, { cwd: params.cwd })
+  const executableProbe = params.command
+    ? probeExecutable(runnerCmd, { cwd: params.cwd })
+    : probePackageManagerCommand(params.runner ?? runnerCmd, { cwd: params.cwd })
   if (!executableProbe.available) {
-    const error = executableProbe.error?.code === 'ENOENT'
-      ? createMissingExecutableError(runnerCmd)
-      : executableProbe.error ?? new Error(`Cannot execute "${runnerCmd}"`)
+    const error = resolveExecutableProbeError(params.runner ?? runnerCmd, executableProbe)
     updateInitStreamingStatus('error', error.message)
     return { success: false, error }
   }
@@ -3369,13 +3367,18 @@ async function selectAvailablePackageManager(
   if (!missingExecutable)
     return detectedPackageManager
 
+  const missingProbe = probePackageManagerCommand(missingExecutable, { cwd: projectDir })
+  const missingError = resolveExecutableProbeError(missingExecutable, missingProbe)
+  const missingExplanation = missingProbe.error?.code === 'ENOENT'
+    ? `"${missingExecutable}" is not available in PATH.`
+    : missingError.message
   preparePackageManagerCommandEnvironment(env)
   const alternatives = getAvailablePackageManagers(detectedPackageManager.pm, isAvailable)
   if (alternatives.length === 0)
-    throw createMissingExecutableError(missingExecutable, env.PATH)
+    throw missingError
 
   const selectedPackageManager = await pSelect({
-    message: `${detectedPackageManager.pm} was detected from the project lockfile, but "${missingExecutable}" is not available in PATH. Choose an installed package manager:`,
+    message: `${detectedPackageManager.pm} was detected from the project lockfile, but ${missingExplanation} Choose an installed package manager:`,
     options: alternatives.map(packageManager => ({
       value: packageManager,
       label: packageManager,

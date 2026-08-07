@@ -98,6 +98,12 @@ export function probePackageManagerCommand(commandLine: string, options: Executa
   return probe
 }
 
+export function resolveExecutableProbeError(command: string, probe: ExecutableProbeResult): Error {
+  if (probe.error?.code === 'ENOENT')
+    return createMissingExecutableError(command)
+  return probe.error ?? new Error(`Cannot execute "${command}"`)
+}
+
 export function getAvailablePackageManagers(
   detected: SupportedPackageManager,
   isAvailable: (command: string) => boolean = command => probePackageManagerCommand(command).available,

@@ -27,6 +27,7 @@ import {
   isPackageManagerAvailable,
   preparePackageManagerCommandEnvironment,
   probeExecutable,
+  resolveExecutableProbeError,
   supportsYarnDlx,
   waitForCommandResult,
 } from '../src/init/command-execution.ts'
@@ -116,6 +117,17 @@ t('Yarn dlx availability rejects Yarn Classic', () => {
   assert.equal(supportsYarnDlx('2.0.0'), true)
   assert.equal(supportsYarnDlx('4.10.3'), true)
   assert.equal(supportsYarnDlx('not-a-version'), false)
+})
+
+t('probe error resolution preserves runner incompatibility details', () => {
+  const compatibilityError = new Error('Runner "yarn dlx" requires Yarn 2 or newer.')
+  const resolved = resolveExecutableProbeError('yarn dlx', {
+    available: false,
+    error: compatibilityError,
+    status: 0,
+  })
+
+  assert.equal(resolved, compatibilityError)
 })
 
 t('package manager metadata uses matching direct commands and runners', () => {
