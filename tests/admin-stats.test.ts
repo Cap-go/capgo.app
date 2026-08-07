@@ -1356,8 +1356,10 @@ describe('/private/admin_stats', () => {
     expect(payload.success).toBe(true)
     expect(payload.data.trend).toHaveLength(1)
     expect(payload.data.trend[0]?.date).toBe('2026-02-01')
-    expect(payload.data.trend[0]?.total).toBe(3)
-    expect(payload.data.trend[0]?.plans[soloPlan?.name ?? 'Solo']).toBe(3)
-    expect(payload.data.totals.find(plan => plan.plan_name === (soloPlan?.name ?? 'Solo'))?.total).toBe(3)
+    // Counts all trial orgs created that day: ONBOARDING_ORG, ONBOARDING_NO_BUNDLE_ORG,
+    // ONBOARDING_LATE_SUBSCRIPTION_ORG, and ONBOARDING_INVITE_ORG (invite orgs are included).
+    expect(payload.data.trend[0]?.total).toBe(4)
+    expect(payload.data.trend[0]?.plans[soloPlan?.name ?? 'Solo']).toBe(4)
+    expect(payload.data.totals.find(plan => plan.plan_name === (soloPlan?.name ?? 'Solo'))?.total).toBe(4)
   })
 })

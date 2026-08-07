@@ -322,6 +322,26 @@ function isTransientDockerPortBindFailure(output: string): boolean {
     || /failed to bind host port/i.test(output)
 }
 
+function getCloudflareWorkerPorts(): number[] {
+  const raw = process.env.CLOUDFLARE_WORKER_PORT_OFFSET
+  if (!raw || !/^\d+$/.test(raw))
+    return []
+
+  const offset = Number(raw)
+  if (!Number.isSafeInteger(offset) || offset < 0)
+    return []
+
+  // wrangler worker ports + inspector ports from scripts/start-cloudflare-workers.sh
+  return [
+    8787 + offset,
+    8788 + offset,
+    8789 + offset,
+    9230 + offset,
+    9231 + offset,
+    9232 + offset,
+  ]
+}
+
 /**
  * Keep worktree host ports out of the kernel ephemeral pool.
  *
@@ -336,11 +356,14 @@ function reserveWorktreePortsFromEphemeralPool(repoRoot: string): void {
     return
 
   const { cfg } = ensureWorktreeSupabaseDir(repoRoot)
-  const ports = Object.values(cfg.ports).filter(port => Number.isFinite(port)).sort((a, b) => a - b)
+  const ports = [
+    ...Object.values(cfg.ports).filter(port => Number.isFinite(port)),
+    ...getCloudflareWorkerPorts(),
+  ].sort((a, b) => a - b)
   if (ports.length === 0)
     return
 
-  const reserved = ports.join(',')
+  const reserved = [...new Set(ports)].join(',')
   const result = spawnSync('sudo', ['sysctl', '-w', `net.ipv4.ip_local_reserved_ports=${reserved}`], {
     encoding: 'utf8',
   })
@@ -366,14 +389,41 @@ function freeHostPorts(ports: number[]): void {
 }
 
 /**
+ * Cancelled CI jobs can leave named Supabase containers that still hold host
+ * ports after `supabase stop`. Force-remove anything matching this worktree.
+ */
+function removeLeftoverWorktreeContainers(projectId: string): void {
+  if (process.platform === 'win32')
+    return
+
+  const listed = spawnSync('docker', ['ps', '-aq', '--filter', `name=${projectId}`], {
+    encoding: 'utf8',
+  })
+  if ((listed.status ?? 1) !== 0)
+    return
+
+  const ids = (listed.stdout ?? '').split(/\s+/).filter(Boolean)
+  if (ids.length === 0)
+    return
+
+  console.error(`Removing leftover Docker containers for ${projectId}: ${ids.join(', ')}`)
+  spawnSync('docker', ['rm', '-f', ...ids], { stdio: 'inherit' })
+}
+
+/**
  * `supabase start` can fail on GitHub runners with a transient Docker port bind
  * (`address already in use`) after a partial start/stop. Retry only that class of
  * failure so permanent start errors fail fast.
  */
 function runSupabaseStartWithRetry(args: string[], repoRoot: string): number {
   const { cfg } = ensureWorktreeSupabaseDir(repoRoot)
-  const ports = Object.values(cfg.ports).filter(port => Number.isFinite(port))
+  const ports = [
+    ...Object.values(cfg.ports).filter(port => Number.isFinite(port)),
+    ...getCloudflareWorkerPorts(),
+  ]
   reserveWorktreePortsFromEphemeralPool(repoRoot)
+  removeLeftoverWorktreeContainers(cfg.projectId)
+  freeHostPorts(ports)
 
   const maxAttempts = 5
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -385,6 +435,7 @@ function runSupabaseStartWithRetry(args: string[], repoRoot: string): number {
       return status
     console.error(`Supabase start hit a transient Docker port bind (attempt ${attempt}/${maxAttempts}); stopping and retrying...`)
     runSupabase(['stop', '--no-backup'], repoRoot)
+    removeLeftoverWorktreeContainers(cfg.projectId)
     freeHostPorts(ports)
     spawnSync(process.platform === 'win32' ? 'timeout' : 'sleep', process.platform === 'win32' ? ['/T', '2', '/NOBREAK'] : ['2'])
   }

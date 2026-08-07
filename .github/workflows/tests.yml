@@ -297,7 +297,7 @@ jobs:
         run: bash scripts/test-db-tinbase.sh
 
   test_backend:
-    needs: changes
+    needs: [changes, lint_typecheck, dead_code]
     if: needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -313,7 +313,7 @@ jobs:
       SUPABASE_WORKTREE_INSTANCE: backend-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard_id }}
       SUPABASE_WORKTREE_PORT_OFFSET: ${{ matrix.supabase_port_offset }}
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         include:
           - shard: 1/6
@@ -404,6 +404,23 @@ jobs:
         run: |
           export BACKGROUND_WAIT_ON="${SUPABASE_FUNCTIONS_HEALTH_URL:?Missing isolated Supabase health URL}"
           bash .github/scripts/start-background-service.sh
+      - name: Warm edge functions before tests
+        run: |
+          # GET /ok alone is not enough — cold first POSTs to triggers can 502 under load.
+          health_url="${SUPABASE_FUNCTIONS_HEALTH_URL#http-get://}"
+          health_url="${health_url#https-get://}"
+          base_url="http://${health_url%/ok}"
+          for attempt in 1 2 3 4 5; do
+            status=$(curl -s -o /tmp/edge-warm.body -w '%{http_code}' -X POST "${base_url}/triggers/cron_email" \
+              -H 'Content-Type: application/json' \
+              -H 'apisecret: testsecret' \
+              -d '{"email":"warm@capgo.app","appId":"com.warm.edge","type":"monthly_create_stats"}' || true)
+            echo "edge warm attempt=${attempt} status=${status}"
+            if [ "${status}" != "502" ] && [ "${status}" != "503" ] && [ "${status}" != "000" ]; then
+              break
+            fi
+            sleep "${attempt}"
+          done
       - name: Run backend integration tests
         env:
           VITEST_SHARD: ${{ matrix.shard }}
@@ -435,7 +452,7 @@ jobs:
 
   # SQL/schema checks split so each 5-minute job has headroom after cold Supabase start.
   test_backend_sql:
-    needs: changes
+    needs: [changes, lint_typecheck, dead_code]
     if: needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -520,7 +537,7 @@ jobs:
         run: bun scripts/supabase-worktree.ts stop --no-backup || true
 
   test_backend_sql_catalog:
-    needs: changes
+    needs: [changes, lint_typecheck, dead_code]
     if: needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -601,7 +618,7 @@ jobs:
 
 
   test_cloudflare:
-    needs: changes
+    needs: [changes, lint_typecheck, dead_code]
     if: needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -618,7 +635,7 @@ jobs:
       CLOUDFLARE_WORKER_PORT_OFFSET: ${{ matrix.cloudflare_worker_port_offset }}
       CLOUDFLARE_PERSIST_DIR: .context/cloudflare-workers-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.supabase_port_offset }}
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         include:
           - shard: 1/8
@@ -750,8 +767,133 @@ jobs:
           done
           bun scripts/supabase-worktree.ts stop --no-backup || true
 
+  # Serial plugin hot-path suite (/updates, /stats, /channel_self). Kept off the
+  # 8-way CF shard matrix because parallel workerd load causes intermittent 503s.
+  test_cloudflare_plugin:
+    needs: [changes, lint_typecheck, dead_code]
+    if: needs.changes.outputs.run_capgo == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    name: Run Cloudflare plugin tests (serial)
+    permissions:
+      contents: read
+    concurrency:
+      group: capgo-local-services-cloudflare-plugin-${{ github.event_name }}-${{ github.repository }}
+      cancel-in-progress: false
+    env:
+      SUPABASE_WORKTREE_INSTANCE: cloudflare-plugin-${{ github.run_id }}-${{ github.run_attempt }}
+      SUPABASE_WORKTREE_PORT_OFFSET: 4800
+      CLOUDFLARE_WORKER_PORT_OFFSET: 4800
+      CLOUDFLARE_PERSIST_DIR: .context/cloudflare-workers-${{ github.run_id }}-${{ github.run_attempt }}-plugin-4800
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6 # v6
+        with:
+          fetch-depth: 2
+      - name: Setup Node.js
+        uses: actions/setup-node@v6 # v6
+        with:
+          node-version: 24.x
+      - name: Setup bun
+        run: bash scripts/setup-bun.sh
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@v2 # v2.0.0
+        with:
+          version: 2.109.1
+      - name: Link Supabase templates
+        run: ln -sfn supabase/templates templates
+      - name: Stop this job's Supabase stack
+        run: bun scripts/supabase-worktree.ts stop --no-backup || true
+      - name: Run Supabase Start (deps install in background)
+        run: |
+          (
+            set -e
+            bun install
+          ) > "${RUNNER_TEMP}/deps-install.log" 2>&1 &
+          deps_install_pid=$!
+          bun scripts/supabase-worktree.ts start -x imgproxy,studio,mailpit,realtime,postgres-meta,supavisor,logflare,vector
+          if ! wait "${deps_install_pid}"; then
+            echo "::error::Dependency install failed"
+            cat "${RUNNER_TEMP}/deps-install.log"
+            exit 1
+          fi
+      - name: Export isolated test endpoints
+        run: |
+          {
+            bun scripts/supabase-worktree.ts with-env bun -e 'const apiUrl = new URL(process.env.SUPABASE_URL ?? ""); const dbUrl = process.env.SUPABASE_DB_URL ?? ""; if (!apiUrl.host || !dbUrl) throw new Error("Isolated Supabase status is missing API_URL or DB_URL."); console.log(`SUPABASE_FUNCTIONS_HEALTH_URL=http-get://${apiUrl.host}/functions/v1/ok`); console.log(`MAIN_SUPABASE_DB_URL=${dbUrl}`)'
+            printf 'CLOUDFLARE_FUNCTION_URL=http://127.0.0.1:%s\n' "$((8787 + CLOUDFLARE_WORKER_PORT_OFFSET))"
+          } >> "$GITHUB_ENV"
+      - name: Quiesce test scheduler
+        run: bun scripts/supabase-worktree.ts with-env bun scripts/quiesce-test-scheduler.ts
+      - id: bootstrap_edge_server
+        name: Bootstrap Edge server
+        env:
+          BACKGROUND_SERVICE_NAME: Bootstrap Edge server
+          BACKGROUND_RUN_COMMAND: exec bun scripts/supabase-worktree.ts functions serve
+          BACKGROUND_LOG_PATH: ${{ runner.temp }}/cloudflare-plugin-edge-server.log
+          BACKGROUND_WAIT_TIMEOUT_MS: 60000
+        run: |
+          export BACKGROUND_WAIT_ON="${SUPABASE_FUNCTIONS_HEALTH_URL:?Missing isolated Supabase health URL}"
+          bash .github/scripts/start-background-service.sh
+      - id: start_cloudflare_workers
+        name: Start Cloudflare Workers for testing
+        env:
+          BACKGROUND_SERVICE_NAME: Cloudflare Workers
+          BACKGROUND_RUN_COMMAND: |
+            chmod +x scripts/start-cloudflare-workers.sh
+            exec ./scripts/start-cloudflare-workers.sh
+          BACKGROUND_LOG_PATH: ${{ runner.temp }}/cloudflare-plugin-workers.log
+          BACKGROUND_WAIT_TIMEOUT_MS: 120000
+          BACKGROUND_TAIL_LINES: 400
+        run: |
+          worker_port_offset="${CLOUDFLARE_WORKER_PORT_OFFSET:-0}"
+          export BACKGROUND_WAIT_ON="http-get://127.0.0.1:$((8787 + worker_port_offset))/ok
+          http-get://127.0.0.1:$((8788 + worker_port_offset))/ok
+          http-get://127.0.0.1:$((8789 + worker_port_offset))/ok"
+          bash .github/scripts/start-background-service.sh
+      - name: Warm plugin /updates endpoint
+        run: |
+          plugin_url="http://127.0.0.1:$((8788 + CLOUDFLARE_WORKER_PORT_OFFSET))/updates"
+          for attempt in 1 2 3 4 5; do
+            status=$(curl -s -o /tmp/plugin-warm.body -w '%{http_code}' -X POST "$plugin_url" \
+              -H 'Content-Type: application/json' \
+              -d '{"device_id":"warm","app_id":"com.warm.plugin","version_name":"1.0.0","version_build":"1.0.0","platform":"android","plugin_version":"6.25.0"}' || true)
+            echo "plugin warm attempt=${attempt} status=${status}"
+            if [ "${status}" != "502" ] && [ "${status}" != "503" ] && [ "${status}" != "000" ]; then
+              break
+            fi
+            sleep "${attempt}"
+          done
+      - name: Run Cloudflare plugin integration tests (serial)
+        run: bun run supabase:with-env -- bun run test:cloudflare:plugin
+      - name: Show Cloudflare Worker logs after plugin test failure
+        if: failure() && steps.start_cloudflare_workers.outputs.log_path != ''
+        run: |
+          echo "::group::Cloudflare Worker log"
+          tail -n 400 "${{ steps.start_cloudflare_workers.outputs.log_path }}" || true
+          echo "::endgroup::"
+      - name: Upload background service logs
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: test-cloudflare-plugin-background-service-logs
+          path: |
+            ${{ steps.bootstrap_edge_server.outputs.log_path }}
+            ${{ steps.start_cloudflare_workers.outputs.log_path }}
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Stop background services
+        if: always()
+        run: |
+          for pid in "${{ steps.bootstrap_edge_server.outputs.pid }}" "${{ steps.start_cloudflare_workers.outputs.pid }}"; do
+            if [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null; then
+              kill "${pid}" 2>/dev/null || true
+            fi
+          done
+          bun scripts/supabase-worktree.ts stop --no-backup || true
+
   test_playwright:
-    needs: changes
+    needs: [changes, lint_typecheck, dead_code]
     if: needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5

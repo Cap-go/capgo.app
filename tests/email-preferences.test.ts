@@ -52,6 +52,24 @@ beforeAll(async () => {
     userId: USER_ID_EMAIL_PREFS,
     stripeCustomerId: STRIPE_CUSTOMER_ID_EMAIL_PREFS,
   })
+
+  // Warm cron_email so the first preference assertion does not race a cold Deno isolate (502).
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    const warm = await fetch(`${BASE_URL}/triggers/cron_email`, {
+      method: 'POST',
+      headers: triggerHeaders,
+      body: JSON.stringify({
+        email: USER_EMAIL_EMAIL_PREFS,
+        appId: APPNAME_PREFS,
+        type: 'monthly_create_stats',
+      }),
+    })
+    const body = await warm.text().catch(() => '')
+    if (warm.status !== 502 && warm.status !== 503)
+      break
+    console.error(`[email-preferences] cron_email warm attempt=${attempt} status=${warm.status} body=${body.slice(0, 400)}`)
+    await new Promise(resolve => setTimeout(resolve, 500 * attempt))
+  }
 })
 
 beforeEach(async () => {
@@ -77,6 +95,19 @@ async function isMigrationApplied(): Promise<boolean> {
 
   // If we get a 42703 error (column doesn't exist), migration not applied
   return !error || error.code !== '42703'
+}
+
+async function postCronEmail(body: Record<string, unknown>): Promise<Response> {
+  const response = await fetch(`${BASE_URL}/triggers/cron_email`, {
+    method: 'POST',
+    headers: triggerHeaders,
+    body: JSON.stringify(body),
+  })
+  if (response.status !== 200) {
+    const text = await response.clone().text().catch(() => '<unreadable body>')
+    console.error(`[email-preferences] cron_email non-200 status=${response.status} body=${text.slice(0, 800)}`)
+  }
+  return response
 }
 
 describe('[Database] Email Preferences Column', () => {
@@ -220,14 +251,10 @@ describe('[POST] /triggers/cron_email - Email Preference Filtering', () => {
       .eq('id', USER_ID_EMAIL_PREFS)
 
     // Send request for weekly stats
-    const response = await fetch(`${BASE_URL}/triggers/cron_email`, {
-      method: 'POST',
-      headers: triggerHeaders,
-      body: JSON.stringify({
-        email: USER_EMAIL_EMAIL_PREFS,
-        appId: APPNAME_PREFS,
-        type: 'weekly_install_stats',
-      }),
+    const response = await postCronEmail({
+      email: USER_EMAIL_EMAIL_PREFS,
+      appId: APPNAME_PREFS,
+      type: 'weekly_install_stats',
     })
 
     expect(response.status).toBe(200)
@@ -270,14 +297,10 @@ describe('[POST] /triggers/cron_email - Email Preference Filtering', () => {
       .eq('id', USER_ID_EMAIL_PREFS)
 
     // Send request for monthly stats
-    const response = await fetch(`${BASE_URL}/triggers/cron_email`, {
-      method: 'POST',
-      headers: triggerHeaders,
-      body: JSON.stringify({
-        email: USER_EMAIL_EMAIL_PREFS,
-        appId: APPNAME_PREFS,
-        type: 'monthly_create_stats',
-      }),
+    const response = await postCronEmail({
+      email: USER_EMAIL_EMAIL_PREFS,
+      appId: APPNAME_PREFS,
+      type: 'monthly_create_stats',
     })
 
     expect(response.status).toBe(200)
@@ -314,14 +337,10 @@ describe('[POST] /triggers/cron_email - Email Preference Filtering', () => {
       .eq('id', USER_ID_EMAIL_PREFS)
 
     // Send request for weekly stats
-    const response = await fetch(`${BASE_URL}/triggers/cron_email`, {
-      method: 'POST',
-      headers: triggerHeaders,
-      body: JSON.stringify({
-        email: USER_EMAIL_EMAIL_PREFS,
-        appId: APPNAME_PREFS,
-        type: 'weekly_install_stats',
-      }),
+    const response = await postCronEmail({
+      email: USER_EMAIL_EMAIL_PREFS,
+      appId: APPNAME_PREFS,
+      type: 'weekly_install_stats',
     })
 
     expect(response.status).toBe(200)
@@ -354,14 +373,10 @@ describe('[POST] /triggers/cron_email - Email Preference Filtering', () => {
       .eq('id', USER_ID_EMAIL_PREFS)
 
     // Send request for monthly stats
-    const response = await fetch(`${BASE_URL}/triggers/cron_email`, {
-      method: 'POST',
-      headers: triggerHeaders,
-      body: JSON.stringify({
-        email: USER_EMAIL_EMAIL_PREFS,
-        appId: APPNAME_PREFS,
-        type: 'monthly_create_stats',
-      }),
+    const response = await postCronEmail({
+      email: USER_EMAIL_EMAIL_PREFS,
+      appId: APPNAME_PREFS,
+      type: 'monthly_create_stats',
     })
 
     expect(response.status).toBe(200)
@@ -401,15 +416,11 @@ describe('[POST] /triggers/cron_email - Deploy Install Stats Preference', () => 
       .eq('id', USER_ID_EMAIL_PREFS)
 
     // Send request for deploy install stats (will fail due to missing versionId, but preference check happens first)
-    const response = await fetch(`${BASE_URL}/triggers/cron_email`, {
-      method: 'POST',
-      headers: triggerHeaders,
-      body: JSON.stringify({
-        email: USER_EMAIL_EMAIL_PREFS,
-        appId: APPNAME_PREFS,
-        type: 'deploy_install_stats',
-        versionId: 999999, // Non-existent version
-      }),
+    const response = await postCronEmail({
+      email: USER_EMAIL_EMAIL_PREFS,
+      appId: APPNAME_PREFS,
+      type: 'deploy_install_stats',
+      versionId: 999999, // Non-existent version
     })
 
     expect(response.status).toBe(200)
