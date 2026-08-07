@@ -20,6 +20,7 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useOrgBillingCycleChart } from '~/composables/useOrgBillingCycleChart'
 import { createLegendConfig, createStackedChartScales } from '~/services/chartConfig'
+import { createTodayLineOptions } from '~/services/chartTodayLine'
 import { generateMonthDays, getDaysInCurrentMonth } from '~/services/date'
 import { useOrganizationStore } from '~/stores/organization'
 import { createTooltipConfig, todayLinePlugin, verticalLinePlugin } from '../../services/chartTooltip'
@@ -45,13 +46,14 @@ const effectiveOrganization = computed(() => {
     return organizationStore.getOrgByAppId(props.appId) ?? organizationStore.currentOrganization
   return organizationStore.currentOrganization
 })
-const { resolveCycleStart, resolveCycleEnd, todayLimit, transformDailySeries } = useOrgBillingCycleChart(
+const chartCycle = useOrgBillingCycleChart(
   () => props.useBillingPeriod,
   () => effectiveOrganization.value?.subscription_start,
   () => effectiveOrganization.value?.subscription_end,
 )
-const cycleStart = computed(() => resolveCycleStart())
-const cycleEnd = computed(() => resolveCycleEnd())
+const cycleStart = computed(() => chartCycle.resolveCycleStart())
+const cycleEnd = computed(() => chartCycle.resolveCycleEnd())
+const { todayLimit, transformDailySeries } = chartCycle
 
 const UPDATE_FAILURE_ACTIONS = [
   'set_fail',
@@ -189,29 +191,14 @@ const chartData = computed<ChartData<'bar' | 'line'>>(() => {
 })
 
 const todayLineOptions = computed(() => {
-  if (!props.useBillingPeriod)
-    return { enabled: false }
-
   const labels = Array.isArray(chartData.value.labels) ? chartData.value.labels : []
-  const index = todayLimit(labels.length)
-
-  if (index < 0 || index >= labels.length)
-    return { enabled: false }
-
-  const strokeColor = isDark.value ? 'rgba(165, 180, 252, 0.75)' : 'rgba(99, 102, 241, 0.7)'
-  const glowColor = isDark.value ? 'rgba(129, 140, 248, 0.35)' : 'rgba(165, 180, 252, 0.35)'
-  const badgeFill = isDark.value ? 'rgba(67, 56, 202, 0.45)' : 'rgba(199, 210, 254, 0.85)'
-  const textColor = isDark.value ? '#e0e7ff' : '#312e81'
-
-  return {
-    enabled: true,
-    xIndex: index,
+  return createTodayLineOptions({
+    useBillingPeriod: props.useBillingPeriod,
+    index: todayLimit(labels.length),
+    labelCount: labels.length,
     label: t('today'),
-    color: strokeColor,
-    glowColor,
-    badgeFill,
-    textColor,
-  }
+    isDark: isDark.value,
+  })
 })
 
 const chartOptions = computed(() => {

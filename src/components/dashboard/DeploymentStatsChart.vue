@@ -19,6 +19,7 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useOrgBillingCycleChart } from '~/composables/useOrgBillingCycleChart'
 import { createLegendConfig, createStackedChartScales } from '~/services/chartConfig'
+import { createTodayLineOptions, generateAppChartColors, getSafeChartHue } from '~/services/chartTodayLine'
 import { createTooltipConfig, todayLinePlugin, verticalLinePlugin } from '~/services/chartTooltip'
 import { generateMonthDays, getDaysInCurrentMonth } from '~/services/date'
 import { useOrganizationStore } from '~/stores/organization'
@@ -43,13 +44,14 @@ const isDark = useDark()
 const { t } = useI18n()
 const router = useRouter()
 const organizationStore = useOrganizationStore()
-const { resolveCycleStart, resolveCycleEnd, todayLimit, transformDailySeries } = useOrgBillingCycleChart(
+const chartCycle = useOrgBillingCycleChart(
   () => props.useBillingPeriod,
   () => organizationStore.currentOrganization?.subscription_start,
   () => organizationStore.currentOrganization?.subscription_end,
 )
-const cycleStart = resolveCycleStart()
-const cycleEnd = resolveCycleEnd()
+const cycleStart = chartCycle.resolveCycleStart()
+const cycleEnd = chartCycle.resolveCycleEnd()
+const { todayLimit, transformDailySeries } = chartCycle
 
 // Determine mode based on which data is provided
 const isChannelMode = computed(() => Object.keys(props.dataByChannel).length > 0)
@@ -109,52 +111,6 @@ Chart.register(
 
 function monthdays() {
   return generateMonthDays(props.useBillingPeriod, cycleStart, cycleEnd)
-}
-
-// Check if a hue is in the red or green range (reserved for UpdateStats)
-function isReservedHue(hue: number): boolean {
-  // Red range: 0-30 and 330-360
-  // Green range: 90-160
-  return (hue >= 0 && hue <= 30) || (hue >= 330 && hue <= 360) || (hue >= 90 && hue <= 160)
-}
-
-// Get the nth safe hue that skips red/green colors
-function getSafeHue(targetIndex: number): number {
-  let i = 0
-  let safeCount = 0
-
-  while (safeCount <= targetIndex && i < targetIndex * 3 + 10) {
-    const hue = (210 + i * 137.508) % 360
-    i++
-
-    if (!isReservedHue(hue)) {
-      if (safeCount === targetIndex)
-        return hue
-      safeCount++
-    }
-  }
-
-  // Fallback to blue if we somehow can't find enough safe hues
-  return 210
-}
-
-// Generate infinite distinct pastel colors starting with blue, skipping red/green
-function generateChannelColors(channelCount: number) {
-  const colors = []
-
-  for (let colorIndex = 0; colorIndex < channelCount; colorIndex++) {
-    const hue = getSafeHue(colorIndex)
-
-    // Use pastel-friendly saturation and lightness values
-    const saturation = 50 + (colorIndex % 3) * 8 // 50%, 58%, 66% - softer colors
-    const lightness = 60 + (colorIndex % 4) * 5 // 60%, 65%, 70%, 75% - lighter, more pastel
-
-    const backgroundColor = `hsla(${hue}, ${saturation}%, ${lightness}%, 0.8)`
-
-    colors.push(backgroundColor)
-  }
-
-  return colors
 }
 
 const chartData = computed<ChartData<any>>(() => {
@@ -223,7 +179,7 @@ const chartData = computed<ChartData<any>>(() => {
   }
 
   // Multiple items view - show breakdown by channel or app
-  const itemColors = generateChannelColors(itemIds.length)
+  const itemColors = generateAppChartColors(itemIds.length)
   const datasets = itemIds.map((itemId, index) => {
     const itemData = dataSource[itemId] as number[]
 
@@ -235,7 +191,7 @@ const chartData = computed<ChartData<any>>(() => {
     if (props.accumulated) {
       processed = transformDailySeries(itemData, true, labelCount)
       // Use safe hue that skips red/green (reserved for UpdateStats)
-      const hue = getSafeHue(index)
+      const hue = getSafeChartHue(index)
       const saturation = 50 + (index % 3) * 8
       const lightness = 60 + (index % 4) * 5
       borderColor = `hsl(${hue}, ${saturation + 15}%, ${lightness - 15}%)`
@@ -283,29 +239,14 @@ const chartData = computed<ChartData<any>>(() => {
 const legendItems = computed(() => hasBreakdownData.value ? createChartLegendItems(chartData.value.datasets, 'breakdownId') : [])
 
 const todayLineOptions = computed(() => {
-  if (!props.useBillingPeriod)
-    return { enabled: false }
-
   const labels = Array.isArray(chartData.value.labels) ? chartData.value.labels : []
-  const index = todayLimit(labels.length)
-
-  if (index < 0 || index >= labels.length)
-    return { enabled: false }
-
-  const strokeColor = isDark.value ? 'rgba(165, 180, 252, 0.75)' : 'rgba(99, 102, 241, 0.7)'
-  const glowColor = isDark.value ? 'rgba(129, 140, 248, 0.35)' : 'rgba(165, 180, 252, 0.35)'
-  const badgeFill = isDark.value ? 'rgba(67, 56, 202, 0.45)' : 'rgba(199, 210, 254, 0.85)'
-  const textColor = isDark.value ? '#e0e7ff' : '#312e81'
-
-  return {
-    enabled: true,
-    xIndex: index,
+  return createTodayLineOptions({
+    useBillingPeriod: props.useBillingPeriod,
+    index: todayLimit(labels.length),
+    labelCount: labels.length,
     label: t('today'),
-    color: strokeColor,
-    glowColor,
-    badgeFill,
-    textColor,
-  }
+    isDark: isDark.value,
+  })
 })
 
 const chartOptions = computed(() => {

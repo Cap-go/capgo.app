@@ -19,8 +19,10 @@ import { computed } from 'vue'
 import { Bar, Line } from 'vue-chartjs'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
+import { useOrgBillingCycleChart } from '~/composables/useOrgBillingCycleChart'
 import { createLegendConfig, createStackedChartScales } from '~/services/chartConfig'
-import { generateMonthDays, getCurrentDayMonth, getDaysInCurrentMonth, normalizeToUtcStartOfDay } from '~/services/date'
+import { createTodayLineOptions, getSafeChartHue } from '~/services/chartTodayLine'
+import { generateMonthDays, getCurrentDayMonth, getDaysInCurrentMonth } from '~/services/date'
 import { useOrganizationStore } from '~/stores/organization'
 import { inlineAnnotationPlugin } from '../../services/chartAnnotations'
 import { createTooltipConfig, todayLinePlugin, verticalLinePlugin } from '../../services/chartTooltip'
@@ -53,8 +55,14 @@ const isDark = useDark()
 const { t } = useI18n()
 const router = useRouter()
 const organizationStore = useOrganizationStore()
-const cycleStart = normalizeToUtcStartOfDay(new Date(organizationStore.currentOrganization?.subscription_start ?? new Date()))
-const cycleEnd = normalizeToUtcStartOfDay(new Date(organizationStore.currentOrganization?.subscription_end ?? new Date()))
+const chartCycle = useOrgBillingCycleChart(
+  () => props.useBillingPeriod,
+  () => organizationStore.currentOrganization?.subscription_start,
+  () => organizationStore.currentOrganization?.subscription_end,
+)
+const cycleStart = chartCycle.resolveCycleStart()
+const cycleEnd = chartCycle.resolveCycleEnd()
+const { todayLimit } = chartCycle
 
 // Create a reverse mapping from app name to app ID for tooltip clicks
 const appIdByLabel = computed(() => {
@@ -77,6 +85,9 @@ const tooltipClickHandler = computed<TooltipClickHandler>(() => ({
 // View mode is now controlled by parent component
 const viewMode = computed(() => props.accumulated ? 'cumulative' : 'daily')
 
+function monthdays() {
+  return generateMonthDays(props.useBillingPeriod, cycleStart, cycleEnd)
+}
 Chart.register(
   Tooltip,
   BarController,
@@ -150,10 +161,6 @@ const projectionData = computed(() => {
   return res
 })
 
-function monthdays() {
-  return generateMonthDays(props.useBillingPeriod, cycleStart, cycleEnd)
-}
-
 function createAnnotation(id: string, y: number, title: string, lineColor: string, bgColor: string) {
   const obj: any = {}
   obj[`line_${id}`] = {
@@ -209,54 +216,16 @@ const generateAnnotations = computed(() => {
   return annotations
 })
 
-// Check if a hue is in the red or green range (reserved for UpdateStats)
-function isReservedHue(hue: number): boolean {
-  // Red range: 0-30 and 330-360
-  // Green range: 90-160
-  return (hue >= 0 && hue <= 30) || (hue >= 330 && hue <= 360) || (hue >= 90 && hue <= 160)
-}
-
-// Get the nth safe hue that skips red/green colors
-function getSafeHue(targetIndex: number): number {
-  let i = 0
-  let safeCount = 0
-
-  while (safeCount <= targetIndex && i < targetIndex * 3 + 10) {
-    const hue = (210 + i * 137.508) % 360
-    i++
-
-    if (!isReservedHue(hue)) {
-      if (safeCount === targetIndex)
-        return hue
-      safeCount++
-    }
-  }
-
-  // Fallback to blue if we somehow can't find enough safe hues
-  return 210
-}
-
-// Generate infinite distinct pastel colors starting with blue, skipping red/green
 function generateAppColors(appCount: number) {
-  const colors = []
-
-  for (let colorIndex = 0; colorIndex < appCount; colorIndex++) {
-    const hue = getSafeHue(colorIndex)
-
-    // Use pastel-friendly saturation and lightness values
-    const saturation = 50 + (colorIndex % 3) * 8 // 50%, 58%, 66% - softer colors
-    const lightness = 60 + (colorIndex % 4) * 5 // 60%, 65%, 70%, 75% - lighter, more pastel
-
-    const borderColor = `hsl(${hue}, ${saturation + 15}%, ${lightness - 15}%)`
-    const backgroundColor = `hsla(${hue}, ${saturation}%, ${lightness}%, 0.6)`
-
-    colors.push({
-      border: borderColor,
-      bg: backgroundColor,
-    })
-  }
-
-  return colors
+  return Array.from({ length: appCount }, (_, colorIndex) => {
+    const hue = getSafeChartHue(colorIndex)
+    const saturation = 50 + (colorIndex % 3) * 8
+    const lightness = 60 + (colorIndex % 4) * 5
+    return {
+      border: `hsl(${hue}, ${saturation + 15}%, ${lightness - 15}%)`,
+      bg: `hsla(${hue}, ${saturation}%, ${lightness}%, 0.6)`,
+    }
+  })
 }
 
 const chartData = computed<ChartData<'line' | 'bar'>>(() => {
@@ -293,7 +262,7 @@ const chartData = computed<ChartData<'line' | 'bar'>>(() => {
         }
         else {
           // Use safe hue that skips red/green (reserved for UpdateStats)
-          const hue = getSafeHue(index)
+          const hue = getSafeChartHue(index)
           const saturation = 50 + (index % 3) * 8
           const lightness = 60 + (index % 4) * 5
           backgroundColor = `hsla(${hue}, ${saturation}%, ${lightness}%, 0.8)`
@@ -381,34 +350,14 @@ const hasAppData = computed(() => Object.keys(props.dataByApp || {}).length > 0)
 const legendItems = computed(() => hasAppData.value ? createChartLegendItems(chartData.value.datasets, 'appId') : [])
 
 const todayLineOptions = computed(() => {
-  if (!props.useBillingPeriod)
-    return { enabled: false }
-
-  const today = normalizeToUtcStartOfDay()
-
-  if (today < cycleStart || today > cycleEnd)
-    return { enabled: false }
-
-  const diff = Math.floor((today.getTime() - cycleStart.getTime()) / (1000 * 60 * 60 * 24))
   const labels = Array.isArray(chartData.value.labels) ? chartData.value.labels : []
-
-  if (diff < 0 || diff >= labels.length)
-    return { enabled: false }
-
-  const strokeColor = isDark.value ? 'rgba(165, 180, 252, 0.75)' : 'rgba(99, 102, 241, 0.7)'
-  const glowColor = isDark.value ? 'rgba(129, 140, 248, 0.35)' : 'rgba(165, 180, 252, 0.35)'
-  const badgeFill = isDark.value ? 'rgba(67, 56, 202, 0.45)' : 'rgba(199, 210, 254, 0.85)'
-  const textColor = isDark.value ? '#e0e7ff' : '#312e81'
-
-  return {
-    enabled: true,
-    xIndex: diff,
+  return createTodayLineOptions({
+    useBillingPeriod: props.useBillingPeriod,
+    index: todayLimit(labels.length),
+    labelCount: labels.length,
     label: t('today'),
-    color: strokeColor,
-    glowColor,
-    badgeFill,
-    textColor,
-  }
+    isDark: isDark.value,
+  })
 })
 
 // Calculate appropriate Y-axis max based on actual data values
