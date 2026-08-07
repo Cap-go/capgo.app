@@ -1,5 +1,5 @@
 // src/build/prescan/engine.ts
-import type { Finding, OutcomeOptions, PrescanCheck, PrescanOutcome, PrescanReport, ScanContext, Severity } from './types'
+import type { Finding, OutcomeOptions, PrescanCheck, PrescanOutcome, PrescanReport, ScanContext } from './types'
 import { enforcedCounts } from './enforcement'
 import {
   applyWarnOverrides,

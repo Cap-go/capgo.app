@@ -18,6 +18,7 @@ interface CliReplayBody {
 interface ValidatedReplayPayload {
   currentUrl: string
   events: unknown[]
+  identifyPerson: boolean
   lib: string
   libVersion: string
   sessionId: string
@@ -67,6 +68,7 @@ function validateReplayBody(body: CliReplayBody): ValidatedReplayPayload {
   return {
     currentUrl: readRequiredString(properties, '$current_url'),
     events,
+    identifyPerson: properties.$identify_person === true,
     lib: readOptionalString(properties, '$lib', '@capgo/cli'),
     libVersion: readOptionalString(properties, '$lib_version', 'unknown'),
     sessionId: readRequiredString(properties, '$session_id'),
@@ -108,8 +110,6 @@ app.post('/', middlewareAuth(), async (c) => {
   const body = await parseBody<CliReplayBody>(c)
   const replay = validateReplayBody(body)
   const userEmail = await getAuthenticatedUserEmail(c, userId)
-  if (!userEmail)
-    throw quickError(500, 'missing_replay_user_email', 'Could not resolve replay user email')
 
   const sent = await capturePosthogReplaySnapshot(c, {
     ...replay,

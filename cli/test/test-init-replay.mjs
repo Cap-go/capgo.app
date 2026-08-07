@@ -131,6 +131,7 @@ const event = {
 }
 const body = buildInitReplayBody({
   events: [event],
+  identifyPerson: true,
   sessionId: 'init-session-123',
   timestamp: '2026-06-16T00:00:00.000Z',
   windowId: 'window-123',
@@ -139,6 +140,7 @@ assert.equal(body.event, '$snapshot')
 assert.equal(body.properties.$session_id, 'init-session-123')
 assert.equal(body.properties.$window_id, 'window-123')
 assert.equal(body.properties.$current_url, 'capgo-cli://init')
+assert.equal(body.properties.$identify_person, true)
 assert.deepEqual(body.properties.$snapshot_data, [event])
 assert.equal(typeof body.properties.$snapshot_bytes, 'number')
 assert.ok(body.properties.$snapshot_bytes > 0, 'snapshot byte size is included')
@@ -361,6 +363,10 @@ assert.equal(applyRawCommandAnalyticsOptOut(['node', 'capgo', 'bundle', 'upload'
     releaseStaleSend()
     await new Promise(resolve => setTimeout(resolve, 80))
     await replay.finish()
+
+    assert.equal(captured.filter(body => body.properties.$identify_person === true).length, 1, 'only one replay snapshot requests person identification')
+    assert.equal(captured[0]?.properties.$identify_person, true, 'the first queued replay snapshot requests person identification')
+    assert.equal(captured.slice(1).some(body => '$identify_person' in body.properties), false, 'later replay snapshots omit person identification')
 
     const resizedMeta = captured.flatMap(body => body.properties.$snapshot_data.filter(event => event.type === 4))
       .find(event => event.data.width === getReplayViewportSize(100, 30).width
