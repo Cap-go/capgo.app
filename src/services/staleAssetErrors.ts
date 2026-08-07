@@ -16,6 +16,16 @@ const KNOWN_CRAWLER_ERROR_PATTERNS = [
   /Object Not Found Matching Id:\d+(?:,\s*MethodName:[^,]+,\s*ParamCount:\d+)?/i,
 ]
 
+// Transient browser network drops surface as a `fetch` TypeError whose exact
+// wording differs per engine. Anchored so only the standalone browser message
+// (optionally wrapped with a `<context>: ` prefix, e.g. `downloadUrl error: …`)
+// is suppressed — not richer messages like "Failed to fetch organization insights".
+const TRANSIENT_NETWORK_ERROR_PATTERNS = [
+  /^(?:.*: )?Failed to fetch$/i,
+  /^(?:.*: )?Load failed$/i,
+  /^(?:.*: )?NetworkError when attempting to fetch resource\.?$/i,
+]
+
 // vue-router throws this when a lazy route component fails to load (e.g. a stale
 // chunk 404 during a deploy). It can also surface if a navigation races the
 // automatic reload we trigger for stale chunks, so we treat it as a chunk error.
@@ -35,6 +45,13 @@ export function isKnownCrawlerNoiseErrorMessage(message: string | undefined): bo
     return false
 
   return KNOWN_CRAWLER_ERROR_PATTERNS.some(pattern => pattern.test(message))
+}
+
+export function isTransientNetworkErrorMessage(message: string | undefined): boolean {
+  if (!message)
+    return false
+
+  return TRANSIENT_NETWORK_ERROR_PATTERNS.some(pattern => pattern.test(message))
 }
 
 export function isComponentResolutionErrorMessage(message: string | undefined): boolean {
@@ -63,9 +80,15 @@ export function shouldSuppressPostHogExceptionEvent(event: PostHogEventLike): bo
 
   const exception = event.properties?.$exception_list?.[0]
   const exceptionValue = getErrorMessage(exception?.value) ?? getErrorMessage(exception?.$exception_value)
-  if (isStaleAssetErrorMessage(exceptionValue) || isKnownCrawlerNoiseErrorMessage(exceptionValue))
+  if (isSuppressibleNoiseErrorMessage(exceptionValue))
     return true
 
   const fallbackValue = getErrorMessage(event.properties?.$exception_values?.[0])
-  return isStaleAssetErrorMessage(fallbackValue) || isKnownCrawlerNoiseErrorMessage(fallbackValue)
+  return isSuppressibleNoiseErrorMessage(fallbackValue)
+}
+
+function isSuppressibleNoiseErrorMessage(message: string | undefined): boolean {
+  return isStaleAssetErrorMessage(message)
+    || isKnownCrawlerNoiseErrorMessage(message)
+    || isTransientNetworkErrorMessage(message)
 }
