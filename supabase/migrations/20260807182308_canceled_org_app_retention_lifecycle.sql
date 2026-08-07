@@ -104,7 +104,8 @@ COMMENT ON FUNCTION public.long_canceled_org_ids() IS
 -- Queue retention warning events (85d bundles / 90d apps).
 -- Window is [p_min_days, p_min_days+5) so warnings never fire in the same cron
 -- pass as the next destructive step (90d soft-delete / 95d app delete).
--- Dedup: skip if already claimed in notifications OR still pending in the queue.
+-- Dedup: skip if already claimed in notifications OR still
+-- pending in the queue.
 CREATE OR REPLACE FUNCTION public.queue_canceled_org_retention_alerts(
   p_alert_type text,
   p_min_days integer,

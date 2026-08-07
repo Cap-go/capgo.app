@@ -584,7 +584,7 @@ SELECT is(
     ]
   ),
   1,
-  'queues exactly one 85-day bundle warning (warn85 only; long/ultra outside [85,90))'
+  'queues one 85-day bundle warning for warn85 only'
 );
 
 SELECT is(
@@ -596,7 +596,7 @@ SELECT is(
     ]
   ),
   1,
-  'queues exactly one 90-day app warning (long only; ultra outside [90,95))'
+  'queues one 90-day app warning for long only'
 );
 
 SELECT is(
@@ -621,7 +621,7 @@ SELECT is(
     ]
   ),
   2,
-  'second cleanup does not re-queue retention warnings while messages are pending'
+  'second cleanup does not re-queue pending retention warnings'
 );
 
 SELECT ok(
