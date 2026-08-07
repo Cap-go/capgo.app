@@ -25,7 +25,10 @@ const emit = defineEmits(['addDevice'])
 // TODO: delete the old version check when all devices uses the new version system
 type Device = Database['public']['Tables']['devices']['Row']
 type PlatformOs = Database['public']['Enums']['platform_os']
-interface DateRangePickerHandle { openPicker: (invoker?: HTMLElement) => Promise<void> }
+interface DateRangePickerHandle {
+  openPicker: (invoker?: HTMLElement) => Promise<void>
+  togglePicker: (invoker?: HTMLElement) => void
+}
 
 const { t } = useI18n()
 const supabase = useSupabase()
@@ -76,7 +79,7 @@ function clearExtraFilters() {
 }
 
 function openDateRangePicker(event: MouseEvent) {
-  void dateRangePickerRef.value?.openPicker(event.currentTarget as HTMLElement)
+  dateRangePickerRef.value?.togglePicker(event.currentTarget as HTMLElement)
 }
 
 function clearDeviceViewFilters(clearFilters: () => void) {

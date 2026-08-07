@@ -50,10 +50,16 @@ test.describe('Devices empty state', () => {
     await expect(emptyState.getByText('Search or filters are hiding it.')).toHaveCount(0)
     await expect(page.getByText('No elements found')).toHaveCount(0)
 
-    await emptyState.getByRole('button', { name: 'Change time range' }).press('Enter')
+    const changeTimeRange = emptyState.getByRole('button', { name: 'Change time range' })
+    await changeTimeRange.click()
+    await expect(page.getByRole('dialog', { name: /Date range:/ })).toBeVisible()
+    await changeTimeRange.click()
+    await expect(page.getByRole('dialog', { name: /Date range:/ })).toHaveCount(0)
+
+    await changeTimeRange.press('Enter')
     await expect(page.getByRole('dialog', { name: /Date range:/ })).toBeVisible()
     await page.keyboard.press('Escape')
-    await expect(emptyState.getByRole('button', { name: 'Change time range' })).toBeFocused()
+    await expect(changeTimeRange).toBeFocused()
 
     const search = page.getByPlaceholder('Search by device ID or Custom ID')
     await search.fill('missing-device')

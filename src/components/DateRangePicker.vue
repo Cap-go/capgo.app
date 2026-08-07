@@ -181,7 +181,7 @@ async function openPicker(invoker?: HTMLElement) {
   popoverRef.value?.querySelector<HTMLElement>('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')?.focus()
 }
 
-defineExpose({ openPicker })
+defineExpose({ openPicker, togglePicker })
 
 onClickOutside(popoverRef, (event) => {
   const target = event.target as Node | null
@@ -235,11 +235,11 @@ function syncDraftFromProps() {
   pickerRange.value = [range.start, range.end]
 }
 
-function togglePicker() {
+function togglePicker(invoker?: HTMLElement) {
   if (isOpen.value)
     closePicker()
   else
-    void openPicker()
+    void openPicker(invoker)
 }
 
 function selectPreset(mode: RollingDateRangePreset) {
@@ -324,7 +324,7 @@ function presetButtonClass(active: boolean, disabled: boolean) {
       aria-haspopup="dialog"
       :aria-expanded="isOpen"
       :aria-controls="popoverId"
-      @click="togglePicker"
+      @click="togglePicker()"
     >
       <CalendarDaysIcon
         class="date-range-trigger-icon h-4 w-4 shrink-0 transition-colors"
