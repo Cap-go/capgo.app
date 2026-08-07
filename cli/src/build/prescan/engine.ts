@@ -1,5 +1,5 @@
 // src/build/prescan/engine.ts
-import type { Finding, OutcomeOptions, PrescanCheck, PrescanOutcome, PrescanReport, ScanContext, Severity } from './types'
+import type { Finding, OutcomeOptions, PrescanCheck, PrescanOutcome, PrescanReport, ScanContext } from './types'
 import { enforcedCounts } from './enforcement'
 
 interface EngineOptions { checkTimeoutMs?: number }
@@ -56,7 +56,7 @@ export async function runPrescan(ctx: ScanContext, checks: PrescanCheck[], optio
     })
   }
 
-  const counts: Record<Severity, number> = { error: 0, warning: 0, info: 0 }
+  const counts: PrescanReport['counts'] = { error: 0, warning: 0, info: 0 }
   for (const f of findings) counts[f.severity]++
 
   return { findings, counts, skippedRemote: remoteSkipped.length, durationMs: Date.now() - start, checksRun: runnable.length }
