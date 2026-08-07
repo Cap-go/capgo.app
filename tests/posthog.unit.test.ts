@@ -123,6 +123,19 @@ describe('posthog helper', () => {
     expect(body.properties).not.toHaveProperty('$set')
   })
 
+  it('normalizes endpoint-shaped hosts for group identification', async () => {
+    const { groupIdentifyPosthog } = await import('../supabase/functions/_backend/utils/posthog.ts')
+    envState.posthogApiHost = 'https://eu.i.posthog.com/s/'
+
+    await groupIdentifyPosthog(createContext(), {
+      groupKey: 'org-id',
+      groupType: 'organization',
+      properties: { name: 'Capgo' },
+    })
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('https://eu.i.posthog.com/capture/')
+  })
+
   it('identifies the replay person before sending the initial snapshot', async () => {
     const { capturePosthogReplaySnapshot } = await import('../supabase/functions/_backend/utils/posthog.ts')
 

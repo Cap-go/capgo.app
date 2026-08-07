@@ -388,9 +388,7 @@ export async function groupIdentifyPosthog(c: Context, payload: PostHogGroupIden
   }
 
   const host = getEnv(c, 'POSTHOG_API_HOST') || POSTHOG_CAPTURE_URL
-  const posthogUrl = host.endsWith('/capture/')
-    ? host
-    : new URL('capture/', host.endsWith('/') ? host : `${host}/`).toString()
+  const posthogUrl = getPostHogCaptureUrl(host)
 
   const body = {
     api_key: apiKey,
