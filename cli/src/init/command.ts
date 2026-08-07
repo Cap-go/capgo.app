@@ -2,6 +2,7 @@ import type { Buffer } from 'node:buffer'
 import type { ExistingOrganizationApp, Options, PendingOnboardingApp } from '../api/app'
 import type { UploadReporter } from '../bundle/upload'
 import type { Organization } from '../utils'
+import type { SupportedPackageManager } from './command-execution'
 import type { InitCodeDiff, InitEncryptionPhase, InitEncryptionSummary } from './runtime'
 import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
@@ -34,6 +35,7 @@ import { uploadSupportLogs } from '../support/support-upload'
 import { consoleWebUrl, createSupabaseClient, defaultApiHost, findBuildCommandForProjectType, findMainFile, findMainFileForProjectType, findProjectType, findRoot, findSavedKey, findSavedKeySilent, formatError, getAllPackagesDependencies, getAppId, getBundleVersion, getConfig, getConfigForWrite, getLocalConfig, getNativeProjectResetAdvice, getOrganizationListWithPermission, getPackageScripts, getPMAndCommand, hasCliPermission, PACKNAME, projectIsMonorepo, resolveUserIdFromApiKey, updateConfigbyKey, updateConfigUpdater, validateIosUpdaterSync } from '../utils'
 import { buildAppIdConflictSuggestions, isAppAlreadyExistsError } from './app-conflict'
 import { isChannelAlreadyExistsError } from './channel-conflict'
+import { createMissingExecutableError, getAvailablePackageManagers, getMissingPackageManagerExecutable, getPackageManagerInfo, probeExecutable, waitForCommandResult } from './command-execution'
 import { cancel as pCancel, confirm as pConfirm, intro as pIntro, isCancel as pIsCancel, log as pLog, outro as pOutro, select as pSelect, spinner as pSpinner, text as pText } from './prompts'
 import { finishActiveCliReplay, getActiveCliReplaySessionId, isCliTelemetryDisabled, startInitReplay } from './replay'
 import { appendInitStreamingLine, clearInitStreamingOutput, INIT_CANCEL, pushInitLog, setInitCodeDiff, setInitEncryptionSummary, setInitVersionWarning, startInitStreamingOutput, stopInitInkSession, updateInitStreamingStatus, waitForInitStreamingContinue } from './runtime'
@@ -3279,42 +3281,41 @@ async function streamCommandInInitPanel(params: {
     }
   }
 
-  return new Promise((resolve) => {
-    let child
-    try {
-      child = spawn(runnerCmd, fullArgs, {
-        // Onboarding commands that use this helper must be non-interactive.
-        // Keep stdin ignored and capture stdout/stderr so no child process
-        // touches the parent TTY while Ink is actively rendering into it.
-        cwd: params.cwd,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      })
-    }
-    catch (error) {
-      updateInitStreamingStatus('error', error instanceof Error ? error.message : String(error))
-      resolve({ success: false, error: error instanceof Error ? error : new Error(String(error)) })
-      return
-    }
+  const executableProbe = probeExecutable(runnerCmd, { cwd: params.cwd })
+  if (!executableProbe.available) {
+    const error = executableProbe.error?.code === 'ENOENT'
+      ? createMissingExecutableError(runnerCmd)
+      : executableProbe.error ?? new Error(`Cannot execute "${runnerCmd}"`)
+    updateInitStreamingStatus('error', error.message)
+    return { success: false, error }
+  }
 
-    child.stdout?.on('data', appendChunk)
-    child.stderr?.on('data', appendChunk)
-
-    child.once('error', (error) => {
-      updateInitStreamingStatus('error', error.message)
-      resolve({ success: false, error })
+  let child
+  try {
+    child = spawn(runnerCmd, fullArgs, {
+      // Onboarding commands that use this helper must be non-interactive.
+      // Keep stdin ignored and capture stdout/stderr so no child process
+      // touches the parent TTY while Ink is actively rendering into it.
+      cwd: params.cwd,
+      stdio: ['ignore', 'pipe', 'pipe'],
     })
+  }
+  catch (error) {
+    const resolvedError = error instanceof Error ? error : new Error(String(error))
+    updateInitStreamingStatus('error', resolvedError.message)
+    return { success: false, error: resolvedError }
+  }
 
-    child.once('close', (code) => {
-      if (code === 0) {
-        updateInitStreamingStatus('success', 'Done')
-        resolve({ success: true })
-        return
-      }
-      const err = new Error(`Command exited with code ${code ?? 'unknown'}`)
-      updateInitStreamingStatus('error', err.message)
-      resolve({ success: false, error: err })
-    })
-  })
+  child.stdout?.on('data', appendChunk)
+  child.stderr?.on('data', appendChunk)
+
+  const result = await waitForCommandResult(child)
+  if (result.success)
+    updateInitStreamingStatus('success', 'Done')
+  else
+    updateInitStreamingStatus('error', result.error?.message ?? 'Command failed')
+
+  return result
 }
 
 function delay(ms: number): Promise<void> {
@@ -3349,6 +3350,39 @@ type PackageManagerInfo = ReturnType<typeof getPMAndCommand>
 export type PlatformChoice = 'ios' | 'android'
 type BuildProjectStepOutcome = 'completed' | 'skipped'
 export type RunDeviceStepOutcome = { args: string[], command: string } | { args: undefined, command: string }
+
+async function selectAvailablePackageManager(
+  detectedPackageManager: PackageManagerInfo,
+  projectDir: string,
+  orgId: string,
+  apikey: string,
+): Promise<PackageManagerInfo> {
+  if (detectedPackageManager.pm === 'unknown')
+    throw createMissingExecutableError('unknown', env.PATH)
+
+  const isAvailable = (command: string) => probeExecutable(command, { cwd: projectDir }).available
+  const missingExecutable = getMissingPackageManagerExecutable(detectedPackageManager.pm, isAvailable)
+  if (!missingExecutable)
+    return detectedPackageManager
+
+  const alternatives = getAvailablePackageManagers(detectedPackageManager.pm, isAvailable)
+  if (alternatives.length === 0)
+    throw createMissingExecutableError(missingExecutable, env.PATH)
+
+  const selectedPackageManager = await pSelect({
+    message: `${detectedPackageManager.pm} was detected from the project lockfile, but "${missingExecutable}" is not available in PATH. Choose an installed package manager:`,
+    options: alternatives.map(packageManager => ({
+      value: packageManager,
+      label: packageManager,
+      hint: 'available in PATH',
+    })),
+  })
+  await cancelCommand(selectedPackageManager, orgId, apikey)
+
+  const selected = selectedPackageManager as SupportedPackageManager
+  pLog.info(`Using ${selected} instead of unavailable ${detectedPackageManager.pm} for build and sync.`)
+  return getPackageManagerInfo(selected)
+}
 
 export interface CapacitorRunTarget {
   name: string
@@ -3602,9 +3636,9 @@ async function runProjectBuildAndSync(appId: string, platform: PlatformChoice, o
 }
 
 async function buildProjectStep(orgId: string, apikey: string, appId: string, platform: 'ios' | 'android', config?: CapacitorConfigSnapshot) {
-  const pm = getPMAndCommand()
   const packageJsonPath = path.resolve(globalPathToPackageJson ?? join(findRoot(cwd()), PACKNAME))
   const projectDir = dirname(packageJsonPath)
+  const pm = await selectAvailablePackageManager(getPMAndCommand(), projectDir, orgId, apikey)
   await ensureNativePlatformForBuild(platform, config, pm.runner, projectDir)
 
   const doBuild = await pConfirm({ message: `Automatic build ${appId} with "${pm.pm} run build" ?` })

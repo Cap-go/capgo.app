@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import assert from 'node:assert/strict'
-import { execSync } from 'node:child_process'
+import { execSync, spawn } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -19,6 +19,15 @@ import {
   revertInitAutoTestChangeContent,
   runInheritedCommand,
 } from '../src/init/command.ts'
+import {
+  createMissingExecutableError,
+  getAvailablePackageManagers,
+  getMissingPackageManagerExecutable,
+  getPackageManagerInfo,
+  isPackageManagerAvailable,
+  probeExecutable,
+  waitForCommandResult,
+} from '../src/init/command-execution.ts'
 import { usesAlwaysDirectUpdate } from '../src/updaterConfig.ts'
 
 let failures = 0
@@ -44,6 +53,61 @@ function t(name, fn) {
     console.error(error)
   }
 }
+
+t('command probe reports executables missing from PATH', () => {
+  const result = probeExecutable('__capgo_missing_package_manager__', { env: { PATH: '' } })
+
+  assert.equal(result.available, false)
+  assert.equal(result.error?.code, 'ENOENT')
+})
+
+t('missing executable error explains the PATH mismatch', () => {
+  const error = createMissingExecutableError('bun', '/usr/local/bin:/usr/bin')
+
+  assert.equal(error.code, 'ENOENT')
+  assert.match(error.message, /Cannot find executable "bun" in PATH/)
+  assert.match(error.message, /\/usr\/local\/bin:\/usr\/bin/)
+})
+
+t('package manager discovery returns only installed alternatives', () => {
+  const available = getAvailablePackageManagers('bun', command => command === 'npm' || command === 'npx' || command === 'pnpm')
+
+  assert.deepEqual(available, ['npm', 'pnpm'])
+})
+
+t('package manager availability includes its Capacitor runner', () => {
+  assert.equal(isPackageManagerAvailable('npm', command => command === 'npm'), false)
+  assert.equal(isPackageManagerAvailable('npm', command => command === 'npm' || command === 'npx'), true)
+  assert.equal(getMissingPackageManagerExecutable('npm', command => command === 'npm'), 'npx')
+  assert.equal(getMissingPackageManagerExecutable('npm', command => command === 'npm' || command === 'npx'), undefined)
+})
+
+t('package manager metadata uses matching direct commands and runners', () => {
+  assert.deepEqual(getPackageManagerInfo('npm'), {
+    pm: 'npm',
+    command: 'install',
+    installCommand: 'npm install',
+    runner: 'npx',
+  })
+  assert.deepEqual(getPackageManagerInfo('pnpm'), {
+    pm: 'pnpm',
+    command: 'install',
+    installCommand: 'pnpm install',
+    runner: 'pnpm exec',
+  })
+  assert.deepEqual(getPackageManagerInfo('yarn'), {
+    pm: 'yarn',
+    command: 'install',
+    installCommand: 'yarn install',
+    runner: 'yarn dlx',
+  })
+  assert.deepEqual(getPackageManagerInfo('bun'), {
+    pm: 'bun',
+    command: 'install',
+    installCommand: 'bun install',
+    runner: 'bunx',
+  })
+})
 
 t('git status helper skips non-git folders', () => {
   withTempDir((root) => {
@@ -270,6 +334,26 @@ async function tAsync(name, fn) {
     console.error(error)
   }
 }
+
+await tAsync('command settlement preserves ENOENT instead of close code -2', async () => {
+  const child = spawn('__capgo_missing_stream_command__', [], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  const result = await waitForCommandResult(child)
+
+  assert.equal(result.success, false)
+  assert.equal(result.error?.code, 'ENOENT')
+  assert.match(result.error?.message ?? '', /capgo_missing_stream_command/)
+})
+
+await tAsync('command settlement handles normal zero and nonzero exits', async () => {
+  const success = await waitForCommandResult(spawn(process.execPath, ['-e', 'process.exit(0)']))
+  const failure = await waitForCommandResult(spawn(process.execPath, ['-e', 'process.exit(7)']))
+
+  assert.deepEqual(success, { success: true })
+  assert.equal(failure.success, false)
+  assert.equal(failure.error?.message, 'Command exited with code 7')
+})
 
 await tAsync('inherited child output flows through parent streams for replay capture', async () => {
   const originalStdoutWrite = process.stdout.write
