@@ -60,8 +60,10 @@ export async function openBlank(link: string) {
     return !(await presentActionSheetOpen(link))
   }
   const opened = globalThis.open(link, '_blank')
-  if (opened)
+  if (opened) {
+    opened.opener = null
     return true
+  }
   // Async callers often lose the user-gesture; offer a confirm link fallback.
   return presentBlockedPopupFallback(link)
 }

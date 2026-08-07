@@ -196,17 +196,19 @@ test.describe('Subscription Checkout', () => {
     // Web checkout opens a confirm dialog with a real target=_blank link.
     const confirmLink = page.getByRole('link', { name: 'Confirm' })
     await expect(confirmLink).toBeVisible()
-    const checkoutUrl = await confirmLink.getAttribute('href')
-    expect(checkoutUrl).toBeTruthy()
 
     const escapedStripeOrigin = STRIPE_EMULATOR_URL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    expect(checkoutUrl!).toMatch(new RegExp(`${escapedStripeOrigin}/checkout/`))
+    const checkoutUrlPattern = new RegExp(`${escapedStripeOrigin}/checkout/`)
 
-    await page.goto(checkoutUrl!)
-    await expect(page).toHaveURL(new RegExp(`${escapedStripeOrigin}/checkout/`))
-    await page.getByRole('button', { name: /^Pay / }).click()
+    const [checkoutPage] = await Promise.all([
+      page.waitForEvent('popup'),
+      confirmLink.click(),
+    ])
+    await checkoutPage.waitForLoadState('domcontentloaded')
+    await expect(checkoutPage).toHaveURL(checkoutUrlPattern)
+    await checkoutPage.getByRole('button', { name: /^Pay / }).click()
 
-    await page.waitForURL(/\/settings\/organization\/plans\?success=1/)
-    await expect(page.getByRole('heading', { name: 'Thank You for subscribing to Capgo' })).toBeVisible()
+    await checkoutPage.waitForURL(/\/settings\/organization\/plans\?success=1/)
+    await expect(checkoutPage.getByRole('heading', { name: 'Thank You for subscribing to Capgo' })).toBeVisible()
   })
 })
