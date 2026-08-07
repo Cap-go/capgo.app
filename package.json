@@ -1,7 +1,7 @@
 {
   "name": "capgo-app",
   "type": "module",
-  "version": "12.209.11",
+  "version": "12.209.12",
   "private": true,
   "workspaces": [
     "cli",
@@ -45,6 +45,7 @@
     "dev": "vite",
     "serve": "vite",
     "serve:local": "ENV=local vite",
+    "serve:prod-no-cors": "ENV=prod CAPGO_PROD_SUPABASE_PROXY=true CHOKIDAR_USEPOLLING=true vite",
     "serve:worktree": "bun run supabase:with-env -- bun -e \"const supabaseUrl = process.env.SUPABASE_URL || ''; process.env.SUPA_URL = supabaseUrl; process.env.SUPA_ANON = process.env.SUPABASE_ANON_KEY || ''; process.env.API_DOMAIN = supabaseUrl.replace(/^https?:\\/\\//, '') + '/functions/v1'; process.env.ENV = 'local'; const { spawnSync } = require('node:child_process'); const result = spawnSync('bun', ['run', 'serve:local'], { stdio: 'inherit', env: process.env }); process.exit(result.status ?? 1)\"",
     "serve:dev": "BRANCH=development vite",
     "serve:preprod": "BRANCH=preprod vite",

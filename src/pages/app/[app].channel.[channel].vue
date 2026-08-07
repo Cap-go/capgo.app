@@ -940,12 +940,13 @@ async function copyCurlCommand() {
               {{ channel.name }}
             </InfoRow>
             <!-- Bundle assigned to this channel -->
-            <InfoRow :label="t('bundle-assigned-to-this-channel')" label-class="font-bold" :is-link="channel && !isInternalVersionName((channel.version.name))">
-              <div class="flex items-center gap-2">
-                <span class="cursor-pointer" @click="openBundle()">{{ channel.version.name }}</span>
+            <InfoRow :label="t('bundle-assigned-to-this-channel')" class="sm:items-center" label-class="text-base! leading-5 font-bold! lg:whitespace-nowrap" :is-link="channel && !isInternalVersionName((channel.version.name))">
+              <div class="flex items-center gap-3">
+                <span class="text-base leading-5 cursor-pointer" @click="openBundle()">{{ channel.version.name }}</span>
                 <button
                   v-if="channel"
-                  class="p-1 transition-colors border border-gray-200 rounded-md dark:border-gray-700 hover:bg-gray-50 hover:border-gray-300 dark:hover:border-gray-600 dark:hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:border-gray-200 dark:disabled:hover:border-gray-700"
+                  class="relative p-0 d-btn d-btn-outline size-6 min-h-6 before:absolute before:-inset-2.5 before:content-['']"
+                  :aria-label="t('select-stable-bundle')"
                   :disabled="!canPromoteBundle"
                   @click="openSelectStableVersion()"
                 >

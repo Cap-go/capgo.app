@@ -1,4 +1,5 @@
 import type { RealtimeChannel } from '@supabase/supabase-js'
+import { useEventBus } from '@vueuse/core'
 import { onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
@@ -45,6 +46,7 @@ export function useRealtimeCLIFeed() {
   const orgStore = useOrganizationStore()
   const router = useRouter()
   const { t } = useI18n()
+  const bundleUploadedEvent = useEventBus<string>('bundle-uploaded')
 
   let currentChannel: RealtimeChannel | null = null
   const isConnected = ref(false)
@@ -102,6 +104,9 @@ export function useRealtimeCLIFeed() {
     const onAction = route ? () => router.push(route) : undefined
 
     if (isUploadReplicationEvent(payload.event)) {
+      if (payload.app_id)
+        bundleUploadedEvent.emit(payload.app_id)
+
       showUploadReplicationToast({
         eventLabel: payload.event,
         route,

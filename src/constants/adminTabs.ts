@@ -1,6 +1,7 @@
 import type { Tab } from '~/components/comp_def'
 import IconArrowPath from '~icons/heroicons/arrow-path'
 import IconBanknotes from '~icons/heroicons/banknotes'
+import IconBell from '~icons/heroicons/bell'
 import IconBuildingOffice from '~icons/heroicons/building-office-2'
 import IconCircleStack from '~icons/heroicons/circle-stack'
 import IconCurrencyDollar from '~icons/heroicons/currency-dollar'
@@ -17,4 +18,5 @@ export const adminTabs: Tab[] = [
   { label: 'admin-organizations', icon: IconBuildingOffice, key: '/organizations' },
   { label: 'revenue', icon: IconBanknotes, key: '/revenue' },
   { label: 'credits', icon: IconCurrencyDollar, key: '/credits' },
+  { label: 'notifications', icon: IconBell, key: '/notifications' },
 ]

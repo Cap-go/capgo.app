@@ -380,6 +380,8 @@ export const requestBuildOptionsSchema = z.object({
   supaAnon: z.string().optional(),
   prescan: z.boolean().optional(),
   prescanIgnoreFatal: z.boolean().optional(),
+  prescanSkip: z.array(z.string()).optional(),
+  prescanWarn: z.array(z.string()).optional(),
 })
 
 export type RequestBuildOptions = z.infer<typeof requestBuildOptionsSchema>

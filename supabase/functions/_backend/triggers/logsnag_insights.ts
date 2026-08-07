@@ -11,6 +11,7 @@ import { BRES, middlewareAPISecret, quickError } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { logsnagInsights } from '../utils/logsnag.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
+import { readGlobalNotificationStatsCF } from '../utils/nativeNotifications.ts'
 import { countAllApps, countAllUpdates, countAllUpdatesExternal, getUpdateStats } from '../utils/stats.ts'
 import { supabaseAdmin } from '../utils/supabase.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
@@ -3150,6 +3151,115 @@ function formatPercentCount(count: number, total: number): string {
   return `${(count * 100 / total).toFixed(0)}% - ${count}`
 }
 
+
+interface NativeNotificationGlobalStats {
+  apps: number
+  providers: number
+  campaigns: number
+  campaigns_day: number
+  sent_day: number
+  received_day: number
+  opened_day: number
+  failed_day: number
+  sent_last_month: number
+  opened_last_month: number
+}
+
+function countNotificationEvent(rows: { event: string, count: number }[], event: string): number {
+  return rows.reduce((sum, row) => sum + (row.event === event ? Number(row.count) || 0 : 0), 0)
+}
+
+async function getNativeNotificationGlobalStats(c: Context, window: DailyWindow): Promise<NativeNotificationGlobalStats> {
+  const dayStartIso = window.prevDayStart.toISOString()
+  const dayEndIso = window.prevDayEnd.toISOString()
+  const lastMonthStart = new Date(window.prevDayEnd.getTime() - 30 * 24 * 60 * 60 * 1000)
+
+  let pgClient: ReturnType<typeof getPgClient> | undefined
+  try {
+    pgClient = getPgClient(c)
+    const drizzleClient = getDrizzleClient(pgClient)
+    const result = await drizzleClient.execute<{
+      apps: number
+      providers: number
+      campaigns: number
+      campaigns_day: number
+    }>(sql`
+      SELECT
+        (
+          SELECT COUNT(DISTINCT app_id)::int
+          FROM public.notification_provider_configs
+          WHERE status = 'configured'
+            AND created_at < ${dayEndIso}::timestamptz
+        ) AS apps,
+        (
+          SELECT COUNT(*)::int
+          FROM public.notification_provider_configs
+          WHERE status = 'configured'
+            AND created_at < ${dayEndIso}::timestamptz
+        ) AS providers,
+        (
+          SELECT COUNT(*)::int
+          FROM public.notification_campaigns
+          WHERE created_at < ${dayEndIso}::timestamptz
+        ) AS campaigns,
+        (
+          SELECT COUNT(*)::int
+          FROM public.notification_campaigns
+          WHERE created_at >= ${dayStartIso}::timestamptz
+            AND created_at < ${dayEndIso}::timestamptz
+        ) AS campaigns_day
+    `)
+    const row = result.rows[0] ?? { apps: 0, providers: 0, campaigns: 0, campaigns_day: 0 }
+
+    const [dayRows, monthRows] = await Promise.all([
+      readGlobalNotificationStatsCF(c, { since: window.prevDayStart, until: window.prevDayEnd, throwOnError: true }),
+      readGlobalNotificationStatsCF(c, { since: lastMonthStart, until: window.prevDayEnd, throwOnError: true }),
+    ])
+
+    return {
+      apps: Number(row.apps) || 0,
+      providers: Number(row.providers) || 0,
+      campaigns: Number(row.campaigns) || 0,
+      campaigns_day: Number(row.campaigns_day) || 0,
+      sent_day: countNotificationEvent(dayRows, 'sent'),
+      received_day: countNotificationEvent(dayRows, 'received'),
+      opened_day: countNotificationEvent(dayRows, 'opened'),
+      failed_day: countNotificationEvent(dayRows, 'failed'),
+      sent_last_month: countNotificationEvent(monthRows, 'sent'),
+      opened_last_month: countNotificationEvent(monthRows, 'opened'),
+    }
+  }
+  finally {
+    if (pgClient)
+      closeClient(c, pgClient)
+  }
+}
+
+async function runNativeNotificationsGlobalStatsShard(c: Context, window: DailyWindow): Promise<void> {
+  const stats = await getNativeNotificationGlobalStats(c, window)
+
+  await updateGlobalStatsSnapshot(c, window.prevDayDateId, {
+    notifications_apps: stats.apps,
+    notifications_providers: stats.providers,
+    notifications_campaigns: stats.campaigns,
+    notifications_campaigns_day: stats.campaigns_day,
+    notifications_sent_day: stats.sent_day,
+    notifications_received_day: stats.received_day,
+    notifications_opened_day: stats.opened_day,
+    notifications_failed_day: stats.failed_day,
+    notifications_sent_last_month: stats.sent_last_month,
+    notifications_opened_last_month: stats.opened_last_month,
+  })
+
+  cloudlog({
+    requestId: c.get('requestId'),
+    message: 'Updated global stats native_notifications shard',
+    dateId: window.prevDayDateId,
+    notifications_apps: stats.apps,
+    notifications_sent_day: stats.sent_day,
+  })
+}
+
 async function runNotificationsGlobalStatsShard(c: Context, window: DailyWindow): Promise<void> {
   const notificationClaim = await claimGlobalStatsNotificationDelivery(c, window.prevDayDateId)
   if (!notificationClaim) {
@@ -3444,6 +3554,10 @@ async function runLogsnagInsightsShard(c: Context, shard: GlobalStatsShard, date
     case 'notifications':
       await runNotificationsGlobalStatsShard(c, window)
       return
+    case 'native_notifications':
+      await runNativeNotificationsGlobalStatsShard(c, window)
+      await markGlobalStatsShardComplete(c, dateId, shard)
+      return
   }
 }
 
@@ -3568,6 +3682,7 @@ export const logsnagInsightsShardApps: Record<GlobalStatsShard, Hono<MiddlewareK
   paid_products: createLogsnagInsightsShardApp('paid_products'),
   ltv: createLogsnagInsightsShardApp('ltv'),
   notifications: createLogsnagInsightsShardApp('notifications'),
+  native_notifications: createLogsnagInsightsShardApp('native_notifications'),
 }
 
 app.post('/', middlewareAPISecret, async (c) => {

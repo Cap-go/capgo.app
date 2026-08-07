@@ -759,6 +759,8 @@ export class CapgoSDK {
         // pass CLI flags, so expose the gate controls directly.
         prescan: options.prescan,
         prescanIgnoreFatal: options.prescanIgnoreFatal,
+        prescanSkip: options.prescanSkip,
+        prescanWarn: options.prescanWarn,
       }
 
       const result = await requestBuildInternal(options.appId, internalOptions, true)

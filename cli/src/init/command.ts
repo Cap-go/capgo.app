@@ -918,6 +918,10 @@ function findNearestPackageJson(startDir: string) {
   return findNearestNamedFile(startDir, [PACKNAME])
 }
 
+export function resolveInitPackageJsonPath(currentPath: string | undefined, startDir = cwd()) {
+  return currentPath ?? findNearestPackageJson(startDir)
+}
+
 function readExistingFile(filePath: string | undefined) {
   if (!filePath || !existsSync(filePath))
     return undefined
@@ -1198,6 +1202,7 @@ async function ensureWorkspaceReadyForInit(initialAppId?: string): Promise<strin
     const currentDir = cwd()
     const nearestCapacitorConfig = findNearestCapacitorConfig(currentDir)
     const nearestPackageJson = findNearestPackageJson(currentDir)
+    globalPathToPackageJson = resolveInitPackageJsonPath(globalPathToPackageJson, currentDir)
     const projectDir = nearestCapacitorConfig?.dir || (nearestPackageJson ? dirname(nearestPackageJson) : currentDir)
     const projectType = await findProjectType({ quiet: true, packageJsonPath: globalPathToPackageJson })
     const frameworkKind = getFrameworkKind(projectType)

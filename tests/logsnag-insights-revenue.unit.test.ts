@@ -202,8 +202,8 @@ describe('logsnag revenue metric helpers', () => {
       'ltv',
     ])
     expect(logsnagInsightsTestUtils.getMissingGlobalStatsRequiredShards(ready)).toEqual([])
-    expect(logsnagInsightsTestUtils.getMissingGlobalStatsShards(ready)).toEqual(['notifications'])
-    expect(logsnagInsightsTestUtils.getGlobalStatsShardQueueCandidates(ready)).toEqual(['notifications'])
+    expect(logsnagInsightsTestUtils.getMissingGlobalStatsShards(ready)).toEqual(['notifications', 'native_notifications'])
+    expect(logsnagInsightsTestUtils.getGlobalStatsShardQueueCandidates(ready)).toEqual(['notifications', 'native_notifications'])
 
     const legacyUsage = logsnagInsightsTestUtils.normalizeCompletedGlobalStatsShards([
       'core',
@@ -222,6 +222,7 @@ describe('logsnag revenue metric helpers', () => {
     const sent = logsnagInsightsTestUtils.normalizeCompletedGlobalStatsShards([
       ...ready,
       'notifications',
+      'native_notifications',
     ])
     expect(logsnagInsightsTestUtils.getMissingGlobalStatsShards(sent)).toEqual([])
   })
@@ -259,7 +260,7 @@ describe('logsnag revenue metric helpers', () => {
 
     expect(staleShards).toEqual(['core', 'usage_storage', 'builds'])
     expect(logsnagInsightsTestUtils.getGlobalStatsRepairShardQueueCandidates(ready, staleShards)).toEqual(['core', 'usage_storage', 'builds'])
-    expect(logsnagInsightsTestUtils.getGlobalStatsRepairShardQueueCandidates(ready)).toEqual(['notifications'])
+    expect(logsnagInsightsTestUtils.getGlobalStatsRepairShardQueueCandidates(ready)).toEqual(['notifications', 'native_notifications'])
   })
 
   it.concurrent('keeps fresh completed global stats shards eligible for notifications', () => {
@@ -294,7 +295,7 @@ describe('logsnag revenue metric helpers', () => {
     const staleShards = logsnagInsightsTestUtils.getGlobalStatsStaleRepairShards(freshRow, expectedBuildStats)
 
     expect(staleShards).toEqual([])
-    expect(logsnagInsightsTestUtils.getGlobalStatsRepairShardQueueCandidates(ready, staleShards)).toEqual(['notifications'])
+    expect(logsnagInsightsTestUtils.getGlobalStatsRepairShardQueueCandidates(ready, staleShards)).toEqual(['notifications', 'native_notifications'])
   })
 
   it.concurrent('detects completed global stats notifications for idempotent retries', () => {
@@ -322,7 +323,7 @@ describe('logsnag revenue metric helpers', () => {
       'notifications_tracking',
     ])
     expect(logsnagInsightsTestUtils.hasCompletedGlobalStatsNotifications(partiallySent)).toBe(false)
-    expect(logsnagInsightsTestUtils.getMissingGlobalStatsShards(partiallySent)).toEqual(['notifications'])
+    expect(logsnagInsightsTestUtils.getMissingGlobalStatsShards(partiallySent)).toEqual(['notifications', 'native_notifications'])
   })
 
   it.concurrent('skips completed non-notification shard retries only', () => {
@@ -357,6 +358,7 @@ describe('logsnag revenue metric helpers', () => {
       'paid_products',
       'ltv',
       'notifications',
+      'native_notifications',
     ])
   })
 
