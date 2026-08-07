@@ -7,6 +7,8 @@ const POSTHOG_CAPTURE_URL = 'https://eu.i.posthog.com/capture/'
 const POSTHOG_EXCEPTION_URL = 'https://eu.i.posthog.com/i/v0/e/'
 const POSTHOG_SNAPSHOT_URL = 'https://eu.i.posthog.com/s/'
 const POSTHOG_DELIVERY_TIMEOUT_MS = 5000
+const POSTHOG_IDENTIFY_TIMEOUT_MS = 250
+const RRWEB_META_EVENT_TYPE = 4
 
 export type PostHogGroups = Record<string, string>
 
@@ -14,10 +16,12 @@ interface PostHogCapturePayload extends Pick<TrackOptions, 'event'>, Pick<TrackO
   distinct_id?: string
   groups?: PostHogGroups
   ip?: string
+  personProperties?: Record<string, unknown>
   setPersonProperties?: boolean
   tags?: Record<string, unknown>
   nonPersonTags?: Record<string, unknown>
   timestamp?: string
+  timeoutMs?: number
   user_id?: string
 }
 
@@ -29,10 +33,6 @@ export async function trackPosthogEvent(c: Context, payload: PostHogCapturePaylo
   }
 
   const host = getEnv(c, 'POSTHOG_API_HOST') || POSTHOG_CAPTURE_URL
-  const posthogUrl = host.endsWith('/capture/')
-    ? host
-    : new URL('capture/', host.endsWith('/') ? host : `${host}/`).toString()
-
   const distinctId = payload.user_id || payload.distinct_id || 'anonymous'
 
   const hasGroups = payload.groups && Object.keys(payload.groups).length > 0
@@ -46,7 +46,7 @@ export async function trackPosthogEvent(c: Context, payload: PostHogCapturePaylo
     ...(payload.tags || {}),
     channel: payload.channel,
     description: payload.description,
-    ...(payload.setPersonProperties === false ? {} : { $set: payload.tags }),
+    ...(payload.setPersonProperties === false ? {} : { $set: { ...payload.tags, ...payload.personProperties } }),
     ...(hasGroups ? { $groups: payload.groups } : {}),
   }
 
@@ -59,13 +59,17 @@ export async function trackPosthogEvent(c: Context, payload: PostHogCapturePaylo
     timestamp: payload.timestamp ?? new Date().toISOString(),
   }
 
+  const controller = payload.timeoutMs ? new AbortController() : undefined
+  const timeoutId = controller ? setTimeout(() => controller.abort(), payload.timeoutMs) : undefined
   try {
+    const posthogUrl = getPostHogCaptureUrl(host)
     const res = await fetch(posthogUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(body),
+      signal: controller?.signal,
     })
 
     if (!res.ok) {
@@ -81,6 +85,10 @@ export async function trackPosthogEvent(c: Context, payload: PostHogCapturePaylo
     cloudlogErr({ requestId: c.get('requestId'), message: 'PostHog fetch failed', error: serializeError(e), event: payload.event, distinctId })
     return false
   }
+  finally {
+    if (timeoutId)
+      clearTimeout(timeoutId)
+  }
 }
 
 function trimTrailingSlashes(value: string) {
@@ -91,11 +99,16 @@ function trimTrailingSlashes(value: string) {
 }
 
 function stripPostHogEndpoint(host: string) {
-  for (const suffix of ['/i/v0/e', '/capture', '/e']) {
+  for (const suffix of ['/i/v0/e', '/capture', '/s', '/e']) {
     if (host.endsWith(suffix))
       return `${host.slice(0, -suffix.length)}/`
   }
   return host
+}
+
+function getPostHogCaptureUrl(host: string) {
+  const normalizedHost = stripPostHogEndpoint(trimTrailingSlashes(host))
+  return new URL('capture/', normalizedHost.endsWith('/') ? normalizedHost : `${normalizedHost}/`).toString()
 }
 
 function getPostHogSnapshotUrl(host: string) {
@@ -139,6 +152,20 @@ export async function capturePosthogReplaySnapshot(c: Context, payload: PostHogR
   catch (e) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Invalid PostHog replay host', error: serializeError(e), host })
     return false
+  }
+
+  const isInitialSnapshot = payload.events.some(event => typeof event === 'object' && event !== null && 'type' in event && event.type === RRWEB_META_EVENT_TYPE)
+  if (isInitialSnapshot && payload.userEmail) {
+    await trackPosthogEvent(c, {
+      channel: 'cli',
+      event: '$identify',
+      // Resizes emit another rrweb Meta event. Keep retries backend-only while
+      // letting PostHog deduplicate them into one identify event per session.
+      nonPersonTags: { $insert_id: `cli-replay-identify:${payload.sessionId}` },
+      personProperties: { email: payload.userEmail },
+      timeoutMs: POSTHOG_IDENTIFY_TIMEOUT_MS,
+      user_id: payload.userId,
+    }).catch(error => cloudlogErr({ requestId: c.get('requestId'), message: 'PostHog identification failed', error: serializeError(error), userId: payload.userId }))
   }
 
   const body = {
@@ -364,10 +391,6 @@ export async function groupIdentifyPosthog(c: Context, payload: PostHogGroupIden
   }
 
   const host = getEnv(c, 'POSTHOG_API_HOST') || POSTHOG_CAPTURE_URL
-  const posthogUrl = host.endsWith('/capture/')
-    ? host
-    : new URL('capture/', host.endsWith('/') ? host : `${host}/`).toString()
-
   const body = {
     api_key: apiKey,
     event: '$groupidentify',
@@ -381,6 +404,7 @@ export async function groupIdentifyPosthog(c: Context, payload: PostHogGroupIden
   }
 
   try {
+    const posthogUrl = getPostHogCaptureUrl(host)
     const res = await fetch(posthogUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

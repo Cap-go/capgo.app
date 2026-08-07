@@ -1962,10 +1962,15 @@ export async function resolveUserIdFromApiKey(supabase: SupabaseClient<Database>
 
   const userId = (dataUser || '').toString()
 
-  if (!userId || userIdError) {
+  if (userIdError) {
     if (!silent)
-      log.error(`Invalid API key or insufficient permissions.`)
-    throw new Error('Invalid API key or insufficient permissions.')
+      log.error(userIdError.message)
+    throw userIdError
+  }
+  if (!userId) {
+    if (!silent)
+      log.error(`Capgo authentication failed: invalid Capgo API key or insufficient Capgo permissions.`)
+    throw new Error('Capgo authentication failed: invalid Capgo API key or insufficient Capgo permissions.')
   }
   return userId
 }
@@ -2063,6 +2068,13 @@ export function getPMAndCommand() {
   pmFetched = true
   pmRunner = findPackageManagerRunner(dir)
   return { pm, command: pmCommand, installCommand: `${pm} ${pmCommand}`, runner: pmRunner }
+}
+
+export function setPMAndCommand(next: { pm: PackageManagerType, command: InstallCommand, runner: PackageManagerRunner }): void {
+  pm = next.pm
+  pmCommand = next.command
+  pmRunner = next.runner
+  pmFetched = true
 }
 
 export function getNativeProjectResetAdvice(platformRunner: string, nativePlatform: 'ios' | 'android') {

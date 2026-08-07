@@ -108,8 +108,6 @@ app.post('/', middlewareAuth(), async (c) => {
   const body = await parseBody<CliReplayBody>(c)
   const replay = validateReplayBody(body)
   const userEmail = await getAuthenticatedUserEmail(c, userId)
-  if (!userEmail)
-    throw quickError(500, 'missing_replay_user_email', 'Could not resolve replay user email')
 
   const sent = await capturePosthogReplaySnapshot(c, {
     ...replay,
