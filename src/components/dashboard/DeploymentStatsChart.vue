@@ -17,10 +17,10 @@ import { computed } from 'vue'
 import { Bar, Line } from 'vue-chartjs'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
-import { getTodayLimit as resolveTodayLimit, transformSeries as transformDailySeries } from '~/services/buildCharts'
+import { useOrgBillingCycleChart } from '~/composables/useOrgBillingCycleChart'
 import { createLegendConfig, createStackedChartScales } from '~/services/chartConfig'
 import { createTooltipConfig, todayLinePlugin, verticalLinePlugin } from '~/services/chartTooltip'
-import { generateMonthDays, getDaysInCurrentMonth, normalizeToUtcStartOfDay } from '~/services/date'
+import { generateMonthDays, getDaysInCurrentMonth } from '~/services/date'
 import { useOrganizationStore } from '~/stores/organization'
 import { createChartLegendItems } from './chartLegend'
 import ChartLegend from './ChartLegend.vue'
@@ -43,16 +43,13 @@ const isDark = useDark()
 const { t } = useI18n()
 const router = useRouter()
 const organizationStore = useOrganizationStore()
-const cycleStart = normalizeToUtcStartOfDay(new Date(organizationStore.currentOrganization?.subscription_start ?? new Date()))
-const cycleEnd = normalizeToUtcStartOfDay(new Date(organizationStore.currentOrganization?.subscription_end ?? new Date()))
-
-function getTodayLimit(labelCount: number) {
-  return resolveTodayLimit(labelCount, props.useBillingPeriod, cycleStart, cycleEnd)
-}
-
-function transformSeries(source: number[], accumulated: boolean, labelCount: number) {
-  return transformDailySeries(source, accumulated, labelCount, getTodayLimit(labelCount))
-}
+const { resolveCycleStart, resolveCycleEnd, todayLimit, transformDailySeries } = useOrgBillingCycleChart(
+  () => props.useBillingPeriod,
+  () => organizationStore.currentOrganization?.subscription_start,
+  () => organizationStore.currentOrganization?.subscription_end,
+)
+const cycleStart = resolveCycleStart()
+const cycleEnd = resolveCycleEnd()
 
 // Determine mode based on which data is provided
 const isChannelMode = computed(() => Object.keys(props.dataByChannel).length > 0)
@@ -187,13 +184,13 @@ const chartData = computed<ChartData<any>>(() => {
 
     // Process data for cumulative mode
     if (props.accumulated) {
-      processed = transformSeries(props.data as number[], true, labelCount)
+      processed = transformDailySeries(props.data as number[], true, labelCount)
       // Use LineChartStats color scheme for line mode
       borderColor = `hsl(210, 65%, 45%)`
       backgroundColor = `hsla(210, 50%, 60%, 0.6)`
     }
     else {
-      processed = transformSeries(props.data as number[], false, labelCount)
+      processed = transformDailySeries(props.data as number[], false, labelCount)
       // Use existing bar chart colors for bar mode
       backgroundColor = 'hsla(210, 50%, 70%, 0.8)'
       borderColor = 'hsl(210, 50%, 55%)'
@@ -236,7 +233,7 @@ const chartData = computed<ChartData<any>>(() => {
 
     // Process data for cumulative mode
     if (props.accumulated) {
-      processed = transformSeries(itemData, true, labelCount)
+      processed = transformDailySeries(itemData, true, labelCount)
       // Use safe hue that skips red/green (reserved for UpdateStats)
       const hue = getSafeHue(index)
       const saturation = 50 + (index % 3) * 8
@@ -245,7 +242,7 @@ const chartData = computed<ChartData<any>>(() => {
       backgroundColor = `hsla(${hue}, ${saturation}%, ${lightness}%, 0.6)`
     }
     else {
-      processed = transformSeries(itemData, false, labelCount)
+      processed = transformDailySeries(itemData, false, labelCount)
       // Use existing bar chart colors for bar mode
       backgroundColor = itemColors[index]
       borderColor = backgroundColor.replace('hsla', 'hsl').replace(', 0.8)', ')').replace(/(\d+)%\)/, (_, lightness) => {
@@ -290,7 +287,7 @@ const todayLineOptions = computed(() => {
     return { enabled: false }
 
   const labels = Array.isArray(chartData.value.labels) ? chartData.value.labels : []
-  const index = getTodayLimit(labels.length)
+  const index = todayLimit(labels.length)
 
   if (index < 0 || index >= labels.length)
     return { enabled: false }

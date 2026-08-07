@@ -18,9 +18,9 @@ import { computed } from 'vue'
 import { Bar, Line } from 'vue-chartjs'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
-import { getTodayLimit as resolveTodayLimit, transformSeries as transformDailySeries } from '~/services/buildCharts'
+import { useOrgBillingCycleChart } from '~/composables/useOrgBillingCycleChart'
 import { createLegendConfig, createStackedChartScales } from '~/services/chartConfig'
-import { generateMonthDays, getDaysInCurrentMonth, normalizeToUtcStartOfDay } from '~/services/date'
+import { generateMonthDays, getDaysInCurrentMonth } from '~/services/date'
 import { useOrganizationStore } from '~/stores/organization'
 import { createTooltipConfig, todayLinePlugin, verticalLinePlugin } from '../../services/chartTooltip'
 
@@ -45,22 +45,13 @@ const effectiveOrganization = computed(() => {
     return organizationStore.getOrgByAppId(props.appId) ?? organizationStore.currentOrganization
   return organizationStore.currentOrganization
 })
-const cycleStart = computed(() => {
-  return normalizeToUtcStartOfDay(new Date(effectiveOrganization.value?.subscription_start ?? new Date()))
-})
-const cycleEnd = computed(() => {
-  const end = normalizeToUtcStartOfDay(new Date(effectiveOrganization.value?.subscription_end ?? new Date()))
-  const today = normalizeToUtcStartOfDay()
-  return end < today ? today : end
-})
-
-function getTodayLimit(labelCount: number) {
-  return resolveTodayLimit(labelCount, props.useBillingPeriod, cycleStart.value, cycleEnd.value)
-}
-
-function transformSeries(source: number[], accumulated: boolean, labelCount: number) {
-  return transformDailySeries(source, accumulated, labelCount, getTodayLimit(labelCount))
-}
+const { resolveCycleStart, resolveCycleEnd, todayLimit, transformDailySeries } = useOrgBillingCycleChart(
+  () => props.useBillingPeriod,
+  () => effectiveOrganization.value?.subscription_start,
+  () => effectiveOrganization.value?.subscription_end,
+)
+const cycleStart = computed(() => resolveCycleStart())
+const cycleEnd = computed(() => resolveCycleEnd())
 
 const UPDATE_FAILURE_ACTIONS = [
   'set_fail',
@@ -164,7 +155,7 @@ const chartData = computed<ChartData<'bar' | 'line'>>(() => {
     const actionName = props.appNames[action] || action
     const style = ACTION_STYLES[action] ?? ACTION_STYLES.requested
     const rawData = actionData && actionData.length ? actionData : Array.from({ length: labels.length }).fill(0) as Array<number>
-    const processed = transformSeries(rawData, props.accumulated, labelCount)
+    const processed = transformDailySeries(rawData, props.accumulated, labelCount)
 
     const backgroundColor = props.accumulated ? style.lineBackground : style.barBackground
     const borderColor = props.accumulated ? style.lineBorder : style.barBorder
@@ -202,7 +193,7 @@ const todayLineOptions = computed(() => {
     return { enabled: false }
 
   const labels = Array.isArray(chartData.value.labels) ? chartData.value.labels : []
-  const index = getTodayLimit(labels.length)
+  const index = todayLimit(labels.length)
 
   if (index < 0 || index >= labels.length)
     return { enabled: false }

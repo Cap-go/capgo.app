@@ -2,6 +2,7 @@
 import colors from 'tailwindcss/colors'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { computeLastDayEvolution } from '~/services/buildCharts'
 import { addUtcDays, formatUtcDateParam, normalizeToUtcStartOfDay } from '~/services/date'
 import {
   calculateDemoEvolution,
@@ -15,6 +16,7 @@ import { useSupabase } from '~/services/supabase'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useOrganizationStore } from '~/stores/organization'
 import { filterDailySeriesToBillingPeriod } from '~/utils/chartOptimizations'
+import { ensureMinDelay } from '~/utils/minDelay'
 import ChartCard from './ChartCard.vue'
 import DeploymentStatsChart from './DeploymentStatsChart.vue'
 
@@ -289,14 +291,7 @@ async function calculateStats(forceRefetch = false) {
       finalTotal = finalDeploymentData.reduce((sum, count) => sum + count, 0)
     }
 
-    let evolution = 0
-    const nonZeroDays = finalDeploymentData.filter(count => count > 0)
-    if (nonZeroDays.length >= 2) {
-      const lastDayCount = nonZeroDays[nonZeroDays.length - 1]
-      const previousDayCount = nonZeroDays[nonZeroDays.length - 2]
-      if (previousDayCount > 0)
-        evolution = ((lastDayCount - previousDayCount) / previousDayCount) * 100
-    }
+    const evolution = computeLastDayEvolution(finalDeploymentData)
 
     if (requestToken !== latestRequestToken)
       return
@@ -325,11 +320,7 @@ async function calculateStats(forceRefetch = false) {
   }
   finally {
     if (requestToken === latestRequestToken) {
-      // Ensure spinner shows for at least 300ms for better UX
-      const elapsed = Date.now() - startTime
-      if (elapsed < 300) {
-        await new Promise(resolve => setTimeout(resolve, 300 - elapsed))
-      }
+      await ensureMinDelay(startTime)
       isLoading.value = false
     }
   }
