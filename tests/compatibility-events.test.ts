@@ -244,27 +244,31 @@ describe('acknowledge_compatibility_event RPC', () => {
     expect(row.resolution_kind).toBeNull()
   })
 
-  it('is a silent no-op when a non-member tries to accept an event', async () => {
+  it('raises and leaves the event unresolved when a non-member tries to accept it', async () => {
     const eventId = await insertEvent({ platform: 'ios', channelName: 'beta' })
 
     const { error } = await nonMemberClient.rpc('acknowledge_compatibility_event', {
       event_id: eventId,
       note: 'Not allowed to do this',
     })
-    // No existence oracle: unauthorized callers get no error, just a no-op.
-    expect(error).toBeNull()
+    // The RPC raises so the client stops reporting success on a write that never
+    // happened. The same 'not_authorized' error is used for unknown ids below,
+    // so an unauthorized caller cannot use it as an event-existence oracle.
+    expect(error).not.toBeNull()
+    expect(error?.message).toContain('not_authorized')
 
     const row = await getEventById(eventId)
     expect(row.resolved_at).toBeNull()
     expect(row.resolved_by).toBeNull()
   })
 
-  it('is a silent no-op for an unknown event id', async () => {
+  it('raises the same error for an unknown event id (no existence oracle)', async () => {
     const { error } = await memberClient.rpc('acknowledge_compatibility_event', {
       event_id: 9_999_999_999,
       note: 'Does not exist',
     })
-    expect(error).toBeNull()
+    expect(error).not.toBeNull()
+    expect(error?.message).toContain('not_authorized')
   })
 })
 

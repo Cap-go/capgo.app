@@ -24,7 +24,7 @@ import { confirmWithRememberedChoice } from '../promptPreferences'
 import { showReplicationProgress } from '../replicationProgress'
 import { formatTable } from '../terminal-table'
 import { usesAlwaysDirectUpdate } from '../updaterConfig'
-import { baseKeyV2, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, canPromptInteractively, checkCompatibilityCloud, checkPlanValidUpload, checkRemoteCliMessages, createSupabaseClient, deletedFailedVersion, deltaManifestTooLargeMessage, findRoot, findSavedKey, formatError, getAppId, getBundleVersion, getCompatibilityDetails, getConfig, getInstalledVersion, getLocalConfig, getLocalDependencies, getOrganizationId, getPMAndCommand, getRemoteChecksums, getRemoteFileConfig, hasCliPermission, invokeCapgoCliApi, isCompatible, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, regexSemver, resolveUserIdFromApiKey, sendEvent, setVersionManifest, updateConfigUpdater, updateOrCreateChannel, updateOrCreateVersion, UPLOAD_TIMEOUT, uploadTUS, uploadUrl, zipFile } from '../utils'
+import { baseKeyV2, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, canPromptInteractively, checkCompatibilityCloud, checkPlanValidUpload, checkRemoteCliMessages, createSupabaseClient, deletedFailedVersion, deltaManifestTooLargeMessage, findRoot, findSavedKey, formatError, getAppId, getBundleVersion, getCompatibilityDetails, getConfig, getInstalledVersion, getLocalConfig, getLocalDependencies, getOrganizationId, getPMAndCommand, getRemoteChecksums, getRemoteFileConfig, hasCliPermission, invokeCapgoCliApi, isCompatible, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, regexSemver, resolveUserIdFromApiKey, sendEvent, setVersionManifest, updateConfigUpdater, updateOrCreateChannel, updateOrCreateVersion, UPLOAD_TIMEOUT, UPLOAD_TIMEOUT_ERROR_NAME, uploadTimeoutMessage, uploadTUS, uploadUrl, zipFile } from '../utils'
 import type { AutoBumpLevel } from '../versionHelpers'
 import { autoBumpVersionBy, getVersionSuggestions, interactiveVersionBump, normalizeAutoBumpInput } from '../versionHelpers'
 import { resolveAutoBumpLevelFromAi } from './auto-bump-ai'
@@ -616,15 +616,17 @@ async function uploadBundleToCapgoCloud(apikey: string, supabase: SupabaseType, 
         throw new Error('Cannot get upload url')
       }
 
+      const uploadTimeoutMs = options.timeout || UPLOAD_TIMEOUT
+
       if (options.verbose) {
         log.info(`[Verbose] Presigned URL obtained, uploading via HTTP PUT...`)
-        log.info(`  - Timeout: ${options.timeout || UPLOAD_TIMEOUT}ms`)
-        log.info(`  - Retry attempts: 5`)
+        log.info(`  - Timeout: ${uploadTimeoutMs}ms`)
+        log.info(`  - Retry attempts: 0 (standard upload does not retry, use --tus for resumable retries)`)
         log.info(`  - Content-Type: application/zip`)
       }
 
       const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), options.timeout || UPLOAD_TIMEOUT)
+      const timeoutId = setTimeout(() => controller.abort(), uploadTimeoutMs)
 
       try {
         const response = await fetch(url, {
@@ -639,6 +641,17 @@ async function uploadBundleToCapgoCloud(apikey: string, supabase: SupabaseType, 
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`)
         }
+      }
+      catch (putError: any) {
+        // A timeout fires as an AbortError from our controller. Convert it into a
+        // typed, descriptive error so the user sees what happened and how to work
+        // around it, instead of the raw "This operation was aborted" message.
+        if (controller.signal.aborted || putError?.name === 'AbortError') {
+          const timeoutError = new Error(uploadTimeoutMessage(uploadTimeoutMs))
+          timeoutError.name = UPLOAD_TIMEOUT_ERROR_NAME
+          throw timeoutError
+        }
+        throw putError
       }
       finally {
         clearTimeout(timeoutId)
@@ -658,7 +671,12 @@ async function uploadBundleToCapgoCloud(apikey: string, supabase: SupabaseType, 
       log.info(`[Verbose] Error type: ${errorUpload instanceof Error ? 'Error' : typeof errorUpload}`)
     }
 
-    if (errorUpload instanceof Error && errorUpload.message.includes('HTTP error')) {
+    if (errorUpload instanceof Error && errorUpload.name === UPLOAD_TIMEOUT_ERROR_NAME) {
+      // Already a descriptive, actionable message (names the elapsed budget and
+      // points at --timeout / --tus); print it as-is without the generic prefix.
+      log.error(errorUpload.message)
+    }
+    else if (errorUpload instanceof Error && errorUpload.message.includes('HTTP error')) {
       try {
         const statusMatch = errorUpload.message.match(/status: (\d+)/)
         const status = statusMatch ? statusMatch[1] : 'unknown'
@@ -1323,7 +1341,13 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   if (options.verbose)
     log.info(`[Verbose] Target channel${channels.length > 1 ? 's' : ''}: ${channelLabel}`)
 
-  // Now if it does exist we will fetch the org id
+  // Verify the app exists and this key may upload BEFORE the org lookup, so a
+  // missing app or bad key yields an actionable message (e.g. run `app add`)
+  // instead of the opaque "Cannot get organization id" thrown below.
+  if (options.verbose)
+    log.info(`[Verbose] Checking app existence and upload permission...`)
+  await checkAppExistsAndHasPermissionOrgErr(supabase, apikey, appid, 'app.upload_bundle', silent, true)
+
   const orgId = await getOrganizationId(supabase, appid)
   if (options.verbose)
     log.info(`[Verbose] Organization ID: ${orgId}`)
