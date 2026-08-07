@@ -358,35 +358,20 @@ jobs:
         run: ln -sfn supabase/templates templates
       - name: Stop this job's Supabase stack
         run: bun scripts/supabase-worktree.ts stop --no-backup || true
-      - name: Run Supabase Start (deps and PostgreSQL 17 client install in background)
+      - name: Install dependencies
+        run: bun install
+      - name: Install PostgreSQL 17 client
         run: |
-          (
-            set -e
-            bun install
-          ) > "${RUNNER_TEMP}/deps-install.log" 2>&1 &
-          deps_install_pid=$!
-          (
-            if command -v pg_dump-17 >/dev/null 2>&1 && command -v pg_restore-17 >/dev/null 2>&1 && command -v psql-17 >/dev/null 2>&1; then
-              exit 0
-            fi
-            sudo rm -f /etc/apt/sources.list.d/azure-cli.list /etc/apt/sources.list.d/azure-cli.sources /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/microsoft-prod.sources
-            sudo apt-get update
-            sudo apt-get install -y ca-certificates postgresql-common
-            sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
-            sudo apt-get install -y postgresql-client-17
-          ) > "${RUNNER_TEMP}/pg17-client-install.log" 2>&1 &
-          pg17_install_pid=$!
-          bun scripts/supabase-worktree.ts start -x imgproxy,studio,mailpit,realtime,postgres-meta,supavisor,logflare,vector
-          if ! wait "${deps_install_pid}"; then
-            echo "::error::Dependency install failed"
-            cat "${RUNNER_TEMP}/deps-install.log"
-            exit 1
+          if command -v pg_dump-17 >/dev/null 2>&1 && command -v pg_restore-17 >/dev/null 2>&1 && command -v psql-17 >/dev/null 2>&1; then
+            exit 0
           fi
-          if ! wait "${pg17_install_pid}"; then
-            echo "::error::PostgreSQL 17 client install failed"
-            cat "${RUNNER_TEMP}/pg17-client-install.log"
-            exit 1
-          fi
+          sudo rm -f /etc/apt/sources.list.d/azure-cli.list /etc/apt/sources.list.d/azure-cli.sources /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/microsoft-prod.sources
+          sudo apt-get update
+          sudo apt-get install -y ca-certificates postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y postgresql-client-17
+      - name: Run Supabase Start
+        run: bun scripts/supabase-worktree.ts start -x imgproxy,studio,mailpit,realtime,postgres-meta,supavisor,logflare,vector
       - name: Export isolated Supabase endpoints
         run: |
           bun scripts/supabase-worktree.ts with-env bun -e 'const apiUrl = new URL(process.env.SUPABASE_URL ?? ""); const dbUrl = process.env.SUPABASE_DB_URL ?? ""; if (!apiUrl.host || !dbUrl) throw new Error("Isolated Supabase status is missing API_URL or DB_URL."); console.log(`SUPABASE_FUNCTIONS_HEALTH_URL=http-get://${apiUrl.host}/functions/v1/ok`); console.log(`MAIN_SUPABASE_DB_URL=${dbUrl}`)' >> "$GITHUB_ENV"
@@ -607,35 +592,20 @@ jobs:
         run: ln -sfn supabase/templates templates
       - name: Stop this job's Supabase stack
         run: bun scripts/supabase-worktree.ts stop --no-backup || true
-      - name: Run Supabase Start (deps and PostgreSQL 17 client install in background)
+      - name: Install dependencies
+        run: bun install
+      - name: Install PostgreSQL 17 client
         run: |
-          (
-            set -e
-            bun install
-          ) > "${RUNNER_TEMP}/deps-install.log" 2>&1 &
-          deps_install_pid=$!
-          (
-            if command -v pg_dump-17 >/dev/null 2>&1 && command -v pg_restore-17 >/dev/null 2>&1 && command -v psql-17 >/dev/null 2>&1; then
-              exit 0
-            fi
-            sudo rm -f /etc/apt/sources.list.d/azure-cli.list /etc/apt/sources.list.d/azure-cli.sources /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/microsoft-prod.sources
-            sudo apt-get update
-            sudo apt-get install -y ca-certificates postgresql-common
-            sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
-            sudo apt-get install -y postgresql-client-17
-          ) > "${RUNNER_TEMP}/pg17-client-install.log" 2>&1 &
-          pg17_install_pid=$!
-          bun scripts/supabase-worktree.ts start -x imgproxy,studio,mailpit,realtime,postgres-meta,supavisor,logflare,vector
-          if ! wait "${deps_install_pid}"; then
-            echo "::error::Dependency install failed"
-            cat "${RUNNER_TEMP}/deps-install.log"
-            exit 1
+          if command -v pg_dump-17 >/dev/null 2>&1 && command -v pg_restore-17 >/dev/null 2>&1 && command -v psql-17 >/dev/null 2>&1; then
+            exit 0
           fi
-          if ! wait "${pg17_install_pid}"; then
-            echo "::error::PostgreSQL 17 client install failed"
-            cat "${RUNNER_TEMP}/pg17-client-install.log"
-            exit 1
-          fi
+          sudo rm -f /etc/apt/sources.list.d/azure-cli.list /etc/apt/sources.list.d/azure-cli.sources /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/microsoft-prod.sources
+          sudo apt-get update
+          sudo apt-get install -y ca-certificates postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y postgresql-client-17
+      - name: Run Supabase Start
+        run: bun scripts/supabase-worktree.ts start -x imgproxy,studio,mailpit,realtime,postgres-meta,supavisor,logflare,vector
       - name: Export isolated Supabase endpoints
         run: |
           bun scripts/supabase-worktree.ts with-env bun -e 'const apiUrl = new URL(process.env.SUPABASE_URL ?? ""); const dbUrl = process.env.SUPABASE_DB_URL ?? ""; if (!apiUrl.host || !dbUrl) throw new Error("Isolated Supabase status is missing API_URL or DB_URL."); console.log(`SUPABASE_FUNCTIONS_HEALTH_URL=http-get://${apiUrl.host}/functions/v1/ok`); console.log(`MAIN_SUPABASE_DB_URL=${dbUrl}`)' >> "$GITHUB_ENV"
@@ -692,19 +662,10 @@ jobs:
         run: ln -sfn supabase/templates templates
       - name: Stop this job's Supabase stack
         run: bun scripts/supabase-worktree.ts stop --no-backup || true
-      - name: Run Supabase Start (deps install in background)
-        run: |
-          (
-            set -e
-            bun install
-          ) > "${RUNNER_TEMP}/deps-install.log" 2>&1 &
-          deps_install_pid=$!
-          bun scripts/supabase-worktree.ts start -x imgproxy,studio,mailpit,realtime,postgres-meta,supavisor,logflare,vector
-          if ! wait "${deps_install_pid}"; then
-            echo "::error::Dependency install failed"
-            cat "${RUNNER_TEMP}/deps-install.log"
-            exit 1
-          fi
+      - name: Install dependencies
+        run: bun install
+      - name: Run Supabase Start
+        run: bun scripts/supabase-worktree.ts start -x imgproxy,studio,mailpit,realtime,postgres-meta,supavisor,logflare,vector
       - name: Export isolated Supabase endpoints
         run: |
           bun scripts/supabase-worktree.ts with-env bun -e 'const apiUrl = new URL(process.env.SUPABASE_URL ?? ""); const dbUrl = process.env.SUPABASE_DB_URL ?? ""; if (!apiUrl.host || !dbUrl) throw new Error("Isolated Supabase status is missing API_URL or DB_URL."); console.log(`SUPABASE_FUNCTIONS_HEALTH_URL=http-get://${apiUrl.host}/functions/v1/ok`); console.log(`MAIN_SUPABASE_DB_URL=${dbUrl}`)' >> "$GITHUB_ENV"
@@ -1479,20 +1440,12 @@ jobs:
         run: ln -sfn supabase/templates templates
       - name: Stop this job's Supabase stack
         run: bun scripts/supabase-worktree.ts stop --no-backup || true
-      - name: Run Supabase Start (deps install in background)
+      - name: Install dependencies and build CLI
         run: |
-          (
-            set -e
-            bun install
-            bun run cli:build
-          ) > "${RUNNER_TEMP}/deps-install.log" 2>&1 &
-          deps_install_pid=$!
-          bun scripts/supabase-worktree.ts start -x imgproxy,studio,mailpit,realtime,postgres-meta,supavisor,logflare,vector
-          if ! wait "${deps_install_pid}"; then
-            echo "::error::Dependency install or CLI build failed"
-            cat "${RUNNER_TEMP}/deps-install.log"
-            exit 1
-          fi
+          bun install
+          bun run cli:build
+      - name: Run Supabase Start
+        run: bun scripts/supabase-worktree.ts start -x imgproxy,studio,mailpit,realtime,postgres-meta,supavisor,logflare,vector
       - name: Export isolated Supabase endpoints
         run: |
           bun scripts/supabase-worktree.ts with-env bun -e 'const apiUrl = new URL(process.env.SUPABASE_URL ?? ""); const dbUrl = process.env.SUPABASE_DB_URL ?? ""; if (!apiUrl.host || !dbUrl) throw new Error("Isolated Supabase status is missing API_URL or DB_URL."); console.log(`SUPABASE_FUNCTIONS_HEALTH_URL=http-get://${apiUrl.host}/functions/v1/ok`); console.log(`MAIN_SUPABASE_DB_URL=${dbUrl}`)' >> "$GITHUB_ENV"
