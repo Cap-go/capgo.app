@@ -1218,6 +1218,14 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   // Check 2FA compliance early to give a clear error message
   await check2FAComplianceForApp(supabase, appid, silent)
 
+  // Fail fast if the app does not exist (or we lack upload permission) BEFORE sending any
+  // bundle bytes. Otherwise the whole bundle uploads first and the files backend rejects the
+  // TUS request with a raw `app_not_found` 404, hiding the actionable `app add` guidance.
+  // 2FA was already checked just above, so skip the redundant check here.
+  await checkAppExistsAndHasPermissionOrgErr(supabase, apikey, appid, 'app.upload_bundle', silent, true)
+  if (options.verbose)
+    log.info(`[Verbose] App exists and API key has app.upload_bundle permission`)
+
   const userId = await resolveUserIdFromApiKey(supabase, apikey)
   if (options.verbose)
     log.info(`[Verbose] User verified successfully, user_id: ${userId}`)
@@ -1718,11 +1726,8 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
       log.info(`[Verbose] Version record updated successfully`)
   }
 
-  // Check we have app access to this appId
-  if (options.verbose)
-    log.info(`[Verbose] Checking app permissions...`)
-
-  await checkAppExistsAndHasPermissionOrgErr(supabase, apikey, appid, 'app.upload_bundle', silent, true)
+  // App existence and app.upload_bundle permission were already verified up front (before any
+  // upload). Here we only need the extra bundle.delete permission for linked-bundle cleanup.
   const canDeleteBundle = await hasCliPermission(supabase, apikey, 'bundle.delete', { appId: appid })
 
   if (options.verbose) {
