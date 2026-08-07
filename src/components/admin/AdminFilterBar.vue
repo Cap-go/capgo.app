@@ -3,15 +3,47 @@ import type { DateRangeMode } from '~/stores/adminDashboard'
 import { useMutationObserver } from '@vueuse/core'
 import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRoute, useRouter } from 'vue-router'
 import ArrowPathIconSolid from '~icons/heroicons/arrow-path-solid'
 import DateRangePicker from '~/components/DateRangePicker.vue'
+import {
+  parseDateRangeQuery,
+  serializeDateRangeQuery,
+} from '~/services/dateRange'
 import {
   getDateRangeForMode,
   useAdminDashboardStore,
 } from '~/stores/adminDashboard'
 
 const { t } = useI18n()
+const route = useRoute()
+const router = useRouter()
 const adminStore = useAdminDashboardStore()
+
+function storeMatchesQuery() {
+  const parsed = parseDateRangeQuery(route.query)
+  if (!parsed)
+    return false
+  if (parsed.mode !== adminStore.dateRangeMode)
+    return false
+  if (parsed.mode !== 'custom')
+    return true
+  return parsed.start.getTime() === adminStore.customDateRange.start.getTime()
+    && parsed.end.getTime() === adminStore.customDateRange.end.getTime()
+}
+
+function applyQueryToStore() {
+  const parsed = parseDateRangeQuery(route.query)
+  if (!parsed || storeMatchesQuery())
+    return
+  if (parsed.mode === 'custom')
+    adminStore.setCustomDateRange(parsed.start, parsed.end)
+  else
+    adminStore.setDateRangeMode(parsed.mode)
+}
+
+// Hydrate before first paint/fetch so reloads restore the selected timeframe.
+applyQueryToStore()
 
 const rangeMode = ref<DateRangeMode>(adminStore.dateRangeMode)
 const rangeValue = ref<[Date, Date] | null>([
@@ -54,6 +86,36 @@ function syncFromStore() {
   rangeValue.value = [rolling.start, rolling.end]
 }
 
+function syncStoreToQuery() {
+  const serialized = serializeDateRangeQuery(
+    adminStore.dateRangeMode,
+    adminStore.customDateRange,
+  )
+  const currentRange = typeof route.query.range === 'string' ? route.query.range : undefined
+  const currentStart = typeof route.query.start === 'string' ? route.query.start : undefined
+  const currentEnd = typeof route.query.end === 'string' ? route.query.end : undefined
+  if (
+    currentRange === serialized.range
+    && currentStart === serialized.start
+    && currentEnd === serialized.end
+  ) {
+    return
+  }
+
+  const nextQuery: Record<string, string | string[] | null | undefined> = { ...route.query }
+  nextQuery.range = serialized.range
+  if (serialized.start && serialized.end) {
+    nextQuery.start = serialized.start
+    nextQuery.end = serialized.end
+  }
+  else {
+    delete nextQuery.start
+    delete nextQuery.end
+  }
+
+  void router.replace({ query: nextQuery })
+}
+
 function onApply(payload: { start: Date, end: Date, mode: DateRangeMode }) {
   rangeMode.value = payload.mode
   rangeValue.value = [payload.start, payload.end]
@@ -77,6 +139,24 @@ watch(
     adminStore.activeDateRange.end.getTime(),
   ] as const,
   syncFromStore,
+)
+
+watch(
+  () => [
+    adminStore.dateRangeMode,
+    adminStore.customDateRange.start.getTime(),
+    adminStore.customDateRange.end.getTime(),
+  ] as const,
+  syncStoreToQuery,
+  { immediate: true },
+)
+
+watch(
+  () => [route.query.range, route.query.start, route.query.end] as const,
+  () => {
+    applyQueryToStore()
+    syncFromStore()
+  },
 )
 </script>
 
