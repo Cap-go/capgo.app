@@ -41,7 +41,15 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
     },
   },
   { slug: 'observe', path: '/app/com.demo.app/observe/updater', auth: true },
-  { slug: 'observe-logs', path: '/app/com.demo.app/observe/logs', auth: true },
+  {
+    slug: 'observe-logs',
+    path: '/app/com.demo.app/observe/logs',
+    auth: true,
+    prepare: async (page) => {
+      await page.locator('[data-test="log-table-filters-open"]').click()
+      await page.locator('[data-test="log-table-filters-modal"]').waitFor({ state: 'visible' })
+    },
+  },
   { slug: 'observe-native', path: '/app/com.demo.app/observe/native', auth: true },
   { slug: 'observe-compatibility', path: '/app/com.demo.app/observe/compatibility', auth: true },
   { slug: 'observe-plugins', path: '/app/com.demo.app/observe/plugins', auth: true },

@@ -453,7 +453,7 @@ onMounted(() => {
                       :key="shortcut.label"
                       type="button"
                       data-test="log-table-filter-shortcut"
-                      class="d-btn d-btn-sm min-h-10 border border-slate-300 bg-white px-3 font-medium text-slate-800 shadow-sm hover:border-azure-500 hover:bg-azure-50 hover:text-azure-700 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-azure-500 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:hover:border-azure-400 dark:hover:bg-slate-700"
+                      class="inline-flex min-h-10 items-center justify-center rounded-md border-2 border-slate-300 bg-white px-3.5 text-sm font-semibold text-slate-800 shadow-sm transition-colors duration-150 hover:border-azure-500 hover:bg-azure-50 hover:text-azure-700 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-azure-500 dark:border-slate-500 dark:bg-slate-800 dark:text-slate-100 dark:hover:border-azure-400 dark:hover:bg-slate-700"
                       :class="{
                         'border-azure-500 bg-azure-50 text-azure-700 ring-2 ring-azure-500 dark:border-azure-400 dark:bg-azure-950/40 dark:text-azure-200': isShortcutActive(shortcut),
                       }"
