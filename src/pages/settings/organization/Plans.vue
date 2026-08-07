@@ -14,6 +14,7 @@ import { invokeCapgoApi } from '~/services/capgoApi'
 import { formatIncludedThenPrice } from '~/services/creditPricing'
 import { formatNumberValue } from '~/services/formatLocale'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
+import { shouldShowExpiredTrialPlansState } from '~/services/paymentRequired'
 import { checkPermissions } from '~/services/permissions'
 import { getAffonsoReferral, getDatafastAttribution, openCheckout } from '~/services/stripe'
 import { getCreditUnitPricing, getCurrentPlanNameOrg, useSupabase } from '~/services/supabase'
@@ -46,6 +47,30 @@ const showAdminModal = ref(false)
 
 const { currentOrganization } = storeToRefs(organizationStore)
 const creditUnitPrices = ref<Partial<Record<Database['public']['Enums']['credit_metric_type'], number>>>({})
+const paidAt = ref<string | null | undefined>(undefined)
+const showExpiredTrialState = computed(() => {
+  return shouldShowExpiredTrialPlansState(organizationStore.currentOrganizationFailed, isMobile, paidAt.value)
+})
+
+let billingLookupRun = 0
+watch(() => currentOrganization.value?.gid, async (orgId) => {
+  const currentRun = ++billingLookupRun
+  paidAt.value = undefined
+
+  if (isMobile || !orgId)
+    return
+
+  const { data, error } = await useSupabase()
+    .from('orgs')
+    .select('stripe_info(paid_at)')
+    .eq('id', orgId)
+    .maybeSingle()
+
+  if (currentRun !== billingLookupRun || error || !data)
+    return
+
+  paidAt.value = data.stripe_info?.paid_at ?? null
+}, { immediate: true })
 
 interface PlanFeature {
   label: string
@@ -423,6 +448,8 @@ function buttonName(p: Database['public']['Tables']['plans']['Row']) {
   if (currentPlan.value?.name === p.name && currentOrganization.value?.paying && currentOrganization.value?.is_yearly === isYearly.value) {
     return t('Current')
   }
+  if (showExpiredTrialState.value)
+    return t('choose-plan-name', { plan: p.name })
   if (isTrial.value || organizationStore.currentOrganizationFailed) {
     return t('plan-upgrade')
   }
@@ -435,6 +462,8 @@ function isDisabled(plan: Database['public']['Tables']['plans']['Row']) {
 }
 
 function isRecommended(p: Database['public']['Tables']['plans']['Row']) {
+  if (showExpiredTrialState.value)
+    return false
   return currentPlanSuggest.value?.name === p.name && (currentPlanSuggest.value?.price_m ?? 0) > (currentPlan.value?.price_m ?? 0)
 }
 function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
@@ -456,7 +485,7 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
         <div class="flex-1">
           <div class="flex items-center gap-3">
             <h1 class="text-3xl font-bold text-gray-900 dark:text-white">
-              {{ t('plan-pricing-plans') }}
+              {{ t(showExpiredTrialState ? 'trial-ended-title' : 'plan-pricing-plans') }}
             </h1>
             <!-- Custom Plan Trigger -->
             <button
@@ -468,7 +497,7 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
             </button>
           </div>
           <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-            {{ t('plan-desc') }}
+            {{ t(showExpiredTrialState ? 'trial-ended-plans-description' : 'plan-desc') }}
           </p>
           <p v-if="!isMobile" class="mt-2 text-sm">
             <a class="font-medium text-blue-600 hover:underline dark:text-blue-300" href="https://capgo.app/pricing/#compare-plans">
@@ -498,35 +527,37 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
       </div>
 
       <!-- Error Message -->
-      <div v-if="organizationStore.currentOrganizationFailed" class="px-4 py-2 mb-4 font-medium text-center text-white bg-red-500 rounded-lg shrink-0">
+      <div v-if="organizationStore.currentOrganizationFailed && !showExpiredTrialState" class="px-4 py-2 mb-4 font-medium text-center text-white bg-red-500 rounded-lg shrink-0">
         {{ t('plan-failed') }}
       </div>
 
-      <!-- Credits CTA: shows info banner for credits-only orgs, upsell CTA for others -->
-      <CreditsCta v-if="!isMobile" class="mb-6 shrink-0" :credits-only="isCreditsOnly" />
+      <template v-if="!showExpiredTrialState">
+        <!-- Credits CTA: shows info banner for credits-only orgs, upsell CTA for others -->
+        <CreditsCta v-if="!isMobile" class="mb-6 shrink-0" :credits-only="isCreditsOnly" />
 
-      <!-- Expert as a Service CTA -->
-      <div v-if="!isMobile" class="mb-6 shrink-0">
-        <div class="flex flex-col gap-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900/70 sm:flex-row sm:items-center sm:justify-between">
-          <div class="min-w-0 flex-1">
-            <p class="text-sm font-semibold text-slate-900 dark:text-white">
-              {{ t('expert-service-title') }}
-            </p>
-            <p class="mt-1 max-w-3xl text-xs leading-5 text-slate-600 dark:text-slate-300">
-              {{ t('expert-service-desc') }}
-            </p>
+        <!-- Expert as a Service CTA -->
+        <div v-if="!isMobile" class="mb-6 shrink-0">
+          <div class="flex flex-col gap-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900/70 sm:flex-row sm:items-center sm:justify-between">
+            <div class="min-w-0 flex-1">
+              <p class="text-sm font-semibold text-slate-900 dark:text-white">
+                {{ t('expert-service-title') }}
+              </p>
+              <p class="mt-1 max-w-3xl text-xs leading-5 text-slate-600 dark:text-slate-300">
+                {{ t('expert-service-desc') }}
+              </p>
+            </div>
+            <a
+              class="d-btn d-btn-sm h-auto min-h-10 w-full shrink-0 justify-center gap-2 whitespace-nowrap rounded-lg border-none bg-blue-600 px-4 text-xs font-semibold text-white hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600 sm:w-auto"
+              href="https://capgo.app/premium-support/"
+              rel="noopener noreferrer"
+              target="_blank"
+            >
+              {{ t('expert-service-cta') }}
+              <IconArrowRight class="h-3.5 w-3.5" aria-hidden="true" />
+            </a>
           </div>
-          <a
-            class="d-btn d-btn-sm h-auto min-h-10 w-full shrink-0 justify-center gap-2 whitespace-nowrap rounded-lg border-none bg-blue-600 px-4 text-xs font-semibold text-white hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600 sm:w-auto"
-            href="https://capgo.app/premium-support/"
-            rel="noopener noreferrer"
-            target="_blank"
-          >
-            {{ t('expert-service-cta') }}
-            <IconArrowRight class="h-3.5 w-3.5" aria-hidden="true" />
-          </a>
         </div>
-      </div>
+      </template>
 
       <!-- Plans Grid -->
       <div class="grid content-start min-h-0 grid-cols-1 gap-4 p-1 overflow-y-auto md:grid-cols-2 xl:grid-cols-4 grow">
@@ -539,7 +570,7 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
           :class="[
             // Don't highlight the plan card for credits-only orgs — they are not actually
             // on any plan, and highlighting Solo (the fallback) would be misleading.
-            p.name === currentPlan?.name && !isCreditsOnly ? 'border-2 border-blue-500' : 'border-gray-200 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-700',
+            p.name === currentPlan?.name && !isCreditsOnly && !showExpiredTrialState ? 'border-2 border-blue-500' : 'border-gray-200 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-700',
             isRecommended(p) ? 'shadow-lg shadow-blue-500/10' : 'shadow-sm',
           ]"
         >
@@ -614,6 +645,34 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
           </div>
         </div>
       </div>
+
+      <template v-if="showExpiredTrialState">
+        <!-- Credits CTA: shows info banner for credits-only orgs, upsell CTA for others -->
+        <CreditsCta v-if="!isMobile" class="mt-6 shrink-0" :credits-only="isCreditsOnly" />
+
+        <!-- Expert as a Service CTA -->
+        <div v-if="!isMobile" class="mt-6 shrink-0">
+          <div class="flex flex-col gap-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900/70 sm:flex-row sm:items-center sm:justify-between">
+            <div class="min-w-0 flex-1">
+              <p class="text-sm font-semibold text-slate-900 dark:text-white">
+                {{ t('expert-service-title') }}
+              </p>
+              <p class="mt-1 max-w-3xl text-xs leading-5 text-slate-600 dark:text-slate-300">
+                {{ t('expert-service-desc') }}
+              </p>
+            </div>
+            <a
+              class="d-btn d-btn-sm h-auto min-h-10 w-full shrink-0 justify-center gap-2 whitespace-nowrap rounded-lg border-none bg-blue-600 px-4 text-xs font-semibold text-white hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600 sm:w-auto"
+              href="https://capgo.app/premium-support/"
+              rel="noopener noreferrer"
+              target="_blank"
+            >
+              {{ t('expert-service-cta') }}
+              <IconArrowRight class="h-3.5 w-3.5" aria-hidden="true" />
+            </a>
+          </div>
+        </div>
+      </template>
 
       <!-- Footer / Contact -->
       <div v-if="!isMobile" class="mt-4 text-xs text-center text-gray-500 dark:text-gray-400 shrink-0">
