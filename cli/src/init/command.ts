@@ -3369,16 +3369,19 @@ async function selectAvailablePackageManager(
 
   const missingProbe = probePackageManagerCommand(missingExecutable, { cwd: projectDir })
   const missingError = resolveExecutableProbeError(missingExecutable, missingProbe)
-  const missingExplanation = missingProbe.error?.code === 'ENOENT'
+  const rawMissingExplanation = missingProbe.error?.code === 'ENOENT'
     ? `"${missingExecutable}" is not available in PATH.`
     : missingError.message
+  const missingExplanation = /[.!?]$/.test(rawMissingExplanation)
+    ? rawMissingExplanation
+    : `${rawMissingExplanation}.`
   preparePackageManagerCommandEnvironment(env)
   const alternatives = getAvailablePackageManagers(detectedPackageManager.pm, isAvailable)
   if (alternatives.length === 0)
     throw missingError
 
   const selectedPackageManager = await pSelect({
-    message: `${detectedPackageManager.pm} was detected from the project lockfile, but ${missingExplanation} Choose an installed package manager:`,
+    message: `${detectedPackageManager.pm} was detected from the project lockfile. ${missingExplanation} Choose an installed package manager:`,
     options: alternatives.map(packageManager => ({
       value: packageManager,
       label: packageManager,
