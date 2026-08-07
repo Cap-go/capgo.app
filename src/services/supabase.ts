@@ -164,12 +164,26 @@ export function getSupabaseHost(): string {
   return resolveSupabaseHost(config.supaHost, config.supaProxyPath)
 }
 
+function trimLeadingSlashes(value: string): string {
+  let start = 0
+  while (value[start] === '/')
+    start++
+  return value.slice(start)
+}
+
+function trimTrailingSlashes(value: string): string {
+  let end = value.length
+  while (end > 0 && value[end - 1] === '/')
+    end--
+  return value.slice(0, end)
+}
+
 export function resolveSupabaseHost(supaHost: string, proxyPath?: string, runtimeOrigin = globalThis.location?.origin): string {
-  const normalizedHost = supaHost.replace(/\/+$/, '')
+  const normalizedHost = trimTrailingSlashes(supaHost)
   if (!proxyPath || !runtimeOrigin)
     return normalizedHost
 
-  const normalizedProxyPath = `/${proxyPath.replace(/^\/+|\/+$/g, '')}/`
+  const normalizedProxyPath = `/${trimLeadingSlashes(trimTrailingSlashes(proxyPath))}/`
   return new URL(normalizedProxyPath, runtimeOrigin).href
 }
 
