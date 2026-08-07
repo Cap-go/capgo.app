@@ -3,7 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
-import { shouldShowExpiredTrialCopy } from '~/services/paymentRequired'
+import { resolveBillingPaidAt, shouldShowExpiredTrialCopy } from '~/services/paymentRequired'
 import { useSupabase } from '~/services/supabase'
 import { useOrganizationStore } from '~/stores/organization'
 
@@ -31,7 +31,7 @@ watch(() => organizationStore.currentOrganization?.gid, async (orgId) => {
   if (currentRun !== billingLookupRun || error || !data)
     return
 
-  paidAt.value = data.stripe_info?.paid_at ?? null
+  paidAt.value = resolveBillingPaidAt(data.stripe_info)
 }, { immediate: true })
 
 function goToPlans() {
