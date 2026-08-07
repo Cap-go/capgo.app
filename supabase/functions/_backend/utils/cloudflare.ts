@@ -60,6 +60,7 @@ export type Bindings = {
   DEVICE_INFO: AnalyticsEngineDataset
   NOTIFICATION_REGISTRY?: AnalyticsEngineDataset
   NOTIFICATION_EVENTS?: AnalyticsEngineDataset
+  CLI_USAGE?: AnalyticsEngineDataset
   NOTIFICATION_QUEUE?: Queue
   DB_STOREAPPS: D1Database
   CHANNEL_SELF_STORE?: KVNamespace

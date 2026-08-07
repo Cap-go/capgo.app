@@ -22,6 +22,7 @@ import { isCI } from 'ci-info'
 // Native fetch is available in Node.js >= 18
 import prettyjson from 'prettyjson'
 import * as tus from 'tus-js-client'
+import { buildCliRequestHeaders } from './analytics/cli-headers'
 import { getGlobalAnalyticsProps } from './analytics/global-props'
 import { getActiveUploadReporter } from './bundle/reporter'
 import { createTimedFetch, isSupabaseInstrumentationEnabled } from './analytics/supabase-perf'
@@ -705,7 +706,11 @@ export async function getRemoteConfig(silent = false, signal?: AbortSignal) {
   const run = (async () => {
     const localConfig = await getLocalConfig(silent)
     try {
-      const response = await fetch(`${localConfig.hostApi}/private/config`, signal ? { signal } : {})
+      const silentKey = findSavedKeySilent()
+      const response = await fetch(`${localConfig.hostApi}/private/config`, {
+        ...(signal ? { signal } : {}),
+        headers: buildCliRequestHeaders(silentKey ? { capgkey: silentKey } : undefined),
+      })
       if (!response.ok)
         throw new Error(`HTTP error! status: ${response.status}`)
       const data = await response.json() as CapgoConfig
@@ -745,7 +750,10 @@ export async function getRemoteFileConfig() {
   const localConfig = await getLocalConfig()
   // call host + /api/get_config and parse the result as json using fetch
   try {
-    const response = await fetch(`${localConfig.hostFilesApi}/files/config`)
+    const silentKey = findSavedKeySilent()
+    const response = await fetch(`${localConfig.hostFilesApi}/files/config`, {
+      headers: buildCliRequestHeaders(silentKey ? { capgkey: silentKey } : undefined),
+    })
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`)
     }
@@ -872,12 +880,12 @@ export async function invokeCapgoCliApi<T = any>(
   try {
     const response = await fetch(url, {
       method,
-      headers: {
+      headers: buildCliRequestHeaders({
         'Content-Type': 'application/json',
         // Self-host Edge Functions validate the Supabase anon JWT; Capgo cloud uses the API key.
         'Authorization': usesFunctionsV1 && anonKey ? `Bearer ${anonKey}` : options.apikey,
         'capgkey': options.apikey,
-      },
+      }),
       body: method === 'GET' || method === 'HEAD'
         ? undefined
         : (typeof options.body === 'string' ? options.body : JSON.stringify(options.body ?? {})),
@@ -1809,10 +1817,10 @@ export async function sendEvent(capgkey: string, payload: TrackOptions & { notif
       const fetchResponse = await fetch(`${config.hostApi}/private/events`, {
         method: 'POST',
         body: JSON.stringify(enrichedPayload),
-        headers: {
+        headers: buildCliRequestHeaders({
           'Content-Type': 'application/json',
           'capgkey': capgkey,
-        },
+        }),
         signal: eventSignal,
       })
 

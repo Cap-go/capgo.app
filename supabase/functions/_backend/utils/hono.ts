@@ -167,7 +167,7 @@ export function getAllowedCorsOrigin(origin: string, c: Context) {
 
 export const useCors = cors({
   origin: getAllowedCorsOrigin,
-  allowHeaders: ['Content-Type', 'Authorization', 'X-Capgo-Spoof-Admin-Authorization', 'capgkey', 'capgo_api', 'x-api-key', 'x-limited-key-id', 'apisecret', 'apikey', 'x-client-info'],
+  allowHeaders: ['Content-Type', 'Authorization', 'X-Capgo-Spoof-Admin-Authorization', 'capgkey', 'capgo_api', 'x-api-key', 'x-limited-key-id', 'apisecret', 'apikey', 'x-client-info', 'x-cli-version', 'x-cli-command', 'x-cli-node', 'x-cli-os'],
   allowMethods: ['POST', 'GET', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
 })
 

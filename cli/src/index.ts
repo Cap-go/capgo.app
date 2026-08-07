@@ -5,6 +5,7 @@ import pack from '../package.json'
 import { categorizeCliError } from './analytics/error-category'
 import { applyCommandAnalyticsOptOut, applyRawCommandAnalyticsOptOut } from './analytics/opt-out'
 import { enableSupabaseInstrumentation } from './analytics/supabase-perf'
+import { setCurrentCliCommand } from './analytics/cli-headers'
 import { extractCommandContext, flushAnalytics, trackCommandFailed, trackCommandInvoked, trackCommandSucceeded } from './analytics/track'
 import { addApp } from './app/add'
 import { debugApp } from './app/debug'
@@ -87,6 +88,7 @@ let currentCommandPath = 'unknown'
 program.hook('preAction', (_thisCommand, actionCommand) => {
   setConfigWriteTarget(resolveCapacitorConfigTargetPath(actionCommand.optsWithGlobals().capacitorConfig))
   currentCommandPath = getCommandPath(actionCommand)
+  setCurrentCliCommand(currentCommandPath)
   applyCommandAnalyticsOptOut(currentCommandPath, actionCommand.opts())
   trackCommandInvoked(currentCommandPath, extractCommandContext(actionCommand))
 })

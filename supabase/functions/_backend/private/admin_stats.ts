@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { Hono } from 'hono/tiny'
 import { safeParseSchema } from '../utils/schema_validation.ts'
 import { getAdminBuilderAnalytics } from '../utils/builder_analytics.ts'
+import { getAdminCliUsage } from '../utils/cli_usage.ts'
 import { getAdminAppsTrend, getAdminBandwidthTrend, getAdminBundlesTrend, getAdminDistributionMetrics, getAdminFailureMetrics, getAdminMauTrend, getAdminOrgMetrics, getAdminPlatformOverview, getAdminStorageTrend, getAdminSuccessRate, getAdminSuccessRateTrend, getAdminUploadMetrics } from '../utils/cloudflare.ts'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
@@ -41,6 +42,7 @@ const metricCategories = [
   'customer_country_breakdown',
   'organization_insights',
   'builder_analytics',
+  'cli_usage',
 ] as const
 
 const isoUtcDatetimeSchema = z.string().refine(
@@ -311,6 +313,10 @@ app.post('/', middlewareAuth, async (c) => {
 
       case 'builder_analytics':
         result = await getAdminBuilderAnalytics(c, start_date, end_date)
+        break
+
+      case 'cli_usage':
+        result = await getAdminCliUsage(c, start_date, end_date)
         break
 
       default:
