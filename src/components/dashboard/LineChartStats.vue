@@ -7,7 +7,7 @@ import { computed } from 'vue'
 import { Bar, Line } from 'vue-chartjs'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
-import { useCurrentOrgBillingCycleChart } from '~/composables/useOrgBillingCycleChart'
+import { useDashboardDailyChartCycle } from '~/composables/useOrgBillingCycleChart'
 import { createLegendConfig, createStackedChartScales } from '~/services/chartConfig'
 import { createTodayLineOptions, getSafeChartHue } from '~/services/chartTodayLine'
 import { registerDashboardCharts } from '~/services/dashboardChartRegister'
@@ -45,10 +45,7 @@ registerDashboardCharts()
 const isDark = useDark()
 const { t } = useI18n()
 const router = useRouter()
-const chartCycle = useCurrentOrgBillingCycleChart(() => props.useBillingPeriod)
-const cycleStart = chartCycle.resolveCycleStart()
-const cycleEnd = chartCycle.resolveCycleEnd()
-const { todayLimit } = chartCycle
+const { cycleStart, cycleEnd, todayLimit } = useDashboardDailyChartCycle(() => props.useBillingPeriod)
 
 const tooltipClickHandler = computed<TooltipClickHandler>(() => {
   const appIdByLabel: Record<string, string> = {}

@@ -48,3 +48,14 @@ export function useCurrentOrgBillingCycleChart(useBillingPeriod: MaybeRefOrGette
     () => organizationStore.currentOrganization?.subscription_end,
   )
 }
+
+/** One-shot helper: current-org cycle bounds plus today/transform helpers. */
+export function useDashboardDailyChartCycle(useBillingPeriod: MaybeRefOrGetter<boolean>) {
+  const chartCycle = useCurrentOrgBillingCycleChart(useBillingPeriod)
+  return {
+    cycleStart: chartCycle.resolveCycleStart(),
+    cycleEnd: chartCycle.resolveCycleEnd(),
+    todayLimit: chartCycle.todayLimit,
+    transformDailySeries: chartCycle.transformDailySeries,
+  }
+}

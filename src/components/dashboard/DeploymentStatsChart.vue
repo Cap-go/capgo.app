@@ -6,7 +6,7 @@ import { computed } from 'vue'
 import { Bar, Line } from 'vue-chartjs'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
-import { useCurrentOrgBillingCycleChart } from '~/composables/useOrgBillingCycleChart'
+import { useDashboardDailyChartCycle } from '~/composables/useOrgBillingCycleChart'
 import { createLegendConfig, createStackedChartScales } from '~/services/chartConfig'
 import { createTodayLineOptions, generateAppChartColors, getSafeChartHue } from '~/services/chartTodayLine'
 import { createTooltipConfig, todayLinePlugin, verticalLinePlugin } from '~/services/chartTooltip'
@@ -28,10 +28,7 @@ registerDashboardCharts()
 const isDark = useDark()
 const { t } = useI18n()
 const router = useRouter()
-const chartCycle = useCurrentOrgBillingCycleChart(() => props.useBillingPeriod)
-const cycleStart = chartCycle.resolveCycleStart()
-const cycleEnd = chartCycle.resolveCycleEnd()
-const { todayLimit, transformDailySeries } = chartCycle
+const { cycleStart, cycleEnd, todayLimit, transformDailySeries } = useDashboardDailyChartCycle(() => props.useBillingPeriod)
 
 const isChannelMode = computed(() => Object.keys(props.dataByChannel).length > 0)
 const isAppMode = computed(() => Object.keys(props.dataByApp).length > 0)
