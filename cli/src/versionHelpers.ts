@@ -4,20 +4,24 @@ import { format, increment, parse } from '@std/semver'
 /** CLI / API auto-bump levels (fix is normalized to patch at parse time) */
 export type AutoBumpLevel = 'major' | 'minor' | 'patch' | 'metadata'
 
+/** Resolver input including AI-backed classification */
+export type AutoBumpInput = AutoBumpLevel | 'ai'
+
 /** @std/semver increment release types used by auto-bump */
 export type AutoBumpRelease = 'major' | 'minor' | 'patch' | 'prerelease'
 
 const AUTO_BUMP_LEVELS = new Set<AutoBumpLevel>(['major', 'minor', 'patch', 'metadata'])
 
 /**
- * Normalize CLI/SDK auto-bump values.
+ * Normalize CLI/SDK auto-bump values including `ai`.
  * - bare flag / true → minor
  * - fix → patch
+ * - ai → ai (resolved later via Workers AI)
  * - metadata stays metadata (mapped to prerelease increment later)
  */
-export function normalizeAutoBumpLevel(
+export function normalizeAutoBumpInput(
   level: string | boolean | undefined | null,
-): AutoBumpLevel | undefined {
+): AutoBumpInput | undefined {
   if (level === undefined || level === null || level === false)
     return undefined
   if (level === true)
@@ -25,9 +29,24 @@ export function normalizeAutoBumpLevel(
   const normalized = String(level).trim().toLowerCase()
   if (normalized === 'fix')
     return 'patch'
+  if (normalized === 'ai')
+    return 'ai'
   if (AUTO_BUMP_LEVELS.has(normalized as AutoBumpLevel))
     return normalized as AutoBumpLevel
   return undefined
+}
+
+/**
+ * Normalize CLI/SDK auto-bump values to concrete bump levels (excludes `ai`).
+ * Prefer `normalizeAutoBumpInput` when `ai` is allowed.
+ */
+export function normalizeAutoBumpLevel(
+  level: string | boolean | undefined | null,
+): AutoBumpLevel | undefined {
+  const input = normalizeAutoBumpInput(level)
+  if (!input || input === 'ai')
+    return undefined
+  return input
 }
 
 export function autoBumpLevelToRelease(level: AutoBumpLevel | AutoBumpRelease): AutoBumpRelease {
