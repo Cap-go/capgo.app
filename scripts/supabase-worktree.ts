@@ -19,10 +19,12 @@ function hasSupabaseCli(): boolean {
 function getLocalSupabaseCli(repoRoot: string): string | null {
   const binName = process.platform === 'win32' ? 'supabase.exe' : 'supabase'
   // Prefer the package shim Bun/npm expose on PATH (.bin), then legacy bin/ layouts.
+  // Do NOT use dist/supabase.js — that is the installer stub and throws
+  // "No matching Supabase CLI binary package" when the platform binary is not
+  // extracted yet (common while `bun install` still runs in parallel with start).
   const candidates = [
     resolve(repoRoot, 'node_modules', '.bin', binName),
     resolve(repoRoot, 'node_modules', 'supabase', 'bin', binName),
-    resolve(repoRoot, 'node_modules', 'supabase', 'dist', 'supabase.js'),
   ]
   return candidates.find(candidate => existsSync(candidate)) ?? null
 }
