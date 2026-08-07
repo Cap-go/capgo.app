@@ -19,6 +19,8 @@ export interface ExecutableProbeOptions {
 export interface ExecutableProbeResult {
   available: boolean
   error?: NodeJS.ErrnoException
+  status?: number | null
+  stdout?: string
 }
 
 export interface CommandResult {
@@ -44,19 +46,44 @@ export function createMissingExecutableError(command: string, executablePath = p
 export function probeExecutable(command: string, options: ExecutableProbeOptions = {}): ExecutableProbeResult {
   const result = spawnSync(command, ['--version'], {
     cwd: options.cwd,
-    env: options.env,
-    stdio: 'ignore',
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      ...options.env,
+      COREPACK_ENABLE_PROJECT_SPEC: '0',
+    },
+    stdio: ['ignore', 'pipe', 'ignore'],
   })
 
   if (result.error)
     return { available: false, error: result.error }
 
-  return { available: true }
+  return { available: true, status: result.status, stdout: result.stdout }
+}
+
+export function supportsYarnDlx(version: string): boolean {
+  const major = Number.parseInt(version.split('.')[0] ?? '', 10)
+  return Number.isInteger(major) && major >= 2
+}
+
+export function probePackageManagerCommand(commandLine: string, options: ExecutableProbeOptions = {}): ExecutableProbeResult {
+  const [command] = commandLine.split(/\s+/)
+  if (!command)
+    return { available: false, error: createMissingExecutableError(commandLine) }
+
+  const probe = probeExecutable(command, options)
+  if (!probe.available || commandLine !== 'yarn dlx')
+    return probe
+
+  return {
+    ...probe,
+    available: probe.status === 0 && supportsYarnDlx(probe.stdout?.trim() ?? ''),
+  }
 }
 
 export function getAvailablePackageManagers(
   detected: SupportedPackageManager,
-  isAvailable: (command: string) => boolean = command => probeExecutable(command).available,
+  isAvailable: (command: string) => boolean = command => probePackageManagerCommand(command).available,
 ): SupportedPackageManager[] {
   return supportedPackageManagers.filter(command => command !== detected && isPackageManagerAvailable(command, isAvailable))
 }
@@ -72,18 +99,17 @@ export function getPackageManagerInfo(pm: SupportedPackageManager): PackageManag
 
 export function isPackageManagerAvailable(
   pm: SupportedPackageManager,
-  isAvailable: (command: string) => boolean = command => probeExecutable(command).available,
+  isAvailable: (command: string) => boolean = command => probePackageManagerCommand(command).available,
 ): boolean {
   return getMissingPackageManagerExecutable(pm, isAvailable) === undefined
 }
 
 export function getMissingPackageManagerExecutable(
   pm: SupportedPackageManager,
-  isAvailable: (command: string) => boolean = command => probeExecutable(command).available,
+  isAvailable: (command: string) => boolean = command => probePackageManagerCommand(command).available,
 ): string | undefined {
   const info = getPackageManagerInfo(pm)
-  const runnerCommand = info.runner.split(' ')[0]
-  return [info.pm, runnerCommand].find(command => !command || !isAvailable(command))
+  return [info.pm, info.runner].find(command => !isAvailable(command))
 }
 
 export function waitForCommandResult(child: ChildProcess): Promise<CommandResult> {

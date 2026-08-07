@@ -26,9 +26,11 @@ import {
   getPackageManagerInfo,
   isPackageManagerAvailable,
   probeExecutable,
+  supportsYarnDlx,
   waitForCommandResult,
 } from '../src/init/command-execution.ts'
 import { usesAlwaysDirectUpdate } from '../src/updaterConfig.ts'
+import { getPMAndCommand, setPMAndCommand } from '../src/utils.ts'
 
 let failures = 0
 
@@ -70,7 +72,7 @@ t('missing executable error explains the PATH mismatch', () => {
 })
 
 t('package manager discovery returns only installed alternatives', () => {
-  const available = getAvailablePackageManagers('bun', command => command === 'npm' || command === 'npx' || command === 'pnpm')
+  const available = getAvailablePackageManagers('bun', command => ['npm', 'npx', 'pnpm', 'pnpm exec'].includes(command))
 
   assert.deepEqual(available, ['npm', 'pnpm'])
 })
@@ -80,6 +82,15 @@ t('package manager availability includes its Capacitor runner', () => {
   assert.equal(isPackageManagerAvailable('npm', command => command === 'npm' || command === 'npx'), true)
   assert.equal(getMissingPackageManagerExecutable('npm', command => command === 'npm'), 'npx')
   assert.equal(getMissingPackageManagerExecutable('npm', command => command === 'npm' || command === 'npx'), undefined)
+  assert.equal(getMissingPackageManagerExecutable('yarn', command => command === 'yarn'), 'yarn dlx')
+  assert.equal(getMissingPackageManagerExecutable('yarn', command => command === 'yarn' || command === 'yarn dlx'), undefined)
+})
+
+t('Yarn dlx availability rejects Yarn Classic', () => {
+  assert.equal(supportsYarnDlx('1.22.22'), false)
+  assert.equal(supportsYarnDlx('2.0.0'), true)
+  assert.equal(supportsYarnDlx('4.10.3'), true)
+  assert.equal(supportsYarnDlx('not-a-version'), false)
 })
 
 t('package manager metadata uses matching direct commands and runners', () => {
@@ -107,6 +118,19 @@ t('package manager metadata uses matching direct commands and runners', () => {
     installCommand: 'bun install',
     runner: 'bunx',
   })
+})
+
+t('selected package manager persists for later onboarding commands', () => {
+  const original = getPMAndCommand()
+  const fallback = getPackageManagerInfo('npm')
+
+  try {
+    setPMAndCommand(fallback)
+    assert.deepEqual(getPMAndCommand(), fallback)
+  }
+  finally {
+    setPMAndCommand(original)
+  }
 })
 
 t('git status helper skips non-git folders', () => {

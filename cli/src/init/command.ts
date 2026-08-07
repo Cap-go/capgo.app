@@ -32,10 +32,10 @@ import { copyToClipboard, revealInFinder } from '../support/clipboard'
 import { contactSupport } from '../support/contact-support'
 import { appendInternalLog, getInternalLogPath, startInternalLog } from '../support/internal-log'
 import { uploadSupportLogs } from '../support/support-upload'
-import { consoleWebUrl, createSupabaseClient, defaultApiHost, findBuildCommandForProjectType, findMainFile, findMainFileForProjectType, findProjectType, findRoot, findSavedKey, findSavedKeySilent, formatError, getAllPackagesDependencies, getAppId, getBundleVersion, getConfig, getConfigForWrite, getLocalConfig, getNativeProjectResetAdvice, getOrganizationListWithPermission, getPackageScripts, getPMAndCommand, hasCliPermission, PACKNAME, projectIsMonorepo, resolveUserIdFromApiKey, updateConfigbyKey, updateConfigUpdater, validateIosUpdaterSync } from '../utils'
+import { consoleWebUrl, createSupabaseClient, defaultApiHost, findBuildCommandForProjectType, findMainFile, findMainFileForProjectType, findProjectType, findRoot, findSavedKey, findSavedKeySilent, formatError, getAllPackagesDependencies, getAppId, getBundleVersion, getConfig, getConfigForWrite, getLocalConfig, getNativeProjectResetAdvice, getOrganizationListWithPermission, getPackageScripts, getPMAndCommand, hasCliPermission, PACKNAME, projectIsMonorepo, resolveUserIdFromApiKey, setPMAndCommand, updateConfigbyKey, updateConfigUpdater, validateIosUpdaterSync } from '../utils'
 import { buildAppIdConflictSuggestions, isAppAlreadyExistsError } from './app-conflict'
 import { isChannelAlreadyExistsError } from './channel-conflict'
-import { createMissingExecutableError, getAvailablePackageManagers, getMissingPackageManagerExecutable, getPackageManagerInfo, probeExecutable, waitForCommandResult } from './command-execution'
+import { createMissingExecutableError, getAvailablePackageManagers, getMissingPackageManagerExecutable, getPackageManagerInfo, probeExecutable, probePackageManagerCommand, waitForCommandResult } from './command-execution'
 import { cancel as pCancel, confirm as pConfirm, intro as pIntro, isCancel as pIsCancel, log as pLog, outro as pOutro, select as pSelect, spinner as pSpinner, text as pText } from './prompts'
 import { finishActiveCliReplay, getActiveCliReplaySessionId, isCliTelemetryDisabled, startInitReplay } from './replay'
 import { appendInitStreamingLine, clearInitStreamingOutput, INIT_CANCEL, pushInitLog, setInitCodeDiff, setInitEncryptionSummary, setInitVersionWarning, startInitStreamingOutput, stopInitInkSession, updateInitStreamingStatus, waitForInitStreamingContinue } from './runtime'
@@ -2779,7 +2779,9 @@ async function waitForVerifiedUpdaterInstall(
 }
 
 async function addUpdaterStep(orgId: string, apikey: string, appId: string) {
-  const pm = getPMAndCommand()
+  const packageJsonPath = path.resolve(globalPathToPackageJson ?? join(findRoot(cwd()), PACKNAME))
+  const projectDir = dirname(packageJsonPath)
+  const pm = await selectAvailablePackageManager(getPMAndCommand(), projectDir, orgId, apikey)
   let pkgVersion = '1.0.0'
   let delta = false
   const installChoice = await pSelect({
@@ -2998,7 +3000,7 @@ async function addEncryptionStep(orgId: string, apikey: string, appId: string) {
     pLog.warn(`Cannot find @capacitor/core in package.json. It is likely that you are using a monorepo. Please NOTE that encryption is not supported in Capacitor V5.`)
   }
 
-  const pm = getPMAndCommand()
+  const pm = await selectAvailablePackageManager(getPMAndCommand(), projectDir, orgId, apikey)
 
   // Ask up-front whether the app is security-critical, with an extra option
   // for users who don't know what encryption is. The "learn more" branch
@@ -3360,7 +3362,7 @@ async function selectAvailablePackageManager(
   if (detectedPackageManager.pm === 'unknown')
     throw createMissingExecutableError('unknown', env.PATH)
 
-  const isAvailable = (command: string) => probeExecutable(command, { cwd: projectDir }).available
+  const isAvailable = (command: string) => probePackageManagerCommand(command, { cwd: projectDir }).available
   const missingExecutable = getMissingPackageManagerExecutable(detectedPackageManager.pm, isAvailable)
   if (!missingExecutable)
     return detectedPackageManager
@@ -3380,8 +3382,10 @@ async function selectAvailablePackageManager(
   await cancelCommand(selectedPackageManager, orgId, apikey)
 
   const selected = selectedPackageManager as SupportedPackageManager
+  const selectedInfo = getPackageManagerInfo(selected)
+  setPMAndCommand(selectedInfo)
   pLog.info(`Using ${selected} instead of unavailable ${detectedPackageManager.pm} for build and sync.`)
-  return getPackageManagerInfo(selected)
+  return selectedInfo
 }
 
 export interface CapacitorRunTarget {
@@ -4266,7 +4270,9 @@ async function promptForSelectedPlatform(orgId: string, apikey: string, options:
 }
 
 async function handleMissingPlatformSelection(orgId: string, apikey: string, availablePlatforms: ReturnType<typeof getNativePlatformAvailability>, projectDir = cwd()): Promise<void> {
-  const { pm, capAddAndroid, capAddIos } = getInitRecoveryCommands()
+  const pm = await selectAvailablePackageManager(getPMAndCommand(), projectDir, orgId, apikey)
+  const capAddAndroid = formatRunnerCommand(pm.runner, ['cap', 'add', 'android'])
+  const capAddIos = formatRunnerCommand(pm.runner, ['cap', 'add', 'ios'])
   pLog.warn(`⚠️  No native platform directories found (${availablePlatforms.iosDir}/ or ${availablePlatforms.androidDir}/).`)
   const recoveryChoice = await pSelect({
     message: 'Add a native platform before choosing a test platform.',

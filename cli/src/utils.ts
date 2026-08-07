@@ -2043,6 +2043,13 @@ export function getPMAndCommand() {
   return { pm, command: pmCommand, installCommand: `${pm} ${pmCommand}`, runner: pmRunner }
 }
 
+export function setPMAndCommand(next: { pm: PackageManagerType, command: InstallCommand, runner: PackageManagerRunner }): void {
+  pm = next.pm
+  pmCommand = next.command
+  pmRunner = next.runner
+  pmFetched = true
+}
+
 export function getNativeProjectResetAdvice(platformRunner: string, nativePlatform: 'ios' | 'android') {
   const nativeLabel = nativePlatform === 'ios' ? 'iOS' : 'Android'
   return {
