@@ -107,7 +107,7 @@ async function executeTracking(c: Context, payload: SendEventToTrackingPayload, 
   await Promise.all(tasks)
 }
 
-async function executeBentoTracking(c: Context, payload: SendEventToTrackingPayload) {
+async function executeBentoTracking(c: Context, payload: SendEventToTrackingPayload, strict = false) {
   if (!payload.sentToBento)
     return
 
@@ -119,6 +119,8 @@ async function executeBentoTracking(c: Context, payload: SendEventToTrackingPayl
       event: payload.event,
       user_id: payload.user_id,
     })
+    if (strict)
+      throw new Error('sendEventToTracking missing Bento payload')
     return
   }
 
@@ -133,6 +135,8 @@ async function executeBentoTracking(c: Context, payload: SendEventToTrackingPayl
       event: payload.event,
       user_id: payload.user_id,
     })
+    if (strict)
+      throw new Error('sendEventToTracking missing org id for Bento notification')
     return
   }
 
@@ -170,17 +174,17 @@ async function executeBentoTracking(c: Context, payload: SendEventToTrackingPayl
     finally {
       await pgClient.end()
     }
-  })
+  }, strict)
 }
 
 export async function sendEventToTracking(c: Context, payload: SendEventToTrackingPayload, options: SendEventToTrackingOptions = {}) {
   const trackingTask = executeTracking(c, payload, options)
   if (options.background === false) {
     await trackingTask
-    await executeBentoTracking(c, payload)
+    await executeBentoTracking(c, payload, options.strict === true)
     return
   }
 
   await backgroundTask(c, trackingTask)
-  await backgroundTask(c, executeBentoTracking(c, payload))
+  await backgroundTask(c, executeBentoTracking(c, payload, options.strict === true))
 }

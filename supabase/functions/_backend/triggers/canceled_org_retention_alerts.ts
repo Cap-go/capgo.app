@@ -33,6 +33,8 @@ const ALERT_CONFIG = {
   icon: string
 }>
 
+const ORG_ID_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
 function isRetentionAlertType(value: unknown): value is RetentionAlertType {
   return value === 'bundles_deletion_warning' || value === 'app_deletion_warning'
 }
@@ -49,12 +51,20 @@ function accessEndDateKey(accessEnd: string | undefined): string {
 export const app = new Hono<MiddlewareKeyVariables>()
 
 app.post('/', middlewareAPISecret, async (c) => {
-  const payload = await parseBody<CanceledOrgRetentionAlertPayload>(c)
-  const orgId = payload.org_id
+  const payload = await parseBody<CanceledOrgRetentionAlertPayload | null>(c)
+  if (!payload || typeof payload !== 'object')
+    throw simpleError('invalid_payload', 'Missing retention alert payload', { payload })
+
+  const orgId = typeof payload.org_id === 'string' ? payload.org_id.trim() : ''
   const alertType = payload.alert_type
 
-  if (!orgId || !isRetentionAlertType(alertType))
-    throw simpleError('invalid_payload', 'Missing org_id or alert_type in retention alert payload', { payload })
+  if (!orgId || !ORG_ID_UUID_RE.test(orgId) || !isRetentionAlertType(alertType)) {
+    throw simpleError(
+      'invalid_payload',
+      'Missing or invalid org_id/alert_type in retention alert payload',
+      { payload },
+    )
+  }
 
   const config = ALERT_CONFIG[alertType]
 
@@ -106,7 +116,7 @@ app.post('/', middlewareAPISecret, async (c) => {
       days_until_deletion: String(daysUntilDeletion),
       app_count: String(appIds.length),
     },
-  }, { background: false })
+  }, { background: false, strict: true })
 
   return c.json(BRES)
 })

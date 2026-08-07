@@ -24,7 +24,13 @@ vi.mock('../supabase/functions/_backend/utils/hono.ts', async () => {
   }
 })
 
-async function postRetentionAlert(body: Record<string, unknown>) {
+const ORG_BUNDLES = 'a0c1e2f3-1111-4aaa-8bbb-000000000101'
+const ORG_APPS = 'a0c1e2f3-1111-4aaa-8bbb-000000000102'
+const ORG_BAD = 'a0c1e2f3-1111-4aaa-8bbb-000000000103'
+const ORG_PROTO = 'a0c1e2f3-1111-4aaa-8bbb-000000000104'
+const ORG_FALLBACK = 'a0c1e2f3-1111-4aaa-8bbb-000000000105'
+
+async function postRetentionAlert(body: unknown) {
   const { app } = await import('../supabase/functions/_backend/triggers/canceled_org_retention_alerts.ts')
   return app.request('http://localhost/', {
     method: 'POST',
@@ -45,7 +51,7 @@ describe('canceled_org_retention_alerts', () => {
 
   it('sends a once Bento/tracking event for bundle deletion warnings', async () => {
     const response = await postRetentionAlert({
-      org_id: 'org-retention-bundles',
+      org_id: ORG_BUNDLES,
       org_name: 'Retention Org',
       management_email: 'billing@example.com',
       alert_type: 'bundles_deletion_warning',
@@ -62,8 +68,8 @@ describe('canceled_org_retention_alerts', () => {
         channel: 'usage',
         event: 'Bundles will be deleted',
         sentToBento: true,
-        user_id: 'org-retention-bundles',
-        groups: { organization: 'org-retention-bundles' },
+        user_id: ORG_BUNDLES,
+        groups: { organization: ORG_BUNDLES },
         bento: expect.objectContaining({
           once: true,
           event: 'org:bundles_will_be_deleted',
@@ -71,19 +77,19 @@ describe('canceled_org_retention_alerts', () => {
           audience: 'billing',
           uniqId: 'retention:bundles_deletion_warning:2026-05-01',
           data: expect.objectContaining({
-            org_id: 'org-retention-bundles',
+            org_id: ORG_BUNDLES,
             app_ids: ['com.example.app'],
             days_until_deletion: 5,
           }),
         }),
       }),
-      { background: false },
+      { background: false, strict: true },
     )
   })
 
   it('sends a once Bento/tracking event for app deletion warnings', async () => {
     const response = await postRetentionAlert({
-      org_id: 'org-retention-apps',
+      org_id: ORG_APPS,
       org_name: 'Retention Org',
       alert_type: 'app_deletion_warning',
       access_end: '2026-04-20T12:30:00.000Z',
@@ -104,13 +110,13 @@ describe('canceled_org_retention_alerts', () => {
           }),
         }),
       }),
-      { background: false },
+      { background: false, strict: true },
     )
   })
 
   it('rejects unsupported alert types', async () => {
     const response = await postRetentionAlert({
-      org_id: 'org-retention-bad',
+      org_id: ORG_BAD,
       alert_type: 'not_a_real_alert',
     })
 
@@ -120,7 +126,7 @@ describe('canceled_org_retention_alerts', () => {
 
   it.each(['constructor', 'toString', 'valueOf'])('rejects prototype key %s as alert type', async (alertType) => {
     const response = await postRetentionAlert({
-      org_id: 'org-retention-proto',
+      org_id: ORG_PROTO,
       alert_type: alertType,
     })
 
@@ -137,9 +143,27 @@ describe('canceled_org_retention_alerts', () => {
     expect(sendEventToTrackingMock).not.toHaveBeenCalled()
   })
 
+  it('rejects null JSON body without 500', async () => {
+    const response = await postRetentionAlert(null)
+
+    expect(response.status).toBeGreaterThanOrEqual(400)
+    expect(response.status).toBeLessThan(500)
+    expect(sendEventToTrackingMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects non-uuid org_id', async () => {
+    const response = await postRetentionAlert({
+      org_id: 'not-a-uuid',
+      alert_type: 'bundles_deletion_warning',
+    })
+
+    expect(response.status).toBeGreaterThanOrEqual(400)
+    expect(sendEventToTrackingMock).not.toHaveBeenCalled()
+  })
+
   it('falls back access_end uniqId and NaN days_until_deletion', async () => {
     const response = await postRetentionAlert({
-      org_id: 'org-retention-fallback',
+      org_id: ORG_FALLBACK,
       alert_type: 'app_deletion_warning',
       access_end: 'not-a-date',
       days_until_deletion: 'nope',
@@ -156,7 +180,7 @@ describe('canceled_org_retention_alerts', () => {
           }),
         }),
       }),
-      { background: false },
+      { background: false, strict: true },
     )
   })
 })
