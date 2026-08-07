@@ -3,6 +3,7 @@ import { getRuntimeKey } from 'hono/adapter'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   buildCliRequestHeaders,
+  CAPGO_CLI_API_VERSION,
   getCurrentCliCommand,
   setCurrentCliCommand,
 } from '../cli/src/analytics/cli-headers.ts'
@@ -72,6 +73,8 @@ describe('buildCliRequestHeaders', () => {
   it.concurrent('includes version, command, node, and os headers', () => {
     setCurrentCliCommand('bundle upload')
     const headers = buildCliRequestHeaders()
+    expect(headers.capgo_api).toBe('2025-10-01')
+    expect(headers.capgo_api).toBe(CAPGO_CLI_API_VERSION)
     expect(headers['x-cli-version']).toBe(pack.version)
     expect(headers['x-cli-command']).toBe('bundle upload')
     expect(headers['x-cli-node']).toBeTruthy()
@@ -117,6 +120,7 @@ describe('trackCliUsage', () => {
       apikey_id: null,
       org_id: null,
       source: 'config',
+      api_version: '2025-10-01',
     })
     expect(backgroundTaskMock).not.toHaveBeenCalled()
     expect(writeDataPoint).not.toHaveBeenCalled()
@@ -135,12 +139,13 @@ describe('trackCliUsage', () => {
       apikey_id: 'rbac-1',
       org_id: null,
       source: 'config',
+      api_version: '2025-10-01',
     })
 
     expect(backgroundTaskMock).toHaveBeenCalledTimes(1)
     await backgroundTaskMock.mock.calls[0]?.[1]
     expect(writeDataPoint).toHaveBeenCalledWith({
-      blobs: ['8.32.8', 'bundle upload', 'v22.0.0', 'darwin', 'rbac-1', '', 'config'],
+      blobs: ['8.32.8', 'bundle upload', 'v22.0.0', 'darwin', 'rbac-1', '', 'config', '2025-10-01'],
       indexes: ['rbac-1'],
     })
     expect(getPgClientMock).not.toHaveBeenCalled()
@@ -157,6 +162,7 @@ describe('trackCliUsage', () => {
       apikey_id: null,
       org_id: null,
       source: 'config',
+      api_version: '',
     })
     await backgroundTaskMock.mock.calls[0]?.[1]
     expect(writeDataPoint).toHaveBeenCalledWith(expect.objectContaining({
@@ -176,12 +182,16 @@ describe('trackCliUsage', () => {
       apikey_id: null,
       org_id: null,
       source: 'config',
+      api_version: '2025-10-01',
     })
 
     expect(backgroundTaskMock).toHaveBeenCalledTimes(1)
     await backgroundTaskMock.mock.calls[0]?.[1]
     expect(getPgClientMock).toHaveBeenCalled()
     expect(queryMock).toHaveBeenCalled()
+    const [sql, args] = queryMock.mock.calls[0] ?? []
+    expect(String(sql)).toContain('api_version')
+    expect(args).toEqual(['8.32.8', 'init', 'v22.0.0', 'linux', null, null, 'config', '2025-10-01'])
     expect(closeClientMock).toHaveBeenCalled()
   })
 })

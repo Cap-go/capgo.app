@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { cwd } from 'node:process'
+import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { getPlatformDirFromCapacitorConfig } from '../build/platform-paths'
 import { getInstalledVersion } from '../utils'
 
@@ -277,7 +278,7 @@ export async function singleProbeRequest(endpoint: string, payload: UpdateProbeP
   try {
     response = await fetch(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+headers: buildCliRequestHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(payload),
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     })

@@ -3,6 +3,7 @@ import type { AppOptions } from '../schemas/app'
 import type { Organization } from '../utils'
 import { existsSync, readFileSync } from 'node:fs'
 import { intro, log, outro } from '@clack/prompts'
+import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { getInvocationSource } from '../analytics/track'
 import { checkAppExists, defaultAppIconPath, getAppIconStoragePath, newIconPath } from '../api/app'
 import { checkAlerts } from '../api/update'
@@ -101,11 +102,7 @@ async function createAppViaApi(
   })
   const response = await fetch(`${apiHost}/app`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': apikey,
-      'capgkey': apikey,
-    },
+headers: buildCliRequestHeaders({ 'Content-Type': 'application/json', Authorization: apikey, capgkey: apikey }),
     body: JSON.stringify({
       owner_org: params.ownerOrg,
       app_id: params.appId,

@@ -12,6 +12,7 @@ import { parse } from '@std/semver'
 // @ts-expect-error - No type definitions available for micromatch
 import * as micromatch from 'micromatch'
 import * as tus from 'tus-js-client'
+import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { encryptChecksum, encryptChecksumV3, encryptSource } from '../api/crypto'
 import { BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, deltaManifestTooLargeMessage, findRoot, generateManifest, getContentType, getInstalledVersion, getLocalConfig, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, sendEvent, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
 import { getUploadReporter } from './reporter'
@@ -29,10 +30,7 @@ async function fileExists(localConfig: any, filename: string): Promise<boolean> 
     url.searchParams.set('nocache', `${Date.now()}`)
     const response = await fetch(url.toString(), {
       method: 'GET',
-      headers: {
-        'range': 'bytes=0-0',
-        'cache-control': 'no-cache',
-      },
+headers: buildCliRequestHeaders({ range: 'bytes=0-0', 'cache-control': 'no-cache' }),
     })
     return response.ok
   }
@@ -308,9 +306,7 @@ export async function uploadPartial(
             filename,
             filetype,
           },
-          headers: {
-            Authorization: apikey,
-          },
+headers: buildCliRequestHeaders({ Authorization: apikey }),
           onError: (error) => {
             const errorMessage = error.toString()
 

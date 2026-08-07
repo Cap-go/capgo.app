@@ -3,6 +3,7 @@ import type { Database } from '../types/supabase.types'
 import { confirm as confirmC, intro, isCancel, log, outro, spinner } from '@clack/prompts'
 import { Table } from '@sauber/table'
 // Native fetch is available in Node.js >= 18
+import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { checkAlerts } from '../api/update'
 import { createSupabaseClient, findSavedKey, formatError, getAppId, getConfig, getLocalConfig, getOrganizationId, sendEvent } from '../utils'
 
@@ -105,10 +106,7 @@ export async function getStats(apikey: string, query: QueryStats, after: string 
 
     const response = await fetch(statsEndpoint, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'capgkey': apikey,
-      },
+headers: buildCliRequestHeaders({ 'Content-Type': 'application/json', capgkey: apikey }),
       body: JSON.stringify(effectiveQuery),
     })
 

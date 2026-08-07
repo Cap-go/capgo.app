@@ -14,12 +14,14 @@ export interface CliUsageEvent {
   apikey_id: string | null
   org_id: string | null
   source: 'config' | 'api' | 'events'
+  api_version: string
 }
 
 export interface AdminCliUsageStats {
   total: number
   by_version: Record<string, number>
   by_command: Record<string, number>
+  by_api_version: Record<string, number>
   by_day: Array<{ date: string, count: number }>
   top_apikeys: Array<{ apikey_id: string, count: number }>
 }
@@ -29,6 +31,7 @@ function emptyAdminCliUsageStats(): AdminCliUsageStats {
     total: 0,
     by_version: {},
     by_command: {},
+    by_api_version: {},
     by_day: [],
     top_apikeys: [],
   }
@@ -55,6 +58,7 @@ export function trackCliUsage(c: Context, event: CliUsageEvent) {
               event.apikey_id ?? '',
               event.org_id ?? '',
               event.source,
+              event.api_version,
             ],
             indexes: [event.apikey_id || 'anonymous'],
           })
@@ -71,8 +75,8 @@ export function trackCliUsage(c: Context, event: CliUsageEvent) {
       try {
         await pgClient.query(
           `INSERT INTO public.cli_usage
-            (cli_version, command, node_version, os_platform, apikey_id, org_id, source)
-           VALUES ($1, $2, $3, $4, $5::uuid, $6::uuid, $7)`,
+            (cli_version, command, node_version, os_platform, apikey_id, org_id, source, api_version)
+           VALUES ($1, $2, $3, $4, $5::uuid, $6::uuid, $7, $8)`,
           [
             event.cli_version,
             event.command,
@@ -81,6 +85,7 @@ export function trackCliUsage(c: Context, event: CliUsageEvent) {
             event.apikey_id,
             event.org_id,
             event.source,
+            event.api_version,
           ],
         )
       }
@@ -136,10 +141,11 @@ async function getAdminCliUsageFromAE(
   const timeFilter = `timestamp >= toDateTime('${formatDateCF(start_date)}')
     AND timestamp < toDateTime('${formatDateCF(end_date)}')`
 
-  const [totalRows, versionRows, commandRows, dayRows, apikeyRows] = await Promise.all([
+  const [totalRows, versionRows, commandRows, apiVersionRows, dayRows, apikeyRows] = await Promise.all([
     runQueryToCFA<{ total: number }>(c, `SELECT count() AS total FROM cli_usage WHERE ${timeFilter}`),
     runQueryToCFA<{ key: string, count: number }>(c, `SELECT blob1 AS key, count() AS count FROM cli_usage WHERE ${timeFilter} GROUP BY key ORDER BY count DESC LIMIT 50`),
     runQueryToCFA<{ key: string, count: number }>(c, `SELECT blob2 AS key, count() AS count FROM cli_usage WHERE ${timeFilter} GROUP BY key ORDER BY count DESC LIMIT 50`),
+    runQueryToCFA<{ key: string, count: number }>(c, `SELECT blob8 AS key, count() AS count FROM cli_usage WHERE ${timeFilter} GROUP BY key ORDER BY count DESC LIMIT 50`),
     runQueryToCFA<{ date: string, count: number }>(c, `SELECT formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d') AS date, count() AS count FROM cli_usage WHERE ${timeFilter} GROUP BY date ORDER BY date ASC`),
     runQueryToCFA<{ apikey_id: string, count: number }>(c, `SELECT index1 AS apikey_id, count() AS count FROM cli_usage WHERE ${timeFilter} AND index1 != 'anonymous' GROUP BY apikey_id ORDER BY count DESC LIMIT 20`),
   ])
@@ -148,6 +154,7 @@ async function getAdminCliUsageFromAE(
     total: Number(totalRows[0]?.total) || 0,
     by_version: rowsToRecord(versionRows),
     by_command: rowsToRecord(commandRows),
+    by_api_version: rowsToRecord(apiVersionRows),
     by_day: dayRows.map(row => ({ date: row.date, count: Number(row.count) || 0 })),
     top_apikeys: apikeyRows.map(row => ({
       apikey_id: row.apikey_id || 'unknown',
@@ -163,7 +170,7 @@ async function getAdminCliUsageFromPostgres(
 ): Promise<AdminCliUsageStats> {
   const pgClient = getPgClient(c, true)
   try {
-    const [totalRes, versionRes, commandRes, dayRes, apikeyRes] = await Promise.all([
+    const [totalRes, versionRes, commandRes, apiVersionRes, dayRes, apikeyRes] = await Promise.all([
       pgClient.query<{ total: string }>(
         `SELECT count(*)::bigint AS total FROM public.cli_usage
          WHERE created_at >= $1::timestamptz AND created_at < $2::timestamptz`,
@@ -178,6 +185,13 @@ async function getAdminCliUsageFromPostgres(
       ),
       pgClient.query<{ key: string, count: string }>(
         `SELECT coalesce(command, 'unknown') AS key, count(*)::bigint AS count
+         FROM public.cli_usage
+         WHERE created_at >= $1::timestamptz AND created_at < $2::timestamptz
+         GROUP BY 1 ORDER BY count DESC LIMIT 50`,
+        [start_date, end_date],
+      ),
+      pgClient.query<{ key: string, count: string }>(
+        `SELECT coalesce(api_version, 'unknown') AS key, count(*)::bigint AS count
          FROM public.cli_usage
          WHERE created_at >= $1::timestamptz AND created_at < $2::timestamptz
          GROUP BY 1 ORDER BY count DESC LIMIT 50`,
@@ -205,6 +219,7 @@ async function getAdminCliUsageFromPostgres(
       total: Number(totalRes.rows[0]?.total) || 0,
       by_version: rowsToRecord(versionRes.rows.map(r => ({ key: r.key, count: Number(r.count) }))),
       by_command: rowsToRecord(commandRes.rows.map(r => ({ key: r.key, count: Number(r.count) }))),
+      by_api_version: rowsToRecord(apiVersionRes.rows.map(r => ({ key: r.key, count: Number(r.count) }))),
       by_day: dayRes.rows.map(row => ({ date: row.date, count: Number(row.count) || 0 })),
       top_apikeys: apikeyRes.rows.map(row => ({
         apikey_id: row.apikey_id || 'unknown',

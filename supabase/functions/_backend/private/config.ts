@@ -21,6 +21,7 @@ app.get('/', async (c) => {
       apikey_id: identity.apikey_id,
       org_id: identity.org_id,
       source: 'config',
+      api_version: c.req.header('capgo_api') ?? '',
     })
   }
 

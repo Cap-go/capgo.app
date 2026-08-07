@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Database } from '../types/supabase.types'
 import { log } from '@clack/prompts'
+import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { formatCapgoApiErrorBody, getPMAndCommand, hasCliPermission, resolveCapgoPublicApiHost, show2FADeniedError } from '../utils'
 
 export async function checkAppExists(supabase: SupabaseClient<Database>, appid: string) {
@@ -109,11 +110,7 @@ export async function completePendingOnboardingApp(
   const apiHost = await resolveCapgoPublicApiHost(options)
   const response = await fetch(`${apiHost}/app/${encodeURIComponent(appId)}`, {
     method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': apikey,
-      'capgkey': apikey,
-    },
+headers: buildCliRequestHeaders({ 'Content-Type': 'application/json', Authorization: apikey, capgkey: apikey }),
     body: JSON.stringify({
       need_onboarding: false,
     }),

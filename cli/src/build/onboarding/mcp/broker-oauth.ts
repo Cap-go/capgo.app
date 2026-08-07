@@ -8,6 +8,7 @@
 // The interactive (TUI) onboarding keeps its own loopback flow (oauth-google.ts); only the MCP path, whose
 // process dies between tool calls, uses this broker.
 import process from 'node:process'
+import { buildCliRequestHeaders } from '../../../analytics/cli-headers'
 
 const DEFAULT_BROKER_BASE = 'https://api.capgo.app'
 /** Override the broker base via env (staging / local). */
@@ -36,7 +37,7 @@ export type BrokerPollResult =
 export async function createBrokerSession(appId: string): Promise<BrokerSession> {
   const res = await fetch(`${brokerBase()}${BROKER_PATH}/sessions`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', accept: 'application/json' },
+    headers: buildCliRequestHeaders({ 'content-type': 'application/json', accept: 'application/json' }),
     body: JSON.stringify({ app_id: appId }),
   })
   if (!res.ok) {
@@ -54,7 +55,7 @@ export async function createBrokerSession(appId: string): Promise<BrokerSession>
  * token — the broker withholds it (status 'awaiting_code') until the matching code is presented.
  */
 export async function pollBrokerSession(session: { pubId: string, pollSecret: string }, confirmCode?: string): Promise<BrokerPollResult> {
-  const headers: Record<string, string> = { authorization: `Bearer ${session.pollSecret}`, accept: 'application/json' }
+  const headers = buildCliRequestHeaders({ authorization: `Bearer ${session.pollSecret}`, accept: 'application/json' })
   if (confirmCode)
     headers['x-confirm-code'] = confirmCode
   const res = await fetch(`${brokerBase()}${BROKER_PATH}/sessions/${encodeURIComponent(session.pubId)}`, { headers })

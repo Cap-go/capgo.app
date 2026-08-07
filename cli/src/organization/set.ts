@@ -1,5 +1,6 @@
 import type { OrganizationSetOptions, PasswordPolicyConfig } from '../schemas/organization'
 import { confirm as confirmC, intro, isCancel, log, outro, text } from '@clack/prompts'
+import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { checkAlerts } from '../api/update'
 import {
   assertOrgPermission,
@@ -44,10 +45,7 @@ async function updateOrganizationViaApi(apikey: string, payload: OrganizationUpd
   const response = await fetch(`${apiHost}/organization`, {
     method: 'PUT',
     body: JSON.stringify(payload),
-    headers: {
-      'Content-Type': 'application/json',
-      'capgkey': apikey,
-    },
+headers: buildCliRequestHeaders({ 'Content-Type': 'application/json', capgkey: apikey }),
   })
 
   const responseText = await response.text()

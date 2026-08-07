@@ -7,11 +7,13 @@ CREATE TABLE public.cli_usage (
   os_platform text NOT NULL DEFAULT '',
   apikey_id uuid NULL,
   org_id uuid NULL,
-  source text NOT NULL DEFAULT 'config'
+  source text NOT NULL DEFAULT 'config',
+  api_version text NOT NULL DEFAULT ''
 );
 CREATE INDEX cli_usage_created_at_idx ON public.cli_usage (created_at DESC);
 CREATE INDEX cli_usage_cli_version_idx ON public.cli_usage (cli_version);
 CREATE INDEX cli_usage_apikey_id_idx ON public.cli_usage (apikey_id) WHERE apikey_id IS NOT NULL;
+CREATE INDEX cli_usage_api_version_idx ON public.cli_usage (api_version);
 
 ALTER TABLE public.cli_usage OWNER TO postgres;
 ALTER TABLE public.cli_usage ENABLE ROW LEVEL SECURITY;

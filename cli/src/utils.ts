@@ -1641,9 +1641,7 @@ export async function uploadTUS(apikey: string, data: Buffer, orgId: string, app
         filename: `orgs/${orgId}/apps/${appId}/${name}.zip`,
         filetype: 'application/zip',
       },
-      headers: {
-        Authorization: apikey,
-      },
+headers: buildCliRequestHeaders({ Authorization: apikey }),
       // Callback for errors which cannot be fixed using retries
       onError(error) {
         log.error(`Error uploading bundle: ${error.message}`)

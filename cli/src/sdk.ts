@@ -74,6 +74,7 @@ import { deleteOrganizationInternal } from './organization/delete'
 import { listOrganizationsInternal } from './organization/list'
 import { setOrganizationInternal } from './organization/set'
 import { getUserIdInternal } from './user/account'
+import { buildCliRequestHeaders } from './analytics/cli-headers'
 import { createSupabaseClient, findSavedKey, getConfig, getLocalConfig } from './utils'
 import { parseSecurityPolicyError } from './utils/security_policy_errors'
 
@@ -1203,10 +1204,7 @@ export class CapgoSDK {
 
       const response = await fetch(`${localConfig.hostApi}/private/stats`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'capgkey': apikey,
-        },
+headers: buildCliRequestHeaders({ 'Content-Type': 'application/json', capgkey: apikey }),
         body: JSON.stringify(query),
       })
 

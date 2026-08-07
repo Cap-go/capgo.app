@@ -22,6 +22,7 @@ interface CliUsageData {
   total: number
   by_version: Record<string, number>
   by_command: Record<string, number>
+  by_api_version: Record<string, number>
   by_day: Array<{ date: string, count: number }>
   top_apikeys: Array<{ apikey_id: string, count: number }>
 }
@@ -68,10 +69,20 @@ const commandEntries = computed(() => {
     .slice(0, 20)
 })
 
+const apiVersionEntries = computed(() => {
+  const breakdown = cliUsage.value?.by_api_version ?? {}
+  return Object.entries(breakdown)
+    .map(([version, count]) => ({ version: version || '(empty)', count: Number(count) || 0 }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 20)
+})
+
 const versionLabels = computed(() => versionEntries.value.map(entry => entry.version))
 const versionValues = computed(() => versionEntries.value.map(entry => entry.count))
 const commandLabels = computed(() => commandEntries.value.map(entry => entry.command))
 const commandValues = computed(() => commandEntries.value.map(entry => entry.count))
+const apiVersionLabels = computed(() => apiVersionEntries.value.map(entry => entry.version))
+const apiVersionValues = computed(() => apiVersionEntries.value.map(entry => entry.count))
 
 const dailySeries = computed(() => {
   const points = cliUsage.value?.by_day ?? []
@@ -145,7 +156,7 @@ displayStore.defaultBack = '/dashboard'
             />
           </div>
 
-          <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+          <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
             <ChartCard
               title="By CLI version"
               :is-loading="isLoadingStats"
@@ -169,6 +180,21 @@ displayStore.defaultBack = '/dashboard'
               <AdminBarChart
                 :labels="commandLabels"
                 :values="commandValues"
+                label="Invocations"
+                value-mode="count"
+                :is-loading="isLoadingStats"
+                :total="totalInvocations"
+              />
+            </ChartCard>
+
+            <ChartCard
+              title="By API version"
+              :is-loading="isLoadingStats"
+              :has-data="apiVersionEntries.length > 0"
+            >
+              <AdminBarChart
+                :labels="apiVersionLabels"
+                :values="apiVersionValues"
                 label="Invocations"
                 value-mode="count"
                 :is-loading="isLoadingStats"

@@ -1,5 +1,6 @@
 // cli/src/support/support-upload.ts
 import { readFileSync } from 'node:fs'
+import { buildCliRequestHeaders } from '../analytics/cli-headers'
 
 export interface SupportUploadInput {
   apiHost: string
@@ -32,10 +33,7 @@ export async function uploadSupportLogs(input: SupportUploadInput): Promise<Supp
   try {
     const res = await fetch(`${host}/build/support_logs`, {
       method: 'POST',
-      headers: {
-        'capgkey': input.apikey,
-        'content-type': 'application/json',
-      },
+headers: buildCliRequestHeaders({ capgkey: input.apikey, 'content-type': 'application/json' }),
       body: JSON.stringify({ appId: input.appId, jobId: input.jobId, platform: input.platform, gzB64 }),
       // Short timeout: this is an optional nicety; the attach fallback always works.
       signal: AbortSignal.timeout(15_000),
