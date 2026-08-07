@@ -15,6 +15,7 @@ import {
 import { useSupabase } from '~/services/supabase'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useOrganizationStore } from '~/stores/organization'
+import { filterDailySeriesToBillingPeriod } from '~/utils/chartOptimizations'
 import BundleUploadsChart from './BundleUploadsChart.vue'
 import ChartCard from './ChartCard.vue'
 
@@ -45,43 +46,6 @@ const props = defineProps({
     default: false,
   },
 })
-
-// Helper function to filter 30-day data to billing period
-function filterToBillingPeriod(fullData: number[], last30DaysStart: Date, billingStart: Date) {
-  const currentDate = normalizeToUtcStartOfDay()
-
-  // Calculate billing period length
-  let currentBillingDay: number
-
-  if (billingStart.getUTCDate() === 1) {
-    currentBillingDay = currentDate.getUTCDate()
-  }
-  else {
-    const billingStartDay = billingStart.getUTCDate()
-    const daysInMonth = new Date(Date.UTC(currentDate.getUTCFullYear(), currentDate.getUTCMonth() + 1, 0)).getUTCDate()
-    currentBillingDay = (currentDate.getUTCDate() - billingStartDay + 1 + daysInMonth) % daysInMonth
-    if (currentBillingDay === 0)
-      currentBillingDay = daysInMonth
-  }
-
-  // Create arrays for billing period length
-  const billingData = Array.from({ length: currentBillingDay }).fill(0) as number[]
-
-  // Map 30-day data to billing period
-  for (let i = 0; i < 30; i++) {
-    const dataDate = addUtcDays(last30DaysStart, i)
-
-    // Check if this date falls within current billing period
-    if (dataDate >= billingStart && dataDate <= currentDate) {
-      const billingIndex = Math.floor((dataDate.getTime() - billingStart.getTime()) / (1000 * 60 * 60 * 24))
-      if (billingIndex >= 0 && billingIndex < currentBillingDay) {
-        billingData[billingIndex] = fullData[i]
-      }
-    }
-  }
-
-  return { data: billingData }
-}
 
 const { t } = useI18n()
 const organizationStore = useOrganizationStore()
@@ -266,13 +230,13 @@ async function calculateStats(forceRefetch = false) {
       // Filter data based on billing period mode
       if (props.useBillingPeriod) {
         // Show only data within billing period
-        const filteredData = filterToBillingPeriod(dailyCounts30Days, last30DaysStart, billingStart)
+        const filteredData = filterDailySeriesToBillingPeriod(dailyCounts30Days, last30DaysStart, billingStart)
         bundleData.value = filteredData.data
 
         // Filter by-app data too
         const filteredByApp: { [appId: string]: number[] } = {}
         Object.keys(bundleDataByApp30Days).forEach((appId) => {
-          const filteredAppData = filterToBillingPeriod(bundleDataByApp30Days[appId], last30DaysStart, billingStart)
+          const filteredAppData = filterDailySeriesToBillingPeriod(bundleDataByApp30Days[appId], last30DaysStart, billingStart)
           filteredByApp[appId] = filteredAppData.data
         })
         bundleDataByApp.value = filteredByApp

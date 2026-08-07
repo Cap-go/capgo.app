@@ -135,12 +135,6 @@ export function getCurrentDayMonth() {
   return date.getDate()
 }
 
-export function normalizeToStartOfDay(date: Date) {
-  const normalized = new Date(date)
-  normalized.setHours(0, 0, 0, 0)
-  return normalized
-}
-
 /**
  * Start of the UTC calendar day.
  * Dashboard daily stats (daily_mau, daily_version, CF Analytics) are bucketed in UTC,

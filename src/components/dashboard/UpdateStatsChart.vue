@@ -18,6 +18,7 @@ import { computed } from 'vue'
 import { Bar, Line } from 'vue-chartjs'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
+import { getTodayLimit as resolveTodayLimit, transformSeries as transformDailySeries } from '~/services/buildCharts'
 import { createLegendConfig, createStackedChartScales } from '~/services/chartConfig'
 import { generateMonthDays, getDaysInCurrentMonth, normalizeToUtcStartOfDay } from '~/services/date'
 import { useOrganizationStore } from '~/stores/organization'
@@ -53,7 +54,13 @@ const cycleEnd = computed(() => {
   return end < today ? today : end
 })
 
-const DAY_IN_MS = 1000 * 60 * 60 * 24
+function getTodayLimit(labelCount: number) {
+  return resolveTodayLimit(labelCount, props.useBillingPeriod, cycleStart.value, cycleEnd.value)
+}
+
+function transformSeries(source: number[], accumulated: boolean, labelCount: number) {
+  return transformDailySeries(source, accumulated, labelCount, getTodayLimit(labelCount))
+}
 
 const UPDATE_FAILURE_ACTIONS = [
   'set_fail',
@@ -141,51 +148,6 @@ const ACTION_STYLES: Record<string, { barBackground: string, barBorder: string, 
     lineBackground: 'hsla(0, 65%, 65%, 0.35)',
     lineBorder: 'hsl(0, 70%, 50%)',
   },
-}
-
-function getTodayLimit(labelCount: number) {
-  if (!props.useBillingPeriod)
-    return labelCount - 1
-
-  const today = normalizeToUtcStartOfDay()
-
-  // If cycle end is today or in the past, show all data
-  if (cycleEnd.value <= today)
-    return labelCount - 1
-
-  // If cycle end is in the future, only show data up to today
-  const diff = Math.floor((today.getTime() - cycleStart.value.getTime()) / DAY_IN_MS)
-
-  if (Number.isNaN(diff) || diff < 0)
-    return -1
-
-  return Math.min(diff, labelCount - 1)
-}
-
-function transformSeries(source: number[], accumulated: boolean, labelCount: number) {
-  const display: Array<number | null> = Array.from({ length: labelCount }).fill(null) as Array<number | null>
-  const base: Array<number | null> = Array.from({ length: labelCount }).fill(null) as Array<number | null>
-  const limitIndex = getTodayLimit(labelCount)
-
-  if (limitIndex < 0)
-    return { display, base }
-
-  let runningTotal = 0
-  for (let index = 0; index <= limitIndex; index++) {
-    const hasValue = index < source.length && typeof source[index] === 'number' && Number.isFinite(source[index])
-    const numericValue = hasValue ? source[index] as number : 0
-
-    base[index] = numericValue
-    if (accumulated) {
-      runningTotal += numericValue
-      display[index] = runningTotal
-    }
-    else {
-      display[index] = numericValue
-    }
-  }
-
-  return { display, base }
 }
 
 function monthdays() {
