@@ -361,6 +361,131 @@ describe('audit log triggers', () => {
     }
   })
 
+  it('organization stats_updated_at-only UPDATE does not create audit log', async () => {
+    const beforeRows = await executeSQL(
+      `SELECT COUNT(*)::integer AS count
+       FROM public.audit_logs
+       WHERE org_id = $1::uuid
+         AND table_name = 'orgs'
+         AND operation = 'UPDATE'`,
+      [ORG_ID],
+    )
+    const beforeCount = beforeRows[0]?.count ?? 0
+
+    const { error: updateError } = await getSupabaseClient()
+      .from('orgs')
+      .update({ stats_updated_at: new Date().toISOString() })
+      .eq('id', ORG_ID)
+    expect(updateError).toBeNull()
+
+    await new Promise(resolve => setTimeout(resolve, 100))
+
+    const afterRows = await executeSQL(
+      `SELECT COUNT(*)::integer AS count
+       FROM public.audit_logs
+       WHERE org_id = $1::uuid
+         AND table_name = 'orgs'
+         AND operation = 'UPDATE'`,
+      [ORG_ID],
+    )
+    expect(afterRows[0]?.count ?? 0).toBe(beforeCount)
+  })
+
+  it('organization updated_at-only UPDATE does not create audit log', async () => {
+    const beforeRows = await executeSQL(
+      `SELECT COUNT(*)::integer AS count
+       FROM public.audit_logs
+       WHERE org_id = $1::uuid
+         AND table_name = 'orgs'
+         AND operation = 'UPDATE'`,
+      [ORG_ID],
+    )
+    const beforeCount = beforeRows[0]?.count ?? 0
+
+    const { error: updateError } = await getSupabaseClient()
+      .from('orgs')
+      .update({ updated_at: new Date().toISOString() })
+      .eq('id', ORG_ID)
+    expect(updateError).toBeNull()
+
+    await new Promise(resolve => setTimeout(resolve, 100))
+
+    const afterRows = await executeSQL(
+      `SELECT COUNT(*)::integer AS count
+       FROM public.audit_logs
+       WHERE org_id = $1::uuid
+         AND table_name = 'orgs'
+         AND operation = 'UPDATE'`,
+      [ORG_ID],
+    )
+    expect(afterRows[0]?.count ?? 0).toBe(beforeCount)
+  })
+
+  it('app stats_updated_at-only UPDATE does not create audit log', async () => {
+    const beforeRows = await executeSQL(
+      `SELECT COUNT(*)::integer AS count
+       FROM public.audit_logs
+       WHERE org_id = $1::uuid
+         AND table_name = 'apps'
+         AND record_id = $2
+         AND operation = 'UPDATE'`,
+      [ORG_ID, APIKEY_AUDIT_APP_ID],
+    )
+    const beforeCount = beforeRows[0]?.count ?? 0
+
+    const { error: updateError } = await getSupabaseClient()
+      .from('apps')
+      .update({ stats_updated_at: new Date().toISOString() })
+      .eq('app_id', APIKEY_AUDIT_APP_ID)
+    expect(updateError).toBeNull()
+
+    await new Promise(resolve => setTimeout(resolve, 100))
+
+    const afterRows = await executeSQL(
+      `SELECT COUNT(*)::integer AS count
+       FROM public.audit_logs
+       WHERE org_id = $1::uuid
+         AND table_name = 'apps'
+         AND record_id = $2
+         AND operation = 'UPDATE'`,
+      [ORG_ID, APIKEY_AUDIT_APP_ID],
+    )
+    expect(afterRows[0]?.count ?? 0).toBe(beforeCount)
+  })
+
+  it('app updated_at-only UPDATE does not create audit log', async () => {
+    const beforeRows = await executeSQL(
+      `SELECT COUNT(*)::integer AS count
+       FROM public.audit_logs
+       WHERE org_id = $1::uuid
+         AND table_name = 'apps'
+         AND record_id = $2
+         AND operation = 'UPDATE'`,
+      [ORG_ID, APIKEY_AUDIT_APP_ID],
+    )
+    const beforeCount = beforeRows[0]?.count ?? 0
+
+    await executeSQL(
+      `UPDATE public.apps
+       SET updated_at = now()
+       WHERE app_id = $1`,
+      [APIKEY_AUDIT_APP_ID],
+    )
+
+    await new Promise(resolve => setTimeout(resolve, 100))
+
+    const afterRows = await executeSQL(
+      `SELECT COUNT(*)::integer AS count
+       FROM public.audit_logs
+       WHERE org_id = $1::uuid
+         AND table_name = 'apps'
+         AND record_id = $2
+         AND operation = 'UPDATE'`,
+      [ORG_ID, APIKEY_AUDIT_APP_ID],
+    )
+    expect(afterRows[0]?.count ?? 0).toBe(beforeCount)
+  })
+
   it('org_users INSERT creates audit log', async () => {
     // Get another user to add to the org
     const { data: anotherUser, error: userError } = await getSupabaseClient()
