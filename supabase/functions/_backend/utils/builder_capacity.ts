@@ -451,9 +451,7 @@ export async function getAdminBuilderCapacity(
     live.free = Math.max(0, (live.workers_online || activeBuilds) - live.used)
   }
 
-  const poolSize = live.workers_online > 0 ? live.workers_online : live.workers_total
-  if (live.builder_reachable)
-    await recordBuilderCapacityIfChanged(c, poolSize, `admin_${source}`)
+  // Capacity events are written by the builder worker on runner +/−, not by admin reads.
 
   const [events, intervals] = await Promise.all([
     loadCapacityEvents(c, startIso, endIso),

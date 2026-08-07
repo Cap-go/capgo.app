@@ -63,3 +63,10 @@ GRANT USAGE, SELECT ON SEQUENCE public.builder_capacity_events_id_seq TO service
 REVOKE ALL ON TABLE public.builder_capacity_events FROM PUBLIC;
 REVOKE ALL ON TABLE public.builder_capacity_events FROM anon;
 REVOKE ALL ON TABLE public.builder_capacity_events FROM authenticated;
+
+-- Current production pool size (3 MacInCloud GitLab emulator runners).
+INSERT INTO public.builder_capacity_events (workers_total, delta, source)
+SELECT 3, 3, 'seed'
+WHERE NOT EXISTS (
+  SELECT 1 FROM public.builder_capacity_events
+);
