@@ -10,11 +10,12 @@ import IconArrowRight from '~icons/lucide/arrow-right'
 import IconCheckCircle from '~icons/lucide/check-circle'
 import CreditsCta from '~/components/CreditsCta.vue'
 import RbacPermissionOnlyModal from '~/components/RbacPermissionOnlyModal.vue'
+import { useBillingPaidAt } from '~/composables/useBillingPaidAt'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { formatIncludedThenPrice } from '~/services/creditPricing'
 import { formatNumberValue } from '~/services/formatLocale'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
-import { resolveBillingPaidAt, shouldShowExpiredTrialPlansState, shouldShowPlanFailureBanner } from '~/services/paymentRequired'
+import { shouldShowExpiredTrialPlansState, shouldShowPlanFailureBanner } from '~/services/paymentRequired'
 import { checkPermissions } from '~/services/permissions'
 import { getAffonsoReferral, getDatafastAttribution, openCheckout } from '~/services/stripe'
 import { getCreditUnitPricing, getCurrentPlanNameOrg, useSupabase } from '~/services/supabase'
@@ -47,41 +48,14 @@ const showAdminModal = ref(false)
 
 const { currentOrganization } = storeToRefs(organizationStore)
 const creditUnitPrices = ref<Partial<Record<Database['public']['Enums']['credit_metric_type'], number>>>({})
-const paidAt = ref<string | null | undefined>(undefined)
-const billingLookupFailed = ref(false)
+const billingOrgId = computed(() => currentOrganization.value?.gid)
+const { paidAt, billingLookupFailed } = useBillingPaidAt(billingOrgId, isMobile)
 const showExpiredTrialState = computed(() => {
   return shouldShowExpiredTrialPlansState(organizationStore.currentOrganizationFailed, isMobile, paidAt.value)
 })
 const showPlanFailureBanner = computed(() => {
   return shouldShowPlanFailureBanner(organizationStore.currentOrganizationFailed, isMobile, paidAt.value, billingLookupFailed.value)
 })
-
-let billingLookupRun = 0
-watch(() => currentOrganization.value?.gid, async (orgId) => {
-  const currentRun = ++billingLookupRun
-  paidAt.value = undefined
-  billingLookupFailed.value = false
-
-  if (isMobile || !orgId)
-    return
-
-  const { data, error } = await useSupabase()
-    .from('orgs')
-    .select('stripe_info(paid_at)')
-    .eq('id', orgId)
-    .maybeSingle()
-
-  if (currentRun !== billingLookupRun)
-    return
-
-  if (error || !data) {
-    billingLookupFailed.value = true
-    console.error('Failed to load organization billing history', { orgId, error })
-    return
-  }
-
-  paidAt.value = resolveBillingPaidAt(data.stripe_info)
-}, { immediate: true })
 
 interface PlanFeature {
   label: string

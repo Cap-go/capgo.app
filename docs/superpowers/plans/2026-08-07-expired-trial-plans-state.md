@@ -4,7 +4,7 @@
 
 **Goal:** Show a clear, neutral expired-trial state on the plans page for organizations that never paid, without changing any previously subscribed state.
 
-**Architecture:** Reuse the dashboard billing-history distinction through a small pure service that treats `stripe_info.paid_at === null` as never paid. The plans page loads that value with stale-response protection, derives one `showExpiredTrialState` computed value, and uses it to switch header copy, suppress the misleading error banner, and neutralize plan cards only for expired trials.
+**Architecture:** Reuse the dashboard billing-history distinction through a small pure service that treats `stripe_info.paid_at === null` as never paid. A shared composable loads that value with stale-response protection for both the dashboard modal and plans page. The plans page derives one `showExpiredTrialState` computed value and uses it to switch header copy, suppress the misleading error banner, and neutralize plan cards only for expired trials.
 
 **Tech Stack:** Vue 3 Composition API, Pinia, Supabase JS, vue-i18n, Vitest, Tailwind CSS
 
@@ -13,7 +13,9 @@
 ## File Structure
 
 - Create `src/services/paymentRequired.ts`: shared pure billing-history predicates used by dashboard and plans-page presentation.
+- Create `src/composables/useBillingPaidAt.ts`: shared billing-history query, error state, and stale-response guard.
 - Create `tests/payment-required-copy.unit.test.ts`: focused resolver coverage for never-paid, previously paid, unresolved, missing-relation, and native states.
+- Modify `src/components/PaymentRequiredModal.vue`: consume the shared billing-history composable.
 - Modify `src/pages/settings/organization/Plans.vue`: load `paid_at`, derive the expired-trial state, update header/banner/card treatment, and place secondary CTAs after the plan grid.
 - Modify `messages/en.json`: add state-aware expired-trial heading and plan-specific action copy.
 
@@ -27,7 +29,7 @@
 
 ```ts
 import { describe, expect, it } from 'vitest'
-import { resolveBillingPaidAt, shouldShowExpiredTrialCopy } from '../src/services/paymentRequired'
+import { resolveBillingPaidAt, shouldShowExpiredTrialCopy, shouldShowExpiredTrialPlansState, shouldShowPlanFailureBanner } from '../src/services/paymentRequired'
 
 describe('payment required copy', () => {
   it.concurrent('shows expired-trial copy for a never-paid web organization', () => {
@@ -49,6 +51,16 @@ describe('payment required copy', () => {
   it.concurrent('never shows purchase-oriented trial copy in the native app', () => {
     expect(shouldShowExpiredTrialCopy(true, null)).toBe(false)
   })
+
+  it.concurrent('shows the plans-page state only for an expired never-paid organization', () => {
+    expect(shouldShowExpiredTrialPlansState(true, false, null)).toBe(true)
+    expect(shouldShowExpiredTrialPlansState(true, false, undefined)).toBe(false)
+  })
+
+  it.concurrent('keeps the failure banner neutral until billing history resolves', () => {
+    expect(shouldShowPlanFailureBanner(true, false, undefined)).toBe(false)
+    expect(shouldShowPlanFailureBanner(true, false, '2026-01-15T12:00:00.000Z')).toBe(true)
+  })
 })
 ```
 
@@ -68,13 +80,28 @@ export function resolveBillingPaidAt(stripeInfo: { paid_at: string | null } | nu
 export function shouldShowExpiredTrialCopy(isNative: boolean, paidAt: string | null | undefined): boolean {
   return !isNative && paidAt === null
 }
+
+export function shouldShowExpiredTrialPlansState(currentOrganizationFailed: boolean, isNative: boolean, paidAt: string | null | undefined): boolean {
+  return currentOrganizationFailed && shouldShowExpiredTrialCopy(isNative, paidAt)
+}
+
+export function shouldShowPlanFailureBanner(
+  currentOrganizationFailed: boolean,
+  isNative: boolean,
+  paidAt: string | null | undefined,
+  billingLookupFailed = false,
+): boolean {
+  return currentOrganizationFailed
+    && (isNative || billingLookupFailed || paidAt !== undefined)
+    && !shouldShowExpiredTrialPlansState(currentOrganizationFailed, isNative, paidAt)
+}
 ```
 
 - [ ] **Step 4: Run the focused test and verify that it passes**
 
 Run: `bunx vitest run tests/payment-required-copy.unit.test.ts`
 
-Expected: PASS with five tests.
+Expected: PASS with seven tests.
 
 - [ ] **Step 5: Commit the resolver**
 
@@ -86,6 +113,8 @@ git commit -m "test(frontend): cover expired trial billing state"
 ### Task 2: State-Aware Plans Page
 
 **Files:**
+- Create: `src/composables/useBillingPaidAt.ts`
+- Modify: `src/components/PaymentRequiredModal.vue`
 - Modify: `src/pages/settings/organization/Plans.vue`
 - Modify: `messages/en.json`
 
@@ -99,48 +128,60 @@ Add these keys to `messages/en.json` in alphabetical order:
 "trial-ended-title": "Your free trial has ended"
 ```
 
-- [ ] **Step 2: Load billing history with organization-switch protection**
+- [ ] **Step 2: Share billing-history loading with organization-switch protection**
 
-Import the shared billing-state helpers, then add billing state beside the existing refs. Keep the banner neutral while the lookup is pending, but preserve the existing failure presentation when the lookup itself fails:
+Create `useBillingPaidAt` with the authenticated `orgs.stripe_info(paid_at)` lookup, a monotonically increasing request token, and explicit lookup-error state. It returns `paidAt` and `billingLookupFailed` refs, resets both when the organization changes, ignores stale responses, and logs failures with the organization ID.
 
 ```ts
-import { resolveBillingPaidAt, shouldShowExpiredTrialPlansState, shouldShowPlanFailureBanner } from '~/services/paymentRequired'
+export function useBillingPaidAt(orgId: Readonly<Ref<string | null | undefined>>, disabled = false) {
+  const paidAt = ref<string | null | undefined>(undefined)
+  const billingLookupFailed = ref(false)
+  let billingLookupRun = 0
 
-const paidAt = ref<string | null | undefined>(undefined)
-const billingLookupFailed = ref(false)
+  watch(orgId, async (nextOrgId) => {
+    const currentRun = ++billingLookupRun
+    paidAt.value = undefined
+    billingLookupFailed.value = false
+
+    if (disabled || !nextOrgId)
+      return
+
+    const { data, error } = await useSupabase()
+      .from('orgs')
+      .select('stripe_info(paid_at)')
+      .eq('id', nextOrgId)
+      .maybeSingle()
+
+    if (currentRun !== billingLookupRun)
+      return
+
+    if (error || !data) {
+      billingLookupFailed.value = true
+      console.error('Failed to load organization billing history', { orgId: nextOrgId, error })
+      return
+    }
+
+    paidAt.value = resolveBillingPaidAt(data.stripe_info)
+  }, { immediate: true })
+
+  return { paidAt, billingLookupFailed }
+}
+```
+
+Replace the inline watcher in `PaymentRequiredModal.vue` with the composable, then use the same composable on the plans page. Keep the plans banner neutral while the lookup is pending, but preserve the existing failure presentation when the lookup itself fails:
+
+```ts
+import { useBillingPaidAt } from '~/composables/useBillingPaidAt'
+import { shouldShowExpiredTrialPlansState, shouldShowPlanFailureBanner } from '~/services/paymentRequired'
+
+const billingOrgId = computed(() => currentOrganization.value?.gid)
+const { paidAt, billingLookupFailed } = useBillingPaidAt(billingOrgId, isMobile)
 const showExpiredTrialState = computed(() => {
   return shouldShowExpiredTrialPlansState(organizationStore.currentOrganizationFailed, isMobile, paidAt.value)
 })
 const showPlanFailureBanner = computed(() => {
   return shouldShowPlanFailureBanner(organizationStore.currentOrganizationFailed, isMobile, paidAt.value, billingLookupFailed.value)
 })
-
-let billingLookupRun = 0
-watch(() => currentOrganization.value?.gid, async (orgId) => {
-  const currentRun = ++billingLookupRun
-  paidAt.value = undefined
-  billingLookupFailed.value = false
-
-  if (isMobile || !orgId)
-    return
-
-  const { data, error } = await useSupabase()
-    .from('orgs')
-    .select('stripe_info(paid_at)')
-    .eq('id', orgId)
-    .maybeSingle()
-
-  if (currentRun !== billingLookupRun)
-    return
-
-  if (error || !data) {
-    billingLookupFailed.value = true
-    console.error('Failed to load organization billing history', { orgId, error })
-    return
-  }
-
-  paidAt.value = resolveBillingPaidAt(data.stripe_info)
-}, { immediate: true })
 ```
 
 This query is read-only and uses the current authenticated client. Do not alter ended-subscription state or query Stripe directly.
@@ -158,10 +199,10 @@ Change only the pricing heading and description:
 </p>
 ```
 
-Suppress the current red banner only for the proven expired-trial state:
+Render the current red banner only after billing history proves a non-trial failure, or when the lookup fails and the existing fallback is required:
 
 ```vue
-<div v-if="organizationStore.currentOrganizationFailed && !showExpiredTrialState" class="px-4 py-2 mb-4 font-medium text-center text-white bg-red-500 rounded-lg shrink-0">
+<div v-if="showPlanFailureBanner" class="px-4 py-2 mb-4 font-medium text-center text-white bg-red-500 rounded-lg shrink-0">
   {{ t('plan-failed') }}
 </div>
 ```
@@ -199,7 +240,7 @@ p.name === currentPlan?.name && !isCreditsOnly && !showExpiredTrialState
 
 - [ ] **Step 5: Put the primary plan choice before secondary CTAs**
 
-Move the existing `CreditsCta` and expert-support blocks, unchanged internally, from above the plans grid to immediately below the grid. Do not add another expired-trial callout.
+Render the existing `CreditsCta` and expert-support blocks once. Use flex ordering and state-specific spacing to keep them above the grid for existing states and immediately below the grid for the expired-trial state. Do not duplicate their markup or add another expired-trial callout.
 
 - [ ] **Step 6: Run focused tests and frontend typechecking**
 
@@ -214,7 +255,7 @@ Expected: exit 0 with no Vue or TypeScript errors.
 - [ ] **Step 7: Commit the plans-page behavior**
 
 ```bash
-git add messages/en.json src/pages/settings/organization/Plans.vue
+git add messages/en.json src/composables/useBillingPaidAt.ts src/components/PaymentRequiredModal.vue src/pages/settings/organization/Plans.vue
 git commit -m "fix(frontend): clarify expired trial plans state"
 ```
 
@@ -222,6 +263,8 @@ git commit -m "fix(frontend): clarify expired trial plans state"
 
 **Files:**
 - Verify: `src/pages/settings/organization/Plans.vue`
+- Verify: `src/components/PaymentRequiredModal.vue`
+- Verify: `src/composables/useBillingPaidAt.ts`
 - Verify: `src/services/paymentRequired.ts`
 - Verify: `tests/payment-required-copy.unit.test.ts`
 
@@ -235,7 +278,7 @@ Expected: exit 0; formatting changes, if any, are limited to touched frontend fi
 
 Run: `bunx vitest run tests/payment-required-copy.unit.test.ts`
 
-Expected: PASS with five tests.
+Expected: PASS with seven tests.
 
 - [ ] **Step 3: Run frontend typechecking**
 
@@ -245,14 +288,14 @@ Expected: exit 0.
 
 - [ ] **Step 4: Review the final diff for scope**
 
-Run: `git diff HEAD~2 -- messages/en.json src/pages/settings/organization/Plans.vue src/services/paymentRequired.ts tests/payment-required-copy.unit.test.ts`
+Run: `git diff HEAD~2 -- messages/en.json src/components/PaymentRequiredModal.vue src/composables/useBillingPaidAt.ts src/pages/settings/organization/Plans.vue src/services/paymentRequired.ts tests/payment-required-copy.unit.test.ts`
 
 Expected: only the never-paid expired-trial state changes. No ended-subscription, canceled-subscription, backend, schema, or migration behavior changes.
 
 - [ ] **Step 5: Commit formatter-only changes if needed**
 
 ```bash
-git add messages/en.json src/pages/settings/organization/Plans.vue src/services/paymentRequired.ts tests/payment-required-copy.unit.test.ts
+git add messages/en.json src/components/PaymentRequiredModal.vue src/composables/useBillingPaidAt.ts src/pages/settings/organization/Plans.vue src/services/paymentRequired.ts tests/payment-required-copy.unit.test.ts
 git commit -m "style(frontend): format expired trial plans changes"
 ```
 
