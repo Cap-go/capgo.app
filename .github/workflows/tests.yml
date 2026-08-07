@@ -410,16 +410,22 @@ jobs:
           health_url="${SUPABASE_FUNCTIONS_HEALTH_URL#http-get://}"
           health_url="${health_url#https-get://}"
           base_url="http://${health_url%/ok}"
-          for attempt in 1 2 3 4 5; do
-            status=$(curl -s -o /tmp/edge-warm.body -w '%{http_code}' -X POST "${base_url}/triggers/cron_email" \
-              -H 'Content-Type: application/json' \
-              -H 'apisecret: testsecret' \
-              -d '{"email":"warm@capgo.app","appId":"com.warm.edge","type":"monthly_create_stats"}' || true)
-            echo "edge warm attempt=${attempt} status=${status}"
-            if [ "${status}" != "502" ] && [ "${status}" != "503" ] && [ "${status}" != "000" ]; then
-              break
-            fi
-            sleep "${attempt}"
+          for path in /ok /triggers/cron_email /triggers/cron_stat_org /triggers/cron_stat_app; do
+            for attempt in 1 2 3 4 5; do
+              if [ "$path" = "/ok" ]; then
+                status=$(curl -s -o /tmp/edge-warm.body -w '%{http_code}' "${base_url}${path}" || true)
+              else
+                status=$(curl -s -o /tmp/edge-warm.body -w '%{http_code}' -X POST "${base_url}${path}" \
+                  -H 'Content-Type: application/json' \
+                  -H 'apisecret: testsecret' \
+                  -d '{}' || true)
+              fi
+              echo "edge warm path=${path} attempt=${attempt} status=${status}"
+              if [ "${status}" != "502" ] && [ "${status}" != "503" ] && [ "${status}" != "000" ]; then
+                break
+              fi
+              sleep "${attempt}"
+            done
           done
       - name: Run backend integration tests
         env:

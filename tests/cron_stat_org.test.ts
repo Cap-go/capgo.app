@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { BASE_URL, fetchTestRequest, getBaseData, getSupabaseClient, PRODUCT_ID, postUpdate, TEST_EMAIL, USER_ID } from './test-utils.ts'
+import { BASE_URL, fetchTestRequest, getBaseData, getSupabaseClient, PRODUCT_ID, postUpdate, TEST_EMAIL, USER_ID, warmEdgeEndpoint } from './test-utils.ts'
 
 // Create unique IDs for this test file to avoid parallel test interference
 const id = randomUUID()
@@ -55,6 +55,9 @@ beforeAll(async () => {
   })
   if (appError)
     throw appError
+
+  // Cold first POST to cron_stat_org can 502 under Deno load; warm before assertions.
+  await warmEdgeEndpoint('/triggers/cron_stat_org')
 })
 
 // Reset state before each test
