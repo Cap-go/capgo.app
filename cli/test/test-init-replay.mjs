@@ -385,5 +385,47 @@ assert.equal(applyRawCommandAnalyticsOptOut(['node', 'capgo', 'bundle', 'upload'
   }
 }
 
+{
+  const captured = []
+  const restoreFns = []
+  let sendAttempt = 0
+
+  try {
+    restoreFns.push(replaceProcessProperty(stdout, 'isTTY', true))
+    restoreFns.push(replaceProcessProperty(stdin, 'isTTY', true))
+    restoreFns.push(replaceProcessProperty(stdout, 'write', () => true))
+
+    const replay = startInitReplay({
+      apikey: 'capgo-key',
+      isCi: false,
+      replayUrl: 'https://api.capgo.app/private/replay',
+      cols: 80,
+      rows: 24,
+      throttleMs: 10,
+      terminalPixelSize: { height: 480, width: 800 },
+      transport: async (_url, body) => {
+        sendAttempt += 1
+        captured.push(body)
+        return sendAttempt > 1
+      },
+    })
+    assert.ok(replay, 'replay starts for identity retry test')
+
+    stdout.write('first identity attempt\r\n')
+    await new Promise(resolve => setTimeout(resolve, 50))
+    stdout.write('retry identity attempt\r\n')
+    await new Promise(resolve => setTimeout(resolve, 50))
+    await replay.finish()
+
+    assert.equal(captured[0]?.properties.$identify_person, true, 'the failed first send requests person identification')
+    assert.equal(captured[1]?.properties.$identify_person, true, 'the next send retries person identification')
+    assert.equal(captured.slice(2).some(body => '$identify_person' in body.properties), false, 'identity stops retrying after a successful send')
+  }
+  finally {
+    while (restoreFns.length > 0)
+      restoreFns.pop()()
+  }
+}
+
 
 console.log('✅ init replay telemetry tests passed')

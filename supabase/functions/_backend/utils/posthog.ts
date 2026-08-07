@@ -146,16 +146,6 @@ export async function capturePosthogReplaySnapshot(c: Context, payload: PostHogR
   }
 
   const host = getEnv(c, 'POSTHOG_API_HOST') || POSTHOG_SNAPSHOT_URL
-  if (payload.identifyPerson && payload.userEmail) {
-    await trackPosthogEvent(c, {
-      channel: 'cli',
-      event: '$identify',
-      personProperties: { email: payload.userEmail },
-      timeoutMs: POSTHOG_IDENTIFY_TIMEOUT_MS,
-      user_id: payload.userId,
-    })
-  }
-
   let posthogUrl: string
   try {
     posthogUrl = getPostHogSnapshotUrl(host)
@@ -163,6 +153,16 @@ export async function capturePosthogReplaySnapshot(c: Context, payload: PostHogR
   catch (e) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Invalid PostHog replay host', error: serializeError(e), host })
     return false
+  }
+
+  if (payload.identifyPerson && payload.userEmail) {
+    await trackPosthogEvent(c, {
+      channel: 'cli',
+      event: '$identify',
+      personProperties: { email: payload.userEmail },
+      timeoutMs: POSTHOG_IDENTIFY_TIMEOUT_MS,
+      user_id: payload.userId,
+    }).catch(error => cloudlogErr({ requestId: c.get('requestId'), message: 'PostHog identification failed', error: serializeError(error), userId: payload.userId }))
   }
 
   const body = {

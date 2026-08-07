@@ -701,22 +701,30 @@ class InitReplayRecorder implements InitReplayController {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), remainingFlushMs)
     timeout.unref?.()
+    const identifyPerson = !this.hasQueuedIdentity
     const body = buildInitReplayBody({
       currentUrl: this.currentUrl,
       events,
-      identifyPerson: !this.hasQueuedIdentity,
+      identifyPerson,
       sessionId: this.sessionId,
       timestamp: new Date(timestamp).toISOString(),
       windowId: this.windowId,
     })
-    this.hasQueuedIdentity = true
+    if (identifyPerson)
+      this.hasQueuedIdentity = true
     const pending = this.transport(replayUrl, body, this.apikey, controller.signal)
       .then((sent) => {
+        if (identifyPerson && !sent)
+          this.hasQueuedIdentity = false
         if (sent && frameIncludesMeta && metaGenerationAtCapture === this.metaGeneration)
           this.hasSentMeta = true
         return sent
       })
-      .catch(() => false)
+      .catch(() => {
+        if (identifyPerson)
+          this.hasQueuedIdentity = false
+        return false
+      })
       .finally(() => {
         clearTimeout(timeout)
         this.pendingSends.delete(pending)

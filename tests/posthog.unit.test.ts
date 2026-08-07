@@ -244,6 +244,27 @@ describe('posthog helper', () => {
     ])
   })
 
+  it('fails safely when replay identification receives an invalid PostHog host', async () => {
+    const { capturePosthogReplaySnapshot } = await import('../supabase/functions/_backend/utils/posthog.ts')
+    envState.posthogApiHost = '://bad-host'
+
+    await expect(capturePosthogReplaySnapshot(createContext(), {
+      currentUrl: 'capgo-cli://init',
+      distinctId: 'user-id',
+      events: [{}],
+      identifyPerson: true,
+      lib: '@capgo/cli',
+      libVersion: '8.9.0',
+      sessionId: 'init-session',
+      timestamp: '2026-06-16T00:00:00.000Z',
+      userEmail: 'user@example.com',
+      userId: 'user-id',
+      windowId: 'window-id',
+    })).resolves.toBe(false)
+
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   it('uses the full exception endpoint host and only sends the request path for exceptions', async () => {
     const { capturePosthogException } = await import('../supabase/functions/_backend/utils/posthog.ts')
     envState.posthogApiHost = 'https://eu.i.posthog.com/i/v0/e'
