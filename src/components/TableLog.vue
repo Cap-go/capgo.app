@@ -3,9 +3,8 @@ import type { TableColumn } from './comp_def'
 import type { DateRangePreset } from '~/services/dateRange'
 import { FormKit } from '@formkit/vue'
 import { useDebounceFn, useNow } from '@vueuse/core'
-import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, useId, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import IconClose from '~icons/heroicons/x-mark'
 import IconFastBackward from '~icons/ic/round-keyboard-double-arrow-left'
 import IconSearch from '~icons/ic/round-search?raw'
 import IconSortDown from '~icons/lucide/chevron-down'
@@ -15,6 +14,8 @@ import IconDownload from '~icons/lucide/download'
 import IconFilter from '~icons/system-uicons/filtering'
 import IconReload from '~icons/tabler/reload'
 import DateRangePicker from '~/components/DateRangePicker.vue'
+import FilterModal from '~/components/FilterModal.vue'
+import { createClearedFilters } from '~/composables/useFilterModal'
 import { clampDateRange, getDateRangeForPreset, inferDateRangePreset, TABLE_DATE_RANGE_DEFAULT } from '~/services/dateRange'
 
 interface Props {
@@ -54,7 +55,6 @@ const searchVal = ref(props.search ?? '')
 
 const filterSearchVal = ref('')
 const isFilterModalOpen = ref(false)
-const filterModalBoxRef = ref<HTMLElement | null>(null)
 const filterOpenButtonRef = ref<HTMLButtonElement | null>(null)
 const filterModalTitleId = `${useId()}-log-filters-title`
 
@@ -64,56 +64,9 @@ function openFilterModal() {
 
 function closeFilterModal() {
   isFilterModalOpen.value = false
-  nextTick(() => {
-    filterOpenButtonRef.value?.focus()
-  })
 }
 
-function getFilterModalFocusable() {
-  const root = filterModalBoxRef.value
-  if (!root)
-    return [] as HTMLElement[]
-  return Array.from(root.querySelectorAll<HTMLElement>(
-    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-  )).filter(el => !el.hasAttribute('disabled') && el.offsetParent !== null)
-}
-
-function onFilterModalKeydown(e: KeyboardEvent) {
-  if (!isFilterModalOpen.value)
-    return
-  if (e.key === 'Escape') {
-    e.preventDefault()
-    closeFilterModal()
-    return
-  }
-  if (e.key !== 'Tab')
-    return
-  const focusable = getFilterModalFocusable()
-  if (!focusable.length)
-    return
-  const first = focusable[0]!
-  const last = focusable[focusable.length - 1]!
-  if (e.shiftKey && document.activeElement === first) {
-    e.preventDefault()
-    last.focus()
-  }
-  else if (!e.shiftKey && document.activeElement === last) {
-    e.preventDefault()
-    first.focus()
-  }
-}
-
-watch(isFilterModalOpen, async (open) => {
-  if (open) {
-    window.addEventListener('keydown', onFilterModalKeydown)
-    await nextTick()
-    const focusable = getFilterModalFocusable()
-    focusable[0]?.focus()
-  }
-  else {
-    window.removeEventListener('keydown', onFilterModalKeydown)
-  }
-})
+const hasFilterMenu = computed(() => Boolean(props.filterText && props.filters && Object.keys(props.filters).length))
 
 const filterList = computed(() => {
   if (!props.filters)
@@ -228,9 +181,7 @@ function applyFilterShortcut(shortcut: { label: string, filters: string[] }) {
   if (!props.filters)
     return
 
-  const nextFilters = Object.fromEntries(
-    Object.keys(props.filters).map(key => [key, false]),
-  ) as Record<string, boolean>
+  const nextFilters = createClearedFilters(props.filters)
   shortcut.filters.forEach((filter) => {
     if (filter in nextFilters)
       nextFilters[filter] = true
@@ -241,20 +192,20 @@ function applyFilterShortcut(shortcut: { label: string, filters: string[] }) {
 function clearAllFilters() {
   if (!props.filters)
     return
-  const cleared = Object.fromEntries(
-    Object.keys(props.filters).map(key => [key, false]),
-  ) as Record<string, boolean>
-  emit('update:filters', cleared)
+  emit('update:filters', createClearedFilters(props.filters))
 }
 
 function isShortcutActive(shortcut: { filters: string[] }) {
   if (!props.filters || !shortcut.filters.length)
     return false
+  const applicable = shortcut.filters.filter(filter => filter in props.filters!)
+  if (!applicable.length)
+    return false
   const selected = Object.entries(props.filters).filter(([, enabled]) => enabled).map(([key]) => key)
-  if (selected.length !== shortcut.filters.length)
+  if (selected.length !== applicable.length)
     return false
   const selectedSet = new Set(selected)
-  return shortcut.filters.every(filter => selectedSet.has(filter))
+  return applicable.every(filter => selectedSet.has(filter))
 }
 
 function updateUrlParams() {
@@ -332,7 +283,6 @@ onUnmounted(() => {
   })
   const paramsString = params.toString() ? `?${params.toString()}` : ''
   window.history.replaceState({}, '', `${window.location.pathname}${paramsString}`)
-  window.removeEventListener('keydown', onFilterModalKeydown)
 })
 
 // Add watches
@@ -377,7 +327,7 @@ onMounted(() => {
           <span class="hidden text-sm md:block">{{ t('download-csv') }}</span>
         </button>
       </div>
-      <div class="flex h-10 mr-2 shrink-0" :class="{ 'md:mr-auto': !filterText || !filterList.length }">
+      <div class="flex h-10 mr-2 shrink-0" :class="{ 'md:mr-auto': !hasFilterMenu }">
         <DateRangePicker
           v-model="preciseDates"
           v-model:mode="rangeMode"
@@ -386,7 +336,7 @@ onMounted(() => {
           @apply="onRangeApply"
         />
       </div>
-      <div v-if="filterText && filterList.length" class="relative h-10 mr-2 shrink-0 md:mr-auto">
+      <div v-if="hasFilterMenu" class="relative h-10 mr-2 shrink-0 md:mr-auto">
         <button
           ref="filterOpenButtonRef"
           type="button"
@@ -406,130 +356,79 @@ onMounted(() => {
           <IconFilter class="mr-2 w-4 h-4" />
           <span class="hidden md:block">{{ filterButtonLabel }}</span>
         </button>
-        <Teleport to="body">
-          <div
-            v-if="isFilterModalOpen"
-            class="d-modal d-modal-open"
-            role="dialog"
-            aria-modal="true"
-            :aria-labelledby="filterModalTitleId"
-            data-test="log-table-filters-modal"
-          >
-            <div
-              ref="filterModalBoxRef"
-              class="d-modal-box w-[calc(100vw-2rem)] max-w-md rounded-lg border border-slate-200 bg-white p-0 shadow-2xl dark:border-slate-700 dark:bg-slate-900"
-            >
-              <div class="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4 dark:border-slate-800">
-                <div class="min-w-0">
-                  <h2
-                    :id="filterModalTitleId"
-                    class="text-lg font-semibold leading-7 text-slate-950 dark:text-white"
-                  >
-                    {{ t(filterText) }}
-                  </h2>
-                  <p class="mt-1 text-sm leading-5 text-slate-600 dark:text-slate-300">
-                    {{ t('filter-logs-modal-subtitle') }}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-slate-500 transition-colors duration-200 hover:bg-slate-100 hover:text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-azure-500 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
-                  :aria-label="t('close')"
-                  data-test="log-table-filters-close"
-                  @click="closeFilterModal"
-                >
-                  <IconClose class="h-5 w-5" />
-                </button>
-              </div>
-
-              <div class="max-h-[min(28rem,60vh)] space-y-5 overflow-y-auto px-5 py-5">
-                <div v-if="filterShortcuts?.length" class="space-y-2">
-                  <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
-                    {{ t('filter-shortcuts-label') }}
-                  </p>
-                  <div class="flex flex-wrap gap-2">
-                    <button
-                      v-for="shortcut in filterShortcuts"
-                      :key="shortcut.label"
-                      type="button"
-                      data-test="log-table-filter-shortcut"
-                      class="inline-flex min-h-10 items-center justify-center rounded-md border-2 border-slate-300 bg-white px-3.5 text-sm font-semibold text-slate-800 shadow-sm transition-colors duration-150 hover:border-azure-500 hover:bg-azure-50 hover:text-azure-700 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-azure-500 dark:border-slate-500 dark:bg-slate-800 dark:text-slate-100 dark:hover:border-azure-400 dark:hover:bg-slate-700"
-                      :class="{
-                        'border-azure-500 bg-azure-50 text-azure-700 ring-2 ring-azure-500 dark:border-azure-400 dark:bg-azure-950/40 dark:text-azure-200': isShortcutActive(shortcut),
-                      }"
-                      @click="applyFilterShortcut(shortcut)"
-                    >
-                      {{ t(shortcut.label) }}
-                    </button>
-                  </div>
-                </div>
-
-                <div>
-                  <label for="log-filter-search" class="sr-only">{{ t('search') }}</label>
-                  <input
-                    id="log-filter-search"
-                    v-model="filterSearchVal"
-                    type="text"
-                    name="log-filter-search"
-                    :aria-label="t('search')"
-                    :placeholder="t('search')"
-                    class="w-full rounded-md border border-slate-300 px-3 py-2.5 text-sm text-slate-900 focus:border-azure-500 focus:outline-none focus:ring-2 focus:ring-azure-500 dark:border-slate-600 dark:bg-slate-800 dark:text-white"
-                  >
-                </div>
-
-                <fieldset v-if="filterList.length" class="space-y-1">
-                  <legend class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
-                    {{ t('filter-options') }}
-                  </legend>
-                  <label
-                    v-for="(f, i) in filterList"
-                    :key="i"
-                    :for="`log-filter-option-${i}`"
-                    class="flex min-h-11 cursor-pointer items-center rounded-md px-2 py-2 transition-colors duration-150 hover:bg-slate-50 dark:hover:bg-slate-800"
-                  >
-                    <input
-                      :id="`log-filter-option-${i}`"
-                      :checked="filters?.[f]"
-                      type="checkbox"
-                      :name="`log-filter-option-${i}`"
-                      class="h-4 w-4 shrink-0 rounded border-gray-300 text-azure-500 focus:ring-2 focus:ring-azure-500 dark:border-gray-600 dark:bg-gray-700 dark:ring-offset-gray-800"
-                      @change="emit('update:filters', { ...filters, [f]: !filters?.[f] })"
-                    >
-                    <span class="ml-3 min-w-0 text-sm font-medium text-slate-900 dark:text-slate-200">
-                      {{ t(f) }}
-                    </span>
-                  </label>
-                </fieldset>
-                <p v-else class="py-2 text-center text-sm text-slate-500 dark:text-slate-400">
-                  {{ t('no-results') }}
-                </p>
-              </div>
-
-              <div class="flex flex-col-reverse gap-2 border-t border-slate-100 px-5 py-4 sm:flex-row sm:items-center sm:justify-between dark:border-slate-800">
-                <button
-                  type="button"
-                  class="d-btn d-btn-ghost min-h-11"
-                  data-test="log-table-filters-clear"
-                  :disabled="!filterActivated"
-                  @click="clearAllFilters"
-                >
-                  {{ t('clear-filters') }}
-                </button>
-                <button
-                  type="button"
-                  class="d-btn d-btn-primary min-h-11"
-                  data-test="log-table-filters-done"
-                  @click="closeFilterModal"
-                >
-                  {{ t('done') }}
-                </button>
-              </div>
+        <FilterModal
+          :open="isFilterModalOpen"
+          :title="t(filterText ?? 'Filters')"
+          :subtitle="t('filter-logs-modal-subtitle')"
+          :title-id="filterModalTitleId"
+          :clear-disabled="!filterActivated"
+          :restore-focus-el="filterOpenButtonRef"
+          test-id-prefix="log-table"
+          @close="closeFilterModal"
+          @clear="clearAllFilters"
+        >
+          <div v-if="filterShortcuts?.length" class="space-y-2">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+              {{ t('filter-shortcuts-label') }}
+            </p>
+            <div class="flex flex-wrap gap-2">
+              <button
+                v-for="shortcut in filterShortcuts"
+                :key="shortcut.label"
+                type="button"
+                data-test="log-table-filter-shortcut"
+                class="d-btn d-btn-sm min-h-10 border-2 border-slate-300 bg-white px-3.5 font-semibold text-slate-800 shadow-sm hover:border-azure-500 hover:bg-azure-50 hover:text-azure-700 dark:border-slate-500 dark:bg-slate-800 dark:text-slate-100 dark:hover:border-azure-400 dark:hover:bg-slate-700"
+                :class="{
+                  'border-azure-500 bg-azure-50 text-azure-700 ring-2 ring-azure-500 dark:border-azure-400 dark:bg-azure-950/40 dark:text-azure-200': isShortcutActive(shortcut),
+                }"
+                :aria-pressed="isShortcutActive(shortcut)"
+                @click="applyFilterShortcut(shortcut)"
+              >
+                {{ t(shortcut.label) }}
+              </button>
             </div>
-            <form method="dialog" class="d-modal-backdrop">
-              <button type="button" :aria-label="t('close')" @click="closeFilterModal" />
-            </form>
           </div>
-        </Teleport>
+
+          <div>
+            <label for="log-filter-search" class="sr-only">{{ t('search') }}</label>
+            <input
+              id="log-filter-search"
+              v-model="filterSearchVal"
+              type="text"
+              name="log-filter-search"
+              :aria-label="t('search')"
+              :placeholder="t('search')"
+              class="w-full rounded-md border border-slate-300 px-3 py-2.5 text-sm text-slate-900 focus:border-azure-500 focus:outline-none focus:ring-2 focus:ring-azure-500 dark:border-slate-600 dark:bg-slate-800 dark:text-white"
+            >
+          </div>
+
+          <fieldset v-if="filterList.length" class="space-y-1">
+            <legend class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+              {{ t('filter-options') }}
+            </legend>
+            <label
+              v-for="f in filterList"
+              :key="f"
+              :for="`log-filter-option-${f}`"
+              class="flex min-h-11 cursor-pointer items-center rounded-md px-2 py-2 transition-colors duration-150 hover:bg-slate-50 dark:hover:bg-slate-800"
+            >
+              <input
+                :id="`log-filter-option-${f}`"
+                :checked="filters?.[f]"
+                type="checkbox"
+                :name="`log-filter-option-${f}`"
+                class="h-4 w-4 shrink-0 rounded border-gray-300 text-azure-500 focus:ring-2 focus:ring-azure-500 dark:border-gray-600 dark:bg-gray-700 dark:ring-offset-gray-800"
+                @change="emit('update:filters', { ...filters, [f]: !filters?.[f] })"
+              >
+              <span class="ml-3 min-w-0 text-sm font-medium text-slate-900 dark:text-slate-200">
+                {{ t(f) }}
+              </span>
+            </label>
+          </fieldset>
+          <p v-else class="py-2 text-center text-sm text-slate-500 dark:text-slate-400">
+            {{ t('no-results') }}
+          </p>
+        </FilterModal>
       </div>
       <div class="flex min-w-0 max-w-[13rem] overflow-hidden sm:max-w-[14rem] md:max-w-[14rem] lg:max-w-[16rem] xl:max-w-xs md:w-auto">
         <FormKit

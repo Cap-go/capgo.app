@@ -80,6 +80,8 @@ describe('stats action filters', () => {
     const observeKeySet = new Set(observeActionFilterKeys)
     const updateKeySet = new Set(updateActionFilterKeys)
     expect([...observeKeySet].some(key => updateKeySet.has(key))).toBe(false)
-    expect(observeActionFilterKeys.length + updateActionFilterKeys.length).toBe(statsActionFilters.length)
+    expect(new Set([...observeActionFilterKeys, ...updateActionFilterKeys])).toEqual(
+      new Set(statsActionFilters.map(([filterKey]) => filterKey)),
+    )
   })
 })

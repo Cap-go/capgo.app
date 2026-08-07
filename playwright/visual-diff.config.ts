@@ -46,8 +46,16 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
     path: '/app/com.demo.app/observe/logs',
     auth: true,
     prepare: async (page) => {
-      await page.locator('[data-test="log-table-filters-open"]').click()
-      await page.locator('[data-test="log-table-filters-modal"]').waitFor({ state: 'visible' })
+      // Open Actions so reviewers see the filter modal on head.
+      // Base still uses the legacy dropdown, so fall back when modal is absent.
+      const openButton = page.locator('[data-test="log-table-filters-open"]')
+      if (await openButton.count()) {
+        await openButton.click()
+        await page.locator('[data-test="log-table-filters-modal"]').waitFor({ state: 'visible' })
+        return
+      }
+      await page.getByRole('button', { name: /actions/i }).click()
+      await page.getByText('All failures', { exact: true }).waitFor({ state: 'visible' })
     },
   },
   { slug: 'observe-native', path: '/app/com.demo.app/observe/native', auth: true },
