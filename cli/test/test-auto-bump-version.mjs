@@ -7,6 +7,7 @@ import {
   autoBumpMinorVersion,
   autoBumpVersion,
   autoBumpVersionBy,
+  normalizeAutoBumpInput,
   normalizeAutoBumpLevel,
 } from '../src/versionHelpers.ts'
 
@@ -65,7 +66,7 @@ assertEqual(v, '0.3.0', 'third minor')
 console.log('\n6️⃣  Fallback for non-strict semver-like strings...')
 assertEqual(autoBumpMinorVersion('3.2.1-beta'), '3.3.0', 'prerelease base → minor via @std/semver or fallback')
 
-console.log('\n7️⃣  normalizeAutoBumpLevel...')
+console.log('\n7️⃣  normalizeAutoBumpLevel / normalizeAutoBumpInput...')
 assertEqual(normalizeAutoBumpLevel(true), 'minor', 'true → minor')
 assertEqual(normalizeAutoBumpLevel(undefined), undefined, 'undefined → undefined')
 assertEqual(normalizeAutoBumpLevel(false), undefined, 'false → undefined')
@@ -75,7 +76,13 @@ assertEqual(normalizeAutoBumpLevel('major'), 'major', 'major')
 assertEqual(normalizeAutoBumpLevel('minor'), 'minor', 'minor')
 assertEqual(normalizeAutoBumpLevel('patch'), 'patch', 'patch')
 assertEqual(normalizeAutoBumpLevel('metadata'), 'metadata', 'metadata')
+assertEqual(normalizeAutoBumpLevel('ai'), undefined, 'ai excluded from level normalize')
 assertEqual(normalizeAutoBumpLevel('nope'), undefined, 'invalid → undefined')
+assertEqual(normalizeAutoBumpInput('ai'), 'ai', 'ai input')
+assertEqual(normalizeAutoBumpInput('Ai'), 'ai', 'Ai → ai')
+assertEqual(normalizeAutoBumpInput('patch'), 'patch', 'input patch')
+assertEqual(normalizeAutoBumpInput(true), 'minor', 'input true → minor')
+assertEqual(normalizeAutoBumpInput('nope'), undefined, 'input invalid → undefined')
 
 console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
 console.log(`📊 Test Results: ${passed} passed, ${failed} failed`)

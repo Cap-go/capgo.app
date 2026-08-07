@@ -1,9 +1,11 @@
 import type { Context } from 'hono'
+import type { AiBinding } from '../utils/workers_ai.ts'
 import sourceMessages from '../../../../messages/en.json'
 import { CacheHelper } from '../utils/cache.ts'
 import { honoFactory, parseBody, quickError, useCors } from '../utils/hono.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { backgroundTask, getEnv } from '../utils/utils.ts'
+import { extractAiText, recordOf } from '../utils/workers_ai.ts'
 
 const CACHE_TTL_SECONDS = 5 * 60
 const DEFAULT_TRANSLATION_MODEL = '@cf/meta/llama-3.1-8b-instruct-fast'
@@ -64,10 +66,6 @@ interface TranslationMessagesResponsePayload {
   status: 'ready'
 }
 
-interface AiBinding {
-  run: (model: string, input: unknown) => Promise<unknown>
-}
-
 type MessageEntry = [string, string]
 
 const sourceMessageCatalog = sourceMessages as Record<string, string>
@@ -87,59 +85,6 @@ async function sha256Hex(value: string) {
   return Array.from(new Uint8Array(digest))
     .map(byte => byte.toString(16).padStart(2, '0'))
     .join('')
-}
-
-function recordOf(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
-}
-
-function extractContentText(content: unknown): string {
-  if (typeof content === 'string')
-    return content
-  if (!Array.isArray(content))
-    return ''
-
-  return content.map((item) => {
-    if (typeof item === 'string')
-      return item
-    const itemRecord = recordOf(item)
-    return typeof itemRecord?.text === 'string' ? itemRecord.text : ''
-  }).join('')
-}
-
-function extractAiText(result: unknown): string {
-  if (typeof result === 'string')
-    return result
-
-  const resultRecord = recordOf(result)
-  if (!resultRecord)
-    return ''
-
-  for (const key of ['response', 'text', 'result', 'output']) {
-    const value = resultRecord[key]
-    if (typeof value === 'string')
-      return value
-    const valueRecord = recordOf(value)
-    if (valueRecord)
-      return extractAiText(valueRecord)
-    if (Array.isArray(value))
-      return extractContentText(value)
-  }
-
-  const choices = resultRecord.choices
-  if (Array.isArray(choices)) {
-    for (const choice of choices) {
-      const choiceRecord = recordOf(choice)
-      if (typeof choiceRecord?.text === 'string')
-        return choiceRecord.text
-      const message = recordOf(choiceRecord?.message)
-      const text = extractContentText(message?.content)
-      if (text)
-        return text
-    }
-  }
-
-  return ''
 }
 
 function parseTranslationObject(value: unknown): Record<string, string> | null {

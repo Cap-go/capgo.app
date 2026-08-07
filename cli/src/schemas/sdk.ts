@@ -95,7 +95,7 @@ export const uploadOptionsSchema = z.object({
   autoSetBundle: z.boolean().optional(),
   autoBump: z.union([
     z.boolean(),
-    z.enum(['major', 'minor', 'patch', 'fix', 'metadata']),
+    z.enum(['major', 'minor', 'patch', 'fix', 'metadata', 'ai']),
   ]).optional(),
   selfAssign: z.boolean().optional(),
   packageJsonPaths: z.string().optional(),
