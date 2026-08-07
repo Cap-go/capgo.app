@@ -3,9 +3,8 @@ import type { TableColumn } from './comp_def'
 import type { DateRangePreset } from '~/services/dateRange'
 import { FormKit } from '@formkit/vue'
 import { useDebounceFn, useNow } from '@vueuse/core'
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, useId, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import IconDown from '~icons/ic/round-keyboard-arrow-down'
 import IconFastBackward from '~icons/ic/round-keyboard-double-arrow-left'
 import IconSearch from '~icons/ic/round-search?raw'
 import IconSortDown from '~icons/lucide/chevron-down'
@@ -15,6 +14,8 @@ import IconDownload from '~icons/lucide/download'
 import IconFilter from '~icons/system-uicons/filtering'
 import IconReload from '~icons/tabler/reload'
 import DateRangePicker from '~/components/DateRangePicker.vue'
+import FilterModal from '~/components/FilterModal.vue'
+import { createClearedFilters } from '~/composables/useFilterModal'
 import { clampDateRange, getDateRangeForPreset, inferDateRangePreset, TABLE_DATE_RANGE_DEFAULT } from '~/services/dateRange'
 
 interface Props {
@@ -53,33 +54,19 @@ const { t } = useI18n()
 const searchVal = ref(props.search ?? '')
 
 const filterSearchVal = ref('')
-const filterDropdownOpen = ref(false)
-const filterDropdownRef = ref<HTMLElement | null>(null)
-const filterDropdownStyle = ref<{ top: string, left: string }>({ top: '0px', left: '0px' })
+const isFilterModalOpen = ref(false)
+const filterOpenButtonRef = ref<HTMLButtonElement | null>(null)
+const filterModalTitleId = `${useId()}-log-filters-title`
 
-function toggleFilterDropdown() {
-  if (filterDropdownOpen.value) {
-    filterDropdownOpen.value = false
-    return
-  }
-  if (filterDropdownRef.value) {
-    const rect = filterDropdownRef.value.getBoundingClientRect()
-    filterDropdownStyle.value = {
-      top: `${rect.bottom + 4}px`,
-      left: `${rect.left}px`,
-    }
-  }
-  filterDropdownOpen.value = true
+function openFilterModal() {
+  isFilterModalOpen.value = true
 }
 
-function handleClickOutside(event: MouseEvent) {
-  if (filterDropdownOpen.value && filterDropdownRef.value && !filterDropdownRef.value.contains(event.target as Node)) {
-    const dropdown = document.querySelector('.fixed.p-2.w-64.bg-white')
-    if (dropdown && !dropdown.contains(event.target as Node)) {
-      filterDropdownOpen.value = false
-    }
-  }
+function closeFilterModal() {
+  isFilterModalOpen.value = false
 }
+
+const hasFilterMenu = computed(() => Boolean(props.filterText && props.filters && Object.keys(props.filters).length))
 
 const filterList = computed(() => {
   if (!props.filters)
@@ -194,14 +181,31 @@ function applyFilterShortcut(shortcut: { label: string, filters: string[] }) {
   if (!props.filters)
     return
 
-  const nextFilters = Object.fromEntries(
-    Object.keys(props.filters).map(key => [key, false]),
-  ) as Record<string, boolean>
+  const nextFilters = createClearedFilters(props.filters)
   shortcut.filters.forEach((filter) => {
     if (filter in nextFilters)
       nextFilters[filter] = true
   })
   emit('update:filters', nextFilters)
+}
+
+function clearAllFilters() {
+  if (!props.filters)
+    return
+  emit('update:filters', createClearedFilters(props.filters))
+}
+
+function isShortcutActive(shortcut: { filters: string[] }) {
+  if (!props.filters || !shortcut.filters.length)
+    return false
+  const applicable = shortcut.filters.filter(filter => filter in props.filters!)
+  if (!applicable.length)
+    return false
+  const selected = Object.entries(props.filters).filter(([, enabled]) => enabled).map(([key]) => key)
+  if (selected.length !== applicable.length)
+    return false
+  const selectedSet = new Set(selected)
+  return applicable.every(filter => selectedSet.has(filter))
 }
 
 function updateUrlParams() {
@@ -279,7 +283,6 @@ onUnmounted(() => {
   })
   const paramsString = params.toString() ? `?${params.toString()}` : ''
   window.history.replaceState({}, '', `${window.location.pathname}${paramsString}`)
-  document.removeEventListener('click', handleClickOutside)
 })
 
 // Add watches
@@ -300,7 +303,6 @@ watch(searchVal, useDebounceFn(() => {
 
 onMounted(() => {
   loadFromUrlParams()
-  document.addEventListener('click', handleClickOutside)
 })
 </script>
 
@@ -325,7 +327,7 @@ onMounted(() => {
           <span class="hidden text-sm md:block">{{ t('download-csv') }}</span>
         </button>
       </div>
-      <div class="flex h-10 mr-2 shrink-0" :class="{ 'md:mr-auto': !filterText || !filterList.length }">
+      <div class="flex h-10 mr-2 shrink-0" :class="{ 'md:mr-auto': !hasFilterMenu }">
         <DateRangePicker
           v-model="preciseDates"
           v-model:mode="rangeMode"
@@ -334,12 +336,16 @@ onMounted(() => {
           @apply="onRangeApply"
         />
       </div>
-      <div v-if="filterText && filterList.length" ref="filterDropdownRef" class="relative h-10 mr-2 shrink-0 md:mr-auto">
+      <div v-if="hasFilterMenu" class="relative h-10 mr-2 shrink-0 md:mr-auto">
         <button
+          ref="filterOpenButtonRef"
           type="button"
           :aria-label="filterButtonLabel"
+          :aria-expanded="isFilterModalOpen"
+          aria-haspopup="dialog"
+          data-test="log-table-filters-open"
           class="d-btn d-btn-sm relative h-full min-h-10 border-gray-300 bg-white px-3 text-sm font-medium text-gray-500 hover:bg-gray-100 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:hover:border-gray-600 dark:hover:bg-gray-700"
-          @click="toggleFilterDropdown"
+          @click="openFilterModal"
         >
           <div
             v-if="filterActivated"
@@ -349,60 +355,80 @@ onMounted(() => {
           </div>
           <IconFilter class="mr-2 w-4 h-4" />
           <span class="hidden md:block">{{ filterButtonLabel }}</span>
-          <IconDown class="hidden ml-2 w-4 h-4 md:block" />
         </button>
-        <Teleport to="body">
-          <div
-            v-if="filterDropdownOpen"
-            class="fixed p-2 w-64 bg-white shadow-lg rounded-lg z-9999 dark:bg-gray-800 border border-gray-200 dark:border-gray-700"
-            :style="filterDropdownStyle"
-            @click.stop
-          >
-            <div v-if="filterShortcuts?.length" class="mb-2 border-b border-gray-200 pb-2 dark:border-gray-700">
+        <FilterModal
+          :open="isFilterModalOpen"
+          :title="t(filterText ?? 'Filters')"
+          :subtitle="t('filter-logs-modal-subtitle')"
+          :title-id="filterModalTitleId"
+          :clear-disabled="!filterActivated"
+          :restore-focus-el="filterOpenButtonRef"
+          test-id-prefix="log-table"
+          @close="closeFilterModal"
+          @clear="clearAllFilters"
+        >
+          <div v-if="filterShortcuts?.length" class="space-y-2">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+              {{ t('filter-shortcuts-label') }}
+            </p>
+            <div class="flex flex-wrap gap-2">
               <button
                 v-for="shortcut in filterShortcuts"
                 :key="shortcut.label"
                 type="button"
-                class="d-btn d-btn-ghost d-btn-sm w-full justify-start px-2 text-sm font-medium text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-700"
+                data-test="log-table-filter-shortcut"
+                class="d-btn d-btn-sm min-h-10 border-2 border-slate-300 bg-white px-3.5 font-semibold text-slate-800 shadow-sm hover:border-azure-500 hover:bg-azure-50 hover:text-azure-700 dark:border-slate-500 dark:bg-slate-800 dark:text-slate-100 dark:hover:border-azure-400 dark:hover:bg-slate-700"
+                :class="{
+                  'border-azure-500 bg-azure-50 text-azure-700 ring-2 ring-azure-500 dark:border-azure-400 dark:bg-azure-950/40 dark:text-azure-200': isShortcutActive(shortcut),
+                }"
+                :aria-pressed="isShortcutActive(shortcut)"
                 @click="applyFilterShortcut(shortcut)"
               >
                 {{ t(shortcut.label) }}
               </button>
             </div>
+          </div>
+
+          <div>
+            <label for="log-filter-search" class="sr-only">{{ t('search') }}</label>
             <input
+              id="log-filter-search"
               v-model="filterSearchVal"
               type="text"
               name="log-filter-search"
               :aria-label="t('search')"
               :placeholder="t('search')"
-              class="w-full px-3 py-2 mb-2 text-sm border border-gray-300 rounded-md dark:border-gray-600 dark:bg-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-              @click.stop
+              class="w-full rounded-md border border-slate-300 px-3 py-2.5 text-sm text-slate-900 focus:border-azure-500 focus:outline-none focus:ring-2 focus:ring-azure-500 dark:border-slate-600 dark:bg-slate-800 dark:text-white"
             >
-            <ul class="max-h-64 overflow-y-auto">
-              <li v-for="(f, i) in filterList" :key="i">
-                <div
-                  class="flex items-center p-2 rounded-sm cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600"
-                >
-                  <input
-                    :id="`filter-radio-example-${i}`" :checked="filters?.[f]" type="checkbox"
-                    :name="`filter-radio-${i}`"
-                    class="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 dark:bg-gray-700 dark:border-gray-600 dark:ring-offset-gray-800 focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-600 dark:focus:ring-offset-gray-800"
-                    @change="
-                      emit('update:filters', { ...filters, [f]: !filters?.[f] })
-                    "
-                  >
-                  <label
-                    :for="`filter-radio-example-${i}`"
-                    class="ml-2 w-full text-sm font-medium text-gray-900 rounded-sm dark:text-gray-300"
-                  >{{ t(f) }}</label>
-                </div>
-              </li>
-              <li v-if="filterList.length === 0" class="p-2 text-sm text-gray-500 dark:text-gray-400 text-center">
-                {{ t('no-results') }}
-              </li>
-            </ul>
           </div>
-        </Teleport>
+
+          <fieldset v-if="filterList.length" class="space-y-1">
+            <legend class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+              {{ t('filter-options') }}
+            </legend>
+            <label
+              v-for="f in filterList"
+              :key="f"
+              :for="`log-filter-option-${f}`"
+              class="flex min-h-11 cursor-pointer items-center rounded-md px-2 py-2 transition-colors duration-150 hover:bg-slate-50 dark:hover:bg-slate-800"
+            >
+              <input
+                :id="`log-filter-option-${f}`"
+                :checked="filters?.[f]"
+                type="checkbox"
+                :name="`log-filter-option-${f}`"
+                class="h-4 w-4 shrink-0 rounded border-gray-300 text-azure-500 focus:ring-2 focus:ring-azure-500 dark:border-gray-600 dark:bg-gray-700 dark:ring-offset-gray-800"
+                @change="emit('update:filters', { ...filters, [f]: !filters?.[f] })"
+              >
+              <span class="ml-3 min-w-0 text-sm font-medium text-slate-900 dark:text-slate-200">
+                {{ t(f) }}
+              </span>
+            </label>
+          </fieldset>
+          <p v-else class="py-2 text-center text-sm text-slate-500 dark:text-slate-400">
+            {{ t('no-results') }}
+          </p>
+        </FilterModal>
       </div>
       <div class="flex min-w-0 max-w-[13rem] overflow-hidden sm:max-w-[14rem] md:max-w-[14rem] lg:max-w-[16rem] xl:max-w-xs md:w-auto">
         <FormKit
