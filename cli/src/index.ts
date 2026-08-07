@@ -55,7 +55,7 @@ import { probe } from './probe'
 import { testRunDeviceCommand } from './run/device'
 import { getUserId } from './user/account'
 import { formatError } from './utils'
-import { normalizeAutoBumpLevel } from './versionHelpers'
+import { normalizeAutoBumpInput } from './versionHelpers'
 
 // Common option descriptions used across multiple commands
 const optionDescriptions = {
@@ -266,12 +266,12 @@ Example: npx @capgo/cli@latest bundle upload com.example.app --path ./dist --cha
   .option('--no-delta', `Disable delta updates even if instant updates are enabled`)
   .option('--encrypted-checksum <encryptedChecksum>', `An encrypted checksum (signature). Used only when uploading an external bundle.`)
   .option('--auto-set-bundle', `Set the bundle version in Capacitor config`)
-  .addOption(new Option('--auto-bump [level]', `Auto-increment bundle version from the latest remote channel/app version. Level: major, minor (default), patch|fix, or metadata (prerelease)`)
+  .addOption(new Option('--auto-bump [level]', `Auto-increment bundle version from the latest remote channel/app version. Level: major, minor (default), patch|fix, metadata (prerelease), or ai`)
     .preset('minor')
     .argParser((value: string) => {
-      const level = normalizeAutoBumpLevel(value)
+      const level = normalizeAutoBumpInput(value)
       if (!level) {
-        throw new InvalidArgumentError(`Invalid --auto-bump level "${value}". Allowed: major, minor, patch, fix, metadata.`)
+        throw new InvalidArgumentError(`Invalid --auto-bump level "${value}". Allowed: major, minor, patch, fix, metadata, ai.`)
       }
       return level
     }))

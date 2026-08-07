@@ -26,7 +26,8 @@ import { formatTable } from '../terminal-table'
 import { usesAlwaysDirectUpdate } from '../updaterConfig'
 import { baseKeyV2, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, canPromptInteractively, checkCompatibilityCloud, checkPlanValidUpload, checkRemoteCliMessages, createSupabaseClient, deletedFailedVersion, deltaManifestTooLargeMessage, findRoot, findSavedKey, formatError, getAppId, getBundleVersion, getCompatibilityDetails, getConfig, getInstalledVersion, getLocalConfig, getLocalDependencies, getOrganizationId, getPMAndCommand, getRemoteChecksums, getRemoteFileConfig, hasCliPermission, invokeCapgoCliApi, isCompatible, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, regexSemver, resolveUserIdFromApiKey, sendEvent, setVersionManifest, updateConfigUpdater, updateOrCreateChannel, updateOrCreateVersion, UPLOAD_TIMEOUT, uploadTUS, uploadUrl, zipFile } from '../utils'
 import type { AutoBumpLevel } from '../versionHelpers'
-import { autoBumpVersionBy, getVersionSuggestions, interactiveVersionBump, normalizeAutoBumpLevel } from '../versionHelpers'
+import { autoBumpVersionBy, getVersionSuggestions, interactiveVersionBump, normalizeAutoBumpInput } from '../versionHelpers'
+import { resolveAutoBumpLevelFromAi } from './auto-bump-ai'
 import { maybePromptBuilderCta, shouldBlockIncompatibleUpload } from './builder-cta'
 import { checkIndexPosition, searchInDirectory } from './check'
 import { summarizeUploadCompatibility } from './compatibility'
@@ -1262,7 +1263,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   if (options.verbose)
     log.info(`[Verbose] App ID: ${appid}, Build path: ${path}`)
 
-  if (normalizeAutoBumpLevel(options.autoBump) && options.bundle)
+  if (normalizeAutoBumpInput(options.autoBump) && options.bundle)
     uploadFail('Cannot use --bundle (-b) and --auto-bump together. Omit --bundle to auto-increment from the latest remote version.')
 
   let bundle = await getBundle(extConfig.config, options)
@@ -1329,11 +1330,30 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   if (options.verbose)
     log.info(`[Verbose] Trial check completed`)
 
-  const autoBumpLevel = normalizeAutoBumpLevel(options.autoBump)
-  if (autoBumpLevel) {
+  const autoBumpInput = normalizeAutoBumpInput(options.autoBump)
+  if (autoBumpInput) {
+    let level: AutoBumpLevel
+    if (autoBumpInput === 'ai') {
+      const decision = await resolveAutoBumpLevelFromAi({
+        supabase,
+        appid,
+        channels,
+        path,
+        apikey,
+        options: {
+          supaHost: options.supaHost,
+          supaAnon: options.supaAnon,
+        },
+      })
+      log.info(`🤖 AI auto-bump chose ${decision.level}: ${decision.reason}`)
+      level = decision.level
+    }
+    else {
+      level = autoBumpInput
+    }
     if (options.verbose)
-      log.info(`[Verbose] Resolving auto-bump (${autoBumpLevel}) version from channel/app remote versions...`)
-    bundle = await resolveAutoBumpVersion(supabase, appid, channels, bundle, autoBumpLevel)
+      log.info(`[Verbose] Resolving auto-bump (${level}) version from channel/app remote versions...`)
+    bundle = await resolveAutoBumpVersion(supabase, appid, channels, bundle, level)
     if (options.verbose)
       log.info(`[Verbose] Bundle version after auto-bump: ${bundle}`)
   }
