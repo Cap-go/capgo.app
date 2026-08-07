@@ -7,6 +7,7 @@ import {
   getCommandPath,
   shouldCapturePosthogException,
 } from '../src/posthog.ts'
+import { CliUserError } from '../src/shared/cli-user-error.ts'
 
 const originalFetch = globalThis.fetch
 const originalEnv = {
@@ -134,6 +135,17 @@ try {
   assert.equal(shouldCapturePosthogException({ code: 'commander.helpDisplayed' }), false)
   assert.equal(shouldCapturePosthogException({ code: 'ENOENT' }), true)
   assert.equal(shouldCapturePosthogException(new Error('boom')), true)
+
+  // Expected user-facing CLI failures must never open an error tracking issue,
+  // regardless of the (dynamic) channel context attached to them.
+  assert.equal(shouldCapturePosthogException(new CliUserError('Channel does not have a bundle linked', { appId: 'com.example.app', channel: 'production' })), false)
+  assert.equal(shouldCapturePosthogException(new CliUserError('Missing API key')), false)
+  // Two failures on different channels must be treated identically (one issue,
+  // not one per channel), since the channel name lives in context, not the message.
+  assert.equal(
+    new CliUserError('Channel does not have a bundle linked', { channel: 'production' }).message,
+    new CliUserError('Channel does not have a bundle linked', { channel: 'canary' }).message,
+  )
 
   console.log('CLI PostHog exception capture tests passed')
 }

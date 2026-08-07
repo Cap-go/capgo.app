@@ -2,6 +2,7 @@ import type { Command } from 'commander'
 import { homedir, platform, release } from 'node:os'
 import { arch, cwd, env, version as nodeVersion } from 'node:process'
 import pack from '../package.json'
+import { CliUserError } from './shared/cli-user-error'
 
 const POSTHOG_EXCEPTION_URL = 'https://eu.i.posthog.com/i/v0/e/'
 const CAPGO_POSTHOG_PROJECT_TOKEN = 'phc_NXDyDajQaTQVwb25DEhIVZfxVUn4R0Y348Z7vWYHZUi'
@@ -177,6 +178,11 @@ function getCommanderCode(error: unknown) {
 }
 
 export function shouldCapturePosthogException(error: unknown) {
+  // Expected user-facing failures (missing input, a channel with no bundle,
+  // insufficient permissions, …) are legitimate states, not crashes — never
+  // open an error tracking issue for them.
+  if (error instanceof CliUserError)
+    return false
   return !getCommanderCode(error)?.startsWith('commander.')
 }
 

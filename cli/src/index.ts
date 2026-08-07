@@ -1340,12 +1340,14 @@ void (async () => {
       await Promise.all([capturePromise, flushAnalytics(), finishActiveCliReplay().catch(() => {})])
       exit(exitCode)
     }
-    const capturePromise = capturePosthogException({
-      error,
-      functionName: currentCommandPath,
-      kind: 'unhandled_error',
-      status: 1,
-    })
+    const capturePromise = shouldCapturePosthogException(error)
+      ? capturePosthogException({
+        error,
+        functionName: currentCommandPath,
+        kind: 'unhandled_error',
+        status: 1,
+      })
+      : Promise.resolve(false)
     // For non-Commander errors, show full error details
     log.error(`Error: ${formatError(error)}`)
     trackCommandFailed(currentCommandPath, { errorCategory: categorizeCliError(error), exitCode: 1 })
