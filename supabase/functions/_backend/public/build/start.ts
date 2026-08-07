@@ -321,7 +321,7 @@ export async function startBuild(
       .from('build_requests')
       .update({
         status: startedStatus,
-        started_at: new Date().toISOString(),
+        // started_at is set later from the builder-reported run start (status/reconcile).
         updated_at: new Date().toISOString(),
       })
       .eq('builder_job_id', jobId)

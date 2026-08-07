@@ -293,7 +293,20 @@ const capacityHourlySeries = computed(() => {
     { label: 'Free', color: '#10b981', data: hourly.map(d => ({ date: d.date, value: d.free })) },
   ]
 })
-const hasCapacityHourly = computed(() => capacityHourlySeries.value.some(s => s.data.some(p => p.value > 0)))
+const hasCapacityHourly = computed(() => {
+  const c = capacity.value
+  if (!c)
+    return false
+  // Show the series even when all values are 0 (outage / empty pool), as long as
+  // we have capacity events or run intervals for the selected period.
+  return c.hourly.length > 0 && (c.capacity_events > 0 || c.runs_sampled > 0)
+})
+
+function liveMetric(value: number | undefined): string | number {
+  if (!capacityLive.value?.builder_reachable)
+    return '—'
+  return value ?? 0
+}
 
 // ---- builder onboarding analytics (builder_analytics) ----
 const isLoadingData = ref(false)
@@ -403,7 +416,8 @@ async function spoof(orgId: string) {
 
 // ---- shared lifecycle ----
 async function loadAll() {
-  await Promise.all([loadCapacity(), loadGlobalStatsTrend(), loadData()])
+  void loadCapacity()
+  await Promise.all([loadGlobalStatsTrend(), loadData()])
 }
 
 function sendNonAdminBack() {
@@ -446,38 +460,38 @@ displayStore.defaultBack = '/dashboard'
           <div class="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5">
             <AdminStatsCard
               title="Available builders"
-              :value="capacityLive?.free ?? 0"
+              :value="liveMetric(capacityLive?.free)"
               color-class="text-emerald-500"
               :is-loading="isLoadingCapacity"
               :subtitle="capacityLive?.builder_reachable ? `${capacityLive?.workers_online ?? 0} online` : 'Builder unreachable'"
             />
             <AdminStatsCard
               title="Running builders"
-              :value="capacityLive?.used ?? 0"
+              :value="liveMetric(capacityLive?.used)"
               color-class="text-red-500"
               :is-loading="isLoadingCapacity"
-              subtitle="Busy online runners"
+              :subtitle="capacityLive?.builder_reachable ? 'Busy online runners' : 'Builder unreachable'"
             />
             <AdminStatsCard
               title="Online workers"
-              :value="capacityLive?.workers_online ?? 0"
+              :value="liveMetric(capacityLive?.workers_online)"
               color-class="text-[#119eff]"
               :is-loading="isLoadingCapacity"
-              :subtitle="`${capacityLive?.workers_total ?? 0} registered`"
+              :subtitle="capacityLive?.builder_reachable ? `${capacityLive?.workers_total ?? 0} registered` : 'Builder unreachable'"
             />
             <AdminStatsCard
               title="Waiting jobs"
-              :value="capacityLive?.waiting ?? 0"
+              :value="liveMetric(capacityLive?.waiting)"
               color-class="text-amber-500"
               :is-loading="isLoadingCapacity"
-              subtitle="Queued for a runner"
+              :subtitle="capacityLive?.builder_reachable ? 'Queued for a runner' : 'Builder unreachable'"
             />
             <AdminStatsCard
               title="Offline workers"
-              :value="capacityLive?.offline ?? 0"
+              :value="liveMetric(capacityLive?.offline)"
               color-class="text-slate-500"
               :is-loading="isLoadingCapacity"
-              subtitle="Registered but offline"
+              :subtitle="capacityLive?.builder_reachable ? 'Registered but offline' : 'Builder unreachable'"
             />
           </div>
 
@@ -486,7 +500,7 @@ displayStore.defaultBack = '/dashboard'
               title="Builder usage by hour"
               :is-loading="isLoadingCapacity"
               :has-data="hasCapacityHourly"
-              no-data-message="No capacity events or build intervals in this period yet"
+              no-data-message="No capacity events yet — open after the builder reports worker +/-"
             >
               <template #header>
                 <div class="flex flex-col gap-1">

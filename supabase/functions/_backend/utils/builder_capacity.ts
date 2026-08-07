@@ -61,8 +61,10 @@ interface BuilderOkResponse {
   status?: string
 }
 
-const ACTIVE_BUILD_STATUSES = ['starting', 'waiting_runner', 'running'] as const
+/** Statuses that occupy a runner machine (not queue wait). */
+const OCCUPYING_BUILD_STATUSES = ['running'] as const
 const HOUR_MS = 60 * 60 * 1000
+const CAPACITY_ADVISORY_LOCK_KEY = 874_201_903
 
 export function msFromBuilderTimestamp(value: number | null | undefined): number | null {
   if (typeof value !== 'number' || !Number.isFinite(value))
@@ -89,18 +91,18 @@ export function workersAt(events: BuilderCapacityEvent[], atMs: number): number 
 
 export function maxConcurrentUsed(
   intervals: BuilderRunInterval[],
-  hourStartMs: number,
-  hourEndMs: number,
+  rangeStartMs: number,
+  rangeEndMs: number,
 ): number {
   const events: Array<{ t: number, d: number }> = []
   for (const interval of intervals) {
-    if (interval.started_at >= hourEndMs)
+    if (interval.started_at >= rangeEndMs)
       continue
-    const end = interval.completed_at ?? hourEndMs
-    if (end <= hourStartMs)
+    const end = interval.completed_at ?? rangeEndMs
+    if (end <= rangeStartMs)
       continue
-    const start = Math.max(interval.started_at, hourStartMs)
-    const stop = Math.min(end, hourEndMs)
+    const start = Math.max(interval.started_at, rangeStartMs)
+    const stop = Math.min(end, rangeEndMs)
     if (stop <= start)
       continue
     events.push({ t: start, d: 1 })
@@ -118,6 +120,10 @@ export function maxConcurrentUsed(
   return max
 }
 
+/**
+ * Single sweep over run intervals + capacity events.
+ * First/last hour bins are clipped to [startMs, endMs].
+ */
 export function reconstructHourlyCapacity(
   events: BuilderCapacityEvent[],
   intervals: BuilderRunInterval[],
@@ -131,20 +137,43 @@ export function reconstructHourlyCapacity(
     return []
 
   const sortedEvents = [...events].sort((a, b) => a.created_at - b.created_at)
-  const hourStart = Math.floor(startMs / HOUR_MS) * HOUR_MS
-  const points: BuilderCapacityHourPoint[] = []
 
-  for (let t = hourStart; t < endMs; t += HOUR_MS) {
-    const hourEnd = t + HOUR_MS
-    const date = new Date(t).toISOString()
-    const workers = workersAt(sortedEvents, hourEnd - 1)
-    const used = maxConcurrentUsed(intervals, t, hourEnd)
-    const free = Math.max(0, workers - used)
+  const runEvents: Array<{ t: number, d: number }> = []
+  for (const interval of intervals) {
+    const start = Math.max(interval.started_at, startMs)
+    const end = Math.min(interval.completed_at ?? endMs, endMs)
+    if (end <= start)
+      continue
+    runEvents.push({ t: start, d: 1 }, { t: end, d: -1 })
+  }
+  runEvents.sort((a, b) => a.t - b.t || a.d - b.d)
+
+  const firstHour = Math.floor(startMs / HOUR_MS) * HOUR_MS
+  const points: BuilderCapacityHourPoint[] = []
+  let ei = 0
+  let current = 0
+
+  for (let hour = firstHour; hour < endMs; hour += HOUR_MS) {
+    const binStart = Math.max(hour, startMs)
+    const binEnd = Math.min(hour + HOUR_MS, endMs)
+    if (binEnd <= binStart)
+      continue
+
+    let maxUsed = current
+    while (ei < runEvents.length && runEvents[ei].t < binEnd) {
+      current += runEvents[ei].d
+      if (runEvents[ei].t >= binStart)
+        maxUsed = Math.max(maxUsed, current)
+      ei += 1
+    }
+
+    const workers = workersAt(sortedEvents, binEnd - 1)
+    const date = new Date(hour).toISOString()
     points.push({
       date,
       workers,
-      used,
-      free,
+      used: maxUsed,
+      free: Math.max(0, workers - maxUsed),
       waiting: waitingByHour.get(date) ?? 0,
     })
   }
@@ -241,16 +270,16 @@ async function fetchBuilderLive(c: Context): Promise<{
   }
 }
 
-async function countActiveBuilds(c: Context): Promise<number> {
+async function countOccupyingBuilds(c: Context): Promise<number> {
   const { count, error } = await supabaseAdmin(c)
     .from('build_requests')
     .select('id', { count: 'exact', head: true })
-    .in('status', [...ACTIVE_BUILD_STATUSES])
+    .in('status', [...OCCUPYING_BUILD_STATUSES])
 
   if (error) {
     cloudlogErr({
       requestId: c.get('requestId'),
-      message: 'Failed counting active builds for capacity',
+      message: 'Failed counting occupying builds for capacity',
       error: error.message,
     })
     return 0
@@ -264,61 +293,70 @@ export async function recordBuilderCapacityIfChanged(
   source = 'sync',
 ): Promise<BuilderCapacityEvent | null> {
   const total = Math.max(0, Math.trunc(workersTotal))
-  const admin = supabaseAdmin(c)
+  const client = getPgClient(c)
+  try {
+    await client.query('BEGIN')
+    await client.query('SELECT pg_advisory_xact_lock($1)', [CAPACITY_ADVISORY_LOCK_KEY])
 
-  const { data: latest, error: latestError } = await admin
-    .from('builder_capacity_events')
-    .select('workers_total')
-    .order('created_at', { ascending: false })
-    .order('id', { ascending: false })
-    .limit(1)
-    .maybeSingle()
+    const { rows: latestRows } = await client.query<{ workers_total: number }>(
+      `SELECT workers_total
+       FROM public.builder_capacity_events
+       ORDER BY created_at DESC, id DESC
+       LIMIT 1`,
+    )
+    const previous = latestRows[0]?.workers_total ?? null
+    if (previous === total) {
+      await client.query('COMMIT')
+      return null
+    }
 
-  if (latestError) {
-    cloudlogErr({
+    const delta = previous === null ? total : total - previous
+    const { rows } = await client.query<{
+      created_at: string
+      workers_total: number
+      delta: number
+    }>(
+      `INSERT INTO public.builder_capacity_events (workers_total, delta, source)
+       VALUES ($1, $2, $3)
+       RETURNING created_at, workers_total, delta`,
+      [total, delta, source],
+    )
+    await client.query('COMMIT')
+
+    const inserted = rows[0]
+    if (!inserted)
+      return null
+
+    cloudlog({
       requestId: c.get('requestId'),
-      message: 'Failed reading latest builder capacity event',
-      error: latestError.message,
-    })
-    return null
-  }
-
-  const previous = latest?.workers_total ?? null
-  if (previous === total)
-    return null
-
-  const delta = previous === null ? total : total - previous
-  const { data: inserted, error: insertError } = await admin
-    .from('builder_capacity_events')
-    .insert({
+      message: 'builder capacity event recorded',
       workers_total: total,
       delta,
       source,
     })
-    .select('created_at, workers_total, delta')
-    .single()
 
-  if (insertError || !inserted) {
+    return {
+      created_at: Date.parse(inserted.created_at),
+      workers_total: inserted.workers_total,
+      delta: inserted.delta,
+    }
+  }
+  catch (error) {
+    try {
+      await client.query('ROLLBACK')
+    }
+    catch {
+      // ignore rollback errors
+    }
     cloudlogErr({
       requestId: c.get('requestId'),
-      message: 'Failed inserting builder capacity event',
-      error: insertError?.message,
+      message: 'Failed recording builder capacity event',
+      error: String(error),
     })
     return null
   }
-
-  cloudlog({
-    requestId: c.get('requestId'),
-    message: 'builder capacity event recorded',
-    workers_total: total,
-    delta,
-    source,
-  })
-
-  return {
-    created_at: Date.parse(inserted.created_at),
-    workers_total: inserted.workers_total,
-    delta: inserted.delta,
+  finally {
+    await closeClient(c, client)
   }
 }
 
@@ -329,7 +367,6 @@ async function loadCapacityEvents(
 ): Promise<BuilderCapacityEvent[]> {
   const client = getPgClient(c)
   try {
-    // Include the latest event before the window so workersAt() has a baseline.
     const { rows } = await client.query<{
       created_at: string
       workers_total: number
@@ -372,35 +409,34 @@ async function loadRunIntervals(
 ): Promise<BuilderRunInterval[]> {
   const client = getPgClient(c)
   try {
+    // Only builder-reported run intervals (started_at set when the runner
+    // actually starts). Exclude waiting_runner / queue time from "used".
     const { rows } = await client.query<{
       started_at: string | null
       completed_at: string | null
-      created_at: string
-      build_time_unit: number | null
-      source: string
     }>(
       `WITH request_runs AS (
          SELECT
            br.started_at,
-           br.completed_at,
-           br.created_at,
-           NULL::bigint AS build_time_unit,
-           'request'::text AS source
+           br.completed_at
          FROM public.build_requests br
          WHERE br.started_at IS NOT NULL
+           AND (
+             br.completed_at IS NOT NULL
+             OR br.status = 'running'
+           )
            AND br.started_at < $2::timestamptz
            AND (br.completed_at IS NULL OR br.completed_at > $1::timestamptz)
+           AND (br.completed_at IS NULL OR br.completed_at >= br.started_at)
        ),
        log_runs AS (
          SELECT
            (bl.created_at - make_interval(secs => GREATEST(bl.build_time_unit, 0))) AS started_at,
-           bl.created_at AS completed_at,
-           bl.created_at,
-           bl.build_time_unit,
-           'log'::text AS source
+           bl.created_at AS completed_at
          FROM public.build_logs bl
          WHERE bl.created_at > $1::timestamptz
            AND bl.created_at - make_interval(secs => GREATEST(bl.build_time_unit, 0)) < $2::timestamptz
+           AND bl.build_time_unit > 0
            AND NOT EXISTS (
              SELECT 1
              FROM public.build_requests br
@@ -408,11 +444,9 @@ async function loadRunIntervals(
                AND br.started_at IS NOT NULL
            )
        )
-       SELECT started_at, completed_at, created_at, build_time_unit, source
-       FROM request_runs
+       SELECT started_at, completed_at FROM request_runs
        UNION ALL
-       SELECT started_at, completed_at, created_at, build_time_unit, source
-       FROM log_runs`,
+       SELECT started_at, completed_at FROM log_runs`,
       [startIso, endIso],
     )
 
@@ -422,9 +456,12 @@ async function loadRunIntervals(
         if (!Number.isFinite(started))
           return null
         const completed = row.completed_at ? Date.parse(row.completed_at) : null
+        const completedMs = completed !== null && Number.isFinite(completed) ? completed : null
+        if (completedMs !== null && completedMs < started)
+          return null
         return {
           started_at: started,
-          completed_at: completed !== null && Number.isFinite(completed) ? completed : null,
+          completed_at: completedMs,
         } satisfies BuilderRunInterval
       })
       .filter((row): row is BuilderRunInterval => row !== null)
@@ -439,19 +476,17 @@ export async function getAdminBuilderCapacity(
   startIso: string,
   endIso: string,
 ): Promise<BuilderCapacityResult> {
-  const [{ live, source }, activeBuilds] = await Promise.all([
+  const [{ live, source }, occupyingBuilds] = await Promise.all([
     fetchBuilderLive(c),
-    countActiveBuilds(c),
+    countOccupyingBuilds(c),
   ])
 
-  // Prefer builder machine occupancy; fall back to Capgo active jobs when /ok
-  // path cannot see currentJobId.
-  if (source === 'ok' || (!live.builder_reachable && activeBuilds > 0)) {
-    live.used = Math.min(live.workers_online || activeBuilds, activeBuilds)
-    live.free = Math.max(0, (live.workers_online || activeBuilds) - live.used)
+  // Prefer builder machine occupancy; fall back to Capgo running jobs when /ok
+  // path cannot see currentJobId. waiting_runner is demand, not used capacity.
+  if (source === 'ok' || (!live.builder_reachable && occupyingBuilds > 0)) {
+    live.used = Math.min(live.workers_online || occupyingBuilds, occupyingBuilds)
+    live.free = Math.max(0, (live.workers_online || occupyingBuilds) - live.used)
   }
-
-  // Capacity events are written by the builder worker on runner +/−, not by admin reads.
 
   const [events, intervals] = await Promise.all([
     loadCapacityEvents(c, startIso, endIso),
