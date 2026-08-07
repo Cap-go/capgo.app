@@ -325,6 +325,7 @@ describe('posthog helper', () => {
     envState.posthogApiHost = '://bad-host'
 
     await expect(trackPosthogEvent(createContext(), {
+      channel: 'test',
       event: 'test-event',
       user_id: 'user-id',
     })).resolves.toBe(false)
