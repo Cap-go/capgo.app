@@ -64,6 +64,7 @@ test.describe('Devices empty state', () => {
     const search = page.getByPlaceholder('Search by device ID or Custom ID')
     await search.fill('missing-device')
     await expect.poll(() => requests.at(-1)?.search).toBe('missing-device')
+    await expectRequestCountToRemain(requests, requests.length)
     const requestCountBeforeRefresh = requests.length
     await emptyState.getByRole('button', { name: 'Refresh devices' }).click()
     await expect.poll(() => requests.length).toBe(requestCountBeforeRefresh + 2)

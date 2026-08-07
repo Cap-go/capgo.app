@@ -317,6 +317,7 @@ async function reload() {
 }
 
 async function refreshData() {
+  cancelScheduledReload()
   const loadId = ++activeLoadId.value
   isLoading.value = true
   try {
