@@ -897,16 +897,19 @@ build
   .command('request [appId]')
   .description(`Request a native build from Capgo Cloud.
 
-This command will zip your project directory and upload it to Capgo for building.
-The build will be processed and sent directly to app stores.
+This command zips your project and uploads it to Capgo for a remote native build.
+By default the finished artifact can go to the app store (when store credentials are saved)
+and/or to Capgo storage as a time-limited download link (--output-upload).
 
  🔒 SECURITY: Credentials are never stored on Capgo servers. They are auto-deleted
     after build completion. Build outputs may optionally be uploaded for time-limited download links.
 
 📋 PREREQUISITE: Save credentials first with:
-   \`npx @capgo/cli build credentials save --appId <app-id> --platform <ios|android>\`
+   \`npx @capgo/cli@latest build credentials save --appId <app-id> --platform <ios|android>\`
 
-Example: npx @capgo/cli@latest build request com.example.app --platform ios --path .`)
+Example: npx @capgo/cli@latest build request com.example.app --platform ios --path .
+Android AAB only (no Play upload): npx @capgo/cli@latest build request com.example.app --platform android --no-playstore-upload --output-upload
+iOS IPA only (no TestFlight upload): npx @capgo/cli@latest build request com.example.app --platform ios --ios-distribution ad_hoc --output-upload`)
   .action(requestBuildCommand)
   .option('--path <path>', `Path to the project directory to build (default: current directory)`)
   .option('--node-modules <nodeModules>', optionDescriptions.nodeModules)
@@ -924,7 +927,7 @@ Example: npx @capgo/cli@latest build request com.example.app --platform ios --pa
   .option('--app-store-connect-team-id <id>', 'iOS: App Store Connect Team ID')
   .option('--ios-scheme <scheme>', 'iOS: Xcode scheme to build (default: App)')
   .option('--ios-target <target>', 'iOS: Xcode target for reading build settings (default: same as scheme)')
-  .addOption(new Option('--ios-distribution <mode>', 'iOS: Distribution mode').choices(['app_store', 'ad_hoc']).default('app_store'))
+  .addOption(new Option('--ios-distribution <mode>', 'iOS: Distribution mode. app_store (default) uploads to TestFlight/App Store; ad_hoc skips store upload and builds an Ad Hoc IPA for device install. Use ad_hoc with --output-upload when the App Store app does not exist yet or you only need an IPA download.').choices(['app_store', 'ad_hoc']).default('app_store'))
   .option('--ios-provisioning-profile <mapping>', 'iOS: Provisioning profile path or bundleId=path mapping (repeatable)', collect, [])
   // Android credential CLI options (can also be set via env vars or saved credentials)
   .option('--android-keystore-file <keystore>', 'Android: Base64-encoded keystore file')
@@ -934,7 +937,7 @@ Example: npx @capgo/cli@latest build request com.example.app --platform ios --pa
   .option('--play-config-json <json>', 'Android: Base64-encoded Google Play service account JSON')
   .option('--android-flavor <flavor>', 'Android: Product flavor to build (e.g. production). Required if your project has multiple flavors.')
   .option('--in-app-update-priority <priority>', 'Android: Google Play in-app update priority for this release (integer 0–5; higher = more urgent). See https://developer.android.com/guide/playcore/in-app-updates. Precedence: CLI > env > saved credentials')
-  .option('--no-playstore-upload', 'Skip Play Store upload for this build (nulls out saved play config). Requires --output-upload.')
+  .option('--no-playstore-upload', 'Android: do not upload the AAB/APK to Google Play for this build (ignores saved Play credentials). Use when the Play app does not exist yet, or you only want a Capgo download link. Requires --output-upload.')
   .option('--submit-to-store-review', 'After upload, submit the store release for review instead of leaving it as a draft/inactive build. Android marks the Play release completed; iOS submits the processed TestFlight build to App Store review.')
   .option('--store-release-name <name>', 'Store release name/version label. Android sends this as the Google Play version_name; iOS uses it as the App Store version when creating or reusing the editable version.')
   .option('--store-release-notes <notes>', 'Default store release notes. Android uses this as the Play changelog; iOS uses it as the fallback App Store What\'s New text.')
@@ -942,8 +945,8 @@ Example: npx @capgo/cli@latest build request com.example.app --platform ios --pa
   .option('--ios-testflight-groups <groups>', 'iOS: optional comma-separated TestFlight external group names or IDs for external beta distribution.')
   .option('--ios-automatic-release', 'iOS: automatically release the App Store version after Apple approval. Default is manual release.')
   .option('--no-ios-automatic-release', 'iOS: keep the App Store version waiting for manual release after Apple approval.')
-  .option('--output-upload', 'Override output upload behavior for this build only (enable). Precedence: CLI > env > saved credentials')
-  .option('--no-output-upload', 'Override output upload behavior for this build only (disable). Precedence: CLI > env > saved credentials')
+  .option('--output-upload', 'Upload the finished IPA/APK/AAB to Capgo storage and print a time-limited download link (and QR). Use with --no-playstore-upload (Android) or --ios-distribution ad_hoc (iOS) when you only need the artifact and are not publishing to the store yet. Precedence: CLI > env > saved credentials')
+  .option('--no-output-upload', 'Do not upload the finished IPA/APK/AAB to Capgo storage (no download link). Store upload still happens when Play/TestFlight credentials are configured. Precedence: CLI > env > saved credentials')
   .option('--output-retention <duration>', 'Override output link TTL for this build only (1h to 7d). Examples: 1h, 6h, 2d. Precedence: CLI > env > saved credentials')
   .option('--output-record <path>', 'After a successful build, write a JSON record (jobId, status, outputUrl, qrCodeAscii, qrCodePngPath, finishedAt) to <path>. A PNG QR code is also written next to it as <path>.qr.png. Read fields back with `build last-output`.')
   .option('--skip-build-number-bump', 'Skip automatic build number/version code incrementing. Uses whatever version is already in the project files.')
@@ -954,6 +957,8 @@ Example: npx @capgo/cli@latest build request com.example.app --platform ios --pa
   .option('--ai-analytics', 'On build failure, send logs to Capgo AI for diagnosis. In interactive terminals this skips the upfront confirmation; in CI this auto-uploads and prints the analysis to stderr.')
   .option('--no-prescan', 'Skip the automatic pre-build scan')
   .option('--prescan-ignore-fatal', 'Run the pre-build scan but never block the build (report only)')
+  .option('--prescan-skip <checkId>', 'Skip specific prescan check(s) by id (repeatable or comma-separated). Other checks still run.', collect, [])
+  .option('--prescan-warn <checkId>', 'Downgrade specific prescan check(s) to warning by id (repeatable or comma-separated). Check still runs.', collect, [])
   .option('--fail-on-warnings', 'Treat prescan warnings as fatal')
   .option('--send-logs-to-support', 'On a CI/CD build failure, automatically upload the build logs to Capgo support (no email required). Capgo support is notified and will follow up by email. Additive to --ai-analytics.')
   .addOption(new Option('--send-logs', 'Deprecated alias for --send-logs-to-support').hideHelp())
@@ -984,6 +989,8 @@ Checks credentials (expiry, passwords, profile pairing), project state (cap sync
   .option('--json', 'Output a machine-readable JSON report')
   .option('--fail-on-warnings', 'Exit non-zero when warnings are found (CI)')
   .option('--ignore-fatal', 'Diagnostic mode: report everything but always exit 0')
+  .option('--skip <checkId>', 'Skip specific check(s) by id (repeatable or comma-separated). Alias of --prescan-skip on build request.', collect, [])
+  .option('--warn <checkId>', 'Downgrade specific check(s) to warning by id (repeatable or comma-separated). Alias of --prescan-warn on build request.', collect, [])
   .option('--verbose', optionDescriptions.verbose)
   .option('--supa-host <supaHost>', optionDescriptions.supaHost)
   .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)

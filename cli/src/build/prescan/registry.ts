@@ -136,3 +136,6 @@ export const ALL_CHECKS: PrescanCheck[] = [
   playSaAccess, ascKeyAccess,
   ...IOS_EXPANSION_CHECKS,
 ]
+
+/** Stable list of registered check ids for CLI override validation. */
+export const ALL_CHECK_IDS: string[] = ALL_CHECKS.map(check => check.id)
