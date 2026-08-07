@@ -10,20 +10,14 @@ import { useRouter } from 'vue-router'
 import { useOrgBillingCycleChart } from '~/composables/useOrgBillingCycleChart'
 import { createLegendConfig, createStackedChartScales } from '~/services/chartConfig'
 import { createTodayLineOptions } from '~/services/chartTodayLine'
+import { dailyChartBaseProps } from '~/services/dailyChartProps'
 import { registerDashboardCharts } from '~/services/dashboardChartRegister'
-import { generateMonthDays, getDaysInCurrentMonth } from '~/services/date'
+import { generateMonthDays } from '~/services/date'
 import { useOrganizationStore } from '~/stores/organization'
 import { createTooltipConfig, todayLinePlugin, verticalLinePlugin } from '../../services/chartTooltip'
 
 const props = defineProps({
-  title: { type: String, default: '' },
-  colors: { type: Object, default: () => ({}) },
-  limits: { type: Object, default: () => ({}) },
-  data: { type: Array, default: () => Array.from({ length: getDaysInCurrentMonth() }).fill(0) as number[] },
-  dataByApp: { type: Object, default: () => ({}) },
-  appNames: { type: Object, default: () => ({}) },
-  useBillingPeriod: { type: Boolean, default: true },
-  accumulated: { type: Boolean, default: false },
+  ...dailyChartBaseProps(),
   appId: { type: String, default: '' },
 })
 
