@@ -43,7 +43,7 @@ describe('canceled_org_retention_alerts', () => {
     vi.resetModules()
   })
 
-  it.concurrent('sends a once Bento/tracking event for bundle deletion warnings', async () => {
+  it('sends a once Bento/tracking event for bundle deletion warnings', async () => {
     const response = await postRetentionAlert({
       org_id: 'org-retention-bundles',
       org_name: 'Retention Org',
@@ -81,7 +81,7 @@ describe('canceled_org_retention_alerts', () => {
     )
   })
 
-  it.concurrent('sends a once Bento/tracking event for app deletion warnings', async () => {
+  it('sends a once Bento/tracking event for app deletion warnings', async () => {
     const response = await postRetentionAlert({
       org_id: 'org-retention-apps',
       org_name: 'Retention Org',
@@ -108,7 +108,7 @@ describe('canceled_org_retention_alerts', () => {
     )
   })
 
-  it.concurrent('rejects unsupported alert types', async () => {
+  it('rejects unsupported alert types', async () => {
     const response = await postRetentionAlert({
       org_id: 'org-retention-bad',
       alert_type: 'not_a_real_alert',
