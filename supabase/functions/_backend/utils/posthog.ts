@@ -8,6 +8,7 @@ const POSTHOG_EXCEPTION_URL = 'https://eu.i.posthog.com/i/v0/e/'
 const POSTHOG_SNAPSHOT_URL = 'https://eu.i.posthog.com/s/'
 const POSTHOG_DELIVERY_TIMEOUT_MS = 5000
 const POSTHOG_IDENTIFY_TIMEOUT_MS = 250
+const RRWEB_META_EVENT_TYPE = 4
 
 export type PostHogGroups = Record<string, string>
 
@@ -127,7 +128,6 @@ export interface PostHogReplaySnapshotPayload {
   currentUrl: string
   distinctId: string
   events: unknown[]
-  identifyPerson?: boolean
   lib: string
   libVersion: string
   sessionId: string
@@ -155,7 +155,8 @@ export async function capturePosthogReplaySnapshot(c: Context, payload: PostHogR
     return false
   }
 
-  if (payload.identifyPerson && payload.userEmail) {
+  const isInitialSnapshot = payload.events.some(event => typeof event === 'object' && event !== null && 'type' in event && event.type === RRWEB_META_EVENT_TYPE)
+  if (isInitialSnapshot && payload.userEmail) {
     await trackPosthogEvent(c, {
       channel: 'cli',
       event: '$identify',

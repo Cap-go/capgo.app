@@ -145,7 +145,6 @@ describe('posthog helper', () => {
       events: [{ data: { height: 600, href: 'capgo-cli://init', width: 900 }, timestamp: 123, type: 4 }],
       lib: '@capgo/cli',
       libVersion: '8.9.0',
-      identifyPerson: true,
       sessionId: 'init-session',
       timestamp: '2026-06-16T00:00:00.000Z',
       userEmail: 'user@example.com',
@@ -189,8 +188,7 @@ describe('posthog helper', () => {
     await capturePosthogReplaySnapshot(createContext(), {
       currentUrl: 'capgo-cli://init',
       distinctId: 'user-id',
-      events: [{}],
-      identifyPerson: true,
+      events: [{ type: 4 }],
       lib: '@capgo/cli',
       libVersion: '8.9.0',
       sessionId: 'init-session',
@@ -212,12 +210,31 @@ describe('posthog helper', () => {
     await capturePosthogReplaySnapshot(createContext(), {
       currentUrl: 'capgo-cli://init',
       distinctId: 'user-id',
-      events: [{}],
-      identifyPerson: true,
+      events: [{ type: 4 }],
       lib: '@capgo/cli',
       libVersion: '8.9.0',
       sessionId: 'init-session',
       timestamp: '2026-06-16T00:00:00.000Z',
+      userId: 'user-id',
+      windowId: 'window-id',
+    })
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('https://eu.i.posthog.com/s/')
+  })
+
+  it('does not identify follow-up replay snapshots without a meta event', async () => {
+    const { capturePosthogReplaySnapshot } = await import('../supabase/functions/_backend/utils/posthog.ts')
+
+    await capturePosthogReplaySnapshot(createContext(), {
+      currentUrl: 'capgo-cli://init',
+      distinctId: 'user-id',
+      events: [{ type: 2 }],
+      lib: '@capgo/cli',
+      libVersion: '8.9.0',
+      sessionId: 'init-session',
+      timestamp: '2026-06-16T00:00:00.000Z',
+      userEmail: 'user@example.com',
       userId: 'user-id',
       windowId: 'window-id',
     })
@@ -238,8 +255,7 @@ describe('posthog helper', () => {
     const request = capturePosthogReplaySnapshot(createContext(), {
       currentUrl: 'capgo-cli://init',
       distinctId: 'user-id',
-      events: [{}],
-      identifyPerson: true,
+      events: [{ type: 4 }],
       lib: '@capgo/cli',
       libVersion: '8.9.0',
       sessionId: 'init-session',
@@ -264,8 +280,7 @@ describe('posthog helper', () => {
     await expect(capturePosthogReplaySnapshot(createContext(), {
       currentUrl: 'capgo-cli://init',
       distinctId: 'user-id',
-      events: [{}],
-      identifyPerson: true,
+      events: [{ type: 4 }],
       lib: '@capgo/cli',
       libVersion: '8.9.0',
       sessionId: 'init-session',

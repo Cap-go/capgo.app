@@ -18,7 +18,6 @@ interface CliReplayBody {
 interface ValidatedReplayPayload {
   currentUrl: string
   events: unknown[]
-  identifyPerson: boolean
   lib: string
   libVersion: string
   sessionId: string
@@ -68,7 +67,6 @@ function validateReplayBody(body: CliReplayBody): ValidatedReplayPayload {
   return {
     currentUrl: readRequiredString(properties, '$current_url'),
     events,
-    identifyPerson: properties.$identify_person === true,
     lib: readOptionalString(properties, '$lib', '@capgo/cli'),
     libVersion: readOptionalString(properties, '$lib_version', 'unknown'),
     sessionId: readRequiredString(properties, '$session_id'),

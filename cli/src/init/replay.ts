@@ -55,7 +55,6 @@ interface InitReplaySnapshotBody {
   event: '$snapshot'
   properties: {
     $current_url: string
-    $identify_person?: boolean
     $lib: string
     $lib_version: string
     $session_id: string
@@ -471,7 +470,6 @@ export function createTerminalInteractionEvents(input: {
 export function buildInitReplayBody(input: {
   currentUrl?: string
   events: eventWithTime[]
-  identifyPerson?: boolean
   sessionId: string
   timestamp: string
   windowId: string
@@ -480,7 +478,6 @@ export function buildInitReplayBody(input: {
     event: '$snapshot',
     properties: {
       $current_url: input.currentUrl || DEFAULT_REPLAY_CURRENT_URL,
-      ...(input.identifyPerson ? { $identify_person: true } : {}),
       $lib: '@capgo/cli',
       $lib_version: pack.version,
       $session_id: input.sessionId,
@@ -520,7 +517,6 @@ class InitReplayRecorder implements InitReplayController {
   private captureTimer: NodeJS.Timeout | undefined
   private disposed = false
   private hasSentMeta = false
-  private hasQueuedIdentity = false
   private metaGeneration = 0
   private lastSnapshotText = ''
   private pendingTerminalWrite = Promise.resolve()
@@ -701,30 +697,20 @@ class InitReplayRecorder implements InitReplayController {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), remainingFlushMs)
     timeout.unref?.()
-    const identifyPerson = !this.hasQueuedIdentity
     const body = buildInitReplayBody({
       currentUrl: this.currentUrl,
       events,
-      identifyPerson,
       sessionId: this.sessionId,
       timestamp: new Date(timestamp).toISOString(),
       windowId: this.windowId,
     })
-    if (identifyPerson)
-      this.hasQueuedIdentity = true
     const pending = this.transport(replayUrl, body, this.apikey, controller.signal)
       .then((sent) => {
-        if (identifyPerson && !sent)
-          this.hasQueuedIdentity = false
         if (sent && frameIncludesMeta && metaGenerationAtCapture === this.metaGeneration)
           this.hasSentMeta = true
         return sent
       })
-      .catch(() => {
-        if (identifyPerson)
-          this.hasQueuedIdentity = false
-        return false
-      })
+      .catch(() => false)
       .finally(() => {
         clearTimeout(timeout)
         this.pendingSends.delete(pending)
