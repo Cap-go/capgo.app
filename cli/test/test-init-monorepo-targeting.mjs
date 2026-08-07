@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import { resolveInitPackageJsonPath, resolveInitTargetPath, resolveResumedInitTargets } from '../src/init/command.ts'
+import { getBundleVersion } from '../src/utils.ts'
 
 const root = mkdtempSync(join(tmpdir(), 'capgo-init-monorepo-'))
 const outsideRoot = mkdtempSync(join(tmpdir(), 'capgo-init-monorepo-outside-'))
@@ -24,7 +25,7 @@ try {
   mkdirSync(directoryTarget)
   mkdirSync(androidDir)
   mkdirSync(join(explicitProjectDir, 'src'), { recursive: true })
-  writeFileSync(savedPackageJson, '{}')
+  writeFileSync(savedPackageJson, '{"version":"1.2.3"}')
   writeFileSync(savedMainFile, 'export {}')
   writeFileSync(savedConfigFile, 'export default {}')
   writeFileSync(explicitPackageJson, '{}')
@@ -34,7 +35,9 @@ try {
   const canonicalSavedConfigFile = realpathSync(savedConfigFile)
   const canonicalExplicitConfigFile = realpathSync(explicitConfigFile)
 
-  assert.equal(resolveInitPackageJsonPath(undefined, androidDir), savedPackageJson)
+  const packageJsonFromAndroid = resolveInitPackageJsonPath(undefined, androidDir)
+  assert.equal(packageJsonFromAndroid, savedPackageJson)
+  assert.equal(getBundleVersion(undefined, packageJsonFromAndroid), '1.2.3')
   assert.equal(resolveInitPackageJsonPath(explicitPackageJson, androidDir), explicitPackageJson)
   assert.equal(resolveInitTargetPath('./package.json', 'Package JSON path', root), savedPackageJson)
   assert.equal(resolveInitTargetPath('./projects/qr-code-reader/src/main.ts', 'Main file path', root), savedMainFile)
