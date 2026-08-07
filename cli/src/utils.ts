@@ -841,6 +841,30 @@ export interface CapgoCliInvokeOptions {
   supaAnon?: string
 }
 
+
+export function getCapgoCliHttpStatus(error: unknown): number | undefined {
+  const context = (error as { context?: { status?: number } } | null)?.context
+  return typeof context?.status === 'number' ? context.status : undefined
+}
+
+export async function readCapgoCliApiErrorPayload(error: unknown): Promise<{ error?: string, message?: string } | null> {
+  const response = (error as { context?: Response } | null)?.context
+  if (!response || typeof response.clone !== 'function')
+    return null
+  try {
+    const text = await response.clone().text()
+    try {
+      return JSON.parse(text) as { error?: string, message?: string }
+    }
+    catch {
+      return text ? { message: text } : null
+    }
+  }
+  catch {
+    return null
+  }
+}
+
 /**
  * Invoke Capgo HTTP APIs formerly reached via supabase.functions.invoke.
  * Capgo cloud -> hostApi / hostFilesApi. Self-host -> /functions/v1.
@@ -1061,6 +1085,7 @@ export async function checkRemoteCliMessages(supabase: SupabaseClient<Database>,
   }
 }
 
+// TODO(cli-http): billing/entitlement RPCs have no Capgo HTTP equivalents yet
 export async function checkPlanValid(supabase: SupabaseClient<Database>, orgId: string, appId?: string, warning = true) {
   const config = await getRemoteConfig()
 
@@ -1741,6 +1766,7 @@ export async function setVersionManifest(
   }
 }
 
+// TODO(cli-http): Prefer POST channel via invokeCapgoCliApi; this SDK upsert remains for callers not yet migrated.
 export async function updateOrCreateChannel(supabase: SupabaseClient<Database>, update: Database['public']['Tables']['channels']['Insert']) {
   // console.log('updateOrCreateChannel', update)
   if (!update.app_id || !update.name || !update.created_by) {
@@ -1939,6 +1965,7 @@ export async function getOrganizationWithPermission(
   return organization
 }
 
+// TODO(cli-http): no Capgo HTTP identity endpoint yet (rpc get_user_id)
 export async function resolveUserIdFromApiKey(supabase: SupabaseClient<Database>, apikey: string, silent = false) {
   const { data: dataUser, error: userIdError } = await supabase
     .rpc('get_user_id', { apikey })
@@ -1960,6 +1987,7 @@ interface CliPermissionScope {
   channelId?: number | null
 }
 
+// TODO(cli-http): no Capgo HTTP check-permission endpoint yet (rpc cli_check_permission)
 export async function hasCliPermission(
   supabase: SupabaseClient<Database>,
   apikey: string,
@@ -2015,13 +2043,20 @@ export async function assertOrgPermission(
   await assertCliPermission(supabase, apikey, permissionKey, { orgId }, { message, silent })
 }
 
-export async function getOrganizationId(supabase: SupabaseClient<Database>, appId: string) {
-  const { data, error } = await supabase.from('apps')
-    .select('owner_org')
-    .eq('app_id', appId)
-    .single()
+export async function getOrganizationId(
+  apikey: string,
+  appId: string,
+  options?: { supaHost?: string, supaAnon?: string },
+) {
+  const { data, error } = await invokeCapgoCliApi<{ owner_org?: string }>(`app/${encodeURIComponent(appId)}`, {
+    apikey,
+    method: 'GET',
+    body: undefined,
+    supaHost: options?.supaHost,
+    supaAnon: options?.supaAnon,
+  })
 
-  if (!data || error) {
+  if (!data?.owner_org || error) {
     log.error(`Cannot get organization id for app id ${appId}`)
     formatError(error)
     throw new Error(`Cannot get organization id for app id ${appId}`)

@@ -278,7 +278,7 @@ export async function debugApp(appId: string, options: AppDebugOptions) {
   }
 
   const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
-  const orgId = await getOrganizationId(supabase, appId)
+  const orgId = await getOrganizationId(options.apikey!, appId, { supaHost: options.supaHost, supaAnon: options.supaAnon })
 
   const doRun = await confirmC({ message: `Automatic check if update working in device ?` })
   await cancelCommand('debug', doRun, orgId, options.apikey)

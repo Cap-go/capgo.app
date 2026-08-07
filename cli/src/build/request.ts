@@ -1442,7 +1442,7 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
     // run first gives the batched report instead of a bare "Cannot get organization id".
     let orgId = ''
     try {
-      orgId = await getOrganizationId(supabase, appId)
+      orgId = await getOrganizationId(options.apikey!, appId, { supaHost: options.supaHost, supaAnon: options.supaAnon })
     }
     catch {
       // App not accessible / no org — surfaced by prescan (app-exists) and the permission backstop.

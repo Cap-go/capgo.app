@@ -1,10 +1,12 @@
-import { createSupabaseClient } from '../utils'
+import { createSupabaseClient, invokeCapgoCliApi } from '../utils'
 
 const ownerOrgCache = new Map<string, Promise<string | undefined>>()
 
 export interface OrgResolverDeps {
-  /** Injectable for tests; defaults to the real Supabase client factory. */
+  /** @deprecated Prefer fetchOwnerOrg; kept for existing unit tests. */
   createClient?: typeof createSupabaseClient
+  /** Injectable for tests; defaults to GET app via invokeCapgoCliApi. */
+  fetchOwnerOrg?: (apikey: string, appId: string, signal?: AbortSignal) => Promise<string | undefined>
 }
 
 /**
@@ -18,18 +20,34 @@ export function resolveOwnerOrgId(apikey: string, appId: string, deps: OrgResolv
   if (cached)
     return cached
 
-  const create = deps.createClient ?? createSupabaseClient
   const promise = (async () => {
     try {
-      const supabase = await create(apikey, undefined, undefined, true, false)
-      let query = supabase
-        .from('apps')
-        .select('owner_org')
-        .eq('app_id', appId)
-      if (signal)
-        query = query.abortSignal(signal)
-      const { data } = await query.maybeSingle()
-      return data?.owner_org ?? undefined
+      if (signal?.aborted)
+        return undefined
+      if (deps.fetchOwnerOrg)
+        return await deps.fetchOwnerOrg(apikey, appId, signal)
+
+      // TODO(cli-http): createClient path is legacy test/compat only
+      if (deps.createClient) {
+        const supabase = await deps.createClient(apikey, undefined, undefined, true, false)
+        let query = supabase
+          .from('apps')
+          .select('owner_org')
+          .eq('app_id', appId)
+        if (signal)
+          query = query.abortSignal(signal)
+        const { data } = await query.maybeSingle()
+        return data?.owner_org ?? undefined
+      }
+
+      const { data, error } = await invokeCapgoCliApi<{ owner_org?: string }>(`app/${encodeURIComponent(appId)}`, {
+        apikey,
+        method: 'GET',
+        body: undefined,
+      })
+      if (error || !data?.owner_org)
+        return undefined
+      return data.owner_org
     }
     catch {
       return undefined

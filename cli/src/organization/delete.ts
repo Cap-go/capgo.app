@@ -7,6 +7,7 @@ import {
   createSupabaseClient,
   findSavedKey,
   formatError,
+  invokeCapgoCliApi,
   sendEvent,
 } from '../utils'
 
@@ -42,17 +43,24 @@ export async function deleteOrganizationInternal(
     enrichedOptions.supaHost,
     enrichedOptions.supaAnon,
   )
+  // TODO(cli-http): assertOrgPermission still uses rpc(cli_check_permission)
   await assertOrgPermission(supabase, enrichedOptions.apikey, 'org.delete', orgId, `Insufficient permissions to delete organization ${orgId}`, silent)
 
+  // TODO(cli-http): check2FAAccessForOrg still uses reject_access_due_to_2fa RPCs
   await check2FAAccessForOrg(supabase, orgId, silent)
 
-  const { data: orgData, error: orgError } = await supabase
-    .from('orgs')
-    .select('created_by, name')
-    .eq('id', orgId)
-    .single()
+  const { data: orgData, error: orgError } = await invokeCapgoCliApi<{ name?: string, created_by?: string }>(
+    `organization?orgId=${encodeURIComponent(orgId)}`,
+    {
+      apikey: enrichedOptions.apikey,
+      method: 'GET',
+      body: undefined,
+      supaHost: enrichedOptions.supaHost,
+      supaAnon: enrichedOptions.supaAnon,
+    },
+  )
 
-  if (orgError || !orgData) {
+  if (orgError || !orgData?.name) {
     if (!silent)
       log.error(`Cannot get organization details ${formatError(orgError)}`)
     throw new Error(`Cannot get organization details: ${formatError(orgError)}`)
@@ -72,10 +80,13 @@ export async function deleteOrganizationInternal(
   if (!silent)
     log.info(`Deleting organization "${orgData.name}"`)
 
-  const { error: dbError } = await supabase
-    .from('orgs')
-    .delete()
-    .eq('id', orgId)
+  const { error: dbError } = await invokeCapgoCliApi('organization', {
+    apikey: enrichedOptions.apikey,
+    method: 'DELETE',
+    body: { orgId },
+    supaHost: enrichedOptions.supaHost,
+    supaAnon: enrichedOptions.supaAnon,
+  })
 
   if (dbError) {
     if (!silent)

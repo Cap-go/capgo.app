@@ -1,9 +1,8 @@
 import type { ChannelDeleteOptions } from '../schemas/channel'
 import { intro, log, outro } from '@clack/prompts'
 import { check2FAComplianceForApp, checkAppExistsAndHasPermissionOrgErr } from '../api/app'
-import { delChannel, findBundleIdByChannelName, findChannel } from '../api/channels'
-import { deleteAppVersion } from '../api/versions'
-import { createSupabaseClient, findSavedKey, formatError, getAppId, getConfig, hasCliPermission, invokeCapgoCliApi, sendEvent } from '../utils'
+import { delChannel, findChannel } from '../api/channels'
+import { createSupabaseClient, findSavedKey, formatError, getAppId, getConfig, getOrganizationId, hasCliPermission, invokeCapgoCliApi, sendEvent } from '../utils'
 
 export async function deleteChannelInternal(channelId: string, appId: string, options: ChannelDeleteOptions, silent = false) {
   if (!silent)
@@ -28,7 +27,14 @@ export async function deleteChannelInternal(channelId: string, appId: string, op
   const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
   await check2FAComplianceForApp(supabase, appId, silent)
 
-  const { data: channel, error: channelError } = await findChannel(supabase, appId, channelId)
+  const httpOptions = {
+    apikey: options.apikey,
+    silent,
+    supaHost: options.supaHost,
+    supaAnon: options.supaAnon,
+  }
+
+  const { data: channel, error: channelError } = await findChannel(httpOptions, appId, channelId)
   if (channelError || !channel) {
     if (!silent)
       log.error(`Channel ${channelId} not found`)
@@ -46,12 +52,7 @@ export async function deleteChannelInternal(channelId: string, appId: string, op
     ? await hasCliPermission(supabase, options.apikey, 'bundle.delete', { appId })
     : false
 
-  const orgId = channel.owner_org
-  if (!orgId) {
-    if (!silent)
-      log.error(`Channel ${channelId} has no owner organization`)
-    throw new Error(`Channel ${channelId} has no owner organization`)
-  }
+  const orgId = await getOrganizationId(options.apikey, appId, { supaHost: options.supaHost, supaAnon: options.supaAnon })
 
   if (options.deleteBundle && !canDeleteBundle) {
     if (!silent)
@@ -79,18 +80,10 @@ export async function deleteChannelInternal(channelId: string, appId: string, op
     if (options.deleteBundle && !silent)
       log.info(`Deleting bundle ${appId}#${channelId} from Capgo`)
 
-    if (options.deleteBundle) {
-      const bundle = await findBundleIdByChannelName(supabase, appId, channelId)
-      if (bundle?.name && !silent)
-        log.info(`Deleting bundle ${bundle.name} from Capgo`)
-      if (bundle?.name)
-        await deleteAppVersion(supabase, appId, bundle.name)
-    }
-
     if (!silent)
       log.info(`Deleting channel ${appId}#${channelId} from Capgo`)
 
-    const deleteStatus = await delChannel(supabase, channelId, appId)
+    const deleteStatus = await delChannel(httpOptions, channelId, appId, options.deleteBundle)
     if (deleteStatus.error) {
       if (!silent)
         log.error(`Cannot delete Channel 🙀 ${formatError(deleteStatus.error)}`)

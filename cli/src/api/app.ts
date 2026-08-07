@@ -2,13 +2,26 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Database } from '../types/supabase.types'
 import { log } from '@clack/prompts'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
-import { formatCapgoApiErrorBody, getPMAndCommand, hasCliPermission, resolveCapgoPublicApiHost, show2FADeniedError } from '../utils'
+import { formatCapgoApiErrorBody, getCapgoCliHttpStatus, getPMAndCommand, hasCliPermission, invokeCapgoCliApi, resolveCapgoPublicApiHost, show2FADeniedError } from '../utils'
 
-export async function checkAppExists(supabase: SupabaseClient<Database>, appid: string) {
-  const { data: app } = await supabase
-    .rpc('exist_app_v2', { appid })
-    .single()
-  return !!app
+export async function checkAppExists(
+  apikey: string,
+  appid: string,
+  options?: { supaHost?: string, supaAnon?: string },
+) {
+  const { data, error } = await invokeCapgoCliApi(`app/${encodeURIComponent(appid)}`, {
+    apikey,
+    method: 'GET',
+    body: undefined,
+    supaHost: options?.supaHost,
+    supaAnon: options?.supaAnon,
+  })
+  if (error) {
+    if (getCapgoCliHttpStatus(error) === 404)
+      return false
+    throw error
+  }
+  return !!data
 }
 
 export type PendingOnboardingApp = Pick<
@@ -21,81 +34,65 @@ export type ExistingOrganizationApp = Pick<
   'app_id' | 'name' | 'owner_org' | 'need_onboarding'
 >
 
-function isMissingOnboardingSchemaError(error: { message?: string, details?: string, hint?: string, code?: string | null } | null) {
-  if (!error)
-    return false
-
-  const text = [error.message, error.details, error.hint, error.code]
-    .filter(Boolean)
-    .join(' ')
-    .toLowerCase()
-
-  return [
-    'need_onboarding',
-    'existing_app',
-    'ios_store_url',
-    'android_store_url',
-    'column',
-    'schema cache',
-    'pgrst204',
-    '42703',
-  ].some(token => text.includes(token))
-}
 
 export async function listPendingOnboardingApps(
-  supabase: SupabaseClient<Database>,
+  apikey: string,
   orgId: string,
+  options?: { supaHost?: string, supaAnon?: string },
 ): Promise<PendingOnboardingApp[]> {
-  const { data, error } = await supabase
-    .from('apps')
-    .select('app_id, name, icon_url, need_onboarding, existing_app, ios_store_url, android_store_url')
-    .eq('owner_org', orgId)
-    .eq('need_onboarding', true)
-    .order('created_at', { ascending: false })
-
-  if (error) {
-    if (isMissingOnboardingSchemaError(error)) {
-      return []
+  const apps: PendingOnboardingApp[] = []
+  let page = 0
+  while (true) {
+    const { data, error } = await invokeCapgoCliApi<Array<PendingOnboardingApp & { created_at?: string }>>(
+      `app?org_id=${encodeURIComponent(orgId)}&page=${page}`,
+      {
+        apikey,
+        method: 'GET',
+        body: undefined,
+        supaHost: options?.supaHost,
+        supaAnon: options?.supaAnon,
+      },
+    )
+    if (error) {
+      throw new Error(`Could not load pending onboarding apps: ${error.message}`)
     }
-
-    throw new Error(`Could not load pending onboarding apps: ${error.message}`)
+    const batch = Array.isArray(data) ? data : []
+    if (!batch.length)
+      break
+    apps.push(...batch.filter(app => app.need_onboarding === true))
+    if (batch.length < 50)
+      break
+    page += 1
   }
-
-  return data ?? []
+  return apps
 }
 
 export async function findAppInOrganization(
-  supabase: SupabaseClient<Database>,
+  apikey: string,
   orgId: string,
   appId: string,
+  options?: { supaHost?: string, supaAnon?: string },
 ): Promise<ExistingOrganizationApp | null> {
-  const { data, error } = await supabase
-    .from('apps')
-    .select('app_id, name, owner_org, need_onboarding')
-    .eq('owner_org', orgId)
-    .eq('app_id', appId)
-    .maybeSingle()
-
+  const { data, error } = await invokeCapgoCliApi<ExistingOrganizationApp>(`app/${encodeURIComponent(appId)}`, {
+    apikey,
+    method: 'GET',
+    body: undefined,
+    supaHost: options?.supaHost,
+    supaAnon: options?.supaAnon,
+  })
   if (error) {
-    if (isMissingOnboardingSchemaError(error)) {
-      const { data: fallbackData, error: fallbackError } = await supabase
-        .from('apps')
-        .select('app_id, name, owner_org')
-        .eq('owner_org', orgId)
-        .eq('app_id', appId)
-        .maybeSingle()
-
-      if (fallbackError) {
-        throw new Error(`Could not check existing app ${appId} in org ${orgId}: ${fallbackError.message}`)
-      }
-
-      return fallbackData ? { ...fallbackData, need_onboarding: false } : null
-    }
-
+    if (getCapgoCliHttpStatus(error) === 404)
+      return null
     throw new Error(`Could not check existing app ${appId} in org ${orgId}: ${error.message}`)
   }
-
-  return data ?? null
+  if (!data || data.owner_org !== orgId)
+    return null
+  return {
+    app_id: data.app_id,
+    name: data.name,
+    owner_org: data.owner_org,
+    need_onboarding: data.need_onboarding ?? false,
+  }
 }
 
 export async function completePendingOnboardingApp(
@@ -130,13 +127,15 @@ headers: buildCliRequestHeaders({ 'Content-Type': 'application/json', Authorizat
 /**
  * Check multiple app IDs at once for batch validation (e.g., for suggestions)
  */
-export async function checkAppIdsExist(supabase: SupabaseClient<Database>, appids: string[]) {
+export async function checkAppIdsExist(
+  apikey: string,
+  appids: string[],
+  options?: { supaHost?: string, supaAnon?: string },
+) {
   const results = await Promise.all(
     appids.map(async (appid) => {
-      const { data: app } = await supabase
-        .rpc('exist_app_v2', { appid })
-        .single()
-      return { appid, exists: !!app }
+      const exists = await checkAppExists(apikey, appid, options)
+      return { appid, exists }
     }),
   )
   return results
@@ -147,6 +146,7 @@ export async function check2FAComplianceForApp(
   appid: string,
   silent = false,
 ): Promise<void> {
+  // TODO(cli-http): no Capgo HTTP equivalent for reject_access_due_to_2fa_for_app yet
   // Use the new reject_access_due_to_2fa_for_app function
   // This handles getting the org, user identity (JWT or API key), and checking 2FA compliance
   const { data: shouldReject, error: rejectError } = await supabase
@@ -182,7 +182,7 @@ export async function checkAppExistsAndHasPermissionOrgErr(
   if (!skip2FACheck)
     await check2FAComplianceForApp(supabase, appid, silent)
 
-  if (!isChannelScopedPermission && !(await checkAppExists(supabase, appid))) {
+  if (!isChannelScopedPermission && !(await checkAppExists(apikey, appid))) {
     const msg = `App ${appid} does not exist, run first \`${pm.runner} @capgo/cli app add ${appid}\` to create it`
     if (!silent)
       log.error(msg)

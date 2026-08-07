@@ -28,11 +28,17 @@ async function removeVersions(
   supabase: SupabaseClient<Database>,
   appId: string,
   silent: boolean,
+  http: { apikey: string, supaHost?: string, supaAnon?: string },
 ) {
   for await (const row of toRemove) {
     if (!silent)
       log.warn(`Removing ${row.name} created on ${getHumanDate(row.created_at)}`)
-    await deleteSpecificVersion(supabase, appId, row.name)
+    await deleteSpecificVersion(supabase, appId, row.name, {
+      silent,
+      apikey: http.apikey,
+      supaHost: http.supaHost,
+      supaAnon: http.supaAnon,
+    })
   }
 }
 
@@ -86,8 +92,8 @@ export async function cleanupBundleInternal(appId: string, options: BundleCleanu
   if (!silent)
     log.info('Querying all available versions in Capgo')
 
-  let allVersions: (Database['public']['Tables']['app_versions']['Row'] & { keep?: string })[] = await getActiveAppVersions(supabase, appId)
-  const versionInUse = await getChannelsVersion(supabase, appId)
+  let allVersions: (Database['public']['Tables']['app_versions']['Row'] & { keep?: string })[] = await getActiveAppVersions(options.apikey!, appId, { silent, apikey: options.apikey!, supaHost: options.supaHost, supaAnon: options.supaAnon })
+  const versionInUse = await getChannelsVersion({ apikey: options.apikey!, silent, supaHost: options.supaHost, supaAnon: options.supaAnon }, appId)
 
   if (!silent)
     log.info(`Total active versions in Capgo: ${allVersions?.length ?? 0}`)
@@ -152,7 +158,7 @@ export async function cleanupBundleInternal(appId: string, options: BundleCleanu
   if (!silent)
     log.success('You have confirmed removal, removing versions now')
 
-  await removeVersions(toRemove, supabase, appId, silent)
+  await removeVersions(toRemove, supabase, appId, silent, { apikey: options.apikey!, supaHost: options.supaHost, supaAnon: options.supaAnon })
 
   void trackEvent({ channel: 'bundle', event: 'Bundles Cleaned', icon: '🧹', tags: { kept_count: kept, deleted_count: toRemove.length } })
 

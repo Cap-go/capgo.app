@@ -8,13 +8,30 @@ import { dirname, resolve } from 'node:path'
 import QRCode from 'qrcode'
 import { buildPreviewWebUrl, type PreviewWebEnv } from './web-url'
 import { check2FAComplianceForApp, checkAppExistsAndHasPermissionOrgErr } from '../api/app'
-import { createSupabaseClient, findSavedKey, formatError, getAppId, getConfig } from '../utils'
+import { createSupabaseClient, findSavedKey, formatError, getAppId, getCapgoCliHttpStatus, getConfig, invokeCapgoCliApi, readCapgoCliApiErrorPayload } from '../utils'
 
 type AppRow = Pick<Database['public']['Tables']['apps']['Row'], 'allow_preview' | 'app_id'>
 type BundleRow = Pick<Database['public']['Tables']['app_versions']['Row'], 'id' | 'name'>
 type ChannelRow = Pick<Database['public']['Tables']['channels']['Row'], 'id' | 'name'>
 
-type CapgoSupabaseClient = SupabaseClient<Database>
+export interface CapgoPreviewHttpOptions {
+  apikey: string
+  supaHost?: string
+  supaAnon?: string
+  /** Injectable for unit tests; defaults to invokeCapgoCliApi. */
+  invoke?: typeof invokeCapgoCliApi
+}
+
+function previewInvoke<T>(options: CapgoPreviewHttpOptions, path: string, method: string = 'GET', body?: unknown) {
+  const invoke = options.invoke ?? invokeCapgoCliApi
+  return invoke<T>(path, {
+    apikey: options.apikey,
+    method,
+    body: method === 'GET' || method === 'HEAD' ? undefined : body,
+    supaHost: options.supaHost,
+    supaAnon: options.supaAnon,
+  })
+}
 
 export interface PreviewQrCommandOptions extends OptionsBase {
   bundle?: string
@@ -76,12 +93,8 @@ export async function renderQrCodePng(value: string, outputPath: string) {
   return absolutePath
 }
 
-async function getAppPreviewState(supabase: CapgoSupabaseClient, appId: string): Promise<AppRow> {
-  const { data, error } = await supabase
-    .from('apps')
-    .select('app_id, allow_preview')
-    .eq('app_id', appId)
-    .single()
+async function getAppPreviewState(options: CapgoPreviewHttpOptions, appId: string): Promise<AppRow> {
+  const { data, error } = await previewInvoke<AppRow>(options, `app/${encodeURIComponent(appId)}`)
 
   if (error || !data)
     throw new Error(`Cannot load app ${appId}: ${formatError(error)}`)
@@ -89,79 +102,89 @@ async function getAppPreviewState(supabase: CapgoSupabaseClient, appId: string):
   return data
 }
 
-export async function assertAppAllowsPreview(supabase: CapgoSupabaseClient, appId: string) {
-  const app = await getAppPreviewState(supabase, appId)
+export async function assertAppAllowsPreview(options: CapgoPreviewHttpOptions, appId: string) {
+  const app = await getAppPreviewState(options, appId)
   if (!app.allow_preview)
     throw new Error(`Preview is disabled for app ${appId}. Enable it with: npx @capgo/cli@latest app set ${appId} --preview`)
 }
 
-async function getBundleById(supabase: CapgoSupabaseClient, appId: string, id: number): Promise<BundleRow | null> {
-  const { data, error } = await supabase
-    .from('app_versions')
-    .select('id, name')
-    .eq('app_id', appId)
-    .eq('id', id)
-    .eq('deleted', false)
-    .maybeSingle()
-
-  if (error)
-    throw new Error(`Cannot load bundle ${id}: ${formatError(error)}`)
-
-  return data
+async function listBundles(options: CapgoPreviewHttpOptions, appId: string): Promise<BundleRow[]> {
+  const all: BundleRow[] = []
+  let page = 0
+  while (true) {
+    const { data, error } = await previewInvoke<BundleRow[]>(options, `bundle?app_id=${encodeURIComponent(appId)}&page=${page}`)
+    if (error) {
+      const payload = await readCapgoCliApiErrorPayload(error)
+      if (payload?.error === 'cannot_get_bundle' && payload?.message === 'Cannot get bundle')
+        return all
+      throw new Error(`Cannot load bundles for ${appId}: ${formatError(error)}`)
+    }
+    const batch = Array.isArray(data) ? data : []
+    if (!batch.length)
+      break
+    all.push(...batch.map(row => ({ id: row.id, name: row.name })))
+    if (batch.length < 50)
+      break
+    page += 1
+  }
+  return all
 }
 
-async function getBundleByName(supabase: CapgoSupabaseClient, appId: string, name: string): Promise<BundleRow | null> {
-  const { data, error } = await supabase
-    .from('app_versions')
-    .select('id, name')
-    .eq('app_id', appId)
-    .eq('name', name)
-    .eq('deleted', false)
-    .maybeSingle()
-
-  if (error)
-    throw new Error(`Cannot load bundle ${name}: ${formatError(error)}`)
-
-  return data
+async function getBundleById(options: CapgoPreviewHttpOptions, appId: string, id: number): Promise<BundleRow | null> {
+  const bundles = await listBundles(options, appId)
+  return bundles.find(bundle => bundle.id === id) ?? null
 }
 
-async function getChannelById(supabase: CapgoSupabaseClient, appId: string, id: number): Promise<ChannelRow | null> {
-  const { data, error } = await supabase
-    .from('channels')
-    .select('id, name')
-    .eq('app_id', appId)
-    .eq('id', id)
-    .maybeSingle()
-
-  if (error)
-    throw new Error(`Cannot load channel ${id}: ${formatError(error)}`)
-
-  return data
+async function getBundleByName(options: CapgoPreviewHttpOptions, appId: string, name: string): Promise<BundleRow | null> {
+  const bundles = await listBundles(options, appId)
+  return bundles.find(bundle => bundle.name === name) ?? null
 }
 
-async function getChannelByName(supabase: CapgoSupabaseClient, appId: string, name: string): Promise<ChannelRow | null> {
-  const { data, error } = await supabase
-    .from('channels')
-    .select('id, name')
-    .eq('app_id', appId)
-    .eq('name', name)
-    .maybeSingle()
+async function listChannels(options: CapgoPreviewHttpOptions, appId: string): Promise<ChannelRow[]> {
+  const all: ChannelRow[] = []
+  let page = 0
+  while (true) {
+    const { data, error } = await previewInvoke<ChannelRow[]>(options, `channel?app_id=${encodeURIComponent(appId)}&page=${page}`)
+    if (error)
+      throw new Error(`Cannot load channels for ${appId}: ${formatError(error)}`)
+    const batch = Array.isArray(data) ? data : []
+    if (!batch.length)
+      break
+    all.push(...batch.map(row => ({ id: row.id, name: row.name })))
+    if (batch.length < 50)
+      break
+    page += 1
+  }
+  return all
+}
 
-  if (error)
+async function getChannelById(options: CapgoPreviewHttpOptions, appId: string, id: number): Promise<ChannelRow | null> {
+  const channels = await listChannels(options, appId)
+  return channels.find(channel => channel.id === id) ?? null
+}
+
+async function getChannelByName(options: CapgoPreviewHttpOptions, appId: string, name: string): Promise<ChannelRow | null> {
+  const { data, error } = await previewInvoke<ChannelRow>(
+    options,
+    `channel?app_id=${encodeURIComponent(appId)}&channel=${encodeURIComponent(name)}`,
+  )
+  if (error) {
+    if (getCapgoCliHttpStatus(error) === 400)
+      return null
     throw new Error(`Cannot load channel ${name}: ${formatError(error)}`)
-
-  return data
+  }
+  return data ? { id: data.id, name: data.name } : null
 }
 
 export async function resolveBundlePreviewTarget(
-  supabase: CapgoSupabaseClient,
+  options: CapgoPreviewHttpOptions,
   appId: string,
   bundleRef: string,
 ): Promise<PreviewQrTarget | null> {
   const numericId = parseSafeIntegerRef(bundleRef, 0)
   const bundle = numericId === undefined
-    ? await getBundleByName(supabase, appId, bundleRef)
-    : (await getBundleById(supabase, appId, numericId) ?? await getBundleByName(supabase, appId, bundleRef))
+    ? await getBundleByName(options, appId, bundleRef)
+    : (await getBundleById(options, appId, numericId) ?? await getBundleByName(options, appId, bundleRef))
 
   if (!bundle)
     return null
@@ -175,14 +198,14 @@ export async function resolveBundlePreviewTarget(
 }
 
 export async function resolveChannelPreviewTarget(
-  supabase: CapgoSupabaseClient,
+  options: CapgoPreviewHttpOptions,
   appId: string,
   channelRef: string,
 ): Promise<PreviewQrTarget | null> {
   const numericId = parseSafeIntegerRef(channelRef, 1)
   const channel = numericId === undefined
-    ? await getChannelByName(supabase, appId, channelRef)
-    : (await getChannelById(supabase, appId, numericId) ?? await getChannelByName(supabase, appId, channelRef))
+    ? await getChannelByName(options, appId, channelRef)
+    : (await getChannelById(options, appId, numericId) ?? await getChannelByName(options, appId, channelRef))
 
   if (!channel)
     return null
@@ -196,7 +219,7 @@ export async function resolveChannelPreviewTarget(
 }
 
 export async function resolvePreviewQrTarget(
-  supabase: CapgoSupabaseClient,
+  http: CapgoPreviewHttpOptions,
   appId: string,
   options: Pick<PreviewQrCommandOptions, 'bundle' | 'channel' | 'target' | 'type'>,
 ): Promise<PreviewQrTarget> {
@@ -208,14 +231,14 @@ export async function resolvePreviewQrTarget(
     throw new Error('Use --type only with a positional target')
 
   if (options.bundle) {
-    const bundle = await resolveBundlePreviewTarget(supabase, appId, options.bundle)
+    const bundle = await resolveBundlePreviewTarget(http, appId, options.bundle)
     if (!bundle)
       throw new Error(`Bundle ${options.bundle} not found for app ${appId}`)
     return bundle
   }
 
   if (options.channel) {
-    const channel = await resolveChannelPreviewTarget(supabase, appId, options.channel)
+    const channel = await resolveChannelPreviewTarget(http, appId, options.channel)
     if (!channel)
       throw new Error(`Channel ${options.channel} not found for app ${appId}`)
     return channel
@@ -225,22 +248,22 @@ export async function resolvePreviewQrTarget(
     throw new Error('Missing target. Provide a bundle or channel with --bundle, --channel, or a positional target')
 
   if (options.type === 'bundle') {
-    const bundle = await resolveBundlePreviewTarget(supabase, appId, options.target)
+    const bundle = await resolveBundlePreviewTarget(http, appId, options.target)
     if (!bundle)
       throw new Error(`Bundle ${options.target} not found for app ${appId}`)
     return bundle
   }
 
   if (options.type === 'channel') {
-    const channel = await resolveChannelPreviewTarget(supabase, appId, options.target)
+    const channel = await resolveChannelPreviewTarget(http, appId, options.target)
     if (!channel)
       throw new Error(`Channel ${options.target} not found for app ${appId}`)
     return channel
   }
 
   const [bundle, channel] = await Promise.all([
-    resolveBundlePreviewTarget(supabase, appId, options.target),
-    resolveChannelPreviewTarget(supabase, appId, options.target),
+    resolveBundlePreviewTarget(http, appId, options.target),
+    resolveChannelPreviewTarget(http, appId, options.target),
   ])
 
   if (bundle && channel)
@@ -293,13 +316,13 @@ export async function printPreviewQrCode(target: PreviewQrTarget, options: Previ
 }
 
 export async function printPreviewQrForResolvedTarget(
-  supabase: CapgoSupabaseClient,
+  http: CapgoPreviewHttpOptions,
   appId: string,
   target: PreviewQrTarget,
-  options: PreviewQrOutputOptions = {},
+  output: PreviewQrOutputOptions = {},
 ) {
-  await assertAppAllowsPreview(supabase, appId)
-  await printPreviewQrCode(target, options)
+  await assertAppAllowsPreview(http, appId)
+  await printPreviewQrCode(target, output)
 }
 
 export async function getPreviewQr(appId: string, target: string | undefined, options: PreviewQrCommandOptions) {
@@ -320,11 +343,13 @@ export async function getPreviewQr(appId: string, target: string | undefined, op
   }
 
   const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
+  // TODO(cli-http): 2FA + permission checks still use supabase RPCs
   await check2FAComplianceForApp(supabase, appId)
   await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'app.read', false, true)
 
-  const resolvedTarget = await resolvePreviewQrTarget(supabase, appId, { ...options, target })
-  await printPreviewQrForResolvedTarget(supabase, appId, resolvedTarget, {
+  const http = { apikey: options.apikey!, supaHost: options.supaHost, supaAnon: options.supaAnon }
+  const resolvedTarget = await resolvePreviewQrTarget(http, appId, { ...options, target })
+  await printPreviewQrForResolvedTarget(http, appId, resolvedTarget, {
     png: options.png,
     url: options.url,
     webUrl: options.webUrl,

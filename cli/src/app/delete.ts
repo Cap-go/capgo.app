@@ -1,13 +1,14 @@
 import type { OptionsBase } from '../schemas/base'
 import { intro, isCancel, log, outro, select } from '@clack/prompts'
-import { checkAppExistsAndHasPermissionOrgErr, getAppIconStoragePath } from '../api/app'
+import { checkAppExistsAndHasPermissionOrgErr } from '../api/app'
 import {
   createSupabaseClient,
   findSavedKey,
   formatError,
   getAppId,
+  getCapgoCliHttpStatus,
   getConfig,
-  getOrganizationId,
+  invokeCapgoCliApi,
   resolveUserIdFromApiKey,
   sendEvent,
 } from '../utils'
@@ -38,18 +39,47 @@ export async function deleteAppInternal(
   }
 
   const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
+  // TODO(cli-http): identity still uses rpc via resolveUserIdFromApiKey
   const userId = await resolveUserIdFromApiKey(supabase, options.apikey)
 
   await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'app.delete', silent)
 
-  const { data: appOwnerRaw, error: appOwnerError } = await supabase.from('apps')
-    .select('owner_org ( created_by, id )')
-    .eq('app_id', appId)
-    .single()
+  const { data: appData, error: appError } = await invokeCapgoCliApi<{
+    owner_org?: string
+    app_id?: string
+  } & Record<string, unknown>>(`app/${encodeURIComponent(appId)}`, {
+    apikey: options.apikey,
+    method: 'GET',
+    body: undefined,
+    supaHost: options.supaHost,
+    supaAnon: options.supaAnon,
+  })
 
-  const appOwner = appOwnerRaw as { owner_org: { created_by: string, id: string } } | null
+  if (appError && getCapgoCliHttpStatus(appError) !== 404) {
+    if (!silent)
+      log.warn(`Cannot get the app owner ${formatError(appError)}`)
+  }
 
-  if (!skipConfirmation && !appOwnerError && (appOwner?.owner_org.created_by ?? '') !== userId) {
+  const orgId = typeof appData?.owner_org === 'string' ? appData.owner_org : undefined
+
+  // Owner confirmation previously joined orgs.created_by; GET app does not include that.
+  // TODO(cli-http): GET organization returns created_by — use it for owner confirmation
+  let orgCreatedBy: string | undefined
+  if (orgId) {
+    const { data: orgData } = await invokeCapgoCliApi<{ created_by?: string }>(
+      `organization?orgId=${encodeURIComponent(orgId)}`,
+      {
+        apikey: options.apikey,
+        method: 'GET',
+        body: undefined,
+        supaHost: options.supaHost,
+        supaAnon: options.supaAnon,
+      },
+    )
+    orgCreatedBy = orgData?.created_by
+  }
+
+  if (!skipConfirmation && orgCreatedBy && orgCreatedBy !== userId) {
     if (!silent) {
       log.warn('Deleting the app is not recommended for users that are not the organization owner')
       log.warn('You are invited as a super_admin but your are not the owner')
@@ -72,21 +102,8 @@ export async function deleteAppInternal(
       throw new Error('Cannot delete app: you are not the organization owner')
     }
   }
-  else if (appOwnerError && !silent) {
-    log.warn(`Cannot get the app owner ${formatError(appOwnerError)}`)
-  }
 
-  const { error: storageError } = appOwner?.owner_org.id
-    ? await supabase
-        .storage
-        .from('images')
-        .remove([getAppIconStoragePath(appOwner.owner_org.id, appId)])
-    : { error: null }
-
-  if (storageError && !silent) {
-    log.error('Could not delete app logo')
-  }
-
+  // TODO(cli-http): user-scoped storage path apps/${appId}/${userId} cleanup is not covered by DELETE app
   const { error: delError } = await supabase
     .storage
     .from(`apps/${appId}/${userId}`)
@@ -95,10 +112,13 @@ export async function deleteAppInternal(
   if (delError && !silent)
     log.error('Could not delete app version')
 
-  const { error: dbError } = await supabase
-    .from('apps')
-    .delete()
-    .eq('app_id', appId)
+  const { error: dbError } = await invokeCapgoCliApi(`app/${encodeURIComponent(appId)}`, {
+    apikey: options.apikey,
+    method: 'DELETE',
+    body: undefined,
+    supaHost: options.supaHost,
+    supaAnon: options.supaAnon,
+  })
 
   if (dbError) {
     if (!silent)
@@ -106,16 +126,17 @@ export async function deleteAppInternal(
     throw new Error(`Could not delete app: ${formatError(dbError)}`)
   }
 
-  const orgId = await getOrganizationId(supabase, appId)
-  await sendEvent(options.apikey, {
-    channel: 'app',
-    event: 'App Deleted',
-    icon: '🗑️',
-    org_id: orgId,
-    tracking_version: 2,
-    tags: { 'app-id': appId },
-    notify: false,
-  }).catch(() => {})
+  if (orgId) {
+    await sendEvent(options.apikey, {
+      channel: 'app',
+      event: 'App Deleted',
+      icon: '🗑️',
+      org_id: orgId,
+      tracking_version: 2,
+      tags: { 'app-id': appId },
+      notify: false,
+    }).catch(() => {})
+  }
 
   if (!silent) {
     log.success('App deleted in Capgo')

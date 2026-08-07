@@ -601,9 +601,12 @@ export class CapgoSDK {
   async listBundles(appId: string): Promise<SDKResult<BundleInfo[]>> {
     try {
       const apikey = this.apikey || findSavedKey(true)
-      const supabase = await createSupabaseClient(apikey, this.supaHost, this.supaAnon)
 
-      const versions = await getActiveAppVersions(supabase, appId)
+      const versions = await getActiveAppVersions(apikey, appId, {
+        apikey,
+        supaHost: this.supaHost,
+        supaAnon: this.supaAnon,
+      })
 
       const bundles: BundleInfo[] = versions.map(bundle => ({
         id: bundle.id.toString(),

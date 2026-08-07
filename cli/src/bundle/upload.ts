@@ -1238,7 +1238,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     log.info(`[Verbose] Target channel${channels.length > 1 ? 's' : ''}: ${channelLabel}`)
 
   // Now if it does exist we will fetch the org id
-  const orgId = await getOrganizationId(supabase, appid)
+  const orgId = await getOrganizationId(apikey, appid, { supaHost: options.supaHost, supaAnon: options.supaAnon })
   if (options.verbose)
     log.info(`[Verbose] Organization ID: ${orgId}`)
 

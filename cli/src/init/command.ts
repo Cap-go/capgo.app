@@ -1343,7 +1343,7 @@ async function validateResumedOnboardingAccess(
       : false
     const hasAppAccess = !organization || !resume.appId
       ? true
-      : Boolean(await findAppInOrganization(supabase, organization.gid, resume.appId))
+      : Boolean(await findAppInOrganization(apikey, organization.gid, resume.appId))
 
     return getResumedOnboardingAccessError(resume, organization, hasCreateAppPermission, hasAppAccess)
   }
@@ -2064,7 +2064,7 @@ async function maybeReusePendingOnboardingApp(
   supabase: Awaited<ReturnType<typeof createSupabaseClient>>,
   options?: Pick<SuperOptions, 'supaHost' | 'supaAnon'>,
 ) {
-  const pendingApps = await listPendingOnboardingApps(supabase, organization.gid)
+  const pendingApps = await listPendingOnboardingApps(apikey, organization.gid, options)
   const selectedApp = await selectPendingOnboardingApp(organization.gid, apikey, appId, pendingApps)
 
   if (!selectedApp) {
@@ -2292,7 +2292,7 @@ async function resolveExistingAppConflict(
   appId: string,
   options: SuperOptions,
 ): Promise<ExistingAppConflictResolution> {
-  const existingApp: ExistingOrganizationApp | null = await findAppInOrganization(supabase, organization.gid, appId)
+  const existingApp: ExistingOrganizationApp | null = await findAppInOrganization(apikey, organization.gid, appId)
   if (!existingApp)
     return 'not-owned'
 
@@ -2346,7 +2346,7 @@ async function askForReplacementAppId(
   baseAppId: string,
 ): Promise<string> {
   const rawSuggestions = buildAppIdConflictSuggestions(baseAppId)
-  const existingResults = await checkAppIdsExist(supabase, rawSuggestions)
+  const existingResults = await checkAppIdsExist(apikey, rawSuggestions)
   const suggestions = rawSuggestions.filter((_, idx) => !existingResults[idx].exists).slice(0, 4)
 
   if (suggestions.length === 0) {
@@ -5224,7 +5224,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
         : false
       const hasAppAccess = !savedOrg || !resumedSnapshot.appId
         ? true
-        : Boolean(await findAppInOrganization(supabase, savedOrg.gid, resumedSnapshot.appId).catch(() => null))
+        : Boolean(await findAppInOrganization(options.apikey, savedOrg.gid, resumedSnapshot.appId, { supaHost: options.supaHost, supaAnon: options.supaAnon }).catch(() => null))
 
       if (!savedOrg) {
         pLog.warn(`Previously used organization "${resumedSnapshot.orgName}" is no longer available. Please select a new one.`)

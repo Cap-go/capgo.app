@@ -55,11 +55,12 @@ function ensureOptions(appId: string, options: AppOptions, silent: boolean) {
 }
 
 async function ensureAppDoesNotExist(
-  supabase: Awaited<ReturnType<typeof createSupabaseClient>>,
+  apikey: string,
   appId: string,
   silent: boolean,
+  options?: { supaHost?: string, supaAnon?: string },
 ) {
-  const appExist = await checkAppExists(supabase, appId)
+  const appExist = await checkAppExists(apikey, appId, options)
   if (!appExist)
     return
 
@@ -149,7 +150,7 @@ export async function addAppInternal(
   const supabase = await createSupabaseClient(options.apikey!, options.supaHost, options.supaAnon)
   const userId = await resolveUserIdFromApiKey(supabase, options.apikey)
 
-  await ensureAppDoesNotExist(supabase, appId, silent)
+  await ensureAppDoesNotExist(options.apikey!, appId, silent, { supaHost: options.supaHost, supaAnon: options.supaAnon })
 
   if (!organization)
     organization = await getOrganizationWithPermission(supabase, options.apikey, 'org.create_app')
@@ -201,7 +202,8 @@ export async function addAppInternal(
   // Icon upload is best-effort. Storage RLS issues must not block app creation;
   // the web onboarding path already continues without an icon on upload failure.
   if (iconBuff && iconType) {
-    const { error } = await supabase.storage
+    // TODO(cli-http): icon upload still requires supabase storage
+  const { error } = await supabase.storage
       .from('images')
       .upload(iconPath, iconBuff, {
         contentType: iconType,

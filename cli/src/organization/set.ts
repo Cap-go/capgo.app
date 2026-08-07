@@ -107,6 +107,7 @@ export async function setOrganizationInternal(
 
   await check2FAAccessForOrg(supabase, orgId, silent)
 
+  // TODO(cli-http): GET organization omits enforcing_2fa/password_policy/security fields needed here
   const { data: orgData, error: orgError } = await supabase
     .from('orgs')
     .select('name, management_email, created_by, enforcing_2fa, password_policy_config, require_apikey_expiration, max_apikey_expiration_days, enforce_hashed_api_keys')
@@ -131,6 +132,7 @@ export async function setOrganizationInternal(
         log.info('Checking organization members 2FA status...')
 
         const { data: membersStatus, error: membersError } = await supabase
+          // TODO(cli-http): no HTTP equivalent for check_org_members_2fa_enabled
           .rpc('check_org_members_2fa_enabled', { org_id: orgId })
 
         if (membersError) {
@@ -140,6 +142,7 @@ export async function setOrganizationInternal(
 
         // Also check if the current user has 2FA enabled
         const { data: userHas2FA, error: user2FAError } = await supabase
+          // TODO(cli-http): no HTTP equivalent for has_2fa_enabled
           .rpc('has_2fa_enabled')
 
         if (user2FAError) {
@@ -148,7 +151,7 @@ export async function setOrganizationInternal(
         }
 
         // Get current user ID to exclude from member count
-        const { data: currentUserId, error: identityError } = await supabase.rpc('request_actor_user_id')
+        const { data: currentUserId, error: identityError } = await supabase.rpc('request_actor_user_id') /* TODO(cli-http): identity RPC */
 
         if (identityError || !currentUserId) {
           log.error(`Cannot get current user identity: ${identityError ? formatError(identityError) : 'No user ID returned'}`)
@@ -169,6 +172,7 @@ export async function setOrganizationInternal(
           if (membersWithout2FA.length > 0) {
             // Get member details
             const { data: members, error: membersListError } = await supabase
+              // TODO(cli-http): prefer GET organization/members when only listing members
               .rpc('get_org_members', { guild_id: orgId })
 
             if (membersListError) {
@@ -263,6 +267,7 @@ export async function setOrganizationInternal(
 
         // Check which members will be affected
         const { data: membersStatus, error: membersError } = await supabase
+          // TODO(cli-http): no HTTP equivalent for check_org_members_password_policy
           .rpc('check_org_members_password_policy', { org_id: orgId })
 
         if (membersError) {

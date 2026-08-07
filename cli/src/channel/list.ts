@@ -26,14 +26,14 @@ export async function listChannelsInternal(appId: string, options: OptionsBase, 
 
   const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
   await check2FAComplianceForApp(supabase, appId, silent)
-  const orgId = await getOrganizationId(supabase, appId)
+  const orgId = await getOrganizationId(options.apikey!, appId, { supaHost: options.supaHost, supaAnon: options.supaAnon })
 
   await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'app.read_channels', silent, true)
 
   if (!silent)
     log.info('Querying available channels in Capgo')
 
-  const allChannels = await getActiveChannels(supabase, appId)
+  const allChannels = await getActiveChannels({ apikey: options.apikey!, silent, supaHost: options.supaHost, supaAnon: options.supaAnon }, appId)
 
   if (!silent) {
     log.info(`Active channels in Capgo: ${allChannels?.length ?? 0}`)
