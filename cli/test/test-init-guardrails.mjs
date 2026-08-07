@@ -25,6 +25,7 @@ import {
   getMissingPackageManagerExecutable,
   getPackageManagerInfo,
   isPackageManagerAvailable,
+  preparePackageManagerCommandEnvironment,
   probeExecutable,
   supportsYarnDlx,
   waitForCommandResult,
@@ -61,6 +62,20 @@ t('command probe reports executables missing from PATH', () => {
 
   assert.equal(result.available, false)
   assert.equal(result.error?.code, 'ENOENT')
+})
+
+t('command probe rejects executables whose version check fails', () => {
+  const result = probeExecutable(process.execPath, { args: ['-e', 'process.exit(7)'] })
+
+  assert.equal(result.available, false)
+  assert.equal(result.status, 7)
+})
+
+t('package manager probes and commands share the Corepack environment', () => {
+  const commandEnvironment = { PATH: '/usr/bin' }
+
+  assert.equal(preparePackageManagerCommandEnvironment(commandEnvironment), commandEnvironment)
+  assert.equal(commandEnvironment.COREPACK_ENABLE_PROJECT_SPEC, '0')
 })
 
 t('missing executable error explains the PATH mismatch', () => {

@@ -12,6 +12,7 @@ export interface PackageManagerInfo {
 }
 
 export interface ExecutableProbeOptions {
+  args?: string[]
   cwd?: string
   env?: NodeJS.ProcessEnv
 }
@@ -43,14 +44,21 @@ export function createMissingExecutableError(command: string, executablePath = p
   return error
 }
 
+export function preparePackageManagerCommandEnvironment(environment: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  // Corepack may otherwise reject a deliberately selected fallback because the
+  // project's packageManager field names a different tool. Keep the probe and
+  // every later inherited child process on the same explicit policy.
+  environment.COREPACK_ENABLE_PROJECT_SPEC = '0'
+  return environment
+}
+
 export function probeExecutable(command: string, options: ExecutableProbeOptions = {}): ExecutableProbeResult {
-  const result = spawnSync(command, ['--version'], {
+  const result = spawnSync(command, options.args ?? ['--version'], {
     cwd: options.cwd,
     encoding: 'utf8',
     env: {
       ...process.env,
       ...options.env,
-      COREPACK_ENABLE_PROJECT_SPEC: '0',
     },
     stdio: ['ignore', 'pipe', 'ignore'],
   })
@@ -58,7 +66,7 @@ export function probeExecutable(command: string, options: ExecutableProbeOptions
   if (result.error)
     return { available: false, error: result.error }
 
-  return { available: true, status: result.status, stdout: result.stdout }
+  return { available: result.status === 0, status: result.status, stdout: result.stdout }
 }
 
 export function supportsYarnDlx(version: string): boolean {
