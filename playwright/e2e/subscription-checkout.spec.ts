@@ -181,19 +181,6 @@ test.describe('Subscription Checkout', () => {
     await page.addInitScript((nextOrgId) => {
       localStorage.setItem('capgo_current_org_id', nextOrgId)
     }, orgId)
-    await page.addInitScript(() => {
-      ;(window as Window & { __lastOpenedUrl?: string | null }).__lastOpenedUrl = null
-      window.open = ((url?: string | URL | null) => {
-        const normalizedUrl = typeof url === 'string'
-          ? url
-          : url instanceof URL
-            ? url.toString()
-            : null
-        ;(window as Window & { __lastOpenedUrl?: string | null }).__lastOpenedUrl = normalizedUrl
-        return null
-      }) as typeof window.open
-    })
-
     await page.login('test@capgo.app', USER_PASSWORD)
     await page.goto('/settings/organization/plans')
 
@@ -206,18 +193,22 @@ test.describe('Subscription Checkout', () => {
     await expect(planCard.getByRole('button', { name: 'Upgrade' })).toBeEnabled()
     await planCard.locator('[data-test="plan-action-button"]').click()
 
+    // Web checkout opens a confirm dialog with a real target=_blank link.
+    const confirmLink = page.getByRole('link', { name: 'Confirm' })
+    await expect(confirmLink).toBeVisible()
+
     const escapedStripeOrigin = STRIPE_EMULATOR_URL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    let checkoutUrl = ''
-    await expect.poll(async () => {
-      checkoutUrl = await page.evaluate(() => (window as Window & { __lastOpenedUrl?: string | null }).__lastOpenedUrl ?? '')
-      return checkoutUrl
-    }).toMatch(new RegExp(`${escapedStripeOrigin}/checkout/`))
+    const checkoutUrlPattern = new RegExp(`${escapedStripeOrigin}/checkout/`)
 
-    await page.goto(checkoutUrl)
-    await expect(page).toHaveURL(new RegExp(`${escapedStripeOrigin}/checkout/`))
-    await page.getByRole('button', { name: /^Pay / }).click()
+    const [checkoutPage] = await Promise.all([
+      page.waitForEvent('popup'),
+      confirmLink.click(),
+    ])
+    await checkoutPage.waitForLoadState('domcontentloaded')
+    await expect(checkoutPage).toHaveURL(checkoutUrlPattern)
+    await checkoutPage.getByRole('button', { name: /^Pay / }).click()
 
-    await page.waitForURL(/\/settings\/organization\/plans\?success=1/)
-    await expect(page.getByRole('heading', { name: 'Thank You for subscribing to Capgo' })).toBeVisible()
+    await checkoutPage.waitForURL(/\/settings\/organization\/plans\?success=1/)
+    await expect(checkoutPage.getByRole('heading', { name: 'Thank You for subscribing to Capgo' })).toBeVisible()
   })
 })

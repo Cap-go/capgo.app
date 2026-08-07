@@ -2312,6 +2312,8 @@
   "store-release-validation-title-track-unknown": "Android store install detected, release track unknown.",
   "test-preview": "Test preview",
   "stripe-billing-portal-will-be-opened-in-a-new-tab": "Stripe billing portal will be opened in a new tab",
+  "stripe-checkout-will-be-opened-in-a-new-tab": "Stripe checkout will be opened in a new tab",
+  "popup-blocked-open-manually": "Your browser blocked the new tab. Confirm to open it.",
   "subscribed-events": "Subscribed Events",
   "subscribed": "Subscribed",
   "subscribed-within-7-days": "Subscribed (within 7 days)",

@@ -28,13 +28,44 @@ async function presentActionSheetOpen(url: string) {
   })
   return dialogStore.onDialogDismiss()
 }
-export function openBlank(link: string) {
+async function presentBlockedPopupFallback(url: string) {
+  const { t } = useI18n()
+  const dialogStore = useDialogV2Store()
+
+  dialogStore.openDialog({
+    title: t('open-in-new-tab'),
+    description: t('popup-blocked-open-manually'),
+    buttons: [
+      {
+        text: t('button-cancel'),
+        role: 'cancel',
+      },
+      {
+        text: t('button-confirm'),
+        id: 'confirm-button',
+        role: 'primary',
+        href: url,
+        target: '_blank',
+        rel: 'noopener noreferrer',
+      },
+    ],
+  })
+  return !(await dialogStore.onDialogDismiss())
+}
+
+export async function openBlank(link: string) {
   console.log('openBlank', link)
   if (Capacitor.getPlatform() === 'ios') {
-    presentActionSheetOpen(link)
+    // presentActionSheetOpen resolves true when dismissed/canceled
+    return !(await presentActionSheetOpen(link))
+  }
+  const opened = globalThis.open(link, '_blank')
+  if (opened) {
+    opened.opener = null
     return true
   }
-  return Boolean(globalThis.open(link, '_blank'))
+  // Async callers often lose the user-gesture; offer a confirm link fallback.
+  return presentBlockedPopupFallback(link)
 }
 export async function openPortal(orgId: string, t: ComposerTranslation) {
   let url = ''
@@ -70,7 +101,7 @@ export async function openPortal(orgId: string, t: ComposerTranslation) {
         handler: async () => {
           await prem
           if (url)
-            openBlank(url)
+            await openBlank(url)
           else
             toast.error('Cannot open your portal')
         },
