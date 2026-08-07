@@ -8,6 +8,7 @@ import {
   isExpectedUserError,
   shouldCapturePosthogException,
 } from '../src/posthog.ts'
+import { CliUserError } from '../src/shared/cli-user-error.ts'
 
 const originalFetch = globalThis.fetch
 const originalEnv = {
@@ -66,9 +67,10 @@ try {
   assert.equal(body.properties.error_kind, 'unhandled_error')
   assert.equal(body.properties.status, 1)
   assert.match(body.properties.distinct_id, /^cli:[^:]+:bundle upload$/)
-  // Fingerprint must NOT include the CLI version, so one error stays one issue
-  // across releases (the version is still reported via cli_version below).
-  assert.match(body.properties.$exception_fingerprint, /^cli:bundle upload:unhandled_error:Error:runUpload:/)
+  // Fingerprint must NOT include the CLI version, so the same bug stays one
+  // error-tracking issue across releases (version still reported via cli_version).
+  assert.equal(body.properties.$exception_fingerprint, 'bundle upload:unhandled_error:Error:runUpload:<cwd>/src/index.ts:1')
+  assert.doesNotMatch(body.properties.$exception_fingerprint, /cli:/)
   assert.equal(body.properties.cli_version, body.properties.distinct_id.split(':')[1])
   assert.equal(body.properties.$exception_list[0].type, 'Error')
   assert.equal(body.properties.$exception_list[0].value, 'boom')
@@ -136,6 +138,17 @@ try {
   assert.equal(shouldCapturePosthogException({ code: 'ENOENT' }), true)
   assert.equal(shouldCapturePosthogException(new Error('boom')), true)
 
+  // Expected user-facing CLI failures must never open an error tracking issue,
+  // regardless of the (dynamic) channel context attached to them.
+  assert.equal(shouldCapturePosthogException(new CliUserError('Channel does not have a bundle linked', { appId: 'com.example.app', channel: 'production' })), false)
+  assert.equal(shouldCapturePosthogException(new CliUserError('Missing API key')), false)
+  // Two failures on different channels must be treated identically (one issue,
+  // not one per channel), since the channel name lives in context, not the message.
+  assert.equal(
+    new CliUserError('Channel does not have a bundle linked', { channel: 'production' }).message,
+    new CliUserError('Channel does not have a bundle linked', { channel: 'canary' }).message,
+  )
+
   // Expected user errors must be skipped by exception capture (they are still
   // counted via trackCommandFailed at the call site).
   assert.equal(isExpectedUserError(new Error('Invalid API key or insufficient permissions.')), true)
@@ -146,6 +159,9 @@ try {
   assert.equal(isExpectedUserError({ status: 401 }), true)
   assert.equal(isExpectedUserError(new Error('Cannot get organization id for app id com.example')), false)
   assert.equal(isExpectedUserError(new Error('boom')), false)
+  assert.equal(shouldCapturePosthogException(new Error('invalid_apikey')), false)
+  assert.equal(shouldCapturePosthogException({ context: { status: 401 } }), false)
+  assert.equal(shouldCapturePosthogException(new Error('Cannot get organization id for app id com.example')), true)
 
   console.log('CLI PostHog exception capture tests passed')
 }

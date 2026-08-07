@@ -2,6 +2,7 @@ import type { Command } from 'commander'
 import { homedir, platform, release } from 'node:os'
 import { arch, cwd, env, version as nodeVersion } from 'node:process'
 import pack from '../package.json'
+import { CliUserError } from './shared/cli-user-error'
 
 const POSTHOG_EXCEPTION_URL = 'https://eu.i.posthog.com/i/v0/e/'
 const CAPGO_POSTHOG_PROJECT_TOKEN = 'phc_NXDyDajQaTQVwb25DEhIVZfxVUn4R0Y348Z7vWYHZUi'
@@ -176,10 +177,6 @@ function getCommanderCode(error: unknown) {
   return typeof code === 'string' ? code : undefined
 }
 
-export function shouldCapturePosthogException(error: unknown) {
-  return !getCommanderCode(error)?.startsWith('commander.')
-}
-
 // Lowercased markers for expected user-configuration failures (bad/missing API
 // key, app not created yet). These are surfaced with the backend error codes or
 // the CLI's own wording — matched case-insensitively against the error message.
@@ -225,6 +222,15 @@ export function isExpectedUserError(error: unknown) {
   return getErrorStatus(error) === 401
 }
 
+export function shouldCapturePosthogException(error: unknown) {
+  // Expected user-facing failures (CliUserError, bad/missing key, app not
+  // created, …) are legitimate states, not crashes — never open an error
+  // tracking issue for them.
+  if (error instanceof CliUserError || isExpectedUserError(error))
+    return false
+  return !getCommanderCode(error)?.startsWith('commander.')
+}
+
 export function getCommandPath(command: Command) {
   const names: string[] = []
   let current: Command | null | undefined = command
@@ -258,11 +264,12 @@ export async function capturePosthogException(payload: CapturePosthogExceptionPa
   const distinctId = `cli:${pack.version}:${payload.functionName}`
   const frames = parseExceptionFrames(serializedError.stack, payload.functionName)
   const topFrame = frames[0]
-  // Keep the CLI version OUT of the fingerprint so the same error stays one
-  // issue across releases instead of re-fingerprinting into a fresh issue on
-  // every version bump. The version is still reported via `cli_version` below.
+  // Deliberately exclude the CLI version from the fingerprint so the same bug
+  // stays a single error-tracking issue across releases instead of minting a
+  // brand-new issue on every version bump. Version is still reported via
+  // `cli_version` below.
   const fingerprint = [
-    `cli:${payload.functionName}`,
+    payload.functionName,
     payload.kind,
     serializedError.name || 'Error',
     topFrame?.function || payload.functionName,

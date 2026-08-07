@@ -7,6 +7,22 @@ description: Use when working with Capgo Cloud native iOS and Android build requ
 
 Use this skill for Capgo Cloud native iOS and Android build workflows.
 
+## Build prescan overrides
+
+Before `build request` uploads, Capgo runs a local/remote **prescan**. Prefer per-check overrides over disabling the whole scan:
+
+- `--prescan-skip <checkId>` — do not run that check (repeatable / comma-separated)
+- `--prescan-warn <checkId>` — still run it, but downgrade findings to warning
+- `--no-prescan` / `--prescan-ignore-fatal` — global escapes; use only when necessary
+
+Example (intentional Capacitor `server.url` / Next.js shell):
+
+```bash
+npx @capgo/cli@latest build request <appId> --platform ios --prescan-skip ios/capacitor-server-url-shipped
+```
+
+Standalone: `build prescan` accepts `--skip` / `--warn`. Full catalog: `webdocs/prescan-checks.mdx`.
+
 ## Onboarding (automated iOS setup)
 
 ### `build init` (alias: `build onboarding`)
@@ -116,7 +132,7 @@ interface BuildLogger {
 - `--app-store-connect-team-id <id>`
 - `--ios-scheme <scheme>`
 - `--ios-target <target>`
-- `--ios-distribution <mode>`: `app_store` or `ad_hoc`
+- `--ios-distribution <mode>`: `app_store` (default, uploads to TestFlight) or `ad_hoc` (skips store upload; use with `--output-upload` for IPA-only when the App Store app does not exist yet)
 - `--ios-provisioning-profile <mapping>`: repeatable path or `bundleId=path`
 
 #### Android request options
@@ -131,13 +147,13 @@ interface BuildLogger {
 
 #### Output behavior options
 
-- `--no-playstore-upload`: skip Play Store upload for the build, requires `--output-upload`
+- `--output-upload`: upload the finished IPA/APK/AAB to Capgo storage and print a time-limited download link (and QR). Pair with `--no-playstore-upload` (Android) or `--ios-distribution ad_hoc` (iOS) for artifact-only builds
+- `--no-output-upload`: skip Capgo storage upload (no download link); store upload can still happen when store credentials are set
+- `--no-playstore-upload`: Android — skip Google Play upload for this build (ignores saved Play credentials). Requires `--output-upload`. Use when the Play app does not exist yet or you only need the AAB download
 - `--submit-to-store-review`: submit after upload instead of leaving a draft/inactive store release. Android completes the Google Play release; iOS submits to TestFlight external review.
 - `--store-release-name <name>`: Android Google Play version_name/release label.
 - `--store-release-notes <notes>`: Google Play changelog and iOS TestFlight What to Test text.
 - `--ios-testflight-groups <groups>`: comma-separated external TestFlight group names or IDs required with `--submit-to-store-review` on iOS.
-- `--output-upload`
-- `--no-output-upload`
 - `--output-retention <duration>`: `1h` to `7d`
 - `--skip-build-number-bump`
 - `--no-skip-build-number-bump`

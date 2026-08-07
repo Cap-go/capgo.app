@@ -1,11 +1,38 @@
 <script setup lang="ts">
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
+import { resolveBillingPaidAt, shouldShowExpiredTrialCopy } from '~/services/paymentRequired'
+import { useSupabase } from '~/services/supabase'
+import { useOrganizationStore } from '~/stores/organization'
 
 const { t } = useI18n()
 const router = useRouter()
 const hideExternalPurchaseFlows = isNativeAppStoreContext()
+const organizationStore = useOrganizationStore()
+const paidAt = ref<string | null | undefined>(undefined)
+const showExpiredTrialCopy = computed(() => shouldShowExpiredTrialCopy(hideExternalPurchaseFlows, paidAt.value))
+
+let billingLookupRun = 0
+watch(() => organizationStore.currentOrganization?.gid, async (orgId) => {
+  const currentRun = ++billingLookupRun
+  paidAt.value = undefined
+
+  if (hideExternalPurchaseFlows || !orgId)
+    return
+
+  const { data, error } = await useSupabase()
+    .from('orgs')
+    .select('stripe_info(paid_at)')
+    .eq('id', orgId)
+    .maybeSingle()
+
+  if (currentRun !== billingLookupRun || error || !data)
+    return
+
+  paidAt.value = resolveBillingPaidAt(data.stripe_info)
+}, { immediate: true })
 
 function goToPlans() {
   router.push('/settings/organization/plans')
@@ -27,9 +54,14 @@ function goToPlans() {
         </div>
       </div>
       <h2 class="mb-2 text-2xl font-bold text-gray-900 dark:text-white">
-        {{ t('subscription-required') }}
+        {{ t(showExpiredTrialCopy ? 'trial-ended-title' : 'subscription-required') }}
       </h2>
-      <p class="mb-6 max-w-sm text-gray-600 dark:text-gray-400">
+      <i18n-t v-if="showExpiredTrialCopy" keypath="trial-ended-description" tag="p" class="mb-6 max-w-sm text-gray-600 dark:text-gray-400">
+        <template #supportEmail>
+          <a href="mailto:support@capgo.app" class="d-link font-medium text-amber-700 underline dark:text-amber-400">support@capgo.app</a>
+        </template>
+      </i18n-t>
+      <p v-else class="mb-6 max-w-sm text-gray-600 dark:text-gray-400">
         {{ t(hideExternalPurchaseFlows ? 'plan-failed-native-description' : 'plan-failed-description') }}
       </p>
       <button
@@ -41,7 +73,7 @@ function goToPlans() {
           <path d="M4 4a2 2 0 00-2 2v1h16V6a2 2 0 00-2-2H4z" />
           <path fill-rule="evenodd" d="M18 9H2v5a2 2 0 002 2h12a2 2 0 002-2V9zM4 13a1 1 0 011-1h1a1 1 0 110 2H5a1 1 0 01-1-1zm5-1a1 1 0 100 2h1a1 1 0 100-2H9z" clip-rule="evenodd" />
         </svg>
-        {{ t('plan-upgrade-v2') }}
+        {{ t(showExpiredTrialCopy ? 'choose-a-plan' : 'plan-upgrade-v2') }}
       </button>
     </div>
   </div>

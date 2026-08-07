@@ -242,16 +242,14 @@ test.describe('Compatibility events', () => {
     // already-narrowed dialog container instead.
     const confirmButton = dialog.getByRole('button', { name: 'Accept', exact: true })
 
-    // Submitting with an empty reason is rejected: the validation toast appears
-    // and the dialog stays open (the handler returns false / preventClose).
-    await confirmButton.click()
-    await expect(page.locator('[data-test="toast"]'))
-      .toContainText('Please provide a reason before accepting this incompatibility.')
-    await expect(dialog.getByRole('heading', { name: 'Accept incompatibility' })).toBeVisible()
+    // The reason is required: with the field empty the confirm button is disabled
+    // (so it can no longer be dead-clicked), and no RPC fires.
+    await expect(confirmButton).toBeDisabled()
     expect(rpcBody).toBeNull()
 
-    // Provide a reason and submit successfully.
+    // Typing a reason enables the button and submits successfully.
     await reason.fill('Intentional native release')
+    await expect(confirmButton).toBeEnabled()
     await confirmButton.click()
 
     // The RPC is called with the event id and the trimmed note.
