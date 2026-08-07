@@ -84,7 +84,7 @@ export async function assertAscAccess(opts: AssertAscAccessOptions): Promise<Asc
     token = generateJwt(opts.keyId, opts.issuerId, opts.p8Pem)
   }
   catch {
-    return { ok: false, kind: 'auth-error', message: 'Could not sign the App Store Connect request - the .p8 key, Key ID, or Issuer ID is invalid.' }
+    return { ok: false, kind: 'auth-error', message: 'Invalid App Store Connect key material (.p8 / Key ID / Issuer ID). The CLI could not build a JWT, so Apple was never contacted.' }
   }
 
   // Own 7s AbortController so the fetch aborts cleanly BEFORE the engine's 10s
@@ -139,7 +139,7 @@ export async function assertAscAccess(opts: AssertAscAccessOptions): Promise<Asc
         return {
           ok: false,
           kind: 'no-app-access',
-          message: `The App Store Connect API key cannot see an app with bundle id ${opts.bundleId}.`,
+          message: `The App Store Connect API key cannot see an app with bundle id ${opts.bundleId}. Create it in App Store Connect, or skip TestFlight and get an IPA with --ios-distribution ad_hoc --output-upload.`,
         }
       }
     }

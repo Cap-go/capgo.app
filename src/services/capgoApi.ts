@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Database } from '~/types/supabase.types'
 import { FunctionsFetchError, FunctionsHttpError } from '@supabase/supabase-js'
+import { getLocalConfig, useSupabase } from './supabase'
 
 export interface CapgoApiInvokeOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
@@ -166,7 +167,6 @@ export async function invokeCapgoApi<T = any>(
   path: string,
   options: CapgoApiInvokeOptions = {},
 ): Promise<{ data: T | null, error: Error | null }> {
-  const { getLocalConfig, useSupabase } = await import('./supabase')
   const supabase = options.client ?? useSupabase()
   const config = getLocalConfig()
 

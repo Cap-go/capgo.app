@@ -93,6 +93,10 @@ export const uploadOptionsSchema = z.object({
   minUpdateVersion: z.string().optional(),
   autoMinUpdateVersion: z.boolean().optional(),
   autoSetBundle: z.boolean().optional(),
+  autoBump: z.union([
+    z.boolean(),
+    z.enum(['major', 'minor', 'patch', 'fix', 'metadata', 'ai']),
+  ]).optional(),
   selfAssign: z.boolean().optional(),
   packageJsonPaths: z.string().optional(),
   ignoreCompatibilityCheck: z.boolean().optional(),
@@ -380,6 +384,8 @@ export const requestBuildOptionsSchema = z.object({
   supaAnon: z.string().optional(),
   prescan: z.boolean().optional(),
   prescanIgnoreFatal: z.boolean().optional(),
+  prescanSkip: z.array(z.string()).optional(),
+  prescanWarn: z.array(z.string()).optional(),
 })
 
 export type RequestBuildOptions = z.infer<typeof requestBuildOptionsSchema>

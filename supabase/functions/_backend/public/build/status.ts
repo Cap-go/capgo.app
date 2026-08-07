@@ -11,6 +11,7 @@ import {
   shouldApplyBuildTimeout,
 } from '../../utils/build_timeout.ts'
 import { emitBuildTransitionEvent } from '../../utils/build_tracking.ts'
+import { isoFromBuilderTimestamp } from '../../utils/builder_capacity.ts'
 import { simpleError } from '../../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
 import { checkPermission } from '../../utils/rbac.ts'
@@ -223,6 +224,8 @@ export async function getBuildStatus(
       status: effectiveStatus,
       last_error: effectiveError,
       runner_wait_seconds: runnerWaitSeconds,
+      started_at: isoFromBuilderTimestamp(builderJob.job.started_at) ?? undefined,
+      completed_at: isoFromBuilderTimestamp(effectiveCompletedAt) ?? undefined,
       updated_at: new Date().toISOString(),
     })
     .eq('builder_job_id', job_id)

@@ -564,7 +564,7 @@ export function androidViewForStep(
         if (ctx.playVerifyOutcome === 'wrong-build-id') {
           return {
             ...base,
-            message: `None of your Play Store apps match "${pkg}". Pick a different package (the applicationId your app is actually published under), or create "${pkg}" in Play Console (https://play.google.com/console). Capgo grants your build access to that exact package, so it must exist before provisioning.`,
+            message: `None of your Play Store apps match "${pkg}". Pick a different package (the applicationId your app is actually published under), or create "${pkg}" in Play Console (https://play.google.com/console). Capgo grants your build access to that exact package, so it must exist before Play upload. If you only need the AAB (no Play upload yet), cancel and run: npx @capgo/cli@latest build request --platform android --no-playstore-upload --output-upload`,
             options: [
               { value: 'recheck', label: 'Re-check (I fixed the package / created the app)' },
               { value: 'proceed', label: 'The app exists, proceed anyway' },
@@ -575,7 +575,7 @@ export function androidViewForStep(
         }
         return {
           ...base,
-          message: `No Play Store app exists yet for "${pkg}". Create it once in Play Console (https://play.google.com/console), then re-check. Capgo grants your build access to that exact package, so it must exist before provisioning.`,
+          message: `No Play Store app exists yet for "${pkg}". Create it once in Play Console (https://play.google.com/console), then re-check. Capgo grants your build access to that exact package, so it must exist before Play upload. If you only need the AAB (no Play upload yet), cancel and run: npx @capgo/cli@latest build request --platform android --no-playstore-upload --output-upload`,
           options: [
             { value: 'open', label: 'Open Play Console to create this app' },
             { value: 'recheck', label: 'I\'ve created it, re-check' },

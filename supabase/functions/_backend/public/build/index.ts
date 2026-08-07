@@ -15,6 +15,7 @@ import { middlewareKey } from '../../utils/hono_middleware.ts'
 import { aiAnalyzeDeprecated } from './ai_analyze.ts'
 import { aiAnalyzeStreamBuild } from './ai_analyze_stream.ts'
 import { cancelBuild } from './cancel.ts'
+import { reportBuilderCapacity } from './capacity.ts'
 import { streamBuildLogs } from './logs.ts'
 import { requestBuild } from './request.ts'
 import { startBuild } from './start.ts'
@@ -23,6 +24,12 @@ import { uploadSupportLogs } from './support_logs.ts'
 import { tusProxy } from './upload.ts'
 
 export const app = honoFactory.createApp()
+
+// POST /build/capacity - Builder reports worker pool size (+/− events). Auth: BUILDER_API_KEY.
+app.post('/capacity', async (c) => {
+  return reportBuilderCapacity(c)
+})
+
 const uploadWriteMiddleware = middlewareKey(['all', 'write'])
 
 // POST /build/request - Request a new native build

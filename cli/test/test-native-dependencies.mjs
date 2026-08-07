@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { chdir, cwd } from 'node:process'
 import { getLocalDependencies } from '../src/utils.ts'
 
 const fixtureDir = join(tmpdir(), `capgo-native-dependencies-${process.pid}`)
@@ -69,4 +70,49 @@ try {
 }
 finally {
   rmSync(fixtureDir, { recursive: true, force: true })
+}
+
+// Monorepo hoisting: dependencies installed at the workspace root node_modules
+// must be discovered when no explicit --node-modules path is given, by walking
+// up parent directories from the app package.
+const monorepoDir = join(tmpdir(), `capgo-native-dependencies-hoist-${process.pid}`)
+const appDir = join(monorepoDir, 'packages', 'app')
+const rootNodeModules = join(monorepoDir, 'node_modules')
+const originalCwd = cwd()
+
+try {
+  mkdirSync(appDir, { recursive: true })
+  mkdirSync(rootNodeModules, { recursive: true })
+
+  writeJson(join(appDir, 'package.json'), {
+    name: 'app',
+    dependencies: {
+      '@capgo/capacitor-updater': '^8.0.0',
+    },
+  })
+
+  // Hoisted to the workspace root, not the app-local node_modules.
+  const hoistedPackageDir = join(rootNodeModules, '@capgo', 'capacitor-updater')
+  mkdirSync(join(hoistedPackageDir, 'ios'), { recursive: true })
+  writeJson(join(hoistedPackageDir, 'package.json'), {
+    name: '@capgo/capacitor-updater',
+    version: '8.3.0',
+    capacitor: { ios: { src: 'ios' } },
+  })
+  writeFileSync(join(hoistedPackageDir, 'ios', 'UpdaterPlugin.swift'), 'final class UpdaterPlugin {}\n')
+
+  // Run from the app directory so the default node_modules resolution has to
+  // walk up to the workspace root.
+  chdir(appDir)
+  const dependencies = await getLocalDependencies(join(appDir, 'package.json'), undefined)
+  const updater = dependencies.find(dep => dep.name === '@capgo/capacitor-updater')
+
+  assert.equal(updater?.version, '8.3.0')
+  assert.equal(updater?.native, true)
+
+  console.log('hoisted monorepo dependencies are resolved via the parent-directory walk')
+}
+finally {
+  chdir(originalCwd)
+  rmSync(monorepoDir, { recursive: true, force: true })
 }

@@ -5,7 +5,7 @@ import type { LinkedChannel } from '~/services/bundleLinkedChannels'
 import type { ChannelPromotionTarget } from '~/services/channelPromotion'
 import type { Database } from '~/types/supabase.types'
 import { Capacitor } from '@capacitor/core'
-import { computedAsync } from '@vueuse/core'
+import { computedAsync, useEventBus } from '@vueuse/core'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
@@ -39,6 +39,7 @@ const { t } = useI18n()
 const dialogStore = useDialogV2Store()
 const supabase = useSupabase()
 const router = useRouter()
+const bundleUploadedEvent = useEventBus<string>('bundle-uploaded')
 const total = ref(0)
 const totalAllBundles = ref<number | null>(null)
 const search = ref('')
@@ -470,6 +471,11 @@ async function reload() {
     isLoading.value = false
   }
 }
+
+bundleUploadedEvent.on((appId) => {
+  if (appId === props.appId)
+    void reload()
+})
 
 async function massDelete() {
   console.log('massDelete')

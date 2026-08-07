@@ -572,8 +572,8 @@ const paginationClass = computed(() => props.mobileFixedPagination
 
 <template>
   <div class="pb-4 overflow-x-auto md:pb-0">
-    <div class="flex flex-wrap items-center justify-between gap-2 p-3 pb-4 overflow-visible">
-      <div class="flex h-10 items-center">
+    <div class="flex flex-wrap items-center justify-between gap-2 p-3 pb-4 overflow-visible md:flex-nowrap">
+      <div class="flex h-10 shrink-0 items-center">
         <button
           class="inline-flex items-center py-1.5 px-3 mr-2 text-sm font-medium text-gray-500 bg-white rounded-md border border-gray-300 cursor-pointer dark:text-white dark:bg-gray-800 dark:border-gray-600 hover:bg-gray-100 focus:ring-4 focus:ring-gray-200 dark:hover:border-gray-600 dark:hover:bg-gray-700 dark:focus:ring-gray-700 focus:outline-hidden"
           type="button" @click="handleResetClick"
@@ -732,15 +732,15 @@ const paginationClass = computed(() => props.mobileFixedPagination
       >
         <IconTrash class="h-6 text-red-500" />
       </button>
-      <div class="flex w-full min-w-0 flex-col items-stretch gap-2 overflow-visible sm:w-auto sm:flex-1 sm:flex-row sm:items-center sm:justify-end md:flex-none">
+      <div class="flex w-full min-w-0 flex-col items-stretch gap-2 overflow-visible sm:w-auto sm:min-w-0 sm:flex-1 sm:flex-row sm:items-center sm:justify-end md:w-auto md:flex-none">
         <div v-if="$slots['toolbar-extras']" class="flex h-10 shrink-0 items-center self-end sm:self-auto">
           <slot name="toolbar-extras" />
         </div>
-        <div class="min-w-0 w-full overflow-hidden sm:flex-1 md:w-auto md:flex-none">
+        <div class="min-w-0 w-full overflow-hidden sm:w-auto sm:max-w-[13rem] md:max-w-[14rem] lg:max-w-[16rem] xl:max-w-xs">
           <FormKit
             v-model="searchVal" :placeholder="searchPlaceholder" :prefix-icon="IconSearch"
             :disabled="isLoading" enterkeyhint="send" :classes="{
-              outer: 'mb-0! w-full md:w-96',
+              outer: 'mb-0! w-full sm:w-52 md:w-56 lg:w-64 xl:w-80',
             }"
           />
         </div>
