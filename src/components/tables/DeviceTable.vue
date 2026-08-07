@@ -6,6 +6,7 @@ import { computed, h, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
+import IconSmartphone from '~icons/lucide/smartphone'
 import DateRangePicker from '~/components/DateRangePicker.vue'
 import { formatDate } from '~/services/date'
 import { getDateRangeForPreset, TABLE_DATE_RANGE_DEFAULT } from '~/services/dateRange'
@@ -24,6 +25,10 @@ const emit = defineEmits(['addDevice'])
 // TODO: delete the old version check when all devices uses the new version system
 type Device = Database['public']['Tables']['devices']['Row']
 type PlatformOs = Database['public']['Enums']['platform_os']
+interface DateRangePickerHandle {
+  openPicker: (invoker?: HTMLElement) => Promise<void>
+  togglePicker: (invoker?: HTMLElement) => void
+}
 
 const { t } = useI18n()
 const supabase = useSupabase()
@@ -48,6 +53,7 @@ const dateRangeMode = ref<DateRangePreset>(TABLE_DATE_RANGE_DEFAULT)
 const selectedPlatform = ref<'' | PlatformOs>('')
 const selectedVersionName = ref(props.versionName ?? '')
 const bundleNames = ref<string[]>([])
+const dateRangePickerRef = ref<DateRangePickerHandle>()
 const skipFilterReload = ref(false)
 const offset = 10
 const activeExtraFilters = computed(() =>
@@ -70,6 +76,15 @@ function clearExtraFilters() {
   nextTick(() => {
     skipFilterReload.value = false
   })
+}
+
+function openDateRangePicker(event: MouseEvent) {
+  dateRangePickerRef.value?.togglePicker(event.currentTarget as HTMLElement)
+}
+
+function clearDeviceViewFilters(clearFilters: () => void) {
+  cancelScheduledReload()
+  clearFilters()
 }
 const columns = ref<TableColumn[]>([
   {
@@ -302,6 +317,7 @@ async function reload() {
 }
 
 async function refreshData() {
+  cancelScheduledReload()
   const loadId = ++activeLoadId.value
   isLoading.value = true
   try {
@@ -567,11 +583,62 @@ watch([selectedPlatform, selectedVersionName], () => {
     >
       <template #toolbar-extras>
         <DateRangePicker
+          ref="dateRangePickerRef"
           v-model="dateRange"
           v-model:mode="dateRangeMode"
           compact
           @apply="refreshData()"
         />
+      </template>
+      <template #empty-state="{ clearFilters, hasActiveFilters }">
+        <div
+          class="mx-auto flex max-w-2xl flex-col items-center px-4 py-6 text-left md:py-8"
+          data-test="devices-empty-state"
+        >
+          <IconSmartphone class="mb-3 h-9 w-9 text-slate-400 dark:text-slate-500" aria-hidden="true" />
+          <h3 class="text-center text-base font-semibold text-slate-900 dark:text-white">
+            {{ t('devices-empty-title') }}
+          </h3>
+          <p class="mt-1 text-center text-sm text-slate-600 dark:text-slate-300">
+            {{ t('devices-empty-intro') }}
+          </p>
+          <ul class="mt-4 w-full list-disc space-y-2 pl-5 text-sm leading-6 text-slate-600 dark:text-slate-300">
+            <li>
+              <span class="font-medium text-slate-800 dark:text-slate-100">{{ t('devices-empty-time-reason') }}</span>
+              <button
+                type="button"
+                class="d-btn d-btn-link ml-1 h-auto min-h-0 p-0 text-sm font-medium text-azure-600 underline decoration-azure-600/40 underline-offset-2 hover:text-azure-700 focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 dark:text-azure-400 dark:hover:text-azure-300"
+                @click="openDateRangePicker"
+              >
+                {{ t('devices-empty-change-time') }}
+              </button>
+            </li>
+            <li v-if="hasActiveFilters">
+              <span class="font-medium text-slate-800 dark:text-slate-100">{{ t('devices-empty-filters-reason') }}</span>
+              <button
+                type="button"
+                class="d-btn d-btn-link ml-1 h-auto min-h-0 p-0 text-sm font-medium text-azure-600 underline decoration-azure-600/40 underline-offset-2 hover:text-azure-700 focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 dark:text-azure-400 dark:hover:text-azure-300"
+                @click="clearDeviceViewFilters(clearFilters)"
+              >
+                {{ t('devices-empty-clear-filters') }}
+              </button>
+            </li>
+            <li>
+              <span class="font-medium text-slate-800 dark:text-slate-100">{{ t('devices-empty-contact-reason') }}</span>
+              {{ t('devices-empty-contact-help') }}
+            </li>
+            <li>
+              <span class="font-medium text-slate-800 dark:text-slate-100">{{ t('devices-empty-refresh-reason') }}</span>
+              <button
+                type="button"
+                class="d-btn d-btn-link ml-1 h-auto min-h-0 p-0 text-sm font-medium text-azure-600 underline decoration-azure-600/40 underline-offset-2 hover:text-azure-700 focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 dark:text-azure-400 dark:hover:text-azure-300"
+                @click="refreshData"
+              >
+                {{ t('devices-empty-refresh') }}
+              </button>
+            </li>
+          </ul>
+        </div>
       </template>
       <template #filter-extras>
         <fieldset>
