@@ -767,11 +767,12 @@ async function versionExistsOnRemote(supabase: SupabaseType, appid: string, bund
 }
 
 async function getLatestRemoteAppVersion(supabase: SupabaseType, appid: string): Promise<string | null> {
+  // Include deleted versions: Capgo forbids reusing deleted names (exist_app_versions
+  // still treats them as occupied), so occupancy must drive the auto-bump base.
   const { data, error } = await supabase
     .from('app_versions')
     .select('name')
     .eq('app_id', appid)
-    .eq('deleted', false)
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle()
@@ -782,6 +783,27 @@ async function getLatestRemoteAppVersion(supabase: SupabaseType, appid: string):
   }
 
   return data?.name ?? null
+}
+
+async function findFreeAutoBumpCandidate(
+  supabase: SupabaseType,
+  appid: string,
+  startCandidate: string,
+  level: AutoBumpLevel,
+  baseVersion: string,
+): Promise<string> {
+  let candidate = startCandidate
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const exists = await versionExistsOnRemote(supabase, appid, candidate)
+    if (!exists) {
+      if (candidate !== baseVersion)
+        log.info(`🔢 Auto-bumped (${level}) version from ${baseVersion} to ${candidate}`)
+      return candidate
+    }
+    candidate = autoBumpVersionBy(candidate, level)
+  }
+
+  uploadFail(`Could not find a free ${level}-bumped version after 100 attempts (started from ${baseVersion})`)
 }
 
 async function resolveAutoBumpVersion(
@@ -806,20 +828,11 @@ async function resolveAutoBumpVersion(
 
   if (!baseVersion) {
     log.info(`ℹ️ No remote versions found for auto-bump, keeping local version ${localBundle}`)
-    return localBundle
+    return findFreeAutoBumpCandidate(supabase, appid, localBundle, level, localBundle)
   }
 
-  let candidate = autoBumpVersionBy(baseVersion, level)
-  for (let attempt = 0; attempt < 100; attempt++) {
-    const exists = await versionExistsOnRemote(supabase, appid, candidate)
-    if (!exists) {
-      log.info(`🔢 Auto-bumped (${level}) version from ${baseVersion} to ${candidate}`)
-      return candidate
-    }
-    candidate = autoBumpVersionBy(candidate, level)
-  }
-
-  uploadFail(`Could not find a free ${level}-bumped version after 100 attempts (started from ${baseVersion})`)
+  const candidate = autoBumpVersionBy(baseVersion, level)
+  return findFreeAutoBumpCandidate(supabase, appid, candidate, level, baseVersion)
 }
 
 // It is really important that this function never terminates the program, it should always return.
@@ -1359,7 +1372,9 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   // If we got a new version string, retry with that version
   if (typeof versionExistsResult === 'string') {
     log.info(`Retrying upload with new version: ${versionExistsResult}`)
-    return uploadBundleInternal(preAppid, { ...options, bundle: versionExistsResult }, silent)
+    // Clear autoBump: retry already chose an explicit bundle; keeping autoBump
+    // would trip the user-facing --bundle + --auto-bump guard.
+    return uploadBundleInternal(preAppid, { ...options, bundle: versionExistsResult, autoBump: undefined }, silent)
   }
 
   if (options.external && !options.external.startsWith('https://')) {
