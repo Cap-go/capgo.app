@@ -142,15 +142,6 @@ const isCreditsOnly = computed(() => {
   return !org.paying && (org.trial_left ?? 0) <= 0 && (org.credit_available ?? 0) > 0
 })
 
-function isSafariBrowser() {
-  if (Capacitor.getPlatform() !== 'web')
-    return false
-  if (typeof navigator === 'undefined')
-    return false
-  const ua = navigator.userAgent
-  return /Version\/[\d.]+/.test(ua) && /Safari\//.test(ua) && !/Chrome|CriOS|FxiOS|OPiOS|Edg|Chromium/.test(ua)
-}
-
 async function prefetchStripeCheckoutUrl(plan: Database['public']['Tables']['plans']['Row'], isYear: boolean) {
   if (!plan.stripe_id)
     return
@@ -212,16 +203,18 @@ function trackPlanCheckoutStarted(plan: Database['public']['Tables']['plans']['R
   }).catch()
 }
 
-async function openSafariStripeCheckout(plan: Database['public']['Tables']['plans']['Row'], isYear: boolean) {
+async function openWebStripeCheckout(plan: Database['public']['Tables']['plans']['Row'], isYear: boolean) {
   const url = await prefetchStripeCheckoutUrl(plan, isYear)
   if (!url) {
     toast.error('Cannot get your checkout')
     return false
   }
 
+  // Confirm dialog with a real <a href> so checkout opens under a fresh user gesture.
+  // Avoids popup blockers after the async Stripe session create.
   dialogStore.openDialog({
     title: t('open-in-new-tab'),
-    description: 'This will open Stripe to complete checkout.',
+    description: t('stripe-checkout-will-be-opened-in-a-new-tab'),
     buttons: [
       {
         text: t('button-cancel'),
@@ -234,7 +227,7 @@ async function openSafariStripeCheckout(plan: Database['public']['Tables']['plan
         href: url,
         target: '_blank',
         rel: 'noopener noreferrer',
-        handler: () => trackPlanCheckoutStarted(plan, isYear, 'safari_confirm'),
+        handler: () => trackPlanCheckoutStarted(plan, isYear, 'web_confirm'),
       },
     ],
   })
@@ -255,8 +248,8 @@ async function openChangePlan(plan: Database['public']['Tables']['plans']['Row']
   isSubscribeLoading.value[index] = true
   if (plan.stripe_id) {
     const checkoutIsYearly = hasYearlyDiscount(plan) ? isYearly.value : false
-    if (isSafariBrowser()) {
-      const shouldContinue = await openSafariStripeCheckout(plan, checkoutIsYearly)
+    if (Capacitor.getPlatform() === 'web') {
+      const shouldContinue = await openWebStripeCheckout(plan, checkoutIsYearly)
       if (!shouldContinue) {
         isSubscribeLoading.value[index] = false
         return
@@ -592,7 +585,7 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
             :disabled="isDisabled(p)"
             @click="openChangePlan(p, index)"
           >
-            <svg v-if="isSubscribeLoading[index]" class="w-4 h-4 text-white animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <svg v-if="isSubscribeLoading[index]" class="w-4 h-4 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
               <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
               <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
             </svg>

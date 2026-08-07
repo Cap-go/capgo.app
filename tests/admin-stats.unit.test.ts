@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { adminStatsBodySchema, MAX_ADMIN_STATS_LIMIT, MAX_ADMIN_STATS_OFFSET } from '../supabase/functions/_backend/private/admin_stats.ts'
-import { safeParseSchema } from '../supabase/functions/_backend/utils/schema_validation.ts'
 import { buildPluginBreakdownResult, normalizeAnalyticsLimit } from '../supabase/functions/_backend/utils/cloudflare.ts'
+import { normalizeAdminStatsDate } from '../supabase/functions/_backend/utils/pg.ts'
+
+import { safeParseSchema } from '../supabase/functions/_backend/utils/schema_validation.ts'
 
 describe('admin stats validation', () => {
   const baseBody = {
@@ -49,7 +51,15 @@ describe('admin stats validation', () => {
     expect(parsed.success).toBe(true)
   })
 
-  
+  it('accepts the builder capacity metric', () => {
+    const parsed = safeParseSchema(adminStatsBodySchema, {
+      ...baseBody,
+      metric_category: 'builder_capacity',
+    })
+
+    expect(parsed.success).toBe(true)
+  })
+
   it.concurrent('accepts the cli usage metric', () => {
     const parsed = safeParseSchema(adminStatsBodySchema, {
       ...baseBody,
@@ -59,7 +69,7 @@ describe('admin stats validation', () => {
     expect(parsed.success).toBe(true)
   })
 
-it.concurrent('accepts the trial plan breakdown metric', () => {
+  it.concurrent('accepts the trial plan breakdown metric', () => {
     const parsed = safeParseSchema(adminStatsBodySchema, {
       ...baseBody,
       metric_category: 'trial_plan_breakdown',
@@ -156,8 +166,6 @@ describe('buildPluginBreakdownResult', () => {
     ])
   })
 })
-
-import { normalizeAdminStatsDate } from '../supabase/functions/_backend/utils/pg.ts'
 
 describe('normalizeAdminStatsDate', () => {
   it.concurrent('normalizes Date objects and ISO timestamps to YYYY-MM-DD', () => {

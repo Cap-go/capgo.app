@@ -134,3 +134,62 @@ export function inferDateRangePreset(
   }
   return best ?? 'custom'
 }
+
+export function isRollingDateRangePreset(value: string): value is RollingDateRangePreset {
+  return value in DATE_RANGE_DURATIONS_MS
+}
+
+export interface DateRangeQueryParams {
+  range?: unknown
+  start?: unknown
+  end?: unknown
+}
+
+export type ParsedDateRangeQuery
+  = { mode: RollingDateRangePreset }
+    | { mode: 'custom', start: Date, end: Date }
+
+/** Parse `range` (+ optional `start`/`end` for custom) from a route query. */
+export function parseDateRangeQuery(query: DateRangeQueryParams): ParsedDateRangeQuery | null {
+  const range = typeof query.range === 'string' ? query.range : null
+  if (!range)
+    return null
+
+  if (range === 'custom') {
+    if (typeof query.start !== 'string' || typeof query.end !== 'string')
+      return null
+    const start = new Date(query.start)
+    const end = new Date(query.end)
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end.getTime() < start.getTime())
+      return null
+    return { mode: 'custom', start, end }
+  }
+
+  if (isRollingDateRangePreset(range))
+    return { mode: range }
+
+  return null
+}
+
+export interface SerializedDateRangeQuery {
+  range: DateRangePreset
+  start?: string
+  end?: string
+}
+
+/** Serialize a date-range mode for URL query params. */
+export function serializeDateRangeQuery(
+  mode: DateRangePreset,
+  custom?: DateRangeValue,
+): SerializedDateRangeQuery {
+  if (mode === 'custom' && custom) {
+    return {
+      range: 'custom',
+      start: custom.start.toISOString(),
+      end: custom.end.toISOString(),
+    }
+  }
+  if (mode === 'custom')
+    return { range: DEFAULT_DATE_RANGE_PRESET }
+  return { range: mode }
+}

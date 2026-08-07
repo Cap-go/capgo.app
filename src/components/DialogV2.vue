@@ -75,6 +75,12 @@ function handleButtonClick(button: DialogV2Button, event?: Event) {
     return
   }
 
+  // Let target=_blank open natively so browsers do not treat it as a blocked popup.
+  if (button.href && button.target === '_blank') {
+    close({ ...safeButton, skipNavigation: true })
+    return
+  }
+
   const shouldPreventNavigation = button.href && (!mouseEvent || (mouseEvent.button === 0 && !hasModifier))
   if (shouldPreventNavigation)
     event?.preventDefault()

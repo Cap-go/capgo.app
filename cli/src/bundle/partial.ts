@@ -14,7 +14,7 @@ import * as micromatch from 'micromatch'
 import * as tus from 'tus-js-client'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { encryptChecksum, encryptChecksumV3, encryptSource } from '../api/crypto'
-import { BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, deltaManifestTooLargeMessage, findRoot, generateManifest, getContentType, getInstalledVersion, getLocalConfig, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, sendEvent, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
+import { appAddHintMessage, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, deltaManifestTooLargeMessage, findRoot, generateManifest, getContentType, getInstalledVersion, getLocalConfig, isAppNotFoundError, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, sendEvent, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
 import { getUploadReporter } from './reporter'
 
 const log = {
@@ -309,6 +309,15 @@ export async function uploadPartial(
 headers: buildCliRequestHeaders({ Authorization: apikey }),
           onError: (error) => {
             const errorMessage = error.toString()
+
+            // Turn the backend's `app_not_found` rejection into the actionable `app add`
+            // hint. Without this the raw tus error object escapes as an unhandled
+            // rejection instead of a clear user error.
+            if (isAppNotFoundError(error)) {
+              log.error(`Failed to upload ${filePathUnix}: ${errorMessage}`)
+              reject(new Error(appAddHintMessage(appId)))
+              return
+            }
 
             // Try to extract requestId from error message
             let requestId: string | undefined

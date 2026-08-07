@@ -1640,6 +1640,22 @@ export async function zipFileWindows(filePath: string): Promise<Buffer> {
   return zip.toBuffer()
 }
 
+export function appAddHintMessage(appId: string): string {
+  const pm = getPMAndCommand()
+  return `App ${appId} does not exist, run first \`${pm.runner} @capgo/cli app add ${appId}\` to create it`
+}
+
+// The files backend rejects uploads for unknown apps with a `404 app_not_found` body
+// (see supabase/functions/_backend/files/files.ts). Detect it from either a tus
+// DetailedError (which exposes the raw response body) or a generic error message so we
+// can surface the actionable `app add` hint instead of a raw tus error string.
+export function isAppNotFoundError(error: unknown): boolean {
+  const detailed = error as { originalResponse?: { getBody?: () => string } }
+  const responseBody = detailed?.originalResponse?.getBody?.()
+  const message = error instanceof Error ? error.message : String(error ?? '')
+  return `${responseBody ?? ''} ${message}`.includes('app_not_found')
+}
+
 export async function uploadTUS(apikey: string, data: Buffer, orgId: string, appId: string, name: string, spinner: UploadSpinner, localConfig: CapgoConfig, chunkSize: number): Promise<boolean> {
   return new Promise((resolve, reject) => {
     sendEvent(apikey, {
@@ -1670,6 +1686,12 @@ headers: buildCliRequestHeaders({ Authorization: apikey }),
       // Callback for errors which cannot be fixed using retries
       onError(error) {
         log.error(`Error uploading bundle: ${error.message}`)
+        // Turn the backend's `app_not_found` rejection into the actionable `app add`
+        // hint instead of leaking a raw tus error string to the user.
+        if (isAppNotFoundError(error)) {
+          reject(new Error(appAddHintMessage(appId)))
+          return
+        }
         if (error instanceof tus.DetailedError) {
           const body = error.originalResponse?.getBody()
           const jsonBody = JSON.parse(body || '{"error": "unknown error"}')
@@ -1973,10 +1995,15 @@ export async function resolveUserIdFromApiKey(supabase: SupabaseClient<Database>
 
   const userId = (dataUser || '').toString()
 
-  if (!userId || userIdError) {
+  if (userIdError) {
     if (!silent)
-      log.error(`Invalid API key or insufficient permissions.`)
-    throw new Error('Invalid API key or insufficient permissions.')
+      log.error(userIdError.message)
+    throw userIdError
+  }
+  if (!userId) {
+    if (!silent)
+      log.error(`Capgo authentication failed: invalid Capgo API key or insufficient Capgo permissions.`)
+    throw new Error('Capgo authentication failed: invalid Capgo API key or insufficient Capgo permissions.')
   }
   return userId
 }
@@ -2082,6 +2109,13 @@ export function getPMAndCommand() {
   pmFetched = true
   pmRunner = findPackageManagerRunner(dir)
   return { pm, command: pmCommand, installCommand: `${pm} ${pmCommand}`, runner: pmRunner }
+}
+
+export function setPMAndCommand(next: { pm: PackageManagerType, command: InstallCommand, runner: PackageManagerRunner }): void {
+  pm = next.pm
+  pmCommand = next.command
+  pmRunner = next.runner
+  pmFetched = true
 }
 
 export function getNativeProjectResetAdvice(platformRunner: string, nativePlatform: 'ios' | 'android') {

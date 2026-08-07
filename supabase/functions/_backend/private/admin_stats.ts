@@ -1,15 +1,16 @@
 import type Stripe from 'stripe'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
-import { z } from 'zod'
 import { Hono } from 'hono/tiny'
-import { safeParseSchema } from '../utils/schema_validation.ts'
+import { z } from 'zod'
 import { getAdminBuilderAnalytics } from '../utils/builder_analytics.ts'
+import { getAdminBuilderCapacity } from '../utils/builder_capacity.ts'
 import { getAdminCliUsage } from '../utils/cli_usage.ts'
 import { getAdminAppsTrend, getAdminBandwidthTrend, getAdminBundlesTrend, getAdminDistributionMetrics, getAdminFailureMetrics, getAdminMauTrend, getAdminOrgMetrics, getAdminPlatformOverview, getAdminStorageTrend, getAdminSuccessRate, getAdminSuccessRateTrend, getAdminUploadMetrics } from '../utils/cloudflare.ts'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { getAdminCancelledOrganizations, getAdminCustomerCountryBreakdown, getAdminDeploymentsTrend, getAdminEmailTypeBreakdown, getAdminGlobalStatsTrend, getAdminOnboardingFunnel, getAdminOrganizationInsights, getAdminPluginBreakdown, getAdminTrialOrganizations, getAdminTrialPlanBreakdown } from '../utils/pg.ts'
+import { safeParseSchema } from '../utils/schema_validation.ts'
 import { getCancellationDetails } from '../utils/stripe.ts'
 import { supabaseClient as useSupabaseClient } from '../utils/supabase.ts'
 
@@ -42,6 +43,7 @@ const metricCategories = [
   'customer_country_breakdown',
   'organization_insights',
   'builder_analytics',
+  'builder_capacity',
   'cli_usage',
 ] as const
 
@@ -313,6 +315,10 @@ app.post('/', middlewareAuth, async (c) => {
 
       case 'builder_analytics':
         result = await getAdminBuilderAnalytics(c, start_date, end_date)
+        break
+
+      case 'builder_capacity':
+        result = await getAdminBuilderCapacity(c, start_date, end_date)
         break
 
       case 'cli_usage':
