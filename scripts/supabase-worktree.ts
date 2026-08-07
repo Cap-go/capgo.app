@@ -381,12 +381,53 @@ function reserveWorktreePortsFromEphemeralPool(repoRoot: string): void {
   console.error(`Reserved Supabase worktree ports from ephemeral pool: ${reserved}`)
 }
 
+/**
+ * Drop whatever still holds worktree host ports after a partial Docker start.
+ *
+ * `fuser` alone is not enough on GitHub runners: docker-proxy / leftover
+ * containers from a failed bind can keep the port until removed explicitly.
+ */
 function freeHostPorts(ports: number[]): void {
   if (process.platform === 'win32' || ports.length === 0)
     return
 
-  for (const port of ports) {
+  const uniquePorts = [...new Set(ports.filter(port => Number.isFinite(port)))]
+  const holders = new Set<string>()
+
+  for (const port of uniquePorts) {
+    const byPublish = spawnSync('docker', ['ps', '-aq', '--filter', `publish=${port}`], {
+      encoding: 'utf8',
+    })
+    for (const id of (byPublish.stdout ?? '').split(/\s+/).filter(Boolean))
+      holders.add(id)
+  }
+
+  // Match host-port publish strings docker prints (0.0.0.0:58722->5432/tcp).
+  const listed = spawnSync('docker', ['ps', '-a', '--format', '{{.ID}} {{.Ports}}'], {
+    encoding: 'utf8',
+  })
+  if ((listed.status ?? 1) === 0) {
+    for (const line of (listed.stdout ?? '').split('\n')) {
+      const trimmed = line.trim()
+      if (!trimmed)
+        continue
+      const spaceIdx = trimmed.indexOf(' ')
+      const id = spaceIdx >= 0 ? trimmed.slice(0, spaceIdx) : trimmed
+      const published = spaceIdx >= 0 ? trimmed.slice(spaceIdx + 1) : ''
+      if (uniquePorts.some(port => published.includes(`:${port}->`) || published.includes(`:${port}/`)))
+        holders.add(id)
+    }
+  }
+
+  if (holders.size > 0) {
+    console.error(`Removing Docker containers still publishing worktree ports: ${[...holders].join(', ')}`)
+    spawnSync('docker', ['rm', '-f', ...holders], { stdio: 'inherit' })
+  }
+
+  for (const port of uniquePorts) {
     spawnSync('fuser', ['-k', `${port}/tcp`], { stdio: 'ignore' })
+    // Close lingering sockets that still occupy the port after docker-proxy dies.
+    spawnSync('ss', ['-K', 'sport', '=', `:${port}`], { stdio: 'ignore' })
   }
 }
 
@@ -439,7 +480,12 @@ function runSupabaseStartWithRetry(args: string[], repoRoot: string): number {
     runSupabase(['stop', '--no-backup'], repoRoot)
     removeLeftoverWorktreeContainers(cfg.projectId)
     freeHostPorts(ports)
-    spawnSync(process.platform === 'win32' ? 'timeout' : 'sleep', process.platform === 'win32' ? ['/T', '2', '/NOBREAK'] : ['2'])
+    // Back off so docker-proxy / TIME_WAIT can release before the next bind.
+    const sleepSeconds = String(Math.min(2 ** attempt, 8))
+    spawnSync(
+      process.platform === 'win32' ? 'timeout' : 'sleep',
+      process.platform === 'win32' ? ['/T', sleepSeconds, '/NOBREAK'] : [sleepSeconds],
+    )
   }
   return 1
 }

@@ -822,9 +822,9 @@ jobs:
           deps_install_pid=$!
           bun scripts/supabase-worktree.ts start -x imgproxy,studio,mailpit,realtime,postgres-meta,supavisor,logflare,vector
           if ! wait "${deps_install_pid}"; then
-            echo "::error::Dependency install failed"
-            cat "${RUNNER_TEMP}/deps-install.log"
-            exit 1
+            echo "::warning::Background dependency install failed (often OOM during Docker start retries); retrying after Supabase is up"
+            cat "${RUNNER_TEMP}/deps-install.log" || true
+            bun install
           fi
       - name: Export isolated test endpoints
         run: |
@@ -937,9 +937,9 @@ jobs:
           deps_install_pid=$!
           bun scripts/supabase-worktree.ts start -x imgproxy,studio,mailpit,realtime,postgres-meta,supavisor,logflare,vector
           if ! wait "${deps_install_pid}"; then
-            echo "::error::Dependency install failed"
-            cat "${RUNNER_TEMP}/deps-install.log"
-            exit 1
+            echo "::warning::Background dependency install failed (often OOM during Docker start retries); retrying after Supabase is up"
+            cat "${RUNNER_TEMP}/deps-install.log" || true
+            bun install
           fi
       - name: Export isolated test endpoints
         run: |
