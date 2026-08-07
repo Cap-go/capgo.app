@@ -161,7 +161,7 @@ async function ensureBuildPermission(c: Context, appId: string, userId: string) 
       app_id: appId,
       user_id: userId,
     })
-    throw simpleError('unauthorized', 'You do not have permission to request builds for this app')
+    throw simpleError('unauthorized', 'Capgo permission denied: you do not have app.build_native for this app. This is Capgo authorization, not App Store Connect or Google Play credentials.')
   }
 }
 

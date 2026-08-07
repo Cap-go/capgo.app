@@ -84,7 +84,7 @@ export async function assertAscAccess(opts: AssertAscAccessOptions): Promise<Asc
     token = generateJwt(opts.keyId, opts.issuerId, opts.p8Pem)
   }
   catch {
-    return { ok: false, kind: 'auth-error', message: 'Could not sign the App Store Connect request - the .p8 key, Key ID, or Issuer ID is invalid.' }
+    return { ok: false, kind: 'auth-error', message: 'Invalid App Store Connect key material (.p8 / Key ID / Issuer ID). Apple was not contacted; Capgo login is unrelated.' }
   }
 
   // Own 7s AbortController so the fetch aborts cleanly BEFORE the engine's 10s
