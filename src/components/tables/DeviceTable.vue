@@ -603,7 +603,7 @@ watch([selectedPlatform, selectedVersionName], () => {
               <span class="font-medium text-slate-800 dark:text-slate-100">{{ t('devices-empty-time-reason') }}</span>
               <button
                 type="button"
-                class="ml-1 font-medium text-azure-600 underline decoration-azure-600/40 underline-offset-2 hover:text-azure-700 focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 dark:text-azure-400 dark:hover:text-azure-300"
+                class="d-btn d-btn-link ml-1 h-auto min-h-0 p-0 text-sm font-medium text-azure-600 underline decoration-azure-600/40 underline-offset-2 hover:text-azure-700 focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 dark:text-azure-400 dark:hover:text-azure-300"
                 @click="openDateRangePicker"
               >
                 {{ t('devices-empty-change-time') }}
@@ -613,7 +613,7 @@ watch([selectedPlatform, selectedVersionName], () => {
               <span class="font-medium text-slate-800 dark:text-slate-100">{{ t('devices-empty-filters-reason') }}</span>
               <button
                 type="button"
-                class="ml-1 font-medium text-azure-600 underline decoration-azure-600/40 underline-offset-2 hover:text-azure-700 focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 dark:text-azure-400 dark:hover:text-azure-300"
+                class="d-btn d-btn-link ml-1 h-auto min-h-0 p-0 text-sm font-medium text-azure-600 underline decoration-azure-600/40 underline-offset-2 hover:text-azure-700 focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 dark:text-azure-400 dark:hover:text-azure-300"
                 @click="clearDeviceViewFilters(clearFilters)"
               >
                 {{ t('devices-empty-clear-filters') }}
@@ -627,7 +627,7 @@ watch([selectedPlatform, selectedVersionName], () => {
               <span class="font-medium text-slate-800 dark:text-slate-100">{{ t('devices-empty-refresh-reason') }}</span>
               <button
                 type="button"
-                class="ml-1 font-medium text-azure-600 underline decoration-azure-600/40 underline-offset-2 hover:text-azure-700 focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 dark:text-azure-400 dark:hover:text-azure-300"
+                class="d-btn d-btn-link ml-1 h-auto min-h-0 p-0 text-sm font-medium text-azure-600 underline decoration-azure-600/40 underline-offset-2 hover:text-azure-700 focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 dark:text-azure-400 dark:hover:text-azure-300"
                 @click="refreshData"
               >
                 {{ t('devices-empty-refresh') }}
