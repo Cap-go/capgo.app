@@ -518,6 +518,7 @@ function presetButtonClass(active: boolean, disabled: boolean) {
 }
 
 .date-range-popover {
+  left: auto;
   max-width: none;
   max-height: none;
   background: var(--drp-bg) !important;

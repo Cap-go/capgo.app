@@ -117,7 +117,10 @@ const localCommand = isLocal(config.supaHost) ? ` --supa-host ${config.supaHost}
 const usesBuilderSetupCommand = computed(() => selectedIntent.value === 'builder')
 const cliSubcommand = computed(() => usesBuilderSetupCommand.value ? 'build init' : 'i')
 const cliCommand = computed(() => {
-  const key = apiKey.value ?? '[APIKEY]'
+  const key = apiKey.value
+  if (!key)
+    return ''
+
   if (usesBuilderSetupCommand.value)
     return `npx @capgo/cli@latest build init -a ${key}${localCommand}`
 
@@ -132,8 +135,8 @@ const redactedCliCommand = computed(() => {
 const cliCommandArgs = computed(() => {
   const args: string[] = []
 
-  if (usesBuilderSetupCommand.value)
-    args.push('-a', apiKey.value ?? '[APIKEY]')
+  if (usesBuilderSetupCommand.value && apiKey.value)
+    args.push('-a', apiKey.value)
 
   if (isLocal(config.supaHost))
     args.push('--supa-host', config.supaHost, '--supa-anon', config.supaKey)
@@ -394,13 +397,6 @@ async function loadResumeApp() {
   if (resumeStep.value === 'setup') {
     flowStep.value = 'setup'
     hydrateIntentFromCurrentOrg()
-    try {
-      await ensureApiKey()
-    }
-    catch (error) {
-      console.error('Cannot ensure API key', error)
-      toast.error(t('app-onboarding-toast-apikey-error'))
-    }
   }
   else {
     flowStep.value = resumeStep.value === 'choice' ? 'choice' : 'install'
@@ -843,6 +839,9 @@ async function copyText(text: string) {
 }
 
 async function copyCliCommand() {
+  if (!apiKey.value)
+    return
+
   await copyText(cliCommand.value)
 }
 
@@ -875,16 +874,14 @@ onMounted(async () => {
     await organizationStore.awaitInitialLoad()
     await main.awaitInitialLoad()
 
-    try {
-      await ensureApiKey()
-    }
-    catch (error) {
-      console.error('Cannot ensure API key', error)
-      toast.error(t('app-onboarding-toast-apikey-error'))
-    }
     const resumed = await loadResumeApp()
     if (!resumed)
       flowStep.value = 'details'
+
+    void ensureApiKey().catch((error) => {
+      console.error('Cannot ensure API key', error)
+      toast.error(t('app-onboarding-toast-apikey-error'))
+    })
   }
   finally {
     isLoading.value = false
@@ -1243,25 +1240,29 @@ watch(appName, (value) => {
                       {{ t('app-onboarding-command-hide') }}
                     </button>
                   </div>
-                  <div
-                    class="group relative cursor-pointer rounded-xl bg-slate-950 p-4 pr-14 ring-1 ring-white/10 transition hover:ring-white/20"
-                    role="button"
-                    tabindex="0"
+                  <button
+                    v-if="apiKey"
+                    type="button"
+                    class="d-btn group relative h-auto min-h-0 w-full justify-start whitespace-normal rounded-xl border-0 bg-slate-950 p-4 pr-14 text-left font-normal ring-1 ring-white/10 transition hover:bg-slate-950 hover:ring-white/20"
                     :aria-label="t('app-onboarding-command-copy')"
                     @click="copyCliCommand"
-                    @keydown.enter.prevent="copyCliCommand"
-                    @keydown.space.prevent="copyCliCommand"
                   >
                     <code class="block whitespace-pre-wrap break-all text-sm">
                       <span class="text-slate-500">npx</span>
                       <span class="text-sky-300"> @capgo/cli@latest</span>
                       <span class="font-bold text-violet-300">&nbsp;{{ cliSubcommand }}</span>
-                      <span class="text-emerald-300">&nbsp;{{ apiKey ?? '[APIKEY]' }}</span>
+                      <span v-if="!usesBuilderSetupCommand" class="text-emerald-300">&nbsp;{{ apiKey }}</span>
                       <template v-for="(arg, index) in cliCommandArgs" :key="`${arg}-${index}`">
                         <span :class="index % 2 === 0 ? 'text-amber-300' : 'text-cyan-300'"> {{ arg }}</span>
                       </template>
                     </code>
                     <IconCopy class="absolute right-4 top-4 h-5 w-5 text-muted-blue-300 transition group-hover:text-white" />
+                  </button>
+                  <div v-else class="rounded-xl bg-slate-950 p-4 pr-14 ring-1 ring-white/10" role="status">
+                    <div class="flex min-h-6 items-center gap-3 text-sm text-slate-300">
+                      <Spinner size="w-5 h-5" />
+                      <span>{{ t('app-onboarding-command-apikey-loading') }}</span>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1391,26 +1392,30 @@ watch(appName, (value) => {
             </p>
           </div>
 
-          <div
-            class="group relative cursor-pointer rounded-2xl bg-slate-950 p-5 pr-14 ring-1 ring-white/10 transition hover:ring-white/20"
-            role="button"
-            tabindex="0"
+          <button
+            v-if="apiKey"
+            type="button"
+            class="d-btn group relative h-auto min-h-0 w-full justify-start whitespace-normal rounded-2xl border-0 bg-slate-950 p-5 pr-14 text-left font-normal ring-1 ring-white/10 transition hover:bg-slate-950 hover:ring-white/20"
             data-test="app-onboarding-command-copy"
             :aria-label="t('app-onboarding-command-copy')"
             @click="copyCliCommand"
-            @keydown.enter.prevent="copyCliCommand"
-            @keydown.space.prevent="copyCliCommand"
           >
             <code class="block whitespace-pre-wrap break-all text-sm">
               <span class="text-slate-500">npx</span>
               <span class="text-sky-300"> @capgo/cli@latest</span>
               <span class="font-bold text-violet-300">&nbsp;{{ cliSubcommand }}</span>
-              <span class="text-emerald-300">&nbsp;{{ apiKey ?? '[APIKEY]' }}</span>
+              <span v-if="!usesBuilderSetupCommand" class="text-emerald-300">&nbsp;{{ apiKey }}</span>
               <template v-for="(arg, index) in cliCommandArgs" :key="`${arg}-${index}`">
                 <span :class="index % 2 === 0 ? 'text-amber-300' : 'text-cyan-300'"> {{ arg }}</span>
               </template>
             </code>
             <IconCopy class="absolute right-4 top-4 h-5 w-5 text-muted-blue-300 transition group-hover:text-white" />
+          </button>
+          <div v-else class="rounded-2xl bg-slate-950 p-5 pr-14 ring-1 ring-white/10" role="status">
+            <div class="flex min-h-6 items-center gap-3 text-sm text-slate-300">
+              <Spinner size="w-5 h-5" />
+              <span>{{ t('app-onboarding-command-apikey-loading') }}</span>
+            </div>
           </div>
 
           <div class="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-sm text-slate-700 dark:border-white/15 dark:bg-slate-950/90 dark:text-slate-200">
@@ -1528,25 +1533,29 @@ watch(appName, (value) => {
               </div>
             </div>
 
-            <div
-              class="group relative cursor-pointer rounded-2xl bg-slate-950 p-5 pr-14 ring-1 ring-white/10 transition hover:ring-white/20"
-              role="button"
-              tabindex="0"
+            <button
+              v-if="apiKey"
+              type="button"
+              class="d-btn group relative h-auto min-h-0 w-full justify-start whitespace-normal rounded-2xl border-0 bg-slate-950 p-5 pr-14 text-left font-normal ring-1 ring-white/10 transition hover:bg-slate-950 hover:ring-white/20"
               :aria-label="t('app-onboarding-command-copy')"
               @click="copyCliCommand"
-              @keydown.enter.prevent="copyCliCommand"
-              @keydown.space.prevent="copyCliCommand"
             >
               <code class="block whitespace-pre-wrap break-all text-sm">
                 <span class="text-slate-500">npx</span>
                 <span class="text-sky-300"> @capgo/cli@latest</span>
                 <span class="font-bold text-violet-300">&nbsp;{{ cliSubcommand }}</span>
-                <span class="text-emerald-300">&nbsp;{{ apiKey ?? '[APIKEY]' }}</span>
+                <span v-if="!usesBuilderSetupCommand" class="text-emerald-300">&nbsp;{{ apiKey }}</span>
                 <template v-for="(arg, index) in cliCommandArgs" :key="`${arg}-${index}`">
                   <span :class="index % 2 === 0 ? 'text-amber-300' : 'text-cyan-300'"> {{ arg }}</span>
                 </template>
               </code>
               <IconCopy class="absolute right-4 top-4 h-5 w-5 text-muted-blue-300 transition group-hover:text-white" />
+            </button>
+            <div v-else class="rounded-2xl bg-slate-950 p-5 pr-14 ring-1 ring-white/10" role="status">
+              <div class="flex min-h-6 items-center gap-3 text-sm text-slate-300">
+                <Spinner size="w-5 h-5" />
+                <span>{{ t('app-onboarding-command-apikey-loading') }}</span>
+              </div>
             </div>
 
             <div class="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-sm text-slate-700 dark:border-white/15 dark:bg-slate-950/90 dark:text-slate-200">

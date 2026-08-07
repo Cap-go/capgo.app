@@ -317,7 +317,13 @@ export async function downloadUrl(provider: string, userId: string, appId: strin
     return res.url
   }
   catch (e) {
-    throw new Error(`downloadUrl error: ${e instanceof Error ? e.message : String(e)}`)
+    // A transient browser network drop surfaces as a `TypeError` whose wording
+    // differs per engine (Chrome "Failed to fetch", WebKit "Load failed",
+    // Firefox "NetworkError when attempting to fetch resource."). Rethrow it
+    // untouched so transient-network detection can still recognise the message.
+    if (e instanceof TypeError)
+      throw e
+    throw new Error(`downloadUrl error: ${e instanceof Error ? e.message : String(e)}`, { cause: e })
   }
 }
 

@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Database } from '~/types/supabase.types'
-import { FunctionsHttpError } from '@supabase/supabase-js'
+import { FunctionsFetchError, FunctionsHttpError } from '@supabase/supabase-js'
 import { getLocalConfig, useSupabase } from './supabase'
 
 export interface CapgoApiInvokeOptions {
@@ -11,6 +11,83 @@ export interface CapgoApiInvokeOptions {
   allowAnonymous?: boolean
   /** Prefer caller-provided client for session/auth context. */
   client?: SupabaseClient<Database>
+  /**
+   * Number of automatic retries for transient failures (network drops, edge
+   * timeouts, and 5xx/429 responses from a stressed backend). Defaults to 2 for
+   * idempotent requests (GET/HEAD) and 0 otherwise, so mutations are never
+   * silently replayed. Pass 0 to opt out entirely.
+   */
+  retries?: number
+}
+
+/** HTTP statuses that indicate a transient, retry-worthy backend failure. */
+const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504])
+
+export function isRetryableStatus(status: number): boolean {
+  return RETRYABLE_STATUS_CODES.has(status)
+}
+
+/** Only idempotent methods are auto-retried so a retry can't double-apply a mutation. */
+function isIdempotentMethod(method: string): boolean {
+  const normalized = method.toUpperCase()
+  return normalized === 'GET' || normalized === 'HEAD' || normalized === 'OPTIONS'
+}
+
+export function defaultRetriesForMethod(method: string): number {
+  return isIdempotentMethod(method) ? 2 : 0
+}
+
+/**
+ * True when an invoke error looks transient and safe to retry: a network-level
+ * failure (`Failed to fetch` / `Failed to send a request to the Edge Function`)
+ * or a retryable HTTP status. Non-2xx business errors (4xx) are not retried.
+ */
+export function isRetryableInvokeError(error: unknown): boolean {
+  if (error instanceof FunctionsHttpError && error.context instanceof Response)
+    return isRetryableStatus(error.context.status)
+  if (error instanceof FunctionsFetchError)
+    return true
+  // Raw browser fetch failures surface as TypeError ("Failed to fetch").
+  if (error instanceof TypeError)
+    return true
+  const message = (error as { message?: unknown } | null)?.message
+  return typeof message === 'string'
+    && (message.includes('Failed to fetch')
+      || message.includes('Failed to send a request to the Edge Function'))
+}
+
+/** Uniform fraction in [0, 1) from the crypto RNG (Math.random is flagged by static analysis). */
+function jitterFraction(): number {
+  const buffer = new Uint32Array(1)
+  globalThis.crypto.getRandomValues(buffer)
+  return buffer[0] / 2 ** 32
+}
+
+/** Exponential backoff with full jitter, capped, so retries don't stampede a recovering backend. */
+export function retryBackoffMs(attempt: number): number {
+  const exponential = Math.min(3000, 300 * 2 ** attempt)
+  return Math.round(exponential / 2 + jitterFraction() * (exponential / 2))
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+/**
+ * Run an invoke attempt, retrying transient failures up to `retries` times with
+ * backoff. The attempt must resolve to the `{ data, error }` shape rather than
+ * throwing, so both the Cloudflare fetch and Supabase invoke paths share it.
+ */
+async function invokeWithRetry<T>(
+  attempt: () => Promise<{ data: T | null, error: Error | null }>,
+  retries: number,
+): Promise<{ data: T | null, error: Error | null }> {
+  for (let i = 0; ; i++) {
+    const result = await attempt()
+    if (!result.error || i >= retries || !isRetryableInvokeError(result.error))
+      return result
+    await sleep(retryBackoffMs(i))
+  }
 }
 
 function normalizeApiHost(host: string | undefined): string {
@@ -95,14 +172,16 @@ export async function invokeCapgoApi<T = any>(
 
   if (!isCapgoManagedSupabaseHost(config.supaHost)) {
     const { allowAnonymous: _allowAnonymous, client: _client, ...invokeOptions } = options
-    return supabase.functions.invoke(path, {
+    const selfHostRetries = options.retries ?? defaultRetriesForMethod(invokeOptions.method ?? 'POST')
+    return invokeWithRetry<T>(() => supabase.functions.invoke(path, {
       method: invokeOptions.method,
       body: invokeOptions.body ?? undefined,
       headers: invokeOptions.headers,
-    })
+    }), selfHostRetries)
   }
 
   const method = (options.method ?? 'POST').toUpperCase()
+  const retries = options.retries ?? defaultRetriesForMethod(method)
   const headers: Record<string, string> = {
     ...(options.headers ?? {}),
   }
@@ -133,34 +212,36 @@ export async function invokeCapgoApi<T = any>(
   const apiHost = normalizeApiHost(import.meta.env.VITE_API_HOST as string)
   const url = `${apiHost}/${path.replace(/^\//, '')}`
 
-  try {
-    const response = await fetch(url, {
-      method,
-      headers,
-      body: method === 'GET' || method === 'HEAD' ? undefined : body,
-    })
+  return invokeWithRetry<T>(async () => {
+    try {
+      const response = await fetch(url, {
+        method,
+        headers,
+        body: method === 'GET' || method === 'HEAD' ? undefined : body,
+      })
 
-    if (!response.ok) {
+      if (!response.ok) {
+        return {
+          data: null,
+          error: new FunctionsHttpError(response),
+        }
+      }
+
+      const contentType = response.headers.get('content-type') ?? ''
+      const payload = contentType.includes('application/json')
+        ? await response.json().catch(() => null)
+        : await response.text().catch(() => null)
+
       return {
-        data: null,
-        error: new FunctionsHttpError(response),
+        data: payload as T,
+        error: null,
       }
     }
-
-    const contentType = response.headers.get('content-type') ?? ''
-    const payload = contentType.includes('application/json')
-      ? await response.json().catch(() => null)
-      : await response.text().catch(() => null)
-
-    return {
-      data: payload as T,
-      error: null,
+    catch (error) {
+      return {
+        data: null,
+        error: error instanceof Error ? error : new Error(String(error)),
+      }
     }
-  }
-  catch (error) {
-    return {
-      data: null,
-      error: error instanceof Error ? error : new Error(String(error)),
-    }
-  }
+  }, retries)
 }

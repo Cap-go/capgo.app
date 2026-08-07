@@ -422,6 +422,7 @@ npx @capgo/cli@latest bundle upload com.example.app --path ./dist --channel prod
 | **--no-delta** | <code>boolean</code> | Disable delta updates even if instant updates are enabled |
 | **--encrypted-checksum** | <code>string</code> | An encrypted checksum (signature). Used only when uploading an external bundle. |
 | **--auto-set-bundle** | <code>boolean</code> | Set the bundle version in Capacitor config |
+| **--auto-bump** | <code>string</code> | Auto-increment bundle version from the latest remote channel/app version. Level: major, minor (default), patch|fix, or metadata (prerelease) |
 | **--capacitor-config** | <code>string</code> | Capacitor config source to update (useful with dynamic monorepo configs) |
 | **--dry-upload** | <code>boolean</code> | Dry upload the bundle process: add the row in database without uploading files or updating channels (Used by Capgo for internal testing) |
 | **--package-json** | <code>string</code> | Paths to package.json files for monorepos (comma-separated) |
@@ -1514,8 +1515,8 @@ Checks credentials (expiry, passwords, profile pairing), project state (cap sync
 | **--json** | <code>boolean</code> | Output a machine-readable JSON report |
 | **--fail-on-warnings** | <code>boolean</code> | Exit non-zero when warnings are found (CI) |
 | **--ignore-fatal** | <code>boolean</code> | Diagnostic mode: report everything but always exit 0 |
-| **--skip** | <code>string</code> | Skip specific check(s) by id (repeatable or comma-separated) |
-| **--warn** | <code>string</code> | Downgrade specific check(s) to warning by id (repeatable or comma-separated) |
+| **--skip** | <code>string</code> | Skip specific check(s) by id (repeatable or comma-separated). Alias of --prescan-skip on build request. |
+| **--warn** | <code>string</code> | Downgrade specific check(s) to warning by id (repeatable or comma-separated). Alias of --prescan-warn on build request. |
 | **--verbose** | <code>boolean</code> | Enable verbose output with detailed logging |
 | **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
 | **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
