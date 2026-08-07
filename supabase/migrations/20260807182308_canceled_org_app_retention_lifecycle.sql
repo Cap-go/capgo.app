@@ -235,7 +235,9 @@ REVOKE ALL ON FUNCTION public.queue_canceled_org_retention_alerts(text, integer,
 GRANT ALL ON FUNCTION public.queue_canceled_org_retention_alerts(text, integer, integer) TO service_role;
 
 COMMENT ON FUNCTION public.queue_canceled_org_retention_alerts(text, integer, integer) IS
-  'Queues once-per-cancel-cycle Bento/tracking warnings for canceled orgs in [p_min_days, p_min_days+5) (bundles at 85, apps at 90). Skips claimed notifications and pending queue rows.';
+  'Queues once-per-cancel-cycle Bento/tracking warnings for canceled orgs '
+  'in [p_min_days, p_min_days+5) (bundles at 85, apps at 90). '
+  'Skips claimed notifications and pending queue rows.';
 
 -- Hard-delete apps for orgs past the 95-day unpaid window; archive to old_apps first.
 CREATE OR REPLACE FUNCTION public.delete_apps_for_long_canceled_orgs(
