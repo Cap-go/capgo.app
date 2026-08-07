@@ -90,6 +90,9 @@ SELECT ok(
   'cron_tasks points canceled_org_version_cleanup at cleanup_long_canceled_org_data'
 );
 
+-- Fixtures + pgmq access need the default postgres role (service_role has no pgmq schema grants).
+SELECT tests.clear_authentication();
+
 -- Dedicated fixtures (unique customer/app ids for parallel safety)
 -- long = 92d (past 90, before 95) for version soft-delete without app delete
 -- warn85 = 87d for bundle-deletion warning queue
