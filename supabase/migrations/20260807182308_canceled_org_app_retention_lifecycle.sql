@@ -42,15 +42,19 @@ ALTER TABLE public.old_apps ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Deny all access on old_apps" ON public.old_apps;
 CREATE POLICY "Deny all access on old_apps"
   ON public.old_apps
+  FOR ALL
+  TO anon, authenticated
   USING (false)
   WITH CHECK (false);
 
-GRANT SELECT, INSERT, REFERENCES, DELETE, TRIGGER, TRUNCATE, UPDATE ON TABLE public.old_apps TO anon;
-GRANT SELECT, INSERT, REFERENCES, DELETE, TRIGGER, TRUNCATE, UPDATE ON TABLE public.old_apps TO authenticated;
 GRANT ALL ON TABLE public.old_apps TO service_role;
-GRANT ALL ON SEQUENCE public.old_apps_id_seq TO anon;
-GRANT ALL ON SEQUENCE public.old_apps_id_seq TO authenticated;
+REVOKE ALL ON TABLE public.old_apps FROM PUBLIC;
+REVOKE ALL ON TABLE public.old_apps FROM anon;
+REVOKE ALL ON TABLE public.old_apps FROM authenticated;
 GRANT ALL ON SEQUENCE public.old_apps_id_seq TO service_role;
+REVOKE ALL ON SEQUENCE public.old_apps_id_seq FROM PUBLIC;
+REVOKE ALL ON SEQUENCE public.old_apps_id_seq FROM anon;
+REVOKE ALL ON SEQUENCE public.old_apps_id_seq FROM authenticated;
 
 -- Parameterized eligibility: canceled/deleted orgs past N days of end-of-access.
 CREATE OR REPLACE FUNCTION public.canceled_org_ids_past_grace(p_days integer)
@@ -97,7 +101,10 @@ GRANT ALL ON FUNCTION public.long_canceled_org_ids() TO service_role;
 COMMENT ON FUNCTION public.long_canceled_org_ids() IS
   'Org ids whose stripe_info is canceled/deleted and GREATEST(canceled_at, subscription_anchor_end, trial_at) is older than 90 days.';
 
--- Queue retention warning events (85d bundles / 90d apps). Dedup via notifications.
+-- Queue retention warning events (85d bundles / 90d apps).
+-- Window is [p_min_days, p_min_days+5) so warnings never fire in the same cron
+-- pass as the next destructive step (90d soft-delete / 95d app delete).
+-- Dedup: skip if already claimed in notifications OR still pending in the queue.
 CREATE OR REPLACE FUNCTION public.queue_canceled_org_retention_alerts(
   p_alert_type text,
   p_min_days integer,
@@ -110,9 +117,12 @@ SET search_path = ''
 AS $$
 DECLARE
   v_batch_size integer := GREATEST(1, COALESCE(p_batch_size, 500));
+  v_min_days integer := GREATEST(0, COALESCE(p_min_days, 0));
+  v_max_days integer := v_min_days + 5;
   v_event text;
   v_queued bigint := 0;
   org_record RECORD;
+  v_days_until integer;
 BEGIN
   IF p_alert_type = 'bundles_deletion_warning' THEN
     v_event := 'org:bundles_will_be_deleted';
@@ -140,7 +150,9 @@ BEGIN
     JOIN public.orgs AS o ON o.customer_id = si.customer_id
     WHERE si.status IN ('canceled', 'deleted')
       AND GREATEST(si.canceled_at, si.subscription_anchor_end, si.trial_at)
-        <= pg_catalog.now() - make_interval(days => GREATEST(0, COALESCE(p_min_days, 0)))
+        <= pg_catalog.now() - make_interval(days => v_min_days)
+      AND GREATEST(si.canceled_at, si.subscription_anchor_end, si.trial_at)
+        > pg_catalog.now() - make_interval(days => v_max_days)
       AND EXISTS (
         SELECT 1
         FROM public.apps AS a
@@ -161,9 +173,28 @@ BEGIN
             )
           )
       )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM pgmq.q_canceled_org_retention_alerts AS q
+        WHERE q.message -> 'payload' ->> 'org_id' = o.id::text
+          AND q.message -> 'payload' ->> 'alert_type' = p_alert_type
+      )
     ORDER BY o.id
     LIMIT v_batch_size
   LOOP
+    v_days_until := GREATEST(
+      0,
+      CEIL(
+        EXTRACT(
+          EPOCH FROM (
+            org_record.access_end
+            + make_interval(days => v_max_days)
+            - pg_catalog.now()
+          )
+        ) / 86400.0
+      )::integer
+    );
+
     PERFORM pgmq.send(
       'canceled_org_retention_alerts',
       jsonb_build_object(
@@ -175,7 +206,7 @@ BEGIN
           'management_email', org_record.management_email,
           'alert_type', p_alert_type,
           'access_end', org_record.access_end,
-          'days_until_deletion', 5,
+          'days_until_deletion', v_days_until,
           'app_ids', org_record.app_ids
         )
       )
@@ -185,9 +216,11 @@ BEGIN
 
   IF v_queued > 0 THEN
     RAISE NOTICE
-      'queue_canceled_org_retention_alerts: type=% queued=%',
+      'queue_canceled_org_retention_alerts: type=% queued=% window=[%,%)',
       p_alert_type,
-      v_queued;
+      v_queued,
+      v_min_days,
+      v_max_days;
   END IF;
 
   RETURN v_queued;
@@ -201,7 +234,7 @@ REVOKE ALL ON FUNCTION public.queue_canceled_org_retention_alerts(text, integer,
 GRANT ALL ON FUNCTION public.queue_canceled_org_retention_alerts(text, integer, integer) TO service_role;
 
 COMMENT ON FUNCTION public.queue_canceled_org_retention_alerts(text, integer, integer) IS
-  'Queues once-per-cancel-cycle Bento/tracking warnings for canceled orgs past p_min_days (bundles at 85, apps at 90). Skips orgs already claimed in notifications.';
+  'Queues once-per-cancel-cycle Bento/tracking warnings for canceled orgs in [p_min_days, p_min_days+5) (bundles at 85, apps at 90). Skips claimed notifications and pending queue rows.';
 
 -- Hard-delete apps for orgs past the 95-day unpaid window; archive to old_apps first.
 CREATE OR REPLACE FUNCTION public.delete_apps_for_long_canceled_orgs(

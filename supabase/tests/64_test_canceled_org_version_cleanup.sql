@@ -2,6 +2,55 @@ BEGIN;
 
 SELECT plan(38);
 
+-- pgmq schema is not granted to service_role; use postgres-owned helpers.
+CREATE OR REPLACE FUNCTION pg_temp.delete_canceled_org_retention_alerts(
+  p_org_ids text[]
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+  IF pg_catalog.to_regclass('pgmq.q_canceled_org_retention_alerts') IS NULL THEN
+    RETURN;
+  END IF;
+
+  EXECUTE
+    'DELETE FROM pgmq.q_canceled_org_retention_alerts
+     WHERE message -> ''payload'' ->> ''org_id'' = ANY($1)'
+    USING p_org_ids;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION pg_temp.count_canceled_org_retention_alerts(
+  p_alert_type text,
+  p_org_ids uuid[]
+)
+RETURNS integer
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_count integer := 0;
+BEGIN
+  IF pg_catalog.to_regclass('pgmq.q_canceled_org_retention_alerts') IS NULL THEN
+    RETURN 0;
+  END IF;
+
+  EXECUTE
+    'SELECT count(*)::integer
+     FROM pgmq.q_canceled_org_retention_alerts
+     WHERE ($1 IS NULL OR message -> ''payload'' ->> ''alert_type'' = $1)
+       AND (message -> ''payload'' ->> ''org_id'')::uuid = ANY($2)'
+    INTO v_count
+    USING p_alert_type, p_org_ids;
+
+  RETURN COALESCE(v_count, 0);
+END;
+$$;
+
 SELECT tests.authenticate_as_service_role();
 
 SELECT ok(
@@ -89,9 +138,6 @@ SELECT ok(
   ) = 1,
   'cron_tasks points canceled_org_version_cleanup at cleanup_long_canceled_org_data'
 );
-
--- Fixtures + pgmq access need the default postgres role (service_role has no pgmq schema grants).
-SELECT tests.clear_authentication();
 
 -- Dedicated fixtures (unique customer/app ids for parallel safety)
 -- long = 92d (past 90, before 95) for version soft-delete without app delete
@@ -420,16 +466,12 @@ SELECT is(
 );
 
 -- Full canceled-org cleanup (warnings + versions + app delete + audit logs)
-DELETE FROM pgmq.q_canceled_org_retention_alerts
-WHERE message -> 'payload' ->> 'org_id' IN (
-  SELECT long_canceled_org::text FROM canceled_cleanup_ctx
-  UNION ALL
-  SELECT warn85_org::text FROM canceled_cleanup_ctx
-  UNION ALL
-  SELECT ultra_canceled_org::text FROM canceled_cleanup_ctx
-  UNION ALL
-  SELECT recent_canceled_org::text FROM canceled_cleanup_ctx
-);
+SELECT pg_temp.delete_canceled_org_retention_alerts(ARRAY[
+  (SELECT long_canceled_org::text FROM canceled_cleanup_ctx),
+  (SELECT warn85_org::text FROM canceled_cleanup_ctx),
+  (SELECT ultra_canceled_org::text FROM canceled_cleanup_ctx),
+  (SELECT recent_canceled_org::text FROM canceled_cleanup_ctx)
+]);
 
 SELECT public.cleanup_long_canceled_org_data();
 
@@ -532,45 +574,54 @@ SELECT ok(
   'deleted 95-day app is archived into old_apps with creator email'
 );
 
-SELECT ok(
-  (
-    SELECT count(*)::int
-    FROM pgmq.q_canceled_org_retention_alerts
-    WHERE message -> 'payload' ->> 'alert_type' = 'bundles_deletion_warning'
-      AND (message -> 'payload' ->> 'org_id')::uuid IN (
-        SELECT warn85_org FROM canceled_cleanup_ctx
-        UNION ALL
-        SELECT long_canceled_org FROM canceled_cleanup_ctx
-        UNION ALL
-        SELECT ultra_canceled_org FROM canceled_cleanup_ctx
-      )
-  ) >= 1,
-  'queues 85-day bundle deletion warnings for eligible canceled orgs'
+SELECT is(
+  pg_temp.count_canceled_org_retention_alerts(
+    'bundles_deletion_warning',
+    ARRAY[
+      (SELECT warn85_org FROM canceled_cleanup_ctx),
+      (SELECT long_canceled_org FROM canceled_cleanup_ctx),
+      (SELECT ultra_canceled_org FROM canceled_cleanup_ctx)
+    ]
+  ),
+  1,
+  'queues exactly one 85-day bundle warning (warn85 only; long/ultra outside [85,90))'
 );
 
-SELECT ok(
-  (
-    SELECT count(*)::int
-    FROM pgmq.q_canceled_org_retention_alerts
-    WHERE message -> 'payload' ->> 'alert_type' = 'app_deletion_warning'
-      AND (message -> 'payload' ->> 'org_id')::uuid IN (
-        SELECT long_canceled_org FROM canceled_cleanup_ctx
-        UNION ALL
-        SELECT ultra_canceled_org FROM canceled_cleanup_ctx
-      )
-  ) >= 1,
-  'queues 90-day app deletion warnings for eligible canceled orgs'
+SELECT is(
+  pg_temp.count_canceled_org_retention_alerts(
+    'app_deletion_warning',
+    ARRAY[
+      (SELECT long_canceled_org FROM canceled_cleanup_ctx),
+      (SELECT ultra_canceled_org FROM canceled_cleanup_ctx)
+    ]
+  ),
+  1,
+  'queues exactly one 90-day app warning (long only; ultra outside [90,95))'
 );
 
-SELECT ok(
-  (
-    SELECT count(*)::int
-    FROM pgmq.q_canceled_org_retention_alerts
-    WHERE (message -> 'payload' ->> 'org_id')::uuid = (
-      SELECT recent_canceled_org FROM canceled_cleanup_ctx
-    )
-  ) = 0,
+SELECT is(
+  pg_temp.count_canceled_org_retention_alerts(
+    NULL,
+    ARRAY[(SELECT recent_canceled_org FROM canceled_cleanup_ctx)]
+  ),
+  0,
   'recently canceled orgs do not get retention deletion warnings'
+);
+
+SELECT public.cleanup_long_canceled_org_data();
+
+SELECT is(
+  pg_temp.count_canceled_org_retention_alerts(
+    NULL,
+    ARRAY[
+      (SELECT warn85_org FROM canceled_cleanup_ctx),
+      (SELECT long_canceled_org FROM canceled_cleanup_ctx),
+      (SELECT ultra_canceled_org FROM canceled_cleanup_ctx),
+      (SELECT recent_canceled_org FROM canceled_cleanup_ctx)
+    ]
+  ),
+  2,
+  'second cleanup does not re-queue retention warnings while messages are pending'
 );
 
 SELECT ok(

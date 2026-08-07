@@ -117,4 +117,46 @@ describe('canceled_org_retention_alerts', () => {
     expect(response.status).toBeGreaterThanOrEqual(400)
     expect(sendEventToTrackingMock).not.toHaveBeenCalled()
   })
+
+  it.each(['constructor', 'toString', 'valueOf'])('rejects prototype key %s as alert type', async (alertType) => {
+    const response = await postRetentionAlert({
+      org_id: 'org-retention-proto',
+      alert_type: alertType,
+    })
+
+    expect(response.status).toBeGreaterThanOrEqual(400)
+    expect(sendEventToTrackingMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects missing org_id', async () => {
+    const response = await postRetentionAlert({
+      alert_type: 'bundles_deletion_warning',
+    })
+
+    expect(response.status).toBeGreaterThanOrEqual(400)
+    expect(sendEventToTrackingMock).not.toHaveBeenCalled()
+  })
+
+  it('falls back access_end uniqId and NaN days_until_deletion', async () => {
+    const response = await postRetentionAlert({
+      org_id: 'org-retention-fallback',
+      alert_type: 'app_deletion_warning',
+      access_end: 'not-a-date',
+      days_until_deletion: 'nope',
+    })
+
+    expect(response.status).toBe(200)
+    expect(sendEventToTrackingMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        bento: expect.objectContaining({
+          uniqId: 'retention:app_deletion_warning:not-a-date',
+          data: expect.objectContaining({
+            days_until_deletion: 5,
+          }),
+        }),
+      }),
+      { background: false },
+    )
+  })
 })

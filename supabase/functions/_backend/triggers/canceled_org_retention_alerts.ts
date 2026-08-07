@@ -16,11 +16,7 @@ interface CanceledOrgRetentionAlertPayload {
   app_ids?: string[]
 }
 
-const ALERT_CONFIG: Record<RetentionAlertType, {
-  bentoEvent: string
-  trackingEvent: string
-  icon: string
-}> = {
+const ALERT_CONFIG = {
   bundles_deletion_warning: {
     bentoEvent: 'org:bundles_will_be_deleted',
     trackingEvent: 'Bundles will be deleted',
@@ -31,6 +27,14 @@ const ALERT_CONFIG: Record<RetentionAlertType, {
     trackingEvent: 'Apps will be deleted',
     icon: '🗑️',
   },
+} as const satisfies Record<RetentionAlertType, {
+  bentoEvent: string
+  trackingEvent: string
+  icon: string
+}>
+
+function isRetentionAlertType(value: unknown): value is RetentionAlertType {
+  return value === 'bundles_deletion_warning' || value === 'app_deletion_warning'
 }
 
 function accessEndDateKey(accessEnd: string | undefined): string {
@@ -49,14 +53,13 @@ app.post('/', middlewareAPISecret, async (c) => {
   const orgId = payload.org_id
   const alertType = payload.alert_type
 
-  if (!orgId || !alertType)
+  if (!orgId || !isRetentionAlertType(alertType))
     throw simpleError('invalid_payload', 'Missing org_id or alert_type in retention alert payload', { payload })
 
   const config = ALERT_CONFIG[alertType]
-  if (!config)
-    throw simpleError('unsupported_alert_type', 'Retention alert type not supported', { alertType, payload })
 
-  const daysUntilDeletion = Number(payload.days_until_deletion ?? 5)
+  const parsedDays = Number(payload.days_until_deletion ?? 5)
+  const daysUntilDeletion = Number.isFinite(parsedDays) ? parsedDays : 5
   const appIds = Array.isArray(payload.app_ids) ? payload.app_ids : []
   const accessEndKey = accessEndDateKey(payload.access_end)
   const uniqId = `retention:${alertType}:${accessEndKey}`
@@ -77,7 +80,9 @@ app.post('/', middlewareAPISecret, async (c) => {
     message: 'canceled org retention alert',
     eventName: config.bentoEvent,
     orgId,
-    metadata,
+    alertType,
+    daysUntilDeletion,
+    appCount: appIds.length,
   })
 
   await sendEventToTracking(c, {
