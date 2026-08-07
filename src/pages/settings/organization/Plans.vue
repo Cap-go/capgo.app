@@ -293,6 +293,29 @@ async function loadCreditPricing(orgId?: string) {
   creditUnitPrices.value = await getCreditUnitPricing(orgId)
 }
 
+// When no organization can be resolved (e.g. an `?oid=` pointing at an org the
+// user isn't a member of), bail out gracefully instead of throwing: surface the
+// same dialog the no-permission path uses and route back to /apps. Guarded so
+// the watchEffect, the currentOrganization watcher and loadData don't stack
+// multiple dialogs or redirects for the same missing org.
+let redirectingNoOrg = false
+async function redirectWhenNoOrg() {
+  if (redirectingNoOrg)
+    return
+  redirectingNoOrg = true
+  dialogStore.openDialog({
+    title: t('cannot-view-plans'),
+    description: `${t('plans-super-only')}`,
+    buttons: [
+      {
+        text: t('ok'),
+      },
+    ],
+  })
+  await dialogStore.onDialogDismiss()
+  router.push('/apps')
+}
+
 async function loadData(initial: boolean) {
   if (!initialLoad.value && !initial)
     return
@@ -301,8 +324,13 @@ async function loadData(initial: boolean) {
 
   const orgToLoad = currentOrganization.value
   const orgId = orgToLoad?.gid
-  if (!orgId)
-    throw new Error('Cannot get current org id')
+  if (!orgId) {
+    // No current org even after the store finished loading. Throwing here used to
+    // escape as an unhandled rejection on the billing page and leave the user on a
+    // broken render, so bail out gracefully and give them a way off the page.
+    await redirectWhenNoOrg()
+    return
+  }
 
   await Promise.all([
     loadCreditPricing(orgId),
@@ -408,7 +436,11 @@ watchEffect(async () => {
         }
       }
 
-      loadData(true)
+      loadData(true).catch((error) => {
+        // Never let a load failure escape as an unhandled rejection on the
+        // billing page — the graceful no-org path is handled inside loadData.
+        console.error('Failed to load plans data', error)
+      })
       const orgId = currentOrganization.value?.gid
       if (orgId) {
         sendEvent({
