@@ -29,7 +29,7 @@ const activeTab = computed(() => {
 })
 
 function handleTab(key: string) {
-  router.push(key)
+  router.push({ path: key, query: route.query })
 }
 </script>
 

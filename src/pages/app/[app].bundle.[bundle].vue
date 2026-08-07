@@ -428,7 +428,7 @@ async function downloadNow() {
     })
     await dialogStore.onDialogDismiss()
   }
-  openVersion(version.value)
+  await openVersion(version.value)
 }
 
 async function openDownload() {

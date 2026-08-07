@@ -10,7 +10,7 @@ describe('payment required copy', () => {
     expect(resolveBillingPaidAt(null)).toBe(null)
   })
 
-  it.concurrent('keeps existing copy for a previously paid web organization', () => {
+  it.concurrent('keeps subscription copy for a previously paid web organization', () => {
     expect(shouldShowExpiredTrialCopy(false, '2026-01-15T12:00:00.000Z')).toBe(false)
   })
 

@@ -67,10 +67,18 @@ const { t } = useI18n()
                 <ol class="inline-flex items-center space-x-1">
                   <li v-for="(breadcrumb, i) in displayStore.pathTitle" :key="i" class="flex items-center">
                     <span v-if="i > 0" class="mx-1" aria-hidden="true"> / </span>
+                    <!-- Last crumb points at the current route, so render it as plain text rather than a dead link -->
+                    <span
+                      v-if="i === displayStore.pathTitle.length - 1"
+                      class="flex items-center h-16 px-2 font-bold text-slate-600 dark:text-slate-100"
+                      aria-current="page"
+                    >
+                      {{ breadcrumb.translate === false ? breadcrumb.name : t(breadcrumb.name) }}
+                    </span>
                     <router-link
+                      v-else
                       :to="breadcrumb.path"
-                      class="px-1 rounded-sm hover:underline focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 focus:outline-none"
-                      :class="i === displayStore.pathTitle.length - 1 ? 'font-bold text-slate-600 dark:text-slate-100' : ''"
+                      class="flex items-center h-16 px-2 rounded-sm underline underline-offset-2 decoration-slate-400/60 hover:decoration-slate-600 hover:text-slate-800 dark:decoration-slate-500 dark:hover:decoration-slate-300 dark:hover:text-white focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 focus:outline-none"
                     >
                       {{ breadcrumb.translate === false ? breadcrumb.name : t(breadcrumb.name) }}
                     </router-link>

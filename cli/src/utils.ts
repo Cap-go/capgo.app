@@ -86,6 +86,25 @@ export function deltaManifestTooLargeMessage(fileCount: number): string {
   ].join('\n')
 }
 
+/**
+ * Stable `name` for the error thrown when the standard (non-TUS) upload hits its
+ * wall-clock timeout. Kept typed and constant so error tracking groups every
+ * occurrence into a single issue instead of one duplicate per CLI version.
+ */
+export const UPLOAD_TIMEOUT_ERROR_NAME = 'BundleUploadTimeoutError'
+
+/** User-facing error when the standard HTTP PUT upload exceeds its wall-clock timeout. */
+export function uploadTimeoutMessage(timeoutMs: number): string {
+  const seconds = Math.round(timeoutMs / 1000)
+  return [
+    `Bundle upload timed out after ${seconds}s.`,
+    `The standard upload has to finish the whole transfer within this window and does not retry, so a large bundle or a slow connection can trip it.`,
+    `What you can do:`,
+    `1. Retry with the resumable upload, which uploads in chunks and retries automatically: npx @capgo/cli@latest bundle upload --tus`,
+    `2. Or raise the limit for the standard upload: npx @capgo/cli@latest bundle upload --timeout <milliseconds>`,
+  ].join('\n')
+}
+
 export const PACKNAME = 'package.json'
 
 export type ArrayElement<ArrayType extends readonly unknown[]>
@@ -275,14 +294,18 @@ export function findRoot(dir: string) {
 // do not expose this function this prevent missuses
 function readPackageJson(f: string = findRoot(cwd()), file: string | undefined = undefined) {
   const fileSplit = file?.split(',')[0]
-  if (fileSplit) {
-    if (!existsSync(fileSplit)) {
-      const message = `Package.json at ${fileSplit} does not exist`
-      log.error(message)
-      throw new Error(message)
-    }
+  const packageJsonPath = fileSplit ?? join(f, PACKNAME)
+  if (!existsSync(packageJsonPath)) {
+    // When the user passed an explicit path we keep it simple; otherwise the
+    // default path means the command is running outside a project directory,
+    // so point them at how to fix it (mirrors getAllPackagesDependencies).
+    const message = fileSplit
+      ? `Package.json at ${packageJsonPath} does not exist`
+      : `No package.json found at ${packageJsonPath}. Run this command from your project root (the folder that contains package.json), or pass --package-json <path> to point at it (for example in a monorepo).`
+    log.error(message)
+    throw new Error(message)
   }
-  const packageJson = readFileSync(fileSplit ?? join(f, PACKNAME))
+  const packageJson = readFileSync(packageJsonPath)
   return JSON.parse(packageJson as any)
 }
 
@@ -1607,6 +1630,22 @@ export async function zipFileWindows(filePath: string): Promise<Buffer> {
   return zip.toBuffer()
 }
 
+export function appAddHintMessage(appId: string): string {
+  const pm = getPMAndCommand()
+  return `App ${appId} does not exist, run first \`${pm.runner} @capgo/cli app add ${appId}\` to create it`
+}
+
+// The files backend rejects uploads for unknown apps with a `404 app_not_found` body
+// (see supabase/functions/_backend/files/files.ts). Detect it from either a tus
+// DetailedError (which exposes the raw response body) or a generic error message so we
+// can surface the actionable `app add` hint instead of a raw tus error string.
+export function isAppNotFoundError(error: unknown): boolean {
+  const detailed = error as { originalResponse?: { getBody?: () => string } }
+  const responseBody = detailed?.originalResponse?.getBody?.()
+  const message = error instanceof Error ? error.message : String(error ?? '')
+  return `${responseBody ?? ''} ${message}`.includes('app_not_found')
+}
+
 export async function uploadTUS(apikey: string, data: Buffer, orgId: string, appId: string, name: string, spinner: UploadSpinner, localConfig: CapgoConfig, chunkSize: number): Promise<boolean> {
   return new Promise((resolve, reject) => {
     sendEvent(apikey, {
@@ -1639,6 +1678,12 @@ export async function uploadTUS(apikey: string, data: Buffer, orgId: string, app
       // Callback for errors which cannot be fixed using retries
       onError(error) {
         log.error(`Error uploading bundle: ${error.message}`)
+        // Turn the backend's `app_not_found` rejection into the actionable `app add`
+        // hint instead of leaking a raw tus error string to the user.
+        if (isAppNotFoundError(error)) {
+          reject(new Error(appAddHintMessage(appId)))
+          return
+        }
         if (error instanceof tus.DetailedError) {
           const body = error.originalResponse?.getBody()
           const jsonBody = JSON.parse(body || '{"error": "unknown error"}')
@@ -1940,10 +1985,15 @@ export async function resolveUserIdFromApiKey(supabase: SupabaseClient<Database>
 
   const userId = (dataUser || '').toString()
 
-  if (!userId || userIdError) {
+  if (userIdError) {
     if (!silent)
-      log.error(`Invalid API key or insufficient permissions.`)
-    throw new Error('Invalid API key or insufficient permissions.')
+      log.error(userIdError.message)
+    throw userIdError
+  }
+  if (!userId) {
+    if (!silent)
+      log.error(`Capgo authentication failed: invalid Capgo API key or insufficient Capgo permissions.`)
+    throw new Error('Capgo authentication failed: invalid Capgo API key or insufficient Capgo permissions.')
   }
   return userId
 }
@@ -2016,8 +2066,9 @@ export async function getOrganizationId(supabase: SupabaseClient<Database>, appI
     .single()
 
   if (!data || error) {
-    log.error(`Cannot get organization id for app id ${appId}`)
-    formatError(error)
+    // Surface the underlying PostgREST cause instead of discarding it — a bare
+    // "Cannot get organization id" leaves both users and triage with no signal.
+    log.error(`Cannot get organization id for app id ${appId}: ${formatError(error)}`)
     throw new Error(`Cannot get organization id for app id ${appId}`)
   }
   return data.owner_org
@@ -2041,6 +2092,13 @@ export function getPMAndCommand() {
   pmFetched = true
   pmRunner = findPackageManagerRunner(dir)
   return { pm, command: pmCommand, installCommand: `${pm} ${pmCommand}`, runner: pmRunner }
+}
+
+export function setPMAndCommand(next: { pm: PackageManagerType, command: InstallCommand, runner: PackageManagerRunner }): void {
+  pm = next.pm
+  pmCommand = next.command
+  pmRunner = next.runner
+  pmFetched = true
 }
 
 export function getNativeProjectResetAdvice(platformRunner: string, nativePlatform: 'ios' | 'android') {
@@ -2187,6 +2245,27 @@ async function calculatePlatformChecksums(dependencyFolderPath: string): Promise
   return { ios_checksum, android_checksum }
 }
 
+// Collect every `node_modules` directory from `startDir` up to the filesystem
+// root. This mirrors the parent-directory walk `getAllPackagesDependencies`
+// uses to resolve versions, so that the existence check validates the same
+// hoisted locations the enumeration reads from. Without this, dependencies
+// hoisted to a monorepo/workspace root read as missing.
+function getHoistedNodeModulesPaths(startDir: string): string[] {
+  const paths: string[] = []
+  let currentDir = startDir
+  const root = path.parse(currentDir).root
+  while (true) {
+    paths.push(join(currentDir, 'node_modules'))
+    if (currentDir === root)
+      break
+    const parentDir = dirname(currentDir)
+    if (parentDir === currentDir)
+      break
+    currentDir = parentDir
+  }
+  return paths
+}
+
 export async function getLocalDependencies(packageJsonPath: string | undefined, nodeModulesString: string | undefined) {
   const nodeModules = nodeModulesString
     ? nodeModulesString
@@ -2220,7 +2299,7 @@ export async function getLocalDependencies(packageJsonPath: string | undefined, 
   }
 
   const nodeModulesPaths = nodeModules.length === 0
-    ? [join(cwd(), 'node_modules')]
+    ? getHoistedNodeModulesPaths(cwd())
     : nodeModules
 
   const anyValidPath = nodeModulesPaths.some(path => existsSync(path))
@@ -2303,7 +2382,7 @@ export async function getLocalDependencies(packageJsonPath: string | undefined, 
         ios_checksum,
         android_checksum,
       }
-    })).catch(() => [])
+    }))
 
   if (anyInvalid || dependenciesObject.some(a => a.native === undefined)) {
     log.error('Missing dependencies or invalid dependencies')

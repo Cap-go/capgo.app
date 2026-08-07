@@ -178,7 +178,6 @@ npx @capgo/cli@latest build prescan
 
 Scan your project and saved credentials for problems that would fail a cloud build — before uploading anything.
 Checks credentials (expiry, passwords, profile pairing), project state (cap sync, node_modules layout), and platform config. Runs automatically inside `build request`; this command runs it standalone (e.g. in CI).
-See [Prescan checks](/docs/cli/prescan-checks/) for the full check catalog and how to `--skip` / `--warn` individual rules.
 
 **Options:**
 
@@ -192,8 +191,8 @@ See [Prescan checks](/docs/cli/prescan-checks/) for the full check catalog and h
 | **--json** | <code>boolean</code> | Output a machine-readable JSON report |
 | **--fail-on-warnings** | <code>boolean</code> | Exit non-zero when warnings are found (CI) |
 | **--ignore-fatal** | <code>boolean</code> | Diagnostic mode: report everything but always exit 0 |
-| **--skip** | <code>string</code> | Skip specific check(s) by id (repeatable or comma-separated) |
-| **--warn** | <code>string</code> | Downgrade specific check(s) to warning by id (repeatable or comma-separated) |
+| **--skip** | <code>string</code> | Skip specific check(s) by id (repeatable or comma-separated). Alias of --prescan-skip on build request. |
+| **--warn** | <code>string</code> | Downgrade specific check(s) to warning by id (repeatable or comma-separated). Alias of --prescan-warn on build request. |
 | **--verbose** | <code>boolean</code> | Enable verbose output with detailed logging |
 | **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
 | **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |

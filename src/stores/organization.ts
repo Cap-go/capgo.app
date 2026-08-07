@@ -465,7 +465,17 @@ export const useOrganizationStore = defineStore('organization', () => {
   }
 
   const setCurrentOrganization = (id: string) => {
-    currentOrganization.value = organizations.value.find(org => org.gid === id)
+    const organization = organizations.value.find(org => org.gid === id)
+    if (!organization) {
+      // The id isn't in the user's org list (e.g. an `?oid=` pointing at an org
+      // they aren't a member of). Blindly assigning the `find()` result would
+      // silently clear currentOrganization to undefined, which downstream pages
+      // (notably the plans page) then treat as a hard error. Log loudly and keep
+      // the current organization untouched instead of clobbering it.
+      console.error(`setCurrentOrganization: no organization with id "${id}" in the user's org list; keeping the current organization`)
+      return
+    }
+    currentOrganization.value = organization
   }
 
   const setCurrentOrganizationToMain = () => {
