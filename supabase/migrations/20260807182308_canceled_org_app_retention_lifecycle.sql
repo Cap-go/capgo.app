@@ -154,10 +154,21 @@ BEGIN
         <= pg_catalog.now() - make_interval(days => v_min_days)
       AND GREATEST(si.canceled_at, si.subscription_anchor_end, si.trial_at)
         > pg_catalog.now() - make_interval(days => v_max_days)
-      AND EXISTS (
-        SELECT 1
-        FROM public.apps AS a
-        WHERE a.owner_org = o.id
+      AND (
+        CASE
+          WHEN p_alert_type = 'bundles_deletion_warning' THEN EXISTS (
+            SELECT 1
+            FROM public.app_versions AS av
+            WHERE av.owner_org = o.id
+              AND av.deleted = false
+              AND av.name NOT IN ('builtin', 'unknown')
+          )
+          ELSE EXISTS (
+            SELECT 1
+            FROM public.apps AS a
+            WHERE a.owner_org = o.id
+          )
+        END
       )
       AND NOT EXISTS (
         SELECT 1
@@ -170,7 +181,7 @@ BEGIN
             || ':'
             || to_char(
               GREATEST(si.canceled_at, si.subscription_anchor_end, si.trial_at) AT TIME ZONE 'UTC',
-              'YYYY-MM-DD'
+              'YYYY-MM-DD"T"HH24:MI:SS"Z"'
             )
           )
       )
@@ -236,8 +247,8 @@ GRANT ALL ON FUNCTION public.queue_canceled_org_retention_alerts(text, integer, 
 
 COMMENT ON FUNCTION public.queue_canceled_org_retention_alerts(text, integer, integer) IS
   'Queues once-per-cancel-cycle Bento/tracking warnings for canceled orgs '
-  'in [p_min_days, p_min_days+5) (bundles at 85, apps at 90). '
-  'Skips claimed notifications and pending queue rows.';
+  'in [p_min_days, p_min_days+5). Bundles require a deletable app_versions row; '
+  'apps require an apps row. Dedup uniq_id uses access_end UTC timestamp.';
 
 -- Hard-delete apps for orgs past the 95-day unpaid window; archive to old_apps first.
 CREATE OR REPLACE FUNCTION public.delete_apps_for_long_canceled_orgs(

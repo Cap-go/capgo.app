@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(38);
+SELECT plan(39);
 
 -- pgmq schema is not granted to service_role; use postgres-owned helpers.
 CREATE OR REPLACE FUNCTION pg_temp.delete_canceled_org_retention_alerts(
@@ -622,6 +622,52 @@ SELECT is(
   ),
   2,
   'second cleanup does not re-queue pending retention warnings'
+);
+
+-- Drain pending messages, claim via notifications, assert claim-based dedup.
+SELECT pg_temp.delete_canceled_org_retention_alerts(ARRAY[
+  (SELECT warn85_org::text FROM canceled_cleanup_ctx),
+  (SELECT long_canceled_org::text FROM canceled_cleanup_ctx)
+]);
+
+INSERT INTO public.notifications (owner_org, event, uniq_id)
+SELECT
+  warn85_org,
+  'org:bundles_will_be_deleted',
+  'retention:bundles_deletion_warning:'
+    || to_char(
+      (SELECT GREATEST(si.canceled_at, si.subscription_anchor_end, si.trial_at)
+       FROM public.stripe_info AS si
+       WHERE si.customer_id = warn85_customer) AT TIME ZONE 'UTC',
+      'YYYY-MM-DD"T"HH24:MI:SS"Z"'
+    )
+FROM canceled_cleanup_ctx;
+
+INSERT INTO public.notifications (owner_org, event, uniq_id)
+SELECT
+  long_canceled_org,
+  'org:apps_will_be_deleted',
+  'retention:app_deletion_warning:'
+    || to_char(
+      (SELECT GREATEST(si.canceled_at, si.subscription_anchor_end, si.trial_at)
+       FROM public.stripe_info AS si
+       WHERE si.customer_id = long_customer) AT TIME ZONE 'UTC',
+      'YYYY-MM-DD"T"HH24:MI:SS"Z"'
+    )
+FROM canceled_cleanup_ctx;
+
+SELECT public.cleanup_long_canceled_org_data();
+
+SELECT is(
+  pg_temp.count_canceled_org_retention_alerts(
+    NULL,
+    ARRAY[
+      (SELECT warn85_org FROM canceled_cleanup_ctx),
+      (SELECT long_canceled_org FROM canceled_cleanup_ctx)
+    ]
+  ),
+  0,
+  'notifications claim prevents re-queue after pending messages are drained'
 );
 
 SELECT ok(

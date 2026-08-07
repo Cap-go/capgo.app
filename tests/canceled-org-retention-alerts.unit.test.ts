@@ -75,7 +75,7 @@ describe('canceled_org_retention_alerts', () => {
           event: 'org:bundles_will_be_deleted',
           preferenceKey: 'usage_limit',
           audience: 'billing',
-          uniqId: 'retention:bundles_deletion_warning:2026-05-01',
+          uniqId: 'retention:bundles_deletion_warning:2026-05-01T00:00:00Z',
           data: expect.objectContaining({
             org_id: ORG_BUNDLES,
             app_ids: ['com.example.app'],
@@ -104,7 +104,7 @@ describe('canceled_org_retention_alerts', () => {
         bento: expect.objectContaining({
           once: true,
           event: 'org:apps_will_be_deleted',
-          uniqId: 'retention:app_deletion_warning:2026-04-20',
+          uniqId: 'retention:app_deletion_warning:2026-04-20T12:30:00Z',
           data: expect.objectContaining({
             app_count: 2,
           }),
@@ -174,10 +174,29 @@ describe('canceled_org_retention_alerts', () => {
       expect.anything(),
       expect.objectContaining({
         bento: expect.objectContaining({
-          uniqId: 'retention:app_deletion_warning:not-a-date',
+          uniqId: 'retention:app_deletion_warning:invalid',
           data: expect.objectContaining({
             days_until_deletion: 5,
           }),
+        }),
+      }),
+      { background: false, strict: true },
+    )
+  })
+
+  it('rejects non-string access_end without 500', async () => {
+    const response = await postRetentionAlert({
+      org_id: ORG_FALLBACK,
+      alert_type: 'bundles_deletion_warning',
+      access_end: { nested: true },
+    })
+
+    expect(response.status).toBe(200)
+    expect(sendEventToTrackingMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        bento: expect.objectContaining({
+          uniqId: 'retention:bundles_deletion_warning:unknown',
         }),
       }),
       { background: false, strict: true },

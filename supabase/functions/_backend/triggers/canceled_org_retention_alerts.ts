@@ -39,21 +39,25 @@ function isRetentionAlertType(value: unknown): value is RetentionAlertType {
   return value === 'bundles_deletion_warning' || value === 'app_deletion_warning'
 }
 
-function accessEndDateKey(accessEnd: string | undefined): string {
-  if (!accessEnd)
+/** Cycle key matching SQL to_char(access_end AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'). */
+function accessEndCycleKey(accessEnd: unknown): string {
+  if (typeof accessEnd !== 'string' || !accessEnd.trim())
     return 'unknown'
   const parsed = new Date(accessEnd)
   if (Number.isNaN(parsed.getTime()))
-    return accessEnd.slice(0, 10)
-  return parsed.toISOString().slice(0, 10)
+    return 'invalid'
+  return parsed.toISOString().replace(/\.\d{3}Z$/, 'Z')
 }
 
 export const app = new Hono<MiddlewareKeyVariables>()
 
 app.post('/', middlewareAPISecret, async (c) => {
   const payload = await parseBody<CanceledOrgRetentionAlertPayload | null>(c)
-  if (!payload || typeof payload !== 'object')
-    throw simpleError('invalid_payload', 'Missing retention alert payload', { payload })
+  if (!payload || typeof payload !== 'object') {
+    throw simpleError('invalid_payload', 'Missing retention alert payload', {
+      hasPayload: false,
+    })
+  }
 
   const orgId = typeof payload.org_id === 'string' ? payload.org_id.trim() : ''
   const alertType = payload.alert_type
@@ -62,7 +66,11 @@ app.post('/', middlewareAPISecret, async (c) => {
     throw simpleError(
       'invalid_payload',
       'Missing or invalid org_id/alert_type in retention alert payload',
-      { payload },
+      {
+        hasOrgId: orgId.length > 0,
+        orgIdValid: orgId.length > 0 && ORG_ID_UUID_RE.test(orgId),
+        alertType: typeof alertType === 'string' ? alertType : typeof alertType,
+      },
     )
   }
 
@@ -71,7 +79,7 @@ app.post('/', middlewareAPISecret, async (c) => {
   const parsedDays = Number(payload.days_until_deletion ?? 5)
   const daysUntilDeletion = Number.isFinite(parsedDays) ? parsedDays : 5
   const appIds = Array.isArray(payload.app_ids) ? payload.app_ids : []
-  const accessEndKey = accessEndDateKey(payload.access_end)
+  const accessEndKey = accessEndCycleKey(payload.access_end)
   const uniqId = `retention:${alertType}:${accessEndKey}`
 
   const metadata = {
@@ -79,7 +87,7 @@ app.post('/', middlewareAPISecret, async (c) => {
     org_name: payload.org_name ?? '',
     management_email: payload.management_email ?? '',
     alert_type: alertType,
-    access_end: payload.access_end ?? '',
+    access_end: typeof payload.access_end === 'string' ? payload.access_end : '',
     days_until_deletion: daysUntilDeletion,
     app_ids: appIds,
     app_count: appIds.length,
