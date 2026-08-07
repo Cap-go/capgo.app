@@ -100,6 +100,7 @@ const isOpen = ref(false)
 const triggerRef = ref<HTMLButtonElement | null>(null)
 const popoverRef = ref<HTMLDialogElement | null>(null)
 const returnFocusTarget = ref<HTMLElement | null>(null)
+const positionAnchor = ref<HTMLElement | null>(null)
 const draftMode = ref<DateRangePreset>(props.mode)
 const pickerRange = ref<Date[] | null>(null)
 const popoverStyle = ref<Record<string, string>>({})
@@ -149,10 +150,10 @@ const effectiveMaxDate = computed(() => {
 })
 
 function updatePopoverPosition() {
-  const trigger = triggerRef.value
-  if (!trigger)
+  const anchor = positionAnchor.value?.isConnected ? positionAnchor.value : triggerRef.value
+  if (!anchor)
     return
-  const rect = trigger.getBoundingClientRect()
+  const rect = anchor.getBoundingClientRect()
   popoverStyle.value = {
     top: `${Math.round(rect.bottom + 8)}px`,
     right: `${Math.round(window.innerWidth - rect.right)}px`,
@@ -165,11 +166,13 @@ function closePicker() {
   isOpen.value = false
   const target = returnFocusTarget.value?.isConnected ? returnFocusTarget.value : triggerRef.value
   returnFocusTarget.value = null
+  positionAnchor.value = null
   nextTick(() => target?.focus())
 }
 
 async function openPicker(invoker?: HTMLElement) {
   returnFocusTarget.value = invoker ?? triggerRef.value
+  positionAnchor.value = invoker ?? triggerRef.value
   syncDraftFromProps()
   updatePopoverPosition()
   isOpen.value = true
@@ -182,7 +185,7 @@ defineExpose({ openPicker })
 
 onClickOutside(popoverRef, (event) => {
   const target = event.target as Node | null
-  if (target && triggerRef.value?.contains(target))
+  if (target && (triggerRef.value?.contains(target) || positionAnchor.value?.contains(target)))
     return
   closePicker()
 })

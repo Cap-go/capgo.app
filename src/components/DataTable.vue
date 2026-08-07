@@ -190,6 +190,10 @@ onUnmounted(() => {
   window.removeEventListener('keydown', onFilterModalKeydown)
 })
 
+const debouncedReload = useDebounceFn(() => {
+  emit('reload')
+}, 1000)
+
 function clearAllFilters() {
   // Emit a new filters object so DataTable's filters watcher performs one reload.
   // Extra filters are cleared without scheduling a second reload.
@@ -207,6 +211,8 @@ function clearViewFilters() {
   emit('update:search', '')
   emit('update:currentPage', 1)
   clearAllFilters()
+  if (props.autoReload !== false)
+    debouncedReload()
 }
 
 function sortClick(key: number) {
@@ -327,10 +333,6 @@ onUnmounted(() => {
 onMounted(() => {
   loadFromUrlParams()
 })
-
-const debouncedReload = useDebounceFn(() => {
-  emit('reload')
-}, 1000)
 
 const debouncedUpdateUrlParams = useDebounceFn(() => {
   updateUrlParams()

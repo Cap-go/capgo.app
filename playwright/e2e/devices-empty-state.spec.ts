@@ -20,6 +20,15 @@ async function mockEmptyDevices(page: Page, requests: Record<string, unknown>[])
   })
 }
 
+async function expectRequestCountToRemain(requests: Record<string, unknown>[], expected: number) {
+  const stableAfter = Date.now() + 1100
+  await expect.poll(() => {
+    if (requests.length !== expected)
+      return `unexpected:${requests.length}`
+    return Date.now() >= stableAfter ? 'stable' : 'waiting'
+  }, { timeout: 2000, intervals: [100] }).toBe('stable')
+}
+
 test.describe('Devices empty state', () => {
   test.beforeEach(async ({ page }) => {
     await page.login('test@capgo.app', 'testtest')
@@ -52,8 +61,7 @@ test.describe('Devices empty state', () => {
     const requestCountBeforeRefresh = requests.length
     await emptyState.getByRole('button', { name: 'Refresh devices' }).click()
     await expect.poll(() => requests.length).toBe(requestCountBeforeRefresh + 2)
-    await page.waitForTimeout(1200)
-    expect(requests).toHaveLength(requestCountBeforeRefresh + 2)
+    await expectRequestCountToRemain(requests, requestCountBeforeRefresh + 2)
     await expect.poll(() => requests.at(-1)).toMatchObject({
       appId: APP_ID,
       search: 'missing-device',
@@ -85,8 +93,7 @@ test.describe('Devices empty state', () => {
     await expect(search).toHaveValue('')
     await expect(emptyState.getByText('Search or filters are hiding it.')).toHaveCount(0)
     await expect.poll(() => requests.length).toBe(requestCountBeforeClear + 2)
-    await page.waitForTimeout(1200)
-    expect(requests).toHaveLength(requestCountBeforeClear + 2)
+    await expectRequestCountToRemain(requests, requestCountBeforeClear + 2)
     await expect.poll(() => requests.at(-1)).toMatchObject({
       appId: APP_ID,
       customIdMode: false,
