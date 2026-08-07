@@ -15,7 +15,11 @@ import IconApiKey from '~icons/mdi/shield-key'
 import IconAppStore from '~icons/simple-icons/appstore'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
-import { allowOnboardingDashboardExploration, getOnboardingResumeAppId } from '~/utils/onboardingRedirect'
+import {
+  allowOnboardingDashboardExploration,
+  getOnboardingResumeAppId,
+  shouldConfirmOnboardingDashboardExploration,
+} from '~/utils/onboardingRedirect'
 import DropdownProfile from '../components/dashboard/DropdownProfile.vue'
 
 const props = defineProps <{
@@ -63,8 +67,11 @@ async function openTab(tab: Tab) {
   const onboardingResumeAppId = isPendingOnboardingResume
     ? resumeQueryAppId
     : getOnboardingResumeAppId(onboardingUserId)
-  const requiresOnboardingExplorationConfirmation = tab.key === '/dashboard'
-    && !!onboardingResumeAppId
+  const requiresOnboardingExplorationConfirmation = shouldConfirmOnboardingDashboardExploration({
+    destination: tab.key,
+    resumeAppId: onboardingResumeAppId,
+    userId: onboardingUserId,
+  })
 
   if (tab.key === '/apikeys' && isPendingOnboardingResume)
     allowOnboardingDashboardExploration(onboardingUserId, onboardingResumeAppId)
