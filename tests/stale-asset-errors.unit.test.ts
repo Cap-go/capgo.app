@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { getErrorMessage, isKnownCrawlerNoiseErrorMessage, isStaleAssetErrorMessage, shouldSuppressPostHogExceptionEvent } from '../src/services/staleAssetErrors'
+import { getErrorMessage, isComponentResolutionErrorMessage, isKnownCrawlerNoiseErrorMessage, isStaleAssetErrorMessage, shouldSuppressPostHogExceptionEvent } from '../src/services/staleAssetErrors'
 
 describe('stale asset error helpers', () => {
   it('matches the stale asset errors currently seen in PostHog', () => {
@@ -23,6 +23,13 @@ describe('stale asset error helpers', () => {
     expect(isKnownCrawlerNoiseErrorMessage('Object Not Found Matching Id:2, MethodName:update, ParamCount:4')).toBe(true)
     expect(isKnownCrawlerNoiseErrorMessage('Non-Error promise rejection captured with value: Object Not Found Matching Id:5')).toBe(true)
     expect(isKnownCrawlerNoiseErrorMessage('Cannot read properties of null (reading \'save\')')).toBe(false)
+  })
+
+  it('matches the vue-router component-resolution error caused by stale chunks', () => {
+    expect(isComponentResolutionErrorMessage('Couldn\'t resolve component "default" at "/app/:app/device/:device"')).toBe(true)
+    expect(isComponentResolutionErrorMessage(new Error('Couldn\'t resolve component "default" at "/app/:app"').message)).toBe(true)
+    expect(isComponentResolutionErrorMessage('Navigation cancelled from "/" to "/apps" with a new navigation.')).toBe(false)
+    expect(isComponentResolutionErrorMessage(undefined)).toBe(false)
   })
 
   it('extracts useful messages from arbitrary rejection values', () => {
