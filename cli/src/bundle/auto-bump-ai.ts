@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Database } from '../types/supabase.types.ts'
 import type { AutoBumpLevel } from '../versionHelpers.ts'
 import { log } from '@clack/prompts'
-import { generateManifest, invokeCapgoCliApi } from '../utils.ts'
+import { generateManifest, invokeCapgoCliApi } from '../utils'
 
 export type ManifestEntry = { file: string, hash: string }
 
