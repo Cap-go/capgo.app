@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
-import { resolveInitTargetPath, resolveResumedInitTargets } from '../src/init/command.ts'
+import { resolveInitPackageJsonPath, resolveInitTargetPath, resolveResumedInitTargets } from '../src/init/command.ts'
 
 const root = mkdtempSync(join(tmpdir(), 'capgo-init-monorepo-'))
 const outsideRoot = mkdtempSync(join(tmpdir(), 'capgo-init-monorepo-outside-'))
@@ -18,9 +18,11 @@ try {
   const explicitMainFile = join(explicitProjectDir, 'src', 'main.ts')
   const explicitConfigFile = join(configDir, 'capacitor.config.stripe-phone-app.ts')
   const outsidePackageJson = join(outsideRoot, 'package.json')
+  const androidDir = join(root, 'android')
   mkdirSync(appDir, { recursive: true })
   mkdirSync(configDir, { recursive: true })
   mkdirSync(directoryTarget)
+  mkdirSync(androidDir)
   mkdirSync(join(explicitProjectDir, 'src'), { recursive: true })
   writeFileSync(savedPackageJson, '{}')
   writeFileSync(savedMainFile, 'export {}')
@@ -32,6 +34,8 @@ try {
   const canonicalSavedConfigFile = realpathSync(savedConfigFile)
   const canonicalExplicitConfigFile = realpathSync(explicitConfigFile)
 
+  assert.equal(resolveInitPackageJsonPath(undefined, androidDir), savedPackageJson)
+  assert.equal(resolveInitPackageJsonPath(explicitPackageJson, androidDir), explicitPackageJson)
   assert.equal(resolveInitTargetPath('./package.json', 'Package JSON path', root), savedPackageJson)
   assert.equal(resolveInitTargetPath('./projects/qr-code-reader/src/main.ts', 'Main file path', root), savedMainFile)
   assert.equal(resolveInitTargetPath('./env-configs/capacitor.config.qr-code-reader.ts', 'Capacitor config path', root), savedConfigFile)
