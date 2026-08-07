@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Database } from '../types/supabase.types'
 import { log } from '@clack/prompts'
-import { formatCapgoApiErrorBody, getPMAndCommand, hasCliPermission, resolveCapgoPublicApiHost, show2FADeniedError } from '../utils'
+import { appAddHintMessage, formatCapgoApiErrorBody, hasCliPermission, resolveCapgoPublicApiHost, show2FADeniedError } from '../utils'
 
 export async function checkAppExists(supabase: SupabaseClient<Database>, appid: string) {
   const { data: app } = await supabase
@@ -178,7 +178,6 @@ export async function checkAppExistsAndHasPermissionOrgErr(
   skip2FACheck = false,
   channelId?: number | null,
 ) {
-  const pm = getPMAndCommand()
   const isChannelScopedPermission = channelId != null && requiredPermissionKey.startsWith('channel.')
 
   // Check 2FA compliance first (unless already checked earlier)
@@ -186,7 +185,7 @@ export async function checkAppExistsAndHasPermissionOrgErr(
     await check2FAComplianceForApp(supabase, appid, silent)
 
   if (!isChannelScopedPermission && !(await checkAppExists(supabase, appid))) {
-    const msg = `App ${appid} does not exist, run first \`${pm.runner} @capgo/cli app add ${appid}\` to create it`
+    const msg = appAddHintMessage(appid)
     if (!silent)
       log.error(msg)
     throw new Error(msg)
