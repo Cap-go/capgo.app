@@ -307,7 +307,7 @@ onMounted(() => {
 <template>
   <div class="pb-4 md:pb-0">
     <div class="flex flex-wrap items-start justify-between gap-2 p-3 pb-4 overflow-visible md:items-center md:flex-nowrap">
-      <div class="flex h-10 md:mb-0">
+      <div class="flex h-10 shrink-0 md:mb-0">
         <button class="inline-flex items-center py-1.5 px-3 mr-2 text-sm font-medium text-gray-500 bg-white rounded-md border border-gray-300 dark:text-white dark:bg-gray-800 dark:border-gray-600 hover:bg-gray-100 focus:ring-4 focus:ring-gray-200 dark:hover:border-gray-600 dark:hover:bg-gray-700 dark:focus:ring-gray-700 focus:outline-hidden" type="button" @click="reloadData">
           <IconReload v-if="!isLoading" class="m-1 md:mr-2" />
           <Spinner v-else size="w-[16.8px] h-[16.8px] m-1 mr-2" />
@@ -325,7 +325,7 @@ onMounted(() => {
           <span class="hidden text-sm md:block">{{ t('download-csv') }}</span>
         </button>
       </div>
-      <div class="flex h-10 mr-2" :class="{ 'md:mr-auto': !filterText || !filterList.length }">
+      <div class="flex h-10 mr-2 shrink-0" :class="{ 'md:mr-auto': !filterText || !filterList.length }">
         <DateRangePicker
           v-model="preciseDates"
           v-model:mode="rangeMode"
@@ -334,7 +334,7 @@ onMounted(() => {
           @apply="onRangeApply"
         />
       </div>
-      <div v-if="filterText && filterList.length" ref="filterDropdownRef" class="relative h-10 mr-2 md:mr-auto">
+      <div v-if="filterText && filterList.length" ref="filterDropdownRef" class="relative h-10 mr-2 shrink-0 md:mr-auto">
         <button
           type="button"
           :aria-label="filterButtonLabel"
@@ -404,14 +404,14 @@ onMounted(() => {
           </div>
         </Teleport>
       </div>
-      <div class="flex min-w-0 overflow-hidden md:w-auto">
+      <div class="flex min-w-0 max-w-[13rem] overflow-hidden sm:max-w-[14rem] md:max-w-[14rem] lg:max-w-[16rem] xl:max-w-xs md:w-auto">
         <FormKit
           v-model="searchVal"
           :placeholder="searchPlaceholder"
           :prefix-icon="IconSearch"
           enterkeyhint="send"
           :classes="{
-            outer: 'mb-0! w-48 sm:w-64 md:w-96',
+            outer: 'mb-0! w-48 sm:w-52 md:w-56 lg:w-64 xl:w-80',
           }"
         />
       </div>
