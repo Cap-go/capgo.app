@@ -58,7 +58,7 @@ function goToPlans() {
       </h2>
       <i18n-t v-if="showExpiredTrialCopy" keypath="trial-ended-description" tag="p" class="mb-6 max-w-sm text-gray-600 dark:text-gray-400">
         <template #supportEmail>
-          <a href="mailto:support@capgo.app" class="font-medium text-amber-700 underline dark:text-amber-400">support@capgo.app</a>
+          <a href="mailto:support@capgo.app" class="d-link font-medium text-amber-700 underline dark:text-amber-400">support@capgo.app</a>
         </template>
       </i18n-t>
       <p v-else class="mb-6 max-w-sm text-gray-600 dark:text-gray-400">
