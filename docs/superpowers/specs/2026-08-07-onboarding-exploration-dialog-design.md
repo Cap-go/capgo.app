@@ -17,7 +17,7 @@ The sidebar currently uses the presence of an onboarding resume app ID as the co
 
 ## Approach
 
-Import `canExploreOnboardingDashboard` into the sidebar. When deciding whether the Dashboard item needs confirmation, require all of the following:
+Import `shouldConfirmOnboardingDashboardExploration` into the sidebar. The helper uses `canExploreOnboardingDashboard` internally and requires all of the following before the Dashboard item opens the confirmation dialogue:
 
 1. The destination is `/dashboard`.
 2. A resumable onboarding app is known.
