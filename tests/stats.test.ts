@@ -4,7 +4,7 @@ import { env } from 'node:process'
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { ALLOWED_STATS_ACTIONS } from '../supabase/functions/_backend/plugin_runtime/plugins/stats_actions.ts'
-import { APP_NAME, createAppVersions, executeSQL, getBaseData, getSupabaseClient, getVersionFromAction, headers, ORG_ID, PLUGIN_BASE_URL, resetAndSeedAppData, resetAndSeedAppDataStats, resetAppData, resetAppDataStats, USER_ID } from './test-utils.ts'
+import { APP_NAME, createAppVersions, executeSQL, getBaseData, getSupabaseClient, getVersionFromAction, headers, ORG_ID, PLUGIN_BASE_URL, resetAndSeedAppData, resetAndSeedAppDataStats, resetAppData, resetAppDataStats, USER_ID, warmEdgeEndpoint } from './test-utils.ts'
 
 const id = randomUUID()
 const APP_NAME_STATS = `${APP_NAME}.${id}`
@@ -100,6 +100,15 @@ describe.skipIf(!USE_CLOUDFLARE)('[POST] /stats Cloudflare write guard', () => {
 beforeAll(async () => {
   await resetAndSeedAppData(APP_NAME_STATS)
   await resetAndSeedAppDataStats(APP_NAME_STATS)
+  await warmEdgeEndpoint(`${PLUGIN_BASE_URL}/stats`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      ...getBaseData(APP_NAME_STATS),
+      action: 'get',
+      device_id: randomUUID().toLowerCase(),
+    }),
+  })
 })
 
 afterAll(async () => {
