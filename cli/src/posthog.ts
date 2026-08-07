@@ -213,8 +213,11 @@ export async function capturePosthogException(payload: CapturePosthogExceptionPa
   const distinctId = `cli:${pack.version}:${payload.functionName}`
   const frames = parseExceptionFrames(serializedError.stack, payload.functionName)
   const topFrame = frames[0]
+  // Deliberately exclude the CLI version from the fingerprint so the same bug
+  // stays a single error-tracking issue across releases instead of minting a
+  // brand-new issue on every version bump.
   const fingerprint = [
-    distinctId,
+    payload.functionName,
     payload.kind,
     serializedError.name || 'Error',
     topFrame?.function || payload.functionName,

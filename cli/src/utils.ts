@@ -2221,6 +2221,27 @@ async function calculatePlatformChecksums(dependencyFolderPath: string): Promise
   return { ios_checksum, android_checksum }
 }
 
+// Collect every `node_modules` directory from `startDir` up to the filesystem
+// root. This mirrors the parent-directory walk `getAllPackagesDependencies`
+// uses to resolve versions, so that the existence check validates the same
+// hoisted locations the enumeration reads from. Without this, dependencies
+// hoisted to a monorepo/workspace root read as missing.
+function getHoistedNodeModulesPaths(startDir: string): string[] {
+  const paths: string[] = []
+  let currentDir = startDir
+  const root = path.parse(currentDir).root
+  while (true) {
+    paths.push(join(currentDir, 'node_modules'))
+    if (currentDir === root)
+      break
+    const parentDir = dirname(currentDir)
+    if (parentDir === currentDir)
+      break
+    currentDir = parentDir
+  }
+  return paths
+}
+
 export async function getLocalDependencies(packageJsonPath: string | undefined, nodeModulesString: string | undefined) {
   const nodeModules = nodeModulesString
     ? nodeModulesString
@@ -2254,7 +2275,7 @@ export async function getLocalDependencies(packageJsonPath: string | undefined, 
   }
 
   const nodeModulesPaths = nodeModules.length === 0
-    ? [join(cwd(), 'node_modules')]
+    ? getHoistedNodeModulesPaths(cwd())
     : nodeModules
 
   const anyValidPath = nodeModulesPaths.some(path => existsSync(path))
@@ -2337,7 +2358,7 @@ export async function getLocalDependencies(packageJsonPath: string | undefined, 
         ios_checksum,
         android_checksum,
       }
-    })).catch(() => [])
+    }))
 
   if (anyInvalid || dependenciesObject.some(a => a.native === undefined)) {
     log.error('Missing dependencies or invalid dependencies')
