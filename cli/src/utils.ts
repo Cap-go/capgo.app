@@ -275,14 +275,18 @@ export function findRoot(dir: string) {
 // do not expose this function this prevent missuses
 function readPackageJson(f: string = findRoot(cwd()), file: string | undefined = undefined) {
   const fileSplit = file?.split(',')[0]
-  if (fileSplit) {
-    if (!existsSync(fileSplit)) {
-      const message = `Package.json at ${fileSplit} does not exist`
-      log.error(message)
-      throw new Error(message)
-    }
+  const packageJsonPath = fileSplit ?? join(f, PACKNAME)
+  if (!existsSync(packageJsonPath)) {
+    // When the user passed an explicit path we keep it simple; otherwise the
+    // default path means the command is running outside a project directory,
+    // so point them at how to fix it (mirrors getAllPackagesDependencies).
+    const message = fileSplit
+      ? `Package.json at ${packageJsonPath} does not exist`
+      : `No package.json found at ${packageJsonPath}. Run this command from your project root (the folder that contains package.json), or pass --package-json <path> to point at it (for example in a monorepo).`
+    log.error(message)
+    throw new Error(message)
   }
-  const packageJson = readFileSync(fileSplit ?? join(f, PACKNAME))
+  const packageJson = readFileSync(packageJsonPath)
   return JSON.parse(packageJson as any)
 }
 
