@@ -23,6 +23,7 @@ import {
   USER_ID_2,
   USER_PASSWORD,
   USER_PASSWORD_NONMEMBER,
+  warmEdgeEndpoint,
 } from './test-utils.ts'
 
 const normalizedSupabaseBaseUrl = normalizeLocalhostUrl(SUPABASE_BASE_URL) ?? SUPABASE_BASE_URL
@@ -69,6 +70,11 @@ beforeAll(async () => {
     'Content-Type': 'application/json',
     'capgkey': createdKey.key,
   }
+
+  await warmEdgeEndpoint(`${BASE_URL}/organization?orgId=${ORG_ID}`, {
+    method: 'GET',
+    headers,
+  })
 })
 
 async function createUserOrgBinding(orgId: string, userId: string, roleName = 'org_member', grantedBy = USER_ID) {
@@ -148,6 +154,16 @@ describe('read-only API keys cannot access destructive organization routes', () 
 
     readOnlyKey = createdKey.key
     readOnlyKeyId = createdKey.id
+
+    await warmEdgeEndpoint(`${BASE_URL}/organization/members`, {
+      method: 'POST',
+      headers: { ...readOnlyHeaders, capgkey: readOnlyKey },
+      body: JSON.stringify({
+        orgId: readOnlyOrgId,
+        email: USER_ADMIN_EMAIL,
+        invite_type: 'org_member',
+      }),
+    })
   })
 
   afterAll(async () => {

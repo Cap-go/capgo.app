@@ -391,27 +391,46 @@ jobs:
           bash .github/scripts/start-background-service.sh
       - name: Warm edge functions before tests
         run: |
-          # GET /ok alone is not enough — cold first POSTs to triggers can 502 under load.
+          # GET /ok alone is not enough — cold first requests under file parallelism 502.
           health_url="${SUPABASE_FUNCTIONS_HEALTH_URL#http-get://}"
           health_url="${health_url#https-get://}"
           base_url="http://${health_url%/ok}"
-          for path in /ok /triggers/cron_email /triggers/cron_stat_org /triggers/cron_stat_app; do
+          warm_get() {
+            local path="$1"
             for attempt in 1 2 3 4 5; do
-              if [ "$path" = "/ok" ]; then
-                status=$(curl -s -o /tmp/edge-warm.body -w '%{http_code}' "${base_url}${path}" || true)
-              else
-                status=$(curl -s -o /tmp/edge-warm.body -w '%{http_code}' -X POST "${base_url}${path}" \
-                  -H 'Content-Type: application/json' \
-                  -H 'apisecret: testsecret' \
-                  -d '{}' || true)
-              fi
-              echo "edge warm path=${path} attempt=${attempt} status=${status}"
+              status=$(curl -s -o /tmp/edge-warm.body -w '%{http_code}' "${base_url}${path}" || true)
+              echo "edge warm GET path=${path} attempt=${attempt} status=${status}"
               if [ "${status}" != "502" ] && [ "${status}" != "503" ] && [ "${status}" != "000" ]; then
-                break
+                return 0
               fi
               sleep "${attempt}"
             done
-          done
+            return 1
+          }
+          warm_post() {
+            local path="$1"
+            for attempt in 1 2 3 4 5; do
+              status=$(curl -s -o /tmp/edge-warm.body -w '%{http_code}' -X POST "${base_url}${path}" \
+                -H 'Content-Type: application/json' \
+                -H 'apisecret: testsecret' \
+                -d '{}' || true)
+              echo "edge warm POST path=${path} attempt=${attempt} status=${status}"
+              if [ "${status}" != "502" ] && [ "${status}" != "503" ] && [ "${status}" != "000" ]; then
+                return 0
+              fi
+              sleep "${attempt}"
+            done
+            return 1
+          }
+          warm_get /ok
+          warm_post /triggers/cron_email
+          warm_post /triggers/cron_stat_org
+          warm_post /triggers/cron_stat_app
+          # Private API routes hit by sharded suites; warm before concurrent files start.
+          warm_get '/webhooks?orgId=00000000-0000-0000-0000-000000000000'
+          warm_get '/organization?orgId=00000000-0000-0000-0000-000000000000'
+          warm_post /organization
+          warm_post /organization/members
       - name: Run backend integration tests
         env:
           VITEST_SHARD: ${{ matrix.shard }}

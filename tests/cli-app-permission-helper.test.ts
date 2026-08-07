@@ -4,6 +4,7 @@ const hasCliPermissionMock = vi.hoisted(() => vi.fn())
 
 vi.mock('../cli/src/utils', () => ({
   getPMAndCommand: () => ({ runner: 'bunx' }),
+  appAddHintMessage: (appId: string) => `App ${appId} does not exist, run first \`bunx @capgo/cli app add ${appId}\` to create it`,
   hasCliPermission: hasCliPermissionMock,
   show2FADeniedError: vi.fn(() => {
     throw new Error('2FA required')

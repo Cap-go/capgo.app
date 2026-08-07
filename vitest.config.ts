@@ -22,6 +22,8 @@ export default defineConfig(({ mode }) => ({
     hookTimeout: 15_000, // Setup/teardown should complete promptly with isolated fixtures
     retry: 0,
     maxConcurrency: 2, // Keep edge-function load under Deno capacity in CI shards
+    // Cap workers so shards do not open too many cold isolates at once (502 from Kong).
+    maxWorkers: 2,
     // Vitest 4: pool options are now top-level
     isolate: true,
     fileParallelism: true,
