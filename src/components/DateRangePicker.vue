@@ -99,6 +99,8 @@ const allPresets = computed(() => presetGroups.value.flatMap(g => g.items))
 const isOpen = ref(false)
 const triggerRef = ref<HTMLButtonElement | null>(null)
 const popoverRef = ref<HTMLDialogElement | null>(null)
+const returnFocusTarget = ref<HTMLElement | null>(null)
+const positionAnchor = ref<HTMLElement | null>(null)
 const draftMode = ref<DateRangePreset>(props.mode)
 const pickerRange = ref<Date[] | null>(null)
 const popoverStyle = ref<Record<string, string>>({})
@@ -148,10 +150,10 @@ const effectiveMaxDate = computed(() => {
 })
 
 function updatePopoverPosition() {
-  const trigger = triggerRef.value
-  if (!trigger)
+  const anchor = positionAnchor.value?.isConnected ? positionAnchor.value : triggerRef.value
+  if (!anchor)
     return
-  const rect = trigger.getBoundingClientRect()
+  const rect = anchor.getBoundingClientRect()
   popoverStyle.value = {
     top: `${Math.round(rect.bottom + 8)}px`,
     right: `${Math.round(window.innerWidth - rect.right)}px`,
@@ -162,10 +164,15 @@ function closePicker() {
   if (!isOpen.value)
     return
   isOpen.value = false
-  nextTick(() => triggerRef.value?.focus())
+  const target = returnFocusTarget.value?.isConnected ? returnFocusTarget.value : triggerRef.value
+  returnFocusTarget.value = null
+  positionAnchor.value = null
+  nextTick(() => target?.focus())
 }
 
-async function openPicker() {
+async function openPicker(invoker?: HTMLElement) {
+  returnFocusTarget.value = invoker ?? triggerRef.value
+  positionAnchor.value = invoker ?? triggerRef.value
   syncDraftFromProps()
   updatePopoverPosition()
   isOpen.value = true
@@ -174,9 +181,11 @@ async function openPicker() {
   popoverRef.value?.querySelector<HTMLElement>('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')?.focus()
 }
 
+defineExpose({ openPicker, togglePicker })
+
 onClickOutside(popoverRef, (event) => {
   const target = event.target as Node | null
-  if (target && triggerRef.value?.contains(target))
+  if (target && (triggerRef.value?.contains(target) || positionAnchor.value?.contains(target)))
     return
   closePicker()
 })
@@ -226,11 +235,11 @@ function syncDraftFromProps() {
   pickerRange.value = [range.start, range.end]
 }
 
-function togglePicker() {
+function togglePicker(invoker?: HTMLElement) {
   if (isOpen.value)
     closePicker()
   else
-    void openPicker()
+    void openPicker(invoker)
 }
 
 function selectPreset(mode: RollingDateRangePreset) {
@@ -315,7 +324,7 @@ function presetButtonClass(active: boolean, disabled: boolean) {
       aria-haspopup="dialog"
       :aria-expanded="isOpen"
       :aria-controls="popoverId"
-      @click="togglePicker"
+      @click="togglePicker()"
     >
       <CalendarDaysIcon
         class="date-range-trigger-icon h-4 w-4 shrink-0 transition-colors"

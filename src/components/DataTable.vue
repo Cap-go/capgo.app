@@ -119,6 +119,7 @@ const filterActivated = computed(() => {
     : 0
   return booleanCount + (props.extraFilterCount ?? 0)
 })
+const hasActiveViewFilters = computed(() => Boolean(searchVal.value.trim()) || filterActivated.value > 0)
 
 const showFilterMenu = computed(() =>
   Boolean(props.filterText && (filterList.value.length || slots['filter-extras'])),
@@ -189,6 +190,10 @@ onUnmounted(() => {
   window.removeEventListener('keydown', onFilterModalKeydown)
 })
 
+const debouncedReload = useDebounceFn(() => {
+  emit('reload')
+}, 1000)
+
 function clearAllFilters() {
   // Emit a new filters object so DataTable's filters watcher performs one reload.
   // Extra filters are cleared without scheduling a second reload.
@@ -199,6 +204,15 @@ function clearAllFilters() {
     emit('update:filters', cleared)
   }
   emit('clearExtraFilters')
+}
+
+function clearViewFilters() {
+  searchVal.value = ''
+  emit('update:search', '')
+  emit('update:currentPage', 1)
+  clearAllFilters()
+  if (props.autoReload !== false)
+    debouncedReload()
 }
 
 function sortClick(key: number) {
@@ -319,10 +333,6 @@ onUnmounted(() => {
 onMounted(() => {
   loadFromUrlParams()
 })
-
-const debouncedReload = useDebounceFn(() => {
-  emit('reload')
-}, 1000)
 
 const debouncedUpdateUrlParams = useDebounceFn(() => {
   updateUrlParams()
@@ -866,7 +876,13 @@ const paginationClass = computed(() => props.mobileFixedPagination
               :colspan="columns.length + (props.massSelect ? 1 : 0)"
               class="px-4 py-2 text-center text-gray-500 md:py-4 md:px-6 dark:text-gray-400"
             >
-              {{ t("no_elements_found") }}
+              <slot
+                name="empty-state"
+                :clear-filters="clearViewFilters"
+                :has-active-filters="hasActiveViewFilters"
+              >
+                {{ t("no_elements_found") }}
+              </slot>
             </td>
           </tr>
         </tbody>
