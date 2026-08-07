@@ -318,7 +318,6 @@ describe('ios/asc-key-access', () => {
     expect(findings[0]!.id).toBe('ios/asc-key-access')
     expect(findings[0]!.title).toContain('HTTP 401')
     expect(findings[0]!.title).toContain('Apple rejected')
-    expect(findings[0]!.title).toContain('not Capgo auth')
     expect(findings[0]!.detail).toContain('NOT_AUTHORIZED')
     expect(findings[0]!.detail).toContain('properly configured bearer token')
     expect(findings[0]!.enforceAfter).toBe(ASC_PRESCAN_AUTH_ENFORCE_AFTER)
@@ -422,17 +421,16 @@ describe('ios/asc-key-access', () => {
     expect(finding.detail).toContain('INTERNAL_ERROR')
   })
 
-  it('local JWT signing failure names Apple key material and excludes Capgo auth', () => {
+  it('local JWT signing failure names Apple key material', () => {
     const finding = classifyAscAuthFinding({
       ok: false,
       kind: 'auth-error',
-      message: 'Invalid App Store Connect key material (.p8 / Key ID / Issuer ID). Apple was not contacted; Capgo login is unrelated.',
+      message: 'Invalid App Store Connect key material (.p8 / Key ID / Issuer ID). The CLI could not build a JWT, so Apple was never contacted.',
     })
     expect(finding.severity).toBe('error')
-    expect(finding.title).toContain('App Store Connect key material')
-    expect(finding.title).toContain('Capgo login is unrelated')
+    expect(finding.title).toBe('Invalid App Store Connect key material (.p8 / Key ID / Issuer ID)')
     expect(finding.title).not.toContain('Could not authenticate')
-    expect(finding.fix ?? '').toContain('not Capgo login')
+    expect(finding.fix ?? '').toContain('App Store Connect API key')
   })
 
   it('skips cleanly (no finding) when APPLE_KEY_CONTENT does not decode to a PEM', async () => {

@@ -23,7 +23,7 @@ export const apikeyPermission: PrescanCheck = {
         id: 'shared/apikey-permission',
         severity: 'error',
         title: `Capgo rejected this API key: missing app.build_native permission for ${ctx.appId}`,
-        detail: 'This is Capgo authorization, not App Store Connect or Google Play credentials.',
+        detail: 'Your Capgo API key authenticated, but it lacks native-build rights for this app.',
         fix: 'Use a Capgo apikey from the org that owns the app (role with native-build rights), or fix the appId',
       }]
     }
@@ -49,7 +49,7 @@ export const appExists: PrescanCheck = {
         id: 'shared/app-exists',
         severity: 'error',
         title: `Capgo: app ${ctx.appId} is not visible to this Capgo API key`,
-        detail: 'Either the app does not exist in Capgo or it belongs to an org this Capgo key cannot access. This is not an App Store / Play Store credential error.',
+        detail: 'Either the app does not exist in Capgo or it belongs to an org this Capgo key cannot access.',
         fix: `Create it (npx @capgo/cli@latest app add ${ctx.appId}) or pass the right appId / Capgo apikey`,
       }]
     }

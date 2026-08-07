@@ -44,7 +44,7 @@ export function getBuildOnboardingRecoveryAdvice(
   }
   else if (lower.includes('api key verification failed') || lower.includes('apple rejected the app store connect') || lower.includes('401') || lower.includes('403')) {
     summary.push(
-      'Apple rejected the App Store Connect credentials (not Capgo login).',
+      'Apple rejected the App Store Connect credentials.',
       'Double-check the .p8 file, Key ID, Issuer ID, and that the key still has Admin or Developer access.',
     )
     docs.add('https://capgo.app/docs/cli/cloud-build/ios/')

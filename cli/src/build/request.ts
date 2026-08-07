@@ -1926,7 +1926,7 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
     // This hard assert still runs when prescan is skipped (--no-prescan) or bypassed
     // (--prescan-ignore-fatal), so permission is always enforced before the POST.
     await assertCliPermission(supabase, options.apikey, 'app.build_native', { appId }, {
-      message: `Capgo rejected this API key: missing app.build_native permission for app ${appId}. This is Capgo authorization, not App Store Connect or Google Play credentials.`,
+      message: `Capgo rejected this API key: missing app.build_native permission for app ${appId}.`,
       silent,
     })
 
@@ -1955,7 +1955,7 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
         || /invalid_apikey|unauthorized|no_key_provided|invalid_jwt|no_jwt/i.test(errorText)
       throw new Error(
         isCapgoAuth
-          ? `Capgo rejected the build request (HTTP ${response.status}): ${errorText}. This is Capgo API authentication/authorization, not App Store Connect or Google Play credentials.`
+          ? `Capgo rejected the build request (HTTP ${response.status}): ${errorText}`
           : `Capgo build request failed (HTTP ${response.status}): ${errorText}`,
       )
     }

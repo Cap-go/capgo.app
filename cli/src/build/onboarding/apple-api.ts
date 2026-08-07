@@ -104,13 +104,13 @@ async function ascFetch(
 // onboarding (no drift between the two probes). These strings reach the
 // terminal and --json reports, so they NEVER contain credential material.
 export const ASC_AGREEMENTS_MESSAGE
-  = 'Apple is blocking App Store Connect API access because your developer account has a required agreement that is unsigned or has expired. Capgo login is unrelated.\n'
+  = 'Apple is blocking App Store Connect API access because your developer account has a required agreement that is unsigned or has expired.\n'
     + '  - Sign in as the Account Holder at https://appstoreconnect.apple.com\n'
     + '  - Open "Business" (Agreements, Tax, and Banking) and accept the pending or updated agreement\n'
     + '  - Then run this step again — your App Store Connect API key is valid, so no key changes are needed'
 
 export const ASC_KEY_REJECTED_MESSAGE
-  = 'Apple rejected the App Store Connect API key (not Capgo authentication). Please check:\n'
+  = 'Apple rejected the App Store Connect API key. Please check:\n'
     + '  - The .p8 file is correct and hasn\'t been modified\n'
     + '  - The Key ID matches the key shown in App Store Connect\n'
     + '  - The Issuer ID is correct (shown at the top of the API keys page)\n'

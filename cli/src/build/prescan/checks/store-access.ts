@@ -33,8 +33,8 @@ const STORE_ACCESS_TIMEOUT_MS = 7000
 /** ASC authentication failures become build-blocking after a 14-day rollout. */
 export const ASC_PRESCAN_AUTH_ENFORCE_AFTER = '2026-08-17T00:00:00.000Z'
 
-const PLAY_FIX = 'This is a Google Play credential/access problem (not Capgo login). Invite the service-account email in Play Console → Users and permissions and grant release access for this app. If the Play app does not exist yet and you only need the AAB, re-run with --no-playstore-upload --output-upload.'
-const ASC_FIX = 'This is an Apple App Store Connect credential problem (not Capgo login). Check the Key ID / Issuer ID / .p8 and that the key has Admin or Developer access (or ask the Account Holder to accept pending agreements).'
+const PLAY_FIX = 'Invite the Google Play service-account email in Play Console → Users and permissions and grant release access for this app. If the Play app does not exist yet and you only need the AAB, re-run with --no-playstore-upload --output-upload.'
+const ASC_FIX = 'Fix the App Store Connect API key: check Key ID / Issuer ID / .p8, and confirm the key has Admin or Developer access (or ask the Account Holder to accept pending agreements).'
 const ASC_AGREEMENT_CODES = new Set([
   'FORBIDDEN.REQUIRED_AGREEMENTS_MISSING_OR_EXPIRED',
   'FORBIDDEN_ERROR.PLA_NOT_ACCEPTED',
@@ -74,9 +74,9 @@ export function classifyAscAuthFinding(result: Extract<AscAccessResult, { ok: fa
       id: 'ios/asc-key-access',
       severity: 'error',
       enforceAfter: ASC_PRESCAN_AUTH_ENFORCE_AFTER,
-      title: 'Apple blocked App Store Connect API access (HTTP 403) — Capgo login is unrelated',
+      title: 'Apple blocked App Store Connect API access (HTTP 403): unsigned or expired agreement',
       detail: reason,
-      fix: 'Ask the Account Holder to accept pending agreements in App Store Connect → Business, then retry. Your Capgo API key is not the problem.',
+      fix: 'Ask the Account Holder to accept pending agreements in App Store Connect → Business, then retry.',
     }
   }
   if (isDefinitiveAuthFailure(result)) {
@@ -84,7 +84,7 @@ export function classifyAscAuthFinding(result: Extract<AscAccessResult, { ok: fa
       id: 'ios/asc-key-access',
       severity: 'error',
       enforceAfter: ASC_PRESCAN_AUTH_ENFORCE_AFTER,
-      title: `Apple rejected the App Store Connect API key during preflight (HTTP ${result.status}) — not Capgo auth`,
+      title: `Apple rejected the App Store Connect API key during preflight (HTTP ${result.status})`,
       detail: reason,
       fix: ASC_FIX,
     }
@@ -93,9 +93,9 @@ export function classifyAscAuthFinding(result: Extract<AscAccessResult, { ok: fa
     return {
       id: 'ios/asc-key-access',
       severity: 'warning',
-      title: 'Apple denied the App Store Connect preflight request (HTTP 403) — not Capgo auth',
+      title: 'Apple denied the App Store Connect preflight request (HTTP 403)',
       detail: `${reason} This /v1/apps probe differs from the TestFlight upload path, so the build may still succeed.`,
-      fix: 'Review Apple\'s reason and confirm the App Store Connect key can access the target app. Capgo login is unrelated. Use --fail-on-warnings only if this probe must be strict.',
+      fix: 'Review Apple\'s reason and confirm the App Store Connect key can access the target app. Use --fail-on-warnings only if this probe must be strict.',
     }
   }
   if (result.status !== undefined) {
@@ -108,13 +108,13 @@ export function classifyAscAuthFinding(result: Extract<AscAccessResult, { ok: fa
     }
   }
   // A local signing failure has no HTTP status. It is definitive because the
-  // CLI could not construct a token from the supplied key material. Apple was
-  // never contacted; Capgo API-key auth is unrelated.
+  // CLI could not construct a token from the supplied key material, so Apple
+  // was never contacted.
   return {
     id: 'ios/asc-key-access',
     severity: 'error',
-    title: 'Invalid App Store Connect key material (.p8 / Key ID / Issuer ID) — Apple was not contacted, Capgo login is unrelated',
-    detail: reason || 'Capgo CLI could not build an App Store Connect JWT from the credentials you provided.',
+    title: 'Invalid App Store Connect key material (.p8 / Key ID / Issuer ID)',
+    detail: reason || 'The CLI could not build an App Store Connect JWT from the credentials you provided, so Apple was never contacted.',
     fix: ASC_FIX,
   }
 }
@@ -184,8 +184,8 @@ export function makePlaySaAccess(validator: PlayValidator): PrescanCheck {
             id: 'android/play-sa-access',
             severity: effective.ambiguous ? 'warning' : 'error',
             title: effective.ambiguous
-              ? 'Google Play access could not be verified: app missing or service account has no access — not Capgo auth'
-              : 'Google Play upload blocked: app missing or service account has no access — not Capgo auth',
+              ? 'Google Play access could not be verified: app missing or service account has no access'
+              : 'Google Play upload blocked: app missing or service account has no access',
             detail: result.message,
             fix: PLAY_FIX,
           }]
@@ -194,8 +194,8 @@ export function makePlaySaAccess(validator: PlayValidator): PrescanCheck {
           return [{
             id: 'android/play-sa-access',
             severity: 'error',
-            title: 'Google rejected the Play service-account key — not Capgo auth',
-            detail: 'The service-account JSON failed to authenticate with Google (Capgo login is unrelated). Re-download a fresh key from the Google Cloud console.',
+            title: 'Google rejected the Play service-account key',
+            detail: 'The service-account JSON failed to authenticate with Google. Re-download a fresh key from the Google Cloud console.',
             fix: PLAY_FIX,
           }]
         case 'network-error':
@@ -278,9 +278,9 @@ export function makeAscKeyAccess(asserter: AscAsserter): PrescanCheck {
           return [{
             id: 'ios/asc-key-access',
             severity: 'warning',
-            title: 'Apple App Store Connect API key cannot see this app — not Capgo auth',
+            title: 'App Store Connect API key cannot see this app',
             detail: result.message,
-            fix: 'Confirm the app exists in App Store Connect and the API key role can access it, or fix the bundle identifier. Capgo login is unrelated. If you only need an IPA download (no TestFlight), re-run with --ios-distribution ad_hoc --output-upload.',
+            fix: 'Confirm the app exists in App Store Connect and the API key role can access it, or fix the bundle identifier. If you only need an IPA download (no TestFlight), re-run with --ios-distribution ad_hoc --output-upload.',
           }]
         case 'network':
           return [{

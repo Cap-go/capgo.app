@@ -1942,8 +1942,8 @@ export async function resolveUserIdFromApiKey(supabase: SupabaseClient<Database>
 
   if (!userId || userIdError) {
     if (!silent)
-      log.error(`Capgo authentication failed: invalid Capgo API key or insufficient Capgo permissions. This is not an App Store Connect / Google Play credential error.`)
-    throw new Error('Capgo authentication failed: invalid Capgo API key or insufficient Capgo permissions. This is not an App Store Connect / Google Play credential error.')
+      log.error(`Capgo authentication failed: invalid Capgo API key or insufficient Capgo permissions.`)
+    throw new Error('Capgo authentication failed: invalid Capgo API key or insufficient Capgo permissions.')
   }
   return userId
 }
