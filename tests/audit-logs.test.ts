@@ -361,7 +361,7 @@ describe('audit log triggers', () => {
     }
   })
 
-  it('organization and app bookkeeping UPDATEs do not create audit logs', async () => {
+  it('organization and app bookkeeping update rows do not create audit logs', async () => {
     const bookkeepingOrgId = randomUUID()
     const bookkeepingAppId = `com.audit.bookkeeping.${bookkeepingOrgId.replace(/-/g, '')}`
     const bookkeepingCustomerId = `cus_audit_bookkeeping_${bookkeepingOrgId}`

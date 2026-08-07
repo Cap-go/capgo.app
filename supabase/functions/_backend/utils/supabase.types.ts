@@ -584,6 +584,30 @@ export type Database = {
           },
         ]
       }
+      builder_capacity_events: {
+        Row: {
+          created_at: string
+          delta: number
+          id: number
+          source: string
+          workers_total: number
+        }
+        Insert: {
+          created_at?: string
+          delta: number
+          id?: number
+          source?: string
+          workers_total: number
+        }
+        Update: {
+          created_at?: string
+          delta?: number
+          id?: number
+          source?: string
+          workers_total?: number
+        }
+        Relationships: []
+      }
       build_requests: {
         Row: {
           ai_analyzed: boolean
@@ -591,6 +615,7 @@ export type Database = {
           build_config: Json | null
           build_mode: string
           builder_job_id: string | null
+          completed_at: string | null
           created_at: string
           id: string
           last_error: string | null
@@ -598,6 +623,7 @@ export type Database = {
           platform: string
           requested_by: string
           runner_wait_seconds: number
+          started_at: string | null
           status: string
           updated_at: string
           upload_expires_at: string
@@ -611,6 +637,7 @@ export type Database = {
           build_config?: Json | null
           build_mode?: string
           builder_job_id?: string | null
+          completed_at?: string | null
           created_at?: string
           id?: string
           last_error?: string | null
@@ -618,6 +645,7 @@ export type Database = {
           platform: string
           requested_by: string
           runner_wait_seconds?: number
+          started_at?: string | null
           status?: string
           updated_at?: string
           upload_expires_at: string
@@ -631,6 +659,7 @@ export type Database = {
           build_config?: Json | null
           build_mode?: string
           builder_job_id?: string | null
+          completed_at?: string | null
           created_at?: string
           id?: string
           last_error?: string | null
@@ -638,6 +667,7 @@ export type Database = {
           platform?: string
           requested_by?: string
           runner_wait_seconds?: number
+          started_at?: string | null
           status?: string
           updated_at?: string
           upload_expires_at?: string
