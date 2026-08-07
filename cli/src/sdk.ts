@@ -556,6 +556,7 @@ export class CapgoSDK {
           minUpdateVersion: options.minUpdateVersion,
           autoMinUpdateVersion: options.autoMinUpdateVersion,
           autoSetBundle: options.autoSetBundle,
+          autoBump: options.autoBump,
           selfAssign: options.selfAssign,
           packageJson: options.packageJsonPaths,
           ignoreMetadataCheck: options.ignoreCompatibilityCheck,

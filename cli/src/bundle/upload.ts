@@ -25,7 +25,7 @@ import { showReplicationProgress } from '../replicationProgress'
 import { formatTable } from '../terminal-table'
 import { usesAlwaysDirectUpdate } from '../updaterConfig'
 import { baseKeyV2, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, canPromptInteractively, checkCompatibilityCloud, checkPlanValidUpload, checkRemoteCliMessages, createSupabaseClient, deletedFailedVersion, deltaManifestTooLargeMessage, findRoot, findSavedKey, formatError, getAppId, getBundleVersion, getCompatibilityDetails, getConfig, getInstalledVersion, getLocalConfig, getLocalDependencies, getOrganizationId, getPMAndCommand, getRemoteChecksums, getRemoteFileConfig, hasCliPermission, invokeCapgoCliApi, isCompatible, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, regexSemver, resolveUserIdFromApiKey, sendEvent, setVersionManifest, updateConfigUpdater, updateOrCreateChannel, updateOrCreateVersion, UPLOAD_TIMEOUT, uploadTUS, uploadUrl, zipFile } from '../utils'
-import { getVersionSuggestions, interactiveVersionBump } from '../versionHelpers'
+import { autoBumpMinorVersion, getVersionSuggestions, interactiveVersionBump } from '../versionHelpers'
 import { maybePromptBuilderCta, shouldBlockIncompatibleUpload } from './builder-cta'
 import { checkIndexPosition, searchInDirectory } from './check'
 import { summarizeUploadCompatibility } from './compatibility'
@@ -753,6 +753,73 @@ async function getVersionIdForChannelUpdate(supabase: SupabaseType, apikey: stri
   return versionId
 }
 
+
+async function versionExistsOnRemote(supabase: SupabaseType, appid: string, bundle: string): Promise<boolean> {
+  const { data: appVersion, error: appVersionError } = await supabase
+    .rpc('exist_app_versions', { appid, name_version: bundle })
+    .single()
+
+  if (appVersionError)
+    uploadFail(`Cannot check if version ${bundle} already exists ${formatError(appVersionError)}`)
+
+  return !!appVersion
+}
+
+async function getLatestRemoteAppVersion(supabase: SupabaseType, appid: string): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('app_versions')
+    .select('name')
+    .eq('app_id', appid)
+    .eq('deleted', false)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (error) {
+    log.warn(`Cannot fetch latest remote version ${formatError(error)}`)
+    return null
+  }
+
+  return data?.name ?? null
+}
+
+async function resolveAutoBumpVersion(
+  supabase: SupabaseType,
+  appid: string,
+  channels: string[],
+  localBundle: string,
+): Promise<string> {
+  const primaryChannel = channels[0]
+  const linked = await getLinkedBundleOnChannel(supabase, appid, primaryChannel)
+  let baseVersion = linked?.name ?? null
+
+  if (baseVersion) {
+    log.info(`📦 Auto-bump base from channel ${primaryChannel}: ${baseVersion}`)
+  }
+  else {
+    baseVersion = await getLatestRemoteAppVersion(supabase, appid)
+    if (baseVersion)
+      log.info(`📦 Auto-bump base from latest remote app version: ${baseVersion}`)
+  }
+
+  if (!baseVersion) {
+    log.info(`ℹ️ No remote versions found for auto-bump, keeping local version ${localBundle}`)
+    return localBundle
+  }
+
+  let candidate = autoBumpMinorVersion(baseVersion)
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const exists = await versionExistsOnRemote(supabase, appid, candidate)
+    if (!exists) {
+      log.info(`🔢 Auto-bumped version from ${baseVersion} to ${candidate}`)
+      return candidate
+    }
+    candidate = autoBumpMinorVersion(candidate)
+  }
+
+  uploadFail(`Could not find a free minor-bumped version after 100 attempts (started from ${baseVersion})`)
+}
+
 // It is really important that this function never terminates the program, it should always return.
 async function getLinkedBundleOnChannel(supabase: SupabaseType, appid: string, channel: string): Promise<LinkedChannelVersion> {
   const { data, error } = await supabase
@@ -1180,24 +1247,19 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   if (options.verbose)
     log.info(`[Verbose] App ID: ${appid}, Build path: ${path}`)
 
-  const bundle = await getBundle(extConfig.config, options)
+  if (options.autoBump && options.bundle)
+    uploadFail('Cannot use --bundle (-b) and --auto-bump together. Omit --bundle to auto-increment from the latest remote version.')
+
+  let bundle = await getBundle(extConfig.config, options)
   if (options.verbose)
     log.info(`[Verbose] Bundle version: ${bundle}`)
 
   const defaultStorageProvider: Exclude<UploadBundleResult['storageProvider'], undefined> = options.external ? 'external' : 'r2-direct'
   let encryptionMethod: UploadBundleResult['encryptionMethod'] = 'none'
 
-  if (options.autoSetBundle) {
-    await updateConfigUpdater({ version: bundle })
-    if (options.verbose)
-      log.info(`[Verbose] Auto-set bundle version in ${extConfig.path}`)
-  }
-
   checkNotifyAppReady(options, path)
   if (options.verbose)
     log.info(`[Verbose] Code check passed (notifyAppReady found and index.html present)`)
-
-  log.info(`Upload ${appid}@${bundle} started from path "${path}" to Capgo cloud`)
 
   const localConfig = await getLocalConfig()
   if (options.verbose)
@@ -1251,6 +1313,22 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     log.info(`[Verbose] Plan validation passed`)
   if (options.verbose)
     log.info(`[Verbose] Trial check completed`)
+
+  if (options.autoBump) {
+    if (options.verbose)
+      log.info(`[Verbose] Resolving auto-bump version from channel/app remote versions...`)
+    bundle = await resolveAutoBumpVersion(supabase, appid, channels, bundle)
+    if (options.verbose)
+      log.info(`[Verbose] Bundle version after auto-bump: ${bundle}`)
+  }
+
+  if (options.autoSetBundle) {
+    await updateConfigUpdater({ version: bundle })
+    if (options.verbose)
+      log.info(`[Verbose] Auto-set bundle version in ${extConfig.path}`)
+  }
+
+  log.info(`Upload ${appid}@${bundle} started from path "${path}" to Capgo cloud`)
 
   if (options.verbose)
     log.info(`[Verbose] Checking if version ${bundle} already exists...`)

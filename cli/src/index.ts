@@ -265,6 +265,7 @@ Example: npx @capgo/cli@latest bundle upload com.example.app --path ./dist --cha
   .option('--no-delta', `Disable delta updates even if instant updates are enabled`)
   .option('--encrypted-checksum <encryptedChecksum>', `An encrypted checksum (signature). Used only when uploading an external bundle.`)
   .option('--auto-set-bundle', `Set the bundle version in Capacitor config`)
+  .option('--auto-bump', `Auto-increment bundle version from the latest remote channel/app version (semver minor)`)
   .option('--capacitor-config <path>', optionDescriptions.capacitorConfig)
   .option('--dry-upload', `Dry upload the bundle process: add the row in database without uploading files or updating channels (Used by Capgo for internal testing)`)
   .option('--package-json <packageJson>', optionDescriptions.packageJson)

@@ -30,6 +30,7 @@ export const mcpUploadBundleInputSchema = z.object({
   minUpdateVersion: z.string().optional(),
   autoMinUpdateVersion: z.boolean().optional(),
   autoSetBundle: z.boolean().optional(),
+  autoBump: z.boolean().optional(),
   encrypt: z.boolean().optional(),
   capacitorConfig: capacitorConfigOptionSchema.optional(),
 })

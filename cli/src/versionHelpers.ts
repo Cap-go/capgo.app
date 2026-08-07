@@ -23,6 +23,27 @@ export function autoBumpVersion(currentVersion: string): string {
 }
 
 /**
+ * Auto-bump a semver version by incrementing the minor number
+ * @param currentVersion - The current version string (e.g., "1.0.0")
+ * @returns The bumped version or a fallback version if parsing fails
+ */
+export function autoBumpMinorVersion(currentVersion: string): string {
+  try {
+    const parsed = parse(currentVersion)
+    return format(increment(parsed, 'minor'))
+  }
+  catch {
+    // Fallback: try to extract major.minor and increment minor
+    const match = currentVersion.match(/^(\d+)\.(\d+)\.(\d+)/)
+    if (match) {
+      const [, major, minor] = match
+      return `${major}.${Number.parseInt(minor) + 1}.0`
+    }
+    return '0.1.0' // Ultimate fallback
+  }
+}
+
+/**
  * Interactively ask the user how to handle version bumping
  * @param currentVersion - The current version
  * @param context - Optional context string (e.g., "upload", "onboarding")

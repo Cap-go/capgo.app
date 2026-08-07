@@ -210,6 +210,7 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
       minUpdateVersion,
       autoMinUpdateVersion,
       autoSetBundle,
+      autoBump,
       encrypt,
       capacitorConfig,
     }) => {
@@ -225,6 +226,7 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
         minUpdateVersion,
         autoMinUpdateVersion,
         autoSetBundle,
+        autoBump,
         encrypt,
         capacitorConfig,
       })
