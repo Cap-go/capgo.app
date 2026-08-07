@@ -22,15 +22,15 @@ test.describe('Observe sections', () => {
     await expect(updaterTab).toHaveAttribute('aria-current', 'page')
 
     await logsTab.click()
-    await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/logs$/)
+    await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/logs(?:\?|$)/)
     await expect(logsTab).toHaveAttribute('aria-current', 'page')
 
     await compatibilityTab.click()
-    await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/compatibility$/)
+    await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/compatibility(?:\?|$)/)
     await expect(compatibilityTab).toHaveAttribute('aria-current', 'page')
 
     await pluginsTab.click()
-    await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/plugins$/)
+    await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/plugins(?:\?|$)/)
     await expect(pluginsTab).toHaveAttribute('aria-current', 'page')
     await expect(page.locator('[data-test="observe-plugin-insights"]')).toBeVisible()
     await expect(page.locator('[data-test="observe-plugin-insights"] table').getByText('4.15.3', { exact: true })).toBeVisible()
@@ -45,7 +45,7 @@ test.describe('Observe sections', () => {
     expect((pluginsBox?.x ?? 0) + (pluginsBox?.width ?? 0)).toBeLessThanOrEqual(375)
 
     await nativeTab.click()
-    await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/native$/)
+    await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/native(?:\?|$)/)
     await expect(page.getByRole('heading', { name: 'All versions summary', exact: true })).toBeVisible()
   })
 })

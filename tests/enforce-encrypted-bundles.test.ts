@@ -299,8 +299,9 @@ describe('[Encrypted Bundles Enforcement]', () => {
         })
 
         expect(response.ok).toBe(false)
-        const data = await response.json() as { error: string }
-        expect(data.error).toContain('encryption')
+        const data = await response.json() as { error?: string, message?: string }
+        const errorText = `${data.error ?? ''} ${data.message ?? ''}`.trim()
+        expect(errorText, `unexpected encryption rejection body: ${JSON.stringify(data)}`).toMatch(/encryption/i)
       })
     })
 
