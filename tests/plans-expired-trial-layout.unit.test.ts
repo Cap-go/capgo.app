@@ -5,7 +5,12 @@ const plansSource = readFileSync(new URL('../src/pages/settings/organization/Pla
 
 describe('expired trial plans layout', () => {
   it('keeps the credits and premium support banners ahead of the plans', () => {
-    expect(plansSource).not.toContain("showExpiredTrialState ? 'order-2 mt-6' : 'order-0 mb-6'")
-    expect(plansSource).not.toContain("showExpiredTrialState ? 'order-1' : 'order-0'")
+    const creditsIndex = plansSource.indexOf('<CreditsCta')
+    const expertSupportIndex = plansSource.indexOf("'expert-service-title'")
+    const plansIndex = plansSource.indexOf('<!-- Plans Grid -->')
+
+    expect(creditsIndex).toBeGreaterThanOrEqual(0)
+    expect(expertSupportIndex).toBeGreaterThan(creditsIndex)
+    expect(plansIndex).toBeGreaterThan(expertSupportIndex)
   })
 })
