@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict'
 import { cwd } from 'node:process'
 import { Command } from 'commander'
+import { IncompatibleBundleError } from '../src/bundle/upload.ts'
 import {
   capturePosthogException,
   getCommandPath,
@@ -149,6 +150,10 @@ try {
   // `uploadFail` now throws CliUserError, so a duplicate-version upload — a normal
   // `bundle upload` outcome — is filtered out of error tracking by type.
   assert.equal(shouldCapturePosthogException(new CliUserError('Version 1.2.3 already exists')), false)
+  // The `--fail-on-incompatible` abort is a state the user asked for, not a
+  // crash, so it must never open an error tracking issue either.
+  assert.equal(new IncompatibleBundleError('Upload aborted: bundle is incompatible') instanceof CliUserError, true)
+  assert.equal(shouldCapturePosthogException(new IncompatibleBundleError('Upload aborted: bundle is incompatible')), false)
   // A user-initiated cancel (Ctrl+C / Escape at an interactive prompt) is a
   // deliberate abort, not a crash — the cancel sites throw CliUserError so it
   // never opens an error tracking issue.
