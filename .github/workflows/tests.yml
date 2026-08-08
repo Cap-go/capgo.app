@@ -1245,7 +1245,8 @@ jobs:
     if: needs.changes.outputs.run_cli == 'true'
     name: CLI POSIX paths (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 5
+    # windows-2022 often needs >5m for bun install + CLI zip under shared runners.
+    timeout-minutes: 10
     strategy:
       matrix:
         os: [windows-2025, windows-2022]
