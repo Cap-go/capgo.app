@@ -16,7 +16,6 @@ import IconSend from '~icons/lucide/send'
 import IconZap from '~icons/lucide/zap'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
-import { useOrganizationStore } from '~/stores/organization'
 
 interface NotificationProviderConfig {
   id: string
@@ -75,8 +74,6 @@ const { t } = useI18n()
 const route = useRoute()
 const supabase = useSupabase()
 const displayStore = useDisplayStore()
-const organizationStore = useOrganizationStore()
-const isOrgUnpaid = computed(() => organizationStore.currentOrganizationFailed)
 
 const id = ref('')
 const isLoading = ref(false)
@@ -629,8 +626,7 @@ watch(activeNotificationTab, () => {
 
 <template>
   <div>
-    <UnpaidState v-if="isOrgUnpaid" />
-    <div v-else-if="app || isLoading">
+    <div v-if="app || isLoading">
       <nav class="relative -mt-px border-t bg-blue-50 dark:bg-slate-800/40 border-blue-200/60 dark:border-blue-800/70" aria-label="Notification sections">
         <ul class="flex flex-nowrap max-w-full gap-2 px-1 py-2 overflow-x-auto overflow-y-hidden overscroll-x-contain touch-pan-x no-scrollbar text-sm font-medium text-center text-gray-600 dark:text-gray-200">
           <li v-for="tab in notificationTabs" :key="tab.key" class="mr-2">
