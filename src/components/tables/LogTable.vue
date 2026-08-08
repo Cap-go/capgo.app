@@ -9,7 +9,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import { formatDate } from '~/services/date'
 import { getLogDocUrl } from '~/services/logDocLinks'
-import { actionToFilter, createActionFilterState, failureActionFilterKeys, filterToAction } from '~/services/statsActions'
+import { actionToFilter, createActionFilterState, failureActionFilterKeys, filterToAction, observeActionFilterKeys, updateActionFilterKeys } from '~/services/statsActions'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
 
 const props = defineProps<{
@@ -137,6 +137,8 @@ async function copyMetadata(elem: Element) {
 }
 const filterShortcuts = [
   { label: 'filter-shortcut-all-fail', filters: failureActionFilterKeys },
+  { label: 'filter-shortcut-updates', filters: updateActionFilterKeys },
+  { label: 'filter-shortcut-observe', filters: observeActionFilterKeys },
 ]
 let latestDataRequest = 0
 const actionFilters = ref<Record<string, boolean>>(createActionFilterState())

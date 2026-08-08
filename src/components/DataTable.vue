@@ -6,7 +6,6 @@ import DOMPurify from 'dompurify'
 import {
   computed,
   defineComponent,
-  nextTick,
   onMounted,
   onUnmounted,
   ref,
@@ -16,7 +15,6 @@ import {
 } from 'vue'
 import { useI18n } from 'vue-i18n'
 import IconTrash from '~icons/heroicons/trash'
-import IconClose from '~icons/heroicons/x-mark'
 import IconPrev from '~icons/ic/round-keyboard-arrow-left'
 import IconNext from '~icons/ic/round-keyboard-arrow-right'
 import IconFastBackward from '~icons/ic/round-keyboard-double-arrow-left'
@@ -28,6 +26,8 @@ import IconSortUp from '~icons/lucide/chevron-up'
 import IconSort from '~icons/lucide/chevrons-up-down'
 import IconFilter from '~icons/system-uicons/filtering'
 import IconReload from '~icons/tabler/reload'
+import FilterModal from '~/components/FilterModal.vue'
+import { createClearedFilters } from '~/composables/useFilterModal'
 
 interface Props {
   isLoading?: boolean
@@ -76,7 +76,6 @@ const emit = defineEmits([
   'clearExtraFilters',
 ])
 const isFilterModalOpen = ref(false)
-const filterModalBoxRef = ref<HTMLElement | null>(null)
 const filterOpenButtonRef = ref<HTMLButtonElement | null>(null)
 const filterModalTitleId = `${useId()}-filters-title`
 const addTooltipId = `${useId()}-add-tooltip`
@@ -135,60 +134,7 @@ function openFilterModal() {
 
 function closeFilterModal() {
   isFilterModalOpen.value = false
-  nextTick(() => {
-    filterOpenButtonRef.value?.focus()
-  })
 }
-
-function getFilterModalFocusable() {
-  const root = filterModalBoxRef.value
-  if (!root)
-    return [] as HTMLElement[]
-  return Array.from(root.querySelectorAll<HTMLElement>(
-    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-  )).filter(el => !el.hasAttribute('disabled') && el.offsetParent !== null)
-}
-
-function onFilterModalKeydown(e: KeyboardEvent) {
-  if (!isFilterModalOpen.value)
-    return
-  if (e.key === 'Escape') {
-    e.preventDefault()
-    closeFilterModal()
-    return
-  }
-  if (e.key !== 'Tab')
-    return
-  const focusable = getFilterModalFocusable()
-  if (!focusable.length)
-    return
-  const first = focusable[0]!
-  const last = focusable[focusable.length - 1]!
-  if (e.shiftKey && document.activeElement === first) {
-    e.preventDefault()
-    last.focus()
-  }
-  else if (!e.shiftKey && document.activeElement === last) {
-    e.preventDefault()
-    first.focus()
-  }
-}
-
-watch(isFilterModalOpen, async (open) => {
-  if (open) {
-    window.addEventListener('keydown', onFilterModalKeydown)
-    await nextTick()
-    const focusable = getFilterModalFocusable()
-    focusable[0]?.focus()
-  }
-  else {
-    window.removeEventListener('keydown', onFilterModalKeydown)
-  }
-})
-
-onUnmounted(() => {
-  window.removeEventListener('keydown', onFilterModalKeydown)
-})
 
 const debouncedReload = useDebounceFn(() => {
   emit('reload')
@@ -197,12 +143,8 @@ const debouncedReload = useDebounceFn(() => {
 function clearAllFilters() {
   // Emit a new filters object so DataTable's filters watcher performs one reload.
   // Extra filters are cleared without scheduling a second reload.
-  if (props.filters) {
-    const cleared = Object.fromEntries(
-      Object.keys(props.filters).map(key => [key, false]),
-    ) as { [key: string]: boolean }
-    emit('update:filters', cleared)
-  }
+  if (props.filters)
+    emit('update:filters', createClearedFilters(props.filters))
   emit('clearExtraFilters')
 }
 
@@ -626,103 +568,51 @@ const paginationClass = computed(() => props.mobileFixedPagination
             <IconFilter class="w-4 h-4 mr-2" />
             <span class="hidden md:block">{{ t(filterText ?? '') }}</span>
           </button>
-          <Teleport to="body">
-            <div
-              v-if="isFilterModalOpen"
-              class="d-modal d-modal-open"
-              role="dialog"
-              aria-modal="true"
-              :aria-labelledby="filterModalTitleId"
-              data-test="data-table-filters-modal"
-            >
-              <div
-                ref="filterModalBoxRef"
-                class="d-modal-box w-[calc(100vw-2rem)] max-w-md rounded-lg border border-slate-200 bg-white p-0 shadow-2xl dark:border-slate-700 dark:bg-slate-900"
-              >
-                <div class="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4 dark:border-slate-800">
-                  <div class="min-w-0">
-                    <h2
-                      :id="filterModalTitleId"
-                      class="text-lg font-semibold leading-7 text-slate-950 dark:text-white"
-                    >
-                      {{ t(filterText ?? 'Filters') }}
-                    </h2>
-                    <p class="mt-1 text-sm leading-5 text-slate-600 dark:text-slate-300">
-                      {{ t('filter-modal-subtitle') }}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-slate-500 transition-colors duration-200 hover:bg-slate-100 hover:text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-azure-500 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
-                    :aria-label="t('close')"
-                    data-test="data-table-filters-close"
-                    @click="closeFilterModal"
-                  >
-                    <IconClose class="h-5 w-5" />
-                  </button>
-                </div>
-
-                <div class="max-h-[min(28rem,60vh)] space-y-5 overflow-y-auto px-5 py-5">
-                  <div v-if="$slots['filter-extras']" class="space-y-4">
-                    <slot name="filter-extras" />
-                  </div>
-                  <div
-                    v-if="$slots['filter-extras'] && filterList.length"
-                    class="border-t border-slate-200 dark:border-slate-700"
-                    role="separator"
-                  />
-                  <fieldset v-if="filterList.length" class="space-y-1">
-                    <legend class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
-                      {{ t('filter-options') }}
-                    </legend>
-                    <label
-                      v-for="(f, i) in filterList"
-                      :key="i"
-                      :for="`filter-radio-example-${i}`"
-                      class="flex min-h-11 cursor-pointer items-center rounded-md px-2 py-2 transition-colors duration-150 hover:bg-slate-50 dark:hover:bg-slate-800"
-                    >
-                      <input
-                        :id="`filter-radio-example-${i}`"
-                        :checked="filters?.[f]"
-                        type="checkbox"
-                        :name="`filter-radio-${i}`"
-                        class="h-4 w-4 shrink-0 rounded border-gray-300 text-azure-500 focus:ring-2 focus:ring-azure-500 dark:border-gray-600 dark:bg-gray-700 dark:ring-offset-gray-800"
-                        @change="
-                          emit('update:filters', { ...filters, [f]: !filters?.[f] })
-                        "
-                      >
-                      <span class="ml-3 min-w-0 text-sm font-medium text-slate-900 dark:text-slate-200">
-                        {{ getFilterLabel(f) }}
-                      </span>
-                    </label>
-                  </fieldset>
-                </div>
-
-                <div class="flex flex-col-reverse gap-2 border-t border-slate-100 px-5 py-4 sm:flex-row sm:items-center sm:justify-between dark:border-slate-800">
-                  <button
-                    type="button"
-                    class="d-btn d-btn-ghost min-h-11"
-                    data-test="data-table-filters-clear"
-                    :disabled="!filterActivated"
-                    @click="clearAllFilters"
-                  >
-                    {{ t('clear-filters') }}
-                  </button>
-                  <button
-                    type="button"
-                    class="d-btn d-btn-primary min-h-11"
-                    data-test="data-table-filters-done"
-                    @click="closeFilterModal"
-                  >
-                    {{ t('done') }}
-                  </button>
-                </div>
-              </div>
-              <form method="dialog" class="d-modal-backdrop">
-                <button type="button" :aria-label="t('close')" @click="closeFilterModal" />
-              </form>
+          <FilterModal
+            :open="isFilterModalOpen"
+            :title="t(filterText ?? 'Filters')"
+            :subtitle="t('filter-modal-subtitle')"
+            :title-id="filterModalTitleId"
+            :clear-disabled="!filterActivated"
+            :restore-focus-el="filterOpenButtonRef"
+            test-id-prefix="data-table"
+            @close="closeFilterModal"
+            @clear="clearAllFilters"
+          >
+            <div v-if="$slots['filter-extras']" class="space-y-4">
+              <slot name="filter-extras" />
             </div>
-          </Teleport>
+            <div
+              v-if="$slots['filter-extras'] && filterList.length"
+              class="border-t border-slate-200 dark:border-slate-700"
+              role="separator"
+            />
+            <fieldset v-if="filterList.length" class="space-y-1">
+              <legend class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                {{ t('filter-options') }}
+              </legend>
+              <label
+                v-for="(f, i) in filterList"
+                :key="f"
+                :for="`filter-radio-example-${i}`"
+                class="flex min-h-11 cursor-pointer items-center rounded-md px-2 py-2 transition-colors duration-150 hover:bg-slate-50 dark:hover:bg-slate-800"
+              >
+                <input
+                  :id="`filter-radio-example-${i}`"
+                  :checked="filters?.[f]"
+                  type="checkbox"
+                  :name="`filter-radio-${i}`"
+                  class="h-4 w-4 shrink-0 rounded border-gray-300 text-azure-500 focus:ring-2 focus:ring-azure-500 dark:border-gray-600 dark:bg-gray-700 dark:ring-offset-gray-800"
+                  @change="
+                    emit('update:filters', { ...filters, [f]: !filters?.[f] })
+                  "
+                >
+                <span class="ml-3 min-w-0 text-sm font-medium text-slate-900 dark:text-slate-200">
+                  {{ getFilterLabel(f) }}
+                </span>
+              </label>
+            </fieldset>
+          </FilterModal>
         </div>
       </div>
       <button
