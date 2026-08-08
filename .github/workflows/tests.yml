@@ -462,6 +462,7 @@ jobs:
           warm_get '/organization?orgId=00000000-0000-0000-0000-000000000000'
           warm_post /organization
           warm_post /organization/members
+          warm_post /apikey
       - name: Run backend integration tests
         env:
           VITEST_SHARD: ${{ matrix.shard }}

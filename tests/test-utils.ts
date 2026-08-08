@@ -487,19 +487,36 @@ export const headersInternal = {
   'apisecret': API_SECRET,
 }
 
+/** Kong proxy body when the Deno isolate dies mid-request under shard load. */
+const KONG_UPSTREAM_INVALID_RESPONSE = 'An invalid response was received from the upstream server'
+
 /**
- * Send one request. A transient failure is test evidence, not a reason to rerun it.
+ * Send one request. Application 4xx/5xx are test evidence and are not retried.
+ * Only Kong's upstream-invalid 502/503 (isolate crash/reload) is retried — same
+ * signal the CI warm step already treats as non-ready.
  */
 export async function fetchTestRequest(
   url: string,
   options?: RequestInit,
 ): Promise<Response> {
-  const response = await fetch(url, options)
-  if (response.status === 502 || response.status === 503) {
+  const maxAttempts = 3
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const response = await fetch(url, options)
+    if (response.status !== 502 && response.status !== 503)
+      return response
+
     const body = await response.clone().text().catch(() => '<unreadable body>')
-    console.error(`[fetchTestRequest] gateway status=${response.status} url=${url} body=${body.slice(0, 800)}`)
+    console.error(`[fetchTestRequest] gateway status=${response.status} attempt=${attempt}/${maxAttempts} url=${url} body=${body.slice(0, 800)}`)
+
+    const isKongUpstreamDeath = body.includes(KONG_UPSTREAM_INVALID_RESPONSE)
+    if (!isKongUpstreamDeath || attempt === maxAttempts)
+      return response
+
+    await new Promise(resolve => setTimeout(resolve, 250 * attempt))
   }
-  return response
+
+  // Unreachable — loop always returns — keeps TypeScript definite.
+  return fetch(url, options)
 }
 
 /**
