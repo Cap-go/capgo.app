@@ -6,6 +6,7 @@ test.use({ screenshot: 'off', trace: 'off', video: 'off' })
 // The seeded demo app owned by the `test@capgo.app` user (see supabase/seed.sql).
 // Sibling specs implicitly rely on this same login, so we reuse its demo app id.
 const APP_ID = 'com.demo.app'
+const TEST_USER_ID = '6aa76066-55ef-4238-ade6-0b32334a4097'
 
 // A single unresolved, incompatible event used across the history + accept flows.
 // `id` is the PostgREST primary key the accept RPC is called with; the bundle ids
@@ -107,6 +108,10 @@ async function mockStoreReleaseValidationStatus(page: Page) {
 test.describe('Compatibility events', () => {
   test.beforeEach(async ({ page }) => {
     await page.login('test@capgo.app', 'testtest')
+    // Keep the support-usernames prompt from covering store-release alert actions.
+    await page.evaluate((userId) => {
+      localStorage.setItem(`capgo.supportUsernames.dismissed.${userId}`, '1')
+    }, TEST_USER_ID)
   })
 
   test('shows the store release validation alert before opening the modal', async ({ page }) => {
