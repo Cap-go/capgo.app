@@ -208,12 +208,7 @@ export async function setChannelInternal(channel: string, appId: string, options
     || hasRolloutTargetChange
     || hasRolloutConfiguration
   const hasBundlePromotion = hasStableBundlePromotion || hasRolloutTargetChange
-  const { data: existingChannel, error: channelError } = await findChannel({
-    apikey: options.apikey!,
-    silent,
-    supaHost: options.supaHost,
-    supaAnon: options.supaAnon,
-  }, appId, channel)
+  const { data: existingChannel, error: channelError } = await findChannel(supabase, appId, channel)
   if (channelError || !existingChannel) {
     if (!silent)
       log.error(`Cannot find channel ${channel}`)
@@ -293,7 +288,7 @@ export async function setChannelInternal(channel: string, appId: string, options
       log.info(`Set ${appId} channel: ${channel} to @${resolvedBundleVersion}`)
 
     channelPayload.version = data.id
-    bundleLinkChanged = bundleLinkChanged || existingChannel.version?.id !== data.id
+    bundleLinkChanged = bundleLinkChanged || existingChannel.version !== data.id
   }
 
   if (latestRemote) {
@@ -336,7 +331,7 @@ export async function setChannelInternal(channel: string, appId: string, options
       log.info(`Set ${appId} channel: ${channel} to @${data.name}`)
 
     channelPayload.version = data.id
-    bundleLinkChanged = bundleLinkChanged || existingChannel.version?.id !== data.id
+    bundleLinkChanged = bundleLinkChanged || existingChannel.version !== data.id
   }
 
   if (rolloutBundle != null) {
@@ -371,7 +366,7 @@ export async function setChannelInternal(channel: string, appId: string, options
       }
     }
 
-    if ((existingChannel.version?.id == null) && channelPayload.version == null)
+    if (existingChannel.version == null && channelPayload.version == null)
       throw new Error('Cannot set rollout target without a stable bundle')
 
     channelPayload.rollout_version = data.id
@@ -459,7 +454,7 @@ export async function setChannelInternal(channel: string, appId: string, options
     }
 
     channelPayload.version = rolloutVersion
-    bundleLinkChanged = bundleLinkChanged || existingChannel.version?.id !== rolloutVersion
+    bundleLinkChanged = bundleLinkChanged || existingChannel.version !== rolloutVersion
     channelPayload.rollout_version = null
     channelPayload.rollout_enabled = false
     channelPayload.rollout_percentage_bps = 0

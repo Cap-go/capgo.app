@@ -82,7 +82,10 @@ export async function addChannelInternal(channelId: string, appId: string, optio
     outro('Done ✅')
   }
 
-  return res.data ?? true
+  // POST /channel returns { status: 'ok' } when creating without a bundle promote;
+  // keep the previous PostgREST shape so callers can read the channel name.
+  const data = res.data && typeof res.data === 'object' ? res.data as Record<string, unknown> : {}
+  return { name: channelId, ...data }
 }
 
 export async function addChannel(channelId: string, appId: string, options: ChannelAddOptions) {

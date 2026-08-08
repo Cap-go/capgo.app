@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Database } from '../types/supabase.types'
 import { confirm as confirmC, intro, log, outro, spinner } from '@clack/prompts'
 import { Table } from '@sauber/table'
-import { formatError, getCapgoCliHttpStatus, invokeCapgoCliApi, readCapgoCliApiErrorPayload } from '../utils'
+import { formatError, getCapgoCliHttpStatus, invokeCapgoCliApi } from '../utils'
 
 interface CheckVersionOptions {
   silent?: boolean
@@ -219,15 +219,15 @@ export function delChannel(options: CapgoHttpOptions, name: string, appId: strin
   })
 }
 
-export async function findChannel(options: CapgoHttpOptions, appId: string, name: string) {
-  const { data, error } = await fetchChannelsPage(appId, 0, options, name)
-  if (error) {
-    const payload = await readCapgoCliApiErrorPayload(error)
-    return { data: null, error: error ?? new Error(payload?.message || 'Channel not found') }
-  }
-  if (!data || Array.isArray(data))
-    return { data: null, error: new Error('Channel not found') }
-  return { data: { ...normalizeHttpChannel(data), owner_org: undefined as string | undefined, rollout_version: data.rollout_version ?? data.rollout_version_info?.id ?? null }, error: null }
+// Channel reads stay on PostgREST so RLS (app.read / channel.read) matches console and
+// preview-key behavior. HTTP GET /channel requires app.read_channels, which preview keys lack.
+export function findChannel(supabase: SupabaseClient<Database>, appId: string, name: string) {
+  return supabase
+    .from('channels')
+    .select()
+    .eq('app_id', appId)
+    .eq('name', name)
+    .single()
 }
 
 export type { Channel } from '../schemas/channel'

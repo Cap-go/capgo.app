@@ -34,7 +34,7 @@ export async function deleteChannelInternal(channelId: string, appId: string, op
     supaAnon: options.supaAnon,
   }
 
-  const { data: channel, error: channelError } = await findChannel(httpOptions, appId, channelId)
+  const { data: channel, error: channelError } = await findChannel(supabase, appId, channelId)
   if (channelError || !channel) {
     if (!silent)
       log.error(`Channel ${channelId} not found`)
