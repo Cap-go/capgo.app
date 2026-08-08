@@ -228,7 +228,7 @@ describeBackend('[GET] /webhooks', () => {
 
 describeBackend('[POST] /webhooks', () => {
   it('create webhook', async () => {
-    const response = await fetch(webhookEndpoint(), {
+    const response = await fetchTestRequest(webhookEndpoint(), {
       method: 'POST',
       headers: webhookHeaders,
       body: JSON.stringify({
@@ -253,7 +253,7 @@ describeBackend('[POST] /webhooks', () => {
   })
 
   it('create webhook with Standard Webhooks delivery version', async () => {
-    const response = await fetch(webhookEndpoint(), {
+    const response = await fetchTestRequest(webhookEndpoint(), {
       method: 'POST',
       headers: webhookHeaders,
       body: JSON.stringify({
@@ -395,7 +395,7 @@ describeBackend('[POST] /webhooks', () => {
   })
 
   it('create webhook with missing required fields', async () => {
-    const response = await fetch(webhookEndpoint(), {
+    const response = await fetchTestRequest(webhookEndpoint(), {
       method: 'POST',
       headers: webhookHeaders,
       body: JSON.stringify({
@@ -410,7 +410,7 @@ describeBackend('[POST] /webhooks', () => {
   })
 
   it('create webhook with invalid URL', async () => {
-    const response = await fetch(webhookEndpoint(), {
+    const response = await fetchTestRequest(webhookEndpoint(), {
       method: 'POST',
       headers: webhookHeaders,
       body: JSON.stringify({
@@ -426,7 +426,7 @@ describeBackend('[POST] /webhooks', () => {
   })
 
   it('create webhook with HTTP URL (non-HTTPS)', async () => {
-    const response = await fetch(webhookEndpoint(), {
+    const response = await fetchTestRequest(webhookEndpoint(), {
       method: 'POST',
       headers: webhookHeaders,
       body: JSON.stringify({
@@ -443,7 +443,7 @@ describeBackend('[POST] /webhooks', () => {
   })
 
   it('create webhook with invalid events', async () => {
-    const response = await fetch(webhookEndpoint(), {
+    const response = await fetchTestRequest(webhookEndpoint(), {
       method: 'POST',
       headers: webhookHeaders,
       body: JSON.stringify({
@@ -459,7 +459,7 @@ describeBackend('[POST] /webhooks', () => {
   })
 
   it('create webhook with invalid delivery version', async () => {
-    const response = await fetch(webhookEndpoint(), {
+    const response = await fetchTestRequest(webhookEndpoint(), {
       method: 'POST',
       headers: webhookHeaders,
       body: JSON.stringify({
@@ -476,7 +476,7 @@ describeBackend('[POST] /webhooks', () => {
   })
 
   it('create webhook with empty events array', async () => {
-    const response = await fetch(webhookEndpoint(), {
+    const response = await fetchTestRequest(webhookEndpoint(), {
       method: 'POST',
       headers: webhookHeaders,
       body: JSON.stringify({
@@ -493,7 +493,7 @@ describeBackend('[POST] /webhooks', () => {
 
   it('create webhook with invalid orgId', async () => {
     const invalidOrgId = randomUUID()
-    const response = await fetch(webhookEndpoint(), {
+    const response = await fetchTestRequest(webhookEndpoint(), {
       method: 'POST',
       headers: webhookHeaders,
       body: JSON.stringify({
@@ -507,7 +507,7 @@ describeBackend('[POST] /webhooks', () => {
   })
 
   it('create webhook rejects localhost URL', async () => {
-    const response = await fetch(webhookEndpoint(), {
+    const response = await fetchTestRequest(webhookEndpoint(), {
       method: 'POST',
       headers: webhookHeaders,
       body: JSON.stringify({
@@ -557,7 +557,7 @@ describeBackend('[PUT] /webhooks', () => {
       throw new Error('Webhook was not created in previous test')
 
     const newName = `Updated Webhook ${globalId}`
-    const response = await fetch(webhookEndpoint(), {
+    const response = await fetchTestRequest(webhookEndpoint(), {
       method: 'PUT',
       headers: webhookHeaders,
       body: JSON.stringify({
@@ -578,7 +578,7 @@ describeBackend('[PUT] /webhooks', () => {
       throw new Error('Webhook was not created in previous test')
 
     const newUrl = 'https://updated.example.com/webhook'
-    const response = await fetch(webhookEndpoint(), {
+    const response = await fetchTestRequest(webhookEndpoint(), {
       method: 'PUT',
       headers: webhookHeaders,
       body: JSON.stringify({
@@ -596,7 +596,7 @@ describeBackend('[PUT] /webhooks', () => {
     if (!createdWebhookId)
       throw new Error('Webhook was not created in previous test')
 
-    const response = await fetch(webhookEndpoint(), {
+    const response = await fetchTestRequest(webhookEndpoint(), {
       method: 'PUT',
       headers: webhookHeaders,
       body: JSON.stringify({
@@ -615,7 +615,7 @@ describeBackend('[PUT] /webhooks', () => {
     if (!createdWebhookId)
       throw new Error('Webhook was not created in previous test')
 
-    const response = await fetch(webhookEndpoint(), {
+    const response = await fetchTestRequest(webhookEndpoint(), {
       method: 'PUT',
       headers: webhookHeaders,
       body: JSON.stringify({
@@ -629,7 +629,7 @@ describeBackend('[PUT] /webhooks', () => {
     expect(data.webhook.enabled).toBe(false)
 
     // Re-enable for subsequent tests
-    await fetch(webhookEndpoint(), {
+    await fetchTestRequest(webhookEndpoint(), {
       method: 'PUT',
       headers: webhookHeaders,
       body: JSON.stringify({
@@ -644,7 +644,7 @@ describeBackend('[PUT] /webhooks', () => {
     if (!createdWebhookId)
       throw new Error('Webhook was not created in previous test')
 
-    const standardResponse = await fetch(webhookEndpoint(), {
+    const standardResponse = await fetchTestRequest(webhookEndpoint(), {
       method: 'PUT',
       headers: webhookHeaders,
       body: JSON.stringify({
@@ -657,7 +657,7 @@ describeBackend('[PUT] /webhooks', () => {
     const standardData = await standardResponse.json() as { webhook: { delivery_version: string } }
     expect(standardData.webhook.delivery_version).toBe('standard')
 
-    const legacyResponse = await fetch(webhookEndpoint(), {
+    const legacyResponse = await fetchTestRequest(webhookEndpoint(), {
       method: 'PUT',
       headers: webhookHeaders,
       body: JSON.stringify({
@@ -675,7 +675,7 @@ describeBackend('[PUT] /webhooks', () => {
     if (!createdWebhookId)
       throw new Error('Webhook was not created in previous test')
 
-    const response = await fetch(webhookEndpoint(), {
+    const response = await fetchTestRequest(webhookEndpoint(), {
       method: 'PUT',
       headers: webhookHeaders,
       body: JSON.stringify({
@@ -690,7 +690,7 @@ describeBackend('[PUT] /webhooks', () => {
 
   it('update webhook with invalid webhookId', async () => {
     const invalidWebhookId = randomUUID()
-    const response = await fetch(webhookEndpoint(), {
+    const response = await fetchTestRequest(webhookEndpoint(), {
       method: 'PUT',
       headers: webhookHeaders,
       body: JSON.stringify({
@@ -708,7 +708,7 @@ describeBackend('[PUT] /webhooks', () => {
     if (!createdWebhookId)
       throw new Error('Webhook was not created in previous test')
 
-    const response = await fetch(webhookEndpoint(), {
+    const response = await fetchTestRequest(webhookEndpoint(), {
       method: 'PUT',
       headers: webhookHeaders,
       body: JSON.stringify({
@@ -726,7 +726,7 @@ describeBackend('[PUT] /webhooks', () => {
     if (!createdWebhookId)
       throw new Error('Webhook was not created in previous test')
 
-    const response = await fetch(webhookEndpoint(), {
+    const response = await fetchTestRequest(webhookEndpoint(), {
       method: 'PUT',
       headers: webhookHeaders,
       body: JSON.stringify({
@@ -747,7 +747,7 @@ describeBackend('[POST] /webhooks/test', () => {
     if (!createdWebhookId)
       throw new Error('Webhook was not created in previous test')
 
-    const response = await fetch(webhookEndpoint('/test'), {
+    const response = await fetchTestRequest(webhookEndpoint('/test'), {
       method: 'POST',
       headers: webhookHeaders,
       body: JSON.stringify({
@@ -782,7 +782,7 @@ describeBackend('[POST] /webhooks/test', () => {
 
   it('test webhook with invalid webhookId', async () => {
     const invalidWebhookId = randomUUID()
-    const response = await fetch(webhookEndpoint('/test'), {
+    const response = await fetchTestRequest(webhookEndpoint('/test'), {
       method: 'POST',
       headers: webhookHeaders,
       body: JSON.stringify({
@@ -806,7 +806,7 @@ describeBackend('[POST] /webhooks/test', () => {
     expect(updateError).toBeNull()
 
     try {
-      const response = await fetch(webhookEndpoint('/test'), {
+      const response = await fetchTestRequest(webhookEndpoint('/test'), {
         method: 'POST',
         headers: webhookHeaders,
         body: JSON.stringify({
@@ -828,7 +828,7 @@ describeBackend('[POST] /webhooks/test', () => {
   })
 
   it('test webhook with missing body', async () => {
-    const response = await fetch(webhookEndpoint('/test'), {
+    const response = await fetchTestRequest(webhookEndpoint('/test'), {
       method: 'POST',
       headers: webhookHeaders,
       body: JSON.stringify({}),
@@ -843,7 +843,7 @@ describeBackend('[POST] /webhooks/test', () => {
     if (!createdWebhookId || !appScopedKey)
       throw new Error('Webhook test prerequisites were not created')
 
-    const response = await fetch(webhookEndpoint('/test'), {
+    const response = await fetchTestRequest(webhookEndpoint('/test'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -865,7 +865,7 @@ describeBackend('[POST] /webhooks/test', () => {
     if (!createdWebhookId || !appScopedKey || !orgScopedSubkeyId)
       throw new Error('Webhook subkey test prerequisites were not created')
 
-    const response = await fetch(webhookEndpoint('/test'), {
+    const response = await fetchTestRequest(webhookEndpoint('/test'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -975,7 +975,7 @@ describeBackend('[GET] /webhooks/deliveries', () => {
 describeBackend('[POST] /webhooks/deliveries/retry', () => {
   it('retry delivery with invalid deliveryId', async () => {
     const invalidDeliveryId = randomUUID()
-    const response = await fetch(webhookEndpoint('/deliveries/retry'), {
+    const response = await fetchTestRequest(webhookEndpoint('/deliveries/retry'), {
       method: 'POST',
       headers: webhookHeaders,
       body: JSON.stringify({
@@ -992,7 +992,7 @@ describeBackend('[POST] /webhooks/deliveries/retry', () => {
     if (!lastDeliveryId || !appScopedKey)
       throw new Error('Delivery retry prerequisites were not created')
 
-    const response = await fetch(webhookEndpoint('/deliveries/retry'), {
+    const response = await fetchTestRequest(webhookEndpoint('/deliveries/retry'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1014,7 +1014,7 @@ describeBackend('[POST] /webhooks/deliveries/retry', () => {
     if (!lastDeliveryId || !appScopedKey || !orgScopedSubkeyId)
       throw new Error('Delivery retry subkey prerequisites were not created')
 
-    const response = await fetch(webhookEndpoint('/deliveries/retry'), {
+    const response = await fetchTestRequest(webhookEndpoint('/deliveries/retry'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1065,7 +1065,7 @@ describeBackend('[POST] /webhooks/deliveries/retry', () => {
     expect(insertError).toBeNull()
 
     try {
-      const response = await fetch(webhookEndpoint('/deliveries/retry'), {
+      const response = await fetchTestRequest(webhookEndpoint('/deliveries/retry'), {
         method: 'POST',
         headers: webhookHeaders,
         body: JSON.stringify({
@@ -1126,7 +1126,7 @@ describeBackend('[POST] /webhooks/deliveries/retry', () => {
     expect(updateError).toBeNull()
 
     try {
-      const response = await fetch(webhookEndpoint('/deliveries/retry'), {
+      const response = await fetchTestRequest(webhookEndpoint('/deliveries/retry'), {
         method: 'POST',
         headers: webhookHeaders,
         body: JSON.stringify({
@@ -1152,7 +1152,7 @@ describeBackend('[POST] /webhooks/deliveries/retry', () => {
   })
 
   it('retry delivery with missing body', async () => {
-    const response = await fetch(webhookEndpoint('/deliveries/retry'), {
+    const response = await fetchTestRequest(webhookEndpoint('/deliveries/retry'), {
       method: 'POST',
       headers: webhookHeaders,
       body: JSON.stringify({}),
@@ -1167,7 +1167,7 @@ describeBackend('[POST] /webhooks/deliveries/retry', () => {
 describeBackend('[DELETE] /webhooks', () => {
   it('delete webhook with invalid webhookId', async () => {
     const invalidWebhookId = randomUUID()
-    const response = await fetch(webhookEndpoint(`?orgId=${WEBHOOK_TEST_ORG_ID}&webhookId=${invalidWebhookId}`), {
+    const response = await fetchTestRequest(webhookEndpoint(`?orgId=${WEBHOOK_TEST_ORG_ID}&webhookId=${invalidWebhookId}`), {
       method: 'DELETE',
       headers: webhookHeaders,
     })
@@ -1177,7 +1177,7 @@ describeBackend('[DELETE] /webhooks', () => {
   })
 
   it('delete webhook with missing body', async () => {
-    const response = await fetch(webhookEndpoint(), {
+    const response = await fetchTestRequest(webhookEndpoint(), {
       method: 'DELETE',
       headers: webhookHeaders,
     })
@@ -1191,7 +1191,7 @@ describeBackend('[DELETE] /webhooks', () => {
     if (!createdWebhookId)
       throw new Error('Webhook was not created in previous test')
 
-    const response = await fetch(webhookEndpoint(`?orgId=${WEBHOOK_TEST_ORG_ID}&webhookId=${createdWebhookId}`), {
+    const response = await fetchTestRequest(webhookEndpoint(`?orgId=${WEBHOOK_TEST_ORG_ID}&webhookId=${createdWebhookId}`), {
       method: 'DELETE',
       headers: webhookHeaders,
     })
@@ -1201,7 +1201,7 @@ describeBackend('[DELETE] /webhooks', () => {
     expect(data.webhookId).toBe(createdWebhookId)
 
     // Verify deletion
-    const getResponse = await fetch(webhookEndpoint(`?orgId=${WEBHOOK_TEST_ORG_ID}&webhookId=${createdWebhookId}`), {
+    const getResponse = await fetchTestRequest(webhookEndpoint(`?orgId=${WEBHOOK_TEST_ORG_ID}&webhookId=${createdWebhookId}`), {
       headers: webhookHeaders,
     })
     expect(getResponse.status).toBe(400)
@@ -1211,7 +1211,7 @@ describeBackend('[DELETE] /webhooks', () => {
 
   it('delete already deleted webhook', async () => {
     // Create a new webhook to delete
-    const createResponse = await fetch(webhookEndpoint(), {
+    const createResponse = await fetchTestRequest(webhookEndpoint(), {
       method: 'POST',
       headers: webhookHeaders,
       body: JSON.stringify({
@@ -1225,13 +1225,13 @@ describeBackend('[DELETE] /webhooks', () => {
     const webhookId = createData.webhook.id
 
     // First deletion
-    await fetch(webhookEndpoint(`?orgId=${WEBHOOK_TEST_ORG_ID}&webhookId=${webhookId}`), {
+    await fetchTestRequest(webhookEndpoint(`?orgId=${WEBHOOK_TEST_ORG_ID}&webhookId=${webhookId}`), {
       method: 'DELETE',
       headers: webhookHeaders,
     })
 
     // Second deletion attempt
-    const response = await fetch(webhookEndpoint(`?orgId=${WEBHOOK_TEST_ORG_ID}&webhookId=${webhookId}`), {
+    const response = await fetchTestRequest(webhookEndpoint(`?orgId=${WEBHOOK_TEST_ORG_ID}&webhookId=${webhookId}`), {
       method: 'DELETE',
       headers: webhookHeaders,
     })

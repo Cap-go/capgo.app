@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { env } from 'node:process'
 import { createClient } from '@supabase/supabase-js'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { appApiKeyBindings, BASE_URL, createDirectApiKeyWithBindings, executeSQL, fetchTestRequest, getAuthHeadersForCredentials, getSupabaseClient, normalizeLocalhostUrl, orgApiKeyBindings, resetAndSeedAppData, resetAppData, TEST_EMAIL, USER_EMAIL_APIKEY_EXPIRATION, USER_ID_APIKEY_EXPIRATION, USER_PASSWORD } from './test-utils.ts'
+import { appApiKeyBindings, BASE_URL, createDirectApiKeyWithBindings, executeSQL, fetchTestRequest, getAuthHeadersForCredentials, getSupabaseClient, normalizeLocalhostUrl, orgApiKeyBindings, resetAndSeedAppData, resetAppData, TEST_EMAIL, USER_EMAIL_APIKEY_EXPIRATION, USER_ID_APIKEY_EXPIRATION, USER_PASSWORD, warmEdgeEndpoint } from './test-utils.ts'
 
 const id = randomUUID()
 const BASE_ORG_ID = randomUUID()
@@ -271,6 +271,13 @@ beforeAll(async () => {
     throw policyAppError ?? new Error('Missing policy app')
 
   policyAppUuid = policyApp.id
+
+  // Load the apikey isolate before concurrent POSTs from this file.
+  await warmEdgeEndpoint('/apikey', {
+    method: 'POST',
+    headers: authHeaders,
+    body: JSON.stringify({ name: keyName('warm-apikey-isolate') }),
+  })
 })
 
 afterAll(async () => {
