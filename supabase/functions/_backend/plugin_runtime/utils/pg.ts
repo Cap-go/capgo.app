@@ -1097,7 +1097,7 @@ export function requestInfosChannelPostgres(
 const MANIFEST_ROWS_CACHE_PATH = '/.manifest-rows-v1'
 const MANIFEST_ROWS_CACHE_TTL_SECONDS = 60
 
-type ManifestRow = { file_name: string, file_hash: string, s3_path: string }
+interface ManifestRow { file_name: string, file_hash: string, s3_path: string }
 
 export async function requestManifestEntriesPostgres(
   c: Context,
@@ -1909,6 +1909,7 @@ export interface AdminGlobalStatsTrend {
   apps_with_manual_builds_24h: number
   app_build_onboarding_finalized: boolean
   apps_active: number
+  apps_with_preview: number
   users: number
   users_active: number
   paying: number
@@ -2036,6 +2037,7 @@ export async function getAdminGlobalStatsTrend(
         COALESCE(NULLIF(to_jsonb(gs) ->> 'apps_with_manual_builds_24h', '')::int, 0)::int AS apps_with_manual_builds_24h,
         (onboarding_next.date_id IS NOT NULL)::boolean AS app_build_onboarding_finalized,
         gs.apps_active::int AS apps_active,
+        COALESCE(NULLIF(to_jsonb(gs) ->> 'apps_with_preview', '')::int, 0)::int AS apps_with_preview,
         gs.users::int AS users,
         gs.users_active::int AS users_active,
         gs.paying::int AS paying,
@@ -2192,6 +2194,7 @@ export async function getAdminGlobalStatsTrend(
       apps_with_manual_builds_24h: Number(row.apps_with_manual_builds_24h) || 0,
       app_build_onboarding_finalized: row.app_build_onboarding_finalized === true || row.app_build_onboarding_finalized === 'true',
       apps_active: Number(row.apps_active) || 0,
+      apps_with_preview: Number(row.apps_with_preview) || 0,
       users: Number(row.users) || 0,
       users_active: Number(row.users_active) || 0,
       paying: Number(row.paying) || 0,
