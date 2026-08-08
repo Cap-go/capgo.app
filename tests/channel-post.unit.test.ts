@@ -66,6 +66,7 @@ function buildAdminChain(body: {
   existingChannelId?: number | null
   existingChannelVersion?: number | null
   existingRolloutVersion?: number | null
+  existingChannelPublic?: boolean
   ownerOrg?: string
   versionId?: number
   versionError?: { message: string } | null
@@ -98,6 +99,7 @@ function buildAdminChain(body: {
                     id: body.existingChannelId,
                     version: body.existingChannelVersion ?? null,
                     rollout_version: body.existingRolloutVersion ?? null,
+                    public: body.existingChannelPublic ?? false,
                   },
               error: null,
             }),
@@ -276,10 +278,11 @@ describe('public channel post', () => {
     expect(updateOrCreateChannel).not.toHaveBeenCalled()
   })
 
-  it('requires app settings permission to make an existing channel public', async () => {
+  it('requires app settings permission to make an existing private channel public', async () => {
     supabaseAdmin.mockImplementation(() => buildAdminChain({
       existingChannelId: 42,
       existingChannelVersion: 123,
+      existingChannelPublic: false,
     }))
     checkPermission
       .mockResolvedValueOnce(true)
@@ -298,6 +301,32 @@ describe('public channel post', () => {
     expect(checkPermission).toHaveBeenNthCalledWith(1, c, 'channel.update_settings', { appId: 'com.test.preview', channelId: 42 })
     expect(checkPermission).toHaveBeenNthCalledWith(2, c, 'app.update_settings', { appId: 'com.test.preview' })
     expect(updateOrCreateChannel).not.toHaveBeenCalled()
+  })
+
+  it('allows channel settings updates that retain an already-public channel', async () => {
+    supabaseAdmin.mockImplementation(() => buildAdminChain({
+      existingChannelId: 42,
+      existingChannelVersion: 123,
+      existingChannelPublic: true,
+    }))
+    const { post } = await import('../supabase/functions/_backend/public/channel/post.ts')
+    const c = context()
+
+    await post(c, {
+      app_id: 'com.test.already-public',
+      channel: 'production',
+      public: true,
+      allow_emulator: true,
+    }, apiKey())
+
+    expect(checkPermission).toHaveBeenCalledTimes(1)
+    expect(checkPermission).toHaveBeenCalledWith(c, 'channel.update_settings', { appId: 'com.test.already-public', channelId: 42 })
+    expect(updateOrCreateChannel).toHaveBeenCalledWith(
+      c,
+      expect.objectContaining({ version: 123, public: true, allow_emulator: true }),
+      42,
+      true,
+    )
   })
 
   it('preserves the stable version for a settings-only update without channel.read or bundle lookup', async () => {
