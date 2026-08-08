@@ -1,7 +1,7 @@
 -- Test RLS Policies
 -- This file tests all Row Level Security policies in the database
 BEGIN;
-SELECT plan(70);
+SELECT plan(72);
 SELECT
     policies_are(
         'public',
@@ -408,6 +408,30 @@ SELECT
               AND policyname = 'Allow RBAC channels update'
         ),
         'channels update policy should honor channel-scoped update permission'
+    );
+
+SELECT
+    ok(
+        (
+            SELECT COALESCE(with_check, '') ~ 'rbac_perm_app_update_settings'
+            FROM pg_policies
+            WHERE schemaname = 'public'
+              AND tablename = 'channels'
+              AND policyname = 'Allow RBAC channels insert'
+        ),
+        'channels insert policy should require app.update_settings for public channels'
+    );
+
+SELECT
+    ok(
+        EXISTS (
+            SELECT 1
+            FROM pg_trigger
+            WHERE tgname = 'enforce_public_channel_app_settings_permission'
+              AND tgrelid = 'public.channels'::regclass
+              AND NOT tgisinternal
+        ),
+        'channels should enforce app.update_settings on private-to-public updates'
     );
 
 SELECT
