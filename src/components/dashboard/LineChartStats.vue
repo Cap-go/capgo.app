@@ -105,7 +105,7 @@ const projectionData = computed(() => {
   const lastDay = arrWithoutUndefined[arrWithoutUndefined.length - 1]
   // create a projection of the evolution, start after the last value of the array, put undefined for the beginning of the month
   // each value is the previous value + the evolution, the first value is the last value of the array
-  let res = new Array(getDaysInCurrentMonth()).fill(undefined)
+  let res = new Array(getDaysInCurrentUtcMonth()).fill(undefined)
   res = res.reduce((acc: number[], val: number, i: number) => {
     let newVal
     const last = acc[acc.length - 1] ?? 0
@@ -136,7 +136,7 @@ function createAnnotation(id: string, y: number, title: string, lineColor: strin
   }
   obj[`label_${id}`] = {
     type: 'label',
-    xValue: getDaysInCurrentMonth() / 2,
+    xValue: getDaysInCurrentUtcMonth() / 2,
     yValue: y,
     backgroundColor: bgColor,
     content: [title],
