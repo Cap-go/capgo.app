@@ -860,16 +860,21 @@ async function foldNativeObserveTimingEventsCFChunked(
   }
 }
 
+interface ReadNativeObserveStatsParams {
+  appId: string
+  days: NativeObservePeriodDays
+  labels: string[]
+  start: Dayjs
+  endExclusive: Dayjs
+  endInclusive: Dayjs
+  versionGroup: NativeObserveVersionGroup
+}
+
 async function readNativeObserveStatsSB(
   c: Context<MiddlewareKeyVariables>,
-  appId: string,
-  days: NativeObservePeriodDays,
-  labels: string[],
-  start: Dayjs,
-  endExclusive: Dayjs,
-  endInclusive: Dayjs,
-  versionGroup: NativeObserveVersionGroup,
+  input: ReadNativeObserveStatsParams,
 ) {
+  const { appId, days, labels, start, endExclusive, endInclusive, versionGroup } = input
   const params = [appId, start.toISOString(), endExclusive.toISOString(), nativeObserveActions]
   const paramsWithIssues = [...params, issueActions]
   const db = getPgClient(c, true)
@@ -908,14 +913,9 @@ async function readNativeObserveStatsSB(
 
 async function readNativeObserveStatsCF(
   c: Context<MiddlewareKeyVariables>,
-  appId: string,
-  days: NativeObservePeriodDays,
-  labels: string[],
-  start: Dayjs,
-  endExclusive: Dayjs,
-  endInclusive: Dayjs,
-  versionGroup: NativeObserveVersionGroup,
+  input: ReadNativeObserveStatsParams,
 ) {
+  const { appId, days, labels, start, endExclusive, endInclusive, versionGroup } = input
   const state = createNativeObserveAggregateState(versionGroup)
   await foldNativeObserveTimingEventsCFChunked(c, appId, start, endExclusive, state)
   const aggregates = finalizeNativeObserveAggregate(state)
@@ -946,23 +946,7 @@ async function readNativeObserveStats(
   const endExclusive = dayjs(period.endExclusive)
   const endInclusive = dayjs(period.endInclusive)
   const labels = period.labels
-
-  // Same dual-path pattern as private/stats and update_delivery_stats.
-  if (c.env.APP_LOG) {
-    return readNativeObserveStatsCF(
-      c,
-      appId,
-      days,
-      labels,
-      start,
-      endExclusive,
-      endInclusive,
-      versionGroup,
-    )
-  }
-
-  return readNativeObserveStatsSB(
-    c,
+  const input: ReadNativeObserveStatsParams = {
     appId,
     days,
     labels,
@@ -970,7 +954,13 @@ async function readNativeObserveStats(
     endExclusive,
     endInclusive,
     versionGroup,
-  )
+  }
+
+  // Same dual-path pattern as private/stats and update_delivery_stats.
+  if (c.env.APP_LOG)
+    return readNativeObserveStatsCF(c, input)
+
+  return readNativeObserveStatsSB(c, input)
 }
 
 async function readNativeObservePluginStatsSB(c: Context<MiddlewareKeyVariables>, appId: string) {
