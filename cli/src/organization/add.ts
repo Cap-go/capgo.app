@@ -1,6 +1,7 @@
 import type { OrganizationAddOptions } from '../schemas/organization'
 import { intro, isCancel, log, outro, text } from '@clack/prompts'
 import { checkAlerts } from '../api/update'
+import { CliUserError } from '../shared/cli-user-error'
 import {
   createSupabaseClient,
   findSavedKey,
@@ -42,8 +43,8 @@ export async function addOrganizationInternal(options: OrganizationAddOptions, s
     })
 
     if (isCancel(nameInput)) {
-      log.error('Canceled adding organization')
-      throw new Error('Organization creation cancelled')
+      log.warn('Canceled adding organization')
+      throw new CliUserError('Organization creation cancelled')
     }
     name = nameInput as string
   }
@@ -55,8 +56,8 @@ export async function addOrganizationInternal(options: OrganizationAddOptions, s
     })
 
     if (isCancel(emailInput)) {
-      log.error('Canceled adding organization')
-      throw new Error('Organization creation cancelled')
+      log.warn('Canceled adding organization')
+      throw new CliUserError('Organization creation cancelled')
     }
     email = emailInput as string
   }
