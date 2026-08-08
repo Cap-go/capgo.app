@@ -2,7 +2,7 @@ import type { ManifestEntry } from '../supabase/functions/_backend/utils/downloa
 
 import { randomUUID } from 'node:crypto'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
-import { createAppVersions, getBaseData, getSupabaseClient, postUpdate, resetAndSeedAppData, resetAppData, resetAppDataStats } from './test-utils.ts'
+import { createAppVersions, getBaseData, getSupabaseClient, PLUGIN_BASE_URL, postUpdate, resetAndSeedAppData, resetAppData, resetAppDataStats, warmEdgeEndpoint } from './test-utils.ts'
 
 const id = randomUUID()
 const APPNAME = `com.demo.app.updates.${id}`
@@ -88,6 +88,17 @@ beforeAll(async () => {
   if (versionData) {
     versionId = versionData.id
   }
+
+  // Warm the plugin worker before assertions. Cold first POST /updates can 503 under local workerd.
+  const warmData = getBaseData(APPNAME)
+  warmData.version_name = '1.0.0'
+  await warmEdgeEndpoint(`${PLUGIN_BASE_URL}/updates`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(warmData),
+  })
 })
 
 afterEach(async () => {

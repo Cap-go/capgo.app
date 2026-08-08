@@ -4,6 +4,7 @@ import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import PaymentRequiredModal from '~/components/PaymentRequiredModal.vue'
 import Tabs from '~/components/Tabs.vue'
+import UnpaidState from '~/components/UnpaidState.vue'
 import { appSettingsTabs } from '~/constants/appSettingsTabs'
 import { appTabs as baseAppTabs } from '~/constants/appTabs'
 import { bundleTabs } from '~/constants/bundleTabs'
@@ -73,9 +74,23 @@ const isOnSettingsPage = computed(() => {
   return /^\/app\/[^/]+\/settings\/?$/.test(route.path)
 })
 
-// Show payment overlay only when org is unpaid AND not on settings page
+// These list pages only ever show a blurred empty table behind the modal when
+// the org is unpaid, which never explains why. On those routes the layout shows
+// a clear unpaid state instead: it names the reason and links to the plans page.
+const isUnpaidStateRoute = computed(() => {
+  return /^\/app\/[^/]+\/(?:bundles|channels|devices|builds|notifications)\/?$/.test(route.path)
+})
+
+// Replace the page with the unpaid state when the org is unpaid and the route
+// supports it. The RouterView is not rendered, so the page loads no data.
+const showUnpaidState = computed(() => {
+  return !isResolvingAppOrganization.value && isOrgUnpaid.value && isUnpaidStateRoute.value
+})
+
+// Show payment overlay only when org is unpaid, not on a settings page, and the
+// page is not already replaced by the unpaid state above.
 const showPaymentOverlay = computed(() => {
-  return !isResolvingAppOrganization.value && isOrgUnpaid.value && !isOnSettingsPage.value
+  return !isResolvingAppOrganization.value && isOrgUnpaid.value && !isOnSettingsPage.value && !isUnpaidStateRoute.value
 })
 
 // Detect resource type from route (channel, device, or bundle)
@@ -229,13 +244,18 @@ function handleSecondaryTab(key: string) {
       @update:secondary-active-tab="handleSecondaryTab"
     />
     <main class="relative flex flex-1 w-full min-h-0 mt-0 overflow-hidden bg-blue-50 dark:bg-slate-800/40">
-      <div
-        class="flex-1 w-full min-h-0 mx-auto"
-        :class="showPaymentOverlay ? 'overflow-hidden blur-sm pointer-events-none select-none' : 'overflow-y-auto'"
-      >
-        <RouterView class="w-full" />
+      <div v-if="showUnpaidState" class="flex-1 w-full min-h-0 mx-auto overflow-y-auto">
+        <UnpaidState />
       </div>
-      <PaymentRequiredModal v-if="showPaymentOverlay" />
+      <template v-else>
+        <div
+          class="flex-1 w-full min-h-0 mx-auto"
+          :class="showPaymentOverlay ? 'overflow-hidden blur-sm pointer-events-none select-none' : 'overflow-y-auto'"
+        >
+          <RouterView class="w-full" />
+        </div>
+        <PaymentRequiredModal v-if="showPaymentOverlay" />
+      </template>
     </main>
   </div>
 </template>

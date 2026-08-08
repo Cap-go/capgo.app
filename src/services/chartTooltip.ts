@@ -1,6 +1,6 @@
 import type { Chart, TooltipItem as ChartTooltipItem, TooltipLabelStyle, TooltipModel } from 'chart.js'
 import { useDark } from '@vueuse/core'
-import { formatLocalDateLong } from '~/services/date'
+import { formatLocalDateLong, utcCalendarDayAsLocalDate } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
 
 interface TooltipContext {
@@ -61,19 +61,19 @@ function formatTooltipValue(value: unknown) {
  */
 function getDateFromIndex(dataIndex: number, dateStartOrUseBillingPeriod?: Date | boolean): Date {
   const today = new Date()
-  today.setHours(0, 0, 0, 0)
+  today.setUTCHours(0, 0, 0, 0)
 
   if (dateStartOrUseBillingPeriod instanceof Date) {
-    // Billing period mode: start from billing start date
+    // Billing period mode: start from billing start date (UTC day)
     const date = new Date(dateStartOrUseBillingPeriod)
-    date.setHours(0, 0, 0, 0)
-    date.setDate(date.getDate() + dataIndex)
+    date.setUTCHours(0, 0, 0, 0)
+    date.setUTCDate(date.getUTCDate() + dataIndex)
     return date
   }
 
   // Last 30 days mode (dateStartOrUseBillingPeriod is false or undefined)
   const date = new Date(today)
-  date.setDate(date.getDate() - 29 + dataIndex) // 29 days ago + index
+  date.setUTCDate(date.getUTCDate() - 29 + dataIndex) // 29 days ago + index
   return date
 }
 
@@ -81,7 +81,7 @@ function getDateFromIndex(dataIndex: number, dateStartOrUseBillingPeriod?: Date 
  * Format a date for tooltip display using the app's locale (e.g., "December 10" in English, "10 décembre" in French)
  */
 function formatDateForTooltip(date: Date): string {
-  return formatLocalDateLong(date)
+  return formatLocalDateLong(utcCalendarDayAsLocalDate(date))
 }
 
 function getDatasetBaseValue(

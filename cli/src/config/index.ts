@@ -1,17 +1,21 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { existsSync, realpathSync, statSync } from 'node:fs'
-import { readFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { basename, extname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { cwd } from 'node:process'
 import type { CapacitorConfig, ExtConfigPairs } from '../schemas/config'
-import { loadConfig as loadConfigCap, requireTS, writeConfig as writeConfigCap } from '../capacitor-cli'
+import { formatJSObject, loadConfig as loadConfigCap, requireTS, writeConfig as writeConfigCap } from '../capacitor-cli'
 
 export type { CapacitorConfig, ExtConfigPairs } from '../schemas/config'
 
 let configWriteTarget: string | undefined
 const configWriteTargetStore = new AsyncLocalStorage<{ filePath: string | undefined }>()
-const capacitorConfigFilePattern = /^capacitor\.config(?:\.[^.]+)*\.(?:ts|json)$/
+// `.js` is accepted alongside `.ts`/`.json` — these are the three config names Capacitor's
+// own loader recognizes (see `capacitorConfigFiles` in init/command.ts). `.mjs`/`.cjs` are
+// intentionally excluded: Capacitor never loads them as configs, and the `.js` writer below
+// emits CommonJS, so allowing them would let reads pass but writes silently no-op.
+const capacitorConfigFilePattern = /^capacitor\.config(?:\.[^.]+)*\.(?:ts|js|json)$/
 
 /**
  * Overrides the config file Capacitor writes after loading the active root config.
@@ -45,7 +49,7 @@ export function resolveCapacitorConfigTargetPath(value: string | undefined, init
   if (!existsSync(resolved) || !statSync(resolved).isFile())
     throw new Error(`Capacitor config path does not exist: ${resolved}`)
   if (!capacitorConfigFilePattern.test(basename(resolved)))
-    throw new Error(`Capacitor config path must point to a capacitor.config.*.ts or capacitor.config.*.json file: ${resolved}`)
+    throw new Error(`Capacitor config path must point to a capacitor.config.*.ts, capacitor.config.*.js, or capacitor.config.*.json file: ${resolved}`)
 
   const workspaceRoot = realpathSync(initialCwd)
   const target = realpathSync(resolved)
@@ -59,9 +63,30 @@ async function loadConfigTarget(filePath: string): Promise<CapacitorConfig> {
   if (extname(filePath) === '.json')
     return JSON.parse(await readFile(filePath, 'utf8')) as CapacitorConfig
 
-  const configModule = requireTS(createRequire(filePath)('typescript'), filePath)
+  // Mirror Capacitor's own `capacitor.config.js` loader, which simply `require()`s the file.
+  const configModule = extname(filePath) === '.js'
+    ? (createRequire(filePath)(filePath) as Record<string, unknown>)
+    : requireTS(createRequire(filePath)('typescript'), filePath)
   const exportedConfig = configModule.default ?? configModule
   return (typeof exportedConfig === 'function' ? await exportedConfig() : await exportedConfig) as CapacitorConfig
+}
+
+/**
+ * Persists a config update to the target file. Capacitor's own `writeConfig`
+ * silently no-ops on `.js` (it only formats `.ts`/`.json`), so we format and
+ * write `capacitor.config.js` ourselves — mirroring how Capacitor emits `.ts`.
+ */
+async function writeConfigTarget(extConfig: CapacitorConfig, filePath: string): Promise<void> {
+  if (extname(filePath) === '.js') {
+    const source = `/** @type {import('@capacitor/cli').CapacitorConfig} */
+const config = ${formatJSObject(extConfig)}
+
+module.exports = config
+`
+    await writeFile(filePath, source)
+    return
+  }
+  await writeConfigCap(extConfig, filePath)
 }
 
 export async function loadConfig(): Promise<ExtConfigPairs | undefined> {
@@ -107,7 +132,7 @@ export async function writeConfig(key: string, config: ExtConfigPairs, raw = fal
       extConfig.plugins[key] = config.config.plugins?.[key]
     else
       extConfig = config.config
-    await writeConfigCap(extConfig, oldConfig.path)
+    await writeConfigTarget(extConfig, oldConfig.path)
   }
 }
 

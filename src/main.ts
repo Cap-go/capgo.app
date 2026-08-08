@@ -8,7 +8,7 @@ import { routes } from 'vue-router/auto-routes'
 import { installDeepLinkHandler } from '~/services/deepLinks'
 import { getNativeExternalPurchaseRedirect, isNativeAppStoreContext, isNativeExternalPurchaseRestrictedPath } from '~/services/nativeCompliance'
 import { posthogLoader } from '~/services/posthog'
-import { getErrorMessage, isKnownCrawlerNoiseErrorMessage, isStaleAssetErrorMessage } from '~/services/staleAssetErrors'
+import { getErrorMessage, isComponentResolutionErrorMessage, isKnownCrawlerNoiseErrorMessage, isStaleAssetErrorMessage } from '~/services/staleAssetErrors'
 import { getLocalConfig } from '~/services/supabase'
 import App from './App.vue'
 import { getRemoteConfig } from './services/supabase'
@@ -71,7 +71,11 @@ function clearChunkReloadToastPending(): void {
   }
 }
 
-function handleChunkError(message: string) {
+// `targetPath` is the route the user was navigating to when the chunk failed.
+// A bare reload restores the URL the browser is still on (the page the user is
+// leaving), so it silently throws the navigation away. When we know the target
+// we navigate there instead, so the user lands where they asked to go.
+function handleChunkError(message: string, targetPath?: string) {
   const previousReload = getChunkReloadTimestamp()
   if (previousReload && Date.now() - previousReload < CHUNK_RELOAD_COOLDOWN_MS) {
     console.warn('Chunk load error detected again after a recent reload, skipping automatic reload.', message)
@@ -81,7 +85,10 @@ function handleChunkError(message: string) {
   console.warn('Chunk load error detected, reloading page...', message)
   setChunkReloadTimestamp()
   setChunkReloadToastPending()
-  window.location.reload()
+  if (targetPath)
+    window.location.assign(targetPath)
+  else
+    window.location.reload()
 }
 
 window.addEventListener('error', (event) => {
@@ -121,8 +128,13 @@ window.addEventListener('vite:preloadError', (event) => {
     ?? 'Vite preload error'
   if (!isStaleAssetErrorMessage(message))
     return
-  event.preventDefault()
-  event.stopImmediatePropagation()
+  // Deliberately do NOT call event.preventDefault(): Vite's preload helper only
+  // rethrows the underlying import failure when the default is not prevented.
+  // Preventing it makes `__vitePreload` resolve with `undefined`, so a lazy route
+  // resolves to a falsy component and vue-router throws "Couldn't resolve
+  // component" instead of the real chunk error. Letting it rethrow keeps the
+  // rejection matching STALE_ASSET_ERROR_PATTERNS, so it still gets the reload
+  // (below) and the PostHog suppression this handler was written to provide.
   handleChunkError(message)
 })
 
@@ -230,6 +242,18 @@ const router = createRouter({
   ],
   history: createWebHistory(import.meta.env.BASE_URL),
 })
+
+// Recover from lazy-route load failures that slip past the vite:preloadError
+// handler (e.g. a navigation that races the reload). vue-router surfaces these
+// as "Couldn't resolve component" once a stale chunk fails to import, so treat
+// them as chunk errors and trigger the same reload instead of leaving the user
+// on a dead route.
+router.onError((error, to) => {
+  const message = getErrorMessage(error) ?? String(error)
+  if (isStaleAssetErrorMessage(message) || isComponentResolutionErrorMessage(message))
+    handleChunkError(message, to?.fullPath)
+})
+
 router.beforeEach((to, from, next) => {
   if (isNativeAppStoreContext() && isNativeExternalPurchaseRestrictedPath(to.path)) {
     return next(getNativeExternalPurchaseRedirect(to.path))

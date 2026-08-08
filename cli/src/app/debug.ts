@@ -5,7 +5,8 @@ import { Table } from '@sauber/table'
 // Native fetch is available in Node.js >= 18
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { checkAlerts } from '../api/update'
-import { createSupabaseClient, findSavedKey, formatError, getAppId, getConfig, getLocalConfig, getOrganizationId, sendEvent } from '../utils'
+import { CliUserError } from '../shared/cli-user-error'
+import { findSavedKey, formatError, getAppId, getConfig, getLocalConfig, getOrganizationId, sendEvent } from '../utils'
 
 function wait(ms: number) {
   return new Promise((resolve) => {
@@ -71,7 +72,8 @@ export async function cancelCommand(channel: string, command: boolean | symbol, 
     return
 
   await markSnag(channel, orgId, apikey, 'canceled', undefined, '🤷')
-  throw new Error('Command cancelled')
+  log.warn('Command cancelled')
+  throw new CliUserError('Command cancelled')
 }
 
 interface Order {
@@ -277,7 +279,6 @@ export async function debugApp(appId: string, options: AppDebugOptions) {
     throw new Error('Missing appId')
   }
 
-  const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
   const orgId = await getOrganizationId(options.apikey!, appId, { supaHost: options.supaHost, supaAnon: options.supaAnon })
 
   const doRun = await confirmC({ message: `Automatic check if update working in device ?` })

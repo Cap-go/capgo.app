@@ -26,6 +26,12 @@ export default defineConfig(({ mode }) => ({
       'tests/mfa-email-otp-trigger.test.ts',
       'tests/queue_big_job_archive.test.ts',
       'tests/queue_cron_stat_org_function.test.ts',
+      // Hot plugin paths (/updates, /stats, /channel_self) overload workerd under shard
+      // parallelism. Run them serially via vitest.config.cloudflare-plugin.ts.
+      'tests/updates*.test.ts',
+      'tests/stats*.test.ts',
+      'tests/channel_self*.test.ts',
+      'tests/channel-rate-limit.test.ts',
     ],
     environment: 'node',
     watch: false,
@@ -35,7 +41,7 @@ export default defineConfig(({ mode }) => ({
     // Keep concurrency modest: maxWorkers=5 overloaded local workerd into intermittent 503s.
     // Zero-retry policy: flaky cases are fixed at the source, not masked by re-running tests.
     retry: 0,
-    maxConcurrency: 6,
+    maxConcurrency: 2,
     maxWorkers: 3,
     env: {
       ...loadEnv(mode, cwd(), ''),

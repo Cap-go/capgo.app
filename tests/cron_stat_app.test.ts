@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { BASE_URL, ORG_ID_CRON_APP, STRIPE_CUSTOMER_ID_CRON_APP, getSupabaseClient, resetAndSeedAppData, resetAndSeedAppDataStats, resetAppData, resetAppDataStats } from './test-utils.ts'
+import { BASE_URL, ORG_ID_CRON_APP, STRIPE_CUSTOMER_ID_CRON_APP, getSupabaseClient, resetAndSeedAppData, resetAndSeedAppDataStats, resetAppData, resetAppDataStats, warmEdgeEndpoint } from './test-utils.ts'
 
 const appId = `com.cron.${randomUUID().slice(0, 8)}`
 
@@ -24,6 +24,12 @@ describe('[POST] /triggers/cron_stat_app', () => {
       .eq('id', ORG_ID_CRON_APP)
     if (error)
       throw error
+
+    await warmEdgeEndpoint('/triggers/cron_stat_app', {
+      method: 'POST',
+      headers: triggerHeaders,
+      body: JSON.stringify({ appId, orgId: ORG_ID_CRON_APP }),
+    })
   })
 
   afterAll(async () => {

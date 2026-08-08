@@ -7,6 +7,7 @@ import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { getInvocationSource } from '../analytics/track'
 import { checkAppExists, defaultAppIconPath, getAppIconStoragePath, newIconPath } from '../api/app'
 import { checkAlerts } from '../api/update'
+import { CliUserError } from '../shared/cli-user-error'
 import {
   assertCliPermission,
   createSupabaseClient,
@@ -28,19 +29,19 @@ function ensureOptions(appId: string, options: AppOptions, silent: boolean) {
   if (!options.apikey) {
     if (!silent)
       log.error('Missing API key, you need to provide an API key to upload your bundle')
-    throw new Error('Missing API key')
+    throw new CliUserError('Missing API key')
   }
 
   if (!appId) {
     if (!silent)
       log.error('Missing argument, you need to provide a appId, or be in a capacitor project')
-    throw new Error('Missing appId')
+    throw new CliUserError('Missing appId')
   }
 
   if (appId.includes('--')) {
     if (!silent)
       log.error('The app id includes illegal symbols. You cannot use "--" in the app id')
-    throw new Error('App id includes illegal symbols')
+    throw new CliUserError('App id includes illegal symbols')
   }
 
   if (!reverseDomainRegex.test(appId)) {
@@ -50,7 +51,7 @@ function ensureOptions(appId: string, options: AppOptions, silent: boolean) {
       log.info('Valid format: lowercase letters, numbers, dots, hyphens, and underscores')
       log.info('Examples: com.mycompany.myapp, io.capgo.app, com.example.my-app')
     }
-    throw new Error('Invalid app ID format')
+    throw new CliUserError('Invalid app ID format')
   }
 }
 
@@ -67,12 +68,15 @@ async function ensureAppDoesNotExist(
   if (appId === 'io.ionic.starter') {
     if (!silent)
       log.error(`This appId ${appId} cannot be used it's reserved, please change it in your capacitor config.`)
-    throw new Error('Reserved appId, please change it in capacitor config')
+    throw new CliUserError('Reserved appId, please change it in capacitor config')
   }
 
   if (!silent)
     log.error(`App ${appId} already exist`)
-  throw new Error(`App ${appId} already exists`)
+  // Keep "already exists" in the message so `isAppAlreadyExistsError` still
+  // matches it; pass the id via context, not the message. Re-uploading an
+  // existing app is an expected user state, not a crash.
+  throw new CliUserError('App already exists', { appId })
 }
 
 export type AppCreateSource = 'cli-direct' | 'onboarding' | 'mcp'

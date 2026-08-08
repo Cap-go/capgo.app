@@ -1,6 +1,7 @@
 import type { OptionsBase } from '../schemas/base'
 import { intro, isCancel, log, outro, select } from '@clack/prompts'
-import { checkAppExistsAndHasPermissionOrgErr } from '../api/app'
+import { checkAppExistsAndHasPermissionOrgErr, getAppIconStoragePath } from '../api/app'
+import { CliUserError } from '../shared/cli-user-error'
 import {
   createSupabaseClient,
   findSavedKey,
@@ -94,14 +95,24 @@ export async function deleteAppInternal(
       })
 
       if (isCancel(shouldContinue) || shouldContinue === 'no') {
-        log.error('Canceled deleting the app, exiting')
-        throw new Error('App deletion cancelled')
+        log.warn('Canceled deleting the app, exiting')
+        throw new CliUserError('App deletion cancelled')
       }
     }
     else {
       throw new Error('Cannot delete app: you are not the organization owner')
     }
   }
+
+  const { error: storageError } = orgId
+    ? await supabase
+        .storage
+        .from('images')
+        .remove([getAppIconStoragePath(orgId, appId)])
+    : { error: null }
+
+  if (storageError && !silent)
+    log.error('Could not delete app logo')
 
   // TODO(cli-http): user-scoped storage path apps/${appId}/${userId} cleanup is not covered by DELETE app
   const { error: delError } = await supabase

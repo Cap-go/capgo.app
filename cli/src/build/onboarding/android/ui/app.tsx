@@ -26,7 +26,7 @@ import type { DOMElement } from 'ink'
 import { Box, measureElement, Newline, Text, useApp, useInput, useStdout } from 'ink'
 // src/build/onboarding/android/ui/app.tsx
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { createSupabaseClient, findBuildCommandForProjectType, findProjectType, findSavedKeySilent, getOrganizationId, getPackageScripts, getPMAndCommand } from '../../../../utils.js'
+import { findBuildCommandForProjectType, findProjectType, findSavedKeySilent, getOrganizationId, getPackageScripts, getPMAndCommand } from '../../../../utils.js'
 import { loadSavedCredentials, updateSavedCredentials } from '../../../credentials.js'
 import { releaseCapturedLogs, runCapgoAiAnalysis } from '../../../../ai/analyze.js'
 import { createStreamingMarkdownRenderer } from '../../../../ai/stream-markdown.js'
@@ -330,11 +330,7 @@ const AndroidOnboardingApp: FC<AppProps> = ({ appId, initialProgress, androidDir
 
     let cancelled = false
     void (async () => {
-      const supabase = await createSupabaseClient(resolvedApiKeyRef.current!, undefined, undefined, true)
-        .catch(() => null)
-      if (!supabase || cancelled)
-        return
-      const orgId = await getOrganizationId(supabase, appId).catch(() => null)
+      const orgId = await getOrganizationId(resolvedApiKeyRef.current!, appId).catch(() => null)
       if (orgId && !cancelled)
         setResolvedOrgId(orgId)
     })()

@@ -5,8 +5,10 @@ import { Command } from 'commander'
 import {
   capturePosthogException,
   getCommandPath,
+  isExpectedUserError,
   shouldCapturePosthogException,
 } from '../src/posthog.ts'
+import { CliUserError } from '../src/shared/cli-user-error.ts'
 
 const originalFetch = globalThis.fetch
 const originalEnv = {
@@ -65,7 +67,15 @@ try {
   assert.equal(body.properties.error_kind, 'unhandled_error')
   assert.equal(body.properties.status, 1)
   assert.match(body.properties.distinct_id, /^cli:[^:]+:bundle upload$/)
-  assert.match(body.properties.$exception_fingerprint, /cli:[^:]+:bundle upload:unhandled_error:Error:runUpload:/)
+  // Fingerprint must NOT include the CLI version, the top-frame symbol, or the
+  // top-frame filename, so the same bug stays one error-tracking issue across
+  // releases and across install locations (npx cache hash, bunx, pnpm, sandbox).
+  // Version is still reported via cli_version.
+  assert.equal(body.properties.$exception_fingerprint, 'bundle upload:unhandled_error:Error:1')
+  assert.doesNotMatch(body.properties.$exception_fingerprint, /cli:/)
+  assert.doesNotMatch(body.properties.$exception_fingerprint, /runUpload/)
+  assert.doesNotMatch(body.properties.$exception_fingerprint, /index\.ts/)
+  assert.equal(body.properties.cli_version, body.properties.distinct_id.split(':')[1])
   assert.equal(body.properties.$exception_list[0].type, 'Error')
   assert.equal(body.properties.$exception_list[0].value, 'boom')
   assert.equal(body.properties.$exception_list[0].mechanism.handled, true)
@@ -131,6 +141,39 @@ try {
   assert.equal(shouldCapturePosthogException({ code: 'commander.helpDisplayed' }), false)
   assert.equal(shouldCapturePosthogException({ code: 'ENOENT' }), true)
   assert.equal(shouldCapturePosthogException(new Error('boom')), true)
+
+  // Expected user-facing CLI failures must never open an error tracking issue,
+  // regardless of the (dynamic) channel context attached to them.
+  assert.equal(shouldCapturePosthogException(new CliUserError('Channel does not have a bundle linked', { appId: 'com.example.app', channel: 'production' })), false)
+  assert.equal(shouldCapturePosthogException(new CliUserError('Missing API key')), false)
+  // `uploadFail` now throws CliUserError, so a duplicate-version upload — a normal
+  // `bundle upload` outcome — is filtered out of error tracking by type.
+  assert.equal(shouldCapturePosthogException(new CliUserError('Version 1.2.3 already exists')), false)
+  // A user-initiated cancel (Ctrl+C / Escape at an interactive prompt) is a
+  // deliberate abort, not a crash — the cancel sites throw CliUserError so it
+  // never opens an error tracking issue.
+  assert.equal(shouldCapturePosthogException(new CliUserError('Login cancelled')), false)
+  assert.equal(shouldCapturePosthogException(new CliUserError('Upload cancelled by user')), false)
+  // Two failures on different channels must be treated identically (one issue,
+  // not one per channel), since the channel name lives in context, not the message.
+  assert.equal(
+    new CliUserError('Channel does not have a bundle linked', { channel: 'production' }).message,
+    new CliUserError('Channel does not have a bundle linked', { channel: 'canary' }).message,
+  )
+
+  // Expected user errors must be skipped by exception capture (they are still
+  // counted via trackCommandFailed at the call site).
+  assert.equal(isExpectedUserError(new Error('Invalid API key or insufficient permissions.')), true)
+  assert.equal(isExpectedUserError(new Error('invalid_apikey')), true)
+  assert.equal(isExpectedUserError(new Error('no_key_provided')), true)
+  assert.equal(isExpectedUserError(new Error('App com.example does not exist, run first `npx @capgo/cli app add com.example` to create it')), true)
+  assert.equal(isExpectedUserError({ context: { status: 401 } }), true)
+  assert.equal(isExpectedUserError({ status: 401 }), true)
+  assert.equal(isExpectedUserError(new Error('Cannot get organization id for app id com.example')), false)
+  assert.equal(isExpectedUserError(new Error('boom')), false)
+  assert.equal(shouldCapturePosthogException(new Error('invalid_apikey')), false)
+  assert.equal(shouldCapturePosthogException({ context: { status: 401 } }), false)
+  assert.equal(shouldCapturePosthogException(new Error('Cannot get organization id for app id com.example')), true)
 
   console.log('CLI PostHog exception capture tests passed')
 }

@@ -4,7 +4,7 @@ import { resolve } from 'node:path'
 import { cwd, exit } from 'node:process'
 import { log } from '@clack/prompts'
 import { trackEvent } from '../analytics/track'
-import { createSupabaseClient, findSavedKey, getAppId, getConfig, getOrganizationId, sendEvent } from '../utils'
+import { findSavedKey, getAppId, getConfig, getOrganizationId, sendEvent } from '../utils'
 import {
   clearSavedCredentials,
   convertFilesToCredentials,
@@ -517,7 +517,6 @@ export async function saveCredentialsCommand(options: SaveCredentialsOptions): P
     try {
       const apikey = findSavedKey(true)
       if (apikey) {
-        const supabase = await createSupabaseClient(apikey)
         const orgId = await getOrganizationId(apikey, appId)
         await sendEvent(apikey, {
           channel: 'credentials',

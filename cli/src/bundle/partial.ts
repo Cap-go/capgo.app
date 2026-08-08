@@ -14,6 +14,7 @@ import * as micromatch from 'micromatch'
 import * as tus from 'tus-js-client'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { encryptChecksum, encryptChecksumV3, encryptSource } from '../api/crypto'
+import { CliUserError } from '../shared/cli-user-error'
 import { appAddHintMessage, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, deltaManifestTooLargeMessage, findRoot, generateManifest, getContentType, getInstalledVersion, getLocalConfig, isAppNotFoundError, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, sendEvent, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
 import { getUploadReporter } from './reporter'
 
@@ -206,15 +207,17 @@ export async function uploadPartial(
   const startTime = performance.now()
   const localConfig = await getLocalConfig()
 
-  // Determine if user explicitly requested delta updates
-  const userRequestedDelta = !!(options.partial || options.delta || options.partialOnly || options.deltaOnly)
+  // Determine if user explicitly requested delta updates. Read the flag captured
+  // before `options.delta` was mutated by the instant-update auto-enable, so an
+  // auto-enabled delta degrades to a full upload instead of aborting.
+  const userRequestedDelta = !!options.userRequestedDelta
 
   // Check the updater version and Brotli support
   const { version, supportsBrotliV2 } = await getUpdaterVersion(options)
 
   // Check for incompatible options with older updater versions
   if (!supportsBrotliV2) {
-    throw new Error(`Your project is using an older version of @capgo/capacitor-updater (${version || 'unknown'}). To use Delta updates, please upgrade to version ${BROTLI_MIN_UPDATER_VERSION_V5} (v5), ${BROTLI_MIN_UPDATER_VERSION_V6} (v6) or ${BROTLI_MIN_UPDATER_VERSION_V7} (v7) or higher.`)
+    throw new CliUserError(`Your project is using an older version of @capgo/capacitor-updater (${version || 'unknown'}). To use Delta updates, please upgrade to version ${BROTLI_MIN_UPDATER_VERSION_V5} (v5), ${BROTLI_MIN_UPDATER_VERSION_V6} (v6) or ${BROTLI_MIN_UPDATER_VERSION_V7} (v7) or higher.`)
   }
   else {
     // Only newer versions can use Brotli with .br extension
@@ -232,11 +235,11 @@ export async function uploadPartial(
   const filesWithSpaces = manifest.filter(file => file.file.includes(' '))
 
   if (filesWithSpaces.length > 0) {
-    throw new Error(`Files with spaces in their names (${filesWithSpaces.map(f => f.file).join(', ')}). Please rename the files.`)
+    throw new CliUserError(`Files with spaces in their names (${filesWithSpaces.map(f => f.file).join(', ')}). Please rename the files.`)
   }
 
   if (manifest.length > MAX_MANIFEST_ENTRIES)
-    throw new Error(deltaManifestTooLargeMessage(manifest.length))
+    throw new CliUserError(deltaManifestTooLargeMessage(manifest.length))
 
   let uploadedFiles = 0
   const totalFiles = manifest.length

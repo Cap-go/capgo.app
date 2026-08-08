@@ -1,6 +1,7 @@
 import type { OrganizationDeleteOptions } from '../schemas/organization'
 import { confirm as confirmC, intro, isCancel, log, outro } from '@clack/prompts'
 import { checkAlerts } from '../api/update'
+import { CliUserError } from '../shared/cli-user-error'
 import {
   assertOrgPermission,
   check2FAAccessForOrg,
@@ -72,8 +73,8 @@ export async function deleteOrganizationInternal(
     })
 
     if (isCancel(confirmDelete) || !confirmDelete) {
-      log.error('Canceled deleting the organization')
-      throw new Error('Organization deletion cancelled')
+      log.warn('Canceled deleting the organization')
+      throw new CliUserError('Organization deletion cancelled')
     }
   }
 

@@ -38,7 +38,7 @@ import { appendInternalLog, getInternalLogPath } from '../../../support/internal
 import { redactSecrets } from '../../../support/redact.js'
 import { uploadSupportLogs } from '../../../support/support-upload.js'
 import { offerSupportUploadBeforeAi } from '../../../support/support-upload-prompt.js'
-import { createSupabaseClient, findBuildCommandForProjectType, findProjectType, findSavedKeySilent, getOrganizationId, getPackageScripts, getPMAndCommand } from '../../../utils.js'
+import { findBuildCommandForProjectType, findProjectType, findSavedKeySilent, getOrganizationId, getPackageScripts, getPMAndCommand } from '../../../utils.js'
 import { loadSavedCredentials, updateSavedCredentials } from '../../credentials.js'
 import { writeReleaseBundleId } from '../../pbxproj-parser.js'
 import { handleCustomMsg } from '../../qr.js'
@@ -515,11 +515,7 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
 
     let cancelled = false
     void (async () => {
-      const supabase = await createSupabaseClient(resolvedApiKeyRef.current!, undefined, undefined, true)
-        .catch(() => null)
-      if (!supabase || cancelled)
-        return
-      const orgId = await getOrganizationId(supabase, appId).catch(() => null)
+      const orgId = await getOrganizationId(resolvedApiKeyRef.current!, appId).catch(() => null)
       if (orgId && !cancelled)
         setResolvedOrgId(orgId)
     })()

@@ -230,13 +230,6 @@ export async function findChannel(options: CapgoHttpOptions, appId: string, name
   return { data: { ...normalizeHttpChannel(data), owner_org: undefined as string | undefined, rollout_version: data.rollout_version ?? data.rollout_version_info?.id ?? null }, error: null }
 }
 
-export async function findBundleIdByChannelName(options: CapgoHttpOptions, appId: string, name: string) {
-  const { data, error } = await findChannel(options, appId, name)
-  if (error || !data)
-    throw error ?? new Error('Channel not found')
-  return data.version ?? null
-}
-
 export type { Channel } from '../schemas/channel'
 type Channel = import('../schemas/channel').Channel
 

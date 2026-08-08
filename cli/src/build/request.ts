@@ -59,6 +59,7 @@ import { renderMarkdown } from '../ai/render-markdown'
 import { createStreamingMarkdownRenderer } from '../ai/stream-markdown'
 import { aiAnalysisResultFromPostAnalyze, trackAiAnalysisChoice, trackAiAnalysisResult } from '../ai/telemetry'
 import { type SupportBundleFiles, writeSupportBundleFiles } from '../onboarding-support.js'
+import { CliUserError } from '../shared/cli-user-error'
 import { copyToClipboard, revealInFinder } from '../support/clipboard.js'
 import { contactSupport } from '../support/contact-support.js'
 import { appendInternalLog, getInternalLogPath, startInternalLog } from '../support/internal-log.js'
@@ -130,8 +131,10 @@ export async function resolveBuildPlatform(
   }
 
   const selectedPlatform = await promptPlatform()
-  if (clackIsCancel(selectedPlatform))
-    throw new Error('Build request canceled.')
+  if (clackIsCancel(selectedPlatform)) {
+    clackLog.warn('Build request canceled.')
+    throw new CliUserError('Build request canceled.')
+  }
 
   if (selectedPlatform !== 'ios' && selectedPlatform !== 'android')
     throw new Error('Build request canceled.')

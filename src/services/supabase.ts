@@ -317,7 +317,13 @@ export async function downloadUrl(provider: string, userId: string, appId: strin
     return res.url
   }
   catch (e) {
-    throw new Error(`downloadUrl error: ${e instanceof Error ? e.message : String(e)}`)
+    // A transient browser network drop surfaces as a `TypeError` whose wording
+    // differs per engine (Chrome "Failed to fetch", WebKit "Load failed",
+    // Firefox "NetworkError when attempting to fetch resource."). Rethrow it
+    // untouched so transient-network detection can still recognise the message.
+    if (e instanceof TypeError)
+      throw e
+    throw new Error(`downloadUrl error: ${e instanceof Error ? e.message : String(e)}`, { cause: e })
   }
 }
 
@@ -388,12 +394,13 @@ function parseDashboardRangeDate(value?: string) {
 }
 
 export function normalizeDashboardDateRange(startDate?: string, endDate?: string, now: Date = new Date()) {
+  // Exclusive end = next UTC midnight so the current UTC day is fully included
   const fallbackEnd = new Date(now)
-  fallbackEnd.setHours(0, 0, 0, 0)
-  fallbackEnd.setDate(fallbackEnd.getDate() + 1)
+  fallbackEnd.setUTCHours(0, 0, 0, 0)
+  fallbackEnd.setUTCDate(fallbackEnd.getUTCDate() + 1)
 
   const fallbackStart = new Date(fallbackEnd)
-  fallbackStart.setDate(fallbackStart.getDate() - 30)
+  fallbackStart.setUTCDate(fallbackStart.getUTCDate() - 30)
 
   const parsedStart = parseDashboardRangeDate(startDate)
   const parsedEnd = parseDashboardRangeDate(endDate)

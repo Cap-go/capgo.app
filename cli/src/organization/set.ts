@@ -2,6 +2,7 @@ import type { OrganizationSetOptions, PasswordPolicyConfig } from '../schemas/or
 import { confirm as confirmC, intro, isCancel, log, outro, text } from '@clack/prompts'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { checkAlerts } from '../api/update'
+import { CliUserError } from '../shared/cli-user-error'
 import {
   assertOrgPermission,
   check2FAAccessForOrg,
@@ -198,8 +199,8 @@ export async function setOrganizationInternal(
           })
 
           if (isCancel(shouldContinue) || !shouldContinue) {
-            log.error('Canceled enabling 2FA enforcement')
-            throw new Error('2FA enforcement cancelled')
+            log.warn('Canceled enabling 2FA enforcement')
+            throw new CliUserError('2FA enforcement cancelled')
           }
         }
 
@@ -286,8 +287,8 @@ export async function setOrganizationInternal(
             })
 
             if (isCancel(shouldContinue) || !shouldContinue) {
-              log.error('Canceled enabling password policy')
-              throw new Error('Password policy configuration cancelled')
+              log.warn('Canceled enabling password policy')
+              throw new CliUserError('Password policy configuration cancelled')
             }
           }
         }
@@ -438,8 +439,8 @@ export async function setOrganizationInternal(
     })
 
     if (isCancel(nameInput)) {
-      log.error('Canceled updating organization')
-      throw new Error('Organization update cancelled')
+      log.warn('Canceled updating organization')
+      throw new CliUserError('Organization update cancelled')
     }
     name = nameInput as string
   }
@@ -451,8 +452,8 @@ export async function setOrganizationInternal(
     })
 
     if (isCancel(emailInput)) {
-      log.error('Canceled updating organization')
-      throw new Error('Organization update cancelled')
+      log.warn('Canceled updating organization')
+      throw new CliUserError('Organization update cancelled')
     }
     email = emailInput as string
   }

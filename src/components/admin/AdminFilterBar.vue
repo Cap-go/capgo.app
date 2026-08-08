@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { LocationQueryRaw } from 'vue-router'
 import type { DateRangeMode } from '~/stores/adminDashboard'
 import { useMutationObserver } from '@vueuse/core'
 import { onMounted, onUnmounted, ref, watch } from 'vue'
@@ -102,7 +103,7 @@ function syncStoreToQuery() {
     return
   }
 
-  const nextQuery: Record<string, string | string[] | null | undefined> = { ...route.query }
+  const nextQuery: LocationQueryRaw = { ...route.query }
   nextQuery.range = serialized.range
   if (serialized.start && serialized.end) {
     nextQuery.start = serialized.start

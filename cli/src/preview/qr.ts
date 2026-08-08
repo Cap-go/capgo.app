@@ -1,4 +1,3 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
 import type { OptionsBase } from '../schemas/base'
 import type { Database } from '../types/supabase.types'
 import { stdout } from 'node:process'

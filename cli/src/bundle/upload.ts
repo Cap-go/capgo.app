@@ -22,9 +22,10 @@ import { getChecksum } from '../checksum'
 import { getRepoStarStatus, isRepoStarredInSession, starRepository } from '../github'
 import { confirmWithRememberedChoice } from '../promptPreferences'
 import { showReplicationProgress } from '../replicationProgress'
+import { CliUserError } from '../shared/cli-user-error'
 import { formatTable } from '../terminal-table'
 import { usesAlwaysDirectUpdate } from '../updaterConfig'
-import { baseKeyV2, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, canPromptInteractively, checkCompatibilityCloud, checkPlanValidUpload, checkRemoteCliMessages, createSupabaseClient, deletedFailedVersion, deltaManifestTooLargeMessage, findRoot, findSavedKey, formatError, getAppId, getBundleVersion, getCompatibilityDetails, getConfig, getInstalledVersion, getLocalConfig, getLocalDependencies, getOrganizationId, getPMAndCommand, getRemoteChecksums, getRemoteFileConfig, hasCliPermission, invokeCapgoCliApi, isCompatible, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, regexSemver, resolveUserIdFromApiKey, sendEvent, setVersionManifest, updateConfigUpdater, updateOrCreateChannel, updateOrCreateVersion, UPLOAD_TIMEOUT, uploadTUS, uploadUrl, zipFile } from '../utils'
+import { baseKeyV2, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, canPromptInteractively, checkCompatibilityCloud, checkPlanValidUpload, checkRemoteCliMessages, createSupabaseClient, deletedFailedVersion, deltaManifestTooLargeMessage, findRoot, findSavedKey, formatError, getAppId, getBundleVersion, getCompatibilityDetails, getConfig, getInstalledVersion, getLocalConfig, getLocalDependencies, getOrganizationId, getPMAndCommand, getRemoteChecksums, getRemoteFileConfig, hasCliPermission, invokeCapgoCliApi, isCompatible, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, regexSemver, resolveUserIdFromApiKey, sendEvent, setVersionManifest, updateConfigUpdater, updateOrCreateChannel, updateOrCreateVersion, UPLOAD_TIMEOUT, UPLOAD_TIMEOUT_ERROR_NAME, uploadTimeoutMessage, uploadTUS, uploadUrl, zipFile } from '../utils'
 import type { AutoBumpLevel } from '../versionHelpers'
 import { autoBumpVersionBy, getVersionSuggestions, interactiveVersionBump, normalizeAutoBumpInput } from '../versionHelpers'
 import { resolveAutoBumpLevelFromAi } from './auto-bump-ai'
@@ -52,9 +53,23 @@ const log = {
   success: (message: string) => getUploadReporter().success(message),
 }
 
+// The upload path's single failure chokepoint. Every abort here is a deliberate,
+// message-carrying stop — a bad flag, a duplicate version, a cancelled prompt,
+// a backend refusal — not a CLI crash. Throwing `CliUserError` opts the whole
+// path out of error tracking by type (via `shouldCapturePosthogException`), which
+// covers `Version X already exists` and `Upload cancelled by user` without
+// matching on message text. The non-zero exit and analytics events are unchanged;
+// only the `$exception` capture goes away.
 function uploadFail(message: string): never {
   log.error(message)
-  throw new Error(message)
+  throw new CliUserError(message)
+}
+
+// A user-initiated cancel is an expected exit, not a crash: warn instead of
+// error, and throw `CliUserError` so error tracking skips it.
+function uploadCancel(): never {
+  log.warn(UPLOAD_CANCELLED_BY_USER)
+  throw new CliUserError(UPLOAD_CANCELLED_BY_USER)
 }
 
 /**
@@ -304,7 +319,7 @@ async function checkVersionExists(supabase: SupabaseType, appid: string, bundle:
 
   if (appVersion) {
     if (versionExistsOk) {
-      log.warn(`Version ${bundle} already exists - exiting gracefully due to --silent-fail option`)
+      log.warn(`Version ${bundle} already exists - exiting gracefully due to --version-exists-ok option`)
       getUploadReporter().outro('Bundle version already exists - exiting gracefully 🎉')
       return true
     }
@@ -332,14 +347,14 @@ async function checkVersionExists(supabase: SupabaseType, appid: string, bundle:
       })
 
       if (pIsCancel(choice) || typeof choice !== 'string' || choice === 'cancel') {
-        uploadFail('Upload cancelled by user')
+        uploadCancel()
       }
 
       let newVersion: string
       if (choice === 'custom') {
         const customVersion = await interactiveVersionBump(bundle, 'upload')
         if (!customVersion) {
-          uploadFail('Upload cancelled by user')
+          uploadCancel()
         }
         newVersion = customVersion
       }
@@ -616,15 +631,17 @@ async function uploadBundleToCapgoCloud(apikey: string, supabase: SupabaseType, 
         throw new Error('Cannot get upload url')
       }
 
+      const uploadTimeoutMs = options.timeout || UPLOAD_TIMEOUT
+
       if (options.verbose) {
         log.info(`[Verbose] Presigned URL obtained, uploading via HTTP PUT...`)
-        log.info(`  - Timeout: ${options.timeout || UPLOAD_TIMEOUT}ms`)
-        log.info(`  - Retry attempts: 5`)
+        log.info(`  - Timeout: ${uploadTimeoutMs}ms`)
+        log.info(`  - Retry attempts: 0 (standard upload does not retry, use --tus for resumable retries)`)
         log.info(`  - Content-Type: application/zip`)
       }
 
       const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), options.timeout || UPLOAD_TIMEOUT)
+      const timeoutId = setTimeout(() => controller.abort(), uploadTimeoutMs)
 
       try {
         const response = await fetch(url, {
@@ -639,6 +656,17 @@ async function uploadBundleToCapgoCloud(apikey: string, supabase: SupabaseType, 
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`)
         }
+      }
+      catch (putError: any) {
+        // A timeout fires as an AbortError from our controller. Convert it into a
+        // typed, descriptive error so the user sees what happened and how to work
+        // around it, instead of the raw "This operation was aborted" message.
+        if (controller.signal.aborted || putError?.name === 'AbortError') {
+          const timeoutError = new Error(uploadTimeoutMessage(uploadTimeoutMs))
+          timeoutError.name = UPLOAD_TIMEOUT_ERROR_NAME
+          throw timeoutError
+        }
+        throw putError
       }
       finally {
         clearTimeout(timeoutId)
@@ -658,7 +686,12 @@ async function uploadBundleToCapgoCloud(apikey: string, supabase: SupabaseType, 
       log.info(`[Verbose] Error type: ${errorUpload instanceof Error ? 'Error' : typeof errorUpload}`)
     }
 
-    if (errorUpload instanceof Error && errorUpload.message.includes('HTTP error')) {
+    if (errorUpload instanceof Error && errorUpload.name === UPLOAD_TIMEOUT_ERROR_NAME) {
+      // Already a descriptive, actionable message (names the elapsed budget and
+      // points at --timeout / --tus); print it as-is without the generic prefix.
+      log.error(errorUpload.message)
+    }
+    else if (errorUpload instanceof Error && errorUpload.message.includes('HTTP error')) {
       try {
         const statusMatch = errorUpload.message.match(/status: (\d+)/)
         const status = statusMatch ? statusMatch[1] : 'unknown'
@@ -1221,6 +1254,12 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   if (options.verbose)
     log.info(`[Verbose] Capacitor config loaded successfully`)
 
+  // Record whether the user explicitly asked for a delta/partial upload BEFORE
+  // any mutation of `options.delta`. The instant-update auto-enable below and
+  // the flag fold later both set `options.delta = true`, so reading it back
+  // afterwards cannot tell an auto-enabled delta from an explicit `--delta`.
+  options.userRequestedDelta = !!(options.partial || options.delta || options.partialOnly || options.deltaOnly)
+
   // Check if instant updates are enabled and auto-enable delta updates.
   const instantUpdateEnabled = usesAlwaysDirectUpdate(extConfig?.config?.plugins?.CapacitorUpdater)
   const interactive = canPromptInteractively({ silent })
@@ -1323,7 +1362,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   if (options.verbose)
     log.info(`[Verbose] Target channel${channels.length > 1 ? 's' : ''}: ${channelLabel}`)
 
-  // Now if it does exist we will fetch the org id
+  // App existence/permission already checked above; fetch org id for analytics and plan checks.
   const orgId = await getOrganizationId(apikey, appid, { supaHost: options.supaHost, supaAnon: options.supaAnon })
   if (options.verbose)
     log.info(`[Verbose] Organization ID: ${orgId}`)
@@ -1493,7 +1532,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     const hasCredentials = (await loadSavedCredentials(appid)) !== null
     const builderAction = await maybePromptBuilderCta({ incompatible, interactive, hasCredentials, appId: appid, orgId, apikey, incompatibleCount })
     if (builderAction === 'abort')
-      throw new Error(UPLOAD_CANCELLED_BY_USER)
+      uploadCancel()
 
     if (builderAction !== 'continue') {
       // Skip the OTA upload and hand the launch back to the CLI entry point, which
@@ -1795,9 +1834,9 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     }
     catch (err) {
       // If user explicitly requested delta, the error was already thrown by uploadPartial
-      // and we should propagate it
-      const userRequestedDelta = !!(options.partial || options.delta || options.partialOnly || options.deltaOnly)
-      if (userRequestedDelta) {
+      // and we should propagate it. Read the explicit-request flag captured before
+      // `options.delta` was mutated, so an auto-enabled delta degrades gracefully.
+      if (options.userRequestedDelta) {
         // Error already logged in uploadPartial, just re-throw
         throw err
       }

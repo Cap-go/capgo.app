@@ -2,6 +2,7 @@ import type { Command } from 'commander'
 import { homedir, platform, release } from 'node:os'
 import { arch, cwd, env, version as nodeVersion } from 'node:process'
 import pack from '../package.json'
+import { CliUserError } from './shared/cli-user-error'
 
 const POSTHOG_EXCEPTION_URL = 'https://eu.i.posthog.com/i/v0/e/'
 const CAPGO_POSTHOG_PROJECT_TOKEN = 'phc_NXDyDajQaTQVwb25DEhIVZfxVUn4R0Y348Z7vWYHZUi'
@@ -176,7 +177,57 @@ function getCommanderCode(error: unknown) {
   return typeof code === 'string' ? code : undefined
 }
 
+// Lowercased markers for expected user-configuration failures (bad/missing API
+// key, app not created yet). These are surfaced with the backend error codes or
+// the CLI's own wording — matched case-insensitively against the error message.
+const EXPECTED_USER_ERROR_MARKERS = [
+  'invalid_apikey',
+  'invalid apikey',
+  'no_key_provided',
+  'no key provided',
+  'invalid api key or insufficient permissions',
+  'does not exist, run first',
+]
+
+function getErrorStatus(error: unknown): number | undefined {
+  if (!error || typeof error !== 'object')
+    return undefined
+  const candidate = error as { status?: unknown, statusCode?: unknown, context?: { status?: unknown } }
+  if (typeof candidate.status === 'number')
+    return candidate.status
+  if (typeof candidate.statusCode === 'number')
+    return candidate.statusCode
+  // supabase-js FunctionsHttpError keeps the upstream Response on `.context`.
+  const contextStatus = candidate.context && typeof candidate.context === 'object'
+    ? (candidate.context as { status?: unknown }).status
+    : undefined
+  return typeof contextStatus === 'number' ? contextStatus : undefined
+}
+
+/**
+ * Expected user-configuration failures: a bad or missing API key (401
+ * `invalid_apikey` / `no_key_provided`) or an app that has not been created
+ * yet. These are real user errors, not CLI bugs — they are still counted via
+ * `trackCommandFailed`, but must NOT be sent to error tracking as exceptions.
+ */
+export function isExpectedUserError(error: unknown) {
+  const message = (error instanceof Error
+    ? error.message
+    : typeof error === 'string' ? error : '').toLowerCase()
+
+  if (EXPECTED_USER_ERROR_MARKERS.some(marker => message.includes(marker)))
+    return true
+
+  // A 401 from any Capgo endpoint is an auth/config problem on the caller side.
+  return getErrorStatus(error) === 401
+}
+
 export function shouldCapturePosthogException(error: unknown) {
+  // Expected user-facing failures (CliUserError, bad/missing key, app not
+  // created, …) are legitimate states, not crashes — never open an error
+  // tracking issue for them.
+  if (error instanceof CliUserError || isExpectedUserError(error))
+    return false
   return !getCommanderCode(error)?.startsWith('commander.')
 }
 
@@ -212,13 +263,18 @@ export async function capturePosthogException(payload: CapturePosthogExceptionPa
   const sanitizedMessage = sanitizeTelemetryText(serializedError.message)
   const distinctId = `cli:${pack.version}:${payload.functionName}`
   const frames = parseExceptionFrames(serializedError.stack, payload.functionName)
-  const topFrame = frames[0]
+  // Fingerprint deliberately omits both the CLI version and the top stack frame
+  // (its function name and filename). The CLI ships as one minified
+  // `dist/index.js`, so the top-frame symbol is renamed on every release and the
+  // filename is the full install path — which differs per npx cache hash, bunx,
+  // pnpm store, global install, or sandbox. Keeping either splits one bug into a
+  // fresh error-tracking issue per install location and per release. The command
+  // path, error kind, error name, and exit status stay stable across all of them.
+  // Version is still reported via `cli_version` below.
   const fingerprint = [
-    distinctId,
+    payload.functionName,
     payload.kind,
     serializedError.name || 'Error',
-    topFrame?.function || payload.functionName,
-    topFrame && 'filename' in topFrame ? topFrame.filename : 'unknown',
     String(payload.status ?? 1),
   ].join(':')
 

@@ -133,6 +133,42 @@ export const failureActionFilterKeys = statsActionFilters
   .filter(([, actionValue]) => failureActions.has(actionValue))
   .map(([filterKey]) => filterKey)
 
+/** Observe / health events (webview, crashes, launches, native version changes). */
+const observeActions = new Set<string>([
+  'app_moved_to_foreground',
+  'app_moved_to_background',
+  'app_launch_start',
+  'app_launch_ready',
+  'app_launch_timeout',
+  'app_crash',
+  'app_crash_native',
+  'app_anr',
+  'app_killed_low_memory',
+  'app_killed_excessive_resource_usage',
+  'app_initialization_failure',
+  'app_memory_warning',
+  'webview_javascript_error',
+  'webview_unhandled_rejection',
+  'webview_resource_error',
+  'webview_security_policy_violation',
+  'webview_unclean_restart',
+  'webview_render_process_gone',
+  'webview_content_process_terminated',
+  'webview_dom_content_loaded',
+  'webview_page_loaded',
+  'os_version_changed',
+  'native_app_version_changed',
+])
+
+export const observeActionFilterKeys = statsActionFilters
+  .filter(([, actionValue]) => observeActions.has(actionValue))
+  .map(([filterKey]) => filterKey)
+
+/** Live-update / OTA process events (everything that is not observe). */
+export const updateActionFilterKeys = statsActionFilters
+  .filter(([, actionValue]) => !observeActions.has(actionValue))
+  .map(([filterKey]) => filterKey)
+
 export function createActionFilterState(): Record<string, boolean> {
   return Object.fromEntries(statsActionFilters.map(([filterKey]) => [filterKey, false]))
 }

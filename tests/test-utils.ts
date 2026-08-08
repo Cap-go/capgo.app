@@ -487,14 +487,56 @@ export const headersInternal = {
   'apisecret': API_SECRET,
 }
 
+/** Kong proxy body when the Deno isolate dies mid-request under shard load. */
+const KONG_UPSTREAM_INVALID_RESPONSE = 'An invalid response was received from the upstream server'
+
 /**
- * Send one request. A transient failure is test evidence, not a reason to rerun it.
+ * Send one request. Application 4xx/5xx are test evidence and are not retried.
+ * Only Kong's upstream-invalid 502/503 (isolate crash/reload) is retried — same
+ * signal the CI warm step already treats as non-ready.
  */
 export async function fetchTestRequest(
   url: string,
   options?: RequestInit,
 ): Promise<Response> {
-  return fetch(url, options)
+  const maxAttempts = 3
+  let lastResponse: Response | undefined
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const response = await fetch(url, options)
+    lastResponse = response
+    if (response.status !== 502 && response.status !== 503)
+      return response
+
+    const body = await response.clone().text().catch(() => '<unreadable body>')
+    console.error(`[fetchTestRequest] gateway status=${response.status} attempt=${attempt}/${maxAttempts} url=${url} body=${body.slice(0, 800)}`)
+
+    const isKongUpstreamDeath = body.includes(KONG_UPSTREAM_INVALID_RESPONSE)
+    if (!isKongUpstreamDeath || attempt === maxAttempts)
+      return response
+
+    await new Promise(resolve => setTimeout(resolve, 250 * attempt))
+  }
+
+  return lastResponse!
+}
+
+/**
+ * Warm a local edge/trigger endpoint until it stops returning gateway 502/503.
+ * Does not assert business status — only readiness of the Deno/workerd isolate.
+ */
+export async function warmEdgeEndpoint(
+  path: string,
+  options: RequestInit = { method: 'POST', headers: { 'Content-Type': 'application/json', 'apisecret': API_SECRET }, body: '{}' },
+): Promise<void> {
+  const url = path.startsWith('http') ? path : getEndpointUrl(path)
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    const response = await fetch(url, options)
+    await response.text().catch(() => undefined)
+    if (response.status !== 502 && response.status !== 503)
+      return
+    console.error(`[warmEdgeEndpoint] attempt=${attempt} status=${response.status} url=${url}`)
+    await new Promise(resolve => setTimeout(resolve, 500 * attempt))
+  }
 }
 
 // Cache for prepared apps to avoid repeated seeding
@@ -808,7 +850,7 @@ export function getUpdateBaseData(appId: string): ReturnType<typeof updateAndroi
 }
 
 export async function postUpdate(data: object) {
-  return await fetchTestRequest(
+  const response = await fetchTestRequest(
     getEndpointUrl('/updates'),
     {
       method: 'POST',
@@ -816,6 +858,11 @@ export async function postUpdate(data: object) {
       body: JSON.stringify(data),
     },
   )
+  if (response.status !== 200) {
+    const body = await response.clone().text().catch(() => '<unreadable body>')
+    console.error(`[postUpdate] non-200 status=${response.status} body=${body.slice(0, 800)}`)
+  }
+  return response
 }
 
 export interface DeviceLink {

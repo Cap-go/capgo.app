@@ -107,7 +107,7 @@ async function executeTracking(c: Context, payload: SendEventToTrackingPayload, 
   await Promise.all(tasks)
 }
 
-async function executeBentoTracking(c: Context, payload: SendEventToTrackingPayload) {
+async function executeBentoTracking(c: Context, payload: SendEventToTrackingPayload, strict = false) {
   if (!payload.sentToBento)
     return
 
@@ -119,6 +119,8 @@ async function executeBentoTracking(c: Context, payload: SendEventToTrackingPayl
       event: payload.event,
       user_id: payload.user_id,
     })
+    if (strict)
+      throw new Error('sendEventToTracking missing Bento payload')
     return
   }
 
@@ -133,6 +135,8 @@ async function executeBentoTracking(c: Context, payload: SendEventToTrackingPayl
       event: payload.event,
       user_id: payload.user_id,
     })
+    if (strict)
+      throw new Error('sendEventToTracking missing org id for Bento notification')
     return
   }
 
@@ -142,6 +146,8 @@ async function executeBentoTracking(c: Context, payload: SendEventToTrackingPayl
       if (bento.once) {
         // Permanent per-(event, org, uniqId) claim: per-entity alerts (e.g. an
         // incompatible bundle version) must not re-email org admins on retries.
+        // Discard the boolean: false is often benign (already claimed, no
+        // recipients, Bento unset). Under strict, only thrown errors fail closed.
         await sendNotifToOrgMembersOnce(
           c,
           bento.event,
@@ -152,35 +158,34 @@ async function executeBentoTracking(c: Context, payload: SendEventToTrackingPayl
           getDrizzleClient(pgClient),
           bento.audience,
         )
+        return
       }
-      else {
-        await sendNotifToOrgMembers(
-          c,
-          bento.event,
-          bento.preferenceKey,
-          bento.data,
-          orgId,
-          bento.uniqId,
-          bento.cron ?? '* * * * *',
-          getDrizzleClient(pgClient),
-          bento.audience,
-        )
-      }
+      await sendNotifToOrgMembers(
+        c,
+        bento.event,
+        bento.preferenceKey,
+        bento.data,
+        orgId,
+        bento.uniqId,
+        bento.cron ?? '* * * * *',
+        getDrizzleClient(pgClient),
+        bento.audience,
+      )
     }
     finally {
       await pgClient.end()
     }
-  })
+  }, strict)
 }
 
 export async function sendEventToTracking(c: Context, payload: SendEventToTrackingPayload, options: SendEventToTrackingOptions = {}) {
   const trackingTask = executeTracking(c, payload, options)
   if (options.background === false) {
     await trackingTask
-    await executeBentoTracking(c, payload)
+    await executeBentoTracking(c, payload, options.strict === true)
     return
   }
 
   await backgroundTask(c, trackingTask)
-  await backgroundTask(c, executeBentoTracking(c, payload))
+  await backgroundTask(c, executeBentoTracking(c, payload, options.strict === true))
 }
