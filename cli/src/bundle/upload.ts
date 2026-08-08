@@ -53,9 +53,16 @@ const log = {
   success: (message: string) => getUploadReporter().success(message),
 }
 
+// The upload path's single failure chokepoint. Every abort here is a deliberate,
+// message-carrying stop — a bad flag, a duplicate version, a cancelled prompt,
+// a backend refusal — not a CLI crash. Throwing `CliUserError` opts the whole
+// path out of error tracking by type (via `shouldCapturePosthogException`), which
+// covers `Version X already exists` and `Upload cancelled by user` without
+// matching on message text. The non-zero exit and analytics events are unchanged;
+// only the `$exception` capture goes away.
 function uploadFail(message: string): never {
   log.error(message)
-  throw new Error(message)
+  throw new CliUserError(message)
 }
 
 // A user-initiated cancel is an expected exit, not a crash: warn instead of
@@ -312,7 +319,7 @@ async function checkVersionExists(supabase: SupabaseType, appid: string, bundle:
 
   if (appVersion) {
     if (versionExistsOk) {
-      log.warn(`Version ${bundle} already exists - exiting gracefully due to --silent-fail option`)
+      log.warn(`Version ${bundle} already exists - exiting gracefully due to --version-exists-ok option`)
       getUploadReporter().outro('Bundle version already exists - exiting gracefully 🎉')
       return true
     }
