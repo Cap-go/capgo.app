@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   getTableDateRangeSignature,
+  getTimeWindowPageRange,
   parseDateRangeQuery,
   serializeDateRangeQuery,
   shouldRecountOnTableReload,
@@ -84,5 +85,18 @@ describe('date range query parse/serialize', () => {
       previousPage: 3,
       requestedPage: 3,
     })).toBe(true)
+  })
+
+  it.concurrent('shifts logs Load older windows backward without resetting page 1', () => {
+    const start = Date.parse('2026-08-08T12:00:00.000Z')
+    const end = Date.parse('2026-08-08T12:30:00.000Z')
+    expect(getTimeWindowPageRange(start, end, 1)).toEqual({
+      rangeStart: start,
+      rangeEnd: end,
+    })
+    expect(getTimeWindowPageRange(start, end, 0)).toEqual({
+      rangeStart: Date.parse('2026-08-08T11:30:00.000Z'),
+      rangeEnd: Date.parse('2026-08-08T12:00:00.000Z'),
+    })
   })
 })

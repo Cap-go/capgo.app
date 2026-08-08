@@ -227,3 +227,20 @@ export function shouldRecountOnTableReload(options: {
     return true
   return options.previousPage === options.requestedPage
 }
+
+/**
+ * Time-window pagination used by logs/deployments "Load older".
+ * Page 1 is the selected range; page 0 / -1 / … shift one full window backward.
+ */
+export function getTimeWindowPageRange(
+  rangeStartMs: number,
+  rangeEndMs: number,
+  page: number,
+): { rangeStart: number, rangeEnd: number } {
+  const timeDifference = rangeEndMs - rangeStartMs
+  const pageTimeOffset = timeDifference * (page - 1)
+  return {
+    rangeStart: rangeStartMs + pageTimeOffset,
+    rangeEnd: rangeEndMs + pageTimeOffset,
+  }
+}
