@@ -167,8 +167,11 @@ export async function check2FAComplianceForApp(
 }
 
 function hostOptionsFromSupabase(supabase: SupabaseClient<Database>) {
-  const supaHost = typeof supabase.supabaseUrl === 'string' ? supabase.supabaseUrl : undefined
-  const supaAnon = typeof supabase.supabaseKey === 'string' ? supabase.supabaseKey : undefined
+  // supabase-js keeps these as protected fields; local/self-host tests still
+  // need the same host when Capgo HTTP existence checks replace PostgREST RPCs.
+  const client = supabase as SupabaseClient<Database> & { supabaseUrl?: string, supabaseKey?: string }
+  const supaHost = typeof client.supabaseUrl === 'string' ? client.supabaseUrl : undefined
+  const supaAnon = typeof client.supabaseKey === 'string' ? client.supabaseKey : undefined
   if (supaHost && supaAnon)
     return { supaHost, supaAnon }
   return undefined
