@@ -1,7 +1,7 @@
 -- Test RLS Policies
 -- This file tests all Row Level Security policies in the database
 BEGIN;
-SELECT plan(70);
+SELECT plan(72);
 SELECT
     policies_are(
         'public',
