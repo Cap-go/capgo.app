@@ -89,9 +89,7 @@ jobs:
           filter: blob:none
           token: "${{ secrets.PERSONAL_ACCESS_TOKEN }}"
       - name: Setup bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
+        run: bash scripts/setup-bun.sh
       - name: Install dependencies
         if: ${{ needs.changes.outputs.run_capgo == 'true' || needs.changes.outputs.run_cli == 'true' || needs.changes.outputs.run_notifications == 'true' }}
         run: bun install --frozen-lockfile
@@ -213,9 +211,7 @@ jobs:
           fetch-depth: 0
           filter: blob:none
       - name: Setup bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
+        run: bash scripts/setup-bun.sh
       - name: Install dependencies
         run: bun install --frozen-lockfile
       - name: Sync generated schema and types
