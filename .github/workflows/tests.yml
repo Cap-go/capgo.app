@@ -146,13 +146,28 @@ jobs:
           # PR already covers the branch, the push suite is redundant and its flakes
           # (Docker port binds, transient 502/503) stick on the PR check list.
           if [ "$EVENT_NAME" = "push" ]; then
-            pr_count="$(gh pr list --head "$BRANCH_NAME" --state open --json number --jq 'length' 2>/dev/null || echo 0)"
-            if [ "${pr_count:-0}" -gt 0 ]; then
-              echo "Skipping push test suite; open PR already covers branch $BRANCH_NAME"
-              echo "capgo=false" >> "$GITHUB_OUTPUT"
-              echo "cli=false" >> "$GITHUB_OUTPUT"
-              echo "notifications=false" >> "$GITHUB_OUTPUT"
-              exit 0
+            set +e
+            pr_json="$(gh pr list \
+              --repo "$GITHUB_REPOSITORY" \
+              --state open \
+              --json number,headRefName,headRepository 2>/tmp/gh-pr-list.err)"
+            gh_status=$?
+            set -e
+            if [ "$gh_status" -ne 0 ]; then
+              echo "Warning: gh pr list failed; not skipping push tests"
+              cat /tmp/gh-pr-list.err || true
+            else
+              pr_count="$(printf '%s' "$pr_json" | jq \
+                --arg branch "$BRANCH_NAME" \
+                --arg repo "$GITHUB_REPOSITORY" \
+                '[.[] | select(.headRefName == $branch and .headRepository.nameWithOwner == $repo)] | length')"
+              if [ "${pr_count:-0}" -gt 0 ]; then
+                echo "Skipping push test suite; open PR already covers branch $BRANCH_NAME in $GITHUB_REPOSITORY"
+                echo "capgo=false" >> "$GITHUB_OUTPUT"
+                echo "cli=false" >> "$GITHUB_OUTPUT"
+                echo "notifications=false" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
             fi
           fi
 

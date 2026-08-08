@@ -184,7 +184,7 @@ describe('canceled_org_retention_alerts', () => {
     )
   })
 
-  it('rejects non-string access_end without 500', async () => {
+  it('falls back to unknown uniqId for non-string access_end', async () => {
     const response = await postRetentionAlert({
       org_id: ORG_FALLBACK,
       alert_type: 'bundles_deletion_warning',
