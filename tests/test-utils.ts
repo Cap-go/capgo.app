@@ -500,8 +500,10 @@ export async function fetchTestRequest(
   options?: RequestInit,
 ): Promise<Response> {
   const maxAttempts = 3
+  let lastResponse: Response | undefined
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const response = await fetch(url, options)
+    lastResponse = response
     if (response.status !== 502 && response.status !== 503)
       return response
 
@@ -515,8 +517,7 @@ export async function fetchTestRequest(
     await new Promise(resolve => setTimeout(resolve, 250 * attempt))
   }
 
-  // Unreachable — loop always returns — keeps TypeScript definite.
-  return fetch(url, options)
+  return lastResponse!
 }
 
 /**
