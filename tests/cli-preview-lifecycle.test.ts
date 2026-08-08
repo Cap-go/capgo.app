@@ -76,6 +76,8 @@ const APPNAME = `com.cli.preview.lifecycle.${id}`
 const CHANNEL_NAME = `preview-${id.slice(0, 8)}`
 const SECOND_CHANNEL_NAME = `preview-other-${id.slice(0, 8)}`
 const MAIN_CHANNEL_NAME = `main-${id.slice(0, 8)}`
+const DEFAULT_CHANNEL_NAME = `preview-default-${id.slice(0, 8)}`
+const PUBLIC_POST_CHANNEL_NAME = `preview-public-post-${id.slice(0, 8)}`
 const BUNDLE_NAME = `1.0.0-preview-${id.slice(0, 8)}`
 const LEGACY_CHANNEL_NAME = `preview-legacy-${id.slice(0, 8)}`
 const LEGACY_BUNDLE_NAME = `1.0.0-legacy-${id.slice(0, 8)}`
@@ -247,6 +249,34 @@ describe('cli app preview lifecycle', () => {
       supaHost: SUPABASE_BASE_URL,
       supaAnon: SUPABASE_ANON_KEY,
     }
+
+    await expect(addChannelInternal(DEFAULT_CHANNEL_NAME, APPNAME, {
+      ...cliOptions,
+      default: true,
+    }, true)).rejects.toThrow('Cannot create channel')
+
+    const publicChannelResponse = await fetch(`${BASE_URL}/channel`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'capgkey': apiKey.key,
+      },
+      body: JSON.stringify({
+        app_id: APPNAME,
+        channel: PUBLIC_POST_CHANNEL_NAME,
+        public: true,
+      }),
+    })
+    expect(publicChannelResponse.status).toBe(400)
+    await expect(publicChannelResponse.json()).resolves.toMatchObject({ error: 'cannot_access_app' })
+
+    const blockedPublicChannels = await executeSQL(
+      `SELECT COUNT(*)::integer AS count
+       FROM public.channels
+       WHERE app_id = $1 AND name = ANY($2::varchar[])`,
+      [APPNAME, [DEFAULT_CHANNEL_NAME, PUBLIC_POST_CHANNEL_NAME]],
+    )
+    expect(Number(blockedPublicChannels[0]?.count ?? 0)).toBe(0)
 
     const { upload, requests } = await (async () => {
       const fetchSpy = vi.spyOn(globalThis, 'fetch')
