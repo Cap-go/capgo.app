@@ -3,6 +3,8 @@ import type { Database } from '~/types/supabase.types'
 import colors from 'tailwindcss/colors'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { computeLastDayEvolution } from '~/services/buildCharts'
+import { normalizeToUtcStartOfDay } from '~/services/date'
 import {
   calculateDemoEvolution,
   calculateDemoTotal,
@@ -14,6 +16,8 @@ import {
 import { useSupabase } from '~/services/supabase'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useOrganizationStore } from '~/stores/organization'
+import { filterDailySeriesToBillingPeriod, resolveDashboardDailySeriesWindow } from '~/utils/chartOptimizations'
+import { ensureMinDelay } from '~/utils/minDelay'
 import BundleUploadsChart from './BundleUploadsChart.vue'
 import ChartCard from './ChartCard.vue'
 
@@ -44,44 +48,6 @@ const props = defineProps({
     default: false,
   },
 })
-
-// Helper function to filter 30-day data to billing period
-function filterToBillingPeriod(fullData: number[], last30DaysStart: Date, billingStart: Date) {
-  const currentDate = new Date()
-
-  // Calculate billing period length
-  let currentBillingDay: number
-
-  if (billingStart.getDate() === 1) {
-    currentBillingDay = currentDate.getDate()
-  }
-  else {
-    const billingStartDay = billingStart.getUTCDate()
-    const daysInMonth = new Date(Date.UTC(currentDate.getUTCFullYear(), currentDate.getUTCMonth() + 1, 0)).getUTCDate()
-    currentBillingDay = (currentDate.getUTCDate() - billingStartDay + 1 + daysInMonth) % daysInMonth
-    if (currentBillingDay === 0)
-      currentBillingDay = daysInMonth
-  }
-
-  // Create arrays for billing period length
-  const billingData = Array.from({ length: currentBillingDay }).fill(0) as number[]
-
-  // Map 30-day data to billing period
-  for (let i = 0; i < 30; i++) {
-    const dataDate = new Date(last30DaysStart)
-    dataDate.setDate(dataDate.getDate() + i)
-
-    // Check if this date falls within current billing period
-    if (dataDate >= billingStart && dataDate <= currentDate) {
-      const billingIndex = Math.floor((dataDate.getTime() - billingStart.getTime()) / (1000 * 60 * 60 * 24))
-      if (billingIndex >= 0 && billingIndex < currentBillingDay) {
-        billingData[billingIndex] = fullData[i]
-      }
-    }
-  }
-
-  return { data: billingData }
-}
 
 const { t } = useI18n()
 const organizationStore = useOrganizationStore()
@@ -154,16 +120,12 @@ async function calculateStats(forceRefetch = false) {
     const orgChanged = currentCacheOrgId.value !== currentOrgId
     currentCacheOrgId.value = currentOrgId
 
-    // Always work with last 30 days of data
-    const last30DaysEnd = new Date()
-    const last30DaysStart = new Date()
-    last30DaysStart.setDate(last30DaysStart.getDate() - 29) // 30 days including today
-    last30DaysStart.setHours(0, 0, 0, 0)
-    last30DaysEnd.setHours(23, 59, 59, 999)
-
     // Get billing period dates for filtering
-    const billingStart = new Date(organizationStore.currentOrganization?.subscription_start ?? new Date())
-    billingStart.setHours(0, 0, 0, 0)
+    const billingStart = normalizeToUtcStartOfDay(new Date(organizationStore.currentOrganization?.subscription_start ?? new Date()))
+    const { seriesStart: last30DaysStart, exclusiveEnd: last30DaysEnd, dayCount } = resolveDashboardDailySeriesWindow(
+      props.useBillingPeriod,
+      billingStart,
+    )
 
     // Determine target apps
     const localAppNames: { [appId: string]: string } = {}
@@ -202,7 +164,7 @@ async function calculateStats(forceRefetch = false) {
     }
 
     if (targetAppIds.length === 0) {
-      bundleData.value = Array.from({ length: 30 }).fill(0) as number[]
+      bundleData.value = Array.from({ length: dayCount }).fill(0) as number[]
       bundleDataByApp.value = {}
       return
     }
@@ -216,12 +178,12 @@ async function calculateStats(forceRefetch = false) {
       data = cachedData
     }
     else {
-      // Fetch last 30 days of data
+      // Fetch series window (billing cycle or last 30 UTC days)
       const query = useSupabase()
         .from('app_versions')
         .select('created_at, app_id, deleted, r2_path, external_url, user_id')
         .gte('created_at', last30DaysStart.toISOString())
-        .lte('created_at', last30DaysEnd.toISOString())
+        .lt('created_at', last30DaysEnd.toISOString())
         .in('app_id', targetAppIds)
 
       const result = await query
@@ -236,26 +198,26 @@ async function calculateStats(forceRefetch = false) {
 
     if (!error && data) {
       // Create fresh arrays for processing
-      const dailyCounts30Days = Array.from({ length: 30 }).fill(0) as number[]
+      const dailyCounts30Days = Array.from({ length: dayCount }).fill(0) as number[]
       const bundleDataByApp30Days: { [appId: string]: number[] } = {}
       targetAppIds.forEach((appId) => {
-        bundleDataByApp30Days[appId] = Array.from({ length: 30 }).fill(0) as number[]
+        bundleDataByApp30Days[appId] = Array.from({ length: dayCount }).fill(0) as number[]
       })
 
       // Track total separately (don't use ref during loop)
       let totalCount = 0
 
-      // Map each bundle to the correct day and app (30 days)
+      // Map each bundle to the correct day and app
       data
         .filter((bundle: BundleUploadRow) => bundle.created_at !== null && bundle.app_id !== null && !isSyntheticDefaultVersion(bundle))
         .forEach((bundle: any) => {
           if (bundle.created_at && bundle.app_id) {
             const bundleDate = new Date(bundle.created_at)
 
-            // Calculate days since start of 30-day period
+            // Calculate days since start of series window
             const daysDiff = Math.floor((bundleDate.getTime() - last30DaysStart.getTime()) / (1000 * 60 * 60 * 24))
 
-            if (daysDiff >= 0 && daysDiff < 30) {
+            if (daysDiff >= 0 && daysDiff < dayCount) {
               dailyCounts30Days[daysDiff]++
               totalCount++
 
@@ -270,13 +232,13 @@ async function calculateStats(forceRefetch = false) {
       // Filter data based on billing period mode
       if (props.useBillingPeriod) {
         // Show only data within billing period
-        const filteredData = filterToBillingPeriod(dailyCounts30Days, last30DaysStart, billingStart)
+        const filteredData = filterDailySeriesToBillingPeriod(dailyCounts30Days, last30DaysStart, billingStart)
         bundleData.value = filteredData.data
 
         // Filter by-app data too
         const filteredByApp: { [appId: string]: number[] } = {}
         Object.keys(bundleDataByApp30Days).forEach((appId) => {
-          const filteredAppData = filterToBillingPeriod(bundleDataByApp30Days[appId], last30DaysStart, billingStart)
+          const filteredAppData = filterDailySeriesToBillingPeriod(bundleDataByApp30Days[appId], last30DaysStart, billingStart)
           filteredByApp[appId] = filteredAppData.data
         })
         bundleDataByApp.value = filteredByApp
@@ -292,25 +254,14 @@ async function calculateStats(forceRefetch = false) {
       }
 
       // Calculate evolution (compare last two days with data)
-      const nonZeroDays = bundleData.value.filter(count => count > 0)
-      if (nonZeroDays.length >= 2) {
-        const lastDayCount = nonZeroDays[nonZeroDays.length - 1]
-        const previousDayCount = nonZeroDays[nonZeroDays.length - 2]
-        if (previousDayCount > 0) {
-          lastDayEvolution.value = ((lastDayCount - previousDayCount) / previousDayCount) * 100
-        }
-      }
+      lastDayEvolution.value = computeLastDayEvolution(bundleData.value)
     }
   }
   catch (error) {
     console.error('Error calculating bundle upload stats:', error)
   }
   finally {
-    // Ensure spinner shows for at least 300ms for better UX
-    const elapsed = Date.now() - startTime
-    if (elapsed < 300) {
-      await new Promise(resolve => setTimeout(resolve, 300 - elapsed))
-    }
+    await ensureMinDelay(startTime)
     isLoading.value = false
   }
 }

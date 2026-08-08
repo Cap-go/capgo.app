@@ -3,6 +3,7 @@ import type { ComputedRef, Ref } from 'vue'
 import type { Database } from '~/types/supabase.types'
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
+import { addUtcDays, normalizeToUtcStartOfDay } from '~/services/date'
 import { createSignedImageUrl, getImmediateImageUrl, resolveImagePath } from '~/services/storage'
 import { isPlatformAdmin, stripeEnabled, useSupabase } from '~/services/supabase'
 import { clearWebsitePaidUserCookie, setWebsitePaidUserCookie, syncWebsitePaidUserCookieFromOrganizations } from '~/services/websiteAuthCookie'
@@ -356,14 +357,11 @@ export const useOrganizationStore = defineStore('organization', () => {
       dashboardAppsStore.fetchApps(true)
     }
 
-    // Always fetch last 30 days of data and filter client-side for billing period
-    // End date should be tomorrow at midnight to include all of today's data
-    const last30DaysEnd = new Date()
-    last30DaysEnd.setHours(0, 0, 0, 0)
-    last30DaysEnd.setDate(last30DaysEnd.getDate() + 1) // Tomorrow midnight
-    const last30DaysStart = new Date()
-    last30DaysStart.setHours(0, 0, 0, 0)
-    last30DaysStart.setDate(last30DaysStart.getDate() - 29) // 30 days including today
+    // Always fetch last 30 UTC days of data and filter client-side for billing period
+    // End date should be next UTC midnight to include all of today's UTC data
+    const todayUtc = normalizeToUtcStartOfDay()
+    const last30DaysEnd = addUtcDays(todayUtc, 1)
+    const last30DaysStart = addUtcDays(todayUtc, -29)
     try {
       await main.updateDashboard(currentOrganizationRaw.gid, last30DaysStart.toISOString(), last30DaysEnd.toISOString())
     }

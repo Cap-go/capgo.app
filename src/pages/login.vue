@@ -40,6 +40,7 @@ const emailForLogin = ref('')
 const hasSso = ref(false)
 const enforceSso = ref(false)
 const isDomainChecking = ref(false)
+const domainCheckTimeoutMs = 5000
 const isCheckingSavedSession = ref(true)
 const captchaStatus = ref<'disabled' | 'loading' | 'ready' | 'unavailable'>(captchaKey.value ? 'loading' : 'disabled')
 let captchaInitTimeout: ReturnType<typeof setTimeout> | null = null
@@ -324,6 +325,8 @@ async function login(form: { email: string, password: string }) {
 }
 
 async function checkDomain(email: string): Promise<{ has_sso: boolean, enforce_sso?: boolean, provider_id?: string, org_id?: string }> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), domainCheckTimeoutMs)
   try {
     const { data: sessionData } = await supabase.auth.getSession()
     const token = sessionData?.session?.access_token
@@ -339,6 +342,7 @@ async function checkDomain(email: string): Promise<{ has_sso: boolean, enforce_s
       method: 'POST',
       headers,
       body: JSON.stringify({ email }),
+      signal: controller.signal,
     })
 
     if (!response.ok) {
@@ -347,8 +351,8 @@ async function checkDomain(email: string): Promise<{ has_sso: boolean, enforce_s
 
     return await response.json()
   }
-  catch {
-    return { has_sso: false }
+  finally {
+    clearTimeout(timeout)
   }
 }
 
@@ -356,12 +360,22 @@ async function handleEmailContinue(form: { email: string }) {
   isDomainChecking.value = true
   emailForLogin.value = form.email
 
-  const result = await checkDomain(form.email)
-  hasSso.value = result.has_sso
-  enforceSso.value = result.enforce_sso === true
-
-  isDomainChecking.value = false
-  statusAuth.value = 'credentials'
+  try {
+    const result = await checkDomain(form.email)
+    hasSso.value = result.has_sso
+    enforceSso.value = result.enforce_sso === true
+  }
+  catch (error) {
+    // Domain check timed out or failed. Fall through to the password step.
+    console.error('SSO domain check failed', error)
+    hasSso.value = false
+    enforceSso.value = false
+    toast.error(t('sso-check-failed'))
+  }
+  finally {
+    isDomainChecking.value = false
+    statusAuth.value = 'credentials'
+  }
 }
 
 async function handlePasswordSubmit(form: { password: string }) {
