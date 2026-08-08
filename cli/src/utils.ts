@@ -1177,9 +1177,12 @@ export function findSavedKey(quiet = false) {
     key = readFileSync(keyPath, 'utf8').trim()
   }
   if (!key) {
-    const message = `Cannot find API key in local folder or global, please login first with ${getPMAndCommand().runner} @capgo/cli login`
+    // Keep this message static (no interpolated package-manager runner): it is a
+    // CliUserError so error tracking skips it, and a constant string means one
+    // "not logged in" condition renders as one value instead of one per runner.
+    const message = 'Cannot find API key in local folder or global, please login first with `capgo login`'
     log.error(message)
-    throw new Error(message)
+    throw new CliUserError(message)
   }
   return key
 }
