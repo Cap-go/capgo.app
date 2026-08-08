@@ -550,8 +550,7 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
 
       <div
         v-if="!isMobile"
-        class="flex flex-col shrink-0"
-        :class="showExpiredTrialState ? 'order-2 mt-6' : 'order-0 mb-6'"
+        class="flex flex-col mb-6 shrink-0"
       >
         <!-- Credits CTA: shows info banner for credits-only orgs, upsell CTA for others -->
         <CreditsCta class="shrink-0" :credits-only="isCreditsOnly" />
@@ -581,7 +580,7 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
       </div>
 
       <!-- Plans Grid -->
-      <div class="grid content-start min-h-0 grid-cols-1 gap-4 p-1 overflow-y-auto md:grid-cols-2 xl:grid-cols-4 grow" :class="showExpiredTrialState ? 'order-1' : 'order-0'">
+      <div class="grid content-start min-h-0 grid-cols-1 gap-4 p-1 overflow-y-auto md:grid-cols-2 xl:grid-cols-4 grow">
         <div
           v-for="(p, index) in mainStore.plans"
           :key="p.price_m"
@@ -668,7 +667,7 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
       </div>
 
       <!-- Footer / Contact -->
-      <div v-if="!isMobile" class="order-3 mt-4 text-xs text-center text-gray-500 dark:text-gray-400 shrink-0">
+      <div v-if="!isMobile" class="mt-4 text-xs text-center text-gray-500 dark:text-gray-400 shrink-0">
         {{ t('plan-page-warn').replace('%ORG_NAME%', currentOrganization?.name ?? '') }}
         <a class="text-blue-600 hover:underline" href="https://capgo.app/docs/docs/webapp/payment/">{{ t('plan-page-warn-2') }}</a>
       </div>
