@@ -172,6 +172,7 @@ ON CONFLICT DO NOTHING;
 
 -- 1) Preview key cannot INSERT a public channel.
 SELECT tests.clear_authentication();
+SELECT set_config('request.jwt.claim.role', 'anon', true);
 SELECT set_config('request.headers', '{"capgkey":"public-channel-guard-preview-key"}', true);
 
 SELECT throws_ok(
@@ -263,6 +264,7 @@ SELECT lives_ok(
 
 -- 3) Channel-admin cannot flip private -> public.
 SELECT tests.clear_authentication();
+SELECT set_config('request.jwt.claim.role', 'anon', true);
 SELECT set_config('request.headers', '{"capgkey":"public-channel-guard-channel-admin-key"}', true);
 
 SELECT throws_ok(
@@ -288,6 +290,7 @@ SELECT lives_ok(
 
 -- 5) App admin can flip private -> public.
 SELECT tests.clear_authentication();
+SELECT set_config('request.jwt.claim.role', 'anon', true);
 SELECT set_config('request.headers', '{"capgkey":"public-channel-guard-admin-key"}', true);
 
 SELECT lives_ok(
@@ -301,6 +304,7 @@ SELECT lives_ok(
 
 -- 6) Channel-admin can still edit an already-public channel.
 SELECT tests.clear_authentication();
+SELECT set_config('request.jwt.claim.role', 'anon', true);
 SELECT set_config('request.headers', '{"capgkey":"public-channel-guard-channel-admin-key"}', true);
 
 SELECT lives_ok(

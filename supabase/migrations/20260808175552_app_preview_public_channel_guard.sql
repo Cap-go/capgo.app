@@ -66,13 +66,17 @@ SECURITY DEFINER
 SET search_path = ''
 AS $$
 DECLARE
-  v_request_role text := COALESCE(auth.role(), session_user);
+  -- Prefer current_request_role over auth.role()/session_user: pgTAP and
+  -- PostgREST API-key traffic set the role GUC (and/or JWT role) to anon while
+  -- session_user stays postgres. Falling back to session_user would skip the
+  -- private -> public guard for those callers.
+  v_request_role text := public.current_request_role();
 BEGIN
-  -- Only gate private -> public transitions. Service-role/admin paths enforce
-  -- the matching app.update_settings check in application code.
+  -- Only gate private -> public transitions. Internal/service-role paths
+  -- enforce the matching app.update_settings check in application code.
   IF NEW.public IS TRUE
     AND OLD.public IS NOT TRUE
-    AND v_request_role NOT IN ('service_role', 'postgres')
+    AND NOT public.is_internal_request_role(v_request_role)
   THEN
     IF v_request_role IS DISTINCT FROM 'anon' AND v_request_role IS DISTINCT FROM 'authenticated' THEN
       RAISE EXCEPTION 'PERMISSION_DENIED_APP_UPDATE_SETTINGS'
