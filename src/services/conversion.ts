@@ -33,9 +33,9 @@ export function getDaysBetweenDates(date1: string | Date, date2: string | Date) 
   const oneDay = 24 * 60 * 60 * 1000
   const firstDate = new Date(date1)
   const secondDate = new Date(date2)
-  // Normalize both dates to midnight (start of day) to avoid timezone/time-of-day issues
-  firstDate.setHours(0, 0, 0, 0)
-  secondDate.setHours(0, 0, 0, 0)
+  // Normalize both dates to UTC midnight — dashboard stats are bucketed by UTC day
+  firstDate.setUTCHours(0, 0, 0, 0)
+  secondDate.setUTCHours(0, 0, 0, 0)
   const res = Math.round(Math.abs((firstDate.valueOf() - secondDate.valueOf()) / oneDay))
   return res
 }
