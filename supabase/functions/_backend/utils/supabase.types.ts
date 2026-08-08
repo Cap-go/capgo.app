@@ -10,7 +10,7 @@ export type Database = {
   // Allows to automatically instantiate createClient with right options
   // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
   __InternalSupabase: {
-    PostgrestVersion: "14.5"
+    PostgrestVersion: "14.15"
   }
   graphql_public: {
     Tables: {
@@ -584,30 +584,6 @@ export type Database = {
           },
         ]
       }
-      builder_capacity_events: {
-        Row: {
-          created_at: string
-          delta: number
-          id: number
-          source: string
-          workers_total: number
-        }
-        Insert: {
-          created_at?: string
-          delta: number
-          id?: number
-          source?: string
-          workers_total: number
-        }
-        Update: {
-          created_at?: string
-          delta?: number
-          id?: number
-          source?: string
-          workers_total?: number
-        }
-        Relationships: []
-      }
       build_requests: {
         Row: {
           ai_analyzed: boolean
@@ -691,6 +667,30 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      builder_capacity_events: {
+        Row: {
+          created_at: string
+          delta: number
+          id: number
+          source: string
+          workers_total: number
+        }
+        Insert: {
+          created_at?: string
+          delta: number
+          id?: number
+          source?: string
+          workers_total: number
+        }
+        Update: {
+          created_at?: string
+          delta?: number
+          id?: number
+          source?: string
+          workers_total?: number
+        }
+        Relationships: []
       }
       capgo_credits_steps: {
         Row: {
@@ -981,6 +981,45 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      cli_usage: {
+        Row: {
+          api_version: string
+          apikey_id: string | null
+          cli_version: string
+          command: string
+          created_at: string
+          id: number
+          node_version: string
+          org_id: string | null
+          os_platform: string
+          source: string
+        }
+        Insert: {
+          api_version?: string
+          apikey_id?: string | null
+          cli_version: string
+          command?: string
+          created_at?: string
+          id?: number
+          node_version?: string
+          org_id?: string | null
+          os_platform?: string
+          source?: string
+        }
+        Update: {
+          api_version?: string
+          apikey_id?: string | null
+          cli_version?: string
+          command?: string
+          created_at?: string
+          id?: number
+          node_version?: string
+          org_id?: string | null
+          os_platform?: string
+          source?: string
+        }
+        Relationships: []
       }
       compatibility_events: {
         Row: {
@@ -2230,6 +2269,39 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      old_apps: {
+        Row: {
+          app_created_at: string | null
+          app_id: string
+          created_at: string
+          deleted_at: string
+          email: string
+          id: number
+          owner_org: string
+          user_id: string | null
+        }
+        Insert: {
+          app_created_at?: string | null
+          app_id: string
+          created_at?: string
+          deleted_at?: string
+          email: string
+          id?: number
+          owner_org: string
+          user_id?: string | null
+        }
+        Update: {
+          app_created_at?: string | null
+          app_id?: string
+          created_at?: string
+          deleted_at?: string
+          email?: string
+          id?: number
+          owner_org?: string
+          user_id?: string | null
+        }
+        Relationships: []
       }
       onboarding_demo_data: {
         Row: {
@@ -3806,6 +3878,10 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      canceled_org_ids_past_grace: {
+        Args: { p_days: number }
+        Returns: string[]
+      }
       channel_forced_devices_denied_channel_ids: {
         Args: never
         Returns: number[]
@@ -3867,6 +3943,14 @@ export type Database = {
       claim_legacy_onboarding_demo_data: {
         Args: { p_app_uuid: string }
         Returns: undefined
+      }
+      cleanup_audit_logs_bookkeeping_noise: {
+        Args: {
+          batch_size?: number
+          max_batches?: number
+          max_runtime_ms?: number
+        }
+        Returns: number
       }
       cleanup_audit_logs_for_long_canceled_orgs: {
         Args: {
@@ -3960,6 +4044,10 @@ export type Database = {
           deleted_count: number
           deleted_user_ids: string[]
         }[]
+      }
+      delete_apps_for_long_canceled_orgs: {
+        Args: { p_batch_size?: number }
+        Returns: number
       }
       delete_group_with_bindings: {
         Args: { group_id: string }
@@ -4853,6 +4941,14 @@ export type Database = {
       process_stats_email_monthly: { Args: never; Returns: undefined }
       process_stats_email_weekly: { Args: never; Returns: undefined }
       process_subscribed_orgs: { Args: never; Returns: undefined }
+      queue_canceled_org_retention_alerts: {
+        Args: {
+          p_alert_type: string
+          p_batch_size?: number
+          p_min_days: number
+        }
+        Returns: number
+      }
       queue_cron_stat_app_for_app: {
         Args: { p_app_id: string; p_org_id?: string }
         Returns: undefined

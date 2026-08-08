@@ -1700,6 +1700,16 @@ BEGIN
       END IF;
     END LOOP;
 
+    -- Pure updated_at bumps are bookkeeping, not user-facing audit events.
+    IF v_changed_fields IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1
+        FROM pg_catalog.unnest(v_changed_fields) AS changed_field(field_name)
+        WHERE changed_field.field_name IS DISTINCT FROM 'updated_at'
+      ) THEN
+      RETURN NEW;
+    END IF;
+
     IF TG_TABLE_NAME = ANY(ARRAY['apps', 'orgs'])
       AND v_changed_fields && ARRAY['stats_refresh_requested_at', 'stats_updated_at']
       AND NOT EXISTS (
@@ -1734,26 +1744,49 @@ BEGIN
 
   END IF;
 
-  CASE TG_TABLE_NAME
-    WHEN 'orgs' THEN
-      v_org_id := COALESCE(NEW.id, OLD.id);
-      v_record_id := COALESCE(NEW.id, OLD.id)::text;
-    WHEN 'apps' THEN
-      v_org_id := COALESCE(NEW.owner_org, OLD.owner_org);
-      v_record_id := COALESCE(NEW.app_id, OLD.app_id)::text;
-    WHEN 'channels' THEN
-      v_org_id := COALESCE(NEW.owner_org, OLD.owner_org);
-      v_record_id := COALESCE(NEW.id, OLD.id)::text;
-    WHEN 'app_versions' THEN
-      v_org_id := COALESCE(NEW.owner_org, OLD.owner_org);
-      v_record_id := COALESCE(NEW.id, OLD.id)::text;
-    WHEN 'org_users' THEN
-      v_org_id := COALESCE(NEW.org_id, OLD.org_id);
-      v_record_id := COALESCE(NEW.id, OLD.id)::text;
-    ELSE
-      v_org_id := NULL;
-      v_record_id := NULL;
-  END CASE;
+  IF TG_OP = 'DELETE' THEN
+    CASE TG_TABLE_NAME
+      WHEN 'orgs' THEN
+        v_org_id := OLD.id;
+        v_record_id := OLD.id::text;
+      WHEN 'apps' THEN
+        v_org_id := OLD.owner_org;
+        v_record_id := OLD.app_id::text;
+      WHEN 'channels' THEN
+        v_org_id := OLD.owner_org;
+        v_record_id := OLD.id::text;
+      WHEN 'app_versions' THEN
+        v_org_id := OLD.owner_org;
+        v_record_id := OLD.id::text;
+      WHEN 'org_users' THEN
+        v_org_id := OLD.org_id;
+        v_record_id := OLD.id::text;
+      ELSE
+        v_org_id := NULL;
+        v_record_id := NULL;
+    END CASE;
+  ELSE
+    CASE TG_TABLE_NAME
+      WHEN 'orgs' THEN
+        v_org_id := NEW.id;
+        v_record_id := NEW.id::text;
+      WHEN 'apps' THEN
+        v_org_id := NEW.owner_org;
+        v_record_id := NEW.app_id::text;
+      WHEN 'channels' THEN
+        v_org_id := NEW.owner_org;
+        v_record_id := NEW.id::text;
+      WHEN 'app_versions' THEN
+        v_org_id := NEW.owner_org;
+        v_record_id := NEW.id::text;
+      WHEN 'org_users' THEN
+        v_org_id := NEW.org_id;
+        v_record_id := NEW.id::text;
+      ELSE
+        v_org_id := NULL;
+        v_record_id := NULL;
+    END CASE;
+  END IF;
 
   IF v_org_id IS NOT NULL THEN
     INSERT INTO public.audit_logs (
@@ -1787,7 +1820,11 @@ BEGIN
     );
   END IF;
 
-  RETURN COALESCE(NEW, OLD);
+  IF TG_OP = 'DELETE' THEN
+    RETURN OLD;
+  END IF;
+
+  RETURN NEW;
 END;
 $$;
 
@@ -3622,6 +3659,76 @@ $$;
 
 
 ALTER FUNCTION "public"."cleanup_apikey_role_bindings"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."cleanup_audit_logs_bookkeeping_noise"("max_batches" integer DEFAULT 100, "batch_size" integer DEFAULT 1000, "max_runtime_ms" integer DEFAULT 15000) RETURNS bigint
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  batch_no integer := 0;
+  deleted_batch integer;
+  deleted_total bigint := 0;
+  v_max_batches integer := GREATEST(1, COALESCE(max_batches, 100));
+  v_batch_size integer := GREATEST(1, COALESCE(batch_size, 1000));
+  v_max_runtime_ms integer := GREATEST(1000, COALESCE(max_runtime_ms, 15000));
+  started_at timestamptz := pg_catalog.clock_timestamp();
+BEGIN
+  PERFORM pg_catalog.set_config('statement_timeout', '0', true);
+
+  LOOP
+    batch_no := batch_no + 1;
+    EXIT WHEN batch_no > v_max_batches;
+    EXIT WHEN (EXTRACT(EPOCH FROM (pg_catalog.clock_timestamp() - started_at)) * 1000) >= v_max_runtime_ms;
+
+    DELETE FROM public.audit_logs
+    WHERE ctid IN (
+      SELECT al.ctid
+      FROM public.audit_logs AS al
+      WHERE al.operation = 'UPDATE'
+        AND al.changed_fields IS NOT NULL
+        AND (
+          NOT EXISTS (
+            SELECT 1
+            FROM pg_catalog.unnest(al.changed_fields) AS changed_field(field_name)
+            WHERE changed_field.field_name IS DISTINCT FROM 'updated_at'
+          )
+          OR (
+            al.table_name = ANY (ARRAY['apps', 'orgs']::text[])
+            AND al.changed_fields && ARRAY['stats_refresh_requested_at', 'stats_updated_at']::text[]
+            AND NOT EXISTS (
+              SELECT 1
+              FROM pg_catalog.unnest(al.changed_fields) AS changed_field(field_name)
+              WHERE changed_field.field_name <> ALL (
+                ARRAY['stats_refresh_requested_at', 'stats_updated_at', 'updated_at']::text[]
+              )
+            )
+          )
+        )
+      ORDER BY al.created_at
+      LIMIT v_batch_size
+    );
+
+    GET DIAGNOSTICS deleted_batch = ROW_COUNT;
+    deleted_total := deleted_total + deleted_batch;
+    EXIT WHEN deleted_batch = 0;
+  END LOOP;
+
+  RAISE NOTICE
+    'cleanup_audit_logs_bookkeeping_noise: deleted=% batches=%/% batch_size=% runtime_ms=% budget_ms=%',
+    deleted_total,
+    LEAST(batch_no, v_max_batches),
+    v_max_batches,
+    v_batch_size,
+    (EXTRACT(EPOCH FROM (pg_catalog.clock_timestamp() - started_at)) * 1000)::bigint,
+    v_max_runtime_ms;
+
+  RETURN deleted_total;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."cleanup_audit_logs_bookkeeping_noise"("max_batches" integer, "batch_size" integer, "max_runtime_ms" integer) OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."cleanup_audit_logs_for_long_canceled_orgs"("max_batches" integer DEFAULT 1000000, "batch_size" integer DEFAULT 1000, "max_runtime_ms" integer DEFAULT 60000) RETURNS bigint
@@ -11869,13 +11976,7 @@ BEGIN
               SELECT array_agg(value::text) INTO queue_names
               FROM jsonb_array_elements_text(task.target::jsonb);
 
-              IF task.healthcheck_url IS NOT NULL THEN
-                PERFORM public.process_queue_with_healthcheck(
-                  COALESCE(queue_names, ARRAY[]::text[]),
-                  COALESCE(task.batch_size, 950),
-                  task.healthcheck_url
-                );
-              ELSIF task.batch_size IS NOT NULL THEN
+              IF task.batch_size IS NOT NULL THEN
                 PERFORM public.process_function_queue(queue_names, task.batch_size);
               ELSE
                 PERFORM public.process_function_queue(queue_names);
@@ -12475,72 +12576,6 @@ ALTER FUNCTION "public"."process_global_stats_creates_queue"("batch_size" intege
 
 COMMENT ON FUNCTION "public"."process_global_stats_creates_queue"("batch_size" integer) IS 'Applies queued app-create and version-upload deltas onto global_stats daily counters. Indexed upsert on global_stats.date_id PK.';
 
-
-
-CREATE OR REPLACE FUNCTION "public"."process_queue_with_healthcheck"("queue_names" "text"[], "batch_size" integer, "healthcheck_url" "text") RETURNS "void"
-    LANGUAGE "plpgsql"
-    SET "search_path" TO ''
-    AS $$
-DECLARE
-  calls_needed int;
-  headers jsonb;
-  queue_name text;
-  queue_size bigint;
-  request_timeout_ms int;
-  url text;
-BEGIN
-  IF batch_size IS NULL OR batch_size <= 0 THEN
-    RAISE EXCEPTION 'batch_size must be positive';
-  END IF;
-
-  headers := pg_catalog.jsonb_build_object(
-    'Content-Type', 'application/json',
-    'apisecret', public.get_apikey()
-  );
-  url := public.get_db_url() || '/functions/v1/triggers/queue_consumer/sync';
-
-  FOREACH queue_name IN ARRAY queue_names LOOP
-    BEGIN
-      EXECUTE pg_catalog.format('SELECT count(*) FROM pgmq.%I', 'q_' || queue_name)
-      INTO queue_size;
-
-      IF queue_size > 0 THEN
-        calls_needed := LEAST(
-          pg_catalog.ceil(queue_size / batch_size::double precision)::int,
-          10
-        );
-      ELSE
-        calls_needed := 1;
-      END IF;
-
-      request_timeout_ms := CASE
-        WHEN queue_name = 'on_manifest_create' THEN 60000
-        ELSE 8000
-      END;
-
-      FOR i IN 1..calls_needed LOOP
-        PERFORM net.http_post(
-          url := url,
-          headers := headers,
-          body := pg_catalog.jsonb_strip_nulls(pg_catalog.jsonb_build_object(
-            'queue_name', queue_name,
-            'batch_size', batch_size,
-            'healthcheck_url', healthcheck_url
-          )),
-          timeout_milliseconds := request_timeout_ms
-        );
-      END LOOP;
-    EXCEPTION WHEN OTHERS THEN
-      RAISE WARNING 'process_queue_with_healthcheck failed for queue "%": %',
-        queue_name,
-        SQLERRM;
-    END;
-  END LOOP;
-END;
-$$;
-
-
-ALTER FUNCTION "public"."process_queue_with_healthcheck"("queue_names" "text"[], "batch_size" integer, "healthcheck_url" "text") OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."process_stats_email_monthly"() RETURNS "void"
@@ -17961,7 +17996,10 @@ CREATE TABLE IF NOT EXISTS "public"."build_requests" (
     "last_error" "text",
     "runner_wait_seconds" bigint DEFAULT 0 NOT NULL,
     "ai_analyzed" boolean DEFAULT false NOT NULL,
-    CONSTRAINT "build_requests_platform_check" CHECK ((("platform")::"text" = ANY (ARRAY[('ios'::character varying)::"text", ('android'::character varying)::"text"])))
+    "started_at" timestamp with time zone,
+    "completed_at" timestamp with time zone,
+    CONSTRAINT "build_requests_platform_check" CHECK ((("platform")::"text" = ANY (ARRAY[('ios'::character varying)::"text", ('android'::character varying)::"text"]))),
+    CONSTRAINT "build_requests_run_interval_check" CHECK ((("started_at" IS NULL) OR ("completed_at" IS NULL) OR ("completed_at" >= "started_at")))
 );
 
 
@@ -17973,6 +18011,43 @@ COMMENT ON COLUMN "public"."build_requests"."runner_wait_seconds" IS 'Self-hoste
 
 
 COMMENT ON COLUMN "public"."build_requests"."ai_analyzed" IS 'Set true after a successful AI analysis of this failed build. Enforces one-analysis-per-job for cost control.';
+
+
+
+COMMENT ON COLUMN "public"."build_requests"."started_at" IS 'Builder-reported job start (UTC). Used for capacity reconstruction.';
+
+
+
+COMMENT ON COLUMN "public"."build_requests"."completed_at" IS 'Builder-reported job completion (UTC). Used for capacity reconstruction.';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."builder_capacity_events" (
+    "id" bigint NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "workers_total" integer NOT NULL,
+    "delta" integer NOT NULL,
+    "source" "text" DEFAULT 'sync'::"text" NOT NULL,
+    CONSTRAINT "builder_capacity_events_source_check" CHECK ((("char_length"("source") > 0) AND ("char_length"("source") <= 64))),
+    CONSTRAINT "builder_capacity_events_workers_total_check" CHECK (("workers_total" >= 0))
+);
+
+
+ALTER TABLE "public"."builder_capacity_events" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."builder_capacity_events" IS 'Absolute worker pool size over time. delta is workers_total - previous workers_total.';
+
+
+
+ALTER TABLE "public"."builder_capacity_events" ALTER COLUMN "id" ADD GENERATED BY DEFAULT AS IDENTITY (
+    SEQUENCE NAME "public"."builder_capacity_events_id_seq"
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
 
 
 
@@ -18230,8 +18305,7 @@ CREATE TABLE IF NOT EXISTS "public"."cron_tasks" (
     "run_on_day" integer,
     "enabled" boolean DEFAULT true NOT NULL,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
-    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
-    "healthcheck_url" "text"
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL
 );
 
 
@@ -18717,7 +18791,17 @@ CREATE TABLE IF NOT EXISTS "public"."global_stats" (
     "above_plan_with_credits" bigint,
     "above_plan_without_credits" bigint,
     "upgrade_rate_12m" double precision DEFAULT 0 NOT NULL,
-    "versions_created" bigint DEFAULT 0 NOT NULL
+    "versions_created" bigint DEFAULT 0 NOT NULL,
+    "notifications_apps" bigint DEFAULT 0 NOT NULL,
+    "notifications_providers" bigint DEFAULT 0 NOT NULL,
+    "notifications_campaigns" bigint DEFAULT 0 NOT NULL,
+    "notifications_campaigns_day" bigint DEFAULT 0 NOT NULL,
+    "notifications_sent_day" bigint DEFAULT 0 NOT NULL,
+    "notifications_received_day" bigint DEFAULT 0 NOT NULL,
+    "notifications_opened_day" bigint DEFAULT 0 NOT NULL,
+    "notifications_failed_day" bigint DEFAULT 0 NOT NULL,
+    "notifications_sent_last_month" bigint DEFAULT 0 NOT NULL,
+    "notifications_opened_last_month" bigint DEFAULT 0 NOT NULL
 );
 
 
@@ -18989,6 +19073,46 @@ COMMENT ON COLUMN "public"."global_stats"."upgrade_rate_12m" IS 'Trailing 12-mon
 
 
 COMMENT ON COLUMN "public"."global_stats"."versions_created" IS 'Number of non-internal app versions uploaded during the UTC day. Event-sourced via the global_stats_creates queue so deletes later that day still count.';
+
+
+
+COMMENT ON COLUMN "public"."global_stats"."notifications_apps" IS 'Distinct apps with at least one configured native push notification provider at snapshot time.';
+
+
+
+COMMENT ON COLUMN "public"."global_stats"."notifications_providers" IS 'Count of configured native push notification provider configs at snapshot time.';
+
+
+
+COMMENT ON COLUMN "public"."global_stats"."notifications_campaigns" IS 'Total native notification campaigns created up to snapshot day end.';
+
+
+
+COMMENT ON COLUMN "public"."global_stats"."notifications_campaigns_day" IS 'Native notification campaigns created during the UTC snapshot day.';
+
+
+
+COMMENT ON COLUMN "public"."global_stats"."notifications_sent_day" IS 'Native notification sent events during the UTC snapshot day (Cloudflare Analytics Engine).';
+
+
+
+COMMENT ON COLUMN "public"."global_stats"."notifications_received_day" IS 'Native notification received events during the UTC snapshot day (Cloudflare Analytics Engine).';
+
+
+
+COMMENT ON COLUMN "public"."global_stats"."notifications_opened_day" IS 'Native notification opened events during the UTC snapshot day (Cloudflare Analytics Engine).';
+
+
+
+COMMENT ON COLUMN "public"."global_stats"."notifications_failed_day" IS 'Native notification failed events during the UTC snapshot day (Cloudflare Analytics Engine).';
+
+
+
+COMMENT ON COLUMN "public"."global_stats"."notifications_sent_last_month" IS 'Native notification sent events in the trailing 30 days ending at snapshot day end (Cloudflare Analytics Engine).';
+
+
+
+COMMENT ON COLUMN "public"."global_stats"."notifications_opened_last_month" IS 'Native notification opened events in the trailing 30 days ending at snapshot day end (Cloudflare Analytics Engine).';
 
 
 
@@ -19993,7 +20117,8 @@ CREATE TABLE IF NOT EXISTS "public"."users" (
     "created_via_invite" boolean DEFAULT false NOT NULL,
     "format_locale" character varying,
     "discord_username" character varying(32),
-    "github_username" character varying(39)
+    "github_username" character varying(39),
+    "github_id" bigint
 );
 
 
@@ -20243,6 +20368,11 @@ ALTER TABLE ONLY "public"."build_logs"
 
 ALTER TABLE ONLY "public"."build_requests"
     ADD CONSTRAINT "build_requests_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."builder_capacity_events"
+    ADD CONSTRAINT "builder_capacity_events_pkey" PRIMARY KEY ("id");
 
 
 
@@ -20874,6 +21004,14 @@ CREATE INDEX "idx_build_requests_org" ON "public"."build_requests" USING "btree"
 
 
 CREATE INDEX "idx_build_requests_requested_by" ON "public"."build_requests" USING "btree" ("requested_by");
+
+
+
+CREATE INDEX "idx_build_requests_run_interval" ON "public"."build_requests" USING "btree" ("started_at", "completed_at") WHERE ("started_at" IS NOT NULL);
+
+
+
+CREATE INDEX "idx_builder_capacity_events_created_at" ON "public"."builder_capacity_events" USING "btree" ("created_at" DESC);
 
 
 
@@ -21526,6 +21664,10 @@ CREATE OR REPLACE TRIGGER "on_user_create" AFTER INSERT ON "public"."users" FOR 
 
 
 CREATE OR REPLACE TRIGGER "on_user_delete" AFTER DELETE ON "public"."users" FOR EACH ROW EXECUTE FUNCTION "public"."trigger_http_queue_post_to_function"('on_user_delete');
+
+
+
+CREATE OR REPLACE TRIGGER "on_user_org_access" AFTER INSERT OR UPDATE OF "principal_type", "principal_id", "scope_type", "org_id", "expires_at", "is_direct" ON "public"."role_bindings" FOR EACH ROW WHEN ((("new"."principal_type" = 'user'::"text") AND ("new"."scope_type" = 'org'::"text") AND ("new"."org_id" IS NOT NULL) AND ("new"."is_direct" IS TRUE) AND (("new"."expires_at" IS NULL) OR ("new"."expires_at" > "now"())))) EXECUTE FUNCTION "public"."trigger_http_queue_post_to_function"('on_user_org_access');
 
 
 
@@ -22363,6 +22505,10 @@ CREATE POLICY "Deny all access" ON "public"."to_delete_accounts" USING (false) W
 
 
 
+CREATE POLICY "Deny all authenticated on builder_capacity_events" ON "public"."builder_capacity_events" AS RESTRICTIVE TO "anon", "authenticated" USING (false) WITH CHECK (false);
+
+
+
 CREATE POLICY "Deny all notification app settings access" ON "public"."notification_app_settings" AS RESTRICTIVE USING (false) WITH CHECK (false);
 
 
@@ -22611,6 +22757,10 @@ CREATE POLICY "Service role manages build time" ON "public"."daily_build_time" T
 
 
 
+CREATE POLICY "Service role manages builder_capacity_events" ON "public"."builder_capacity_events" TO "service_role" USING (true) WITH CHECK (true);
+
+
+
 CREATE POLICY "Users can read own password compliance" ON "public"."user_password_compliance" FOR SELECT TO "authenticated" USING (("user_id" = ( SELECT "auth"."uid"() AS "uid")));
 
 
@@ -22666,6 +22816,9 @@ ALTER TABLE "public"."build_logs" ENABLE ROW LEVEL SECURITY;
 
 
 ALTER TABLE "public"."build_requests" ENABLE ROW LEVEL SECURITY;
+
+
+ALTER TABLE "public"."builder_capacity_events" ENABLE ROW LEVEL SECURITY;
 
 
 ALTER TABLE "public"."capgo_credits_steps" ENABLE ROW LEVEL SECURITY;
@@ -23694,6 +23847,11 @@ GRANT ALL ON FUNCTION "public"."claim_legacy_onboarding_demo_data"("p_app_uuid" 
 
 REVOKE ALL ON FUNCTION "public"."cleanup_apikey_role_bindings"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."cleanup_apikey_role_bindings"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."cleanup_audit_logs_bookkeeping_noise"("max_batches" integer, "batch_size" integer, "max_runtime_ms" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."cleanup_audit_logs_bookkeeping_noise"("max_batches" integer, "batch_size" integer, "max_runtime_ms" integer) TO "service_role";
 
 
 
@@ -24882,11 +25040,6 @@ GRANT ALL ON FUNCTION "public"."process_global_stats_creates_queue"("batch_size"
 
 
 
-REVOKE ALL ON FUNCTION "public"."process_queue_with_healthcheck"("queue_names" "text"[], "batch_size" integer, "healthcheck_url" "text") FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."process_queue_with_healthcheck"("queue_names" "text"[], "batch_size" integer, "healthcheck_url" "text") TO "service_role";
-
-
-
 REVOKE ALL ON FUNCTION "public"."process_stats_email_monthly"() FROM PUBLIC;
 
 
@@ -25905,6 +26058,16 @@ GRANT ALL ON TABLE "public"."build_logs" TO "service_role";
 GRANT ALL ON TABLE "public"."build_requests" TO "anon";
 GRANT ALL ON TABLE "public"."build_requests" TO "authenticated";
 GRANT ALL ON TABLE "public"."build_requests" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."builder_capacity_events" TO "service_role";
+
+
+
+GRANT ALL ON SEQUENCE "public"."builder_capacity_events_id_seq" TO "anon";
+GRANT ALL ON SEQUENCE "public"."builder_capacity_events_id_seq" TO "authenticated";
+GRANT ALL ON SEQUENCE "public"."builder_capacity_events_id_seq" TO "service_role";
 
 
 
