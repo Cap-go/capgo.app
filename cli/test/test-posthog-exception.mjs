@@ -1,11 +1,15 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict'
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { cwd } from 'node:process'
 import { Command } from 'commander'
 import { IncompatibleBundleError } from '../src/bundle/upload.ts'
 import {
   capturePosthogException,
   getCommandPath,
+  getInstallId,
   isExpectedUserError,
   shouldCapturePosthogException,
 } from '../src/posthog.ts'
@@ -29,6 +33,12 @@ function restoreEnv() {
       process.env[key] = value
   }
 }
+
+// Resolve the install id against a throwaway config directory. This seeds the
+// module cache, so the later capturePosthogException calls reuse it without
+// touching the real home directory.
+const installIdDir = mkdtempSync(join(tmpdir(), 'capgo-posthog-'))
+const installId = getInstallId(installIdDir)
 
 try {
   console.log('Testing CLI PostHog exception capture...')
@@ -67,7 +77,14 @@ try {
   assert.equal(body.properties.function_name, 'bundle upload')
   assert.equal(body.properties.error_kind, 'unhandled_error')
   assert.equal(body.properties.status, 1)
-  assert.match(body.properties.distinct_id, /^cli:[^:]+:bundle upload$/)
+  // distinct_id must be the anonymous, stable per-install id (a UUID) — never
+  // the CLI version or the command name, so "users affected" counts real installs.
+  assert.equal(body.properties.distinct_id, installId)
+  assert.match(body.properties.distinct_id, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+  // The id is generated once and persisted in the CLI config directory.
+  const installIdPath = join(installIdDir, 'install-id')
+  assert.equal(existsSync(installIdPath), true)
+  assert.equal(readFileSync(installIdPath, 'utf8').trim(), installId)
   // Fingerprint must NOT include the CLI version, the top-frame symbol, or the
   // top-frame filename, so the same bug stays one error-tracking issue across
   // releases and across install locations (npx cache hash, bunx, pnpm, sandbox).
@@ -76,7 +93,8 @@ try {
   assert.doesNotMatch(body.properties.$exception_fingerprint, /cli:/)
   assert.doesNotMatch(body.properties.$exception_fingerprint, /runUpload/)
   assert.doesNotMatch(body.properties.$exception_fingerprint, /index\.ts/)
-  assert.equal(body.properties.cli_version, body.properties.distinct_id.split(':')[1])
+  assert.equal(typeof body.properties.cli_version, 'string')
+  assert.notEqual(body.properties.cli_version, '')
   assert.equal(body.properties.$exception_list[0].type, 'Error')
   assert.equal(body.properties.$exception_list[0].value, 'boom')
   assert.equal(body.properties.$exception_list[0].mechanism.handled, true)
@@ -97,6 +115,23 @@ try {
     sensitiveBody.properties.$exception_list[0].value,
     'Cannot upload <cwd>/<path> for <email> app <app_id> --token <redacted>',
   )
+  // The install id is stable across captures.
+  assert.equal(body.properties.distinct_id, sensitiveBody.properties.distinct_id)
+
+  // A two-segment app id (com.phantom) must be redacted too, not only ids with
+  // three or more segments — the raw id must never reach the error title.
+  requests.length = 0
+  const twoSegmentError = new Error('App com.phantom already exists')
+  await capturePosthogException({
+    error: twoSegmentError,
+    functionName: 'app add',
+    kind: 'unhandled_error',
+    status: 1,
+  })
+
+  const twoSegmentBody = JSON.parse(requests[0].init.body)
+  assert.equal(twoSegmentBody.properties.$exception_list[0].value, 'App <app_id> already exists')
+  assert.equal(twoSegmentBody.properties.$exception_list[0].value.includes('com.phantom'), false)
 
   // Two occurrences of the SAME logical error but with different minified top
   // frames (as different builds / call sites produce) must share one fingerprint.

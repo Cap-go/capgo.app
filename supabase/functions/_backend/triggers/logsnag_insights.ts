@@ -43,7 +43,8 @@ type AppBuildOnboardingMetrics = Record<string, unknown> & {
   apps_with_cli_onboarding_builds_24h: number
   apps_with_manual_builds_24h: number
 }
-type AppBuildOnboardingMetricRow = Record<string, unknown> & {
+interface AppBuildOnboardingMetricRow {
+  [key: string]: unknown
   created_at: string | Date | null
   created_from_onboarding: boolean | null
   onboarding_completed_at: string | Date | null
