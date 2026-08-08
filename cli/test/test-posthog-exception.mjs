@@ -67,10 +67,14 @@ try {
   assert.equal(body.properties.error_kind, 'unhandled_error')
   assert.equal(body.properties.status, 1)
   assert.match(body.properties.distinct_id, /^cli:[^:]+:bundle upload$/)
-  // Fingerprint must NOT include the CLI version, so the same bug stays one
-  // error-tracking issue across releases (version still reported via cli_version).
-  assert.equal(body.properties.$exception_fingerprint, 'bundle upload:unhandled_error:Error:runUpload:<cwd>/src/index.ts:1')
+  // Fingerprint is built only from stable dimensions: command path, error kind,
+  // error name and exit status. It must NOT include the CLI version (so the same
+  // bug stays one issue across releases) NOR the top stack frame's
+  // function/filename (minified bundles rename it per build and per call site,
+  // which split one bug into a new issue every occurrence).
+  assert.equal(body.properties.$exception_fingerprint, 'bundle upload:unhandled_error:Error:1')
   assert.doesNotMatch(body.properties.$exception_fingerprint, /cli:/)
+  assert.doesNotMatch(body.properties.$exception_fingerprint, /runUpload|index\.ts/)
   assert.equal(body.properties.cli_version, body.properties.distinct_id.split(':')[1])
   assert.equal(body.properties.$exception_list[0].type, 'Error')
   assert.equal(body.properties.$exception_list[0].value, 'boom')
@@ -92,6 +96,26 @@ try {
     sensitiveBody.properties.$exception_list[0].value,
     'Cannot upload <cwd>/<path> for <email> app <app_id> --token <redacted>',
   )
+
+  // Two occurrences of the SAME logical error but with different minified top
+  // frames (as different builds / call sites produce) must share one fingerprint.
+  requests.length = 0
+  const minifiedA = new Error('boom')
+  minifiedA.stack = `Error: boom\n    at T0 (${cwd()}/dist/index.js:1:20)`
+  const minifiedB = new Error('boom')
+  minifiedB.stack = `Error: boom\n    at CDA (${cwd()}/dist/chunk-2.js:9:3)`
+  for (const minified of [minifiedA, minifiedB]) {
+    await capturePosthogException({
+      error: minified,
+      functionName: 'bundle upload',
+      kind: 'unhandled_error',
+      status: 1,
+    })
+  }
+  assert.equal(requests.length, 2)
+  const [fpA, fpB] = requests.map(r => JSON.parse(r.init.body).properties.$exception_fingerprint)
+  assert.equal(fpA, fpB)
+  assert.equal(fpA, 'bundle upload:unhandled_error:Error:1')
 
   requests.length = 0
   await capturePosthogException({
@@ -142,6 +166,9 @@ try {
   // regardless of the (dynamic) channel context attached to them.
   assert.equal(shouldCapturePosthogException(new CliUserError('Channel does not have a bundle linked', { appId: 'com.example.app', channel: 'production' })), false)
   assert.equal(shouldCapturePosthogException(new CliUserError('Missing API key')), false)
+  // `findSavedKey` throws this as a CliUserError when nobody ran `capgo login`;
+  // it must be skipped (a plain Error with this text would have leaked through).
+  assert.equal(shouldCapturePosthogException(new CliUserError('Cannot find API key in local folder or global, please login first with `capgo login`')), false)
   // Two failures on different channels must be treated identically (one issue,
   // not one per channel), since the channel name lives in context, not the message.
   assert.equal(
