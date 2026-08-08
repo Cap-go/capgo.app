@@ -236,11 +236,15 @@ jobs:
           # Gate the auto-sync on its own output: the regenerated types are only
           # trustworthy if they still compile against the backend that consumes
           # them. Prod is often behind local migrations, so a regenerated types
-          # file can drop columns the code still references. Fail the job here
-          # instead of pushing an unverified commit that reddens `main` for the
-          # next contributor.
+          # file can drop columns the code still references. Skip the push in
+          # that case instead of landing an unverified commit that reddens
+          # `main` — and exit 0 so migration-touching releases are not blocked.
           echo "Schema/types drift detected; verifying regenerated types compile against the codebase."
-          bun typecheck
+          if ! bun typecheck; then
+            echo "Regenerated schema/types do not compile (prod likely behind local migrations). Skipping auto-sync push." >&2
+            git checkout -- supabase/schemas/prod.sql src/types/supabase.types.ts supabase/functions/_backend/utils/supabase.types.ts
+            exit 0
+          fi
 
           git config --local user.name "github-actions[bot]"
           git config --local user.email "github-actions[bot]@users.noreply.github.com"

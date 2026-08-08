@@ -327,8 +327,15 @@ type RequiredGlobalStatsShard = typeof REQUIRED_GLOBAL_STATS_SHARDS[number]
 type GlobalStatsNotificationStepAction = 'send' | 'complete_claimed' | 'skip'
 type GlobalStatsUpdate = Database['public']['Tables']['global_stats']['Update']
 type GlobalStatsRow = Database['public']['Tables']['global_stats']['Row']
-type GlobalStatsSnapshotPatch = GlobalStatsUpdate & { orgs?: number }
-type GlobalStatsSnapshotRow = GlobalStatsRow & { orgs?: number | null }
+type GlobalStatsSnapshotPatch = GlobalStatsUpdate & {
+  orgs?: number
+  // Present in repo migrations before prod deploy; keep writable while generated types lag.
+  apps_with_preview?: number
+}
+type GlobalStatsSnapshotRow = GlobalStatsRow & {
+  orgs?: number | null
+  apps_with_preview?: number | null
+}
 
 interface LogsnagInsightsPayload {
   retry_count?: unknown
@@ -790,14 +797,24 @@ function shouldRefreshMutablePastDueStats(
   return !hasPersistedPastDueStats(snapshot)
 }
 
-function isMissingBuildMetricColumnError(error: unknown): boolean {
+function isMissingSchemaColumnError(error: unknown, columnHints: string[]): boolean {
   const errorCode = String((error as any)?.code ?? '').toUpperCase()
   const message = String((error as any)?.message ?? '').toLowerCase()
   return errorCode === 'PGRST204'
     || errorCode === '42703'
-    || message.includes('build_total_seconds_day')
-    || message.includes('build_avg_seconds_day')
-    || message.includes('build_count_day')
+    || columnHints.some(hint => message.includes(hint.toLowerCase()))
+}
+
+function isMissingBuildMetricColumnError(error: unknown): boolean {
+  return isMissingSchemaColumnError(error, [
+    'build_total_seconds_day',
+    'build_avg_seconds_day',
+    'build_count_day',
+  ])
+}
+
+function isMissingAppsWithPreviewColumnError(error: unknown): boolean {
+  return isMissingSchemaColumnError(error, ['apps_with_preview'])
 }
 
 async function calculateRevenue(c: Context, referenceDate?: Date): Promise<PlanRevenue> {
@@ -1592,14 +1609,35 @@ async function ensureGlobalStatsSnapshotRows(c: Context, dateIds: readonly strin
 async function updateGlobalStatsSnapshot(c: Context, dateId: string, patch: GlobalStatsSnapshotPatch): Promise<void> {
   await ensureGlobalStatsSnapshotRow(c, dateId)
 
-  const { orgs, ...globalStatsPatch } = patch
+  const { orgs, apps_with_preview, ...globalStatsPatch } = patch
+  const updatePayload = {
+    ...globalStatsPatch,
+    ...(apps_with_preview === undefined ? {} : { apps_with_preview }),
+  } as GlobalStatsUpdate
   const { error } = await supabaseAdmin(c)
     .from('global_stats')
-    .update(globalStatsPatch as GlobalStatsUpdate)
+    .update(updatePayload)
     .eq('date_id', dateId)
 
-  if (error)
-    throw error
+  if (error) {
+    if (apps_with_preview !== undefined && isMissingAppsWithPreviewColumnError(error)) {
+      cloudlog({
+        requestId: c.get('requestId'),
+        message: 'global_stats.apps_with_preview missing; retrying snapshot update without it',
+        dateId,
+        error,
+      })
+      const { error: legacyError } = await supabaseAdmin(c)
+        .from('global_stats')
+        .update(globalStatsPatch as GlobalStatsUpdate)
+        .eq('date_id', dateId)
+      if (legacyError)
+        throw legacyError
+    }
+    else {
+      throw error
+    }
+  }
 
   if (orgs !== undefined)
     await updateGlobalStatsSnapshotOrgCount(c, dateId, orgs)
