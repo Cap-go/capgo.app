@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict'
 import { cwd } from 'node:process'
 import { Command } from 'commander'
+import { IncompatibleBundleError } from '../src/bundle/upload.ts'
 import {
   capturePosthogException,
   getCommandPath,
@@ -97,6 +98,26 @@ try {
     'Cannot upload <cwd>/<path> for <email> app <app_id> --token <redacted>',
   )
 
+  // Two occurrences of the SAME logical error but with different minified top
+  // frames (as different builds / call sites produce) must share one fingerprint.
+  requests.length = 0
+  const minifiedA = new Error('boom')
+  minifiedA.stack = `Error: boom\n    at T0 (${cwd()}/dist/index.js:1:20)`
+  const minifiedB = new Error('boom')
+  minifiedB.stack = `Error: boom\n    at CDA (${cwd()}/dist/chunk-2.js:9:3)`
+  for (const minified of [minifiedA, minifiedB]) {
+    await capturePosthogException({
+      error: minified,
+      functionName: 'bundle upload',
+      kind: 'unhandled_error',
+      status: 1,
+    })
+  }
+  assert.equal(requests.length, 2)
+  const [fpA, fpB] = requests.map(r => JSON.parse(r.init.body).properties.$exception_fingerprint)
+  assert.equal(fpA, fpB)
+  assert.equal(fpA, 'bundle upload:unhandled_error:Error:1')
+
   requests.length = 0
   await capturePosthogException({
     error: undefined,
@@ -146,9 +167,16 @@ try {
   // regardless of the (dynamic) channel context attached to them.
   assert.equal(shouldCapturePosthogException(new CliUserError('Channel does not have a bundle linked', { appId: 'com.example.app', channel: 'production' })), false)
   assert.equal(shouldCapturePosthogException(new CliUserError('Missing API key')), false)
+  // `findSavedKey` throws this as a CliUserError when nobody ran `capgo login`;
+  // it must be skipped (a plain Error with this text would have leaked through).
+  assert.equal(shouldCapturePosthogException(new CliUserError('Cannot find API key in local folder or global, please login first with `capgo login`')), false)
   // `uploadFail` now throws CliUserError, so a duplicate-version upload — a normal
   // `bundle upload` outcome — is filtered out of error tracking by type.
   assert.equal(shouldCapturePosthogException(new CliUserError('Version 1.2.3 already exists')), false)
+  // The `--fail-on-incompatible` abort is a state the user asked for, not a
+  // crash, so it must never open an error tracking issue either.
+  assert.equal(new IncompatibleBundleError('Upload aborted: bundle is incompatible') instanceof CliUserError, true)
+  assert.equal(shouldCapturePosthogException(new IncompatibleBundleError('Upload aborted: bundle is incompatible')), false)
   // A user-initiated cancel (Ctrl+C / Escape at an interactive prompt) is a
   // deliberate abort, not a crash — the cancel sites throw CliUserError so it
   // never opens an error tracking issue.

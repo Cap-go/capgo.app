@@ -77,8 +77,13 @@ function uploadCancel(): never {
  * incompatible with the channel's current native packages. A dedicated type lets
  * `uploadBundle` skip the generic "retry the upload?" prompt — retrying an
  * incompatible bundle is pointless.
+ *
+ * Extends `CliUserError` so `shouldCapturePosthogException` skips it: the
+ * `--fail-on-incompatible` abort is a state the user asked for, not a crash, so
+ * it must not open an error tracking `$exception` issue. The non-zero exit, the
+ * printed message, and the `Bundle Upload Blocked` event stay unchanged.
  */
-class IncompatibleBundleError extends Error {}
+export class IncompatibleBundleError extends CliUserError {}
 
 async function persistVersionData(
   supabase: SupabaseType,
