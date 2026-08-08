@@ -22,6 +22,7 @@ import { getChecksum } from '../checksum'
 import { getRepoStarStatus, isRepoStarredInSession, starRepository } from '../github'
 import { confirmWithRememberedChoice } from '../promptPreferences'
 import { showReplicationProgress } from '../replicationProgress'
+import { CliUserError } from '../shared/cli-user-error'
 import { formatTable } from '../terminal-table'
 import { usesAlwaysDirectUpdate } from '../updaterConfig'
 import { baseKeyV2, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, canPromptInteractively, checkCompatibilityCloud, checkPlanValidUpload, checkRemoteCliMessages, createSupabaseClient, deletedFailedVersion, deltaManifestTooLargeMessage, findRoot, findSavedKey, formatError, getAppId, getBundleVersion, getCompatibilityDetails, getConfig, getInstalledVersion, getLocalConfig, getLocalDependencies, getOrganizationId, getPMAndCommand, getRemoteChecksums, getRemoteFileConfig, hasCliPermission, invokeCapgoCliApi, isCompatible, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, regexSemver, resolveUserIdFromApiKey, sendEvent, setVersionManifest, updateConfigUpdater, updateOrCreateChannel, updateOrCreateVersion, UPLOAD_TIMEOUT, UPLOAD_TIMEOUT_ERROR_NAME, uploadTimeoutMessage, uploadTUS, uploadUrl, zipFile } from '../utils'
@@ -62,8 +63,13 @@ function uploadFail(message: string): never {
  * incompatible with the channel's current native packages. A dedicated type lets
  * `uploadBundle` skip the generic "retry the upload?" prompt — retrying an
  * incompatible bundle is pointless.
+ *
+ * Extends `CliUserError` so `shouldCapturePosthogException` skips it: the
+ * `--fail-on-incompatible` abort is a state the user asked for, not a crash, so
+ * it must not open an error tracking `$exception` issue. The non-zero exit, the
+ * printed message, and the `Bundle Upload Blocked` event stay unchanged.
  */
-class IncompatibleBundleError extends Error {}
+export class IncompatibleBundleError extends CliUserError {}
 
 async function persistVersionData(
   supabase: SupabaseType,

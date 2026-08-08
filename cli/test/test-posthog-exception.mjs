@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict'
 import { cwd } from 'node:process'
 import { Command } from 'commander'
+import { IncompatibleBundleError } from '../src/bundle/upload.ts'
 import {
   capturePosthogException,
   getCommandPath,
@@ -142,6 +143,10 @@ try {
   // regardless of the (dynamic) channel context attached to them.
   assert.equal(shouldCapturePosthogException(new CliUserError('Channel does not have a bundle linked', { appId: 'com.example.app', channel: 'production' })), false)
   assert.equal(shouldCapturePosthogException(new CliUserError('Missing API key')), false)
+  // The `--fail-on-incompatible` abort is a state the user asked for, not a
+  // crash, so it must never open an error tracking issue either.
+  assert.equal(new IncompatibleBundleError('Upload aborted: bundle is incompatible') instanceof CliUserError, true)
+  assert.equal(shouldCapturePosthogException(new IncompatibleBundleError('Upload aborted: bundle is incompatible')), false)
   // Two failures on different channels must be treated identically (one issue,
   // not one per channel), since the channel name lives in context, not the message.
   assert.equal(
