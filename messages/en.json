@@ -195,6 +195,8 @@
   "admin-app-build-onboarding-total-apps-created": "Apps created",
   "admin-apps-created-by-day": "Apps Created by Day",
   "admin-apps-created-by-day-series": "Apps created",
+  "admin-apps-with-preview": "Apps with Preview QR Enabled",
+  "admin-apps-with-preview-series": "Apps with preview QR",
   "admin-versions-uploaded-by-day": "Versions Uploaded by Day",
   "admin-versions-uploaded-by-day-series": "Versions uploaded",
   "admin-credits": "Admin Credits",
