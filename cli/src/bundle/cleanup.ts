@@ -14,6 +14,7 @@ import { trackEvent } from '../analytics/track'
 import { check2FAComplianceForApp, checkAppExistsAndHasPermissionOrgErr } from '../api/app'
 import { checkAlerts } from '../api/update'
 import { deleteSpecificVersion, displayBundles, getActiveAppVersions, getChannelsVersion } from '../api/versions'
+import { CliUserError } from '../shared/cli-user-error'
 import {
   createSupabaseClient,
   findSavedKey,
@@ -141,7 +142,7 @@ export async function cleanupBundleInternal(appId: string, options: BundleCleanu
       const doDelete = await confirmC({ message: 'Do you want to continue removing the versions specified?' })
       if (isCancel(doDelete) || !doDelete) {
         log.warn('Not confirmed, aborting removal...')
-        throw new Error('Cleanup cancelled by user')
+        throw new CliUserError('Cleanup cancelled by user')
       }
     }
     else {

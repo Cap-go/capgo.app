@@ -9,6 +9,7 @@ import IconShield from '~icons/lucide/shield-check'
 import IconX from '~icons/lucide/x'
 import { authGhostButtonClass, authInsetCardClass, authPrimaryButtonClass, authSecondaryButtonClass } from '~/components/auth/pageStyles'
 import Toggle from '~/components/Toggle.vue'
+import { invokeCapgoApi } from '~/services/capgoApi'
 import { useSupabase } from '~/services/supabase'
 import { openSupport } from '~/services/support'
 
@@ -26,8 +27,6 @@ const inviteRow = ref<Database['public']['Functions']['get_invite_by_magic_looku
 const isLoading = ref(false)
 const isFetchingInvite = ref(true)
 const isError = ref(null) as Ref<string | null>
-const supabase = useSupabase()
-
 // Terms and marketing acceptance
 const acceptTerms = ref(false)
 const acceptMarketing = ref(true)
@@ -123,7 +122,8 @@ async function submitForm() {
     isLoading.value = true
 
     // Call the backend API to accept the invitation using Supabase Functions
-    const { data, error } = await supabase.functions.invoke('private/accept_invitation', {
+    const { data, error } = await invokeCapgoApi('private/accept_invitation', {
+      allowAnonymous: true,
       body: {
         password: password.value,
         magic_invite_string: inviteMagicString.value,

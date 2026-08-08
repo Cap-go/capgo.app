@@ -513,6 +513,34 @@ function messageCatalogOf(value: unknown): Record<string, string> {
   )
 }
 
+function escapeVueI18nAtSigns(message: string) {
+  const escapedAtSign = '{\'@\'}'
+  let output = ''
+
+  for (let index = 0; index < message.length;) {
+    if (message.startsWith(escapedAtSign, index)) {
+      output += escapedAtSign
+      index += escapedAtSign.length
+    }
+    else if (message[index] === '@') {
+      output += escapedAtSign
+      index += 1
+    }
+    else {
+      output += message[index]
+      index += 1
+    }
+  }
+
+  return output
+}
+
+function vueI18nMessageCatalog(messages: Record<string, string>) {
+  return Object.fromEntries(
+    Object.entries(messages).map(([key, message]) => [key, escapeVueI18nAtSigns(message)]),
+  )
+}
+
 function getTranslationStore(env: TranslationWorkerBindings) {
   if (!env.DB_TRANSLATIONS)
     fail(503, 'translation_unavailable', 'Cloudflare D1 translation store is not configured')
@@ -580,7 +608,7 @@ function parseTranslationStoreEntry(row: unknown): TranslationStoreEntry | null 
 function readyPayloadFromStore(entry: TranslationStoreEntry): TranslationMessagesResponsePayload {
   return {
     checksum: entry.checksum,
-    messages: entry.messages,
+    messages: vueI18nMessageCatalog(entry.messages),
     model: entry.model,
     status: 'ready',
   }
@@ -831,7 +859,8 @@ async function matchReadyTranslationPayload(request: Request) {
     return null
 
   try {
-    return await cached.json() as TranslationMessagesResponsePayload
+    const payload = await cached.json() as TranslationMessagesResponsePayload
+    return { ...payload, messages: vueI18nMessageCatalog(payload.messages) }
   }
   catch {
     return null
@@ -1316,6 +1345,7 @@ export default {
 export const __translationWorkerTestUtils__ = {
   buildBatches,
   claimedTranslationBatchIndex,
+  escapeVueI18nAtSigns,
   isReadyTranslationFresh,
   isTranslationBatchLeaseExpired,
   keepTranslation,

@@ -7,6 +7,7 @@ const props = defineProps<{
   value?: string
   editable?: boolean
   isLink?: boolean
+  labelClass?: string
   readonly?: boolean
 }>()
 
@@ -25,7 +26,7 @@ watch(rowInput, useDebounceFn(() => {
 <template>
   <div class="py-4 px-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:py-5 sm:px-6">
     <dl>
-      <dt class="text-sm font-medium text-gray-700 dark:text-gray-200 first-letter:uppercase">
+      <dt class="text-sm font-medium text-gray-700 dark:text-gray-200 first-letter:uppercase" :class="props.labelClass">
         {{ props.label }}
       </dt>
     </dl>

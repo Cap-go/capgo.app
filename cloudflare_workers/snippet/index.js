@@ -12,7 +12,8 @@
 const TIMEOUT_MS = 3000 // 3 seconds - matches plugin timeout
 const CIRCUIT_RESET_MS = 5 * 60 * 1000 // 5 minutes before retrying unhealthy worker
 
-// On-prem and plan-upgrade caching rely on worker-provided Cache-Control headers
+// On-prem and plan-upgrade caching use worker Cache-Control, with Retry-After as TTL fallback.
+// Cached responses keep Retry-After / X-RateLimit-Reset so clients and edge skip the worker.
 
 // Helper to build cache keys using actual hostname to avoid DNS lookups on fake .internal domains
 function getCircuitBreakerCacheKey(hostname, colo, workerUrl) {
@@ -53,7 +54,10 @@ async function markHealthy(hostname, colo, workerUrl) {
   try {
     const cache = caches.default
     const key = getCircuitBreakerCacheKey(hostname, colo, workerUrl)
-    await cache.delete(key)
+    // Only delete when a breaker entry exists — avoid Cache API write on every success.
+    const cached = await cache.match(key)
+    if (cached)
+      await cache.delete(key)
   }
   catch {
     // Ignore errors - cache miss is fine
@@ -133,35 +137,140 @@ async function getPlanUpgradeCache(hostname, appId, endpoint, method) {
   }
 }
 
-function getCacheTtlSeconds(headers) {
-  const cacheControl = headers.get('Cache-Control') || headers.get('cache-control')
-  if (!cacheControl)
-    return null
-
-  const directives = cacheControl.split(',').map(part => part.trim().toLowerCase())
-  if (directives.includes('no-store'))
-    return null
-
-  const sMaxAge = directives.find(part => part.startsWith('s-maxage='))
-  if (sMaxAge) {
-    const seconds = Number.parseInt(sMaxAge.split('=')[1] || '', 10)
-    if (Number.isFinite(seconds) && seconds > 0)
-      return seconds
+function getRetryAfterSeconds(headers, responseBody) {
+  const header = headers.get('Retry-After') || headers.get('retry-after')
+  if (header) {
+    const seconds = Number.parseFloat(header.trim())
+    if (Number.isFinite(seconds) && seconds >= 0)
+      return Math.floor(seconds)
   }
 
-  const maxAge = directives.find(part => part.startsWith('max-age='))
-  if (maxAge) {
-    const seconds = Number.parseInt(maxAge.split('=')[1] || '', 10)
-    if (Number.isFinite(seconds) && seconds > 0)
-      return seconds
+  const moreInfo = responseBody && typeof responseBody === 'object' ? responseBody.moreInfo : null
+  const fromMoreInfo = moreInfo && typeof moreInfo.retryAfterSeconds === 'number'
+    ? moreInfo.retryAfterSeconds
+    : null
+  if (typeof fromMoreInfo === 'number' && Number.isFinite(fromMoreInfo) && fromMoreInfo >= 0)
+    return Math.floor(fromMoreInfo)
+
+  if (responseBody && typeof responseBody.retryAfterSeconds === 'number'
+    && Number.isFinite(responseBody.retryAfterSeconds) && responseBody.retryAfterSeconds >= 0) {
+    return Math.floor(responseBody.retryAfterSeconds)
   }
 
   return null
 }
 
+function getCacheTtlSeconds(headers, responseBody) {
+  const cacheControl = headers.get('Cache-Control') || headers.get('cache-control')
+  if (cacheControl) {
+    const directives = cacheControl.split(',').map(part => part.trim().toLowerCase())
+    if (directives.includes('no-store'))
+      return null
+
+    const sMaxAge = directives.find(part => part.startsWith('s-maxage='))
+    if (sMaxAge) {
+      const seconds = Number.parseInt(sMaxAge.split('=')[1] || '', 10)
+      if (Number.isFinite(seconds) && seconds > 0)
+        return seconds
+    }
+
+    const maxAge = directives.find(part => part.startsWith('max-age='))
+    if (maxAge) {
+      const seconds = Number.parseInt(maxAge.split('=')[1] || '', 10)
+      if (Number.isFinite(seconds) && seconds > 0)
+        return seconds
+    }
+  }
+
+  // Fall back to Retry-After so on_premise / plan-upgrade responses still edge-cache
+  // and skip the worker for the client backoff window.
+  const retryAfter = getRetryAfterSeconds(headers, responseBody)
+  if (typeof retryAfter === 'number' && retryAfter > 0)
+    return retryAfter
+
+  return null
+}
+
+/**
+ * Keep rate-limit headers accurate when serving a cached 429.
+ * Recompute Retry-After / Cache-Control from X-RateLimit-Reset (unix seconds),
+ * and refresh moreInfo.retryAfterSeconds in the JSON body when present.
+ */
+async function withFreshRateLimitHeaders(cachedResponse) {
+  const headers = new Headers(cachedResponse.headers)
+  const nowSec = Math.floor(Date.now() / 1000)
+  let remaining = null
+  let resetAtSec = null
+
+  const resetHeader = headers.get('X-RateLimit-Reset') || headers.get('x-ratelimit-reset')
+  if (resetHeader) {
+    const parsed = Number.parseInt(resetHeader, 10)
+    if (Number.isFinite(parsed)) {
+      resetAtSec = parsed
+      remaining = Math.max(0, parsed - nowSec)
+      headers.set('Retry-After', String(remaining))
+      headers.set('X-RateLimit-Reset', String(parsed))
+      if (remaining <= 0)
+        headers.set('Cache-Control', 'private, no-store')
+      else
+        headers.set('Cache-Control', `public, max-age=${remaining}`)
+    }
+  }
+
+  let body = cachedResponse.body
+  try {
+    const text = await cachedResponse.clone().text()
+    const json = JSON.parse(text)
+    if (json && typeof json === 'object' && json.moreInfo && typeof json.moreInfo === 'object' && typeof remaining === 'number') {
+      json.moreInfo.retryAfterSeconds = remaining
+      if (typeof resetAtSec === 'number')
+        json.moreInfo.rateLimitResetAt = resetAtSec * 1000
+      headers.delete('Content-Length')
+      body = JSON.stringify(json)
+    }
+    else {
+      body = text
+    }
+  }
+  catch {
+    // Keep original body stream when JSON rewrite is not possible.
+  }
+
+  return new Response(body, {
+    status: cachedResponse.status,
+    statusText: cachedResponse.statusText,
+    headers,
+  })
+}
+
+/** Persist absolute reset + Cache-Control so Cache API TTL and client countdown stay correct. */
+function applyEdgeRateLimitCacheHeaders(headers, responseBody, cacheTtl) {
+  headers.set('Cache-Control', `public, max-age=${cacheTtl}`)
+
+  const nowSec = Math.floor(Date.now() / 1000)
+  const retryAfter = getRetryAfterSeconds(headers, responseBody)
+  const fromBodyReset = responseBody && responseBody.moreInfo
+    && typeof responseBody.moreInfo.rateLimitResetAt === 'number'
+    ? Math.ceil(responseBody.moreInfo.rateLimitResetAt / 1000)
+    : null
+
+  if (typeof fromBodyReset === 'number' && Number.isFinite(fromBodyReset)) {
+    headers.set('X-RateLimit-Reset', String(fromBodyReset))
+    headers.set('Retry-After', String(Math.max(0, fromBodyReset - nowSec)))
+    return
+  }
+
+  if (typeof retryAfter === 'number') {
+    if (!headers.has('Retry-After'))
+      headers.set('Retry-After', String(retryAfter))
+    if (!headers.has('X-RateLimit-Reset'))
+      headers.set('X-RateLimit-Reset', String(nowSec + retryAfter))
+  }
+}
+
 async function setOnPremCache(hostname, appId, endpoint, method, responseBody, status, responseHeaders) {
   try {
-    const cacheTtl = getCacheTtlSeconds(responseHeaders)
+    const cacheTtl = getCacheTtlSeconds(responseHeaders, responseBody)
     if (!cacheTtl) {
       console.log(`On-prem cache SKIP for ${appId}/${endpoint}/${method} (missing cache TTL)`)
       return
@@ -175,6 +284,7 @@ async function setOnPremCache(hostname, appId, endpoint, method, responseBody, s
     headers.set('X-Onprem-Cached', 'true')
     headers.set('X-Onprem-App-Id', appId)
     headers.set('X-Onprem-Ttl', String(cacheTtl))
+    applyEdgeRateLimitCacheHeaders(headers, responseBody, cacheTtl)
 
     // Store the response cache
     const key = getOnPremCacheKey(hostname, appId, endpoint, method)
@@ -221,7 +331,7 @@ async function buildOnPremResponse(hostname, appId, endpoint, method, responseBo
 
 async function setPlanUpgradeCache(hostname, appId, endpoint, method, responseBody, status, responseHeaders) {
   try {
-    const cacheTtl = getCacheTtlSeconds(responseHeaders)
+    const cacheTtl = getCacheTtlSeconds(responseHeaders, responseBody)
     if (!cacheTtl) {
       console.log(`Plan-upgrade cache SKIP for ${appId}/${endpoint}/${method} (missing cache TTL)`)
       return
@@ -236,6 +346,7 @@ async function setPlanUpgradeCache(hostname, appId, endpoint, method, responseBo
     headers.set('X-Plan-Upgrade-Cached', 'true')
     headers.set('X-Plan-Upgrade-App-Id', appId)
     headers.set('X-Plan-Upgrade-Ttl', String(cacheTtl))
+    applyEdgeRateLimitCacheHeaders(headers, responseBody, cacheTtl)
     const response = new Response(JSON.stringify(responseBody), {
       status,
       headers,
@@ -248,23 +359,36 @@ async function setPlanUpgradeCache(hostname, appId, endpoint, method, responseBo
   }
 }
 
-async function extractAppId(request, url) {
+function extractAppIdFromBodyBytes(requestBody) {
+  if (!requestBody)
+    return null
+  try {
+    const body = JSON.parse(new TextDecoder().decode(requestBody))
+    if (Array.isArray(body)) {
+      // /stats batch: first event app_id (handler enforces one app_id per batch)
+      const first = body[0]
+      if (first && typeof first === 'object' && typeof first.app_id === 'string' && first.app_id)
+        return first.app_id
+      return null
+    }
+    if (body && typeof body === 'object')
+      return body.app_id ?? null
+    return null
+  }
+  catch {
+    return null
+  }
+}
+
+function extractAppIdFromRequest(request, url, requestBody) {
   const method = request.method
   // For GET and DELETE on /channel_self, app_id is in query params
   if ((method === 'DELETE' || method === 'GET') && matchesEndpoint(url.pathname, '/channel_self')) {
     return url.searchParams.get('app_id')
   }
-  // For POST and PUT methods, app_id is in the body
-  if (method === 'POST' || method === 'PUT') {
-    try {
-      const clonedRequest = request.clone()
-      const body = await clonedRequest.json()
-      return body.app_id
-    }
-    catch {
-      return null
-    }
-  }
+  // For POST and PUT methods, app_id is in the body (already buffered once).
+  if (method === 'POST' || method === 'PUT')
+    return extractAppIdFromBodyBytes(requestBody)
   // For other HTTP methods (PATCH, OPTIONS, HEAD, etc.), on-prem caching is
   // intentionally skipped as these endpoints don't use those methods
   return null
@@ -276,21 +400,26 @@ export default {
     const method = request.method
     const hostname = url.hostname
 
+    // Buffer POST/PUT body once — reused for app_id parse and regional fallbacks.
+    const requestBody = method === 'POST' || method === 'PUT'
+      ? await request.arrayBuffer()
+      : undefined
+
     // Check on-prem cache for cacheable endpoints BEFORE routing to workers
     let appId = null
     let endpoint = null
     if (isCacheableEndpoint(url.pathname)) {
       endpoint = getEndpointName(url.pathname)
-      appId = await extractAppId(request, url)
+      appId = extractAppIdFromRequest(request, url, requestBody)
 
       if (appId) {
         const cachedPlanUpgrade = await getPlanUpgradeCache(hostname, appId, endpoint, method)
         if (cachedPlanUpgrade) {
-          return cachedPlanUpgrade
+          return await withFreshRateLimitHeaders(cachedPlanUpgrade)
         }
         const cachedResponse = await getOnPremCache(hostname, appId, endpoint, method)
         if (cachedResponse) {
-          return cachedResponse
+          return await withFreshRateLimitHeaders(cachedResponse)
         }
       }
     }
@@ -677,13 +806,12 @@ export default {
     const pathWithQuery = url.pathname + url.search
 
     const fallbackUrls = zoneFallbackUrls[zone] || [WORKER_URL.EUROPE]
-    const requestBody = method === 'POST' || method === 'PUT'
-      ? await request.clone().arrayBuffer()
-      : undefined
     let pendingOnPrem = null
     let onPremConfirmations = 0
     let successfulFallbacks = 0
     let fallbackFailure = false
+    // After first on-prem hit, confirm with at most one more healthy worker (not the full mesh).
+    let onPremConfirmPending = false
 
     for (let index = 0; index < fallbackUrls.length; index++) {
       const workerUrl = fallbackUrls[index]
@@ -735,11 +863,26 @@ export default {
                 headers: response.headers,
                 workerUrl,
               }
-              if (index < fallbackUrls.length - 1) {
-                console.log(`${workerUrl} returned on-prem for ${appId}; trying fallback worker before finalizing`)
+              // Confirm with one extra healthy worker when available; otherwise finalize.
+              if (onPremConfirmations === 1 && index < fallbackUrls.length - 1) {
+                onPremConfirmPending = true
+                console.log(`${workerUrl} returned on-prem for ${appId}; confirming with one fallback worker`)
                 continue
               }
-              continue
+              // Never cache after a skipped/failed configured fallback (partial outage).
+              if (fallbackFailure) {
+                console.log(`On-prem seen after fallback failure for ${appId}; not caching`)
+                continue
+              }
+              console.log(`On-prem confirmed (${onPremConfirmations}) for ${appId}`)
+              return await buildOnPremResponse(hostname, appId, endpoint, method, pendingOnPrem.responseBody, pendingOnPrem.status, pendingOnPrem.headers)
+            }
+
+            // A non-on-prem response during confirm means do not cache on-prem.
+            if (onPremConfirmPending) {
+              console.log(`${workerUrl} disagreed on on-prem for ${appId}; serving cloud response`)
+              onPremConfirmPending = false
+              pendingOnPrem = null
             }
 
             if (isPlanUpgradeResponse(response.status, responseBody)) {
@@ -773,7 +916,7 @@ export default {
       }
     }
 
-    // Skipped/failed fallback workers are not counted as agreement because a partial outage can reflect stale replicas.
+    // If we only got on-prem responses (and maybe failed to confirm), cache when all successes agreed.
     if (pendingOnPrem && !fallbackFailure && successfulFallbacks > 0 && onPremConfirmations === successfulFallbacks) {
       console.log(`All ${onPremConfirmations}/${successfulFallbacks} successful fallback workers returned on-prem for ${appId}`)
       return await buildOnPremResponse(hostname, appId, endpoint, method, pendingOnPrem.responseBody, pendingOnPrem.status, pendingOnPrem.headers)
@@ -787,6 +930,14 @@ export default {
     }
 
     // No worker produced a usable non-on-prem response, so try the original request as last resort.
+    // Body was consumed into requestBody — rebuild Request when needed.
+    if (requestBody) {
+      return fetch(new Request(request.url, {
+        method: request.method,
+        headers: request.headers,
+        body: requestBody.slice(0),
+      }))
+    }
     return fetch(request)
   },
 }

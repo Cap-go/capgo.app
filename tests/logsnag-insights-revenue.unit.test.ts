@@ -56,6 +56,23 @@ describe('logsnag revenue metric helpers', () => {
     expect(start.toISOString()).toBe('2023-02-28T00:00:00.000Z')
   })
 
+  it.concurrent('computes upgrade_rate_12m from upgrade events over paying orgs only', () => {
+    // Daily shard: prior upgraded_orgs sum + today / paying (not users/orgs).
+    const priorUpgradedOrgs12m = 101
+    const todayUpgradedOrgs = 0
+    const paying = 1161
+    const allOrgs = 7749
+
+    expect(logsnagInsightsTestUtils.calculateConversionRate(
+      priorUpgradedOrgs12m + todayUpgradedOrgs,
+      paying,
+    )).toBe(8.7)
+    expect(logsnagInsightsTestUtils.calculateConversionRate(
+      priorUpgradedOrgs12m + todayUpgradedOrgs,
+      allOrgs,
+    )).toBe(1.3)
+  })
+
   it.concurrent('computes plan conversion rates against paying orgs, not all users/orgs', () => {
     const rates = logsnagInsightsTestUtils.getPlanConversionRates(
       { Solo: 15, Maker: 10, Team: 0, Enterprise: 0, Trial: 50 },
@@ -202,8 +219,8 @@ describe('logsnag revenue metric helpers', () => {
       'ltv',
     ])
     expect(logsnagInsightsTestUtils.getMissingGlobalStatsRequiredShards(ready)).toEqual([])
-    expect(logsnagInsightsTestUtils.getMissingGlobalStatsShards(ready)).toEqual(['notifications'])
-    expect(logsnagInsightsTestUtils.getGlobalStatsShardQueueCandidates(ready)).toEqual(['notifications'])
+    expect(logsnagInsightsTestUtils.getMissingGlobalStatsShards(ready)).toEqual(['notifications', 'native_notifications'])
+    expect(logsnagInsightsTestUtils.getGlobalStatsShardQueueCandidates(ready)).toEqual(['notifications', 'native_notifications'])
 
     const legacyUsage = logsnagInsightsTestUtils.normalizeCompletedGlobalStatsShards([
       'core',
@@ -222,6 +239,7 @@ describe('logsnag revenue metric helpers', () => {
     const sent = logsnagInsightsTestUtils.normalizeCompletedGlobalStatsShards([
       ...ready,
       'notifications',
+      'native_notifications',
     ])
     expect(logsnagInsightsTestUtils.getMissingGlobalStatsShards(sent)).toEqual([])
   })
@@ -259,7 +277,7 @@ describe('logsnag revenue metric helpers', () => {
 
     expect(staleShards).toEqual(['core', 'usage_storage', 'builds'])
     expect(logsnagInsightsTestUtils.getGlobalStatsRepairShardQueueCandidates(ready, staleShards)).toEqual(['core', 'usage_storage', 'builds'])
-    expect(logsnagInsightsTestUtils.getGlobalStatsRepairShardQueueCandidates(ready)).toEqual(['notifications'])
+    expect(logsnagInsightsTestUtils.getGlobalStatsRepairShardQueueCandidates(ready)).toEqual(['notifications', 'native_notifications'])
   })
 
   it.concurrent('keeps fresh completed global stats shards eligible for notifications', () => {
@@ -294,7 +312,7 @@ describe('logsnag revenue metric helpers', () => {
     const staleShards = logsnagInsightsTestUtils.getGlobalStatsStaleRepairShards(freshRow, expectedBuildStats)
 
     expect(staleShards).toEqual([])
-    expect(logsnagInsightsTestUtils.getGlobalStatsRepairShardQueueCandidates(ready, staleShards)).toEqual(['notifications'])
+    expect(logsnagInsightsTestUtils.getGlobalStatsRepairShardQueueCandidates(ready, staleShards)).toEqual(['notifications', 'native_notifications'])
   })
 
   it.concurrent('detects completed global stats notifications for idempotent retries', () => {
@@ -322,7 +340,7 @@ describe('logsnag revenue metric helpers', () => {
       'notifications_tracking',
     ])
     expect(logsnagInsightsTestUtils.hasCompletedGlobalStatsNotifications(partiallySent)).toBe(false)
-    expect(logsnagInsightsTestUtils.getMissingGlobalStatsShards(partiallySent)).toEqual(['notifications'])
+    expect(logsnagInsightsTestUtils.getMissingGlobalStatsShards(partiallySent)).toEqual(['notifications', 'native_notifications'])
   })
 
   it.concurrent('skips completed non-notification shard retries only', () => {
@@ -357,6 +375,7 @@ describe('logsnag revenue metric helpers', () => {
       'paid_products',
       'ltv',
       'notifications',
+      'native_notifications',
     ])
   })
 
@@ -660,6 +679,18 @@ describe('logsnag revenue metric helpers', () => {
     expect(coreSnapshotQuery).toContain('si.is_above_plan = true')
     expect(coreSnapshotQuery).not.toContain('si.plan_usage > 100')
     expect(coreSnapshotQuery).not.toContain('o.has_usage_credits')
+  })
+
+  it.concurrent('snapshots apps with preview QR enabled in the core global stats shard', () => {
+    const source = readFileSync(new URL('../supabase/functions/_backend/triggers/logsnag_insights.ts', import.meta.url), 'utf8')
+    const countFn = source.match(/async function countAppsWithPreview[\s\S]*?async function getTrialExtensionStats/)?.[0] ?? ''
+    const coreShard = source.match(/async function runCoreGlobalStatsShard[\s\S]*?async function getRegistersToday/)?.[0] ?? ''
+
+    expect(countFn).toContain('apps.allow_preview = true')
+    expect(countFn).toContain('apps.created_at <')
+    expect(countFn).toContain('snapshotEnd')
+    expect(coreShard).toContain('countAppsWithPreview(c, window.prevDayEnd)')
+    expect(coreShard).toContain('apps_with_preview,')
   })
   it.concurrent('normalizes logsnag insights retry payload counts', () => {
     expect(logsnagInsightsTestUtils.normalizeLogsnagInsightsRetryCount('2')).toBe(2)

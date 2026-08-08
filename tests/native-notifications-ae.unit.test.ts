@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   buildNotificationBadgeStateQuery,
   buildNotificationRegistryLookupQuery,
+  buildGlobalNotificationStatsQuery,
+  readGlobalNotificationStatsCF,
   buildNotificationStatsQuery,
   createNotificationDeliveryEventProof,
   createNotificationEventProof,
@@ -193,6 +195,67 @@ describe('native notification AE registry', () => {
     expect(query).toContain("blob2 = 'campaign-1'")
     expect(query).toContain('COUNT(DISTINCT')
     expect(query).toContain('GROUP BY blob1')
+  })
+
+  it.concurrent('builds org notification stats query across multiple app indexes', () => {
+    const query = buildNotificationStatsQuery({
+      dataset: 'notification_events',
+      appIds: ['com.demo.app', 'com.demo.app2'],
+      days: 7,
+      now: new Date('2026-05-06T00:00:00Z'),
+    })
+
+    expect(query).toContain('FROM notification_events')
+    expect(query).toContain("(index1 = 'com.demo.app' OR startsWith(index1, 'com.demo.app:'))")
+    expect(query).toContain("(index1 = 'com.demo.app2' OR startsWith(index1, 'com.demo.app2:'))")
+    expect(query).toContain('GROUP BY blob1')
+  })
+
+  it.concurrent('rejects stats query without any app id', () => {
+    expect(() => buildNotificationStatsQuery({ dataset: 'notification_events' })).toThrow()
+  })
+
+  it.concurrent('builds global notification stats query for a day window', () => {
+    const query = buildGlobalNotificationStatsQuery({
+      dataset: 'notification_events',
+      since: new Date('2026-08-03T00:00:00Z'),
+      until: new Date('2026-08-04T00:00:00Z'),
+    })
+
+    expect(query).toContain('FROM notification_events')
+    expect(query).toContain("timestamp >= toDateTime('2026-08-03 00:00:00')")
+    expect(query).toContain("timestamp < toDateTime('2026-08-04 00:00:00')")
+    expect(query).toContain('GROUP BY blob1')
+    expect(query).not.toContain('index1')
+  })
+
+  it.concurrent('throws when global notification stats require AE credentials', async () => {
+    await expect(readGlobalNotificationStatsCF({
+      get: () => 'test-request',
+      env: {},
+    } as any, {
+      since: new Date('2026-08-03T00:00:00Z'),
+      until: new Date('2026-08-04T00:00:00Z'),
+      throwOnError: true,
+    })).rejects.toThrow(/not configured/)
+  })
+
+  it.concurrent('rejects campaign stats spanning multiple apps', () => {
+    expect(() => buildNotificationStatsQuery({
+      dataset: 'notification_events',
+      appIds: ['com.demo.app', 'com.demo.app2'],
+      campaignId: 'campaign-1',
+    })).toThrow()
+  })
+
+  it.concurrent('falls back to 30 days when days is not finite', () => {
+    const query = buildNotificationStatsQuery({
+      dataset: 'notification_events',
+      appId: 'com.demo.app',
+      days: Number.NaN,
+      now: new Date('2026-05-06T00:00:00Z'),
+    })
+    expect(query).toContain("timestamp >= toDateTime('2026-04-06")
   })
 
   it.concurrent('builds latest desired badge lookup from AE event rows', () => {

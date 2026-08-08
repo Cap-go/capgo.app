@@ -27,7 +27,21 @@ export interface MobileprovisionDetail extends MobileprovisionInfo {
   profileType: 'app_store' | 'ad_hoc' | 'development' | 'enterprise' | 'unknown'
   /** SHA1 (40-char lowercase hex) of each DeveloperCertificate embedded in the profile */
   certificateSha1s: string[]
+  /**
+   * The capability-bearing keys parsed from the profile's `<key>Entitlements</key>`
+   * dict, keyed by entitlement name. String/bool entitlements map to their value;
+   * array entitlements (application-groups, associated-domains, keychain-access-groups,
+   * iCloud container ids, etc.) map to the list of `<string>` members. Only keys
+   * actually present in the profile are included, so a caller can both test
+   * presence (`key in profileEntitlements`) and read the granted value/members.
+   * No credential material is included — these are capability KEY names + their
+   * declared identifiers, the same data the entitlement-coverage checks surface.
+   */
+  profileEntitlements: ProfileEntitlements
 }
+
+export type ProfileEntitlementValue = string | string[] | boolean
+export type ProfileEntitlements = Record<string, ProfileEntitlementValue>
 
 export function parseMobileprovision(filePath: string): MobileprovisionInfo {
   const data = readFileSync(filePath)
@@ -103,6 +117,7 @@ export function parseMobileprovisionBufferDetailed(data: Buffer, source = '<buff
   const expirationDate = extractPlistValue(plistXml, 'ExpirationDate', 'date') || ''
   const profileType = deriveProfileType(plistXml)
   const certificateSha1s = extractCertificateSha1s(plistXml)
+  const profileEntitlements = extractProfileEntitlements(plistXml)
 
   return {
     ...base,
@@ -110,6 +125,7 @@ export function parseMobileprovisionBufferDetailed(data: Buffer, source = '<buff
     expirationDate,
     profileType,
     certificateSha1s,
+    profileEntitlements,
   }
 }
 
@@ -185,6 +201,54 @@ function extractCertificateSha1s(xml: string): string[] {
     }
   }
   return sha1s
+}
+
+// Auto-managed entitlement keys the profile always carries; never surfaced as
+// capabilities (the coverage checks exclude the same set on the app side).
+function isAutoManagedEntitlementKey(key: string): boolean {
+  return key === 'application-identifier' || key.endsWith('.team-identifier')
+}
+
+/** `<string>` children of `<array>...</array>` block text. */
+function arrayStringMembers(arrayXml: string): string[] {
+  return Array.from(arrayXml.matchAll(/<string>([\s\S]*?)<\/string>/g), m => m[1].trim())
+}
+
+/**
+ * Parse the capability keys from the profile's first `<key>Entitlements</key>`
+ * dict (one-level capture, mirroring extractNestedPlistValue). EVERY key present
+ * in the dict is read generically by its sibling value tag (string / bool / array),
+ * so the profile side is symmetric with the app side — a granted capability outside
+ * any fixed allowlist is recorded, not silently treated as "missing" (which would
+ * false-positive in the entitlements-vs-profile coverage check). Auto-managed keys
+ * (application-identifier, *.team-identifier) are skipped. Only keys actually present
+ * are added, so a missing capability is absent (not a false value). Never throws —
+ * returns {} when there is no Entitlements dict.
+ */
+function extractProfileEntitlements(xml: string): ProfileEntitlements {
+  const dict = xml.match(/<key>Entitlements<\/key>\s*<dict>([\s\S]*?)<\/dict>/)?.[1]
+  if (dict === undefined)
+    return {}
+  const out: ProfileEntitlements = {}
+  // Each <key>K</key> followed by its value: a self-closing <true/>/<false/>, an
+  // <array>...</array> (non-greedy, first close wins), or a scalar <tag>V</tag>.
+  const re = /<key>([\s\S]*?)<\/key>\s*(?:<(true|false)\s*\/>|<array>([\s\S]*?)<\/array>|<([a-z]+)>([\s\S]*?)<\/\4>)/g
+  for (const m of dict.matchAll(re)) {
+    const key = m[1].trim()
+    if (key in out || isAutoManagedEntitlementKey(key))
+      continue
+    if (m[2] !== undefined)
+      out[key] = m[2] === 'true'
+    else if (m[3] !== undefined)
+      out[key] = arrayStringMembers(m[3])
+    else if (m[4] === 'string')
+      out[key] = m[5].trim()
+    // Other scalar kinds (integer/real/date/data) are not capability-bearing and
+    // are intentionally not surfaced; their presence is still implied by the key.
+    else
+      out[key] = m[5].trim()
+  }
+  return out
 }
 
 function extractPlistValue(xml: string, key: string, valueTag: string = 'string'): string | null {

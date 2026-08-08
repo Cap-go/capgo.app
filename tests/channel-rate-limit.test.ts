@@ -5,7 +5,7 @@ import { BASE_URL, getBaseData, headers, PLUGIN_BASE_URL, resetAndSeedAppData, r
 
 // Rate limiting uses Cloudflare Workers Cache API, which isn't available in Supabase Edge Functions
 const USE_CLOUDFLARE = env.USE_CLOUDFLARE_WORKERS === 'true'
-const OP_LIMIT_PER_SECOND = 5
+const OP_LIMIT_PER_SECOND = 10
 
 const id = randomUUID()
 const APPNAME = `com.ratelimit.${id}`
@@ -155,8 +155,8 @@ describe.skipIf(!USE_CLOUDFLARE)('channel_self rate limiting', () => {
     return fetchGetChannels(data as any)
   })
 
-  describe('same channel 60-second rate limit', () => {
-    it('should rate limit same channel set within 60 seconds', async () => {
+  describe('same channel 1-second rate limit', () => {
+    it('should rate limit same channel set within 1 second', async () => {
       const deviceId = randomUUID().toLowerCase()
       const data = getBaseData(APPNAME)
       data.device_id = deviceId
@@ -165,13 +165,26 @@ describe.skipIf(!USE_CLOUDFLARE)('channel_self rate limiting', () => {
       const response1 = await fetchChannelSelfEndpoint('POST', data)
       expect(response1.status).not.toBe(429)
 
-      await sleep(1100) // Wait for op-level rate limit to expire
-
+      // Immediate duplicate set — same-set (1s), not op burst (limit 10).
       const response2 = await fetchChannelSelfEndpoint('POST', data)
-      expect(response2.status).toBe(429) // Still rate limited by 60-second rule
+      expect(response2.status).toBe(429)
     })
 
-    it('should allow set with different channel after 1 second', async () => {
+    it('should allow set with different channel immediately', async () => {
+      const deviceId = randomUUID().toLowerCase()
+      const data = getBaseData(APPNAME)
+      data.device_id = deviceId
+      data.channel = 'production'
+
+      const response1 = await fetchChannelSelfEndpoint('POST', data)
+      expect(response1.status).not.toBe(429)
+
+      data.channel = 'beta'
+      const response2 = await fetchChannelSelfEndpoint('POST', data)
+      expect(response2.status).not.toBe(429)
+    })
+
+    it('should allow same channel set after 1 second', async () => {
       const deviceId = randomUUID().toLowerCase()
       const data = getBaseData(APPNAME)
       data.device_id = deviceId
@@ -182,7 +195,6 @@ describe.skipIf(!USE_CLOUDFLARE)('channel_self rate limiting', () => {
 
       await sleep(1100)
 
-      data.channel = 'beta'
       const response2 = await fetchChannelSelfEndpoint('POST', data)
       expect(response2.status).not.toBe(429)
     })

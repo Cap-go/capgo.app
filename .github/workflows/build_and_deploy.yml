@@ -92,7 +92,27 @@ jobs:
       - name: Update functions
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_TOKEN }}
-        run: supabase functions deploy
+        # Capgo cloud publishes allowlisted functions only (pg_net + functions.invoke).
+        # Self-hosting keeps deploying all functions via `supabase functions deploy`.
+        run: |
+          FUNCTIONS=($(bun scripts/supabase-cloud-functions.ts list))
+          if [ "${#FUNCTIONS[@]}" -eq 0 ]; then
+            echo "Capgo cloud function allowlist is empty; refusing to deploy all functions" >&2
+            exit 1
+          fi
+          supabase functions deploy "${FUNCTIONS[@]}"
+          # Remove Capgo-cloud-only functions that are no longer allowlisted.
+          # Self-host installs are unaffected (they deploy every local function).
+          SKIPPED=($(bun scripts/supabase-cloud-functions.ts skip-list))
+          for fn in "${SKIPPED[@]}"; do
+            if ! out=$(supabase functions delete "$fn" 2>&1); then
+              if echo "$out" | grep -qiE 'not found|does not exist|404|Function not found'; then
+                continue
+              fi
+              echo "$out" >&2
+              exit 1
+            fi
+          done
 
   read_replica_schema:
     needs: changes

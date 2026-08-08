@@ -10,6 +10,7 @@ import IconArrowRight from '~icons/lucide/arrow-right'
 import IconCheckCircle from '~icons/lucide/check-circle'
 import CreditsCta from '~/components/CreditsCta.vue'
 import RbacPermissionOnlyModal from '~/components/RbacPermissionOnlyModal.vue'
+import { invokeCapgoApi } from '~/services/capgoApi'
 import { formatIncludedThenPrice } from '~/services/creditPricing'
 import { formatNumberValue } from '~/services/formatLocale'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
@@ -141,15 +142,6 @@ const isCreditsOnly = computed(() => {
   return !org.paying && (org.trial_left ?? 0) <= 0 && (org.credit_available ?? 0) > 0
 })
 
-function isSafariBrowser() {
-  if (Capacitor.getPlatform() !== 'web')
-    return false
-  if (typeof navigator === 'undefined')
-    return false
-  const ua = navigator.userAgent
-  return /Version\/[\d.]+/.test(ua) && /Safari\//.test(ua) && !/Chrome|CriOS|FxiOS|OPiOS|Edg|Chromium/.test(ua)
-}
-
 async function prefetchStripeCheckoutUrl(plan: Database['public']['Tables']['plans']['Row'], isYear: boolean) {
   if (!plan.stripe_id)
     return
@@ -163,7 +155,7 @@ async function prefetchStripeCheckoutUrl(plan: Database['public']['Tables']['pla
   const datafastAttribution = await getDatafastAttribution()
   const affonsoReferral = await getAffonsoReferral()
   try {
-    const resp = await supabase.functions.invoke('private/stripe_checkout', {
+    const resp = await invokeCapgoApi('private/stripe_checkout', {
       body: JSON.stringify({
         priceId: plan.stripe_id,
         successUrl,
@@ -211,16 +203,18 @@ function trackPlanCheckoutStarted(plan: Database['public']['Tables']['plans']['R
   }).catch()
 }
 
-async function openSafariStripeCheckout(plan: Database['public']['Tables']['plans']['Row'], isYear: boolean) {
+async function openWebStripeCheckout(plan: Database['public']['Tables']['plans']['Row'], isYear: boolean) {
   const url = await prefetchStripeCheckoutUrl(plan, isYear)
   if (!url) {
     toast.error('Cannot get your checkout')
     return false
   }
 
+  // Confirm dialog with a real <a href> so checkout opens under a fresh user gesture.
+  // Avoids popup blockers after the async Stripe session create.
   dialogStore.openDialog({
     title: t('open-in-new-tab'),
-    description: 'This will open Stripe to complete checkout.',
+    description: t('stripe-checkout-will-be-opened-in-a-new-tab'),
     buttons: [
       {
         text: t('button-cancel'),
@@ -233,7 +227,7 @@ async function openSafariStripeCheckout(plan: Database['public']['Tables']['plan
         href: url,
         target: '_blank',
         rel: 'noopener noreferrer',
-        handler: () => trackPlanCheckoutStarted(plan, isYear, 'safari_confirm'),
+        handler: () => trackPlanCheckoutStarted(plan, isYear, 'web_confirm'),
       },
     ],
   })
@@ -253,9 +247,9 @@ async function openChangePlan(plan: Database['public']['Tables']['plans']['Row']
   // get the current url
   isSubscribeLoading.value[index] = true
   if (plan.stripe_id) {
-    const checkoutIsYearly = plan.price_y === plan.price_m ? false : isYearly.value
-    if (isSafariBrowser()) {
-      const shouldContinue = await openSafariStripeCheckout(plan, checkoutIsYearly)
+    const checkoutIsYearly = hasYearlyDiscount(plan) ? isYearly.value : false
+    if (Capacitor.getPlatform() === 'web') {
+      const shouldContinue = await openWebStripeCheckout(plan, checkoutIsYearly)
       if (!shouldContinue) {
         isSubscribeLoading.value[index] = false
         return
@@ -270,8 +264,12 @@ async function openChangePlan(plan: Database['public']['Tables']['plans']['Row']
   isSubscribeLoading.value[index] = false
 }
 
+function hasYearlyDiscount(plan: Database['public']['Tables']['plans']['Row']): boolean {
+  return plan.price_y > 0 && Math.round(plan.price_y / 12) < plan.price_m
+}
+
 function getPrice(plan: Database['public']['Tables']['plans']['Row'], t: 'm' | 'y'): number {
-  if (t === 'm' || plan.price_y === plan.price_m) {
+  if (t === 'm' || !hasYearlyDiscount(plan)) {
     return plan.price_m
   }
   else {
@@ -288,6 +286,29 @@ async function loadCreditPricing(orgId?: string) {
   creditUnitPrices.value = await getCreditUnitPricing(orgId)
 }
 
+// When no organization can be resolved (e.g. an `?oid=` pointing at an org the
+// user isn't a member of), bail out gracefully instead of throwing: surface the
+// same dialog the no-permission path uses and route back to /apps. Guarded so
+// the watchEffect, the currentOrganization watcher and loadData don't stack
+// multiple dialogs or redirects for the same missing org.
+let redirectingNoOrg = false
+async function redirectWhenNoOrg() {
+  if (redirectingNoOrg)
+    return
+  redirectingNoOrg = true
+  dialogStore.openDialog({
+    title: t('cannot-view-plans'),
+    description: `${t('plans-super-only')}`,
+    buttons: [
+      {
+        text: t('ok'),
+      },
+    ],
+  })
+  await dialogStore.onDialogDismiss()
+  router.push('/apps')
+}
+
 async function loadData(initial: boolean) {
   if (!initialLoad.value && !initial)
     return
@@ -296,8 +317,13 @@ async function loadData(initial: boolean) {
 
   const orgToLoad = currentOrganization.value
   const orgId = orgToLoad?.gid
-  if (!orgId)
-    throw new Error('Cannot get current org id')
+  if (!orgId) {
+    // No current org even after the store finished loading. Throwing here used to
+    // escape as an unhandled rejection on the billing page and leave the user on a
+    // broken render, so bail out gracefully and give them a way off the page.
+    await redirectWhenNoOrg()
+    return
+  }
 
   await Promise.all([
     loadCreditPricing(orgId),
@@ -403,7 +429,11 @@ watchEffect(async () => {
         }
       }
 
-      loadData(true)
+      loadData(true).catch((error) => {
+        // Never let a load failure escape as an unhandled rejection on the
+        // billing page — the graceful no-org path is handled inside loadData.
+        console.error('Failed to load plans data', error)
+      })
       const orgId = currentOrganization.value?.gid
       if (orgId) {
         sendEvent({
@@ -504,32 +534,6 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
         {{ t('plan-failed') }}
       </div>
 
-      <!-- Credits CTA: shows info banner for credits-only orgs, upsell CTA for others -->
-      <CreditsCta v-if="!isMobile" class="mb-6 shrink-0" :credits-only="isCreditsOnly" />
-
-      <!-- Expert as a Service CTA -->
-      <div v-if="!isMobile" class="mb-6 shrink-0">
-        <div class="flex flex-col gap-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900/70 sm:flex-row sm:items-center sm:justify-between">
-          <div class="min-w-0 flex-1">
-            <p class="text-sm font-semibold text-slate-900 dark:text-white">
-              {{ t('expert-service-title') }}
-            </p>
-            <p class="mt-1 max-w-3xl text-xs leading-5 text-slate-600 dark:text-slate-300">
-              {{ t('expert-service-desc') }}
-            </p>
-          </div>
-          <a
-            class="d-btn d-btn-sm h-auto min-h-10 w-full shrink-0 justify-center gap-2 whitespace-nowrap rounded-lg border-none bg-blue-600 px-4 text-xs font-semibold text-white hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600 sm:w-auto"
-            href="https://capgo.app/premium-support/"
-            rel="noopener noreferrer"
-            target="_blank"
-          >
-            {{ t('expert-service-cta') }}
-            <IconArrowRight class="h-3.5 w-3.5" aria-hidden="true" />
-          </a>
-        </div>
-      </div>
-
       <!-- Plans Grid -->
       <div class="grid content-start min-h-0 grid-cols-1 gap-4 p-1 overflow-y-auto md:grid-cols-2 xl:grid-cols-4 grow">
         <div
@@ -575,7 +579,7 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
               <span class="ml-1 text-sm font-medium text-gray-500 dark:text-gray-400">/{{ t('mo') }}</span>
             </div>
             <p v-if="isYearlyPlan(p, segmentVal)" class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              {{ p.price_m !== p.price_y ? t('billed-annually-at') : t('billed-monthly-at') }} ${{ p.price_y }}
+              {{ hasYearlyDiscount(p) ? t('billed-annually-at') : t('billed-monthly-at') }} ${{ hasYearlyDiscount(p) ? p.price_y : p.price_m }}
             </p>
           </div>
 
@@ -587,7 +591,7 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
             :disabled="isDisabled(p)"
             @click="openChangePlan(p, index)"
           >
-            <svg v-if="isSubscribeLoading[index]" class="w-4 h-4 text-white animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <svg v-if="isSubscribeLoading[index]" class="w-4 h-4 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
               <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
               <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
             </svg>
@@ -614,6 +618,32 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
               </li>
             </ul>
           </div>
+        </div>
+      </div>
+
+      <!-- Credits CTA: under prices so plan cards stay visible without scrolling -->
+      <CreditsCta v-if="!isMobile" class="mt-6 shrink-0" :credits-only="isCreditsOnly" />
+
+      <!-- Expert as a Service CTA -->
+      <div v-if="!isMobile" class="mt-4 shrink-0">
+        <div class="flex flex-col gap-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900/70 sm:flex-row sm:items-center sm:justify-between">
+          <div class="min-w-0 flex-1">
+            <p class="text-sm font-semibold text-slate-900 dark:text-white">
+              {{ t('expert-service-title') }}
+            </p>
+            <p class="mt-1 max-w-3xl text-xs leading-5 text-slate-600 dark:text-slate-300">
+              {{ t('expert-service-desc') }}
+            </p>
+          </div>
+          <a
+            class="d-btn d-btn-sm h-auto min-h-10 w-full shrink-0 justify-center gap-2 whitespace-nowrap rounded-lg border-none bg-blue-600 px-4 text-xs font-semibold text-white hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600 sm:w-auto"
+            href="https://capgo.app/premium-support/"
+            rel="noopener noreferrer"
+            target="_blank"
+          >
+            {{ t('expert-service-cta') }}
+            <IconArrowRight class="h-3.5 w-3.5" aria-hidden="true" />
+          </a>
         </div>
       </div>
 

@@ -1,5 +1,13 @@
 // src/build/prescan/engine.ts
-import type { Finding, OutcomeOptions, PrescanCheck, PrescanOutcome, PrescanReport, ScanContext, Severity } from './types'
+import type { Finding, OutcomeOptions, PrescanCheck, PrescanOutcome, PrescanReport, ScanContext } from './types'
+import { enforcedCounts } from './enforcement'
+import {
+  applyWarnOverrides,
+  emptyOverrides,
+  filterChecksForOverrides,
+  type PrescanOverrides,
+  recountSeverities,
+} from './overrides'
 
 interface EngineOptions { checkTimeoutMs?: number }
 
@@ -16,15 +24,17 @@ function sanitizeCrashDetail(error: unknown): string {
   return msg.replace(/[A-Z0-9+/=_-]{40,}/gi, '[redacted]').slice(0, MAX_CRASH_DETAIL_CHARS)
 }
 
-export async function runPrescan(ctx: ScanContext, checks: PrescanCheck[], options: EngineOptions = {}): Promise<PrescanReport> {
+export async function runPrescan(ctx: ScanContext, checks: PrescanCheck[], options: EngineOptions & { overrides?: PrescanOverrides } = {}): Promise<PrescanReport> {
   const start = Date.now()
   const timeoutMs = options.checkTimeoutMs ?? DEFAULT_CHECK_TIMEOUT_MS
+  const overrides = options.overrides ?? emptyOverrides()
+  const { runnable: overrideFiltered, skipped: skippedByOverride } = filterChecksForOverrides(checks, overrides)
 
   // appliesTo predicates get the same crash isolation as run(): a throwing
   // predicate must degrade to a notice, never reject the whole scan.
   const applicable: PrescanCheck[] = []
   const findings: Finding[] = []
-  for (const c of checks) {
+  for (const c of overrideFiltered) {
     if (!c.platforms.includes(ctx.platform))
       continue
     try {
@@ -55,10 +65,19 @@ export async function runPrescan(ctx: ScanContext, checks: PrescanCheck[], optio
     })
   }
 
-  const counts: Record<Severity, number> = { error: 0, warning: 0, info: 0 }
-  for (const f of findings) counts[f.severity]++
+  if (skippedByOverride.length > 0) {
+    findings.push({
+      id: 'prescan/check-skipped',
+      severity: 'info',
+      title: `${skippedByOverride.length} check(s) skipped via --prescan-skip`,
+      detail: skippedByOverride.join(', '),
+    })
+  }
 
-  return { findings, counts, skippedRemote: remoteSkipped.length, durationMs: Date.now() - start, checksRun: runnable.length }
+  const adjusted = applyWarnOverrides(findings, overrides)
+  const counts = recountSeverities(adjusted)
+
+  return { findings: adjusted, counts, skippedRemote: remoteSkipped.length, durationMs: Date.now() - start, checksRun: runnable.length }
 }
 
 async function runIsolated(check: PrescanCheck, ctx: ScanContext, timeoutMs: number): Promise<Finding[]> {
@@ -71,7 +90,10 @@ async function runIsolated(check: PrescanCheck, ctx: ScanContext, timeoutMs: num
     }]), timeoutMs)
   })
   try {
-    return await Promise.race([check.run(ctx), timeout])
+    const findings = await Promise.race([check.run(ctx), timeout])
+    if (!check.enforceAfter)
+      return findings
+    return findings.map(finding => ({ ...finding, enforceAfter: finding.enforceAfter ?? check.enforceAfter }))
   }
   catch (error) {
     return [{
@@ -79,6 +101,7 @@ async function runIsolated(check: PrescanCheck, ctx: ScanContext, timeoutMs: num
       severity: 'info',
       title: `Check ${check.id} crashed and was skipped`,
       detail: sanitizeCrashDetail(error),
+      enforceAfter: check.enforceAfter,
     }]
   }
   finally {
@@ -86,9 +109,10 @@ async function runIsolated(check: PrescanCheck, ctx: ScanContext, timeoutMs: num
   }
 }
 
-export function decideOutcome(report: Pick<PrescanReport, 'counts'>, options: OutcomeOptions): PrescanOutcome {
+export function decideOutcome(report: Pick<PrescanReport, 'counts' | 'findings'>, options: OutcomeOptions): PrescanOutcome {
   if (options.ignoreFatal) return 'proceed'
-  if (report.counts.error > 0) return 'block'
-  if (report.counts.warning > 0) return options.failOnWarnings ? 'block' : 'ask'
+  const counts = enforcedCounts(report, options.now)
+  if (counts.error > 0) return 'block'
+  if (counts.warning > 0) return options.failOnWarnings ? 'block' : 'ask'
   return 'proceed'
 }

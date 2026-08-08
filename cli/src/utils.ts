@@ -4,6 +4,7 @@ import type {
 } from '@std/semver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Buffer } from 'node:buffer'
+import type { UploadSpinner } from './bundle/reporter'
 import type { CapacitorConfig, ExtConfigPairs } from './config'
 import type { Compatibility, CompatibilityDetails, IncompatibilityReason, NativePackage } from './schemas/common'
 import type { Database } from './types/supabase.types'
@@ -13,7 +14,7 @@ import { homedir, platform as osPlatform } from 'node:os'
 import path, { dirname, join, relative, resolve, sep } from 'node:path'
 import { cwd, env, stdin, stdout } from 'node:process'
 import { findInstallCommand, findPackageManagerRunner, findPackageManagerType } from '@capgo/find-package-manager'
-import { confirm as confirmC, isCancel, log, select, spinner as spinnerC } from '@clack/prompts'
+import { confirm as confirmC, isCancel, log as clackLog, select, spinner as spinnerC } from '@clack/prompts'
 import { canParse, format, lessThan, parse, parseRange, rangeIntersects } from '@std/semver'
 import { createClient, FunctionsHttpError } from '@supabase/supabase-js'
 import AdmZip from 'adm-zip'
@@ -22,15 +23,32 @@ import { isCI } from 'ci-info'
 import prettyjson from 'prettyjson'
 import * as tus from 'tus-js-client'
 import { getGlobalAnalyticsProps } from './analytics/global-props'
+import { getActiveUploadReporter } from './bundle/reporter'
 import { createTimedFetch, isSupabaseInstrumentationEnabled } from './analytics/supabase-perf'
 import { markSnag } from './app/debug'
 import { findMonorepoRoot, findNXMonorepoRoot, isMonorepo, isNXMonorepo } from './capacitor-cli'
 import { getChecksum } from './checksum'
 import { loadConfig, loadConfigForWrite, writeConfig } from './config'
 import { isTruthyEnvValue } from './posthog'
-import { safeParseSchema } from './schemas/schema_validation'
 import { nativePackageSchema } from './schemas/common'
+import { safeParseSchema } from './schemas/schema_validation'
+import { CliUserError } from './shared/cli-user-error'
 import { formatApiErrorForCli, parseSecurityPolicyError } from './utils/security_policy_errors'
+
+function reportUploadContext(level: 'error' | 'info' | 'success' | 'warn', message: string) {
+  const reporter = getActiveUploadReporter()
+  if (reporter)
+    reporter[level](message)
+  else
+    clackLog[level](message)
+}
+
+const log = {
+  error: (message: string) => reportUploadContext('error', message),
+  info: (message: string) => reportUploadContext('info', message),
+  success: (message: string) => reportUploadContext('success', message),
+  warn: (message: string) => reportUploadContext('warn', message),
+}
 
 export const baseKey = '.capgo_key'
 export const baseKeyV2 = '.capgo_key_v2'
@@ -66,6 +84,25 @@ export function deltaManifestTooLargeMessage(fileCount: number): string {
     `1. Upload a full zip instead: npx @capgo/cli@latest bundle upload --no-delta`,
     '2. Or reduce files in your web build output (remove unused assets, avoid copying large trees into dist).',
     'See https://capgo.app/docs/faq/#are-there-delta-update-file-path-limitations',
+  ].join('\n')
+}
+
+/**
+ * Stable `name` for the error thrown when the standard (non-TUS) upload hits its
+ * wall-clock timeout. Kept typed and constant so error tracking groups every
+ * occurrence into a single issue instead of one duplicate per CLI version.
+ */
+export const UPLOAD_TIMEOUT_ERROR_NAME = 'BundleUploadTimeoutError'
+
+/** User-facing error when the standard HTTP PUT upload exceeds its wall-clock timeout. */
+export function uploadTimeoutMessage(timeoutMs: number): string {
+  const seconds = Math.round(timeoutMs / 1000)
+  return [
+    `Bundle upload timed out after ${seconds}s.`,
+    `The standard upload has to finish the whole transfer within this window and does not retry, so a large bundle or a slow connection can trip it.`,
+    `What you can do:`,
+    `1. Retry with the resumable upload, which uploads in chunks and retries automatically: npx @capgo/cli@latest bundle upload --tus`,
+    `2. Or raise the limit for the standard upload: npx @capgo/cli@latest bundle upload --timeout <milliseconds>`,
   ].join('\n')
 }
 
@@ -258,14 +295,18 @@ export function findRoot(dir: string) {
 // do not expose this function this prevent missuses
 function readPackageJson(f: string = findRoot(cwd()), file: string | undefined = undefined) {
   const fileSplit = file?.split(',')[0]
-  if (fileSplit) {
-    if (!existsSync(fileSplit)) {
-      const message = `Package.json at ${fileSplit} does not exist`
-      log.error(message)
-      throw new Error(message)
-    }
+  const packageJsonPath = fileSplit ?? join(f, PACKNAME)
+  if (!existsSync(packageJsonPath)) {
+    // When the user passed an explicit path we keep it simple; otherwise the
+    // default path means the command is running outside a project directory,
+    // so point them at how to fix it (mirrors getAllPackagesDependencies).
+    const message = fileSplit
+      ? `Package.json at ${packageJsonPath} does not exist`
+      : `No package.json found at ${packageJsonPath}. Run this command from your project root (the folder that contains package.json), or pass --package-json <path> to point at it (for example in a monorepo).`
+    log.error(message)
+    throw new Error(message)
   }
-  const packageJson = readFileSync(fileSplit ?? join(f, PACKNAME))
+  const packageJson = readFileSync(packageJsonPath)
   return JSON.parse(packageJson as any)
 }
 
@@ -674,22 +715,44 @@ interface CapgoConfig {
   hostFilesApi: string
   hostApi: string
 }
+let cachedRemoteConfig: CapgoConfig | null = null
+let remoteConfigInFlight: Promise<CapgoConfig> | null = null
+
 export async function getRemoteConfig(silent = false, signal?: AbortSignal) {
   // call host + /api/get_config and parse the result as json using fetch
-  const localConfig = await getLocalConfig(silent)
-  try {
-    const response = await fetch(`${localConfig.hostApi}/private/config`, signal ? { signal } : {})
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`)
+  // Always return a shallow copy so callers cannot mutate the process-wide cache.
+  if (!signal && cachedRemoteConfig)
+    return { ...cachedRemoteConfig }
+  if (!signal && remoteConfigInFlight)
+    return remoteConfigInFlight.then(config => ({ ...config }))
+
+  const run = (async () => {
+    const localConfig = await getLocalConfig(silent)
+    try {
+      const response = await fetch(`${localConfig.hostApi}/private/config`, signal ? { signal } : {})
+      if (!response.ok)
+        throw new Error(`HTTP error! status: ${response.status}`)
+      const data = await response.json() as CapgoConfig
+      const merged = { ...data, ...localConfig } as CapgoConfig
+      if (!signal)
+        cachedRemoteConfig = merged
+      return { ...merged }
     }
-    const data = await response.json() as CapgoConfig
-    return { ...data, ...localConfig } as CapgoConfig
-  }
-  catch {
-    if (!silent)
-      log.info(`Local config ${formatError(localConfig)}`)
-    return localConfig
-  }
+    catch {
+      if (!silent)
+        log.info(`Local config ${formatError(localConfig)}`)
+      // Do not cache fallbacks — a later call can recover after a transient failure.
+      return { ...localConfig }
+    }
+    finally {
+      if (!signal)
+        remoteConfigInFlight = null
+    }
+  })()
+
+  if (!signal)
+    remoteConfigInFlight = run
+  return run
 }
 
 interface CapgoFilesConfig {
@@ -745,24 +808,138 @@ export function formatCapgoApiErrorBody(body: unknown): string {
   return [record.error, record.message, record.status].filter(Boolean).join(' | ')
 }
 
-/** Resolve Capgo public API base URL for CLI mutations (app create/update, etc.). */
+/** Capgo-managed Supabase hosts (cloud). Match hostname exactly. */
+export function isCapgoManagedSupabaseHost(supaHost?: string): boolean {
+  if (!supaHost)
+    return false
+  try {
+    const hostname = new URL(normalizeSupabaseHost(supaHost)).hostname.toLowerCase()
+    return hostname === 'sb.capgo.app'
+      || hostname === 'xvwzpoazmxkqosrdewyv.supabase.co'
+      || hostname === 'ibwjdnhknbkcqfbabwei.supabase.co'
+      || hostname === 'aucsybvnhavogdmzwtcw.supabase.co'
+  }
+  catch {
+    return false
+  }
+}
+
+/**
+ * Resolve Capgo public API base URL for CLI mutations (app create/update, etc.).
+ * Capgo cloud uses api.capgo.app. Self-host with only localSupa (default localApi)
+ * keeps /functions/v1 on that Supabase host.
+ */
 export function resolveConfiguredCapgoPublicApiHost(config: {
   hostApi: string
+  hostFilesApi?: string
   supaHost?: string
   supaKey?: string
 }): string {
-  if (config.supaHost && config.supaKey && config.hostApi === defaultApiHost)
+  if (
+    config.supaHost
+    && config.supaKey
+    && config.hostApi === defaultApiHost
+    && !isCapgoManagedSupabaseHost(config.supaHost)
+  ) {
     return `${normalizeSupabaseHost(config.supaHost)}/functions/v1`
+  }
 
   return config.hostApi
+}
+
+export interface CapgoCliInvokeOptions {
+  apikey: string
+  method?: string
+  body?: unknown
+  /** Capgo cloud files worker; ignored when resolving to self-host /functions/v1 */
+  useFilesHost?: boolean
+  supaHost?: string
+  supaAnon?: string
+}
+
+/**
+ * Invoke Capgo HTTP APIs formerly reached via supabase.functions.invoke.
+ * Capgo cloud -> hostApi / hostFilesApi. Self-host -> /functions/v1.
+ */
+export async function invokeCapgoCliApi<T = any>(
+  path: string,
+  options: CapgoCliInvokeOptions,
+): Promise<{ data: T | null, error: Error | null }> {
+  const method = (options.method ?? 'POST').toUpperCase()
+  let base: string
+  let anonKey: string | undefined = options.supaAnon
+  if (options.supaHost && options.supaAnon && !isCapgoManagedSupabaseHost(options.supaHost)) {
+    base = `${normalizeSupabaseHost(options.supaHost)}/functions/v1`
+  }
+  else {
+    const localConfig = await getRemoteConfig(true)
+    anonKey = options.supaAnon ?? localConfig.supaKey
+    if (
+      localConfig.supaHost
+      && localConfig.supaKey
+      && localConfig.hostApi === defaultApiHost
+      && !isCapgoManagedSupabaseHost(localConfig.supaHost)
+      && !(options.supaHost && isCapgoManagedSupabaseHost(options.supaHost))
+    ) {
+      base = `${normalizeSupabaseHost(localConfig.supaHost)}/functions/v1`
+    }
+    else if (options.useFilesHost) {
+      base = localConfig.hostFilesApi
+    }
+    else {
+      base = localConfig.hostApi
+    }
+  }
+
+  const usesFunctionsV1 = base.includes('/functions/v1')
+  const url = `${base.replace(/\/+$/, '')}/${path.replace(/^\//, '')}`
+  try {
+    const response = await fetch(url, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        // Self-host Edge Functions validate the Supabase anon JWT; Capgo cloud uses the API key.
+        'Authorization': usesFunctionsV1 && anonKey ? `Bearer ${anonKey}` : options.apikey,
+        'capgkey': options.apikey,
+      },
+      body: method === 'GET' || method === 'HEAD'
+        ? undefined
+        : (typeof options.body === 'string' ? options.body : JSON.stringify(options.body ?? {})),
+    })
+
+    if (!response.ok) {
+      return {
+        data: null,
+        error: new FunctionsHttpError(response),
+      }
+    }
+
+    const contentType = response.headers.get('content-type') ?? ''
+    const payload = contentType.includes('application/json')
+      ? await response.json().catch(() => null)
+      : await response.text().catch(() => null)
+
+    return { data: payload as T, error: null }
+  }
+  catch (error) {
+    return {
+      data: null,
+      error: error instanceof Error ? error : new Error(String(error)),
+    }
+  }
 }
 
 export async function resolveCapgoPublicApiHost(
   options?: { supaHost?: string, supaAnon?: string },
   silent = true,
 ): Promise<string> {
-  if (options?.supaHost && options?.supaAnon)
+  if (options?.supaHost && options?.supaAnon) {
+    if (isCapgoManagedSupabaseHost(options.supaHost)) {
+      const localConfig = await getLocalConfig(silent)
+      return localConfig.hostApi
+    }
     return `${normalizeSupabaseHost(options.supaHost)}/functions/v1`
+  }
 
   const localConfig = await getLocalConfig(silent)
   if (localConfig.supaHost && localConfig.supaKey)
@@ -777,6 +954,7 @@ export async function createSupabaseClient(apikey: string, supaHost?: string, su
   if (supaHost && supaKey) {
     if (!silent)
       log.info('Using custom supabase instance from provided options')
+    // Mutate only this call's copy — getRemoteConfig returns a shallow clone.
     config.supaHost = supaHost
     config.supaKey = supaKey
   }
@@ -801,6 +979,7 @@ export async function createSupabaseClient(apikey: string, supaHost?: string, su
 }
 
 export async function isPayingOrg(supabase: SupabaseClient<Database>, orgId: string): Promise<boolean> {
+  // Keep calling the stable single-arg RPC — old CLIs depend on this signature.
   const { data } = await supabase
     .rpc('is_paying_org', { orgid: orgId })
     .single()
@@ -808,25 +987,63 @@ export async function isPayingOrg(supabase: SupabaseClient<Database>, orgId: str
 }
 
 export async function isTrialOrg(supabase: SupabaseClient<Database>, orgId: string): Promise<number> {
+  // Keep calling the stable single-arg RPC — old CLIs depend on this signature.
   const { data } = await supabase
     .rpc('is_trial_org', { orgid: orgId })
     .single()
   return data || 0
 }
 
-export async function isAllowedActionOrg(supabase: SupabaseClient<Database>, orgId: string): Promise<boolean> {
+export async function hasOrgUsageCredits(supabase: SupabaseClient<Database>, orgId: string, appId?: string): Promise<boolean> {
+  // New SECURITY DEFINER RPC — do not SELECT orgs.has_usage_credits directly; RLS
+  // can deny app-scoped API keys even when they may upload for that org.
   const { data } = await supabase
-    .rpc('is_allowed_action_org', { orgid: orgId })
+    .rpc('has_usage_credits_org', appId ? { orgid: orgId, appid: appId } : { orgid: orgId })
     .single()
-  return !!data
+  return data || false
 }
 
-export async function isAllowedActionAppIdApiKey(supabase: SupabaseClient<Database>, appId: string, apikey: string): Promise<boolean> {
-  const { data } = await supabase
-    .rpc('is_allowed_action', { apikey, appid: appId })
-    .single()
+/** Trial upgrade nag is for unpaid trial orgs only — skip when paying or using credits. */
+export function shouldWarnTrialExpiry(options: {
+  trialDays: number
+  isPaying: boolean
+  hasCredits: boolean
+  warning?: boolean
+}): boolean {
+  const { trialDays, isPaying, hasCredits, warning = true } = options
+  return !!warning && trialDays > 0 && !isPaying && !hasCredits
+}
 
-  return !!data
+export async function isAllowedActionOrg(supabase: SupabaseClient<Database>, orgId: string): Promise<boolean> {
+  const { data, error } = await supabase
+    .rpc('is_allowed_action_org', { orgid: orgId })
+    .single()
+  if (error)
+    throw new Error(`Cannot validate plan: ${formatError(error)}`)
+
+  return data === true
+}
+
+/** Validate metered plan actions while preserving app-scoped RBAC context when available. */
+export async function isAllowedPlanActions(
+  supabase: SupabaseClient<Database>,
+  orgId: string,
+  actions: Database['public']['Enums']['action_type'][],
+  appId?: string,
+): Promise<boolean> {
+  const { data, error } = appId
+    ? await supabase.rpc('is_allowed_action_org_action', { orgid: orgId, actions, appid: appId })
+    : await supabase.rpc('is_allowed_action_org_action', { orgid: orgId, actions })
+  if (error) {
+    // Older servers may not expose the app-aware overload in PostgREST's
+    // schema cache. Preserve their org-scoped behavior without hiding any
+    // permission, transport, or database errors from supported servers.
+    if (appId && error.code === 'PGRST202')
+      return isAllowedActionOrg(supabase, orgId)
+    throw new Error(`Cannot validate plan: ${formatError(error)}`)
+  }
+
+  return data === true
 }
 
 export async function checkRemoteCliMessages(supabase: SupabaseClient<Database>, orgId: string, cliVersion: string) {
@@ -860,11 +1077,12 @@ export async function checkRemoteCliMessages(supabase: SupabaseClient<Database>,
   }
 }
 
-export async function checkPlanValid(supabase: SupabaseClient<Database>, orgId: string, apikey: string, appId?: string, warning = true) {
+export async function checkPlanValid(supabase: SupabaseClient<Database>, orgId: string, appId?: string, warning = true) {
   const config = await getRemoteConfig()
 
-  // isAllowedActionAppIdApiKey was updated in the orgs_v3 migration to work with the new system
-  const validPlan = await (appId ? isAllowedActionAppIdApiKey(supabase, appId, apikey) : isAllowedActionOrg(supabase, orgId))
+  const validPlan = await (appId
+    ? isAllowedPlanActions(supabase, orgId, ['mau', 'storage', 'bandwidth', 'build_time'], appId)
+    : isAllowedActionOrg(supabase, orgId))
   if (!validPlan) {
     log.error(`You need to upgrade your plan to continue to use capgo.\n Upgrade here: ${config.hostWeb}/settings/organization/plans\n`)
     wait(100)
@@ -873,33 +1091,23 @@ export async function checkPlanValid(supabase: SupabaseClient<Database>, orgId: 
         module.default(`${config.hostWeb}/settings/organization/plans`)
       })
     wait(500)
-    throw new Error('Plan upgrade required')
+    // Needing a plan upgrade is a user-account state, not a CLI crash — opt it
+    // out of error tracking by type while keeping the message and non-zero exit.
+    throw new CliUserError('Plan upgrade required')
   }
-  const [trialDays, ispaying] = await Promise.all([
+  const [trialDays, ispaying, hasCredits] = await Promise.all([
     isTrialOrg(supabase, orgId),
     isPayingOrg(supabase, orgId),
+    hasOrgUsageCredits(supabase, orgId, appId),
   ])
-  if (trialDays > 0 && warning && !ispaying)
+  if (shouldWarnTrialExpiry({ trialDays, isPaying: ispaying, hasCredits, warning }))
     log.warn(`WARNING !!\nTrial expires in ${trialDays} days, upgrade here: ${config.hostWeb}/settings/organization/plans\n`)
 }
 
-export async function checkPlanValidUpload(supabase: SupabaseClient<Database>, orgId: string, apikey: string, appId?: string, warning = true) {
+export async function checkPlanValidUpload(supabase: SupabaseClient<Database>, orgId: string, appId?: string, warning = true) {
   const config = await getRemoteConfig()
 
-  // Pass appid so RBAC evaluates the app scope. Without it,
-  // API keys with app-scoped bindings can be rejected and the org-scope
-  // plan check returns false even when the plan is healthy. PostgREST
-  // routes to the 3-arg overload at runtime; the `as never` cast bypasses
-  // a `supabase gen types` quirk that collapses overloads sharing the
-  // same name (the 3-arg signature exists in the DB but is not emitted
-  // by the generator).
-  const args = { orgid: orgId, actions: ['storage'], appid: appId } as never
-  const { data: validPlan, error: validPlanError } = await supabase.rpc('is_allowed_action_org_action', args)
-  if (validPlanError) {
-    const message = `Cannot validate upload plan: ${formatError(validPlanError)}`
-    log.error(message)
-    throw new Error(message)
-  }
+  const validPlan = await isAllowedPlanActions(supabase, orgId, ['storage'], appId)
   if (!validPlan) {
     log.error(`You need to upgrade your plan to continue to use capgo.\n Upgrade here: ${config.hostWeb}/settings/organization/plans\n`)
     wait(100)
@@ -908,13 +1116,18 @@ export async function checkPlanValidUpload(supabase: SupabaseClient<Database>, o
         module.default(`${config.hostWeb}/settings/organization/plans`)
       })
     wait(500)
-    throw new Error('Plan upgrade required for upload')
+    // Same as `checkPlanValid`: an upgrade prompt is an expected account state,
+    // not a crash — throw a filtered `CliUserError`, keep exit and analytics.
+    throw new CliUserError('Plan upgrade required for upload')
   }
-  const [trialDays, ispaying] = await Promise.all([
+  // Trial/paying stay on the legacy single-arg RPCs for old CLI compatibility.
+  // Credits use the new has_usage_credits_org (with optional appid).
+  const [trialDays, ispaying, hasCredits] = await Promise.all([
     isTrialOrg(supabase, orgId),
     isPayingOrg(supabase, orgId),
+    hasOrgUsageCredits(supabase, orgId, appId),
   ])
-  if (trialDays > 0 && warning && !ispaying)
+  if (shouldWarnTrialExpiry({ trialDays, isPaying: ispaying, hasCredits, warning }))
     log.warn(`WARNING !!\nTrial expires in ${trialDays} days, upgrade here: ${config.hostWeb}/settings/organization/plans\n`)
 }
 
@@ -964,9 +1177,12 @@ export function findSavedKey(quiet = false) {
     key = readFileSync(keyPath, 'utf8').trim()
   }
   if (!key) {
-    const message = `Cannot find API key in local folder or global, please login first with ${getPMAndCommand().runner} @capgo/cli login`
+    // Keep this message static (no interpolated package-manager runner): it is a
+    // CliUserError so error tracking skips it, and a constant string means one
+    // "not logged in" condition renders as one value instead of one per runner.
+    const message = 'Cannot find API key in local folder or global, please login first with `capgo login`'
     log.error(message)
-    throw new Error(message)
+    throw new CliUserError(message)
   }
   return key
 }
@@ -1287,20 +1503,24 @@ export async function updateOrCreateVersion(supabase: SupabaseClient<Database>, 
     .eq('name', update.name)
 }
 
-export async function uploadUrl(supabase: SupabaseClient<Database>, appId: string, name: string): Promise<string> {
+export async function uploadUrl(apikey: string, appId: string, name: string, options?: { supaHost?: string, supaAnon?: string }): Promise<string> {
   const data = {
     app_id: appId,
     name,
     version: 0,
   }
   try {
-    const pathUploadLink = 'files/upload_link'
-    const res = await supabase.functions.invoke(pathUploadLink, { body: JSON.stringify(data) })
+    const res = await invokeCapgoCliApi<{ url?: string }>('files/upload_link', {
+      apikey,
+      body: data,
+      useFilesHost: true,
+      supaHost: options?.supaHost,
+      supaAnon: options?.supaAnon,
+    })
 
     if (res.error) {
-      // Handle error case
       if (res.error instanceof FunctionsHttpError) {
-        const errorBody = await res.error.context.json()
+        const errorBody = await res.error.context.json().catch(() => ({}))
         log.error(`Upload URL error: ${errorBody.status || JSON.stringify(errorBody)}`)
       }
       else {
@@ -1309,7 +1529,7 @@ export async function uploadUrl(supabase: SupabaseClient<Database>, appId: strin
       return ''
     }
 
-    return res.data.url
+    return res.data?.url ?? ''
   }
   catch (error) {
     log.error(`Cannot get upload url ${formatError(error)}`)
@@ -1418,7 +1638,23 @@ export async function zipFileWindows(filePath: string): Promise<Buffer> {
   return zip.toBuffer()
 }
 
-export async function uploadTUS(apikey: string, data: Buffer, orgId: string, appId: string, name: string, spinner: ReturnType<typeof spinnerC>, localConfig: CapgoConfig, chunkSize: number): Promise<boolean> {
+export function appAddHintMessage(appId: string): string {
+  const pm = getPMAndCommand()
+  return `App ${appId} does not exist, run first \`${pm.runner} @capgo/cli app add ${appId}\` to create it`
+}
+
+// The files backend rejects uploads for unknown apps with a `404 app_not_found` body
+// (see supabase/functions/_backend/files/files.ts). Detect it from either a tus
+// DetailedError (which exposes the raw response body) or a generic error message so we
+// can surface the actionable `app add` hint instead of a raw tus error string.
+export function isAppNotFoundError(error: unknown): boolean {
+  const detailed = error as { originalResponse?: { getBody?: () => string } }
+  const responseBody = detailed?.originalResponse?.getBody?.()
+  const message = error instanceof Error ? error.message : String(error ?? '')
+  return `${responseBody ?? ''} ${message}`.includes('app_not_found')
+}
+
+export async function uploadTUS(apikey: string, data: Buffer, orgId: string, appId: string, name: string, spinner: UploadSpinner, localConfig: CapgoConfig, chunkSize: number): Promise<boolean> {
   return new Promise((resolve, reject) => {
     sendEvent(apikey, {
       channel: 'app',
@@ -1450,13 +1686,34 @@ export async function uploadTUS(apikey: string, data: Buffer, orgId: string, app
       // Callback for errors which cannot be fixed using retries
       onError(error) {
         log.error(`Error uploading bundle: ${error.message}`)
+        // Turn the backend's `app_not_found` rejection into the actionable `app add`
+        // hint instead of leaking a raw tus error string to the user.
+        if (isAppNotFoundError(error)) {
+          reject(new Error(appAddHintMessage(appId)))
+          return
+        }
         if (error instanceof tus.DetailedError) {
           const body = error.originalResponse?.getBody()
-          const jsonBody = JSON.parse(body || '{"error": "unknown error"}')
-          reject(jsonBody.status || jsonBody.error || jsonBody.message || 'unknown error')
+          const status = error.originalResponse?.getStatus()
+          const url = error.originalRequest?.getURL()
+
+          // Parse can throw on a non-JSON body (an HTML 502/504 page from a proxy),
+          // so keep it inside the try and fall back to the raw body, then the tus
+          // error message. An empty body used to collapse to the literal
+          // "unknown error" and drop the status, URL, and body on the floor.
+          const errorMsg = (() => {
+            try {
+              const jsonBody = JSON.parse(body || '{"error": "unknown error"}')
+              return jsonBody.status || jsonBody.error || jsonBody.message || 'unknown error'
+            }
+            catch {
+              return body || error.message
+            }
+          })()
+          reject(new Error(`TUS upload failed (status ${status ?? 'unknown'}, url ${url ?? 'unknown'}): ${errorMsg}`))
         }
         else {
-          reject(error.message || error.toString() || 'unknown error')
+          reject(new Error(`TUS upload failed: ${error.message || error.toString()}`))
         }
       },
       // Callback for reporting upload progress
@@ -1486,13 +1743,18 @@ export async function uploadTUS(apikey: string, data: Buffer, orgId: string, app
   })
 }
 
-export async function deletedFailedVersion(supabase: SupabaseClient<Database>, appId: string, name: string): Promise<void> {
+export async function deletedFailedVersion(apikey: string, appId: string, name: string, options?: { supaHost?: string, supaAnon?: string }): Promise<void> {
   const data = {
     app_id: appId,
     name,
   }
-  const pathFailed = 'private/delete_failed_version'
-  const res = await supabase.functions.invoke(pathFailed, { body: JSON.stringify(data), method: 'DELETE' })
+  const res = await invokeCapgoCliApi('private/delete_failed_version', {
+    apikey,
+    method: 'DELETE',
+    body: data,
+    supaHost: options?.supaHost,
+    supaAnon: options?.supaAnon,
+  })
 
   if (res.error) {
     if (res.error instanceof FunctionsHttpError) {
@@ -1514,18 +1776,23 @@ export interface VersionManifestEntry {
  * Prefer this over writing app_versions.manifest jsonb — old CLIs still use that legacy path.
  */
 export async function setVersionManifest(
-  supabase: SupabaseClient<Database>,
+  apikey: string,
   appId: string,
   name: string,
   manifest: VersionManifestEntry[],
+  options?: { supaHost?: string, supaAnon?: string },
 ): Promise<void> {
   const data = {
     app_id: appId,
     name,
     manifest,
   }
-  const pathSetManifest = 'private/set_manifest'
-  const res = await supabase.functions.invoke(pathSetManifest, { body: JSON.stringify(data) })
+  const res = await invokeCapgoCliApi('private/set_manifest', {
+    apikey,
+    body: data,
+    supaHost: options?.supaHost,
+    supaAnon: options?.supaAnon,
+  })
 
   if (res.error) {
     if (res.error instanceof FunctionsHttpError) {
@@ -1719,8 +1986,8 @@ export async function getOrganizationWithPermission(
     : allowedOrganizations[0].gid
 
   if (isCancel(organizationUidRaw)) {
-    log.error('Canceled organization selection, exiting')
-    throw new Error('Organization selection cancelled')
+    log.warn('Canceled organization selection, exiting')
+    throw new CliUserError('Organization selection cancelled')
   }
 
   const organizationUid = organizationUidRaw as string
@@ -1741,10 +2008,15 @@ export async function resolveUserIdFromApiKey(supabase: SupabaseClient<Database>
 
   const userId = (dataUser || '').toString()
 
-  if (!userId || userIdError) {
+  if (userIdError) {
     if (!silent)
-      log.error(`Invalid API key or insufficient permissions.`)
-    throw new Error('Invalid API key or insufficient permissions.')
+      log.error(userIdError.message)
+    throw userIdError
+  }
+  if (!userId) {
+    if (!silent)
+      log.error(`Capgo authentication failed: invalid Capgo API key or insufficient Capgo permissions.`)
+    throw new Error('Capgo authentication failed: invalid Capgo API key or insufficient Capgo permissions.')
   }
   return userId
 }
@@ -1817,8 +2089,9 @@ export async function getOrganizationId(supabase: SupabaseClient<Database>, appI
     .single()
 
   if (!data || error) {
-    log.error(`Cannot get organization id for app id ${appId}`)
-    formatError(error)
+    // Surface the underlying PostgREST cause instead of discarding it — a bare
+    // "Cannot get organization id" leaves both users and triage with no signal.
+    log.error(`Cannot get organization id for app id ${appId}: ${formatError(error)}`)
     throw new Error(`Cannot get organization id for app id ${appId}`)
   }
   return data.owner_org
@@ -1842,6 +2115,13 @@ export function getPMAndCommand() {
   pmFetched = true
   pmRunner = findPackageManagerRunner(dir)
   return { pm, command: pmCommand, installCommand: `${pm} ${pmCommand}`, runner: pmRunner }
+}
+
+export function setPMAndCommand(next: { pm: PackageManagerType, command: InstallCommand, runner: PackageManagerRunner }): void {
+  pm = next.pm
+  pmCommand = next.command
+  pmRunner = next.runner
+  pmFetched = true
 }
 
 export function getNativeProjectResetAdvice(platformRunner: string, nativePlatform: 'ios' | 'android') {
@@ -1988,6 +2268,27 @@ async function calculatePlatformChecksums(dependencyFolderPath: string): Promise
   return { ios_checksum, android_checksum }
 }
 
+// Collect every `node_modules` directory from `startDir` up to the filesystem
+// root. This mirrors the parent-directory walk `getAllPackagesDependencies`
+// uses to resolve versions, so that the existence check validates the same
+// hoisted locations the enumeration reads from. Without this, dependencies
+// hoisted to a monorepo/workspace root read as missing.
+function getHoistedNodeModulesPaths(startDir: string): string[] {
+  const paths: string[] = []
+  let currentDir = startDir
+  const root = path.parse(currentDir).root
+  while (true) {
+    paths.push(join(currentDir, 'node_modules'))
+    if (currentDir === root)
+      break
+    const parentDir = dirname(currentDir)
+    if (parentDir === currentDir)
+      break
+    currentDir = parentDir
+  }
+  return paths
+}
+
 export async function getLocalDependencies(packageJsonPath: string | undefined, nodeModulesString: string | undefined) {
   const nodeModules = nodeModulesString
     ? nodeModulesString
@@ -2021,7 +2322,7 @@ export async function getLocalDependencies(packageJsonPath: string | undefined, 
   }
 
   const nodeModulesPaths = nodeModules.length === 0
-    ? [join(cwd(), 'node_modules')]
+    ? getHoistedNodeModulesPaths(cwd())
     : nodeModules
 
   const anyValidPath = nodeModulesPaths.some(path => existsSync(path))
@@ -2104,7 +2405,7 @@ export async function getLocalDependencies(packageJsonPath: string | undefined, 
         ios_checksum,
         android_checksum,
       }
-    })).catch(() => [])
+    }))
 
   if (anyInvalid || dependenciesObject.some(a => a.native === undefined)) {
     log.error('Missing dependencies or invalid dependencies')
@@ -2233,8 +2534,9 @@ export function getCompatibilityDetails(pkg: Compatibility): CompatibilityDetail
   }
 
   // Check checksum changes (even if versions match, native code could have changed)
-  const iosChanged = pkg.localIosChecksum && pkg.remoteIosChecksum && pkg.localIosChecksum !== pkg.remoteIosChecksum
-  const androidChanged = pkg.localAndroidChecksum && pkg.remoteAndroidChecksum && pkg.localAndroidChecksum !== pkg.remoteAndroidChecksum
+  const hasChecksum = (value: string | undefined) => typeof value === 'string' && value.trim().length > 0
+  const iosChanged = hasChecksum(pkg.localIosChecksum) && hasChecksum(pkg.remoteIosChecksum) && pkg.localIosChecksum !== pkg.remoteIosChecksum
+  const androidChanged = hasChecksum(pkg.localAndroidChecksum) && hasChecksum(pkg.remoteAndroidChecksum) && pkg.localAndroidChecksum !== pkg.remoteAndroidChecksum
 
   if (iosChanged && androidChanged) {
     reasons.push('both_platforms_changed')
@@ -2245,6 +2547,13 @@ export function getCompatibilityDetails(pkg: Compatibility): CompatibilityDetail
   else if (androidChanged) {
     reasons.push('android_code_changed')
   }
+
+  // One-sided platform checksums (CLI old↔new metadata). Still incompatible so a
+  // real same-version native bump is not silently passed; message warns of CLI drift.
+  const iosOneSided = hasChecksum(pkg.localIosChecksum) !== hasChecksum(pkg.remoteIosChecksum)
+  const androidOneSided = hasChecksum(pkg.localAndroidChecksum) !== hasChecksum(pkg.remoteAndroidChecksum)
+  if (iosOneSided || androidOneSided)
+    reasons.push('platform_checksum_metadata_changed')
 
   const messages: string[] = []
   const isIncompatibleReason = (reason: IncompatibilityReason) => reason !== 'requested_version_changed'
@@ -2264,6 +2573,9 @@ export function getCompatibilityDetails(pkg: Compatibility): CompatibilityDetail
         break
       case 'both_platforms_changed':
         messages.push('iOS and Android native code changed')
+        break
+      case 'platform_checksum_metadata_changed':
+        messages.push('iOS/Android checksum metadata appeared or disappeared (may be Capgo CLI change — verify native code)')
         break
       case 'new_plugin':
         messages.push('new plugin (requires app store update)')
@@ -2542,8 +2854,8 @@ export async function promptAndSyncCapacitor(
     if (isInit && orgId && apikey) {
       await markSnag('onboarding-v2', orgId, apikey, 'canceled', undefined, '🤷')
     }
-    log.error('Canceled Capacitor sync')
-    throw new Error('Capacitor sync cancelled')
+    log.warn('Canceled Capacitor sync')
+    throw new CliUserError('Capacitor sync cancelled')
   }
 
   if (shouldSync) {

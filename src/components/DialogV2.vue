@@ -30,7 +30,7 @@ const sizeClasses = {
 }
 
 function getButtonClasses(button: DialogV2Button) {
-  const baseClasses = 'd-btn'
+  const baseClasses = 'd-btn h-auto min-h-12 max-w-full whitespace-normal break-words py-3 text-center'
 
   const roleClasses = {
     primary: 'd-btn-primary',
@@ -71,6 +71,12 @@ function handleButtonClick(button: DialogV2Button, event?: Event) {
   const isModifiedLinkClick = !!(button.href && mouseEvent && (mouseEvent.button !== 0 || hasModifier))
 
   if (isModifiedLinkClick) {
+    close({ ...safeButton, skipNavigation: true })
+    return
+  }
+
+  // Let target=_blank open natively so browsers do not treat it as a blocked popup.
+  if (button.href && button.target === '_blank') {
     close({ ...safeButton, skipNavigation: true })
     return
   }
@@ -158,7 +164,7 @@ onUnmounted(() => {
 
         <!-- Buttons -->
         <div v-if="dialogStore.dialogOptions?.buttons?.length" class="px-6 pb-6">
-          <div class="flex justify-end space-x-2">
+          <div class="flex flex-wrap justify-end gap-2">
             <template v-for="(button, i) in dialogStore.dialogOptions.buttons" :key="i">
               <button
                 v-if="!button.href"

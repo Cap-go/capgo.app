@@ -4,7 +4,7 @@ import { env } from 'node:process'
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { ALLOWED_STATS_ACTIONS } from '../supabase/functions/_backend/plugin_runtime/plugins/stats_actions.ts'
-import { APP_NAME, createAppVersions, getBaseData, getSupabaseClient, getVersionFromAction, headers, ORG_ID, PLUGIN_BASE_URL, resetAndSeedAppData, resetAndSeedAppDataStats, resetAppData, resetAppDataStats, USER_ID } from './test-utils.ts'
+import { APP_NAME, createAppVersions, executeSQL, getBaseData, getSupabaseClient, getVersionFromAction, headers, ORG_ID, PLUGIN_BASE_URL, resetAndSeedAppData, resetAndSeedAppDataStats, resetAppData, resetAppDataStats, USER_ID, warmEdgeEndpoint } from './test-utils.ts'
 
 const id = randomUUID()
 const APP_NAME_STATS = `${APP_NAME}.${id}`
@@ -100,6 +100,15 @@ describe.skipIf(!USE_CLOUDFLARE)('[POST] /stats Cloudflare write guard', () => {
 beforeAll(async () => {
   await resetAndSeedAppData(APP_NAME_STATS)
   await resetAndSeedAppDataStats(APP_NAME_STATS)
+  await warmEdgeEndpoint(`${PLUGIN_BASE_URL}/stats`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      ...getBaseData(APP_NAME_STATS),
+      action: 'get',
+      device_id: randomUUID().toLowerCase(),
+    }),
+  })
 })
 
 afterAll(async () => {
@@ -884,51 +893,52 @@ describe('rollout trigger metadata', () => {
     const appId = `${APP_NAME}.rollout.trigger.${shortId}`
     await resetAndSeedAppData(appId)
     await resetAndSeedAppDataStats(appId)
-    const supabase = getSupabaseClient()
 
     try {
       const stableVersion = await createAppVersions(`1.0.0-stable-${shortId}.1`, appId)
       const rolloutVersion = await createAppVersions(`1.0.0-rollout-${shortId}.1`, appId)
 
-      const { data: channel, error: channelError } = await supabase
-        .from('channels')
-        .insert({
-          app_id: appId,
-          name: `production-${shortId}`,
-          version: stableVersion.id,
-          rollout_version: rolloutVersion.id,
-          rollout_enabled: true,
-          rollout_percentage_bps: 5000,
-          created_by: USER_ID,
-          owner_org: ORG_ID,
-        })
-        .select('id')
-        .single()
-      expect(channelError).toBeNull()
-      expect(channel).toBeTruthy()
+      // Bypass PostgREST/Kong for channel seed writes — under CF shard load Kong
+      // returns "An invalid response was received from the upstream server".
+      const channelRows = await executeSQL<{ id: number }>(
+        `INSERT INTO public.channels (
+           app_id, name, version, rollout_version, rollout_enabled,
+           rollout_percentage_bps, created_by, owner_org
+         ) VALUES (
+           $1, $2, $3::bigint, $4::bigint, true, 5000, $5::uuid, $6::uuid
+         )
+         RETURNING id`,
+        [appId, `production-${shortId}`, stableVersion.id, rolloutVersion.id, USER_ID, ORG_ID],
+      )
+      expect(channelRows[0]?.id).toBeTruthy()
 
       const triggeredAt = new Date().toISOString()
       const reason = `Auto-pause rollback test ${shortId}`
-      await supabase
-        .from('channels')
-        .update({
-          rollout_version: null,
-          rollout_enabled: false,
-          rollout_percentage_bps: 0,
-          rollout_paused_at: null,
-          rollout_pause_reason: reason,
-          auto_pause_last_triggered_at: triggeredAt,
-        })
-        .eq('id', channel!.id)
-        .throwOnError()
+      await executeSQL(
+        `UPDATE public.channels
+         SET rollout_version = NULL,
+             rollout_enabled = false,
+             rollout_percentage_bps = 0,
+             rollout_paused_at = NULL,
+             rollout_pause_reason = $2,
+             auto_pause_last_triggered_at = $3::timestamptz
+         WHERE id = $1::bigint`,
+        [channelRows[0]!.id, reason, triggeredAt],
+      )
 
-      const { data: updatedChannel, error: updatedError } = await supabase
-        .from('channels')
-        .select('rollout_version, rollout_paused_at, rollout_pause_reason, auto_pause_last_triggered_at')
-        .eq('id', channel!.id)
-        .single()
+      const updatedRows = await executeSQL<{
+        rollout_version: number | null
+        rollout_paused_at: string | null
+        rollout_pause_reason: string | null
+        auto_pause_last_triggered_at: string | null
+      }>(
+        `SELECT rollout_version, rollout_paused_at, rollout_pause_reason, auto_pause_last_triggered_at
+         FROM public.channels
+         WHERE id = $1::bigint`,
+        [channelRows[0]!.id],
+      )
+      const updatedChannel = updatedRows[0]
 
-      expect(updatedError).toBeNull()
       expect(updatedChannel?.rollout_version).toBeNull()
       expect(updatedChannel?.rollout_paused_at).toBeNull()
       expect(updatedChannel?.rollout_pause_reason).toBe(reason)
@@ -1189,7 +1199,7 @@ batchTestDescribe('[POST] /stats batch operations', () => {
       device_id: uuid2,
     }
 
-    // Send batch request with non-existent app
+    // Batch keeps HTTP 200 + per-event errors for backward compatibility.
     const response = await postStats([baseData1, baseData2])
     expect(response.status).toBe(200)
 
@@ -1198,7 +1208,6 @@ batchTestDescribe('[POST] /stats batch operations', () => {
     expect(responseData.results).toBeDefined()
     expect(responseData.results).toHaveLength(2)
 
-    // Both events should return on_premise_app error
     expect(responseData.results![0].status).toBe('error')
     expect(responseData.results![0].error).toBe('on_premise_app')
     expect(responseData.results![1].status).toBe('error')

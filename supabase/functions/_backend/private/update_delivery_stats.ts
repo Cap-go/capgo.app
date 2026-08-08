@@ -5,10 +5,11 @@ import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc.js'
 import { Hono } from 'hono/tiny'
-import { readUpdateDeliveryTimingEventsCF } from '../utils/cloudflare.ts'
+import { CacheHelper } from '../utils/cache.ts'
+import { parseStatsDurationMs, readUpdateDeliveryTimingEventsCF, resolveUpdateDeliveryTimingDurationMs } from '../utils/cloudflare.ts'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
-import { cloudlog } from '../utils/logging.ts'
+import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
 import { closeClient, getPgClient, logPgError } from '../utils/pg.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { supabaseAdmin, supabaseClient as useSupabaseClient } from '../utils/supabase.ts'
@@ -18,6 +19,8 @@ dayjs.extend(utc)
 const maxPeriodDays = 365
 const maxDeliveryMs = 7_200_000
 const pairingLookbackMs = 2 * 60 * 60 * 1000
+const UPDATE_DELIVERY_STATS_CACHE_TTL_SECONDS = 300
+const UPDATE_DELIVERY_STATS_CACHE_PATH = '/.update-delivery-stats'
 type UpdateDeliveryPeriodDays = number
 type UpdateDeliveryScope = 'app' | 'org' | 'platform'
 
@@ -252,21 +255,12 @@ function toMetric(value: NumericValue, decimals = 0) {
   return Math.round(numeric * factor) / factor
 }
 
-function parseMetaDurationMs(metadata: Record<string, string> | null | undefined): number | null {
-  if (!metadata)
-    return null
-  for (const key of ['duration_ms', 'duration'] as const) {
-    const raw = metadata[key]
-    if (typeof raw !== 'string' || raw.length === 0 || raw.length > 15)
-      continue
-    if (!/^\d+(?:\.\d+)?$/.test(raw))
-      continue
-    const value = Number(raw)
-    if (!Number.isFinite(value))
-      continue
-    return value
-  }
-  return null
+function parseMetaDurationMs(metadata: Record<string, unknown> | null | undefined): number | null {
+  return parseStatsDurationMs(metadata)
+}
+
+function resolveEventDurationMs(event: UpdateDeliveryTimingEventCF): number | null {
+  return resolveUpdateDeliveryTimingDurationMs(event)
 }
 
 function percentileCont(sorted: number[], q: number): number | null {
@@ -324,7 +318,7 @@ function buildDeliveriesFromEvents(
     if (!Number.isFinite(endMs) || endMs < options.periodStartMs)
       continue
 
-    let durationMs = parseMetaDurationMs(event.metadata)
+    let durationMs = resolveEventDurationMs(event)
     if (!isValidDuration(durationMs) && options.allowPairing) {
       const key = `${event.app_id}\0${event.device_id}\0${event.version_name || 'unknown'}`
       const starts = startsByKey.get(key)
@@ -483,15 +477,31 @@ async function assertPlatformAdmin(c: Context<MiddlewareKeyVariables>) {
 }
 
 async function listOrgAppIds(c: Context<MiddlewareKeyVariables>, orgId: string): Promise<string[]> {
-  const { data, error } = await supabaseAdmin(c)
-    .from('apps')
-    .select('app_id')
-    .eq('owner_org', orgId)
-  if (error) {
-    cloudlog({ requestId: c.get('requestId'), message: 'list_org_app_ids_error', error })
-    throw simpleError('fetch_error', 'Failed to fetch organization apps', { error: String(error) })
+  const limit = 1000
+  let page = 0
+  const appIds: string[] = []
+  while (true) {
+    const { data, error } = await supabaseAdmin(c)
+      .from('apps')
+      .select('app_id')
+      .eq('owner_org', orgId)
+      .range(page * limit, (page + 1) * limit - 1)
+    if (error) {
+      cloudlog({ requestId: c.get('requestId'), message: 'list_org_app_ids_error', error })
+      throw simpleError('fetch_error', 'Failed to fetch organization apps', { error: String(error) })
+    }
+    const rows = data ?? []
+    if (rows.length === 0)
+      break
+    for (const row of rows) {
+      if (typeof row.app_id === 'string' && row.app_id.length > 0)
+        appIds.push(row.app_id)
+    }
+    if (rows.length < limit)
+      break
+    page += 1
   }
-  return (data ?? []).map(row => row.app_id).filter((appId): appId is string => typeof appId === 'string' && appId.length > 0)
+  return appIds
 }
 
 async function readUpdateDeliveryStatsSB(
@@ -615,6 +625,19 @@ async function readUpdateDeliveryStatsCF(
   })
   const { dailyRows, overviewRow } = aggregateDeliverySamples(samples)
 
+  if (overviewRow.samples === 0) {
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'update_delivery_stats CF produced zero samples',
+      scope,
+      event_count: events.length,
+      app_count: appIds?.length ?? null,
+      allow_pairing: allowPairing,
+      start: start.toISOString(),
+      end: endExclusive.toISOString(),
+    })
+  }
+
   return buildUpdateDeliveryResponse({
     labels,
     days,
@@ -632,6 +655,16 @@ async function readUpdateDeliveryStats(
   days: UpdateDeliveryPeriodDays,
   scopeId?: string,
 ) {
+  const cache = new CacheHelper(c)
+  const cacheKey = cache.buildRequest(UPDATE_DELIVERY_STATS_CACHE_PATH, {
+    scope,
+    scopeId: scopeId ?? '',
+    days: String(days),
+  })
+  const cached = await cache.matchJson<ReturnType<typeof buildUpdateDeliveryResponse>>(cacheKey)
+  if (cached)
+    return cached
+
   const endExclusive = dayjs().utc().add(1, 'day').startOf('day')
   const start = endExclusive.subtract(days, 'day')
   const endInclusive = endExclusive.subtract(1, 'millisecond')
@@ -639,19 +672,33 @@ async function readUpdateDeliveryStats(
 
   // Same dual-path pattern as private/stats: Analytics Engine in prod, Postgres locally.
   if (c.env.APP_LOG) {
-    return readUpdateDeliveryStatsCF(
-      c,
-      scope,
-      days,
-      scopeId,
-      labels,
-      start,
-      endExclusive,
-      endInclusive,
-    )
+    try {
+      const cfResponse = await readUpdateDeliveryStatsCF(
+        c,
+        scope,
+        days,
+        scopeId,
+        labels,
+        start,
+        endExclusive,
+        endInclusive,
+      )
+      // Avoid caching empty windows — AE ingest lag or sparse orgs should retry next load.
+      if (cfResponse.overview.samples > 0)
+        await cache.putJson(cacheKey, cfResponse, UPDATE_DELIVERY_STATS_CACHE_TTL_SECONDS)
+      return cfResponse
+    }
+    catch (error) {
+      cloudlogErr({
+        requestId: c.get('requestId'),
+        message: 'CF update delivery stats failed, falling back to Postgres',
+        error: serializeError(error),
+        scope,
+      })
+    }
   }
 
-  return readUpdateDeliveryStatsSB(
+  const pgResponse = await readUpdateDeliveryStatsSB(
     c,
     scope,
     days,
@@ -661,6 +708,9 @@ async function readUpdateDeliveryStats(
     endExclusive,
     endInclusive,
   )
+  if (pgResponse.overview.samples > 0)
+    await cache.putJson(cacheKey, pgResponse, UPDATE_DELIVERY_STATS_CACHE_TTL_SECONDS)
+  return pgResponse
 }
 
 export const app = new Hono<MiddlewareKeyVariables>()
@@ -726,6 +776,7 @@ export const updateDeliveryStatsTestUtils = {
   normalizePeriodDays,
   normalizeScope,
   parseMetaDurationMs,
+  resolveEventDurationMs,
   percentileCont,
   toMetric,
 }

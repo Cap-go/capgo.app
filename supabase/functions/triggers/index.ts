@@ -1,3 +1,4 @@
+import { app as canceled_org_retention_alerts } from '../_backend/triggers/canceled_org_retention_alerts.ts'
 import { app as credit_usage_alerts } from '../_backend/triggers/credit_usage_alerts.ts'
 import { app as credit_usage_posthog } from '../_backend/triggers/credit_usage_posthog.ts'
 import { app as cron_clean_orphan_images } from '../_backend/triggers/cron_clean_orphan_images.ts'
@@ -18,13 +19,14 @@ import { app as on_manifest_create } from '../_backend/triggers/on_manifest_crea
 import { app as on_org_update } from '../_backend/triggers/on_org_update.ts'
 import { app as on_organization_create } from '../_backend/triggers/on_organization_create.ts'
 import { app as on_organization_delete } from '../_backend/triggers/on_organization_delete.ts'
-import { app as pluginNotifications } from '../_backend/triggers/plugin_notifications.ts'
 import { app as on_user_create } from '../_backend/triggers/on_user_create.ts'
 import { app as on_user_delete } from '../_backend/triggers/on_user_delete.ts'
+import { app as on_user_org_access } from '../_backend/triggers/on_user_org_access.ts'
 import { app as on_user_update } from '../_backend/triggers/on_user_update.ts'
 import { app as on_version_create } from '../_backend/triggers/on_version_create.ts'
 import { app as on_version_delete } from '../_backend/triggers/on_version_delete.ts'
 import { app as on_version_update } from '../_backend/triggers/on_version_update.ts'
+import { app as pluginNotifications } from '../_backend/triggers/plugin_notifications.ts'
 import { app as queue_consumer } from '../_backend/triggers/queue_consumer.ts'
 import { app as stripe_event } from '../_backend/triggers/stripe_event.ts'
 import { app as webhook_delivery } from '../_backend/triggers/webhook_delivery.ts'
@@ -53,10 +55,12 @@ appGlobal.route('/logsnag_insights_retention', logsnagInsightsShardApps.retentio
 appGlobal.route('/logsnag_insights_paid_products', logsnagInsightsShardApps.paid_products)
 appGlobal.route('/logsnag_insights_ltv', logsnagInsightsShardApps.ltv)
 appGlobal.route('/logsnag_insights_notifications', logsnagInsightsShardApps.notifications)
+appGlobal.route('/logsnag_insights_native_notifications', logsnagInsightsShardApps.native_notifications)
 appGlobal.route('/on_channel_update', on_channel_update)
 appGlobal.route('/on_user_create', on_user_create)
 appGlobal.route('/on_user_update', on_user_update)
 appGlobal.route('/on_user_delete', on_user_delete)
+appGlobal.route('/on_user_org_access', on_user_org_access)
 appGlobal.route('/on_app_create', on_app_create)
 appGlobal.route('/on_app_delete', on_app_delete)
 appGlobal.route('/on_app_update', on_app_update)
@@ -74,6 +78,7 @@ appGlobal.route('/cron_clear_versions', cron_clear_versions)
 appGlobal.route('/cron_clean_orphan_images', cron_clean_orphan_images)
 appGlobal.route('/cron_reconcile_build_status', cron_reconcile_build_status)
 appGlobal.route('/cron_rollout_auto_pause', cron_rollout_auto_pause)
+appGlobal.route('/canceled_org_retention_alerts', canceled_org_retention_alerts)
 appGlobal.route('/credit_usage_alerts', credit_usage_alerts)
 appGlobal.route('/credit_usage_posthog', credit_usage_posthog)
 appGlobal.route('/on_organization_delete', on_organization_delete)

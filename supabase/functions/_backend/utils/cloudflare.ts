@@ -4,7 +4,7 @@ import type { DeviceComparable } from './deviceComparison.ts'
 import type { StatsInsightRawAction, StatsInsightRawDaily, StatsInsightRawDevice, StatsInsightRawSummary, StatsInsightRawVersion } from './statsInsights.ts'
 import type { Database } from './supabase.types.ts'
 import type { DeviceRes, DeviceWithoutCreatedAt, NativeVersionUsage, ReadDevicesParams, ReadStatsInsightsParams, ReadStatsParams, StatsInsightsResult, StatsMetadata, VersionUsage, VersionUsageChannel } from './types.ts'
-import { CacheHelper } from './cache.ts'
+import { CACHE_PUT_TIMEOUT_MS, CacheHelper } from './cache.ts'
 import { hasComparableDeviceChanged, toComparableDevice } from './deviceComparison.ts'
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
 import { emptyStatsInsights, normalizeStatsInsightsResult } from './statsInsights.ts'
@@ -135,13 +135,11 @@ export async function trackDeviceUsageCF(c: Context, device_id: string, app_id: 
       version_build: normalizedVersionBuild,
     })
 
-    // Check if device/version was already tracked for the current day
-    if (usageCache.available) {
-      const cachedUsage = await usageCache.matchJson<{ t: number }>(usageCacheRequest)
-      if (cachedUsage) {
-        // Device/version already tracked for this day, skip write
-        return
-      }
+    // Always await matchJson (resolves Cache API); .available is sync-racy.
+    const cachedUsage = await usageCache.matchJson<{ t: number }>(usageCacheRequest)
+    if (cachedUsage) {
+      // Device/version already tracked for this day, skip write
+      return
     }
 
     const platformValue = getUsagePlatformValue(normalizedPlatform)
@@ -153,10 +151,8 @@ export async function trackDeviceUsageCF(c: Context, device_id: string, app_id: 
       indexes: [app_id],
     })
 
-    // Cache the write for this native version during the current day
-    if (usageCache.available) {
-      await usageCache.putJson(usageCacheRequest, { t: Date.now() }, TRACK_DEVICE_USAGE_CACHE_MAX_AGE_SECONDS)
-    }
+    // Cache the write for this native version during the current day (put timed out).
+    await usageCache.putJson(usageCacheRequest, { t: Date.now() }, TRACK_DEVICE_USAGE_CACHE_MAX_AGE_SECONDS, { timeoutMs: CACHE_PUT_TIMEOUT_MS })
   }
   catch {
     const platformValue = getUsagePlatformValue(normalizedPlatform)
@@ -195,6 +191,30 @@ export function trackVersionUsageCF(c: Context, version_name: string, app_id: st
   })
 
   return Promise.resolve()
+}
+
+const MAX_STATS_DURATION_MS = 7_200_000
+
+export function parseStatsDurationMs(metadata?: StatsMetadata | Record<string, unknown> | null): number | null {
+  if (!metadata)
+    return null
+  for (const key of ['duration_ms', 'duration'] as const) {
+    const raw = metadata[key]
+    if (typeof raw === 'number') {
+      if (Number.isFinite(raw) && raw >= 0 && raw <= MAX_STATS_DURATION_MS)
+        return raw
+      continue
+    }
+    if (typeof raw !== 'string' || raw.length === 0 || raw.length > 15)
+      continue
+    if (!/^\d+(?:\.\d+)?$/.test(raw))
+      continue
+    const value = Number(raw)
+    if (!Number.isFinite(value) || value < 0 || value > MAX_STATS_DURATION_MS)
+      continue
+    return value
+  }
+  return null
 }
 
 function serializeStatsMetadata(metadata?: StatsMetadata): string {
@@ -244,8 +264,10 @@ export function trackLogsCF(c: Context, app_id: string, device_id: string, actio
   if (!c.env.APP_LOG)
     return Promise.resolve()
 
+  const durationMs = parseStatsDurationMs(metadata)
   c.env.APP_LOG.writeDataPoint({
     blobs: [device_id, action, version_name, serializeStatsMetadata(metadata), ...appLogDimensionBlobs(dimensions)],
+    ...(durationMs !== null ? { doubles: [durationMs] } : {}),
     indexes: [app_id],
   })
 
@@ -256,8 +278,10 @@ export function trackLogsCFExternal(c: Context, app_id: string, device_id: strin
   if (!c.env.APP_LOG_EXTERNAL)
     return Promise.resolve()
 
+  const durationMs = parseStatsDurationMs(metadata)
   c.env.APP_LOG_EXTERNAL.writeDataPoint({
     blobs: [device_id, action, version_name, serializeStatsMetadata(metadata), ...appLogDimensionBlobs(dimensions)],
+    ...(durationMs !== null ? { doubles: [durationMs] } : {}),
     indexes: [app_id],
   })
 
@@ -282,7 +306,9 @@ type DeviceCachePayload = DeviceComparable & {
 }
 
 export async function trackDevicesCF(c: Context, device: DeviceWithoutCreatedAt) {
-  cloudlog({ requestId: c.get('requestId'), message: 'trackDevicesCF', device })
+  // Runs under waitUntil — Cache I/O here stretches Workers Wall Time charts.
+  const start = performance.now()
+  let outcome: 'cache_hit' | 'wrote' | 'error' = 'wrote'
 
   // Analytics Engine DEVICE_INFO is required for tracking devices
   if (!c.env.DEVICE_INFO) {
@@ -296,10 +322,10 @@ export async function trackDevicesCF(c: Context, device: DeviceWithoutCreatedAt)
       app_id: device.app_id,
       device_id: device.device_id,
     })
-    const cachedDevice = trackDeviceCache.available
-      ? await trackDeviceCache.matchJson<DeviceCachePayload>(trackDeviceCacheRequest)
-      : null
+    // Do not gate on helper.available — it is sync-racy before ensureCache resolves.
+    const cachedDevice = await trackDeviceCache.matchJson<DeviceCachePayload>(trackDeviceCacheRequest)
     if (cachedDevice && !hasComparableDeviceChanged(cachedDevice, device)) {
+      outcome = 'cache_hit'
       cloudlog({
         requestId: c.get('requestId'),
         message: 'Cache hit – device unchanged, skipping write',
@@ -313,7 +339,7 @@ export async function trackDevicesCF(c: Context, device: DeviceWithoutCreatedAt)
 
     const comparableDevice = toComparableDevice(device)
 
-    // Write to Analytics Engine - this is the primary store now
+    // Write to Analytics Engine - this is the primary store now (sync; needs no waitUntil)
     cloudlog({ requestId: c.get('requestId'), message: 'Writing to Analytics Engine DEVICE_INFO' })
     // Platform: 0 = android, 1 = ios, 2 = electron
     const platformLower = comparableDevice.platform?.toLowerCase()
@@ -339,19 +365,29 @@ export async function trackDevicesCF(c: Context, device: DeviceWithoutCreatedAt)
       indexes: [device.app_id],
     })
 
-    // Update cache
-    if (trackDeviceCache.available) {
-      const cachePayload: DeviceCachePayload = {
-        ...comparableDevice,
-        app_id: device.app_id,
-        device_id: device.device_id,
-        cached_at: new Date().toISOString(),
-      }
-      await trackDeviceCache.putJson(trackDeviceCacheRequest, cachePayload, TRACK_DEVICE_CACHE_MAX_AGE_SECONDS)
+    const cachePayload: DeviceCachePayload = {
+      ...comparableDevice,
+      app_id: device.app_id,
+      device_id: device.device_id,
+      cached_at: new Date().toISOString(),
     }
+    await trackDeviceCache.putJson(trackDeviceCacheRequest, cachePayload, TRACK_DEVICE_CACHE_MAX_AGE_SECONDS, { timeoutMs: CACHE_PUT_TIMEOUT_MS })
   }
   catch (e) {
+    outcome = 'error'
     cloudlogErr({ requestId: c.get('requestId'), message: 'Error tracking device', error: serializeError(e), device })
+  }
+  finally {
+    const ms = Math.round(performance.now() - start)
+    if (ms >= 20) {
+      cloudlog({
+        requestId: c.get('requestId'),
+        message: 'trackDevicesCF_timing',
+        ms,
+        outcome,
+        app_id: device.app_id,
+      })
+    }
   }
 }
 
@@ -916,6 +952,14 @@ GROUP BY install_source`
   return counts
 }
 
+function platformOsToCFDouble(platform: Database['public']['Enums']['platform_os']): number {
+  if (platform === 'ios')
+    return 1
+  if (platform === 'electron')
+    return 2
+  return 0
+}
+
 export async function countDevicesCF(
   c: Context,
   app_id: string,
@@ -923,12 +967,15 @@ export async function countDevicesCF(
   deviceIds: string[] = [],
   versionName?: string,
   search?: string,
+  options?: {
+    platform?: Database['public']['Enums']['platform_os']
+    updatedAt?: { gt?: string, lte?: string }
+  },
 ) {
   // Use Analytics Engine DEVICE_INFO for counting devices
+  const platform = options?.platform
+  const updatedAt = options?.updatedAt
   const conditions = [`index1 = '${escapeSqlString(app_id)}'`]
-
-  if (customIdMode)
-    conditions.push(`blob5 != ''`)
 
   if (deviceIds.length) {
     if (deviceIds.length === 1)
@@ -937,19 +984,55 @@ export async function countDevicesCF(
       conditions.push(`blob1 IN (${deviceIds.map(id => `'${escapeSqlString(id)}'`).join(', ')})`)
   }
 
-  if (search) {
-    const searchLower = search.toLowerCase()
-    if (deviceIds.length) {
-      conditions.push(`position('${escapeSqlString(searchLower)}' IN toLower(blob5)) > 0`)
-    }
-    else {
-      // Search in device_id, custom_id, or version_name
-      conditions.push(`(position('${escapeSqlString(searchLower)}' IN toLower(blob1)) > 0 OR position('${escapeSqlString(searchLower)}' IN toLower(blob5)) > 0 OR position('${escapeSqlString(searchLower)}' IN toLower(blob2)) > 0)`)
-    }
-  }
+  if (updatedAt?.gt)
+    conditions.push(`timestamp > toDateTime('${escapeSqlString(formatDateCF(updatedAt.gt))}')`)
+  if (updatedAt?.lte)
+    conditions.push(`timestamp <= toDateTime('${escapeSqlString(formatDateCF(updatedAt.lte))}')`)
 
-  if (versionName)
-    conditions.push(`blob2 = '${escapeSqlString(versionName)}'`)
+  // Match latest aggregated fields for current-state filtering (same as Supabase devices table).
+  // customIdMode must use aggregated custom_id so historical non-empty blob5 rows
+  // do not keep devices that later cleared their custom id.
+  if (versionName || platform || search || customIdMode) {
+    const outerConditions: string[] = []
+    if (customIdMode)
+      outerConditions.push(`custom_id != ''`)
+    if (versionName)
+      outerConditions.push(`version_name = '${escapeSqlString(versionName)}'`)
+    if (platform)
+      outerConditions.push(`platform = ${platformOsToCFDouble(platform)}`)
+    if (search) {
+      const searchLower = search.toLowerCase()
+      if (deviceIds.length) {
+        outerConditions.push(`(position('${escapeSqlString(searchLower)}' IN toLower(custom_id)) > 0 OR position('${escapeSqlString(searchLower)}' IN toLower(version_name)) > 0)`)
+      }
+      else {
+        outerConditions.push(`(position('${escapeSqlString(searchLower)}' IN toLower(device_id)) > 0 OR position('${escapeSqlString(searchLower)}' IN toLower(custom_id)) > 0 OR position('${escapeSqlString(searchLower)}' IN toLower(version_name)) > 0)`)
+      }
+    }
+
+    const query = `SELECT COUNT() AS total
+FROM (
+  SELECT
+    argMax(blob1, timestamp) AS device_id,
+    argMax(blob2, timestamp) AS version_name,
+    argMax(blob5, timestamp) AS custom_id,
+    argMax(double1, timestamp) AS platform
+  FROM device_info
+  WHERE ${conditions.join(' AND ')}
+  GROUP BY blob1
+)
+WHERE ${outerConditions.join(' AND ')}`
+
+    cloudlog({ requestId: c.get('requestId'), message: 'countDevicesCF query', query })
+    try {
+      const res = await runQueryToCFA<{ total: number }>(c, query)
+      return res[0]?.total ?? 0
+    }
+    catch (e) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading device count from Analytics Engine', error: serializeError(e), query })
+    }
+    return 0
+  }
 
   const query = `SELECT COUNT(DISTINCT blob1) AS total
 FROM device_info
@@ -1020,22 +1103,64 @@ function buildReadDevicesCFUpdatedAtGtCondition(updatedAtGt: string | undefined)
   const safeUpdatedAtGt = escapeSqlString(formatDateCF(updatedAtGt))
   return `updated_at > toDateTime('${safeUpdatedAtGt}')`
 }
+function buildReadDevicesCFUpdatedAtLteCondition(updatedAtLte: string | undefined) {
+  if (!updatedAtLte)
+    return ''
+  const safeUpdatedAtLte = escapeSqlString(formatDateCF(updatedAtLte))
+  return `updated_at <= toDateTime('${safeUpdatedAtLte}')`
+}
 
-function buildReadDevicesCFOuterConditions(params: ReadDevicesParams, devicesOrder: DevicesOrderCF | null) {
-  const conditions = [
+function buildReadDevicesCFCustomIdsCondition(customIds: string[] | undefined) {
+  if (!customIds?.length)
+    return ''
+
+  if (customIds.length === 1)
+    return `custom_id = '${escapeSqlString(customIds[0])}'`
+
+  const customIdsList = customIds.map(id => `'${escapeSqlString(id)}'`).join(', ')
+  return `custom_id IN (${customIdsList})`
+}
+
+function buildReadDevicesCFPlatformCondition(platform: ReadDevicesParams['platform']) {
+  if (!platform)
+    return ''
+  return `platform = ${platformOsToCFDouble(platform)}`
+}
+
+function buildReadDevicesCFVersionNameCondition(versionName: ReadDevicesParams['version_name']) {
+  if (!versionName)
+    return ''
+  return `version_name = '${escapeSqlString(versionName)}'`
+}
+
+function buildReadDevicesCFSearchCondition(search: string | undefined, deviceIds: string[] | undefined) {
+  if (!search)
+    return undefined
+  const searchLower = search.toLowerCase()
+  if (deviceIds?.length) {
+    return `(position('${escapeSqlString(searchLower)}' IN toLower(custom_id)) > 0 OR position('${escapeSqlString(searchLower)}' IN toLower(version_name)) > 0)`
+  }
+  return `(position('${escapeSqlString(searchLower)}' IN toLower(device_id)) > 0 OR position('${escapeSqlString(searchLower)}' IN toLower(custom_id)) > 0 OR position('${escapeSqlString(searchLower)}' IN toLower(version_name)) > 0)`
+}
+
+function buildReadDevicesCFOuterConditions(params: ReadDevicesParams, devicesOrder: DevicesOrderCF | null, customIdMode: boolean) {
+  return [
     buildReadDevicesCFCursorCondition(params.cursor, devicesOrder),
     buildReadDevicesCFUpdatedAtGtCondition(params.updated_at_gt),
-  ]
-  return conditions.filter(Boolean)
+    buildReadDevicesCFUpdatedAtLteCondition(params.updated_at_lte),
+    // Match the latest aggregated custom_id, not historical event rows.
+    customIdMode ? `custom_id != ''` : undefined,
+    buildReadDevicesCFCustomIdsCondition(params.customIds),
+    // Match the latest aggregated platform/version/search, not historical event rows.
+    buildReadDevicesCFPlatformCondition(params.platform),
+    buildReadDevicesCFVersionNameCondition(params.version_name),
+    buildReadDevicesCFSearchCondition(params.search, params.deviceIds),
+  ].filter((condition): condition is string => Boolean(condition))
 }
 
 export function buildReadDevicesCFQuery(params: ReadDevicesParams, customIdMode: boolean) {
   const limit = normalizeAnalyticsLimit(params.limit)
   const conditions: string[] = [`index1 = '${escapeSqlString(params.app_id)}'`]
-
-  if (customIdMode) {
-    conditions.push(`blob5 != ''`)
-  }
 
   if (params.deviceIds?.length) {
     if (params.deviceIds.length === 1) {
@@ -1047,27 +1172,18 @@ export function buildReadDevicesCFQuery(params: ReadDevicesParams, customIdMode:
     }
   }
 
-  if (params.search) {
-    const searchLower = params.search.toLowerCase()
-    if (params.deviceIds?.length) {
-      conditions.push(`position('${escapeSqlString(searchLower)}' IN toLower(blob5)) > 0`)
-    }
-    else {
-      conditions.push(`(position('${escapeSqlString(searchLower)}' IN toLower(blob1)) > 0 OR position('${escapeSqlString(searchLower)}' IN toLower(blob5)) > 0 OR position('${escapeSqlString(searchLower)}' IN toLower(blob2)) > 0)`)
-    }
-  }
-
-  if (params.version_name) {
-    conditions.push(`blob2 = '${escapeSqlString(params.version_name)}'`)
-  }
-
   if (params.updated_at_gt) {
     const safeUpdatedAtGt = escapeSqlString(formatDateCF(params.updated_at_gt))
     conditions.push(`timestamp > toDateTime('${safeUpdatedAtGt}')`)
   }
 
+  if (params.updated_at_lte) {
+    const safeUpdatedAtLte = escapeSqlString(formatDateCF(params.updated_at_lte))
+    conditions.push(`timestamp <= toDateTime('${safeUpdatedAtLte}')`)
+  }
+
   const devicesOrder = getReadDevicesCFOrder(params)
-  const outerConditions = buildReadDevicesCFOuterConditions(params, devicesOrder)
+  const outerConditions = buildReadDevicesCFOuterConditions(params, devicesOrder, customIdMode)
   const includeCountryCode = !!params.deviceIds?.length
   const outerFilter = outerConditions.length ? `WHERE ${outerConditions.join(' AND ')}` : ''
   let orderBy = 'device_id ASC'
@@ -1274,7 +1390,16 @@ export interface UpdateDeliveryTimingEventCF {
   action: string
   version_name: string
   metadata: StatsMetadata | null
+  /** Duration from Analytics Engine double1 when plugins report timing. */
+  duration_ms: number | null
   created_at: string
+}
+
+/** Prefer AE double1, then stats metadata duration fields. */
+export function resolveUpdateDeliveryTimingDurationMs(event: UpdateDeliveryTimingEventCF): number | null {
+  if (typeof event.duration_ms === 'number' && Number.isFinite(event.duration_ms) && event.duration_ms > 0 && event.duration_ms <= MAX_STATS_DURATION_MS)
+    return event.duration_ms
+  return parseStatsDurationMs(event.metadata)
 }
 
 export interface ReadUpdateDeliveryTimingEventsCFParams {
@@ -1303,6 +1428,7 @@ export function buildUpdateDeliveryTimingEventsCFQuery(params: ReadUpdateDeliver
   blob2 AS action,
   blob3 AS version_name,
   blob4 AS metadata,
+  double1 AS duration_ms,
   timestamp AS created_at
 FROM app_log
 WHERE
@@ -1310,7 +1436,6 @@ WHERE
   AND timestamp < toDateTime('${formatDateCF(params.end_date)}')
   AND blob2 IN (${actionsList})
   ${appFilter}
-GROUP BY app_id, device_id, action, version_name, metadata, created_at
 ORDER BY created_at ASC
 LIMIT ${limit}`
 }
@@ -1338,23 +1463,27 @@ export async function readUpdateDeliveryTimingEventsCF(
       action: string
       version_name: string
       metadata: string | null
+      duration_ms: number | string | null
       created_at: string
     }>(c, query)
-    return rows.map(row => ({
-      app_id: row.app_id,
-      device_id: row.device_id,
-      action: row.action,
-      version_name: row.version_name || 'unknown',
-      metadata: parseStatsMetadata(row.metadata),
-      created_at: row.created_at,
-    }))
+    return rows.map((row) => {
+      const rawDuration = Number(row.duration_ms)
+      return {
+        app_id: row.app_id,
+        device_id: row.device_id,
+        action: row.action,
+        version_name: row.version_name || 'unknown',
+        metadata: parseStatsMetadata(row.metadata),
+        duration_ms: Number.isFinite(rawDuration) && rawDuration > 0 ? rawDuration : null,
+        created_at: row.created_at,
+      }
+    })
   }
   catch (e) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading update delivery timing events', error: serializeError(e), query })
     throw e
   }
 }
-
 
 export interface NativeObservePluginVersionCF {
   plugin_version: string

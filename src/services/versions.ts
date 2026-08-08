@@ -63,10 +63,21 @@ export async function openVersion(app: Database['public']['Tables']['app_version
   const { t } = i18n.global
 
   let signedURL
-  if (app.r2_path)
-    signedURL = await downloadUrl(app.storage_provider, app.user_id ?? '', app.app_id, app.id)
-  else
+  if (app.r2_path) {
+    try {
+      signedURL = await downloadUrl(app.storage_provider, app.user_id ?? '', app.app_id, app.id)
+    }
+    catch (error) {
+      // Transient network failures throw out of `downloadUrl`; surface them in
+      // the same toast used for the empty-URL case instead of dead-ending.
+      console.error('Error', error)
+      toast.error(t('cannot-get-the-test-'))
+      return
+    }
+  }
+  else {
     signedURL = app.external_url
+  }
 
   if (!signedURL) {
     toast.error(t('cannot-get-the-test-'))

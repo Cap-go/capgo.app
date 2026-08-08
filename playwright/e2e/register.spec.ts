@@ -23,6 +23,9 @@ test.describe('Registration', () => {
     const uniqueSuffix = Date.now()
     const email = `no-org-e2e-${uniqueSuffix}@example.com`
     const appName = `No Org App ${uniqueSuffix}`
+    const editedAppName = `Renamed App ${uniqueSuffix}`
+    const finalAppName = `Final App ${uniqueSuffix}`
+    const organizationName = `Manual Org ${uniqueSuffix}`
 
     await page.fill('[data-test="email"]', email)
     await page.fill('[data-test="first_name"]', 'No')
@@ -41,7 +44,16 @@ test.describe('Registration', () => {
 
     await expectProtectedRouteRedirect(page, '/apps', /\/onboarding\/app/, '[data-test="onboarding-logout"]')
 
-    await page.click('[data-test="onboarding-mode-app-name"]')
+    await expect(page.locator('[data-test="onboarding-org-name"]')).toHaveValue(appName)
+    await page.getByRole('button', { name: 'Back', exact: true }).click()
+    await page.fill('[data-test="app-onboarding-name"]', editedAppName)
+    await page.click('[data-test="app-onboarding-continue"]')
+    await expect(page.locator('[data-test="onboarding-org-name"]')).toHaveValue(editedAppName)
+    await page.fill('[data-test="onboarding-org-name"]', organizationName)
+    await page.getByRole('button', { name: 'Back', exact: true }).click()
+    await page.fill('[data-test="app-onboarding-name"]', finalAppName)
+    await page.click('[data-test="app-onboarding-continue"]')
+    await expect(page.locator('[data-test="onboarding-org-name"]')).toHaveValue(organizationName)
     await expect(page.locator('[data-test="onboarding-create-org"]')).toBeEnabled()
     await page.click('[data-test="onboarding-create-org"]')
 

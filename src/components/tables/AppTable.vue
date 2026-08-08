@@ -15,10 +15,14 @@ const props = defineProps<{
   apps: (Database['public']['Tables']['apps']['Row'])[]
   deleteButton: boolean
   total?: number
+  /** Fixed page size for server-side pagination controls */
+  offset?: number
   currentPage?: number
   search?: string
   serverSidePagination?: boolean
   isLoading?: boolean
+  addDisabled?: boolean
+  addTooltip?: string
 }>()
 const emit = defineEmits([
   'addApp',
@@ -211,7 +215,7 @@ const columns = ref<TableColumn[]>([
 ])
 
 function openSettings(app: Database['public']['Tables']['apps']['Row']) {
-  router.push(`/app/${app.app_id}/info`)
+  router.push(`/app/${app.app_id}/settings`)
 }
 
 function openPackage(app: Database['public']['Tables']['apps']['Row']) {
@@ -307,7 +311,10 @@ const filteredApps = computed(() => {
         v-model:current-page="internalCurrentPage"
         v-model:search="internalSearch"
         :show-add="!isMobile"
+        :add-disabled="props.addDisabled"
+        :add-tooltip="props.addTooltip"
         :total="props.total ?? filteredApps.length"
+        :offset="props.offset"
         :element-list="filteredApps"
         :search-placeholder="t('search-by-name-or-app-id')"
         :is-loading="props.isLoading ?? false"

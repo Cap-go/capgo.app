@@ -34,7 +34,21 @@ archive_path="$tmp_dir/$asset_name"
 extract_path="$tmp_dir/extract"
 asset_url="https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/${asset_name}"
 
-curl -fsSL "$asset_url" -o "$archive_path"
+download_attempts=5
+download_ok=0
+for attempt in $(seq 1 "$download_attempts"); do
+  if curl --retry 3 --retry-delay 2 --retry-all-errors -fsSL "$asset_url" -o "$archive_path"; then
+    download_ok=1
+    break
+  fi
+  echo "Bun download failed (attempt ${attempt}/${download_attempts}), retrying..." >&2
+  sleep $((attempt * 2))
+done
+
+if [ "$download_ok" -ne 1 ]; then
+  echo "Failed to download Bun from $asset_url after ${download_attempts} attempts" >&2
+  exit 1
+fi
 
 if command -v shasum >/dev/null 2>&1; then
   echo "$asset_sha256  $archive_path" | shasum -a 256 -c -

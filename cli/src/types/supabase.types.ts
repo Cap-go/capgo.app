@@ -1036,7 +1036,6 @@ export type Database = {
           created_at: string
           description: string | null
           enabled: boolean
-          healthcheck_url: string | null
           hour_interval: number | null
           id: number
           minute_interval: number | null
@@ -1057,7 +1056,6 @@ export type Database = {
           created_at?: string
           description?: string | null
           enabled?: boolean
-          healthcheck_url?: string | null
           hour_interval?: number | null
           id?: number
           minute_interval?: number | null
@@ -1078,7 +1076,6 @@ export type Database = {
           created_at?: string
           description?: string | null
           enabled?: boolean
-          healthcheck_url?: string | null
           hour_interval?: number | null
           id?: number
           minute_interval?: number | null
@@ -1530,6 +1527,7 @@ export type Database = {
           versions_created: number
           apps_with_cli_onboarding_builds_24h: number
           apps_with_manual_builds_24h: number
+          apps_with_preview: number
           apps_active: number | null
           average_ltv: number
           build_avg_seconds_day_android: number
@@ -1623,6 +1621,7 @@ export type Database = {
           versions_created?: number
           apps_with_cli_onboarding_builds_24h?: number
           apps_with_manual_builds_24h?: number
+          apps_with_preview?: number
           apps_active?: number | null
           average_ltv?: number
           build_avg_seconds_day_android?: number
@@ -1716,6 +1715,7 @@ export type Database = {
           versions_created?: number
           apps_with_cli_onboarding_builds_24h?: number
           apps_with_manual_builds_24h?: number
+          apps_with_preview?: number
           apps_active?: number | null
           average_ltv?: number
           build_avg_seconds_day_android?: number
@@ -4212,6 +4212,9 @@ export type Database = {
         | { Args: never; Returns: boolean }
         | { Args: { user_id: string }; Returns: boolean }
       has_seeded_demo_data: { Args: { p_app_id: string }; Returns: boolean }
+      has_usage_credits_org:
+        | { Args: { orgid: string }; Returns: boolean }
+        | { Args: { appid: string; orgid: string }; Returns: boolean }
       internal_request_db_user_names: { Args: never; Returns: string[] }
       internal_request_role_names: { Args: never; Returns: string[] }
       invite_user_to_org_rbac: {
@@ -4362,14 +4365,6 @@ export type Database = {
             Args: { batch_size?: number; queue_names: string[] }
             Returns: undefined
           }
-      process_queue_with_healthcheck: {
-        Args: {
-          batch_size: number
-          healthcheck_url: string
-          queue_names: string[]
-        }
-        Returns: undefined
-      }
       process_stats_email_monthly: { Args: never; Returns: undefined }
       process_stats_email_weekly: { Args: never; Returns: undefined }
       process_subscribed_orgs: { Args: never; Returns: undefined }

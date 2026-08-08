@@ -1,6 +1,7 @@
 // src/build/prescan/report.ts
 import { env, stdout } from 'node:process'
 import type { Finding, PrescanReport, Severity } from './types'
+import { formatEnforcementDeadline, informationOnlyFindings, isFindingEnforced } from './enforcement'
 
 const ORDER: Severity[] = ['error', 'warning', 'info']
 const BADGE: Record<Severity, string> = { error: '✖ ERROR', warning: '⚠ WARN ', info: 'ℹ INFO ' }
@@ -18,8 +19,9 @@ function colorEnabledByDefault(): boolean {
   return Boolean(stdout.isTTY) && !env.NO_COLOR
 }
 
-export function renderTerminalReport(report: PrescanReport, opts: { verbose?: boolean, color?: boolean } = {}): string {
+export function renderTerminalReport(report: PrescanReport, opts: { verbose?: boolean, color?: boolean, now?: Date, ignoreFatal?: boolean } = {}): string {
   const enabled = opts.color ?? colorEnabledByDefault()
+  const now = opts.now ?? new Date()
   // Wrap whole semantic units only (badge / id / detail / fix / summary) so substring
   // matching on the plain text still works when color is on.
   const paint = (codes: string, text: string): string => (enabled ? `${codes}${text}${ANSI.reset}` : text)
@@ -27,13 +29,23 @@ export function renderTerminalReport(report: PrescanReport, opts: { verbose?: bo
   const lines: string[] = []
   for (const sev of ORDER) {
     for (const f of report.findings.filter(x => x.severity === sev)) {
-      lines.push(`${paint(SEVERITY_CODES[sev], BADGE[sev])}  ${f.title}  ${paint(ANSI.dim, `[${f.id}]`)}`)
+      const informationOnly = !isFindingEnforced(f, now)
+      const badge = informationOnly
+        ? (sev === 'error' ? '✖ CRITICAL — INFORMATION ONLY' : `${BADGE[sev].trim()} — INFORMATION ONLY`)
+        : BADGE[sev]
+      lines.push(`${paint(SEVERITY_CODES[sev], badge)}  ${f.title}  ${paint(ANSI.dim, `[${f.id}]`)}`)
       if (f.detail)
         lines.push(paint(ANSI.dim, `         ${f.detail}`))
       if (f.fix)
         lines.push(paint(ANSI.dim, `         fix: ${f.fix}`))
       if (f.docsUrl)
         lines.push(paint(ANSI.dim, `         docs: ${f.docsUrl}`))
+      if (informationOnly && f.enforceAfter && !(opts.ignoreFatal && sev === 'error')) {
+        const impact = sev === 'error'
+          ? 'this critical finding is information only now and will fail builds'
+          : 'this finding is information only now and can affect build outcomes'
+        lines.push(paint(ANSI.dim, `         rollout: ${impact} starting ${formatEnforcementDeadline(f.enforceAfter)}`))
+      }
     }
   }
 
@@ -43,6 +55,10 @@ export function renderTerminalReport(report: PrescanReport, opts: { verbose?: bo
   // Tint the summary by worst severity so the headline matches the badges above.
   const summaryCodes = error > 0 ? ANSI.red : warning > 0 ? ANSI.yellow : ANSI.dim
   lines.push(paint(summaryCodes, summary))
+  const deferred = informationOnlyFindings(report, now)
+    .filter(finding => !(opts.ignoreFatal && finding.severity === 'error'))
+  if (deferred.length > 0)
+    lines.push(paint(ANSI.dim, `rollout: ${deferred.length} finding(s) are information only until their enforcement deadline`))
   if (opts.verbose)
     lines.push(paint(ANSI.dim, `remote checks skipped: ${report.skippedRemote}`))
   return lines.join('\n')
@@ -57,6 +73,8 @@ export function renderJsonReport(report: PrescanReport): string {
       out.fix = f.fix
     if (f.docsUrl)
       out.docsUrl = f.docsUrl
+    if (f.enforceAfter)
+      out.enforceAfter = f.enforceAfter
     return out
   })
   return JSON.stringify({ version: 1, counts: report.counts, checksRun: report.checksRun, durationMs: report.durationMs, skippedRemote: report.skippedRemote, findings }, null, 2)

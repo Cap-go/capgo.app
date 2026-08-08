@@ -3,8 +3,8 @@ import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { BentoTrackingPayload } from '../utils/tracking.ts'
 import { Hono } from 'hono/tiny'
-import { BUILDER_RECOVERY_MILESTONES, buildBuilderOnboardingBentoEvent } from '../utils/builder_onboarding_recovery.ts'
-import { BUNDLE_INCOMPATIBLE_EVENT, buildBundleCompatibilityBentoEvent } from '../utils/bundle_compatibility_recovery.ts'
+import { buildBuilderOnboardingBentoEvent, BUILDER_RECOVERY_MILESTONES } from '../utils/builder_onboarding_recovery.ts'
+import { buildBundleCompatibilityBentoEvent, BUNDLE_INCOMPATIBLE_EVENT } from '../utils/bundle_compatibility_recovery.ts'
 import { BRES, parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
 import { cloudlog } from '../utils/logging.ts'
@@ -12,7 +12,7 @@ import { trackPosthogEvent } from '../utils/posthog.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { broadcastCLIEvent } from '../utils/realtime_broadcast.ts'
 import { supabaseWithAuth } from '../utils/supabase.ts'
-import { sendEventToTracking } from '../utils/tracking.ts'
+import { addAuthenticatedApiKeyIdToTrackingPayload, sendEventToTracking } from '../utils/tracking.ts'
 import { backgroundTask } from '../utils/utils.ts'
 
 // PostHog event recording whether the org-member incompatibility email was sent
@@ -238,8 +238,9 @@ async function buildBuilderBentoEvent(
     !onboardingOrgId || !appId
     || trackedBody.event !== 'Builder Onboarding Step'
     || !builderStep || !BUILDER_RECOVERY_MILESTONES.has(builderStep)
-  )
+  ) {
     return undefined
+  }
 
   const [orgResult, appResult] = await Promise.all([
     supabase.from('orgs').select('id, name').eq('id', onboardingOrgId).single(),
@@ -289,6 +290,7 @@ async function buildBundleIncompatibleBentoEvent(
     updateStrategy = channelRow?.disable_auto_update ?? null
   }
   const skippedForMetadata = updateStrategy === 'version_number'
+  const apikeyId = c.get('apikey')?.id
 
   await backgroundTask(c, trackPosthogEvent(c, {
     event: BUNDLE_INCOMPATIBLE_EMAIL_EVENT,
@@ -302,6 +304,7 @@ async function buildBundleIncompatibleBentoEvent(
       app_id: appId,
       ...(incompatibleChannel ? { channel_name: incompatibleChannel } : {}),
     },
+    nonPersonTags: apikeyId === undefined ? undefined : { apikey_id: apikeyId },
   }))
 
   if (skippedForMetadata)
@@ -395,12 +398,13 @@ app.post('/', middlewareAuth(), async (c) => {
 
   // Exactly one of these is ever set (distinct event names); `??` picks the active one.
   const bentoEvent = onboardingBentoEvent ?? builderBentoEvent ?? bundleIncompatibleBentoEvent
-  await sendEventToTracking(c, {
+  const apikeyId = c.get('apikey')?.id
+  await sendEventToTracking(c, addAuthenticatedApiKeyIdToTrackingPayload({
     ...trackedBody,
     bento: bentoEvent,
     sentToBento: Boolean(bentoEvent),
     groups: verifiedOrgId ? { organization: verifiedOrgId } : undefined,
-  })
+  }, apikeyId))
 
   return c.json(BRES)
 })

@@ -2,16 +2,18 @@
 import { Capacitor } from '@capacitor/core'
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import { logAsUser } from '~/services/logAs'
 import { isSpoofed, unspoofUser } from '~/services/supabase'
 import { openSupport } from '~/services/support'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
+import { allowOnboardingDashboardExploration } from '~/utils/onboardingRedirect'
 
 const { t } = useI18n()
 const router = useRouter()
+const route = useRoute()
 const main = useMainStore()
 const dialogStore = useDialogV2Store()
 const isMobile = ref(Capacitor.isNativePlatform())
@@ -28,6 +30,12 @@ const acronym = computed(() => {
 const isLoading = ref(false)
 const spoofed = ref(isSpoofed())
 const logAsInput = ref('')
+
+function allowPendingOnboardingDashboardExploration() {
+  const resumeAppId = typeof route.query.resume === 'string' ? route.query.resume : null
+  if (route.path === '/app/new' && resumeAppId)
+    allowOnboardingDashboardExploration(main.user?.id ?? main.auth?.id, resumeAppId)
+}
 
 async function openLogAsDialog() {
   let identifier = ''
@@ -126,7 +134,7 @@ async function logOut() {
             </p>
           </div>
         </div>
-        <router-link to="/settings/account" class="block py-2 px-3 rounded-lg hover:bg-slate-700/50">
+        <router-link to="/settings/account" class="block py-2 px-3 rounded-lg hover:bg-slate-700/50" @click="allowPendingOnboardingDashboardExploration">
           {{ t('settings') }}
         </router-link>
         <router-link v-if="isMobile" to="/app/modules" class="block py-2 px-3 rounded-lg hover:bg-slate-700/50">

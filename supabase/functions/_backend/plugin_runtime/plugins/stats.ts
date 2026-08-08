@@ -15,6 +15,7 @@ import { createStatsMau, createStatsVersion, onPremStats, sendStatsAndDevice } f
 import { statsRequestSchema } from '../utils/plugin_validation.ts'
 import { getClientIP } from '../utils/rate_limit.ts'
 import { backgroundTask, INVALID_STRING_APP_ID, isLimited, MISSING_STRING_APP_ID, reverseDomainRegex } from '../utils/utils.ts'
+import { onPremiseAppResponse } from '../utils/rateLimitInfo.ts'
 
 const PLAN_ERROR = 'Cannot send stats, upgrade plan to continue to update'
 const DOWNLOAD_FAIL_FIXED_PLUGIN_VERSION = parse('7.17.0')
@@ -291,7 +292,7 @@ app.post('/', async (c) => {
     return typeof v === 'string' && v.trim() !== ''
   })
 
-  const pgClient = getPgClient(c, !hasCustomId)
+  const pgClient = await getPgClient(c, !hasCustomId)
   const drizzleClient = getDrizzleClient(pgClient!, { logger: false })
 
   try {
@@ -303,13 +304,13 @@ app.post('/', async (c) => {
         return result.response
       }
       if (result.isOnprem) {
-        return c.json({ error: 'on_premise_app', message: 'On-premise app detected' }, 429)
+        return onPremiseAppResponse(c)
       }
       if (result.success) {
         return c.json(BRES)
       }
       if (result.error === 'need_plan_upgrade') {
-        return c.json({ error: 'on_premise_app', message: 'On-premise app detected' }, 429)
+        return onPremiseAppResponse(c)
       }
       return simpleError200(c, result.error!, result.message!, result.moreInfo)
     }
@@ -337,6 +338,8 @@ app.post('/', async (c) => {
         }
 
         if (result.isOnprem) {
+          // Keep batch HTTP 200 + per-event results for backward compatibility.
+          // Single-event path still returns onPremiseAppResponse (429 + headers).
           results.push({
             status: 'error',
             error: 'on_premise_app',
@@ -348,7 +351,7 @@ app.post('/', async (c) => {
           results.push({ status: 'ok', index: i })
         }
         else if (result.error === 'need_plan_upgrade') {
-          return c.json({ error: 'on_premise_app', message: 'On-premise app detected' }, 429)
+          return onPremiseAppResponse(c)
         }
         else {
           results.push({

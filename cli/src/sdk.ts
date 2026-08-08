@@ -76,6 +76,7 @@ import { setOrganizationInternal } from './organization/set'
 import { getUserIdInternal } from './user/account'
 import { createSupabaseClient, findSavedKey, getConfig, getLocalConfig } from './utils'
 import { parseSecurityPolicyError } from './utils/security_policy_errors'
+import { normalizeAutoBumpInput } from './versionHelpers'
 
 export type DoctorInfo = Awaited<ReturnType<typeof getInfoInternal>>
 type CompatibilityReport = Awaited<ReturnType<typeof checkCompatibilityInternal>>['finalCompatibility']
@@ -556,6 +557,7 @@ export class CapgoSDK {
           minUpdateVersion: options.minUpdateVersion,
           autoMinUpdateVersion: options.autoMinUpdateVersion,
           autoSetBundle: options.autoSetBundle,
+          autoBump: normalizeAutoBumpInput(options.autoBump),
           selfAssign: options.selfAssign,
           packageJson: options.packageJsonPaths,
           ignoreMetadataCheck: options.ignoreCompatibilityCheck,
@@ -759,6 +761,8 @@ export class CapgoSDK {
         // pass CLI flags, so expose the gate controls directly.
         prescan: options.prescan,
         prescanIgnoreFatal: options.prescanIgnoreFatal,
+        prescanSkip: options.prescanSkip,
+        prescanWarn: options.prescanWarn,
       }
 
       const result = await requestBuildInternal(options.appId, internalOptions, true)

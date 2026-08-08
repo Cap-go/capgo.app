@@ -34,6 +34,7 @@ export async function buildScanContext(args: BuildScanContextArgs): Promise<Scan
   return {
     appId,
     platform: args.platform,
+    hostPlatform: process.platform,
     projectDir: args.projectDir,
     config,
     credentials,

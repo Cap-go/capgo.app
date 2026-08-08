@@ -59,6 +59,7 @@ import { renderMarkdown } from '../ai/render-markdown'
 import { createStreamingMarkdownRenderer } from '../ai/stream-markdown'
 import { aiAnalysisResultFromPostAnalyze, trackAiAnalysisChoice, trackAiAnalysisResult } from '../ai/telemetry'
 import { type SupportBundleFiles, writeSupportBundleFiles } from '../onboarding-support.js'
+import { CliUserError } from '../shared/cli-user-error'
 import { copyToClipboard, revealInFinder } from '../support/clipboard.js'
 import { contactSupport } from '../support/contact-support.js'
 import { appendInternalLog, getInternalLogPath, startInternalLog } from '../support/internal-log.js'
@@ -129,8 +130,10 @@ export async function resolveBuildPlatform(
   }
 
   const selectedPlatform = await promptPlatform()
-  if (clackIsCancel(selectedPlatform))
-    throw new Error('Build request canceled.')
+  if (clackIsCancel(selectedPlatform)) {
+    clackLog.warn('Build request canceled.')
+    throw new CliUserError('Build request canceled.')
+  }
 
   if (selectedPlatform !== 'ios' && selectedPlatform !== 'android')
     throw new Error('Build request canceled.')
@@ -1840,7 +1843,13 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
     // the dashboard + skewed "Build requested" telemetry).
     if (options.prescan === true) {
       const { executePrescan, runPrescanGate } = await import('./prescan/command')
-      const { decision: gateDecision, report: gateReport, crashed: gateCrashed } = await runPrescanGate(
+      const { enforcedCounts } = await import('./prescan/enforcement')
+      const {
+        decision: gateDecision,
+        report: gateReport,
+        crashed: gateCrashed,
+        informationOnlyFindings: gateInformationOnlyFindings,
+      } = await runPrescanGate(
         {
           enabled: true,
           ignoreFatal: options.prescanIgnoreFatal,
@@ -1864,6 +1873,8 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
           credentials: mergedCredentials as Record<string, string>,
           androidFlavor: options.androidFlavor,
           iosDist: options.iosDistribution,
+          skip: options.prescanSkip,
+          warn: options.prescanWarn,
           supaHost: options.supaHost,
           supaAnon: options.supaAnon,
         })).report,
@@ -1873,13 +1884,18 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
       // funnel — run volume, block rate, and which checks fire — not just blocks.
       {
         const pc = gateReport?.counts
+        const ec = gateReport ? enforcedCounts(gateReport) : undefined
         const prescanResult = gateCrashed
           ? 'crashed'
           : !pc
               ? 'skipped'
-              : pc.error > 0
-                  ? (options.prescanIgnoreFatal ? 'bypassed' : 'blocked')
-                  : pc.warning > 0 ? (options.failOnWarnings ? 'blocked' : 'warned') : 'clean'
+              : gateDecision === 'block'
+                ? 'blocked'
+                : options.prescanIgnoreFatal && (ec?.error ?? pc.error) > 0
+                  ? 'bypassed'
+                  : gateInformationOnlyFindings > 0
+                    ? 'information-only'
+                    : (ec?.warning ?? pc.warning) > 0 ? 'warned' : 'clean'
         await sendEvent(options.apikey, {
           channel: 'native-builder',
           event: 'Prescan run',
@@ -1895,6 +1911,7 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
             'warnings': String(pc?.warning ?? 0),
             'finding-ids': gateReport ? gateReport.findings.filter(finding => finding.severity !== 'info').map(finding => finding.id).join(',').slice(0, 200) : '',
             'bypassed': String(prescanResult === 'bypassed'),
+            'information-only-findings': String(gateInformationOnlyFindings),
           },
           notify: false,
         }).catch(() => {})
@@ -1912,7 +1929,7 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
     // This hard assert still runs when prescan is skipped (--no-prescan) or bypassed
     // (--prescan-ignore-fatal), so permission is always enforced before the POST.
     await assertCliPermission(supabase, options.apikey, 'app.build_native', { appId }, {
-      message: `Insufficient permissions to request a native build for app ${appId}`,
+      message: `Capgo rejected this API key: missing app.build_native permission for app ${appId}.`,
       silent,
     })
 
@@ -1937,7 +1954,13 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
     if (!response.ok) {
       const errorText = await response.text()
       await throwIfBuildPlanLimitError(response.status, errorText, 'request', log)
-      throw new Error(`Failed to request build: ${response.status} - ${errorText}`)
+      const isCapgoAuth = response.status === 401 || response.status === 403
+        || /invalid_apikey|unauthorized|no_key_provided|invalid_jwt|no_jwt/i.test(errorText)
+      throw new Error(
+        isCapgoAuth
+          ? `Capgo rejected the build request (HTTP ${response.status}): ${errorText}`
+          : `Capgo build request failed (HTTP ${response.status}): ${errorText}`,
+      )
     }
 
     const buildRequest = await response.json() as {

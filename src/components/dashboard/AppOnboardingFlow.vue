@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import type { Database } from '~/types/supabase.types'
-import { FormKit } from '@formkit/vue'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
@@ -15,7 +14,6 @@ import IconGlobe from '~icons/lucide/globe-2'
 import IconLayers from '~icons/lucide/layers'
 import IconLoader from '~icons/lucide/loader-2'
 import IconPackage from '~icons/lucide/package'
-import IconPencil from '~icons/lucide/pencil-line'
 import IconRefresh from '~icons/lucide/refresh-cw'
 import IconSmartphone from '~icons/lucide/smartphone'
 import IconSparkles from '~icons/lucide/sparkles'
@@ -23,6 +21,7 @@ import IconStore from '~icons/lucide/store'
 import IconTerminal from '~icons/lucide/terminal'
 import IconUsers from '~icons/lucide/users-round'
 import { createDefaultApiKey, findUsablePlainApiKey } from '~/services/apikeys'
+import { getCapgoApiErrorCode, invokeCapgoApi } from '~/services/capgoApi'
 import { pushEvent } from '~/services/posthog'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
 import { getLocalConfig, isLocal, useSupabase } from '~/services/supabase'
@@ -38,7 +37,9 @@ import {
   clearOnboardingAppDraft,
   loadOnboardingAppDraft,
 } from '~/utils/onboardingAppDraft'
+import { allowOnboardingDashboardExploration } from '~/utils/onboardingRedirect'
 import { slugifyOnboardingSegment } from '~/utils/onboardingSlug'
+import AppOnboardingIconInput from './AppOnboardingIconInput.vue'
 
 const props = defineProps<{
   onboarding: boolean
@@ -58,7 +59,6 @@ const config = getLocalConfig()
 type AppRow = Database['public']['Tables']['apps']['Row']
 type StandardFlowStep = 'details' | 'choice' | 'install' | 'setup'
 type PreOrgFlowStep = 'intent' | 'details' | 'organization' | 'setup'
-type OrgOnboardingMode = 'app-name' | 'name' | null
 
 interface UserCountStop {
   value: number
@@ -75,6 +75,11 @@ const isCliCommandVisible = ref(false)
 const apiKey = ref<string | null>(null)
 const createdApp = ref<AppRow | null>(null)
 const flowStep = ref<StandardFlowStep | PreOrgFlowStep>('details')
+const showLanguageSelector = computed(() => (
+  (props.preOrg && !createdApp.value)
+  || (flowStep.value === 'setup' && Boolean(createdApp.value))
+  || (!props.preOrg && flowStep.value === 'install' && Boolean(createdApp.value))
+))
 const selectedIconFile = ref<File | null>(null)
 const localIconPreview = ref('')
 const storeIconPreview = ref('')
@@ -89,8 +94,8 @@ const appIdSuggestions = ref<string[]>([])
 const appIdFeedback = ref('')
 const hasEditedAppId = ref(false)
 const selectedIntent = ref<string | null>(null)
-const orgMode = ref<OrgOnboardingMode>(null)
 const orgNameInput = ref('')
+const hasEditedOrgName = ref(false)
 const estimatedUsersIndex = ref<number | null>(null)
 
 const intentOptions = [
@@ -112,7 +117,10 @@ const localCommand = isLocal(config.supaHost) ? ` --supa-host ${config.supaHost}
 const usesBuilderSetupCommand = computed(() => selectedIntent.value === 'builder')
 const cliSubcommand = computed(() => usesBuilderSetupCommand.value ? 'build init' : 'i')
 const cliCommand = computed(() => {
-  const key = apiKey.value ?? '[APIKEY]'
+  const key = apiKey.value
+  if (!key)
+    return ''
+
   if (usesBuilderSetupCommand.value)
     return `npx @capgo/cli@latest build init -a ${key}${localCommand}`
 
@@ -127,8 +135,8 @@ const redactedCliCommand = computed(() => {
 const cliCommandArgs = computed(() => {
   const args: string[] = []
 
-  if (usesBuilderSetupCommand.value)
-    args.push('-a', apiKey.value ?? '[APIKEY]')
+  if (usesBuilderSetupCommand.value && apiKey.value)
+    args.push('-a', apiKey.value)
 
   if (isLocal(config.supaHost))
     args.push('--supa-host', config.supaHost, '--supa-anon', config.supaKey)
@@ -214,9 +222,8 @@ const userCountStops = computed<UserCountStop[]>(() => {
   return planStops.length === planNameOrder.length ? planStops : fallbackUserCountStops
 })
 const selectedUserCountStop = computed<UserCountStop | null>(() => estimatedUsersIndex.value === null ? null : userCountStops.value[Math.min(estimatedUsersIndex.value, userCountStops.value.length - 1)] ?? null)
-const canShowOrgDetails = computed(() => orgMode.value !== null)
 const canCreatePreOrgOrganization = computed(() => {
-  if (!orgMode.value || !orgNameInput.value.trim())
+  if (!orgNameInput.value.trim())
     return false
   if (existingApp.value === true)
     return selectedUserCountStop.value !== null
@@ -390,13 +397,6 @@ async function loadResumeApp() {
   if (resumeStep.value === 'setup') {
     flowStep.value = 'setup'
     hydrateIntentFromCurrentOrg()
-    try {
-      await ensureApiKey()
-    }
-    catch (error) {
-      console.error('Cannot ensure API key', error)
-      toast.error(t('app-onboarding-toast-apikey-error'))
-    }
   }
   else {
     flowStep.value = resumeStep.value === 'choice' ? 'choice' : 'install'
@@ -412,7 +412,7 @@ async function importStoreMetadata() {
   const requestedRun = ++storeImportRun
   isImportingStore.value = true
   try {
-    const { data, error } = await supabase.functions.invoke('app/store-metadata', {
+    const { data, error } = await invokeCapgoApi('app/store-metadata', {
       method: 'POST',
       body: { url: requestedUrl },
     })
@@ -601,9 +601,6 @@ function continuePreOrgDetails() {
   if (!ensureValidAppId())
     return
 
-  if (!orgMode.value)
-    orgMode.value = 'app-name'
-
   flowStep.value = 'organization'
 }
 
@@ -613,12 +610,12 @@ async function createOrganizationAndApp() {
     return
   }
 
-  if (!canCreatePreOrgOrganization.value) {
-    toast.error(t('organization-onboarding-mode-required'))
+  const orgName = orgNameInput.value.trim()
+  if (!orgName) {
+    toast.error(t('org-name-required'))
     return
   }
 
-  const orgName = orgNameInput.value.trim()
   const estimatedMau = existingApp.value === true
     ? selectedUserCountStop.value?.value
     : userCountStops.value[0]?.value
@@ -630,7 +627,7 @@ async function createOrganizationAndApp() {
 
   isSubmitting.value = true
   try {
-    const { data, error } = await supabase.functions.invoke('organization', {
+    const { data, error } = await invokeCapgoApi('organization', {
       method: 'POST',
       body: {
         name: orgName,
@@ -642,7 +639,8 @@ async function createOrganizationAndApp() {
 
     if (error || !data?.id) {
       console.error('Error creating organization during unified onboarding', error)
-      toast.error(error?.code === '23505'
+      const errorCode = await getCapgoApiErrorCode(error)
+      toast.error(errorCode === '23505'
         ? t('org-with-this-name-exists')
         : t('cannot-create-org'))
       return
@@ -796,7 +794,7 @@ async function seedDemoData() {
 
   isSeedingDemo.value = true
   try {
-    const { data, error } = await supabase.functions.invoke('app/demo', {
+    const { data, error } = await invokeCapgoApi('app/demo', {
       method: 'POST',
       body: {
         owner_org: currentOrg.value.gid,
@@ -808,7 +806,7 @@ async function seedDemoData() {
       throw error
     }
 
-    router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}?tour=1&refresh=true`)
+    router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}?refresh=true`)
   }
   catch (error) {
     console.error('Cannot seed demo data', error)
@@ -841,6 +839,9 @@ async function copyText(text: string) {
 }
 
 async function copyCliCommand() {
+  if (!apiKey.value)
+    return
+
   await copyText(cliCommand.value)
 }
 
@@ -857,6 +858,7 @@ function openDashboard() {
   if (!createdApp.value)
     return
 
+  allowOnboardingDashboardExploration(onboardingUserId.value, createdApp.value.app_id)
   router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}`)
 }
 
@@ -872,16 +874,14 @@ onMounted(async () => {
     await organizationStore.awaitInitialLoad()
     await main.awaitInitialLoad()
 
-    try {
-      await ensureApiKey()
-    }
-    catch (error) {
-      console.error('Cannot ensure API key', error)
-      toast.error(t('app-onboarding-toast-apikey-error'))
-    }
     const resumed = await loadResumeApp()
     if (!resumed)
       flowStep.value = 'details'
+
+    void ensureApiKey().catch((error) => {
+      console.error('Cannot ensure API key', error)
+      toast.error(t('app-onboarding-toast-apikey-error'))
+    })
   }
   finally {
     isLoading.value = false
@@ -904,16 +904,6 @@ watch(existingApp, (value) => {
   appIdFeedback.value = ''
 })
 
-watch(orgMode, (value) => {
-  if (value === 'app-name')
-    orgNameInput.value = appName.value.trim()
-})
-
-watch(appName, (value) => {
-  if (orgMode.value === 'app-name')
-    orgNameInput.value = value.trim()
-})
-
 watch(existingAppSetup, (value) => {
   if (value === 'manual')
     resetStoreImportState()
@@ -922,6 +912,11 @@ watch(existingAppSetup, (value) => {
 watch(suggestedAppId, (value) => {
   if (!hasEditedAppId.value && !createdApp.value)
     manualAppId.value = value
+}, { immediate: true })
+
+watch(appName, (value) => {
+  if (!hasEditedOrgName.value)
+    orgNameInput.value = value.trim()
 }, { immediate: true })
 </script>
 
@@ -1191,13 +1186,8 @@ watch(suggestedAppId, (value) => {
                 </div>
 
                 <div>
-                  <FormKit
-                    type="file"
+                  <AppOnboardingIconInput
                     :label="t('app-onboarding-icon-label')"
-                    accept="image/*"
-                    outer-class="mt-0"
-                    label-class="text-sm font-medium text-slate-800 dark:text-slate-200"
-                    input-class="mt-2 block w-full min-h-11 text-sm text-slate-600 file:mr-3 file:min-h-9 file:rounded-lg file:border-0 file:bg-slate-100 file:px-3 file:text-sm file:font-medium file:text-slate-700 dark:text-slate-300 dark:file:bg-slate-800 dark:file:text-slate-200"
                     @update:model-value="onSelectIconFormKit"
                   />
                   <p class="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">
@@ -1250,25 +1240,29 @@ watch(suggestedAppId, (value) => {
                       {{ t('app-onboarding-command-hide') }}
                     </button>
                   </div>
-                  <div
-                    class="group relative cursor-pointer rounded-xl bg-slate-950 p-4 pr-14 ring-1 ring-white/10 transition hover:ring-white/20"
-                    role="button"
-                    tabindex="0"
+                  <button
+                    v-if="apiKey"
+                    type="button"
+                    class="d-btn group relative h-auto min-h-0 w-full justify-start whitespace-normal rounded-xl border-0 bg-slate-950 p-4 pr-14 text-left font-normal ring-1 ring-white/10 transition hover:bg-slate-950 hover:ring-white/20"
                     :aria-label="t('app-onboarding-command-copy')"
                     @click="copyCliCommand"
-                    @keydown.enter.prevent="copyCliCommand"
-                    @keydown.space.prevent="copyCliCommand"
                   >
                     <code class="block whitespace-pre-wrap break-all text-sm">
                       <span class="text-slate-500">npx</span>
                       <span class="text-sky-300"> @capgo/cli@latest</span>
-                      <span class="mr-1 font-bold text-violet-300"> {{ cliSubcommand }}</span>
-                      <span class="text-emerald-300"> {{ apiKey ?? '[APIKEY]' }}</span>
+                      <span class="font-bold text-violet-300">&nbsp;{{ cliSubcommand }}</span>
+                      <span v-if="!usesBuilderSetupCommand" class="text-emerald-300">&nbsp;{{ apiKey }}</span>
                       <template v-for="(arg, index) in cliCommandArgs" :key="`${arg}-${index}`">
                         <span :class="index % 2 === 0 ? 'text-amber-300' : 'text-cyan-300'"> {{ arg }}</span>
                       </template>
                     </code>
                     <IconCopy class="absolute right-4 top-4 h-5 w-5 text-muted-blue-300 transition group-hover:text-white" />
+                  </button>
+                  <div v-else class="rounded-xl bg-slate-950 p-4 pr-14 ring-1 ring-white/10" role="status">
+                    <div class="flex min-h-6 items-center gap-3 text-sm text-slate-300">
+                      <Spinner size="w-5 h-5" />
+                      <span>{{ t('app-onboarding-command-apikey-loading') }}</span>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1283,181 +1277,145 @@ watch(suggestedAppId, (value) => {
                 {{ t('unified-onboarding-step-organization') }}
               </p>
               <h2 class="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
-                {{ t('organization-onboarding-question') }}
+                {{ t('unified-onboarding-organization-title') }}
               </h2>
+              <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                {{ t('unified-onboarding-organization-helper') }}
+              </p>
             </div>
 
-            <div class="grid gap-3 sm:grid-cols-2">
-              <button
-                type="button"
-                class="group flex min-h-24 items-start gap-3 rounded-xl border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900"
-                :class="whiteCardToggleButtonClass(orgMode === 'app-name')"
-                data-test="onboarding-mode-app-name"
-                @click="orgMode = 'app-name'"
+            <div>
+              <label for="onboarding-org-name-input" class="text-sm font-medium text-slate-800 dark:text-slate-200">
+                {{ t('organization-name') }}
+              </label>
+              <input
+                id="onboarding-org-name-input"
+                v-model="orgNameInput"
+                type="text"
+                :placeholder="t('organization-name')"
+                data-test="onboarding-org-name"
+                autocomplete="organization"
+                autofocus
+                class="d-input mt-2 min-h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-base text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/10 sm:text-sm dark:border-white/20 dark:bg-slate-950/90 dark:text-white dark:placeholder:text-slate-500 dark:focus:border-primary-500 dark:focus:ring-primary-500/30"
+                @input="hasEditedOrgName = true"
               >
-                <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-500 text-white">
-                  <IconSmartphone class="h-5 w-5" />
-                </span>
-                <span class="min-w-0 flex-1">
-                  <span class="block text-base font-semibold">{{ t('organization-onboarding-mode-app-name', { name: appName || t('app-onboarding-preview-placeholder') }) }}</span>
-                  <span class="mt-1 block text-sm leading-6 text-slate-500 dark:text-slate-400">
-                    {{ t('organization-onboarding-mode-app-name-helper') }}
-                  </span>
-                </span>
-                <IconCheck v-if="orgMode === 'app-name'" class="h-5 w-5 shrink-0 text-primary-500" />
-              </button>
-              <button
-                type="button"
-                class="group flex min-h-24 items-start gap-3 rounded-xl border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900"
-                :class="whiteCardToggleButtonClass(orgMode === 'name')"
-                data-test="onboarding-mode-name"
-                @click="orgMode = 'name'"
-              >
-                <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-900 text-white dark:bg-white dark:text-slate-950">
-                  <IconPencil class="h-5 w-5" />
-                </span>
-                <span class="min-w-0 flex-1">
-                  <span class="block text-base font-semibold">{{ t('organization-onboarding-mode-name') }}</span>
-                  <span class="mt-1 block text-sm leading-6 text-slate-500 dark:text-slate-400">
-                    {{ t('organization-onboarding-mode-name-helper') }}
-                  </span>
-                </span>
-                <IconCheck v-if="orgMode === 'name'" class="h-5 w-5 shrink-0 text-primary-500" />
-              </button>
             </div>
 
-            <template v-if="canShowOrgDetails">
-              <div>
-                <label for="onboarding-org-name-input" class="text-sm font-medium text-slate-800 dark:text-slate-200">
-                  {{ t('organization-name') }}
-                </label>
-                <input
-                  id="onboarding-org-name-input"
-                  v-model="orgNameInput"
-                  type="text"
-                  :placeholder="t('organization-name')"
-                  data-test="onboarding-org-name"
-                  class="mt-2 min-h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-base text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/10 sm:text-sm dark:border-white/20 dark:bg-slate-950/90 dark:text-white dark:placeholder:text-slate-500 dark:focus:border-primary-500 dark:focus:ring-primary-500/30"
-                >
-              </div>
+            <div v-if="existingApp === true">
+              <p id="estimated-users-label" class="flex items-center gap-2 text-sm font-medium text-slate-800 dark:text-slate-200">
+                <IconUsers class="h-4 w-4 text-primary-500" />
+                {{ t('organization-onboarding-existing-users-label') }}
+              </p>
+              <p id="estimated-users-help" class="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
+                {{ t('organization-onboarding-existing-users-helper') }}
+              </p>
 
-              <div v-if="existingApp === true">
-                <p id="estimated-users-label" class="flex items-center gap-2 text-sm font-medium text-slate-800 dark:text-slate-200">
-                  <IconUsers class="h-4 w-4 text-primary-500" />
-                  {{ t('organization-onboarding-existing-users-label') }}
-                </p>
-                <p id="estimated-users-help" class="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
-                  {{ t('organization-onboarding-existing-users-helper') }}
-                </p>
-
-                <div
-                  id="estimated-users"
-                  class="mt-3 grid gap-2 sm:grid-cols-2"
-                  role="radiogroup"
-                  aria-labelledby="estimated-users-label"
-                  aria-describedby="estimated-users-help"
-                  data-test="onboarding-estimated-users"
+              <div
+                id="estimated-users"
+                class="mt-3 grid gap-2 sm:grid-cols-2"
+                role="radiogroup"
+                aria-labelledby="estimated-users-label"
+                aria-describedby="estimated-users-help"
+                data-test="onboarding-estimated-users"
+              >
+                <label
+                  v-for="(stop, index) in userCountStops"
+                  :key="`${stop.planName}-${stop.value}`"
+                  class="group cursor-pointer"
+                  :data-value="stop.value"
+                  data-test="onboarding-estimated-users-option"
                 >
-                  <label
-                    v-for="(stop, index) in userCountStops"
-                    :key="`${stop.planName}-${stop.value}`"
-                    class="group cursor-pointer"
-                    :data-value="stop.value"
-                    data-test="onboarding-estimated-users-option"
+                  <input
+                    type="radio"
+                    name="estimated-users"
+                    class="peer sr-only"
+                    :value="index"
+                    :checked="isUserCountStopSelected(index)"
+                    @change="selectUserCountStop(index)"
                   >
-                    <input
-                      type="radio"
-                      name="estimated-users"
-                      class="peer sr-only"
-                      :value="index"
-                      :checked="isUserCountStopSelected(index)"
-                      @change="selectUserCountStop(index)"
-                    >
-                    <span
-                      class="flex min-h-16 items-center justify-between gap-3 rounded-xl border p-3 text-left transition peer-focus-visible:outline-none peer-focus-visible:ring-2 peer-focus-visible:ring-primary-500 peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-white dark:peer-focus-visible:ring-offset-slate-900"
-                      :class="isUserCountStopSelected(index)
-                        ? 'border-primary-500 bg-slate-100 text-slate-950 ring-2 ring-primary-500/15 dark:border-primary-500/80 dark:bg-primary-500/25 dark:text-white dark:ring-primary-500/30'
-                        : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50 dark:border-white/15 dark:bg-slate-950/90 dark:text-slate-200 dark:hover:border-white/30 dark:hover:bg-slate-900'"
-                    >
-                      <span class="min-w-0">
-                        <span class="block text-sm font-semibold">
-                          {{ getUserCountStopTitle(stop) }}
-                        </span>
-                        <span class="mt-1 block text-xs text-slate-500 dark:text-slate-400">
-                          {{ t('organization-onboarding-plan-match') }}: {{ stop.planName }}
-                        </span>
+                  <span
+                    class="flex min-h-16 items-center justify-between gap-3 rounded-xl border p-3 text-left transition peer-focus-visible:outline-none peer-focus-visible:ring-2 peer-focus-visible:ring-primary-500 peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-white dark:peer-focus-visible:ring-offset-slate-900"
+                    :class="isUserCountStopSelected(index)
+                      ? 'border-primary-500 bg-slate-100 text-slate-950 ring-2 ring-primary-500/15 dark:border-primary-500/80 dark:bg-primary-500/25 dark:text-white dark:ring-primary-500/30'
+                      : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50 dark:border-white/15 dark:bg-slate-950/90 dark:text-slate-200 dark:hover:border-white/30 dark:hover:bg-slate-900'"
+                  >
+                    <span class="min-w-0">
+                      <span class="block text-sm font-semibold">
+                        {{ getUserCountStopTitle(stop) }}
                       </span>
-                      <span
-                        class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border transition"
-                        :class="isUserCountStopSelected(index) ? 'border-primary-500 bg-primary-500 text-white' : 'border-slate-300 bg-white text-transparent group-hover:border-slate-400 dark:border-white/20 dark:bg-slate-900'"
-                        aria-hidden="true"
-                      >
-                        <IconCheck class="h-3.5 w-3.5" />
+                      <span class="mt-1 block text-xs text-slate-500 dark:text-slate-400">
+                        {{ t('organization-onboarding-plan-match') }}: {{ stop.planName }}
                       </span>
                     </span>
-                  </label>
-                </div>
+                    <span
+                      class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border transition"
+                      :class="isUserCountStopSelected(index) ? 'border-primary-500 bg-primary-500 text-white' : 'border-slate-300 bg-white text-transparent group-hover:border-slate-400 dark:border-white/20 dark:bg-slate-900'"
+                      aria-hidden="true"
+                    >
+                      <IconCheck class="h-3.5 w-3.5" />
+                    </span>
+                  </span>
+                </label>
               </div>
+            </div>
 
-              <div class="flex flex-col-reverse gap-3 border-t border-slate-200 pt-6 sm:flex-row sm:items-center sm:justify-between dark:border-white/15">
-                <button type="button" class="d-btn min-h-12" :class="whiteCardSecondaryButtonClass()" @click="flowStep = 'details'">
-                  {{ t('button-back') }}
-                </button>
-                <button
-                  type="button"
-                  class="d-btn min-h-12"
-                  :class="whiteCardPrimaryButtonClass()"
-                  data-test="onboarding-create-org"
-                  :disabled="!canCreatePreOrgOrganization || isSubmitting"
-                  @click="createOrganizationAndApp()"
-                >
-                  <IconLoader v-if="isSubmitting" class="h-4 w-4 animate-spin" />
-                  <span v-else>{{ t('unified-onboarding-continue-organization') }}</span>
-                  <IconArrowRight v-if="!isSubmitting" class="h-4 w-4" />
-                </button>
-              </div>
-            </template>
+            <div class="flex flex-col-reverse gap-3 border-t border-slate-200 pt-6 sm:flex-row sm:items-center sm:justify-between dark:border-white/15">
+              <button type="button" class="d-btn min-h-12" :class="whiteCardSecondaryButtonClass()" @click="flowStep = 'details'">
+                {{ t('button-back') }}
+              </button>
+              <button
+                type="button"
+                class="d-btn min-h-12"
+                :class="whiteCardPrimaryButtonClass()"
+                data-test="onboarding-create-org"
+                :disabled="!canCreatePreOrgOrganization || isSubmitting"
+                @click="createOrganizationAndApp()"
+              >
+                <IconLoader v-if="isSubmitting" class="h-4 w-4 animate-spin" />
+                <span v-else>{{ t('unified-onboarding-continue-organization') }}</span>
+                <IconArrowRight v-if="!isSubmitting" class="h-4 w-4" />
+              </button>
+            </div>
           </div>
         </div>
 
         <div v-else-if="flowStep === 'setup' && createdApp" class="space-y-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900/95">
-          <div class="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <p class="text-sm font-semibold text-primary-500 dark:text-slate-300">
-                {{ t('unified-onboarding-step-setup') }}
-              </p>
-              <h2 class="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
-                {{ setupTitle }}
-              </h2>
-              <p class="mt-2 max-w-2xl text-sm leading-6 text-slate-600 dark:text-slate-300">
-                {{ setupSubtitle }}
-              </p>
-            </div>
-            <button class="d-btn min-h-11" :class="whiteCardSecondaryButtonClass()" @click="openDashboard">
-              {{ t('app-onboarding-open-dashboard') }}
-            </button>
+          <div>
+            <p class="text-sm font-semibold text-primary-500 dark:text-slate-300">
+              {{ t('unified-onboarding-step-setup') }}
+            </p>
+            <h2 class="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
+              {{ setupTitle }}
+            </h2>
+            <p class="mt-2 max-w-2xl text-sm leading-6 text-slate-600 dark:text-slate-300">
+              {{ setupSubtitle }}
+            </p>
           </div>
 
-          <div
-            class="group relative cursor-pointer rounded-2xl bg-slate-950 p-5 pr-14 ring-1 ring-white/10 transition hover:ring-white/20"
-            role="button"
-            tabindex="0"
+          <button
+            v-if="apiKey"
+            type="button"
+            class="d-btn group relative h-auto min-h-0 w-full justify-start whitespace-normal rounded-2xl border-0 bg-slate-950 p-5 pr-14 text-left font-normal ring-1 ring-white/10 transition hover:bg-slate-950 hover:ring-white/20"
             data-test="app-onboarding-command-copy"
             :aria-label="t('app-onboarding-command-copy')"
             @click="copyCliCommand"
-            @keydown.enter.prevent="copyCliCommand"
-            @keydown.space.prevent="copyCliCommand"
           >
             <code class="block whitespace-pre-wrap break-all text-sm">
               <span class="text-slate-500">npx</span>
               <span class="text-sky-300"> @capgo/cli@latest</span>
-              <span class="mr-1 font-bold text-violet-300"> {{ cliSubcommand }}</span>
-              <span class="text-emerald-300"> {{ apiKey ?? '[APIKEY]' }}</span>
+              <span class="font-bold text-violet-300">&nbsp;{{ cliSubcommand }}</span>
+              <span v-if="!usesBuilderSetupCommand" class="text-emerald-300">&nbsp;{{ apiKey }}</span>
               <template v-for="(arg, index) in cliCommandArgs" :key="`${arg}-${index}`">
                 <span :class="index % 2 === 0 ? 'text-amber-300' : 'text-cyan-300'"> {{ arg }}</span>
               </template>
             </code>
             <IconCopy class="absolute right-4 top-4 h-5 w-5 text-muted-blue-300 transition group-hover:text-white" />
+          </button>
+          <div v-else class="rounded-2xl bg-slate-950 p-5 pr-14 ring-1 ring-white/10" role="status">
+            <div class="flex min-h-6 items-center gap-3 text-sm text-slate-300">
+              <Spinner size="w-5 h-5" />
+              <span>{{ t('app-onboarding-command-apikey-loading') }}</span>
+            </div>
           </div>
 
           <div class="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-sm text-slate-700 dark:border-white/15 dark:bg-slate-950/90 dark:text-slate-200">
@@ -1478,9 +1436,12 @@ watch(suggestedAppId, (value) => {
           </div>
 
           <div class="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-end">
-            <button class="d-btn min-h-11" :class="whiteCardPrimaryButtonClass()" @click="openDashboard">
-              {{ t('app-onboarding-install-later') }}
-              <IconArrowRight class="h-4 w-4" />
+            <button class="d-btn min-h-11" :class="whiteCardPrimaryButtonClass()" :disabled="isSeedingDemo" @click="openDashboard">
+              <IconLoader v-if="isSeedingDemo" class="h-4 w-4 animate-spin" />
+              <template v-else>
+                {{ t('app-onboarding-explore-dashboard') }}
+                <IconArrowRight class="h-4 w-4" />
+              </template>
             </button>
           </div>
         </div>
@@ -1558,7 +1519,7 @@ watch(suggestedAppId, (value) => {
 
         <div v-else-if="!props.preOrg && flowStep === 'install' && createdApp">
           <div class="space-y-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900/95">
-            <div class="flex flex-wrap items-start justify-between gap-4">
+            <div>
               <div>
                 <p class="text-sm font-semibold text-primary-500 dark:text-slate-300">
                   {{ t('app-onboarding-install-badge') }}
@@ -1570,30 +1531,31 @@ watch(suggestedAppId, (value) => {
                   {{ t('app-onboarding-install-subtitle') }}
                 </p>
               </div>
-              <button class="d-btn min-h-11" :class="whiteCardSecondaryButtonClass()" @click="openDashboard">
-                {{ t('app-onboarding-open-dashboard') }}
-              </button>
             </div>
 
-            <div
-              class="group relative cursor-pointer rounded-2xl bg-slate-950 p-5 pr-14 ring-1 ring-white/10 transition hover:ring-white/20"
-              role="button"
-              tabindex="0"
+            <button
+              v-if="apiKey"
+              type="button"
+              class="d-btn group relative h-auto min-h-0 w-full justify-start whitespace-normal rounded-2xl border-0 bg-slate-950 p-5 pr-14 text-left font-normal ring-1 ring-white/10 transition hover:bg-slate-950 hover:ring-white/20"
               :aria-label="t('app-onboarding-command-copy')"
               @click="copyCliCommand"
-              @keydown.enter.prevent="copyCliCommand"
-              @keydown.space.prevent="copyCliCommand"
             >
               <code class="block whitespace-pre-wrap break-all text-sm">
                 <span class="text-slate-500">npx</span>
                 <span class="text-sky-300"> @capgo/cli@latest</span>
-                <span class="mr-1 font-bold text-violet-300"> {{ cliSubcommand }}</span>
-                <span class="text-emerald-300"> {{ apiKey ?? '[APIKEY]' }}</span>
+                <span class="font-bold text-violet-300">&nbsp;{{ cliSubcommand }}</span>
+                <span v-if="!usesBuilderSetupCommand" class="text-emerald-300">&nbsp;{{ apiKey }}</span>
                 <template v-for="(arg, index) in cliCommandArgs" :key="`${arg}-${index}`">
                   <span :class="index % 2 === 0 ? 'text-amber-300' : 'text-cyan-300'"> {{ arg }}</span>
                 </template>
               </code>
               <IconCopy class="absolute right-4 top-4 h-5 w-5 text-muted-blue-300 transition group-hover:text-white" />
+            </button>
+            <div v-else class="rounded-2xl bg-slate-950 p-5 pr-14 ring-1 ring-white/10" role="status">
+              <div class="flex min-h-6 items-center gap-3 text-sm text-slate-300">
+                <Spinner size="w-5 h-5" />
+                <span>{{ t('app-onboarding-command-apikey-loading') }}</span>
+              </div>
             </div>
 
             <div class="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-sm text-slate-700 dark:border-white/15 dark:bg-slate-950/90 dark:text-slate-200">
@@ -1614,15 +1576,22 @@ watch(suggestedAppId, (value) => {
             </div>
 
             <div class="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <button class="d-btn min-h-11" :class="whiteCardSecondaryButtonClass()" @click="flowStep = 'choice'">
+              <button class="d-btn min-h-11" :class="whiteCardSecondaryButtonClass()" :disabled="isSeedingDemo" @click="flowStep = 'choice'">
                 {{ t('button-back') }}
               </button>
-              <button class="d-btn min-h-11" :class="whiteCardPrimaryButtonClass()" @click="openDashboard">
-                {{ t('app-onboarding-install-later') }}
-                <IconArrowRight class="h-4 w-4" />
+              <button class="d-btn min-h-11" :class="whiteCardPrimaryButtonClass()" :disabled="isSeedingDemo" @click="openDashboard">
+                <IconLoader v-if="isSeedingDemo" class="h-4 w-4 animate-spin" />
+                <template v-else>
+                  {{ t('app-onboarding-explore-dashboard') }}
+                  <IconArrowRight class="h-4 w-4" />
+                </template>
               </button>
             </div>
           </div>
+        </div>
+
+        <div v-if="showLanguageSelector" class="flex justify-end pt-2">
+          <LangSelector />
         </div>
       </div>
     </div>

@@ -1,7 +1,8 @@
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Database } from '../utils/supabase.types.ts'
 import { Hono } from 'hono/tiny'
-import { BRES, middlewareAPISecret, simpleError, triggerValidator } from '../utils/hono.ts'
+import { normalizeBentoEmail, syncBentoFirstOrgOnEmailChange } from '../utils/bento_first_org.ts'
+import { BRES, middlewareAPISecret, quickError, simpleError, triggerValidator } from '../utils/hono.ts'
 import { cleanStoredImageMetadata } from '../utils/image.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { createApiKey } from '../utils/supabase.ts'
@@ -21,8 +22,18 @@ app.post('/', middlewareAPISecret, triggerValidator('users', 'UPDATE'), async (c
     cloudlog({ requestId: c.get('requestId'), message: 'No id' })
     throw simpleError('no_id', 'No id', { record })
   }
+
+  const newEmail = normalizeBentoEmail(record.email)
+  const oldEmail = oldRecord?.email ? normalizeBentoEmail(oldRecord.email) : undefined
+  if (oldEmail && oldEmail !== newEmail) {
+    const suppressionResult = await syncBentoFirstOrgOnEmailChange(c, oldEmail, newEmail)
+    if (suppressionResult === false)
+      quickError(500, 'bento_first_org_suppression_failed', 'Bento first-organization recovery suppression failed')
+  }
+
+  await syncUserPreferenceTags(c, newEmail, record, oldRecord, oldEmail)
+
   await createApiKey(c, record.id)
-  await syncUserPreferenceTags(c, record.email, record, oldRecord, oldRecord?.email)
 
   const newImagePath = record.image_url
   const oldImagePath = oldRecord?.image_url

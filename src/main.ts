@@ -1,5 +1,5 @@
 // register vue composition api globally
-import type { Router } from 'vue-router'
+import type { RouteLocationNormalized, Router } from 'vue-router'
 import { CapacitorUpdater } from '@capgo/capacitor-updater'
 import { setupLayouts } from 'virtual:generated-layouts'
 import { createApp } from 'vue'
@@ -8,7 +8,7 @@ import { routes } from 'vue-router/auto-routes'
 import { installDeepLinkHandler } from '~/services/deepLinks'
 import { getNativeExternalPurchaseRedirect, isNativeAppStoreContext, isNativeExternalPurchaseRestrictedPath } from '~/services/nativeCompliance'
 import { posthogLoader } from '~/services/posthog'
-import { getErrorMessage, isKnownCrawlerNoiseErrorMessage, isStaleAssetErrorMessage } from '~/services/staleAssetErrors'
+import { getErrorMessage, isComponentResolutionErrorMessage, isKnownCrawlerNoiseErrorMessage, isStaleAssetErrorMessage } from '~/services/staleAssetErrors'
 import { getLocalConfig } from '~/services/supabase'
 import App from './App.vue'
 import { getRemoteConfig } from './services/supabase'
@@ -71,7 +71,11 @@ function clearChunkReloadToastPending(): void {
   }
 }
 
-function handleChunkError(message: string) {
+// `targetPath` is the route the user was navigating to when the chunk failed.
+// A bare reload restores the URL the browser is still on (the page the user is
+// leaving), so it silently throws the navigation away. When we know the target
+// we navigate there instead, so the user lands where they asked to go.
+function handleChunkError(message: string, targetPath?: string) {
   const previousReload = getChunkReloadTimestamp()
   if (previousReload && Date.now() - previousReload < CHUNK_RELOAD_COOLDOWN_MS) {
     console.warn('Chunk load error detected again after a recent reload, skipping automatic reload.', message)
@@ -81,7 +85,10 @@ function handleChunkError(message: string) {
   console.warn('Chunk load error detected, reloading page...', message)
   setChunkReloadTimestamp()
   setChunkReloadToastPending()
-  window.location.reload()
+  if (targetPath)
+    window.location.assign(targetPath)
+  else
+    window.location.reload()
 }
 
 window.addEventListener('error', (event) => {
@@ -121,12 +128,26 @@ window.addEventListener('vite:preloadError', (event) => {
     ?? 'Vite preload error'
   if (!isStaleAssetErrorMessage(message))
     return
-  event.preventDefault()
-  event.stopImmediatePropagation()
+  // Deliberately do NOT call event.preventDefault(): Vite's preload helper only
+  // rethrows the underlying import failure when the default is not prevented.
+  // Preventing it makes `__vitePreload` resolve with `undefined`, so a lazy route
+  // resolves to a falsy component and vue-router throws "Couldn't resolve
+  // component" instead of the real chunk error. Letting it rethrow keeps the
+  // rejection matching STALE_ASSET_ERROR_PATTERNS, so it still gets the reload
+  // (below) and the PostHog suppression this handler was written to provide.
   handleChunkError(message)
 })
 
 const guestPath = ['/login', '/delete_account', '/confirm-signup', '/forgot_password', '/resend_email', '/onboarding', '/register', '/invitation', '/scan', '/sso-callback']
+
+function redirectAppPath(suffix: string) {
+  return (to: RouteLocationNormalized) => ({
+    path: `/app/${encodeURIComponent(String((to.params as { app: string }).app))}${suffix}`,
+    query: to.query,
+    hash: to.hash,
+  })
+}
+
 function isGuestRoutePath(path: string) {
   return guestPath.includes(path) || path === '/preview' || path.startsWith('/preview/')
 }
@@ -165,7 +186,7 @@ const router = createRouter({
       redirect: (to) => {
         const { tab: _, ...query } = to.query
         return {
-          path: `/app/${encodeURIComponent(String((to.params as { package: string }).package))}/logs`,
+          path: `/app/${encodeURIComponent(String((to.params as { package: string }).package))}/observe/logs`,
           query,
           hash: to.hash,
         }
@@ -188,18 +209,51 @@ const router = createRouter({
       redirect: (to) => {
         const { tab: _, ...query } = to.query
         return {
-          path: `/app/${encodeURIComponent(String((to.params as { package: string }).package))}/logs`,
+          path: `/app/${encodeURIComponent(String((to.params as { package: string }).package))}/observe/logs`,
           query,
           hash: to.hash,
         }
       },
     },
-    { path: '/app/package/:package', redirect: to => `/app/${(to.params as { package: string }).package}` },
-    { path: '/app/package/:package/settings', redirect: to => `/app/${(to.params as { package: string }).package}` },
+    {
+      path: '/app/package/:package',
+      redirect: to => ({
+        path: `/app/${encodeURIComponent(String((to.params as { package: string }).package))}`,
+        query: to.query,
+        hash: to.hash,
+      }),
+    },
+    {
+      path: '/app/package/:package/settings',
+      redirect: to => ({
+        path: `/app/${encodeURIComponent(String((to.params as { package: string }).package))}/settings`,
+        query: to.query,
+        hash: to.hash,
+      }),
+    },
+    // Legacy app tab URLs after settings/observe revamp
+    { path: '/app/:app/info', redirect: redirectAppPath('/settings') },
+    { path: '/app/:app/access', redirect: redirectAppPath('/settings/access') },
+    { path: '/app/:app/logs/insights', redirect: redirectAppPath('/observe/updater') },
+    { path: '/app/:app/logs', redirect: redirectAppPath('/observe/logs') },
+    { path: '/app/:app/compatibility', redirect: redirectAppPath('/observe/compatibility') },
+    { path: '/app/:app/observe', redirect: redirectAppPath('/observe/native') },
     ...setupLayouts(newRoutes),
   ],
   history: createWebHistory(import.meta.env.BASE_URL),
 })
+
+// Recover from lazy-route load failures that slip past the vite:preloadError
+// handler (e.g. a navigation that races the reload). vue-router surfaces these
+// as "Couldn't resolve component" once a stale chunk fails to import, so treat
+// them as chunk errors and trigger the same reload instead of leaving the user
+// on a dead route.
+router.onError((error, to) => {
+  const message = getErrorMessage(error) ?? String(error)
+  if (isStaleAssetErrorMessage(message) || isComponentResolutionErrorMessage(message))
+    handleChunkError(message, to?.fullPath)
+})
+
 router.beforeEach((to, from, next) => {
   if (isNativeAppStoreContext() && isNativeExternalPurchaseRestrictedPath(to.path)) {
     return next(getNativeExternalPurchaseRedirect(to.path))

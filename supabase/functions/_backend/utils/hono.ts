@@ -59,6 +59,7 @@ export interface MiddlewareKeyVariables {
     skipSupabaseStatsFallback?: boolean
     skipSupabaseNotificationWrites?: boolean
     queuePluginNotifications?: boolean
+    deliverPluginNotificationsInProcess?: boolean
     skipChannelSelfPostgresFallback?: boolean
     requireReadReplica?: boolean
   }
@@ -172,20 +173,27 @@ export const useCors = cors({
 
 export const honoFactory = createFactory<MiddlewareKeyVariables>()
 
+type TriggerOperation = 'DELETE' | 'INSERT' | 'UPDATE'
+
 export function triggerValidator(
   table: keyof Database['public']['Tables'],
-  type: 'DELETE' | 'INSERT' | 'UPDATE',
+  type: TriggerOperation | readonly TriggerOperation[],
 ) {
   return honoFactory.createMiddleware(async (c, next) => {
-    const body = await c.req.json<DeletePayload<typeof table> | InsertPayload<typeof table> | UpdatePayload<typeof table>>()
+    const rawBody = await parseBody<unknown>(c)
+    if (rawBody === null || typeof rawBody !== 'object' || Array.isArray(rawBody))
+      throw simpleError('invalid_payload', 'Expected a JSON object', { body: rawBody })
+
+    const body = rawBody as DeletePayload<typeof table> | InsertPayload<typeof table> | UpdatePayload<typeof table>
+    const allowedTypes: readonly TriggerOperation[] = typeof type === 'string' ? [type] : type
 
     if (body.table !== String(table)) {
       cloudlog({ requestId: c.get('requestId'), message: `Not ${String(table)}` })
       throw simpleError('table_not_match', 'Not table', { body })
     }
 
-    if (body.type !== type) {
-      cloudlog({ requestId: c.get('requestId'), message: `Not ${type}` })
+    if (!allowedTypes.includes(body.type)) {
+      cloudlog({ requestId: c.get('requestId'), message: `Not ${allowedTypes.join(' or ')}` })
       throw simpleError('type_not_match', 'Not type', { body })
     }
 

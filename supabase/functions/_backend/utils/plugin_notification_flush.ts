@@ -1,6 +1,7 @@
 import type { Context } from 'hono'
 import type { PluginNotificationQueueItem } from './plugin_notification_queue.ts'
 import { parseCronExpression } from 'cron-schedule'
+import { deliverQueuedPluginNotifications } from '../triggers/plugin_notifications.ts'
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
 import { parsePluginNotificationQueueItem, PLUGIN_NOTIFICATION_QUEUE_PREFIX, suppressPluginNotificationQueue } from './plugin_notification_queue.ts'
 import { getEnv } from './utils.ts'
@@ -55,6 +56,26 @@ function getPluginNotificationThrottleTtlSeconds(c: Context, item: PluginNotific
 }
 
 async function postPluginNotificationBatch(c: Context, items: PluginNotificationQueueItem[]): Promise<PluginNotificationTransferResult> {
+  // Cron flush runs on the API worker: deliver in-process to avoid brittle self-HTTP (prod 522s).
+  if (c.get('deliverPluginNotificationsInProcess')) {
+    const result = await deliverQueuedPluginNotifications(c, items)
+    if (result.failed > 0) {
+      cloudlogErr({
+        requestId: c.get('requestId'),
+        message: 'Plugin notification in-process transfer failed',
+        failed: result.failed,
+        processed: result.processed,
+        throttled: result.throttled,
+        invalid: result.invalid,
+      })
+      return { accepted: false }
+    }
+    const throttledResult = result.results.find(
+      (entry): entry is { status: 'throttled', lastSendAt: string } => entry.status === 'throttled' && Boolean(entry.lastSendAt),
+    )
+    return { accepted: true, throttledLastSendAt: throttledResult?.lastSendAt }
+  }
+
   const url = getPluginNotificationTriggerUrl(c)
   const apiSecret = getEnv(c, 'API_SECRET')
   if (!url || !apiSecret) {
@@ -78,7 +99,7 @@ async function postPluginNotificationBatch(c: Context, items: PluginNotification
   }
 
   const body = await response.text().catch(() => '')
-  cloudlogErr({ requestId: c.get('requestId'), message: 'Plugin notification trigger transfer failed', status: response.status, statusText: response.statusText, body })
+  cloudlogErr({ requestId: c.get('requestId'), message: 'Plugin notification trigger transfer failed', url, status: response.status, statusText: response.statusText, body })
   return { accepted: false }
 }
 

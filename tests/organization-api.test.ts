@@ -23,6 +23,7 @@ import {
   USER_ID_2,
   USER_PASSWORD,
   USER_PASSWORD_NONMEMBER,
+  warmEdgeEndpoint,
 } from './test-utils.ts'
 
 const normalizedSupabaseBaseUrl = normalizeLocalhostUrl(SUPABASE_BASE_URL) ?? SUPABASE_BASE_URL
@@ -39,28 +40,20 @@ let organizationApiKeyId = 0
 beforeAll(async () => {
   authHeaders = await getAuthHeaders()
 
-  // Create stripe_info for this test org
-  const { error: stripeError } = await getSupabaseClient().from('stripe_info').insert({
-    customer_id: customerId,
-    status: 'succeeded',
-    product_id: 'prod_LQIregjtNduh4q',
-    subscription_id: `sub_${globalId}`,
-    trial_at: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString(),
-    is_good_plan: true,
-  })
-  if (stripeError)
-    throw stripeError
-
-  const { error } = await getSupabaseClient().from('orgs').insert({
-    id: ORG_ID,
-    name,
-    management_email: TEST_EMAIL,
-    created_by: USER_ID,
-    customer_id: customerId,
-    website,
-  })
-  if (error)
-    throw error
+  // Seed via SQL to avoid Kong/PostgREST upstream flakes under shard load.
+  const trialAt = new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString()
+  await executeSQL(
+    `INSERT INTO public.stripe_info (
+       customer_id, status, product_id, subscription_id, trial_at, is_good_plan
+     ) VALUES ($1, 'succeeded', 'prod_LQIregjtNduh4q', $2, $3::timestamptz, true)`,
+    [customerId, `sub_${globalId}`, trialAt],
+  )
+  await executeSQL(
+    `INSERT INTO public.orgs (
+       id, name, management_email, created_by, customer_id, website
+     ) VALUES ($1::uuid, $2, $3, $4::uuid, $5, $6)`,
+    [ORG_ID, name, TEST_EMAIL, USER_ID, customerId, website],
+  )
 
   const createdKey = await createDirectApiKeyWithBindings({
     userId: USER_ID,
@@ -77,41 +70,45 @@ beforeAll(async () => {
     'Content-Type': 'application/json',
     'capgkey': createdKey.key,
   }
+
+  await warmEdgeEndpoint(`${BASE_URL}/organization?orgId=${ORG_ID}`, {
+    method: 'GET',
+    headers,
+  })
 })
 
 async function createUserOrgBinding(orgId: string, userId: string, roleName = 'org_member', grantedBy = USER_ID) {
-  const { data: role, error: roleError } = await getSupabaseClient()
-    .from('roles')
-    .select('id')
-    .eq('name', roleName)
-    .eq('scope_type', 'org')
-    .single()
-  if (roleError)
-    throw roleError
+  const [role] = await executeSQL(
+    `SELECT id FROM public.roles WHERE name = $1 AND scope_type = 'org' LIMIT 1`,
+    [roleName],
+  )
+  if (!role?.id)
+    throw new Error(`Unable to resolve org role ${roleName}`)
 
-  const { error: bindingError } = await getSupabaseClient()
-    .from('role_bindings')
-    .insert({
-      principal_type: 'user',
-      principal_id: userId,
-      role_id: role!.id,
-      scope_type: 'org',
-      org_id: orgId,
-      granted_by: grantedBy,
-      reason: 'Test RBAC binding',
-      is_direct: true,
-    })
-  if (bindingError && bindingError.code !== '23505')
-    throw bindingError
+  try {
+    await executeSQL(
+      `INSERT INTO public.role_bindings (
+         principal_type, principal_id, role_id, scope_type, org_id,
+         granted_by, reason, is_direct
+       ) VALUES (
+         'user', $1::uuid, $2::uuid, 'org', $3::uuid, $4::uuid,
+         'Test RBAC binding', true
+       )`,
+      [userId, role.id, orgId, grantedBy],
+    )
+  }
+  catch (error: any) {
+    if (error?.code !== '23505')
+      throw error
+  }
 }
 
 afterAll(async () => {
-  // Clean up test organization, org_users relation, and stripe_info
   if (organizationApiKeyId) {
-    await getSupabaseClient().from('apikeys').delete().eq('id', organizationApiKeyId)
+    await executeSQL('DELETE FROM public.apikeys WHERE id = $1', [organizationApiKeyId])
   }
-  await getSupabaseClient().from('orgs').delete().eq('id', ORG_ID)
-  await getSupabaseClient().from('stripe_info').delete().eq('customer_id', customerId)
+  await executeSQL('DELETE FROM public.orgs WHERE id = $1::uuid', [ORG_ID])
+  await executeSQL('DELETE FROM public.stripe_info WHERE customer_id = $1', [customerId])
 })
 
 describe('read-only API keys cannot access destructive organization routes', () => {
@@ -126,25 +123,21 @@ describe('read-only API keys cannot access destructive organization routes', () 
   }
 
   beforeAll(async () => {
-    const { error: stripeError } = await getSupabaseClient().from('stripe_info').insert({
-      customer_id: readOnlyCustomerId,
-      status: 'succeeded',
-      product_id: 'prod_LQIregjtNduh4q',
-      subscription_id: `sub_${readOnlyGlobalId}`,
-      trial_at: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString(),
-      is_good_plan: true,
-    })
-    expect(stripeError).toBeNull()
-
-    const { error: orgError } = await getSupabaseClient().from('orgs').insert({
-      id: readOnlyOrgId,
-      name: readOnlyName,
-      management_email: TEST_EMAIL,
-      created_by: USER_ID,
-      customer_id: readOnlyCustomerId,
-      require_apikey_expiration: false,
-    })
-    expect(orgError).toBeNull()
+    // Seed via SQL — PostgREST/Kong flakes under CF shard load with
+    // "An invalid response was received from the upstream server".
+    const trialAt = new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString()
+    await executeSQL(
+      `INSERT INTO public.stripe_info (
+         customer_id, status, product_id, subscription_id, trial_at, is_good_plan
+       ) VALUES ($1, 'succeeded', 'prod_LQIregjtNduh4q', $2, $3::timestamptz, true)`,
+      [readOnlyCustomerId, `sub_${readOnlyGlobalId}`, trialAt],
+    )
+    await executeSQL(
+      `INSERT INTO public.orgs (
+         id, name, management_email, created_by, customer_id, require_apikey_expiration
+       ) VALUES ($1::uuid, $2, $3, $4::uuid, $5, false)`,
+      [readOnlyOrgId, readOnlyName, TEST_EMAIL, USER_ID, readOnlyCustomerId],
+    )
 
     const createdKey = await createDirectApiKeyWithBindings({
       userId: USER_ID,
@@ -161,14 +154,24 @@ describe('read-only API keys cannot access destructive organization routes', () 
 
     readOnlyKey = createdKey.key
     readOnlyKeyId = createdKey.id
+
+    await warmEdgeEndpoint(`${BASE_URL}/organization/members`, {
+      method: 'POST',
+      headers: { ...readOnlyHeaders, capgkey: readOnlyKey },
+      body: JSON.stringify({
+        orgId: readOnlyOrgId,
+        email: USER_ADMIN_EMAIL,
+        invite_type: 'org_member',
+      }),
+    })
   })
 
   afterAll(async () => {
     if (readOnlyKeyId) {
-      await getSupabaseClient().from('apikeys').delete().eq('id', readOnlyKeyId)
+      await executeSQL('DELETE FROM public.apikeys WHERE id = $1', [readOnlyKeyId])
     }
-    await getSupabaseClient().from('orgs').delete().eq('id', readOnlyOrgId)
-    await getSupabaseClient().from('stripe_info').delete().eq('customer_id', readOnlyCustomerId)
+    await executeSQL('DELETE FROM public.orgs WHERE id = $1::uuid', [readOnlyOrgId])
+    await executeSQL('DELETE FROM public.stripe_info WHERE customer_id = $1', [readOnlyCustomerId])
   })
 
   it.concurrent('rejects POST /organization/members', async () => {
@@ -1226,29 +1229,27 @@ describe('[POST] /organization/members', () => {
 
 describe('[DELETE] /organization/members', () => {
   it('delete organization member', async () => {
-    const { data: userData, error: userError } = await getSupabaseClient().from('users').select().eq('email', USER_ADMIN_EMAIL).single()
-    expect(userError).toBeNull()
+    const [userData] = await executeSQL(
+      'SELECT id, email FROM public.users WHERE email = $1 LIMIT 1',
+      [USER_ADMIN_EMAIL],
+    )
     expect(userData).toBeTruthy()
     expect(userData?.email).toBe(USER_ADMIN_EMAIL)
 
-    const { error } = await getSupabaseClient().from('org_users').insert({
-      org_id: ORG_ID,
-      user_id: userData!.id,
-      rbac_role_name: 'org_member',
-    })
-    expect(error).toBeNull()
+    await executeSQL(
+      `INSERT INTO public.org_users (org_id, user_id, rbac_role_name)
+       VALUES ($1::uuid, $2::uuid, 'org_member')`,
+      [ORG_ID, userData.id],
+    )
 
-    await createUserOrgBinding(ORG_ID, userData!.id, 'org_member')
+    await createUserOrgBinding(ORG_ID, userData.id, 'org_member')
 
-    const { data: rbacData, error: rbacFetchError } = await getSupabaseClient()
-      .from('role_bindings')
-      .select()
-      .eq('principal_type', 'user')
-      .eq('principal_id', userData!.id)
-      .eq('org_id', ORG_ID)
-    expect(rbacFetchError).toBeNull()
-    expect(rbacData).toBeTruthy()
-    expect(rbacData!.length).toBeGreaterThan(0)
+    const rbacData = await executeSQL(
+      `SELECT id FROM public.role_bindings
+       WHERE principal_type = 'user' AND principal_id = $1::uuid AND org_id = $2::uuid`,
+      [userData.id, ORG_ID],
+    )
+    expect(rbacData.length).toBeGreaterThan(0)
 
     const response = await fetch(`${BASE_URL}/organization/members?orgId=${ORG_ID}&email=${USER_ADMIN_EMAIL}`, {
       headers,
@@ -1264,12 +1265,17 @@ describe('[DELETE] /organization/members', () => {
       throw safe.error
     expect(safe.data.status).toBe('ok')
 
-    const { data, error: orgUserError } = await getSupabaseClient().from('org_users').select().eq('org_id', ORG_ID).eq('user_id', userData!.id).single()
-    expect(orgUserError).toBeTruthy()
-    expect(data).toBeNull()
+    const orgUsers = await executeSQL(
+      'SELECT id FROM public.org_users WHERE org_id = $1::uuid AND user_id = $2::uuid',
+      [ORG_ID, userData.id],
+    )
+    expect(orgUsers).toHaveLength(0)
 
-    // Verify role_bindings were also cleaned up
-    const { data: rbacDataAfterDelete } = await getSupabaseClient().from('role_bindings').select().eq('principal_type', 'user').eq('principal_id', userData!.id).eq('org_id', ORG_ID)
+    const rbacDataAfterDelete = await executeSQL(
+      `SELECT id FROM public.role_bindings
+       WHERE principal_type = 'user' AND principal_id = $1::uuid AND org_id = $2::uuid`,
+      [userData.id, ORG_ID],
+    )
     expect(rbacDataAfterDelete).toHaveLength(0)
   })
 

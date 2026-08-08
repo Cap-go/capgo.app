@@ -226,15 +226,17 @@ export async function sendNotifOrg(
     return false
   }
 
-  // Create write-capable drizzle client for mutations
-  const pgClient = getPgClient(c)
-  const writeClient = createDrizzleClient(pgClient)
-
+  // Create write-capable drizzle client for mutations (acquire inside try so connect
+  // failures are logged like other PG errors instead of rejecting the caller).
+  let pgClient: Awaited<ReturnType<typeof getPgClient>> | undefined
   let shouldSend = false
   let isFirstSend = false
   let claimRollback: NotificationClaimRollback | undefined
 
   try {
+    pgClient = await getPgClient(c)
+    const writeClient = createDrizzleClient(pgClient)
+
     if (!notif) {
       // First time: use insert with onConflictDoNothing to avoid error logs
       isFirstSend = true
@@ -298,13 +300,16 @@ export async function sendNotifOrg(
     return false
   }
   catch (e: unknown) {
-    if (claimRollback)
+    if (claimRollback && pgClient) {
+      const writeClient = createDrizzleClient(pgClient)
       await rollbackNotificationClaim(c, writeClient, eventName, orgId, uniqId, claimRollback)
+    }
     logPgError(c, 'sendNotifOrg', e)
     return false
   }
   finally {
-    await closeClient(c, pgClient)
+    if (pgClient)
+      await closeClient(c, pgClient)
   }
 }
 
@@ -320,10 +325,10 @@ export async function claimNotifOrgOnce(
     return false
   }
 
-  const ownedPgClient = writeClient ? undefined : getPgClient(c)
-  const effectiveWriteClient = writeClient ?? createDrizzleClient(ownedPgClient!)
-
+  let ownedPgClient: Awaited<ReturnType<typeof getPgClient>> | undefined
   try {
+    ownedPgClient = writeClient ? undefined : await getPgClient(c)
+    const effectiveWriteClient = writeClient ?? createDrizzleClient(ownedPgClient!)
     const claimed = await insertNotificationClaim(effectiveWriteClient, eventName, orgId, uniqId)
     if (!claimed) {
       cloudlog({ requestId: c.get('requestId'), message: 'notif once already claimed', event: eventName, orgId, uniqId })
@@ -355,10 +360,11 @@ export async function sendNotifOrgOnce(
     return { sent: false, cleanupFailed: false }
   }
 
-  const ownedPgClient = writeClient ? undefined : getPgClient(c)
-  const effectiveWriteClient = writeClient ?? createDrizzleClient(ownedPgClient!)
-
+  let ownedPgClient: Awaited<ReturnType<typeof getPgClient>> | undefined
   try {
+    ownedPgClient = writeClient ? undefined : await getPgClient(c)
+    const effectiveWriteClient = writeClient ?? createDrizzleClient(ownedPgClient!)
+
     const claimed = await claimNotifOrgOnce(c, eventName, orgId, uniqId, effectiveWriteClient)
     if (!claimed)
       return { sent: false, cleanupFailed: false }
@@ -390,6 +396,10 @@ export async function sendNotifOrgOnce(
       logPgError(c, 'sendNotifOrgOnce', e)
       return { sent: false, cleanupFailed: !cleanupSucceeded }
     }
+  }
+  catch (e: unknown) {
+    logPgError(c, 'sendNotifOrgOnce', e)
+    return { sent: false, cleanupFailed: false }
   }
   finally {
     if (ownedPgClient)

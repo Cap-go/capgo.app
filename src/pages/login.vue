@@ -17,6 +17,7 @@ import mfaIcon from '~icons/simple-icons/2fas?raw'
 import { hideLoader } from '~/services/loader'
 import { autoAuth, defaultApiHost, hashEmail, useSupabase } from '~/services/supabase'
 import { openSupport } from '~/services/support'
+import { isCapgoDomainReferrer } from '~/utils/capgoReferrer'
 
 const route = useRoute('/login')
 const supabase = useSupabase()
@@ -39,6 +40,7 @@ const emailForLogin = ref('')
 const hasSso = ref(false)
 const enforceSso = ref(false)
 const isDomainChecking = ref(false)
+const domainCheckTimeoutMs = 5000
 const isCheckingSavedSession = ref(true)
 const captchaStatus = ref<'disabled' | 'loading' | 'ready' | 'unavailable'>(captchaKey.value ? 'loading' : 'disabled')
 let captchaInitTimeout: ReturnType<typeof setTimeout> | null = null
@@ -323,6 +325,8 @@ async function login(form: { email: string, password: string }) {
 }
 
 async function checkDomain(email: string): Promise<{ has_sso: boolean, enforce_sso?: boolean, provider_id?: string, org_id?: string }> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), domainCheckTimeoutMs)
   try {
     const { data: sessionData } = await supabase.auth.getSession()
     const token = sessionData?.session?.access_token
@@ -338,6 +342,7 @@ async function checkDomain(email: string): Promise<{ has_sso: boolean, enforce_s
       method: 'POST',
       headers,
       body: JSON.stringify({ email }),
+      signal: controller.signal,
     })
 
     if (!response.ok) {
@@ -346,8 +351,8 @@ async function checkDomain(email: string): Promise<{ has_sso: boolean, enforce_s
 
     return await response.json()
   }
-  catch {
-    return { has_sso: false }
+  finally {
+    clearTimeout(timeout)
   }
 }
 
@@ -355,12 +360,22 @@ async function handleEmailContinue(form: { email: string }) {
   isDomainChecking.value = true
   emailForLogin.value = form.email
 
-  const result = await checkDomain(form.email)
-  hasSso.value = result.has_sso
-  enforceSso.value = result.enforce_sso === true
-
-  isDomainChecking.value = false
-  statusAuth.value = 'credentials'
+  try {
+    const result = await checkDomain(form.email)
+    hasSso.value = result.has_sso
+    enforceSso.value = result.enforce_sso === true
+  }
+  catch (error) {
+    // Domain check timed out or failed. Fall through to the password step.
+    console.error('SSO domain check failed', error)
+    hasSso.value = false
+    enforceSso.value = false
+    toast.error(t('sso-check-failed'))
+  }
+  finally {
+    isDomainChecking.value = false
+    statusAuth.value = 'credentials'
+  }
 }
 
 async function handlePasswordSubmit(form: { password: string }) {
@@ -545,6 +560,53 @@ async function openScan() {
   router.push('/scan')
 }
 
+async function acceptQuerySession() {
+  isLoading.value = true
+  const res = await supabase.auth.setSession({
+    access_token: querySessionAccessToken.value,
+    refresh_token: querySessionRefreshToken.value,
+  })
+  if (res.error) {
+    if (res.error.name === 'AuthSessionMissingError')
+      console.warn('Cannot set auth', res.error)
+    else
+      console.error('Cannot set auth', res.error)
+    isLoading.value = false
+    return
+  }
+
+  hasQuerySession.value = false
+  querySessionAccessToken.value = ''
+  querySessionRefreshToken.value = ''
+  nextLogin()
+}
+
+async function handleQuerySessionHandoff(accessToken: string, refreshToken: string, parsedUrl: URL) {
+  parsedUrl.searchParams.delete('access_token')
+  parsedUrl.searchParams.delete('refresh_token')
+  globalThis.history.replaceState({}, '', parsedUrl.toString())
+
+  querySessionAccessToken.value = accessToken
+  querySessionRefreshToken.value = refreshToken
+
+  // Landing/register handoff from Capgo domains is expected; skip the
+  // confirm step that causes onboarding drop-off. Keep confirmation when
+  // the referrer is missing or external (shared/leaked session links).
+  if (isCapgoDomainReferrer(document.referrer)) {
+    await acceptQuerySession()
+    // setSession failed: tokens remain in memory — show confirm so user can retry
+    if (querySessionAccessToken.value) {
+      hasQuerySession.value = true
+      hideLoader()
+    }
+    return
+  }
+
+  hasQuerySession.value = true
+  isLoading.value = false
+  hideLoader()
+}
+
 async function checkLogin() {
   try {
     const parsedUrl = new URL(route.fullPath, globalThis.location.origin)
@@ -559,16 +621,8 @@ async function checkLogin() {
     const accessToken = params.get('access_token')
     const refreshToken = params.get('refresh_token')
 
-    if (!!accessToken && !!refreshToken) {
-      parsedUrl.searchParams.delete('access_token')
-      parsedUrl.searchParams.delete('refresh_token')
-      globalThis.history.replaceState({}, '', parsedUrl.toString())
-
-      querySessionAccessToken.value = accessToken
-      querySessionRefreshToken.value = refreshToken
-      hasQuerySession.value = true
-      isLoading.value = false
-      hideLoader()
+    if (accessToken && refreshToken) {
+      await handleQuerySessionHandoff(accessToken, refreshToken, parsedUrl)
       return
     }
 
@@ -606,27 +660,6 @@ async function checkLogin() {
   finally {
     isCheckingSavedSession.value = false
   }
-}
-
-async function acceptQuerySession() {
-  isLoading.value = true
-  const res = await supabase.auth.setSession({
-    access_token: querySessionAccessToken.value,
-    refresh_token: querySessionRefreshToken.value,
-  })
-  if (res.error) {
-    if (res.error.name === 'AuthSessionMissingError')
-      console.warn('Cannot set auth', res.error)
-    else
-      console.error('Cannot set auth', res.error)
-    isLoading.value = false
-    return
-  }
-
-  hasQuerySession.value = false
-  querySessionAccessToken.value = ''
-  querySessionRefreshToken.value = ''
-  nextLogin()
 }
 
 function declineQuerySession() {

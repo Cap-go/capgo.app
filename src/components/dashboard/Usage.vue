@@ -10,6 +10,7 @@ import BanknotesIcon from '~icons/heroicons/banknotes'
 import CalendarDaysIcon from '~icons/heroicons/calendar-days'
 import ChartBarIcon from '~icons/heroicons/chart-bar'
 import InformationInfo from '~icons/heroicons/information-circle'
+import { invokeCapgoApi } from '~/services/capgoApi'
 import { bytesToGb, getDaysBetweenDates } from '~/services/conversion'
 import {
   CHART_REFRESH_POLL_MS,
@@ -23,14 +24,13 @@ import {
   requestOrgChartRefresh,
   shouldAutoRequestChartRefresh,
 } from '~/services/dashboardRefresh'
-import { formatLocalDate, formatLocalDateTime, formatUtcDateTimeAsLocal } from '~/services/date'
+import { addUtcDays, formatLocalDate, formatLocalDateTime, formatUtcDateTimeAsLocal, normalizeToUtcStartOfDay } from '~/services/date'
 import { DEMO_APP_NAMES, generateDemoBandwidthData, generateDemoMauData, generateDemoStorageData } from '~/services/demoChartData'
-import { getPlans, useSupabase } from '~/services/supabase'
+import { getPlans } from '~/services/supabase'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
-import DeliveryLatencyPanel from './DeliveryLatencyPanel.vue'
 import DeploymentStatsCard from './DeploymentStatsCard.vue'
 import UpdateStatsCard from './UpdateStatsCard.vue'
 import UsageCard from './UsageCard.vue'
@@ -401,14 +401,10 @@ async function handleReloadClick() {
 // Function to reload all chart data
 async function reloadAllCharts() {
   // Force reload of main dashboard data
-  // End date should be tomorrow at midnight to include all of today's data
-  const last30DaysEnd = new Date()
-  last30DaysEnd.setHours(0, 0, 0, 0)
-  last30DaysEnd.setDate(last30DaysEnd.getDate() + 1) // Tomorrow midnight
-  // Start date should be 29 days ago at midnight (to get 30 days total including today)
-  const last30DaysStart = new Date()
-  last30DaysStart.setHours(0, 0, 0, 0)
-  last30DaysStart.setDate(last30DaysStart.getDate() - 29)
+  // End date should be next UTC midnight to include all of today's UTC data
+  const todayUtc = normalizeToUtcStartOfDay()
+  const last30DaysEnd = addUtcDays(todayUtc, 1)
+  const last30DaysStart = addUtcDays(todayUtc, -29)
 
   const orgId = effectiveOrganization.value?.gid
   if (orgId) {
@@ -480,9 +476,8 @@ async function getAppStats(rangeStart: Date, rangeEnd: Date) {
       }
     }
 
-    const supabase = useSupabase()
     const dateRange = `?from=${rangeStart.toISOString()}&to=${rangeEnd.toISOString()}&noAccumulate=true`
-    const response = await supabase.functions.invoke(`statistics/app/${props.appId}/${dateRange}`, {
+    const response = await invokeCapgoApi(`statistics/app/${props.appId}${dateRange}`, {
       method: 'GET',
     })
 
@@ -518,9 +513,7 @@ async function getAppStats(rangeStart: Date, rangeEnd: Date) {
 
 // Helper function to filter 30-day data to billing period
 function filterToBillingPeriod(fullData: { mau: number[], storage: number[], storageByteHours: number[], bandwidth: number[] }, last30DaysStart: Date, billingStart: Date) {
-  const currentDate = new Date()
-  // Reset current date to start of day for consistent comparison
-  currentDate.setHours(0, 0, 0, 0)
+  const currentDate = normalizeToUtcStartOfDay()
 
   // Calculate billing period length - use getDaysBetweenDates for consistency
   // Simply calculate days between billing start and current date + 1 (to include today)
@@ -536,10 +529,7 @@ function filterToBillingPeriod(fullData: { mau: number[], storage: number[], sto
 
   // Map 30-day data to billing period
   for (let i = 0; i < 30; i++) {
-    const dataDate = new Date(last30DaysStart)
-    dataDate.setDate(dataDate.getDate() + i)
-    // Reset to start of day for consistent comparison
-    dataDate.setHours(0, 0, 0, 0)
+    const dataDate = addUtcDays(last30DaysStart, i)
 
     // Check if this date falls within current billing period
     if (dataDate >= billingStart && dataDate <= currentDate) {
@@ -557,20 +547,14 @@ function filterToBillingPeriod(fullData: { mau: number[], storage: number[], sto
 }
 
 async function getUsages(forceRefetch = false) {
-  // Always work with last 30 days of data
-  // End date should be tomorrow at midnight to include all of today's data
-  const last30DaysEnd = new Date()
-  last30DaysEnd.setHours(0, 0, 0, 0)
-  last30DaysEnd.setDate(last30DaysEnd.getDate() + 1) // Tomorrow midnight
-  // Start date should be 29 days ago at midnight (to get 30 days total including today)
-  const last30DaysStart = new Date()
-  last30DaysStart.setHours(0, 0, 0, 0)
-  last30DaysStart.setDate(last30DaysStart.getDate() - 29)
+  // Always work with last 30 UTC days of data
+  // End date should be next UTC midnight to include all of today's UTC data
+  const todayUtc = normalizeToUtcStartOfDay()
+  const last30DaysEnd = addUtcDays(todayUtc, 1)
+  const last30DaysStart = addUtcDays(todayUtc, -29)
 
   // Get billing period dates for filtering
-  const billingStart = new Date(effectiveOrganization.value?.subscription_start ?? new Date())
-  // Reset to start of day to match calculation in store
-  billingStart.setHours(0, 0, 0, 0)
+  const billingStart = normalizeToUtcStartOfDay(new Date(effectiveOrganization.value?.subscription_start ?? new Date()))
 
   const currentOrgId = effectiveOrganization.value?.gid ?? null
 
@@ -642,9 +626,7 @@ async function getUsages(forceRefetch = false) {
   const { global: globalStats, byApp: byAppStats, appNames: appNamesMap } = await getAppStats(last30DaysStart, last30DaysEnd)
 
   const finalData = globalStats.map((item: any) => {
-    const itemDate = new Date(item.date)
-    // Reset to start of day for consistent date handling
-    itemDate.setHours(0, 0, 0, 0)
+    const itemDate = normalizeToUtcStartOfDay(new Date(item.date))
     return {
       ...item,
       date: itemDate,
@@ -1002,7 +984,7 @@ onBeforeUnmount(() => {
       <!-- Daily vs Cumulative Switch -->
       <div class="flex items-center p-1 space-x-1 bg-gray-200 rounded-lg dark:bg-gray-800">
         <button
-          class="flex gap-0.5 justify-center items-center py-1 px-2 text-xs font-medium text-center whitespace-nowrap rounded-md transition-colors cursor-pointer sm:gap-1.5 sm:px-3"
+          class="flex gap-0.5 justify-center items-center h-9 min-h-9 py-1 px-2 text-xs font-medium text-center whitespace-nowrap rounded-md transition-colors cursor-pointer sm:gap-1.5 sm:px-3"
           :class="[!showCumulative || !useBillingPeriod ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm' : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white']"
           :aria-label="t('daily')"
           @click="showCumulative = false"
@@ -1011,7 +993,7 @@ onBeforeUnmount(() => {
           <span class="hidden sm:inline">{{ t('daily') }}</span>
         </button>
         <button
-          class="flex gap-0.5 justify-center items-center py-1 px-2 text-xs font-medium text-center whitespace-nowrap rounded-md transition-colors cursor-pointer sm:gap-1.5 sm:px-3"
+          class="flex gap-0.5 justify-center items-center h-9 min-h-9 py-1 px-2 text-xs font-medium text-center whitespace-nowrap rounded-md transition-colors cursor-pointer sm:gap-1.5 sm:px-3"
           :class="[
             showCumulative && useBillingPeriod
               ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
@@ -1028,7 +1010,7 @@ onBeforeUnmount(() => {
       <!-- Billing Period vs Last 30 Days Switch -->
       <div class="flex items-center p-1 space-x-1 bg-gray-200 rounded-lg dark:bg-gray-800">
         <button
-          class="flex gap-0.5 justify-center items-center py-1 px-2 text-xs font-medium text-center whitespace-nowrap rounded-md transition-colors cursor-pointer sm:gap-1.5 sm:px-3" :class="[useBillingPeriod ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm' : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white']"
+          class="flex gap-0.5 justify-center items-center h-9 min-h-9 py-1 px-2 text-xs font-medium text-center whitespace-nowrap rounded-md transition-colors cursor-pointer sm:gap-1.5 sm:px-3" :class="[useBillingPeriod ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm' : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white']"
           :aria-label="t('billing-period')"
           @click="useBillingPeriod = true"
         >
@@ -1036,7 +1018,7 @@ onBeforeUnmount(() => {
           <span class="hidden sm:inline">{{ t('billing-period') }}</span>
         </button>
         <button
-          class="flex gap-0.5 justify-center items-center py-1 px-2 text-xs font-medium text-center whitespace-nowrap rounded-md transition-colors cursor-pointer sm:gap-1.5 sm:px-3" :class="[!useBillingPeriod ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm' : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white']"
+          class="flex gap-0.5 justify-center items-center h-9 min-h-9 py-1 px-2 text-xs font-medium text-center whitespace-nowrap rounded-md transition-colors cursor-pointer sm:gap-1.5 sm:px-3" :class="[!useBillingPeriod ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm' : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white']"
           :aria-label="t('last-30-days')"
           @click="useBillingPeriod = false"
         >
@@ -1138,7 +1120,7 @@ onBeforeUnmount(() => {
           <div class="inline-flex shrink-0 items-center rounded-lg bg-slate-100 p-1 dark:bg-slate-800" :aria-label="t('storage-chart-mode')">
             <button
               type="button"
-              class="rounded-md px-2.5 py-1 text-xs font-semibold transition-colors"
+              class="h-9 min-h-9 rounded-md px-2.5 py-1 text-xs font-semibold transition-colors"
               :class="storageUsageMode === 'total' ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'"
               @click="storageUsageMode = 'total'"
             >
@@ -1146,7 +1128,7 @@ onBeforeUnmount(() => {
             </button>
             <button
               type="button"
-              class="rounded-md px-2.5 py-1 text-xs font-semibold transition-colors"
+              class="h-9 min-h-9 rounded-md px-2.5 py-1 text-xs font-semibold transition-colors"
               :class="storageUsageMode === 'hourly' ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'"
               @click="storageUsageMode = 'hourly'"
             >
@@ -1168,14 +1150,5 @@ onBeforeUnmount(() => {
     <BundleUploadsCard v-show="!appId" :use-billing-period="useBillingPeriod" :accumulated="useBillingPeriod && showCumulative" :reload-trigger="reloadTrigger" :force-demo="forceDemo" class="col-span-full sm:col-span-6 xl:col-span-4" />
     <UpdateStatsCard v-show="!appId" :use-billing-period="useBillingPeriod" :accumulated="useBillingPeriod && showCumulative" :reload-trigger="reloadTrigger" :force-demo="forceDemo" class="col-span-full sm:col-span-6 xl:col-span-4" />
     <DeploymentStatsCard v-show="!appId" :use-billing-period="useBillingPeriod" :accumulated="useBillingPeriod && showCumulative" :reload-trigger="reloadTrigger" :force-demo="forceDemo" class="col-span-full sm:col-span-6 xl:col-span-4" />
-  </div>
-
-  <div v-if="!appId" class="mb-6">
-    <DeliveryLatencyPanel
-      :key="['org', effectiveOrganization?.gid || '', reloadTrigger].join(':')"
-      scope="org"
-      :org-id="effectiveOrganization?.gid || ''"
-      :force-demo="forceDemo"
-    />
   </div>
 </template>

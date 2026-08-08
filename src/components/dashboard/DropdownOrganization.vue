@@ -235,6 +235,8 @@ async function refreshOrganizationLogosIfNeeded(force = false) {
 }
 
 function onOrganizationClick(org: Organization) {
+  closeDropdown()
+
   // Check if the user is invited to the organization
   if (isPendingOrganizationInvite(org)) {
     handleOrganizationInvitation(org)
@@ -242,12 +244,11 @@ function onOrganizationClick(org: Organization) {
   }
 
   organizationStore.setCurrentOrganization(org.gid)
-  // if current path is not home, redirect to the org home page
-  // route.params.app
+  // Org row opens the org global dashboard; settings gear opens org settings.
+  // When already on dashboard, the watch on currentOrganization in
+  // organization.ts will trigger data reload via main.updateDashboard().
   if (router.currentRoute.value.path !== '/dashboard')
-    router.push(`/dashboard`)
-  // Note: When already on dashboard, the watch on currentOrganization in
-  // organization.ts will trigger data reload via main.updateDashboard()
+    router.push('/dashboard')
 }
 
 async function createNewOrg() {
@@ -324,34 +325,6 @@ function acronym(name: string) {
   return (first + second).toUpperCase()
 }
 
-function onOrgItemClick(org: Organization, e: MouseEvent) {
-  if (isSelected(org)) {
-    e.preventDefault()
-    e.stopPropagation()
-    return
-  }
-  onOrganizationClick(org)
-}
-
-function isRowInteractive(org: Organization) {
-  return isInvitation(org) || !isSelected(org)
-}
-
-function onOrgItemKeydown(org: Organization, e: KeyboardEvent) {
-  if (e.target !== e.currentTarget)
-    return
-
-  if (!isRowInteractive(org))
-    return
-
-  if (e.key !== 'Enter' && e.key !== ' ')
-    return
-
-  e.preventDefault()
-  closeDropdown()
-  onOrganizationClick(org)
-}
-
 watch(
   () => route.query.invite_org,
   (inviteOrg) => {
@@ -420,17 +393,13 @@ watch(
             class="block px-1 my-1 rounded-lg"
             :class="isSelected(org) ? 'bg-gray-700/80' : ''"
           >
-            <div
-              class="flex items-center gap-2 px-3 py-3 text-white rounded-md"
-              :class="isRowInteractive(org) ? 'cursor-pointer hover:bg-gray-600' : 'cursor-default'"
-              :aria-current="isSelected(org) ? 'true' : undefined"
-              :role="isRowInteractive(org) ? 'button' : undefined"
-              :tabindex="isRowInteractive(org) ? 0 : -1"
-              @click="onOrgItemClick(org, $event)"
-              @keydown="onOrgItemKeydown(org, $event)"
-            >
-              <div
-                class="flex flex-1 items-center min-w-0 text-left"
+            <div class="flex items-center gap-2 px-3 py-3 text-white rounded-md hover:bg-gray-600">
+              <button
+                type="button"
+                class="d-btn d-btn-ghost d-btn-sm h-auto min-h-0 flex-1 items-center justify-start min-w-0 border-none px-0 shadow-none text-white hover:bg-transparent"
+                :aria-current="isSelected(org) ? 'true' : undefined"
+                :aria-label="org.name"
+                @click="onOrganizationClick(org)"
               >
                 <img
                   v-if="org.logo"
@@ -453,26 +422,24 @@ watch(
                 >
                   {{ acronym(org.name) }}
                 </div>
-                <span class="block truncate">{{ org.name }}</span>
-              </div>
-              <div class="flex items-center justify-end min-w-0 shrink-0">
+                <span class="block truncate min-w-0">{{ org.name }}</span>
                 <span
                   v-if="isInvitation(org)"
-                  class="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium rounded-full border border-amber-400/25 bg-amber-500/8 text-amber-200"
+                  class="inline-flex items-center gap-1 px-2 py-0.5 ml-auto text-[10px] font-medium rounded-full border border-amber-400/25 bg-amber-500/8 text-amber-200 shrink-0"
                 >
                   <span class="size-1.5 rounded-full bg-amber-300" />
                   {{ t('sso-status-pending') }}
                 </span>
-                <button
-                  v-else
-                  type="button"
-                  class="flex items-center justify-center size-8 rounded-md cursor-pointer text-slate-300 transition-colors hover:bg-slate-500/30 hover:text-white"
-                  :aria-label="`${t('settings')} ${org.name}`"
-                  @click="openOrganizationSettings(org, $event)"
-                >
-                  <IconSettings class="size-4" />
-                </button>
-              </div>
+              </button>
+              <button
+                v-if="!isInvitation(org)"
+                type="button"
+                class="d-btn d-btn-ghost d-btn-sm d-btn-square size-8 min-h-0 border-none text-slate-300 hover:bg-slate-500/30 hover:text-white shrink-0"
+                :aria-label="`${t('settings')} ${org.name}`"
+                @click="openOrganizationSettings(org, $event)"
+              >
+                <IconSettings class="size-4" />
+              </button>
             </div>
             <div v-if="!isInvitation(org)" class="pb-2 pl-8 pr-1">
               <div v-if="getOrgApps(org).length > 0" class="space-y-1">

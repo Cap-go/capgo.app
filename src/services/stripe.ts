@@ -2,6 +2,7 @@ import type { ComposerTranslation } from 'vue-i18n'
 import { Capacitor } from '@capacitor/core'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
+import { invokeCapgoApi } from '~/services/capgoApi'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useSupabase } from './supabase'
 
@@ -27,32 +28,71 @@ async function presentActionSheetOpen(url: string) {
   })
   return dialogStore.onDialogDismiss()
 }
-export function openBlank(link: string) {
-  console.log('openBlank', link)
-  if (Capacitor.getPlatform() === 'ios') {
-    presentActionSheetOpen(link)
-    return true
-  }
-  return Boolean(globalThis.open(link, '_blank'))
-}
-export async function openPortal(orgId: string, t: ComposerTranslation) {
-  let url = ''
-  const supabase = useSupabase()
+async function presentBlockedPopupFallback(url: string) {
+  const { t } = useI18n()
   const dialogStore = useDialogV2Store()
 
-  const session = await supabase.auth.getSession()
-  if (!session)
-    return
-
-  // datafast_visitor_id
-
-  const prem = supabase.functions.invoke('private/stripe_portal', {
-    body: JSON.stringify({ callbackUrl: globalThis.location.href, orgId }),
-  }).then(({ data }) => {
-    if (data?.url) {
-      url = data.url
-    }
+  dialogStore.openDialog({
+    title: t('open-in-new-tab'),
+    description: t('popup-blocked-open-manually'),
+    buttons: [
+      {
+        text: t('button-cancel'),
+        role: 'cancel',
+      },
+      {
+        text: t('button-confirm'),
+        id: 'confirm-button',
+        role: 'primary',
+        href: url,
+        target: '_blank',
+        rel: 'noopener noreferrer',
+      },
+    ],
   })
+  return !(await dialogStore.onDialogDismiss())
+}
+
+export async function openBlank(link: string) {
+  console.log('openBlank', link)
+  if (Capacitor.getPlatform() === 'ios') {
+    // presentActionSheetOpen resolves true when dismissed/canceled
+    return !(await presentActionSheetOpen(link))
+  }
+  const opened = globalThis.open(link, '_blank')
+  if (opened) {
+    opened.opener = null
+    return true
+  }
+  // Async callers often lose the user-gesture; offer a confirm link fallback.
+  return presentBlockedPopupFallback(link)
+}
+
+const PORTAL_URL_CACHE_TTL_MS = 3 * 60 * 1000
+const portalUrlCache = new Map<string, { url: string, callbackUrl: string, createdAt: number }>()
+
+export async function openPortal(orgId: string, t: ComposerTranslation) {
+  const dialogStore = useDialogV2Store()
+  const now = Date.now()
+  for (const [cachedOrgId, entry] of portalUrlCache) {
+    if (now - entry.createdAt >= PORTAL_URL_CACHE_TTL_MS)
+      portalUrlCache.delete(cachedOrgId)
+  }
+  const callbackUrl = globalThis.location.href
+  const cachedEntry = portalUrlCache.get(orgId)
+  const cachedUrl = cachedEntry?.callbackUrl === callbackUrl
+    ? cachedEntry.url
+    : ''
+  const portalUrl = cachedUrl
+    ? Promise.resolve(cachedUrl)
+    : invokeCapgoApi('private/stripe_portal', {
+        body: JSON.stringify({ callbackUrl, orgId }),
+      }).then(({ data }) => {
+        const url = data?.url || ''
+        if (url)
+          portalUrlCache.set(orgId, { url, callbackUrl, createdAt: Date.now() })
+        return url
+      }, () => '')
 
   dialogStore.openDialog({
     title: t('open-your-portal'),
@@ -67,9 +107,9 @@ export async function openPortal(orgId: string, t: ComposerTranslation) {
         id: 'confirm-button',
         role: 'primary',
         handler: async () => {
-          await prem
+          const url = await portalUrl
           if (url)
-            openBlank(url)
+            await openBlank(url)
           else
             toast.error('Cannot open your portal')
         },
@@ -118,7 +158,7 @@ export async function openCheckout(priceId: string, successUrl: string, cancelUr
   const datafastAttribution = await getDatafastAttribution()
   const affonsoReferral = await getAffonsoReferral()
   try {
-    const resp = await supabase.functions.invoke('private/stripe_checkout', {
+    const resp = await invokeCapgoApi('private/stripe_checkout', {
       body: JSON.stringify({
         priceId,
         successUrl,
@@ -145,11 +185,10 @@ export async function openCheckout(priceId: string, successUrl: string, cancelUr
 export async function startCreditTopUp(orgId: string, quantity = 100) {
   if (!orgId)
     return
-  const supabase = useSupabase()
   const datafastAttribution = await getDatafastAttribution()
   const affonsoReferral = await getAffonsoReferral()
   try {
-    const { data, error } = await supabase.functions.invoke('private/credits/start-top-up', {
+    const { data, error } = await invokeCapgoApi('private/credits/start-top-up', {
       body: JSON.stringify({
         orgId,
         quantity,
@@ -175,9 +214,8 @@ export async function completeCreditTopUp(orgId: string, sessionId?: string | nu
   if (!orgId)
     return null
 
-  const supabase = useSupabase()
   try {
-    const { data, error } = await supabase.functions.invoke('private/credits/complete-top-up', {
+    const { data, error } = await invokeCapgoApi('private/credits/complete-top-up', {
       body: JSON.stringify({
         orgId,
         ...(sessionId ? { sessionId } : {}),

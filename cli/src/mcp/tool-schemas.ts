@@ -30,6 +30,7 @@ export const mcpUploadBundleInputSchema = z.object({
   minUpdateVersion: z.string().optional(),
   autoMinUpdateVersion: z.boolean().optional(),
   autoSetBundle: z.boolean().optional(),
+  autoBump: z.enum(['major', 'minor', 'patch', 'metadata', 'ai']).optional().describe('Semver part to bump from latest remote version (default minor when set via CLI without value); ai classifies via Capgo Workers AI'),
   encrypt: z.boolean().optional(),
   capacitorConfig: capacitorConfigOptionSchema.optional(),
 })

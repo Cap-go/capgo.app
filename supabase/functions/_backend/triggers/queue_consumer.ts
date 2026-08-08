@@ -24,7 +24,6 @@ const VERSION_QUEUE_VISIBILITY_TIMEOUT_SECONDS = 900
 const MANIFEST_QUEUE_VISIBILITY_TIMEOUT_SECONDS = 900
 const QUEUE_HTTP_TIMEOUT_MS = 15_000
 const VERSION_QUEUE_HTTP_TIMEOUT_MS = 300_000 // large deleted manifests: trash then DB delete
-const HEALTHCHECK_HTTP_TIMEOUT_MS = 8_000
 // HARD RULE: no pgmq queue may retry more than 5 times. Do not raise this, and
 // do not add per-queue exceptions. Leftover work must be re-enqueued by a
 // sweeper/cron (e.g. sweep_deleted_version_manifests), never by burning reads.
@@ -1020,60 +1019,6 @@ export async function http_post_helper(
   }
 }
 
-async function pingCronHealthcheck(
-  healthcheckUrl: string,
-  fetchImpl: typeof fetch,
-): Promise<boolean> {
-  const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), HEALTHCHECK_HTTP_TIMEOUT_MS)
-
-  try {
-    const response = await fetchImpl(healthcheckUrl, {
-      method: 'GET',
-      signal: controller.signal,
-    })
-    await response.body?.cancel()
-    return response.ok
-  }
-  catch {
-    return false
-  }
-  finally {
-    clearTimeout(timeoutId)
-  }
-}
-
-function trimTrailingSlashes(value: string): string {
-  let end = value.length
-  while (end > 0 && value[end - 1] === '/')
-    end--
-  return value.slice(0, end)
-}
-
-function getCronHealthcheckStartUrl(healthcheckUrl: string): string {
-  return `${trimTrailingSlashes(healthcheckUrl)}/start`
-}
-
-async function maybePingCronHealthcheckStart(
-  healthcheckUrl: string | null,
-  fetchImpl: typeof fetch = fetch,
-): Promise<boolean> {
-  if (!healthcheckUrl)
-    return false
-
-  return pingCronHealthcheck(getCronHealthcheckStartUrl(healthcheckUrl), fetchImpl)
-}
-
-async function maybePingCronHealthcheck(
-  processResult: QueueProcessResult,
-  healthcheckUrl: string | null,
-  fetchImpl: typeof fetch = fetch,
-): Promise<boolean> {
-  if (!healthcheckUrl || !processResult.readSucceeded || processResult.skippedCount > 0 || processResult.actionableFailureCount > 0)
-    return false
-
-  return pingCronHealthcheck(healthcheckUrl, fetchImpl)
-}
 
 // Helper function to delete multiple messages from the queue in a single batch
 async function delete_queue_message_batch(c: Context, db: ReturnType<typeof getPgClient>, queueName: string, msgIds: number[]) {
@@ -1158,7 +1103,6 @@ async function runQueueSync(
   c: Context,
   queueName: string,
   finalBatchSize: number,
-  healthcheckUrl: string | null,
   executionMode: 'background' | 'awaited',
   waitForCompletion = false,
 ): Promise<QueueProcessResult> {
@@ -1166,10 +1110,7 @@ async function runQueueSync(
   let db: ReturnType<typeof getPgClient> | null = null
   try {
     db = getPgClient(c)
-    if (healthcheckUrl !== null)
-      await maybePingCronHealthcheckStart(healthcheckUrl)
     const result = await processQueue(c, db, queueName, finalBatchSize, waitForCompletion)
-    await maybePingCronHealthcheck(result, healthcheckUrl)
     cloudlog({
       requestId: c.get('requestId'),
       message: result.success
@@ -1201,10 +1142,9 @@ app.post('/sync', async (c) => {
   cloudlog({ requestId: c.get('requestId'), message: `[Sync Request] Received trigger to process queue.` })
 
   // Require JSON body with queue_name and optional batch_size
-  const body = await parseBody<{ queue_name: string, batch_size?: number, healthcheck_url?: string | null, wait_for_completion?: boolean }>(c)
+  const body = await parseBody<{ queue_name: string, batch_size?: number, wait_for_completion?: boolean }>(c)
   const queueName = body?.queue_name
   const batchSize = body?.batch_size
-  const healthcheckUrl = typeof body?.healthcheck_url === 'string' && body.healthcheck_url.trim() ? body.healthcheck_url.trim() : null
   const waitForCompletion = body?.wait_for_completion === true
 
   if (!queueName || typeof queueName !== 'string') {
@@ -1231,12 +1171,12 @@ app.post('/sync', async (c) => {
   }
 
   if (shouldRunQueueSyncInBackground(queueName) && !waitForCompletion) {
-    await backgroundTask(c, runQueueSync(c, queueName, finalBatchSize, healthcheckUrl, 'background'))
+    await backgroundTask(c, runQueueSync(c, queueName, finalBatchSize, 'background'))
     cloudlog({ requestId: c.get('requestId'), message: `[Sync Request] Responding 202 Accepted. Time: ${Date.now() - handlerStart}ms` })
     return c.json(BRES, 202)
   }
 
-  await runQueueSync(c, queueName, finalBatchSize, healthcheckUrl, 'awaited', waitForCompletion)
+  await runQueueSync(c, queueName, finalBatchSize, 'awaited', waitForCompletion)
   cloudlog({ requestId: c.get('requestId'), message: `[Sync Request] Responding 202 Accepted after awaited queue processing. Time: ${Date.now() - handlerStart}ms` })
   return c.json(BRES, 202)
 })
@@ -1246,7 +1186,6 @@ export const __queueConsumerTestUtils__ = {
   extractMessageBody,
   getQueueMessageTrace,
   getActionableQueueFailures,
-  getCronHealthcheckStartUrl,
   getQueueBatchSize,
   getQueueAckChunkSize,
   getQueueHttpConcurrency,
@@ -1257,8 +1196,6 @@ export const __queueConsumerTestUtils__ = {
   normalizeQueueFunctionType,
   prepareQueueHttpBody,
   shouldRunQueueSyncInBackground,
-  maybePingCronHealthcheck,
-  maybePingCronHealthcheckStart,
   queueFailureResponse,
   resolveFunctionUrl,
   sanitizeDiscordResponseBody,

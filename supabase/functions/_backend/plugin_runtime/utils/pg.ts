@@ -1,25 +1,37 @@
 import type { SQL } from 'drizzle-orm'
 import type { Context } from 'hono'
+import type { AdminOnboardingActivationCohort } from './onboardingFunnel.ts'
 import { and, eq, isNotNull, isNull, or, sql } from 'drizzle-orm'
 import { drizzle } from 'drizzle-orm/node-postgres'
 import { alias } from 'drizzle-orm/pg-core'
 import { getRuntimeKey } from 'hono/adapter'
 // @ts-types="npm:@types/pg"
-import { Pool } from 'pg'
+import { Client, Pool } from 'pg'
 import { backgroundTask, existInEnv, getEnv } from '../utils/utils.ts'
 import { CacheHelper } from './cache.ts'
-import { getAdminOnboardingTelemetry } from './cloudflare.ts'
-import { getAdminOnboardingActivationMetrics } from './onboardingFunnel.ts'
-import type { AdminOnboardingActivationCohort } from './onboardingFunnel.ts'
 import { getChannelSelfOverride, isChannelSelfStoreEnabled } from './channelSelfStore.ts'
+import { getAdminOnboardingTelemetry } from './cloudflare.ts'
 import { DISPOSABLE_EMAIL_DOMAINS, PERSONAL_EMAIL_DOMAINS } from './emailClassification.ts'
 import { getClientDbRegionSB } from './geolocation.ts'
 import { REQUIRED_GLOBAL_STATS_SHARDS } from './global_stats.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
+import { getAdminOnboardingActivationMetrics } from './onboardingFunnel.ts'
 import * as schema from './postgres_schema.ts'
 import { withOptionalManifestSelect } from './queryHelpers.ts'
 import { getRolloutDecision } from './rollout.ts'
 import { shouldRequireReadReplica, shouldSkipDirectHyperdriveFallback } from './supabase_write_guard.ts'
+
+/**
+ * Plugin PG client handle. On Hyperdrive (workerd) this is a per-request `Client`;
+ * elsewhere it is a short-lived `Pool`.
+ *
+ * @see https://developers.cloudflare.com/hyperdrive/get-started/
+ * @see https://developers.cloudflare.com/hyperdrive/examples/connect-to-postgres/
+ */
+export type PluginPgClient = Client | Pool
+
+/** Hyperdrive owns Worker↔origin cleanup; do not call `.end()` on these clients. */
+const skipEndClients = new WeakSet<object>()
 
 const REPLICATION_LAG_THRESHOLD_SECONDS = 180
 const REPLICATION_LAG_CACHE_TTL_SECONDS = 60
@@ -111,7 +123,7 @@ export function buildPlanValidationExpression(
   ) OR (${customerIdSubquery} IS NULL)`
 }
 
-export function selectOne(pgClient: ReturnType<typeof getPgClient>) {
+export function selectOne(pgClient: PluginPgClient) {
   // Use pg Pool directly to avoid Drizzle's prepared statement handling
   // which doesn't work with Supabase pooler in transaction mode
   return pgClient.query('SELECT 1')
@@ -164,7 +176,7 @@ function toReplicationLagSeconds(value: unknown): number | null {
  * Query replication lag from the REPLICA database using pg_stat_subscription.
  * Uses the existing pool - no new connections.
  */
-async function queryReplicaLag(c: Context, pool: Pool): Promise<ReplicationLagStatus> {
+async function queryReplicaLag(c: Context, pool: PluginPgClient): Promise<ReplicationLagStatus> {
   try {
     const query = `
       SELECT MAX(EXTRACT(EPOCH FROM (now() - last_msg_receipt_time))) AS lag_seconds
@@ -196,7 +208,7 @@ async function queryReplicaLag(c: Context, pool: Pool): Promise<ReplicationLagSt
   }
 }
 
-async function getCachedReplicaLag(c: Context, pool: Pool): Promise<ReplicationLagStatus> {
+async function getCachedReplicaLag(c: Context, pool: PluginPgClient): Promise<ReplicationLagStatus> {
   const cacheKey = getReplicationLagCacheKey(c)
   const memoryEntry = getFreshReplicationLagMemoryEntry(cacheKey)
   if (memoryEntry)
@@ -241,12 +253,21 @@ async function getCachedReplicaLag(c: Context, pool: Pool): Promise<ReplicationL
 /**
  * Set replication lag headers on hot plugin responses using a 60-second cache.
  */
-export async function setReplicationLagHeader(c: Context, pool: Pool): Promise<void> {
-  const status = await getCachedReplicaLag(c, pool)
-  safeSetResponseHeader(c, 'X-Replication-Lag', status.status)
-  if (status.max_lag_seconds !== null) {
-    safeSetResponseHeader(c, 'X-Replication-Lag-Seconds', String(Math.round(status.max_lag_seconds)))
+export async function setReplicationLagHeader(c: Context, pool: PluginPgClient): Promise<void> {
+  // Hot path: only use in-memory lag. Cold Cache API / DB probe runs in background
+  // so a miss cannot add another Hyperdrive RTT to /updates P999.
+  const cacheKey = getReplicationLagCacheKey(c)
+  const memoryEntry = getFreshReplicationLagMemoryEntry(cacheKey)
+  if (memoryEntry) {
+    safeSetResponseHeader(c, 'X-Replication-Lag', memoryEntry.status)
+    if (memoryEntry.max_lag_seconds !== null) {
+      safeSetResponseHeader(c, 'X-Replication-Lag-Seconds', String(Math.round(memoryEntry.max_lag_seconds)))
+    }
+    return
   }
+
+  safeSetResponseHeader(c, 'X-Replication-Lag', 'unknown')
+  backgroundTask(c, getCachedReplicaLag(c, pool))
 }
 
 /**
@@ -298,7 +319,6 @@ function getReadOnlyDatabaseURL(c: Context, dbRegion: string | undefined): strin
     return null
 
   setDatabaseSource(c, selectedRoute.binding)
-  cloudlog({ requestId: c.get('requestId'), message: `Using ${selectedRoute.binding} for read-only` })
   return c.env[selectedRoute.binding].connectionString
 }
 
@@ -311,7 +331,6 @@ function getLocalReadOnlyDatabaseURL(c: Context): string | null {
     return null
 
   setDatabaseSource(c, 'local_read_replica')
-  cloudlog({ requestId: c.get('requestId'), message: 'Using LOCAL_READ_REPLICA_SUPABASE_DB_URL for read-only' })
   return fixSupabaseHost(getEnv(c, 'LOCAL_READ_REPLICA_SUPABASE_DB_URL'))
 }
 
@@ -330,57 +349,91 @@ export function getDatabaseURL(c: Context, readOnly = false): string {
   }
 
   if (readOnly && shouldRequireReadReplica(c)) {
-    cloudlog({ requestId: c.get('requestId'), message: 'Read replica is required for this endpoint' })
     throw new Error('Read replica is required for this endpoint')
   }
 
   if (c.env.HYPERDRIVE_CAPGO_DIRECT_EU && !shouldSkipDirectHyperdriveFallback(c)) {
     setDatabaseSource(c, 'HYPERDRIVE_CAPGO_DIRECT_EU')
-    cloudlog({ requestId: c.get('requestId'), message: `Using HYPERDRIVE_CAPGO_DIRECT_EU for ${readOnly ? 'read-only' : 'read-write'}` })
     return c.env.HYPERDRIVE_CAPGO_DIRECT_EU.connectionString
   }
 
   if (c.env.HYPERDRIVE_CAPGO_DIRECT_EU) {
-    cloudlog({ requestId: c.get('requestId'), message: 'Skipping HYPERDRIVE_CAPGO_DIRECT_EU fallback for this endpoint' })
   }
 
   // Main DB write poller EU region in supabase
   if (existInEnv(c, 'MAIN_SUPABASE_DB_URL')) {
     setDatabaseSource(c, 'sb_pooler_main')
-    cloudlog({ requestId: c.get('requestId'), message: 'Using MAIN_SUPABASE_DB_URL for read-write' })
     return getEnv(c, 'MAIN_SUPABASE_DB_URL')
   }
 
   // Default Supabase direct connection used for testing or if no other option is available
   setDatabaseSource(c, 'direct')
-  cloudlog({ requestId: c.get('requestId'), message: 'Using Direct Supabase for read-write' })
   return fixSupabaseHost(getEnv(c, 'SUPABASE_DB_URL'))
 }
 
-export function getPgClient(c: Context, readOnly = false) {
+/** True when dbUrl is one of this Worker's Hyperdrive binding connection strings. */
+function isHyperdriveConnectionString(c: Context, dbUrl: string): boolean {
+  const env = c.env as Record<string, { connectionString?: string } | undefined> | undefined
+  if (!env)
+    return false
+  for (const [key, value] of Object.entries(env)) {
+    if (!key.startsWith('HYPERDRIVE_') || !value?.connectionString)
+      continue
+    if (value.connectionString === dbUrl)
+      return true
+  }
+  return false
+}
+
+/**
+ * Create a DB client for this request.
+ *
+ * Hyperdrive connection lifecycle (explicit Cloudflare contract):
+ * @see https://developers.cloudflare.com/hyperdrive/concepts/connection-lifecycle/
+ * - New `pg.Client` inside each request. Never create/cache Client/Pool in global scope.
+ * - `await client.connect()`, then query.
+ * - Do **not** call `client.end()` / `pool.end()`: "Workers-to-Hyperdrive connections
+ *   are automatically cleaned up when the request ends"; origin pool stays open.
+ *
+ * Non-Hyperdrive (local/direct/pooler): `Pool` + explicit `closeClient`/`end()`.
+ */
+export async function getPgClient(c: Context, readOnly = false): Promise<PluginPgClient> {
   const dbUrl = getDatabaseURL(c, readOnly)
   const requestId = c.get('requestId')
   const appName = c.res.headers.get('X-Worker-Source') ?? 'unknown source'
   const dbName = String(c.get('databaseSource') ?? c.res.headers.get('X-Database-Source') ?? 'unknown source')
-  cloudlog({ requestId, message: 'SUPABASE_DB_URL selected', dbName, appName, readOnly })
-
   const isPooler = dbName.startsWith('sb_pooler')
-  const options = {
-    connectionString: dbUrl,
-    max: 4,
-    application_name: `${appName}-${dbName}`,
-    idleTimeoutMillis: 20000, // Increase from 2 to 20 seconds
-    connectionTimeoutMillis: 10000, // Add explicit connect timeout
-    maxLifetimeMillis: 30 * 60 * 1000, // 30 minutes
-    // PgBouncer/Supabase pooler doesn't support the 'options' startup parameter
-    options: readOnly && !isPooler ? '-c default_transaction_read_only=on' : undefined,
+  const readOnlyOptions = readOnly && !isPooler ? '-c default_transaction_read_only=on' : undefined
+  const isWorkerd = getRuntimeKey() === 'workerd'
+  // Match on the actual connection string (not just databaseSource metadata) so the
+  // Hyperdrive Client contract cannot silently become Pool+end() if c.set is missed.
+  const useHyperdriveClient = isWorkerd && isHyperdriveConnectionString(c, dbUrl)
+
+  if (useHyperdriveClient) {
+    const client = new Client({
+      connectionString: dbUrl,
+      application_name: `${appName}-${dbName}`,
+      connectionTimeoutMillis: 10000,
+      // PgBouncer/Supabase pooler doesn't support the 'options' startup parameter
+      options: readOnlyOptions,
+    })
+    client.on('error', (err: Error) => {
+      cloudlogErr({ requestId, message: 'PG Client Error', error: err })
+    })
+    await client.connect()
+    skipEndClients.add(client)
+    return client
   }
 
-  const pool = new Pool(options)
-
-  // Hook to log when connections are removed from the pool
-  pool.on('remove', () => {
-    cloudlog({ requestId, message: 'PG Connection Removed from Pool' })
+  const pool = new Pool({
+    connectionString: dbUrl,
+    max: isWorkerd ? 1 : 4,
+    application_name: `${appName}-${dbName}`,
+    idleTimeoutMillis: 20000,
+    connectionTimeoutMillis: 10000,
+    maxLifetimeSeconds: 30 * 60,
+    // PgBouncer/Supabase pooler doesn't support the 'options' startup parameter
+    options: readOnlyOptions,
   })
 
   pool.on('error', (err: Error) => {
@@ -390,68 +443,346 @@ export function getPgClient(c: Context, readOnly = false) {
   return pool
 }
 
-export function getDrizzleClient(db: ReturnType<typeof getPgClient>, options?: { logger?: boolean }) {
+export function getDrizzleClient(db: PluginPgClient, options?: { logger?: boolean }) {
   // Keep SQL logging on by default for API/trigger diagnostics.
   // Plugin hot paths pass `{ logger: false }` to avoid per-request log CPU/volume.
   return drizzle({ client: db, logger: options?.logger ?? true })
 }
 
-// Helper to extract detailed error information from pg errors
-export function logPgError(c: Context, functionName: string, error: unknown) {
-  const e = error as Error & {
-    code?: string
-    errno?: number
-    syscall?: string
-    address?: string
-    port?: number
-    severity?: string
-    detail?: string
-    hint?: string
-    position?: string
-    routine?: string
-    file?: string
-    line?: string
-    column?: string
+const POSTGRES_ERROR_FIELDS = [
+  // PostgreSQL server errors (node-postgres DatabaseError)
+  'severity',
+  'code',
+  'detail',
+  'hint',
+  'position',
+  'internalPosition',
+  'internalQuery',
+  'where',
+  'schema',
+  'table',
+  'column',
+  'dataType',
+  'constraint',
+  'file',
+  'line',
+  'routine',
+
+  // Network, socket, and TLS errors
+  'errno',
+  'syscall',
+  'address',
+  'port',
+  'host',
+  'hostname',
+  'library',
+  'function',
+  'reason',
+  'opensslErrorStack',
+
+  // Driver/runtime errors
+  'status',
+  'statusCode',
+  'command',
+  'query',
+] as const
+
+const MAX_POSTGRES_ERROR_CAUSE_DEPTH = 8
+const MAX_POSTGRES_LOG_VALUE_DEPTH = 4
+const MAX_POSTGRES_LOG_ARRAY_ITEMS = 50
+const MAX_POSTGRES_LOG_OBJECT_KEYS = 50
+const POSTGRES_LOG_REDACTED_KEYS = new Set(['bindings', 'parameters', 'params', 'values'])
+const POSTGRES_LOG_UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+
+function redactPostgresLogText(value: string): string {
+  return value.replace(/(^|[\r\n])params:[^\r\n]*/gi, '$1params: [redacted]')
+}
+
+function describeThrownValue(value: unknown): string {
+  if (typeof value === 'string')
+    return redactPostgresLogText(value)
+  if (value === null || value === undefined || typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint' || typeof value === 'symbol')
+    return String(value)
+  return 'object thrown'
+}
+
+function readErrorProperty(error: object, key: PropertyKey): unknown {
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(error, key)
+    if (!descriptor)
+      return undefined
+    if ('value' in descriptor)
+      return descriptor.value
+    return '[accessor property omitted]'
+  }
+  catch (propertyError) {
+    return `[unreadable property: ${describeThrownValue(propertyError)}]`
+  }
+}
+
+function getObjectType(value: object): string {
+  if (Array.isArray(value))
+    return 'Array'
+  if (value instanceof AggregateError)
+    return 'AggregateError'
+  if (value instanceof Error)
+    return 'Error'
+  if (typeof value === 'function')
+    return 'Function'
+  return 'Object'
+}
+
+function getLogArrayLength(value: unknown[]): number {
+  const length = readErrorProperty(value, 'length')
+  return typeof length === 'number' && Number.isSafeInteger(length) && length > 0
+    ? length
+    : 0
+}
+
+function serializePostgresLogArray(
+  value: unknown[],
+  seen: WeakSet<object>,
+  depth: number,
+): unknown[] {
+  const totalLength = getLogArrayLength(value)
+  const boundedLength = Math.min(totalLength, MAX_POSTGRES_LOG_ARRAY_ITEMS)
+  const serialized: unknown[] = []
+  for (let index = 0; index < boundedLength; index++)
+    serialized.push(serializePostgresLogValue(readErrorProperty(value, index), seen, depth + 1))
+
+  if (totalLength > boundedLength)
+    serialized.push(`[truncated ${totalLength - boundedLength} items]`)
+  return serialized
+}
+
+function serializePostgresLogObject(
+  value: object,
+  seen: WeakSet<object>,
+  depth: number,
+): unknown {
+  let keys: string[]
+  try {
+    keys = Object.keys(value)
+  }
+  catch (keyError) {
+    return `[unreadable object: ${describeThrownValue(keyError)}]`
   }
 
+  // A null-prototype record plus explicit unsafe-key filtering prevents
+  // attacker-controlled diagnostic keys from invoking `__proto__` setters
+  // here or in less defensive downstream log processors.
+  const serialized: Record<string, unknown> = Object.create(null)
+  const blockedKeys: string[] = []
+  for (const key of keys.slice(0, MAX_POSTGRES_LOG_OBJECT_KEYS)) {
+    if (POSTGRES_LOG_UNSAFE_KEYS.has(key.toLowerCase())) {
+      blockedKeys.push(key)
+      continue
+    }
+    // Structured query objects can carry bound values under these keys.
+    // Keep the query text and shape, but never copy parameter values to logs.
+    serialized[key] = POSTGRES_LOG_REDACTED_KEYS.has(key.toLowerCase())
+      ? '[redacted]'
+      : serializePostgresLogValue(readErrorProperty(value, key), seen, depth + 1)
+  }
+
+  if (keys.length > MAX_POSTGRES_LOG_OBJECT_KEYS)
+    serialized.__truncatedKeys = keys.length - MAX_POSTGRES_LOG_OBJECT_KEYS
+  if (blockedKeys.length)
+    serialized.__blockedKeys = blockedKeys
+
+  return serialized
+}
+
+function serializePostgresLogValue(
+  value: unknown,
+  seen = new WeakSet<object>(),
+  depth = 0,
+): unknown {
+  if (typeof value === 'string')
+    return redactPostgresLogText(value)
+  if (typeof value === 'bigint')
+    return value.toString()
+  if (typeof value === 'symbol')
+    return value.toString()
+  if (typeof value === 'function') {
+    const functionName = readErrorProperty(value, 'name')
+    return `[function ${typeof functionName === 'string' && functionName ? functionName : 'anonymous'}]`
+  }
+  if (value === null || typeof value !== 'object')
+    return value
+
+  if (seen.has(value))
+    return '[circular]'
+  if (depth >= MAX_POSTGRES_LOG_VALUE_DEPTH)
+    return `[truncated ${getObjectType(value)}]`
+
+  seen.add(value)
+  try {
+    return Array.isArray(value)
+      ? serializePostgresLogArray(value, seen, depth)
+      : serializePostgresLogObject(value, seen, depth)
+  }
+  catch (serializationError) {
+    return `[unserializable ${getObjectType(value)}: ${describeThrownValue(serializationError)}]`
+  }
+  finally {
+    seen.delete(value)
+  }
+}
+
+function serializePostgresAggregateErrors(
+  aggregateErrors: unknown[],
+  seen: WeakSet<object>,
+  depth: number,
+): Record<string, unknown>[] {
+  const totalLength = getLogArrayLength(aggregateErrors)
+  const boundedLength = Math.min(totalLength, MAX_POSTGRES_LOG_ARRAY_ITEMS)
+  const errors: Record<string, unknown>[] = []
+  for (let index = 0; index < boundedLength; index++) {
+    errors.push(serializePostgresError(
+      readErrorProperty(aggregateErrors, index),
+      seen,
+      depth + 1,
+    ))
+  }
+  if (totalLength > boundedLength) {
+    errors.push({
+      type: 'truncated',
+      omitted: totalLength - boundedLength,
+    })
+  }
+  return errors
+}
+
+/**
+ * Serialize the complete Drizzle/node-postgres cause chain for Cloudflare logs.
+ *
+ * Error fields such as `code`, `severity`, and `routine` are not reliably
+ * enumerable, while Drizzle wraps the original driver error in `cause`. Read
+ * both explicitly so transient replica/Hyperdrive failures retain their
+ * PostgreSQL SQLSTATE and network diagnostics.
+ */
+export function serializePostgresError(
+  error: unknown,
+  seen = new WeakSet<object>(),
+  depth = 0,
+): Record<string, unknown> {
+  if (error === null || (typeof error !== 'object' && typeof error !== 'function')) {
+    return {
+      type: error === null ? 'null' : typeof error,
+      value: serializePostgresLogValue(error),
+    }
+  }
+
+  if (seen.has(error))
+    return { type: getObjectType(error), circular: true }
+
+  if (depth >= MAX_POSTGRES_ERROR_CAUSE_DEPTH)
+    return { type: getObjectType(error), truncated: true }
+
+  seen.add(error)
+  const serialized: Record<string, unknown> = {
+    type: getObjectType(error),
+  }
+  try {
+    const name = readErrorProperty(error, 'name')
+    const message = readErrorProperty(error, 'message')
+    const stack = readErrorProperty(error, 'stack')
+
+    serialized.name = name === undefined
+      ? getObjectType(error)
+      : serializePostgresLogValue(name)
+    if (message !== undefined)
+      serialized.message = serializePostgresLogValue(message)
+    if (stack !== undefined)
+      serialized.stack = serializePostgresLogValue(stack)
+
+    for (const field of POSTGRES_ERROR_FIELDS) {
+      const value = readErrorProperty(error, field)
+      if (value !== undefined)
+        serialized[field] = serializePostgresLogValue(value)
+    }
+
+    const params = readErrorProperty(error, 'params')
+    if (Array.isArray(params)) {
+      // Query parameters can contain credentials or other user-provided secrets.
+      // The affected app is logged explicitly by the caller instead.
+      serialized.parameterCount = params.length
+    }
+
+    const aggregateErrors = readErrorProperty(error, 'errors')
+    if (Array.isArray(aggregateErrors))
+      serialized.errors = serializePostgresAggregateErrors(aggregateErrors, seen, depth)
+
+    const cause = readErrorProperty(error, 'cause')
+    if (cause !== undefined)
+      serialized.cause = serializePostgresError(cause, seen, depth + 1)
+
+    return serialized
+  }
+  catch (serializationError) {
+    serialized.serializationFailure = describeThrownValue(serializationError)
+    return serialized
+  }
+  finally {
+    seen.delete(error)
+  }
+}
+
+export function logPgError(
+  c: Context,
+  functionName: string,
+  error: unknown,
+  diagnostics: Record<string, unknown> = {},
+) {
+  const cf = c.req.raw.cf
+  const serializedDiagnostics = serializePostgresLogValue(diagnostics)
+  const callerDiagnostics = serializedDiagnostics !== null
+    && typeof serializedDiagnostics === 'object'
+    && !Array.isArray(serializedDiagnostics)
+    ? serializedDiagnostics as Record<string, unknown>
+    : { context: serializedDiagnostics }
+
+  // This deliberately verbose payload is temporary while investigating the
+  // intermittent getAppOwnerPostgres replica/Hyperdrive failure.
   cloudlogErr({
     requestId: c.get('requestId'),
     message: `${functionName} - PostgreSQL Error`,
-    error: {
-      // Basic error info
-      message: e.message,
-      name: e.name,
-      stack: e.stack,
-
-      // PostgreSQL-specific error codes
-      code: e.code, // e.g., '57P01' for connection termination, 'ECONNREFUSED', 'ETIMEDOUT'
-      severity: e.severity,
-      detail: e.detail,
-      hint: e.hint,
-
-      // Network-level errors
-      errno: e.errno, // System error number
-      syscall: e.syscall, // System call that failed (e.g., 'connect', 'read', 'write')
-      address: e.address, // IP address
-      port: e.port, // Port number
-
-      // Query position info
-      position: e.position,
-      routine: e.routine,
-
-      // File info for debugging
-      file: e.file,
-      line: e.line,
-      column: e.column,
+    error: serializePostgresError(error),
+    diagnostics: {
+      ...callerDiagnostics,
+      version: 1,
+      functionName,
+      databaseSource: c.get('databaseSource') ?? c.res.headers.get('X-Database-Source') ?? 'unknown',
+      workerSource: c.res.headers.get('X-Worker-Source') ?? 'unknown',
+      runtime: getRuntimeKey(),
+      request: {
+        method: c.req.method,
+        path: c.req.path,
+        rayId: c.req.header('cf-ray') ?? c.get('requestId'),
+        userAgent: c.req.header('user-agent'),
+        colo: cf?.colo,
+        continent: cf?.continent,
+        country: cf?.country,
+      },
     },
   })
 }
 
-export function closeClient(c: Context, db: ReturnType<typeof getPgClient>) {
-  // cloudlog(c.get('requestId'), 'Closing client', client)
-  if (getRuntimeKey() !== 'workerd')
-    return backgroundTask(c, db.end())
-  return undefined
+export function closeClient(c: Context, db: PluginPgClient) {
+  // Hyperdrive: do not end() — connection-lifecycle docs say GC cleans the edge hop.
+  // https://developers.cloudflare.com/hyperdrive/concepts/connection-lifecycle/
+  if (skipEndClients.has(db))
+    return
+
+  // Non-Hyperdrive Pool: must end() or we leak sockets (the old workerd sawtooth).
+  return backgroundTask(c, Promise.resolve(db.end()).catch((error: unknown) => {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'PG client end failed',
+      error,
+    })
+  }))
 }
 
 export function getAlias() {
@@ -579,7 +910,6 @@ export function requestInfosChannelDevicePostgres(
     ))
     .groupBy(channelDevicesAlias.device_id, channelDevicesAlias.app_id, channelAlias.id, versionAlias.id)
     .limit(1)
-  cloudlog({ requestId: c.get('requestId'), message: 'channelDevice Query:', channelDeviceQuery: channelDevice.toSQL() })
 
   return channelDevice.then(data => data.at(0))
 }
@@ -614,7 +944,6 @@ export async function getEffectiveDeviceChannelNamePostgres(
       ))
       .limit(1)
 
-    cloudlog({ requestId: c.get('requestId'), message: 'stats channel self override Query:', channelQuery: channelQuery.toSQL() })
     const channel = await channelQuery.then(data => data.at(0))
     return channel?.name ? channel : null
   }
@@ -636,7 +965,6 @@ export async function getEffectiveDeviceChannelNamePostgres(
       .where(and(eq(channelDevicesAlias.device_id, device_id), eq(channelDevicesAlias.app_id, app_id)))
       .limit(1)
 
-    cloudlog({ requestId: c.get('requestId'), message: 'stats channel override Query:', channelQuery: channelQuery.toSQL() })
     const channel = await channelQuery.then(data => data.at(0))
     if (channel?.name)
       return channel
@@ -665,7 +993,6 @@ export async function getEffectiveDeviceChannelNamePostgres(
       .orderBy(channelAlias.name, channelAlias.id)
       .limit(1)
 
-    cloudlog({ requestId: c.get('requestId'), message: 'stats channel Query:', channelQuery: channelQuery.toSQL(), fallbackChannelName: channelName })
     const channel = await channelQuery.then(data => data.at(0))
     return channel?.name ? channel : null
   }
@@ -708,7 +1035,6 @@ export function requestInfosChannelByIdPostgres(
     ))
     .groupBy(channelAlias.id, versionAlias.id)
     .limit(1)
-  cloudlog({ requestId: c.get('requestId'), message: 'channel self override Query:', channelSelfOverrideQuery: channel.toSQL() })
 
   return channel.then(data => data.at(0))
 }
@@ -763,18 +1089,29 @@ export function requestInfosChannelPostgres(
     .groupBy(channelAlias.id, versionAlias.id)
     .orderBy(channelAlias.name, channelAlias.id)
     .limit(1)
-  cloudlog({ requestId: c.get('requestId'), message: 'channel Query:', channelQuery: channelQuery.toSQL() })
   const channel = channelQuery.then(data => data.at(0))
 
   return channel
 }
 
-export function requestManifestEntriesPostgres(
+const MANIFEST_ROWS_CACHE_PATH = '/.manifest-rows-v1'
+const MANIFEST_ROWS_CACHE_TTL_SECONDS = 60
+
+interface ManifestRow { file_name: string, file_hash: string, s3_path: string }
+
+export async function requestManifestEntriesPostgres(
   c: Context,
   versionId: number,
   drizzleClient: ReturnType<typeof getDrizzleClient>,
-) {
-  const manifestQuery = drizzleClient
+): Promise<ManifestRow[]> {
+  // Cache raw rows by version id (not final download URLs — those embed device_id).
+  const helper = new CacheHelper(c)
+  const cacheKey = helper.buildRequest(MANIFEST_ROWS_CACHE_PATH, { version_id: String(versionId) })
+  const cached = await helper.matchJson<ManifestRow[]>(cacheKey)
+  if (cached)
+    return cached
+
+  const rows = await drizzleClient
     .select({
       file_name: schema.manifest.file_name,
       file_hash: schema.manifest.file_hash,
@@ -783,8 +1120,9 @@ export function requestManifestEntriesPostgres(
     .from(schema.manifest)
     .where(eq(schema.manifest.app_version_id, versionId))
 
-  cloudlog({ requestId: c.get('requestId'), message: 'rollout manifest Query:', manifestQuery: manifestQuery.toSQL() })
-  return manifestQuery
+  // Fire-and-forget put; Cache API size limits may reject huge manifests.
+  void helper.putJson(cacheKey, rows, MANIFEST_ROWS_CACHE_TTL_SECONDS)
+  return rows
 }
 
 export function requestInfosChannelByIdPostgresRollout(
@@ -811,7 +1149,6 @@ export function requestInfosChannelByIdPostgresRollout(
     ))
     .limit(1)
 
-  cloudlog({ requestId: c.get('requestId'), message: 'channel self override rollout Query:', channelSelfOverrideQuery: channel.toSQL() })
   return channel.then(data => data.at(0))
 }
 
@@ -840,7 +1177,6 @@ export function requestInfosChannelDevicePostgresRollout(
     ))
     .limit(1)
 
-  cloudlog({ requestId: c.get('requestId'), message: 'channelDevice rollout Query:', channelDeviceQuery: channelDevice.toSQL() })
   return channelDevice.then(data => data.at(0))
 }
 
@@ -887,7 +1223,6 @@ export function requestInfosChannelPostgresRollout(
     .orderBy(channelAlias.name, channelAlias.id)
     .limit(1)
 
-  cloudlog({ requestId: c.get('requestId'), message: 'channel rollout Query:', channelQuery: channelQuery.toSQL() })
   return channelQuery.then(data => data.at(0))
 }
 
@@ -948,6 +1283,11 @@ interface RequestInfosPostgresOptions {
   drizzleClient: ReturnType<typeof getDrizzleClient>
   channelDeviceCount?: number | null
   manifestBundleCount?: number | null
+  /**
+   * When false, skip manifest json_agg / follow-up fetch in channel queries.
+   * Used by /updates to avoid loading thousands of files before the up-to-date short-circuit.
+   */
+  includeManifest?: boolean
   rolloutChannelCount?: number | null
   rolloutPausedVersionNames?: string[] | null
   currentVersionName: string
@@ -965,6 +1305,7 @@ export function requestInfosPostgres(options: RequestInfosPostgresOptions) {
     drizzleClient,
     channelDeviceCount,
     manifestBundleCount,
+    includeManifest,
     rolloutChannelCount,
     rolloutPausedVersionNames,
     currentVersionName,
@@ -972,31 +1313,59 @@ export function requestInfosPostgres(options: RequestInfosPostgresOptions) {
     channelSelfOverrideChannelId,
   } = options
   const shouldQueryChannelOverride = channelDeviceCount === undefined || channelDeviceCount === null ? true : channelDeviceCount > 0
-  const shouldFetchManifest = manifestBundleCount === undefined || manifestBundleCount === null ? true : manifestBundleCount > 0
+  const shouldFetchManifest = includeManifest !== false
+    && (manifestBundleCount == null || manifestBundleCount > 0)
   const isPausedRolloutVersion = Array.isArray(rolloutPausedVersionNames) && rolloutPausedVersionNames.includes(currentVersionName)
   const shouldUseRolloutPath = (rolloutChannelCount ?? 0) > 0 || isPausedRolloutVersion
 
   if (!shouldUseRolloutPath) {
-    let channelDevice: ReturnType<typeof requestInfosChannelByIdPostgres> | ReturnType<typeof requestInfosChannelDevicePostgres> | Promise<null>
+    const runPair = async (
+      deviceClient: typeof drizzleClient,
+      channelClient: typeof drizzleClient,
+    ) => {
+      let channelDevice: ReturnType<typeof requestInfosChannelByIdPostgres> | ReturnType<typeof requestInfosChannelDevicePostgres> | Promise<null>
 
-    if (typeof channelSelfOverrideChannelId === 'number') {
-      channelDevice = requestInfosChannelByIdPostgres(c, app_id, channelSelfOverrideChannelId, drizzleClient, shouldFetchManifest, includeMetadata)
+      if (typeof channelSelfOverrideChannelId === 'number') {
+        channelDevice = requestInfosChannelByIdPostgres(c, app_id, channelSelfOverrideChannelId, deviceClient, shouldFetchManifest, includeMetadata)
+      }
+      else if (shouldQueryChannelOverride) {
+        channelDevice = requestInfosChannelDevicePostgres(c, app_id, device_id, deviceClient, shouldFetchManifest, includeMetadata)
+      }
+      else {
+        channelDevice = Promise.resolve(null)
+      }
+      const channel = requestInfosChannelPostgres(c, platform, app_id, defaultChannel, channelClient, shouldFetchManifest, includeMetadata)
+      const [channelOverride, channelData] = await Promise.all([channelDevice, channel])
+      return { channelData, channelOverride }
     }
-    else if (shouldQueryChannelOverride) {
-      channelDevice = requestInfosChannelDevicePostgres(c, app_id, device_id, drizzleClient, shouldFetchManifest, includeMetadata)
-    }
-    else {
-      cloudlog({ requestId: c.get('requestId'), message: 'Skipping channel device override query' })
-      channelDevice = Promise.resolve(null)
-    }
-    const channel = requestInfosChannelPostgres(c, platform, app_id, defaultChannel, drizzleClient, shouldFetchManifest, includeMetadata)
 
-    return Promise.all([channelDevice, channel])
-      .then(([channelOverride, channelData]) => ({ channelData, channelOverride }))
-      .catch((e) => {
+    return (async () => {
+      try {
+        // Single pg.Client serializes queries; use a second Hyperdrive client when
+        // both override + default channel are needed so the two RTTs overlap.
+        const needsParallelClients = shouldQueryChannelOverride || typeof channelSelfOverrideChannelId === 'number'
+        if (needsParallelClients && getRuntimeKey() === 'workerd') {
+          try {
+            const parallelClient = await getPgClient(c, true)
+            try {
+              const drizzleParallel = getDrizzleClient(parallelClient, { logger: false })
+              return await runPair(drizzleClient, drizzleParallel)
+            }
+            finally {
+              await closeClient(c, parallelClient)
+            }
+          }
+          catch {
+            // Latency opt only — fall back to serial queries on the primary client.
+          }
+        }
+        return await runPair(drizzleClient, drizzleClient)
+      }
+      catch (e) {
         logPgError(c, 'requestInfosPostgres', e)
         throw e
-      })
+      }
+    })()
   }
 
   let channelDevice: ReturnType<typeof requestInfosChannelByIdPostgresRollout> | ReturnType<typeof requestInfosChannelDevicePostgresRollout> | Promise<null>
@@ -1007,7 +1376,6 @@ export function requestInfosPostgres(options: RequestInfosPostgresOptions) {
     channelDevice = requestInfosChannelDevicePostgresRollout(c, app_id, device_id, drizzleClient, includeMetadata)
   }
   else {
-    cloudlog({ requestId: c.get('requestId'), message: 'Skipping channel device override rollout query' })
     channelDevice = Promise.resolve(null)
   }
   const channel = requestInfosChannelPostgresRollout(c, platform, app_id, defaultChannel, drizzleClient, includeMetadata)
@@ -1097,15 +1465,18 @@ export async function getAppOwnerPostgres(
     return appOwner as AppOwnerPostgresResult
   }
   catch (e: unknown) {
-    logPgError(c, 'getAppOwnerPostgres', e)
+    logPgError(c, 'getAppOwnerPostgres', e, {
+      appId,
+      planActions: actions,
+    })
     return null
   }
 }
 
-export type AppBlockProviderInfraRequestsLookup =
-  | { status: 'found', blockProviderInfraRequests: boolean }
-  | { status: 'missing' }
-  | { status: 'error' }
+export type AppBlockProviderInfraRequestsLookup
+  = | { status: 'found', blockProviderInfraRequests: boolean }
+    | { status: 'missing' }
+    | { status: 'error' }
 
 export async function getAppBlockProviderInfraRequestsPostgres(
   c: Context,
@@ -1494,7 +1865,7 @@ export async function getAdminDeploymentsTrend(
   app_id?: string,
 ): Promise<AdminDeploymentsTrend[]> {
   try {
-    const pgClient = getPgClient(c, true) // Read-only query
+    const pgClient = await getPgClient(c, true) // Read-only query
     const drizzleClient = getDrizzleClient(pgClient)
 
     const appFilter = app_id ? sql`AND app_id = ${app_id}` : sql``
@@ -1538,6 +1909,7 @@ export interface AdminGlobalStatsTrend {
   apps_with_manual_builds_24h: number
   app_build_onboarding_finalized: boolean
   apps_active: number
+  apps_with_preview: number
   users: number
   users_active: number
   paying: number
@@ -1635,7 +2007,7 @@ export async function getAdminGlobalStatsTrend(
     // Admin global stats are low traffic and depend on recently migrated
     // global_stats columns. Use primary DB so replica schema/data drift does not
     // silently blank the dashboard.
-    const pgClient = getPgClient(c)
+    const pgClient = await getPgClient(c)
     const drizzleClient = getDrizzleClient(pgClient)
 
     // Extract just the date portion (YYYY-MM-DD) from ISO timestamps
@@ -1665,6 +2037,7 @@ export async function getAdminGlobalStatsTrend(
         COALESCE(NULLIF(to_jsonb(gs) ->> 'apps_with_manual_builds_24h', '')::int, 0)::int AS apps_with_manual_builds_24h,
         (onboarding_next.date_id IS NOT NULL)::boolean AS app_build_onboarding_finalized,
         gs.apps_active::int AS apps_active,
+        COALESCE(NULLIF(to_jsonb(gs) ->> 'apps_with_preview', '')::int, 0)::int AS apps_with_preview,
         gs.users::int AS users,
         gs.users_active::int AS users_active,
         gs.paying::int AS paying,
@@ -1821,6 +2194,7 @@ export async function getAdminGlobalStatsTrend(
       apps_with_manual_builds_24h: Number(row.apps_with_manual_builds_24h) || 0,
       app_build_onboarding_finalized: row.app_build_onboarding_finalized === true || row.app_build_onboarding_finalized === 'true',
       apps_active: Number(row.apps_active) || 0,
+      apps_with_preview: Number(row.apps_with_preview) || 0,
       users: Number(row.users) || 0,
       users_active: Number(row.users_active) || 0,
       paying: Number(row.paying) || 0,
@@ -1977,7 +2351,7 @@ export function normalizeAdminStatsDate(value: unknown): string {
 }
 
 async function getLiveRegisteredUsersCount(c: Context): Promise<number> {
-  const pgClient = getPgClient(c)
+  const pgClient = await getPgClient(c)
   const drizzleClient = getDrizzleClient(pgClient)
 
   try {
@@ -2011,7 +2385,7 @@ export async function getAdminPayingOrgBreakdown(c: Context): Promise<AdminPayin
     paying_orgs_total: 0,
   }
 
-  const pgClient = getPgClient(c)
+  const pgClient = await getPgClient(c)
   const drizzleClient = getDrizzleClient(pgClient)
 
   try {
@@ -2111,7 +2485,7 @@ export async function getAdminEmailTypeBreakdown(
   }
 
   try {
-    const pgClient = getPgClient(c, true)
+    const pgClient = await getPgClient(c, true)
     const drizzleClient = getDrizzleClient(pgClient)
     const { startDay, seriesEndDay, endExclusive } = getAdminUtcDateRange(start_date, end_date)
 
@@ -2226,7 +2600,7 @@ export async function getAdminCustomerCountryBreakdown(
   }
 
   try {
-    const pgClient = getPgClient(c, false)
+    const pgClient = await getPgClient(c, false)
     const drizzleClient = getDrizzleClient(pgClient)
     const { startDay, endExclusive } = getAdminUtcDateRange(start_date, end_date)
 
@@ -2480,9 +2854,9 @@ export async function getAdminOrganizationInsights(
   end_date: string,
   filters: AdminOrganizationInsightsFilters = {},
 ): Promise<AdminOrganizationInsightsResult> {
-  let pgClient: ReturnType<typeof getPgClient> | undefined
+  let pgClient: PluginPgClient | undefined
   try {
-    pgClient = getPgClient(c)
+    pgClient = await getPgClient(c)
     const drizzleClient = getDrizzleClient(pgClient)
     const safeLimit = Math.max(1, Math.min(Math.floor(filters.limit ?? 50), 500))
     const safeOffset = Math.max(0, Math.floor(filters.offset ?? 0))
@@ -2788,7 +3162,7 @@ export async function getAdminCancelledOrganizations(
   offset: number = 0,
 ): Promise<AdminCancelledOrganizationsResult> {
   try {
-    const pgClient = getPgClient(c, true)
+    const pgClient = await getPgClient(c, true)
     const drizzleClient = getDrizzleClient(pgClient)
 
     const dateFilter = start_date && end_date
@@ -2904,7 +3278,7 @@ export async function getAdminTrialOrganizations(
   try {
     // The admin dashboard needs plans.name, and plans is not replicated to
     // read replicas.
-    const pgClient = getPgClient(c)
+    const pgClient = await getPgClient(c)
     const drizzleClient = getDrizzleClient(pgClient)
 
     // Query to get trial organizations ordered by days remaining (ascending - expiring soon first)
@@ -3011,10 +3385,10 @@ export async function getAdminTrialPlanBreakdown(
     trend: [],
   }
 
-  let pgClient: ReturnType<typeof getPgClient> | undefined
+  let pgClient: PluginPgClient | undefined
   try {
     // The admin dashboard needs plans.name, and plans is not available on every read replica.
-    pgClient = getPgClient(c)
+    pgClient = await getPgClient(c)
     const drizzleClient = getDrizzleClient(pgClient)
     const { startDay, seriesEndDay, endExclusive } = getAdminUtcDateRange(start_date, end_date)
 
@@ -3110,6 +3484,7 @@ export async function getAdminTrialPlanBreakdown(
 
 // Admin Onboarding Funnel
 export interface AdminOnboardingFunnel {
+  total_registrations: number
   total_orgs: number
   orgs_with_app: number
   orgs_with_channel: number
@@ -3118,7 +3493,12 @@ export interface AdminOnboardingFunnel {
   orgs_with_production_device: number
   orgs_with_update_download: number
   activation_telemetry_available: boolean
+  // Invite join metrics (team invites)
+  total_invite_registrations: number
+  total_org_joins_invite_register: number
+  total_org_joins_existing_account: number
   // Conversion rates
+  org_conversion_rate: number
   app_conversion_rate: number
   channel_conversion_rate: number
   bundle_conversion_rate: number
@@ -3128,6 +3508,7 @@ export interface AdminOnboardingFunnel {
   // Trend data
   trend: Array<{
     date: string
+    new_registrations: number
     new_orgs: number
     orgs_created_app: number
     orgs_created_channel: number
@@ -3135,6 +3516,12 @@ export interface AdminOnboardingFunnel {
     orgs_subscribed: number
     orgs_with_production_device: number
     orgs_with_update_download: number
+  }>
+  invite_trend: Array<{
+    date: string
+    invite_registrations: number
+    org_joins_invite_register: number
+    org_joins_existing_account: number
   }>
 }
 
@@ -3145,7 +3532,7 @@ export async function getAdminOnboardingFunnel(
 ): Promise<AdminOnboardingFunnel> {
   try {
     // Read replicas don't include org/app/channel data, so use primary DB.
-    const pgClient = getPgClient(c)
+    const pgClient = await getPgClient(c)
     const drizzleClient = getDrizzleClient(pgClient)
     const now = new Date()
 
@@ -3167,13 +3554,22 @@ export async function getAdminOnboardingFunnel(
       )
     `
 
-    // Get total funnel counts for orgs created in the date range
+    // Get total funnel counts for self-serve registrations and orgs they create
     const funnelQuery = sql`
-      WITH orgs_in_range AS (
-        SELECT id, customer_id, created_at, created_at::date as created_date
-        FROM orgs
+      WITH registrations_in_range AS (
+        SELECT id, created_at, created_at::date as created_date
+        FROM public.users
         WHERE created_at >= ${start_date}::timestamp
           AND created_at < ${end_date}::timestamp
+          AND created_via_invite = false
+      ),
+      orgs_in_range AS (
+        SELECT o.id, o.customer_id, o.created_at, o.created_at::date as created_date
+        FROM orgs o
+        INNER JOIN public.users u ON u.id = o.created_by
+        WHERE o.created_at >= ${start_date}::timestamp
+          AND o.created_at < ${end_date}::timestamp
+          AND u.created_via_invite = false
       ),
       orgs_with_apps AS (
         SELECT DISTINCT o.id, o.created_date
@@ -3201,6 +3597,7 @@ export async function getAdminOnboardingFunnel(
           AND si.paid_at < o.created_at + interval '7 days'
       )
       SELECT
+        (SELECT COUNT(*)::int FROM registrations_in_range) as total_registrations,
         (SELECT COUNT(*)::int FROM orgs_in_range) as total_orgs,
         (SELECT COUNT(*)::int FROM orgs_with_apps) as orgs_with_app,
         (SELECT COUNT(*)::int FROM orgs_with_channels) as orgs_with_channel,
@@ -3211,6 +3608,7 @@ export async function getAdminOnboardingFunnel(
     const funnelResult = await drizzleClient.execute(funnelQuery)
     const funnelRow = funnelResult.rows[0] as any || {}
 
+    const totalRegistrations = Number(funnelRow.total_registrations) || 0
     const totalOrgs = Number(funnelRow.total_orgs) || 0
     const orgsWithApp = Number(funnelRow.orgs_with_app) || 0
     const orgsWithChannel = Number(funnelRow.orgs_with_channel) || 0
@@ -3226,19 +3624,31 @@ export async function getAdminOnboardingFunnel(
           '1 day'::interval
         )::date as date
       ),
-      daily_orgs AS (
-        SELECT created_at::date as date, COUNT(*)::int as new_orgs
-        FROM orgs
+      daily_registrations AS (
+        SELECT created_at::date as date, COUNT(*)::int as new_registrations
+        FROM public.users
         WHERE created_at >= ${start_date}::timestamp
           AND created_at < ${end_date}::timestamp
+          AND created_via_invite = false
         GROUP BY created_at::date
+      ),
+      daily_orgs AS (
+        SELECT o.created_at::date as date, COUNT(*)::int as new_orgs
+        FROM orgs o
+        INNER JOIN public.users u ON u.id = o.created_by
+        WHERE o.created_at >= ${start_date}::timestamp
+          AND o.created_at < ${end_date}::timestamp
+          AND u.created_via_invite = false
+        GROUP BY o.created_at::date
       ),
       daily_apps AS (
         SELECT o.created_at::date as date, COUNT(DISTINCT o.id)::int as orgs_created_app
         FROM orgs o
+        INNER JOIN public.users u ON u.id = o.created_by
         INNER JOIN apps a ON a.owner_org = o.id
         WHERE o.created_at >= ${start_date}::timestamp
           AND o.created_at < ${end_date}::timestamp
+          AND u.created_via_invite = false
           AND a.created_at >= o.created_at
           AND a.created_at < o.created_at + interval '7 days'
         GROUP BY o.created_at::date
@@ -3246,10 +3656,12 @@ export async function getAdminOnboardingFunnel(
       daily_channels AS (
         SELECT o.created_at::date as date, COUNT(DISTINCT o.id)::int as orgs_created_channel
         FROM orgs o
+        INNER JOIN public.users u ON u.id = o.created_by
         INNER JOIN apps a ON a.owner_org = o.id
         INNER JOIN channels c ON c.app_id = a.app_id
         WHERE o.created_at >= ${start_date}::timestamp
           AND o.created_at < ${end_date}::timestamp
+          AND u.created_via_invite = false
           AND c.created_at >= o.created_at
           AND c.created_at < o.created_at + interval '7 days'
         GROUP BY o.created_at::date
@@ -3257,19 +3669,23 @@ export async function getAdminOnboardingFunnel(
       daily_bundles AS (
         SELECT o.created_at::date as date, COUNT(DISTINCT o.id)::int as orgs_created_bundle
         FROM orgs o
+        INNER JOIN public.users u ON u.id = o.created_by
         INNER JOIN apps a ON a.owner_org = o.id
         WHERE o.created_at >= ${start_date}::timestamp
           AND o.created_at < ${end_date}::timestamp
+          AND u.created_via_invite = false
           AND ${onboardingBundleEligibility}
         GROUP BY o.created_at::date
       ),
       daily_subscriptions AS (
         SELECT o.created_at::date as date, COUNT(DISTINCT o.id)::int as orgs_subscribed
         FROM orgs o
+        INNER JOIN public.users u ON u.id = o.created_by
         INNER JOIN apps a ON a.owner_org = o.id
         INNER JOIN stripe_info si ON si.customer_id = o.customer_id
         WHERE o.created_at >= ${start_date}::timestamp
           AND o.created_at < ${end_date}::timestamp
+          AND u.created_via_invite = false
           AND ${onboardingBundleEligibility}
           AND si.paid_at IS NOT NULL
           AND si.paid_at >= o.created_at
@@ -3278,12 +3694,14 @@ export async function getAdminOnboardingFunnel(
       )
       SELECT
         ds.date,
+        COALESCE(dregs.new_registrations, 0) as new_registrations,
         COALESCE(dorgs.new_orgs, 0) as new_orgs,
         COALESCE(dapps.orgs_created_app, 0) as orgs_created_app,
         COALESCE(dchannels.orgs_created_channel, 0) as orgs_created_channel,
         COALESCE(dbundles.orgs_created_bundle, 0) as orgs_created_bundle,
         COALESCE(dsubscriptions.orgs_subscribed, 0) as orgs_subscribed
       FROM date_series ds
+      LEFT JOIN daily_registrations dregs ON dregs.date = ds.date
       LEFT JOIN daily_orgs dorgs ON dorgs.date = ds.date
       LEFT JOIN daily_apps dapps ON dapps.date = ds.date
       LEFT JOIN daily_channels dchannels ON dchannels.date = ds.date
@@ -3298,15 +3716,59 @@ export async function getAdminOnboardingFunnel(
         o.created_at as created_at,
         a.app_id as app_id
       FROM orgs o
+      INNER JOIN public.users u ON u.id = o.created_by
       INNER JOIN apps a ON a.owner_org = o.id
       WHERE o.created_at >= ${start_date}::timestamp
         AND o.created_at < ${end_date}::timestamp
+        AND u.created_via_invite = false
         AND ${onboardingBundleEligibility}
     `
 
-    const [trendResult, activationCohortResult] = await Promise.all([
+    const inviteTrendQuery = sql`
+      WITH date_series AS (
+        SELECT generate_series(
+          ${start_date}::timestamptz::date,
+          (${end_date}::timestamptz::date - 1),
+          '1 day'::interval
+        )::date as date
+      ),
+      daily_invite_registrations AS (
+        SELECT created_at::date as date, COUNT(*)::int as invite_registrations
+        FROM public.users
+        WHERE created_at >= ${start_date}::timestamp
+          AND created_at < ${end_date}::timestamp
+          AND created_via_invite = true
+        GROUP BY created_at::date
+      ),
+      daily_invite_org_joins AS (
+        SELECT
+          rb.granted_at::date as date,
+          COUNT(*) FILTER (WHERE u.created_via_invite = true)::int as org_joins_invite_register,
+          COUNT(*) FILTER (WHERE COALESCE(u.created_via_invite, false) = false)::int as org_joins_existing_account
+        FROM public.role_bindings rb
+        INNER JOIN public.users u ON u.id = rb.principal_id
+        WHERE rb.reason = 'Accepted invitation'
+          AND rb.principal_type = public.rbac_principal_user()
+          AND rb.scope_type = public.rbac_scope_org()
+          AND rb.granted_at >= ${start_date}::timestamp
+          AND rb.granted_at < ${end_date}::timestamp
+        GROUP BY rb.granted_at::date
+      )
+      SELECT
+        ds.date,
+        COALESCE(diregs.invite_registrations, 0) as invite_registrations,
+        COALESCE(dijoins.org_joins_invite_register, 0) as org_joins_invite_register,
+        COALESCE(dijoins.org_joins_existing_account, 0) as org_joins_existing_account
+      FROM date_series ds
+      LEFT JOIN daily_invite_registrations diregs ON diregs.date = ds.date
+      LEFT JOIN daily_invite_org_joins dijoins ON dijoins.date = ds.date
+      ORDER BY ds.date ASC
+    `
+
+    const [trendResult, activationCohortResult, inviteTrendResult] = await Promise.all([
       drizzleClient.execute(trendQuery),
       drizzleClient.execute(activationCohortQuery),
+      drizzleClient.execute(inviteTrendQuery),
     ])
 
     const activationCohorts: AdminOnboardingActivationCohort[] = []
@@ -3342,6 +3804,7 @@ export async function getAdminOnboardingFunnel(
       const activationTrend = activationMetrics.trend_by_date.get(date)
       return {
         date,
+        new_registrations: Number(row.new_registrations) || 0,
         new_orgs: Number(row.new_orgs) || 0,
         orgs_created_app: Number(row.orgs_created_app) || 0,
         orgs_created_channel: Number(row.orgs_created_channel) || 0,
@@ -3352,7 +3815,22 @@ export async function getAdminOnboardingFunnel(
       }
     })
 
+    const inviteTrend = inviteTrendResult.rows.map((row: any) => {
+      const date = row.date instanceof Date ? row.date.toISOString().split('T')[0] : String(row.date)
+      return {
+        date,
+        invite_registrations: Number(row.invite_registrations) || 0,
+        org_joins_invite_register: Number(row.org_joins_invite_register) || 0,
+        org_joins_existing_account: Number(row.org_joins_existing_account) || 0,
+      }
+    })
+
+    const totalInviteRegistrations = inviteTrend.reduce((sum, row) => sum + row.invite_registrations, 0)
+    const totalOrgJoinsInviteRegister = inviteTrend.reduce((sum, row) => sum + row.org_joins_invite_register, 0)
+    const totalOrgJoinsExistingAccount = inviteTrend.reduce((sum, row) => sum + row.org_joins_existing_account, 0)
+
     const result: AdminOnboardingFunnel = {
+      total_registrations: totalRegistrations,
       total_orgs: totalOrgs,
       orgs_with_app: orgsWithApp,
       orgs_with_channel: orgsWithChannel,
@@ -3361,6 +3839,10 @@ export async function getAdminOnboardingFunnel(
       orgs_with_production_device: activationMetrics.orgs_with_production_device,
       orgs_with_update_download: activationMetrics.orgs_with_update_download,
       activation_telemetry_available: activationTelemetry.available,
+      total_invite_registrations: totalInviteRegistrations,
+      total_org_joins_invite_register: totalOrgJoinsInviteRegister,
+      total_org_joins_existing_account: totalOrgJoinsExistingAccount,
+      org_conversion_rate: totalRegistrations > 0 ? (totalOrgs / totalRegistrations) * 100 : 0,
       app_conversion_rate: totalOrgs > 0 ? (orgsWithApp / totalOrgs) * 100 : 0,
       channel_conversion_rate: orgsWithApp > 0 ? (orgsWithChannel / orgsWithApp) * 100 : 0,
       bundle_conversion_rate: orgsWithChannel > 0 ? (orgsWithBundle / orgsWithChannel) * 100 : 0,
@@ -3368,6 +3850,7 @@ export async function getAdminOnboardingFunnel(
       production_device_conversion_rate: orgsWithBundle > 0 ? (activationMetrics.orgs_with_production_device / orgsWithBundle) * 100 : 0,
       update_download_conversion_rate: activationMetrics.orgs_with_production_device > 0 ? (activationMetrics.orgs_with_update_download / activationMetrics.orgs_with_production_device) * 100 : 0,
       trend,
+      invite_trend: inviteTrend,
     }
 
     cloudlog({ requestId: c.get('requestId'), message: 'getAdminOnboardingFunnel result', result })
@@ -3377,6 +3860,7 @@ export async function getAdminOnboardingFunnel(
   catch (e: unknown) {
     logPgError(c, 'getAdminOnboardingFunnel', e)
     return {
+      total_registrations: 0,
       total_orgs: 0,
       orgs_with_app: 0,
       orgs_with_channel: 0,
@@ -3385,6 +3869,10 @@ export async function getAdminOnboardingFunnel(
       orgs_with_production_device: 0,
       orgs_with_update_download: 0,
       activation_telemetry_available: false,
+      total_invite_registrations: 0,
+      total_org_joins_invite_register: 0,
+      total_org_joins_existing_account: 0,
+      org_conversion_rate: 0,
       app_conversion_rate: 0,
       channel_conversion_rate: 0,
       bundle_conversion_rate: 0,
@@ -3392,6 +3880,7 @@ export async function getAdminOnboardingFunnel(
       production_device_conversion_rate: 0,
       update_download_conversion_rate: 0,
       trend: [],
+      invite_trend: [],
     }
   }
 }
@@ -3402,7 +3891,7 @@ export async function getAdminPluginBreakdown(
   end_date: string,
 ): Promise<AdminPluginBreakdown> {
   try {
-    const pgClient = getPgClient(c, true)
+    const pgClient = await getPgClient(c, true)
     const drizzleClient = getDrizzleClient(pgClient)
 
     const startDateOnly = start_date.split('T')[0]

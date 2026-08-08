@@ -396,7 +396,12 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: ChannelSet,
   if (body.autoPauseAction && !['pause', 'rollback', 'notify'].includes(body.autoPauseAction)) {
     throw simpleError('invalid_auto_pause_action', 'Auto-pause action must be pause, rollback, or notify', { autoPauseAction: body.autoPauseAction })
   }
-  const changesRolloutTarget = body.rolloutVersion !== undefined || !!body.rollback || !!body.promoteToStable
+  const disablesRollout = body.rolloutEnabled === false && !body.rollback && !body.promoteToStable
+  // Clearing rollout_version (disable unlink / explicit target / rollback / promote) is gated by the DB trigger with channel.promote_bundle.
+  const changesRolloutTarget = body.rolloutVersion !== undefined
+    || !!body.rollback
+    || !!body.promoteToStable
+    || (disablesRollout && existingRolloutVersion != null)
   if (changesRolloutTarget) {
     if (existingChannelId === null) {
       throw simpleError('cannot_find_channel', 'Cannot find channel', { app_id: body.app_id, channel: body.channel })
@@ -476,6 +481,14 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: ChannelSet,
     channel.rollout_paused_at = null
     channel.rollout_pause_reason = null
   }
+
+  // Disabling progressive rollout always unlinks the second bundle (ignore any parallel rolloutVersion).
+  if (disablesRollout) {
+    channel.rollout_version = null
+    channel.rollout_paused_at = null
+    channel.rollout_pause_reason = null
+  }
+
   if (!existingChannel && requestedVersionName) {
     const createdChannel = await createAndPromoteChannelInTransaction(c, channel, requestedVersionName, apikey)
     return c.json({ ...BRES, ...createdChannel })

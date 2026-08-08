@@ -6,6 +6,7 @@ test.use({ screenshot: 'off', trace: 'off', video: 'off' })
 // The seeded demo app owned by the `test@capgo.app` user (see supabase/seed.sql).
 // Sibling specs implicitly rely on this same login, so we reuse its demo app id.
 const APP_ID = 'com.demo.app'
+const TEST_USER_ID = '6aa76066-55ef-4238-ade6-0b32334a4097'
 
 // A single unresolved, incompatible event used across the history + accept flows.
 // `id` is the PostgREST primary key the accept RPC is called with; the bundle ids
@@ -107,6 +108,10 @@ async function mockStoreReleaseValidationStatus(page: Page) {
 test.describe('Compatibility events', () => {
   test.beforeEach(async ({ page }) => {
     await page.login('test@capgo.app', 'testtest')
+    // Keep the support-usernames prompt from covering store-release alert actions.
+    await page.evaluate((userId) => {
+      localStorage.setItem(`capgo.supportUsernames.dismissed.${userId}`, '1')
+    }, TEST_USER_ID)
   })
 
   test('shows the store release validation alert before opening the modal', async ({ page }) => {
@@ -166,13 +171,13 @@ test.describe('Compatibility events', () => {
     await expect(page.getByText('Compatibility events').first()).toBeVisible()
 
     await banner.locator('[data-test="compatibility-banner-view"]').click()
-    await page.waitForURL(url => url.pathname === `/app/${APP_ID}/compatibility`)
+    await page.waitForURL(url => url.pathname === `/app/${APP_ID}/observe/compatibility`)
   })
 
   test('renders an unresolved event row with its details and dependency-diff link', async ({ page }) => {
     await mockCompatibilityEvents(page, () => [unresolvedEvent()])
 
-    await page.goto(`/app/${APP_ID}/compatibility`)
+    await page.goto(`/app/${APP_ID}/observe/compatibility`)
 
     await expect(page.getByRole('heading', { name: 'Compatibility events' })).toBeVisible()
 
@@ -220,7 +225,7 @@ test.describe('Compatibility events', () => {
       })
     })
 
-    await page.goto(`/app/${APP_ID}/compatibility`)
+    await page.goto(`/app/${APP_ID}/observe/compatibility`)
 
     // Filter to unresolved-only so the row disappearing is an observable assertion.
     await page.locator('[data-test="compatibility-filter-unresolved"]').check()
@@ -242,16 +247,14 @@ test.describe('Compatibility events', () => {
     // already-narrowed dialog container instead.
     const confirmButton = dialog.getByRole('button', { name: 'Accept', exact: true })
 
-    // Submitting with an empty reason is rejected: the validation toast appears
-    // and the dialog stays open (the handler returns false / preventClose).
-    await confirmButton.click()
-    await expect(page.locator('[data-test="toast"]'))
-      .toContainText('Please provide a reason before accepting this incompatibility.')
-    await expect(dialog.getByRole('heading', { name: 'Accept incompatibility' })).toBeVisible()
+    // The reason is required: with the field empty the confirm button is disabled
+    // (so it can no longer be dead-clicked), and no RPC fires.
+    await expect(confirmButton).toBeDisabled()
     expect(rpcBody).toBeNull()
 
-    // Provide a reason and submit successfully.
+    // Typing a reason enables the button and submits successfully.
     await reason.fill('Intentional native release')
+    await expect(confirmButton).toBeEnabled()
     await confirmButton.click()
 
     // The RPC is called with the event id and the trimmed note.

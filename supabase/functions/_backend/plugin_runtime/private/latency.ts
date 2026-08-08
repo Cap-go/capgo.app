@@ -8,7 +8,7 @@ export const app = new Hono<MiddlewareKeyVariables>()
 
 app.get('/', async (c) => {
   cloudlog({ requestId: c.get('requestId'), message: 'Latency check' })
-  const pgClient = getPgClient(c, true)
+  const pgClient = await getPgClient(c, true)
   try {
     const res = await selectOne(pgClient)
     if (!res)

@@ -20,7 +20,10 @@ export function generateJwt(
   return jwt.sign(
     {
       iss: issuerId,
-      exp: now + 1199, // ~20 minutes
+      // Stay below Apple's 20-minute maximum so small local clock skew does
+      // not make the token appear too long-lived and trigger a false 401.
+      iat: now,
+      exp: now + 15 * 60,
       aud: 'appstoreconnect-v1',
     },
     p8Content,
@@ -104,10 +107,10 @@ export const ASC_AGREEMENTS_MESSAGE
   = 'Apple is blocking App Store Connect API access because your developer account has a required agreement that is unsigned or has expired.\n'
     + '  - Sign in as the Account Holder at https://appstoreconnect.apple.com\n'
     + '  - Open "Business" (Agreements, Tax, and Banking) and accept the pending or updated agreement\n'
-    + '  - Then run this step again — your API key is valid, so no key changes are needed'
+    + '  - Then run this step again — your App Store Connect API key is valid, so no key changes are needed'
 
 export const ASC_KEY_REJECTED_MESSAGE
-  = 'API key verification failed. Please check:\n'
+  = 'Apple rejected the App Store Connect API key. Please check:\n'
     + '  - The .p8 file is correct and hasn\'t been modified\n'
     + '  - The Key ID matches the key shown in App Store Connect\n'
     + '  - The Issuer ID is correct (shown at the top of the API keys page)\n'
@@ -129,13 +132,13 @@ export interface AscAuthClassification {
 export function classifyAscAuthError(err: any): AscAuthClassification {
   const status = typeof err?.status === 'number' ? err.status : undefined
   const code = typeof err?.code === 'string' ? err.code : undefined
-  const is401 = status === 401 || err?.message?.includes('401')
-  const is403 = status === 403 || err?.message?.includes('403')
+  const is401 = status === 401
+  const is403 = status === 403
   const isAgreements = Boolean(is403 && (code === 'FORBIDDEN.REQUIRED_AGREEMENTS_MISSING_OR_EXPIRED' || code === 'FORBIDDEN_ERROR.PLA_NOT_ACCEPTED' || /\bPLA_NOT_ACCEPTED\b|required agreement|program license agreement/i.test(err?.message ?? '')))
   return {
     is401or403: Boolean(is401 || is403),
     isAgreements,
-    status: status ?? (is403 ? 403 : is401 ? 401 : undefined),
+    status,
     code,
     message: isAgreements ? ASC_AGREEMENTS_MESSAGE : ASC_KEY_REJECTED_MESSAGE,
   }

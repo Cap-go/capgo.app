@@ -31,6 +31,7 @@ export const optionsUploadSchema = optionsBaseSchema.extend({
   minUpdateVersion: z.string().optional(),
   autoMinUpdateVersion: z.boolean().optional(),
   autoSetBundle: z.boolean().optional(),
+  autoBump: z.enum(['major', 'minor', 'patch', 'metadata', 'ai']).optional(),
   ignoreMetadataCheck: z.boolean().optional(),
   failOnIncompatible: z.boolean().optional(),
   ignoreChecksumCheck: z.boolean().optional(),
@@ -41,6 +42,10 @@ export const optionsUploadSchema = optionsBaseSchema.extend({
   partialOnly: z.boolean().optional(),
   delta: z.boolean().optional(),
   deltaOnly: z.boolean().optional(),
+  // Internal: records whether the user explicitly asked for a delta/partial
+  // upload, captured before `delta` is mutated by the instant-update
+  // auto-enable. Not a CLI flag.
+  userRequestedDelta: z.boolean().optional(),
   tus: z.boolean().optional(),
   encryptedChecksum: z.string().optional(),
   packageJson: z.string().optional(),

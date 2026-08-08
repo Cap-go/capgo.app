@@ -76,6 +76,35 @@ afterEach(() => {
 })
 
 describe('sendEventToTracking', () => {
+  it('uses the authenticated API key ID instead of a caller-provided tag', async () => {
+    const { addAuthenticatedApiKeyIdToTrackingPayload } = await import('../supabase/functions/_backend/utils/tracking.ts')
+
+    const payload = addAuthenticatedApiKeyIdToTrackingPayload({
+      channel: 'usage',
+      event: 'Tracked Event',
+      notify: false,
+      tags: { apikey_id: 'caller-supplied', app_id: 'app-id' },
+    }, 87015)
+
+    expect(payload.tags).toEqual({ app_id: 'app-id' })
+    expect(payload.nonPersonTags).toEqual({ apikey_id: 87015 })
+  })
+
+  it('does not allow callers without an API key to report an API key ID', async () => {
+    const { addAuthenticatedApiKeyIdToTrackingPayload } = await import('../supabase/functions/_backend/utils/tracking.ts')
+
+    const payload = addAuthenticatedApiKeyIdToTrackingPayload({
+      channel: 'usage',
+      event: 'Tracked Event',
+      notify: false,
+      tags: { apikey_id: 'caller-supplied', app_id: 'app-id' },
+      nonPersonTags: { apikey_id: 'caller-supplied', cli_version: '8.31.3' },
+    }, undefined)
+
+    expect(payload.tags).toEqual({ app_id: 'app-id' })
+    expect(payload.nonPersonTags).toEqual({ cli_version: '8.31.3' })
+  })
+
   it('runs all tracking providers in the background by default', async () => {
     const { sendEventToTracking } = await import('../supabase/functions/_backend/utils/tracking.ts')
 
@@ -94,6 +123,7 @@ describe('sendEventToTracking', () => {
       notify: false,
       sentToBento: true,
       tags: { app_id: 'app-id' },
+      nonPersonTags: { apikey_id: 87015 },
     })
 
     expect(backgroundTaskMock).toHaveBeenCalledTimes(2)
@@ -101,6 +131,7 @@ describe('sendEventToTracking', () => {
     expect(posthogMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       event: 'Tracked Event',
       ip: '1.2.3.4',
+      nonPersonTags: { apikey_id: 87015 },
       user_id: 'org-id',
     }))
     expect(notifToOrgMembersMock).toHaveBeenCalledWith(

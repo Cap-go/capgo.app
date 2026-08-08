@@ -8,6 +8,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import plusOutline from '~icons/ion/add-outline'
 import IconAlertCircle from '~icons/lucide/alert-circle'
+import { invokeCapgoApi } from '~/services/capgoApi'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
 import { withBuiltinChannelVersion } from '~/services/versions'
 import { useAppDetailStore } from '~/stores/appDetail'
@@ -147,7 +148,7 @@ async function customDeviceOverwritePart5(
     return
   }
 
-  const { error: addDeviceError } = await supabase.functions.invoke('private/create_device', {
+  const { error: addDeviceError } = await invokeCapgoApi('private/create_device', {
     body: {
       device_id: deviceId,
       app_id: route.params.app as string,
@@ -292,10 +293,20 @@ watchEffect(async () => {
         <div class="flex flex-col overflow-hidden overflow-y-auto bg-white border shadow-lg md:rounded-lg dark:bg-gray-800 border-slate-300 dark:border-slate-900">
           <DeviceTable v-if="deviceIds.length > 0" :app-id="channel.version.app_id" :ids="deviceIds" :channel="channel" show-add-button @add-device="AddDevice" />
           <template v-else-if="!dialogStore.showDialog">
-            <div class="py-4 text-center">
-              <div>{{ t('forced-devices-not-found') }}</div>
-              <div class="mt-4 text-white cursor-pointer d-btn d-btn-primary" @click="AddDevice">
-                <plusOutline />
+            <div class="flex min-h-96 items-center justify-center px-6 py-10 text-center">
+              <div class="flex max-w-2xl flex-col items-center">
+                <h2 class="text-xl font-semibold text-slate-900 dark:text-white">
+                  {{ t('forced-devices-not-found') }}
+                </h2>
+                <i18n-t keypath="forced-devices-description" tag="p" class="mt-3 text-sm leading-6 text-slate-500 dark:text-slate-300">
+                  <template #setChannel>
+                    <code class="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs text-slate-700 dark:bg-slate-700 dark:text-slate-100">setChannel()</code>
+                  </template>
+                </i18n-t>
+                <button type="button" class="mt-8 gap-2 text-white d-btn d-btn-primary" @click="AddDevice">
+                  <plusOutline class="h-5 w-5" aria-hidden="true" />
+                  {{ t('force-device-to-channel') }}
+                </button>
               </div>
             </div>
           </template>

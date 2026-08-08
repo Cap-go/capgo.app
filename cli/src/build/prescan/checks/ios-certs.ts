@@ -10,6 +10,140 @@ export interface OpenedP12 {
 
 type CertBag = forge.pkcs12.Bag
 
+const SHA1_OID = '1.3.14.3.2.26'
+const PBES2_OID = '1.2.840.113549.1.5.13'
+const PBESV1_SHA1_3DES_OID = '1.2.840.113549.1.12.1.3'
+const AES_CBC_OIDS = new Set([
+  '2.16.840.1.101.3.4.1.2',
+  '2.16.840.1.101.3.4.1.22',
+  '2.16.840.1.101.3.4.1.42',
+])
+
+/** Marks malformed outer PFX input that the existing p12-opens check owns. */
+class MalformedP12Error extends Error {
+  constructor() {
+    super('malformed PKCS12 ASN.1')
+    this.name = 'MalformedP12Error'
+  }
+}
+
+interface PrivateKeyEncryption {
+  algorithmOid: string
+  encryptionSchemeOid: string | null
+}
+
+/** Return constructed ASN.1 children, or an empty list for primitive nodes. */
+function asn1Children(node: forge.asn1.Asn1 | undefined): forge.asn1.Asn1[] {
+  return node && Array.isArray(node.value) ? node.value : []
+}
+
+/** Decode an ASN.1 OID node without letting malformed OID bytes crash the scan. */
+function asn1Oid(node: forge.asn1.Asn1 | undefined): string | null {
+  if (!node || node.type !== forge.asn1.Type.OID || typeof node.value !== 'string')
+    return null
+  try {
+    return forge.asn1.derToOid(node.value)
+  }
+  catch {
+    return null
+  }
+}
+
+/** Read the encryption algorithm attached to a PKCS8ShroudedKeyBag only. */
+function privateKeyEncryptionFromSafeBag(node: forge.asn1.Asn1): PrivateKeyEncryption | null {
+  const bag = asn1Children(node)
+  if (asn1Oid(bag[0]) !== forge.pki.oids.pkcs8ShroudedKeyBag)
+    return null
+  const encryptedPrivateKeyInfo = asn1Children(bag[1])[0]
+  const algorithmIdentifier = asn1Children(encryptedPrivateKeyInfo)[0]
+  const algorithm = asn1Children(algorithmIdentifier)
+  const algorithmOid = asn1Oid(algorithm[0])
+  if (!algorithmOid)
+    return null
+  const pbes2Params = asn1Children(algorithm[1])
+  const encryptionScheme = asn1Children(pbes2Params[1])
+  return { algorithmOid, encryptionSchemeOid: asn1Oid(encryptionScheme[0]) }
+}
+
+/** Find encrypted private-key bags through the nested PKCS#12 ContentInfo layers. */
+function collectPrivateKeyEncryptions(node: forge.asn1.Asn1, result: PrivateKeyEncryption[], depth = 0): void {
+  if (depth > 32)
+    return
+  const encryption = privateKeyEncryptionFromSafeBag(node)
+  if (encryption) {
+    result.push(encryption)
+    return // Never interpret encrypted private-key bytes as nested ASN.1.
+  }
+  if (Array.isArray(node.value)) {
+    for (const child of node.value)
+      collectPrivateKeyEncryptions(child, result, depth + 1)
+  }
+  else if (node.type === forge.asn1.Type.OCTETSTRING && node.value.length > 0) {
+    try {
+      collectPrivateKeyEncryptions(forge.asn1.fromDer(node.value), result, depth + 1)
+    }
+    catch {
+      // Most OCTET STRING values are encrypted bytes or certificate fields,
+      // not nested ASN.1. Only descend when forge can decode the whole value.
+    }
+  }
+}
+
+/** Read the PFX MAC digest algorithm from the optional MacData block. */
+function p12MacAlgorithm(pfx: forge.asn1.Asn1): string | null {
+  if (!Array.isArray(pfx.value))
+    return null
+  const macData = pfx.value[2]
+  if (!macData || !Array.isArray(macData.value))
+    return null
+  const digestInfo = macData.value[0]
+  if (!digestInfo || !Array.isArray(digestInfo.value))
+    return null
+  const algorithmIdentifier = digestInfo.value[0]
+  if (!algorithmIdentifier || !Array.isArray(algorithmIdentifier.value))
+    return null
+  return asn1Oid(algorithmIdentifier.value[0])
+}
+
+/** Parse the outer PFX while tagging malformed input for p12-opens to report. */
+function parseP12Asn1(base64: string): forge.asn1.Asn1 {
+  try {
+    return forge.asn1.fromDer(forge.util.decode64(base64))
+  }
+  catch {
+    throw new MalformedP12Error()
+  }
+}
+
+/** List runner-incompatible MAC and private-key encryption choices in a P12. */
+function legacyP12CompatibilityProblems(base64: string): string[] {
+  assertCredentialBlobSize(base64, 'certificate')
+  const pfx = parseP12Asn1(base64)
+  const privateKeyEncryptions: PrivateKeyEncryption[] = []
+  collectPrivateKeyEncryptions(pfx, privateKeyEncryptions)
+
+  const problems = new Set<string>()
+  const macAlgorithm = p12MacAlgorithm(pfx)
+  if (macAlgorithm !== SHA1_OID)
+    problems.add(macAlgorithm === forge.pki.oids.sha256 ? 'SHA-256 MAC' : 'non-SHA-1 MAC')
+  if (privateKeyEncryptions.length === 0) {
+    problems.add('missing PBESv1 SHA-1/3DES private-key encryption')
+  }
+  for (const encryption of privateKeyEncryptions) {
+    if (encryption.algorithmOid === PBESV1_SHA1_3DES_OID)
+      continue
+    if (encryption.algorithmOid === PBES2_OID) {
+      problems.add(AES_CBC_OIDS.has(encryption.encryptionSchemeOid ?? '')
+        ? 'PBES2/AES private-key encryption'
+        : 'PBES2 private-key encryption')
+    }
+    else {
+      problems.add('unsupported private-key encryption')
+    }
+  }
+  return [...problems]
+}
+
 function bagLocalKeyIdHex(bag: CertBag): string | null {
   const attr = (bag.attributes as Record<string, unknown[]> | undefined)?.localKeyId?.[0]
   return typeof attr === 'string' ? forge.util.bytesToHex(attr) : null
@@ -117,6 +251,32 @@ export const p12Opens: PrescanCheck = {
         fix: 'Re-export the .p12 and re-run `build credentials save` with the correct --p12-password',
       }]
     }
+  },
+}
+
+export const p12LegacyEncryption: PrescanCheck = {
+  id: 'ios/p12-legacy-encryption',
+  platforms: ['ios'],
+  appliesTo: ctx => has(ctx, 'BUILD_CERTIFICATE_BASE64'),
+  async run(ctx): Promise<Finding[]> {
+    let problems: string[]
+    try {
+      problems = legacyP12CompatibilityProblems(ctx.credentials!.BUILD_CERTIFICATE_BASE64)
+    }
+    catch (error) {
+      if (error instanceof MalformedP12Error)
+        return [] // p12-opens owns malformed/invalid P12 failures
+      throw error
+    }
+    if (problems.length === 0)
+      return []
+    return [{
+      id: 'ios/p12-legacy-encryption',
+      severity: 'error',
+      title: 'The P12 certificate uses encryption that the macOS build runner cannot import',
+      detail: `Detected ${problems.join(' and ')}. Fastlane security import may report a wrong password even when the password is correct.`,
+      fix: 'Re-export the .p12 with PBESv1 SHA-1/3DES encryption and a SHA-1 MAC, then re-run `build credentials save`.',
+    }]
   },
 }
 

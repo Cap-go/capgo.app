@@ -9,11 +9,12 @@ import {
   onMounted,
   onUnmounted,
   ref,
+  useId,
+  useSlots,
   watch,
 } from 'vue'
 import { useI18n } from 'vue-i18n'
 import IconTrash from '~icons/heroicons/trash'
-import IconDown from '~icons/ic/round-keyboard-arrow-down'
 import IconPrev from '~icons/ic/round-keyboard-arrow-left'
 import IconNext from '~icons/ic/round-keyboard-arrow-right'
 import IconFastBackward from '~icons/ic/round-keyboard-double-arrow-left'
@@ -25,17 +26,25 @@ import IconSortUp from '~icons/lucide/chevron-up'
 import IconSort from '~icons/lucide/chevrons-up-down'
 import IconFilter from '~icons/system-uicons/filtering'
 import IconReload from '~icons/tabler/reload'
+import FilterModal from '~/components/FilterModal.vue'
+import { createClearedFilters } from '~/composables/useFilterModal'
 
 interface Props {
   isLoading?: boolean
   filterText?: string
   filters?: { [key: string]: boolean }
   filterLabels?: { [key: string]: string }
+  /** Extra active filters contributed by the filter-extras slot (e.g. selects). */
+  extraFilterCount?: number
   searchPlaceholder?: string
   showAdd?: boolean
+  addDisabled?: boolean
+  addTooltip?: string
   addButtonTestId?: string
   search?: string
   total: number
+  /** Fixed page size used for last-page / next calculations. Prefer this over inferring from the current page length. */
+  offset?: number
   currentPage: number
   columns: TableColumn[]
   elementList: { [key: string]: any }[]
@@ -47,6 +56,7 @@ interface Props {
 const props = withDefaults(defineProps<Props>(), {
   autoReload: true,
   mobileFixedPagination: true,
+  extraFilterCount: 0,
 })
 const emit = defineEmits([
   'add',
@@ -63,7 +73,13 @@ const emit = defineEmits([
   'plusClick',
   'selectRow',
   'massDelete',
+  'clearExtraFilters',
 ])
+const isFilterModalOpen = ref(false)
+const filterOpenButtonRef = ref<HTMLButtonElement | null>(null)
+const filterModalTitleId = `${useId()}-filters-title`
+const addTooltipId = `${useId()}-add-tooltip`
+const slots = useSlots()
 const { t } = useI18n()
 const searchVal = ref(props.search ?? '')
 const pendingReset = ref(false)
@@ -71,11 +87,18 @@ const pendingAdd = ref(false)
 // const sorts = ref<TableSort>({})
 // get columns from elementList
 
-const offset = computed(() => {
-  if (!props.elementList)
-    return 0
+// Page size must stay fixed across pages. Inferring it from the current page's
+// row count breaks last-page / next controls when the final page is short
+// (common after deletes).
+const pageSize = computed(() => {
+  if (props.offset && props.offset > 0)
+    return props.offset
+  if (!props.elementList || props.elementList.length === 0)
+    return 1
   return props.elementList.length
 })
+
+const totalPages = computed(() => Math.max(1, Math.ceil(props.total / pageSize.value)))
 
 const selectedRows = ref<boolean[]>(props.elementList.map(_ => false))
 const previousSelectedRow = ref<number | null>(null)
@@ -86,17 +109,52 @@ const filterList = computed(() => {
   return Object.keys(props.filters)
 })
 const filterActivated = computed(() => {
-  if (!props.filters)
-    return []
-  return Object.keys(props.filters).reduce((acc, key) => {
-    if (props.filters![key])
-      acc += 1
-    return acc
-  }, 0)
+  const booleanCount = props.filters
+    ? Object.keys(props.filters).reduce((acc, key) => {
+        if (props.filters![key])
+          acc += 1
+        return acc
+      }, 0)
+    : 0
+  return booleanCount + (props.extraFilterCount ?? 0)
 })
+const hasActiveViewFilters = computed(() => Boolean(searchVal.value.trim()) || filterActivated.value > 0)
+
+const showFilterMenu = computed(() =>
+  Boolean(props.filterText && (filterList.value.length || slots['filter-extras'])),
+)
 
 function getFilterLabel(filter: string) {
   return props.filterLabels?.[filter] ?? t(filter)
+}
+
+function openFilterModal() {
+  isFilterModalOpen.value = true
+}
+
+function closeFilterModal() {
+  isFilterModalOpen.value = false
+}
+
+const debouncedReload = useDebounceFn(() => {
+  emit('reload')
+}, 1000)
+
+function clearAllFilters() {
+  // Emit a new filters object so DataTable's filters watcher performs one reload.
+  // Extra filters are cleared without scheduling a second reload.
+  if (props.filters)
+    emit('update:filters', createClearedFilters(props.filters))
+  emit('clearExtraFilters')
+}
+
+function clearViewFilters() {
+  searchVal.value = ''
+  emit('update:search', '')
+  emit('update:currentPage', 1)
+  clearAllFilters()
+  if (props.autoReload !== false)
+    debouncedReload()
 }
 
 function sortClick(key: number) {
@@ -218,10 +276,6 @@ onMounted(() => {
   loadFromUrlParams()
 })
 
-const debouncedReload = useDebounceFn(() => {
-  emit('reload')
-}, 1000)
-
 const debouncedUpdateUrlParams = useDebounceFn(() => {
   updateUrlParams()
 }, 1000)
@@ -335,13 +389,15 @@ function tooltipIdFor(rowIndex: number, actionIndex: number): string {
 }
 
 const displayElemRange = computed(() => {
-  const begin = (props.currentPage - 1) * props.elementList.length
+  if (props.elementList.length === 0)
+    return '0-0'
+  const begin = (props.currentPage - 1) * pageSize.value
   const end = begin + props.elementList.length
   return `${begin}-${end}`
 })
 
 function canNext() {
-  return props.currentPage < Math.ceil(props.total / offset.value)
+  return props.currentPage < totalPages.value
 }
 function canPrev() {
   return props.currentPage > 1
@@ -356,7 +412,7 @@ async function next() {
 async function fastForward() {
   if (canNext()) {
     emit('fastForward')
-    emit('update:currentPage', Math.ceil(props.total / offset.value))
+    emit('update:currentPage', totalPages.value)
   }
 }
 async function prev() {
@@ -385,6 +441,9 @@ function handleResetClick() {
 }
 
 function handleAddClick() {
+  if (props.addDisabled)
+    return
+
   pendingAdd.value = true
   emit('add')
   requestAnimationFrame(() => {
@@ -465,8 +524,8 @@ const paginationClass = computed(() => props.mobileFixedPagination
 
 <template>
   <div class="pb-4 overflow-x-auto md:pb-0">
-    <div class="flex items-start justify-between p-3 pb-4 md:items-center">
-      <div class="flex h-10 md:mb-0">
+    <div class="flex flex-wrap items-center justify-between gap-2 p-3 pb-4 overflow-visible md:flex-nowrap">
+      <div class="flex h-10 shrink-0 items-center">
         <button
           class="inline-flex items-center py-1.5 px-3 mr-2 text-sm font-medium text-gray-500 bg-white rounded-md border border-gray-300 cursor-pointer dark:text-white dark:bg-gray-800 dark:border-gray-600 hover:bg-gray-100 focus:ring-4 focus:ring-gray-200 dark:hover:border-gray-600 dark:hover:bg-gray-700 dark:focus:ring-gray-700 focus:outline-hidden"
           type="button" @click="handleResetClick"
@@ -478,18 +537,27 @@ const paginationClass = computed(() => props.mobileFixedPagination
         <div v-if="showAdd" class="p-px mr-2 rounded-lg from-cyan-500 to-purple-500 bg-linear-to-r">
           <button
             :data-test="addButtonTestId"
-            class="inline-flex items-center py-1.5 px-3 text-sm font-medium text-gray-500 bg-white rounded-md cursor-pointer dark:text-white dark:bg-gray-800 hover:bg-gray-100 focus:ring-4 focus:ring-gray-200 dark:hover:bg-gray-700 dark:focus:ring-gray-700 focus:outline-hidden"
+            :aria-describedby="addDisabled && addTooltip ? addTooltipId : undefined"
+            :aria-disabled="addDisabled"
+            :title="addDisabled ? addTooltip : undefined"
+            class="inline-flex items-center py-1.5 px-3 text-sm font-medium text-gray-500 bg-white rounded-md cursor-pointer dark:text-white dark:bg-gray-800 hover:bg-gray-100 focus:ring-4 focus:ring-gray-200 dark:hover:bg-gray-700 dark:focus:ring-gray-700 focus:outline-hidden aria-disabled:cursor-not-allowed aria-disabled:bg-gray-100 aria-disabled:text-gray-400 aria-disabled:hover:bg-gray-100 dark:aria-disabled:bg-gray-700 dark:aria-disabled:text-gray-500 dark:aria-disabled:hover:bg-gray-700"
             type="button" @click="handleAddClick"
           >
             <plusOutline v-if="!isAdding" class="m-1 md:mr-2" />
             <Spinner v-else size="w-[16.8px] h-[16.8px] m-1 mr-2" />
             <span class="hidden text-sm md:block">{{ t("add-one") }}</span>
           </button>
+          <span v-if="addDisabled && addTooltip" :id="addTooltipId" class="sr-only">{{ addTooltip }}</span>
         </div>
-        <div v-if="filterText && filterList.length" class="h-10 d-dropdown">
+        <div v-if="showFilterMenu" class="relative h-10">
           <button
-            tabindex="0"
+            ref="filterOpenButtonRef"
+            type="button"
             class="inline-flex items-center py-1.5 px-3 mr-2 h-full text-sm font-medium text-gray-500 bg-white rounded-md border border-gray-300 cursor-pointer dark:text-white dark:bg-gray-800 dark:border-gray-600 hover:bg-gray-100 focus:ring-4 focus:ring-gray-200 dark:hover:border-gray-600 dark:hover:bg-gray-700 dark:focus:ring-gray-700 focus:outline-hidden"
+            data-test="data-table-filters-open"
+            :aria-expanded="isFilterModalOpen"
+            aria-haspopup="dialog"
+            @click="openFilterModal"
           >
             <div
               v-if="filterActivated"
@@ -498,30 +566,53 @@ const paginationClass = computed(() => props.mobileFixedPagination
               {{ filterActivated }}
             </div>
             <IconFilter class="w-4 h-4 mr-2" />
-            <span class="hidden md:block">{{ t(filterText) }}</span>
-            <IconDown class="hidden w-4 h-4 ml-2 md:block" />
+            <span class="hidden md:block">{{ t(filterText ?? '') }}</span>
           </button>
-          <ul class="max-h-80 w-72 max-w-[calc(100vw-2rem)] overflow-y-auto border border-gray-200 bg-white p-2 shadow-xl d-dropdown-content d-menu rounded-box z-20 dark:border-gray-700 dark:bg-base-200">
-            <li v-for="(f, i) in filterList" :key="i">
-              <div
-                class="flex min-h-10 items-center rounded-md p-2 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600"
+          <FilterModal
+            :open="isFilterModalOpen"
+            :title="t(filterText ?? 'Filters')"
+            :subtitle="t('filter-modal-subtitle')"
+            :title-id="filterModalTitleId"
+            :clear-disabled="!filterActivated"
+            :restore-focus-el="filterOpenButtonRef"
+            test-id-prefix="data-table"
+            @close="closeFilterModal"
+            @clear="clearAllFilters"
+          >
+            <div v-if="$slots['filter-extras']" class="space-y-4">
+              <slot name="filter-extras" />
+            </div>
+            <div
+              v-if="$slots['filter-extras'] && filterList.length"
+              class="border-t border-slate-200 dark:border-slate-700"
+              role="separator"
+            />
+            <fieldset v-if="filterList.length" class="space-y-1">
+              <legend class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                {{ t('filter-options') }}
+              </legend>
+              <label
+                v-for="(f, i) in filterList"
+                :key="f"
+                :for="`filter-radio-example-${i}`"
+                class="flex min-h-11 cursor-pointer items-center rounded-md px-2 py-2 transition-colors duration-150 hover:bg-slate-50 dark:hover:bg-slate-800"
               >
                 <input
-                  :id="`filter-radio-example-${i}`" :checked="filters?.[f]" type="checkbox"
+                  :id="`filter-radio-example-${i}`"
+                  :checked="filters?.[f]"
+                  type="checkbox"
                   :name="`filter-radio-${i}`"
-                  class="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 dark:bg-gray-700 dark:border-gray-600 dark:ring-offset-gray-800 focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-600 dark:focus:ring-offset-gray-800"
+                  class="h-4 w-4 shrink-0 rounded border-gray-300 text-azure-500 focus:ring-2 focus:ring-azure-500 dark:border-gray-600 dark:bg-gray-700 dark:ring-offset-gray-800"
                   @change="
                     emit('update:filters', { ...filters, [f]: !filters?.[f] })
                   "
                 >
-                <label
-                  :for="`filter-radio-example-${i}`"
-                  class="w-full min-w-0 truncate ml-2 text-sm font-medium text-gray-900 rounded-sm cursor-pointer dark:text-gray-300"
-                >{{
-                  getFilterLabel(f) }}</label>
-              </div>
-            </li>
-          </ul>
+                <span class="ml-3 min-w-0 text-sm font-medium text-slate-900 dark:text-slate-200">
+                  {{ getFilterLabel(f) }}
+                </span>
+              </label>
+            </fieldset>
+          </FilterModal>
         </div>
       </div>
       <button
@@ -541,13 +632,18 @@ const paginationClass = computed(() => props.mobileFixedPagination
       >
         <IconTrash class="h-6 text-red-500" />
       </button>
-      <div class="flex overflow-hidden md:w-auto">
-        <FormKit
-          v-model="searchVal" :placeholder="searchPlaceholder" :prefix-icon="IconSearch"
-          :disabled="isLoading" enterkeyhint="send" :classes="{
-            outer: 'mb-0! md:w-96',
-          }"
-        />
+      <div class="flex w-full min-w-0 flex-col items-stretch gap-2 overflow-visible sm:w-auto sm:min-w-0 sm:flex-1 sm:flex-row sm:items-center sm:justify-end md:w-auto md:flex-none">
+        <div v-if="$slots['toolbar-extras']" class="flex h-10 shrink-0 items-center self-end sm:self-auto">
+          <slot name="toolbar-extras" />
+        </div>
+        <div class="min-w-0 w-full overflow-hidden sm:w-auto sm:max-w-[13rem] md:max-w-[14rem] lg:max-w-[16rem] xl:max-w-xs">
+          <FormKit
+            v-model="searchVal" :placeholder="searchPlaceholder" :prefix-icon="IconSearch"
+            :disabled="isLoading" enterkeyhint="send" :classes="{
+              outer: 'mb-0! w-full sm:w-52 md:w-56 lg:w-64 xl:w-80',
+            }"
+          />
+        </div>
       </div>
     </div>
     <div class="block">
@@ -670,7 +766,13 @@ const paginationClass = computed(() => props.mobileFixedPagination
               :colspan="columns.length + (props.massSelect ? 1 : 0)"
               class="px-4 py-2 text-center text-gray-500 md:py-4 md:px-6 dark:text-gray-400"
             >
-              {{ t("no_elements_found") }}
+              <slot
+                name="empty-state"
+                :clear-filters="clearViewFilters"
+                :has-active-filters="hasActiveViewFilters"
+              >
+                {{ t("no_elements_found") }}
+              </slot>
             </td>
           </tr>
         </tbody>

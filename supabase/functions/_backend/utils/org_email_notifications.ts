@@ -683,6 +683,8 @@ export async function sendNotifToOrgMembersOnce(
         preferenceKey,
         orgId,
       })
+      // Claim anyway so once-dedup (SQL + retries) does not re-queue forever.
+      await claimNotifOrgOnce(c, eventName, orgId, uniqId, writeClient)
       return false
     }
 

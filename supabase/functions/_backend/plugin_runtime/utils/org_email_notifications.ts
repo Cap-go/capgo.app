@@ -127,8 +127,7 @@ interface EligibleOrgMemberEmailsResult {
   resolutionFailed: boolean
 }
 
-
-type OrgRoleBindingRow = {
+interface OrgRoleBindingRow {
   principal_id: string | null
   expires_at: Date | null
 }
@@ -480,43 +479,52 @@ export async function sendEmailToOrgMembers(
   if (!isBentoConfigured(c))
     return 0
 
-  const client = drizzleClient ?? getDrizzleClient(getPgClient(c, true))
-  const { recipients } = await getPreparedEligibleEmailTargets(c, orgId, preferenceKey, client)
-  if (!recipients) {
-    cloudlog({ requestId: c.get('requestId'), message: 'sendEmailToOrgMembers: org not found', orgId })
-    return 0
-  }
+  let ownedPgClient: Awaited<ReturnType<typeof getPgClient>> | undefined
+  try {
+    if (!drizzleClient)
+      ownedPgClient = await getPgClient(c, true)
+    const client = drizzleClient ?? getDrizzleClient(ownedPgClient!)
+    const { recipients } = await getPreparedEligibleEmailTargets(c, orgId, preferenceKey, client)
+    if (!recipients) {
+      cloudlog({ requestId: c.get('requestId'), message: 'sendEmailToOrgMembers: org not found', orgId })
+      return 0
+    }
 
-  const { adminEmails, managementEmail, allEmails } = recipients
+    const { adminEmails, managementEmail, allEmails } = recipients
 
-  if (allEmails.length === 0) {
+    if (allEmails.length === 0) {
+      cloudlog({
+        requestId: c.get('requestId'),
+        message: 'sendEmailToOrgMembers: no eligible recipients',
+        eventName,
+        preferenceKey,
+        orgId,
+      })
+      return 0
+    }
+
+    // Send emails in background - don't await
+    for (const email of allEmails) {
+      backgroundTask(c, trackBentoEvent(c, email, eventData, eventName))
+    }
+
     cloudlog({
       requestId: c.get('requestId'),
-      message: 'sendEmailToOrgMembers: no eligible recipients',
+      message: 'sendEmailToOrgMembers: queued',
       eventName,
       preferenceKey,
       orgId,
+      totalRecipients: allEmails.length,
+      adminRecipients: adminEmails.length,
+      managementEmailIncluded: !!managementEmail,
     })
-    return 0
+
+    return allEmails.length
   }
-
-  // Send emails in background - don't await
-  for (const email of allEmails) {
-    backgroundTask(c, trackBentoEvent(c, email, eventData, eventName))
+  finally {
+    if (ownedPgClient)
+      await closeClient(c, ownedPgClient)
   }
-
-  cloudlog({
-    requestId: c.get('requestId'),
-    message: 'sendEmailToOrgMembers: queued',
-    eventName,
-    preferenceKey,
-    orgId,
-    totalRecipients: allEmails.length,
-    adminRecipients: adminEmails.length,
-    managementEmailIncluded: !!managementEmail,
-  })
-
-  return allEmails.length
 }
 
 /**
@@ -633,7 +641,7 @@ export async function sendNotifToOrgMembersOnce(
   if (!isBentoConfigured(c))
     return false
 
-  const pgClient = getPgClient(c)
+  const pgClient = await getPgClient(c)
   const writeClient = getDrizzleClient(pgClient)
 
   try {
@@ -825,7 +833,6 @@ export async function sendNotifToOrgMembersCached(
   // No need to cache "sent=true" as next check should query DB anyway
   return result === true
 }
-
 
 /**
  * Resolve org admin/super_admin member emails for Bento profile tagging.

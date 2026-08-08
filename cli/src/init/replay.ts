@@ -21,12 +21,8 @@ const REPLAY_LINE_HEIGHT_PX = 20
 const REPLAY_PADDING_PX = 32
 const REPLAY_FRAME_THROTTLE_MS = 1000
 const REPLAY_FLUSH_TIMEOUT_MS = 1500
-const TERMINAL_PIXEL_SIZE_TIMEOUT_MS = 200
 const DEFAULT_REPLAY_CURRENT_URL = 'capgo-cli://init'
 const DEFAULT_REPLAY_SESSION_PREFIX = 'init'
-const XTERM_ESCAPE = String.fromCharCode(27)
-const XTERM_REPORT_TEXT_AREA_SIZE = `${XTERM_ESCAPE}[14t`
-const XTERM_TEXT_AREA_SIZE_RESPONSE = new RegExp(`${XTERM_ESCAPE}\\[4;(\\d+);(\\d+)t`)
 
 type CliStream = typeof stdout | typeof stderr
 type StreamWrite = CliStream['write']
@@ -189,16 +185,6 @@ function isUsableTerminalPixelSize(size?: TerminalPixelSize): size is TerminalPi
   )
 }
 
-export function parseTerminalPixelSizeResponse(input: string): TerminalPixelSize | undefined {
-  const match = XTERM_TEXT_AREA_SIZE_RESPONSE.exec(input)
-  if (!match)
-    return undefined
-
-  const height = Number(match[1])
-  const width = Number(match[2])
-  return isUsableTerminalPixelSize({ height, width }) ? { height, width } : undefined
-}
-
 export function getReplayViewportSize(cols = DEFAULT_COLS, rows = DEFAULT_ROWS, terminalPixelSize?: TerminalPixelSize) {
   if (isUsableTerminalPixelSize(terminalPixelSize))
     return { height: Math.round(terminalPixelSize.height), width: Math.round(terminalPixelSize.width) }
@@ -238,60 +224,6 @@ function chunkToString(chunk: unknown, encoding?: BufferEncoding) {
   if (chunk instanceof Uint8Array)
     return Buffer.from(chunk).toString(encoding || 'utf8')
   return String(chunk ?? '')
-}
-
-export function queryTerminalPixelSize(timeoutMs = TERMINAL_PIXEL_SIZE_TIMEOUT_MS): Promise<TerminalPixelSize | undefined> {
-  if (!stdin.isTTY || !stdout.isTTY || typeof stdin.setRawMode !== 'function')
-    return Promise.resolve(undefined)
-
-  return new Promise((resolve) => {
-    let settled = false
-    let response = ''
-    const wasPaused = stdin.isPaused()
-    const wasRaw = stdin.isRaw
-    const initialDataListeners = stdin.listenerCount('data')
-    const initialKeypressListeners = stdin.listenerCount('keypress')
-    const initialReadableListeners = stdin.listenerCount('readable')
-    const timer = setTimeout(() => cleanup(undefined), timeoutMs)
-    timer.unref?.()
-
-    function cleanup(size: TerminalPixelSize | undefined) {
-      if (settled)
-        return
-
-      settled = true
-      clearTimeout(timer)
-      stdin.off('data', onData)
-      const inputWasClaimed = stdin.listenerCount('data') > initialDataListeners
-        || stdin.listenerCount('keypress') > initialKeypressListeners
-        || stdin.listenerCount('readable') > initialReadableListeners
-      try {
-        if (!inputWasClaimed && !wasRaw)
-          stdin.setRawMode(false)
-        if (!inputWasClaimed && wasPaused)
-          stdin.pause()
-      }
-      catch {}
-      resolve(size)
-    }
-
-    function onData(chunk: Buffer | string) {
-      response += chunkToString(chunk)
-      const size = parseTerminalPixelSizeResponse(response)
-      if (size)
-        cleanup(size)
-    }
-
-    try {
-      stdin.setRawMode(true)
-      stdin.resume()
-      stdin.on('data', onData)
-      stdout.write(XTERM_REPORT_TEXT_AREA_SIZE)
-    }
-    catch {
-      cleanup(undefined)
-    }
-  })
 }
 
 function visibleTerminalText(term: Terminal) {
@@ -437,7 +369,7 @@ function buildTerminalImageDataUrl(frame: TerminalReplayFrame) {
     `<svg xmlns="http://www.w3.org/2000/svg" width="${frame.width}" height="${frame.height}" viewBox="0 0 ${frame.width} ${frame.height}">`,
     `<rect width="${frame.width}" height="${frame.height}" fill="#0d1117"/>`,
     `<foreignObject width="${frame.width}" height="${frame.height}">`,
-    '<div xmlns="http://www.w3.org/1999/xhtml" style="box-sizing:border-box;width:100%;height:100%;padding:16px;background:#0d1117;color:#d6deeb;overflow:hidden;font:14px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;">',
+    `<div xmlns="http://www.w3.org/1999/xhtml" style="box-sizing:border-box;width:100%;height:100%;padding:16px;background:#0d1117;color:#d6deeb;overflow:hidden;font:14px/${REPLAY_LINE_HEIGHT_PX}px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;"><style>pre{margin:0;font:inherit}</style>`,
     frame.html,
     '</div></foreignObject></svg>',
   ].join('')
@@ -669,8 +601,8 @@ class InitReplayRecorder implements InitReplayController {
     this.hasSentMeta = false
     this.metaGeneration += 1
     this.resolvedTerminalPixelSize = undefined
-    // Re-querying pixel size touches shared stdin and can leak CSI responses into
-    // active Ink prompts; fall back to cols/rows-based viewport sizing instead.
+    // Explicit pixel dimensions are stale after a resize; use the updated
+    // columns/rows for viewport sizing instead.
     this.terminalPixelSizeSource = Promise.resolve(undefined)
 
     // Drain in-flight stdout writes before clearing — otherwise a stale chunk
@@ -834,9 +766,7 @@ export function startInitReplay(options: StartInitReplayOptions = {}): InitRepla
           })()
     const currentUrl = options.currentUrl?.trim() || DEFAULT_REPLAY_CURRENT_URL
     const sessionPrefix = options.sessionPrefix?.trim() || DEFAULT_REPLAY_SESSION_PREFIX
-    const terminalPixelSize = options.terminalPixelSize
-      ? Promise.resolve(options.terminalPixelSize)
-      : queryTerminalPixelSize()
+    const terminalPixelSize = Promise.resolve(options.terminalPixelSize)
 
     return new InitReplayRecorder(
       apikey,

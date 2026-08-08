@@ -3,6 +3,7 @@ import type { ComputedRef, Ref } from 'vue'
 import type { Database } from '~/types/supabase.types'
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
+import { addUtcDays, normalizeToUtcStartOfDay } from '~/services/date'
 import { createSignedImageUrl, getImmediateImageUrl, resolveImagePath } from '~/services/storage'
 import { isPlatformAdmin, stripeEnabled, useSupabase } from '~/services/supabase'
 import { clearWebsitePaidUserCookie, setWebsitePaidUserCookie, syncWebsitePaidUserCookieFromOrganizations } from '~/services/websiteAuthCookie'
@@ -34,6 +35,7 @@ export interface OrganizationApp {
   app_id: string
   name: string | null
   owner_org: string
+  need_onboarding: boolean
   icon_url: string | null
   icon_storage_path?: string | null
   icon_url_loading?: boolean
@@ -264,12 +266,13 @@ export const useOrganizationStore = defineStore('organization', () => {
     }
   }
 
-  const appWithImmediateIcon = (app: { app_id: string, name: string | null, owner_org: string, icon_url: string | null }): OrganizationApp => {
+  const appWithImmediateIcon = (app: { app_id: string, name: string | null, owner_org: string, need_onboarding: boolean, icon_url: string | null }): OrganizationApp => {
     const { normalized, shouldSign } = resolveImagePath(app.icon_url)
     return {
       app_id: app.app_id,
       name: app.name,
       owner_org: app.owner_org,
+      need_onboarding: app.need_onboarding,
       icon_url: shouldSign ? '' : normalized || null,
       icon_storage_path: normalized || null,
       icon_url_loading: shouldSign,
@@ -354,14 +357,11 @@ export const useOrganizationStore = defineStore('organization', () => {
       dashboardAppsStore.fetchApps(true)
     }
 
-    // Always fetch last 30 days of data and filter client-side for billing period
-    // End date should be tomorrow at midnight to include all of today's data
-    const last30DaysEnd = new Date()
-    last30DaysEnd.setHours(0, 0, 0, 0)
-    last30DaysEnd.setDate(last30DaysEnd.getDate() + 1) // Tomorrow midnight
-    const last30DaysStart = new Date()
-    last30DaysStart.setHours(0, 0, 0, 0)
-    last30DaysStart.setDate(last30DaysStart.getDate() - 29) // 30 days including today
+    // Always fetch last 30 UTC days of data and filter client-side for billing period
+    // End date should be next UTC midnight to include all of today's UTC data
+    const todayUtc = normalizeToUtcStartOfDay()
+    const last30DaysEnd = addUtcDays(todayUtc, 1)
+    const last30DaysStart = addUtcDays(todayUtc, -29)
     try {
       await main.updateDashboard(currentOrganizationRaw.gid, last30DaysStart.toISOString(), last30DaysEnd.toISOString())
     }
@@ -390,7 +390,7 @@ export const useOrganizationStore = defineStore('organization', () => {
     const appIconLoadRun = ++organizationAppIconLoadRun
     const { error, data: allAppsByOwner } = await supabase
       .from('apps')
-      .select('app_id, name, owner_org, icon_url')
+      .select('app_id, name, owner_org, need_onboarding, icon_url')
       .in('owner_org', orgIds)
 
     if (error) {
@@ -463,7 +463,17 @@ export const useOrganizationStore = defineStore('organization', () => {
   }
 
   const setCurrentOrganization = (id: string) => {
-    currentOrganization.value = organizations.value.find(org => org.gid === id)
+    const organization = organizations.value.find(org => org.gid === id)
+    if (!organization) {
+      // The id isn't in the user's org list (e.g. an `?oid=` pointing at an org
+      // they aren't a member of). Blindly assigning the `find()` result would
+      // silently clear currentOrganization to undefined, which downstream pages
+      // (notably the plans page) then treat as a hard error. Log loudly and keep
+      // the current organization untouched instead of clobbering it.
+      console.error(`setCurrentOrganization: no organization with id "${id}" in the user's org list; keeping the current organization`)
+      return
+    }
+    currentOrganization.value = organization
   }
 
   const setCurrentOrganizationToMain = () => {
@@ -593,20 +603,15 @@ export const useOrganizationStore = defineStore('organization', () => {
       return
     }
 
-    // Try to restore from localStorage first
-    let targetOrgId = currentOrganization.value?.gid
-    if (!targetOrgId) {
+    let selectedOrganization = currentOrganization.value
+      ? selectableOrganizations.find(org => org.gid === currentOrganization.value?.gid)
+      : undefined
+    if (!selectedOrganization) {
       const storedOrgId = localStorage.getItem(STORAGE_KEY)
-      if (storedOrgId) {
-        const storedOrg = mappedData.find(org => org.gid === storedOrgId && isSelectableOrganization(org))
-        if (storedOrg) {
-          targetOrgId = storedOrg.gid
-        }
-      }
+      if (storedOrgId)
+        selectedOrganization = selectableOrganizations.find(org => org.gid === storedOrgId)
     }
-
-    targetOrgId ||= organization.gid
-    currentOrganization.value = mappedData.find(org => org.gid === targetOrgId) as Organization | undefined
+    currentOrganization.value = selectedOrganization ?? organization
     // Don't mark as failed if user lacks 2FA or password access - the data is redacted and unreliable
     const lacks2FAAccess = currentOrganization.value?.enforcing_2fa === true && currentOrganization.value?.['2fa_has_access'] === false
     const lacksPasswordAccess = currentOrganization.value?.password_policy_config?.enabled && currentOrganization.value?.password_has_access === false

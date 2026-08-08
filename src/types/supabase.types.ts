@@ -584,6 +584,30 @@ export type Database = {
           },
         ]
       }
+      builder_capacity_events: {
+        Row: {
+          created_at: string
+          delta: number
+          id: number
+          source: string
+          workers_total: number
+        }
+        Insert: {
+          created_at?: string
+          delta: number
+          id?: number
+          source?: string
+          workers_total: number
+        }
+        Update: {
+          created_at?: string
+          delta?: number
+          id?: number
+          source?: string
+          workers_total?: number
+        }
+        Relationships: []
+      }
       build_requests: {
         Row: {
           ai_analyzed: boolean
@@ -591,6 +615,7 @@ export type Database = {
           build_config: Json | null
           build_mode: string
           builder_job_id: string | null
+          completed_at: string | null
           created_at: string
           id: string
           last_error: string | null
@@ -598,6 +623,7 @@ export type Database = {
           platform: string
           requested_by: string
           runner_wait_seconds: number
+          started_at: string | null
           status: string
           updated_at: string
           upload_expires_at: string
@@ -611,6 +637,7 @@ export type Database = {
           build_config?: Json | null
           build_mode?: string
           builder_job_id?: string | null
+          completed_at?: string | null
           created_at?: string
           id?: string
           last_error?: string | null
@@ -618,6 +645,7 @@ export type Database = {
           platform: string
           requested_by: string
           runner_wait_seconds?: number
+          started_at?: string | null
           status?: string
           updated_at?: string
           upload_expires_at: string
@@ -631,6 +659,7 @@ export type Database = {
           build_config?: Json | null
           build_mode?: string
           builder_job_id?: string | null
+          completed_at?: string | null
           created_at?: string
           id?: string
           last_error?: string | null
@@ -638,6 +667,7 @@ export type Database = {
           platform?: string
           requested_by?: string
           runner_wait_seconds?: number
+          started_at?: string | null
           status?: string
           updated_at?: string
           upload_expires_at?: string
@@ -1036,7 +1066,6 @@ export type Database = {
           created_at: string
           description: string | null
           enabled: boolean
-          healthcheck_url: string | null
           hour_interval: number | null
           id: number
           minute_interval: number | null
@@ -1057,7 +1086,6 @@ export type Database = {
           created_at?: string
           description?: string | null
           enabled?: boolean
-          healthcheck_url?: string | null
           hour_interval?: number | null
           id?: number
           minute_interval?: number | null
@@ -1078,7 +1106,6 @@ export type Database = {
           created_at?: string
           description?: string | null
           enabled?: boolean
-          healthcheck_url?: string | null
           hour_interval?: number | null
           id?: number
           minute_interval?: number | null
@@ -1540,6 +1567,7 @@ export type Database = {
           apps_created: number
           apps_with_cli_onboarding_builds_24h: number
           apps_with_manual_builds_24h: number
+          apps_with_preview: number
           average_ltv: number
           build_avg_seconds_day_android: number
           build_avg_seconds_day_ios: number
@@ -1579,6 +1607,16 @@ export type Database = {
           need_upgrade: number | null
           new_paying_orgs: number
           not_paying: number | null
+          notifications_apps: number
+          notifications_campaigns: number
+          notifications_campaigns_day: number
+          notifications_failed_day: number
+          notifications_opened_day: number
+          notifications_opened_last_month: number
+          notifications_providers: number
+          notifications_received_day: number
+          notifications_sent_day: number
+          notifications_sent_last_month: number
           nrr: number
           onboarded: number | null
           org_conversion_rate: number
@@ -1639,6 +1677,7 @@ export type Database = {
           apps_created?: number
           apps_with_cli_onboarding_builds_24h?: number
           apps_with_manual_builds_24h?: number
+          apps_with_preview?: number
           average_ltv?: number
           build_avg_seconds_day_android?: number
           build_avg_seconds_day_ios?: number
@@ -1678,6 +1717,16 @@ export type Database = {
           need_upgrade?: number | null
           new_paying_orgs?: number
           not_paying?: number | null
+          notifications_apps?: number
+          notifications_campaigns?: number
+          notifications_campaigns_day?: number
+          notifications_failed_day?: number
+          notifications_opened_day?: number
+          notifications_opened_last_month?: number
+          notifications_providers?: number
+          notifications_received_day?: number
+          notifications_sent_day?: number
+          notifications_sent_last_month?: number
           nrr?: number
           onboarded?: number | null
           org_conversion_rate?: number
@@ -1738,6 +1787,7 @@ export type Database = {
           apps_created?: number
           apps_with_cli_onboarding_builds_24h?: number
           apps_with_manual_builds_24h?: number
+          apps_with_preview?: number
           average_ltv?: number
           build_avg_seconds_day_android?: number
           build_avg_seconds_day_ios?: number
@@ -1777,6 +1827,16 @@ export type Database = {
           need_upgrade?: number | null
           new_paying_orgs?: number
           not_paying?: number | null
+          notifications_apps?: number
+          notifications_campaigns?: number
+          notifications_campaigns_day?: number
+          notifications_failed_day?: number
+          notifications_opened_day?: number
+          notifications_opened_last_month?: number
+          notifications_providers?: number
+          notifications_received_day?: number
+          notifications_sent_day?: number
+          notifications_sent_last_month?: number
           nrr?: number
           onboarded?: number | null
           org_conversion_rate?: number
@@ -3349,6 +3409,7 @@ export type Database = {
           enable_notifications: boolean
           first_name: string | null
           format_locale: string | null
+          github_id: number | null
           github_username: string | null
           id: string
           image_url: string | null
@@ -3367,6 +3428,7 @@ export type Database = {
           enable_notifications?: boolean
           first_name?: string | null
           format_locale?: string | null
+          github_id?: number | null
           github_username?: string | null
           id: string
           image_url?: string | null
@@ -3385,6 +3447,7 @@ export type Database = {
           enable_notifications?: boolean
           first_name?: string | null
           format_locale?: string | null
+          github_id?: number | null
           github_username?: string | null
           id?: string
           image_url?: string | null
@@ -4579,6 +4642,9 @@ export type Database = {
         Returns: boolean
       }
       has_seeded_demo_data: { Args: { p_app_id: string }; Returns: boolean }
+      has_usage_credits_org:
+        | { Args: { orgid: string }; Returns: boolean }
+        | { Args: { appid: string; orgid: string }; Returns: boolean }
       internal_request_db_user_names: { Args: never; Returns: string[] }
       internal_request_role_names: { Args: never; Returns: string[] }
       invite_user_to_org_rbac: {
@@ -4783,14 +4849,6 @@ export type Database = {
       process_global_stats_creates_queue: {
         Args: { batch_size?: number }
         Returns: number
-      }
-      process_queue_with_healthcheck: {
-        Args: {
-          batch_size: number
-          healthcheck_url: string
-          queue_names: string[]
-        }
-        Returns: undefined
       }
       process_stats_email_monthly: { Args: never; Returns: undefined }
       process_stats_email_weekly: { Args: never; Returns: undefined }
@@ -5094,6 +5152,10 @@ export type Database = {
         }[]
       }
       request_has_app_read_access: {
+        Args: { appid: string; orgid: string }
+        Returns: boolean
+      }
+      request_has_org_or_app_read_access: {
         Args: { appid: string; orgid: string }
         Returns: boolean
       }

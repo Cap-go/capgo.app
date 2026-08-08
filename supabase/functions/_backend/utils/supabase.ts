@@ -1,13 +1,16 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Context } from 'hono'
+// @ts-types="npm:@types/pg"
+import type { PoolClient } from 'pg'
 import type { BillingPlanBentoState } from './billing_bento_tags.ts'
 import type { AuthInfo } from './hono.ts'
 import type { Database } from './supabase.types.ts'
 import type { DeviceWithoutCreatedAt, NativeVersionUsage, Order, ReadDevicesParams, ReadStatsInsightsParams, ReadStatsParams, StatsInsightsResult, StatsMetadata, VersionUsage, VersionUsageChannel } from './types.ts'
 import { createClient } from '@supabase/supabase-js'
+import { HTTPException } from 'hono/http-exception'
 import { buildBillingPlanBentoTags } from './billing_bento_tags.ts'
 import { buildNormalizedDeviceForWrite, hasComparableDeviceChanged, nullableString } from './deviceComparison.ts'
-import { simpleError } from './hono.ts'
+import { quickError, simpleError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { closeClient, getPgClient } from './pg.ts'
 import { emptyStatsInsights, normalizeStatsInsightsResult } from './statsInsights.ts'
@@ -791,18 +794,39 @@ export async function createApiKey(c: Context, userId: string) {
     return
   }
 
-  const pgClient = getPgClient(c)
+  const pgPool = getPgClient(c)
+  let pgClient: PoolClient | undefined
   let inTransaction = false
   try {
+    pgClient = await pgPool.connect()
     await pgClient.query('BEGIN')
     inTransaction = true
+    await pgClient.query(`SET LOCAL lock_timeout = '5s'`)
 
+    // Serialize with delete_user(). Its to_delete_accounts FK check takes a
+    // KEY SHARE lock on public.users, which conflicts with this UPDATE lock.
+    // The separate query below therefore gets a fresh READ COMMITTED snapshot
+    // after any in-flight deletion transaction has finished.
     const userLockResult = await pgClient.query(
-      'SELECT id FROM auth.users WHERE id = $1::uuid FOR UPDATE',
+      'SELECT id FROM public.users WHERE id = $1::uuid FOR UPDATE',
       [userId],
     )
     if (userLockResult.rowCount === 0) {
       cloudlogErr({ requestId: c.get('requestId'), message: 'createApiKey error', userId, error: 'user not found' })
+      await pgClient.query('ROLLBACK')
+      return
+    }
+
+    const deletionResult = await pgClient.query<{ deletion_scheduled: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1
+         FROM public.to_delete_accounts
+         WHERE account_id = $1::uuid
+       ) AS deletion_scheduled`,
+      [userId],
+    )
+    if (deletionResult.rows[0]?.deletion_scheduled) {
+      cloudlog({ requestId: c.get('requestId'), message: 'createApiKey skipped, account deletion scheduled', userId })
       await pgClient.query('ROLLBACK')
       return
     }
@@ -962,13 +986,21 @@ export async function createApiKey(c: Context, userId: string) {
     await pgClient.query('COMMIT')
   }
   catch (error) {
-    if (inTransaction) {
+    if (inTransaction && pgClient) {
       await pgClient.query('ROLLBACK').catch(() => {})
     }
     cloudlogErr({ requestId: c.get('requestId'), message: 'createApiKey error', userId, error })
+    // A lock timeout is transient: let the queue retry instead of permanently
+    // acknowledging user provisioning without a default API key.
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === '55P03')
+      throw error
   }
   finally {
-    closeClient(c, pgClient)
+    // Workerd keeps request-scoped Pools open, so destroy the checked-out
+    // socket explicitly after the transaction and then close the Pool where
+    // the runtime supports it.
+    pgClient?.release(true)
+    closeClient(c, pgPool)
   }
 }
 
@@ -1081,7 +1113,6 @@ export async function getDefaultPlan(c: Context) {
     .single()
   return plan
 }
-
 
 export function trackBandwidthUsageSB(
   c: Context,
@@ -1512,6 +1543,14 @@ export async function readDevicesSB(c: Context, params: ReadDevicesParams, custo
       query = query.in('device_id', params.deviceIds)
   }
 
+  if (params.customIds?.length) {
+    cloudlog({ requestId: c.get('requestId'), message: 'customIds', customIds: params.customIds })
+    if (params.customIds.length === 1)
+      query = query.eq('custom_id', params.customIds[0])
+    else
+      query = query.in('custom_id', params.customIds)
+  }
+
   if (params.search) {
     cloudlog({ requestId: c.get('requestId'), message: 'search', search: params.search })
     const searchPattern = buildIlikeContainsPattern(params.search)
@@ -1524,11 +1563,16 @@ export async function readDevicesSB(c: Context, params: ReadDevicesParams, custo
   if (params.version_name)
     query = query.eq('version_name', params.version_name)
 
+  if (params.platform)
+    query = query.eq('platform', params.platform)
+
   if (params.installSources?.length)
     query = query.in('install_source', params.installSources)
 
   if (params.updated_at_gt)
     query = query.gt('updated_at', params.updated_at_gt)
+  if (params.updated_at_lte)
+    query = query.lte('updated_at', params.updated_at_lte)
 
   const devicesOrder = getDevicesOrder(params.order)
 
@@ -1598,6 +1642,10 @@ export async function countDevicesSB(
   deviceIds: string[] = [],
   versionName?: string,
   search?: string,
+  options?: {
+    platform?: Database['public']['Enums']['platform_os']
+    updatedAt?: { gt?: string, lte?: string }
+  },
 ) {
   let req = supabaseAdmin(c)
     .from('devices')
@@ -1627,6 +1675,13 @@ export async function countDevicesSB(
 
   if (versionName)
     req = req.eq('version_name', versionName)
+
+  if (options?.platform)
+    req = req.eq('platform', options.platform)
+  if (options?.updatedAt?.gt)
+    req = req.gt('updated_at', options.updatedAt.gt)
+  if (options?.updatedAt?.lte)
+    req = req.lte('updated_at', options.updatedAt.lte)
 
   const { count, error } = await req
 
@@ -1736,7 +1791,17 @@ export async function checkKey(c: Context, authorization: string | undefined, su
       .rpc('find_apikey_by_value', { key_value: authorization })
       .single()
 
-    if (error || !data) {
+    if (error) {
+      // Kong/PostgREST overload must not look like a bad key (flaky 401s in CI).
+      const message = error.message ?? ''
+      if (message.includes('invalid response was received from the upstream server')) {
+        cloudlog({ requestId: c.get('requestId'), message: 'Apikey lookup upstream failure', authorizationPrefix: authorization?.substring(0, 8), error })
+        throw quickError(503, 'upstream_unavailable', 'Upstream unavailable', { error: message })
+      }
+      cloudlog({ requestId: c.get('requestId'), message: 'Invalid apikey', authorizationPrefix: authorization?.substring(0, 8), error })
+      return null
+    }
+    if (!data) {
       cloudlog({ requestId: c.get('requestId'), message: 'Invalid apikey', authorizationPrefix: authorization?.substring(0, 8), error })
       return null
     }
@@ -1750,6 +1815,8 @@ export async function checkKey(c: Context, authorization: string | undefined, su
     return data
   }
   catch (error) {
+    if (error instanceof HTTPException)
+      throw error
     cloudlog({ requestId: c.get('requestId'), message: 'checkKey error', error })
     return null
   }

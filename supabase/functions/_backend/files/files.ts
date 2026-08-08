@@ -9,6 +9,7 @@ import { app as upload_link } from '../private/upload_link.ts'
 import { app as ok } from '../public/ok.ts'
 import { sendDiscordAlert } from '../utils/discord.ts'
 import { quickError, simpleError } from '../utils/hono.ts'
+import { onPremiseAppResponse } from '../utils/rateLimitInfo.ts'
 import { middlewareKey } from '../utils/hono_middleware.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { closeClient, getAppByIdPg, getDrizzleClient, getPgClient } from '../utils/pg.ts'
@@ -994,12 +995,9 @@ async function checkWriteAppAccess(c: Context, next: Next) {
     }
 
     if (!appPlan.plan_valid) {
-      // Keep the explicit JSON 429 payload here: onError rewrites thrown 429s to
-      // too_many_requests, and the edge cache contract depends on on_premise_app.
-      return c.json({
-        error: 'on_premise_app',
-        message: 'On-premise app detected',
-      }, 429)
+      // Keep the explicit on_premise_app 429 (with Retry-After / Cache-Control) —
+      // the edge cache contract depends on that error code and headers.
+      return onPremiseAppResponse(c)
     }
 
     // Ready bundle objects are immutable. Refuse resumable uploads that target a

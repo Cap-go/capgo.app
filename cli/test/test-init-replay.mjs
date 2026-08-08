@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { stdin, stdout } from 'node:process'
 import { applyCommandAnalyticsOptOut, applyRawCommandAnalyticsOptOut } from '../src/analytics/opt-out.ts'
-import { buildInitReplayBody, createTerminalInteractionEvents, createTerminalSnapshot, createTerminalSnapshotNode, getReplayViewportSize, parseTerminalPixelSizeResponse, queryTerminalPixelSize, renderRedactedTerminalFrame, renderRedactedTerminalText, resolveCapgoReplayUrl, resolveReplayUrlForFlush, resolveSupabaseReplayUrl, shouldStartInitReplay, startInitReplay } from '../src/init/replay.ts'
+import { buildInitReplayBody, createTerminalInteractionEvents, createTerminalSnapshot, createTerminalSnapshotNode, getReplayViewportSize, renderRedactedTerminalFrame, renderRedactedTerminalText, resolveCapgoReplayUrl, resolveReplayUrlForFlush, resolveSupabaseReplayUrl, shouldStartInitReplay, startInitReplay } from '../src/init/replay.ts'
 
 console.log('🧪 Testing init replay telemetry...\n')
 
@@ -38,8 +38,6 @@ const replayTimeoutStartedAt = Date.now()
 assert.equal(await resolveReplayUrlForFlush(new Promise(() => {}), 20, () => { abortedReplayLookup = true }), undefined, 'stalled replay URL lookup times out')
 assert.equal(abortedReplayLookup, true, 'stalled replay URL lookup is aborted on timeout')
 assert.ok(Date.now() - replayTimeoutStartedAt < 1000, 'stalled replay URL lookup does not block final flush')
-assert.deepEqual(parseTerminalPixelSizeResponse('\u001B[4;412;640t'), { height: 412, width: 640 }, 'xterm pixel-size report is parsed as height and width')
-assert.equal(parseTerminalPixelSizeResponse('\u001B[4;0;640t'), undefined, 'invalid terminal pixel reports are ignored')
 assert.deepEqual(getReplayViewportSize(20, 5, { height: 412, width: 640 }), { height: 412, width: 640 }, 'reported terminal pixels override computed fallback size')
 const pixelSizedFrame = await renderRedactedTerminalFrame('small real terminal', 20, 5, { height: 412, width: 640 })
 assert.equal(pixelSizedFrame.width, 640, 'terminal frame uses reported pixel width')
@@ -59,52 +57,6 @@ function replaceProcessProperty(target, key, value) {
   }
 }
 
-{
-  const restoreFns = []
-  const rawModeCalls = []
-  const promptListener = () => {}
-  let pauseCalls = 0
-  let paused = true
-
-  try {
-    restoreFns.push(replaceProcessProperty(stdin, 'isTTY', true))
-    restoreFns.push(replaceProcessProperty(stdout, 'isTTY', true))
-    restoreFns.push(replaceProcessProperty(stdin, 'isRaw', false))
-    restoreFns.push(replaceProcessProperty(stdin, 'isPaused', () => paused))
-    restoreFns.push(replaceProcessProperty(stdin, 'setRawMode', (value) => {
-      rawModeCalls.push(value)
-      Object.defineProperty(stdin, 'isRaw', {
-        configurable: true,
-        value,
-        writable: true,
-      })
-      return stdin
-    }))
-    restoreFns.push(replaceProcessProperty(stdin, 'resume', () => {
-      paused = false
-      return stdin
-    }))
-    restoreFns.push(replaceProcessProperty(stdin, 'pause', () => {
-      pauseCalls += 1
-      paused = true
-      return stdin
-    }))
-    restoreFns.push(replaceProcessProperty(stdout, 'write', () => true))
-
-    const pixelQuery = queryTerminalPixelSize(1000)
-    stdin.on('keypress', promptListener)
-    stdin.emit('data', '\u001B[4;412;640t')
-    assert.deepEqual(await pixelQuery, { height: 412, width: 640 }, 'terminal pixel query still reads the terminal response')
-    assert.deepEqual(rawModeCalls, [true], 'terminal pixel query does not disable raw mode after a prompt claims stdin')
-    assert.equal(pauseCalls, 0, 'terminal pixel query does not pause stdin after a prompt claims stdin')
-  }
-  finally {
-    stdin.off('keypress', promptListener)
-    while (restoreFns.length > 0)
-      restoreFns.pop()()
-  }
-}
-
 const redacted = await renderRedactedTerminalText([
   'capg_1234567890abcdef',
   'Authorization: Bearer abcdefghijklmno.1234567890',
@@ -120,6 +72,20 @@ assert.match(styledFrame.html, /color:/, 'terminal HTML keeps xterm color styles
 assert.match(styledFrame.html, /hello replay/, 'terminal HTML includes visible text')
 const node = await createTerminalSnapshotNode(styledFrame)
 const serializedNode = JSON.stringify(node)
+const fullTerminalFrame = await renderRedactedTerminalFrame(Array.from({ length: 30 }, (_, index) => index === 29 ? 'LAST ROW MUST BE FULLY VISIBLE' : `row ${index + 1}`).join('\n'), 100, 30)
+assert.equal(fullTerminalFrame.height, 632, '30-row fixture keeps the expected SVG viewport height')
+const fullTerminalSnapshot = JSON.stringify(await createTerminalSnapshotNode(fullTerminalFrame))
+const terminalSvgBase64 = fullTerminalSnapshot.match(/data:image\/svg\+xml;base64,([A-Za-z0-9+/=]+)/)?.[1]
+assert.ok(terminalSvgBase64, '30-row terminal snapshot includes an SVG image')
+const terminalSvg = Buffer.from(terminalSvgBase64, 'base64').toString('utf8')
+assert.match(terminalSvg, /font:14px\/20px ui-monospace/, 'terminal SVG line height matches viewport row height')
+assert.match(terminalSvg, /<style>pre\{margin:0;font:inherit\}<\/style>/, 'terminal SVG removes default pre margins')
+const terminalLineHeight = Number(terminalSvg.match(/font:14px\/(\d+)px/)?.[1])
+const terminalPadding = Number(terminalSvg.match(/padding:(\d+)px/)?.[1])
+assert.ok(Number.isFinite(terminalLineHeight), 'terminal SVG exposes a numeric line height')
+assert.ok(Number.isFinite(terminalPadding), 'terminal SVG exposes numeric padding')
+assert.equal(30 * terminalLineHeight + 2 * terminalPadding, fullTerminalFrame.height, 'declared row and padding budget matches the SVG viewport height')
+assert.match(terminalSvg, /LAST ROW MUST BE FULLY VISIBLE/, 'terminal SVG contains the final row')
 const ansiSplitSecret = await renderRedactedTerminalText('capg_1234\u001B[31m567890abcdef\u001B[0m', 120, 10)
 assert.match(ansiSplitSecret, /\[REDACTED\]/, 'ANSI-normalized secret is redacted')
 assert.doesNotMatch(ansiSplitSecret, /capg_1234567890abcdef/, 'ANSI-split Capgo API key is redacted after terminal normalization')
@@ -226,9 +192,14 @@ assert.equal(applyRawCommandAnalyticsOptOut(['node', 'capgo', 'bundle', 'upload'
     Object.defineProperty(stdout, 'rows', { configurable: true, enumerable: true, get: () => rows })
 
     const rawModeCalls = []
+    const terminalWrites = []
     restoreFns.push(replaceProcessProperty(stdin, 'setRawMode', (value) => {
       rawModeCalls.push(value)
       return stdin
+    }))
+    restoreFns.push(replaceProcessProperty(stdout, 'write', (chunk) => {
+      terminalWrites.push(String(chunk))
+      return true
     }))
 
     const replay = startInitReplay({
@@ -238,13 +209,14 @@ assert.equal(applyRawCommandAnalyticsOptOut(['node', 'capgo', 'bundle', 'upload'
       cols: 80,
       rows: 24,
       throttleMs: 20,
-      terminalPixelSize: { height: 480, width: 800 },
       transport: async (_url, body) => {
         captured.push(body)
         return true
       },
     })
     assert.ok(replay, 'replay starts with mocked terminal dimensions')
+    assert.equal(rawModeCalls.length, 0, 'replay startup does not change stdin raw mode')
+    assert.equal(terminalWrites.some(write => write.includes('\u001B[14t')), false, 'replay startup does not query terminal pixel size')
 
     stdout.write('before resize line\r\n')
     await new Promise(resolve => setTimeout(resolve, 80))

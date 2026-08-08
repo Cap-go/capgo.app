@@ -1,11 +1,15 @@
 <script setup lang="ts">
 import type { TableColumn } from '../comp_def'
+import type { DateRangePreset } from '~/services/dateRange'
 import type { Database } from '~/types/supabase.types'
-import { h, ref } from 'vue'
+import { computed, h, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
+import IconSmartphone from '~icons/lucide/smartphone'
+import DateRangePicker from '~/components/DateRangePicker.vue'
 import { formatDate } from '~/services/date'
+import { getDateRangeForPreset, TABLE_DATE_RANGE_DEFAULT } from '~/services/dateRange'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
 
 const props = defineProps<{
@@ -20,6 +24,11 @@ const emit = defineEmits(['addDevice'])
 
 // TODO: delete the old version check when all devices uses the new version system
 type Device = Database['public']['Tables']['devices']['Row']
+type PlatformOs = Database['public']['Enums']['platform_os']
+interface DateRangePickerHandle {
+  openPicker: (invoker?: HTMLElement) => Promise<void>
+  togglePicker: (invoker?: HTMLElement) => void
+}
 
 const { t } = useI18n()
 const supabase = useSupabase()
@@ -38,7 +47,45 @@ const filters = ref({
   Override: false,
   CustomId: false,
 })
+const initialRange = getDateRangeForPreset(TABLE_DATE_RANGE_DEFAULT)
+const dateRange = ref<[Date, Date] | null>([initialRange.start, initialRange.end])
+const dateRangeMode = ref<DateRangePreset>(TABLE_DATE_RANGE_DEFAULT)
+const selectedPlatform = ref<'' | PlatformOs>('')
+const selectedVersionName = ref(props.versionName ?? '')
+const bundleNames = ref<string[]>([])
+const dateRangePickerRef = ref<DateRangePickerHandle>()
+const skipFilterReload = ref(false)
 const offset = 10
+const activeExtraFilters = computed(() =>
+  (selectedPlatform.value ? 1 : 0) + (selectedVersionName.value.trim() ? 1 : 0),
+)
+const platformOptions = computed(() => [
+  { value: '' as const, label: t('all-platforms') },
+  { value: 'ios' as const, label: t('platform-ios') },
+  { value: 'android' as const, label: t('platform-android') },
+  { value: 'electron' as const, label: t('platform-electron') },
+])
+
+function clearExtraFilters() {
+  // Values only — DataTable clear emits a filters update that triggers the single reload.
+  // Keep skipFilterReload true until the next tick so platform/bundle watchers do not
+  // schedule a second reload in the same clear action.
+  skipFilterReload.value = true
+  selectedPlatform.value = ''
+  selectedVersionName.value = ''
+  nextTick(() => {
+    skipFilterReload.value = false
+  })
+}
+
+function openDateRangePicker(event: MouseEvent) {
+  dateRangePickerRef.value?.togglePicker(event.currentTarget as HTMLElement)
+}
+
+function clearDeviceViewFilters(clearFilters: () => void) {
+  cancelScheduledReload()
+  clearFilters()
+}
 const columns = ref<TableColumn[]>([
   {
     label: t('device-id'),
@@ -95,16 +142,72 @@ function getSearchTerm() {
   return trimmed.length ? trimmed : undefined
 }
 
+function getDateRangePayload() {
+  if (dateRangeMode.value !== 'custom') {
+    const rolling = getDateRangeForPreset(dateRangeMode.value)
+    return {
+      updated_at_gt: rolling.start.toISOString(),
+      updated_at_lte: rolling.end.toISOString(),
+    }
+  }
+  if (!dateRange.value)
+    return {}
+  return {
+    updated_at_gt: dateRange.value[0].toISOString(),
+    updated_at_lte: dateRange.value[1].toISOString(),
+  }
+}
+
+function getVersionNameFilter() {
+  const selected = selectedVersionName.value.trim()
+  return selected || undefined
+}
+
+function getPlatformFilter(): PlatformOs | undefined {
+  return selectedPlatform.value || undefined
+}
+
 function getQuerySignature() {
   return JSON.stringify({
     appId: props.appId,
-    versionName: props.versionName,
+    versionName: getVersionNameFilter(),
+    platform: getPlatformFilter() ?? '',
     search: getSearchTerm(),
     order: getActiveOrder(columns.value),
     override: filters.value.Override,
     customIdMode: filters.value.CustomId,
     ids: props.ids ? [...props.ids].sort().join(',') : '',
+    dateRange: getDateRangePayload(),
   })
+}
+
+async function loadBundleNames() {
+  const appId = props.appId
+  if (!appId)
+    return
+
+  const { data, error } = await supabase
+    .from('app_versions')
+    .select('name')
+    .eq('app_id', appId)
+    .eq('deleted', false)
+    .order('created_at', { ascending: false })
+    .limit(200)
+
+  // Ignore stale responses if the user switched apps while the query was in flight.
+  if (appId !== props.appId)
+    return
+
+  if (error || !data) {
+    bundleNames.value = []
+    return
+  }
+
+  const names = [...new Set(data.map(row => row.name).filter(Boolean))]
+  const selected = getVersionNameFilter()
+  if (selected && !names.includes(selected))
+    names.unshift(selected)
+  bundleNames.value = names
 }
 
 async function getDevicesID() {
@@ -149,11 +252,13 @@ async function countDevices() {
       body: JSON.stringify({
         count: true,
         appId: props.appId,
-        versionName: props.versionName,
+        versionName: getVersionNameFilter(),
+        platform: getPlatformFilter(),
         devicesId: deviceIds.length > 0 ? deviceIds : undefined,
         search: searchTerm,
         order: getActiveOrder(columns.value),
         customIdMode: filters.value.CustomId,
+        ...getDateRangePayload(),
       }),
     })
 
@@ -212,6 +317,7 @@ async function reload() {
 }
 
 async function refreshData() {
+  cancelScheduledReload()
   const loadId = ++activeLoadId.value
   isLoading.value = true
   try {
@@ -235,6 +341,27 @@ async function refreshData() {
   }
 }
 
+let reloadTimer: ReturnType<typeof setTimeout> | undefined
+
+function cancelScheduledReload() {
+  if (!reloadTimer)
+    return
+  clearTimeout(reloadTimer)
+  reloadTimer = undefined
+}
+
+function debouncedReload() {
+  cancelScheduledReload()
+  reloadTimer = setTimeout(() => {
+    reloadTimer = undefined
+    reload()
+  }, 300)
+}
+
+onUnmounted(() => {
+  cancelScheduledReload()
+})
+
 async function fetchDevicesPage(cursor: string | undefined | null) {
   const ids = await resolveDeviceIds()
   const searchTerm = getSearchTerm()
@@ -252,13 +379,15 @@ async function fetchDevicesPage(cursor: string | undefined | null) {
     },
     body: JSON.stringify({
       appId: props.appId,
-      versionName: props.versionName,
+      versionName: getVersionNameFilter(),
+      platform: getPlatformFilter(),
       devicesId: ids.length ? ids : undefined,
       search: searchTerm,
       order: getActiveOrder(columns.value),
       cursor: cursor ?? undefined,
       limit: offset,
       customIdMode: filters.value.CustomId,
+      ...getDateRangePayload(),
     }),
   })
 
@@ -403,20 +532,166 @@ async function ensureVersionNames(devices: Device[]) {
       device.version_name = versionMap[id]
   })
 }
+
+onMounted(async () => {
+  await loadBundleNames()
+})
+
+watch(() => props.appId, async (appId) => {
+  cancelScheduledReload()
+  // Invalidate in-flight reloads from the previous app before awaiting.
+  activeLoadId.value += 1
+  skipFilterReload.value = true
+  selectedPlatform.value = ''
+  selectedVersionName.value = props.versionName ?? ''
+  await loadBundleNames()
+  if (appId !== props.appId)
+    return
+  skipFilterReload.value = false
+  await refreshData()
+})
+
+watch(() => props.versionName, (value) => {
+  cancelScheduledReload()
+  skipFilterReload.value = true
+  selectedVersionName.value = value ?? ''
+  skipFilterReload.value = false
+  debouncedReload()
+})
+
+watch([selectedPlatform, selectedVersionName], () => {
+  if (skipFilterReload.value)
+    return
+  debouncedReload()
+})
 </script>
 
 <template>
   <div>
     <DataTable
       v-model:filters="filters" v-model:columns="columns" v-model:current-page="currentPage" v-model:search="search"
-      :total="total" :element-list="elements"
+      :total="total" :offset="offset" :element-list="elements"
       filter-text="Filters"
+      :extra-filter-count="activeExtraFilters"
       :show-add="showAddButton"
       :is-loading="isLoading"
       :search-placeholder="t('search-by-device-id')"
       @add="handleAddDevice"
       @reload="reload()"
       @reset="refreshData()"
-    />
+      @clear-extra-filters="clearExtraFilters"
+    >
+      <template #toolbar-extras>
+        <DateRangePicker
+          ref="dateRangePickerRef"
+          v-model="dateRange"
+          v-model:mode="dateRangeMode"
+          compact
+          @apply="refreshData()"
+        />
+      </template>
+      <template #empty-state="{ clearFilters, hasActiveFilters }">
+        <div
+          class="mx-auto flex max-w-2xl flex-col items-center px-4 py-6 text-left md:py-8"
+          data-test="devices-empty-state"
+        >
+          <IconSmartphone class="mb-3 h-9 w-9 text-slate-400 dark:text-slate-500" aria-hidden="true" />
+          <h3 class="text-center text-base font-semibold text-slate-900 dark:text-white">
+            {{ t('devices-empty-title') }}
+          </h3>
+          <p class="mt-1 text-center text-sm text-slate-600 dark:text-slate-300">
+            {{ t('devices-empty-intro') }}
+          </p>
+          <ul class="mt-4 w-full list-disc space-y-2 pl-5 text-sm leading-6 text-slate-600 dark:text-slate-300">
+            <li>
+              <span class="font-medium text-slate-800 dark:text-slate-100">{{ t('devices-empty-time-reason') }}</span>
+              <button
+                type="button"
+                class="d-btn d-btn-link ml-1 h-auto min-h-0 p-0 text-sm font-medium text-azure-600 underline decoration-azure-600/40 underline-offset-2 hover:text-azure-700 focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 dark:text-azure-400 dark:hover:text-azure-300"
+                @click="openDateRangePicker"
+              >
+                {{ t('devices-empty-change-time') }}
+              </button>
+            </li>
+            <li v-if="hasActiveFilters">
+              <span class="font-medium text-slate-800 dark:text-slate-100">{{ t('devices-empty-filters-reason') }}</span>
+              <button
+                type="button"
+                class="d-btn d-btn-link ml-1 h-auto min-h-0 p-0 text-sm font-medium text-azure-600 underline decoration-azure-600/40 underline-offset-2 hover:text-azure-700 focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 dark:text-azure-400 dark:hover:text-azure-300"
+                @click="clearDeviceViewFilters(clearFilters)"
+              >
+                {{ t('devices-empty-clear-filters') }}
+              </button>
+            </li>
+            <li>
+              <span class="font-medium text-slate-800 dark:text-slate-100">{{ t('devices-empty-contact-reason') }}</span>
+              {{ t('devices-empty-contact-help') }}
+            </li>
+            <li>
+              <span class="font-medium text-slate-800 dark:text-slate-100">{{ t('devices-empty-refresh-reason') }}</span>
+              <button
+                type="button"
+                class="d-btn d-btn-link ml-1 h-auto min-h-0 p-0 text-sm font-medium text-azure-600 underline decoration-azure-600/40 underline-offset-2 hover:text-azure-700 focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 dark:text-azure-400 dark:hover:text-azure-300"
+                @click="refreshData"
+              >
+                {{ t('devices-empty-refresh') }}
+              </button>
+            </li>
+          </ul>
+        </div>
+      </template>
+      <template #filter-extras>
+        <fieldset>
+          <legend class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+            {{ t('platform') }}
+          </legend>
+          <div
+            id="device-table-platform-filter"
+            class="grid grid-cols-2 gap-2 sm:grid-cols-4"
+            role="group"
+            :aria-label="t('platform')"
+            data-test="device-platform-filter"
+          >
+            <button
+              v-for="option in platformOptions"
+              :key="option.value || 'all'"
+              type="button"
+              class="min-h-11 rounded-md border px-2 text-sm font-medium transition-colors duration-150 focus:outline-hidden focus:ring-2 focus:ring-azure-500"
+              :class="selectedPlatform === option.value
+                ? 'border-azure-500 bg-azure-500/10 text-azure-700 dark:border-azure-400 dark:bg-azure-400/10 dark:text-azure-200'
+                : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-800'"
+              :aria-pressed="selectedPlatform === option.value"
+              :data-test="`device-platform-${option.value || 'all'}`"
+              @click="selectedPlatform = option.value"
+            >
+              {{ option.label }}
+            </button>
+          </div>
+        </fieldset>
+        <div class="flex w-full flex-col gap-2">
+          <label for="device-table-bundle-filter" class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+            {{ t('bundle') }}
+          </label>
+          <input
+            id="device-table-bundle-filter"
+            v-model="selectedVersionName"
+            list="device-table-bundle-options"
+            type="text"
+            class="d-input d-input-bordered min-h-11 w-full border-slate-200 bg-white text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+            :placeholder="t('all-bundles')"
+            :aria-label="t('bundle')"
+            data-test="device-bundle-filter"
+            autocomplete="off"
+          >
+          <datalist id="device-table-bundle-options">
+            <option
+              v-for="name in bundleNames"
+              :key="name"
+              :value="name"
+            />
+          </datalist>
+        </div>
+      </template>
+    </DataTable>
   </div>
 </template>

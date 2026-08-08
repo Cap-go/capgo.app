@@ -1,0 +1,167 @@
+---
+title: Build prescan checks
+description: "Full list of Capgo CLI build prescan checks and how to skip or warn on specific rules."
+sidebar_label: Prescan checks
+sidebar:
+  order: 16
+---
+
+Capgo runs a **build prescan** before cloud native builds (`build request`) and via `build prescan`.
+It catches credential, project, and store-config problems **before** zip/upload.
+
+## Ignore specific checks (recommended)
+
+Prefer targeting individual check ids instead of disabling the whole scan.
+
+```bash
+# Skip one check entirely (e.g. intentional capacitor server.url / Next.js shell)
+npx @capgo/cli@latest build request <appId> --platform ios \
+  --prescan-skip ios/capacitor-server-url-shipped
+
+# Run the check but never block on it (error → warning)
+npx @capgo/cli@latest build request <appId> --platform ios \
+  --prescan-warn ios/capacitor-server-url-shipped
+
+# Repeatable or comma-separated
+npx @capgo/cli@latest build request <appId> --platform ios \
+  --prescan-skip ios/capacitor-server-url-shipped \
+  --prescan-warn ios/capacitor-allow-navigation-wildcard,ios/plist-ats-arbitrary-loads
+```
+
+Standalone scan:
+
+```bash
+npx @capgo/cli@latest build prescan <appId> --platform ios \
+  --skip ios/capacitor-server-url-shipped \
+  --warn ios/capacitor-server-cleartext
+```
+
+Unknown check ids fail fast with a clear error.
+
+## Global escapes (use sparingly)
+
+| Flag | Effect |
+| --- | --- |
+| `--no-prescan` | Skip the entire scan |
+| `--prescan-ignore-fatal` / `--ignore-fatal` | Run scan, print report, never block |
+| `--fail-on-warnings` | Treat warnings as fatal (CI) |
+
+`--no-prescan` and `--prescan-ignore-fatal` hide or bypass **all** remaining checks. Prefer `--prescan-skip` / `--prescan-warn` so other failures still surface.
+
+## Check catalog
+
+Ids are stable. Use the exact id in `--prescan-skip` / `--prescan-warn`.
+
+### Shared
+
+| Id | Platforms | What it checks | Gradual enforce |
+| --- | --- | --- | --- |
+| `shared/apikey-permission` | ios, android | API key has permission to request native builds | |
+| `shared/app-exists` | ios, android | App id exists and is visible to the API key | |
+| `shared/credentials-saved` | ios, android | Required iOS/Android credentials are saved locally | |
+| `shared/cap-sync-stale` | ios, android | Web assets built and Capacitor plugins synced into native projects | |
+| `shared/node-linker-layout` | ios, android | node_modules layout is compatible with Capacitor native paths | |
+| `shared/bundle-id-consistency` | ios, android | Capacitor appId matches native bundle id / applicationId | |
+
+### iOS
+
+| Id | Platforms | What it checks | Gradual enforce |
+| --- | --- | --- | --- |
+| `ios/p12-opens` | ios | iOS .p12 certificate opens with the provided password | |
+| `ios/p12-expiry` | ios | iOS signing certificate is not expired | |
+| `ios/profile-expiry` | ios | Provisioning profile is not expired | |
+| `ios/profile-bundle-match` | ios | Provisioning profile bundle id matches the app | |
+| `ios/profile-type-vs-mode` | ios | Profile type matches app_store / ad_hoc distribution mode | |
+| `ios/cert-profile-pairing` | ios | Certificate is embedded in the provisioning profile | |
+| `ios/targets-covered` | ios | All iOS targets have a provisioning profile | |
+| `ios/infoplist-sanity` | ios | Info.plist has required version / identity keys | |
+| `ios/asc-key-valid` | ios | App Store Connect API key fields look valid | |
+| `ios/asc-key-access` | ios | ASC API key can access the app (remote) | |
+| `ios/plist-bundle-id-format` | ios | CFBundleIdentifier format is valid | yes (2026-08-14) |
+| `ios/plist-version-short-format` | ios | CFBundleShortVersionString format is valid | yes (2026-08-14) |
+| `ios/plist-version-build-format` | ios | CFBundleVersion format is valid | yes (2026-08-14) |
+| `ios/plist-encryption-compliance` | ios | ITSAppUsesNonExemptEncryption is declared | yes (2026-08-14) |
+| `ios/plist-ats-arbitrary-loads` | ios | NSAllowsArbitraryLoads is not enabled for production | yes (2026-08-14) |
+| `ios/plist-launch-storyboard` | ios | Launch screen is declared | yes (2026-08-14) |
+| `ios/plist-orientations-multitasking` | ios | Orientation / multitasking settings are consistent | yes (2026-08-14) |
+| `ios/plist-orientations-present` | ios | UISupportedInterfaceOrientations is declared | yes (2026-08-14) |
+| `ios/plist-display-name` | ios | Display name is set | yes (2026-08-14) |
+| `ios/plist-background-modes-sanity` | ios | UIBackgroundModes values look valid | yes (2026-08-14) |
+| `ios/xcode-deployment-target-capacitor` | ios | iOS deployment target meets Capacitor requirements | yes (2026-08-14) |
+| `ios/xcode-signing-team` | ios | DEVELOPMENT_TEAM / signing team is set | yes (2026-08-14) |
+| `ios/xcode-bundle-id-mismatch-across-configs` | ios | Bundle id is consistent across Xcode configs | yes (2026-08-14) |
+| `ios/xcode-enable-bitcode-leftover` | ios | ENABLE_BITCODE leftover is removed | yes (2026-08-14) |
+| `ios/xcode-swift-version-sanity` | ios | Swift version setting looks sane | yes (2026-08-14) |
+| `ios/xcode-no-app-target` | ios | Xcode project has an application target | yes (2026-08-14) |
+| `ios/xcode-multiple-app-targets` | ios | Multiple app targets are handled intentionally | yes (2026-08-14) |
+| `ios/entitlements-vs-profile-capability` | ios | Entitlements match profile capabilities | yes (2026-08-14) |
+| `ios/entitlements-aps-environment-vs-mode` | ios | aps-environment matches distribution mode | yes (2026-08-14) |
+| `ios/entitlements-associated-domains-format` | ios | Associated Domains format is valid | yes (2026-08-14) |
+| `ios/entitlements-app-groups-format` | ios | App Groups format is valid | yes (2026-08-14) |
+| `ios/capacitor-server-url-shipped` | ios | capacitor.config server.url is not left as a live-reload / remote shell endpoint for store builds | yes (2026-08-14) |
+| `ios/capacitor-server-cleartext` | ios | server.cleartext is not enabled for production | yes (2026-08-14) |
+| `ios/capacitor-allow-navigation-wildcard` | ios | server.allowNavigation is not a blanket wildcard | yes (2026-08-14) |
+| `ios/pods-not-installed` | ios | CocoaPods Pods / workspace are present when using Pods | yes (2026-08-14) |
+| `ios/pods-lock-missing` | ios | Podfile.lock pins pod versions | yes (2026-08-14) |
+| `ios/pods-capacitor-missing` | ios | Podfile wires Capacitor | yes (2026-08-14) |
+| `ios/spm-package-resolved-missing` | ios | SPM Package.resolved is present | yes (2026-08-14) |
+| `ios/spm-capacitor-dependency-missing` | ios | Package.swift declares Capacitor | yes (2026-08-14) |
+| `ios/appicon-empty-or-placeholder` | ios | AppIcon.appiconset exists and is not empty/placeholder | yes (2026-08-14) |
+| `ios/appicon-referenced-file-missing` | ios | Contents.json icon files exist on disk | yes (2026-08-14) |
+| `ios/appicon-marketing-missing` | ios | 1024×1024 marketing icon exists | yes (2026-08-14) |
+| `ios/spm-deployment-target-consistency` | ios | SPM deployment target is consistent | yes (2026-08-14) |
+
+### Android
+
+| Id | Platforms | What it checks | Gradual enforce |
+| --- | --- | --- | --- |
+| `android/keystore-opens` | android | Android keystore opens with provided passwords | |
+| `android/keystore-expiry` | android | Android signing cert is not expired | |
+| `android/cordova-vars-present` | android | cordova.variables.gradle is present after cap sync | |
+| `android/gradle-props-heuristics` | android | gradle.properties heuristics for common build breaks | |
+| `android/play-sa-json` | android | Play service-account JSON is present/valid when configured | |
+| `android/flavor-exists` | android | Requested product flavor exists | |
+| `android/agp8-package-attr` | android | Manifest package= attribute removed for AGP 8+ | |
+| `android/manifest-well-formed` | android | AndroidManifest.xml parses | |
+| `android/manifest-tag-typo` | android | Common manifest tag typos | |
+| `android/manifest-namespace-uri` | android | xmlns:android namespace URI is correct | |
+| `android/manifest-missing-prefix` | android | Android attributes use the android: prefix | |
+| `android/manifest-exported-missing` | android | android:exported is set where required | |
+| `android/manifest-multiple-uses-sdk` | android | Only one uses-sdk element | |
+| `android/manifest-duplicate-component` | android | No duplicate components | |
+| `android/manifest-unique-permission` | android | Custom permissions are unique | |
+| `android/manifest-hardcoded-debuggable` | android | debuggable=true not shipped | |
+| `android/manifest-mock-location` | android | ACCESS_MOCK_LOCATION not shipped | |
+| `android/manifest-exported-unprotected` | android | Exported components are protected | |
+| `android/manifest-query-all-packages` | android | QUERY_ALL_PACKAGES justification | |
+| `android/manifest-deeplink-valid` | android | Deeplink intent-filters look valid | |
+| `android/applicationid-present` | android | applicationId is declared in app/build.gradle | |
+| `android/capacitor-build-gradle-applied` | android | capacitor.build.gradle exists when applied | |
+| `android/gradle-wrapper-present` | android | Gradle wrapper files are present | |
+| `android/flavor-dimensions` | android | Flavor dimensions are declared when flavors exist | |
+| `android/google-services-file` | android | google-services.json present when plugin applied | |
+| `android/local-properties-committed` | android | local.properties is not committed with secrets | |
+| `android/sdk-floors` | android | min/compile/target SDK floors look valid | |
+| `android/target-sdk-play` | android | targetSdk meets Play requirements | |
+| `android/min-sdk-capacitor` | android | minSdk meets Capacitor requirements | |
+| `android/version-fields` | android | versionCode / versionName are present | |
+| `android/play-sa-access` | android | Play service account can access the app (remote) | |
+
+## Example: remote Next.js / server.url shell
+
+Shipping a native shell that loads a production `server.url` is a supported Capacitor pattern.
+Prescan flags `ios/capacitor-server-url-shipped` because it is often a live-reload leftover.
+
+Acknowledge it without disabling other checks:
+
+```bash
+npx @capgo/cli@latest build request <appId> --platform ios \
+  --prescan-skip ios/capacitor-server-url-shipped
+```
+
+Or keep visibility as a warning:
+
+```bash
+npx @capgo/cli@latest build request <appId> --platform ios \
+  --prescan-warn ios/capacitor-server-url-shipped
+```

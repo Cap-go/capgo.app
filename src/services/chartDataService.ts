@@ -1,27 +1,22 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import colors from 'tailwindcss/colors'
 import { ref } from 'vue'
+import { invokeCapgoApi } from '~/services/capgoApi'
+import { formatUtcDateParam, normalizeToUtcStartOfDay } from '~/services/date'
 
 const SKIP_COLOR = 10
 const colorKeys = Object.keys(colors)
 const chartDataCache = ref<Map<string, any>>(new Map())
 
-function formatDateParam(date: Date) {
-  const normalized = new Date(date)
-  normalized.setUTCHours(0, 0, 0, 0)
-  return normalized.toISOString().slice(0, 10)
-}
-
 function clampToToday(date: Date): Date {
-  const today = new Date()
-  today.setUTCHours(0, 0, 0, 0)
+  const today = normalizeToUtcStartOfDay()
   return date > today ? today : date
 }
 
 type VersionUsageKind = 'bundle' | 'native'
 
 function buildCacheKey(appId: string, from: Date, to: Date, kind: VersionUsageKind) {
-  return `${appId}|${kind}|${formatDateParam(from)}|${formatDateParam(to)}`
+  return `${appId}|${kind}|${formatUtcDateParam(from)}|${formatUtcDateParam(to)}`
 }
 
 export async function useChartData(supabase: SupabaseClient, appId: string, from: Date, to: Date, kind: VersionUsageKind = 'bundle') {
@@ -32,10 +27,11 @@ export async function useChartData(supabase: SupabaseClient, appId: string, from
 
   // Clamp the 'to' date to today - we can't fetch data for future dates
   const clampedTo = clampToToday(to)
-  const fromParam = formatDateParam(from)
-  const toParam = formatDateParam(clampedTo)
+  const fromParam = formatUtcDateParam(from)
+  const toParam = formatUtcDateParam(clampedTo)
   const usagePath = kind === 'native' ? 'native_usage' : 'bundle_usage'
-  const { error, data } = await supabase.functions.invoke(`statistics/app/${appId}/${usagePath}?from=${fromParam}&to=${toParam}`, {
+  const { error, data } = await invokeCapgoApi(`statistics/app/${appId}/${usagePath}?from=${fromParam}&to=${toParam}`, {
+    client: supabase,
     method: 'GET',
   })
   if (error)

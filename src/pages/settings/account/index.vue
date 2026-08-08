@@ -4,7 +4,7 @@ import { Capacitor } from '@capacitor/core'
 import { setErrors } from '@formkit/core'
 import { FormKit, FormKitMessages, reset } from '@formkit/vue'
 import dayjs from 'dayjs'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, unref, useTemplateRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
@@ -13,6 +13,7 @@ import IconVersion from '~icons/heroicons/arrow-path'
 import iconEmail from '~icons/heroicons/envelope?raw'
 import iconFlag from '~icons/heroicons/flag?raw'
 import iconName from '~icons/heroicons/user?raw'
+import GitHubProfileDialog from '~/components/dashboard/GitHubProfileDialog.vue'
 import { getRecentEmailOtpVerification } from '~/services/emailOtp'
 import { getFormatLocaleOptions, resolveFormatLocale } from '~/services/formatLocale'
 import { pickPhoto, takePhoto } from '~/services/photos'
@@ -41,7 +42,12 @@ const captchaKey = ref(import.meta.env.VITE_CAPTCHA_KEY)
 const organizationsToDelete = ref<string[]>([])
 const formatLocaleOptions = computed(() => getFormatLocaleOptions(locale.value))
 const paidOrganizationsToDelete = ref<Array<{ name: string, planName: string }>>([])
-displayStore.NavTitle = t('account')
+const githubDialog = useTemplateRef('githubDialog')
+const githubUsername = computed(() => unref(githubDialog.value?.githubUsername) ?? '')
+
+function openGitHubProfileDialog() {
+  githubDialog.value?.openGitHubProfileDialog()
+}
 
 async function redirectToEmailVerification() {
   await router.push({
@@ -420,7 +426,7 @@ async function presentActionSheet() {
   return dialogStore.onDialogDismiss()
 }
 
-async function submit(form: { first_name: string, last_name: string, email: string, country: string, discord_username: string, github_username: string, format_locale: string }) {
+async function submit(form: { first_name: string, last_name: string, email: string, country: string, discord_username: string, format_locale: string }) {
   if (isLoading.value || !main.user?.id)
     return
 
@@ -431,7 +437,6 @@ async function submit(form: { first_name: string, last_name: string, email: stri
     && form.email === main.user?.email
     && form.country === main.user?.country
     && (form.discord_username || null) === main.user?.discord_username
-    && (form.github_username || null) === main.user?.github_username
     && formatLocale === currentFormatLocale) {
     return
   }
@@ -444,7 +449,6 @@ async function submit(form: { first_name: string, last_name: string, email: stri
     email: main.user.email,
     country: form.country,
     discord_username: form.discord_username || null,
-    github_username: form.github_username || null,
     format_locale: formatLocale,
   }
 
@@ -593,13 +597,16 @@ onMounted(async () => {
                 <FormKit
                   type="text"
                   name="github_username"
+                  :model-value="githubUsername"
                   autocomplete="off"
                   :disabled="isLoading"
-                  :value="main.user?.github_username ?? ''"
-                  validation="length:0,39"
+                  readonly
                   enterkeyhint="send"
                   :label="t('github-username')"
                   :help="t('github-username-help')"
+                  :placeholder="t('github-username-select')"
+                  @click="openGitHubProfileDialog"
+                  @keydown.enter.prevent="openGitHubProfileDialog"
                 />
               </div>
             </div>
@@ -750,6 +757,8 @@ onMounted(async () => {
         </div>
       </div>
     </Teleport>
+
+    <GitHubProfileDialog ref="githubDialog" dialog-id="github-profile" />
   </div>
 </template>
 

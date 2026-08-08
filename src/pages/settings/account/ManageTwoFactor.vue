@@ -6,6 +6,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import VueTurnstile from 'vue-turnstile'
 import { formatLocalDate } from '~/services/date'
+import { verifyEmailOtp } from '~/services/emailOtp'
 import { useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
@@ -110,9 +111,7 @@ async function verifyOtpForMfa() {
     return
 
   otpVerificationLoading.value = true
-  const { data, error: verifyError } = await supabase.functions.invoke('private/verify_email_otp', {
-    body: { token },
-  })
+  const { data, error: verifyError } = await verifyEmailOtp(supabase, token)
   otpVerificationLoading.value = false
 
   if (verifyError || !data?.verified_at) {

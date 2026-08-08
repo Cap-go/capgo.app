@@ -8,13 +8,20 @@ import { join, posix, win32 } from 'node:path'
 import { cwd } from 'node:process'
 import { buffer as readBuffer } from 'node:stream/consumers'
 import { createBrotliCompress } from 'node:zlib'
-import { log, spinner as spinnerC } from '@clack/prompts'
 import { parse } from '@std/semver'
 // @ts-expect-error - No type definitions available for micromatch
 import * as micromatch from 'micromatch'
 import * as tus from 'tus-js-client'
 import { encryptChecksum, encryptChecksumV3, encryptSource } from '../api/crypto'
-import { BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, deltaManifestTooLargeMessage, findRoot, generateManifest, getContentType, getInstalledVersion, getLocalConfig, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, sendEvent, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
+import { CliUserError } from '../shared/cli-user-error'
+import { appAddHintMessage, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, deltaManifestTooLargeMessage, findRoot, generateManifest, getContentType, getInstalledVersion, getLocalConfig, isAppNotFoundError, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, sendEvent, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
+import { getUploadReporter } from './reporter'
+
+const log = {
+  info: (message: string) => getUploadReporter().info(message),
+  warn: (message: string) => getUploadReporter().warn(message),
+  error: (message: string) => getUploadReporter().error(message),
+}
 
 // Check if file already exists on server (bypass cache and force storage lookup)
 async function fileExists(localConfig: any, filename: string): Promise<boolean> {
@@ -128,7 +135,7 @@ export async function prepareBundlePartialFiles(
   finalKeyData: string,
   supportsHexChecksum: boolean = false,
 ) {
-  const spinner = spinnerC()
+  const spinner = getUploadReporter().spinner()
   spinner.start(encryptionMethod !== 'v2' ? 'Generating the update manifest' : `Generating the update manifest with ${supportsHexChecksum ? 'V3' : 'V2'} encryption`)
   const manifest = await generateManifest(path)
 
@@ -197,20 +204,22 @@ export async function uploadPartial(
   encryptionOptions: PartialEncryptionOptions | undefined,
   options: OptionsUpload,
 ): Promise<any[] | null> {
-  const spinner = spinnerC()
+  const spinner = getUploadReporter().spinner()
   spinner.start('Preparing partial update with TUS protocol')
   const startTime = performance.now()
   const localConfig = await getLocalConfig()
 
-  // Determine if user explicitly requested delta updates
-  const userRequestedDelta = !!(options.partial || options.delta || options.partialOnly || options.deltaOnly)
+  // Determine if user explicitly requested delta updates. Read the flag captured
+  // before `options.delta` was mutated by the instant-update auto-enable, so an
+  // auto-enabled delta degrades to a full upload instead of aborting.
+  const userRequestedDelta = !!options.userRequestedDelta
 
   // Check the updater version and Brotli support
   const { version, supportsBrotliV2 } = await getUpdaterVersion(options)
 
   // Check for incompatible options with older updater versions
   if (!supportsBrotliV2) {
-    throw new Error(`Your project is using an older version of @capgo/capacitor-updater (${version || 'unknown'}). To use Delta updates, please upgrade to version ${BROTLI_MIN_UPDATER_VERSION_V5} (v5), ${BROTLI_MIN_UPDATER_VERSION_V6} (v6) or ${BROTLI_MIN_UPDATER_VERSION_V7} (v7) or higher.`)
+    throw new CliUserError(`Your project is using an older version of @capgo/capacitor-updater (${version || 'unknown'}). To use Delta updates, please upgrade to version ${BROTLI_MIN_UPDATER_VERSION_V5} (v5), ${BROTLI_MIN_UPDATER_VERSION_V6} (v6) or ${BROTLI_MIN_UPDATER_VERSION_V7} (v7) or higher.`)
   }
   else {
     // Only newer versions can use Brotli with .br extension
@@ -228,12 +237,11 @@ export async function uploadPartial(
   const filesWithSpaces = manifest.filter(file => file.file.includes(' '))
 
   if (filesWithSpaces.length > 0) {
-    throw new Error(`Files with spaces in their names (${filesWithSpaces.map(f => f.file).join(', ')}). Please rename the files.`)
+    throw new CliUserError(`Files with spaces in their names (${filesWithSpaces.map(f => f.file).join(', ')}). Please rename the files.`)
   }
 
   if (manifest.length > MAX_MANIFEST_ENTRIES)
-    throw new Error(deltaManifestTooLargeMessage(manifest.length))
-
+    throw new CliUserError(deltaManifestTooLargeMessage(manifest.length))
 
   let uploadedFiles = 0
   const totalFiles = manifest.length
@@ -308,6 +316,15 @@ export async function uploadPartial(
           },
           onError: (error) => {
             const errorMessage = error.toString()
+
+            // Turn the backend's `app_not_found` rejection into the actionable `app add`
+            // hint. Without this the raw tus error object escapes as an unhandled
+            // rejection instead of a clear user error.
+            if (isAppNotFoundError(error)) {
+              log.error(`Failed to upload ${filePathUnix}: ${errorMessage}`)
+              reject(new Error(appAddHintMessage(appId)))
+              return
+            }
 
             // Try to extract requestId from error message
             let requestId: string | undefined

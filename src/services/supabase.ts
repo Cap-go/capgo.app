@@ -6,6 +6,7 @@ import { format, parse } from '@std/semver'
 import { createClient } from '@supabase/supabase-js'
 import subset from 'semver/ranges/subset'
 import { ref } from 'vue'
+import { invokeCapgoApi } from '~/services/capgoApi'
 import { getFirstTierCreditUnitPricing, sortCreditPricingSteps } from './creditPricing'
 
 let supaClient: SupabaseClient<Database> = null as any
@@ -16,6 +17,7 @@ export interface CapgoConfig {
   supaHost: string
   supaKey: string
   supbaseId: string
+  supaProxyPath?: string
   host: string
   hostWeb: string
   stripeEnabled?: boolean
@@ -31,6 +33,7 @@ export function getLocalConfig() {
     supaHost: import.meta.env.VITE_SUPABASE_URL as string,
     supaKey: import.meta.env.VITE_SUPABASE_ANON_KEY as string,
     supbaseId: import.meta.env.VITE_SUPABASE_URL?.split('//')[1].split('.')[0].split(':')[0] as string,
+    supaProxyPath: import.meta.env.VITE_SUPABASE_PROXY_PATH as string | undefined,
     host: import.meta.env.VITE_APP_URL as string,
     hostWeb: import.meta.env.LANDING_URL as string,
     stripeEnabled: stripeEnabledEnv === undefined ? true : stripeEnabledEnv !== 'false',
@@ -100,6 +103,11 @@ function shouldRefreshSpoofedAdminJwt(jwt: string) {
   return expiresAt - Date.now() / 1000 <= SPOOF_ADMIN_TOKEN_REFRESH_WINDOW_SECONDS
 }
 
+function isSpoofedAdminJwtUsable(jwt: string) {
+  const expiresAt = getJwtExpiresAt(jwt)
+  return expiresAt !== null && expiresAt > Date.now() / 1000
+}
+
 function createSpoofAdminSupabase() {
   return createClient<Database>(getSupabaseHost(), config.supaKey, {
     auth: {
@@ -153,10 +161,30 @@ export async function getRemoteConfig() {
 }
 
 export function getSupabaseHost(): string {
-  let host = config.supaHost
-  while (host.endsWith('/'))
-    host = host.slice(0, -1)
-  return host
+  return resolveSupabaseHost(config.supaHost, config.supaProxyPath)
+}
+
+function trimLeadingSlashes(value: string): string {
+  let start = 0
+  while (value[start] === '/')
+    start++
+  return value.slice(start)
+}
+
+function trimTrailingSlashes(value: string): string {
+  let end = value.length
+  while (end > 0 && value[end - 1] === '/')
+    end--
+  return value.slice(0, end)
+}
+
+export function resolveSupabaseHost(supaHost: string, proxyPath?: string, runtimeOrigin = globalThis.location?.origin): string {
+  const normalizedHost = trimTrailingSlashes(supaHost)
+  if (!proxyPath || !runtimeOrigin)
+    return normalizedHost
+
+  const normalizedProxyPath = `/${trimLeadingSlashes(trimTrailingSlashes(proxyPath))}/`
+  return new URL(normalizedProxyPath, runtimeOrigin).href
 }
 
 export function useSupabase() {
@@ -227,19 +255,34 @@ export async function unspoofUser() {
   if (!spoofedAdminSession)
     return false
 
-  const restoredAdminSession = await refreshSpoofedAdminSession(spoofedAdminSession).catch(() => null)
+  // A refresh token may have been invalidated while its paired access token is
+  // still valid. Restore that access token directly so stopping impersonation
+  // does not strand the user in the spoofed session.
+  const restoredAdminSession = isSpoofedAdminJwtUsable(spoofedAdminSession.jwt)
+    ? spoofedAdminSession
+    : await refreshSpoofedAdminSession(spoofedAdminSession).catch(() => null)
   if (!restoredAdminSession) {
     clearSpoof()
     return false
   }
 
-  const supabase = useSupabase()
-  const { data, error } = await supabase.auth.setSession({ access_token: restoredAdminSession.jwt, refresh_token: restoredAdminSession.refreshToken })
-  clearSpoof()
+  if (restoredAdminSession !== spoofedAdminSession)
+    saveSpoofedAdminSession(restoredAdminSession)
 
-  if (error || !data.session)
+  const supabase = useSupabase()
+  let data: { session?: unknown } | null | undefined
+  let error: unknown
+  try {
+    ({ data, error } = await supabase.auth.setSession({ access_token: restoredAdminSession.jwt, refresh_token: restoredAdminSession.refreshToken }))
+  }
+  catch {
+    return false
+  }
+
+  if (error || !data?.session)
     return false
 
+  clearSpoof()
   return true
 }
 
@@ -274,7 +317,13 @@ export async function downloadUrl(provider: string, userId: string, appId: strin
     return res.url
   }
   catch (e) {
-    throw new Error(`downloadUrl error: ${e instanceof Error ? e.message : String(e)}`)
+    // A transient browser network drop surfaces as a `TypeError` whose wording
+    // differs per engine (Chrome "Failed to fetch", WebKit "Load failed",
+    // Firefox "NetworkError when attempting to fetch resource."). Rethrow it
+    // untouched so transient-network detection can still recognise the message.
+    if (e instanceof TypeError)
+      throw e
+    throw new Error(`downloadUrl error: ${e instanceof Error ? e.message : String(e)}`, { cause: e })
   }
 }
 
@@ -345,12 +394,13 @@ function parseDashboardRangeDate(value?: string) {
 }
 
 export function normalizeDashboardDateRange(startDate?: string, endDate?: string, now: Date = new Date()) {
+  // Exclusive end = next UTC midnight so the current UTC day is fully included
   const fallbackEnd = new Date(now)
-  fallbackEnd.setHours(0, 0, 0, 0)
-  fallbackEnd.setDate(fallbackEnd.getDate() + 1)
+  fallbackEnd.setUTCHours(0, 0, 0, 0)
+  fallbackEnd.setUTCDate(fallbackEnd.getUTCDate() + 1)
 
   const fallbackStart = new Date(fallbackEnd)
-  fallbackStart.setDate(fallbackStart.getDate() - 30)
+  fallbackStart.setUTCDate(fallbackStart.getUTCDate() - 30)
 
   const parsedStart = parseDashboardRangeDate(startDate)
   const parsedEnd = parseDashboardRangeDate(endDate)
@@ -372,12 +422,11 @@ export function normalizeDashboardDateRange(startDate?: string, endDate?: string
 
 export async function getAllDashboard(orgId: string, startDate?: string, endDate?: string): Promise<AppUsageGlobalByApp> {
   try {
-    const supabase = useSupabase()
     const { start, end } = normalizeDashboardDateRange(startDate, endDate)
     const dateRange = `?from=${start}&to=${end}&breakdown=true&noAccumulate=true`
 
     // 🚀 SUPER OPTIMIZED: Single API call returns both aggregated AND per-app breakdown (with daily values, not accumulated)
-    const response = await supabase.functions.invoke(`statistics/org/${orgId}/${dateRange}`, {
+    const response = await invokeCapgoApi(`statistics/org/${orgId}${dateRange}`, {
       method: 'GET',
     })
 
@@ -577,7 +626,7 @@ export async function getUsageCreditDeductions(orgId: string): Promise<UsageCred
 }
 
 export async function calculateCreditCost(request: CreditCostCalculationRequest): Promise<CreditCostCalculationResponse> {
-  const response = await useSupabase().functions.invoke('private/credits', {
+  const response = await invokeCapgoApi('private/credits', {
     body: {
       ...request,
       build_time: request.build_time ?? 0,
@@ -647,10 +696,10 @@ export async function findBestPlan(stats: Database['public']['Functions']['find_
   return data
 }
 
-export function convertNativePackages(nativePackages: { name: string, version: string }[]) {
-  if (!nativePackages) {
-    throw new Error(`Error parsing native packages, perhaps the metadata does not exist in Capgo?`)
-  }
+export function convertNativePackages(nativePackages: { name: string, version: string }[] | null | undefined) {
+  // Missing metadata is normal for older bundles / empty channels — treat as empty.
+  if (!nativePackages)
+    return new Map<string, { name: string, version: string }>()
 
   // Check types
   nativePackages.forEach((data) => {
@@ -688,9 +737,11 @@ export async function getRemoteDependencies(appId: string, channel: string) {
     throw new Error(error.message)
   }
   const version = remoteNativePackages.version as { native_packages?: unknown } | null
-  const nativePackages = version?.native_packages
-  if (!Array.isArray(nativePackages))
-    throw new Error('Error parsing native packages, perhaps the metadata does not exist in Capgo?')
+  // Channel may have no linked version, or an older version without metadata.
+  // Match CLI: fall back to [] so linking still works.
+  const nativePackages = Array.isArray(version?.native_packages)
+    ? version.native_packages
+    : []
   return convertNativePackages(nativePackages as { name: string, version: string }[])
 }
 
@@ -717,6 +768,14 @@ export function isCompatible(pkg: Compatibility): boolean {
 
 export async function checkCompatibilityNativePackages(appId: string, channel: string, nativePackages: { name: string, version: string }[]) {
   const mappedRemoteNativePackages = await getRemoteDependencies(appId, channel)
+
+  // Nothing on the channel to compare against → skip gate (same as missing local metadata).
+  if (mappedRemoteNativePackages.size === 0) {
+    return {
+      finalCompatibility: [] as Compatibility[],
+      localDependencies: nativePackages,
+    }
+  }
 
   const finalDependencies: Compatibility[] = nativePackages
     .map((local) => {

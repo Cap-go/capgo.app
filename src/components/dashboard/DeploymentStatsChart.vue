@@ -2,204 +2,73 @@
 import type { ChartData, ChartOptions, Plugin } from 'chart.js'
 import type { TooltipClickHandler } from '~/services/chartTooltip'
 import { useDark } from '@vueuse/core'
-import {
-  BarController,
-  BarElement,
-  CategoryScale,
-  Chart,
-  LinearScale,
-  LineController,
-  LineElement,
-  PointElement,
-  Tooltip,
-} from 'chart.js'
 import { computed } from 'vue'
 import { Bar, Line } from 'vue-chartjs'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
+import { useDashboardDailyChartCycle } from '~/composables/useOrgBillingCycleChart'
 import { createLegendConfig, createStackedChartScales } from '~/services/chartConfig'
+import { createTodayLineOptions, generateAppChartColors, getSafeChartHue } from '~/services/chartTodayLine'
 import { createTooltipConfig, todayLinePlugin, verticalLinePlugin } from '~/services/chartTooltip'
-import { generateMonthDays, getDaysInCurrentMonth } from '~/services/date'
-import { useOrganizationStore } from '~/stores/organization'
+import { dailyChartBaseProps } from '~/services/dailyChartProps'
+import { registerDashboardCharts } from '~/services/dashboardChartRegister'
+import { generateMonthDays } from '~/services/date'
 import { createChartLegendItems } from './chartLegend'
 import ChartLegend from './ChartLegend.vue'
 
 const props = defineProps({
-  title: { type: String, default: '' },
-  colors: { type: Object, default: () => ({}) },
-  limits: { type: Object, default: () => ({}) },
-  data: { type: Array, default: () => Array.from({ length: getDaysInCurrentMonth() }).fill(0) as number[] },
+  ...dailyChartBaseProps(),
   dataByChannel: { type: Object, default: () => ({}) },
   channelNames: { type: Object, default: () => ({}) },
   channelAppIds: { type: Object, default: () => ({}) },
-  dataByApp: { type: Object, default: () => ({}) },
-  appNames: { type: Object, default: () => ({}) },
-  useBillingPeriod: { type: Boolean, default: true },
-  accumulated: { type: Boolean, default: false },
 })
+
+registerDashboardCharts()
 
 const isDark = useDark()
 const { t } = useI18n()
 const router = useRouter()
-const organizationStore = useOrganizationStore()
-const cycleStart = new Date(organizationStore.currentOrganization?.subscription_start ?? new Date())
-const cycleEnd = new Date(organizationStore.currentOrganization?.subscription_end ?? new Date())
-// Reset to start of day for consistent date handling
-cycleStart.setHours(0, 0, 0, 0)
-cycleEnd.setHours(0, 0, 0, 0)
+const { cycleStart, cycleEnd, todayLimit, transformDailySeries } = useDashboardDailyChartCycle(() => props.useBillingPeriod)
 
-const DAY_IN_MS = 1000 * 60 * 60 * 24
-
-// Determine mode based on which data is provided
 const isChannelMode = computed(() => Object.keys(props.dataByChannel).length > 0)
 const isAppMode = computed(() => Object.keys(props.dataByApp).length > 0)
 const hasBreakdownData = computed(() => isChannelMode.value || isAppMode.value)
 
-// Create a reverse mapping from channel/app name to ID for tooltip clicks
 const idByLabel = computed(() => {
   const mapping: Record<string, string> = {}
   if (isChannelMode.value) {
-    Object.entries(props.channelNames as Record<string, string>).forEach(([channelId, channelName]) => {
+    for (const [channelId, channelName] of Object.entries(props.channelNames as Record<string, string>))
       mapping[channelName] = channelId
-    })
   }
   else if (isAppMode.value) {
-    Object.entries(props.appNames as Record<string, string>).forEach(([appId, appName]) => {
+    for (const [appId, appName] of Object.entries(props.appNames as Record<string, string>))
       mapping[appName] = appId
-    })
   }
   return mapping
 })
 
-// Click handler for tooltip items - navigates to channel page (channel mode) or app page (app mode)
 const tooltipClickHandler = computed<TooltipClickHandler | undefined>(() => {
   if (isChannelMode.value) {
     return {
       onAppClick: (channelId: string) => {
         const appId = (props.channelAppIds as Record<string, string>)[channelId]
-        if (appId) {
+        if (appId)
           router.push(`/app/${appId}/channel/${channelId}`)
-        }
       },
       appIdByLabel: idByLabel.value,
     }
   }
-  else if (isAppMode.value) {
+  if (isAppMode.value) {
     return {
-      onAppClick: (appId: string) => {
-        router.push(`/app/${appId}`)
-      },
+      onAppClick: (appId: string) => router.push(`/app/${appId}`),
       appIdByLabel: idByLabel.value,
     }
   }
   return undefined
 })
 
-Chart.register(
-  Tooltip,
-  BarController,
-  BarElement,
-  LineController,
-  LineElement,
-  PointElement,
-  CategoryScale,
-  LinearScale,
-)
-
-function getTodayLimit(labelCount: number) {
-  if (!props.useBillingPeriod)
-    return labelCount - 1
-
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-
-  // If cycle end is today or in the past, show all data
-  if (cycleEnd <= today)
-    return labelCount - 1
-
-  // If cycle end is in the future, only show data up to today
-  const diff = Math.floor((today.getTime() - cycleStart.getTime()) / DAY_IN_MS)
-
-  if (Number.isNaN(diff) || diff < 0)
-    return -1
-
-  return Math.min(diff, labelCount - 1)
-}
-
-function transformSeries(source: number[], accumulated: boolean, labelCount: number) {
-  const display: Array<number | null> = Array.from({ length: labelCount }).fill(null) as Array<number | null>
-  const base: Array<number | null> = Array.from({ length: labelCount }).fill(null) as Array<number | null>
-  const limitIndex = getTodayLimit(labelCount)
-
-  if (limitIndex < 0)
-    return { display, base }
-
-  let runningTotal = 0
-  for (let index = 0; index <= limitIndex; index++) {
-    const hasValue = index < source.length && typeof source[index] === 'number' && Number.isFinite(source[index])
-    const numericValue = hasValue ? source[index] as number : 0
-
-    base[index] = numericValue
-    if (accumulated) {
-      runningTotal += numericValue
-      display[index] = runningTotal
-    }
-    else {
-      display[index] = numericValue
-    }
-  }
-
-  return { display, base }
-}
-
 function monthdays() {
-  return generateMonthDays(props.useBillingPeriod, cycleStart, cycleEnd)
-}
-
-// Check if a hue is in the red or green range (reserved for UpdateStats)
-function isReservedHue(hue: number): boolean {
-  // Red range: 0-30 and 330-360
-  // Green range: 90-160
-  return (hue >= 0 && hue <= 30) || (hue >= 330 && hue <= 360) || (hue >= 90 && hue <= 160)
-}
-
-// Get the nth safe hue that skips red/green colors
-function getSafeHue(targetIndex: number): number {
-  let i = 0
-  let safeCount = 0
-
-  while (safeCount <= targetIndex && i < targetIndex * 3 + 10) {
-    const hue = (210 + i * 137.508) % 360
-    i++
-
-    if (!isReservedHue(hue)) {
-      if (safeCount === targetIndex)
-        return hue
-      safeCount++
-    }
-  }
-
-  // Fallback to blue if we somehow can't find enough safe hues
-  return 210
-}
-
-// Generate infinite distinct pastel colors starting with blue, skipping red/green
-function generateChannelColors(channelCount: number) {
-  const colors = []
-
-  for (let colorIndex = 0; colorIndex < channelCount; colorIndex++) {
-    const hue = getSafeHue(colorIndex)
-
-    // Use pastel-friendly saturation and lightness values
-    const saturation = 50 + (colorIndex % 3) * 8 // 50%, 58%, 66% - softer colors
-    const lightness = 60 + (colorIndex % 4) * 5 // 60%, 65%, 70%, 75% - lighter, more pastel
-
-    const backgroundColor = `hsla(${hue}, ${saturation}%, ${lightness}%, 0.8)`
-
-    colors.push(backgroundColor)
-  }
-
-  return colors
+  return generateMonthDays(props.useBillingPeriod, cycleStart.value, cycleEnd.value)
 }
 
 const chartData = computed<ChartData<any>>(() => {
@@ -229,13 +98,13 @@ const chartData = computed<ChartData<any>>(() => {
 
     // Process data for cumulative mode
     if (props.accumulated) {
-      processed = transformSeries(props.data as number[], true, labelCount)
+      processed = transformDailySeries(props.data as number[], true, labelCount)
       // Use LineChartStats color scheme for line mode
       borderColor = `hsl(210, 65%, 45%)`
       backgroundColor = `hsla(210, 50%, 60%, 0.6)`
     }
     else {
-      processed = transformSeries(props.data as number[], false, labelCount)
+      processed = transformDailySeries(props.data as number[], false, labelCount)
       // Use existing bar chart colors for bar mode
       backgroundColor = 'hsla(210, 50%, 70%, 0.8)'
       borderColor = 'hsl(210, 50%, 55%)'
@@ -268,7 +137,7 @@ const chartData = computed<ChartData<any>>(() => {
   }
 
   // Multiple items view - show breakdown by channel or app
-  const itemColors = generateChannelColors(itemIds.length)
+  const itemColors = generateAppChartColors(itemIds.length)
   const datasets = itemIds.map((itemId, index) => {
     const itemData = dataSource[itemId] as number[]
 
@@ -278,16 +147,16 @@ const chartData = computed<ChartData<any>>(() => {
 
     // Process data for cumulative mode
     if (props.accumulated) {
-      processed = transformSeries(itemData, true, labelCount)
+      processed = transformDailySeries(itemData, true, labelCount)
       // Use safe hue that skips red/green (reserved for UpdateStats)
-      const hue = getSafeHue(index)
+      const hue = getSafeChartHue(index)
       const saturation = 50 + (index % 3) * 8
       const lightness = 60 + (index % 4) * 5
       borderColor = `hsl(${hue}, ${saturation + 15}%, ${lightness - 15}%)`
       backgroundColor = `hsla(${hue}, ${saturation}%, ${lightness}%, 0.6)`
     }
     else {
-      processed = transformSeries(itemData, false, labelCount)
+      processed = transformDailySeries(itemData, false, labelCount)
       // Use existing bar chart colors for bar mode
       backgroundColor = itemColors[index]
       borderColor = backgroundColor.replace('hsla', 'hsl').replace(', 0.8)', ')').replace(/(\d+)%\)/, (_, lightness) => {
@@ -328,29 +197,14 @@ const chartData = computed<ChartData<any>>(() => {
 const legendItems = computed(() => hasBreakdownData.value ? createChartLegendItems(chartData.value.datasets, 'breakdownId') : [])
 
 const todayLineOptions = computed(() => {
-  if (!props.useBillingPeriod)
-    return { enabled: false }
-
   const labels = Array.isArray(chartData.value.labels) ? chartData.value.labels : []
-  const index = getTodayLimit(labels.length)
-
-  if (index < 0 || index >= labels.length)
-    return { enabled: false }
-
-  const strokeColor = isDark.value ? 'rgba(165, 180, 252, 0.75)' : 'rgba(99, 102, 241, 0.7)'
-  const glowColor = isDark.value ? 'rgba(129, 140, 248, 0.35)' : 'rgba(165, 180, 252, 0.35)'
-  const badgeFill = isDark.value ? 'rgba(67, 56, 202, 0.45)' : 'rgba(199, 210, 254, 0.85)'
-  const textColor = isDark.value ? '#e0e7ff' : '#312e81'
-
-  return {
-    enabled: true,
-    xIndex: index,
+  return createTodayLineOptions({
+    useBillingPeriod: props.useBillingPeriod,
+    index: todayLimit(labels.length),
+    labelCount: labels.length,
     label: t('today'),
-    color: strokeColor,
-    glowColor,
-    badgeFill,
-    textColor,
-  }
+    isDark: isDark.value,
+  })
 })
 
 const chartOptions = computed(() => {
@@ -362,7 +216,7 @@ const chartOptions = computed(() => {
       title: {
         display: false,
       },
-      tooltip: createTooltipConfig(hasBreakdownData.value, props.accumulated, props.useBillingPeriod ? cycleStart : false, tooltipClickHandler.value),
+      tooltip: createTooltipConfig(hasBreakdownData.value, props.accumulated, props.useBillingPeriod ? cycleStart.value : false, tooltipClickHandler.value),
       todayLine: todayLineOptions.value,
     },
   }

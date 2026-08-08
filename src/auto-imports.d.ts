@@ -128,6 +128,7 @@ declare global {
   const useAdminDashboardStore: typeof import('./stores/adminDashboard').useAdminDashboardStore
   const useAnimate: typeof import('@vueuse/core').useAnimate
   const useAppDetailStore: typeof import('./stores/appDetail').useAppDetailStore
+  const useAppPage: typeof import('./composables/useAppPage').useAppPage
   const useArrayDifference: typeof import('@vueuse/core').useArrayDifference
   const useArrayEvery: typeof import('@vueuse/core').useArrayEvery
   const useArrayFilter: typeof import('@vueuse/core').useArrayFilter
@@ -483,6 +484,7 @@ declare module 'vue' {
     readonly useAdminDashboardStore: UnwrapRef<typeof import('./stores/adminDashboard')['useAdminDashboardStore']>
     readonly useAnimate: UnwrapRef<typeof import('@vueuse/core')['useAnimate']>
     readonly useAppDetailStore: UnwrapRef<typeof import('./stores/appDetail')['useAppDetailStore']>
+    readonly useAppPage: UnwrapRef<typeof import('./composables/useAppPage')['useAppPage']>
     readonly useArrayDifference: UnwrapRef<typeof import('@vueuse/core')['useArrayDifference']>
     readonly useArrayEvery: UnwrapRef<typeof import('@vueuse/core')['useArrayEvery']>
     readonly useArrayFilter: UnwrapRef<typeof import('@vueuse/core')['useArrayFilter']>

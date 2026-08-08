@@ -37,6 +37,7 @@ export type Permission
     | 'org.read_invoices'
     | 'org.read_audit'
     | 'org.read_billing_audit'
+    | 'org.create_app'
   // App permissions
     | 'app.read'
     | 'app.update_settings'

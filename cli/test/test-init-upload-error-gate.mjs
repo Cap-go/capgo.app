@@ -1,0 +1,28 @@
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
+const runtime = readFileSync(fileURLToPath(new URL('../src/init/runtime.tsx', import.meta.url)), 'utf8')
+const app = readFileSync(fileURLToPath(new URL('../src/init/ui/app.tsx', import.meta.url)), 'utf8')
+const command = readFileSync(fileURLToPath(new URL('../src/init/command.ts', import.meta.url)), 'utf8')
+const replicationProgress = readFileSync(fileURLToPath(new URL('../src/replicationProgress.ts', import.meta.url)), 'utf8')
+
+assert.match(runtime, /waitForInitStreamingContinue/)
+assert.match(app, /output\.continuePrompt/)
+assert.match(app, /key\.return/)
+assert.match(app, /output\.onCancel\?\.\(\)/)
+assert.match(app, /if \(key\.ctrl && input === 'c'\)/)
+assert.match(app, /else\s+\{\s+exit\(130\)/)
+assert.doesNotMatch(app, /key\.escape/)
+assert.match(command, /waitForInitStreamingContinue\('Press Enter to continue, or Ctrl\+C to cancel\.'/)
+assert.match(command, /updateInitStreamingStatus\('error', failureText\)/)
+assert.doesNotMatch(app, /Press Enter to continue\. Press Ctrl\+C to cancel\./)
+assert.match(replicationProgress, /reporter\?: ReplicationProgressReporter/)
+assert.match(replicationProgress, /const progressReporter = reporter \?\? clackReplicationReporter/)
+assert.match(command, /reporter: \{[\s\S]*spinner: \(\) => \(\{[\s\S]*updateInitStreamingStatus\('running', message\)/)
+assert.doesNotMatch(command, /s\.stop\('Upload failed ❌'\)/)
+assert.doesNotMatch(command, /pLog\.info\(`🎉 Your updated bundle is now available on Capgo`\)/)
+assert.doesNotMatch(app, /output\.lines\.length/)
+assert.match(command, /onCancel: \(\) => \{[\s\S]*cancelCommand\(INIT_CANCEL, orgId, apikey\)/)
+assert.match(command, /Replicating your updated bundle across Capgo\\?'s global servers\./)
+assert.doesNotMatch(command, /onboarding regions/)
