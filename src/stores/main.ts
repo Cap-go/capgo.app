@@ -4,6 +4,7 @@ import type { Database } from '~/types/supabase.types'
 import { acceptHMRUpdate, defineStore } from 'pinia'
 import { ref } from 'vue'
 import { getDaysBetweenDates } from '~/services/conversion'
+import { normalizeToUtcStartOfDay } from '~/services/date'
 import { reset } from '~/services/posthog'
 import {
   clearSpoof,
@@ -87,15 +88,9 @@ export const useMainStore = defineStore('main', () => {
   }
 
   const calculateMonthDay = (subscriptionStart: string | undefined) => {
-    // Parse dates consistently - ensure we're handling them the same way
-    // If subscriptionStart is provided, parse it as-is (should be in ISO format from DB)
-    // Otherwise use current date
-    const startDate = subscriptionStart ? new Date(subscriptionStart) : new Date()
-    const currentDate = new Date()
-
-    // Reset both dates to start of day to avoid time component issues
-    startDate.setHours(0, 0, 0, 0)
-    currentDate.setHours(0, 0, 0, 0)
+    // Parse dates consistently using UTC day boundaries (dashboard stats are UTC-bucketed)
+    const startDate = normalizeToUtcStartOfDay(subscriptionStart ? new Date(subscriptionStart) : new Date())
+    const currentDate = normalizeToUtcStartOfDay()
 
     const daysInMonth = new Date(Date.UTC(currentDate.getUTCFullYear(), currentDate.getUTCMonth() + 1, 0)).getUTCDate()
     return (getDaysBetweenDates(startDate, currentDate) % daysInMonth || daysInMonth) - 1
@@ -138,12 +133,8 @@ export const useMainStore = defineStore('main', () => {
     const appData = dashboardByapp.value.filter(d => d.app_id === appId)
 
     // Calculate how many days into the billing cycle we are
-    const startDate = subscriptionStart ? new Date(subscriptionStart) : new Date()
-    const currentDate = new Date()
-
-    // Reset to start of day for consistent comparison
-    startDate.setHours(0, 0, 0, 0)
-    currentDate.setHours(0, 0, 0, 0)
+    const startDate = normalizeToUtcStartOfDay(subscriptionStart ? new Date(subscriptionStart) : new Date())
+    const currentDate = normalizeToUtcStartOfDay()
 
     // Calculate days in billing cycle
     const daysInBillingCycle = Math.floor((currentDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1

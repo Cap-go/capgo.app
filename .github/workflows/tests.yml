@@ -132,12 +132,43 @@ jobs:
           FILTER_CLI: ${{ steps.filter.outputs.cli }}
           FILTER_NOTIFICATIONS: ${{ steps.filter.outputs.notifications }}
           FILTER_SHARED: ${{ steps.filter.outputs.shared }}
+          GH_TOKEN: ${{ github.token }}
+          BRANCH_NAME: ${{ github.ref_name }}
         run: |
           if [ "$EVENT_NAME" = "workflow_call" ]; then
             echo "capgo=$INPUT_RUN_CAPGO" >> "$GITHUB_OUTPUT"
             echo "cli=$INPUT_RUN_CLI" >> "$GITHUB_OUTPUT"
             echo "notifications=$INPUT_RUN_NOTIFICATIONS" >> "$GITHUB_OUTPUT"
             exit 0
+          fi
+
+          # Push + pull_request both run this workflow on feature branches. When an open
+          # PR already covers the branch, the push suite is redundant and its flakes
+          # (Docker port binds, transient 502/503) stick on the PR check list.
+          if [ "$EVENT_NAME" = "push" ]; then
+            set +e
+            pr_json="$(gh pr list \
+              --repo "$GITHUB_REPOSITORY" \
+              --state open \
+              --json number,headRefName,headRepository 2>/tmp/gh-pr-list.err)"
+            gh_status=$?
+            set -e
+            if [ "$gh_status" -ne 0 ]; then
+              echo "Warning: gh pr list failed; not skipping push tests"
+              cat /tmp/gh-pr-list.err || true
+            else
+              pr_count="$(printf '%s' "$pr_json" | jq \
+                --arg branch "$BRANCH_NAME" \
+                --arg repo "$GITHUB_REPOSITORY" \
+                '[.[] | select(.headRefName == $branch and .headRepository.nameWithOwner == $repo)] | length')"
+              if [ "${pr_count:-0}" -gt 0 ]; then
+                echo "Skipping push test suite; open PR already covers branch $BRANCH_NAME in $GITHUB_REPOSITORY"
+                echo "capgo=false" >> "$GITHUB_OUTPUT"
+                echo "cli=false" >> "$GITHUB_OUTPUT"
+                echo "notifications=false" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            fi
           fi
 
           run_capgo=false
@@ -431,6 +462,7 @@ jobs:
           warm_get '/organization?orgId=00000000-0000-0000-0000-000000000000'
           warm_post /organization
           warm_post /organization/members
+          warm_post /apikey
       - name: Run backend integration tests
         env:
           VITEST_SHARD: ${{ matrix.shard }}
@@ -1213,7 +1245,8 @@ jobs:
     if: needs.changes.outputs.run_cli == 'true'
     name: CLI POSIX paths (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 5
+    # windows-2022 often needs >5m for bun install + CLI zip under shared runners.
+    timeout-minutes: 10
     strategy:
       matrix:
         os: [windows-2025, windows-2022]

@@ -2,6 +2,8 @@
 import colors from 'tailwindcss/colors'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { computeLastDayEvolution } from '~/services/buildCharts'
+import { formatUtcDateParam, normalizeToUtcStartOfDay } from '~/services/date'
 import {
   calculateDemoEvolution,
   calculateDemoTotal,
@@ -13,6 +15,8 @@ import {
 import { useSupabase } from '~/services/supabase'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useOrganizationStore } from '~/stores/organization'
+import { filterDailySeriesToBillingPeriod, resolveDashboardDailySeriesWindow } from '~/utils/chartOptimizations'
+import { ensureMinDelay } from '~/utils/minDelay'
 import ChartCard from './ChartCard.vue'
 import DeploymentStatsChart from './DeploymentStatsChart.vue'
 
@@ -38,44 +42,6 @@ const props = defineProps({
     default: false,
   },
 })
-
-// Helper function to filter 30-day data to billing period
-function filterToBillingPeriod(fullData: number[], last30DaysStart: Date, billingStart: Date) {
-  const currentDate = new Date()
-
-  // Calculate billing period length
-  let currentBillingDay: number
-
-  if (billingStart.getDate() === 1) {
-    currentBillingDay = currentDate.getDate()
-  }
-  else {
-    const billingStartDay = billingStart.getUTCDate()
-    const daysInMonth = new Date(Date.UTC(currentDate.getUTCFullYear(), currentDate.getUTCMonth() + 1, 0)).getUTCDate()
-    currentBillingDay = (currentDate.getUTCDate() - billingStartDay + 1 + daysInMonth) % daysInMonth
-    if (currentBillingDay === 0)
-      currentBillingDay = daysInMonth
-  }
-
-  // Create arrays for billing period length
-  const billingData = Array.from({ length: currentBillingDay }).fill(0) as number[]
-
-  // Map 30-day data to billing period
-  for (let i = 0; i < 30; i++) {
-    const dataDate = new Date(last30DaysStart)
-    dataDate.setDate(dataDate.getDate() + i)
-
-    // Check if this date falls within current billing period
-    if (dataDate >= billingStart && dataDate <= currentDate) {
-      const billingIndex = Math.floor((dataDate.getTime() - billingStart.getTime()) / (1000 * 60 * 60 * 24))
-      if (billingIndex >= 0 && billingIndex < currentBillingDay) {
-        billingData[billingIndex] = fullData[i]
-      }
-    }
-  }
-
-  return { data: billingData }
-}
 
 const { t } = useI18n()
 const organizationStore = useOrganizationStore()
@@ -169,19 +135,16 @@ async function calculateStats(forceRefetch = false) {
       return
     }
 
-    // Always work with last 30 days of data
-    const last30DaysEnd = new Date()
-    const last30DaysStart = new Date()
-    last30DaysStart.setDate(last30DaysStart.getDate() - 29) // 30 days including today
-    last30DaysStart.setHours(0, 0, 0, 0)
-    last30DaysEnd.setHours(23, 59, 59, 999)
-
     // Get billing period dates for filtering
-    const billingStart = new Date(targetOrganization.subscription_start ?? new Date())
-    billingStart.setHours(0, 0, 0, 0)
+    const billingStart = normalizeToUtcStartOfDay(new Date(targetOrganization.subscription_start ?? new Date()))
+    const { seriesStart: last30DaysStart, exclusiveEnd, dayCount } = resolveDashboardDailySeriesWindow(
+      props.useBillingPeriod,
+      billingStart,
+    )
 
-    const startDate = last30DaysStart.toISOString().split('T')[0]
-    const endDate = last30DaysEnd.toISOString().split('T')[0]
+    // Date-only exclusive upper bound so today's UTC deployments are included
+    const startDate = formatUtcDateParam(last30DaysStart)
+    const endDateExclusive = formatUtcDateParam(exclusiveEnd)
 
     let targetAppIds: string[] = []
 
@@ -206,7 +169,7 @@ async function calculateStats(forceRefetch = false) {
       return
     }
 
-    const dailyCounts30Days = Array.from({ length: 30 }).fill(0) as number[]
+    const dailyCounts30Days = Array.from({ length: dayCount }).fill(0) as number[]
     let totalDeploymentsCount = 0
 
     // Check per-org cache - only use if not forcing refetch
@@ -235,7 +198,7 @@ async function calculateStats(forceRefetch = false) {
         `)
         .in('app_id', targetAppIds)
         .gte('deployed_at', startDate)
-        .lte('deployed_at', endDate)
+        .lt('deployed_at', endDateExclusive)
         .order('deployed_at')
 
       if (result.error)
@@ -262,7 +225,7 @@ async function calculateStats(forceRefetch = false) {
     // Create fresh arrays for processing per channel
     const perChannel: { [channelId: string]: number[] } = {}
     Object.keys(localChannelNames).forEach((channelId) => {
-      perChannel[channelId] = Array.from({ length: 30 }).fill(0) as number[]
+      perChannel[channelId] = Array.from({ length: dayCount }).fill(0) as number[]
     })
 
     // Create fresh arrays for processing per app (multi-app mode)
@@ -276,10 +239,10 @@ async function calculateStats(forceRefetch = false) {
 
         const deployDate = new Date(deployment.deployed_at)
 
-        // Calculate days since start of 30-day period
+        // Calculate days since start of series window
         const daysDiff = Math.floor((deployDate.getTime() - last30DaysStart.getTime()) / (1000 * 60 * 60 * 24))
 
-        if (daysDiff < 0 || daysDiff >= 30)
+        if (daysDiff < 0 || daysDiff >= dayCount)
           return
 
         dailyCounts30Days[daysDiff] += 1
@@ -287,14 +250,14 @@ async function calculateStats(forceRefetch = false) {
 
         // Initialize channel array if not already (for channels discovered during iteration)
         if (!perChannel[deployment.channel_id]) {
-          perChannel[deployment.channel_id] = Array.from({ length: 30 }).fill(0) as number[]
+          perChannel[deployment.channel_id] = Array.from({ length: dayCount }).fill(0) as number[]
         }
         perChannel[deployment.channel_id][daysDiff] += 1
 
         // For multi-app mode: aggregate by app_id
         if (!isSingleAppMode.value && deployment.app_id) {
           if (!perApp[deployment.app_id]) {
-            perApp[deployment.app_id] = Array.from({ length: 30 }).fill(0) as number[]
+            perApp[deployment.app_id] = Array.from({ length: dayCount }).fill(0) as number[]
             // Get app name from dashboardAppsStore
             localAppNames[deployment.app_id] = dashboardAppsStore.appNames[deployment.app_id] || deployment.app_id
           }
@@ -309,19 +272,19 @@ async function calculateStats(forceRefetch = false) {
     let finalTotal = totalDeploymentsCount
 
     if (props.useBillingPeriod) {
-      const filteredData = filterToBillingPeriod(dailyCounts30Days, last30DaysStart, billingStart)
+      const filteredData = filterDailySeriesToBillingPeriod(dailyCounts30Days, last30DaysStart, billingStart)
       finalDeploymentData = filteredData.data
 
       const filteredPerChannel: { [channelId: string]: number[] } = {}
       Object.keys(perChannel).forEach((channelId) => {
-        const filteredChannelData = filterToBillingPeriod(perChannel[channelId], last30DaysStart, billingStart)
+        const filteredChannelData = filterDailySeriesToBillingPeriod(perChannel[channelId], last30DaysStart, billingStart)
         filteredPerChannel[channelId] = filteredChannelData.data
       })
       finalPerChannel = filteredPerChannel
 
       const filteredPerApp: { [appId: string]: number[] } = {}
       Object.keys(perApp).forEach((appId) => {
-        const filteredAppData = filterToBillingPeriod(perApp[appId], last30DaysStart, billingStart)
+        const filteredAppData = filterDailySeriesToBillingPeriod(perApp[appId], last30DaysStart, billingStart)
         filteredPerApp[appId] = filteredAppData.data
       })
       finalPerApp = filteredPerApp
@@ -329,14 +292,7 @@ async function calculateStats(forceRefetch = false) {
       finalTotal = finalDeploymentData.reduce((sum, count) => sum + count, 0)
     }
 
-    let evolution = 0
-    const nonZeroDays = finalDeploymentData.filter(count => count > 0)
-    if (nonZeroDays.length >= 2) {
-      const lastDayCount = nonZeroDays[nonZeroDays.length - 1]
-      const previousDayCount = nonZeroDays[nonZeroDays.length - 2]
-      if (previousDayCount > 0)
-        evolution = ((lastDayCount - previousDayCount) / previousDayCount) * 100
-    }
+    const evolution = computeLastDayEvolution(finalDeploymentData)
 
     if (requestToken !== latestRequestToken)
       return
@@ -365,11 +321,7 @@ async function calculateStats(forceRefetch = false) {
   }
   finally {
     if (requestToken === latestRequestToken) {
-      // Ensure spinner shows for at least 300ms for better UX
-      const elapsed = Date.now() - startTime
-      if (elapsed < 300) {
-        await new Promise(resolve => setTimeout(resolve, 300 - elapsed))
-      }
+      await ensureMinDelay(startTime)
       isLoading.value = false
     }
   }

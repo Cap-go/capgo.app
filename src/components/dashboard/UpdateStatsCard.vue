@@ -6,6 +6,7 @@ import ArrowDownOnSquareIcon from '~icons/heroicons/arrow-down-on-square'
 import GlobeAltIcon from '~icons/heroicons/globe-alt'
 import XCircleIcon from '~icons/heroicons/x-circle'
 import UpdateStatsChart from '~/components/dashboard/UpdateStatsChart.vue'
+import { addUtcDays, formatUtcDateParam, normalizeToUtcStartOfDay } from '~/services/date'
 import { calculateDemoEvolution, calculateDemoTotal, generateDemoUpdateStatsData } from '~/services/demoChartData'
 import { formatNumberValue } from '~/services/formatLocale'
 import { useSupabase } from '~/services/supabase'
@@ -172,15 +173,12 @@ async function calculateStats(forceRefetch = false) {
 
   const DAY_IN_MS = 1000 * 60 * 60 * 24
 
-  // Always work with full billing period when enabled, otherwise last 30 days
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
+  // Always work with full billing period when enabled, otherwise last 30 UTC days
+  const today = normalizeToUtcStartOfDay()
 
-  const last30DaysStart = new Date(today)
-  last30DaysStart.setDate(last30DaysStart.getDate() - 29)
+  const last30DaysStart = addUtcDays(today, -29)
 
-  const billingStart = new Date(effectiveOrganization.value?.subscription_start ?? today)
-  billingStart.setHours(0, 0, 0, 0)
+  const billingStart = normalizeToUtcStartOfDay(new Date(effectiveOrganization.value?.subscription_start ?? today))
   const safeBillingStart = billingStart > today ? today : billingStart
 
   const rangeStart = props.useBillingPeriod ? safeBillingStart : last30DaysStart
@@ -188,8 +186,8 @@ async function calculateStats(forceRefetch = false) {
     ? Math.max(0, Math.floor((today.getTime() - rangeStart.getTime()) / DAY_IN_MS) + 1)
     : 30
 
-  const startDate = rangeStart.toISOString().split('T')[0]
-  const endDate = today.toISOString().split('T')[0]
+  const startDate = formatUtcDateParam(rangeStart)
+  const endDate = formatUtcDateParam(today)
 
   // Cache key includes org, app, and range to avoid stale data between periods
   const cacheKey = `${currentOrgId ?? 'none'}:${props.appId || 'org'}:${startDate}:${endDate}`
@@ -268,8 +266,7 @@ async function calculateStats(forceRefetch = false) {
       // Process each stat entry
       data.forEach((stat: any) => {
         if (stat.date) {
-          const statDate = new Date(stat.date)
-          statDate.setHours(0, 0, 0, 0)
+          const statDate = normalizeToUtcStartOfDay(new Date(stat.date))
 
           // Calculate days since start of range
           const daysDiff = Math.floor((statDate.getTime() - rangeStart.getTime()) / DAY_IN_MS)

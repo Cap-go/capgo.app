@@ -1,3 +1,4 @@
+import { app as canceled_org_retention_alerts } from '../_backend/triggers/canceled_org_retention_alerts.ts'
 import { app as credit_usage_alerts } from '../_backend/triggers/credit_usage_alerts.ts'
 import { app as credit_usage_posthog } from '../_backend/triggers/credit_usage_posthog.ts'
 import { app as cron_clean_orphan_images } from '../_backend/triggers/cron_clean_orphan_images.ts'
@@ -77,6 +78,7 @@ appGlobal.route('/cron_clear_versions', cron_clear_versions)
 appGlobal.route('/cron_clean_orphan_images', cron_clean_orphan_images)
 appGlobal.route('/cron_reconcile_build_status', cron_reconcile_build_status)
 appGlobal.route('/cron_rollout_auto_pause', cron_rollout_auto_pause)
+appGlobal.route('/canceled_org_retention_alerts', canceled_org_retention_alerts)
 appGlobal.route('/credit_usage_alerts', credit_usage_alerts)
 appGlobal.route('/credit_usage_posthog', credit_usage_posthog)
 appGlobal.route('/on_organization_delete', on_organization_delete)

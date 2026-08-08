@@ -394,12 +394,13 @@ function parseDashboardRangeDate(value?: string) {
 }
 
 export function normalizeDashboardDateRange(startDate?: string, endDate?: string, now: Date = new Date()) {
+  // Exclusive end = next UTC midnight so the current UTC day is fully included
   const fallbackEnd = new Date(now)
-  fallbackEnd.setHours(0, 0, 0, 0)
-  fallbackEnd.setDate(fallbackEnd.getDate() + 1)
+  fallbackEnd.setUTCHours(0, 0, 0, 0)
+  fallbackEnd.setUTCDate(fallbackEnd.getUTCDate() + 1)
 
   const fallbackStart = new Date(fallbackEnd)
-  fallbackStart.setDate(fallbackStart.getDate() - 30)
+  fallbackStart.setUTCDate(fallbackStart.getUTCDate() - 30)
 
   const parsedStart = parseDashboardRangeDate(startDate)
   const parsedEnd = parseDashboardRangeDate(endDate)

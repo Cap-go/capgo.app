@@ -71,7 +71,11 @@ function clearChunkReloadToastPending(): void {
   }
 }
 
-function handleChunkError(message: string) {
+// `targetPath` is the route the user was navigating to when the chunk failed.
+// A bare reload restores the URL the browser is still on (the page the user is
+// leaving), so it silently throws the navigation away. When we know the target
+// we navigate there instead, so the user lands where they asked to go.
+function handleChunkError(message: string, targetPath?: string) {
   const previousReload = getChunkReloadTimestamp()
   if (previousReload && Date.now() - previousReload < CHUNK_RELOAD_COOLDOWN_MS) {
     console.warn('Chunk load error detected again after a recent reload, skipping automatic reload.', message)
@@ -81,7 +85,10 @@ function handleChunkError(message: string) {
   console.warn('Chunk load error detected, reloading page...', message)
   setChunkReloadTimestamp()
   setChunkReloadToastPending()
-  window.location.reload()
+  if (targetPath)
+    window.location.assign(targetPath)
+  else
+    window.location.reload()
 }
 
 window.addEventListener('error', (event) => {
@@ -241,10 +248,10 @@ const router = createRouter({
 // as "Couldn't resolve component" once a stale chunk fails to import, so treat
 // them as chunk errors and trigger the same reload instead of leaving the user
 // on a dead route.
-router.onError((error) => {
+router.onError((error, to) => {
   const message = getErrorMessage(error) ?? String(error)
   if (isStaleAssetErrorMessage(message) || isComponentResolutionErrorMessage(message))
-    handleChunkError(message)
+    handleChunkError(message, to?.fullPath)
 })
 
 router.beforeEach((to, from, next) => {

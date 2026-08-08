@@ -4,6 +4,7 @@ import { confirm as confirmC, intro, isCancel, log, outro, spinner } from '@clac
 import { Table } from '@sauber/table'
 // Native fetch is available in Node.js >= 18
 import { checkAlerts } from '../api/update'
+import { CliUserError } from '../shared/cli-user-error'
 import { createSupabaseClient, findSavedKey, formatError, getAppId, getConfig, getLocalConfig, getOrganizationId, sendEvent } from '../utils'
 
 function wait(ms: number) {
@@ -70,7 +71,8 @@ export async function cancelCommand(channel: string, command: boolean | symbol, 
     return
 
   await markSnag(channel, orgId, apikey, 'canceled', undefined, '🤷')
-  throw new Error('Command cancelled')
+  log.warn('Command cancelled')
+  throw new CliUserError('Command cancelled')
 }
 
 interface Order {
