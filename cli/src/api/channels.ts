@@ -230,6 +230,20 @@ export function findChannel(supabase: SupabaseClient<Database>, appId: string, n
     .single()
 }
 
+export function findBundleIdByChannelName(supabase: SupabaseClient<Database>, appId: string, name: string) {
+  return supabase
+    .from('channels')
+    .select(`
+      id,
+      version:app_versions!channels_version_fkey(id, name)
+    `)
+    .eq('app_id', appId)
+    .eq('name', name)
+    .single()
+    .throwOnError()
+    .then(({ data }) => data?.version)
+}
+
 export type { Channel } from '../schemas/channel'
 type Channel = import('../schemas/channel').Channel
 
