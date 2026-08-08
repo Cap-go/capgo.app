@@ -1,6 +1,7 @@
 import type { OptionsBase } from '../schemas/base'
 import { intro, isCancel, log, outro, select } from '@clack/prompts'
 import { checkAppExistsAndHasPermissionOrgErr, getAppIconStoragePath } from '../api/app'
+import { CliUserError } from '../shared/cli-user-error'
 import {
   createSupabaseClient,
   findSavedKey,
@@ -64,8 +65,8 @@ export async function deleteAppInternal(
       })
 
       if (isCancel(shouldContinue) || shouldContinue === 'no') {
-        log.error('Canceled deleting the app, exiting')
-        throw new Error('App deletion cancelled')
+        log.warn('Canceled deleting the app, exiting')
+        throw new CliUserError('App deletion cancelled')
       }
     }
     else {

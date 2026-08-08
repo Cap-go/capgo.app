@@ -32,6 +32,7 @@ import { loadConfig, loadConfigForWrite, writeConfig } from './config'
 import { isTruthyEnvValue } from './posthog'
 import { nativePackageSchema } from './schemas/common'
 import { safeParseSchema } from './schemas/schema_validation'
+import { CliUserError } from './shared/cli-user-error'
 import { formatApiErrorForCli, parseSecurityPolicyError } from './utils/security_policy_errors'
 
 function reportUploadContext(level: 'error' | 'info' | 'success' | 'warn', message: string) {
@@ -1963,8 +1964,8 @@ export async function getOrganizationWithPermission(
     : allowedOrganizations[0].gid
 
   if (isCancel(organizationUidRaw)) {
-    log.error('Canceled organization selection, exiting')
-    throw new Error('Organization selection cancelled')
+    log.warn('Canceled organization selection, exiting')
+    throw new CliUserError('Organization selection cancelled')
   }
 
   const organizationUid = organizationUidRaw as string
@@ -2831,8 +2832,8 @@ export async function promptAndSyncCapacitor(
     if (isInit && orgId && apikey) {
       await markSnag('onboarding-v2', orgId, apikey, 'canceled', undefined, '🤷')
     }
-    log.error('Canceled Capacitor sync')
-    throw new Error('Capacitor sync cancelled')
+    log.warn('Canceled Capacitor sync')
+    throw new CliUserError('Capacitor sync cancelled')
   }
 
   if (shouldSync) {

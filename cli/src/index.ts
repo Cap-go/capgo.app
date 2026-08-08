@@ -53,6 +53,7 @@ import { capturePosthogException, getCommandPath, shouldCapturePosthogException 
 import { getPreviewQr } from './preview/qr'
 import { probe } from './probe'
 import { testRunDeviceCommand } from './run/device'
+import { CliUserError } from './shared/cli-user-error'
 import { getUserId } from './user/account'
 import { formatError } from './utils'
 import { normalizeAutoBumpInput } from './versionHelpers'
@@ -1348,8 +1349,11 @@ void (async () => {
         status: 1,
       })
       : Promise.resolve(false)
-    // For non-Commander errors, show full error details
-    log.error(`Error: ${formatError(error)}`)
+    // For non-Commander errors, show full error details. A CliUserError already
+    // printed a clear message at the call site, so skip the redundant and
+    // alarming `Error: …` line for it.
+    if (!(error instanceof CliUserError))
+      log.error(`Error: ${formatError(error)}`)
     trackCommandFailed(currentCommandPath, { errorCategory: categorizeCliError(error), exitCode: 1 })
     await Promise.all([capturePromise, flushAnalytics(), finishActiveCliReplay().catch(() => {})])
     exit(1)
