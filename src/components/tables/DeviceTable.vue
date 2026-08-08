@@ -156,19 +156,21 @@ function getSearchTerm() {
 }
 
 function getDateRangePayload() {
-  if (dateRangeMode.value !== 'custom') {
-    const rolling = getDateRangeForPreset(dateRangeMode.value)
-    return {
-      updated_at_gt: rolling.start.toISOString(),
-      updated_at_lte: rolling.end.toISOString(),
-    }
-  }
+  // Always use the frozen session bounds. Recomputing rolling presets from
+  // `now` on each page fetch desyncs API filters from cached cursors.
   if (!dateRange.value)
     return {}
   return {
     updated_at_gt: dateRange.value[0].toISOString(),
     updated_at_lte: dateRange.value[1].toISOString(),
   }
+}
+
+function snapRollingDateRangeBounds() {
+  if (dateRangeMode.value === 'custom')
+    return
+  const rolling = getDateRangeForPreset(dateRangeMode.value)
+  dateRange.value = [rolling.start, rolling.end]
 }
 
 function getVersionNameFilter() {
@@ -309,6 +311,11 @@ async function reload() {
     const requestedPage = currentPage.value
     const querySignature = getQuerySignature()
     const filtersChanged = lastQuerySignature.value !== querySignature
+    const shouldRecount = shouldRecountOnTableReload({
+      filtersChanged,
+      previousPage: previousPage.value,
+      requestedPage,
+    })
     if (filtersChanged) {
       lastQuerySignature.value = querySignature
       currentPage.value = 1
@@ -316,13 +323,15 @@ async function reload() {
       elements.value.length = 0
     }
 
-    // Page-only navigation must not reset or re-count: rolling date payloads
-    // used to change the signature every click and pin users on page 1.
-    if (shouldRecountOnTableReload({
-      filtersChanged,
-      previousPage: previousPage.value,
-      requestedPage,
-    })) {
+    if (shouldRecount) {
+      // Toolbar reload (not a page change): snap rolling bounds and drop
+      // cursors so the new window cannot reuse stale page offsets.
+      if (!filtersChanged) {
+        snapRollingDateRangeBounds()
+        currentPage.value = 1
+        clearPaginationState()
+        elements.value.length = 0
+      }
       const newTotal = await countDevices()
       if (loadId !== activeLoadId.value)
         return
@@ -347,6 +356,7 @@ async function refreshData() {
   const loadId = ++activeLoadId.value
   isLoading.value = true
   try {
+    snapRollingDateRangeBounds()
     currentPage.value = 1
     previousPage.value = 1
     lastQuerySignature.value = getQuerySignature()
