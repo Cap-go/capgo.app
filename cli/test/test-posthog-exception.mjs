@@ -67,14 +67,14 @@ try {
   assert.equal(body.properties.error_kind, 'unhandled_error')
   assert.equal(body.properties.status, 1)
   assert.match(body.properties.distinct_id, /^cli:[^:]+:bundle upload$/)
-  // Fingerprint is built only from stable dimensions: command path, error kind,
-  // error name and exit status. It must NOT include the CLI version (so the same
-  // bug stays one issue across releases) NOR the top stack frame's
-  // function/filename (minified bundles rename it per build and per call site,
-  // which split one bug into a new issue every occurrence).
+  // Fingerprint must NOT include the CLI version, the top-frame symbol, or the
+  // top-frame filename, so the same bug stays one error-tracking issue across
+  // releases and across install locations (npx cache hash, bunx, pnpm, sandbox).
+  // Version is still reported via cli_version.
   assert.equal(body.properties.$exception_fingerprint, 'bundle upload:unhandled_error:Error:1')
   assert.doesNotMatch(body.properties.$exception_fingerprint, /cli:/)
-  assert.doesNotMatch(body.properties.$exception_fingerprint, /runUpload|index\.ts/)
+  assert.doesNotMatch(body.properties.$exception_fingerprint, /runUpload/)
+  assert.doesNotMatch(body.properties.$exception_fingerprint, /index\.ts/)
   assert.equal(body.properties.cli_version, body.properties.distinct_id.split(':')[1])
   assert.equal(body.properties.$exception_list[0].type, 'Error')
   assert.equal(body.properties.$exception_list[0].value, 'boom')
@@ -169,6 +169,9 @@ try {
   // `findSavedKey` throws this as a CliUserError when nobody ran `capgo login`;
   // it must be skipped (a plain Error with this text would have leaked through).
   assert.equal(shouldCapturePosthogException(new CliUserError('Cannot find API key in local folder or global, please login first with `capgo login`')), false)
+  // `uploadFail` now throws CliUserError, so a duplicate-version upload — a normal
+  // `bundle upload` outcome — is filtered out of error tracking by type.
+  assert.equal(shouldCapturePosthogException(new CliUserError('Version 1.2.3 already exists')), false)
   // A user-initiated cancel (Ctrl+C / Escape at an interactive prompt) is a
   // deliberate abort, not a crash — the cancel sites throw CliUserError so it
   // never opens an error tracking issue.

@@ -263,13 +263,14 @@ export async function capturePosthogException(payload: CapturePosthogExceptionPa
   const sanitizedMessage = sanitizeTelemetryText(serializedError.message)
   const distinctId = `cli:${pack.version}:${payload.functionName}`
   const frames = parseExceptionFrames(serializedError.stack, payload.functionName)
-  // Fingerprint only on stable dimensions: the command path (`functionName`),
-  // the error kind, the error name and the exit status. Deliberately exclude
-  // the CLI version AND the top stack frame's function/filename: bundles are
-  // minified, so the top frame renders as a per-build, per-call-site symbol
-  // (`T0`, `CDA`, …) that splits one bug into a fresh error-tracking issue on
-  // every release and every call site. Version is still reported via
-  // `cli_version` below; the full frames stay on the stacktrace for debugging.
+  // Fingerprint deliberately omits both the CLI version and the top stack frame
+  // (its function name and filename). The CLI ships as one minified
+  // `dist/index.js`, so the top-frame symbol is renamed on every release and the
+  // filename is the full install path — which differs per npx cache hash, bunx,
+  // pnpm store, global install, or sandbox. Keeping either splits one bug into a
+  // fresh error-tracking issue per install location and per release. The command
+  // path, error kind, error name, and exit status stay stable across all of them.
+  // Version is still reported via `cli_version` below.
   const fingerprint = [
     payload.functionName,
     payload.kind,
