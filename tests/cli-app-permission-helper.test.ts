@@ -10,6 +10,7 @@ vi.mock('../cli/src/utils', () => ({
   hasCliPermission: hasCliPermissionMock,
   invokeCapgoCliApi: invokeCapgoCliApiMock,
   getCapgoCliHttpStatus: getCapgoCliHttpStatusMock,
+  isCapgoManagedSupabaseHost: () => false,
   show2FADeniedError: vi.fn(() => {
     throw new Error('2FA required')
   }),
