@@ -4,11 +4,11 @@ import IconBanknotes from '~icons/heroicons/banknotes'
 import IconBell from '~icons/heroicons/bell'
 import IconBuildingOffice from '~icons/heroicons/building-office-2'
 import IconCircleStack from '~icons/heroicons/circle-stack'
+import IconCommandLine from '~icons/heroicons/command-line'
 import IconCurrencyDollar from '~icons/heroicons/currency-dollar'
 import IconPuzzle from '~icons/heroicons/puzzle-piece'
 import IconUsers from '~icons/heroicons/user-group'
 import IconBuild from '~icons/heroicons/wrench-screwdriver'
-import IconCommandLine from '~icons/heroicons/command-line'
 
 export const adminTabs: Tab[] = [
   { label: 'builder', icon: IconBuild, key: '/builder' },

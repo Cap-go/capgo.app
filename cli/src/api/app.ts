@@ -166,6 +166,14 @@ export async function check2FAComplianceForApp(
   }
 }
 
+function hostOptionsFromSupabase(supabase: SupabaseClient<Database>) {
+  const supaHost = typeof supabase.supabaseUrl === 'string' ? supabase.supabaseUrl : undefined
+  const supaAnon = typeof supabase.supabaseKey === 'string' ? supabase.supabaseKey : undefined
+  if (supaHost && supaAnon)
+    return { supaHost, supaAnon }
+  return undefined
+}
+
 export async function checkAppExistsAndHasPermissionOrgErr(
   supabase: SupabaseClient<Database>,
   apikey: string,
@@ -181,7 +189,8 @@ export async function checkAppExistsAndHasPermissionOrgErr(
   if (!skip2FACheck)
     await check2FAComplianceForApp(supabase, appid, silent)
 
-  if (!isChannelScopedPermission && !(await checkAppExists(apikey, appid))) {
+  // Keep local/self-host Capgo HTTP traffic on the same host as this supabase client.
+  if (!isChannelScopedPermission && !(await checkAppExists(apikey, appid, hostOptionsFromSupabase(supabase)))) {
     const msg = appAddHintMessage(appid)
     if (!silent)
       log.error(msg)
