@@ -129,16 +129,6 @@ async function listBundles(options: CapgoPreviewHttpOptions, appId: string): Pro
   return all
 }
 
-async function getBundleById(options: CapgoPreviewHttpOptions, appId: string, id: number): Promise<BundleRow | null> {
-  const bundles = await listBundles(options, appId)
-  return bundles.find(bundle => bundle.id === id) ?? null
-}
-
-async function getBundleByName(options: CapgoPreviewHttpOptions, appId: string, name: string): Promise<BundleRow | null> {
-  const bundles = await listBundles(options, appId)
-  return bundles.find(bundle => bundle.name === name) ?? null
-}
-
 async function listChannels(options: CapgoPreviewHttpOptions, appId: string): Promise<ChannelRow[]> {
   const all: ChannelRow[] = []
   let page = 0
@@ -181,9 +171,11 @@ export async function resolveBundlePreviewTarget(
   bundleRef: string,
 ): Promise<PreviewQrTarget | null> {
   const numericId = parseSafeIntegerRef(bundleRef, 0)
+  // Fetch once: id and name lookups previously each called listBundles.
+  const bundles = await listBundles(options, appId)
   const bundle = numericId === undefined
-    ? await getBundleByName(options, appId, bundleRef)
-    : (await getBundleById(options, appId, numericId) ?? await getBundleByName(options, appId, bundleRef))
+    ? bundles.find(row => row.name === bundleRef) ?? null
+    : bundles.find(row => row.id === numericId) ?? bundles.find(row => row.name === bundleRef) ?? null
 
   if (!bundle)
     return null

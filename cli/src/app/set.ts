@@ -73,10 +73,10 @@ export async function setAppInternal(appId: string, options: Options, silent = f
       log.error('retention value cannot be less than 0')
     throw new Error('Retention value cannot be less than 0')
   }
-  else if (retention && retention >= 63113904) {
+  else if (retention && retention > 730) {
     if (!silent)
-      log.error('retention value cannot be greater than 63113904 seconds (2 years)')
-    throw new Error('Retention value cannot be greater than 63113904 seconds (2 years)')
+      log.error('retention value cannot be greater than 730 days (2 years)')
+    throw new Error('Retention value cannot be greater than 730 days (2 years)')
   }
 
   if (buildTimeoutMinutes != null) {

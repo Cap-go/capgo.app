@@ -171,6 +171,8 @@ interface AppProps {
   apikey?: string
   // Capgo API gateway override (--supa-host); prod when omitted.
   supaHost?: string
+  /** Custom Supabase anon key for self-hosting (--supa-anon). */
+  supaAnon?: string
   /** Correlation id for this onboarding run; emitted as `journey_id` on every analytics event. */
   journeyId: string
   /** Reports the current step to the shell on every transition, so the caller can
@@ -260,7 +262,7 @@ function emptyProgress(appId: string): AndroidOnboardingProgress {
   }
 }
 
-const AndroidOnboardingApp: FC<AppProps> = ({ appId, initialProgress, androidDir, apikey, supaHost, journeyId, onStep, onResult, onBeforeExit }) => {
+const AndroidOnboardingApp: FC<AppProps> = ({ appId, initialProgress, androidDir, apikey, supaHost, supaAnon, journeyId, onStep, onResult, onBeforeExit }) => {
   const { exit } = useApp()
   const exitAfterBeforeExit = useCallback(() => {
     exitAfterOnboardingBeforeExit(onBeforeExit, exit)
@@ -330,7 +332,7 @@ const AndroidOnboardingApp: FC<AppProps> = ({ appId, initialProgress, androidDir
 
     let cancelled = false
     void (async () => {
-      const orgId = await getOrganizationId(resolvedApiKeyRef.current!, appId).catch(() => null)
+      const orgId = await getOrganizationId(resolvedApiKeyRef.current!, appId, { supaHost, supaAnon }).catch(() => null)
       if (orgId && !cancelled)
         setResolvedOrgId(orgId)
     })()
@@ -338,7 +340,7 @@ const AndroidOnboardingApp: FC<AppProps> = ({ appId, initialProgress, androidDir
     return () => {
       cancelled = true
     }
-  }, [appId])
+  }, [appId, supaHost, supaAnon])
 
   const [logLines, setLogLines] = useState<LogEntry[]>([])
   const [error, setError] = useState<string | null>(null)

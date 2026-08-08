@@ -8,7 +8,7 @@ import {
   setCurrentCliCommand,
 } from '../cli/src/analytics/cli-headers.ts'
 import pack from '../cli/package.json'
-import { trackCliUsage } from '../supabase/functions/_backend/utils/cli_usage.ts'
+import { resolveCliUsageIdentity, trackCliUsage } from '../supabase/functions/_backend/utils/cli_usage.ts'
 
 const {
   backgroundTaskMock,
@@ -70,7 +70,7 @@ describe('buildCliRequestHeaders', () => {
     setCurrentCliCommand('')
   })
 
-  it.concurrent('includes version, command, node, and os headers', () => {
+  it('includes version, command, node, and os headers', () => {
     setCurrentCliCommand('bundle upload')
     const headers = buildCliRequestHeaders()
     expect(headers.capgo_api).toBe('2025-10-01')
@@ -82,14 +82,14 @@ describe('buildCliRequestHeaders', () => {
     expect(headers.capgkey).toBeUndefined()
   })
 
-  it.concurrent('merges extra headers without inventing apikey', () => {
+  it('merges extra headers without inventing apikey', () => {
     const headers = buildCliRequestHeaders({ Authorization: 'Bearer x', capgkey: 'key-1' })
     expect(headers.Authorization).toBe('Bearer x')
     expect(headers.capgkey).toBe('key-1')
     expect(headers['x-cli-version']).toBe(pack.version)
   })
 
-  it.concurrent('tracks command via setters', () => {
+  it('tracks command via setters', () => {
     setCurrentCliCommand('app list')
     expect(getCurrentCliCommand()).toBe('app list')
   })
@@ -109,7 +109,7 @@ describe('trackCliUsage', () => {
     vi.mocked(getRuntimeKey).mockReset()
   })
 
-  it.concurrent('skips entirely when cli_version is empty', () => {
+  it('skips entirely when cli_version is empty', () => {
     vi.mocked(getRuntimeKey).mockReturnValue('workerd')
     const writeDataPoint = vi.fn()
     trackCliUsage(createContext({ CLI_USAGE: { writeDataPoint } }), {
@@ -193,5 +193,34 @@ describe('trackCliUsage', () => {
     expect(String(sql)).toContain('api_version')
     expect(args).toEqual(['8.32.8', 'init', 'v22.0.0', 'linux', null, null, 'config', '2025-10-01'])
     expect(closeClientMock).toHaveBeenCalled()
+  })
+})
+
+describe('resolveCliUsageIdentity', () => {
+  beforeEach(() => {
+    cloudlogErrMock.mockReset()
+    checkKeyMock.mockReset()
+  })
+
+  it('returns nulls when no capgkey is provided', async () => {
+    const result = await resolveCliUsageIdentity(createContext(), undefined)
+    expect(result).toEqual({ apikey_id: null, org_id: null })
+    expect(checkKeyMock).not.toHaveBeenCalled()
+  })
+
+  it('returns rbac_id for a valid key', async () => {
+    checkKeyMock.mockResolvedValue({ rbac_id: 'rbac-123' })
+    const result = await resolveCliUsageIdentity(createContext(), 'capgo_key')
+    expect(result).toEqual({ apikey_id: 'rbac-123', org_id: null })
+    expect(checkKeyMock).toHaveBeenCalled()
+  })
+
+  it('returns nulls without throwing when checkKey rejects', async () => {
+    checkKeyMock.mockRejectedValue(new Error('lookup failed'))
+    await expect(resolveCliUsageIdentity(createContext(), 'bad-key')).resolves.toEqual({
+      apikey_id: null,
+      org_id: null,
+    })
+    expect(cloudlogErrMock).toHaveBeenCalled()
   })
 })

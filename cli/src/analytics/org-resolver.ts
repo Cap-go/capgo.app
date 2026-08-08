@@ -44,6 +44,7 @@ export function resolveOwnerOrgId(apikey: string, appId: string, deps: OrgResolv
         apikey,
         method: 'GET',
         body: undefined,
+        signal,
       })
       if (error || !data?.owner_org)
         return undefined
@@ -55,5 +56,12 @@ export function resolveOwnerOrgId(apikey: string, appId: string, deps: OrgResolv
   })()
 
   ownerOrgCache.set(cacheKey, promise)
+  // Do not cache aborted/failed/negative lookups for the process lifetime.
+  void promise.then((value) => {
+    if (!value)
+      ownerOrgCache.delete(cacheKey)
+  }).catch(() => {
+    ownerOrgCache.delete(cacheKey)
+  })
   return promise
 }

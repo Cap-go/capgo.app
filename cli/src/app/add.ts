@@ -105,9 +105,17 @@ async function createAppViaApi(
     supaHost: params.supaHost,
     supaAnon: params.supaAnon,
   })
+  const usesFunctionsV1 = apiHost.includes('/functions/v1')
+  const authorization = usesFunctionsV1 && params.supaAnon
+    ? `Bearer ${params.supaAnon}`
+    : apikey
   const response = await fetch(`${apiHost}/app`, {
     method: 'POST',
-headers: buildCliRequestHeaders({ 'Content-Type': 'application/json', Authorization: apikey, capgkey: apikey }),
+    headers: buildCliRequestHeaders({
+      'Content-Type': 'application/json',
+      'Authorization': authorization,
+      'capgkey': apikey,
+    }),
     body: JSON.stringify({
       owner_org: params.ownerOrg,
       app_id: params.appId,

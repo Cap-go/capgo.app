@@ -279,6 +279,8 @@ interface AppProps {
   apikey?: string
   // Capgo API gateway override (--supa-host); prod when omitted.
   supaHost?: string
+  /** Custom Supabase anon key for self-hosting (--supa-anon). */
+  supaAnon?: string
   /** Correlation id for this onboarding run; emitted as `journey_id` on every analytics event. */
   journeyId: string
   /** Reports the current step to the shell on every transition, so the caller can
@@ -331,7 +333,7 @@ async function runRunnerCommand(runner: string, args: string[]): Promise<{ succe
   })
 }
 
-const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgress, iosDir, guidedHelperUsable, apikey, supaHost, journeyId, onStep, onResult, onBeforeExit }) => {
+const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgress, iosDir, guidedHelperUsable, apikey, supaHost, supaAnon, journeyId, onStep, onResult, onBeforeExit }) => {
   const { exit } = useApp()
   const exitAfterBeforeExit = useCallback(() => {
     exitAfterOnboardingBeforeExit(onBeforeExit, exit)
@@ -515,7 +517,7 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
 
     let cancelled = false
     void (async () => {
-      const orgId = await getOrganizationId(resolvedApiKeyRef.current!, appId).catch(() => null)
+      const orgId = await getOrganizationId(resolvedApiKeyRef.current!, appId, { supaHost, supaAnon }).catch(() => null)
       if (orgId && !cancelled)
         setResolvedOrgId(orgId)
     })()
@@ -523,7 +525,7 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
     return () => {
       cancelled = true
     }
-  }, [appId])
+  }, [appId, supaHost, supaAnon])
 
   const [log, setLog] = useState<LogEntry[]>([])
   const [error, setError] = useState<string | null>(null)

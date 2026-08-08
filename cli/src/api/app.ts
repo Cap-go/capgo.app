@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Database } from '../types/supabase.types'
 import { log } from '@clack/prompts'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
-import { appAddHintMessage, formatCapgoApiErrorBody, getCapgoCliHttpStatus, hasCliPermission, invokeCapgoCliApi, resolveCapgoPublicApiHost, show2FADeniedError } from '../utils'
+import { appAddHintMessage, formatCapgoApiErrorBody, getCapgoCliHttpStatus, hasCliPermission, invokeCapgoCliApi, isCapgoManagedSupabaseHost, resolveCapgoPublicApiHost, show2FADeniedError } from '../utils'
 
 export async function checkAppExists(
   apikey: string,
@@ -105,9 +105,17 @@ export async function completePendingOnboardingApp(
   // Prefer Capgo API host (or self-hosted /functions/v1) with the API key so
   // org.create_app keys can finish pending onboarding without app.update_settings.
   const apiHost = await resolveCapgoPublicApiHost(options)
+  const usesFunctionsV1 = apiHost.includes('/functions/v1')
+  const authorization = usesFunctionsV1 && options?.supaAnon
+    ? `Bearer ${options.supaAnon}`
+    : apikey
   const response = await fetch(`${apiHost}/app/${encodeURIComponent(appId)}`, {
     method: 'PUT',
-    headers: buildCliRequestHeaders({ 'Content-Type': 'application/json', Authorization: apikey, capgkey: apikey }),
+    headers: buildCliRequestHeaders({
+      'Content-Type': 'application/json',
+      'Authorization': authorization,
+      'capgkey': apikey,
+    }),
     body: JSON.stringify({
       need_onboarding: false,
     }),
@@ -134,8 +142,14 @@ export async function checkAppIdsExist(
 ) {
   const results = await Promise.all(
     appids.map(async (appid) => {
-      const exists = await checkAppExists(apikey, appid, options)
-      return { appid, exists }
+      try {
+        const exists = await checkAppExists(apikey, appid, options)
+        return { appid, exists }
+      }
+      catch {
+        // Keep suggestion generation resilient to transient lookup failures.
+        return { appid, exists: false }
+      }
     }),
   )
   return results
@@ -169,10 +183,12 @@ export async function check2FAComplianceForApp(
 function hostOptionsFromSupabase(supabase: SupabaseClient<Database>) {
   // supabase-js keeps these as protected fields; local/self-host tests still
   // need the same host when Capgo HTTP existence checks replace PostgREST RPCs.
+  // Hosted Capgo clients must keep default api.capgo.app resolution — their
+  // supabaseUrl points at PostgREST, not the public Capgo HTTP API.
   const client = supabase as SupabaseClient<Database> & { supabaseUrl?: string, supabaseKey?: string }
   const supaHost = typeof client.supabaseUrl === 'string' ? client.supabaseUrl : undefined
   const supaAnon = typeof client.supabaseKey === 'string' ? client.supabaseKey : undefined
-  if (supaHost && supaAnon)
+  if (supaHost && supaAnon && !isCapgoManagedSupabaseHost(supaHost))
     return { supaHost, supaAnon }
   return undefined
 }

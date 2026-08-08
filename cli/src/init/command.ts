@@ -1338,6 +1338,7 @@ async function validateResumedOnboardingAccess(
   supabase: Awaited<ReturnType<typeof createSupabaseClient>>,
   apikey: string,
   resume: ResumeResult,
+  hostOptions?: { supaHost?: string, supaAnon?: string },
 ): Promise<string | undefined> {
   try {
     const { error: orgError, data: organizations } = await supabase.rpc('get_orgs_v7')
@@ -1350,7 +1351,7 @@ async function validateResumedOnboardingAccess(
       : false
     const hasAppAccess = !organization || !resume.appId
       ? true
-      : Boolean(await findAppInOrganization(apikey, organization.gid, resume.appId))
+      : Boolean(await findAppInOrganization(apikey, organization.gid, resume.appId, hostOptions))
 
     return getResumedOnboardingAccessError(resume, organization, hasCreateAppPermission, hasAppAccess)
   }
@@ -1367,6 +1368,7 @@ async function tryResumeOnboarding(
   initialTargets: InitTargetPaths,
   initialCwd: string,
   supabase: Awaited<ReturnType<typeof createSupabaseClient>>,
+  hostOptions?: { supaHost?: string, supaAnon?: string },
 ): Promise<ResumeResult | undefined> {
   try {
     const rawData = readFileSync(getTmpObjectPath(), 'utf-8')
@@ -1398,7 +1400,7 @@ async function tryResumeOnboarding(
     }
 
     const resume: ResumeResult = { stepDone: step_done, orgId, orgName, appId: savedAppId }
-    const accessError = await validateResumedOnboardingAccess(supabase, apikey, resume)
+    const accessError = await validateResumedOnboardingAccess(supabase, apikey, resume, hostOptions)
     if (accessError) {
       pLog.warn(accessError)
       cleanupStepsDone()
@@ -2299,7 +2301,10 @@ async function resolveExistingAppConflict(
   appId: string,
   options: SuperOptions,
 ): Promise<ExistingAppConflictResolution> {
-  const existingApp: ExistingOrganizationApp | null = await findAppInOrganization(apikey, organization.gid, appId)
+  const existingApp: ExistingOrganizationApp | null = await findAppInOrganization(apikey, organization.gid, appId, {
+    supaHost: options.supaHost,
+    supaAnon: options.supaAnon,
+  })
   if (!existingApp)
     return 'not-owned'
 
@@ -2351,9 +2356,10 @@ async function askForReplacementAppId(
   organization: Organization,
   apikey: string,
   baseAppId: string,
+  hostOptions?: { supaHost?: string, supaAnon?: string },
 ): Promise<string> {
   const rawSuggestions = buildAppIdConflictSuggestions(baseAppId)
-  const existingResults = await checkAppIdsExist(apikey, rawSuggestions)
+  const existingResults = await checkAppIdsExist(apikey, rawSuggestions, hostOptions)
   const suggestions = rawSuggestions.filter((_, idx) => !existingResults[idx].exists).slice(0, 4)
 
   if (suggestions.length === 0) {
@@ -2451,7 +2457,10 @@ async function addAppStep(organization: Organization, apikey: string, appId: str
         if (conflictResolution === 'not-owned')
           pLog.error(`❌ App ID "${currentAppId}" is already taken`)
 
-        currentAppId = await askForReplacementAppId(supabase, organization, apikey, currentAppId)
+        currentAppId = await askForReplacementAppId(supabase, organization, apikey, currentAppId, {
+          supaHost: options.supaHost,
+          supaAnon: options.supaAnon,
+        })
         confirmedAppId = undefined
         pLog.info(`🔄 Trying with new app ID: ${currentAppId}`)
         continue
@@ -5100,7 +5109,10 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
   const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
   await resolveUserIdFromApiKey(supabase, options.apikey)
 
-  let resumed = await tryResumeOnboarding(options.apikey, initialTargets, initialCwd, supabase)
+  let resumed = await tryResumeOnboarding(options.apikey, initialTargets, initialCwd, supabase, {
+    supaHost: options.supaHost,
+    supaAnon: options.supaAnon,
+  })
   let stepToSkip = resumed?.stepDone ?? 0
 
   await ensureGitRepoCleanBeforeInit(stepToSkip > 0 ? globalAutoTestChange : undefined)

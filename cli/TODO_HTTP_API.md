@@ -1,6 +1,7 @@
 # CLI HTTP API migration TODOs
 
 ## Missing endpoints (block full supabase-js removal)
+
 - [ ] GET/POST private/cli identity (`get_user_id` / `request_actor_user_id` + 2FA flags)
 - [ ] POST private/cli/check-permission (`cli_check_permission` / `assertCliPermission` / `hasCliPermission`)
 - [ ] GET organization v7-enriched fields (`get_orgs_v7` / rich org list with plan + warnings)
@@ -19,6 +20,7 @@
 - [ ] User-scoped storage cleanup path `apps/${appId}/${userId}` on app delete
 
 ## Partial (endpoint exists, CLI still needs more)
+
 - [ ] GET organization — usable for name/created_by/logo, not security settings
 - [ ] GET organization/members — member list migrated; 2FA/password enrichment still RPC
 - [ ] PUT app — core settings migrated; preview/timeout/default upload channel still SDK
@@ -28,6 +30,7 @@
 - [ ] DELETE app — DB delete migrated; legacy user storage cleanup still SDK
 
 ## Still on supabase-js (file references)
+
 - `cli/src/utils.ts` — `resolveUserIdFromApiKey`, `hasCliPermission` / `assertCliPermission`, `checkPlanValid`, `updateOrCreateChannel` fallback, storage helpers
 - `cli/src/api/app.ts` — `check2FAComplianceForApp` (`reject_access_due_to_2fa_for_app`)
 - `cli/src/channel/currentBundle.ts` — channel row + `get_channel_current_bundle_rbac`

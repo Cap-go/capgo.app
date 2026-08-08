@@ -37,6 +37,10 @@ function emptyAdminCliUsageStats(): AdminCliUsageStats {
   }
 }
 
+function usesAnalyticsEngine(c: Context): boolean {
+  return getRuntimeKey() === 'workerd' && !!c.env.CLI_USAGE
+}
+
 /**
  * Record CLI usage from request headers.
  * Prefer /private/config only for v1 — avoid hot authenticated private routes.
@@ -46,7 +50,7 @@ export function trackCliUsage(c: Context, event: CliUsageEvent) {
     return
 
   try {
-    if (getRuntimeKey() === 'workerd' && c.env.CLI_USAGE) {
+    if (usesAnalyticsEngine(c)) {
       backgroundTask(c, Promise.resolve().then(() => {
         try {
           c.env.CLI_USAGE.writeDataPoint({
@@ -115,6 +119,7 @@ export async function resolveCliUsageIdentity(
       return { apikey_id: null, org_id: null }
     return {
       apikey_id: apikey.rbac_id ?? null,
+      // TODO: apikeys rows have no owner_org; org breakdown is not needed for the admin dashboard yet.
       org_id: null,
     }
   }
@@ -238,7 +243,7 @@ export async function getAdminCliUsage(
   end_date: string,
 ): Promise<AdminCliUsageStats> {
   try {
-    if (c.env.CLI_USAGE) {
+    if (usesAnalyticsEngine(c)) {
       return await getAdminCliUsageFromAE(c, start_date, end_date)
     }
     return await getAdminCliUsageFromPostgres(c, start_date, end_date)

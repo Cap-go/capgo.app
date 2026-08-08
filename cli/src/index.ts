@@ -900,6 +900,7 @@ build
   .option('-a, --apikey <apikey>', 'API key to link to your account')
   .option('-p, --platform <platform>', 'Platform to onboard (ios or android). If omitted, auto-detects when only one native folder exists; prompts otherwise.')
   .option('--supa-host <supaHost>', optionDescriptions.supaHost)
+  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
   .option('--no-analytics', 'Disable build onboarding analytics and terminal replay for this run')
   // enableSelfUpdate is set ONLY here (the genuine `build init` entrypoint) so
   // the self-update prompt's re-exec replays `build init`, never a wrapper

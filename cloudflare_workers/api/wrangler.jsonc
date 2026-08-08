@@ -269,7 +269,7 @@
         },
         {
           "binding": "CLI_USAGE",
-          "dataset": "cli_usage"
+          "dataset": "cli_usage_alpha"
         }
       ],
       "d1_databases": [

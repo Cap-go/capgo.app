@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Database } from '../types/supabase.types'
 import { confirm as confirmC, intro, log, outro, spinner } from '@clack/prompts'
 import { Table } from '@sauber/table'
-import { formatError, getCapgoCliHttpStatus, invokeCapgoCliApi } from '../utils'
+import { formatError, invokeCapgoCliApi } from '../utils'
 
 interface CheckVersionOptions {
   silent?: boolean
@@ -77,47 +77,33 @@ async function fetchChannelsPage(appid: string, page: number, options: CapgoHttp
 }
 
 export async function checkVersionNotUsedInChannel(
-  _supabase: SupabaseClient<Database>,
+  supabase: SupabaseClient<Database>,
   appid: string,
   versionData: Database['public']['Tables']['app_versions']['Row'],
   options: CheckVersionOptions = {},
 ) {
   const { silent = false, autoUnlink = false, channelName, requireMatch = false, apikey, supaHost, supaAnon } = options
   if (!apikey) {
-    // TODO(cli-http): callers must pass apikey for HTTP channel lookups
+    // TODO(cli-http): callers must pass apikey for HTTP unlink
     throw new Error('Missing API key for channel version check')
   }
 
-  const channels: HttpChannel[] = []
-  let page = 0
-  while (true) {
-    const { data, error } = await fetchChannelsPage(appid, page, { apikey, silent, supaHost, supaAnon }, channelName)
-    if (error) {
-      if (channelName && getCapgoCliHttpStatus(error) === 400) {
-        break
-      }
-      if (!silent)
-        log.error(`Cannot check Version ${appid}@${versionData.name}: ${formatError(error)}`)
-      throw new Error(`Cannot check version ${appid}@${versionData.name}: ${formatError(error)}`)
-    }
-    if (channelName) {
-      if (data && !Array.isArray(data))
-        channels.push(data)
-      break
-    }
-    const batch = Array.isArray(data) ? data : []
-    if (!batch.length)
-      break
-    channels.push(...batch)
-    if (batch.length < 50)
-      break
-    page += 1
+  // Channel link reads stay on PostgREST so preview keys (no app.read_channels) still work.
+  let query = supabase
+    .from('channels')
+    .select('id, name, version, rollout_version')
+    .eq('app_id', appid)
+  if (channelName)
+    query = query.eq('name', channelName)
+  const { data, error } = await query
+  if (error) {
+    if (!silent)
+      log.error(`Cannot check Version ${appid}@${versionData.name}: ${formatError(error)}`)
+    throw new Error(`Cannot check version ${appid}@${versionData.name}: ${formatError(error)}`)
   }
 
-  const channelFound = channels.filter((channel) => {
-    const versionId = channel.version?.id
-    const rolloutId = channel.rollout_version ?? channel.rollout_version_info?.id
-    return versionId === versionData.id || rolloutId === versionData.id
+  const channelFound = (data ?? []).filter((channel) => {
+    return channel.version === versionData.id || channel.rollout_version === versionData.id
   })
 
   if (!channelFound.length) {
@@ -155,9 +141,9 @@ export async function checkVersionNotUsedInChannel(
       app_id: appid,
       channel: channel.name,
     }
-    if (channel.version?.id === versionData.id)
+    if (channel.version === versionData.id)
       body.version = null
-    if ((channel.rollout_version ?? channel.rollout_version_info?.id) === versionData.id) {
+    if (channel.rollout_version === versionData.id) {
       body.rollout_version = null
       body.rollout_enabled = false
       body.rollout_percentage_bps = 0
@@ -230,18 +216,53 @@ export function findChannel(supabase: SupabaseClient<Database>, appId: string, n
     .single()
 }
 
-export function findBundleIdByChannelName(supabase: SupabaseClient<Database>, appId: string, name: string) {
-  return supabase
+export type ChannelLinkedVersion = { id: number, name: string }
+
+export async function findVersionsLinkedToChannel(
+  supabase: SupabaseClient<Database>,
+  appId: string,
+  name: string,
+): Promise<{ stable: ChannelLinkedVersion | null, rollout: ChannelLinkedVersion | null }> {
+  const { data, error } = await supabase
     .from('channels')
     .select(`
       id,
-      version:app_versions!channels_version_fkey(id, name)
+      version:app_versions!channels_version_fkey(id, name),
+      rollout_version_info:app_versions!channels_rollout_version_fkey(id, name)
     `)
     .eq('app_id', appId)
     .eq('name', name)
-    .single()
-    .throwOnError()
-    .then(({ data }) => data?.version)
+    .maybeSingle()
+
+  if (error || !data)
+    return { stable: null, rollout: null }
+
+  const stable = data.version && typeof data.version === 'object' && !Array.isArray(data.version)
+    ? data.version as ChannelLinkedVersion
+    : null
+  const rollout = data.rollout_version_info && typeof data.rollout_version_info === 'object' && !Array.isArray(data.rollout_version_info)
+    ? data.rollout_version_info as ChannelLinkedVersion
+    : null
+  return { stable, rollout }
+}
+
+export async function isVersionLinkedToOtherChannel(
+  supabase: SupabaseClient<Database>,
+  appId: string,
+  versionId: number,
+  excludeChannelName: string,
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('channels')
+    .select('id')
+    .eq('app_id', appId)
+    .neq('name', excludeChannelName)
+    .or(`version.eq.${versionId},rollout_version.eq.${versionId}`)
+    .limit(1)
+
+  if (error)
+    return true
+  return (data?.length ?? 0) > 0
 }
 
 export type { Channel } from '../schemas/channel'

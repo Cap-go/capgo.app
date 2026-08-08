@@ -650,7 +650,12 @@ export async function setChannelInternal(channel: string, appId: string, options
           supaAnon: options.supaAnon,
         })
         const matched = versions.find(v => v.id === channelPayload.rollout_version)
-        channelBody.rolloutVersion = matched?.name ?? null
+        if (!matched) {
+          if (!silent)
+            log.error('Cannot set channel because no rollout bundle version could be resolved')
+          throw new Error('Cannot set channel without a rollout bundle version')
+        }
+        channelBody.rolloutVersion = matched.name
       }
       else {
         channelBody.rolloutVersion = channelPayload.rollout_version

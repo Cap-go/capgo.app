@@ -99,6 +99,8 @@ export interface OnboardingShellProps {
   guidedHelperUsable: boolean
   apikey?: string
   supaHost?: string
+  /** Custom Supabase anon key for self-hosting (--supa-anon). */
+  supaAnon?: string
   /** Correlation id for this onboarding run; threaded into every analytics event the apps emit. */
   journeyId: string
   /** Pre-resolved platform (--platform flag or the single existing native dir); skips the picker. */
@@ -131,7 +133,7 @@ const AnalyticsNotice: FC = () => (
   </Box>
 )
 
-const OnboardingShell: FC<OnboardingShellProps> = ({ appId, iosBundleIdInitial, iosDir, androidDir, guidedHelperUsable, apikey, supaHost, journeyId, initialPlatform, updateInfo, analyticsNotice, onResolvePlatform, onStep, onResult, onBeforeExit }) => {
+const OnboardingShell: FC<OnboardingShellProps> = ({ appId, iosBundleIdInitial, iosDir, androidDir, guidedHelperUsable, apikey, supaHost, supaAnon, journeyId, initialPlatform, updateInfo, analyticsNotice, onResolvePlatform, onStep, onResult, onBeforeExit }) => {
   const { exit } = useApp()
   const { cols, rows } = useTerminalSize()
   const [ready, setReady] = useState<ReadyApp | null>(null)
@@ -221,9 +223,9 @@ const OnboardingShell: FC<OnboardingShellProps> = ({ appId, iosBundleIdInitial, 
   // exiting the wizard. The app owns the size decision so a shrink→regrow keeps
   // the user exactly where they were.
   if (ready?.kind === 'ios')
-    return <OnboardingApp appId={appId} iosBundleIdInitial={iosBundleIdInitial} initialProgress={ready.progress} iosDir={iosDir} guidedHelperUsable={guidedHelperUsable} apikey={apikey} supaHost={supaHost} journeyId={journeyId} onStep={onStep} onResult={onResult} onBeforeExit={onBeforeExit} />
+    return <OnboardingApp appId={appId} iosBundleIdInitial={iosBundleIdInitial} initialProgress={ready.progress} iosDir={iosDir} guidedHelperUsable={guidedHelperUsable} apikey={apikey} supaHost={supaHost} supaAnon={supaAnon} journeyId={journeyId} onStep={onStep} onResult={onResult} onBeforeExit={onBeforeExit} />
   if (ready?.kind === 'android')
-    return <AndroidOnboardingApp appId={appId} initialProgress={ready.progress} androidDir={androidDir} apikey={apikey} supaHost={supaHost} journeyId={journeyId} onStep={onStep} onResult={onResult} onBeforeExit={onBeforeExit} />
+    return <AndroidOnboardingApp appId={appId} initialProgress={ready.progress} androidDir={androidDir} apikey={apikey} supaHost={supaHost} supaAnon={supaAnon} journeyId={journeyId} onStep={onStep} onResult={onResult} onBeforeExit={onBeforeExit} />
   if (ready?.kind === 'appflow')
     return <AppflowApp appId={appId} scope={ready.scope} apikey={apikey} supaHost={supaHost} journeyId={journeyId} onStep={onStep} onResult={onResult} onBeforeExit={onBeforeExit} />
 

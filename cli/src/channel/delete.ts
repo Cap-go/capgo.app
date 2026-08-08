@@ -1,7 +1,7 @@
 import type { ChannelDeleteOptions } from '../schemas/channel'
 import { intro, log, outro } from '@clack/prompts'
 import { check2FAComplianceForApp, checkAppExistsAndHasPermissionOrgErr } from '../api/app'
-import { delChannel, findBundleIdByChannelName, findChannel } from '../api/channels'
+import { delChannel, findChannel, findVersionsLinkedToChannel, isVersionLinkedToOtherChannel } from '../api/channels'
 import { deleteAppVersion } from '../api/versions'
 import { createSupabaseClient, findSavedKey, formatError, getAppId, getConfig, getOrganizationId, hasCliPermission, invokeCapgoCliApi, sendEvent } from '../utils'
 
@@ -81,19 +81,29 @@ export async function deleteChannelInternal(channelId: string, appId: string, op
     if (options.deleteBundle && !silent)
       log.info(`Deleting bundle ${appId}#${channelId} from Capgo`)
 
-    // App-admin cleanup: soft-delete the linked bundle, then DELETE the channel.
+    // App-admin cleanup: soft-delete linked bundles that are not shared, then DELETE the channel.
     // Do not send delete_bundle=true here — that path is preview-key only.
+    const softDeletedBundleNames: string[] = []
     if (options.deleteBundle) {
-      const bundle = await findBundleIdByChannelName(supabase, appId, channelId)
-      if (bundle?.name && !silent)
-        log.info(`Deleting bundle ${bundle.name} from Capgo`)
-      if (bundle?.name) {
+      const linked = await findVersionsLinkedToChannel(supabase, appId, channelId)
+      const candidates = [linked.stable, linked.rollout].filter((row): row is NonNullable<typeof row> => !!row?.name)
+      const uniqueByName = new Map(candidates.map(row => [row.name, row]))
+      for (const bundle of uniqueByName.values()) {
+        const shared = await isVersionLinkedToOtherChannel(supabase, appId, bundle.id, channelId)
+        if (shared) {
+          if (!silent)
+            log.info(`Keeping bundle ${bundle.name}; it is still linked to another channel`)
+          continue
+        }
+        if (!silent)
+          log.info(`Deleting bundle ${bundle.name} from Capgo`)
         await deleteAppVersion(supabase, appId, bundle.name, {
           silent,
           apikey: options.apikey,
           supaHost: options.supaHost,
           supaAnon: options.supaAnon,
         })
+        softDeletedBundleNames.push(bundle.name)
       }
     }
 
@@ -102,6 +112,13 @@ export async function deleteChannelInternal(channelId: string, appId: string, op
 
     const deleteStatus = await delChannel(httpOptions, channelId, appId, false)
     if (deleteStatus.error) {
+      if (softDeletedBundleNames.length) {
+        await supabase
+          .from('app_versions')
+          .update({ deleted: false })
+          .eq('app_id', appId)
+          .in('name', softDeletedBundleNames)
+      }
       if (!silent)
         log.error(`Cannot delete Channel 🙀 ${formatError(deleteStatus.error)}`)
       throw new Error(`Cannot delete channel: ${formatError(deleteStatus.error)}`)

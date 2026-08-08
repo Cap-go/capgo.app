@@ -53,6 +53,9 @@ async function loadCliUsage() {
 
 const totalInvocations = computed(() => cliUsage.value?.total || 0)
 
+const distinctVersionCount = computed(() => Object.keys(cliUsage.value?.by_version ?? {}).length)
+const distinctCommandCount = computed(() => Object.keys(cliUsage.value?.by_command ?? {}).length)
+
 const versionEntries = computed(() => {
   const breakdown = cliUsage.value?.by_version ?? {}
   return Object.entries(breakdown)
@@ -142,14 +145,14 @@ displayStore.defaultBack = '/dashboard'
             />
             <AdminStatsCard
               title="CLI versions"
-              :value="versionEntries.length"
+              :value="distinctVersionCount"
               color-class="text-[#119eff]"
               :is-loading="isLoadingStats"
               subtitle="Distinct versions"
             />
             <AdminStatsCard
               title="Commands"
-              :value="commandEntries.length"
+              :value="distinctCommandCount"
               color-class="text-[#10b981]"
               :is-loading="isLoadingStats"
               subtitle="Distinct commands"

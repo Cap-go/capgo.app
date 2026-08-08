@@ -108,7 +108,7 @@ export async function getStats(apikey: string, query: QueryStats, after: string 
 
     const response = await fetch(statsEndpoint, {
       method: 'POST',
-headers: buildCliRequestHeaders({ 'Content-Type': 'application/json', capgkey: apikey }),
+      headers: buildCliRequestHeaders({ 'Content-Type': 'application/json', capgkey: apikey }),
       body: JSON.stringify(effectiveQuery),
     })
 
