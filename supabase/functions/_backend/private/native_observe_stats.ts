@@ -1,11 +1,11 @@
-import type { Context } from 'hono'
 import type { Dayjs } from 'dayjs'
+import type { Context } from 'hono'
 import type { UpdateDeliveryTimingEventCF } from '../utils/cloudflare.ts'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc.js'
 import { Hono } from 'hono/tiny'
-import { parseStatsDurationMs, readNativeObservePluginVersionsCF, readUpdateDeliveryTimingEventsCF, resolveUpdateDeliveryTimingDurationMs } from '../utils/cloudflare.ts'
+import { parseStatsDurationMs, readDevicePlatformChannelByIdsCF, readNativeObservePluginVersionsCF, readUpdateDeliveryTimingEventsCF, resolveUpdateDeliveryTimingDurationMs } from '../utils/cloudflare.ts'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog } from '../utils/logging.ts'
@@ -18,11 +18,13 @@ dayjs.extend(utc)
 const supportedPeriodDays = [1, 3, 7, 30] as const
 type NativeObservePeriodDays = typeof supportedPeriodDays[number]
 type NativeObserveView = 'global' | 'plugins'
+type NativeObserveVersionGroup = 'version' | 'version_platform' | 'version_platform_channel'
 
 interface NativeObserveStatsRequest {
   app_id: string
   days?: number
   view?: NativeObserveView
+  version_group?: NativeObserveVersionGroup
 }
 
 interface NativeObserveMetricRow {
@@ -37,6 +39,8 @@ interface NativeObserveMetricRow {
 
 interface NativeObserveVersionRow {
   version_name: string
+  platform?: string | null
+  channel_name?: string | null
   events: number | string
   devices: number | string
   issue_count: number | string
@@ -75,6 +79,8 @@ interface NativeObserveEventSample {
   version_name: string
   device_id: string
   duration_ms: number | null
+  platform?: string
+  channel_name?: string
 }
 
 type NativeObserveNumericValue = number | string | null | undefined
@@ -84,6 +90,7 @@ interface BuildNativeObserveResponseInput {
   days: NativeObservePeriodDays
   start: string
   end: string
+  versionGroup: NativeObserveVersionGroup
   dailyRows: NativeObserveMetricRow[]
   actionRows: NativeObserveMetricRow[]
   versionRows: NativeObserveVersionRow[]
@@ -198,6 +205,8 @@ FROM filtered`
 const versionStatsQuery = `${filteredStatsCte}
 SELECT
   version_name,
+  NULL::text AS platform,
+  NULL::text AS channel_name,
   count(*)::integer AS events,
   count(DISTINCT device_id)::integer AS devices,
   count(*) FILTER (WHERE action = ANY($5::public.stats_action[]))::integer AS issue_count,
@@ -208,6 +217,56 @@ FROM filtered
 GROUP BY version_name
 ORDER BY events DESC, version_name ASC
 LIMIT 12`
+
+const filteredStatsWithDevicesCte = `WITH filtered AS (
+  SELECT
+    to_char(date_trunc('day', stats.created_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD') AS day,
+    stats.action,
+    COALESCE(NULLIF(stats.version_name, ''), 'unknown') AS version_name,
+    COALESCE(NULLIF(devices.platform::text, ''), 'unknown') AS platform,
+    COALESCE(NULLIF(devices.default_channel, ''), 'unknown') AS channel_name,
+    stats.device_id,
+    ${durationExpression.replaceAll('metadata', 'stats.metadata')} AS duration_ms
+  FROM public.stats
+  LEFT JOIN public.devices
+    ON devices.app_id = stats.app_id
+    AND devices.device_id = stats.device_id
+  WHERE stats.app_id = $1
+    AND stats.created_at >= $2::timestamptz
+    AND stats.created_at < $3::timestamptz
+    AND stats.action = ANY($4::public.stats_action[])
+)`
+
+function buildVersionStatsQuery(versionGroup: NativeObserveVersionGroup): string {
+  if (versionGroup === 'version')
+    return versionStatsQuery
+
+  const groupColumns = versionGroup === 'version_platform'
+    ? 'version_name, platform'
+    : 'version_name, platform, channel_name'
+  const channelSelect = versionGroup === 'version_platform'
+    ? 'NULL::text AS channel_name,'
+    : 'channel_name,'
+  const orderColumns = versionGroup === 'version_platform'
+    ? 'events DESC, version_name ASC, platform ASC'
+    : 'events DESC, version_name ASC, platform ASC, channel_name ASC'
+
+  return `${filteredStatsWithDevicesCte}
+SELECT
+  version_name,
+  platform,
+  ${channelSelect}
+  count(*)::integer AS events,
+  count(DISTINCT device_id)::integer AS devices,
+  count(*) FILTER (WHERE action = ANY($5::public.stats_action[]))::integer AS issue_count,
+  count(DISTINCT device_id) FILTER (WHERE action = ANY($5::public.stats_action[]))::integer AS affected_devices,
+  percentile_cont(0.9) WITHIN GROUP (ORDER BY duration_ms) FILTER (WHERE action = 'app_launch_ready'::public.stats_action AND duration_ms IS NOT NULL) AS launch_p90_ms,
+  percentile_cont(0.9) WITHIN GROUP (ORDER BY duration_ms) FILTER (WHERE action = 'webview_page_loaded'::public.stats_action AND duration_ms IS NOT NULL) AS webview_load_p90_ms
+FROM filtered
+GROUP BY ${groupColumns}
+ORDER BY ${orderColumns}
+LIMIT 36`
+}
 
 const pluginVersionStatsQuery = `SELECT
   COALESCE(NULLIF(plugin_version, ''), 'unknown') AS plugin_version,
@@ -247,6 +306,31 @@ function normalizeNativeObserveView(value: unknown): NativeObserveView | null {
   if (value === 'plugins')
     return 'plugins'
   return null
+}
+
+function normalizeNativeObserveVersionGroup(value: unknown): NativeObserveVersionGroup | null {
+  if (value === undefined || value === 'version')
+    return 'version'
+  if (value === 'version_platform' || value === 'version_platform_channel')
+    return value
+  return null
+}
+
+function needsVersionDeviceDimensions(versionGroup: NativeObserveVersionGroup) {
+  return versionGroup !== 'version'
+}
+
+function versionGroupBucketKey(
+  versionGroup: NativeObserveVersionGroup,
+  versionName: string,
+  platform = 'unknown',
+  channelName = 'unknown',
+) {
+  if (versionGroup === 'version')
+    return versionName
+  if (versionGroup === 'version_platform')
+    return `${versionName}\0${platform}`
+  return `${versionName}\0${platform}\0${channelName}`
 }
 function generateDateLabels(from: Date, to: Date) {
   const start = dayjs(from).utc().startOf('day')
@@ -341,17 +425,23 @@ function toNativeObserveEventSamples(events: UpdateDeliveryTimingEventCF[]): Nat
   return samples
 }
 
+interface NativeObserveVersionBucket {
+  version_name: string
+  platform: string | null
+  channel_name: string | null
+  devices: Set<string>
+  issueDevices: Set<string>
+  events: number
+  issueCount: number
+  launchDurations: number[]
+  webviewDurations: number[]
+}
+
 interface NativeObserveAggregateState {
   dailyMap: Map<string, { events: number, devices: Set<string>, durations: number[] }>
   actionMap: Map<string, { events: number, devices: Set<string>, durations: number[] }>
-  versionMap: Map<string, {
-    devices: Set<string>
-    issueDevices: Set<string>
-    events: number
-    issueCount: number
-    launchDurations: number[]
-    webviewDurations: number[]
-  }>
+  versionMap: Map<string, NativeObserveVersionBucket>
+  versionGroup: NativeObserveVersionGroup
   allDevices: Set<string>
   issueDevices: Set<string>
   issueCount: number
@@ -361,11 +451,14 @@ interface NativeObserveAggregateState {
   events: number
 }
 
-function createNativeObserveAggregateState(): NativeObserveAggregateState {
+function createNativeObserveAggregateState(
+  versionGroup: NativeObserveVersionGroup = 'version',
+): NativeObserveAggregateState {
   return {
     dailyMap: new Map(),
     actionMap: new Map(),
     versionMap: new Map(),
+    versionGroup,
     allDevices: new Set(),
     issueDevices: new Set(),
     issueCount: 0,
@@ -376,7 +469,7 @@ function createNativeObserveAggregateState(): NativeObserveAggregateState {
   }
 }
 
-type NativeObserveMetricBucket = { events: number, devices: Set<string>, durations: number[] }
+interface NativeObserveMetricBucket { events: number, devices: Set<string>, durations: number[] }
 function bumpMetricBucket(
   map: Map<string, NativeObserveMetricBucket>,
   key: string,
@@ -413,7 +506,22 @@ function foldOverviewCounters(state: NativeObserveAggregateState, sample: Native
 }
 
 function foldVersionBucket(state: NativeObserveAggregateState, sample: NativeObserveEventSample) {
-  const version = state.versionMap.get(sample.version_name) ?? {
+  const platform = needsVersionDeviceDimensions(state.versionGroup)
+    ? (sample.platform || 'unknown')
+    : null
+  const channelName = state.versionGroup === 'version_platform_channel'
+    ? (sample.channel_name || 'unknown')
+    : null
+  const key = versionGroupBucketKey(
+    state.versionGroup,
+    sample.version_name,
+    platform ?? 'unknown',
+    channelName ?? 'unknown',
+  )
+  const version = state.versionMap.get(key) ?? {
+    version_name: sample.version_name,
+    platform,
+    channel_name: channelName,
     devices: new Set<string>(),
     issueDevices: new Set<string>(),
     events: 0,
@@ -428,7 +536,7 @@ function foldVersionBucket(state: NativeObserveAggregateState, sample: NativeObs
     version.issueDevices.add(sample.device_id)
   }
   pushTimedActionDuration(sample.action, sample.duration_ms, version.launchDurations, version.webviewDurations)
-  state.versionMap.set(sample.version_name, version)
+  state.versionMap.set(key, version)
 }
 
 function foldNativeObserveSamples(state: NativeObserveAggregateState, samples: NativeObserveEventSample[]) {
@@ -474,12 +582,15 @@ function finalizeNativeObserveAggregate(state: NativeObserveAggregateState): {
       return eventCmp !== 0 ? eventCmp : a.action.localeCompare(b.action)
     })
 
-  const versionRows: NativeObserveVersionRow[] = [...state.versionMap.entries()]
-    .map(([version_name, value]) => {
+  const versionLimit = state.versionGroup === 'version' ? 12 : 36
+  const versionRows: NativeObserveVersionRow[] = [...state.versionMap.values()]
+    .map((value) => {
       const launchMetrics = metricFromDurations(value.launchDurations)
       const webviewMetrics = metricFromDurations(value.webviewDurations)
       return {
-        version_name,
+        version_name: value.version_name,
+        platform: value.platform,
+        channel_name: value.channel_name,
         events: value.events,
         devices: value.devices.size,
         issue_count: value.issueCount,
@@ -490,9 +601,17 @@ function finalizeNativeObserveAggregate(state: NativeObserveAggregateState): {
     })
     .sort((a, b) => {
       const eventCmp = toCount(b.events) - toCount(a.events)
-      return eventCmp !== 0 ? eventCmp : a.version_name.localeCompare(b.version_name)
+      if (eventCmp !== 0)
+        return eventCmp
+      const versionCmp = a.version_name.localeCompare(b.version_name)
+      if (versionCmp !== 0)
+        return versionCmp
+      const platformCmp = (a.platform ?? '').localeCompare(b.platform ?? '')
+      if (platformCmp !== 0)
+        return platformCmp
+      return (a.channel_name ?? '').localeCompare(b.channel_name ?? '')
     })
-    .slice(0, 12)
+    .slice(0, versionLimit)
 
   const launchSorted = [...state.launchDurations].sort((a, b) => a - b)
   const webviewSorted = [...state.webviewDurations].sort((a, b) => a - b)
@@ -515,8 +634,11 @@ function finalizeNativeObserveAggregate(state: NativeObserveAggregateState): {
   }
 }
 
-function aggregateNativeObserveSamples(samples: NativeObserveEventSample[]) {
-  const state = createNativeObserveAggregateState()
+function aggregateNativeObserveSamples(
+  samples: NativeObserveEventSample[],
+  versionGroup: NativeObserveVersionGroup = 'version',
+) {
+  const state = createNativeObserveAggregateState(versionGroup)
   foldNativeObserveSamples(state, samples)
   return finalizeNativeObserveAggregate(state)
 }
@@ -584,6 +706,7 @@ function buildNativeObserveResponse(input: BuildNativeObserveResponseInput) {
       start: input.start,
       end: input.end,
     },
+    version_group: input.versionGroup,
     overview: {
       total_events: toCount(overview.events),
       total_devices: totalDevices,
@@ -617,6 +740,8 @@ function buildNativeObserveResponse(input: BuildNativeObserveResponseInput) {
     })),
     versions: input.versionRows.map(row => ({
       version_name: row.version_name,
+      platform: row.platform ?? null,
+      channel_name: row.channel_name ?? null,
       events: toCount(row.events),
       devices: toCount(row.devices),
       issue_count: toCount(row.issue_count),
@@ -667,6 +792,30 @@ async function readReleaseMarkers(
 const MAX_NATIVE_OBSERVE_EVENTS = 100_000
 const NATIVE_OBSERVE_CHUNK_CONCURRENCY = 4
 
+async function enrichNativeObserveSamplesWithDeviceMeta(
+  c: Context<MiddlewareKeyVariables>,
+  appId: string,
+  samples: NativeObserveEventSample[],
+  versionGroup: NativeObserveVersionGroup,
+) {
+  if (!needsVersionDeviceDimensions(versionGroup) || !samples.length)
+    return samples
+
+  const deviceMeta = await readDevicePlatformChannelByIdsCF(
+    c,
+    appId,
+    samples.map(sample => sample.device_id),
+  )
+  return samples.map((sample) => {
+    const meta = deviceMeta.get(sample.device_id)
+    return {
+      ...sample,
+      platform: meta?.platform ?? 'unknown',
+      channel_name: meta?.channel_name ?? 'unknown',
+    }
+  })
+}
+
 async function foldNativeObserveTimingEventsCFChunked(
   c: Context<MiddlewareKeyVariables>,
   appId: string,
@@ -700,7 +849,13 @@ async function foldNativeObserveTimingEventsCFChunked(
     for (const chunk of chunks) {
       if (state.events >= MAX_NATIVE_OBSERVE_EVENTS)
         break
-      foldNativeObserveSamples(state, toNativeObserveEventSamples(chunk))
+      const samples = await enrichNativeObserveSamplesWithDeviceMeta(
+        c,
+        appId,
+        toNativeObserveEventSamples(chunk),
+        state.versionGroup,
+      )
+      foldNativeObserveSamples(state, samples)
     }
   }
 }
@@ -713,6 +868,7 @@ async function readNativeObserveStatsSB(
   start: Dayjs,
   endExclusive: Dayjs,
   endInclusive: Dayjs,
+  versionGroup: NativeObserveVersionGroup,
 ) {
   const params = [appId, start.toISOString(), endExclusive.toISOString(), nativeObserveActions]
   const paramsWithIssues = [...params, issueActions]
@@ -722,7 +878,10 @@ async function readNativeObserveStatsSB(
     const dailyResult = await db.query<NativeObserveMetricRow>(dailyStatsQuery, params)
     const actionResult = await db.query<NativeObserveMetricRow>(actionStatsQuery, params)
     const overviewResult = await db.query<NativeObserveOverviewRow>(overviewStatsQuery, paramsWithIssues)
-    const versionResult = await db.query<NativeObserveVersionRow>(versionStatsQuery, paramsWithIssues)
+    const versionResult = await db.query<NativeObserveVersionRow>(
+      buildVersionStatsQuery(versionGroup),
+      paramsWithIssues,
+    )
     const releaseMarkersResult = await db.query<NativeObserveReleaseMarker>(releaseMarkersQuery, params.slice(0, 3))
 
     return buildNativeObserveResponse({
@@ -730,6 +889,7 @@ async function readNativeObserveStatsSB(
       days,
       start: start.toISOString(),
       end: endInclusive.toISOString(),
+      versionGroup,
       dailyRows: dailyResult.rows,
       actionRows: actionResult.rows,
       versionRows: versionResult.rows,
@@ -754,8 +914,9 @@ async function readNativeObserveStatsCF(
   start: Dayjs,
   endExclusive: Dayjs,
   endInclusive: Dayjs,
+  versionGroup: NativeObserveVersionGroup,
 ) {
-  const state = createNativeObserveAggregateState()
+  const state = createNativeObserveAggregateState(versionGroup)
   await foldNativeObserveTimingEventsCFChunked(c, appId, start, endExclusive, state)
   const aggregates = finalizeNativeObserveAggregate(state)
   const releaseMarkers = await readReleaseMarkers(c, appId, start, endExclusive)
@@ -765,6 +926,7 @@ async function readNativeObserveStatsCF(
     days,
     start: start.toISOString(),
     end: endInclusive.toISOString(),
+    versionGroup,
     dailyRows: aggregates.dailyRows,
     actionRows: aggregates.actionRows,
     versionRows: aggregates.versionRows,
@@ -773,7 +935,12 @@ async function readNativeObserveStatsCF(
   })
 }
 
-async function readNativeObserveStats(c: Context<MiddlewareKeyVariables>, appId: string, days: NativeObservePeriodDays) {
+async function readNativeObserveStats(
+  c: Context<MiddlewareKeyVariables>,
+  appId: string,
+  days: NativeObservePeriodDays,
+  versionGroup: NativeObserveVersionGroup,
+) {
   const period = getRollingStatsPeriod(days)
   const start = dayjs(period.start)
   const endExclusive = dayjs(period.endExclusive)
@@ -790,6 +957,7 @@ async function readNativeObserveStats(c: Context<MiddlewareKeyVariables>, appId:
       start,
       endExclusive,
       endInclusive,
+      versionGroup,
     )
   }
 
@@ -801,6 +969,7 @@ async function readNativeObserveStats(c: Context<MiddlewareKeyVariables>, appId:
     start,
     endExclusive,
     endInclusive,
+    versionGroup,
   )
 }
 
@@ -854,6 +1023,10 @@ app.post('/', middlewareAuth, async (c) => {
   if (view === 'global' && !days)
     throw simpleError('invalid_days', 'days must be one of 1, 3, 7, or 30')
 
+  const versionGroup = normalizeNativeObserveVersionGroup(body.version_group)
+  if (!versionGroup)
+    throw simpleError('invalid_version_group', 'version_group must be version, version_platform, or version_platform_channel')
+
   if (!(await checkPermission(c, 'app.read', { appId: body.app_id })))
     throw simpleError('app_access_denied', 'You can\'t access this app', { app_id: body.app_id })
 
@@ -861,7 +1034,12 @@ app.post('/', middlewareAuth, async (c) => {
     if (view === 'plugins')
       return c.json(await readNativeObservePluginStats(c, body.app_id))
 
-    return c.json(await readNativeObserveStats(c, body.app_id, days as NativeObservePeriodDays))
+    return c.json(await readNativeObserveStats(
+      c,
+      body.app_id,
+      days as NativeObservePeriodDays,
+      versionGroup,
+    ))
   }
   catch (error) {
     cloudlog({ requestId: c.get('requestId'), message: 'Error fetching native observe stats', error })
@@ -875,8 +1053,10 @@ export const nativeObserveStatsTestUtils = {
   buildNativeObserveResponse,
   generateDateLabels,
   normalizeNativeObservePeriodDays,
+  normalizeNativeObserveVersionGroup,
   normalizeNativeObserveView,
   parseMetaDurationMs,
   percentileCont,
   toNativeObserveEventSamples,
+  versionGroupBucketKey,
 }

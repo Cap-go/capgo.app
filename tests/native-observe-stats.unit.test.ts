@@ -19,6 +19,14 @@ describe('native observe stats helpers', () => {
     expect(nativeObserveStatsTestUtils.normalizeNativeObserveView('unknown')).toBeNull()
   })
 
+  it.concurrent('normalizes supported version groups', () => {
+    expect(nativeObserveStatsTestUtils.normalizeNativeObserveVersionGroup(undefined)).toBe('version')
+    expect(nativeObserveStatsTestUtils.normalizeNativeObserveVersionGroup('version')).toBe('version')
+    expect(nativeObserveStatsTestUtils.normalizeNativeObserveVersionGroup('version_platform')).toBe('version_platform')
+    expect(nativeObserveStatsTestUtils.normalizeNativeObserveVersionGroup('version_platform_channel')).toBe('version_platform_channel')
+    expect(nativeObserveStatsTestUtils.normalizeNativeObserveVersionGroup('unknown')).toBeNull()
+  })
+
   it.concurrent('generates inclusive UTC day labels', () => {
     expect(nativeObserveStatsTestUtils.generateDateLabels(
       new Date('2026-07-01T18:00:00Z'),
@@ -32,6 +40,7 @@ describe('native observe stats helpers', () => {
       days: 7,
       start: '2026-07-01T00:00:00.000Z',
       end: '2026-07-02T23:59:59.999Z',
+      versionGroup: 'version',
       dailyRows: [
         { day: '2026-07-01', action: 'app_launch_ready', events: 4, devices: 3, p50_ms: 410.4, p90_ms: 912.8, p99_ms: 1200 },
         { day: '2026-07-01', action: 'webview_page_loaded', events: 3, devices: 2, p50_ms: 720, p90_ms: 1450, p99_ms: 1800 },
@@ -62,13 +71,14 @@ describe('native observe stats helpers', () => {
 
     expect(response.overview.issue_free_rate).toBe(75)
     expect(response.overview.launch_p90_ms).toBe(913)
+    expect(response.version_group).toBe('version')
     expect(response.daily.launches).toEqual([4, 0])
     expect(response.daily.webview_loads).toEqual([3, 0])
     expect('pluginVersions' in response).toBe(false)
     expect(response.daily.issue_events).toEqual([0, 1])
     expect(response.daily.launch_p50_ms).toEqual([410, null])
     expect(response.actionBreakdown[1]).toMatchObject({ action: 'app_crash', is_issue: true })
-    expect(response.versions[0]).toMatchObject({ version_name: '1.2.3', issue_free_rate: 75, launch_p90_ms: 913 })
+    expect(response.versions[0]).toMatchObject({ version_name: '1.2.3', platform: null, channel_name: null, issue_free_rate: 75, launch_p90_ms: 913 })
     expect(response.releaseMarkers).toHaveLength(1)
   })
 
@@ -180,6 +190,45 @@ describe('native observe stats helpers', () => {
       expect.objectContaining({ version_name: '1.2.3', events: 4, devices: 3, issue_count: 1, affected_devices: 1 }),
       expect.objectContaining({ version_name: '1.2.4', events: 1, devices: 1, issue_count: 1, affected_devices: 1 }),
     ])
+  })
+
+  it.concurrent('aggregates version rows by platform and channel when requested', () => {
+    const aggregates = nativeObserveStatsTestUtils.aggregateNativeObserveSamples([
+      {
+        day: '2026-07-01',
+        action: 'app_launch_ready',
+        version_name: '1.0.0',
+        device_id: 'android-prod',
+        duration_ms: 400,
+        platform: 'android',
+        channel_name: 'production',
+      },
+      {
+        day: '2026-07-01',
+        action: 'app_launch_ready',
+        version_name: '1.0.0',
+        device_id: 'android-beta',
+        duration_ms: 500,
+        platform: 'android',
+        channel_name: 'beta',
+      },
+      {
+        day: '2026-07-01',
+        action: 'app_launch_ready',
+        version_name: '1.0.0',
+        device_id: 'ios-prod',
+        duration_ms: 450,
+        platform: 'ios',
+        channel_name: 'production',
+      },
+    ], 'version_platform_channel')
+
+    expect(aggregates.versionRows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ version_name: '1.0.0', platform: 'android', channel_name: 'production', devices: 1, events: 1 }),
+      expect.objectContaining({ version_name: '1.0.0', platform: 'android', channel_name: 'beta', devices: 1, events: 1 }),
+      expect.objectContaining({ version_name: '1.0.0', platform: 'ios', channel_name: 'production', devices: 1, events: 1 }),
+    ]))
+    expect(aggregates.versionRows).toHaveLength(3)
   })
 
   it.concurrent('maps CF timing events into observe samples', () => {
