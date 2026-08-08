@@ -22,6 +22,7 @@ import { isCI } from 'ci-info'
 // Native fetch is available in Node.js >= 18
 import prettyjson from 'prettyjson'
 import * as tus from 'tus-js-client'
+import { buildCliRequestHeaders } from './analytics/cli-headers'
 import { getGlobalAnalyticsProps } from './analytics/global-props'
 import { getActiveUploadReporter } from './bundle/reporter'
 import { createTimedFetch, isSupabaseInstrumentationEnabled } from './analytics/supabase-perf'
@@ -729,7 +730,11 @@ export async function getRemoteConfig(silent = false, signal?: AbortSignal) {
   const run = (async () => {
     const localConfig = await getLocalConfig(silent)
     try {
-      const response = await fetch(`${localConfig.hostApi}/private/config`, signal ? { signal } : {})
+      const silentKey = findSavedKeySilent()
+      const response = await fetch(`${localConfig.hostApi}/private/config`, {
+        ...(signal ? { signal } : {}),
+        headers: buildCliRequestHeaders(silentKey ? { capgkey: silentKey } : undefined),
+      })
       if (!response.ok)
         throw new Error(`HTTP error! status: ${response.status}`)
       const data = await response.json() as CapgoConfig
@@ -769,7 +774,10 @@ export async function getRemoteFileConfig() {
   const localConfig = await getLocalConfig()
   // call host + /api/get_config and parse the result as json using fetch
   try {
-    const response = await fetch(`${localConfig.hostFilesApi}/files/config`)
+    const silentKey = findSavedKeySilent()
+    const response = await fetch(`${localConfig.hostFilesApi}/files/config`, {
+      headers: buildCliRequestHeaders(silentKey ? { capgkey: silentKey } : undefined),
+    })
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`)
     }
@@ -855,6 +863,31 @@ export interface CapgoCliInvokeOptions {
   useFilesHost?: boolean
   supaHost?: string
   supaAnon?: string
+  signal?: AbortSignal
+}
+
+
+export function getCapgoCliHttpStatus(error: unknown): number | undefined {
+  const context = (error as { context?: { status?: number } } | null)?.context
+  return typeof context?.status === 'number' ? context.status : undefined
+}
+
+export async function readCapgoCliApiErrorPayload(error: unknown): Promise<{ error?: string, message?: string } | null> {
+  const response = (error as { context?: Response } | null)?.context
+  if (!response || typeof response.clone !== 'function')
+    return null
+  try {
+    const text = await response.clone().text()
+    try {
+      return JSON.parse(text) as { error?: string, message?: string }
+    }
+    catch {
+      return text ? { message: text } : null
+    }
+  }
+  catch {
+    return null
+  }
 }
 
 /**
@@ -896,15 +929,16 @@ export async function invokeCapgoCliApi<T = any>(
   try {
     const response = await fetch(url, {
       method,
-      headers: {
+      headers: buildCliRequestHeaders({
         'Content-Type': 'application/json',
         // Self-host Edge Functions validate the Supabase anon JWT; Capgo cloud uses the API key.
         'Authorization': usesFunctionsV1 && anonKey ? `Bearer ${anonKey}` : options.apikey,
         'capgkey': options.apikey,
-      },
+      }),
       body: method === 'GET' || method === 'HEAD'
         ? undefined
         : (typeof options.body === 'string' ? options.body : JSON.stringify(options.body ?? {})),
+      signal: options.signal,
     })
 
     if (!response.ok) {
@@ -1077,6 +1111,7 @@ export async function checkRemoteCliMessages(supabase: SupabaseClient<Database>,
   }
 }
 
+// TODO(cli-http): billing/entitlement RPCs have no Capgo HTTP equivalents yet
 export async function checkPlanValid(supabase: SupabaseClient<Database>, orgId: string, appId?: string, warning = true) {
   const config = await getRemoteConfig()
 
@@ -1680,9 +1715,7 @@ export async function uploadTUS(apikey: string, data: Buffer, orgId: string, app
         filename: `orgs/${orgId}/apps/${appId}/${name}.zip`,
         filetype: 'application/zip',
       },
-      headers: {
-        Authorization: apikey,
-      },
+      headers: buildCliRequestHeaders({ Authorization: apikey }),
       // Callback for errors which cannot be fixed using retries
       onError(error) {
         log.error(`Error uploading bundle: ${error.message}`)
@@ -1803,6 +1836,7 @@ export async function setVersionManifest(
   }
 }
 
+// TODO(cli-http): Prefer POST channel via invokeCapgoCliApi; this SDK upsert remains for callers not yet migrated.
 export async function updateOrCreateChannel(supabase: SupabaseClient<Database>, update: Database['public']['Tables']['channels']['Insert']) {
   // console.log('updateOrCreateChannel', update)
   if (!update.app_id || !update.name || !update.created_by) {
@@ -1877,10 +1911,10 @@ export async function sendEvent(capgkey: string, payload: TrackOptions & { notif
       const fetchResponse = await fetch(`${config.hostApi}/private/events`, {
         method: 'POST',
         body: JSON.stringify(enrichedPayload),
-        headers: {
+        headers: buildCliRequestHeaders({
           'Content-Type': 'application/json',
           'capgkey': capgkey,
-        },
+        }),
         signal: eventSignal,
       })
 
@@ -2001,6 +2035,7 @@ export async function getOrganizationWithPermission(
   return organization
 }
 
+// TODO(cli-http): no Capgo HTTP identity endpoint yet (rpc get_user_id)
 export async function resolveUserIdFromApiKey(supabase: SupabaseClient<Database>, apikey: string, silent = false) {
   const { data: dataUser, error: userIdError } = await supabase
     .rpc('get_user_id', { apikey })
@@ -2027,6 +2062,7 @@ interface CliPermissionScope {
   channelId?: number | null
 }
 
+// TODO(cli-http): no Capgo HTTP check-permission endpoint yet (rpc cli_check_permission)
 export async function hasCliPermission(
   supabase: SupabaseClient<Database>,
   apikey: string,
@@ -2082,14 +2118,21 @@ export async function assertOrgPermission(
   await assertCliPermission(supabase, apikey, permissionKey, { orgId }, { message, silent })
 }
 
-export async function getOrganizationId(supabase: SupabaseClient<Database>, appId: string) {
-  const { data, error } = await supabase.from('apps')
-    .select('owner_org')
-    .eq('app_id', appId)
-    .single()
+export async function getOrganizationId(
+  apikey: string,
+  appId: string,
+  options?: { supaHost?: string, supaAnon?: string },
+) {
+  const { data, error } = await invokeCapgoCliApi<{ owner_org?: string }>(`app/${encodeURIComponent(appId)}`, {
+    apikey,
+    method: 'GET',
+    body: undefined,
+    supaHost: options?.supaHost,
+    supaAnon: options?.supaAnon,
+  })
 
-  if (!data || error) {
-    // Surface the underlying PostgREST cause instead of discarding it — a bare
+  if (!data?.owner_org || error) {
+    // Surface the underlying cause instead of discarding it — a bare
     // "Cannot get organization id" leaves both users and triage with no signal.
     log.error(`Cannot get organization id for app id ${appId}: ${formatError(error)}`)
     throw new Error(`Cannot get organization id for app id ${appId}`)

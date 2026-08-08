@@ -26,7 +26,7 @@ import type { DOMElement } from 'ink'
 import { Box, measureElement, Newline, Text, useApp, useInput, useStdout } from 'ink'
 // src/build/onboarding/android/ui/app.tsx
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { createSupabaseClient, findBuildCommandForProjectType, findProjectType, findSavedKeySilent, getOrganizationId, getPackageScripts, getPMAndCommand } from '../../../../utils.js'
+import { findBuildCommandForProjectType, findProjectType, findSavedKeySilent, getOrganizationId, getPackageScripts, getPMAndCommand } from '../../../../utils.js'
 import { loadSavedCredentials, updateSavedCredentials } from '../../../credentials.js'
 import { releaseCapturedLogs, runCapgoAiAnalysis } from '../../../../ai/analyze.js'
 import { createStreamingMarkdownRenderer } from '../../../../ai/stream-markdown.js'
@@ -171,6 +171,8 @@ interface AppProps {
   apikey?: string
   // Capgo API gateway override (--supa-host); prod when omitted.
   supaHost?: string
+  /** Custom Supabase anon key for self-hosting (--supa-anon). */
+  supaAnon?: string
   /** Correlation id for this onboarding run; emitted as `journey_id` on every analytics event. */
   journeyId: string
   /** Reports the current step to the shell on every transition, so the caller can
@@ -260,7 +262,7 @@ function emptyProgress(appId: string): AndroidOnboardingProgress {
   }
 }
 
-const AndroidOnboardingApp: FC<AppProps> = ({ appId, initialProgress, androidDir, apikey, supaHost, journeyId, onStep, onResult, onBeforeExit }) => {
+const AndroidOnboardingApp: FC<AppProps> = ({ appId, initialProgress, androidDir, apikey, supaHost, supaAnon, journeyId, onStep, onResult, onBeforeExit }) => {
   const { exit } = useApp()
   const exitAfterBeforeExit = useCallback(() => {
     exitAfterOnboardingBeforeExit(onBeforeExit, exit)
@@ -330,11 +332,7 @@ const AndroidOnboardingApp: FC<AppProps> = ({ appId, initialProgress, androidDir
 
     let cancelled = false
     void (async () => {
-      const supabase = await createSupabaseClient(resolvedApiKeyRef.current!, undefined, undefined, true)
-        .catch(() => null)
-      if (!supabase || cancelled)
-        return
-      const orgId = await getOrganizationId(supabase, appId).catch(() => null)
+      const orgId = await getOrganizationId(resolvedApiKeyRef.current!, appId, { supaHost, supaAnon }).catch(() => null)
       if (orgId && !cancelled)
         setResolvedOrgId(orgId)
     })()
@@ -342,7 +340,7 @@ const AndroidOnboardingApp: FC<AppProps> = ({ appId, initialProgress, androidDir
     return () => {
       cancelled = true
     }
-  }, [appId])
+  }, [appId, supaHost, supaAnon])
 
   const [logLines, setLogLines] = useState<LogEntry[]>([])
   const [error, setError] = useState<string | null>(null)

@@ -1,13 +1,36 @@
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
+import { resolveCliUsageIdentity, trackCliUsage } from '../utils/cli_usage.ts'
 import { useCors } from '../utils/hono.ts'
-import { existInEnv, getEnv, isStripeConfigured } from '../utils/utils.ts'
+import { backgroundTask, existInEnv, getEnv, isStripeConfigured } from '../utils/utils.ts'
 
 export const app = new Hono<MiddlewareKeyVariables>()
 
 app.use('/', useCors)
 
-app.get('/', (c) => {
+app.get('/', async (c) => {
+  const cliVersion = c.req.header('x-cli-version') ?? ''
+  if (cliVersion) {
+    const capgkey = c.req.header('capgkey') ?? c.req.header('x-api-key') ?? undefined
+    const event = {
+      cli_version: cliVersion,
+      command: c.req.header('x-cli-command') ?? '',
+      node_version: c.req.header('x-cli-node') ?? '',
+      os_platform: c.req.header('x-cli-os') ?? '',
+      source: 'config' as const,
+      api_version: c.req.header('capgo_api') ?? '',
+    }
+    // Keep /private/config fast: resolve apikey identity off the response path.
+    backgroundTask(c, (async () => {
+      const identity = await resolveCliUsageIdentity(c, capgkey)
+      trackCliUsage(c, {
+        ...event,
+        apikey_id: identity.apikey_id,
+        org_id: identity.org_id,
+      })
+    })())
+  }
+
   return c.json({
     supaHost: existInEnv(c, 'SUPABASE_REPLICATE_URL') ? getEnv(c, 'SUPABASE_REPLICATE_URL') : getEnv(c, 'SUPABASE_URL'),
     supbaseId: getEnv(c, 'SUPABASE_URL')?.split('//')[1].split('.')[0].split(':')[0],

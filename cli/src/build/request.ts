@@ -65,6 +65,7 @@ import { contactSupport } from '../support/contact-support.js'
 import { appendInternalLog, getInternalLogPath, startInternalLog } from '../support/internal-log.js'
 import { uploadSupportLogs } from '../support/support-upload.js'
 import { offerSupportUploadBeforeAi } from '../support/support-upload-prompt.js'
+import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { assertCliPermission, canPromptInteractively, createSupabaseClient, findSavedKey, getConfig, getOrganizationId, getRemoteConfig, sendEvent, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
 import { mergeCredentials, MIN_OUTPUT_RETENTION_SECONDS, parseInAppUpdatePriority, parseOptionalBoolean, parseOutputRetentionSeconds } from './credentials'
 import { buildProvisioningMap } from './credentials-command'
@@ -464,9 +465,7 @@ async function streamBuildLogs(
 
     const startResponse = await fetch(startUrl, {
       method: 'POST',
-      headers: {
-        'x-capgo-log-token': logsToken,
-      },
+headers: buildCliRequestHeaders({ 'x-capgo-log-token': logsToken }),
     })
     if (!startResponse.ok) {
       const errorText = await startResponse.text().catch(() => 'unknown error')
@@ -729,9 +728,7 @@ async function pollBuildStatus(
       return 'cancelled'
     try {
       const response = await fetch(`${host}/build/status?job_id=${encodeURIComponent(jobId)}&app_id=${encodeURIComponent(appId)}&platform=${platform}`, {
-        headers: {
-          authorization: apikey,
-        },
+        headers: buildCliRequestHeaders({ authorization: apikey }),
         signal: abortSignal,
       })
 
@@ -1448,7 +1445,7 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
     // run first gives the batched report instead of a bare "Cannot get organization id".
     let orgId = ''
     try {
-      orgId = await getOrganizationId(supabase, appId)
+      orgId = await getOrganizationId(options.apikey!, appId, { supaHost: options.supaHost, supaAnon: options.supaAnon })
     }
     catch {
       // App not accessible / no org — surfaced by prescan (app-exists) and the permission backstop.
@@ -1941,10 +1938,10 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
       `${host}/build/request`,
       {
         method: 'POST',
-        headers: {
+        headers: buildCliRequestHeaders({
           'Content-Type': 'application/json',
-          'authorization': options.apikey,
-        },
+          authorization: options.apikey,
+        }),
         body: JSON.stringify(requestPayload),
       },
       maxRetries,
@@ -2088,9 +2085,9 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
             filename: basename(zipPath),
             filetype: 'application/zip',
           },
-          headers: {
+          headers: buildCliRequestHeaders({
             authorization: options.apikey,
-          },
+          }),
           // Callback before request is sent
           onBeforeRequest(req) {
             if (verbose) {
@@ -2186,10 +2183,10 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
 
       const startResponse = await fetch(`${host}/build/start/${buildRequest.job_id}`, {
         method: 'POST',
-        headers: {
+        headers: buildCliRequestHeaders({
           'Content-Type': 'application/json',
-          'authorization': options.apikey,
-        },
+          authorization: options.apikey,
+        }),
         body: JSON.stringify({ app_id: appId }),
       })
 
@@ -2215,10 +2212,10 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
         try {
           await fetch(`${host}/build/cancel/${buildRequest.job_id}`, {
             method: 'POST',
-            headers: {
+            headers: buildCliRequestHeaders({
               'Content-Type': 'application/json',
-              'authorization': options.apikey,
-            },
+              authorization: options.apikey,
+            }),
             body: JSON.stringify({ app_id: appId }),
             signal: cancelAbort.signal,
           })
@@ -2254,9 +2251,9 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
       const statusCheck = async (): Promise<string | null> => {
         try {
           const response = await fetch(`${host}/build/status?job_id=${encodeURIComponent(buildRequest.job_id)}&app_id=${encodeURIComponent(appId)}&platform=${platform}`, {
-            headers: {
+            headers: buildCliRequestHeaders({
               authorization: options.apikey,
-            },
+            }),
           })
           if (!response.ok) {
             return null

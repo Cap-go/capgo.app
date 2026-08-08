@@ -60,6 +60,15 @@ describe('admin stats validation', () => {
     expect(parsed.success).toBe(true)
   })
 
+  it.concurrent('accepts the cli usage metric', () => {
+    const parsed = safeParseSchema(adminStatsBodySchema, {
+      ...baseBody,
+      metric_category: 'cli_usage',
+    })
+
+    expect(parsed.success).toBe(true)
+  })
+
   it.concurrent('accepts the trial plan breakdown metric', () => {
     const parsed = safeParseSchema(adminStatsBodySchema, {
       ...baseBody,

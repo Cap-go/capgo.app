@@ -38,7 +38,7 @@ import { appendInternalLog, getInternalLogPath } from '../../../support/internal
 import { redactSecrets } from '../../../support/redact.js'
 import { uploadSupportLogs } from '../../../support/support-upload.js'
 import { offerSupportUploadBeforeAi } from '../../../support/support-upload-prompt.js'
-import { createSupabaseClient, findBuildCommandForProjectType, findProjectType, findSavedKeySilent, getOrganizationId, getPackageScripts, getPMAndCommand } from '../../../utils.js'
+import { findBuildCommandForProjectType, findProjectType, findSavedKeySilent, getOrganizationId, getPackageScripts, getPMAndCommand } from '../../../utils.js'
 import { loadSavedCredentials, updateSavedCredentials } from '../../credentials.js'
 import { writeReleaseBundleId } from '../../pbxproj-parser.js'
 import { handleCustomMsg } from '../../qr.js'
@@ -279,6 +279,8 @@ interface AppProps {
   apikey?: string
   // Capgo API gateway override (--supa-host); prod when omitted.
   supaHost?: string
+  /** Custom Supabase anon key for self-hosting (--supa-anon). */
+  supaAnon?: string
   /** Correlation id for this onboarding run; emitted as `journey_id` on every analytics event. */
   journeyId: string
   /** Reports the current step to the shell on every transition, so the caller can
@@ -331,7 +333,7 @@ async function runRunnerCommand(runner: string, args: string[]): Promise<{ succe
   })
 }
 
-const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgress, iosDir, guidedHelperUsable, apikey, supaHost, journeyId, onStep, onResult, onBeforeExit }) => {
+const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgress, iosDir, guidedHelperUsable, apikey, supaHost, supaAnon, journeyId, onStep, onResult, onBeforeExit }) => {
   const { exit } = useApp()
   const exitAfterBeforeExit = useCallback(() => {
     exitAfterOnboardingBeforeExit(onBeforeExit, exit)
@@ -515,11 +517,7 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
 
     let cancelled = false
     void (async () => {
-      const supabase = await createSupabaseClient(resolvedApiKeyRef.current!, undefined, undefined, true)
-        .catch(() => null)
-      if (!supabase || cancelled)
-        return
-      const orgId = await getOrganizationId(supabase, appId).catch(() => null)
+      const orgId = await getOrganizationId(resolvedApiKeyRef.current!, appId, { supaHost, supaAnon }).catch(() => null)
       if (orgId && !cancelled)
         setResolvedOrgId(orgId)
     })()
@@ -527,7 +525,7 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
     return () => {
       cancelled = true
     }
-  }, [appId])
+  }, [appId, supaHost, supaAnon])
 
   const [log, setLog] = useState<LogEntry[]>([])
   const [error, setError] = useState<string | null>(null)

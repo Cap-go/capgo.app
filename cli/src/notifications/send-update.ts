@@ -1,4 +1,5 @@
 import { log, spinner } from '@clack/prompts'
+import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { findSavedKey, formatError, getLocalConfig } from '../utils'
 
 interface SendUpdateNotificationsOptions {
@@ -45,10 +46,7 @@ export async function sendUpdateNotificationsForChannels(options: SendUpdateNoti
 
       const response = await fetch(`${localConfig.hostApi}/notifications/update-check`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          capgkey: apikey,
-        },
+headers: buildCliRequestHeaders({ 'Content-Type': 'application/json', capgkey: apikey }),
         body: JSON.stringify({
           appId: options.appId,
           target: { broadcast: true },

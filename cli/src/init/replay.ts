@@ -9,6 +9,7 @@ import { isCI } from 'ci-info'
 import { Window } from 'happy-dom'
 import { snapshot } from 'rrweb-snapshot'
 import pack from '../../package.json'
+import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { isTruthyEnvValue } from '../posthog'
 import { redactSecrets } from '../support/redact'
 import { defaultApiHost, getRemoteConfig } from '../utils'
@@ -494,10 +495,7 @@ const defaultReplayTransport: InitReplayTransport = async (url, body, apikey, si
   try {
     const response = await fetch(url, {
       body: JSON.stringify(body),
-      headers: {
-        'Content-Type': 'application/json',
-        'capgkey': apikey,
-      },
+headers: buildCliRequestHeaders({ 'Content-Type': 'application/json', capgkey: apikey }),
       method: 'POST',
       signal,
     })

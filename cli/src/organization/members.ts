@@ -9,6 +9,7 @@ import {
   createSupabaseClient,
   findSavedKey,
   formatError,
+  invokeCapgoCliApi,
 } from '../utils'
 
 interface PasswordPolicyConfig {
@@ -102,6 +103,7 @@ export async function listMembersInternal(orgId: string, options: OptionsBase, s
   await assertOrgPermission(supabase, enrichedOptions.apikey, 'org.read_members', orgId, `Insufficient permissions to list members of organization ${orgId}`, silent)
   await check2FAAccessForOrg(supabase, orgId, silent)
 
+  // TODO(cli-http): GET organization omits security settings (enforcing_2fa, password_policy_config, ...)
   // Get organization name and security settings
   const { data: orgData, error: orgError } = await supabase
     .from('orgs')
@@ -121,9 +123,19 @@ export async function listMembersInternal(orgId: string, options: OptionsBase, s
   if (!silent)
     log.info(`Getting members of "${orgData.name}" from Capgo`)
 
-  // Get members
-  const { data: members, error: membersError } = await supabase
-    .rpc('get_org_members', { guild_id: orgId })
+  // Get members via HTTP
+  const { data: members, error: membersError } = await invokeCapgoCliApi<Array<{
+    uid: string
+    email: string
+    role: string
+    is_tmp: boolean
+  }>>(`organization/members?orgId=${encodeURIComponent(orgId)}`, {
+    apikey: enrichedOptions.apikey!,
+    method: 'GET',
+    body: undefined,
+    supaHost: enrichedOptions.supaHost,
+    supaAnon: enrichedOptions.supaAnon,
+  })
 
   if (membersError) {
     if (!silent)
@@ -131,6 +143,7 @@ export async function listMembersInternal(orgId: string, options: OptionsBase, s
     throw new Error(`Cannot get organization members: ${formatError(membersError)}`)
   }
 
+  // TODO(cli-http): no HTTP equivalent for check_org_members_2fa_enabled
   // Get 2FA status for all members (only super_admins can call this)
   const { data: membersStatus, error: statusError } = await supabase
     .rpc('check_org_members_2fa_enabled', { org_id: orgId })
@@ -150,6 +163,7 @@ export async function listMembersInternal(orgId: string, options: OptionsBase, s
   // Get password policy compliance status (only if password policy is enabled)
   let passwordPolicyStatus: Array<{ user_id: string, password_policy_compliant: boolean }> | null = null
   if (hasPasswordPolicy) {
+    // TODO(cli-http): no HTTP equivalent for check_org_members_password_policy
     const { data: policyStatus, error: policyError } = await supabase
       .rpc('check_org_members_password_policy', { org_id: orgId })
 

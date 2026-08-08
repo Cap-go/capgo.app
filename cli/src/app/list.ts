@@ -1,11 +1,10 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
 import type { OptionsBase } from '../schemas/base'
 import type { Database } from '../types/supabase.types'
 import { intro, log, outro } from '@clack/prompts'
 import { Table } from '@sauber/table'
-import { trackEvent, withSupabaseSource } from '../analytics/track'
+import { trackEvent } from '../analytics/track'
 import { checkAlerts } from '../api/update'
-import { createSupabaseClient, findSavedKey, getHumanDate, resolveUserIdFromApiKey } from '../utils'
+import { createSupabaseClient, findSavedKey, formatError, getHumanDate, invokeCapgoCliApi, resolveUserIdFromApiKey } from '../utils'
 
 function displayApps(data: Database['public']['Tables']['apps']['Row'][]) {
   const table = new Table()
@@ -19,24 +18,41 @@ function displayApps(data: Database['public']['Tables']['apps']['Row'][]) {
   log.success(table.toString())
 }
 
-async function getActiveApps(supabase: SupabaseClient<Database>, silent: boolean, orgIds: string[]) {
-  // Scope the list to the caller's orgs. An unfiltered apps select makes Postgres
-  // evaluate per-row RBAC across the entire apps table, which can hit the
-  // statement timeout on large databases and surface as "Apps not found".
-  // Filtering by owner_org first restricts the rows RLS evaluates to the caller's.
-  const { data, error } = await withSupabaseSource('apps.list', () => supabase
-    .from('apps')
-    .select()
-    .in('owner_org', orgIds)
-    .order('created_at', { ascending: false }))
+async function getActiveApps(
+  apikey: string,
+  silent: boolean,
+  options: { supaHost?: string, supaAnon?: string },
+) {
+  const all: Database['public']['Tables']['apps']['Row'][] = []
+  let page = 0
+  while (true) {
+    const { data, error } = await invokeCapgoCliApi<Database['public']['Tables']['apps']['Row'][]>(
+      `app?page=${page}`,
+      {
+        apikey,
+        method: 'GET',
+        body: undefined,
+        supaHost: options.supaHost,
+        supaAnon: options.supaAnon,
+      },
+    )
 
-  if (error) {
-    if (!silent)
-      log.error('Apps not found')
-    throw new Error('Apps not found')
+    if (error) {
+      if (!silent)
+        log.error('Apps not found')
+      throw new Error(`Apps not found: ${formatError(error)}`)
+    }
+
+    const batch = Array.isArray(data) ? data : []
+    if (!batch.length)
+      break
+    all.push(...batch)
+    if (batch.length < 50)
+      break
+    page += 1
   }
 
-  return data ?? []
+  return all.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
 }
 
 export async function listAppInternal(options: OptionsBase, silent = false) {
@@ -49,28 +65,17 @@ export async function listAppInternal(options: OptionsBase, silent = false) {
 
   const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
 
+  // TODO(cli-http): identity still uses rpc via resolveUserIdFromApiKey
   await resolveUserIdFromApiKey(supabase, options.apikey)
 
   if (!silent)
     log.info('Getting active bundle in Capgo')
 
-  // Resolve the orgs this identity can access (RBAC-aware, SECURITY DEFINER — works for
-  // both API keys and logged-in sessions) so the list can be scoped to them. Without
-  // this, the unfiltered apps query times out on large databases (see getActiveApps).
-  const { data: orgs, error: orgsError } = await supabase.rpc('get_orgs_v6')
-  if (orgsError) {
-    if (!silent)
-      log.error('Could not load your organizations')
-    throw new Error(`Could not load organizations: ${orgsError.message}`)
-  }
-  const orgIds = (orgs ?? []).map(org => org.gid).filter(Boolean)
-  if (!orgIds.length) {
-    if (!silent)
-      log.error('No apps found')
-    throw new Error('No apps found')
-  }
-
-  const allApps = await getActiveApps(supabase, silent, orgIds)
+  // TODO(cli-http): previously scoped via get_orgs_v6; GET app already scopes to key orgs server-side
+  const allApps = await getActiveApps(options.apikey!, silent, {
+    supaHost: options.supaHost,
+    supaAnon: options.supaAnon,
+  })
 
   void trackEvent({ channel: 'app', event: 'Apps Listed', icon: '📋', tags: { app_count: allApps.length } })
 
@@ -89,6 +94,6 @@ export async function listAppInternal(options: OptionsBase, silent = false) {
   return allApps
 }
 
-export async function listApp(options: OptionsBase) {
-  return listAppInternal(options, false)
+export async function listApp(options: OptionsBase, silent = false) {
+  return listAppInternal(options, silent)
 }

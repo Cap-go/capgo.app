@@ -26,6 +26,8 @@ export interface OnboardingBuilderOptions {
   // build request AND AI analysis hit the same host as the plain CLI flow
   // (preprod/self-hosted testing). Defaults to prod when omitted.
   supaHost?: string
+  /** Custom Supabase anon key for self-hosting (--supa-anon). */
+  supaAnon?: string
   /**
    * Offer the self-update prompt as the first wizard screen. ONLY the genuine
    * `build init` / `onboarding` entrypoint sets this. Other callers that reach
@@ -254,6 +256,7 @@ export async function onboardingBuilderCommand(options: OnboardingBuilderOptions
       androidDir,
       apikey: options.apikey,
       supaHost: options.supaHost,
+      supaAnon: options.supaAnon,
       journeyId,
       initialPlatform,
       // Whether the iOS flow may offer guided ASC-key creation (see the probe

@@ -1,4 +1,5 @@
 import { readFile, stat, writeFile } from 'node:fs/promises'
+import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { cleanupCapturedJobFiles, getAiPromptPath, getLogCapturePath } from './log-capture'
 import { SYSTEM_PROMPT } from './prompt'
 import { createSseParser } from './sse'
@@ -124,11 +125,7 @@ export async function postAnalyzeStreamRequest(input: PostAnalyzeStreamInput): P
   try {
     const res = await fetch(url, {
       method: 'POST',
-      headers: {
-        'capgkey': input.apikey,
-        'content-type': 'application/json',
-        'accept': 'text/event-stream',
-      },
+headers: buildCliRequestHeaders({ capgkey: input.apikey, 'content-type': 'application/json', accept: 'text/event-stream' }),
       body: JSON.stringify({ jobId: input.jobId, appId: input.appId, logs: input.logs }),
       signal: controller.signal,
     })

@@ -5,6 +5,7 @@ import pack from '../package.json'
 import { categorizeCliError } from './analytics/error-category'
 import { applyCommandAnalyticsOptOut, applyRawCommandAnalyticsOptOut } from './analytics/opt-out'
 import { enableSupabaseInstrumentation } from './analytics/supabase-perf'
+import { setCurrentCliCommand } from './analytics/cli-headers'
 import { extractCommandContext, flushAnalytics, trackCommandFailed, trackCommandInvoked, trackCommandSucceeded } from './analytics/track'
 import { addApp } from './app/add'
 import { debugApp } from './app/debug'
@@ -89,6 +90,7 @@ let currentCommandPath = 'unknown'
 program.hook('preAction', (_thisCommand, actionCommand) => {
   setConfigWriteTarget(resolveCapacitorConfigTargetPath(actionCommand.optsWithGlobals().capacitorConfig))
   currentCommandPath = getCommandPath(actionCommand)
+  setCurrentCliCommand(currentCommandPath)
   applyCommandAnalyticsOptOut(currentCommandPath, actionCommand.opts())
   trackCommandInvoked(currentCommandPath, extractCommandContext(actionCommand))
 })
@@ -898,6 +900,7 @@ build
   .option('-a, --apikey <apikey>', 'API key to link to your account')
   .option('-p, --platform <platform>', 'Platform to onboard (ios or android). If omitted, auto-detects when only one native folder exists; prompts otherwise.')
   .option('--supa-host <supaHost>', optionDescriptions.supaHost)
+  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
   .option('--no-analytics', 'Disable build onboarding analytics and terminal replay for this run')
   // enableSelfUpdate is set ONLY here (the genuine `build init` entrypoint) so
   // the self-update prompt's re-exec replays `build init`, never a wrapper

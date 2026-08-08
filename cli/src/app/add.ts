@@ -3,6 +3,7 @@ import type { AppOptions } from '../schemas/app'
 import type { Organization } from '../utils'
 import { existsSync, readFileSync } from 'node:fs'
 import { intro, log, outro } from '@clack/prompts'
+import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { getInvocationSource } from '../analytics/track'
 import { checkAppExists, defaultAppIconPath, getAppIconStoragePath, newIconPath } from '../api/app'
 import { checkAlerts } from '../api/update'
@@ -55,11 +56,12 @@ function ensureOptions(appId: string, options: AppOptions, silent: boolean) {
 }
 
 async function ensureAppDoesNotExist(
-  supabase: Awaited<ReturnType<typeof createSupabaseClient>>,
+  apikey: string,
   appId: string,
   silent: boolean,
+  options?: { supaHost?: string, supaAnon?: string },
 ) {
-  const appExist = await checkAppExists(supabase, appId)
+  const appExist = await checkAppExists(apikey, appId, options)
   if (!appExist)
     return
 
@@ -103,13 +105,17 @@ async function createAppViaApi(
     supaHost: params.supaHost,
     supaAnon: params.supaAnon,
   })
+  const usesFunctionsV1 = apiHost.includes('/functions/v1')
+  const authorization = usesFunctionsV1 && params.supaAnon
+    ? `Bearer ${params.supaAnon}`
+    : apikey
   const response = await fetch(`${apiHost}/app`, {
     method: 'POST',
-    headers: {
+    headers: buildCliRequestHeaders({
       'Content-Type': 'application/json',
-      'Authorization': apikey,
+      'Authorization': authorization,
       'capgkey': apikey,
-    },
+    }),
     body: JSON.stringify({
       owner_org: params.ownerOrg,
       app_id: params.appId,
@@ -156,7 +162,7 @@ export async function addAppInternal(
   const supabase = await createSupabaseClient(options.apikey!, options.supaHost, options.supaAnon)
   const userId = await resolveUserIdFromApiKey(supabase, options.apikey)
 
-  await ensureAppDoesNotExist(supabase, appId, silent)
+  await ensureAppDoesNotExist(options.apikey!, appId, silent, { supaHost: options.supaHost, supaAnon: options.supaAnon })
 
   if (!organization)
     organization = await getOrganizationWithPermission(supabase, options.apikey, 'org.create_app')
@@ -208,7 +214,8 @@ export async function addAppInternal(
   // Icon upload is best-effort. Storage RLS issues must not block app creation;
   // the web onboarding path already continues without an icon on upload failure.
   if (iconBuff && iconType) {
-    const { error } = await supabase.storage
+    // TODO(cli-http): icon upload still requires supabase storage
+  const { error } = await supabase.storage
       .from('images')
       .upload(iconPath, iconBuff, {
         contentType: iconType,
