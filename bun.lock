@@ -127,7 +127,7 @@
         "dompurify": "^3.4.12",
         "drizzle-orm": "1.0.0-rc.4",
         "gsap": "^3.15.0",
-        "hono": "4.12.31",
+        "hono": "4.12.34",
         "mime": "^4.1.0",
         "pg": "^8.22.0",
         "pinia": "4.0.2",
@@ -211,7 +211,7 @@
     },
     "cli": {
       "name": "@capgo/cli",
-      "version": "8.31.1",
+      "version": "8.33.0",
       "bin": {
         "capgo": "dist/index.js",
       },
@@ -1966,7 +1966,7 @@
 
     "hls.js": ["hls.js@1.6.16", "", {}, "sha512-VSIRpLfRwlAAdGL4wiTucx2ScRipo0ed1FBatWkyt832jC4CReKstga6yIhYVwGu9LOBjuX9wzmRMeQdBJtzEA=="],
 
-    "hono": ["hono@4.12.31", "", {}, "sha512-zJIHFrl6bq3RDd2YusFNCDlM8qUprxKswyi/OPzPyzKDdyBXDqWx8bZlZ7R+saTdSTatUmb3O7K4SspGPaEOQg=="],
+    "hono": ["hono@4.12.34", "", {}, "sha512-GqXJqY/xJkJmuloTrnV1ZEXG3fqte+VjkUqoRNZXcrUidiUOP4fMSIHHY4tsqZBK++kVyWmt/AAfSUuy57/eSA=="],
 
     "hookable": ["hookable@5.5.3", "", {}, "sha512-Yc+BQe8SvoXH1643Qez1zqLRmbA5rCL+sSmk6TVos0LWVfNIB7PGncdlId77WzLGSIB5KaWgTaNTs2lNVEI6VQ=="],
 
