@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
+  getTableDateRangeSignature,
   parseDateRangeQuery,
   serializeDateRangeQuery,
+  shouldRecountOnTableReload,
 } from '../src/services/dateRange'
 
 describe('date range query parse/serialize', () => {
@@ -47,5 +49,40 @@ describe('date range query parse/serialize', () => {
       start: '2026-03-01T00:00:00.000Z',
       end: '2026-03-15T00:00:00.000Z',
     })
+  })
+
+  it.concurrent('keeps rolling table signatures stable across wall-clock ticks', () => {
+    expect(getTableDateRangeSignature('30min')).toEqual({ mode: '30min' })
+    expect(getTableDateRangeSignature('30day')).toEqual({ mode: '30day' })
+    expect(getTableDateRangeSignature('30min')).toEqual(getTableDateRangeSignature('30min'))
+  })
+
+  it.concurrent('includes custom bounds in the table signature', () => {
+    const start = new Date('2026-03-01T00:00:00.000Z')
+    const end = new Date('2026-03-15T00:00:00.000Z')
+    expect(getTableDateRangeSignature('custom', [start, end])).toEqual({
+      mode: 'custom',
+      start: '2026-03-01T00:00:00.000Z',
+      end: '2026-03-15T00:00:00.000Z',
+    })
+    expect(getTableDateRangeSignature('custom', null)).toEqual({ mode: 'custom' })
+  })
+
+  it.concurrent('skips recount on page-only navigation and recounts on filter or reload', () => {
+    expect(shouldRecountOnTableReload({
+      filtersChanged: false,
+      previousPage: 1,
+      requestedPage: 2,
+    })).toBe(false)
+    expect(shouldRecountOnTableReload({
+      filtersChanged: true,
+      previousPage: 2,
+      requestedPage: 2,
+    })).toBe(true)
+    expect(shouldRecountOnTableReload({
+      filtersChanged: false,
+      previousPage: 3,
+      requestedPage: 3,
+    })).toBe(true)
   })
 })

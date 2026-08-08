@@ -193,3 +193,37 @@ export function serializeDateRangeQuery(
     return { range: DEFAULT_DATE_RANGE_PRESET }
   return { range: mode }
 }
+
+/**
+ * Stable filter identity for table reloads.
+ * Rolling presets must NOT embed `now`-based timestamps — those change every
+ * call and would reset cursor pagination back to page 1 on each next click.
+ */
+export function getTableDateRangeSignature(
+  mode: DateRangePreset,
+  customRange?: [Date, Date] | null,
+): { mode: DateRangePreset, start?: string, end?: string } {
+  if (mode !== 'custom')
+    return { mode }
+  if (!customRange?.[0] || !customRange?.[1])
+    return { mode: 'custom' }
+  return {
+    mode: 'custom',
+    start: customRange[0].toISOString(),
+    end: customRange[1].toISOString(),
+  }
+}
+
+/**
+ * Whether a devices/logs table reload should re-run the expensive count query.
+ * Page-only navigation keeps the cached total so 100k+ device apps stay usable.
+ */
+export function shouldRecountOnTableReload(options: {
+  filtersChanged: boolean
+  previousPage: number
+  requestedPage: number
+}): boolean {
+  if (options.filtersChanged)
+    return true
+  return options.previousPage === options.requestedPage
+}
