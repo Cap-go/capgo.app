@@ -694,6 +694,7 @@
   "cannot-sign-off": "Cannot log off",
   "sso-account-linked": "Your SSO account has been linked to your existing account. Please sign in again.",
   "sso-linked-success": "SSO sign-in successful. Welcome!",
+  "sso-check-failed": "We could not check your sign-in options. Continue with your password.",
   "cannot-test-app-some": "Cannot test app something wrong happened",
   "cannot-transfer-app": "Cannot transfer organization. Please check the browser console and report the error to <a href='https://support.capgo.app/' target='_blank' class='text-blue-500 underline hover:text-blue-600'>Capgo support</a>.",
   "cannot-update-bundle-metadata": "Cannot update bundle metadata, please check the browser console",
