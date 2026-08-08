@@ -402,8 +402,9 @@ async function handleReloadClick() {
 async function reloadAllCharts() {
   // Force reload of main dashboard data
   // End date should be next UTC midnight to include all of today's UTC data
-  const last30DaysEnd = addUtcDays(normalizeToUtcStartOfDay(), 1)
-  const last30DaysStart = addUtcDays(normalizeToUtcStartOfDay(), -29)
+  const todayUtc = normalizeToUtcStartOfDay()
+  const last30DaysEnd = addUtcDays(todayUtc, 1)
+  const last30DaysStart = addUtcDays(todayUtc, -29)
 
   const orgId = effectiveOrganization.value?.gid
   if (orgId) {
@@ -548,8 +549,9 @@ function filterToBillingPeriod(fullData: { mau: number[], storage: number[], sto
 async function getUsages(forceRefetch = false) {
   // Always work with last 30 UTC days of data
   // End date should be next UTC midnight to include all of today's UTC data
-  const last30DaysEnd = addUtcDays(normalizeToUtcStartOfDay(), 1)
-  const last30DaysStart = addUtcDays(normalizeToUtcStartOfDay(), -29)
+  const todayUtc = normalizeToUtcStartOfDay()
+  const last30DaysEnd = addUtcDays(todayUtc, 1)
+  const last30DaysStart = addUtcDays(todayUtc, -29)
 
   // Get billing period dates for filtering
   const billingStart = normalizeToUtcStartOfDay(new Date(effectiveOrganization.value?.subscription_start ?? new Date()))

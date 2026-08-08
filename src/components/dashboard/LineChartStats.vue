@@ -11,7 +11,7 @@ import { useDashboardDailyChartCycle } from '~/composables/useOrgBillingCycleCha
 import { createLegendConfig, createStackedChartScales } from '~/services/chartConfig'
 import { createTodayLineOptions, getSafeChartHue } from '~/services/chartTodayLine'
 import { registerDashboardCharts } from '~/services/dashboardChartRegister'
-import { generateMonthDays, getCurrentDayMonth, getDaysInCurrentMonth } from '~/services/date'
+import { generateMonthDays, getCurrentDayMonth, getDaysInCurrentUtcMonth } from '~/services/date'
 import { inlineAnnotationPlugin } from '../../services/chartAnnotations'
 import { createTooltipConfig, todayLinePlugin, verticalLinePlugin } from '../../services/chartTooltip'
 import { createChartLegendItems } from './chartLegend'
@@ -29,7 +29,7 @@ const props = defineProps({
   title: { type: String, default: '' },
   colors: { type: Object, default: () => ({}) },
   limits: { type: Object, default: () => ({}) },
-  data: { type: Array, default: Array.from({ length: getDaysInCurrentMonth() }).fill(undefined) as number[] },
+  data: { type: Array, default: Array.from({ length: getDaysInCurrentUtcMonth() }).fill(undefined) as number[] },
   dataByApp: {
     type: Object,
     default: () => ({}),
@@ -60,7 +60,7 @@ const tooltipClickHandler = computed<TooltipClickHandler>(() => {
 const viewMode = computed(() => props.accumulated ? 'cumulative' : 'daily')
 
 function monthdays() {
-  return generateMonthDays(props.useBillingPeriod, cycleStart, cycleEnd)
+  return generateMonthDays(props.useBillingPeriod, cycleStart.value, cycleEnd.value)
 }
 
 const accumulateData = computed(() => {
@@ -368,7 +368,7 @@ const chartOptions = computed<ChartOptions & { plugins: { inlineAnnotationPlugin
       title: {
         display: false,
       },
-      tooltip: createTooltipConfig(hasAppData.value, props.accumulated, props.useBillingPeriod ? cycleStart : false, hasAppData.value ? tooltipClickHandler.value : undefined),
+      tooltip: createTooltipConfig(hasAppData.value, props.accumulated, props.useBillingPeriod ? cycleStart.value : false, hasAppData.value ? tooltipClickHandler.value : undefined),
       filler: {
         propagate: false,
       },

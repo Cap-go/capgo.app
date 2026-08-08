@@ -2,7 +2,6 @@
 import type { ChartData, ChartOptions, Plugin } from 'chart.js'
 import type { TooltipClickHandler } from '~/services/chartTooltip'
 import { useDark } from '@vueuse/core'
-import dayjs from 'dayjs'
 import { computed } from 'vue'
 import { Bar, Line } from 'vue-chartjs'
 import { useI18n } from 'vue-i18n'
@@ -12,7 +11,7 @@ import { createLegendConfig, createStackedChartScales } from '~/services/chartCo
 import { createTodayLineOptions } from '~/services/chartTodayLine'
 import { dailyChartBaseProps } from '~/services/dailyChartProps'
 import { registerDashboardCharts } from '~/services/dashboardChartRegister'
-import { generateMonthDays } from '~/services/date'
+import { generateMonthDays, getUtcDayBounds } from '~/services/date'
 import { useOrganizationStore } from '~/stores/organization'
 import { createTooltipConfig, todayLinePlugin, verticalLinePlugin } from '../../services/chartTooltip'
 
@@ -83,12 +82,11 @@ const tooltipClickHandler = computed<TooltipClickHandler | undefined>(() => {
       const params = new URLSearchParams()
       filterActions.forEach(action => params.append('action', action))
 
-      // Add date range if provided (selected day)
+      // Add date range if provided (selected UTC calendar day)
       if (clickContext?.date) {
-        const startOfDay = dayjs(clickContext.date).startOf('day')
-        const endOfDay = dayjs(clickContext.date).endOf('day')
-        params.set('start', startOfDay.toISOString())
-        params.set('end', endOfDay.toISOString())
+        const { start, end } = getUtcDayBounds(clickContext.date)
+        params.set('start', start.toISOString())
+        params.set('end', end.toISOString())
       }
 
       router.push(`/app/${props.appId}/observe/logs?${params.toString()}`)

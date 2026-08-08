@@ -13,6 +13,7 @@ import {
   generateMonthDays,
   getChartDateRange,
   getDateLocale,
+  getUtcDayBounds,
   normalizeToUtcStartOfDay,
   resolveDateLocale,
   utcCalendarDayAsLocalDate,
@@ -137,5 +138,23 @@ describe('date helpers', () => {
 
   it('keeps formatUtcDateParam stable for date-only strings', () => {
     expect(formatUtcDateParam('2026-08-07')).toBe('2026-08-07')
+  })
+
+  it('treats zone-less ISO datetimes as UTC in formatUtcDateParam', () => {
+    expect(formatUtcDateParam('2026-08-07T15:30:00')).toBe('2026-08-07')
+  })
+
+  it('parses date-only billing boundaries as UTC days in getChartDateRange', () => {
+    const range = getChartDateRange(true, '2026-08-07', '2026-09-07')
+    expect(formatUtcDateParam(range.startDate)).toBe('2026-08-07')
+    expect(formatUtcDateParam(range.endDate)).toBe('2026-09-07')
+    expect(range.startDate.toISOString()).toBe('2026-08-07T00:00:00.000Z')
+  })
+
+  it('builds UTC day bounds for log navigation without local shift', () => {
+    const selected = new Date('2026-08-07T00:00:00.000Z')
+    const { start, end } = getUtcDayBounds(selected)
+    expect(start.toISOString()).toBe('2026-08-07T00:00:00.000Z')
+    expect(end.toISOString()).toBe('2026-08-07T23:59:59.999Z')
   })
 })

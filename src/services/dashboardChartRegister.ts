@@ -4,6 +4,7 @@ import {
   CategoryScale,
   Chart,
   Filler,
+  Legend,
   LinearScale,
   LineController,
   LineElement,
@@ -19,6 +20,7 @@ export function registerDashboardCharts() {
     return
   Chart.register(
     Tooltip,
+    Legend,
     BarController,
     BarElement,
     LineController,

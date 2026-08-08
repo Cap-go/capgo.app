@@ -359,8 +359,9 @@ export const useOrganizationStore = defineStore('organization', () => {
 
     // Always fetch last 30 UTC days of data and filter client-side for billing period
     // End date should be next UTC midnight to include all of today's UTC data
-    const last30DaysEnd = addUtcDays(normalizeToUtcStartOfDay(), 1)
-    const last30DaysStart = addUtcDays(normalizeToUtcStartOfDay(), -29)
+    const todayUtc = normalizeToUtcStartOfDay()
+    const last30DaysEnd = addUtcDays(todayUtc, 1)
+    const last30DaysStart = addUtcDays(todayUtc, -29)
     try {
       await main.updateDashboard(currentOrganizationRaw.gid, last30DaysStart.toISOString(), last30DaysEnd.toISOString())
     }

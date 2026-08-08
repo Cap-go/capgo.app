@@ -129,10 +129,23 @@ export function getDaysInCurrentMonth() {
   ).getDate()
 }
 
+/** Days in the current UTC calendar month (for UTC-bucketed dashboard charts). */
+export function getDaysInCurrentUtcMonth() {
+  const date = new Date()
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate()
+}
+
 export function getCurrentDayMonth() {
   const date = new Date()
 
   return date.getDate()
+}
+
+/** Inclusive UTC day start and end instants for log / range navigation. */
+export function getUtcDayBounds(date: Date) {
+  const start = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 0, 0, 0, 0))
+  const end = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 23, 59, 59, 999))
+  return { start, end }
 }
 
 /**
@@ -153,13 +166,51 @@ export function addUtcDays(date: Date, days: number) {
 }
 
 /**
+ * Parse a billing / chart range boundary as a UTC calendar day.
+ * Date-only strings stay on that UTC day (unlike parseDatePreservingUtc local midnight).
+ */
+function parseUtcRangeBoundary(date: Date | string | undefined | null): Date | null {
+  if (!date)
+    return null
+
+  if (date instanceof Date)
+    return Number.isNaN(date.getTime()) ? null : date
+
+  const dateOnlyMatch = DATE_ONLY_RE.exec(date)
+  if (dateOnlyMatch) {
+    const [, year, month, day] = dateOnlyMatch
+    const parsedYear = Number(year)
+    const parsedMonth = Number(month)
+    const parsedDay = Number(day)
+    const parsed = new Date(Date.UTC(parsedYear, parsedMonth - 1, parsedDay))
+    if (
+      Number.isNaN(parsed.getTime())
+      || parsed.getUTCFullYear() !== parsedYear
+      || parsed.getUTCMonth() !== parsedMonth - 1
+      || parsed.getUTCDate() !== parsedDay
+    ) {
+      return null
+    }
+    return parsed
+  }
+
+  const normalized = ZONELESS_ISO_DATETIME_RE.test(date) ? `${date}Z` : date
+  const parsed = new Date(normalized)
+  return Number.isNaN(parsed.getTime()) ? null : parsed
+}
+
+/**
  * YYYY-MM-DD for API / DB date filters using the UTC calendar day.
  * Never derive this from local midnight via toISOString() — that shifts the day for viewers east of UTC.
  */
 export function formatUtcDateParam(date: Date | string = new Date()) {
-  const parsed = typeof date === 'string'
-    ? (DATE_ONLY_RE.test(date) ? new Date(`${date}T00:00:00.000Z`) : new Date(date))
-    : new Date(date)
+  let parsed: Date
+  if (typeof date === 'string' && DATE_ONLY_RE.test(date))
+    parsed = new Date(`${date}T00:00:00.000Z`)
+  else if (typeof date === 'string' && ZONELESS_ISO_DATETIME_RE.test(date))
+    parsed = new Date(`${date}Z`)
+  else
+    parsed = new Date(date)
   if (Number.isNaN(parsed.getTime()))
     return ''
   return parsed.toISOString().slice(0, 10)
@@ -185,8 +236,8 @@ function getDatesInRange(startDate: Date, endDate: Date) {
 
 export function getChartDateRange(useBillingPeriod: boolean, billingStart?: Date | string | null, billingEnd?: Date | string | null) {
   if (useBillingPeriod) {
-    const startDate = normalizeToUtcStartOfDay(parseDatePreservingUtc(billingStart) ?? new Date())
-    const endDate = normalizeToUtcStartOfDay(parseDatePreservingUtc(billingEnd) ?? new Date())
+    const startDate = normalizeToUtcStartOfDay(parseUtcRangeBoundary(billingStart) ?? new Date())
+    const endDate = normalizeToUtcStartOfDay(parseUtcRangeBoundary(billingEnd) ?? new Date())
     return { startDate, endDate }
   }
 

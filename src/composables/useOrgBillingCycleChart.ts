@@ -1,5 +1,5 @@
 import type { MaybeRefOrGetter } from 'vue'
-import { toValue } from 'vue'
+import { computed, toValue } from 'vue'
 import { getTodayLimit, transformSeries } from '~/services/buildCharts'
 import { normalizeToUtcStartOfDay } from '~/services/date'
 import { useOrganizationStore } from '~/stores/organization'
@@ -18,9 +18,18 @@ export function useOrgBillingCycleChart(
   }
 
   function resolveCycleEnd() {
-    const end = normalizeToUtcStartOfDay(new Date(toValue(subscriptionEnd) ?? new Date()))
     const today = normalizeToUtcStartOfDay()
-    return end < today ? today : end
+    const rawEnd = toValue(subscriptionEnd)
+    if (!rawEnd)
+      return today
+
+    const end = normalizeToUtcStartOfDay(new Date(rawEnd))
+    if (Number.isNaN(end.getTime()))
+      return today
+
+    // Active cycle: stop at today so future empty days are not rendered.
+    // Expired cycle: keep subscription_end so the period does not stretch to today.
+    return end.getTime() > today.getTime() ? today : end
   }
 
   function todayLimit(labelCount: number) {
@@ -49,12 +58,14 @@ export function useCurrentOrgBillingCycleChart(useBillingPeriod: MaybeRefOrGette
   )
 }
 
-/** One-shot helper: current-org cycle bounds plus today/transform helpers. */
+/** Reactive current-org cycle bounds plus today/transform helpers. */
 export function useDashboardDailyChartCycle(useBillingPeriod: MaybeRefOrGetter<boolean>) {
   const chartCycle = useCurrentOrgBillingCycleChart(useBillingPeriod)
+  const cycleStart = computed(() => chartCycle.resolveCycleStart())
+  const cycleEnd = computed(() => chartCycle.resolveCycleEnd())
   return {
-    cycleStart: chartCycle.resolveCycleStart(),
-    cycleEnd: chartCycle.resolveCycleEnd(),
+    cycleStart,
+    cycleEnd,
     todayLimit: chartCycle.todayLimit,
     transformDailySeries: chartCycle.transformDailySeries,
   }

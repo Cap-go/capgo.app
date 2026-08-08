@@ -4,7 +4,7 @@ import colors from 'tailwindcss/colors'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { computeLastDayEvolution } from '~/services/buildCharts'
-import { addUtcDays, normalizeToUtcStartOfDay } from '~/services/date'
+import { normalizeToUtcStartOfDay } from '~/services/date'
 import {
   calculateDemoEvolution,
   calculateDemoTotal,
@@ -16,7 +16,7 @@ import {
 import { useSupabase } from '~/services/supabase'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useOrganizationStore } from '~/stores/organization'
-import { filterDailySeriesToBillingPeriod } from '~/utils/chartOptimizations'
+import { filterDailySeriesToBillingPeriod, resolveDashboardDailySeriesWindow } from '~/utils/chartOptimizations'
 import { ensureMinDelay } from '~/utils/minDelay'
 import BundleUploadsChart from './BundleUploadsChart.vue'
 import ChartCard from './ChartCard.vue'
@@ -120,12 +120,12 @@ async function calculateStats(forceRefetch = false) {
     const orgChanged = currentCacheOrgId.value !== currentOrgId
     currentCacheOrgId.value = currentOrgId
 
-    // Always work with last 30 UTC days of data
-    const last30DaysEnd = new Date()
-    const last30DaysStart = addUtcDays(normalizeToUtcStartOfDay(), -29)
-
     // Get billing period dates for filtering
     const billingStart = normalizeToUtcStartOfDay(new Date(organizationStore.currentOrganization?.subscription_start ?? new Date()))
+    const { seriesStart: last30DaysStart, exclusiveEnd: last30DaysEnd, dayCount } = resolveDashboardDailySeriesWindow(
+      props.useBillingPeriod,
+      billingStart,
+    )
 
     // Determine target apps
     const localAppNames: { [appId: string]: string } = {}
@@ -164,7 +164,7 @@ async function calculateStats(forceRefetch = false) {
     }
 
     if (targetAppIds.length === 0) {
-      bundleData.value = Array.from({ length: 30 }).fill(0) as number[]
+      bundleData.value = Array.from({ length: dayCount }).fill(0) as number[]
       bundleDataByApp.value = {}
       return
     }
@@ -178,12 +178,12 @@ async function calculateStats(forceRefetch = false) {
       data = cachedData
     }
     else {
-      // Fetch last 30 days of data
+      // Fetch series window (billing cycle or last 30 UTC days)
       const query = useSupabase()
         .from('app_versions')
         .select('created_at, app_id, deleted, r2_path, external_url, user_id')
         .gte('created_at', last30DaysStart.toISOString())
-        .lte('created_at', last30DaysEnd.toISOString())
+        .lt('created_at', last30DaysEnd.toISOString())
         .in('app_id', targetAppIds)
 
       const result = await query
@@ -198,26 +198,26 @@ async function calculateStats(forceRefetch = false) {
 
     if (!error && data) {
       // Create fresh arrays for processing
-      const dailyCounts30Days = Array.from({ length: 30 }).fill(0) as number[]
+      const dailyCounts30Days = Array.from({ length: dayCount }).fill(0) as number[]
       const bundleDataByApp30Days: { [appId: string]: number[] } = {}
       targetAppIds.forEach((appId) => {
-        bundleDataByApp30Days[appId] = Array.from({ length: 30 }).fill(0) as number[]
+        bundleDataByApp30Days[appId] = Array.from({ length: dayCount }).fill(0) as number[]
       })
 
       // Track total separately (don't use ref during loop)
       let totalCount = 0
 
-      // Map each bundle to the correct day and app (30 days)
+      // Map each bundle to the correct day and app
       data
         .filter((bundle: BundleUploadRow) => bundle.created_at !== null && bundle.app_id !== null && !isSyntheticDefaultVersion(bundle))
         .forEach((bundle: any) => {
           if (bundle.created_at && bundle.app_id) {
             const bundleDate = new Date(bundle.created_at)
 
-            // Calculate days since start of 30-day period
+            // Calculate days since start of series window
             const daysDiff = Math.floor((bundleDate.getTime() - last30DaysStart.getTime()) / (1000 * 60 * 60 * 24))
 
-            if (daysDiff >= 0 && daysDiff < 30) {
+            if (daysDiff >= 0 && daysDiff < dayCount) {
               dailyCounts30Days[daysDiff]++
               totalCount++
 

@@ -39,7 +39,7 @@ const tooltipClickHandler = computed<TooltipClickHandler>(() => {
 })
 
 function monthdays() {
-  return generateMonthDays(props.useBillingPeriod, cycleStart, cycleEnd)
+  return generateMonthDays(props.useBillingPeriod, cycleStart.value, cycleEnd.value)
 }
 const hasAppData = computed(() => Object.keys(props.dataByApp).length > 0)
 
@@ -174,7 +174,7 @@ const chartOptions = computed(() => {
       title: {
         display: false,
       },
-      tooltip: createTooltipConfig(hasAppData.value, props.accumulated, props.useBillingPeriod ? cycleStart : false, hasAppData.value ? tooltipClickHandler.value : undefined),
+      tooltip: createTooltipConfig(hasAppData.value, props.accumulated, props.useBillingPeriod ? cycleStart.value : false, hasAppData.value ? tooltipClickHandler.value : undefined),
       todayLine: todayLineOptions.value,
     },
   }
