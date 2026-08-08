@@ -32,6 +32,7 @@ import { loadConfig, loadConfigForWrite, writeConfig } from './config'
 import { isTruthyEnvValue } from './posthog'
 import { nativePackageSchema } from './schemas/common'
 import { safeParseSchema } from './schemas/schema_validation'
+import { CliUserError } from './shared/cli-user-error'
 import { formatApiErrorForCli, parseSecurityPolicyError } from './utils/security_policy_errors'
 
 function reportUploadContext(level: 'error' | 'info' | 'success' | 'warn', message: string) {
@@ -1090,7 +1091,9 @@ export async function checkPlanValid(supabase: SupabaseClient<Database>, orgId: 
         module.default(`${config.hostWeb}/settings/organization/plans`)
       })
     wait(500)
-    throw new Error('Plan upgrade required')
+    // Needing a plan upgrade is a user-account state, not a CLI crash — opt it
+    // out of error tracking by type while keeping the message and non-zero exit.
+    throw new CliUserError('Plan upgrade required')
   }
   const [trialDays, ispaying, hasCredits] = await Promise.all([
     isTrialOrg(supabase, orgId),
@@ -1113,7 +1116,9 @@ export async function checkPlanValidUpload(supabase: SupabaseClient<Database>, o
         module.default(`${config.hostWeb}/settings/organization/plans`)
       })
     wait(500)
-    throw new Error('Plan upgrade required for upload')
+    // Same as `checkPlanValid`: an upgrade prompt is an expected account state,
+    // not a crash — throw a filtered `CliUserError`, keep exit and analytics.
+    throw new CliUserError('Plan upgrade required for upload')
   }
   // Trial/paying stay on the legacy single-arg RPCs for old CLI compatibility.
   // Credits use the new has_usage_credits_org (with optional appid).

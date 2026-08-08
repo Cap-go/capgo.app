@@ -22,6 +22,7 @@ import { getChecksum } from '../checksum'
 import { getRepoStarStatus, isRepoStarredInSession, starRepository } from '../github'
 import { confirmWithRememberedChoice } from '../promptPreferences'
 import { showReplicationProgress } from '../replicationProgress'
+import { CliUserError } from '../shared/cli-user-error'
 import { formatTable } from '../terminal-table'
 import { usesAlwaysDirectUpdate } from '../updaterConfig'
 import { baseKeyV2, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, canPromptInteractively, checkCompatibilityCloud, checkPlanValidUpload, checkRemoteCliMessages, createSupabaseClient, deletedFailedVersion, deltaManifestTooLargeMessage, findRoot, findSavedKey, formatError, getAppId, getBundleVersion, getCompatibilityDetails, getConfig, getInstalledVersion, getLocalConfig, getLocalDependencies, getOrganizationId, getPMAndCommand, getRemoteChecksums, getRemoteFileConfig, hasCliPermission, invokeCapgoCliApi, isCompatible, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, regexSemver, resolveUserIdFromApiKey, sendEvent, setVersionManifest, updateConfigUpdater, updateOrCreateChannel, updateOrCreateVersion, UPLOAD_TIMEOUT, UPLOAD_TIMEOUT_ERROR_NAME, uploadTimeoutMessage, uploadTUS, uploadUrl, zipFile } from '../utils'
@@ -52,9 +53,16 @@ const log = {
   success: (message: string) => getUploadReporter().success(message),
 }
 
+// The upload path's single failure chokepoint. Every abort here is a deliberate,
+// message-carrying stop — a bad flag, a duplicate version, a cancelled prompt,
+// a backend refusal — not a CLI crash. Throwing `CliUserError` opts the whole
+// path out of error tracking by type (via `shouldCapturePosthogException`), which
+// covers `Version X already exists` and `Upload cancelled by user` without
+// matching on message text. The non-zero exit and analytics events are unchanged;
+// only the `$exception` capture goes away.
 function uploadFail(message: string): never {
   log.error(message)
-  throw new Error(message)
+  throw new CliUserError(message)
 }
 
 /**
@@ -304,7 +312,7 @@ async function checkVersionExists(supabase: SupabaseType, appid: string, bundle:
 
   if (appVersion) {
     if (versionExistsOk) {
-      log.warn(`Version ${bundle} already exists - exiting gracefully due to --silent-fail option`)
+      log.warn(`Version ${bundle} already exists - exiting gracefully due to --version-exists-ok option`)
       getUploadReporter().outro('Bundle version already exists - exiting gracefully 🎉')
       return true
     }
@@ -1517,7 +1525,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     const hasCredentials = (await loadSavedCredentials(appid)) !== null
     const builderAction = await maybePromptBuilderCta({ incompatible, interactive, hasCredentials, appId: appid, orgId, apikey, incompatibleCount })
     if (builderAction === 'abort')
-      throw new Error(UPLOAD_CANCELLED_BY_USER)
+      throw new CliUserError(UPLOAD_CANCELLED_BY_USER)
 
     if (builderAction !== 'continue') {
       // Skip the OTA upload and hand the launch back to the CLI entry point, which
