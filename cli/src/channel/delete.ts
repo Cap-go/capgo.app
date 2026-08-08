@@ -88,7 +88,7 @@ export async function deleteChannelInternal(channelId: string, appId: string, op
       if (bundle?.name && !silent)
         log.info(`Deleting bundle ${bundle.name} from Capgo`)
       if (bundle?.name) {
-        await deleteAppVersion(null, appId, bundle.name, {
+        await deleteAppVersion(supabase, appId, bundle.name, {
           silent,
           apikey: options.apikey,
           supaHost: options.supaHost,

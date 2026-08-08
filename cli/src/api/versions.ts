@@ -62,12 +62,32 @@ async function fetchBundlePages(appid: string, options: CapgoHttpOptions) {
 }
 
 export async function deleteAppVersion(
-  _supabase: SupabaseClient<Database> | null,
+  supabase: SupabaseClient<Database> | null,
   appid: string,
   bundle: string,
   options: VersionOptions = {},
 ) {
   const { silent = false, apikey, supaHost, supaAnon } = options
+
+  // Soft-delete via PostgREST when a client is provided. HTTP DELETE /bundle
+  // rejects bundles still linked to a channel; admin channel cleanup needs this path.
+  if (supabase) {
+    const { error: delAppSpecVersionError } = await supabase
+      .from('app_versions')
+      .update({ deleted: true })
+      .eq('app_id', appid)
+      .eq('deleted', false)
+      .eq('name', bundle)
+
+    if (delAppSpecVersionError) {
+      const message = `App version ${appid}@${bundle} not found in database`
+      if (!silent)
+        log.error(message)
+      throw new Error(`${message}: ${formatError(delAppSpecVersionError)}`)
+    }
+    return
+  }
+
   if (!apikey)
     throw new Error('Missing API key for bundle delete')
 
