@@ -9,6 +9,7 @@ import BuildStatsCard from '~/components/dashboard/BuildStatsCard.vue'
 import BuildTimeCard from '~/components/dashboard/BuildTimeCard.vue'
 import { useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
+import { useOrganizationStore } from '~/stores/organization'
 
 const { t } = useI18n()
 const id = ref('')
@@ -17,6 +18,8 @@ const lastPath = ref('')
 const isLoading = ref(false)
 const supabase = useSupabase()
 const displayStore = useDisplayStore()
+const organizationStore = useOrganizationStore()
+const isOrgUnpaid = computed(() => organizationStore.currentOrganizationFailed)
 const app = ref<Database['public']['Tables']['apps']['Row']>()
 const showingBuildSteps = ref(false)
 
@@ -69,7 +72,8 @@ watchEffect(async () => {
 
 <template>
   <div>
-    <div v-if="app || isLoading">
+    <UnpaidState v-if="isOrgUnpaid" />
+    <div v-else-if="app || isLoading">
       <div class="mt-0 md:mt-8">
         <div class="w-full h-full px-0 pt-0 mx-auto mb-8 overflow-y-auto sm:px-6 md:pt-8 lg:px-8 max-w-9xl max-h-fit">
           <div v-if="!showingBuildSteps" class="mb-6">

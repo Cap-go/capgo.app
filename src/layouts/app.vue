@@ -73,9 +73,17 @@ const isOnSettingsPage = computed(() => {
   return /^\/app\/[^/]+\/settings\/?$/.test(route.path)
 })
 
-// Show payment overlay only when org is unpaid AND not on settings page
+// List pages render their own unpaid empty state, which explains why the list
+// is empty and links to the plans page. The layout overlay must not cover them,
+// or that explanation stays hidden behind the blurred modal.
+const routeHasOwnUnpaidState = computed(() => {
+  return /^\/app\/[^/]+\/(?:bundles|channels|devices|builds|notifications)\/?$/.test(route.path)
+})
+
+// Show payment overlay only when org is unpaid AND the current page does not
+// already show its own unpaid state.
 const showPaymentOverlay = computed(() => {
-  return !isResolvingAppOrganization.value && isOrgUnpaid.value && !isOnSettingsPage.value
+  return !isResolvingAppOrganization.value && isOrgUnpaid.value && !isOnSettingsPage.value && !routeHasOwnUnpaidState.value
 })
 
 // Detect resource type from route (channel, device, or bundle)
