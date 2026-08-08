@@ -691,6 +691,9 @@ describe('logsnag revenue metric helpers', () => {
     expect(countFn).toContain('snapshotEnd')
     expect(coreShard).toContain('countAppsWithPreview(c, window.prevDayEnd)')
     expect(coreShard).toContain('apps_with_preview,')
+    // Keep writable while prod types lag the migration (auto-sync gate).
+    expect(source).toContain('apps_with_preview?: number')
+    expect(source).toContain('isMissingAppsWithPreviewColumnError')
   })
   it.concurrent('normalizes logsnag insights retry payload counts', () => {
     expect(logsnagInsightsTestUtils.normalizeLogsnagInsightsRetryCount('2')).toBe(2)
