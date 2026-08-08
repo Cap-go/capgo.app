@@ -1691,11 +1691,26 @@ export async function uploadTUS(apikey: string, data: Buffer, orgId: string, app
         }
         if (error instanceof tus.DetailedError) {
           const body = error.originalResponse?.getBody()
-          const jsonBody = JSON.parse(body || '{"error": "unknown error"}')
-          reject(jsonBody.status || jsonBody.error || jsonBody.message || 'unknown error')
+          const status = error.originalResponse?.getStatus()
+          const url = error.originalRequest?.getURL()
+
+          // Parse can throw on a non-JSON body (an HTML 502/504 page from a proxy),
+          // so keep it inside the try and fall back to the raw body, then the tus
+          // error message. An empty body used to collapse to the literal
+          // "unknown error" and drop the status, URL, and body on the floor.
+          const errorMsg = (() => {
+            try {
+              const jsonBody = JSON.parse(body || '{"error": "unknown error"}')
+              return jsonBody.status || jsonBody.error || jsonBody.message || 'unknown error'
+            }
+            catch {
+              return body || error.message
+            }
+          })()
+          reject(new Error(`TUS upload failed (status ${status ?? 'unknown'}, url ${url ?? 'unknown'}): ${errorMsg}`))
         }
         else {
-          reject(error.message || error.toString() || 'unknown error')
+          reject(new Error(`TUS upload failed: ${error.message || error.toString()}`))
         }
       },
       // Callback for reporting upload progress
@@ -1968,8 +1983,8 @@ export async function getOrganizationWithPermission(
     : allowedOrganizations[0].gid
 
   if (isCancel(organizationUidRaw)) {
-    log.error('Canceled organization selection, exiting')
-    throw new Error('Organization selection cancelled')
+    log.warn('Canceled organization selection, exiting')
+    throw new CliUserError('Organization selection cancelled')
   }
 
   const organizationUid = organizationUidRaw as string
@@ -2836,8 +2851,8 @@ export async function promptAndSyncCapacitor(
     if (isInit && orgId && apikey) {
       await markSnag('onboarding-v2', orgId, apikey, 'canceled', undefined, '🤷')
     }
-    log.error('Canceled Capacitor sync')
-    throw new Error('Capacitor sync cancelled')
+    log.warn('Canceled Capacitor sync')
+    throw new CliUserError('Capacitor sync cancelled')
   }
 
   if (shouldSync) {

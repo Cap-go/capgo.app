@@ -139,6 +139,7 @@ const globalStatsTrendData = ref<Array<{
   apps_created: number
   versions_created: number
   demo_apps_created: number
+  apps_with_preview: number
   devices_last_month: number
   trial_extended_orgs: number
   trial_extended_subscribed_orgs: number
@@ -702,6 +703,22 @@ const versionsCreatedTrendSeries = computed(() => {
         value: item.versions_created ?? 0,
       })),
       color: '#10b981',
+    },
+  ]
+})
+
+const appsWithPreviewTrendSeries = computed(() => {
+  if (globalStatsTrendData.value.length === 0)
+    return []
+
+  return [
+    {
+      label: t('admin-apps-with-preview-series'),
+      data: globalStatsTrendData.value.map(item => ({
+        date: item.date,
+        value: item.apps_with_preview ?? 0,
+      })),
+      color: '#119eff',
     },
   ]
 })
@@ -1579,6 +1596,18 @@ displayStore.defaultBack = '/dashboard'
             >
               <AdminMultiLineChart
                 :series="versionsCreatedTrendSeries"
+                :is-loading="isLoadingGlobalStatsTrend"
+              />
+            </ChartCard>
+
+            <!-- Apps with Preview QR Enabled -->
+            <ChartCard
+              :title="t('admin-apps-with-preview')"
+              :is-loading="isLoadingGlobalStatsTrend"
+              :has-data="appsWithPreviewTrendSeries.length > 0"
+            >
+              <AdminMultiLineChart
+                :series="appsWithPreviewTrendSeries"
                 :is-loading="isLoadingGlobalStatsTrend"
               />
             </ChartCard>

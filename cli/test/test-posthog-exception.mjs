@@ -149,6 +149,10 @@ try {
   // `uploadFail` now throws CliUserError, so a duplicate-version upload — a normal
   // `bundle upload` outcome — is filtered out of error tracking by type.
   assert.equal(shouldCapturePosthogException(new CliUserError('Version 1.2.3 already exists')), false)
+  // A user-initiated cancel (Ctrl+C / Escape at an interactive prompt) is a
+  // deliberate abort, not a crash — the cancel sites throw CliUserError so it
+  // never opens an error tracking issue.
+  assert.equal(shouldCapturePosthogException(new CliUserError('Login cancelled')), false)
   assert.equal(shouldCapturePosthogException(new CliUserError('Upload cancelled by user')), false)
   // Two failures on different channels must be treated identically (one issue,
   // not one per channel), since the channel name lives in context, not the message.

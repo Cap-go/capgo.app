@@ -24,7 +24,7 @@ import {
   requestOrgChartRefresh,
   shouldAutoRequestChartRefresh,
 } from '~/services/dashboardRefresh'
-import { formatLocalDate, formatLocalDateTime, formatUtcDateTimeAsLocal } from '~/services/date'
+import { addUtcDays, formatLocalDate, formatLocalDateTime, formatUtcDateTimeAsLocal, normalizeToUtcStartOfDay } from '~/services/date'
 import { DEMO_APP_NAMES, generateDemoBandwidthData, generateDemoMauData, generateDemoStorageData } from '~/services/demoChartData'
 import { getPlans } from '~/services/supabase'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
@@ -401,14 +401,10 @@ async function handleReloadClick() {
 // Function to reload all chart data
 async function reloadAllCharts() {
   // Force reload of main dashboard data
-  // End date should be tomorrow at midnight to include all of today's data
-  const last30DaysEnd = new Date()
-  last30DaysEnd.setHours(0, 0, 0, 0)
-  last30DaysEnd.setDate(last30DaysEnd.getDate() + 1) // Tomorrow midnight
-  // Start date should be 29 days ago at midnight (to get 30 days total including today)
-  const last30DaysStart = new Date()
-  last30DaysStart.setHours(0, 0, 0, 0)
-  last30DaysStart.setDate(last30DaysStart.getDate() - 29)
+  // End date should be next UTC midnight to include all of today's UTC data
+  const todayUtc = normalizeToUtcStartOfDay()
+  const last30DaysEnd = addUtcDays(todayUtc, 1)
+  const last30DaysStart = addUtcDays(todayUtc, -29)
 
   const orgId = effectiveOrganization.value?.gid
   if (orgId) {
@@ -517,9 +513,7 @@ async function getAppStats(rangeStart: Date, rangeEnd: Date) {
 
 // Helper function to filter 30-day data to billing period
 function filterToBillingPeriod(fullData: { mau: number[], storage: number[], storageByteHours: number[], bandwidth: number[] }, last30DaysStart: Date, billingStart: Date) {
-  const currentDate = new Date()
-  // Reset current date to start of day for consistent comparison
-  currentDate.setHours(0, 0, 0, 0)
+  const currentDate = normalizeToUtcStartOfDay()
 
   // Calculate billing period length - use getDaysBetweenDates for consistency
   // Simply calculate days between billing start and current date + 1 (to include today)
@@ -535,10 +529,7 @@ function filterToBillingPeriod(fullData: { mau: number[], storage: number[], sto
 
   // Map 30-day data to billing period
   for (let i = 0; i < 30; i++) {
-    const dataDate = new Date(last30DaysStart)
-    dataDate.setDate(dataDate.getDate() + i)
-    // Reset to start of day for consistent comparison
-    dataDate.setHours(0, 0, 0, 0)
+    const dataDate = addUtcDays(last30DaysStart, i)
 
     // Check if this date falls within current billing period
     if (dataDate >= billingStart && dataDate <= currentDate) {
@@ -556,20 +547,14 @@ function filterToBillingPeriod(fullData: { mau: number[], storage: number[], sto
 }
 
 async function getUsages(forceRefetch = false) {
-  // Always work with last 30 days of data
-  // End date should be tomorrow at midnight to include all of today's data
-  const last30DaysEnd = new Date()
-  last30DaysEnd.setHours(0, 0, 0, 0)
-  last30DaysEnd.setDate(last30DaysEnd.getDate() + 1) // Tomorrow midnight
-  // Start date should be 29 days ago at midnight (to get 30 days total including today)
-  const last30DaysStart = new Date()
-  last30DaysStart.setHours(0, 0, 0, 0)
-  last30DaysStart.setDate(last30DaysStart.getDate() - 29)
+  // Always work with last 30 UTC days of data
+  // End date should be next UTC midnight to include all of today's UTC data
+  const todayUtc = normalizeToUtcStartOfDay()
+  const last30DaysEnd = addUtcDays(todayUtc, 1)
+  const last30DaysStart = addUtcDays(todayUtc, -29)
 
   // Get billing period dates for filtering
-  const billingStart = new Date(effectiveOrganization.value?.subscription_start ?? new Date())
-  // Reset to start of day to match calculation in store
-  billingStart.setHours(0, 0, 0, 0)
+  const billingStart = normalizeToUtcStartOfDay(new Date(effectiveOrganization.value?.subscription_start ?? new Date()))
 
   const currentOrgId = effectiveOrganization.value?.gid ?? null
 
@@ -641,9 +626,7 @@ async function getUsages(forceRefetch = false) {
   const { global: globalStats, byApp: byAppStats, appNames: appNamesMap } = await getAppStats(last30DaysStart, last30DaysEnd)
 
   const finalData = globalStats.map((item: any) => {
-    const itemDate = new Date(item.date)
-    // Reset to start of day for consistent date handling
-    itemDate.setHours(0, 0, 0, 0)
+    const itemDate = normalizeToUtcStartOfDay(new Date(item.date))
     return {
       ...item,
       date: itemDate,

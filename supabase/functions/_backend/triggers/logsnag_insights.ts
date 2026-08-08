@@ -10,12 +10,13 @@ import { GLOBAL_STATS_SHARDS, REQUIRED_GLOBAL_STATS_SHARDS, USAGE_GLOBAL_STATS_S
 import { BRES, middlewareAPISecret, quickError } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { logsnagInsights } from '../utils/logsnag.ts'
-import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import { readGlobalNotificationStatsCF } from '../utils/nativeNotifications.ts'
+import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import { countAllApps, countAllUpdates, countAllUpdatesExternal, getUpdateStats } from '../utils/stats.ts'
 import { supabaseAdmin } from '../utils/supabase.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
 import { backgroundTask } from '../utils/utils.ts'
+
 const DAY_IN_MS = 24 * 60 * 60 * 1000
 
 interface PlanTotal { [key: string]: number }
@@ -42,7 +43,7 @@ type AppBuildOnboardingMetrics = Record<string, unknown> & {
   apps_with_cli_onboarding_builds_24h: number
   apps_with_manual_builds_24h: number
 }
-type AppBuildOnboardingMetricRow = {
+interface AppBuildOnboardingMetricRow {
   created_at: string | Date | null
   created_from_onboarding: boolean | null
   onboarding_completed_at: string | Date | null
@@ -1489,6 +1490,29 @@ async function countDemoSeededApps(c: Context, createdAfterIso: string, createdB
   }
 }
 
+async function countAppsWithPreview(c: Context, snapshotEnd: Date): Promise<number> {
+  const pgClient = getPgClient(c, false)
+  const drizzleClient = getDrizzleClient(pgClient)
+
+  try {
+    const result = await drizzleClient.execute<{ count: number }>(sql`
+      SELECT COUNT(*)::int AS count
+      FROM public.apps AS apps
+      WHERE apps.allow_preview = true
+        AND apps.created_at < ${snapshotEnd}
+    `)
+
+    return Number(result.rows[0]?.count) || 0
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'countAppsWithPreview error', error })
+    return 0
+  }
+  finally {
+    closeClient(c, pgClient)
+  }
+}
+
 async function getTrialExtensionStats(c: Context, window: CurrentDayWindow): Promise<TrialExtensionStats> {
   const pgClient = getPgClient(c, false)
   const drizzleClient = getDrizzleClient(pgClient)
@@ -2602,6 +2626,7 @@ async function runCoreGlobalStatsShard(c: Context, window: DailyWindow): Promise
   const finalizedAppBuildOnboardingWindow = getCompletedAppBuildOnboardingWindow(window)
   const [
     apps,
+    apps_with_preview,
     updates,
     updates_external,
     users,
@@ -2613,6 +2638,7 @@ async function runCoreGlobalStatsShard(c: Context, window: DailyWindow): Promise
     finalizedAppBuildOnboardingMetrics,
   ] = await Promise.all([
     countAllApps(c, window.prevDayEnd),
+    countAppsWithPreview(c, window.prevDayEnd),
     countAllUpdates(c, window.prevDayEnd),
     countAllUpdatesExternal(c, window.prevDayEnd),
     countRegisteredUsersForSnapshot(c, window.prevDayEnd),
@@ -2653,6 +2679,7 @@ async function runCoreGlobalStatsShard(c: Context, window: DailyWindow): Promise
   await updateGlobalStatsSnapshot(c, window.prevDayDateId, {
     apps,
     apps_active: actives.apps,
+    apps_with_preview,
     above_plan_with_credits,
     above_plan_without_credits,
     need_upgrade,
@@ -2680,7 +2707,7 @@ async function runCoreGlobalStatsShard(c: Context, window: DailyWindow): Promise
     users_active: actives.users,
   })
 
-  cloudlog({ requestId: c.get('requestId'), message: 'Updated global stats core shard', dateId: window.prevDayDateId, finalizedAppBuildOnboardingDateId: finalizedAppBuildOnboardingWindow.prevDayDateId, apps, updates, users, orgs })
+  cloudlog({ requestId: c.get('requestId'), message: 'Updated global stats core shard', dateId: window.prevDayDateId, finalizedAppBuildOnboardingDateId: finalizedAppBuildOnboardingWindow.prevDayDateId, apps, apps_with_preview, updates, users, orgs })
 }
 
 async function getRegistersToday(c: Context, createdAfterIso: string, createdBeforeIso: string): Promise<number> {
@@ -3163,7 +3190,6 @@ function formatPercentCount(count: number, total: number): string {
   return `${(count * 100 / total).toFixed(0)}% - ${count}`
 }
 
-
 interface NativeNotificationGlobalStats {
   apps: number
   providers: number
@@ -3569,7 +3595,6 @@ async function runLogsnagInsightsShard(c: Context, shard: GlobalStatsShard, date
     case 'native_notifications':
       await runNativeNotificationsGlobalStatsShard(c, window)
       await markGlobalStatsShardComplete(c, dateId, shard)
-      return
   }
 }
 

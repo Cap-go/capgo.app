@@ -65,6 +65,13 @@ function uploadFail(message: string): never {
   throw new CliUserError(message)
 }
 
+// A user-initiated cancel is an expected exit, not a crash: warn instead of
+// error, and throw `CliUserError` so error tracking skips it.
+function uploadCancel(): never {
+  log.warn(UPLOAD_CANCELLED_BY_USER)
+  throw new CliUserError(UPLOAD_CANCELLED_BY_USER)
+}
+
 /**
  * Thrown when `--fail-on-incompatible` aborts an upload because the bundle is
  * incompatible with the channel's current native packages. A dedicated type lets
@@ -340,14 +347,14 @@ async function checkVersionExists(supabase: SupabaseType, appid: string, bundle:
       })
 
       if (pIsCancel(choice) || typeof choice !== 'string' || choice === 'cancel') {
-        uploadFail('Upload cancelled by user')
+        uploadCancel()
       }
 
       let newVersion: string
       if (choice === 'custom') {
         const customVersion = await interactiveVersionBump(bundle, 'upload')
         if (!customVersion) {
-          uploadFail('Upload cancelled by user')
+          uploadCancel()
         }
         newVersion = customVersion
       }
@@ -1247,6 +1254,12 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   if (options.verbose)
     log.info(`[Verbose] Capacitor config loaded successfully`)
 
+  // Record whether the user explicitly asked for a delta/partial upload BEFORE
+  // any mutation of `options.delta`. The instant-update auto-enable below and
+  // the flag fold later both set `options.delta = true`, so reading it back
+  // afterwards cannot tell an auto-enabled delta from an explicit `--delta`.
+  options.userRequestedDelta = !!(options.partial || options.delta || options.partialOnly || options.deltaOnly)
+
   // Check if instant updates are enabled and auto-enable delta updates.
   const instantUpdateEnabled = usesAlwaysDirectUpdate(extConfig?.config?.plugins?.CapacitorUpdater)
   const interactive = canPromptInteractively({ silent })
@@ -1525,7 +1538,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     const hasCredentials = (await loadSavedCredentials(appid)) !== null
     const builderAction = await maybePromptBuilderCta({ incompatible, interactive, hasCredentials, appId: appid, orgId, apikey, incompatibleCount })
     if (builderAction === 'abort')
-      throw new CliUserError(UPLOAD_CANCELLED_BY_USER)
+      uploadCancel()
 
     if (builderAction !== 'continue') {
       // Skip the OTA upload and hand the launch back to the CLI entry point, which
@@ -1827,9 +1840,9 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     }
     catch (err) {
       // If user explicitly requested delta, the error was already thrown by uploadPartial
-      // and we should propagate it
-      const userRequestedDelta = !!(options.partial || options.delta || options.partialOnly || options.deltaOnly)
-      if (userRequestedDelta) {
+      // and we should propagate it. Read the explicit-request flag captured before
+      // `options.delta` was mutated, so an auto-enabled delta degrades gracefully.
+      if (options.userRequestedDelta) {
         // Error already logged in uploadPartial, just re-throw
         throw err
       }

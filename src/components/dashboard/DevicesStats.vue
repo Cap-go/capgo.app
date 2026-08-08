@@ -11,7 +11,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { createChartScales } from '~/services/chartConfig'
 import { useChartData } from '~/services/chartDataService'
 import { createTooltipConfig, todayLinePlugin, verticalLinePlugin } from '~/services/chartTooltip'
-import { generateChartDayLabels, getChartDateRange, normalizeToStartOfDay } from '~/services/date'
+import { generateChartDayLabels, getChartDateRange, normalizeToUtcStartOfDay } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
 import { useSupabase } from '~/services/supabase'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
@@ -48,12 +48,12 @@ const props = defineProps({
 // Demo data generator for devices stats when forceDemo is true
 function generateDemoDevicesData(days: number, usageKind: string = 'bundle'): { labels: string[], datasets: { label: string, data: number[] }[] } {
   const labels: string[] = []
-  const today = new Date()
+  const today = normalizeToUtcStartOfDay()
 
   for (let i = days - 1; i >= 0; i--) {
     const date = new Date(today)
-    date.setDate(date.getDate() - i)
-    labels.push(date.toISOString().split('T')[0])
+    date.setUTCDate(date.getUTCDate() - i)
+    labels.push(date.toISOString().slice(0, 10))
   }
 
   // Generate realistic version adoption data
@@ -337,7 +337,7 @@ const processedChartData = computed<ChartData<'line'> | null>(() => {
       if (!currentRange.value)
         return rawValues.length - 1
 
-      const today = normalizeToStartOfDay(new Date())
+      const today = normalizeToUtcStartOfDay(new Date())
       const diff = Math.floor((today.getTime() - currentRange.value.startDate.getTime()) / (24 * 60 * 60 * 1000))
 
       if (Number.isNaN(diff))
@@ -495,7 +495,7 @@ const todayLineOptions = computed(() => {
   if (!props.useBillingPeriod || !currentRange.value)
     return { enabled: false }
 
-  const today = normalizeToStartOfDay(new Date())
+  const today = normalizeToUtcStartOfDay(new Date())
   const { startDate, endDate } = currentRange.value
 
   if (today < startDate || today > endDate)
