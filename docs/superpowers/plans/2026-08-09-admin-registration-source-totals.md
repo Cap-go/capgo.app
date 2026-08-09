@@ -189,7 +189,7 @@ Run:
 
 ```bash
 git push -u origin wolny/admin-registration-source-totals
-gh pr create --repo Cap-go/capgo.app --base main --head wolny/admin-registration-source-totals --title "feat(admin): summarize registration sources" --body "Adds three selected-period registration-source totals below the existing stacked chart. Reuses the filtered frontend trend data and existing admin stats cards; no backend changes. Verified with focused and full unit tests, lint, dead-code analysis, type checking, and a production build."
+gh pr create --repo Cap-go/capgo.app --base main --head wolny/admin-registration-source-totals --title "feat(admin): summarize registration sources" --body $'## Summary (AI generated)\nAdds three selected-period registration-source totals below the existing stacked chart.\n\n## Motivation (AI generated)\nMake the registration-source split readable at a glance for the selected dashboard period.\n\n## Business Impact (AI generated)\nImproves admin visibility using existing filtered frontend data; no backend or API behavior changes.\n\n## Test Plan (AI generated)\nVerified with focused and full unit tests, lint, dead-code analysis, type checking, and a production build.'
 ```
 
 Expected: a new non-draft PR targeting `main` with the design, implementation, and verification evidence.

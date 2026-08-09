@@ -5,6 +5,7 @@ meta:
 
 <script setup lang="ts">
 import type { TableColumn } from '~/components/comp_def'
+import type { RegistrationSourceTrendPoint } from '~/services/adminRegistrationSources'
 import { computed, h, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
@@ -16,6 +17,7 @@ import AdminStackedBarChart from '~/components/admin/AdminStackedBarChart.vue'
 import AdminStatsCard from '~/components/admin/AdminStatsCard.vue'
 import ChartCard from '~/components/dashboard/ChartCard.vue'
 import PageLoader from '~/components/PageLoader.vue'
+import { aggregateRegistrationSourceTotals } from '~/services/adminRegistrationSources'
 import { formatLocalDate, formatLocalDateTime } from '~/services/date'
 import { formatNumberValue, formatOneDecimal } from '~/services/formatLocale'
 import { getEmoji } from '~/services/i18n'
@@ -32,13 +34,6 @@ const router = useRouter()
 const isLoading = ref(true)
 
 // Onboarding funnel data
-interface RegistrationSourceTrendPoint {
-  date: string
-  normal_registrations: number
-  invite_registrations: number
-  without_profile: number
-}
-
 interface OnboardingFunnelData {
   total_registrations: number
   total_orgs: number
@@ -1114,17 +1109,7 @@ const inviteJoinTrendSeries = computed(() => {
 })
 
 const registrationSourceTotals = computed(() => {
-  const trend = onboardingFunnelData.value?.registration_source_trend ?? []
-
-  return trend.reduce((totals, item) => ({
-    normalRegistrations: totals.normalRegistrations + (Number(item.normal_registrations) || 0),
-    organizationInvites: totals.organizationInvites + (Number(item.invite_registrations) || 0),
-    withoutProfiles: totals.withoutProfiles + (Number(item.without_profile) || 0),
-  }), {
-    normalRegistrations: 0,
-    organizationInvites: 0,
-    withoutProfiles: 0,
-  })
+  return aggregateRegistrationSourceTotals(onboardingFunnelData.value?.registration_source_trend ?? [])
 })
 
 const registrationSourceTrendSeries = computed(() => {

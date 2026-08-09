@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
+import { aggregateRegistrationSourceTotals } from '../src/services/adminRegistrationSources'
 
 describe('admin registration source dashboard', () => {
   it.concurrent('wires the auth registration trend to the stacked chart', async () => {
@@ -12,13 +13,37 @@ describe('admin registration source dashboard', () => {
     expect(source).toContain(`t('without-profile')`)
   })
 
+  it.concurrent('sums registration source trend values for the selected period', () => {
+    expect(aggregateRegistrationSourceTotals([
+      {
+        date: '2026-08-07',
+        normal_registrations: 4,
+        invite_registrations: 2,
+        without_profile: 1,
+      },
+      {
+        date: '2026-08-08',
+        normal_registrations: 3,
+        invite_registrations: 1,
+        without_profile: 2,
+      },
+    ])).toEqual({
+      normalRegistrations: 7,
+      organizationInvites: 3,
+      withoutProfiles: 3,
+    })
+
+    expect(aggregateRegistrationSourceTotals([])).toEqual({
+      normalRegistrations: 0,
+      organizationInvites: 0,
+      withoutProfiles: 0,
+    })
+  })
+
   it.concurrent('renders selected-period source totals below the stacked chart', async () => {
     const source = await readFile(new URL('../src/pages/admin/dashboard/users.vue', import.meta.url), 'utf8')
 
-    expect(source).toContain('const registrationSourceTotals = computed(() => {')
-    expect(source).toContain('normalRegistrations: totals.normalRegistrations + (Number(item.normal_registrations) || 0)')
-    expect(source).toContain('organizationInvites: totals.organizationInvites + (Number(item.invite_registrations) || 0)')
-    expect(source).toContain('withoutProfiles: totals.withoutProfiles + (Number(item.without_profile) || 0)')
+    expect(source).toContain('aggregateRegistrationSourceTotals(onboardingFunnelData.value?.registration_source_trend ?? [])')
     expect(source).toContain(':value="registrationSourceTotals.normalRegistrations"')
     expect(source).toContain(':value="registrationSourceTotals.organizationInvites"')
     expect(source).toContain(':value="registrationSourceTotals.withoutProfiles"')
