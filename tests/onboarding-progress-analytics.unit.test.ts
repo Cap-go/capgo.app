@@ -131,7 +131,11 @@ describe('onboarding progress analytics', () => {
   })
 
   it('never exposes free-text fields and never lets capture failures escape', () => {
-    const capture = vi.fn(() => {
+    const capture = vi.fn<(
+      name: string,
+      supaHost: string,
+      properties?: Record<string, string | number | boolean | null>,
+    ) => void>(() => {
       throw new Error('PostHog unavailable')
     })
     const tracker = createOnboardingProgressTracker({
