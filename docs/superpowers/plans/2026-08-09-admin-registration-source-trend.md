@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Add the auth-based registration source contract
+## Task 1: Add the auth-based registration source contract
 
 **Files:**
 - Modify: `tests/admin-stats.test.ts:59-71,381-418,682-712,1070-1160`
@@ -168,11 +168,12 @@ Expected: PASS, including the auth-only account, exclusive end boundary, and zer
 - [ ] **Step 5: Commit the backend contract**
 
 ```bash
+bun lint:backend
 git add tests/admin-stats.test.ts supabase/functions/_backend/utils/pg.ts
 git commit -m "feat(admin): report registration profile sources"
 ```
 
-### Task 2: Build the reusable stacked-column chart
+## Task 2: Build the reusable stacked-column chart
 
 **Files:**
 - Create: `tests/admin-stacked-bar-chart.unit.test.ts`
@@ -280,11 +281,12 @@ Expected: PASS with three tests.
 - [ ] **Step 5: Commit the chart component**
 
 ```bash
+bun lint:fix
 git add tests/admin-stacked-bar-chart.unit.test.ts src/components/admin/adminStackedBarChart.ts src/components/admin/AdminStackedBarChart.vue
 git commit -m "feat(admin): add stacked bar chart component"
 ```
 
-### Task 3: Wire the three datasets into the users dashboard
+## Task 3: Wire the three datasets into the users dashboard
 
 **Files:**
 - Create: `tests/admin-registration-source-dashboard.unit.test.ts`
@@ -406,11 +408,12 @@ Expected: PASS with five tests.
 - [ ] **Step 5: Commit the dashboard integration**
 
 ```bash
+bun lint:fix
 git add tests/admin-registration-source-dashboard.unit.test.ts src/pages/admin/dashboard/users.vue messages/en.json
 git commit -m "feat(admin): chart registration sources"
 ```
 
-### Task 4: Verify the completed feature
+## Task 4: Verify the completed feature
 
 **Files:**
 - Verify: `supabase/functions/_backend/utils/pg.ts`

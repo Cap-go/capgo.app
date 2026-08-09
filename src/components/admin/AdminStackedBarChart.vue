@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { AdminStackedBarDataset } from './adminStackedBarChart'
+import type { AdminStackedBarDataset } from '~/components/admin/adminStackedBarChart'
 import { useDark } from '@vueuse/core'
 import {
   BarController,
@@ -12,8 +12,8 @@ import {
 } from 'chart.js'
 import { computed } from 'vue'
 import { Bar } from 'vue-chartjs'
+import { buildAdminStackedBarChartData, buildAdminStackedBarChartOptions } from '~/components/admin/adminStackedBarChart'
 import { formatLocalDate } from '~/services/date'
-import { buildAdminStackedBarChartData, buildAdminStackedBarChartOptions } from './adminStackedBarChart'
 
 interface DataSeries {
   label: string

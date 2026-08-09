@@ -1226,6 +1226,21 @@ describe('/private/admin_stats', () => {
         without_profile: 0,
       },
     ])
+
+    const exclusiveEndData = await getOnboardingFunnelDirect(
+      '2026-02-01T00:00:00.000Z',
+      ONBOARDING_END_BOUNDARY_CREATED_AT,
+    )
+
+    expect(exclusiveEndData.registration_source_trend).toEqual([
+      {
+        date: '2026-02-01',
+        normal_registrations: 4,
+        invite_registrations: 1,
+        without_profile: 1,
+      },
+    ])
+    expect(exclusiveEndData.registration_source_trend.some(row => row.date === '2026-02-02')).toBe(false)
   })
 
   it.concurrent('keeps an uploaded bundle in the funnel after a later channel promotion', async () => {
