@@ -109,14 +109,13 @@ Queue delivery is at least once, so the tag sync can repeat; treat the tag as a 
 
 #### 3c. Public email preference footer link
 
-Use Capgo's public preference page in Bento footers (does not reveal whether the email has an account):
+Use the same Capgo preference URL in every Bento footer (does not reveal whether the email has an account):
 
 ```text
-https://console.capgo.app/email-preferences?email={{ visitor.email }}&disable=onboarding
+https://console.capgo.app/email-preferences?email={{ visitor.email }}
 ```
 
-- `email` — prefill address
-- `disable` — comma-separated preference keys to start unchecked (e.g. `onboarding,weekly_stats`)
+- Prefills the address only — the visitor chooses what to disable
 - Save always shows success
 - “Unsubscribe from all” calls Bento unsubscribe for that address
 
