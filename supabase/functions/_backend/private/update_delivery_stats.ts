@@ -561,6 +561,7 @@ async function readUpdateDeliveryTimingEventsCFChunked(
     endExclusive: Dayjs
     actions: string[]
     appIds?: string[]
+    requireDuration?: boolean
   },
 ) {
   // AE SQL has a hard row cap and no JOIN. Fetch UTC day windows so busy apps
@@ -577,6 +578,7 @@ async function readUpdateDeliveryTimingEventsCFChunked(
       end_date: chunkEnd.toISOString(),
       actions: params.actions,
       app_ids: params.appIds,
+      require_duration: params.requireDuration,
     })
     events.push(...chunk)
     cursor = next
@@ -617,6 +619,9 @@ async function readUpdateDeliveryStatsCF(
     endExclusive,
     actions: allowPairing ? [...timingActions] : [...endActions],
     appIds,
+    // Platform cannot pair start/end at global scale; spend the AE row budget on
+    // timed completes so admin "Time to deliver an update" is not empty.
+    requireDuration: !allowPairing,
   })
 
   const samples = buildDeliveriesFromEvents(events, {

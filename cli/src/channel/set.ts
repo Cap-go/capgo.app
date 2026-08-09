@@ -4,10 +4,11 @@ import type { Compatibility } from '../utils'
 import { intro, log, outro } from '@clack/prompts'
 import { check2FAComplianceForApp, checkAppExistsAndHasPermissionOrgErr } from '../api/app'
 import { findChannel } from '../api/channels'
+import { getActiveAppVersions, getVersionData } from '../api/versions'
 import { sendUpdateNotificationsForChannels } from '../notifications/send-update'
 import { printPreviewQrForResolvedTarget, resolveChannelPreviewTarget } from '../preview/qr'
 import { formatTable } from '../terminal-table'
-import { checkCompatibilityNativePackages, checkPlanValid, createSupabaseClient, findSavedKey, getAppId, getBundleVersion, getCompatibilityDetails, getConfig, invokeCapgoCliApi, isCompatible, resolveUserIdFromApiKey, sendEvent, updateOrCreateChannel } from '../utils'
+import { checkCompatibilityNativePackages, checkPlanValid, createSupabaseClient, findSavedKey, getAppId, getBundleVersion, getCompatibilityDetails, getConfig, getOrganizationId, invokeCapgoCliApi, isCompatible, resolveUserIdFromApiKey, sendEvent } from '../utils'
 
 /**
  * Display a compatibility table for the given packages
@@ -221,12 +222,7 @@ export async function setChannelInternal(channel: string, appId: string, options
   if (hasBundlePromotion || disableUnlinksRollout)
     await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'channel.promote_bundle', silent, true, existingChannel.id)
 
-  const orgId = existingChannel.owner_org
-  if (!orgId) {
-    if (!silent)
-      log.error(`Cannot get organization id for channel ${channel}`)
-    throw new Error(`Cannot get organization id for channel ${channel}`)
-  }
+  const orgId = await getOrganizationId(options.apikey!, appId, { supaHost: options.supaHost, supaAnon: options.supaAnon })
 
   await checkPlanValid(supabase, orgId, appId)
 
@@ -239,22 +235,12 @@ export async function setChannelInternal(channel: string, appId: string, options
   }
 
   async function findRemoteBundle(versionName: string) {
-    const { data, error: vError } = await supabase
-      .from('app_versions')
-      .select()
-      .eq('app_id', appId)
-      .eq('name', versionName)
-      .eq('user_id', userId)
-      .eq('deleted', false)
-      .single()
-
-    if (vError || !data) {
-      if (!silent)
-        log.error(`Cannot find version ${versionName}`)
-      throw new Error(`Cannot find version ${versionName}`)
-    }
-
-    return data
+    return getVersionData(options.apikey!, appId, versionName, {
+      silent,
+      apikey: options.apikey!,
+      supaHost: options.supaHost,
+      supaAnon: options.supaAnon,
+    })
   }
 
   const resolvedBundleVersion = latest
@@ -262,20 +248,12 @@ export async function setChannelInternal(channel: string, appId: string, options
     : bundle
 
   if (resolvedBundleVersion != null) {
-    const { data, error: vError } = await supabase
-      .from('app_versions')
-      .select()
-      .eq('app_id', appId)
-      .eq('name', resolvedBundleVersion)
-      .eq('user_id', userId)
-      .eq('deleted', false)
-      .single()
-
-    if (vError || !data) {
-      if (!silent)
-        log.error(`Cannot find version ${resolvedBundleVersion}`)
-      throw new Error(`Cannot find version ${resolvedBundleVersion}`)
-    }
+    const data = await getVersionData(options.apikey!, appId, resolvedBundleVersion, {
+      silent,
+      apikey: options.apikey!,
+      supaHost: options.supaHost,
+      supaAnon: options.supaAnon,
+    })
 
     if (!options.ignoreMetadataCheck) {
       const { finalCompatibility, localDependencies } = await checkCompatibilityNativePackages(
@@ -314,16 +292,14 @@ export async function setChannelInternal(channel: string, appId: string, options
   }
 
   if (latestRemote) {
-    const { data, error: vError } = await supabase
-      .from('app_versions')
-      .select()
-      .eq('app_id', appId)
-      .eq('user_id', userId)
-      .eq('deleted', false)
-      .order('created_at', { ascending: false })
-      .single()
-
-    if (vError || !data) {
+    const versions = await getActiveAppVersions(options.apikey!, appId, {
+      silent,
+      apikey: options.apikey!,
+      supaHost: options.supaHost,
+      supaAnon: options.supaAnon,
+    })
+    const data = versions[0]
+    if (!data) {
       if (!silent)
         log.error('Cannot find latest remote version')
       throw new Error('Cannot find latest remote version')
@@ -446,15 +422,14 @@ export async function setChannelInternal(channel: string, appId: string, options
       throw new Error('Cannot promote rollout without a rollout target')
 
     if (channelPayload.rollout_version == null && !options.ignoreMetadataCheck) {
-      const { data, error: vError } = await supabase
-        .from('app_versions')
-        .select()
-        .eq('app_id', appId)
-        .eq('id', rolloutVersion)
-        .eq('deleted', false)
-        .single()
-
-      if (vError || !data)
+      const versions = await getActiveAppVersions(options.apikey!, appId, {
+        silent,
+        apikey: options.apikey!,
+        supaHost: options.supaHost,
+        supaAnon: options.supaAnon,
+      })
+      const data = versions.find(v => v.id === rolloutVersion)
+      if (!data)
         throw new Error('Cannot find rollout version to promote')
 
       const { finalCompatibility, localDependencies } = await checkCompatibilityNativePackages(
@@ -621,7 +596,105 @@ export async function setChannelInternal(channel: string, appId: string, options
     }
   }
   else {
-    const { error: dbError } = await updateOrCreateChannel(supabase, channelPayload)
+    const channelBody: Record<string, unknown> = {
+      app_id: appId,
+      channel,
+    }
+    if (channelPayload.version !== undefined)
+      channelBody.version = typeof channelPayload.version === 'number' ? undefined : channelPayload.version
+    // POST channel expects version as version name string; resolve from id when needed
+    if (typeof channelPayload.version === 'number') {
+      const versions = await getActiveAppVersions(options.apikey!, appId, {
+        silent: true,
+        apikey: options.apikey!,
+        supaHost: options.supaHost,
+        supaAnon: options.supaAnon,
+      })
+      const matched = versions.find(v => v.id === channelPayload.version)
+      if (!matched) {
+        if (!silent)
+          log.error('Cannot set channel because no bundle version could be resolved')
+        throw new Error('Cannot set channel without a bundle version')
+      }
+      channelBody.version = matched.name
+    }
+    else if (channelPayload.version === null) {
+      channelBody.version = null
+    }
+    if (channelPayload.public !== undefined)
+      channelBody.public = channelPayload.public
+    if (channelPayload.disable_auto_update_under_native !== undefined)
+      channelBody.disableAutoUpdateUnderNative = channelPayload.disable_auto_update_under_native
+    if (channelPayload.disable_auto_update !== undefined)
+      channelBody.disableAutoUpdate = channelPayload.disable_auto_update
+    if (channelPayload.ios !== undefined)
+      channelBody.ios = channelPayload.ios
+    if (channelPayload.android !== undefined)
+      channelBody.android = channelPayload.android
+    if (channelPayload.allow_device_self_set !== undefined)
+      channelBody.allow_device_self_set = channelPayload.allow_device_self_set
+    if (channelPayload.allow_emulator !== undefined)
+      channelBody.allow_emulator = channelPayload.allow_emulator
+    if (channelPayload.allow_device !== undefined)
+      channelBody.allow_device = channelPayload.allow_device
+    if (channelPayload.allow_dev !== undefined)
+      channelBody.allow_dev = channelPayload.allow_dev
+    if (channelPayload.allow_prod !== undefined)
+      channelBody.allow_prod = channelPayload.allow_prod
+    if (channelPayload.rollout_version !== undefined) {
+      if (typeof channelPayload.rollout_version === 'number') {
+        const versions = await getActiveAppVersions(options.apikey!, appId, {
+          silent: true,
+          apikey: options.apikey!,
+          supaHost: options.supaHost,
+          supaAnon: options.supaAnon,
+        })
+        const matched = versions.find(v => v.id === channelPayload.rollout_version)
+        if (!matched) {
+          if (!silent)
+            log.error('Cannot set channel because no rollout bundle version could be resolved')
+          throw new Error('Cannot set channel without a rollout bundle version')
+        }
+        channelBody.rolloutVersion = matched.name
+      }
+      else {
+        channelBody.rolloutVersion = channelPayload.rollout_version
+      }
+    }
+    if (channelPayload.rollout_percentage_bps !== undefined)
+      channelBody.rolloutPercentageBps = channelPayload.rollout_percentage_bps
+    if (channelPayload.rollout_enabled !== undefined)
+      channelBody.rolloutEnabled = channelPayload.rollout_enabled
+    if (channelPayload.rollout_paused_at !== undefined)
+      channelBody.rolloutPausedAt = channelPayload.rollout_paused_at
+    if (channelPayload.rollout_pause_reason !== undefined)
+      channelBody.rolloutPauseReason = channelPayload.rollout_pause_reason
+    if (channelPayload.rollout_cache_ttl_seconds !== undefined)
+      channelBody.rolloutCacheTtlSeconds = channelPayload.rollout_cache_ttl_seconds
+    if (channelPayload.auto_pause_enabled !== undefined)
+      channelBody.autoPauseEnabled = channelPayload.auto_pause_enabled
+    if (channelPayload.auto_pause_window_minutes !== undefined)
+      channelBody.autoPauseWindowMinutes = channelPayload.auto_pause_window_minutes
+    if (channelPayload.auto_pause_failure_rate_bps !== undefined)
+      channelBody.autoPauseFailureRateBps = channelPayload.auto_pause_failure_rate_bps
+    if (channelPayload.auto_pause_confidence !== undefined)
+      channelBody.autoPauseConfidence = channelPayload.auto_pause_confidence
+    if (channelPayload.auto_pause_min_attempts !== undefined)
+      channelBody.autoPauseMinAttempts = channelPayload.auto_pause_min_attempts
+    if (channelPayload.auto_pause_min_failures !== undefined)
+      channelBody.autoPauseMinFailures = channelPayload.auto_pause_min_failures
+    if (channelPayload.auto_pause_action !== undefined)
+      channelBody.autoPauseAction = channelPayload.auto_pause_action
+    if (channelPayload.auto_pause_cooldown_minutes !== undefined)
+      channelBody.autoPauseCooldownMinutes = channelPayload.auto_pause_cooldown_minutes
+
+    const { error: dbError } = await invokeCapgoCliApi('channel', {
+      apikey: options.apikey!,
+      method: 'POST',
+      body: channelBody,
+      supaHost: options.supaHost,
+      supaAnon: options.supaAnon,
+    })
     if (dbError) {
       if (!silent)
         log.error('Cannot set channel because this API key does not have the required RBAC permission.')
@@ -642,10 +715,11 @@ export async function setChannelInternal(channel: string, appId: string, options
   }
 
   if (options.qrPreview && !silent) {
-    const previewTarget = await resolveChannelPreviewTarget(supabase, appId, channel)
+    const previewHttp = { apikey: options.apikey!, supaHost: options.supaHost, supaAnon: options.supaAnon }
+    const previewTarget = await resolveChannelPreviewTarget(previewHttp, appId, channel)
     if (!previewTarget)
       throw new Error(`Channel ${channel} not found for app ${appId}`)
-    await printPreviewQrForResolvedTarget(supabase, appId, previewTarget)
+    await printPreviewQrForResolvedTarget(previewHttp, appId, previewTarget)
   }
 
   await sendEvent(options.apikey, {

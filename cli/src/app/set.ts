@@ -14,6 +14,7 @@ import {
   getConfig,
   getContentType,
   getOrganizationId,
+  invokeCapgoCliApi,
   sendEvent,
 } from '../utils'
 
@@ -43,7 +44,7 @@ export async function setAppInternal(appId: string, options: Options, silent = f
 
   const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
   await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'app.update_settings', silent)
-  const organizationUid = await getOrganizationId(supabase, appId)
+  const organizationUid = await getOrganizationId(options.apikey!, appId, { supaHost: options.supaHost, supaAnon: options.supaAnon })
 
   const {
     name,
@@ -72,10 +73,10 @@ export async function setAppInternal(appId: string, options: Options, silent = f
       log.error('retention value cannot be less than 0')
     throw new Error('Retention value cannot be less than 0')
   }
-  else if (retention && retention >= 63113904) {
+  else if (retention && retention > 730) {
     if (!silent)
-      log.error('retention value cannot be greater than 63113904 seconds (2 years)')
-    throw new Error('Retention value cannot be greater than 63113904 seconds (2 years)')
+      log.error('retention value cannot be greater than 730 days (2 years)')
+    throw new Error('Retention value cannot be greater than 730 days (2 years)')
   }
 
   if (buildTimeoutMinutes != null) {
@@ -87,6 +88,7 @@ export async function setAppInternal(appId: string, options: Options, silent = f
     }
   }
 
+  // TODO(cli-http): channel existence check still uses supabase-js
   if (defaultUploadChannel)
     await assertChannelExists(supabase, appId, defaultUploadChannel)
 
@@ -128,6 +130,7 @@ export async function setAppInternal(appId: string, options: Options, silent = f
   }
 
   if (iconBuff && iconType) {
+    // TODO(cli-http): icon upload still requires supabase storage
     const { error } = await supabase.storage
       .from('images')
       .upload(iconPath, iconBuff, {
@@ -144,43 +147,62 @@ export async function setAppInternal(appId: string, options: Options, silent = f
     iconUrl = iconPath
   }
 
-  const appUpdate: Database['public']['Tables']['apps']['Update'] = {}
+  const putBody: Record<string, unknown> = {}
   if (iconBuff && iconType)
-    appUpdate.icon_url = iconUrl
+    putBody.icon = iconUrl
   if (name != null)
-    appUpdate.name = name
+    putBody.name = name
   if (retention != null)
-    appUpdate.retention = retention * 24 * 60 * 60
+    putBody.retention = retention * 24 * 60 * 60
   if (exposeMetadata != null)
-    appUpdate.expose_metadata = exposeMetadata
+    putBody.expose_metadata = exposeMetadata
+  if (allowDeviceCustomId != null)
+    putBody.allow_device_custom_id = allowDeviceCustomId
+  if (blockProviderInfraRequests != null)
+    putBody.block_provider_infra_requests = blockProviderInfraRequests
+  if (iosStoreUrl !== undefined)
+    putBody.ios_store_url = normalizedIosStoreUrl
+  if (androidStoreUrl !== undefined)
+    putBody.android_store_url = normalizedAndroidStoreUrl
+
+  if (Object.keys(putBody).length > 0) {
+    const { error: putError } = await invokeCapgoCliApi(`app/${encodeURIComponent(appId)}`, {
+      apikey: options.apikey!,
+      method: 'PUT',
+      body: putBody,
+      supaHost: options.supaHost,
+      supaAnon: options.supaAnon,
+    })
+    if (putError) {
+      if (!silent)
+        log.error(`Could not set app ${formatError(putError)}`)
+      throw new Error(`Could not set app: ${formatError(putError)}`)
+    }
+  }
+
+  // TODO(cli-http): PUT app does not support allow_preview / build_timeout_seconds / default_upload_channel yet
+  const appUpdate: Database['public']['Tables']['apps']['Update'] = {}
   if (preview != null)
     appUpdate.allow_preview = preview
-  if (allowDeviceCustomId != null)
-    appUpdate.allow_device_custom_id = allowDeviceCustomId
-  if (blockProviderInfraRequests != null)
-    appUpdate.block_provider_infra_requests = blockProviderInfraRequests
   if (buildTimeoutMinutes != null)
     appUpdate.build_timeout_seconds = Math.trunc(Number(buildTimeoutMinutes)) * 60
-  if (iosStoreUrl !== undefined)
-    appUpdate.ios_store_url = normalizedIosStoreUrl
-  if (androidStoreUrl !== undefined)
-    appUpdate.android_store_url = normalizedAndroidStoreUrl
   if (defaultUploadChannel != null)
     appUpdate.default_upload_channel = defaultUploadChannel
 
-  const { error: dbError } = Object.keys(appUpdate).length === 0 && !defaultDownloadChannel && disableDownloadChannels == null
-    ? { error: null }
-    : await supabase
+  if (Object.keys(appUpdate).length > 0) {
+    const { error: dbError } = await supabase
       .from('apps')
       .update(appUpdate)
       .eq('app_id', appId)
 
-  if (dbError) {
-    if (!silent)
-      log.error(`Could not set app ${formatError(dbError)}`)
-    throw new Error(`Could not set app: ${formatError(dbError)}`)
+    if (dbError) {
+      if (!silent)
+        log.error(`Could not set app ${formatError(dbError)}`)
+      throw new Error(`Could not set app: ${formatError(dbError)}`)
+    }
   }
 
+  // TODO(cli-http): download-channel defaults still use direct channel table writes
   if (disableDownloadChannels)
     await disableAllDownloadChannels(supabase, appId)
   else if (defaultDownloadChannel)

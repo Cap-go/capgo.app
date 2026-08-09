@@ -10,12 +10,13 @@ import { GLOBAL_STATS_SHARDS, REQUIRED_GLOBAL_STATS_SHARDS, USAGE_GLOBAL_STATS_S
 import { BRES, middlewareAPISecret, quickError } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { logsnagInsights } from '../utils/logsnag.ts'
-import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import { readGlobalNotificationStatsCF } from '../utils/nativeNotifications.ts'
+import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import { countAllApps, countAllUpdates, countAllUpdatesExternal, getUpdateStats } from '../utils/stats.ts'
 import { supabaseAdmin } from '../utils/supabase.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
 import { backgroundTask } from '../utils/utils.ts'
+
 const DAY_IN_MS = 24 * 60 * 60 * 1000
 
 interface PlanTotal { [key: string]: number }
@@ -42,7 +43,8 @@ type AppBuildOnboardingMetrics = Record<string, unknown> & {
   apps_with_cli_onboarding_builds_24h: number
   apps_with_manual_builds_24h: number
 }
-type AppBuildOnboardingMetricRow = {
+interface AppBuildOnboardingMetricRow {
+  [key: string]: unknown
   created_at: string | Date | null
   created_from_onboarding: boolean | null
   onboarding_completed_at: string | Date | null
@@ -325,8 +327,15 @@ type RequiredGlobalStatsShard = typeof REQUIRED_GLOBAL_STATS_SHARDS[number]
 type GlobalStatsNotificationStepAction = 'send' | 'complete_claimed' | 'skip'
 type GlobalStatsUpdate = Database['public']['Tables']['global_stats']['Update']
 type GlobalStatsRow = Database['public']['Tables']['global_stats']['Row']
-type GlobalStatsSnapshotPatch = GlobalStatsUpdate & { orgs?: number }
-type GlobalStatsSnapshotRow = GlobalStatsRow & { orgs?: number | null }
+type GlobalStatsSnapshotPatch = GlobalStatsUpdate & {
+  orgs?: number
+  // Present in repo migrations before prod deploy; keep writable while generated types lag.
+  apps_with_preview?: number
+}
+type GlobalStatsSnapshotRow = GlobalStatsRow & {
+  orgs?: number | null
+  apps_with_preview?: number | null
+}
 
 interface LogsnagInsightsPayload {
   retry_count?: unknown
@@ -788,14 +797,24 @@ function shouldRefreshMutablePastDueStats(
   return !hasPersistedPastDueStats(snapshot)
 }
 
-function isMissingBuildMetricColumnError(error: unknown): boolean {
+function isMissingSchemaColumnError(error: unknown, columnHints: string[]): boolean {
   const errorCode = String((error as any)?.code ?? '').toUpperCase()
   const message = String((error as any)?.message ?? '').toLowerCase()
   return errorCode === 'PGRST204'
     || errorCode === '42703'
-    || message.includes('build_total_seconds_day')
-    || message.includes('build_avg_seconds_day')
-    || message.includes('build_count_day')
+    || columnHints.some(hint => message.includes(hint.toLowerCase()))
+}
+
+function isMissingBuildMetricColumnError(error: unknown): boolean {
+  return isMissingSchemaColumnError(error, [
+    'build_total_seconds_day',
+    'build_avg_seconds_day',
+    'build_count_day',
+  ])
+}
+
+function isMissingAppsWithPreviewColumnError(error: unknown): boolean {
+  return isMissingSchemaColumnError(error, ['apps_with_preview'])
 }
 
 async function calculateRevenue(c: Context, referenceDate?: Date): Promise<PlanRevenue> {
@@ -1489,6 +1508,29 @@ async function countDemoSeededApps(c: Context, createdAfterIso: string, createdB
   }
 }
 
+async function countAppsWithPreview(c: Context, snapshotEnd: Date): Promise<number> {
+  const pgClient = getPgClient(c, false)
+  const drizzleClient = getDrizzleClient(pgClient)
+
+  try {
+    const result = await drizzleClient.execute<{ count: number }>(sql`
+      SELECT COUNT(*)::int AS count
+      FROM public.apps AS apps
+      WHERE apps.allow_preview = true
+        AND apps.created_at < ${snapshotEnd}
+    `)
+
+    return Number(result.rows[0]?.count) || 0
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'countAppsWithPreview error', error })
+    return 0
+  }
+  finally {
+    closeClient(c, pgClient)
+  }
+}
+
 async function getTrialExtensionStats(c: Context, window: CurrentDayWindow): Promise<TrialExtensionStats> {
   const pgClient = getPgClient(c, false)
   const drizzleClient = getDrizzleClient(pgClient)
@@ -1567,14 +1609,35 @@ async function ensureGlobalStatsSnapshotRows(c: Context, dateIds: readonly strin
 async function updateGlobalStatsSnapshot(c: Context, dateId: string, patch: GlobalStatsSnapshotPatch): Promise<void> {
   await ensureGlobalStatsSnapshotRow(c, dateId)
 
-  const { orgs, ...globalStatsPatch } = patch
+  const { orgs, apps_with_preview, ...globalStatsPatch } = patch
+  const updatePayload = {
+    ...globalStatsPatch,
+    ...(apps_with_preview === undefined ? {} : { apps_with_preview }),
+  } as GlobalStatsUpdate
   const { error } = await supabaseAdmin(c)
     .from('global_stats')
-    .update(globalStatsPatch as GlobalStatsUpdate)
+    .update(updatePayload)
     .eq('date_id', dateId)
 
-  if (error)
-    throw error
+  if (error) {
+    if (apps_with_preview !== undefined && isMissingAppsWithPreviewColumnError(error)) {
+      cloudlog({
+        requestId: c.get('requestId'),
+        message: 'global_stats.apps_with_preview missing; retrying snapshot update without it',
+        dateId,
+        error,
+      })
+      const { error: legacyError } = await supabaseAdmin(c)
+        .from('global_stats')
+        .update(globalStatsPatch as GlobalStatsUpdate)
+        .eq('date_id', dateId)
+      if (legacyError)
+        throw legacyError
+    }
+    else {
+      throw error
+    }
+  }
 
   if (orgs !== undefined)
     await updateGlobalStatsSnapshotOrgCount(c, dateId, orgs)
@@ -2602,6 +2665,7 @@ async function runCoreGlobalStatsShard(c: Context, window: DailyWindow): Promise
   const finalizedAppBuildOnboardingWindow = getCompletedAppBuildOnboardingWindow(window)
   const [
     apps,
+    apps_with_preview,
     updates,
     updates_external,
     users,
@@ -2613,6 +2677,7 @@ async function runCoreGlobalStatsShard(c: Context, window: DailyWindow): Promise
     finalizedAppBuildOnboardingMetrics,
   ] = await Promise.all([
     countAllApps(c, window.prevDayEnd),
+    countAppsWithPreview(c, window.prevDayEnd),
     countAllUpdates(c, window.prevDayEnd),
     countAllUpdatesExternal(c, window.prevDayEnd),
     countRegisteredUsersForSnapshot(c, window.prevDayEnd),
@@ -2653,6 +2718,7 @@ async function runCoreGlobalStatsShard(c: Context, window: DailyWindow): Promise
   await updateGlobalStatsSnapshot(c, window.prevDayDateId, {
     apps,
     apps_active: actives.apps,
+    apps_with_preview,
     above_plan_with_credits,
     above_plan_without_credits,
     need_upgrade,
@@ -2680,7 +2746,7 @@ async function runCoreGlobalStatsShard(c: Context, window: DailyWindow): Promise
     users_active: actives.users,
   })
 
-  cloudlog({ requestId: c.get('requestId'), message: 'Updated global stats core shard', dateId: window.prevDayDateId, finalizedAppBuildOnboardingDateId: finalizedAppBuildOnboardingWindow.prevDayDateId, apps, updates, users, orgs })
+  cloudlog({ requestId: c.get('requestId'), message: 'Updated global stats core shard', dateId: window.prevDayDateId, finalizedAppBuildOnboardingDateId: finalizedAppBuildOnboardingWindow.prevDayDateId, apps, apps_with_preview, updates, users, orgs })
 }
 
 async function getRegistersToday(c: Context, createdAfterIso: string, createdBeforeIso: string): Promise<number> {
@@ -3163,7 +3229,6 @@ function formatPercentCount(count: number, total: number): string {
   return `${(count * 100 / total).toFixed(0)}% - ${count}`
 }
 
-
 interface NativeNotificationGlobalStats {
   apps: number
   providers: number
@@ -3569,7 +3634,6 @@ async function runLogsnagInsightsShard(c: Context, shard: GlobalStatsShard, date
     case 'native_notifications':
       await runNativeNotificationsGlobalStatsShard(c, window)
       await markGlobalStatsShardComplete(c, dateId, shard)
-      return
   }
 }
 

@@ -1,5 +1,7 @@
 // Shared helpers for the per-app build charts (Builds by status + Build time).
 
+import { addUtcDays, normalizeToUtcStartOfDay } from '~/services/date'
+
 const DAY_IN_MS = 1000 * 60 * 60 * 24
 export const WINDOW_DAYS = 30
 
@@ -45,7 +47,7 @@ export function buildSeriesKey(platform: string | null | undefined, outcome: 'su
 }
 
 export interface BuildChartWindow {
-  windowStart: Date // local midnight of the first rendered day
+  windowStart: Date // UTC midnight of the first rendered day
   startISO: string // inclusive lower bound for created_at queries
   endISO: string // inclusive upper bound (end of today)
   dayCount: number // number of days from windowStart..today inclusive
@@ -57,25 +59,22 @@ export interface BuildChartWindow {
 // mode it is the trailing 30 days. Either way data is bucketed by day from
 // windowStart, so there is no separate billing remapping step.
 export function getBuildChartWindow(useBillingPeriod: boolean, subscriptionStart?: string | null): BuildChartWindow {
-  const todayStart = new Date()
-  todayStart.setHours(0, 0, 0, 0)
+  const todayStart = normalizeToUtcStartOfDay()
   const endOfToday = new Date()
-  endOfToday.setHours(23, 59, 59, 999)
 
   let windowStart = new Date(todayStart)
 
-  const cycleStart = subscriptionStart ? new Date(subscriptionStart) : null
+  const cycleStart = subscriptionStart ? normalizeToUtcStartOfDay(new Date(subscriptionStart)) : null
   if (useBillingPeriod && cycleStart && !Number.isNaN(cycleStart.getTime())) {
-    cycleStart.setHours(0, 0, 0, 0)
     const elapsedDays = Math.floor((todayStart.getTime() - cycleStart.getTime()) / DAY_IN_MS)
     // Guard against a future or implausibly old anchor; fall back to 30 days.
     if (elapsedDays >= 0 && elapsedDays <= 366)
       windowStart = cycleStart
     else
-      windowStart.setDate(windowStart.getDate() - (WINDOW_DAYS - 1))
+      windowStart = addUtcDays(windowStart, -(WINDOW_DAYS - 1))
   }
   else {
-    windowStart.setDate(windowStart.getDate() - (WINDOW_DAYS - 1))
+    windowStart = addUtcDays(windowStart, -(WINDOW_DAYS - 1))
   }
 
   const dayCount = Math.max(Math.floor((todayStart.getTime() - windowStart.getTime()) / DAY_IN_MS) + 1, 1)
@@ -121,8 +120,7 @@ export function getTodayLimit(labelCount: number, useBillingPeriod: boolean, cyc
   if (!useBillingPeriod)
     return labelCount - 1
 
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
+  const today = normalizeToUtcStartOfDay()
 
   if (cycleEnd <= today)
     return labelCount - 1

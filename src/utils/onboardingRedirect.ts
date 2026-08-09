@@ -13,6 +13,16 @@ export function canExploreOnboardingDashboard(userId: string | null | undefined)
   return !!userId && dashboardExplorationUserId === userId
 }
 
+export function shouldConfirmOnboardingDashboardExploration(options: {
+  destination: string
+  resumeAppId: string | null | undefined
+  userId: string | null | undefined
+}) {
+  return options.destination === '/dashboard'
+    && !!options.resumeAppId
+    && !canExploreOnboardingDashboard(options.userId)
+}
+
 export function getOnboardingResumeAppId(userId: string | null | undefined) {
   return canExploreOnboardingDashboard(userId) ? dashboardExplorationResumeAppId : null
 }

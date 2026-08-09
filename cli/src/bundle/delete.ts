@@ -32,6 +32,7 @@ export async function deleteBundleInternal(bundleId: string, appId: string, opti
 
   const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
   await check2FAComplianceForApp(supabase, appId, silent)
+  // TODO(cli-http): identity still uses rpc via resolveUserIdFromApiKey
   await resolveUserIdFromApiKey(supabase, options.apikey)
   await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'bundle.delete', silent, true)
 
@@ -40,9 +41,14 @@ export async function deleteBundleInternal(bundleId: string, appId: string, opti
     log.info(`Keep in mind that you will not be able to reuse this bundle version, it's gone forever`)
   }
 
-  await deleteSpecificVersion(supabase, appId, bundleId)
+  await deleteSpecificVersion(supabase, appId, bundleId, {
+    silent,
+    apikey: options.apikey,
+    supaHost: options.supaHost,
+    supaAnon: options.supaAnon,
+  })
 
-  const orgId = await getOrganizationId(supabase, appId)
+  const orgId = await getOrganizationId(options.apikey!, appId, { supaHost: options.supaHost, supaAnon: options.supaAnon })
   await sendEvent(options.apikey, {
     channel: 'app',
     event: 'Bundle Deleted',

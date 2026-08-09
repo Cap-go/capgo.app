@@ -9,8 +9,14 @@ import { toast } from 'vue-sonner'
 import IconSmartphone from '~icons/lucide/smartphone'
 import DateRangePicker from '~/components/DateRangePicker.vue'
 import { formatDate } from '~/services/date'
-import { getDateRangeForPreset, TABLE_DATE_RANGE_DEFAULT } from '~/services/dateRange'
+import {
+  getDateRangeForPreset,
+  getTableDateRangeSignature,
+  shouldRecountOnTableReload,
+  TABLE_DATE_RANGE_DEFAULT,
+} from '~/services/dateRange'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
+import BundleMultiFilter from './BundleMultiFilter.vue'
 
 const props = defineProps<{
   appId: string
@@ -38,6 +44,7 @@ const search = ref('')
 const elements = ref<Device[]>([])
 const isLoading = ref(true)
 const currentPage = ref(1)
+const previousPage = ref(1)
 const nextCursor = ref<string | undefined>(undefined)
 const hasMore = ref(false)
 const pageStartCursor = ref<Map<number, string | null | undefined>>(new Map([[1, undefined]]))
@@ -51,13 +58,13 @@ const initialRange = getDateRangeForPreset(TABLE_DATE_RANGE_DEFAULT)
 const dateRange = ref<[Date, Date] | null>([initialRange.start, initialRange.end])
 const dateRangeMode = ref<DateRangePreset>(TABLE_DATE_RANGE_DEFAULT)
 const selectedPlatform = ref<'' | PlatformOs>('')
-const selectedVersionName = ref(props.versionName ?? '')
+const selectedVersionNames = ref<string[]>(props.versionName ? [props.versionName] : [])
 const bundleNames = ref<string[]>([])
 const dateRangePickerRef = ref<DateRangePickerHandle>()
 const skipFilterReload = ref(false)
 const offset = 10
 const activeExtraFilters = computed(() =>
-  (selectedPlatform.value ? 1 : 0) + (selectedVersionName.value.trim() ? 1 : 0),
+  (selectedPlatform.value ? 1 : 0) + (selectedVersionNames.value.length ? 1 : 0),
 )
 const platformOptions = computed(() => [
   { value: '' as const, label: t('all-platforms') },
@@ -72,7 +79,7 @@ function clearExtraFilters() {
   // schedule a second reload in the same clear action.
   skipFilterReload.value = true
   selectedPlatform.value = ''
-  selectedVersionName.value = ''
+  selectedVersionNames.value = []
   nextTick(() => {
     skipFilterReload.value = false
   })
@@ -80,6 +87,13 @@ function clearExtraFilters() {
 
 function openDateRangePicker(event: MouseEvent) {
   dateRangePickerRef.value?.togglePicker(event.currentTarget as HTMLElement)
+}
+
+function onDateRangeApply(payload: { start: Date, end: Date, mode: DateRangePreset }) {
+  // Apply payload first so refresh does not race v-model flush and keep the old window.
+  dateRangeMode.value = payload.mode
+  dateRange.value = [payload.start, payload.end]
+  void refreshData()
 }
 
 function clearDeviceViewFilters(clearFilters: () => void) {
@@ -143,13 +157,8 @@ function getSearchTerm() {
 }
 
 function getDateRangePayload() {
-  if (dateRangeMode.value !== 'custom') {
-    const rolling = getDateRangeForPreset(dateRangeMode.value)
-    return {
-      updated_at_gt: rolling.start.toISOString(),
-      updated_at_lte: rolling.end.toISOString(),
-    }
-  }
+  // Always use the frozen session bounds. Recomputing rolling presets from
+  // `now` on each page fetch desyncs API filters from cached cursors.
   if (!dateRange.value)
     return {}
   return {
@@ -158,9 +167,15 @@ function getDateRangePayload() {
   }
 }
 
-function getVersionNameFilter() {
-  const selected = selectedVersionName.value.trim()
-  return selected || undefined
+function snapRollingDateRangeBounds() {
+  if (dateRangeMode.value === 'custom')
+    return
+  const rolling = getDateRangeForPreset(dateRangeMode.value)
+  dateRange.value = [rolling.start, rolling.end]
+}
+
+function getVersionNameFilter(): string[] | undefined {
+  return selectedVersionNames.value.length ? [...selectedVersionNames.value] : undefined
 }
 
 function getPlatformFilter(): PlatformOs | undefined {
@@ -170,14 +185,15 @@ function getPlatformFilter(): PlatformOs | undefined {
 function getQuerySignature() {
   return JSON.stringify({
     appId: props.appId,
-    versionName: getVersionNameFilter(),
+    versionNames: getVersionNameFilter() ?? [],
     platform: getPlatformFilter() ?? '',
     search: getSearchTerm(),
     order: getActiveOrder(columns.value),
     override: filters.value.Override,
     customIdMode: filters.value.CustomId,
     ids: props.ids ? [...props.ids].sort().join(',') : '',
-    dateRange: getDateRangePayload(),
+    // Stable mode identity — not rolling ISO bounds that move every millisecond.
+    dateRange: getTableDateRangeSignature(dateRangeMode.value, dateRange.value),
   })
 }
 
@@ -204,9 +220,11 @@ async function loadBundleNames() {
   }
 
   const names = [...new Set(data.map(row => row.name).filter(Boolean))]
-  const selected = getVersionNameFilter()
-  if (selected && !names.includes(selected))
-    names.unshift(selected)
+  const selected = getVersionNameFilter() ?? []
+  for (const name of selected) {
+    if (!names.includes(name))
+      names.unshift(name)
+  }
   bundleNames.value = names
 }
 
@@ -252,7 +270,7 @@ async function countDevices() {
       body: JSON.stringify({
         count: true,
         appId: props.appId,
-        versionName: getVersionNameFilter(),
+        versionNames: getVersionNameFilter(),
         platform: getPlatformFilter(),
         devicesId: deviceIds.length > 0 ? deviceIds : undefined,
         search: searchTerm,
@@ -288,24 +306,47 @@ function clearPaginationState() {
   hasMore.value = false
 }
 
+function resetTablePagination(options: { snapRolling?: boolean } = {}) {
+  if (options.snapRolling)
+    snapRollingDateRangeBounds()
+  currentPage.value = 1
+  previousPage.value = 1
+  clearPaginationState()
+  elements.value.length = 0
+  lastQuerySignature.value = getQuerySignature()
+}
+
 async function reload() {
   const loadId = ++activeLoadId.value
   isLoading.value = true
   try {
+    const requestedPage = currentPage.value
     const querySignature = getQuerySignature()
-    if (lastQuerySignature.value !== querySignature) {
-      lastQuerySignature.value = querySignature
-      currentPage.value = 1
-      clearPaginationState()
-      elements.value.length = 0
+    const filtersChanged = lastQuerySignature.value !== querySignature
+    const shouldRecount = shouldRecountOnTableReload({
+      filtersChanged,
+      previousPage: previousPage.value,
+      requestedPage,
+    })
+    if (filtersChanged) {
+      // Keep frozen date bounds; only drop cursors / page for the new filters.
+      resetTablePagination()
     }
 
-    const newTotal = await countDevices()
-    if (loadId !== activeLoadId.value)
-      return
+    if (shouldRecount) {
+      // Toolbar reload (not a page change): snap rolling bounds and drop
+      // cursors so the new window cannot reuse stale page offsets.
+      if (!filtersChanged)
+        resetTablePagination({ snapRolling: true })
+      const newTotal = await countDevices()
+      if (loadId !== activeLoadId.value)
+        return
+      total.value = newTotal
+    }
 
-    total.value = newTotal
     await getData(loadId)
+    if (loadId === activeLoadId.value)
+      previousPage.value = currentPage.value
   }
   catch (error) {
     console.error(error)
@@ -321,16 +362,15 @@ async function refreshData() {
   const loadId = ++activeLoadId.value
   isLoading.value = true
   try {
-    currentPage.value = 1
-    lastQuerySignature.value = getQuerySignature()
-    clearPaginationState()
-    elements.value.length = 0
+    resetTablePagination({ snapRolling: true })
     const newTotal = await countDevices()
     if (loadId !== activeLoadId.value)
       return
 
     total.value = newTotal
     await getData(loadId)
+    if (loadId === activeLoadId.value)
+      previousPage.value = currentPage.value
   }
   catch (error) {
     console.error(error)
@@ -379,7 +419,7 @@ async function fetchDevicesPage(cursor: string | undefined | null) {
     },
     body: JSON.stringify({
       appId: props.appId,
-      versionName: getVersionNameFilter(),
+      versionNames: getVersionNameFilter(),
       platform: getPlatformFilter(),
       devicesId: ids.length ? ids : undefined,
       search: searchTerm,
@@ -543,7 +583,7 @@ watch(() => props.appId, async (appId) => {
   activeLoadId.value += 1
   skipFilterReload.value = true
   selectedPlatform.value = ''
-  selectedVersionName.value = props.versionName ?? ''
+  selectedVersionNames.value = props.versionName ? [props.versionName] : []
   await loadBundleNames()
   if (appId !== props.appId)
     return
@@ -554,16 +594,16 @@ watch(() => props.appId, async (appId) => {
 watch(() => props.versionName, (value) => {
   cancelScheduledReload()
   skipFilterReload.value = true
-  selectedVersionName.value = value ?? ''
+  selectedVersionNames.value = value ? [value] : []
   skipFilterReload.value = false
   debouncedReload()
 })
 
-watch([selectedPlatform, selectedVersionName], () => {
+watch([selectedPlatform, selectedVersionNames], () => {
   if (skipFilterReload.value)
     return
   debouncedReload()
-})
+}, { deep: true })
 </script>
 
 <template>
@@ -587,7 +627,7 @@ watch([selectedPlatform, selectedVersionName], () => {
           v-model="dateRange"
           v-model:mode="dateRangeMode"
           compact
-          @apply="refreshData()"
+          @apply="onDateRangeApply"
         />
       </template>
       <template #empty-state="{ clearFilters, hasActiveFilters }">
@@ -668,29 +708,10 @@ watch([selectedPlatform, selectedVersionName], () => {
             </button>
           </div>
         </fieldset>
-        <div class="flex w-full flex-col gap-2">
-          <label for="device-table-bundle-filter" class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
-            {{ t('bundle') }}
-          </label>
-          <input
-            id="device-table-bundle-filter"
-            v-model="selectedVersionName"
-            list="device-table-bundle-options"
-            type="text"
-            class="d-input d-input-bordered min-h-11 w-full border-slate-200 bg-white text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
-            :placeholder="t('all-bundles')"
-            :aria-label="t('bundle')"
-            data-test="device-bundle-filter"
-            autocomplete="off"
-          >
-          <datalist id="device-table-bundle-options">
-            <option
-              v-for="name in bundleNames"
-              :key="name"
-              :value="name"
-            />
-          </datalist>
-        </div>
+        <BundleMultiFilter
+          v-model="selectedVersionNames"
+          :options="bundleNames"
+        />
       </template>
     </DataTable>
   </div>

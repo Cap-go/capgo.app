@@ -5,6 +5,7 @@ import pack from '../package.json'
 import { categorizeCliError } from './analytics/error-category'
 import { applyCommandAnalyticsOptOut, applyRawCommandAnalyticsOptOut } from './analytics/opt-out'
 import { enableSupabaseInstrumentation } from './analytics/supabase-perf'
+import { setCurrentCliCommand } from './analytics/cli-headers'
 import { extractCommandContext, flushAnalytics, trackCommandFailed, trackCommandInvoked, trackCommandSucceeded } from './analytics/track'
 import { addApp } from './app/add'
 import { debugApp } from './app/debug'
@@ -53,6 +54,7 @@ import { capturePosthogException, getCommandPath, shouldCapturePosthogException 
 import { getPreviewQr } from './preview/qr'
 import { probe } from './probe'
 import { testRunDeviceCommand } from './run/device'
+import { CliUserError } from './shared/cli-user-error'
 import { getUserId } from './user/account'
 import { formatError } from './utils'
 import { normalizeAutoBumpInput } from './versionHelpers'
@@ -88,6 +90,7 @@ let currentCommandPath = 'unknown'
 program.hook('preAction', (_thisCommand, actionCommand) => {
   setConfigWriteTarget(resolveCapacitorConfigTargetPath(actionCommand.optsWithGlobals().capacitorConfig))
   currentCommandPath = getCommandPath(actionCommand)
+  setCurrentCliCommand(currentCommandPath)
   applyCommandAnalyticsOptOut(currentCommandPath, actionCommand.opts())
   trackCommandInvoked(currentCommandPath, extractCommandContext(actionCommand))
 })
@@ -897,6 +900,7 @@ build
   .option('-a, --apikey <apikey>', 'API key to link to your account')
   .option('-p, --platform <platform>', 'Platform to onboard (ios or android). If omitted, auto-detects when only one native folder exists; prompts otherwise.')
   .option('--supa-host <supaHost>', optionDescriptions.supaHost)
+  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
   .option('--no-analytics', 'Disable build onboarding analytics and terminal replay for this run')
   // enableSelfUpdate is set ONLY here (the genuine `build init` entrypoint) so
   // the self-update prompt's re-exec replays `build init`, never a wrapper
@@ -1348,8 +1352,11 @@ void (async () => {
         status: 1,
       })
       : Promise.resolve(false)
-    // For non-Commander errors, show full error details
-    log.error(`Error: ${formatError(error)}`)
+    // For non-Commander errors, show full error details. A CliUserError already
+    // printed a clear message at the call site, so skip the redundant and
+    // alarming `Error: …` line for it.
+    if (!(error instanceof CliUserError))
+      log.error(`Error: ${formatError(error)}`)
     trackCommandFailed(currentCommandPath, { errorCategory: categorizeCliError(error), exitCode: 1 })
     await Promise.all([capturePromise, flushAnalytics(), finishActiveCliReplay().catch(() => {})])
     exit(1)

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { updateDeliveryStatsTestUtils } from '../supabase/functions/_backend/private/update_delivery_stats.ts'
+import { buildUpdateDeliveryTimingEventsCFQuery } from '../supabase/functions/_backend/utils/cloudflare.ts'
 
 describe('update delivery stats helpers', () => {
   it.concurrent('normalizes bounded period days', () => {
@@ -13,6 +14,34 @@ describe('update delivery stats helpers', () => {
     expect(updateDeliveryStatsTestUtils.normalizePeriodDays(0)).toBeNull()
     expect(updateDeliveryStatsTestUtils.normalizePeriodDays(366)).toBeNull()
     expect(updateDeliveryStatsTestUtils.normalizePeriodDays(7.5)).toBeNull()
+  })
+
+  it.concurrent('builds platform AE queries that keep the row budget on timed completes', () => {
+    const query = buildUpdateDeliveryTimingEventsCFQuery({
+      start_date: '2026-07-01T00:00:00.000Z',
+      end_date: '2026-07-02T00:00:00.000Z',
+      actions: ['download_complete', 'download_zip_complete'],
+      require_duration: true,
+      limit: 50_000,
+    })
+
+    expect(query).toContain("blob2 IN ('download_complete', 'download_zip_complete')")
+    expect(query).toContain("AND (double1 > 0 OR position('duration' IN blob4) > 0)")
+    expect(query).not.toContain('AND index1 =')
+  })
+
+  it.concurrent('keeps pairing AE queries unfiltered so start events remain available', () => {
+    const query = buildUpdateDeliveryTimingEventsCFQuery({
+      start_date: '2026-07-01T00:00:00.000Z',
+      end_date: '2026-07-02T00:00:00.000Z',
+      actions: ['download_complete', 'download_0'],
+      app_ids: ['com.demo.app'],
+      require_duration: false,
+      limit: 10,
+    })
+
+    expect(query).toContain("AND index1 = 'com.demo.app'")
+    expect(query).not.toContain("position('duration' IN blob4)")
   })
 
   it.concurrent('normalizes supported scopes', () => {

@@ -25,36 +25,44 @@ async function test(name, fn) {
   }
 }
 
-function createSupabaseStub({ apps = [], bundles = [], channels = [] }) {
-  const tables = {
-    apps,
-    app_versions: bundles,
-    channels,
-  }
-
+function createHttpStub({ apps = [], bundles = [], channels = [] }) {
   return {
-    from(table) {
-      const filters = []
-      const builder = {
-        select() {
-          return builder
-        },
-        eq(column, value) {
-          filters.push({ column, value })
-          return builder
-        },
-        maybeSingle() {
-          const rows = (tables[table] ?? []).filter(row => filters.every(filter => row[filter.column] === filter.value))
-          return Promise.resolve({ data: rows[0] ?? null, error: null })
-        },
-        single() {
-          const rows = (tables[table] ?? []).filter(row => filters.every(filter => row[filter.column] === filter.value))
-          if (!rows[0])
-            return Promise.resolve({ data: null, error: { message: 'not found' } })
-          return Promise.resolve({ data: rows[0], error: null })
-        },
+    apikey: 'test-key',
+    async invoke(path) {
+      const url = new URL(path, 'https://example.test/')
+      const pathname = url.pathname.replace(/^\//, '')
+
+      if (pathname.startsWith('app/')) {
+        const appId = decodeURIComponent(pathname.slice('app/'.length))
+        const app = apps.find(row => row.app_id === appId)
+        if (!app)
+          return { data: null, error: Object.assign(new Error('not found'), { context: { status: 404 } }) }
+        return { data: app, error: null }
       }
-      return builder
+
+      if (pathname === 'bundle') {
+        const appId = url.searchParams.get('app_id')
+        const page = Number(url.searchParams.get('page') || '0')
+        const rows = bundles.filter(row => row.app_id === appId && row.deleted === false)
+        const slice = rows.slice(page * 50, page * 50 + 50)
+        return { data: slice, error: null }
+      }
+
+      if (pathname === 'channel') {
+        const appId = url.searchParams.get('app_id')
+        const channelName = url.searchParams.get('channel')
+        const page = Number(url.searchParams.get('page') || '0')
+        const rows = channels.filter(row => row.app_id === appId)
+        if (channelName) {
+          const channel = rows.find(row => row.name === channelName)
+          if (!channel)
+            return { data: null, error: Object.assign(new Error('missing'), { context: { status: 400 } }) }
+          return { data: channel, error: null }
+        }
+        return { data: rows.slice(page * 50, page * 50 + 50), error: null }
+      }
+
+      return { data: null, error: new Error(`unexpected path ${path}`) }
     },
   }
 }
@@ -74,7 +82,7 @@ await test('builds compact channel preview deep link', () => {
 })
 
 await test('resolves bundle refs by id or name', async () => {
-  const supabase = createSupabaseStub({
+  const http = createHttpStub({
     bundles: [
       { app_id: 'com.example.app', deleted: false, id: 42, name: '1.2.3' },
       { app_id: 'com.example.app', deleted: false, id: 99, name: 'numeric-name' },
@@ -82,17 +90,17 @@ await test('resolves bundle refs by id or name', async () => {
   })
 
   assert.deepEqual(
-    await resolvePreviewQrTarget(supabase, 'com.example.app', { bundle: '42' }),
+    await resolvePreviewQrTarget(http, 'com.example.app', { bundle: '42' }),
     { appId: 'com.example.app', bundleName: '1.2.3', kind: 'bundle', versionId: 42 },
   )
   assert.deepEqual(
-    await resolvePreviewQrTarget(supabase, 'com.example.app', { bundle: 'numeric-name' }),
+    await resolvePreviewQrTarget(http, 'com.example.app', { bundle: 'numeric-name' }),
     { appId: 'com.example.app', bundleName: 'numeric-name', kind: 'bundle', versionId: 99 },
   )
 })
 
 await test('resolves channel refs by id or name', async () => {
-  const supabase = createSupabaseStub({
+  const http = createHttpStub({
     channels: [
       { app_id: 'com.example.app', id: 7, name: 'production' },
       { app_id: 'com.example.app', id: 8, name: 'beta' },
@@ -100,34 +108,34 @@ await test('resolves channel refs by id or name', async () => {
   })
 
   assert.deepEqual(
-    await resolvePreviewQrTarget(supabase, 'com.example.app', { channel: '7' }),
+    await resolvePreviewQrTarget(http, 'com.example.app', { channel: '7' }),
     { appId: 'com.example.app', channelId: 7, channelName: 'production', kind: 'channel' },
   )
   assert.deepEqual(
-    await resolvePreviewQrTarget(supabase, 'com.example.app', { channel: 'beta' }),
+    await resolvePreviewQrTarget(http, 'com.example.app', { channel: 'beta' }),
     { appId: 'com.example.app', channelId: 8, channelName: 'beta', kind: 'channel' },
   )
 })
 
 await test('requires type when positional target is ambiguous', async () => {
-  const supabase = createSupabaseStub({
+  const http = createHttpStub({
     bundles: [{ app_id: 'com.example.app', deleted: false, id: 42, name: 'production' }],
     channels: [{ app_id: 'com.example.app', id: 7, name: 'production' }],
   })
 
   await assert.rejects(
-    () => resolvePreviewQrTarget(supabase, 'com.example.app', { target: 'production' }),
+    () => resolvePreviewQrTarget(http, 'com.example.app', { target: 'production' }),
     /matches both a bundle and a channel/,
   )
 })
 
 await test('rejects QR when app preview is disabled', async () => {
-  const supabase = createSupabaseStub({
+  const http = createHttpStub({
     apps: [{ app_id: 'com.example.app', allow_preview: false }],
   })
 
   await assert.rejects(
-    () => assertAppAllowsPreview(supabase, 'com.example.app'),
+    () => assertAppAllowsPreview(http, 'com.example.app'),
     /Preview is disabled/,
   )
 })

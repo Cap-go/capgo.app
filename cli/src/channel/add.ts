@@ -35,6 +35,7 @@ export async function addChannelInternal(channelId: string, appId: string, optio
 
   const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon, silent)
   await check2FAComplianceForApp(supabase, appId, silent)
+  // TODO(cli-http): identity still uses rpc(get_user_id) via resolveUserIdFromApiKey
   await resolveUserIdFromApiKey(supabase, options.apikey)
   // Creating a channel needs the exact RBAC permission. The backend and channels
   // INSERT RLS remain authoritative, so a key without app.create_channel is denied.
@@ -43,15 +44,16 @@ export async function addChannelInternal(channelId: string, appId: string, optio
   if (!silent)
     log.info(`Creating channel ${appId}#${channelId} to Capgo`)
 
-  const orgId = await getOrganizationId(supabase, appId)
-  const userId = await resolveUserIdFromApiKey(supabase, options.apikey)
-
-  const res = await createChannel(supabase, {
-    name: channelId,
+  const orgId = await getOrganizationId(options.apikey!, appId, { supaHost: options.supaHost, supaAnon: options.supaAnon })
+  const res = await createChannel({
+    apikey: options.apikey!,
+    silent,
+    supaHost: options.supaHost,
+    supaAnon: options.supaAnon,
+  }, {
+    channel: channelId,
     app_id: appId,
     version: null,
-    created_by: userId,
-    owner_org: orgId,
     allow_device_self_set: options.selfAssign ?? false,
     public: options.default ?? false,
   })
@@ -80,7 +82,10 @@ export async function addChannelInternal(channelId: string, appId: string, optio
     outro('Done ✅')
   }
 
-  return res.data ?? true
+  // POST /channel returns { status: 'ok' } when creating without a bundle promote;
+  // keep the previous PostgREST shape so callers can read the channel name.
+  const data = res.data && typeof res.data === 'object' ? res.data as Record<string, unknown> : {}
+  return { ...data, name: channelId }
 }
 
 export async function addChannel(channelId: string, appId: string, options: ChannelAddOptions) {

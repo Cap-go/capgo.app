@@ -45,4 +45,22 @@ describe('onboarding dashboard redirect', () => {
     expect(refreshedModule.getOnboardingResumeAppId('user-1')).toBeNull()
     expect(refreshedModule.getOnboardingResumeRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/apps', resumeAppId: null, userId: 'user-1' })).toEqual({ path: '/app/new', query: { resume: 'com.example.app' } })
   })
+
+  it('asks for dashboard confirmation only before exploration is granted', async () => {
+    const module = await import('../src/utils/onboardingRedirect.ts')
+
+    expect(module.shouldConfirmOnboardingDashboardExploration({
+      destination: '/dashboard',
+      resumeAppId: 'com.example.app',
+      userId: 'user-1',
+    })).toBe(true)
+
+    module.allowOnboardingDashboardExploration('user-1', 'com.example.app')
+
+    expect(module.shouldConfirmOnboardingDashboardExploration({
+      destination: '/dashboard',
+      resumeAppId: 'com.example.app',
+      userId: 'user-1',
+    })).toBe(false)
+  })
 })

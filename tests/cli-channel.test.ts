@@ -955,25 +955,41 @@ describe('tests CLI channel commands', () => {
         expect(scopedChannelsError).toBeNull()
         expect(scopedChannels).toEqual([{ id: target!.id, name: targetChannelName }])
 
-        const { error: targetUpdateError } = await scopedSupabase
+        // Channel-scoped admins may edit settings, but promoting to public
+        // requires app.update_settings and must be denied here.
+        const { error: targetPublicUpdateError } = await scopedSupabase
           .from('channels')
           .update({ public: true })
+          .eq('id', target!.id)
+        expect(targetPublicUpdateError?.code).toBe('42501')
+
+        const { error: targetUpdateError } = await scopedSupabase
+          .from('channels')
+          .update({ allow_emulator: true })
           .eq('id', target!.id)
         expect(targetUpdateError).toBeNull()
 
         const { error: siblingUpdateError } = await scopedSupabase
           .from('channels')
-          .update({ public: true })
+          .update({ allow_emulator: true })
           .eq('id', sibling!.id)
         expect(siblingUpdateError).toBeNull()
 
         const { data: siblingAfterDirectUpdate, error: siblingAfterDirectUpdateError } = await supabase
           .from('channels')
-          .select('public')
+          .select('allow_emulator')
           .eq('id', sibling!.id)
           .single()
         expect(siblingAfterDirectUpdateError).toBeNull()
-        expect(siblingAfterDirectUpdate?.public).toBe(false)
+        expect(siblingAfterDirectUpdate?.allow_emulator).toBe(false)
+
+        const { data: targetAfterDirectUpdate, error: targetAfterDirectUpdateError } = await supabase
+          .from('channels')
+          .select('public, allow_emulator')
+          .eq('id', target!.id)
+          .single()
+        expect(targetAfterDirectUpdateError).toBeNull()
+        expect(targetAfterDirectUpdate).toEqual({ public: false, allow_emulator: true })
 
         const postResponse = await fetch(`${BASE_URL}/channel`, {
           method: 'POST',

@@ -2,13 +2,78 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Database } from '../types/supabase.types'
 import { confirm as confirmC, intro, log, outro, spinner } from '@clack/prompts'
 import { Table } from '@sauber/table'
-import { formatError } from '../utils'
+import { formatError, invokeCapgoCliApi } from '../utils'
 
 interface CheckVersionOptions {
   silent?: boolean
   autoUnlink?: boolean
   channelName?: string
   requireMatch?: boolean
+  apikey?: string
+  supaHost?: string
+  supaAnon?: string
+}
+
+interface CapgoHttpOptions {
+  apikey: string
+  silent?: boolean
+  supaHost?: string
+  supaAnon?: string
+}
+
+type HttpChannel = {
+  id: number
+  name: string
+  public?: boolean
+  ios?: boolean
+  android?: boolean
+  allow_device_self_set?: boolean
+  allow_emulator?: boolean
+  allow_device?: boolean
+  allow_dev?: boolean
+  allow_prod?: boolean
+  disableAutoUpdate?: string
+  disable_auto_update?: string
+  disableAutoUpdateUnderNative?: boolean
+  disable_auto_update_under_native?: boolean
+  created_at?: string
+  created_by?: string
+  app_id?: string
+  version?: { id?: number, name?: string } | null
+  rollout_version?: number | null
+  rollout_version_info?: { id?: number, name?: string } | null
+}
+
+function normalizeHttpChannel(row: HttpChannel): Channel {
+  return {
+    id: row.id,
+    name: row.name,
+    public: !!row.public,
+    // TODO(cli-http): GET channel does not currently return ios/android; default false for display
+    ios: row.ios ?? false,
+    android: row.android ?? false,
+    disable_auto_update: String(row.disableAutoUpdate ?? row.disable_auto_update ?? ''),
+    disable_auto_update_under_native: !!(row.disableAutoUpdateUnderNative ?? row.disable_auto_update_under_native),
+    allow_device_self_set: !!row.allow_device_self_set,
+    allow_emulator: !!row.allow_emulator,
+    allow_device: !!row.allow_device,
+    allow_dev: !!row.allow_dev,
+    allow_prod: !!row.allow_prod,
+    version: row.version ?? undefined,
+  }
+}
+
+async function fetchChannelsPage(appid: string, page: number, options: CapgoHttpOptions, channel?: string) {
+  const params = new URLSearchParams({ app_id: appid, page: String(page) })
+  if (channel)
+    params.set('channel', channel)
+  return invokeCapgoCliApi<HttpChannel | HttpChannel[]>(`channel?${params.toString()}`, {
+    apikey: options.apikey,
+    method: 'GET',
+    body: undefined,
+    supaHost: options.supaHost,
+    supaAnon: options.supaAnon,
+  })
 }
 
 export async function checkVersionNotUsedInChannel(
@@ -17,25 +82,31 @@ export async function checkVersionNotUsedInChannel(
   versionData: Database['public']['Tables']['app_versions']['Row'],
   options: CheckVersionOptions = {},
 ) {
-  const { silent = false, autoUnlink = false, channelName, requireMatch = false } = options
-  let query = supabase
-    .from('channels')
-    .select()
-    .eq('app_id', appid)
-    .or(`version.eq.${versionData.id},rollout_version.eq.${versionData.id}`)
-
-  if (channelName)
-    query = query.eq('name', channelName)
-
-  const { data: channelFound, error: errorChannel } = await query
-
-  if (errorChannel) {
-    if (!silent)
-      log.error(`Cannot check Version ${appid}@${versionData.name}: ${formatError(errorChannel)}`)
-    throw new Error(`Cannot check version ${appid}@${versionData.name}: ${formatError(errorChannel)}`)
+  const { silent = false, autoUnlink = false, channelName, requireMatch = false, apikey, supaHost, supaAnon } = options
+  if (!apikey) {
+    // TODO(cli-http): callers must pass apikey for HTTP unlink
+    throw new Error('Missing API key for channel version check')
   }
 
-  if (!channelFound?.length) {
+  // Channel link reads stay on PostgREST so preview keys (no app.read_channels) still work.
+  let query = supabase
+    .from('channels')
+    .select('id, name, version, rollout_version')
+    .eq('app_id', appid)
+  if (channelName)
+    query = query.eq('name', channelName)
+  const { data, error } = await query
+  if (error) {
+    if (!silent)
+      log.error(`Cannot check Version ${appid}@${versionData.name}: ${formatError(error)}`)
+    throw new Error(`Cannot check version ${appid}@${versionData.name}: ${formatError(error)}`)
+  }
+
+  const channelFound = (data ?? []).filter((channel) => {
+    return channel.version === versionData.id || channel.rollout_version === versionData.id
+  })
+
+  if (!channelFound.length) {
     if (channelName && requireMatch) {
       const message = `Version ${appid}@${versionData.name} is not linked to channel ${channelName}`
       if (!silent)
@@ -66,22 +137,27 @@ export async function checkVersionNotUsedInChannel(
     const s = silent ? null : spinner()
     s?.start(`Unlinking channel ${channel.name}`)
 
-    const patch: Database['public']['Tables']['channels']['Update'] = {}
-    if (channel.version === versionData.id) {
-      patch.version = null
+    const body: Record<string, unknown> = {
+      app_id: appid,
+      channel: channel.name,
     }
+    if (channel.version === versionData.id)
+      body.version = null
     if (channel.rollout_version === versionData.id) {
-      patch.rollout_version = null
-      patch.rollout_enabled = false
-      patch.rollout_percentage_bps = 0
-      patch.rollout_paused_at = null
-      patch.rollout_pause_reason = null
+      body.rollout_version = null
+      body.rollout_enabled = false
+      body.rollout_percentage_bps = 0
+      body.rollout_paused_at = null
+      body.rollout_pause_reason = null
     }
 
-    const { error: errorChannelUpdate } = await supabase
-      .from('channels')
-      .update(patch)
-      .eq('id', channel.id)
+    const { error: errorChannelUpdate } = await invokeCapgoCliApi('channel', {
+      apikey,
+      method: 'POST',
+      body,
+      supaHost,
+      supaAnon,
+    })
 
     if (errorChannelUpdate) {
       s?.stop(`Cannot update channel ${channel.name} ${formatError(errorChannelUpdate)}`)
@@ -96,25 +172,41 @@ export async function checkVersionNotUsedInChannel(
 }
 
 export function createChannel(
-  supabase: SupabaseClient<Database>,
-  update: Database['public']['Tables']['channels']['Insert'],
+  options: CapgoHttpOptions,
+  update: {
+    app_id: string
+    channel: string
+    version?: string | null
+    public?: boolean
+    allow_device_self_set?: boolean
+    [key: string]: unknown
+  },
 ) {
-  return supabase
-    .from('channels')
-    .insert(update)
-    .select()
-    .single()
+  return invokeCapgoCliApi('channel', {
+    apikey: options.apikey,
+    method: 'POST',
+    body: update,
+    supaHost: options.supaHost,
+    supaAnon: options.supaAnon,
+  })
 }
 
-export function delChannel(supabase: SupabaseClient<Database>, name: string, appId: string) {
-  return supabase
-    .from('channels')
-    .delete()
-    .eq('name', name)
-    .eq('app_id', appId)
-    .single()
+export function delChannel(options: CapgoHttpOptions, name: string, appId: string, deleteBundle = false) {
+  return invokeCapgoCliApi('channel', {
+    apikey: options.apikey,
+    method: 'DELETE',
+    body: {
+      app_id: appId,
+      channel: name,
+      delete_bundle: deleteBundle,
+    },
+    supaHost: options.supaHost,
+    supaAnon: options.supaAnon,
+  })
 }
 
+// Channel reads stay on PostgREST so RLS (app.read / channel.read) matches console and
+// preview-key behavior. HTTP GET /channel requires app.read_channels, which preview keys lack.
 export function findChannel(supabase: SupabaseClient<Database>, appId: string, name: string) {
   return supabase
     .from('channels')
@@ -124,19 +216,53 @@ export function findChannel(supabase: SupabaseClient<Database>, appId: string, n
     .single()
 }
 
+export type ChannelLinkedVersion = { id: number, name: string }
 
-export function findBundleIdByChannelName(supabase: SupabaseClient<Database>, appId: string, name: string) {
-  return supabase
+export async function findVersionsLinkedToChannel(
+  supabase: SupabaseClient<Database>,
+  appId: string,
+  name: string,
+): Promise<{ stable: ChannelLinkedVersion | null, rollout: ChannelLinkedVersion | null }> {
+  const { data, error } = await supabase
     .from('channels')
     .select(`
       id,
-      version:app_versions!channels_version_fkey(id, name)
+      version:app_versions!channels_version_fkey(id, name),
+      rollout_version_info:app_versions!channels_rollout_version_fkey(id, name)
     `)
     .eq('app_id', appId)
     .eq('name', name)
-    .single()
-    .throwOnError()
-    .then(({ data }) => data?.version)
+    .maybeSingle()
+
+  if (error || !data)
+    return { stable: null, rollout: null }
+
+  const stable = data.version && typeof data.version === 'object' && !Array.isArray(data.version)
+    ? data.version as ChannelLinkedVersion
+    : null
+  const rollout = data.rollout_version_info && typeof data.rollout_version_info === 'object' && !Array.isArray(data.rollout_version_info)
+    ? data.rollout_version_info as ChannelLinkedVersion
+    : null
+  return { stable, rollout }
+}
+
+export async function isVersionLinkedToOtherChannel(
+  supabase: SupabaseClient<Database>,
+  appId: string,
+  versionId: number,
+  excludeChannelName: string,
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('channels')
+    .select('id')
+    .eq('app_id', appId)
+    .neq('name', excludeChannelName)
+    .or(`version.eq.${versionId},rollout_version.eq.${versionId}`)
+    .limit(1)
+
+  if (error)
+    return true
+  return (data?.length ?? 0) > 0
 }
 
 export type { Channel } from '../schemas/channel'
@@ -173,38 +299,25 @@ export function displayChannels(data: Channel[], silent = false) {
 }
 
 export async function getActiveChannels(
-  supabase: SupabaseClient<Database>,
+  options: CapgoHttpOptions,
   appid: string,
-  silent = false,
 ) {
-  const { data, error: vError } = await supabase
-    .from('channels')
-    .select(`
-      id,
-      name,
-      public,
-      allow_emulator,
-      allow_device,
-      allow_dev,
-      allow_prod,
-      ios,
-      android,
-      allow_device_self_set,
-      disable_auto_update_under_native,
-      disable_auto_update,
-      created_at,
-      created_by,
-      app_id,
-      version:app_versions!channels_version_fkey(id, name)
-    `)
-    .eq('app_id', appid)
-    .order('created_at', { ascending: false })
-
-  if (vError) {
-    if (!silent)
-      log.error(`App ${appid} not found in database`)
-    throw new Error(`App ${appid} not found in database: ${formatError(vError)}`)
+  const all: Channel[] = []
+  let page = 0
+  while (true) {
+    const { data, error: vError } = await fetchChannelsPage(appid, page, options)
+    if (vError) {
+      if (!options.silent)
+        log.error(`App ${appid} not found in database`)
+      throw new Error(`App ${appid} not found in database: ${formatError(vError)}`)
+    }
+    const batch = Array.isArray(data) ? data : []
+    if (!batch.length)
+      break
+    all.push(...batch.map(normalizeHttpChannel))
+    if (batch.length < 50)
+      break
+    page += 1
   }
-
-  return data as Channel[]
+  return all
 }

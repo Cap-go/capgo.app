@@ -76,7 +76,7 @@ export async function unlinkDeviceInternal(
     )
     await check2FAComplianceForApp(supabase, resolvedAppId, silent)
 
-    const orgId = await getOrganizationId(supabase, resolvedAppId)
+    const orgId = await getOrganizationId(enrichedOptions.apikey!, resolvedAppId, { supaHost: enrichedOptions.supaHost, supaAnon: enrichedOptions.supaAnon })
 
     await checkAppExistsAndHasPermissionOrgErr(
       supabase,
@@ -89,12 +89,20 @@ export async function unlinkDeviceInternal(
 
     await checkPlanValid(supabase, orgId, resolvedAppId)
 
-    const versionData = await getVersionData(supabase, resolvedAppId, bundle, { silent })
+    const versionData = await getVersionData(enrichedOptions.apikey!, resolvedAppId, bundle, {
+      silent,
+      apikey: enrichedOptions.apikey!,
+      supaHost: enrichedOptions.supaHost,
+      supaAnon: enrichedOptions.supaAnon,
+    })
     await checkVersionNotUsedInChannel(supabase, resolvedAppId, versionData, {
       silent,
       autoUnlink: true,
       channelName: channel,
       requireMatch: true,
+      apikey: enrichedOptions.apikey!,
+      supaHost: enrichedOptions.supaHost,
+      supaAnon: enrichedOptions.supaAnon,
     })
 
     await sendEvent(enrichedOptions.apikey, {

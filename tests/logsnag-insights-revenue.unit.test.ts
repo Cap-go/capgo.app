@@ -680,6 +680,21 @@ describe('logsnag revenue metric helpers', () => {
     expect(coreSnapshotQuery).not.toContain('si.plan_usage > 100')
     expect(coreSnapshotQuery).not.toContain('o.has_usage_credits')
   })
+
+  it.concurrent('snapshots apps with preview QR enabled in the core global stats shard', () => {
+    const source = readFileSync(new URL('../supabase/functions/_backend/triggers/logsnag_insights.ts', import.meta.url), 'utf8')
+    const countFn = source.match(/async function countAppsWithPreview[\s\S]*?async function getTrialExtensionStats/)?.[0] ?? ''
+    const coreShard = source.match(/async function runCoreGlobalStatsShard[\s\S]*?async function getRegistersToday/)?.[0] ?? ''
+
+    expect(countFn).toContain('apps.allow_preview = true')
+    expect(countFn).toContain('apps.created_at <')
+    expect(countFn).toContain('snapshotEnd')
+    expect(coreShard).toContain('countAppsWithPreview(c, window.prevDayEnd)')
+    expect(coreShard).toContain('apps_with_preview,')
+    // Keep writable while prod types lag the migration (auto-sync gate).
+    expect(source).toContain('apps_with_preview?: number')
+    expect(source).toContain('isMissingAppsWithPreviewColumnError')
+  })
   it.concurrent('normalizes logsnag insights retry payload counts', () => {
     expect(logsnagInsightsTestUtils.normalizeLogsnagInsightsRetryCount('2')).toBe(2)
     expect(logsnagInsightsTestUtils.normalizeLogsnagInsightsRetryCount(2.8)).toBe(2)

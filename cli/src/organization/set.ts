@@ -1,6 +1,8 @@
 import type { OrganizationSetOptions, PasswordPolicyConfig } from '../schemas/organization'
 import { confirm as confirmC, intro, isCancel, log, outro, text } from '@clack/prompts'
+import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { checkAlerts } from '../api/update'
+import { CliUserError } from '../shared/cli-user-error'
 import {
   assertOrgPermission,
   check2FAAccessForOrg,
@@ -44,10 +46,7 @@ async function updateOrganizationViaApi(apikey: string, payload: OrganizationUpd
   const response = await fetch(`${apiHost}/organization`, {
     method: 'PUT',
     body: JSON.stringify(payload),
-    headers: {
-      'Content-Type': 'application/json',
-      'capgkey': apikey,
-    },
+    headers: buildCliRequestHeaders({ 'Content-Type': 'application/json', capgkey: apikey }),
   })
 
   const responseText = await response.text()
@@ -109,6 +108,7 @@ export async function setOrganizationInternal(
 
   await check2FAAccessForOrg(supabase, orgId, silent)
 
+  // TODO(cli-http): GET organization omits enforcing_2fa/password_policy/security fields needed here
   const { data: orgData, error: orgError } = await supabase
     .from('orgs')
     .select('name, management_email, created_by, enforcing_2fa, password_policy_config, require_apikey_expiration, max_apikey_expiration_days, enforce_hashed_api_keys')
@@ -133,6 +133,7 @@ export async function setOrganizationInternal(
         log.info('Checking organization members 2FA status...')
 
         const { data: membersStatus, error: membersError } = await supabase
+          // TODO(cli-http): no HTTP equivalent for check_org_members_2fa_enabled
           .rpc('check_org_members_2fa_enabled', { org_id: orgId })
 
         if (membersError) {
@@ -142,6 +143,7 @@ export async function setOrganizationInternal(
 
         // Also check if the current user has 2FA enabled
         const { data: userHas2FA, error: user2FAError } = await supabase
+          // TODO(cli-http): no HTTP equivalent for has_2fa_enabled
           .rpc('has_2fa_enabled')
 
         if (user2FAError) {
@@ -150,7 +152,7 @@ export async function setOrganizationInternal(
         }
 
         // Get current user ID to exclude from member count
-        const { data: currentUserId, error: identityError } = await supabase.rpc('request_actor_user_id')
+        const { data: currentUserId, error: identityError } = await supabase.rpc('request_actor_user_id') /* TODO(cli-http): identity RPC */
 
         if (identityError || !currentUserId) {
           log.error(`Cannot get current user identity: ${identityError ? formatError(identityError) : 'No user ID returned'}`)
@@ -171,6 +173,7 @@ export async function setOrganizationInternal(
           if (membersWithout2FA.length > 0) {
             // Get member details
             const { data: members, error: membersListError } = await supabase
+              // TODO(cli-http): prefer GET organization/members when only listing members
               .rpc('get_org_members', { guild_id: orgId })
 
             if (membersListError) {
@@ -196,8 +199,8 @@ export async function setOrganizationInternal(
           })
 
           if (isCancel(shouldContinue) || !shouldContinue) {
-            log.error('Canceled enabling 2FA enforcement')
-            throw new Error('2FA enforcement cancelled')
+            log.warn('Canceled enabling 2FA enforcement')
+            throw new CliUserError('2FA enforcement cancelled')
           }
         }
 
@@ -265,6 +268,7 @@ export async function setOrganizationInternal(
 
         // Check which members will be affected
         const { data: membersStatus, error: membersError } = await supabase
+          // TODO(cli-http): no HTTP equivalent for check_org_members_password_policy
           .rpc('check_org_members_password_policy', { org_id: orgId })
 
         if (membersError) {
@@ -283,8 +287,8 @@ export async function setOrganizationInternal(
             })
 
             if (isCancel(shouldContinue) || !shouldContinue) {
-              log.error('Canceled enabling password policy')
-              throw new Error('Password policy configuration cancelled')
+              log.warn('Canceled enabling password policy')
+              throw new CliUserError('Password policy configuration cancelled')
             }
           }
         }
@@ -435,8 +439,8 @@ export async function setOrganizationInternal(
     })
 
     if (isCancel(nameInput)) {
-      log.error('Canceled updating organization')
-      throw new Error('Organization update cancelled')
+      log.warn('Canceled updating organization')
+      throw new CliUserError('Organization update cancelled')
     }
     name = nameInput as string
   }
@@ -448,8 +452,8 @@ export async function setOrganizationInternal(
     })
 
     if (isCancel(emailInput)) {
-      log.error('Canceled updating organization')
-      throw new Error('Organization update cancelled')
+      log.warn('Canceled updating organization')
+      throw new CliUserError('Organization update cancelled')
     }
     email = emailInput as string
   }

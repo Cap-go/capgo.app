@@ -76,6 +76,10 @@
         {
           "binding": "NOTIFICATION_EVENTS",
           "dataset": "notification_events"
+        },
+        {
+          "binding": "CLI_USAGE",
+          "dataset": "cli_usage"
         }
       ],
       "d1_databases": [
@@ -167,6 +171,10 @@
         {
           "binding": "NOTIFICATION_EVENTS",
           "dataset": "notification_events"
+        },
+        {
+          "binding": "CLI_USAGE",
+          "dataset": "cli_usage"
         }
       ],
       "d1_databases": [
@@ -258,6 +266,10 @@
         {
           "binding": "NOTIFICATION_EVENTS",
           "dataset": "notification_events_alpha"
+        },
+        {
+          "binding": "CLI_USAGE",
+          "dataset": "cli_usage_alpha"
         }
       ],
       "d1_databases": [

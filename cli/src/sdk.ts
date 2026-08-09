@@ -74,6 +74,7 @@ import { deleteOrganizationInternal } from './organization/delete'
 import { listOrganizationsInternal } from './organization/list'
 import { setOrganizationInternal } from './organization/set'
 import { getUserIdInternal } from './user/account'
+import { buildCliRequestHeaders } from './analytics/cli-headers'
 import { createSupabaseClient, findSavedKey, getConfig, getLocalConfig } from './utils'
 import { parseSecurityPolicyError } from './utils/security_policy_errors'
 import { normalizeAutoBumpInput } from './versionHelpers'
@@ -602,9 +603,12 @@ export class CapgoSDK {
   async listBundles(appId: string): Promise<SDKResult<BundleInfo[]>> {
     try {
       const apikey = this.apikey || findSavedKey(true)
-      const supabase = await createSupabaseClient(apikey, this.supaHost, this.supaAnon)
 
-      const versions = await getActiveAppVersions(supabase, appId)
+      const versions = await getActiveAppVersions(apikey, appId, {
+        apikey,
+        supaHost: this.supaHost,
+        supaAnon: this.supaAnon,
+      })
 
       const bundles: BundleInfo[] = versions.map(bundle => ({
         id: bundle.id.toString(),
@@ -1205,10 +1209,7 @@ export class CapgoSDK {
 
       const response = await fetch(`${localConfig.hostApi}/private/stats`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'capgkey': apikey,
-        },
+headers: buildCliRequestHeaders({ 'Content-Type': 'application/json', capgkey: apikey }),
         body: JSON.stringify(query),
       })
 

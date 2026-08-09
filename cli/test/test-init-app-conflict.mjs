@@ -17,33 +17,20 @@ async function t(name, fn) {
   }
 }
 
-function createSupabaseStub(results) {
-  const calls = []
-  let resultIndex = 0
+const originalFetch = globalThis.fetch
 
-  return {
-    calls,
-    from(table) {
-      const call = { table, select: undefined, filters: [] }
-      calls.push(call)
-
-      const chain = {
-        select(columns) {
-          call.select = columns
-          return chain
-        },
-        eq(column, value) {
-          call.filters.push([column, value])
-          return chain
-        },
-        maybeSingle() {
-          return results[resultIndex++]
-        },
-      }
-
-      return chain
-    },
+function mockAppFetch(handler) {
+  globalThis.fetch = async (input, init) => {
+    const url = String(input)
+    return handler(url, init)
   }
+}
+
+function jsonResponse(body, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  })
 }
 
 await t('app conflict detector matches duplicate app errors', () => {
@@ -76,52 +63,80 @@ await t('app conflict suggestions are based on the current app ID', () => {
 })
 
 await t('findAppInOrganization checks the selected organization and app ID', async () => {
-  const supabase = createSupabaseStub([
-    {
-      data: {
+  const calls = []
+  mockAppFetch(async (url, init) => {
+    calls.push({ url, method: init?.method ?? 'GET' })
+    if (url.includes('/app/com.example.app')) {
+      return jsonResponse({
         app_id: 'com.example.app',
         name: 'Example',
         owner_org: 'org_123',
         need_onboarding: false,
-      },
-      error: null,
-    },
-  ])
-
-  const app = await findAppInOrganization(supabase, 'org_123', 'com.example.app')
-
-  assert.equal(app.app_id, 'com.example.app')
-  assert.equal(app.owner_org, 'org_123')
-  assert.deepEqual(supabase.calls[0], {
-    table: 'apps',
-    select: 'app_id, name, owner_org, need_onboarding',
-    filters: [
-      ['owner_org', 'org_123'],
-      ['app_id', 'com.example.app'],
-    ],
+      })
+    }
+    return jsonResponse({ error: 'not_found' }, 404)
   })
+
+  try {
+    const app = await findAppInOrganization('test-key', 'org_123', 'com.example.app')
+
+    assert.equal(app.app_id, 'com.example.app')
+    assert.equal(app.owner_org, 'org_123')
+    const appCall = calls.find(call => /\/app\/com\.example\.app$/.test(call.url))
+    assert.ok(appCall, 'expected GET app/<id> request')
+    assert.equal(appCall.method, 'GET')
+  }
+  finally {
+    globalThis.fetch = originalFetch
+  }
 })
 
-await t('findAppInOrganization falls back for older onboarding schemas', async () => {
-  const supabase = createSupabaseStub([
-    {
-      data: null,
-      error: { message: 'Could not find the need_onboarding column in the schema cache' },
-    },
-    {
-      data: {
+await t('findAppInOrganization defaults need_onboarding when omitted', async () => {
+  mockAppFetch(async (url) => {
+    if (url.includes('/app/com.example.app')) {
+      return jsonResponse({
         app_id: 'com.example.app',
         name: 'Example',
         owner_org: 'org_123',
-      },
-      error: null,
-    },
-  ])
+      })
+    }
+    return jsonResponse({ error: 'not_found' }, 404)
+  })
 
-  const app = await findAppInOrganization(supabase, 'org_123', 'com.example.app')
+  try {
+    const app = await findAppInOrganization('test-key', 'org_123', 'com.example.app')
 
-  assert.equal(app.need_onboarding, false)
-  assert.equal(supabase.calls[1].select, 'app_id, name, owner_org')
+    assert.equal(app.need_onboarding, false)
+    assert.equal(app.owner_org, 'org_123')
+  }
+  finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+await t('findAppInOrganization returns null for another org or missing app', async () => {
+  mockAppFetch(async (url) => {
+    if (url.includes('/app/com.example.app')) {
+      return jsonResponse({
+        app_id: 'com.example.app',
+        name: 'Example',
+        owner_org: 'org_other',
+        need_onboarding: false,
+      })
+    }
+    return jsonResponse({ error: 'not_found' }, 404)
+  })
+
+  try {
+    const wrongOrg = await findAppInOrganization('test-key', 'org_123', 'com.example.app')
+    assert.equal(wrongOrg, null)
+
+    const missing = await findAppInOrganization('test-key', 'org_123', 'com.missing.app')
+    assert.equal(missing, null)
+  }
+  finally {
+    globalThis.fetch = originalFetch
+  }
 })
 
 if (failures > 0) {

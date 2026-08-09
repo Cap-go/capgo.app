@@ -53,6 +53,8 @@ export async function currentBundleInternal(channel: string, appId: string, opti
     throw new CliUserError('Channel name missing')
   }
 
+  // TODO(cli-http): channel-scoped RBAC needs channel.read + get_channel_current_bundle_rbac;
+  // GET channel uses app.read_channels and would regress channel-scoped API keys.
   const { data: supabaseChannel, error } = await withSupabaseSource('channels.currentBundle', () => supabase
     .from('channels')
     .select('id, version')
@@ -81,6 +83,7 @@ export async function currentBundleInternal(channel: string, appId: string, opti
     throw new CliUserError('Channel does not have a bundle linked', { appId, channel })
   }
 
+  // TODO(cli-http): keep RBAC RPC until HTTP returns channel-scoped current bundle safely
   const { data: bundleRows, error: bundleError } = await withSupabaseSource('channels.currentBundleName', () => supabase
     .rpc('get_channel_current_bundle_rbac' as any, {
       p_app_id: appId,

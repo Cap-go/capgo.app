@@ -15,7 +15,9 @@ interface DataDevice {
   appId: string
   count?: boolean
   installSourceCounts?: boolean
+  /** @deprecated Prefer versionNames for multi-select. Kept for backward compatibility. */
   versionName?: string
+  versionNames?: string[]
   platform?: typeof Constants.public.Enums.platform_os[number]
   devicesId?: string[]
   deviceIds?: string[] // TODO: remove when migration is done
@@ -36,11 +38,13 @@ const orderItemSchema = z.object({
   sortable: z.enum(['asc', 'desc']).optional(),
 })
 const platformSchema = z.enum(Constants.public.Enums.platform_os)
+const MAX_VERSION_NAMES = 50
 const devicesBodySchema = z.object({
   appId: appIdSchema,
   count: z.boolean().optional(),
   installSourceCounts: z.boolean().optional(),
   versionName: safeQueryTextSchema.optional(),
+  versionNames: z.array(safeQueryTextSchema).max(MAX_VERSION_NAMES).optional(),
   platform: platformSchema.optional(),
   devicesId: z.array(deviceIdSchema).optional(),
   deviceIds: z.array(deviceIdSchema).optional(),
@@ -53,6 +57,16 @@ const devicesBodySchema = z.object({
   updated_at_gt: z.string().min(1).max(64).optional(),
   updated_at_lte: z.string().min(1).max(64).optional(),
 })
+
+function resolveVersionNameFilter(body: { versionName?: string, versionNames?: string[] }): string | string[] | undefined {
+  const names = (body.versionNames ?? [])
+    .map(name => name.trim())
+    .filter(Boolean)
+  if (names.length)
+    return [...new Set(names)]
+  const single = body.versionName?.trim()
+  return single || undefined
+}
 
 export const app = new Hono<MiddlewareKeyVariables>()
 
@@ -76,6 +90,7 @@ app.post('/', middlewareAuth(), async (c) => {
   }
 
   const devicesIds = body.devicesId ?? body.deviceIds ?? []
+  const versionNameFilter = resolveVersionNameFilter(body)
   if (body.installSourceCounts)
     return c.json({ installSources: await countInstallSources(c, body.appId) })
   if (body.count) {
@@ -85,7 +100,7 @@ app.post('/', middlewareAuth(), async (c) => {
         body.appId,
         body.customIdMode ?? false,
         devicesIds,
-        body.versionName,
+        versionNameFilter,
         body.search?.trim(),
         {
           platform: body.platform,
@@ -96,7 +111,7 @@ app.post('/', middlewareAuth(), async (c) => {
   }
   return c.json(await readDevices(c, {
     app_id: body.appId,
-    version_name: body.versionName,
+    version_name: versionNameFilter,
     platform: body.platform,
     deviceIds: devicesIds,
     installSources: body.installSources,

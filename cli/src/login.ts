@@ -3,6 +3,7 @@ import { homedir } from 'node:os'
 import { intro, isCancel, log, outro, password } from '@clack/prompts'
 import { checkAlerts } from './api/update'
 import { validateAndSaveKey } from './auth/session'
+import { CliUserError } from './shared/cli-user-error'
 
 interface Options {
   local: boolean
@@ -26,8 +27,8 @@ export async function loginInternal(apikey: string, options: Options, silent = f
     })
 
     if (isCancel(apikeyInput)) {
-      log.error('Login cancelled')
-      throw new Error('Login cancelled')
+      log.warn('Login cancelled')
+      throw new CliUserError('Login cancelled')
     }
     apikey = apikeyInput as string
   }

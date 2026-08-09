@@ -1,5 +1,8 @@
 import type { Command } from 'commander'
+import { randomUUID } from 'node:crypto'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir, platform, release } from 'node:os'
+import { join } from 'node:path'
 import { arch, cwd, env, version as nodeVersion } from 'node:process'
 import pack from '../package.json'
 import { CliUserError } from './shared/cli-user-error'
@@ -109,7 +112,7 @@ function sanitizeTelemetryText(value: string) {
     .replace(/~\/[^\s"',)]+/g, '~/<path>')
     .replace(/[\w.%+-]+@[\w.-]+\.[A-Z]{2,}/gi, '<email>')
     .replace(/(https?:\/\/)([^/\s:@]+):([^/\s@]+)@/gi, '$1<redacted>@')
-    .replace(/\b[a-z][\w-]*(?:\.[\w-]+){2,}\b/gi, '<app_id>')
+    .replace(/\b[a-z][\w-]*(?:\.[\w-]+){1,}\b/gi, '<app_id>')
     .replace(/\b[a-z]:\\[^\s"',)]+/gi, '<path>')
     .replace(/(^|[\s"'(])\/[^\s"',)]+/g, '$1<path>')
     .replace(/(--(?:token|api[-_]?key|key|password|secret|private[-_]?key|jwt|session|auth)(?:=|\s+))("[^"]+"|'[^']+'|\S+)/gi, '$1<redacted>')
@@ -245,6 +248,43 @@ export function getCommandPath(command: Command) {
   return names.reverse().join(' ') || 'unknown'
 }
 
+// Anonymous, stable per-install identifier used as the PostHog `distinct_id`.
+// It carries no personal data — a random id generated once and persisted in the
+// CLI config directory. The previous `cli:<version>:<command>` value was not a
+// person at all, so "users affected" on every CLI error-tracking issue counted
+// version-by-command pairs, and each release minted a fresh synthetic person.
+// The install id keeps one install equal to one person, stable across releases
+// and commands. The CLI version and command name still ship as the `cli_version`
+// and `function_name` properties.
+let cachedInstallId: string | undefined
+
+export function getInstallId(configDir = join(homedir(), '.capgo-credentials')): string {
+  if (cachedInstallId)
+    return cachedInstallId
+
+  const installIdPath = join(configDir, 'install-id')
+  let id: string
+  try {
+    const existing = existsSync(installIdPath) ? readFileSync(installIdPath, 'utf8').trim() : ''
+    if (existing) {
+      id = existing
+    }
+    else {
+      id = randomUUID()
+      mkdirSync(configDir, { recursive: true })
+      writeFileSync(installIdPath, id, { encoding: 'utf8', mode: 0o600 })
+    }
+  }
+  catch {
+    // A read-only or unwritable HOME (CI, sandbox) must never break telemetry.
+    // Fall back to an ephemeral id so the event still sends; it just cannot
+    // persist, so it stays stable only for the current process.
+    id = randomUUID()
+  }
+  cachedInstallId = id
+  return id
+}
+
 export async function capturePosthogException(payload: CapturePosthogExceptionPayload) {
   const token = getPosthogToken()
   if (!token)
@@ -261,19 +301,20 @@ export async function capturePosthogException(payload: CapturePosthogExceptionPa
 
   const serializedError = serializeError(payload.error)
   const sanitizedMessage = sanitizeTelemetryText(serializedError.message)
-  const distinctId = `cli:${pack.version}:${payload.functionName}`
+  const distinctId = getInstallId()
   const frames = parseExceptionFrames(serializedError.stack, payload.functionName)
-  const topFrame = frames[0]
-  // Deliberately exclude the CLI version from the fingerprint so the same bug
-  // stays a single error-tracking issue across releases instead of minting a
-  // brand-new issue on every version bump. Version is still reported via
-  // `cli_version` below.
+  // Fingerprint deliberately omits both the CLI version and the top stack frame
+  // (its function name and filename). The CLI ships as one minified
+  // `dist/index.js`, so the top-frame symbol is renamed on every release and the
+  // filename is the full install path — which differs per npx cache hash, bunx,
+  // pnpm store, global install, or sandbox. Keeping either splits one bug into a
+  // fresh error-tracking issue per install location and per release. The command
+  // path, error kind, error name, and exit status stay stable across all of them.
+  // Version is still reported via `cli_version` below.
   const fingerprint = [
     payload.functionName,
     payload.kind,
     serializedError.name || 'Error',
-    topFrame?.function || payload.functionName,
-    topFrame && 'filename' in topFrame ? topFrame.filename : 'unknown',
     String(payload.status ?? 1),
   ].join(':')
 
