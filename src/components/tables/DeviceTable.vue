@@ -16,6 +16,7 @@ import {
   TABLE_DATE_RANGE_DEFAULT,
 } from '~/services/dateRange'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
+import BundleMultiFilter from './BundleMultiFilter.vue'
 
 const props = defineProps<{
   appId: string
@@ -57,13 +58,13 @@ const initialRange = getDateRangeForPreset(TABLE_DATE_RANGE_DEFAULT)
 const dateRange = ref<[Date, Date] | null>([initialRange.start, initialRange.end])
 const dateRangeMode = ref<DateRangePreset>(TABLE_DATE_RANGE_DEFAULT)
 const selectedPlatform = ref<'' | PlatformOs>('')
-const selectedVersionName = ref(props.versionName ?? '')
+const selectedVersionNames = ref<string[]>(props.versionName ? [props.versionName] : [])
 const bundleNames = ref<string[]>([])
 const dateRangePickerRef = ref<DateRangePickerHandle>()
 const skipFilterReload = ref(false)
 const offset = 10
 const activeExtraFilters = computed(() =>
-  (selectedPlatform.value ? 1 : 0) + (selectedVersionName.value.trim() ? 1 : 0),
+  (selectedPlatform.value ? 1 : 0) + (selectedVersionNames.value.length ? 1 : 0),
 )
 const platformOptions = computed(() => [
   { value: '' as const, label: t('all-platforms') },
@@ -78,7 +79,7 @@ function clearExtraFilters() {
   // schedule a second reload in the same clear action.
   skipFilterReload.value = true
   selectedPlatform.value = ''
-  selectedVersionName.value = ''
+  selectedVersionNames.value = []
   nextTick(() => {
     skipFilterReload.value = false
   })
@@ -173,9 +174,8 @@ function snapRollingDateRangeBounds() {
   dateRange.value = [rolling.start, rolling.end]
 }
 
-function getVersionNameFilter() {
-  const selected = selectedVersionName.value.trim()
-  return selected || undefined
+function getVersionNameFilter(): string[] | undefined {
+  return selectedVersionNames.value.length ? [...selectedVersionNames.value] : undefined
 }
 
 function getPlatformFilter(): PlatformOs | undefined {
@@ -185,7 +185,7 @@ function getPlatformFilter(): PlatformOs | undefined {
 function getQuerySignature() {
   return JSON.stringify({
     appId: props.appId,
-    versionName: getVersionNameFilter(),
+    versionNames: getVersionNameFilter() ?? [],
     platform: getPlatformFilter() ?? '',
     search: getSearchTerm(),
     order: getActiveOrder(columns.value),
@@ -220,9 +220,11 @@ async function loadBundleNames() {
   }
 
   const names = [...new Set(data.map(row => row.name).filter(Boolean))]
-  const selected = getVersionNameFilter()
-  if (selected && !names.includes(selected))
-    names.unshift(selected)
+  const selected = getVersionNameFilter() ?? []
+  for (const name of selected) {
+    if (!names.includes(name))
+      names.unshift(name)
+  }
   bundleNames.value = names
 }
 
@@ -268,7 +270,7 @@ async function countDevices() {
       body: JSON.stringify({
         count: true,
         appId: props.appId,
-        versionName: getVersionNameFilter(),
+        versionNames: getVersionNameFilter(),
         platform: getPlatformFilter(),
         devicesId: deviceIds.length > 0 ? deviceIds : undefined,
         search: searchTerm,
@@ -417,7 +419,7 @@ async function fetchDevicesPage(cursor: string | undefined | null) {
     },
     body: JSON.stringify({
       appId: props.appId,
-      versionName: getVersionNameFilter(),
+      versionNames: getVersionNameFilter(),
       platform: getPlatformFilter(),
       devicesId: ids.length ? ids : undefined,
       search: searchTerm,
@@ -581,7 +583,7 @@ watch(() => props.appId, async (appId) => {
   activeLoadId.value += 1
   skipFilterReload.value = true
   selectedPlatform.value = ''
-  selectedVersionName.value = props.versionName ?? ''
+  selectedVersionNames.value = props.versionName ? [props.versionName] : []
   await loadBundleNames()
   if (appId !== props.appId)
     return
@@ -592,16 +594,16 @@ watch(() => props.appId, async (appId) => {
 watch(() => props.versionName, (value) => {
   cancelScheduledReload()
   skipFilterReload.value = true
-  selectedVersionName.value = value ?? ''
+  selectedVersionNames.value = value ? [value] : []
   skipFilterReload.value = false
   debouncedReload()
 })
 
-watch([selectedPlatform, selectedVersionName], () => {
+watch([selectedPlatform, selectedVersionNames], () => {
   if (skipFilterReload.value)
     return
   debouncedReload()
-})
+}, { deep: true })
 </script>
 
 <template>
@@ -706,29 +708,10 @@ watch([selectedPlatform, selectedVersionName], () => {
             </button>
           </div>
         </fieldset>
-        <div class="flex w-full flex-col gap-2">
-          <label for="device-table-bundle-filter" class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
-            {{ t('bundle') }}
-          </label>
-          <input
-            id="device-table-bundle-filter"
-            v-model="selectedVersionName"
-            list="device-table-bundle-options"
-            type="text"
-            class="d-input d-input-bordered min-h-11 w-full border-slate-200 bg-white text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
-            :placeholder="t('all-bundles')"
-            :aria-label="t('bundle')"
-            data-test="device-bundle-filter"
-            autocomplete="off"
-          >
-          <datalist id="device-table-bundle-options">
-            <option
-              v-for="name in bundleNames"
-              :key="name"
-              :value="name"
-            />
-          </datalist>
-        </div>
+        <BundleMultiFilter
+          v-model="selectedVersionNames"
+          :options="bundleNames"
+        />
       </template>
     </DataTable>
   </div>

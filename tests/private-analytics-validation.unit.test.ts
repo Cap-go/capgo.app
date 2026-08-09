@@ -142,6 +142,21 @@ describe('private analytics route validation', () => {
     }), false)
   })
 
+  it('accepts versionNames multi-select filters on /private/devices', async () => {
+    readDevicesMock.mockResolvedValue({ data: [], nextCursor: undefined, hasMore: false })
+
+    const response = await devicesApp.request(postJson('http://local/', {
+      appId: 'com.example.app',
+      versionNames: ['1.2.3', '2.0.0'],
+    }))
+
+    expect(response.status).toBe(200)
+    expect(readDevicesMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      app_id: 'com.example.app',
+      version_name: ['1.2.3', '2.0.0'],
+    }), false)
+  })
+
   it('passes platform to countDevices on /private/devices', async () => {
     countDevicesMock.mockResolvedValue(7)
 

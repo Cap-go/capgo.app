@@ -65,11 +65,13 @@ export function hasUnsafeStatsQueryText(body: {
 
 export function hasUnsafeDevicesQueryText(body: {
   versionName?: string
+  versionNames?: string[]
   search?: string
   cursor?: string
   order?: { key: string }[]
 }): boolean {
   return hasUnsafeQueryText(body.versionName)
+    || body.versionNames?.some(name => hasUnsafeQueryText(name))
     || hasUnsafeQueryText(body.search)
     || hasUnsafeQueryText(body.cursor, 128)
     || body.order?.some(item => hasUnsafeQueryText(item.key, 64))
