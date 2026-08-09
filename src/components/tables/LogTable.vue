@@ -182,7 +182,7 @@ const paginatedRange = computed(() => {
   const rangeStart = range.value ? range.value[0].getTime() : undefined
   const rangeEnd = range.value ? range.value[1].getTime() : undefined
 
-  if (rangeStart && rangeEnd)
+  if (rangeStart !== undefined && rangeEnd !== undefined)
     return getTimeWindowPageRange(rangeStart, rangeEnd, currentPage.value)
 
   return {

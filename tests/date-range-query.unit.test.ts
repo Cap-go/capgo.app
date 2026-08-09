@@ -99,4 +99,11 @@ describe('date range query parse/serialize', () => {
       rangeEnd: Date.parse('2026-08-08T12:00:00.000Z'),
     })
   })
+
+  it.concurrent('keeps epoch zero as a valid older-page window bound', () => {
+    expect(getTimeWindowPageRange(0, 60_000, 0)).toEqual({
+      rangeStart: -60_000,
+      rangeEnd: 0,
+    })
+  })
 })

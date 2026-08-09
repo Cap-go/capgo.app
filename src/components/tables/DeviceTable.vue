@@ -304,6 +304,16 @@ function clearPaginationState() {
   hasMore.value = false
 }
 
+function resetTablePagination(options: { snapRolling?: boolean } = {}) {
+  if (options.snapRolling)
+    snapRollingDateRangeBounds()
+  currentPage.value = 1
+  previousPage.value = 1
+  clearPaginationState()
+  elements.value.length = 0
+  lastQuerySignature.value = getQuerySignature()
+}
+
 async function reload() {
   const loadId = ++activeLoadId.value
   isLoading.value = true
@@ -317,21 +327,15 @@ async function reload() {
       requestedPage,
     })
     if (filtersChanged) {
-      lastQuerySignature.value = querySignature
-      currentPage.value = 1
-      clearPaginationState()
-      elements.value.length = 0
+      // Keep frozen date bounds; only drop cursors / page for the new filters.
+      resetTablePagination()
     }
 
     if (shouldRecount) {
       // Toolbar reload (not a page change): snap rolling bounds and drop
       // cursors so the new window cannot reuse stale page offsets.
-      if (!filtersChanged) {
-        snapRollingDateRangeBounds()
-        currentPage.value = 1
-        clearPaginationState()
-        elements.value.length = 0
-      }
+      if (!filtersChanged)
+        resetTablePagination({ snapRolling: true })
       const newTotal = await countDevices()
       if (loadId !== activeLoadId.value)
         return
@@ -356,12 +360,7 @@ async function refreshData() {
   const loadId = ++activeLoadId.value
   isLoading.value = true
   try {
-    snapRollingDateRangeBounds()
-    currentPage.value = 1
-    previousPage.value = 1
-    lastQuerySignature.value = getQuerySignature()
-    clearPaginationState()
-    elements.value.length = 0
+    resetTablePagination({ snapRolling: true })
     const newTotal = await countDevices()
     if (loadId !== activeLoadId.value)
       return
