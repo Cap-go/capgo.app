@@ -42,13 +42,10 @@ describe('plans visit tracking', () => {
     expect(sender).toHaveBeenCalledTimes(2)
   })
 
-  it('allows the organization to be tracked again after leaving the route', () => {
-    const tracker = createPlansVisitTracker(sender)
+  it('allows the organization to be tracked again in a new page instance', () => {
+    createPlansVisitTracker(sender).track('org-1')
 
-    tracker.track('org-1')
-    tracker.reset()
-
-    expect(tracker.track('org-1')).toBe(true)
+    expect(createPlansVisitTracker(sender).track('org-1')).toBe(true)
     expect(sender).toHaveBeenCalledTimes(2)
   })
 
@@ -64,10 +61,10 @@ describe('plans visit page integration', () => {
   const plansSource = readFileSync(new URL('../src/pages/settings/organization/Plans.vue', import.meta.url), 'utf8')
   const usageSource = readFileSync(new URL('../src/pages/settings/organization/Usage.vue', import.meta.url), 'utf8')
 
-  it('uses and resets the guarded tracker from the Plans page', () => {
+  it('uses the guarded tracker from the Plans page', () => {
     expect(plansSource).toContain("import { createPlansVisitTracker } from '~/services/plansVisitTracking'")
     expect(plansSource).toContain('plansVisitTracker.track(orgId)')
-    expect(plansSource).toContain('plansVisitTracker.reset()')
+    expect(plansSource).not.toContain('plansVisitTracker.reset()')
   })
 
   it('does not emit the Plans visit event from the Usage page', () => {

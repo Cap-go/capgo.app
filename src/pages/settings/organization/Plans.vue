@@ -43,11 +43,6 @@ const organizationStore = useOrganizationStore()
 const dialogStore = useDialogV2Store()
 const isMobile = isNativeAppStoreContext()
 
-watch(() => route.path, (path) => {
-  if (path !== '/settings/organization/plans')
-    plansVisitTracker.reset()
-}, { immediate: true })
-
 // Modal state for non-admin access
 const showAdminModal = ref(false)
 

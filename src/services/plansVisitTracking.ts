@@ -4,10 +4,6 @@ export function createPlansVisitTracker(sender: typeof sendEvent = sendEvent) {
   const trackedOrganizationIds = new Set<string>()
 
   return {
-    reset() {
-      trackedOrganizationIds.clear()
-    },
-
     track(orgId: string | null | undefined) {
       if (!orgId || trackedOrganizationIds.has(orgId))
         return false
