@@ -1068,6 +1068,23 @@ function buildReadDevicesCFCustomIdsCondition(customIds: string[] | undefined) {
   return `custom_id IN (${customIdsList})`
 }
 
+function buildReadDevicesCFVersionNameCondition(versionName: ReadDevicesParams['version_name']) {
+  if (!versionName)
+    return ''
+
+  const names = [...new Set(
+    (Array.isArray(versionName) ? versionName : [versionName])
+      .map(name => name.trim())
+      .filter(Boolean),
+  )]
+
+  if (!names.length)
+    return ''
+  if (names.length === 1)
+    return `blob2 = '${escapeSqlString(names[0]!)}'`
+  return `blob2 IN (${names.map(name => `'${escapeSqlString(name)}'`).join(', ')})`
+}
+
 function buildReadDevicesCFOuterConditions(params: ReadDevicesParams, devicesOrder: DevicesOrderCF | null) {
   const conditions = [
     buildReadDevicesCFCursorCondition(params.cursor, devicesOrder),
@@ -1106,9 +1123,9 @@ export function buildReadDevicesCFQuery(params: ReadDevicesParams, customIdMode:
     }
   }
 
-  if (params.version_name) {
-    conditions.push(`blob2 = '${escapeSqlString(params.version_name)}'`)
-  }
+  const versionNameCondition = buildReadDevicesCFVersionNameCondition(params.version_name)
+  if (versionNameCondition)
+    conditions.push(versionNameCondition)
 
   if (params.updated_at_gt) {
     const safeUpdatedAtGt = escapeSqlString(formatDateCF(params.updated_at_gt))
