@@ -217,6 +217,9 @@ try {
   // never opens an error tracking issue.
   assert.equal(shouldCapturePosthogException(new CliUserError('Login cancelled')), false)
   assert.equal(shouldCapturePosthogException(new CliUserError('Upload cancelled by user')), false)
+  // `login --local` outside a git repository is a normal user mistake the CLI
+  // already handles cleanly, so it throws CliUserError and never opens an issue.
+  assert.equal(shouldCapturePosthogException(new CliUserError('Not in a git repository')), false)
   // Two failures on different channels must be treated identically (one issue,
   // not one per channel), since the channel name lives in context, not the message.
   assert.equal(

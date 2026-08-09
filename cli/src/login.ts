@@ -36,7 +36,7 @@ export async function loginInternal(apikey: string, options: Options, silent = f
   if (!apikey) {
     if (!silent)
       log.error('Missing API key, you need to provide an API key to upload your bundle')
-    throw new Error('Missing API key')
+    throw new CliUserError('Missing API key')
   }
 
   if (!silent)
@@ -47,7 +47,7 @@ export async function loginInternal(apikey: string, options: Options, silent = f
   if (local && !existsSync('.git')) {
     if (!silent)
       log.error('To use local you should be in a git repository')
-    throw new Error('Not in a git repository')
+    throw new CliUserError('Not in a git repository')
   }
 
   // Validate, persist (0o600) and emit the login event via the shared auth core.
