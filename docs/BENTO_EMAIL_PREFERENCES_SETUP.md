@@ -93,6 +93,20 @@ Tag does NOT contain: onboarding_disabled
 Do not check the suppression tag only when the workflow starts. It is a monotonic safety opt-out that can be added while the workflow is waiting.
 Keep this recovery email non-transactional so Bento's global unsubscribe state remains a delivery gate.
 
+#### 3b. Invite-to-org reminders
+
+**Entry events**: `org:invite_new_capgo_user_to_org`, `org:invite_existing_capgo_user_to_org`
+
+**Exit tag**: `org:invite_accepted`
+
+Capgo adds `org:invite_accepted` when a user-org `role_bindings` row is written with reason `Accepted invitation` (dashboard RPC `accept_invitation_to_org` and the private accept-invitation API). Wire the Invite-to-org workflow with a Match before each reminder send:
+
+```text
+Tag contains: org:invite_accepted → End
+```
+
+Queue delivery is at least once, so the tag sync can repeat; treat the tag as a sticky exit condition, not an entry trigger.
+
 #### 4. Weekly Statistics
 
 **Events**: `user:weekly_stats`
