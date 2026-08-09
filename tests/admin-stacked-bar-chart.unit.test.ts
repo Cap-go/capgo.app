@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 import {
   buildAdminStackedBarChartData,
@@ -38,5 +39,12 @@ describe('admin stacked bar chart', () => {
   it.concurrent('formats a segment as count and share of its day', () => {
     expect(formatAdminStackedBarTooltip('Organization invite', 2, 10)).toBe('Organization invite: 2 (20%)')
     expect(formatAdminStackedBarTooltip('Without profile', 0, 0)).toBe('Without profile: 0 (0%)')
+  })
+
+  it.concurrent('uses the configured DaisyUI prefix for its loading spinner', async () => {
+    const source = await readFile(new URL('../src/components/admin/AdminStackedBarChart.vue', import.meta.url), 'utf8')
+
+    expect(source).toContain('class="d-loading d-loading-spinner d-loading-lg text-primary"')
+    expect(source).not.toContain('class="loading loading-spinner loading-lg text-primary"')
   })
 })

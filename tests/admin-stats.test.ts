@@ -73,7 +73,9 @@ const ONBOARDING_WITHOUT_PROFILE_CREATED_AT = '2026-02-01T09:30:00.000Z'
 const ONBOARDING_END_BOUNDARY_CREATED_AT = '2026-02-02T00:00:00.000Z'
 const GLOBAL_STATS_TREND_DATES = ['2099-12-30', '2099-12-31', '2100-01-01'] as const
 
-async function getCoreSnapshotCountsAt(snapshotExclusiveEnd: Date) {
+type AdminStatsTestApp = Hono<{ Bindings: { SUPABASE_DB_URL: string } }>
+
+async function requestDirectAdminStats<T>(registerRoute: (app: AdminStatsTestApp) => void): Promise<T> {
   const globalWithEdgeRuntime = globalThis as typeof globalThis & {
     EdgeRuntime?: { waitUntil: (promise: Promise<unknown>) => void }
   }
@@ -84,14 +86,11 @@ async function getCoreSnapshotCountsAt(snapshotExclusiveEnd: Date) {
 
   try {
     const app = new Hono<{ Bindings: { SUPABASE_DB_URL: string } }>()
-    app.get('/', async c => c.json(await logsnagInsightsTestUtils.getCoreSnapshotCounts(c, snapshotExclusiveEnd)))
+    registerRoute(app)
 
     const response = await app.request('http://local/', undefined, { SUPABASE_DB_URL: POSTGRES_URL })
     expect(response.status).toBe(200)
-    return await response.json() as {
-      abovePlanWithCredits: number
-      abovePlanWithoutCredits: number
-    }
+    return await response.json() as T
   }
   finally {
     if (previousSupabaseDbUrl === undefined)
@@ -102,30 +101,19 @@ async function getCoreSnapshotCountsAt(snapshotExclusiveEnd: Date) {
   }
 }
 
+async function getCoreSnapshotCountsAt(snapshotExclusiveEnd: Date) {
+  return requestDirectAdminStats<{
+    abovePlanWithCredits: number
+    abovePlanWithoutCredits: number
+  }>(app => {
+    app.get('/', async c => c.json(await logsnagInsightsTestUtils.getCoreSnapshotCounts(c, snapshotExclusiveEnd)))
+  })
+}
+
 async function getOnboardingFunnelDirect(startDate: string, endDate: string) {
-  const globalWithEdgeRuntime = globalThis as typeof globalThis & {
-    EdgeRuntime?: { waitUntil: (promise: Promise<unknown>) => void }
-  }
-  const previousEdgeRuntime = globalWithEdgeRuntime.EdgeRuntime
-  const previousSupabaseDbUrl = process.env.SUPABASE_DB_URL
-  globalWithEdgeRuntime.EdgeRuntime = undefined
-  process.env.SUPABASE_DB_URL = POSTGRES_URL
-
-  try {
-    const app = new Hono<{ Bindings: { SUPABASE_DB_URL: string } }>()
+  return requestDirectAdminStats<Awaited<ReturnType<typeof getAdminOnboardingFunnel>>>(app => {
     app.get('/', async c => c.json(await getAdminOnboardingFunnel(c, startDate, endDate)))
-
-    const response = await app.request('http://local/', undefined, { SUPABASE_DB_URL: POSTGRES_URL })
-    expect(response.status).toBe(200)
-    return await response.json() as Awaited<ReturnType<typeof getAdminOnboardingFunnel>>
-  }
-  finally {
-    if (previousSupabaseDbUrl === undefined)
-      delete process.env.SUPABASE_DB_URL
-    else
-      process.env.SUPABASE_DB_URL = previousSupabaseDbUrl
-    globalWithEdgeRuntime.EdgeRuntime = previousEdgeRuntime
-  }
+  })
 }
 
 let adminHeaders: Record<string, string>
