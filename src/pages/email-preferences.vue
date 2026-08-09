@@ -4,8 +4,6 @@ import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import IconCheck from '~icons/lucide/check'
 import IconLoader from '~icons/lucide/loader-2'
-import AuthPageShell from '~/components/auth/AuthPageShell.vue'
-import { authInsetCardClass, authPrimaryButtonClass } from '~/components/auth/pageStyles'
 import Toggle from '~/components/Toggle.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
 
@@ -88,9 +86,7 @@ const PREFERENCE_DESC_KEYS: Record<PublicEmailPreferenceKey, string> = {
 const { t } = useI18n()
 const route = useRoute('/email-preferences')
 
-const emailFromQuery = computed(() => String(route.query.email ?? '').trim())
-
-const email = ref(emailFromQuery.value)
+const email = ref(String(route.query.email ?? '').trim())
 const unsubscribeAll = ref(false)
 const enableNotifications = ref(true)
 const optForNewsletters = ref(true)
@@ -145,98 +141,116 @@ async function savePreferences() {
 </script>
 
 <template>
-  <AuthPageShell
-    :card-title="t('email-preferences-title')"
-    :card-description="t('email-preferences-description')"
-    card-width-class="max-w-xl"
-  >
-    <form class="space-y-5" @submit.prevent="savePreferences">
-      <div>
-        <label for="email-preferences-email" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-200">
-          {{ t('email') }}
-        </label>
-        <input
-          id="email-preferences-email"
-          v-model="email"
-          type="email"
-          autocomplete="email"
-          required
-          class="d-input d-input-bordered w-full bg-white dark:bg-slate-950"
-          :aria-invalid="!emailLooksValid && email.length > 0"
-        >
-      </div>
-
-      <div :class="authInsetCardClass">
-        <label class="flex items-start justify-between gap-4">
-          <span>
-            <span class="block text-sm font-semibold text-slate-800 dark:text-slate-100">
-              {{ t('email-preferences-unsubscribe-all') }}
-            </span>
-            <span class="mt-1 block text-sm text-slate-500 dark:text-slate-400">
-              {{ t('email-preferences-unsubscribe-all-desc') }}
-            </span>
-          </span>
-          <Toggle v-model:value="unsubscribeAll" />
-        </label>
-      </div>
-
-      <div v-show="!unsubscribeAll" class="space-y-6">
+  <div class="min-h-dvh bg-slate-50 px-4 py-[max(1.5rem,env(safe-area-inset-top))] pb-[max(1.5rem,env(safe-area-inset-bottom))] dark:bg-slate-950">
+    <div class="mx-auto w-full max-w-xl">
+      <header class="mb-6 flex items-center gap-3">
+        <img src="/capgo.webp" alt="Capgo" class="h-9 w-9 rounded-md invert dark:invert-0">
         <div>
-          <h3 class="mb-3 text-sm font-semibold tracking-wide text-slate-500 uppercase dark:text-slate-400">
-            {{ t('notifications-general') }}
-          </h3>
-          <div class="space-y-3">
-            <label class="flex items-start justify-between gap-4 rounded-xl border border-slate-200/80 bg-white/80 px-3 py-3 dark:border-slate-700/80 dark:bg-slate-950/50">
-              <span>
-                <span class="block text-sm font-medium text-slate-800 dark:text-slate-100">{{ t('activation-notification') }}</span>
-                <span class="mt-1 block text-xs text-slate-500 dark:text-slate-400">{{ t('activation-notification-desc') }}</span>
+          <p class="text-xs font-semibold tracking-[0.2em] text-slate-500 uppercase dark:text-slate-400">
+            Capgo
+          </p>
+          <h1 class="text-xl font-semibold text-slate-900 dark:text-white">
+            {{ t('email-preferences-title') }}
+          </h1>
+        </div>
+      </header>
+
+      <p class="mb-6 text-sm leading-6 text-slate-600 dark:text-slate-300">
+        {{ t('email-preferences-description') }}
+      </p>
+
+      <form class="space-y-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-6" @submit.prevent="savePreferences">
+        <div>
+          <label for="email-preferences-email" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-200">
+            {{ t('email') }}
+          </label>
+          <input
+            id="email-preferences-email"
+            v-model="email"
+            type="email"
+            autocomplete="email"
+            required
+            class="d-input d-input-bordered w-full bg-white dark:bg-slate-950"
+            :aria-invalid="!emailLooksValid && email.length > 0"
+          >
+        </div>
+
+        <div class="rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-950/60">
+          <label class="flex items-start justify-between gap-4">
+            <span>
+              <span class="block text-sm font-semibold text-slate-800 dark:text-slate-100">
+                {{ t('email-preferences-unsubscribe-all') }}
               </span>
-              <Toggle v-model:value="enableNotifications" />
-            </label>
-            <label class="flex items-start justify-between gap-4 rounded-xl border border-slate-200/80 bg-white/80 px-3 py-3 dark:border-slate-700/80 dark:bg-slate-950/50">
-              <span>
-                <span class="block text-sm font-medium text-slate-800 dark:text-slate-100">{{ t('activation-doi') }}</span>
-                <span class="mt-1 block text-xs text-slate-500 dark:text-slate-400">{{ t('activation-doi-desc') }}</span>
+              <span class="mt-1 block text-sm text-slate-500 dark:text-slate-400">
+                {{ t('email-preferences-unsubscribe-all-desc') }}
               </span>
-              <Toggle v-model:value="optForNewsletters" />
-            </label>
+            </span>
+            <Toggle v-model:value="unsubscribeAll" />
+          </label>
+        </div>
+
+        <div v-show="!unsubscribeAll" class="space-y-6">
+          <div>
+            <h2 class="mb-3 text-sm font-semibold tracking-wide text-slate-500 uppercase dark:text-slate-400">
+              {{ t('notifications-general') }}
+            </h2>
+            <div class="space-y-3">
+              <label class="flex items-start justify-between gap-4 rounded-xl border border-slate-200 px-3 py-3 dark:border-slate-700">
+                <span>
+                  <span class="block text-sm font-medium text-slate-800 dark:text-slate-100">{{ t('activation-notification') }}</span>
+                  <span class="mt-1 block text-xs text-slate-500 dark:text-slate-400">{{ t('activation-notification-desc') }}</span>
+                </span>
+                <Toggle v-model:value="enableNotifications" />
+              </label>
+              <label class="flex items-start justify-between gap-4 rounded-xl border border-slate-200 px-3 py-3 dark:border-slate-700">
+                <span>
+                  <span class="block text-sm font-medium text-slate-800 dark:text-slate-100">{{ t('activation-doi') }}</span>
+                  <span class="mt-1 block text-xs text-slate-500 dark:text-slate-400">{{ t('activation-doi-desc') }}</span>
+                </span>
+                <Toggle v-model:value="optForNewsletters" />
+              </label>
+            </div>
+          </div>
+
+          <div v-for="section in PREFERENCE_SECTIONS" :key="section.titleKey">
+            <h2 class="mb-3 text-sm font-semibold tracking-wide text-slate-500 uppercase dark:text-slate-400">
+              {{ t(section.titleKey) }}
+            </h2>
+            <div class="space-y-3">
+              <label
+                v-for="key in section.keys"
+                :key="key"
+                class="flex items-start justify-between gap-4 rounded-xl border border-slate-200 px-3 py-3 dark:border-slate-700"
+              >
+                <span>
+                  <span class="block text-sm font-medium text-slate-800 dark:text-slate-100">{{ t(PREFERENCE_LABEL_KEYS[key]) }}</span>
+                  <span class="mt-1 block text-xs text-slate-500 dark:text-slate-400">{{ t(PREFERENCE_DESC_KEYS[key]) }}</span>
+                </span>
+                <Toggle v-model:value="preferences[key]" />
+              </label>
+            </div>
           </div>
         </div>
 
-        <div v-for="section in PREFERENCE_SECTIONS" :key="section.titleKey">
-          <h3 class="mb-3 text-sm font-semibold tracking-wide text-slate-500 uppercase dark:text-slate-400">
-            {{ t(section.titleKey) }}
-          </h3>
-          <div class="space-y-3">
-            <label
-              v-for="key in section.keys"
-              :key="key"
-              class="flex items-start justify-between gap-4 rounded-xl border border-slate-200/80 bg-white/80 px-3 py-3 dark:border-slate-700/80 dark:bg-slate-950/50"
-            >
-              <span>
-                <span class="block text-sm font-medium text-slate-800 dark:text-slate-100">{{ t(PREFERENCE_LABEL_KEYS[key]) }}</span>
-                <span class="mt-1 block text-xs text-slate-500 dark:text-slate-400">{{ t(PREFERENCE_DESC_KEYS[key]) }}</span>
-              </span>
-              <Toggle v-model:value="preferences[key]" />
-            </label>
-          </div>
-        </div>
-      </div>
+        <p v-if="formError" class="text-sm text-red-600 dark:text-red-400" role="alert">
+          {{ formError }}
+        </p>
+        <p v-else-if="isSaved" class="flex items-center gap-2 text-sm font-medium text-emerald-700 dark:text-emerald-400" role="status">
+          <IconCheck class="h-4 w-4" aria-hidden="true" />
+          {{ t('email-preferences-saved') }}
+        </p>
 
-      <p v-if="formError" class="text-sm text-red-600 dark:text-red-400" role="alert">
-        {{ formError }}
-      </p>
-      <p v-else-if="isSaved" class="flex items-center gap-2 text-sm font-medium text-emerald-700 dark:text-emerald-400" role="status">
-        <IconCheck class="h-4 w-4" aria-hidden="true" />
-        {{ t('email-preferences-saved') }}
-      </p>
-
-      <button type="submit" class="d-btn border-0" :class="authPrimaryButtonClass" :disabled="isSaving">
-        <IconLoader v-if="isSaving" class="h-4 w-4 animate-spin" aria-hidden="true" />
-        {{ isSaving ? t('saving') : t('email-preferences-save') }}
-      </button>
-    </form>
-  </AuthPageShell>
+        <button
+          type="submit"
+          class="d-btn inline-flex w-full items-center justify-center gap-2 rounded-xl border-0 bg-[#119eff] px-4 py-3 text-base font-semibold text-white hover:brightness-105 disabled:opacity-60"
+          :disabled="isSaving"
+        >
+          <IconLoader v-if="isSaving" class="h-4 w-4 animate-spin" aria-hidden="true" />
+          {{ isSaving ? t('saving') : t('email-preferences-save') }}
+        </button>
+      </form>
+    </div>
+  </div>
 </template>
 
 <route lang="yaml">
