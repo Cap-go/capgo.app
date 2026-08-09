@@ -15,6 +15,7 @@ import { formatIncludedThenPrice } from '~/services/creditPricing'
 import { formatNumberValue } from '~/services/formatLocale'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { checkPermissions } from '~/services/permissions'
+import { createPlansVisitTracker } from '~/services/plansVisitTracking'
 import { getAffonsoReferral, getDatafastAttribution, openCheckout } from '~/services/stripe'
 import { getCreditUnitPricing, getCurrentPlanNameOrg, useSupabase } from '~/services/supabase'
 import { openSupport } from '~/services/support'
@@ -36,10 +37,16 @@ const segmentVal = ref<'m' | 'y'>('y')
 const isYearly = computed(() => segmentVal.value === 'y')
 const route = useRoute()
 const router = useRouter()
+const plansVisitTracker = createPlansVisitTracker()
 const main = useMainStore()
 const organizationStore = useOrganizationStore()
 const dialogStore = useDialogV2Store()
 const isMobile = isNativeAppStoreContext()
+
+watch(() => route.path, (path) => {
+  if (path !== '/settings/organization/plans')
+    plansVisitTracker.reset()
+}, { immediate: true })
 
 // Modal state for non-admin access
 const showAdminModal = ref(false)
@@ -435,16 +442,7 @@ watchEffect(async () => {
         console.error('Failed to load plans data', error)
       })
       const orgId = currentOrganization.value?.gid
-      if (orgId) {
-        sendEvent({
-          channel: 'usage',
-          event: 'User visit',
-          icon: '💳',
-          org_id: orgId,
-          tracking_version: 2,
-          notify: false,
-        }).catch()
-      }
+      plansVisitTracker.track(orgId)
     }
   }
 })

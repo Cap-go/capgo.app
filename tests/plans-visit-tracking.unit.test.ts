@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPlansVisitTracker } from '../src/services/plansVisitTracking'
 
@@ -56,5 +57,21 @@ describe('plans visit tracking', () => {
 
     expect(tracker.track(undefined)).toBe(false)
     expect(sender).not.toHaveBeenCalled()
+  })
+})
+
+describe('plans visit page integration', () => {
+  const plansSource = readFileSync(new URL('../src/pages/settings/organization/Plans.vue', import.meta.url), 'utf8')
+  const usageSource = readFileSync(new URL('../src/pages/settings/organization/Usage.vue', import.meta.url), 'utf8')
+
+  it('uses and resets the guarded tracker from the Plans page', () => {
+    expect(plansSource).toContain("import { createPlansVisitTracker } from '~/services/plansVisitTracking'")
+    expect(plansSource).toContain('plansVisitTracker.track(orgId)')
+    expect(plansSource).toContain('plansVisitTracker.reset()')
+  })
+
+  it('does not emit the Plans visit event from the Usage page', () => {
+    expect(usageSource).not.toContain("event: 'User visit'")
+    expect(usageSource).not.toContain("import { sendEvent } from '~/services/tracking'")
   })
 })
