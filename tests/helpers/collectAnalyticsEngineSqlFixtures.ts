@@ -230,6 +230,16 @@ export async function collectAnalyticsEngineSqlFixtures(): Promise<AnalyticsEngi
         }),
       },
       {
+        name: 'buildUpdateDeliveryTimingEventsCFQuery.platformRequireDuration',
+        query: buildUpdateDeliveryTimingEventsCFQuery({
+          start_date: SAMPLE_START,
+          end_date: SAMPLE_END,
+          actions: ['download_complete', 'download_zip_complete'],
+          require_duration: true,
+          limit: 50_000,
+        }),
+      },
+      {
         name: 'buildNativeObservePluginVersionsCFQuery.default',
         query: buildNativeObservePluginVersionsCFQuery(SAMPLE_APP_ID, 12),
       },
