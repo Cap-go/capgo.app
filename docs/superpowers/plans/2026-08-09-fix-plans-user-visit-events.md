@@ -15,7 +15,7 @@
 - Create `src/services/plansVisitTracking.ts`: owns the canonical event payload and the in-memory per-activation organization deduplication guard.
 - Create `tests/plans-visit-tracking.unit.test.ts`: verifies payload, same-organization deduplication, organization switching, reset behavior, and page integration source contracts.
 - Modify `src/pages/settings/organization/Plans.vue`: use the tracker and reset it when leaving the Plans route.
-- Modify `src/pages/settings/organization/Usage.vue`: remove the redundant Plans-route watcher and now-unused imports.
+- Modify `src/pages/settings/organization/Usage.vue`: remove only the redundant Plans `User visit` branch and its `sendEvent` import; preserve the watcher and success-toast behavior.
 
 ### Task 1: Build and test the visit tracker
 
@@ -178,7 +178,7 @@ describe('plans visit page integration', () => {
 
   it('does not emit the Plans visit event from the Usage page', () => {
     expect(usageSource).not.toContain("event: 'User visit'")
-    expect(usageSource).not.toContain("route.path === '/settings/organization/plans'")
+    expect(usageSource).not.toContain("import { sendEvent } from '~/services/tracking'")
   })
 })
 ```
@@ -221,31 +221,33 @@ plansVisitTracker.track(orgId)
 
 Do not alter `trackPlanCheckoutStarted`; `Plans.vue` still needs its existing `sendEvent` import for `Checkout Started`.
 
-- [ ] **Step 4: Remove the redundant emitter from `Usage.vue`**
+- [ ] **Step 4: Remove only the redundant event branch from `Usage.vue`**
 
-Delete the complete `watchEffect` block that checks `route.path === '/settings/organization/plans'` and sends `User visit`.
-
-Update imports exactly as follows:
+Inside the existing `watchEffect`, delete only this `else if` branch:
 
 ```ts
-import { computed, ref } from 'vue'
-import { useRouter } from 'vue-router'
+else if (main.user?.id) {
+  const orgId = currentOrganization.value?.gid
+  if (orgId) {
+    sendEvent({
+      channel: 'usage',
+      event: 'User visit',
+      icon: '💳',
+      org_id: orgId,
+      tracking_version: 2,
+      notify: false,
+    }).catch()
+  }
+}
 ```
 
-Remove these imports because no remaining Usage code needs them:
+Remove only the now-unused tracking import:
 
 ```ts
-import { toast } from 'vue-sonner'
 import { sendEvent } from '~/services/tracking'
 ```
 
-Delete the now-unused declaration:
-
-```ts
-const route = useRoute()
-```
-
-Keep `router`, `main`, and `organizationStore`; later Usage logic still uses them.
+Keep `watchEffect`, `route`, `router`, `toast`, `main`, `currentOrganization`, and `organizationStore`. The success-query toast and every other Usage behavior remain unchanged.
 
 - [ ] **Step 5: Run the focused test and verify that all seven tests pass**
 
