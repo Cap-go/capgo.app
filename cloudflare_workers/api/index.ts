@@ -11,7 +11,7 @@ import { app as create_device } from '../../supabase/functions/_backend/private/
 import { app as credits } from '../../supabase/functions/_backend/private/credits.ts'
 import { app as deleted_failed_version } from '../../supabase/functions/_backend/private/delete_failed_version.ts'
 import { app as devices_priv } from '../../supabase/functions/_backend/private/devices.ts'
-import { app as email_preferences } from '../../supabase/functions/_backend/private/email_preferences.ts'
+import { app as emailPreferences } from '../../supabase/functions/_backend/private/email_preferences.ts'
 import { app as events } from '../../supabase/functions/_backend/private/events.ts'
 import { app as groups } from '../../supabase/functions/_backend/private/groups.ts'
 import { app as invite_existing_user_to_org } from '../../supabase/functions/_backend/private/invite_existing_user_to_org.ts'
@@ -126,7 +126,7 @@ appPrivate.route('/website_stats', publicStats)
 appPrivate.route('/config', config)
 appPrivate.route('/config/builder', configBuilder)
 appPrivate.route('/accept_invitation', accept_invitation)
-appPrivate.route('/email_preferences', email_preferences)
+appPrivate.route('/email_preferences', emailPreferences)
 appPrivate.route('/devices', devices_priv)
 appPrivate.route('/channel_device', channel_device)
 appPrivate.route('/log_as', log_as)

@@ -1193,6 +1193,7 @@
   "email-preferences-invalid-email": "Enter a valid email address",
   "email-preferences-save": "Save preferences",
   "email-preferences-saved": "Preferences saved",
+  "email-preferences-save-failed": "Could not save preferences. Try again.",
   "email-preferences-title": "Email preferences",
   "email-preferences-unsubscribe-all": "Unsubscribe from all Capgo emails",
   "email-preferences-unsubscribe-all-desc": "Stops Capgo marketing and product emails for this address in Bento.",

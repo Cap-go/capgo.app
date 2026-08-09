@@ -116,7 +116,8 @@ https://console.capgo.app/email-preferences?email={{ visitor.email }}
 ```
 
 - Prefills the address only — the visitor chooses what to disable
-- Save always shows success
+- Save always shows the same success for known and unknown emails
+- This public path is **opt-out only** (cannot re-enable prefs; use logged-in settings for that)
 - “Unsubscribe from all” calls Bento unsubscribe for that address
 
 #### 4. Weekly Statistics

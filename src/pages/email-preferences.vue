@@ -119,22 +119,36 @@ async function savePreferences() {
   isSaving.value = true
   isSaved.value = false
   try {
-    await invokeCapgoApi('private/email_preferences', {
+    const optOutPreferences = Object.fromEntries(
+      PUBLIC_EMAIL_PREFERENCE_KEYS
+        .filter(key => unsubscribeAll.value || preferences[key] === false)
+        .map(key => [key, false]),
+    )
+
+    const { data, error } = await invokeCapgoApi<{ status?: string }>('private/email_preferences', {
       allowAnonymous: true,
       body: {
         email: email.value.trim().toLowerCase(),
         unsubscribe_all: unsubscribeAll.value,
-        enable_notifications: unsubscribeAll.value ? false : enableNotifications.value,
-        opt_for_newsletters: unsubscribeAll.value ? false : optForNewsletters.value,
-        preferences: unsubscribeAll.value
-          ? Object.fromEntries(PUBLIC_EMAIL_PREFERENCE_KEYS.map(key => [key, false]))
-          : { ...preferences },
+        // Opt-out only — never send `true` from this public page.
+        enable_notifications: unsubscribeAll.value || !enableNotifications.value ? false : undefined,
+        opt_for_newsletters: unsubscribeAll.value || !optForNewsletters.value ? false : undefined,
+        preferences: optOutPreferences,
       },
     })
+
+    if (error || data?.status !== 'ok') {
+      formError.value = t('email-preferences-save-failed')
+      return
+    }
+
+    // Success is identical for known and unknown emails (no existence oracle).
+    isSaved.value = true
+  }
+  catch {
+    formError.value = t('email-preferences-save-failed')
   }
   finally {
-    // Always confirm save — backend never reveals whether the account exists.
-    isSaved.value = true
     isSaving.value = false
   }
 }
@@ -144,7 +158,7 @@ async function savePreferences() {
   <div class="min-h-dvh bg-slate-50 px-4 py-[max(1.5rem,env(safe-area-inset-top))] pb-[max(1.5rem,env(safe-area-inset-bottom))] dark:bg-slate-950">
     <div class="mx-auto w-full max-w-xl">
       <header class="mb-6 flex items-center gap-3">
-        <img src="/capgo.webp" alt="Capgo" class="h-9 w-9 rounded-md invert dark:invert-0">
+        <img src="/capgo.webp" alt="" class="h-9 w-9 rounded-md invert dark:invert-0" aria-hidden="true">
         <div>
           <p class="text-xs font-semibold tracking-[0.2em] text-slate-500 uppercase dark:text-slate-400">
             Capgo

@@ -6,6 +6,7 @@ const {
   syncUserPreferenceTagsMock,
   unsubscribeBentoMock,
   usersMaybeSingleMock,
+  usersUpdateEqMock,
   usersUpdateMaybeSingleMock,
 } = vi.hoisted(() => ({
   matchJsonMock: vi.fn(async () => null),
@@ -13,6 +14,7 @@ const {
   syncUserPreferenceTagsMock: vi.fn(async () => undefined),
   unsubscribeBentoMock: vi.fn(async () => true),
   usersMaybeSingleMock: vi.fn(async () => ({ data: null, error: null })),
+  usersUpdateEqMock: vi.fn(),
   usersUpdateMaybeSingleMock: vi.fn(async () => ({ data: null, error: null })),
 }))
 
@@ -46,13 +48,16 @@ vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
             maybeSingle: usersMaybeSingleMock,
           }),
         }),
-        update: () => ({
-          eq: () => ({
-            select: () => ({
-              maybeSingle: usersUpdateMaybeSingleMock,
+        update: (payload: unknown) => {
+          usersUpdateEqMock(payload)
+          return {
+            eq: () => ({
+              select: () => ({
+                maybeSingle: usersUpdateMaybeSingleMock,
+              }),
             }),
-          }),
-        }),
+          }
+        },
       }
     },
   }),
@@ -62,7 +67,12 @@ vi.mock('../supabase/functions/_backend/utils/user_preferences.ts', () => ({
   syncUserPreferenceTags: syncUserPreferenceTagsMock,
 }))
 
-const { app, PUBLIC_EMAIL_PREFERENCE_KEYS } = await import('../supabase/functions/_backend/private/email_preferences.ts')
+const {
+  app,
+  PUBLIC_EMAIL_PREFERENCE_KEYS,
+  escapeIlikeExact,
+  sanitizeOptOutPreferences,
+} = await import('../supabase/functions/_backend/private/email_preferences.ts')
 
 async function postPreferences(body: unknown) {
   return await app.request('http://local/', {
@@ -81,6 +91,18 @@ describe('public email preferences endpoint', () => {
     unsubscribeBentoMock.mockResolvedValue(true)
   })
 
+  it('escapes ilike wildcards in emails', () => {
+    expect(escapeIlikeExact('a%b_c\\d@example.com')).toBe('a\\%b\\_c\\\\d@example.com')
+  })
+
+  it('strips unknown keys and ignores re-enable attempts', () => {
+    expect(sanitizeOptOutPreferences({
+      onboarding: false,
+      weekly_stats: true,
+      admin: false,
+    })).toEqual({ onboarding: false })
+  })
+
   it('returns ok for unknown emails without creating a user', async () => {
     const response = await postPreferences({
       email: 'nobody@example.com',
@@ -89,7 +111,7 @@ describe('public email preferences endpoint', () => {
 
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toEqual({ status: 'ok' })
-    expect(usersUpdateMaybeSingleMock).not.toHaveBeenCalled()
+    expect(usersUpdateEqMock).not.toHaveBeenCalled()
     expect(unsubscribeBentoMock).not.toHaveBeenCalled()
     expect(syncUserPreferenceTagsMock).not.toHaveBeenCalled()
   })
@@ -103,35 +125,72 @@ describe('public email preferences endpoint', () => {
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toEqual({ status: 'ok' })
     expect(unsubscribeBentoMock).toHaveBeenCalledWith(expect.anything(), 'nobody@example.com')
-    expect(usersUpdateMaybeSingleMock).not.toHaveBeenCalled()
+    expect(usersUpdateEqMock).not.toHaveBeenCalled()
   })
 
-  it('updates existing user preferences and syncs Bento tags', async () => {
+  it('applies opt-outs without re-enabling existing prefs', async () => {
     const user = {
       id: '11111111-1111-4111-8111-111111111111',
       email: 'user@example.com',
       enable_notifications: true,
       opt_for_newsletters: true,
-      email_preferences: { onboarding: true, weekly_stats: true },
+      email_preferences: { onboarding: false, weekly_stats: true },
     }
     usersMaybeSingleMock.mockResolvedValue({ data: user, error: null })
     usersUpdateMaybeSingleMock.mockResolvedValue({
       data: {
         ...user,
-        email_preferences: { onboarding: false, weekly_stats: true },
+        email_preferences: { onboarding: false, weekly_stats: false },
       },
       error: null,
     })
 
     const response = await postPreferences({
       email: 'User@Example.com',
-      preferences: { onboarding: false },
+      preferences: {
+        onboarding: true,
+        weekly_stats: false,
+        admin: true,
+      },
+      enable_notifications: true,
+      opt_for_newsletters: true,
     })
 
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toEqual({ status: 'ok' })
+    expect(usersUpdateEqMock).toHaveBeenCalledWith({
+      email_preferences: { onboarding: false, weekly_stats: false },
+      enable_notifications: true,
+      opt_for_newsletters: true,
+    })
     expect(syncUserPreferenceTagsMock).toHaveBeenCalledOnce()
     expect(unsubscribeBentoMock).not.toHaveBeenCalled()
+  })
+
+  it('disables general flags only when explicitly opted out', async () => {
+    const user = {
+      id: '11111111-1111-4111-8111-111111111111',
+      email: 'user@example.com',
+      enable_notifications: true,
+      opt_for_newsletters: true,
+      email_preferences: {},
+    }
+    usersMaybeSingleMock.mockResolvedValue({ data: user, error: null })
+    usersUpdateMaybeSingleMock.mockResolvedValue({
+      data: { ...user, enable_notifications: false, opt_for_newsletters: true },
+      error: null,
+    })
+
+    const response = await postPreferences({
+      email: 'user@example.com',
+      enable_notifications: false,
+    })
+
+    expect(response.status).toBe(200)
+    expect(usersUpdateEqMock).toHaveBeenCalledWith(expect.objectContaining({
+      enable_notifications: false,
+      opt_for_newsletters: true,
+    }))
   })
 
   it('disables all prefs and unsubscribes Bento when unsubscribe_all is set', async () => {
@@ -164,7 +223,20 @@ describe('public email preferences endpoint', () => {
     expect(syncUserPreferenceTagsMock).toHaveBeenCalledOnce()
   })
 
-  it('returns the same ok payload when lookup fails', async () => {
+  it('still unsubscribes Bento when lookup fails and unsubscribe_all is set', async () => {
+    usersMaybeSingleMock.mockResolvedValue({ data: null, error: { message: 'db down' } })
+
+    const response = await postPreferences({
+      email: 'user@example.com',
+      unsubscribe_all: true,
+    })
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({ status: 'ok' })
+    expect(unsubscribeBentoMock).toHaveBeenCalledWith(expect.anything(), 'user@example.com')
+  })
+
+  it('returns the same ok payload when lookup fails without unsubscribe', async () => {
     usersMaybeSingleMock.mockResolvedValue({ data: null, error: { message: 'db down' } })
 
     const response = await postPreferences({

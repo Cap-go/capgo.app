@@ -50,15 +50,24 @@ function normalizeEmail(email: string) {
   return email.trim().toLowerCase()
 }
 
-function sanitizePreferences(input: Record<string, boolean> | undefined): Partial<EmailPreferences> {
+/** Escape `%` / `_` so PostgREST `ilike` cannot be used as a wildcard probe. */
+export function escapeIlikeExact(value: string) {
+  return value.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_')
+}
+
+/**
+ * Public footer form is opt-out only: keep allowlisted keys set to `false`.
+ * Never re-enable preferences from this unauthenticated path.
+ */
+export function sanitizeOptOutPreferences(input: Record<string, boolean> | undefined): Partial<EmailPreferences> {
   if (!input)
     return {}
   const allowed = new Set<string>(PUBLIC_EMAIL_PREFERENCE_KEYS)
   const out: Partial<EmailPreferences> = {}
   for (const [key, value] of Object.entries(input)) {
-    if (!allowed.has(key) || typeof value !== 'boolean')
+    if (!allowed.has(key) || value !== false)
       continue
-    out[key as PublicEmailPreferenceKey] = value
+    out[key as PublicEmailPreferenceKey] = false
   }
   return out
 }
@@ -89,6 +98,7 @@ async function isEmailPreferencesRateLimited(c: Parameters<typeof getClientIP>[0
  * Public email-footer preference save.
  * Always returns the same success payload whether or not the email belongs to a Capgo user.
  * Never loads or returns existing preferences (existence oracle safe).
+ * Opt-out only: cannot re-enable prefs without an authenticated Capgo session.
  */
 app.post('/', async (c) => {
   if (await isEmailPreferencesRateLimited(c))
@@ -103,14 +113,14 @@ app.post('/', async (c) => {
 
   const email = normalizeEmail(parsed.data.email)
   const unsubscribeAll = parsed.data.unsubscribe_all === true
-  const preferencePatch = sanitizePreferences(parsed.data.preferences)
+  const preferenceOptOuts = sanitizeOptOutPreferences(parsed.data.preferences)
 
   try {
     const admin = supabaseAdmin(c)
     const { data: user, error } = await admin
       .from('users')
       .select('id, email, enable_notifications, opt_for_newsletters, email_preferences')
-      .ilike('email', email)
+      .ilike('email', escapeIlikeExact(email))
       .maybeSingle()
 
     if (error) {
@@ -119,10 +129,8 @@ app.post('/', async (c) => {
         message: 'email_preferences lookup failed',
         error: serializeError(error),
       })
-      return c.json(BRES)
     }
-
-    if (user) {
+    else if (user) {
       const previous = {
         ...user,
         email_preferences: (user.email_preferences ?? {}) as EmailPreferences,
@@ -131,17 +139,18 @@ app.post('/', async (c) => {
         ? allPreferencesDisabled()
         : {
             ...previous.email_preferences,
-            ...preferencePatch,
+            ...preferenceOptOuts,
           }
 
       const update = {
         email_preferences: nextPrefs,
-        enable_notifications: unsubscribeAll
+        // Opt-out only for general flags too — never force them back on.
+        enable_notifications: unsubscribeAll || parsed.data.enable_notifications === false
           ? false
-          : (parsed.data.enable_notifications ?? previous.enable_notifications),
-        opt_for_newsletters: unsubscribeAll
+          : previous.enable_notifications,
+        opt_for_newsletters: unsubscribeAll || parsed.data.opt_for_newsletters === false
           ? false
-          : (parsed.data.opt_for_newsletters ?? previous.opt_for_newsletters),
+          : previous.opt_for_newsletters,
       }
 
       const { data: updated, error: updateError } = await admin
@@ -164,7 +173,7 @@ app.post('/', async (c) => {
     }
 
     if (unsubscribeAll) {
-      // Unsubscribe even when no Capgo user row exists — Bento may still have the subscriber.
+      // Always attempt Bento unsubscribe, even when Capgo user lookup failed.
       const unsubscribed = await unsubscribeBento(c, email)
       if (unsubscribed === false) {
         cloudlogErr({
@@ -178,7 +187,7 @@ app.post('/', async (c) => {
       requestId: c.get('requestId'),
       message: 'email_preferences_saved',
       unsubscribeAll,
-      preferenceKeys: Object.keys(preferencePatch),
+      preferenceKeys: Object.keys(preferenceOptOuts),
     })
   }
   catch (error) {
