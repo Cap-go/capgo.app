@@ -88,17 +88,7 @@ const PREFERENCE_DESC_KEYS: Record<PublicEmailPreferenceKey, string> = {
 const { t } = useI18n()
 const route = useRoute('/email-preferences')
 
-function parseDisableParam(raw: unknown): Set<PublicEmailPreferenceKey> {
-  const allowed = new Set<string>(PUBLIC_EMAIL_PREFERENCE_KEYS)
-  const values = String(raw ?? '')
-    .split(',')
-    .map(part => part.trim())
-    .filter(Boolean)
-  return new Set(values.filter((key): key is PublicEmailPreferenceKey => allowed.has(key)))
-}
-
 const emailFromQuery = computed(() => String(route.query.email ?? '').trim())
-const disabledFromQuery = parseDisableParam(route.query.disable)
 
 const email = ref(emailFromQuery.value)
 const unsubscribeAll = ref(false)
@@ -110,7 +100,7 @@ const formError = ref<string | null>(null)
 
 const preferences = reactive<Record<PublicEmailPreferenceKey, boolean>>(
   Object.fromEntries(
-    PUBLIC_EMAIL_PREFERENCE_KEYS.map(key => [key, !disabledFromQuery.has(key)]),
+    PUBLIC_EMAIL_PREFERENCE_KEYS.map(key => [key, true]),
   ) as Record<PublicEmailPreferenceKey, boolean>,
 )
 
