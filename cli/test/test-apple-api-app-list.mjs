@@ -1,9 +1,20 @@
 import assert from 'node:assert/strict'
-import { parseAppsResponse, parseBundleIdsResponse } from '../src/build/onboarding/apple-api.ts'
+import { ensureBundleId, parseAppsResponse, parseBundleIdsResponse } from '../src/build/onboarding/apple-api.ts'
 
 function t(name, fn) {
   try {
     fn()
+    process.stdout.write(`✓ ${name}\n`)
+  }
+  catch (e) {
+    process.stderr.write(`✗ ${name}\n`)
+    throw e
+  }
+}
+
+async function at(name, fn) {
+  try {
+    await fn()
     process.stdout.write(`✓ ${name}\n`)
   }
   catch (e) {
@@ -83,5 +94,41 @@ t('parseBundleIdsResponse drops entries with missing attributes/identifier', () 
   }
   assert.deepEqual(parseBundleIdsResponse(json), ['ee.forgr.real'])
 })
+
+// ─── ensureBundleId ────────────────────────────────────────────────
+
+const realFetch = globalThis.fetch
+
+try {
+  await at('ensureBundleId selects the exact identifier when Apple returns a similar identifier first', async () => {
+    globalThis.fetch = async () => Response.json({
+      data: [
+        { id: 'wrong-resource', attributes: { identifier: 'io.onyxpro.app.app' } },
+        { id: 'correct-resource', attributes: { identifier: 'io.onyxpro.app' } },
+      ],
+    })
+
+    const result = await ensureBundleId('token', 'io.onyxpro.app')
+
+    assert.equal(result.bundleIdResourceId, 'correct-resource')
+  })
+
+  await at('ensureBundleId requests Apple\'s maximum page size', async () => {
+    let requestUrl = ''
+    globalThis.fetch = async (url) => {
+      requestUrl = String(url)
+      return Response.json({
+        data: [{ id: 'correct-resource', attributes: { identifier: 'io.onyxpro.app' } }],
+      })
+    }
+
+    await ensureBundleId('token', 'io.onyxpro.app')
+
+    assert.match(requestUrl, /[?&]limit=200(?:&|$)/)
+  })
+}
+finally {
+  globalThis.fetch = realFetch
+}
 
 console.log('OK')
