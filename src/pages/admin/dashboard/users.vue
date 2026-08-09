@@ -1113,6 +1113,20 @@ const inviteJoinTrendSeries = computed(() => {
   ]
 })
 
+const registrationSourceTotals = computed(() => {
+  const trend = onboardingFunnelData.value?.registration_source_trend ?? []
+
+  return trend.reduce((totals, item) => ({
+    normalRegistrations: totals.normalRegistrations + (Number(item.normal_registrations) || 0),
+    organizationInvites: totals.organizationInvites + (Number(item.invite_registrations) || 0),
+    withoutProfiles: totals.withoutProfiles + (Number(item.without_profile) || 0),
+  }), {
+    normalRegistrations: 0,
+    organizationInvites: 0,
+    withoutProfiles: 0,
+  })
+})
+
 const registrationSourceTrendSeries = computed(() => {
   const trend = onboardingFunnelData.value?.registration_source_trend
   if (!trend || trend.length === 0)
@@ -1253,6 +1267,29 @@ displayStore.defaultBack = '/dashboard'
               :series="registrationSourceTrendSeries"
               :is-loading="isLoadingOnboardingFunnel"
             />
+            <div data-test="registration-source-totals" class="grid grid-cols-1 gap-6 mt-6 md:grid-cols-3">
+              <AdminStatsCard
+                :title="t('normal-registration')"
+                :value="registrationSourceTotals.normalRegistrations"
+                color-class="text-blue-500"
+                :is-loading="isLoadingOnboardingFunnel"
+                :subtitle="t('selected-period')"
+              />
+              <AdminStatsCard
+                :title="t('organization-invite')"
+                :value="registrationSourceTotals.organizationInvites"
+                color-class="text-orange-500"
+                :is-loading="isLoadingOnboardingFunnel"
+                :subtitle="t('selected-period')"
+              />
+              <AdminStatsCard
+                :title="t('without-profile')"
+                :value="registrationSourceTotals.withoutProfiles"
+                color-class="text-slate-400"
+                :is-loading="isLoadingOnboardingFunnel"
+                :subtitle="t('selected-period')"
+              />
+            </div>
           </ChartCard>
 
           <!-- Onboarding Trend Chart -->
