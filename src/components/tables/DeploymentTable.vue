@@ -7,6 +7,7 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import { formatDate } from '~/services/date'
+import { getTimeWindowPageRange } from '~/services/dateRange'
 import { getLogDocUrl } from '~/services/logDocLinks'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
 
@@ -46,15 +47,8 @@ const paginatedRange = computed(() => {
   const rangeStart = range.value ? range.value[0].getTime() : undefined
   const rangeEnd = range.value ? range.value[1].getTime() : undefined
 
-  if (rangeStart && rangeEnd) {
-    const timeDifference = rangeEnd - rangeStart
-    const pageTimeOffset = timeDifference * (currentPage.value - 1)
-
-    return {
-      rangeStart: rangeStart + pageTimeOffset,
-      rangeEnd: rangeEnd + pageTimeOffset,
-    }
-  }
+  if (rangeStart !== undefined && rangeEnd !== undefined)
+    return getTimeWindowPageRange(rangeStart, rangeEnd, currentPage.value)
 
   return {
     rangeStart,
@@ -169,10 +163,9 @@ columns.value = [
   },
 ]
 
-async function reload() {
+// TableLog emits `reload` only from "Load older" after decrementing currentPage.
+async function loadOlder() {
   try {
-    currentPage.value = 1
-    elements.value.length = 0
     await getData()
   }
   catch (error) {
@@ -230,7 +223,7 @@ watch(range, async () => {
       :auto-reload="false"
       :app-id="props.appId ?? ''"
       :search-placeholder="t('search-by-version')"
-      @reload="reload()" @reset="refreshData()"
+      @reload="loadOlder()" @reset="refreshData()"
     />
   </div>
 </template>

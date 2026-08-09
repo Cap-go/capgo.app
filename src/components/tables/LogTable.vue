@@ -2,12 +2,12 @@
 import type { Ref } from 'vue'
 import type { TableColumn } from '../comp_def'
 import { useDebounceFn } from '@vueuse/core'
-import dayjs from 'dayjs'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import { formatDate } from '~/services/date'
+import { getDateRangeForPreset, getTimeWindowPageRange, TABLE_DATE_RANGE_DEFAULT } from '~/services/dateRange'
 import { getLogDocUrl } from '~/services/logDocLinks'
 import { actionToFilter, createActionFilterState, failureActionFilterKeys, filterToAction, observeActionFilterKeys, updateActionFilterKeys } from '~/services/statsActions'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
@@ -67,7 +67,7 @@ const isLoading = ref(false)
 const isExporting = ref(false)
 const currentPage = ref(1)
 
-// Initialize date range from query parameters if provided, otherwise default to last hour
+// Initialize date range from query parameters if provided, otherwise table default.
 function initializeDateRange(): [Date, Date] {
   const startParam = route.query.start
   const endParam = route.query.end
@@ -87,7 +87,8 @@ function initializeDateRange(): [Date, Date] {
     }
   }
 
-  return [dayjs().subtract(1, 'hour').toDate(), new Date()]
+  const initial = getDateRangeForPreset(TABLE_DATE_RANGE_DEFAULT)
+  return [initial.start, initial.end]
 }
 
 const range = ref<[Date, Date]>(initializeDateRange())
@@ -181,15 +182,8 @@ const paginatedRange = computed(() => {
   const rangeStart = range.value ? range.value[0].getTime() : undefined
   const rangeEnd = range.value ? range.value[1].getTime() : undefined
 
-  if (rangeStart && rangeEnd) {
-    const timeDifference = rangeEnd - rangeStart
-    const pageTimeOffset = timeDifference * (currentPage.value - 1)
-
-    return {
-      rangeStart: rangeStart + pageTimeOffset,
-      rangeEnd: rangeEnd + pageTimeOffset,
-    }
-  }
+  if (rangeStart !== undefined && rangeEnd !== undefined)
+    return getTimeWindowPageRange(rangeStart, rangeEnd, currentPage.value)
 
   return {
     rangeStart,
@@ -389,10 +383,11 @@ columns.value = [
   },
 ]
 
-async function reload() {
+// TableLog emits `reload` only from "Load older" after decrementing currentPage.
+// Do not reset the page here — that pinned logs on the first window forever.
+async function loadOlder() {
   try {
-    currentPage.value = 1
-    await getData({ append: false })
+    await getData({ append: true })
   }
   catch (error) {
     console.error(error)
@@ -475,7 +470,7 @@ watch(range, async () => {
       :auto-reload="false"
       :app-id="props.appId ?? ''"
       :search-placeholder="deviceId ? t('search-by-device-id-0') : t('search-by-device-id-')"
-      @reload="reload()" @reset="refreshData()" @export="exportCsv()"
+      @reload="loadOlder()" @reset="refreshData()" @export="exportCsv()"
     />
   </div>
 </template>

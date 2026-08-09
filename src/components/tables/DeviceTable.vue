@@ -9,7 +9,12 @@ import { toast } from 'vue-sonner'
 import IconSmartphone from '~icons/lucide/smartphone'
 import DateRangePicker from '~/components/DateRangePicker.vue'
 import { formatDate } from '~/services/date'
-import { getDateRangeForPreset, TABLE_DATE_RANGE_DEFAULT } from '~/services/dateRange'
+import {
+  getDateRangeForPreset,
+  getTableDateRangeSignature,
+  shouldRecountOnTableReload,
+  TABLE_DATE_RANGE_DEFAULT,
+} from '~/services/dateRange'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
 
 const props = defineProps<{
@@ -38,6 +43,7 @@ const search = ref('')
 const elements = ref<Device[]>([])
 const isLoading = ref(true)
 const currentPage = ref(1)
+const previousPage = ref(1)
 const nextCursor = ref<string | undefined>(undefined)
 const hasMore = ref(false)
 const pageStartCursor = ref<Map<number, string | null | undefined>>(new Map([[1, undefined]]))
@@ -80,6 +86,13 @@ function clearExtraFilters() {
 
 function openDateRangePicker(event: MouseEvent) {
   dateRangePickerRef.value?.togglePicker(event.currentTarget as HTMLElement)
+}
+
+function onDateRangeApply(payload: { start: Date, end: Date, mode: DateRangePreset }) {
+  // Apply payload first so refresh does not race v-model flush and keep the old window.
+  dateRangeMode.value = payload.mode
+  dateRange.value = [payload.start, payload.end]
+  void refreshData()
 }
 
 function clearDeviceViewFilters(clearFilters: () => void) {
@@ -143,19 +156,21 @@ function getSearchTerm() {
 }
 
 function getDateRangePayload() {
-  if (dateRangeMode.value !== 'custom') {
-    const rolling = getDateRangeForPreset(dateRangeMode.value)
-    return {
-      updated_at_gt: rolling.start.toISOString(),
-      updated_at_lte: rolling.end.toISOString(),
-    }
-  }
+  // Always use the frozen session bounds. Recomputing rolling presets from
+  // `now` on each page fetch desyncs API filters from cached cursors.
   if (!dateRange.value)
     return {}
   return {
     updated_at_gt: dateRange.value[0].toISOString(),
     updated_at_lte: dateRange.value[1].toISOString(),
   }
+}
+
+function snapRollingDateRangeBounds() {
+  if (dateRangeMode.value === 'custom')
+    return
+  const rolling = getDateRangeForPreset(dateRangeMode.value)
+  dateRange.value = [rolling.start, rolling.end]
 }
 
 function getVersionNameFilter() {
@@ -177,7 +192,8 @@ function getQuerySignature() {
     override: filters.value.Override,
     customIdMode: filters.value.CustomId,
     ids: props.ids ? [...props.ids].sort().join(',') : '',
-    dateRange: getDateRangePayload(),
+    // Stable mode identity — not rolling ISO bounds that move every millisecond.
+    dateRange: getTableDateRangeSignature(dateRangeMode.value, dateRange.value),
   })
 }
 
@@ -288,24 +304,47 @@ function clearPaginationState() {
   hasMore.value = false
 }
 
+function resetTablePagination(options: { snapRolling?: boolean } = {}) {
+  if (options.snapRolling)
+    snapRollingDateRangeBounds()
+  currentPage.value = 1
+  previousPage.value = 1
+  clearPaginationState()
+  elements.value.length = 0
+  lastQuerySignature.value = getQuerySignature()
+}
+
 async function reload() {
   const loadId = ++activeLoadId.value
   isLoading.value = true
   try {
+    const requestedPage = currentPage.value
     const querySignature = getQuerySignature()
-    if (lastQuerySignature.value !== querySignature) {
-      lastQuerySignature.value = querySignature
-      currentPage.value = 1
-      clearPaginationState()
-      elements.value.length = 0
+    const filtersChanged = lastQuerySignature.value !== querySignature
+    const shouldRecount = shouldRecountOnTableReload({
+      filtersChanged,
+      previousPage: previousPage.value,
+      requestedPage,
+    })
+    if (filtersChanged) {
+      // Keep frozen date bounds; only drop cursors / page for the new filters.
+      resetTablePagination()
     }
 
-    const newTotal = await countDevices()
-    if (loadId !== activeLoadId.value)
-      return
+    if (shouldRecount) {
+      // Toolbar reload (not a page change): snap rolling bounds and drop
+      // cursors so the new window cannot reuse stale page offsets.
+      if (!filtersChanged)
+        resetTablePagination({ snapRolling: true })
+      const newTotal = await countDevices()
+      if (loadId !== activeLoadId.value)
+        return
+      total.value = newTotal
+    }
 
-    total.value = newTotal
     await getData(loadId)
+    if (loadId === activeLoadId.value)
+      previousPage.value = currentPage.value
   }
   catch (error) {
     console.error(error)
@@ -321,16 +360,15 @@ async function refreshData() {
   const loadId = ++activeLoadId.value
   isLoading.value = true
   try {
-    currentPage.value = 1
-    lastQuerySignature.value = getQuerySignature()
-    clearPaginationState()
-    elements.value.length = 0
+    resetTablePagination({ snapRolling: true })
     const newTotal = await countDevices()
     if (loadId !== activeLoadId.value)
       return
 
     total.value = newTotal
     await getData(loadId)
+    if (loadId === activeLoadId.value)
+      previousPage.value = currentPage.value
   }
   catch (error) {
     console.error(error)
@@ -587,7 +625,7 @@ watch([selectedPlatform, selectedVersionName], () => {
           v-model="dateRange"
           v-model:mode="dateRangeMode"
           compact
-          @apply="refreshData()"
+          @apply="onDateRangeApply"
         />
       </template>
       <template #empty-state="{ clearFilters, hasActiveFilters }">
