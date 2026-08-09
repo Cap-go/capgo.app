@@ -4,9 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const {
   syncBentoFirstOrgOnRoleBindingWriteMock,
   syncBentoFirstOrgOnUserCreateMock,
+  syncBentoOrgInviteAcceptedOnRoleBindingWriteMock,
 } = vi.hoisted(() => ({
   syncBentoFirstOrgOnRoleBindingWriteMock: vi.fn(async () => undefined),
   syncBentoFirstOrgOnUserCreateMock: vi.fn(async () => undefined),
+  syncBentoOrgInviteAcceptedOnRoleBindingWriteMock: vi.fn(async () => undefined),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/bento_first_org.ts', () => ({
@@ -14,6 +16,9 @@ vi.mock('../supabase/functions/_backend/utils/bento_first_org.ts', () => ({
   syncBentoFirstOrgOnUserCreate: syncBentoFirstOrgOnUserCreateMock,
 }))
 
+vi.mock('../supabase/functions/_backend/utils/bento_org_invite.ts', () => ({
+  syncBentoOrgInviteAcceptedOnRoleBindingWrite: syncBentoOrgInviteAcceptedOnRoleBindingWriteMock,
+}))
 const apiWorker = (await import('../cloudflare_workers/api/index.ts')).default
 
 const API_SECRET = 'test-secret'
@@ -73,6 +78,7 @@ describe('first-organization lifecycle trigger route', () => {
     process.env.API_SECRET = API_SECRET
     vi.clearAllMocks()
     syncBentoFirstOrgOnRoleBindingWriteMock.mockResolvedValue(undefined)
+    syncBentoOrgInviteAcceptedOnRoleBindingWriteMock.mockResolvedValue(undefined)
   })
 
   afterEach(() => {
@@ -90,6 +96,8 @@ describe('first-organization lifecycle trigger route', () => {
     await expect(response.json()).resolves.toEqual({ status: 'ok' })
     expect(syncBentoFirstOrgOnRoleBindingWriteMock).toHaveBeenCalledOnce()
     expect(syncBentoFirstOrgOnRoleBindingWriteMock).toHaveBeenCalledWith(expect.anything(), ROLE_BINDING_ID)
+    expect(syncBentoOrgInviteAcceptedOnRoleBindingWriteMock).toHaveBeenCalledOnce()
+    expect(syncBentoOrgInviteAcceptedOnRoleBindingWriteMock).toHaveBeenCalledWith(expect.anything(), ROLE_BINDING_ID)
   })
 
   it('returns 5xx so the queue retries when lifecycle delivery fails', async () => {
@@ -100,6 +108,18 @@ describe('first-organization lifecycle trigger route', () => {
     expect(response.status).toBeGreaterThanOrEqual(500)
     expect(response.status).toBeLessThan(600)
     expect(syncBentoFirstOrgOnRoleBindingWriteMock).toHaveBeenCalledOnce()
+    expect(syncBentoOrgInviteAcceptedOnRoleBindingWriteMock).not.toHaveBeenCalled()
+  })
+
+  it('returns 5xx so the queue retries when invite-accepted tagging fails', async () => {
+    syncBentoOrgInviteAcceptedOnRoleBindingWriteMock.mockRejectedValueOnce(new Error('Bento unavailable'))
+
+    const response = await requestRoleBindingWrite('INSERT')
+
+    expect(response.status).toBeGreaterThanOrEqual(500)
+    expect(response.status).toBeLessThan(600)
+    expect(syncBentoFirstOrgOnRoleBindingWriteMock).toHaveBeenCalledOnce()
+    expect(syncBentoOrgInviteAcceptedOnRoleBindingWriteMock).toHaveBeenCalledOnce()
   })
 
   it.each([
@@ -110,6 +130,7 @@ describe('first-organization lifecycle trigger route', () => {
 
     expect(response.status).toBe(400)
     expect(syncBentoFirstOrgOnRoleBindingWriteMock).not.toHaveBeenCalled()
+    expect(syncBentoOrgInviteAcceptedOnRoleBindingWriteMock).not.toHaveBeenCalled()
   })
 
   it.each([
@@ -126,6 +147,7 @@ describe('first-organization lifecycle trigger route', () => {
       error: 'invalid_payload',
     })
     expect(syncBentoFirstOrgOnRoleBindingWriteMock).not.toHaveBeenCalled()
+    expect(syncBentoOrgInviteAcceptedOnRoleBindingWriteMock).not.toHaveBeenCalled()
   })
 
   it.each([
@@ -139,8 +161,8 @@ describe('first-organization lifecycle trigger route', () => {
     expect(response.status).toBe(400)
     await expect(response.json()).resolves.toMatchObject({ error })
     expect(syncBentoFirstOrgOnRoleBindingWriteMock).not.toHaveBeenCalled()
+    expect(syncBentoOrgInviteAcceptedOnRoleBindingWriteMock).not.toHaveBeenCalled()
   })
-
   it('registers the same route in the Supabase trigger router', async () => {
     // Importing this deployment entry point evaluates Deno.serve and starts a
     // server, so verify its static wiring without executing the module.
