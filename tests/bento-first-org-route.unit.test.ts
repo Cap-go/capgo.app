@@ -4,21 +4,42 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const {
   syncBentoFirstOrgOnRoleBindingWriteMock,
   syncBentoFirstOrgOnUserCreateMock,
-  syncBentoOrgInviteAcceptedOnRoleBindingWriteMock,
-} = vi.hoisted(() => ({
-  syncBentoFirstOrgOnRoleBindingWriteMock: vi.fn(async () => undefined),
-  syncBentoFirstOrgOnUserCreateMock: vi.fn(async () => undefined),
-  syncBentoOrgInviteAcceptedOnRoleBindingWriteMock: vi.fn(async () => undefined),
-}))
+  syncBentoSubscriberTagsMock,
+  supabaseFromMock,
+} = vi.hoisted(() => {
+  const maybeSingle = vi.fn(async () => ({ data: { email: 'invitee@example.com' }, error: null }))
+  const eq = vi.fn(() => ({ maybeSingle }))
+  const select = vi.fn(() => ({ eq }))
+  const from = vi.fn(() => ({ select }))
+  return {
+    syncBentoFirstOrgOnRoleBindingWriteMock: vi.fn(async () => undefined),
+    syncBentoFirstOrgOnUserCreateMock: vi.fn(async () => undefined),
+    syncBentoSubscriberTagsMock: vi.fn(async () => true),
+    supabaseFromMock: { eq, from, maybeSingle, select },
+  }
+})
 
 vi.mock('../supabase/functions/_backend/utils/bento_first_org.ts', () => ({
   syncBentoFirstOrgOnRoleBindingWrite: syncBentoFirstOrgOnRoleBindingWriteMock,
   syncBentoFirstOrgOnUserCreate: syncBentoFirstOrgOnUserCreateMock,
 }))
 
-vi.mock('../supabase/functions/_backend/utils/bento_org_invite.ts', () => ({
-  syncBentoOrgInviteAcceptedOnRoleBindingWrite: syncBentoOrgInviteAcceptedOnRoleBindingWriteMock,
-}))
+vi.mock('../supabase/functions/_backend/utils/bento.ts', async () => {
+  const actual = await vi.importActual('../supabase/functions/_backend/utils/bento.ts')
+  return {
+    ...actual,
+    syncBentoSubscriberTags: syncBentoSubscriberTagsMock,
+  }
+})
+
+vi.mock('../supabase/functions/_backend/utils/supabase.ts', async () => {
+  const actual = await vi.importActual('../supabase/functions/_backend/utils/supabase.ts')
+  return {
+    ...actual,
+    supabaseAdmin: () => ({ from: supabaseFromMock.from }),
+  }
+})
+
 const apiWorker = (await import('../cloudflare_workers/api/index.ts')).default
 
 const API_SECRET = 'test-secret'
@@ -63,10 +84,14 @@ function requestPayload(payload: unknown, apiSecret: string | null = API_SECRET)
   }))
 }
 
-function requestRoleBindingWrite(type: 'INSERT' | 'UPDATE', apiSecret: string | null = API_SECRET) {
+function requestRoleBindingWrite(
+  type: 'INSERT' | 'UPDATE',
+  apiSecret: string | null = API_SECRET,
+  record = roleBindingRecord,
+) {
   return requestPayload({
-    old_record: type === 'UPDATE' ? roleBindingRecord : null,
-    record: roleBindingRecord,
+    old_record: type === 'UPDATE' ? record : null,
+    record,
     schema: 'public',
     table: 'role_bindings',
     type,
@@ -78,7 +103,8 @@ describe('first-organization lifecycle trigger route', () => {
     process.env.API_SECRET = API_SECRET
     vi.clearAllMocks()
     syncBentoFirstOrgOnRoleBindingWriteMock.mockResolvedValue(undefined)
-    syncBentoOrgInviteAcceptedOnRoleBindingWriteMock.mockResolvedValue(undefined)
+    syncBentoSubscriberTagsMock.mockResolvedValue(true)
+    supabaseFromMock.maybeSingle.mockResolvedValue({ data: { email: 'invitee@example.com' }, error: null })
   })
 
   afterEach(() => {
@@ -96,8 +122,23 @@ describe('first-organization lifecycle trigger route', () => {
     await expect(response.json()).resolves.toEqual({ status: 'ok' })
     expect(syncBentoFirstOrgOnRoleBindingWriteMock).toHaveBeenCalledOnce()
     expect(syncBentoFirstOrgOnRoleBindingWriteMock).toHaveBeenCalledWith(expect.anything(), ROLE_BINDING_ID)
-    expect(syncBentoOrgInviteAcceptedOnRoleBindingWriteMock).toHaveBeenCalledOnce()
-    expect(syncBentoOrgInviteAcceptedOnRoleBindingWriteMock).toHaveBeenCalledWith(expect.anything(), ROLE_BINDING_ID)
+    expect(syncBentoSubscriberTagsMock).toHaveBeenCalledOnce()
+    expect(syncBentoSubscriberTagsMock).toHaveBeenCalledWith(expect.anything(), {
+      deleteSegments: [],
+      email: 'invitee@example.com',
+      segments: ['org:invite_accepted'],
+    })
+  })
+
+  it('skips invite-accepted tagging when reason is not Accepted invitation', async () => {
+    const response = await requestRoleBindingWrite('INSERT', API_SECRET, {
+      ...roleBindingRecord,
+      reason: 'SSO org membership provisioning',
+    })
+
+    expect(response.status).toBe(200)
+    expect(syncBentoFirstOrgOnRoleBindingWriteMock).toHaveBeenCalledOnce()
+    expect(syncBentoSubscriberTagsMock).not.toHaveBeenCalled()
   })
 
   it('returns 5xx so the queue retries when lifecycle delivery fails', async () => {
@@ -108,18 +149,7 @@ describe('first-organization lifecycle trigger route', () => {
     expect(response.status).toBeGreaterThanOrEqual(500)
     expect(response.status).toBeLessThan(600)
     expect(syncBentoFirstOrgOnRoleBindingWriteMock).toHaveBeenCalledOnce()
-    expect(syncBentoOrgInviteAcceptedOnRoleBindingWriteMock).not.toHaveBeenCalled()
-  })
-
-  it('returns 5xx so the queue retries when invite-accepted tagging fails', async () => {
-    syncBentoOrgInviteAcceptedOnRoleBindingWriteMock.mockRejectedValueOnce(new Error('Bento unavailable'))
-
-    const response = await requestRoleBindingWrite('INSERT')
-
-    expect(response.status).toBeGreaterThanOrEqual(500)
-    expect(response.status).toBeLessThan(600)
-    expect(syncBentoFirstOrgOnRoleBindingWriteMock).toHaveBeenCalledOnce()
-    expect(syncBentoOrgInviteAcceptedOnRoleBindingWriteMock).toHaveBeenCalledOnce()
+    expect(syncBentoSubscriberTagsMock).not.toHaveBeenCalled()
   })
 
   it.each([
@@ -130,7 +160,7 @@ describe('first-organization lifecycle trigger route', () => {
 
     expect(response.status).toBe(400)
     expect(syncBentoFirstOrgOnRoleBindingWriteMock).not.toHaveBeenCalled()
-    expect(syncBentoOrgInviteAcceptedOnRoleBindingWriteMock).not.toHaveBeenCalled()
+    expect(syncBentoSubscriberTagsMock).not.toHaveBeenCalled()
   })
 
   it.each([
@@ -147,7 +177,7 @@ describe('first-organization lifecycle trigger route', () => {
       error: 'invalid_payload',
     })
     expect(syncBentoFirstOrgOnRoleBindingWriteMock).not.toHaveBeenCalled()
-    expect(syncBentoOrgInviteAcceptedOnRoleBindingWriteMock).not.toHaveBeenCalled()
+    expect(syncBentoSubscriberTagsMock).not.toHaveBeenCalled()
   })
 
   it.each([
@@ -161,8 +191,9 @@ describe('first-organization lifecycle trigger route', () => {
     expect(response.status).toBe(400)
     await expect(response.json()).resolves.toMatchObject({ error })
     expect(syncBentoFirstOrgOnRoleBindingWriteMock).not.toHaveBeenCalled()
-    expect(syncBentoOrgInviteAcceptedOnRoleBindingWriteMock).not.toHaveBeenCalled()
+    expect(syncBentoSubscriberTagsMock).not.toHaveBeenCalled()
   })
+
   it('registers the same route in the Supabase trigger router', async () => {
     // Importing this deployment entry point evaluates Deno.serve and starts a
     // server, so verify its static wiring without executing the module.
