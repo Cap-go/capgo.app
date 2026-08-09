@@ -1,4 +1,4 @@
-import { sendEvent } from './tracking'
+import { sendEvent } from '~/services/tracking'
 
 export function createPlansVisitTracker(sender: typeof sendEvent = sendEvent) {
   const trackedOrganizationIds = new Set<string>()

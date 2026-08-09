@@ -63,6 +63,8 @@ describe('plans visit page integration', () => {
 
   it('uses the guarded tracker from the Plans page', () => {
     expect(plansSource).toContain("import { createPlansVisitTracker } from '~/services/plansVisitTracking'")
+    expect(plansSource).toContain('watchEffect(async (onCleanup)')
+    expect(plansSource).toContain('currentOrganization.value?.gid === orgId')
     expect(plansSource).toContain('plansVisitTracker.track(orgId)')
     expect(plansSource).not.toContain('plansVisitTracker.reset()')
   })

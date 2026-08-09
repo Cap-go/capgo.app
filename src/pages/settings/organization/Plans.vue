@@ -387,7 +387,12 @@ watch(currentOrganization, async (newOrg, prevOrg) => {
   // isSubscribeLoading.value.fill(false, 0, plans.value.length)
 })
 
-watchEffect(async () => {
+watchEffect(async (onCleanup) => {
+  let isCurrentActivation = true
+  onCleanup(() => {
+    isCurrentActivation = false
+  })
+
   if (route.path === '/settings/organization/plans') {
     if (isMobile) {
       router.replace('/settings/organization/usage')
@@ -405,9 +410,17 @@ watchEffect(async () => {
         organizationStore.setCurrentOrganization(route.query.oid)
       }
 
+      const orgId = currentOrganization.value?.gid
+      const isCurrentTrackingContext = () => isCurrentActivation
+        && route.path === '/settings/organization/plans'
+        && currentOrganization.value?.gid === orgId
+
       // Check permission on initial load
-      if (currentOrganization.value) {
-        const hasUpdateBillingPermission = await checkPermissions('org.update_billing', { orgId: currentOrganization.value.gid })
+      if (orgId) {
+        const hasUpdateBillingPermission = await checkPermissions('org.update_billing', { orgId })
+
+        if (!isCurrentTrackingContext())
+          return
 
         if (!hasUpdateBillingPermission) {
           const fallbackOrg = await findBillableFallbackOrg()
@@ -436,8 +449,8 @@ watchEffect(async () => {
         // billing page — the graceful no-org path is handled inside loadData.
         console.error('Failed to load plans data', error)
       })
-      const orgId = currentOrganization.value?.gid
-      plansVisitTracker.track(orgId)
+      if (isCurrentTrackingContext())
+        plansVisitTracker.track(orgId)
     }
   }
 })
