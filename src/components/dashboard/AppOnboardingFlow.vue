@@ -1,5 +1,9 @@
 <script setup lang="ts">
 import type { Database } from '~/types/supabase.types'
+import type {
+  OnboardingIntent,
+  OnboardingStepCompletionProperties,
+} from '~/utils/onboardingProgressAnalytics'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
@@ -37,6 +41,7 @@ import {
   clearOnboardingAppDraft,
   loadOnboardingAppDraft,
 } from '~/utils/onboardingAppDraft'
+import { createOnboardingProgressTracker } from '~/utils/onboardingProgressAnalytics'
 import { allowOnboardingDashboardExploration } from '~/utils/onboardingRedirect'
 import { slugifyOnboardingSegment } from '~/utils/onboardingSlug'
 import AppOnboardingIconInput from './AppOnboardingIconInput.vue'
@@ -59,6 +64,7 @@ const config = getLocalConfig()
 type AppRow = Database['public']['Tables']['apps']['Row']
 type StandardFlowStep = 'details' | 'choice' | 'install' | 'setup'
 type PreOrgFlowStep = 'intent' | 'details' | 'organization' | 'setup'
+type OnboardingFlowStep = StandardFlowStep | PreOrgFlowStep
 
 interface UserCountStop {
   value: number
@@ -74,7 +80,7 @@ const isSeedingDemo = ref(false)
 const isCliCommandVisible = ref(false)
 const apiKey = ref<string | null>(null)
 const createdApp = ref<AppRow | null>(null)
-const flowStep = ref<StandardFlowStep | PreOrgFlowStep>('details')
+const flowStep = ref<OnboardingFlowStep>('details')
 const showLanguageSelector = computed(() => (
   (props.preOrg && !createdApp.value)
   || (flowStep.value === 'setup' && Boolean(createdApp.value))
@@ -93,7 +99,7 @@ const manualAppId = ref('')
 const appIdSuggestions = ref<string[]>([])
 const appIdFeedback = ref('')
 const hasEditedAppId = ref(false)
-const selectedIntent = ref<string | null>(null)
+const selectedIntent = ref<OnboardingIntent | null>(null)
 const orgNameInput = ref('')
 const hasEditedOrgName = ref(false)
 const estimatedUsersIndex = ref<number | null>(null)
@@ -193,7 +199,7 @@ const aiHelpPrompt = computed(() => {
     command: redactedCliCommand.value,
   })
 })
-const appOnboardingSteps = computed<Array<{ id: StandardFlowStep | PreOrgFlowStep, label: string }>>(() => {
+const appOnboardingSteps = computed<Array<{ id: OnboardingFlowStep, label: string }>>(() => {
   if (props.preOrg) {
     return [
       { id: 'intent', label: t('unified-onboarding-step-intent') },
@@ -231,6 +237,40 @@ const canCreatePreOrgOrganization = computed(() => {
 })
 const setupTitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onboarding-setup-builder-title') : t('unified-onboarding-setup-ota-title'))
 const setupSubtitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onboarding-setup-builder-subtitle') : t('unified-onboarding-setup-ota-subtitle'))
+
+let progressTracker: ReturnType<typeof createOnboardingProgressTracker> | null = null
+
+function initializeProgressTracking(resumed: boolean) {
+  progressTracker = createOnboardingProgressTracker({
+    flow: props.preOrg ? 'pre_org' : 'existing_org',
+    resumed,
+    steps: appOnboardingSteps.value.map(step => step.id),
+    supaHost: config.supaHost,
+  })
+  progressTracker.viewStep(flowStep.value)
+}
+
+function completeAndViewStep(nextStep: OnboardingFlowStep, completionProperties: OnboardingStepCompletionProperties = {}) {
+  const previousStep = flowStep.value
+  if (previousStep === nextStep)
+    return
+
+  progressTracker?.completeStep(previousStep, {
+    ...completionProperties,
+    nextStep,
+  })
+  flowStep.value = nextStep
+  progressTracker?.viewStep(nextStep, previousStep)
+}
+
+function viewPreviousStep(nextStep: OnboardingFlowStep) {
+  const previousStep = flowStep.value
+  if (previousStep === nextStep)
+    return
+
+  flowStep.value = nextStep
+  progressTracker?.viewStep(nextStep, previousStep)
+}
 
 function whiteCardToggleButtonClass(active: boolean) {
   return active
@@ -569,8 +609,12 @@ function hydrateIntentFromCurrentOrg() {
     return
 
   const intent = (onboarding as { intent?: unknown }).intent
-  if (typeof intent === 'string' && intent)
-    selectedIntent.value = intent
+  if (typeof intent !== 'string')
+    return
+
+  const supportedIntent = intentOptions.find(option => option.value === intent)?.value
+  if (supportedIntent)
+    selectedIntent.value = supportedIntent
 }
 
 function continueFromIntent() {
@@ -579,7 +623,7 @@ function continueFromIntent() {
     return
   }
 
-  flowStep.value = 'details'
+  completeAndViewStep('details', { intent: selectedIntent.value })
 }
 
 function continuePreOrgDetails() {
@@ -601,7 +645,9 @@ function continuePreOrgDetails() {
   if (!ensureValidAppId())
     return
 
-  flowStep.value = 'organization'
+  completeAndViewStep('organization', {
+    storeImportUsed: hasImportedStoreMetadata.value,
+  })
 }
 
 async function createOrganizationAndApp() {
@@ -680,8 +726,6 @@ async function createOrganizationAndApp() {
       console.error('Cannot ensure API key', apiKeyError)
       toast.error(t('app-onboarding-toast-apikey-error'))
     }
-
-    flowStep.value = 'setup'
   }
   finally {
     isSubmitting.value = false
@@ -776,7 +820,12 @@ async function createAppRecord(options?: { nextStep?: StandardFlowStep | PreOrgF
       .single()
 
     createdApp.value = refreshed ?? responseData
-    flowStep.value = options?.nextStep ?? 'choice'
+    const completionProperties: OnboardingStepCompletionProperties = {
+      appId,
+    }
+    if (flowStep.value === 'details')
+      completionProperties.storeImportUsed = hasImportedStoreMetadata.value
+    completeAndViewStep(options?.nextStep ?? 'choice', completionProperties)
   }
   catch (error) {
     console.error('Cannot create onboarding app', error)
@@ -850,19 +899,30 @@ async function copyAiInstructions() {
 }
 
 function goToInstallStep() {
+  if (!createdApp.value)
+    return
+
   isCliCommandVisible.value = false
-  flowStep.value = 'install'
+  completeAndViewStep('install', {
+    appId: createdApp.value.app_id,
+  })
 }
 
 function openDashboard() {
   if (!createdApp.value)
     return
 
+  if (flowStep.value === 'install' || flowStep.value === 'setup') {
+    progressTracker?.completeStep(flowStep.value, {
+      appId: createdApp.value.app_id,
+    })
+  }
   allowOnboardingDashboardExploration(onboardingUserId.value, createdApp.value.app_id)
   router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}`)
 }
 
 onMounted(async () => {
+  let resumedFlow = false
   isLoading.value = true
   try {
     if (props.preOrg) {
@@ -875,6 +935,7 @@ onMounted(async () => {
     await main.awaitInitialLoad()
 
     const resumed = await loadResumeApp()
+    resumedFlow = resumed
     if (!resumed)
       flowStep.value = 'details'
 
@@ -885,6 +946,7 @@ onMounted(async () => {
   }
   finally {
     isLoading.value = false
+    initializeProgressTracking(resumedFlow)
   }
 })
 
@@ -1576,7 +1638,7 @@ watch(appName, (value) => {
             </div>
 
             <div class="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <button class="d-btn min-h-11" :class="whiteCardSecondaryButtonClass()" :disabled="isSeedingDemo" @click="flowStep = 'choice'">
+              <button class="d-btn min-h-11" :class="whiteCardSecondaryButtonClass()" :disabled="isSeedingDemo" @click="viewPreviousStep('choice')">
                 {{ t('button-back') }}
               </button>
               <button class="d-btn min-h-11" :class="whiteCardPrimaryButtonClass()" :disabled="isSeedingDemo" @click="openDashboard">
