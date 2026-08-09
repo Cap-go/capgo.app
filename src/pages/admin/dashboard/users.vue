@@ -32,6 +32,13 @@ const router = useRouter()
 const isLoading = ref(true)
 
 // Onboarding funnel data
+interface RegistrationSourceTrendPoint {
+  date: string
+  normal_registrations: number
+  invite_registrations: number
+  without_profile: number
+}
+
 interface OnboardingFunnelData {
   total_registrations: number
   total_orgs: number
@@ -69,12 +76,7 @@ interface OnboardingFunnelData {
     org_joins_invite_register: number
     org_joins_existing_account: number
   }>
-  registration_source_trend: Array<{
-    date: string
-    normal_registrations: number
-    invite_registrations: number
-    without_profile: number
-  }>
+  registration_source_trend: RegistrationSourceTrendPoint[]
 }
 
 interface EmailTypeBreakdown {
