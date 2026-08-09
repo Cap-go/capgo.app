@@ -1426,7 +1426,7 @@ watch(appName, (value) => {
             </div>
 
             <div class="flex flex-col-reverse gap-3 border-t border-slate-200 pt-6 sm:flex-row sm:items-center sm:justify-between dark:border-white/15">
-              <button type="button" class="d-btn min-h-12" :class="whiteCardSecondaryButtonClass()" @click="flowStep = 'details'">
+              <button type="button" class="d-btn min-h-12" :class="whiteCardSecondaryButtonClass()" @click="viewPreviousStep('details')">
                 {{ t('button-back') }}
               </button>
               <button
