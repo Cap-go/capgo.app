@@ -15,7 +15,7 @@ import * as tus from 'tus-js-client'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { encryptChecksum, encryptChecksumV3, encryptSource } from '../api/crypto'
 import { CliUserError } from '../shared/cli-user-error'
-import { appAddHintMessage, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, deltaManifestTooLargeMessage, findRoot, generateManifest, getContentType, getInstalledVersion, getLocalConfig, isAppNotFoundError, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, sendEvent, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
+import { BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, buildTusUploadError, deltaManifestTooLargeMessage, findRoot, generateManifest, getContentType, getInstalledVersion, getLocalConfig, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, sendEvent, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
 import { getUploadReporter } from './reporter'
 
 const log = {
@@ -311,35 +311,13 @@ export async function uploadPartial(
           },
 headers: buildCliRequestHeaders({ Authorization: apikey }),
           onError: (error) => {
-            const errorMessage = error.toString()
-
-            // Turn the backend's `app_not_found` rejection into the actionable `app add`
-            // hint. Without this the raw tus error object escapes as an unhandled
-            // rejection instead of a clear user error.
-            if (isAppNotFoundError(error)) {
-              log.error(`Failed to upload ${filePathUnix}: ${errorMessage}`)
-              reject(new Error(appAddHintMessage(appId)))
-              return
-            }
-
-            // Try to extract requestId from error message
-            let requestId: string | undefined
-            try {
-              // TUS errors often include response text in the format: "response text: {json}"
-              const responseTextMatch = errorMessage.match(/response text: (\{.*?\})/)
-              if (responseTextMatch && responseTextMatch[1]) {
-                const errorResponse = JSON.parse(responseTextMatch[1])
-                requestId = errorResponse.moreInfo?.requestId
-              }
-            }
-            catch {
-              // Ignore JSON parse errors
-            }
-
-            const requestIdSuffix = requestId ? ` [requestId: ${requestId}]` : ''
-            log.error(`Failed to upload ${filePathUnix}: ${errorMessage}${requestIdSuffix}`)
-
-            reject(error)
+            // Reject a real Error carrying the HTTP status, backend message, and
+            // request id — the same shape as `uploadTUS`. Rejecting the raw tus
+            // blob leaked the URL and per-file object key into the message and
+            // dropped the status the error-tracking filter needs.
+            const uploadError = buildTusUploadError(error, appId)
+            log.error(`Failed to upload ${filePathUnix}: ${uploadError.message}`)
+            reject(uploadError)
           },
           onProgress() {
             const percentage = ((uploadedFiles / totalFiles) * 100).toFixed(2)

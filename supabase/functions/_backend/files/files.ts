@@ -908,7 +908,9 @@ async function checkWriteAppAccess(c: Context, next: Next) {
         app_id,
         capgkeyPrefix: capgkey ? capgkey.substring(0, 15) : 'missing',
       })
-      throw new HTTPException(400, {
+      // 401, not 400, so a genuine missing user matches how `invalid_apikey`
+      // behaves on this route and the CLI treats it as an auth error.
+      throw new HTTPException(401, {
         res: c.json({
           error: 'user_not_found',
           message: 'User not found for the provided API key',

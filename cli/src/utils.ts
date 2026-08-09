@@ -1689,6 +1689,46 @@ export function isAppNotFoundError(error: unknown): boolean {
   return `${responseBody ?? ''} ${message}`.includes('app_not_found')
 }
 
+// Turn a tus upload failure into a real Error that carries the HTTP status, the
+// backend error code/message, and the request id. Attaching `.status` lets the
+// CLI error-tracking filter treat an auth failure (401) as an expected user
+// error, and building a clean message keeps the raw tus blob — which embeds the
+// upload URL and per-file object key — out of the message.
+export function buildTusUploadError(error: unknown, appId: string): Error & { status?: number } {
+  // The backend rejects unknown apps with `404 app_not_found`; surface the
+  // actionable `app add` hint instead of a raw tus error string.
+  if (isAppNotFoundError(error))
+    return new Error(appAddHintMessage(appId))
+
+  if (error instanceof tus.DetailedError) {
+    const body = error.originalResponse?.getBody()
+    const status = error.originalResponse?.getStatus()
+    const url = error.originalRequest?.getURL()
+
+    // Parse can throw on a non-JSON body (an HTML 502/504 page from a proxy),
+    // so keep it inside the try and fall back to the raw body, then the tus
+    // error message.
+    let backendMessage: string
+    let requestId: string | undefined
+    try {
+      const jsonBody = JSON.parse(body || '{"error": "unknown error"}')
+      backendMessage = jsonBody.status || jsonBody.error || jsonBody.message || 'unknown error'
+      requestId = jsonBody.moreInfo?.requestId
+    }
+    catch {
+      backendMessage = body || error.message
+    }
+
+    const requestIdSuffix = requestId ? ` [requestId: ${requestId}]` : ''
+    const built = new Error(`TUS upload failed (status ${status ?? 'unknown'}, url ${url ?? 'unknown'}): ${backendMessage}${requestIdSuffix}`) as Error & { status?: number }
+    if (typeof status === 'number')
+      built.status = status
+    return built
+  }
+
+  return new Error(`TUS upload failed: ${error instanceof Error ? (error.message || error.toString()) : String(error)}`)
+}
+
 export async function uploadTUS(apikey: string, data: Buffer, orgId: string, appId: string, name: string, spinner: UploadSpinner, localConfig: CapgoConfig, chunkSize: number): Promise<boolean> {
   return new Promise((resolve, reject) => {
     sendEvent(apikey, {
@@ -1719,35 +1759,7 @@ export async function uploadTUS(apikey: string, data: Buffer, orgId: string, app
       // Callback for errors which cannot be fixed using retries
       onError(error) {
         log.error(`Error uploading bundle: ${error.message}`)
-        // Turn the backend's `app_not_found` rejection into the actionable `app add`
-        // hint instead of leaking a raw tus error string to the user.
-        if (isAppNotFoundError(error)) {
-          reject(new Error(appAddHintMessage(appId)))
-          return
-        }
-        if (error instanceof tus.DetailedError) {
-          const body = error.originalResponse?.getBody()
-          const status = error.originalResponse?.getStatus()
-          const url = error.originalRequest?.getURL()
-
-          // Parse can throw on a non-JSON body (an HTML 502/504 page from a proxy),
-          // so keep it inside the try and fall back to the raw body, then the tus
-          // error message. An empty body used to collapse to the literal
-          // "unknown error" and drop the status, URL, and body on the floor.
-          const errorMsg = (() => {
-            try {
-              const jsonBody = JSON.parse(body || '{"error": "unknown error"}')
-              return jsonBody.status || jsonBody.error || jsonBody.message || 'unknown error'
-            }
-            catch {
-              return body || error.message
-            }
-          })()
-          reject(new Error(`TUS upload failed (status ${status ?? 'unknown'}, url ${url ?? 'unknown'}): ${errorMsg}`))
-        }
-        else {
-          reject(new Error(`TUS upload failed: ${error.message || error.toString()}`))
-        }
+        reject(buildTusUploadError(error, appId))
       },
       // Callback for reporting upload progress
       onProgress(bytesUploaded, bytesTotal) {

@@ -232,6 +232,10 @@ try {
   assert.equal(isExpectedUserError(new Error('App com.example does not exist, run first `npx @capgo/cli app add com.example` to create it')), true)
   assert.equal(isExpectedUserError({ context: { status: 401 } }), true)
   assert.equal(isExpectedUserError({ status: 401 }), true)
+  // A 401 `user_not_found` from the files backend must be treated as an auth
+  // error, both via the marker and via the status attached to the thrown error.
+  assert.equal(isExpectedUserError(new Error('user_not_found')), true)
+  assert.equal(isExpectedUserError(Object.assign(new Error('TUS upload failed (status 401, url https://x): user_not_found'), { status: 401 })), true)
   assert.equal(isExpectedUserError(new Error('Cannot get organization id for app id com.example')), false)
   assert.equal(isExpectedUserError(new Error('boom')), false)
   assert.equal(shouldCapturePosthogException(new Error('invalid_apikey')), false)

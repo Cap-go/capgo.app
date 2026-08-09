@@ -188,6 +188,7 @@ const EXPECTED_USER_ERROR_MARKERS = [
   'invalid apikey',
   'no_key_provided',
   'no key provided',
+  'user_not_found',
   'invalid api key or insufficient permissions',
   'does not exist, run first',
 ]

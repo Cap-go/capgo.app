@@ -37,7 +37,10 @@ export async function getUserIdFromApikey(
   }
   catch (e: unknown) {
     logPgError(c, 'getUserIdFromApikey', e)
-    return null
+    // A failed query is a backend problem, not a missing user. Rethrow so it
+    // surfaces as a 500 instead of a null result that the caller reports to the
+    // user as a bad API key.
+    throw e
   }
 }
 
