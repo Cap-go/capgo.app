@@ -1410,6 +1410,12 @@ export interface ReadUpdateDeliveryTimingEventsCFParams {
   /** When set, restrict to these app ids. Omit for platform-wide scans. */
   app_ids?: string[]
   limit?: number
+  /**
+   * Platform metadata-only mode: keep AE's 50k row budget on timed completes.
+   * Without this, platform scans fill the limit with download_complete rows that
+   * have no duration and admin delivery latency stays empty.
+   */
+  require_duration?: boolean
 }
 
 export function buildUpdateDeliveryTimingEventsCFQuery(params: ReadUpdateDeliveryTimingEventsCFParams): string {
@@ -1421,6 +1427,10 @@ export function buildUpdateDeliveryTimingEventsCFQuery(params: ReadUpdateDeliver
           ? `AND index1 = '${escapeSqlString(params.app_ids[0])}'`
           : `AND index1 IN (${params.app_ids.map(id => `'${escapeSqlString(id)}'`).join(', ')})`
       )
+    : ''
+  // Prefer double1 (written by trackLogsCF) and keep blob4 duration for older rows.
+  const durationFilter = params.require_duration
+    ? `AND (double1 > 0 OR position('duration' IN blob4) > 0)`
     : ''
 
   return `SELECT
@@ -1437,6 +1447,7 @@ WHERE
   AND timestamp < toDateTime('${formatDateCF(params.end_date)}')
   AND blob2 IN (${actionsList})
   ${appFilter}
+  ${durationFilter}
 ORDER BY created_at ASC
 LIMIT ${limit}`
 }
