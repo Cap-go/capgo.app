@@ -97,6 +97,7 @@ expect(payload.data.registration_source_trend).toEqual([
 Run:
 
 ```bash
+bun run supabase:db:reset
 bunx vitest run tests/admin-stats.test.ts -t "returns subscribed as the last onboarding funnel step without exceeding the bundle cohort|returns every auth registration in exactly one daily profile bucket"
 ```
 
@@ -452,6 +453,7 @@ Expected: focused tests pass, then the complete unit suite reports zero failures
 Run:
 
 ```bash
+bun run supabase:db:reset
 bunx vitest run tests/admin-stats.test.ts -t "returns subscribed as the last onboarding funnel step without exceeding the bundle cohort|returns every auth registration in exactly one daily profile bucket"
 ```
 
