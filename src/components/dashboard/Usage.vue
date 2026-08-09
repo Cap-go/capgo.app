@@ -45,11 +45,9 @@ const props = defineProps<{
 const plans = ref<Database['public']['Tables']['plans']['Row'][]>([])
 const { t } = useI18n()
 
-const noData = computed(() => false)
 const loadedAlready = ref(false)
 const storageUsageMode = ref<'total' | 'hourly'>('total')
 const storageUnit = computed(() => storageUsageMode.value === 'total' ? t('units-gb') : t('units-gb-hours'))
-// const noData = computed(() => data.value.mau.length == 0)
 
 const data = ref({
   mau: [] as number[],
@@ -123,6 +121,11 @@ const main = useMainStore()
 const organizationStore = useOrganizationStore()
 const dashboardAppsStore = useDashboardAppsStore()
 const dialogStore = useDialogV2Store()
+
+// Demo charts stand in for the payment-failed state and for organizations with no apps yet.
+const isDemoView = computed(() => props.forceDemo || (dashboardAppsStore.isLoaded && dashboardAppsStore.apps.length === 0))
+// No data to plot: loading is done, we are not showing demo charts, and every day is empty.
+const noData = computed(() => !isLoading.value && !isDemoView.value && !data.value.mau.some(value => value !== undefined && value !== null))
 const localOrgStatsUpdatedAt = ref<string | null>(null)
 const localOrgStatsRefreshRequestedAt = ref<string | null>(null)
 const localAppStatsUpdatedAt = ref<string | null>(props.appStatsUpdatedAt ?? null)
@@ -133,6 +136,9 @@ const autoRefreshScopeKey = ref<string | null>(null)
 let refreshPollTimer: ReturnType<typeof setTimeout> | null = null
 let refreshPollStartedAt = 0
 let refreshClockTimer: ReturnType<typeof setInterval> | null = null
+// Load the dashboard even if the store update never lands, so the spinner always clears.
+let initialLoadFallbackTimer: ReturnType<typeof setTimeout> | null = null
+const INITIAL_LOAD_FALLBACK_MS = 6000
 const effectiveOrganization = computed(() => {
   if (props.appId)
     return organizationStore.getOrgByAppId(props.appId) ?? organizationStore.currentOrganization
@@ -776,40 +782,47 @@ async function loadData() {
   const startTime = Date.now()
   isLoading.value = true
 
-  await getPlans().then((pls) => {
-    plans.value.length = 0
-    plans.value.push(...pls)
-  })
+  try {
+    await getPlans().then((pls) => {
+      plans.value.length = 0
+      plans.value.push(...pls)
+    })
 
-  // If forceDemo is true, use demo data instead of fetching real data
-  if (props.forceDemo) {
-    await loadDemoData()
+    // If forceDemo is true, use demo data instead of fetching real data
+    if (props.forceDemo) {
+      await loadDemoData()
+    }
+    else {
+      await getUsages(true) // Initial load - force fetch
+    }
   }
-  else {
-    await getUsages(true) // Initial load - force fetch
+  catch (error) {
+    // Let the charts fall back to their empty state instead of spinning forever.
+    console.error('Failed to load dashboard usage data:', error)
   }
+  finally {
+    // Ensure spinner shows for at least 300ms for better UX
+    const elapsed = Date.now() - startTime
+    if (elapsed < 300) {
+      await new Promise(resolve => setTimeout(resolve, 300 - elapsed))
+    }
+    isLoading.value = false
+    chartsLoaded.value.usage = true
+    loadedAlready.value = true // Mark as loaded so watcher can reload data on mode changes
 
-  // Ensure spinner shows for at least 300ms for better UX
-  const elapsed = Date.now() - startTime
-  if (elapsed < 300) {
-    await new Promise(resolve => setTimeout(resolve, 300 - elapsed))
+    // Stagger additional charts loading to improve perceived performance
+    setTimeout(() => {
+      chartsLoaded.value.bundles = true
+    }, 100)
+
+    setTimeout(() => {
+      chartsLoaded.value.updates = true
+    }, 200)
+
+    setTimeout(() => {
+      chartsLoaded.value.deployments = true
+    }, 300)
   }
-  isLoading.value = false
-  chartsLoaded.value.usage = true
-  loadedAlready.value = true // Mark as loaded so watcher can reload data on mode changes
-
-  // Stagger additional charts loading to improve perceived performance
-  setTimeout(() => {
-    chartsLoaded.value.bundles = true
-  }, 100)
-
-  setTimeout(() => {
-    chartsLoaded.value.updates = true
-  }, 200)
-
-  setTimeout(() => {
-    chartsLoaded.value.deployments = true
-  }, 300)
 }
 
 // Watch for organization changes - show loading immediately when org switches
@@ -964,14 +977,25 @@ onMounted(async () => {
       loadData()
     }
   }
-  // If dashboard not fetched yet, the watcher on 'dashboard' will handle loading
-  // and will check needsForceRefresh there
+  else {
+    // Dashboard not fetched yet: the watcher on 'dashboard' loads it once the store
+    // updates. If that fetch fails the watcher never fires, so load anyway after a
+    // bounded wait to clear the spinner.
+    initialLoadFallbackTimer = setTimeout(() => {
+      if (!loadedAlready.value)
+        loadData()
+    }, INITIAL_LOAD_FALLBACK_MS)
+  }
 })
 
 onBeforeUnmount(() => {
   if (refreshClockTimer !== null) {
     clearInterval(refreshClockTimer)
     refreshClockTimer = null
+  }
+  if (initialLoadFallbackTimer !== null) {
+    clearTimeout(initialLoadFallbackTimer)
+    initialLoadFallbackTimer = null
   }
   stopRefreshPolling()
 })
@@ -1150,5 +1174,15 @@ onBeforeUnmount(() => {
     <BundleUploadsCard v-show="!appId" :use-billing-period="useBillingPeriod" :accumulated="useBillingPeriod && showCumulative" :reload-trigger="reloadTrigger" :force-demo="forceDemo" class="col-span-full sm:col-span-6 xl:col-span-4" />
     <UpdateStatsCard v-show="!appId" :use-billing-period="useBillingPeriod" :accumulated="useBillingPeriod && showCumulative" :reload-trigger="reloadTrigger" :force-demo="forceDemo" class="col-span-full sm:col-span-6 xl:col-span-4" />
     <DeploymentStatsCard v-show="!appId" :use-billing-period="useBillingPeriod" :accumulated="useBillingPeriod && showCumulative" :reload-trigger="reloadTrigger" :force-demo="forceDemo" class="col-span-full sm:col-span-6 xl:col-span-4" />
+  </div>
+
+  <div
+    v-else
+    class="flex flex-col items-center justify-center gap-3 py-20 text-center text-slate-500 dark:text-slate-300"
+  >
+    <ChartBarIcon class="w-10 h-10 opacity-60" />
+    <p class="text-sm font-medium">
+      {{ t('no-data') }}
+    </p>
   </div>
 </template>
