@@ -569,13 +569,13 @@ export async function ensureBundleId(
 ): Promise<{ bundleIdResourceId: string }> {
   // Try to find existing
   const searchBody = await ascFetch(
-    `/bundleIds?filter[identifier]=${encodeURIComponent(identifier)}&limit=1`,
+    `/bundleIds?filter[identifier]=${encodeURIComponent(identifier)}&limit=200`,
     token,
   )
 
-  if (searchBody.data?.length > 0) {
-    return { bundleIdResourceId: searchBody.data[0].id }
-  }
+  const exactMatch = searchBody.data?.find((bundleId: any) => bundleId.attributes?.identifier === identifier)
+  if (exactMatch)
+    return { bundleIdResourceId: exactMatch.id }
 
   // Register new. Apple's `attributes.identifier` field accepts the
   // reverse-DNS bundle id verbatim (dots, hyphens), but the human-readable
