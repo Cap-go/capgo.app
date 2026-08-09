@@ -107,6 +107,19 @@ Tag contains: org:invite_accepted → End
 
 Queue delivery is at least once, so the tag sync can repeat; treat the tag as a sticky exit condition, not an entry trigger.
 
+#### 3c. Public email preference footer link
+
+Use Capgo's public preference page in Bento footers (does not reveal whether the email has an account):
+
+```text
+https://console.capgo.app/email-preferences?email={{ visitor.email }}&disable=onboarding
+```
+
+- `email` — prefill address
+- `disable` — comma-separated preference keys to start unchecked (e.g. `onboarding,weekly_stats`)
+- Save always shows success
+- “Unsubscribe from all” calls Bento unsubscribe for that address
+
 #### 4. Weekly Statistics
 
 **Events**: `user:weekly_stats`

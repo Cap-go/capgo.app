@@ -10,6 +10,7 @@ import { app as credits } from '../_backend/private/credits.ts'
 import { app as deleted_failed_version } from '../_backend/private/delete_failed_version.ts'
 import { app as devices_priv } from '../_backend/private/devices.ts'
 import { app as download_link } from '../_backend/private/download_link.ts'
+import { app as email_preferences } from '../_backend/private/email_preferences.ts'
 import { app as events } from '../_backend/private/events.ts'
 import { app as groups } from '../_backend/private/groups.ts'
 import { app as invite_existing_user_to_org } from '../_backend/private/invite_existing_user_to_org.ts'
@@ -82,6 +83,7 @@ appGlobal.route('/roles', roles)
 appGlobal.route('/invite_new_user_to_org', invite_new_user_to_org)
 appGlobal.route('/invite_existing_user_to_org', invite_existing_user_to_org)
 appGlobal.route('/accept_invitation', accept_invitation)
+appGlobal.route('/email_preferences', email_preferences)
 appGlobal.route('/validate_password_compliance', validate_password_compliance)
 appGlobal.route('/verify_email_otp', verify_email_otp)
 appGlobal.route('/website_preview', website_preview)
