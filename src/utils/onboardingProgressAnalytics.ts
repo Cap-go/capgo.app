@@ -29,6 +29,7 @@ interface CreateOnboardingProgressTrackerOptions {
 export function createOnboardingProgressTracker(options: CreateOnboardingProgressTrackerOptions) {
   const capture = options.capture ?? pushEvent
   const now = options.now ?? Date.now
+  const onboardingAttemptId = crypto.randomUUID()
   let activeStep: OnboardingAnalyticsStep | null = null
   let activePreviousStep: OnboardingAnalyticsStep | null = null
   let activeStepViewedAt = 0
@@ -41,6 +42,7 @@ export function createOnboardingProgressTracker(options: CreateOnboardingProgres
 
     return {
       flow: options.flow,
+      onboarding_attempt_id: onboardingAttemptId,
       onboarding_version: ONBOARDING_ANALYTICS_VERSION,
       resumed: options.resumed,
       step,

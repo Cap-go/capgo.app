@@ -27,6 +27,7 @@ describe('onboarding progress analytics', () => {
       'https://supabase.capgo.test',
       {
         flow: 'pre_org',
+        onboarding_attempt_id: expect.any(String),
         onboarding_version: ONBOARDING_ANALYTICS_VERSION,
         resumed: false,
         step: 'intent',
@@ -34,6 +35,35 @@ describe('onboarding progress analytics', () => {
         total_steps: 4,
       },
     )
+  })
+
+  it.concurrent('uses one unique attempt id for every event from a tracker instance', () => {
+    const firstCapture = vi.fn()
+    const firstTracker = createOnboardingProgressTracker({
+      capture: firstCapture,
+      flow: 'pre_org',
+      resumed: false,
+      steps,
+      supaHost: 'https://supabase.capgo.test',
+    })
+    const secondCapture = vi.fn()
+    const secondTracker = createOnboardingProgressTracker({
+      capture: secondCapture,
+      flow: 'pre_org',
+      resumed: false,
+      steps,
+      supaHost: 'https://supabase.capgo.test',
+    })
+
+    firstTracker.viewStep('intent')
+    firstTracker.completeStep('intent', { nextStep: 'details' })
+    secondTracker.viewStep('intent')
+
+    const firstAttemptIds = firstCapture.mock.calls.map(call => call[2]?.onboarding_attempt_id)
+    const secondAttemptId = secondCapture.mock.calls[0]?.[2]?.onboarding_attempt_id
+    expect(firstAttemptIds[0]).toEqual(expect.any(String))
+    expect(new Set(firstAttemptIds).size).toBe(1)
+    expect(firstAttemptIds[0]).not.toBe(secondAttemptId)
   })
 
   it.concurrent('reports completion before the next view with duration and narrow context', () => {
@@ -63,6 +93,7 @@ describe('onboarding progress analytics', () => {
       flow: 'pre_org',
       intent: 'ota',
       next_step: 'details',
+      onboarding_attempt_id: expect.any(String),
       onboarding_version: ONBOARDING_ANALYTICS_VERSION,
       resumed: false,
       step: 'intent',
@@ -71,6 +102,7 @@ describe('onboarding progress analytics', () => {
     })
     expect(capture.mock.calls[2]?.[2]).toEqual({
       flow: 'pre_org',
+      onboarding_attempt_id: expect.any(String),
       onboarding_version: ONBOARDING_ANALYTICS_VERSION,
       previous_step: 'intent',
       resumed: false,
@@ -190,6 +222,7 @@ describe('onboarding progress analytics', () => {
       'flow',
       'intent',
       'next_step',
+      'onboarding_attempt_id',
       'onboarding_version',
       'previous_step',
       'resumed',
