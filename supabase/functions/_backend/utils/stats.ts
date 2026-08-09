@@ -474,7 +474,7 @@ export function countDevices(
   app_id: string,
   customIdMode: boolean,
   deviceIds: string[] = [],
-  versionName?: string,
+  versionName?: string | string[],
   search?: string,
   options?: {
     platform?: Database['public']['Enums']['platform_os']

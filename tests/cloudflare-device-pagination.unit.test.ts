@@ -167,6 +167,20 @@ describe('buildReadDevicesCFQuery', () => {
     expect(Math.max(outerWhereIndex, altOuterWhereIndex)).toBeGreaterThan(groupByIndex)
   })
 
+  it.concurrent('filters devices by multiple version names after grouping', () => {
+    const query = buildReadDevicesCFQuery({
+      app_id: 'com.example.app',
+      version_name: ['1.2.3', '2.0.0'],
+      limit: 1,
+    }, false)
+
+    const groupByIndex = query.indexOf('GROUP BY blob1')
+    const outerWhereIndex = query.indexOf(`WHERE version_name IN ('1.2.3', '2.0.0')`)
+
+    expect(query).not.toContain(`blob2 IN ('1.2.3', '2.0.0')`)
+    expect(outerWhereIndex).toBeGreaterThan(groupByIndex)
+  })
+
   it.concurrent('applies search against latest aggregated device fields after grouping', () => {
     const query = buildReadDevicesCFQuery({
       app_id: 'com.example.app',

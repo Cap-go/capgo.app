@@ -1560,8 +1560,15 @@ export async function readDevicesSB(c: Context, params: ReadDevicesParams, custo
       query = query.or(`device_id.ilike.${searchPattern},custom_id.ilike.${searchPattern},version_name.ilike.${searchPattern}`)
   }
 
-  if (params.version_name)
-    query = query.eq('version_name', params.version_name)
+  if (params.version_name) {
+    const versionNames = (Array.isArray(params.version_name) ? params.version_name : [params.version_name])
+      .map(name => name.trim())
+      .filter(Boolean)
+    if (versionNames.length === 1)
+      query = query.eq('version_name', versionNames[0]!)
+    else if (versionNames.length > 1)
+      query = query.in('version_name', versionNames)
+  }
 
   if (params.platform)
     query = query.eq('platform', params.platform)
@@ -1640,7 +1647,7 @@ export async function countDevicesSB(
   app_id: string,
   customIdMode: boolean,
   deviceIds: string[] = [],
-  versionName?: string,
+  versionName?: string | string[],
   search?: string,
   options?: {
     platform?: Database['public']['Enums']['platform_os']
@@ -1673,8 +1680,15 @@ export async function countDevicesSB(
       req = req.or(`device_id.ilike.${normalizedSearch},custom_id.ilike.${normalizedSearch},version_name.ilike.${normalizedSearch}`)
   }
 
-  if (versionName)
-    req = req.eq('version_name', versionName)
+  if (versionName) {
+    const versionNames = (Array.isArray(versionName) ? versionName : [versionName])
+      .map(name => name.trim())
+      .filter(Boolean)
+    if (versionNames.length === 1)
+      req = req.eq('version_name', versionNames[0]!)
+    else if (versionNames.length > 1)
+      req = req.in('version_name', versionNames)
+  }
 
   if (options?.platform)
     req = req.eq('platform', options.platform)

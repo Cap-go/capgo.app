@@ -961,12 +961,30 @@ function platformOsToCFDouble(platform: Database['public']['Enums']['platform_os
   return 0
 }
 
+function normalizeVersionNameFilter(versionName: string | string[] | undefined): string[] {
+  if (!versionName)
+    return []
+  const names = (Array.isArray(versionName) ? versionName : [versionName])
+    .map(name => name.trim())
+    .filter(Boolean)
+  return [...new Set(names)]
+}
+
+function buildVersionNameSqlCondition(versionName: string | string[] | undefined): string {
+  const names = normalizeVersionNameFilter(versionName)
+  if (!names.length)
+    return ''
+  if (names.length === 1)
+    return `version_name = '${escapeSqlString(names[0]!)}'`
+  return `version_name IN (${names.map(name => `'${escapeSqlString(name)}'`).join(', ')})`
+}
+
 export async function countDevicesCF(
   c: Context,
   app_id: string,
   customIdMode: boolean,
   deviceIds: string[] = [],
-  versionName?: string,
+  versionName?: string | string[],
   search?: string,
   options?: {
     platform?: Database['public']['Enums']['platform_os']
@@ -976,6 +994,7 @@ export async function countDevicesCF(
   // Use Analytics Engine DEVICE_INFO for counting devices
   const platform = options?.platform
   const updatedAt = options?.updatedAt
+  const versionNameCondition = buildVersionNameSqlCondition(versionName)
   const conditions = [`index1 = '${escapeSqlString(app_id)}'`]
 
   if (deviceIds.length) {
@@ -993,12 +1012,12 @@ export async function countDevicesCF(
   // Match latest aggregated fields for current-state filtering (same as Supabase devices table).
   // customIdMode must use aggregated custom_id so historical non-empty blob5 rows
   // do not keep devices that later cleared their custom id.
-  if (versionName || platform || search || customIdMode) {
+  if (versionNameCondition || platform || search || customIdMode) {
     const outerConditions: string[] = []
     if (customIdMode)
       outerConditions.push(`custom_id != ''`)
-    if (versionName)
-      outerConditions.push(`version_name = '${escapeSqlString(versionName)}'`)
+    if (versionNameCondition)
+      outerConditions.push(versionNameCondition)
     if (platform)
       outerConditions.push(`platform = ${platformOsToCFDouble(platform)}`)
     if (search) {
@@ -1129,9 +1148,7 @@ function buildReadDevicesCFPlatformCondition(platform: ReadDevicesParams['platfo
 }
 
 function buildReadDevicesCFVersionNameCondition(versionName: ReadDevicesParams['version_name']) {
-  if (!versionName)
-    return ''
-  return `version_name = '${escapeSqlString(versionName)}'`
+  return buildVersionNameSqlCondition(versionName)
 }
 
 function buildReadDevicesCFSearchCondition(search: string | undefined, deviceIds: string[] | undefined) {
