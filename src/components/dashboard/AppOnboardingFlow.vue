@@ -241,10 +241,14 @@ const setupSubtitle = computed(() => usesBuilderSetupCommand.value ? t('unified-
 let progressTracker: ReturnType<typeof createOnboardingProgressTracker> | null = null
 
 function initializeProgressTracking(resumed: boolean) {
+  const trackedSteps = appOnboardingSteps.value.map(step => step.id)
+  if (!props.preOrg && resumed && flowStep.value === 'setup')
+    trackedSteps.push('setup')
+
   progressTracker = createOnboardingProgressTracker({
     flow: props.preOrg ? 'pre_org' : 'existing_org',
     resumed,
-    steps: appOnboardingSteps.value.map(step => step.id),
+    steps: trackedSteps,
     supaHost: config.supaHost,
   })
   progressTracker.viewStep(flowStep.value)
@@ -1262,7 +1266,7 @@ watch(appName, (value) => {
                 </div>
 
                 <div class="flex flex-col-reverse gap-3 border-t border-slate-200 pt-6 sm:flex-row sm:items-center sm:justify-between dark:border-white/15">
-                  <button class="d-btn min-h-12" :class="whiteCardSecondaryButtonClass()" @click="props.preOrg ? (flowStep = 'intent') : router.push('/apps')">
+                  <button class="d-btn min-h-12" :class="whiteCardSecondaryButtonClass()" @click="props.preOrg ? viewPreviousStep('intent') : router.push('/apps')">
                     {{ props.preOrg ? t('button-back') : t('button-cancel') }}
                   </button>
                   <button

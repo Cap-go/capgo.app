@@ -8,12 +8,15 @@ function sourceBetween(start: string, end: string) {
 }
 
 describe('app onboarding progress analytics integration', () => {
-  it('initializes tracking once the real initial or resumed step is resolved', () => {
+  it.concurrent('initializes tracking once the real initial or resumed step is resolved', () => {
     expect(onboardingSource).toContain("import { createOnboardingProgressTracker } from '~/utils/onboardingProgressAnalytics'")
 
     const initializer = sourceBetween('function initializeProgressTracking(', 'function whiteCardToggleButtonClass(')
     expect(initializer).toContain("flow: props.preOrg ? 'pre_org' : 'existing_org'")
-    expect(initializer).toContain('steps: appOnboardingSteps.value.map(step => step.id)')
+    expect(initializer).toContain('const trackedSteps = appOnboardingSteps.value.map(step => step.id)')
+    expect(initializer).toContain("if (!props.preOrg && resumed && flowStep.value === 'setup')")
+    expect(initializer).toContain("trackedSteps.push('setup')")
+    expect(initializer).toContain('steps: trackedSteps')
     expect(initializer).toContain('resumed,')
     expect(initializer).toContain('progressTracker.viewStep(flowStep.value)')
 
@@ -31,11 +34,11 @@ describe('app onboarding progress analytics integration', () => {
     expect(initializationIndex).toBeGreaterThan(loadingFinishedIndex)
   })
 
-  it('retains the existing intent compatibility event', () => {
+  it.concurrent('retains the existing intent compatibility event', () => {
     expect(onboardingSource).toContain("pushEvent('onboarding_intent_selected', config.supaHost, {")
   })
 
-  it('tracks only successful forward transitions with approved context', () => {
+  it.concurrent('tracks only successful forward transitions with approved context', () => {
     const transitionHelpers = sourceBetween('function completeAndViewStep(', 'function whiteCardToggleButtonClass(')
     expect(transitionHelpers).toContain('progressTracker?.completeStep(previousStep, {')
     expect(transitionHelpers).toContain('nextStep,')
@@ -58,15 +61,17 @@ describe('app onboarding progress analytics integration', () => {
     expect(realSetupChoice).toContain('appId: createdApp.value.app_id')
   })
 
-  it('reports back navigation as a new view without completing the abandoned step', () => {
+  it.concurrent('reports back navigation as a new view without completing the abandoned step', () => {
     const backNavigation = sourceBetween('function viewPreviousStep(', 'function whiteCardToggleButtonClass(')
     expect(backNavigation).not.toContain('completeStep')
     expect(backNavigation).toContain('progressTracker?.viewStep(nextStep, previousStep)')
     expect(onboardingSource).toContain('@click="viewPreviousStep(\'choice\')"')
+    expect(onboardingSource).toContain("props.preOrg ? viewPreviousStep('intent') : router.push('/apps')")
     expect(onboardingSource).not.toContain('@click="flowStep = \'choice\'"')
+    expect(onboardingSource).not.toContain("props.preOrg ? (flowStep = 'intent') : router.push('/apps')")
   })
 
-  it('completes only terminal install or setup exits and leaves demo selection incomplete', () => {
+  it.concurrent('completes only terminal install or setup exits and leaves demo selection incomplete', () => {
     const demoAction = sourceBetween('async function seedDemoData()', 'async function copyText(')
     expect(demoAction).not.toContain('completeStep')
     expect(demoAction).not.toContain('completeAndViewStep')

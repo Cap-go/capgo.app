@@ -7,7 +7,7 @@ import {
 const steps = ['intent', 'details', 'organization', 'setup'] as const
 
 describe('onboarding progress analytics', () => {
-  it('reports the initial real step with the stable version and approved properties', () => {
+  it.concurrent('reports the initial real step with the stable version and approved properties', () => {
     const capture = vi.fn()
     const tracker = createOnboardingProgressTracker({
       capture,
@@ -36,7 +36,7 @@ describe('onboarding progress analytics', () => {
     )
   })
 
-  it('reports completion before the next view with duration and narrow context', () => {
+  it.concurrent('reports completion before the next view with duration and narrow context', () => {
     let now = 1_000
     const capture = vi.fn()
     const tracker = createOnboardingProgressTracker({
@@ -80,7 +80,7 @@ describe('onboarding progress analytics', () => {
     })
   })
 
-  it('deduplicates completion for one visit and resets timing after back navigation', () => {
+  it.concurrent('deduplicates completion for one visit and resets timing after back navigation', () => {
     let now = 10
     const capture = vi.fn()
     const tracker = createOnboardingProgressTracker({
@@ -112,7 +112,38 @@ describe('onboarding progress analytics', () => {
     })
   })
 
-  it('ignores completion without a matching active visit', () => {
+  it.concurrent('tracks a resumed setup visit through its terminal completion', () => {
+    const capture = vi.fn()
+    const tracker = createOnboardingProgressTracker({
+      capture,
+      flow: 'existing_org',
+      now: () => 50,
+      resumed: true,
+      steps: ['details', 'choice', 'install', 'setup'],
+      supaHost: 'https://supabase.capgo.test',
+    })
+
+    tracker.viewStep('setup')
+    tracker.completeStep('setup', { appId: 'com.example.final' })
+
+    expect(capture.mock.calls.map(call => call[0])).toEqual([
+      'onboarding_step_viewed',
+      'onboarding_step_completed',
+    ])
+    expect(capture.mock.calls[0]?.[2]).toMatchObject({
+      resumed: true,
+      step: 'setup',
+      step_index: 3,
+      total_steps: 4,
+    })
+    expect(capture.mock.calls[1]?.[2]).toMatchObject({
+      app_id: 'com.example.final',
+      resumed: true,
+      step: 'setup',
+    })
+  })
+
+  it.concurrent('ignores completion without a matching active visit', () => {
     const capture = vi.fn()
     const tracker = createOnboardingProgressTracker({
       capture,
@@ -130,7 +161,7 @@ describe('onboarding progress analytics', () => {
     expect(capture.mock.calls[0]?.[0]).toBe('onboarding_step_viewed')
   })
 
-  it('never exposes free-text fields and never lets capture failures escape', () => {
+  it.concurrent('never exposes free-text fields and never lets capture failures escape', () => {
     const capture = vi.fn<(
       name: string,
       supaHost: string,
