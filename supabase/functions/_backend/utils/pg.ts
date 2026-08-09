@@ -3182,6 +3182,12 @@ export interface AdminOnboardingFunnel {
     org_joins_invite_register: number
     org_joins_existing_account: number
   }>
+  registration_source_trend: Array<{
+    date: string
+    normal_registrations: number
+    invite_registrations: number
+    without_profile: number
+  }>
 }
 
 export async function getAdminOnboardingFunnel(
@@ -3424,10 +3430,45 @@ export async function getAdminOnboardingFunnel(
       ORDER BY ds.date ASC
     `
 
-    const [trendResult, activationCohortResult, inviteTrendResult] = await Promise.all([
+    const registrationSourceTrendQuery = sql`
+      WITH date_series AS (
+        SELECT generate_series(
+          ${start_date}::timestamptz::date,
+          (${end_date}::timestamptz::date - 1),
+          '1 day'::interval
+        )::date as date
+      ),
+      daily_registration_sources AS (
+        SELECT
+          au.created_at::date as date,
+          COUNT(*) FILTER (
+            WHERE u.id IS NOT NULL AND u.created_via_invite = false
+          )::int as normal_registrations,
+          COUNT(*) FILTER (
+            WHERE u.id IS NOT NULL AND u.created_via_invite = true
+          )::int as invite_registrations,
+          COUNT(*) FILTER (WHERE u.id IS NULL)::int as without_profile
+        FROM auth.users au
+        LEFT JOIN public.users u ON u.id = au.id
+        WHERE au.created_at >= ${start_date}::timestamptz
+          AND au.created_at < ${end_date}::timestamptz
+        GROUP BY au.created_at::date
+      )
+      SELECT
+        ds.date,
+        COALESCE(drs.normal_registrations, 0) as normal_registrations,
+        COALESCE(drs.invite_registrations, 0) as invite_registrations,
+        COALESCE(drs.without_profile, 0) as without_profile
+      FROM date_series ds
+      LEFT JOIN daily_registration_sources drs ON drs.date = ds.date
+      ORDER BY ds.date ASC
+    `
+
+    const [trendResult, activationCohortResult, inviteTrendResult, registrationSourceTrendResult] = await Promise.all([
       drizzleClient.execute(trendQuery),
       drizzleClient.execute(activationCohortQuery),
       drizzleClient.execute(inviteTrendQuery),
+      drizzleClient.execute(registrationSourceTrendQuery),
     ])
 
     const activationCohorts: AdminOnboardingActivationCohort[] = []
@@ -3484,6 +3525,13 @@ export async function getAdminOnboardingFunnel(
       }
     })
 
+    const registrationSourceTrend = registrationSourceTrendResult.rows.map((row: any) => ({
+      date: row.date instanceof Date ? row.date.toISOString().split('T')[0] : String(row.date),
+      normal_registrations: Number(row.normal_registrations) || 0,
+      invite_registrations: Number(row.invite_registrations) || 0,
+      without_profile: Number(row.without_profile) || 0,
+    }))
+
     const totalInviteRegistrations = inviteTrend.reduce((sum, row) => sum + row.invite_registrations, 0)
     const totalOrgJoinsInviteRegister = inviteTrend.reduce((sum, row) => sum + row.org_joins_invite_register, 0)
     const totalOrgJoinsExistingAccount = inviteTrend.reduce((sum, row) => sum + row.org_joins_existing_account, 0)
@@ -3510,6 +3558,7 @@ export async function getAdminOnboardingFunnel(
       update_download_conversion_rate: activationMetrics.orgs_with_production_device > 0 ? (activationMetrics.orgs_with_update_download / activationMetrics.orgs_with_production_device) * 100 : 0,
       trend,
       invite_trend: inviteTrend,
+      registration_source_trend: registrationSourceTrend,
     }
 
     cloudlog({ requestId: c.get('requestId'), message: 'getAdminOnboardingFunnel result', result })
@@ -3540,6 +3589,7 @@ export async function getAdminOnboardingFunnel(
       update_download_conversion_rate: 0,
       trend: [],
       invite_trend: [],
+      registration_source_trend: [],
     }
   }
 }

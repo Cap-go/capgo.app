@@ -4,6 +4,7 @@ import { Hono } from 'hono/tiny'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { logsnagInsightsTestUtils } from '../supabase/functions/_backend/triggers/logsnag_insights.ts'
 import { REQUIRED_GLOBAL_STATS_SHARDS } from '../supabase/functions/_backend/utils/global_stats.ts'
+import { getAdminOnboardingFunnel } from '../supabase/functions/_backend/utils/pg.ts'
 import { BASE_URL, executeSQL, fetchTestRequest, getAuthHeadersForCredentials, getEndpointUrl, getSupabaseClient, POSTGRES_URL, PRODUCT_ID, resetAndSeedAppData, resetAppData, TEST_EMAIL, USER_ADMIN_EMAIL, USER_ID, USER_PASSWORD_HASH } from './test-utils.ts'
 
 const DAY_IN_MS = 24 * 60 * 60 * 1000
@@ -63,12 +64,18 @@ const ONBOARDING_REGISTER_USER_IDS = [
   randomUUID(),
 ] as const
 const ONBOARDING_INVITE_USER_ID = randomUUID()
+const ONBOARDING_WITHOUT_PROFILE_USER_ID = randomUUID()
+const ONBOARDING_END_BOUNDARY_USER_ID = randomUUID()
 const ONBOARDING_INVITE_ORG_ID = randomUUID()
 const ONBOARDING_INVITE_CUSTOMER_ID = `cus_admin_stats_onboarding_invite_${ONBOARDING_INVITE_ORG_ID.slice(0, 8)}`
 const ONBOARDING_REGISTER_CREATED_AT = '2026-02-01T09:00:00.000Z'
+const ONBOARDING_WITHOUT_PROFILE_CREATED_AT = '2026-02-01T09:30:00.000Z'
+const ONBOARDING_END_BOUNDARY_CREATED_AT = '2026-02-02T00:00:00.000Z'
 const GLOBAL_STATS_TREND_DATES = ['2099-12-30', '2099-12-31', '2100-01-01'] as const
 
-async function getCoreSnapshotCountsAt(snapshotExclusiveEnd: Date) {
+type AdminStatsTestApp = Hono<{ Bindings: { SUPABASE_DB_URL: string } }>
+
+async function requestDirectAdminStats<T>(registerRoute: (app: AdminStatsTestApp) => void): Promise<T> {
   const globalWithEdgeRuntime = globalThis as typeof globalThis & {
     EdgeRuntime?: { waitUntil: (promise: Promise<unknown>) => void }
   }
@@ -79,14 +86,11 @@ async function getCoreSnapshotCountsAt(snapshotExclusiveEnd: Date) {
 
   try {
     const app = new Hono<{ Bindings: { SUPABASE_DB_URL: string } }>()
-    app.get('/', async c => c.json(await logsnagInsightsTestUtils.getCoreSnapshotCounts(c, snapshotExclusiveEnd)))
+    registerRoute(app)
 
     const response = await app.request('http://local/', undefined, { SUPABASE_DB_URL: POSTGRES_URL })
     expect(response.status).toBe(200)
-    return await response.json() as {
-      abovePlanWithCredits: number
-      abovePlanWithoutCredits: number
-    }
+    return await response.json() as T
   }
   finally {
     if (previousSupabaseDbUrl === undefined)
@@ -95,6 +99,21 @@ async function getCoreSnapshotCountsAt(snapshotExclusiveEnd: Date) {
       process.env.SUPABASE_DB_URL = previousSupabaseDbUrl
     globalWithEdgeRuntime.EdgeRuntime = previousEdgeRuntime
   }
+}
+
+async function getCoreSnapshotCountsAt(snapshotExclusiveEnd: Date) {
+  return requestDirectAdminStats<{
+    abovePlanWithCredits: number
+    abovePlanWithoutCredits: number
+  }>(app => {
+    app.get('/', async c => c.json(await logsnagInsightsTestUtils.getCoreSnapshotCounts(c, snapshotExclusiveEnd)))
+  })
+}
+
+async function getOnboardingFunnelDirect(startDate: string, endDate: string) {
+  return requestDirectAdminStats<Awaited<ReturnType<typeof getAdminOnboardingFunnel>>>(app => {
+    app.get('/', async c => c.json(await getAdminOnboardingFunnel(c, startDate, endDate)))
+  })
 }
 
 let adminHeaders: Record<string, string>
@@ -416,6 +435,18 @@ beforeAll(async () => {
     [ONBOARDING_INVITE_USER_ID, inviteEmail, ONBOARDING_REGISTER_CREATED_AT],
   )
 
+  for (const [userId, email, createdAt] of [
+    [ONBOARDING_WITHOUT_PROFILE_USER_ID, `admin-stats-onboarding-without-profile-${ONBOARDING_WITHOUT_PROFILE_USER_ID.slice(0, 8)}@capgo.app`, ONBOARDING_WITHOUT_PROFILE_CREATED_AT],
+    [ONBOARDING_END_BOUNDARY_USER_ID, `admin-stats-onboarding-end-boundary-${ONBOARDING_END_BOUNDARY_USER_ID.slice(0, 8)}@capgo.app`, ONBOARDING_END_BOUNDARY_CREATED_AT],
+  ] as const) {
+    await executeSQL(
+      `INSERT INTO auth.users (id, email, encrypted_password, email_confirmed_at, created_at, updated_at, raw_user_meta_data)
+       VALUES ($1, $2, $3, $4::timestamptz, $4::timestamptz, $4::timestamptz, '{}'::jsonb)
+       ON CONFLICT (id) DO NOTHING`,
+      [userId, email, USER_PASSWORD_HASH, createdAt],
+    )
+  }
+
   const { error: orgError } = await supabase.from('orgs').insert([
     {
       id: TRIAL_ORG_ID,
@@ -704,11 +735,11 @@ afterAll(async () => {
   await supabase.from('stripe_info').delete().in('customer_id', [TRIAL_CUSTOMER_ID, ATTENTION_SORT_HEALTHY_CUSTOMER_ID, CANCELLED_YEARLY_CUSTOMER_ID, CANCELLED_MONTHLY_CUSTOMER_ID, ONBOARDING_CUSTOMER_ID, ONBOARDING_NO_BUNDLE_CUSTOMER_ID, ONBOARDING_LATE_SUBSCRIPTION_CUSTOMER_ID, ONBOARDING_INVITE_CUSTOMER_ID])
   await executeSQL(
     'DELETE FROM public.users WHERE id = ANY($1::uuid[])',
-    [[...ONBOARDING_REGISTER_USER_IDS, ONBOARDING_INVITE_USER_ID]],
+    [[...ONBOARDING_REGISTER_USER_IDS, ONBOARDING_INVITE_USER_ID, ONBOARDING_WITHOUT_PROFILE_USER_ID, ONBOARDING_END_BOUNDARY_USER_ID]],
   )
   await executeSQL(
     'DELETE FROM auth.users WHERE id = ANY($1::uuid[])',
-    [[...ONBOARDING_REGISTER_USER_IDS, ONBOARDING_INVITE_USER_ID]],
+    [[...ONBOARDING_REGISTER_USER_IDS, ONBOARDING_INVITE_USER_ID, ONBOARDING_WITHOUT_PROFILE_USER_ID, ONBOARDING_END_BOUNDARY_USER_ID]],
   )
 }, 90000)
 
@@ -1115,6 +1146,12 @@ describe('/private/admin_stats', () => {
           org_joins_invite_register: number
           org_joins_existing_account: number
         }>
+        registration_source_trend: Array<{
+          date: string
+          normal_registrations: number
+          invite_registrations: number
+          without_profile: number
+        }>
       }
     }
 
@@ -1149,6 +1186,49 @@ describe('/private/admin_stats', () => {
       org_joins_invite_register: 1,
       org_joins_existing_account: 1,
     })
+  })
+
+  it('returns every auth registration in exactly one daily profile bucket', async () => {
+    const data = await getOnboardingFunnelDirect(
+      '2026-02-01T00:00:00.000Z',
+      '2026-02-04T00:00:00.000Z',
+    )
+
+    expect(data.registration_source_trend).toEqual([
+      {
+        date: '2026-02-01',
+        normal_registrations: 4,
+        invite_registrations: 1,
+        without_profile: 1,
+      },
+      {
+        date: '2026-02-02',
+        normal_registrations: 0,
+        invite_registrations: 0,
+        without_profile: 1,
+      },
+      {
+        date: '2026-02-03',
+        normal_registrations: 0,
+        invite_registrations: 0,
+        without_profile: 0,
+      },
+    ])
+
+    const exclusiveEndData = await getOnboardingFunnelDirect(
+      '2026-02-01T00:00:00.000Z',
+      ONBOARDING_END_BOUNDARY_CREATED_AT,
+    )
+
+    expect(exclusiveEndData.registration_source_trend).toEqual([
+      {
+        date: '2026-02-01',
+        normal_registrations: 4,
+        invite_registrations: 1,
+        without_profile: 1,
+      },
+    ])
+    expect(exclusiveEndData.registration_source_trend.some(row => row.date === '2026-02-02')).toBe(false)
   })
 
   it.concurrent('keeps an uploaded bundle in the funnel after a later channel promotion', async () => {

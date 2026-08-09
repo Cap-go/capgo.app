@@ -12,6 +12,7 @@ import AdminBarChart from '~/components/admin/AdminBarChart.vue'
 import AdminFilterBar from '~/components/admin/AdminFilterBar.vue'
 import AdminFunnelChart from '~/components/admin/AdminFunnelChart.vue'
 import AdminMultiLineChart from '~/components/admin/AdminMultiLineChart.vue'
+import AdminStackedBarChart from '~/components/admin/AdminStackedBarChart.vue'
 import AdminStatsCard from '~/components/admin/AdminStatsCard.vue'
 import ChartCard from '~/components/dashboard/ChartCard.vue'
 import PageLoader from '~/components/PageLoader.vue'
@@ -31,6 +32,13 @@ const router = useRouter()
 const isLoading = ref(true)
 
 // Onboarding funnel data
+interface RegistrationSourceTrendPoint {
+  date: string
+  normal_registrations: number
+  invite_registrations: number
+  without_profile: number
+}
+
 interface OnboardingFunnelData {
   total_registrations: number
   total_orgs: number
@@ -68,6 +76,7 @@ interface OnboardingFunnelData {
     org_joins_invite_register: number
     org_joins_existing_account: number
   }>
+  registration_source_trend: RegistrationSourceTrendPoint[]
 }
 
 interface EmailTypeBreakdown {
@@ -1104,6 +1113,39 @@ const inviteJoinTrendSeries = computed(() => {
   ]
 })
 
+const registrationSourceTrendSeries = computed(() => {
+  const trend = onboardingFunnelData.value?.registration_source_trend
+  if (!trend || trend.length === 0)
+    return []
+
+  return [
+    {
+      label: t('normal-registration'),
+      data: trend.map(item => ({
+        date: item.date,
+        value: Number(item.normal_registrations) || 0,
+      })),
+      color: '#3b82f6',
+    },
+    {
+      label: t('organization-invite'),
+      data: trend.map(item => ({
+        date: item.date,
+        value: Number(item.invite_registrations) || 0,
+      })),
+      color: '#f97316',
+    },
+    {
+      label: t('without-profile'),
+      data: trend.map(item => ({
+        date: item.date,
+        value: Number(item.without_profile) || 0,
+      })),
+      color: '#94a3b8',
+    },
+  ]
+})
+
 watch(() => adminStore.activeDateRange, () => {
   loadGlobalStatsTrend()
   loadOnboardingFunnel()
@@ -1197,6 +1239,21 @@ displayStore.defaultBack = '/dashboard'
               {{ t('no-data-available') }}
             </div>
           </div>
+
+          <!-- Registration Source Trend Chart -->
+          <ChartCard
+            :title="t('registrations-by-source')"
+            :is-loading="isLoadingOnboardingFunnel"
+            :has-data="registrationSourceTrendSeries.length > 0"
+          >
+            <p class="mb-3 text-sm text-slate-500 dark:text-slate-400">
+              {{ t('registrations-by-source-description') }}
+            </p>
+            <AdminStackedBarChart
+              :series="registrationSourceTrendSeries"
+              :is-loading="isLoadingOnboardingFunnel"
+            />
+          </ChartCard>
 
           <!-- Onboarding Trend Chart -->
           <ChartCard
