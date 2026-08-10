@@ -88,23 +88,34 @@ describe('admin frontend onboarding dashboard', () => {
   it('uses the existing admin dashboard components and fixed onboarding version', async () => {
     const source = await readFile(new URL('../src/pages/admin/dashboard/frontend-onboarding.vue', import.meta.url), 'utf8')
 
-    expect(source).toContain('<AdminFilterBar')
-    expect(source.match(/<AdminStatsCard\b/g)).toHaveLength(4)
-    expect(source).toContain('<AdminStackedBarChart')
-    expect(source).toContain('<AdminFunnelChart')
+    expect(source).toContain('<PageLoader')
+    expect(source.match(/<AdminFilterBar(?:\s|\/?>)/g)).toHaveLength(1)
+    expect(source.match(/<AdminStatsCard(?:\s|\/?>)/g)).toHaveLength(4)
+    expect(source.match(/<ChartCard(?:\s|\/?>)/g)).toHaveLength(1)
+    expect(source.match(/<AdminStackedBarChart(?:\s|\/?>)/g)).toHaveLength(1)
+    expect(source.match(/<AdminFunnelChart(?:\s|\/?>)/g)).toHaveLength(1)
     expect(source).toContain(`t('frontend-onboarding-version-1')`)
   })
 
   it('omits PostHog warnings, existing-org analytics, and selector UI', async () => {
     const source = await readFile(new URL('../src/pages/admin/dashboard/frontend-onboarding.vue', import.meta.url), 'utf8')
+    const template = source.slice(source.indexOf('<template>'))
 
     expect(source).not.toContain('posthogWarning')
     expect(source).not.toContain('posthog_configured')
     expect(source).not.toContain('posthog_connected')
     expect(source).not.toContain('existing_org')
+    expect(source).not.toContain('DateRangePicker')
     expect(source).not.toContain('<select')
     expect(source).not.toContain('version-selector')
     expect(source).not.toContain('intent-selector')
+    expect(template).not.toContain('is-demo-data')
+    expect(template).not.toContain('isDemoData')
+    expect(template).not.toMatch(/\bretry\b/i)
+    expect(template).not.toMatch(/\btruncat(?:e|ed|ion)\b/i)
+    expect(template).not.toContain('error-message')
+    expect(template).not.toContain('errorMessage')
+    expect(template).not.toMatch(/v-(?:if|else-if)="[^"]*\berror\b/i)
   })
 
   it('registers the frontend onboarding admin tab', async () => {
