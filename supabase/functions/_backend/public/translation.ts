@@ -1,5 +1,6 @@
 import type { Context } from 'hono'
 import type { AiBinding } from '../utils/workers_ai.ts'
+import sourceMessageContexts from '../../../../messages/en.context.json'
 import sourceMessages from '../../../../messages/en.json'
 import { CacheHelper } from '../utils/cache.ts'
 import { honoFactory, parseBody, quickError, useCors } from '../utils/hono.ts'
@@ -66,10 +67,26 @@ interface TranslationMessagesResponsePayload {
   status: 'ready'
 }
 
-type MessageEntry = [string, string]
+type MessageEntry = [string, string, string]
 
-const sourceMessageCatalog = sourceMessages as Record<string, string>
+interface TranslationPromptMessage {
+  context?: string
+  text: string
+}
+
+function catalogWithoutSchema(messages: Record<string, unknown>) {
+  return Object.fromEntries(
+    Object.entries(messages).filter((entry): entry is [string, string] => entry[0] !== '$schema' && typeof entry[1] === 'string'),
+  )
+}
+
+const sourceMessageCatalog = catalogWithoutSchema(sourceMessages as Record<string, unknown>)
+const sourceMessageContextCatalog = catalogWithoutSchema(sourceMessageContexts as Record<string, unknown>)
 const pendingTranslations = new Map<string, Promise<void>>()
+const sourceCatalogChecksumPromise = sha256Hex(JSON.stringify({
+  contexts: sourceMessageContextCatalog,
+  messages: sourceMessageCatalog,
+}))
 
 function getTranslationModel(c: Context) {
   return getEnv(c, 'TRANSLATION_MODEL') || DEFAULT_TRANSLATION_MODEL
@@ -140,20 +157,21 @@ function keepTranslation(source: string, translated: unknown) {
   return normalized
 }
 
-function buildBatches(messages: Record<string, string>) {
+function buildBatches(messages: Record<string, string>, contexts: Record<string, string> = sourceMessageContextCatalog) {
   const batches: MessageEntry[][] = []
   let current: MessageEntry[] = []
   let currentCharacters = 0
 
-  for (const entry of Object.entries(messages)) {
-    const nextCharacters = entry[0].length + entry[1].length
+  for (const [key, message] of Object.entries(messages)) {
+    const context = typeof contexts[key] === 'string' ? contexts[key].trim() : ''
+    const nextCharacters = key.length + message.length + context.length
     if (current.length > 0 && (current.length >= MAX_BATCH_ITEMS || currentCharacters + nextCharacters > MAX_BATCH_CHARACTERS)) {
       batches.push(current)
       current = []
       currentCharacters = 0
     }
 
-    current.push(entry)
+    current.push([key, message, context])
     currentCharacters += nextCharacters
   }
 
@@ -179,6 +197,16 @@ function translationSchema() {
   }
 }
 
+function translationBatchPayload(batch: MessageEntry[]) {
+  const messages: Record<string, TranslationPromptMessage> = {}
+  for (const [key, text, context] of batch) {
+    messages[key] = context
+      ? { text, context }
+      : { text }
+  }
+  return { messages }
+}
+
 async function translateBatch(ai: AiBinding, model: string, targetLanguage: string, batch: MessageEntry[]) {
   let lastError: Error | null = null
 
@@ -197,15 +225,16 @@ async function translateBatch(ai: AiBinding, model: string, targetLanguage: stri
             content: [
               `Translate Capgo application UI messages from English to ${getTargetLanguageName(targetLanguage)}.`,
               'Return JSON only, with a translations object keyed by the exact input keys.',
+              'Each input value is an object with text (translate this) and optional context (where/how the text is used in the Capgo console UI).',
+              'Use context to disambiguate meaning, tone, and part of speech (button label vs title vs status vs empty state).',
+              'Translate only the text field. Do not translate or copy context into the output.',
               'Translate user-facing text naturally. Keep product names, code, URLs, commands, numbers, and placeholders unchanged.',
               'Every placeholder like {count}, %name%, or $1 must be copied exactly.',
             ].join(' '),
           },
           {
             role: 'user',
-            content: JSON.stringify({
-              messages: Object.fromEntries(batch),
-            }),
+            content: JSON.stringify(translationBatchPayload(batch)),
           },
         ],
       })
@@ -294,7 +323,7 @@ app.post('/messages', async (c) => {
     quickError(400, 'unsupported_translation_language', 'English messages are already bundled')
 
   const messages = sourceMessageCatalog
-  const checksum = await sha256Hex(JSON.stringify(messages))
+  const checksum = await sourceCatalogChecksumPromise
   const model = getTranslationModel(c)
   const cacheHelper = new CacheHelper(c)
   const cacheRequest = cacheHelper.buildRequest(TRANSLATION_CACHE_PATH, {

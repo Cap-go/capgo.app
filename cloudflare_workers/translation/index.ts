@@ -1,4 +1,5 @@
 import type { D1Database, ExecutionContext, MessageBatch, Queue } from '@cloudflare/workers-types'
+import sourceMessageContexts from '../../messages/en.context.json' with { type: 'json' }
 import sourceMessages from '../../messages/en.json' with { type: 'json' }
 
 const CACHE_TTL_SECONDS = 5 * 60
@@ -115,8 +116,13 @@ interface TranslationQueuePayload {
   targetLanguage?: string
 }
 
-type MessageEntry = [string, string]
+type MessageEntry = [string, string, string]
 type TranslationStoreEntryInput = Omit<TranslationStoreEntry, 'updatedAt'>
+
+interface TranslationPromptMessage {
+  context?: string
+  text: string
+}
 
 interface ReadyTranslationWriteInput {
   batchCount?: number
@@ -153,8 +159,18 @@ class PublicHttpError extends Error {
   }
 }
 
-const sourceMessageCatalog = sourceMessages as Record<string, string>
-const sourceCatalogChecksumPromise = sha256Hex(JSON.stringify(sourceMessageCatalog)) // NOSONAR: top-level await is disallowed by lint config.
+function catalogWithoutSchema(messages: Record<string, unknown>) {
+  return Object.fromEntries(
+    Object.entries(messages).filter((entry): entry is [string, string] => entry[0] !== '$schema' && typeof entry[1] === 'string'),
+  )
+}
+
+const sourceMessageCatalog = catalogWithoutSchema(sourceMessages as Record<string, unknown>)
+const sourceMessageContextCatalog = catalogWithoutSchema(sourceMessageContexts as Record<string, unknown>)
+const sourceCatalogChecksumPromise = sha256Hex(JSON.stringify({
+  contexts: sourceMessageContextCatalog,
+  messages: sourceMessageCatalog,
+})) // NOSONAR: top-level await is disallowed by lint config.
 let translationStoreInitialized = false
 let lastTranslationStoreCleanupAt = 0
 
@@ -384,7 +400,12 @@ function shouldFlushBatch(current: MessageEntry[], currentCharacters: number, ne
   return current.length > 0 && (current.length >= MAX_BATCH_ITEMS || currentCharacters + nextCharacters > MAX_BATCH_CHARACTERS)
 }
 
-function buildBatches(messages: Record<string, string>) {
+function messageContextFor(key: string, contexts: Record<string, string> = sourceMessageContextCatalog) {
+  const context = contexts[key]
+  return typeof context === 'string' ? context.trim() : ''
+}
+
+function buildBatches(messages: Record<string, string>, contexts: Record<string, string> = sourceMessageContextCatalog) {
   const batches: MessageEntry[][] = []
   let current: MessageEntry[] = []
   let currentCharacters = 0
@@ -398,8 +419,9 @@ function buildBatches(messages: Record<string, string>) {
   }
 
   for (const [key, message] of Object.entries(messages)) {
-    const entry: MessageEntry = [key, message]
-    const entryCharacters = key.length + message.length
+    const context = messageContextFor(key, contexts)
+    const entry: MessageEntry = [key, message, context]
+    const entryCharacters = key.length + message.length + context.length
     if (shouldFlushBatch(current, currentCharacters, entryCharacters))
       flush()
     current.push(entry)
@@ -428,9 +450,22 @@ function translationPrompt(targetLanguage: string) {
   return [
     `Translate Capgo application UI messages from English to ${targetLanguageLabel(targetLanguage)}.`,
     'Return JSON only, with a translations object keyed by the exact input keys.',
+    'Each input value is an object with text (translate this) and optional context (where/how the text is used in the Capgo console UI).',
+    'Use context to disambiguate meaning, tone, and part of speech (button label vs title vs status vs empty state).',
+    'Translate only the text field. Do not translate or copy context into the output.',
     'Translate user-facing text naturally. Keep product names, code, URLs, commands, numbers, and placeholders unchanged.',
     'Every placeholder like {count}, %name%, or $1 must be copied exactly.',
   ].join(' ')
+}
+
+function translationBatchPayload(batch: MessageEntry[]) {
+  const messages: Record<string, TranslationPromptMessage> = {}
+  for (const [key, text, context] of batch) {
+    messages[key] = context
+      ? { text, context }
+      : { text }
+  }
+  return { messages }
 }
 
 function translationRequest(targetLanguage: string, batch: MessageEntry[]) {
@@ -448,7 +483,7 @@ function translationRequest(targetLanguage: string, batch: MessageEntry[]) {
       },
       {
         role: 'user',
-        content: JSON.stringify({ messages: Object.fromEntries(batch) }),
+        content: JSON.stringify(translationBatchPayload(batch)),
       },
     ],
   }
@@ -1351,7 +1386,9 @@ export const __translationWorkerTestUtils__ = {
   keepTranslation,
   normalizeBatchIndex,
   parseTranslationObject,
+  translationBatchPayload,
   translationBatchClaimMarker,
   translationBatchIndexFromStore,
+  translationPrompt,
   translationStoreTtlSeconds,
 }
