@@ -4,11 +4,12 @@ import { fileURLToPath } from 'node:url'
 
 const root = join(fileURLToPath(new URL('.', import.meta.url)), '..')
 const en = JSON.parse(readFileSync(join(root, 'messages/en.json'), 'utf8'))
-const keys = Object.keys(en).filter(key => key !== '$schema')
+const keys = Object.keys(en).filter(key => key !== '$schema').sort()
 const keySet = new Set(keys)
 
 function walk(dir, out = []) {
-  for (const name of readdirSync(dir)) {
+  const names = readdirSync(dir).sort()
+  for (const name of names) {
     if (name === 'node_modules' || name === 'dist' || name === '.git' || name === 'graphify-out')
       continue
     const path = join(dir, name)
@@ -51,34 +52,30 @@ for (const file of files) {
       addUsage(match[1], rel)
   }
 
-  // Catch known keys appearing as quoted literals in source (nav labels, maps, enums).
   const literalPattern = /['"`]([\w.-]+)['"`]/g
   let match
   while ((match = literalPattern.exec(content)) !== null) {
     const key = match[1]
     if (!keySet.has(key))
       continue
-    // Skip very short generic tokens unless they are known UI keys used as labels.
     if (key.length < 3 && key !== 'ok')
       continue
     addUsage(key, rel)
   }
 }
 
-function humanizePath(path) {
-  return path
+function areaFromPath(path) {
+  const normalized = path
     .replace(/^src\//, '')
-    .replace(/^pages\//, 'page ')
-    .replace(/^components\//, 'component ')
-    .replace(/^services\//, 'service ')
-    .replace(/^stores\//, 'store ')
-    .replace(/^layouts\//, 'layout ')
-    .replace(/^constants\//, 'constants ')
-    .replace(/\.vue$/, '')
-    .replace(/\.ts$/, '')
-    .replace(/\./g, ' ')
-    .replace(/\//g, ' › ')
+    .replace(/\.(vue|ts|js|tsx|jsx|mjs|cjs)$/, '')
+  const parts = normalized.split('/')
+  // Drop the file/component leaf so renames inside the same folder stay stable.
+  if (parts.length > 1)
+    parts.pop()
+  return parts
+    .join('/')
     .replace(/\[([^\]]+)\]/g, '($1)')
+    || 'app'
 }
 
 function inferUiRole(text, key) {
@@ -156,9 +153,9 @@ for (const key of keys) {
   const filesForKey = usage.get(key)
   if (filesForKey && filesForKey.size > 0) {
     withUsage += 1
-    const locs = [...filesForKey].slice(0, 5).map(humanizePath).join('; ')
+    const areas = [...new Set([...filesForKey].map(areaFromPath).sort())].slice(0, 5)
     const role = inferUiRole(text, key)
-    contexts[key] = `Used in Capgo web console: ${locs}. Role: ${role}. Translate for UI; keep Capgo product names, code, and placeholders unchanged.`
+    contexts[key] = `Used in Capgo web console areas: ${areas.join(', ')}. Role: ${role}. Translate for UI; keep Capgo product names, code, and placeholders unchanged.`
   }
   else {
     contexts[key] = keyFallbackContext(key, text)

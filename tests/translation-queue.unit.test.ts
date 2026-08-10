@@ -49,7 +49,7 @@ describe('translation queue helpers', () => {
 
   it.concurrent('includes usage context in translation batch payloads', () => {
     const payload = __translationWorkerTestUtils__.translationBatchPayload([
-      ['Current', 'Current', 'Used in Capgo web console: page settings › organization › Plans. Role: filter or date-range option label.'],
+      ['Current', 'Current', 'Used in Capgo web console areas: pages/settings/organization. Role: filter or date-range option label.'],
       ['save', 'Save', ''],
     ])
 
@@ -57,7 +57,7 @@ describe('translation queue helpers', () => {
       messages: {
         Current: {
           text: 'Current',
-          context: 'Used in Capgo web console: page settings › organization › Plans. Role: filter or date-range option label.',
+          context: 'Used in Capgo web console areas: pages/settings/organization. Role: filter or date-range option label.',
         },
         save: {
           text: 'Save',

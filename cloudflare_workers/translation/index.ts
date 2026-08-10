@@ -167,6 +167,8 @@ function catalogWithoutSchema(messages: Record<string, unknown>) {
 
 const sourceMessageCatalog = catalogWithoutSchema(sourceMessages as Record<string, unknown>)
 const sourceMessageContextCatalog = catalogWithoutSchema(sourceMessageContexts as Record<string, unknown>)
+// Context uses stable folder areas + UI role (not file names), so renames inside a
+// folder do not invalidate translation caches. Area/role changes still should.
 const sourceCatalogChecksumPromise = sha256Hex(JSON.stringify({
   contexts: sourceMessageContextCatalog,
   messages: sourceMessageCatalog,
