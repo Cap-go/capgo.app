@@ -579,6 +579,10 @@ export async function readNotificationRegistrationsCF(c: Context<MiddlewareKeyVa
 
 export const MAX_ORG_NOTIFICATION_STATS_APPS = 64
 
+/** Dedup key for AE event rows without blob9: CFA has no concat/toString. */
+export const NOTIFICATION_STATS_EVENT_DEDUP_EXPR
+  = `if(blob9 = '', format('{}:{}:{}:{}', timestamp, blob1, blob3, blob4), blob9)`
+
 export function buildNotificationStatsQuery(params: {
   dataset: string
   appId?: string
@@ -609,7 +613,7 @@ export function buildNotificationStatsQuery(params: {
     }).join(' OR ')
   }
 
-  return `SELECT blob1 AS event, COUNT(DISTINCT if(blob9 = '', concat(toString(timestamp), ':', blob1, ':', blob3, ':', blob4), blob9)) AS count\n`
+  return `SELECT blob1 AS event, COUNT(DISTINCT ${NOTIFICATION_STATS_EVENT_DEDUP_EXPR}) AS count\n`
     + `FROM ${params.dataset}\n`
     + `WHERE timestamp >= toDateTime('${formatDateCF(since)}')\n`
     + `  AND (${indexCondition})\n`
@@ -626,7 +630,7 @@ export function buildGlobalNotificationStatsQuery(params: {
   const untilClause = params.until
     ? `\n  AND timestamp < toDateTime('${formatDateCF(params.until)}')`
     : ''
-  return `SELECT blob1 AS event, COUNT(DISTINCT if(blob9 = '', concat(toString(timestamp), ':', blob1, ':', blob3, ':', blob4), blob9)) AS count\n`
+  return `SELECT blob1 AS event, COUNT(DISTINCT ${NOTIFICATION_STATS_EVENT_DEDUP_EXPR}) AS count\n`
     + `FROM ${params.dataset}\n`
     + `WHERE timestamp >= toDateTime('${formatDateCF(params.since)}')${untilClause}\n`
     + `GROUP BY blob1\n`

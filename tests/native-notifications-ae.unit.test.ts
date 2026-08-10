@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { lintAnalyticsEngineSql } from '../supabase/functions/_backend/utils/analyticsEngineSqlLint.ts'
 import {
   buildNotificationBadgeStateQuery,
   buildNotificationRegistryLookupQuery,
@@ -15,6 +16,7 @@ import {
   getNotificationEventIndex,
   getNotificationIndex,
   normalizeNotificationTag,
+  NOTIFICATION_STATS_EVENT_DEDUP_EXPR,
   shouldTrackNotificationPermissionChanged,
   trackNotificationEventCF,
   trackNotificationRegistrationCF,
@@ -193,7 +195,11 @@ describe('native notification AE registry', () => {
     expect(query).toContain('FROM notification_events')
     expect(query).toContain("index1 = 'com.demo.app:campaign-1'")
     expect(query).toContain("blob2 = 'campaign-1'")
-    expect(query).toContain('COUNT(DISTINCT')
+    expect(query).toContain(`COUNT(DISTINCT ${NOTIFICATION_STATS_EVENT_DEDUP_EXPR})`)
+    expect(query).toContain("format('{}:{}:{}:{}', timestamp, blob1, blob3, blob4)")
+    expect(query).not.toContain('concat(')
+    expect(query).not.toContain('toString(')
+    expect(lintAnalyticsEngineSql(query)).toEqual([])
     expect(query).toContain('GROUP BY blob1')
   })
 
@@ -208,6 +214,10 @@ describe('native notification AE registry', () => {
     expect(query).toContain('FROM notification_events')
     expect(query).toContain("(index1 = 'com.demo.app' OR startsWith(index1, 'com.demo.app:'))")
     expect(query).toContain("(index1 = 'com.demo.app2' OR startsWith(index1, 'com.demo.app2:'))")
+    expect(query).toContain("format('{}:{}:{}:{}', timestamp, blob1, blob3, blob4)")
+    expect(query).not.toContain('concat(')
+    expect(query).not.toContain('toString(')
+    expect(lintAnalyticsEngineSql(query)).toEqual([])
     expect(query).toContain('GROUP BY blob1')
   })
 
@@ -225,6 +235,10 @@ describe('native notification AE registry', () => {
     expect(query).toContain('FROM notification_events')
     expect(query).toContain("timestamp >= toDateTime('2026-08-03 00:00:00')")
     expect(query).toContain("timestamp < toDateTime('2026-08-04 00:00:00')")
+    expect(query).toContain(`COUNT(DISTINCT ${NOTIFICATION_STATS_EVENT_DEDUP_EXPR})`)
+    expect(query).not.toContain('concat(')
+    expect(query).not.toContain('toString(')
+    expect(lintAnalyticsEngineSql(query)).toEqual([])
     expect(query).toContain('GROUP BY blob1')
     expect(query).not.toContain('index1')
   })
