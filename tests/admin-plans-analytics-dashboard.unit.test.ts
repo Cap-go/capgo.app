@@ -21,7 +21,7 @@ const validResponse: BackendPlansAnalyticsResponse = {
     posthogConfigured: true,
     posthogConnected: true,
     posthogFailureReason: null,
-    legacyDeduplicationSeconds: 30,
+    legacyDeduplicationSeconds: null,
   },
 }
 
@@ -90,6 +90,15 @@ describe('admin Plans analytics dashboard', () => {
     expect(parsePlansAnalyticsResponse(value)).toEqual(value)
   })
 
+  it('accepts a validated nonnegative integer legacy threshold for a future enabled path', () => {
+    const value = {
+      ...validResponse,
+      dataQuality: { ...validResponse.dataQuality, legacyDeduplicationSeconds: 30 },
+    }
+
+    expect(parsePlansAnalyticsResponse(value)).toEqual(value)
+  })
+
   it.each([
     ['non-object response', null],
     ['missing required fields', { traffic: validResponse.traffic }],
@@ -120,6 +129,14 @@ describe('admin Plans analytics dashboard', () => {
     ['invalid tracking timestamp', {
       ...validResponse,
       dataQuality: { ...validResponse.dataQuality, exactTrackingStartedAt: 'not-a-timestamp' },
+    }],
+    ['negative legacy deduplication threshold', {
+      ...validResponse,
+      dataQuality: { ...validResponse.dataQuality, legacyDeduplicationSeconds: -1 },
+    }],
+    ['fractional legacy deduplication threshold', {
+      ...validResponse,
+      dataQuality: { ...validResponse.dataQuality, legacyDeduplicationSeconds: 0.5 },
     }],
   ])('rejects a malformed response with %s', (_name, value) => {
     expect(() => parsePlansAnalyticsResponse(value)).toThrowError('Invalid Plans analytics response')

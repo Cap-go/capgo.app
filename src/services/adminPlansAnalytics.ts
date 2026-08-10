@@ -36,7 +36,7 @@ export interface PlansAnalyticsDataQuality {
   posthogConfigured: boolean
   posthogConnected: boolean
   posthogFailureReason: PlansAnalyticsFailureReason | null
-  legacyDeduplicationSeconds: number
+  legacyDeduplicationSeconds: number | null
 }
 
 export interface PlansAnalyticsResponse {
@@ -150,6 +150,10 @@ function nullableFailureReason(value: unknown, path: string): PlansAnalyticsFail
   return invalidResponse(path)
 }
 
+function nullableCount(value: unknown, path: string): number | null {
+  return value === null ? null : count(value, path)
+}
+
 function counts(value: unknown, path: string): number[] {
   return array(value, path).map((item, index) => count(item, `${path}[${index}]`))
 }
@@ -214,7 +218,7 @@ export function parsePlansAnalyticsResponse(value: unknown): PlansAnalyticsRespo
       posthogConfigured: boolean(qualityValue.posthogConfigured, 'response.dataQuality.posthogConfigured'),
       posthogConnected: boolean(qualityValue.posthogConnected, 'response.dataQuality.posthogConnected'),
       posthogFailureReason: nullableFailureReason(qualityValue.posthogFailureReason, 'response.dataQuality.posthogFailureReason'),
-      legacyDeduplicationSeconds: count(qualityValue.legacyDeduplicationSeconds, 'response.dataQuality.legacyDeduplicationSeconds'),
+      legacyDeduplicationSeconds: nullableCount(qualityValue.legacyDeduplicationSeconds, 'response.dataQuality.legacyDeduplicationSeconds'),
     },
   }
 }

@@ -144,6 +144,7 @@ describe('plans analytics orchestration', () => {
       legacyReconstructionAvailable: false,
       legacyUnavailableReason: 'missing_event_time_path',
       legacyLogicalOpens: 0,
+      legacyDeduplicationSeconds: null,
     })
     expect(result.traffic.totalOpens).toEqual([0])
     expect(result.visitorBreakdown).toHaveLength(1)
@@ -286,7 +287,7 @@ describe('plans analytics orchestration', () => {
       excludedMissingOrganization: 4,
       unmatchedCheckoutStarts: 1,
       unknownBillingOrganizations: 0,
-      legacyDeduplicationSeconds: 30,
+      legacyDeduplicationSeconds: null,
     })
     expect(result.traffic.totalOpens).toEqual([1])
     expect(result.checkoutIntent[0]).toMatchObject({ startedCheckout: 1, didNotStart: 0 })

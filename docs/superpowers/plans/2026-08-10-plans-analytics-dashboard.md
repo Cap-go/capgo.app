@@ -10,6 +10,14 @@
 
 **Design specification:** `docs/superpowers/specs/2026-08-10-plans-analytics-dashboard-design.md`
 
+## Evidence Record — 2026-08-10
+
+The exact tracking prerequisite was merged via `main`: commit `918f7dc15` (`fix(analytics): deduplicate plans page visit tracking (#2964)`) emits one Plans `User visit` per activation with `tags: { page: 'plans' }`; merge commit `060a4abaa` includes it on this branch.
+
+The Task 1 PostHog project lookup, schema lookup, bounded event sample, and legacy gap-histogram calls were attempted, and every call returned MCP error `-32603 Internal error`. Therefore no production event-time pathname or inter-event gap distribution was proven. The implementation must keep `LEGACY_PATH_SOURCE = 'unavailable'`, return `legacyUnavailableReason = 'missing_event_time_path'`, and return `legacyDeduplicationSeconds = null`; 30 seconds remains an unvalidated candidate and must not be interpreted as active or numerically trustworthy.
+
+Legacy reconstruction may be re-enabled only after a successful event-time pathname proof, validation of a real same-organization/session gap histogram, and tests for the enabled path, threshold boundaries, and DTO metadata. The failed calls support no claims about production data.
+
 ---
 
 ## File Structure
@@ -925,7 +933,7 @@ export interface PlansAnalyticsResponse {
     posthogConfigured: boolean
     posthogConnected: boolean
     posthogFailureReason: 'unconfigured' | 'timeout' | 'unavailable' | 'too_large' | null
-    legacyDeduplicationSeconds: number
+    legacyDeduplicationSeconds: number | null
   }
 }
 ```

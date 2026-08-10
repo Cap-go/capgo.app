@@ -75,7 +75,7 @@ Legacy watcher emissions must be converted into logical openings without removin
 4. Collapse the other events in the burst into the first event and retain that timestamp.
 5. Read 30 seconds before the selected range so a burst crossing the range boundary does not create a false opening. Events before `start` remain excluded from chart counts.
 
-The initial threshold is 30 seconds. Before implementation is finalized, query the historical same-organization/session inter-event gap distribution and confirm that 30 seconds separates watcher bursts from genuine navigation. The selected value is returned in `dataQuality.legacyDeduplicationSeconds` and covered by deterministic tests.
+Thirty seconds is only a candidate threshold. It must not be treated as active or numerically trustworthy until a historical same-organization/session inter-event gap distribution proves that it separates watcher bursts from genuine navigation. `dataQuality.legacyDeduplicationSeconds` is `null` while legacy reconstruction is unavailable; a selected numeric value may be returned only after the legacy path and threshold are validated and covered by deterministic tests.
 
 This repair changes **Total opens** and visit-to-checkout attribution. Organization-unique graphs apply their own range or daily deduplication after logical openings have been constructed.
 
@@ -202,10 +202,18 @@ interface PlansAnalyticsResponse {
     posthogConfigured: boolean
     posthogConnected: boolean
     posthogFailureReason: 'unconfigured' | 'timeout' | 'unavailable' | 'too_large' | null
-    legacyDeduplicationSeconds: number
+    legacyDeduplicationSeconds: number | null
   }
 }
 ```
+
+## Evidence Record — 2026-08-10
+
+The exact tracking prerequisite is present through `main`: commit `918f7dc15` (`fix(analytics): deduplicate plans page visit tracking (#2964)`) emits one `User visit` per Plans-page activation with `tags: { page: 'plans' }`, and merge commit `060a4abaa` brought that prerequisite into this branch.
+
+The Task 1 PostHog project lookup, schema lookup, bounded event sample, and legacy inter-event gap histogram were each attempted. Every call returned MCP error `-32603 Internal error`. These failures provide no production event sample, schema result, event-time pathname proof, or gap distribution. Consequently, legacy reconstruction remains disabled with `legacyUnavailableReason: 'missing_event_time_path'`, and the 30-second candidate is unvalidated: it is neither active nor numerically trustworthy and is reported as `legacyDeduplicationSeconds: null`.
+
+Re-enabling legacy reconstruction requires a successful proof that the chosen pathname is event-time data, a real same-organization/session gap histogram that validates the selected threshold, and tests covering the enabled mapper, burst boundaries, and wire metadata. No production-data conclusion is inferred from the failed calls.
 
 The concrete daily-series types use the existing admin chart input conventions and contain every UTC date in the selected range, including zero-value days.
 

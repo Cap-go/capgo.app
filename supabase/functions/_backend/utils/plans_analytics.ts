@@ -41,7 +41,7 @@ export interface PlansAnalyticsResponse {
     posthogConfigured: boolean
     posthogConnected: boolean
     posthogFailureReason: PlansAnalyticsFailureReason | null
-    legacyDeduplicationSeconds: number
+    legacyDeduplicationSeconds: number | null
   }
 }
 
@@ -61,6 +61,10 @@ interface ParsedRange {
   endMs: number
   startIso: string
   endIso: string
+}
+
+function legacyDeduplicationSeconds(reconstructionAvailable: boolean): number | null {
+  return reconstructionAvailable ? LEGACY_BURST_SECONDS : null
 }
 
 function safeIso(timestampMs: number): string | null {
@@ -196,7 +200,7 @@ function emptyPlansAnalyticsResponse(
       posthogConfigured: quality.posthogConfigured ?? false,
       posthogConnected: quality.posthogConnected ?? false,
       posthogFailureReason: quality.posthogFailureReason ?? null,
-      legacyDeduplicationSeconds: LEGACY_BURST_SECONDS,
+      legacyDeduplicationSeconds: legacyDeduplicationSeconds(false),
     },
   }
 }
@@ -444,7 +448,7 @@ export async function getAdminPlansAnalytics(
       posthogConfigured: true,
       posthogConnected: true,
       posthogFailureReason: null,
-      legacyDeduplicationSeconds: LEGACY_BURST_SECONDS,
+      legacyDeduplicationSeconds: legacyDeduplicationSeconds(false),
     },
   }
   cloudlog({
