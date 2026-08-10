@@ -53,11 +53,46 @@ export interface FrontendOnboardingFunnelDisplayStage {
   color: string
 }
 
+export interface FrontendOnboardingAnalyticsLoaderCallbacks {
+  onAnalytics: (analytics: FrontendOnboardingAnalytics | null) => void
+  onError: (error: unknown) => void
+  onLoading: (isLoading: boolean) => void
+}
+
 const FUNNEL_STAGE_COLORS: Record<FrontendOnboardingStageKey, string> = {
   intent: '#119eff',
   details: '#6366f1',
   organization: '#8b5cf6',
   setup: '#10b981',
+}
+
+export function createFrontendOnboardingAnalyticsLoader(
+  fetchAnalytics: () => Promise<FrontendOnboardingAnalytics | null>,
+  callbacks: FrontendOnboardingAnalyticsLoaderCallbacks,
+) {
+  let latestRequest = 0
+
+  return async function loadFrontendOnboardingAnalytics() {
+    const request = ++latestRequest
+    callbacks.onLoading(true)
+
+    try {
+      const result = await fetchAnalytics()
+      if (request !== latestRequest)
+        return
+      callbacks.onAnalytics(result)
+    }
+    catch (error) {
+      if (request !== latestRequest)
+        return
+      callbacks.onAnalytics(null)
+      callbacks.onError(error)
+    }
+    finally {
+      if (request === latestRequest)
+        callbacks.onLoading(false)
+    }
+  }
 }
 
 export function buildFrontendOnboardingDailySeries(

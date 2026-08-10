@@ -17,6 +17,7 @@ import PageLoader from '~/components/PageLoader.vue'
 import {
   buildFrontendOnboardingDailySeries,
   buildFrontendOnboardingFunnelStages,
+  createFrontendOnboardingAnalyticsLoader,
   formatFrontendOnboardingDuration,
 } from '~/services/adminFrontendOnboarding'
 import { formatNumberValue } from '~/services/formatLocale'
@@ -31,28 +32,31 @@ const displayStore = useDisplayStore()
 const mainStore = useMainStore()
 const isLoading = ref(true)
 const isLoadingStats = ref(false)
+const isReady = ref(false)
 const analytics = ref<FrontendOnboardingAnalytics | null>(null)
 
-async function loadAnalytics() {
-  isLoadingStats.value = true
-  try {
-    analytics.value = await adminStore.fetchStats('frontend_onboarding_analytics') || null
-  }
-  catch (error) {
-    console.error('[Admin Frontend Onboarding] Error loading analytics:', error)
-    analytics.value = null
-  }
-  finally {
-    isLoadingStats.value = false
-  }
-}
+const loadAnalytics = createFrontendOnboardingAnalyticsLoader(
+  async () => await adminStore.fetchStats('frontend_onboarding_analytics') || null,
+  {
+    onAnalytics: (value) => {
+      analytics.value = value
+    },
+    onError: (error) => {
+      console.error('[Admin Frontend Onboarding] Error loading analytics:', error)
+    },
+    onLoading: (value) => {
+      isLoadingStats.value = value
+    },
+  },
+)
 
-const kpis = computed(() => analytics.value?.kpis)
+const visibleAnalytics = computed(() => isLoadingStats.value ? null : analytics.value)
+const kpis = computed(() => visibleAnalytics.value?.kpis)
 const dailySeries = computed(() => buildFrontendOnboardingDailySeries(
-  analytics.value?.daily_attempts ?? [],
+  visibleAnalytics.value?.daily_attempts ?? [],
   t('frontend-onboarding-new-users'),
 ))
-const funnelStages = computed(() => buildFrontendOnboardingFunnelStages(analytics.value?.funnel ?? []))
+const funnelStages = computed(() => buildFrontendOnboardingFunnelStages(visibleAnalytics.value?.funnel ?? []))
 const hasAttempts = computed(() => (kpis.value?.attempts ?? 0) > 0)
 const attemptsValue = computed(() => formatNumberValue(kpis.value?.attempts ?? 0))
 const completionValue = computed(() => `${formatNumberValue(kpis.value?.completion_rate ?? 0, {
@@ -73,14 +77,17 @@ const largestDropoffSubtitle = computed(() => {
   if (!dropoff)
     return t('frontend-onboarding-no-dropoff')
 
-  const stages = analytics.value?.funnel ?? []
+  const stages = visibleAnalytics.value?.funnel ?? []
   const from = stages.find(stage => stage.key === dropoff.from)?.label ?? dropoff.from
   const to = stages.find(stage => stage.key === dropoff.to)?.label ?? dropoff.to
   return t('frontend-onboarding-transition', { from, to })
 })
 
-watch(() => adminStore.activeDateRange, loadAnalytics, { deep: true })
-watch(() => adminStore.refreshTrigger, loadAnalytics)
+watch(() => adminStore.activeDateRange, () => {
+  if (!isReady.value)
+    return
+  void loadAnalytics()
+}, { deep: true })
 
 onMounted(async () => {
   if (!mainStore.isAdmin) {
@@ -89,6 +96,7 @@ onMounted(async () => {
     return
   }
 
+  isReady.value = true
   await loadAnalytics()
   isLoading.value = false
   displayStore.NavTitle = t('frontend-onboarding')
@@ -165,7 +173,7 @@ displayStore.defaultBack = '/dashboard'
             <AdminFunnelChart :stages="funnelStages" :is-loading="isLoadingStats" />
           </div>
           <div class="grid grid-cols-2 gap-4 pt-5 mt-5 border-t border-slate-200 md:grid-cols-4 dark:border-slate-700">
-            <div v-for="stage in analytics?.funnel ?? []" :key="stage.key" class="text-center">
+            <div v-for="stage in visibleAnalytics?.funnel ?? []" :key="stage.key" class="text-center">
               <p class="text-xl font-bold text-slate-900 tabular-nums dark:text-white">
                 {{ formatNumberValue(stage.of_start_percent, { minimumFractionDigits: 1, maximumFractionDigits: 1 }) }}%
               </p>
