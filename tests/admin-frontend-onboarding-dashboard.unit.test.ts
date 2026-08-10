@@ -1,9 +1,9 @@
+import type { FrontendOnboardingAnalytics } from '../src/services/adminFrontendOnboarding'
 import { describe, expect, it } from 'vitest'
 import {
   buildFrontendOnboardingDailySeries,
   buildFrontendOnboardingFunnelStages,
   formatFrontendOnboardingDuration,
-  type FrontendOnboardingAnalytics,
 } from '../src/services/adminFrontendOnboarding'
 
 describe('admin frontend onboarding dashboard', () => {
@@ -40,7 +40,7 @@ describe('admin frontend onboarding dashboard', () => {
     posthog_connected: true,
   }
 
-  it('adapts daily attempts into one ordered stacked-chart series', () => {
+  it.concurrent('adapts daily attempts into one ordered stacked-chart series', () => {
     expect(buildFrontendOnboardingDailySeries(analytics.daily_attempts, 'Attempts')).toEqual([
       {
         label: 'Attempts',
@@ -56,21 +56,25 @@ describe('admin frontend onboarding dashboard', () => {
     ])
   })
 
-  it('adapts funnel stages in response order with stable key-based colors', () => {
-    expect(buildFrontendOnboardingFunnelStages(analytics.funnel)).toEqual([
-      { label: 'Intent', value: 10, color: '#119eff' },
-      { label: 'App details', value: 8, color: '#6366f1' },
-      { label: 'Organization', value: 5, color: '#8b5cf6' },
+  it.concurrent('adapts reordered funnel stages with stable key-based colors', () => {
+    expect(buildFrontendOnboardingFunnelStages([
+      analytics.funnel[3],
+      analytics.funnel[0],
+      analytics.funnel[2],
+    ])).toEqual([
       { label: 'Setup reached', value: 4, color: '#10b981' },
+      { label: 'Intent', value: 10, color: '#119eff' },
+      { label: 'Organization', value: 5, color: '#8b5cf6' },
     ])
   })
 
-  it('formats nullable durations as rounded, nonnegative minutes and seconds', () => {
+  it.concurrent('formats nullable durations as rounded, nonnegative minutes and seconds', () => {
     expect(formatFrontendOnboardingDuration(222000)).toBe('3m 42s')
     expect(formatFrontendOnboardingDuration(28000)).toBe('28s')
     expect(formatFrontendOnboardingDuration(null)).toBe('—')
     expect(formatFrontendOnboardingDuration(0)).toBe('0s')
     expect(formatFrontendOnboardingDuration(550)).toBe('1s')
+    expect(formatFrontendOnboardingDuration(59_500)).toBe('1m 0s')
     expect(formatFrontendOnboardingDuration(-100)).toBe('0s')
   })
 })
