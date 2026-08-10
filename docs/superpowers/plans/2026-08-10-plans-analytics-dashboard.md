@@ -256,7 +256,9 @@ import type { Context } from 'hono'
 import { cloudlogErr, serializeError } from './logging.ts'
 import { getEnv } from './utils.ts'
 
-export type PosthogReadFailureReason = 'unconfigured' | 'timeout' | 'unavailable'
+export const MAX_POSTHOG_RESPONSE_BYTES = 8 * 1024 * 1024
+
+export type PosthogReadFailureReason = 'too_large' | 'unconfigured' | 'timeout' | 'unavailable'
 
 export interface PosthogReadResult {
   configured: boolean
@@ -265,12 +267,14 @@ export interface PosthogReadResult {
   rows: Record<string, unknown>[]
 }
 
-export async function queryPosthogHogql(c: Context, query: string): Promise<PosthogReadResult> {
+export async function queryPosthogHogql(c: Context, query: string, options: { maxResponseBytes?: number } = {}): Promise<PosthogReadResult> {
   const key = (getEnv(c, 'POSTHOG_READ_KEY') || '').trim()
-  const host = (getEnv(c, 'POSTHOG_READ_HOST') || '').trim().replace(/\/$/, '')
-  const project = (getEnv(c, 'POSTHOG_READ_PROJECT_ID') || '').trim()
-  if (!key || !host || !project)
+  const hostOverride = (getEnv(c, 'POSTHOG_READ_HOST') || '').trim()
+  const projectOverride = (getEnv(c, 'POSTHOG_READ_PROJECT_ID') || '').trim()
+  if (!key || Boolean(hostOverride) !== Boolean(projectOverride))
     return { configured: false, connected: false, failureReason: 'unconfigured', rows: [] }
+  const host = (hostOverride || 'https://eu.posthog.com').replace(/\/+$/, '')
+  const project = projectOverride || '22029'
   try {
     const response = await fetch(`${host}/api/projects/${project}/query/`, {
       method: 'POST',
@@ -282,13 +286,16 @@ export async function queryPosthogHogql(c: Context, query: string): Promise<Post
       cloudlogErr({ requestId: c.get('requestId'), message: 'posthog_query_failed', status: response.status })
       return { configured: true, connected: false, failureReason: 'unavailable', rows: [] }
     }
-    const body = await response.json() as { columns?: string[], results?: unknown[][] }
-    const columns = body.columns ?? []
+    const body = await readBoundedResponse(response, options.maxResponseBytes ?? MAX_POSTHOG_RESPONSE_BYTES)
+    if (body === null)
+      return { configured: true, connected: true, failureReason: 'too_large', rows: [] }
+    const json = JSON.parse(body) as { columns?: string[], results?: unknown[][] }
+    const columns = json.columns ?? []
     return {
       configured: true,
       connected: true,
       failureReason: null,
-      rows: (body.results ?? []).map(row => Object.fromEntries(columns.map((column, index) => [column, row[index]]))),
+      rows: (json.results ?? []).map(row => Object.fromEntries(columns.map((column, index) => [column, row[index]]))),
     }
   }
   catch (error) {
@@ -298,6 +305,8 @@ export async function queryPosthogHogql(c: Context, query: string): Promise<Post
   }
 }
 ```
+
+`readBoundedResponse` must reject an oversized declared `Content-Length` before reading, stream and cancel an undeclared/chunked response as soon as it exceeds the byte limit, and only then decode and parse JSON. Clamp caller-provided limits to the global 8 MiB ceiling. Key-only configuration intentionally retains the established production EU project defaults; an explicit host and project must be supplied together, and a partial override is unconfigured so a key is never sent to a lone override.
 
 - [ ] **Step 4: Refactor Builder analytics to use the transport**
 
@@ -1015,9 +1024,11 @@ The function must:
 5. map only valid scalar rows into PlansBehaviorEvent/BillingTransition
 6. repair logical openings before removing the 30-second lookback
 7. attribute checkout through end + 24h
-8. batch-load billing histories for unique opening org IDs
-9. build all charts with classifyPlansBillingAt
-10. compute data-quality counts and log only aggregate durations/counts
+8. cap unique opening organizations at 4,000 before transition or billing work
+9. run at most four 1,000-organization transition queries concurrently, each with a 2 MiB response budget so the whole wave remains within 8 MiB
+10. batch-load billing histories for unique opening org IDs
+11. build all charts with classifyPlansBillingAt
+12. compute data-quality counts and log only aggregate durations/counts
 ```
 
 Do not log organization IDs, PostHog keys, URLs containing credentials, or raw event properties.

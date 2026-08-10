@@ -14,12 +14,15 @@ import {
   classifyPlansBillingAt,
   loadPlansBillingHistories,
 } from './plans_billing_history.ts'
-import { queryPosthogHogql } from './posthog_read.ts'
+import { MAX_POSTHOG_RESPONSE_BYTES, queryPosthogHogql } from './posthog_read.ts'
 
 export const MAX_POSTHOG_ROWS = 200_000
 export const TRACKING_HISTORY_START = '2026-02-23T00:00:00.000Z'
 export const LEGACY_PATH_SOURCE = 'unavailable' as const
 const TRANSITION_ORG_BATCH_SIZE = 1_000
+export const TRANSITION_QUERY_CONCURRENCY = 4
+export const MAX_PLANS_ORGANIZATIONS = TRANSITION_ORG_BATCH_SIZE * TRANSITION_QUERY_CONCURRENCY
+export const MAX_TRANSITION_RESPONSE_BYTES = Math.floor(MAX_POSTHOG_RESPONSE_BYTES / TRANSITION_QUERY_CONCURRENCY)
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 type PlansAnalyticsFailureReason = PosthogReadFailureReason | 'too_large'
@@ -371,12 +374,25 @@ export async function getAdminPlansAnalytics(
   ))
   const attributedCheckouts = attributeCheckoutStarts(openings, checkoutEvents)
   const orgIds = [...new Set(openings.map(opening => opening.orgId))]
+  if (orgIds.length > MAX_PLANS_ORGANIZATIONS) {
+    return emptyPlansAnalyticsResponse(range.startMs, range.endMs, {
+      posthogConfigured: true,
+      posthogConnected: true,
+      posthogFailureReason: 'too_large',
+    })
+  }
   const relevantOrganizations = new Set(orgIds)
   const transitionRows: Record<string, unknown>[] = []
+  const transitionBatches: string[][] = []
   for (let offset = 0; offset < orgIds.length; offset += TRANSITION_ORG_BATCH_SIZE) {
-    const batch = orgIds.slice(offset, offset + TRANSITION_ORG_BATCH_SIZE)
-    const transitionResult = await queryPosthogHogql(c, buildBillingTransitionsQuery(range.endIso, batch))
-    const transitionFailure = failedResult([transitionResult])
+    transitionBatches.push(orgIds.slice(offset, offset + TRANSITION_ORG_BATCH_SIZE))
+  }
+  for (let offset = 0; offset < transitionBatches.length; offset += TRANSITION_QUERY_CONCURRENCY) {
+    const wave = transitionBatches.slice(offset, offset + TRANSITION_QUERY_CONCURRENCY)
+    const transitionResults = await Promise.all(wave.map(batch => (
+      queryPosthogHogql(c, buildBillingTransitionsQuery(range.endIso, batch), { maxResponseBytes: MAX_TRANSITION_RESPONSE_BYTES })
+    )))
+    const transitionFailure = failedResult(transitionResults)
     if (transitionFailure) {
       return emptyPlansAnalyticsResponse(range.startMs, range.endMs, {
         posthogConfigured: transitionFailure.configured,
@@ -384,14 +400,17 @@ export async function getAdminPlansAnalytics(
         posthogFailureReason: transitionFailure.failureReason ?? 'unavailable',
       })
     }
-    if (transitionResult.rows.length > MAX_POSTHOG_ROWS || transitionRows.length + transitionResult.rows.length > MAX_POSTHOG_ROWS) {
-      return emptyPlansAnalyticsResponse(range.startMs, range.endMs, {
-        posthogConfigured: true,
-        posthogConnected: true,
-        posthogFailureReason: 'too_large',
-      })
+    for (const transitionResult of transitionResults) {
+      if (transitionResult.rows.length > MAX_POSTHOG_ROWS || transitionRows.length + transitionResult.rows.length > MAX_POSTHOG_ROWS) {
+        return emptyPlansAnalyticsResponse(range.startMs, range.endMs, {
+          posthogConfigured: true,
+          posthogConnected: true,
+          posthogFailureReason: 'too_large',
+        })
+      }
+      for (const row of transitionResult.rows)
+        transitionRows.push(row)
     }
-    transitionRows.push(...transitionResult.rows)
   }
 
   const boundaryResult = await queryPosthogHogql(c, buildExactTrackingStartQuery())

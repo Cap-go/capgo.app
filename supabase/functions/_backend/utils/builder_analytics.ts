@@ -1,8 +1,7 @@
 import type { Context } from 'hono'
 import { cloudlog } from './logging.ts'
 import { closeClient, getPgClient } from './pg.ts'
-import { queryPosthogHogql } from './posthog_read.ts'
-import { getEnv } from './utils.ts'
+import { isPosthogReadConfigured, queryPosthogHogql } from './posthog_read.ts'
 
 // Builder analytics for the admin dashboard. Live (no cache):
 //  - Onboarding funnel / AI usage / per-org journeys come from PostHog (HogQL).
@@ -148,7 +147,7 @@ async function loadOnboardingEvents(c: Context, start: string, end: string): Pro
       AND timestamp <= parseDateTimeBestEffort(${sqlStr(end)})
     ORDER BY timestamp DESC
     LIMIT ${ONBOARDING_EVENT_LIMIT}`
-  const { connected: ok, rows } = await queryPosthogHogql(c, q)
+  const { connected, failureReason, rows } = await queryPosthogHogql(c, q)
   if (rows.length >= ONBOARDING_EVENT_LIMIT)
     cloudlog({ requestId: c.get('requestId'), message: 'builder_analytics onboarding events truncated', limit: ONBOARDING_EVENT_LIMIT })
   const events = rows
@@ -162,7 +161,7 @@ async function loadOnboardingEvents(c: Context, start: string, end: string): Pro
       errorCategory: str(r.error_category),
     }))
     .filter(e => e.appId || e.journeyId)
-  return { ok, events }
+  return { ok: connected && failureReason === null, events }
 }
 
 async function loadAiChoiceCount(c: Context, start: string, end: string): Promise<number> {
@@ -210,7 +209,7 @@ export async function getAdminBuilderAnalytics(c: Context, startDate: string, en
   const nowMs = Date.now()
   const startMs = Date.parse(startDate)
   const endMs = Date.parse(endDate)
-  const posthogConfigured = Boolean((getEnv(c, 'POSTHOG_READ_KEY') || '').trim())
+  const posthogConfigured = isPosthogReadConfigured(c)
 
   // --- PostHog onboarding (parallel, each bounded by a fetch timeout) ---
   const [onboarding, aiOrgs] = await Promise.all([

@@ -7,13 +7,19 @@ import {
   buildPlansBehaviorQuery,
   getAdminPlansAnalytics,
   LEGACY_PATH_SOURCE,
+  MAX_PLANS_ORGANIZATIONS,
   MAX_POSTHOG_ROWS,
+  MAX_TRANSITION_RESPONSE_BYTES,
   TRACKING_HISTORY_START,
+  TRANSITION_QUERY_CONCURRENCY,
 } from '../supabase/functions/_backend/utils/plans_analytics.ts'
 import { loadPlansBillingHistories } from '../supabase/functions/_backend/utils/plans_billing_history.ts'
 import { queryPosthogHogql } from '../supabase/functions/_backend/utils/posthog_read.ts'
 
-vi.mock('../supabase/functions/_backend/utils/posthog_read.ts', () => ({ queryPosthogHogql: vi.fn() }))
+vi.mock('../supabase/functions/_backend/utils/posthog_read.ts', async importOriginal => ({
+  ...await importOriginal<typeof import('../supabase/functions/_backend/utils/posthog_read.ts')>(),
+  queryPosthogHogql: vi.fn(),
+}))
 vi.mock('../supabase/functions/_backend/utils/plans_billing_history.ts', async importOriginal => ({
   ...await importOriginal<typeof import('../supabase/functions/_backend/utils/plans_billing_history.ts')>(),
   loadPlansBillingHistories: vi.fn(),
@@ -35,6 +41,9 @@ const ORG_PAID = '00000000-0000-4000-8000-000000000012'
 const ORG_CANCELED = '00000000-0000-4000-8000-000000000013'
 const ORG_KNOWN = '00000000-0000-4000-8000-000000000014'
 const ORG_UNKNOWN = '00000000-0000-4000-8000-000000000015'
+const EXPECTED_TRANSITION_QUERY_CONCURRENCY = 4
+const EXPECTED_MAX_PLANS_ORGANIZATIONS = 4_000
+const EXPECTED_MAX_TRANSITION_RESPONSE_BYTES = 2 * 1024 * 1024
 
 function connected(rows: Record<string, unknown>[] = []) {
   return {
@@ -49,6 +58,10 @@ function rowsWithLength(length: number): Record<string, unknown>[] {
   const rows: Record<string, unknown>[] = []
   rows.length = length
   return rows
+}
+
+function organizationIds(length: number): string[] {
+  return Array.from({ length }, (_, index) => `00000000-0000-4000-8000-${index.toString(16).padStart(12, '0')}`)
 }
 
 function behavior(overrides: Record<string, unknown> = {}) {
@@ -82,7 +95,7 @@ function history(orgId: string, overrides: Partial<OrganizationBillingHistory> =
 }
 
 beforeEach(() => {
-  vi.clearAllMocks()
+  vi.resetAllMocks()
   vi.mocked(loadPlansBillingHistories).mockResolvedValue(new Map())
 })
 
@@ -132,6 +145,7 @@ describe('plans analytics orchestration', () => {
     ['unconfigured', { configured: false, connected: false, failureReason: 'unconfigured' as const, rows: [] }],
     ['timeout', { configured: true, connected: false, failureReason: 'timeout' as const, rows: [] }],
     ['unavailable', { configured: true, connected: false, failureReason: 'unavailable' as const, rows: [] }],
+    ['too large', { configured: true, connected: true, failureReason: 'too_large' as const, rows: [] }],
   ])('returns a structured %s state', async (_label, failure) => {
     vi.mocked(queryPosthogHogql).mockResolvedValue(failure)
 
@@ -197,7 +211,7 @@ describe('plans analytics orchestration', () => {
   })
 
   it('batches large relevant organization sets deterministically', async () => {
-    const orgIds = Array.from({ length: 1_001 }, (_, index) => `00000000-0000-4000-8000-${index.toString(16).padStart(12, '0')}`)
+    const orgIds = organizationIds(1_001)
     vi.mocked(queryPosthogHogql)
       .mockResolvedValueOnce(connected(orgIds.map(orgId => behavior({ org_id: orgId }))))
       .mockResolvedValueOnce(connected())
@@ -214,6 +228,100 @@ describe('plans analytics orchestration', () => {
     expect(secondTransitionQuery).toContain(orgIds[1_000])
     expect(secondTransitionQuery).not.toContain(orgIds[0])
     expect(loadPlansBillingHistories).toHaveBeenCalledWith(context, orgIds, '2026-08-01', '2026-08-02', new Map())
+  })
+
+  it('rejects organization cardinality above the single-wave ceiling before transition or billing work', async () => {
+    const orgIds = organizationIds(EXPECTED_MAX_PLANS_ORGANIZATIONS + 1)
+    vi.mocked(queryPosthogHogql).mockResolvedValueOnce(connected(orgIds.map(orgId => behavior({ org_id: orgId }))))
+
+    expect(MAX_PLANS_ORGANIZATIONS).toBe(EXPECTED_MAX_PLANS_ORGANIZATIONS)
+    const result = await getAdminPlansAnalytics(context, start, end)
+
+    expect(result.dataQuality.posthogFailureReason).toBe('too_large')
+    expect(queryPosthogHogql).toHaveBeenCalledTimes(1)
+    expect(loadPlansBillingHistories).not.toHaveBeenCalled()
+  })
+
+  it('runs the maximum organization set in one bounded transition-query wave', async () => {
+    const orgIds = organizationIds(EXPECTED_MAX_PLANS_ORGANIZATIONS)
+    let activeTransitions = 0
+    let maxActiveTransitions = 0
+    vi.mocked(queryPosthogHogql).mockImplementation(async (_context, query) => {
+      if (query.includes('event IN (\'User visit\', \'Checkout Started\')'))
+        return connected(orgIds.map(orgId => behavior({ org_id: orgId })))
+      if (query.includes('SELECT min(timestamp) AS exact_tracking_started_at'))
+        return connected()
+
+      activeTransitions += 1
+      maxActiveTransitions = Math.max(maxActiveTransitions, activeTransitions)
+      await new Promise(resolve => setTimeout(resolve, 1))
+      activeTransitions -= 1
+      return connected()
+    })
+
+    const result = await getAdminPlansAnalytics(context, start, end)
+
+    expect(TRANSITION_QUERY_CONCURRENCY).toBe(EXPECTED_TRANSITION_QUERY_CONCURRENCY)
+    expect(MAX_TRANSITION_RESPONSE_BYTES).toBe(EXPECTED_MAX_TRANSITION_RESPONSE_BYTES)
+    expect(maxActiveTransitions).toBe(EXPECTED_TRANSITION_QUERY_CONCURRENCY)
+    const transitionCalls = vi.mocked(queryPosthogHogql).mock.calls.filter(([, query]) => query.includes('event IN (\'User subscribe\''))
+    expect(transitionCalls).toHaveLength(EXPECTED_TRANSITION_QUERY_CONCURRENCY)
+    expect(transitionCalls.every(([, , options]) => options?.maxResponseBytes === EXPECTED_MAX_TRANSITION_RESPONSE_BYTES)).toBe(true)
+    const behaviorCall = vi.mocked(queryPosthogHogql).mock.calls.find(([, query]) => query.includes('event IN (\'User visit\''))
+    const boundaryCall = vi.mocked(queryPosthogHogql).mock.calls.find(([, query]) => query.includes('SELECT min(timestamp)'))
+    expect(behaviorCall?.[2]).toBeUndefined()
+    expect(boundaryCall?.[2]).toBeUndefined()
+    expect(result.dataQuality.posthogFailureReason).toBeNull()
+    expect(loadPlansBillingHistories).toHaveBeenCalledWith(context, orgIds, '2026-08-01', '2026-08-02', new Map())
+  })
+
+  it('fails closed after a concurrent transition batch fails', async () => {
+    const orgIds = organizationIds(EXPECTED_MAX_PLANS_ORGANIZATIONS)
+    vi.mocked(queryPosthogHogql).mockImplementation(async (_context, query) => {
+      if (query.includes('event IN (\'User visit\', \'Checkout Started\')'))
+        return connected(orgIds.map(orgId => behavior({ org_id: orgId })))
+      if (query.includes(orgIds[1_000]))
+        return { configured: true, connected: false, failureReason: 'timeout', rows: [] }
+      return connected()
+    })
+
+    const result = await getAdminPlansAnalytics(context, start, end)
+
+    expect(result.dataQuality).toMatchObject({ posthogConnected: false, posthogFailureReason: 'timeout' })
+    expect(queryPosthogHogql).toHaveBeenCalledTimes(1 + EXPECTED_TRANSITION_QUERY_CONCURRENCY)
+    expect(loadPlansBillingHistories).not.toHaveBeenCalled()
+  })
+
+  it('fails closed when a transition response exceeds its share of the wave budget', async () => {
+    vi.mocked(queryPosthogHogql)
+      .mockResolvedValueOnce(connected([behavior()]))
+      .mockResolvedValueOnce({ configured: true, connected: true, failureReason: 'too_large', rows: [] })
+
+    const result = await getAdminPlansAnalytics(context, start, end)
+
+    expect(result.dataQuality).toMatchObject({ posthogConnected: true, posthogFailureReason: 'too_large' })
+    expect(queryPosthogHogql).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(queryPosthogHogql).mock.calls[1]?.[2]).toEqual({ maxResponseBytes: EXPECTED_MAX_TRANSITION_RESPONSE_BYTES })
+    expect(loadPlansBillingHistories).not.toHaveBeenCalled()
+  })
+
+  it('applies the global transition row ceiling across concurrent batches', async () => {
+    const orgIds = organizationIds(2_000)
+    let transitionBatch = 0
+    vi.mocked(queryPosthogHogql).mockImplementation(async (_context, query) => {
+      if (query.includes('event IN (\'User visit\', \'Checkout Started\')'))
+        return connected(orgIds.map(orgId => behavior({ org_id: orgId })))
+      if (query.includes('SELECT min(timestamp) AS exact_tracking_started_at'))
+        return connected()
+      transitionBatch += 1
+      return connected(rowsWithLength(transitionBatch === 1 ? 100_001 : 100_000))
+    })
+
+    const result = await getAdminPlansAnalytics(context, start, end)
+
+    expect(result.dataQuality.posthogFailureReason).toBe('too_large')
+    expect(queryPosthogHogql).toHaveBeenCalledTimes(3)
+    expect(loadPlansBillingHistories).not.toHaveBeenCalled()
   })
 
   it('prevents unrelated global transitions from consuming the row ceiling', async () => {

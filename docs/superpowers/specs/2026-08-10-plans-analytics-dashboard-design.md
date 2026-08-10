@@ -238,7 +238,7 @@ For an extreme custom range that times out, retain the selection and show: “Th
 - Keep PostHog credentials and HogQL on the backend.
 - Preserve the existing platform-admin read-only authorization gate.
 - Distinguish unconfigured, connection failure, timeout, and valid empty data in the response/error model.
-- Treat an analytics result that reaches the bounded PostHog row ceiling as `too_large`; never render silently truncated charts.
+- Treat an analytics result that reaches the bounded PostHog row or response-byte ceiling as `too_large`; never render silently truncated charts. Sequential behavior and boundary queries have an 8 MiB response ceiling; each of the four concurrent transition queries is limited to 2 MiB so one wave remains bounded to 8 MiB in aggregate.
 - Log query duration, selected range duration, logical event counts, and classification coverage without logging organization IDs or credentials.
 - Never silently fall back to current billing status.
 - Never substitute zeros when either source fails.
