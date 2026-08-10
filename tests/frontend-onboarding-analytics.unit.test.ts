@@ -15,7 +15,7 @@ vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
 }))
 
 import {
-  assertFrontendOnboardingAttemptLimit,
+  assertFrontendOnboardingAttemptTotal,
   buildFrontendOnboardingHogql,
   FRONTEND_ONBOARDING_ATTEMPT_LIMIT,
   getAdminFrontendOnboardingAnalytics,
@@ -57,14 +57,16 @@ describe('buildFrontendOnboardingHogql', () => {
     expect(query).toContain("trim(attempt_id) != ''")
     expect(query).toContain('HAVING intent_ms > 0')
     expect(query).toContain('ORDER BY intent_ms ASC, attempt_id ASC')
-    expect(query).toContain('LIMIT 50001')
+    expect(query).toContain('count() OVER () AS total_attempts')
+    expect(query).toContain('LIMIT 50000')
+    expect(query).not.toContain('LIMIT 50001')
   })
 })
 
-describe('assertFrontendOnboardingAttemptLimit', () => {
-  it('fails closed when the query returns more than its limit', () => {
-    expect(() => assertFrontendOnboardingAttemptLimit(2, 1)).toThrow('frontend onboarding analytics query exceeded attempt limit')
-    expect(() => assertFrontendOnboardingAttemptLimit(1, 1)).not.toThrow()
+describe('assertFrontendOnboardingAttemptTotal', () => {
+  it('fails closed when grouped total metadata exceeds its limit', () => {
+    expect(() => assertFrontendOnboardingAttemptTotal(2, 1)).toThrow('frontend onboarding analytics query exceeded attempt limit')
+    expect(() => assertFrontendOnboardingAttemptTotal(1, 1)).not.toThrow()
     expect(FRONTEND_ONBOARDING_ATTEMPT_LIMIT).toBe(50_000)
   })
 })
@@ -83,6 +85,7 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
         details_ms: intentMs + 1_000,
         organization_ms: intentMs + 2_000,
         setup_ms: intentMs + 3_000,
+        total_attempts: 1,
       }],
     })
 
@@ -130,14 +133,14 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
       connected: true,
       failureReason: null,
       rows: [
-        { attempt_id: '  ', intent_ms: startMs + 1_000, details_ms: startMs + 2_000 },
-        { attempt_id: 'no-intent', intent_ms: null, details_ms: startMs + 2_000 },
-        { attempt_id: 'not-finite', intent_ms: 'Infinity', details_ms: startMs + 2_000 },
-        { attempt_id: 'zero-intent', intent_ms: 0, details_ms: startMs + 2_000 },
-        { attempt_id: false, intent_ms: startMs + 1_000, details_ms: startMs + 2_000 },
-        { attempt_id: ['array'], intent_ms: startMs + 1_000, details_ms: startMs + 2_000 },
-        { attempt_id: 'boolean-step', intent_ms: startMs + 2_000, details_ms: true, organization_ms: [], setup_ms: {} },
-        { attempt_id: 'valid', intent_ms: String(startMs + 1_000), details_ms: undefined, organization_ms: 0, setup_ms: 'not-a-number' },
+        { attempt_id: '  ', intent_ms: startMs + 1_000, details_ms: startMs + 2_000, total_attempts: 8 },
+        { attempt_id: 'no-intent', intent_ms: null, details_ms: startMs + 2_000, total_attempts: 8 },
+        { attempt_id: 'not-finite', intent_ms: 'Infinity', details_ms: startMs + 2_000, total_attempts: 8 },
+        { attempt_id: 'zero-intent', intent_ms: 0, details_ms: startMs + 2_000, total_attempts: 8 },
+        { attempt_id: false, intent_ms: startMs + 1_000, details_ms: startMs + 2_000, total_attempts: 8 },
+        { attempt_id: ['array'], intent_ms: startMs + 1_000, details_ms: startMs + 2_000, total_attempts: 8 },
+        { attempt_id: 'boolean-step', intent_ms: startMs + 2_000, details_ms: true, organization_ms: [], setup_ms: {}, total_attempts: 8 },
+        { attempt_id: 'valid', intent_ms: String(startMs + 1_000), details_ms: undefined, organization_ms: 0, setup_ms: 'not-a-number', total_attempts: 8 },
       ],
     })
 
@@ -178,7 +181,7 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
       configured: true,
       connected: true,
       failureReason: null,
-      rows: { length: FRONTEND_ONBOARDING_ATTEMPT_LIMIT + 1 },
+      rows: [{ total_attempts: FRONTEND_ONBOARDING_ATTEMPT_LIMIT + 1 }],
     })
 
     await expect(getAdminFrontendOnboardingAnalytics(
@@ -189,7 +192,25 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
     expect(cloudlogErrMock).toHaveBeenCalledWith(expect.objectContaining({
       message: 'frontend_onboarding_analytics_attempt_limit_exceeded',
       attempt_limit: FRONTEND_ONBOARDING_ATTEMPT_LIMIT,
-      returned_rows: FRONTEND_ONBOARDING_ATTEMPT_LIMIT + 1,
+      total_attempts: FRONTEND_ONBOARDING_ATTEMPT_LIMIT + 1,
+    }))
+  })
+
+  it('logs and rejects malformed grouped total metadata before aggregation', async () => {
+    queryPosthogHogqlMock.mockResolvedValueOnce({
+      configured: true,
+      connected: true,
+      failureReason: null,
+      rows: [{ total_attempts: 'not-a-number' }],
+    })
+
+    await expect(getAdminFrontendOnboardingAnalytics(
+      createContext(),
+      '2026-08-01T00:00:00.000Z',
+      '2026-08-03T00:00:00.000Z',
+    )).rejects.toThrow('frontend onboarding analytics query returned invalid total metadata')
+    expect(cloudlogErrMock).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'frontend_onboarding_analytics_invalid_total_attempts',
     }))
   })
 

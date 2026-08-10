@@ -11,6 +11,8 @@ import { queryPosthogHogql } from './posthog_read.ts'
 const ISO_UTC_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?Z$/
 const POSTHOG_MIN_DATE_MS = Date.UTC(1970, 0, 1)
 const POSTHOG_MAX_DATE_MS = Date.UTC(2106, 0, 1)
+const INVALID_TOTAL_ATTEMPTS_ERROR = 'frontend onboarding analytics query returned invalid total metadata'
+const ATTEMPT_LIMIT_EXCEEDED_ERROR = 'frontend onboarding analytics query exceeded attempt limit'
 
 export const FRONTEND_ONBOARDING_ATTEMPT_LIMIT = 50_000
 
@@ -62,9 +64,17 @@ function attemptId(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
-export function assertFrontendOnboardingAttemptLimit(rowCount: number, limit = FRONTEND_ONBOARDING_ATTEMPT_LIMIT): void {
-  if (rowCount > limit)
-    throw new Error('frontend onboarding analytics query exceeded attempt limit')
+export function assertFrontendOnboardingAttemptTotal(totalAttempts: unknown, limit = FRONTEND_ONBOARDING_ATTEMPT_LIMIT): number {
+  if (typeof totalAttempts !== 'number'
+    || !Number.isFinite(totalAttempts)
+    || !Number.isInteger(totalAttempts)
+    || totalAttempts < 0) {
+    throw new Error(INVALID_TOTAL_ATTEMPTS_ERROR)
+  }
+  if (totalAttempts > limit)
+    throw new Error(ATTEMPT_LIMIT_EXCEEDED_ERROR)
+
+  return totalAttempts
 }
 
 function mapAttempts(rows: Record<string, unknown>[]): FrontendOnboardingAttempt[] {
@@ -91,6 +101,7 @@ export function buildFrontendOnboardingHogql(startDate: string, followupEndDate:
       JSONExtractString(toString(properties), 'step') AS step
     SELECT
       attempt_id,
+      count() OVER () AS total_attempts,
       toUnixTimestamp(minIf(timestamp, step = 'intent')) * 1000 AS intent_ms,
       toUnixTimestamp(minIf(timestamp, step = 'details')) * 1000 AS details_ms,
       toUnixTimestamp(minIf(timestamp, step = 'organization')) * 1000 AS organization_ms,
@@ -105,7 +116,7 @@ export function buildFrontendOnboardingHogql(startDate: string, followupEndDate:
     GROUP BY attempt_id
     HAVING intent_ms > 0
     ORDER BY intent_ms ASC, attempt_id ASC
-    LIMIT ${FRONTEND_ONBOARDING_ATTEMPT_LIMIT + 1}`
+    LIMIT ${FRONTEND_ONBOARDING_ATTEMPT_LIMIT}`
 }
 
 export async function getAdminFrontendOnboardingAnalytics(c: Context, startDate: string, endDate: string) {
@@ -126,14 +137,24 @@ export async function getAdminFrontendOnboardingAnalytics(c: Context, startDate:
     c,
     buildFrontendOnboardingHogql(new Date(previousStartMs).toISOString(), new Date(followupEndMs).toISOString()),
   )
-  if (posthog.rows.length > FRONTEND_ONBOARDING_ATTEMPT_LIMIT) {
-    cloudlogErr({
-      requestId: c.get('requestId'),
-      message: 'frontend_onboarding_analytics_attempt_limit_exceeded',
-      attempt_limit: FRONTEND_ONBOARDING_ATTEMPT_LIMIT,
-      returned_rows: posthog.rows.length,
-    })
-    assertFrontendOnboardingAttemptLimit(posthog.rows.length)
+  if (posthog.rows.length > 0) {
+    const totalAttempts = posthog.rows[0].total_attempts
+    try {
+      assertFrontendOnboardingAttemptTotal(totalAttempts)
+    }
+    catch (error) {
+      const message = error instanceof Error && error.message === ATTEMPT_LIMIT_EXCEEDED_ERROR
+        ? 'frontend_onboarding_analytics_attempt_limit_exceeded'
+        : 'frontend_onboarding_analytics_invalid_total_attempts'
+      cloudlogErr({
+        requestId: c.get('requestId'),
+        message,
+        attempt_limit: FRONTEND_ONBOARDING_ATTEMPT_LIMIT,
+        total_attempts: totalAttempts,
+        returned_rows: posthog.rows.length,
+      })
+      throw error
+    }
   }
   const analytics = buildFrontendOnboardingAnalytics(mapAttempts(posthog.rows), startMs, endMs)
 
