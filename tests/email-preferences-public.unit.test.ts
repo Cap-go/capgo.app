@@ -10,21 +10,35 @@ const {
   usersUpdateEqMock,
   usersUpdateMaybeSingleMock,
   verifyCaptchaTokenMock,
-} = vi.hoisted(() => ({
-  getEnvMock: vi.fn((_c: unknown, key: string) => {
-    if (key === 'CAPTCHA_SECRET_KEY')
+} = vi.hoisted(() => {
+  type UsersRow = {
+    id: string
+    email: string
+    enable_notifications: boolean
+    opt_for_newsletters: boolean
+    email_preferences: Record<string, boolean>
+  }
+  type UsersQueryResult = {
+    data: UsersRow | null
+    error: { message: string } | null
+  }
+
+  return {
+    getEnvMock: vi.fn((_c: unknown, key: string) => {
+      if (key === 'CAPTCHA_SECRET_KEY')
+        return ''
       return ''
-    return ''
-  }),
-  matchJsonMock: vi.fn(async () => null),
-  putJsonMock: vi.fn(async () => undefined),
-  syncUserPreferenceTagsMock: vi.fn(async () => undefined),
-  unsubscribeBentoMock: vi.fn(async () => true),
-  usersMaybeSingleMock: vi.fn(async () => ({ data: null, error: null })),
-  usersUpdateEqMock: vi.fn(),
-  usersUpdateMaybeSingleMock: vi.fn(async () => ({ data: null, error: null })),
-  verifyCaptchaTokenMock: vi.fn(async () => undefined),
-}))
+    }),
+    matchJsonMock: vi.fn(async () => null),
+    putJsonMock: vi.fn(async () => undefined),
+    syncUserPreferenceTagsMock: vi.fn(async () => undefined),
+    unsubscribeBentoMock: vi.fn(async () => true),
+    usersMaybeSingleMock: vi.fn(async (): Promise<UsersQueryResult> => ({ data: null, error: null })),
+    usersUpdateEqMock: vi.fn(),
+    usersUpdateMaybeSingleMock: vi.fn(async (): Promise<UsersQueryResult> => ({ data: null, error: null })),
+    verifyCaptchaTokenMock: vi.fn(async () => undefined),
+  }
+})
 
 vi.mock('../supabase/functions/_backend/utils/bento.ts', () => ({
   unsubscribeBento: unsubscribeBentoMock,
