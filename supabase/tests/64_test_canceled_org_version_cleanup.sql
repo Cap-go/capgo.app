@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(39);
+SELECT plan(43);
 
 -- pgmq schema is not granted to service_role; use postgres-owned helpers.
 CREATE OR REPLACE FUNCTION pg_temp.delete_canceled_org_retention_alerts(
@@ -143,6 +143,7 @@ SELECT ok(
 -- long = 92d (past 90, before 95) for version soft-delete without app delete
 -- warn85 = 87d for bundle-deletion warning queue
 -- ultra = 100d (past 95) for app delete + old_apps archive
+-- credits = 100d canceled + has_usage_credits (must be fully exempt)
 CREATE TEMP TABLE canceled_cleanup_ctx AS
 SELECT
   'a0c1e2f3-1111-4aaa-8bbb-000000000001'::uuid AS long_canceled_org,
@@ -152,6 +153,7 @@ SELECT
   'a0c1e2f3-1111-4aaa-8bbb-000000000005'::uuid AS early_cancel_org,
   'a0c1e2f3-1111-4aaa-8bbb-000000000006'::uuid AS warn85_org,
   'a0c1e2f3-1111-4aaa-8bbb-000000000007'::uuid AS ultra_canceled_org,
+  'a0c1e2f3-1111-4aaa-8bbb-000000000008'::uuid AS credits_canceled_org,
   'cus_canceled_cleanup_long'::varchar AS long_customer,
   'cus_canceled_cleanup_recent'::varchar AS recent_customer,
   'cus_canceled_cleanup_trial'::varchar AS trial_customer,
@@ -159,6 +161,7 @@ SELECT
   'cus_canceled_cleanup_early'::varchar AS early_customer,
   'cus_canceled_cleanup_warn85'::varchar AS warn85_customer,
   'cus_canceled_cleanup_ultra'::varchar AS ultra_customer,
+  'cus_canceled_cleanup_credits'::varchar AS credits_customer,
   'com.test.canceled.cleanup.long'::varchar AS long_app,
   'com.test.canceled.cleanup.recent'::varchar AS recent_app,
   'com.test.canceled.cleanup.trial'::varchar AS trial_app,
@@ -166,6 +169,7 @@ SELECT
   'com.test.canceled.cleanup.early'::varchar AS early_app,
   'com.test.canceled.cleanup.warn85'::varchar AS warn85_app,
   'com.test.canceled.cleanup.ultra'::varchar AS ultra_app,
+  'com.test.canceled.cleanup.credits'::varchar AS credits_app,
   '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid AS user_id,
   'prod_LQIregjtNduh4q'::varchar AS product_id;
 
@@ -257,28 +261,43 @@ SELECT
   now() - interval '200 days',
   now() - interval '100 days',
   now() - interval '100 days'
+FROM canceled_cleanup_ctx
+UNION ALL
+-- 100 days canceled but actively funded by usage credits.
+SELECT
+  credits_customer,
+  'canceled'::public.stripe_status,
+  product_id,
+  now() - interval '200 days',
+  false,
+  now() - interval '200 days',
+  now() - interval '100 days',
+  now() - interval '100 days'
 FROM canceled_cleanup_ctx;
 
-INSERT INTO public.orgs (id, created_by, name, management_email, customer_id)
-SELECT long_canceled_org, user_id, 'Long Canceled Cleanup Org', 'canceled-long@test.local', long_customer
+INSERT INTO public.orgs (id, created_by, name, management_email, customer_id, has_usage_credits)
+SELECT long_canceled_org, user_id, 'Long Canceled Cleanup Org', 'canceled-long@test.local', long_customer, false
 FROM canceled_cleanup_ctx
 UNION ALL
-SELECT recent_canceled_org, user_id, 'Recent Canceled Cleanup Org', 'canceled-recent@test.local', recent_customer
+SELECT recent_canceled_org, user_id, 'Recent Canceled Cleanup Org', 'canceled-recent@test.local', recent_customer, false
 FROM canceled_cleanup_ctx
 UNION ALL
-SELECT trial_org, user_id, 'Expired Trial Cleanup Org', 'canceled-trial@test.local', trial_customer
+SELECT trial_org, user_id, 'Expired Trial Cleanup Org', 'canceled-trial@test.local', trial_customer, false
 FROM canceled_cleanup_ctx
 UNION ALL
-SELECT paying_org, user_id, 'Paying Cleanup Org', 'canceled-paying@test.local', paying_customer
+SELECT paying_org, user_id, 'Paying Cleanup Org', 'canceled-paying@test.local', paying_customer, false
 FROM canceled_cleanup_ctx
 UNION ALL
-SELECT early_cancel_org, user_id, 'Early Cancel Cleanup Org', 'canceled-early@test.local', early_customer
+SELECT early_cancel_org, user_id, 'Early Cancel Cleanup Org', 'canceled-early@test.local', early_customer, false
 FROM canceled_cleanup_ctx
 UNION ALL
-SELECT warn85_org, user_id, 'Warn85 Canceled Cleanup Org', 'canceled-warn85@test.local', warn85_customer
+SELECT warn85_org, user_id, 'Warn85 Canceled Cleanup Org', 'canceled-warn85@test.local', warn85_customer, false
 FROM canceled_cleanup_ctx
 UNION ALL
-SELECT ultra_canceled_org, user_id, 'Ultra Canceled Cleanup Org', 'canceled-ultra@test.local', ultra_customer
+SELECT ultra_canceled_org, user_id, 'Ultra Canceled Cleanup Org', 'canceled-ultra@test.local', ultra_customer, false
+FROM canceled_cleanup_ctx
+UNION ALL
+SELECT credits_canceled_org, user_id, 'Credits Canceled Cleanup Org', 'canceled-credits@test.local', credits_customer, true
 FROM canceled_cleanup_ctx;
 
 INSERT INTO public.apps (app_id, icon_url, owner_org, name, user_id)
@@ -294,7 +313,9 @@ SELECT early_app, '', early_cancel_org, 'Early Cancel App', user_id FROM cancele
 UNION ALL
 SELECT warn85_app, '', warn85_org, 'Warn85 App', user_id FROM canceled_cleanup_ctx
 UNION ALL
-SELECT ultra_app, '', ultra_canceled_org, 'Ultra Canceled App', user_id FROM canceled_cleanup_ctx;
+SELECT ultra_app, '', ultra_canceled_org, 'Ultra Canceled App', user_id FROM canceled_cleanup_ctx
+UNION ALL
+SELECT credits_app, '', credits_canceled_org, 'Credits Canceled App', user_id FROM canceled_cleanup_ctx;
 
 INSERT INTO public.app_versions (id, app_id, name, storage_provider, owner_org, user_id, deleted)
 SELECT 970101, long_app, '1.0.0', 'r2', long_canceled_org, user_id, false FROM canceled_cleanup_ctx
@@ -313,7 +334,9 @@ SELECT 970501, early_app, '1.0.0', 'r2', early_cancel_org, user_id, false FROM c
 UNION ALL
 SELECT 970601, warn85_app, '1.0.0', 'r2', warn85_org, user_id, false FROM canceled_cleanup_ctx
 UNION ALL
-SELECT 970701, ultra_app, '1.0.0', 'r2', ultra_canceled_org, user_id, false FROM canceled_cleanup_ctx;
+SELECT 970701, ultra_app, '1.0.0', 'r2', ultra_canceled_org, user_id, false FROM canceled_cleanup_ctx
+UNION ALL
+SELECT 970801, credits_app, '1.0.0', 'r2', credits_canceled_org, user_id, false FROM canceled_cleanup_ctx;
 
 SELECT set_config('capgo.seed_channel_targets', 'true', true);
 
@@ -470,7 +493,8 @@ SELECT pg_temp.delete_canceled_org_retention_alerts(ARRAY[
   (SELECT long_canceled_org::text FROM canceled_cleanup_ctx),
   (SELECT warn85_org::text FROM canceled_cleanup_ctx),
   (SELECT ultra_canceled_org::text FROM canceled_cleanup_ctx),
-  (SELECT recent_canceled_org::text FROM canceled_cleanup_ctx)
+  (SELECT recent_canceled_org::text FROM canceled_cleanup_ctx),
+  (SELECT credits_canceled_org::text FROM canceled_cleanup_ctx)
 ]);
 
 SELECT public.cleanup_long_canceled_org_data();
@@ -563,6 +587,30 @@ SELECT ok(
   '100-day org app is deleted after 95 days'
 );
 
+SELECT is(
+  (SELECT deleted FROM public.app_versions WHERE id = 970801),
+  false,
+  'credit-funded canceled org versions are never soft-deleted'
+);
+
+SELECT ok(
+  EXISTS (
+    SELECT 1
+    FROM public.apps
+    WHERE app_id = (SELECT credits_app FROM canceled_cleanup_ctx)
+  ),
+  'credit-funded canceled org apps are never deleted by retention'
+);
+
+SELECT ok(
+  NOT EXISTS (
+    SELECT 1
+    FROM public.canceled_org_ids_past_grace(0) AS oid(id)
+    WHERE oid.id = (SELECT credits_canceled_org FROM canceled_cleanup_ctx)
+  ),
+  'credit-funded canceled orgs are excluded from canceled_org_ids_past_grace'
+);
+
 SELECT ok(
   EXISTS (
     SELECT 1
@@ -580,7 +628,8 @@ SELECT is(
     ARRAY[
       (SELECT warn85_org FROM canceled_cleanup_ctx),
       (SELECT long_canceled_org FROM canceled_cleanup_ctx),
-      (SELECT ultra_canceled_org FROM canceled_cleanup_ctx)
+      (SELECT ultra_canceled_org FROM canceled_cleanup_ctx),
+      (SELECT credits_canceled_org FROM canceled_cleanup_ctx)
     ]
   ),
   1,
@@ -592,7 +641,8 @@ SELECT is(
     'app_deletion_warning',
     ARRAY[
       (SELECT long_canceled_org FROM canceled_cleanup_ctx),
-      (SELECT ultra_canceled_org FROM canceled_cleanup_ctx)
+      (SELECT ultra_canceled_org FROM canceled_cleanup_ctx),
+      (SELECT credits_canceled_org FROM canceled_cleanup_ctx)
     ]
   ),
   1,
@@ -606,6 +656,15 @@ SELECT is(
   ),
   0,
   'recently canceled orgs do not get retention deletion warnings'
+);
+
+SELECT is(
+  pg_temp.count_canceled_org_retention_alerts(
+    NULL,
+    ARRAY[(SELECT credits_canceled_org FROM canceled_cleanup_ctx)]
+  ),
+  0,
+  'credit-funded canceled orgs do not get retention deletion warnings'
 );
 
 SELECT public.cleanup_long_canceled_org_data();
