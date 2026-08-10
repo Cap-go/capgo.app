@@ -1,0 +1,16 @@
+<!-- Workflow: Aha moment (13471) -->
+<!-- Step: stuck after first_app (no first_bundle) -->
+<!-- Position: email #2 / Split A -->
+<!-- Delay after existing 64375: 2 days -->
+<!-- Stop if tags: first_bundle OR first_app_update OR onboarded -->
+<!-- Subject: One command left: upload your first Capgo bundle -->
+<!-- Inbox: npx @capgo/cli@latest bundle upload -->
+
+<p dir="ltr">Hey {{ visitor.pretty_name.first }},</p>
+<p dir="ltr">Your app exists in Capgo. The missing piece is the first bundle upload.</p>
+<p dir="ltr">From your project folder:</p>
+<pre class="bento-code-block" data-theme="dark"><code>npx @capgo/cli@latest bundle upload</code></pre>
+<p dir="ltr">That pushes your web build to Capgo so devices can fetch live updates.</p>
+<p dir="ltr">Docs: <a target="_blank" rel="noopener noreferrer nofollow" href="https://capgo.app/docs/getting-started/deploy/">Deploy your first update</a><br>
+Bundles UI: <a target="_blank" rel="noopener noreferrer nofollow" href="https://capgo.app/docs/webapp/bundles/">Manage bundles</a></p>
+<p dir="ltr">If the CLI errors, paste the output in a reply and I’ll decode it.</p>

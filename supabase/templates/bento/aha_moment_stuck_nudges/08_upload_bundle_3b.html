@@ -1,0 +1,19 @@
+<!-- Workflow: Aha moment (13471) -->
+<!-- Step: stuck after first_app (no first_bundle) -->
+<!-- Position: email #3 / Split B -->
+<!-- Delay after email #2: 2 days -->
+<!-- Stop if tags: first_bundle OR first_app_update OR onboarded -->
+<!-- Subject: What’s blocking your first Capgo upload? -->
+<!-- Inbox: Reply with one word: apikey / build / channel / time -->
+
+<p dir="ltr">Hey {{ visitor.pretty_name.first }},</p>
+<p dir="ltr">Still no first bundle. Reply with one word and I’ll send the shortest fix:</p>
+<ul>
+  <li dir="ltr"><p dir="ltr"><strong>apikey</strong> — auth / permission errors</p></li>
+  <li dir="ltr"><p dir="ltr"><strong>build</strong> — can’t find dist/www output</p></li>
+  <li dir="ltr"><p dir="ltr"><strong>channel</strong> — unsure where to deploy</p></li>
+  <li dir="ltr"><p dir="ltr"><strong>time</strong> — not ready this week</p></li>
+</ul>
+<p dir="ltr">Command when you’re ready:</p>
+<pre class="bento-code-block" data-theme="dark"><code>npx @capgo/cli@latest bundle upload</code></pre>
+<p dir="ltr">Docs: <a target="_blank" rel="noopener noreferrer nofollow" href="https://capgo.app/docs/getting-started/deploy/">Deploy your first update</a></p>
