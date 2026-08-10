@@ -295,10 +295,6 @@ function billingEvidenceAt(history: BillingHistoryEvidence, timestampMs: number)
   }
 }
 
-export function paidStateAt(history: BillingHistoryEvidence, timestampMs: number): HistoricalPaidState {
-  return billingEvidenceAt(history, timestampMs).paidState
-}
-
 export function classifyPlansBillingAt(history: BillingHistoryEvidence, timestampMs: number) {
   const evidence = billingEvidenceAt(history, timestampMs)
 

@@ -123,6 +123,7 @@ FROM events
 WHERE event IN ('User visit', 'Checkout Started')
   AND (
     (event = 'User visit'
+    AND properties.page = 'plans'
     AND timestamp >= parseDateTimeBestEffort(${sqlString(queryStart)})
     AND timestamp < parseDateTimeBestEffort(${sqlString(range.endIso)}))
     OR

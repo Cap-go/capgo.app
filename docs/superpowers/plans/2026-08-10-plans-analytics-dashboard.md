@@ -727,7 +727,7 @@ export interface OrganizationBillingHistory {
 }
 ```
 
-Implement `endingMrr()`, `hasCreditsAt()`, `paidStateAt()`, and `classifyPlansBillingAt()`. Never read the mutable current Stripe status as historical truth.
+Implement `endingMrr()`, `hasCreditsAt()`, an internal `billingEvidenceAt()`, and the exported `classifyPlansBillingAt()`. Never read the mutable current Stripe status as historical truth; do not expose a redundant paid-state wrapper.
 
 - [ ] **Step 4: Implement the exact precedence**
 
@@ -973,6 +973,7 @@ FROM events
 WHERE event IN ('User visit', 'Checkout Started')
   AND (
     (event = 'User visit'
+      AND properties.page = 'plans'
       AND timestamp >= parseDateTimeBestEffort('2026-07-31T23:59:30.000Z')
       AND timestamp < parseDateTimeBestEffort('2026-08-02T00:00:00.000Z'))
     OR

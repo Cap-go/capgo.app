@@ -106,7 +106,7 @@ describe('plans analytics query construction', () => {
     expect(behaviorQuery).toContain('event IN (\'User visit\', \'Checkout Started\')')
     expect(behaviorQuery).toContain('2026-07-31T23:59:30.000Z')
     expect(behaviorQuery).toContain('2026-08-03T00:00:00.000Z')
-    expect(behaviorQuery).toContain('event = \'User visit\'\n    AND timestamp >= parseDateTimeBestEffort(\'2026-07-31T23:59:30.000Z\')\n    AND timestamp < parseDateTimeBestEffort(\'2026-08-02T00:00:00.000Z\')')
+    expect(behaviorQuery).toContain('event = \'User visit\'\n    AND properties.page = \'plans\'\n    AND timestamp >= parseDateTimeBestEffort(\'2026-07-31T23:59:30.000Z\')\n    AND timestamp < parseDateTimeBestEffort(\'2026-08-02T00:00:00.000Z\')')
     expect(behaviorQuery).toContain('event = \'Checkout Started\'\n    AND timestamp >= parseDateTimeBestEffort(\'2026-08-01T00:00:00.000Z\')\n    AND timestamp < parseDateTimeBestEffort(\'2026-08-03T00:00:00.000Z\')')
     expect(behaviorQuery).toContain('LIMIT 200001')
     expect(behaviorQuery).not.toMatch(/SELECT\s+properties\b/i)
@@ -129,6 +129,19 @@ describe('plans analytics query construction', () => {
     expect(exactQuery).toContain(TRACKING_HISTORY_START)
     expect(exactQuery).toContain('timestamp < now()')
     expect(exactQuery).toContain('LIMIT 200001')
+  })
+
+  it.concurrent('filters non-Plans visit noise before it can consume the PostHog row ceiling', () => {
+    const behaviorQuery = buildPlansBehaviorQuery(start, end)
+    const visitBranchStart = behaviorQuery.indexOf('(event = \'User visit\'')
+    const checkoutBranchStart = behaviorQuery.indexOf('(event = \'Checkout Started\'')
+    const limit = behaviorQuery.indexOf(`LIMIT ${MAX_POSTHOG_ROWS + 1}`)
+    const visitBranch = behaviorQuery.slice(visitBranchStart, checkoutBranchStart)
+
+    expect(visitBranchStart).toBeGreaterThan(-1)
+    expect(checkoutBranchStart).toBeGreaterThan(visitBranchStart)
+    expect(limit).toBeGreaterThan(checkoutBranchStart)
+    expect(visitBranch).toContain("properties.page = 'plans'")
   })
 
   it.concurrent('escapes date scalar literals and validates dates before constructing queries', () => {
