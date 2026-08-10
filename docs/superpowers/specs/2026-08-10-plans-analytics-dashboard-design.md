@@ -197,6 +197,7 @@ interface PlansAnalyticsResponse {
     unknownBillingOrganizations: number
     posthogConfigured: boolean
     posthogConnected: boolean
+    posthogFailureReason: 'unconfigured' | 'timeout' | 'unavailable' | 'too_large' | null
     legacyDeduplicationSeconds: number
   }
 }
@@ -225,6 +226,7 @@ For an extreme custom range that times out, retain the selection and show: “Th
 - Keep PostHog credentials and HogQL on the backend.
 - Preserve the existing platform-admin read-only authorization gate.
 - Distinguish unconfigured, connection failure, timeout, and valid empty data in the response/error model.
+- Treat an analytics result that reaches the bounded PostHog row ceiling as `too_large`; never render silently truncated charts.
 - Log query duration, selected range duration, logical event counts, and classification coverage without logging organization IDs or credentials.
 - Never silently fall back to current billing status.
 - Never substitute zeros when either source fails.
