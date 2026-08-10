@@ -23,17 +23,21 @@ function makeDir(name) {
 
 // Regression: running `capgo init` (and doctor) from a directory without a
 // package.json used to escape as a raw Node ENOENT stack trace. readPackageJson
-// must now guard the default path and surface an actionable message.
-await test('getBundleVersion throws a helpful message when package.json is missing', async () => {
+// must now guard the default path and throw a CliUserError with a constant,
+// actionable message, so error tracking skips it and does not open one issue
+// per absolute path.
+await test('getBundleVersion throws a CliUserError when package.json is missing', async () => {
   const dir = makeDir('missing-pkg')
   try {
     assert.throws(
       () => getBundleVersion(dir),
       (error) => {
         assert.ok(!(error instanceof Error && 'code' in error && error.code === 'ENOENT'), 'should not surface a raw ENOENT')
-        assert.match(error.message, /No package\.json found at/)
-        assert.match(error.message, /project root/)
-        assert.match(error.message, /--package-json/)
+        assert.equal(error.name, 'CliUserError')
+        // Constant, actionable message (no interpolated path) so error tracking
+        // fingerprints one issue; the path travels in context instead.
+        assert.equal(error.message, 'package.json not found. Run this command from your project root, or pass --package-json <path>.')
+        assert.match(error.context.packageJsonPath, /package\.json$/)
         return true
       },
     )
@@ -43,14 +47,16 @@ await test('getBundleVersion throws a helpful message when package.json is missi
   }
 })
 
-await test('getPackageScripts throws the explicit-path message when a supplied package.json is missing', async () => {
+await test('getPackageScripts throws a CliUserError with the path in context for an explicit package.json', async () => {
   const dir = makeDir('missing-explicit-pkg')
   try {
     const missing = join(dir, 'package.json')
     assert.throws(
       () => getPackageScripts(undefined, missing),
       (error) => {
-        assert.match(error.message, /Package\.json at .*package\.json does not exist/)
+        assert.equal(error.name, 'CliUserError')
+        assert.equal(error.message, 'package.json not found. Run this command from your project root, or pass --package-json <path>.')
+        assert.equal(error.context.packageJsonPath, missing)
         return true
       },
     )

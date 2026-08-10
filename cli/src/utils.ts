@@ -305,7 +305,10 @@ function readPackageJson(f: string = findRoot(cwd()), file: string | undefined =
       ? `Package.json at ${packageJsonPath} does not exist`
       : `No package.json found at ${packageJsonPath}. Run this command from your project root (the folder that contains package.json), or pass --package-json <path> to point at it (for example in a monorepo).`
     log.error(message)
-    throw new Error(message)
+    // Expected user error, not a crash: throw a CliUserError so error tracking
+    // skips it. Keep the thrown message constant (the path goes in context) so
+    // it fingerprints one issue instead of one per absolute path.
+    throw new CliUserError('package.json not found. Run this command from your project root, or pass --package-json <path>.', { packageJsonPath })
   }
   const packageJson = readFileSync(packageJsonPath)
   return JSON.parse(packageJson as any)
@@ -498,7 +501,9 @@ export async function getAllPackagesDependencies(f: string = findRoot(cwd()), fi
       if (!existsSync(file)) {
         const message = `Package.json at ${file} does not exist`
         log.error(message)
-        throw new Error(message)
+        // Expected user error, not a crash: constant thrown message, path in
+        // context, so error tracking skips it and does not fingerprint per path.
+        throw new CliUserError('package.json not found. Run this command from your project root, or pass --package-json <path>.', { packageJsonPath: file })
       }
     }
   }
@@ -573,7 +578,9 @@ export async function getDeclaredPackageVersionMap(f: string = findRoot(cwd()), 
       if (!existsSync(file)) {
         const message = `Package.json at ${file} does not exist`
         log.error(message)
-        throw new Error(message)
+        // Expected user error, not a crash: constant thrown message, path in
+        // context, so error tracking skips it and does not fingerprint per path.
+        throw new CliUserError('package.json not found. Run this command from your project root, or pass --package-json <path>.', { packageJsonPath: file })
       }
     }
   }
