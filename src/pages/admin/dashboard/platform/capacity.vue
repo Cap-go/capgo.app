@@ -48,18 +48,27 @@ const router = useRouter()
 const isLoading = ref(true)
 const isLoadingCapacity = ref(false)
 const capacity = ref<BuilderCapacity | null>(null)
+let loadCapacitySequence = 0
+let capacityPageActive = false
 
 async function loadCapacity() {
+  const sequence = ++loadCapacitySequence
   isLoadingCapacity.value = true
   try {
-    capacity.value = (await adminStore.fetchStats('builder_capacity', true)) || null
+    const next = (await adminStore.fetchStats('builder_capacity', true)) || null
+    if (sequence !== loadCapacitySequence)
+      return
+    capacity.value = next
   }
   catch (error) {
+    if (sequence !== loadCapacitySequence)
+      return
     console.error('[Admin Platform Capacity] Error loading builder capacity:', error)
     capacity.value = null
   }
   finally {
-    isLoadingCapacity.value = false
+    if (sequence === loadCapacitySequence)
+      isLoadingCapacity.value = false
   }
 }
 
@@ -108,7 +117,8 @@ function stopCapacityPolling() {
 
 async function loadAll() {
   await loadCapacity()
-  startCapacityPolling()
+  if (capacityPageActive)
+    startCapacityPolling()
 }
 
 function sendNonAdminBack() {
@@ -128,12 +138,14 @@ watch(
 onMounted(async () => {
   if (!mainStore.isAdmin)
     return sendNonAdminBack()
+  capacityPageActive = true
   isLoading.value = true
   await loadAll()
   isLoading.value = false
 })
 
 onUnmounted(() => {
+  capacityPageActive = false
   stopCapacityPolling()
 })
 

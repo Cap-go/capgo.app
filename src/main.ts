@@ -240,7 +240,6 @@ const router = createRouter({
     { path: '/app/:app/observe', redirect: redirectAppPath('/observe/native') },
     // Legacy admin dashboard URLs after intention-hub reorg
     { path: '/admin/dashboard', redirect: '/admin/dashboard/pulse' },
-    { path: '/admin/dashboard/', redirect: '/admin/dashboard/pulse' },
     { path: '/admin/dashboard/users', redirect: '/admin/dashboard/onboarding' },
     { path: '/admin/dashboard/updates', redirect: '/admin/dashboard/product/updates' },
     { path: '/admin/dashboard/plugins', redirect: '/admin/dashboard/product/plugins' },

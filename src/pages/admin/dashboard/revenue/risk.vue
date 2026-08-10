@@ -34,19 +34,26 @@ const globalStatsTrendData = ref<Array<{
 }>>([])
 
 const isLoadingGlobalStatsTrend = ref(false)
+let loadGlobalStatsTrendSequence = 0
 
 async function loadGlobalStatsTrend() {
+  const sequence = ++loadGlobalStatsTrendSequence
   isLoadingGlobalStatsTrend.value = true
   try {
     const data = await adminStore.fetchStats('global_stats_trend')
+    if (sequence !== loadGlobalStatsTrendSequence)
+      return
     globalStatsTrendData.value = data || []
   }
   catch (error) {
+    if (sequence !== loadGlobalStatsTrendSequence)
+      return
     console.error('[Admin Dashboard Revenue Risk] Error loading global stats trend:', error)
     globalStatsTrendData.value = []
   }
   finally {
-    isLoadingGlobalStatsTrend.value = false
+    if (sequence === loadGlobalStatsTrendSequence)
+      isLoadingGlobalStatsTrend.value = false
   }
 }
 
