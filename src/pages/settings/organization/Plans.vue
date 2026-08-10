@@ -23,6 +23,7 @@ import { sendEvent } from '~/services/tracking'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
+import { isCreditsOnlyOrg } from '~/utils/organizationBilling'
 
 const { t } = useI18n()
 const mainStore = useMainStore()
@@ -137,12 +138,7 @@ const isTrial = computed(() => currentOrganization?.value ? (!currentOrganizatio
 
 // Credits-only org: has credits but no active subscription and no trial remaining.
 // These orgs use pay-as-you-go credits as their primary payment method.
-const isCreditsOnly = computed(() => {
-  const org = currentOrganization?.value
-  if (!org)
-    return false
-  return !org.paying && (org.trial_left ?? 0) <= 0 && (org.credit_available ?? 0) > 0
-})
+const isCreditsOnly = computed(() => isCreditsOnlyOrg(currentOrganization?.value))
 
 async function prefetchStripeCheckoutUrl(plan: Database['public']['Tables']['plans']['Row'], isYear: boolean) {
   if (!plan.stripe_id)
@@ -496,6 +492,12 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
             <h1 class="text-3xl font-bold text-gray-900 dark:text-white">
               {{ t('plan-pricing-plans') }}
             </h1>
+            <span
+              v-if="isCreditsOnly"
+              class="inline-flex items-center px-2.5 py-1 text-xs font-semibold text-blue-700 rounded-full bg-blue-50 dark:text-blue-300 dark:bg-blue-900/30"
+            >
+              {{ t('credits-only-badge') }}
+            </span>
             <!-- Custom Plan Trigger -->
             <button
               v-if="!isMobile"
@@ -506,7 +508,7 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
             </button>
           </div>
           <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-            {{ t('plan-desc') }}
+            {{ isCreditsOnly ? t('credits-only-plan-page-desc') : t('plan-desc') }}
           </p>
           <p v-if="!isMobile" class="mt-2 text-sm">
             <a class="font-medium text-blue-600 hover:underline dark:text-blue-300" href="https://capgo.app/pricing/#compare-plans">
