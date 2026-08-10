@@ -70,10 +70,9 @@ function areaFromPath(path) {
     .replace(/\.(vue|ts|js|tsx|jsx|mjs|cjs)$/, '')
   const parts = normalized.split('/')
   // Drop the file/component leaf so renames inside the same folder stay stable.
-  if (parts.length > 1)
-    parts.pop()
-  return parts
-    .join('/')
+  // Root-level files under src/ fall back to "app".
+  const area = parts.length > 1 ? parts.slice(0, -1).join('/') : ''
+  return area
     .replace(/\[([^\]]+)\]/g, '($1)')
     || 'app'
 }
