@@ -47,4 +47,13 @@ describe('admin stacked bar chart', () => {
     expect(source).toContain('class="d-loading d-loading-spinner d-loading-lg text-primary"')
     expect(source).not.toContain('class="loading loading-spinner loading-lg text-primary"')
   })
+
+  it.concurrent('offers opt-in contrasting segment boundaries without changing every chart', async () => {
+    const source = await readFile(new URL('../src/components/admin/AdminStackedBarChart.vue', import.meta.url), 'utf8')
+
+    expect(source).toContain('accessibleBorders')
+    expect(source).toContain('default: false')
+    expect(source).toContain('isDark.value ? \'#f8fafc\' : \'#0f172a\'')
+    expect(source).toContain('borderWidth: 1')
+  })
 })

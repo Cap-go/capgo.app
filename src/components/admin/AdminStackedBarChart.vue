@@ -30,6 +30,10 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  accessibleBorders: {
+    type: Boolean,
+    default: false,
+  },
 })
 
 const isDark = useDark()
@@ -54,7 +58,18 @@ const chartData = computed(() => {
     color: item.color,
   }))
 
-  return buildAdminStackedBarChartData(labels, datasets)
+  const data = buildAdminStackedBarChartData(labels, datasets)
+  if (!props.accessibleBorders)
+    return data
+
+  return {
+    ...data,
+    datasets: data.datasets.map(dataset => ({
+      ...dataset,
+      borderColor: isDark.value ? '#f8fafc' : '#0f172a',
+      borderWidth: 1,
+    })),
+  }
 })
 
 const chartOptions = computed(() => buildAdminStackedBarChartOptions(isDark.value))

@@ -67,6 +67,28 @@ export interface PlansAnalyticsSeries {
   checkoutVisitors: ChartSeries[]
 }
 
+export function createLatestRequestCoordinator() {
+  let latestRequestId = 0
+  const pendingRequestIds = new Set<number>()
+
+  return {
+    begin() {
+      latestRequestId += 1
+      pendingRequestIds.add(latestRequestId)
+      return latestRequestId
+    },
+    isLatest(requestId: number) {
+      return requestId === latestRequestId
+    },
+    finish(requestId: number) {
+      pendingRequestIds.delete(requestId)
+    },
+    get pendingCount() {
+      return pendingRequestIds.size
+    },
+  }
+}
+
 function invalidResponse(path: string): never {
   throw new TypeError(`Invalid Plans analytics response at ${path}`)
 }

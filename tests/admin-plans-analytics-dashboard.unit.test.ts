@@ -2,7 +2,7 @@ import type { PlansAnalyticsResponse as FrontendPlansAnalyticsResponse } from '.
 import type { PlansAnalyticsResponse as BackendPlansAnalyticsResponse } from '../supabase/functions/_backend/utils/plans_analytics.ts'
 import { readFile } from 'node:fs/promises'
 import { describe, expect, expectTypeOf, it } from 'vitest'
-import { buildPlansAnalyticsSeries, parsePlansAnalyticsResponse } from '../src/services/adminPlansAnalytics.ts'
+import { buildPlansAnalyticsSeries, createLatestRequestCoordinator, parsePlansAnalyticsResponse } from '../src/services/adminPlansAnalytics.ts'
 
 const validResponse: BackendPlansAnalyticsResponse = {
   traffic: { dates: ['2026-08-01'], uniqueVisitorOrganizations: [2], totalOpens: [4] },
@@ -165,6 +165,23 @@ describe('admin Plans analytics dashboard', () => {
     expect(series.checkoutVisitors.reduce((sum, item) => sum + item.data[0].value, 0)).toBe(1)
   })
 
+  it.concurrent('coordinates overlapping requests with latest-wins and pending-count semantics', () => {
+    const coordinator = createLatestRequestCoordinator()
+    const olderRequest = coordinator.begin()
+    const latestRequest = coordinator.begin()
+
+    expect(coordinator.pendingCount).toBe(2)
+    expect(coordinator.isLatest(olderRequest)).toBe(false)
+    expect(coordinator.isLatest(latestRequest)).toBe(true)
+
+    coordinator.finish(latestRequest)
+    expect(coordinator.pendingCount).toBe(1)
+    expect(coordinator.isLatest(olderRequest)).toBe(false)
+
+    coordinator.finish(olderRequest)
+    expect(coordinator.pendingCount).toBe(0)
+  })
+
   it.concurrent('wires a full-width Plans page and deferred documentation', async () => {
     const [tabs, completionDoc, messagesText] = await Promise.all([
       readFile(new URL('../src/constants/adminTabs.ts', import.meta.url), 'utf8'),
@@ -184,9 +201,82 @@ describe('admin Plans analytics dashboard', () => {
     expect(JSON.parse(messagesText)).toMatchObject(requiredMessages)
 
     const page = await readFile(new URL('../src/pages/admin/dashboard/plans.vue', import.meta.url), 'utf8')
+    expect(page).toContain('layout: admin')
+    expect(page).toContain('if (!mainStore.isAdmin)')
+    expect(page).toContain('router.push(\'/dashboard\')')
+    expect(page).toContain('<AdminFilterBar />')
     expect(page).toContain(`fetchStats('plans_analytics')`)
-    expect(page.match(/AdminStackedBarChart/g)?.length).toBeGreaterThanOrEqual(4)
-    expect(page).toContain('AdminMultiLineChart')
-    expect(page).toContain('UTC')
+    expect(page).toContain('parsePlansAnalyticsResponse(response)')
+    expect(page).not.toContain('as PlansAnalyticsResponse')
+    expect(page).toContain('const data = ref<PlansAnalyticsResponse | null>(null)')
+    expect(page).toContain('const isInitialLoading = ref(true)')
+    expect(page).toContain('const isLoadingStats = ref(false)')
+    expect(page).toContain('const requestError = ref<string | null>(null)')
+
+    expect(page).toContain('case \'unconfigured\':')
+    expect(page).toContain('case \'timeout\':')
+    expect(page).toContain('case \'too_large\':')
+    expect(page).toContain('case \'unavailable\':')
+    expect(page).toContain('t(\'plans-analytics-posthog-unconfigured\')')
+    expect(page).toContain('t(\'plans-analytics-posthog-timeout\')')
+    expect(page).toContain('t(\'plans-analytics-range-too-large\')')
+    expect(page).toContain('t(\'plans-analytics-unavailable\')')
+    expect(page).toContain('unknownBillingOrganizations > 0')
+    expect(page).toContain('!data.dataQuality.legacyReconstructionAvailable')
+    expect(page).toContain('t(\'plans-analytics-partial-warning\')')
+    expect(page).toContain('t(\'plans-analytics-legacy-unavailable\')')
+    expect(page).toContain('t(\'plans-analytics-empty\')')
+
+    expect(page.match(/<ChartCard/g)).toHaveLength(5)
+    expect(page.match(/<AdminMultiLineChart/g)).toHaveLength(1)
+    expect(page.match(/<AdminStackedBarChart/g)).toHaveLength(3)
+    expect(page.match(/accessible-borders/g)).toHaveLength(3)
+    expect(page.match(/<table/g)).toHaveLength(4)
+    expect(page.match(/class="sr-only"/g)?.length).toBeGreaterThanOrEqual(4)
+    expect(page).toContain('<caption')
+    expect(page).toContain('scope="col"')
+    expect(page).toContain('scope="row"')
+    expect(page).toContain('t(\'plans-analytics-traffic-description\')')
+    expect(page).toContain('t(\'plans-analytics-who-opened-description\')')
+    expect(page).toContain('t(\'plans-analytics-checkout-intent-description\')')
+    expect(page).toContain('t(\'plans-analytics-who-opened-checkout-description\')')
+
+    const cardTitles = [
+      'plans-analytics-traffic',
+      'plans-analytics-who-opened',
+      'plans-analytics-checkout-intent',
+      'plans-analytics-who-opened-checkout',
+      'plans-analytics-checkout-completion',
+    ]
+    const titlePositions = cardTitles.map(key => page.indexOf(`t('${key}')`))
+    expect(titlePositions.every(position => position >= 0)).toBe(true)
+    expect(titlePositions).toEqual([...titlePositions].sort((a, b) => a - b))
+    expect(page).toContain('class="space-y-6"')
+    expect(page).not.toContain('lg:grid-cols-2')
+
+    expect(page).toContain('t(\'plans-analytics-timezone\')')
+    expect(page.match(/watch\(/g)).toHaveLength(1)
+    expect(page).toContain('watch([')
+    expect(page).toContain('() => adminStore.activeDateRange')
+    expect(page).toContain('() => adminStore.refreshTrigger')
+    expect(page).toContain('{ deep: true }')
+    expect(page).toContain('const authorized = ref(false)')
+    expect(page).toContain('if (!authorized.value)')
+    expect(page).toContain('authorized.value = true')
+    expect(page.indexOf('authorized.value = true')).toBeGreaterThan(page.indexOf('if (!mainStore.isAdmin)'))
+    expect(page).toContain('createLatestRequestCoordinator()')
+    expect(page).toContain('requestCoordinator.begin()')
+    expect(page.match(/if \(requestCoordinator\.isLatest\(requestId\)\)/g)).toHaveLength(2)
+    expect(page).toContain('requestCoordinator.finish(requestId)')
+    expect(page).toContain('requestCoordinator.pendingCount > 0')
+    expect(page).not.toContain('setInterval')
+    expect(page).not.toContain('setTimeout')
+
+    expect(page).toContain('t(\'plans-analytics-checkout-completion-description\')')
+    expect(page).toContain('https://github.com/Cap-go/capgo.app/blob/main/docs/admin/plans-checkout-completion.md')
+    expect(page).toContain('target="_blank"')
+    expect(page).toContain('rel="noopener noreferrer"')
+    expect(page).toContain('role="alert"')
+    expect(page).toContain('role="status"')
   })
 })
