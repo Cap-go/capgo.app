@@ -53,7 +53,7 @@ const requiredMessages = {
   'plans-analytics-partial-warning': 'Some organizations could not be classified from historical billing records and appear as Unknown.',
   'plans-analytics-legacy-unavailable': 'Legacy Plans visits are unavailable because no event-time pathname could be verified.',
   'plans-analytics-posthog-unconfigured': 'PostHog analytics is not configured.',
-  'plans-analytics-posthog-timeout': 'This range was too large to process. Select a shorter period and try again.',
+  'plans-analytics-posthog-timeout': 'Plans analytics timed out. Try again, or select a shorter period.',
   'plans-analytics-range-too-large': 'This range returned too much data to process. Select a shorter period and try again.',
   'plans-analytics-unavailable': 'Plans analytics is temporarily unavailable.',
   'plans-analytics-empty': 'No Plans visits were recorded in this period.',
@@ -264,6 +264,7 @@ describe('admin Plans analytics dashboard', () => {
       expect(messages[key]).toEqual(expect.any(String))
     }
     expect(messages['plans-analytics-posthog-timeout']).toBe(requiredMessages['plans-analytics-posthog-timeout'])
+    expect(messages['plans-analytics-posthog-timeout']).not.toBe(messages['plans-analytics-range-too-large'])
 
     const page = await readFile(new URL('../src/pages/admin/dashboard/plans.vue', import.meta.url), 'utf8')
     expect(page).toContain('layout: admin')

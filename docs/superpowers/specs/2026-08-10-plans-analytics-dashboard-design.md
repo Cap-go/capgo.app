@@ -231,7 +231,7 @@ Add a **Plans** tab and a dedicated admin dashboard page. The page uses the exis
 - Refresh uses the existing manual refresh control and invalidates the five-minute cache.
 - There is no automatic refresh or automatic retry.
 
-For an extreme custom range that times out, retain the selection and show: “This range was too large to process. Select a shorter period and try again.”
+For a timed-out request, retain the selection and show: “Plans analytics timed out. Try again, or select a shorter period.” Keep this distinct from the `too_large` response, which tells the admin that the result exceeded a bounded row or byte ceiling.
 
 ## Error Handling and Observability
 
@@ -280,7 +280,7 @@ Unit tests cover:
 
 Backend tests cover admin authorization, request validation, PostHog unconfigured/unavailable/timeout behavior, valid empty data, and the complete response contract using mocked PostHog responses.
 
-Frontend tests cover loading, populated graphs, valid empty data, partial-data warnings, large-range timeout messaging, unavailable state, UTC labeling, and the checkout-completion documentation link.
+Frontend tests cover loading, populated graphs, valid empty data, partial-data warnings, timeout recovery messaging distinct from `too_large`, unavailable state, UTC labeling, and the checkout-completion documentation link.
 
 Before handoff, run focused tests, lint, type checking, and the production build. Validate the 30-second legacy threshold against the real historical gap distribution before considering the analytics numerically trustworthy.
 
