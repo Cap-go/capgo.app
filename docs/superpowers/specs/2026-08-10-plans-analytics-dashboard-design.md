@@ -187,9 +187,9 @@ interface PlansAnalyticsResponse {
     uniqueVisitorOrganizations: number[]
     totalOpens: number[]
   }
-  visitorBreakdown: DailyBillingSeries[]
-  checkoutIntent: DailyCheckoutIntentSeries[]
-  checkoutVisitorBreakdown: DailyBillingSeries[]
+  visitorBreakdown: DailyBillingPoint[]
+  checkoutIntent: DailyCheckoutIntentPoint[]
+  checkoutVisitorBreakdown: DailyBillingPoint[]
   dataQuality: {
     exactTrackingStartedAt: string | null
     legacyLogicalOpens: number

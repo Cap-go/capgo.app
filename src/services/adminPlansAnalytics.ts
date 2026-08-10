@@ -49,6 +49,16 @@ export interface PlansAnalyticsResponse {
 
 export type Translate = (key: string) => string
 
+export interface PlansAnalyticsPresentationState {
+  unavailableMessage: string | null
+  hasTraffic: boolean
+  hasVisitors: boolean
+  hasCheckoutIntent: boolean
+  hasCheckoutVisitors: boolean
+  showPartialBillingWarning: boolean
+  showLegacyUnavailableWarning: boolean
+}
+
 export interface ChartDataPoint {
   date: string
   value: number
@@ -65,6 +75,30 @@ export interface PlansAnalyticsSeries {
   visitors: ChartSeries[]
   checkoutIntent: ChartSeries[]
   checkoutVisitors: ChartSeries[]
+}
+
+export function buildPlansAnalyticsPresentationState(
+  data: PlansAnalyticsResponse | null,
+  requestError: string | null,
+  translate: Translate,
+): PlansAnalyticsPresentationState {
+  const failureMessageKeys: Record<PlansAnalyticsFailureReason, string> = {
+    unconfigured: 'plans-analytics-posthog-unconfigured',
+    timeout: 'plans-analytics-posthog-timeout',
+    too_large: 'plans-analytics-range-too-large',
+    unavailable: 'plans-analytics-unavailable',
+  }
+  const failureReason = data?.dataQuality.posthogFailureReason
+
+  return {
+    unavailableMessage: requestError ?? (failureReason ? translate(failureMessageKeys[failureReason]) : null),
+    hasTraffic: Boolean(data?.dataQuality.posthogConnected && data.traffic.totalOpens.some(value => value > 0)),
+    hasVisitors: Boolean(data?.dataQuality.posthogConnected && data.visitorBreakdown.some(row => row.total > 0)),
+    hasCheckoutIntent: Boolean(data?.dataQuality.posthogConnected && data.checkoutIntent.some(row => row.startedCheckout > 0 || row.didNotStart > 0)),
+    hasCheckoutVisitors: Boolean(data?.dataQuality.posthogConnected && data.checkoutVisitorBreakdown.some(row => row.total > 0)),
+    showPartialBillingWarning: Boolean(data && data.dataQuality.unknownBillingOrganizations > 0),
+    showLegacyUnavailableWarning: Boolean(data && !data.dataQuality.legacyReconstructionAvailable),
+  }
 }
 
 export function createLatestRequestCoordinator() {

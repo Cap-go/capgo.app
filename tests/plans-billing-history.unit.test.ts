@@ -1,4 +1,11 @@
+import type { OrganizationBillingHistory } from '../supabase/functions/_backend/utils/plans_billing_history.ts'
+
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  classifyPlansBillingAt,
+  loadPlansBillingHistories,
+
+} from '../supabase/functions/_backend/utils/plans_billing_history.ts'
 
 const {
   closeClientMock,
@@ -24,26 +31,22 @@ vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
   getPgClient: getPgClientMock,
 }))
 
-import {
-  classifyPlansBillingAt,
-  loadPlansBillingHistories,
-  type OrganizationBillingHistory,
-} from '../supabase/functions/_backend/utils/plans_billing_history.ts'
-
 const at = Date.parse('2026-08-01T12:00:00Z')
-const base = (): OrganizationBillingHistory => ({
-  orgId: 'org-a',
-  customerId: 'cus-a',
-  trialEndsAtMs: Date.parse('2026-07-01T00:00:00Z'),
-  paidAtMs: null,
-  canceledAtMs: null,
-  currentPastDueAtMs: null,
-  churnReason: null,
-  revenueMovements: [],
-  transitions: [],
-  creditGrants: [],
-  creditConsumptions: [],
-})
+function base(): OrganizationBillingHistory {
+  return {
+    orgId: 'org-a',
+    customerId: 'cus-a',
+    trialEndsAtMs: Date.parse('2026-07-01T00:00:00Z'),
+    paidAtMs: null,
+    canceledAtMs: null,
+    currentPastDueAtMs: null,
+    churnReason: null,
+    revenueMovements: [],
+    transitions: [],
+    creditGrants: [],
+    creditConsumptions: [],
+  }
+}
 
 function normalizedQuery(query: unknown) {
   return String(query).replace(/\s+/g, ' ').trim()
@@ -53,25 +56,39 @@ function context() {
   return { get: vi.fn(() => 'request-id') } as never
 }
 
-describe('Plans billing history classification', () => {
+describe('plans billing history classification', () => {
   it.each([
     ['active payment problem beats paying', {
-      ...base(), paidAtMs: Date.parse('2026-06-01T00:00:00Z'), currentPastDueAtMs: Date.parse('2026-07-20T00:00:00Z'),
+      ...base(),
+      paidAtMs: Date.parse('2026-06-01T00:00:00Z'),
+      currentPastDueAtMs: Date.parse('2026-07-20T00:00:00Z'),
       revenueMovements: [{ date: '2026-06-01', openingMrr: 0, newBusinessMrr: 12, expansionMrr: 0, contractionMrr: 0, churnMrr: 0, churnReason: null }],
     }, 'payment_problem'],
     ['carried positive MRR is paying', {
-      ...base(), paidAtMs: Date.parse('2026-06-01T00:00:00Z'), revenueMovements: [{
-        date: '2026-06-01', openingMrr: 0, newBusinessMrr: 12, expansionMrr: 0, contractionMrr: 0, churnMrr: 0, churnReason: null,
+      ...base(),
+      paidAtMs: Date.parse('2026-06-01T00:00:00Z'),
+      revenueMovements: [{
+        date: '2026-06-01',
+        openingMrr: 0,
+        newBusinessMrr: 12,
+        expansionMrr: 0,
+        contractionMrr: 0,
+        churnMrr: 0,
+        churnReason: null,
       }],
     }, 'paying'],
     ['future trial end is active trial', {
-      ...base(), trialEndsAtMs: Date.parse('2026-08-10T00:00:00Z'),
+      ...base(),
+      trialEndsAtMs: Date.parse('2026-08-10T00:00:00Z'),
     }, 'active_trial'],
     ['positive unexpired credits are credits only', {
-      ...base(), creditGrants: [{ id: 'grant-a', grantedAtMs: Date.parse('2026-07-01T00:00:00Z'), expiresAtMs: Date.parse('2026-09-01T00:00:00Z'), creditsTotal: 10 }],
+      ...base(),
+      creditGrants: [{ id: 'grant-a', grantedAtMs: Date.parse('2026-07-01T00:00:00Z'), expiresAtMs: Date.parse('2026-09-01T00:00:00Z'), creditsTotal: 10 }],
     }, 'credits_only'],
     ['previously paid voluntary ended entitlement is canceled', {
-      ...base(), paidAtMs: Date.parse('2026-06-01T00:00:00Z'), canceledAtMs: Date.parse('2026-07-01T00:00:00Z'),
+      ...base(),
+      paidAtMs: Date.parse('2026-06-01T00:00:00Z'),
+      canceledAtMs: Date.parse('2026-07-01T00:00:00Z'),
     }, 'canceled'],
     ['never-paid ended trial is expired trial', base(), 'expired_trial'],
   ] as const)('%s', (_label, history, expected) => {
@@ -319,9 +336,9 @@ describe('loadPlansBillingHistories', () => {
     expect(calls[1]!.sql).toContain('CROSS JOIN LATERAL')
     expect(calls[1]!.sql).toContain('FROM public.processed_stripe_events pse')
     expect(calls[1]!.sql).toContain('pse.customer_id = rc.customer_id')
-    expect(calls[1]!.sql).toContain('drm.date_id = ( SELECT pse.date_id')
-    expect(calls[1]!.sql).toContain('drm.customer_id = rc.customer_id')
+    expect(calls[1]!.sql).toContain('JOIN public.daily_revenue_metrics drm ON drm.date_id = pse.date_id AND drm.customer_id = pse.customer_id')
     expect(calls[1]!.sql).toContain('pse.date_id < $2::text')
+    expect(calls[1]!.sql).toContain('ORDER BY pse.date_id DESC LIMIT 1')
     expect(calls[1]!.sql).toContain('SELECT DISTINCT pse.date_id')
     expect(calls[1]!.sql).toContain('pse.date_id BETWEEN $2::text AND $3::text')
     expect(calls[1]!.sql).toContain('drm.date_id = movement_dates.date_id')
@@ -330,11 +347,11 @@ describe('loadPlansBillingHistories', () => {
     expect(calls[1]!.sql).not.toContain('drm.date_id BETWEEN $2::text AND $3::text')
     expect(calls[2]).toMatchObject({ params: [['org-a', 'org-b'], '2026-08-01', '2026-08-07'] })
     expect(calls[2]!.sql).toContain('g.org_id = ANY($1::uuid[])')
-    expect(calls[2]!.sql).toContain("g.granted_at < ($3::date + INTERVAL '1 day')")
+    expect(calls[2]!.sql).toContain('g.granted_at < ($3::date + INTERVAL \'1 day\')')
     expect(calls[2]!.sql).toContain('g.expires_at >= $2::date')
     expect(calls[3]).toMatchObject({ params: [['grant-a', 'grant-b'], '2026-08-07'] })
     expect(calls[3]!.sql).toContain('c.grant_id = ANY($1::uuid[])')
-    expect(calls[3]!.sql).toContain("c.applied_at < ($2::date + INTERVAL '1 day')")
+    expect(calls[3]!.sql).toContain('c.applied_at < ($2::date + INTERVAL \'1 day\')')
 
     expect(result.get('org-a')).toMatchObject({
       orgId: 'org-a',
@@ -353,7 +370,8 @@ describe('loadPlansBillingHistories', () => {
     pgQueryMock.mockRejectedValueOnce(new Error('database unavailable'))
 
     await expect(loadPlansBillingHistories(context(), ['org-a'], '2026-08-01', '2026-08-07', new Map()))
-      .rejects.toThrow('database unavailable')
+      .rejects
+      .toThrow('database unavailable')
 
     expect(pgReleaseMock).toHaveBeenCalledOnce()
     expect(closeClientMock).toHaveBeenCalledOnce()
@@ -378,7 +396,8 @@ describe('loadPlansBillingHistories', () => {
 
   it('does not open an unbounded database query for an empty organization set', async () => {
     await expect(loadPlansBillingHistories(context(), [], '2026-08-01', '2026-08-07', new Map()))
-      .resolves.toEqual(new Map())
+      .resolves
+      .toEqual(new Map())
 
     expect(getPgClientMock).not.toHaveBeenCalled()
     expect(pgQueryMock).not.toHaveBeenCalled()

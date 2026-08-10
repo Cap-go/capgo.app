@@ -132,7 +132,9 @@ FROM (
   SELECT dateDiff(
     'second',
     lagInFrame(timestamp) OVER (
-      PARTITION BY properties.org_id, distinct_id
+      PARTITION BY
+        properties.org_id,
+        coalesce(nullIf(toString(properties.$session_id), ''), toString(distinct_id))
       ORDER BY timestamp
       ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
     ),
@@ -148,7 +150,7 @@ GROUP BY gap_bucket
 ORDER BY gap_bucket
 ```
 
-Expected: duplicate bursts concentrate at or below 30 seconds. Keep `LEGACY_BURST_SECONDS = 30`; if the distribution disproves the cutoff, update the constant, its tests, and the design document in the same commit before continuing.
+Expected before enabling legacy repair: duplicate bursts concentrate at or below the selected cutoff when partitioned by the same organization plus session-or-actor identity used at runtime. Thirty seconds remains only a candidate until this query succeeds. If the distribution validates a cutoff, update the constant, enabled-path tests, response metadata, and design document together; otherwise keep legacy reconstruction unavailable and its reported threshold null.
 
 - [ ] **Step 5: Commit any evidence-driven specification correction**
 
@@ -265,11 +267,10 @@ export interface PosthogReadResult {
 
 export async function queryPosthogHogql(c: Context, query: string): Promise<PosthogReadResult> {
   const key = (getEnv(c, 'POSTHOG_READ_KEY') || '').trim()
-  if (!key)
+  const host = (getEnv(c, 'POSTHOG_READ_HOST') || '').trim().replace(/\/$/, '')
+  const project = (getEnv(c, 'POSTHOG_READ_PROJECT_ID') || '').trim()
+  if (!key || !host || !project)
     return { configured: false, connected: false, failureReason: 'unconfigured', rows: [] }
-
-  const host = ((getEnv(c, 'POSTHOG_READ_HOST') || 'https://eu.posthog.com').trim()).replace(/\/$/, '')
-  const project = (getEnv(c, 'POSTHOG_READ_PROJECT_ID') || '22029').trim()
   try {
     const response = await fetch(`${host}/api/projects/${project}/query/`, {
       method: 'POST',
@@ -403,23 +404,29 @@ describe('Plans analytics model', () => {
     const openings = buildLogicalPlansOpenings([
       event({ timestampMs: ms('2026-08-01T08:00:00Z'), orgId: 'org-a', page: 'plans', path: '' }),
       event({ timestampMs: ms('2026-08-02T08:00:00Z'), orgId: 'org-a', page: 'plans', path: '' }),
+      event({ timestampMs: ms('2026-08-02T12:00:00Z'), orgId: 'org-a', page: 'plans', path: '' }),
       event({ timestampMs: ms('2026-08-02T09:00:00Z'), orgId: 'org-b', page: 'plans', path: '' }),
     ], ms('2026-08-01T00:00:00Z'), ms('2026-08-03T00:00:00Z'), 30)
     const matches = attributeCheckoutStarts(openings, [
       event({ event: 'Checkout Started', timestampMs: ms('2026-08-02T08:10:00Z'), orgId: 'org-a', path: '' }),
+      event({ event: 'Checkout Started', timestampMs: ms('2026-08-02T12:10:00Z'), orgId: 'org-a', path: '' }),
     ])
     const result = buildPlansChartData({
       openings,
       attributedCheckouts: matches,
       startMs: ms('2026-08-01T00:00:00Z'),
       endMs: ms('2026-08-03T00:00:00Z'),
-      classifyAt: orgId => orgId === 'org-a' ? 'paying' : 'active_trial',
+      classifyAt: (orgId, timestampMs) => orgId === 'org-b'
+        ? 'active_trial'
+        : timestampMs < ms('2026-08-02T10:00:00Z') ? 'paying' : 'credits_only',
     })
     expect(result.traffic.uniqueVisitorOrganizations).toEqual([1, 1])
     expect(result.traffic.totalOpens).toEqual([1, 2])
     expect(result.visitorBreakdown.map(day => day.total)).toEqual([1, 2])
     expect(result.checkoutIntent.map(day => day.startedCheckout + day.didNotStart)).toEqual([1, 2])
     expect(result.checkoutVisitorBreakdown.map(day => day.total)).toEqual([0, 1])
+    expect(result.checkoutIntent[1].startedCheckout).toBe(1)
+    expect(result.checkoutVisitorBreakdown[1]).toMatchObject({ paying: 1, creditsOnly: 0 })
   })
 })
 ```
@@ -515,14 +522,14 @@ Implementation requirements:
 
 ```text
 exact candidate: event === 'User visit' && page === 'plans'
-legacy candidate: event === 'User visit' && normalized path === '/settings/organization/plans'
+legacy candidate: event === 'User visit' && page !== 'plans' && normalized path === '/settings/organization/plans'
 legacy identity: orgId + (sessionId || actorId)
 legacy new opening: first event or previous gap > burstSeconds
 visible opening: timestampMs >= startMs && timestampMs < endMs
 checkout match: maximum opening.timestampMs <= checkout.timestampMs with gap <= 24h
 ```
 
-Normalize paths with `new URL(value, 'https://console.capgo.app').pathname`, then remove a trailing slash except for `/`.
+Normalize paths with `new URL(value, 'https://capgo.app').pathname`, then remove a trailing slash except for `/`.
 
 - [ ] **Step 5: Implement graph aggregation**
 
@@ -743,7 +750,7 @@ export async function loadPlansBillingHistories(
 ): Promise<Map<string, OrganizationBillingHistory>>
 ```
 
-Use one `getPgClient(c, true)` lifecycle and parameterized `ANY($1::uuid[])`/`ANY($1::text[])` queries. Load:
+Before calling the loader, normalize and validate every PostHog organization identifier as a UUID. Count invalid or missing identifiers in `excludedMissingOrganization` and pass only validated UUIDs to the parameterized database queries. Use one `getPgClient(c, true)` lifecycle and parameterized `ANY($1::uuid[])`/`ANY($1::text[])` queries. Load:
 
 ```sql
 SELECT o.id::text AS org_id, o.customer_id, si.trial_at, si.paid_at,
@@ -914,7 +921,7 @@ Create `plans_analytics.ts` with:
 ```ts
 export const MAX_POSTHOG_ROWS = 200_000
 export const TRACKING_HISTORY_START = '2026-02-23T00:00:00.000Z'
-export const LEGACY_PATH_SOURCE = 'event' as const
+export const LEGACY_PATH_SOURCE = 'unavailable' as const
 
 export interface PlansAnalyticsResponse {
   traffic: { dates: string[], uniqueVisitorOrganizations: number[], totalOpens: number[] }
@@ -951,15 +958,19 @@ SELECT
   properties.org_id AS org_id,
   properties.$groups.organization AS grouped_org_id,
   properties.page AS page,
-  properties.$current_url AS event_current_url,
-  properties.$pathname AS event_pathname,
-  person.properties.$current_url AS person_current_url,
   properties.$session_id AS session_id,
   distinct_id
 FROM events
 WHERE event IN ('User visit', 'Checkout Started')
-  AND timestamp >= parseDateTimeBestEffort('2026-07-31T23:59:30.000Z')
-  AND timestamp < parseDateTimeBestEffort('2026-08-03T00:00:00.000Z')
+  AND (
+    (event = 'User visit'
+      AND timestamp >= parseDateTimeBestEffort('2026-07-31T23:59:30.000Z')
+      AND timestamp < parseDateTimeBestEffort('2026-08-02T00:00:00.000Z'))
+    OR
+    (event = 'Checkout Started'
+      AND timestamp >= parseDateTimeBestEffort('2026-08-01T00:00:00.000Z')
+      AND timestamp < parseDateTimeBestEffort('2026-08-03T00:00:00.000Z'))
+  )
 ORDER BY timestamp
 LIMIT 200001
 ```
@@ -971,7 +982,7 @@ const queryStart = new Date(Date.parse(startDate) - (LEGACY_BURST_SECONDS * 1000
 const queryEnd = new Date(Date.parse(endDate) + CHECKOUT_ATTRIBUTION_MS).toISOString()
 ```
 
-Then insert them with `sqlString(queryStart)` and `sqlString(queryEnd)`. Restrict the checkout portion to timestamps at or after `startDate`; the extra pre-range window exists only for visit burst repair. `LEGACY_PATH_SOURCE = 'event'` means runtime reconstruction uses `event_current_url || event_pathname`, never `person_current_url`. If Task 1 proves that only an ingestion-time person-on-events URL is valid, change the constant and its fixture expectations before implementing the mapper. If Task 1 cannot prove either source, set the source to `unavailable` and return `missing_event_time_path`. Do not select the full `properties` object.
+Then insert them with `sqlString(queryStart)` and `sqlString(queryEnd)`. Restrict checkout rows to `[startDate, queryEnd)` and visit rows to `[queryStart, endDate)`; the extra pre-range window exists only for visit burst repair. Keep `LEGACY_PATH_SOURCE = 'unavailable'`, return `missing_event_time_path`, and report a null legacy threshold. Only switch to an event-time source after Task 1 proves it and the enabled mapper, burst boundaries, and wire metadata are covered by tests. Never use `person_current_url`, and do not select the full `properties` object.
 
 The transition query begins at `TRACKING_HISTORY_START`, ends at `end + 24h`, and selects `$group_key`, `$group_type`, `$group_set.plan_status`, `$group_set.canceled_at`, organization group ID, and event name.
 
@@ -1148,6 +1159,8 @@ describe('admin Plans analytics dashboard', () => {
 })
 ```
 
+Keep raw-source checks limited to stable wiring contracts: the admin guard, `fetchStats('plans_analytics')`, response parsing, the UTC key, and the secured documentation link. Test response validation and presentation behavior through exported pure helpers. Cover initial/pending request coordination, valid empty data, partial-billing and unavailable-legacy warnings, each of `unconfigured`, `timeout`, `too_large`, and `unavailable`, plus request-error precedence. Assert required translation-key presence rather than exact copy, except where the design explicitly fixes the wording.
+
 - [ ] **Step 2: Run the test to verify failure**
 
 ```bash
@@ -1207,7 +1220,7 @@ Use these exact English values:
   "plans-analytics-title": "Plans analytics",
   "plans-analytics-timezone": "Reporting timezone: UTC",
   "plans-analytics-traffic": "Plans page traffic",
-  "plans-analytics-traffic-description": "Organizations and logical openings of the Plans page",
+  "plans-analytics-traffic-description": "Unique organizations on their first Plans opening in the selected range, alongside total logical openings per UTC day",
   "plans-analytics-unique-visitor-orgs": "Unique visitor orgs",
   "plans-analytics-total-opens": "Total opens",
   "plans-analytics-who-opened": "Who opened Plans?",
@@ -1231,7 +1244,7 @@ Use these exact English values:
   "plans-analytics-partial-warning": "Some organizations could not be classified from historical billing records and appear as Unknown.",
   "plans-analytics-legacy-unavailable": "Legacy Plans visits are unavailable because no event-time pathname could be verified.",
   "plans-analytics-posthog-unconfigured": "PostHog analytics is not configured.",
-  "plans-analytics-posthog-timeout": "This range took too long to process. Select a shorter period and try again.",
+  "plans-analytics-posthog-timeout": "This range was too large to process. Select a shorter period and try again.",
   "plans-analytics-range-too-large": "This range returned too much data to process. Select a shorter period and try again.",
   "plans-analytics-unavailable": "Plans analytics is temporarily unavailable.",
   "plans-analytics-empty": "No Plans visits were recorded in this period."
@@ -1296,7 +1309,8 @@ async function loadPlansAnalytics() {
   isLoadingStats.value = true
   requestError.value = null
   try {
-    data.value = await adminStore.fetchStats('plans_analytics') as PlansAnalyticsResponse
+    const response: unknown = await adminStore.fetchStats('plans_analytics')
+    data.value = parsePlansAnalyticsResponse(response)
   }
   catch (error) {
     console.error('[Admin Dashboard Plans] Error loading Plans analytics:', error)
@@ -1313,23 +1327,14 @@ Watch `adminStore.activeDateRange` and `adminStore.refreshTrigger`, matching exi
 
 - [ ] **Step 2: Implement explicit availability messages**
 
-Map `dataQuality.posthogFailureReason` exactly:
+Map `dataQuality.posthogFailureReason` through the behavior-tested presentation helper:
 
 ```ts
-const unavailableMessage = computed(() => {
-  if (requestError.value)
-    return requestError.value
-  switch (data.value?.dataQuality.posthogFailureReason) {
-    case 'unconfigured': return t('plans-analytics-posthog-unconfigured')
-    case 'timeout': return t('plans-analytics-posthog-timeout')
-    case 'too_large': return t('plans-analytics-range-too-large')
-    case 'unavailable': return t('plans-analytics-unavailable')
-    default: return null
-  }
-})
+const presentation = computed(() => buildPlansAnalyticsPresentationState(data.value, requestError.value, t))
+const unavailableMessage = computed(() => presentation.value.unavailableMessage)
 ```
 
-Show a non-blocking warning when `unknownBillingOrganizations > 0` or legacy reconstruction is unavailable. A connected response with zero values is a valid empty result, not an error.
+The helper maps `unconfigured`, `timeout`, `too_large`, and `unavailable` to their translation keys, gives a request failure precedence, and derives chart availability. Show a non-blocking warning when its partial-billing or unavailable-legacy flag is true. A connected response with zero values is a valid empty result, not an error.
 
 - [ ] **Step 3: Render all five full-width cards**
 
@@ -1353,7 +1358,7 @@ Render in this order inside `space-y-6`:
 </ChartCard>
 ```
 
-The fifth card is not a chart. Render a full-width card with title `Checkout completion`, the literal user-facing deferred copy approved in the design specification, and an external link to:
+The fifth card is not a chart. Render a full-width card using the `plans-analytics-checkout-completion`, `plans-analytics-checkout-completion-description`, and `plans-analytics-checkout-completion-link` translation keys. Keep only the external URL literal:
 
 ```text
 https://github.com/Cap-go/capgo.app/blob/main/docs/admin/plans-checkout-completion.md
@@ -1393,8 +1398,8 @@ git commit -m "feat(admin): add plans analytics dashboard"
 - [ ] **Step 1: Run formatting and lint first**
 
 ```bash
-bun run lint:fix
-bun run lint:backend
+bun lint:fix
+bun lint:backend
 ```
 
 Expected: PASS with only intentional formatting changes.

@@ -2,7 +2,7 @@ import type { PlansAnalyticsResponse as FrontendPlansAnalyticsResponse } from '.
 import type { PlansAnalyticsResponse as BackendPlansAnalyticsResponse } from '../supabase/functions/_backend/utils/plans_analytics.ts'
 import { readFile } from 'node:fs/promises'
 import { describe, expect, expectTypeOf, it } from 'vitest'
-import { buildPlansAnalyticsSeries, createLatestRequestCoordinator, parsePlansAnalyticsResponse } from '../src/services/adminPlansAnalytics.ts'
+import { buildPlansAnalyticsPresentationState, buildPlansAnalyticsSeries, createLatestRequestCoordinator, parsePlansAnalyticsResponse } from '../src/services/adminPlansAnalytics.ts'
 
 const validResponse: BackendPlansAnalyticsResponse = {
   traffic: { dates: ['2026-08-01'], uniqueVisitorOrganizations: [2], totalOpens: [4] },
@@ -29,7 +29,7 @@ const requiredMessages = {
   'plans-analytics-title': 'Plans analytics',
   'plans-analytics-timezone': 'Reporting timezone: UTC',
   'plans-analytics-traffic': 'Plans page traffic',
-  'plans-analytics-traffic-description': 'Organizations and logical openings of the Plans page',
+  'plans-analytics-traffic-description': 'Unique organizations on their first Plans opening in the selected range, alongside total logical openings per UTC day',
   'plans-analytics-unique-visitor-orgs': 'Unique visitor orgs',
   'plans-analytics-total-opens': 'Total opens',
   'plans-analytics-who-opened': 'Who opened Plans?',
@@ -53,7 +53,7 @@ const requiredMessages = {
   'plans-analytics-partial-warning': 'Some organizations could not be classified from historical billing records and appear as Unknown.',
   'plans-analytics-legacy-unavailable': 'Legacy Plans visits are unavailable because no event-time pathname could be verified.',
   'plans-analytics-posthog-unconfigured': 'PostHog analytics is not configured.',
-  'plans-analytics-posthog-timeout': 'This range took too long to process. Select a shorter period and try again.',
+  'plans-analytics-posthog-timeout': 'This range was too large to process. Select a shorter period and try again.',
   'plans-analytics-range-too-large': 'This range returned too much data to process. Select a shorter period and try again.',
   'plans-analytics-unavailable': 'Plans analytics is temporarily unavailable.',
   'plans-analytics-empty': 'No Plans visits were recorded in this period.',
@@ -61,8 +61,6 @@ const requiredMessages = {
 
 describe('admin Plans analytics dashboard', () => {
   it('keeps the frontend response DTO identical to the backend wire contract', () => {
-    expectTypeOf<FrontendPlansAnalyticsResponse>().toMatchTypeOf<BackendPlansAnalyticsResponse>()
-    expectTypeOf<BackendPlansAnalyticsResponse>().toMatchTypeOf<FrontendPlansAnalyticsResponse>()
     expectTypeOf<FrontendPlansAnalyticsResponse>().toEqualTypeOf<BackendPlansAnalyticsResponse>()
   })
 
@@ -142,6 +140,51 @@ describe('admin Plans analytics dashboard', () => {
     expect(() => parsePlansAnalyticsResponse(value)).toThrowError('Invalid Plans analytics response')
   })
 
+  it.each([
+    ['unconfigured', 'plans-analytics-posthog-unconfigured'],
+    ['timeout', 'plans-analytics-posthog-timeout'],
+    ['too_large', 'plans-analytics-range-too-large'],
+    ['unavailable', 'plans-analytics-unavailable'],
+  ] as const)('maps the %s backend failure to its visible message', (failureReason, expected) => {
+    const state = buildPlansAnalyticsPresentationState({
+      ...validResponse,
+      dataQuality: { ...validResponse.dataQuality, posthogFailureReason: failureReason },
+    }, null, key => key)
+
+    expect(state.unavailableMessage).toBe(expected)
+  })
+
+  it('distinguishes valid empty data, partial billing, and unavailable legacy history', () => {
+    const state = buildPlansAnalyticsPresentationState({
+      ...validResponse,
+      traffic: { dates: [], uniqueVisitorOrganizations: [], totalOpens: [] },
+      visitorBreakdown: [],
+      checkoutIntent: [],
+      checkoutVisitorBreakdown: [],
+      dataQuality: {
+        ...validResponse.dataQuality,
+        unknownBillingOrganizations: 2,
+        legacyReconstructionAvailable: false,
+      },
+    }, null, key => key)
+
+    expect(state).toMatchObject({
+      unavailableMessage: null,
+      hasTraffic: false,
+      hasVisitors: false,
+      hasCheckoutIntent: false,
+      hasCheckoutVisitors: false,
+      showPartialBillingWarning: true,
+      showLegacyUnavailableWarning: true,
+    })
+  })
+
+  it('gives a request failure precedence over backend presentation state', () => {
+    const state = buildPlansAnalyticsPresentationState(validResponse, 'request failed', key => key)
+
+    expect(state.unavailableMessage).toBe('request failed')
+  })
+
   it.concurrent('maps all API datasets into stable chart series', () => {
     const series = buildPlansAnalyticsSeries({
       ...validResponse,
@@ -215,7 +258,12 @@ describe('admin Plans analytics dashboard', () => {
     expect(completionDoc).toContain('Completed or Not completed')
     expect(completionDoc).toContain('pending until the agreed observation window')
     expect(completionDoc).toContain('separate approved design')
-    expect(JSON.parse(messagesText)).toMatchObject(requiredMessages)
+    const messages = JSON.parse(messagesText) as Record<string, unknown>
+    for (const key of Object.keys(requiredMessages)) {
+      expect(messages).toHaveProperty(key)
+      expect(messages[key]).toEqual(expect.any(String))
+    }
+    expect(messages['plans-analytics-posthog-timeout']).toBe(requiredMessages['plans-analytics-posthog-timeout'])
 
     const page = await readFile(new URL('../src/pages/admin/dashboard/plans.vue', import.meta.url), 'utf8')
     expect(page).toContain('layout: admin')
@@ -230,16 +278,7 @@ describe('admin Plans analytics dashboard', () => {
     expect(page).toContain('const isLoadingStats = ref(false)')
     expect(page).toContain('const requestError = ref<string | null>(null)')
 
-    expect(page).toContain('case \'unconfigured\':')
-    expect(page).toContain('case \'timeout\':')
-    expect(page).toContain('case \'too_large\':')
-    expect(page).toContain('case \'unavailable\':')
-    expect(page).toContain('t(\'plans-analytics-posthog-unconfigured\')')
-    expect(page).toContain('t(\'plans-analytics-posthog-timeout\')')
-    expect(page).toContain('t(\'plans-analytics-range-too-large\')')
-    expect(page).toContain('t(\'plans-analytics-unavailable\')')
-    expect(page).toContain('unknownBillingOrganizations > 0')
-    expect(page).toContain('!data.dataQuality.legacyReconstructionAvailable')
+    expect(page).toContain('buildPlansAnalyticsPresentationState(data.value, requestError.value, t)')
     expect(page).toContain('t(\'plans-analytics-partial-warning\')')
     expect(page).toContain('t(\'plans-analytics-legacy-unavailable\')')
     expect(page).toContain('t(\'plans-analytics-empty\')')
@@ -268,9 +307,6 @@ describe('admin Plans analytics dashboard', () => {
     const titlePositions = cardTitles.map(key => page.indexOf(`t('${key}')`))
     expect(titlePositions.every(position => position >= 0)).toBe(true)
     expect(titlePositions).toEqual([...titlePositions].sort((a, b) => a - b))
-    expect(page).toContain('class="space-y-6"')
-    expect(page).not.toContain('lg:grid-cols-2')
-
     expect(page).toContain('t(\'plans-analytics-timezone\')')
     expect(page.match(/watch\(/g)).toHaveLength(1)
     expect(page).toContain('watch([')

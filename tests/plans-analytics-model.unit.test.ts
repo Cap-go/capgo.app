@@ -1,3 +1,4 @@
+import type { LogicalPlansOpening, PlansBehaviorEvent } from '../supabase/functions/_backend/utils/plans_analytics_model.ts'
 import { describe, expect, it } from 'vitest'
 import {
   attributeCheckoutStarts,
@@ -5,21 +6,22 @@ import {
   buildPlansChartData,
   CHECKOUT_ATTRIBUTION_MS,
   LEGACY_BURST_SECONDS,
-  type LogicalPlansOpening,
-  type PlansBehaviorEvent,
+
 } from '../supabase/functions/_backend/utils/plans_analytics_model.ts'
 
 const ms = (value: string) => Date.parse(value)
-const event = (partial: Partial<PlansBehaviorEvent> & Pick<PlansBehaviorEvent, 'timestampMs' | 'orgId'>): PlansBehaviorEvent => ({
-  actorId: 'user-a',
-  event: 'User visit',
-  page: '',
-  path: '/settings/organization/plans',
-  sessionId: '',
-  ...partial,
-})
+function event(partial: Partial<PlansBehaviorEvent> & Pick<PlansBehaviorEvent, 'timestampMs' | 'orgId'>): PlansBehaviorEvent {
+  return {
+    actorId: 'user-a',
+    event: 'User visit',
+    page: '',
+    path: '/settings/organization/plans',
+    sessionId: '',
+    ...partial,
+  }
+}
 
-describe('Plans analytics model', () => {
+describe('plans analytics model', () => {
   it.concurrent('collapses only legacy bursts and preserves exact repeat openings', () => {
     const events = [
       event({ timestampMs: ms('2026-08-01T10:00:00Z'), orgId: 'org-a' }),
@@ -150,6 +152,27 @@ describe('Plans analytics model', () => {
     expect(result.visitorBreakdown.map(day => day.total)).toEqual([1, 2])
     expect(result.checkoutIntent.map(day => day.startedCheckout + day.didNotStart)).toEqual([1, 2])
     expect(result.checkoutVisitorBreakdown.map(day => day.total)).toEqual([0, 1])
+  })
+
+  it.concurrent('deduplicates same-day checkout starts and classifies the earliest attributed opening', () => {
+    const openings = buildLogicalPlansOpenings([
+      event({ timestampMs: ms('2026-08-01T08:00:00Z'), orgId: 'org-a', page: 'plans', path: '' }),
+      event({ timestampMs: ms('2026-08-01T12:00:00Z'), orgId: 'org-a', page: 'plans', path: '' }),
+    ], ms('2026-08-01T00:00:00Z'), ms('2026-08-02T00:00:00Z'))
+    const matches = attributeCheckoutStarts(openings, [
+      event({ event: 'Checkout Started', timestampMs: ms('2026-08-01T08:05:00Z'), orgId: 'org-a', path: '' }),
+      event({ event: 'Checkout Started', timestampMs: ms('2026-08-01T12:05:00Z'), orgId: 'org-a', path: '' }),
+    ])
+    const result = buildPlansChartData({
+      openings,
+      attributedCheckouts: matches,
+      startMs: ms('2026-08-01T00:00:00Z'),
+      endMs: ms('2026-08-02T00:00:00Z'),
+      classifyAt: (_orgId, timestampMs) => timestampMs < ms('2026-08-01T10:00:00Z') ? 'expired_trial' : 'credits_only',
+    })
+
+    expect(result.checkoutIntent).toEqual([{ date: '2026-08-01', startedCheckout: 1, didNotStart: 0 }])
+    expect(result.checkoutVisitorBreakdown[0]).toMatchObject({ expiredTrial: 1, creditsOnly: 0, total: 1 })
   })
 
   it.concurrent('zero-fills intersecting UTC days and uses each graph category timestamp', () => {

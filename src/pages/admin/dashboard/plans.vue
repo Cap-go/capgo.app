@@ -13,7 +13,7 @@ import AdminMultiLineChart from '~/components/admin/AdminMultiLineChart.vue'
 import AdminStackedBarChart from '~/components/admin/AdminStackedBarChart.vue'
 import ChartCard from '~/components/dashboard/ChartCard.vue'
 import PageLoader from '~/components/PageLoader.vue'
-import { buildPlansAnalyticsSeries, createLatestRequestCoordinator, parsePlansAnalyticsResponse } from '~/services/adminPlansAnalytics'
+import { buildPlansAnalyticsPresentationState, buildPlansAnalyticsSeries, createLatestRequestCoordinator, parsePlansAnalyticsResponse } from '~/services/adminPlansAnalytics'
 import { useAdminDashboardStore } from '~/stores/adminDashboard'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
@@ -61,39 +61,12 @@ const series = computed(() => data.value
   ? buildPlansAnalyticsSeries(data.value, t)
   : { traffic: [], visitors: [], checkoutIntent: [], checkoutVisitors: [] })
 
-const unavailableMessage = computed(() => {
-  if (requestError.value)
-    return requestError.value
-  switch (data.value?.dataQuality.posthogFailureReason) {
-    case 'unconfigured':
-      return t('plans-analytics-posthog-unconfigured')
-    case 'timeout':
-      return t('plans-analytics-posthog-timeout')
-    case 'too_large':
-      return t('plans-analytics-range-too-large')
-    case 'unavailable':
-      return t('plans-analytics-unavailable')
-    default:
-      return null
-  }
-})
-
-const hasTraffic = computed(() => Boolean(
-  data.value?.dataQuality.posthogConnected
-  && data.value.traffic.totalOpens.some(value => value > 0),
-))
-const hasVisitors = computed(() => Boolean(
-  data.value?.dataQuality.posthogConnected
-  && data.value.visitorBreakdown.some(row => row.total > 0),
-))
-const hasCheckoutIntent = computed(() => Boolean(
-  data.value?.dataQuality.posthogConnected
-  && data.value.checkoutIntent.some(row => row.startedCheckout > 0 || row.didNotStart > 0),
-))
-const hasCheckoutVisitors = computed(() => Boolean(
-  data.value?.dataQuality.posthogConnected
-  && data.value.checkoutVisitorBreakdown.some(row => row.total > 0),
-))
+const presentation = computed(() => buildPlansAnalyticsPresentationState(data.value, requestError.value, t))
+const unavailableMessage = computed(() => presentation.value.unavailableMessage)
+const hasTraffic = computed(() => presentation.value.hasTraffic)
+const hasVisitors = computed(() => presentation.value.hasVisitors)
+const hasCheckoutIntent = computed(() => presentation.value.hasCheckoutIntent)
+const hasCheckoutVisitors = computed(() => presentation.value.hasCheckoutVisitors)
 
 watch([
   () => adminStore.activeDateRange,
@@ -150,7 +123,7 @@ displayStore.defaultBack = '/dashboard'
           </div>
 
           <div
-            v-if="data && data.dataQuality.unknownBillingOrganizations > 0"
+            v-if="presentation.showPartialBillingWarning"
             role="status"
             class="rounded-lg border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-slate-700 dark:text-slate-200"
           >
@@ -158,7 +131,7 @@ displayStore.defaultBack = '/dashboard'
           </div>
 
           <div
-            v-if="data && !data.dataQuality.legacyReconstructionAvailable"
+            v-if="presentation.showLegacyUnavailableWarning"
             role="status"
             class="rounded-lg border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-slate-700 dark:text-slate-200"
           >

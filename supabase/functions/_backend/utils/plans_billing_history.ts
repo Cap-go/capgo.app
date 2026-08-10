@@ -414,16 +414,14 @@ export async function loadPlansBillingHistories(
           CROSS JOIN LATERAL (
             SELECT drm.customer_id, drm.date_id, drm.opening_mrr, drm.new_business_mrr,
                    drm.expansion_mrr, drm.contraction_mrr, drm.churn_mrr, drm.churn_reason
-            FROM public.daily_revenue_metrics drm
-            WHERE drm.date_id = (
-              SELECT pse.date_id
-              FROM public.processed_stripe_events pse
-              WHERE pse.customer_id = rc.customer_id
-                AND pse.date_id < $2::text
-              ORDER BY pse.date_id DESC
-              LIMIT 1
-            )
-              AND drm.customer_id = rc.customer_id
+            FROM public.processed_stripe_events pse
+            JOIN public.daily_revenue_metrics drm
+              ON drm.date_id = pse.date_id
+             AND drm.customer_id = pse.customer_id
+            WHERE pse.customer_id = rc.customer_id
+              AND pse.date_id < $2::text
+            ORDER BY pse.date_id DESC
+            LIMIT 1
           ) latest
         ), in_range AS (
           SELECT drm.customer_id, drm.date_id, drm.opening_mrr, drm.new_business_mrr,
