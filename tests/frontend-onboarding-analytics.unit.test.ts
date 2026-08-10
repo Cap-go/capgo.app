@@ -1,24 +1,34 @@
 import type { Context } from 'hono'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const queryPosthogHogqlMock = vi.hoisted(() => vi.fn())
+const { cloudlogErrMock, queryPosthogHogqlMock } = vi.hoisted(() => ({
+  cloudlogErrMock: vi.fn(),
+  queryPosthogHogqlMock: vi.fn(),
+}))
 
 vi.mock('../supabase/functions/_backend/utils/posthog_read.ts', () => ({
   queryPosthogHogql: queryPosthogHogqlMock,
 }))
 
+vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
+  cloudlogErr: cloudlogErrMock,
+}))
+
 import {
+  assertFrontendOnboardingAttemptLimit,
   buildFrontendOnboardingHogql,
+  FRONTEND_ONBOARDING_ATTEMPT_LIMIT,
   getAdminFrontendOnboardingAnalytics,
 } from '../supabase/functions/_backend/utils/frontend_onboarding_analytics.ts'
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
 function createContext(): Context {
-  return {} as Context
+  return { get: () => 'request-id' } as unknown as Context
 }
 
 beforeEach(() => {
+  cloudlogErrMock.mockReset()
   queryPosthogHogqlMock.mockReset()
   queryPosthogHogqlMock.mockResolvedValue({
     configured: true,
@@ -46,6 +56,16 @@ describe('buildFrontendOnboardingHogql', () => {
     expect(query).toContain("timestamp < parseDateTimeBestEffort('2026-08-04T00:00:00.000Z')")
     expect(query).toContain("trim(attempt_id) != ''")
     expect(query).toContain('HAVING intent_ms > 0')
+    expect(query).toContain('ORDER BY intent_ms ASC, attempt_id ASC')
+    expect(query).toContain('LIMIT 50001')
+  })
+})
+
+describe('assertFrontendOnboardingAttemptLimit', () => {
+  it('fails closed when the query returns more than its limit', () => {
+    expect(() => assertFrontendOnboardingAttemptLimit(2, 1)).toThrow('frontend onboarding analytics query exceeded attempt limit')
+    expect(() => assertFrontendOnboardingAttemptLimit(1, 1)).not.toThrow()
+    expect(FRONTEND_ONBOARDING_ATTEMPT_LIMIT).toBe(50_000)
   })
 })
 
@@ -114,7 +134,10 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
         { attempt_id: 'no-intent', intent_ms: null, details_ms: startMs + 2_000 },
         { attempt_id: 'not-finite', intent_ms: 'Infinity', details_ms: startMs + 2_000 },
         { attempt_id: 'zero-intent', intent_ms: 0, details_ms: startMs + 2_000 },
-        { attempt_id: 'valid', intent_ms: startMs + 1_000, details_ms: undefined, organization_ms: 0, setup_ms: 'not-a-number' },
+        { attempt_id: false, intent_ms: startMs + 1_000, details_ms: startMs + 2_000 },
+        { attempt_id: ['array'], intent_ms: startMs + 1_000, details_ms: startMs + 2_000 },
+        { attempt_id: 'boolean-step', intent_ms: startMs + 2_000, details_ms: true, organization_ms: [], setup_ms: {} },
+        { attempt_id: 'valid', intent_ms: String(startMs + 1_000), details_ms: undefined, organization_ms: 0, setup_ms: 'not-a-number' },
       ],
     })
 
@@ -125,9 +148,9 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
     )
 
     expect(result).toMatchObject({
-      kpis: { attempts: 1, completed: 0, completion_rate: 0 },
+      kpis: { attempts: 2, completed: 0, completion_rate: 0 },
       funnel: [
-        { key: 'intent', reached: 1 },
+        { key: 'intent', reached: 2 },
         { key: 'details', reached: 0 },
         { key: 'organization', reached: 0 },
         { key: 'setup', reached: 0 },
@@ -150,11 +173,36 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
     )
   })
 
+  it('logs and fails closed when PostHog exceeds the explicit attempt limit', async () => {
+    queryPosthogHogqlMock.mockResolvedValueOnce({
+      configured: true,
+      connected: true,
+      failureReason: null,
+      rows: { length: FRONTEND_ONBOARDING_ATTEMPT_LIMIT + 1 },
+    })
+
+    await expect(getAdminFrontendOnboardingAnalytics(
+      createContext(),
+      '2026-08-01T00:00:00.000Z',
+      '2026-08-03T00:00:00.000Z',
+    )).rejects.toThrow('frontend onboarding analytics query exceeded attempt limit')
+    expect(cloudlogErrMock).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'frontend_onboarding_analytics_attempt_limit_exceeded',
+      attempt_limit: FRONTEND_ONBOARDING_ATTEMPT_LIMIT,
+      returned_rows: FRONTEND_ONBOARDING_ATTEMPT_LIMIT + 1,
+    }))
+  })
+
   it.each([
     ['not-a-date', '2026-08-03T00:00:00.000Z'],
     ['2026-08-03T00:00:00.000Z', 'not-a-date'],
     ['2026-08-03T00:00:00.000Z', '2026-08-03T00:00:00.000Z'],
     ['2026-08-04T00:00:00.000Z', '2026-08-03T00:00:00.000Z'],
+    ['2026-02-30T00:00:00.000Z', '2026-03-03T00:00:00.000Z'],
+    ['1969-12-30T00:00:00.000Z', '1970-01-01T00:00:00.000Z'],
+    ['1970-01-01T00:00:00.000Z', '1970-01-02T00:00:00.000Z'],
+    ['2105-12-31T00:00:00.000Z', '2106-01-01T00:00:00.000Z'],
+    ['2105-12-30T00:00:00.000Z', '2105-12-31T00:00:00.000Z'],
   ])('rejects invalid bounds before calling PostHog', async (start, end) => {
     await expect(getAdminFrontendOnboardingAnalytics(createContext(), start, end)).rejects.toBeInstanceOf(RangeError)
     expect(queryPosthogHogqlMock).not.toHaveBeenCalled()

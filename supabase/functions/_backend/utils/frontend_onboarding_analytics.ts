@@ -1,28 +1,70 @@
 import type { Context } from 'hono'
 import {
   buildFrontendOnboardingAnalytics,
+  FRONTEND_ONBOARDING_FOLLOWUP_MS,
   FRONTEND_ONBOARDING_VERSION,
   type FrontendOnboardingAttempt,
 } from './frontend_onboarding_analytics_model.ts'
+import { cloudlogErr } from './logging.ts'
 import { queryPosthogHogql } from './posthog_read.ts'
 
-const MAX_DATE_MS = 8.64e15
+const ISO_UTC_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?Z$/
+const POSTHOG_MIN_DATE_MS = Date.UTC(1970, 0, 1)
+const POSTHOG_MAX_DATE_MS = Date.UTC(2106, 0, 1)
+
+export const FRONTEND_ONBOARDING_ATTEMPT_LIMIT = 50_000
 
 function sqlStr(value: string): string {
   return `'${value.replace(/'/g, '\'\'')}'`
 }
 
-function isValidDateMs(value: number): boolean {
-  return Number.isFinite(value) && Math.abs(value) <= MAX_DATE_MS
+function parseStrictPosthogDate(value: string): number {
+  const match = ISO_UTC_PATTERN.exec(value)
+  if (!match)
+    throw new RangeError('date must be a strict ISO UTC timestamp')
+
+  const [, yearValue, monthValue, dayValue, hourValue, minuteValue, secondValue, millisecondValue] = match
+  const year = Number(yearValue)
+  const month = Number(monthValue)
+  const day = Number(dayValue)
+  const hour = Number(hourValue)
+  const minute = Number(minuteValue)
+  const second = Number(secondValue)
+  const millisecond = Number((millisecondValue ?? '').padEnd(3, '0'))
+  const timestamp = Date.UTC(year, month - 1, day, hour, minute, second, millisecond)
+  const parsed = new Date(timestamp)
+  if (!Number.isFinite(timestamp)
+    || parsed.getUTCFullYear() !== year
+    || parsed.getUTCMonth() !== month - 1
+    || parsed.getUTCDate() !== day
+    || parsed.getUTCHours() !== hour
+    || parsed.getUTCMinutes() !== minute
+    || parsed.getUTCSeconds() !== second
+    || parsed.getUTCMilliseconds() !== millisecond
+    || timestamp < POSTHOG_MIN_DATE_MS
+    || timestamp >= POSTHOG_MAX_DATE_MS) {
+    throw new RangeError('date must be within the supported PostHog range')
+  }
+
+  return timestamp
 }
 
 function nullableMs(value: unknown): number | null {
-  const milliseconds = Number(value)
+  const milliseconds = typeof value === 'number'
+    ? value
+    : typeof value === 'string' && value.trim() !== ''
+      ? Number(value)
+      : Number.NaN
   return Number.isFinite(milliseconds) && milliseconds > 0 ? milliseconds : null
 }
 
 function attemptId(value: unknown): string {
-  return value === null || value === undefined ? '' : String(value).trim()
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+export function assertFrontendOnboardingAttemptLimit(rowCount: number, limit = FRONTEND_ONBOARDING_ATTEMPT_LIMIT): void {
+  if (rowCount > limit)
+    throw new Error('frontend onboarding analytics query exceeded attempt limit')
 }
 
 function mapAttempts(rows: Record<string, unknown>[]): FrontendOnboardingAttempt[] {
@@ -61,25 +103,38 @@ export function buildFrontendOnboardingHogql(startDate: string, followupEndDate:
       AND timestamp < parseDateTimeBestEffort(${sqlStr(followupEndDate)})
       AND trim(attempt_id) != ''
     GROUP BY attempt_id
-    HAVING intent_ms > 0`
+    HAVING intent_ms > 0
+    ORDER BY intent_ms ASC, attempt_id ASC
+    LIMIT ${FRONTEND_ONBOARDING_ATTEMPT_LIMIT + 1}`
 }
 
 export async function getAdminFrontendOnboardingAnalytics(c: Context, startDate: string, endDate: string) {
-  const startMs = Date.parse(startDate)
-  const endMs = Date.parse(endDate)
-  if (!isValidDateMs(startMs) || !isValidDateMs(endMs) || endMs <= startMs)
-    throw new RangeError('startDate and endDate must be valid dates, with endDate greater than startDate')
+  const startMs = parseStrictPosthogDate(startDate)
+  const endMs = parseStrictPosthogDate(endDate)
+  if (endMs <= startMs)
+    throw new RangeError('endDate must be greater than startDate')
 
   const durationMs = endMs - startMs
   const previousStartMs = startMs - durationMs
-  const followupEndMs = endMs + 24 * 60 * 60 * 1000
-  if (!isValidDateMs(previousStartMs) || !isValidDateMs(followupEndMs))
-    throw new RangeError('derived analytics date boundaries must be valid')
+  const followupEndMs = endMs + FRONTEND_ONBOARDING_FOLLOWUP_MS
+  if (previousStartMs < POSTHOG_MIN_DATE_MS || previousStartMs >= POSTHOG_MAX_DATE_MS
+    || followupEndMs < POSTHOG_MIN_DATE_MS || followupEndMs >= POSTHOG_MAX_DATE_MS) {
+    throw new RangeError('derived analytics date boundaries must be within the supported PostHog range')
+  }
 
   const posthog = await queryPosthogHogql(
     c,
     buildFrontendOnboardingHogql(new Date(previousStartMs).toISOString(), new Date(followupEndMs).toISOString()),
   )
+  if (posthog.rows.length > FRONTEND_ONBOARDING_ATTEMPT_LIMIT) {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'frontend_onboarding_analytics_attempt_limit_exceeded',
+      attempt_limit: FRONTEND_ONBOARDING_ATTEMPT_LIMIT,
+      returned_rows: posthog.rows.length,
+    })
+    assertFrontendOnboardingAttemptLimit(posthog.rows.length)
+  }
   const analytics = buildFrontendOnboardingAnalytics(mapAttempts(posthog.rows), startMs, endMs)
 
   return {
