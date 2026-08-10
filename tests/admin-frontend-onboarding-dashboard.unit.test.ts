@@ -180,8 +180,54 @@ describe('admin frontend onboarding dashboard', () => {
     expect(loadingUpdates).toEqual([true, false])
   })
 
+  it('clears both page loaders when the latest request finishes before a stale request', async () => {
+    const first = deferred<FrontendOnboardingAnalytics | null>()
+    const second = deferred<FrontendOnboardingAnalytics | null>()
+    const requests = [first.promise, second.promise]
+    let requestIndex = 0
+    let analyticsState: FrontendOnboardingAnalytics | null = null
+    let isLoadingStats = false
+    let isLoading = true
+    const latestAnalytics = {
+      ...analytics,
+      kpis: { ...analytics.kpis, attempts: 20 },
+    }
+    const load = createFrontendOnboardingAnalyticsLoader(
+      () => requests[requestIndex++],
+      {
+        onAnalytics: (value) => {
+          analyticsState = value
+        },
+        onError: () => {},
+        onLoading: (value) => {
+          isLoadingStats = value
+          if (!value)
+            isLoading = false
+        },
+      },
+    )
+
+    const firstLoad = load()
+    const secondLoad = load()
+    expect(isLoadingStats).toBe(true)
+    expect(isLoading).toBe(true)
+
+    second.resolve(latestAnalytics)
+    await secondLoad
+    expect(analyticsState).toEqual(latestAnalytics)
+    expect(isLoadingStats).toBe(false)
+    expect(isLoading).toBe(false)
+
+    first.resolve(analytics)
+    await firstLoad
+    expect(analyticsState).toEqual(latestAnalytics)
+    expect(isLoadingStats).toBe(false)
+    expect(isLoading).toBe(false)
+  })
+
   it('wires the page to the frontend onboarding analytics metric', async () => {
     const source = await readFile(new URL('../src/pages/admin/dashboard/frontend-onboarding.vue', import.meta.url), 'utf8')
+    const onLoadingCallback = source.match(/onLoading: \(value\) => \{([\s\S]*?)\n {4}\},/)?.[1] ?? ''
 
     expect(source).toContain(`fetchStats('frontend_onboarding_analytics')`)
     expect(source).toContain('createFrontendOnboardingAnalyticsLoader')
@@ -190,6 +236,10 @@ describe('admin frontend onboarding dashboard', () => {
     expect(source).toContain('if (!isReady.value)')
     expect(source).toContain('isReady.value = true')
     expect(source).toContain('void loadAnalytics()')
+    expect(source).not.toContain('await loadAnalytics()')
+    expect(onLoadingCallback).toContain('isLoadingStats.value = value')
+    expect(onLoadingCallback).toContain('if (!value)')
+    expect(onLoadingCallback).toContain('isLoading.value = false')
     expect(source).toContain('const visibleAnalytics = computed(() => isLoadingStats.value ? null : analytics.value)')
   })
 

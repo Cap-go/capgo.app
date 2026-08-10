@@ -46,6 +46,8 @@ const loadAnalytics = createFrontendOnboardingAnalyticsLoader(
     },
     onLoading: (value) => {
       isLoadingStats.value = value
+      if (!value)
+        isLoading.value = false
     },
   },
 )
@@ -97,8 +99,7 @@ onMounted(async () => {
   }
 
   isReady.value = true
-  await loadAnalytics()
-  isLoading.value = false
+  void loadAnalytics()
   displayStore.NavTitle = t('frontend-onboarding')
 })
 
