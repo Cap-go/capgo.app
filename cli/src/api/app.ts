@@ -220,9 +220,10 @@ export async function checkAppExistsAndHasPermissionOrgErr(
   if (!(await hasCliPermission(supabase, apikey, requiredPermissionKey, { appId: appid, channelId: channelId ?? null }))) {
     if (!silent)
       log.error(`Insufficient permissions for app ${appid}. Required RBAC permission for this action: ${requiredPermissionKey}.`)
-    // Keep the app id and permission key OUT of the CliUserError message: they
-    // go in context so error tracking does not fingerprint one issue per app.
-    throw new CliUserError('Insufficient permissions for app. Required RBAC permission for this action.', { appId: appid, requiredPermission: requiredPermissionKey })
+    // Keep the app id OUT of the CliUserError message so error tracking does not
+    // fingerprint one issue per app; it goes in context. The permission key is a
+    // small bounded enum, so it stays in the message (as in currentBundle.ts).
+    throw new CliUserError(`Insufficient permissions for app. Required RBAC permission for this action: ${requiredPermissionKey}.`, { appId: appid })
   }
 
   return true

@@ -221,12 +221,13 @@ try {
   // later reword of the message can no longer break the filter by substring.
   assert.equal(shouldCapturePosthogException(new CliUserError('Capgo authentication failed: invalid Capgo API key or insufficient Capgo permissions.')), false)
   // `checkAppExistsAndHasPermissionOrgErr` throws the RBAC failure as
-  // CliUserError; the app id and permission key live in context, so every app
-  // maps to one issue instead of one issue per app.
-  assert.equal(shouldCapturePosthogException(new CliUserError('Insufficient permissions for app. Required RBAC permission for this action.', { appId: 'com.example.app', requiredPermission: 'app.write' })), false)
+  // CliUserError; the app id lives in context (the permission key is a bounded
+  // enum and stays in the message), so every app maps to one issue per
+  // permission instead of one issue per app.
+  assert.equal(shouldCapturePosthogException(new CliUserError('Insufficient permissions for app. Required RBAC permission for this action: app.write.', { appId: 'com.example.app' })), false)
   assert.equal(
-    new CliUserError('Insufficient permissions for app. Required RBAC permission for this action.', { appId: 'com.a' }).message,
-    new CliUserError('Insufficient permissions for app. Required RBAC permission for this action.', { appId: 'com.b' }).message,
+    new CliUserError('Insufficient permissions for app. Required RBAC permission for this action: channel.delete.', { appId: 'com.a' }).message,
+    new CliUserError('Insufficient permissions for app. Required RBAC permission for this action: channel.delete.', { appId: 'com.b' }).message,
   )
   // Two failures on different channels must be treated identically (one issue,
   // not one per channel), since the channel name lives in context, not the message.
