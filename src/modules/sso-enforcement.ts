@@ -57,6 +57,12 @@ export const install: UserModule = ({ router }) => {
     if (isPublicRoute(to.path))
       return next()
 
+    // Local worktree/dev has no reliable edge-function path for SSO enforcement.
+    // Skip the network check so password login works against seed users.
+    // Vite injects branch as VITE_BRANCH (not ENV) into import.meta.env.
+    if (import.meta.env.VITE_BRANCH === 'local')
+      return next()
+
     const supabase = useSupabase()
     const { data: { session } } = await supabase.auth.getSession()
 
