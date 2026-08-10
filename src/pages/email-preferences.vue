@@ -2,6 +2,7 @@
 import { computed, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
+import VueTurnstile from 'vue-turnstile'
 import IconCheck from '~icons/lucide/check'
 import IconLoader from '~icons/lucide/loader-2'
 import Toggle from '~/components/Toggle.vue'
@@ -93,6 +94,9 @@ const optForNewsletters = ref(true)
 const isSaving = ref(false)
 const isSaved = ref(false)
 const formError = ref<string | null>(null)
+const captchaKey = ref(import.meta.env.VITE_CAPTCHA_KEY as string | undefined)
+const captchaToken = ref('')
+const captchaComponent = ref<InstanceType<typeof VueTurnstile> | null>(null)
 
 const preferences = reactive<Record<PublicEmailPreferenceKey, boolean>>(
   Object.fromEntries(
@@ -109,10 +113,28 @@ const emailLooksValid = computed(() => {
   return domain.includes('.') && !value.includes(' ')
 })
 
+const captchaRequired = computed(() => Boolean(captchaKey.value))
+const canSubmit = computed(() => {
+  if (!emailLooksValid.value || isSaving.value)
+    return false
+  if (captchaRequired.value && !captchaToken.value)
+    return false
+  return true
+})
+
+function resetCaptcha() {
+  captchaComponent.value?.reset()
+  captchaToken.value = ''
+}
+
 async function savePreferences() {
   formError.value = null
   if (!emailLooksValid.value) {
     formError.value = t('email-preferences-invalid-email')
+    return
+  }
+  if (captchaRequired.value && !captchaToken.value) {
+    formError.value = t('email-preferences-captcha-required')
     return
   }
 
@@ -134,19 +156,23 @@ async function savePreferences() {
         enable_notifications: unsubscribeAll.value || !enableNotifications.value ? false : undefined,
         opt_for_newsletters: unsubscribeAll.value || !optForNewsletters.value ? false : undefined,
         preferences: optOutPreferences,
+        captcha_token: captchaToken.value || undefined,
       },
     })
 
     if (error || data?.status !== 'ok') {
       formError.value = t('email-preferences-save-failed')
+      resetCaptcha()
       return
     }
 
     // Success is identical for known and unknown emails (no existence oracle).
     isSaved.value = true
+    resetCaptcha()
   }
   catch {
     formError.value = t('email-preferences-save-failed')
+    resetCaptcha()
   }
   finally {
     isSaving.value = false
@@ -254,10 +280,18 @@ async function savePreferences() {
           {{ t('email-preferences-saved') }}
         </p>
 
+        <VueTurnstile
+          v-if="captchaKey"
+          ref="captchaComponent"
+          v-model="captchaToken"
+          size="flexible"
+          :site-key="captchaKey"
+        />
+
         <button
           type="submit"
           class="d-btn inline-flex w-full items-center justify-center gap-2 rounded-xl border-0 bg-[#119eff] px-4 py-3 text-base font-semibold text-white hover:brightness-105 disabled:opacity-60"
-          :disabled="isSaving"
+          :disabled="!canSubmit"
         >
           <IconLoader v-if="isSaving" class="h-4 w-4 animate-spin" aria-hidden="true" />
           {{ isSaving ? t('saving') : t('email-preferences-save') }}
