@@ -13,9 +13,9 @@ const {
   putJsonMock: vi.fn(async () => undefined),
   syncUserPreferenceTagsMock: vi.fn(async () => undefined),
   unsubscribeBentoMock: vi.fn(async () => true),
-  usersMaybeSingleMock: vi.fn(async () => ({ data: null, error: null })),
+  usersMaybeSingleMock: vi.fn(async (): Promise<{ data: any, error: any }> => ({ data: null, error: null })),
   usersUpdateEqMock: vi.fn(),
-  usersUpdateMaybeSingleMock: vi.fn(async () => ({ data: null, error: null })),
+  usersUpdateMaybeSingleMock: vi.fn(async (): Promise<{ data: any, error: any }> => ({ data: null, error: null })),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/bento.ts', () => ({
