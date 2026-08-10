@@ -59,6 +59,8 @@ A legacy candidate is a `User visit` event that:
 
 Query strings, fragments, and a trailing slash do not change the normalized path. Legacy and exact branches are mutually exclusive.
 
+The pathname evidence must be stored on the event, or be a PostHog person-on-events property verified to represent ingestion-time state. A query-time person property is not valid historical evidence. If the schema probe cannot establish an event-time pathname, legacy reconstruction is disabled and the page reports the exact-tracking boundary rather than fabricating historical Plans visits.
+
 ### Organization identity
 
 Events without a valid organization identifier cannot contribute to organization-based graphs. The response reports their count as excluded data-quality evidence.
@@ -192,6 +194,8 @@ interface PlansAnalyticsResponse {
     exactTrackingStartedAt: string | null
     legacyLogicalOpens: number
     exactLogicalOpens: number
+    legacyReconstructionAvailable: boolean
+    legacyUnavailableReason: 'missing_event_time_path' | null
     excludedMissingOrganization: number
     unmatchedCheckoutStarts: number
     unknownBillingOrganizations: number
