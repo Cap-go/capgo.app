@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Database } from '../types/supabase.types'
 import { log } from '@clack/prompts'
 import { Table } from '@sauber/table'
+import { CliUserError } from '../shared/cli-user-error'
 import { formatError, getHumanDate, invokeCapgoCliApi, readCapgoCliApiErrorPayload } from '../utils'
 import { checkVersionNotUsedInChannel } from './channels'
 
@@ -80,10 +81,13 @@ export async function deleteAppVersion(
       .eq('name', bundle)
 
     if (delAppSpecVersionError) {
-      const message = `App version ${appid}@${bundle} not found in database`
       if (!silent)
-        log.error(message)
-      throw new Error(`${message}: ${formatError(delAppSpecVersionError)}`)
+        log.error(`App version ${appid}@${bundle} not found in database`)
+      throw new CliUserError('App version not found in database', {
+        appId: appid,
+        version: bundle,
+        detail: formatError(delAppSpecVersionError),
+      })
     }
     return
   }
@@ -99,10 +103,13 @@ export async function deleteAppVersion(
     supaAnon,
   })
   if (error) {
-    const message = `App version ${appid}@${bundle} not found in database`
     if (!silent)
-      log.error(message)
-    throw new Error(`${message}: ${formatError(error)}`)
+      log.error(`App version ${appid}@${bundle} not found in database`)
+    throw new CliUserError('App version not found in database', {
+      appId: appid,
+      version: bundle,
+      detail: formatError(error),
+    })
   }
 }
 
@@ -225,10 +232,13 @@ export async function getVersionData(
   const all = await getActiveAppVersions(apikey, appid, options)
   const versionData = all.find(row => row.name === bundle)
   if (!versionData) {
-    const message = `App version ${appid}@${bundle} doesn't exist`
+    // A named bundle that is not in the active list is a user typo or a version
+    // that was never uploaded, not a CLI crash. Throw a CliUserError so error
+    // tracking skips it, and keep the app id and version in `context` (not the
+    // message) so one problem stays one issue instead of one per version string.
     if (!silent)
-      log.error(message)
-    throw new Error(message)
+      log.error(`App version ${appid}@${bundle} doesn't exist`)
+    throw new CliUserError('App version doesn\'t exist', { appId: appid, version: bundle })
   }
   return versionData
 }
