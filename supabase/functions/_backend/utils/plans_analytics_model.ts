@@ -69,7 +69,7 @@ function utcDate(timestampMs: number): string {
 
 function normalizePath(value: string): string | null {
   try {
-    const pathname = new URL(value, 'https://console.capgo.app').pathname
+    const pathname = new URL(value, 'https://capgo.app').pathname
     return pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname
   }
   catch {
