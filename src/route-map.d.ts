@@ -45,34 +45,6 @@ declare module 'vue-router/auto-routes' {
       Record<never, never>,
       | never
     >,
-    '/admin/dashboard/': RouteRecordInfo<
-      '/admin/dashboard/',
-      '/admin/dashboard',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
-    '/admin/dashboard/builder': RouteRecordInfo<
-      '/admin/dashboard/builder',
-      '/admin/dashboard/builder',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
-    '/admin/dashboard/cli': RouteRecordInfo<
-      '/admin/dashboard/cli',
-      '/admin/dashboard/cli',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
-    '/admin/dashboard/credits': RouteRecordInfo<
-      '/admin/dashboard/credits',
-      '/admin/dashboard/credits',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
     '/admin/dashboard/customers/credits': RouteRecordInfo<
       '/admin/dashboard/customers/credits',
       '/admin/dashboard/customers/credits',
@@ -83,20 +55,6 @@ declare module 'vue-router/auto-routes' {
     '/admin/dashboard/customers/organizations': RouteRecordInfo<
       '/admin/dashboard/customers/organizations',
       '/admin/dashboard/customers/organizations',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
-    '/admin/dashboard/debug': RouteRecordInfo<
-      '/admin/dashboard/debug',
-      '/admin/dashboard/debug',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
-    '/admin/dashboard/notifications': RouteRecordInfo<
-      '/admin/dashboard/notifications',
-      '/admin/dashboard/notifications',
       Record<never, never>,
       Record<never, never>,
       | never
@@ -122,13 +80,6 @@ declare module 'vue-router/auto-routes' {
       Record<never, never>,
       | never
     >,
-    '/admin/dashboard/organizations': RouteRecordInfo<
-      '/admin/dashboard/organizations',
-      '/admin/dashboard/organizations',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
     '/admin/dashboard/platform/capacity': RouteRecordInfo<
       '/admin/dashboard/platform/capacity',
       '/admin/dashboard/platform/capacity',
@@ -146,13 +97,6 @@ declare module 'vue-router/auto-routes' {
     '/admin/dashboard/platform/replication': RouteRecordInfo<
       '/admin/dashboard/platform/replication',
       '/admin/dashboard/platform/replication',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
-    '/admin/dashboard/plugins': RouteRecordInfo<
-      '/admin/dashboard/plugins',
-      '/admin/dashboard/plugins',
       Record<never, never>,
       Record<never, never>,
       | never
@@ -199,13 +143,6 @@ declare module 'vue-router/auto-routes' {
       Record<never, never>,
       | never
     >,
-    '/admin/dashboard/replication': RouteRecordInfo<
-      '/admin/dashboard/replication',
-      '/admin/dashboard/replication',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
     '/admin/dashboard/retention/': RouteRecordInfo<
       '/admin/dashboard/retention/',
       '/admin/dashboard/retention',
@@ -244,20 +181,6 @@ declare module 'vue-router/auto-routes' {
     '/admin/dashboard/revenue/upgrades': RouteRecordInfo<
       '/admin/dashboard/revenue/upgrades',
       '/admin/dashboard/revenue/upgrades',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
-    '/admin/dashboard/updates': RouteRecordInfo<
-      '/admin/dashboard/updates',
-      '/admin/dashboard/updates',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
-    '/admin/dashboard/users': RouteRecordInfo<
-      '/admin/dashboard/users',
-      '/admin/dashboard/users',
       Record<never, never>,
       Record<never, never>,
       | never
@@ -788,38 +711,6 @@ declare module 'vue-router/auto-routes' {
       pathParamNames:
         | never
     }
-    'src/pages/admin/dashboard/index.vue': {
-      routes:
-        | '/admin/dashboard/'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
-    'src/pages/admin/dashboard/builder.vue': {
-      routes:
-        | '/admin/dashboard/builder'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
-    'src/pages/admin/dashboard/cli.vue': {
-      routes:
-        | '/admin/dashboard/cli'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
-    'src/pages/admin/dashboard/credits.vue': {
-      routes:
-        | '/admin/dashboard/credits'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
     'src/pages/admin/dashboard/customers/credits.vue': {
       routes:
         | '/admin/dashboard/customers/credits'
@@ -831,22 +722,6 @@ declare module 'vue-router/auto-routes' {
     'src/pages/admin/dashboard/customers/organizations.vue': {
       routes:
         | '/admin/dashboard/customers/organizations'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
-    'src/pages/admin/dashboard/debug.vue': {
-      routes:
-        | '/admin/dashboard/debug'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
-    'src/pages/admin/dashboard/notifications.vue': {
-      routes:
-        | '/admin/dashboard/notifications'
       views:
         | never
       pathParamNames:
@@ -876,14 +751,6 @@ declare module 'vue-router/auto-routes' {
       pathParamNames:
         | never
     }
-    'src/pages/admin/dashboard/organizations.vue': {
-      routes:
-        | '/admin/dashboard/organizations'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
     'src/pages/admin/dashboard/platform/capacity.vue': {
       routes:
         | '/admin/dashboard/platform/capacity'
@@ -903,14 +770,6 @@ declare module 'vue-router/auto-routes' {
     'src/pages/admin/dashboard/platform/replication.vue': {
       routes:
         | '/admin/dashboard/platform/replication'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
-    'src/pages/admin/dashboard/plugins.vue': {
-      routes:
-        | '/admin/dashboard/plugins'
       views:
         | never
       pathParamNames:
@@ -964,14 +823,6 @@ declare module 'vue-router/auto-routes' {
       pathParamNames:
         | never
     }
-    'src/pages/admin/dashboard/replication.vue': {
-      routes:
-        | '/admin/dashboard/replication'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
     'src/pages/admin/dashboard/retention/index.vue': {
       routes:
         | '/admin/dashboard/retention/'
@@ -1015,22 +866,6 @@ declare module 'vue-router/auto-routes' {
     'src/pages/admin/dashboard/revenue/upgrades.vue': {
       routes:
         | '/admin/dashboard/revenue/upgrades'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
-    'src/pages/admin/dashboard/updates.vue': {
-      routes:
-        | '/admin/dashboard/updates'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
-    'src/pages/admin/dashboard/users.vue': {
-      routes:
-        | '/admin/dashboard/users'
       views:
         | never
       pathParamNames:

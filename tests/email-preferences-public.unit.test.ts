@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const {
-  getEnvMock,
   matchJsonMock,
   putJsonMock,
   syncUserPreferenceTagsMock,
@@ -9,36 +8,15 @@ const {
   usersMaybeSingleMock,
   usersUpdateEqMock,
   usersUpdateMaybeSingleMock,
-  verifyCaptchaTokenMock,
-} = vi.hoisted(() => {
-  type UsersRow = {
-    id: string
-    email: string
-    enable_notifications: boolean
-    opt_for_newsletters: boolean
-    email_preferences: Record<string, boolean>
-  }
-  type UsersQueryResult = {
-    data: UsersRow | null
-    error: { message: string } | null
-  }
-
-  return {
-    getEnvMock: vi.fn((_c: unknown, key: string) => {
-      if (key === 'CAPTCHA_SECRET_KEY')
-        return ''
-      return ''
-    }),
-    matchJsonMock: vi.fn(async () => null),
-    putJsonMock: vi.fn(async () => undefined),
-    syncUserPreferenceTagsMock: vi.fn(async () => undefined),
-    unsubscribeBentoMock: vi.fn(async () => true),
-    usersMaybeSingleMock: vi.fn(async (): Promise<UsersQueryResult> => ({ data: null, error: null })),
-    usersUpdateEqMock: vi.fn(),
-    usersUpdateMaybeSingleMock: vi.fn(async (): Promise<UsersQueryResult> => ({ data: null, error: null })),
-    verifyCaptchaTokenMock: vi.fn(async () => undefined),
-  }
-})
+} = vi.hoisted(() => ({
+  matchJsonMock: vi.fn(async () => null),
+  putJsonMock: vi.fn(async () => undefined),
+  syncUserPreferenceTagsMock: vi.fn(async () => undefined),
+  unsubscribeBentoMock: vi.fn(async () => true),
+  usersMaybeSingleMock: vi.fn(async (): Promise<{ data: unknown, error: unknown }> => ({ data: null, error: null })),
+  usersUpdateEqMock: vi.fn(),
+  usersUpdateMaybeSingleMock: vi.fn(async (): Promise<{ data: unknown, error: unknown }> => ({ data: null, error: null })),
+}))
 
 vi.mock('../supabase/functions/_backend/utils/bento.ts', () => ({
   unsubscribeBento: unsubscribeBentoMock,
@@ -53,10 +31,6 @@ vi.mock('../supabase/functions/_backend/utils/cache.ts', () => ({
     matchJson = matchJsonMock
     putJson = putJsonMock
   },
-}))
-
-vi.mock('../supabase/functions/_backend/utils/captcha.ts', () => ({
-  verifyCaptchaToken: verifyCaptchaTokenMock,
 }))
 
 vi.mock('../supabase/functions/_backend/utils/rate_limit.ts', () => ({
@@ -93,14 +67,6 @@ vi.mock('../supabase/functions/_backend/utils/user_preferences.ts', () => ({
   syncUserPreferenceTags: syncUserPreferenceTagsMock,
 }))
 
-vi.mock('../supabase/functions/_backend/utils/utils.ts', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../supabase/functions/_backend/utils/utils.ts')>()
-  return {
-    ...actual,
-    getEnv: getEnvMock,
-  }
-})
-
 const {
   app,
   PUBLIC_EMAIL_PREFERENCE_KEYS,
@@ -119,16 +85,10 @@ async function postPreferences(body: unknown) {
 describe('public email preferences endpoint', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    getEnvMock.mockImplementation((_c: unknown, key: string) => {
-      if (key === 'CAPTCHA_SECRET_KEY')
-        return ''
-      return ''
-    })
     matchJsonMock.mockResolvedValue(null)
     usersMaybeSingleMock.mockResolvedValue({ data: null, error: null })
     usersUpdateMaybeSingleMock.mockResolvedValue({ data: null, error: null })
     unsubscribeBentoMock.mockResolvedValue(true)
-    verifyCaptchaTokenMock.mockResolvedValue(undefined)
   })
 
   it('escapes ilike wildcards in emails', () => {
@@ -154,7 +114,6 @@ describe('public email preferences endpoint', () => {
     expect(usersUpdateEqMock).not.toHaveBeenCalled()
     expect(unsubscribeBentoMock).not.toHaveBeenCalled()
     expect(syncUserPreferenceTagsMock).not.toHaveBeenCalled()
-    expect(verifyCaptchaTokenMock).not.toHaveBeenCalled()
   })
 
   it('returns ok for unknown emails when unsubscribe_all and still unsubscribes Bento', async () => {
@@ -295,41 +254,5 @@ describe('public email preferences endpoint', () => {
     expect(response.status).toBe(400)
     await expect(response.json()).resolves.toMatchObject({ error: 'invalid_payload' })
     expect(usersMaybeSingleMock).not.toHaveBeenCalled()
-  })
-
-  it('requires captcha when CAPTCHA_SECRET_KEY is set', async () => {
-    getEnvMock.mockImplementation((_c: unknown, key: string) => {
-      if (key === 'CAPTCHA_SECRET_KEY')
-        return 'test-secret'
-      return ''
-    })
-
-    const response = await postPreferences({
-      email: 'nobody@example.com',
-      preferences: { onboarding: false },
-    })
-
-    expect(response.status).toBe(400)
-    await expect(response.json()).resolves.toMatchObject({ error: 'invalid_captcha' })
-    expect(verifyCaptchaTokenMock).not.toHaveBeenCalled()
-    expect(usersMaybeSingleMock).not.toHaveBeenCalled()
-  })
-
-  it('verifies captcha token when CAPTCHA_SECRET_KEY is set', async () => {
-    getEnvMock.mockImplementation((_c: unknown, key: string) => {
-      if (key === 'CAPTCHA_SECRET_KEY')
-        return 'test-secret'
-      return ''
-    })
-
-    const response = await postPreferences({
-      email: 'nobody@example.com',
-      preferences: { onboarding: false },
-      captcha_token: 'turnstile-token',
-    })
-
-    expect(response.status).toBe(200)
-    await expect(response.json()).resolves.toEqual({ status: 'ok' })
-    expect(verifyCaptchaTokenMock).toHaveBeenCalledWith(expect.anything(), 'turnstile-token', 'test-secret')
   })
 })

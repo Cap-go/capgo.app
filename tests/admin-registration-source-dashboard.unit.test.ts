@@ -4,7 +4,7 @@ import { aggregateRegistrationSourceTotals } from '../src/services/adminRegistra
 
 describe('admin registration source dashboard', () => {
   it.concurrent('wires the auth registration trend to the stacked chart', async () => {
-    const source = await readFile(new URL('../src/pages/admin/dashboard/users.vue', import.meta.url), 'utf8')
+    const source = await readFile(new URL('../src/pages/admin/dashboard/onboarding/sources.vue', import.meta.url), 'utf8')
 
     expect(source).toContain('registration_source_trend')
     expect(source).toContain('AdminStackedBarChart')
@@ -41,7 +41,7 @@ describe('admin registration source dashboard', () => {
   })
 
   it.concurrent('renders selected-period source totals below the stacked chart', async () => {
-    const source = await readFile(new URL('../src/pages/admin/dashboard/users.vue', import.meta.url), 'utf8')
+    const source = await readFile(new URL('../src/pages/admin/dashboard/onboarding/sources.vue', import.meta.url), 'utf8')
 
     expect(source).toContain('aggregateRegistrationSourceTotals(onboardingFunnelData.value?.registration_source_trend ?? [])')
     expect(source).toContain(':value="registrationSourceTotals.normalRegistrations"')
@@ -56,13 +56,13 @@ describe('admin registration source dashboard', () => {
     )
     expect(registrationSection.match(/:subtitle="t\('selected-period'\)"/g)).toHaveLength(3)
 
+    const sectionIndex = source.indexOf('<!-- Registration Source Trend Chart -->')
     const chartIndex = source.indexOf('<AdminStackedBarChart')
     const totalsIndex = source.indexOf('data-test="registration-source-totals"')
-    const onboardingTrendIndex = source.indexOf('<!-- Onboarding Trend Chart -->')
 
-    expect(chartIndex).toBeGreaterThan(-1)
+    expect(sectionIndex).toBeGreaterThan(-1)
+    expect(chartIndex).toBeGreaterThan(sectionIndex)
     expect(totalsIndex).toBeGreaterThan(chartIndex)
-    expect(onboardingTrendIndex).toBeGreaterThan(totalsIndex)
   })
 
   it.concurrent('defines every registration source label in English', async () => {

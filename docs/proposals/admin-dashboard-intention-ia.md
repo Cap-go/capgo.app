@@ -36,6 +36,6 @@ Legacy URLs (`/admin/dashboard/users`, `/updates`, …) redirect to the new hubs
 
 Real product captures (local worktree, `admin@capgo.app`):
 
-- `docs/pr-assets/admin-intention-ia/real-onboarding-funnel.png`
-- `docs/pr-assets/admin-intention-ia/real-product-updates.png`
-- `docs/pr-assets/admin-intention-ia/real-pulse.png`
+- `docs/pr-assets/admin-intention-ia/real-onboarding-funnel.webp`
+- `docs/pr-assets/admin-intention-ia/real-product-updates.webp`
+- `docs/pr-assets/admin-intention-ia/real-pulse.webp`
