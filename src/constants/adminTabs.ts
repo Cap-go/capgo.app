@@ -3,6 +3,7 @@ import IconArrowPath from '~icons/heroicons/arrow-path'
 import IconBanknotes from '~icons/heroicons/banknotes'
 import IconBell from '~icons/heroicons/bell'
 import IconBuildingOffice from '~icons/heroicons/building-office-2'
+import IconChartBarSquare from '~icons/heroicons/chart-bar-square'
 import IconCircleStack from '~icons/heroicons/circle-stack'
 import IconCommandLine from '~icons/heroicons/command-line'
 import IconCurrencyDollar from '~icons/heroicons/currency-dollar'
@@ -17,6 +18,7 @@ export const adminTabs: Tab[] = [
   { label: 'plugins', icon: IconPuzzle, key: '/plugins' },
   { label: 'cli', icon: IconCommandLine, key: '/cli' },
   { label: 'users', icon: IconUsers, key: '/users' },
+  { label: 'frontend-onboarding', icon: IconChartBarSquare, key: '/frontend-onboarding' },
   { label: 'admin-organizations', icon: IconBuildingOffice, key: '/organizations' },
   { label: 'revenue', icon: IconBanknotes, key: '/revenue' },
   { label: 'credits', icon: IconCurrencyDollar, key: '/credits' },

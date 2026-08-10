@@ -1,4 +1,5 @@
 import type { FrontendOnboardingAnalytics } from '../src/services/adminFrontendOnboarding'
+import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 import {
   buildFrontendOnboardingDailySeries,
@@ -76,5 +77,61 @@ describe('admin frontend onboarding dashboard', () => {
     expect(formatFrontendOnboardingDuration(550)).toBe('1s')
     expect(formatFrontendOnboardingDuration(59_500)).toBe('1m 0s')
     expect(formatFrontendOnboardingDuration(-100)).toBe('0s')
+  })
+
+  it('wires the page to the frontend onboarding analytics metric', async () => {
+    const source = await readFile(new URL('../src/pages/admin/dashboard/frontend-onboarding.vue', import.meta.url), 'utf8')
+
+    expect(source).toContain(`fetchStats('frontend_onboarding_analytics')`)
+  })
+
+  it('uses the existing admin dashboard components and fixed onboarding version', async () => {
+    const source = await readFile(new URL('../src/pages/admin/dashboard/frontend-onboarding.vue', import.meta.url), 'utf8')
+
+    expect(source).toContain('<AdminFilterBar')
+    expect(source.match(/<AdminStatsCard\b/g)).toHaveLength(4)
+    expect(source).toContain('<AdminStackedBarChart')
+    expect(source).toContain('<AdminFunnelChart')
+    expect(source).toContain(`t('frontend-onboarding-version-1')`)
+  })
+
+  it('omits PostHog warnings, existing-org analytics, and selector UI', async () => {
+    const source = await readFile(new URL('../src/pages/admin/dashboard/frontend-onboarding.vue', import.meta.url), 'utf8')
+
+    expect(source).not.toContain('posthogWarning')
+    expect(source).not.toContain('posthog_configured')
+    expect(source).not.toContain('posthog_connected')
+    expect(source).not.toContain('existing_org')
+    expect(source).not.toContain('<select')
+    expect(source).not.toContain('version-selector')
+    expect(source).not.toContain('intent-selector')
+  })
+
+  it('registers the frontend onboarding admin tab', async () => {
+    const source = await readFile(new URL('../src/constants/adminTabs.ts', import.meta.url), 'utf8')
+
+    expect(source).toContain(`{ label: 'frontend-onboarding', icon:`)
+    expect(source).toContain(`key: '/frontend-onboarding'`)
+  })
+
+  it('defines every frontend onboarding page label in English', async () => {
+    const messages = JSON.parse(await readFile(new URL('../messages/en.json', import.meta.url), 'utf8')) as Record<string, string>
+
+    expect(messages['frontend-onboarding']).toBe('Frontend onboarding')
+    expect(messages['frontend-onboarding-version-1']).toBe('Onboarding v1')
+    expect(messages['frontend-onboarding-attempts']).toBe('Onboarding attempts')
+    expect(messages['frontend-onboarding-attempts-subtitle']).toBe('Unique frontend attempts')
+    expect(messages['frontend-onboarding-completed']).toBe('Frontend onboarding completed')
+    expect(messages['frontend-onboarding-completed-subtitle']).toBe('{count} attempts reached setup')
+    expect(messages['frontend-onboarding-median-time']).toBe('Median completion time')
+    expect(messages['frontend-onboarding-median-time-subtitle']).toBe('Completed attempts only')
+    expect(messages['frontend-onboarding-largest-dropoff']).toBe('Largest drop-off')
+    expect(messages['frontend-onboarding-daily-attempts']).toBe('Daily onboarding attempts')
+    expect(messages['frontend-onboarding-funnel']).toBe('Frontend onboarding funnel')
+    expect(messages['frontend-onboarding-funnel-description']).toBe('Progress through the new-user app-creation wizard')
+    expect(messages['frontend-onboarding-new-users']).toBe('New user onboarding')
+    expect(messages['frontend-onboarding-selected-period']).toBe('Selected period')
+    expect(messages['frontend-onboarding-no-dropoff']).toBe('No drop-off')
+    expect(messages['frontend-onboarding-transition']).toBe('{from} → {to}')
   })
 })
