@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Database } from '../types/supabase.types'
 import { log } from '@clack/prompts'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
+import { CliUserError } from '../shared/cli-user-error'
 import { appAddHintMessage, formatCapgoApiErrorBody, getCapgoCliHttpStatus, hasCliPermission, invokeCapgoCliApi, isCapgoManagedSupabaseHost, resolveCapgoPublicApiHost, show2FADeniedError } from '../utils'
 
 export async function checkAppExists(
@@ -217,10 +218,11 @@ export async function checkAppExistsAndHasPermissionOrgErr(
   }
 
   if (!(await hasCliPermission(supabase, apikey, requiredPermissionKey, { appId: appid, channelId: channelId ?? null }))) {
-    const msg = `Insufficient permissions for app ${appid}. Required RBAC permission for this action: ${requiredPermissionKey}.`
     if (!silent)
-      log.error(msg)
-    throw new Error(msg)
+      log.error(`Insufficient permissions for app ${appid}. Required RBAC permission for this action: ${requiredPermissionKey}.`)
+    // Keep the app id and permission key OUT of the CliUserError message: they
+    // go in context so error tracking does not fingerprint one issue per app.
+    throw new CliUserError('Insufficient permissions for app. Required RBAC permission for this action.', { appId: appid, requiredPermission: requiredPermissionKey })
   }
 
   return true

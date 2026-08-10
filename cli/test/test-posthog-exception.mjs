@@ -217,6 +217,17 @@ try {
   // never opens an error tracking issue.
   assert.equal(shouldCapturePosthogException(new CliUserError('Login cancelled')), false)
   assert.equal(shouldCapturePosthogException(new CliUserError('Upload cancelled by user')), false)
+  // `resolveUserIdFromApiKey` throws a bad-key failure as CliUserError, so a
+  // later reword of the message can no longer break the filter by substring.
+  assert.equal(shouldCapturePosthogException(new CliUserError('Capgo authentication failed: invalid Capgo API key or insufficient Capgo permissions.')), false)
+  // `checkAppExistsAndHasPermissionOrgErr` throws the RBAC failure as
+  // CliUserError; the app id and permission key live in context, so every app
+  // maps to one issue instead of one issue per app.
+  assert.equal(shouldCapturePosthogException(new CliUserError('Insufficient permissions for app. Required RBAC permission for this action.', { appId: 'com.example.app', requiredPermission: 'app.write' })), false)
+  assert.equal(
+    new CliUserError('Insufficient permissions for app. Required RBAC permission for this action.', { appId: 'com.a' }).message,
+    new CliUserError('Insufficient permissions for app. Required RBAC permission for this action.', { appId: 'com.b' }).message,
+  )
   // Two failures on different channels must be treated identically (one issue,
   // not one per channel), since the channel name lives in context, not the message.
   assert.equal(

@@ -2051,7 +2051,10 @@ export async function resolveUserIdFromApiKey(supabase: SupabaseClient<Database>
   if (!userId) {
     if (!silent)
       log.error(`Capgo authentication failed: invalid Capgo API key or insufficient Capgo permissions.`)
-    throw new Error('Capgo authentication failed: invalid Capgo API key or insufficient Capgo permissions.')
+    // Throw a CliUserError so error tracking skips this by type: a bad or
+    // missing API key is an expected user-configuration failure, not a crash.
+    // Type classification stays true even if this wording changes later.
+    throw new CliUserError('Capgo authentication failed: invalid Capgo API key or insufficient Capgo permissions.')
   }
   return userId
 }
