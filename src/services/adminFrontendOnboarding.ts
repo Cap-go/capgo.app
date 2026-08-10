@@ -53,6 +53,14 @@ export interface FrontendOnboardingFunnelDisplayStage {
   color: string
 }
 
+export interface FrontendOnboardingFunnelSummary {
+  key: FrontendOnboardingStageKey
+  conversion_percent: number
+  reached: number
+  from_label: string | null
+  to_label: string
+}
+
 export interface FrontendOnboardingAnalyticsLoaderCallbacks {
   onAnalytics: (analytics: FrontendOnboardingAnalytics | null) => void
   onError: (error: unknown) => void
@@ -113,6 +121,18 @@ export function buildFrontendOnboardingFunnelStages(
     label: stage.label,
     value: stage.reached,
     color: FUNNEL_STAGE_COLORS[stage.key],
+  }))
+}
+
+export function buildFrontendOnboardingFunnelSummaries(
+  funnel: readonly FrontendOnboardingAnalytics['funnel'][number][],
+): FrontendOnboardingFunnelSummary[] {
+  return funnel.map((stage, index) => ({
+    key: stage.key,
+    conversion_percent: index === 0 ? 100 : 100 - stage.dropoff_percent,
+    reached: stage.reached,
+    from_label: index === 0 ? null : funnel[index - 1]?.label ?? null,
+    to_label: stage.label,
   }))
 }
 

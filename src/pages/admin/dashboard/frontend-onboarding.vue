@@ -17,6 +17,7 @@ import PageLoader from '~/components/PageLoader.vue'
 import {
   buildFrontendOnboardingDailySeries,
   buildFrontendOnboardingFunnelStages,
+  buildFrontendOnboardingFunnelSummaries,
   createFrontendOnboardingAnalyticsLoader,
   formatFrontendOnboardingDuration,
 } from '~/services/adminFrontendOnboarding'
@@ -59,6 +60,7 @@ const dailySeries = computed(() => buildFrontendOnboardingDailySeries(
   t('frontend-onboarding-new-users'),
 ))
 const funnelStages = computed(() => buildFrontendOnboardingFunnelStages(visibleAnalytics.value?.funnel ?? []))
+const funnelSummaries = computed(() => buildFrontendOnboardingFunnelSummaries(visibleAnalytics.value?.funnel ?? []))
 const hasAttempts = computed(() => (kpis.value?.attempts ?? 0) > 0)
 const attemptsValue = computed(() => formatNumberValue(kpis.value?.attempts ?? 0))
 const completionValue = computed(() => `${formatNumberValue(kpis.value?.completion_rate ?? 0, {
@@ -174,12 +176,12 @@ displayStore.defaultBack = '/dashboard'
             <AdminFunnelChart :stages="funnelStages" :is-loading="isLoadingStats" />
           </div>
           <div class="grid grid-cols-2 gap-4 pt-5 mt-5 border-t border-slate-200 md:grid-cols-4 dark:border-slate-700">
-            <div v-for="stage in visibleAnalytics?.funnel ?? []" :key="stage.key" class="text-center">
+            <div v-for="summary in funnelSummaries" :key="summary.key" class="text-center">
               <p class="text-xl font-bold text-slate-900 tabular-nums dark:text-white">
-                {{ formatNumberValue(stage.of_start_percent, { minimumFractionDigits: 1, maximumFractionDigits: 1 }) }}%
+                {{ formatNumberValue(summary.conversion_percent) }}%
               </p>
               <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                {{ stage.label }} · {{ formatNumberValue(stage.reached) }}
+                {{ summary.from_label ? t('frontend-onboarding-transition', { from: summary.from_label, to: summary.to_label }) : summary.to_label }} · {{ formatNumberValue(summary.reached) }}
               </p>
             </div>
           </div>

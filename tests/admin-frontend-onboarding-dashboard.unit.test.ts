@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildFrontendOnboardingDailySeries,
   buildFrontendOnboardingFunnelStages,
+  buildFrontendOnboardingFunnelSummaries,
   createFrontendOnboardingAnalyticsLoader,
   formatFrontendOnboardingDuration,
 } from '../src/services/adminFrontendOnboarding'
@@ -77,6 +78,39 @@ describe('admin frontend onboarding dashboard', () => {
       { label: 'Setup reached', value: 4, color: '#10b981' },
       { label: 'Intent', value: 10, color: '#119eff' },
       { label: 'Organization', value: 5, color: '#8b5cf6' },
+    ])
+  })
+
+  it.concurrent('adapts funnel drop-offs into ordered stage-to-stage conversions', () => {
+    expect(buildFrontendOnboardingFunnelSummaries(analytics.funnel)).toEqual([
+      {
+        key: 'intent',
+        conversion_percent: 100,
+        reached: 10,
+        from_label: null,
+        to_label: 'Intent',
+      },
+      {
+        key: 'details',
+        conversion_percent: 80,
+        reached: 8,
+        from_label: 'Intent',
+        to_label: 'App details',
+      },
+      {
+        key: 'organization',
+        conversion_percent: 62.5,
+        reached: 5,
+        from_label: 'App details',
+        to_label: 'Organization',
+      },
+      {
+        key: 'setup',
+        conversion_percent: 80,
+        reached: 4,
+        from_label: 'Organization',
+        to_label: 'Setup reached',
+      },
     ])
   })
 
@@ -245,6 +279,7 @@ describe('admin frontend onboarding dashboard', () => {
 
   it('uses the existing admin dashboard components and fixed onboarding version', async () => {
     const source = await readFile(new URL('../src/pages/admin/dashboard/frontend-onboarding.vue', import.meta.url), 'utf8')
+    const template = source.slice(source.indexOf('<template>'))
 
     expect(source).toContain('<PageLoader')
     expect(source.match(/<AdminFilterBar(?:\s|\/?>)/g)).toHaveLength(1)
@@ -253,6 +288,9 @@ describe('admin frontend onboarding dashboard', () => {
     expect(source.match(/<AdminStackedBarChart(?:\s|\/?>)/g)).toHaveLength(1)
     expect(source.match(/<AdminFunnelChart(?:\s|\/?>)/g)).toHaveLength(1)
     expect(source).toContain(`t('frontend-onboarding-version-1')`)
+    expect(source).toContain('buildFrontendOnboardingFunnelSummaries')
+    expect(template).toContain('summary.conversion_percent')
+    expect(template).not.toContain('of_start_percent')
   })
 
   it('omits PostHog warnings, existing-org analytics, and selector UI', async () => {
