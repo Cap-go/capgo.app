@@ -1,4 +1,5 @@
 import type { EmailPreferenceKey, EmailPreferences } from '../utils/org_email_notifications.ts'
+import type { Json } from '../utils/supabase.types.ts'
 import { z } from 'zod'
 import { unsubscribeBento } from '../utils/bento.ts'
 import { CacheHelper } from '../utils/cache.ts'
@@ -143,7 +144,7 @@ app.post('/', async (c) => {
           }
 
       const update = {
-        email_preferences: nextPrefs,
+        email_preferences: nextPrefs as Json,
         // Opt-out only for general flags too — never force them back on.
         enable_notifications: unsubscribeAll || parsed.data.enable_notifications === false
           ? false

@@ -41,8 +41,11 @@ const ALL_EMAIL_PREF_DISABLED_TAGS = Object.values(EMAIL_PREF_DISABLED_TAGS)
 const ALL_EMAIL_TYPE_TAGS = Object.values(EMAIL_TYPE_TAGS)
 const ALL_TAGS = [...ALL_LEGACY_TAGS, ...ALL_EMAIL_PREF_DISABLED_TAGS, ...ALL_EMAIL_TYPE_TAGS]
 
-type UserPreferenceRecord = Database['public']['Tables']['users']['Row'] & {
-  email_preferences?: EmailPreferences | null
+/** Fields used for Bento preference tag sync — partial selects are enough. */
+type UserPreferenceRecord = {
+  enable_notifications?: boolean | null
+  opt_for_newsletters?: boolean | null
+  email_preferences?: EmailPreferences | Database['public']['Tables']['users']['Row']['email_preferences'] | null
 }
 
 function buildDesiredTags(email: string, record: UserPreferenceRecord | null | undefined) {
@@ -54,7 +57,7 @@ function buildDesiredTags(email: string, record: UserPreferenceRecord | null | u
   if (record?.opt_for_newsletters)
     tags.add(NEWSLETTER_TAG)
 
-  const emailPrefs = record?.email_preferences ?? {}
+  const emailPrefs = (record?.email_preferences ?? {}) as EmailPreferences
   for (const [key, disabledTag] of Object.entries(EMAIL_PREF_DISABLED_TAGS)) {
     const prefKey = key as EmailPreferenceKey
     const isEnabled = emailPrefs[prefKey] ?? true
