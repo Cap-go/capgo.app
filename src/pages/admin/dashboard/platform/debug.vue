@@ -34,9 +34,9 @@ displayStore.defaultBack = '/dashboard'
 function triggerFakeReplicationToast() {
   showUploadReplicationToast({
     eventLabel: 'Upload was uploaded',
-    route: '/admin/dashboard/replication',
+    route: '/admin/dashboard/platform/replication',
     actionLabel: t('view'),
-    onAction: () => router.push('/admin/dashboard/replication'),
+    onAction: () => router.push('/admin/dashboard/platform/replication'),
   })
 }
 </script>

@@ -10,7 +10,7 @@ import { useRouter } from 'vue-router'
 const router = useRouter()
 
 onMounted(() => {
-  void router.replace('/admin/dashboard/pulse')
+  void router.replace('/admin/dashboard/product/cli')
 })
 </script>
 
