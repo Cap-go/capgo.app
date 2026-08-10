@@ -289,9 +289,6 @@ const shouldShowUpgrade = computed(() => {
   if (hideExternalPurchaseFlows)
     return false
 
-  if (isCreditsOnly.value)
-    return !!currentPlanSuggest.value
-
   if (!currentPlanSuggest.value || !currentPlan.value) {
     return false
   }
