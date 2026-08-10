@@ -18,14 +18,18 @@ const organizationStore = useOrganizationStore()
 const isMobile = Capacitor.isNativePlatform()
 const isCreditsOnly = computed(() => isCreditsOnlyOrg(organizationStore.currentOrganization))
 const billingCtaHref = computed(() => {
+  if (isMobile)
+    return '/settings/organization/usage'
   if (isCreditsOnly.value)
     return '/settings/organization/credits'
-  return isMobile ? '/settings/organization/usage' : '/settings/organization/plans'
+  return '/settings/organization/plans'
 })
 const billingCtaLabel = computed(() => {
+  if (isMobile)
+    return t('see-usage')
   if (isCreditsOnly.value)
     return t('manage')
-  return isMobile ? t('see-usage') : t('upgrade')
+  return t('upgrade')
 })
 
 // Check if user lacks security compliance (2FA or password) - data is unreliable in this case
