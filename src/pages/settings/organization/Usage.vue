@@ -15,6 +15,7 @@ import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { calculateCreditCost, getCurrentPlanNameOrg, getPlans, getPlanUsagePercent, getTotalStorage, getUsageCreditDeductions } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
+import { isCreditsOnlyOrg } from '~/utils/organizationBilling'
 
 type PlanUsageDetailed = Database['public']['Functions']['get_plan_usage_percent_detailed']['Returns'][number]
 // tabs handled by settings layout
@@ -179,6 +180,12 @@ const planUsage = computed(() => planUsageMap.value?.get(currentOrganization.val
 // Similar to Plans.vue - current plan and best plan computed properties
 const currentPlan = computed(() => main.plans.find(plan => plan.name === planUsage.value?.currentPlan?.name))
 const currentPlanSuggest = computed(() => main.plans.find(plan => plan.name === main.bestPlan))
+const isCreditsOnly = computed(() => isCreditsOnlyOrg(currentOrganization.value))
+const currentPlanLabel = computed(() => {
+  if (isCreditsOnly.value)
+    return t('credits')
+  return currentPlan.value?.name || t('loading')
+})
 
 function roundNumber(number: number) {
   return Math.round(number * 100) / 100
@@ -282,6 +289,9 @@ const shouldShowUpgrade = computed(() => {
   if (hideExternalPurchaseFlows)
     return false
 
+  if (isCreditsOnly.value)
+    return !!currentPlanSuggest.value
+
   if (!currentPlanSuggest.value || !currentPlan.value) {
     return false
   }
@@ -379,15 +389,26 @@ function nextRunDate() {
                 {{ t('plan') }}
               </div>
               <div class="text-2xl font-bold text-gray-900 dark:text-white">
-                {{ currentPlan?.name || t('loading') }}
+                {{ currentPlanLabel }}
+              </div>
+              <div v-if="isCreditsOnly" class="mt-1 text-xs font-medium text-blue-600 dark:text-blue-400">
+                {{ t('credits-only-banner') }}
               </div>
             </div>
-            <div v-if="!hideExternalPurchaseFlows" class="flex flex-col">
+            <div v-if="!hideExternalPurchaseFlows && !isCreditsOnly" class="flex flex-col">
               <div class="mb-1 text-sm text-gray-500 dark:text-gray-400">
                 {{ t('base') }}
               </div>
               <div class="text-2xl font-bold text-gray-900 dark:text-white">
                 {{ formatMonthlyPrice(currentPlan?.price_m) }}
+              </div>
+            </div>
+            <div v-if="!hideExternalPurchaseFlows && isCreditsOnly" class="flex flex-col">
+              <div class="mb-1 text-sm text-gray-500 dark:text-gray-400">
+                {{ t('credits') }}
+              </div>
+              <div class="text-2xl font-bold text-gray-900 dark:text-white">
+                {{ formatNumberValue(Number(currentOrganization?.credit_available ?? 0), { maximumFractionDigits: 0 }) }}
               </div>
             </div>
             <div v-if="!hideExternalPurchaseFlows" class="flex flex-col">
@@ -404,7 +425,7 @@ function nextRunDate() {
               {{ t('total') }}
             </div>
             <div class="text-xl font-semibold text-gray-900 dark:text-white">
-              {{ formatCurrency(planUsage?.totalPrice) }}
+              {{ formatCurrency(isCreditsOnly ? planUsage?.totalUsagePrice : planUsage?.totalPrice) }}
             </div>
           </div>
         </div>
@@ -437,7 +458,7 @@ function nextRunDate() {
       </div>
 
       <!-- Credits CTA -->
-      <CreditsCta v-if="!hideExternalPurchaseFlows" class="mb-8 shrink-0" />
+      <CreditsCta v-if="!hideExternalPurchaseFlows" class="mb-8 shrink-0" :credits-only="isCreditsOnly" />
 
       <!-- Usage Metrics Grid -->
       <h2 class="mb-4 text-lg font-semibold text-gray-900 dark:text-white shrink-0">
