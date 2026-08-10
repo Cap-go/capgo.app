@@ -5,6 +5,7 @@ meta:
 
 <script setup lang="ts">
 import type { TableColumn } from '~/components/comp_def'
+import type { RegistrationSourceTrendPoint } from '~/services/adminRegistrationSources'
 import { computed, h, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
@@ -16,6 +17,7 @@ import AdminStackedBarChart from '~/components/admin/AdminStackedBarChart.vue'
 import AdminStatsCard from '~/components/admin/AdminStatsCard.vue'
 import ChartCard from '~/components/dashboard/ChartCard.vue'
 import PageLoader from '~/components/PageLoader.vue'
+import { aggregateRegistrationSourceTotals } from '~/services/adminRegistrationSources'
 import { formatLocalDate, formatLocalDateTime } from '~/services/date'
 import { formatNumberValue, formatOneDecimal } from '~/services/formatLocale'
 import { getEmoji } from '~/services/i18n'
@@ -32,13 +34,6 @@ const router = useRouter()
 const isLoading = ref(true)
 
 // Onboarding funnel data
-interface RegistrationSourceTrendPoint {
-  date: string
-  normal_registrations: number
-  invite_registrations: number
-  without_profile: number
-}
-
 interface OnboardingFunnelData {
   total_registrations: number
   total_orgs: number
@@ -1113,6 +1108,10 @@ const inviteJoinTrendSeries = computed(() => {
   ]
 })
 
+const registrationSourceTotals = computed(() => {
+  return aggregateRegistrationSourceTotals(onboardingFunnelData.value?.registration_source_trend ?? [])
+})
+
 const registrationSourceTrendSeries = computed(() => {
   const trend = onboardingFunnelData.value?.registration_source_trend
   if (!trend || trend.length === 0)
@@ -1253,6 +1252,29 @@ displayStore.defaultBack = '/dashboard'
               :series="registrationSourceTrendSeries"
               :is-loading="isLoadingOnboardingFunnel"
             />
+            <div data-test="registration-source-totals" class="grid grid-cols-1 gap-6 mt-6 md:grid-cols-3">
+              <AdminStatsCard
+                :title="t('normal-registration')"
+                :value="registrationSourceTotals.normalRegistrations"
+                color-class="text-blue-500"
+                :is-loading="isLoadingOnboardingFunnel"
+                :subtitle="t('selected-period')"
+              />
+              <AdminStatsCard
+                :title="t('organization-invite')"
+                :value="registrationSourceTotals.organizationInvites"
+                color-class="text-orange-500"
+                :is-loading="isLoadingOnboardingFunnel"
+                :subtitle="t('selected-period')"
+              />
+              <AdminStatsCard
+                :title="t('without-profile')"
+                :value="registrationSourceTotals.withoutProfiles"
+                color-class="text-slate-400"
+                :is-loading="isLoadingOnboardingFunnel"
+                :subtitle="t('selected-period')"
+              />
+            </div>
           </ChartCard>
 
           <!-- Onboarding Trend Chart -->
