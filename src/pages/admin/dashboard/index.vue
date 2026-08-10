@@ -10,7 +10,7 @@ import { useRouter } from 'vue-router'
 const router = useRouter()
 
 onMounted(() => {
-  void router.replace('/admin/dashboard/users')
+  void router.replace('/admin/dashboard/onboarding')
 })
 </script>
 

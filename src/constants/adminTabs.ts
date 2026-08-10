@@ -1,29 +1,19 @@
 import type { Tab } from '~/components/comp_def'
-import IconArrowPath from '~icons/heroicons/arrow-path'
 import IconBanknotes from '~icons/heroicons/banknotes'
-import IconBell from '~icons/heroicons/bell'
 import IconBuildingOffice from '~icons/heroicons/building-office-2'
-import IconChartBar from '~icons/heroicons/chart-bar-square'
+import IconChartBar from '~icons/heroicons/chart-bar'
 import IconCircleStack from '~icons/heroicons/circle-stack'
-import IconCommandLine from '~icons/heroicons/command-line'
-import IconCurrencyDollar from '~icons/heroicons/currency-dollar'
-import IconPuzzle from '~icons/heroicons/puzzle-piece'
-import IconSignal from '~icons/heroicons/signal'
-import IconUsers from '~icons/heroicons/user-group'
-import IconBuild from '~icons/heroicons/wrench-screwdriver'
+import IconHeart from '~icons/heroicons/heart'
+import IconRocket from '~icons/heroicons/rocket-launch'
+import IconSparkles from '~icons/heroicons/sparkles'
 
+/** Primary admin hubs — organized by admin intention, not product feature. */
 export const adminTabs: Tab[] = [
-  { label: 'builder', icon: IconBuild, key: '/builder' },
-  { label: 'updates', icon: IconArrowPath, key: '/updates' },
-  { label: 'replication', icon: IconCircleStack, key: '/replication' },
-  { label: 'plugins', icon: IconPuzzle, key: '/plugins' },
-  { label: 'cli', icon: IconCommandLine, key: '/cli' },
-  { label: 'channel-surfing', icon: IconSignal, key: '/channel-surfing' },
-  { label: 'users', icon: IconUsers, key: '/users' },
-  { label: 'frontend-onboarding', icon: IconChartBar, key: '/frontend-onboarding' },
-  { label: 'admin-organizations', icon: IconBuildingOffice, key: '/organizations' },
-  { label: 'revenue', icon: IconBanknotes, key: '/revenue' },
-  { label: 'plans-analytics-title', icon: IconChartBar, key: '/plans' },
-  { label: 'credits', icon: IconCurrencyDollar, key: '/credits' },
-  { label: 'notifications', icon: IconBell, key: '/notifications' },
+  { label: 'admin-pulse', icon: IconChartBar, key: '/pulse' },
+  { label: 'admin-onboarding', icon: IconRocket, key: '/onboarding' },
+  { label: 'admin-product', icon: IconSparkles, key: '/product/updates' },
+  { label: 'admin-retention', icon: IconHeart, key: '/retention' },
+  { label: 'admin-customers', icon: IconBuildingOffice, key: '/customers/organizations' },
+  { label: 'admin-revenue', icon: IconBanknotes, key: '/revenue' },
+  { label: 'admin-platform', icon: IconCircleStack, key: '/platform/replication' },
 ]
