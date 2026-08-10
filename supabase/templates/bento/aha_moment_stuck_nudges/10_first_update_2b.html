@@ -1,0 +1,19 @@
+<!-- Workflow: Aha moment (13471) -->
+<!-- Step: stuck after first_bundle (no first_app_update) -->
+<!-- Position: email #2 / Split B -->
+<!-- Delay after existing 64383: 2 days -->
+<!-- Stop if tags: first_app_update OR onboarded -->
+<!-- Subject: Your Capgo bundle is live — force the first device check -->
+<!-- Inbox: Reinstall, open once, confirm notifyAppReady. -->
+
+<p dir="ltr">Hey {{ visitor.pretty_name.first }},</p>
+<p dir="ltr">Fast path to see the first update:</p>
+<ol>
+  <li dir="ltr"><p dir="ltr">Install a fresh native build with <code>@capgo/capacitor-updater</code></p></li>
+  <li dir="ltr"><p dir="ltr">Call <code>CapacitorUpdater.notifyAppReady()</code> early after launch</p></li>
+  <li dir="ltr"><p dir="ltr">Open the app on a physical phone once</p></li>
+  <li dir="ltr"><p dir="ltr">Check Capgo logs for the device check-in</p></li>
+</ol>
+<p dir="ltr">Onboarding guide: <a target="_blank" rel="noopener noreferrer nofollow" href="https://capgo.app/docs/getting-started/onboarding/">Onboarding</a><br>
+Deploy guide: <a target="_blank" rel="noopener noreferrer nofollow" href="https://capgo.app/docs/getting-started/deploy/">Deploy</a></p>
+<p dir="ltr">If the device never appears, reply with platform + plugin version.</p>

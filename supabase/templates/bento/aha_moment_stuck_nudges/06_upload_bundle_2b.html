@@ -1,0 +1,20 @@
+<!-- Workflow: Aha moment (13471) -->
+<!-- Step: stuck after first_app (no first_bundle) -->
+<!-- Position: email #2 / Split B -->
+<!-- Delay after existing 64375: 2 days -->
+<!-- Stop if tags: first_bundle OR first_app_update OR onboarded -->
+<!-- Subject: Upload checklist before your first Capgo bundle -->
+<!-- Inbox: 4 quick checks so the upload succeeds. -->
+
+<p dir="ltr">Hey {{ visitor.pretty_name.first }},</p>
+<p dir="ltr">Before you upload, run this 30-second checklist:</p>
+<ul>
+  <li dir="ltr"><p dir="ltr">App ID in Capgo matches Capacitor <code>appId</code></p></li>
+  <li dir="ltr"><p dir="ltr">You have an API key with upload rights</p></li>
+  <li dir="ltr"><p dir="ltr">Your web build folder is ready (<code>dist</code> / <code>www</code> / framework output)</p></li>
+  <li dir="ltr"><p dir="ltr">You’re in the project root when you run the CLI</p></li>
+</ul>
+<p dir="ltr">Then:</p>
+<pre class="bento-code-block" data-theme="dark"><code>npx @capgo/cli@latest bundle upload</code></pre>
+<p dir="ltr">Prefer video? <a target="_blank" rel="noopener noreferrer nofollow" href="https://youtu.be/LCwaZrCOIGI">CLI walkthrough</a></p>
+<p dir="ltr">Full guide: <a target="_blank" rel="noopener noreferrer nofollow" href="https://capgo.app/docs/getting-started/deploy/">Deploy your first update</a></p>
