@@ -15,6 +15,7 @@ import { formatIncludedThenPrice } from '~/services/creditPricing'
 import { formatNumberValue } from '~/services/formatLocale'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { checkPermissions } from '~/services/permissions'
+import { createPlansVisitTracker } from '~/services/plansVisitTracking'
 import { getAffonsoReferral, getDatafastAttribution, openCheckout } from '~/services/stripe'
 import { getCreditUnitPricing, getCurrentPlanNameOrg, useSupabase } from '~/services/supabase'
 import { openSupport } from '~/services/support'
@@ -36,6 +37,7 @@ const segmentVal = ref<'m' | 'y'>('y')
 const isYearly = computed(() => segmentVal.value === 'y')
 const route = useRoute()
 const router = useRouter()
+const plansVisitTracker = createPlansVisitTracker()
 const main = useMainStore()
 const organizationStore = useOrganizationStore()
 const dialogStore = useDialogV2Store()
@@ -385,7 +387,12 @@ watch(currentOrganization, async (newOrg, prevOrg) => {
   // isSubscribeLoading.value.fill(false, 0, plans.value.length)
 })
 
-watchEffect(async () => {
+watchEffect(async (onCleanup) => {
+  let isCurrentActivation = true
+  onCleanup(() => {
+    isCurrentActivation = false
+  })
+
   if (route.path === '/settings/organization/plans') {
     if (isMobile) {
       router.replace('/settings/organization/usage')
@@ -403,9 +410,17 @@ watchEffect(async () => {
         organizationStore.setCurrentOrganization(route.query.oid)
       }
 
+      const orgId = currentOrganization.value?.gid
+      const isCurrentTrackingContext = () => isCurrentActivation
+        && route.path === '/settings/organization/plans'
+        && currentOrganization.value?.gid === orgId
+
       // Check permission on initial load
-      if (currentOrganization.value) {
-        const hasUpdateBillingPermission = await checkPermissions('org.update_billing', { orgId: currentOrganization.value.gid })
+      if (orgId) {
+        const hasUpdateBillingPermission = await checkPermissions('org.update_billing', { orgId })
+
+        if (!isCurrentTrackingContext())
+          return
 
         if (!hasUpdateBillingPermission) {
           const fallbackOrg = await findBillableFallbackOrg()
@@ -434,17 +449,8 @@ watchEffect(async () => {
         // billing page — the graceful no-org path is handled inside loadData.
         console.error('Failed to load plans data', error)
       })
-      const orgId = currentOrganization.value?.gid
-      if (orgId) {
-        sendEvent({
-          channel: 'usage',
-          event: 'User visit',
-          icon: '💳',
-          org_id: orgId,
-          tracking_version: 2,
-          notify: false,
-        }).catch()
-      }
+      if (isCurrentTrackingContext())
+        plansVisitTracker.track(orgId)
     }
   }
 })

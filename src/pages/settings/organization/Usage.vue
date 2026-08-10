@@ -13,7 +13,6 @@ import { formatLocalDate, formatLocalDateTime, formatUtcDateTimeAsLocal } from '
 import { formatNumber, formatNumberValue } from '~/services/formatLocale'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { calculateCreditCost, getCurrentPlanNameOrg, getPlans, getPlanUsagePercent, getTotalStorage, getUsageCreditDeductions } from '~/services/supabase'
-import { sendEvent } from '~/services/tracking'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 
@@ -41,19 +40,6 @@ watchEffect(async () => {
     // if success is in url params show modal success plan setup
     if (route.query.success) {
       toast.success(t('usage-success'))
-    }
-    else if (main.user?.id) {
-      const orgId = currentOrganization.value?.gid
-      if (orgId) {
-        sendEvent({
-          channel: 'usage',
-          event: 'User visit',
-          icon: '💳',
-          org_id: orgId,
-          tracking_version: 2,
-          notify: false,
-        }).catch()
-      }
     }
   }
 })
