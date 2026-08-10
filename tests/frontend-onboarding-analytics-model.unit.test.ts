@@ -42,12 +42,12 @@ describe('buildFrontendOnboardingAnalytics', () => {
       attempt({ attemptId: 'intent-only', intentMs: CURRENT_START_MS + DAY_MS + MINUTE_MS }),
     ], CURRENT_START_MS, CURRENT_END_MS)
 
-    expect(analytics.current).toMatchObject({
+    expect(analytics.kpis).toMatchObject({
       attempts: 4,
       completed: 2,
       completion_rate: 50,
       median_completion_ms: 300_000,
-      largest_dropoff: { from: 'App details', to: 'Organization', percentage: 1 / 3 * 100 },
+      largest_dropoff: { from: 'details', to: 'organization', percentage: 1 / 3 * 100 },
     })
     expect(analytics.daily_attempts).toEqual([
       { date: '2026-08-01', attempts: 2 },
@@ -75,7 +75,7 @@ describe('buildFrontendOnboardingAnalytics', () => {
     ], CURRENT_START_MS, CURRENT_END_MS)
 
     expect(analytics.funnel.map(stage => stage.reached)).toEqual([1, 0, 0, 0])
-    expect(analytics.current.median_completion_ms).toBeNull()
+    expect(analytics.kpis.median_completion_ms).toBeNull()
   })
 
   it('uses the immediately preceding cohort for comparisons', () => {
@@ -99,7 +99,7 @@ describe('buildFrontendOnboardingAnalytics', () => {
       }),
     ], CURRENT_START_MS, CURRENT_END_MS)
 
-    expect(analytics.current.comparison).toEqual({
+    expect(analytics.kpis.comparison).toEqual({
       attempts_percent: 0,
       completion_rate_points: 50,
       median_completion_ms: -300_000,
@@ -112,7 +112,7 @@ describe('buildFrontendOnboardingAnalytics', () => {
       attempt({ attemptId: 'current-intent', intentMs: CURRENT_START_MS }),
     ], CURRENT_START_MS, CURRENT_END_MS)
 
-    expect(analytics.current.comparison).toEqual({
+    expect(analytics.kpis.comparison).toEqual({
       attempts_percent: null,
       completion_rate_points: null,
       median_completion_ms: null,
@@ -123,7 +123,7 @@ describe('buildFrontendOnboardingAnalytics', () => {
   it('returns zero KPIs, zero-filled days, and an empty funnel for an empty cohort', () => {
     const analytics = buildFrontendOnboardingAnalytics([], CURRENT_START_MS, CURRENT_END_MS)
 
-    expect(analytics.current).toMatchObject({
+    expect(analytics.kpis).toMatchObject({
       attempts: 0,
       completed: 0,
       completion_rate: 0,
@@ -147,8 +147,48 @@ describe('buildFrontendOnboardingAnalytics', () => {
       attempt({ attemptId: 'end-exclusive', intentMs: CURRENT_END_MS }),
     ], CURRENT_START_MS, CURRENT_END_MS)
 
-    expect(analytics.current.attempts).toBe(1)
-    expect(analytics.current.completed).toBe(1)
-    expect(analytics.current.median_completion_ms).toBe(FRONTEND_ONBOARDING_FOLLOWUP_MS)
+    expect(analytics.kpis.attempts).toBe(1)
+    expect(analytics.kpis.completed).toBe(1)
+    expect(analytics.kpis.median_completion_ms).toBe(FRONTEND_ONBOARDING_FOLLOWUP_MS)
+  })
+
+  it('fills every UTC date crossed by a partial-day range', () => {
+    const startMs = Date.UTC(2026, 7, 1, 23)
+    const endMs = Date.UTC(2026, 7, 2, 1)
+    const analytics = buildFrontendOnboardingAnalytics([
+      attempt({ attemptId: 'late-day-one', intentMs: startMs }),
+      attempt({ attemptId: 'early-day-two', intentMs: startMs + 90 * MINUTE_MS }),
+    ], startMs, endMs)
+
+    expect(analytics.daily_attempts).toEqual([
+      { date: '2026-08-01', attempts: 1 },
+      { date: '2026-08-02', attempts: 1 },
+    ])
+  })
+
+  it('keeps the median comparison null when the previous cohort has no completions', () => {
+    const previousStartMs = CURRENT_START_MS - 2 * DAY_MS
+    const analytics = buildFrontendOnboardingAnalytics([
+      attempt({ attemptId: 'previous-intent-only', intentMs: previousStartMs }),
+      attempt({
+        attemptId: 'current-complete',
+        intentMs: CURRENT_START_MS,
+        setupMs: CURRENT_START_MS + 4 * MINUTE_MS,
+      }),
+    ], CURRENT_START_MS, CURRENT_END_MS)
+
+    expect(analytics.kpis.comparison.median_completion_ms).toBeNull()
+  })
+
+  it.each([
+    ['equal bounds', CURRENT_START_MS, CURRENT_START_MS],
+    ['reversed bounds', CURRENT_END_MS, CURRENT_START_MS],
+    ['NaN start', Number.NaN, CURRENT_END_MS],
+  ])('rejects %s', (_description, startMs, endMs) => {
+    expect(() => buildFrontendOnboardingAnalytics([], startMs, endMs)).toThrow(RangeError)
+  })
+
+  it('rejects an infinite end bound', () => {
+    expect(() => buildFrontendOnboardingAnalytics([], CURRENT_START_MS, Number.POSITIVE_INFINITY)).toThrow(RangeError)
   })
 })

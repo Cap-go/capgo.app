@@ -20,8 +20,8 @@ export interface FrontendOnboardingFunnelStage {
 }
 
 export interface FrontendOnboardingLargestDropoff {
-  from: FrontendOnboardingFunnelStage['label']
-  to: FrontendOnboardingFunnelStage['label']
+  from: Exclude<FrontendOnboardingStageKey, 'setup'>
+  to: Exclude<FrontendOnboardingStageKey, 'intent'>
   percentage: number
 }
 
@@ -46,7 +46,7 @@ export interface FrontendOnboardingDailyAttempt {
 }
 
 export interface FrontendOnboardingAnalytics {
-  current: FrontendOnboardingPeriodKpis & { comparison: FrontendOnboardingComparison }
+  kpis: FrontendOnboardingPeriodKpis & { comparison: FrontendOnboardingComparison }
   daily_attempts: FrontendOnboardingDailyAttempt[]
   funnel: FrontendOnboardingFunnelStage[]
 }
@@ -114,13 +114,13 @@ function findLargestDropoff(funnel: FrontendOnboardingFunnelStage[]): FrontendOn
   for (let index = 1; index < funnel.length; index++) {
     const previousStage = funnel[index - 1]
     const currentStage = funnel[index]
-    if (previousStage.reached === 0)
+    if (previousStage.reached === 0 || previousStage.key === 'setup' || currentStage.key === 'intent')
       continue
 
     if (largestDropoff === null || currentStage.dropoff_percent > largestDropoff.percentage) {
       largestDropoff = {
-        from: previousStage.label,
-        to: currentStage.label,
+        from: previousStage.key,
+        to: currentStage.key,
         percentage: currentStage.dropoff_percent,
       }
     }
@@ -191,6 +191,9 @@ export function buildFrontendOnboardingAnalytics(
   currentStartMs: number,
   currentEndMs: number,
 ): FrontendOnboardingAnalytics {
+  if (!Number.isFinite(currentStartMs) || !Number.isFinite(currentEndMs) || currentEndMs <= currentStartMs)
+    throw new RangeError('currentStartMs and currentEndMs must be finite, with currentEndMs greater than currentStartMs')
+
   const periodDurationMs = currentEndMs - currentStartMs
   const previousStartMs = currentStartMs - periodDurationMs
   const currentAttempts = attempts.filter(attempt => attempt.intentMs >= currentStartMs && attempt.intentMs < currentEndMs)
@@ -199,7 +202,7 @@ export function buildFrontendOnboardingAnalytics(
   const previous = summarizePeriod(previousAttempts)
 
   return {
-    current: {
+    kpis: {
       ...current.kpis,
       comparison: comparePeriods(current.kpis, previous.kpis),
     },
