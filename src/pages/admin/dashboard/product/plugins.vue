@@ -195,13 +195,15 @@ const majorTrendSeries = computed(() => {
 })
 const hasMajorTrendData = computed(() => majorTrendSeries.value.length > 0)
 
-watch(() => adminStore.activeDateRange, () => {
-  loadPluginBreakdown()
-}, { deep: true })
-
-watch(() => adminStore.refreshTrigger, () => {
-  loadPluginBreakdown()
-})
+watch(
+  [() => adminStore.activeDateRange, () => adminStore.refreshTrigger],
+  () => {
+    if (!mainStore.isAdmin)
+      return
+    loadPluginBreakdown()
+  },
+  { deep: true },
+)
 
 watch(thresholdSelection, (value) => {
   if (value !== 'custom')
@@ -237,21 +239,21 @@ displayStore.defaultBack = '/dashboard'
         <div v-else class="space-y-6">
           <div class="grid grid-cols-1 gap-6 md:grid-cols-3">
             <AdminStatsCard
-              title="Active devices (30d)"
+              :title="t('admin-plugins-active-devices-30d')"
               :value="devicesTotal"
               color-class="text-primary"
               :is-loading="isLoadingBreakdown"
               subtitle="All platforms"
             />
             <AdminStatsCard
-              title="iOS devices (30d)"
+              :title="t('admin-plugins-ios-devices-30d')"
               :value="devicesIos"
               color-class="text-[#119eff]"
               :is-loading="isLoadingBreakdown"
               subtitle="Active iOS devices"
             />
             <AdminStatsCard
-              title="Android devices (30d)"
+              :title="t('admin-plugins-android-devices-30d')"
               :value="devicesAndroid"
               color-class="text-emerald-500"
               :is-loading="isLoadingBreakdown"
@@ -260,8 +262,7 @@ displayStore.defaultBack = '/dashboard'
           </div>
 
           <ChartCard
-            chart-id="version-breakdown-trend"
-            title="Version Breakdown Over Time"
+            :title="t('admin-plugins-version-breakdown')"
             :is-loading="isLoadingBreakdown"
             :has-data="hasVersionTrendData"
             no-data-message="No plugin version trend data available"
@@ -269,7 +270,7 @@ displayStore.defaultBack = '/dashboard'
             <template #header>
               <div class="flex flex-col gap-1">
                 <h2 class="text-2xl font-semibold leading-tight dark:text-white text-slate-600">
-                  Version Breakdown Over Time
+                  {{ t('admin-plugins-version-breakdown') }}
                 </h2>
                 <p class="text-xs text-slate-500 dark:text-slate-400">
                   Top {{ topVersionsForTrend.length }} versions from latest snapshot (min share {{ thresholdValue }}%)
@@ -285,7 +286,6 @@ displayStore.defaultBack = '/dashboard'
           </ChartCard>
 
           <ChartCard
-            chart-id="major-version-breakdown-trend"
             title="Major Version Breakdown Over Time"
             :is-loading="isLoadingBreakdown"
             :has-data="hasMajorTrendData"
@@ -310,8 +310,7 @@ displayStore.defaultBack = '/dashboard'
           </ChartCard>
 
           <ChartCard
-            chart-id="version-ladder"
-            title="Version Ladder"
+            :title="t('admin-plugins-version-ladder')"
             :is-loading="isLoadingBreakdown"
             :has-data="hasVersionLadderData"
             no-data-message="No plugin version ladder data available"
@@ -319,7 +318,7 @@ displayStore.defaultBack = '/dashboard'
             <template #header>
               <div class="flex flex-col gap-1">
                 <h2 class="text-2xl font-semibold leading-tight dark:text-white text-slate-600">
-                  Version Ladder
+                  {{ t('admin-plugins-version-ladder') }}
                 </h2>
                 <p class="text-xs text-slate-500 dark:text-slate-400">
                   Top {{ maxVersionRows }} plugin versions with their top 3 app IDs
@@ -383,8 +382,7 @@ displayStore.defaultBack = '/dashboard'
 
           <div class="grid grid-cols-1 gap-6 xl:grid-cols-2">
             <ChartCard
-              chart-id="plugin-versions"
-              title="Plugin Versions"
+              :title="t('admin-plugins-plugin-versions')"
               :total="devicesTotal"
               unit="devices"
               :is-loading="isLoadingBreakdown"
@@ -395,7 +393,7 @@ displayStore.defaultBack = '/dashboard'
                 <div class="flex flex-col gap-3">
                   <div class="flex flex-col gap-1">
                     <h2 class="text-2xl font-semibold leading-tight dark:text-white text-slate-600">
-                      Plugin Versions
+                      {{ t('admin-plugins-plugin-versions') }}
                     </h2>
                     <p class="text-xs text-slate-500 dark:text-slate-400">
                       Latest snapshot: {{ snapshotDate }}
@@ -439,15 +437,14 @@ displayStore.defaultBack = '/dashboard'
               <AdminBarChart
                 :labels="versionLabels"
                 :values="versionValues"
-                label="Device Share"
+                :label="t('admin-plugins-device-share')"
                 :total="devicesTotal"
                 :is-loading="isLoadingBreakdown"
               />
             </ChartCard>
 
             <ChartCard
-              chart-id="major-versions"
-              title="Major Versions"
+              :title="t('admin-plugins-major-versions')"
               :total="devicesTotal"
               unit="devices"
               :is-loading="isLoadingBreakdown"
@@ -457,7 +454,7 @@ displayStore.defaultBack = '/dashboard'
               <template #header>
                 <div class="flex flex-col gap-1">
                   <h2 class="text-2xl font-semibold leading-tight dark:text-white text-slate-600">
-                    Major Versions
+                    {{ t('admin-plugins-major-versions') }}
                   </h2>
                   <p class="text-xs text-slate-500 dark:text-slate-400">
                     Latest snapshot: {{ snapshotDate }}
@@ -467,7 +464,7 @@ displayStore.defaultBack = '/dashboard'
               <AdminBarChart
                 :labels="majorLabels"
                 :values="majorValues"
-                label="Device Share"
+                :label="t('admin-plugins-device-share')"
                 :total="devicesTotal"
                 :is-loading="isLoadingBreakdown"
               />

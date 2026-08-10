@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import type { Tab } from '~/components/comp_def'
+import type { AdminHubKey } from '~/constants/adminHubs'
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import Tabs from '~/components/Tabs.vue'
 import { adminCustomersTabs } from '~/constants/adminCustomersTabs'
+import { adminHubPathPrefix, adminHubPrimaryKey } from '~/constants/adminHubs'
 import { adminOnboardingTabs } from '~/constants/adminOnboardingTabs'
 import { adminPlatformTabs } from '~/constants/adminPlatformTabs'
 import { adminProductTabs } from '~/constants/adminProductTabs'
@@ -23,32 +25,19 @@ const tabs = computed<Tab[]>(() => {
   }))
 })
 
-type HubKey = 'onboarding' | 'product' | 'retention' | 'customers' | 'revenue' | 'platform'
-
-const hubConfig: Record<HubKey, { base: string, tabs: Tab[] }> = {
-  onboarding: { base: `${ADMIN_BASE}/onboarding`, tabs: adminOnboardingTabs },
-  product: { base: `${ADMIN_BASE}/product`, tabs: adminProductTabs },
-  retention: { base: `${ADMIN_BASE}/retention`, tabs: adminRetentionTabs },
-  customers: { base: `${ADMIN_BASE}/customers`, tabs: adminCustomersTabs },
-  revenue: { base: `${ADMIN_BASE}/revenue`, tabs: adminRevenueTabs },
-  platform: { base: `${ADMIN_BASE}/platform`, tabs: adminPlatformTabs },
+const hubConfig: Record<AdminHubKey, { base: string, tabs: Tab[] }> = {
+  onboarding: { base: `${ADMIN_BASE}${adminHubPathPrefix.onboarding}`, tabs: adminOnboardingTabs },
+  product: { base: `${ADMIN_BASE}${adminHubPathPrefix.product}`, tabs: adminProductTabs },
+  retention: { base: `${ADMIN_BASE}${adminHubPathPrefix.retention}`, tabs: adminRetentionTabs },
+  customers: { base: `${ADMIN_BASE}${adminHubPathPrefix.customers}`, tabs: adminCustomersTabs },
+  revenue: { base: `${ADMIN_BASE}${adminHubPathPrefix.revenue}`, tabs: adminRevenueTabs },
+  platform: { base: `${ADMIN_BASE}${adminHubPathPrefix.platform}`, tabs: adminPlatformTabs },
 }
 
-const activeHub = computed<HubKey | null>(() => {
+const activeHub = computed<AdminHubKey | null>(() => {
   const path = route.path.replace(/\/$/, '')
-  if (path.startsWith(`${ADMIN_BASE}/onboarding`))
-    return 'onboarding'
-  if (path.startsWith(`${ADMIN_BASE}/product`))
-    return 'product'
-  if (path.startsWith(`${ADMIN_BASE}/retention`))
-    return 'retention'
-  if (path.startsWith(`${ADMIN_BASE}/customers`))
-    return 'customers'
-  if (path.startsWith(`${ADMIN_BASE}/revenue`))
-    return 'revenue'
-  if (path.startsWith(`${ADMIN_BASE}/platform`))
-    return 'platform'
-  return null
+  const hubs = Object.keys(adminHubPathPrefix) as AdminHubKey[]
+  return hubs.find(hub => path.startsWith(`${ADMIN_BASE}${adminHubPathPrefix[hub]}`)) ?? null
 })
 
 const secondaryTabs = computed<Tab[]>(() => {
@@ -66,19 +55,8 @@ const secondaryTabs = computed<Tab[]>(() => {
 const activeTab = computed(() => {
   const path = route.path.replace(/\/$/, '')
   const hub = activeHub.value
-
-  if (hub === 'onboarding')
-    return `${ADMIN_BASE}/onboarding`
-  if (hub === 'product')
-    return `${ADMIN_BASE}/product/updates`
-  if (hub === 'retention')
-    return `${ADMIN_BASE}/retention`
-  if (hub === 'customers')
-    return `${ADMIN_BASE}/customers/organizations`
-  if (hub === 'revenue')
-    return `${ADMIN_BASE}/revenue`
-  if (hub === 'platform')
-    return `${ADMIN_BASE}/platform/replication`
+  if (hub)
+    return `${ADMIN_BASE}${adminHubPrimaryKey[hub]}`
 
   const exact = tabs.value.find((t) => {
     const tabKey = t.key.replace(/\/$/, '')
@@ -112,8 +90,7 @@ const activeSecondaryTab = computed(() => {
     .filter(({ tabKey }) => path.startsWith(`${tabKey}/`))
     .sort((a, b) => b.tabKey.length - a.tabKey.length)[0]
 
-  const hub = activeHub.value
-  return prefixMatch?.t.key ?? (hub ? hubConfig[hub].base : undefined)
+  return prefixMatch?.t.key ?? secondaryTabs.value[0]?.key
 })
 
 function handleTab(key: string) {

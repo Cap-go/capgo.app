@@ -58,7 +58,6 @@ async function loadGlobalStatsTrend() {
   isLoadingGlobalStatsTrend.value = true
   try {
     const data = await adminStore.fetchStats('global_stats_trend')
-    console.log('[Admin Dashboard Updates] Global stats trend data:', data)
     globalStatsTrendData.value = data || []
   }
   catch (error) {
@@ -157,14 +156,15 @@ const latestGlobalStats = computed(() => {
   return globalStatsTrendData.value[globalStatsTrendData.value.length - 1]
 })
 
-watch(() => adminStore.activeDateRange, () => {
-  loadGlobalStatsTrend()
-}, { deep: true })
-
-// Watch for refresh button clicks
-watch(() => adminStore.refreshTrigger, () => {
-  loadGlobalStatsTrend()
-})
+watch(
+  [() => adminStore.activeDateRange, () => adminStore.refreshTrigger],
+  () => {
+    if (!mainStore.isAdmin)
+      return
+    loadGlobalStatsTrend()
+  },
+  { deep: true },
+)
 
 onMounted(async () => {
   if (!mainStore.isAdmin) {

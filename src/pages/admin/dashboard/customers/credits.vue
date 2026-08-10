@@ -415,13 +415,15 @@ async function loadRecentGrants() {
 
 watch(searchQuery, handleSearchInput)
 
-watch(() => adminStore.activeDateRange, () => {
-  loadCreditAnalytics()
-}, { deep: true })
-
-watch(() => adminStore.refreshTrigger, () => {
-  loadCreditAnalytics()
-})
+watch(
+  [() => adminStore.activeDateRange, () => adminStore.refreshTrigger],
+  () => {
+    if (!mainStore.isAdmin)
+      return
+    loadCreditAnalytics()
+  },
+  { deep: true },
+)
 
 onUnmounted(() => {
   if (searchDebounce) {

@@ -100,13 +100,15 @@ const dailySeries = computed(() => {
 
 const topUsers = computed(() => cliUsage.value?.top_users ?? [])
 
-watch(() => adminStore.activeDateRange, () => {
-  loadCliUsage()
-}, { deep: true })
-
-watch(() => adminStore.refreshTrigger, () => {
-  loadCliUsage()
-})
+watch(
+  [() => adminStore.activeDateRange, () => adminStore.refreshTrigger],
+  () => {
+    if (!mainStore.isAdmin)
+      return
+    loadCliUsage()
+  },
+  { deep: true },
+)
 
 onMounted(async () => {
   if (!mainStore.isAdmin) {

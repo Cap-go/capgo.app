@@ -5,6 +5,7 @@ meta:
 
 <script setup lang="ts">
 import type { TableColumn } from '~/components/comp_def'
+import type { OrganizationInsight, OrganizationInsightsResponse } from '~/services/adminOrganizationInsights'
 import { computed, h, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
@@ -17,39 +18,6 @@ import { useAdminDashboardStore } from '~/stores/adminDashboard'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
 
-type BillingType = 'monthly' | 'yearly'
-
-interface OrganizationInsight {
-  org_id: string
-  org_name: string
-  management_email: string
-  plan_name: string | null
-  billing_type: BillingType | null
-  upload_count: number
-  build_count: number
-  failed_update_count: number
-  install_count: number
-  update_attempt_count: number
-  needs_attention: boolean
-  fail_rate: number
-  mau: number
-  members_count: number
-  apps_count: number
-  last_upload_at: string | null
-  last_build_at: string | null
-  paid_at: string | null
-  registered_at: string
-}
-
-interface OrganizationInsightsResponse {
-  success: boolean
-  data: {
-    organizations: OrganizationInsight[]
-    total: number
-    plan_options: string[]
-  }
-}
-
 const { t } = useI18n()
 const displayStore = useDisplayStore()
 const mainStore = useMainStore()
@@ -58,6 +26,7 @@ const router = useRouter()
 const isLoading = ref(true)
 
 const PAGE_SIZE = 100
+const MAX_PAGES = 50
 const organizations = ref<OrganizationInsight[]>([])
 const isLoadingOrganizations = ref(false)
 let loadOrganizationsSequence = 0
@@ -71,6 +40,8 @@ function formatBillingTypeLabel(billingType: OrganizationInsight['billing_type']
     return t('yearly')
   if (billingType === 'monthly')
     return t('monthly')
+  if (billingType === 'usage')
+    return t('usage')
   return t('unknown')
 }
 
@@ -92,37 +63,47 @@ async function loadOrganizations() {
       throw new Error('Not authenticated')
 
     const { start, end } = adminStore.activeDateRange
-    const body: Record<string, unknown> = {
-      metric_category: 'organization_insights',
-      start_date: start.toISOString(),
-      end_date: end.toISOString(),
-      limit: PAGE_SIZE,
-      offset: 0,
-      paid_only: true,
+    const allOrgs: OrganizationInsight[] = []
+
+    for (let page = 0; page < MAX_PAGES; page++) {
+      if (sequence !== loadOrganizationsSequence)
+        return
+
+      const response = await fetch(`${defaultApiHost}/private/admin_stats`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          metric_category: 'organization_insights',
+          start_date: start.toISOString(),
+          end_date: end.toISOString(),
+          limit: PAGE_SIZE,
+          offset: page * PAGE_SIZE,
+          paid_only: true,
+        }),
+      })
+
+      if (!response.ok) {
+        const errorData: unknown = await response.json().catch(() => ({}))
+        throw new Error(`API error: ${response.status} - ${JSON.stringify(errorData)}`)
+      }
+
+      const payload = await response.json() as OrganizationInsightsResponse
+      if (!payload.success)
+        throw new Error('Failed to fetch organization insights')
+
+      const pageOrgs = payload.data.organizations || []
+      allOrgs.push(...pageOrgs)
+
+      if (pageOrgs.length < PAGE_SIZE || allOrgs.length >= (payload.data.total || 0))
+        break
     }
-
-    const response = await fetch(`${defaultApiHost}/private/admin_stats`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${session.access_token}`,
-      },
-      body: JSON.stringify(body),
-    })
-
-    if (!response.ok) {
-      const errorData: unknown = await response.json().catch(() => ({}))
-      throw new Error(`API error: ${response.status} - ${JSON.stringify(errorData)}`)
-    }
-
-    const payload = await response.json() as OrganizationInsightsResponse
-    if (!payload.success)
-      throw new Error('Failed to fetch organization insights')
 
     if (sequence !== loadOrganizationsSequence)
       return
 
-    const allOrgs = payload.data.organizations || []
     organizations.value = allOrgs.filter(isInactiveOrganization)
   }
   catch (error) {
@@ -215,13 +196,15 @@ const organizationColumns = computed<TableColumn[]>(() => [
   },
 ])
 
-watch(() => adminStore.activeDateRange, () => {
-  loadOrganizations()
-}, { deep: true })
-
-watch(() => adminStore.refreshTrigger, () => {
-  loadOrganizations()
-})
+watch(
+  [() => adminStore.activeDateRange, () => adminStore.refreshTrigger],
+  () => {
+    if (!mainStore.isAdmin)
+      return
+    void loadOrganizations()
+  },
+  { deep: true },
+)
 
 onMounted(async () => {
   if (!mainStore.isAdmin) {

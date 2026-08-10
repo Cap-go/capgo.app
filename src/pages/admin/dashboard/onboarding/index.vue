@@ -12,6 +12,7 @@ import AdminFunnelChart from '~/components/admin/AdminFunnelChart.vue'
 import AdminMultiLineChart from '~/components/admin/AdminMultiLineChart.vue'
 import ChartCard from '~/components/dashboard/ChartCard.vue'
 import PageLoader from '~/components/PageLoader.vue'
+import { useOnboardingFunnelMetrics } from '~/composables/useOnboardingFunnelMetrics'
 import { formatOneDecimal } from '~/services/formatLocale'
 import { useAdminDashboardStore } from '~/stores/adminDashboard'
 import { useDisplayStore } from '~/stores/display'
@@ -105,7 +106,6 @@ async function loadGlobalStatsTrend() {
   isLoadingGlobalStatsTrend.value = true
   try {
     const data = await adminStore.fetchStats('global_stats_trend')
-    console.log('[Admin Dashboard Onboarding] Global stats trend data:', data)
     globalStatsTrendData.value = data || []
   }
   catch (error) {
@@ -121,7 +121,6 @@ async function loadOnboardingFunnel() {
   isLoadingOnboardingFunnel.value = true
   try {
     const data = await adminStore.fetchStats('onboarding_funnel')
-    console.log('[Admin Dashboard Onboarding] Onboarding funnel data:', data)
     onboardingFunnelData.value = data || null
   }
   catch (error) {
@@ -139,7 +138,7 @@ const registrationsTrendSeries = computed(() => {
 
   return [
     {
-      label: 'Daily Registrations',
+      label: t('daily-registrations'),
       data: globalStatsTrendData.value.map(item => ({
         date: item.date,
         value: item.registers_today,
@@ -167,104 +166,7 @@ const registrationToSubscriptionConversionSeries = computed(() => {
   ]
 })
 
-const onboardingFunnelRates = computed(() => {
-  if (!onboardingFunnelData.value) {
-    return {
-      org: 0,
-      app: 0,
-      channel: 0,
-      bundle: 0,
-      subscribed: 0,
-      productionDevice: 0,
-      updateDownload: 0,
-    }
-  }
-
-  const totalRegistrations = Number(onboardingFunnelData.value.total_registrations) || 0
-  const totalOrgs = Number(onboardingFunnelData.value.total_orgs) || 0
-  const orgsWithApp = Number(onboardingFunnelData.value.orgs_with_app) || 0
-  const orgsWithChannel = Number(onboardingFunnelData.value.orgs_with_channel) || 0
-  const orgsWithBundle = Number(onboardingFunnelData.value.orgs_with_bundle) || 0
-  const orgsSubscribed = Number(onboardingFunnelData.value.orgs_subscribed) || 0
-  const orgsWithProductionDevice = Number(onboardingFunnelData.value.orgs_with_production_device) || 0
-  const orgsWithUpdateDownload = Number(onboardingFunnelData.value.orgs_with_update_download) || 0
-
-  return {
-    org: totalRegistrations > 0 ? (totalOrgs / totalRegistrations) * 100 : 0,
-    app: totalOrgs > 0 ? (orgsWithApp / totalOrgs) * 100 : 0,
-    channel: orgsWithApp > 0 ? (orgsWithChannel / orgsWithApp) * 100 : 0,
-    bundle: orgsWithChannel > 0 ? (orgsWithBundle / orgsWithChannel) * 100 : 0,
-    subscribed: orgsWithBundle > 0 ? (orgsSubscribed / orgsWithBundle) * 100 : 0,
-    productionDevice: orgsWithBundle > 0 ? (orgsWithProductionDevice / orgsWithBundle) * 100 : 0,
-    updateDownload: orgsWithProductionDevice > 0 ? (orgsWithUpdateDownload / orgsWithProductionDevice) * 100 : 0,
-  }
-})
-
-const onboardingFunnelConversionSummaries = computed(() => {
-  const rates = onboardingFunnelRates.value
-  const items = [
-    {
-      key: 'org',
-      value: rates.org,
-      label: t('register-to-org'),
-      colorClass: 'text-sky-500',
-    },
-    {
-      key: 'app',
-      value: rates.app,
-      label: t('org-to-app'),
-      colorClass: 'text-purple-500',
-    },
-    {
-      key: 'channel',
-      value: rates.channel,
-      label: t('app-to-channel'),
-      colorClass: 'text-amber-500',
-    },
-    {
-      key: 'bundle',
-      value: rates.bundle,
-      label: t('channel-to-bundle'),
-      colorClass: 'text-emerald-500',
-    },
-  ]
-
-  if (onboardingFunnelData.value?.activation_telemetry_available) {
-    items.push(
-      {
-        key: 'productionDevice',
-        value: rates.productionDevice,
-        label: t('bundle-to-production-device'),
-        colorClass: 'text-pink-500',
-      },
-      {
-        key: 'updateDownload',
-        value: rates.updateDownload,
-        label: t('production-device-to-update-download'),
-        colorClass: 'text-indigo-500',
-      },
-    )
-  }
-
-  items.push({
-    key: 'subscribed',
-    value: rates.subscribed,
-    label: t('bundle-to-subscribed'),
-    colorClass: 'text-rose-500',
-  })
-
-  return items
-})
-
-const onboardingFunnelConversionGridClass = computed(() => {
-  // Keep one row on large screens so rates follow the funnel columns.
-  const count = onboardingFunnelConversionSummaries.value.length
-  if (count >= 7)
-    return 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-7'
-  if (count >= 6)
-    return 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-6'
-  return 'grid-cols-2 sm:grid-cols-4'
-})
+const { onboardingFunnelRates, onboardingFunnelConversionSummaries, onboardingFunnelConversionGridClass } = useOnboardingFunnelMetrics(onboardingFunnelData)
 
 // Onboarding funnel stages for display
 const onboardingFunnelStages = computed(() => {
@@ -447,16 +349,16 @@ const inviteJoinTrendSeries = computed(() => {
   ]
 })
 
-watch(() => adminStore.activeDateRange, () => {
-  loadGlobalStatsTrend()
-  loadOnboardingFunnel()
-}, { deep: true })
-
-// Watch for refresh button clicks
-watch(() => adminStore.refreshTrigger, () => {
-  loadGlobalStatsTrend()
-  loadOnboardingFunnel()
-})
+watch(
+  [() => adminStore.activeDateRange, () => adminStore.refreshTrigger],
+  () => {
+    if (!mainStore.isAdmin)
+      return
+    loadGlobalStatsTrend()
+    loadOnboardingFunnel()
+  },
+  { deep: true },
+)
 
 onMounted(async () => {
   if (!mainStore.isAdmin) {

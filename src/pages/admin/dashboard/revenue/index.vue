@@ -102,7 +102,6 @@ async function loadGlobalStatsTrend() {
   isLoadingGlobalStatsTrend.value = true
   try {
     const data = await adminStore.fetchStats('global_stats_trend')
-    console.log('[Admin Dashboard Revenue] Global stats trend data:', data)
     globalStatsTrendData.value = data || []
   }
   catch (error) {
@@ -145,7 +144,7 @@ const subscriptionFlowSeries = computed(() => {
 
   return [
     {
-      label: 'New Subscriptions',
+      label: t('new-subscriptions'),
       data: globalStatsTrendData.value.map(item => ({
         date: item.date,
         value: item.new_paying_orgs || 0,
@@ -153,7 +152,7 @@ const subscriptionFlowSeries = computed(() => {
       color: '#10b981', // green
     },
     {
-      label: 'Cancellations',
+      label: t('cancellations'),
       data: globalStatsTrendData.value.map(item => ({
         date: item.date,
         value: item.canceled_orgs || 0,
@@ -620,7 +619,7 @@ const abovePlanMetricCards = computed(() => {
   return [
     {
       key: 'need-upgrade',
-      title: 'Orgs Need Upgrade',
+      title: t('need-upgrade'),
       description: t('need-upgrade-description'),
       value: stats ? stats.need_upgrade : 0,
       emptyDisplay: '0',
@@ -665,14 +664,15 @@ const abovePlanMetricCards = computed(() => {
   ]
 })
 
-watch(() => adminStore.activeDateRange, () => {
-  loadGlobalStatsTrend()
-}, { deep: true })
-
-// Watch for refresh button clicks
-watch(() => adminStore.refreshTrigger, () => {
-  loadGlobalStatsTrend()
-})
+watch(
+  [() => adminStore.activeDateRange, () => adminStore.refreshTrigger],
+  () => {
+    if (!mainStore.isAdmin)
+      return
+    loadGlobalStatsTrend()
+  },
+  { deep: true },
+)
 
 onMounted(async () => {
   if (!mainStore.isAdmin) {
@@ -758,7 +758,7 @@ displayStore.defaultBack = '/dashboard'
                   Total Paid Organizations
                 </p>
                 <p v-if="latestGlobalStats" class="mt-2 text-3xl font-bold text-success">
-                  {{ formatNumberValue(latestGlobalStats.paying_orgs_total || latestGlobalStats.paying || 0) }}
+                  {{ formatNumberValue(latestGlobalStats.paying_orgs_total ?? latestGlobalStats.paying ?? 0) }}
                 </p>
                 <p v-else class="mt-2 text-3xl font-bold text-success">
                   0

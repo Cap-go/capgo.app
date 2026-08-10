@@ -5,7 +5,7 @@ meta:
 
 <script setup lang="ts">
 import type { TableColumn } from '~/components/comp_def'
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import AdminFilterBar from '~/components/admin/AdminFilterBar.vue'
@@ -47,6 +47,7 @@ const cancelledOrganizationsTotal = ref(0)
 const cancelledOrganizationsCurrentPage = ref(1)
 const isLoadingCancelledOrganizations = ref(false)
 const CANCELLED_PAGE_SIZE = 20
+let loadCancelledOrganizationsSequence = 0
 
 function formatBillingTypeLabel(billingType: CancelledOrganization['billing_type']) {
   if (billingType === 'yearly')
@@ -56,7 +57,7 @@ function formatBillingTypeLabel(billingType: CancelledOrganization['billing_type
   return t('unknown')
 }
 
-const cancelledOrganizationsColumns = ref<TableColumn[]>([
+const cancelledOrganizationsColumns = computed<TableColumn[]>(() => [
   { label: t('org-name'), key: 'org_name', mobile: true, head: true, sortable: false },
   { label: t('email'), key: 'management_email', mobile: false, sortable: false },
   {
@@ -101,6 +102,7 @@ const cancelledOrganizationsColumns = ref<TableColumn[]>([
 ])
 
 async function loadCancelledOrganizations() {
+  const sequence = ++loadCancelledOrganizationsSequence
   isLoadingCancelledOrganizations.value = true
   try {
     const supabase = useSupabase()
@@ -135,26 +137,37 @@ async function loadCancelledOrganizations() {
     if (!data.success)
       throw new Error('Failed to fetch cancelled organizations')
 
+    if (sequence !== loadCancelledOrganizationsSequence)
+      return
+
     cancelledOrganizations.value = data.data.organizations || []
     cancelledOrganizationsTotal.value = data.data.total || 0
   }
   catch (error) {
+    if (sequence !== loadCancelledOrganizationsSequence)
+      return
+
     console.error('[Admin Dashboard Retention Churn] Error loading cancelled organizations:', error)
     cancelledOrganizations.value = []
     cancelledOrganizationsTotal.value = 0
   }
   finally {
-    isLoadingCancelledOrganizations.value = false
+    if (sequence === loadCancelledOrganizationsSequence)
+      isLoadingCancelledOrganizations.value = false
   }
 }
 
 watch(() => adminStore.activeDateRange, () => {
-  loadCancelledOrganizations()
+  if (!mainStore.isAdmin)
+    return
+  cancelledOrganizationsCurrentPage.value = 1
+  void loadCancelledOrganizations()
 }, { deep: true })
 
-// Watch for refresh button clicks
 watch(() => adminStore.refreshTrigger, () => {
-  loadCancelledOrganizations()
+  if (!mainStore.isAdmin)
+    return
+  void loadCancelledOrganizations()
 })
 
 onMounted(async () => {

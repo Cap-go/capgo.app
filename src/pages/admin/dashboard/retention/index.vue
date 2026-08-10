@@ -106,7 +106,7 @@ function getTrialExtensionBadgeLabel(extensionCount: number) {
   return t('trial-extended-badge', { count: extensionCount })
 }
 
-const trialOrganizationsColumns = ref<TableColumn[]>([
+const trialOrganizationsColumns = computed<TableColumn[]>(() => [
   {
     label: t('org-name'),
     key: 'org_name',
@@ -163,7 +163,10 @@ const trialOrganizationsColumns = ref<TableColumn[]>([
   },
 ])
 
+let loadTrialOrganizationsSequence = 0
+
 async function loadTrialOrganizations() {
+  const sequence = ++loadTrialOrganizationsSequence
   isLoadingTrialOrganizations.value = true
   try {
     const supabase = useSupabase()
@@ -199,16 +202,23 @@ async function loadTrialOrganizations() {
     if (!data.success)
       throw new Error('Failed to fetch trial organizations')
 
+    if (sequence !== loadTrialOrganizationsSequence)
+      return
+
     trialOrganizations.value = data.data.organizations || []
     trialOrganizationsTotal.value = data.data.total || 0
   }
   catch (error) {
+    if (sequence !== loadTrialOrganizationsSequence)
+      return
+
     console.error('[Admin Dashboard Retention Trials] Error loading trial organizations:', error)
     trialOrganizations.value = []
     trialOrganizationsTotal.value = 0
   }
   finally {
-    isLoadingTrialOrganizations.value = false
+    if (sequence === loadTrialOrganizationsSequence)
+      isLoadingTrialOrganizations.value = false
   }
 }
 
@@ -216,7 +226,6 @@ async function loadGlobalStatsTrend() {
   isLoadingGlobalStatsTrend.value = true
   try {
     const data = await adminStore.fetchStats('global_stats_trend')
-    console.log('[Admin Dashboard Retention Trials] Global stats trend data:', data)
     globalStatsTrendData.value = data || []
   }
   catch (error) {
@@ -249,7 +258,7 @@ const usersTrendSeries = computed(() => {
 
   return [
     {
-      label: 'Paying Organizations',
+      label: t('admin-pulse-paying-orgs'),
       data: globalStatsTrendData.value.map(item => ({
         date: item.date,
         value: item.paying,
@@ -257,7 +266,7 @@ const usersTrendSeries = computed(() => {
       color: '#10b981', // green
     },
     {
-      label: 'Trial Organizations',
+      label: t('trial-organizations'),
       data: globalStatsTrendData.value.map(item => ({
         date: item.date,
         value: item.trial,
@@ -338,12 +347,17 @@ const latestGlobalStats = computed(() => {
 })
 
 watch(() => adminStore.activeDateRange, () => {
+  if (!mainStore.isAdmin)
+    return
+  trialOrganizationsCurrentPage.value = 1
   loadGlobalStatsTrend()
   loadTrialPlanBreakdown()
+  loadTrialOrganizations()
 }, { deep: true })
 
-// Watch for refresh button clicks
 watch(() => adminStore.refreshTrigger, () => {
+  if (!mainStore.isAdmin)
+    return
   loadGlobalStatsTrend()
   loadTrialPlanBreakdown()
   loadTrialOrganizations()
@@ -386,7 +400,7 @@ displayStore.defaultBack = '/dashboard'
               </div>
               <div>
                 <p class="text-sm text-slate-600 dark:text-slate-400">
-                  Trial Organizations
+                  {{ t('trial-organizations') }}
                 </p>
                 <p v-if="latestGlobalStats" class="mt-2 text-3xl font-bold text-warning">
                   {{ formatNumberValue(latestGlobalStats.trial) }}
@@ -395,7 +409,7 @@ displayStore.defaultBack = '/dashboard'
                   0
                 </p>
                 <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  Organizations in trial period
+                  {{ t('organizations-in-trial-period') }}
                 </p>
               </div>
             </div>

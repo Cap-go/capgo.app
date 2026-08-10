@@ -135,7 +135,7 @@ const abovePlanMetricCards = computed(() => {
   return [
     {
       key: 'need-upgrade',
-      title: 'Orgs Need Upgrade',
+      title: t('need-upgrade'),
       description: t('need-upgrade-description'),
       value: stats ? stats.need_upgrade : 0,
       emptyDisplay: '0',
@@ -180,13 +180,15 @@ const abovePlanMetricCards = computed(() => {
   ]
 })
 
-watch(() => adminStore.activeDateRange, () => {
-  loadGlobalStatsTrend()
-}, { deep: true })
-
-watch(() => adminStore.refreshTrigger, () => {
-  loadGlobalStatsTrend()
-})
+watch(
+  [() => adminStore.activeDateRange, () => adminStore.refreshTrigger],
+  () => {
+    if (!mainStore.isAdmin)
+      return
+    loadGlobalStatsTrend()
+  },
+  { deep: true },
+)
 
 onMounted(async () => {
   if (!mainStore.isAdmin) {

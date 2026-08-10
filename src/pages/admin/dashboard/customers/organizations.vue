@@ -5,6 +5,7 @@ meta:
 
 <script setup lang="ts">
 import type { TableColumn } from '~/components/comp_def'
+import type { BillingType, OrganizationInsight, OrganizationInsightsResponse } from '~/services/adminOrganizationInsights'
 import { computed, h, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
@@ -16,40 +17,7 @@ import { useAdminDashboardStore } from '~/stores/adminDashboard'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
 
-type BillingType = 'monthly' | 'yearly'
 type BillingFilter = BillingType | 'all'
-
-interface OrganizationInsight {
-  org_id: string
-  org_name: string
-  management_email: string
-  plan_name: string | null
-  billing_type: BillingType | null
-  upload_count: number
-  build_count: number
-  failed_update_count: number
-  install_count: number
-  update_attempt_count: number
-  needs_attention: boolean
-  fail_rate: number
-  mau: number
-  members_count: number
-  apps_count: number
-  last_upload_at: string | null
-  last_build_at: string | null
-  paid_at: string | null
-  registered_at: string
-  distribution_stage: string | null
-}
-
-interface OrganizationInsightsResponse {
-  success: boolean
-  data: {
-    organizations: OrganizationInsight[]
-    total: number
-    plan_options: string[]
-  }
-}
 
 const { t } = useI18n()
 const displayStore = useDisplayStore()
@@ -83,27 +51,13 @@ function formatBillingTypeLabel(billingType: OrganizationInsight['billing_type']
     return t('yearly')
   if (billingType === 'monthly')
     return t('monthly')
+  if (billingType === 'usage')
+    return t('usage')
   return t('unknown')
 }
 
 function formatDateOrNever(value: string | null) {
   return formatLocalDateTime(value) || t('never')
-}
-
-const DISTRIBUTION_STAGE_LABEL_KEYS: Record<string, string> = {
-  no_device: 'distribution-stage-no-device',
-  local_only: 'distribution-stage-local-only',
-  native_unknown: 'distribution-stage-native-unknown',
-  play_unknown: 'distribution-stage-play-unknown',
-  testflight: 'distribution-stage-testflight',
-  store_live: 'distribution-stage-store-live',
-}
-
-function formatDistributionStage(stage: string | null) {
-  if (!stage)
-    return t('unknown')
-  const key = DISTRIBUTION_STAGE_LABEL_KEYS[stage]
-  return key ? t(key) : t('unknown')
 }
 
 function getOrganizationAttentionLabel(item: OrganizationInsight) {
@@ -300,13 +254,6 @@ const organizationColumns = computed<TableColumn[]>(() => [
     displayFunction: (item: OrganizationInsight) => formatDateOrNever(item.last_upload_at),
   },
   {
-    label: t('distribution-stage'),
-    key: 'distribution_stage',
-    mobile: true,
-    sortable: false,
-    displayFunction: (item: OrganizationInsight) => formatDistributionStage(item.distribution_stage),
-  },
-  {
     label: t('last-build'),
     key: 'last_build_at',
     mobile: false,
@@ -338,10 +285,14 @@ const organizationColumns = computed<TableColumn[]>(() => [
 ])
 
 watch(() => adminStore.activeDateRange, () => {
+  if (!mainStore.isAdmin)
+    return
   resetToFirstPageAndLoadImmediately()
 }, { deep: true })
 
 watch(() => adminStore.refreshTrigger, () => {
+  if (!mainStore.isAdmin)
+    return
   loadOrganizationsImmediately()
 })
 

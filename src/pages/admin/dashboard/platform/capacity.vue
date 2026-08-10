@@ -69,9 +69,9 @@ const capacityHourlySeries = computed(() => {
   if (!hourly.length)
     return []
   return [
-    { label: 'Workers', color: '#64748b', data: hourly.map(d => ({ date: d.date, value: d.workers })) },
-    { label: 'Used', color: '#ef4444', data: hourly.map(d => ({ date: d.date, value: d.used })) },
-    { label: 'Free', color: '#10b981', data: hourly.map(d => ({ date: d.date, value: d.free })) },
+    { label: t('admin-capacity-workers'), color: '#64748b', data: hourly.map(d => ({ date: d.date, value: d.workers })) },
+    { label: t('admin-capacity-used'), color: '#ef4444', data: hourly.map(d => ({ date: d.date, value: d.used })) },
+    { label: t('admin-capacity-free'), color: '#10b981', data: hourly.map(d => ({ date: d.date, value: d.free })) },
   ]
 })
 const hasCapacityHourly = computed(() => {
@@ -152,45 +152,45 @@ displayStore.defaultBack = '/dashboard'
         <div v-else class="space-y-6">
           <div class="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5">
             <AdminStatsCard
-              title="Available builders"
+              :title="t('admin-pulse-builders-free')"
               :value="liveMetric(capacityLive?.free)"
               color-class="text-emerald-500"
               :is-loading="isLoadingCapacity"
-              :subtitle="capacityLive?.builder_reachable ? `${capacityLive?.workers_online ?? 0} online` : 'Builder unreachable'"
+              :subtitle="capacityLive?.builder_reachable ? t('admin-pulse-builders-online', { count: capacityLive?.workers_online ?? 0 }) : t('admin-pulse-builder-unreachable')"
             />
             <AdminStatsCard
-              title="Running builders"
+              :title="t('admin-pulse-builders-used')"
               :value="liveMetric(capacityLive?.used)"
               color-class="text-red-500"
               :is-loading="isLoadingCapacity"
-              :subtitle="capacityLive?.builder_reachable ? 'Busy online runners' : 'Builder unreachable'"
+              :subtitle="capacityLive?.builder_reachable ? t('admin-pulse-builders-used-subtitle') : t('admin-pulse-builder-unreachable')"
             />
             <AdminStatsCard
-              title="Online workers"
+              :title="t('admin-capacity-online-workers')"
               :value="liveMetric(capacityLive?.workers_online)"
               color-class="text-[#119eff]"
               :is-loading="isLoadingCapacity"
-              :subtitle="capacityLive?.builder_reachable ? `${capacityLive?.workers_total ?? 0} registered` : 'Builder unreachable'"
+              :subtitle="capacityLive?.builder_reachable ? `${capacityLive?.workers_total ?? 0} registered` : t('admin-pulse-builder-unreachable')"
             />
             <AdminStatsCard
-              title="Waiting jobs"
+              :title="t('admin-pulse-builders-waiting')"
               :value="liveMetric(capacityLive?.waiting)"
               color-class="text-amber-500"
               :is-loading="isLoadingCapacity"
-              :subtitle="capacityLive?.builder_reachable ? 'Queued for a runner' : 'Builder unreachable'"
+              :subtitle="capacityLive?.builder_reachable ? t('admin-pulse-builders-waiting-subtitle') : t('admin-pulse-builder-unreachable')"
             />
             <AdminStatsCard
-              title="Offline workers"
+              :title="t('admin-pulse-builders-offline')"
               :value="liveMetric(capacityLive?.offline)"
               color-class="text-slate-500"
               :is-loading="isLoadingCapacity"
-              :subtitle="capacityLive?.builder_reachable ? 'Registered but offline' : 'Builder unreachable'"
+              :subtitle="capacityLive?.builder_reachable ? t('admin-pulse-builders-offline-subtitle') : t('admin-pulse-builder-unreachable')"
             />
           </div>
 
           <div class="grid grid-cols-1 gap-6">
             <ChartCard
-              title="Builder usage by hour"
+              :title="t('admin-capacity-usage-by-hour')"
               :is-loading="isLoadingCapacity"
               :has-data="hasCapacityHourly"
               no-data-message="No capacity events yet — open after the builder reports worker +/-"
@@ -198,10 +198,10 @@ displayStore.defaultBack = '/dashboard'
               <template #header>
                 <div class="flex flex-col gap-1">
                   <h2 class="text-2xl font-semibold leading-tight dark:text-white text-slate-600">
-                    Builder usage by hour
+                    {{ t('admin-capacity-usage-by-hour') }}
                   </h2>
                   <p class="text-xs text-slate-500 dark:text-slate-400">
-                    Free vs used reconstructed from worker +/− events and build start/end intervals
+                    {{ t('admin-capacity-usage-by-hour-description') }}
                   </p>
                 </div>
               </template>

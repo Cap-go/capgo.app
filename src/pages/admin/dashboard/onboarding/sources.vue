@@ -69,7 +69,6 @@ async function loadOnboardingFunnel() {
   isLoadingOnboardingFunnel.value = true
   try {
     const data = await adminStore.fetchStats('onboarding_funnel')
-    console.log('[Admin Dashboard Onboarding Sources] Onboarding funnel data:', data)
     onboardingFunnelData.value = data || null
   }
   catch (error) {
@@ -235,18 +234,17 @@ const registrationSourceTrendSeries = computed(() => {
   ]
 })
 
-watch(() => adminStore.activeDateRange, () => {
-  loadOnboardingFunnel()
-  loadEmailTypeBreakdown()
-  loadCustomerCountryBreakdown()
-}, { deep: true })
-
-// Watch for refresh button clicks
-watch(() => adminStore.refreshTrigger, () => {
-  loadOnboardingFunnel()
-  loadEmailTypeBreakdown()
-  loadCustomerCountryBreakdown()
-})
+watch(
+  [() => adminStore.activeDateRange, () => adminStore.refreshTrigger],
+  () => {
+    if (!mainStore.isAdmin)
+      return
+    loadOnboardingFunnel()
+    loadEmailTypeBreakdown()
+    loadCustomerCountryBreakdown()
+  },
+  { deep: true },
+)
 
 onMounted(async () => {
   if (!mainStore.isAdmin) {

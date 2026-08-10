@@ -4,9 +4,19 @@ const OUT = '/opt/cursor/artifacts/admin-reorg'
 const DOCS = '/workspace/docs/pr-assets/admin-intention-ia'
 const BASE = 'http://localhost:5173'
 
-async function waitForAdmin(page, path) {
+async function waitForAdmin(page, path, readyLocator) {
   await page.goto(`${BASE}${path}`, { waitUntil: 'domcontentloaded' })
+  await page.waitForURL((url) => {
+    try {
+      return new URL(url).pathname.replace(/\/$/, '') === path.replace(/\/$/, '')
+    }
+    catch {
+      return false
+    }
+  }, { timeout: 120000 })
   await page.getByRole('button', { name: /onboarding|pulse|product/i }).first().waitFor({ timeout: 120000 })
+  if (readyLocator)
+    await readyLocator(page).waitFor({ timeout: 120000 })
   // give charts a moment
   await page.waitForTimeout(3000)
 }
@@ -30,25 +40,24 @@ await page.getByRole('button', { name: /log in/i }).first().click()
 await page.waitForURL(u => !String(u).includes('/login'), { timeout: 90000 })
 console.log('logged in', page.url())
 
-await waitForAdmin(page, '/admin/dashboard/pulse')
+await waitForAdmin(page, '/admin/dashboard/pulse', p => p.getByText(/new registrations|pulse/i).first())
 await shot(page, 'real-pulse')
 
-await waitForAdmin(page, '/admin/dashboard/onboarding')
+await waitForAdmin(page, '/admin/dashboard/onboarding', p => p.getByRole('button', { name: /funnel|sources|cohorts/i }).first())
 await shot(page, 'real-onboarding-funnel')
 
-await waitForAdmin(page, '/admin/dashboard/onboarding/sources')
+await waitForAdmin(page, '/admin/dashboard/onboarding/sources', p => p.getByText(/registrations by source|sources/i).first())
 await shot(page, 'real-onboarding-sources')
 
-await waitForAdmin(page, '/admin/dashboard/onboarding/cohorts')
+await waitForAdmin(page, '/admin/dashboard/onboarding/cohorts', p => p.getByRole('button', { name: /cohorts/i }).first())
 await shot(page, 'real-onboarding-cohorts')
 
-await waitForAdmin(page, '/admin/dashboard/product/updates')
+await waitForAdmin(page, '/admin/dashboard/product/updates', p => p.getByRole('button', { name: /updates|plugins|cli/i }).first())
 await shot(page, 'real-product-updates')
 
-await waitForAdmin(page, '/admin/dashboard/retention')
+await waitForAdmin(page, '/admin/dashboard/retention', p => p.getByRole('button', { name: /trials|churn|inactive/i }).first())
 await shot(page, 'real-retention')
 
-await waitForAdmin(page, '/admin/dashboard/customers/organizations')
+await waitForAdmin(page, '/admin/dashboard/customers/organizations', p => p.getByRole('button', { name: /organizations|credits/i }).first())
 await shot(page, 'real-customers')
-
 await browser.close()

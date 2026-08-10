@@ -138,7 +138,7 @@ const payingOrgs = computed(() => {
   const stats = latestGlobalStats.value
   if (!stats)
     return 0
-  return stats.paying_orgs_total || stats.paying || 0
+  return stats.paying_orgs_total ?? stats.paying ?? 0
 })
 
 const capacityLive = computed(() => capacity.value?.live)
