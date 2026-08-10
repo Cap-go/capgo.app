@@ -15,6 +15,16 @@ function isTimeoutError(error: unknown): boolean {
   return error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')
 }
 
+function isHogqlResponse(value: unknown): value is { columns: string[], results: unknown[][] } {
+  if (typeof value !== 'object' || value === null || Array.isArray(value))
+    return false
+  const { columns, results } = value as { columns?: unknown, results?: unknown }
+  return Array.isArray(columns)
+    && columns.every(column => typeof column === 'string')
+    && Array.isArray(results)
+    && results.every(row => Array.isArray(row) && row.length === columns.length)
+}
+
 export async function queryPosthogHogql(c: Context, query: string): Promise<PosthogReadResult> {
   const key = (getEnv(c, 'POSTHOG_READ_KEY') || '').trim()
   if (!key) {
@@ -26,8 +36,8 @@ export async function queryPosthogHogql(c: Context, query: string): Promise<Post
     }
   }
 
-  const host = ((getEnv(c, 'POSTHOG_READ_HOST') || 'https://eu.posthog.com').trim()).replace(/\/$/, '')
-  const project = (getEnv(c, 'POSTHOG_READ_PROJECT_ID') || '22029').trim()
+  const host = ((getEnv(c, 'POSTHOG_READ_HOST') || '').trim() || 'https://eu.posthog.com').replace(/\/+$/, '')
+  const project = (getEnv(c, 'POSTHOG_READ_PROJECT_ID') || '').trim() || '22029'
   try {
     const res = await fetch(`${host}/api/projects/${project}/query/`, {
       method: 'POST',
@@ -39,11 +49,14 @@ export async function queryPosthogHogql(c: Context, query: string): Promise<Post
       cloudlogErr({ requestId: c.get('requestId'), message: 'posthog_query_failed', status: res.status })
       return { configured: true, connected: false, failureReason: 'unavailable', rows: [] }
     }
-    const json = await res.json() as { columns?: string[], results?: unknown[][] }
-    const cols = json.columns ?? []
-    const rows = (json.results ?? []).map((row) => {
+    const json = await res.json() as unknown
+    if (!isHogqlResponse(json)) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'posthog_query_invalid_response' })
+      return { configured: true, connected: false, failureReason: 'unavailable', rows: [] }
+    }
+    const rows = json.results.map((row) => {
       const result: Record<string, unknown> = {}
-      cols.forEach((column, index) => { result[column] = row[index] })
+      json.columns.forEach((column, index) => { result[column] = row[index] })
       return result
     })
     return { configured: true, connected: true, failureReason: null, rows }
