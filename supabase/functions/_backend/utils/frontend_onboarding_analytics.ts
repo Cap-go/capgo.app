@@ -102,16 +102,16 @@ export function buildFrontendOnboardingHogql(startDate: string, followupEndDate:
     SELECT
       attempt_id,
       count() OVER () AS total_attempts,
-      toUnixTimestamp(minIf(timestamp, step = 'intent')) * 1000 AS intent_ms,
-      toUnixTimestamp(minIf(timestamp, step = 'details')) * 1000 AS details_ms,
-      toUnixTimestamp(minIf(timestamp, step = 'organization')) * 1000 AS organization_ms,
-      toUnixTimestamp(minIf(timestamp, step = 'setup')) * 1000 AS setup_ms
+      toUnixTimestamp64Milli(minIf(timestamp, step = 'intent')) AS intent_ms,
+      toUnixTimestamp64Milli(minIf(timestamp, step = 'details')) AS details_ms,
+      toUnixTimestamp64Milli(minIf(timestamp, step = 'organization')) AS organization_ms,
+      toUnixTimestamp64Milli(minIf(timestamp, step = 'setup')) AS setup_ms
     FROM events
     WHERE event = 'onboarding_step_viewed'
       AND JSONExtractString(toString(properties), 'flow') = 'pre_org'
       AND toInt64OrZero(toString(properties.onboarding_version)) = 1
-      AND timestamp >= parseDateTimeBestEffort(${sqlStr(startDate)})
-      AND timestamp < parseDateTimeBestEffort(${sqlStr(followupEndDate)})
+      AND timestamp >= parseDateTime64BestEffort(${sqlStr(startDate)})
+      AND timestamp < parseDateTime64BestEffort(${sqlStr(followupEndDate)})
       AND trim(attempt_id) != ''
     GROUP BY attempt_id
     HAVING intent_ms > 0

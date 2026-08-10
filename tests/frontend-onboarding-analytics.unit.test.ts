@@ -40,20 +40,20 @@ beforeEach(() => {
 
 describe('buildFrontendOnboardingHogql', () => {
   it('queries the fixed v1 pre-org viewed events grouped by attempt in an exclusive time range', () => {
-    const query = buildFrontendOnboardingHogql('2026-08-01T00:00:00.000Z', '2026-08-04T00:00:00.000Z')
+    const query = buildFrontendOnboardingHogql('2026-08-01T00:00:00.123Z', '2026-08-04T00:00:00.789Z')
 
     expect(query).toContain("event = 'onboarding_step_viewed'")
     expect(query).toContain("JSONExtractString(toString(properties), 'flow') = 'pre_org'")
     expect(query).toContain('toInt64OrZero(toString(properties.onboarding_version)) = 1')
     expect(query).toContain("JSONExtractString(toString(properties), 'onboarding_attempt_id')")
     expect(query).toContain("JSONExtractString(toString(properties), 'step')")
-    expect(query).toContain("minIf(timestamp, step = 'intent')")
-    expect(query).toContain("minIf(timestamp, step = 'details')")
-    expect(query).toContain("minIf(timestamp, step = 'organization')")
-    expect(query).toContain("minIf(timestamp, step = 'setup')")
+    expect(query).toContain("toUnixTimestamp64Milli(minIf(timestamp, step = 'intent'))")
+    expect(query).toContain("toUnixTimestamp64Milli(minIf(timestamp, step = 'details'))")
+    expect(query).toContain("toUnixTimestamp64Milli(minIf(timestamp, step = 'organization'))")
+    expect(query).toContain("toUnixTimestamp64Milli(minIf(timestamp, step = 'setup'))")
     expect(query).toContain('GROUP BY attempt_id')
-    expect(query).toContain("timestamp >= parseDateTimeBestEffort('2026-08-01T00:00:00.000Z')")
-    expect(query).toContain("timestamp < parseDateTimeBestEffort('2026-08-04T00:00:00.000Z')")
+    expect(query).toContain("timestamp >= parseDateTime64BestEffort('2026-08-01T00:00:00.123Z')")
+    expect(query).toContain("timestamp < parseDateTime64BestEffort('2026-08-04T00:00:00.789Z')")
     expect(query).toContain("trim(attempt_id) != ''")
     expect(query).toContain('HAVING intent_ms > 0')
     expect(query).toContain('ORDER BY intent_ms ASC, attempt_id ASC')
@@ -74,7 +74,7 @@ describe('assertFrontendOnboardingAttemptTotal', () => {
 describe('getAdminFrontendOnboardingAnalytics', () => {
   it('maps a successful grouped row into frontend onboarding analytics', async () => {
     const start = '2026-08-01T00:00:00.000Z'
-    const intentMs = Date.parse(start) + 60 * 60 * 1000
+    const intentMs = Date.parse(start) + 60 * 60 * 1000 + 123
     queryPosthogHogqlMock.mockResolvedValueOnce({
       configured: true,
       connected: true,
@@ -82,9 +82,9 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
       rows: [{
         attempt_id: 'attempt-1',
         intent_ms: intentMs,
-        details_ms: intentMs + 1_000,
-        organization_ms: intentMs + 2_000,
-        setup_ms: intentMs + 3_000,
+        details_ms: intentMs + 555,
+        organization_ms: intentMs + 1_000,
+        setup_ms: intentMs + 2_666,
         total_attempts: 1,
       }],
     })
@@ -93,7 +93,7 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
 
     expect(result).toMatchObject({
       onboarding_version: 1,
-      kpis: { attempts: 1, completed: 1, completion_rate: 100 },
+      kpis: { attempts: 1, completed: 1, completion_rate: 100, median_completion_ms: 2_666 },
       daily_attempts: [
         { date: '2026-08-01', attempts: 1 },
         { date: '2026-08-02', attempts: 0 },
@@ -169,10 +169,10 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
 
     expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(1)
     expect(queryPosthogHogqlMock.mock.calls[0][1]).toContain(
-      `timestamp >= parseDateTimeBestEffort('${new Date(Date.parse(start) - 2 * DAY_MS).toISOString()}')`,
+      `timestamp >= parseDateTime64BestEffort('${new Date(Date.parse(start) - 2 * DAY_MS).toISOString()}')`,
     )
     expect(queryPosthogHogqlMock.mock.calls[0][1]).toContain(
-      `timestamp < parseDateTimeBestEffort('${new Date(Date.parse(end) + DAY_MS).toISOString()}')`,
+      `timestamp < parseDateTime64BestEffort('${new Date(Date.parse(end) + DAY_MS).toISOString()}')`,
     )
   })
 
