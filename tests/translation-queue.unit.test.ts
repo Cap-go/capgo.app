@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import translationWorker, { __translationWorkerTestUtils__ } from '../cloudflare_workers/translation/index.ts'
+import sourceMessageContexts from '../messages/en.context.json'
 import sourceMessages from '../messages/en.json'
 
 function stubWorkerCache(matchedResponse: Response | null = null) {
@@ -31,11 +32,39 @@ function createTranslationStoreMock(latestReadyEntry: Record<string, unknown> | 
 }
 
 describe('translation queue helpers', () => {
+  it.concurrent('keeps translator context for every English message key', () => {
+    const messageKeys = Object.keys(sourceMessages).filter(key => key !== '$schema')
+    const contextKeys = Object.keys(sourceMessageContexts)
+
+    expect(contextKeys.sort()).toEqual(messageKeys.sort())
+    expect(Object.values(sourceMessageContexts).every(value => typeof value === 'string' && value.trim().length > 0)).toBe(true)
+  })
+
   it.concurrent('splits the English catalog into bounded queue batches', () => {
     const batches = __translationWorkerTestUtils__.buildBatches(sourceMessages as Record<string, string>)
 
     expect(batches.length).toBeGreaterThan(1)
     expect(batches.every(batch => batch.length <= 60)).toBe(true)
+  })
+
+  it.concurrent('includes usage context in translation batch payloads', () => {
+    const payload = __translationWorkerTestUtils__.translationBatchPayload([
+      ['Current', 'Current', 'Used in Capgo web console areas: pages/settings/organization. Role: filter or date-range option label.'],
+      ['save', 'Save', ''],
+    ])
+
+    expect(payload).toEqual({
+      messages: {
+        Current: {
+          text: 'Current',
+          context: 'Used in Capgo web console areas: pages/settings/organization. Role: filter or date-range option label.',
+        },
+        save: {
+          text: 'Save',
+        },
+      },
+    })
+    expect(__translationWorkerTestUtils__.translationPrompt('fr')).toContain('Use context to disambiguate')
   })
 
   it.concurrent('keeps source text when translation drops a placeholder', () => {
