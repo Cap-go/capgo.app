@@ -1189,6 +1189,7 @@
   "edit-webhook": "Edit Webhook",
   "edit-bundle-metadata": "Edit bundle metadata",
   "email": "Email",
+  "email-preferences-captcha-required": "Complete the captcha before saving",
   "email-preferences-description": "Choose which Capgo emails you want to receive. Changes apply to this email address.",
   "email-preferences-invalid-email": "Enter a valid email address",
   "email-preferences-save": "Save preferences",

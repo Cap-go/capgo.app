@@ -119,6 +119,8 @@ https://console.capgo.app/email-preferences?email={{ visitor.email }}
 - Save always shows the same success for known and unknown emails
 - This public path is **opt-out only** (cannot re-enable prefs; use logged-in settings for that)
 - “Unsubscribe from all” calls Bento unsubscribe for that address
+- Cloudflare Turnstile required when `CAPTCHA_SECRET_KEY` / `VITE_CAPTCHA_KEY` are set (same as invite/login)
+- Rate limits: ~20 / 15m per IP, ~10 / 15m per email hash
 
 #### 4. Weekly Statistics
 
