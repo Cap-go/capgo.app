@@ -29,7 +29,7 @@ export interface FrontendOnboardingAnalytics {
   }>
   funnel: Array<{
     key: FrontendOnboardingStageKey
-    label: string
+    label: 'Intent' | 'App details' | 'Organization' | 'Setup reached'
     reached: number
     of_start_percent: number
     dropoff_percent: number
