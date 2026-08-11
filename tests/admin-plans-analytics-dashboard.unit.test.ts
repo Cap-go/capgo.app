@@ -234,7 +234,7 @@ describe('admin Plans analytics dashboard', () => {
 
   it.concurrent('wires a full-width Plans page and deferred documentation', async () => {
     const [tabs, completionDoc, messagesText, messageContextsText, historicalDesign, historicalPlan] = await Promise.all([
-      readFile(new URL('../src/constants/adminTabs.ts', import.meta.url), 'utf8'),
+      readFile(new URL('../src/constants/adminRevenueTabs.ts', import.meta.url), 'utf8'),
       readFile(new URL('../docs/admin/plans-checkout-completion.md', import.meta.url), 'utf8'),
       readFile(new URL('../messages/en.json', import.meta.url), 'utf8'),
       readFile(new URL('../messages/en.context.json', import.meta.url), 'utf8'),
@@ -267,7 +267,7 @@ describe('admin Plans analytics dashboard', () => {
     expect(historicalPlan).not.toContain('Validate the 30-second legacy burst threshold')
     expect(messages['plans-analytics-posthog-timeout']).not.toBe(messages['plans-analytics-range-too-large'])
 
-    const page = await readFile(new URL('../src/pages/admin/dashboard/plans.vue', import.meta.url), 'utf8')
+    const page = await readFile(new URL('../src/pages/admin/dashboard/revenue/plans.vue', import.meta.url), 'utf8')
     expect(page).toContain('layout: admin')
     expect(page).toContain('if (!mainStore.isAdmin)')
     expect(page).toContain('router.push(\'/dashboard\')')

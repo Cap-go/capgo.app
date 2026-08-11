@@ -59,7 +59,7 @@ export const install: UserModule = ({ router }) => {
 
     // Local worktree/dev has no reliable edge-function path for SSO enforcement.
     // Skip the network check so password login works against seed users.
-    // Require DEV so a mis-built production bundle with VITE_BRANCH=local cannot bypass SSO.
+    // Require DEV so an incorrectly built production bundle with VITE_BRANCH=local cannot bypass SSO.
     if (import.meta.env.DEV && import.meta.env.VITE_BRANCH === 'local')
       return next()
 
