@@ -15,6 +15,7 @@ import IconPencil from '~icons/heroicons/pencil'
 import IconShield from '~icons/heroicons/shield-check'
 import IconTrash from '~icons/heroicons/trash'
 import IconXMark from '~icons/heroicons/x-mark'
+import ApiKeyHiddenScopeNotice from '~/components/ApiKeyHiddenScopeNotice.vue'
 import ChannelPermissionOverridesPanel from '~/components/permissions/ChannelPermissionOverridesPanel.vue'
 import {
   clearApiKeyScopeFilters,
@@ -1662,24 +1663,11 @@ getKeys()
               @reset="refreshData()"
             >
               <template #table-notice>
-                <div
-                  v-if="!isLoading && hiddenByScopeCount > 0"
-                  role="status"
-                  class="mx-3 mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-cyan-200 bg-cyan-50 px-3 py-2 text-sm text-cyan-900 dark:border-cyan-500/30 dark:bg-cyan-500/10 dark:text-cyan-100"
-                >
-                  <span>
-                    {{ hiddenByScopeCount === 1
-                      ? t('api-key-hidden-by-scope-filter-one')
-                      : t('api-keys-hidden-by-scope-filter-many', { count: hiddenByScopeCount }) }}
-                  </span>
-                  <button
-                    type="button"
-                    class="rounded-sm font-semibold text-cyan-700 underline underline-offset-2 hover:text-cyan-900 focus-visible:ring-2 focus-visible:ring-cyan-500 focus-visible:ring-offset-2 focus-visible:outline-none dark:text-cyan-200 dark:hover:text-white dark:focus-visible:ring-offset-slate-800"
-                    @click="clearScopeFilters()"
-                  >
-                    {{ t('remove-api-key-scope-filter') }}
-                  </button>
-                </div>
+                <ApiKeyHiddenScopeNotice
+                  :hidden-count="hiddenByScopeCount"
+                  :is-loading="isLoading"
+                  @remove-filter="clearScopeFilters()"
+                />
               </template>
             </DataTable>
           </div>

@@ -1,39 +1,64 @@
-import { readFile } from 'node:fs/promises'
-import { fileURLToPath } from 'node:url'
-import { describe, expect, it } from 'vitest'
+// @vitest-environment happy-dom
 
-const repoRoot = fileURLToPath(new URL('../', import.meta.url))
+import type { App } from 'vue'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createApp } from 'vue'
+import { createI18n } from 'vue-i18n'
+import en from '../messages/en.json'
+import ApiKeyHiddenScopeNotice from '../src/components/ApiKeyHiddenScopeNotice.vue'
 
-async function readRepoFile(path: string) {
-  return readFile(`${repoRoot}${path}`, 'utf8')
+const mountedApps: App[] = []
+
+function mountNotice(hiddenCount: number, isLoading = false) {
+  const container = document.createElement('div')
+  const removeFilter = vi.fn()
+  const app = createApp(ApiKeyHiddenScopeNotice, {
+    hiddenCount,
+    isLoading,
+    onRemoveFilter: removeFilter,
+  })
+
+  app.use(createI18n({
+    legacy: false,
+    locale: 'en',
+    messages: { en },
+  }))
+  app.mount(container)
+  mountedApps.push(app)
+
+  return { container, removeFilter }
 }
 
+afterEach(() => {
+  mountedApps.splice(0).forEach(app => app.unmount())
+})
+
 describe('API key hidden-scope notice', () => {
-  it.concurrent('places the optional notice between the table toolbar and rows', async () => {
-    const dataTableSource = await readRepoFile('src/components/DataTable.vue')
-    const noticeSlotIndex = dataTableSource.indexOf('<slot name="table-notice" />')
-    const tableWrapperIndex = dataTableSource.indexOf('<div class="block">')
-
-    expect(noticeSlotIndex).toBeGreaterThan(-1)
-    expect(tableWrapperIndex).toBeGreaterThan(noticeSlotIndex)
+  it('stays hidden when no matching keys are excluded or while keys are loading', () => {
+    expect(mountNotice(0).container.querySelector('[role="status"]')).toBeNull()
+    expect(mountNotice(3, true).container.querySelector('[role="status"]')).toBeNull()
   })
 
-  it.concurrent('renders a search-aware status with a scope-clearing action', async () => {
-    const apiKeysSource = await readRepoFile('src/pages/ApiKeys.vue')
+  it('renders the plural translated status and emits the remove-filter action', () => {
+    const { container, removeFilter } = mountNotice(3)
+    const status = container.querySelector('[role="status"]')
+    const button = container.querySelector('button')
 
-    expect(apiKeysSource).toContain('<template #table-notice>')
-    expect(apiKeysSource).toContain('v-if="!isLoading && hiddenByScopeCount > 0"')
-    expect(apiKeysSource).toContain('role="status"')
-    expect(apiKeysSource).toContain('@click="clearScopeFilters()"')
-    expect(apiKeysSource).toContain("t('api-key-hidden-by-scope-filter-one')")
-    expect(apiKeysSource).toContain("t('api-keys-hidden-by-scope-filter-many', { count: hiddenByScopeCount })")
+    expect(status?.querySelector('span')?.textContent?.trim()).toBe(
+      '3 API keys are hidden by the current scope filter.',
+    )
+    expect(button?.textContent?.trim()).toBe('Remove the filter')
+
+    button?.click()
+
+    expect(removeFilter).toHaveBeenCalledOnce()
   })
 
-  it.concurrent('provides the approved English copy', async () => {
-    const messages = JSON.parse(await readRepoFile('messages/en.json')) as Record<string, string>
+  it('renders the singular translated status', () => {
+    const { container } = mountNotice(1)
 
-    expect(messages['api-key-hidden-by-scope-filter-one']).toBe('1 API key is hidden by the current scope filter.')
-    expect(messages['api-keys-hidden-by-scope-filter-many']).toBe('{count} API keys are hidden by the current scope filter.')
-    expect(messages['remove-api-key-scope-filter']).toBe('Remove the filter')
+    expect(container.querySelector('[role="status"] span')?.textContent?.trim()).toBe(
+      '1 API key is hidden by the current scope filter.',
+    )
   })
 })
