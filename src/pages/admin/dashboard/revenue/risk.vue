@@ -4,22 +4,17 @@ meta:
 </route>
 
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRouter } from 'vue-router'
 import AdminFilterBar from '~/components/admin/AdminFilterBar.vue'
 import AdminRevenueRiskPanel from '~/components/admin/AdminRevenueRiskPanel.vue'
 import PageLoader from '~/components/PageLoader.vue'
+import { ensureAdminOrRedirect, useAdminStatsReload } from '~/composables/useAdminStatsReload'
 import { useAdminRevenueDashboard } from '~/composables/useAdminRevenueDashboard'
-import { useAdminDashboardStore } from '~/stores/adminDashboard'
 import { useDisplayStore } from '~/stores/display'
-import { useMainStore } from '~/stores/main'
 
 const { t } = useI18n()
 const displayStore = useDisplayStore()
-const mainStore = useMainStore()
-const adminStore = useAdminDashboardStore()
-const router = useRouter()
 const isLoading = ref(true)
 
 const {
@@ -33,26 +28,12 @@ const {
   activePastDueOrgSeries,
 } = useAdminRevenueDashboard('Admin Dashboard Revenue Risk')
 
-watch(
-  [() => adminStore.activeDateRange, () => adminStore.refreshTrigger],
-  () => {
-    if (!mainStore.isAdmin)
-      return
-    loadGlobalStatsTrend()
-  },
-  { deep: true },
-)
+useAdminStatsReload(loadGlobalStatsTrend)
 
 onMounted(async () => {
-  if (!mainStore.isAdmin) {
-    console.error('Non-admin user attempted to access admin revenue risk')
-    router.push('/dashboard')
+  const ok = await ensureAdminOrRedirect('Non-admin user attempted to access admin revenue risk', isLoading, loadGlobalStatsTrend)
+  if (!ok)
     return
-  }
-
-  isLoading.value = true
-  await loadGlobalStatsTrend()
-  isLoading.value = false
 
   displayStore.NavTitle = t('admin-revenue-risk')
 })

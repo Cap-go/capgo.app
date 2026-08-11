@@ -52,15 +52,25 @@ function handleClick() {
   if (props.clickable)
     emit('click')
 }
+
+function handleKeydown(event: KeyboardEvent) {
+  if (!props.clickable)
+    return
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault()
+    emit('click')
+  }
+}
 </script>
 
 <template>
-  <component
-    :is="clickable ? 'button' : 'div'"
-    :type="clickable ? 'button' : undefined"
+  <div
     class="flex flex-col justify-between p-6 text-left bg-white border rounded-lg shadow-lg border-slate-300 dark:bg-gray-800 dark:border-slate-900"
-    :class="{ 'w-full cursor-pointer hover:shadow-xl transition-shadow': clickable }"
+    :class="{ 'd-btn d-btn-ghost h-auto min-h-0 w-full cursor-pointer hover:shadow-xl transition-shadow': clickable }"
+    :role="clickable ? 'button' : undefined"
+    :tabindex="clickable ? 0 : undefined"
     @click="handleClick"
+    @keydown="handleKeydown"
   >
     <!-- Loading state -->
     <div class="flex items-start justify-between">
@@ -93,5 +103,5 @@ function handleClick() {
         {{ subtitle }}
       </p>
     </div>
-  </component>
+  </div>
 </template>

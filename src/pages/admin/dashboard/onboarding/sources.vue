@@ -60,49 +60,70 @@ const emailTypeBreakdown = ref<EmailTypeBreakdown | null>(null)
 const isLoadingEmailTypeBreakdown = ref(false)
 const customerCountryBreakdown = ref<CustomerCountryBreakdown | null>(null)
 const isLoadingCustomerCountryBreakdown = ref(false)
+let loadOnboardingFunnelSequence = 0
+let loadEmailTypeBreakdownSequence = 0
+let loadCustomerCountryBreakdownSequence = 0
 
 async function loadOnboardingFunnel() {
+  const sequence = ++loadOnboardingFunnelSequence
   isLoadingOnboardingFunnel.value = true
   try {
     const data = await adminStore.fetchStats('onboarding_funnel')
+    if (sequence !== loadOnboardingFunnelSequence)
+      return
     onboardingFunnelData.value = data || null
   }
   catch (error) {
+    if (sequence !== loadOnboardingFunnelSequence)
+      return
     console.error('[Admin Dashboard Onboarding Sources] Error loading onboarding funnel:', error)
     onboardingFunnelData.value = null
   }
   finally {
-    isLoadingOnboardingFunnel.value = false
+    if (sequence === loadOnboardingFunnelSequence)
+      isLoadingOnboardingFunnel.value = false
   }
 }
 
 async function loadEmailTypeBreakdown() {
+  const sequence = ++loadEmailTypeBreakdownSequence
   isLoadingEmailTypeBreakdown.value = true
   try {
     const data = await adminStore.fetchStats('email_type_breakdown')
+    if (sequence !== loadEmailTypeBreakdownSequence)
+      return
     emailTypeBreakdown.value = data as EmailTypeBreakdown
   }
   catch (error) {
+    if (sequence !== loadEmailTypeBreakdownSequence)
+      return
     console.error('[Admin Dashboard Onboarding Sources] Error loading email type breakdown:', error)
     emailTypeBreakdown.value = null
   }
   finally {
-    isLoadingEmailTypeBreakdown.value = false
+    if (sequence === loadEmailTypeBreakdownSequence)
+      isLoadingEmailTypeBreakdown.value = false
   }
 }
 
 async function loadCustomerCountryBreakdown() {
+  const sequence = ++loadCustomerCountryBreakdownSequence
   isLoadingCustomerCountryBreakdown.value = true
   try {
     const data = await adminStore.fetchStats('customer_country_breakdown')
+    if (sequence !== loadCustomerCountryBreakdownSequence)
+      return
     customerCountryBreakdown.value = data as CustomerCountryBreakdown
   }
   catch (error) {
+    if (sequence !== loadCustomerCountryBreakdownSequence)
+      return
     console.error('[Admin Dashboard Onboarding Sources] Error loading customer country breakdown:', error)
     customerCountryBreakdown.value = null
   }
   finally {
-    isLoadingCustomerCountryBreakdown.value = false
+    if (sequence === loadCustomerCountryBreakdownSequence)
+      isLoadingCustomerCountryBreakdown.value = false
   }
 }
 

@@ -67,19 +67,26 @@ const maxVersionRows = 20
 const maxTrendVersions = 5
 const maxTrendMajorVersions = 8
 const trendColorPalette = ['#119eff', '#10b981', '#f59e0b', '#6366f1', '#ec4899', '#14b8a6', '#f97316', '#8b5cf6']
+let loadPluginBreakdownSequence = 0
 
 async function loadPluginBreakdown() {
+  const sequence = ++loadPluginBreakdownSequence
   isLoadingBreakdown.value = true
   try {
     const data = await adminStore.fetchStats('plugin_breakdown')
+    if (sequence !== loadPluginBreakdownSequence)
+      return
     pluginBreakdown.value = data || null
   }
   catch (error) {
+    if (sequence !== loadPluginBreakdownSequence)
+      return
     console.error('[Admin Dashboard Plugins] Error loading plugin breakdown:', error)
     pluginBreakdown.value = null
   }
   finally {
-    isLoadingBreakdown.value = false
+    if (sequence === loadPluginBreakdownSequence)
+      isLoadingBreakdown.value = false
   }
 }
 

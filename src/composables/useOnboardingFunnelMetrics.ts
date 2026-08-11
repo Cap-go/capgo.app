@@ -115,6 +115,8 @@ export function useOnboardingFunnelMetrics(
       return 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-7'
     if (count >= 6)
       return 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-6'
+    if (count >= 5)
+      return 'grid-cols-2 sm:grid-cols-5'
     return 'grid-cols-2 sm:grid-cols-4'
   })
 

@@ -35,19 +35,26 @@ const router = useRouter()
 const isLoading = ref(true)
 const isLoadingStats = ref(false)
 const cliUsage = ref<CliUsageData | null>(null)
+let loadCliUsageSequence = 0
 
 async function loadCliUsage() {
+  const sequence = ++loadCliUsageSequence
   isLoadingStats.value = true
   try {
     const data = await adminStore.fetchStats('cli_usage')
+    if (sequence !== loadCliUsageSequence)
+      return
     cliUsage.value = data || null
   }
   catch (error) {
+    if (sequence !== loadCliUsageSequence)
+      return
     console.error('[Admin Dashboard CLI] Error loading CLI usage:', error)
     cliUsage.value = null
   }
   finally {
-    isLoadingStats.value = false
+    if (sequence === loadCliUsageSequence)
+      isLoadingStats.value = false
   }
 }
 

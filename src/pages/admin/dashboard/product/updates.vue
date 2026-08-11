@@ -4,25 +4,22 @@ meta:
 </route>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRouter } from 'vue-router'
 import AdminFilterBar from '~/components/admin/AdminFilterBar.vue'
 import AdminMultiLineChart from '~/components/admin/AdminMultiLineChart.vue'
 import ChartCard from '~/components/dashboard/ChartCard.vue'
 import DeliveryLatencyPanel from '~/components/dashboard/DeliveryLatencyPanel.vue'
 import PageLoader from '~/components/PageLoader.vue'
+import { ensureAdminOrRedirect, useAdminStatsReload } from '~/composables/useAdminStatsReload'
 import { useAdminGlobalStatsTrend } from '~/composables/useAdminGlobalStatsTrend'
 import { formatNumberValue, formatOneDecimal } from '~/services/formatLocale'
 import { useAdminDashboardStore } from '~/stores/adminDashboard'
 import { useDisplayStore } from '~/stores/display'
-import { useMainStore } from '~/stores/main'
 
 const { t } = useI18n()
 const displayStore = useDisplayStore()
-const mainStore = useMainStore()
 const adminStore = useAdminDashboardStore()
-const router = useRouter()
 const isLoading = ref(true)
 
 const {
@@ -116,26 +113,12 @@ const devicesTrendSeries = computed(() => {
     },
   ]
 })
-watch(
-  [() => adminStore.activeDateRange, () => adminStore.refreshTrigger],
-  () => {
-    if (!mainStore.isAdmin)
-      return
-    loadGlobalStatsTrend()
-  },
-  { deep: true },
-)
+useAdminStatsReload(loadGlobalStatsTrend)
 
 onMounted(async () => {
-  if (!mainStore.isAdmin) {
-    console.error('Non-admin user attempted to access admin dashboard')
-    router.push('/dashboard')
+  const ok = await ensureAdminOrRedirect('Non-admin user attempted to access admin dashboard', isLoading, loadGlobalStatsTrend)
+  if (!ok)
     return
-  }
-
-  isLoading.value = true
-  await loadGlobalStatsTrend()
-  isLoading.value = false
 
   displayStore.NavTitle = t('updates')
 })

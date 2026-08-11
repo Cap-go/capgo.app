@@ -41,6 +41,7 @@ declare global {
   const definePage: typeof import('vue-router/experimental').definePage
   const eagerComputed: typeof import('@vueuse/core').eagerComputed
   const effectScope: typeof import('vue').effectScope
+  const ensureAdminOrRedirect: typeof import('./composables/useAdminStatsReload').ensureAdminOrRedirect
   const extendRef: typeof import('@vueuse/core').extendRef
   const getCurrentInstance: typeof import('vue').getCurrentInstance
   const getCurrentScope: typeof import('vue').getCurrentScope
@@ -132,6 +133,7 @@ declare global {
   const useAdminDashboardStore: typeof import('./stores/adminDashboard').useAdminDashboardStore
   const useAdminGlobalStatsTrend: typeof import('./composables/useAdminGlobalStatsTrend').useAdminGlobalStatsTrend
   const useAdminRevenueDashboard: typeof import('./composables/useAdminRevenueDashboard').useAdminRevenueDashboard
+  const useAdminStatsReload: typeof import('./composables/useAdminStatsReload').useAdminStatsReload
   const useAnimate: typeof import('@vueuse/core').useAnimate
   const useAppDetailStore: typeof import('./stores/appDetail').useAppDetailStore
   const useAppPage: typeof import('./composables/useAppPage').useAppPage
@@ -417,6 +419,7 @@ declare module 'vue' {
     readonly definePage: UnwrapRef<typeof import('vue-router/experimental')['definePage']>
     readonly eagerComputed: UnwrapRef<typeof import('@vueuse/core')['eagerComputed']>
     readonly effectScope: UnwrapRef<typeof import('vue')['effectScope']>
+    readonly ensureAdminOrRedirect: UnwrapRef<typeof import('./composables/useAdminStatsReload')['ensureAdminOrRedirect']>
     readonly extendRef: UnwrapRef<typeof import('@vueuse/core')['extendRef']>
     readonly getCurrentInstance: UnwrapRef<typeof import('vue')['getCurrentInstance']>
     readonly getCurrentScope: UnwrapRef<typeof import('vue')['getCurrentScope']>
@@ -505,6 +508,7 @@ declare module 'vue' {
     readonly useAdminDashboardStore: UnwrapRef<typeof import('./stores/adminDashboard')['useAdminDashboardStore']>
     readonly useAdminGlobalStatsTrend: UnwrapRef<typeof import('./composables/useAdminGlobalStatsTrend')['useAdminGlobalStatsTrend']>
     readonly useAdminRevenueDashboard: UnwrapRef<typeof import('./composables/useAdminRevenueDashboard')['useAdminRevenueDashboard']>
+    readonly useAdminStatsReload: UnwrapRef<typeof import('./composables/useAdminStatsReload')['useAdminStatsReload']>
     readonly useAnimate: UnwrapRef<typeof import('@vueuse/core')['useAnimate']>
     readonly useAppDetailStore: UnwrapRef<typeof import('./stores/appDetail')['useAppDetailStore']>
     readonly useAppPage: UnwrapRef<typeof import('./composables/useAppPage')['useAppPage']>

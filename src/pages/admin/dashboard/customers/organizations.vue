@@ -10,13 +10,12 @@ import { computed, h, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import AdminFilterBar from '~/components/admin/AdminFilterBar.vue'
+import { createSharedOrganizationInsightColumns } from '~/services/adminOrganizationInsightColumns'
 import {
-  formatOrganizationBillingTypeLabel,
   formatOrganizationDateOrNever,
   formatOrganizationNumber,
   formatOrganizationPercent,
 } from '~/services/adminOrganizationInsights'
-import { formatLocalDate } from '~/services/date'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
 import { useAdminDashboardStore } from '~/stores/adminDashboard'
 import { useDisplayStore } from '~/stores/display'
@@ -156,8 +155,9 @@ function scheduleSearchReload() {
   }, 350)
 }
 
-const organizationColumns = computed<TableColumn[]>(() => [
-  {
+const organizationColumns = computed<TableColumn[]>(() => {
+  const shared = createSharedOrganizationInsightColumns(t)
+  const attentionOrgName: TableColumn = {
     label: t('org-name'),
     key: 'org_name',
     mobile: true,
@@ -182,102 +182,48 @@ const organizationColumns = computed<TableColumn[]>(() => [
         ]),
       ])
     },
-  },
-  {
-    label: t('plan'),
-    key: 'plan_name',
-    mobile: true,
-    sortable: false,
-    displayFunction: (item: OrganizationInsight) => item.plan_name || t('unknown'),
-  },
-  {
-    label: t('billing-cycle'),
-    key: 'billing_type',
-    mobile: false,
-    sortable: false,
-    displayFunction: (item: OrganizationInsight) => formatOrganizationBillingTypeLabel(item.billing_type, t),
-  },
-  {
-    label: t('total-mau-period'),
-    key: 'mau',
-    mobile: true,
-    sortable: false,
-    class: 'text-right',
-    displayFunction: (item: OrganizationInsight) => formatOrganizationNumber(item.mau),
-  },
-  {
-    label: t('uploads-period'),
-    key: 'upload_count',
-    mobile: false,
-    sortable: false,
-    class: 'text-right',
-    displayFunction: (item: OrganizationInsight) => formatOrganizationNumber(item.upload_count),
-  },
-  {
-    label: t('builds-period'),
-    key: 'build_count',
-    mobile: false,
-    sortable: false,
-    class: 'text-right',
-    displayFunction: (item: OrganizationInsight) => formatOrganizationNumber(item.build_count),
-  },
-  {
-    label: t('fail-rate'),
-    key: 'fail_rate',
-    mobile: false,
-    sortable: false,
-    class: 'text-right',
-    displayFunction: (item: OrganizationInsight) => formatOrganizationPercent(item.fail_rate),
-  },
-  {
-    label: t('last-upload'),
-    key: 'last_upload_at',
-    mobile: false,
-    sortable: false,
-    displayFunction: (item: OrganizationInsight) => formatOrganizationDateOrNever(item.last_upload_at, t),
-  },
-  {
-    label: t('last-build'),
-    key: 'last_build_at',
-    mobile: false,
-    sortable: false,
-    displayFunction: (item: OrganizationInsight) => formatOrganizationDateOrNever(item.last_build_at, t),
-  },
-  {
-    label: t('since-paying'),
-    key: 'paid_at',
-    mobile: false,
-    sortable: false,
-    displayFunction: (item: OrganizationInsight) => formatLocalDate(item.paid_at) || t('never'),
-  },
-  {
-    label: t('registered-at'),
-    key: 'registered_at',
-    mobile: false,
-    sortable: false,
-    displayFunction: (item: OrganizationInsight) => formatLocalDate(item.registered_at) || t('unknown'),
-  },
-  {
-    label: t('members'),
-    key: 'members_count',
-    mobile: false,
-    sortable: false,
-    class: 'text-right',
-    displayFunction: (item: OrganizationInsight) => formatOrganizationNumber(item.members_count),
-  },
-])
+  }
 
-watch(() => adminStore.activeDateRange, () => {
-  if (!mainStore.isAdmin)
-    return
-  resetToFirstPageAndLoadImmediately()
-}, { deep: true })
-
-watch(() => adminStore.refreshTrigger, () => {
-  if (!mainStore.isAdmin)
-    return
-  loadOrganizationsImmediately()
+  return [
+    attentionOrgName,
+    ...shared.slice(1, 5),
+    {
+      label: t('builds-period'),
+      key: 'build_count',
+      mobile: false,
+      sortable: false,
+      class: 'text-right',
+      displayFunction: (item: OrganizationInsight) => formatOrganizationNumber(item.build_count),
+    },
+    {
+      label: t('fail-rate'),
+      key: 'fail_rate',
+      mobile: false,
+      sortable: false,
+      class: 'text-right',
+      displayFunction: (item: OrganizationInsight) => formatOrganizationPercent(item.fail_rate),
+    },
+    shared[5],
+    {
+      label: t('last-build'),
+      key: 'last_build_at',
+      mobile: false,
+      sortable: false,
+      displayFunction: (item: OrganizationInsight) => formatOrganizationDateOrNever(item.last_build_at, t),
+    },
+    ...shared.slice(6),
+  ]
 })
+
+watch(
+  [() => adminStore.dateRangeMode, () => adminStore.customDateRange, () => adminStore.refreshTrigger],
+  () => {
+    if (!mainStore.isAdmin)
+      return
+    void loadOrganizations()
+  },
+  { deep: true },
+)
 
 watch([selectedPlan, selectedBilling, paidOnly], () => {
   resetToFirstPageAndLoadImmediately()
