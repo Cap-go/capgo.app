@@ -131,7 +131,14 @@ interface GitRepoStatus {
   clean: boolean
   repoRoot?: string
   entries: string[]
+  fileEntries?: InitGitStatusEntry[]
   error?: string
+}
+
+interface InitGitStatusEntry {
+  status: string
+  filePath: string
+  display: string
 }
 
 export interface InitGitChangeFingerprint {
@@ -149,6 +156,20 @@ export interface InitGitChanges {
 export interface InitGitChangeScope {
   exactPaths?: string[]
   directoryPrefixes?: string[]
+}
+
+export interface InitGitSnapshotDependencies {
+  runStatus?: (repoRoot: string, args: readonly string[]) => Buffer | undefined
+  lstat?: (filePath: string) => {
+    dev: bigint
+    ino: bigint
+    size: bigint
+    mode: bigint
+    mtimeNs: bigint
+    ctimeNs: bigint
+    isFile: () => boolean
+  }
+  readFile?: (filePath: string) => Buffer
 }
 
 export interface InitNativeResetTarget {
@@ -372,10 +393,9 @@ export function getGitRepoStatus(startDir = cwd()): GitRepoStatus {
     }
   }
 
-  const statusResult = spawnSync('git', ['status', '--porcelain', '--untracked-files=all'], {
+  const statusResult = spawnSync('git', getInitGitStatusArgs(), {
     cwd: repoRoot,
     stdio: 'pipe',
-    encoding: 'utf8',
   })
 
   if (statusResult.error) {
@@ -398,17 +418,26 @@ export function getGitRepoStatus(startDir = cwd()): GitRepoStatus {
     }
   }
 
-  const entries = statusResult.stdout
-    ?.toString()
-    .split('\n')
-    .map(line => line.trimEnd())
-    .filter(Boolean) ?? []
+  const statusEntries = parseInitGitStatusOutput(statusResult.stdout)
+  if (!statusEntries) {
+    return {
+      inRepo: true,
+      clean: false,
+      repoRoot,
+      entries: [],
+      fileEntries: [],
+      error: 'Could not parse git status output.',
+    }
+  }
+  const fileEntries = statusEntries.map(({ status, filePath, display }) => ({ status, filePath, display }))
+  const entries = fileEntries.map(entry => entry.display)
 
   return {
     inRepo: true,
     clean: entries.length === 0,
     repoRoot,
     entries,
+    fileEntries,
   }
 }
 
@@ -744,12 +773,11 @@ function isGitObjectId(value: string) {
   return /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(value)
 }
 
-interface InitGitStatusRecord {
-  status: string
-  filePath: string
+interface InitGitStatusRecord extends InitGitStatusEntry {
   headMode: string | null
   indexMode: string | null
   worktreeMode: string | null
+  originalPath?: string
 }
 
 function splitInitGitStatusFields(value: string, count: number) {
@@ -766,32 +794,130 @@ function splitInitGitStatusFields(value: string, count: number) {
   return fields
 }
 
-function parseInitGitStatusRecord(value: string): InitGitStatusRecord | undefined {
+function normalizeInitGitStatus(rawStatus: string) {
+  const status = rawStatus.replaceAll('.', ' ')
+  return /^[ MADRCUT]{2}$/.test(status) ? status : undefined
+}
+
+function hasValidInitGitStatusMetadata(modes: string[], objectIds: string[]) {
+  return modes.every(mode => /^[0-7]{6}$/.test(mode))
+    && objectIds.every(isGitObjectId)
+}
+
+function parseInitGitStatusRecord(value: string, originalPath?: string): InitGitStatusRecord | undefined {
   if (value.startsWith('? ')) {
     const filePath = value.slice(2)
     return filePath
-      ? { status: '??', filePath, headMode: null, indexMode: null, worktreeMode: null }
+      ? { status: '??', filePath, display: `?? ${filePath}`, headMode: null, indexMode: null, worktreeMode: null }
       : undefined
   }
-  if (!value.startsWith('1 '))
-    return undefined
 
-  const fields = splitInitGitStatusFields(value, 9)
-  if (!fields)
-    return undefined
-  const [, rawStatus, submodule, headMode, indexMode, worktreeMode, headObjectId, indexObjectId, filePath] = fields
-  const status = rawStatus.replaceAll('.', ' ')
-  if (!filePath
-    || !/^[ MADRCUT]{2}$/.test(status)
-    || submodule !== 'N...'
-    || ![headMode, indexMode, worktreeMode].every(mode => /^[0-7]{6}$/.test(mode))
-    || !isGitObjectId(headObjectId)
-    || !isGitObjectId(indexObjectId))
-    return undefined
-  return { status, filePath, headMode, indexMode, worktreeMode }
+  if (value.startsWith('1 ')) {
+    const fields = splitInitGitStatusFields(value, 9)
+    if (!fields)
+      return undefined
+    const [, rawStatus, submodule, headMode, indexMode, worktreeMode, headObjectId, indexObjectId, filePath] = fields
+    const status = normalizeInitGitStatus(rawStatus)
+    if (!status || !filePath || submodule !== 'N...'
+      || !hasValidInitGitStatusMetadata([headMode, indexMode, worktreeMode], [headObjectId, indexObjectId]))
+      return undefined
+    return { status, filePath, display: `${status} ${filePath}`, headMode, indexMode, worktreeMode }
+  }
+
+  if (value.startsWith('2 ')) {
+    const fields = splitInitGitStatusFields(value, 10)
+    if (!fields || !originalPath)
+      return undefined
+    const [, rawStatus, submodule, headMode, indexMode, worktreeMode, headObjectId, indexObjectId, score, filePath] = fields
+    const status = normalizeInitGitStatus(rawStatus)
+    if (!status || !filePath || submodule !== 'N...' || !/^[RC][0-9]+$/.test(score)
+      || !hasValidInitGitStatusMetadata([headMode, indexMode, worktreeMode], [headObjectId, indexObjectId]))
+      return undefined
+    return {
+      status,
+      filePath,
+      display: `${status} ${originalPath} -> ${filePath}`,
+      headMode,
+      indexMode,
+      worktreeMode,
+      originalPath,
+    }
+  }
+
+  if (value.startsWith('u ')) {
+    const fields = splitInitGitStatusFields(value, 11)
+    if (!fields)
+      return undefined
+    const [, rawStatus, , stageOneMode, stageTwoMode, stageThreeMode, worktreeMode, stageOneObjectId, stageTwoObjectId, stageThreeObjectId, filePath] = fields
+    const status = normalizeInitGitStatus(rawStatus)
+    if (!status || !filePath
+      || !hasValidInitGitStatusMetadata(
+        [stageOneMode, stageTwoMode, stageThreeMode, worktreeMode],
+        [stageOneObjectId, stageTwoObjectId, stageThreeObjectId],
+      ))
+      return undefined
+    return {
+      status,
+      filePath,
+      display: `${status} ${filePath}`,
+      headMode: stageOneMode,
+      indexMode: stageTwoMode,
+      worktreeMode,
+    }
+  }
+
+  return undefined
 }
 
-export function captureInitGitSnapshot(startDir = cwd(), scope?: InitGitChangeScope): InitGitChanges | undefined {
+function parseInitGitStatusOutput(output: Buffer): InitGitStatusRecord[] | undefined {
+  if (output.length > 0 && output.at(-1) !== 0)
+    return undefined
+  const rawEntries = output.length > 0 ? output.subarray(0, -1).toString('utf8').split('\0') : []
+  const entries: InitGitStatusRecord[] = []
+  for (let index = 0; index < rawEntries.length; index += 1) {
+    const rawEntry = rawEntries[index]
+    const isRenameOrCopy = rawEntry.startsWith('2 ')
+    const originalPath = isRenameOrCopy ? rawEntries[++index] : undefined
+    const parsedEntry = parseInitGitStatusRecord(rawEntry, originalPath)
+    if (!parsedEntry)
+      return undefined
+    entries.push(parsedEntry)
+  }
+  return entries
+}
+
+function getInitGitStatusArgs(scope?: NormalizedInitGitChangeScope) {
+  const args = ['-c', 'status.renames=copies', 'status', '--porcelain=v2', '-z', '--untracked-files=all']
+  if (scope)
+    args.push('--', ...scope.exactPaths.map(filePath => `:(top,literal)${filePath}`), ...scope.directoryPrefixes.map(prefix => `:(top,literal)${prefix}`))
+  return args
+}
+
+function runInitGitStatus(repoRoot: string, args: readonly string[]): Buffer | undefined {
+  const result = spawnSync('git', [...args], {
+    cwd: repoRoot,
+    stdio: 'pipe',
+  })
+  return !result.error && result.status === 0 && result.stdout ? result.stdout : undefined
+}
+
+function initGitFileMetadataMatches(
+  left: ReturnType<NonNullable<InitGitSnapshotDependencies['lstat']>>,
+  right: ReturnType<NonNullable<InitGitSnapshotDependencies['lstat']>>,
+) {
+  return left.dev === right.dev
+    && left.ino === right.ino
+    && left.size === right.size
+    && left.mode === right.mode
+    && left.mtimeNs === right.mtimeNs
+    && left.ctimeNs === right.ctimeNs
+}
+
+export function captureInitGitSnapshot(
+  startDir = cwd(),
+  scope?: InitGitChangeScope,
+  dependencies: InitGitSnapshotDependencies = {},
+): InitGitChanges | undefined {
   try {
     const repoRoot = getInitGitRepoRoot(startDir)
     if (!repoRoot)
@@ -802,29 +928,19 @@ export function captureInitGitSnapshot(startDir = cwd(), scope?: InitGitChangeSc
     if (normalizedScope && normalizedScope.exactPaths.length === 0 && normalizedScope.directoryPrefixes.length === 0)
       return { version: 1, repoRoot, files: {} }
 
-    const statusArgs = ['-c', 'status.renames=copies', 'status', '--porcelain=v2', '-z', '--untracked-files=all']
-    if (normalizedScope) {
-      statusArgs.push('--', ...normalizedScope.exactPaths.map(filePath => `:(top,literal)${filePath}`), ...normalizedScope.directoryPrefixes.map(prefix => `:(top,literal)${prefix}`))
-    }
-    const statusResult = spawnSync('git', statusArgs, {
-      cwd: repoRoot,
-      stdio: 'pipe',
-      encoding: 'utf8',
-    })
-    if (statusResult.error || statusResult.status !== 0)
+    const runStatus = dependencies.runStatus ?? runInitGitStatus
+    const lstat = dependencies.lstat ?? (filePath => lstatSync(filePath, { bigint: true }))
+    const readFile = dependencies.readFile ?? (filePath => readFileSync(filePath))
+    const statusArgs = getInitGitStatusArgs(normalizedScope)
+    const statusOutput = runStatus(repoRoot, statusArgs)
+    if (!statusOutput)
       return undefined
-
-    const statusOutput = statusResult.stdout?.toString() ?? ''
-    if (statusOutput && !statusOutput.endsWith('\0'))
+    const entries = parseInitGitStatusOutput(statusOutput)
+    if (!entries)
       return undefined
-    const entries = statusOutput ? statusOutput.slice(0, -1).split('\0') : []
     const files: Record<string, InitGitChangeFingerprint> = {}
     for (const entry of entries) {
-      const parsedEntry = parseInitGitStatusRecord(entry)
-      if (!parsedEntry)
-        return undefined
-
-      const { status, filePath, headMode, indexMode, worktreeMode } = parsedEntry
+      const { status, filePath, headMode, indexMode, worktreeMode } = entry
       const fingerprintKind = getInitGitFingerprintKind(status)
       if (!filePath || !fingerprintKind || files[filePath])
         return undefined
@@ -846,16 +962,26 @@ export function captureInitGitSnapshot(startDir = cwd(), scope?: InitGitChangeSc
       if (status !== '??' && (!isRegularGitBlobMode(indexMode) || !isRegularGitBlobMode(worktreeMode)))
         return undefined
 
-      const fileStats = lstatSync(absolutePath)
-      if (!fileStats.isFile())
+      const beforeStats = lstat(absolutePath)
+      if (!beforeStats.isFile())
+        return undefined
+      const contents = readFile(absolutePath)
+      const afterStats = lstat(absolutePath)
+      const mode = Number(afterStats.mode)
+      if (!afterStats.isFile()
+        || !initGitFileMetadataMatches(beforeStats, afterStats)
+        || !isSupportedInitGitFileMode(mode))
         return undefined
       files[filePath] = {
         status,
-        sha256: createHash('sha256').update(readFileSync(absolutePath)).digest('hex'),
-        mode: fileStats.mode,
+        sha256: createHash('sha256').update(contents).digest('hex'),
+        mode,
       }
     }
 
+    const finalStatusOutput = runStatus(repoRoot, statusArgs)
+    if (!finalStatusOutput || !finalStatusOutput.equals(statusOutput))
+      return undefined
     return { version: 1, repoRoot, files }
   }
   catch {
@@ -1123,6 +1249,10 @@ function getNormalizedGitStatusEntryPath(entry: string) {
   return getGitStatusEntryPath(entry).split(path.sep).join('/')
 }
 
+function getGitStatusFileEntries(status: GitRepoStatus) {
+  return status.fileEntries?.length === status.entries.length ? status.fileEntries : undefined
+}
+
 export function evaluateInitGitRepoState(
   status: GitRepoStatus,
   currentValue: InitGitChanges | undefined,
@@ -1141,7 +1271,10 @@ export function evaluateInitGitRepoState(
   }
 
   const current = parseInitGitChangesValue(currentValue, true)
-  const statusPaths = status.entries.map(getNormalizedGitStatusEntryPath)
+  const fileEntries = getGitStatusFileEntries(status)
+  const statusPaths = fileEntries
+    ? fileEntries.map(entry => entry.filePath)
+    : status.entries.map(getNormalizedGitStatusEntryPath)
   const currentPaths = current ? Object.keys(current.files).sort() : []
   const snapshotMatchesStatus = Boolean(
     current
@@ -1175,7 +1308,9 @@ export function evaluateInitGitRepoState(
 
   const unsafePaths = new Set(classification.unsafePaths)
   return {
-    warningEntries: status.entries.filter(entry => unsafePaths.has(getNormalizedGitStatusEntryPath(entry))),
+    warningEntries: fileEntries
+      ? fileEntries.filter(entry => unsafePaths.has(entry.filePath)).map(entry => entry.display)
+      : status.entries.filter(entry => unsafePaths.has(getNormalizedGitStatusEntryPath(entry))),
     recognizedCount: classification.recognizedCount,
     nextSaved: classification.retained,
     shouldPersist: true,
@@ -1193,8 +1328,7 @@ export function isOnlyAllowedInitAutoTestChange(status: GitRepoStatus, allowedCh
   try {
     const repoRoot = realpathSync.native(status.repoRoot)
     const allowedFilePath = realpathSync.native(path.resolve(allowedChange.filePath))
-    const dirtyPaths = status.entries
-      .map(getGitStatusEntryPath)
+    const dirtyPaths = (getGitStatusFileEntries(status)?.map(entry => entry.filePath) ?? status.entries.map(getGitStatusEntryPath))
       .filter(Boolean)
       .map(entryPath => realpathSync.native(path.resolve(repoRoot, entryPath)))
 

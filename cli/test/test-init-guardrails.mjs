@@ -85,6 +85,13 @@ function initializeGitRepo(root, files) {
   execSync('git commit -m "init"', { cwd: root, stdio: 'ignore' })
 }
 
+function getRawInitGitStatus(root) {
+  return execSync('git -c status.renames=copies status --porcelain=v2 -z --untracked-files=all', {
+    cwd: root,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+}
+
 function tryCreateTestSymlink(target, filePath) {
   try {
     symlinkSync(target, filePath)
@@ -521,6 +528,80 @@ t('git snapshot handles mixed tracked, untracked, and staged-deleted paths toget
   })
 })
 
+t('git snapshot rejects file metadata changed during hashing', () => {
+  withTempDir((root) => {
+    initializeGitRepo(root, { 'tracked file ü.txt': 'initial\n' })
+    const filePath = join(root, 'tracked file ü.txt')
+    writeFileSync(filePath, 'modified\n', 'utf8')
+    const statusOutput = getRawInitGitStatus(root)
+    const stable = lstatSync(filePath, { bigint: true })
+    const changed = {
+      dev: stable.dev,
+      ino: stable.ino,
+      size: stable.size,
+      mode: stable.mode,
+      mtimeNs: stable.mtimeNs + 1n,
+      ctimeNs: stable.ctimeNs,
+      isFile: () => true,
+    }
+    let readCompleted = false
+
+    const snapshot = captureInitGitSnapshot(root, undefined, {
+      runStatus: () => statusOutput,
+      lstat: () => readCompleted ? changed : stable,
+      readFile: (target) => {
+        const content = readFileSync(target)
+        readCompleted = true
+        return content
+      },
+    })
+
+    assert.equal(snapshot, undefined)
+  })
+})
+
+t('git snapshot rejects a changed second status result', () => {
+  withTempDir((root) => {
+    initializeGitRepo(root, { 'tracked file ü.txt': 'initial\n' })
+    writeFileSync(join(root, 'tracked file ü.txt'), 'modified\n', 'utf8')
+    const statusOutput = getRawInitGitStatus(root)
+    let statusCalls = 0
+
+    const snapshot = captureInitGitSnapshot(root, undefined, {
+      runStatus: () => statusCalls++ === 0
+        ? statusOutput
+        : Buffer.concat([statusOutput, Buffer.from('? changed after hashing.txt\0')]),
+    })
+
+    assert.equal(snapshot, undefined)
+    assert.equal(statusCalls, 2)
+  })
+})
+
+t('git snapshot accepts stable metadata and status for raw whitespace and Unicode paths', () => {
+  withTempDir((root) => {
+    initializeGitRepo(root, {
+      'tracked file.txt': 'initial\n',
+      'tracked ü.txt': 'initial\n',
+    })
+    writeFileSync(join(root, 'tracked file.txt'), 'modified\n', 'utf8')
+    writeFileSync(join(root, 'tracked ü.txt'), 'modified\n', 'utf8')
+    const statusOutput = getRawInitGitStatus(root)
+    let statusCalls = 0
+
+    const snapshot = captureInitGitSnapshot(root, undefined, {
+      runStatus: () => {
+        statusCalls += 1
+        return statusOutput
+      },
+    })
+
+    assert.ok(snapshot)
+    assert.deepEqual(Object.keys(snapshot.files).sort(), ['tracked file.txt', 'tracked ü.txt'])
+    assert.equal(statusCalls, 2)
+  })
+})
+
 t('git snapshot declines unsupported symlinks and renames', () => {
   withTempDir((root) => {
     execSync('git init', { cwd: root, stdio: 'ignore' })
@@ -541,6 +622,9 @@ t('git snapshot declines unsupported symlinks and renames', () => {
     execSync('git commit -m "init"', { cwd: root, stdio: 'ignore' })
     execSync('git mv before.txt after.txt', { cwd: root, stdio: 'ignore' })
 
+    const status = getGitRepoStatus(root)
+    assert.deepEqual(status.entries, ['R  before.txt -> after.txt'])
+    assert.deepEqual(status.fileEntries, [{ status: 'R ', filePath: 'after.txt', display: 'R  before.txt -> after.txt' }])
     assert.equal(captureInitGitSnapshot(root), undefined)
   })
 })
@@ -1348,6 +1432,64 @@ await tAsync('live git cleanliness gate filters trusted changes without weakenin
   finally {
     beginFreshInitProgress()
   }
+})
+
+await tAsync('live git cleanliness gate recognizes raw whitespace and Unicode paths', async () => {
+  await withTempDirAsync(async (root) => {
+    initializeGitRepo(root, {
+      'trusted file.txt': 'initial\n',
+      'trusted ü.txt': 'initial\n',
+    })
+    writeFileSync(join(root, 'trusted file.txt'), 'Capgo change\n', 'utf8')
+    writeFileSync(join(root, 'trusted ü.txt'), 'Capgo change\n', 'utf8')
+    const saved = captureInitGitSnapshot(root)
+    assert.ok(saved)
+
+    const runGate = async () => {
+      const events = []
+      await ensureGitRepoCleanBeforeInit(undefined, {
+        getStatus: () => getGitRepoStatus(root),
+        captureSnapshot: () => captureInitGitSnapshot(root),
+        isOnlyAllowedAutoTestChange: () => false,
+        persistProgress: () => {},
+        log: {
+          error: message => events.push({ type: 'error', message }),
+          info: message => events.push({ type: 'info', message }),
+          success: message => events.push({ type: 'success', message }),
+          warn: message => events.push({ type: 'warn', message }),
+        },
+        selectAction: async (prompt) => {
+          events.push({ type: 'prompt', prompt })
+          return 'continue-dirty'
+        },
+        cancelAction: async () => {},
+        waitForRetry: async () => assert.fail('retry prompt was not expected'),
+      })
+      return events
+    }
+
+    try {
+      restoreInitProgressState(4, saved)
+      const exactEvents = await runGate()
+      assert.equal(exactEvents.some(event => event.type === 'prompt'), false)
+      assert.deepEqual(exactEvents.filter(event => event.type === 'info').map(event => event.message), [
+        'Resuming with uncommitted changes created by the previous Capgo onboarding run.',
+      ])
+
+      writeFileSync(join(root, 'unsafe ü file.txt'), 'user change\n', 'utf8')
+      restoreInitProgressState(4, saved)
+      const mixedEvents = await runGate()
+      assert.equal(mixedEvents.some(event => event.type === 'prompt'), true)
+      assert.deepEqual(
+        mixedEvents.filter(event => event.type === 'warn' && event.message.startsWith('  ')).map(event => event.message),
+        ['  ?? unsafe ü file.txt'],
+      )
+      assert.equal(mixedEvents.some(event => event.type === 'info' && event.message === '2 recognized Capgo changes were omitted from this warning.'), true)
+    }
+    finally {
+      beginFreshInitProgress()
+    }
+  })
 })
 
 t('production onboarding lifecycle transitions clear resumed fingerprint state', () => {
