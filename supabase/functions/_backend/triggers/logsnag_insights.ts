@@ -278,17 +278,138 @@ function isUnpaidAtBillingSnapshot(paidAt: Date | string | null | undefined, sna
 
 function isPaidPlanAtBillingSnapshot(
   paidAt: Date | string | null | undefined,
+  _trialAt: Date | string | null | undefined,
+  snapshotExclusiveEnd: Date,
+): boolean {
+  // Paying plan snapshots must have converted (paid_at). Unpaid / never-converted
+  // trial rows used to inflate Solo/Maker counts and diverge from Stripe MRR.
+  if (!paidAt)
+    return false
+  return new Date(paidAt).getTime() < snapshotExclusiveEnd.getTime()
+}
+
+const YEARLY_ANCHOR_DAYS = 300
+const ONE_DAY_SECONDS = 24 * 60 * 60
+
+function getEmptyPlanRevenue(): PlanRevenue {
+  return {
+    mrr: 0,
+    total_revenue: 0,
+    revenue_solo: 0,
+    revenue_maker: 0,
+    revenue_team: 0,
+    revenue_enterprise: 0,
+    plan_solo_monthly: 0,
+    plan_solo_yearly: 0,
+    plan_maker_monthly: 0,
+    plan_maker_yearly: 0,
+    plan_team_monthly: 0,
+    plan_team_yearly: 0,
+    plan_enterprise_monthly: 0,
+    plan_enterprise_yearly: 0,
+  }
+}
+
+function roundRevenueMoney(value: number) {
+  return Number(value.toFixed(2))
+}
+
+export function resolvePlanBillingInterval(options: {
+  priceId: string | null | undefined
+  priceMId: string | null | undefined
+  priceYId: string | null | undefined
+  anchorStart: Date | string | null | undefined
+  anchorEnd: Date | string | null | undefined
+}): 'monthly' | 'yearly' {
+  if (options.priceId && options.priceMId && options.priceId === options.priceMId)
+    return 'monthly'
+  if (options.priceId && options.priceYId && options.priceId === options.priceYId)
+    return 'yearly'
+
+  const startMs = options.anchorStart ? new Date(options.anchorStart).getTime() : Number.NaN
+  const endMs = options.anchorEnd ? new Date(options.anchorEnd).getTime() : Number.NaN
+  if (Number.isFinite(startMs) && Number.isFinite(endMs) && endMs > startMs) {
+    const days = (endMs - startMs) / (ONE_DAY_SECONDS * 1000)
+    if (days >= YEARLY_ANCHOR_DAYS)
+      return 'yearly'
+  }
+
+  return 'monthly'
+}
+
+export function resolvePlanMrrDollars(options: {
+  billing: 'monthly' | 'yearly'
+  priceId: string | null | undefined
+  priceMId: string | null | undefined
+  priceYId: string | null | undefined
+  priceM: number | null | undefined
+  priceY: number | null | undefined
+}): number {
+  const priceM = Number(options.priceM) || 0
+  const priceY = Number(options.priceY) || 0
+
+  if (options.priceId && options.priceMId && options.priceId === options.priceMId)
+    return priceM
+  if (options.priceId && options.priceYId && options.priceId === options.priceYId)
+    return priceY / 12
+
+  return options.billing === 'yearly' ? priceY / 12 : priceM
+}
+
+function hasLeftTrialAtSnapshot(
   trialAt: Date | string | null | undefined,
   snapshotExclusiveEnd: Date,
 ): boolean {
-  if (paidAt)
-    return new Date(paidAt).getTime() < snapshotExclusiveEnd.getTime()
-
+  // Mirrors SQL: si.trial_at <= snapshotExclusiveEnd (NULL does not pass).
+  // paid_at can be set on subscription.created / checkout before the first charge;
+  // Capgo stores Stripe trial_end in trial_at, so MRR stays $0 until that boundary.
   if (!trialAt)
     return false
-
   const trialAtTime = new Date(trialAt).getTime()
   return Number.isFinite(trialAtTime) && trialAtTime <= snapshotExclusiveEnd.getTime()
+}
+
+function applySubscriptionRevenue(
+  revenue: PlanRevenue,
+  planKey: string,
+  billing: 'monthly' | 'yearly',
+  mrr: number,
+) {
+  if (planKey === 'solo') {
+    revenue.mrr += mrr
+    revenue.revenue_solo += mrr * 12
+    if (billing === 'monthly')
+      revenue.plan_solo_monthly++
+    else
+      revenue.plan_solo_yearly++
+    return
+  }
+  if (planKey === 'maker') {
+    revenue.mrr += mrr
+    revenue.revenue_maker += mrr * 12
+    if (billing === 'monthly')
+      revenue.plan_maker_monthly++
+    else
+      revenue.plan_maker_yearly++
+    return
+  }
+  if (planKey === 'team') {
+    revenue.mrr += mrr
+    revenue.revenue_team += mrr * 12
+    if (billing === 'monthly')
+      revenue.plan_team_monthly++
+    else
+      revenue.plan_team_yearly++
+    return
+  }
+  if (planKey === 'enterprise') {
+    revenue.mrr += mrr
+    revenue.revenue_enterprise += mrr * 12
+    if (billing === 'monthly')
+      revenue.plan_enterprise_monthly++
+    else
+      revenue.plan_enterprise_yearly++
+  }
 }
 
 function normalizeCoreSnapshotCounts(row: Partial<CoreSnapshotRow> | null | undefined): CoreSnapshotCounts {
@@ -818,184 +939,107 @@ function isMissingAppsWithPreviewColumnError(error: unknown): boolean {
 }
 
 async function calculateRevenue(c: Context, referenceDate?: Date): Promise<PlanRevenue> {
-  const supabase = supabaseAdmin(c)
+  const pgClient = getPgClient(c, false)
+  const drizzleClient = getDrizzleClient(pgClient)
 
   try {
-    // Get plan prices from database
-    const { data: plansData, error: plansError } = await supabase
-      .from('plans')
-      .select('name, price_m, price_y, price_m_id, price_y_id')
-      .in('name', ['Solo', 'Maker', 'Team', 'Enterprise'])
+    // Load rows via SQL (no PostgREST ~1000-row truncation), then classify with the
+    // shared JS helpers so unit tests exercise the same billing/MRR rules as prod.
+    const snapshotExclusiveEnd = referenceDate ?? new Date()
+    const snapshotExclusiveEndIso = snapshotExclusiveEnd.toISOString()
+    const result = await drizzleClient.execute<{
+      plan_key: string | null
+      price_id: string | null
+      price_m_id: string | null
+      price_y_id: string | null
+      price_m: number | string | null
+      price_y: number | string | null
+      subscription_anchor_start: string | Date | null
+      subscription_anchor_end: string | Date | null
+    }>(sql`
+      SELECT
+        lower(p.name) AS plan_key,
+        si.price_id,
+        p.price_m_id,
+        p.price_y_id,
+        p.price_m,
+        p.price_y,
+        si.subscription_anchor_start,
+        si.subscription_anchor_end
+      FROM public.stripe_info si
+      INNER JOIN public.plans p ON p.stripe_id = si.product_id
+      WHERE si.is_good_plan = true
+        AND p.name IN ('Solo', 'Maker', 'Team', 'Enterprise')
+        AND si.paid_at IS NOT NULL
+        AND si.paid_at < ${snapshotExclusiveEndIso}::timestamptz
+        AND si.trial_at <= ${snapshotExclusiveEndIso}::timestamptz
+        AND (
+          ${referenceDate ? sql`
+            si.created_at < ${snapshotExclusiveEndIso}::timestamptz
+            AND si.status IN (
+              'succeeded'::public.stripe_status,
+              'canceled'::public.stripe_status,
+              'deleted'::public.stripe_status
+            )
+            AND (si.canceled_at IS NULL OR si.canceled_at >= ${snapshotExclusiveEndIso}::timestamptz)
+            AND si.subscription_anchor_end > ${snapshotExclusiveEndIso}::timestamptz
+          ` : sql`
+            si.status = 'succeeded'::public.stripe_status
+          `}
+        )
+    `)
 
-    if (plansError || !plansData) {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to fetch plan prices', error: plansError })
-      return {
-        mrr: 0,
-        total_revenue: 0,
-        revenue_solo: 0,
-        revenue_maker: 0,
-        revenue_team: 0,
-        revenue_enterprise: 0,
-        plan_solo_monthly: 0,
-        plan_solo_yearly: 0,
-        plan_maker_monthly: 0,
-        plan_maker_yearly: 0,
-        plan_team_monthly: 0,
-        plan_team_yearly: 0,
-        plan_enterprise_monthly: 0,
-        plan_enterprise_yearly: 0,
-      }
-    }
+    const revenue = getEmptyPlanRevenue()
+    for (const row of result.rows) {
+      const planKey = String(row.plan_key || '')
+      if (!planKey)
+        continue
 
-    // Build price map
-    const priceMap = new Map<string, { price_m: number, price_y: number, price_m_id: string, price_y_id: string }>()
-    for (const plan of plansData) {
-      const price_m = Number(plan.price_m) || 0
-      const price_y = Number(plan.price_y) || 0
-      priceMap.set(plan.name.toLowerCase(), {
-        price_m, // Already in dollars
-        price_y, // Already in dollars
-        price_m_id: plan.price_m_id || '',
-        price_y_id: plan.price_y_id || '',
+      const billing = resolvePlanBillingInterval({
+        priceId: row.price_id,
+        priceMId: row.price_m_id,
+        priceYId: row.price_y_id,
+        anchorStart: row.subscription_anchor_start,
+        anchorEnd: row.subscription_anchor_end,
       })
-      cloudlog({ requestId: c.get('requestId'), message: `Plan ${plan.name}: monthly=$${price_m}, yearly=$${price_y}` })
+      const mrr = resolvePlanMrrDollars({
+        billing,
+        priceId: row.price_id,
+        priceMId: row.price_m_id,
+        priceYId: row.price_y_id,
+        priceM: Number(row.price_m) || 0,
+        priceY: Number(row.price_y) || 0,
+      })
+      applySubscriptionRevenue(revenue, planKey, billing, mrr)
     }
 
-    // Get subscription counts from stripe_info. Replays use the snapshot end to avoid counting subscriptions created after the target date.
-    let subsQuery = supabase
-      .from('stripe_info')
-      .select('price_id')
-      .eq('is_good_plan', true)
-
-    if (referenceDate) {
-      const snapshotEndIso = referenceDate.toISOString()
-      subsQuery = subsQuery
-        .lt('created_at', snapshotEndIso)
-        .or(`paid_at.lt.${snapshotEndIso},and(paid_at.is.null,trial_at.lte.${snapshotEndIso})`)
-        .in('status', ['succeeded', 'canceled', 'deleted'])
-        .or(`canceled_at.is.null,canceled_at.gte.${snapshotEndIso}`)
-        .gt('subscription_anchor_end', snapshotEndIso)
-    }
-    else {
-      subsQuery = subsQuery.eq('status', 'succeeded')
-    }
-
-    const { data: subsData, error: subsError } = await subsQuery
-    if (subsError || !subsData) {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to fetch subscriptions', error: subsError })
-      return {
-        mrr: 0,
-        total_revenue: 0,
-        revenue_solo: 0,
-        revenue_maker: 0,
-        revenue_team: 0,
-        revenue_enterprise: 0,
-        plan_solo_monthly: 0,
-        plan_solo_yearly: 0,
-        plan_maker_monthly: 0,
-        plan_maker_yearly: 0,
-        plan_team_monthly: 0,
-        plan_team_yearly: 0,
-        plan_enterprise_monthly: 0,
-        plan_enterprise_yearly: 0,
-      }
-    }
-
-    // Count subscriptions by plan and billing period
-    const subCountMap = new Map<string, { monthly: number, yearly: number }>()
-    const priceToPlan = new Map<string, { planName: string, billing: 'monthly' | 'yearly' }>()
-    for (const [planName, planPrices] of priceMap) {
-      if (planPrices.price_m_id)
-        priceToPlan.set(planPrices.price_m_id, { planName, billing: 'monthly' })
-      if (planPrices.price_y_id)
-        priceToPlan.set(planPrices.price_y_id, { planName, billing: 'yearly' })
-    }
-
-    for (const sub of subsData) {
-      const priceId = sub.price_id
-      if (!priceId)
-        continue
-
-      const plan = priceToPlan.get(priceId)
-      if (!plan)
-        continue
-
-      if (!subCountMap.has(plan.planName))
-        subCountMap.set(plan.planName, { monthly: 0, yearly: 0 })
-
-      subCountMap.get(plan.planName)![plan.billing]++
-    }
-
-    // Calculate MRR and ARR
-    const solo = subCountMap.get('solo') || { monthly: 0, yearly: 0 }
-    const maker = subCountMap.get('maker') || { monthly: 0, yearly: 0 }
-    const team = subCountMap.get('team') || { monthly: 0, yearly: 0 }
-    const enterprise = subCountMap.get('enterprise') || { monthly: 0, yearly: 0 }
-
-    const soloPrices = priceMap.get('solo') || { price_m: 0, price_y: 0, price_m_id: '', price_y_id: '' }
-    const makerPrices = priceMap.get('maker') || { price_m: 0, price_y: 0, price_m_id: '', price_y_id: '' }
-    const teamPrices = priceMap.get('team') || { price_m: 0, price_y: 0, price_m_id: '', price_y_id: '' }
-    const enterprisePrices = priceMap.get('enterprise') || { price_m: 0, price_y: 0, price_m_id: '', price_y_id: '' }
-
-    // MRR = (monthly subs × monthly price) + (yearly subs × yearly price / 12)
-    const soloMRR = (solo.monthly * soloPrices.price_m) + (solo.yearly * soloPrices.price_y / 12)
-    const makerMRR = (maker.monthly * makerPrices.price_m) + (maker.yearly * makerPrices.price_y / 12)
-    const teamMRR = (team.monthly * teamPrices.price_m) + (team.yearly * teamPrices.price_y / 12)
-    const enterpriseMRR = (enterprise.monthly * enterprisePrices.price_m) + (enterprise.yearly * enterprisePrices.price_y / 12)
-    const totalMRR = soloMRR + makerMRR + teamMRR + enterpriseMRR
+    revenue.mrr = roundRevenueMoney(revenue.mrr)
+    revenue.total_revenue = roundRevenueMoney(revenue.mrr * 12)
+    revenue.revenue_solo = roundRevenueMoney(revenue.revenue_solo)
+    revenue.revenue_maker = roundRevenueMoney(revenue.revenue_maker)
+    revenue.revenue_team = roundRevenueMoney(revenue.revenue_team)
+    revenue.revenue_enterprise = roundRevenueMoney(revenue.revenue_enterprise)
 
     cloudlog({
       requestId: c.get('requestId'),
       message: 'Revenue calculation',
-      solo: { monthly: solo.monthly, yearly: solo.yearly, mrr: soloMRR, prices: soloPrices },
-      maker: { monthly: maker.monthly, yearly: maker.yearly, mrr: makerMRR, prices: makerPrices },
-      team: { monthly: team.monthly, yearly: team.yearly, mrr: teamMRR, prices: teamPrices },
-      enterprise: { monthly: enterprise.monthly, yearly: enterprise.yearly, mrr: enterpriseMRR, prices: enterprisePrices },
-      totalMRR,
+      referenceDate: referenceDate ? snapshotExclusiveEndIso : null,
+      mrr: revenue.mrr,
+      total_revenue: revenue.total_revenue,
+      solo: { monthly: revenue.plan_solo_monthly, yearly: revenue.plan_solo_yearly, arr: revenue.revenue_solo },
+      maker: { monthly: revenue.plan_maker_monthly, yearly: revenue.plan_maker_yearly, arr: revenue.revenue_maker },
+      team: { monthly: revenue.plan_team_monthly, yearly: revenue.plan_team_yearly, arr: revenue.revenue_team },
+      enterprise: { monthly: revenue.plan_enterprise_monthly, yearly: revenue.plan_enterprise_yearly, arr: revenue.revenue_enterprise },
     })
 
-    // ARR = MRR × 12
-    const soloARR = soloMRR * 12
-    const makerARR = makerMRR * 12
-    const teamARR = teamMRR * 12
-    const enterpriseARR = enterpriseMRR * 12
-    const totalARR = totalMRR * 12
-
-    return {
-      mrr: totalMRR,
-      total_revenue: totalARR,
-      revenue_solo: soloARR,
-      revenue_maker: makerARR,
-      revenue_team: teamARR,
-      revenue_enterprise: enterpriseARR,
-      plan_solo_monthly: solo.monthly,
-      plan_solo_yearly: solo.yearly,
-      plan_maker_monthly: maker.monthly,
-      plan_maker_yearly: maker.yearly,
-      plan_team_monthly: team.monthly,
-      plan_team_yearly: team.yearly,
-      plan_enterprise_monthly: enterprise.monthly,
-      plan_enterprise_yearly: enterprise.yearly,
-    }
+    return revenue
   }
   catch (e) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'calculateRevenue error', error: e })
-    return {
-      mrr: 0,
-      total_revenue: 0,
-      revenue_solo: 0,
-      revenue_maker: 0,
-      revenue_team: 0,
-      revenue_enterprise: 0,
-      plan_solo_monthly: 0,
-      plan_solo_yearly: 0,
-      plan_maker_monthly: 0,
-      plan_maker_yearly: 0,
-      plan_team_monthly: 0,
-      plan_team_yearly: 0,
-      plan_enterprise_monthly: 0,
-      plan_enterprise_yearly: 0,
-    }
+    return getEmptyPlanRevenue()
+  }
+  finally {
+    closeClient(c, pgClient)
   }
 }
 
@@ -2314,13 +2358,9 @@ async function getBillingSnapshotCounts(c: Context, snapshotExclusiveEnd: Date):
         INNER JOIN public.plans p ON p.stripe_id = si.product_id
         WHERE si.is_good_plan = true
           AND si.created_at < ${snapshotExclusiveEndIso}::timestamptz
-          AND (
-            si.paid_at < ${snapshotExclusiveEndIso}::timestamptz
-            OR (
-              si.paid_at IS NULL
-              AND si.trial_at <= ${snapshotExclusiveEndIso}::timestamptz
-            )
-          )
+          AND si.paid_at IS NOT NULL
+          AND si.paid_at < ${snapshotExclusiveEndIso}::timestamptz
+          AND si.trial_at <= ${snapshotExclusiveEndIso}::timestamptz
           AND si.status IN (
             'succeeded'::public.stripe_status,
             'canceled'::public.stripe_status,
@@ -2892,13 +2932,9 @@ async function getUpgradeRate12m(
           INNER JOIN public.plans p ON p.stripe_id = si.product_id
           WHERE si.is_good_plan = true
             AND si.created_at < ${snapshotEndIso}::timestamptz
-            AND (
-              si.paid_at < ${snapshotEndIso}::timestamptz
-              OR (
-                si.paid_at IS NULL
-                AND si.trial_at <= ${snapshotEndIso}::timestamptz
-              )
-            )
+            AND si.paid_at IS NOT NULL
+            AND si.paid_at < ${snapshotEndIso}::timestamptz
+            AND si.trial_at <= ${snapshotEndIso}::timestamptz
             AND si.status IN (
               'succeeded'::public.stripe_status,
               'canceled'::public.stripe_status,
@@ -3547,6 +3583,9 @@ export const logsnagInsightsTestUtils = {
   normalizeBillingSnapshotCounts,
   isUnpaidAtBillingSnapshot,
   isPaidPlanAtBillingSnapshot,
+  resolvePlanBillingInterval,
+  resolvePlanMrrDollars,
+  hasLeftTrialAtSnapshot,
   normalizeCoreSnapshotCounts,
   getCoreSnapshotCounts,
   reserveLogsnagInsightsRetry,
