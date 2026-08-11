@@ -6,7 +6,6 @@ import {
   buildExactTrackingStartQuery,
   buildPlansBehaviorQuery,
   getAdminPlansAnalytics,
-  LEGACY_PATH_SOURCE,
   MAX_PLANS_ORGANIZATIONS,
   MAX_POSTHOG_ROWS,
   MAX_TRANSITION_RESPONSE_BYTES,
@@ -71,8 +70,6 @@ function behavior(overrides: Record<string, unknown> = {}) {
     org_id: ORG_A,
     grouped_org_id: '',
     page: 'plans',
-    session_id: 'session-a',
-    distinct_id: 'user-a',
     ...overrides,
   }
 }
@@ -104,14 +101,16 @@ describe('plans analytics query construction', () => {
     const behaviorQuery = buildPlansBehaviorQuery(start, end)
     expect(behaviorQuery).toContain('toUnixTimestamp64Milli(timestamp) AS timestamp_ms')
     expect(behaviorQuery).toContain('event IN (\'User visit\', \'Checkout Started\')')
-    expect(behaviorQuery).toContain('2026-07-31T23:59:30.000Z')
+    expect(behaviorQuery).not.toContain('2026-07-31T23:59:30.000Z')
     expect(behaviorQuery).toContain('2026-08-03T00:00:00.000Z')
-    expect(behaviorQuery).toContain('event = \'User visit\'\n    AND properties.page = \'plans\'\n    AND timestamp >= parseDateTimeBestEffort(\'2026-07-31T23:59:30.000Z\')\n    AND timestamp < parseDateTimeBestEffort(\'2026-08-02T00:00:00.000Z\')')
+    expect(behaviorQuery).toContain('event = \'User visit\'\n    AND properties.page = \'plans\'\n    AND timestamp >= parseDateTimeBestEffort(\'2026-08-01T00:00:00.000Z\')\n    AND timestamp < parseDateTimeBestEffort(\'2026-08-02T00:00:00.000Z\')')
     expect(behaviorQuery).toContain('event = \'Checkout Started\'\n    AND timestamp >= parseDateTimeBestEffort(\'2026-08-01T00:00:00.000Z\')\n    AND timestamp < parseDateTimeBestEffort(\'2026-08-03T00:00:00.000Z\')')
     expect(behaviorQuery).toContain('LIMIT 200001')
     expect(behaviorQuery).not.toMatch(/SELECT\s+properties\b/i)
-    expect(behaviorQuery).not.toContain('current_url')
-    expect(behaviorQuery).not.toContain('pathname')
+    expect(behaviorQuery).not.toContain('$current_url')
+    expect(behaviorQuery).not.toContain('$pathname')
+    expect(behaviorQuery).not.toContain('$session_id')
+    expect(behaviorQuery).not.toContain('distinct_id')
 
     const transitionQuery = buildBillingTransitionsQuery(end, [ORG_A, ORG_B])
     expect(transitionQuery).toContain('toUnixTimestamp64Milli(timestamp) AS timestamp_ms')
@@ -150,6 +149,7 @@ describe('plans analytics query construction', () => {
     expect(buildBillingTransitionsQuery('+275760-09-12T23:59:59.999Z', [ORG_A])).toBe('')
     expect(buildBillingTransitionsQuery(end, ['bad\'id'])).toContain('\'bad\'\'id\'')
     expect(() => buildPlansBehaviorQuery('not-a-date', end)).not.toThrow()
+    expect(buildPlansBehaviorQuery('-271821-04-20T00:00:00.000Z', '-271821-04-21T00:00:00.000Z')).not.toBe('')
   })
 })
 
@@ -168,10 +168,6 @@ describe('plans analytics orchestration', () => {
       posthogConfigured: failure.configured,
       posthogConnected: failure.connected,
       posthogFailureReason: failure.failureReason,
-      legacyReconstructionAvailable: false,
-      legacyUnavailableReason: 'missing_event_time_path',
-      legacyLogicalOpens: 0,
-      legacyDeduplicationSeconds: null,
     })
     expect(result.traffic.totalOpens).toEqual([0])
     expect(result.visitorBreakdown).toHaveLength(1)
@@ -210,7 +206,7 @@ describe('plans analytics orchestration', () => {
     vi.mocked(queryPosthogHogql).mockImplementation(async (_context, query) => {
       queries.push(query)
       if (queries.length === 1)
-        return connected([behavior(), behavior({ org_id: ORG_B, distinct_id: 'user-b' })])
+        return connected([behavior(), behavior({ org_id: ORG_B })])
       return connected()
     })
 
@@ -378,20 +374,19 @@ describe('plans analytics orchestration', () => {
     })
   })
 
-  it('retains exact rows while failing closed on URL-looking legacy rows and reporting unmatched data', async () => {
-    expect(LEGACY_PATH_SOURCE).toBe('unavailable')
+  it('counts only exact page-tagged visits while ignoring URL-looking page-empty rows and reporting unmatched data', async () => {
     vi.mocked(queryPosthogHogql)
       .mockResolvedValueOnce(connected([
         behavior(),
-        behavior({ timestamp_ms: startMs + 120_000, org_id: ORG_B, page: '', distinct_id: 'user-b', event_current_url: 42, event_pathname: {}, person_current_url: [] }),
-        behavior({ timestamp_ms: startMs + 180_000, org_id: '', grouped_org_id: '', distinct_id: 'user-c' }),
+        behavior({ timestamp_ms: startMs + 120_000, org_id: ORG_B, page: '', event_current_url: 'https://capgo.app/dashboard/plans', event_pathname: '/dashboard/plans', person_current_url: 'https://capgo.app/dashboard/plans' }),
+        behavior({ timestamp_ms: startMs + 180_000, org_id: '', grouped_org_id: '' }),
         behavior({ timestamp_ms: startMs + 300_000, event: 'Checkout Started' }),
-        behavior({ timestamp_ms: startMs + 360_000, event: 'Checkout Started', org_id: 'not-a-uuid', grouped_org_id: '', distinct_id: 'user-invalid-checkout' }),
-        behavior({ timestamp_ms: startMs + 420_000, event: 'Checkout Started', org_id: 42, grouped_org_id: null, distinct_id: 'user-wrong-type-checkout' }),
-        behavior({ timestamp_ms: startMs + 480_000, event: 'Checkout Started', org_id: undefined, grouped_org_id: '', distinct_id: 'user-missing-checkout' }),
-        behavior({ timestamp_ms: startMs + 7_200_000, event: 'Checkout Started', org_id: ORG_X, distinct_id: 'user-x' }),
-        behavior({ timestamp_ms: startMs - 1, event: 'Checkout Started', org_id: '', grouped_org_id: '', distinct_id: 'user-before-window' }),
-        behavior({ timestamp_ms: Date.parse(end) + 24 * 60 * 60 * 1000, event: 'Checkout Started', org_id: '', grouped_org_id: '', distinct_id: 'user-after-window' }),
+        behavior({ timestamp_ms: startMs + 360_000, event: 'Checkout Started', org_id: 'not-a-uuid', grouped_org_id: '' }),
+        behavior({ timestamp_ms: startMs + 420_000, event: 'Checkout Started', org_id: 42, grouped_org_id: null }),
+        behavior({ timestamp_ms: startMs + 480_000, event: 'Checkout Started', org_id: undefined, grouped_org_id: '' }),
+        behavior({ timestamp_ms: startMs + 7_200_000, event: 'Checkout Started', org_id: ORG_X }),
+        behavior({ timestamp_ms: startMs - 1, event: 'Checkout Started', org_id: '', grouped_org_id: '' }),
+        behavior({ timestamp_ms: Date.parse(end) + 24 * 60 * 60 * 1000, event: 'Checkout Started', org_id: '', grouped_org_id: '' }),
       ]))
       .mockResolvedValueOnce(connected())
       .mockResolvedValueOnce(connected([{ exact_tracking_started_at: '2026-08-01T10:00:00Z' }]))
@@ -402,13 +397,9 @@ describe('plans analytics orchestration', () => {
     expect(result.dataQuality).toMatchObject({
       exactTrackingStartedAt: '2026-08-01T10:00:00.000Z',
       exactLogicalOpens: 1,
-      legacyLogicalOpens: 0,
-      legacyReconstructionAvailable: false,
-      legacyUnavailableReason: 'missing_event_time_path',
       excludedMissingOrganization: 4,
       unmatchedCheckoutStarts: 1,
       unknownBillingOrganizations: 0,
-      legacyDeduplicationSeconds: null,
     })
     expect(result.traffic.totalOpens).toEqual([1])
     expect(result.checkoutIntent[0]).toMatchObject({ startedCheckout: 1, didNotStart: 0 })
@@ -450,7 +441,7 @@ describe('plans analytics orchestration', () => {
     vi.mocked(queryPosthogHogql)
       .mockResolvedValueOnce(connected([
         behavior({ org_id: ORG_PAID }),
-        behavior({ timestamp_ms: startMs + 120_000, org_id: ORG_CANCELED, distinct_id: 'user-b' }),
+        behavior({ timestamp_ms: startMs + 120_000, org_id: ORG_CANCELED }),
       ]))
       .mockResolvedValueOnce(connected([
         { timestamp_ms: startMs - 5_000, event: 'User subscribe', group_key: ORG_PAID, group_type: 'organization', grouped_org_id: '', plan_status: 'succeeded', canceled_at: null },
@@ -485,11 +476,11 @@ describe('plans analytics orchestration', () => {
     vi.mocked(queryPosthogHogql)
       .mockResolvedValueOnce(connected([
         behavior(),
-        behavior({ org_id: ORG_B, distinct_id: 'user-b' }),
-        behavior({ org_id: ORG_C, distinct_id: 'user-c' }),
-        behavior({ org_id: ORG_D, distinct_id: 'user-d' }),
-        behavior({ org_id: ORG_E, distinct_id: 'user-e' }),
-        behavior({ org_id: ORG_F, distinct_id: 'user-f' }),
+        behavior({ org_id: ORG_B }),
+        behavior({ org_id: ORG_C }),
+        behavior({ org_id: ORG_D }),
+        behavior({ org_id: ORG_E }),
+        behavior({ org_id: ORG_F }),
       ]))
       .mockResolvedValueOnce(connected([
         { timestamp_ms: startMs - 6_000, event: 'User update subscribe', group_key: '', group_type: '', grouped_org_id: ORG_A, plan_status: 'past_due', event_plan_status: null, canceled_at: null },
@@ -554,8 +545,8 @@ describe('plans analytics orchestration', () => {
     vi.mocked(queryPosthogHogql)
       .mockResolvedValueOnce(connected([
         behavior({ org_id: ORG_KNOWN }),
-        behavior({ timestamp_ms: startMs + 120_000, org_id: ORG_UNKNOWN, distinct_id: 'user-b' }),
-        behavior({ timestamp_ms: startMs + 180_000, event: 'Checkout Started', org_id: ORG_UNKNOWN, distinct_id: 'user-b' }),
+        behavior({ timestamp_ms: startMs + 120_000, org_id: ORG_UNKNOWN }),
+        behavior({ timestamp_ms: startMs + 180_000, event: 'Checkout Started', org_id: ORG_UNKNOWN }),
       ]))
       .mockResolvedValueOnce(connected())
       .mockResolvedValueOnce(connected())
