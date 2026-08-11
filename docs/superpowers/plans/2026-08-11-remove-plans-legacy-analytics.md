@@ -23,12 +23,12 @@ Remove imports and assertions for `LEGACY_BURST_SECONDS`, legacy path normalizat
 ```ts
 it.concurrent('keeps every exact Plans opening in range and ignores all other visits', () => {
   const events = [
-    event({ timestampMs: ms('2026-07-31T23:59:59.999Z'), page: 'plans' }),
-    event({ timestampMs: ms('2026-08-01T10:00:00Z'), page: 'plans' }),
-    event({ timestampMs: ms('2026-08-01T10:00:01Z'), page: 'plans' }),
-    event({ timestampMs: ms('2026-08-01T10:00:02Z'), page: '' }),
-    event({ event: 'Checkout Started', timestampMs: ms('2026-08-01T10:00:03Z') }),
-    event({ timestampMs: ms('2026-08-02T00:00:00Z'), page: 'plans' }),
+    event({ timestampMs: ms('2026-07-31T23:59:59.999Z'), orgId: 'pre-range', page: 'plans' }),
+    event({ timestampMs: ms('2026-08-01T10:00:00Z'), orgId: 'org-a', page: 'plans' }),
+    event({ timestampMs: ms('2026-08-01T10:00:01Z'), orgId: 'org-a', page: 'plans' }),
+    event({ timestampMs: ms('2026-08-01T10:00:02Z'), orgId: 'empty-page', page: '' }),
+    event({ event: 'Checkout Started', timestampMs: ms('2026-08-01T10:00:03Z'), orgId: 'checkout' }),
+    event({ timestampMs: ms('2026-08-02T00:00:00Z'), orgId: 'end-exclusive', page: 'plans' }),
   ]
 
   expect(buildLogicalPlansOpenings(
@@ -44,7 +44,7 @@ it.concurrent('keeps every exact Plans opening in range and ignores all other vi
 })
 ```
 
-Keep malformed-timestamp, attribution, UTC bucketing, graph-invariant, and earliest-checkout tests. Remove `actorId`, `sessionId`, `path`, and `source` from fixtures.
+Keep malformed-timestamp, attribution, UTC bucketing, graph-invariant, and earliest-checkout tests. Retain the required `orgId` and `page` fields, and remove any legacy-only `actorId`, `sessionId`, `path`, and `source` fields from fixtures.
 
 - [ ] **Step 2: Run RED**
 
