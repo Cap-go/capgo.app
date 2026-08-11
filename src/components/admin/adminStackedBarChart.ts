@@ -25,6 +25,24 @@ export function buildAdminStackedBarChartData(
   }
 }
 
+export function applyAdminStackedBarAccessibleBorders(
+  data: ChartData<'bar'>,
+  accessibleBorders: boolean,
+  isDark: boolean,
+): ChartData<'bar'> {
+  if (!accessibleBorders)
+    return data
+
+  return {
+    ...data,
+    datasets: data.datasets.map(dataset => ({
+      ...dataset,
+      borderColor: isDark ? '#f8fafc' : '#0f172a',
+      borderWidth: 1,
+    })),
+  }
+}
+
 export function formatAdminStackedBarTooltip(label: string, value: number, total: number) {
   const percentage = total > 0 ? (value / total) * 100 : 0
   return `${label}: ${formatNumberValue(value)} (${formatNumberValue(percentage, { maximumFractionDigits: 1 })}%)`

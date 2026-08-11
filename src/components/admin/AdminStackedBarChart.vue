@@ -12,7 +12,7 @@ import {
 } from 'chart.js'
 import { computed } from 'vue'
 import { Bar } from 'vue-chartjs'
-import { buildAdminStackedBarChartData, buildAdminStackedBarChartOptions } from '~/components/admin/adminStackedBarChart'
+import { applyAdminStackedBarAccessibleBorders, buildAdminStackedBarChartData, buildAdminStackedBarChartOptions } from '~/components/admin/adminStackedBarChart'
 import { formatLocalDate } from '~/services/date'
 
 interface DataSeries {
@@ -27,6 +27,10 @@ const props = defineProps({
     required: true,
   },
   isLoading: {
+    type: Boolean,
+    default: false,
+  },
+  accessibleBorders: {
     type: Boolean,
     default: false,
   },
@@ -54,7 +58,11 @@ const chartData = computed(() => {
     color: item.color,
   }))
 
-  return buildAdminStackedBarChartData(labels, datasets)
+  return applyAdminStackedBarAccessibleBorders(
+    buildAdminStackedBarChartData(labels, datasets),
+    props.accessibleBorders,
+    isDark.value,
+  )
 })
 
 const chartOptions = computed(() => buildAdminStackedBarChartOptions(isDark.value))
