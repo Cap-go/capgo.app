@@ -1354,14 +1354,17 @@ await tAsync('live git cleanliness gate filters trusted changes without weakenin
     entries: [' M package.json', '?? src/user.ts'],
   }
 
-  const runGate = async ({ status, snapshot, savedValue, action = 'continue-dirty' }) => {
+  const runGate = async ({ status, snapshot, savedValue, action = 'continue-dirty', persistSucceeds = true }) => {
     restoreInitProgressState(4, savedValue)
     const events = []
     await ensureGitRepoCleanBeforeInit(undefined, {
       getStatus: () => status,
       captureSnapshot: () => snapshot,
       isOnlyAllowedAutoTestChange: () => false,
-      persistProgress: () => events.push({ type: 'persist', state: getInitProgressStateForTesting() }),
+      persistProgress: () => {
+        events.push({ type: 'persist', state: getInitProgressStateForTesting() })
+        return persistSucceeds
+      },
       log: {
         error: message => events.push({ type: 'error', message }),
         info: message => events.push({ type: 'info', message }),
@@ -1389,6 +1392,20 @@ await tAsync('live git cleanliness gate filters trusted changes without weakenin
       'Resuming with uncommitted changes created by the previous Capgo onboarding run.',
     ])
 
+    const failedExact = await runGate({
+      status: { ...dirtyStatus, entries: [' M package.json'] },
+      snapshot: saved,
+      savedValue: saved,
+      persistSucceeds: false,
+    })
+    assert.equal(failedExact.events.some(event => event.type === 'prompt'), true)
+    assert.deepEqual(
+      failedExact.events.filter(event => event.type === 'warn' && event.message.startsWith('  ')).map(event => event.message),
+      ['   M package.json'],
+    )
+    assert.equal(failedExact.events.some(event => event.type === 'info' && event.message.includes('previous Capgo onboarding run')), false)
+    assert.equal(failedExact.events.findIndex(event => event.type === 'persist') < failedExact.events.findIndex(event => event.type === 'prompt'), true)
+
     const mixed = await runGate({ status: dirtyStatus, snapshot: current, savedValue: saved })
     const mixedPrompt = mixed.events.find(event => event.type === 'prompt')
     assert.deepEqual(mixedPrompt?.prompt, {
@@ -1406,6 +1423,15 @@ await tAsync('live git cleanliness gate filters trusted changes without weakenin
     assert.deepEqual(Object.keys(mixed.state.gitChanges?.files ?? {}), ['package.json'])
     assert.equal(mixed.state.gitChanges?.files['src/user.ts'], undefined)
     assert.equal(mixed.events.some(event => event.type === 'warn' && event.message === 'Continuing with dirty git status. This is not recommended.'), true)
+
+    const failedMixed = await runGate({ status: dirtyStatus, snapshot: current, savedValue: saved, persistSucceeds: false })
+    assert.deepEqual(
+      failedMixed.events.filter(event => event.type === 'warn' && event.message.startsWith('  ')).map(event => event.message),
+      ['   M package.json', '  ?? src/user.ts'],
+    )
+    assert.equal(failedMixed.events.some(event => event.type === 'info' && event.message.includes('recognized Capgo')), false)
+    assert.equal(failedMixed.events.findIndex(event => event.type === 'persist') < failedMixed.events.findIndex(event => event.type === 'prompt'), true)
+    assert.deepEqual(Object.keys(failedMixed.state.gitChanges?.files ?? {}), ['package.json'])
 
     for (const [name, savedValue] of [
       ['missing fingerprints', undefined],
@@ -1428,6 +1454,16 @@ await tAsync('live git cleanliness gate filters trusted changes without weakenin
     assert.equal(clean.events.some(event => event.type === 'prompt'), false)
     assert.deepEqual(clean.events.filter(event => event.type === 'persist').map(event => event.state.gitChanges), [undefined])
     assert.deepEqual(clean.state, { stepDone: 4, gitChanges: undefined })
+
+    const failedClean = await runGate({
+      status: { inRepo: true, clean: true, repoRoot, entries: [] },
+      snapshot: undefined,
+      savedValue: saved,
+      persistSucceeds: false,
+    })
+    assert.equal(failedClean.events.some(event => event.type === 'prompt'), false)
+    assert.equal(failedClean.events.some(event => event.type === 'persist'), true)
+    assert.deepEqual(failedClean.state, { stepDone: 4, gitChanges: undefined })
   }
   finally {
     beginFreshInitProgress()
@@ -1451,7 +1487,7 @@ await tAsync('live git cleanliness gate recognizes raw whitespace and Unicode pa
         getStatus: () => getGitRepoStatus(root),
         captureSnapshot: () => captureInitGitSnapshot(root),
         isOnlyAllowedAutoTestChange: () => false,
-        persistProgress: () => {},
+        persistProgress: () => true,
         log: {
           error: message => events.push({ type: 'error', message }),
           info: message => events.push({ type: 'info', message }),

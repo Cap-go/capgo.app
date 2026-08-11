@@ -119,7 +119,7 @@ export interface InitGitCleanGateDependencies {
   getStatus?: () => GitRepoStatus
   captureSnapshot?: (startDir?: string) => InitGitChanges | undefined
   isOnlyAllowedAutoTestChange?: (status: GitRepoStatus, allowedChange?: InitAutoTestChange) => boolean
-  persistProgress?: () => void
+  persistProgress?: () => boolean
   log?: InitGitCleanGateLog
   selectAction?: (prompt: { message: string, options: ReturnType<typeof getDirtyGitStatusActionOptions> }) => Promise<DirtyGitStatusAction | symbol>
   cancelAction?: (action: DirtyGitStatusAction | symbol) => Promise<void>
@@ -1429,22 +1429,26 @@ export async function ensureGitRepoCleanBeforeInit(
       return
 
     const decision = evaluateInitGitRepoState(status, captureSnapshot(status.repoRoot), globalInitGitChanges)
+    let persistenceSucceeded = false
     if (decision.shouldPersist) {
       globalInitGitChanges = decision.nextSaved
-      persistProgress()
+      persistenceSucceeded = persistProgress()
     }
-    for (const message of decision.infoMessages)
+    const canUseRecognition = decision.recognizedCount === 0 || persistenceSucceeded
+    const infoMessages = canUseRecognition ? decision.infoMessages : []
+    const warningEntries = canUseRecognition ? decision.warningEntries : status.entries
+    for (const message of infoMessages)
       log.info(message)
-    if (decision.skipPrompt)
+    if (canUseRecognition && decision.skipPrompt)
       return
 
     warned = true
     log.warn(`Git repository is not clean: ${status.repoRoot}`)
-    for (const entry of decision.warningEntries.slice(0, 10)) {
+    for (const entry of warningEntries.slice(0, 10)) {
       log.warn(`  ${entry}`)
     }
-    if (decision.warningEntries.length > 10) {
-      log.warn(`  ...and ${decision.warningEntries.length - 10} more`)
+    if (warningEntries.length > 10) {
+      log.warn(`  ...and ${warningEntries.length - 10} more`)
     }
     log.info('Clean, commit, or stash those changes before init continues, or continue anyway if you accept the risk.')
 
@@ -2197,7 +2201,7 @@ export function getInitProgressStateForTesting() {
 
 function writeInitProgress() {
   if (globalStepDone <= 0)
-    return
+    return false
 
   const gitChanges = parseInitGitChanges(globalInitGitChanges)
   writeFileSync(getTmpObjectPath(), JSON.stringify({
@@ -2219,11 +2223,12 @@ function writeInitProgress() {
     nodeModulesPath: globalNodeModulesPath,
     ...(gitChanges ? { gitChanges } : {}),
   }))
+  return true
 }
 
 function persistInitProgressSafely() {
   try {
-    writeInitProgress()
+    return writeInitProgress()
   }
   catch (error) {
     try {
@@ -2231,6 +2236,7 @@ function persistInitProgressSafely() {
     }
     catch {
     }
+    return false
   }
 }
 
