@@ -430,7 +430,7 @@ describe('Plans analytics model', () => {
         : timestampMs < ms('2026-08-02T10:00:00Z') ? 'paying' : 'credits_only',
     })
     expect(result.traffic.uniqueVisitorOrganizations).toEqual([1, 1])
-    expect(result.traffic.totalOpens).toEqual([1, 2])
+    expect(result.traffic.totalOpens).toEqual([1, 3])
     expect(result.visitorBreakdown.map(day => day.total)).toEqual([1, 2])
     expect(result.checkoutIntent.map(day => day.startedCheckout + day.didNotStart)).toEqual([1, 2])
     expect(result.checkoutVisitorBreakdown.map(day => day.total)).toEqual([0, 1])

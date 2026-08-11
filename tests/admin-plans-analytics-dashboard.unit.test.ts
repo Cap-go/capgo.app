@@ -259,11 +259,11 @@ describe('admin Plans analytics dashboard', () => {
     expect(completionDoc).toContain('pending until the agreed observation window')
     expect(completionDoc).toContain('separate approved design')
     const messages = JSON.parse(messagesText) as Record<string, unknown>
-    for (const key of Object.keys(requiredMessages)) {
+    for (const [key, expected] of Object.entries(requiredMessages)) {
       expect(messages).toHaveProperty(key)
       expect(messages[key]).toEqual(expect.any(String))
+      expect(messages[key]).toBe(expected)
     }
-    expect(messages['plans-analytics-posthog-timeout']).toBe(requiredMessages['plans-analytics-posthog-timeout'])
     expect(messages['plans-analytics-posthog-timeout']).not.toBe(messages['plans-analytics-range-too-large'])
 
     const page = await readFile(new URL('../src/pages/admin/dashboard/plans.vue', import.meta.url), 'utf8')

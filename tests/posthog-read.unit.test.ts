@@ -49,8 +49,8 @@ describe('postHog read transport', () => {
 
   it.each([
     ['key', posthogEnv({ POSTHOG_READ_KEY: '' })],
-    ['host override without project', posthogEnv({ POSTHOG_READ_PROJECT_ID: '' })],
-    ['project override without host', posthogEnv({ POSTHOG_READ_HOST: '' })],
+    ['project', posthogEnv({ POSTHOG_READ_PROJECT_ID: '' })],
+    ['host', posthogEnv({ POSTHOG_READ_HOST: '' })],
   ])('does not fetch when the %s part of the read configuration is missing', async (_missing, environment) => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
