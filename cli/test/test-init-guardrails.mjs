@@ -7,9 +7,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   applyInitAutoTestChange,
+  beginFreshInitProgress,
   captureInitGitSnapshot,
   classifyInitGitChanges,
-  evaluateInitGitRepoState,
+  declineInitProgressResume,
+  discardResumedInitProgress,
+  ensureGitRepoCleanBeforeInit,
   getDirtyGitStatusActionOptions,
   getGitRepoStatus,
   getInitProgressStateForTesting,
@@ -22,7 +25,6 @@ import {
   isOnlyAllowedInitAutoTestChange,
   mergeInitGitChanges,
   parseInitGitChanges,
-  resetInitProgressState,
   restoreInitProgressState,
   revertInitAutoTestChangeContent,
   runInheritedCommand,
@@ -760,151 +762,6 @@ t('saved init git fingerprints require a strict versioned runtime shape', () => 
   assert.equal(parseInitGitChanges({ ...valid, files: inheritedFiles }), undefined)
 })
 
-t('saved Capgo git changes skip only the unsafe-state prompt they exactly cover', () => {
-  const repoRoot = '/repo'
-  const saved = {
-    version: 1,
-    repoRoot,
-    files: {
-      'package.json': { status: ' M', sha256: 'a'.repeat(64), mode: 0o100644 },
-    },
-  }
-  const status = {
-    inRepo: true,
-    clean: false,
-    repoRoot,
-    entries: [' M package.json'],
-  }
-
-  const decision = evaluateInitGitRepoState(status, saved, saved)
-  assert.equal(decision.skipPrompt, true)
-  assert.deepEqual(decision.warningEntries, [])
-  assert.deepEqual(decision.infoMessages, [
-    'Resuming with uncommitted changes created by the previous Capgo onboarding run.',
-  ])
-  assert.equal(decision.recognizedCount, 1)
-})
-
-t('mixed saved and unknown git changes keep the warning but omit recognized entries', () => {
-  const repoRoot = '/repo'
-  const fingerprint = sha256 => ({ status: ' M', sha256, mode: 0o100644 })
-  const saved = {
-    version: 1,
-    repoRoot,
-    files: { 'package.json': fingerprint('a'.repeat(64)) },
-  }
-  const current = {
-    version: 1,
-    repoRoot,
-    files: {
-      'package.json': fingerprint('a'.repeat(64)),
-      'src/main.ts': fingerprint('b'.repeat(64)),
-    },
-  }
-  const status = {
-    inRepo: true,
-    clean: false,
-    repoRoot,
-    entries: [' M package.json', ' M src/main.ts'],
-  }
-
-  const decision = evaluateInitGitRepoState(status, current, saved)
-  assert.equal(decision.skipPrompt, false)
-  assert.deepEqual(decision.warningEntries, [' M src/main.ts'])
-  assert.deepEqual(decision.infoMessages, ['1 recognized Capgo change was omitted from this warning.'])
-  assert.deepEqual(Object.keys(decision.nextSaved?.files ?? {}), ['package.json'])
-  assert.equal(decision.shouldPersist, true)
-})
-
-t('changed, missing, and malformed saved git fingerprints preserve the unsafe warning', () => {
-  const repoRoot = '/repo'
-  const saved = {
-    version: 1,
-    repoRoot,
-    files: { 'package.json': { status: ' M', sha256: 'a'.repeat(64), mode: 0o100644 } },
-  }
-  const current = {
-    version: 1,
-    repoRoot,
-    files: { 'package.json': { status: ' M', sha256: 'b'.repeat(64), mode: 0o100644 } },
-  }
-  const status = {
-    inRepo: true,
-    clean: false,
-    repoRoot,
-    entries: [' M package.json'],
-  }
-
-  for (const [name, rawSaved] of [
-    ['subsequently modified', saved],
-    ['legacy progress', undefined],
-    ['malformed progress', { ...saved, files: [] }],
-  ]) {
-    const parsedSaved = name === 'subsequently modified' ? rawSaved : parseInitGitChanges(rawSaved)
-    const decision = evaluateInitGitRepoState(status, current, parsedSaved)
-    assert.equal(decision.skipPrompt, false, name)
-    assert.deepEqual(decision.warningEntries, [' M package.json'], name)
-    assert.equal(decision.recognizedCount, 0, name)
-  }
-})
-
-t('clean git state clears saved fingerprints and continue-anyway never attributes unsafe paths', () => {
-  const repoRoot = '/repo'
-  const saved = {
-    version: 1,
-    repoRoot,
-    files: { 'package.json': { status: ' M', sha256: 'a'.repeat(64), mode: 0o100644 } },
-  }
-  const cleanDecision = evaluateInitGitRepoState({
-    inRepo: true,
-    clean: true,
-    repoRoot,
-    entries: [],
-  }, { version: 1, repoRoot, files: {} }, saved)
-  assert.equal(cleanDecision.skipPrompt, true)
-  assert.equal(cleanDecision.nextSaved, undefined)
-  assert.equal(cleanDecision.shouldPersist, true)
-
-  const mixedCurrent = {
-    version: 1,
-    repoRoot,
-    files: {
-      ...saved.files,
-      'src/user.ts': { status: '??', sha256: 'b'.repeat(64), mode: 0o100644 },
-    },
-  }
-  const dirtyDecision = evaluateInitGitRepoState({
-    inRepo: true,
-    clean: false,
-    repoRoot,
-    entries: [' M package.json', '?? src/user.ts'],
-  }, mixedCurrent, saved)
-  assert.deepEqual(Object.keys(dirtyDecision.nextSaved?.files ?? {}), ['package.json'])
-  assert.equal(dirtyDecision.nextSaved?.files['src/user.ts'], undefined)
-})
-
-t('fresh, declined, and discarded onboarding state cannot retain saved git fingerprints', () => {
-  const saved = {
-    version: 1,
-    repoRoot: '/repo',
-    files: { 'package.json': { status: ' M', sha256: 'a'.repeat(64), mode: 0o100644 } },
-  }
-
-  try {
-    restoreInitProgressState(4, saved)
-    assert.deepEqual(getInitProgressStateForTesting(), { stepDone: 4, gitChanges: saved })
-
-    for (const flow of ['fresh start', 'declined resume', 'discarded resume']) {
-      resetInitProgressState()
-      assert.deepEqual(getInitProgressStateForTesting(), { stepDone: 0, gitChanges: undefined }, flow)
-      restoreInitProgressState(4, saved)
-    }
-  }
-  finally {
-    resetInitProgressState()
-  }
-})
-
 async function tAsync(name, fn) {
   try {
     await fn()
@@ -916,6 +773,128 @@ async function tAsync(name, fn) {
     console.error(error)
   }
 }
+
+await tAsync('live git cleanliness gate filters trusted changes without weakening the existing prompt', async () => {
+  const repoRoot = '/repo'
+  const fingerprint = sha256 => ({ status: ' M', sha256, mode: 0o100644 })
+  const saved = {
+    version: 1,
+    repoRoot,
+    files: { 'package.json': fingerprint('a'.repeat(64)) },
+  }
+  const current = {
+    version: 1,
+    repoRoot,
+    files: {
+      ...saved.files,
+      'src/user.ts': { status: '??', sha256: 'b'.repeat(64), mode: 0o100644 },
+    },
+  }
+  const dirtyStatus = {
+    inRepo: true,
+    clean: false,
+    repoRoot,
+    entries: [' M package.json', '?? src/user.ts'],
+  }
+
+  const runGate = async ({ status, snapshot, savedValue, action = 'continue-dirty' }) => {
+    restoreInitProgressState(4, savedValue)
+    const events = []
+    await ensureGitRepoCleanBeforeInit(undefined, {
+      getStatus: () => status,
+      captureSnapshot: () => snapshot,
+      isOnlyAllowedAutoTestChange: () => false,
+      persistProgress: () => events.push({ type: 'persist', state: getInitProgressStateForTesting() }),
+      log: {
+        error: message => events.push({ type: 'error', message }),
+        info: message => events.push({ type: 'info', message }),
+        success: message => events.push({ type: 'success', message }),
+        warn: message => events.push({ type: 'warn', message }),
+      },
+      selectAction: async (prompt) => {
+        events.push({ type: 'prompt', prompt })
+        return action
+      },
+      cancelAction: async selectedAction => events.push({ type: 'cancel-check', action: selectedAction }),
+      waitForRetry: async () => assert.fail('retry prompt was not expected'),
+    })
+    return { events, state: getInitProgressStateForTesting() }
+  }
+
+  try {
+    const exact = await runGate({
+      status: { ...dirtyStatus, entries: [' M package.json'] },
+      snapshot: saved,
+      savedValue: saved,
+    })
+    assert.equal(exact.events.some(event => event.type === 'prompt'), false)
+    assert.deepEqual(exact.events.filter(event => event.type === 'info').map(event => event.message), [
+      'Resuming with uncommitted changes created by the previous Capgo onboarding run.',
+    ])
+
+    const mixed = await runGate({ status: dirtyStatus, snapshot: current, savedValue: saved })
+    const mixedPrompt = mixed.events.find(event => event.type === 'prompt')
+    assert.deepEqual(mixedPrompt?.prompt, {
+      message: 'How do you want to handle the dirty git status?',
+      options: getDirtyGitStatusActionOptions(),
+    })
+    assert.deepEqual(
+      mixed.events.filter(event => event.type === 'warn' && event.message.startsWith('  ')).map(event => event.message),
+      ['  ?? src/user.ts'],
+    )
+    assert.equal(mixed.events.some(event => event.type === 'info' && event.message === '1 recognized Capgo change was omitted from this warning.'), true)
+    const mixedPersistIndex = mixed.events.findIndex(event => event.type === 'persist')
+    assert.equal(mixedPersistIndex < mixed.events.findIndex(event => event.type === 'prompt'), true)
+    assert.deepEqual(Object.keys(mixed.events[mixedPersistIndex]?.state.gitChanges?.files ?? {}), ['package.json'])
+    assert.deepEqual(Object.keys(mixed.state.gitChanges?.files ?? {}), ['package.json'])
+    assert.equal(mixed.state.gitChanges?.files['src/user.ts'], undefined)
+    assert.equal(mixed.events.some(event => event.type === 'warn' && event.message === 'Continuing with dirty git status. This is not recommended.'), true)
+
+    for (const [name, savedValue] of [
+      ['missing fingerprints', undefined],
+      ['malformed fingerprints', { ...saved, files: [] }],
+    ]) {
+      const fallback = await runGate({ status: dirtyStatus, snapshot: current, savedValue })
+      assert.deepEqual(
+        fallback.events.filter(event => event.type === 'warn' && event.message.startsWith('  ')).map(event => event.message),
+        ['   M package.json', '  ?? src/user.ts'],
+        name,
+      )
+      assert.equal(fallback.events.some(event => event.type === 'prompt'), true, name)
+    }
+
+    const clean = await runGate({
+      status: { inRepo: true, clean: true, repoRoot, entries: [] },
+      snapshot: undefined,
+      savedValue: saved,
+    })
+    assert.equal(clean.events.some(event => event.type === 'prompt'), false)
+    assert.deepEqual(clean.events.filter(event => event.type === 'persist').map(event => event.state.gitChanges), [undefined])
+    assert.deepEqual(clean.state, { stepDone: 4, gitChanges: undefined })
+  }
+  finally {
+    beginFreshInitProgress()
+  }
+})
+
+t('production onboarding lifecycle transitions clear resumed fingerprint state', () => {
+  const saved = {
+    version: 1,
+    repoRoot: '/repo',
+    files: { 'package.json': { status: ' M', sha256: 'a'.repeat(64), mode: 0o100644 } },
+  }
+  const transitions = [
+    ['fresh onboarding start', beginFreshInitProgress],
+    ['declined resume', () => declineInitProgressResume({ clearCodeDiff: () => {}, clearEncryptionSummary: () => {} })],
+    ['discarded resumed onboarding', () => discardResumedInitProgress({ clearCodeDiff: () => {}, clearEncryptionSummary: () => {} })],
+  ]
+
+  for (const [name, transition] of transitions) {
+    restoreInitProgressState(4, saved)
+    transition()
+    assert.deepEqual(getInitProgressStateForTesting(), { stepDone: 0, gitChanges: undefined }, name)
+  }
+})
 
 await tAsync('command settlement preserves ENOENT instead of close code -2', async () => {
   const child = spawn('__capgo_missing_stream_command__', [], {

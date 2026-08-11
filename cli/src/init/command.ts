@@ -108,6 +108,24 @@ type CancelablePromptValue = boolean | string | symbol
 type InitAutoTestChangeKind = 'html-banner' | 'vue-banner' | 'css-background'
 type DirtyGitStatusAction = 'check-again' | 'continue-dirty'
 
+interface InitGitCleanGateLog {
+  error: (message: string) => void
+  info: (message: string) => void
+  success: (message: string) => void
+  warn: (message: string) => void
+}
+
+export interface InitGitCleanGateDependencies {
+  getStatus?: () => GitRepoStatus
+  captureSnapshot?: (startDir?: string) => InitGitChanges | undefined
+  isOnlyAllowedAutoTestChange?: (status: GitRepoStatus, allowedChange?: InitAutoTestChange) => boolean
+  persistProgress?: () => void
+  log?: InitGitCleanGateLog
+  selectAction?: (prompt: { message: string, options: ReturnType<typeof getDirtyGitStatusActionOptions> }) => Promise<DirtyGitStatusAction | symbol>
+  cancelAction?: (action: DirtyGitStatusAction | symbol) => Promise<void>
+  waitForRetry?: () => Promise<void>
+}
+
 interface GitRepoStatus {
   inRepo: boolean
   clean: boolean
@@ -938,13 +956,24 @@ async function waitForGitRepoCleanRetry() {
   await cancelBeforeAuthenticatedOnboarding(ready)
 }
 
-async function ensureGitRepoCleanBeforeInit(allowedAutoTestChange?: InitAutoTestChange) {
+export async function ensureGitRepoCleanBeforeInit(
+  allowedAutoTestChange?: InitAutoTestChange,
+  dependencies: InitGitCleanGateDependencies = {},
+) {
+  const getStatus = dependencies.getStatus ?? getGitRepoStatus
+  const captureSnapshot = dependencies.captureSnapshot ?? captureInitGitSnapshot
+  const isAllowedAutoTestChange = dependencies.isOnlyAllowedAutoTestChange ?? isOnlyAllowedInitAutoTestChange
+  const persistProgress = dependencies.persistProgress ?? persistInitProgressSafely
+  const log = dependencies.log ?? pLog
+  const selectAction = dependencies.selectAction ?? (prompt => pSelect<DirtyGitStatusAction>(prompt))
+  const cancelAction = dependencies.cancelAction ?? (action => cancelBeforeAuthenticatedOnboarding(action))
+  const waitForRetry = dependencies.waitForRetry ?? waitForGitRepoCleanRetry
   let warned = false
 
   while (true) {
-    const status = getGitRepoStatus()
+    const status = getStatus()
     if (status.error && !status.inRepo) {
-      pLog.warn(`Could not verify git status, skipping clean-repo check: ${status.error}`)
+      log.warn(`Could not verify git status, skipping clean-repo check: ${status.error}`)
       return
     }
 
@@ -953,51 +982,51 @@ async function ensureGitRepoCleanBeforeInit(allowedAutoTestChange?: InitAutoTest
 
     if (status.error) {
       warned = true
-      pLog.error(`Could not verify git status for ${status.repoRoot}: ${status.error}`)
-      pLog.info('Fix the git error first, then retry onboarding.')
-      await waitForGitRepoCleanRetry()
+      log.error(`Could not verify git status for ${status.repoRoot}: ${status.error}`)
+      log.info('Fix the git error first, then retry onboarding.')
+      await waitForRetry()
       continue
     }
 
     if (status.clean) {
       globalInitGitChanges = undefined
-      persistInitProgressSafely()
+      persistProgress()
       if (warned)
-        pLog.success('Git repository is clean ✅')
+        log.success('Git repository is clean ✅')
       return
     }
 
-    if (isOnlyAllowedInitAutoTestChange(status, allowedAutoTestChange))
+    if (isAllowedAutoTestChange(status, allowedAutoTestChange))
       return
 
-    const decision = evaluateInitGitRepoState(status, captureInitGitSnapshot(status.repoRoot), globalInitGitChanges)
+    const decision = evaluateInitGitRepoState(status, captureSnapshot(status.repoRoot), globalInitGitChanges)
     if (decision.shouldPersist) {
       globalInitGitChanges = decision.nextSaved
-      persistInitProgressSafely()
+      persistProgress()
     }
     for (const message of decision.infoMessages)
-      pLog.info(message)
+      log.info(message)
     if (decision.skipPrompt)
       return
 
     warned = true
-    pLog.warn(`Git repository is not clean: ${status.repoRoot}`)
+    log.warn(`Git repository is not clean: ${status.repoRoot}`)
     for (const entry of decision.warningEntries.slice(0, 10)) {
-      pLog.warn(`  ${entry}`)
+      log.warn(`  ${entry}`)
     }
     if (decision.warningEntries.length > 10) {
-      pLog.warn(`  ...and ${decision.warningEntries.length - 10} more`)
+      log.warn(`  ...and ${decision.warningEntries.length - 10} more`)
     }
-    pLog.info('Clean, commit, or stash those changes before init continues, or continue anyway if you accept the risk.')
+    log.info('Clean, commit, or stash those changes before init continues, or continue anyway if you accept the risk.')
 
-    const action = await pSelect<DirtyGitStatusAction>({
+    const action = await selectAction({
       message: 'How do you want to handle the dirty git status?',
       options: getDirtyGitStatusActionOptions(),
     })
-    await cancelBeforeAuthenticatedOnboarding(action)
+    await cancelAction(action)
 
     if (action === 'continue-dirty') {
-      pLog.warn('Continuing with dirty git status. This is not recommended.')
+      log.warn('Continuing with dirty git status. This is not recommended.')
       return
     }
   }
@@ -1688,6 +1717,15 @@ export function resetInitProgressState() {
   globalInitGitChanges = undefined
 }
 
+export function beginFreshInitProgress() {
+  resetInitProgressState()
+}
+
+interface InitProgressTransitionDependencies {
+  clearCodeDiff?: () => void
+  clearEncryptionSummary?: () => void
+}
+
 export function restoreInitProgressState(stepDone: number, gitChanges: unknown) {
   globalStepDone = stepDone
   globalInitGitChanges = parseInitGitChanges(gitChanges)
@@ -1980,13 +2018,7 @@ async function tryResumeOnboarding(
     // User chose to start over — delete the saved progress and drop any
     // restored code diff / encryption summary so a fresh manual path
     // doesn't re-show stale content.
-    cleanupStepsDone()
-    globalCodeDiff = undefined
-    setInitCodeDiff(undefined)
-    globalEncryptionSummary = undefined
-    setInitEncryptionSummary(undefined)
-    globalAutoTestChange = undefined
-    globalNodeModulesPath = undefined
+    declineInitProgressResume()
     return undefined
   }
   catch (err) {
@@ -2016,6 +2048,37 @@ function cleanupStepsDone() {
   catch (err) {
     pLog.error(`Cannot delete the tmp steps file.\nError: ${err}`)
   }
+}
+
+export function declineInitProgressResume(dependencies: InitProgressTransitionDependencies = {}) {
+  const clearCodeDiff = dependencies.clearCodeDiff ?? (() => setInitCodeDiff(undefined))
+  const clearEncryptionSummary = dependencies.clearEncryptionSummary ?? (() => setInitEncryptionSummary(undefined))
+  cleanupStepsDone()
+  globalCodeDiff = undefined
+  clearCodeDiff()
+  globalEncryptionSummary = undefined
+  clearEncryptionSummary()
+  globalAutoTestChange = undefined
+  globalNodeModulesPath = undefined
+}
+
+export function discardResumedInitProgress(dependencies: InitProgressTransitionDependencies = {}) {
+  const clearCodeDiff = dependencies.clearCodeDiff ?? (() => setInitCodeDiff(undefined))
+  const clearEncryptionSummary = dependencies.clearEncryptionSummary ?? (() => setInitEncryptionSummary(undefined))
+  globalNodeModulesPath = undefined
+  globalChannelName = defaultChannel
+  globalPlatform = 'ios'
+  globalDelta = false
+  globalCurrentVersion = undefined
+  globalAppId = undefined
+  globalOrgId = undefined
+  globalOrgName = undefined
+  globalCodeDiff = undefined
+  clearCodeDiff()
+  globalEncryptionSummary = undefined
+  clearEncryptionSummary()
+  globalAutoTestChange = undefined
+  cleanupStepsDone()
 }
 
 async function cancelCommand(command: boolean | string | symbol, orgId: string, apikey: string) {
@@ -5501,7 +5564,7 @@ async function maybeStarCapgoRepo(includeSkillsRepository = false, repository?: 
 }
 
 export async function initApp(apikeyCommand: string, appId: string, options: SuperOptions) {
-  resetInitProgressState()
+  beginFreshInitProgress()
   const initialCwd = cwd()
   const packageJsonPath = resolveInitTargetPath(options.packageJson, 'Package JSON path', initialCwd)
   const capacitorConfigPath = getConfigWriteTarget() ?? resolveCapacitorConfigTargetPath(options.capacitorConfig, initialCwd)
@@ -5701,20 +5764,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
   const discardResumedState = async () => {
     stepToSkip = 0
     resumed = undefined
-    globalNodeModulesPath = undefined
-    globalChannelName = defaultChannel
-    globalPlatform = 'ios'
-    globalDelta = false
-    globalCurrentVersion = undefined
-    globalAppId = undefined
-    globalOrgId = undefined
-    globalOrgName = undefined
-    globalCodeDiff = undefined
-    setInitCodeDiff(undefined)
-    globalEncryptionSummary = undefined
-    setInitEncryptionSummary(undefined)
-    globalAutoTestChange = undefined
-    cleanupStepsDone()
+    discardResumedInitProgress()
     globalPathToPackageJson = initialTargets.pathToPackageJson
     globalCapacitorConfigPath = initialTargets.capacitorConfigPath
     globalConfigLoadDir = initialTargets.configLoadDir
