@@ -525,7 +525,6 @@ export async function getPlans(): Promise<Database['public']['Tables']['plans'][
   }
 }
 
-export type CreditUnitPricing = Partial<Record<CreditMetricType, number>>
 export type UsageCreditLedgerRow = Database['public']['Views']['usage_credit_ledger']['Row']
 
 export interface CreditTierUsage {
