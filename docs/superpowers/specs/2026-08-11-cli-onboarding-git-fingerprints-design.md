@@ -130,17 +130,17 @@ Keep the production change in the existing onboarding command file unless a pre-
 - Small wrapper calls only at automatic mutation sites.
 - A conditional branch inside the existing dirty-Git warning flow.
 
-Do not introduce a service, database change, new prompt, package-manager mapping, or broad onboarding refactor.
+Do not introduce a service, database change, new prompt, or broad onboarding refactor. Keep the package-manager knowledge local to the tracker and limited to selecting the manifest and known lockfiles that an automatic install may claim.
 
 ## Testing
 
-Use three compact tests rather than a full onboarding test suite:
+Use focused guardrail tests rather than a full end-to-end onboarding suite. Keep the original three behavioral groups, and add compact regressions where conservative attribution or destructive-path safety depends on an edge case:
 
 1. **Attribution regression:** `src/main.ts` is dirty before a tracked operation changes `package.json` and a lockfile; only the package files are recorded.
 2. **Resume classification:** table-driven cases cover an exact match, changed fingerprint, additional path, and absent saved data.
 3. **Conservative failure:** a failed snapshot or automatic operation records no trusted changes.
 
-Include staged, deleted, and mode-changed fingerprints as additional rows in the same classification table; do not create separate fixtures or tests for them. Do not add a full end-to-end onboarding test for this isolated behavior.
+Include staged, deleted, and mode-changed fingerprints as rows in the same classification table. Cover raw whitespace/Unicode Git paths, malformed progress, persistence failures, scoped automatic operations, and native-reset path/symlink safety with focused fixtures. Do not add a full end-to-end onboarding test for this isolated behavior.
 
 ## Alternatives Considered
 
