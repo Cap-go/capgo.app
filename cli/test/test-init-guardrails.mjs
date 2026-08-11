@@ -602,6 +602,63 @@ t('git snapshot accepts stable metadata and status for raw whitespace and Unicod
   })
 })
 
+t('scoped git snapshot rejects an entry count above its hashing limit', () => {
+  withTempDir((root) => {
+    initializeGitRepo(root, {
+      'native/one.txt': 'initial one\n',
+      'native/two.txt': 'initial two\n',
+    })
+    writeFileSync(join(root, 'native', 'one.txt'), 'changed one\n', 'utf8')
+    writeFileSync(join(root, 'native', 'two.txt'), 'changed two\n', 'utf8')
+    let readCount = 0
+
+    const snapshot = captureInitGitSnapshot(root, { directoryPrefixes: ['native'] }, {
+      limits: { maxEntries: 1, maxTotalBytes: 1024 },
+      readFile: (target) => {
+        readCount += 1
+        return readFileSync(target)
+      },
+    })
+
+    assert.equal(snapshot, undefined)
+    assert.equal(readCount, 0)
+  })
+})
+
+t('scoped git snapshot rejects total file bytes above its hashing limit', () => {
+  withTempDir((root) => {
+    initializeGitRepo(root, {
+      'native/one.txt': 'initial one\n',
+      'native/two.txt': 'initial two\n',
+    })
+    writeFileSync(join(root, 'native', 'one.txt'), '1234', 'utf8')
+    writeFileSync(join(root, 'native', 'two.txt'), '5678', 'utf8')
+
+    const snapshot = captureInitGitSnapshot(root, { directoryPrefixes: ['native'] }, {
+      limits: { maxEntries: 2, maxTotalBytes: 7 },
+    })
+
+    assert.equal(snapshot, undefined)
+  })
+})
+
+t('scoped git snapshot fingerprints a small tree within its hashing limits', () => {
+  withTempDir((root) => {
+    initializeGitRepo(root, {
+      'native/one.txt': 'initial one\n',
+      'native/two.txt': 'initial two\n',
+    })
+    writeFileSync(join(root, 'native', 'one.txt'), '1234', 'utf8')
+    writeFileSync(join(root, 'native', 'two.txt'), '5678', 'utf8')
+
+    const snapshot = captureInitGitSnapshot(root, { directoryPrefixes: ['native'] }, {
+      limits: { maxEntries: 2, maxTotalBytes: 8 },
+    })
+
+    assert.deepEqual(Object.keys(snapshot?.files ?? {}).sort(), ['native/one.txt', 'native/two.txt'])
+  })
+})
+
 t('git snapshot declines unsupported symlinks and renames', () => {
   withTempDir((root) => {
     execSync('git init', { cwd: root, stdio: 'ignore' })
@@ -1525,6 +1582,57 @@ await tAsync('live git cleanliness gate recognizes raw whitespace and Unicode pa
     finally {
       beginFreshInitProgress()
     }
+  })
+})
+
+await tAsync('live git cleanliness gate warns for a dirty submodule without retrying', async () => {
+  await withTempDirAsync(async (root) => {
+    const moduleSource = join(root, 'module-source')
+    const projectRoot = join(root, 'project')
+    mkdirSync(moduleSource)
+    mkdirSync(projectRoot)
+    initializeGitRepo(moduleSource, { 'tracked.txt': 'initial\n' })
+    initializeGitRepo(projectRoot, { 'README.md': 'project\n' })
+    execSync(`git -c protocol.file.allow=always submodule add "${moduleSource}" vendor/module`, { cwd: projectRoot, stdio: 'ignore' })
+    execSync('git commit -m "add submodule"', { cwd: projectRoot, stdio: 'ignore' })
+    writeFileSync(join(projectRoot, 'vendor', 'module', 'tracked.txt'), 'dirty\n', 'utf8')
+
+    const status = getGitRepoStatus(projectRoot)
+    assert.equal(status.error, undefined)
+    assert.equal(status.clean, false)
+    assert.deepEqual(status.entries, [' M vendor/module'])
+    assert.equal(captureInitGitSnapshot(projectRoot), undefined)
+
+    const warnings = []
+    let promptCount = 0
+    try {
+      beginFreshInitProgress()
+      await ensureGitRepoCleanBeforeInit(undefined, {
+        getStatus: () => getGitRepoStatus(projectRoot),
+        captureSnapshot: () => captureInitGitSnapshot(projectRoot),
+        isOnlyAllowedAutoTestChange: () => false,
+        persistProgress: () => true,
+        log: {
+          error: message => warnings.push(`error:${message}`),
+          info: () => {},
+          success: () => {},
+          warn: message => warnings.push(message),
+        },
+        selectAction: async () => {
+          promptCount += 1
+          return 'continue-dirty'
+        },
+        cancelAction: async () => {},
+        waitForRetry: async () => assert.fail('dirty submodules must not enter the git-error retry path'),
+      })
+    }
+    finally {
+      beginFreshInitProgress()
+    }
+
+    assert.equal(promptCount, 1)
+    assert.equal(warnings.includes('   M vendor/module'), true)
+    assert.equal(warnings.some(message => message.startsWith('error:')), false)
   })
 })
 

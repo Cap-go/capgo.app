@@ -170,6 +170,15 @@ export interface InitGitSnapshotDependencies {
     isFile: () => boolean
   }
   readFile?: (filePath: string) => Buffer
+  limits?: {
+    maxEntries: number
+    maxTotalBytes: number
+  }
+}
+
+const defaultInitGitSnapshotLimits = {
+  maxEntries: 10_000,
+  maxTotalBytes: 256 * 1024 * 1024,
 }
 
 export interface InitNativeResetTarget {
@@ -774,6 +783,7 @@ function isGitObjectId(value: string) {
 }
 
 interface InitGitStatusRecord extends InitGitStatusEntry {
+  submodule: string | null
   headMode: string | null
   indexMode: string | null
   worktreeMode: string | null
@@ -804,11 +814,15 @@ function hasValidInitGitStatusMetadata(modes: string[], objectIds: string[]) {
     && objectIds.every(isGitObjectId)
 }
 
+function isValidInitGitSubmoduleState(value: string) {
+  return value === 'N...' || /^S[C.][M.][U.]$/.test(value)
+}
+
 function parseInitGitStatusRecord(value: string, originalPath?: string): InitGitStatusRecord | undefined {
   if (value.startsWith('? ')) {
     const filePath = value.slice(2)
     return filePath
-      ? { status: '??', filePath, display: `?? ${filePath}`, headMode: null, indexMode: null, worktreeMode: null }
+      ? { status: '??', filePath, display: `?? ${filePath}`, submodule: null, headMode: null, indexMode: null, worktreeMode: null }
       : undefined
   }
 
@@ -818,10 +832,10 @@ function parseInitGitStatusRecord(value: string, originalPath?: string): InitGit
       return undefined
     const [, rawStatus, submodule, headMode, indexMode, worktreeMode, headObjectId, indexObjectId, filePath] = fields
     const status = normalizeInitGitStatus(rawStatus)
-    if (!status || !filePath || submodule !== 'N...'
+    if (!status || !filePath || !isValidInitGitSubmoduleState(submodule)
       || !hasValidInitGitStatusMetadata([headMode, indexMode, worktreeMode], [headObjectId, indexObjectId]))
       return undefined
-    return { status, filePath, display: `${status} ${filePath}`, headMode, indexMode, worktreeMode }
+    return { status, filePath, display: `${status} ${filePath}`, submodule, headMode, indexMode, worktreeMode }
   }
 
   if (value.startsWith('2 ')) {
@@ -830,13 +844,14 @@ function parseInitGitStatusRecord(value: string, originalPath?: string): InitGit
       return undefined
     const [, rawStatus, submodule, headMode, indexMode, worktreeMode, headObjectId, indexObjectId, score, filePath] = fields
     const status = normalizeInitGitStatus(rawStatus)
-    if (!status || !filePath || submodule !== 'N...' || !/^[RC][0-9]+$/.test(score)
+    if (!status || !filePath || !isValidInitGitSubmoduleState(submodule) || !/^[RC][0-9]+$/.test(score)
       || !hasValidInitGitStatusMetadata([headMode, indexMode, worktreeMode], [headObjectId, indexObjectId]))
       return undefined
     return {
       status,
       filePath,
       display: `${status} ${originalPath} -> ${filePath}`,
+      submodule,
       headMode,
       indexMode,
       worktreeMode,
@@ -848,9 +863,9 @@ function parseInitGitStatusRecord(value: string, originalPath?: string): InitGit
     const fields = splitInitGitStatusFields(value, 11)
     if (!fields)
       return undefined
-    const [, rawStatus, , stageOneMode, stageTwoMode, stageThreeMode, worktreeMode, stageOneObjectId, stageTwoObjectId, stageThreeObjectId, filePath] = fields
+    const [, rawStatus, submodule, stageOneMode, stageTwoMode, stageThreeMode, worktreeMode, stageOneObjectId, stageTwoObjectId, stageThreeObjectId, filePath] = fields
     const status = normalizeInitGitStatus(rawStatus)
-    if (!status || !filePath
+    if (!status || !filePath || !isValidInitGitSubmoduleState(submodule)
       || !hasValidInitGitStatusMetadata(
         [stageOneMode, stageTwoMode, stageThreeMode, worktreeMode],
         [stageOneObjectId, stageTwoObjectId, stageThreeObjectId],
@@ -860,6 +875,7 @@ function parseInitGitStatusRecord(value: string, originalPath?: string): InitGit
       status,
       filePath,
       display: `${status} ${filePath}`,
+      submodule,
       headMode: stageOneMode,
       indexMode: stageTwoMode,
       worktreeMode,
@@ -931,18 +947,24 @@ export function captureInitGitSnapshot(
     const runStatus = dependencies.runStatus ?? runInitGitStatus
     const lstat = dependencies.lstat ?? (filePath => lstatSync(filePath, { bigint: true }))
     const readFile = dependencies.readFile ?? (filePath => readFileSync(filePath))
+    const limits = dependencies.limits ?? defaultInitGitSnapshotLimits
+    if (!Number.isSafeInteger(limits.maxEntries) || limits.maxEntries < 0
+      || !Number.isSafeInteger(limits.maxTotalBytes) || limits.maxTotalBytes < 0)
+      return undefined
     const statusArgs = getInitGitStatusArgs(normalizedScope)
     const statusOutput = runStatus(repoRoot, statusArgs)
     if (!statusOutput)
       return undefined
     const entries = parseInitGitStatusOutput(statusOutput)
-    if (!entries)
+    if (!entries || entries.length > limits.maxEntries)
       return undefined
     const files: Record<string, InitGitChangeFingerprint> = {}
+    const maxTotalBytes = BigInt(limits.maxTotalBytes)
+    let totalBytes = 0n
     for (const entry of entries) {
-      const { status, filePath, headMode, indexMode, worktreeMode } = entry
+      const { status, filePath, submodule, headMode, indexMode, worktreeMode } = entry
       const fingerprintKind = getInitGitFingerprintKind(status)
-      if (!filePath || !fingerprintKind || files[filePath])
+      if (!filePath || !fingerprintKind || (submodule !== null && submodule !== 'N...') || files[filePath])
         return undefined
 
       const absolutePath = path.resolve(repoRoot, filePath)
@@ -965,6 +987,9 @@ export function captureInitGitSnapshot(
       const beforeStats = lstat(absolutePath)
       if (!beforeStats.isFile())
         return undefined
+      const nextTotalBytes = totalBytes + beforeStats.size
+      if (beforeStats.size < 0n || nextTotalBytes > maxTotalBytes)
+        return undefined
       const contents = readFile(absolutePath)
       const afterStats = lstat(absolutePath)
       const mode = Number(afterStats.mode)
@@ -977,6 +1002,7 @@ export function captureInitGitSnapshot(
         sha256: createHash('sha256').update(contents).digest('hex'),
         mode,
       }
+      totalBytes = nextTotalBytes
     }
 
     const finalStatusOutput = runStatus(repoRoot, statusArgs)
