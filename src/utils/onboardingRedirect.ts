@@ -27,6 +27,16 @@ export function getOnboardingResumeAppId(userId: string | null | undefined) {
   return canExploreOnboardingDashboard(userId) ? dashboardExplorationResumeAppId : null
 }
 
+export function getOnboardingExploreBannerAppId(options: {
+  apps: Array<{ app_id: string, need_onboarding: boolean }>
+  organizationCount: number
+}) {
+  if (options.organizationCount !== 1 || options.apps.length !== 1 || !options.apps[0].need_onboarding)
+    return null
+
+  return options.apps[0].app_id
+}
+
 export function isNewOnboardingUser(createdAt: string | null | undefined) {
   if (!createdAt)
     return false

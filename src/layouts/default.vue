@@ -5,6 +5,7 @@ import OnboardingExploreBanner from '~/components/dashboard/OnboardingExploreBan
 import { useRealtimeCLIFeed } from '~/composables/useRealtimeCLIFeed'
 import { useSupabase } from '~/services/supabase'
 import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
+import { getOnboardingExploreBannerAppId } from '~/utils/onboardingRedirect'
 import Navbar from '../components/Navbar.vue'
 import Sidebar from '../components/Sidebar.vue'
 
@@ -18,19 +19,6 @@ let onboardingLookupRun = 0
 const selectableOrganizations = computed(() => organizationStore.organizations.filter(org => !isPendingOrganizationInvite(org)))
 const selectableOrganizationIds = computed(() => selectableOrganizations.value.map(org => org.gid).sort().join(','))
 
-function getRouteAppId() {
-  const match = route.path.match(/^\/app\/([^/]+)/)
-  if (!match?.[1] || match[1] === 'new')
-    return ''
-
-  try {
-    return decodeURIComponent(match[1])
-  }
-  catch {
-    return match[1]
-  }
-}
-
 async function refreshPendingOnboardingApp() {
   const lookupRun = ++onboardingLookupRun
   pendingOnboardingAppId.value = ''
@@ -40,26 +28,15 @@ async function refreshPendingOnboardingApp() {
 
   await organizationStore.awaitInitialLoad()
 
-  const singleOrganization = selectableOrganizations.value.length === 1
-    ? selectableOrganizations.value[0]
-    : undefined
-  const routeAppId = getRouteAppId()
-
-  let query = supabase
-    .from('apps')
-    .select('app_id')
-    .eq('need_onboarding', true)
-    .order('created_at', { ascending: false })
-    .limit(1)
-
-  if (singleOrganization)
-    query = query.eq('owner_org', singleOrganization.gid)
-  else if (routeAppId)
-    query = query.eq('app_id', routeAppId)
-  else
+  const singleOrganization = selectableOrganizations.value[0]
+  if (selectableOrganizations.value.length !== 1 || !singleOrganization)
     return
 
-  const { data, error } = await query.maybeSingle()
+  const { data, error } = await supabase
+    .from('apps')
+    .select('app_id, need_onboarding')
+    .eq('owner_org', singleOrganization.gid)
+    .limit(2)
 
   if (lookupRun !== onboardingLookupRun)
     return
@@ -69,7 +46,10 @@ async function refreshPendingOnboardingApp() {
     return
   }
 
-  pendingOnboardingAppId.value = data?.app_id ?? ''
+  pendingOnboardingAppId.value = getOnboardingExploreBannerAppId({
+    apps: data ?? [],
+    organizationCount: selectableOrganizations.value.length,
+  }) ?? ''
 }
 
 watch([
