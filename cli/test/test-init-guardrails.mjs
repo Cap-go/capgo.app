@@ -533,6 +533,14 @@ t('git fingerprint classification requires exact path, status, hash, and mode ma
       retainedPaths: ['package.json'],
     },
     {
+      name: 'path deleted after a regular fingerprint was saved is unsafe',
+      current: changes({ 'package.json': fingerprint(' D', null, null) }),
+      saved: changes({ 'package.json': fingerprint(' M', 'saved') }),
+      unsafePaths: ['package.json'],
+      recognizedCount: 0,
+      retainedPaths: [],
+    },
+    {
       name: 'mode change is unsafe',
       current: changes({ 'scripts/setup.sh': fingerprint(' M', 'saved', 0o100755) }),
       saved: changes({ 'scripts/setup.sh': fingerprint(' M', 'saved', 0o100644) }),
