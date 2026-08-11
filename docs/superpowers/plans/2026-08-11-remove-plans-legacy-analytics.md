@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Make the behavior model exact-only
+## Task 1: Make the behavior model exact-only
 
 **Files:**
 - Modify: `tests/plans-analytics-model.unit.test.ts`
@@ -97,7 +97,7 @@ git add supabase/functions/_backend/utils/plans_analytics_model.ts tests/plans-a
 git commit -m "refactor(admin): remove legacy plans opening model"
 ```
 
-### Task 2: Remove legacy backend orchestration
+## Task 2: Remove legacy backend orchestration
 
 **Files:**
 - Modify: `tests/plans-analytics-orchestration.unit.test.ts`
@@ -193,7 +193,7 @@ git add supabase/functions/_backend/utils/plans_analytics.ts tests/plans-analyti
 git commit -m "refactor(admin): remove legacy plans analytics contract"
 ```
 
-### Task 3: Remove the frontend contract and warning
+## Task 3: Remove the frontend contract and warning
 
 **Files:**
 - Modify: `tests/admin-plans-analytics-dashboard.unit.test.ts`
@@ -282,7 +282,7 @@ git add src/services/adminPlansAnalytics.ts src/pages/admin/dashboard/plans.vue 
 git commit -m "refactor(admin): remove legacy plans warning"
 ```
 
-### Task 4: Remove copy and supersede historical instructions
+## Task 4: Remove copy and supersede historical instructions
 
 **Files:**
 - Modify: `messages/en.json`
@@ -340,7 +340,7 @@ git add messages/en.json messages/en.context.json docs/superpowers/specs/2026-08
 git commit -m "docs(admin): retire legacy plans analytics"
 ```
 
-### Task 5: Verify and publish
+## Task 5: Verify and publish
 
 **Files:**
 - Verify all files changed since `origin/main`

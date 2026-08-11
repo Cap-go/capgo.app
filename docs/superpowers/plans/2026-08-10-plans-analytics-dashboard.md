@@ -1,7 +1,7 @@
 # Plans Analytics Dashboard Implementation Plan
 
 > **SUPERSEDED — historical planning record only.** Superseded: legacy pathname reconstruction is not part of the shipped analytics model. `User visit` events tagged with `page = 'plans'` are the sole source of Plans openings. The shipped response and UI contain no legacy reconstruction fields or warning, and no 30-second reconstruction algorithm can be enabled. All task snippets below are retained only as historical context and must not be treated as current implementation instructions.
-
+>
 > **Archived instruction (do not execute):** This plan originally directed agentic workers to use superpowers:subagent-driven-development or superpowers:executing-plans task by task.
 
 **Goal:** Add a read-only admin Plans analytics page that aggregates exact page-tag openings, classifies daily visitor organizations by historical billing state, and attributes checkout intent across midnight.

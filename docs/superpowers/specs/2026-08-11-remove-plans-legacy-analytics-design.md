@@ -42,7 +42,7 @@ Tests will prove that:
 
 - only exact `page = 'plans'` visits become openings;
 - the behavior query no longer fetches a 30-second pre-range window;
-- response parsing rejects removed legacy fields only by ignoring additional wire fields, while requiring the retained contract;
+- response parsing ignores obsolete legacy fields while requiring the retained contract;
 - presentation state contains no legacy-warning flag;
 - the Plans page contains no legacy warning;
 - checkout attribution and graph invariants remain unchanged;
