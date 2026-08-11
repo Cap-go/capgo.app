@@ -20,7 +20,7 @@ function attempt(overrides: Partial<FrontendOnboardingAttempt> & Pick<FrontendOn
 }
 
 describe('buildFrontendOnboardingAnalytics', () => {
-  it('builds current KPIs, daily attempts, and a monotonic funnel', () => {
+  it.concurrent('builds current KPIs, daily attempts, and a monotonic funnel', () => {
     const analytics = buildFrontendOnboardingAnalytics([
       attempt({
         attemptId: 'complete',
@@ -62,7 +62,7 @@ describe('buildFrontendOnboardingAnalytics', () => {
     ])
   })
 
-  it('ignores steps before intent and after the 24-hour progression window', () => {
+  it.concurrent('ignores steps before intent and after the 24-hour progression window', () => {
     const intentMs = CURRENT_START_MS + MINUTE_MS
     const analytics = buildFrontendOnboardingAnalytics([
       attempt({
@@ -78,7 +78,7 @@ describe('buildFrontendOnboardingAnalytics', () => {
     expect(analytics.kpis.median_completion_ms).toBeNull()
   })
 
-  it('uses the immediately preceding cohort for comparisons', () => {
+  it.concurrent('uses the immediately preceding cohort for comparisons', () => {
     const previousStartMs = CURRENT_START_MS - 2 * DAY_MS
     const analytics = buildFrontendOnboardingAnalytics([
       attempt({
@@ -107,7 +107,7 @@ describe('buildFrontendOnboardingAnalytics', () => {
     })
   })
 
-  it('returns null comparisons without a previous cohort denominator', () => {
+  it.concurrent('returns null comparisons without a previous cohort denominator', () => {
     const analytics = buildFrontendOnboardingAnalytics([
       attempt({ attemptId: 'current-intent', intentMs: CURRENT_START_MS }),
     ], CURRENT_START_MS, CURRENT_END_MS)
@@ -120,7 +120,7 @@ describe('buildFrontendOnboardingAnalytics', () => {
     })
   })
 
-  it('returns zero KPIs, zero-filled days, and an empty funnel for an empty cohort', () => {
+  it.concurrent('returns zero KPIs, zero-filled days, and an empty funnel for an empty cohort', () => {
     const analytics = buildFrontendOnboardingAnalytics([], CURRENT_START_MS, CURRENT_END_MS)
 
     expect(analytics.kpis).toMatchObject({
@@ -137,7 +137,7 @@ describe('buildFrontendOnboardingAnalytics', () => {
     expect(analytics.funnel.map(stage => stage.reached)).toEqual([0, 0, 0, 0])
   })
 
-  it('reports no largest drop-off when every attempt reaches every stage', () => {
+  it.concurrent('reports no largest drop-off when every attempt reaches every stage', () => {
     const previousStartMs = CURRENT_START_MS - 2 * DAY_MS
     const analytics = buildFrontendOnboardingAnalytics([
       attempt({
@@ -155,7 +155,7 @@ describe('buildFrontendOnboardingAnalytics', () => {
     expect(analytics.kpis.comparison.largest_dropoff_points).toBe(-100)
   })
 
-  it('includes the start boundary and 24-hour step boundary but excludes the end boundary', () => {
+  it.concurrent('includes the start boundary and 24-hour step boundary but excludes the end boundary', () => {
     const analytics = buildFrontendOnboardingAnalytics([
       attempt({
         attemptId: 'start-inclusive',
@@ -170,7 +170,7 @@ describe('buildFrontendOnboardingAnalytics', () => {
     expect(analytics.kpis.median_completion_ms).toBe(FRONTEND_ONBOARDING_FOLLOWUP_MS)
   })
 
-  it('fills every UTC date crossed by a partial-day range', () => {
+  it.concurrent('fills every UTC date crossed by a partial-day range', () => {
     const startMs = Date.UTC(2026, 7, 1, 23)
     const endMs = Date.UTC(2026, 7, 2, 1)
     const analytics = buildFrontendOnboardingAnalytics([
@@ -184,7 +184,7 @@ describe('buildFrontendOnboardingAnalytics', () => {
     ])
   })
 
-  it('keeps the median comparison null when the previous cohort has no completions', () => {
+  it.concurrent('keeps the median comparison null when the previous cohort has no completions', () => {
     const previousStartMs = CURRENT_START_MS - 2 * DAY_MS
     const analytics = buildFrontendOnboardingAnalytics([
       attempt({ attemptId: 'previous-intent-only', intentMs: previousStartMs }),
@@ -198,7 +198,7 @@ describe('buildFrontendOnboardingAnalytics', () => {
     expect(analytics.kpis.comparison.median_completion_ms).toBeNull()
   })
 
-  it.each([
+  it.concurrent.each([
     ['equal bounds', CURRENT_START_MS, CURRENT_START_MS],
     ['reversed bounds', CURRENT_END_MS, CURRENT_START_MS],
     ['NaN start', Number.NaN, CURRENT_END_MS],
@@ -206,7 +206,7 @@ describe('buildFrontendOnboardingAnalytics', () => {
     expect(() => buildFrontendOnboardingAnalytics([], startMs, endMs)).toThrow(RangeError)
   })
 
-  it('rejects an infinite end bound', () => {
+  it.concurrent('rejects an infinite end bound', () => {
     expect(() => buildFrontendOnboardingAnalytics([], CURRENT_START_MS, Number.POSITIVE_INFINITY)).toThrow(RangeError)
   })
 })

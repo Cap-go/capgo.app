@@ -60,7 +60,7 @@ describe('admin stats validation', () => {
     expect(parsed.success).toBe(true)
   })
 
-  it('accepts the frontend onboarding analytics metric', () => {
+  it.concurrent('accepts the frontend onboarding analytics metric', () => {
     const parsed = safeParseSchema(adminStatsBodySchema, {
       ...baseBody,
       metric_category: 'frontend_onboarding_analytics',

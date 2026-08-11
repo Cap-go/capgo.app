@@ -1437,11 +1437,12 @@ Expected: PASS.
 Run:
 
 ```bash
+bun run lint:fix
 bun run lint
 bun run typecheck:frontend
 ```
 
-Expected: both commands PASS. If formatting changes are required, run `bun run lint:fix`, inspect the diff, and rerun both commands.
+Expected: all commands PASS. Inspect any auto-fix diff before committing.
 
 - [ ] **Step 7: Commit the page**
 
@@ -1476,6 +1477,7 @@ Expected: all tests PASS.
 - [ ] **Step 2: Run repository lint and type checks**
 
 ```bash
+bun run lint:fix
 bun run lint
 bun run lint:backend
 bun run typecheck
@@ -1530,7 +1532,14 @@ Use a title that does not begin with `[CODEX]`, for example:
 feat(admin): add frontend onboarding analytics
 ```
 
-The PR description must state:
+The PR description must contain these AI-generated sections:
+
+- **Summary** — what the dashboard adds and its fixed `pre_org` / `onboarding_version = 1` scope;
+- **Motivation** — why early onboarding loss needs a dedicated funnel;
+- **Business Impact** — how the dashboard helps diagnose and reduce onboarding drop-off;
+- **Test Plan** — the analytics contract and verification performed.
+
+The **Test Plan** must state:
 
 - only `pre_org` and `onboarding_version = 1` are included;
 - an attempt is grouped by `onboarding_attempt_id` and cohort-started by first Intent view;

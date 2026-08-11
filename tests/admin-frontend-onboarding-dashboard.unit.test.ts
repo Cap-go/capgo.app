@@ -135,7 +135,7 @@ describe('admin frontend onboarding dashboard', () => {
     expect(formatFrontendOnboardingDuration(-100)).toBe('0s')
   })
 
-  it('commits only the latest analytics request and lets only it clear loading', async () => {
+  it.concurrent('commits only the latest analytics request and lets only it clear loading', async () => {
     const first = deferred<FrontendOnboardingAnalytics | null>()
     const second = deferred<FrontendOnboardingAnalytics | null>()
     const requests = [first.promise, second.promise]
@@ -172,7 +172,7 @@ describe('admin frontend onboarding dashboard', () => {
     expect(errors).toEqual([])
   })
 
-  it('ignores a stale analytics rejection', async () => {
+  it.concurrent('ignores a stale analytics rejection', async () => {
     const first = deferred<FrontendOnboardingAnalytics | null>()
     const second = deferred<FrontendOnboardingAnalytics | null>()
     const requests = [first.promise, second.promise]
@@ -201,7 +201,7 @@ describe('admin frontend onboarding dashboard', () => {
     expect(loadingUpdates).toEqual([true, true, false])
   })
 
-  it('clears analytics and reports the latest analytics rejection', async () => {
+  it.concurrent('clears analytics and reports the latest analytics rejection', async () => {
     const request = deferred<FrontendOnboardingAnalytics | null>()
     const analyticsUpdates: Array<FrontendOnboardingAnalytics | null> = []
     const loadingUpdates: boolean[] = []
@@ -225,7 +225,7 @@ describe('admin frontend onboarding dashboard', () => {
     expect(loadingUpdates).toEqual([true, false])
   })
 
-  it('clears both page loaders when the latest request finishes before a stale request', async () => {
+  it.concurrent('clears both page loaders when the latest request finishes before a stale request', async () => {
     const first = deferred<FrontendOnboardingAnalytics | null>()
     const second = deferred<FrontendOnboardingAnalytics | null>()
     const requests = [first.promise, second.promise]
@@ -270,7 +270,7 @@ describe('admin frontend onboarding dashboard', () => {
     expect(isLoading).toBe(false)
   })
 
-  it('wires the page to the frontend onboarding analytics metric', async () => {
+  it.concurrent('wires the page to the frontend onboarding analytics metric', async () => {
     const source = await readFile(new URL('../src/pages/admin/dashboard/frontend-onboarding.vue', import.meta.url), 'utf8')
     const onLoadingCallback = source.match(/onLoading: \(value\) => \{([\s\S]*?)\n {4}\},/)?.[1] ?? ''
 
@@ -288,7 +288,7 @@ describe('admin frontend onboarding dashboard', () => {
     expect(source).toContain('const visibleAnalytics = computed(() => isLoadingStats.value ? null : analytics.value)')
   })
 
-  it('uses the existing admin dashboard components and fixed onboarding version', async () => {
+  it.concurrent('uses the existing admin dashboard components and fixed onboarding version', async () => {
     const source = await readFile(new URL('../src/pages/admin/dashboard/frontend-onboarding.vue', import.meta.url), 'utf8')
     const template = source.slice(source.indexOf('<template>'))
 
@@ -309,7 +309,7 @@ describe('admin frontend onboarding dashboard', () => {
     expect(funnelChart).toContain('class="d-loading d-loading-spinner d-loading-lg text-primary"')
   })
 
-  it('omits PostHog warnings, existing-org analytics, and selector UI', async () => {
+  it.concurrent('omits PostHog warnings, existing-org analytics, and selector UI', async () => {
     const source = await readFile(new URL('../src/pages/admin/dashboard/frontend-onboarding.vue', import.meta.url), 'utf8')
     const template = source.slice(source.indexOf('<template>'))
 
@@ -330,14 +330,14 @@ describe('admin frontend onboarding dashboard', () => {
     expect(template).not.toMatch(/v-(?:if|else-if)="[^"]*\berror\b/i)
   })
 
-  it('registers the frontend onboarding admin tab', async () => {
+  it.concurrent('registers the frontend onboarding admin tab', async () => {
     const source = await readFile(new URL('../src/constants/adminTabs.ts', import.meta.url), 'utf8')
 
     expect(source).toContain(`{ label: 'frontend-onboarding', icon:`)
     expect(source).toContain(`key: '/frontend-onboarding'`)
   })
 
-  it('defines every frontend onboarding page label in English', async () => {
+  it.concurrent('defines every frontend onboarding page label in English', async () => {
     const messages = JSON.parse(await readFile(new URL('../messages/en.json', import.meta.url), 'utf8')) as Record<string, string>
 
     expect(messages['frontend-onboarding']).toBe('Frontend onboarding')
