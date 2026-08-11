@@ -9,8 +9,8 @@ import { useI18n } from 'vue-i18n'
 import AdminFilterBar from '~/components/admin/AdminFilterBar.vue'
 import AdminRevenueRiskPanel from '~/components/admin/AdminRevenueRiskPanel.vue'
 import PageLoader from '~/components/PageLoader.vue'
-import { ensureAdminOrRedirect, useAdminStatsReload } from '~/composables/useAdminStatsReload'
 import { useAdminRevenueDashboard } from '~/composables/useAdminRevenueDashboard'
+import { ensureAdminOrRedirect, useAdminStatsReload } from '~/composables/useAdminStatsReload'
 import { useDisplayStore } from '~/stores/display'
 
 const { t } = useI18n()

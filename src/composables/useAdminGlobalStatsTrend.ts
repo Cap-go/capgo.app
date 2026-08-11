@@ -1,9 +1,9 @@
 import type { GlobalStatsTrendPoint } from '~/services/adminStatsTypes'
 
-export type { GlobalStatsTrendPoint as AdminGlobalStatsTrendPoint } from '~/services/adminStatsTypes'
-
 import { computed, ref } from 'vue'
 import { useAdminDashboardStore } from '~/stores/adminDashboard'
+
+export type { GlobalStatsTrendPoint as AdminGlobalStatsTrendPoint } from '~/services/adminStatsTypes'
 
 export function useAdminGlobalStatsTrend(defaultLogLabel = 'Admin Dashboard') {
   const adminStore = useAdminDashboardStore()

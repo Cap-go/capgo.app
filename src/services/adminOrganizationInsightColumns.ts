@@ -1,12 +1,12 @@
 import type { TableColumn } from '~/components/comp_def'
 import type { OrganizationInsight } from '~/services/adminOrganizationInsights'
 import { h } from 'vue'
-import { formatLocalDate } from '~/services/date'
 import {
   formatOrganizationBillingTypeLabel,
   formatOrganizationDateOrNever,
   formatOrganizationNumber,
 } from '~/services/adminOrganizationInsights'
+import { formatLocalDate } from '~/services/date'
 
 /** Shared organization-insight columns used by customers + retention inactive views. */
 export function createSharedOrganizationInsightColumns(

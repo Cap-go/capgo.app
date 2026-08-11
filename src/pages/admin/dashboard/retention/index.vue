@@ -49,7 +49,6 @@ const {
   latestGlobalStats,
 } = useAdminGlobalStatsTrend('Admin Dashboard Retention Trials')
 
-
 // Trial organizations data
 interface TrialOrganization {
   org_id: string

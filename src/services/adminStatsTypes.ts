@@ -98,4 +98,3 @@ export interface GlobalStatsTrendPoint {
   trial_extended_subscribed_orgs?: number
   demo_apps_created?: number
 }
-

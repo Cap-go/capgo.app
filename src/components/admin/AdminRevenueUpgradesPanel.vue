@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { AdminGlobalStatsTrendPoint } from '~/composables/useAdminGlobalStatsTrend'
-import type { AdminChartSeries, AbovePlanMetricCard } from '~/composables/useAdminRevenueDashboard'
+import type { AbovePlanMetricCard, AdminChartSeries } from '~/composables/useAdminRevenueDashboard'
 import { useI18n } from 'vue-i18n'
 import AdminMultiLineChart from '~/components/admin/AdminMultiLineChart.vue'
 import ChartCard from '~/components/dashboard/ChartCard.vue'

@@ -1,3 +1,7 @@
+import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { useAdminGlobalStatsTrend } from '~/composables/useAdminGlobalStatsTrend'
+
 export interface AdminChartSeries {
   label: string
   data: Array<{ date: string, value: number }>
@@ -15,10 +19,6 @@ export interface AbovePlanMetricCard {
   valueClass: string
   iconPath: string
 }
-
-import { computed } from 'vue'
-import { useI18n } from 'vue-i18n'
-import { useAdminGlobalStatsTrend } from '~/composables/useAdminGlobalStatsTrend'
 
 export function useAdminRevenueDashboard(logLabel = 'Admin Dashboard Revenue') {
   const { t } = useI18n()
