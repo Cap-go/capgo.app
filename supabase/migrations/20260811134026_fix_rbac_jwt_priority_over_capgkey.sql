@@ -1,3 +1,90 @@
+-- Shared app/channel scope resolution for the direct RBAC checkers.
+CREATE OR REPLACE FUNCTION public.rbac_resolve_permission_scope(
+  p_org_id uuid,
+  p_app_id character varying,
+  p_channel_id bigint
+) RETURNS TABLE (
+  ok boolean,
+  effective_org_id uuid,
+  effective_app_id character varying
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_app_owner_org uuid;
+  v_channel_org_id uuid;
+  v_channel_app_id character varying;
+BEGIN
+  effective_org_id := p_org_id;
+  effective_app_id := p_app_id;
+
+  IF p_app_id IS NOT NULL THEN
+    SELECT owner_org INTO v_app_owner_org
+    FROM public.apps
+    WHERE app_id = p_app_id
+    LIMIT 1;
+
+    IF v_app_owner_org IS NULL THEN
+      ok := false;
+      RETURN NEXT;
+      RETURN;
+    END IF;
+
+    IF effective_org_id IS NOT NULL AND effective_org_id IS DISTINCT FROM v_app_owner_org THEN
+      ok := false;
+      RETURN NEXT;
+      RETURN;
+    END IF;
+
+    effective_org_id := v_app_owner_org;
+  END IF;
+
+  IF p_channel_id IS NOT NULL THEN
+    SELECT owner_org, app_id
+    INTO v_channel_org_id, v_channel_app_id
+    FROM public.channels
+    WHERE id = p_channel_id
+    LIMIT 1;
+
+    IF v_channel_org_id IS NULL THEN
+      ok := false;
+      RETURN NEXT;
+      RETURN;
+    END IF;
+
+    IF effective_org_id IS NOT NULL AND effective_org_id IS DISTINCT FROM v_channel_org_id THEN
+      ok := false;
+      RETURN NEXT;
+      RETURN;
+    END IF;
+
+    IF effective_app_id IS NOT NULL AND effective_app_id IS DISTINCT FROM v_channel_app_id THEN
+      ok := false;
+      RETURN NEXT;
+      RETURN;
+    END IF;
+
+    effective_org_id := v_channel_org_id;
+    effective_app_id := v_channel_app_id;
+  END IF;
+
+  ok := true;
+  RETURN NEXT;
+END;
+$$;
+
+ALTER FUNCTION public.rbac_resolve_permission_scope(uuid, character varying, bigint)
+  OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.rbac_resolve_permission_scope(uuid, character varying, bigint)
+  FROM PUBLIC;
+GRANT ALL ON FUNCTION public.rbac_resolve_permission_scope(uuid, character varying, bigint)
+  TO service_role;
+
+COMMENT ON FUNCTION public.rbac_resolve_permission_scope(uuid, character varying, bigint)
+IS 'Resolves effective org/app scope for RBAC permission checks. Returns ok=false when the app or channel is missing or conflicts with the requested org/app.';
+
 CREATE OR REPLACE FUNCTION public.rbac_check_permission_direct(
   p_permission_key text,
   p_user_id uuid,
@@ -12,59 +99,25 @@ SET search_path = ''
 AS $$
 DECLARE
   v_allowed boolean := false;
-  v_effective_org_id uuid := p_org_id;
+  v_effective_org_id uuid;
   v_effective_user_id uuid := p_user_id;
-  v_effective_app_id character varying := p_app_id;
+  v_effective_app_id character varying;
   v_api_key public.apikeys%ROWTYPE;
-  v_app_owner_org uuid;
-  v_channel_org_id uuid;
-  v_channel_app_id character varying;
   v_channel_scope boolean := p_channel_id IS NOT NULL;
   v_override boolean;
   v_uid uuid := auth.uid();
+  v_scope_ok boolean;
 BEGIN
   IF p_permission_key IS NULL OR p_permission_key = '' THEN
     RETURN false;
   END IF;
 
-  IF p_app_id IS NOT NULL THEN
-    SELECT owner_org INTO v_app_owner_org
-    FROM public.apps
-    WHERE app_id = p_app_id
-    LIMIT 1;
+  SELECT s.ok, s.effective_org_id, s.effective_app_id
+  INTO v_scope_ok, v_effective_org_id, v_effective_app_id
+  FROM public.rbac_resolve_permission_scope(p_org_id, p_app_id, p_channel_id) AS s;
 
-    IF v_app_owner_org IS NULL THEN
-      RETURN false;
-    END IF;
-
-    IF v_effective_org_id IS NOT NULL AND v_effective_org_id IS DISTINCT FROM v_app_owner_org THEN
-      RETURN false;
-    END IF;
-
-    v_effective_org_id := v_app_owner_org;
-  END IF;
-
-  IF p_channel_id IS NOT NULL THEN
-    SELECT owner_org, app_id
-    INTO v_channel_org_id, v_channel_app_id
-    FROM public.channels
-    WHERE id = p_channel_id
-    LIMIT 1;
-
-    IF v_channel_org_id IS NULL THEN
-      RETURN false;
-    END IF;
-
-    IF v_effective_org_id IS NOT NULL AND v_effective_org_id IS DISTINCT FROM v_channel_org_id THEN
-      RETURN false;
-    END IF;
-
-    IF v_effective_app_id IS NOT NULL AND v_effective_app_id IS DISTINCT FROM v_channel_app_id THEN
-      RETURN false;
-    END IF;
-
-    v_effective_org_id := v_channel_org_id;
-    v_effective_app_id := v_channel_app_id;
+  IF NOT COALESCE(v_scope_ok, false) THEN
+    RETURN false;
   END IF;
 
   -- Match apps_readable_app_ids(): authenticated JWT callers use the user principal,
@@ -184,57 +237,23 @@ SECURITY DEFINER
 SET search_path = ''
 AS $$
 DECLARE
-  v_effective_org_id uuid := p_org_id;
+  v_effective_org_id uuid;
   v_effective_user_id uuid := p_user_id;
-  v_effective_app_id character varying := p_app_id;
+  v_effective_app_id character varying;
   v_api_key public.apikeys%ROWTYPE;
-  v_app_owner_org uuid;
-  v_channel_org_id uuid;
-  v_channel_app_id character varying;
   v_uid uuid := auth.uid();
+  v_scope_ok boolean;
 BEGIN
   IF p_permission_key IS NULL OR p_permission_key = '' THEN
     RETURN false;
   END IF;
 
-  IF p_app_id IS NOT NULL THEN
-    SELECT owner_org INTO v_app_owner_org
-    FROM public.apps
-    WHERE app_id = p_app_id
-    LIMIT 1;
+  SELECT s.ok, s.effective_org_id, s.effective_app_id
+  INTO v_scope_ok, v_effective_org_id, v_effective_app_id
+  FROM public.rbac_resolve_permission_scope(p_org_id, p_app_id, p_channel_id) AS s;
 
-    IF v_app_owner_org IS NULL THEN
-      RETURN false;
-    END IF;
-
-    IF v_effective_org_id IS NOT NULL AND v_effective_org_id IS DISTINCT FROM v_app_owner_org THEN
-      RETURN false;
-    END IF;
-
-    v_effective_org_id := v_app_owner_org;
-  END IF;
-
-  IF p_channel_id IS NOT NULL THEN
-    SELECT owner_org, app_id
-    INTO v_channel_org_id, v_channel_app_id
-    FROM public.channels
-    WHERE id = p_channel_id
-    LIMIT 1;
-
-    IF v_channel_org_id IS NULL THEN
-      RETURN false;
-    END IF;
-
-    IF v_effective_org_id IS NOT NULL AND v_effective_org_id IS DISTINCT FROM v_channel_org_id THEN
-      RETURN false;
-    END IF;
-
-    IF v_effective_app_id IS NOT NULL AND v_effective_app_id IS DISTINCT FROM v_channel_app_id THEN
-      RETURN false;
-    END IF;
-
-    v_effective_org_id := v_channel_org_id;
-    v_effective_app_id := v_channel_app_id;
+  IF NOT COALESCE(v_scope_ok, false) THEN
+    RETURN false;
   END IF;
 
   IF p_apikey IS NOT NULL
