@@ -1031,6 +1031,48 @@ await tAsync('native reset targets configured platform directories without escap
   }
 })
 
+await tAsync('native reset resolution canonicalizes directory ancestors and rejects ambiguous targets', async () => {
+  await withTempDirAsync(async (root) => {
+    const projectDir = join(root, 'project')
+    mkdirSync(projectDir)
+    initializeGitRepo(projectDir, { 'package.json': '{"name":"example"}\n' })
+    const canonicalProjectDir = realpathSync(projectDir)
+
+    writeFileSync(join(projectDir, 'blocking-file'), 'not a directory\n', 'utf8')
+    assert.equal(resolveInitNativeResetTarget(projectDir, 'blocking-file/ios'), undefined)
+
+    const nonexistentTarget = resolveInitNativeResetTarget(projectDir, 'missing/nested/ios')
+    assert.deepEqual(nonexistentTarget, {
+      directory: join(canonicalProjectDir, 'missing/nested/ios'),
+      scope: { exactPaths: [], directoryPrefixes: ['missing/nested/ios'] },
+    })
+
+    const internalTargetDir = join(projectDir, 'real-native')
+    mkdirSync(internalTargetDir)
+    if (tryCreateTestSymlink(internalTargetDir, join(projectDir, 'native-alias'))) {
+      const internalTarget = resolveInitNativeResetTarget(projectDir, 'native-alias/ios')
+      assert.deepEqual(internalTarget, {
+        directory: join(canonicalProjectDir, 'real-native/ios'),
+        scope: { exactPaths: [], directoryPrefixes: ['real-native/ios'] },
+      })
+
+      const finalTargetDir = join(projectDir, 'final-native')
+      mkdirSync(finalTargetDir)
+      assert.equal(tryCreateTestSymlink(finalTargetDir, join(projectDir, 'final-native-link')), true)
+      assert.equal(resolveInitNativeResetTarget(projectDir, 'final-native-link'), undefined)
+    }
+
+    const outsideDir = join(root, 'outside')
+    mkdirSync(outsideDir)
+    if (tryCreateTestSymlink(outsideDir, join(projectDir, 'external-alias')))
+      assert.equal(resolveInitNativeResetTarget(projectDir, 'external-alias/ios'), undefined)
+
+    assert.equal(resolveInitNativeResetTarget(projectDir, join(projectDir, 'absolute-ios')), undefined)
+    assert.equal(resolveInitNativeResetTarget(projectDir, 'native/../ios'), undefined)
+    assert.equal(resolveInitNativeResetTarget(projectDir, 'native\0ios'), undefined)
+  })
+})
+
 await tAsync('tracked init mutation persists changed process, structured, and void successes', async () => {
   await withTempDirAsync(async (root) => {
     initializeGitRepo(root, {
@@ -1189,6 +1231,8 @@ t('automatic onboarding mutations use narrow tracking windows and user-controlle
   const nativeResetBody = sourceBetween('async function runNativeResetCommand(', 'async function waitForReadyConfirmation(')
   assert.match(nativeResetBody, /rmSync\(resetTarget\.directory,/)
   assert.match(nativeResetBody, /scope: resetTarget\.scope/)
+  assert.match(nativeResetBody, /path\.relative\(realpathSync\(projectDir\), resetTarget\.directory\)/)
+  assert.match(nativeResetBody, /resetSpinner\.start\(`Running: \$\{resetCommand\}`\)/)
 })
 
 await tAsync('live git cleanliness gate filters trusted changes without weakening the existing prompt', async () => {

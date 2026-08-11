@@ -654,29 +654,50 @@ function isPathInside(parentDir: string, targetPath: string, allowSame = false) 
 
 export function resolveInitNativeResetTarget(projectDir: string, nativePlatformDir: string): InitNativeResetTarget | undefined {
   try {
+    if (!nativePlatformDir
+      || nativePlatformDir.includes('\0')
+      || path.isAbsolute(nativePlatformDir)
+      || path.win32.isAbsolute(nativePlatformDir)
+      || nativePlatformDir.split(/[\\/]/).includes('..'))
+      return undefined
+
     const repoRoot = getInitGitRepoRoot(projectDir)
     const resolvedProjectDir = realpathSync(projectDir)
     if (!repoRoot || !isPathInside(repoRoot, resolvedProjectDir, true))
       return undefined
 
-    const directory = path.resolve(resolvedProjectDir, nativePlatformDir)
-    if (!isPathInside(resolvedProjectDir, directory))
+    const lexicalTarget = path.resolve(resolvedProjectDir, nativePlatformDir)
+    if (!isPathInside(resolvedProjectDir, lexicalTarget))
       return undefined
 
-    let existingAncestor = directory
+    const unresolvedSuffix: string[] = []
+    let existingAncestor = lexicalTarget
     while (!existsSync(existingAncestor)) {
+      unresolvedSuffix.unshift(path.basename(existingAncestor))
       const parentDir = dirname(existingAncestor)
       if (parentDir === existingAncestor)
         return undefined
       existingAncestor = parentDir
     }
-    if ((existingAncestor === directory && !lstatSync(directory).isDirectory())
-      || !isPathInside(resolvedProjectDir, realpathSync(existingAncestor), true))
+
+    const ancestorStats = lstatSync(existingAncestor)
+    if (existingAncestor === lexicalTarget && ancestorStats.isSymbolicLink())
+      return undefined
+    const canonicalAncestor = realpathSync(existingAncestor)
+    if (!statSync(canonicalAncestor).isDirectory())
+      return undefined
+
+    const directory = path.resolve(canonicalAncestor, ...unresolvedSuffix)
+    if (!isPathInside(resolvedProjectDir, directory)
+      || !isPathInside(repoRoot, directory))
       return undefined
 
     const scope = createInitGitChangeScope(resolvedProjectDir, [], [directory])
     const normalizedScope = normalizeInitGitScope(scope)
-    if (!normalizedScope || normalizedScope.directoryPrefixes.length !== 1)
+    const repoRelativeDirectory = path.relative(repoRoot, directory).replaceAll(path.sep, '/')
+    if (!normalizedScope
+      || normalizedScope.directoryPrefixes.length !== 1
+      || normalizedScope.directoryPrefixes[0] !== repoRelativeDirectory)
       return undefined
     return { directory, scope }
   }
@@ -2710,11 +2731,17 @@ async function runNativeResetCommand(
   successMessage: string,
   failureMessage: string,
 ): Promise<void> {
+  const resetTarget = resolveInitNativeResetTarget(projectDir, nativePlatformDir)
   const resetAdvice = getNativeProjectResetAdvice(platformRunner, nativePlatform)
+  const resetDisplayPath = resetTarget
+    ? path.relative(realpathSync(projectDir), resetTarget.directory).replaceAll(path.sep, '/')
+    : nativePlatform
+  const resetCommand = resetDisplayPath === nativePlatform
+    ? resetAdvice.command
+    : resetAdvice.command.replace(`rm -rf ${nativePlatform}`, `rm -rf ${resetDisplayPath}`)
   const resetSpinner = pSpinner()
-  resetSpinner.start(`Running: ${resetAdvice.command}`)
+  resetSpinner.start(`Running: ${resetCommand}`)
   try {
-    const resetTarget = resolveInitNativeResetTarget(projectDir, nativePlatformDir)
     if (!resetTarget)
       throw new Error(`Cannot safely reset ${nativePlatformDir}: the native directory must stay inside the selected project`)
 
