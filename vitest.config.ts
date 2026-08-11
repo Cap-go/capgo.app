@@ -1,11 +1,34 @@
 import path from 'node:path'
 import { cwd } from 'node:process'
 import vue from '@vitejs/plugin-vue'
+import Icons from 'unplugin-icons/vite'
 import { loadEnv } from 'vite'
 import { defineConfig } from 'vitest/config'
 
+const rawSearchIconId = '\0vitest-raw-search-icon'
+
 export default defineConfig(({ mode }) => ({
-  plugins: [vue()],
+  plugins: [
+    {
+      name: 'vitest-raw-search-icon',
+      enforce: 'pre',
+      resolveId(id) {
+        return id === '~icons/ic/round-search?raw' ? rawSearchIconId : null
+      },
+      load(id) {
+        return id === rawSearchIconId ? 'export default "<svg />"' : null
+      },
+    },
+    {
+      name: 'vitest-vue-route-block',
+      enforce: 'pre',
+      transform(_, id) {
+        return id.includes('vue&type=route') ? 'export default {}' : null
+      },
+    },
+    vue(),
+    Icons({ compiler: 'vue3' }),
+  ],
   resolve: {
     alias: {
       '@capgo/cli/sdk': path.resolve(cwd(), 'cli/src/sdk.ts'),
