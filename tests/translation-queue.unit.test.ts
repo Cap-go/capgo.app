@@ -86,9 +86,9 @@ describe('translation queue helpers', () => {
     expect(__translationWorkerTestUtils__.unwrapTranslatedMessage('Compte')).toBe('Compte')
     expect(__translationWorkerTestUtils__.unwrapTranslatedMessage('Save ')).toBe('Save ')
     expect(__translationWorkerTestUtils__.keepTranslation('Save ', 'Save ')).toBe('Save ')
-    expect(__translationWorkerTestUtils__.unwrapTranslatedMessage('{"text":" "}' )).toBeNull()
+    expect(__translationWorkerTestUtils__.unwrapTranslatedMessage('{"text":" "}')).toBeNull()
     expect(__translationWorkerTestUtils__.unwrapTranslatedMessage({ text: ' ' })).toBeNull()
-    expect(__translationWorkerTestUtils__.keepTranslation('Password', '{"text":" "}' )).toBe('Password')
+    expect(__translationWorkerTestUtils__.keepTranslation('Password', '{"text":" "}')).toBe('Password')
     expect(__translationWorkerTestUtils__.keepTranslation('Password', { text: 'Mot de passe ' })).toBe('Mot de passe ')
     expect(__translationWorkerTestUtils__.unwrapTranslatedMessage({ text: ' Mot de passe ' })).toBe(' Mot de passe ')
   })
@@ -235,7 +235,7 @@ describe('translation queue helpers', () => {
         'password': '{"text":"Mot de passe","context":"Used in Capgo web console areas: pages."}',
         'create-a-free-account': '{"text":"Créer un compte gratuit"}',
         'blank-wrapper': '{"text":" "}',
-        'object-wrapper': { text: 'Objet', context: 'legacy object blob' },
+        'object-wrapper': { text: 'Valeur legacy', context: 'legacy object blob' },
         'save': 'Save ',
       },
       model: 'model',
@@ -253,7 +253,7 @@ describe('translation queue helpers', () => {
     expect(payload.messages.password).toBe('Mot de passe')
     expect(payload.messages['create-a-free-account']).toBe('Créer un compte gratuit')
     expect(payload.messages['blank-wrapper']).toBeUndefined()
-    expect(payload.messages['object-wrapper']).toBe('Objet')
+    expect(payload.messages['object-wrapper']).toBe('Valeur legacy')
     expect(payload.messages.save).toBe('Save ')
   })
 
