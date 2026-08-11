@@ -466,16 +466,17 @@ async function handleCreditCheckoutReturn() {
   if (!currentOrganization.value?.gid)
     return
 
-  // Completing a Stripe top-up is a billing mutation; require update access.
-  if (!(await ensureUpdateBillingAccess())) {
-    delete newQuery.creditCheckout
-    delete newQuery.session_id
-    await router.replace({ query: newQuery })
-    return
-  }
-
+  // Lock before any await so mount + org-switch cannot double-complete the same session.
   isCompletingTopUp.value = true
   try {
+    // Completing a Stripe top-up is a billing mutation; require update access.
+    if (!(await ensureUpdateBillingAccess())) {
+      delete newQuery.creditCheckout
+      delete newQuery.session_id
+      await router.replace({ query: newQuery })
+      return
+    }
+
     await completeCreditTopUp(currentOrganization.value.gid, sessionId)
     toast.success(t('credits-top-up-success'))
     const orgId = currentOrganization.value?.gid
