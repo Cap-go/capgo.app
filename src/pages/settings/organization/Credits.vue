@@ -466,6 +466,14 @@ async function handleCreditCheckoutReturn() {
   if (!currentOrganization.value?.gid)
     return
 
+  // Completing a Stripe top-up is a billing mutation; require update access.
+  if (!(await ensureUpdateBillingAccess())) {
+    delete newQuery.creditCheckout
+    delete newQuery.session_id
+    await router.replace({ query: newQuery })
+    return
+  }
+
   isCompletingTopUp.value = true
   try {
     await completeCreditTopUp(currentOrganization.value.gid, sessionId)
