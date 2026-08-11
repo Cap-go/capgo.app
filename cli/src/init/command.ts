@@ -695,6 +695,22 @@ export function mergeInitGitChanges(existing: InitGitChanges | undefined, before
   return cloneInitGitChanges({ version: 1, repoRoot: usableAfter.repoRoot, files: retainedFiles })
 }
 
+export async function trackInitGitChanges<T>(
+  existing: InitGitChanges | undefined,
+  operation: () => T | Promise<T>,
+  options: {
+    startDir?: string
+    isSuccess?: (result: T) => boolean
+  } = {},
+): Promise<{ result: T, gitChanges: InitGitChanges | undefined }> {
+  const before = captureInitGitSnapshot(options.startDir)
+  const result = await operation()
+  if (options.isSuccess && !options.isSuccess(result))
+    return { result, gitChanges: existing }
+  const after = captureInitGitSnapshot(options.startDir)
+  return { result, gitChanges: mergeInitGitChanges(existing, before, after) }
+}
+
 export function classifyInitGitChanges(current: InitGitChanges | undefined, saved: InitGitChanges | undefined): InitGitClassification {
   if (!isUsableInitGitChanges(current))
     return { unsafePaths: [], recognizedCount: 0, retained: undefined }
@@ -1577,7 +1593,10 @@ async function maybeRunCapacitorInit(projectDir: string, projectType: string, in
 
   try {
     spinner.start(`Installing Capacitor packages with ${pm.installCommand}`)
-    const installCoreResult = spawnSync(pm.pm, [pm.command, '@capacitor/core'], { stdio: 'pipe', cwd: projectDir })
+    const installCoreResult = await runTrackedInitMutation(
+      () => spawnSync(pm.pm, [pm.command, '@capacitor/core'], { stdio: 'pipe', cwd: projectDir }),
+      { startDir: projectDir, isSuccess: result => !result.error && result.status === 0 },
+    )
     if (installCoreResult.error)
       throw installCoreResult.error
     if (installCoreResult.status !== 0) {
@@ -1586,7 +1605,10 @@ async function maybeRunCapacitorInit(projectDir: string, projectType: string, in
       throw new Error(stderr || stdout || `${pm.installCommand} @capacitor/core exited with code ${installCoreResult.status}`)
     }
 
-    const installCliResult = spawnSync(pm.pm, [pm.command, '-D', '@capacitor/cli'], { stdio: 'pipe', cwd: projectDir })
+    const installCliResult = await runTrackedInitMutation(
+      () => spawnSync(pm.pm, [pm.command, '-D', '@capacitor/cli'], { stdio: 'pipe', cwd: projectDir }),
+      { startDir: projectDir, isSuccess: result => !result.error && result.status === 0 },
+    )
     if (installCliResult.error)
       throw installCliResult.error
     if (installCliResult.status !== 0) {
@@ -1596,7 +1618,10 @@ async function maybeRunCapacitorInit(projectDir: string, projectType: string, in
     }
 
     spinner.message(`Running: ${pm.runner} cap init "${appName}" "${capacitorAppId}" --web-dir ${webDir}`)
-    const initResult = spawnSync(pm.runner, ['cap', 'init', appName, capacitorAppId, '--web-dir', webDir], { stdio: 'pipe', cwd: projectDir })
+    const initResult = await runTrackedInitMutation(
+      () => spawnSync(pm.runner, ['cap', 'init', appName, capacitorAppId, '--web-dir', webDir], { stdio: 'pipe', cwd: projectDir }),
+      { startDir: projectDir, isSuccess: result => !result.error && result.status === 0 },
+    )
     if (initResult.error)
       throw initResult.error
     if (initResult.status !== 0) {
@@ -1631,12 +1656,15 @@ async function runCapacitorPlatformAdd(platformName: 'ios' | 'android', runner: 
   spinner.start(runMessage)
   spinner.stop()
 
-  const result = await streamCommandInInitPanel({
-    title: `Adding ${platformName.toUpperCase()} native project`,
-    runner,
-    args: ['cap', 'add', platformName],
-    cwd: commandCwd,
-  })
+  const result = await runTrackedInitMutation(
+    () => streamCommandInInitPanel({
+      title: `Adding ${platformName.toUpperCase()} native project`,
+      runner,
+      args: ['cap', 'add', platformName],
+      cwd: commandCwd,
+    }),
+    { startDir: commandCwd, isSuccess: result => result.success },
+  )
   await delay(result.success ? 750 : 3500)
   clearInitStreamingOutput()
   if (!result.success) {
@@ -1800,6 +1828,32 @@ function persistInitProgressSafely() {
     catch {
     }
   }
+}
+
+async function runTrackedInitMutation<T>(
+  operation: () => T | Promise<T>,
+  options: {
+    startDir?: string
+    isSuccess?: (result: T) => boolean
+  } = {},
+): Promise<T> {
+  let successful = true
+  const isSuccess = options.isSuccess
+  const tracked = await trackInitGitChanges(globalInitGitChanges, operation, {
+    ...options,
+    isSuccess: isSuccess
+      ? (result) => {
+          successful = isSuccess(result)
+          return successful
+        }
+      : undefined,
+  })
+  if (successful) {
+    globalInitGitChanges = tracked.gitChanges
+    if (globalStepDone > 0)
+      persistInitProgressSafely()
+  }
+  return tracked.result
 }
 
 function markStepDone(step: number, pathToPackageJson?: string, channelName?: string) {
@@ -2319,7 +2373,10 @@ async function markStep(orgId: string, apikey: string, step: string, appId: stri
  */
 async function saveAppIdToCapacitorConfig(appId: string) {
   try {
-    await updateConfigUpdater({ appId })
+    await runTrackedInitMutation(
+      () => updateConfigUpdater({ appId }),
+      { startDir: globalConfigLoadDir ?? (globalCapacitorConfigPath ? dirname(globalCapacitorConfigPath) : cwd()) },
+    )
     pLog.info(`💾 Saved new app ID "${appId}" to CapacitorUpdater config`)
   }
   catch (err) {
@@ -2340,7 +2397,10 @@ async function syncPendingAppIdToCapacitorConfig(appId: string) {
       ...extConfig.config.plugins.CapacitorUpdater,
       appId,
     }
-    await writeConfigUpdater(extConfig, true)
+    await runTrackedInitMutation(
+      () => writeConfigUpdater(extConfig, true),
+      { startDir: globalConfigLoadDir ?? (globalCapacitorConfigPath ? dirname(globalCapacitorConfigPath) : cwd()) },
+    )
     pLog.info(`💾 Synced pending onboarding app ID "${appId}" to capacitor config`)
   }
   catch (err) {
@@ -2392,24 +2452,26 @@ async function runNativeResetCommand(platformRunner: string, nativePlatform: Pla
   const resetSpinner = pSpinner()
   resetSpinner.start(`Running: ${resetAdvice.command}`)
   try {
-    rmSync(nativePlatform, { recursive: true, force: true })
-    resetSpinner.stop()
+    await runTrackedInitMutation(async () => {
+      rmSync(nativePlatform, { recursive: true, force: true })
+      resetSpinner.stop()
 
-    const addResult = await streamCommandInInitPanel({
-      title: `Recreating ${nativePlatform.toUpperCase()} native project`,
-      runner: platformRunner,
-      args: ['cap', 'add', nativePlatform],
-    })
-    if (!addResult.success)
-      throw addResult.error ?? new Error(`cap add ${nativePlatform} failed`)
+      const addResult = await streamCommandInInitPanel({
+        title: `Recreating ${nativePlatform.toUpperCase()} native project`,
+        runner: platformRunner,
+        args: ['cap', 'add', nativePlatform],
+      })
+      if (!addResult.success)
+        throw addResult.error ?? new Error(`cap add ${nativePlatform} failed`)
 
-    const syncResult = await streamCommandInInitPanel({
-      title: `Syncing ${nativePlatform.toUpperCase()} native project`,
-      runner: platformRunner,
-      args: ['cap', 'sync', nativePlatform],
+      const syncResult = await streamCommandInInitPanel({
+        title: `Syncing ${nativePlatform.toUpperCase()} native project`,
+        runner: platformRunner,
+        args: ['cap', 'sync', nativePlatform],
+      })
+      if (!syncResult.success)
+        throw syncResult.error ?? new Error(`cap sync ${nativePlatform} failed`)
     })
-    if (!syncResult.success)
-      throw syncResult.error ?? new Error(`cap sync ${nativePlatform} failed`)
 
     await delay(750)
     resetSpinner.stop(successMessage)
@@ -2561,7 +2623,10 @@ async function ensureCapacitorProjectReady(
       const spinner = pSpinner()
       spinner.start(`Running: ${pm.runner} cap init "${appName}" "${appId}"`)
       try {
-        const initResult = spawnSync(pm.runner, ['cap', 'init', appName, appId], { stdio: 'pipe' as const })
+        const initResult = await runTrackedInitMutation(
+          () => spawnSync(pm.runner, ['cap', 'init', appName, appId], { stdio: 'pipe' as const }),
+          { isSuccess: result => !result.error && result.status === 0 },
+        )
         if (initResult.error)
           throw initResult.error
         if (initResult.status !== 0) {
@@ -3272,15 +3337,18 @@ function formatSpawnOutput(output: string | Buffer | null | undefined): string {
   return typeof output === 'string' ? output : output.toString('utf8')
 }
 
-function runUpdaterInstallCommand(pm: PackageManagerInfo, packageJsonPath: string, versionToInstall: string): void {
+async function runUpdaterInstallCommand(pm: PackageManagerInfo, packageJsonPath: string, versionToInstall: string): Promise<void> {
   const [command, ...args] = pm.installCommand.split(whitespaceSplitPattern).filter(Boolean)
   if (!command)
     throw new Error('Cannot determine package manager install command')
 
-  const result = spawnSync(command, [...args, '--force', `${CAPGO_UPDATER_PACKAGE}@${versionToInstall}`], {
-    stdio: 'pipe',
-    cwd: dirname(packageJsonPath),
-  })
+  const result = await runTrackedInitMutation(
+    () => spawnSync(command, [...args, '--force', `${CAPGO_UPDATER_PACKAGE}@${versionToInstall}`], {
+      stdio: 'pipe',
+      cwd: dirname(packageJsonPath),
+    }),
+    { startDir: dirname(packageJsonPath), isSuccess: result => !result.error && result.status === 0 },
+  )
   if (result.error || result.status !== 0) {
     const output = [formatSpawnOutput(result.stdout), formatSpawnOutput(result.stderr)]
       .map(text => text.trim())
@@ -3328,7 +3396,7 @@ async function waitForVerifiedUpdaterInstall(
         const s = pSpinner()
         try {
           s.start(`Running: ${getUpdaterInstallCommand(pm, versionToInstall, true)}`)
-          runUpdaterInstallCommand(pm, packageJsonPath, versionToInstall)
+          await runUpdaterInstallCommand(pm, packageJsonPath, versionToInstall)
           s.stop('Updater install command finished ✅')
         }
         catch (error) {
@@ -3388,7 +3456,7 @@ async function addUpdaterStep(orgId: string, apikey: string, appId: string) {
       }
       else {
         try {
-          runUpdaterInstallCommand(pm, path, versionToInstall)
+          await runUpdaterInstallCommand(pm, path, versionToInstall)
           s.stop(`Install Done ✅`)
         }
         catch (error) {
@@ -3415,12 +3483,15 @@ async function addUpdaterStep(orgId: string, apikey: string, appId: string) {
     s.start(`Updating config file`)
     delta = !!doDirectInstall
     const projectDir = dirname(path)
-    await withTemporaryCwd(getInitConfigLoadDir(projectDir), async () => {
-      if (doDirectInstall) {
-        await updateConfigbyKey('SplashScreen', { launchAutoHide: false })
-      }
-      await updateConfigUpdater(getInitUpdaterPluginConfig(appId, delta))
-    })
+    await runTrackedInitMutation(
+      () => withTemporaryCwd(getInitConfigLoadDir(projectDir), async () => {
+        if (doDirectInstall) {
+          await updateConfigbyKey('SplashScreen', { launchAutoHide: false })
+        }
+        await updateConfigUpdater(getInitUpdaterPluginConfig(appId, delta))
+      }),
+      { startDir: projectDir },
+    )
     s.stop(`Config file updated ✅`)
     break
   }
@@ -3532,10 +3603,12 @@ async function addCodeStep(orgId: string, apikey: string, appId: string) {
     else if (!alreadyConfigured) {
       const s = pSpinner()
       s.start(`Adding @capacitor-updater to your main file`)
-      if (created) {
-        mkdirSync(dirname(filePath), { recursive: true })
-      }
-      writeFileSync(filePath, newContent, 'utf8')
+      await runTrackedInitMutation(() => {
+        if (created) {
+          mkdirSync(dirname(filePath), { recursive: true })
+        }
+        writeFileSync(filePath, newContent, 'utf8')
+      }, { startDir: projectDir })
       s.stop()
       globalCodeDiff = previewDiff
       setInitCodeDiff(globalCodeDiff)
@@ -3712,7 +3785,10 @@ async function addEncryptionStep(orgId: string, apikey: string, appId: string) {
     // key is present in the config.
     try {
       const encryptionConfig = await withTemporaryCwd(getInitConfigLoadDir(projectDir), () => getConfigForWrite())
-      await withTemporaryCwd(projectDir, () => createKeyInternal({ force: true, setupChannel: false }, true, encryptionConfig))
+      await runTrackedInitMutation(
+        () => withTemporaryCwd(projectDir, () => createKeyInternal({ force: true, setupChannel: false }, true, encryptionConfig)),
+        { startDir: projectDir },
+      )
       // Intentionally stop without a success message: the persistent
       // encryption summary panel renders on the next step and already shows
       // the outcome. Passing a message here would push it into the rolling
@@ -3734,12 +3810,15 @@ async function addEncryptionStep(orgId: string, apikey: string, appId: string) {
       // exactly what we want — the key needs to end up in whichever
       // native projects exist.
       await ensureUpdaterReadyBeforeSync(pm, orgId, apikey, packageJsonPath)
-      const syncResult = await streamCommandInInitPanel({
-        title: '🔐 Syncing native project so the public key is bundled',
-        runner: pm.runner,
-        args: ['cap', 'sync'],
-        cwd: projectDir,
-      })
+      const syncResult = await runTrackedInitMutation(
+        () => streamCommandInInitPanel({
+          title: '🔐 Syncing native project so the public key is bundled',
+          runner: pm.runner,
+          args: ['cap', 'sync'],
+          cwd: projectDir,
+        }),
+        { startDir: projectDir, isSuccess: result => result.success },
+      )
       // Small dwell so the user can read the final state of the panel
       // (success banner or the last few lines of an error) before we
       // tear it down and move on.
@@ -4165,12 +4244,15 @@ async function runBuildAndSyncLoop(
       // understand that the next streamed command is the native sync.
       await delay(1500)
 
-      const syncResult = await streamCommandInInitPanel({
-        title: `Syncing ${platform.toUpperCase()} native project`,
-        runner: pm.runner,
-        args: ['cap', 'sync', platform],
-        cwd: buildAndSyncCwd,
-      })
+      const syncResult = await runTrackedInitMutation(
+        () => streamCommandInInitPanel({
+          title: `Syncing ${platform.toUpperCase()} native project`,
+          runner: pm.runner,
+          args: ['cap', 'sync', platform],
+          cwd: buildAndSyncCwd,
+        }),
+        { startDir: buildAndSyncCwd, isSuccess: result => result.success },
+      )
       if (!syncResult.success) {
         await delay(3500)
         clearInitStreamingOutput()
@@ -5037,7 +5119,10 @@ async function addCodeChangeStep(orgId: string, apikey: string, appId: string, p
           const content = readFileSync(filePath, 'utf8')
           const appliedChange = applyInitAutoTestChange(relativeFilePath, content)
           if (appliedChange) {
-            writeFileSync(filePath, appliedChange.content, 'utf8')
+            await runTrackedInitMutation(
+              () => writeFileSync(filePath, appliedChange.content, 'utf8'),
+              { startDir: projectDir },
+            )
             const displayPath = formatInitFilePath(filePath)
             s.stop(`✅ Made test changes to ${displayPath}`)
             pLog.info(`📝 Added visible test modification to verify the update works`)
@@ -5233,7 +5318,10 @@ async function maybeOfferAutoTestCleanup(orgId: string, apikey: string, appId: s
           pLog.warn(`Could not automatically revert ${autoTestChange.displayPath}. Please revert it manually.`)
         }
         else {
-          writeFileSync(autoTestChange.filePath, revertedContent, 'utf8')
+          await runTrackedInitMutation(
+            () => writeFileSync(autoTestChange.filePath, revertedContent, 'utf8'),
+            { startDir: dirname(autoTestChange.filePath) },
+          )
           pLog.success(`Reverted ${autoTestChange.displayPath} ✅`)
           reverted = true
           globalAutoTestChange = undefined
@@ -5701,15 +5789,18 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
       }
     }
     else {
-      extConfig = await withTemporaryCwd(getInitConfigLoadDir(selectedProjectDir), () => updateConfigUpdater({
-        statsUrl: `${options.supaHost}/functions/v1/stats`,
-        channelUrl: `${options.supaHost}/functions/v1/channel_self`,
-        updateUrl: `${options.supaHost}/functions/v1/updates`,
-        localApiFiles: `${options.supaHost}/functions/v1`,
-        localS3: true,
-        localSupa: options.supaHost,
-        localSupaAnon: options.supaAnon,
-      }))
+      extConfig = await runTrackedInitMutation(
+        () => withTemporaryCwd(getInitConfigLoadDir(selectedProjectDir), () => updateConfigUpdater({
+          statsUrl: `${options.supaHost}/functions/v1/stats`,
+          channelUrl: `${options.supaHost}/functions/v1/channel_self`,
+          updateUrl: `${options.supaHost}/functions/v1/updates`,
+          localApiFiles: `${options.supaHost}/functions/v1`,
+          localS3: true,
+          localSupa: options.supaHost,
+          localSupaAnon: options.supaAnon,
+        })),
+        { startDir: selectedProjectDir },
+      )
     }
   }
   await reloadSelectedProjectConfig()

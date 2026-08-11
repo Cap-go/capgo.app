@@ -2,9 +2,9 @@
 
 import assert from 'node:assert/strict'
 import { execSync, spawn } from 'node:child_process'
-import { lstatSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import {
   applyInitAutoTestChange,
   beginFreshInitProgress,
@@ -28,6 +28,7 @@ import {
   restoreInitProgressState,
   revertInitAutoTestChangeContent,
   runInheritedCommand,
+  trackInitGitChanges,
   tryResumeOnboarding,
 } from '../src/init/command.ts'
 import {
@@ -55,6 +56,29 @@ function withTempDir(fn) {
   finally {
     rmSync(root, { recursive: true, force: true })
   }
+}
+
+async function withTempDirAsync(fn) {
+  const root = mkdtempSync(join(tmpdir(), 'capgo-init-guardrails-'))
+  try {
+    await fn(root)
+  }
+  finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
+function initializeGitRepo(root, files) {
+  execSync('git init', { cwd: root, stdio: 'ignore' })
+  execSync('git config user.email "test@example.com"', { cwd: root, stdio: 'ignore' })
+  execSync('git config user.name "Test User"', { cwd: root, stdio: 'ignore' })
+  execSync('git config commit.gpgsign false', { cwd: root, stdio: 'ignore' })
+  for (const [filePath, content] of Object.entries(files)) {
+    mkdirSync(dirname(join(root, filePath)), { recursive: true })
+    writeFileSync(join(root, filePath), content, 'utf8')
+  }
+  execSync('git add .', { cwd: root, stdio: 'ignore' })
+  execSync('git commit -m "init"', { cwd: root, stdio: 'ignore' })
 }
 
 function tryCreateTestSymlink(target, filePath) {
@@ -795,6 +819,152 @@ async function tAsync(name, fn) {
     console.error(error)
   }
 }
+
+await tAsync('git mutation tracker attributes only changes made inside one async operation window', async () => {
+  await withTempDirAsync(async (root) => {
+    initializeGitRepo(root, {
+      'src/main.ts': 'console.log(\'initial\')\n',
+      'package.json': '{"name":"example","dependencies":{}}\n',
+      'package-lock.json': '{"name":"example","lockfileVersion":3}\n',
+    })
+    writeFileSync(join(root, 'src/main.ts'), 'console.log(\'user edit\')\n', 'utf8')
+    let calls = 0
+
+    const tracked = await trackInitGitChanges(undefined, async () => {
+      calls += 1
+      await Promise.resolve()
+      writeFileSync(join(root, 'package.json'), '{"name":"example","dependencies":{"@capgo/capacitor-updater":"latest"}}\n', 'utf8')
+      writeFileSync(join(root, 'package-lock.json'), '{"name":"example","lockfileVersion":3,"packages":{"capgo":{}}}\n', 'utf8')
+      return 'installed'
+    }, { startDir: root })
+
+    assert.equal(calls, 1)
+    assert.equal(tracked.result, 'installed')
+    assert.deepEqual(Object.keys(tracked.gitChanges?.files ?? {}).sort(), ['package-lock.json', 'package.json'])
+  })
+})
+
+await tAsync('git mutation tracker propagates the same error without changing existing state', async () => {
+  await withTempDirAsync(async (root) => {
+    initializeGitRepo(root, { 'package.json': '{"name":"example"}\n' })
+    writeFileSync(join(root, 'package.json'), '{"name":"saved"}\n', 'utf8')
+    const existing = captureInitGitSnapshot(root)
+    const original = structuredClone(existing)
+    const expectedError = new Error('mutation failed')
+    let calls = 0
+    let caught
+
+    try {
+      await trackInitGitChanges(existing, async () => {
+        calls += 1
+        writeFileSync(join(root, 'package.json'), '{"name":"partial"}\n', 'utf8')
+        throw expectedError
+      }, { startDir: root })
+    }
+    catch (error) {
+      caught = error
+    }
+
+    assert.equal(calls, 1)
+    assert.equal(caught, expectedError)
+    assert.deepEqual(existing, original)
+  })
+})
+
+await tAsync('git mutation tracker rejects partially-mutating unsuccessful results', async () => {
+  await withTempDirAsync(async (root) => {
+    initializeGitRepo(root, { 'package.json': '{"name":"example"}\n' })
+    writeFileSync(join(root, 'package.json'), '{"name":"saved"}\n', 'utf8')
+    const existing = captureInitGitSnapshot(root)
+    const original = structuredClone(existing)
+
+    const tracked = await trackInitGitChanges(existing, () => {
+      writeFileSync(join(root, 'package.json'), '{"name":"partial"}\n', 'utf8')
+      return { success: false }
+    }, {
+      startDir: root,
+      isSuccess: result => result.success,
+    })
+
+    assert.deepEqual(tracked.result, { success: false })
+    assert.equal(tracked.gitChanges, existing)
+    assert.deepEqual(existing, original)
+  })
+})
+
+await tAsync('git mutation tracker prunes a user-changed fingerprint without re-attributing a later mutation', async () => {
+  await withTempDirAsync(async (root) => {
+    initializeGitRepo(root, { 'package.json': '{"name":"example"}\n' })
+    const first = await trackInitGitChanges(undefined, () => {
+      writeFileSync(join(root, 'package.json'), '{"name":"capgo-first"}\n', 'utf8')
+    }, { startDir: root })
+    assert.deepEqual(Object.keys(first.gitChanges?.files ?? {}), ['package.json'])
+
+    writeFileSync(join(root, 'package.json'), '{"name":"user-edit"}\n', 'utf8')
+    const second = await trackInitGitChanges(first.gitChanges, () => {
+      writeFileSync(join(root, 'package.json'), '{"name":"capgo-second"}\n', 'utf8')
+    }, { startDir: root })
+
+    assert.equal(second.gitChanges, undefined)
+  })
+})
+
+await tAsync('git mutation tracker retains existing fingerprints when capture is unavailable', async () => {
+  await withTempDirAsync(async (root) => {
+    const existing = {
+      version: 1,
+      repoRoot: '/existing/repo',
+      files: {
+        'package.json': { status: ' M', sha256: 'a'.repeat(64), mode: 0o100644 },
+      },
+    }
+
+    const tracked = await trackInitGitChanges(existing, () => {
+      writeFileSync(join(root, 'new-file.txt'), 'not in a git repo\n', 'utf8')
+      return 'done'
+    }, { startDir: root })
+
+    assert.equal(tracked.result, 'done')
+    assert.deepEqual(tracked.gitChanges, existing)
+    assert.deepEqual(Object.keys(tracked.gitChanges?.files ?? {}), ['package.json'])
+  })
+})
+
+t('automatic onboarding mutations use narrow tracking windows and user-controlled work stays outside them', () => {
+  const source = readFileSync(new URL('../src/init/command.ts', import.meta.url), 'utf8')
+  const sourceBetween = (start, end) => {
+    const startIndex = source.indexOf(start)
+    const endIndex = end ? source.indexOf(end, startIndex + start.length) : source.length
+    assert.notEqual(startIndex, -1, start)
+    assert.notEqual(endIndex, -1, end ?? 'end of file')
+    return source.slice(startIndex, endIndex)
+  }
+  const trackedCallCount = body => body.match(/\brunTrackedInitMutation\s*\(/g)?.length ?? 0
+  const coverage = [
+    ['updater dependency install', 'function runUpdaterInstallCommand(', 'function logUpdaterInstallStateDetails(', 1],
+    ['Capacitor package installs and init', 'async function maybeRunCapacitorInit(', 'async function runCapacitorPlatformAdd(', 3],
+    ['Capacitor platform add', 'async function runCapacitorPlatformAdd(', 'async function runCreateAppTemplate(', 1],
+    ['app-ID config update', 'async function saveAppIdToCapacitorConfig(', 'async function syncPendingAppIdToCapacitorConfig(', 1],
+    ['pending app-ID config sync', 'async function syncPendingAppIdToCapacitorConfig(', 'function logBrokenIosSync(', 1],
+    ['native reset delete/add/sync sequence', 'async function runNativeResetCommand(', 'async function waitForReadyConfirmation(', 1],
+    ['pending-app Capacitor init', 'async function ensureCapacitorProjectReady(', 'async function selectPendingOnboardingApp(', 1],
+    ['updater config update', 'async function addUpdaterStep(', 'async function addCodeStep(', 1],
+    ['source-code injection write', 'async function addCodeStep(', 'async function addEncryptionStep(', 1],
+    ['key creation and encryption sync', 'async function addEncryptionStep(', 'async function streamCommandInInitPanel(', 2],
+    ['primary automatic native sync', 'async function runBuildAndSyncLoop(', 'async function runProjectBuildAndSync(', 1],
+    ['updater test write', 'async function addCodeChangeStep(', 'function getSuggestedCleanupBundleVersion(', 1],
+    ['updater test cleanup write', 'async function maybeOfferAutoTestCleanup(', 'async function uploadStep(', 1],
+    ['self-host config update', 'export async function initApp(', undefined, 1],
+  ]
+
+  for (const [name, start, end, expectedCalls] of coverage)
+    assert.equal(trackedCallCount(sourceBetween(start, end)), expectedCalls, name)
+
+  assert.equal(trackedCallCount(sourceBetween('async function waitUntilSetupIsDone(', 'async function askForAppName(')), 0, 'manual setup wait')
+  assert.equal(trackedCallCount(sourceBetween('async function waitForReadyConfirmation(', 'async function waitForReadyRetry(')), 0, 'manual ready wait')
+  assert.equal(trackedCallCount(sourceBetween('async function runDeviceStep(', 'async function addCodeChangeStep(')), 0, 'cap run')
+  assert.equal(trackedCallCount(sourceBetween('const buildResult = await streamCommandInInitPanel({', '// Keep the completed build output visible')), 0, 'project build')
+})
 
 await tAsync('live git cleanliness gate filters trusted changes without weakening the existing prompt', async () => {
   const repoRoot = '/repo'
