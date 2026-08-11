@@ -1,4 +1,12 @@
 -- Shared app/channel scope resolution for the direct RBAC checkers.
+-- Execution profile (RLS / hot console paths, not plugin /updates):
+-- - Called once per rbac_check_permission_direct(_no_password_policy) invocation.
+-- - Roles: authenticated + anon via SECURITY DEFINER owners; helper itself
+--   granted only to service_role (callers are DEFINER).
+-- - Lookups: optional apps by primary key app_id; optional channels by PK id.
+-- - Cardinality: apps/channels are console-scale (thousands), not plugin-hot.
+-- - Indexes: apps_pkey(app_id), channels_pkey(id) — Index Scan / Index Only Scan
+--   in EXPLAIN (ANALYZE, BUFFERS) on local seed data.
 CREATE OR REPLACE FUNCTION public.rbac_resolve_permission_scope(
   p_org_id uuid,
   p_app_id character varying,
@@ -83,7 +91,10 @@ GRANT ALL ON FUNCTION public.rbac_resolve_permission_scope(uuid, character varyi
   TO service_role;
 
 COMMENT ON FUNCTION public.rbac_resolve_permission_scope(uuid, character varying, bigint)
-IS 'Resolves effective org/app scope for RBAC permission checks. Returns ok=false when the app or channel is missing or conflicts with the requested org/app.';
+IS 'Resolves effective org/app scope for RBAC permission checks. '
+   'Called once per direct permission check (RLS/console). '
+   'Optional PK lookups on apps.app_id and channels.id '
+   '(apps_pkey, channel_pkey). Returns ok=false on missing/conflicting scope.';
 
 CREATE OR REPLACE FUNCTION public.rbac_check_permission_direct(
   p_permission_key text,
@@ -106,6 +117,10 @@ DECLARE
   v_channel_scope boolean := p_channel_id IS NOT NULL;
   v_override boolean;
   v_scope_ok boolean;
+  v_uid uuid := auth.uid();
+  v_header_apikey text := NULLIF(btrim(public.get_apikey_header()), '');
+  v_request_apikey text := NULLIF(btrim(p_apikey), '');
+  v_use_apikey boolean;
 BEGIN
   IF p_permission_key IS NULL OR p_permission_key = '' THEN
     RETURN false;
@@ -119,14 +134,22 @@ BEGIN
     RETURN false;
   END IF;
 
-  -- Explicit p_apikey selects the API-key principal (no 2FA/password gates).
-  -- JWT-vs-capgkey selection for request/RLS callers lives in
-  -- rbac_check_permission_request, which passes NULL p_apikey when auth.uid() is set.
-  IF p_apikey IS NOT NULL
-    AND btrim(p_apikey) <> ''
-  THEN
+  -- Explicit p_apikey selects the API-key principal (no 2FA/password gates),
+  -- except when a JWT user is authenticated and p_apikey is only the request
+  -- capgkey header forwarded by a DEFINER caller (same value as get_apikey_header).
+  -- In that case prefer the JWT user principal. Intentional key checks pass a
+  -- key that is not the current request header (or no JWT).
+  -- RLS wrappers should pass NULL via rbac_check_permission_request when JWT.
+  v_use_apikey := v_request_apikey IS NOT NULL
+    AND NOT (
+      v_uid IS NOT NULL
+      AND p_user_id IS NOT DISTINCT FROM v_uid
+      AND v_request_apikey IS NOT DISTINCT FROM v_header_apikey
+    );
+
+  IF v_use_apikey THEN
     SELECT * INTO v_api_key
-    FROM public.find_apikey_by_value(p_apikey)
+    FROM public.find_apikey_by_value(v_request_apikey)
     LIMIT 1;
 
     IF v_api_key.id IS NULL
@@ -218,7 +241,10 @@ COMMENT ON FUNCTION public.rbac_check_permission_direct(
   character varying,
   bigint,
   text
-) IS 'Direct RBAC permission check. Non-empty p_apikey selects the API-key principal; otherwise the user principal is used. Applies channel overrides and password/2FA gates for user checks. JWT-vs-capgkey selection for RLS is handled by rbac_check_permission_request.';
+) IS 'Direct RBAC permission check. Non-empty p_apikey selects the API-key '
+   'principal unless it is only the request capgkey while JWT auth.uid() matches '
+   'p_user_id (prefer JWT). Applies channel overrides and password/2FA for users. '
+   'RLS should use rbac_check_permission_request.';
 
 CREATE OR REPLACE FUNCTION public.rbac_check_permission_direct_no_password_policy(
   p_permission_key text,
@@ -238,6 +264,10 @@ DECLARE
   v_effective_app_id character varying;
   v_api_key public.apikeys%ROWTYPE;
   v_scope_ok boolean;
+  v_uid uuid := auth.uid();
+  v_header_apikey text := NULLIF(btrim(public.get_apikey_header()), '');
+  v_request_apikey text := NULLIF(btrim(p_apikey), '');
+  v_use_apikey boolean;
 BEGIN
   IF p_permission_key IS NULL OR p_permission_key = '' THEN
     RETURN false;
@@ -251,11 +281,16 @@ BEGIN
     RETURN false;
   END IF;
 
-  IF p_apikey IS NOT NULL
-    AND btrim(p_apikey) <> ''
-  THEN
+  v_use_apikey := v_request_apikey IS NOT NULL
+    AND NOT (
+      v_uid IS NOT NULL
+      AND p_user_id IS NOT DISTINCT FROM v_uid
+      AND v_request_apikey IS NOT DISTINCT FROM v_header_apikey
+    );
+
+  IF v_use_apikey THEN
     SELECT * INTO v_api_key
-    FROM public.find_apikey_by_value(p_apikey)
+    FROM public.find_apikey_by_value(v_request_apikey)
     LIMIT 1;
 
     IF v_api_key.id IS NULL
@@ -304,6 +339,17 @@ BEGIN
 END;
 $$;
 
+COMMENT ON FUNCTION public.rbac_check_permission_direct_no_password_policy(
+  text,
+  uuid,
+  uuid,
+  character varying,
+  bigint,
+  text
+) IS 'Same as rbac_check_permission_direct but skips the password-policy gate. '
+   'Non-empty p_apikey selects the API-key principal unless it is only the '
+   'request capgkey while JWT auth.uid() matches p_user_id.';
+
 CREATE OR REPLACE FUNCTION public.rbac_check_permission_request(
   p_permission_key text,
   p_org_id uuid DEFAULT NULL::uuid,
@@ -336,4 +382,6 @@ COMMENT ON FUNCTION public.rbac_check_permission_request(
   uuid,
   character varying,
   bigint
-) IS 'Request-aware RBAC permission wrapper for RLS and SQL callers. Authenticated JWT requests evaluate the user principal; anonymous capgkey requests evaluate the API-key principal.';
+) IS 'Request-aware RBAC permission wrapper for RLS and SQL callers. '
+   'Authenticated JWT requests evaluate the user principal; '
+   'anonymous capgkey requests evaluate the API-key principal.';

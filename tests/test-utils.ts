@@ -957,15 +957,39 @@ export async function withAuthenticatedUser<T>(
   userId: string,
   fn: (client: PoolClient) => Promise<T>,
 ): Promise<T> {
-  const client = await db.connect()
-  try {
-    await client.query('BEGIN')
+  return withLocalRoleClient(db, async (client) => {
     await client.query('SET LOCAL ROLE authenticated')
     await client.query('SELECT set_config($1, $2, true)', ['request.jwt.claim.sub', userId])
     await client.query('SELECT set_config($1, $2, true)', [
       'request.jwt.claims',
       JSON.stringify({ sub: userId, role: 'authenticated', aud: 'authenticated' }),
     ])
+    return fn(client)
+  })
+}
+
+export async function withAnonymousCapgkey<T>(
+  db: Pool,
+  capgkey: string,
+  fn: (client: PoolClient) => Promise<T>,
+): Promise<T> {
+  return withLocalRoleClient(db, async (client) => {
+    await client.query('SET LOCAL ROLE anon')
+    await client.query('SELECT set_config($1, $2, true)', [
+      'request.headers',
+      JSON.stringify({ capgkey }),
+    ])
+    return fn(client)
+  })
+}
+
+async function withLocalRoleClient<T>(
+  db: Pool,
+  fn: (client: PoolClient) => Promise<T>,
+): Promise<T> {
+  const client = await db.connect()
+  try {
+    await client.query('BEGIN')
     const result = await fn(client)
     await client.query('COMMIT')
     return result

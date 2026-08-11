@@ -1,8 +1,13 @@
-import type { PoolClient } from 'pg'
 import { randomUUID } from 'node:crypto'
 import { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { POSTGRES_URL, USER_ID, USER_ID_2, withAuthenticatedUser } from './test-utils.ts'
+import {
+  POSTGRES_URL,
+  USER_ID,
+  USER_ID_2,
+  withAnonymousCapgkey,
+  withAuthenticatedUser,
+} from './test-utils.ts'
 
 const INVALID_CAPGKEY = '00000000-0000-0000-0000-000000000000'
 const fixtureId = randomUUID()
@@ -10,36 +15,6 @@ const orgId = randomUUID()
 const validApiKey = randomUUID()
 
 let pool: Pool
-
-async function withAnonymousCapgkey<T>(
-  capgkey: string,
-  fn: (client: PoolClient) => Promise<T>,
-): Promise<T> {
-  const client = await pool.connect()
-  try {
-    await client.query('BEGIN')
-    await client.query('SET LOCAL ROLE anon')
-    await client.query('SELECT set_config($1, $2, true)', [
-      'request.headers',
-      JSON.stringify({ capgkey }),
-    ])
-    const result = await fn(client)
-    await client.query('COMMIT')
-    return result
-  }
-  catch (error) {
-    try {
-      await client.query('ROLLBACK')
-    }
-    catch {
-      // Ignore rollback failures for clearer root error handling.
-    }
-    throw error
-  }
-  finally {
-    client.release()
-  }
-}
 
 beforeAll(async () => {
   pool = new Pool({ connectionString: POSTGRES_URL })
@@ -96,6 +71,7 @@ beforeAll(async () => {
 afterAll(async () => {
   const client = await pool.connect()
   try {
+    await client.query('DELETE FROM public.apikeys WHERE key = $1', [validApiKey])
     await client.query('DELETE FROM public.orgs WHERE id = $1::uuid', [orgId])
   }
   finally {
@@ -168,7 +144,7 @@ describe('rbac JWT priority over capgkey', () => {
   })
 
   it.concurrent('authorizes anonymous requests with a valid capgkey', async () => {
-    const allowed = await withAnonymousCapgkey(validApiKey, async (client) => {
+    const allowed = await withAnonymousCapgkey(pool, validApiKey, async (client) => {
       const result = await client.query(`
         SELECT public.rbac_check_permission_request(
           public.rbac_perm_org_update_user_roles(),
@@ -185,7 +161,7 @@ describe('rbac JWT priority over capgkey', () => {
   })
 
   it.concurrent('denies anonymous requests with an invalid capgkey', async () => {
-    const allowed = await withAnonymousCapgkey(INVALID_CAPGKEY, async (client) => {
+    const allowed = await withAnonymousCapgkey(pool, INVALID_CAPGKEY, async (client) => {
       const result = await client.query(`
         SELECT public.rbac_check_permission_request(
           public.rbac_perm_org_update_user_roles(),
@@ -199,5 +175,29 @@ describe('rbac JWT priority over capgkey', () => {
     })
 
     expect(allowed).toBe(false)
+  })
+
+  it.concurrent('prefers JWT over header-sourced apikey in direct checks', async () => {
+    const allowed = await withAuthenticatedUser(pool, USER_ID, async (client) => {
+      await client.query(
+        'SELECT set_config($1, $2, true)',
+        ['request.headers', JSON.stringify({ capgkey: INVALID_CAPGKEY })],
+      )
+
+      const result = await client.query(`
+        SELECT public.rbac_check_permission_direct(
+          public.rbac_perm_org_update_user_roles(),
+          $1::uuid,
+          $2::uuid,
+          NULL::character varying,
+          NULL::bigint,
+          $3
+        ) AS allowed
+      `, [USER_ID, orgId, INVALID_CAPGKEY])
+
+      return result.rows[0]?.allowed as boolean
+    })
+
+    expect(allowed).toBe(true)
   })
 })
