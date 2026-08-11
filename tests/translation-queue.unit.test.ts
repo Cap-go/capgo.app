@@ -88,9 +88,13 @@ describe('translation queue helpers', () => {
     expect(__translationWorkerTestUtils__.keepTranslation('Save ', 'Save ')).toBe('Save ')
     expect(__translationWorkerTestUtils__.unwrapTranslatedMessage('{"text":" "}')).toBeNull()
     expect(__translationWorkerTestUtils__.unwrapTranslatedMessage({ text: ' ' })).toBeNull()
+    expect(__translationWorkerTestUtils__.unwrapTranslatedMessage('{}')).toBeNull()
+    expect(__translationWorkerTestUtils__.unwrapTranslatedMessage('{"context":"x"}')).toBeNull()
+    expect(__translationWorkerTestUtils__.keepTranslation('Password', '{}')).toBe('Password')
     expect(__translationWorkerTestUtils__.keepTranslation('Password', '{"text":" "}')).toBe('Password')
     expect(__translationWorkerTestUtils__.keepTranslation('Password', { text: 'Mot de passe ' })).toBe('Mot de passe ')
     expect(__translationWorkerTestUtils__.unwrapTranslatedMessage({ text: ' Mot de passe ' })).toBe(' Mot de passe ')
+    expect(__translationWorkerTestUtils__.unwrapTranslatedMessage('{not-json')).toBe('{not-json')
   })
 
   it.concurrent('parses object-shaped translation values from Workers AI', () => {

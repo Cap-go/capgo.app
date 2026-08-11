@@ -341,11 +341,13 @@ function unwrapTranslatedMessage(translated: unknown): string | null {
       return translated
 
     const parsed = parseJsonCandidate(trimmedForParse)
-    const record = recordOf(parsed)
-    if (!record || typeof record.text !== 'string')
+    if (parsed === undefined)
       return translated
 
-    if (!record.text.trim())
+    const record = recordOf(parsed)
+    if (!record)
+      return translated
+    if (typeof record.text !== 'string' || !record.text.trim())
       return null
 
     return record.text

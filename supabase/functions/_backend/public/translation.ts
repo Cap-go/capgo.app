@@ -175,9 +175,9 @@ function unwrapTranslatedMessage(translated: unknown): string | null {
     try {
       const parsed = JSON.parse(trimmedForParse) as unknown
       const record = recordOf(parsed)
-      if (!record || typeof record.text !== 'string')
+      if (!record)
         return translated
-      if (!record.text.trim())
+      if (typeof record.text !== 'string' || !record.text.trim())
         return null
       return record.text
     }
