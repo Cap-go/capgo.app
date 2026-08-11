@@ -664,6 +664,15 @@ describe('logsnag revenue metric helpers', () => {
     })).toBe(2490 / 12)
   })
 
+  it.concurrent('keeps active Stripe trials out of MRR until trial_at passes', () => {
+    const snapshotEnd = new Date('2026-08-11T00:00:00.000Z')
+
+    expect(logsnagInsightsTestUtils.hasLeftTrialAtSnapshot(null, snapshotEnd)).toBe(true)
+    expect(logsnagInsightsTestUtils.hasLeftTrialAtSnapshot('2026-08-10T23:59:59.999Z', snapshotEnd)).toBe(true)
+    expect(logsnagInsightsTestUtils.hasLeftTrialAtSnapshot('2026-08-11T00:00:00.000Z', snapshotEnd)).toBe(true)
+    expect(logsnagInsightsTestUtils.hasLeftTrialAtSnapshot('2026-08-11T00:00:00.001Z', snapshotEnd)).toBe(false)
+  })
+
   it.concurrent('normalizes snapshot billing counts from SQL rows', () => {
     expect(logsnagInsightsTestUtils.normalizeBillingSnapshotCounts([
       {
