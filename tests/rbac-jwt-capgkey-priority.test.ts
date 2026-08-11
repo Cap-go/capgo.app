@@ -22,6 +22,8 @@ beforeAll(async () => {
   try {
     await client.query('BEGIN')
 
+    // Org insert triggers grant USER_ID the user-principal org_super_admin binding
+    // (generate_org_user_on_org_create / generate_org_user_stripe_info_on_org_create).
     await client.query(`
       INSERT INTO public.orgs (id, created_by, name, management_email)
       VALUES ($1::uuid, $2::uuid, $3, $4)
@@ -40,6 +42,7 @@ beforeAll(async () => {
     const apiKeyRbacId = apiKeyResult.rows[0]?.rbac_id as string
     expect(apiKeyRbacId).toBeTruthy()
 
+    // Separate apikey-principal binding: anon capgkey path + JWT-vs-key isolation cases.
     await client.query(`
       INSERT INTO public.role_bindings (
         principal_type, principal_id, role_id, scope_type, org_id, granted_by, is_direct
