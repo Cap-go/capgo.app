@@ -7,7 +7,7 @@ import { createClient } from '@supabase/supabase-js'
 import subset from 'semver/ranges/subset'
 import { ref } from 'vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
-import { getFirstTierCreditUnitPricing, sortCreditPricingSteps } from './creditPricing'
+import { sortCreditPricingSteps } from './creditPricing'
 
 let supaClient: SupabaseClient<Database> = null as any
 
