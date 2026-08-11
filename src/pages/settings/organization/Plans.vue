@@ -10,10 +10,12 @@ import IconArrowRight from '~icons/lucide/arrow-right'
 import IconCheckCircle from '~icons/lucide/check-circle'
 import CreditsCta from '~/components/CreditsCta.vue'
 import RbacPermissionOnlyModal from '~/components/RbacPermissionOnlyModal.vue'
+import { useBillingPaidAt } from '~/composables/useBillingPaidAt'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { formatIncludedThenPrice } from '~/services/creditPricing'
 import { formatNumberValue } from '~/services/formatLocale'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
+import { shouldShowExpiredTrialPlansState, shouldShowPlanFailureBanner } from '~/services/paymentRequired'
 import { checkPermissions } from '~/services/permissions'
 import { createPlansVisitTracker } from '~/services/plansVisitTracking'
 import { getAffonsoReferral, getDatafastAttribution, openCheckout } from '~/services/stripe'
@@ -49,6 +51,14 @@ const showAdminModal = ref(false)
 
 const { currentOrganization } = storeToRefs(organizationStore)
 const creditUnitPrices = ref<Partial<Record<Database['public']['Enums']['credit_metric_type'], number>>>({})
+const billingOrgId = computed(() => currentOrganization.value?.gid)
+const { paidAt, billingLookupFailed } = useBillingPaidAt(billingOrgId, isMobile)
+const showExpiredTrialState = computed(() => {
+  return shouldShowExpiredTrialPlansState(organizationStore.currentOrganizationFailed, isMobile, paidAt.value)
+})
+const showPlanFailureBanner = computed(() => {
+  return shouldShowPlanFailureBanner(organizationStore.currentOrganizationFailed, isMobile, paidAt.value, billingLookupFailed.value)
+})
 
 interface PlanFeature {
   label: string
@@ -457,6 +467,8 @@ function buttonName(p: Database['public']['Tables']['plans']['Row']) {
   if (currentPlan.value?.name === p.name && currentOrganization.value?.paying && currentOrganization.value?.is_yearly === isYearly.value) {
     return t('Current')
   }
+  if (showExpiredTrialState.value)
+    return t('choose-plan-name', { plan: p.name })
   if (isTrial.value || organizationStore.currentOrganizationFailed) {
     return t('plan-upgrade')
   }
@@ -469,6 +481,8 @@ function isDisabled(plan: Database['public']['Tables']['plans']['Row']) {
 }
 
 function isRecommended(p: Database['public']['Tables']['plans']['Row']) {
+  if (showExpiredTrialState.value)
+    return false
   return currentPlanSuggest.value?.name === p.name && (currentPlanSuggest.value?.price_m ?? 0) > (currentPlan.value?.price_m ?? 0)
 }
 function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
@@ -490,7 +504,7 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
         <div class="flex-1">
           <div class="flex items-center gap-3">
             <h1 class="text-3xl font-bold text-gray-900 dark:text-white">
-              {{ t('plan-pricing-plans') }}
+              {{ t(showExpiredTrialState ? 'trial-ended-title' : 'plan-pricing-plans') }}
             </h1>
             <span
               v-if="isCreditsOnly"
@@ -508,7 +522,7 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
             </button>
           </div>
           <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-            {{ isCreditsOnly ? t('credits-only-plan-page-desc') : t('plan-desc') }}
+            {{ t(showExpiredTrialState ? 'trial-ended-plans-description' : isCreditsOnly ? 'credits-only-plan-page-desc' : 'plan-desc') }}
           </p>
           <p v-if="!isMobile" class="mt-2 text-sm">
             <a class="font-medium text-blue-600 hover:underline dark:text-blue-300" href="https://capgo.app/pricing/#compare-plans">
@@ -538,7 +552,7 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
       </div>
 
       <!-- Error Message -->
-      <div v-if="organizationStore.currentOrganizationFailed" class="px-4 py-2 mb-4 font-medium text-center text-white bg-red-500 rounded-lg shrink-0">
+      <div v-if="showPlanFailureBanner" class="px-4 py-2 mb-4 font-medium text-center text-white bg-red-500 rounded-lg shrink-0">
         {{ t('plan-failed') }}
       </div>
 
@@ -553,7 +567,7 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
           :class="[
             // Don't highlight the plan card for credits-only orgs — they are not actually
             // on any plan, and highlighting Solo (the fallback) would be misleading.
-            p.name === currentPlan?.name && !isCreditsOnly ? 'border-2 border-blue-500' : 'border-gray-200 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-700',
+            p.name === currentPlan?.name && !isCreditsOnly && !showExpiredTrialState ? 'border-2 border-blue-500' : 'border-gray-200 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-700',
             isRecommended(p) ? 'shadow-lg shadow-blue-500/10' : 'shadow-sm',
           ]"
         >

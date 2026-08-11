@@ -18,6 +18,7 @@ export const adminTabs: Tab[] = [
   { label: 'plugins', icon: IconPuzzle, key: '/plugins' },
   { label: 'cli', icon: IconCommandLine, key: '/cli' },
   { label: 'users', icon: IconUsers, key: '/users' },
+  { label: 'frontend-onboarding', icon: IconChartBar, key: '/frontend-onboarding' },
   { label: 'admin-organizations', icon: IconBuildingOffice, key: '/organizations' },
   { label: 'revenue', icon: IconBanknotes, key: '/revenue' },
   { label: 'plans-analytics-title', icon: IconChartBar, key: '/plans' },
