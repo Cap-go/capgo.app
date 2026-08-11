@@ -132,6 +132,8 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
   })
 
   it.each([
+    { configured: false, connected: true, failureReason: null },
+    { configured: true, connected: false, failureReason: null },
     { configured: false, connected: false, failureReason: 'unconfigured' },
     { configured: true, connected: false, failureReason: 'unavailable' },
     { configured: true, connected: false, failureReason: 'timeout' },
