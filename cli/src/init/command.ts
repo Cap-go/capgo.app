@@ -393,60 +393,51 @@ function isGitObjectId(value: string) {
   return /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(value)
 }
 
-function getInitGitIndexMode(repoRoot: string, filePath: string): string | null | undefined {
-  const indexResult = spawnSync('git', ['--literal-pathspecs', 'ls-files', '--stage', '-z', '--', filePath], {
-    cwd: repoRoot,
-    stdio: 'pipe',
-    encoding: 'utf8',
-  })
-  if (indexResult.error || indexResult.status !== 0)
-    return undefined
-
-  const output = indexResult.stdout?.toString() ?? ''
-  if (!output)
-    return null
-  if (!output.endsWith('\0'))
-    return undefined
-
-  const entries = output.slice(0, -1).split('\0')
-  if (entries.length !== 1)
-    return undefined
-  const separatorIndex = entries[0].indexOf('\t')
-  if (separatorIndex < 1 || entries[0].slice(separatorIndex + 1) !== filePath)
-    return undefined
-  const metadata = entries[0].slice(0, separatorIndex).split(' ')
-  if (metadata.length !== 3)
-    return undefined
-  const [mode, objectId, stage] = metadata
-  return /^[0-7]{6}$/.test(mode) && isGitObjectId(objectId) && stage === '0' ? mode : undefined
+interface InitGitStatusRecord {
+  status: string
+  filePath: string
+  headMode: string | null
+  indexMode: string | null
+  worktreeMode: string | null
 }
 
-function isDeletedRegularGitPath(repoRoot: string, filePath: string, indexMode: string | null) {
-  if (indexMode !== null)
-    return isRegularGitBlobMode(indexMode)
+function splitInitGitStatusFields(value: string, count: number) {
+  const fields: string[] = []
+  let offset = 0
+  while (fields.length < count - 1) {
+    const separatorIndex = value.indexOf(' ', offset)
+    if (separatorIndex < 0)
+      return undefined
+    fields.push(value.slice(offset, separatorIndex))
+    offset = separatorIndex + 1
+  }
+  fields.push(value.slice(offset))
+  return fields
+}
 
-  const headResult = spawnSync('git', ['--literal-pathspecs', 'ls-tree', '-z', 'HEAD', '--', filePath], {
-    cwd: repoRoot,
-    stdio: 'pipe',
-    encoding: 'utf8',
-  })
-  if (headResult.error || headResult.status !== 0)
-    return false
+function parseInitGitStatusRecord(value: string): InitGitStatusRecord | undefined {
+  if (value.startsWith('? ')) {
+    const filePath = value.slice(2)
+    return filePath
+      ? { status: '??', filePath, headMode: null, indexMode: null, worktreeMode: null }
+      : undefined
+  }
+  if (!value.startsWith('1 '))
+    return undefined
 
-  const output = headResult.stdout?.toString() ?? ''
-  if (!output.endsWith('\0'))
-    return false
-  const headEntries = output.slice(0, -1).split('\0')
-  if (headEntries.length !== 1)
-    return false
-  const separatorIndex = headEntries[0].indexOf('\t')
-  if (separatorIndex < 1 || headEntries[0].slice(separatorIndex + 1) !== filePath)
-    return false
-  const metadata = headEntries[0].slice(0, separatorIndex).split(' ')
-  if (metadata.length !== 3)
-    return false
-  const [mode, type, objectId] = metadata
-  return isRegularGitBlobMode(mode) && type === 'blob' && isGitObjectId(objectId)
+  const fields = splitInitGitStatusFields(value, 9)
+  if (!fields)
+    return undefined
+  const [, rawStatus, submodule, headMode, indexMode, worktreeMode, headObjectId, indexObjectId, filePath] = fields
+  const status = rawStatus.replaceAll('.', ' ')
+  if (!filePath
+    || !/^[ MADRCUT]{2}$/.test(status)
+    || submodule !== 'N...'
+    || ![headMode, indexMode, worktreeMode].every(mode => /^[0-7]{6}$/.test(mode))
+    || !isGitObjectId(headObjectId)
+    || !isGitObjectId(indexObjectId))
+    return undefined
+  return { status, filePath, headMode, indexMode, worktreeMode }
 }
 
 export function captureInitGitSnapshot(startDir = cwd()): InitGitChanges | undefined {
@@ -463,7 +454,7 @@ export function captureInitGitSnapshot(startDir = cwd()): InitGitChanges | undef
     if (!repoRootValue)
       return undefined
     const repoRoot = realpathSync(repoRootValue)
-    const statusResult = spawnSync('git', ['-c', 'status.renames=copies', 'status', '--porcelain=v1', '-z', '--untracked-files=all'], {
+    const statusResult = spawnSync('git', ['-c', 'status.renames=copies', 'status', '--porcelain=v2', '-z', '--untracked-files=all'], {
       cwd: repoRoot,
       stdio: 'pipe',
       encoding: 'utf8',
@@ -471,14 +462,17 @@ export function captureInitGitSnapshot(startDir = cwd()): InitGitChanges | undef
     if (statusResult.error || statusResult.status !== 0)
       return undefined
 
-    const entries = statusResult.stdout?.toString().split('\0').filter(Boolean) ?? []
+    const statusOutput = statusResult.stdout?.toString() ?? ''
+    if (statusOutput && !statusOutput.endsWith('\0'))
+      return undefined
+    const entries = statusOutput ? statusOutput.slice(0, -1).split('\0') : []
     const files: Record<string, InitGitChangeFingerprint> = {}
     for (const entry of entries) {
-      if (entry.length < 4 || entry[2] !== ' ')
+      const parsedEntry = parseInitGitStatusRecord(entry)
+      if (!parsedEntry)
         return undefined
 
-      const status = entry.slice(0, 2)
-      const filePath = entry.slice(3)
+      const { status, filePath, headMode, indexMode, worktreeMode } = parsedEntry
       if (!filePath || status.includes('R') || status.includes('C') || status.includes('T') || status.includes('U') || status === 'AA' || status === 'DD' || files[filePath])
         return undefined
 
@@ -487,16 +481,16 @@ export function captureInitGitSnapshot(startDir = cwd()): InitGitChanges | undef
       if (pathFromRoot === '..' || pathFromRoot.startsWith(`..${path.sep}`) || path.isAbsolute(pathFromRoot))
         return undefined
 
-      const indexMode = getInitGitIndexMode(repoRoot, filePath)
-      if (indexMode === undefined)
-        return undefined
       if (status.includes('D')) {
-        if (!isDeletedRegularGitPath(repoRoot, filePath, indexMode))
+        const deletedMode = status[0] === 'D' ? headMode : indexMode
+        if (!isRegularGitBlobMode(deletedMode)
+          || (status[0] === 'D' && indexMode !== '000000')
+          || (status[1] === 'D' && worktreeMode !== '000000'))
           return undefined
         files[filePath] = { status, sha256: null, mode: null }
         continue
       }
-      if (status === '??' ? indexMode !== null : !isRegularGitBlobMode(indexMode))
+      if (status !== '??' && (!isRegularGitBlobMode(indexMode) || !isRegularGitBlobMode(worktreeMode)))
         return undefined
 
       const fileStats = lstatSync(absolutePath)

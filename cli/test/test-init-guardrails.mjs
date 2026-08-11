@@ -455,6 +455,36 @@ t('git snapshot fingerprints a deleted regular file with null content and mode',
   })
 })
 
+t('git snapshot handles mixed tracked, untracked, and staged-deleted paths together', () => {
+  withTempDir((root) => {
+    execSync('git init', { cwd: root, stdio: 'ignore' })
+    execSync('git config user.email "test@example.com"', { cwd: root, stdio: 'ignore' })
+    execSync('git config user.name "Test User"', { cwd: root, stdio: 'ignore' })
+    execSync('git config commit.gpgsign false', { cwd: root, stdio: 'ignore' })
+    mkdirSync(join(root, 'src'), { recursive: true })
+    writeFileSync(join(root, 'src', 'tracked file.ts'), 'initial\n', 'utf8')
+    writeFileSync(join(root, 'old file ü.txt'), 'delete me\n', 'utf8')
+    execSync('git add .', { cwd: root, stdio: 'ignore' })
+    execSync('git commit -m "init"', { cwd: root, stdio: 'ignore' })
+
+    unlinkSync(join(root, 'old file ü.txt'))
+    execSync('git add -u', { cwd: root, stdio: 'ignore' })
+    writeFileSync(join(root, 'src', 'tracked file.ts'), 'modified\n', 'utf8')
+    writeFileSync(join(root, 'new file é.txt'), 'untracked\n', 'utf8')
+
+    const snapshot = captureInitGitSnapshot(root)
+    assert.ok(snapshot)
+    assert.deepEqual(Object.keys(snapshot.files).sort(), ['new file é.txt', 'old file ü.txt', 'src/tracked file.ts'])
+    assert.deepEqual(snapshot.files['old file ü.txt'], { status: 'D ', sha256: null, mode: null })
+    assert.equal(snapshot.files['src/tracked file.ts']?.status, ' M')
+    assert.equal(typeof snapshot.files['src/tracked file.ts']?.sha256, 'string')
+    assert.equal(typeof snapshot.files['src/tracked file.ts']?.mode, 'number')
+    assert.equal(snapshot.files['new file é.txt']?.status, '??')
+    assert.equal(typeof snapshot.files['new file é.txt']?.sha256, 'string')
+    assert.equal(typeof snapshot.files['new file é.txt']?.mode, 'number')
+  })
+})
+
 t('git snapshot declines unsupported symlinks and renames', () => {
   withTempDir((root) => {
     execSync('git init', { cwd: root, stdio: 'ignore' })
