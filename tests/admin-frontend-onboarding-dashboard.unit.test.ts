@@ -125,6 +125,16 @@ describe('admin frontend onboarding dashboard', () => {
     expect(buildFrontendOnboardingFunnelSummaries(emptyFunnel).map(stage => stage.conversion_percent)).toEqual([0, 0, 0, 0])
   })
 
+  it.concurrent('shows zero conversion after a stage has dropped to zero', () => {
+    const collapsedFunnel = analytics.funnel.map((stage, index) => ({
+      ...stage,
+      reached: [10, 8, 0, 0][index],
+      dropoff_percent: [0, 20, 100, 0][index],
+    }))
+
+    expect(buildFrontendOnboardingFunnelSummaries(collapsedFunnel).map(stage => stage.conversion_percent)).toEqual([100, 80, 0, 0])
+  })
+
   it.concurrent('formats nullable durations as rounded, nonnegative minutes and seconds', () => {
     expect(formatFrontendOnboardingDuration(222000)).toBe('3m 42s')
     expect(formatFrontendOnboardingDuration(28000)).toBe('28s')

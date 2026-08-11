@@ -128,13 +128,20 @@ export function buildFrontendOnboardingFunnelSummaries(
   funnel: readonly FrontendOnboardingAnalytics['funnel'][number][],
 ): FrontendOnboardingFunnelSummary[] {
   const hasAttempts = (funnel[0]?.reached ?? 0) > 0
-  return funnel.map((stage, index) => ({
-    key: stage.key,
-    conversion_percent: hasAttempts ? (index === 0 ? 100 : 100 - stage.dropoff_percent) : 0,
-    reached: stage.reached,
-    from_label: index === 0 ? null : funnel[index - 1]?.label ?? null,
-    to_label: stage.label,
-  }))
+  return funnel.map((stage, index) => {
+    const previousStage = funnel[index - 1]
+    const conversionPercent = hasAttempts && (index === 0 || (previousStage?.reached ?? 0) > 0)
+      ? (index === 0 ? 100 : 100 - stage.dropoff_percent)
+      : 0
+
+    return {
+      key: stage.key,
+      conversion_percent: conversionPercent,
+      reached: stage.reached,
+      from_label: index === 0 ? null : previousStage?.label ?? null,
+      to_label: stage.label,
+    }
+  })
 }
 
 export function formatFrontendOnboardingDuration(value: number | null): string {
