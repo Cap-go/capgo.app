@@ -4,7 +4,7 @@
 
 **Goal:** Add a read-only `Frontend onboarding` platform-admin page that reports version-1 `pre_org` onboarding attempts, completion, timing, daily volume, and the Intent-to-Setup funnel from PostHog.
 
-**Architecture:** The existing `/private/admin_stats` endpoint dispatches a new `frontend_onboarding_analytics` category to a focused backend orchestrator. A shared backend-only HogQL transport fetches one row per `onboarding_attempt_id`, pure TypeScript summarizes current and previous cohorts, and the existing Pinia admin store supplies the response to a Vue page composed from the existing filter, KPI, stacked-bar, and funnel components.
+**Architecture:** The existing `/private/admin_stats` endpoint dispatches a new `frontend_onboarding_analytics` category to a focused backend orchestrator. The shared backend-only HogQL transport already merged in PR #2976 fetches one row per `onboarding_attempt_id`; pure TypeScript summarizes current and previous cohorts, and the existing Pinia admin store supplies the response to a Vue page composed from the existing filter, KPI, stacked-bar, and funnel components.
 
 **Tech Stack:** Vue 3, Pinia, TypeScript, Hono, PostHog HogQL, Chart.js, Vitest, Bun.
 
@@ -14,21 +14,24 @@
 
 ## File Structure
 
+**Existing dependency from PR #2976 (reuse; do not recreate or modify):**
+
+- `supabase/functions/_backend/utils/posthog_read.ts` — reusable backend-only HogQL transport.
+- `supabase/functions/_backend/utils/builder_analytics.ts` — existing Builder consumer of the shared transport.
+- `tests/posthog-read.unit.test.ts` — shared transport contract.
+
 **Create:**
 
-- `supabase/functions/_backend/utils/posthog_read.ts` — reusable backend-only HogQL HTTP transport extracted from Builder Analytics.
 - `supabase/functions/_backend/utils/frontend_onboarding_analytics_model.ts` — pure cohort, funnel, KPI, comparison, median, and UTC daily aggregation.
 - `supabase/functions/_backend/utils/frontend_onboarding_analytics.ts` — fixed v1 HogQL query and response orchestration.
 - `src/services/adminFrontendOnboarding.ts` — frontend response types and presentation adapters.
 - `src/pages/admin/dashboard/frontend-onboarding.vue` — the platform-admin page.
-- `tests/posthog-read.unit.test.ts` — shared PostHog transport contract.
 - `tests/frontend-onboarding-analytics-model.unit.test.ts` — pure aggregation behavior.
 - `tests/frontend-onboarding-analytics.unit.test.ts` — query and orchestration behavior.
 - `tests/admin-frontend-onboarding-dashboard.unit.test.ts` — frontend adapters and page wiring.
 
 **Modify:**
 
-- `supabase/functions/_backend/utils/builder_analytics.ts` — replace its private HogQL client with the shared transport without changing its response.
 - `supabase/functions/_backend/private/admin_stats.ts` — validate and dispatch the new metric category.
 - `tests/admin-stats.unit.test.ts` — prove the category is accepted.
 - `src/stores/adminDashboard.ts` — add the category to `MetricCategory`.
@@ -54,11 +57,13 @@ Expected: both commands exit successfully.
 
 ### Task 1: Share the Existing PostHog Read Transport
 
-**Files:**
+> **Already completed by PR #2976. Do not execute the implementation or commit steps in this historical task.** Verify that the three dependency files below exist and that `builder_analytics.ts` imports `queryPosthogHogql`; then begin this PR's implementation at Task 2. The retained steps document the original extraction only.
 
-- Create: `tests/posthog-read.unit.test.ts`
-- Create: `supabase/functions/_backend/utils/posthog_read.ts`
-- Modify: `supabase/functions/_backend/utils/builder_analytics.ts`
+**Historical files (already present; do not change in this PR):**
+
+- Existing: `tests/posthog-read.unit.test.ts`
+- Existing: `supabase/functions/_backend/utils/posthog_read.ts`
+- Existing: `supabase/functions/_backend/utils/builder_analytics.ts`
 
 - [ ] **Step 1: Write the failing transport tests**
 
