@@ -84,17 +84,24 @@ describe('translation queue helpers', () => {
       '{"text":"Créer un compte gratuit"}',
     )).toBe('Créer un compte gratuit')
     expect(__translationWorkerTestUtils__.unwrapTranslatedMessage('Compte')).toBe('Compte')
+    expect(__translationWorkerTestUtils__.unwrapTranslatedMessage('Save ')).toBe('Save ')
+    expect(__translationWorkerTestUtils__.keepTranslation('Save ', 'Save ')).toBe('Save ')
+    expect(__translationWorkerTestUtils__.unwrapTranslatedMessage('{"text":" "}' )).toBeNull()
+    expect(__translationWorkerTestUtils__.unwrapTranslatedMessage({ text: ' ' })).toBeNull()
+    expect(__translationWorkerTestUtils__.keepTranslation('Password', '{"text":" "}' )).toBe('Password')
+    expect(__translationWorkerTestUtils__.keepTranslation('Password', { text: 'Mot de passe ' })).toBe('Mot de passe ')
+    expect(__translationWorkerTestUtils__.unwrapTranslatedMessage({ text: ' Mot de passe ' })).toBe(' Mot de passe ')
   })
 
   it.concurrent('parses object-shaped translation values from Workers AI', () => {
     expect(__translationWorkerTestUtils__.parseTranslationObject({
       translations: {
         password: { text: 'Mot de passe', context: 'short UI label' },
-        save: 'Enregistrer',
+        save: 'Enregistrer ',
       },
     })).toEqual({
       password: 'Mot de passe',
-      save: 'Enregistrer',
+      save: 'Enregistrer ',
     })
   })
 
@@ -227,6 +234,9 @@ describe('translation queue helpers', () => {
         'discord-username-help': 'Sans le signe @.',
         'password': '{"text":"Mot de passe","context":"Used in Capgo web console areas: pages."}',
         'create-a-free-account': '{"text":"Créer un compte gratuit"}',
+        'blank-wrapper': '{"text":" "}',
+        'object-wrapper': { text: 'Objet', context: 'legacy object blob' },
+        'save': 'Save ',
       },
       model: 'model',
       status: 'ready',
@@ -242,6 +252,9 @@ describe('translation queue helpers', () => {
     expect(payload.messages['discord-username-help']).toBe('Sans le signe {\'@\'}.')
     expect(payload.messages.password).toBe('Mot de passe')
     expect(payload.messages['create-a-free-account']).toBe('Créer un compte gratuit')
+    expect(payload.messages['blank-wrapper']).toBeUndefined()
+    expect(payload.messages['object-wrapper']).toBe('Objet')
+    expect(payload.messages.save).toBe('Save ')
   })
 
   it('serves the last saved translation and queues a refresh when the checksum changed', async () => {

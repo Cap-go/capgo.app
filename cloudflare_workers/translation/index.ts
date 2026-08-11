@@ -331,19 +331,36 @@ function extractAiText(result: unknown): string {
   return ''
 }
 
+function unwrapTranslatedMessage(translated: unknown): string | null {
+  if (typeof translated === 'string') {
+    if (!translated.trim())
+      return null
+
+    const trimmedForParse = translated.trim()
+    if (!trimmedForParse.startsWith('{'))
+      return translated
+
+    const parsed = parseJsonCandidate(trimmedForParse)
+    const record = recordOf(parsed)
+    if (!record || typeof record.text !== 'string')
+      return translated
+
+    if (!record.text.trim())
+      return null
+
+    return record.text
+  }
+
+  const record = recordOf(translated)
+  if (typeof record?.text !== 'string')
+    return null
+  if (!record.text.trim())
+    return null
+  return record.text
+}
+
 function translatedTextFromEntry(entry: unknown): string | null {
-  if (typeof entry === 'string') {
-    const trimmed = entry.trim()
-    return trimmed || null
-  }
-
-  const record = recordOf(entry)
-  if (typeof record?.text === 'string') {
-    const trimmed = record.text.trim()
-    return trimmed || null
-  }
-
-  return null
+  return unwrapTranslatedMessage(entry)
 }
 
 function stringMapFromRecord(record: Record<string, unknown> | null): Record<string, string> | null {
@@ -405,22 +422,8 @@ function parseTranslationObject(value: unknown): Record<string, string> | null {
   return null
 }
 
-function unwrapTranslatedMessage(translated: string) {
-  const trimmed = translated.trim()
-  if (!trimmed.startsWith('{'))
-    return trimmed
-
-  const parsed = parseJsonCandidate(trimmed)
-  const record = recordOf(parsed)
-  if (!record || typeof record.text !== 'string')
-    return trimmed
-
-  const unwrapped = record.text.trim()
-  return unwrapped || trimmed
-}
-
 function keepTranslation(source: string, translated: unknown) {
-  const candidate = typeof translated === 'string' ? unwrapTranslatedMessage(translated) : ''
+  const candidate = unwrapTranslatedMessage(translated)
   if (!candidate)
     return source
 
@@ -576,9 +579,13 @@ function messageCatalogOf(value: unknown): Record<string, string> {
   if (!record)
     return {}
 
-  return Object.fromEntries(
-    Object.entries(record).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
-  )
+  const output: Record<string, string> = {}
+  for (const [key, entry] of Object.entries(record)) {
+    const unwrapped = unwrapTranslatedMessage(entry)
+    if (unwrapped !== null)
+      output[key] = unwrapped
+  }
+  return output
 }
 
 function escapeVueI18nAtSigns(message: string) {
@@ -603,12 +610,14 @@ function escapeVueI18nAtSigns(message: string) {
   return output
 }
 
-function vueI18nMessageCatalog(messages: Record<string, string>) {
+function vueI18nMessageCatalog(messages: Record<string, unknown>) {
   return Object.fromEntries(
-    Object.entries(messages).map(([key, message]) => [
-      key,
-      escapeVueI18nAtSigns(unwrapTranslatedMessage(message)),
-    ]),
+    Object.entries(messages).flatMap(([key, message]) => {
+      const unwrapped = unwrapTranslatedMessage(message)
+      if (unwrapped === null)
+        return []
+      return [[key, escapeVueI18nAtSigns(unwrapped)]]
+    }),
   )
 }
 

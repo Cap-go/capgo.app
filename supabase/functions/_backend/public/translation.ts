@@ -145,18 +145,7 @@ function parseTranslationObject(value: unknown): Record<string, string> | null {
 }
 
 function translatedTextFromEntry(entry: unknown): string | null {
-  if (typeof entry === 'string') {
-    const trimmed = entry.trim()
-    return trimmed || null
-  }
-
-  const record = recordOf(entry)
-  if (typeof record?.text === 'string') {
-    const trimmed = record.text.trim()
-    return trimmed || null
-  }
-
-  return null
+  return unwrapTranslatedMessage(entry)
 }
 
 function unwrapTranslationRecord(record: Record<string, unknown>): Record<string, string> | null {
@@ -174,31 +163,38 @@ function placeholders(value: string) {
   return value.match(PLACEHOLDER_PATTERN) ?? []
 }
 
-function unwrapTranslatedMessage(translated: string) {
-  const trimmed = translated.trim()
-  if (!trimmed.startsWith('{'))
-    return trimmed
+function unwrapTranslatedMessage(translated: unknown): string | null {
+  if (typeof translated === 'string') {
+    if (!translated.trim())
+      return null
 
-  try {
-    const parsed = JSON.parse(trimmed) as unknown
-    const record = recordOf(parsed)
-    if (typeof record?.text === 'string') {
-      const unwrapped = record.text.trim()
-      if (unwrapped)
-        return unwrapped
+    const trimmedForParse = translated.trim()
+    if (!trimmedForParse.startsWith('{'))
+      return translated
+
+    try {
+      const parsed = JSON.parse(trimmedForParse) as unknown
+      const record = recordOf(parsed)
+      if (!record || typeof record.text !== 'string')
+        return translated
+      if (!record.text.trim())
+        return null
+      return record.text
+    }
+    catch {
+      return translated
     }
   }
-  catch {
-    // Keep the original candidate when it is not a JSON {text} wrapper.
-  }
 
-  return trimmed
+  const record = recordOf(translated)
+  if (typeof record?.text !== 'string')
+    return null
+  if (!record.text.trim())
+    return null
+  return record.text
 }
 
 function keepTranslation(source: string, translated: unknown) {
-  if (typeof translated !== 'string')
-    return source
-
   const normalized = unwrapTranslatedMessage(translated)
   if (!normalized)
     return source
