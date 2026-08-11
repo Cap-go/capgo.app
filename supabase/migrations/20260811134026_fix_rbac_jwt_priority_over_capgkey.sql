@@ -5,7 +5,7 @@
 --   granted only to service_role (callers are DEFINER).
 -- - Lookups: optional apps by primary key app_id; optional channels by PK id.
 -- - Cardinality: apps/channels are console-scale (thousands), not plugin-hot.
--- - Indexes: apps_pkey(app_id), channels_pkey(id) — Index Scan / Index Only Scan
+-- - Indexes: apps_pkey(app_id), channel_pkey(id) — Index Scan / Index Only Scan
 --   in EXPLAIN (ANALYZE, BUFFERS) on local seed data.
 CREATE OR REPLACE FUNCTION public.rbac_resolve_permission_scope(
   p_org_id uuid,
@@ -96,6 +96,44 @@ IS 'Resolves effective org/app scope for RBAC permission checks. '
    'Optional PK lookups on apps.app_id and channels.id '
    '(apps_pkey, channel_pkey). Returns ok=false on missing/conflicting scope.';
 
+-- Shared JWT-vs-capgkey principal selection for both direct checkers.
+CREATE OR REPLACE FUNCTION public.rbac_should_use_apikey_principal(
+  p_user_id uuid,
+  p_apikey text
+) RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_uid uuid := auth.uid();
+  v_header_apikey text := NULLIF(btrim(public.get_apikey_header()), '');
+  v_request_apikey text := NULLIF(btrim(p_apikey), '');
+BEGIN
+  -- Non-empty p_apikey selects the API-key principal, except when a JWT user is
+  -- authenticated and p_apikey is only the request capgkey header forwarded by a
+  -- DEFINER caller (same value as get_apikey_header). Prefer JWT in that case.
+  RETURN v_request_apikey IS NOT NULL
+    AND NOT (
+      v_uid IS NOT NULL
+      AND p_user_id IS NOT DISTINCT FROM v_uid
+      AND v_request_apikey IS NOT DISTINCT FROM v_header_apikey
+    );
+END;
+$$;
+
+ALTER FUNCTION public.rbac_should_use_apikey_principal(uuid, text)
+  OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.rbac_should_use_apikey_principal(uuid, text)
+  FROM PUBLIC;
+GRANT ALL ON FUNCTION public.rbac_should_use_apikey_principal(uuid, text)
+  TO service_role;
+
+COMMENT ON FUNCTION public.rbac_should_use_apikey_principal(uuid, text)
+IS 'Returns true when direct RBAC checkers should evaluate the API-key principal. '
+   'False when p_apikey is empty/null, or when JWT auth.uid() matches p_user_id and '
+   'p_apikey equals the request capgkey header (prefer JWT).';
+
 CREATE OR REPLACE FUNCTION public.rbac_check_permission_direct(
   p_permission_key text,
   p_user_id uuid,
@@ -117,10 +155,8 @@ DECLARE
   v_channel_scope boolean := p_channel_id IS NOT NULL;
   v_override boolean;
   v_scope_ok boolean;
-  v_uid uuid := auth.uid();
-  v_header_apikey text := NULLIF(btrim(public.get_apikey_header()), '');
-  v_request_apikey text := NULLIF(btrim(p_apikey), '');
   v_use_apikey boolean;
+  v_request_apikey text := NULLIF(btrim(p_apikey), '');
 BEGIN
   IF p_permission_key IS NULL OR p_permission_key = '' THEN
     RETURN false;
@@ -134,18 +170,7 @@ BEGIN
     RETURN false;
   END IF;
 
-  -- Explicit p_apikey selects the API-key principal (no 2FA/password gates),
-  -- except when a JWT user is authenticated and p_apikey is only the request
-  -- capgkey header forwarded by a DEFINER caller (same value as get_apikey_header).
-  -- In that case prefer the JWT user principal. Intentional key checks pass a
-  -- key that is not the current request header (or no JWT).
-  -- RLS wrappers should pass NULL via rbac_check_permission_request when JWT.
-  v_use_apikey := v_request_apikey IS NOT NULL
-    AND NOT (
-      v_uid IS NOT NULL
-      AND p_user_id IS NOT DISTINCT FROM v_uid
-      AND v_request_apikey IS NOT DISTINCT FROM v_header_apikey
-    );
+  v_use_apikey := public.rbac_should_use_apikey_principal(p_user_id, p_apikey);
 
   IF v_use_apikey THEN
     SELECT * INTO v_api_key
@@ -264,10 +289,8 @@ DECLARE
   v_effective_app_id character varying;
   v_api_key public.apikeys%ROWTYPE;
   v_scope_ok boolean;
-  v_uid uuid := auth.uid();
-  v_header_apikey text := NULLIF(btrim(public.get_apikey_header()), '');
-  v_request_apikey text := NULLIF(btrim(p_apikey), '');
   v_use_apikey boolean;
+  v_request_apikey text := NULLIF(btrim(p_apikey), '');
 BEGIN
   IF p_permission_key IS NULL OR p_permission_key = '' THEN
     RETURN false;
@@ -281,12 +304,7 @@ BEGIN
     RETURN false;
   END IF;
 
-  v_use_apikey := v_request_apikey IS NOT NULL
-    AND NOT (
-      v_uid IS NOT NULL
-      AND p_user_id IS NOT DISTINCT FROM v_uid
-      AND v_request_apikey IS NOT DISTINCT FROM v_header_apikey
-    );
+  v_use_apikey := public.rbac_should_use_apikey_principal(p_user_id, p_apikey);
 
   IF v_use_apikey THEN
     SELECT * INTO v_api_key

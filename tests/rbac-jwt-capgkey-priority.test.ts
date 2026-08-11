@@ -185,19 +185,32 @@ describe('rbac JWT priority over capgkey', () => {
       )
 
       const result = await client.query(`
-        SELECT public.rbac_check_permission_direct(
-          public.rbac_perm_org_update_user_roles(),
-          $1::uuid,
-          $2::uuid,
-          NULL::character varying,
-          NULL::bigint,
-          $3
-        ) AS allowed
+        SELECT
+          public.rbac_check_permission_direct(
+            public.rbac_perm_org_update_user_roles(),
+            $1::uuid,
+            $2::uuid,
+            NULL::character varying,
+            NULL::bigint,
+            $3
+          ) AS with_password_policy,
+          public.rbac_check_permission_direct_no_password_policy(
+            public.rbac_perm_org_update_user_roles(),
+            $1::uuid,
+            $2::uuid,
+            NULL::character varying,
+            NULL::bigint,
+            $3
+          ) AS without_password_policy
       `, [USER_ID, orgId, INVALID_CAPGKEY])
 
-      return result.rows[0]?.allowed as boolean
+      return result.rows[0] as {
+        with_password_policy: boolean
+        without_password_policy: boolean
+      }
     })
 
-    expect(allowed).toBe(true)
+    expect(allowed.with_password_policy).toBe(true)
+    expect(allowed.without_password_policy).toBe(true)
   })
 })
