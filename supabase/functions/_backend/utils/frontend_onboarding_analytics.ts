@@ -98,9 +98,6 @@ function mapAttempts(rows: Record<string, unknown>[]): FrontendOnboardingAttempt
 
 export function buildFrontendOnboardingHogql(startDate: string, cohortEndDate: string, followupEndDate: string): string {
   return `
-    WITH
-      JSONExtractString(toString(properties), 'onboarding_attempt_id') AS attempt_id,
-      JSONExtractString(toString(properties), 'step') AS step
     SELECT
       attempt_id,
       count() OVER () AS total_attempts,
@@ -108,13 +105,19 @@ export function buildFrontendOnboardingHogql(startDate: string, cohortEndDate: s
       toUnixTimestamp64Milli(minIf(timestamp, step = 'details')) AS details_ms,
       toUnixTimestamp64Milli(minIf(timestamp, step = 'organization')) AS organization_ms,
       toUnixTimestamp64Milli(minIf(timestamp, step = 'setup')) AS setup_ms
-    FROM events
-    WHERE event = 'onboarding_step_viewed'
-      AND JSONExtractString(toString(properties), 'flow') = 'pre_org'
-      AND toIntOrZero(toString(properties.onboarding_version)) = 1
-      AND timestamp >= parseDateTimeBestEffort(${sqlStr(startDate)})
-      AND timestamp < parseDateTimeBestEffort(${sqlStr(followupEndDate)})
-      AND trim(attempt_id) != ''
+    FROM (
+      SELECT
+        timestamp,
+        JSONExtractString(toString(properties), 'onboarding_attempt_id') AS attempt_id,
+        JSONExtractString(toString(properties), 'step') AS step
+      FROM events
+      WHERE event = 'onboarding_step_viewed'
+        AND JSONExtractString(toString(properties), 'flow') = 'pre_org'
+        AND toIntOrZero(toString(properties.onboarding_version)) = 1
+        AND timestamp >= parseDateTimeBestEffort(${sqlStr(startDate)})
+        AND timestamp < parseDateTimeBestEffort(${sqlStr(followupEndDate)})
+    )
+    WHERE trim(attempt_id) != ''
     GROUP BY attempt_id
     HAVING intent_ms >= toUnixTimestamp64Milli(parseDateTimeBestEffort(${sqlStr(startDate)}))
       AND intent_ms < toUnixTimestamp64Milli(parseDateTimeBestEffort(${sqlStr(cohortEndDate)}))
