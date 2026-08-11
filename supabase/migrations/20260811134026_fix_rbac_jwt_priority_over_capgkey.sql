@@ -105,7 +105,6 @@ DECLARE
   v_api_key public.apikeys%ROWTYPE;
   v_channel_scope boolean := p_channel_id IS NOT NULL;
   v_override boolean;
-  v_uid uuid := auth.uid();
   v_scope_ok boolean;
 BEGIN
   IF p_permission_key IS NULL OR p_permission_key = '' THEN
@@ -120,14 +119,11 @@ BEGIN
     RETURN false;
   END IF;
 
-  -- Match apps_readable_app_ids(): authenticated JWT callers use the user principal,
-  -- and anonymous requests with capgkey use the API-key principal.
-  -- Callers that already resolved a JWT identity must pass NULL p_apikey (see
-  -- rbac_check_permission_request); auth.uid() is unavailable on raw service-role
-  -- Postgres connections used by some internal callers.
+  -- Explicit p_apikey selects the API-key principal (no 2FA/password gates).
+  -- JWT-vs-capgkey selection for request/RLS callers lives in
+  -- rbac_check_permission_request, which passes NULL p_apikey when auth.uid() is set.
   IF p_apikey IS NOT NULL
     AND btrim(p_apikey) <> ''
-    AND v_uid IS NULL
   THEN
     SELECT * INTO v_api_key
     FROM public.find_apikey_by_value(p_apikey)
@@ -222,7 +218,7 @@ COMMENT ON FUNCTION public.rbac_check_permission_direct(
   character varying,
   bigint,
   text
-) IS 'Direct RBAC permission check. Authenticated JWT callers use the user principal even when capgkey is present; anonymous capgkey callers use the API-key principal. Applies channel overrides and password/2FA gates for user checks.';
+) IS 'Direct RBAC permission check. Non-empty p_apikey selects the API-key principal; otherwise the user principal is used. Applies channel overrides and password/2FA gates for user checks. JWT-vs-capgkey selection for RLS is handled by rbac_check_permission_request.';
 
 CREATE OR REPLACE FUNCTION public.rbac_check_permission_direct_no_password_policy(
   p_permission_key text,
@@ -241,7 +237,6 @@ DECLARE
   v_effective_user_id uuid := p_user_id;
   v_effective_app_id character varying;
   v_api_key public.apikeys%ROWTYPE;
-  v_uid uuid := auth.uid();
   v_scope_ok boolean;
 BEGIN
   IF p_permission_key IS NULL OR p_permission_key = '' THEN
@@ -258,7 +253,6 @@ BEGIN
 
   IF p_apikey IS NOT NULL
     AND btrim(p_apikey) <> ''
-    AND v_uid IS NULL
   THEN
     SELECT * INTO v_api_key
     FROM public.find_apikey_by_value(p_apikey)
