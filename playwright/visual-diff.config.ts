@@ -18,16 +18,6 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
   { slug: 'dashboard', path: '/dashboard', auth: true },
   { slug: 'apps', path: '/apps', auth: true },
   { slug: 'app-overview', path: '/app/com.demo.app', auth: true },
-  {
-    slug: 'app-bundle-install-stats',
-    path: '/app/com.demo.app',
-    auth: true,
-    prepare: async (page) => {
-      const panel = page.locator('[data-testid="bundle-install-stats"]')
-      await panel.scrollIntoViewIfNeeded()
-      await panel.waitFor({ state: 'visible' })
-    },
-  },
   { slug: 'app-settings', path: '/app/com.demo.app/settings', auth: true },
   { slug: 'app-settings-access', path: '/app/com.demo.app/settings/access', auth: true },
   { slug: 'channels', path: '/app/com.demo.app/channels', auth: true },

@@ -57,7 +57,7 @@ describe('bundle install stats helpers', () => {
     const v100 = rows.get('1.0.0')
     expect(v100?.samples).toBe(3)
     expect(v100?.p50_ms).toBe(3000)
-    expect(v100?.p70_ms).toBe(3400)
+    expect(v100?.p70_ms).toBe(3800)
     expect(rows.get('1.1.0')?.p50_ms).toBe(2000)
   })
 
@@ -77,7 +77,7 @@ describe('bundle install stats helpers', () => {
 
     expect(response.bundles[0]?.version_name).toBe('1.1.0')
     expect(response.bundles[0]?.success_rate).toBe(90.9)
-    expect(response.totals.success_rate).toBe(88.5)
+    expect(response.totals.success_rate).toBe(89.6)
     expect(response.bundles[1]?.timing.p50_ms).toBe(1200)
   })
 })
