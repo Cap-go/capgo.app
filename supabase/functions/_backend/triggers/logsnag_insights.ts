@@ -360,10 +360,11 @@ function hasLeftTrialAtSnapshot(
   trialAt: Date | string | null | undefined,
   snapshotExclusiveEnd: Date,
 ): boolean {
-  // paid_at can be set on subscription.created / checkout before the first charge.
-  // Capgo stores Stripe trial_end in trial_at; until that boundary passes, MRR is $0.
+  // Mirrors SQL: si.trial_at <= snapshotExclusiveEnd (NULL does not pass).
+  // paid_at can be set on subscription.created / checkout before the first charge;
+  // Capgo stores Stripe trial_end in trial_at, so MRR stays $0 until that boundary.
   if (!trialAt)
-    return true
+    return false
   const trialAtTime = new Date(trialAt).getTime()
   return Number.isFinite(trialAtTime) && trialAtTime <= snapshotExclusiveEnd.getTime()
 }
@@ -955,7 +956,6 @@ async function calculateRevenue(c: Context, referenceDate?: Date): Promise<PlanR
       price_y: number | string | null
       subscription_anchor_start: string | Date | null
       subscription_anchor_end: string | Date | null
-      trial_at: string | Date | null
     }>(sql`
       SELECT
         lower(p.name) AS plan_key,
@@ -965,8 +965,7 @@ async function calculateRevenue(c: Context, referenceDate?: Date): Promise<PlanR
         p.price_m,
         p.price_y,
         si.subscription_anchor_start,
-        si.subscription_anchor_end,
-        si.trial_at
+        si.subscription_anchor_end
       FROM public.stripe_info si
       INNER JOIN public.plans p ON p.stripe_id = si.product_id
       WHERE si.is_good_plan = true
@@ -994,8 +993,6 @@ async function calculateRevenue(c: Context, referenceDate?: Date): Promise<PlanR
     for (const row of result.rows) {
       const planKey = String(row.plan_key || '')
       if (!planKey)
-        continue
-      if (!hasLeftTrialAtSnapshot(row.trial_at, snapshotExclusiveEnd))
         continue
 
       const billing = resolvePlanBillingInterval({
