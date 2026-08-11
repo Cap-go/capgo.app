@@ -17,7 +17,6 @@ function createContext() {
   return {
     env: {
       APP_LOG: {},
-      VERSION_USAGE: {},
       DEVICE_USAGE: {},
       DEVICE_INFO: {},
       CF_ANALYTICS_TOKEN: 'analytics-token',
@@ -45,7 +44,7 @@ describe('public live update metrics', () => {
       const query = String(init?.body ?? '')
       queries.push(query)
 
-      if (query.includes('FROM version_usage') && query.includes('AS installs')) {
+      if (query.includes('FROM app_log') && query.includes('AS installs') && query.includes('GROUP BY date')) {
         return analyticsResponse(
           [
             { name: 'date', type: 'String' },
@@ -210,7 +209,7 @@ describe('public live update metrics', () => {
     expect(metrics.updater_versions[0]).toMatchObject({ key: '8.1.0', share: 60 })
     expect(metrics.updater_versions.find(row => row.key === '8.1.0')?.success_rate).toBe(93.3)
     expect(queries.length).toBe(11)
-    expect(queries.join('\n')).toContain('FROM version_usage')
+    expect(queries.join('\n')).toContain('FROM app_log')
     expect(queries.join('\n')).toContain('blob6')
     expect(queries.join('\n')).toContain('blob7')
     expect(queries.join('\n')).toContain('blob10')

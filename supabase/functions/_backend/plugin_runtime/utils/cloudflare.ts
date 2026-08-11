@@ -1872,8 +1872,15 @@ export async function getUpdateStatsCF(c: Context): Promise<UpdateStats> {
     const result = await runQueryToCFA<{ app_id: string, failed: number, set: number, get: number }>(c, query)
 
     cloudlog({ requestId: c.get('requestId'), message: 'getUpdateStatsCF result', result })
+    const total = result.reduce((acc, app) => {
+      acc.failed += app.failed || 0
+      acc.set += app.set || 0
+      acc.get += app.get || 0
+      return acc
+    }, { failed: 0, set: 0, get: 0 })
+
     const apps = result
-      .filter(app => app.get > 0)
+      .filter(app => (app.set + app.failed) > 0)
       .map((app) => {
         const totalOutcomes = app.set + app.failed
         const successRate = Number(Number(totalOutcomes > 0 ? (app.set / totalOutcomes) * 100 : 100).toFixed(2))
@@ -1883,13 +1890,6 @@ export async function getUpdateStatsCF(c: Context): Promise<UpdateStats> {
           healthy: successRate >= 70,
         }
       })
-
-    const total = apps.reduce((acc, app) => {
-      acc.failed += app.failed
-      acc.set += app.set
-      acc.get += app.get
-      return acc
-    }, { failed: 0, set: 0, get: 0 })
 
     const totalOutcomes = total.set + total.failed
     const totalSuccessRate = totalOutcomes > 0 ? (total.set / totalOutcomes) * 100 : 100
@@ -2837,7 +2837,7 @@ function buildBreakdownMetrics(
 }
 
 export async function getPublicLiveUpdateMetricsCF(c: Context, referenceDate = new Date()): Promise<PublicLiveUpdateMetrics> {
-  if (!c.env.APP_LOG || !c.env.VERSION_USAGE || !c.env.DEVICE_USAGE || !c.env.DEVICE_INFO || !getEnv(c, 'CF_ANALYTICS_TOKEN') || !getEnv(c, 'CF_ACCOUNT_ANALYTICS_ID'))
+  if (!c.env.APP_LOG || !c.env.DEVICE_USAGE || !c.env.DEVICE_INFO || !getEnv(c, 'CF_ANALYTICS_TOKEN') || !getEnv(c, 'CF_ACCOUNT_ANALYTICS_ID'))
     throw new Error('Public live update metric bindings are unavailable')
 
   const end = new Date(Date.UTC(referenceDate.getUTCFullYear(), referenceDate.getUTCMonth(), referenceDate.getUTCDate()))
@@ -2847,7 +2847,7 @@ export async function getPublicLiveUpdateMetricsCF(c: Context, referenceDate = n
   const failureActions = PUBLIC_FAILURE_ACTIONS.map(action => `'${action}'`).join(', ')
   const day = `formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d')`
   const appLogOutcomeFilter = `(blob2 = 'set' OR blob2 IN (${failureActions}))`
-  const dailySuccessQuery = `SELECT ${day} AS date, sum(if(blob3 = 'install', 1, 0)) AS installs, sum(if(blob3 = 'fail', 1, 0)) AS fails FROM version_usage WHERE ${window} GROUP BY date ORDER BY date ASC`
+  const dailySuccessQuery = `SELECT ${day} AS date, sum(if(blob2 = 'set', 1, 0)) AS installs, sum(if(blob2 IN (${failureActions}), 1, 0)) AS fails FROM app_log WHERE ${window} AND ${appLogOutcomeFilter} GROUP BY date ORDER BY date ASC`
   const failuresQuery = `SELECT action, count() AS devices FROM (SELECT ${day} AS date, blob2 AS action, index1 AS app_id, blob1 AS device_id FROM app_log WHERE ${window} AND blob2 IN (${failureActions}) GROUP BY date, action, app_id, device_id) GROUP BY action`
   const platformsShareQuery = `SELECT platform, count() AS devices FROM (SELECT double1 AS platform, index1 AS app_id, blob1 AS device_id FROM device_usage WHERE ${window} AND double1 IN (0.0, 1.0, 2.0) GROUP BY platform, app_id, device_id) GROUP BY platform`
   const platformsOutcomeQuery = `SELECT blob5 AS key, sum(if(blob2 = 'set', 1, 0)) AS successes, sum(if(blob2 IN (${failureActions}), 1, 0)) AS failures FROM app_log WHERE ${window} AND ${appLogOutcomeFilter} AND blob5 IN ('ios', 'android', 'electron') GROUP BY blob5`
