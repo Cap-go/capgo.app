@@ -26,17 +26,13 @@ export interface DailyCheckoutIntentPoint {
 
 export interface PlansAnalyticsDataQuality {
   exactTrackingStartedAt: string | null
-  legacyLogicalOpens: number
   exactLogicalOpens: number
-  legacyReconstructionAvailable: boolean
-  legacyUnavailableReason: 'missing_event_time_path' | null
   excludedMissingOrganization: number
   unmatchedCheckoutStarts: number
   unknownBillingOrganizations: number
   posthogConfigured: boolean
   posthogConnected: boolean
   posthogFailureReason: PlansAnalyticsFailureReason | null
-  legacyDeduplicationSeconds: number | null
 }
 
 export interface PlansAnalyticsResponse {
@@ -56,7 +52,6 @@ export interface PlansAnalyticsPresentationState {
   hasCheckoutIntent: boolean
   hasCheckoutVisitors: boolean
   showPartialBillingWarning: boolean
-  showLegacyUnavailableWarning: boolean
 }
 
 export interface ChartDataPoint {
@@ -97,7 +92,6 @@ export function buildPlansAnalyticsPresentationState(
     hasCheckoutIntent: Boolean(data?.dataQuality.posthogConnected && data.checkoutIntent.some(row => row.startedCheckout > 0 || row.didNotStart > 0)),
     hasCheckoutVisitors: Boolean(data?.dataQuality.posthogConnected && data.checkoutVisitorBreakdown.some(row => row.total > 0)),
     showPartialBillingWarning: Boolean(data && data.dataQuality.unknownBillingOrganizations > 0),
-    showLegacyUnavailableWarning: Boolean(data && !data.dataQuality.legacyReconstructionAvailable),
   }
 }
 
@@ -172,20 +166,10 @@ function nullableTimestamp(value: unknown, path: string): string | null {
   return value
 }
 
-function nullableLegacyReason(value: unknown, path: string): 'missing_event_time_path' | null {
-  if (value === null || value === 'missing_event_time_path')
-    return value
-  return invalidResponse(path)
-}
-
 function nullableFailureReason(value: unknown, path: string): PlansAnalyticsFailureReason | null {
   if (value === null || value === 'unconfigured' || value === 'timeout' || value === 'unavailable' || value === 'too_large')
     return value
   return invalidResponse(path)
-}
-
-function nullableCount(value: unknown, path: string): number | null {
-  return value === null ? null : count(value, path)
 }
 
 function counts(value: unknown, path: string): number[] {
@@ -242,17 +226,13 @@ export function parsePlansAnalyticsResponse(value: unknown): PlansAnalyticsRespo
       .map((row, index) => dailyBillingPoint(row, `response.checkoutVisitorBreakdown[${index}]`)),
     dataQuality: {
       exactTrackingStartedAt: nullableTimestamp(qualityValue.exactTrackingStartedAt, 'response.dataQuality.exactTrackingStartedAt'),
-      legacyLogicalOpens: count(qualityValue.legacyLogicalOpens, 'response.dataQuality.legacyLogicalOpens'),
       exactLogicalOpens: count(qualityValue.exactLogicalOpens, 'response.dataQuality.exactLogicalOpens'),
-      legacyReconstructionAvailable: boolean(qualityValue.legacyReconstructionAvailable, 'response.dataQuality.legacyReconstructionAvailable'),
-      legacyUnavailableReason: nullableLegacyReason(qualityValue.legacyUnavailableReason, 'response.dataQuality.legacyUnavailableReason'),
       excludedMissingOrganization: count(qualityValue.excludedMissingOrganization, 'response.dataQuality.excludedMissingOrganization'),
       unmatchedCheckoutStarts: count(qualityValue.unmatchedCheckoutStarts, 'response.dataQuality.unmatchedCheckoutStarts'),
       unknownBillingOrganizations: count(qualityValue.unknownBillingOrganizations, 'response.dataQuality.unknownBillingOrganizations'),
       posthogConfigured: boolean(qualityValue.posthogConfigured, 'response.dataQuality.posthogConfigured'),
       posthogConnected: boolean(qualityValue.posthogConnected, 'response.dataQuality.posthogConnected'),
       posthogFailureReason: nullableFailureReason(qualityValue.posthogFailureReason, 'response.dataQuality.posthogFailureReason'),
-      legacyDeduplicationSeconds: nullableCount(qualityValue.legacyDeduplicationSeconds, 'response.dataQuality.legacyDeduplicationSeconds'),
     },
   }
 }

@@ -1,8 +1,10 @@
 # Plans Analytics Dashboard Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **SUPERSEDED — historical planning record only.** Superseded: legacy pathname reconstruction is not part of the shipped analytics model. `User visit` events tagged with `page = 'plans'` are the sole source of Plans openings. The shipped response and UI contain no legacy reconstruction fields or warning, and no 30-second reconstruction algorithm can be enabled. All task snippets below are retained only as historical context and must not be treated as current implementation instructions.
+>
+> **Archived instruction (do not execute):** This plan originally directed agentic workers to use superpowers:subagent-driven-development or superpowers:executing-plans task by task.
 
-**Goal:** Add a read-only admin Plans analytics page that reconstructs logical Plans openings, classifies daily visitor organizations by historical billing state, and attributes checkout intent across midnight.
+**Goal:** Add a read-only admin Plans analytics page that aggregates exact page-tag openings, classifies daily visitor organizations by historical billing state, and attributes checkout intent across midnight.
 
 **Architecture:** `/private/admin_stats` dispatches one `plans_analytics` request to a focused backend orchestrator. PostHog supplies behavior and timestamped billing transitions, PostgreSQL supplies billing and credit history, pure functions build the reconciled UTC chart datasets, and the existing Pinia cache supplies five-minute frontend caching. Unavailable, ambiguous, and oversized data is reported explicitly rather than rendered as zero.
 
@@ -14,9 +16,7 @@
 
 The exact tracking prerequisite was merged via `main`: commit `918f7dc15` (`fix(analytics): deduplicate plans page visit tracking (#2964)`) emits one Plans `User visit` per activation with `tags: { page: 'plans' }`; merge commit `060a4abaa` includes it on this branch.
 
-The Task 1 PostHog project lookup, schema lookup, bounded event sample, and legacy gap-histogram calls were attempted, and every call returned MCP error `-32603 Internal error`. Therefore no production event-time pathname or inter-event gap distribution was proven. The implementation must keep `LEGACY_PATH_SOURCE = 'unavailable'`, return `legacyUnavailableReason = 'missing_event_time_path'`, and return `legacyDeduplicationSeconds = null`; 30 seconds remains an unvalidated candidate and must not be interpreted as active or numerically trustworthy.
-
-Legacy reconstruction may be re-enabled only after a successful event-time pathname proof, validation of a real same-organization/session gap histogram, and tests for the enabled path, threshold boundaries, and DTO metadata. The failed calls support no claims about production data.
+The Task 1 PostHog project lookup, schema lookup, bounded event sample, and legacy gap-histogram calls were attempted, and every call returned MCP error `-32603 Internal error`. The failed calls support no claims about production data and do not alter the exact-page-tag source of truth above.
 
 ---
 
@@ -25,14 +25,14 @@ Legacy reconstruction may be re-enabled only after a successful event-time pathn
 **Create:**
 
 - `supabase/functions/_backend/utils/posthog_read.ts` — reusable, bounded PostHog HogQL transport with structured failure reasons.
-- `supabase/functions/_backend/utils/plans_analytics_model.ts` — pure visit repair, checkout attribution, UTC bucketing, and chart aggregation.
+- `supabase/functions/_backend/utils/plans_analytics_model.ts` — pure exact page-tag filtering, checkout attribution, UTC bucketing, and chart aggregation.
 - `supabase/functions/_backend/utils/plans_billing_history.ts` — pure billing timeline reconstruction plus bounded PostgreSQL history loading.
 - `supabase/functions/_backend/utils/plans_analytics.ts` — PostHog query builders and orchestration of behavior, billing, and response metadata.
 - `src/services/adminPlansAnalytics.ts` — frontend response types and chart-series adapters.
 - `src/pages/admin/dashboard/plans.vue` — the read-only admin page.
 - `docs/admin/plans-checkout-completion.md` — deferred Graph 5 definition.
 - `tests/posthog-read.unit.test.ts` — PostHog read transport tests.
-- `tests/plans-analytics-model.unit.test.ts` — deduplication, attribution, UTC, and graph invariant tests.
+- `tests/plans-analytics-model.unit.test.ts` — exact-event filtering, attribution, UTC, and graph invariant tests.
 - `tests/plans-billing-history.unit.test.ts` — paid/trial/canceled/payment/credits classification tests.
 - `tests/plans-analytics-orchestration.unit.test.ts` — HogQL, PostgreSQL loader, response, and failure-state tests.
 - `tests/admin-plans-analytics-dashboard.unit.test.ts` — frontend adapters, page wiring, translations, tab, and deferred-document tests.
@@ -49,117 +49,11 @@ No database migration or customer-facing Plans-page change belongs in this imple
 
 ---
 
-### Task 1: Verify the Historical PostHog Contract
+### Archived Task 1 Evidence: Historical PostHog Probe
 
-**Files:**
+This section records an investigation outcome only; it contains no implementation steps. The exact tracking prerequisite merged through `main` and emits one `User visit` per Plans activation with `page = 'plans'`.
 
-- Read: `src/pages/settings/organization/Plans.vue`
-- Read: `src/pages/settings/organization/Usage.vue`
-- Read: `supabase/functions/_backend/utils/posthog.ts`
-- Read: `supabase/functions/_backend/private/events.ts`
-- Modify if evidence changes: `docs/superpowers/specs/2026-08-10-plans-analytics-dashboard-design.md`
-
-- [ ] **Step 1: Verify the exact tracking prerequisite without copying it into this branch**
-
-Run:
-
-```bash
-rg -n "page: 'plans'|plansVisitTracking" src/pages/settings/organization/Plans.vue src/services
-```
-
-Expected after the tracking PR has merged: an exact `User visit` emission with event property `page: 'plans'`. If it is absent, merge the prerequisite through `main`; do not recreate or cherry-pick its implementation into this analytics PR.
-
-- [ ] **Step 2: Run the bounded PostHog schema/sample probe**
-
-Run this HogQL through the configured PostHog SQL reader or SQL editor:
-
-```sql
-SELECT
-  timestamp,
-  properties.org_id AS org_id,
-  properties.page AS page,
-  properties.$current_url AS event_current_url,
-  properties.$pathname AS event_pathname,
-  properties.$session_id AS session_id,
-  properties.$groups.organization AS grouped_org_id,
-  distinct_id,
-  person.properties.$current_url AS person_current_url
-FROM events
-WHERE event = 'User visit'
-  AND timestamp >= parseDateTimeBestEffort('2026-02-23T00:00:00.000Z')
-  AND timestamp < now()
-ORDER BY timestamp DESC
-LIMIT 100
-```
-
-Expected: exact events expose `page = 'plans'`; legacy rows expose a usable organization identifier. Record whether `event_current_url` or `event_pathname` contains an event-time Plans path. Only use `person_current_url` if the PostHog project metadata confirms person-on-events ingestion-time semantics.
-
-- [ ] **Step 3: Decide the legacy availability flag from evidence**
-
-Use this fixed rule:
-
-```text
-event_current_url or event_pathname available on legacy rows
-  => legacyReconstructionAvailable = true
-
-only person_current_url available AND person-on-events is event-time
-  => legacyReconstructionAvailable = true
-
-only query-time person URL available
-  => legacyReconstructionAvailable = false
-     legacyUnavailableReason = 'missing_event_time_path'
-```
-
-Expected: the implementation never turns a current person URL into a historical Plans visit.
-
-- [ ] **Step 4: Validate the 30-second legacy burst threshold**
-
-Run:
-
-```sql
-SELECT
-  multiIf(
-    gap_seconds <= 1, '00-01s',
-    gap_seconds <= 5, '02-05s',
-    gap_seconds <= 10, '06-10s',
-    gap_seconds <= 30, '11-30s',
-    gap_seconds <= 60, '31-60s',
-    gap_seconds <= 300, '01-05m',
-    'over-05m'
-  ) AS gap_bucket,
-  count() AS events
-FROM (
-  SELECT dateDiff(
-    'second',
-    lagInFrame(timestamp) OVER (
-      PARTITION BY
-        properties.org_id,
-        coalesce(nullIf(toString(properties.$session_id), ''), toString(distinct_id))
-      ORDER BY timestamp
-      ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-    ),
-    timestamp
-  ) AS gap_seconds
-  FROM events
-  WHERE event = 'User visit'
-    AND timestamp >= parseDateTimeBestEffort('2026-02-23T00:00:00.000Z')
-    AND timestamp < now()
-)
-WHERE gap_seconds >= 0
-GROUP BY gap_bucket
-ORDER BY gap_bucket
-```
-
-Expected before enabling legacy repair: duplicate bursts concentrate at or below the selected cutoff when partitioned by the same organization plus session-or-actor identity used at runtime. Thirty seconds remains only a candidate until this query succeeds. If the distribution validates a cutoff, update the constant, enabled-path tests, response metadata, and design document together; otherwise keep legacy reconstruction unavailable and its reported threshold null.
-
-- [ ] **Step 5: Commit any evidence-driven specification correction**
-
-```bash
-git add docs/superpowers/specs/2026-08-10-plans-analytics-dashboard-design.md
-git commit -m "docs: record plans analytics data contract"
-```
-
-Expected: either a focused spec commit, or a clean worktree when the existing contract is confirmed unchanged.
+The attempted 2026-08-10 PostHog project, schema, sample, and gap-histogram calls all failed with MCP error `-32603 Internal error`, so they established no trustworthy historical pathname or burst-threshold evidence. The shipped dashboard therefore accepts exact page-tag events only. Pathname reconstruction, legacy availability metadata, and burst repair are absent and cannot be enabled through this plan.
 
 ---
 
@@ -864,56 +758,7 @@ describe('Plans analytics orchestration', () => {
 })
 ```
 
-Add these fixture tests to the same file for exact/legacy quality accounting:
-
-```ts
-it('retains exact rows while reporting unavailable legacy reconstruction and unmatched data', async () => {
-  vi.mocked(queryPosthogHogql)
-    .mockResolvedValueOnce({
-      configured: true,
-      connected: true,
-      failureReason: null,
-      rows: [
-        { timestamp_ms: Date.parse('2026-08-01T10:00:00Z'), event: 'User visit', org_id: 'org-a', grouped_org_id: '', page: 'plans', event_current_url: '', event_pathname: '', person_current_url: '', session_id: '', distinct_id: 'user-a' },
-        { timestamp_ms: Date.parse('2026-08-01T10:01:00Z'), event: 'User visit', org_id: 'org-b', grouped_org_id: '', page: '', event_current_url: '', event_pathname: '', person_current_url: '/settings/organization/plans', session_id: '', distinct_id: 'user-b' },
-        { timestamp_ms: Date.parse('2026-08-01T10:02:00Z'), event: 'User visit', org_id: '', grouped_org_id: '', page: 'plans', event_current_url: '', event_pathname: '', person_current_url: '', session_id: '', distinct_id: 'user-c' },
-        { timestamp_ms: Date.parse('2026-08-01T10:05:00Z'), event: 'Checkout Started', org_id: 'org-a', grouped_org_id: '', page: '', event_current_url: '', event_pathname: '', person_current_url: '', session_id: '', distinct_id: 'user-a' },
-        { timestamp_ms: Date.parse('2026-08-01T12:00:00Z'), event: 'Checkout Started', org_id: 'org-x', grouped_org_id: '', page: '', event_current_url: '', event_pathname: '', person_current_url: '', session_id: '', distinct_id: 'user-x' },
-      ],
-    })
-    .mockResolvedValueOnce({ configured: true, connected: true, failureReason: null, rows: [] })
-    .mockResolvedValueOnce({ configured: true, connected: true, failureReason: null, rows: [{ exact_tracking_started_at: '2026-08-01T10:00:00Z' }] })
-  vi.mocked(loadPlansBillingHistories).mockResolvedValue(new Map([['org-a', {
-    orgId: 'org-a', customerId: 'cus-a', trialEndsAtMs: Date.parse('2026-07-01T00:00:00Z'),
-    paidAtMs: null, canceledAtMs: null, currentPastDueAtMs: null, churnReason: null,
-    revenueMovements: [], transitions: [], creditGrants: [], creditConsumptions: [],
-  }]]))
-
-  const result = await getAdminPlansAnalytics(context, start, end)
-  expect(result.dataQuality).toMatchObject({
-    exactLogicalOpens: 1,
-    legacyLogicalOpens: 0,
-    legacyReconstructionAvailable: false,
-    legacyUnavailableReason: 'missing_event_time_path',
-    excludedMissingOrganization: 1,
-    unmatchedCheckoutStarts: 1,
-    unknownBillingOrganizations: 0,
-  })
-  expect(result.checkoutIntent[0]).toMatchObject({ startedCheckout: 1, didNotStart: 0 })
-})
-
-it('uses a verified event pathname for repaired legacy openings', async () => {
-  vi.mocked(queryPosthogHogql)
-    .mockResolvedValueOnce({ configured: true, connected: true, failureReason: null, rows: [
-      { timestamp_ms: Date.parse('2026-08-01T10:00:00Z'), event: 'User visit', org_id: 'org-a', grouped_org_id: '', page: '', event_current_url: 'https://console.capgo.app/settings/organization/plans?from=dashboard', event_pathname: '', person_current_url: '', session_id: '', distinct_id: 'user-a' },
-      { timestamp_ms: Date.parse('2026-08-01T10:00:05Z'), event: 'User visit', org_id: 'org-a', grouped_org_id: '', page: '', event_current_url: 'https://console.capgo.app/settings/organization/plans', event_pathname: '', person_current_url: '', session_id: '', distinct_id: 'user-a' },
-    ] })
-    .mockResolvedValueOnce({ configured: true, connected: true, failureReason: null, rows: [] })
-    .mockResolvedValueOnce({ configured: true, connected: true, failureReason: null, rows: [] })
-  const result = await getAdminPlansAnalytics(context, start, end)
-  expect(result.dataQuality).toMatchObject({ legacyReconstructionAvailable: true, legacyLogicalOpens: 1 })
-})
-```
+The shipped fixture coverage keeps only exact `page = 'plans'` rows, ignores untagged visit rows, and accounts for excluded organizations and unmatched checkout starts without legacy response metadata.
 
 - [ ] **Step 2: Run the test to verify failure**
 
@@ -930,7 +775,6 @@ Create `plans_analytics.ts` with:
 ```ts
 export const MAX_POSTHOG_ROWS = 200_000
 export const TRACKING_HISTORY_START = '2026-02-23T00:00:00.000Z'
-export const LEGACY_PATH_SOURCE = 'unavailable' as const
 
 export interface PlansAnalyticsResponse {
   traffic: { dates: string[], uniqueVisitorOrganizations: number[], totalOpens: number[] }
@@ -939,17 +783,13 @@ export interface PlansAnalyticsResponse {
   checkoutVisitorBreakdown: DailyBillingPoint[]
   dataQuality: {
     exactTrackingStartedAt: string | null
-    legacyLogicalOpens: number
     exactLogicalOpens: number
-    legacyReconstructionAvailable: boolean
-    legacyUnavailableReason: 'missing_event_time_path' | null
     excludedMissingOrganization: number
     unmatchedCheckoutStarts: number
     unknownBillingOrganizations: number
     posthogConfigured: boolean
     posthogConnected: boolean
     posthogFailureReason: 'unconfigured' | 'timeout' | 'unavailable' | 'too_large' | null
-    legacyDeduplicationSeconds: number | null
   }
 }
 ```
@@ -974,7 +814,7 @@ WHERE event IN ('User visit', 'Checkout Started')
   AND (
     (event = 'User visit'
       AND properties.page = 'plans'
-      AND timestamp >= parseDateTimeBestEffort('2026-07-31T23:59:30.000Z')
+      AND timestamp >= parseDateTimeBestEffort('2026-08-01T00:00:00.000Z')
       AND timestamp < parseDateTimeBestEffort('2026-08-02T00:00:00.000Z'))
     OR
     (event = 'Checkout Started'
@@ -988,11 +828,11 @@ LIMIT 200001
 The concrete timestamps above illustrate a request for `[2026-08-01, 2026-08-02)`. In the builder, calculate them with:
 
 ```ts
-const queryStart = new Date(Date.parse(startDate) - (LEGACY_BURST_SECONDS * 1000)).toISOString()
+const queryStart = new Date(Date.parse(startDate)).toISOString()
 const queryEnd = new Date(Date.parse(endDate) + CHECKOUT_ATTRIBUTION_MS).toISOString()
 ```
 
-Then insert them with `sqlString(queryStart)` and `sqlString(queryEnd)`. Restrict checkout rows to `[startDate, queryEnd)` and visit rows to `[queryStart, endDate)`; the extra pre-range window exists only for visit burst repair. Keep `LEGACY_PATH_SOURCE = 'unavailable'`, return `missing_event_time_path`, and report a null legacy threshold. Only switch to an event-time source after Task 1 proves it and the enabled mapper, burst boundaries, and wire metadata are covered by tests. Never use `person_current_url`, and do not select the full `properties` object.
+Then insert them with `sqlString(queryStart)` and `sqlString(queryEnd)`. Restrict checkout rows to `[startDate, queryEnd)` and exact page-tag visit rows to `[queryStart, endDate)`. Never use pathname or person properties to infer Plans openings, and do not select the full `properties` object.
 
 The transition query begins at `TRACKING_HISTORY_START`, ends at `end + 24h`, and selects `$group_key`, `$group_type`, `$group_set.plan_status`, `$group_set.canceled_at`, organization group ID, and event name.
 
@@ -1023,7 +863,7 @@ The function must:
 3. return a structured empty response for any PostHog failure
 4. reject rows.length > MAX_POSTHOG_ROWS as too_large
 5. map only valid scalar rows into PlansBehaviorEvent/BillingTransition
-6. repair logical openings before removing the 30-second lookback
+6. retain exact page-tag Plans openings in the selected range
 7. attribute checkout through end + 24h
 8. cap unique opening organizations at 4,000 before transition or billing work
 9. run at most four 1,000-organization transition queries concurrently, each with a 2 MiB response budget so the whole wave remains within 8 MiB
@@ -1139,10 +979,9 @@ describe('admin Plans analytics dashboard', () => {
       checkoutIntent: [{ date: '2026-08-01', startedCheckout: 1, didNotStart: 1 }],
       checkoutVisitorBreakdown: [{ date: '2026-08-01', paying: 1, activeTrial: 0, expiredTrial: 0, canceled: 0, paymentProblem: 0, creditsOnly: 0, unknown: 0, total: 1 }],
       dataQuality: {
-        exactTrackingStartedAt: '2026-08-01T00:00:00Z', legacyLogicalOpens: 3, exactLogicalOpens: 1,
-        legacyReconstructionAvailable: true, legacyUnavailableReason: null,
+        exactTrackingStartedAt: '2026-08-01T00:00:00Z', exactLogicalOpens: 1,
         excludedMissingOrganization: 0, unmatchedCheckoutStarts: 0, unknownBillingOrganizations: 0,
-        posthogConfigured: true, posthogConnected: true, posthogFailureReason: null, legacyDeduplicationSeconds: 30,
+        posthogConfigured: true, posthogConnected: true, posthogFailureReason: null,
       },
     }, key => key)
     expect(series.traffic.map(item => item.data[0].value)).toEqual([2, 4])
@@ -1171,7 +1010,7 @@ describe('admin Plans analytics dashboard', () => {
 })
 ```
 
-Keep raw-source checks limited to stable wiring contracts: the admin guard, `fetchStats('plans_analytics')`, response parsing, the UTC key, and the secured documentation link. Test response validation and presentation behavior through exported pure helpers. Cover initial/pending request coordination, valid empty data, partial-billing and unavailable-legacy warnings, each of `unconfigured`, `timeout`, `too_large`, and `unavailable`, plus request-error precedence. Assert required translation-key presence rather than exact copy, except where the design explicitly fixes the wording.
+Keep raw-source checks limited to stable wiring contracts: the admin guard, `fetchStats('plans_analytics')`, response parsing, the UTC key, and the secured documentation link. Test response validation and presentation behavior through exported pure helpers. Cover initial/pending request coordination, valid empty data, partial-billing warnings, each of `unconfigured`, `timeout`, `too_large`, and `unavailable`, plus request-error precedence. Assert required translation-key presence rather than exact copy, except where the design explicitly fixes the wording.
 
 - [ ] **Step 2: Run the test to verify failure**
 
@@ -1223,7 +1062,7 @@ Import a suitable chart icon such as `~icons/heroicons/chart-bar-square` and add
 { label: 'plans-analytics-title', icon: IconChartBar, key: '/plans' },
 ```
 
-Add English keys for the page title, four graph titles/descriptions, UTC label, seven categories, two checkout-intent series, partial-data warning, missing legacy path, unconfigured/unavailable/timeout/too-large messages, empty state, and checkout-completion card/link. Use translation keys only in Vue code.
+Add English keys for the page title, four graph titles/descriptions, UTC label, seven categories, two checkout-intent series, partial-data warning, unconfigured/unavailable/timeout/too-large messages, empty state, and checkout-completion card/link. Use translation keys only in Vue code.
 
 Use these exact English values:
 
@@ -1254,7 +1093,6 @@ Use these exact English values:
   "plans-category-credits-only": "Credits only",
   "plans-category-unknown": "Unknown",
   "plans-analytics-partial-warning": "Some organizations could not be classified from historical billing records and appear as Unknown.",
-  "plans-analytics-legacy-unavailable": "Legacy Plans visits are unavailable because no event-time pathname could be verified.",
   "plans-analytics-posthog-unconfigured": "PostHog analytics is not configured.",
   "plans-analytics-posthog-timeout": "Plans analytics timed out. Try again, or select a shorter period.",
   "plans-analytics-range-too-large": "This range returned too much data to process. Select a shorter period and try again.",
@@ -1346,7 +1184,7 @@ const presentation = computed(() => buildPlansAnalyticsPresentationState(data.va
 const unavailableMessage = computed(() => presentation.value.unavailableMessage)
 ```
 
-The helper maps `unconfigured`, `timeout`, `too_large`, and `unavailable` to their translation keys, gives a request failure precedence, and derives chart availability. Show a non-blocking warning when its partial-billing or unavailable-legacy flag is true. A connected response with zero values is a valid empty result, not an error.
+The helper maps `unconfigured`, `timeout`, `too_large`, and `unavailable` to their translation keys, gives a request failure precedence, and derives chart availability. Show a non-blocking warning when its partial-billing flag is true. A connected response with zero values is a valid empty result, not an error.
 
 - [ ] **Step 3: Render all five full-width cards**
 

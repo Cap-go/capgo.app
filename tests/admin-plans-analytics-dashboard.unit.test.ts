@@ -11,17 +11,13 @@ const validResponse: BackendPlansAnalyticsResponse = {
   checkoutVisitorBreakdown: [{ date: '2026-08-01', paying: 1, activeTrial: 0, expiredTrial: 0, canceled: 0, paymentProblem: 0, creditsOnly: 0, unknown: 0, total: 1 }],
   dataQuality: {
     exactTrackingStartedAt: '2026-08-01T00:00:00Z',
-    legacyLogicalOpens: 3,
     exactLogicalOpens: 1,
-    legacyReconstructionAvailable: true,
-    legacyUnavailableReason: null,
     excludedMissingOrganization: 0,
     unmatchedCheckoutStarts: 0,
     unknownBillingOrganizations: 0,
     posthogConfigured: true,
     posthogConnected: true,
     posthogFailureReason: null,
-    legacyDeduplicationSeconds: null,
   },
 }
 
@@ -51,7 +47,6 @@ const requiredMessages = {
   'plans-category-credits-only': 'Credits only',
   'plans-category-unknown': 'Unknown',
   'plans-analytics-partial-warning': 'Some organizations could not be classified from historical billing records and appear as Unknown.',
-  'plans-analytics-legacy-unavailable': 'Legacy Plans visits are unavailable because no event-time pathname could be verified.',
   'plans-analytics-posthog-unconfigured': 'PostHog analytics is not configured.',
   'plans-analytics-posthog-timeout': 'Plans analytics timed out. Try again, or select a shorter period.',
   'plans-analytics-range-too-large': 'This range returned too much data to process. Select a shorter period and try again.',
@@ -71,8 +66,6 @@ describe('admin Plans analytics dashboard', () => {
       dataQuality: {
         ...validResponse.dataQuality,
         exactTrackingStartedAt: null,
-        legacyReconstructionAvailable: false,
-        legacyUnavailableReason: 'missing_event_time_path',
         posthogConnected: false,
         posthogFailureReason: 'timeout',
       },
@@ -88,13 +81,19 @@ describe('admin Plans analytics dashboard', () => {
     expect(parsePlansAnalyticsResponse(value)).toEqual(value)
   })
 
-  it('accepts a validated nonnegative integer legacy threshold for a future enabled path', () => {
-    const value = {
+  it('ignores obsolete legacy data-quality fields from an older backend response', () => {
+    const compatibilityResponse = {
       ...validResponse,
-      dataQuality: { ...validResponse.dataQuality, legacyDeduplicationSeconds: 30 },
+      dataQuality: {
+        ...validResponse.dataQuality,
+        legacyLogicalOpens: 3,
+        legacyReconstructionAvailable: false,
+        legacyUnavailableReason: 'missing_event_time_path',
+        legacyDeduplicationSeconds: 30,
+      },
     }
 
-    expect(parsePlansAnalyticsResponse(value)).toEqual(value)
+    expect(parsePlansAnalyticsResponse(compatibilityResponse).dataQuality).toEqual(validResponse.dataQuality)
   })
 
   it.each([
@@ -128,14 +127,6 @@ describe('admin Plans analytics dashboard', () => {
       ...validResponse,
       dataQuality: { ...validResponse.dataQuality, exactTrackingStartedAt: 'not-a-timestamp' },
     }],
-    ['negative legacy deduplication threshold', {
-      ...validResponse,
-      dataQuality: { ...validResponse.dataQuality, legacyDeduplicationSeconds: -1 },
-    }],
-    ['fractional legacy deduplication threshold', {
-      ...validResponse,
-      dataQuality: { ...validResponse.dataQuality, legacyDeduplicationSeconds: 0.5 },
-    }],
   ])('rejects a malformed response with %s', (_name, value) => {
     expect(() => parsePlansAnalyticsResponse(value)).toThrowError('Invalid Plans analytics response')
   })
@@ -154,7 +145,7 @@ describe('admin Plans analytics dashboard', () => {
     expect(state.unavailableMessage).toBe(expected)
   })
 
-  it('distinguishes valid empty data, partial billing, and unavailable legacy history', () => {
+  it('distinguishes valid empty data with partial billing', () => {
     const state = buildPlansAnalyticsPresentationState({
       ...validResponse,
       traffic: { dates: [], uniqueVisitorOrganizations: [], totalOpens: [] },
@@ -164,7 +155,6 @@ describe('admin Plans analytics dashboard', () => {
       dataQuality: {
         ...validResponse.dataQuality,
         unknownBillingOrganizations: 2,
-        legacyReconstructionAvailable: false,
       },
     }, null, key => key)
 
@@ -175,8 +165,8 @@ describe('admin Plans analytics dashboard', () => {
       hasCheckoutIntent: false,
       hasCheckoutVisitors: false,
       showPartialBillingWarning: true,
-      showLegacyUnavailableWarning: true,
     })
+    expect(state).not.toHaveProperty('showLegacyUnavailableWarning')
   })
 
   it('gives a request failure precedence over backend presentation state', () => {
@@ -243,10 +233,13 @@ describe('admin Plans analytics dashboard', () => {
   })
 
   it.concurrent('wires a full-width Plans page and deferred documentation', async () => {
-    const [tabs, completionDoc, messagesText] = await Promise.all([
+    const [tabs, completionDoc, messagesText, messageContextsText, historicalDesign, historicalPlan] = await Promise.all([
       readFile(new URL('../src/constants/adminTabs.ts', import.meta.url), 'utf8'),
       readFile(new URL('../docs/admin/plans-checkout-completion.md', import.meta.url), 'utf8'),
       readFile(new URL('../messages/en.json', import.meta.url), 'utf8'),
+      readFile(new URL('../messages/en.context.json', import.meta.url), 'utf8'),
+      readFile(new URL('../docs/superpowers/specs/2026-08-10-plans-analytics-dashboard-design.md', import.meta.url), 'utf8'),
+      readFile(new URL('../docs/superpowers/plans/2026-08-10-plans-analytics-dashboard.md', import.meta.url), 'utf8'),
     ])
     expect(tabs).toContain(`label: 'plans-analytics-title'`)
     expect(tabs).toContain(`key: '/plans'`)
@@ -264,6 +257,14 @@ describe('admin Plans analytics dashboard', () => {
       expect(messages[key]).toEqual(expect.any(String))
       expect(messages[key]).toBe(expected)
     }
+    const messageContexts = JSON.parse(messageContextsText) as Record<string, unknown>
+    expect(messages).not.toHaveProperty('plans-analytics-legacy-unavailable')
+    expect(messageContexts).not.toHaveProperty('plans-analytics-legacy-unavailable')
+    expect(historicalDesign).toContain('Exact event tracking is the sole source of Plans openings.')
+    expect(historicalPlan).toContain('Superseded: legacy pathname reconstruction is not part of the shipped analytics model.')
+    expect(historicalPlan).not.toContain('legacyReconstructionAvailable = true')
+    expect(historicalPlan).not.toContain('legacyUnavailableReason = \'missing_event_time_path\'')
+    expect(historicalPlan).not.toContain('Validate the 30-second legacy burst threshold')
     expect(messages['plans-analytics-posthog-timeout']).not.toBe(messages['plans-analytics-range-too-large'])
 
     const page = await readFile(new URL('../src/pages/admin/dashboard/plans.vue', import.meta.url), 'utf8')
@@ -281,7 +282,8 @@ describe('admin Plans analytics dashboard', () => {
 
     expect(page).toContain('buildPlansAnalyticsPresentationState(data.value, requestError.value, t)')
     expect(page).toContain('t(\'plans-analytics-partial-warning\')')
-    expect(page).toContain('t(\'plans-analytics-legacy-unavailable\')')
+    expect(page).not.toContain('plans-analytics-legacy-unavailable')
+    expect(page).not.toContain('showLegacyUnavailableWarning')
     expect(page).toContain('t(\'plans-analytics-empty\')')
 
     expect(page.match(/<ChartCard/g)).toHaveLength(5)

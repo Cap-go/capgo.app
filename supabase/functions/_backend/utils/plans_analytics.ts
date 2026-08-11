@@ -8,7 +8,6 @@ import {
   buildLogicalPlansOpenings,
   buildPlansChartData,
   CHECKOUT_ATTRIBUTION_MS,
-  LEGACY_BURST_SECONDS,
 } from './plans_analytics_model.ts'
 import {
   classifyPlansBillingAt,
@@ -18,7 +17,6 @@ import { MAX_POSTHOG_RESPONSE_BYTES, queryPosthogHogql } from './posthog_read.ts
 
 export const MAX_POSTHOG_ROWS = 200_000
 export const TRACKING_HISTORY_START = '2026-02-23T00:00:00.000Z'
-export const LEGACY_PATH_SOURCE = 'unavailable' as const
 const TRANSITION_ORG_BATCH_SIZE = 1_000
 export const TRANSITION_QUERY_CONCURRENCY = 4
 export const MAX_PLANS_ORGANIZATIONS = TRANSITION_ORG_BATCH_SIZE * TRANSITION_QUERY_CONCURRENCY
@@ -34,17 +32,13 @@ export interface PlansAnalyticsResponse {
   checkoutVisitorBreakdown: DailyBillingPoint[]
   dataQuality: {
     exactTrackingStartedAt: string | null
-    legacyLogicalOpens: number
     exactLogicalOpens: number
-    legacyReconstructionAvailable: boolean
-    legacyUnavailableReason: 'missing_event_time_path' | null
     excludedMissingOrganization: number
     unmatchedCheckoutStarts: number
     unknownBillingOrganizations: number
     posthogConfigured: boolean
     posthogConnected: boolean
     posthogFailureReason: PlansAnalyticsFailureReason | null
-    legacyDeduplicationSeconds: number | null
   }
 }
 
@@ -66,10 +60,6 @@ interface ParsedRange {
   endIso: string
 }
 
-function legacyDeduplicationSeconds(reconstructionAvailable: boolean): number | null {
-  return reconstructionAvailable ? LEGACY_BURST_SECONDS : null
-}
-
 function safeIso(timestampMs: number): string | null {
   if (!Number.isFinite(timestampMs))
     return null
@@ -88,7 +78,7 @@ function parseRange(startDate: string, endDate: string): ParsedRange | null {
 
   const startIso = safeIso(startMs)
   const endIso = safeIso(endMs)
-  if (!startIso || !endIso || !safeIso(startMs - LEGACY_BURST_SECONDS * 1000) || !safeIso(endMs + CHECKOUT_ATTRIBUTION_MS))
+  if (!startIso || !endIso || !safeIso(endMs + CHECKOUT_ATTRIBUTION_MS))
     return null
 
   return {
@@ -108,7 +98,6 @@ export function buildPlansBehaviorQuery(startDate: string, endDate: string): str
   if (!range)
     return ''
 
-  const queryStart = safeIso(range.startMs - LEGACY_BURST_SECONDS * 1000)!
   const queryEnd = safeIso(range.endMs + CHECKOUT_ATTRIBUTION_MS)!
   return `
 SELECT
@@ -116,15 +105,13 @@ SELECT
   event,
   properties.org_id AS org_id,
   properties.$groups.organization AS grouped_org_id,
-  properties.page AS page,
-  properties.$session_id AS session_id,
-  distinct_id
+  properties.page AS page
 FROM events
 WHERE event IN ('User visit', 'Checkout Started')
   AND (
     (event = 'User visit'
     AND properties.page = 'plans'
-    AND timestamp >= parseDateTimeBestEffort(${sqlString(queryStart)})
+    AND timestamp >= parseDateTimeBestEffort(${sqlString(range.startIso)})
     AND timestamp < parseDateTimeBestEffort(${sqlString(range.endIso)}))
     OR
     (event = 'Checkout Started'
@@ -194,17 +181,13 @@ function emptyPlansAnalyticsResponse(
     ...charts,
     dataQuality: {
       exactTrackingStartedAt: quality.exactTrackingStartedAt ?? null,
-      legacyLogicalOpens: 0,
       exactLogicalOpens: quality.exactLogicalOpens ?? 0,
-      legacyReconstructionAvailable: false,
-      legacyUnavailableReason: 'missing_event_time_path',
       excludedMissingOrganization: quality.excludedMissingOrganization ?? 0,
       unmatchedCheckoutStarts: quality.unmatchedCheckoutStarts ?? 0,
       unknownBillingOrganizations: quality.unknownBillingOrganizations ?? 0,
       posthogConfigured: quality.posthogConfigured ?? false,
       posthogConnected: quality.posthogConnected ?? false,
       posthogFailureReason: quality.posthogFailureReason ?? null,
-      legacyDeduplicationSeconds: legacyDeduplicationSeconds(false),
     },
   }
 }
@@ -227,11 +210,7 @@ function organizationId(row: Record<string, unknown>): string | null {
 function mapBehaviorRow(row: Record<string, unknown>): PlansBehaviorEvent | null {
   if (!Number.isFinite(row.timestamp_ms) || (row.event !== 'User visit' && row.event !== 'Checkout Started'))
     return null
-  if (
-    !isOptionalString(row.page)
-    || !isOptionalString(row.session_id)
-    || !isOptionalString(row.distinct_id)
-  ) {
+  if (!isOptionalString(row.page)) {
     return null
   }
 
@@ -243,11 +222,7 @@ function mapBehaviorRow(row: Record<string, unknown>): PlansBehaviorEvent | null
     event: row.event,
     timestampMs: row.timestamp_ms as number,
     orgId,
-    actorId: row.distinct_id ?? '',
-    sessionId: row.session_id ?? '',
     page: row.page ?? '',
-    // Legacy reconstruction is unavailable. Event-time and person-current paths are intentionally ignored.
-    path: '',
   }
 }
 
@@ -366,9 +341,8 @@ export async function getAdminPlansAnalytics(
 
   const excludedMissingOrganization = unresolvedOrganizationCount(behaviorResult.rows, range)
   const behaviorEvents = behaviorResult.rows.map(mapBehaviorRow).filter(event => event !== null)
-  const exactEvents = behaviorEvents.filter(event => event.event !== 'User visit' || event.page === 'plans')
-  const openings = buildLogicalPlansOpenings(exactEvents, range.startMs, range.endMs)
-  const checkoutEvents = exactEvents.filter(event => (
+  const openings = buildLogicalPlansOpenings(behaviorEvents, range.startMs, range.endMs)
+  const checkoutEvents = behaviorEvents.filter(event => (
     event.event === 'Checkout Started'
     && event.timestampMs >= range.startMs
     && event.timestampMs < range.endMs + CHECKOUT_ATTRIBUTION_MS
@@ -458,17 +432,13 @@ export async function getAdminPlansAnalytics(
     ...charts,
     dataQuality: {
       exactTrackingStartedAt: exactTrackingStartedAt(boundaryResult.rows),
-      legacyLogicalOpens: 0,
       exactLogicalOpens: openings.length,
-      legacyReconstructionAvailable: false,
-      legacyUnavailableReason: 'missing_event_time_path',
       excludedMissingOrganization,
       unmatchedCheckoutStarts: checkoutEvents.length - attributedCheckouts.length,
       unknownBillingOrganizations: unknownOrganizations.size,
       posthogConfigured: true,
       posthogConnected: true,
       posthogFailureReason: null,
-      legacyDeduplicationSeconds: legacyDeduplicationSeconds(false),
     },
   }
   cloudlog({
