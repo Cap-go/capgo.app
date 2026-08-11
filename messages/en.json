@@ -2012,7 +2012,6 @@
   "plans-category-credits-only": "Credits only",
   "plans-category-unknown": "Unknown",
   "plans-analytics-partial-warning": "Some organizations could not be classified from historical billing records and appear as Unknown.",
-  "plans-analytics-legacy-unavailable": "Legacy Plans visits are unavailable because no event-time pathname could be verified.",
   "plans-analytics-posthog-unconfigured": "PostHog analytics is not configured.",
   "plans-analytics-posthog-timeout": "Plans analytics timed out. Try again, or select a shorter period.",
   "plans-analytics-range-too-large": "This range returned too much data to process. Select a shorter period and try again.",

@@ -47,7 +47,6 @@ const requiredMessages = {
   'plans-category-credits-only': 'Credits only',
   'plans-category-unknown': 'Unknown',
   'plans-analytics-partial-warning': 'Some organizations could not be classified from historical billing records and appear as Unknown.',
-  'plans-analytics-legacy-unavailable': 'Legacy Plans visits are unavailable because no event-time pathname could be verified.',
   'plans-analytics-posthog-unconfigured': 'PostHog analytics is not configured.',
   'plans-analytics-posthog-timeout': 'Plans analytics timed out. Try again, or select a shorter period.',
   'plans-analytics-range-too-large': 'This range returned too much data to process. Select a shorter period and try again.',
@@ -234,10 +233,13 @@ describe('admin Plans analytics dashboard', () => {
   })
 
   it.concurrent('wires a full-width Plans page and deferred documentation', async () => {
-    const [tabs, completionDoc, messagesText] = await Promise.all([
+    const [tabs, completionDoc, messagesText, messageContextsText, historicalDesign, historicalPlan] = await Promise.all([
       readFile(new URL('../src/constants/adminTabs.ts', import.meta.url), 'utf8'),
       readFile(new URL('../docs/admin/plans-checkout-completion.md', import.meta.url), 'utf8'),
       readFile(new URL('../messages/en.json', import.meta.url), 'utf8'),
+      readFile(new URL('../messages/en.context.json', import.meta.url), 'utf8'),
+      readFile(new URL('../docs/superpowers/specs/2026-08-10-plans-analytics-dashboard-design.md', import.meta.url), 'utf8'),
+      readFile(new URL('../docs/superpowers/plans/2026-08-10-plans-analytics-dashboard.md', import.meta.url), 'utf8'),
     ])
     expect(tabs).toContain(`label: 'plans-analytics-title'`)
     expect(tabs).toContain(`key: '/plans'`)
@@ -255,6 +257,14 @@ describe('admin Plans analytics dashboard', () => {
       expect(messages[key]).toEqual(expect.any(String))
       expect(messages[key]).toBe(expected)
     }
+    const messageContexts = JSON.parse(messageContextsText) as Record<string, unknown>
+    expect(messages).not.toHaveProperty('plans-analytics-legacy-unavailable')
+    expect(messageContexts).not.toHaveProperty('plans-analytics-legacy-unavailable')
+    expect(historicalDesign).toContain('Exact event tracking is the sole source of Plans openings.')
+    expect(historicalPlan).toContain('Superseded: legacy pathname reconstruction is not part of the shipped analytics model.')
+    expect(historicalPlan).not.toContain('legacyReconstructionAvailable = true')
+    expect(historicalPlan).not.toContain('legacyUnavailableReason = \'missing_event_time_path\'')
+    expect(historicalPlan).not.toContain('Validate the 30-second legacy burst threshold')
     expect(messages['plans-analytics-posthog-timeout']).not.toBe(messages['plans-analytics-range-too-large'])
 
     const page = await readFile(new URL('../src/pages/admin/dashboard/plans.vue', import.meta.url), 'utf8')
