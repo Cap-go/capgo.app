@@ -30,7 +30,7 @@ const { t } = useI18n()
     </span>
     <button
       type="button"
-      class="rounded-sm font-semibold text-cyan-700 underline underline-offset-2 hover:text-cyan-900 focus-visible:ring-2 focus-visible:ring-cyan-500 focus-visible:ring-offset-2 focus-visible:outline-none dark:text-cyan-200 dark:hover:text-white dark:focus-visible:ring-offset-slate-800"
+      class="d-btn d-btn-link h-auto min-h-0 rounded-sm border-0 p-0 font-semibold text-cyan-700 underline underline-offset-2 shadow-none hover:text-cyan-900 focus-visible:ring-2 focus-visible:ring-cyan-500 focus-visible:ring-offset-2 focus-visible:outline-none dark:text-cyan-200 dark:hover:text-white dark:focus-visible:ring-offset-slate-800"
       @click="emit('removeFilter')"
     >
       {{ t('remove-api-key-scope-filter') }}

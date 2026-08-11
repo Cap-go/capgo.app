@@ -1,5 +1,7 @@
 // @vitest-environment happy-dom
 
+import { readFile } from 'node:fs/promises'
+import { cwd } from 'node:process'
 import type { App } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createApp } from 'vue'
@@ -8,6 +10,11 @@ import en from '../messages/en.json'
 import ApiKeyHiddenScopeNotice from '../src/components/ApiKeyHiddenScopeNotice.vue'
 
 const mountedApps: App[] = []
+const repoRoot = cwd()
+
+async function readRepoFile(path: string) {
+  return readFile(`${repoRoot}/${path}`, 'utf8')
+}
 
 function mountNotice(hiddenCount: number, isLoading = false) {
   const container = document.createElement('div')
@@ -48,6 +55,8 @@ describe('API key hidden-scope notice', () => {
       '3 API keys are hidden by the current scope filter.',
     )
     expect(button?.textContent?.trim()).toBe('Remove the filter')
+    expect(button?.classList.contains('d-btn')).toBe(true)
+    expect(button?.classList.contains('d-btn-link')).toBe(true)
 
     button?.click()
 
@@ -60,5 +69,22 @@ describe('API key hidden-scope notice', () => {
     expect(container.querySelector('[role="status"] span')?.textContent?.trim()).toBe(
       '1 API key is hidden by the current scope filter.',
     )
+  })
+
+  it('keeps the notice slot between the DataTable toolbar and table', async () => {
+    const source = await readRepoFile('src/components/DataTable.vue')
+    const toolbarIndex = source.indexOf('<div class="flex flex-wrap items-center justify-between')
+    const noticeSlotIndex = source.indexOf('<slot name="table-notice" />')
+    const tableIndex = source.indexOf('<table id="custom_table"')
+
+    expect(toolbarIndex).toBeGreaterThan(-1)
+    expect(noticeSlotIndex).toBeGreaterThan(toolbarIndex)
+    expect(tableIndex).toBeGreaterThan(noticeSlotIndex)
+  })
+
+  it('keeps the ApiKeys page notice wired to the scope-clearing action', async () => {
+    const source = await readRepoFile('src/pages/ApiKeys.vue')
+
+    expect(source).toMatch(/<ApiKeyHiddenScopeNotice[\s\S]*?:hidden-count="hiddenByScopeCount"[\s\S]*?@remove-filter="clearScopeFilters\(\)"/)
   })
 })
