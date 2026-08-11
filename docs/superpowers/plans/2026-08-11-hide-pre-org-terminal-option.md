@@ -45,8 +45,8 @@ Do not change API-key creation or the dedicated setup-step command.
 - [ ] **Step 4: Verify GREEN and repository checks**
 
 Run `bunx vitest run tests/app-onboarding-apikey-loading.unit.test.ts`, `bun
-lint`, `bun test:unit`, `bun typecheck`, and `bun build`. Expect every command
-to exit successfully.
+lint`, `bun test:unit`, `bun typecheck`, and `CHOKIDAR_USEPOLLING=1 bun run
+build`. Expect every command to exit successfully.
 
 - [ ] **Step 5: Commit and publish**
 
