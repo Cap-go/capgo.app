@@ -4,6 +4,7 @@ meta:
 </route>
 
 <script setup lang="ts">
+import type { BuilderCapacity, GlobalStatsTrendPoint, OnboardingFunnelData } from '~/services/adminStatsTypes'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
@@ -14,44 +15,6 @@ import { formatNumberValue, formatOneDecimal } from '~/services/formatLocale'
 import { useAdminDashboardStore } from '~/stores/adminDashboard'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
-
-interface OnboardingFunnelData {
-  total_registrations: number
-  total_orgs: number
-  orgs_with_app: number
-  orgs_with_channel: number
-  orgs_with_bundle: number
-  orgs_subscribed: number
-  orgs_with_production_device: number
-  orgs_with_update_download: number
-  activation_telemetry_available: boolean
-  update_download_conversion_rate: number
-  org_conversion_rate: number
-}
-
-interface GlobalStatsTrendPoint {
-  date: string
-  paying: number
-  trial: number
-  registers_today: number
-  success_rate: number
-  mrr: number
-  paying_orgs_total?: number
-}
-
-interface BuilderCapacityLive {
-  workers_total: number
-  workers_online: number
-  used: number
-  free: number
-  waiting: number
-  offline: number
-  builder_reachable: boolean
-}
-
-interface BuilderCapacity {
-  live: BuilderCapacityLive
-}
 
 const { t } = useI18n()
 const displayStore = useDisplayStore()
@@ -67,48 +30,65 @@ const isLoadingCapacity = ref(false)
 const globalStatsTrendData = ref<GlobalStatsTrendPoint[]>([])
 const onboardingFunnelData = ref<OnboardingFunnelData | null>(null)
 const capacity = ref<BuilderCapacity | null>(null)
+let loadAllSequence = 0
 
-async function loadGlobalStatsTrend() {
+async function loadGlobalStatsTrend(sequence: number) {
   isLoadingStats.value = true
   try {
     const data = await adminStore.fetchStats('global_stats_trend')
+    if (sequence !== loadAllSequence)
+      return
     globalStatsTrendData.value = data || []
   }
   catch (error) {
+    if (sequence !== loadAllSequence)
+      return
     console.error('[Admin Dashboard Pulse] Error loading global stats trend:', error)
     globalStatsTrendData.value = []
   }
   finally {
-    isLoadingStats.value = false
+    if (sequence === loadAllSequence)
+      isLoadingStats.value = false
   }
 }
 
-async function loadOnboardingFunnel() {
+async function loadOnboardingFunnel(sequence: number) {
   isLoadingFunnel.value = true
   try {
     const data = await adminStore.fetchStats('onboarding_funnel')
+    if (sequence !== loadAllSequence)
+      return
     onboardingFunnelData.value = data || null
   }
   catch (error) {
+    if (sequence !== loadAllSequence)
+      return
     console.error('[Admin Dashboard Pulse] Error loading onboarding funnel:', error)
     onboardingFunnelData.value = null
   }
   finally {
-    isLoadingFunnel.value = false
+    if (sequence === loadAllSequence)
+      isLoadingFunnel.value = false
   }
 }
 
-async function loadCapacity() {
+async function loadCapacity(sequence: number) {
   isLoadingCapacity.value = true
   try {
-    capacity.value = (await adminStore.fetchStats('builder_capacity', true)) || null
+    const data = (await adminStore.fetchStats('builder_capacity', true)) || null
+    if (sequence !== loadAllSequence)
+      return
+    capacity.value = data
   }
   catch (error) {
+    if (sequence !== loadAllSequence)
+      return
     console.error('[Admin Dashboard Pulse] Error loading builder capacity:', error)
     capacity.value = null
   }
   finally {
-    isLoadingCapacity.value = false
+    if (sequence === loadAllSequence)
+      isLoadingCapacity.value = false
   }
 }
 
@@ -150,10 +130,11 @@ function goTo(path: string) {
 }
 
 async function loadAll() {
+  const sequence = ++loadAllSequence
   await Promise.all([
-    loadGlobalStatsTrend(),
-    loadOnboardingFunnel(),
-    loadCapacity(),
+    loadGlobalStatsTrend(sequence),
+    loadOnboardingFunnel(sequence),
+    loadCapacity(sequence),
   ])
 }
 

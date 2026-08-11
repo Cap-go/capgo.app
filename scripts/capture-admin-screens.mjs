@@ -1,8 +1,15 @@
+import { mkdirSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { chromium } from '@playwright/test'
 
-const OUT = '/opt/cursor/artifacts/admin-reorg'
-const DOCS = '/workspace/docs/pr-assets/admin-intention-ia'
+const rootDir = join(dirname(fileURLToPath(import.meta.url)), '..')
+const OUT = join(rootDir, '.context/admin-screens')
+const DOCS = join(rootDir, 'docs/pr-assets/admin-intention-ia')
 const BASE = 'http://localhost:5173'
+
+mkdirSync(OUT, { recursive: true })
+mkdirSync(DOCS, { recursive: true })
 
 async function waitForAdmin(page, path, readyLocator) {
   await page.goto(`${BASE}${path}`, { waitUntil: 'domcontentloaded' })
@@ -22,8 +29,8 @@ async function waitForAdmin(page, path, readyLocator) {
 }
 
 async function shot(page, name) {
-  await page.screenshot({ path: `${OUT}/${name}.png`, fullPage: false })
-  await page.screenshot({ path: `${DOCS}/${name}.png`, fullPage: false })
+  await page.screenshot({ path: join(OUT, `${name}.png`), fullPage: false })
+  await page.screenshot({ path: join(DOCS, `${name}.png`), fullPage: false })
   console.log('saved', name, page.url())
 }
 

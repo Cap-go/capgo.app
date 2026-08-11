@@ -4,6 +4,7 @@ meta:
 </route>
 
 <script setup lang="ts">
+import type { OnboardingFunnelData } from '~/services/adminStatsTypes'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
@@ -22,26 +23,6 @@ const mainStore = useMainStore()
 const adminStore = useAdminDashboardStore()
 const router = useRouter()
 const isLoading = ref(true)
-
-// Onboarding funnel data
-interface OnboardingFunnelData {
-  total_registrations: number
-  total_orgs: number
-  orgs_with_app: number
-  orgs_with_channel: number
-  orgs_with_bundle: number
-  orgs_subscribed: number
-  orgs_with_production_device: number
-  orgs_with_update_download: number
-  activation_telemetry_available: boolean
-  org_conversion_rate: number
-  app_conversion_rate: number
-  channel_conversion_rate: number
-  bundle_conversion_rate: number
-  subscription_conversion_rate: number
-  production_device_conversion_rate: number
-  update_download_conversion_rate: number
-}
 
 const onboardingFunnelData = ref<OnboardingFunnelData | null>(null)
 const isLoadingOnboardingFunnel = ref(false)
@@ -166,7 +147,7 @@ displayStore.defaultBack = '/dashboard'
             v-if="isLoadingOnboardingFunnel"
             class="flex items-center justify-center h-48"
           >
-            <span class="loading loading-spinner loading-lg" />
+            <span class="d-loading d-loading-spinner d-loading-lg" />
           </div>
 
           <template v-else-if="onboardingFunnelData">

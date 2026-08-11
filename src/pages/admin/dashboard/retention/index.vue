@@ -42,38 +42,13 @@ const trialPlanBreakdown = ref<TrialPlanBreakdown | null>(null)
 const isLoadingTrialPlanBreakdown = ref(false)
 
 // Global stats trend data
-const globalStatsTrendData = ref<Array<{
-  date: string
-  apps: number
-  apps_active: number
-  users: number
-  users_active: number
-  paying: number
-  trial: number
-  not_paying: number
-  updates: number
-  updates_external: number
-  success_rate: number
-  bundle_storage_gb: number
-  plan_solo: number
-  plan_maker: number
-  plan_team: number
-  plan_enterprise: number
-  registers_today: number
-  new_paying_orgs: number
-  apps_created: number
-  versions_created: number
-  demo_apps_created: number
-  apps_with_preview: number
-  devices_last_month: number
-  trial_extended_orgs: number
-  trial_extended_subscribed_orgs: number
-  paying_orgs_subscription?: number
-  paying_orgs_credits?: number
-  paying_orgs_total?: number
-}>>([])
+const {
+  globalStatsTrendData,
+  isLoadingGlobalStatsTrend,
+  loadGlobalStatsTrend,
+  latestGlobalStats,
+} = useAdminGlobalStatsTrend('Admin Dashboard Retention Trials')
 
-const isLoadingGlobalStatsTrend = ref(false)
 
 // Trial organizations data
 interface TrialOrganization {
@@ -222,21 +197,6 @@ async function loadTrialOrganizations() {
   }
 }
 
-async function loadGlobalStatsTrend() {
-  isLoadingGlobalStatsTrend.value = true
-  try {
-    const data = await adminStore.fetchStats('global_stats_trend')
-    globalStatsTrendData.value = data || []
-  }
-  catch (error) {
-    console.error('[Admin Dashboard Retention Trials] Error loading global stats trend:', error)
-    globalStatsTrendData.value = []
-  }
-  finally {
-    isLoadingGlobalStatsTrend.value = false
-  }
-}
-
 async function loadTrialPlanBreakdown() {
   isLoadingTrialPlanBreakdown.value = true
   try {
@@ -261,7 +221,7 @@ const usersTrendSeries = computed(() => {
       label: t('admin-pulse-paying-orgs'),
       data: globalStatsTrendData.value.map(item => ({
         date: item.date,
-        value: item.paying,
+        value: Number(item.paying) || 0,
       })),
       color: '#10b981', // green
     },
@@ -269,7 +229,7 @@ const usersTrendSeries = computed(() => {
       label: t('trial-organizations'),
       data: globalStatsTrendData.value.map(item => ({
         date: item.date,
-        value: item.trial,
+        value: Number(item.trial) || 0,
       })),
       color: '#f59e0b', // amber
     },
@@ -325,7 +285,7 @@ const trialExtensionTrendSeries = computed(() => {
       label: t('trial-extensions'),
       data: globalStatsTrendData.value.map(item => ({
         date: item.date,
-        value: item.trial_extended_orgs ?? 0,
+        value: Number(item.trial_extended_orgs) || 0,
       })),
       color: '#119eff',
     },
@@ -333,27 +293,28 @@ const trialExtensionTrendSeries = computed(() => {
       label: t('extended-trial-subscriptions'),
       data: globalStatsTrendData.value.map(item => ({
         date: item.date,
-        value: item.trial_extended_subscribed_orgs ?? 0,
+        value: Number(item.trial_extended_subscribed_orgs) || 0,
       })),
       color: '#10b981',
     },
   ]
 })
 
-const latestGlobalStats = computed(() => {
-  if (globalStatsTrendData.value.length === 0)
-    return null
-  return globalStatsTrendData.value[globalStatsTrendData.value.length - 1]
-})
-
-watch(() => adminStore.activeDateRange, () => {
-  if (!mainStore.isAdmin)
-    return
-  trialOrganizationsCurrentPage.value = 1
-  loadGlobalStatsTrend()
-  loadTrialPlanBreakdown()
-  loadTrialOrganizations()
-}, { deep: true })
+watch(
+  () => [
+    adminStore.dateRangeMode,
+    adminStore.customDateRange.start.getTime(),
+    adminStore.customDateRange.end.getTime(),
+  ] as const,
+  () => {
+    if (!mainStore.isAdmin)
+      return
+    trialOrganizationsCurrentPage.value = 1
+    loadGlobalStatsTrend()
+    loadTrialPlanBreakdown()
+    loadTrialOrganizations()
+  },
+)
 
 watch(() => adminStore.refreshTrigger, () => {
   if (!mainStore.isAdmin)
@@ -403,7 +364,7 @@ displayStore.defaultBack = '/dashboard'
                   {{ t('trial-organizations') }}
                 </p>
                 <p v-if="latestGlobalStats" class="mt-2 text-3xl font-bold text-warning">
-                  {{ formatNumberValue(latestGlobalStats.trial) }}
+                  {{ formatNumberValue(latestGlobalStats.trial || 0) }}
                 </p>
                 <p v-else class="mt-2 text-3xl font-bold text-warning">
                   0

@@ -5,7 +5,7 @@ import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import Tabs from '~/components/Tabs.vue'
 import { adminCustomersTabs } from '~/constants/adminCustomersTabs'
-import { adminHubPathPrefix, adminHubPrimaryKey } from '~/constants/adminHubs'
+import { adminHubPathPrefix, getAdminHubPrimaryKey } from '~/constants/adminHubs'
 import { adminOnboardingTabs } from '~/constants/adminOnboardingTabs'
 import { adminPlatformTabs } from '~/constants/adminPlatformTabs'
 import { adminProductTabs } from '~/constants/adminProductTabs'
@@ -56,7 +56,7 @@ const activeTab = computed(() => {
   const path = route.path.replace(/\/$/, '')
   const hub = activeHub.value
   if (hub)
-    return `${ADMIN_BASE}${adminHubPrimaryKey[hub]}`
+    return `${ADMIN_BASE}${getAdminHubPrimaryKey(hub)}`
 
   const exact = tabs.value.find((t) => {
     const tabKey = t.key.replace(/\/$/, '')

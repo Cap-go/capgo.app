@@ -4,6 +4,7 @@ meta:
 </route>
 
 <script setup lang="ts">
+import type { BuilderCapacity } from '~/services/adminStatsTypes'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
@@ -15,29 +16,6 @@ import PageLoader from '~/components/PageLoader.vue'
 import { useAdminDashboardStore } from '~/stores/adminDashboard'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
-
-interface BuilderCapacityLive {
-  workers_total: number
-  workers_online: number
-  used: number
-  free: number
-  waiting: number
-  offline: number
-  builder_reachable: boolean
-}
-interface BuilderCapacityHourPoint {
-  date: string
-  workers: number
-  used: number
-  free: number
-  waiting: number
-}
-interface BuilderCapacity {
-  live: BuilderCapacityLive
-  hourly: BuilderCapacityHourPoint[]
-  capacity_events: number
-  runs_sampled: number
-}
 
 const { t } = useI18n()
 const displayStore = useDisplayStore()
@@ -89,7 +67,7 @@ const hasCapacityHourly = computed(() => {
     return false
   // Show the series even when all values are 0 (outage / empty pool), as long as
   // we have capacity events or run intervals for the selected period.
-  return c.hourly.length > 0 && (c.capacity_events > 0 || c.runs_sampled > 0)
+  return (c.hourly?.length ?? 0) > 0 && ((c.capacity_events ?? 0) > 0 || (c.runs_sampled ?? 0) > 0)
 })
 
 function liveMetric(value: number | undefined): string | number {
@@ -182,7 +160,7 @@ displayStore.defaultBack = '/dashboard'
               :value="liveMetric(capacityLive?.workers_online)"
               color-class="text-[#119eff]"
               :is-loading="isLoadingCapacity"
-              :subtitle="capacityLive?.builder_reachable ? `${capacityLive?.workers_total ?? 0} registered` : t('admin-pulse-builder-unreachable')"
+              :subtitle="capacityLive?.builder_reachable ? t('admin-capacity-registered', { count: capacityLive?.workers_total ?? 0 }) : t('admin-pulse-builder-unreachable')"
             />
             <AdminStatsCard
               :title="t('admin-pulse-builders-waiting')"

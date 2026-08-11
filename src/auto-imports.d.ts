@@ -13,7 +13,6 @@ declare global {
   const WEBHOOK_EVENT_TYPES: typeof import('./stores/webhooks').WEBHOOK_EVENT_TYPES
   const asyncComputed: typeof import('@vueuse/core').asyncComputed
   const autoResetRef: typeof import('@vueuse/core').autoResetRef
-  const buildDemoBundleInstallStats: typeof import('./composables/useBundleInstallStats').buildDemoBundleInstallStats
   const buildDemoUpdateDeliveryStats: typeof import('./composables/useUpdateDeliveryStats').buildDemoUpdateDeliveryStats
   const computed: typeof import('vue').computed
   const computedAsync: typeof import('@vueuse/core').computedAsync
@@ -131,6 +130,8 @@ declare global {
   const until: typeof import('@vueuse/core').until
   const useActiveElement: typeof import('@vueuse/core').useActiveElement
   const useAdminDashboardStore: typeof import('./stores/adminDashboard').useAdminDashboardStore
+  const useAdminGlobalStatsTrend: typeof import('./composables/useAdminGlobalStatsTrend').useAdminGlobalStatsTrend
+  const useAdminRevenueDashboard: typeof import('./composables/useAdminRevenueDashboard').useAdminRevenueDashboard
   const useAnimate: typeof import('@vueuse/core').useAnimate
   const useAppDetailStore: typeof import('./stores/appDetail').useAppDetailStore
   const useAppPage: typeof import('./composables/useAppPage').useAppPage
@@ -151,14 +152,12 @@ declare global {
   const useAttrs: typeof import('vue').useAttrs
   const useBase64: typeof import('@vueuse/core').useBase64
   const useBattery: typeof import('@vueuse/core').useBattery
-  const useBillingPaidAt: typeof import('./composables/useBillingPaidAt').useBillingPaidAt
   const useBluetooth: typeof import('@vueuse/core').useBluetooth
   const useBreakpoints: typeof import('@vueuse/core').useBreakpoints
   const useBroadcastChannel: typeof import('@vueuse/core').useBroadcastChannel
   const useBrowserLocation: typeof import('@vueuse/core').useBrowserLocation
   const useBuildCardStats: typeof import('./composables/useBuildCardStats').useBuildCardStats
   const useBuildChartConfig: typeof import('./composables/useBuildChartConfig').useBuildChartConfig
-  const useBundleInstallStats: typeof import('./composables/useBundleInstallStats').useBundleInstallStats
   const useCached: typeof import('@vueuse/core').useCached
   const useClipboard: typeof import('@vueuse/core').useClipboard
   const useClipboardItems: typeof import('@vueuse/core').useClipboardItems
@@ -243,6 +242,7 @@ declare global {
   const useNow: typeof import('@vueuse/core').useNow
   const useObjectUrl: typeof import('@vueuse/core').useObjectUrl
   const useOffsetPagination: typeof import('@vueuse/core').useOffsetPagination
+  const useOnboardingFunnelMetrics: typeof import('./composables/useOnboardingFunnelMetrics').useOnboardingFunnelMetrics
   const useOnline: typeof import('@vueuse/core').useOnline
   const useOrgBillingCycleChart: typeof import('./composables/useOrgBillingCycleChart').useOrgBillingCycleChart
   const useOrganizationStore: typeof import('./stores/organization').useOrganizationStore
@@ -346,11 +346,14 @@ declare global {
   export type { Component, Slot, Slots, ComponentPublicInstance, ComputedRef, DirectiveBinding, ExtractDefaultPropTypes, ExtractPropTypes, ExtractPublicPropTypes, InjectionKey, PropType, Ref, ShallowRef, MaybeRef, MaybeRefOrGetter, VNode, WritableComputedRef } from 'vue'
   import('vue')
   // @ts-ignore
-  export type { BundleInstallStatsItem, BundleInstallStatsResponse } from './composables/useBundleInstallStats'
-  import('./composables/useBundleInstallStats')
+  export type { AdminGlobalStatsTrendPoint } from './composables/useAdminGlobalStatsTrend'
+  import('./composables/useAdminGlobalStatsTrend')
   // @ts-ignore
   export type { UpdateEndpointRequest } from './composables/useDeviceUpdateFormat'
   import('./composables/useDeviceUpdateFormat')
+  // @ts-ignore
+  export type { OnboardingFunnelMetricsData } from './composables/useOnboardingFunnelMetrics'
+  import('./composables/useOnboardingFunnelMetrics')
   // @ts-ignore
   export type { CheckDomainResponse } from './composables/useSSORouting'
   import('./composables/useSSORouting')
@@ -386,7 +389,6 @@ declare module 'vue' {
     readonly WEBHOOK_EVENT_TYPES: UnwrapRef<typeof import('./stores/webhooks')['WEBHOOK_EVENT_TYPES']>
     readonly asyncComputed: UnwrapRef<typeof import('@vueuse/core')['asyncComputed']>
     readonly autoResetRef: UnwrapRef<typeof import('@vueuse/core')['autoResetRef']>
-    readonly buildDemoBundleInstallStats: UnwrapRef<typeof import('./composables/useBundleInstallStats')['buildDemoBundleInstallStats']>
     readonly buildDemoUpdateDeliveryStats: UnwrapRef<typeof import('./composables/useUpdateDeliveryStats')['buildDemoUpdateDeliveryStats']>
     readonly computed: UnwrapRef<typeof import('vue')['computed']>
     readonly computedAsync: UnwrapRef<typeof import('@vueuse/core')['computedAsync']>
@@ -501,6 +503,8 @@ declare module 'vue' {
     readonly until: UnwrapRef<typeof import('@vueuse/core')['until']>
     readonly useActiveElement: UnwrapRef<typeof import('@vueuse/core')['useActiveElement']>
     readonly useAdminDashboardStore: UnwrapRef<typeof import('./stores/adminDashboard')['useAdminDashboardStore']>
+    readonly useAdminGlobalStatsTrend: UnwrapRef<typeof import('./composables/useAdminGlobalStatsTrend')['useAdminGlobalStatsTrend']>
+    readonly useAdminRevenueDashboard: UnwrapRef<typeof import('./composables/useAdminRevenueDashboard')['useAdminRevenueDashboard']>
     readonly useAnimate: UnwrapRef<typeof import('@vueuse/core')['useAnimate']>
     readonly useAppDetailStore: UnwrapRef<typeof import('./stores/appDetail')['useAppDetailStore']>
     readonly useAppPage: UnwrapRef<typeof import('./composables/useAppPage')['useAppPage']>
@@ -521,14 +525,12 @@ declare module 'vue' {
     readonly useAttrs: UnwrapRef<typeof import('vue')['useAttrs']>
     readonly useBase64: UnwrapRef<typeof import('@vueuse/core')['useBase64']>
     readonly useBattery: UnwrapRef<typeof import('@vueuse/core')['useBattery']>
-    readonly useBillingPaidAt: UnwrapRef<typeof import('./composables/useBillingPaidAt')['useBillingPaidAt']>
     readonly useBluetooth: UnwrapRef<typeof import('@vueuse/core')['useBluetooth']>
     readonly useBreakpoints: UnwrapRef<typeof import('@vueuse/core')['useBreakpoints']>
     readonly useBroadcastChannel: UnwrapRef<typeof import('@vueuse/core')['useBroadcastChannel']>
     readonly useBrowserLocation: UnwrapRef<typeof import('@vueuse/core')['useBrowserLocation']>
     readonly useBuildCardStats: UnwrapRef<typeof import('./composables/useBuildCardStats')['useBuildCardStats']>
     readonly useBuildChartConfig: UnwrapRef<typeof import('./composables/useBuildChartConfig')['useBuildChartConfig']>
-    readonly useBundleInstallStats: UnwrapRef<typeof import('./composables/useBundleInstallStats')['useBundleInstallStats']>
     readonly useCached: UnwrapRef<typeof import('@vueuse/core')['useCached']>
     readonly useClipboard: UnwrapRef<typeof import('@vueuse/core')['useClipboard']>
     readonly useClipboardItems: UnwrapRef<typeof import('@vueuse/core')['useClipboardItems']>
@@ -613,6 +615,7 @@ declare module 'vue' {
     readonly useNow: UnwrapRef<typeof import('@vueuse/core')['useNow']>
     readonly useObjectUrl: UnwrapRef<typeof import('@vueuse/core')['useObjectUrl']>
     readonly useOffsetPagination: UnwrapRef<typeof import('@vueuse/core')['useOffsetPagination']>
+    readonly useOnboardingFunnelMetrics: UnwrapRef<typeof import('./composables/useOnboardingFunnelMetrics')['useOnboardingFunnelMetrics']>
     readonly useOnline: UnwrapRef<typeof import('@vueuse/core')['useOnline']>
     readonly useOrgBillingCycleChart: UnwrapRef<typeof import('./composables/useOrgBillingCycleChart')['useOrgBillingCycleChart']>
     readonly useOrganizationStore: UnwrapRef<typeof import('./stores/organization')['useOrganizationStore']>

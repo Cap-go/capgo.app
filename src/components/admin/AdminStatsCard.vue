@@ -55,9 +55,11 @@ function handleClick() {
 </script>
 
 <template>
-  <div
-    class="flex flex-col justify-between p-6 bg-white border rounded-lg shadow-lg border-slate-300 dark:bg-gray-800 dark:border-slate-900"
-    :class="{ 'cursor-pointer hover:shadow-xl transition-shadow': clickable }"
+  <component
+    :is="clickable ? 'button' : 'div'"
+    :type="clickable ? 'button' : undefined"
+    class="flex flex-col justify-between p-6 text-left bg-white border rounded-lg shadow-lg border-slate-300 dark:bg-gray-800 dark:border-slate-900"
+    :class="{ 'w-full cursor-pointer hover:shadow-xl transition-shadow': clickable }"
     @click="handleClick"
   >
     <!-- Loading state -->
@@ -91,5 +93,5 @@ function handleClick() {
         {{ subtitle }}
       </p>
     </div>
-  </div>
+  </component>
 </template>

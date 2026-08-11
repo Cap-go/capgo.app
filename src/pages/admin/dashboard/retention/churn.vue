@@ -157,12 +157,19 @@ async function loadCancelledOrganizations() {
   }
 }
 
-watch(() => adminStore.activeDateRange, () => {
-  if (!mainStore.isAdmin)
-    return
-  cancelledOrganizationsCurrentPage.value = 1
-  void loadCancelledOrganizations()
-}, { deep: true })
+watch(
+  () => [
+    adminStore.dateRangeMode,
+    adminStore.customDateRange.start.getTime(),
+    adminStore.customDateRange.end.getTime(),
+  ] as const,
+  () => {
+    if (!mainStore.isAdmin)
+      return
+    cancelledOrganizationsCurrentPage.value = 1
+    void loadCancelledOrganizations()
+  },
+)
 
 watch(() => adminStore.refreshTrigger, () => {
   if (!mainStore.isAdmin)
@@ -206,6 +213,7 @@ displayStore.defaultBack = '/dashboard'
               :is-loading="isLoadingCancelledOrganizations"
               :total="cancelledOrganizationsTotal"
               :current-page="cancelledOrganizationsCurrentPage"
+              :offset="CANCELLED_PAGE_SIZE"
               :columns="cancelledOrganizationsColumns"
               :element-list="cancelledOrganizations"
               :auto-reload="false"

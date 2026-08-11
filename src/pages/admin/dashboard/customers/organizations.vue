@@ -10,8 +10,13 @@ import { computed, h, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import AdminFilterBar from '~/components/admin/AdminFilterBar.vue'
-import { formatLocalDate, formatLocalDateTime } from '~/services/date'
-import { formatNumberValue } from '~/services/formatLocale'
+import {
+  formatOrganizationBillingTypeLabel,
+  formatOrganizationDateOrNever,
+  formatOrganizationNumber,
+  formatOrganizationPercent,
+} from '~/services/adminOrganizationInsights'
+import { formatLocalDate } from '~/services/date'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
 import { useAdminDashboardStore } from '~/stores/adminDashboard'
 import { useDisplayStore } from '~/stores/display'
@@ -38,28 +43,6 @@ const searchQuery = ref('')
 let loadOrganizationsSequence = 0
 let searchReloadTimer: ReturnType<typeof setTimeout> | undefined
 
-function formatNumber(value: number) {
-  return formatNumberValue(value)
-}
-
-function formatPercent(value: number) {
-  return `${formatNumberValue(Number(value || 0), { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
-}
-
-function formatBillingTypeLabel(billingType: OrganizationInsight['billing_type']) {
-  if (billingType === 'yearly')
-    return t('yearly')
-  if (billingType === 'monthly')
-    return t('monthly')
-  if (billingType === 'usage')
-    return t('usage')
-  return t('unknown')
-}
-
-function formatDateOrNever(value: string | null) {
-  return formatLocalDateTime(value) || t('never')
-}
-
 function getOrganizationAttentionLabel(item: OrganizationInsight) {
   const failRate = Number(item.fail_rate || 0)
   const failedUpdateCount = Number(item.failed_update_count || 0)
@@ -69,9 +52,9 @@ function getOrganizationAttentionLabel(item: OrganizationInsight) {
     return null
 
   return t('organization-attention-high-fail-rate', {
-    failRate: formatPercent(failRate),
-    failed: formatNumber(failedUpdateCount),
-    total: formatNumber(updateAttemptCount),
+    failRate: formatOrganizationPercent(failRate),
+    failed: formatOrganizationNumber(failedUpdateCount),
+    total: formatOrganizationNumber(updateAttemptCount),
   })
 }
 
@@ -212,7 +195,7 @@ const organizationColumns = computed<TableColumn[]>(() => [
     key: 'billing_type',
     mobile: false,
     sortable: false,
-    displayFunction: (item: OrganizationInsight) => formatBillingTypeLabel(item.billing_type),
+    displayFunction: (item: OrganizationInsight) => formatOrganizationBillingTypeLabel(item.billing_type, t),
   },
   {
     label: t('total-mau-period'),
@@ -220,7 +203,7 @@ const organizationColumns = computed<TableColumn[]>(() => [
     mobile: true,
     sortable: false,
     class: 'text-right',
-    displayFunction: (item: OrganizationInsight) => formatNumber(item.mau),
+    displayFunction: (item: OrganizationInsight) => formatOrganizationNumber(item.mau),
   },
   {
     label: t('uploads-period'),
@@ -228,7 +211,7 @@ const organizationColumns = computed<TableColumn[]>(() => [
     mobile: false,
     sortable: false,
     class: 'text-right',
-    displayFunction: (item: OrganizationInsight) => formatNumber(item.upload_count),
+    displayFunction: (item: OrganizationInsight) => formatOrganizationNumber(item.upload_count),
   },
   {
     label: t('builds-period'),
@@ -236,7 +219,7 @@ const organizationColumns = computed<TableColumn[]>(() => [
     mobile: false,
     sortable: false,
     class: 'text-right',
-    displayFunction: (item: OrganizationInsight) => formatNumber(item.build_count),
+    displayFunction: (item: OrganizationInsight) => formatOrganizationNumber(item.build_count),
   },
   {
     label: t('fail-rate'),
@@ -244,21 +227,21 @@ const organizationColumns = computed<TableColumn[]>(() => [
     mobile: false,
     sortable: false,
     class: 'text-right',
-    displayFunction: (item: OrganizationInsight) => formatPercent(item.fail_rate),
+    displayFunction: (item: OrganizationInsight) => formatOrganizationPercent(item.fail_rate),
   },
   {
     label: t('last-upload'),
     key: 'last_upload_at',
     mobile: false,
     sortable: false,
-    displayFunction: (item: OrganizationInsight) => formatDateOrNever(item.last_upload_at),
+    displayFunction: (item: OrganizationInsight) => formatOrganizationDateOrNever(item.last_upload_at, t),
   },
   {
     label: t('last-build'),
     key: 'last_build_at',
     mobile: false,
     sortable: false,
-    displayFunction: (item: OrganizationInsight) => formatDateOrNever(item.last_build_at),
+    displayFunction: (item: OrganizationInsight) => formatOrganizationDateOrNever(item.last_build_at, t),
   },
   {
     label: t('since-paying'),
@@ -280,7 +263,7 @@ const organizationColumns = computed<TableColumn[]>(() => [
     mobile: false,
     sortable: false,
     class: 'text-right',
-    displayFunction: (item: OrganizationInsight) => formatNumber(item.members_count),
+    displayFunction: (item: OrganizationInsight) => formatOrganizationNumber(item.members_count),
   },
 ])
 

@@ -12,6 +12,7 @@ import AdminMultiLineChart from '~/components/admin/AdminMultiLineChart.vue'
 import ChartCard from '~/components/dashboard/ChartCard.vue'
 import DeliveryLatencyPanel from '~/components/dashboard/DeliveryLatencyPanel.vue'
 import PageLoader from '~/components/PageLoader.vue'
+import { useAdminGlobalStatsTrend } from '~/composables/useAdminGlobalStatsTrend'
 import { formatNumberValue, formatOneDecimal } from '~/services/formatLocale'
 import { useAdminDashboardStore } from '~/stores/adminDashboard'
 import { useDisplayStore } from '~/stores/display'
@@ -24,52 +25,18 @@ const adminStore = useAdminDashboardStore()
 const router = useRouter()
 const isLoading = ref(true)
 
-// Global stats trend data
-const globalStatsTrendData = ref<Array<{
-  date: string
-  apps: number
-  apps_active: number
-  users: number
-  users_active: number
-  paying: number
-  trial: number
-  not_paying: number
-  updates: number
-  updates_external: number
-  success_rate: number
-  bundle_storage_gb: number
-  plan_solo: number
-  plan_maker: number
-  plan_team: number
-  plan_enterprise: number
-  registers_today: number
-  devices_last_month: number
-  devices_last_month_ios: number
-  devices_last_month_android: number
-}>>([])
+const {
+  globalStatsTrendData,
+  isLoadingGlobalStatsTrend,
+  loadGlobalStatsTrend,
+  latestGlobalStats,
+} = useAdminGlobalStatsTrend('Admin Dashboard Updates')
 
-const isLoadingGlobalStatsTrend = ref(false)
 const deliveryLatencyDays = computed(() => {
   const { start, end } = adminStore.activeDateRange
   return Math.max(1, Math.min(365, Math.ceil((end.getTime() - start.getTime()) / 86_400_000)))
 })
 
-async function loadGlobalStatsTrend() {
-  isLoadingGlobalStatsTrend.value = true
-  try {
-    const data = await adminStore.fetchStats('global_stats_trend')
-    globalStatsTrendData.value = data || []
-  }
-  catch (error) {
-    console.error('[Admin Dashboard Updates] Error loading global stats trend:', error)
-    globalStatsTrendData.value = []
-  }
-  finally {
-    isLoadingGlobalStatsTrend.value = false
-  }
-}
-
-// Computed properties for charts
 const updatesTrendSeries = computed(() => {
   if (globalStatsTrendData.value.length === 0)
     return []
@@ -79,9 +46,9 @@ const updatesTrendSeries = computed(() => {
       label: 'Daily Updates',
       data: globalStatsTrendData.value.map(item => ({
         date: item.date,
-        value: item.updates,
+        value: item.updates || 0,
       })),
-      color: '#f59e0b', // amber
+      color: '#f59e0b',
     },
   ]
 })
@@ -95,9 +62,9 @@ const successRateTrendSeries = computed(() => {
       label: 'Success Rate (%)',
       data: globalStatsTrendData.value.map(item => ({
         date: item.date,
-        value: item.success_rate,
+        value: item.success_rate || 0,
       })),
-      color: '#10b981', // green
+      color: '#10b981',
     },
   ]
 })
@@ -111,9 +78,9 @@ const externalUpdatesSeries = computed(() => {
       label: 'Open Source Updates',
       data: globalStatsTrendData.value.map(item => ({
         date: item.date,
-        value: item.updates_external,
+        value: item.updates_external || 0,
       })),
-      color: '#8b5cf6', // purple
+      color: '#8b5cf6',
     },
   ]
 })
@@ -127,9 +94,9 @@ const devicesTrendSeries = computed(() => {
       label: 'Active Devices',
       data: globalStatsTrendData.value.map(item => ({
         date: item.date,
-        value: item.devices_last_month,
+        value: item.devices_last_month || 0,
       })),
-      color: '#06b6d4', // cyan
+      color: '#06b6d4',
     },
     {
       label: 'iOS Devices',
@@ -137,7 +104,7 @@ const devicesTrendSeries = computed(() => {
         date: item.date,
         value: item.devices_last_month_ios || 0,
       })),
-      color: '#000000', // black (Apple)
+      color: '#000000',
     },
     {
       label: 'Android Devices',
@@ -145,17 +112,10 @@ const devicesTrendSeries = computed(() => {
         date: item.date,
         value: item.devices_last_month_android || 0,
       })),
-      color: '#3ddc84', // Android green
+      color: '#3ddc84',
     },
   ]
 })
-
-const latestGlobalStats = computed(() => {
-  if (globalStatsTrendData.value.length === 0)
-    return null
-  return globalStatsTrendData.value[globalStatsTrendData.value.length - 1]
-})
-
 watch(
   [() => adminStore.activeDateRange, () => adminStore.refreshTrigger],
   () => {

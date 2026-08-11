@@ -1,4 +1,7 @@
-export type BillingType = 'monthly' | 'yearly' | 'usage'
+import { formatLocalDateTime } from '~/services/date'
+import { formatNumberValue } from '~/services/formatLocale'
+
+export type BillingType = 'monthly' | 'yearly'
 
 export interface OrganizationInsight {
   org_id: string
@@ -29,4 +32,24 @@ export interface OrganizationInsightsResponse {
     total: number
     plan_options: string[]
   }
+}
+
+export function formatOrganizationNumber(value: number) {
+  return formatNumberValue(value)
+}
+
+export function formatOrganizationPercent(value: number) {
+  return `${formatNumberValue(Number(value || 0), { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
+}
+
+export function formatOrganizationBillingTypeLabel(billingType: OrganizationInsight['billing_type'], t: (k: string) => string) {
+  if (billingType === 'yearly')
+    return t('yearly')
+  if (billingType === 'monthly')
+    return t('monthly')
+  return t('unknown')
+}
+
+export function formatOrganizationDateOrNever(value: string | null, t: (k: string) => string) {
+  return formatLocalDateTime(value) || t('never')
 }

@@ -4,7 +4,7 @@ meta:
 </route>
 
 <script setup lang="ts">
-import type { RegistrationSourceTrendPoint } from '~/services/adminRegistrationSources'
+import type { OnboardingFunnelData } from '~/services/adminStatsTypes'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
@@ -28,10 +28,6 @@ const mainStore = useMainStore()
 const adminStore = useAdminDashboardStore()
 const router = useRouter()
 const isLoading = ref(true)
-
-interface OnboardingFunnelData {
-  registration_source_trend: RegistrationSourceTrendPoint[]
-}
 
 interface EmailTypeBreakdown {
   totals: {

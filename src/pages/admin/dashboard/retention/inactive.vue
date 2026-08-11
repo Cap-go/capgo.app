@@ -11,8 +11,12 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import AdminFilterBar from '~/components/admin/AdminFilterBar.vue'
 import PageLoader from '~/components/PageLoader.vue'
-import { formatLocalDate, formatLocalDateTime } from '~/services/date'
-import { formatNumberValue } from '~/services/formatLocale'
+import {
+  formatOrganizationBillingTypeLabel,
+  formatOrganizationDateOrNever,
+  formatOrganizationNumber,
+} from '~/services/adminOrganizationInsights'
+import { formatLocalDate } from '~/services/date'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
 import { useAdminDashboardStore } from '~/stores/adminDashboard'
 import { useDisplayStore } from '~/stores/display'
@@ -26,28 +30,11 @@ const router = useRouter()
 const isLoading = ref(true)
 
 const PAGE_SIZE = 100
-const MAX_PAGES = 50
+const SAFETY_MAX_PAGES = 200
 const organizations = ref<OrganizationInsight[]>([])
 const isLoadingOrganizations = ref(false)
+const loadTruncated = ref(false)
 let loadOrganizationsSequence = 0
-
-function formatNumber(value: number) {
-  return formatNumberValue(value)
-}
-
-function formatBillingTypeLabel(billingType: OrganizationInsight['billing_type']) {
-  if (billingType === 'yearly')
-    return t('yearly')
-  if (billingType === 'monthly')
-    return t('monthly')
-  if (billingType === 'usage')
-    return t('usage')
-  return t('unknown')
-}
-
-function formatDateOrNever(value: string | null) {
-  return formatLocalDateTime(value) || t('never')
-}
 
 function isInactiveOrganization(item: OrganizationInsight) {
   return Number(item.mau || 0) === 0 || Number(item.upload_count || 0) === 0
@@ -64,10 +51,16 @@ async function loadOrganizations() {
 
     const { start, end } = adminStore.activeDateRange
     const allOrgs: OrganizationInsight[] = []
+    let hitSafetyMax = false
 
-    for (let page = 0; page < MAX_PAGES; page++) {
+    for (let page = 0; ; page++) {
       if (sequence !== loadOrganizationsSequence)
         return
+
+      if (page >= SAFETY_MAX_PAGES) {
+        hitSafetyMax = true
+        break
+      }
 
       const response = await fetch(`${defaultApiHost}/private/admin_stats`, {
         method: 'POST',
@@ -97,13 +90,14 @@ async function loadOrganizations() {
       const pageOrgs = payload.data.organizations || []
       allOrgs.push(...pageOrgs)
 
-      if (pageOrgs.length < PAGE_SIZE || allOrgs.length >= (payload.data.total || 0))
+      if (pageOrgs.length === 0 || pageOrgs.length < PAGE_SIZE || allOrgs.length >= (payload.data.total || 0))
         break
     }
 
     if (sequence !== loadOrganizationsSequence)
       return
 
+    loadTruncated.value = hitSafetyMax
     organizations.value = allOrgs.filter(isInactiveOrganization)
   }
   catch (error) {
@@ -112,6 +106,7 @@ async function loadOrganizations() {
 
     console.error('[Admin Dashboard Retention Inactive] Error loading organization insights:', error)
     organizations.value = []
+    loadTruncated.value = false
   }
   finally {
     if (sequence === loadOrganizationsSequence)
@@ -147,7 +142,7 @@ const organizationColumns = computed<TableColumn[]>(() => [
     key: 'billing_type',
     mobile: false,
     sortable: false,
-    displayFunction: (item: OrganizationInsight) => formatBillingTypeLabel(item.billing_type),
+    displayFunction: (item: OrganizationInsight) => formatOrganizationBillingTypeLabel(item.billing_type, t),
   },
   {
     label: t('total-mau-period'),
@@ -155,7 +150,7 @@ const organizationColumns = computed<TableColumn[]>(() => [
     mobile: true,
     sortable: false,
     class: 'text-right',
-    displayFunction: (item: OrganizationInsight) => formatNumber(item.mau),
+    displayFunction: (item: OrganizationInsight) => formatOrganizationNumber(item.mau),
   },
   {
     label: t('uploads-period'),
@@ -163,14 +158,14 @@ const organizationColumns = computed<TableColumn[]>(() => [
     mobile: false,
     sortable: false,
     class: 'text-right',
-    displayFunction: (item: OrganizationInsight) => formatNumber(item.upload_count),
+    displayFunction: (item: OrganizationInsight) => formatOrganizationNumber(item.upload_count),
   },
   {
     label: t('last-upload'),
     key: 'last_upload_at',
     mobile: false,
     sortable: false,
-    displayFunction: (item: OrganizationInsight) => formatDateOrNever(item.last_upload_at),
+    displayFunction: (item: OrganizationInsight) => formatOrganizationDateOrNever(item.last_upload_at, t),
   },
   {
     label: t('since-paying'),
@@ -192,7 +187,7 @@ const organizationColumns = computed<TableColumn[]>(() => [
     mobile: false,
     sortable: false,
     class: 'text-right',
-    displayFunction: (item: OrganizationInsight) => formatNumber(item.members_count),
+    displayFunction: (item: OrganizationInsight) => formatOrganizationNumber(item.members_count),
   },
 ])
 
@@ -240,6 +235,12 @@ displayStore.defaultBack = '/dashboard'
               </h3>
               <p class="text-sm text-slate-600 dark:text-slate-400">
                 {{ t('admin-retention-inactive-description') }}
+              </p>
+              <p
+                v-if="loadTruncated"
+                class="text-sm text-amber-600 dark:text-amber-400"
+              >
+                {{ t('admin-retention-inactive-truncated') }}
               </p>
             </div>
 

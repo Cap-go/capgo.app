@@ -4,6 +4,7 @@ meta:
 </route>
 
 <script setup lang="ts">
+import type { OnboardingFunnelData } from '~/services/adminStatsTypes'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
@@ -12,6 +13,7 @@ import AdminFunnelChart from '~/components/admin/AdminFunnelChart.vue'
 import AdminMultiLineChart from '~/components/admin/AdminMultiLineChart.vue'
 import ChartCard from '~/components/dashboard/ChartCard.vue'
 import PageLoader from '~/components/PageLoader.vue'
+import { useAdminGlobalStatsTrend } from '~/composables/useAdminGlobalStatsTrend'
 import { useOnboardingFunnelMetrics } from '~/composables/useOnboardingFunnelMetrics'
 import { formatOneDecimal } from '~/services/formatLocale'
 import { useAdminDashboardStore } from '~/stores/adminDashboard'
@@ -25,97 +27,15 @@ const adminStore = useAdminDashboardStore()
 const router = useRouter()
 const isLoading = ref(true)
 
-// Onboarding funnel data
-interface OnboardingFunnelData {
-  total_registrations: number
-  total_orgs: number
-  orgs_with_app: number
-  orgs_with_channel: number
-  orgs_with_bundle: number
-  orgs_subscribed: number
-  orgs_with_production_device: number
-  orgs_with_update_download: number
-  activation_telemetry_available: boolean
-  total_invite_registrations: number
-  total_org_joins_invite_register: number
-  total_org_joins_existing_account: number
-  org_conversion_rate: number
-  app_conversion_rate: number
-  channel_conversion_rate: number
-  bundle_conversion_rate: number
-  subscription_conversion_rate: number
-  production_device_conversion_rate: number
-  update_download_conversion_rate: number
-  trend: Array<{
-    date: string
-    new_registrations: number
-    new_orgs: number
-    orgs_created_app: number
-    orgs_created_channel: number
-    orgs_created_bundle: number
-    orgs_subscribed: number
-    orgs_with_production_device: number
-    orgs_with_update_download: number
-  }>
-  invite_trend: Array<{
-    date: string
-    invite_registrations: number
-    org_joins_invite_register: number
-    org_joins_existing_account: number
-  }>
-}
-
 const onboardingFunnelData = ref<OnboardingFunnelData | null>(null)
 const isLoadingOnboardingFunnel = ref(false)
 
 // Global stats trend data
-const globalStatsTrendData = ref<Array<{
-  date: string
-  apps: number
-  apps_active: number
-  users: number
-  users_active: number
-  paying: number
-  trial: number
-  not_paying: number
-  updates: number
-  updates_external: number
-  success_rate: number
-  bundle_storage_gb: number
-  plan_solo: number
-  plan_maker: number
-  plan_team: number
-  plan_enterprise: number
-  registers_today: number
-  new_paying_orgs: number
-  apps_created: number
-  versions_created: number
-  demo_apps_created: number
-  apps_with_preview: number
-  devices_last_month: number
-  trial_extended_orgs: number
-  trial_extended_subscribed_orgs: number
-  paying_orgs_subscription?: number
-  paying_orgs_credits?: number
-  paying_orgs_total?: number
-}>>([])
-
-const isLoadingGlobalStatsTrend = ref(false)
-
-async function loadGlobalStatsTrend() {
-  isLoadingGlobalStatsTrend.value = true
-  try {
-    const data = await adminStore.fetchStats('global_stats_trend')
-    globalStatsTrendData.value = data || []
-  }
-  catch (error) {
-    console.error('[Admin Dashboard Onboarding] Error loading global stats trend:', error)
-    globalStatsTrendData.value = []
-  }
-  finally {
-    isLoadingGlobalStatsTrend.value = false
-  }
-}
+const {
+  globalStatsTrendData,
+  isLoadingGlobalStatsTrend,
+  loadGlobalStatsTrend,
+} = useAdminGlobalStatsTrend('Admin Dashboard Onboarding')
 
 async function loadOnboardingFunnel() {
   isLoadingOnboardingFunnel.value = true
@@ -141,7 +61,7 @@ const registrationsTrendSeries = computed(() => {
       label: t('daily-registrations'),
       data: globalStatsTrendData.value.map(item => ({
         date: item.date,
-        value: item.registers_today,
+        value: Number(item.registers_today) || 0,
       })),
       color: '#3b82f6', // blue
     },
@@ -157,8 +77,8 @@ const registrationToSubscriptionConversionSeries = computed(() => {
       label: t('registration-to-subscription-conversion'),
       data: globalStatsTrendData.value.map(item => ({
         date: item.date,
-        value: item.registers_today > 0
-          ? (item.new_paying_orgs / item.registers_today) * 100
+        value: (Number(item.registers_today) || 0) > 0
+          ? ((Number(item.new_paying_orgs) || 0) / (Number(item.registers_today) || 0)) * 100
           : 0,
       })),
       color: '#8b5cf6', // violet
@@ -235,7 +155,7 @@ const onboardingFunnelTrendSeries = computed(() => {
     return []
 
   const trend = onboardingFunnelData.value.trend
-  const demoAppsCreatedByDate = new Map(globalStatsTrendData.value.map(item => [normalizeTrendDate(item.date), item.demo_apps_created]))
+  const demoAppsCreatedByDate = new Map(globalStatsTrendData.value.map(item => [normalizeTrendDate(item.date), Number(item.demo_apps_created) || 0]))
   return [
     {
       label: t('user-registrations'),
@@ -396,7 +316,7 @@ displayStore.defaultBack = '/dashboard'
               {{ t('onboarding-funnel-description') }}
             </p>
             <div v-if="isLoadingOnboardingFunnel" class="flex items-center justify-center h-48">
-              <span class="loading loading-spinner loading-lg" />
+              <span class="d-loading d-loading-spinner d-loading-lg" />
             </div>
             <div v-else-if="onboardingFunnelStages.length > 0" class="space-y-6">
               <div class="h-72 sm:h-80">
