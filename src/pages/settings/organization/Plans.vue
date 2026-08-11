@@ -325,24 +325,24 @@ async function loadData(initial: boolean) {
   initialLoad.value = true
 }
 
-// Pick the org with the most apps where the user can actually manage billing.
-// Used as a fallback when the current org's billing is not accessible.
+// Pick the org with the most apps where the user can view billing.
+// Used as a fallback when the current org's billing is not readable.
 async function findBillableFallbackOrg() {
   const candidates = [...organizationStore.getAllOrgs()]
     .map(([_, org]) => org)
     .sort((a, b) => b.app_count - a.app_count)
   for (const org of candidates) {
-    if (await checkPermissions('org.update_billing', { orgId: org.gid }))
+    if (await checkPermissions('org.read_billing', { orgId: org.gid }))
       return org
   }
   return undefined
 }
 watch(currentOrganization, async (newOrg, prevOrg) => {
   if (newOrg) {
-    // Check permission directly instead of relying on computedAsync default
-    const hasUpdateBillingPermission = await checkPermissions('org.update_billing', { orgId: newOrg.gid })
+    // Viewing plans requires read_billing; update_billing is only for checkout actions.
+    const hasReadBillingPermission = await checkPermissions('org.read_billing', { orgId: newOrg.gid })
 
-    if (!hasUpdateBillingPermission) {
+    if (!hasReadBillingPermission) {
       if (!initialLoad.value) {
         const fallbackOrg = await findBillableFallbackOrg()
         if (fallbackOrg) {
@@ -403,14 +403,14 @@ watchEffect(async (onCleanup) => {
         && route.path === '/settings/organization/plans'
         && currentOrganization.value?.gid === orgId
 
-      // Check permission on initial load
+      // Viewing requires org.read_billing; checkout still checks org.update_billing.
       if (orgId) {
-        const hasUpdateBillingPermission = await checkPermissions('org.update_billing', { orgId })
+        const hasReadBillingPermission = await checkPermissions('org.read_billing', { orgId })
 
         if (!isCurrentTrackingContext())
           return
 
-        if (!hasUpdateBillingPermission) {
+        if (!hasReadBillingPermission) {
           const fallbackOrg = await findBillableFallbackOrg()
           if (fallbackOrg) {
             organizationStore.setCurrentOrganization(fallbackOrg.gid)

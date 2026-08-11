@@ -145,7 +145,8 @@ watchEffect(() => {
   if (!needsUsage && hasUsage)
     organizationTabs.value = organizationTabs.value.filter(tab => tab.key !== '/settings/organization/usage')
 
-  const needsCredits = billingEnabled && canUpdateBilling.value && !hideExternalPurchaseFlows
+  // Plans/Credits are readable with org.read_billing; mutations stay gated by org.update_billing.
+  const needsCredits = billingEnabled && canReadBilling.value && !hideExternalPurchaseFlows
   const hasCredits = organizationTabs.value.find(tab => tab.key === '/settings/organization/credits')
 
   if (needsCredits && !hasCredits) {
@@ -157,7 +158,7 @@ watchEffect(() => {
   if (!needsCredits && hasCredits)
     organizationTabs.value = organizationTabs.value.filter(tab => tab.key !== '/settings/organization/credits')
 
-  const needsPlans = billingEnabled && canUpdateBilling.value && !hideExternalPurchaseFlows
+  const needsPlans = billingEnabled && canReadBilling.value && !hideExternalPurchaseFlows
   const hasPlans = organizationTabs.value.find(tab => tab.key === '/settings/organization/plans')
   if (needsPlans && !hasPlans) {
     const base = baseOrgTabs.find(t => t.key === '/settings/organization/plans')

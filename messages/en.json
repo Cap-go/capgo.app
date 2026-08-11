@@ -2016,7 +2016,7 @@
   "plans-analytics-range-too-large": "This range returned too much data to process. Select a shorter period and try again.",
   "plans-analytics-unavailable": "Plans analytics is temporarily unavailable.",
   "plans-analytics-empty": "No Plans visits were recorded in this period.",
-  "plans-super-only": "Only super admins are allowed to view plans and billing",
+  "plans-super-only": "Only users with billing read access can view plans and billing",
   "platform": "Platform",
   "platform-android": "Android",
   "platform-electron": "Electron",
