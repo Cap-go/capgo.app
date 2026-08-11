@@ -2,21 +2,26 @@ import type { PoolClient } from 'pg'
 import { randomUUID } from 'node:crypto'
 import { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { ORG_ID, POSTGRES_URL, USER_ID } from './test-utils.ts'
+import { POSTGRES_URL, USER_ID, USER_ID_2, withAuthenticatedUser } from './test-utils.ts'
 
 const INVALID_CAPGKEY = '00000000-0000-0000-0000-000000000000'
+const fixtureId = randomUUID()
+const orgId = randomUUID()
+const validApiKey = randomUUID()
 
 let pool: Pool
 
-async function withAuthenticatedUser<T>(userId: string, fn: (client: PoolClient) => Promise<T>): Promise<T> {
+async function withAnonymousCapgkey<T>(
+  capgkey: string,
+  fn: (client: PoolClient) => Promise<T>,
+): Promise<T> {
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
-    await client.query('SET LOCAL ROLE authenticated')
-    await client.query('SELECT set_config($1, $2, true)', ['request.jwt.claim.sub', userId])
+    await client.query('SET LOCAL ROLE anon')
     await client.query('SELECT set_config($1, $2, true)', [
-      'request.jwt.claims',
-      JSON.stringify({ sub: userId, role: 'authenticated', aud: 'authenticated' }),
+      'request.headers',
+      JSON.stringify({ capgkey }),
     ])
     const result = await fn(client)
     await client.query('COMMIT')
@@ -38,15 +43,70 @@ async function withAuthenticatedUser<T>(userId: string, fn: (client: PoolClient)
 
 beforeAll(async () => {
   pool = new Pool({ connectionString: POSTGRES_URL })
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+
+    await client.query(`
+      INSERT INTO public.orgs (id, created_by, name, management_email)
+      VALUES ($1::uuid, $2::uuid, $3, $4)
+    `, [orgId, USER_ID, `JWT capgkey priority ${fixtureId}`, `jwt-capgkey-${fixtureId}@capgo.app`])
+
+    await client.query(`
+      INSERT INTO public.org_users (org_id, user_id, rbac_role_name, is_invite)
+      VALUES ($1::uuid, $2::uuid, public.rbac_role_org_member(), false)
+    `, [orgId, USER_ID_2])
+
+    const apiKeyResult = await client.query(`
+      INSERT INTO public.apikeys (user_id, key, name)
+      VALUES ($1::uuid, $2, $3)
+      RETURNING rbac_id
+    `, [USER_ID, validApiKey, `JWT capgkey priority ${fixtureId}`])
+    const apiKeyRbacId = apiKeyResult.rows[0]?.rbac_id as string
+    expect(apiKeyRbacId).toBeTruthy()
+
+    await client.query(`
+      INSERT INTO public.role_bindings (
+        principal_type, principal_id, role_id, scope_type, org_id, granted_by, is_direct
+      )
+      SELECT
+        public.rbac_principal_apikey(),
+        $1::uuid,
+        roles.id,
+        public.rbac_scope_org(),
+        $2::uuid,
+        $3::uuid,
+        true
+      FROM public.roles
+      WHERE roles.name = public.rbac_role_org_super_admin()
+        AND roles.scope_type = public.rbac_scope_org()
+    `, [apiKeyRbacId, orgId, USER_ID])
+
+    await client.query('COMMIT')
+  }
+  catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  }
+  finally {
+    client.release()
+  }
 })
 
 afterAll(async () => {
-  await pool.end()
+  const client = await pool.connect()
+  try {
+    await client.query('DELETE FROM public.orgs WHERE id = $1::uuid', [orgId])
+  }
+  finally {
+    client.release()
+    await pool.end()
+  }
 })
 
 describe('rbac JWT priority over capgkey', () => {
-  it('uses JWT user permissions when an invalid capgkey header is present', async () => {
-    const allowed = await withAuthenticatedUser(USER_ID, async (client) => {
+  it.concurrent('uses JWT user permissions when an invalid capgkey header is present', async () => {
+    const allowed = await withAuthenticatedUser(pool, USER_ID, async (client) => {
       await client.query(
         'SELECT set_config($1, $2, true)',
         ['request.headers', JSON.stringify({ capgkey: INVALID_CAPGKEY })],
@@ -59,7 +119,7 @@ describe('rbac JWT priority over capgkey', () => {
           NULL::character varying,
           NULL::bigint
         ) AS allowed
-      `, [ORG_ID])
+      `, [orgId])
 
       return result.rows[0]?.allowed as boolean
     })
@@ -67,10 +127,32 @@ describe('rbac JWT priority over capgkey', () => {
     expect(allowed).toBe(true)
   })
 
-  it('allows org super admins to insert groups when capgkey header is invalid', async () => {
+  it.concurrent('denies JWT users without the permission even when a valid capgkey is present', async () => {
+    const allowed = await withAuthenticatedUser(pool, USER_ID_2, async (client) => {
+      await client.query(
+        'SELECT set_config($1, $2, true)',
+        ['request.headers', JSON.stringify({ capgkey: validApiKey })],
+      )
+
+      const result = await client.query(`
+        SELECT public.rbac_check_permission_request(
+          public.rbac_perm_org_update_user_roles(),
+          $1::uuid,
+          NULL::character varying,
+          NULL::bigint
+        ) AS allowed
+      `, [orgId])
+
+      return result.rows[0]?.allowed as boolean
+    })
+
+    expect(allowed).toBe(false)
+  })
+
+  it.concurrent('allows org super admins to insert groups when capgkey header is invalid', async () => {
     const groupId = randomUUID()
 
-    await withAuthenticatedUser(USER_ID, async (client) => {
+    await withAuthenticatedUser(pool, USER_ID, async (client) => {
       await client.query(
         'SELECT set_config($1, $2, true)',
         ['request.headers', JSON.stringify({ capgkey: INVALID_CAPGKEY })],
@@ -79,18 +161,43 @@ describe('rbac JWT priority over capgkey', () => {
       const result = await client.query(`
         INSERT INTO public.groups (id, org_id, name, description, created_by)
         VALUES ($1::uuid, $2::uuid, $3, $4, $5::uuid)
-        RETURNING id
-      `, [groupId, ORG_ID, `JWT priority group ${groupId}`, 'Regression test', USER_ID])
+      `, [groupId, orgId, `JWT priority group ${groupId}`, 'Regression test', USER_ID])
 
-      expect(result.rows).toHaveLength(1)
+      expect(result.rowCount).toBe(1)
+    })
+  })
+
+  it.concurrent('authorizes anonymous requests with a valid capgkey', async () => {
+    const allowed = await withAnonymousCapgkey(validApiKey, async (client) => {
+      const result = await client.query(`
+        SELECT public.rbac_check_permission_request(
+          public.rbac_perm_org_update_user_roles(),
+          $1::uuid,
+          NULL::character varying,
+          NULL::bigint
+        ) AS allowed
+      `, [orgId])
+
+      return result.rows[0]?.allowed as boolean
     })
 
-    const client = await pool.connect()
-    try {
-      await client.query('DELETE FROM public.groups WHERE id = $1::uuid', [groupId])
-    }
-    finally {
-      client.release()
-    }
+    expect(allowed).toBe(true)
+  })
+
+  it.concurrent('denies anonymous requests with an invalid capgkey', async () => {
+    const allowed = await withAnonymousCapgkey(INVALID_CAPGKEY, async (client) => {
+      const result = await client.query(`
+        SELECT public.rbac_check_permission_request(
+          public.rbac_perm_org_update_user_roles(),
+          $1::uuid,
+          NULL::character varying,
+          NULL::bigint
+        ) AS allowed
+      `, [orgId])
+
+      return result.rows[0]?.allowed as boolean
+    })
+
+    expect(allowed).toBe(false)
   })
 })

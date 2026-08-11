@@ -21,6 +21,7 @@ DECLARE
   v_channel_app_id character varying;
   v_channel_scope boolean := p_channel_id IS NOT NULL;
   v_override boolean;
+  v_uid uuid := auth.uid();
 BEGIN
   IF p_permission_key IS NULL OR p_permission_key = '' THEN
     RETURN false;
@@ -68,12 +69,12 @@ BEGIN
 
   -- Match apps_readable_app_ids(): authenticated JWT callers use the user principal,
   -- and anonymous requests with capgkey use the API-key principal.
+  -- Callers that already resolved a JWT identity must pass NULL p_apikey (see
+  -- rbac_check_permission_request); auth.uid() is unavailable on raw service-role
+  -- Postgres connections used by some internal callers.
   IF p_apikey IS NOT NULL
     AND btrim(p_apikey) <> ''
-    AND NOT (
-      auth.uid() IS NOT NULL
-      AND p_user_id IS NOT DISTINCT FROM auth.uid()
-    )
+    AND v_uid IS NULL
   THEN
     SELECT * INTO v_api_key
     FROM public.find_apikey_by_value(p_apikey)
@@ -190,6 +191,7 @@ DECLARE
   v_app_owner_org uuid;
   v_channel_org_id uuid;
   v_channel_app_id character varying;
+  v_uid uuid := auth.uid();
 BEGIN
   IF p_permission_key IS NULL OR p_permission_key = '' THEN
     RETURN false;
@@ -237,10 +239,7 @@ BEGIN
 
   IF p_apikey IS NOT NULL
     AND btrim(p_apikey) <> ''
-    AND NOT (
-      auth.uid() IS NOT NULL
-      AND p_user_id IS NOT DISTINCT FROM auth.uid()
-    )
+    AND v_uid IS NULL
   THEN
     SELECT * INTO v_api_key
     FROM public.find_apikey_by_value(p_apikey)
@@ -302,15 +301,17 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = ''
 AS $$
+DECLARE
+  v_uid uuid := auth.uid();
 BEGIN
   RETURN public.rbac_check_permission_direct(
     p_permission_key,
-    auth.uid(),
+    v_uid,
     p_org_id,
     p_app_id,
     p_channel_id,
     CASE
-      WHEN auth.uid() IS NOT NULL THEN NULL::text
+      WHEN v_uid IS NOT NULL THEN NULL::text
       ELSE NULLIF(btrim(public.get_apikey_header()), '')
     END
   );
