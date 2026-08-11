@@ -22,12 +22,15 @@ import {
   getResumedOnboardingAccessError,
   getNativePlatformAvailability,
   injectInitCode,
+  isSuccessfulInitCommandResult,
+  isSuccessfulInitProcessResult,
   isOnlyAllowedInitAutoTestChange,
   mergeInitGitChanges,
   parseInitGitChanges,
   restoreInitProgressState,
   revertInitAutoTestChangeContent,
   runInheritedCommand,
+  runTrackedInitMutation,
   trackInitGitChanges,
   tryResumeOnboarding,
 } from '../src/init/command.ts'
@@ -930,6 +933,183 @@ await tAsync('git mutation tracker retains existing fingerprints when capture is
   })
 })
 
+await tAsync('scoped git tracking ignores a large unrelated dirty tree and retains saved out-of-scope records', async () => {
+  await withTempDirAsync(async (root) => {
+    const files = { 'package.json': '{"name":"example"}\n' }
+    for (let index = 0; index < 120; index += 1)
+      files[`src/dirty-${index}.ts`] = `export const value = ${index}\n`
+    initializeGitRepo(root, files)
+    for (let index = 0; index < 120; index += 1)
+      writeFileSync(join(root, `src/dirty-${index}.ts`), `export const userValue = ${index}\n`, 'utf8')
+
+    const repoRoot = captureInitGitSnapshot(root, { exactPaths: [] })?.repoRoot
+    assert.ok(repoRoot)
+    const existing = {
+      version: 1,
+      repoRoot,
+      files: {
+        'src/dirty-0.ts': { status: ' M', sha256: 'a'.repeat(64), mode: 0o100644 },
+      },
+    }
+    const tracked = await trackInitGitChanges(existing, () => {
+      writeFileSync(join(root, 'package.json'), '{"name":"capgo"}\n', 'utf8')
+      writeFileSync(join(root, 'src/dirty-1.ts'), 'export const changedAgain = true\n', 'utf8')
+    }, {
+      startDir: root,
+      scope: { exactPaths: ['package.json'] },
+    })
+
+    assert.deepEqual(Object.keys(tracked.gitChanges?.files ?? {}).sort(), ['package.json', 'src/dirty-0.ts'])
+    assert.deepEqual(tracked.gitChanges?.files['src/dirty-0.ts'], existing.files['src/dirty-0.ts'])
+    assert.deepEqual(Object.keys(captureInitGitSnapshot(root, { exactPaths: ['package.json'] })?.files ?? {}), ['package.json'])
+  })
+})
+
+await tAsync('unsafe git scopes fail closed without claiming paths', async () => {
+  await withTempDirAsync(async (root) => {
+    initializeGitRepo(root, { 'package.json': '{"name":"example"}\n' })
+    const existing = {
+      version: 1,
+      repoRoot: captureInitGitSnapshot(root)?.repoRoot,
+      files: {
+        'saved.txt': { status: '??', sha256: 'a'.repeat(64), mode: 0o100644 },
+      },
+    }
+    const unsafeScopes = [
+      { exactPaths: ['/absolute.txt'] },
+      { exactPaths: ['../escaping.txt'] },
+      { exactPaths: ['unsafe\0name.txt'] },
+      { directoryPrefixes: ['../../outside'] },
+    ]
+
+    for (const scope of unsafeScopes) {
+      assert.equal(captureInitGitSnapshot(root, scope), undefined)
+      const tracked = await trackInitGitChanges(existing, () => {
+        writeFileSync(join(root, 'package.json'), '{"name":"partial"}\n', 'utf8')
+      }, { startDir: root, scope })
+      assert.deepEqual(tracked.gitChanges, existing)
+    }
+  })
+})
+
+await tAsync('tracked init mutation persists changed process, structured, and void successes', async () => {
+  await withTempDirAsync(async (root) => {
+    initializeGitRepo(root, {
+      'package.json': '{"name":"example"}\n',
+      'capacitor.config.ts': 'export default {}\n',
+      'src/main.ts': 'console.log(\'initial\')\n',
+    })
+    restoreInitProgressState(1, undefined)
+    let persistCount = 0
+    const dependencies = { persistProgress: () => { persistCount += 1 } }
+
+    const processResult = await runTrackedInitMutation(() => {
+      writeFileSync(join(root, 'package.json'), '{"name":"capgo"}\n', 'utf8')
+      return { status: 0, error: undefined }
+    }, {
+      startDir: root,
+      scope: { exactPaths: ['package.json'] },
+      isSuccess: isSuccessfulInitProcessResult,
+    }, dependencies)
+    assert.equal(processResult.status, 0)
+    assert.equal(persistCount, 1)
+
+    const commandResult = await runTrackedInitMutation(() => {
+      writeFileSync(join(root, 'capacitor.config.ts'), 'export default { appId: \'com.test.app\' }\n', 'utf8')
+      return { success: true }
+    }, {
+      startDir: root,
+      scope: { exactPaths: ['capacitor.config.ts'] },
+      isSuccess: isSuccessfulInitCommandResult,
+    }, dependencies)
+    assert.equal(commandResult.success, true)
+
+    await runTrackedInitMutation(() => {
+      writeFileSync(join(root, 'src/main.ts'), 'console.log(\'capgo\')\n', 'utf8')
+    }, {
+      startDir: root,
+      scope: { exactPaths: ['src/main.ts'] },
+    }, dependencies)
+
+    assert.equal(persistCount, 3)
+    assert.deepEqual(Object.keys(getInitProgressStateForTesting().gitChanges?.files ?? {}).sort(), [
+      'capacitor.config.ts',
+      'package.json',
+      'src/main.ts',
+    ])
+    beginFreshInitProgress()
+  })
+})
+
+await tAsync('tracked init mutation leaves global state and persistence unchanged on every failure mode', async () => {
+  await withTempDirAsync(async (root) => {
+    initializeGitRepo(root, { 'package.json': '{"name":"example"}\n' })
+    writeFileSync(join(root, 'package.json'), '{"name":"saved"}\n', 'utf8')
+    const saved = captureInitGitSnapshot(root)
+    assert.ok(saved)
+    const original = structuredClone(saved)
+    let persistCount = 0
+    const dependencies = { persistProgress: () => { persistCount += 1 } }
+
+    const operationError = new Error('operation failed')
+    restoreInitProgressState(1, saved)
+    await assert.rejects(
+      runTrackedInitMutation(() => {
+        writeFileSync(join(root, 'package.json'), '{"name":"partial-operation"}\n', 'utf8')
+        throw operationError
+      }, { startDir: root, scope: { exactPaths: ['package.json'] } }, dependencies),
+      error => error === operationError,
+    )
+    assert.deepEqual(getInitProgressStateForTesting().gitChanges, original)
+
+    restoreInitProgressState(1, saved)
+    const failedResult = await runTrackedInitMutation(() => {
+      writeFileSync(join(root, 'package.json'), '{"name":"partial-result"}\n', 'utf8')
+      return { success: false }
+    }, {
+      startDir: root,
+      scope: { exactPaths: ['package.json'] },
+      isSuccess: isSuccessfulInitCommandResult,
+    }, dependencies)
+    assert.deepEqual(failedResult, { success: false })
+    assert.deepEqual(getInitProgressStateForTesting().gitChanges, original)
+
+    const predicateError = new Error('predicate failed')
+    restoreInitProgressState(1, saved)
+    await assert.rejects(
+      runTrackedInitMutation(() => ({ success: true }), {
+        startDir: root,
+        scope: { exactPaths: ['package.json'] },
+        isSuccess: () => { throw predicateError },
+      }, dependencies),
+      error => error === predicateError,
+    )
+    assert.deepEqual(getInitProgressStateForTesting().gitChanges, original)
+    assert.equal(persistCount, 0)
+    beginFreshInitProgress()
+  })
+})
+
+await tAsync('zero-delta tracked success keeps global state byte-equal without persisting', async () => {
+  await withTempDirAsync(async (root) => {
+    initializeGitRepo(root, { 'package.json': '{"name":"example"}\n' })
+    writeFileSync(join(root, 'package.json'), '{"name":"saved"}\n', 'utf8')
+    const saved = captureInitGitSnapshot(root)
+    assert.ok(saved)
+    restoreInitProgressState(1, saved)
+    let persistCount = 0
+
+    await runTrackedInitMutation(() => undefined, {
+      startDir: root,
+      scope: { exactPaths: ['package.json'] },
+    }, { persistProgress: () => { persistCount += 1 } })
+
+    assert.deepEqual(getInitProgressStateForTesting().gitChanges, saved)
+    assert.equal(persistCount, 0)
+    beginFreshInitProgress()
+  })
+})
+
 t('automatic onboarding mutations use narrow tracking windows and user-controlled work stays outside them', () => {
   const source = readFileSync(new URL('../src/init/command.ts', import.meta.url), 'utf8')
   const sourceBetween = (start, end) => {
@@ -957,8 +1137,11 @@ t('automatic onboarding mutations use narrow tracking windows and user-controlle
     ['self-host config update', 'export async function initApp(', undefined, 1],
   ]
 
-  for (const [name, start, end, expectedCalls] of coverage)
-    assert.equal(trackedCallCount(sourceBetween(start, end)), expectedCalls, name)
+  for (const [name, start, end, expectedCalls] of coverage) {
+    const body = sourceBetween(start, end)
+    assert.equal(trackedCallCount(body), expectedCalls, name)
+    assert.equal(body.match(/\bscope:/g)?.length ?? 0, expectedCalls, `${name} scope`)
+  }
 
   assert.equal(trackedCallCount(sourceBetween('async function waitUntilSetupIsDone(', 'async function askForAppName(')), 0, 'manual setup wait')
   assert.equal(trackedCallCount(sourceBetween('async function waitForReadyConfirmation(', 'async function waitForReadyRetry(')), 0, 'manual ready wait')

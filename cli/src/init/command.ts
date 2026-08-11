@@ -33,7 +33,7 @@ import { copyToClipboard, revealInFinder } from '../support/clipboard'
 import { contactSupport } from '../support/contact-support'
 import { appendInternalLog, getInternalLogPath, startInternalLog } from '../support/internal-log'
 import { uploadSupportLogs } from '../support/support-upload'
-import { consoleWebUrl, createSupabaseClient, defaultApiHost, findBuildCommandForProjectType, findMainFile, findMainFileForProjectType, findProjectType, findRoot, findSavedKey, findSavedKeySilent, formatError, getAllPackagesDependencies, getAppId, getBundleVersion, getConfig, getConfigForWrite, getLocalConfig, getNativeProjectResetAdvice, getOrganizationListWithPermission, getPackageScripts, getPMAndCommand, hasCliPermission, PACKNAME, projectIsMonorepo, resolveUserIdFromApiKey, setPMAndCommand, updateConfigbyKey, updateConfigUpdater, validateIosUpdaterSync } from '../utils'
+import { baseKeyPubV2, baseKeyV2, consoleWebUrl, createSupabaseClient, defaultApiHost, findBuildCommandForProjectType, findMainFile, findMainFileForProjectType, findProjectType, findRoot, findSavedKey, findSavedKeySilent, formatError, getAllPackagesDependencies, getAppId, getBundleVersion, getConfig, getConfigForWrite, getLocalConfig, getNativeProjectResetAdvice, getOrganizationListWithPermission, getPackageScripts, getPMAndCommand, hasCliPermission, PACKNAME, projectIsMonorepo, resolveUserIdFromApiKey, setPMAndCommand, updateConfigbyKey, updateConfigUpdater, validateIosUpdaterSync } from '../utils'
 import { buildAppIdConflictSuggestions, isAppAlreadyExistsError } from './app-conflict'
 import { isChannelAlreadyExistsError } from './channel-conflict'
 import { createMissingExecutableError, getAvailablePackageManagers, getMissingPackageManagerExecutable, getPackageManagerInfo, preparePackageManagerCommandEnvironment, probeExecutable, probePackageManagerCommand, resolveExecutableProbeError, waitForCommandResult } from './command-execution'
@@ -144,6 +144,22 @@ export interface InitGitChanges {
   version: 1
   repoRoot: string
   files: Record<string, InitGitChangeFingerprint>
+}
+
+export interface InitGitChangeScope {
+  exactPaths?: string[]
+  directoryPrefixes?: string[]
+}
+
+interface NormalizedInitGitChangeScope {
+  exactPaths: string[]
+  directoryPrefixes: string[]
+}
+
+export interface TrackInitGitChangesOptions<T> {
+  startDir?: string
+  scope?: InitGitChangeScope
+  isSuccess?: (result: T) => boolean
 }
 
 export interface InitGitClassification {
@@ -530,6 +546,128 @@ function cloneInitGitChanges(changes: InitGitChanges, files = changes.files): In
     : undefined
 }
 
+function initGitChangesMatch(left: InitGitChanges | undefined, right: InitGitChanges | undefined) {
+  if (!left || !right)
+    return left === right
+  if (left.repoRoot !== right.repoRoot)
+    return false
+  const leftPaths = Object.keys(left.files).sort()
+  const rightPaths = Object.keys(right.files).sort()
+  return leftPaths.length === rightPaths.length
+    && leftPaths.every((filePath, index) => filePath === rightPaths[index]
+      && initGitFingerprintMatches(left.files[filePath], right.files[filePath]))
+}
+
+function normalizeInitGitScope(scope: InitGitChangeScope): NormalizedInitGitChangeScope | undefined {
+  if (!isPlainInitGitRecord(scope))
+    return undefined
+  const scopeKeys = Reflect.ownKeys(scope)
+  if (scopeKeys.some((key) => {
+    const descriptor = Object.getOwnPropertyDescriptor(scope, key)
+    return typeof key !== 'string'
+      || !['exactPaths', 'directoryPrefixes'].includes(key)
+      || descriptor?.enumerable !== true
+      || !Object.hasOwn(descriptor, 'value')
+  })
+    || (scope.exactPaths !== undefined && !Array.isArray(scope.exactPaths))
+    || (scope.directoryPrefixes !== undefined && !Array.isArray(scope.directoryPrefixes)))
+    return undefined
+
+  const normalizeEntries = (entries: unknown[] | undefined) => {
+    const normalized: string[] = []
+    for (const entry of entries ?? []) {
+      if (typeof entry !== 'string' || !entry || entry.includes('\0'))
+        return undefined
+      const posixPath = entry.replaceAll('\\', '/')
+      if (path.posix.isAbsolute(posixPath)
+        || /^[a-z]:\//i.test(posixPath)
+        || posixPath.split('/').includes('..'))
+        return undefined
+      const value = path.posix.normalize(posixPath).replace(/^\.\//, '').replace(/\/$/, '')
+      if (!value || value === '.')
+        return undefined
+      normalized.push(value)
+    }
+    return [...new Set(normalized)].sort()
+  }
+
+  const exactPaths = normalizeEntries(scope.exactPaths)
+  const directoryPrefixes = normalizeEntries(scope.directoryPrefixes)
+  return exactPaths && directoryPrefixes ? { exactPaths, directoryPrefixes } : undefined
+}
+
+function initGitScopeIncludes(scope: NormalizedInitGitChangeScope, filePath: string) {
+  return scope.exactPaths.includes(filePath)
+    || scope.directoryPrefixes.some(prefix => filePath === prefix || filePath.startsWith(`${prefix}/`))
+}
+
+function getInitGitRepoRoot(startDir = cwd()): string | undefined {
+  try {
+    const repoResult = spawnSync('git', ['rev-parse', '--show-toplevel'], {
+      cwd: startDir,
+      stdio: 'pipe',
+      encoding: 'utf8',
+    })
+    if (repoResult.error || repoResult.status !== 0)
+      return undefined
+    const repoRootValue = repoResult.stdout?.toString().trim()
+    return repoRootValue ? realpathSync(repoRootValue) : undefined
+  }
+  catch {
+    return undefined
+  }
+}
+
+function createInitGitChangeScope(startDir: string, exactTargets: string[] = [], directoryTargets: string[] = []): InitGitChangeScope {
+  const repoRoot = getInitGitRepoRoot(startDir)
+  if (!repoRoot)
+    return { exactPaths: [], directoryPrefixes: [] }
+
+  const toRepoRelativePath = (target: string) => {
+    const relativePath = path.relative(repoRoot, path.resolve(startDir, target)).replaceAll(path.sep, '/')
+    if (!relativePath || relativePath === '..' || relativePath.startsWith('../') || path.posix.isAbsolute(relativePath))
+      return undefined
+    return relativePath
+  }
+  const exactPaths = exactTargets.map(toRepoRelativePath)
+  const directoryPrefixes = directoryTargets.map(toRepoRelativePath)
+  if (exactPaths.some(value => !value) || directoryPrefixes.some(value => !value))
+    return { exactPaths: [], directoryPrefixes: [] }
+  return {
+    exactPaths: exactPaths as string[],
+    directoryPrefixes: directoryPrefixes as string[],
+  }
+}
+
+const initPackageLockfiles: Record<SupportedPackageManager, string[]> = {
+  npm: ['package-lock.json', 'npm-shrinkwrap.json'],
+  pnpm: ['pnpm-lock.yaml', 'shrinkwrap.yaml'],
+  yarn: ['yarn.lock'],
+  bun: ['bun.lock', 'bun.lockb'],
+}
+
+function getInitPackageMutationScope(pm: SupportedPackageManager | 'unknown', packageJsonPath: string): InitGitChangeScope {
+  const packageDir = dirname(packageJsonPath)
+  const repoRoot = getInitGitRepoRoot(packageDir)
+  if (!repoRoot)
+    return { exactPaths: [], directoryPrefixes: [] }
+
+  const exactTargets = [packageJsonPath]
+  const lockfiles = pm === 'unknown' ? [] : initPackageLockfiles[pm]
+  let currentDir = packageDir
+  while (currentDir === repoRoot || currentDir.startsWith(`${repoRoot}${path.sep}`)) {
+    exactTargets.push(...lockfiles.map(fileName => join(currentDir, fileName)))
+    if (currentDir === repoRoot)
+      break
+    currentDir = dirname(currentDir)
+  }
+  return createInitGitChangeScope(packageDir, exactTargets)
+}
+
+function getInitCapacitorConfigScope(projectDir: string): InitGitChangeScope {
+  return createInitGitChangeScope(projectDir, capacitorConfigFiles.map(fileName => join(projectDir, fileName)))
+}
+
 function isRegularGitBlobMode(mode: string | null) {
   return mode === '100644' || mode === '100755'
 }
@@ -585,21 +723,22 @@ function parseInitGitStatusRecord(value: string): InitGitStatusRecord | undefine
   return { status, filePath, headMode, indexMode, worktreeMode }
 }
 
-export function captureInitGitSnapshot(startDir = cwd()): InitGitChanges | undefined {
+export function captureInitGitSnapshot(startDir = cwd(), scope?: InitGitChangeScope): InitGitChanges | undefined {
   try {
-    const repoResult = spawnSync('git', ['rev-parse', '--show-toplevel'], {
-      cwd: startDir,
-      stdio: 'pipe',
-      encoding: 'utf8',
-    })
-    if (repoResult.error || repoResult.status !== 0)
+    const repoRoot = getInitGitRepoRoot(startDir)
+    if (!repoRoot)
       return undefined
+    const normalizedScope = scope ? normalizeInitGitScope(scope) : undefined
+    if (scope && !normalizedScope)
+      return undefined
+    if (normalizedScope && normalizedScope.exactPaths.length === 0 && normalizedScope.directoryPrefixes.length === 0)
+      return { version: 1, repoRoot, files: {} }
 
-    const repoRootValue = repoResult.stdout?.toString().trim()
-    if (!repoRootValue)
-      return undefined
-    const repoRoot = realpathSync(repoRootValue)
-    const statusResult = spawnSync('git', ['-c', 'status.renames=copies', 'status', '--porcelain=v2', '-z', '--untracked-files=all'], {
+    const statusArgs = ['-c', 'status.renames=copies', 'status', '--porcelain=v2', '-z', '--untracked-files=all']
+    if (normalizedScope) {
+      statusArgs.push('--', ...normalizedScope.exactPaths.map(filePath => `:(top,literal)${filePath}`), ...normalizedScope.directoryPrefixes.map(prefix => `:(top,literal)${prefix}`))
+    }
+    const statusResult = spawnSync('git', statusArgs, {
       cwd: repoRoot,
       stdio: 'pipe',
       encoding: 'utf8',
@@ -656,9 +795,51 @@ export function captureInitGitSnapshot(startDir = cwd()): InitGitChanges | undef
   }
 }
 
-export function mergeInitGitChanges(existing: InitGitChanges | undefined, before: InitGitChanges | undefined, after: InitGitChanges | undefined): InitGitChanges | undefined {
+export function mergeInitGitChanges(
+  existing: InitGitChanges | undefined,
+  before: InitGitChanges | undefined,
+  after: InitGitChanges | undefined,
+  scope?: InitGitChangeScope,
+): InitGitChanges | undefined {
   const usableBefore = isUsableInitGitChanges(before) ? before : undefined
   const usableAfter = isUsableInitGitChanges(after) ? after : undefined
+  const normalizedScope = scope ? normalizeInitGitScope(scope) : undefined
+  if (scope) {
+    if (!normalizedScope || !usableBefore || !usableAfter || usableBefore.repoRoot !== usableAfter.repoRoot)
+      return isUsableInitGitChanges(existing) ? cloneInitGitChanges(existing) : undefined
+
+    const existingMatchesRepo = isUsableInitGitChanges(existing) && existing.repoRoot === usableBefore.repoRoot
+    const retainedFiles: Record<string, InitGitChangeFingerprint> = {}
+    const recognizedBefore = new Set<string>()
+    if (existingMatchesRepo) {
+      for (const [filePath, fingerprint] of Object.entries(existing.files)) {
+        if (!initGitScopeIncludes(normalizedScope, filePath)) {
+          retainedFiles[filePath] = { ...fingerprint }
+        }
+        else if (initGitFingerprintMatches(fingerprint, usableBefore.files[filePath])) {
+          retainedFiles[filePath] = { ...fingerprint }
+          recognizedBefore.add(filePath)
+        }
+      }
+    }
+
+    for (const filePath of new Set([...Object.keys(usableBefore.files), ...Object.keys(usableAfter.files)])) {
+      if (!initGitScopeIncludes(normalizedScope, filePath))
+        continue
+      const beforeFingerprint = usableBefore.files[filePath]
+      const afterFingerprint = usableAfter.files[filePath]
+      if (initGitFingerprintMatches(beforeFingerprint, afterFingerprint))
+        continue
+      if (beforeFingerprint && !recognizedBefore.has(filePath))
+        continue
+      if (afterFingerprint)
+        retainedFiles[filePath] = { ...afterFingerprint }
+      else
+        delete retainedFiles[filePath]
+    }
+    return cloneInitGitChanges({ version: 1, repoRoot: usableAfter.repoRoot, files: retainedFiles })
+  }
+
   const existingMatchesRepo = isUsableInitGitChanges(existing)
     && (!usableBefore || existing.repoRoot === usableBefore.repoRoot)
   const retainedFiles: Record<string, InitGitChangeFingerprint> = {}
@@ -698,17 +879,22 @@ export function mergeInitGitChanges(existing: InitGitChanges | undefined, before
 export async function trackInitGitChanges<T>(
   existing: InitGitChanges | undefined,
   operation: () => T | Promise<T>,
-  options: {
-    startDir?: string
-    isSuccess?: (result: T) => boolean
-  } = {},
+  options: TrackInitGitChangesOptions<T> = {},
 ): Promise<{ result: T, gitChanges: InitGitChanges | undefined }> {
-  const before = captureInitGitSnapshot(options.startDir)
+  const before = captureInitGitSnapshot(options.startDir, options.scope)
   const result = await operation()
   if (options.isSuccess && !options.isSuccess(result))
     return { result, gitChanges: existing }
-  const after = captureInitGitSnapshot(options.startDir)
-  return { result, gitChanges: mergeInitGitChanges(existing, before, after) }
+  const after = captureInitGitSnapshot(options.startDir, options.scope)
+  return { result, gitChanges: mergeInitGitChanges(existing, before, after, options.scope) }
+}
+
+export function isSuccessfulInitProcessResult(result: { error?: unknown, status: number | null }) {
+  return !result.error && result.status === 0
+}
+
+export function isSuccessfulInitCommandResult(result: { success: boolean }) {
+  return result.success
 }
 
 export function classifyInitGitChanges(current: InitGitChanges | undefined, saved: InitGitChanges | undefined): InitGitClassification {
@@ -1595,7 +1781,11 @@ async function maybeRunCapacitorInit(projectDir: string, projectType: string, in
     spinner.start(`Installing Capacitor packages with ${pm.installCommand}`)
     const installCoreResult = await runTrackedInitMutation(
       () => spawnSync(pm.pm, [pm.command, '@capacitor/core'], { stdio: 'pipe', cwd: projectDir }),
-      { startDir: projectDir, isSuccess: result => !result.error && result.status === 0 },
+      {
+        startDir: projectDir,
+        scope: getInitPackageMutationScope(pm.pm, join(projectDir, PACKNAME)),
+        isSuccess: isSuccessfulInitProcessResult,
+      },
     )
     if (installCoreResult.error)
       throw installCoreResult.error
@@ -1607,7 +1797,11 @@ async function maybeRunCapacitorInit(projectDir: string, projectType: string, in
 
     const installCliResult = await runTrackedInitMutation(
       () => spawnSync(pm.pm, [pm.command, '-D', '@capacitor/cli'], { stdio: 'pipe', cwd: projectDir }),
-      { startDir: projectDir, isSuccess: result => !result.error && result.status === 0 },
+      {
+        startDir: projectDir,
+        scope: getInitPackageMutationScope(pm.pm, join(projectDir, PACKNAME)),
+        isSuccess: isSuccessfulInitProcessResult,
+      },
     )
     if (installCliResult.error)
       throw installCliResult.error
@@ -1620,7 +1814,11 @@ async function maybeRunCapacitorInit(projectDir: string, projectType: string, in
     spinner.message(`Running: ${pm.runner} cap init "${appName}" "${capacitorAppId}" --web-dir ${webDir}`)
     const initResult = await runTrackedInitMutation(
       () => spawnSync(pm.runner, ['cap', 'init', appName, capacitorAppId, '--web-dir', webDir], { stdio: 'pipe', cwd: projectDir }),
-      { startDir: projectDir, isSuccess: result => !result.error && result.status === 0 },
+      {
+        startDir: projectDir,
+        scope: getInitCapacitorConfigScope(projectDir),
+        isSuccess: isSuccessfulInitProcessResult,
+      },
     )
     if (initResult.error)
       throw initResult.error
@@ -1647,7 +1845,7 @@ async function maybeRunCapacitorInit(projectDir: string, projectType: string, in
   }
 }
 
-async function runCapacitorPlatformAdd(platformName: 'ios' | 'android', runner: string, commandCwd = cwd()): Promise<boolean> {
+async function runCapacitorPlatformAdd(platformName: 'ios' | 'android', runner: string, commandCwd = cwd(), nativePlatformDir: string = platformName): Promise<boolean> {
   const command = formatRunnerCommand(runner, ['cap', 'add', platformName])
   const spinner = pSpinner()
   const runMessage = commandCwd === cwd()
@@ -1663,7 +1861,11 @@ async function runCapacitorPlatformAdd(platformName: 'ios' | 'android', runner: 
       args: ['cap', 'add', platformName],
       cwd: commandCwd,
     }),
-    { startDir: commandCwd, isSuccess: result => result.success },
+    {
+      startDir: commandCwd,
+      scope: createInitGitChangeScope(commandCwd, [], [path.resolve(commandCwd, nativePlatformDir)]),
+      isSuccess: isSuccessfulInitCommandResult,
+    },
   )
   await delay(result.success ? 750 : 3500)
   clearInitStreamingOutput()
@@ -1830,13 +2032,12 @@ function persistInitProgressSafely() {
   }
 }
 
-async function runTrackedInitMutation<T>(
+export async function runTrackedInitMutation<T>(
   operation: () => T | Promise<T>,
-  options: {
-    startDir?: string
-    isSuccess?: (result: T) => boolean
-  } = {},
+  options: TrackInitGitChangesOptions<T> = {},
+  dependencies: { persistProgress?: () => void } = {},
 ): Promise<T> {
+  const previousGitChanges = globalInitGitChanges
   let successful = true
   const isSuccess = options.isSuccess
   const tracked = await trackInitGitChanges(globalInitGitChanges, operation, {
@@ -1848,10 +2049,10 @@ async function runTrackedInitMutation<T>(
         }
       : undefined,
   })
-  if (successful) {
+  if (successful && !initGitChangesMatch(previousGitChanges, tracked.gitChanges)) {
     globalInitGitChanges = tracked.gitChanges
     if (globalStepDone > 0)
-      persistInitProgressSafely()
+      (dependencies.persistProgress ?? persistInitProgressSafely)()
   }
   return tracked.result
 }
@@ -2373,9 +2574,14 @@ async function markStep(orgId: string, apikey: string, step: string, appId: stri
  */
 async function saveAppIdToCapacitorConfig(appId: string) {
   try {
+    const configTarget = await getConfigForWrite()
+    const configDir = dirname(configTarget.path)
     await runTrackedInitMutation(
       () => updateConfigUpdater({ appId }),
-      { startDir: globalConfigLoadDir ?? (globalCapacitorConfigPath ? dirname(globalCapacitorConfigPath) : cwd()) },
+      {
+        startDir: configDir,
+        scope: createInitGitChangeScope(configDir, [configTarget.path]),
+      },
     )
     pLog.info(`💾 Saved new app ID "${appId}" to CapacitorUpdater config`)
   }
@@ -2399,7 +2605,10 @@ async function syncPendingAppIdToCapacitorConfig(appId: string) {
     }
     await runTrackedInitMutation(
       () => writeConfigUpdater(extConfig, true),
-      { startDir: globalConfigLoadDir ?? (globalCapacitorConfigPath ? dirname(globalCapacitorConfigPath) : cwd()) },
+      {
+        startDir: dirname(extConfig.path),
+        scope: createInitGitChangeScope(dirname(extConfig.path), [extConfig.path]),
+      },
     )
     pLog.info(`💾 Synced pending onboarding app ID "${appId}" to capacitor config`)
   }
@@ -2471,6 +2680,9 @@ async function runNativeResetCommand(platformRunner: string, nativePlatform: Pla
       })
       if (!syncResult.success)
         throw syncResult.error ?? new Error(`cap sync ${nativePlatform} failed`)
+    }, {
+      startDir: cwd(),
+      scope: createInitGitChangeScope(cwd(), [], [path.resolve(nativePlatform)]),
     })
 
     await delay(750)
@@ -2625,7 +2837,11 @@ async function ensureCapacitorProjectReady(
       try {
         const initResult = await runTrackedInitMutation(
           () => spawnSync(pm.runner, ['cap', 'init', appName, appId], { stdio: 'pipe' as const }),
-          { isSuccess: result => !result.error && result.status === 0 },
+          {
+            startDir: cwd(),
+            scope: getInitCapacitorConfigScope(cwd()),
+            isSuccess: isSuccessfulInitProcessResult,
+          },
         )
         if (initResult.error)
           throw initResult.error
@@ -3347,7 +3563,11 @@ async function runUpdaterInstallCommand(pm: PackageManagerInfo, packageJsonPath:
       stdio: 'pipe',
       cwd: dirname(packageJsonPath),
     }),
-    { startDir: dirname(packageJsonPath), isSuccess: result => !result.error && result.status === 0 },
+    {
+      startDir: dirname(packageJsonPath),
+      scope: getInitPackageMutationScope(pm.pm, packageJsonPath),
+      isSuccess: isSuccessfulInitProcessResult,
+    },
   )
   if (result.error || result.status !== 0) {
     const output = [formatSpawnOutput(result.stdout), formatSpawnOutput(result.stderr)]
@@ -3483,14 +3703,19 @@ async function addUpdaterStep(orgId: string, apikey: string, appId: string) {
     s.start(`Updating config file`)
     delta = !!doDirectInstall
     const projectDir = dirname(path)
+    const configDir = getInitConfigLoadDir(projectDir)
+    const configTarget = await withTemporaryCwd(configDir, () => getConfigForWrite())
     await runTrackedInitMutation(
-      () => withTemporaryCwd(getInitConfigLoadDir(projectDir), async () => {
+      () => withTemporaryCwd(configDir, async () => {
         if (doDirectInstall) {
           await updateConfigbyKey('SplashScreen', { launchAutoHide: false })
         }
         await updateConfigUpdater(getInitUpdaterPluginConfig(appId, delta))
       }),
-      { startDir: projectDir },
+      {
+        startDir: projectDir,
+        scope: createInitGitChangeScope(projectDir, [configTarget.path]),
+      },
     )
     s.stop(`Config file updated ✅`)
     break
@@ -3608,7 +3833,10 @@ async function addCodeStep(orgId: string, apikey: string, appId: string) {
           mkdirSync(dirname(filePath), { recursive: true })
         }
         writeFileSync(filePath, newContent, 'utf8')
-      }, { startDir: projectDir })
+      }, {
+        startDir: projectDir,
+        scope: createInitGitChangeScope(projectDir, [filePath]),
+      })
       s.stop()
       globalCodeDiff = previewDiff
       setInitCodeDiff(globalCodeDiff)
@@ -3787,7 +4015,14 @@ async function addEncryptionStep(orgId: string, apikey: string, appId: string) {
       const encryptionConfig = await withTemporaryCwd(getInitConfigLoadDir(projectDir), () => getConfigForWrite())
       await runTrackedInitMutation(
         () => withTemporaryCwd(projectDir, () => createKeyInternal({ force: true, setupChannel: false }, true, encryptionConfig)),
-        { startDir: projectDir },
+        {
+          startDir: projectDir,
+          scope: createInitGitChangeScope(projectDir, [
+            join(projectDir, baseKeyV2),
+            join(projectDir, baseKeyPubV2),
+            encryptionConfig.path,
+          ]),
+        },
       )
       // Intentionally stop without a success message: the persistent
       // encryption summary panel renders on the next step and already shows
@@ -3817,7 +4052,14 @@ async function addEncryptionStep(orgId: string, apikey: string, appId: string) {
           args: ['cap', 'sync'],
           cwd: projectDir,
         }),
-        { startDir: projectDir, isSuccess: result => result.success },
+        {
+          startDir: projectDir,
+          scope: createInitGitChangeScope(projectDir, [], [
+            path.resolve(projectDir, getPlatformDirFromCapacitorConfig(encryptionConfig.config, 'ios')),
+            path.resolve(projectDir, getPlatformDirFromCapacitorConfig(encryptionConfig.config, 'android')),
+          ]),
+          isSuccess: isSuccessfulInitCommandResult,
+        },
       )
       // Small dwell so the user can read the final state of the panel
       // (success banner or the last few lines of an error) before we
@@ -4109,7 +4351,7 @@ async function ensureNativePlatformForBuild(platform: PlatformChoice, config: Ca
       continue
     }
 
-    if (!await runCapacitorPlatformAdd(platform, runner, projectDir))
+    if (!await runCapacitorPlatformAdd(platform, runner, projectDir, missingDir))
       pLog.warn(`Still could not add ${platform}.`)
   }
 }
@@ -4208,6 +4450,7 @@ async function ensureUpdaterReadyBeforeSync(pm: PackageManagerInfo, orgId: strin
 
 async function runBuildAndSyncLoop(
   platform: PlatformChoice,
+  nativePlatformDir: string,
   buildCommand: string,
   buildAndSyncCommand: string,
   buildAndSyncCwd: string,
@@ -4251,7 +4494,11 @@ async function runBuildAndSyncLoop(
           args: ['cap', 'sync', platform],
           cwd: buildAndSyncCwd,
         }),
-        { startDir: buildAndSyncCwd, isSuccess: result => result.success },
+        {
+          startDir: buildAndSyncCwd,
+          scope: createInitGitChangeScope(buildAndSyncCwd, [], [path.resolve(buildAndSyncCwd, nativePlatformDir)]),
+          isSuccess: isSuccessfulInitCommandResult,
+        },
       )
       if (!syncResult.success) {
         await delay(3500)
@@ -4285,7 +4532,7 @@ async function runBuildAndSyncLoop(
     return
   }
 }
-async function runProjectBuildAndSync(appId: string, platform: PlatformChoice, orgId: string, apikey: string, pm: PackageManagerInfo): Promise<BuildProjectStepOutcome> {
+async function runProjectBuildAndSync(appId: string, platform: PlatformChoice, orgId: string, apikey: string, pm: PackageManagerInfo, config?: CapacitorConfigSnapshot): Promise<BuildProjectStepOutcome> {
   const packageJsonPath = path.resolve(globalPathToPackageJson ?? join(findRoot(cwd()), PACKNAME))
   const projectDir = dirname(packageJsonPath)
   const projectType = await findProjectType({ packageJsonPath })
@@ -4296,7 +4543,7 @@ async function runProjectBuildAndSync(appId: string, platform: PlatformChoice, o
     return handleMissingBuildScript(buildCommand, appId, platform, orgId, apikey, pm)
 
   const buildAndSyncCommand = `${pm.pm} run ${buildCommand} && ${pm.runner} cap sync ${platform}`
-  await runBuildAndSyncLoop(platform, buildCommand, buildAndSyncCommand, projectDir, packageJsonPath, pm, orgId, apikey)
+  await runBuildAndSyncLoop(platform, getPlatformDirFromCapacitorConfig(config, platform), buildCommand, buildAndSyncCommand, projectDir, packageJsonPath, pm, orgId, apikey)
   return 'completed'
 }
 
@@ -4314,7 +4561,7 @@ async function buildProjectStep(orgId: string, apikey: string, appId: string, pl
     return
   }
 
-  const buildOutcome = await runProjectBuildAndSync(appId, platform, orgId, apikey, pm)
+  const buildOutcome = await runProjectBuildAndSync(appId, platform, orgId, apikey, pm, config)
   if (buildOutcome === 'skipped')
     return
 
@@ -4954,7 +5201,8 @@ async function handleMissingPlatformSelection(orgId: string, apikey: string, ava
   }
 
   const platformToAdd = recoveryChoice === 'add-ios' ? 'ios' : 'android'
-  if (!await runCapacitorPlatformAdd(platformToAdd, pm.runner, projectDir))
+  const nativePlatformDir = platformToAdd === 'ios' ? availablePlatforms.iosDir : availablePlatforms.androidDir
+  if (!await runCapacitorPlatformAdd(platformToAdd, pm.runner, projectDir, nativePlatformDir))
     pLog.warn(`Still could not add ${platformToAdd}.`)
 }
 
@@ -5121,7 +5369,10 @@ async function addCodeChangeStep(orgId: string, apikey: string, appId: string, p
           if (appliedChange) {
             await runTrackedInitMutation(
               () => writeFileSync(filePath, appliedChange.content, 'utf8'),
-              { startDir: projectDir },
+              {
+                startDir: projectDir,
+                scope: createInitGitChangeScope(projectDir, [filePath]),
+              },
             )
             const displayPath = formatInitFilePath(filePath)
             s.stop(`✅ Made test changes to ${displayPath}`)
@@ -5320,7 +5571,10 @@ async function maybeOfferAutoTestCleanup(orgId: string, apikey: string, appId: s
         else {
           await runTrackedInitMutation(
             () => writeFileSync(autoTestChange.filePath, revertedContent, 'utf8'),
-            { startDir: dirname(autoTestChange.filePath) },
+            {
+              startDir: dirname(autoTestChange.filePath),
+              scope: createInitGitChangeScope(dirname(autoTestChange.filePath), [autoTestChange.filePath]),
+            },
           )
           pLog.success(`Reverted ${autoTestChange.displayPath} ✅`)
           reverted = true
@@ -5789,8 +6043,10 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
       }
     }
     else {
+      const configDir = getInitConfigLoadDir(selectedProjectDir)
+      const configTarget = await withTemporaryCwd(configDir, () => getConfigForWrite())
       extConfig = await runTrackedInitMutation(
-        () => withTemporaryCwd(getInitConfigLoadDir(selectedProjectDir), () => updateConfigUpdater({
+        () => withTemporaryCwd(configDir, () => updateConfigUpdater({
           statsUrl: `${options.supaHost}/functions/v1/stats`,
           channelUrl: `${options.supaHost}/functions/v1/channel_self`,
           updateUrl: `${options.supaHost}/functions/v1/updates`,
@@ -5799,7 +6055,10 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
           localSupa: options.supaHost,
           localSupaAnon: options.supaAnon,
         })),
-        { startDir: selectedProjectDir },
+        {
+          startDir: selectedProjectDir,
+          scope: createInitGitChangeScope(selectedProjectDir, [configTarget.path]),
+        },
       )
     }
   }
@@ -5851,7 +6110,8 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
 
       if (continueWithout === 'add-ios' || continueWithout === 'add-android') {
         const platformToAdd = continueWithout === 'add-ios' ? 'ios' : 'android'
-        const added = await runCapacitorPlatformAdd(platformToAdd, pm.runner, selectedProjectDir)
+        const nativePlatformDir = platformToAdd === 'ios' ? nativePlatforms.iosDir : nativePlatforms.androidDir
+        const added = await runCapacitorPlatformAdd(platformToAdd, pm.runner, selectedProjectDir, nativePlatformDir)
         if (!added) {
           const recoveryChoice = await pSelect({
             message: `Could not add ${platformToAdd}. What do you want to do next?`,
@@ -5878,7 +6138,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
           }
 
           if (recoveryChoice === 'retry') {
-            const retried = await runCapacitorPlatformAdd(platformToAdd, pm.runner, selectedProjectDir)
+            const retried = await runCapacitorPlatformAdd(platformToAdd, pm.runner, selectedProjectDir, nativePlatformDir)
             if (!retried) {
               pLog.warn(`Still could not add ${platformToAdd}. Continuing without native platforms for now.`)
             }
