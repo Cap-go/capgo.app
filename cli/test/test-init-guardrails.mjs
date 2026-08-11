@@ -1062,6 +1062,18 @@ await tAsync('native reset resolution canonicalizes directory ancestors and reje
       assert.equal(resolveInitNativeResetTarget(projectDir, 'final-native-link'), undefined)
     }
 
+    const danglingFinalLink = join(projectDir, 'dangling-final-link')
+    if (tryCreateTestSymlink(join(projectDir, 'missing-final-target'), danglingFinalLink)) {
+      assert.equal(resolveInitNativeResetTarget(projectDir, 'dangling-final-link'), undefined)
+      assert.equal(lstatSync(danglingFinalLink).isSymbolicLink(), true)
+    }
+
+    const danglingAncestorLink = join(projectDir, 'dangling-ancestor-link')
+    if (tryCreateTestSymlink(join(projectDir, 'missing-ancestor-target'), danglingAncestorLink)) {
+      assert.equal(resolveInitNativeResetTarget(projectDir, 'dangling-ancestor-link/ios'), undefined)
+      assert.equal(lstatSync(danglingAncestorLink).isSymbolicLink(), true)
+    }
+
     const outsideDir = join(root, 'outside')
     mkdirSync(outsideDir)
     if (tryCreateTestSymlink(outsideDir, join(projectDir, 'external-alias')))

@@ -672,15 +672,16 @@ export function resolveInitNativeResetTarget(projectDir: string, nativePlatformD
 
     const unresolvedSuffix: string[] = []
     let existingAncestor = lexicalTarget
-    while (!existsSync(existingAncestor)) {
+    let ancestorStats = lstatSync(existingAncestor, { throwIfNoEntry: false })
+    while (!ancestorStats) {
       unresolvedSuffix.unshift(path.basename(existingAncestor))
       const parentDir = dirname(existingAncestor)
       if (parentDir === existingAncestor)
         return undefined
       existingAncestor = parentDir
+      ancestorStats = lstatSync(existingAncestor, { throwIfNoEntry: false })
     }
 
-    const ancestorStats = lstatSync(existingAncestor)
     if (existingAncestor === lexicalTarget && ancestorStats.isSymbolicLink())
       return undefined
     const canonicalAncestor = realpathSync(existingAncestor)
