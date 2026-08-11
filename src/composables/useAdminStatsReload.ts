@@ -36,9 +36,13 @@ export async function ensureAdminOrRedirect(
   }
   if (isLoading)
     isLoading.value = true
-  if (load)
-    await load()
-  if (isLoading)
-    isLoading.value = false
+  try {
+    if (load)
+      await load()
+  }
+  finally {
+    if (isLoading)
+      isLoading.value = false
+  }
   return true
 }
