@@ -12,14 +12,13 @@ import CreditsCta from '~/components/CreditsCta.vue'
 import RbacPermissionOnlyModal from '~/components/RbacPermissionOnlyModal.vue'
 import { useBillingPaidAt } from '~/composables/useBillingPaidAt'
 import { invokeCapgoApi } from '~/services/capgoApi'
-import { formatIncludedThenPrice } from '~/services/creditPricing'
 import { formatNumberValue } from '~/services/formatLocale'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { shouldShowExpiredTrialPlansState, shouldShowPlanFailureBanner } from '~/services/paymentRequired'
 import { checkPermissions } from '~/services/permissions'
 import { createPlansVisitTracker } from '~/services/plansVisitTracking'
 import { getAffonsoReferral, getDatafastAttribution, openCheckout } from '~/services/stripe'
-import { getCreditUnitPricing, getCurrentPlanNameOrg, useSupabase } from '~/services/supabase'
+import { getCurrentPlanNameOrg, useSupabase } from '~/services/supabase'
 import { openSupport } from '~/services/support'
 import { sendEvent } from '~/services/tracking'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -50,7 +49,6 @@ const isMobile = isNativeAppStoreContext()
 const showAdminModal = ref(false)
 
 const { currentOrganization } = storeToRefs(organizationStore)
-const creditUnitPrices = ref<Partial<Record<Database['public']['Enums']['credit_metric_type'], number>>>({})
 const billingOrgId = computed(() => currentOrganization.value?.gid)
 const { paidAt, billingLookupFailed } = useBillingPaidAt(billingOrgId, isMobile)
 const showExpiredTrialState = computed(() => {
@@ -99,17 +97,9 @@ function planFeatures(plan: Database['public']['Tables']['plans']['Row']) {
     }
   }
 
-  const mauFeature = creditUnitPrices.value.mau !== undefined
-    ? `${formatNumberValue(plan.mau)} ${t('mau')} · ${formatIncludedThenPrice('mau', creditUnitPrices.value.mau, t)}`
-    : `${formatNumberValue(plan.mau)} ${t('mau')}`
-
-  const storageFeature = creditUnitPrices.value.storage !== undefined
-    ? `${formatNumberValue(plan.storage)} ${t('plan-storage')} · ${formatIncludedThenPrice('storage', creditUnitPrices.value.storage, t)}`
-    : `${formatNumberValue(plan.storage)} ${t('plan-storage')}`
-
-  const bandwidthFeature = creditUnitPrices.value.bandwidth !== undefined
-    ? `${formatNumberValue(plan.bandwidth)} ${t('plan-bandwidth')} · ${formatIncludedThenPrice('bandwidth', creditUnitPrices.value.bandwidth, t)}`
-    : `${formatNumberValue(plan.bandwidth)} ${t('plan-bandwidth')}`
+  const mauFeature = `${formatNumberValue(plan.mau)} ${t('mau')}`
+  const storageFeature = `${formatNumberValue(plan.storage)} ${t('plan-storage')}`
+  const bandwidthFeature = `${formatNumberValue(plan.bandwidth)} ${t('plan-bandwidth')}`
 
   const buildTimeFeature = buildTimeDisplay ? planFeature(buildTimeDisplay, true) : null
   const nativeBuildConcurrencyFeature = plan.native_build_concurrency
@@ -290,10 +280,6 @@ function isYearlyPlan(plan: Database['public']['Tables']['plans']['Row'], t: 'm'
   return t === 'y'
 }
 
-async function loadCreditPricing(orgId?: string) {
-  creditUnitPrices.value = await getCreditUnitPricing(orgId)
-}
-
 // When no organization can be resolved (e.g. an `?oid=` pointing at an org the
 // user isn't a member of), bail out gracefully instead of throwing: surface the
 // same dialog the no-permission path uses and route back to /apps. Guarded so
@@ -333,13 +319,9 @@ async function loadData(initial: boolean) {
     return
   }
 
-  await Promise.all([
-    loadCreditPricing(orgId),
-    getCurrentPlanNameOrg(orgId).then((res) => {
-      console.log('getCurrentPlanNameOrg', res)
-      currentPlan.value = main.plans.find(plan => plan.name === res)
-    }),
-  ])
+  const res = await getCurrentPlanNameOrg(orgId)
+  console.log('getCurrentPlanNameOrg', res)
+  currentPlan.value = main.plans.find(plan => plan.name === res)
   initialLoad.value = true
 }
 
