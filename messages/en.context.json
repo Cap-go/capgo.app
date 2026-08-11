@@ -1386,6 +1386,7 @@
   "frontend-onboarding-funnel": "Used in Capgo web console areas: pages/admin/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "frontend-onboarding-funnel-description": "Used in Capgo web console areas: pages/admin/dashboard. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "frontend-onboarding-largest-dropoff": "Used in Capgo web console areas: pages/admin/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "frontend-onboarding-load-error": "Used in Capgo web console areas: pages/admin/dashboard. Role: error message. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "frontend-onboarding-median-time": "Used in Capgo web console areas: pages/admin/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "frontend-onboarding-median-time-subtitle": "Used in Capgo web console areas: pages/admin/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "frontend-onboarding-new-users": "Used in Capgo web console areas: pages/admin/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",

@@ -1,9 +1,10 @@
 import type { Context } from 'hono'
+import type { FrontendOnboardingAttempt } from './frontend_onboarding_analytics_model.ts'
 import {
   buildFrontendOnboardingAnalytics,
   FRONTEND_ONBOARDING_FOLLOWUP_MS,
   FRONTEND_ONBOARDING_VERSION,
-  type FrontendOnboardingAttempt,
+
 } from './frontend_onboarding_analytics_model.ts'
 import { cloudlogErr } from './logging.ts'
 import { queryPosthogHogql } from './posthog_read.ts'
@@ -110,13 +111,13 @@ export function buildFrontendOnboardingHogql(startDate: string, cohortEndDate: s
     FROM events
     WHERE event = 'onboarding_step_viewed'
       AND JSONExtractString(toString(properties), 'flow') = 'pre_org'
-      AND toInt64OrZero(toString(properties.onboarding_version)) = 1
-      AND timestamp >= parseDateTime64BestEffort(${sqlStr(startDate)})
-      AND timestamp < parseDateTime64BestEffort(${sqlStr(followupEndDate)})
+      AND toIntOrZero(toString(properties.onboarding_version)) = 1
+      AND timestamp >= parseDateTimeBestEffort(${sqlStr(startDate)})
+      AND timestamp < parseDateTimeBestEffort(${sqlStr(followupEndDate)})
       AND trim(attempt_id) != ''
     GROUP BY attempt_id
-    HAVING intent_ms >= toUnixTimestamp64Milli(parseDateTime64BestEffort(${sqlStr(startDate)}))
-      AND intent_ms < toUnixTimestamp64Milli(parseDateTime64BestEffort(${sqlStr(cohortEndDate)}))
+    HAVING intent_ms >= toUnixTimestamp64Milli(parseDateTimeBestEffort(${sqlStr(startDate)}))
+      AND intent_ms < toUnixTimestamp64Milli(parseDateTimeBestEffort(${sqlStr(cohortEndDate)}))
     ORDER BY intent_ms ASC, attempt_id ASC
     LIMIT ${FRONTEND_ONBOARDING_ATTEMPT_LIMIT}`
 }
@@ -146,6 +147,9 @@ export async function getAdminFrontendOnboardingAnalytics(c: Context, startDate:
       new Date(followupEndMs).toISOString(),
     ),
   )
+  if (!posthog.configured || !posthog.connected || posthog.failureReason !== null)
+    throw new Error('frontend onboarding analytics PostHog query failed')
+
   if (posthog.rows.length > 0) {
     const totalAttempts = posthog.rows[0].total_attempts
     try {
