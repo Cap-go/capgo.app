@@ -114,6 +114,17 @@ describe('admin frontend onboarding dashboard', () => {
     ])
   })
 
+  it.concurrent('shows zero conversion for every stage when the selected cohort is empty', () => {
+    const emptyFunnel = analytics.funnel.map(stage => ({
+      ...stage,
+      reached: 0,
+      of_start_percent: 0,
+      dropoff_percent: 0,
+    }))
+
+    expect(buildFrontendOnboardingFunnelSummaries(emptyFunnel).map(stage => stage.conversion_percent)).toEqual([0, 0, 0, 0])
+  })
+
   it.concurrent('formats nullable durations as rounded, nonnegative minutes and seconds', () => {
     expect(formatFrontendOnboardingDuration(222000)).toBe('3m 42s')
     expect(formatFrontendOnboardingDuration(28000)).toBe('28s')
@@ -291,6 +302,11 @@ describe('admin frontend onboarding dashboard', () => {
     expect(source).toContain('buildFrontendOnboardingFunnelSummaries')
     expect(template).toContain('summary.conversion_percent')
     expect(template).not.toContain('of_start_percent')
+
+    const statsCard = await readFile(new URL('../src/components/admin/AdminStatsCard.vue', import.meta.url), 'utf8')
+    const funnelChart = await readFile(new URL('../src/components/admin/AdminFunnelChart.vue', import.meta.url), 'utf8')
+    expect(statsCard).toContain('class="d-loading d-loading-spinner d-loading-lg"')
+    expect(funnelChart).toContain('class="d-loading d-loading-spinner d-loading-lg text-primary"')
   })
 
   it('omits PostHog warnings, existing-org analytics, and selector UI', async () => {
@@ -337,7 +353,6 @@ describe('admin frontend onboarding dashboard', () => {
     expect(messages['frontend-onboarding-funnel']).toBe('Frontend onboarding funnel')
     expect(messages['frontend-onboarding-funnel-description']).toBe('Progress through the new-user app-creation wizard')
     expect(messages['frontend-onboarding-new-users']).toBe('New user onboarding')
-    expect(messages['frontend-onboarding-selected-period']).toBe('Selected period')
     expect(messages['frontend-onboarding-no-dropoff']).toBe('No drop-off')
     expect(messages['frontend-onboarding-transition']).toBe('{from} → {to}')
   })

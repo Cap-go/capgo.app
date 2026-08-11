@@ -18,6 +18,7 @@ import {
   assertFrontendOnboardingAttemptTotal,
   buildFrontendOnboardingHogql,
   FRONTEND_ONBOARDING_ATTEMPT_LIMIT,
+  FRONTEND_ONBOARDING_MAX_RANGE_MS,
   getAdminFrontendOnboardingAnalytics,
 } from '../supabase/functions/_backend/utils/frontend_onboarding_analytics.ts'
 
@@ -40,7 +41,11 @@ beforeEach(() => {
 
 describe('buildFrontendOnboardingHogql', () => {
   it('queries the fixed v1 pre-org viewed events grouped by attempt in an exclusive time range', () => {
-    const query = buildFrontendOnboardingHogql('2026-08-01T00:00:00.123Z', '2026-08-04T00:00:00.789Z')
+    const query = buildFrontendOnboardingHogql(
+      '2026-08-01T00:00:00.123Z',
+      '2026-08-03T00:00:00.456Z',
+      '2026-08-04T00:00:00.789Z',
+    )
 
     expect(query).toContain("event = 'onboarding_step_viewed'")
     expect(query).toContain("JSONExtractString(toString(properties), 'flow') = 'pre_org'")
@@ -55,7 +60,8 @@ describe('buildFrontendOnboardingHogql', () => {
     expect(query).toContain("timestamp >= parseDateTime64BestEffort('2026-08-01T00:00:00.123Z')")
     expect(query).toContain("timestamp < parseDateTime64BestEffort('2026-08-04T00:00:00.789Z')")
     expect(query).toContain("trim(attempt_id) != ''")
-    expect(query).toContain('HAVING intent_ms > 0')
+    expect(query).toContain("HAVING intent_ms >= toUnixTimestamp64Milli(parseDateTime64BestEffort('2026-08-01T00:00:00.123Z'))")
+    expect(query).toContain("AND intent_ms < toUnixTimestamp64Milli(parseDateTime64BestEffort('2026-08-03T00:00:00.456Z'))")
     expect(query).toContain('ORDER BY intent_ms ASC, attempt_id ASC')
     expect(query).toContain('count() OVER () AS total_attempts')
     expect(query).toContain('LIMIT 50000')
@@ -174,6 +180,32 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
     expect(queryPosthogHogqlMock.mock.calls[0][1]).toContain(
       `timestamp < parseDateTime64BestEffort('${new Date(Date.parse(end) + DAY_MS).toISOString()}')`,
     )
+    expect(queryPosthogHogqlMock.mock.calls[0][1]).toContain(
+      `AND intent_ms < toUnixTimestamp64Milli(parseDateTime64BestEffort('${end}'))`,
+    )
+  })
+
+  it('accepts schema-valid sub-millisecond ISO fractions and normalizes them for PostHog', async () => {
+    await getAdminFrontendOnboardingAnalytics(
+      createContext(),
+      '2026-08-01T00:00:00.1234Z',
+      '2026-08-03T00:00:00.5678Z',
+    )
+
+    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(1)
+    expect(queryPosthogHogqlMock.mock.calls[0][1]).toContain("parseDateTime64BestEffort('2026-08-03T00:00:00.567Z')")
+  })
+
+  it('rejects date ranges wider than the dashboard maximum before querying PostHog', async () => {
+    const start = Date.UTC(2025, 0, 1)
+    const end = start + FRONTEND_ONBOARDING_MAX_RANGE_MS + 1
+
+    await expect(getAdminFrontendOnboardingAnalytics(
+      createContext(),
+      new Date(start).toISOString(),
+      new Date(end).toISOString(),
+    )).rejects.toThrow('frontend onboarding analytics date range cannot exceed 365 days')
+    expect(queryPosthogHogqlMock).not.toHaveBeenCalled()
   })
 
   it('logs and fails closed when PostHog exceeds the explicit attempt limit', async () => {

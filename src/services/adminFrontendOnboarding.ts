@@ -127,9 +127,10 @@ export function buildFrontendOnboardingFunnelStages(
 export function buildFrontendOnboardingFunnelSummaries(
   funnel: readonly FrontendOnboardingAnalytics['funnel'][number][],
 ): FrontendOnboardingFunnelSummary[] {
+  const hasAttempts = (funnel[0]?.reached ?? 0) > 0
   return funnel.map((stage, index) => ({
     key: stage.key,
-    conversion_percent: index === 0 ? 100 : 100 - stage.dropoff_percent,
+    conversion_percent: hasAttempts ? (index === 0 ? 100 : 100 - stage.dropoff_percent) : 0,
     reached: stage.reached,
     from_label: index === 0 ? null : funnel[index - 1]?.label ?? null,
     to_label: stage.label,

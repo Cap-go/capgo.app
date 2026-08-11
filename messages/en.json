@@ -2764,7 +2764,6 @@
   "frontend-onboarding-funnel": "Frontend onboarding funnel",
   "frontend-onboarding-funnel-description": "Progress through the new-user app-creation wizard",
   "frontend-onboarding-new-users": "New user onboarding",
-  "frontend-onboarding-selected-period": "Selected period",
   "frontend-onboarding-no-dropoff": "No drop-off",
   "frontend-onboarding-transition": "{from} → {to}"
 }

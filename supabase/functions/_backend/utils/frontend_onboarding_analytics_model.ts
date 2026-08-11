@@ -117,7 +117,8 @@ function findLargestDropoff(funnel: FrontendOnboardingFunnelStage[]): FrontendOn
     if (previousStage.reached === 0 || previousStage.key === 'setup' || currentStage.key === 'intent')
       continue
 
-    if (largestDropoff === null || currentStage.dropoff_percent > largestDropoff.percentage) {
+    if (currentStage.dropoff_percent > 0
+      && (largestDropoff === null || currentStage.dropoff_percent > largestDropoff.percentage)) {
       largestDropoff = {
         from: previousStage.key,
         to: currentStage.key,
@@ -180,9 +181,9 @@ function comparePeriods(current: FrontendOnboardingPeriodKpis, previous: Fronten
     median_completion_ms: current.median_completion_ms === null || previous.median_completion_ms === null
       ? null
       : current.median_completion_ms - previous.median_completion_ms,
-    largest_dropoff_points: current.largest_dropoff === null || previous.largest_dropoff === null
-      ? null
-      : current.largest_dropoff.percentage - previous.largest_dropoff.percentage,
+    largest_dropoff_points: hasPreviousAttempts
+      ? (current.largest_dropoff?.percentage ?? 0) - (previous.largest_dropoff?.percentage ?? 0)
+      : null,
   }
 }
 

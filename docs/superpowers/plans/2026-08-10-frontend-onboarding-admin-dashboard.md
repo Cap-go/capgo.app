@@ -586,7 +586,7 @@ function summarizePeriod(
     if (funnel[index - 1].reached === 0)
       continue
     const candidate = funnel[index].dropoff_percent
-    if (largestDropoff === null || candidate > largestDropoff.percentage) {
+    if (candidate > 0 && (largestDropoff === null || candidate > largestDropoff.percentage)) {
       largestDropoff = {
         from: STAGES[index - 1].key as Exclude<FrontendOnboardingStageKey, 'setup'>,
         to: STAGES[index].key as Exclude<FrontendOnboardingStageKey, 'intent'>,
@@ -663,6 +663,7 @@ describe('frontend onboarding PostHog analytics', () => {
   it('builds a fixed v1 pre-org viewed-event query', () => {
     const query = buildFrontendOnboardingHogql(
       '2026-08-06T00:00:00.000Z',
+      '2026-08-10T00:00:00.000Z',
       '2026-08-11T00:00:00.000Z',
     )
 
@@ -684,6 +685,7 @@ describe('frontend onboarding PostHog analytics', () => {
       failureReason: null,
       rows: [{
         attempt_id: 'attempt-a',
+        total_attempts: 1,
         intent_ms: Date.parse('2026-08-08T10:00:00.000Z'),
         details_ms: Date.parse('2026-08-08T10:01:00.000Z'),
         organization_ms: Date.parse('2026-08-08T10:02:00.000Z'),
@@ -754,31 +756,44 @@ import { queryPosthogHogql } from './posthog_read.ts'
 function sqlString(value: string) {
   return `'${value.replace(/'/g, '\'\'')}'`
 }
+
+export const FRONTEND_ONBOARDING_ATTEMPT_LIMIT = 50_000
+export const FRONTEND_ONBOARDING_MAX_RANGE_MS = 365 * 24 * 60 * 60 * 1000
+
+export function assertFrontendOnboardingAttemptTotal(totalAttempts: unknown) {
+  if (typeof totalAttempts !== 'number' || !Number.isInteger(totalAttempts) || totalAttempts < 0)
+    throw new Error('frontend onboarding analytics query returned invalid total metadata')
+  if (totalAttempts > FRONTEND_ONBOARDING_ATTEMPT_LIMIT)
+    throw new Error('frontend onboarding analytics query exceeded attempt limit')
+}
 ```
 
 The query builder must use server-generated ISO timestamps, a fixed event/flow/version, and one grouped row per attempt:
 
 ```ts
-export function buildFrontendOnboardingHogql(startDate: string, followupEndDate: string) {
+export function buildFrontendOnboardingHogql(startDate: string, cohortEndDate: string, followupEndDate: string) {
   return `
     WITH
       JSONExtractString(toString(properties), 'onboarding_attempt_id') AS attempt_id,
       JSONExtractString(toString(properties), 'step') AS step
     SELECT
       attempt_id,
-      toUnixTimestamp(minIf(timestamp, step = 'intent')) * 1000 AS intent_ms,
-      toUnixTimestamp(minIf(timestamp, step = 'details')) * 1000 AS details_ms,
-      toUnixTimestamp(minIf(timestamp, step = 'organization')) * 1000 AS organization_ms,
-      toUnixTimestamp(minIf(timestamp, step = 'setup')) * 1000 AS setup_ms
+      count() OVER () AS total_attempts,
+      toUnixTimestamp64Milli(minIf(timestamp, step = 'intent')) AS intent_ms,
+      toUnixTimestamp64Milli(minIf(timestamp, step = 'details')) AS details_ms,
+      toUnixTimestamp64Milli(minIf(timestamp, step = 'organization')) AS organization_ms,
+      toUnixTimestamp64Milli(minIf(timestamp, step = 'setup')) AS setup_ms
     FROM events
     WHERE event = 'onboarding_step_viewed'
       AND JSONExtractString(toString(properties), 'flow') = 'pre_org'
       AND toInt64OrZero(toString(properties.onboarding_version)) = 1
-      AND timestamp >= parseDateTimeBestEffort(${sqlString(startDate)})
-      AND timestamp < parseDateTimeBestEffort(${sqlString(followupEndDate)})
+      AND timestamp >= parseDateTime64BestEffort(${sqlString(startDate)})
+      AND timestamp < parseDateTime64BestEffort(${sqlString(followupEndDate)})
       AND JSONExtractString(toString(properties), 'onboarding_attempt_id') != ''
     GROUP BY attempt_id
-    HAVING intent_ms > 0
+    HAVING intent_ms >= toUnixTimestamp64Milli(parseDateTime64BestEffort(${sqlString(startDate)}))
+      AND intent_ms < toUnixTimestamp64Milli(parseDateTime64BestEffort(${sqlString(cohortEndDate)}))
+    LIMIT ${FRONTEND_ONBOARDING_ATTEMPT_LIMIT}
   `
 }
 ```
@@ -819,13 +834,19 @@ export async function getAdminFrontendOnboardingAnalytics(
   const startMs = Date.parse(startDate)
   const endMs = Date.parse(endDate)
   const durationMs = endMs - startMs
+  if (durationMs > FRONTEND_ONBOARDING_MAX_RANGE_MS)
+    throw new RangeError('frontend onboarding analytics date range cannot exceed 365 days')
+
   const previousStartMs = startMs - durationMs
   const followupEndMs = endMs + FRONTEND_ONBOARDING_FOLLOWUP_MS
 
   const posthog = await queryPosthogHogql(c, buildFrontendOnboardingHogql(
     new Date(previousStartMs).toISOString(),
+    new Date(endMs).toISOString(),
     new Date(followupEndMs).toISOString(),
   ))
+  if (posthog.rows.length > 0)
+    assertFrontendOnboardingAttemptTotal(posthog.rows[0].total_attempts)
   const attempts = posthog.rows.map(mapAttempt).filter((row): row is FrontendOnboardingAttempt => row !== null)
   const analytics = buildFrontendOnboardingAnalytics(attempts, startMs, endMs)
 
@@ -838,7 +859,7 @@ export async function getAdminFrontendOnboardingAnalytics(
 }
 ```
 
-Do not add a row-limit warning, connection banner contract, retry API, database query, or client-side PostHog credential.
+Fail closed when the grouped total exceeds `FRONTEND_ONBOARDING_ATTEMPT_LIMIT`; do not add a row-limit warning, connection banner contract, retry API, database query, or client-side PostHog credential.
 
 - [ ] **Step 5: Run focused verification**
 
@@ -966,6 +987,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildFrontendOnboardingDailySeries,
   buildFrontendOnboardingFunnelStages,
+  buildFrontendOnboardingFunnelSummaries,
   formatFrontendOnboardingDuration,
   type FrontendOnboardingAnalytics,
 } from '../src/services/adminFrontendOnboarding'
@@ -1216,7 +1238,6 @@ Add these English keys to `messages/en.json`:
 "frontend-onboarding-funnel-description": "Progress through the new-user app-creation wizard",
 "frontend-onboarding-new-users": "New user onboarding",
 "frontend-onboarding-setup-reached": "Setup reached",
-"frontend-onboarding-selected-period": "Selected period",
 "frontend-onboarding-vs-previous-period": "Compared with the previous period",
 "frontend-onboarding-no-dropoff": "No drop-off",
 "frontend-onboarding-transition": "{from} → {to}"
@@ -1282,6 +1303,7 @@ const dailySeries = computed(() => buildFrontendOnboardingDailySeries(
   t('frontend-onboarding-new-users'),
 ))
 const funnelStages = computed(() => buildFrontendOnboardingFunnelStages(analytics.value?.funnel ?? []))
+const funnelSummaries = computed(() => buildFrontendOnboardingFunnelSummaries(analytics.value?.funnel ?? []))
 const hasAttempts = computed(() => (kpis.value?.attempts ?? 0) > 0)
 const completionValue = computed(() => `${formatNumberValue(kpis.value?.completion_rate ?? 0, { maximumFractionDigits: 1 })}%`)
 const completionSubtitle = computed(() => t('frontend-onboarding-completed-subtitle', { count: kpis.value?.completed ?? 0 }))
@@ -1382,12 +1404,12 @@ displayStore.defaultBack = '/dashboard'
             <AdminFunnelChart :stages="funnelStages" :is-loading="isLoadingStats" />
           </div>
           <div class="grid grid-cols-2 gap-4 pt-5 mt-5 border-t border-slate-200 md:grid-cols-4 dark:border-slate-700">
-            <div v-for="stage in analytics?.funnel ?? []" :key="stage.key" class="text-center">
+            <div v-for="summary in funnelSummaries" :key="summary.key" class="text-center">
               <p class="text-xl font-bold text-slate-900 dark:text-white">
-                {{ formatNumberValue(stage.of_start_percent, { maximumFractionDigits: 1 }) }}%
+                {{ formatNumberValue(summary.conversion_percent, { maximumFractionDigits: 1 }) }}%
               </p>
               <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                {{ stage.label }} · {{ stage.reached }}
+                {{ summary.from_label ? t('frontend-onboarding-transition', { from: summary.from_label, to: summary.to_label }) : summary.to_label }} · {{ summary.reached }}
               </p>
             </div>
           </div>

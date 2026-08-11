@@ -137,6 +137,24 @@ describe('buildFrontendOnboardingAnalytics', () => {
     expect(analytics.funnel.map(stage => stage.reached)).toEqual([0, 0, 0, 0])
   })
 
+  it('reports no largest drop-off when every attempt reaches every stage', () => {
+    const previousStartMs = CURRENT_START_MS - 2 * DAY_MS
+    const analytics = buildFrontendOnboardingAnalytics([
+      attempt({
+        attemptId: 'previous-intent-only',
+        intentMs: previousStartMs,
+      }),
+      attempt({
+        attemptId: 'current-complete',
+        intentMs: CURRENT_START_MS,
+        setupMs: CURRENT_START_MS + MINUTE_MS,
+      }),
+    ], CURRENT_START_MS, CURRENT_END_MS)
+
+    expect(analytics.kpis.largest_dropoff).toBeNull()
+    expect(analytics.kpis.comparison.largest_dropoff_points).toBe(-100)
+  })
+
   it('includes the start boundary and 24-hour step boundary but excludes the end boundary', () => {
     const analytics = buildFrontendOnboardingAnalytics([
       attempt({

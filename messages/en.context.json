@@ -1389,7 +1389,6 @@
   "frontend-onboarding-median-time-subtitle": "Used in Capgo web console areas: pages/admin/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "frontend-onboarding-new-users": "Used in Capgo web console areas: pages/admin/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "frontend-onboarding-no-dropoff": "Used in Capgo web console areas: pages/admin/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
-  "frontend-onboarding-selected-period": "Used in Capgo web console. Role: UI label about \"frontend onboarding selected period\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "frontend-onboarding-transition": "Used in Capgo web console areas: pages/admin/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "frontend-onboarding-version-1": "Used in Capgo web console areas: pages/admin/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "general": "Used in Capgo web console areas: constants. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",

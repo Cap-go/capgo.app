@@ -8,13 +8,14 @@ import {
 import { cloudlogErr } from './logging.ts'
 import { queryPosthogHogql } from './posthog_read.ts'
 
-const ISO_UTC_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?Z$/
+const ISO_UTC_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?Z$/
 const POSTHOG_MIN_DATE_MS = Date.UTC(1970, 0, 1)
 const POSTHOG_MAX_DATE_MS = Date.UTC(2106, 0, 1)
 const INVALID_TOTAL_ATTEMPTS_ERROR = 'frontend onboarding analytics query returned invalid total metadata'
 const ATTEMPT_LIMIT_EXCEEDED_ERROR = 'frontend onboarding analytics query exceeded attempt limit'
 
 export const FRONTEND_ONBOARDING_ATTEMPT_LIMIT = 50_000
+export const FRONTEND_ONBOARDING_MAX_RANGE_MS = 365 * 24 * 60 * 60 * 1000
 
 function sqlStr(value: string): string {
   return `'${value.replace(/'/g, '\'\'')}'`
@@ -32,7 +33,7 @@ function parseStrictPosthogDate(value: string): number {
   const hour = Number(hourValue)
   const minute = Number(minuteValue)
   const second = Number(secondValue)
-  const millisecond = Number((millisecondValue ?? '').padEnd(3, '0'))
+  const millisecond = Number((millisecondValue ?? '').slice(0, 3).padEnd(3, '0'))
   const timestamp = Date.UTC(year, month - 1, day, hour, minute, second, millisecond)
   const parsed = new Date(timestamp)
   if (!Number.isFinite(timestamp)
@@ -94,7 +95,7 @@ function mapAttempts(rows: Record<string, unknown>[]): FrontendOnboardingAttempt
   })
 }
 
-export function buildFrontendOnboardingHogql(startDate: string, followupEndDate: string): string {
+export function buildFrontendOnboardingHogql(startDate: string, cohortEndDate: string, followupEndDate: string): string {
   return `
     WITH
       JSONExtractString(toString(properties), 'onboarding_attempt_id') AS attempt_id,
@@ -114,7 +115,8 @@ export function buildFrontendOnboardingHogql(startDate: string, followupEndDate:
       AND timestamp < parseDateTime64BestEffort(${sqlStr(followupEndDate)})
       AND trim(attempt_id) != ''
     GROUP BY attempt_id
-    HAVING intent_ms > 0
+    HAVING intent_ms >= toUnixTimestamp64Milli(parseDateTime64BestEffort(${sqlStr(startDate)}))
+      AND intent_ms < toUnixTimestamp64Milli(parseDateTime64BestEffort(${sqlStr(cohortEndDate)}))
     ORDER BY intent_ms ASC, attempt_id ASC
     LIMIT ${FRONTEND_ONBOARDING_ATTEMPT_LIMIT}`
 }
@@ -126,6 +128,9 @@ export async function getAdminFrontendOnboardingAnalytics(c: Context, startDate:
     throw new RangeError('endDate must be greater than startDate')
 
   const durationMs = endMs - startMs
+  if (durationMs > FRONTEND_ONBOARDING_MAX_RANGE_MS)
+    throw new RangeError('frontend onboarding analytics date range cannot exceed 365 days')
+
   const previousStartMs = startMs - durationMs
   const followupEndMs = endMs + FRONTEND_ONBOARDING_FOLLOWUP_MS
   if (previousStartMs < POSTHOG_MIN_DATE_MS || previousStartMs >= POSTHOG_MAX_DATE_MS
@@ -135,7 +140,11 @@ export async function getAdminFrontendOnboardingAnalytics(c: Context, startDate:
 
   const posthog = await queryPosthogHogql(
     c,
-    buildFrontendOnboardingHogql(new Date(previousStartMs).toISOString(), new Date(followupEndMs).toISOString()),
+    buildFrontendOnboardingHogql(
+      new Date(previousStartMs).toISOString(),
+      new Date(endMs).toISOString(),
+      new Date(followupEndMs).toISOString(),
+    ),
   )
   if (posthog.rows.length > 0) {
     const totalAttempts = posthog.rows[0].total_attempts
