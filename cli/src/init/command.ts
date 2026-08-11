@@ -134,6 +134,15 @@ export interface InitGitClassification {
   retained: InitGitChanges | undefined
 }
 
+export interface InitGitRepoDecision {
+  warningEntries: string[]
+  recognizedCount: number
+  nextSaved: InitGitChanges | undefined
+  shouldPersist: boolean
+  skipPrompt: boolean
+  infoMessages: string[]
+}
+
 interface InitAutoTestChange {
   filePath: string
   displayPath: string
@@ -152,6 +161,8 @@ let globalDelta = false
 let globalCurrentVersion: string | undefined
 let globalAppId: string | undefined
 let globalSupaHost: string | undefined
+let globalStepDone = 0
+let globalInitGitChanges: InitGitChanges | undefined
 
 export function resolveInitTargetPath(value: string | undefined, label: string, initialCwd = cwd()): string | undefined {
   if (!value)
@@ -368,6 +379,98 @@ function initGitFingerprintMatches(left: InitGitChangeFingerprint | undefined, r
     && left.status === right.status
     && left.sha256 === right.sha256
     && left.mode === right.mode
+}
+
+function isPlainInitGitRecord(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value))
+    return false
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
+}
+
+function hasOnlyInitGitKeys(value: Record<string, unknown>, expectedKeys: string[]) {
+  const keys = Reflect.ownKeys(value)
+  return keys.length === expectedKeys.length
+    && keys.every((key) => {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key)
+      return typeof key === 'string'
+        && expectedKeys.includes(key)
+        && descriptor?.enumerable === true
+        && Object.hasOwn(descriptor, 'value')
+    })
+}
+
+function hasOnlyInitGitRecordEntries(value: Record<string, unknown>) {
+  return Reflect.ownKeys(value).every((key) => {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)
+    return typeof key === 'string'
+      && descriptor?.enumerable === true
+      && Object.hasOwn(descriptor, 'value')
+  })
+}
+
+function isSafeInitGitRelativePath(filePath: string) {
+  if (!filePath
+    || filePath.includes('\0')
+    || filePath.includes('\\')
+    || path.posix.isAbsolute(filePath)
+    || path.win32.isAbsolute(filePath)
+    || /^[a-z]:/i.test(filePath))
+    return false
+  const segments = filePath.split('/')
+  return path.posix.normalize(filePath) === filePath
+    && segments.every(segment => segment && segment !== '.' && segment !== '..')
+}
+
+function isSupportedInitGitFileMode(mode: unknown): mode is number | null {
+  return mode === null
+    || (Number.isSafeInteger(mode)
+      && (mode as number) >= 0o100000
+      && (mode as number) <= 0o107777)
+}
+
+function parseInitGitChangesValue(value: unknown, allowEmpty: boolean): InitGitChanges | undefined {
+  try {
+    if (!isPlainInitGitRecord(value) || !hasOnlyInitGitKeys(value, ['version', 'repoRoot', 'files']))
+      return undefined
+    if (value.version !== 1
+      || typeof value.repoRoot !== 'string'
+      || value.repoRoot.trim().length === 0
+      || !isPlainInitGitRecord(value.files)
+      || !hasOnlyInitGitRecordEntries(value.files))
+      return undefined
+
+    const entries = Object.entries(value.files)
+    if (!allowEmpty && entries.length === 0)
+      return undefined
+
+    const parsedEntries: [string, InitGitChangeFingerprint][] = []
+    for (const [filePath, rawFingerprint] of entries) {
+      if (!isSafeInitGitRelativePath(filePath)
+        || !isPlainInitGitRecord(rawFingerprint)
+        || !hasOnlyInitGitKeys(rawFingerprint, ['status', 'sha256', 'mode'])
+        || typeof rawFingerprint.status !== 'string'
+        || rawFingerprint.status.length !== 2
+        || !(rawFingerprint.sha256 === null || (typeof rawFingerprint.sha256 === 'string' && /^[0-9a-f]{64}$/.test(rawFingerprint.sha256)))
+        || !isSupportedInitGitFileMode(rawFingerprint.mode))
+        return undefined
+
+      parsedEntries.push([filePath, {
+        status: rawFingerprint.status,
+        sha256: rawFingerprint.sha256,
+        mode: rawFingerprint.mode,
+      }])
+    }
+
+    return { version: 1, repoRoot: value.repoRoot, files: Object.fromEntries(parsedEntries) }
+  }
+  catch {
+    return undefined
+  }
+}
+
+export function parseInitGitChanges(value: unknown): InitGitChanges | undefined {
+  return parseInitGitChangesValue(value, false)
 }
 
 function isUsableInitGitChanges(changes: InitGitChanges | undefined): changes is InitGitChanges {
@@ -703,6 +806,73 @@ function getGitStatusEntryPath(entry: string) {
   return rawPath.slice(rawPath.lastIndexOf(renameSeparator) + renameSeparator.length)
 }
 
+function getNormalizedGitStatusEntryPath(entry: string) {
+  return getGitStatusEntryPath(entry).split(path.sep).join('/')
+}
+
+export function evaluateInitGitRepoState(
+  status: GitRepoStatus,
+  currentValue: InitGitChanges | undefined,
+  savedValue: InitGitChanges | undefined,
+): InitGitRepoDecision {
+  const saved = parseInitGitChanges(savedValue)
+  if (status.clean) {
+    return {
+      warningEntries: [],
+      recognizedCount: 0,
+      nextSaved: undefined,
+      shouldPersist: true,
+      skipPrompt: true,
+      infoMessages: [],
+    }
+  }
+
+  const current = parseInitGitChangesValue(currentValue, true)
+  const statusPaths = status.entries.map(getNormalizedGitStatusEntryPath)
+  const currentPaths = current ? Object.keys(current.files).sort() : []
+  const snapshotMatchesStatus = Boolean(
+    current
+    && status.repoRoot
+    && path.resolve(current.repoRoot) === path.resolve(status.repoRoot)
+    && statusPaths.length === currentPaths.length
+    && [...statusPaths].sort().every((filePath, index) => filePath === currentPaths[index]),
+  )
+  if (!current || !saved || !snapshotMatchesStatus) {
+    return {
+      warningEntries: status.entries,
+      recognizedCount: 0,
+      nextSaved: saved,
+      shouldPersist: false,
+      skipPrompt: false,
+      infoMessages: [],
+    }
+  }
+
+  const classification = classifyInitGitChanges(current, saved)
+  if (classification.unsafePaths.length === 0 && classification.recognizedCount > 0) {
+    return {
+      warningEntries: [],
+      recognizedCount: classification.recognizedCount,
+      nextSaved: classification.retained,
+      shouldPersist: true,
+      skipPrompt: true,
+      infoMessages: ['Resuming with uncommitted changes created by the previous Capgo onboarding run.'],
+    }
+  }
+
+  const unsafePaths = new Set(classification.unsafePaths)
+  return {
+    warningEntries: status.entries.filter(entry => unsafePaths.has(getNormalizedGitStatusEntryPath(entry))),
+    recognizedCount: classification.recognizedCount,
+    nextSaved: classification.retained,
+    shouldPersist: true,
+    skipPrompt: false,
+    infoMessages: classification.recognizedCount > 0
+      ? [`${classification.recognizedCount} recognized Capgo ${classification.recognizedCount === 1 ? 'change was' : 'changes were'} omitted from this warning.`]
+      : [],
+  }
+}
+
 export function isOnlyAllowedInitAutoTestChange(status: GitRepoStatus, allowedChange?: InitAutoTestChange) {
   if (!allowedChange || !status.inRepo || !status.repoRoot || status.error || status.clean || status.entries.length === 0)
     return false
@@ -790,6 +960,8 @@ async function ensureGitRepoCleanBeforeInit(allowedAutoTestChange?: InitAutoTest
     }
 
     if (status.clean) {
+      globalInitGitChanges = undefined
+      persistInitProgressSafely()
       if (warned)
         pLog.success('Git repository is clean ✅')
       return
@@ -798,13 +970,23 @@ async function ensureGitRepoCleanBeforeInit(allowedAutoTestChange?: InitAutoTest
     if (isOnlyAllowedInitAutoTestChange(status, allowedAutoTestChange))
       return
 
+    const decision = evaluateInitGitRepoState(status, captureInitGitSnapshot(status.repoRoot), globalInitGitChanges)
+    if (decision.shouldPersist) {
+      globalInitGitChanges = decision.nextSaved
+      persistInitProgressSafely()
+    }
+    for (const message of decision.infoMessages)
+      pLog.info(message)
+    if (decision.skipPrompt)
+      return
+
     warned = true
     pLog.warn(`Git repository is not clean: ${status.repoRoot}`)
-    for (const entry of status.entries.slice(0, 10)) {
+    for (const entry of decision.warningEntries.slice(0, 10)) {
       pLog.warn(`  ${entry}`)
     }
-    if (status.entries.length > 10) {
-      pLog.warn(`  ...and ${status.entries.length - 10} more`)
+    if (decision.warningEntries.length > 10) {
+      pLog.warn(`  ...and ${decision.warningEntries.length - 10} more`)
     }
     pLog.info('Clean, commit, or stash those changes before init continues, or continue anyway if you accept the risk.')
 
@@ -1501,32 +1683,71 @@ async function ensureWorkspaceReadyForInit(initialAppId?: string): Promise<strin
 let globalOrgId: string | undefined
 let globalOrgName: string | undefined
 
-function markStepDone(step: number, pathToPackageJson?: string, channelName?: string) {
+export function resetInitProgressState() {
+  globalStepDone = 0
+  globalInitGitChanges = undefined
+}
+
+export function restoreInitProgressState(stepDone: number, gitChanges: unknown) {
+  globalStepDone = stepDone
+  globalInitGitChanges = parseInitGitChanges(gitChanges)
+}
+
+export function getInitProgressStateForTesting() {
+  return {
+    stepDone: globalStepDone,
+    gitChanges: parseInitGitChanges(globalInitGitChanges),
+  }
+}
+
+function writeInitProgress() {
+  if (globalStepDone <= 0)
+    return
+
+  const gitChanges = parseInitGitChanges(globalInitGitChanges)
+  writeFileSync(getTmpObjectPath(), JSON.stringify({
+    step_done: globalStepDone,
+    orgId: globalOrgId,
+    orgName: globalOrgName,
+    appId: globalAppId,
+    pathToPackageJson: globalPathToPackageJson,
+    capacitorConfigPath: globalCapacitorConfigPath,
+    configLoadDir: globalConfigLoadDir,
+    mainFilePath: globalMainFilePath,
+    channelName: globalChannelName,
+    platform: globalPlatform,
+    delta: globalDelta,
+    currentVersion: globalCurrentVersion,
+    codeDiff: globalCodeDiff,
+    encryptionSummary: globalEncryptionSummary,
+    autoTestChange: globalAutoTestChange,
+    nodeModulesPath: globalNodeModulesPath,
+    ...(gitChanges ? { gitChanges } : {}),
+  }))
+}
+
+function persistInitProgressSafely() {
   try {
-    writeFileSync(getTmpObjectPath(), JSON.stringify({
-      step_done: step,
-      orgId: globalOrgId,
-      orgName: globalOrgName,
-      appId: globalAppId,
-      pathToPackageJson: pathToPackageJson ?? globalPathToPackageJson,
-      capacitorConfigPath: globalCapacitorConfigPath,
-      configLoadDir: globalConfigLoadDir,
-      mainFilePath: globalMainFilePath,
-      channelName: channelName ?? globalChannelName,
-      platform: globalPlatform,
-      delta: globalDelta,
-      currentVersion: globalCurrentVersion,
-      codeDiff: globalCodeDiff,
-      encryptionSummary: globalEncryptionSummary,
-      autoTestChange: globalAutoTestChange,
-      nodeModulesPath: globalNodeModulesPath,
-    }))
-    if (pathToPackageJson) {
-      globalPathToPackageJson = pathToPackageJson
+    writeInitProgress()
+  }
+  catch (error) {
+    try {
+      appendInternalLog(`Could not persist onboarding progress: ${formatError(error)}`)
     }
-    if (channelName) {
-      globalChannelName = channelName
+    catch {
     }
+  }
+}
+
+function markStepDone(step: number, pathToPackageJson?: string, channelName?: string) {
+  globalStepDone = step
+  if (pathToPackageJson)
+    globalPathToPackageJson = pathToPackageJson
+  if (channelName)
+    globalChannelName = channelName
+
+  try {
+    writeInitProgress()
   }
   catch (err) {
     pLog.error(`Cannot mark step as done in the CLI, error:\n${err}`)
@@ -1621,6 +1842,7 @@ async function tryResumeOnboarding(
       codeDiff,
       encryptionSummary,
       autoTestChange,
+      gitChanges,
     } = JSON.parse(rawData)
     if (!orgId || !step_done) {
       pLog.warn('⚠️  Found previous onboarding progress, but it was saved in an older format.')
@@ -1665,6 +1887,7 @@ async function tryResumeOnboarding(
         globalAutoTestChange = undefined
         return undefined
       }
+      restoreInitProgressState(step_done, gitChanges)
       globalPathToPackageJson = resumedTargets.pathToPackageJson
       globalCapacitorConfigPath = resumedTargets.capacitorConfigPath
       globalConfigLoadDir = resumedTargets.configLoadDir
@@ -1780,6 +2003,7 @@ async function tryResumeOnboarding(
 }
 
 function cleanupStepsDone() {
+  resetInitProgressState()
   globalAutoTestChange = undefined
   globalNodeModulesPath = undefined
   if (!tmpObject) {
@@ -5277,6 +5501,7 @@ async function maybeStarCapgoRepo(includeSkillsRepository = false, repository?: 
 }
 
 export async function initApp(apikeyCommand: string, appId: string, options: SuperOptions) {
+  resetInitProgressState()
   const initialCwd = cwd()
   const packageJsonPath = resolveInitTargetPath(options.packageJson, 'Package JSON path', initialCwd)
   const capacitorConfigPath = getConfigWriteTarget() ?? resolveCapacitorConfigTargetPath(options.capacitorConfig, initialCwd)

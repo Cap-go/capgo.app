@@ -9,8 +9,10 @@ import {
   applyInitAutoTestChange,
   captureInitGitSnapshot,
   classifyInitGitChanges,
+  evaluateInitGitRepoState,
   getDirtyGitStatusActionOptions,
   getGitRepoStatus,
+  getInitProgressStateForTesting,
   getInitOtaVersionBase,
   getInitSuggestedOtaVersion,
   getInitUpdaterPluginConfig,
@@ -19,6 +21,9 @@ import {
   injectInitCode,
   isOnlyAllowedInitAutoTestChange,
   mergeInitGitChanges,
+  parseInitGitChanges,
+  resetInitProgressState,
+  restoreInitProgressState,
   revertInitAutoTestChangeContent,
   runInheritedCommand,
 } from '../src/init/command.ts'
@@ -705,6 +710,198 @@ t('git fingerprint classification requires exact path, status, hash, and mode ma
     assert.deepEqual(classification.unsafePaths, testCase.unsafePaths, testCase.name)
     assert.equal(classification.recognizedCount, testCase.recognizedCount, testCase.name)
     assert.deepEqual(Object.keys(classification.retained?.files ?? {}).sort(), testCase.retainedPaths, testCase.name)
+  }
+})
+
+t('saved init git fingerprints require a strict versioned runtime shape', () => {
+  const valid = {
+    version: 1,
+    repoRoot: '/repo',
+    files: {
+      'package.json': { status: ' M', sha256: 'a'.repeat(64), mode: 0o100644 },
+      'src/deleted.ts': { status: ' D', sha256: null, mode: null },
+    },
+  }
+  const invalidCases = [
+    ['undefined value', undefined],
+    ['null value', null],
+    ['array value', []],
+    ['unsupported version', { ...valid, version: 2 }],
+    ['empty repository root', { ...valid, repoRoot: '' }],
+    ['array file map', { ...valid, files: [] }],
+    ['empty file map', { ...valid, files: {} }],
+    ['absolute path', { ...valid, files: { '/package.json': valid.files['package.json'] } }],
+    ['Windows absolute path', { ...valid, files: { 'C:\\package.json': valid.files['package.json'] } }],
+    ['Windows drive-relative path', { ...valid, files: { 'C:package.json': valid.files['package.json'] } }],
+    ['escaping path', { ...valid, files: { '../package.json': valid.files['package.json'] } }],
+    ['normalized escaping path', { ...valid, files: { 'src/../../package.json': valid.files['package.json'] } }],
+    ['array fingerprint', { ...valid, files: { 'package.json': [] } }],
+    ['short status', { ...valid, files: { 'package.json': { ...valid.files['package.json'], status: 'M' } } }],
+    ['long status', { ...valid, files: { 'package.json': { ...valid.files['package.json'], status: ' M ' } } }],
+    ['uppercase hash', { ...valid, files: { 'package.json': { ...valid.files['package.json'], sha256: 'A'.repeat(64) } } }],
+    ['short hash', { ...valid, files: { 'package.json': { ...valid.files['package.json'], sha256: 'a'.repeat(63) } } }],
+    ['fractional mode', { ...valid, files: { 'package.json': { ...valid.files['package.json'], mode: 0o100644 + 0.5 } } }],
+    ['directory mode', { ...valid, files: { 'package.json': { ...valid.files['package.json'], mode: 0o040755 } } }],
+    ['symlink mode', { ...valid, files: { 'package.json': { ...valid.files['package.json'], mode: 0o120777 } } }],
+    ['unexpected top-level property', { ...valid, ignored: true }],
+    ['unexpected fingerprint property', { ...valid, files: { 'package.json': { ...valid.files['package.json'], ignored: true } } }],
+  ]
+
+  assert.deepEqual(parseInitGitChanges(valid), valid)
+  assert.notEqual(parseInitGitChanges(valid), valid)
+  assert.notEqual(parseInitGitChanges(valid)?.files, valid.files)
+  for (const [name, value] of invalidCases)
+    assert.equal(parseInitGitChanges(value), undefined, name)
+
+  const inheritedShape = Object.create(valid)
+  assert.equal(parseInitGitChanges(inheritedShape), undefined)
+  const inheritedFiles = Object.create({ inherited: valid.files['package.json'] })
+  inheritedFiles['package.json'] = valid.files['package.json']
+  assert.equal(parseInitGitChanges({ ...valid, files: inheritedFiles }), undefined)
+})
+
+t('saved Capgo git changes skip only the unsafe-state prompt they exactly cover', () => {
+  const repoRoot = '/repo'
+  const saved = {
+    version: 1,
+    repoRoot,
+    files: {
+      'package.json': { status: ' M', sha256: 'a'.repeat(64), mode: 0o100644 },
+    },
+  }
+  const status = {
+    inRepo: true,
+    clean: false,
+    repoRoot,
+    entries: [' M package.json'],
+  }
+
+  const decision = evaluateInitGitRepoState(status, saved, saved)
+  assert.equal(decision.skipPrompt, true)
+  assert.deepEqual(decision.warningEntries, [])
+  assert.deepEqual(decision.infoMessages, [
+    'Resuming with uncommitted changes created by the previous Capgo onboarding run.',
+  ])
+  assert.equal(decision.recognizedCount, 1)
+})
+
+t('mixed saved and unknown git changes keep the warning but omit recognized entries', () => {
+  const repoRoot = '/repo'
+  const fingerprint = sha256 => ({ status: ' M', sha256, mode: 0o100644 })
+  const saved = {
+    version: 1,
+    repoRoot,
+    files: { 'package.json': fingerprint('a'.repeat(64)) },
+  }
+  const current = {
+    version: 1,
+    repoRoot,
+    files: {
+      'package.json': fingerprint('a'.repeat(64)),
+      'src/main.ts': fingerprint('b'.repeat(64)),
+    },
+  }
+  const status = {
+    inRepo: true,
+    clean: false,
+    repoRoot,
+    entries: [' M package.json', ' M src/main.ts'],
+  }
+
+  const decision = evaluateInitGitRepoState(status, current, saved)
+  assert.equal(decision.skipPrompt, false)
+  assert.deepEqual(decision.warningEntries, [' M src/main.ts'])
+  assert.deepEqual(decision.infoMessages, ['1 recognized Capgo change was omitted from this warning.'])
+  assert.deepEqual(Object.keys(decision.nextSaved?.files ?? {}), ['package.json'])
+  assert.equal(decision.shouldPersist, true)
+})
+
+t('changed, missing, and malformed saved git fingerprints preserve the unsafe warning', () => {
+  const repoRoot = '/repo'
+  const saved = {
+    version: 1,
+    repoRoot,
+    files: { 'package.json': { status: ' M', sha256: 'a'.repeat(64), mode: 0o100644 } },
+  }
+  const current = {
+    version: 1,
+    repoRoot,
+    files: { 'package.json': { status: ' M', sha256: 'b'.repeat(64), mode: 0o100644 } },
+  }
+  const status = {
+    inRepo: true,
+    clean: false,
+    repoRoot,
+    entries: [' M package.json'],
+  }
+
+  for (const [name, rawSaved] of [
+    ['subsequently modified', saved],
+    ['legacy progress', undefined],
+    ['malformed progress', { ...saved, files: [] }],
+  ]) {
+    const parsedSaved = name === 'subsequently modified' ? rawSaved : parseInitGitChanges(rawSaved)
+    const decision = evaluateInitGitRepoState(status, current, parsedSaved)
+    assert.equal(decision.skipPrompt, false, name)
+    assert.deepEqual(decision.warningEntries, [' M package.json'], name)
+    assert.equal(decision.recognizedCount, 0, name)
+  }
+})
+
+t('clean git state clears saved fingerprints and continue-anyway never attributes unsafe paths', () => {
+  const repoRoot = '/repo'
+  const saved = {
+    version: 1,
+    repoRoot,
+    files: { 'package.json': { status: ' M', sha256: 'a'.repeat(64), mode: 0o100644 } },
+  }
+  const cleanDecision = evaluateInitGitRepoState({
+    inRepo: true,
+    clean: true,
+    repoRoot,
+    entries: [],
+  }, { version: 1, repoRoot, files: {} }, saved)
+  assert.equal(cleanDecision.skipPrompt, true)
+  assert.equal(cleanDecision.nextSaved, undefined)
+  assert.equal(cleanDecision.shouldPersist, true)
+
+  const mixedCurrent = {
+    version: 1,
+    repoRoot,
+    files: {
+      ...saved.files,
+      'src/user.ts': { status: '??', sha256: 'b'.repeat(64), mode: 0o100644 },
+    },
+  }
+  const dirtyDecision = evaluateInitGitRepoState({
+    inRepo: true,
+    clean: false,
+    repoRoot,
+    entries: [' M package.json', '?? src/user.ts'],
+  }, mixedCurrent, saved)
+  assert.deepEqual(Object.keys(dirtyDecision.nextSaved?.files ?? {}), ['package.json'])
+  assert.equal(dirtyDecision.nextSaved?.files['src/user.ts'], undefined)
+})
+
+t('fresh, declined, and discarded onboarding state cannot retain saved git fingerprints', () => {
+  const saved = {
+    version: 1,
+    repoRoot: '/repo',
+    files: { 'package.json': { status: ' M', sha256: 'a'.repeat(64), mode: 0o100644 } },
+  }
+
+  try {
+    restoreInitProgressState(4, saved)
+    assert.deepEqual(getInitProgressStateForTesting(), { stepDone: 4, gitChanges: saved })
+
+    for (const flow of ['fresh start', 'declined resume', 'discarded resume']) {
+      resetInitProgressState()
+      assert.deepEqual(getInitProgressStateForTesting(), { stepDone: 0, gitChanges: undefined }, flow)
+      restoreInitProgressState(4, saved)
+    }
+  }
+  finally {
+    resetInitProgressState()
   }
 })
 
