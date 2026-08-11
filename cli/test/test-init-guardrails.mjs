@@ -2,7 +2,7 @@
 
 import assert from 'node:assert/strict'
 import { execSync, spawn } from 'node:child_process'
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import {
@@ -28,6 +28,7 @@ import {
   mergeInitGitChanges,
   parseInitGitChanges,
   restoreInitProgressState,
+  resolveInitNativeResetTarget,
   revertInitAutoTestChangeContent,
   runInheritedCommand,
   runTrackedInitMutation,
@@ -992,6 +993,44 @@ await tAsync('unsafe git scopes fail closed without claiming paths', async () =>
   })
 })
 
+await tAsync('native reset targets configured platform directories without escaping the project', async () => {
+  for (const [platformName, configuredPath] of [['ios', 'native/apple-app'], ['android', 'native/android-app']]) {
+    await withTempDirAsync(async (root) => {
+      const projectDir = join(root, 'project')
+      mkdirSync(projectDir)
+      initializeGitRepo(projectDir, {
+        'package.json': '{"name":"example"}\n',
+        [`${configuredPath}/generated.txt`]: 'generated\n',
+        [`${platformName}/keep.txt`]: 'keep\n',
+      })
+      const config = { [platformName]: { path: configuredPath } }
+      const availability = getNativePlatformAvailability(config, projectDir)
+      const nativePlatformDir = platformName === 'ios' ? availability.iosDir : availability.androidDir
+      const resetTarget = resolveInitNativeResetTarget(projectDir, nativePlatformDir)
+
+      assert.ok(resetTarget)
+      assert.equal(resetTarget.directory, join(realpathSync(projectDir), configuredPath))
+      assert.deepEqual(resetTarget.scope, { exactPaths: [], directoryPrefixes: [configuredPath] })
+
+      const tracked = await trackInitGitChanges(undefined, () => {
+        rmSync(resetTarget.directory, { recursive: true, force: true })
+      }, { startDir: projectDir, scope: resetTarget.scope })
+
+      assert.equal(existsSync(join(projectDir, configuredPath)), false)
+      assert.equal(existsSync(join(projectDir, platformName, 'keep.txt')), true)
+      assert.deepEqual(Object.keys(tracked.gitChanges?.files ?? {}), [`${configuredPath}/generated.txt`])
+
+      const outsideDir = join(root, 'outside')
+      mkdirSync(outsideDir)
+      assert.equal(resolveInitNativeResetTarget(projectDir, '../outside'), undefined)
+      assert.equal(resolveInitNativeResetTarget(projectDir, outsideDir), undefined)
+      assert.equal(resolveInitNativeResetTarget(projectDir, '.'), undefined)
+      if (tryCreateTestSymlink(outsideDir, join(projectDir, 'native-link')))
+        assert.equal(resolveInitNativeResetTarget(projectDir, 'native-link/ios'), undefined)
+    })
+  }
+})
+
 await tAsync('tracked init mutation persists changed process, structured, and void successes', async () => {
   await withTempDirAsync(async (root) => {
     initializeGitRepo(root, {
@@ -1147,6 +1186,9 @@ t('automatic onboarding mutations use narrow tracking windows and user-controlle
   assert.equal(trackedCallCount(sourceBetween('async function waitForReadyConfirmation(', 'async function waitForReadyRetry(')), 0, 'manual ready wait')
   assert.equal(trackedCallCount(sourceBetween('async function runDeviceStep(', 'async function addCodeChangeStep(')), 0, 'cap run')
   assert.equal(trackedCallCount(sourceBetween('const buildResult = await streamCommandInInitPanel({', '// Keep the completed build output visible')), 0, 'project build')
+  const nativeResetBody = sourceBetween('async function runNativeResetCommand(', 'async function waitForReadyConfirmation(')
+  assert.match(nativeResetBody, /rmSync\(resetTarget\.directory,/)
+  assert.match(nativeResetBody, /scope: resetTarget\.scope/)
 })
 
 await tAsync('live git cleanliness gate filters trusted changes without weakening the existing prompt', async () => {

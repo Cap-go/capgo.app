@@ -151,6 +151,11 @@ export interface InitGitChangeScope {
   directoryPrefixes?: string[]
 }
 
+export interface InitNativeResetTarget {
+  directory: string
+  scope: InitGitChangeScope
+}
+
 interface NormalizedInitGitChangeScope {
   exactPaths: string[]
   directoryPrefixes: string[]
@@ -636,6 +641,47 @@ function createInitGitChangeScope(startDir: string, exactTargets: string[] = [],
   return {
     exactPaths: exactPaths as string[],
     directoryPrefixes: directoryPrefixes as string[],
+  }
+}
+
+function isPathInside(parentDir: string, targetPath: string, allowSame = false) {
+  const relativePath = path.relative(parentDir, targetPath)
+  return (allowSame || relativePath !== '')
+    && relativePath !== '..'
+    && !relativePath.startsWith(`..${path.sep}`)
+    && !path.isAbsolute(relativePath)
+}
+
+export function resolveInitNativeResetTarget(projectDir: string, nativePlatformDir: string): InitNativeResetTarget | undefined {
+  try {
+    const repoRoot = getInitGitRepoRoot(projectDir)
+    const resolvedProjectDir = realpathSync(projectDir)
+    if (!repoRoot || !isPathInside(repoRoot, resolvedProjectDir, true))
+      return undefined
+
+    const directory = path.resolve(resolvedProjectDir, nativePlatformDir)
+    if (!isPathInside(resolvedProjectDir, directory))
+      return undefined
+
+    let existingAncestor = directory
+    while (!existsSync(existingAncestor)) {
+      const parentDir = dirname(existingAncestor)
+      if (parentDir === existingAncestor)
+        return undefined
+      existingAncestor = parentDir
+    }
+    if ((existingAncestor === directory && !lstatSync(directory).isDirectory())
+      || !isPathInside(resolvedProjectDir, realpathSync(existingAncestor), true))
+      return undefined
+
+    const scope = createInitGitChangeScope(resolvedProjectDir, [], [directory])
+    const normalizedScope = normalizeInitGitScope(scope)
+    if (!normalizedScope || normalizedScope.directoryPrefixes.length !== 1)
+      return undefined
+    return { directory, scope }
+  }
+  catch {
+    return undefined
   }
 }
 
@@ -2656,19 +2702,31 @@ async function maybeCancelAfterRepeatedIosSyncFailures(failureCount: number, org
     await exitCanceledInitOnboarding(orgId, apikey)
 }
 
-async function runNativeResetCommand(platformRunner: string, nativePlatform: PlatformChoice, successMessage: string, failureMessage: string): Promise<void> {
+async function runNativeResetCommand(
+  platformRunner: string,
+  nativePlatform: PlatformChoice,
+  projectDir: string,
+  nativePlatformDir: string,
+  successMessage: string,
+  failureMessage: string,
+): Promise<void> {
   const resetAdvice = getNativeProjectResetAdvice(platformRunner, nativePlatform)
   const resetSpinner = pSpinner()
   resetSpinner.start(`Running: ${resetAdvice.command}`)
   try {
+    const resetTarget = resolveInitNativeResetTarget(projectDir, nativePlatformDir)
+    if (!resetTarget)
+      throw new Error(`Cannot safely reset ${nativePlatformDir}: the native directory must stay inside the selected project`)
+
     await runTrackedInitMutation(async () => {
-      rmSync(nativePlatform, { recursive: true, force: true })
+      rmSync(resetTarget.directory, { recursive: true, force: true })
       resetSpinner.stop()
 
       const addResult = await streamCommandInInitPanel({
         title: `Recreating ${nativePlatform.toUpperCase()} native project`,
         runner: platformRunner,
         args: ['cap', 'add', nativePlatform],
+        cwd: projectDir,
       })
       if (!addResult.success)
         throw addResult.error ?? new Error(`cap add ${nativePlatform} failed`)
@@ -2677,12 +2735,13 @@ async function runNativeResetCommand(platformRunner: string, nativePlatform: Pla
         title: `Syncing ${nativePlatform.toUpperCase()} native project`,
         runner: platformRunner,
         args: ['cap', 'sync', nativePlatform],
+        cwd: projectDir,
       })
       if (!syncResult.success)
         throw syncResult.error ?? new Error(`cap sync ${nativePlatform} failed`)
     }, {
-      startDir: cwd(),
-      scope: createInitGitChangeScope(cwd(), [], [path.resolve(nativePlatform)]),
+      startDir: projectDir,
+      scope: resetTarget.scope,
     })
 
     await delay(750)
@@ -2731,7 +2790,7 @@ async function waitForReadyRetry(message: string, orgId: string, apikey: string,
   await waitForReadyConfirmation(message, orgId, apikey, 'Type "ready" when the iOS folder is fixed.', placeholder)
 }
 
-async function handleBrokenIosSync(platformRunner: string, details: string[], orgId: string, apikey: string, failureCount: number) {
+async function handleBrokenIosSync(platformRunner: string, projectDir: string, nativePlatformDir: string, details: string[], orgId: string, apikey: string, failureCount: number) {
   const resetAdvice = getNativeProjectResetAdvice(platformRunner, 'ios')
   const { doctor } = getInitRecoveryCommands()
   logBrokenIosSync(details, resetAdvice.summary, resetAdvice.command, doctor)
@@ -2745,7 +2804,7 @@ async function handleBrokenIosSync(platformRunner: string, details: string[], or
   await cancelCommand(runResetNow, orgId, apikey)
 
   if (runResetNow) {
-    await runNativeResetCommand(platformRunner, 'ios', 'iOS folder recreated and synced ✅', 'iOS folder reset failed ❌')
+    await runNativeResetCommand(platformRunner, 'ios', projectDir, nativePlatformDir, 'iOS folder recreated and synced ✅', 'iOS folder reset failed ❌')
     return
   }
 
@@ -4522,7 +4581,7 @@ async function runBuildAndSyncLoop(
       if (syncValidation.shouldCheck && !syncValidation.valid) {
         iosSyncFailureCount += 1
         spinner.stop('iOS sync check failed ❌')
-        await handleBrokenIosSync(pm.runner, syncValidation.details, orgId, apikey, iosSyncFailureCount)
+        await handleBrokenIosSync(pm.runner, buildAndSyncCwd, nativePlatformDir, syncValidation.details, orgId, apikey, iosSyncFailureCount)
         pLog.info(`Retrying build and sync for iOS (attempt ${iosSyncFailureCount + 1})`)
         continue
       }
