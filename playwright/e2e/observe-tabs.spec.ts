@@ -46,6 +46,7 @@ test.describe('Observe sections', () => {
 
     await nativeTab.click()
     await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/native(?:\?|$)/)
-    await expect(page.getByRole('heading', { name: 'All versions summary', exact: true })).toBeVisible()
+    await expect(nativeTab).toHaveAttribute('aria-current', 'page')
+    await expect(page.getByRole('heading', { name: 'Observe', exact: true, level: 1 })).toBeVisible()
   })
 })

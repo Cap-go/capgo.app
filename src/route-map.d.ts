@@ -374,6 +374,13 @@ declare module 'vue-router/auto-routes' {
       Record<never, never>,
       | never
     >,
+    '/email-preferences': RouteRecordInfo<
+      '/email-preferences',
+      '/email-preferences',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
     '/forgot_password': RouteRecordInfo<
       '/forgot_password',
       '/forgot_password',
@@ -1018,6 +1025,14 @@ declare module 'vue-router/auto-routes' {
     'src/pages/demo_dialog.vue': {
       routes:
         | '/demo_dialog'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
+    'src/pages/email-preferences.vue': {
+      routes:
+        | '/email-preferences'
       views:
         | never
       pathParamNames:
