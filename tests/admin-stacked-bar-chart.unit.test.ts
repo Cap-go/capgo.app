@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 import {
+  applyAdminStackedBarAccessibleBorders,
   buildAdminStackedBarChartData,
   buildAdminStackedBarChartOptions,
   formatAdminStackedBarTooltip,
@@ -46,5 +47,16 @@ describe('admin stacked bar chart', () => {
 
     expect(source).toContain('class="d-loading d-loading-spinner d-loading-lg text-primary"')
     expect(source).not.toContain('class="loading loading-spinner loading-lg text-primary"')
+  })
+
+  it.concurrent('offers opt-in contrasting segment boundaries without changing every chart', () => {
+    const data = buildAdminStackedBarChartData(['Aug 1', 'Aug 2'], series)
+    const unchanged = applyAdminStackedBarAccessibleBorders(data, false, false)
+    const light = applyAdminStackedBarAccessibleBorders(data, true, false)
+    const dark = applyAdminStackedBarAccessibleBorders(data, true, true)
+
+    expect(unchanged).toBe(data)
+    expect(light.datasets.every(dataset => dataset.borderColor === '#0f172a' && dataset.borderWidth === 1)).toBe(true)
+    expect(dark.datasets.every(dataset => dataset.borderColor === '#f8fafc' && dataset.borderWidth === 1)).toBe(true)
   })
 })

@@ -10,6 +10,7 @@ import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { getAdminCancelledOrganizations, getAdminCustomerCountryBreakdown, getAdminDeploymentsTrend, getAdminEmailTypeBreakdown, getAdminGlobalStatsTrend, getAdminOnboardingFunnel, getAdminOrganizationInsights, getAdminPluginBreakdown, getAdminTrialOrganizations, getAdminTrialPlanBreakdown } from '../utils/pg.ts'
+import { getAdminPlansAnalytics } from '../utils/plans_analytics.ts'
 import { safeParseSchema } from '../utils/schema_validation.ts'
 import { getCancellationDetails } from '../utils/stripe.ts'
 import { supabaseClient as useSupabaseClient } from '../utils/supabase.ts'
@@ -45,6 +46,7 @@ const metricCategories = [
   'builder_analytics',
   'builder_capacity',
   'cli_usage',
+  'plans_analytics',
 ] as const
 
 const isoUtcDatetimeSchema = z.string().refine(
@@ -323,6 +325,10 @@ app.post('/', middlewareAuth, async (c) => {
 
       case 'cli_usage':
         result = await getAdminCliUsage(c, start_date, end_date)
+        break
+
+      case 'plans_analytics':
+        result = await getAdminPlansAnalytics(c, start_date, end_date)
         break
 
       default:
