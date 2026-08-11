@@ -2762,6 +2762,7 @@
   "frontend-onboarding-median-time": "Median completion time",
   "frontend-onboarding-median-time-subtitle": "Completed attempts only",
   "frontend-onboarding-largest-dropoff": "Largest drop-off",
+  "frontend-onboarding-load-error": "Unable to load onboarding analytics. Please try again.",
   "frontend-onboarding-daily-attempts": "Daily onboarding attempts",
   "frontend-onboarding-funnel": "Frontend onboarding funnel",
   "frontend-onboarding-funnel-description": "Progress through the new-user app-creation wizard",

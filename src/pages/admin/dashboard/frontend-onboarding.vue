@@ -35,14 +35,17 @@ const isLoading = ref(true)
 const isLoadingStats = ref(false)
 const isReady = ref(false)
 const analytics = ref<FrontendOnboardingAnalytics | null>(null)
+const loadError = ref(false)
 
 const loadAnalytics = createFrontendOnboardingAnalyticsLoader(
   async () => await adminStore.fetchStats('frontend_onboarding_analytics') || null,
   {
     onAnalytics: (value) => {
       analytics.value = value
+      loadError.value = false
     },
     onError: (error) => {
+      loadError.value = true
       console.error('[Admin Frontend Onboarding] Error loading analytics:', error)
     },
     onLoading: (value) => {
@@ -126,66 +129,72 @@ displayStore.defaultBack = '/dashboard'
           </span>
         </div>
 
-        <div class="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-4">
-          <AdminStatsCard
-            :title="t('frontend-onboarding-attempts')"
-            :value="attemptsValue"
-            :subtitle="t('frontend-onboarding-attempts-subtitle')"
-            color-class="text-indigo-500"
-            :is-loading="isLoadingStats"
-          />
-          <AdminStatsCard
-            :title="t('frontend-onboarding-completed')"
-            :value="completionValue"
-            :subtitle="completionSubtitle"
-            color-class="text-emerald-500"
-            :is-loading="isLoadingStats"
-          />
-          <AdminStatsCard
-            :title="t('frontend-onboarding-median-time')"
-            :value="formatFrontendOnboardingDuration(kpis?.median_completion_ms ?? null)"
-            :subtitle="t('frontend-onboarding-median-time-subtitle')"
-            color-class="text-amber-500"
-            :is-loading="isLoadingStats"
-          />
-          <AdminStatsCard
-            :title="t('frontend-onboarding-largest-dropoff')"
-            :value="largestDropoffValue"
-            :subtitle="largestDropoffSubtitle"
-            color-class="text-rose-500"
-            :is-loading="isLoadingStats"
-          />
+        <div v-if="loadError" role="alert" class="rounded-lg border border-error/30 bg-error/10 px-4 py-3 text-sm text-error">
+          {{ t('frontend-onboarding-load-error') }}
         </div>
 
-        <ChartCard
-          :title="t('frontend-onboarding-daily-attempts')"
-          :is-loading="isLoadingStats"
-          :has-data="hasAttempts"
-        >
-          <AdminStackedBarChart :series="dailySeries" :is-loading="isLoadingStats" />
-        </ChartCard>
+        <template v-else>
+          <div class="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-4">
+            <AdminStatsCard
+              :title="t('frontend-onboarding-attempts')"
+              :value="attemptsValue"
+              :subtitle="t('frontend-onboarding-attempts-subtitle')"
+              color-class="text-indigo-500"
+              :is-loading="isLoadingStats"
+            />
+            <AdminStatsCard
+              :title="t('frontend-onboarding-completed')"
+              :value="completionValue"
+              :subtitle="completionSubtitle"
+              color-class="text-emerald-500"
+              :is-loading="isLoadingStats"
+            />
+            <AdminStatsCard
+              :title="t('frontend-onboarding-median-time')"
+              :value="formatFrontendOnboardingDuration(kpis?.median_completion_ms ?? null)"
+              :subtitle="t('frontend-onboarding-median-time-subtitle')"
+              color-class="text-amber-500"
+              :is-loading="isLoadingStats"
+            />
+            <AdminStatsCard
+              :title="t('frontend-onboarding-largest-dropoff')"
+              :value="largestDropoffValue"
+              :subtitle="largestDropoffSubtitle"
+              color-class="text-rose-500"
+              :is-loading="isLoadingStats"
+            />
+          </div>
 
-        <section class="p-6 bg-white border rounded-lg shadow-lg border-slate-300 dark:bg-gray-800 dark:border-slate-900">
-          <h2 class="text-lg font-semibold text-slate-900 dark:text-white">
-            {{ t('frontend-onboarding-funnel') }}
-          </h2>
-          <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
-            {{ t('frontend-onboarding-funnel-description') }}
-          </p>
-          <div class="mt-6 h-72 sm:h-80">
-            <AdminFunnelChart :stages="funnelStages" :is-loading="isLoadingStats" />
-          </div>
-          <div class="grid grid-cols-2 gap-4 pt-5 mt-5 border-t border-slate-200 md:grid-cols-4 dark:border-slate-700">
-            <div v-for="summary in funnelSummaries" :key="summary.key" class="text-center">
-              <p class="text-xl font-bold text-slate-900 tabular-nums dark:text-white">
-                {{ formatNumberValue(summary.conversion_percent) }}%
-              </p>
-              <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                {{ summary.from_label ? t('frontend-onboarding-transition', { from: summary.from_label, to: summary.to_label }) : summary.to_label }} · {{ formatNumberValue(summary.reached) }}
-              </p>
+          <ChartCard
+            :title="t('frontend-onboarding-daily-attempts')"
+            :is-loading="isLoadingStats"
+            :has-data="hasAttempts"
+          >
+            <AdminStackedBarChart :series="dailySeries" :is-loading="isLoadingStats" />
+          </ChartCard>
+
+          <section class="p-6 bg-white border rounded-lg shadow-lg border-slate-300 dark:bg-gray-800 dark:border-slate-900">
+            <h2 class="text-lg font-semibold text-slate-900 dark:text-white">
+              {{ t('frontend-onboarding-funnel') }}
+            </h2>
+            <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
+              {{ t('frontend-onboarding-funnel-description') }}
+            </p>
+            <div class="mt-6 h-72 sm:h-80">
+              <AdminFunnelChart :stages="funnelStages" :is-loading="isLoadingStats" />
             </div>
-          </div>
-        </section>
+            <div class="grid grid-cols-2 gap-4 pt-5 mt-5 border-t border-slate-200 md:grid-cols-4 dark:border-slate-700">
+              <div v-for="summary in funnelSummaries" :key="summary.key" class="text-center">
+                <p class="text-xl font-bold text-slate-900 tabular-nums dark:text-white">
+                  {{ formatNumberValue(summary.conversion_percent) }}%
+                </p>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  {{ summary.from_label ? t('frontend-onboarding-transition', { from: summary.from_label, to: summary.to_label }) : summary.to_label }} · {{ formatNumberValue(summary.reached) }}
+                </p>
+              </div>
+            </div>
+          </section>
+        </template>
       </div>
     </div>
   </div>

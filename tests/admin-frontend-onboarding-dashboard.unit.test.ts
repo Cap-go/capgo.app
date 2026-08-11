@@ -319,11 +319,23 @@ describe('admin frontend onboarding dashboard', () => {
     expect(funnelChart).toContain('class="d-loading d-loading-spinner d-loading-lg text-primary"')
   })
 
-  it.concurrent('omits PostHog warnings, existing-org analytics, and selector UI', async () => {
+  it.concurrent('shows request failures instead of zero analytics', async () => {
     const source = await readFile(new URL('../src/pages/admin/dashboard/frontend-onboarding.vue', import.meta.url), 'utf8')
     const template = source.slice(source.indexOf('<template>'))
 
-    expect(source).not.toContain('posthogWarning')
+    expect(source).toContain('const loadError = ref(false)')
+    expect(source).toContain('loadError.value = false')
+    expect(source).toContain('loadError.value = true')
+    expect(template).toContain('v-if="loadError"')
+    expect(template).toContain('role="alert"')
+    expect(template).toContain(`t('frontend-onboarding-load-error')`)
+    expect(template).toContain('<template v-else>')
+  })
+
+  it.concurrent('omits existing-org analytics and selector UI', async () => {
+    const source = await readFile(new URL('../src/pages/admin/dashboard/frontend-onboarding.vue', import.meta.url), 'utf8')
+    const template = source.slice(source.indexOf('<template>'))
+
     expect(source).not.toContain('posthog_configured')
     expect(source).not.toContain('posthog_connected')
     expect(source).not.toContain('existing_org')
@@ -335,9 +347,6 @@ describe('admin frontend onboarding dashboard', () => {
     expect(template).not.toContain('isDemoData')
     expect(template).not.toMatch(/\bretry\b/i)
     expect(template).not.toMatch(/\btruncat(?:e|ed|ion)\b/i)
-    expect(template).not.toContain('error-message')
-    expect(template).not.toContain('errorMessage')
-    expect(template).not.toMatch(/v-(?:if|else-if)="[^"]*\berror\b/i)
   })
 
   it.concurrent('registers the frontend onboarding admin tab', async () => {
@@ -365,5 +374,6 @@ describe('admin frontend onboarding dashboard', () => {
     expect(messages['frontend-onboarding-new-users']).toBe('New user onboarding')
     expect(messages['frontend-onboarding-no-dropoff']).toBe('No drop-off')
     expect(messages['frontend-onboarding-transition']).toBe('{from} → {to}')
+    expect(messages['frontend-onboarding-load-error']).toBe('Unable to load onboarding analytics. Please try again.')
   })
 })
