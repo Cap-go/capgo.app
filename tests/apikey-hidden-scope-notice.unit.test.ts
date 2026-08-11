@@ -203,6 +203,12 @@ function mountNotice(hiddenCount: number, isLoading = false) {
   return { container, removeFilter }
 }
 
+async function flushPromises() {
+  await Promise.resolve()
+  await Promise.resolve()
+  await Promise.resolve()
+}
+
 afterEach(() => {
   mountedApps.splice(0).forEach(app => app.unmount())
 })
@@ -284,18 +290,16 @@ describe('api key hidden-scope notice', () => {
     app.component('DataTable', DataTableStub)
     const container = mountApp(app)
 
-    for (let index = 0; index < 10; index++) {
-      await Promise.resolve()
-      await nextTick()
-    }
+    await flushPromises()
+    await vi.waitFor(() => {
+      expect(container.querySelector('[data-test="api-key-data-table"]')?.getAttribute('data-active-scope-count')).toBe('1')
+      expect(container.querySelector('[role="status"] button')).not.toBeNull()
+    })
 
     const table = container.querySelector('[data-test="api-key-data-table"]')
-    const removeFilter = container.querySelector('[role="status"] button') as HTMLButtonElement | null
+    const removeFilter = container.querySelector('[role="status"] button') as HTMLButtonElement
 
-    expect(table?.getAttribute('data-active-scope-count')).toBe('1')
-    expect(removeFilter).not.toBeNull()
-
-    removeFilter!.click()
+    removeFilter.click()
     await nextTick()
 
     expect(table?.getAttribute('data-active-scope-count')).toBe('0')

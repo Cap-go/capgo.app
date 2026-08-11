@@ -5,25 +5,27 @@ import Icons from 'unplugin-icons/vite'
 import { loadEnv } from 'vite'
 import { defineConfig } from 'vitest/config'
 
-const rawSearchIconId = '\0vitest-raw-search-icon'
+const rawIconId = '\0vitest-raw-icon'
 
 export default defineConfig(({ mode }) => ({
   plugins: [
     {
-      name: 'vitest-raw-search-icon',
+      name: 'vitest-raw-icon',
       enforce: 'pre',
       resolveId(id) {
-        return id === '~icons/ic/round-search?raw' ? rawSearchIconId : null
+        return id.startsWith('~icons/') && id.endsWith('?raw') ? rawIconId : null
       },
       load(id) {
-        return id === rawSearchIconId ? 'export default "<svg />"' : null
+        return id === rawIconId ? 'export default "<svg />"' : null
       },
     },
     {
-      name: 'vitest-vue-route-block',
+      name: 'vitest-apikeys-route-block',
       enforce: 'pre',
       transform(_, id) {
-        return id.includes('vue&type=route') ? 'export default {}' : null
+        return id.includes('/src/pages/ApiKeys.vue?vue&type=route')
+          ? 'export default { path: "/apikeys" }'
+          : null
       },
     },
     vue(),
