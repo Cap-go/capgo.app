@@ -351,6 +351,9 @@ declare global {
   export type { AdminGlobalStatsTrendPoint } from './composables/useAdminGlobalStatsTrend'
   import('./composables/useAdminGlobalStatsTrend')
   // @ts-ignore
+  export type { AdminChartSeries, AbovePlanMetricCard } from './composables/useAdminRevenueDashboard'
+  import('./composables/useAdminRevenueDashboard')
+  // @ts-ignore
   export type { UpdateEndpointRequest } from './composables/useDeviceUpdateFormat'
   import('./composables/useDeviceUpdateFormat')
   // @ts-ignore

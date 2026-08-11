@@ -1,24 +1,19 @@
 <script setup lang="ts">
 import type { AdminGlobalStatsTrendPoint } from '~/composables/useAdminGlobalStatsTrend'
+import type { AdminChartSeries } from '~/composables/useAdminRevenueDashboard'
 import { useI18n } from 'vue-i18n'
 import AdminMultiLineChart from '~/components/admin/AdminMultiLineChart.vue'
 import ChartCard from '~/components/dashboard/ChartCard.vue'
 import { formatNumberValue } from '~/services/formatLocale'
 
-interface ChartSeries {
-  label: string
-  data: Array<{ date: string, value: number }>
-  color: string
-}
-
 defineProps<{
   isLoadingGlobalStatsTrend: boolean
   latestGlobalStats: AdminGlobalStatsTrendPoint | null
-  subscriptionFlowSeries: ChartSeries[]
-  pastDueOrgSeries: ChartSeries[]
-  pastDueAverageDaysSeries: ChartSeries[]
-  activeCanceledOrgSeries: ChartSeries[]
-  activePastDueOrgSeries: ChartSeries[]
+  subscriptionFlowSeries: AdminChartSeries[]
+  pastDueOrgSeries: AdminChartSeries[]
+  pastDueAverageDaysSeries: AdminChartSeries[]
+  activeCanceledOrgSeries: AdminChartSeries[]
+  activePastDueOrgSeries: AdminChartSeries[]
 }>()
 
 const { t } = useI18n()

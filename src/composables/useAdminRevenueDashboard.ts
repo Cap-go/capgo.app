@@ -1,3 +1,21 @@
+export interface AdminChartSeries {
+  label: string
+  data: Array<{ date: string, value: number }>
+  color: string
+}
+
+export interface AbovePlanMetricCard {
+  key: string
+  title: string
+  description: string
+  value: number | null
+  emptyDisplay: string
+  iconWrapClass: string
+  iconClass: string
+  valueClass: string
+  iconPath: string
+}
+
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAdminGlobalStatsTrend } from '~/composables/useAdminGlobalStatsTrend'

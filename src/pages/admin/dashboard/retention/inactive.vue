@@ -37,6 +37,7 @@ function isInactiveOrganization(item: OrganizationInsight) {
 
 async function loadOrganizations() {
   const sequence = ++loadOrganizationsSequence
+  loadTruncated.value = false
   isLoadingOrganizations.value = true
   try {
     const supabase = useSupabase()

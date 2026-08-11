@@ -1,34 +1,17 @@
 <script setup lang="ts">
 import type { AdminGlobalStatsTrendPoint } from '~/composables/useAdminGlobalStatsTrend'
+import type { AdminChartSeries, AbovePlanMetricCard } from '~/composables/useAdminRevenueDashboard'
 import { useI18n } from 'vue-i18n'
 import AdminMultiLineChart from '~/components/admin/AdminMultiLineChart.vue'
 import ChartCard from '~/components/dashboard/ChartCard.vue'
 import { formatNumberValue } from '~/services/formatLocale'
 
-interface AbovePlanMetricCard {
-  key: string
-  title: string
-  description: string
-  value: number | null
-  emptyDisplay: string
-  iconWrapClass: string
-  iconClass: string
-  valueClass: string
-  iconPath: string
-}
-
-interface ChartSeries {
-  label: string
-  data: Array<{ date: string, value: number }>
-  color: string
-}
-
 defineProps<{
   isLoadingGlobalStatsTrend: boolean
   latestGlobalStats: AdminGlobalStatsTrendPoint | null
   abovePlanMetricCards: AbovePlanMetricCard[]
-  upgradeTrendSeries: ChartSeries[]
-  upgradeRate12mSeries: ChartSeries[]
+  upgradeTrendSeries: AdminChartSeries[]
+  upgradeRate12mSeries: AdminChartSeries[]
 }>()
 
 const { t } = useI18n()
@@ -103,7 +86,7 @@ const { t } = useI18n()
             {{ formatNumberValue(latestGlobalStats.upgrade_rate_12m || 0, { minimumFractionDigits: 1, maximumFractionDigits: 1 }) }}%
           </p>
           <p v-else class="mt-2 text-3xl font-bold text-success">
-            0.0%
+            {{ formatNumberValue(0, { minimumFractionDigits: 1, maximumFractionDigits: 1 }) }}%
           </p>
           <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
             {{ t('upgrade-rate-12m-description') }}
