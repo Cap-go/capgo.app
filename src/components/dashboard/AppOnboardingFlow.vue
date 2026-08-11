@@ -1280,7 +1280,7 @@ watch(appName, (value) => {
                 </div>
               </template>
 
-              <div class="pt-1">
+              <div v-if="!props.preOrg" class="pt-1">
                 <button
                   v-if="!isCliCommandVisible"
                   type="button"
