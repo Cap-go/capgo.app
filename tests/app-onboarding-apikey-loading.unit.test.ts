@@ -5,6 +5,10 @@ const onboardingSource = readFileSync(new URL('../src/components/dashboard/AppOn
 const englishMessages = JSON.parse(readFileSync(new URL('../messages/en.json', import.meta.url), 'utf8')) as Record<string, string>
 
 describe('app onboarding API key loading state', () => {
+  it.concurrent('does not render the terminal alternative before an organization exists', () => {
+    expect(onboardingSource).toContain('<div v-if="!props.preOrg" class="pt-1">')
+  })
+
   it.concurrent('replaces every incomplete CLI command with the shared loading treatment', () => {
     expect(onboardingSource).not.toContain("{{ apiKey ?? '[APIKEY]' }}")
     expect(onboardingSource).toContain('<Spinner')
