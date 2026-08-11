@@ -385,23 +385,45 @@ function cloneInitGitChanges(changes: InitGitChanges, files = changes.files): In
     : undefined
 }
 
-function isDeletedRegularGitPath(repoRoot: string, filePath: string) {
+function isRegularGitBlobMode(mode: string | null) {
+  return mode === '100644' || mode === '100755'
+}
+
+function isGitObjectId(value: string) {
+  return /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(value)
+}
+
+function getInitGitIndexMode(repoRoot: string, filePath: string): string | null | undefined {
   const indexResult = spawnSync('git', ['--literal-pathspecs', 'ls-files', '--stage', '-z', '--', filePath], {
     cwd: repoRoot,
     stdio: 'pipe',
     encoding: 'utf8',
   })
   if (indexResult.error || indexResult.status !== 0)
-    return false
+    return undefined
 
-  const indexEntries = indexResult.stdout?.toString().split('\0').filter(Boolean) ?? []
-  if (indexEntries.length > 1)
-    return false
-  if (indexEntries.length === 1) {
-    const [metadata] = indexEntries[0].split('\t', 1)
-    const [mode, , stage] = metadata.split(' ')
-    return (mode === '100644' || mode === '100755') && stage === '0'
-  }
+  const output = indexResult.stdout?.toString() ?? ''
+  if (!output)
+    return null
+  if (!output.endsWith('\0'))
+    return undefined
+
+  const entries = output.slice(0, -1).split('\0')
+  if (entries.length !== 1)
+    return undefined
+  const separatorIndex = entries[0].indexOf('\t')
+  if (separatorIndex < 1 || entries[0].slice(separatorIndex + 1) !== filePath)
+    return undefined
+  const metadata = entries[0].slice(0, separatorIndex).split(' ')
+  if (metadata.length !== 3)
+    return undefined
+  const [mode, objectId, stage] = metadata
+  return /^[0-7]{6}$/.test(mode) && isGitObjectId(objectId) && stage === '0' ? mode : undefined
+}
+
+function isDeletedRegularGitPath(repoRoot: string, filePath: string, indexMode: string | null) {
+  if (indexMode !== null)
+    return isRegularGitBlobMode(indexMode)
 
   const headResult = spawnSync('git', ['--literal-pathspecs', 'ls-tree', '-z', 'HEAD', '--', filePath], {
     cwd: repoRoot,
@@ -411,12 +433,20 @@ function isDeletedRegularGitPath(repoRoot: string, filePath: string) {
   if (headResult.error || headResult.status !== 0)
     return false
 
-  const headEntries = headResult.stdout?.toString().split('\0').filter(Boolean) ?? []
+  const output = headResult.stdout?.toString() ?? ''
+  if (!output.endsWith('\0'))
+    return false
+  const headEntries = output.slice(0, -1).split('\0')
   if (headEntries.length !== 1)
     return false
-  const [metadata] = headEntries[0].split('\t', 1)
-  const [mode, type] = metadata.split(' ')
-  return (mode === '100644' || mode === '100755') && type === 'blob'
+  const separatorIndex = headEntries[0].indexOf('\t')
+  if (separatorIndex < 1 || headEntries[0].slice(separatorIndex + 1) !== filePath)
+    return false
+  const metadata = headEntries[0].slice(0, separatorIndex).split(' ')
+  if (metadata.length !== 3)
+    return false
+  const [mode, type, objectId] = metadata
+  return isRegularGitBlobMode(mode) && type === 'blob' && isGitObjectId(objectId)
 }
 
 export function captureInitGitSnapshot(startDir = cwd()): InitGitChanges | undefined {
@@ -433,7 +463,7 @@ export function captureInitGitSnapshot(startDir = cwd()): InitGitChanges | undef
     if (!repoRootValue)
       return undefined
     const repoRoot = realpathSync(repoRootValue)
-    const statusResult = spawnSync('git', ['status', '--porcelain=v1', '-z', '--untracked-files=all'], {
+    const statusResult = spawnSync('git', ['-c', 'status.renames=copies', 'status', '--porcelain=v1', '-z', '--untracked-files=all'], {
       cwd: repoRoot,
       stdio: 'pipe',
       encoding: 'utf8',
@@ -457,12 +487,17 @@ export function captureInitGitSnapshot(startDir = cwd()): InitGitChanges | undef
       if (pathFromRoot === '..' || pathFromRoot.startsWith(`..${path.sep}`) || path.isAbsolute(pathFromRoot))
         return undefined
 
+      const indexMode = getInitGitIndexMode(repoRoot, filePath)
+      if (indexMode === undefined)
+        return undefined
       if (status.includes('D')) {
-        if (!isDeletedRegularGitPath(repoRoot, filePath))
+        if (!isDeletedRegularGitPath(repoRoot, filePath, indexMode))
           return undefined
         files[filePath] = { status, sha256: null, mode: null }
         continue
       }
+      if (status === '??' ? indexMode !== null : !isRegularGitBlobMode(indexMode))
+        return undefined
 
       const fileStats = lstatSync(absolutePath)
       if (!fileStats.isFile())

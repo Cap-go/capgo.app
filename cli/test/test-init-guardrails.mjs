@@ -2,7 +2,7 @@
 
 import assert from 'node:assert/strict'
 import { execSync, spawn } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { lstatSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -46,6 +46,18 @@ function withTempDir(fn) {
   }
   finally {
     rmSync(root, { recursive: true, force: true })
+  }
+}
+
+function tryCreateTestSymlink(target, filePath) {
+  try {
+    symlinkSync(target, filePath)
+    return true
+  }
+  catch (error) {
+    if (['EACCES', 'ENOSYS', 'ENOTSUP', 'EPERM'].includes(error?.code))
+      return false
+    throw error
   }
 }
 
@@ -447,7 +459,8 @@ t('git snapshot declines unsupported symlinks and renames', () => {
   withTempDir((root) => {
     execSync('git init', { cwd: root, stdio: 'ignore' })
     writeFileSync(join(root, 'target.txt'), 'target\n', 'utf8')
-    symlinkSync('target.txt', join(root, 'link.txt'))
+    if (!tryCreateTestSymlink('target.txt', join(root, 'link.txt')))
+      return
 
     assert.equal(captureInitGitSnapshot(root), undefined)
   })
@@ -472,8 +485,10 @@ t('git snapshot declines a tracked symlink changed into a regular file', () => {
     execSync('git config user.email "test@example.com"', { cwd: root, stdio: 'ignore' })
     execSync('git config user.name "Test User"', { cwd: root, stdio: 'ignore' })
     execSync('git config commit.gpgsign false', { cwd: root, stdio: 'ignore' })
+    execSync('git config core.symlinks true', { cwd: root, stdio: 'ignore' })
     writeFileSync(join(root, 'target.txt'), 'target\n', 'utf8')
-    symlinkSync('target.txt', join(root, 'link.txt'))
+    if (!tryCreateTestSymlink('target.txt', join(root, 'link.txt')))
+      return
     execSync('git add target.txt link.txt', { cwd: root, stdio: 'ignore' })
     execSync('git commit -m "init"', { cwd: root, stdio: 'ignore' })
 
@@ -482,6 +497,100 @@ t('git snapshot declines a tracked symlink changed into a regular file', () => {
 
     assert.equal(captureInitGitSnapshot(root), undefined)
   })
+})
+
+t('git snapshot checks tracked index mode when core.symlinks is disabled', () => {
+  withTempDir((root) => {
+    execSync('git init', { cwd: root, stdio: 'ignore' })
+    execSync('git config user.email "test@example.com"', { cwd: root, stdio: 'ignore' })
+    execSync('git config user.name "Test User"', { cwd: root, stdio: 'ignore' })
+    execSync('git config commit.gpgsign false', { cwd: root, stdio: 'ignore' })
+    execSync('git config core.symlinks true', { cwd: root, stdio: 'ignore' })
+    writeFileSync(join(root, 'target.txt'), 'target\n', 'utf8')
+    const linkPath = join(root, 'link.txt')
+    if (!tryCreateTestSymlink('target.txt', linkPath))
+      return
+    execSync('git add target.txt link.txt', { cwd: root, stdio: 'ignore' })
+    execSync('git commit -m "init"', { cwd: root, stdio: 'ignore' })
+    execSync('git config core.symlinks false', { cwd: root, stdio: 'ignore' })
+    unlinkSync(linkPath)
+    execSync('git checkout -- link.txt', { cwd: root, stdio: 'ignore' })
+    assert.equal(lstatSync(linkPath).isFile(), true)
+
+    writeFileSync(linkPath, 'modified placeholder\n', 'utf8')
+
+    assert.equal(captureInitGitSnapshot(root), undefined)
+  })
+})
+
+t('git snapshot forces rename detection when repository status config disables it', () => {
+  withTempDir((root) => {
+    execSync('git init', { cwd: root, stdio: 'ignore' })
+    execSync('git config user.email "test@example.com"', { cwd: root, stdio: 'ignore' })
+    execSync('git config user.name "Test User"', { cwd: root, stdio: 'ignore' })
+    execSync('git config commit.gpgsign false', { cwd: root, stdio: 'ignore' })
+    execSync('git config status.renames false', { cwd: root, stdio: 'ignore' })
+    writeFileSync(join(root, 'before.txt'), 'tracked\n', 'utf8')
+    execSync('git add before.txt', { cwd: root, stdio: 'ignore' })
+    execSync('git commit -m "init"', { cwd: root, stdio: 'ignore' })
+    execSync('git mv before.txt after.txt', { cwd: root, stdio: 'ignore' })
+
+    assert.equal(captureInitGitSnapshot(root), undefined)
+  })
+})
+
+t('git fingerprint merge retains only existing fingerprints proven safe before a mutation', () => {
+  const repoRoot = '/example/repo'
+  const fingerprint = sha256 => ({ status: ' M', sha256, mode: 0o100644 })
+  const changes = (files, root = repoRoot) => ({ version: 1, repoRoot: root, files })
+  const existing = changes({ 'package.json': fingerprint('saved') })
+  const cases = [
+    {
+      name: 'exact existing fingerprint remains retained',
+      before: changes({ 'package.json': fingerprint('saved') }),
+      after: changes({ 'package.json': fingerprint('saved') }),
+      expected: existing,
+    },
+    {
+      name: 'user change before the window prunes the existing fingerprint',
+      before: changes({ 'package.json': fingerprint('user-edit') }),
+      after: changes({ 'package.json': fingerprint('user-edit') }),
+      expected: undefined,
+    },
+    {
+      name: 'stale path changed again during the window is not re-attributed',
+      before: changes({ 'package.json': fingerprint('user-edit') }),
+      after: changes({ 'package.json': fingerprint('second-edit') }),
+      expected: undefined,
+    },
+    {
+      name: 'missing before snapshot retains existing state without claiming after paths',
+      before: undefined,
+      after: changes({
+        'package.json': fingerprint('after-edit'),
+        'new-file.txt': fingerprint('new-file'),
+      }),
+      expected: existing,
+    },
+    {
+      name: 'missing after snapshot retains existing state without claiming before paths',
+      before: changes({
+        'package.json': fingerprint('saved'),
+        'user-file.txt': fingerprint('user-edit'),
+      }),
+      after: undefined,
+      expected: existing,
+    },
+    {
+      name: 'incompatible after snapshot retains existing state without claiming paths',
+      before: changes({ 'package.json': fingerprint('saved') }),
+      after: changes({ 'new-file.txt': fingerprint('new-file') }, '/different/repo'),
+      expected: existing,
+    },
+  ]
+
+  for (const testCase of cases)
+    assert.deepEqual(mergeInitGitChanges(existing, testCase.before, testCase.after), testCase.expected, testCase.name)
 })
 
 t('git fingerprint classification requires exact path, status, hash, and mode matches', () => {
