@@ -28,6 +28,7 @@ import {
   restoreInitProgressState,
   revertInitAutoTestChangeContent,
   runInheritedCommand,
+  tryResumeOnboarding,
 } from '../src/init/command.ts'
 import {
   createMissingExecutableError,
@@ -730,6 +731,8 @@ t('saved init git fingerprints require a strict versioned runtime shape', () => 
     ['array value', []],
     ['unsupported version', { ...valid, version: 2 }],
     ['empty repository root', { ...valid, repoRoot: '' }],
+    ['relative repository root', { ...valid, repoRoot: 'repo' }],
+    ['NUL repository root', { ...valid, repoRoot: '/repo\0other' }],
     ['array file map', { ...valid, files: [] }],
     ['empty file map', { ...valid, files: {} }],
     ['absolute path', { ...valid, files: { '/package.json': valid.files['package.json'] } }],
@@ -740,6 +743,18 @@ t('saved init git fingerprints require a strict versioned runtime shape', () => 
     ['array fingerprint', { ...valid, files: { 'package.json': [] } }],
     ['short status', { ...valid, files: { 'package.json': { ...valid.files['package.json'], status: 'M' } } }],
     ['long status', { ...valid, files: { 'package.json': { ...valid.files['package.json'], status: ' M ' } } }],
+    ['empty status', { ...valid, files: { 'package.json': { ...valid.files['package.json'], status: '  ' } } }],
+    ['garbage status', { ...valid, files: { 'package.json': { ...valid.files['package.json'], status: 'zz' } } }],
+    ['renamed status', { ...valid, files: { 'package.json': { ...valid.files['package.json'], status: 'R ' } } }],
+    ['copied status', { ...valid, files: { 'package.json': { ...valid.files['package.json'], status: ' C' } } }],
+    ['type-changed status', { ...valid, files: { 'package.json': { ...valid.files['package.json'], status: 'T ' } } }],
+    ['unmerged status', { ...valid, files: { 'package.json': { ...valid.files['package.json'], status: 'U ' } } }],
+    ['unsupported added pair', { ...valid, files: { 'package.json': { ...valid.files['package.json'], status: 'AA' } } }],
+    ['unsupported deleted pair', { ...valid, files: { 'package.json': { status: 'DD', sha256: null, mode: null } } }],
+    ['delete with content', { ...valid, files: { 'package.json': { status: ' D', sha256: 'a'.repeat(64), mode: 0o100644 } } }],
+    ['delete with hash only', { ...valid, files: { 'package.json': { status: 'D ', sha256: 'a'.repeat(64), mode: null } } }],
+    ['non-delete with null content', { ...valid, files: { 'package.json': { status: ' M', sha256: null, mode: null } } }],
+    ['non-delete with null mode', { ...valid, files: { 'package.json': { status: 'M ', sha256: 'a'.repeat(64), mode: null } } }],
     ['uppercase hash', { ...valid, files: { 'package.json': { ...valid.files['package.json'], sha256: 'A'.repeat(64) } } }],
     ['short hash', { ...valid, files: { 'package.json': { ...valid.files['package.json'], sha256: 'a'.repeat(63) } } }],
     ['fractional mode', { ...valid, files: { 'package.json': { ...valid.files['package.json'], mode: 0o100644 + 0.5 } } }],
@@ -760,6 +775,13 @@ t('saved init git fingerprints require a strict versioned runtime shape', () => 
   const inheritedFiles = Object.create({ inherited: valid.files['package.json'] })
   inheritedFiles['package.json'] = valid.files['package.json']
   assert.equal(parseInitGitChanges({ ...valid, files: inheritedFiles }), undefined)
+
+  for (const [status, deleted] of [[' M', false], ['M ', false], ['MM', false], ['A ', false], ['??', false], [' D', true], ['D ', true]]) {
+    const fingerprint = deleted
+      ? { status, sha256: null, mode: null }
+      : { status, sha256: 'b'.repeat(64), mode: 0o100755 }
+    assert.deepEqual(parseInitGitChanges({ version: 1, repoRoot: '/repo', files: { 'file.txt': fingerprint } })?.files['file.txt'], fingerprint, status)
+  }
 })
 
 async function tAsync(name, fn) {
@@ -894,6 +916,37 @@ t('production onboarding lifecycle transitions clear resumed fingerprint state',
     transition()
     assert.deepEqual(getInitProgressStateForTesting(), { stepDone: 0, gitChanges: undefined }, name)
   }
+})
+
+await tAsync('resume fallback clears fingerprints when post-confirmation restoration throws', async () => {
+  const saved = {
+    version: 1,
+    repoRoot: '/repo',
+    files: { 'package.json': { status: ' M', sha256: 'a'.repeat(64), mode: 0o100644 } },
+  }
+  let stateBeforeFailure
+
+  const resumed = await tryResumeOnboarding('test-key', {}, process.cwd(), {}, undefined, {
+    readProgress: () => JSON.stringify({
+      step_done: 1,
+      orgId: 'org-id',
+      orgName: 'Saved org',
+      gitChanges: saved,
+    }),
+    validateAccess: async () => undefined,
+    selectResume: async () => 'yes',
+    afterProgressRestored: () => {
+      stateBeforeFailure = getInitProgressStateForTesting()
+      throw new Error('post-restore failure')
+    },
+    clearCodeDiff: () => {},
+    clearEncryptionSummary: () => {},
+    log: { error: () => {}, info: () => {}, warn: () => {} },
+  })
+
+  assert.deepEqual(stateBeforeFailure, { stepDone: 1, gitChanges: saved })
+  assert.equal(resumed, undefined)
+  assert.deepEqual(getInitProgressStateForTesting(), { stepDone: 0, gitChanges: undefined })
 })
 
 await tAsync('command settlement preserves ENOENT instead of close code -2', async () => {

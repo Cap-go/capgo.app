@@ -440,11 +440,26 @@ function isSafeInitGitRelativePath(filePath: string) {
     && segments.every(segment => segment && segment !== '.' && segment !== '..')
 }
 
-function isSupportedInitGitFileMode(mode: unknown): mode is number | null {
-  return mode === null
-    || (Number.isSafeInteger(mode)
-      && (mode as number) >= 0o100000
-      && (mode as number) <= 0o107777)
+function isSupportedInitGitFileMode(mode: unknown): mode is number {
+  return Number.isSafeInteger(mode)
+    && (mode as number) >= 0o100000
+    && (mode as number) <= 0o107777
+}
+
+function getInitGitFingerprintKind(status: unknown): 'regular' | 'deleted' | undefined {
+  if (status === '??')
+    return 'regular'
+  if (status === ' D' || status === 'D ' || status === 'MD' || status === 'AD')
+    return 'deleted'
+  if (status === ' M' || status === 'M ' || status === 'MM' || status === 'A ' || status === 'AM')
+    return 'regular'
+  return undefined
+}
+
+function isSafeInitGitRepoRoot(repoRoot: unknown): repoRoot is string {
+  return typeof repoRoot === 'string'
+    && !repoRoot.includes('\0')
+    && (path.posix.isAbsolute(repoRoot) || path.win32.isAbsolute(repoRoot))
 }
 
 function parseInitGitChangesValue(value: unknown, allowEmpty: boolean): InitGitChanges | undefined {
@@ -452,8 +467,7 @@ function parseInitGitChangesValue(value: unknown, allowEmpty: boolean): InitGitC
     if (!isPlainInitGitRecord(value) || !hasOnlyInitGitKeys(value, ['version', 'repoRoot', 'files']))
       return undefined
     if (value.version !== 1
-      || typeof value.repoRoot !== 'string'
-      || value.repoRoot.trim().length === 0
+      || !isSafeInitGitRepoRoot(value.repoRoot)
       || !isPlainInitGitRecord(value.files)
       || !hasOnlyInitGitRecordEntries(value.files))
       return undefined
@@ -464,17 +478,27 @@ function parseInitGitChangesValue(value: unknown, allowEmpty: boolean): InitGitC
 
     const parsedEntries: [string, InitGitChangeFingerprint][] = []
     for (const [filePath, rawFingerprint] of entries) {
+      const fingerprintKind = isPlainInitGitRecord(rawFingerprint)
+        ? getInitGitFingerprintKind(rawFingerprint.status)
+        : undefined
       if (!isSafeInitGitRelativePath(filePath)
         || !isPlainInitGitRecord(rawFingerprint)
         || !hasOnlyInitGitKeys(rawFingerprint, ['status', 'sha256', 'mode'])
-        || typeof rawFingerprint.status !== 'string'
-        || rawFingerprint.status.length !== 2
-        || !(rawFingerprint.sha256 === null || (typeof rawFingerprint.sha256 === 'string' && /^[0-9a-f]{64}$/.test(rawFingerprint.sha256)))
-        || !isSupportedInitGitFileMode(rawFingerprint.mode))
+        || !fingerprintKind)
         return undefined
 
+      if (fingerprintKind === 'deleted') {
+        if (rawFingerprint.sha256 !== null || rawFingerprint.mode !== null)
+          return undefined
+        parsedEntries.push([filePath, { status: rawFingerprint.status as string, sha256: null, mode: null }])
+        continue
+      }
+      if (typeof rawFingerprint.sha256 !== 'string'
+        || !/^[0-9a-f]{64}$/.test(rawFingerprint.sha256)
+        || !isSupportedInitGitFileMode(rawFingerprint.mode))
+        return undefined
       parsedEntries.push([filePath, {
-        status: rawFingerprint.status,
+        status: rawFingerprint.status as string,
         sha256: rawFingerprint.sha256,
         mode: rawFingerprint.mode,
       }])
@@ -594,7 +618,8 @@ export function captureInitGitSnapshot(startDir = cwd()): InitGitChanges | undef
         return undefined
 
       const { status, filePath, headMode, indexMode, worktreeMode } = parsedEntry
-      if (!filePath || status.includes('R') || status.includes('C') || status.includes('T') || status.includes('U') || status === 'AA' || status === 'DD' || files[filePath])
+      const fingerprintKind = getInitGitFingerprintKind(status)
+      if (!filePath || !fingerprintKind || files[filePath])
         return undefined
 
       const absolutePath = path.resolve(repoRoot, filePath)
@@ -602,7 +627,7 @@ export function captureInitGitSnapshot(startDir = cwd()): InitGitChanges | undef
       if (pathFromRoot === '..' || pathFromRoot.startsWith(`..${path.sep}`) || path.isAbsolute(pathFromRoot))
         return undefined
 
-      if (status.includes('D')) {
+      if (fingerprintKind === 'deleted') {
         const deletedMode = status[0] === 'D' ? headMode : indexMode
         if (!isRegularGitBlobMode(deletedMode)
           || (status[0] === 'D' && indexMode !== '000000')
@@ -1800,6 +1825,16 @@ interface ResumeResult {
   appId?: string
 }
 
+interface InitResumeDependencies {
+  readProgress?: () => string
+  validateAccess?: (resume: ResumeResult) => Promise<string | undefined>
+  selectResume?: (prompt: { message: string, options: { value: string, label: string }[] }) => Promise<string | symbol>
+  afterProgressRestored?: () => void
+  clearCodeDiff?: () => void
+  clearEncryptionSummary?: () => void
+  log?: Pick<InitGitCleanGateLog, 'error' | 'info' | 'warn'>
+}
+
 export function getResumedOnboardingAccessError(
   resume: ResumeResult,
   organization: Organization | undefined,
@@ -1851,15 +1886,23 @@ async function validateResumedOnboardingAccess(
   }
 }
 
-async function tryResumeOnboarding(
+export async function tryResumeOnboarding(
   apikey: string,
   initialTargets: InitTargetPaths,
   initialCwd: string,
   supabase: Awaited<ReturnType<typeof createSupabaseClient>>,
   hostOptions?: { supaHost?: string, supaAnon?: string },
+  dependencies: InitResumeDependencies = {},
 ): Promise<ResumeResult | undefined> {
+  const readProgress = dependencies.readProgress ?? (() => readFileSync(getTmpObjectPath(), 'utf-8'))
+  const validateAccess = dependencies.validateAccess ?? (resume => validateResumedOnboardingAccess(supabase, apikey, resume, hostOptions))
+  const selectResume = dependencies.selectResume ?? (prompt => pSelect(prompt))
+  const afterProgressRestored = dependencies.afterProgressRestored ?? (() => {})
+  const clearCodeDiff = dependencies.clearCodeDiff ?? (() => setInitCodeDiff(undefined))
+  const clearEncryptionSummary = dependencies.clearEncryptionSummary ?? (() => setInitEncryptionSummary(undefined))
+  const log = dependencies.log ?? pLog
   try {
-    const rawData = readFileSync(getTmpObjectPath(), 'utf-8')
+    const rawData = readProgress()
     if (!rawData || rawData.length === 0)
       return undefined
 
@@ -1883,24 +1926,24 @@ async function tryResumeOnboarding(
       gitChanges,
     } = JSON.parse(rawData)
     if (!orgId || !step_done) {
-      pLog.warn('⚠️  Found previous onboarding progress, but it was saved in an older format.')
-      pLog.info('   Starting fresh. Your previous progress cannot be resumed.')
+      log.warn('⚠️  Found previous onboarding progress, but it was saved in an older format.')
+      log.info('   Starting fresh. Your previous progress cannot be resumed.')
       return undefined
     }
 
     const resume: ResumeResult = { stepDone: step_done, orgId, orgName, appId: savedAppId }
-    const accessError = await validateResumedOnboardingAccess(supabase, apikey, resume, hostOptions)
+    const accessError = await validateAccess(resume)
     if (accessError) {
-      pLog.warn(accessError)
+      log.warn(accessError)
       cleanupStepsDone()
       return undefined
     }
 
-    pLog.info(formatInitResumeMessage(step_done, initOnboardingSteps.length))
+    log.info(formatInitResumeMessage(step_done, initOnboardingSteps.length))
     if (orgName) {
-      pLog.info(`   Organization: ${orgName}`)
+      log.info(`   Organization: ${orgName}`)
     }
-    const resumeChoice = await pSelect({
+    const resumeChoice = await selectResume({
       message: 'Would you like to continue from where you left off?',
       options: [
         { value: 'yes', label: '✅ Yes, continue' },
@@ -1916,7 +1959,7 @@ async function tryResumeOnboarding(
         mainFilePath: typeof mainFilePath === 'string' ? mainFilePath : undefined,
       }, initialCwd)
       if (!resumedTargets) {
-        pLog.warn('Saved onboarding targets are no longer available. Starting over.')
+        log.warn('Saved onboarding targets are no longer available. Starting over.')
         cleanupStepsDone()
         globalCodeDiff = undefined
         setInitCodeDiff(undefined)
@@ -1926,6 +1969,7 @@ async function tryResumeOnboarding(
         return undefined
       }
       restoreInitProgressState(step_done, gitChanges)
+      afterProgressRestored()
       globalPathToPackageJson = resumedTargets.pathToPackageJson
       globalCapacitorConfigPath = resumedTargets.capacitorConfigPath
       globalConfigLoadDir = resumedTargets.configLoadDir
@@ -2022,12 +2066,13 @@ async function tryResumeOnboarding(
     return undefined
   }
   catch (err) {
-    pLog.error(`Cannot read which steps have been completed, error:\n${err}`)
-    pLog.warn('Onboarding will continue but please report it to the capgo team!')
+    beginFreshInitProgress()
+    log.error(`Cannot read which steps have been completed, error:\n${err}`)
+    log.warn('Onboarding will continue but please report it to the capgo team!')
     globalCodeDiff = undefined
-    setInitCodeDiff(undefined)
+    clearCodeDiff()
     globalEncryptionSummary = undefined
-    setInitEncryptionSummary(undefined)
+    clearEncryptionSummary()
     globalAutoTestChange = undefined
     globalNodeModulesPath = undefined
     return undefined
