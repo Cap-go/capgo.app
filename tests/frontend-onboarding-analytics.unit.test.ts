@@ -138,7 +138,7 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
     { configured: true, connected: false, failureReason: 'unavailable' },
     { configured: true, connected: false, failureReason: 'timeout' },
     { configured: true, connected: true, failureReason: 'too_large' },
-  ])('fails instead of reporting zero analytics when PostHog returns $failureReason', async (posthog) => {
+  ])('fails instead of reporting zero analytics for configured=$configured, connected=$connected, failureReason=$failureReason', async (posthog) => {
     queryPosthogHogqlMock.mockResolvedValueOnce({ ...posthog, rows: [] })
 
     await expect(getAdminFrontendOnboardingAnalytics(

@@ -293,6 +293,8 @@ describe('admin frontend onboarding dashboard', () => {
     expect(source).toContain('void loadAnalytics()')
     expect(source).not.toContain('await loadAnalytics()')
     expect(onLoadingCallback).toContain('isLoadingStats.value = value')
+    expect(onLoadingCallback).toContain('if (value)')
+    expect(onLoadingCallback).toContain('loadError.value = false')
     expect(onLoadingCallback).toContain('if (!value)')
     expect(onLoadingCallback).toContain('isLoading.value = false')
     expect(source).toContain('const visibleAnalytics = computed(() => isLoadingStats.value ? null : analytics.value)')

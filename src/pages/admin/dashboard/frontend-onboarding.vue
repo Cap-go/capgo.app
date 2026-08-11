@@ -50,6 +50,8 @@ const loadAnalytics = createFrontendOnboardingAnalyticsLoader(
     },
     onLoading: (value) => {
       isLoadingStats.value = value
+      if (value)
+        loadError.value = false
       if (!value)
         isLoading.value = false
     },
