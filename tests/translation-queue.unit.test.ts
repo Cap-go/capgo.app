@@ -71,6 +71,33 @@ describe('translation queue helpers', () => {
     expect(__translationWorkerTestUtils__.keepTranslation('Used {count} times', 'Utilise plusieurs fois')).toBe('Used {count} times')
   })
 
+  it.concurrent('unwraps AI {text,context} blobs before keeping translations', () => {
+    expect(__translationWorkerTestUtils__.unwrapTranslatedMessage(
+      '{"text":"Mot de passe","context":"Used in Capgo web console areas: pages."}',
+    )).toBe('Mot de passe')
+    expect(__translationWorkerTestUtils__.keepTranslation(
+      'Password',
+      '{"text":"Mot de passe","context":"Used in Capgo web console areas: pages."}',
+    )).toBe('Mot de passe')
+    expect(__translationWorkerTestUtils__.keepTranslation(
+      'Create a free account',
+      '{"text":"Créer un compte gratuit"}',
+    )).toBe('Créer un compte gratuit')
+    expect(__translationWorkerTestUtils__.unwrapTranslatedMessage('Compte')).toBe('Compte')
+  })
+
+  it.concurrent('parses object-shaped translation values from Workers AI', () => {
+    expect(__translationWorkerTestUtils__.parseTranslationObject({
+      translations: {
+        password: { text: 'Mot de passe', context: 'short UI label' },
+        save: 'Enregistrer',
+      },
+    })).toEqual({
+      password: 'Mot de passe',
+      save: 'Enregistrer',
+    })
+  })
+
   it.concurrent('escapes raw and adjacent at signs for Vue i18n', () => {
     expect(__translationWorkerTestUtils__.escapeVueI18nAtSigns('Sans le signe @.')).toBe('Sans le signe {\'@\'}.')
     expect(__translationWorkerTestUtils__.escapeVueI18nAtSigns('@@capgo/cli@latest')).toBe('{\'@\'}{\'@\'}capgo/cli{\'@\'}latest')
@@ -152,7 +179,11 @@ describe('translation queue helpers', () => {
     const now = Math.floor(Date.now() / 1000)
     const latestReadyEntry = {
       checksum: 'previous-checksum',
-      messages: JSON.stringify({ 'account': 'Compte', 'discord-username-help': 'Sans le signe @.' }),
+      messages: JSON.stringify({
+        'account': 'Compte',
+        'discord-username-help': 'Sans le signe @.',
+        'password': '{"text":"Mot de passe","context":"Used in Capgo web console areas: pages."}',
+      }),
       model: 'model',
       next_batch_index: 1,
       status: 'ready',
@@ -178,7 +209,11 @@ describe('translation queue helpers', () => {
     expect(response.headers.get('x-capgo-translation-stale')).toBe('1')
     expect(payload).toEqual({
       checksum: 'previous-checksum',
-      messages: { 'account': 'Compte', 'discord-username-help': 'Sans le signe {\'@\'}.' },
+      messages: {
+        'account': 'Compte',
+        'discord-username-help': 'Sans le signe {\'@\'}.',
+        'password': 'Mot de passe',
+      },
       model: 'model',
       status: 'ready',
     })
@@ -188,7 +223,11 @@ describe('translation queue helpers', () => {
   it('sanitizes legacy ready translation cache hits', async () => {
     stubWorkerCache(new Response(JSON.stringify({
       checksum: 'checksum',
-      messages: { 'discord-username-help': 'Sans le signe @.' },
+      messages: {
+        'discord-username-help': 'Sans le signe @.',
+        'password': '{"text":"Mot de passe","context":"Used in Capgo web console areas: pages."}',
+        'create-a-free-account': '{"text":"Créer un compte gratuit"}',
+      },
       model: 'model',
       status: 'ready',
     })))
@@ -201,6 +240,8 @@ describe('translation queue helpers', () => {
 
     expect(response.status).toBe(200)
     expect(payload.messages['discord-username-help']).toBe('Sans le signe {\'@\'}.')
+    expect(payload.messages.password).toBe('Mot de passe')
+    expect(payload.messages['create-a-free-account']).toBe('Créer un compte gratuit')
   })
 
   it('serves the last saved translation and queues a refresh when the checksum changed', async () => {

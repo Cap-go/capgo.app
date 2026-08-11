@@ -331,15 +331,31 @@ function extractAiText(result: unknown): string {
   return ''
 }
 
+function translatedTextFromEntry(entry: unknown): string | null {
+  if (typeof entry === 'string') {
+    const trimmed = entry.trim()
+    return trimmed || null
+  }
+
+  const record = recordOf(entry)
+  if (typeof record?.text === 'string') {
+    const trimmed = record.text.trim()
+    return trimmed || null
+  }
+
+  return null
+}
+
 function stringMapFromRecord(record: Record<string, unknown> | null): Record<string, string> | null {
   if (!record)
     return null
 
   const output: Record<string, string> = {}
   for (const [key, entry] of Object.entries(record)) {
-    if (typeof entry !== 'string')
+    const value = translatedTextFromEntry(entry)
+    if (value === null)
       return null
-    output[key] = entry
+    output[key] = value
   }
   return output
 }
@@ -389,8 +405,22 @@ function parseTranslationObject(value: unknown): Record<string, string> | null {
   return null
 }
 
+function unwrapTranslatedMessage(translated: string) {
+  const trimmed = translated.trim()
+  if (!trimmed.startsWith('{'))
+    return trimmed
+
+  const parsed = parseJsonCandidate(trimmed)
+  const record = recordOf(parsed)
+  if (!record || typeof record.text !== 'string')
+    return trimmed
+
+  const unwrapped = record.text.trim()
+  return unwrapped || trimmed
+}
+
 function keepTranslation(source: string, translated: unknown) {
-  const candidate = typeof translated === 'string' ? translated.trim() : ''
+  const candidate = typeof translated === 'string' ? unwrapTranslatedMessage(translated) : ''
   if (!candidate)
     return source
 
@@ -455,6 +485,7 @@ function translationPrompt(targetLanguage: string) {
     'Each input value is an object with text (translate this) and optional context (where/how the text is used in the Capgo console UI).',
     'Use context to disambiguate meaning, tone, and part of speech (button label vs title vs status vs empty state).',
     'Translate only the text field. Do not translate or copy context into the output.',
+    'Each translations value must be a plain string of the translated text only, never a JSON object or {text, context} wrapper.',
     'Translate user-facing text naturally. Keep product names, code, URLs, commands, numbers, and placeholders unchanged.',
     'Every placeholder like {count}, %name%, or $1 must be copied exactly.',
   ].join(' ')
@@ -574,7 +605,10 @@ function escapeVueI18nAtSigns(message: string) {
 
 function vueI18nMessageCatalog(messages: Record<string, string>) {
   return Object.fromEntries(
-    Object.entries(messages).map(([key, message]) => [key, escapeVueI18nAtSigns(message)]),
+    Object.entries(messages).map(([key, message]) => [
+      key,
+      escapeVueI18nAtSigns(unwrapTranslatedMessage(message)),
+    ]),
   )
 }
 
@@ -1393,4 +1427,5 @@ export const __translationWorkerTestUtils__ = {
   translationBatchIndexFromStore,
   translationPrompt,
   translationStoreTtlSeconds,
+  unwrapTranslatedMessage,
 }
