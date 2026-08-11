@@ -28,15 +28,18 @@ async function refreshPendingOnboardingApp() {
 
   await organizationStore.awaitInitialLoad()
 
-  const singleOrganization = selectableOrganizations.value[0]
-  if (selectableOrganizations.value.length !== 1 || !singleOrganization)
+  const singleOrganization = selectableOrganizations.value.length === 1
+    ? selectableOrganizations.value[0]
+    : undefined
+  if (!singleOrganization || singleOrganization.app_count !== 1)
     return
 
   const { data, error } = await supabase
     .from('apps')
     .select('app_id, need_onboarding')
     .eq('owner_org', singleOrganization.gid)
-    .limit(2)
+    .limit(1)
+    .maybeSingle()
 
   if (lookupRun !== onboardingLookupRun)
     return
@@ -47,7 +50,8 @@ async function refreshPendingOnboardingApp() {
   }
 
   pendingOnboardingAppId.value = getOnboardingExploreBannerAppId({
-    apps: data ?? [],
+    app: data,
+    organizationAppCount: singleOrganization.app_count,
     organizationCount: selectableOrganizations.value.length,
   }) ?? ''
 }

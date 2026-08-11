@@ -28,13 +28,14 @@ export function getOnboardingResumeAppId(userId: string | null | undefined) {
 }
 
 export function getOnboardingExploreBannerAppId(options: {
-  apps: Array<{ app_id: string, need_onboarding: boolean }>
+  app: { app_id: string, need_onboarding: boolean } | null
+  organizationAppCount: number
   organizationCount: number
 }) {
-  if (options.organizationCount !== 1 || options.apps.length !== 1 || !options.apps[0].need_onboarding)
+  if (options.organizationCount !== 1 || options.organizationAppCount !== 1 || !options.app?.need_onboarding)
     return null
 
-  return options.apps[0].app_id
+  return options.app.app_id
 }
 
 export function isNewOnboardingUser(createdAt: string | null | undefined) {
