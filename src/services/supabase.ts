@@ -591,17 +591,6 @@ export async function getCreditPricingSteps(orgId?: string): Promise<CreditPrici
   }
 }
 
-export async function getCreditUnitPricing(orgId?: string): Promise<CreditUnitPricing> {
-  try {
-    const steps = await getCreditPricingSteps(orgId)
-    return getFirstTierCreditUnitPricing(steps)
-  }
-  catch (err) {
-    console.error('getCreditUnitPricing error', err)
-    return {}
-  }
-}
-
 export async function getUsageCreditDeductions(orgId: string): Promise<UsageCreditLedgerRow[]> {
   if (!orgId)
     return []
