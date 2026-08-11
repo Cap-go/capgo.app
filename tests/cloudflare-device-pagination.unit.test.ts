@@ -1,6 +1,7 @@
 import type { Context } from 'hono'
 import { createClient } from '@supabase/supabase-js'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { buildReadDevicesCFQuery as buildPluginReadDevicesCFQuery } from '../supabase/functions/_backend/plugin_runtime/utils/cloudflare.ts'
 import { buildDeviceIdsByInstallSourcesQuery, buildReadDevicesCFQuery, countDevicesCF, countInstallSourcesCF, readBandwidthUsageCF } from '../supabase/functions/_backend/utils/cloudflare.ts'
 import { readDevicesSB } from '../supabase/functions/_backend/utils/supabase.ts'
 
@@ -179,6 +180,16 @@ describe('buildReadDevicesCFQuery', () => {
 
     expect(query).not.toContain(`blob2 IN ('1.2.3', '2.0.0')`)
     expect(outerWhereIndex).toBeGreaterThan(groupByIndex)
+  })
+
+  it.concurrent('filters plugin-runtime devices by multiple version names', () => {
+    const query = buildPluginReadDevicesCFQuery({
+      app_id: 'com.example.app',
+      version_name: ['1.2.3', '2.0.0'],
+      limit: 1,
+    }, false)
+
+    expect(query).toContain(`blob2 IN ('1.2.3', '2.0.0')`)
   })
 
   it.concurrent('applies search against latest aggregated device fields after grouping', () => {

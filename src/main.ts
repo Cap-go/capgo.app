@@ -138,7 +138,7 @@ window.addEventListener('vite:preloadError', (event) => {
   handleChunkError(message)
 })
 
-const guestPath = ['/login', '/delete_account', '/confirm-signup', '/forgot_password', '/resend_email', '/onboarding', '/register', '/invitation', '/scan', '/sso-callback']
+const guestPath = ['/login', '/delete_account', '/confirm-signup', '/forgot_password', '/resend_email', '/onboarding', '/register', '/invitation', '/email-preferences', '/scan', '/sso-callback']
 
 function redirectAppPath(suffix: string) {
   return (to: RouteLocationNormalized) => ({

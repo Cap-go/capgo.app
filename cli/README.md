@@ -422,7 +422,7 @@ npx @capgo/cli@latest bundle upload com.example.app --path ./dist --channel prod
 | **--no-delta** | <code>boolean</code> | Disable delta updates even if instant updates are enabled |
 | **--encrypted-checksum** | <code>string</code> | An encrypted checksum (signature). Used only when uploading an external bundle. |
 | **--auto-set-bundle** | <code>boolean</code> | Set the bundle version in Capacitor config |
-| **--auto-bump** | <code>string</code> | Auto-increment bundle version from the latest remote channel/app version. Level: major, minor (default), patch|fix, or metadata (prerelease) |
+| **--auto-bump** | <code>string</code> | Auto-increment bundle version from the latest remote channel/app version. Level: major, minor (default), patch|fix, metadata (prerelease), or ai |
 | **--capacitor-config** | <code>string</code> | Capacitor config source to update (useful with dynamic monorepo configs) |
 | **--dry-upload** | <code>boolean</code> | Dry upload the bundle process: add the row in database without uploading files or updating channels (Used by Capgo for internal testing) |
 | **--package-json** | <code>string</code> | Paths to package.json files for monorepos (comma-separated) |
@@ -1390,6 +1390,7 @@ Set up build credentials interactively (iOS: certificates + profiles automated; 
 | **-a** | <code>string</code> | API key to link to your account |
 | **-p** | <code>string</code> | Platform to onboard (ios or android). If omitted, auto-detects when only one native folder exists; prompts otherwise. |
 | **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
+| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
 | **--no-analytics** | <code>boolean</code> | Disable build onboarding analytics and terminal replay for this run |
 
 ### <a id="build-request"></a> 🔹 **Request**

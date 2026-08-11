@@ -17,6 +17,7 @@ import { formatNumberValue } from '~/services/formatLocale'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { shouldShowExpiredTrialPlansState, shouldShowPlanFailureBanner } from '~/services/paymentRequired'
 import { checkPermissions } from '~/services/permissions'
+import { createPlansVisitTracker } from '~/services/plansVisitTracking'
 import { getAffonsoReferral, getDatafastAttribution, openCheckout } from '~/services/stripe'
 import { getCreditUnitPricing, getCurrentPlanNameOrg, useSupabase } from '~/services/supabase'
 import { openSupport } from '~/services/support'
@@ -24,6 +25,7 @@ import { sendEvent } from '~/services/tracking'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
+import { isCreditsOnlyOrg } from '~/utils/organizationBilling'
 
 const { t } = useI18n()
 const mainStore = useMainStore()
@@ -38,6 +40,7 @@ const segmentVal = ref<'m' | 'y'>('y')
 const isYearly = computed(() => segmentVal.value === 'y')
 const route = useRoute()
 const router = useRouter()
+const plansVisitTracker = createPlansVisitTracker()
 const main = useMainStore()
 const organizationStore = useOrganizationStore()
 const dialogStore = useDialogV2Store()
@@ -145,12 +148,7 @@ const isTrial = computed(() => currentOrganization?.value ? (!currentOrganizatio
 
 // Credits-only org: has credits but no active subscription and no trial remaining.
 // These orgs use pay-as-you-go credits as their primary payment method.
-const isCreditsOnly = computed(() => {
-  const org = currentOrganization?.value
-  if (!org)
-    return false
-  return !org.paying && (org.trial_left ?? 0) <= 0 && (org.credit_available ?? 0) > 0
-})
+const isCreditsOnly = computed(() => isCreditsOnlyOrg(currentOrganization?.value))
 
 async function prefetchStripeCheckoutUrl(plan: Database['public']['Tables']['plans']['Row'], isYear: boolean) {
   if (!plan.stripe_id)
@@ -395,7 +393,12 @@ watch(currentOrganization, async (newOrg, prevOrg) => {
   // isSubscribeLoading.value.fill(false, 0, plans.value.length)
 })
 
-watchEffect(async () => {
+watchEffect(async (onCleanup) => {
+  let isCurrentActivation = true
+  onCleanup(() => {
+    isCurrentActivation = false
+  })
+
   if (route.path === '/settings/organization/plans') {
     if (isMobile) {
       router.replace('/settings/organization/usage')
@@ -413,9 +416,17 @@ watchEffect(async () => {
         organizationStore.setCurrentOrganization(route.query.oid)
       }
 
+      const orgId = currentOrganization.value?.gid
+      const isCurrentTrackingContext = () => isCurrentActivation
+        && route.path === '/settings/organization/plans'
+        && currentOrganization.value?.gid === orgId
+
       // Check permission on initial load
-      if (currentOrganization.value) {
-        const hasUpdateBillingPermission = await checkPermissions('org.update_billing', { orgId: currentOrganization.value.gid })
+      if (orgId) {
+        const hasUpdateBillingPermission = await checkPermissions('org.update_billing', { orgId })
+
+        if (!isCurrentTrackingContext())
+          return
 
         if (!hasUpdateBillingPermission) {
           const fallbackOrg = await findBillableFallbackOrg()
@@ -444,17 +455,8 @@ watchEffect(async () => {
         // billing page — the graceful no-org path is handled inside loadData.
         console.error('Failed to load plans data', error)
       })
-      const orgId = currentOrganization.value?.gid
-      if (orgId) {
-        sendEvent({
-          channel: 'usage',
-          event: 'User visit',
-          icon: '💳',
-          org_id: orgId,
-          tracking_version: 2,
-          notify: false,
-        }).catch()
-      }
+      if (isCurrentTrackingContext())
+        plansVisitTracker.track(orgId)
     }
   }
 })
@@ -504,6 +506,12 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
             <h1 class="text-3xl font-bold text-gray-900 dark:text-white">
               {{ t(showExpiredTrialState ? 'trial-ended-title' : 'plan-pricing-plans') }}
             </h1>
+            <span
+              v-if="isCreditsOnly"
+              class="inline-flex items-center px-2.5 py-1 text-xs font-semibold text-blue-700 rounded-full bg-blue-50 dark:text-blue-300 dark:bg-blue-900/30"
+            >
+              {{ t('credits-only-badge') }}
+            </span>
             <!-- Custom Plan Trigger -->
             <button
               v-if="!isMobile"
@@ -514,7 +522,7 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
             </button>
           </div>
           <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-            {{ t(showExpiredTrialState ? 'trial-ended-plans-description' : 'plan-desc') }}
+            {{ t(showExpiredTrialState ? 'trial-ended-plans-description' : isCreditsOnly ? 'credits-only-plan-page-desc' : 'plan-desc') }}
           </p>
           <p v-if="!isMobile" class="mt-2 text-sm">
             <a class="font-medium text-blue-600 hover:underline dark:text-blue-300" href="https://capgo.app/pricing/#compare-plans">
