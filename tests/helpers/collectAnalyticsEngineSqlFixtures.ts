@@ -37,6 +37,10 @@ import {
   readStatsVersionCF,
   readUpdateDeliveryTimingEventsCF,
 } from '../../supabase/functions/_backend/utils/cloudflare.ts'
+import {
+  buildGlobalNotificationStatsQuery,
+  buildNotificationStatsQuery,
+} from '../../supabase/functions/_backend/utils/nativeNotifications.ts'
 
 export interface AnalyticsEngineSqlFixture {
   name: string
@@ -219,6 +223,32 @@ export async function collectAnalyticsEngineSqlFixtures(): Promise<AnalyticsEngi
     }
 
     const staticFixtures: AnalyticsEngineSqlFixture[] = [
+      {
+        name: 'buildNotificationStatsQuery.app',
+        query: buildNotificationStatsQuery({
+          dataset: 'notification_events',
+          appId: SAMPLE_APP_ID,
+          days: 7,
+          now: SAMPLE_REFERENCE_DATE,
+        }),
+      },
+      {
+        name: 'buildNotificationStatsQuery.orgApps',
+        query: buildNotificationStatsQuery({
+          dataset: 'notification_events',
+          appIds: [SAMPLE_APP_ID, 'com.example.app2'],
+          days: 7,
+          now: SAMPLE_REFERENCE_DATE,
+        }),
+      },
+      {
+        name: 'buildGlobalNotificationStatsQuery.dayWindow',
+        query: buildGlobalNotificationStatsQuery({
+          dataset: 'notification_events',
+          since: new Date('2026-06-30T00:00:00.000Z'),
+          until: SAMPLE_REFERENCE_DATE,
+        }),
+      },
       {
         name: 'buildUpdateDeliveryTimingEventsCFQuery.app',
         query: buildUpdateDeliveryTimingEventsCFQuery({

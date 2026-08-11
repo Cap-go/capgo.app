@@ -1,12 +1,15 @@
 import type { EmailPreferenceKey, EmailPreferences } from '../utils/org_email_notifications.ts'
+import type { Json } from '../utils/supabase.types.ts'
 import { z } from 'zod'
 import { unsubscribeBento } from '../utils/bento.ts'
 import { CacheHelper } from '../utils/cache.ts'
+import { verifyCaptchaToken } from '../utils/captcha.ts'
 import { BRES, createHono, parseBody, simpleRateLimit, useCors } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
 import { getClientIP } from '../utils/rate_limit.ts'
 import { supabaseAdmin } from '../utils/supabase.ts'
 import { syncUserPreferenceTags } from '../utils/user_preferences.ts'
+import { getEnv } from '../utils/utils.ts'
 import { version } from '../utils/version.ts'
 
 /** Preference keys users can manage from the public email footer form. */
@@ -36,11 +39,14 @@ const bodySchema = z.object({
   enable_notifications: z.boolean().optional(),
   opt_for_newsletters: z.boolean().optional(),
   unsubscribe_all: z.boolean().optional(),
+  captcha_token: z.string().min(1).optional(),
 })
 
 const RATE_LIMIT_PATH = '/rate-limit/email-preferences'
+const RATE_LIMIT_EMAIL_PATH = '/rate-limit/email-preferences-email'
 const RATE_LIMIT_TTL_SECONDS = 60 * 15
-const RATE_LIMIT_MAX = 30
+const RATE_LIMIT_MAX_PER_IP = 20
+const RATE_LIMIT_MAX_PER_EMAIL = 10
 
 export const app = createHono('', version)
 
@@ -81,17 +87,37 @@ function allPreferencesDisabled(): EmailPreferences {
   return prefs
 }
 
-async function isEmailPreferencesRateLimited(c: Parameters<typeof getClientIP>[0]): Promise<boolean> {
-  const ip = getClientIP(c)
-  if (ip === 'unknown')
-    return false
+async function hashRateLimitKey(value: string) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')
+}
 
+async function bumpRateLimit(
+  c: Parameters<typeof getClientIP>[0],
+  path: string,
+  keyParams: Record<string, string>,
+  max: number,
+) {
   const cacheHelper = new CacheHelper(c)
-  const cacheKey = cacheHelper.buildRequest(RATE_LIMIT_PATH, { ip })
+  const cacheKey = cacheHelper.buildRequest(path, keyParams)
   const data = await cacheHelper.matchJson<{ count: number }>(cacheKey)
   const count = (data?.count ?? 0) + 1
   await cacheHelper.putJson(cacheKey, { count }, RATE_LIMIT_TTL_SECONDS)
-  return count > RATE_LIMIT_MAX
+  return count > max
+}
+
+async function isEmailPreferencesRateLimited(
+  c: Parameters<typeof getClientIP>[0],
+  email: string,
+): Promise<boolean> {
+  const ip = getClientIP(c)
+  if (ip !== 'unknown') {
+    if (await bumpRateLimit(c, RATE_LIMIT_PATH, { ip }, RATE_LIMIT_MAX_PER_IP))
+      return true
+  }
+
+  const emailKey = await hashRateLimitKey(email)
+  return await bumpRateLimit(c, RATE_LIMIT_EMAIL_PATH, { email: emailKey }, RATE_LIMIT_MAX_PER_EMAIL)
 }
 
 /**
@@ -99,11 +125,9 @@ async function isEmailPreferencesRateLimited(c: Parameters<typeof getClientIP>[0
  * Always returns the same success payload whether or not the email belongs to a Capgo user.
  * Never loads or returns existing preferences (existence oracle safe).
  * Opt-out only: cannot re-enable prefs without an authenticated Capgo session.
+ * Cloudflare Turnstile is required when CAPTCHA_SECRET_KEY is configured.
  */
 app.post('/', async (c) => {
-  if (await isEmailPreferencesRateLimited(c))
-    return simpleRateLimit({ reason: 'email_preferences_rate_limit' })
-
   const raw = await parseBody<Record<string, unknown>>(c)
   const parsed = bodySchema.safeParse(raw)
   if (!parsed.success) {
@@ -112,6 +136,17 @@ app.post('/', async (c) => {
   }
 
   const email = normalizeEmail(parsed.data.email)
+  if (await isEmailPreferencesRateLimited(c, email))
+    return simpleRateLimit({ reason: 'email_preferences_rate_limit' })
+
+  const captchaSecret = getEnv(c, 'CAPTCHA_SECRET_KEY')
+  if (captchaSecret.length > 0) {
+    if (!parsed.data.captcha_token) {
+      return c.json({ error: 'invalid_captcha', status: 'Error', message: 'Captcha token is required' }, 400)
+    }
+    await verifyCaptchaToken(c, parsed.data.captcha_token, captchaSecret)
+  }
+
   const unsubscribeAll = parsed.data.unsubscribe_all === true
   const preferenceOptOuts = sanitizeOptOutPreferences(parsed.data.preferences)
 
@@ -143,7 +178,7 @@ app.post('/', async (c) => {
           }
 
       const update = {
-        email_preferences: nextPrefs,
+        email_preferences: nextPrefs as Json,
         // Opt-out only for general flags too — never force them back on.
         enable_notifications: unsubscribeAll || parsed.data.enable_notifications === false
           ? false

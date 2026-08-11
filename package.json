@@ -1,7 +1,7 @@
 {
   "name": "capgo-app",
   "type": "module",
-  "version": "12.214.0",
+  "version": "12.215.1",
   "private": true,
   "workspaces": [
     "cli",
@@ -198,6 +198,7 @@
     "test:analytics-sql": "vitest run tests/analytics-engine-sql.unit.test.ts",
     "test:analytics-sql:live": "bun --env-file=internal/cloudflare/.env.prod scripts/validate-analytics-engine-sql.ts",
     "changelog:ai": "node scripts/generate-ai-changelog.mjs",
+    "i18n:contexts": "node scripts/generate-translation-contexts.mjs",
     "bench:plugin-validation-cpu": "bun scripts/bench_plugin_validation_cpu.ts --save scripts/bench/plugin_validation_cpu_results.json",
     "bench:plugin-worker-cpu": "bun scripts/bench_plugin_worker_cpu.ts --save scripts/bench/plugin_worker_cpu_results.json",
     "bench:plugin-har-inspect": "bun scripts/bench_plugin_har_inspect.ts --save scripts/bench/plugin_har_inspect_results.json --har scripts/bench/plugin_endpoints.har",
