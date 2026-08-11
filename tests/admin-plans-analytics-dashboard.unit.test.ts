@@ -11,17 +11,13 @@ const validResponse: BackendPlansAnalyticsResponse = {
   checkoutVisitorBreakdown: [{ date: '2026-08-01', paying: 1, activeTrial: 0, expiredTrial: 0, canceled: 0, paymentProblem: 0, creditsOnly: 0, unknown: 0, total: 1 }],
   dataQuality: {
     exactTrackingStartedAt: '2026-08-01T00:00:00Z',
-    legacyLogicalOpens: 3,
     exactLogicalOpens: 1,
-    legacyReconstructionAvailable: true,
-    legacyUnavailableReason: null,
     excludedMissingOrganization: 0,
     unmatchedCheckoutStarts: 0,
     unknownBillingOrganizations: 0,
     posthogConfigured: true,
     posthogConnected: true,
     posthogFailureReason: null,
-    legacyDeduplicationSeconds: null,
   },
 }
 
@@ -71,8 +67,6 @@ describe('admin Plans analytics dashboard', () => {
       dataQuality: {
         ...validResponse.dataQuality,
         exactTrackingStartedAt: null,
-        legacyReconstructionAvailable: false,
-        legacyUnavailableReason: 'missing_event_time_path',
         posthogConnected: false,
         posthogFailureReason: 'timeout',
       },
@@ -88,13 +82,19 @@ describe('admin Plans analytics dashboard', () => {
     expect(parsePlansAnalyticsResponse(value)).toEqual(value)
   })
 
-  it('accepts a validated nonnegative integer legacy threshold for a future enabled path', () => {
-    const value = {
+  it('ignores obsolete legacy data-quality fields from an older backend response', () => {
+    const compatibilityResponse = {
       ...validResponse,
-      dataQuality: { ...validResponse.dataQuality, legacyDeduplicationSeconds: 30 },
+      dataQuality: {
+        ...validResponse.dataQuality,
+        legacyLogicalOpens: 3,
+        legacyReconstructionAvailable: false,
+        legacyUnavailableReason: 'missing_event_time_path',
+        legacyDeduplicationSeconds: 30,
+      },
     }
 
-    expect(parsePlansAnalyticsResponse(value)).toEqual(value)
+    expect(parsePlansAnalyticsResponse(compatibilityResponse).dataQuality).toEqual(validResponse.dataQuality)
   })
 
   it.each([
@@ -128,14 +128,6 @@ describe('admin Plans analytics dashboard', () => {
       ...validResponse,
       dataQuality: { ...validResponse.dataQuality, exactTrackingStartedAt: 'not-a-timestamp' },
     }],
-    ['negative legacy deduplication threshold', {
-      ...validResponse,
-      dataQuality: { ...validResponse.dataQuality, legacyDeduplicationSeconds: -1 },
-    }],
-    ['fractional legacy deduplication threshold', {
-      ...validResponse,
-      dataQuality: { ...validResponse.dataQuality, legacyDeduplicationSeconds: 0.5 },
-    }],
   ])('rejects a malformed response with %s', (_name, value) => {
     expect(() => parsePlansAnalyticsResponse(value)).toThrowError('Invalid Plans analytics response')
   })
@@ -154,7 +146,7 @@ describe('admin Plans analytics dashboard', () => {
     expect(state.unavailableMessage).toBe(expected)
   })
 
-  it('distinguishes valid empty data, partial billing, and unavailable legacy history', () => {
+  it('distinguishes valid empty data with partial billing', () => {
     const state = buildPlansAnalyticsPresentationState({
       ...validResponse,
       traffic: { dates: [], uniqueVisitorOrganizations: [], totalOpens: [] },
@@ -164,7 +156,6 @@ describe('admin Plans analytics dashboard', () => {
       dataQuality: {
         ...validResponse.dataQuality,
         unknownBillingOrganizations: 2,
-        legacyReconstructionAvailable: false,
       },
     }, null, key => key)
 
@@ -175,8 +166,8 @@ describe('admin Plans analytics dashboard', () => {
       hasCheckoutIntent: false,
       hasCheckoutVisitors: false,
       showPartialBillingWarning: true,
-      showLegacyUnavailableWarning: true,
     })
+    expect(state).not.toHaveProperty('showLegacyUnavailableWarning')
   })
 
   it('gives a request failure precedence over backend presentation state', () => {
@@ -281,7 +272,8 @@ describe('admin Plans analytics dashboard', () => {
 
     expect(page).toContain('buildPlansAnalyticsPresentationState(data.value, requestError.value, t)')
     expect(page).toContain('t(\'plans-analytics-partial-warning\')')
-    expect(page).toContain('t(\'plans-analytics-legacy-unavailable\')')
+    expect(page).not.toContain('plans-analytics-legacy-unavailable')
+    expect(page).not.toContain('showLegacyUnavailableWarning')
     expect(page).toContain('t(\'plans-analytics-empty\')')
 
     expect(page.match(/<ChartCard/g)).toHaveLength(5)

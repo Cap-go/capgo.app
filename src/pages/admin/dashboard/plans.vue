@@ -130,14 +130,6 @@ displayStore.defaultBack = '/dashboard'
             {{ t('plans-analytics-partial-warning') }}
           </div>
 
-          <div
-            v-if="presentation.showLegacyUnavailableWarning"
-            role="status"
-            class="rounded-lg border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-slate-700 dark:text-slate-200"
-          >
-            {{ t('plans-analytics-legacy-unavailable') }}
-          </div>
-
           <ChartCard
             :title="t('plans-analytics-traffic')"
             :is-loading="isLoadingStats"
