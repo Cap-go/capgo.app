@@ -2,11 +2,13 @@
 
 import assert from 'node:assert/strict'
 import { execSync, spawn } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   applyInitAutoTestChange,
+  captureInitGitSnapshot,
+  classifyInitGitChanges,
   getDirtyGitStatusActionOptions,
   getGitRepoStatus,
   getInitOtaVersionBase,
@@ -16,6 +18,7 @@ import {
   getNativePlatformAvailability,
   injectInitCode,
   isOnlyAllowedInitAutoTestChange,
+  mergeInitGitChanges,
   revertInitAutoTestChangeContent,
   runInheritedCommand,
 } from '../src/init/command.ts'
@@ -382,6 +385,180 @@ t('resume allowlist only accepts the exact cli-managed test diff', () => {
       kind: applied.kind,
     }), false)
   })
+})
+
+t('git fingerprints attribute only files changed during the onboarding mutation window', () => {
+  withTempDir((root) => {
+    execSync('git init', { cwd: root, stdio: 'ignore' })
+    execSync('git config user.email "test@example.com"', { cwd: root, stdio: 'ignore' })
+    execSync('git config user.name "Test User"', { cwd: root, stdio: 'ignore' })
+    execSync('git config commit.gpgsign false', { cwd: root, stdio: 'ignore' })
+
+    mkdirSync(join(root, 'src'), { recursive: true })
+    writeFileSync(join(root, 'src', 'main.ts'), 'console.log(\'initial\')\n', 'utf8')
+    writeFileSync(join(root, 'package.json'), '{"name":"example","dependencies":{}}\n', 'utf8')
+    writeFileSync(join(root, 'package-lock.json'), '{"name":"example","lockfileVersion":3}\n', 'utf8')
+    execSync('git add src/main.ts package.json package-lock.json', { cwd: root, stdio: 'ignore' })
+    execSync('git commit -m "init"', { cwd: root, stdio: 'ignore' })
+
+    writeFileSync(join(root, 'src', 'main.ts'), 'console.log(\'user edit\')\n', 'utf8')
+    const before = captureInitGitSnapshot(root)
+    assert.ok(before)
+
+    writeFileSync(join(root, 'package.json'), '{"name":"example","dependencies":{"@capgo/capacitor-updater":"latest"}}\n', 'utf8')
+    writeFileSync(join(root, 'package-lock.json'), '{"name":"example","lockfileVersion":3,"packages":{"capgo":{}}}\n', 'utf8')
+    const after = captureInitGitSnapshot(root)
+    assert.ok(after)
+
+    const saved = mergeInitGitChanges(undefined, before, after)
+    assert.ok(saved)
+    assert.deepEqual(Object.keys(saved.files).sort(), ['package-lock.json', 'package.json'])
+
+    const classification = classifyInitGitChanges(after, saved)
+    assert.deepEqual(classification.unsafePaths, ['src/main.ts'])
+    assert.equal(classification.recognizedCount, 2)
+    assert.deepEqual(Object.keys(classification.retained?.files ?? {}).sort(), ['package-lock.json', 'package.json'])
+  })
+})
+
+t('git snapshot fingerprints a deleted regular file with null content and mode', () => {
+  withTempDir((root) => {
+    execSync('git init', { cwd: root, stdio: 'ignore' })
+    execSync('git config user.email "test@example.com"', { cwd: root, stdio: 'ignore' })
+    execSync('git config user.name "Test User"', { cwd: root, stdio: 'ignore' })
+    execSync('git config commit.gpgsign false', { cwd: root, stdio: 'ignore' })
+    writeFileSync(join(root, 'deleted.txt'), 'tracked\n', 'utf8')
+    execSync('git add deleted.txt', { cwd: root, stdio: 'ignore' })
+    execSync('git commit -m "init"', { cwd: root, stdio: 'ignore' })
+
+    unlinkSync(join(root, 'deleted.txt'))
+
+    const snapshot = captureInitGitSnapshot(root)
+    assert.ok(snapshot)
+    assert.deepEqual(snapshot.files['deleted.txt'], {
+      status: ' D',
+      sha256: null,
+      mode: null,
+    })
+  })
+})
+
+t('git snapshot declines unsupported symlinks and renames', () => {
+  withTempDir((root) => {
+    execSync('git init', { cwd: root, stdio: 'ignore' })
+    writeFileSync(join(root, 'target.txt'), 'target\n', 'utf8')
+    symlinkSync('target.txt', join(root, 'link.txt'))
+
+    assert.equal(captureInitGitSnapshot(root), undefined)
+  })
+
+  withTempDir((root) => {
+    execSync('git init', { cwd: root, stdio: 'ignore' })
+    execSync('git config user.email "test@example.com"', { cwd: root, stdio: 'ignore' })
+    execSync('git config user.name "Test User"', { cwd: root, stdio: 'ignore' })
+    execSync('git config commit.gpgsign false', { cwd: root, stdio: 'ignore' })
+    writeFileSync(join(root, 'before.txt'), 'tracked\n', 'utf8')
+    execSync('git add before.txt', { cwd: root, stdio: 'ignore' })
+    execSync('git commit -m "init"', { cwd: root, stdio: 'ignore' })
+    execSync('git mv before.txt after.txt', { cwd: root, stdio: 'ignore' })
+
+    assert.equal(captureInitGitSnapshot(root), undefined)
+  })
+})
+
+t('git snapshot declines a tracked symlink changed into a regular file', () => {
+  withTempDir((root) => {
+    execSync('git init', { cwd: root, stdio: 'ignore' })
+    execSync('git config user.email "test@example.com"', { cwd: root, stdio: 'ignore' })
+    execSync('git config user.name "Test User"', { cwd: root, stdio: 'ignore' })
+    execSync('git config commit.gpgsign false', { cwd: root, stdio: 'ignore' })
+    writeFileSync(join(root, 'target.txt'), 'target\n', 'utf8')
+    symlinkSync('target.txt', join(root, 'link.txt'))
+    execSync('git add target.txt link.txt', { cwd: root, stdio: 'ignore' })
+    execSync('git commit -m "init"', { cwd: root, stdio: 'ignore' })
+
+    unlinkSync(join(root, 'link.txt'))
+    writeFileSync(join(root, 'link.txt'), 'now regular\n', 'utf8')
+
+    assert.equal(captureInitGitSnapshot(root), undefined)
+  })
+})
+
+t('git fingerprint classification requires exact path, status, hash, and mode matches', () => {
+  const repoRoot = '/example/repo'
+  const fingerprint = (status, sha256, mode = 0o100644) => ({ status, sha256, mode })
+  const changes = files => ({ version: 1, repoRoot, files })
+  const cases = [
+    {
+      name: 'exact saved fingerprint is recognized',
+      current: changes({ 'package.json': fingerprint(' M', 'saved') }),
+      saved: changes({ 'package.json': fingerprint(' M', 'saved') }),
+      unsafePaths: [],
+      recognizedCount: 1,
+      retainedPaths: ['package.json'],
+    },
+    {
+      name: 'same path subsequently changed is unsafe',
+      current: changes({ 'package.json': fingerprint(' M', 'changed') }),
+      saved: changes({ 'package.json': fingerprint(' M', 'saved') }),
+      unsafePaths: ['package.json'],
+      recognizedCount: 0,
+      retainedPaths: [],
+    },
+    {
+      name: 'additional dirty path is unsafe',
+      current: changes({
+        'package.json': fingerprint(' M', 'saved'),
+        'src/main.ts': fingerprint(' M', 'user-edit'),
+      }),
+      saved: changes({ 'package.json': fingerprint(' M', 'saved') }),
+      unsafePaths: ['src/main.ts'],
+      recognizedCount: 1,
+      retainedPaths: ['package.json'],
+    },
+    {
+      name: 'staged status differing from saved status is unsafe',
+      current: changes({ 'package.json': fingerprint('M ', 'saved') }),
+      saved: changes({ 'package.json': fingerprint(' M', 'saved') }),
+      unsafePaths: ['package.json'],
+      recognizedCount: 0,
+      retainedPaths: [],
+    },
+    {
+      name: 'deleted path with an exact null fingerprint is recognized',
+      current: changes({ 'package.json': fingerprint(' D', null, null) }),
+      saved: changes({ 'package.json': fingerprint(' D', null, null) }),
+      unsafePaths: [],
+      recognizedCount: 1,
+      retainedPaths: ['package.json'],
+    },
+    {
+      name: 'mode change is unsafe',
+      current: changes({ 'scripts/setup.sh': fingerprint(' M', 'saved', 0o100755) }),
+      saved: changes({ 'scripts/setup.sh': fingerprint(' M', 'saved', 0o100644) }),
+      unsafePaths: ['scripts/setup.sh'],
+      recognizedCount: 0,
+      retainedPaths: [],
+    },
+    {
+      name: 'no saved fingerprint state leaves current dirty paths unsafe',
+      current: changes({
+        'package.json': fingerprint(' M', 'saved'),
+        'src/main.ts': fingerprint(' M', 'user-edit'),
+      }),
+      saved: undefined,
+      unsafePaths: ['package.json', 'src/main.ts'],
+      recognizedCount: 0,
+      retainedPaths: [],
+    },
+  ]
+
+  for (const testCase of cases) {
+    const classification = classifyInitGitChanges(testCase.current, testCase.saved)
+    assert.deepEqual(classification.unsafePaths, testCase.unsafePaths, testCase.name)
+    assert.equal(classification.recognizedCount, testCase.recognizedCount, testCase.name)
+    assert.deepEqual(Object.keys(classification.retained?.files ?? {}).sort(), testCase.retainedPaths, testCase.name)
+  }
 })
 
 async function tAsync(name, fn) {

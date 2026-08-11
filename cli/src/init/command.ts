@@ -5,7 +5,8 @@ import type { Organization } from '../utils'
 import type { SupportedPackageManager } from './command-execution'
 import type { InitCodeDiff, InitEncryptionPhase, InitEncryptionSummary } from './runtime'
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import path, { dirname, join } from 'node:path'
 import { chdir, cwd, env, exit, platform, stderr, stdin, stdout } from 'node:process'
 import { canParse, format, increment, lessThan, parse } from '@std/semver'
@@ -113,6 +114,24 @@ interface GitRepoStatus {
   repoRoot?: string
   entries: string[]
   error?: string
+}
+
+export interface InitGitChangeFingerprint {
+  status: string
+  sha256: string | null
+  mode: number | null
+}
+
+export interface InitGitChanges {
+  version: 1
+  repoRoot: string
+  files: Record<string, InitGitChangeFingerprint>
+}
+
+export interface InitGitClassification {
+  unsafePaths: string[]
+  recognizedCount: number
+  retained: InitGitChanges | undefined
 }
 
 interface InitAutoTestChange {
@@ -340,6 +359,187 @@ export function getGitRepoStatus(startDir = cwd()): GitRepoStatus {
     clean: entries.length === 0,
     repoRoot,
     entries,
+  }
+}
+
+function initGitFingerprintMatches(left: InitGitChangeFingerprint | undefined, right: InitGitChangeFingerprint | undefined) {
+  return left !== undefined
+    && right !== undefined
+    && left.status === right.status
+    && left.sha256 === right.sha256
+    && left.mode === right.mode
+}
+
+function isUsableInitGitChanges(changes: InitGitChanges | undefined): changes is InitGitChanges {
+  return changes?.version === 1
+    && typeof changes.repoRoot === 'string'
+    && changes.repoRoot.length > 0
+    && changes.files !== null
+    && typeof changes.files === 'object'
+}
+
+function cloneInitGitChanges(changes: InitGitChanges, files = changes.files): InitGitChanges | undefined {
+  const clonedFiles = Object.fromEntries(Object.entries(files).map(([filePath, fingerprint]) => [filePath, { ...fingerprint }]))
+  return Object.keys(clonedFiles).length > 0
+    ? { version: 1, repoRoot: changes.repoRoot, files: clonedFiles }
+    : undefined
+}
+
+function isDeletedRegularGitPath(repoRoot: string, filePath: string) {
+  const indexResult = spawnSync('git', ['--literal-pathspecs', 'ls-files', '--stage', '-z', '--', filePath], {
+    cwd: repoRoot,
+    stdio: 'pipe',
+    encoding: 'utf8',
+  })
+  if (indexResult.error || indexResult.status !== 0)
+    return false
+
+  const indexEntries = indexResult.stdout?.toString().split('\0').filter(Boolean) ?? []
+  if (indexEntries.length > 1)
+    return false
+  if (indexEntries.length === 1) {
+    const [metadata] = indexEntries[0].split('\t', 1)
+    const [mode, , stage] = metadata.split(' ')
+    return (mode === '100644' || mode === '100755') && stage === '0'
+  }
+
+  const headResult = spawnSync('git', ['--literal-pathspecs', 'ls-tree', '-z', 'HEAD', '--', filePath], {
+    cwd: repoRoot,
+    stdio: 'pipe',
+    encoding: 'utf8',
+  })
+  if (headResult.error || headResult.status !== 0)
+    return false
+
+  const headEntries = headResult.stdout?.toString().split('\0').filter(Boolean) ?? []
+  if (headEntries.length !== 1)
+    return false
+  const [metadata] = headEntries[0].split('\t', 1)
+  const [mode, type] = metadata.split(' ')
+  return (mode === '100644' || mode === '100755') && type === 'blob'
+}
+
+export function captureInitGitSnapshot(startDir = cwd()): InitGitChanges | undefined {
+  try {
+    const repoResult = spawnSync('git', ['rev-parse', '--show-toplevel'], {
+      cwd: startDir,
+      stdio: 'pipe',
+      encoding: 'utf8',
+    })
+    if (repoResult.error || repoResult.status !== 0)
+      return undefined
+
+    const repoRootValue = repoResult.stdout?.toString().trim()
+    if (!repoRootValue)
+      return undefined
+    const repoRoot = realpathSync(repoRootValue)
+    const statusResult = spawnSync('git', ['status', '--porcelain=v1', '-z', '--untracked-files=all'], {
+      cwd: repoRoot,
+      stdio: 'pipe',
+      encoding: 'utf8',
+    })
+    if (statusResult.error || statusResult.status !== 0)
+      return undefined
+
+    const entries = statusResult.stdout?.toString().split('\0').filter(Boolean) ?? []
+    const files: Record<string, InitGitChangeFingerprint> = {}
+    for (const entry of entries) {
+      if (entry.length < 4 || entry[2] !== ' ')
+        return undefined
+
+      const status = entry.slice(0, 2)
+      const filePath = entry.slice(3)
+      if (!filePath || status.includes('R') || status.includes('C') || status.includes('T') || status.includes('U') || status === 'AA' || status === 'DD' || files[filePath])
+        return undefined
+
+      const absolutePath = path.resolve(repoRoot, filePath)
+      const pathFromRoot = path.relative(repoRoot, absolutePath)
+      if (pathFromRoot === '..' || pathFromRoot.startsWith(`..${path.sep}`) || path.isAbsolute(pathFromRoot))
+        return undefined
+
+      if (status.includes('D')) {
+        if (!isDeletedRegularGitPath(repoRoot, filePath))
+          return undefined
+        files[filePath] = { status, sha256: null, mode: null }
+        continue
+      }
+
+      const fileStats = lstatSync(absolutePath)
+      if (!fileStats.isFile())
+        return undefined
+      files[filePath] = {
+        status,
+        sha256: createHash('sha256').update(readFileSync(absolutePath)).digest('hex'),
+        mode: fileStats.mode,
+      }
+    }
+
+    return { version: 1, repoRoot, files }
+  }
+  catch {
+    return undefined
+  }
+}
+
+export function mergeInitGitChanges(existing: InitGitChanges | undefined, before: InitGitChanges | undefined, after: InitGitChanges | undefined): InitGitChanges | undefined {
+  const usableBefore = isUsableInitGitChanges(before) ? before : undefined
+  const usableAfter = isUsableInitGitChanges(after) ? after : undefined
+  const existingMatchesRepo = isUsableInitGitChanges(existing)
+    && (!usableBefore || existing.repoRoot === usableBefore.repoRoot)
+  const retainedFiles: Record<string, InitGitChangeFingerprint> = {}
+  const recognizedBefore = new Set<string>()
+
+  if (existingMatchesRepo) {
+    for (const [filePath, fingerprint] of Object.entries(existing.files)) {
+      if (!usableBefore || initGitFingerprintMatches(fingerprint, usableBefore.files[filePath])) {
+        retainedFiles[filePath] = { ...fingerprint }
+        recognizedBefore.add(filePath)
+      }
+    }
+  }
+
+  if (!usableBefore || !usableAfter || usableBefore.repoRoot !== usableAfter.repoRoot) {
+    if (!isUsableInitGitChanges(existing) || Object.keys(retainedFiles).length === 0)
+      return undefined
+    return { version: 1, repoRoot: existing.repoRoot, files: retainedFiles }
+  }
+
+  for (const filePath of new Set([...Object.keys(usableBefore.files), ...Object.keys(usableAfter.files)])) {
+    const beforeFingerprint = usableBefore.files[filePath]
+    const afterFingerprint = usableAfter.files[filePath]
+    if (initGitFingerprintMatches(beforeFingerprint, afterFingerprint))
+      continue
+    if (beforeFingerprint && !recognizedBefore.has(filePath))
+      continue
+    if (afterFingerprint)
+      retainedFiles[filePath] = { ...afterFingerprint }
+    else
+      delete retainedFiles[filePath]
+  }
+
+  return cloneInitGitChanges({ version: 1, repoRoot: usableAfter.repoRoot, files: retainedFiles })
+}
+
+export function classifyInitGitChanges(current: InitGitChanges | undefined, saved: InitGitChanges | undefined): InitGitClassification {
+  if (!isUsableInitGitChanges(current))
+    return { unsafePaths: [], recognizedCount: 0, retained: undefined }
+
+  const compatibleSaved = isUsableInitGitChanges(saved) && saved.repoRoot === current.repoRoot ? saved : undefined
+  const unsafePaths: string[] = []
+  const retainedFiles: Record<string, InitGitChangeFingerprint> = {}
+  for (const filePath of Object.keys(current.files).sort()) {
+    const fingerprint = current.files[filePath]
+    if (compatibleSaved && initGitFingerprintMatches(fingerprint, compatibleSaved.files[filePath]))
+      retainedFiles[filePath] = { ...fingerprint }
+    else
+      unsafePaths.push(filePath)
+  }
+
+  const retained = cloneInitGitChanges({ version: 1, repoRoot: current.repoRoot, files: retainedFiles })
+  return {
+    unsafePaths,
+    recognizedCount: Object.keys(retainedFiles).length,
+    retained,
   }
 }
 
