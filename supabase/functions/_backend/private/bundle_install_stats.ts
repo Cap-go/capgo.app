@@ -19,7 +19,8 @@ dayjs.extend(utc)
 const maxInstallMs = 7_200_000
 const pairingLookbackMs = 2 * 60 * 60 * 1000
 const pairingLookbackHours = pairingLookbackMs / (60 * 60 * 1000)
-const MIN_TIMING_WINDOW_MS = 60_000
+const TIMING_HOUR_SLICE_MS = 60 * 60 * 1000
+const TIMING_FINE_SLICE_MS = 5 * 60 * 1000
 const BUNDLE_INSTALL_STATS_CACHE_TTL_SECONDS = 300
 const BUNDLE_INSTALL_STATS_CACHE_PATH = '/.bundle-install-stats'
 const supportedPeriodDays = [1, 3, 7, 30] as const
@@ -461,6 +462,24 @@ async function resolveChannelVersionFilter(
   return versionNames
 }
 
+async function readInstallTimingEventsCFSlice(
+  c: Context<MiddlewareKeyVariables>,
+  params: {
+    appId: string
+    start: dayjs.Dayjs
+    end: dayjs.Dayjs
+    versionNames?: string[]
+  },
+): Promise<UpdateDeliveryTimingEventCF[]> {
+  return readUpdateDeliveryTimingEventsCF(c, {
+    start_date: params.start.toISOString(),
+    end_date: params.end.toISOString(),
+    actions: [...installTimingActions],
+    app_ids: [params.appId],
+    version_names: params.versionNames,
+  })
+}
+
 async function readInstallTimingEventsCFWindow(
   c: Context<MiddlewareKeyVariables>,
   params: {
@@ -470,36 +489,44 @@ async function readInstallTimingEventsCFWindow(
     versionNames?: string[]
   },
 ): Promise<UpdateDeliveryTimingEventCF[]> {
-  const chunk = await readUpdateDeliveryTimingEventsCF(c, {
-    start_date: params.start.toISOString(),
-    end_date: params.end.toISOString(),
-    actions: [...installTimingActions],
-    app_ids: [params.appId],
-    version_names: params.versionNames,
-  })
-
+  const chunk = await readInstallTimingEventsCFSlice(c, params)
   if (chunk.length < MAX_ANALYTICS_QUERY_LIMIT)
     return chunk
 
   const windowMs = params.end.valueOf() - params.start.valueOf()
-  if (windowMs <= MIN_TIMING_WINDOW_MS) {
+  // Busy day: fall back to sequential hour slices (max ~24 queries), then 5-minute
+  // slices inside a capped hour. Never fan out recursively with Promise.all.
+  const sliceMs = windowMs > TIMING_HOUR_SLICE_MS
+    ? TIMING_HOUR_SLICE_MS
+    : TIMING_FINE_SLICE_MS
+
+  if (windowMs <= TIMING_FINE_SLICE_MS) {
     cloudlog({
       requestId: c.get('requestId'),
-      message: 'bundle_install_stats timing window still capped after min split',
+      message: 'bundle_install_stats timing window still capped after fine split',
       app_id: params.appId,
       start: params.start.toISOString(),
       end: params.end.toISOString(),
       rows: chunk.length,
     })
-    return chunk
+    throw simpleError('fetch_error', 'Install timing sample set too large for this period')
   }
 
-  const mid = params.start.add(windowMs / 2, 'millisecond')
-  const [left, right] = await Promise.all([
-    readInstallTimingEventsCFWindow(c, { ...params, end: mid }),
-    readInstallTimingEventsCFWindow(c, { ...params, start: mid }),
-  ])
-  return [...left, ...right]
+  const events: UpdateDeliveryTimingEventCF[] = []
+  let cursor = params.start
+  while (cursor.isBefore(params.end)) {
+    const nextMs = Math.min(cursor.valueOf() + sliceMs, params.end.valueOf())
+    const next = dayjs(nextMs).utc()
+    const slice = await readInstallTimingEventsCFWindow(c, {
+      appId: params.appId,
+      start: cursor,
+      end: next,
+      versionNames: params.versionNames,
+    })
+    events.push(...slice)
+    cursor = next
+  }
+  return events
 }
 
 async function readInstallTimingEventsCFChunked(
@@ -741,6 +768,9 @@ app.use('/', useCors)
 app.post('/', middlewareAuth, async (c) => {
   const body = await parseBody<BundleInstallStatsRequest>(c)
   cloudlog({ requestId: c.get('requestId'), message: 'post bundle_install_stats body', body })
+
+  if (!body || typeof body !== 'object' || Array.isArray(body))
+    throw simpleError('missing_params', 'app_id is required')
 
   if (typeof body.app_id !== 'string' || !body.app_id.trim())
     throw simpleError('missing_params', 'app_id is required')

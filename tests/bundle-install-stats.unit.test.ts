@@ -81,7 +81,7 @@ describe('bundle install stats helpers', () => {
     expect(response.bundles[1]?.timing.p50_ms).toBe(1200)
   })
 
-  it.concurrent('filters cached response by version_name without changing other bundles source', () => {
+  it.concurrent('filters cached response by version_name without mutating the source', () => {
     const response = bundleInstallStatsTestUtils.buildBundleInstallResponse({
       days: 7,
       start: '2026-07-01T00:00:00.000Z',
@@ -92,6 +92,7 @@ describe('bundle install stats helpers', () => {
       ],
       timingRows: new Map(),
     })
+    const responseBeforeFiltering = structuredClone(response)
 
     const filtered = bundleInstallStatsTestUtils.filterResponseByVersionName(response, '1.0.0')
     expect(filtered.bundles).toHaveLength(1)
@@ -99,5 +100,7 @@ describe('bundle install stats helpers', () => {
     expect(filtered.totals.install).toBe(10)
     expect(filtered.totals.fail).toBe(2)
     expect(filtered.totals.success_rate).toBe(83.3)
+    expect(response).toEqual(responseBeforeFiltering)
+    expect(response.bundles).toHaveLength(2)
   })
 })
