@@ -419,21 +419,38 @@ async function createGroup() {
   if (!orgId)
     return
 
+  const userId = main.user?.id
+  if (!userId)
+    return
+
   isSubmitting.value = true
   try {
-    const { data, error } = await supabase
+    // Avoid INSERT ... RETURNING: groups_select uses readable_group_ids(), and a
+    // STABLE snapshot can miss the new row → false 42501 even when INSERT is allowed.
+    const newGroupId = crypto.randomUUID()
+    const payload = {
+      id: newGroupId,
+      org_id: orgId,
+      name: editName.value.trim(),
+      description: editDescription.value.trim() || null,
+      created_by: userId,
+    }
+
+    const { error } = await supabase
       .from('groups')
-      .insert({
-        org_id: orgId,
-        name: editName.value.trim(),
-        description: editDescription.value.trim() || null,
-        created_by: main.user?.id || null,
-      })
-      .select('id, org_id, name, description, created_at')
-      .single()
+      .insert(payload)
 
     if (error)
       throw error
+
+    const { data, error: fetchError } = await supabase
+      .from('groups')
+      .select('id, org_id, name, description, created_at')
+      .eq('id', newGroupId)
+      .single()
+
+    if (fetchError)
+      throw fetchError
 
     group.value = data as Group
 

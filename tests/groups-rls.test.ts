@@ -124,6 +124,22 @@ describe('groups RLS', () => {
     expect(rows[0]?.id).toBe(adminOnlyGroupId)
   })
 
+  it('allows org admins to insert a group with RETURNING (PostgREST create path)', async () => {
+    const groupId = randomUUID()
+
+    const row = await withAuthenticatedUser(pool, USER_ID, async (client) => {
+      const result = await client.query(`
+        INSERT INTO public.groups (id, org_id, name, description, created_by)
+        VALUES ($1::uuid, $2::uuid, $3, $4, $5::uuid)
+        RETURNING id, org_id, name
+      `, [groupId, orgId, `Group RLS Returning ${fixtureId}`, 'INSERT RETURNING regression', USER_ID])
+      return result.rows[0]
+    })
+
+    expect(row?.id).toBe(groupId)
+    expect(row?.org_id).toBe(orgId)
+  })
+
   it('allows org admins to read group membership lists without group membership', async () => {
     const client = await pool.connect()
     try {
