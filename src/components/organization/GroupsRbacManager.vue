@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { Ref } from 'vue'
 import type { TableColumn } from '~/components/comp_def'
+import { FunctionsHttpError } from '@supabase/supabase-js'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
@@ -239,6 +240,23 @@ function navigateToCreate() {
   router.push('/settings/organization/groups/new')
 }
 
+async function toastForGroupDeleteError(error: unknown) {
+  const apiError = (await getCapgoApiErrorCode(error) ?? '').toLowerCase()
+  const status = error instanceof FunctionsHttpError && error.context instanceof Response
+    ? error.context.status
+    : undefined
+
+  // Prefer HTTP status + stable substrings over exact backend copy.
+  if (status === 409 || apiError.includes('last org_super_admin'))
+    toast.error(t('alert-cannot-delete-owner-title'))
+  else if (apiError.includes('system group'))
+    toast.error(t('cannot-delete-system-group'))
+  else if (apiError.includes('higher privileges'))
+    toast.error(t('cannot-manage-higher-privilege-group'))
+  else
+    toast.error(t('error-removing-group'))
+}
+
 async function deleteGroup(group: GroupRow) {
   if (!props.canManage)
     return
@@ -277,15 +295,7 @@ async function deleteGroup(group: GroupRow) {
     })
 
     if (error) {
-      const apiError = await getCapgoApiErrorCode(error)
-      if (apiError === 'Cannot delete system group')
-        toast.error(t('cannot-delete-system-group'))
-      else if (apiError === 'Cannot remove the last org_super_admin')
-        toast.error(t('alert-cannot-delete-owner-title'))
-      else if (apiError?.includes('higher privileges'))
-        toast.error(t('cannot-manage-higher-privilege-group'))
-      else
-        toast.error(t('error-removing-group'))
+      await toastForGroupDeleteError(error)
       return
     }
 
