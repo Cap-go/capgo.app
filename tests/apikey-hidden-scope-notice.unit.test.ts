@@ -275,19 +275,41 @@ describe('api key hidden-scope notice', () => {
     expect(notice!.compareDocumentPosition(table!) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
   })
 
-  it('clears the active ApiKeys page scope when the notice action is clicked', async () => {
+  it('clears the active ApiKeys page scope, resets pagination, and preserves search', async () => {
     const DataTableStub = defineComponent({
       props: {
+        currentPage: {
+          type: Number,
+          default: 1,
+        },
         filters: {
           type: Object,
           default: () => ({}),
         },
+        search: {
+          type: String,
+          default: '',
+        },
       },
-      setup(props, { slots }) {
+      emits: ['update:currentPage', 'update:search'],
+      setup(props, { emit, slots }) {
         return () => h('section', {
           'data-test': 'api-key-data-table',
           'data-active-scope-count': Object.values(props.filters).filter(Boolean).length,
-        }, [slots['table-notice']?.(), h('table')])
+          'data-current-page': props.currentPage,
+          'data-search': props.search,
+        }, [
+          h('button', {
+            'data-test': 'set-search',
+            'onClick': () => emit('update:search', 'organization'),
+          }),
+          h('button', {
+            'data-test': 'set-page',
+            'onClick': () => emit('update:currentPage', 3),
+          }),
+          slots['table-notice']?.(),
+          h('table'),
+        ])
       },
     })
     const ApiKeysPage = (await import('../src/pages/ApiKeys.vue')).default
@@ -302,12 +324,24 @@ describe('api key hidden-scope notice', () => {
     })
 
     const table = container.querySelector('[data-test="api-key-data-table"]')
+    const setSearch = container.querySelector('[data-test="set-search"]') as HTMLButtonElement
+    const setPage = container.querySelector('[data-test="set-page"]') as HTMLButtonElement
+
+    setSearch.click()
+    setPage.click()
+    await nextTick()
+
+    expect(table?.getAttribute('data-current-page')).toBe('3')
+    expect(table?.getAttribute('data-search')).toBe('organization')
+
     const removeFilter = container.querySelector('[role="status"] button') as HTMLButtonElement
 
     removeFilter.click()
     await nextTick()
 
     expect(table?.getAttribute('data-active-scope-count')).toBe('0')
+    expect(table?.getAttribute('data-current-page')).toBe('1')
+    expect(table?.getAttribute('data-search')).toBe('organization')
     expect(container.querySelector('[role="status"]')).toBeNull()
   })
 })
