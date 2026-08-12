@@ -162,13 +162,12 @@ watchEffect(() => {
   const billingEnabled = stripeEnabled.value
   const needsGroups = !!organizationStore.currentOrganization?.gid
   const needsUsage = billingEnabled && canReadBilling.value
-  const needsCredits = billingEnabled && canUpdateBilling.value && !hideExternalPurchaseFlows
-  const needsPlans = billingEnabled && canUpdateBilling.value && !hideExternalPurchaseFlows
+  const needsPlanPages = billingEnabled && canUpdateBilling.value && !hideExternalPurchaseFlows
   const needsAuditLogs = canReadAuditLogs.value
   const needsSecurity = canManageSecurity.value
   const needsBillingTab = billingEnabled && canReadBilling.value && !hideExternalPurchaseFlows
   // Plan hub when there is a navigable plan page, or billing-only access (hub opens portal).
-  const needsPlanHub = needsPlans || needsCredits || needsBillingTab
+  const needsPlanHub = needsPlanPages || needsBillingTab
 
   // --- Secondary (main) org tabs ---
   upsertTab(organizationTabs, ORG_TEAM_HUB, baseOrgMainTabs)
@@ -206,15 +205,14 @@ watchEffect(() => {
   sortByBase(teamSubTabs.value, baseTeamSubTabs)
 
   // --- Plan sub-tabs ---
-  if (needsPlans)
+  if (needsPlanPages) {
     upsertTab(planSubTabs, '/settings/organization/plans', basePlanSubTabs)
-  else
-    removeTab(planSubTabs, '/settings/organization/plans')
-
-  if (needsCredits)
     upsertTab(planSubTabs, '/settings/organization/credits', basePlanSubTabs)
-  else
+  }
+  else {
+    removeTab(planSubTabs, '/settings/organization/plans')
     removeTab(planSubTabs, '/settings/organization/credits')
+  }
 
   // Billing portal entry: users with org.read_billing can see it; update opens Stripe
   const billingTabKey = '/billing'
@@ -252,7 +250,7 @@ watchEffect(() => {
     // access — Plans.vue would redirect them to /apps — so the hub opens billing instead.
     const planHub = organizationTabs.value.find(tab => tab.key === ORG_PLAN_HUB)
     if (planHub) {
-      if (needsPlans || needsCredits) {
+      if (needsPlanPages) {
         delete planHub.onClick
       }
       else {
