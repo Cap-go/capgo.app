@@ -22,6 +22,16 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
   { slug: 'app-settings-access', path: '/app/com.demo.app/settings/access', auth: true },
   { slug: 'channels', path: '/app/com.demo.app/channels', auth: true },
   {
+    slug: 'channel-devices',
+    path: '/app/com.demo.app/channels',
+    auth: true,
+    prepare: async (page) => {
+      await page.getByText('no_access', { exact: true }).first().click()
+      await page.getByRole('button', { name: /^devices$/i }).click()
+      await page.getByText(/no devices are forced|force a device to this channel/i).first().waitFor({ state: 'visible' })
+    },
+  },
+  {
     slug: 'devices',
     path: '/app/com.demo.app/devices',
     auth: true,

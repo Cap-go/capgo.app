@@ -8,6 +8,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import plusOutline from '~icons/ion/add-outline'
 import IconAlertCircle from '~icons/lucide/alert-circle'
+import ChannelDeviceExpiryNotice from '~/components/ChannelDeviceExpiryNotice.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
 import { withBuiltinChannelVersion } from '~/services/versions'
@@ -291,7 +292,13 @@ watchEffect(async () => {
     <div v-else-if="channel">
       <div class="w-full h-full px-0 pt-0 mx-auto mb-8 overflow-y-auto sm:px-6 md:pt-8 lg:px-8 max-w-9xl max-h-fit">
         <div class="flex flex-col overflow-hidden overflow-y-auto bg-white border shadow-lg md:rounded-lg dark:bg-gray-800 border-slate-300 dark:border-slate-900">
-          <DeviceTable v-if="deviceIds.length > 0" :app-id="channel.version.app_id" :ids="deviceIds" :channel="channel" show-add-button @add-device="AddDevice" />
+          <DeviceTable v-if="deviceIds.length > 0" :app-id="channel.version.app_id" :ids="deviceIds" :channel="channel" show-add-button @add-device="AddDevice">
+            <template #table-notice>
+              <div class="px-4 pb-3 sm:px-6">
+                <ChannelDeviceExpiryNotice />
+              </div>
+            </template>
+          </DeviceTable>
           <template v-else-if="!dialogStore.showDialog">
             <div class="flex min-h-96 items-center justify-center px-6 py-10 text-center">
               <div class="flex max-w-2xl flex-col items-center">
@@ -303,6 +310,7 @@ watchEffect(async () => {
                     <code class="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs text-slate-700 dark:bg-slate-700 dark:text-slate-100">setChannel()</code>
                   </template>
                 </i18n-t>
+                <ChannelDeviceExpiryNotice class="mt-5 w-full text-left" />
                 <button type="button" class="mt-8 gap-2 text-white d-btn d-btn-primary" @click="AddDevice">
                   <plusOutline class="h-5 w-5" aria-hidden="true" />
                   {{ t('force-device-to-channel') }}
@@ -329,6 +337,7 @@ watchEffect(async () => {
     <!-- Teleport Content for Add Device Modal -->
     <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions?.title === t('type-device-id')" defer to="#dialog-v2-content">
       <div class="space-y-4">
+        <ChannelDeviceExpiryNotice compact />
         <FormKit
           v-model="deviceIdInput"
           type="text"

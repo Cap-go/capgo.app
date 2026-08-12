@@ -621,6 +621,9 @@ watch([selectedPlatform, selectedVersionNames], () => {
       @reset="refreshData()"
       @clear-extra-filters="clearExtraFilters"
     >
+      <template #table-notice>
+        <slot name="table-notice" />
+      </template>
       <template #toolbar-extras>
         <DateRangePicker
           ref="dateRangePickerRef"

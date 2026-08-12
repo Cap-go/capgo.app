@@ -11,6 +11,7 @@ import IconCopy from '~icons/heroicons/clipboard-document-check'
 import IconCode from '~icons/heroicons/code-bracket'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconDown from '~icons/material-symbols/keyboard-arrow-down-rounded'
+import ChannelDeviceExpiryNotice from '~/components/ChannelDeviceExpiryNotice.vue'
 import { useDeviceUpdateFormat } from '~/composables/useDeviceUpdateFormat'
 import { formatDate } from '~/services/date'
 import { checkPermissions } from '~/services/permissions'
@@ -478,6 +479,9 @@ async function copyCurlCommand() {
                 </span>
               </div>
             </InfoRow>
+            <div class="px-4 py-4 sm:px-6">
+              <ChannelDeviceExpiryNotice compact />
+            </div>
           </dl>
 
           <!-- Debug API Section -->

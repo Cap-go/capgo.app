@@ -774,6 +774,8 @@
   "channel-link-fail": "Cannot override the channel something wrong happened",
   "channel-linked": "Channel override set",
   "channel-linking": "Link to channel",
+  "channel-device-expiry-title": "Dashboard overrides expire after 90 days",
+  "channel-device-expiry-description": "This assignment is deleted after 90 days. To keep a device on a channel permanently, set {defaultChannel} in your Capacitor config or call {setChannel} from JavaScript.",
   "channel-name": "Channel name",
   "channel-name-placeholder": "Production",
   "channel-not-compatible-with-android": "This channel does not support Android.",
