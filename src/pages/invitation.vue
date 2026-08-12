@@ -78,6 +78,12 @@ const organizationInitials = computed(() => {
 
 onMounted(async () => {
   const supabase = useSupabase()
+  // Sign out any existing session before the form is usable so a later
+  // sign-out cannot wipe the session established after invite accept.
+  const { data: claimsData } = await supabase.auth.getClaims()
+  if (claimsData?.claims?.sub)
+    await supabase.auth.signOut()
+
   if (route.query.invite_magic_string) {
     inviteMagicString.value = route.query.invite_magic_string as string
     const { data, error } = await supabase.rpc('get_invite_by_magic_lookup', {
@@ -97,11 +103,6 @@ onMounted(async () => {
   }
   else {
     isFetchingInvite.value = false
-  }
-
-  const { data: claimsData } = await supabase.auth.getClaims()
-  if (claimsData?.claims?.sub) {
-    await supabase.auth.signOut()
   }
 })
 
@@ -140,11 +141,18 @@ async function submitForm() {
 
     if (data?.access_token && data?.refresh_token) {
       const supabase = useSupabase()
-      await completeInviteSessionHandoff(
-        tokens => supabase.auth.setSession(tokens),
-        () => router.replace('/login'),
-        data,
-      )
+      try {
+        await completeInviteSessionHandoff(
+          tokens => supabase.auth.setSession(tokens),
+          () => router.replace('/login'),
+          data,
+        )
+      }
+      catch {
+        // Invite is already consumed. Keep tokens on /login so the user can
+        // retry instead of being stuck on a generic accept error.
+        await router.replace(`/login?access_token=${encodeURIComponent(data.access_token)}&refresh_token=${encodeURIComponent(data.refresh_token)}`)
+      }
     }
     else {
       captchaComponent.value?.reset()
