@@ -5,14 +5,14 @@ import type { Database, Json } from '../utils/supabase.types.ts'
 import { sql } from 'drizzle-orm'
 import { Hono } from 'hono/tiny'
 
-import { getLastMonthAnalyticsWindowStart, getPluginBreakdownCF, readActiveAppsCF, readLastMonthDevicesByPlatformCF, readLastMonthDevicesCF, readLastMonthUpdatesCF } from '../utils/cloudflare.ts'
+import { getDeviceDaySuccessRateCF, getLastMonthAnalyticsWindowStart, getPluginBreakdownCF, readActiveAppsCF, readLastMonthDevicesByPlatformCF, readLastMonthDevicesCF, readLastMonthUpdatesCF } from '../utils/cloudflare.ts'
 import { GLOBAL_STATS_SHARDS, REQUIRED_GLOBAL_STATS_SHARDS, USAGE_GLOBAL_STATS_SHARDS } from '../utils/global_stats.ts'
 import { BRES, middlewareAPISecret, quickError } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { logsnagInsights } from '../utils/logsnag.ts'
 import { readGlobalNotificationStatsCF } from '../utils/nativeNotifications.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
-import { countAllApps, countAllUpdates, countAllUpdatesExternal, getUpdateStats } from '../utils/stats.ts'
+import { countAllApps, countAllUpdates, countAllUpdatesExternal } from '../utils/stats.ts'
 import { supabaseAdmin } from '../utils/supabase.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
 import { backgroundTask } from '../utils/utils.ts'
@@ -2877,8 +2877,8 @@ async function runUsageStorageGlobalStatsShard(c: Context, window: DailyWindow):
 }
 
 async function runUsageSuccessRateGlobalStatsShard(c: Context, window: DailyWindow): Promise<void> {
-  const res = await getUpdateStats(c)
-  const successRate = res.total.success_rate
+  // Same device-day formula as public /data — not the 1-minute getUpdateStats health window.
+  const successRate = await getDeviceDaySuccessRateCF(c, window.prevDayStart, window.prevDayEnd)
   await updateUsageGlobalStatsSnapshot(c, window, 'Updated global stats usage success rate shard', { success_rate: successRate }, { successRate })
 }
 

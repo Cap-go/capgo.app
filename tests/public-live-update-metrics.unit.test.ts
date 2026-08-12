@@ -1,6 +1,6 @@
 import type { Context } from 'hono'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { getPublicLiveUpdateMetricsCF } from '../supabase/functions/_backend/utils/cloudflare.ts'
+import { getDeviceDaySuccessRateCF, getPublicLiveUpdateMetricsCF } from '../supabase/functions/_backend/utils/cloudflare.ts'
 
 interface AnalyticsColumn { name: string, type: string }
 
@@ -17,7 +17,6 @@ function createContext() {
   return {
     env: {
       APP_LOG: {},
-      VERSION_USAGE: {},
       DEVICE_USAGE: {},
       DEVICE_INFO: {},
       CF_ANALYTICS_TOKEN: 'analytics-token',
@@ -37,7 +36,7 @@ describe('public live update metrics', () => {
     vi.unstubAllGlobals()
   })
 
-  it('returns usage shares plus dimensional success when denormalized log fields exist', async () => {
+  it('returns device-day success plus dimensional breakdowns from app_log', async () => {
     const queries: string[] = []
     vi.stubEnv('CF_ANALYTICS_TOKEN', 'analytics-token')
     vi.stubEnv('CF_ACCOUNT_ANALYTICS_ID', 'analytics-account')
@@ -45,14 +44,14 @@ describe('public live update metrics', () => {
       const query = String(init?.body ?? '')
       queries.push(query)
 
-      if (query.includes('FROM version_usage') && query.includes('AS installs')) {
+      if (query.includes('SELECT date, sum(succeeded) AS successes') && query.includes('GROUP BY date')) {
         return analyticsResponse(
           [
             { name: 'date', type: 'String' },
-            { name: 'installs', type: 'UInt64' },
-            { name: 'fails', type: 'UInt64' },
+            { name: 'successes', type: 'UInt64' },
+            { name: 'failures', type: 'UInt64' },
           ],
-          [{ date: '2026-06-30', installs: '90', fails: '10' }],
+          [{ date: '2026-06-30', successes: '90', failures: '10' }],
         )
       }
 
@@ -80,7 +79,7 @@ describe('public live update metrics', () => {
         )
       }
 
-      if (query.includes('blob5 AS key') && query.includes('sum(if(blob2 = \'set\', 1, 0))')) {
+      if (query.includes('platform AS key') && query.includes('sum(succeeded)')) {
         return analyticsResponse(
           [
             { name: 'key', type: 'String' },
@@ -122,7 +121,7 @@ describe('public live update metrics', () => {
         )
       }
 
-      if (query.includes('blob6 AS key') && query.includes('sum(if(blob2 = \'set\', 1, 0))')) {
+      if (query.includes('country AS key') && query.includes('sum(succeeded)')) {
         return analyticsResponse(
           [
             { name: 'key', type: 'String' },
@@ -163,7 +162,7 @@ describe('public live update metrics', () => {
         )
       }
 
-      if (query.includes('blob7 AS key') && query.includes('sum(if(blob2 = \'set\', 1, 0))')) {
+      if (query.includes('plugin_version AS key') && query.includes('sum(succeeded)')) {
         return analyticsResponse(
           [
             { name: 'key', type: 'String' },
@@ -210,9 +209,34 @@ describe('public live update metrics', () => {
     expect(metrics.updater_versions[0]).toMatchObject({ key: '8.1.0', share: 60 })
     expect(metrics.updater_versions.find(row => row.key === '8.1.0')?.success_rate).toBe(93.3)
     expect(queries.length).toBe(11)
-    expect(queries.join('\n')).toContain('FROM version_usage')
+    expect(queries.join('\n')).toContain('GROUP BY date, app_id, device_id')
+    expect(queries.join('\n')).not.toContain('FROM version_usage')
     expect(queries.join('\n')).toContain('blob6')
     expect(queries.join('\n')).toContain('blob7')
     expect(queries.join('\n')).toContain('blob10')
+  })
+
+  it('computes device-day success rate for global_stats windows', async () => {
+    vi.stubEnv('CF_ANALYTICS_TOKEN', 'analytics-token')
+    vi.stubEnv('CF_ACCOUNT_ANALYTICS_ID', 'analytics-account')
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
+      const query = String(init?.body ?? '')
+      expect(query).toContain('GROUP BY date, app_id, device_id')
+      expect(query).toContain('sum(if(succeeded = 0, failed, 0))')
+      return analyticsResponse(
+        [
+          { name: 'successes', type: 'UInt64' },
+          { name: 'failures', type: 'UInt64' },
+        ],
+        [{ successes: '68', failures: '32' }],
+      )
+    }))
+
+    const rate = await getDeviceDaySuccessRateCF(
+      createContext(),
+      new Date('2026-08-10T00:00:00.000Z'),
+      new Date('2026-08-11T00:00:00.000Z'),
+    )
+    expect(rate).toBe(68)
   })
 })
