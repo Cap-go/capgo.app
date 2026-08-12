@@ -126,6 +126,23 @@ await test('Android secrets stay in buildCredentials, not buildOptions', async (
   assert(!('CAPGO_ANDROID_PROJECT_DIR' in buildCredentials), 'Android project dir should not be in credentials')
 })
 
+await test('Android Play track and release status stay in buildCredentials', async () => {
+  const merged = {
+    PLAY_STORE_TRACK: 'internal',
+    PLAY_STORE_RELEASE_STATUS: 'draft',
+    PLAY_CONFIG_JSON: testVal('{"type":"service_account"}'),
+    CAPGO_STORE_SUBMIT_REVIEW: 'true',
+  }
+
+  const { buildOptions, buildCredentials } = splitPayload(merged, 'android', 'release', '7.83.0')
+
+  assertEquals(buildCredentials.PLAY_STORE_TRACK, 'internal', 'Play track should stay in credentials for the builder env')
+  assertEquals(buildCredentials.PLAY_STORE_RELEASE_STATUS, 'draft', 'Play release status should stay in credentials for the builder env')
+  assertEquals(buildOptions.submitToStoreReview, true, 'submitToStoreReview should still go to options')
+  assert(!('PLAY_STORE_TRACK' in buildOptions), 'Play track must not be dropped into typed options')
+  assert(!('PLAY_STORE_RELEASE_STATUS' in buildOptions), 'Play release status must not be dropped into typed options')
+})
+
 // ─── Test: Output control goes to options, not credentials ──────────────────────
 
 await test('Output and store release fields go to buildOptions, not buildCredentials', async () => {

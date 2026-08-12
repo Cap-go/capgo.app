@@ -102,6 +102,30 @@ export function parseInAppUpdatePriority(value: number | string): number {
   return num
 }
 
+export const ANDROID_PLAY_STORE_TRACKS = ['internal', 'alpha', 'beta', 'production'] as const
+export type AndroidPlayStoreTrack = typeof ANDROID_PLAY_STORE_TRACKS[number]
+
+export const ANDROID_PLAY_STORE_RELEASE_STATUSES = ['draft', 'completed', 'inProgress', 'halted'] as const
+export type AndroidPlayStoreReleaseStatus = typeof ANDROID_PLAY_STORE_RELEASE_STATUSES[number]
+
+export function parseAndroidPlayStoreTrack(value: string): AndroidPlayStoreTrack {
+  const normalized = value.trim().toLowerCase()
+  if (!(ANDROID_PLAY_STORE_TRACKS as readonly string[]).includes(normalized)) {
+    throw new Error(`android-track must be one of: ${ANDROID_PLAY_STORE_TRACKS.join(', ')}`)
+  }
+  return normalized as AndroidPlayStoreTrack
+}
+
+export function parseAndroidPlayStoreReleaseStatus(value: string): AndroidPlayStoreReleaseStatus {
+  const trimmed = value.trim()
+  // Preserve Google Play's camelCase inProgress; accept common aliases.
+  const normalized = trimmed.toLowerCase() === 'inprogress' ? 'inProgress' : trimmed
+  if (!(ANDROID_PLAY_STORE_RELEASE_STATUSES as readonly string[]).includes(normalized)) {
+    throw new Error(`android-release-status must be one of: ${ANDROID_PLAY_STORE_RELEASE_STATUSES.join(', ')}`)
+  }
+  return normalized as AndroidPlayStoreReleaseStatus
+}
+
 /**
  * Convert a file to base64 string
  */
@@ -217,6 +241,8 @@ export function loadCredentialsFromEnv(): Partial<BuildCredentials> {
   const keystoreKeyPassword = readRuntimeEnv('KEYSTORE_KEY_PASSWORD')
   const keystoreStorePassword = readRuntimeEnv('KEYSTORE_STORE_PASSWORD')
   const playConfigJson = readRuntimeEnv('PLAY_CONFIG_JSON')
+  const playStoreTrack = readRuntimeEnv('PLAY_STORE_TRACK')
+  const playStoreReleaseStatus = readRuntimeEnv('PLAY_STORE_RELEASE_STATUS')
   const playStoreInAppUpdatePriority = readRuntimeEnv('PLAY_STORE_IN_APP_UPDATE_PRIORITY')
   const buildOutputUploadEnabled = readRuntimeEnv('BUILD_OUTPUT_UPLOAD_ENABLED')
   const buildOutputRetentionSeconds = readRuntimeEnv('BUILD_OUTPUT_RETENTION_SECONDS')
@@ -284,6 +310,10 @@ export function loadCredentialsFromEnv(): Partial<BuildCredentials> {
     credentials.KEYSTORE_STORE_PASSWORD = keystoreStorePassword
   if (playConfigJson)
     credentials.PLAY_CONFIG_JSON = playConfigJson
+  if (playStoreTrack?.trim())
+    credentials.PLAY_STORE_TRACK = parseAndroidPlayStoreTrack(playStoreTrack)
+  if (playStoreReleaseStatus?.trim())
+    credentials.PLAY_STORE_RELEASE_STATUS = parseAndroidPlayStoreReleaseStatus(playStoreReleaseStatus)
   if (playStoreInAppUpdatePriority) {
     credentials.PLAY_STORE_IN_APP_UPDATE_PRIORITY = String(parseInAppUpdatePriority(playStoreInAppUpdatePriority))
   }
