@@ -15,11 +15,17 @@ import IconPencil from '~icons/heroicons/pencil'
 import IconShield from '~icons/heroicons/shield-check'
 import IconTrash from '~icons/heroicons/trash'
 import IconXMark from '~icons/heroicons/x-mark'
+<<<<<<< HEAD
 import RoleCapabilitiesHint from '~/components/forms/RoleCapabilitiesHint.vue'
+=======
+import ApiKeyHiddenScopeNotice from '~/components/ApiKeyHiddenScopeNotice.vue'
+>>>>>>> origin/main
 import ChannelPermissionOverridesPanel from '~/components/permissions/ChannelPermissionOverridesPanel.vue'
 import {
+  clearApiKeyScopeFilters,
   confirmApiKeyDeletion,
   confirmApiKeyRegeneration,
+  filterApiKeyListRows,
   isApiKeyExpired,
   showApiKeySecretModal,
   sortApiKeyRows,
@@ -298,9 +304,7 @@ function clearScopeFilters(markUserChange = true) {
   if (markUserChange)
     hasUserChangedScopeFilters.value = true
 
-  scopeFilters.value = Object.fromEntries(
-    Object.keys(scopeFilters.value).map(key => [key, false]),
-  )
+  scopeFilters.value = clearApiKeyScopeFilters(scopeFilters.value)
   currentPage.value = 1
 }
 
@@ -622,38 +626,25 @@ async function fetchOrgAndAppNames() {
 
 const searchQuery = ref('')
 
+const apiKeyFilterResult = computed(() => filterApiKeyListRows(keys.value ?? [], {
+  searchQuery: searchQuery.value,
+  orgFilterIds: selectedScopeFilterIds('org'),
+  appFilterIds: selectedScopeFilterIds('app'),
+  getOrgIds: getFilterOrgIds,
+  getAppIds: getDisplayAppIds,
+  getSearchableValues: key => [
+    key.name,
+    key.key,
+    getRoleDisplayName(getHighestRole(key) || ''),
+    formatDisplayOrganizations(key),
+    formatDisplayApps(key),
+  ],
+}))
+
+const hiddenByScopeCount = computed(() => apiKeyFilterResult.value.hiddenByScopeCount)
+
 const filteredAndSortedKeys = computed(() => {
-  let result = keys.value ?? []
-
-  const orgFilterIds = selectedScopeFilterIds('org')
-  if (orgFilterIds.length > 0) {
-    result = result.filter((key) => {
-      const orgIds = getFilterOrgIds(key)
-      return orgFilterIds.some(orgId => orgIds.includes(orgId))
-    })
-  }
-
-  const appFilterIds = selectedScopeFilterIds('app')
-  if (appFilterIds.length > 0) {
-    result = result.filter((key) => {
-      const appIds = getDisplayAppIds(key)
-      return appFilterIds.some(appId => appIds.includes(appId))
-    })
-  }
-
-  // Filter first
-  if (searchQuery.value) {
-    const query = searchQuery.value.toLowerCase()
-    result = result.filter(key =>
-      key.name?.toLowerCase().includes(query)
-      || key.key?.toLowerCase().includes(query)
-      || getRoleDisplayName(getHighestRole(key) || '').toLowerCase().includes(query)
-      || formatDisplayOrganizations(key).toLowerCase().includes(query)
-      || formatDisplayApps(key).toLowerCase().includes(query),
-    )
-  }
-
-  // Then sort based on column state
+  const result = apiKeyFilterResult.value.rows
   return columns.value.length ? sortApiKeyRows(result, columns.value) : result
 })
 
@@ -1675,7 +1666,15 @@ getKeys()
               @update:search="searchQuery = $event"
               @reload="getKeys()"
               @reset="refreshData()"
-            />
+            >
+              <template #table-notice>
+                <ApiKeyHiddenScopeNotice
+                  :hidden-count="hiddenByScopeCount"
+                  :is-loading="isLoading"
+                  @remove-filter="clearScopeFilters()"
+                />
+              </template>
+            </DataTable>
           </div>
           <p class="mt-6 ml-4">
             {{ t('api-keys-are-used-for-cli-and-public-api') }}

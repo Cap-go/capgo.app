@@ -30,7 +30,7 @@ function formatLocalDateTime(date = new Date()): string {
   return `${formatLocalYmd(date)} ${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`
 }
 
-const MAX_ANALYTICS_QUERY_LIMIT = 50_000
+export const MAX_ANALYTICS_QUERY_LIMIT = 50_000
 const INSTALL_SOURCE_COUNT_CACHE_TTL_SECONDS = 60 * 60 * 24 * 30
 
 export function normalizeAnalyticsLimit(limit: unknown, fallback = DEFAULT_LIMIT): number {
@@ -1426,6 +1426,8 @@ export interface ReadUpdateDeliveryTimingEventsCFParams {
   actions: string[]
   /** When set, restrict to these app ids. Omit for platform-wide scans. */
   app_ids?: string[]
+  /** When set, restrict to these version names (blob3). */
+  version_names?: string[]
   limit?: number
   /**
    * Platform metadata-only mode: keep AE's 50k row budget on timed completes.
@@ -1443,6 +1445,13 @@ export function buildUpdateDeliveryTimingEventsCFQuery(params: ReadUpdateDeliver
         params.app_ids.length === 1
           ? `AND index1 = '${escapeSqlString(params.app_ids[0])}'`
           : `AND index1 IN (${params.app_ids.map(id => `'${escapeSqlString(id)}'`).join(', ')})`
+      )
+    : ''
+  const versionFilter = params.version_names?.length
+    ? (
+        params.version_names.length === 1
+          ? `AND blob3 = '${escapeSqlString(params.version_names[0]!)}'`
+          : `AND blob3 IN (${params.version_names.map(name => `'${escapeSqlString(name)}'`).join(', ')})`
       )
     : ''
   // Prefer double1 (written by trackLogsCF) and keep blob4 duration for older rows.
@@ -1464,6 +1473,7 @@ WHERE
   AND timestamp < toDateTime('${formatDateCF(params.end_date)}')
   AND blob2 IN (${actionsList})
   ${appFilter}
+  ${versionFilter}
   ${durationFilter}
 ORDER BY created_at ASC
 LIMIT ${limit}`
@@ -2124,8 +2134,8 @@ export async function getUpdateStatsCF(c: Context): Promise<UpdateStats> {
     const apps = result
       .filter(app => app.get > 0)
       .map((app) => {
-        const totalEvents = app.set + app.get
-        const successRate = Number(Number(totalEvents > 0 ? (app.get / totalEvents) * 100 : 100).toFixed(2))
+        const totalOutcomes = app.set + app.failed
+        const successRate = Number(Number(totalOutcomes > 0 ? (app.set / totalOutcomes) * 100 : 100).toFixed(2))
         return {
           ...app,
           success_rate: successRate,
@@ -2140,8 +2150,8 @@ export async function getUpdateStatsCF(c: Context): Promise<UpdateStats> {
       return acc
     }, { failed: 0, set: 0, get: 0 })
 
-    const totalEvents = total.set + total.get
-    const totalSuccessRate = totalEvents > 0 ? (total.get / totalEvents) * 100 : 100
+    const totalOutcomes = total.set + total.failed
+    const totalSuccessRate = totalOutcomes > 0 ? (total.set / totalOutcomes) * 100 : 100
 
     return {
       apps,
@@ -3086,7 +3096,7 @@ function buildBreakdownMetrics(
 }
 
 export async function getPublicLiveUpdateMetricsCF(c: Context, referenceDate = new Date()): Promise<PublicLiveUpdateMetrics> {
-  if (!c.env.APP_LOG || !c.env.DEVICE_USAGE || !c.env.DEVICE_INFO || !getEnv(c, 'CF_ANALYTICS_TOKEN') || !getEnv(c, 'CF_ACCOUNT_ANALYTICS_ID'))
+  if (!c.env.APP_LOG || !c.env.VERSION_USAGE || !c.env.DEVICE_USAGE || !c.env.DEVICE_INFO || !getEnv(c, 'CF_ANALYTICS_TOKEN') || !getEnv(c, 'CF_ACCOUNT_ANALYTICS_ID'))
     throw new Error('Public live update metric bindings are unavailable')
 
   const end = new Date(Date.UTC(referenceDate.getUTCFullYear(), referenceDate.getUTCMonth(), referenceDate.getUTCDate()))
@@ -3095,17 +3105,17 @@ export async function getPublicLiveUpdateMetricsCF(c: Context, referenceDate = n
   const window = `timestamp >= toDateTime('${formatDateCF(start)}') AND timestamp < toDateTime('${formatDateCF(end)}')`
   const failureActions = PUBLIC_FAILURE_ACTIONS.map(action => `'${action}'`).join(', ')
   const day = `formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d')`
-  const outcomeBase = `SELECT ${day} AS date, index1 AS app_id, blob1 AS device_id, max(if(blob2 = 'set', 1, 0)) AS succeeded, max(if(blob2 IN (${failureActions}), 1, 0)) AS failed, argMax(blob5, timestamp) AS platform, argMax(blob6, timestamp) AS country, argMax(blob7, timestamp) AS plugin_version FROM app_log WHERE ${window} AND (blob2 = 'set' OR blob2 IN (${failureActions})) GROUP BY date, app_id, device_id`
-  const outcomesQuery = `SELECT date, sum(succeeded) AS successes, sum(if(succeeded = 0, failed, 0)) AS failures FROM (${outcomeBase}) GROUP BY date`
+  const appLogOutcomeFilter = `(blob2 = 'set' OR blob2 IN (${failureActions}))`
+  const dailySuccessQuery = `SELECT ${day} AS date, sum(if(blob3 = 'install', 1, 0)) AS installs, sum(if(blob3 = 'fail', 1, 0)) AS fails FROM version_usage WHERE ${window} GROUP BY date ORDER BY date ASC`
   const failuresQuery = `SELECT action, count() AS devices FROM (SELECT ${day} AS date, blob2 AS action, index1 AS app_id, blob1 AS device_id FROM app_log WHERE ${window} AND blob2 IN (${failureActions}) GROUP BY date, action, app_id, device_id) GROUP BY action`
   const platformsShareQuery = `SELECT platform, count() AS devices FROM (SELECT double1 AS platform, index1 AS app_id, blob1 AS device_id FROM device_usage WHERE ${window} AND double1 IN (0.0, 1.0, 2.0) GROUP BY platform, app_id, device_id) GROUP BY platform`
-  const platformsOutcomeQuery = `SELECT platform AS key, sum(succeeded) AS successes, sum(if(succeeded = 0, failed, 0)) AS failures FROM (${outcomeBase}) WHERE platform IN ('ios', 'android', 'electron') GROUP BY platform`
+  const platformsOutcomeQuery = `SELECT blob5 AS key, sum(if(blob2 = 'set', 1, 0)) AS successes, sum(if(blob2 IN (${failureActions}), 1, 0)) AS failures FROM app_log WHERE ${window} AND ${appLogOutcomeFilter} AND blob5 IN ('ios', 'android', 'electron') GROUP BY blob5`
   const platformsFailureQuery = `SELECT platform AS key, action, count() AS devices FROM (SELECT ${day} AS date, index1 AS app_id, blob1 AS device_id, blob2 AS action, argMax(blob5, timestamp) AS platform FROM app_log WHERE ${window} AND blob2 IN (${failureActions}) GROUP BY date, app_id, device_id, action) WHERE platform IN ('ios', 'android', 'electron') GROUP BY platform, action`
   const countriesShareQuery = `SELECT country AS key, count() AS devices FROM (SELECT index1 AS app_id, blob1 AS device_id, argMax(blob10, timestamp) AS country FROM device_info WHERE ${window} AND blob10 != '' GROUP BY app_id, device_id) WHERE country != '' GROUP BY country`
-  const countriesOutcomeQuery = `SELECT country AS key, sum(succeeded) AS successes, sum(if(succeeded = 0, failed, 0)) AS failures FROM (${outcomeBase}) WHERE country != '' GROUP BY country`
+  const countriesOutcomeQuery = `SELECT blob6 AS key, sum(if(blob2 = 'set', 1, 0)) AS successes, sum(if(blob2 IN (${failureActions}), 1, 0)) AS failures FROM app_log WHERE ${window} AND ${appLogOutcomeFilter} AND blob6 != '' GROUP BY blob6`
   const countriesFailureQuery = `SELECT country AS key, action, count() AS devices FROM (SELECT ${day} AS date, index1 AS app_id, blob1 AS device_id, blob2 AS action, argMax(blob6, timestamp) AS country FROM app_log WHERE ${window} AND blob2 IN (${failureActions}) GROUP BY date, app_id, device_id, action) WHERE country != '' GROUP BY country, action`
   const versionsShareQuery = `SELECT version AS key, count() AS devices FROM (SELECT index1 AS app_id, blob1 AS device_id, argMax(blob3, timestamp) AS version FROM device_info WHERE ${window} AND blob3 != '' GROUP BY app_id, device_id) WHERE version != '' GROUP BY version`
-  const versionsOutcomeQuery = `SELECT plugin_version AS key, sum(succeeded) AS successes, sum(if(succeeded = 0, failed, 0)) AS failures FROM (${outcomeBase}) WHERE plugin_version != '' GROUP BY plugin_version`
+  const versionsOutcomeQuery = `SELECT blob7 AS key, sum(if(blob2 = 'set', 1, 0)) AS successes, sum(if(blob2 IN (${failureActions}), 1, 0)) AS failures FROM app_log WHERE ${window} AND ${appLogOutcomeFilter} AND blob7 != '' GROUP BY blob7`
   const versionsFailureQuery = `SELECT plugin_version AS key, action, count() AS devices FROM (SELECT ${day} AS date, index1 AS app_id, blob1 AS device_id, blob2 AS action, argMax(blob7, timestamp) AS plugin_version FROM app_log WHERE ${window} AND blob2 IN (${failureActions}) GROUP BY date, app_id, device_id, action) WHERE plugin_version != '' GROUP BY plugin_version, action`
 
   try {
@@ -3122,7 +3132,7 @@ export async function getPublicLiveUpdateMetricsCF(c: Context, referenceDate = n
       versionOutcomeRows,
       versionFailureRows,
     ] = await Promise.all([
-      runQueryToCFA<{ date: string, successes: number, failures: number }>(c, outcomesQuery),
+      runQueryToCFA<{ date: string, installs: number, fails: number }>(c, dailySuccessQuery),
       runQueryToCFA<{ action: string, devices: number }>(c, failuresQuery),
       runQueryToCFA<{ platform: number, devices: number }>(c, platformsShareQuery),
       runQueryToCFA<{ key: string, successes: number, failures: number }>(c, platformsOutcomeQuery),
@@ -3135,15 +3145,15 @@ export async function getPublicLiveUpdateMetricsCF(c: Context, referenceDate = n
       runQueryToCFA<{ key: string, action: string, devices: number }>(c, versionsFailureQuery),
     ])
     const daily = outcomeRows.map((row) => {
-      const successes = Number(row.successes) || 0
-      const failures = Number(row.failures) || 0
-      const outcomes = successes + failures
-      return { date: row.date, success_rate: outcomes ? roundPublicPercent((successes / outcomes) * 100) : 0 }
+      const installs = Number(row.installs) || 0
+      const fails = Number(row.fails) || 0
+      const outcomes = installs + fails
+      return { date: row.date, success_rate: outcomes ? roundPublicPercent((installs / outcomes) * 100) : 0 }
     }).sort((a, b) => a.date.localeCompare(b.date))
-    const totalSuccesses = outcomeRows.reduce((sum, row) => sum + (Number(row.successes) || 0), 0)
-    const totalFailures = outcomeRows.reduce((sum, row) => sum + (Number(row.failures) || 0), 0)
-    const totalOutcomes = totalSuccesses + totalFailures
-    const success_rate = totalOutcomes ? roundPublicPercent((totalSuccesses / totalOutcomes) * 100) : 0
+    const totalInstalls = outcomeRows.reduce((sum, row) => sum + (Number(row.installs) || 0), 0)
+    const totalFails = outcomeRows.reduce((sum, row) => sum + (Number(row.fails) || 0), 0)
+    const totalOutcomes = totalInstalls + totalFails
+    const success_rate = totalOutcomes ? roundPublicPercent((totalInstalls / totalOutcomes) * 100) : 0
     const failureTotal = failureRows.reduce((sum, row) => sum + (Number(row.devices) || 0), 0)
     const failures = [...failureRows]
       .map(row => ({ reason: row.action, devices: Number(row.devices) || 0 }))

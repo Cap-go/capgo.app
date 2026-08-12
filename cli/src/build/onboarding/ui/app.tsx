@@ -3150,6 +3150,17 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
   if (step === 'requesting-build')
     return <FullscreenBuildOutput title="Building..." lines={buildOutput} terminalRows={terminalRows} />
 
+  if (step === 'build-log-view') {
+    return (
+      <FullscreenBuildOutput
+        title="Build failed"
+        lines={buildOutput}
+        terminalRows={terminalRows}
+        onExit={() => setStep('ai-analysis-prompt')}
+      />
+    )
+  }
+
   // Size gate (resize-reactive): below the enforced floor, render the resize
   // prompt from THIS mounted component so all in-progress state (current step,
   // entered values) is preserved — a shrink shows the prompt, a re-grow shows
@@ -5084,6 +5095,10 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
           <AiAnalysisPromptStep
             dense={dense}
             onChange={async (value) => {
+              if (value === 'logs') {
+                setStep('build-log-view')
+                return
+              }
               if (value === 'support') {
                 await handleSupport('ai-analysis-prompt')
                 return

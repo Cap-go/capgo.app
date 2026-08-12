@@ -7,7 +7,7 @@ import { createClient } from '@supabase/supabase-js'
 import subset from 'semver/ranges/subset'
 import { ref } from 'vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
-import { getFirstTierCreditUnitPricing, sortCreditPricingSteps } from './creditPricing'
+import { sortCreditPricingSteps } from './creditPricing'
 
 let supaClient: SupabaseClient<Database> = null as any
 
@@ -525,7 +525,6 @@ export async function getPlans(): Promise<Database['public']['Tables']['plans'][
   }
 }
 
-export type CreditUnitPricing = Partial<Record<CreditMetricType, number>>
 export type UsageCreditLedgerRow = Database['public']['Views']['usage_credit_ledger']['Row']
 
 export interface CreditTierUsage {
@@ -588,17 +587,6 @@ export async function getCreditPricingSteps(orgId?: string): Promise<CreditPrici
   catch (err) {
     console.error('getCreditPricingSteps error', err)
     return []
-  }
-}
-
-export async function getCreditUnitPricing(orgId?: string): Promise<CreditUnitPricing> {
-  try {
-    const steps = await getCreditPricingSteps(orgId)
-    return getFirstTierCreditUnitPricing(steps)
-  }
-  catch (err) {
-    console.error('getCreditUnitPricing error', err)
-    return {}
   }
 }
 

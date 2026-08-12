@@ -1,38 +1,19 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
+import { useBillingPaidAt } from '~/composables/useBillingPaidAt'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
-import { resolveBillingPaidAt, shouldShowExpiredTrialCopy } from '~/services/paymentRequired'
-import { useSupabase } from '~/services/supabase'
+import { shouldShowExpiredTrialCopy } from '~/services/paymentRequired'
 import { useOrganizationStore } from '~/stores/organization'
 
 const { t } = useI18n()
 const router = useRouter()
 const hideExternalPurchaseFlows = isNativeAppStoreContext()
 const organizationStore = useOrganizationStore()
-const paidAt = ref<string | null | undefined>(undefined)
+const billingOrgId = computed(() => organizationStore.currentOrganization?.gid)
+const { paidAt } = useBillingPaidAt(billingOrgId, hideExternalPurchaseFlows)
 const showExpiredTrialCopy = computed(() => shouldShowExpiredTrialCopy(hideExternalPurchaseFlows, paidAt.value))
-
-let billingLookupRun = 0
-watch(() => organizationStore.currentOrganization?.gid, async (orgId) => {
-  const currentRun = ++billingLookupRun
-  paidAt.value = undefined
-
-  if (hideExternalPurchaseFlows || !orgId)
-    return
-
-  const { data, error } = await useSupabase()
-    .from('orgs')
-    .select('stripe_info(paid_at)')
-    .eq('id', orgId)
-    .maybeSingle()
-
-  if (currentRun !== billingLookupRun || error || !data)
-    return
-
-  paidAt.value = resolveBillingPaidAt(data.stripe_info)
-}, { immediate: true })
 
 function goToPlans() {
   router.push('/settings/organization/plans')

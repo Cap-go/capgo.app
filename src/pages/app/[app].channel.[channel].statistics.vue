@@ -12,6 +12,7 @@ import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconAlertTriangle from '~icons/lucide/alert-triangle'
 import IconCheckCircle from '~icons/lucide/check-circle'
 import IconTrendingUp from '~icons/lucide/trending-up'
+import BundleInstallStatsPanel from '~/components/dashboard/BundleInstallStatsPanel.vue'
 import PeriodDaySelector from '~/components/dashboard/PeriodDaySelector.vue'
 import { createTooltipConfig } from '~/services/chartTooltip'
 import { formatDistanceToNow, formatLocalDate, formatLocalDateShort } from '~/services/date'
@@ -781,6 +782,16 @@ watchEffect(async () => {
               </span>
             </div>
           </div>
+        </div>
+
+        <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+          <BundleInstallStatsPanel
+            :app-id="packageId"
+            :channel-id="id"
+            :days="days"
+            hide-period-selector
+            compact
+          />
         </div>
       </div>
     </div>

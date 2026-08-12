@@ -72,6 +72,36 @@ describe('native observe stats helpers', () => {
     expect(response.releaseMarkers).toHaveLength(1)
   })
 
+  it.concurrent('returns null issue-free rate when no devices are tracked', () => {
+    const response = nativeObserveStatsTestUtils.buildNativeObserveResponse({
+      labels: ['2026-07-01'],
+      days: 1,
+      start: '2026-07-01T00:00:00.000Z',
+      end: '2026-07-01T23:59:59.999Z',
+      dailyRows: [],
+      actionRows: [],
+      versionRows: [
+        { version_name: '1.0.0', events: 0, devices: 0, issue_count: 0, affected_devices: 0, launch_p90_ms: null, webview_load_p90_ms: null },
+      ],
+      overviewRow: {
+        events: 0,
+        devices: 0,
+        issue_count: 0,
+        affected_devices: 0,
+        launch_timeout_count: 0,
+        launch_p50_ms: null,
+        launch_p90_ms: null,
+        webview_load_p50_ms: null,
+        webview_load_p90_ms: null,
+      },
+      releaseMarkers: [],
+    })
+
+    expect(response.overview.total_devices).toBe(0)
+    expect(response.overview.issue_free_rate).toBeNull()
+    expect(response.versions[0].issue_free_rate).toBeNull()
+  })
+
   it.concurrent('builds plugin version aggregates without global statistics', () => {
     expect(nativeObserveStatsTestUtils.buildNativeObservePluginResponse([
       { plugin_version: '7.0.0', devices: 3, total_devices: 4 },
