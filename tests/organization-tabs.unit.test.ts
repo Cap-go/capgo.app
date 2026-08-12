@@ -50,6 +50,8 @@ describe('organization settings tab groups', () => {
     expect(findActiveTabKey(organizationTabs, '/settings/organization/security')).toBe(TEAM_TAB_KEY)
     expect(findActiveTabKey(organizationTabs, '/settings/organization/plans')).toBe(BILLING_TAB_KEY)
     expect(findActiveTabKey(organizationTabs, '/settings/organization/credits')).toBe(BILLING_TAB_KEY)
+    expect(findActiveTabKey(organizationTabs, '/settings/organization/Credits')).toBe(BILLING_TAB_KEY)
+    expect(findActiveTabKey(organizationTabs, '/settings/organization/Members')).toBe(TEAM_TAB_KEY)
     expect(findActiveTabKey(organizationTabs, '/settings/organization')).toBe('/settings/organization')
     expect(findActiveTabKey(organizationTabs, '/settings/organization/webhooks')).toBe('/settings/organization/webhooks')
   })
@@ -59,6 +61,7 @@ describe('organization settings tab groups', () => {
     const team = tabs.find(tab => tab.key === TEAM_TAB_KEY)
 
     expect(findActiveChildKey(team, '/settings/organization/groups/new')).toBe('/settings/organization/groups')
+    expect(findActiveChildKey(team, '/settings/organization/Groups/new')).toBe('/settings/organization/groups')
     expect(pathMatchesTab(team!, '/settings/organization/members')).toBe(true)
     expect(pathMatchesTab(team!, '/settings/organization/plans')).toBe(false)
   })

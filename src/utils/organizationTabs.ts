@@ -11,8 +11,8 @@ export function cloneTabs(tabs: Tab[]): Tab[] {
 }
 
 function pathMatchesKey(path: string, key: string): boolean {
-  const normalizedPath = path.replace(/\/$/, '')
-  const normalizedKey = key.replace(/\/$/, '')
+  const normalizedPath = path.replace(/\/$/, '').toLowerCase()
+  const normalizedKey = key.replace(/\/$/, '').toLowerCase()
   return normalizedPath === normalizedKey || normalizedPath.startsWith(`${normalizedKey}/`)
 }
 
