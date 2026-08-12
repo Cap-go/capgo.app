@@ -65,6 +65,9 @@ export const RBAC_ORG_ROLE_I18N_KEYS: Record<string, string> = {
   app_uploader: 'role-app-uploader',
   app_reader: 'role-app-reader',
   channel_admin: 'role-channel-admin',
+  channel_developer: 'role-channel-developer',
+  channel_preview: 'role-channel-preview',
+  channel_uploader: 'role-channel-uploader',
   channel_reader: 'role-channel-reader',
 }
 

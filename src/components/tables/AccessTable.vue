@@ -8,6 +8,7 @@ import { toast } from 'vue-sonner'
 import IconShield from '~icons/heroicons/shield-check'
 import IconTrash from '~icons/heroicons/trash'
 import IconWrench from '~icons/heroicons/wrench'
+import RoleCapabilitiesHint from '~/components/forms/RoleCapabilitiesHint.vue'
 import ChannelAccessPanel from '~/components/permissions/ChannelAccessPanel.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { formatDate } from '~/services/date'
@@ -98,7 +99,6 @@ const selectedRoleOptions = computed(() => selectedRoleScope.value === 'channel'
 const assignRoleOptions = computed(() => assignAccessForm.value.scope_type === 'channel' ? channelRoleOptions.value : appRoleOptions.value)
 const channelByRbacId = computed(() => new Map(channels.value.map(channel => [channel.rbac_id, channel])))
 const filteredPrincipalOptions = computed(() => principalOptions.value.filter(option => option.type === assignAccessForm.value.principal_type))
-const selectedAssignRole = computed(() => assignRoleOptions.value.find(role => role.name === assignAccessForm.value.role_name))
 const canAssignAppScope = computed(() => appRoleOptions.value.length > 0)
 const canAssignChannelScope = computed(() => channels.value.length > 0 && channelRoleOptions.value.length > 0)
 const hasValidAssignRole = computed(() => assignRoleOptions.value.some(role => role.name === assignAccessForm.value.role_name))
@@ -115,10 +115,6 @@ const selectControlClass = 'd-select d-select-bordered min-h-11 w-full rounded-m
 function getDefaultAssignRoleName(scopeType: 'app' | 'channel') {
   const options = scopeType === 'channel' ? channelRoleOptions.value : appRoleOptions.value
   return options[0]?.name ?? ''
-}
-
-function getRoleDescription(role?: Role) {
-  return role?.description ?? ''
 }
 
 function resetAssignScopeDefaults(scopeType: 'app' | 'channel') {
@@ -671,28 +667,26 @@ watch(
       <div class="rounded-md border border-slate-200 bg-slate-50/80 p-3 dark:border-slate-700 dark:bg-slate-900/60">
         <div class="space-y-2">
           <div v-for="option in selectedRoleOptions" :key="option.id" class="form-control">
-            <label
-              class="flex min-h-14 cursor-pointer items-start gap-3 rounded-md border p-3 text-left transition-colors"
-              :class="selectedRole === option.name
-                ? 'border-primary bg-primary/5 ring-1 ring-primary/30 dark:bg-primary/10'
-                : 'border-slate-200 bg-white hover:border-primary/60 dark:border-slate-700 dark:bg-slate-950'"
-            >
-              <input
-                v-model="selectedRole"
-                type="radio"
-                name="access-role"
-                :value="option.name"
-                class="radio radio-primary radio-sm mt-0.5"
+            <div class="flex items-center gap-2">
+              <label
+                class="flex min-h-14 min-w-0 flex-1 cursor-pointer items-center gap-3 rounded-md border p-3 text-left transition-colors"
+                :class="selectedRole === option.name
+                  ? 'border-primary bg-primary/5 ring-1 ring-primary/30 dark:bg-primary/10'
+                  : 'border-slate-200 bg-white hover:border-primary/60 dark:border-slate-700 dark:bg-slate-950'"
               >
-              <span class="min-w-0">
-                <span class="block text-sm font-medium text-slate-900 dark:text-slate-100">
+                <input
+                  v-model="selectedRole"
+                  type="radio"
+                  name="access-role"
+                  :value="option.name"
+                  class="radio radio-primary radio-sm"
+                >
+                <span class="text-sm font-medium text-slate-900 dark:text-slate-100">
                   {{ getRoleDisplayName(option.name) }}
                 </span>
-                <span v-if="getRoleDescription(option)" class="mt-1 block text-sm leading-5 text-slate-500 dark:text-slate-400">
-                  {{ getRoleDescription(option) }}
-                </span>
-              </span>
-            </label>
+              </label>
+              <RoleCapabilitiesHint :role-name="option.name" />
+            </div>
           </div>
         </div>
       </div>
@@ -853,21 +847,28 @@ watch(
           <label for="assign-role" class="label">
             <span class="label-text">{{ assignAccessForm.scope_type === 'channel' ? t('select-channel-role') : t('select-app-role') }}</span>
           </label>
-          <select
-            id="assign-role"
-            v-model="assignAccessForm.role_name"
-            :class="selectControlClass"
-            aria-describedby="assign-role-helper"
-          >
-            <option value="">
-              {{ t('select-role') }}
-            </option>
-            <option v-for="role in assignRoleOptions" :key="role.id" :value="role.name">
-              {{ getRoleDisplayName(role.name) }}
-            </option>
-          </select>
+          <div class="flex items-center gap-2">
+            <select
+              id="assign-role"
+              v-model="assignAccessForm.role_name"
+              :class="selectControlClass"
+              class="min-w-0 flex-1"
+              aria-describedby="assign-role-helper"
+            >
+              <option value="">
+                {{ t('select-role') }}
+              </option>
+              <option v-for="role in assignRoleOptions" :key="role.id" :value="role.name">
+                {{ getRoleDisplayName(role.name) }}
+              </option>
+            </select>
+            <RoleCapabilitiesHint
+              v-if="assignAccessForm.role_name"
+              :role-name="assignAccessForm.role_name"
+            />
+          </div>
           <p id="assign-role-helper" class="mt-1.5 text-xs leading-5 text-slate-500 dark:text-slate-400">
-            {{ getRoleDescription(selectedAssignRole) || t('assign-access-role-helper') }}
+            {{ t('assign-access-role-helper') }}
           </p>
         </div>
       </div>
