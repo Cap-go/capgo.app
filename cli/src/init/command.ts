@@ -2941,6 +2941,10 @@ async function addCodeStep(orgId: string, apikey: string, appId: string) {
 
         if (choice === 'manual') {
           pLog.info(`Add CapacitorUpdater.notifyAppReady() where your app starts. Follow the framework-specific guide: ${notifyAppReadyDocsUrl}`)
+          const codeAdded = await pConfirm({ message: 'Have you added CapacitorUpdater.notifyAppReady() to your app startup?' })
+          await cancelCommand(codeAdded, orgId, apikey)
+          if (!codeAdded)
+            continue
           return
         }
 
