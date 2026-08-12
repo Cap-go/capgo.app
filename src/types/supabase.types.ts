@@ -4711,6 +4711,10 @@ export type Database = {
         }[]
       }
       group_max_role_priority: { Args: { p_group_id: string }; Returns: number }
+      groups_is_insert_returning_row: {
+        Args: { p_created_by: string; p_id: string }
+        Returns: boolean
+      }
       has_2fa_enabled:
         | { Args: never; Returns: boolean }
         | { Args: { user_id: string }; Returns: boolean }

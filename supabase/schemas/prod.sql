@@ -9335,6 +9335,49 @@ $$;
 ALTER FUNCTION "public"."group_max_role_priority"("p_group_id" "uuid") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."groups_is_insert_returning_row"("p_id" "uuid", "p_created_by" "uuid") RETURNS boolean
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  marker text;
+  uid uuid;
+BEGIN
+  uid := (SELECT auth.uid());
+  IF p_id IS NULL OR p_created_by IS NULL OR uid IS NULL OR p_created_by IS DISTINCT FROM uid THEN
+    RETURN false;
+  END IF;
+  marker := pg_catalog.current_setting('capgo.groups_inserting', true);
+  RETURN marker IS NOT NULL AND marker <> '' AND marker = p_id::text;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."groups_is_insert_returning_row"("p_id" "uuid", "p_created_by" "uuid") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."groups_is_insert_returning_row"("p_id" "uuid", "p_created_by" "uuid") IS 'VOLATILE: true only for the in-flight INSERT row marked by groups_mark_inserting when created_by matches JWT uid.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."groups_mark_inserting"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+BEGIN
+  PERFORM pg_catalog.set_config('capgo.groups_inserting', NEW.id::text, true);
+  RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."groups_mark_inserting"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."groups_mark_inserting"() IS 'BEFORE INSERT: store new group id in a transaction-local GUC for INSERT ... RETURNING SELECT RLS.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."guard_owner_org_reassignment"() RETURNS "trigger"
     LANGUAGE "plpgsql"
     SET "search_path" TO ''
@@ -14708,7 +14751,7 @@ COMMENT ON FUNCTION "public"."readable_app_version_ids"() IS 'Returns app-versio
 
 
 CREATE OR REPLACE FUNCTION "public"."readable_group_ids"() RETURNS "uuid"[]
-    LANGUAGE "sql" STABLE SECURITY DEFINER
+    LANGUAGE "sql" SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
   WITH direct_group_ids AS (
@@ -21968,6 +22011,10 @@ CREATE OR REPLACE TRIGGER "global_stats_creates_on_version_insert" AFTER INSERT 
 
 
 
+CREATE OR REPLACE TRIGGER "groups_mark_inserting" BEFORE INSERT ON "public"."groups" FOR EACH ROW EXECUTE FUNCTION "public"."groups_mark_inserting"();
+
+
+
 CREATE OR REPLACE TRIGGER "guard_owner_org_reassignment_app_versions" BEFORE UPDATE OF "owner_org" ON "public"."app_versions" FOR EACH ROW EXECUTE FUNCTION "public"."guard_owner_org_reassignment"();
 
 
@@ -23466,7 +23513,11 @@ CREATE POLICY "groups_insert" ON "public"."groups" FOR INSERT TO "authenticated"
 
 
 
-CREATE POLICY "groups_select" ON "public"."groups" FOR SELECT TO "anon", "authenticated" USING (("id" = ANY (COALESCE(( SELECT "public"."readable_group_ids"() AS "readable_group_ids"), '{}'::"uuid"[]))));
+CREATE POLICY "groups_select" ON "public"."groups" FOR SELECT TO "anon", "authenticated" USING ((("id" = ANY (COALESCE(( SELECT "public"."readable_group_ids"() AS "readable_group_ids"), '{}'::"uuid"[]))) OR "public"."groups_is_insert_returning_row"("id", "created_by")));
+
+
+
+COMMENT ON POLICY "groups_select" ON "public"."groups" IS 'Members/admins see groups via readable_group_ids() (rank-bounded). INSERT ... RETURNING also allows the transaction-local insert marker for the creator row.';
 
 
 
@@ -25001,6 +25052,18 @@ GRANT ALL ON FUNCTION "public"."get_weekly_stats"("app_id" character varying) TO
 
 REVOKE ALL ON FUNCTION "public"."group_max_role_priority"("p_group_id" "uuid") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."group_max_role_priority"("p_group_id" "uuid") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."groups_is_insert_returning_row"("p_id" "uuid", "p_created_by" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."groups_is_insert_returning_row"("p_id" "uuid", "p_created_by" "uuid") TO "service_role";
+GRANT ALL ON FUNCTION "public"."groups_is_insert_returning_row"("p_id" "uuid", "p_created_by" "uuid") TO "anon";
+GRANT ALL ON FUNCTION "public"."groups_is_insert_returning_row"("p_id" "uuid", "p_created_by" "uuid") TO "authenticated";
+
+
+
+REVOKE ALL ON FUNCTION "public"."groups_mark_inserting"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."groups_mark_inserting"() TO "service_role";
 
 
 
