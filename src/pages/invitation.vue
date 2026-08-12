@@ -12,6 +12,7 @@ import Toggle from '~/components/Toggle.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { useSupabase } from '~/services/supabase'
 import { openSupport } from '~/services/support'
+import { completeInviteSessionHandoff } from '~/utils/invites'
 
 const { t } = useI18n()
 const route = useRoute('/invitation')
@@ -137,13 +138,13 @@ async function submitForm() {
       throw new Error(error.message || 'Failed to accept invitation')
     }
 
-    // Store tokens in local storage or cookies
     if (data?.access_token && data?.refresh_token) {
-      // Login successful, redirect to dashboard
-      // window.location.href = '/dashboard';
-      router.push(`/login?access_token=${data.access_token}&refresh_token=${data.refresh_token}`)
-
-      // MagicCapgo12@#
+      const supabase = useSupabase()
+      await completeInviteSessionHandoff(
+        tokens => supabase.auth.setSession(tokens),
+        () => router.replace('/login'),
+        data,
+      )
     }
     else {
       captchaComponent.value?.reset()

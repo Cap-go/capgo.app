@@ -69,3 +69,30 @@ export function shouldAttemptExistingUserInviteNotification(
 
   return true
 }
+
+interface InviteSessionTokens {
+  access_token: string
+  refresh_token: string
+}
+
+/**
+ * Establish the invitee session in-page, then go to /login without tokens.
+ *
+ * Putting access_token/refresh_token on /login makes login.vue show the
+ * leaked-session warning unless document.referrer is a Capgo host. SPA
+ * navigation from /invitation does not update the referrer (it stays the
+ * email client or empty), so invitees would always see that prompt.
+ */
+export async function completeInviteSessionHandoff(
+  setSession: (tokens: InviteSessionTokens) => Promise<{ error: { message: string } | null }>,
+  goToLogin: () => Promise<unknown> | unknown,
+  tokens: InviteSessionTokens,
+): Promise<void> {
+  const { error } = await setSession({
+    access_token: tokens.access_token,
+    refresh_token: tokens.refresh_token,
+  })
+  if (error)
+    throw new Error(error.message)
+  await goToLogin()
+}
