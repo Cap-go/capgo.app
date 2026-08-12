@@ -192,11 +192,11 @@ const generatedAppId = computed(() => createdApp.value?.app_id || manualAppId.va
 const aiHelpPrompt = computed(() => {
   const resolvedAppId = createdApp.value?.app_id || generatedAppId.value || '[APP_ID]'
   const resolvedAppName = createdApp.value?.name?.trim() || appName.value.trim() || resolvedAppId
-  const appStatus = props.preOrg
-    ? t('app-onboarding-v2-ai-help-status')
-    : createdApp.value?.existing_app
-      ? t('app-onboarding-ai-help-status-existing')
-      : t('app-onboarding-ai-help-status-new')
+  let appStatus = t('app-onboarding-ai-help-status-new')
+  if (props.preOrg)
+    appStatus = t('app-onboarding-v2-ai-help-status')
+  else if (createdApp.value?.existing_app)
+    appStatus = t('app-onboarding-ai-help-status-existing')
 
   return t('app-onboarding-ai-help-prompt', {
     appName: resolvedAppName,
@@ -1388,7 +1388,7 @@ watch(appName, (value) => {
                         type="url"
                         @input="onStoreUrlInput"
                       >
-                      <button class="d-btn min-h-12 shrink-0" :class="whiteCardPrimaryButtonClass()" :disabled="isImportingStore || !storeUrl" @click="importStoreMetadata()">
+                      <button type="button" class="d-btn min-h-12 shrink-0" :class="whiteCardPrimaryButtonClass()" :disabled="isImportingStore || !storeUrl" @click="importStoreMetadata()">
                         <IconLoader v-if="isImportingStore" class="h-4 w-4 animate-spin" />
                         <IconSparkles v-else class="h-4 w-4" />
                         <span>{{ t('app-onboarding-store-import-button') }}</span>

@@ -43,9 +43,9 @@ function onFileSelected(event: Event) {
 
 <template>
   <div>
-    <p class="text-sm font-medium text-slate-800 dark:text-slate-200">
+    <label for="app-onboarding-icon-input" class="text-sm font-medium text-slate-800 dark:text-slate-200">
       {{ label }}
-    </p>
+    </label>
     <div class="mt-2 flex min-h-11 items-center gap-3">
       <button
         type="button"
@@ -59,6 +59,7 @@ function onFileSelected(event: Event) {
       </span>
     </div>
     <input
+      id="app-onboarding-icon-input"
       ref="fileInput"
       type="file"
       accept="image/*"
