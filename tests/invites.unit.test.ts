@@ -42,7 +42,7 @@ describe('completeInviteSessionHandoff', () => {
     expect(takeInviteSessionHandoff(storage)).toBeNull()
   })
 
-  it.concurrent('still navigates when stash storage throws', async () => {
+  it.concurrent('does not navigate when stash storage throws', async () => {
     const goToLogin = vi.fn(async () => {})
     const storage = {
       setItem: () => {
@@ -50,12 +50,25 @@ describe('completeInviteSessionHandoff', () => {
       },
     }
 
-    await completeInviteSessionHandoff(goToLogin, tokens, storage)
-    expect(goToLogin).toHaveBeenCalledTimes(1)
+    await expect(completeInviteSessionHandoff(goToLogin, tokens, storage))
+      .rejects
+      .toThrow('quota')
+    expect(goToLogin).not.toHaveBeenCalled()
   })
 
   it.concurrent('ignores malformed stashed payloads', () => {
     const storage = createStorage({ 'capgo-invite-session-handoff': '{not-json' })
+    expect(takeInviteSessionHandoff(storage)).toBeNull()
+  })
+
+  it.concurrent('returns null when session storage is unavailable', () => {
+    expect(takeInviteSessionHandoff(null)).toBeNull()
+    const storage = {
+      getItem: () => {
+        throw new Error('blocked')
+      },
+      removeItem: () => {},
+    }
     expect(takeInviteSessionHandoff(storage)).toBeNull()
   })
 })

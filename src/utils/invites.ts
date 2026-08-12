@@ -83,6 +83,15 @@ interface InviteSessionStorage {
 
 const INVITE_SESSION_HANDOFF_KEY = 'capgo-invite-session-handoff'
 
+function readSessionStorage(): InviteSessionStorage | null {
+  try {
+    return globalThis.sessionStorage
+  }
+  catch {
+    return null
+  }
+}
+
 /**
  * Same-origin stash for invite → /login session handoff.
  *
@@ -92,8 +101,11 @@ const INVITE_SESSION_HANDOFF_KEY = 'capgo-invite-session-handoff'
  */
 export function stashInviteSessionHandoff(
   tokens: InviteSessionTokens,
-  storage: Pick<InviteSessionStorage, 'setItem'> = globalThis.sessionStorage,
+  storage: Pick<InviteSessionStorage, 'setItem'> | null = readSessionStorage(),
 ) {
+  if (!storage)
+    throw new Error('session_storage_unavailable')
+
   storage.setItem(INVITE_SESSION_HANDOFF_KEY, JSON.stringify({
     access_token: tokens.access_token,
     refresh_token: tokens.refresh_token,
@@ -101,14 +113,17 @@ export function stashInviteSessionHandoff(
 }
 
 export function takeInviteSessionHandoff(
-  storage: Pick<InviteSessionStorage, 'getItem' | 'removeItem'> = globalThis.sessionStorage,
+  storage: Pick<InviteSessionStorage, 'getItem' | 'removeItem'> | null = readSessionStorage(),
 ): InviteSessionTokens | null {
-  const raw = storage.getItem(INVITE_SESSION_HANDOFF_KEY)
-  storage.removeItem(INVITE_SESSION_HANDOFF_KEY)
-  if (!raw)
-    return null
-
   try {
+    if (!storage)
+      return null
+
+    const raw = storage.getItem(INVITE_SESSION_HANDOFF_KEY)
+    storage.removeItem(INVITE_SESSION_HANDOFF_KEY)
+    if (!raw)
+      return null
+
     const parsed = JSON.parse(raw) as Partial<InviteSessionTokens>
     if (typeof parsed.access_token === 'string' && typeof parsed.refresh_token === 'string') {
       return {
@@ -127,13 +142,8 @@ export function takeInviteSessionHandoff(
 export async function completeInviteSessionHandoff(
   goToLogin: () => unknown,
   tokens: InviteSessionTokens,
-  storage?: Pick<InviteSessionStorage, 'setItem'>,
+  storage?: Pick<InviteSessionStorage, 'setItem'> | null,
 ): Promise<void> {
-  try {
-    stashInviteSessionHandoff(tokens, storage)
-  }
-  catch (error) {
-    console.error('Failed to stash invite session', error)
-  }
+  stashInviteSessionHandoff(tokens, storage)
   await goToLogin()
 }
