@@ -62,6 +62,7 @@ const main = useMainStore()
 const organizationStore = useOrganizationStore()
 const onboardingUserId = computed(() => main.user?.id ?? main.auth?.id ?? null)
 const config = getLocalConfig()
+const STORE_ICON_FETCH_TIMEOUT_MS = 10_000
 
 type AppRow = Database['public']['Tables']['apps']['Row']
 type StandardFlowStep = 'details' | 'choice' | 'install' | 'setup'
@@ -607,13 +608,20 @@ async function uploadIcon(appId: string, iconSourceUrl?: string) {
         console.warn('Skipping unsupported icon URL', iconSourceUrl)
       }
       else {
-        const response = await fetch(parsedIconUrl.toString())
-        if (!response.ok)
-          throw new Error(`Icon request failed with status ${response.status}`)
-        const blob = await response.blob()
-        if (!blob.type.startsWith('image/'))
-          throw new Error(`Icon response has unsupported content type: ${blob.type || 'unknown'}`)
-        fileToUpload = new File([blob], 'store-icon.png', { type: blob.type })
+        const controller = new AbortController()
+        const timeoutId = setTimeout(() => controller.abort(), STORE_ICON_FETCH_TIMEOUT_MS)
+        try {
+          const response = await fetch(parsedIconUrl.toString(), { signal: controller.signal })
+          if (!response.ok)
+            throw new Error(`Icon request failed with status ${response.status}`)
+          const blob = await response.blob()
+          if (!blob.type.startsWith('image/'))
+            throw new Error(`Icon response has unsupported content type: ${blob.type || 'unknown'}`)
+          fileToUpload = new File([blob], 'store-icon.png', { type: blob.type })
+        }
+        finally {
+          clearTimeout(timeoutId)
+        }
       }
     }
     catch (error) {
