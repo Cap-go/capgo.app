@@ -15,11 +15,8 @@ import IconPencil from '~icons/heroicons/pencil'
 import IconShield from '~icons/heroicons/shield-check'
 import IconTrash from '~icons/heroicons/trash'
 import IconXMark from '~icons/heroicons/x-mark'
-<<<<<<< HEAD
-import RoleCapabilitiesHint from '~/components/forms/RoleCapabilitiesHint.vue'
-=======
 import ApiKeyHiddenScopeNotice from '~/components/ApiKeyHiddenScopeNotice.vue'
->>>>>>> origin/main
+import RoleCapabilitiesHint from '~/components/forms/RoleCapabilitiesHint.vue'
 import ChannelPermissionOverridesPanel from '~/components/permissions/ChannelPermissionOverridesPanel.vue'
 import {
   clearApiKeyScopeFilters,
