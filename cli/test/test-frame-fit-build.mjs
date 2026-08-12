@@ -91,6 +91,8 @@ test('default render follows — shows the following hint, never "paused"', () =
 
 test('read-only failed-build viewer opens at the bottom and shows how to return', () => {
   const frame = renderReadOnly(longLog, 24)
+  const height = frame.split('\n').length
+  assert(height <= 24, `read-only frame is ${height} rows, exceeds 24`)
   assert(frame.includes('build log line 400'), 'newest retained line must be visible at the bottom')
   assert(!frame.includes('build log line 10'), 'far-earlier lines should be clipped on initial render')
   assert(frame.includes('Build failed'), 'missing completed failure label')

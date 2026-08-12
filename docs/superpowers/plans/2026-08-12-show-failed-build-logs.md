@@ -52,6 +52,7 @@ Expected: the new assertions fail because the menu action and read-only viewer m
 
 **Files:**
 - Modify: `cli/src/build/onboarding/types.ts`
+- Modify: `cli/src/build/onboarding/android/types.ts`
 - Modify: `cli/src/build/onboarding/ui/components.tsx`
 - Modify: `cli/src/build/onboarding/ui/steps/ios-shared.tsx`
 - Modify: `cli/src/build/onboarding/ui/steps/android-shared.tsx`
@@ -60,7 +61,7 @@ Expected: the new assertions fail because the menu action and read-only viewer m
 
 - [ ] **Step 1: Add the shared state and prompt choice**
 
-Add `build-log-view` to `OnboardingStep`, add the `logs` choice immediately above `skip` in both platform prompts, and route that choice to the dedicated state.
+Add `build-log-view` to both `OnboardingStep` and `AndroidOnboardingStep`, including each platform's progress and phase-label mappings. Add the `logs` choice immediately above `skip` in both platform prompts, and route that choice to the dedicated state.
 
 ```tsx
 { label: '👀  Show me the build logs', value: 'logs' },
