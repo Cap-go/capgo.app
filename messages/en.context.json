@@ -1567,6 +1567,7 @@
   "member-added": "Used in Capgo web console areas: pages/settings/organization. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "member-deleted": "Used in Capgo web console areas: pages/settings/organization. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "members": "Used in Capgo web console areas: constants, pages/admin/dashboard, pages/settings/organization. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "team": "Used in Capgo web console areas: constants. Role: short UI label for organization Team settings hub (members, groups, security). Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "metadata": "Used in Capgo web console areas: components/tables, pages/app. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "metadata-min-ver-not-set": "Used in Capgo web console areas: pages/app. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "metadata-not-found": "Used in Capgo web console areas: pages/app. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",

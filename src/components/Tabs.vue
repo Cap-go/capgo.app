@@ -7,18 +7,24 @@ const props = defineProps<{
   activeTab: string
   secondaryTabs?: Tab[]
   secondaryActiveTab?: string
+  tertiaryTabs?: Tab[]
+  tertiaryActiveTab?: string
   noWrap?: boolean
 }>()
 
-const emit = defineEmits(['update:activeTab', 'update:secondaryActiveTab'])
+const emit = defineEmits(['update:activeTab', 'update:secondaryActiveTab', 'update:tertiaryActiveTab'])
 
 const { t } = useI18n()
 
-function activeTabColor(tab: string, isSecondary = false) {
-  const isActive = (isSecondary ? props.secondaryActiveTab : props.activeTab) === tab
+function activeTabColor(tab: string, level: 'primary' | 'secondary' | 'tertiary' = 'primary') {
+  const isActive = level === 'primary'
+    ? props.activeTab === tab
+    : level === 'secondary'
+      ? props.secondaryActiveTab === tab
+      : props.tertiaryActiveTab === tab
 
-  // Secondary row tabs
-  if (isSecondary) {
+  // Secondary / tertiary row tabs share the pill style
+  if (level !== 'primary') {
     return isActive
       ? 'text-blue-600 dark:text-blue-400 bg-white dark:bg-slate-800 border border-blue-200/70 dark:border-blue-800 shadow-sm hover:ring-1 hover:ring-blue-200 dark:hover:ring-blue-700 hover:bg-blue-50 dark:hover:bg-slate-900 transition-colors'
       : 'border border-transparent text-slate-500/75 dark:text-slate-400/75 hover:bg-white dark:hover:bg-slate-900 hover:text-slate-700 dark:hover:text-slate-200 transition-colors'
@@ -32,6 +38,7 @@ function activeTabColor(tab: string, isSecondary = false) {
 
 const ulPrimaryClass = 'flex text-xs md:text-sm font-medium text-center text-gray-500 dark:text-gray-300 gap-1 pt-1 px-1'
 const ulSecondaryClass = 'flex text-sm font-medium text-center text-gray-600 dark:text-gray-200 gap-2 py-2'
+const ulTertiaryClass = 'flex text-sm font-medium text-center text-gray-600 dark:text-gray-200 gap-2 py-1.5'
 const noWrapClass = 'flex-nowrap max-w-full overflow-x-auto overflow-y-hidden overscroll-x-contain touch-pan-x no-scrollbar px-1 pb-px'
 const buttonPrimaryClass = 'inline-flex items-center gap-2 px-3 py-2 min-w-[42px] min-h-[38px] rounded-t-md cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50 dark:focus-visible:ring-offset-slate-900 transition-all group relative'
 const buttonSecondaryClass = 'inline-flex items-center gap-2 px-3 py-1.5 rounded-md cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50 dark:focus-visible:ring-offset-slate-900 transition-colors group'
@@ -65,8 +72,27 @@ const labelClass = 'hidden md:block text-xs md:text-sm font-medium transition-co
             type="button"
             :aria-current="secondaryActiveTab === tab.key ? 'page' : undefined"
             :aria-label="t(tab.label)"
-            :class="[buttonSecondaryClass, activeTabColor(tab.key, true)]"
+            :class="[buttonSecondaryClass, activeTabColor(tab.key, 'secondary')]"
             @click="emit('update:secondaryActiveTab', tab.key)"
+          >
+            <component :is="tab.icon" :class="iconClass" />
+            <span :class="labelClass">{{ t(tab.label) }}</span>
+            <span v-if="tab.badge" class="hidden px-1.5 py-0.5 text-[10px] font-semibold uppercase rounded border md:inline border-azure-500/40 bg-azure-500/10 text-azure-700 dark:text-azure-200">{{ t(tab.badge) }}</span>
+          </button>
+        </li>
+      </ul>
+      <ul
+        v-if="tertiaryTabs?.length"
+        class="border-t border-blue-200/40 dark:border-blue-800/40"
+        :class="[ulTertiaryClass, noWrap ? noWrapClass : 'flex-wrap']"
+      >
+        <li v-for="(tab, i) in tertiaryTabs" :key="i" class="mr-2">
+          <button
+            type="button"
+            :aria-current="tertiaryActiveTab === tab.key ? 'page' : undefined"
+            :aria-label="t(tab.label)"
+            :class="[buttonSecondaryClass, activeTabColor(tab.key, 'tertiary')]"
+            @click="emit('update:tertiaryActiveTab', tab.key)"
           >
             <component :is="tab.icon" :class="iconClass" />
             <span :class="labelClass">{{ t(tab.label) }}</span>
