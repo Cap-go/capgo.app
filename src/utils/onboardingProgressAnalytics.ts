@@ -34,34 +34,32 @@ export interface OnboardingStepCompletionProperties {
 }
 
 export interface OnboardingDetailsEventProperties {
-  app_id?: string
-  app_name?: string
+  field_length?: number
   icon_source?: 'file' | 'store'
-  store_url?: string
 }
 
-export type OnboardingDetailsFieldProperty = keyof Pick<OnboardingDetailsEventProperties, 'app_id' | 'app_name' | 'store_url'>
+export type OnboardingDetailsField = 'app_id' | 'app_name' | 'store_url'
 
 export function createOnboardingDetailsFieldDebouncer(
   emit: (name: OnboardingDetailsEvent, properties: OnboardingDetailsEventProperties) => void,
   delayMs = 1_000,
 ) {
-  const timers = new Map<OnboardingDetailsFieldProperty, ReturnType<typeof setTimeout>>()
+  const timers = new Map<OnboardingDetailsField, ReturnType<typeof setTimeout>>()
 
-  function schedule(name: OnboardingDetailsEvent, property: OnboardingDetailsFieldProperty, value: string) {
-    const activeTimer = timers.get(property)
+  function schedule(name: OnboardingDetailsEvent, field: OnboardingDetailsField, value: string) {
+    const activeTimer = timers.get(field)
     if (activeTimer)
       clearTimeout(activeTimer)
 
     const normalizedValue = value.trim()
     if (!normalizedValue) {
-      timers.delete(property)
+      timers.delete(field)
       return
     }
 
-    timers.set(property, setTimeout(() => {
-      emit(name, { [property]: normalizedValue })
-      timers.delete(property)
+    timers.set(field, setTimeout(() => {
+      emit(name, { field_length: normalizedValue.length })
+      timers.delete(field)
     }, delayMs))
   }
 

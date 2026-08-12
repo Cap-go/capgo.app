@@ -477,7 +477,7 @@ async function importStoreMetadata() {
   if (!requestedUrl || existingAppSetup.value !== 'import')
     return
 
-  trackV2DetailsEvent('onboarding_store_import_submitted', { store_url: requestedUrl })
+  trackV2DetailsEvent('onboarding_store_import_submitted')
   const requestedRun = ++storeImportRun
   isImportingStore.value = true
   try {
@@ -512,14 +512,14 @@ async function importStoreMetadata() {
     if (props.preOrg)
       existingApp.value = true
 
-    trackV2DetailsEvent('onboarding_store_import_succeeded', { store_url: requestedUrl })
+    trackV2DetailsEvent('onboarding_store_import_succeeded')
   }
   catch (error) {
     if (requestedRun !== storeImportRun || existingAppSetup.value !== 'import' || storeUrl.value.trim() !== requestedUrl)
       return
 
     console.error('Cannot import store metadata', error)
-    trackV2DetailsEvent('onboarding_store_import_failed', { store_url: requestedUrl })
+    trackV2DetailsEvent('onboarding_store_import_failed')
     toast.error(t('app-onboarding-toast-store-metadata-error'))
   }
   finally {

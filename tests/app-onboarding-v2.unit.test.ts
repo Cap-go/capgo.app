@@ -29,6 +29,15 @@ describe('pre-organization onboarding v2 app details', () => {
     expect(onboardingSource).toContain("trackV2DetailsEvent('onboarding_store_import_submitted'")
     expect(onboardingSource).toContain("trackV2DetailsEvent('onboarding_store_import_succeeded'")
     expect(onboardingSource).toContain("trackV2DetailsEvent('onboarding_store_import_failed'")
+    expect(onboardingSource).not.toContain("{ store_url: requestedUrl }")
+  })
+
+  it.concurrent('does not send raw onboarding field values to analytics', () => {
+    expect(onboardingSource).toContain("detailsFieldTracker.schedule('onboarding_app_name_entered', 'app_name'")
+    expect(onboardingSource).toContain("detailsFieldTracker.schedule('onboarding_app_id_entered', 'app_id'")
+    expect(onboardingSource).toContain("detailsFieldTracker.schedule('onboarding_store_url_entered', 'store_url'")
+    expect(onboardingSource).not.toContain('{ app_name:')
+    expect(onboardingSource).not.toContain('{ store_url:')
   })
 
   it.concurrent('tracks native app icon picker and upload outcomes', () => {

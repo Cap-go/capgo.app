@@ -19,7 +19,7 @@ describe('onboarding details field analytics debounce', () => {
 
     vi.advanceTimersByTime(1)
     expect(emit).toHaveBeenCalledOnce()
-    expect(emit).toHaveBeenCalledWith('onboarding_app_name_entered', { app_name: 'Example App' })
+    expect(emit).toHaveBeenCalledWith('onboarding_app_name_entered', { field_length: 11 })
   })
 
   it('tracks fields independently and cancels pending empty or disposed values', () => {
@@ -34,8 +34,8 @@ describe('onboarding details field analytics debounce', () => {
     vi.advanceTimersByTime(1_000)
 
     expect(emit).toHaveBeenCalledTimes(2)
-    expect(emit).toHaveBeenCalledWith('onboarding_app_id_entered', { app_id: 'com.example.app' })
-    expect(emit).toHaveBeenCalledWith('onboarding_store_url_entered', { store_url: 'https://apps.apple.com/example' })
+    expect(emit).toHaveBeenCalledWith('onboarding_app_id_entered', { field_length: 15 })
+    expect(emit).toHaveBeenCalledWith('onboarding_store_url_entered', { field_length: 30 })
 
     tracker.schedule('onboarding_app_name_entered', 'app_name', 'Never emitted')
     tracker.dispose()

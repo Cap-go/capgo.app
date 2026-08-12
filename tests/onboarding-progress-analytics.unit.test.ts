@@ -122,13 +122,13 @@ describe('onboarding progress analytics', () => {
       supaHost: 'https://supabase.capgo.test',
     })
 
-    tracker.trackDetailsEvent('onboarding_app_name_entered', { app_name: 'Example App' })
+    tracker.trackDetailsEvent('onboarding_app_name_entered', { field_length: 11 })
 
     expect(capture).toHaveBeenCalledWith(
       'onboarding_app_name_entered',
       'https://supabase.capgo.test',
       expect.objectContaining({
-        app_name: 'Example App',
+        field_length: 11,
         flow: 'pre_org',
         onboarding_attempt_id: expect.any(String),
         onboarding_version: 2,
