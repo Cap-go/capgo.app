@@ -59,6 +59,13 @@ declare module 'vue-router/auto-routes' {
       Record<never, never>,
       | never
     >,
+    '/admin/dashboard/channel-surfing': RouteRecordInfo<
+      '/admin/dashboard/channel-surfing',
+      '/admin/dashboard/channel-surfing',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
     '/admin/dashboard/cli': RouteRecordInfo<
       '/admin/dashboard/cli',
       '/admin/dashboard/cli',
@@ -80,6 +87,13 @@ declare module 'vue-router/auto-routes' {
       Record<never, never>,
       | never
     >,
+    '/admin/dashboard/frontend-onboarding': RouteRecordInfo<
+      '/admin/dashboard/frontend-onboarding',
+      '/admin/dashboard/frontend-onboarding',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
     '/admin/dashboard/notifications': RouteRecordInfo<
       '/admin/dashboard/notifications',
       '/admin/dashboard/notifications',
@@ -90,6 +104,13 @@ declare module 'vue-router/auto-routes' {
     '/admin/dashboard/organizations': RouteRecordInfo<
       '/admin/dashboard/organizations',
       '/admin/dashboard/organizations',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
+    '/admin/dashboard/plans': RouteRecordInfo<
+      '/admin/dashboard/plans',
+      '/admin/dashboard/plans',
       Record<never, never>,
       Record<never, never>,
       | never
@@ -671,6 +692,14 @@ declare module 'vue-router/auto-routes' {
       pathParamNames:
         | never
     }
+    'src/pages/admin/dashboard/channel-surfing.vue': {
+      routes:
+        | '/admin/dashboard/channel-surfing'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
     'src/pages/admin/dashboard/cli.vue': {
       routes:
         | '/admin/dashboard/cli'
@@ -695,6 +724,14 @@ declare module 'vue-router/auto-routes' {
       pathParamNames:
         | never
     }
+    'src/pages/admin/dashboard/frontend-onboarding.vue': {
+      routes:
+        | '/admin/dashboard/frontend-onboarding'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
     'src/pages/admin/dashboard/notifications.vue': {
       routes:
         | '/admin/dashboard/notifications'
@@ -706,6 +743,14 @@ declare module 'vue-router/auto-routes' {
     'src/pages/admin/dashboard/organizations.vue': {
       routes:
         | '/admin/dashboard/organizations'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
+    'src/pages/admin/dashboard/plans.vue': {
+      routes:
+        | '/admin/dashboard/plans'
       views:
         | never
       pathParamNames:

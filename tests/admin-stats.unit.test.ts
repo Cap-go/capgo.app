@@ -78,6 +78,20 @@ describe('admin stats validation', () => {
     expect(parsed.success).toBe(true)
   })
 
+  it.concurrent('accepts the channel surfing metric', () => {
+    const parsed = safeParseSchema(adminStatsBodySchema, {
+      ...baseBody,
+      metric_category: 'channel_surfing',
+      app_id: 'com.demo.app',
+    })
+
+    expect(parsed.success).toBe(true)
+    if (!parsed.success)
+      return
+
+    expect(parsed.data.app_id).toBe('com.demo.app')
+  })
+
   it.concurrent('accepts the plans analytics metric', () => {
     const parsed = safeParseSchema(adminStatsBodySchema, {
       ...baseBody,
