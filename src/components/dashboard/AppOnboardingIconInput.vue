@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, useId } from 'vue'
 
 defineProps<{
   chooseLabel: string
@@ -14,6 +14,7 @@ const emit = defineEmits<{
 }>()
 
 const modelValue = defineModel<unknown>()
+const fileInputId = `app-onboarding-icon-input-${useId()}`
 const fileInput = ref<HTMLInputElement | null>(null)
 const selectedFileName = ref('')
 
@@ -44,7 +45,7 @@ function onFileSelected(event: Event) {
 
 <template>
   <div>
-    <label for="app-onboarding-icon-input" class="text-sm font-medium text-slate-800 dark:text-slate-200">
+    <label :for="fileInputId" class="text-sm font-medium text-slate-800 dark:text-slate-200">
       {{ label }}
     </label>
     <div class="mt-2 flex min-h-11 items-center gap-3">
@@ -60,7 +61,7 @@ function onFileSelected(event: Event) {
       </span>
     </div>
     <input
-      id="app-onboarding-icon-input"
+      :id="fileInputId"
       ref="fileInput"
       type="file"
       accept="image/*"

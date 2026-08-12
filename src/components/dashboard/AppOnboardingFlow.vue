@@ -608,8 +608,12 @@ async function uploadIcon(appId: string, iconSourceUrl?: string) {
       }
       else {
         const response = await fetch(parsedIconUrl.toString())
+        if (!response.ok)
+          throw new Error(`Icon request failed with status ${response.status}`)
         const blob = await response.blob()
-        fileToUpload = new File([blob], 'store-icon.png', { type: blob.type || 'image/png' })
+        if (!blob.type.startsWith('image/'))
+          throw new Error(`Icon response has unsupported content type: ${blob.type || 'unknown'}`)
+        fileToUpload = new File([blob], 'store-icon.png', { type: blob.type })
       }
     }
     catch (error) {
