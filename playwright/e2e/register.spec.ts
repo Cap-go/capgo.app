@@ -38,7 +38,6 @@ test.describe('Registration', () => {
     await page.click('[data-test="onboarding-intent-ota"]')
     await page.click('[data-test="app-onboarding-continue-intent"]')
 
-    await page.click('[data-test="app-onboarding-existing-no"]')
     await page.fill('[data-test="app-onboarding-name"]', appName)
     await page.click('[data-test="app-onboarding-continue"]')
 
