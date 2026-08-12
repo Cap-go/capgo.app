@@ -1,8 +1,9 @@
--- INSERT ... RETURNING on public.groups evaluates groups_select, which calls
--- readable_group_ids(). That helper was STABLE, so Postgres can use a snapshot
--- that does not include the row being inserted. The SELECT policy then fails and
--- PostgREST surfaces 42501 even when groups_insert WITH CHECK passed.
--- VOLATILE forces a fresh read so newly inserted unbound groups are visible.
+-- INSERT ... RETURNING on public.groups evaluates groups_select.
+-- readable_group_ids() scans public.groups under the surrounding INSERT snapshot,
+-- so the brand-new row is invisible and SELECT RLS fails with 42501 even when
+-- groups_insert WITH CHECK passed. Keep the bounded readable_group_ids() path for
+-- normal SELECTs, and allow role managers via org_id (available on NEW) so
+-- RETURNING works. Also mark readable_group_ids VOLATILE for consistency.
 CREATE OR REPLACE FUNCTION public.readable_group_ids()
 RETURNS uuid[]
 LANGUAGE sql
@@ -56,4 +57,21 @@ REVOKE ALL ON FUNCTION public.readable_group_ids() FROM PUBLIC;
 GRANT ALL ON FUNCTION public.readable_group_ids() TO anon, authenticated, service_role;
 
 COMMENT ON FUNCTION public.readable_group_ids() IS
-  'Returns direct JWT-member groups plus rank-manageable groups from bounded caller-scoped orgs for statement-level RLS. VOLATILE so INSERT ... RETURNING can see the new row.';
+  'Returns direct JWT-member groups plus rank-manageable groups from bounded caller-scoped orgs for statement-level RLS. VOLATILE; INSERT ... RETURNING also relies on groups_select org-role OR.';
+
+DROP POLICY IF EXISTS "groups_select" ON public.groups;
+CREATE POLICY "groups_select" ON public.groups
+FOR SELECT
+TO anon, authenticated
+USING (
+  id = ANY(COALESCE((SELECT public.readable_group_ids()), '{}'::uuid[]))
+  OR public.rbac_check_permission_request(
+    public.rbac_perm_org_update_user_roles(),
+    org_id,
+    NULL::character varying,
+    NULL::bigint
+  )
+);
+
+COMMENT ON POLICY "groups_select" ON public.groups IS
+  'Members see their groups via readable_group_ids(); role managers also match by org_id so INSERT ... RETURNING works for new rows invisible to the INSERT snapshot.';
