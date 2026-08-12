@@ -14,7 +14,7 @@ export interface FrontendOnboardingComparison {
 }
 
 export interface FrontendOnboardingAnalytics {
-  onboarding_version: 1
+  onboarding_version: 2
   kpis: {
     attempts: number
     completed: number

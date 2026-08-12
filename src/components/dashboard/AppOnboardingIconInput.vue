@@ -21,6 +21,7 @@ function openFilePicker() {
   try {
     if (!fileInput.value)
       throw new Error('File input is unavailable')
+    fileInput.value.value = ''
     fileInput.value.click()
     emit('pickerOpened')
   }
@@ -54,7 +55,7 @@ function onFileSelected(event: Event) {
       >
         {{ chooseLabel }}
       </button>
-      <span class="min-w-0 truncate text-sm text-slate-600 dark:text-slate-300">
+      <span aria-live="polite" class="min-w-0 truncate text-sm text-slate-600 dark:text-slate-300">
         {{ selectedFileName || emptyLabel }}
       </span>
     </div>

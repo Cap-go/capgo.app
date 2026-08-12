@@ -45,6 +45,7 @@ export function createOnboardingDetailsFieldDebouncer(
   delayMs = 1_000,
 ) {
   const timers = new Map<OnboardingDetailsField, ReturnType<typeof setTimeout>>()
+  const pending = new Map<OnboardingDetailsField, { name: OnboardingDetailsEvent, properties: OnboardingDetailsEventProperties }>()
 
   function schedule(name: OnboardingDetailsEvent, field: OnboardingDetailsField, value: string) {
     const activeTimer = timers.get(field)
@@ -54,19 +55,26 @@ export function createOnboardingDetailsFieldDebouncer(
     const normalizedValue = value.trim()
     if (!normalizedValue) {
       timers.delete(field)
+      pending.delete(field)
       return
     }
 
+    const event = { name, properties: { field_length: normalizedValue.length } }
+    pending.set(field, event)
     timers.set(field, setTimeout(() => {
-      emit(name, { field_length: normalizedValue.length })
+      emit(event.name, event.properties)
       timers.delete(field)
+      pending.delete(field)
     }, delayMs))
   }
 
   function dispose() {
     for (const timer of timers.values())
       clearTimeout(timer)
+    for (const event of pending.values())
+      emit(event.name, event.properties)
     timers.clear()
+    pending.clear()
   }
 
   return { dispose, schedule }

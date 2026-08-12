@@ -601,8 +601,10 @@ async function uploadIcon(appId: string, iconSourceUrl?: string) {
   if (!fileToUpload && iconSourceUrl) {
     try {
       const parsedIconUrl = new URL(iconSourceUrl)
-      if (parsedIconUrl.protocol !== 'https:') {
-        console.warn('Skipping non-HTTPS icon URL', iconSourceUrl)
+      const isRemoteImage = parsedIconUrl.protocol === 'https:'
+      const isInlineImage = parsedIconUrl.protocol === 'data:' && iconSourceUrl.startsWith('data:image/')
+      if (!isRemoteImage && !isInlineImage) {
+        console.warn('Skipping unsupported icon URL', iconSourceUrl)
       }
       else {
         const response = await fetch(parsedIconUrl.toString())

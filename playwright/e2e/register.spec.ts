@@ -38,6 +38,10 @@ test.describe('Registration', () => {
     await page.click('[data-test="onboarding-intent-ota"]')
     await page.click('[data-test="app-onboarding-continue-intent"]')
 
+    await expect(page.locator('[data-test="app-onboarding-existing-yes"]')).toHaveCount(0)
+    await expect(page.locator('[data-test="app-onboarding-existing-no"]')).toHaveCount(0)
+    await expect(page.locator('[data-test="app-onboarding-name"]')).toBeVisible()
+    await expect(page.locator('#app-onboarding-app-id')).toBeVisible()
     await page.fill('[data-test="app-onboarding-name"]', appName)
     await page.click('[data-test="app-onboarding-continue"]')
 

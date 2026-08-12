@@ -40,7 +40,7 @@ beforeEach(() => {
 })
 
 describe('buildFrontendOnboardingHogql', () => {
-  it('queries the fixed v1 pre-org viewed events grouped by attempt in an exclusive time range', () => {
+  it('queries the fixed v2 pre-org viewed events grouped by attempt in an exclusive time range', () => {
     const query = buildFrontendOnboardingHogql(
       '2026-08-01T00:00:00.123Z',
       '2026-08-03T00:00:00.456Z',
@@ -49,7 +49,7 @@ describe('buildFrontendOnboardingHogql', () => {
 
     expect(query).toContain('event = \'onboarding_step_viewed\'')
     expect(query).toContain('JSONExtractString(toString(properties), \'flow\') = \'pre_org\'')
-    expect(query).toContain('toIntOrZero(toString(properties.onboarding_version)) = 1')
+    expect(query).toContain('toIntOrZero(toString(properties.onboarding_version)) = 2')
     expect(query).not.toContain('toInt64OrZero')
     expect(query).toContain('JSONExtractString(toString(properties), \'onboarding_attempt_id\')')
     expect(query).toContain('JSONExtractString(toString(properties), \'step\')')
@@ -103,7 +103,7 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
     const result = await getAdminFrontendOnboardingAnalytics(createContext(), start, '2026-08-03T00:00:00.000Z')
 
     expect(result).toMatchObject({
-      onboarding_version: 1,
+      onboarding_version: 2,
       kpis: { attempts: 1, completed: 1, completion_rate: 100, median_completion_ms: 2_666 },
       daily_attempts: [
         { date: '2026-08-01', attempts: 1 },

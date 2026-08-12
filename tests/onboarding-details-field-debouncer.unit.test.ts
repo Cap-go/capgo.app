@@ -22,7 +22,7 @@ describe('onboarding details field analytics debounce', () => {
     expect(emit).toHaveBeenCalledWith('onboarding_app_name_entered', { field_length: 11 })
   })
 
-  it('tracks fields independently and cancels pending empty or disposed values', () => {
+  it('tracks fields independently, cancels empty values, and flushes pending values on dispose', () => {
     vi.useFakeTimers()
     const emit = vi.fn()
     const tracker = createOnboardingDetailsFieldDebouncer(emit)
@@ -40,6 +40,7 @@ describe('onboarding details field analytics debounce', () => {
     tracker.schedule('onboarding_app_name_entered', 'app_name', 'Never emitted')
     tracker.dispose()
     vi.runAllTimers()
-    expect(emit).toHaveBeenCalledTimes(2)
+    expect(emit).toHaveBeenCalledTimes(3)
+    expect(emit).toHaveBeenLastCalledWith('onboarding_app_name_entered', { field_length: 13 })
   })
 })

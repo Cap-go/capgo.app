@@ -22,5 +22,8 @@ describe('app onboarding file input', () => {
     expect(noFiles).toBeDefined()
     expect(noFiles?.classList.contains('text-slate-600')).toBe(true)
     expect(noFiles?.classList.contains('dark:text-slate-300')).toBe(true)
+    expect(noFiles?.getAttribute('aria-live')).toBe('polite')
+    expect(container.querySelector('label')?.getAttribute('for')).toBe('app-onboarding-icon-input')
+    expect(container.querySelector('input')?.id).toBe('app-onboarding-icon-input')
   })
 })
