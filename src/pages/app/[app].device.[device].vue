@@ -400,9 +400,6 @@ async function copyCurlCommand() {
           {{ t('device-injected-2') }}
         </div>
         <div class="flex flex-col bg-white border shadow-lg md:rounded-lg dark:bg-gray-800 border-slate-300 dark:border-slate-900">
-          <div class="border-b border-slate-200 px-4 py-3 dark:border-slate-700 sm:px-6">
-            <ChannelOverrideRetentionNotice />
-          </div>
           <dl :key="reloadCount" class="divide-y divide-slate-200 dark:divide-slate-500">
             <InfoRow :label="t('device-id')">
               {{ device.device_id }}
@@ -451,6 +448,7 @@ async function copyCurlCommand() {
             <InfoRow :label="t('channel-link')">
               <div class="flex flex-col items-end gap-1">
                 <div class="flex items-center gap-2">
+                  <ChannelOverrideRetentionNotice />
                   <details ref="channelDropdown" class="relative d-dropdown d-dropdown-end" @click.stop>
                     <summary class="d-btn d-btn-outline d-btn-sm">
                       <span>{{ channelDevice?.name ?? t('none') }}</span>
