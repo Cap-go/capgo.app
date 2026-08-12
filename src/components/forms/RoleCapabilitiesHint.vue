@@ -68,19 +68,21 @@ function close() {
       :aria-label="t('role-capabilities-learn-more')"
       :aria-expanded="open"
       :aria-controls="panelId"
+      :aria-haspopup="true"
       @click.stop="toggle"
       @keydown.escape="close"
     >
       <IconInformation class="h-4 w-4" aria-hidden="true" />
     </button>
 
-    <div
+    <dialog
       v-if="open"
       :id="panelId"
-      role="dialog"
+      class="absolute right-0 z-30 m-0 mt-1 w-[min(20rem,calc(100vw-2rem))] max-w-none translate-none rounded-md border border-slate-200 bg-white p-3 text-left text-sm text-inherit shadow-lg open:flex open:flex-col dark:border-slate-700 dark:bg-slate-900"
+      open
       :aria-label="t('role-capabilities-learn-more')"
-      class="absolute right-0 z-30 mt-1 w-[min(20rem,calc(100vw-2rem))] rounded-md border border-slate-200 bg-white p-3 text-left text-sm shadow-lg dark:border-slate-700 dark:bg-slate-900"
       @keydown.escape="close"
+      @click.stop
     >
       <p v-if="summary" class="leading-5 text-slate-700 dark:text-slate-200">
         {{ summary }}
@@ -115,6 +117,6 @@ function close() {
           </ul>
         </div>
       </div>
-    </div>
+    </dialog>
   </div>
 </template>
