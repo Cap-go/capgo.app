@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { updateDeliveryStatsTestUtils } from '../supabase/functions/_backend/private/update_delivery_stats.ts'
-import { buildUpdateDeliveryTimingEventsCFQuery } from '../supabase/functions/_backend/utils/cloudflare.ts'
+import { buildPlatformUpdateDeliveryDailyCFQuery, buildPlatformUpdateDeliveryOverviewCFQuery, buildUpdateDeliveryTimingEventsCFQuery } from '../supabase/functions/_backend/utils/cloudflare.ts'
 
 describe('update delivery stats helpers', () => {
   it.concurrent('normalizes bounded period days', () => {
@@ -25,9 +25,28 @@ describe('update delivery stats helpers', () => {
       limit: 50_000,
     })
 
-    expect(query).toContain("blob2 IN ('download_complete', 'download_zip_complete')")
-    expect(query).toContain("AND (double1 > 0 OR position('duration' IN blob4) > 0)")
+    expect(query).toContain('blob2 IN (\'download_complete\', \'download_zip_complete\')')
+    expect(query).toContain('AND (double1 > 0 OR position(\'duration\' IN blob4) > 0)')
     expect(query).not.toContain('AND index1 =')
+  })
+
+  it.concurrent('aggregates platform delivery latency in AE instead of scanning raw rows', () => {
+    const params = {
+      query_start: '2026-07-01T22:00:00.000Z',
+      period_start: '2026-07-02T00:00:00.000Z',
+      end_date: '2026-10-01T00:00:00.000Z',
+    }
+    const daily = buildPlatformUpdateDeliveryDailyCFQuery(params)
+    const overview = buildPlatformUpdateDeliveryOverviewCFQuery(params)
+
+    expect(daily).toContain('quantileExactWeighted(0.50)(duration_ms, sample_weight)')
+    expect(daily).toContain('quantileExactWeighted(0.99)(duration_ms, sample_weight)')
+    expect(daily).toContain('blob2 IN (\'download_complete\', \'download_zip_complete\', \'download_0\', \'download_zip_start\', \'download_manifest_start\')')
+    expect(daily).toContain('GROUP BY day')
+    expect(daily).not.toContain('LIMIT')
+    expect(overview).toContain('quantileExactWeighted(0.50)(duration_ms, sample_weight)')
+    expect(overview).not.toContain('GROUP BY day')
+    expect(overview).toContain('AND day >= \'2026-07-02\'')
   })
 
   it.concurrent('keeps pairing AE queries unfiltered so start events remain available', () => {
@@ -40,8 +59,8 @@ describe('update delivery stats helpers', () => {
       limit: 10,
     })
 
-    expect(query).toContain("AND index1 = 'com.demo.app'")
-    expect(query).not.toContain("position('duration' IN blob4)")
+    expect(query).toContain('AND index1 = \'com.demo.app\'')
+    expect(query).not.toContain('position(\'duration\' IN blob4)')
   })
 
   it.concurrent('normalizes supported scopes', () => {
@@ -202,7 +221,6 @@ describe('update delivery stats helpers', () => {
       },
     ])
   })
-
 
   it.concurrent('uses Analytics Engine double1 when metadata is empty', () => {
     expect(updateDeliveryStatsTestUtils.resolveEventDurationMs({

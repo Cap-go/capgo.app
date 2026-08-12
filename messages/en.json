@@ -2504,7 +2504,7 @@
   "update-delivery-latency-help": "Device-side download delivery latency percentiles from download start to download complete.",
   "update-delivery-no-data": "No delivery latency data yet",
   "update-delivery-no-data-help": "Percentiles appear when devices report download duration (duration_ms) on download_complete, or when download start and complete events can be paired. Update {'@'}capgo/capacitor-updater if timing metadata is missing.",
-  "update-delivery-no-data-help-platform": "Platform percentiles use download duration metadata only. Values appear when devices report duration_ms (or duration) on download complete events.",
+  "update-delivery-no-data-help-platform": "Percentiles appear when download start and complete events can be paired, or when devices report duration_ms on download complete.",
   "update-delivery-fetch-error": "Could not load delivery latency",
   "update-delivery-fetch-error-help": "The request failed. Retry to refresh this chart.",
   "update-delivery-retry": "Retry",

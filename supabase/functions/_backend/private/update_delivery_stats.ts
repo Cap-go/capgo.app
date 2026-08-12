@@ -6,7 +6,7 @@ import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc.js'
 import { Hono } from 'hono/tiny'
 import { CacheHelper } from '../utils/cache.ts'
-import { parseStatsDurationMs, readUpdateDeliveryTimingEventsCF, resolveUpdateDeliveryTimingDurationMs } from '../utils/cloudflare.ts'
+import { parseStatsDurationMs, readPlatformUpdateDeliveryStatsCF, readUpdateDeliveryTimingEventsCF, resolveUpdateDeliveryTimingDurationMs } from '../utils/cloudflare.ts'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
@@ -597,10 +597,40 @@ async function readUpdateDeliveryStatsCF(
   endExclusive: Dayjs,
   endInclusive: Dayjs,
 ) {
-  const allowPairing = scope !== 'platform'
-  const queryStart = allowPairing
-    ? start.subtract(2, 'hour')
-    : start
+  if (scope === 'platform') {
+    // One in-engine aggregate for the whole window. Raw 50k-row day scans
+    // miss untimed completes and 90 sequential queries time out.
+    const { dailyRows, overviewRow } = await readPlatformUpdateDeliveryStatsCF(c, {
+      query_start: start.subtract(2, 'hour').toISOString(),
+      period_start: start.toISOString(),
+      end_date: endExclusive.toISOString(),
+    })
+
+    if (toCount(overviewRow.samples) === 0) {
+      cloudlog({
+        requestId: c.get('requestId'),
+        message: 'update_delivery_stats CF produced zero samples',
+        scope,
+        event_count: 0,
+        app_count: null,
+        allow_pairing: true,
+        start: start.toISOString(),
+        end: endExclusive.toISOString(),
+      })
+    }
+
+    return buildUpdateDeliveryResponse({
+      labels,
+      days,
+      start: start.toISOString(),
+      end: endInclusive.toISOString(),
+      scope,
+      dailyRows,
+      overviewRow,
+    })
+  }
+
+  const queryStart = start.subtract(2, 'hour')
 
   let appIds: string[] | undefined
   if (scope === 'app') {
@@ -608,7 +638,7 @@ async function readUpdateDeliveryStatsCF(
       throw simpleError('missing_params', 'app_id is required for app scope')
     appIds = [scopeId]
   }
-  else if (scope === 'org') {
+  else {
     if (!scopeId)
       throw simpleError('missing_params', 'org_id is required for org scope')
     appIds = await listOrgAppIds(c, scopeId)
@@ -617,16 +647,14 @@ async function readUpdateDeliveryStatsCF(
   const events = await readUpdateDeliveryTimingEventsCFChunked(c, {
     queryStart,
     endExclusive,
-    actions: allowPairing ? [...timingActions] : [...endActions],
+    actions: [...timingActions],
     appIds,
-    // Platform cannot pair start/end at global scale; spend the AE row budget on
-    // timed completes so admin "Time to deliver an update" is not empty.
-    requireDuration: !allowPairing,
+    requireDuration: false,
   })
 
   const samples = buildDeliveriesFromEvents(events, {
     periodStartMs: start.valueOf(),
-    allowPairing,
+    allowPairing: true,
   })
   const { dailyRows, overviewRow } = aggregateDeliverySamples(samples)
 
@@ -637,7 +665,7 @@ async function readUpdateDeliveryStatsCF(
       scope,
       event_count: events.length,
       app_count: appIds?.length ?? null,
-      allow_pairing: allowPairing,
+      allow_pairing: true,
       start: start.toISOString(),
       end: endExclusive.toISOString(),
     })
@@ -700,6 +728,9 @@ async function readUpdateDeliveryStats(
         error: serializeError(error),
         scope,
       })
+      // Platform-wide public.stats pairing/scans are unsafe at prod scale.
+      if (scope === 'platform')
+        throw error
     }
   }
 
