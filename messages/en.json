@@ -1669,6 +1669,7 @@
   "member-added": "Member added",
   "member-deleted": "Successfully deleted member",
   "members": "Members",
+  "team": "Team",
   "metadata": "Metadata",
   "metadata-min-ver-not-set": "Minimal update version for current bundle is undefined",
   "metadata-not-found": "metadata not found",
