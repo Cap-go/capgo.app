@@ -113,7 +113,7 @@ export function buildFrontendOnboardingHogql(startDate: string, cohortEndDate: s
       FROM events
       WHERE event = 'onboarding_step_viewed'
         AND JSONExtractString(toString(properties), 'flow') = 'pre_org'
-        AND toIntOrZero(toString(properties.onboarding_version)) = ${FRONTEND_ONBOARDING_VERSION}
+        AND toIntOrZero(toString(properties.onboarding_version)) = 1
         AND timestamp >= parseDateTimeBestEffort(${sqlStr(startDate)})
         AND timestamp < parseDateTimeBestEffort(${sqlStr(followupEndDate)})
     )

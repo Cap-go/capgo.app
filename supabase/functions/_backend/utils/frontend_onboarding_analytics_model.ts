@@ -1,4 +1,4 @@
-export const FRONTEND_ONBOARDING_VERSION = 2 as const
+export const FRONTEND_ONBOARDING_VERSION = 1 as const
 export const FRONTEND_ONBOARDING_FOLLOWUP_MS = 24 * 60 * 60 * 1000
 
 export type FrontendOnboardingStageKey = 'intent' | 'details' | 'organization' | 'setup'

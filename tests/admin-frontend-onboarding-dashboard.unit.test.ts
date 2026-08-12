@@ -21,7 +21,7 @@ function deferred<T>() {
 
 describe('admin frontend onboarding dashboard', () => {
   const analytics: FrontendOnboardingAnalytics = {
-    onboarding_version: 2,
+    onboarding_version: 1,
     kpis: {
       attempts: 10,
       completed: 4,
