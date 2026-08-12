@@ -118,10 +118,8 @@ export function getMissingMainFileRecoveryOptions(): { value: MissingMainFileCho
 }
 
 export function readExistingMainFile(mainFilePath: string | null) {
-  if (!mainFilePath)
-    return null
   try {
-    return statSync(mainFilePath).isFile() ? { path: mainFilePath, content: readFileSync(mainFilePath, 'utf8') } : null
+    return mainFilePath && statSync(mainFilePath).isFile() ? { path: mainFilePath, content: readFileSync(mainFilePath, 'utf8') } : null
   }
   catch {
     return null
