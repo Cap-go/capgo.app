@@ -546,7 +546,13 @@ async function deleteOverride(c: Context, drizzleClient: ReturnType<typeof getDr
     return simpleError200(c, 'override_not_allowed', `Cannot delete channel override`)
   }
 
-  await sendStatsAndDevice(c, device, [{ action: 'setChannel' }])
+  try {
+    await sendStatsAndDevice(c, device, [{ action: 'setChannel' }])
+  }
+  catch (error) {
+    // Override already deleted — keep BRES so clients do not retry into override_not_allowed.
+    cloudlog({ requestId: c.get('requestId'), message: 'setChannel stats failed after override delete', error })
+  }
   return c.json(BRES)
 }
 

@@ -12,16 +12,6 @@ export interface AdminChannelSurfingStats {
   top_apps: Array<{ app_id: string, events: number, devices: number }>
 }
 
-function emptyAdminChannelSurfingStats(): AdminChannelSurfingStats {
-  return {
-    total_events: 0,
-    unique_devices: 0,
-    unique_apps: 0,
-    by_day: [],
-    top_apps: [],
-  }
-}
-
 function usesAppLogAnalytics(c: Context): boolean {
   return getRuntimeKey() === 'workerd' && !!c.env.APP_LOG
 }
@@ -192,6 +182,7 @@ export async function getAdminChannelSurfing(
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'getAdminChannelSurfing failed', error: serializeError(error) })
-    return emptyAdminChannelSurfingStats()
+    // Propagate so admin_stats returns an error instead of fake zero adoption.
+    throw error
   }
 }

@@ -112,22 +112,14 @@ describe('getAdminChannelSurfing', () => {
     expect(getPgClientMock).not.toHaveBeenCalled()
   })
 
-  it('returns empty stats when the analytics path throws', async () => {
+  it('propagates analytics outages instead of reporting zero adoption', async () => {
     getRuntimeKeyMock.mockReturnValue('workerd')
     runQueryToCFAMock.mockRejectedValue(new Error('cfa down'))
 
-    const result = await getAdminChannelSurfing(
+    await expect(getAdminChannelSurfing(
       { get: () => 'req', env: { APP_LOG: {} } } as any,
       '2026-08-01T00:00:00.000Z',
       '2026-08-02T00:00:00.000Z',
-    )
-
-    expect(result).toEqual({
-      total_events: 0,
-      unique_devices: 0,
-      unique_apps: 0,
-      by_day: [],
-      top_apps: [],
-    })
+    )).rejects.toThrow('cfa down')
   })
 })
