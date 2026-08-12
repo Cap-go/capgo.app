@@ -52,8 +52,10 @@ async function loadChannelSurfing() {
     channelSurfing.value = null
   }
   finally {
-    if (generation === loadGeneration)
+    if (generation === loadGeneration) {
       isLoadingStats.value = false
+      isLoading.value = false
+    }
   }
 }
 
@@ -106,7 +108,6 @@ onMounted(async () => {
 
   isLoading.value = true
   await loadChannelSurfing()
-  isLoading.value = false
 
   displayStore.NavTitle = t('channel-surfing')
 })
