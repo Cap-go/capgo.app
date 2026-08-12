@@ -95,7 +95,7 @@ describe('i18n remote message loading', () => {
   it('loads backend messages before switching locale', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({
       messages: {
-        'credits-plan-overage': '{included}, puis {price}',
+        'credits-flexibility-cta-description': 'Depassez les limites de votre plan en achetant des credits si besoin.',
       },
     }), {
       headers: { 'Content-Type': 'application/json' },
@@ -114,9 +114,8 @@ describe('i18n remote message loading', () => {
     expect(i18n.global.locale.value).toBe('fr')
     expect(mocks.changeLocale).toHaveBeenCalledWith('fr')
     expect(request).toEqual({ targetLanguage: 'fr' })
-    expect(i18n.global.t('credits-plan-overage', {
-      included: 'Included in plan',
-      price: '$0.08 per minute',
-    })).toBe('Included in plan, puis $0.08 per minute')
+    expect(i18n.global.t('credits-flexibility-cta-description')).toBe(
+      'Depassez les limites de votre plan en achetant des credits si besoin.',
+    )
   })
 })

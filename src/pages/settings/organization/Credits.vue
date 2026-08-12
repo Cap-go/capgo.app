@@ -67,8 +67,9 @@ const { currentOrganization } = storeToRefs(organizationStore)
 const displayStore = useDisplayStore()
 const isMobile = isNativeAppStoreContext()
 
-// Modal state for non-admin access
+// Modal state for insufficient billing access
 const showAdminModal = ref(false)
+const adminModalPermission = ref<'org.read_billing' | 'org.update_billing'>('org.update_billing')
 
 const transactions = ref<UsageCreditLedgerRow[]>([])
 const pricingSteps = ref<CreditPricingStep[]>([])
@@ -395,18 +396,27 @@ async function loadPricingSteps() {
   pricingSteps.value = await getCreditPricingSteps(currentOrganization.value?.gid)
 }
 
-// Returns true when the current user can manage billing for the current org.
-// Otherwise shows the permission modal; used to gate both the page and the buy action.
-async function ensureBillingAccess() {
+// Page view requires org.read_billing; buy/checkout still requires org.update_billing.
+async function ensureReadBillingAccess() {
+  const orgId = currentOrganization.value?.gid
+  if (orgId && await checkPermissions('org.read_billing', { orgId }))
+    return true
+  adminModalPermission.value = 'org.read_billing'
+  showAdminModal.value = true
+  return false
+}
+
+async function ensureUpdateBillingAccess() {
   const orgId = currentOrganization.value?.gid
   if (orgId && await checkPermissions('org.update_billing', { orgId }))
     return true
+  adminModalPermission.value = 'org.update_billing'
   showAdminModal.value = true
   return false
 }
 
 async function handleBuyCredits() {
-  if (!(await ensureBillingAccess()))
+  if (!(await ensureUpdateBillingAccess()))
     return
   const orgId = currentOrganization.value?.gid
   if (!orgId)
@@ -456,8 +466,17 @@ async function handleCreditCheckoutReturn() {
   if (!currentOrganization.value?.gid)
     return
 
+  // Lock before any await so mount + org-switch cannot double-complete the same session.
   isCompletingTopUp.value = true
   try {
+    // Completing a Stripe top-up is a billing mutation; require update access.
+    if (!(await ensureUpdateBillingAccess())) {
+      delete newQuery.creditCheckout
+      delete newQuery.session_id
+      await router.replace({ query: newQuery })
+      return
+    }
+
     await completeCreditTopUp(currentOrganization.value.gid, sessionId)
     toast.success(t('credits-top-up-success'))
     const orgId = currentOrganization.value?.gid
@@ -490,7 +509,7 @@ onMounted(async () => {
 
   displayStore.NavTitle = t('credits')
   await organizationStore.awaitInitialLoad()
-  if (!(await ensureBillingAccess()))
+  if (!(await ensureReadBillingAccess()))
     return
   await Promise.allSettled([loadTransactions(), loadPricingSteps()])
   await handleCreditCheckoutReturn()
@@ -502,7 +521,7 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
 
   if (!newOrgId || newOrgId === oldOrgId)
     return
-  if (!(await ensureBillingAccess()))
+  if (!(await ensureReadBillingAccess()))
     return
   await Promise.allSettled([loadTransactions(), loadPricingSteps()])
   await handleCreditCheckoutReturn()
@@ -847,11 +866,11 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
         </div>
       </div>
     </div>
-    <!-- Permission modal shown when the user can't manage billing -->
+    <!-- Permission modal shown when the user lacks read or update billing access -->
     <RbacPermissionOnlyModal
       v-if="showAdminModal"
       :title="t('billing-access-required')"
-      permission="org.update_billing"
+      :permission="adminModalPermission"
       @click="showAdminModal = false"
     />
   </div>

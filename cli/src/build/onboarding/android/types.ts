@@ -75,6 +75,7 @@ export type AndroidOnboardingStep
     | 'writing-workflow-file'
     | 'ask-build'
     | 'requesting-build'
+    | 'build-log-view'
     // AI debug — only entered when the build fails and logs were captured
     | 'ai-analysis-prompt'
     | 'ai-analysis-running'
@@ -348,6 +349,7 @@ export const ANDROID_STEP_PROGRESS: Record<AndroidOnboardingStep, number> = {
   'writing-workflow-file': 98,
   'ask-build': 90,
   'requesting-build': 95,
+  'build-log-view': 96,
   'ai-analysis-prompt': 96,
   'ai-analysis-running': 98,
   'ai-analysis-result-scroll': 98,
@@ -431,6 +433,7 @@ export function getAndroidPhaseLabel(step: AndroidOnboardingStep): string {
     case 'ai-analysis-running':
     case 'ai-analysis-result':
     case 'ai-analysis-result-scroll':
+    case 'build-log-view':
       return 'AI debug'
     case 'build-complete':
       return 'Complete'

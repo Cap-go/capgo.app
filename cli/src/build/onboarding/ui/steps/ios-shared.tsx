@@ -133,6 +133,7 @@ export const AiAnalysisPromptStep: FC<AiAnalysisPromptStepProps> = ({ dense = fa
       options={[
         { label: '📨  Email Capgo support', value: 'support' },
         { label: '🤖  Debug with AI', value: 'debug' },
+        { label: '👀  Show me the build logs', value: 'logs' },
         { label: '⏭   Skip', value: 'skip' },
       ]}
       onChange={onChange}

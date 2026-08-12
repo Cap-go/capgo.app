@@ -162,17 +162,15 @@ watchEffect(() => {
   const billingEnabled = stripeEnabled.value
   const needsGroups = !!organizationStore.currentOrganization?.gid
   const needsUsage = billingEnabled && canReadBilling.value
-  const needsPlanPages = billingEnabled && canUpdateBilling.value && !hideExternalPurchaseFlows
+  // Plans/Credits/Billing are visible with org.read_billing; mutations stay gated by org.update_billing.
+  const needsPlanPages = billingEnabled && canReadBilling.value && !hideExternalPurchaseFlows
   const needsAuditLogs = canReadAuditLogs.value
   const needsSecurity = canManageSecurity.value
-  const needsBillingTab = billingEnabled && canReadBilling.value && !hideExternalPurchaseFlows
-  // Plan hub when there is a navigable plan page, or billing-only access (hub opens portal).
-  const needsPlanHub = needsPlanPages || needsBillingTab
 
   // --- Secondary (main) org tabs ---
   upsertTab(organizationTabs, ORG_TEAM_HUB, baseOrgMainTabs)
 
-  if (needsPlanHub)
+  if (needsPlanPages)
     upsertTab(organizationTabs, ORG_PLAN_HUB, baseOrgMainTabs)
   else
     removeTab(organizationTabs, ORG_PLAN_HUB)
@@ -225,7 +223,7 @@ watchEffect(() => {
     }
   }
   const hasBilling = planSubTabs.value.find(tab => tab.key === billingTabKey)
-  if (needsBillingTab) {
+  if (needsPlanPages) {
     if (!hasBilling) {
       planSubTabs.value.push({
         label: 'billing',
@@ -242,22 +240,8 @@ watchEffect(() => {
   sortByBase(planSubTabs.value, [...basePlanSubTabs, { label: 'billing', key: billingTabKey, icon: IconBilling }])
 
   // Drop plan hub entirely when no plan sub-tabs remain
-  if (planSubTabs.value.length === 0) {
+  if (planSubTabs.value.length === 0)
     removeTab(organizationTabs, ORG_PLAN_HUB)
-  }
-  else {
-    // Hub click must land on an accessible sub-tab. Billing-only users have no /plans
-    // access — Plans.vue would redirect them to /apps — so the hub opens billing instead.
-    const planHub = organizationTabs.value.find(tab => tab.key === ORG_PLAN_HUB)
-    if (planHub) {
-      if (needsPlanPages) {
-        delete planHub.onClick
-      }
-      else {
-        planHub.onClick = openBilling
-      }
-    }
-  }
 })
 
 const activePrimary = computed(() => {

@@ -282,17 +282,9 @@ app.post('/', async (c) => {
     if (blocked)
       return blocked
   }
-  // When clients send a custom_id, the app-level allow flag should take effect
-  // immediately. Use a read-write (primary) connection in that case to avoid
-  // replica staleness.
-  const hasCustomId = events.some((event) => {
-    if (!event || typeof event !== 'object')
-      return false
-    const v = (event as AppStats).custom_id
-    return typeof v === 'string' && v.trim() !== ''
-  })
-
-  const pgClient = await getPgClient(c, !hasCustomId)
+  // Plugin hot path must never hit primary. Device custom_id lives in Cloudflare
+  // (Analytics Engine), not Postgres — never open primary from /stats for it.
+  const pgClient = await getPgClient(c, true)
   const drizzleClient = getDrizzleClient(pgClient!, { logger: false })
 
   try {

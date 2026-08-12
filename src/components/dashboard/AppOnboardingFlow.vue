@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import type { Database } from '~/types/supabase.types'
 import type {
+  OnboardingDetailsEvent,
+  OnboardingDetailsEventProperties,
   OnboardingIntent,
   OnboardingStepCompletionProperties,
 } from '~/utils/onboardingProgressAnalytics'
@@ -33,6 +35,7 @@ import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
 import { isValidAppId } from '~/utils/appId'
+import { useBeforeUnloadWarning } from '~/utils/beforeUnloadWarning'
 import {
   buildAlternativeAppIds,
   createOnboardingAppWithFallbackIds,
@@ -41,7 +44,7 @@ import {
   clearOnboardingAppDraft,
   loadOnboardingAppDraft,
 } from '~/utils/onboardingAppDraft'
-import { createOnboardingProgressTracker } from '~/utils/onboardingProgressAnalytics'
+import { createOnboardingDetailsFieldDebouncer, createOnboardingProgressTracker } from '~/utils/onboardingProgressAnalytics'
 import { allowOnboardingDashboardExploration } from '~/utils/onboardingRedirect'
 import { slugifyOnboardingSegment } from '~/utils/onboardingSlug'
 import AppOnboardingIconInput from './AppOnboardingIconInput.vue'
@@ -60,6 +63,8 @@ const main = useMainStore()
 const organizationStore = useOrganizationStore()
 const onboardingUserId = computed(() => main.user?.id ?? main.auth?.id ?? null)
 const config = getLocalConfig()
+const STORE_ICON_FETCH_TIMEOUT_MS = 10_000
+const removeBeforeUnloadWarning = useBeforeUnloadWarning(Boolean(props.preOrg))
 
 type AppRow = Database['public']['Tables']['apps']['Row']
 type StandardFlowStep = 'details' | 'choice' | 'install' | 'setup'
@@ -158,10 +163,12 @@ const resumeStep = computed(() => {
   const value = route.query.step
   return value === 'choice' || value === 'install' || value === 'setup' ? value : null
 })
-const canUseStoreImportPreview = computed(() => existingApp.value === true && existingAppSetup.value === 'import')
+const canUseStoreImportPreview = computed(() => existingAppSetup.value === 'import' && (props.preOrg || existingApp.value === true))
 const iconPreview = computed(() => localIconPreview.value || (canUseStoreImportPreview.value ? storeIconPreview.value : '') || '')
 const hasImportedStoreMetadata = computed(() => canUseStoreImportPreview.value && !!(importedStoreAppId.value || storeIconPreview.value || storeScreenshotPreview.value))
 const canShowAppDetails = computed(() => {
+  if (props.preOrg)
+    return true
   if (existingApp.value === false)
     return true
   if (existingApp.value === true)
@@ -188,9 +195,11 @@ const generatedAppId = computed(() => createdApp.value?.app_id || manualAppId.va
 const aiHelpPrompt = computed(() => {
   const resolvedAppId = createdApp.value?.app_id || generatedAppId.value || '[APP_ID]'
   const resolvedAppName = createdApp.value?.name?.trim() || appName.value.trim() || resolvedAppId
-  const appStatus = createdApp.value?.existing_app
-    ? t('app-onboarding-ai-help-status-existing')
-    : t('app-onboarding-ai-help-status-new')
+  let appStatus = t('app-onboarding-ai-help-status-new')
+  if (props.preOrg)
+    appStatus = t('app-onboarding-v2-ai-help-status')
+  else if (createdApp.value?.existing_app)
+    appStatus = t('app-onboarding-ai-help-status-existing')
 
   return t('app-onboarding-ai-help-prompt', {
     appName: resolvedAppName,
@@ -239,6 +248,13 @@ const setupTitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onb
 const setupSubtitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onboarding-setup-builder-subtitle') : t('unified-onboarding-setup-ota-subtitle'))
 
 let progressTracker: ReturnType<typeof createOnboardingProgressTracker> | null = null
+
+function trackV2DetailsEvent(name: OnboardingDetailsEvent, details: OnboardingDetailsEventProperties = {}) {
+  if (props.preOrg)
+    progressTracker?.trackDetailsEvent(name, details)
+}
+
+const detailsFieldTracker = createOnboardingDetailsFieldDebouncer(trackV2DetailsEvent)
 
 function initializeProgressTracking(resumed: boolean) {
   const trackedSteps = appOnboardingSteps.value.map(step => step.id)
@@ -360,6 +376,17 @@ function resetStoreImportState() {
   isImportingStore.value = false
 }
 
+function togglePreOrgStoreImport() {
+  if (existingAppSetup.value === 'import') {
+    trackV2DetailsEvent('onboarding_store_import_hidden')
+    existingAppSetup.value = 'manual'
+    return
+  }
+
+  trackV2DetailsEvent('onboarding_store_import_shown')
+  existingAppSetup.value = 'import'
+}
+
 let resumeIconLoadRun = 0
 async function loadResumeIconPreview(rawIconUrl: string | null | undefined, appId: string, run: number) {
   if (!rawIconUrl || getImmediateImageUrl(rawIconUrl)) {
@@ -453,6 +480,7 @@ async function importStoreMetadata() {
   if (!requestedUrl || existingAppSetup.value !== 'import')
     return
 
+  trackV2DetailsEvent('onboarding_store_import_submitted')
   const requestedRun = ++storeImportRun
   isImportingStore.value = true
   try {
@@ -483,12 +511,18 @@ async function importStoreMetadata() {
 
     if (typeof data?.app_id === 'string' && data.app_id.trim())
       importedStoreAppId.value = data.app_id.trim()
+
+    if (props.preOrg)
+      existingApp.value = true
+
+    trackV2DetailsEvent('onboarding_store_import_succeeded')
   }
   catch (error) {
     if (requestedRun !== storeImportRun || existingAppSetup.value !== 'import' || storeUrl.value.trim() !== requestedUrl)
       return
 
     console.error('Cannot import store metadata', error)
+    trackV2DetailsEvent('onboarding_store_import_failed')
     toast.error(t('app-onboarding-toast-store-metadata-error'))
   }
   finally {
@@ -510,12 +544,49 @@ function onSelectIconFormKit(value: unknown) {
     URL.revokeObjectURL(localIconPreview.value)
   localIconPreview.value = file ? URL.createObjectURL(file) : ''
   isResumeIconLoading.value = false
+  if (file)
+    trackV2DetailsEvent('onboarding_app_icon_picked', { icon_source: 'file' })
+}
+
+function onIconPickerOpened() {
+  trackV2DetailsEvent('onboarding_app_icon_picker_opened')
+}
+
+function onIconPickerOpenFailed() {
+  trackV2DetailsEvent('onboarding_app_icon_picker_open_failed')
+}
+
+function onIconPickerClosedWithoutSelection() {
+  trackV2DetailsEvent('onboarding_app_icon_picker_closed_without_selection')
+}
+
+function onAppNameInput(event: Event) {
+  detailsFieldTracker.schedule('onboarding_app_name_entered', 'app_name', (event.target as HTMLInputElement).value)
 }
 
 function onAppIdInput(event: Event) {
   hasEditedAppId.value = true
   manualAppId.value = (event.target as HTMLInputElement).value
   appIdFeedback.value = ''
+  detailsFieldTracker.schedule('onboarding_app_id_entered', 'app_id', manualAppId.value)
+}
+
+function onStoreUrlInput(event: Event) {
+  detailsFieldTracker.schedule('onboarding_store_url_entered', 'store_url', (event.target as HTMLInputElement).value)
+}
+
+function openAppIdHelp() {
+  trackV2DetailsEvent('onboarding_app_id_help_opened')
+  dialogStore.openDialog({
+    title: t('app-onboarding-v2-appid-dialog-title'),
+    description: t('app-onboarding-v2-appid-dialog-description'),
+    buttons: [
+      {
+        text: t('close'),
+        role: 'primary',
+      },
+    ],
+  })
 }
 
 function applyAppIdSuggestion(suggestion: string) {
@@ -533,13 +604,26 @@ async function uploadIcon(appId: string, iconSourceUrl?: string) {
   if (!fileToUpload && iconSourceUrl) {
     try {
       const parsedIconUrl = new URL(iconSourceUrl)
-      if (parsedIconUrl.protocol !== 'https:') {
-        console.warn('Skipping non-HTTPS icon URL', iconSourceUrl)
+      const isRemoteImage = parsedIconUrl.protocol === 'https:'
+      const isInlineImage = parsedIconUrl.protocol === 'data:' && iconSourceUrl.startsWith('data:image/')
+      if (!isRemoteImage && !isInlineImage) {
+        console.warn('Skipping unsupported icon URL', iconSourceUrl)
       }
       else {
-        const response = await fetch(parsedIconUrl.toString())
-        const blob = await response.blob()
-        fileToUpload = new File([blob], 'store-icon.png', { type: blob.type || 'image/png' })
+        const controller = new AbortController()
+        const timeoutId = setTimeout(() => controller.abort(), STORE_ICON_FETCH_TIMEOUT_MS)
+        try {
+          const response = await fetch(parsedIconUrl.toString(), { signal: controller.signal })
+          if (!response.ok)
+            throw new Error(`Icon request failed with status ${response.status}`)
+          const blob = await response.blob()
+          if (!blob.type.startsWith('image/'))
+            throw new Error(`Icon response has unsupported content type: ${blob.type || 'unknown'}`)
+          fileToUpload = new File([blob], 'store-icon.png', { type: blob.type })
+        }
+        finally {
+          clearTimeout(timeoutId)
+        }
       }
     }
     catch (error) {
@@ -547,8 +631,13 @@ async function uploadIcon(appId: string, iconSourceUrl?: string) {
     }
   }
 
-  if (!fileToUpload)
+  if (!fileToUpload) {
+    if (iconSourceUrl)
+      trackV2DetailsEvent('onboarding_app_icon_upload_failed', { icon_source: 'store' })
     return
+  }
+
+  const iconSource = selectedIconFile.value ? 'file' : 'store'
 
   const iconPath = `org/${currentOrg.value.gid}/${appId}/icon`
   const { error: uploadError } = await supabase.storage
@@ -560,13 +649,22 @@ async function uploadIcon(appId: string, iconSourceUrl?: string) {
 
   if (uploadError) {
     console.error('Cannot upload app icon', uploadError)
+    trackV2DetailsEvent('onboarding_app_icon_upload_failed', { icon_source: iconSource })
     return
   }
 
-  await supabase
+  const { error: appUpdateError } = await supabase
     .from('apps')
     .update({ icon_url: iconPath })
     .eq('app_id', appId)
+
+  if (appUpdateError) {
+    console.error('Cannot save app icon path', appUpdateError)
+    trackV2DetailsEvent('onboarding_app_icon_upload_failed', { icon_source: iconSource })
+    return
+  }
+
+  trackV2DetailsEvent('onboarding_app_icon_uploaded', { icon_source: iconSource })
 }
 
 function ensureValidAppId(): boolean {
@@ -631,11 +729,6 @@ function continueFromIntent() {
 }
 
 function continuePreOrgDetails() {
-  if (existingApp.value === null) {
-    toast.error(t('app-onboarding-toast-existing-required'))
-    return
-  }
-
   if (!appName.value.trim()) {
     toast.error(t('app-onboarding-toast-name-required'))
     return
@@ -648,6 +741,9 @@ function continuePreOrgDetails() {
 
   if (!ensureValidAppId())
     return
+
+  // Store publication is unrelated to whether the user already has a mobile project.
+  existingApp.value = true
 
   completeAndViewStep('organization', {
     storeImportUsed: hasImportedStoreMetadata.value,
@@ -722,6 +818,7 @@ async function createOrganizationAndApp() {
 
     if (!createdApp.value)
       return
+    removeBeforeUnloadWarning()
 
     try {
       await ensureApiKey()
@@ -930,7 +1027,11 @@ onMounted(async () => {
   isLoading.value = true
   try {
     if (props.preOrg) {
-      restoreDraftState()
+      const restoredDraft = restoreDraftState()
+      if (!restoredDraft || existingAppSetup.value !== 'import') {
+        existingApp.value = true
+        existingAppSetup.value = 'manual'
+      }
       flowStep.value = 'intent'
       return
     }
@@ -955,11 +1056,21 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  detailsFieldTracker.dispose()
+
   if (localIconPreview.value.startsWith('blob:'))
     URL.revokeObjectURL(localIconPreview.value)
 })
 
 watch(existingApp, (value) => {
+  if (props.preOrg) {
+    if (value === false)
+      estimatedUsersIndex.value = 0
+    appIdSuggestions.value = []
+    appIdFeedback.value = ''
+    return
+  }
+
   existingAppSetup.value = value === true ? null : value === false ? 'manual' : null
   if (value !== true) {
     resetStoreImportState()
@@ -1080,11 +1191,16 @@ watch(appName, (value) => {
                   {{ t('app-onboarding-step-details') }}
                 </p>
                 <h2 class="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
-                  {{ t('app-onboarding-existing-question') }}
+                  {{ props.preOrg
+                    ? t('app-onboarding-v2-details-title')
+                    : t('app-onboarding-existing-question') }}
                 </h2>
+                <p v-if="props.preOrg" class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                  {{ t('app-onboarding-v2-details-helper') }}
+                </p>
               </div>
 
-              <div class="grid gap-3 sm:grid-cols-2">
+              <div v-if="!props.preOrg" class="grid gap-3 sm:grid-cols-2">
                 <button
                   type="button"
                   :aria-pressed="existingApp === true"
@@ -1131,7 +1247,7 @@ watch(appName, (value) => {
                 </button>
               </div>
 
-              <div v-if="existingApp === true" class="space-y-5 border-t border-slate-200 pt-6 dark:border-white/15">
+              <div v-if="!props.preOrg && existingApp === true" class="space-y-5 border-t border-slate-200 pt-6 dark:border-white/15">
                 <div>
                   <p class="text-sm font-semibold text-slate-950 dark:text-white">
                     {{ t('app-onboarding-start-question') }}
@@ -1218,6 +1334,7 @@ watch(appName, (value) => {
                     class="mt-2 min-h-12 w-full rounded-xl border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/10 dark:border-white/20 dark:bg-slate-950/90 dark:text-white dark:placeholder:text-slate-500 dark:focus:border-primary-500 dark:focus:ring-primary-500/30"
                     :placeholder="t('app-onboarding-name-placeholder')"
                     maxlength="100"
+                    @input="onAppNameInput"
                   >
                 </div>
 
@@ -1231,10 +1348,21 @@ watch(appName, (value) => {
                     @input="onAppIdInput"
                   >
                   <p class="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">
-                    {{ existingApp
-                      ? t('app-onboarding-appid-help-existing')
-                      : t('app-onboarding-appid-help-new') }}
+                    {{ props.preOrg
+                      ? t('app-onboarding-v2-appid-help')
+                      : existingApp
+                        ? t('app-onboarding-appid-help-existing')
+                        : t('app-onboarding-appid-help-new') }}
                   </p>
+                  <button
+                    v-if="props.preOrg"
+                    type="button"
+                    class="mt-1 text-sm font-medium text-primary-500 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
+                    data-test="app-onboarding-appid-learn-more"
+                    @click="openAppIdHelp()"
+                  >
+                    {{ t('learn-more') }}
+                  </button>
                   <output v-if="appIdFeedback" class="mt-2 block text-sm font-medium text-amber-700 dark:text-amber-300" for="app-onboarding-app-id">
                     {{ appIdFeedback }}
                   </output>
@@ -1251,9 +1379,54 @@ watch(appName, (value) => {
                   </div>
                 </div>
 
+                <div v-if="props.preOrg" class="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-white/15 dark:bg-slate-950/60">
+                  <button
+                    type="button"
+                    class="d-btn min-h-10"
+                    :class="whiteCardSecondaryButtonClass()"
+                    :aria-expanded="existingAppSetup === 'import'"
+                    data-test="app-onboarding-toggle-store-import"
+                    @click="togglePreOrgStoreImport()"
+                  >
+                    <IconStore class="h-4 w-4" />
+                    <span>{{ t('app-onboarding-v2-store-import-toggle') }}</span>
+                  </button>
+
+                  <div v-if="existingAppSetup === 'import'" class="mt-4 border-t border-slate-200 pt-4 dark:border-white/15">
+                    <label for="app-onboarding-v2-store-url" class="text-sm font-medium text-slate-800 dark:text-slate-200">
+                      {{ t('app-onboarding-store-link-label') }}
+                    </label>
+                    <div class="mt-2 flex flex-col gap-3 sm:flex-row">
+                      <input
+                        id="app-onboarding-v2-store-url"
+                        v-model="storeUrl"
+                        class="min-h-12 w-full rounded-xl border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/10 dark:border-white/20 dark:bg-slate-950/90 dark:text-white dark:placeholder:text-slate-500 dark:focus:border-primary-500 dark:focus:ring-primary-500/30"
+                        :placeholder="t('app-onboarding-store-link-placeholder')"
+                        type="url"
+                        @input="onStoreUrlInput"
+                      >
+                      <button type="button" class="d-btn min-h-12 shrink-0" :class="whiteCardPrimaryButtonClass()" :disabled="isImportingStore || !storeUrl" @click="importStoreMetadata()">
+                        <IconLoader v-if="isImportingStore" class="h-4 w-4 animate-spin" />
+                        <IconSparkles v-else class="h-4 w-4" />
+                        <span>{{ t('app-onboarding-store-import-button') }}</span>
+                      </button>
+                    </div>
+                    <p class="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400" aria-live="polite">
+                      {{ hasImportedStoreMetadata
+                        ? t('app-onboarding-store-imported-help')
+                        : t('app-onboarding-v2-store-import-help') }}
+                    </p>
+                  </div>
+                </div>
+
                 <div>
                   <AppOnboardingIconInput
                     :label="t('app-onboarding-icon-label')"
+                    :choose-label="t('app-onboarding-icon-choose-file')"
+                    :empty-label="t('app-onboarding-icon-no-file-selected')"
+                    @picker-closed-without-selection="onIconPickerClosedWithoutSelection"
+                    @picker-open-failed="onIconPickerOpenFailed"
+                    @picker-opened="onIconPickerOpened"
                     @update:model-value="onSelectIconFormKit"
                   />
                   <p class="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">
@@ -1280,7 +1453,7 @@ watch(appName, (value) => {
                 </div>
               </template>
 
-              <div class="pt-1">
+              <div v-if="!props.preOrg" class="pt-1">
                 <button
                   v-if="!isCliCommandVisible"
                   type="button"
