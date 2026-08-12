@@ -632,7 +632,7 @@ watch([selectedPlatform, selectedVersionNames], () => {
         />
       </template>
       <template #table-notice>
-        <div v-if="showAddButton" class="border-b border-slate-200 px-4 py-2 dark:border-slate-700 sm:px-6">
+        <div v-if="showAddButton" class="px-4 pb-1 pt-1 sm:px-6">
           <ChannelOverrideRetentionNotice show-label />
         </div>
       </template>
