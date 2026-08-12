@@ -2925,37 +2925,3 @@ export async function getPublicLiveUpdateMetricsCF(c: Context, referenceDate = n
     throw error
   }
 }
-
-/**
- * Device-day install success rate for a closed time window.
- * Used by global_stats.success_rate so admin matches public /data.
- */
-
-/**
- * Device-day install success rate for a closed time window.
- * Used by global_stats.success_rate so admin matches public /data.
- */
-export async function getDeviceDaySuccessRateCF(c: Context, start: Date, end: Date): Promise<number> {
-  if (!c.env.APP_LOG)
-    return 0
-
-  const window = `timestamp >= toDateTime('${formatDateCF(start)}') AND timestamp < toDateTime('${formatDateCF(end)}')`
-  const failureActions = PUBLIC_FAILURE_ACTIONS.map(action => `'${action}'`).join(', ')
-  const day = `formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d')`
-  const outcomeBase = `SELECT ${day} AS date, index1 AS app_id, blob1 AS device_id, max(if(blob2 = 'set', 1, 0)) AS succeeded, max(if(blob2 IN (${failureActions}), 1, 0)) AS failed FROM app_log WHERE ${window} AND (blob2 = 'set' OR blob2 IN (${failureActions})) GROUP BY date, app_id, device_id`
-  const query = `SELECT sum(succeeded) AS successes, sum(if(succeeded = 0, failed, 0)) AS failures FROM (${outcomeBase})`
-
-  cloudlog({ requestId: c.get('requestId'), message: 'getDeviceDaySuccessRateCF query', query })
-  try {
-    const result = await runQueryToCFA<{ successes: number, failures: number }>(c, query)
-    const row = result[0]
-    const successes = Number(row?.successes) || 0
-    const failures = Number(row?.failures) || 0
-    const outcomes = successes + failures
-    return outcomes > 0 ? Number(((successes / outcomes) * 100).toFixed(1)) : 0
-  }
-  catch (e) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'Error in getDeviceDaySuccessRateCF', error: serializeError(e), query })
-    return 0
-  }
-}
