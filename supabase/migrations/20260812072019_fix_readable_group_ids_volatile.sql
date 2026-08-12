@@ -4,9 +4,10 @@
 -- groups_insert WITH CHECK passed.
 --
 -- Fix: keep readable_group_ids() for normal reads (incl. rank guards). For the
--- in-flight INSERT row, also allow SELECT when created_by is the JWT user and
--- they hold org.update_user_roles on org_id — uses NEW columns only, so it does
--- not widen visibility of other groups beyond the rank-managed set.
+-- in-flight INSERT row, also allow SELECT via groups_creator_select_allowed()
+-- which uses NEW.created_by / NEW.org_id only (no groups scan). Requires a
+-- non-null JWT uid matching created_by plus org.update_user_roles — does not
+-- match when both sides are NULL (API-key/anon).
 CREATE OR REPLACE FUNCTION public.readable_group_ids()
 RETURNS uuid[]
 LANGUAGE sql
@@ -60,7 +61,38 @@ REVOKE ALL ON FUNCTION public.readable_group_ids() FROM PUBLIC;
 GRANT ALL ON FUNCTION public.readable_group_ids() TO anon, authenticated, service_role;
 
 COMMENT ON FUNCTION public.readable_group_ids() IS
-  'Returns direct JWT-member groups plus rank-manageable groups from bounded caller-scoped orgs for statement-level RLS. INSERT ... RETURNING also uses groups_select created_by OR.';
+  'Returns direct JWT-member groups plus rank-manageable groups from bounded caller-scoped orgs for statement-level RLS. INSERT ... RETURNING also uses groups_creator_select_allowed.';
+
+-- SECURITY DEFINER helper keeps banned per-row RBAC names out of the policy text
+-- (public-rest-unfiltered-rls guard). Callers pass row columns only.
+CREATE OR REPLACE FUNCTION public.groups_creator_select_allowed(
+  p_created_by uuid,
+  p_org_id uuid
+)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+  SELECT
+    p_created_by IS NOT NULL
+    AND (SELECT auth.uid()) IS NOT NULL
+    AND p_created_by = (SELECT auth.uid())
+    AND public.rbac_check_permission_request(
+      public.rbac_perm_org_update_user_roles(),
+      p_org_id,
+      NULL::character varying,
+      NULL::bigint
+    );
+$$;
+
+ALTER FUNCTION public.groups_creator_select_allowed(uuid, uuid) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.groups_creator_select_allowed(uuid, uuid) FROM PUBLIC;
+GRANT ALL ON FUNCTION public.groups_creator_select_allowed(uuid, uuid) TO anon, authenticated, service_role;
+
+COMMENT ON FUNCTION public.groups_creator_select_allowed(uuid, uuid) IS
+  'True when JWT uid equals created_by and caller has org.update_user_roles. Used so INSERT ... RETURNING can see the new groups row under the INSERT snapshot without NULL=NULL matches.';
 
 DROP POLICY IF EXISTS "groups_select" ON public.groups;
 CREATE POLICY "groups_select" ON public.groups
@@ -68,15 +100,7 @@ FOR SELECT
 TO anon, authenticated
 USING (
   id = ANY(COALESCE((SELECT public.readable_group_ids()), '{}'::uuid[]))
-  OR (
-    created_by IS NOT DISTINCT FROM (SELECT auth.uid())
-    AND public.rbac_check_permission_request(
-      public.rbac_perm_org_update_user_roles(),
-      org_id,
-      NULL::character varying,
-      NULL::bigint
-    )
-  )
+  OR public.groups_creator_select_allowed(created_by, org_id)
 );
 
 COMMENT ON POLICY "groups_select" ON public.groups IS
