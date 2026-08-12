@@ -672,7 +672,7 @@ watch(
                 class="flex min-h-14 min-w-0 flex-1 cursor-pointer items-center gap-3 rounded-md border p-3 text-left transition-colors"
                 :class="selectedRole === option.name
                   ? 'border-primary bg-primary/5 ring-1 ring-primary/30 dark:bg-primary/10'
-                  : 'border-slate-200 bg-white hover:border-primary/60 dark:border-slate-700 dark:bg-slate-950'"
+                  : 'border-slate-200 bg-white hover:border-primary/60 dark:border-slate-700 dark:bg-transparent'"
               >
                 <input
                   v-model="selectedRole"
