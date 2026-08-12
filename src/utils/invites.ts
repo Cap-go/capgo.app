@@ -75,24 +75,65 @@ interface InviteSessionTokens {
   refresh_token: string
 }
 
+interface InviteSessionStorage {
+  getItem: (key: string) => string | null
+  setItem: (key: string, value: string) => void
+  removeItem: (key: string) => void
+}
+
+const INVITE_SESSION_HANDOFF_KEY = 'capgo-invite-session-handoff'
+
 /**
- * Establish the invitee session in-page, then go to /login without tokens.
+ * Same-origin stash for invite → /login session handoff.
  *
- * Putting access_token/refresh_token on /login makes login.vue show the
- * leaked-session warning unless document.referrer is a Capgo host. SPA
- * navigation from /invitation does not update the referrer (it stays the
- * email client or empty), so invitees would always see that prompt.
+ * Do not put tokens on the login URL. SPA navigation keeps document.referrer
+ * as the email client (or empty), so login.vue would show the leaked-session
+ * warning from #2830. sessionStorage is first-party and not in history.
  */
-export async function completeInviteSessionHandoff(
-  setSession: (tokens: InviteSessionTokens) => Promise<{ error: { message: string } | null }>,
-  goToLogin: () => unknown,
+export function stashInviteSessionHandoff(
   tokens: InviteSessionTokens,
-): Promise<void> {
-  const { error } = await setSession({
+  storage: Pick<InviteSessionStorage, 'setItem'> = globalThis.sessionStorage,
+) {
+  storage.setItem(INVITE_SESSION_HANDOFF_KEY, JSON.stringify({
     access_token: tokens.access_token,
     refresh_token: tokens.refresh_token,
-  })
-  if (error)
-    throw new Error(error.message)
+  }))
+}
+
+export function takeInviteSessionHandoff(
+  storage: Pick<InviteSessionStorage, 'getItem' | 'removeItem'> = globalThis.sessionStorage,
+): InviteSessionTokens | null {
+  const raw = storage.getItem(INVITE_SESSION_HANDOFF_KEY)
+  storage.removeItem(INVITE_SESSION_HANDOFF_KEY)
+  if (!raw)
+    return null
+
+  try {
+    const parsed = JSON.parse(raw) as Partial<InviteSessionTokens>
+    if (typeof parsed.access_token === 'string' && typeof parsed.refresh_token === 'string') {
+      return {
+        access_token: parsed.access_token,
+        refresh_token: parsed.refresh_token,
+      }
+    }
+  }
+  catch {
+    return null
+  }
+
+  return null
+}
+
+export async function completeInviteSessionHandoff(
+  goToLogin: () => unknown,
+  tokens: InviteSessionTokens,
+  storage?: Pick<InviteSessionStorage, 'setItem'>,
+): Promise<void> {
+  try {
+    stashInviteSessionHandoff(tokens, storage)
+  }
+  catch (error) {
+    console.error('Failed to stash invite session', error)
+  }
   await goToLogin()
 }

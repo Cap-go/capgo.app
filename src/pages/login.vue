@@ -18,6 +18,7 @@ import { hideLoader } from '~/services/loader'
 import { autoAuth, defaultApiHost, hashEmail, useSupabase } from '~/services/supabase'
 import { openSupport } from '~/services/support'
 import { isCapgoDomainReferrer } from '~/utils/capgoReferrer'
+import { takeInviteSessionHandoff } from '~/utils/invites'
 
 const route = useRoute('/login')
 const supabase = useSupabase()
@@ -581,7 +582,7 @@ async function acceptQuerySession() {
   nextLogin()
 }
 
-async function handleQuerySessionHandoff(accessToken: string, refreshToken: string, parsedUrl: URL) {
+async function handleQuerySessionHandoff(accessToken: string, refreshToken: string, parsedUrl: URL, trustedSource = false) {
   parsedUrl.searchParams.delete('access_token')
   parsedUrl.searchParams.delete('refresh_token')
   globalThis.history.replaceState({}, '', parsedUrl.toString())
@@ -589,10 +590,10 @@ async function handleQuerySessionHandoff(accessToken: string, refreshToken: stri
   querySessionAccessToken.value = accessToken
   querySessionRefreshToken.value = refreshToken
 
-  // Landing/register handoff from Capgo domains is expected; skip the
-  // confirm step that causes onboarding drop-off. Keep confirmation when
-  // the referrer is missing or external (shared/leaked session links).
-  if (isCapgoDomainReferrer(document.referrer)) {
+  // Landing/register handoff from Capgo domains, and first-party org-invite
+  // handoff via sessionStorage, are expected. Keep confirmation when the
+  // referrer is missing or external (shared/leaked session links).
+  if (trustedSource || isCapgoDomainReferrer(document.referrer)) {
     await acceptQuerySession()
     // setSession failed: tokens remain in memory — show confirm so user can retry
     if (querySessionAccessToken.value) {
@@ -616,6 +617,12 @@ async function checkLogin() {
       parsedUrl.searchParams.delete('message')
       globalThis.history.replaceState({}, '', parsedUrl.toString())
       toast.success(t('sso-account-linked'))
+    }
+
+    const inviteHandoff = takeInviteSessionHandoff()
+    if (inviteHandoff) {
+      await handleQuerySessionHandoff(inviteHandoff.access_token, inviteHandoff.refresh_token, parsedUrl, true)
+      return
     }
 
     const accessToken = params.get('access_token')

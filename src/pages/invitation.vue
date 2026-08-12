@@ -140,19 +140,10 @@ async function submitForm() {
     }
 
     if (data?.access_token && data?.refresh_token) {
-      const supabase = useSupabase()
-      try {
-        await completeInviteSessionHandoff(
-          tokens => supabase.auth.setSession(tokens),
-          () => router.replace('/login'),
-          data,
-        )
-      }
-      catch {
-        // Invite is already consumed. Keep tokens on /login so the user can
-        // retry instead of being stuck on a generic accept error.
-        await router.replace(`/login?access_token=${encodeURIComponent(data.access_token)}&refresh_token=${encodeURIComponent(data.refresh_token)}`)
-      }
+      await completeInviteSessionHandoff(
+        () => router.replace('/login'),
+        data,
+      )
     }
     else {
       captchaComponent.value?.reset()
