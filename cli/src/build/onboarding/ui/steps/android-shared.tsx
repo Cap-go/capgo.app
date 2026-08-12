@@ -237,7 +237,7 @@ export const ErrorStep: FC<ErrorStepProps> = ({ message, onChoose, hasBuildLog =
 // cols. All telemetry on the choice stays in the parent's onChoose handler.
 
 export interface AiAnalysisPromptStepProps {
-  onChoose: (choice: 'debug' | 'skip' | 'support') => void
+  onChoose: (choice: 'debug' | 'logs' | 'skip' | 'support') => void
   dense?: boolean
 }
 
@@ -251,9 +251,10 @@ export const AiAnalysisPromptStep: FC<AiAnalysisPromptStepProps> = ({ onChoose, 
       options={[
         { label: '📨  Email Capgo support', value: 'support' },
         { label: '🤖  Debug with AI', value: 'debug' },
+        { label: '👀  Show me the build logs', value: 'logs' },
         { label: '⏭   Skip', value: 'skip' },
       ]}
-      onChange={value => onChoose(value as 'debug' | 'skip' | 'support')}
+      onChange={value => onChoose(value as 'debug' | 'logs' | 'skip' | 'support')}
     />
   </Box>
 )
