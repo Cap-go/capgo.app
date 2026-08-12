@@ -24,7 +24,7 @@
   },
   "peerDependencies": {
     "@capacitor/core": "^8.4.2",
-    "@capgo/capacitor-updater": "^8.51.2"
+    "@capgo/capacitor-updater": "^8.51.4"
   },
   "peerDependenciesMeta": {
     "@capgo/capacitor-updater": {
