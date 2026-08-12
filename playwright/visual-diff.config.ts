@@ -27,7 +27,11 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
     auth: true,
     prepare: async (page) => {
       await page.getByText('no_access', { exact: true }).first().click()
-      await page.getByRole('button', { name: /^devices$/i }).click()
+      await page.waitForURL(/\/app\/com\.demo\.app\/channel\/\d+/)
+      const channelId = page.url().match(/\/channel\/(\d+)/)?.[1]
+      if (!channelId)
+        throw new Error('Missing channel id after opening no_access')
+      await page.goto(`/app/com.demo.app/channel/${channelId}/devices`)
       await page.getByText(/no devices are forced|force a device to this channel/i).first().waitFor({ state: 'visible' })
     },
   },
