@@ -8,6 +8,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import plusOutline from '~icons/ion/add-outline'
 import IconAlertCircle from '~icons/lucide/alert-circle'
+import ChannelOverrideRetentionNotice from '~/components/ChannelOverrideRetentionNotice.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
 import { withBuiltinChannelVersion } from '~/services/versions'
@@ -291,6 +292,9 @@ watchEffect(async () => {
     <div v-else-if="channel">
       <div class="w-full h-full px-0 pt-0 mx-auto mb-8 overflow-y-auto sm:px-6 md:pt-8 lg:px-8 max-w-9xl max-h-fit">
         <div class="flex flex-col overflow-hidden overflow-y-auto bg-white border shadow-lg md:rounded-lg dark:bg-gray-800 border-slate-300 dark:border-slate-900">
+          <div class="border-b border-slate-200 px-4 py-3 dark:border-slate-700 sm:px-6">
+            <ChannelOverrideRetentionNotice />
+          </div>
           <DeviceTable v-if="deviceIds.length > 0" :app-id="channel.version.app_id" :ids="deviceIds" :channel="channel" show-add-button @add-device="AddDevice" />
           <template v-else-if="!dialogStore.showDialog">
             <div class="flex min-h-96 items-center justify-center px-6 py-10 text-center">
@@ -329,6 +333,7 @@ watchEffect(async () => {
     <!-- Teleport Content for Add Device Modal -->
     <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions?.title === t('type-device-id')" defer to="#dialog-v2-content">
       <div class="space-y-4">
+        <ChannelOverrideRetentionNotice compact />
         <FormKit
           v-model="deviceIdInput"
           type="text"

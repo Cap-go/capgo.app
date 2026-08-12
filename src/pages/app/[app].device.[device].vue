@@ -11,6 +11,7 @@ import IconCopy from '~icons/heroicons/clipboard-document-check'
 import IconCode from '~icons/heroicons/code-bracket'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconDown from '~icons/material-symbols/keyboard-arrow-down-rounded'
+import ChannelOverrideRetentionNotice from '~/components/ChannelOverrideRetentionNotice.vue'
 import { useDeviceUpdateFormat } from '~/composables/useDeviceUpdateFormat'
 import { formatDate } from '~/services/date'
 import { checkPermissions } from '~/services/permissions'
@@ -399,6 +400,9 @@ async function copyCurlCommand() {
           {{ t('device-injected-2') }}
         </div>
         <div class="flex flex-col bg-white border shadow-lg md:rounded-lg dark:bg-gray-800 border-slate-300 dark:border-slate-900">
+          <div class="border-b border-slate-200 px-4 py-3 dark:border-slate-700 sm:px-6">
+            <ChannelOverrideRetentionNotice />
+          </div>
           <dl :key="reloadCount" class="divide-y divide-slate-200 dark:divide-slate-500">
             <InfoRow :label="t('device-id')">
               {{ device.device_id }}
