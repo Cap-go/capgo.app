@@ -166,14 +166,12 @@ watchEffect(() => {
   const needsPlans = billingEnabled && canUpdateBilling.value && !hideExternalPurchaseFlows
   const needsAuditLogs = canReadAuditLogs.value
   const needsSecurity = canManageSecurity.value
-  const needsPlanHub = needsPlans || needsCredits || (billingEnabled && canReadBilling.value && !hideExternalPurchaseFlows)
-  const needsTeamHub = true
+  const needsBillingTab = billingEnabled && canReadBilling.value && !hideExternalPurchaseFlows
+  // Plan hub when there is a navigable plan page, or billing-only access (hub opens portal).
+  const needsPlanHub = needsPlans || needsCredits || needsBillingTab
 
   // --- Secondary (main) org tabs ---
-  if (needsTeamHub)
-    upsertTab(organizationTabs, ORG_TEAM_HUB, baseOrgMainTabs)
-  else
-    removeTab(organizationTabs, ORG_TEAM_HUB)
+  upsertTab(organizationTabs, ORG_TEAM_HUB, baseOrgMainTabs)
 
   if (needsPlanHub)
     upsertTab(organizationTabs, ORG_PLAN_HUB, baseOrgMainTabs)
@@ -220,21 +218,22 @@ watchEffect(() => {
 
   // Billing portal entry: users with org.read_billing can see it; update opens Stripe
   const billingTabKey = '/billing'
+  const openBilling = () => {
+    if (canUpdateBilling.value) {
+      openPortal(organizationStore.currentOrganization?.gid ?? '', t)
+    }
+    else {
+      showBillingModal.value = true
+    }
+  }
   const hasBilling = planSubTabs.value.find(tab => tab.key === billingTabKey)
-  if (!hideExternalPurchaseFlows && billingEnabled && canReadBilling.value) {
+  if (needsBillingTab) {
     if (!hasBilling) {
       planSubTabs.value.push({
         label: 'billing',
         icon: IconBilling,
         key: billingTabKey,
-        onClick: () => {
-          if (canUpdateBilling.value) {
-            openPortal(organizationStore.currentOrganization?.gid ?? '', t)
-          }
-          else {
-            showBillingModal.value = true
-          }
-        },
+        onClick: openBilling,
       })
     }
   }
@@ -245,8 +244,22 @@ watchEffect(() => {
   sortByBase(planSubTabs.value, [...basePlanSubTabs, { label: 'billing', key: billingTabKey, icon: IconBilling }])
 
   // Drop plan hub entirely when no plan sub-tabs remain
-  if (planSubTabs.value.length === 0)
+  if (planSubTabs.value.length === 0) {
     removeTab(organizationTabs, ORG_PLAN_HUB)
+  }
+  else {
+    // Hub click must land on an accessible sub-tab. Billing-only users have no /plans
+    // access — Plans.vue would redirect them to /apps — so the hub opens billing instead.
+    const planHub = organizationTabs.value.find(tab => tab.key === ORG_PLAN_HUB)
+    if (planHub) {
+      if (needsPlans || needsCredits) {
+        delete planHub.onClick
+      }
+      else {
+        planHub.onClick = openBilling
+      }
+    }
+  }
 })
 
 const activePrimary = computed(() => {
