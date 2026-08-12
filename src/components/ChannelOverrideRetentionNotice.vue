@@ -11,6 +11,9 @@ withDefaults(defineProps<{
 
 const { t } = useI18n()
 
+/** Keep in sync with cleanup_old_channel_devices retention (90 days). */
+const CHANNEL_OVERRIDE_RETENTION_DAYS = 90
+
 const docsUrl = 'https://capgo.app/docs/live-updates/channels/'
 </script>
 
@@ -32,7 +35,7 @@ const docsUrl = 'https://capgo.app/docs/live-updates/channels/'
           class="font-semibold text-slate-900 dark:text-white"
           :class="compact ? 'text-sm' : 'text-sm sm:text-base'"
         >
-          {{ t('channel-override-retention-title') }}
+          {{ t('channel-override-retention-title', { days: CHANNEL_OVERRIDE_RETENTION_DAYS }) }}
         </p>
         <i18n-t
           keypath="channel-override-retention-desc"
@@ -40,7 +43,7 @@ const docsUrl = 'https://capgo.app/docs/live-updates/channels/'
           class="text-sm leading-6 text-slate-600 dark:text-slate-300"
         >
           <template #days>
-            <span class="font-semibold tabular-nums text-slate-800 dark:text-slate-100">90</span>
+            <span class="font-semibold tabular-nums text-slate-800 dark:text-slate-100">{{ CHANNEL_OVERRIDE_RETENTION_DAYS }}</span>
           </template>
           <template #defaultChannel>
             <code class="rounded-md bg-white/80 px-1.5 py-0.5 font-mono text-xs font-medium text-slate-800 ring-1 ring-slate-200/80 dark:bg-slate-900/60 dark:text-slate-100 dark:ring-slate-700">defaultChannel</code>
