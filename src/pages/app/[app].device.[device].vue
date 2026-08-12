@@ -479,7 +479,7 @@ async function copyCurlCommand() {
                 </span>
               </div>
             </InfoRow>
-            <div class="px-4 py-4 sm:px-6">
+            <div v-if="channelDevice" class="px-4 py-4 sm:px-6">
               <ChannelDeviceExpiryNotice compact />
             </div>
           </dl>
