@@ -13,7 +13,7 @@ import {
   getInitSuggestedOtaVersion,
   getInitUpdaterPluginConfig,
   getMissingMainFileRecoveryOptions,
-  hasExistingMainFile,
+  readExistingMainFile,
   getResumedOnboardingAccessError,
   getNativePlatformAvailability,
   injectInitCode,
@@ -229,13 +229,13 @@ t('missing main file recovery offers manual setup, docs, and path entry', () => 
     'docs',
   ])
   assert.equal(notifyAppReadyDocsUrl, 'https://capgo.app/docs/plugins/updater/notify-app-ready/')
-  assert.equal(hasExistingMainFile(null), false)
+  assert.equal(readExistingMainFile(null), null)
   withTempDir((root) => {
-    assert.equal(hasExistingMainFile(root), false)
+    assert.equal(readExistingMainFile(root), null)
     const entryFile = join(root, 'main.ts')
-    assert.equal(hasExistingMainFile(entryFile), false)
+    assert.equal(readExistingMainFile(entryFile), null)
     writeFileSync(entryFile, '')
-    assert.equal(hasExistingMainFile(entryFile), true)
+    assert.deepEqual(readExistingMainFile(entryFile), { path: entryFile, content: '' })
   })
 })
 

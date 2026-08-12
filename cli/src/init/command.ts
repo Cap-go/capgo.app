@@ -117,14 +117,14 @@ export function getMissingMainFileRecoveryOptions(): { value: MissingMainFileCho
   ]
 }
 
-export function hasExistingMainFile(mainFilePath: string | null): mainFilePath is string {
+export function readExistingMainFile(mainFilePath: string | null) {
   if (!mainFilePath)
-    return false
+    return null
   try {
-    return statSync(mainFilePath).isFile()
+    return statSync(mainFilePath).isFile() ? { path: mainFilePath, content: readFileSync(mainFilePath, 'utf8') } : null
   }
   catch {
-    return false
+    return null
   }
 }
 
@@ -2917,12 +2917,13 @@ async function addCodeStep(orgId: string, apikey: string, appId: string) {
       mainFilePath = projectTypeMainFile ? resolveProjectFilePath(projectTypeMainFile) : projectTypeMainFile
     }
 
-    if (!hasExistingMainFile(mainFilePath)) {
+    let mainFile = readExistingMainFile(mainFilePath)
+    if (!mainFile) {
       pLog.warn('Capgo could not find your app\'s JavaScript or TypeScript entry file automatically.')
       pLog.info('Capgo needs CapacitorUpdater.notifyAppReady() to run when your app starts. Without this call, the update will be marked invalid and rolled back.')
       pLog.info(`Learn more: ${notifyAppReadyDocsUrl}`)
 
-      while (!hasExistingMainFile(mainFilePath)) {
+      while (!mainFile) {
         const choice = await pSelect<MissingMainFileChoice>({
           message: 'How do you want to continue?',
           options: getMissingMainFileRecoveryOptions(),
@@ -2951,7 +2952,7 @@ async function addCodeStep(orgId: string, apikey: string, appId: string) {
         const userProvidedPath = await pText({
           message: 'Provide the relative path to your main file (JS or TS):',
           validate: (value) => {
-            if (!value || !hasExistingMainFile(resolveProjectFilePath(value)))
+            if (!value || !readExistingMainFile(resolveProjectFilePath(value)))
               return 'Path must point to an existing file.'
           },
         })
@@ -2960,11 +2961,12 @@ async function addCodeStep(orgId: string, apikey: string, appId: string) {
           return await exitAfterFinishingReplay(1)
         }
         mainFilePath = resolveProjectFilePath(userProvidedPath as string)
+        mainFile = readExistingMainFile(mainFilePath)
       }
     }
 
-    filePath = mainFilePath
-    currentContent = readFileSync(filePath, 'utf8')
+    filePath = mainFile.path
+    currentContent = mainFile.content
   }
 
   const getCanAutoInject = () => !createNuxtPlugin || created || currentContent.includes(codeInject)
