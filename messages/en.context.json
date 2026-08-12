@@ -650,7 +650,7 @@
   "bundle-install-stats-no-data": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "bundle-install-stats-no-data-help": "Used in Capgo web console areas: components/dashboard. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "bundle-install-stats-title": "Used in Capgo web console areas: components/dashboard. Role: section or dialog title. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
-  "bundle-install-success-rate": "Used in Capgo web console areas: components/dashboard. Role: toast or status message. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "bundle-install-success-rate": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "bundle-install-success-rate-help": "Used in Capgo web console areas: components/dashboard. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "bundle-install-timing-help": "Used in Capgo web console areas: components/dashboard. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "bundle-link": "Used in Capgo web console areas: pages/app. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",

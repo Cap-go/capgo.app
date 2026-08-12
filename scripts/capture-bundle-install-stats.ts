@@ -1,10 +1,3 @@
-import { chromium } from '@playwright/test'
-import { mkdirSync } from 'node:fs'
-import { join } from 'node:path'
-
-const baseUrl = process.env.BASE_URL || 'http://127.0.0.1:5173/'
-const outDir = '/opt/cursor/artifacts/screenshots'
-
 import { createClient } from '@supabase/supabase-js'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
@@ -39,18 +32,6 @@ async function ensureLocalAuth() {
   })
   if (error)
     throw new Error(`Local auth failed: ${error.message}`)
-}
-  await page.goto(`${baseUrl}login?to=/app/com.demo.app`)
-  await page.fill('[data-test="email"]', 'test@capgo.app')
-  await page.click('[data-test="continue"]')
-  await page.waitForSelector('[data-test="password"]')
-  await page.fill('[data-test="password"]', 'testtest')
-  const submit = page.locator('[data-test="submit"]')
-  if (await submit.isEnabled())
-    await submit.click()
-  else
-    await page.locator('form').first().evaluate((el: HTMLFormElement) => el.requestSubmit())
-  await page.waitForURL(/\/(apps|dashboard|app)(\/|$)/, { timeout: 45000 })
 }
 
 async function main() {

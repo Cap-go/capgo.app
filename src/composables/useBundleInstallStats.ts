@@ -86,13 +86,18 @@ export function useBundleInstallStats(
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}))
+        if (requestId !== latestRequest)
+          return
         console.error('Failed to fetch bundle install stats:', errorData)
         statsError.value = true
         toast.error(t('failed-to-fetch-bundle-install-stats'))
         return
       }
 
-      stats.value = await response.json() as BundleInstallStatsResponse
+      const payload = await response.json() as BundleInstallStatsResponse
+      if (requestId !== latestRequest)
+        return
+      stats.value = payload
     }
     catch (error) {
       if (requestId !== latestRequest)
@@ -111,8 +116,8 @@ export function useBundleInstallStats(
 }
 
 export function buildDemoBundleInstallStats(days: number): BundleInstallStatsResponse {
-  const end = dayjsUtcEnd()
-  const start = new Date(end)
+  const end = utcEndOfDay()
+  const start = utcStartOfDay(end)
   start.setUTCDate(end.getUTCDate() - (days - 1))
 
   return {
@@ -153,8 +158,14 @@ export function buildDemoBundleInstallStats(days: number): BundleInstallStatsRes
   }
 }
 
-function dayjsUtcEnd() {
+function utcEndOfDay() {
   const end = new Date()
   end.setUTCHours(23, 59, 59, 999)
   return end
+}
+
+function utcStartOfDay(from: Date) {
+  const start = new Date(from)
+  start.setUTCHours(0, 0, 0, 0)
+  return start
 }

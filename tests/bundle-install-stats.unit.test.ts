@@ -80,4 +80,24 @@ describe('bundle install stats helpers', () => {
     expect(response.totals.success_rate).toBe(89.6)
     expect(response.bundles[1]?.timing.p50_ms).toBe(1200)
   })
+
+  it.concurrent('filters cached response by version_name without changing other bundles source', () => {
+    const response = bundleInstallStatsTestUtils.buildBundleInstallResponse({
+      days: 7,
+      start: '2026-07-01T00:00:00.000Z',
+      end: '2026-07-07T23:59:59.999Z',
+      successRows: [
+        { version_name: '1.0.0', install: 10, fail: 2 },
+        { version_name: '1.1.0', install: 50, fail: 5 },
+      ],
+      timingRows: new Map(),
+    })
+
+    const filtered = bundleInstallStatsTestUtils.filterResponseByVersionName(response, '1.0.0')
+    expect(filtered.bundles).toHaveLength(1)
+    expect(filtered.bundles[0]?.version_name).toBe('1.0.0')
+    expect(filtered.totals.install).toBe(10)
+    expect(filtered.totals.fail).toBe(2)
+    expect(filtered.totals.success_rate).toBe(83.3)
+  })
 })

@@ -788,6 +788,8 @@ watchEffect(async () => {
           <BundleInstallStatsPanel
             :app-id="packageId"
             :channel-id="id"
+            :days="days"
+            hide-period-selector
             compact
           />
         </div>

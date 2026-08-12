@@ -3,9 +3,10 @@ import type { UpdateDeliveryTimingEventCF } from '../utils/cloudflare.ts'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc.js'
+import { HTTPException } from 'hono/http-exception'
 import { Hono } from 'hono/tiny'
 import { CacheHelper } from '../utils/cache.ts'
-import { parseStatsDurationMs, readUpdateDeliveryTimingEventsCF, resolveUpdateDeliveryTimingDurationMs } from '../utils/cloudflare.ts'
+import { MAX_ANALYTICS_QUERY_LIMIT, parseStatsDurationMs, readUpdateDeliveryTimingEventsCF, resolveUpdateDeliveryTimingDurationMs } from '../utils/cloudflare.ts'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
@@ -17,6 +18,8 @@ dayjs.extend(utc)
 
 const maxInstallMs = 7_200_000
 const pairingLookbackMs = 2 * 60 * 60 * 1000
+const pairingLookbackHours = pairingLookbackMs / (60 * 60 * 1000)
+const MIN_TIMING_WINDOW_MS = 60_000
 const BUNDLE_INSTALL_STATS_CACHE_TTL_SECONDS = 300
 const BUNDLE_INSTALL_STATS_CACHE_PATH = '/.bundle-install-stats'
 const supportedPeriodDays = [1, 3, 7, 30] as const
@@ -261,8 +264,9 @@ function buildBundleInstallResponse(input: {
   if (input.versionFilter)
     names = names.filter(name => input.versionFilter!.has(name))
 
+  const successByVersion = new Map(input.successRows.map(row => [row.version_name, row]))
   const bundles: BundleInstallStatsItem[] = names.map((versionName) => {
-    const success = input.successRows.find(row => row.version_name === versionName)
+    const success = successByVersion.get(versionName)
     const timing = input.timingRows.get(versionName)
     const install = toCount(success?.install)
     const fail = toCount(success?.fail)
@@ -310,7 +314,8 @@ function buildBundleInstallResponse(input: {
   }
 }
 
-function buildSuccessRateQuery() {
+function buildSuccessRateQuery(hasVersionFilter: boolean) {
+  const versionClause = hasVersionFilter ? '\n  AND version_name = ANY($4::text[])' : ''
   return `SELECT
   version_name,
   COALESCE(SUM(install), 0)::bigint AS install,
@@ -318,11 +323,14 @@ function buildSuccessRateQuery() {
 FROM public.daily_version
 WHERE app_id = $1
   AND date >= $2::date
-  AND date <= $3::date
+  AND date <= $3::date${versionClause}
 GROUP BY version_name`
 }
 
-function buildInstallTimingQuery() {
+function buildInstallTimingQuery(hasVersionFilter: boolean) {
+  const versionClause = hasVersionFilter
+    ? `\n    AND COALESCE(NULLIF(s.version_name, ''), 'unknown') = ANY($6::text[])`
+    : ''
   return `WITH scoped AS (
   SELECT
     s.app_id,
@@ -333,9 +341,9 @@ function buildInstallTimingQuery() {
     ${durationExpression} AS meta_duration_ms
   FROM public.stats s
   WHERE s.app_id = $1
-    AND s.created_at >= ($2::timestamptz - INTERVAL '2 hours')
-    AND s.created_at < $4::timestamptz
-    AND s.action = ANY($5::public.stats_action[])
+    AND s.created_at >= ($2::timestamptz - INTERVAL '${pairingLookbackHours} hours')
+    AND s.created_at < $3::timestamptz
+    AND s.action = ANY($4::public.stats_action[])${versionClause}
 ),
 installs AS (
   SELECT *
@@ -346,7 +354,7 @@ installs AS (
 starts AS (
   SELECT *
   FROM scoped
-  WHERE action = ANY($6::public.stats_action[])
+  WHERE action = ANY($5::public.stats_action[])
 ),
 install_timings AS (
   SELECT
@@ -363,7 +371,7 @@ install_timings AS (
       AND s.device_id = i.device_id
       AND s.version_name = i.version_name
       AND s.created_at <= i.created_at
-      AND s.created_at > i.created_at - INTERVAL '2 hours'
+      AND s.created_at > i.created_at - INTERVAL '${pairingLookbackHours} hours'
     ORDER BY s.created_at DESC
     LIMIT 1
   ) AS start_event ON TRUE
@@ -378,7 +386,7 @@ install_timings AS (
     AND COALESCE(
       i.meta_duration_ms,
       EXTRACT(EPOCH FROM (i.created_at - start_event.created_at)) * 1000
-    ) <= 7200000
+    ) <= ${maxInstallMs}
 )
 SELECT
   version_name,
@@ -389,6 +397,26 @@ SELECT
   percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms) AS p95_ms
 FROM install_timings
 GROUP BY version_name`
+}
+
+function filterResponseByVersionName(
+  response: BundleInstallStatsResponse,
+  versionName?: string,
+): BundleInstallStatsResponse {
+  if (!versionName)
+    return response
+  const bundles = response.bundles.filter(bundle => bundle.version_name === versionName)
+  const totalInstall = bundles.reduce((sum, bundle) => sum + bundle.install, 0)
+  const totalFail = bundles.reduce((sum, bundle) => sum + bundle.fail, 0)
+  return {
+    ...response,
+    bundles,
+    totals: {
+      install: totalInstall,
+      fail: totalFail,
+      success_rate: computeSuccessRate(totalInstall, totalFail),
+    },
+  }
 }
 
 async function resolveChannelVersionFilter(
@@ -409,7 +437,7 @@ async function resolveChannelVersionFilter(
 
   if (error) {
     cloudlog({ requestId: c.get('requestId'), message: 'bundle_install_stats deploy_history error', error })
-    throw simpleError('fetch_error', 'Failed to fetch channel deployment history', { error: String(error) })
+    throw simpleError('fetch_error', 'Failed to fetch channel deployment history')
   }
 
   const versionNames = new Set<string>()
@@ -433,12 +461,54 @@ async function resolveChannelVersionFilter(
   return versionNames
 }
 
+async function readInstallTimingEventsCFWindow(
+  c: Context<MiddlewareKeyVariables>,
+  params: {
+    appId: string
+    start: dayjs.Dayjs
+    end: dayjs.Dayjs
+    versionNames?: string[]
+  },
+): Promise<UpdateDeliveryTimingEventCF[]> {
+  const chunk = await readUpdateDeliveryTimingEventsCF(c, {
+    start_date: params.start.toISOString(),
+    end_date: params.end.toISOString(),
+    actions: [...installTimingActions],
+    app_ids: [params.appId],
+    version_names: params.versionNames,
+  })
+
+  if (chunk.length < MAX_ANALYTICS_QUERY_LIMIT)
+    return chunk
+
+  const windowMs = params.end.valueOf() - params.start.valueOf()
+  if (windowMs <= MIN_TIMING_WINDOW_MS) {
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'bundle_install_stats timing window still capped after min split',
+      app_id: params.appId,
+      start: params.start.toISOString(),
+      end: params.end.toISOString(),
+      rows: chunk.length,
+    })
+    return chunk
+  }
+
+  const mid = params.start.add(windowMs / 2, 'millisecond')
+  const [left, right] = await Promise.all([
+    readInstallTimingEventsCFWindow(c, { ...params, end: mid }),
+    readInstallTimingEventsCFWindow(c, { ...params, start: mid }),
+  ])
+  return [...left, ...right]
+}
+
 async function readInstallTimingEventsCFChunked(
   c: Context<MiddlewareKeyVariables>,
   params: {
     appId: string
     queryStart: dayjs.Dayjs
     endExclusive: dayjs.Dayjs
+    versionNames?: string[]
   },
 ) {
   const events: UpdateDeliveryTimingEventCF[] = []
@@ -448,11 +518,11 @@ async function readInstallTimingEventsCFChunked(
   while (cursor.isBefore(end)) {
     const next = cursor.add(1, 'day')
     const chunkEnd = next.isBefore(end) ? next : end
-    const chunk = await readUpdateDeliveryTimingEventsCF(c, {
-      start_date: cursor.toISOString(),
-      end_date: chunkEnd.toISOString(),
-      actions: [...installTimingActions],
-      app_ids: [params.appId],
+    const chunk = await readInstallTimingEventsCFWindow(c, {
+      appId: params.appId,
+      start: cursor,
+      end: chunkEnd,
+      versionNames: params.versionNames,
     })
     events.push(...chunk)
     cursor = next
@@ -474,17 +544,25 @@ async function readBundleInstallStatsSB(
   try {
     const startDate = start.format('YYYY-MM-DD')
     const endDate = endInclusive.format('YYYY-MM-DD')
+    const versionNames = versionFilter ? [...versionFilter] : undefined
+    const hasVersionFilter = Boolean(versionNames?.length)
+
+    const successParams: unknown[] = [appId, startDate, endDate]
+    const timingParams: unknown[] = [
+      appId,
+      start.toISOString(),
+      endExclusive.toISOString(),
+      [...installTimingActions],
+      [...installStartActions],
+    ]
+    if (hasVersionFilter) {
+      successParams.push(versionNames)
+      timingParams.push(versionNames)
+    }
 
     const [successResult, timingResult] = await Promise.all([
-      db.query<BundleSuccessRow>(buildSuccessRateQuery(), [appId, startDate, endDate]),
-      db.query<BundleTimingRow>(buildInstallTimingQuery(), [
-        appId,
-        start.toISOString(),
-        startDate,
-        endExclusive.toISOString(),
-        [...installTimingActions],
-        [...installStartActions],
-      ]),
+      db.query<BundleSuccessRow>(buildSuccessRateQuery(hasVersionFilter), successParams),
+      db.query<BundleTimingRow>(buildInstallTimingQuery(hasVersionFilter), timingParams),
     ])
 
     const timingRows = new Map<string, BundleTimingRow>()
@@ -519,10 +597,12 @@ async function readBundleInstallStatsCF(
   versionFilter?: Set<string>,
 ) {
   const queryStart = start.subtract(2, 'hour')
+  const versionNames = versionFilter ? [...versionFilter] : undefined
   const events = await readInstallTimingEventsCFChunked(c, {
     appId,
     queryStart,
     endExclusive,
+    versionNames,
   })
 
   const timingSamples = buildInstallTimingsFromEvents(events, {
@@ -539,16 +619,20 @@ async function readBundleInstallStatsCF(
   const startDate = start.format('YYYY-MM-DD')
   const endDate = endInclusive.format('YYYY-MM-DD')
 
-  const { data: dailyRows, error } = await supabase
+  let dailyQuery = supabase
     .from('daily_version')
     .select('version_name, install, fail')
     .eq('app_id', appId)
     .gte('date', startDate)
     .lte('date', endDate)
+  if (versionNames?.length)
+    dailyQuery = dailyQuery.in('version_name', versionNames)
+
+  const { data: dailyRows, error } = await dailyQuery
 
   if (error) {
     cloudlog({ requestId: c.get('requestId'), message: 'bundle_install_stats daily_version error', error })
-    throw simpleError('fetch_error', 'Failed to fetch bundle success rates', { error: String(error) })
+    throw simpleError('fetch_error', 'Failed to fetch bundle success rates')
   }
 
   const successByVersion = new Map<string, { install: number, fail: number }>()
@@ -594,21 +678,19 @@ async function readBundleInstallStats(
   versionName?: string,
 ) {
   const cache = new CacheHelper(c)
+  // Exclude version_name from the cache key: filtering happens after lookup so
+  // callers cannot cache-bust with unique version_name values.
   const cacheKey = cache.buildRequest(BUNDLE_INSTALL_STATS_CACHE_PATH, {
     appId,
     days: String(days),
     channelId: channelId ? String(channelId) : '',
-    versionName: versionName ?? '',
   })
   const cached = await cache.matchJson<BundleInstallStatsResponse>(cacheKey)
   if (cached)
-    return cached
+    return filterResponseByVersionName(cached, versionName)
 
   let versionFilter: Set<string> | undefined
-  if (versionName) {
-    versionFilter = new Set([versionName])
-  }
-  else if (channelId) {
+  if (channelId) {
     versionFilter = await resolveChannelVersionFilter(c, appId, channelId)
     if (versionFilter.size === 0) {
       const empty = buildBundleInstallResponse({
@@ -619,7 +701,7 @@ async function readBundleInstallStats(
         timingRows: new Map(),
         versionFilter,
       })
-      return empty
+      return filterResponseByVersionName(empty, versionName)
     }
   }
 
@@ -649,7 +731,7 @@ async function readBundleInstallStats(
   if (response.bundles.length > 0)
     await cache.putJson(cacheKey, response, BUNDLE_INSTALL_STATS_CACHE_TTL_SECONDS)
 
-  return response
+  return filterResponseByVersionName(response, versionName)
 }
 
 export const app = new Hono<MiddlewareKeyVariables>()
@@ -660,23 +742,33 @@ app.post('/', middlewareAuth, async (c) => {
   const body = await parseBody<BundleInstallStatsRequest>(c)
   cloudlog({ requestId: c.get('requestId'), message: 'post bundle_install_stats body', body })
 
-  if (!body.app_id)
+  if (typeof body.app_id !== 'string' || !body.app_id.trim())
     throw simpleError('missing_params', 'app_id is required')
 
+  const appId = body.app_id.trim()
   const days = normalizePeriodDays(body.days)
   if (!days)
     throw simpleError('invalid_days', 'days must be one of 1, 3, 7, or 30')
 
-  if (!(await checkPermission(c, 'app.read', { appId: body.app_id }))) {
-    throw simpleError('app_access_denied', 'You can\'t access this app', { app_id: body.app_id })
+  if (!(await checkPermission(c, 'app.read', { appId }))) {
+    throw simpleError('app_access_denied', 'You can\'t access this app', { app_id: appId })
   }
 
+  const versionName = typeof body.version_name === 'string' && body.version_name.trim()
+    ? body.version_name.trim()
+    : undefined
+  const channelId = typeof body.channel_id === 'number' && Number.isFinite(body.channel_id)
+    ? body.channel_id
+    : undefined
+
   try {
-    return c.json(await readBundleInstallStats(c, body.app_id, days, body.channel_id, body.version_name))
+    return c.json(await readBundleInstallStats(c, appId, days, channelId, versionName))
   }
   catch (error) {
-    cloudlog({ requestId: c.get('requestId'), message: 'Error fetching bundle install stats', error })
-    throw simpleError('fetch_error', 'Failed to fetch bundle install statistics', { error: String(error) })
+    if (error instanceof HTTPException)
+      throw error
+    cloudlog({ requestId: c.get('requestId'), message: 'Error fetching bundle install stats', error: serializeError(error) })
+    throw simpleError('fetch_error', 'Failed to fetch bundle install statistics')
   }
 })
 
@@ -687,5 +779,6 @@ export const bundleInstallStatsTestUtils = {
   buildInstallTimingsFromEvents,
   aggregateInstallTimingsByVersion,
   buildBundleInstallResponse,
+  filterResponseByVersionName,
   parseMetaDurationMs: parseStatsDurationMs,
 }

@@ -1,11 +1,9 @@
 <script setup lang="ts">
-import type { BundleInstallStatsItem } from '~/composables/useBundleInstallStats'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconCheckCircle from '~icons/lucide/check-circle'
-import IconTimer from '~icons/lucide/timer'
 import PeriodDaySelector from '~/components/dashboard/PeriodDaySelector.vue'
 import Spinner from '~/components/Spinner.vue'
 import { buildDemoBundleInstallStats, useBundleInstallStats } from '~/composables/useBundleInstallStats'
@@ -161,7 +159,7 @@ watch(
 
     <div
       v-if="effectiveStats?.totals && hasData && !compact"
-      class="grid grid-cols-1 gap-3 sm:grid-cols-3"
+      class="grid grid-cols-1 gap-3 sm:grid-cols-2"
     >
       <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
         <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
@@ -182,18 +180,6 @@ watch(
         <div class="mt-2 text-2xl font-semibold text-slate-900 dark:text-white">
           {{ formatCount(effectiveStats.totals.install) }} / {{ formatCount(effectiveStats.totals.fail) }}
         </div>
-      </div>
-      <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
-        <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
-          <IconTimer class="w-4 h-4" />
-          {{ t('bundle-install-p50') }}
-        </div>
-        <div class="mt-2 text-2xl font-semibold text-sky-600 dark:text-sky-400">
-          {{ formatDuration(bundles.find((b: BundleInstallStatsItem) => b.timing.samples > 0)?.timing.p50_ms ?? null) }}
-        </div>
-        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-          {{ t('bundle-install-timing-help') }}
-        </p>
       </div>
     </div>
 
