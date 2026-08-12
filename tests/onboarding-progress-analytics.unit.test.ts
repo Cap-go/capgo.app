@@ -20,7 +20,7 @@ describe('onboarding progress analytics', () => {
 
     tracker.viewStep('intent')
 
-    expect(ONBOARDING_ANALYTICS_VERSION).toBe(1)
+    expect(ONBOARDING_ANALYTICS_VERSION).toBe(2)
     expect(capture).toHaveBeenCalledOnce()
     expect(capture).toHaveBeenCalledWith(
       'onboarding_step_viewed',
@@ -110,6 +110,31 @@ describe('onboarding progress analytics', () => {
       step_index: 1,
       total_steps: 4,
     })
+  })
+
+  it.concurrent('associates app-details interaction events with the active onboarding attempt', () => {
+    const capture = vi.fn()
+    const tracker = createOnboardingProgressTracker({
+      capture,
+      flow: 'pre_org',
+      resumed: false,
+      steps,
+      supaHost: 'https://supabase.capgo.test',
+    })
+
+    tracker.trackDetailsEvent('onboarding_app_name_entered', { app_name: 'Example App' })
+
+    expect(capture).toHaveBeenCalledWith(
+      'onboarding_app_name_entered',
+      'https://supabase.capgo.test',
+      expect.objectContaining({
+        app_name: 'Example App',
+        flow: 'pre_org',
+        onboarding_attempt_id: expect.any(String),
+        onboarding_version: 2,
+        step: 'details',
+      }),
+    )
   })
 
   it.concurrent('deduplicates completion for one visit and resets timing after back navigation', () => {

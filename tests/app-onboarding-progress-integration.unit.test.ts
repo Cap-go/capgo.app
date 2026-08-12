@@ -9,7 +9,8 @@ function sourceBetween(start: string, end: string) {
 
 describe('app onboarding progress analytics integration', () => {
   it.concurrent('initializes tracking once the real initial or resumed step is resolved', () => {
-    expect(onboardingSource).toContain("import { createOnboardingProgressTracker } from '~/utils/onboardingProgressAnalytics'")
+    expect(onboardingSource).toContain('createOnboardingProgressTracker')
+    expect(onboardingSource).toContain("from '~/utils/onboardingProgressAnalytics'")
 
     const initializer = sourceBetween('function initializeProgressTracking(', 'function whiteCardToggleButtonClass(')
     expect(initializer).toContain("flow: props.preOrg ? 'pre_org' : 'existing_org'")

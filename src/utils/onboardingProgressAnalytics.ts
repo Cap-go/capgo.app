@@ -1,10 +1,26 @@
 import { pushEvent } from '~/services/posthog'
 
-export const ONBOARDING_ANALYTICS_VERSION = 1
+export const ONBOARDING_ANALYTICS_VERSION = 2
 
 export type OnboardingAnalyticsFlow = 'pre_org' | 'existing_org'
 export type OnboardingAnalyticsStep = 'intent' | 'details' | 'organization' | 'choice' | 'install' | 'setup'
 export type OnboardingIntent = 'ota' | 'builder' | 'both' | 'exploring'
+export type OnboardingDetailsEvent
+  = | 'onboarding_app_id_entered'
+    | 'onboarding_app_id_help_opened'
+    | 'onboarding_app_icon_picked'
+    | 'onboarding_app_icon_picker_closed_without_selection'
+    | 'onboarding_app_icon_picker_open_failed'
+    | 'onboarding_app_icon_picker_opened'
+    | 'onboarding_app_icon_upload_failed'
+    | 'onboarding_app_icon_uploaded'
+    | 'onboarding_app_name_entered'
+    | 'onboarding_store_import_failed'
+    | 'onboarding_store_import_hidden'
+    | 'onboarding_store_import_shown'
+    | 'onboarding_store_import_submitted'
+    | 'onboarding_store_import_succeeded'
+    | 'onboarding_store_url_entered'
 
 type AnalyticsPrimitive = string | number | boolean | null
 type AnalyticsProperties = Record<string, AnalyticsPrimitive>
@@ -15,6 +31,47 @@ export interface OnboardingStepCompletionProperties {
   intent?: OnboardingIntent
   nextStep?: OnboardingAnalyticsStep
   storeImportUsed?: boolean
+}
+
+export interface OnboardingDetailsEventProperties {
+  app_id?: string
+  app_name?: string
+  icon_source?: 'file' | 'store'
+  store_url?: string
+}
+
+export type OnboardingDetailsFieldProperty = keyof Pick<OnboardingDetailsEventProperties, 'app_id' | 'app_name' | 'store_url'>
+
+export function createOnboardingDetailsFieldDebouncer(
+  emit: (name: OnboardingDetailsEvent, properties: OnboardingDetailsEventProperties) => void,
+  delayMs = 1_000,
+) {
+  const timers = new Map<OnboardingDetailsFieldProperty, ReturnType<typeof setTimeout>>()
+
+  function schedule(name: OnboardingDetailsEvent, property: OnboardingDetailsFieldProperty, value: string) {
+    const activeTimer = timers.get(property)
+    if (activeTimer)
+      clearTimeout(activeTimer)
+
+    const normalizedValue = value.trim()
+    if (!normalizedValue) {
+      timers.delete(property)
+      return
+    }
+
+    timers.set(property, setTimeout(() => {
+      emit(name, { [property]: normalizedValue })
+      timers.delete(property)
+    }, delayMs))
+  }
+
+  function dispose() {
+    for (const timer of timers.values())
+      clearTimeout(timer)
+    timers.clear()
+  }
+
+  return { dispose, schedule }
 }
 
 interface CreateOnboardingProgressTrackerOptions {
@@ -101,8 +158,17 @@ export function createOnboardingProgressTracker(options: CreateOnboardingProgres
     safelyCapture('onboarding_step_completed', properties)
   }
 
+  function trackDetailsEvent(name: OnboardingDetailsEvent, details: OnboardingDetailsEventProperties = {}) {
+    const properties = sharedProperties('details')
+    if (!properties)
+      return
+
+    safelyCapture(name, { ...properties, ...details })
+  }
+
   return {
     completeStep,
+    trackDetailsEvent,
     viewStep,
   }
 }
