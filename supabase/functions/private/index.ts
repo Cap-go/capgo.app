@@ -2,6 +2,7 @@ import { app as accept_invitation } from '../_backend/private/accept_invitation.
 import { app as admin_credits } from '../_backend/private/admin_credits.ts'
 import { app as admin_stats } from '../_backend/private/admin_stats.ts'
 import { app as channel_device } from '../_backend/private/channel_device.ts'
+import { app as bundle_install_stats } from '../_backend/private/bundle_install_stats.ts'
 import { app as channel_stats } from '../_backend/private/channel_stats.ts'
 import { app as config } from '../_backend/private/config.ts'
 import { app as configBuilder } from '../_backend/private/config_builder.ts'
@@ -61,6 +62,7 @@ appGlobal.route('/devices', devices_priv)
 appGlobal.route('/channel_device', channel_device)
 appGlobal.route('/create_device', create_device)
 appGlobal.route('/channel_stats', channel_stats)
+appGlobal.route('/bundle_install_stats', bundle_install_stats)
 appGlobal.route('/native_observe_stats', native_observe_stats)
 appGlobal.route('/org_notification_stats', org_notification_stats)
 appGlobal.route('/download_link', download_link)

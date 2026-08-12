@@ -3,6 +3,7 @@ import type { Database } from '~/types/supabase.types'
 import { computed, ref, watchEffect } from 'vue'
 import { useRoute } from 'vue-router'
 import AppNotFoundModal from '~/components/AppNotFoundModal.vue'
+import BundleInstallStatsPanel from '~/components/dashboard/BundleInstallStatsPanel.vue'
 import BundleUploadsCard from '~/components/dashboard/BundleUploadsCard.vue'
 import CompatibilityBanner from '~/components/dashboard/CompatibilityBanner.vue'
 import DeploymentBanner from '~/components/dashboard/DeploymentBanner.vue'
@@ -210,6 +211,13 @@ watchEffect(async () => {
               :reload-trigger="usageComponent?.reloadTrigger ?? 0"
               :force-demo="appNotFound"
               class="col-span-full sm:col-span-6 xl:col-span-4"
+            />
+          </div>
+
+          <div class="mb-6">
+            <BundleInstallStatsPanel
+              :app-id="id"
+              :force-demo="appNotFound"
             />
           </div>
         </div>

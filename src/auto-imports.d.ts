@@ -6,11 +6,14 @@
 // biome-ignore lint: disable
 export {}
 declare global {
+  const DATE_RANGE_DURATIONS_MS: typeof import('./stores/adminDashboard').DATE_RANGE_DURATIONS_MS
+  const DEFAULT_DATE_RANGE_MODE: typeof import('./stores/adminDashboard').DEFAULT_DATE_RANGE_MODE
   const EffectScope: typeof import('vue').EffectScope
   const RBAC_ORG_ROLE_I18N_KEYS: typeof import('./stores/organization').RBAC_ORG_ROLE_I18N_KEYS
   const WEBHOOK_EVENT_TYPES: typeof import('./stores/webhooks').WEBHOOK_EVENT_TYPES
   const asyncComputed: typeof import('@vueuse/core').asyncComputed
   const autoResetRef: typeof import('@vueuse/core').autoResetRef
+  const buildDemoBundleInstallStats: typeof import('./composables/useBundleInstallStats').buildDemoBundleInstallStats
   const buildDemoUpdateDeliveryStats: typeof import('./composables/useUpdateDeliveryStats').buildDemoUpdateDeliveryStats
   const computed: typeof import('vue').computed
   const computedAsync: typeof import('@vueuse/core').computedAsync
@@ -20,6 +23,7 @@ declare global {
   const controlledComputed: typeof import('@vueuse/core').controlledComputed
   const controlledRef: typeof import('@vueuse/core').controlledRef
   const createApp: typeof import('vue').createApp
+  const createClearedFilters: typeof import('./composables/useFilterModal').createClearedFilters
   const createDisposableDirective: typeof import('@vueuse/core').createDisposableDirective
   const createEventHook: typeof import('@vueuse/core').createEventHook
   const createGlobalState: typeof import('@vueuse/core').createGlobalState
@@ -42,6 +46,7 @@ declare global {
   const getCurrentInstance: typeof import('vue').getCurrentInstance
   const getCurrentScope: typeof import('vue').getCurrentScope
   const getCurrentWatcher: typeof import('vue').getCurrentWatcher
+  const getDateRangeForMode: typeof import('./stores/adminDashboard').getDateRangeForMode
   const getRbacRoleI18nKey: typeof import('./stores/organization').getRbacRoleI18nKey
   const h: typeof import('vue').h
   const ignorableWatch: typeof import('@vueuse/core').ignorableWatch
@@ -153,6 +158,7 @@ declare global {
   const useBrowserLocation: typeof import('@vueuse/core').useBrowserLocation
   const useBuildCardStats: typeof import('./composables/useBuildCardStats').useBuildCardStats
   const useBuildChartConfig: typeof import('./composables/useBuildChartConfig').useBuildChartConfig
+  const useBundleInstallStats: typeof import('./composables/useBundleInstallStats').useBundleInstallStats
   const useCached: typeof import('@vueuse/core').useCached
   const useClipboard: typeof import('@vueuse/core').useClipboard
   const useClipboardItems: typeof import('@vueuse/core').useClipboardItems
@@ -166,9 +172,11 @@ declare global {
   const useCssVar: typeof import('@vueuse/core').useCssVar
   const useCssVars: typeof import('vue').useCssVars
   const useCurrentElement: typeof import('@vueuse/core').useCurrentElement
+  const useCurrentOrgBillingCycleChart: typeof import('./composables/useOrgBillingCycleChart').useCurrentOrgBillingCycleChart
   const useCycleList: typeof import('@vueuse/core').useCycleList
   const useDark: typeof import('@vueuse/core').useDark
   const useDashboardAppsStore: typeof import('./stores/dashboardApps').useDashboardAppsStore
+  const useDashboardDailyChartCycle: typeof import('./composables/useOrgBillingCycleChart').useDashboardDailyChartCycle
   const useDateFormat: typeof import('@vueuse/core').useDateFormat
   const useDebounce: typeof import('@vueuse/core').useDebounce
   const useDebounceFn: typeof import('@vueuse/core').useDebounceFn
@@ -203,6 +211,7 @@ declare global {
   const useFullscreen: typeof import('@vueuse/core').useFullscreen
   const useGamepad: typeof import('@vueuse/core').useGamepad
   const useGeolocation: typeof import('@vueuse/core').useGeolocation
+  const useGitHubProfileDialog: typeof import('./composables/useGitHubProfileDialog').useGitHubProfileDialog
   const useHead: typeof import('@vueuse/head').useHead
   const useId: typeof import('vue').useId
   const useIdle: typeof import('@vueuse/core').useIdle
@@ -235,6 +244,7 @@ declare global {
   const useObjectUrl: typeof import('@vueuse/core').useObjectUrl
   const useOffsetPagination: typeof import('@vueuse/core').useOffsetPagination
   const useOnline: typeof import('@vueuse/core').useOnline
+  const useOrgBillingCycleChart: typeof import('./composables/useOrgBillingCycleChart').useOrgBillingCycleChart
   const useOrganizationStore: typeof import('./stores/organization').useOrganizationStore
   const usePageLeave: typeof import('@vueuse/core').usePageLeave
   const useParallax: typeof import('@vueuse/core').useParallax
@@ -336,6 +346,9 @@ declare global {
   export type { Component, Slot, Slots, ComponentPublicInstance, ComputedRef, DirectiveBinding, ExtractDefaultPropTypes, ExtractPropTypes, ExtractPublicPropTypes, InjectionKey, PropType, Ref, ShallowRef, MaybeRef, MaybeRefOrGetter, VNode, WritableComputedRef } from 'vue'
   import('vue')
   // @ts-ignore
+  export type { BundleInstallStatsItem, BundleInstallStatsResponse } from './composables/useBundleInstallStats'
+  import('./composables/useBundleInstallStats')
+  // @ts-ignore
   export type { UpdateEndpointRequest } from './composables/useDeviceUpdateFormat'
   import('./composables/useDeviceUpdateFormat')
   // @ts-ignore
@@ -366,11 +379,14 @@ import { UnwrapRef } from 'vue'
 declare module 'vue' {
   interface GlobalComponents {}
   interface ComponentCustomProperties {
+    readonly DATE_RANGE_DURATIONS_MS: UnwrapRef<typeof import('./stores/adminDashboard')['DATE_RANGE_DURATIONS_MS']>
+    readonly DEFAULT_DATE_RANGE_MODE: UnwrapRef<typeof import('./stores/adminDashboard')['DEFAULT_DATE_RANGE_MODE']>
     readonly EffectScope: UnwrapRef<typeof import('vue')['EffectScope']>
     readonly RBAC_ORG_ROLE_I18N_KEYS: UnwrapRef<typeof import('./stores/organization')['RBAC_ORG_ROLE_I18N_KEYS']>
     readonly WEBHOOK_EVENT_TYPES: UnwrapRef<typeof import('./stores/webhooks')['WEBHOOK_EVENT_TYPES']>
     readonly asyncComputed: UnwrapRef<typeof import('@vueuse/core')['asyncComputed']>
     readonly autoResetRef: UnwrapRef<typeof import('@vueuse/core')['autoResetRef']>
+    readonly buildDemoBundleInstallStats: UnwrapRef<typeof import('./composables/useBundleInstallStats')['buildDemoBundleInstallStats']>
     readonly buildDemoUpdateDeliveryStats: UnwrapRef<typeof import('./composables/useUpdateDeliveryStats')['buildDemoUpdateDeliveryStats']>
     readonly computed: UnwrapRef<typeof import('vue')['computed']>
     readonly computedAsync: UnwrapRef<typeof import('@vueuse/core')['computedAsync']>
@@ -380,6 +396,7 @@ declare module 'vue' {
     readonly controlledComputed: UnwrapRef<typeof import('@vueuse/core')['controlledComputed']>
     readonly controlledRef: UnwrapRef<typeof import('@vueuse/core')['controlledRef']>
     readonly createApp: UnwrapRef<typeof import('vue')['createApp']>
+    readonly createClearedFilters: UnwrapRef<typeof import('./composables/useFilterModal')['createClearedFilters']>
     readonly createDisposableDirective: UnwrapRef<typeof import('@vueuse/core')['createDisposableDirective']>
     readonly createEventHook: UnwrapRef<typeof import('@vueuse/core')['createEventHook']>
     readonly createGlobalState: UnwrapRef<typeof import('@vueuse/core')['createGlobalState']>
@@ -402,6 +419,7 @@ declare module 'vue' {
     readonly getCurrentInstance: UnwrapRef<typeof import('vue')['getCurrentInstance']>
     readonly getCurrentScope: UnwrapRef<typeof import('vue')['getCurrentScope']>
     readonly getCurrentWatcher: UnwrapRef<typeof import('vue')['getCurrentWatcher']>
+    readonly getDateRangeForMode: UnwrapRef<typeof import('./stores/adminDashboard')['getDateRangeForMode']>
     readonly getRbacRoleI18nKey: UnwrapRef<typeof import('./stores/organization')['getRbacRoleI18nKey']>
     readonly h: UnwrapRef<typeof import('vue')['h']>
     readonly ignorableWatch: UnwrapRef<typeof import('@vueuse/core')['ignorableWatch']>
@@ -510,6 +528,7 @@ declare module 'vue' {
     readonly useBrowserLocation: UnwrapRef<typeof import('@vueuse/core')['useBrowserLocation']>
     readonly useBuildCardStats: UnwrapRef<typeof import('./composables/useBuildCardStats')['useBuildCardStats']>
     readonly useBuildChartConfig: UnwrapRef<typeof import('./composables/useBuildChartConfig')['useBuildChartConfig']>
+    readonly useBundleInstallStats: UnwrapRef<typeof import('./composables/useBundleInstallStats')['useBundleInstallStats']>
     readonly useCached: UnwrapRef<typeof import('@vueuse/core')['useCached']>
     readonly useClipboard: UnwrapRef<typeof import('@vueuse/core')['useClipboard']>
     readonly useClipboardItems: UnwrapRef<typeof import('@vueuse/core')['useClipboardItems']>
@@ -523,9 +542,11 @@ declare module 'vue' {
     readonly useCssVar: UnwrapRef<typeof import('@vueuse/core')['useCssVar']>
     readonly useCssVars: UnwrapRef<typeof import('vue')['useCssVars']>
     readonly useCurrentElement: UnwrapRef<typeof import('@vueuse/core')['useCurrentElement']>
+    readonly useCurrentOrgBillingCycleChart: UnwrapRef<typeof import('./composables/useOrgBillingCycleChart')['useCurrentOrgBillingCycleChart']>
     readonly useCycleList: UnwrapRef<typeof import('@vueuse/core')['useCycleList']>
     readonly useDark: UnwrapRef<typeof import('@vueuse/core')['useDark']>
     readonly useDashboardAppsStore: UnwrapRef<typeof import('./stores/dashboardApps')['useDashboardAppsStore']>
+    readonly useDashboardDailyChartCycle: UnwrapRef<typeof import('./composables/useOrgBillingCycleChart')['useDashboardDailyChartCycle']>
     readonly useDateFormat: UnwrapRef<typeof import('@vueuse/core')['useDateFormat']>
     readonly useDebounce: UnwrapRef<typeof import('@vueuse/core')['useDebounce']>
     readonly useDebounceFn: UnwrapRef<typeof import('@vueuse/core')['useDebounceFn']>
@@ -560,6 +581,7 @@ declare module 'vue' {
     readonly useFullscreen: UnwrapRef<typeof import('@vueuse/core')['useFullscreen']>
     readonly useGamepad: UnwrapRef<typeof import('@vueuse/core')['useGamepad']>
     readonly useGeolocation: UnwrapRef<typeof import('@vueuse/core')['useGeolocation']>
+    readonly useGitHubProfileDialog: UnwrapRef<typeof import('./composables/useGitHubProfileDialog')['useGitHubProfileDialog']>
     readonly useHead: UnwrapRef<typeof import('@vueuse/head')['useHead']>
     readonly useId: UnwrapRef<typeof import('vue')['useId']>
     readonly useIdle: UnwrapRef<typeof import('@vueuse/core')['useIdle']>
@@ -592,6 +614,7 @@ declare module 'vue' {
     readonly useObjectUrl: UnwrapRef<typeof import('@vueuse/core')['useObjectUrl']>
     readonly useOffsetPagination: UnwrapRef<typeof import('@vueuse/core')['useOffsetPagination']>
     readonly useOnline: UnwrapRef<typeof import('@vueuse/core')['useOnline']>
+    readonly useOrgBillingCycleChart: UnwrapRef<typeof import('./composables/useOrgBillingCycleChart')['useOrgBillingCycleChart']>
     readonly useOrganizationStore: UnwrapRef<typeof import('./stores/organization')['useOrganizationStore']>
     readonly usePageLeave: UnwrapRef<typeof import('@vueuse/core')['usePageLeave']>
     readonly useParallax: UnwrapRef<typeof import('@vueuse/core')['useParallax']>

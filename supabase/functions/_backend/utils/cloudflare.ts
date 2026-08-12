@@ -30,7 +30,7 @@ function formatLocalDateTime(date = new Date()): string {
   return `${formatLocalYmd(date)} ${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`
 }
 
-const MAX_ANALYTICS_QUERY_LIMIT = 50_000
+export const MAX_ANALYTICS_QUERY_LIMIT = 50_000
 const INSTALL_SOURCE_COUNT_CACHE_TTL_SECONDS = 60 * 60 * 24 * 30
 
 export function normalizeAnalyticsLimit(limit: unknown, fallback = DEFAULT_LIMIT): number {
@@ -1426,6 +1426,8 @@ export interface ReadUpdateDeliveryTimingEventsCFParams {
   actions: string[]
   /** When set, restrict to these app ids. Omit for platform-wide scans. */
   app_ids?: string[]
+  /** When set, restrict to these version names (blob3). */
+  version_names?: string[]
   limit?: number
   /**
    * Platform metadata-only mode: keep AE's 50k row budget on timed completes.
@@ -1443,6 +1445,13 @@ export function buildUpdateDeliveryTimingEventsCFQuery(params: ReadUpdateDeliver
         params.app_ids.length === 1
           ? `AND index1 = '${escapeSqlString(params.app_ids[0])}'`
           : `AND index1 IN (${params.app_ids.map(id => `'${escapeSqlString(id)}'`).join(', ')})`
+      )
+    : ''
+  const versionFilter = params.version_names?.length
+    ? (
+        params.version_names.length === 1
+          ? `AND blob3 = '${escapeSqlString(params.version_names[0]!)}'`
+          : `AND blob3 IN (${params.version_names.map(name => `'${escapeSqlString(name)}'`).join(', ')})`
       )
     : ''
   // Prefer double1 (written by trackLogsCF) and keep blob4 duration for older rows.
@@ -1464,6 +1473,7 @@ WHERE
   AND timestamp < toDateTime('${formatDateCF(params.end_date)}')
   AND blob2 IN (${actionsList})
   ${appFilter}
+  ${versionFilter}
   ${durationFilter}
 ORDER BY created_at ASC
 LIMIT ${limit}`
