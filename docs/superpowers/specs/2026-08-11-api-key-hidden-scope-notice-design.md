@@ -48,6 +48,13 @@ action readable on narrow screens by allowing them to wrap. The action must be
 a semantic button with visible keyboard focus. Announce the notice as status
 information without forcing an interruptive alert.
 
+The visual treatment uses a neutral slate background, border, and body text so
+the notice sits naturally inside the table card. A proper circled-information
+icon identifies it as informational. Reserve blue for that icon, the text-style
+action, and keyboard focus; do not use a cyan or turquoise banner background.
+The icon is decorative because the message already conveys the notice meaning,
+so hide it from assistive technology.
+
 ## Verification
 
 Add focused coverage for these cases:

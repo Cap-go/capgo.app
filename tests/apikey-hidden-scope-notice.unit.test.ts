@@ -227,9 +227,14 @@ describe('api key hidden-scope notice', () => {
     expect(status?.querySelector('span')?.textContent?.trim()).toBe(
       '3 API keys are hidden by the current scope filter.',
     )
+    expect(status?.querySelector('[data-test="scope-notice-icon"]')).not.toBeNull()
+    expect(status?.classList.contains('border-slate-200')).toBe(true)
+    expect(status?.classList.contains('bg-slate-50')).toBe(true)
+    expect(status?.className).not.toContain('cyan')
     expect(button?.textContent?.trim()).toBe('Remove the filter')
     expect(button?.classList.contains('d-btn')).toBe(true)
     expect(button?.classList.contains('d-btn-link')).toBe(true)
+    expect(button?.classList.contains('text-blue-600')).toBe(true)
 
     button?.click()
 

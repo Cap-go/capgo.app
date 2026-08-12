@@ -314,3 +314,57 @@ If verification required changes, stage only the files modified for this feature
 git add src/services/apikeys.ts src/components/DataTable.vue src/pages/ApiKeys.vue messages/en.json tests/apikey-list-filtering.unit.test.ts tests/apikey-hidden-scope-notice.unit.test.ts
 git commit -m "fix(frontend): finalize API key scope notice"
 ```
+
+### Task 4: Refine the notice as a neutral information banner
+
+**Files:**
+- Modify: `src/components/ApiKeyHiddenScopeNotice.vue`
+- Modify: `tests/apikey-hidden-scope-notice.unit.test.ts`
+
+- [ ] **Step 1: Add the failing visual contract assertions**
+
+Extend the mounted notice test to require a circled-information icon and the
+neutral banner palette:
+
+```ts
+expect(status?.querySelector('[data-test="scope-notice-icon"]')).not.toBeNull()
+expect(status?.classList.contains('border-slate-200')).toBe(true)
+expect(status?.classList.contains('bg-slate-50')).toBe(true)
+expect(status?.className).not.toContain('cyan')
+expect(button?.classList.contains('text-blue-600')).toBe(true)
+```
+
+- [ ] **Step 2: Run the focused test and confirm it fails**
+
+```bash
+bunx vitest run tests/apikey-hidden-scope-notice.unit.test.ts
+```
+
+Expected: FAIL because the current banner has no information icon and uses the
+cyan palette.
+
+- [ ] **Step 3: Implement the neutral information banner**
+
+Import `~icons/heroicons/information-circle`, render it with
+`aria-hidden="true"` and `data-test="scope-notice-icon"`, and change the banner
+to slate border/background/body classes. Keep blue only on the icon, action,
+and focus ring. Preserve the existing status role, copy, responsive wrapping,
+and emitted `removeFilter` action.
+
+- [ ] **Step 4: Validate the refinement**
+
+```bash
+bunx vitest run tests/apikey-hidden-scope-notice.unit.test.ts tests/apikey-list-filtering.unit.test.ts tests/frontend-channel-rbac-scope.test.ts
+bunx eslint src/components/ApiKeyHiddenScopeNotice.vue tests/apikey-hidden-scope-notice.unit.test.ts
+bun typecheck
+```
+
+Expected: 17 focused tests pass, ESLint passes, and typechecking passes.
+
+- [ ] **Step 5: Commit and push**
+
+```bash
+git add docs/superpowers/specs/2026-08-11-api-key-hidden-scope-notice-design.md docs/superpowers/plans/2026-08-11-api-key-hidden-scope-notice.md src/components/ApiKeyHiddenScopeNotice.vue tests/apikey-hidden-scope-notice.unit.test.ts
+git commit -m "fix(frontend): restyle API key scope notice"
+git push origin wolny/api-key-hidden-scope-notice
+```
