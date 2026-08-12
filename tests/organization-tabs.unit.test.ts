@@ -1,3 +1,4 @@
+import type { Tab } from '../src/components/comp_def'
 import { describe, expect, it } from 'vitest'
 import {
   BILLING_TAB_KEY,
@@ -5,10 +6,32 @@ import {
   defaultChild,
   findActiveChildKey,
   findActiveTabKey,
-  organizationTabs,
   pathMatchesTab,
   TEAM_TAB_KEY,
-} from '../src/constants/organizationTabs'
+} from '../src/utils/organizationTabs'
+
+const organizationTabs: Tab[] = [
+  { label: 'general', key: '/settings/organization' },
+  {
+    label: 'team',
+    key: TEAM_TAB_KEY,
+    children: [
+      { label: 'members', key: '/settings/organization/members' },
+      { label: 'groups', key: '/settings/organization/groups' },
+      { label: 'security', key: '/settings/organization/security' },
+    ],
+  },
+  {
+    label: 'billing',
+    key: BILLING_TAB_KEY,
+    children: [
+      { label: 'plans', key: '/settings/organization/plans' },
+      { label: 'credits', key: '/settings/organization/credits' },
+    ],
+  },
+  { label: 'usage', key: '/settings/organization/usage' },
+  { label: 'webhooks', key: '/settings/organization/webhooks' },
+]
 
 describe('organization settings tab groups', () => {
   it.concurrent('defaults team to members and billing to plans', () => {
