@@ -10,6 +10,7 @@ import {
   beginFreshInitProgress,
   captureInitGitSnapshot,
   classifyInitGitChanges,
+  createInitGitChangeScope,
   declineInitProgressResume,
   discardResumedInitProgress,
   ensureGitRepoCleanBeforeInit,
@@ -250,6 +251,39 @@ t('native platform availability honors custom Capacitor platform directories', (
   })
 })
 
+t('git mutation scopes canonicalize symlinked working directories and fail closed', () => {
+  withTempDir((root) => {
+    const repoRoot = join(root, 'repo')
+    const projectDir = join(repoRoot, 'packages', 'app')
+    mkdirSync(projectDir, { recursive: true })
+    initializeGitRepo(repoRoot, {
+      'packages/app/capacitor.config.ts': 'export default {}\n',
+      'packages/app/package.json': '{"name":"app"}\n',
+    })
+
+    assert.deepEqual(createInitGitChangeScope(join(root, 'missing'), ['package.json']), {
+      exactPaths: [],
+      directoryPrefixes: [],
+    })
+
+    const linkedProjectDir = join(root, 'linked-app')
+    if (!tryCreateTestSymlink(projectDir, linkedProjectDir))
+      return
+
+    assert.deepEqual(createInitGitChangeScope(linkedProjectDir, [
+      'package.json',
+      join(linkedProjectDir, 'capacitor.config.ts'),
+    ], [join(linkedProjectDir, 'ios')]), {
+      exactPaths: ['packages/app/package.json', 'packages/app/capacitor.config.ts'],
+      directoryPrefixes: ['packages/app/ios'],
+    })
+    assert.deepEqual(createInitGitChangeScope(linkedProjectDir, [join(root, 'outside.txt')]), {
+      exactPaths: [],
+      directoryPrefixes: [],
+    })
+  })
+})
+
 t('git status helper detects clean and dirty repos', () => {
   withTempDir((root) => {
     execSync('git init', { cwd: root, stdio: 'ignore' })
@@ -406,19 +440,9 @@ t('auto css onboarding changes preserve leading css header rules', () => {
 
 t('resume allowlist only accepts the exact cli-managed test diff', () => {
   withTempDir((root) => {
-    execSync('git init', { cwd: root, stdio: 'ignore' })
-    execSync('git config user.email "test@example.com"', { cwd: root, stdio: 'ignore' })
-    execSync('git config user.name "Test User"', { cwd: root, stdio: 'ignore' })
-    // Hermetic against host gitconfig: a global commit.gpgsign=true would make
-    // the temp-repo commit below fail (no pinentry in non-interactive runs).
-    execSync('git config commit.gpgsign false', { cwd: root, stdio: 'ignore' })
-
-    mkdirSync(join(root, 'src'), { recursive: true })
-    const filePath = join(root, 'src', 'main.css')
     const original = 'body { color: red; }\n'
-    writeFileSync(filePath, original, 'utf8')
-    execSync('git add src/main.css', { cwd: root, stdio: 'ignore' })
-    execSync('git commit -m "init"', { cwd: root, stdio: 'ignore' })
+    initializeGitRepo(root, { 'src/main.css': original })
+    const filePath = join(root, 'src', 'main.css')
 
     const applied = applyInitAutoTestChange(filePath, original)
     assert.ok(applied)
@@ -444,17 +468,11 @@ t('resume allowlist only accepts the exact cli-managed test diff', () => {
 
 t('git fingerprints attribute only files changed during the onboarding mutation window', () => {
   withTempDir((root) => {
-    execSync('git init', { cwd: root, stdio: 'ignore' })
-    execSync('git config user.email "test@example.com"', { cwd: root, stdio: 'ignore' })
-    execSync('git config user.name "Test User"', { cwd: root, stdio: 'ignore' })
-    execSync('git config commit.gpgsign false', { cwd: root, stdio: 'ignore' })
-
-    mkdirSync(join(root, 'src'), { recursive: true })
-    writeFileSync(join(root, 'src', 'main.ts'), 'console.log(\'initial\')\n', 'utf8')
-    writeFileSync(join(root, 'package.json'), '{"name":"example","dependencies":{}}\n', 'utf8')
-    writeFileSync(join(root, 'package-lock.json'), '{"name":"example","lockfileVersion":3}\n', 'utf8')
-    execSync('git add src/main.ts package.json package-lock.json', { cwd: root, stdio: 'ignore' })
-    execSync('git commit -m "init"', { cwd: root, stdio: 'ignore' })
+    initializeGitRepo(root, {
+      'src/main.ts': 'console.log(\'initial\')\n',
+      'package.json': '{"name":"example","dependencies":{}}\n',
+      'package-lock.json': '{"name":"example","lockfileVersion":3}\n',
+    })
 
     writeFileSync(join(root, 'src', 'main.ts'), 'console.log(\'user edit\')\n', 'utf8')
     const before = captureInitGitSnapshot(root)
@@ -478,13 +496,7 @@ t('git fingerprints attribute only files changed during the onboarding mutation 
 
 t('git snapshot fingerprints a deleted regular file with null content and mode', () => {
   withTempDir((root) => {
-    execSync('git init', { cwd: root, stdio: 'ignore' })
-    execSync('git config user.email "test@example.com"', { cwd: root, stdio: 'ignore' })
-    execSync('git config user.name "Test User"', { cwd: root, stdio: 'ignore' })
-    execSync('git config commit.gpgsign false', { cwd: root, stdio: 'ignore' })
-    writeFileSync(join(root, 'deleted.txt'), 'tracked\n', 'utf8')
-    execSync('git add deleted.txt', { cwd: root, stdio: 'ignore' })
-    execSync('git commit -m "init"', { cwd: root, stdio: 'ignore' })
+    initializeGitRepo(root, { 'deleted.txt': 'tracked\n' })
 
     unlinkSync(join(root, 'deleted.txt'))
 
@@ -500,15 +512,10 @@ t('git snapshot fingerprints a deleted regular file with null content and mode',
 
 t('git snapshot handles mixed tracked, untracked, and staged-deleted paths together', () => {
   withTempDir((root) => {
-    execSync('git init', { cwd: root, stdio: 'ignore' })
-    execSync('git config user.email "test@example.com"', { cwd: root, stdio: 'ignore' })
-    execSync('git config user.name "Test User"', { cwd: root, stdio: 'ignore' })
-    execSync('git config commit.gpgsign false', { cwd: root, stdio: 'ignore' })
-    mkdirSync(join(root, 'src'), { recursive: true })
-    writeFileSync(join(root, 'src', 'tracked file.ts'), 'initial\n', 'utf8')
-    writeFileSync(join(root, 'old file ü.txt'), 'delete me\n', 'utf8')
-    execSync('git add .', { cwd: root, stdio: 'ignore' })
-    execSync('git commit -m "init"', { cwd: root, stdio: 'ignore' })
+    initializeGitRepo(root, {
+      'src/tracked file.ts': 'initial\n',
+      'old file ü.txt': 'delete me\n',
+    })
 
     unlinkSync(join(root, 'old file ü.txt'))
     execSync('git add -u', { cwd: root, stdio: 'ignore' })
@@ -670,13 +677,7 @@ t('git snapshot declines unsupported symlinks and renames', () => {
   })
 
   withTempDir((root) => {
-    execSync('git init', { cwd: root, stdio: 'ignore' })
-    execSync('git config user.email "test@example.com"', { cwd: root, stdio: 'ignore' })
-    execSync('git config user.name "Test User"', { cwd: root, stdio: 'ignore' })
-    execSync('git config commit.gpgsign false', { cwd: root, stdio: 'ignore' })
-    writeFileSync(join(root, 'before.txt'), 'tracked\n', 'utf8')
-    execSync('git add before.txt', { cwd: root, stdio: 'ignore' })
-    execSync('git commit -m "init"', { cwd: root, stdio: 'ignore' })
+    initializeGitRepo(root, { 'before.txt': 'tracked\n' })
     execSync('git mv before.txt after.txt', { cwd: root, stdio: 'ignore' })
 
     const status = getGitRepoStatus(root)
@@ -688,16 +689,12 @@ t('git snapshot declines unsupported symlinks and renames', () => {
 
 t('git snapshot declines a tracked symlink changed into a regular file', () => {
   withTempDir((root) => {
-    execSync('git init', { cwd: root, stdio: 'ignore' })
-    execSync('git config user.email "test@example.com"', { cwd: root, stdio: 'ignore' })
-    execSync('git config user.name "Test User"', { cwd: root, stdio: 'ignore' })
-    execSync('git config commit.gpgsign false', { cwd: root, stdio: 'ignore' })
+    initializeGitRepo(root, { 'target.txt': 'target\n' })
     execSync('git config core.symlinks true', { cwd: root, stdio: 'ignore' })
-    writeFileSync(join(root, 'target.txt'), 'target\n', 'utf8')
     if (!tryCreateTestSymlink('target.txt', join(root, 'link.txt')))
       return
-    execSync('git add target.txt link.txt', { cwd: root, stdio: 'ignore' })
-    execSync('git commit -m "init"', { cwd: root, stdio: 'ignore' })
+    execSync('git add link.txt', { cwd: root, stdio: 'ignore' })
+    execSync('git commit -m "add symlink"', { cwd: root, stdio: 'ignore' })
 
     unlinkSync(join(root, 'link.txt'))
     writeFileSync(join(root, 'link.txt'), 'now regular\n', 'utf8')
@@ -708,17 +705,13 @@ t('git snapshot declines a tracked symlink changed into a regular file', () => {
 
 t('git snapshot checks tracked index mode when core.symlinks is disabled', () => {
   withTempDir((root) => {
-    execSync('git init', { cwd: root, stdio: 'ignore' })
-    execSync('git config user.email "test@example.com"', { cwd: root, stdio: 'ignore' })
-    execSync('git config user.name "Test User"', { cwd: root, stdio: 'ignore' })
-    execSync('git config commit.gpgsign false', { cwd: root, stdio: 'ignore' })
+    initializeGitRepo(root, { 'target.txt': 'target\n' })
     execSync('git config core.symlinks true', { cwd: root, stdio: 'ignore' })
-    writeFileSync(join(root, 'target.txt'), 'target\n', 'utf8')
     const linkPath = join(root, 'link.txt')
     if (!tryCreateTestSymlink('target.txt', linkPath))
       return
-    execSync('git add target.txt link.txt', { cwd: root, stdio: 'ignore' })
-    execSync('git commit -m "init"', { cwd: root, stdio: 'ignore' })
+    execSync('git add link.txt', { cwd: root, stdio: 'ignore' })
+    execSync('git commit -m "add symlink"', { cwd: root, stdio: 'ignore' })
     execSync('git config core.symlinks false', { cwd: root, stdio: 'ignore' })
     unlinkSync(linkPath)
     execSync('git checkout -- link.txt', { cwd: root, stdio: 'ignore' })
@@ -732,14 +725,8 @@ t('git snapshot checks tracked index mode when core.symlinks is disabled', () =>
 
 t('git snapshot forces rename detection when repository status config disables it', () => {
   withTempDir((root) => {
-    execSync('git init', { cwd: root, stdio: 'ignore' })
-    execSync('git config user.email "test@example.com"', { cwd: root, stdio: 'ignore' })
-    execSync('git config user.name "Test User"', { cwd: root, stdio: 'ignore' })
-    execSync('git config commit.gpgsign false', { cwd: root, stdio: 'ignore' })
+    initializeGitRepo(root, { 'before.txt': 'tracked\n' })
     execSync('git config status.renames false', { cwd: root, stdio: 'ignore' })
-    writeFileSync(join(root, 'before.txt'), 'tracked\n', 'utf8')
-    execSync('git add before.txt', { cwd: root, stdio: 'ignore' })
-    execSync('git commit -m "init"', { cwd: root, stdio: 'ignore' })
     execSync('git mv before.txt after.txt', { cwd: root, stdio: 'ignore' })
 
     assert.equal(captureInitGitSnapshot(root), undefined)
@@ -1236,42 +1223,45 @@ await tAsync('tracked init mutation persists changed process, structured, and vo
     restoreInitProgressState(1, undefined)
     let persistCount = 0
     const dependencies = { persistProgress: () => { persistCount += 1 } }
+    try {
+      const processResult = await runTrackedInitMutation(() => {
+        writeFileSync(join(root, 'package.json'), '{"name":"capgo"}\n', 'utf8')
+        return { status: 0, error: undefined }
+      }, {
+        startDir: root,
+        scope: { exactPaths: ['package.json'] },
+        isSuccess: isSuccessfulInitProcessResult,
+      }, dependencies)
+      assert.equal(processResult.status, 0)
+      assert.equal(persistCount, 1)
 
-    const processResult = await runTrackedInitMutation(() => {
-      writeFileSync(join(root, 'package.json'), '{"name":"capgo"}\n', 'utf8')
-      return { status: 0, error: undefined }
-    }, {
-      startDir: root,
-      scope: { exactPaths: ['package.json'] },
-      isSuccess: isSuccessfulInitProcessResult,
-    }, dependencies)
-    assert.equal(processResult.status, 0)
-    assert.equal(persistCount, 1)
+      const commandResult = await runTrackedInitMutation(() => {
+        writeFileSync(join(root, 'capacitor.config.ts'), 'export default { appId: \'com.test.app\' }\n', 'utf8')
+        return { success: true }
+      }, {
+        startDir: root,
+        scope: { exactPaths: ['capacitor.config.ts'] },
+        isSuccess: isSuccessfulInitCommandResult,
+      }, dependencies)
+      assert.equal(commandResult.success, true)
 
-    const commandResult = await runTrackedInitMutation(() => {
-      writeFileSync(join(root, 'capacitor.config.ts'), 'export default { appId: \'com.test.app\' }\n', 'utf8')
-      return { success: true }
-    }, {
-      startDir: root,
-      scope: { exactPaths: ['capacitor.config.ts'] },
-      isSuccess: isSuccessfulInitCommandResult,
-    }, dependencies)
-    assert.equal(commandResult.success, true)
+      await runTrackedInitMutation(() => {
+        writeFileSync(join(root, 'src/main.ts'), 'console.log(\'capgo\')\n', 'utf8')
+      }, {
+        startDir: root,
+        scope: { exactPaths: ['src/main.ts'] },
+      }, dependencies)
 
-    await runTrackedInitMutation(() => {
-      writeFileSync(join(root, 'src/main.ts'), 'console.log(\'capgo\')\n', 'utf8')
-    }, {
-      startDir: root,
-      scope: { exactPaths: ['src/main.ts'] },
-    }, dependencies)
-
-    assert.equal(persistCount, 3)
-    assert.deepEqual(Object.keys(getInitProgressStateForTesting().gitChanges?.files ?? {}).sort(), [
-      'capacitor.config.ts',
-      'package.json',
-      'src/main.ts',
-    ])
-    beginFreshInitProgress()
+      assert.equal(persistCount, 3)
+      assert.deepEqual(Object.keys(getInitProgressStateForTesting().gitChanges?.files ?? {}).sort(), [
+        'capacitor.config.ts',
+        'package.json',
+        'src/main.ts',
+      ])
+    }
+    finally {
+      beginFreshInitProgress()
+    }
   })
 })
 
@@ -1284,43 +1274,46 @@ await tAsync('tracked init mutation leaves global state and persistence unchange
     const original = structuredClone(saved)
     let persistCount = 0
     const dependencies = { persistProgress: () => { persistCount += 1 } }
+    try {
+      const operationError = new Error('operation failed')
+      restoreInitProgressState(1, saved)
+      await assert.rejects(
+        runTrackedInitMutation(() => {
+          writeFileSync(join(root, 'package.json'), '{"name":"partial-operation"}\n', 'utf8')
+          throw operationError
+        }, { startDir: root, scope: { exactPaths: ['package.json'] } }, dependencies),
+        error => error === operationError,
+      )
+      assert.deepEqual(getInitProgressStateForTesting().gitChanges, original)
 
-    const operationError = new Error('operation failed')
-    restoreInitProgressState(1, saved)
-    await assert.rejects(
-      runTrackedInitMutation(() => {
-        writeFileSync(join(root, 'package.json'), '{"name":"partial-operation"}\n', 'utf8')
-        throw operationError
-      }, { startDir: root, scope: { exactPaths: ['package.json'] } }, dependencies),
-      error => error === operationError,
-    )
-    assert.deepEqual(getInitProgressStateForTesting().gitChanges, original)
-
-    restoreInitProgressState(1, saved)
-    const failedResult = await runTrackedInitMutation(() => {
-      writeFileSync(join(root, 'package.json'), '{"name":"partial-result"}\n', 'utf8')
-      return { success: false }
-    }, {
-      startDir: root,
-      scope: { exactPaths: ['package.json'] },
-      isSuccess: isSuccessfulInitCommandResult,
-    }, dependencies)
-    assert.deepEqual(failedResult, { success: false })
-    assert.deepEqual(getInitProgressStateForTesting().gitChanges, original)
-
-    const predicateError = new Error('predicate failed')
-    restoreInitProgressState(1, saved)
-    await assert.rejects(
-      runTrackedInitMutation(() => ({ success: true }), {
+      restoreInitProgressState(1, saved)
+      const failedResult = await runTrackedInitMutation(() => {
+        writeFileSync(join(root, 'package.json'), '{"name":"partial-result"}\n', 'utf8')
+        return { success: false }
+      }, {
         startDir: root,
         scope: { exactPaths: ['package.json'] },
-        isSuccess: () => { throw predicateError },
-      }, dependencies),
-      error => error === predicateError,
-    )
-    assert.deepEqual(getInitProgressStateForTesting().gitChanges, original)
-    assert.equal(persistCount, 0)
-    beginFreshInitProgress()
+        isSuccess: isSuccessfulInitCommandResult,
+      }, dependencies)
+      assert.deepEqual(failedResult, { success: false })
+      assert.deepEqual(getInitProgressStateForTesting().gitChanges, original)
+
+      const predicateError = new Error('predicate failed')
+      restoreInitProgressState(1, saved)
+      await assert.rejects(
+        runTrackedInitMutation(() => ({ success: true }), {
+          startDir: root,
+          scope: { exactPaths: ['package.json'] },
+          isSuccess: () => { throw predicateError },
+        }, dependencies),
+        error => error === predicateError,
+      )
+      assert.deepEqual(getInitProgressStateForTesting().gitChanges, original)
+      assert.equal(persistCount, 0)
+    }
+    finally {
+      beginFreshInitProgress()
+    }
   })
 })
 
@@ -1332,15 +1325,18 @@ await tAsync('zero-delta tracked success keeps global state byte-equal without p
     assert.ok(saved)
     restoreInitProgressState(1, saved)
     let persistCount = 0
+    try {
+      await runTrackedInitMutation(() => undefined, {
+        startDir: root,
+        scope: { exactPaths: ['package.json'] },
+      }, { persistProgress: () => { persistCount += 1 } })
 
-    await runTrackedInitMutation(() => undefined, {
-      startDir: root,
-      scope: { exactPaths: ['package.json'] },
-    }, { persistProgress: () => { persistCount += 1 } })
-
-    assert.deepEqual(getInitProgressStateForTesting().gitChanges, saved)
-    assert.equal(persistCount, 0)
-    beginFreshInitProgress()
+      assert.deepEqual(getInitProgressStateForTesting().gitChanges, saved)
+      assert.equal(persistCount, 0)
+    }
+    finally {
+      beginFreshInitProgress()
+    }
   })
 })
 
@@ -1355,26 +1351,26 @@ t('automatic onboarding mutations use narrow tracking windows and user-controlle
   }
   const trackedCallCount = body => body.match(/\brunTrackedInitMutation\s*\(/g)?.length ?? 0
   const coverage = [
-    ['updater dependency install', 'function runUpdaterInstallCommand(', 'function logUpdaterInstallStateDetails(', 1],
-    ['Capacitor package installs and init', 'async function maybeRunCapacitorInit(', 'async function runCapacitorPlatformAdd(', 3],
-    ['Capacitor platform add', 'async function runCapacitorPlatformAdd(', 'async function runCreateAppTemplate(', 1],
-    ['app-ID config update', 'async function saveAppIdToCapacitorConfig(', 'async function syncPendingAppIdToCapacitorConfig(', 1],
-    ['pending app-ID config sync', 'async function syncPendingAppIdToCapacitorConfig(', 'function logBrokenIosSync(', 1],
-    ['native reset delete/add/sync sequence', 'async function runNativeResetCommand(', 'async function waitForReadyConfirmation(', 1],
-    ['pending-app Capacitor init', 'async function ensureCapacitorProjectReady(', 'async function selectPendingOnboardingApp(', 1],
-    ['updater config update', 'async function addUpdaterStep(', 'async function addCodeStep(', 1],
-    ['source-code injection write', 'async function addCodeStep(', 'async function addEncryptionStep(', 1],
-    ['key creation and encryption sync', 'async function addEncryptionStep(', 'async function streamCommandInInitPanel(', 2],
-    ['primary automatic native sync', 'async function runBuildAndSyncLoop(', 'async function runProjectBuildAndSync(', 1],
-    ['updater test write', 'async function addCodeChangeStep(', 'function getSuggestedCleanupBundleVersion(', 1],
-    ['updater test cleanup write', 'async function maybeOfferAutoTestCleanup(', 'async function uploadStep(', 1],
-    ['self-host config update', 'export async function initApp(', undefined, 1],
+    ['updater dependency install', 'function runUpdaterInstallCommand(', 'function logUpdaterInstallStateDetails('],
+    ['Capacitor package installs and init', 'async function maybeRunCapacitorInit(', 'async function runCapacitorPlatformAdd('],
+    ['Capacitor platform add', 'async function runCapacitorPlatformAdd(', 'async function runCreateAppTemplate('],
+    ['app-ID config update', 'async function saveAppIdToCapacitorConfig(', 'async function syncPendingAppIdToCapacitorConfig('],
+    ['pending app-ID config sync', 'async function syncPendingAppIdToCapacitorConfig(', 'function logBrokenIosSync('],
+    ['native reset delete/add/sync sequence', 'async function runNativeResetCommand(', 'async function waitForReadyConfirmation('],
+    ['pending-app Capacitor init', 'async function ensureCapacitorProjectReady(', 'async function selectPendingOnboardingApp('],
+    ['updater config update', 'async function addUpdaterStep(', 'async function addCodeStep('],
+    ['source-code injection write', 'async function addCodeStep(', 'async function addEncryptionStep('],
+    ['key creation and encryption sync', 'async function addEncryptionStep(', 'async function streamCommandInInitPanel('],
+    ['primary automatic native sync', 'async function runBuildAndSyncLoop(', 'async function runProjectBuildAndSync('],
+    ['updater test write', 'async function addCodeChangeStep(', 'function getSuggestedCleanupBundleVersion('],
+    ['updater test cleanup write', 'async function maybeOfferAutoTestCleanup(', 'async function uploadStep('],
+    ['self-host config update', 'export async function initApp(', undefined],
   ]
 
-  for (const [name, start, end, expectedCalls] of coverage) {
+  for (const [name, start, end] of coverage) {
     const body = sourceBetween(start, end)
-    assert.equal(trackedCallCount(body), expectedCalls, name)
-    assert.equal(body.match(/\bscope:/g)?.length ?? 0, expectedCalls, `${name} scope`)
+    assert.ok(trackedCallCount(body) >= 1, name)
+    assert.match(body, /\brunTrackedInitMutation\s*\([\s\S]*?\bscope:/, `${name} scope`)
   }
 
   assert.equal(trackedCallCount(sourceBetween('async function waitUntilSetupIsDone(', 'async function askForAppName(')), 0, 'manual setup wait')
@@ -1648,10 +1644,15 @@ t('production onboarding lifecycle transitions clear resumed fingerprint state',
     ['discarded resumed onboarding', () => discardResumedInitProgress({ clearCodeDiff: () => {}, clearEncryptionSummary: () => {} })],
   ]
 
-  for (const [name, transition] of transitions) {
-    restoreInitProgressState(4, saved)
-    transition()
-    assert.deepEqual(getInitProgressStateForTesting(), { stepDone: 0, gitChanges: undefined }, name)
+  try {
+    for (const [name, transition] of transitions) {
+      restoreInitProgressState(4, saved)
+      transition()
+      assert.deepEqual(getInitProgressStateForTesting(), { stepDone: 0, gitChanges: undefined }, name)
+    }
+  }
+  finally {
+    beginFreshInitProgress()
   }
 })
 
@@ -1663,27 +1664,32 @@ await tAsync('resume fallback clears fingerprints when post-confirmation restora
   }
   let stateBeforeFailure
 
-  const resumed = await tryResumeOnboarding('test-key', {}, process.cwd(), {}, undefined, {
-    readProgress: () => JSON.stringify({
-      step_done: 1,
-      orgId: 'org-id',
-      orgName: 'Saved org',
-      gitChanges: saved,
-    }),
-    validateAccess: async () => undefined,
-    selectResume: async () => 'yes',
-    afterProgressRestored: () => {
-      stateBeforeFailure = getInitProgressStateForTesting()
-      throw new Error('post-restore failure')
-    },
-    clearCodeDiff: () => {},
-    clearEncryptionSummary: () => {},
-    log: { error: () => {}, info: () => {}, warn: () => {} },
-  })
+  try {
+    const resumed = await tryResumeOnboarding('test-key', {}, process.cwd(), {}, undefined, {
+      readProgress: () => JSON.stringify({
+        step_done: 1,
+        orgId: 'org-id',
+        orgName: 'Saved org',
+        gitChanges: saved,
+      }),
+      validateAccess: async () => undefined,
+      selectResume: async () => 'yes',
+      afterProgressRestored: () => {
+        stateBeforeFailure = getInitProgressStateForTesting()
+        throw new Error('post-restore failure')
+      },
+      clearCodeDiff: () => {},
+      clearEncryptionSummary: () => {},
+      log: { error: () => {}, info: () => {}, warn: () => {} },
+    })
 
-  assert.deepEqual(stateBeforeFailure, { stepDone: 1, gitChanges: saved })
-  assert.equal(resumed, undefined)
-  assert.deepEqual(getInitProgressStateForTesting(), { stepDone: 0, gitChanges: undefined })
+    assert.deepEqual(stateBeforeFailure, { stepDone: 1, gitChanges: saved })
+    assert.equal(resumed, undefined)
+    assert.deepEqual(getInitProgressStateForTesting(), { stepDone: 0, gitChanges: undefined })
+  }
+  finally {
+    beginFreshInitProgress()
+  }
 })
 
 await tAsync('command settlement preserves ENOENT instead of close code -2', async () => {

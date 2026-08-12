@@ -51,7 +51,10 @@ The field is optional. A progress file without it retains the current conservati
 Add one reusable helper that runs an automatic mutation between two Git snapshots. It returns the operation result unchanged and accepts a success predicate for APIs that report failure without throwing:
 
 ```ts
-await trackInitGitChanges(() => automaticMutation(), result => result.success)
+await runTrackedInitMutation(
+  () => automaticMutation(),
+  { startDir, scope, isSuccess: result => result.success },
+)
 ```
 
 The helper:
@@ -83,7 +86,7 @@ Do not wrap user prompts, manual-install/manual-edit waits, project build script
 Keep the existing progress payload and file. Extract its current serialization into a small shared writer used by:
 
 - `markStepDone()`, which updates `step_done` and writes progress as today.
-- `trackInitGitChanges()`, which writes an updated optional `gitChanges` field while preserving the last completed step.
+- `runTrackedInitMutation()`, which writes an updated optional `gitChanges` field while preserving the last completed step.
 
 If no resumable progress has been established yet, tracked fingerprints stay in memory and are included by the next normal `markStepDone()` call. This avoids creating a step-zero progress record that the current resume logic would reject.
 

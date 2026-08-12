@@ -661,24 +661,35 @@ function getInitGitRepoRoot(startDir = cwd()): string | undefined {
   }
 }
 
-function createInitGitChangeScope(startDir: string, exactTargets: string[] = [], directoryTargets: string[] = []): InitGitChangeScope {
-  const repoRoot = getInitGitRepoRoot(startDir)
-  if (!repoRoot)
-    return { exactPaths: [], directoryPrefixes: [] }
+export function createInitGitChangeScope(startDir: string, exactTargets: string[] = [], directoryTargets: string[] = []): InitGitChangeScope {
+  try {
+    const lexicalStartDir = path.resolve(startDir)
+    const resolvedStartDir = realpathSync(lexicalStartDir)
+    const repoRoot = getInitGitRepoRoot(resolvedStartDir)
+    if (!repoRoot)
+      return { exactPaths: [], directoryPrefixes: [] }
 
-  const toRepoRelativePath = (target: string) => {
-    const relativePath = path.relative(repoRoot, path.resolve(startDir, target)).replaceAll(path.sep, '/')
-    if (!relativePath || relativePath === '..' || relativePath.startsWith('../') || path.posix.isAbsolute(relativePath))
-      return undefined
-    return relativePath
+    const toRepoRelativePath = (target: string) => {
+      const lexicalTarget = path.resolve(lexicalStartDir, target)
+      const resolvedTarget = path.isAbsolute(target) && isPathInside(lexicalStartDir, lexicalTarget, true)
+        ? path.resolve(resolvedStartDir, path.relative(lexicalStartDir, lexicalTarget))
+        : path.resolve(resolvedStartDir, target)
+      const relativePath = path.relative(repoRoot, resolvedTarget).replaceAll(path.sep, '/')
+      if (!relativePath || relativePath === '..' || relativePath.startsWith('../') || path.posix.isAbsolute(relativePath))
+        return undefined
+      return relativePath
+    }
+    const exactPaths = exactTargets.map(toRepoRelativePath)
+    const directoryPrefixes = directoryTargets.map(toRepoRelativePath)
+    if (exactPaths.some(value => !value) || directoryPrefixes.some(value => !value))
+      return { exactPaths: [], directoryPrefixes: [] }
+    return {
+      exactPaths: exactPaths as string[],
+      directoryPrefixes: directoryPrefixes as string[],
+    }
   }
-  const exactPaths = exactTargets.map(toRepoRelativePath)
-  const directoryPrefixes = directoryTargets.map(toRepoRelativePath)
-  if (exactPaths.some(value => !value) || directoryPrefixes.some(value => !value))
+  catch {
     return { exactPaths: [], directoryPrefixes: [] }
-  return {
-    exactPaths: exactPaths as string[],
-    directoryPrefixes: directoryPrefixes as string[],
   }
 }
 
