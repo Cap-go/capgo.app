@@ -34,19 +34,26 @@ const router = useRouter()
 const isLoading = ref(true)
 const isLoadingStats = ref(false)
 const channelSurfing = ref<ChannelSurfingData | null>(null)
+let loadGeneration = 0
 
 async function loadChannelSurfing() {
+  const generation = ++loadGeneration
   isLoadingStats.value = true
   try {
     const data = await adminStore.fetchStats('channel_surfing')
+    if (generation !== loadGeneration)
+      return
     channelSurfing.value = data || null
   }
   catch (error) {
+    if (generation !== loadGeneration)
+      return
     console.error('[Admin Dashboard Channel Surfing] Error loading stats:', error)
     channelSurfing.value = null
   }
   finally {
-    isLoadingStats.value = false
+    if (generation === loadGeneration)
+      isLoadingStats.value = false
   }
 }
 
@@ -82,13 +89,13 @@ const dailySeries = computed(() => {
   ]
 })
 
-watch(() => [adminStore.activeDateRange, adminStore.selectedAppId], () => {
-  loadChannelSurfing()
-}, { deep: true })
-
-watch(() => adminStore.refreshTrigger, () => {
-  loadChannelSurfing()
-})
+watch(
+  () => [adminStore.activeDateRange, adminStore.selectedAppId, adminStore.refreshTrigger] as const,
+  () => {
+    loadChannelSurfing()
+  },
+  { deep: true },
+)
 
 onMounted(async () => {
   if (!mainStore.isAdmin) {
