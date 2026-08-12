@@ -1,7 +1,6 @@
 import { onBeforeUnmount, onMounted } from 'vue'
-export function registerBeforeUnloadWarning(enabled: boolean) {
-  if (!enabled)
-    return () => {}
+
+function registerBeforeUnloadWarning() {
   const handler = (event: BeforeUnloadEvent) => {
     event.preventDefault()
     event.returnValue = true
@@ -11,7 +10,7 @@ export function registerBeforeUnloadWarning(enabled: boolean) {
 }
 export function useBeforeUnloadWarning(enabled: boolean) {
   let cleanup = () => {}
-  onMounted(() => cleanup = registerBeforeUnloadWarning(enabled))
+  onMounted(() => enabled && (cleanup = registerBeforeUnloadWarning()))
   onBeforeUnmount(() => cleanup())
   return () => cleanup()
 }
