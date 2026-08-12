@@ -2,7 +2,7 @@
 -- readable_group_ids() scans public.groups under the surrounding INSERT snapshot,
 -- so the brand-new row is invisible and SELECT RLS fails with 42501 even when
 -- groups_insert WITH CHECK passed. Keep the bounded readable_group_ids() path for
--- normal SELECTs, and allow role managers via org_id (available on NEW) so
+-- normal reads, and allow role managers via org_id (available on NEW) so
 -- RETURNING works. Also mark readable_group_ids VOLATILE for consistency.
 CREATE OR REPLACE FUNCTION public.readable_group_ids()
 RETURNS uuid[]
