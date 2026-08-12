@@ -623,7 +623,6 @@ watch([selectedPlatform, selectedVersionNames], () => {
       @clear-extra-filters="clearExtraFilters"
     >
       <template #toolbar-extras>
-        <ChannelOverrideRetentionNotice v-if="showAddButton" show-label />
         <DateRangePicker
           ref="dateRangePickerRef"
           v-model="dateRange"
@@ -631,6 +630,11 @@ watch([selectedPlatform, selectedVersionNames], () => {
           compact
           @apply="onDateRangeApply"
         />
+      </template>
+      <template #table-notice>
+        <div v-if="showAddButton" class="border-b border-slate-200 px-4 py-2 dark:border-slate-700 sm:px-6">
+          <ChannelOverrideRetentionNotice show-label />
+        </div>
       </template>
       <template #empty-state="{ clearFilters, hasActiveFilters }">
         <div
