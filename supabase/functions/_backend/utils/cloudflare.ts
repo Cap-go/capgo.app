@@ -1559,8 +1559,12 @@ function platformDeliveryDaySql(value: string): string {
 
 /**
  * Pair start/complete in AE instead of pulling 50k raw rows per day.
- * Admin platform cannot JOIN; one sample per app+device+version+day.
- * Prefer double1 duration, else complete-minus-start seconds.
+ * AE SQL has no JOIN/UNION/JSON extract, so this is an explicit approximation:
+ * one sample per app+device+version+UTC day using first start and first complete
+ * (or double1 when the complete already has duration). Same-day multi-attempts
+ * and untimed pairs that cross UTC midnight can drop or skew; blob4 metadata
+ * duration cannot be parsed in-engine. trackLogsCF already writes duration to
+ * double1 when metadata has it.
  */
 function buildPlatformUpdateDeliveryDeliveriesSubquery(params: BuildPlatformUpdateDeliveryStatsCFQueryParams): string {
   const metaDurationSql = `min(if(blob2 IN (${PLATFORM_DELIVERY_END_ACTIONS_SQL}) AND double1 > 0, double1, NULL))`
@@ -1569,7 +1573,7 @@ function buildPlatformUpdateDeliveryDeliveriesSubquery(params: BuildPlatformUpda
 
   return `SELECT
   formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d') AS day,
-  blob1 AS device_id,
+  format('{}:{}', index1, blob1) AS app_device,
   1 AS sample_weight,
   if(
     ${metaDurationSql} > 0,
@@ -1591,7 +1595,7 @@ export function buildPlatformUpdateDeliveryDailyCFQuery(params: BuildPlatformUpd
   quantileExactWeighted(0.95)(duration_ms, sample_weight) AS p95_ms,
   quantileExactWeighted(0.99)(duration_ms, sample_weight) AS p99_ms,
   SUM(sample_weight) AS samples,
-  COUNT(DISTINCT device_id) AS devices
+  COUNT(DISTINCT app_device) AS devices
 FROM (
   ${buildPlatformUpdateDeliveryDeliveriesSubquery(params)}
 )
@@ -1609,7 +1613,7 @@ export function buildPlatformUpdateDeliveryOverviewCFQuery(params: BuildPlatform
   quantileExactWeighted(0.95)(duration_ms, sample_weight) AS p95_ms,
   quantileExactWeighted(0.99)(duration_ms, sample_weight) AS p99_ms,
   SUM(sample_weight) AS samples,
-  COUNT(DISTINCT device_id) AS devices
+  COUNT(DISTINCT app_device) AS devices
 FROM (
   ${buildPlatformUpdateDeliveryDeliveriesSubquery(params)}
 )
@@ -1644,6 +1648,8 @@ export async function readPlatformUpdateDeliveryStatsCF(
     }
   }
 
+  // AE SQL has no UNION/ROLLUP, so daily series and true overview percentiles
+  // cannot share one statement. Two parallel queries beat 90 sequential scans.
   const dailyQuery = buildPlatformUpdateDeliveryDailyCFQuery(params)
   const overviewQuery = buildPlatformUpdateDeliveryOverviewCFQuery(params)
   cloudlog({

@@ -598,8 +598,10 @@ async function readUpdateDeliveryStatsCF(
   endInclusive: Dayjs,
 ) {
   if (scope === 'platform') {
-    // One in-engine aggregate for the whole window. Raw 50k-row day scans
-    // miss untimed completes and 90 sequential queries time out.
+    // In-engine aggregate: pair start/complete and use double1 when present.
+    // AE SQL cannot parse blob4 JSON duration; trackLogsCF already copies
+    // metadata duration into double1. Raw 50k-row day scans miss untimed
+    // completes and 90 sequential queries time out.
     const { dailyRows, overviewRow } = await readPlatformUpdateDeliveryStatsCF(c, {
       query_start: start.subtract(2, 'hour').toISOString(),
       period_start: start.toISOString(),
