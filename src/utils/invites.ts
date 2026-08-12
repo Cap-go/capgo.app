@@ -85,7 +85,7 @@ interface InviteSessionTokens {
  */
 export async function completeInviteSessionHandoff(
   setSession: (tokens: InviteSessionTokens) => Promise<{ error: { message: string } | null }>,
-  goToLogin: () => Promise<unknown> | unknown,
+  goToLogin: () => unknown,
   tokens: InviteSessionTokens,
 ): Promise<void> {
   const { error } = await setSession({
