@@ -124,7 +124,7 @@ describe('groups RLS', () => {
     expect(rows[0]?.id).toBe(adminOnlyGroupId)
   })
 
-  it('allows org admins to insert a group with RETURNING (PostgREST create path)', async () => {
+  it('allows org creators (org_super_admin) to insert a group with RETURNING', async () => {
     const groupId = randomUUID()
 
     const row = await withAuthenticatedUser(pool, USER_ID, async (client) => {

@@ -1,9 +1,12 @@
 -- INSERT ... RETURNING on public.groups evaluates groups_select.
 -- readable_group_ids() scans public.groups under the surrounding INSERT snapshot,
 -- so the brand-new row is invisible and SELECT RLS fails with 42501 even when
--- groups_insert WITH CHECK passed. Keep the bounded readable_group_ids() path for
--- normal reads, and allow role managers via org_id (available on NEW) so
--- RETURNING works. Also mark readable_group_ids VOLATILE for consistency.
+-- groups_insert WITH CHECK passed.
+--
+-- Fix: keep readable_group_ids() for normal reads (incl. rank guards). For the
+-- in-flight INSERT row, also allow SELECT when created_by is the JWT user and
+-- they hold org.update_user_roles on org_id — uses NEW columns only, so it does
+-- not widen visibility of other groups beyond the rank-managed set.
 CREATE OR REPLACE FUNCTION public.readable_group_ids()
 RETURNS uuid[]
 LANGUAGE sql
@@ -57,7 +60,7 @@ REVOKE ALL ON FUNCTION public.readable_group_ids() FROM PUBLIC;
 GRANT ALL ON FUNCTION public.readable_group_ids() TO anon, authenticated, service_role;
 
 COMMENT ON FUNCTION public.readable_group_ids() IS
-  'Returns direct JWT-member groups plus rank-manageable groups from bounded caller-scoped orgs for statement-level RLS. VOLATILE; INSERT ... RETURNING also relies on groups_select org-role OR.';
+  'Returns direct JWT-member groups plus rank-manageable groups from bounded caller-scoped orgs for statement-level RLS. INSERT ... RETURNING also uses groups_select created_by OR.';
 
 DROP POLICY IF EXISTS "groups_select" ON public.groups;
 CREATE POLICY "groups_select" ON public.groups
@@ -65,13 +68,16 @@ FOR SELECT
 TO anon, authenticated
 USING (
   id = ANY(COALESCE((SELECT public.readable_group_ids()), '{}'::uuid[]))
-  OR public.rbac_check_permission_request(
-    public.rbac_perm_org_update_user_roles(),
-    org_id,
-    NULL::character varying,
-    NULL::bigint
+  OR (
+    created_by IS NOT DISTINCT FROM (SELECT auth.uid())
+    AND public.rbac_check_permission_request(
+      public.rbac_perm_org_update_user_roles(),
+      org_id,
+      NULL::character varying,
+      NULL::bigint
+    )
   )
 );
 
 COMMENT ON POLICY "groups_select" ON public.groups IS
-  'Members see their groups via readable_group_ids(); role managers also match by org_id so INSERT ... RETURNING works for new rows invisible to the INSERT snapshot.';
+  'Members/admins see groups via readable_group_ids() (rank-bounded). Creators with org.update_user_roles can also SELECT their own row so INSERT ... RETURNING works under the INSERT snapshot.';
