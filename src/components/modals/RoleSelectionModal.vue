@@ -83,6 +83,7 @@ function handleConfirm() {
         v-model="selectedRole"
         :roles="roles"
         :label="t('select-role')"
+        show-capabilities
         class="mt-4"
       />
 

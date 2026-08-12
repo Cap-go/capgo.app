@@ -15,6 +15,7 @@ const KNOWN_ROLES = new Set([
   'org_billing_admin',
   'org_admin',
   'org_super_admin',
+  'apikey_manager',
   'app_admin',
   'app_developer',
   'app_uploader',

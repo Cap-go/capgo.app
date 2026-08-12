@@ -29,7 +29,7 @@ const props = withDefaults(defineProps<Props>(), {
   label: '',
   showDescription: true,
   required: false,
-  showCapabilities: true,
+  showCapabilities: false,
 })
 
 const emit = defineEmits<{

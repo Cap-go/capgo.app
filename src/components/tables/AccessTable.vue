@@ -667,13 +667,13 @@ watch(
       <div class="rounded-md border border-slate-200 bg-slate-50/80 p-3 dark:border-slate-700 dark:bg-slate-900/60">
         <div class="space-y-2">
           <div v-for="option in selectedRoleOptions" :key="option.id" class="form-control">
-            <div
-              class="flex min-h-14 items-center gap-2 rounded-md border p-3 text-left transition-colors"
-              :class="selectedRole === option.name
-                ? 'border-primary bg-primary/5 ring-1 ring-primary/30 dark:bg-primary/10'
-                : 'border-slate-200 bg-white hover:border-primary/60 dark:border-slate-700 dark:bg-slate-950'"
-            >
-              <label class="flex min-w-0 flex-1 cursor-pointer items-center gap-3">
+            <div class="flex items-center gap-2">
+              <label
+                class="flex min-h-14 min-w-0 flex-1 cursor-pointer items-center gap-3 rounded-md border p-3 text-left transition-colors"
+                :class="selectedRole === option.name
+                  ? 'border-primary bg-primary/5 ring-1 ring-primary/30 dark:bg-primary/10'
+                  : 'border-slate-200 bg-white hover:border-primary/60 dark:border-slate-700 dark:bg-slate-950'"
+              >
                 <input
                   v-model="selectedRole"
                   type="radio"

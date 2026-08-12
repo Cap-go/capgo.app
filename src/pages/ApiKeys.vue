@@ -1890,12 +1890,14 @@ getKeys()
               <div
                 v-for="role in orgRoleOptions"
                 :key="role.id"
-                class="flex items-center gap-2 rounded-md border p-3 transition-colors"
-                :class="selectedOrgRole === role.name
-                  ? 'border-primary bg-primary/5 ring-1 ring-primary/30 dark:bg-primary/10'
-                  : 'border-slate-200 bg-white hover:border-primary/60 dark:border-slate-700 dark:bg-slate-950'"
+                class="flex items-center gap-2"
               >
-                <label class="flex min-w-0 flex-1 cursor-pointer items-center gap-3">
+                <label
+                  class="flex min-w-0 flex-1 cursor-pointer items-center gap-3 rounded-md border p-3 transition-colors"
+                  :class="selectedOrgRole === role.name
+                    ? 'border-primary bg-primary/5 ring-1 ring-primary/30 dark:bg-primary/10'
+                    : 'border-slate-200 bg-white hover:border-primary/60 dark:border-slate-700 dark:bg-slate-950'"
+                >
                   <input
                     v-model="selectedOrgRole"
                     type="radio"

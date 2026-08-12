@@ -44,8 +44,6 @@ onClickOutside(rootRef, () => {
 })
 
 function toggle() {
-  if (!hasContent.value)
-    return
   open.value = !open.value
 }
 
@@ -78,7 +76,7 @@ function close() {
     <dialog
       v-if="open"
       :id="panelId"
-      class="absolute right-0 z-30 m-0 mt-1 w-[min(20rem,calc(100vw-2rem))] max-w-none translate-none rounded-md border border-slate-200 bg-white p-3 text-left text-sm text-inherit shadow-lg open:flex open:flex-col dark:border-slate-700 dark:bg-slate-900"
+      class="absolute right-0 left-auto z-30 m-0 mt-1 w-[min(20rem,calc(100vw-2rem))] max-w-none translate-none rounded-md border border-slate-200 bg-white p-3 text-left text-sm text-inherit shadow-lg open:flex open:flex-col dark:border-slate-700 dark:bg-slate-900"
       open
       :aria-label="t('role-capabilities-learn-more')"
       @keydown.escape="close"

@@ -1619,10 +1619,12 @@ async function handleInviteNewUserSubmit() {
             <div
               v-for="option in permissionOptions"
               :key="option.value"
-              class="flex items-center gap-2 rounded-lg p-3"
-              :class="selectedPermissionForm === option.value ? 'bg-primary/5 ring-1 ring-primary/30' : 'hover:bg-gray-50 dark:hover:bg-gray-800'"
+              class="flex items-center gap-2"
             >
-              <label class="flex min-w-0 flex-1 cursor-pointer items-center gap-3">
+              <label
+                class="flex min-w-0 flex-1 cursor-pointer items-center gap-3 rounded-lg p-3"
+                :class="selectedPermissionForm === option.value ? 'bg-primary/5 ring-1 ring-primary/30' : 'hover:bg-gray-50 dark:hover:bg-gray-800'"
+              >
                 <input
                   v-model="selectedPermissionForm"
                   type="radio"
@@ -1720,6 +1722,7 @@ async function handleInviteNewUserSubmit() {
                   description: `${getRoleDisplayName(role.name)} - ${role.description}`,
                 }))"
                 :label="t('select-app-role')"
+                show-capabilities
                 :disabled="appAccessSelectedAppIds.length === 0 || isAppAccessLoading"
                 @update:model-value="appAccessRoleTouched = true"
               />

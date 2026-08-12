@@ -9,6 +9,7 @@ describe('roleCapabilities', () => {
       cannotKey: 'role-cap-org_member-cannot',
     })
     expect(getRoleCapabilityKeys('app_admin')?.summaryKey).toBe('role-cap-app_admin-summary')
+    expect(getRoleCapabilityKeys('apikey_manager')?.canKey).toBe('role-cap-apikey_manager-can')
     expect(getRoleCapabilityKeys('channel_reader')?.cannotKey).toBe('role-cap-channel_reader-cannot')
   })
 
