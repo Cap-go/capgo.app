@@ -584,14 +584,15 @@ export function formatElapsed(ms: number): string {
 // Follow mode (like `less +F`): by default the viewport tails the stream,
 // sticking to the bottom as new lines arrive. Scrolling up (↑/k, PgUp/u) PAUSES
 // the tail so earlier output can be read; scrolling back to the bottom (↓/G)
-// resumes following. Chrome is two rows (a divider + a status line with the
-// spinner, line count, and a follow/scroll hint); the rest is the clipped
+// resumes following. Live chrome is two rows (a divider + status line); the
+// read-only failed-build view adds one exit-hint row. The rest is the clipped
 // viewport, which resizes with the terminal.
 export const FullscreenBuildOutput: FC<{
   title: string
   lines: string[]
   terminalRows: number
-}> = ({ title, lines, terminalRows }) => {
+  onExit?: () => void
+}> = ({ title, lines, terminalRows, onExit }) => {
   const { stdout } = useStdout()
   // Read the live terminal size DIRECTLY each render — Node updates
   // stdout.rows/columns BEFORE emitting 'resize' and Ink re-renders on resize, so
@@ -624,7 +625,7 @@ export const FullscreenBuildOutput: FC<{
   }, [])
   const elapsed = formatElapsed(now - startedAt)
 
-  const CHROME_ROWS = 2 // bottom divider + status line
+  const CHROME_ROWS = onExit ? 3 : 2 // bottom divider + status line + optional exit line
   const viewportRows = Math.max(1, dims.rows - CHROME_ROWS)
   // Each log line renders as exactly ONE row (truncated to the terminal width in
   // the viewport below), so the viewport is a plain 1:1 slice — NOT the
@@ -651,6 +652,10 @@ export const FullscreenBuildOutput: FC<{
   const scrollOffset = follow ? maxScrollOffset : Math.min(pausedOffset, maxScrollOffset)
 
   useInput((input, key) => {
+    if (onExit && isBuildCompleteDismissKey(input, key)) {
+      onExit()
+      return
+    }
     const action = buildScrollAction(input, key, { scrollOffset, maxScrollOffset, viewportRows })
     if (!action)
       return
@@ -688,10 +693,19 @@ export const FullscreenBuildOutput: FC<{
         })}
       </Box>
       <Text color="cyan">{'─'.repeat(dividerWidth)}</Text>
-      <Box>
-        <SpinnerLine text={title} />
-        <Text dimColor wrap="truncate-end">{`  ·  ${elapsed}  (${lines.length} lines)${hint}`}</Text>
-      </Box>
+      {onExit
+        ? (
+            <>
+              <Text wrap="truncate-end"><Text color="red" bold>{`✖ ${title}`}</Text><Text dimColor>{`  ·  ${lines.length} lines${hint}`}</Text></Text>
+              <Text color="yellow" bold>Press Esc or Enter to go back.</Text>
+            </>
+          )
+        : (
+            <Box>
+              <SpinnerLine text={title} />
+              <Text dimColor wrap="truncate-end">{`  ·  ${elapsed}  (${lines.length} lines)${hint}`}</Text>
+            </Box>
+          )}
     </Box>
   )
 }

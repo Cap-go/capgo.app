@@ -818,17 +818,22 @@ test('ask-build shows the saved line, the prompt and the build-now/later control
 // ── AI ANALYSIS + ERROR + BUILD-COMPLETE (ios-shared.tsx) ─────────────────────
 
 // ai-analysis-prompt — offer to debug with Capgo AI
-test('ai-analysis-prompt shows the build-failed line, the offer and the debug/skip control', () => {
+test('ai-analysis-prompt shows the build-log option immediately above Skip', () => {
+  const element = h(AiAnalysisPromptStep, { onChange: noop })
   assertContains(
-    h(AiAnalysisPromptStep, { onChange: noop }),
+    element,
     [
       'Build failed.',
       'We can analyze the build log with Capgo AI and suggest a fix.',
       'Debug with AI',
+      'Show me the build logs',
       'Skip',
     ],
     'ai-analysis-prompt',
   )
+  const frame = renderFrameText(element, 80)
+  if (frame.indexOf('Show me the build logs') >= frame.indexOf('Skip'))
+    throw new Error(`build-log option must render above Skip:\n${frame}`)
 })
 
 // ai-analysis-running (spinner)

@@ -232,6 +232,7 @@ export const KIND_TABLE: Record<AndroidOnboardingStep, AndroidStepKind> = {
   'ai-analysis-running': 'auto',
   'ai-analysis-result': 'auto',
   'ai-analysis-result-scroll': 'auto',
+  'build-log-view': 'auto',
   'support-confirm': 'choice',
   'support-log-view': 'auto',
   'support-uploading': 'auto',
