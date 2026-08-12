@@ -5080,6 +5080,14 @@ export type Database = {
       rbac_principal_apikey: { Args: never; Returns: string }
       rbac_principal_group: { Args: never; Returns: string }
       rbac_principal_user: { Args: never; Returns: string }
+      rbac_resolve_permission_scope: {
+        Args: { p_app_id: string; p_channel_id: number; p_org_id: string }
+        Returns: {
+          effective_app_id: string
+          effective_org_id: string
+          ok: boolean
+        }[]
+      }
       rbac_role_apikey_manager: { Args: never; Returns: string }
       rbac_role_apikey_org_reader: { Args: never; Returns: string }
       rbac_role_app_admin: { Args: never; Returns: string }
@@ -5102,6 +5110,10 @@ export type Database = {
       rbac_scope_channel: { Args: never; Returns: string }
       rbac_scope_org: { Args: never; Returns: string }
       rbac_scope_platform: { Args: never; Returns: string }
+      rbac_should_use_apikey_principal: {
+        Args: { p_apikey: string; p_user_id: string }
+        Returns: boolean
+      }
       read_bandwidth_usage: {
         Args: { p_app_id: string; p_period_end: string; p_period_start: string }
         Returns: {

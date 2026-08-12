@@ -17,6 +17,7 @@ function createContext() {
   return {
     env: {
       APP_LOG: {},
+      VERSION_USAGE: {},
       DEVICE_USAGE: {},
       DEVICE_INFO: {},
       CF_ANALYTICS_TOKEN: 'analytics-token',
@@ -44,14 +45,14 @@ describe('public live update metrics', () => {
       const query = String(init?.body ?? '')
       queries.push(query)
 
-      if (query.includes('SELECT date, sum(succeeded) AS successes') && query.includes('GROUP BY date')) {
+      if (query.includes('FROM version_usage') && query.includes('AS installs')) {
         return analyticsResponse(
           [
             { name: 'date', type: 'String' },
-            { name: 'successes', type: 'UInt64' },
-            { name: 'failures', type: 'UInt64' },
+            { name: 'installs', type: 'UInt64' },
+            { name: 'fails', type: 'UInt64' },
           ],
-          [{ date: '2026-06-30', successes: '90', failures: '10' }],
+          [{ date: '2026-06-30', installs: '90', fails: '10' }],
         )
       }
 
@@ -79,7 +80,7 @@ describe('public live update metrics', () => {
         )
       }
 
-      if (query.includes('platform AS key') && query.includes('sum(succeeded)')) {
+      if (query.includes('blob5 AS key') && query.includes('sum(if(blob2 = \'set\', 1, 0))')) {
         return analyticsResponse(
           [
             { name: 'key', type: 'String' },
@@ -121,7 +122,7 @@ describe('public live update metrics', () => {
         )
       }
 
-      if (query.includes('country AS key') && query.includes('sum(succeeded)')) {
+      if (query.includes('blob6 AS key') && query.includes('sum(if(blob2 = \'set\', 1, 0))')) {
         return analyticsResponse(
           [
             { name: 'key', type: 'String' },
@@ -162,7 +163,7 @@ describe('public live update metrics', () => {
         )
       }
 
-      if (query.includes('plugin_version AS key') && query.includes('sum(succeeded)')) {
+      if (query.includes('blob7 AS key') && query.includes('sum(if(blob2 = \'set\', 1, 0))')) {
         return analyticsResponse(
           [
             { name: 'key', type: 'String' },
@@ -209,6 +210,7 @@ describe('public live update metrics', () => {
     expect(metrics.updater_versions[0]).toMatchObject({ key: '8.1.0', share: 60 })
     expect(metrics.updater_versions.find(row => row.key === '8.1.0')?.success_rate).toBe(93.3)
     expect(queries.length).toBe(11)
+    expect(queries.join('\n')).toContain('FROM version_usage')
     expect(queries.join('\n')).toContain('blob6')
     expect(queries.join('\n')).toContain('blob7')
     expect(queries.join('\n')).toContain('blob10')

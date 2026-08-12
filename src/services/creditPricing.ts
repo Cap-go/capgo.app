@@ -123,10 +123,3 @@ export function formatCreditPricingTierLabel(
     to: formatCreditTierAmount(step.type, maxUnits, t),
   })
 }
-
-export function formatIncludedThenPrice(metric: CreditMetricType, pricePerUnit: number, t: Translate) {
-  return t('credits-plan-overage', {
-    included: t('included-in-plan'),
-    price: formatCreditPricingPrice(metric, pricePerUnit, t),
-  })
-}

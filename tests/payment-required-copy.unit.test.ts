@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { resolveBillingPaidAt, shouldShowExpiredTrialCopy } from '../src/services/paymentRequired'
+import { resolveBillingPaidAt, shouldShowExpiredTrialCopy, shouldShowExpiredTrialPlansState, shouldShowPlanFailureBanner } from '../src/services/paymentRequired'
 
 describe('payment required copy', () => {
   it.concurrent('shows expired-trial copy for a never-paid web organization', () => {
@@ -20,5 +20,24 @@ describe('payment required copy', () => {
 
   it.concurrent('never shows purchase-oriented trial copy in the native app', () => {
     expect(shouldShowExpiredTrialCopy(true, null)).toBe(false)
+  })
+
+  it.concurrent('shows the plans-page state only for an expired never-paid organization', () => {
+    expect(shouldShowExpiredTrialPlansState(true, false, null)).toBe(true)
+    expect(shouldShowExpiredTrialPlansState(false, false, null)).toBe(false)
+    expect(shouldShowExpiredTrialPlansState(true, false, '2026-01-15T12:00:00.000Z')).toBe(false)
+    expect(shouldShowExpiredTrialPlansState(true, false, undefined)).toBe(false)
+  })
+
+  it.concurrent('keeps the plans failure banner neutral while billing history loads', () => {
+    expect(shouldShowPlanFailureBanner(true, false, undefined)).toBe(false)
+  })
+
+  it.concurrent('shows the plans failure banner only for resolved non-trial failures', () => {
+    expect(shouldShowPlanFailureBanner(true, false, null)).toBe(false)
+    expect(shouldShowPlanFailureBanner(true, false, '2026-01-15T12:00:00.000Z')).toBe(true)
+    expect(shouldShowPlanFailureBanner(false, false, '2026-01-15T12:00:00.000Z')).toBe(false)
+    expect(shouldShowPlanFailureBanner(true, true, undefined)).toBe(true)
+    expect(shouldShowPlanFailureBanner(true, false, undefined, true)).toBe(true)
   })
 })

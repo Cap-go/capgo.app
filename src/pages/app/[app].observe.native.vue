@@ -37,7 +37,7 @@ interface NativeObserveStatsResponse {
     total_devices: number
     issue_count: number
     affected_devices: number
-    issue_free_rate: number
+    issue_free_rate: number | null
     launch_timeout_count: number
     launch_p50_ms: number | null
     launch_p90_ms: number | null
@@ -69,7 +69,7 @@ interface NativeObserveStatsResponse {
     devices: number
     issue_count: number
     affected_devices: number
-    issue_free_rate: number
+    issue_free_rate: number | null
     launch_p90_ms: number | null
     webview_load_p90_ms: number | null
   }>
@@ -240,7 +240,9 @@ function formatCount(value: number | null | undefined) {
 }
 
 function formatPercent(value: number | null | undefined) {
-  return `${formatNumberValue(value ?? 0, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
+  if (value === null || value === undefined)
+    return '-'
+  return `${formatNumberValue(value, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
 }
 
 function formatDuration(value: number | null | undefined) {
@@ -312,7 +314,7 @@ watch([packageId, days], async () => {
       </div>
 
       <template v-else>
-        <div class="flex flex-col gap-1">
+        <div v-if="hasData" class="flex flex-col gap-1">
           <h2 class="text-base font-semibold text-slate-950 dark:text-white">
             {{ t('native-observe-overview') }}
           </h2>
@@ -321,7 +323,7 @@ watch([packageId, days], async () => {
           </p>
         </div>
 
-        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
+        <div v-if="hasData" class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
           <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
             <div class="text-sm truncate text-slate-600 dark:text-slate-400">
               {{ t('native-observe-tracked-devices') }}
@@ -335,7 +337,12 @@ watch([packageId, days], async () => {
             <div class="text-sm truncate text-slate-600 dark:text-slate-400">
               {{ t('native-observe-issue-free-rate') }}
             </div>
-            <div class="mt-2 text-2xl font-semibold text-emerald-600 dark:text-emerald-400">
+            <div
+              class="mt-2 text-2xl font-semibold"
+              :class="stats?.overview.issue_free_rate == null
+                ? 'text-slate-950 dark:text-white'
+                : 'text-emerald-600 dark:text-emerald-400'"
+            >
               {{ formatPercent(stats?.overview.issue_free_rate) }}
             </div>
           </div>
