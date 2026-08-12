@@ -35,6 +35,7 @@ import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
 import { isValidAppId } from '~/utils/appId'
+import { registerBeforeUnloadWarning } from '~/utils/beforeUnloadWarning'
 import {
   buildAlternativeAppIds,
   createOnboardingAppWithFallbackIds,
@@ -63,6 +64,7 @@ const organizationStore = useOrganizationStore()
 const onboardingUserId = computed(() => main.user?.id ?? main.auth?.id ?? null)
 const config = getLocalConfig()
 const STORE_ICON_FETCH_TIMEOUT_MS = 10_000
+let removeBeforeUnloadWarning = () => {}
 
 type AppRow = Database['public']['Tables']['apps']['Row']
 type StandardFlowStep = 'details' | 'choice' | 'install' | 'setup'
@@ -816,6 +818,7 @@ async function createOrganizationAndApp() {
 
     if (!createdApp.value)
       return
+    removeBeforeUnloadWarning()
 
     try {
       await ensureApiKey()
@@ -1020,6 +1023,7 @@ function openDashboard() {
 }
 
 onMounted(async () => {
+  removeBeforeUnloadWarning = registerBeforeUnloadWarning(Boolean(props.preOrg))
   let resumedFlow = false
   isLoading.value = true
   try {
@@ -1053,6 +1057,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  removeBeforeUnloadWarning()
   detailsFieldTracker.dispose()
 
   if (localIconPreview.value.startsWith('blob:'))
