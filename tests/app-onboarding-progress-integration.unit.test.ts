@@ -38,6 +38,12 @@ describe('app onboarding progress analytics integration', () => {
     expect(onboardingSource).toContain("pushEvent('onboarding_intent_selected', config.supaHost, {")
   })
 
+  it.concurrent('keeps the unload warning scoped to unfinished pre-org onboarding', () => {
+    expect(onboardingSource).toContain('useBeforeUnloadWarning(Boolean(props.preOrg))')
+    const creation = sourceBetween('async function createOrganizationAndApp()', 'async function createAppRecord(')
+    expect(creation.indexOf('if (!createdApp.value)')).toBeLessThan(creation.indexOf('removeBeforeUnloadWarning()'))
+  })
+
   it.concurrent('tracks only successful forward transitions with approved context', () => {
     const transitionHelpers = sourceBetween('function completeAndViewStep(', 'function whiteCardToggleButtonClass(')
     expect(transitionHelpers).toContain('progressTracker?.completeStep(previousStep, {')

@@ -1,7 +1,20 @@
 // @vitest-environment happy-dom
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { registerBeforeUnloadWarning } from '../src/utils/beforeUnloadWarning'
+import { createApp, defineComponent } from 'vue'
+import { useBeforeUnloadWarning } from '../src/utils/beforeUnloadWarning'
+
+function mountWarning(enabled: boolean) {
+  let complete = () => {}
+  const app = createApp(defineComponent({
+    setup() {
+      complete = useBeforeUnloadWarning(enabled)
+      return () => null
+    },
+  }))
+  app.mount(document.createElement('div'))
+  return { app, complete }
+}
 
 describe('before unload warning', () => {
   afterEach(() => vi.restoreAllMocks())
@@ -9,7 +22,7 @@ describe('before unload warning', () => {
   it('registers the native warning and returns its cleanup', () => {
     const addListener = vi.spyOn(window, 'addEventListener')
     const removeListener = vi.spyOn(window, 'removeEventListener')
-    const cleanup = registerBeforeUnloadWarning(true)
+    const { complete } = mountWarning(true)
     const [eventName, handler] = addListener.mock.calls[0] as unknown as ['beforeunload', EventListener]
     const event = { preventDefault: vi.fn(), returnValue: false } as unknown as BeforeUnloadEvent
 
@@ -18,13 +31,20 @@ describe('before unload warning', () => {
     expect(event.preventDefault).toHaveBeenCalledOnce()
     expect(event.returnValue).toBe(true)
 
-    cleanup()
+    complete()
     expect(removeListener).toHaveBeenCalledWith('beforeunload', handler)
   })
 
   it('does not register outside pre-organization onboarding', () => {
     const addListener = vi.spyOn(window, 'addEventListener')
-    registerBeforeUnloadWarning(false)()
+    mountWarning(false)
     expect(addListener).not.toHaveBeenCalled()
+  })
+
+  it('removes the warning when onboarding unmounts', () => {
+    const removeListener = vi.spyOn(window, 'removeEventListener')
+    const { app } = mountWarning(true)
+    app.unmount()
+    expect(removeListener).toHaveBeenCalledWith('beforeunload', expect.any(Function))
   })
 })
