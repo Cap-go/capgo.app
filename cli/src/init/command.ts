@@ -1,4 +1,4 @@
-import type { Buffer } from 'node:buffer'
+import { Buffer } from 'node:buffer'
 import type { ExistingOrganizationApp, Options, PendingOnboardingApp } from '../api/app'
 import type { UploadReporter } from '../bundle/upload'
 import type { Organization } from '../utils'
@@ -6,7 +6,7 @@ import type { SupportedPackageManager } from './command-execution'
 import type { InitCodeDiff, InitEncryptionPhase, InitEncryptionSummary } from './runtime'
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import path, { dirname, join } from 'node:path'
 import { chdir, cwd, env, exit, platform, stderr, stdin, stdout } from 'node:process'
 import { canParse, format, increment, lessThan, parse } from '@std/semver'
@@ -940,6 +940,39 @@ function initGitFileMetadataMatches(
     && left.ctimeNs === right.ctimeNs
 }
 
+function hashInitGitFile(
+  filePath: string,
+  expectedSize: bigint,
+  readFile?: NonNullable<InitGitSnapshotDependencies['readFile']>,
+) {
+  const expectedBytes = Number(expectedSize)
+  const hash = createHash('sha256')
+  if (readFile) {
+    const contents = readFile(filePath)
+    return contents.length === expectedBytes ? hash.update(contents).digest('hex') : undefined
+  }
+
+  const buffer = Buffer.allocUnsafe(64 * 1024)
+  const file = openSync(filePath, 'r')
+  try {
+    let bytesRead = 0
+    while (bytesRead < expectedBytes) {
+      const chunkSize = Math.min(buffer.length, expectedBytes - bytesRead)
+      const currentRead = readSync(file, buffer, 0, chunkSize, null)
+      if (currentRead === 0)
+        return undefined
+      hash.update(buffer.subarray(0, currentRead))
+      bytesRead += currentRead
+    }
+    if (readSync(file, buffer, 0, 1, null) !== 0)
+      return undefined
+    return hash.digest('hex')
+  }
+  finally {
+    closeSync(file)
+  }
+}
+
 export function captureInitGitSnapshot(
   startDir = cwd(),
   scope?: InitGitChangeScope,
@@ -957,7 +990,6 @@ export function captureInitGitSnapshot(
 
     const runStatus = dependencies.runStatus ?? runInitGitStatus
     const lstat = dependencies.lstat ?? (filePath => lstatSync(filePath, { bigint: true }))
-    const readFile = dependencies.readFile ?? (filePath => readFileSync(filePath))
     const limits = dependencies.limits ?? defaultInitGitSnapshotLimits
     if (!Number.isSafeInteger(limits.maxEntries) || limits.maxEntries < 0
       || !Number.isSafeInteger(limits.maxTotalBytes) || limits.maxTotalBytes < 0)
@@ -1001,7 +1033,9 @@ export function captureInitGitSnapshot(
       const nextTotalBytes = totalBytes + beforeStats.size
       if (beforeStats.size < 0n || nextTotalBytes > maxTotalBytes)
         return undefined
-      const contents = readFile(absolutePath)
+      const sha256 = hashInitGitFile(absolutePath, beforeStats.size, dependencies.readFile)
+      if (!sha256)
+        return undefined
       const afterStats = lstat(absolutePath)
       const mode = Number(afterStats.mode)
       if (!afterStats.isFile()
@@ -1010,7 +1044,7 @@ export function captureInitGitSnapshot(
         return undefined
       files[filePath] = {
         status,
-        sha256: createHash('sha256').update(contents).digest('hex'),
+        sha256,
         mode,
       }
       totalBytes = nextTotalBytes

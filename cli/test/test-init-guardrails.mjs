@@ -567,6 +567,36 @@ t('git snapshot rejects file metadata changed during hashing', () => {
   })
 })
 
+t('git snapshot rejects injected contents that grow beyond the pre-read file size', () => {
+  withTempDir((root) => {
+    initializeGitRepo(root, { 'tracked.txt': 'initial\n' })
+    const filePath = join(root, 'tracked.txt')
+    writeFileSync(filePath, 'modified\n', 'utf8')
+    let readCount = 0
+
+    const snapshot = captureInitGitSnapshot(root, undefined, {
+      readFile: (target) => {
+        readCount += 1
+        return Buffer.concat([readFileSync(target), Buffer.from('growth')])
+      },
+    })
+
+    assert.equal(snapshot, undefined)
+    assert.equal(readCount, 1)
+  })
+})
+
+t('git snapshot preserves the sha256 for exact-size file contents', () => {
+  withTempDir((root) => {
+    initializeGitRepo(root, { 'tracked.txt': 'initial\n' })
+    writeFileSync(join(root, 'tracked.txt'), 'modified\n', 'utf8')
+
+    const snapshot = captureInitGitSnapshot(root)
+
+    assert.equal(snapshot?.files['tracked.txt']?.sha256, '4487e24377581c1a43c957c7700c8b49920de7b8500c05590cee74996ef73f42')
+  })
+})
+
 t('git snapshot rejects a changed second status result', () => {
   withTempDir((root) => {
     initializeGitRepo(root, { 'tracked file ü.txt': 'initial\n' })
