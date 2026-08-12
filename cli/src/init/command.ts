@@ -72,6 +72,7 @@ const appIdRegex = /^[a-z0-9]+(?:\.[\w-]+)+$/i
 const whitespaceSplitPattern = /\s+/
 const capacitorConfigFiles = ['capacitor.config.ts', 'capacitor.config.js', 'capacitor.config.json']
 const capacitorGettingStartedUrl = 'https://capacitorjs.com/docs/getting-started'
+export const notifyAppReadyDocsUrl = 'https://capgo.app/docs/plugins/updater/notify-app-ready/'
 const nextWebDirPattern = /["']?webDir["']?\s*:\s*["']out["']/
 const nuxtWebDirPattern = /["']?webDir["']?\s*:\s*["']\.output\/public["']/
 const initNativeBundleVersion = '0.0.0'
@@ -106,6 +107,15 @@ type CapacitorConfigSnapshot = Awaited<ReturnType<typeof getConfig>>['config']
 type CancelablePromptValue = boolean | string | symbol
 type InitAutoTestChangeKind = 'html-banner' | 'vue-banner' | 'css-background'
 type DirtyGitStatusAction = 'check-again' | 'continue-dirty'
+type MissingMainFileChoice = 'manual' | 'docs' | 'provide-path'
+
+export function getMissingMainFileRecoveryOptions(): { value: MissingMainFileChoice, label: string }[] {
+  return [
+    { value: 'provide-path', label: 'Provide the path to the main file' },
+    { value: 'manual', label: 'I\'ll add the code manually' },
+    { value: 'docs', label: 'Open the notifyAppReady() documentation' },
+  ]
+}
 
 interface GitRepoStatus {
   inRepo: boolean
@@ -2897,18 +2907,45 @@ async function addCodeStep(orgId: string, apikey: string, appId: string) {
     }
 
     if (!mainFilePath || !existsSync(mainFilePath)) {
-      const userProvidedPath = await pText({
-        message: `Provide the correct relative path to your main file (JS or TS):`,
-        validate: (value) => {
-          if (!value || !existsSync(resolveProjectFilePath(value)))
-            return 'File does not exist. Please provide a valid path.'
-        },
-      })
-      if (pIsCancel(userProvidedPath)) {
-        pCancel('Operation cancelled.')
-        return await exitAfterFinishingReplay(1)
+      pLog.warn('Capgo could not find your app\'s JavaScript or TypeScript entry file automatically.')
+      pLog.info('Capgo needs CapacitorUpdater.notifyAppReady() to run when your app starts. Without this call, the update will be marked invalid and rolled back.')
+      pLog.info(`Learn more: ${notifyAppReadyDocsUrl}`)
+
+      while (!mainFilePath) {
+        const choice = await pSelect<MissingMainFileChoice>({
+          message: 'How do you want to continue?',
+          options: getMissingMainFileRecoveryOptions(),
+        })
+        await cancelCommand(choice, orgId, apikey)
+
+        if (choice === 'docs') {
+          try {
+            await open(notifyAppReadyDocsUrl)
+          }
+          catch {
+            pLog.warn(`Could not open your browser automatically. Visit: ${notifyAppReadyDocsUrl}`)
+          }
+          continue
+        }
+
+        if (choice === 'manual') {
+          pLog.info(`Add this code where your app starts:\n\n${getInitCodeInjection('main.ts')}\n`)
+          return
+        }
+
+        const userProvidedPath = await pText({
+          message: 'Provide the relative path to your main file (JS or TS):',
+          validate: (value) => {
+            if (!value || !existsSync(resolveProjectFilePath(value)))
+              return 'File does not exist. Please provide a valid path.'
+          },
+        })
+        if (pIsCancel(userProvidedPath)) {
+          pCancel('Operation cancelled.')
+          return await exitAfterFinishingReplay(1)
+        }
+        mainFilePath = resolveProjectFilePath(userProvidedPath as string)
       }
-      mainFilePath = resolveProjectFilePath(userProvidedPath as string)
     }
 
     filePath = mainFilePath

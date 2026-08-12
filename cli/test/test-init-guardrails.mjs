@@ -12,12 +12,14 @@ import {
   getInitOtaVersionBase,
   getInitSuggestedOtaVersion,
   getInitUpdaterPluginConfig,
+  getMissingMainFileRecoveryOptions,
   getResumedOnboardingAccessError,
   getNativePlatformAvailability,
   injectInitCode,
   isOnlyAllowedInitAutoTestChange,
   revertInitAutoTestChangeContent,
   runInheritedCommand,
+  notifyAppReadyDocsUrl,
 } from '../src/init/command.ts'
 import {
   createMissingExecutableError,
@@ -217,6 +219,15 @@ t('dirty git status prompt keeps clean repo as the recommended path', () => {
   assert.match(options[0]?.hint ?? '', /recommended/)
   assert.equal(options[1]?.value, 'continue-dirty')
   assert.match(options[1]?.hint ?? '', /not recommended/)
+})
+
+t('missing main file recovery offers manual setup, docs, and path entry', () => {
+  assert.deepEqual(getMissingMainFileRecoveryOptions().map(option => option.value), [
+    'provide-path',
+    'manual',
+    'docs',
+  ])
+  assert.equal(notifyAppReadyDocsUrl, 'https://capgo.app/docs/plugins/updater/notify-app-ready/')
 })
 
 t('init code injection preserves framework directives before imports', () => {
