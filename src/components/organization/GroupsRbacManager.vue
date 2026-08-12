@@ -8,6 +8,7 @@ import { toast } from 'vue-sonner'
 import IconTrash from '~icons/heroicons/trash'
 import IconWrench from '~icons/heroicons/wrench'
 import DataTable from '~/components/DataTable.vue'
+import { getCapgoApiErrorCode, invokeCapgoApi } from '~/services/capgoApi'
 import { formatDate } from '~/services/date'
 import { useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -19,6 +20,7 @@ interface Group {
   name: string
   description: string | null
   created_at: string
+  is_system: boolean
 }
 
 interface GroupRow extends Group {
@@ -170,14 +172,17 @@ async function refreshData() {
 async function fetchGroups() {
   const { data, error } = await supabase
     .from('groups')
-    .select('id, org_id, name, description, created_at')
+    .select('id, org_id, name, description, created_at, is_system')
     .eq('org_id', props.orgId)
     .order('name', { ascending: true })
 
   if (error)
     throw error
 
-  groups.value = (Array.isArray(data) ? data : []) as Group[]
+  groups.value = (Array.isArray(data) ? data : []).map(group => ({
+    ...group,
+    is_system: group.is_system === true,
+  })) as Group[]
 }
 
 async function fetchRoles() {
@@ -238,6 +243,11 @@ async function deleteGroup(group: GroupRow) {
   if (!props.canManage)
     return
 
+  if (group.is_system) {
+    toast.error(t('cannot-delete-system-group'))
+    return
+  }
+
   dialogStore.openDialog({
     id: 'delete-group-confirmation',
     title: t('remove-group'),
@@ -260,10 +270,24 @@ async function deleteGroup(group: GroupRow) {
 
   isSubmitting.value = true
   try {
-    const { error } = await supabase.rpc('delete_group_with_bindings', { group_id: group.id })
+    // Direct PostgREST delete / delete_group_with_bindings hit GROUP_DELETE_FORBIDDEN
+    // for JWT callers; private API deletes as an internal request role.
+    const { error } = await invokeCapgoApi(`private/groups/${group.id}`, {
+      method: 'DELETE',
+    })
 
-    if (error)
-      throw error
+    if (error) {
+      const apiError = await getCapgoApiErrorCode(error)
+      if (apiError === 'Cannot delete system group')
+        toast.error(t('cannot-delete-system-group'))
+      else if (apiError === 'Cannot remove the last org_super_admin')
+        toast.error(t('alert-cannot-delete-owner-title'))
+      else if (apiError?.includes('higher privileges'))
+        toast.error(t('cannot-manage-higher-privilege-group'))
+      else
+        toast.error(t('error-removing-group'))
+      return
+    }
 
     toast.success(t('group-removed'))
     await refreshData()
