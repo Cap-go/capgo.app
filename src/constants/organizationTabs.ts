@@ -26,20 +26,6 @@ export const organizationPlanSubTabs: Tab[] = [
   // Billing is injected in the settings layout (Stripe portal / permission modal).
 ]
 
-/** Flat list of every org settings route tab (used for order + permission lookups). */
-export const organizationTabs: Tab[] = [
-  { label: 'general', key: '/settings/organization', icon: IconInfo },
-  { label: 'members', key: '/settings/organization/members', icon: IconUsers },
-  { label: 'groups', key: '/settings/organization/groups', icon: IconUserGroup },
-  { label: 'plans', key: '/settings/organization/plans', icon: IconPlan },
-  { label: 'credits', key: '/settings/organization/credits', icon: IconCredits },
-  { label: 'security', key: '/settings/organization/security', icon: IconSecurity },
-  { label: 'usage', key: '/settings/organization/usage', icon: IconChart },
-  { label: 'notifications', key: '/settings/organization/notifications', icon: IconBell },
-  { label: 'audit-logs', key: '/settings/organization/auditlogs', icon: IconAudit },
-  { label: 'webhooks', key: '/settings/organization/webhooks', icon: IconWebhook },
-]
-
 /** Secondary org tabs after grouping Team + Plan hubs. */
 export const organizationMainTabs: Tab[] = [
   { label: 'general', key: '/settings/organization', icon: IconInfo },
