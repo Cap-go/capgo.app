@@ -231,6 +231,7 @@ t('missing main file recovery offers manual setup, docs, and path entry', () => 
   assert.equal(notifyAppReadyDocsUrl, 'https://capgo.app/docs/plugins/updater/notify-app-ready/')
   assert.equal(hasExistingMainFile(null), false)
   withTempDir((root) => {
+    assert.equal(hasExistingMainFile(root), false)
     const entryFile = join(root, 'main.ts')
     assert.equal(hasExistingMainFile(entryFile), false)
     writeFileSync(entryFile, '')

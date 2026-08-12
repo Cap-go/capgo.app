@@ -118,7 +118,14 @@ export function getMissingMainFileRecoveryOptions(): { value: MissingMainFileCho
 }
 
 export function hasExistingMainFile(mainFilePath: string | null): mainFilePath is string {
-  return Boolean(mainFilePath && existsSync(mainFilePath))
+  if (!mainFilePath)
+    return false
+  try {
+    return statSync(mainFilePath).isFile()
+  }
+  catch {
+    return false
+  }
 }
 
 interface GitRepoStatus {
@@ -2940,8 +2947,8 @@ async function addCodeStep(orgId: string, apikey: string, appId: string) {
         const userProvidedPath = await pText({
           message: 'Provide the relative path to your main file (JS or TS):',
           validate: (value) => {
-            if (!value || !existsSync(resolveProjectFilePath(value)))
-              return 'File does not exist. Please provide a valid path.'
+            if (!value || !hasExistingMainFile(resolveProjectFilePath(value)))
+              return 'Path must point to an existing file.'
           },
         })
         if (pIsCancel(userProvidedPath)) {
