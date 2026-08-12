@@ -13,6 +13,7 @@ import {
   getInitSuggestedOtaVersion,
   getInitUpdaterPluginConfig,
   getMissingMainFileRecoveryOptions,
+  hasExistingMainFile,
   getResumedOnboardingAccessError,
   getNativePlatformAvailability,
   injectInitCode,
@@ -228,6 +229,13 @@ t('missing main file recovery offers manual setup, docs, and path entry', () => 
     'docs',
   ])
   assert.equal(notifyAppReadyDocsUrl, 'https://capgo.app/docs/plugins/updater/notify-app-ready/')
+  assert.equal(hasExistingMainFile(null), false)
+  withTempDir((root) => {
+    const entryFile = join(root, 'main.ts')
+    assert.equal(hasExistingMainFile(entryFile), false)
+    writeFileSync(entryFile, '')
+    assert.equal(hasExistingMainFile(entryFile), true)
+  })
 })
 
 t('init code injection preserves framework directives before imports', () => {

@@ -117,6 +117,10 @@ export function getMissingMainFileRecoveryOptions(): { value: MissingMainFileCho
   ]
 }
 
+export function hasExistingMainFile(mainFilePath: string | null): mainFilePath is string {
+  return Boolean(mainFilePath && existsSync(mainFilePath))
+}
+
 interface GitRepoStatus {
   inRepo: boolean
   clean: boolean
@@ -2906,12 +2910,12 @@ async function addCodeStep(orgId: string, apikey: string, appId: string) {
       mainFilePath = projectTypeMainFile ? resolveProjectFilePath(projectTypeMainFile) : projectTypeMainFile
     }
 
-    if (!mainFilePath || !existsSync(mainFilePath)) {
+    if (!hasExistingMainFile(mainFilePath)) {
       pLog.warn('Capgo could not find your app\'s JavaScript or TypeScript entry file automatically.')
       pLog.info('Capgo needs CapacitorUpdater.notifyAppReady() to run when your app starts. Without this call, the update will be marked invalid and rolled back.')
       pLog.info(`Learn more: ${notifyAppReadyDocsUrl}`)
 
-      while (!mainFilePath) {
+      while (!hasExistingMainFile(mainFilePath)) {
         const choice = await pSelect<MissingMainFileChoice>({
           message: 'How do you want to continue?',
           options: getMissingMainFileRecoveryOptions(),
@@ -2929,7 +2933,7 @@ async function addCodeStep(orgId: string, apikey: string, appId: string) {
         }
 
         if (choice === 'manual') {
-          pLog.info(`Add this code where your app starts:\n\n${getInitCodeInjection('main.ts')}\n`)
+          pLog.info(`Add CapacitorUpdater.notifyAppReady() where your app starts. Follow the framework-specific guide: ${notifyAppReadyDocsUrl}`)
           return
         }
 
