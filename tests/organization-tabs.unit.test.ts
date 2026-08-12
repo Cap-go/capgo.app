@@ -65,4 +65,14 @@ describe('organization settings tab groups', () => {
     expect(pathMatchesTab(team!, '/settings/organization/members')).toBe(true)
     expect(pathMatchesTab(team!, '/settings/organization/plans')).toBe(false)
   })
+
+  it.concurrent('clones nested children without sharing arrays', () => {
+    const tabs = cloneTabs(organizationTabs)
+    const source = organizationTabs.find(tab => tab.key === TEAM_TAB_KEY)!
+    const clone = tabs.find(tab => tab.key === TEAM_TAB_KEY)!
+
+    expect(clone.children).not.toBe(source.children)
+    clone.children = clone.children!.filter(child => child.key !== '/settings/organization/security')
+    expect(source.children?.map(child => child.key)).toContain('/settings/organization/security')
+  })
 })
