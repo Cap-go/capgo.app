@@ -15,6 +15,7 @@ import IconPencil from '~icons/heroicons/pencil'
 import IconShield from '~icons/heroicons/shield-check'
 import IconTrash from '~icons/heroicons/trash'
 import IconXMark from '~icons/heroicons/x-mark'
+import RoleCapabilitiesHint from '~/components/forms/RoleCapabilitiesHint.vue'
 import ChannelPermissionOverridesPanel from '~/components/permissions/ChannelPermissionOverridesPanel.vue'
 import {
   confirmApiKeyDeletion,
@@ -173,6 +174,7 @@ function getRoleDisplayName(roleName: string): string {
   const i18nKey = getRbacRoleI18nKey(normalized)
   return i18nKey ? t(i18nKey) : normalized.replaceAll('_', ' ')
 }
+
 const systemApiKeyOrgReaderRole = 'apikey_org_reader'
 
 // Get bindings for a specific key
@@ -1885,21 +1887,27 @@ getKeys()
               {{ t('select-user-role') }}
             </p>
             <div class="space-y-2">
-              <label
+              <div
                 v-for="role in orgRoleOptions"
                 :key="role.id"
-                class="flex items-center gap-3 cursor-pointer"
+                class="flex items-center gap-2 rounded-md border p-3 transition-colors"
+                :class="selectedOrgRole === role.name
+                  ? 'border-primary bg-primary/5 ring-1 ring-primary/30 dark:bg-primary/10'
+                  : 'border-slate-200 bg-white hover:border-primary/60 dark:border-slate-700 dark:bg-slate-950'"
               >
-                <input
-                  v-model="selectedOrgRole"
-                  type="radio"
-                  :data-test="`create-key-org-role-${role.name}`"
-                  class="d-radio d-radio-primary d-radio-sm"
-                  name="create-org-role"
-                  :value="role.name"
-                >
-                <span class="text-sm font-medium dark:text-white text-slate-800">{{ role.description }}</span>
-              </label>
+                <label class="flex min-w-0 flex-1 cursor-pointer items-center gap-3">
+                  <input
+                    v-model="selectedOrgRole"
+                    type="radio"
+                    :data-test="`create-key-org-role-${role.name}`"
+                    class="d-radio d-radio-primary d-radio-sm"
+                    name="create-org-role"
+                    :value="role.name"
+                  >
+                  <span class="text-sm font-medium dark:text-white text-slate-800">{{ role.description }}</span>
+                </label>
+                <RoleCapabilitiesHint :role-name="role.name" />
+              </div>
             </div>
           </div>
 
@@ -1993,7 +2001,7 @@ getKeys()
                 v-for="appId in selectedAppIds"
                 :key="appId"
                 data-test="create-key-selected-app"
-                class="flex items-center gap-4 px-4 py-2.5 border-b last:border-0 border-slate-100 dark:border-slate-700 hover:bg-slate-50/50 dark:hover:bg-slate-700/20"
+                class="flex items-center gap-3 px-4 py-2.5 border-b last:border-0 border-slate-100 dark:border-slate-700 hover:bg-slate-50/50 dark:hover:bg-slate-700/20"
               >
                 <span class="flex-1 text-sm font-medium truncate dark:text-white text-slate-800">
                   {{ getAppNameById(appId) }}
@@ -2012,10 +2020,18 @@ getKeys()
                   <option value="">
                     {{ t('select-role') }}
                   </option>
-                  <option v-for="role in appRoleOptions" :key="role.id" :value="role.name">
+                  <option
+                    v-for="role in appRoleOptions"
+                    :key="role.id"
+                    :value="role.name"
+                  >
                     {{ role.description }}
                   </option>
                 </select>
+                <RoleCapabilitiesHint
+                  v-if="pendingAppBindings[appId]"
+                  :role-name="pendingAppBindings[appId]"
+                />
                 <button
                   class="text-red-500 d-btn d-btn-xs d-btn-ghost shrink-0"
                   type="button"

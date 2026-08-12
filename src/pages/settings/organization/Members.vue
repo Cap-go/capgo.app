@@ -13,6 +13,7 @@ import IconSearch from '~icons/heroicons/magnifying-glass'
 import IconShield from '~icons/heroicons/shield-check'
 import IconTrash from '~icons/heroicons/trash'
 import IconWrench from '~icons/heroicons/wrench'
+import RoleCapabilitiesHint from '~/components/forms/RoleCapabilitiesHint.vue'
 import RoleSelect from '~/components/forms/RoleSelect.vue'
 import SearchInput from '~/components/forms/SearchInput.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
@@ -1615,18 +1616,24 @@ async function handleInviteNewUserSubmit() {
       <div class="w-full">
         <div class="p-4 border rounded-lg dark:border-gray-600">
           <div class="space-y-3">
-            <div v-for="option in permissionOptions" :key="option.value" class="form-control">
-              <label class="justify-start gap-3 p-3 rounded-lg cursor-pointer hover:bg-gray-50 label dark:hover:bg-gray-800">
+            <div
+              v-for="option in permissionOptions"
+              :key="option.value"
+              class="flex items-center gap-2 rounded-lg p-3"
+              :class="selectedPermissionForm === option.value ? 'bg-primary/5 ring-1 ring-primary/30' : 'hover:bg-gray-50 dark:hover:bg-gray-800'"
+            >
+              <label class="flex min-w-0 flex-1 cursor-pointer items-center gap-3">
                 <input
                   v-model="selectedPermissionForm"
                   type="radio"
                   name="permission"
                   :value="option.value"
-                  class="mr-2 radio radio-primary"
+                  class="radio radio-primary"
                   @change="handleFormKitPermissionSelection(option.value)"
                 >
                 <span class="text-base label-text">{{ option.label }}</span>
               </label>
+              <RoleCapabilitiesHint :role-name="option.value" />
             </div>
           </div>
         </div>

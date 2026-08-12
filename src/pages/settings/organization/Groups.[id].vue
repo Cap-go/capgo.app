@@ -11,6 +11,7 @@ import IconLock from '~icons/heroicons/lock-closed'
 import IconTrash from '~icons/heroicons/trash'
 import IconUsers from '~icons/heroicons/users'
 import DataTable from '~/components/DataTable.vue'
+import RoleCapabilitiesHint from '~/components/forms/RoleCapabilitiesHint.vue'
 import SearchInput from '~/components/forms/SearchInput.vue'
 import { checkPermissions } from '~/services/permissions'
 import { useSupabase } from '~/services/supabase'
@@ -787,7 +788,7 @@ async function removeMemberFromGroup(userId: string) {
               {{ t('select-user-role') }}
             </p>
             <div class="space-y-2">
-              <label class="flex items-center gap-3 cursor-pointer">
+              <label class="flex items-center gap-3 cursor-pointer rounded-md border border-slate-200 p-3 dark:border-slate-700">
                 <input
                   v-model="selectedOrgRole"
                   type="radio"
@@ -798,21 +799,27 @@ async function removeMemberFromGroup(userId: string) {
                 >
                 <span class="text-sm text-slate-600 dark:text-slate-400">{{ t('none') }}</span>
               </label>
-              <label
+              <div
                 v-for="role in orgRoleOptions"
                 :key="role.id"
-                class="flex items-center gap-3 cursor-pointer"
+                class="flex items-center gap-2 rounded-md border p-3 transition-colors"
+                :class="selectedOrgRole === role.name
+                  ? 'border-primary bg-primary/5 ring-1 ring-primary/30 dark:bg-primary/10'
+                  : 'border-slate-200 bg-white hover:border-primary/60 dark:border-slate-700 dark:bg-slate-950'"
               >
-                <input
-                  v-model="selectedOrgRole"
-                  type="radio"
-                  class="d-radio d-radio-primary d-radio-sm"
-                  name="org-role"
-                  :value="role.name"
-                  :disabled="isSubmitting"
-                >
-                <span class="text-sm font-medium dark:text-white text-slate-800">{{ role.description }}</span>
-              </label>
+                <label class="flex min-w-0 flex-1 cursor-pointer items-center gap-3">
+                  <input
+                    v-model="selectedOrgRole"
+                    type="radio"
+                    class="d-radio d-radio-primary d-radio-sm"
+                    name="org-role"
+                    :value="role.name"
+                    :disabled="isSubmitting"
+                  >
+                  <span class="text-sm font-medium dark:text-white text-slate-800">{{ role.description }}</span>
+                </label>
+                <RoleCapabilitiesHint :role-name="role.name" />
+              </div>
             </div>
           </section>
 
@@ -891,7 +898,7 @@ async function removeMemberFromGroup(userId: string) {
                 <div
                   v-for="appId in selectedAppIds"
                   :key="appId"
-                  class="flex items-center gap-4 px-4 py-2.5 border-b last:border-0 border-slate-100 dark:border-slate-700 hover:bg-slate-50/50 dark:hover:bg-slate-700/20 transition-colors"
+                  class="flex items-center gap-3 px-4 py-2.5 border-b last:border-0 border-slate-100 dark:border-slate-700 hover:bg-slate-50/50 dark:hover:bg-slate-700/20 transition-colors"
                 >
                   <span class="flex-1 text-sm font-medium dark:text-white text-slate-800 truncate">
                     {{ getAppName(appId) }}
@@ -910,12 +917,21 @@ async function removeMemberFromGroup(userId: string) {
                     <option value="">
                       {{ t('select-role') }}
                     </option>
-                    <option v-for="role in appRoleOptions" :key="role.id" :value="role.name">
+                    <option
+                      v-for="role in appRoleOptions"
+                      :key="role.id"
+                      :value="role.name"
+                    >
                       {{ role.description }}
                     </option>
                   </select>
+                  <RoleCapabilitiesHint
+                    v-if="pendingAppBindings[appId]"
+                    :role-name="pendingAppBindings[appId]"
+                  />
                   <button
                     class="d-btn d-btn-xs d-btn-ghost text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 shrink-0"
+                    type="button"
                     :disabled="isSubmitting"
                     @click="toggleApp(appId)"
                   >

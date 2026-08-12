@@ -54,11 +54,6 @@ const modalTitle = computed(() => props.title || t('select-role'))
 const confirmButtonText = computed(() => props.confirmText || t('button-confirm'))
 const cancelButtonText = computed(() => props.cancelText || t('cancel'))
 
-const roleDescription = computed(() => {
-  const role = props.roles.find(r => r.name === selectedRole.value)
-  return role?.description ?? ''
-})
-
 function handleClose() {
   emit('update:open', false)
   emit('cancel')
@@ -90,14 +85,6 @@ function handleConfirm() {
         :label="t('select-role')"
         class="mt-4"
       />
-
-      <div v-if="roleDescription" class="mt-2">
-        <label class="label">
-          <span class="label-text-alt text-gray-500">
-            {{ roleDescription }}
-          </span>
-        </label>
-      </div>
 
       <div class="modal-action">
         <button class="d-btn" @click="handleClose">
