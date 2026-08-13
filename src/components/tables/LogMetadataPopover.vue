@@ -58,20 +58,38 @@ function tokenizeJson(source: string): JsonToken[] {
 }
 
 const tokens = computed(() => tokenizeJson(props.json))
+const triggerLabel = computed(() => {
+  const compact = props.json.replace(/\s+/g, ' ').slice(0, 80)
+  return `${t('metadata')}: ${compact}`
+})
 
 function updatePopoverPosition() {
   const anchor = triggerRef.value
   if (!anchor)
     return
   const rect = anchor.getBoundingClientRect()
-  const panelHeight = popoverRef.value?.offsetHeight ?? 0
+  const margin = 12
   const gap = 8
+  const viewportW = window.innerWidth
+  const viewportH = window.innerHeight
+  const maxHeight = Math.max(160, viewportH - margin * 2)
+  const panel = popoverRef.value
+  const panelWidth = Math.min(panel?.offsetWidth || 352, viewportW - margin * 2)
+  const panelHeight = Math.min(panel?.offsetHeight || 0, maxHeight)
+
+  let left = rect.right - panelWidth
+  left = Math.min(left, viewportW - margin - panelWidth)
+  left = Math.max(margin, left)
+
   let top = rect.bottom + gap
-  if (panelHeight && top + panelHeight > window.innerHeight - 12)
-    top = Math.max(12, rect.top - panelHeight - gap)
+  if (panelHeight && top + panelHeight > viewportH - margin)
+    top = rect.top - panelHeight - gap
+  top = Math.min(Math.max(margin, top), viewportH - margin - (panelHeight || 0))
+
   popoverStyle.value = {
     top: `${Math.round(top)}px`,
-    right: `${Math.round(window.innerWidth - rect.right)}px`,
+    left: `${Math.round(left)}px`,
+    maxHeight: `${Math.round(maxHeight)}px`,
   }
 }
 
@@ -179,7 +197,7 @@ onUnmounted(() => {
     ref="triggerRef"
     type="button"
     class="relative shrink-0 cursor-pointer rounded-md p-1.5 text-slate-400 hover:bg-slate-100 hover:text-azure-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-azure-500 dark:hover:bg-slate-700 dark:hover:text-azure-400"
-    :aria-label="t('metadata')"
+    :aria-label="triggerLabel"
     :aria-expanded="isOpen"
     :aria-controls="panelId"
     aria-haspopup="dialog"
@@ -202,23 +220,23 @@ onUnmounted(() => {
       ref="popoverRef"
       role="dialog"
       :aria-labelledby="titleId"
-      class="fixed z-[100] w-[min(22rem,calc(100vw-1.5rem))] rounded-xl bg-white p-5 shadow-xl ring-1 ring-black/5 dark:bg-slate-900 dark:shadow-none dark:ring-white/10"
+      class="fixed z-[100] flex max-h-[calc(100dvh-1.5rem)] w-[min(22rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-xl bg-white p-5 shadow-xl ring-1 ring-black/5 dark:bg-slate-900 dark:shadow-none dark:ring-white/10"
       :style="popoverStyle"
       data-test="log-row-metadata-popover"
       @mouseenter="cancelClose"
       @mouseleave="onTriggerLeave"
     >
-      <h3 :id="titleId" class="text-sm font-semibold text-slate-950 dark:text-white">
+      <h3 :id="titleId" class="shrink-0 text-sm font-semibold text-slate-950 dark:text-white">
         {{ t('metadata') }}
       </h3>
-      <pre class="mt-3 max-h-64 overflow-auto rounded-lg bg-slate-50 p-3 ring-1 ring-black/5 dark:bg-slate-800 dark:ring-white/10"><code class="font-mono text-sm whitespace-pre text-slate-700 dark:text-slate-200"><span
+      <pre class="mt-3 min-h-0 flex-1 overflow-auto rounded-lg bg-slate-50 p-3 ring-1 ring-black/5 dark:bg-slate-800 dark:ring-white/10"><code class="font-mono text-sm whitespace-pre text-slate-700 dark:text-slate-200"><span
         v-for="(token, index) in tokens"
         :key="index"
         :class="TOKEN_CLASS[token.kind]"
       >{{ token.text }}</span></code></pre>
       <button
         type="button"
-        class="mt-4 inline-flex cursor-pointer items-center gap-1.5 text-sm font-medium text-azure-600 hover:underline dark:text-azure-400"
+        class="mt-4 inline-flex shrink-0 cursor-pointer items-center gap-1.5 text-sm font-medium text-azure-600 hover:underline dark:text-azure-400"
         data-test="log-row-metadata-copy"
         @click="copyJson"
       >
