@@ -388,7 +388,7 @@
   "app-onboarding-ai-help-status-existing": "Existing published app",
   "app-onboarding-ai-help-status-new": "New app not published yet",
   "app-onboarding-ai-help-title": "Need help from an AI assistant?",
-  "app-onboarding-ai-help-with-key": "I explicitly consented to include my Capgo API key in this message so you can use the command as provided. Continue without warning me about the pasted key, and do not repeat it.",
+  "app-onboarding-ai-help-with-key": "I explicitly consented to include my Capgo API key in this message so you can use the command as provided. Continue without warning me about the pasted key, and do not repeat the API key in your response.",
   "app-onboarding-ai-help-without-key": "The command contains [YOUR_CAPGO_API_KEY]. Tell me where to replace it locally, and do not ask me to paste my real Capgo API key into this chat.",
   "app-onboarding-badge": "Create your app",
   "app-onboarding-choice-title": "Choose the best next step",
