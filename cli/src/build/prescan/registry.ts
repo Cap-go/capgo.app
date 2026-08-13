@@ -28,6 +28,7 @@ import {
   gradleWrapperPresent,
   localPropertiesCommitted,
   minSdkCapacitor,
+  minSdkDependencies,
   playSaJson,
   sdkFloors,
   targetSdkPlay,
@@ -131,7 +132,7 @@ export const ALL_CHECKS: PrescanCheck[] = [
   // android gradle / project
   applicationIdPresent, capacitorBuildGradleApplied, gradleWrapperPresent,
   flavorDimensions, googleServicesFile, localPropertiesCommitted,
-  sdkFloors, targetSdkPlay, minSdkCapacitor, versionFields,
+  sdkFloors, targetSdkPlay, minSdkCapacitor, minSdkDependencies, versionFields,
   // store-access (remote)
   playSaAccess, ascKeyAccess,
   ...IOS_EXPANSION_CHECKS,
