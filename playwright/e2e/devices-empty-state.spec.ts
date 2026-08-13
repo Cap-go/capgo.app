@@ -67,8 +67,8 @@ test.describe('Devices empty state', () => {
     await expectRequestCountToRemain(requests, requests.length)
     const requestCountBeforeRefresh = requests.length
     await emptyState.getByRole('button', { name: 'Refresh devices' }).click()
-    await expect.poll(() => requests.length).toBe(requestCountBeforeRefresh + 2)
-    await expectRequestCountToRemain(requests, requestCountBeforeRefresh + 2)
+    await expect.poll(() => requests.length).toBe(requestCountBeforeRefresh + 3)
+    await expectRequestCountToRemain(requests, requestCountBeforeRefresh + 3)
     await expect.poll(() => requests.at(-1)).toMatchObject({
       appId: APP_ID,
       search: 'missing-device',
@@ -102,8 +102,8 @@ test.describe('Devices empty state', () => {
 
     await expect(search).toHaveValue('')
     await expect(emptyState.getByText('Search or filters are hiding it.')).toHaveCount(0)
-    await expect.poll(() => requests.length).toBe(requestCountBeforeClear + 2)
-    await expectRequestCountToRemain(requests, requestCountBeforeClear + 2)
+    await expect.poll(() => requests.length).toBe(requestCountBeforeClear + 3)
+    await expectRequestCountToRemain(requests, requestCountBeforeClear + 3)
     await expect.poll(() => requests.at(-1)).toMatchObject({
       appId: APP_ID,
       customIdMode: false,
@@ -112,5 +112,28 @@ test.describe('Devices empty state', () => {
     expect(requests.at(-1)).not.toHaveProperty('platform')
     expect(requests.at(-1)).not.toHaveProperty('versionNames')
     expect(requests.at(-1)).not.toHaveProperty('versionName')
+  })
+
+  test('shows how many devices the time range is hiding', async ({ page }) => {
+    await page.route('**/private/devices**', async (route: Route) => {
+      const body = route.request().postDataJSON() as Record<string, unknown>
+      const filtered = 'updated_at_gt' in body
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(body.count
+          ? { count: filtered ? 0 : 3 }
+          : { data: [], hasMore: false }),
+      })
+    })
+    await page.goto(`/app/${APP_ID}/devices`)
+
+    const banner = page.locator('[data-test="devices-range-filter-banner"]')
+    await expect(banner).toBeVisible()
+    await expect(banner).toContainText('The Last 30 minutes filter is on, so you see 0 of 3 devices.')
+    await expect(page.locator('[data-test="devices-empty-state"]')).toBeVisible()
+
+    await banner.getByRole('button', { name: 'Change time range' }).click()
+    await expect(page.getByRole('dialog', { name: /Date range:/ })).toBeVisible()
   })
 })

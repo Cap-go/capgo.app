@@ -1622,6 +1622,7 @@
   "no-zip-bundle": "No zip bundle",
   "no_elements_found": "No elements found",
   "devices-empty-title": "No devices found",
+  "devices-filter-range-banner": "The {range} filter is on, so you see {shown} of {total} devices.",
   "devices-empty-intro": "A device might not appear because:",
   "devices-empty-time-reason": "The selected time range is too narrow.",
   "devices-empty-change-time": "Change time range",

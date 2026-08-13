@@ -6,10 +6,12 @@ import { computed, h, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
+import IconInfo from '~icons/lucide/info'
 import IconSmartphone from '~icons/lucide/smartphone'
 import DateRangePicker from '~/components/DateRangePicker.vue'
 import { formatDate } from '~/services/date'
 import {
+  DATE_RANGE_PRESET_LABEL_KEYS,
   getDateRangeForPreset,
   getTableDateRangeSignature,
   shouldRecountOnTableReload,
@@ -40,6 +42,7 @@ const { t } = useI18n()
 const supabase = useSupabase()
 const router = useRouter()
 const total = ref(0)
+const unfilteredTotal = ref<number | null>(null)
 const search = ref('')
 const elements = ref<Device[]>([])
 const isLoading = ref(true)
@@ -72,6 +75,13 @@ const platformOptions = computed(() => [
   { value: 'android' as const, label: t('platform-android') },
   { value: 'electron' as const, label: t('platform-electron') },
 ])
+const dateRangeLabel = computed(() => {
+  const mode = dateRangeMode.value
+  if (mode === 'custom')
+    return t('date-range')
+  return t(DATE_RANGE_PRESET_LABEL_KEYS[mode])
+})
+const showRangeFilterBanner = computed(() => unfilteredTotal.value !== null && unfilteredTotal.value > 0)
 
 function clearExtraFilters() {
   // Values only — DataTable clear emits a filters update that triggers the single reload.
@@ -251,7 +261,7 @@ async function resolveDeviceIds() {
   return []
 }
 
-async function countDevices() {
+async function countDevices(options?: { includeDateRange?: boolean }) {
   const { data: currentSession } = await supabase.auth.getSession()!
   if (!currentSession.session)
     return 0
@@ -276,7 +286,7 @@ async function countDevices() {
         search: searchTerm,
         order: getActiveOrder(columns.value),
         customIdMode: filters.value.CustomId,
-        ...getDateRangePayload(),
+        ...(options?.includeDateRange === false ? {} : getDateRangePayload()),
       }),
     })
 
@@ -292,6 +302,18 @@ async function countDevices() {
     console.log('Cannot get devices', err)
     return 0
   }
+}
+
+async function recountDevices(loadId: number) {
+  const [filteredCount, allCount] = await Promise.all([
+    countDevices(),
+    countDevices({ includeDateRange: false }),
+  ])
+  if (loadId !== activeLoadId.value)
+    return false
+  total.value = filteredCount
+  unfilteredTotal.value = allCount
+  return true
 }
 
 interface DevicesResponse {
@@ -338,10 +360,9 @@ async function reload() {
       // cursors so the new window cannot reuse stale page offsets.
       if (!filtersChanged)
         resetTablePagination({ snapRolling: true })
-      const newTotal = await countDevices()
-      if (loadId !== activeLoadId.value)
+      const counted = await recountDevices(loadId)
+      if (!counted)
         return
-      total.value = newTotal
     }
 
     await getData(loadId)
@@ -363,11 +384,9 @@ async function refreshData() {
   isLoading.value = true
   try {
     resetTablePagination({ snapRolling: true })
-    const newTotal = await countDevices()
-    if (loadId !== activeLoadId.value)
+    const counted = await recountDevices(loadId)
+    if (!counted)
       return
-
-    total.value = newTotal
     await getData(loadId)
     if (loadId === activeLoadId.value)
       previousPage.value = currentPage.value
@@ -608,6 +627,27 @@ watch([selectedPlatform, selectedVersionNames], () => {
 
 <template>
   <div>
+    <div
+      v-if="showRangeFilterBanner"
+      class="mx-3 mt-3 flex flex-col gap-3 rounded-lg border border-azure-200 bg-azure-50 px-4 py-3 text-sm text-slate-700 dark:border-azure-800 dark:bg-azure-900/20 dark:text-slate-200 sm:flex-row sm:items-center sm:justify-between"
+      data-test="devices-range-filter-banner"
+      role="status"
+    >
+      <div class="flex min-w-0 items-start gap-3">
+        <IconInfo class="mt-0.5 h-5 w-5 shrink-0 text-azure-600 dark:text-azure-400" aria-hidden="true" />
+        <p>
+          {{ t('devices-filter-range-banner', { range: dateRangeLabel, shown: total, total: unfilteredTotal }) }}
+        </p>
+      </div>
+      <button
+        type="button"
+        class="d-btn d-btn-sm h-9 min-h-9 shrink-0 border-azure-300 bg-white text-azure-700 hover:border-azure-400 hover:bg-azure-100 dark:border-azure-700 dark:bg-slate-900 dark:text-azure-200 dark:hover:bg-azure-900/40"
+        data-test="devices-range-filter-change"
+        @click="openDateRangePicker"
+      >
+        {{ t('devices-empty-change-time') }}
+      </button>
+    </div>
     <DataTable
       v-model:filters="filters" v-model:columns="columns" v-model:current-page="currentPage" v-model:search="search"
       :total="total" :offset="offset" :element-list="elements"
