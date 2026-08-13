@@ -225,7 +225,7 @@ function calculateConversionRate(converted: number | null | undefined, totalOrgs
   return Number((((converted ?? 0) * 100) / totalOrgs).toFixed(1))
 }
 
-const GLOBAL_STATS_PLAN_KEYS = ['Trial', 'Solo', 'Maker', 'Team', 'Enterprise'] as const
+const GLOBAL_STATS_PLAN_KEYS = ['Trial', 'Solo', 'Maker', 'Team', 'Enterprise', 'Credits'] as const
 
 function normalizePlanTotals(plans: PlanTotal): PlanTotal {
   const normalized: PlanTotal = {}
@@ -331,10 +331,12 @@ type GlobalStatsSnapshotPatch = GlobalStatsUpdate & {
   orgs?: number
   // Present in repo migrations before prod deploy; keep writable while generated types lag.
   apps_with_preview?: number
+  plan_credits?: number
 }
 type GlobalStatsSnapshotRow = GlobalStatsRow & {
   orgs?: number | null
   apps_with_preview?: number | null
+  plan_credits?: number | null
 }
 
 interface LogsnagInsightsPayload {
@@ -2346,6 +2348,30 @@ async function getBillingSnapshotCounts(c: Context, snapshotExclusiveEnd: Date):
           )
         ORDER BY si.customer_id, si.created_at DESC
       ),
+      credit_only_orgs AS (
+        SELECT DISTINCT g.org_id
+        FROM public.usage_credit_grants g
+        INNER JOIN public.orgs o ON o.id = g.org_id
+        WHERE o.created_at < ${snapshotExclusiveEndIso}::timestamptz
+          AND g.granted_at < ${snapshotExclusiveEndIso}::timestamptz
+          AND g.expires_at >= ${snapshotExclusiveEndIso}::timestamptz
+          AND g.credits_total > COALESCE((
+            SELECT SUM(c.credits_used)
+            FROM public.usage_credit_consumptions c
+            WHERE c.grant_id = g.id
+              AND c.applied_at < ${snapshotExclusiveEndIso}::timestamptz
+          ), 0)
+          AND NOT EXISTS (
+            SELECT 1
+            FROM active_subscriptions a
+            WHERE a.customer_id = o.customer_id
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM trial_users t
+            WHERE t.customer_id = o.customer_id
+          )
+      ),
       plan_counts AS (
         SELECT plan_name, COUNT(*)::int AS plan_count
         FROM active_subscriptions
@@ -2353,6 +2379,9 @@ async function getBillingSnapshotCounts(c: Context, snapshotExclusiveEnd: Date):
         UNION ALL
         SELECT 'Trial'::character varying AS plan_name, COUNT(*)::int AS plan_count
         FROM trial_users
+        UNION ALL
+        SELECT 'Credits'::character varying AS plan_name, COUNT(*)::int AS plan_count
+        FROM credit_only_orgs
       ),
       customer_counts AS (
         SELECT
@@ -2729,6 +2758,7 @@ async function runCoreGlobalStatsShard(c: Context, window: DailyWindow): Promise
     paying: customers.total,
     paying_monthly: customers.monthly,
     paying_yearly: customers.yearly,
+    plan_credits: plans.Credits || 0,
     plan_enterprise: plans.Enterprise || 0,
     plan_enterprise_conversion_rate: planConversionRates.enterprise,
     plan_maker: plans.Maker,
@@ -3382,6 +3412,7 @@ async function runNotificationsGlobalStatsShard(c: Context, window: DailyWindow)
     const success_rate = getNumber(snapshot.success_rate)
     const org_conversion_rate = getNumber(snapshot.org_conversion_rate)
     const plans = normalizePlanTotals({
+      Credits: getNumber(snapshot.plan_credits),
       Enterprise: getNumber(snapshot.plan_enterprise),
       Maker: getNumber(snapshot.plan_maker),
       Solo: getNumber(snapshot.plan_solo),
@@ -3420,6 +3451,7 @@ async function runNotificationsGlobalStatsShard(c: Context, window: DailyWindow)
           { title: 'Orgs Maker Plan', value: formatPercentCount(plans.Maker, paying), icon: '🤝' },
           { title: 'Orgs Team Plan', value: formatPercentCount(plans.Team, paying), icon: '👏' },
           { title: 'Orgs Enterprise Plan', value: formatPercentCount(plans.Enterprise, paying), icon: '📈' },
+          { title: 'Orgs Credits Plan', value: plans.Credits, icon: '🪙' },
           { title: 'Devices iOS (30d)', value: getNumber(snapshot.devices_last_month_ios), icon: '🍎' },
           { title: 'Devices Android (30d)', value: getNumber(snapshot.devices_last_month_android), icon: '🤖' },
           { title: 'Total Builds', value: getNumber(snapshot.builds_total), icon: '🔨' },
@@ -3548,6 +3580,7 @@ export const logsnagInsightsTestUtils = {
   isUnpaidAtBillingSnapshot,
   isPaidPlanAtBillingSnapshot,
   normalizeCoreSnapshotCounts,
+  getBillingSnapshotCounts,
   getCoreSnapshotCounts,
   reserveLogsnagInsightsRetry,
   reserveLogsnagInsightsShardRetry,

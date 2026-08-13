@@ -1558,6 +1558,7 @@ export interface AdminGlobalStatsTrend {
   plan_maker: number
   plan_team: number
   plan_enterprise: number
+  plan_credits: number
   registers_today: number
   demo_apps_created: number
   devices_last_month: number
@@ -1696,6 +1697,7 @@ export async function getAdminGlobalStatsTrend(
         gs.plan_maker::int AS plan_maker,
         gs.plan_team::int AS plan_team,
         gs.plan_enterprise::int AS plan_enterprise,
+        COALESCE(NULLIF(to_jsonb(gs) ->> 'plan_credits', '')::int, 0)::int AS plan_credits,
         gs.registers_today::int AS registers_today,
         COALESCE(gs.demo_apps_created, 0)::int AS demo_apps_created,
         gs.devices_last_month::int AS devices_last_month,
@@ -1863,6 +1865,7 @@ export async function getAdminGlobalStatsTrend(
       plan_maker: Number(row.plan_maker) || 0,
       plan_team: Number(row.plan_team) || 0,
       plan_enterprise: Number(row.plan_enterprise) || 0,
+      plan_credits: Number(row.plan_credits) || 0,
       registers_today: Number(row.registers_today) || 0,
       demo_apps_created: Number(row.demo_apps_created) || 0,
       devices_last_month: Number(row.devices_last_month) || 0,

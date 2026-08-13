@@ -138,6 +138,7 @@ const globalStatsTrendData = ref<Array<{
   plan_maker: number
   plan_team: number
   plan_enterprise: number
+  plan_credits: number
   registers_today: number
   new_paying_orgs: number
   apps_created: number
@@ -756,7 +757,7 @@ const planDistributionData = computed(() => {
     return []
 
   const latest = globalStatsTrendData.value[globalStatsTrendData.value.length - 1]
-  const total = latest.plan_solo + latest.plan_maker + latest.plan_team + latest.plan_enterprise
+  const total = latest.plan_solo + latest.plan_maker + latest.plan_team + latest.plan_enterprise + (latest.plan_credits ?? 0)
 
   return [
     {
@@ -778,6 +779,11 @@ const planDistributionData = computed(() => {
       label: 'Enterprise',
       value: latest.plan_enterprise,
       percentage: total > 0 ? formatOneDecimal((latest.plan_enterprise / total) * 100) : formatOneDecimal(0),
+    },
+    {
+      label: 'Credits',
+      value: latest.plan_credits ?? 0,
+      percentage: total > 0 ? formatOneDecimal(((latest.plan_credits ?? 0) / total) * 100) : formatOneDecimal(0),
     },
   ]
 })
@@ -818,6 +824,14 @@ const planDistributionTrendSeries = computed(() => {
         value: item.plan_enterprise,
       })),
       color: '#f59e0b', // amber
+    },
+    {
+      label: 'Credits',
+      data: globalStatsTrendData.value.map(item => ({
+        date: item.date,
+        value: item.plan_credits ?? 0,
+      })),
+      color: '#119eff', // azure
     },
   ]
 })
@@ -1577,7 +1591,7 @@ displayStore.defaultBack = '/dashboard'
               <div v-if="isLoadingGlobalStatsTrend" class="flex items-center justify-center h-32">
                 <span class="loading loading-spinner loading-lg" />
               </div>
-              <div v-else-if="planDistributionData.length > 0" class="grid grid-cols-2 gap-4 md:grid-cols-4">
+              <div v-else-if="planDistributionData.length > 0" class="grid grid-cols-2 gap-4 md:grid-cols-5">
                 <div v-for="plan in planDistributionData" :key="plan.label" class="flex flex-col items-center p-4 bg-gray-100 rounded-lg dark:bg-gray-700">
                   <span class="text-sm font-medium text-gray-600 dark:text-gray-400">{{ plan.label }}</span>
                   <span class="mt-2 text-2xl font-bold">{{ formatNumberValue(plan.value) }}</span>

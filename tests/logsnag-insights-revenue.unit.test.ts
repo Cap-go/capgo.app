@@ -574,6 +574,7 @@ describe('logsnag revenue metric helpers', () => {
 
   it.concurrent('defaults missing plan buckets to zero for global stats snapshots', () => {
     expect(logsnagInsightsTestUtils.normalizePlanTotals({ Solo: 12, Team: Number.NaN })).toEqual({
+      Credits: 0,
       Enterprise: 0,
       Maker: 0,
       Solo: 12,
@@ -619,10 +620,19 @@ describe('logsnag revenue metric helpers', () => {
         plan_name: 'Trial',
         plan_count: '1',
       },
+      {
+        yearly: '2',
+        monthly: '3',
+        total: '5',
+        paying_orgs_for_conversion: '4',
+        plan_name: 'Credits',
+        plan_count: '3',
+      },
     ])).toEqual({
       customers: { yearly: 2, monthly: 3, total: 5 },
       payingOrgsForConversion: 4,
       plans: {
+        Credits: 3,
         Enterprise: 0,
         Maker: 0,
         Solo: 2,
@@ -637,6 +647,7 @@ describe('logsnag revenue metric helpers', () => {
       customers: { yearly: 0, monthly: 0, total: 0 },
       payingOrgsForConversion: 0,
       plans: {
+        Credits: 0,
         Enterprise: 0,
         Maker: 0,
         Solo: 0,
@@ -679,6 +690,25 @@ describe('logsnag revenue metric helpers', () => {
     expect(coreSnapshotQuery).toContain('si.is_above_plan = true')
     expect(coreSnapshotQuery).not.toContain('si.plan_usage > 100')
     expect(coreSnapshotQuery).not.toContain('o.has_usage_credits')
+  })
+
+  it.concurrent('counts credit-only orgs as a daily plan bucket at the replayed snapshot boundary', () => {
+    const source = readFileSync(new URL('../supabase/functions/_backend/triggers/logsnag_insights.ts', import.meta.url), 'utf8')
+    const billingSnapshotQuery = source.match(/async function getBillingSnapshotCounts[\s\S]*?async function getSubscriptionAccessSnapshotCounts/)?.[0] ?? ''
+    const coreShard = source.match(/async function runCoreGlobalStatsShard[\s\S]*?async function getRegistersToday/)?.[0] ?? ''
+
+    expect(billingSnapshotQuery).toContain('credit_only_orgs')
+    expect(billingSnapshotQuery).toContain("SELECT 'Credits'::character varying AS plan_name")
+    expect(billingSnapshotQuery).toContain('public.usage_credit_grants')
+    expect(billingSnapshotQuery).toContain('public.usage_credit_consumptions')
+    expect(billingSnapshotQuery).toContain('g.granted_at < ${snapshotExclusiveEndIso}::timestamptz')
+    expect(billingSnapshotQuery).toContain('g.expires_at >= ${snapshotExclusiveEndIso}::timestamptz')
+    expect(billingSnapshotQuery).toContain('c.applied_at < ${snapshotExclusiveEndIso}::timestamptz')
+    expect(billingSnapshotQuery).toContain('FROM active_subscriptions a')
+    expect(billingSnapshotQuery).toContain('FROM trial_users t')
+    expect(billingSnapshotQuery).not.toContain('o.has_usage_credits')
+    expect(coreShard).toContain('plan_credits: plans.Credits || 0')
+    expect(source).toContain('plan_credits?: number')
   })
 
   it.concurrent('snapshots apps with preview QR enabled in the core global stats shard', () => {
