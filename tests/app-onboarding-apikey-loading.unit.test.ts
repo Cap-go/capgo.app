@@ -50,10 +50,11 @@ describe('app onboarding API key loading state', () => {
   })
 
   it.concurrent('asks whether to include the API key and makes inclusion primary', () => {
-    const copyHandler = onboardingSource.slice(
-      onboardingSource.indexOf('function copyAiInstructions()'),
-      onboardingSource.indexOf('function goToInstallStep()'),
-    )
+    const copyHandlerStart = onboardingSource.indexOf('function copyAiInstructions()')
+    const copyHandlerEnd = onboardingSource.indexOf('function goToInstallStep()', copyHandlerStart)
+    expect(copyHandlerStart).toBeGreaterThanOrEqual(0)
+    expect(copyHandlerEnd).toBeGreaterThan(copyHandlerStart)
+    const copyHandler = onboardingSource.slice(copyHandlerStart, copyHandlerEnd)
 
     expect(copyHandler).toContain("id: 'app-onboarding-ai-help-copy-dialog'")
     expect(copyHandler).toContain('await loadApiKey()')
