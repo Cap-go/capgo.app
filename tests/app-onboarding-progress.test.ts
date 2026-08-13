@@ -190,7 +190,7 @@ describe('app onboarding progress RPCs', () => {
         },
       },
     })
-    expect(insertError).toBeNull()
+    expect(insertError, JSON.stringify(insertError)).toBeNull()
 
     const { data, error: readError } = await serviceRoleSupabase
       .from('apps')
