@@ -2299,6 +2299,22 @@ async function dispatchLogsnagInsightsShards(c: Context, dateId: string): Promis
     completedShards: Array.from(completedShards).sort((a, b) => a.localeCompare(b)),
   })
 }
+
+function remainingCreditsAtSnapshotSql(snapshotExclusiveEndIso: string) {
+  // Grant alias must stay `g` in every caller. Shared so Credits and
+  // above-plan-with-credits use the same snapshot boundary.
+  return sql`
+    g.granted_at < ${snapshotExclusiveEndIso}::timestamptz
+      AND g.expires_at >= ${snapshotExclusiveEndIso}::timestamptz
+      AND g.credits_total > COALESCE((
+        SELECT SUM(c.credits_used)
+        FROM public.usage_credit_consumptions c
+        WHERE c.grant_id = g.id
+          AND c.applied_at < ${snapshotExclusiveEndIso}::timestamptz
+      ), 0)
+  `
+}
+
 async function getBillingSnapshotCounts(c: Context, snapshotExclusiveEnd: Date): Promise<BillingSnapshotCounts> {
   const pgClient = getPgClient(c, false)
   const drizzleClient = getDrizzleClient(pgClient)
@@ -2353,14 +2369,7 @@ async function getBillingSnapshotCounts(c: Context, snapshotExclusiveEnd: Date):
         FROM public.usage_credit_grants g
         INNER JOIN public.orgs o ON o.id = g.org_id
         WHERE o.created_at < ${snapshotExclusiveEndIso}::timestamptz
-          AND g.granted_at < ${snapshotExclusiveEndIso}::timestamptz
-          AND g.expires_at >= ${snapshotExclusiveEndIso}::timestamptz
-          AND g.credits_total > COALESCE((
-            SELECT SUM(c.credits_used)
-            FROM public.usage_credit_consumptions c
-            WHERE c.grant_id = g.id
-              AND c.applied_at < ${snapshotExclusiveEndIso}::timestamptz
-          ), 0)
+          AND ${remainingCreditsAtSnapshotSql(snapshotExclusiveEndIso)}
           AND NOT EXISTS (
             SELECT 1
             FROM active_subscriptions a
@@ -2500,14 +2509,7 @@ async function getCoreSnapshotCounts(c: Context, snapshotExclusiveEnd: Date): Pr
             SELECT 1
             FROM public.usage_credit_grants g
             WHERE g.org_id = o.id
-              AND g.granted_at < ${snapshotExclusiveEndIso}::timestamptz
-              AND g.expires_at >= ${snapshotExclusiveEndIso}::timestamptz
-              AND g.credits_total > COALESCE((
-                SELECT SUM(c.credits_used)
-                FROM public.usage_credit_consumptions c
-                WHERE c.grant_id = g.id
-                  AND c.applied_at < ${snapshotExclusiveEndIso}::timestamptz
-              ), 0)
+              AND ${remainingCreditsAtSnapshotSql(snapshotExclusiveEndIso)}
           ) AS has_usage_credits
         FROM public.stripe_info si
         INNER JOIN public.orgs o

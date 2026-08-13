@@ -680,13 +680,14 @@ describe('logsnag revenue metric helpers', () => {
 
   it.concurrent('reconstructs above-plan credit state at the replayed snapshot boundary', () => {
     const source = readFileSync(new URL('../supabase/functions/_backend/triggers/logsnag_insights.ts', import.meta.url), 'utf8')
+    const remainingCreditsHelper = source.match(/function remainingCreditsAtSnapshotSql[\s\S]*?\n\}/)?.[0] ?? ''
     const coreSnapshotQuery = source.match(/async function getCoreSnapshotCounts[\s\S]*?async function runCoreGlobalStatsShard/)?.[0] ?? ''
 
+    expect(remainingCreditsHelper).toContain('g.granted_at < ${snapshotExclusiveEndIso}::timestamptz')
+    expect(remainingCreditsHelper).toContain('g.expires_at >= ${snapshotExclusiveEndIso}::timestamptz')
+    expect(remainingCreditsHelper).toContain('c.applied_at < ${snapshotExclusiveEndIso}::timestamptz')
     expect(coreSnapshotQuery).toContain('public.usage_credit_grants')
-    expect(coreSnapshotQuery).toContain('public.usage_credit_consumptions')
-    expect(coreSnapshotQuery).toContain('g.granted_at < ${snapshotExclusiveEndIso}::timestamptz')
-    expect(coreSnapshotQuery).toContain('g.expires_at >= ${snapshotExclusiveEndIso}::timestamptz')
-    expect(coreSnapshotQuery).toContain('c.applied_at < ${snapshotExclusiveEndIso}::timestamptz')
+    expect(coreSnapshotQuery).toContain('remainingCreditsAtSnapshotSql(snapshotExclusiveEndIso)')
     expect(coreSnapshotQuery).toContain('si.is_above_plan = true')
     expect(coreSnapshotQuery).not.toContain('si.plan_usage > 100')
     expect(coreSnapshotQuery).not.toContain('o.has_usage_credits')
@@ -700,15 +701,20 @@ describe('logsnag revenue metric helpers', () => {
     expect(billingSnapshotQuery).toContain('credit_only_orgs')
     expect(billingSnapshotQuery).toContain("SELECT 'Credits'::character varying AS plan_name")
     expect(billingSnapshotQuery).toContain('public.usage_credit_grants')
-    expect(billingSnapshotQuery).toContain('public.usage_credit_consumptions')
-    expect(billingSnapshotQuery).toContain('g.granted_at < ${snapshotExclusiveEndIso}::timestamptz')
-    expect(billingSnapshotQuery).toContain('g.expires_at >= ${snapshotExclusiveEndIso}::timestamptz')
-    expect(billingSnapshotQuery).toContain('c.applied_at < ${snapshotExclusiveEndIso}::timestamptz')
+    expect(billingSnapshotQuery).toContain('remainingCreditsAtSnapshotSql(snapshotExclusiveEndIso)')
     expect(billingSnapshotQuery).toContain('FROM active_subscriptions a')
     expect(billingSnapshotQuery).toContain('FROM trial_users t')
     expect(billingSnapshotQuery).not.toContain('o.has_usage_credits')
     expect(coreShard).toContain('plan_credits: plans.Credits || 0')
     expect(source).toContain('plan_credits?: number')
+  })
+
+  it.concurrent('shares remaining-credits snapshot predicate between billing and core snapshots', () => {
+    const source = readFileSync(new URL('../supabase/functions/_backend/triggers/logsnag_insights.ts', import.meta.url), 'utf8')
+    const helperMatches = source.match(/remainingCreditsAtSnapshotSql\(/g) ?? []
+
+    expect(source).toContain('function remainingCreditsAtSnapshotSql')
+    expect(helperMatches).toHaveLength(3)
   })
 
   it.concurrent('snapshots apps with preview QR enabled in the core global stats shard', () => {
