@@ -4,7 +4,10 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import IconCheckCircle from '~icons/lucide/check-circle'
 import IconTrendingUp from '~icons/lucide/trending-up'
-import { formatDistanceToNow } from '~/services/date'
+import { getLatestDayVersionAdoption } from '~/services/bundleAdoption'
+import { useChartData } from '~/services/chartDataService'
+import { formatDistanceToNow, getChartDateRange } from '~/services/date'
+import { formatNumberValue } from '~/services/formatLocale'
 import { useSupabase } from '~/services/supabase'
 import { useOrganizationStore } from '~/stores/organization'
 
@@ -21,6 +24,7 @@ const isLoading = ref(false)
 const lastVersion = ref<string>('')
 const lastReleaseDate = ref<string | null>(null)
 const defaultChannelId = ref<number | null>(null)
+const adoptionPercent = ref<number | null>(null)
 
 const HOURS_48_IN_DAYS = 2
 
@@ -28,6 +32,12 @@ const lastReleaseDisplay = computed(() => {
   if (!lastReleaseDate.value)
     return t('never')
   return formatDistanceToNow(new Date(lastReleaseDate.value))
+})
+
+const adoptionPercentLabel = computed(() => {
+  if (adoptionPercent.value === null)
+    return ''
+  return `${formatNumberValue(adoptionPercent.value, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
 })
 
 const hasRecentRelease = computed(() => {
@@ -53,6 +63,7 @@ async function fetchReleaseInfo() {
       lastVersion.value = ''
       lastReleaseDate.value = null
       defaultChannelId.value = null
+      adoptionPercent.value = null
       return
     }
 
@@ -77,10 +88,20 @@ async function fetchReleaseInfo() {
     if (latestVersion) {
       lastVersion.value = latestVersion.name
       lastReleaseDate.value = latestVersion.created_at
+      try {
+        const { startDate, endDate } = getChartDateRange(false)
+        const chartData = await useChartData(supabase, props.appId, startDate, endDate, 'bundle')
+        adoptionPercent.value = getLatestDayVersionAdoption(chartData?.datasets ?? [], latestVersion.name)?.percent ?? 0
+      }
+      catch (error) {
+        console.error('Error fetching bundle adoption:', error)
+        adoptionPercent.value = null
+      }
     }
     else {
       lastVersion.value = ''
       lastReleaseDate.value = null
+      adoptionPercent.value = null
     }
 
     defaultChannelId.value = defaultChannel?.id || null
@@ -128,6 +149,9 @@ watch(() => [props.appId, organizationStore.currentOrganization?.gid], () => {
             </p>
             <p class="text-sm text-emerald-700 dark:text-emerald-300">
               {{ t('version') }} {{ lastVersion }} — {{ t('released') }} {{ lastReleaseDisplay }}
+              <template v-if="adoptionPercentLabel">
+                · {{ t('release-banner-adoption', { percent: adoptionPercentLabel }) }}
+              </template>
             </p>
           </div>
         </div>

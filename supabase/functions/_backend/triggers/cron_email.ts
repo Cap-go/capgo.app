@@ -7,13 +7,14 @@ import {
   getPreviousMonthUtcRange,
   shouldRetryDeployInstallStats,
   shouldSendDeployInstallStatsEmail,
+  summarizeDeviceVersionAdoption,
   sumVersionInstalls,
 } from '../utils/cron_email_stats.ts'
 import { BRES, middlewareAPISecret, parseBody, simpleError } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { sendEmailToOrgMembers } from '../utils/org_email_notifications.ts'
 import { findBestPlan } from '../utils/plans.ts'
-import { readStatsVersion } from '../utils/stats.ts'
+import { readDeviceVersionCounts, readStatsVersion } from '../utils/stats.ts'
 import { getCurrentPlanNameOrg, supabaseAdmin } from '../utils/supabase.ts'
 
 export const app = new Hono<MiddlewareKeyVariables>()
@@ -266,22 +267,37 @@ async function handleDeployInstallStats(
   // Coerce installs with Number() — Analytics Engine sum() can arrive as stringy Float64.
   const installs = sumVersionInstalls(versionStats, versionName, versionId)
 
-  const metadata = {
-    app_id: appId,
-    app_name: appName ?? '',
-    deploy_id: deployId?.toString(),
-    version_id: versionId?.toString(),
-    version_name: versionName ?? '',
-    channel_id: channelId?.toString(),
-    channel_name: channelName ?? '',
-    platform: platform ?? '',
-    deployed_at: windowStart,
-    install_count_24h: installs.toString(),
-    window_hours: '24',
-  }
-
   if (shouldSendDeployInstallStatsEmail(installs)) {
-    await sendEmailToOrgMembers(c, 'bundle:install_stats_24h', 'deploy_stats_24h', metadata, orgId ?? await getOrgIdForApp(c, appId))
+    let adoption = summarizeDeviceVersionAdoption({}, versionName)
+    try {
+      const deviceCounts = await readDeviceVersionCounts(c, appId, channelName)
+      adoption = summarizeDeviceVersionAdoption(deviceCounts, versionName)
+    }
+    catch (error) {
+      cloudlogErr({
+        requestId: c.get('requestId'),
+        message: 'Failed to read device version counts for deploy stats email',
+        error,
+        metadata: { appId, versionName, channelName },
+      })
+    }
+
+    await sendEmailToOrgMembers(c, 'bundle:install_stats_24h', 'deploy_stats_24h', {
+      app_id: appId,
+      app_name: appName ?? '',
+      deploy_id: deployId?.toString(),
+      version_id: versionId?.toString(),
+      version_name: versionName ?? '',
+      channel_id: channelId?.toString(),
+      channel_name: channelName ?? '',
+      platform: platform ?? '',
+      deployed_at: windowStart,
+      install_count_24h: installs.toString(),
+      window_hours: '24',
+      device_count: adoption.device_count.toString(),
+      total_devices: adoption.total_devices.toString(),
+      adoption_percent: adoption.adoption_percent,
+    }, orgId ?? await getOrgIdForApp(c, appId))
     return c.json(BRES)
   }
 

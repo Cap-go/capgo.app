@@ -7,6 +7,7 @@ import {
   getPreviousMonthUtcRange,
   shouldRetryDeployInstallStats,
   shouldSendDeployInstallStatsEmail,
+  summarizeDeviceVersionAdoption,
   sumVersionInstalls,
   toStatNumber,
 } from '../supabase/functions/_backend/utils/cron_email_stats.ts'
@@ -196,5 +197,26 @@ describe('shouldRetryDeployInstallStats', () => {
     const deployedAt = new Date('2026-07-26T00:00:00.000Z')
     const now = new Date('2026-07-25T00:00:00.000Z')
     expect(shouldRetryDeployInstallStats(deployedAt, now)).toBe(false)
+  })
+})
+
+describe('summarizeDeviceVersionAdoption', () => {
+  it.concurrent('computes live device reach for a deployed bundle', () => {
+    expect(summarizeDeviceVersionAdoption({
+      '1.0.0': 20,
+      '1.1.0': 80,
+    }, '1.1.0')).toEqual({
+      device_count: 80,
+      total_devices: 100,
+      adoption_percent: '80.0',
+    })
+  })
+
+  it.concurrent('returns zeros when no devices have reported', () => {
+    expect(summarizeDeviceVersionAdoption({}, '1.1.0')).toEqual({
+      device_count: 0,
+      total_devices: 0,
+      adoption_percent: '0.0',
+    })
   })
 })

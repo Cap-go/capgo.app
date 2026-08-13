@@ -85,6 +85,7 @@ const insightsLoading = ref(false)
 const selectedDays = ref<PeriodDayOption>(7)
 const app = ref<Database['public']['Tables']['apps']['Row']>()
 const insights = ref<LogInsightsResponse | null>(null)
+const publicChannel = ref<{ id: number, name: string, versionName: string } | null>(null)
 let latestInsightsRequest = 0
 
 const appRouteSegment = computed(() => {
@@ -160,6 +161,25 @@ async function loadAppInfo() {
       .eq('app_id', id.value)
       .single()
     app.value = dataApp || app.value
+
+    const { data: channelData } = await supabase
+      .from('channels')
+      .select(`
+        id,
+        name,
+        version:app_versions!channels_version_fkey(id, name)
+      `)
+      .eq('app_id', id.value)
+      .eq('public', true)
+      .order('id', { ascending: true })
+      .limit(1)
+      .maybeSingle()
+
+    const version = channelData?.version as { id?: number, name?: string } | { id?: number, name?: string }[] | null | undefined
+    const versionRow = Array.isArray(version) ? version[0] : version
+    publicChannel.value = channelData && versionRow?.name
+      ? { id: channelData.id, name: channelData.name, versionName: versionRow.name }
+      : null
   }
   catch (error) {
     console.error(error)
@@ -267,6 +287,14 @@ watchEffect(async () => {
     <PageLoader v-if="isLoading" />
     <div v-else-if="app" class="w-full h-full px-4 pt-0 mx-auto mb-8 sm:px-6 md:pt-8 lg:px-8 max-w-9xl max-h-fit">
       <div class="flex flex-col gap-6">
+        <BundleAdoptionCard
+          v-if="publicChannel"
+          :app-id="id"
+          :version-name="publicChannel.versionName"
+          :linked-channel-id="publicChannel.id"
+          :linked-channel-name="publicChannel.name"
+          compact
+        />
         <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div class="min-w-0">
             <h3 class="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
