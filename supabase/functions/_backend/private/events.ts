@@ -8,6 +8,7 @@ import { buildBundleCompatibilityBentoEvent, BUNDLE_INCOMPATIBLE_EVENT, isBreaki
 import { BRES, parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
 import { cloudlog } from '../utils/logging.ts'
+import { buildAiInstructionsCopiedBentoEvent, isFrontendPosthogCapturedEvent } from '../utils/onboarding_copy_tracking.ts'
 import { trackPosthogEvent } from '../utils/posthog.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { broadcastCLIEvent } from '../utils/realtime_broadcast.ts'
@@ -406,16 +407,24 @@ app.post('/', middlewareAuth(), async (c) => {
   // `bundle_incompatible_expected` event is emitted instead of the crash warning.
   // Both outcomes are recorded in PostHog (sent vs sent_expected).
   const bundleIncompatibleBentoEvent: BentoTrackingPayload | undefined = await buildBundleIncompatibleBentoEvent(c, supabase, onboardingOrgId, appId, trackedBody)
+  const aiInstructionsCopiedBentoEvent = buildAiInstructionsCopiedBentoEvent({
+    appId,
+    event: trackedBody.event,
+    nonPersonTags: body.nonPersonTags,
+    orgId: onboardingOrgId,
+  })
 
   // Exactly one of these is ever set (distinct event names); `??` picks the active one.
-  const bentoEvent = onboardingBentoEvent ?? builderBentoEvent ?? bundleIncompatibleBentoEvent
+  const bentoEvent = onboardingBentoEvent ?? builderBentoEvent ?? bundleIncompatibleBentoEvent ?? aiInstructionsCopiedBentoEvent
   const apikeyId = c.get('apikey')?.id
   await sendEventToTracking(c, addAuthenticatedApiKeyIdToTrackingPayload({
     ...trackedBody,
     bento: bentoEvent,
     sentToBento: Boolean(bentoEvent),
     groups: verifiedOrgId ? { organization: verifiedOrgId } : undefined,
-  }, apikeyId))
+  }, apikeyId), {
+    posthog: !isFrontendPosthogCapturedEvent(trackedBody.event),
+  })
 
   return c.json(BRES)
 })

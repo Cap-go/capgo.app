@@ -77,6 +77,37 @@ describe('[POST] /private/events operations', () => {
     expect(data.status).toBe('ok')
   })
 
+  it('accepts the allowlisted AI-instructions copy event with onboarding attempt context', async () => {
+    const response = await fetch(`${BASE_URL}/private/events`, {
+      method: 'POST',
+      headers: {
+        capgkey: headers.Authorization,
+      },
+      body: JSON.stringify({
+        channel: 'onboarding',
+        event: 'onboarding_ai_instructions_copied',
+        icon: '🤖',
+        nonPersonTags: {
+          flow: 'existing_org',
+          onboarding_attempt_id: id,
+          onboarding_version: 2,
+          resumed: true,
+          setup_command: 'ota',
+        },
+        notify: false,
+        org_id: ORG_ID,
+        tags: {
+          app_id: APPNAME_EVENT,
+        },
+        tracking_version: 2,
+      }),
+    })
+
+    const data = await response.json() as { status: string }
+    expect(response.status).toBe(200)
+    expect(data.status).toBe('ok')
+  })
+
   it('tracks v2 org-scoped events without an app id', async () => {
     const response = await fetch(`${BASE_URL}/private/events`, {
       method: 'POST',
