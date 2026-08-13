@@ -531,6 +531,16 @@
       "type": "timestamp with time zone"
     },
     {
+      "default": "'{}'::jsonb",
+      "generated": "",
+      "identity": "",
+      "name": "onboarding",
+      "notNull": true,
+      "position": 31,
+      "table": "apps",
+      "type": "jsonb"
+    },
+    {
       "default": "now()",
       "generated": "",
       "identity": "",
@@ -1771,6 +1781,13 @@
       "valid": true
     },
     {
+      "definition": "CHECK (jsonb_typeof(onboarding) = 'object'::text AND (NOT onboarding ? 'features'::text OR jsonb_typeof(onboarding -> 'features'::text) = 'object'::text))",
+      "name": "apps_onboarding_valid",
+      "table": "apps",
+      "type": "c",
+      "valid": true
+    },
+    {
       "definition": "PRIMARY KEY (app_id)",
       "name": "apps_pkey",
       "table": "apps",
@@ -2133,6 +2150,13 @@
       "constraintOwned": false,
       "definition": "CREATE INDEX idx_apps_default_upload_channel ON public.apps USING btree (default_upload_channel)",
       "name": "idx_apps_default_upload_channel",
+      "table": "apps",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX idx_apps_onboarding_ota_stage ON public.apps USING btree (((((onboarding -> 'features'::text) -> 'ota'::text) ->> 'stage'::text)))",
+      "name": "idx_apps_onboarding_ota_stage",
       "table": "apps",
       "valid": true
     },

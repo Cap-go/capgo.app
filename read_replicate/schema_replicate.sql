@@ -104,7 +104,9 @@ CREATE TABLE public.apps (
     rollout_paused_version_names character varying[] DEFAULT '{}'::character varying[] NOT NULL,
     created_from_onboarding boolean DEFAULT false NOT NULL,
     onboarding_completed_at timestamp with time zone,
-    CONSTRAINT apps_build_timeout_seconds_check CHECK (((build_timeout_seconds >= 300) AND (build_timeout_seconds <= 21600)))
+    onboarding jsonb DEFAULT '{}'::jsonb NOT NULL,
+    CONSTRAINT apps_build_timeout_seconds_check CHECK (((build_timeout_seconds >= 300) AND (build_timeout_seconds <= 21600))),
+    CONSTRAINT apps_onboarding_valid CHECK (((jsonb_typeof(onboarding) = 'object'::text) AND ((NOT (onboarding ? 'features'::text)) OR (jsonb_typeof((onboarding -> 'features'::text)) = 'object'::text))))
 );
 
 ALTER TABLE ONLY public.apps REPLICA IDENTITY FULL;
@@ -822,6 +824,13 @@ CREATE INDEX idx_apps_created_at ON public.apps USING btree (created_at);
 --
 
 CREATE INDEX idx_apps_default_upload_channel ON public.apps USING btree (default_upload_channel);
+
+
+--
+-- Name: idx_apps_onboarding_ota_stage; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_apps_onboarding_ota_stage ON public.apps USING btree (((((onboarding -> 'features'::text) -> 'ota'::text) ->> 'stage'::text)));
 
 
 --
