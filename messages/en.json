@@ -379,7 +379,7 @@
   "app-onboarding-appid-taken-pick-another": "App ID {appId} is already used. Pick another one or use one of the suggestions.",
   "app-onboarding-appid-taken-switched": "App ID {original} was already taken, so Capgo switched to {replacement}.",
   "app-onboarding-ai-help-button": "Copy AI instructions",
-  "app-onboarding-ai-help-caption": "Use your preferred AI assistant to help set up Capgo. Copy the onboarding instructions to get step-by-step guidance.",
+  "app-onboarding-ai-help-caption": "Let your AI assistant guide you through setting up Capgo. Copy the onboarding instructions to get started.",
   "app-onboarding-ai-help-prompt": "I am setting up Capgo for my mobile app and I need step-by-step help with the CLI install.\n\nCapgo context:\n- App name: {appName}\n- App ID: {appId}\n- App status: {appStatus}\n- The Capgo app is already created in the dashboard.\n- Command:\n{command}\n\nPlease help me step by step.\n1. Tell me exactly where I should run this command.\n2. Ask me one question at a time if you need to know my stack (Capacitor, Ionic, React Native, native iOS/Android, etc.).\n3. Help me verify the installation succeeded.\n4. {apiKeyGuidance}",
   "app-onboarding-ai-help-status-existing": "Existing published app",
   "app-onboarding-ai-help-status-new": "New app not published yet",
