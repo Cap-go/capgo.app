@@ -279,6 +279,33 @@ describe('buildFrontendOnboardingAnalytics', () => {
     })
   })
 
+  it.concurrent('includes pre-range intents when their later source stage is inside the selected range', () => {
+    const intentMs = CURRENT_START_MS - MINUTE_MS
+    const analytics = buildFrontendOnboardingAnalytics([
+      attempt({
+        attemptId: 'details-enter-range',
+        intentMs,
+        detailsMs: CURRENT_START_MS,
+        organizationMs: CURRENT_START_MS + MINUTE_MS,
+        setupMs: CURRENT_START_MS + 2 * MINUTE_MS,
+      }),
+    ], CURRENT_START_MS, CURRENT_END_MS)
+
+    expect(analytics.daily_conversions.intent_to_details[0].started).toBe(0)
+    expect(analytics.daily_conversions.details_to_organization[0]).toEqual({
+      date: '2026-08-01',
+      started: 1,
+      converted: 1,
+      conversion_percent: 100,
+    })
+    expect(analytics.daily_conversions.organization_to_setup[0]).toEqual({
+      date: '2026-08-01',
+      started: 1,
+      converted: 1,
+      conversion_percent: 100,
+    })
+  })
+
   it.concurrent('keeps the median comparison null when the previous cohort has no completions', () => {
     const previousStartMs = CURRENT_START_MS - 2 * DAY_MS
     const analytics = buildFrontendOnboardingAnalytics([

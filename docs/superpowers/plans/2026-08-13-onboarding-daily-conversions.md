@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Add daily conversion analytics to the existing backend model
+## Task 1: Add daily conversion analytics to the existing backend model
 
 **Files:**
 - Modify: `supabase/functions/_backend/utils/frontend_onboarding_analytics_model.ts`
@@ -212,4 +212,4 @@ Follow `/Users/michaltremblay/.agents/skills/pr-ready/SKILL.md`, address actiona
 
 - [ ] **Step 4: Push and open the PR**
 
-Push `wolny/onboarding-daily-conversions` and create a non-draft PR with a concise title that does not begin with `[CODEX]`. Include metric semantics and verification results in the body.
+Push `wolny/onboarding-daily-conversions` and create a non-draft PR with a concise title that does not begin with `[CODEX]`. Include these sections, with the suffix shown on every heading: `Summary (AI generated)`, `Motivation (AI generated)`, `Business Impact (AI generated)`, and `Test Plan (AI generated)`.

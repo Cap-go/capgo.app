@@ -230,7 +230,7 @@ function buildDailyConversion(
   const countsByDate = new Map<string, { started: number, converted: number }>()
   for (const attempt of attempts) {
     const fromMs = firstReachedStageMs(attempt, from)
-    if (fromMs === null)
+    if (fromMs === null || fromMs < startMs || fromMs >= endMs)
       continue
 
     const date = utcDate(fromMs)
@@ -295,6 +295,9 @@ export function buildFrontendOnboardingAnalytics(
   const previousAttempts = attempts.filter(attempt => attempt.intentMs >= previousStartMs && attempt.intentMs < currentStartMs)
   const currentV1Attempts = currentAttempts.filter(attempt => attempt.onboardingVersion === 1)
   const currentV2Attempts = currentAttempts.filter(attempt => attempt.onboardingVersion === 2)
+  const currentV2ConversionAttempts = attempts.filter(attempt => attempt.onboardingVersion === 2
+    && attempt.intentMs >= currentStartMs - FRONTEND_ONBOARDING_FOLLOWUP_MS
+    && attempt.intentMs < currentEndMs)
   const previousV2Attempts = previousAttempts.filter(attempt => attempt.onboardingVersion === 2)
   const currentV2 = summarizePeriod(currentV2Attempts)
   const previousV2 = summarizePeriod(previousV2Attempts)
@@ -307,8 +310,8 @@ export function buildFrontendOnboardingAnalytics(
     daily_attempts: buildDailyAttempts(currentAttempts, currentStartMs, currentEndMs),
     daily_conversions: {
       intent_to_details: buildDailyConversion(currentAttempts, currentStartMs, currentEndMs, 'intent', 'details'),
-      details_to_organization: buildDailyConversion(currentV2Attempts, currentStartMs, currentEndMs, 'details', 'organization'),
-      organization_to_setup: buildDailyConversion(currentV2Attempts, currentStartMs, currentEndMs, 'organization', 'setup'),
+      details_to_organization: buildDailyConversion(currentV2ConversionAttempts, currentStartMs, currentEndMs, 'details', 'organization'),
+      organization_to_setup: buildDailyConversion(currentV2ConversionAttempts, currentStartMs, currentEndMs, 'organization', 'setup'),
     },
     funnels: {
       v1: buildFunnel(currentV1Attempts),
