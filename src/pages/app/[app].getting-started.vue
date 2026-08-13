@@ -36,10 +36,14 @@ const iconLoading = computed(() => orgApp.value?.icon_url_loading === true)
 const ledger = computed(() => parseAppOnboardingLedger(app.value?.onboarding))
 const steps = computed(() => buildGettingStartedSteps(ledger.value, { builderDone: builderDone.value }))
 const progress = computed(() => gettingStartedProgress(steps.value))
-const essentialSteps = computed(() => steps.value.filter(step => step.group === 'essential'))
-const growSteps = computed(() => steps.value.filter(step => step.group === 'grow'))
-const essentialDoneCount = computed(() => essentialSteps.value.filter(step => step.done).length)
-const growDoneCount = computed(() => growSteps.value.filter(step => step.done).length)
+const stepGroups = computed(() => {
+  const essential = steps.value.filter(step => step.group === 'essential')
+  const grow = steps.value.filter(step => step.group === 'grow')
+  return [
+    { id: 'essential', titleKey: 'getting-started-essential', steps: essential, doneCount: essential.filter(step => step.done).length },
+    { id: 'grow', titleKey: 'getting-started-grow', steps: grow, doneCount: grow.filter(step => step.done).length },
+  ]
+})
 const allDone = computed(() => progress.value.done === progress.value.total && progress.value.total > 0)
 
 function acronym(name: string) {
@@ -195,75 +199,25 @@ watch(() => id.value, async (appId) => {
         </div>
       </div>
 
-      <section class="mt-8">
+      <section
+        v-for="(group, index) in stepGroups"
+        :key="group.id"
+        :class="index === 0 ? 'mt-8' : 'mt-6'"
+      >
         <details class="group" open>
           <summary class="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-lg py-2 text-sm font-semibold uppercase tracking-wide text-slate-500 marker:content-none focus:outline-none focus:ring-2 focus:ring-azure-500 dark:text-slate-400 [&::-webkit-details-marker]:hidden">
             <span class="flex items-center gap-2">
               <IconCheck
-                v-if="essentialDoneCount === essentialSteps.length"
+                v-if="group.doneCount === group.steps.length"
                 class="size-4 text-emerald-600 dark:text-emerald-300"
               />
-              {{ t('getting-started-essential') }}
-              {{ essentialDoneCount }}/{{ essentialSteps.length }}
+              {{ t(group.titleKey) }}
+              {{ group.doneCount }}/{{ group.steps.length }}
             </span>
           </summary>
           <ul class="divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white shadow-sm dark:divide-white/10 dark:border-white/10 dark:bg-slate-800 dark:shadow-none dark:inset-ring dark:inset-ring-white/5">
             <li
-              v-for="step in essentialSteps"
-              :key="step.id"
-              class="flex items-center gap-3 px-4 py-3"
-              :data-test="`getting-started-step-${step.id}`"
-            >
-              <span
-                class="flex size-6 shrink-0 items-center justify-center rounded-full"
-                :class="step.done ? 'bg-emerald-600 text-white' : 'border-2 border-slate-300 dark:border-slate-600'"
-                :aria-hidden="true"
-              >
-                <IconCheck v-if="step.done" class="size-3.5" />
-              </span>
-              <div class="min-w-0 flex-1">
-                <p class="font-semibold text-slate-950 dark:text-white">
-                  {{ t(step.titleKey) }}
-                </p>
-                <p class="text-sm leading-5 text-slate-500 dark:text-slate-400">
-                  {{ t(step.descKey) }}
-                </p>
-              </div>
-              <span
-                v-if="step.done"
-                class="shrink-0 text-sm font-medium text-slate-400 dark:text-slate-500"
-              >
-                {{ t('getting-started-done') }}
-              </span>
-              <button
-                v-else
-                type="button"
-                class="d-btn d-btn-ghost d-btn-sm h-11 min-h-11 shrink-0 px-3 text-azure-700 dark:text-azure-300"
-                data-test="getting-started-step-action"
-                @click="runStep(step)"
-              >
-                {{ t(step.actionKey) }}
-              </button>
-            </li>
-          </ul>
-        </details>
-      </section>
-
-      <section class="mt-6">
-        <details class="group" open>
-          <summary class="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-lg py-2 text-sm font-semibold uppercase tracking-wide text-slate-500 marker:content-none focus:outline-none focus:ring-2 focus:ring-azure-500 dark:text-slate-400 [&::-webkit-details-marker]:hidden">
-            <span class="flex items-center gap-2">
-              <IconCheck
-                v-if="growDoneCount === growSteps.length"
-                class="size-4 text-emerald-600 dark:text-emerald-300"
-              />
-              {{ t('getting-started-grow') }}
-              {{ growDoneCount }}/{{ growSteps.length }}
-            </span>
-          </summary>
-          <ul class="divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white shadow-sm dark:divide-white/10 dark:border-white/10 dark:bg-slate-800 dark:shadow-none dark:inset-ring dark:inset-ring-white/5">
-            <li
-              v-for="step in growSteps"
+              v-for="step in group.steps"
               :key="step.id"
               class="flex items-center gap-3 px-4 py-3"
               :data-test="`getting-started-step-${step.id}`"
