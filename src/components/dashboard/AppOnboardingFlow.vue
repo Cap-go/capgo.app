@@ -192,7 +192,7 @@ const suggestedAppId = computed(() => {
   return `com.${orgSlug}.${appSlug}`
 })
 const generatedAppId = computed(() => createdApp.value?.app_id || manualAppId.value.trim() || suggestedAppId.value)
-const aiHelpPrompt = computed(() => {
+function createAiHelpPrompt(command: string) {
   const resolvedAppId = createdApp.value?.app_id || generatedAppId.value || '[APP_ID]'
   const resolvedAppName = createdApp.value?.name?.trim() || appName.value.trim() || resolvedAppId
   let appStatus = t('app-onboarding-ai-help-status-new')
@@ -205,9 +205,9 @@ const aiHelpPrompt = computed(() => {
     appName: resolvedAppName,
     appId: resolvedAppId,
     appStatus,
-    command: redactedCliCommand.value,
+    command,
   })
-})
+}
 const appOnboardingSteps = computed<Array<{ id: OnboardingFlowStep, label: string }>>(() => {
   if (props.preOrg) {
     return [
@@ -995,8 +995,25 @@ async function copyCliCommand() {
   await copyText(cliCommand.value)
 }
 
-async function copyAiInstructions() {
-  await copyText(aiHelpPrompt.value)
+function copyAiInstructions() {
+  dialogStore.openDialog({
+    id: 'app-onboarding-ai-help-copy-dialog',
+    title: t('app-onboarding-ai-help-copy-title'),
+    description: t('app-onboarding-ai-help-copy-description'),
+    buttons: [
+      {
+        text: t('app-onboarding-ai-help-copy-without-key'),
+        role: 'secondary',
+        handler: () => copyText(createAiHelpPrompt(redactedCliCommand.value)),
+      },
+      {
+        text: t('app-onboarding-ai-help-copy-with-key'),
+        role: 'primary',
+        disabled: !apiKey.value,
+        handler: () => copyText(createAiHelpPrompt(cliCommand.value)),
+      },
+    ],
+  })
 }
 
 function goToInstallStep() {

@@ -48,4 +48,16 @@ describe('app onboarding API key loading state', () => {
   it.concurrent('provides concise loading copy in the English locale', () => {
     expect(englishMessages['app-onboarding-command-apikey-loading']).toBe('Creating your secure API key…')
   })
+
+  it.concurrent('asks whether to include the API key and makes inclusion primary', () => {
+    const copyHandler = onboardingSource.slice(
+      onboardingSource.indexOf('function copyAiInstructions()'),
+      onboardingSource.indexOf('function goToInstallStep()'),
+    )
+
+    expect(copyHandler).toContain("id: 'app-onboarding-ai-help-copy-dialog'")
+    expect(copyHandler).toContain('createAiHelpPrompt(redactedCliCommand.value)')
+    expect(copyHandler).toContain('createAiHelpPrompt(cliCommand.value)')
+    expect(copyHandler).toContain("role: 'primary'")
+  })
 })
