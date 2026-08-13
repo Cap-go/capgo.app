@@ -93,6 +93,17 @@ export const useDashboardAppsStore = defineStore('dashboardApps', () => {
     display.setAppNameResolver(appId => appNames.value[appId])
   }
 
+  function upsertApp(app: { app_id: string, name: string | null }) {
+    const existingIndex = apps.value.findIndex(item => item.app_id === app.app_id)
+    if (existingIndex >= 0) {
+      apps.value[existingIndex] = { ...apps.value[existingIndex], ...app }
+      return
+    }
+
+    apps.value = [...apps.value, app]
+    isLoaded.value = true
+  }
+
   function reset() {
     apps.value = []
     isLoaded.value = false
@@ -113,6 +124,7 @@ export const useDashboardAppsStore = defineStore('dashboardApps', () => {
 
     // Actions
     fetchApps,
+    upsertApp,
     reset,
   }
 })

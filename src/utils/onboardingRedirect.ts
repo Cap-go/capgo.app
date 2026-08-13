@@ -1,16 +1,83 @@
 // August uses Central European Summer Time (UTC+2).
 export const ONBOARDING_REDIRECT_CUTOFF = Date.parse('2026-08-04T01:00:00+02:00')
 
-let dashboardExplorationUserId: string | null = null
-let dashboardExplorationResumeAppId: string | null = null
+const DASHBOARD_EXPLORATION_STORAGE_KEY = 'capgo:onboarding-dashboard-exploration'
+
+interface DashboardExploration {
+  userId: string
+  resumeAppId: string | null
+}
+
+// Module memory keeps the grant alive when session storage is blocked, for
+// example in private or restricted browsing contexts.
+let dashboardExplorationFallback: DashboardExploration | null = null
+
+function canUseSessionStorage() {
+  try {
+    return typeof window !== 'undefined' && typeof window.sessionStorage !== 'undefined'
+  }
+  catch {
+    return false
+  }
+}
+
+function readDashboardExploration(): DashboardExploration | null {
+  if (!canUseSessionStorage())
+    return dashboardExplorationFallback
+
+  try {
+    const raw = window.sessionStorage.getItem(DASHBOARD_EXPLORATION_STORAGE_KEY)
+    const parsed = raw ? JSON.parse(raw) : null
+    if (parsed && typeof parsed.userId === 'string') {
+      return {
+        userId: parsed.userId,
+        resumeAppId: typeof parsed.resumeAppId === 'string' ? parsed.resumeAppId : null,
+      }
+    }
+  }
+  catch {
+    // Fall back to module memory below.
+  }
+  return dashboardExplorationFallback
+}
+
+function matchingDashboardExploration(userId: string | null | undefined): DashboardExploration | null {
+  if (!userId)
+    return null
+
+  const state = readDashboardExploration()
+  return state?.userId === userId ? state : null
+}
+
+function matchesAppPath(path: string, appId: string) {
+  const candidates = new Set([appId, encodeURIComponent(appId)])
+  for (const candidate of candidates) {
+    const prefix = `/app/${candidate}`
+    if (path === prefix || path.startsWith(`${prefix}/`))
+      return true
+  }
+  return false
+}
 
 export function allowOnboardingDashboardExploration(userId: string | null | undefined, resumeAppId?: string | null) {
-  dashboardExplorationUserId = userId ?? null
-  dashboardExplorationResumeAppId = resumeAppId ?? null
+  if (!userId)
+    return
+
+  const state: DashboardExploration = { userId, resumeAppId: resumeAppId ?? null }
+  dashboardExplorationFallback = state
+
+  if (canUseSessionStorage()) {
+    try {
+      window.sessionStorage.setItem(DASHBOARD_EXPLORATION_STORAGE_KEY, JSON.stringify(state))
+    }
+    catch {
+      // Storage can be blocked in private or restricted browsing contexts.
+    }
+  }
 }
 
 export function canExploreOnboardingDashboard(userId: string | null | undefined) {
-  return !!userId && dashboardExplorationUserId === userId
+  return !!matchingDashboardExploration(userId)
 }
 
 export function shouldConfirmOnboardingDashboardExploration(options: {
@@ -24,7 +91,7 @@ export function shouldConfirmOnboardingDashboardExploration(options: {
 }
 
 export function getOnboardingResumeAppId(userId: string | null | undefined) {
-  return canExploreOnboardingDashboard(userId) ? dashboardExplorationResumeAppId : null
+  return matchingDashboardExploration(userId)?.resumeAppId ?? null
 }
 
 export function isNewOnboardingUser(createdAt: string | null | undefined) {
@@ -51,6 +118,10 @@ export function getOnboardingResumeRedirect(options: {
   if (options.organizationCount !== 1 || options.appCount !== 1 || !options.appId)
     return null
   if (options.path === '/app/new' && options.resumeAppId === options.appId)
+    return null
+  // The pending app already exists. Let the user open it, its devices, bundles,
+  // and settings without bouncing back to "create your new app".
+  if (matchesAppPath(options.path, options.appId))
     return null
 
   return {

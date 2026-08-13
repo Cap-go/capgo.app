@@ -12,6 +12,7 @@ import ReleaseBanner from '~/components/dashboard/ReleaseBanner.vue'
 import StoreReleaseValidationModal from '~/components/dashboard/StoreReleaseValidationModal.vue'
 import UpdateStatsCard from '~/components/dashboard/UpdateStatsCard.vue'
 import { getCapgoVersion, useSupabase } from '~/services/supabase'
+import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
 import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
@@ -27,6 +28,7 @@ const channelsNb = ref(0)
 const capgoVersion = ref('')
 const main = useMainStore()
 const organizationStore = useOrganizationStore()
+const dashboardAppsStore = useDashboardAppsStore()
 const isLoading = ref(false)
 const supabase = useSupabase()
 const displayStore = useDisplayStore()
@@ -119,6 +121,10 @@ async function loadAppInfo() {
     devicesNb.value = devicesCount
     bundlesNb.value = bundlesCount
     channelsNb.value = channelsCount
+    dashboardAppsStore.upsertApp({
+      app_id: appId,
+      name: dataApp.name ?? null,
+    })
   }
   catch (error) {
     console.error(error)

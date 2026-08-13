@@ -29,6 +29,7 @@ import { getCapgoApiErrorCode, invokeCapgoApi } from '~/services/capgoApi'
 import { pushEvent } from '~/services/posthog'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
 import { getLocalConfig, isLocal, useSupabase } from '~/services/supabase'
+import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
@@ -58,6 +59,7 @@ const supabase = useSupabase()
 const dialogStore = useDialogV2Store()
 const main = useMainStore()
 const organizationStore = useOrganizationStore()
+const dashboardAppsStore = useDashboardAppsStore()
 const onboardingUserId = computed(() => main.user?.id ?? main.auth?.id ?? null)
 const config = getLocalConfig()
 
@@ -824,6 +826,10 @@ async function createAppRecord(options?: { nextStep?: StandardFlowStep | PreOrgF
       .single()
 
     createdApp.value = refreshed ?? responseData
+    dashboardAppsStore.upsertApp({
+      app_id: appId,
+      name: appName.value.trim() || null,
+    })
     const completionProperties: OnboardingStepCompletionProperties = {
       appId,
     }
@@ -859,6 +865,11 @@ async function seedDemoData() {
       throw error
     }
 
+    allowOnboardingDashboardExploration(onboardingUserId.value, createdApp.value.app_id)
+    dashboardAppsStore.upsertApp({
+      app_id: createdApp.value.app_id,
+      name: createdApp.value.name ?? null,
+    })
     router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}?refresh=true`)
   }
   catch (error) {
