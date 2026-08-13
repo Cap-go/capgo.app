@@ -14,7 +14,7 @@ let dashboardExplorationFallback: DashboardExploration | null = null
 
 function canUseSessionStorage() {
   try {
-    return typeof window !== 'undefined' && typeof window.sessionStorage !== 'undefined'
+    return typeof window !== 'undefined' && window.sessionStorage !== undefined
   }
   catch {
     return false
