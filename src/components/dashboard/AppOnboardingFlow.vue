@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { Database } from '~/types/supabase.types'
 import type {
+  OnboardingCopyEvent,
   OnboardingDetailsEvent,
   OnboardingDetailsEventProperties,
   OnboardingIntent,
@@ -31,6 +32,8 @@ import { getCapgoApiErrorCode, invokeCapgoApi } from '~/services/capgoApi'
 import { pushEvent } from '~/services/posthog'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
 import { getLocalConfig, isLocal, useSupabase } from '~/services/supabase'
+import { sendEvent } from '~/services/tracking'
+import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
@@ -61,6 +64,7 @@ const supabase = useSupabase()
 const dialogStore = useDialogV2Store()
 const main = useMainStore()
 const organizationStore = useOrganizationStore()
+const dashboardAppsStore = useDashboardAppsStore()
 const onboardingUserId = computed(() => main.user?.id ?? main.auth?.id ?? null)
 const config = getLocalConfig()
 const STORE_ICON_FETCH_TIMEOUT_MS = 10_000
@@ -176,12 +180,6 @@ const cliCommand = computed(() => {
 
   return `npx @capgo/cli@latest i ${key}${localCommand}`
 })
-const redactedCliCommand = computed(() => {
-  if (usesBuilderSetupCommand.value)
-    return `npx @capgo/cli@latest build init -a [YOUR_CAPGO_API_KEY]${localCommand}`
-
-  return `npx @capgo/cli@latest i [YOUR_CAPGO_API_KEY]${localCommand}`
-})
 const cliCommandArgs = computed(() => {
   const args: string[] = []
 
@@ -231,10 +229,9 @@ const suggestedAppId = computed(() => {
   return `com.${orgSlug}.${appSlug}`
 })
 const generatedAppId = computed(() => createdApp.value?.app_id || manualAppId.value.trim() || suggestedAppId.value)
-function createAiHelpPrompt(command: string) {
+function createAiHelpPrompt() {
   const resolvedAppId = createdApp.value?.app_id || generatedAppId.value || '[APP_ID]'
   const resolvedAppName = createdApp.value?.name?.trim() || appName.value.trim() || resolvedAppId
-  const apiKeyGuidance = t(command.includes('[YOUR_CAPGO_API_KEY]') ? 'app-onboarding-ai-help-without-key' : 'app-onboarding-ai-help-with-key')
   let appStatus = t('app-onboarding-ai-help-status-new')
   if (props.preOrg)
     appStatus = t('app-onboarding-v2-ai-help-status')
@@ -245,8 +242,8 @@ function createAiHelpPrompt(command: string) {
     appName: resolvedAppName,
     appId: resolvedAppId,
     appStatus,
-    apiKeyGuidance,
-    command,
+    apiKeyGuidance: t('app-onboarding-ai-help-with-key'),
+    command: cliCommand.value,
   })
 }
 const appOnboardingSteps = computed<Array<{ id: OnboardingFlowStep, label: string }>>(() => {
@@ -973,6 +970,11 @@ async function createAppRecord(options?: { nextStep?: StandardFlowStep | PreOrgF
       .single()
 
     createdApp.value = refreshed ?? responseData
+    dashboardAppsStore.upsertApp({
+      app_id: appId,
+      name: appName.value.trim() || null,
+      ownerOrgId: currentOrg.value.gid,
+    })
     const completionProperties: OnboardingStepCompletionProperties = {
       appId,
     }
@@ -1008,6 +1010,12 @@ async function seedDemoData() {
       throw error
     }
 
+    allowOnboardingDashboardExploration(onboardingUserId.value, createdApp.value.app_id)
+    dashboardAppsStore.upsertApp({
+      app_id: createdApp.value.app_id,
+      name: createdApp.value.name ?? null,
+      ownerOrgId: currentOrg.value.gid,
+    })
     router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}/getting-started`)
   }
   catch (error) {
@@ -1023,6 +1031,7 @@ async function copyText(text: string) {
   try {
     await navigator.clipboard.writeText(text)
     toast.success(t('copied-to-clipboard'))
+    return true
   }
   catch (error) {
     console.error('Failed to copy text', error)
@@ -1037,14 +1046,43 @@ async function copyText(text: string) {
       ],
     })
     await dialogStore.onDialogDismiss()
+    return false
   }
+}
+
+function trackSuccessfulCopy(event: OnboardingCopyEvent) {
+  const orgId = currentOrg.value?.gid
+  const appId = createdApp.value?.app_id || generatedAppId.value || undefined
+  const properties = progressTracker?.trackCopyEvent(event, {
+    ...(appId ? { app_id: appId } : {}),
+    ...(existingApp.value !== null ? { existing_app: existingApp.value } : {}),
+    ...(selectedIntent.value ? { intent: selectedIntent.value } : {}),
+    ...(orgId ? { org_id: orgId } : {}),
+    setup_command: usesBuilderSetupCommand.value ? 'builder' : 'ota',
+  })
+
+  if (event !== 'onboarding_ai_instructions_copied' || !properties || !orgId || !appId)
+    return
+
+  void sendEvent({
+    channel: 'onboarding',
+    event,
+    icon: '🤖',
+    nonPersonTags: properties,
+    notify: false,
+    org_id: orgId,
+    tags: { app_id: appId },
+    tracking_version: 2,
+  }).catch(() => {})
 }
 
 async function copyCliCommand() {
   if (!apiKey.value)
     return
 
-  await copyText(cliCommand.value)
+  const copied = await copyText(cliCommand.value)
+  if (copied)
+    trackSuccessfulCopy('onboarding_cli_command_copied')
 }
 
 async function copyAiInstructions() {
@@ -1054,26 +1092,17 @@ async function copyAiInstructions() {
   catch (error) {
     console.error('Cannot ensure API key', error)
     toast.error(t('app-onboarding-toast-apikey-error'))
+    return
   }
 
-  dialogStore.openDialog({
-    id: 'app-onboarding-ai-help-copy-dialog',
-    title: t('app-onboarding-ai-help-copy-title'),
-    description: t('app-onboarding-ai-help-copy-description'),
-    buttons: [
-      {
-        text: t('app-onboarding-ai-help-copy-without-key'),
-        role: 'secondary',
-        handler: () => copyText(createAiHelpPrompt(redactedCliCommand.value)),
-      },
-      {
-        text: t('app-onboarding-ai-help-copy-with-key'),
-        role: 'primary',
-        disabled: !apiKey.value,
-        handler: () => copyText(createAiHelpPrompt(cliCommand.value)),
-      },
-    ],
-  })
+  if (!apiKey.value) {
+    toast.error(t('app-onboarding-toast-apikey-error'))
+    return
+  }
+
+  const copied = await copyText(createAiHelpPrompt())
+  if (copied)
+    trackSuccessfulCopy('onboarding_ai_instructions_copied')
 }
 
 function goToInstallStep() {

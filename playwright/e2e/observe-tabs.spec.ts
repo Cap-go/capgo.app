@@ -90,5 +90,25 @@ test.describe('Observe sections', () => {
     const rowWithoutMetadata = page.locator('#custom_table tbody tr', { hasText: '11111111' })
     await expect(rowWithMetadata.locator('[data-test="log-row-metadata"]')).toHaveCount(1)
     await expect(rowWithoutMetadata.locator('[data-test="log-row-metadata"]')).toHaveCount(0)
+
+    await rowWithMetadata.locator('[data-test="log-row-metadata"]').click()
+    const popover = page.locator('[data-test="log-row-metadata-popover"]')
+    await expect(popover).toBeVisible()
+    await expect(popover).toContainText(/"source"/)
+    await expect(popover).toContainText('notify_app_ready')
+    await expect(popover.locator('[data-test="log-row-metadata-copy"]')).toBeVisible()
+
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: {
+          writeText: async (text: string) => {
+            document.body.dataset.copiedLogMetadata = text
+          },
+        },
+      })
+    })
+    await popover.locator('[data-test="log-row-metadata-copy"]').click()
+    await expect.poll(() => page.locator('body').getAttribute('data-copied-log-metadata')).toContain('notify_app_ready')
   })
 })

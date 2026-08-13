@@ -1,14 +1,22 @@
-export const FRONTEND_ONBOARDING_VERSION = 1 as const
+export const FRONTEND_ONBOARDING_VERSIONS = [1, 2] as const
+export type FrontendOnboardingVersion = typeof FRONTEND_ONBOARDING_VERSIONS[number]
 export const FRONTEND_ONBOARDING_FOLLOWUP_MS = 24 * 60 * 60 * 1000
 
 export type FrontendOnboardingStageKey = 'intent' | 'details' | 'organization' | 'setup'
 
 export interface FrontendOnboardingAttempt {
   attemptId: string
+  onboardingVersion: FrontendOnboardingVersion
   intentMs: number
   detailsMs: number | null
   organizationMs: number | null
   setupMs: number | null
+  interactionEvents: FrontendOnboardingInteractionEvent[]
+}
+
+export interface FrontendOnboardingInteractionEvent {
+  key: string
+  timestampMs: number
 }
 
 export interface FrontendOnboardingFunnelStage {
@@ -42,13 +50,32 @@ export interface FrontendOnboardingComparison {
 
 export interface FrontendOnboardingDailyAttempt {
   date: string
-  attempts: number
+  v1_attempts: number
+  v2_attempts: number
+}
+
+export interface FrontendOnboardingDailyConversion {
+  date: string
+  started: number
+  converted: number
+  conversion_percent: number | null
 }
 
 export interface FrontendOnboardingAnalytics {
   kpis: FrontendOnboardingPeriodKpis & { comparison: FrontendOnboardingComparison }
   daily_attempts: FrontendOnboardingDailyAttempt[]
-  funnel: FrontendOnboardingFunnelStage[]
+  daily_conversions: {
+    intent_to_details: FrontendOnboardingDailyConversion[]
+    details_to_organization: FrontendOnboardingDailyConversion[]
+    organization_to_setup: FrontendOnboardingDailyConversion[]
+  }
+  funnels: {
+    v1: FrontendOnboardingFunnelStage[]
+    v2: FrontendOnboardingFunnelStage[]
+  }
+  v2_graph: {
+    nodes: Array<{ key: string, count: number }>
+  }
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -155,22 +182,89 @@ function utcDate(ms: number): string {
   return new Date(ms).toISOString().slice(0, 10)
 }
 
-function buildDailyAttempts(attempts: FrontendOnboardingAttempt[], startMs: number, endMs: number): FrontendOnboardingDailyAttempt[] {
-  const attemptsByDate = new Map<string, number>()
-  for (const attempt of attempts)
-    attemptsByDate.set(utcDate(attempt.intentMs), (attemptsByDate.get(utcDate(attempt.intentMs)) ?? 0) + 1)
-
-  const days: FrontendOnboardingDailyAttempt[] = []
+function eachUtcDate(startMs: number, endMs: number): string[] {
+  const dates: string[] = []
   for (let dayStartMs = Date.UTC(
     new Date(startMs).getUTCFullYear(),
     new Date(startMs).getUTCMonth(),
     new Date(startMs).getUTCDate(),
   ); dayStartMs < endMs; dayStartMs += DAY_MS) {
-    const date = utcDate(dayStartMs)
-    days.push({ date, attempts: attemptsByDate.get(date) ?? 0 })
+    dates.push(utcDate(dayStartMs))
+  }
+  return dates
+}
+
+function buildDailyAttempts(attempts: FrontendOnboardingAttempt[], startMs: number, endMs: number): FrontendOnboardingDailyAttempt[] {
+  const attemptsByDate = new Map<string, { v1_attempts: number, v2_attempts: number }>()
+  for (const attempt of attempts) {
+    const date = utcDate(attempt.intentMs)
+    const counts = attemptsByDate.get(date) ?? { v1_attempts: 0, v2_attempts: 0 }
+    counts[`v${attempt.onboardingVersion}_attempts`]++
+    attemptsByDate.set(date, counts)
   }
 
-  return days
+  return eachUtcDate(startMs, endMs)
+    .map(date => ({ date, ...(attemptsByDate.get(date) ?? { v1_attempts: 0, v2_attempts: 0 }) }))
+}
+
+function firstReachedStageMs(attempt: FrontendOnboardingAttempt, stage: FrontendOnboardingStageKey): number | null {
+  const candidates = stage === 'intent'
+    ? [attempt.intentMs]
+    : stage === 'details'
+      ? [attempt.detailsMs, attempt.organizationMs, attempt.setupMs]
+      : stage === 'organization'
+        ? [attempt.organizationMs, attempt.setupMs]
+        : [attempt.setupMs]
+
+  const reached = candidates.filter(timestamp => isStepInFollowupWindow(timestamp, attempt.intentMs))
+  return reached.length === 0 ? null : Math.min(...reached)
+}
+
+function buildDailyConversion(
+  attempts: FrontendOnboardingAttempt[],
+  startMs: number,
+  endMs: number,
+  from: FrontendOnboardingStageKey,
+  to: FrontendOnboardingStageKey,
+): FrontendOnboardingDailyConversion[] {
+  const countsByDate = new Map<string, { started: number, converted: number }>()
+  for (const attempt of attempts) {
+    const fromMs = firstReachedStageMs(attempt, from)
+    if (fromMs === null || fromMs < startMs || fromMs >= endMs)
+      continue
+
+    const date = utcDate(fromMs)
+    const counts = countsByDate.get(date) ?? { started: 0, converted: 0 }
+    counts.started++
+    const toMs = firstReachedStageMs(attempt, to)
+    if (toMs !== null && toMs >= fromMs)
+      counts.converted++
+    countsByDate.set(date, counts)
+  }
+
+  return eachUtcDate(startMs, endMs).map((date) => {
+    const counts = countsByDate.get(date) ?? { started: 0, converted: 0 }
+    return {
+      date,
+      ...counts,
+      conversion_percent: counts.started === 0 ? null : counts.converted / counts.started * 100,
+    }
+  })
+}
+
+function buildV2Graph(attempts: FrontendOnboardingAttempt[]): Array<{ key: string, count: number }> {
+  const counts = new Map<string, number>()
+  for (const attempt of attempts) {
+    const eventKeys = new Set(attempt.interactionEvents
+      .filter(event => isStepInFollowupWindow(event.timestampMs, attempt.intentMs))
+      .map(event => event.key))
+    for (const eventKey of eventKeys)
+      counts.set(eventKey, (counts.get(eventKey) ?? 0) + 1)
+  }
+
+  return [...counts.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, count]) => ({ key, count }))
 }
 
 function comparePeriods(current: FrontendOnboardingPeriodKpis, previous: FrontendOnboardingPeriodKpis): FrontendOnboardingComparison {
@@ -199,15 +293,30 @@ export function buildFrontendOnboardingAnalytics(
   const previousStartMs = currentStartMs - periodDurationMs
   const currentAttempts = attempts.filter(attempt => attempt.intentMs >= currentStartMs && attempt.intentMs < currentEndMs)
   const previousAttempts = attempts.filter(attempt => attempt.intentMs >= previousStartMs && attempt.intentMs < currentStartMs)
-  const current = summarizePeriod(currentAttempts)
-  const previous = summarizePeriod(previousAttempts)
+  const currentV1Attempts = currentAttempts.filter(attempt => attempt.onboardingVersion === 1)
+  const currentV2Attempts = currentAttempts.filter(attempt => attempt.onboardingVersion === 2)
+  const currentV2ConversionAttempts = attempts.filter(attempt => attempt.onboardingVersion === 2
+    && attempt.intentMs >= currentStartMs - FRONTEND_ONBOARDING_FOLLOWUP_MS
+    && attempt.intentMs < currentEndMs)
+  const previousV2Attempts = previousAttempts.filter(attempt => attempt.onboardingVersion === 2)
+  const currentV2 = summarizePeriod(currentV2Attempts)
+  const previousV2 = summarizePeriod(previousV2Attempts)
 
   return {
     kpis: {
-      ...current.kpis,
-      comparison: comparePeriods(current.kpis, previous.kpis),
+      ...currentV2.kpis,
+      comparison: comparePeriods(currentV2.kpis, previousV2.kpis),
     },
     daily_attempts: buildDailyAttempts(currentAttempts, currentStartMs, currentEndMs),
-    funnel: current.funnel,
+    daily_conversions: {
+      intent_to_details: buildDailyConversion(currentAttempts, currentStartMs, currentEndMs, 'intent', 'details'),
+      details_to_organization: buildDailyConversion(currentV2ConversionAttempts, currentStartMs, currentEndMs, 'details', 'organization'),
+      organization_to_setup: buildDailyConversion(currentV2ConversionAttempts, currentStartMs, currentEndMs, 'organization', 'setup'),
+    },
+    funnels: {
+      v1: buildFunnel(currentV1Attempts),
+      v2: currentV2.funnel,
+    },
+    v2_graph: { nodes: buildV2Graph(currentV2Attempts) },
   }
 }

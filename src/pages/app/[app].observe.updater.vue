@@ -85,6 +85,7 @@ const insightsLoading = ref(false)
 const selectedDays = ref<PeriodDayOption>(7)
 const app = ref<Database['public']['Tables']['apps']['Row']>()
 const insights = ref<LogInsightsResponse | null>(null)
+const publicChannels = ref<{ id: number, name: string, versionName: string }[]>([])
 let latestInsightsRequest = 0
 
 const appRouteSegment = computed(() => {
@@ -160,9 +161,32 @@ async function loadAppInfo() {
       .eq('app_id', id.value)
       .single()
     app.value = dataApp || app.value
+
+    const { data: channelsData } = await supabase
+      .from('channels')
+      .select(`
+        id,
+        name,
+        version:app_versions!channels_version_fkey(id, name)
+      `)
+      .eq('app_id', id.value)
+      .eq('public', true)
+      .order('id', { ascending: true })
+
+    const uniqueByVersion = new Map<string, { id: number, name: string, versionName: string }>()
+    for (const channel of channelsData ?? []) {
+      const version = channel.version as { id?: number, name?: string } | { id?: number, name?: string }[] | null | undefined
+      const versionRow = Array.isArray(version) ? version[0] : version
+      const versionName = versionRow?.name
+      if (!versionName || uniqueByVersion.has(versionName))
+        continue
+      uniqueByVersion.set(versionName, { id: channel.id, name: channel.name, versionName })
+    }
+    publicChannels.value = [...uniqueByVersion.values()]
   }
   catch (error) {
     console.error(error)
+    publicChannels.value = []
   }
 }
 
@@ -314,7 +338,17 @@ watchEffect(async () => {
           </div>
         </div>
 
-        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <div
+          class="grid grid-cols-1 gap-4 sm:grid-cols-2"
+          :class="publicChannels.length ? 'xl:grid-cols-5' : 'xl:grid-cols-4'"
+        >
+          <BundleAdoptionCard
+            v-for="channel in publicChannels"
+            :key="channel.id"
+            :app-id="id"
+            :version-name="channel.versionName"
+            :linked-channel-id="channel.id"
+          />
           <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
             <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
               <IconBug class="w-4 h-4" />

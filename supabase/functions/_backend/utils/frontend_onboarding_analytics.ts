@@ -1,10 +1,9 @@
 import type { Context } from 'hono'
-import type { FrontendOnboardingAttempt } from './frontend_onboarding_analytics_model.ts'
+import type { FrontendOnboardingAttempt, FrontendOnboardingInteractionEvent, FrontendOnboardingVersion } from './frontend_onboarding_analytics_model.ts'
 import {
   buildFrontendOnboardingAnalytics,
   FRONTEND_ONBOARDING_FOLLOWUP_MS,
-  FRONTEND_ONBOARDING_VERSION,
-
+  FRONTEND_ONBOARDING_VERSIONS,
 } from './frontend_onboarding_analytics_model.ts'
 import { cloudlogErr } from './logging.ts'
 import { queryPosthogHogql } from './posthog_read.ts'
@@ -17,6 +16,24 @@ const ATTEMPT_LIMIT_EXCEEDED_ERROR = 'frontend onboarding analytics query exceed
 
 export const FRONTEND_ONBOARDING_ATTEMPT_LIMIT = 50_000
 export const FRONTEND_ONBOARDING_MAX_RANGE_MS = 365 * 24 * 60 * 60 * 1000
+
+const ONBOARDING_INTERACTION_EVENTS = [
+  'onboarding_app_id_entered',
+  'onboarding_app_id_help_opened',
+  'onboarding_app_icon_picked',
+  'onboarding_app_icon_picker_closed_without_selection',
+  'onboarding_app_icon_picker_open_failed',
+  'onboarding_app_icon_picker_opened',
+  'onboarding_app_icon_upload_failed',
+  'onboarding_app_icon_uploaded',
+  'onboarding_app_name_entered',
+  'onboarding_store_import_failed',
+  'onboarding_store_import_hidden',
+  'onboarding_store_import_shown',
+  'onboarding_store_import_submitted',
+  'onboarding_store_import_succeeded',
+  'onboarding_store_url_entered',
+] as const
 
 function sqlStr(value: string): string {
   return `'${value.replace(/'/g, '\'\'')}'`
@@ -66,6 +83,25 @@ function attemptId(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+function onboardingVersion(value: unknown): FrontendOnboardingVersion | null {
+  return FRONTEND_ONBOARDING_VERSIONS.includes(value as FrontendOnboardingVersion)
+    ? value as FrontendOnboardingVersion
+    : null
+}
+
+function interactionEvents(value: unknown): FrontendOnboardingInteractionEvent[] {
+  if (!Array.isArray(value))
+    return []
+
+  return value.flatMap((event) => {
+    if (!Array.isArray(event) || typeof event[0] !== 'string' || event[0].trim() === '')
+      return []
+
+    const timestampMs = nullableMs(event[1])
+    return timestampMs === null ? [] : [{ key: event[0].trim(), timestampMs }]
+  })
+}
+
 export function assertFrontendOnboardingAttemptTotal(totalAttempts: unknown, limit = FRONTEND_ONBOARDING_ATTEMPT_LIMIT): number {
   if (typeof totalAttempts !== 'number'
     || !Number.isFinite(totalAttempts)
@@ -83,45 +119,55 @@ function mapAttempts(rows: Record<string, unknown>[]): FrontendOnboardingAttempt
   return rows.flatMap((row) => {
     const id = attemptId(row.attempt_id)
     const intentMs = nullableMs(row.intent_ms)
-    if (!id || intentMs === null)
+    const version = onboardingVersion(row.onboarding_version)
+    if (!id || intentMs === null || version === null)
       return []
 
     return [{
       attemptId: id,
+      onboardingVersion: version,
       intentMs,
       detailsMs: nullableMs(row.details_ms),
       organizationMs: nullableMs(row.organization_ms),
       setupMs: nullableMs(row.setup_ms),
+      interactionEvents: interactionEvents(row.interaction_events),
     }]
   })
 }
 
 export function buildFrontendOnboardingHogql(startDate: string, cohortEndDate: string, followupEndDate: string): string {
+  const eventAllowlist = ['onboarding_step_viewed', ...ONBOARDING_INTERACTION_EVENTS].map(sqlStr).join(', ')
+  const versionAllowlist = FRONTEND_ONBOARDING_VERSIONS.join(', ')
+
   return `
     SELECT
+      onboarding_version,
       attempt_id,
       count() OVER () AS total_attempts,
-      toUnixTimestamp64Milli(minIf(timestamp, step = 'intent')) AS intent_ms,
-      toUnixTimestamp64Milli(minIf(timestamp, step = 'details')) AS details_ms,
-      toUnixTimestamp64Milli(minIf(timestamp, step = 'organization')) AS organization_ms,
-      toUnixTimestamp64Milli(minIf(timestamp, step = 'setup')) AS setup_ms
+      toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'intent')) AS intent_ms,
+      toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'details')) AS details_ms,
+      toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'organization')) AS organization_ms,
+      toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'setup')) AS setup_ms,
+      groupUniqArrayIf(tuple(event, toUnixTimestamp64Milli(timestamp)), event != 'onboarding_step_viewed') AS interaction_events
     FROM (
       SELECT
+        event,
         timestamp,
+        toIntOrZero(toString(properties.onboarding_version)) AS onboarding_version,
         JSONExtractString(toString(properties), 'onboarding_attempt_id') AS attempt_id,
         JSONExtractString(toString(properties), 'step') AS step
       FROM events
-      WHERE event = 'onboarding_step_viewed'
+      WHERE event IN (${eventAllowlist})
         AND JSONExtractString(toString(properties), 'flow') = 'pre_org'
-        AND toIntOrZero(toString(properties.onboarding_version)) = ${FRONTEND_ONBOARDING_VERSION}
+        AND toIntOrZero(toString(properties.onboarding_version)) IN (${versionAllowlist})
         AND timestamp >= parseDateTimeBestEffort(${sqlStr(startDate)})
         AND timestamp < parseDateTimeBestEffort(${sqlStr(followupEndDate)})
     )
     WHERE trim(attempt_id) != ''
-    GROUP BY attempt_id
+    GROUP BY onboarding_version, attempt_id
     HAVING intent_ms >= toUnixTimestamp64Milli(parseDateTimeBestEffort(${sqlStr(startDate)}))
       AND intent_ms < toUnixTimestamp64Milli(parseDateTimeBestEffort(${sqlStr(cohortEndDate)}))
-    ORDER BY intent_ms ASC, attempt_id ASC
+    ORDER BY intent_ms ASC, onboarding_version ASC, attempt_id ASC
     LIMIT ${FRONTEND_ONBOARDING_ATTEMPT_LIMIT}`
 }
 
@@ -136,8 +182,9 @@ export async function getAdminFrontendOnboardingAnalytics(c: Context, startDate:
     throw new RangeError('frontend onboarding analytics date range cannot exceed 365 days')
 
   const previousStartMs = startMs - durationMs
+  const queryStartMs = Math.min(previousStartMs, startMs - FRONTEND_ONBOARDING_FOLLOWUP_MS)
   const followupEndMs = endMs + FRONTEND_ONBOARDING_FOLLOWUP_MS
-  if (previousStartMs < POSTHOG_MIN_DATE_MS || previousStartMs >= POSTHOG_MAX_DATE_MS
+  if (queryStartMs < POSTHOG_MIN_DATE_MS || queryStartMs >= POSTHOG_MAX_DATE_MS
     || followupEndMs < POSTHOG_MIN_DATE_MS || followupEndMs >= POSTHOG_MAX_DATE_MS) {
     throw new RangeError('derived analytics date boundaries must be within the supported PostHog range')
   }
@@ -145,7 +192,7 @@ export async function getAdminFrontendOnboardingAnalytics(c: Context, startDate:
   const posthog = await queryPosthogHogql(
     c,
     buildFrontendOnboardingHogql(
-      new Date(previousStartMs).toISOString(),
+      new Date(queryStartMs).toISOString(),
       new Date(endMs).toISOString(),
       new Date(followupEndMs).toISOString(),
     ),
@@ -175,7 +222,6 @@ export async function getAdminFrontendOnboardingAnalytics(c: Context, startDate:
   const analytics = buildFrontendOnboardingAnalytics(mapAttempts(posthog.rows), startMs, endMs)
 
   return {
-    onboarding_version: FRONTEND_ONBOARDING_VERSION,
     ...analytics,
     posthog_configured: posthog.configured,
     posthog_connected: posthog.connected,

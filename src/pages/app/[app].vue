@@ -12,6 +12,7 @@ import DevicesStats from '~/components/dashboard/DevicesStats.vue'
 import ReleaseBanner from '~/components/dashboard/ReleaseBanner.vue'
 import UpdateStatsCard from '~/components/dashboard/UpdateStatsCard.vue'
 import { getCapgoVersion, useSupabase } from '~/services/supabase'
+import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
@@ -26,6 +27,7 @@ const channelsNb = ref(0)
 const capgoVersion = ref('')
 const main = useMainStore()
 const organizationStore = useOrganizationStore()
+const dashboardAppsStore = useDashboardAppsStore()
 const isLoading = ref(false)
 const supabase = useSupabase()
 const displayStore = useDisplayStore()
@@ -97,6 +99,11 @@ async function loadAppInfo() {
     devicesNb.value = devicesCount
     bundlesNb.value = bundlesCount
     channelsNb.value = channelsCount
+    dashboardAppsStore.upsertApp({
+      app_id: appId,
+      name: dataApp.name ?? null,
+      ownerOrgId: dataApp.owner_org,
+    })
   }
   catch (error) {
     console.error(error)
@@ -172,6 +179,15 @@ watchEffect(async () => {
               :app-id="id"
               :use-billing-period="usageComponent?.useBillingPeriod ?? true"
               :accumulated="(usageComponent?.useBillingPeriod ?? true) && (usageComponent?.showCumulative ?? false)"
+              :reload-trigger="usageComponent?.reloadTrigger ?? 0"
+              :force-demo="appNotFound"
+              class="col-span-full sm:col-span-6 xl:col-span-4"
+            />
+            <DevicesStats
+              :app-id="id"
+              usage-kind="bundle"
+              :use-billing-period="usageComponent?.useBillingPeriod ?? true"
+              :accumulated="false"
               :reload-trigger="usageComponent?.reloadTrigger ?? 0"
               :force-demo="appNotFound"
               class="col-span-full sm:col-span-6 xl:col-span-4"

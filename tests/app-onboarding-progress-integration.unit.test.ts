@@ -83,6 +83,7 @@ describe('app onboarding progress analytics integration', () => {
     const demoAction = sourceBetween('async function seedDemoData()', 'async function copyText(')
     expect(demoAction).not.toContain('completeStep')
     expect(demoAction).not.toContain('completeAndViewStep')
+    expect(demoAction).toContain('allowOnboardingDashboardExploration')
     expect(demoAction).toContain('/getting-started')
 
     const dashboardExit = sourceBetween('function openDashboard()', 'onMounted(async () => {')

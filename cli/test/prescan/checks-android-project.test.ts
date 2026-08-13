@@ -12,6 +12,7 @@ import {
   gradleWrapperPresent,
   localPropertiesCommitted,
   minSdkCapacitor,
+  minSdkDependencies,
   playSaJson,
   sdkFloors,
   targetSdkPlay,
@@ -645,6 +646,41 @@ describe('android/min-sdk-capacitor', () => {
       'android/variables.gradle': 'ext { minSdkVersion = 24 }',
     })
     expect(await minSdkCapacitor.run(aCtx(dir))).toEqual([])
+  })
+})
+
+describe('android/min-sdk-dependencies', () => {
+  const settings = `include ':capgo-capacitor-llm'
+project(':capgo-capacitor-llm').projectDir = new File('../plugins/capgo-capacitor-llm/android')`
+
+  it('errors when a synced plugin depends on a library with a higher minSdk floor', async () => {
+    const dir = makeProject({
+      'android/variables.gradle': 'ext { minSdkVersion = 24 }',
+      'android/capacitor.settings.gradle': settings,
+      'plugins/capgo-capacitor-llm/android/build.gradle': `dependencies {
+  implementation 'com.google.mlkit:genai-prompt:1.0.0-beta2'
+}`,
+    })
+    const f = await minSdkDependencies.run(aCtx(dir))
+    expect(f[0]?.severity).toBe('error')
+    expect(f[0]?.title).toContain('26')
+    expect(f[0]?.detail).toContain('genai-prompt')
+  })
+
+  it('passes when minSdk meets the plugin dependency floor', async () => {
+    const dir = makeProject({
+      'android/variables.gradle': 'ext { minSdkVersion = 26 }',
+      'android/capacitor.settings.gradle': settings,
+      'plugins/capgo-capacitor-llm/android/build.gradle': `dependencies {
+  implementation 'com.google.mlkit:genai-prompt:1.0.0-beta2'
+}`,
+    })
+    expect(await minSdkDependencies.run(aCtx(dir))).toEqual([])
+  })
+
+  it('does not apply when minSdk is unresolvable', () => {
+    const dir = makeProject({ 'android/capacitor.settings.gradle': settings })
+    expect(minSdkDependencies.appliesTo!(aCtx(dir))).toBe(false)
   })
 })
 

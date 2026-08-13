@@ -306,3 +306,16 @@ export function resolveSdk(projectDir: string, dim: SdkDimension): number | null
   }
   return null
 }
+
+/** Android module directories from android/capacitor.settings.gradle `projectDir` entries. */
+export function capacitorPluginAndroidDirs(projectDir: string): string[] {
+  const raw = readTextIfExists(join(projectDir, 'android', 'capacitor.settings.gradle'))
+  if (!raw)
+    return []
+  const androidDir = join(projectDir, 'android')
+  const dirs: string[] = []
+  const re = /project\(':[^']+'\)\.projectDir\s*=\s*new File\('([^']+)'\)/g
+  for (let m = re.exec(raw); m !== null; m = re.exec(raw))
+    dirs.push(join(androidDir, m[1]))
+  return dirs
+}
