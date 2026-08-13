@@ -293,12 +293,27 @@ async function buildBundleIncompatibleBentoEvent(
     ? tags.version_new_name
     : undefined
   const versionOldName = typeof tags.version_old_name === 'string' ? tags.version_old_name : undefined
+
+  let versionNewId: string | undefined
+  let minUpdateVersion: string | null = null
+  if (versionNewName) {
+    const { data: versionNewData } = await supabase
+      .from('app_versions')
+      .select('id, min_update_version')
+      .eq('app_id', appId)
+      .eq('name', versionNewName)
+      .maybeSingle()
+    versionNewId = toIdString(versionNewData?.id)
+    minUpdateVersion = versionNewData?.min_update_version ?? null
+  }
+
   // Gated by the channel strategy: devices on the previous (incompatible) native
   // build never receive this bundle, so the breaking change was done correctly.
   const gatedByStrategy = isBreakingChangeGatedByChannelStrategy({
     strategy: updateStrategy,
     versionOldName,
     versionNewName,
+    minUpdateVersion,
   })
   const apikeyId = c.get('apikey')?.id
 
@@ -328,17 +343,6 @@ async function buildBundleIncompatibleBentoEvent(
     return undefined
   }
 
-  let versionNewId: string | undefined
-  if (versionNewName) {
-    const { data: versionNewData } = await supabase
-      .from('app_versions')
-      .select('id')
-      .eq('app_id', appId)
-      .eq('name', versionNewName)
-      .maybeSingle()
-    versionNewId = toIdString(versionNewData?.id)
-  }
-
   return buildBundleCompatibilityBentoEvent({
     event: trackedBody.event,
     orgId: onboardingOrgId,
@@ -353,6 +357,7 @@ async function buildBundleIncompatibleBentoEvent(
     orgName: orgResult.data?.name ?? undefined,
     appName: appResult.data?.name ?? undefined,
     disableAutoUpdate: updateStrategy,
+    minUpdateVersion,
   })
 }
 

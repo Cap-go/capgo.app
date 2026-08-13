@@ -1,5 +1,5 @@
 import type { BentoTrackingPayload } from './tracking.ts'
-import { tryParse } from '@std/semver'
+import { greaterThan, tryParse } from '@std/semver'
 
 /**
  * The CLI emits a `Bundle Incompatible` tracking event when a `bundle upload`'s
@@ -31,23 +31,33 @@ export const BUNDLE_INCOMPATIBLE_EXPECTED_BENTO_EVENT = 'bundle_incompatible_exp
  * `plugin_runtime/utils/update.ts`, comparing the new bundle name against the
  * previously live bundle name — the native version those devices still have.
  *
- * Fails closed: unparseable versions are treated as NOT gated so the crash
- * warning is emitted instead of the calmer "done correctly" mail.
+ * Fails closed: unparseable or missing versions (including a `version_number`
+ * channel without a usable `min_update_version`) are treated as NOT gated so
+ * the crash warning is emitted instead of the calmer "done correctly" mail.
  */
 export function isBreakingChangeGatedByChannelStrategy(input: {
   strategy: string | null | undefined
   versionOldName: string | undefined
   versionNewName: string | undefined
+  /** `min_update_version` of the new bundle, only used by `version_number`. */
+  minUpdateVersion?: string | null
 }): boolean {
-  // `version_number` gates on `min_update_version` vs the device native version,
-  // which is the whole point of that strategy: outdated natives stay on the old
-  // bundle. Treat it as gated without needing to parse the version names.
-  if (input.strategy === 'version_number')
-    return true
-  if (input.strategy !== 'major' && input.strategy !== 'minor' && input.strategy !== 'patch')
+  if (input.strategy !== 'major' && input.strategy !== 'minor' && input.strategy !== 'patch' && input.strategy !== 'version_number')
     return false
 
   const oldVersion = input.versionOldName ? tryParse(input.versionOldName) : undefined
+
+  // `version_number` gates on the new bundle's `min_update_version` vs the
+  // device's native version. A bundle whose minimum is not above the previous
+  // (incompatible) version still reaches those devices, so only a strictly
+  // greater minimum counts as gated.
+  if (input.strategy === 'version_number') {
+    const minVersion = input.minUpdateVersion ? tryParse(input.minUpdateVersion) : undefined
+    if (!minVersion || !oldVersion)
+      return false
+    return greaterThan(minVersion, oldVersion)
+  }
+
   const newVersion = input.versionNewName ? tryParse(input.versionNewName) : undefined
   if (!oldVersion || !newVersion)
     return false
@@ -86,6 +96,8 @@ export interface BundleCompatibilityBentoInput {
   appName: string | undefined
   /** The channel's `disable_auto_update` strategy, used to pick the event. */
   disableAutoUpdate: string | null | undefined
+  /** `min_update_version` of the new bundle; gates the `version_number` strategy. */
+  minUpdateVersion: string | null | undefined
 }
 
 /**
@@ -117,6 +129,7 @@ export function buildBundleCompatibilityBentoEvent(input: BundleCompatibilityBen
     strategy: input.disableAutoUpdate,
     versionOldName: input.versionOldName,
     versionNewName: input.versionNewName,
+    minUpdateVersion: input.minUpdateVersion,
   })
   const event = gated ? BUNDLE_INCOMPATIBLE_EXPECTED_BENTO_EVENT : BUNDLE_INCOMPATIBLE_BENTO_EVENT
 
@@ -134,6 +147,7 @@ export function buildBundleCompatibilityBentoEvent(input: BundleCompatibilityBen
     data: {
       disable_auto_update: input.disableAutoUpdate ?? '',
       gated,
+      min_update_version: input.minUpdateVersion ?? '',
       org_id: input.orgId,
       org_name: input.orgName ?? '',
       app_id: input.appId,

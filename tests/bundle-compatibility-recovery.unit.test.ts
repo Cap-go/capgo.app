@@ -16,6 +16,7 @@ const base = {
   appName: 'Demo',
   // 'none' never gates, so the base case is the crash-warning event.
   disableAutoUpdate: 'none',
+  minUpdateVersion: null,
 }
 
 describe('buildBundleCompatibilityBentoEvent', () => {
@@ -36,6 +37,7 @@ describe('buildBundleCompatibilityBentoEvent', () => {
     expect(r!.data).toMatchObject({
       disable_auto_update: 'none',
       gated: false,
+      min_update_version: '',
       org_id: 'org-1',
       org_name: 'Demo Org',
       app_id: 'com.demo.app',
@@ -117,11 +119,29 @@ describe('isBreakingChangeGatedByChannelStrategy', () => {
     ['patch', '1.10.35', '1.10.36', true],
     ['patch', '1.10.35', '1.11.0', true],
     ['patch', '1.10.35', '1.10.35', false],
-    ['version_number', '1.10.35', '1.10.36', true],
     ['none', '1.10.35', '2.0.0', false],
     ['unknown_strategy', '1.10.35', '2.0.0', false],
   ])('%s: %s -> %s gated=%s', (strategy, versionOldName, versionNewName, expected) => {
     expect(isBreakingChangeGatedByChannelStrategy({ strategy, versionOldName, versionNewName })).toBe(expected)
+  })
+
+  // `version_number` gates on the new bundle's min_update_version vs the device
+  // native version, so a minimum that is not above the previous version still
+  // reaches those devices.
+  it.concurrent.each([
+    ['1.11.0', true],
+    ['1.10.36', true],
+    ['1.10.35', false],
+    ['1.10.0', false],
+    [null, false],
+    ['not-semver', false],
+  ])('version_number with min_update_version %s gated=%s', (minUpdateVersion, expected) => {
+    expect(isBreakingChangeGatedByChannelStrategy({
+      strategy: 'version_number',
+      versionOldName: '1.10.35',
+      versionNewName: '1.11.0',
+      minUpdateVersion,
+    })).toBe(expected)
   })
 
   // Fail closed: without two parseable versions we cannot prove the strategy
@@ -132,12 +152,7 @@ describe('isBreakingChangeGatedByChannelStrategy', () => {
     expect(isBreakingChangeGatedByChannelStrategy({ strategy: 'minor', versionOldName: undefined, versionNewName: '1.11.0' })).toBe(false)
     expect(isBreakingChangeGatedByChannelStrategy({ strategy: 'minor', versionOldName: '1.10.35', versionNewName: undefined })).toBe(false)
     expect(isBreakingChangeGatedByChannelStrategy({ strategy: null, versionOldName: '1.10.35', versionNewName: '2.0.0' })).toBe(false)
-  })
-
-  // version_number gates on min_update_version vs the device native version, so
-  // it stays gated even when the bundle names don't parse.
-  it.concurrent('treats version_number as gated regardless of version names', () => {
-    expect(isBreakingChangeGatedByChannelStrategy({ strategy: 'version_number', versionOldName: 'builtin', versionNewName: undefined })).toBe(true)
+    expect(isBreakingChangeGatedByChannelStrategy({ strategy: 'version_number', versionOldName: 'builtin', versionNewName: '1.11.0', minUpdateVersion: '1.11.0' })).toBe(false)
   })
 })
 
@@ -145,19 +160,21 @@ describe('buildBundleCompatibilityBentoEvent event split', () => {
   const incident = { ...base, versionOldName: '1.10.35', versionNewName: '1.11.0', channel: 'staging' }
 
   it.concurrent.each([
-    ['minor', 'gated'],
-    ['patch', 'gated'],
-    ['version_number', 'gated'],
-    ['major', 'warning'],
-    ['none', 'warning'],
-  ])('%s strategy on a minor bump emits the %s event', (strategy, expectation) => {
-    const r = buildBundleCompatibilityBentoEvent({ ...incident, disableAutoUpdate: strategy })
+    ['minor', null, 'gated'],
+    ['patch', null, 'gated'],
+    ['version_number', '1.11.0', 'gated'],
+    ['version_number', '1.10.0', 'warning'],
+    ['version_number', null, 'warning'],
+    ['major', null, 'warning'],
+    ['none', null, 'warning'],
+  ])('%s strategy (min %s) on a minor bump emits the %s event', (strategy, minUpdateVersion, expectation) => {
+    const r = buildBundleCompatibilityBentoEvent({ ...incident, disableAutoUpdate: strategy, minUpdateVersion })
     expect(r).toBeDefined()
     if (expectation === 'gated') {
       expect(r!.event).toBe('bundle_incompatible_expected')
       expect(r!.preferenceKey).toBe('bundle_incompatible_expected')
       expect(r!.uniqId).toBe('bundle_incompatible_expected:com.demo.app:staging:1.11.0')
-      expect(r!.data).toMatchObject({ disable_auto_update: strategy, gated: true })
+      expect(r!.data).toMatchObject({ disable_auto_update: strategy, gated: true, min_update_version: minUpdateVersion ?? '' })
     }
     else {
       expect(r!.event).toBe('bundle_incompatible')
