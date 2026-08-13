@@ -393,6 +393,8 @@
   "app-onboarding-ai-help-copy-with-key": "Used in Capgo web console areas: components/dashboard. Role: button or action label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "app-onboarding-ai-help-copy-without-key": "Used in Capgo web console areas: components/dashboard. Role: button or action label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "app-onboarding-ai-help-prompt": "Used in Capgo web console areas: components/dashboard. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "app-onboarding-ai-help-with-key": "Used in Capgo web console areas: components/dashboard. Role: AI prompt instruction confirming the user intentionally included their API key. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "app-onboarding-ai-help-without-key": "Used in Capgo web console areas: components/dashboard. Role: AI prompt instruction for safely replacing a redacted API key. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "app-onboarding-ai-help-status-existing": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "app-onboarding-ai-help-status-new": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "app-onboarding-ai-help-title": "Used in Capgo web console areas: components/dashboard. Role: section or dialog title. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",

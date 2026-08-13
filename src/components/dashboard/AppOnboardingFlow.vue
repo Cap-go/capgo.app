@@ -195,6 +195,7 @@ const generatedAppId = computed(() => createdApp.value?.app_id || manualAppId.va
 function createAiHelpPrompt(command: string) {
   const resolvedAppId = createdApp.value?.app_id || generatedAppId.value || '[APP_ID]'
   const resolvedAppName = createdApp.value?.name?.trim() || appName.value.trim() || resolvedAppId
+  const apiKeyGuidance = t(command.includes('[YOUR_CAPGO_API_KEY]') ? 'app-onboarding-ai-help-without-key' : 'app-onboarding-ai-help-with-key')
   let appStatus = t('app-onboarding-ai-help-status-new')
   if (props.preOrg)
     appStatus = t('app-onboarding-v2-ai-help-status')
@@ -205,6 +206,7 @@ function createAiHelpPrompt(command: string) {
     appName: resolvedAppName,
     appId: resolvedAppId,
     appStatus,
+    apiKeyGuidance,
     command,
   })
 }
