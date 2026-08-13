@@ -338,7 +338,10 @@ watchEffect(async () => {
           </div>
         </div>
 
-        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <div
+          class="grid grid-cols-1 gap-4 sm:grid-cols-2"
+          :class="publicChannels.length ? 'xl:grid-cols-5' : 'xl:grid-cols-4'"
+        >
           <BundleAdoptionCard
             v-for="channel in publicChannels"
             :key="channel.id"
