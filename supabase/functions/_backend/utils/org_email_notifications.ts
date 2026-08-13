@@ -79,6 +79,7 @@ export type EmailPreferenceKey
     | 'daily_fail_ratio'
     | 'cli_realtime_feed'
     | 'bundle_incompatible'
+    | 'bundle_incompatible_expected'
 
 export interface EmailPreferences {
   usage_limit?: boolean
@@ -96,6 +97,7 @@ export interface EmailPreferences {
   daily_fail_ratio?: boolean
   cli_realtime_feed?: boolean
   bundle_incompatible?: boolean
+  bundle_incompatible_expected?: boolean
 }
 
 /**
