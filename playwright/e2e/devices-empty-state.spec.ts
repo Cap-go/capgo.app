@@ -31,6 +31,13 @@ async function expectRequestCountToRemain(requests: Record<string, unknown>[], e
 
 test.describe('Devices empty state', () => {
   test.beforeEach(async ({ page }) => {
+    await page.route('**/private/sso/check-enforcement**', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ allowed: true }),
+      })
+    })
     await page.login('test@capgo.app', 'testtest')
     await page.evaluate((userId) => {
       localStorage.setItem(`capgo.supportUsernames.dismissed.${userId}`, '1')
@@ -44,6 +51,7 @@ test.describe('Devices empty state', () => {
 
     const emptyState = page.locator('[data-test="devices-empty-state"]')
     await expect(emptyState.getByRole('heading', { name: 'No devices found' })).toBeVisible()
+    await expect(page.locator('[data-test="devices-range-filter-banner"]')).toHaveCount(0)
     await expect(emptyState.getByText('The selected time range is too narrow.')).toBeVisible()
     await expect(emptyState.getByText('The app hasn’t contacted Capgo yet.')).toBeVisible()
     await expect(emptyState.getByText('The device contacted Capgo after this page loaded.')).toBeVisible()
@@ -67,8 +75,8 @@ test.describe('Devices empty state', () => {
     await expectRequestCountToRemain(requests, requests.length)
     const requestCountBeforeRefresh = requests.length
     await emptyState.getByRole('button', { name: 'Refresh devices' }).click()
-    await expect.poll(() => requests.length).toBe(requestCountBeforeRefresh + 2)
-    await expectRequestCountToRemain(requests, requestCountBeforeRefresh + 2)
+    await expect.poll(() => requests.length).toBe(requestCountBeforeRefresh + 3)
+    await expectRequestCountToRemain(requests, requestCountBeforeRefresh + 3)
     await expect.poll(() => requests.at(-1)).toMatchObject({
       appId: APP_ID,
       search: 'missing-device',
@@ -102,8 +110,8 @@ test.describe('Devices empty state', () => {
 
     await expect(search).toHaveValue('')
     await expect(emptyState.getByText('Search or filters are hiding it.')).toHaveCount(0)
-    await expect.poll(() => requests.length).toBe(requestCountBeforeClear + 2)
-    await expectRequestCountToRemain(requests, requestCountBeforeClear + 2)
+    await expect.poll(() => requests.length).toBe(requestCountBeforeClear + 3)
+    await expectRequestCountToRemain(requests, requestCountBeforeClear + 3)
     await expect.poll(() => requests.at(-1)).toMatchObject({
       appId: APP_ID,
       customIdMode: false,
@@ -112,5 +120,29 @@ test.describe('Devices empty state', () => {
     expect(requests.at(-1)).not.toHaveProperty('platform')
     expect(requests.at(-1)).not.toHaveProperty('versionNames')
     expect(requests.at(-1)).not.toHaveProperty('versionName')
+  })
+
+  test('shows how many devices the time range is hiding', async ({ page }) => {
+    await page.route('**/private/devices**', async (route: Route) => {
+      const body = route.request().postDataJSON() as Record<string, unknown>
+      const filtered = 'updated_at_gt' in body
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(body.count
+          ? { count: filtered ? 0 : 3 }
+          : { data: [], hasMore: false }),
+      })
+    })
+    await page.goto(`/app/${APP_ID}/devices`)
+
+    const banner = page.locator('[data-test="devices-range-filter-banner"]')
+    await expect(banner).toBeVisible()
+    await expect(banner).toContainText('3 devices are hidden by the current timeframe.')
+    await expect(banner.getByRole('button', { name: 'Change the timeframe' })).toBeVisible()
+    await expect(page.locator('[data-test="devices-empty-state"]')).toBeVisible()
+
+    await banner.getByRole('button', { name: 'Change the timeframe' }).click()
+    await expect(page.getByRole('dialog', { name: /Date range:/ })).toBeVisible()
   })
 })
