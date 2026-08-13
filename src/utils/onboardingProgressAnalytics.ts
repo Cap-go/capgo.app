@@ -4,6 +4,7 @@ export const ONBOARDING_ANALYTICS_VERSION = 2
 
 export type OnboardingAnalyticsFlow = 'pre_org' | 'existing_org'
 export type OnboardingAnalyticsStep = 'intent' | 'details' | 'organization' | 'choice' | 'install' | 'setup'
+export type OnboardingCopyEvent = 'onboarding_ai_instructions_copied' | 'onboarding_cli_command_copied'
 export type OnboardingIntent = 'ota' | 'builder' | 'both' | 'exploring'
 export type OnboardingDetailsEvent
   = | 'onboarding_app_id_entered'
@@ -22,7 +23,7 @@ export type OnboardingDetailsEvent
     | 'onboarding_store_import_succeeded'
     | 'onboarding_store_url_entered'
 
-type AnalyticsPrimitive = string | number | boolean | null
+type AnalyticsPrimitive = string | number | boolean
 type AnalyticsProperties = Record<string, AnalyticsPrimitive>
 type CaptureEvent = (name: string, supaHost: string, properties?: AnalyticsProperties) => void
 
@@ -36,6 +37,14 @@ export interface OnboardingStepCompletionProperties {
 export interface OnboardingDetailsEventProperties {
   field_length?: number
   icon_source?: 'file' | 'store'
+}
+
+export interface OnboardingCopyEventProperties {
+  app_id?: string
+  existing_app?: boolean
+  intent?: OnboardingIntent
+  org_id?: string
+  setup_command: 'builder' | 'ota'
 }
 
 export type OnboardingDetailsField = 'app_id' | 'app_name' | 'store_url'
@@ -172,8 +181,34 @@ export function createOnboardingProgressTracker(options: CreateOnboardingProgres
     safelyCapture(name, { ...properties, ...details })
   }
 
+  function trackCopyEvent(name: OnboardingCopyEvent, details: OnboardingCopyEventProperties) {
+    if (!activeStep)
+      return null
+
+    const properties = sharedProperties(activeStep)
+    if (!properties)
+      return null
+
+    const eventProperties: AnalyticsProperties = {
+      ...properties,
+      setup_command: details.setup_command,
+    }
+    if (details.app_id)
+      eventProperties.app_id = details.app_id
+    if (details.existing_app !== undefined)
+      eventProperties.existing_app = details.existing_app
+    if (details.intent)
+      eventProperties.intent = details.intent
+    if (details.org_id)
+      eventProperties.org_id = details.org_id
+
+    safelyCapture(name, eventProperties)
+    return eventProperties
+  }
+
   return {
     completeStep,
+    trackCopyEvent,
     trackDetailsEvent,
     viewStep,
   }

@@ -137,6 +137,45 @@ describe('onboarding progress analytics', () => {
     )
   })
 
+  it.concurrent('captures copy events with the active onboarding attempt context', () => {
+    const capture = vi.fn()
+    const tracker = createOnboardingProgressTracker({
+      capture,
+      flow: 'pre_org',
+      resumed: true,
+      steps,
+      supaHost: 'https://supabase.capgo.test',
+    })
+    tracker.viewStep('setup')
+    capture.mockClear()
+
+    const properties = tracker.trackCopyEvent('onboarding_ai_instructions_copied', {
+      app_id: 'com.example.app',
+      existing_app: true,
+      intent: 'ota',
+      org_id: 'org-id',
+      setup_command: 'ota',
+    })
+
+    expect(capture).toHaveBeenCalledWith(
+      'onboarding_ai_instructions_copied',
+      'https://supabase.capgo.test',
+      expect.objectContaining({
+        app_id: 'com.example.app',
+        existing_app: true,
+        flow: 'pre_org',
+        intent: 'ota',
+        onboarding_attempt_id: expect.any(String),
+        onboarding_version: ONBOARDING_ANALYTICS_VERSION,
+        org_id: 'org-id',
+        resumed: true,
+        setup_command: 'ota',
+        step: 'setup',
+      }),
+    )
+    expect(properties).toEqual(capture.mock.calls[0]?.[2])
+  })
+
   it.concurrent('deduplicates completion for one visit and resets timing after back navigation', () => {
     let now = 10
     const capture = vi.fn()
