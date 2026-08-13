@@ -139,7 +139,14 @@ async function submitForm() {
     }
 
     if (data?.access_token && data?.refresh_token) {
-      await router.replace(`/login?access_token=${encodeURIComponent(data.access_token)}&refresh_token=${encodeURIComponent(data.refresh_token)}`)
+      const supabase = useSupabase()
+      const { error: sessionError } = await supabase.auth.setSession({
+        access_token: data.access_token,
+        refresh_token: data.refresh_token,
+      })
+      if (sessionError)
+        throw sessionError
+      await router.replace('/login')
     }
     else {
       captchaComponent.value?.reset()

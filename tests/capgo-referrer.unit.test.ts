@@ -27,12 +27,15 @@ describe('isDirectLoginLanding', () => {
     expect(isDirectLoginLanding('https://console.capgo.app/login')).toBe(true)
     expect(isDirectLoginLanding('https://console.capgo.app/login?access_token=a&refresh_token=b')).toBe(true)
     expect(isDirectLoginLanding('https://console.capgo.app/login/')).toBe(true)
+    expect(isDirectLoginLanding('https://example.com/console/login')).toBe(true)
   })
 
   it.concurrent('is false when another console page loaded first', () => {
     expect(isDirectLoginLanding('https://console.capgo.app/invitation?invite_magic_string=x')).toBe(false)
     expect(isDirectLoginLanding('https://console.capgo.app/dashboard')).toBe(false)
     expect(isDirectLoginLanding('https://console.capgo.app/')).toBe(false)
+    expect(isDirectLoginLanding('https://console.capgo.app/notlogin')).toBe(false)
+    expect(isDirectLoginLanding('https://example.com/console/invitation')).toBe(false)
   })
 
   it.concurrent('is true when the first URL is missing or invalid', () => {
