@@ -29,7 +29,7 @@ describe('admin daily conversion chart', () => {
 
     expect(options.indexAxis).toBe('x')
     expect(options.scales?.y).toMatchObject({ min: 0, max: 100 })
-    expect(label?.({ dataIndex: 0, parsed: { y: 60 } } as never)).toBe('60% · 3 / 5 attempts')
-    expect(label?.({ dataIndex: 1, parsed: { y: null } } as never)).toBe('')
+    expect(label?.call({} as never, { dataIndex: 0, parsed: { y: 60 } } as never)).toBe('60% · 3 / 5 attempts')
+    expect(label?.call({} as never, { dataIndex: 1, parsed: { y: null } } as never)).toBe('')
   })
 })
