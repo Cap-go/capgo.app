@@ -45,8 +45,9 @@ describe('app onboarding API key loading state', () => {
     expect(onboardingSource).toContain('<span v-if="!usesBuilderSetupCommand" class="text-emerald-300">&nbsp;{{ apiKey }}</span>')
   })
 
-  it.concurrent('provides concise loading copy in the English locale', () => {
+  it.concurrent('provides secure onboarding copy in the English locale', () => {
     expect(englishMessages['app-onboarding-command-apikey-loading']).toBe('Creating your secure API key…')
+    expect(englishMessages['app-onboarding-ai-help-prompt']).toContain('do not ask me to paste my real Capgo API key into this chat')
   })
 
   it.concurrent('asks whether to include the API key and makes inclusion primary', () => {
@@ -60,7 +61,11 @@ describe('app onboarding API key loading state', () => {
     expect(copyHandler).toContain('await loadApiKey()')
     expect(copyHandler.indexOf('await loadApiKey()')).toBeLessThan(copyHandler.indexOf('dialogStore.openDialog({'))
     expect(copyHandler).toContain('createAiHelpPrompt(redactedCliCommand.value)')
-    expect(copyHandler).toContain('createAiHelpPrompt(cliCommand.value)')
-    expect(copyHandler).toContain("role: 'primary'")
+    const withKeyButtonStart = copyHandler.indexOf("text: t('app-onboarding-ai-help-copy-with-key')")
+    expect(withKeyButtonStart).toBeGreaterThanOrEqual(0)
+    const withKeyButton = copyHandler.slice(withKeyButtonStart)
+    expect(withKeyButton).toContain("role: 'primary'")
+    expect(withKeyButton).toContain('disabled: !apiKey.value')
+    expect(withKeyButton).toContain('createAiHelpPrompt(cliCommand.value)')
   })
 })
