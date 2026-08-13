@@ -152,6 +152,37 @@ export interface GettingStartedStep {
   actionKey: string
 }
 
+const GETTING_STARTED_STEP_DEFS: Array<Omit<GettingStartedStep, 'done'>> = [
+  {
+    id: 'cli_install',
+    group: 'essential',
+    titleKey: 'onboarding-next-cli-install',
+    descKey: 'onboarding-next-cli-install-desc',
+    actionKey: 'getting-started-action-setup',
+  },
+  {
+    id: 'live_update',
+    group: 'essential',
+    titleKey: 'getting-started-live-update',
+    descKey: 'getting-started-live-update-desc',
+    actionKey: 'getting-started-action-setup',
+  },
+  {
+    id: 'store_release',
+    group: 'essential',
+    titleKey: 'store-release-validation-badge',
+    descKey: 'onboarding-next-ota-store-desc',
+    actionKey: 'getting-started-action-validate',
+  },
+  {
+    id: 'builder',
+    group: 'grow',
+    titleKey: 'builder-promo-banner-title',
+    descKey: 'builder-promo-banner-subtitle',
+    actionKey: 'getting-started-action-explore',
+  },
+]
+
 function onboardingStage(ledger: AppOnboardingLedger): AppOnboardingStage | null {
   const ota = ledger.features?.ota ?? {}
   const cliInstall = ledger.features?.cli_install ?? {}
@@ -185,40 +216,10 @@ export function buildGettingStartedSteps(
   ledger: AppOnboardingLedger,
   extras?: { builderDone?: boolean },
 ): GettingStartedStep[] {
-  return [
-    {
-      id: 'cli_install',
-      group: 'essential',
-      done: isGettingStartedStepDone(ledger, 'cli_install', extras),
-      titleKey: 'onboarding-next-cli-install',
-      descKey: 'onboarding-next-cli-install-desc',
-      actionKey: 'getting-started-action-setup',
-    },
-    {
-      id: 'live_update',
-      group: 'essential',
-      done: isGettingStartedStepDone(ledger, 'live_update', extras),
-      titleKey: 'getting-started-live-update',
-      descKey: 'getting-started-live-update-desc',
-      actionKey: 'getting-started-action-setup',
-    },
-    {
-      id: 'store_release',
-      group: 'essential',
-      done: isGettingStartedStepDone(ledger, 'store_release', extras),
-      titleKey: 'store-release-validation-badge',
-      descKey: 'onboarding-next-ota-store-desc',
-      actionKey: 'getting-started-action-validate',
-    },
-    {
-      id: 'builder',
-      group: 'grow',
-      done: isGettingStartedStepDone(ledger, 'builder', extras),
-      titleKey: 'builder-promo-banner-title',
-      descKey: 'builder-promo-banner-subtitle',
-      actionKey: 'getting-started-action-explore',
-    },
-  ]
+  return GETTING_STARTED_STEP_DEFS.map(def => ({
+    ...def,
+    done: isGettingStartedStepDone(ledger, def.id, extras),
+  }))
 }
 
 export function gettingStartedProgress(steps: GettingStartedStep[]): {
