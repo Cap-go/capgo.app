@@ -463,6 +463,42 @@ export const useOrganizationStore = defineStore('organization', () => {
     return _initialLoadPromise.value.promise
   }
 
+  const updateAppOnboarding = (appId: string, onboarding: OrganizationApp['onboarding'] | null | undefined) => {
+    const existing = _appsByAppId.value.get(appId)
+    if (!existing || onboarding == null)
+      return
+
+    const next = { ...existing, onboarding }
+    const nextByAppId = new Map(_appsByAppId.value)
+    nextByAppId.set(appId, next)
+    _appsByAppId.value = nextByAppId
+
+    const orgApps = _appsByOrgId.value.get(existing.owner_org)
+    if (!orgApps)
+      return
+    const nextByOrgId = new Map(_appsByOrgId.value)
+    nextByOrgId.set(existing.owner_org, orgApps.map(app => app.app_id === appId ? next : app))
+    _appsByOrgId.value = nextByOrgId
+  }
+
+  const refreshAppsOnboarding = async (orgId?: string) => {
+    const orgIds = orgId ? [orgId] : Array.from(_appsByOrgId.value.keys())
+    if (orgIds.length === 0)
+      return
+
+    const { data, error } = await supabase
+      .from('apps')
+      .select('app_id, onboarding')
+      .in('owner_org', orgIds)
+
+    if (error) {
+      console.error('Cannot refresh app onboarding', error)
+      return
+    }
+    for (const row of data ?? [])
+      updateAppOnboarding(row.app_id, row.onboarding)
+  }
+
   const getCurrentRoleForApp = (appId: string) => {
     if (_organizationsByAppId.value.size < 1)
       throw new Error('Organizations by app_id map is empty')
@@ -775,6 +811,8 @@ export const useOrganizationStore = defineStore('organization', () => {
     getAppByAppId,
     getAppsByOrgId,
     awaitInitialLoad,
+    updateAppOnboarding,
+    refreshAppsOnboarding,
     deleteOrganization,
     canDeleteOrganization,
     checkPasswordPolicyImpact,

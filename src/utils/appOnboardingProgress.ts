@@ -203,10 +203,8 @@ export function isGettingStartedStepDone(
     return Boolean(cliInstall.succeeded_at)
       || rankAppOnboardingStage(stage) > rankAppOnboardingStage('local_only')
   }
-  if (id === 'live_update') {
-    return Boolean(ota.succeeded_at || ota.started_at)
-      || rankAppOnboardingStage(stage) >= rankAppOnboardingStage('native_unknown')
-  }
+  if (id === 'live_update')
+    return Boolean(ota.succeeded_at)
   if (id === 'store_release')
     return stage === 'store_live'
   return extras?.builderDone === true || Boolean(builder.succeeded_at)

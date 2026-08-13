@@ -3410,6 +3410,19 @@ export async function getAdminOnboardingFunnel(
           AND si.paid_at < o.created_at + interval '7 days'
         GROUP BY o.created_at::date
       ),
+      org_distribution_stages AS (
+        SELECT
+          a.owner_org,
+          MAX(CASE WHEN a.onboarding -> 'features' -> 'ota' ->> 'stage' = 'store_live' THEN 1 ELSE 0 END) AS has_store_live,
+          MAX(CASE WHEN a.onboarding -> 'features' -> 'ota' ->> 'stage' = 'testflight' THEN 1 ELSE 0 END) AS has_testflight
+        FROM apps a
+        INNER JOIN orgs o ON o.id = a.owner_org
+        INNER JOIN public.users u ON u.id = o.created_by
+        WHERE o.created_at >= ${start_date}::timestamp
+          AND o.created_at < ${end_date}::timestamp
+          AND u.created_via_invite = false
+        GROUP BY a.owner_org
+      ),
       daily_distribution AS (
         SELECT
           o.created_at::date as date,
@@ -3422,13 +3435,7 @@ export async function getAdminOnboardingFunnel(
         FROM orgs o
         INNER JOIN public.users u ON u.id = o.created_by
         INNER JOIN apps a ON a.owner_org = o.id
-        INNER JOIN LATERAL (
-          SELECT
-            MAX(CASE WHEN dist_apps.onboarding -> 'features' -> 'ota' ->> 'stage' = 'store_live' THEN 1 ELSE 0 END) AS has_store_live,
-            MAX(CASE WHEN dist_apps.onboarding -> 'features' -> 'ota' ->> 'stage' = 'testflight' THEN 1 ELSE 0 END) AS has_testflight
-          FROM apps dist_apps
-          WHERE dist_apps.owner_org = o.id
-        ) stages ON true
+        INNER JOIN org_distribution_stages stages ON stages.owner_org = o.id
         WHERE o.created_at >= ${start_date}::timestamp
           AND o.created_at < ${end_date}::timestamp
           AND u.created_via_invite = false

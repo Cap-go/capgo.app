@@ -1,6 +1,10 @@
 const STORAGE_PREFIX = 'capgo.gettingStarted.dismissed'
 
-export function gettingStartedDismissedKey(userId: string) {
+export function gettingStartedDismissedKey(userId: string, appId: string) {
+  return `${STORAGE_PREFIX}.${userId}.${appId}`
+}
+
+export function gettingStartedDismissedLegacyKey(userId: string) {
   return `${STORAGE_PREFIX}.${userId}`
 }
 
@@ -23,21 +27,34 @@ export function serializeDismissedGettingStartedAppIds(appIds: Iterable<string>)
   return JSON.stringify([...new Set(appIds)])
 }
 
-export function readDismissedGettingStartedAppIds(userId: string): Set<string> {
-  if (!userId || typeof localStorage === 'undefined')
-    return new Set()
-  return parseDismissedGettingStartedAppIds(localStorage.getItem(gettingStartedDismissedKey(userId)))
+function readStorage(key: string): string | null {
+  try {
+    return localStorage.getItem(key)
+  }
+  catch {
+    return null
+  }
+}
+
+function writeStorage(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value)
+  }
+  catch {
+    // Ignore blocked or full storage so sidebar render and dismiss clicks stay safe.
+  }
 }
 
 export function isGettingStartedDismissed(userId: string, appId: string) {
-  return readDismissedGettingStartedAppIds(userId).has(appId)
+  if (!userId || !appId || typeof localStorage === 'undefined')
+    return false
+  if (readStorage(gettingStartedDismissedKey(userId, appId)) === '1')
+    return true
+  return parseDismissedGettingStartedAppIds(readStorage(gettingStartedDismissedLegacyKey(userId))).has(appId)
 }
 
 export function dismissGettingStarted(userId: string, appId: string) {
   if (!userId || !appId || typeof localStorage === 'undefined')
     return
-
-  const dismissed = readDismissedGettingStartedAppIds(userId)
-  dismissed.add(appId)
-  localStorage.setItem(gettingStartedDismissedKey(userId), serializeDismissedGettingStartedAppIds(dismissed))
+  writeStorage(gettingStartedDismissedKey(userId, appId), '1')
 }

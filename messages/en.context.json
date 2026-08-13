@@ -1933,7 +1933,6 @@
   "onboarding-next-ota-device-desc": "Used in Capgo web console areas: pages/app. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "onboarding-next-ota-store": "Used in Capgo web console areas: pages/app. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "onboarding-next-ota-store-desc": "Used in Capgo web console areas: pages/app. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
-  "onboarding-next-title": "Used in Capgo web console areas: pages/app. Role: section or dialog title. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "onboarding-prerequisites-built": "Used in Capgo web console areas: components/dashboard. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "onboarding-prerequisites-capacitor": "Used in Capgo web console areas: components/dashboard. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "onboarding-prerequisites-cli-desc": "Used in Capgo web console areas: components/dashboard. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",

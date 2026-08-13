@@ -99,7 +99,7 @@ describe('app onboarding progress RPCs', () => {
     expect(error).toBeTruthy()
   })
 
-  it('sets started_at only and cannot write succeeded_at', async () => {
+  it('sets started_at and persists it', async () => {
     const authClient = createAuthClient()
     const { error: signInError } = await authClient.auth.signInWithPassword({
       email: USER_EMAIL,
@@ -127,6 +127,41 @@ describe('app onboarding progress RPCs', () => {
     const persistedLedger = parseAppOnboardingLedger(persisted?.onboarding)
     expect(persistedLedger.features?.cli_install?.started_at).toBeTruthy()
     expect(persistedLedger.features?.cli_install?.succeeded_at).toBeFalsy()
+  })
+
+  it('rejects direct authenticated writes to apps.onboarding', async () => {
+    const authClient = createAuthClient()
+    const { error: signInError } = await authClient.auth.signInWithPassword({
+      email: USER_EMAIL,
+      password: USER_PASSWORD,
+    })
+    if (signInError)
+      throw signInError
+
+    const { error: _updateError } = await authClient
+      .from('apps')
+      .update({
+        onboarding: {
+          features: {
+            ota: {
+              succeeded_at: '2026-01-01T00:00:00.000Z',
+              stage: 'store_live',
+            },
+          },
+        },
+      })
+      .eq('app_id', APP_RPC)
+
+    const { data, error: readError } = await serviceRoleSupabase
+      .from('apps')
+      .select('onboarding')
+      .eq('app_id', APP_RPC)
+      .single()
+    expect(readError).toBeNull()
+    const ledger = parseAppOnboardingLedger(data?.onboarding)
+    expect(ledger.features?.ota?.succeeded_at).toBeFalsy()
+    expect(ledger.features?.ota?.stage).not.toBe('store_live')
+    expect(ledger.features?.cli_install?.started_at).toBeTruthy()
   })
 
   it('keeps TestFlight-only apps off store_live', async () => {

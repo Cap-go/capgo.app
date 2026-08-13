@@ -137,13 +137,22 @@ async function markOnboardingFeatureStarted(featureKey: 'cli_install' | 'ota' | 
   if (markedOnboardingFeatures.has(markKey))
     return
 
-  markedOnboardingFeatures.add(markKey)
-  const { error } = await supabase.rpc('mark_onboarding_feature_started', {
-    p_app_id: appId,
-    p_feature_key: featureKey,
-  })
-  if (error) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    markedOnboardingFeatures.add(markKey)
+    const { data, error } = await supabase.rpc('mark_onboarding_feature_started', {
+      p_app_id: appId,
+      p_feature_key: featureKey,
+    })
+    if (!error) {
+      organizationStore.updateAppOnboarding(appId, data)
+      return
+    }
+
     markedOnboardingFeatures.delete(markKey)
+    if (attempt === 0) {
+      await new Promise(resolve => setTimeout(resolve, 400))
+      continue
+    }
     console.error('Failed to mark onboarding feature started', error)
   }
 }
@@ -999,7 +1008,7 @@ async function seedDemoData() {
       throw error
     }
 
-    router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}?refresh=true`)
+    router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}/getting-started`)
   }
   catch (error) {
     console.error('Cannot seed demo data', error)
@@ -1087,7 +1096,7 @@ function openDashboard() {
     })
   }
   allowOnboardingDashboardExploration(onboardingUserId.value, createdApp.value.app_id)
-  router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}`)
+  router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}/getting-started`)
 }
 
 onMounted(async () => {

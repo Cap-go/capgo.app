@@ -15,6 +15,8 @@ import {
   shouldShowOnboardingNextStep,
 } from '../src/utils/appOnboardingProgress.ts'
 import {
+  gettingStartedDismissedKey,
+  gettingStartedDismissedLegacyKey,
   parseDismissedGettingStartedAppIds,
   serializeDismissedGettingStartedAppIds,
 } from '../src/utils/gettingStartedDismiss.ts'
@@ -143,7 +145,7 @@ describe('app onboarding progress ledger', () => {
     expect(live.every(step => step.done)).toBe(true)
     expect(shouldShowGettingStartedNav({
       features: {
-        ota: { stage: 'store_live' },
+        ota: { succeeded_at: '2026-08-04T00:00:00.000Z', stage: 'store_live' },
       },
     })).toBe(false)
     expect(gettingStartedProgress(live).percent).toBe(100)
@@ -160,9 +162,21 @@ describe('app onboarding progress ledger', () => {
     expect(shouldShowGettingStartedNav({
       features: {
         cli_install: { succeeded_at: '2026-08-02T00:00:00.000Z' },
-        ota: { stage: 'store_live' },
+        ota: { succeeded_at: '2026-08-04T00:00:00.000Z', stage: 'store_live' },
       },
     })).toBe(false)
+  })
+
+  it.concurrent('does not mark live_update done from a device stage alone', () => {
+    const steps = buildGettingStartedSteps({
+      features: {
+        cli_install: { succeeded_at: '2026-08-02T00:00:00.000Z' },
+        ota: { stage: 'native_unknown' },
+      },
+    })
+    expect(steps.find(step => step.id === 'cli_install')?.done).toBe(true)
+    expect(steps.find(step => step.id === 'live_update')?.done).toBe(false)
+    expect(steps.find(step => step.id === 'store_release')?.done).toBe(false)
   })
 })
 
@@ -172,5 +186,10 @@ describe('getting started dismiss storage', () => {
     expect(parseDismissedGettingStartedAppIds('not-json').size).toBe(0)
     expect([...parseDismissedGettingStartedAppIds('["com.demo.app",""]')]).toEqual(['com.demo.app'])
     expect(serializeDismissedGettingStartedAppIds(['com.a.app', 'com.a.app'])).toBe('["com.a.app"]')
+  })
+
+  it.concurrent('uses a per-app dismiss key', () => {
+    expect(gettingStartedDismissedKey('user-1', 'com.demo.app')).toBe('capgo.gettingStarted.dismissed.user-1.com.demo.app')
+    expect(gettingStartedDismissedLegacyKey('user-1')).toBe('capgo.gettingStarted.dismissed.user-1')
   })
 })

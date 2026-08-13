@@ -288,7 +288,6 @@
   "distribution-stage-play-unknown": "Play (track unknown)",
   "distribution-stage-testflight": "TestFlight",
   "distribution-stage-store-live": "App Store live",
-  "onboarding-next-title": "Next step",
   "onboarding-next-cli-install": "Install Capgo on a device",
   "onboarding-next-cli-install-desc": "Run the CLI install command, then open the app so Capgo can see a real device.",
   "onboarding-next-ota-device": "Open the app on a device",

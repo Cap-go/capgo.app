@@ -30,7 +30,7 @@ let builderReqToken = 0
 
 const orgApp = computed(() => id.value ? organizationStore.getAppByAppId(id.value) : undefined)
 const appName = computed(() => app.value?.name || orgApp.value?.name || id.value)
-const appIcon = computed(() => orgApp.value?.icon_url || app.value?.icon_url || '')
+const appIcon = computed(() => orgApp.value?.icon_url || '')
 const iconLoading = computed(() => orgApp.value?.icon_url_loading === true)
 
 const ledger = computed(() => parseAppOnboardingLedger(app.value?.onboarding))
@@ -69,6 +69,7 @@ async function checkBuilderDone(appId: string) {
       .select('id', { count: 'exact', head: true })
       .eq('owner_org', orgId)
       .eq('app_id', appId)
+      .in('status', ['succeeded', 'released'])
     if (token !== builderReqToken || error)
       return
     builderDone.value = (count ?? 0) > 0
@@ -262,7 +263,6 @@ watch(() => id.value, async (appId) => {
       v-if="id"
       ref="storeModal"
       :app-id="id"
-      :show-banner="false"
     />
     <BuilderPresentationModal
       :open="builderModalOpen"

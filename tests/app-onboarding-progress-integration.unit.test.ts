@@ -83,11 +83,13 @@ describe('app onboarding progress analytics integration', () => {
     const demoAction = sourceBetween('async function seedDemoData()', 'async function copyText(')
     expect(demoAction).not.toContain('completeStep')
     expect(demoAction).not.toContain('completeAndViewStep')
+    expect(demoAction).toContain('/getting-started')
 
     const dashboardExit = sourceBetween('function openDashboard()', 'onMounted(async () => {')
     expect(dashboardExit).toContain("if (flowStep.value === 'install' || flowStep.value === 'setup')")
     expect(dashboardExit).toContain('progressTracker?.completeStep(flowStep.value, {')
     expect(dashboardExit).toContain('appId: createdApp.value.app_id')
+    expect(dashboardExit).toContain('/getting-started')
     expect(dashboardExit.indexOf('completeStep')).toBeLessThan(dashboardExit.indexOf('router.push'))
   })
 })

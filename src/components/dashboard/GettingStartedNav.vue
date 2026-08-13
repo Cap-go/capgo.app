@@ -24,7 +24,8 @@ const dismissedTick = ref(0)
 
 const userId = computed(() => main.user?.id ?? main.auth?.id ?? '')
 
-function visibleAppsForOrg(_generation: number) {
+const apps = computed(() => {
+  void dismissedTick.value
   const orgId = organizationStore.currentOrganization?.gid
   if (!orgId || !userId.value)
     return [] as OrganizationApp[]
@@ -34,9 +35,7 @@ function visibleAppsForOrg(_generation: number) {
       return false
     return shouldShowGettingStartedNav(parseAppOnboardingLedger(app.onboarding))
   })
-}
-
-const apps = computed(() => visibleAppsForOrg(dismissedTick.value))
+})
 
 function appLabel(app: OrganizationApp) {
   return app.name || app.app_id
@@ -71,9 +70,10 @@ function dismiss(app: OrganizationApp, event: Event) {
     void router.push(`/app/${encodeURIComponent(app.app_id)}`)
 }
 
-watch(() => userId.value, () => {
-  dismissedTick.value += 1
-})
+watch(() => organizationStore.currentOrganization?.gid, (orgId) => {
+  if (orgId)
+    void organizationStore.refreshAppsOnboarding(orgId)
+}, { immediate: true })
 </script>
 
 <template>

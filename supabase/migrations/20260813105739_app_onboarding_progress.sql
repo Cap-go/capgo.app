@@ -7,7 +7,8 @@
 -- - refresh_app_onboarding_progress: hourly cron_tasks job, service_role only. Pages apps
 --   by app_id (LIMIT 500), then bounded joins on devices (partial app_id indexes),
 --   app_versions(app_id), daily_version(app_id, date), build_requests(app_id).
--- - Plugin hot paths (/updates, /stats) never write this column.
+-- - User-facing writes to apps.onboarding are blocked by protect_apps_onboarding;
+--   only SECURITY DEFINER RPCs and service_role/postgres can change the column.
 
 ALTER TABLE "public"."apps"
   ADD COLUMN IF NOT EXISTS "onboarding" "jsonb" DEFAULT '{}'::"jsonb" NOT NULL;
@@ -26,6 +27,34 @@ ALTER TABLE "public"."apps"
 
 COMMENT ON COLUMN "public"."apps"."onboarding" IS
   'Extensible feature onboarding ledger. Shape: {"refreshed_at": iso, "features": { "<key>": { "started_at", "succeeded_at", "last_used_at", "retained_30d_at", "stage"? } }}. Success/usage/stage are written by refresh_app_onboarding_progress; clients may only set started_at via mark_onboarding_feature_started.';
+
+CREATE OR REPLACE FUNCTION "public"."protect_apps_onboarding"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO ''
+    AS $$
+BEGIN
+  IF TG_OP = 'UPDATE' AND NEW.onboarding IS DISTINCT FROM OLD.onboarding THEN
+    IF current_user IN ('authenticated', 'anon') THEN
+      NEW.onboarding := OLD.onboarding;
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+ALTER FUNCTION "public"."protect_apps_onboarding"() OWNER TO "postgres";
+
+REVOKE ALL ON FUNCTION "public"."protect_apps_onboarding"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."protect_apps_onboarding"() TO "postgres";
+GRANT ALL ON FUNCTION "public"."protect_apps_onboarding"() TO "service_role";
+GRANT ALL ON FUNCTION "public"."protect_apps_onboarding"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."protect_apps_onboarding"() TO "anon";
+
+DROP TRIGGER IF EXISTS "protect_apps_onboarding" ON "public"."apps";
+CREATE TRIGGER "protect_apps_onboarding"
+  BEFORE UPDATE ON "public"."apps"
+  FOR EACH ROW
+  EXECUTE FUNCTION "public"."protect_apps_onboarding"();
 
 CREATE INDEX IF NOT EXISTS "idx_apps_onboarding_ota_stage"
   ON "public"."apps" (("onboarding" -> 'features'::"text" -> 'ota'::"text" ->> 'stage'::"text"));
