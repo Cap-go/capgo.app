@@ -2754,7 +2754,7 @@ async function waitForVerifiedUpdaterInstall(
     if (state.ready) {
       const declaredAt = formatInitFilePath(state.packageJsonPath)
       const versionLabel = state.installedVersion ? ` ${state.installedVersion}` : ''
-      pLog.info(`${CAPGO_UPDATER_PACKAGE}${versionLabel} is in ${declaredAt} and node_modules ✅`)
+      pLog.info(`${CAPGO_UPDATER_PACKAGE}${versionLabel} is declared in ${declaredAt} and installed in node_modules ✅`)
       return state
     }
 
@@ -2825,12 +2825,12 @@ async function addUpdaterStep(orgId: string, apikey: string, appId: string) {
       const installState = getUpdaterInstallState(path)
 
       if (installState.ready) {
-        s.stop(`${CAPGO_UPDATER_PACKAGE} already in ${formatInitFilePath(path)} ✅`)
+        s.stop(`${CAPGO_UPDATER_PACKAGE} is already declared in ${formatInitFilePath(path)} and installed in node_modules ✅`)
       }
       else {
         try {
           runUpdaterInstallCommand(pm, path, versionToInstall)
-          s.stop(`Installed ${CAPGO_UPDATER_PACKAGE} in ${formatInitFilePath(path)} ✅`)
+          s.stop(`Installed ${CAPGO_UPDATER_PACKAGE}; declaration is in ${formatInitFilePath(path)} ✅`)
         }
         catch (error) {
           s.stop('Updater install failed ❌')
