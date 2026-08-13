@@ -6,7 +6,6 @@ import { computed, h, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
-import IconInfo from '~icons/lucide/info'
 import IconSmartphone from '~icons/lucide/smartphone'
 import DateRangePicker from '~/components/DateRangePicker.vue'
 import { formatDate } from '~/services/date'
@@ -629,24 +628,6 @@ watch([selectedPlatform, selectedVersionNames], () => {
 
 <template>
   <div>
-    <div
-      v-if="showRangeFilterBanner"
-      class="mx-3 mt-3 flex flex-col gap-3 rounded-lg border border-azure-200 bg-azure-50 px-4 py-3 text-sm text-slate-700 dark:border-azure-800 dark:bg-azure-900/20 dark:text-slate-200 sm:flex-row sm:items-center sm:justify-between"
-      data-test="devices-range-filter-banner"
-    >
-      <output class="flex min-w-0 items-start gap-3">
-        <IconInfo class="mt-0.5 h-5 w-5 shrink-0 text-azure-600 dark:text-azure-400" aria-hidden="true" />
-        {{ t('devices-filter-range-banner', { range: dateRangeLabel, shown: total, total: unfilteredTotal }) }}
-      </output>
-      <button
-        type="button"
-        class="d-btn d-btn-sm h-9 min-h-9 shrink-0 border-azure-300 bg-white text-azure-700 hover:border-azure-400 hover:bg-azure-100 dark:border-azure-700 dark:bg-slate-900 dark:text-azure-200 dark:hover:bg-azure-900/40"
-        data-test="devices-range-filter-change"
-        @click="openDateRangePicker"
-      >
-        {{ t('devices-empty-change-time') }}
-      </button>
-    </div>
     <DataTable
       v-model:filters="filters" v-model:columns="columns" v-model:current-page="currentPage" v-model:search="search"
       :total="total" :offset="offset" :element-list="elements"
@@ -661,13 +642,24 @@ watch([selectedPlatform, selectedVersionNames], () => {
       @clear-extra-filters="clearExtraFilters"
     >
       <template #toolbar-extras>
-        <DateRangePicker
-          ref="dateRangePickerRef"
-          v-model="dateRange"
-          v-model:mode="dateRangeMode"
-          compact
-          @apply="onDateRangeApply"
-        />
+        <div class="flex min-h-10 min-w-0 items-center gap-1.5">
+          <DateRangePicker
+            ref="dateRangePickerRef"
+            v-model="dateRange"
+            v-model:mode="dateRangeMode"
+            compact
+            @apply="onDateRangeApply"
+          />
+          <button
+            v-if="showRangeFilterBanner"
+            type="button"
+            class="min-w-0 max-w-sm cursor-pointer rounded-md border border-cyan-300 bg-cyan-50 px-2 py-0.5 text-left text-xs font-medium text-cyan-700 transition-colors hover:border-cyan-300 hover:text-cyan-700 focus:outline-none focus:ring-2 focus:ring-cyan-400 focus:ring-offset-1 dark:border-cyan-500/40 dark:bg-cyan-500/15 dark:text-cyan-200 dark:hover:border-cyan-500/40 dark:hover:text-cyan-200 dark:focus:ring-offset-slate-800"
+            data-test="devices-range-filter-banner"
+            @click="openDateRangePicker"
+          >
+            {{ t('devices-filter-range-banner', { range: dateRangeLabel, shown: total, total: unfilteredTotal }) }}
+          </button>
+        </div>
       </template>
       <template #empty-state="{ clearFilters, hasActiveFilters }">
         <div

@@ -134,7 +134,7 @@ test.describe('Devices empty state', () => {
     await expect(banner).toContainText('The Last 30 minutes filter is on, so you see 0 of 3 devices.')
     await expect(page.locator('[data-test="devices-empty-state"]')).toBeVisible()
 
-    await banner.getByRole('button', { name: 'Change time range' }).click()
+    await banner.click()
     await expect(page.getByRole('dialog', { name: /Date range:/ })).toBeVisible()
   })
 })
