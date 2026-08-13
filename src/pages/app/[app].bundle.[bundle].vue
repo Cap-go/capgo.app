@@ -100,7 +100,9 @@ const canPromoteBundle = computed(() => promotableChannelIds.value.size > 0)
 const linkedChannelsForVersion = computed(() => {
   if (!version.value)
     return []
-  return channels.value.filter(channel => channel.version === version.value!.id)
+  return channels.value.filter(channel =>
+    channel.version === version.value!.id || channel.rollout_version === version.value!.id,
+  )
 })
 
 const primaryLinkedChannel = computed(() => linkedChannelsForVersion.value[0] ?? null)

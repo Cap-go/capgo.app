@@ -226,13 +226,14 @@ export interface DeviceVersionAdoptionSummary {
 export function summarizeDeviceVersionAdoption(
   counts: Record<string, number | string | null | undefined>,
   versionName?: string | null,
+  versionId?: number | null,
 ): DeviceVersionAdoptionSummary {
   const totalDevices = Object.values(counts).reduce<number>((sum, value) => {
     return sum + Math.max(0, Math.round(toStatNumber(value)))
   }, 0)
-  const deviceCount = versionName
-    ? Math.max(0, Math.round(toStatNumber(counts[versionName] ?? 0)))
-    : 0
+  const namedCount = versionName ? counts[versionName] : undefined
+  const idCount = versionId != null ? counts[String(versionId)] : undefined
+  const deviceCount = Math.max(0, Math.round(toStatNumber(namedCount ?? idCount ?? 0)))
   const adoptionPercent = totalDevices > 0
     ? (Math.round((deviceCount / totalDevices) * 1000) / 10).toFixed(1)
     : '0.0'

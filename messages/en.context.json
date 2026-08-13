@@ -637,6 +637,7 @@
   "bundle-adoption": "Used in Capgo web console areas: components/bundle. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "bundle-adoption-devices": "Used in Capgo web console areas: components/bundle. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "bundle-adoption-empty": "Used in Capgo web console areas: components/bundle. Role: empty state text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "bundle-adoption-error": "Used in Capgo web console areas: components/bundle. Role: toast or status message. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "bundle-adoption-help": "Used in Capgo web console areas: components/bundle. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "bundle-assigned-to-this-channel": "Used in Capgo web console areas: pages/app. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "bundle-comment": "Used in Capgo web console areas: pages/app. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",

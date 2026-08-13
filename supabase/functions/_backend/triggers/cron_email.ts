@@ -212,20 +212,21 @@ async function loadDeployVersionAdoption(
   c: Context,
   appId: string,
   versionName?: string,
+  versionId?: number,
   channelName?: string,
 ) {
   try {
     const deviceCounts = await readDeviceVersionCounts(c, appId, channelName)
-    return summarizeDeviceVersionAdoption(deviceCounts, versionName)
+    return summarizeDeviceVersionAdoption(deviceCounts, versionName, versionId)
   }
   catch (error) {
     cloudlogErr({
       requestId: c.get('requestId'),
       message: 'Failed to read device version counts for deploy stats email',
       error,
-      metadata: { appId, versionName, channelName },
+      metadata: { appId, versionName, versionId, channelName },
     })
-    return summarizeDeviceVersionAdoption({}, versionName)
+    return summarizeDeviceVersionAdoption({}, versionName, versionId)
   }
 }
 
@@ -289,7 +290,7 @@ async function handleDeployInstallStats(
   const installs = sumVersionInstalls(versionStats, versionName, versionId)
 
   if (shouldSendDeployInstallStatsEmail(installs)) {
-    const adoption = await loadDeployVersionAdoption(c, appId, versionName, channelName)
+    const adoption = await loadDeployVersionAdoption(c, appId, versionName, versionId, channelName)
 
     await sendEmailToOrgMembers(c, 'bundle:install_stats_24h', 'deploy_stats_24h', {
       app_id: appId,

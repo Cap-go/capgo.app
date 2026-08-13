@@ -612,6 +612,7 @@
   "bundle-adoption": "Bundle reach",
   "bundle-adoption-devices": "{count} / {total} devices",
   "bundle-adoption-empty": "No devices have reported {version} yet. They pick it up the next time they check for updates.",
+  "bundle-adoption-error": "Could not load how many devices currently have {version}.",
   "bundle-adoption-help": "{count} of {total} devices ({percent}) currently report {version}.",
   "bundle-comment": "Comment",
   "bundle-comment-empty": "No comment",

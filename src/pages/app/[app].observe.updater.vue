@@ -85,7 +85,7 @@ const insightsLoading = ref(false)
 const selectedDays = ref<PeriodDayOption>(7)
 const app = ref<Database['public']['Tables']['apps']['Row']>()
 const insights = ref<LogInsightsResponse | null>(null)
-const publicChannel = ref<{ id: number, name: string, versionName: string } | null>(null)
+const publicChannels = ref<{ id: number, name: string, versionName: string }[]>([])
 let latestInsightsRequest = 0
 
 const appRouteSegment = computed(() => {
@@ -162,7 +162,7 @@ async function loadAppInfo() {
       .single()
     app.value = dataApp || app.value
 
-    const { data: channelData } = await supabase
+    const { data: channelsData } = await supabase
       .from('channels')
       .select(`
         id,
@@ -172,17 +172,21 @@ async function loadAppInfo() {
       .eq('app_id', id.value)
       .eq('public', true)
       .order('id', { ascending: true })
-      .limit(1)
-      .maybeSingle()
 
-    const version = channelData?.version as { id?: number, name?: string } | { id?: number, name?: string }[] | null | undefined
-    const versionRow = Array.isArray(version) ? version[0] : version
-    publicChannel.value = channelData && versionRow?.name
-      ? { id: channelData.id, name: channelData.name, versionName: versionRow.name }
-      : null
+    const uniqueByVersion = new Map<string, { id: number, name: string, versionName: string }>()
+    for (const channel of channelsData ?? []) {
+      const version = channel.version as { id?: number, name?: string } | { id?: number, name?: string }[] | null | undefined
+      const versionRow = Array.isArray(version) ? version[0] : version
+      const versionName = versionRow?.name
+      if (!versionName || uniqueByVersion.has(versionName))
+        continue
+      uniqueByVersion.set(versionName, { id: channel.id, name: channel.name, versionName })
+    }
+    publicChannels.value = [...uniqueByVersion.values()]
   }
   catch (error) {
     console.error(error)
+    publicChannels.value = []
   }
 }
 
@@ -288,11 +292,12 @@ watchEffect(async () => {
     <div v-else-if="app" class="w-full h-full px-4 pt-0 mx-auto mb-8 sm:px-6 md:pt-8 lg:px-8 max-w-9xl max-h-fit">
       <div class="flex flex-col gap-6">
         <BundleAdoptionCard
-          v-if="publicChannel"
+          v-for="channel in publicChannels"
+          :key="channel.id"
           :app-id="id"
-          :version-name="publicChannel.versionName"
-          :linked-channel-id="publicChannel.id"
-          :linked-channel-name="publicChannel.name"
+          :version-name="channel.versionName"
+          :linked-channel-id="channel.id"
+          :linked-channel-name="channel.name"
           compact
         />
         <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">

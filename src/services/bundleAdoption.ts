@@ -31,12 +31,9 @@ function findLatestIndex(datasets: ChartDatasetLike[]): number {
 
   for (const dataset of datasets) {
     const counts = getCountSeries(dataset)
-    const percents = dataset.data ?? []
-    const length = Math.max(counts.length, percents.length)
 
-    for (let index = length - 1; index >= 0; index--) {
-      const percent = percents[index]
-      if (toNonNegativeInt(counts[index]) > 0 || (typeof percent === 'number' && Number.isFinite(percent) && percent > 0)) {
+    for (let index = counts.length - 1; index >= 0; index--) {
+      if (toNonNegativeInt(counts[index]) > 0) {
         lastIndex = Math.max(lastIndex, index)
         break
       }
@@ -46,11 +43,9 @@ function findLatestIndex(datasets: ChartDatasetLike[]): number {
   return lastIndex
 }
 
-function percentFromShare(count: number, total: number, fallbackPercent: number | null | undefined): number {
+function percentFromShare(count: number, total: number): number {
   if (total > 0)
     return Math.round((count / total) * 1000) / 10
-  if (typeof fallbackPercent === 'number' && Number.isFinite(fallbackPercent))
-    return Math.max(0, Math.round(fallbackPercent * 10) / 10)
   return 0
 }
 
@@ -110,6 +105,6 @@ export function getLatestDayVersionAdoption(
     versionName: target.label,
     count,
     total,
-    percent: percentFromShare(count, total, target.data?.[lastIndex]),
+    percent: percentFromShare(count, total),
   }
 }

@@ -219,4 +219,15 @@ describe('summarizeDeviceVersionAdoption', () => {
       adoption_percent: '0.0',
     })
   })
+
+  it.concurrent('falls back to version_id string keys used by legacy device counts', () => {
+    expect(summarizeDeviceVersionAdoption({
+      9601: 40,
+      9602: 60,
+    }, '1.1.0', 9602)).toEqual({
+      device_count: 60,
+      total_devices: 100,
+      adoption_percent: '60.0',
+    })
+  })
 })

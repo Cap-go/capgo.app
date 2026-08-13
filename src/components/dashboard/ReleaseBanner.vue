@@ -25,6 +25,7 @@ const lastVersion = ref<string>('')
 const lastReleaseDate = ref<string | null>(null)
 const defaultChannelId = ref<number | null>(null)
 const adoptionPercent = ref<number | null>(null)
+let requestToken = 0
 
 const HOURS_48_IN_DAYS = 2
 
@@ -54,9 +55,12 @@ async function fetchReleaseInfo() {
     return
   }
 
+  const currentToken = ++requestToken
   isLoading.value = true
   try {
     await organizationStore.awaitInitialLoad()
+    if (currentToken !== requestToken)
+      return
     const orgId = organizationStore.currentOrganization?.gid
 
     if (!orgId) {
@@ -82,6 +86,9 @@ async function fetchReleaseInfo() {
       .eq('public', true)
       .limit(1)
 
+    if (currentToken !== requestToken)
+      return
+
     const latestVersion = versionsData?.[0]
     const defaultChannel = channelsData?.[0]
 
@@ -91,10 +98,20 @@ async function fetchReleaseInfo() {
       try {
         const { startDate, endDate } = getChartDateRange(false)
         const chartData = await useChartData(supabase, props.appId, startDate, endDate, 'bundle')
-        adoptionPercent.value = getLatestDayVersionAdoption(chartData?.datasets ?? [], latestVersion.name)?.percent ?? 0
+        if (currentToken !== requestToken)
+          return
+        if (!chartData) {
+          adoptionPercent.value = null
+        }
+        else {
+          const adoption = getLatestDayVersionAdoption(chartData.datasets ?? [], latestVersion.name)
+          adoptionPercent.value = adoption && adoption.total > 0 ? adoption.percent : null
+        }
       }
       catch (error) {
         console.error('Error fetching bundle adoption:', error)
+        if (currentToken !== requestToken)
+          return
         adoptionPercent.value = null
       }
     }
@@ -107,10 +124,13 @@ async function fetchReleaseInfo() {
     defaultChannelId.value = defaultChannel?.id || null
   }
   catch (error) {
+    if (currentToken !== requestToken)
+      return
     console.error('Error fetching release info:', error)
   }
   finally {
-    isLoading.value = false
+    if (currentToken === requestToken)
+      isLoading.value = false
   }
 }
 

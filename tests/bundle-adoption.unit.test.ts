@@ -56,4 +56,18 @@ describe('getLatestDayVersionAdoption', () => {
       percent: 60,
     })
   })
+
+  it.concurrent('ignores percent-only days that have no device counts', () => {
+    const adoption = getLatestDayVersionAdoption([
+      { label: '1.0.0', metaCountValues: [40, 0], data: [40, 80] },
+      { label: '1.1.0', metaCountValues: [60, 0], data: [60, 20] },
+    ], '1.1.0')
+
+    expect(adoption).toEqual({
+      versionName: '1.1.0',
+      count: 60,
+      total: 100,
+      percent: 60,
+    })
+  })
 })

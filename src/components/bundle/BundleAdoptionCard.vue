@@ -27,6 +27,7 @@ const router = useRouter()
 const supabase = useSupabase()
 
 const loading = ref(true)
+const loadError = ref(false)
 const adoption = ref<ReturnType<typeof getLatestDayVersionAdoption>>(null)
 let requestToken = 0
 
@@ -42,29 +43,32 @@ const hasDevices = computed(() => (adoption.value?.total ?? 0) > 0)
 async function loadAdoption() {
   if (!props.appId || !props.versionName) {
     adoption.value = null
+    loadError.value = false
     loading.value = false
     return
   }
 
   const currentToken = ++requestToken
   loading.value = true
+  loadError.value = false
   try {
     const { startDate, endDate } = getChartDateRange(false)
     const data = await useChartData(supabase, props.appId, startDate, endDate, 'bundle')
     if (currentToken !== requestToken)
       return
-    adoption.value = getLatestDayVersionAdoption(data?.datasets ?? [], props.versionName)
+    if (!data) {
+      loadError.value = true
+      adoption.value = null
+      return
+    }
+    adoption.value = getLatestDayVersionAdoption(data.datasets ?? [], props.versionName)
   }
   catch (error) {
     console.error('[BundleAdoptionCard] Failed to load adoption', error)
     if (currentToken !== requestToken)
       return
-    adoption.value = {
-      versionName: props.versionName,
-      count: 0,
-      total: 0,
-      percent: 0,
-    }
+    loadError.value = true
+    adoption.value = null
   }
   finally {
     if (currentToken === requestToken)
@@ -109,6 +113,9 @@ watch(() => [props.appId, props.versionName] as const, () => {
             <template v-if="loading">
               {{ t('loading-statistics') }}
             </template>
+            <template v-else-if="loadError">
+              {{ t('bundle-adoption-error', { version: versionName }) }}
+            </template>
             <template v-else-if="hasDevices">
               {{ t('bundle-adoption-help', {
                 version: versionName,
@@ -124,7 +131,7 @@ watch(() => [props.appId, props.versionName] as const, () => {
         </div>
       </div>
 
-      <div v-if="!loading" class="flex flex-col gap-3 min-w-0" :class="{ 'lg:w-80': compact }">
+      <div v-if="!loading && !loadError" class="flex flex-col gap-3 min-w-0" :class="{ 'lg:w-80': compact }">
         <div class="flex items-baseline gap-2">
           <span class="text-2xl font-semibold tabular-nums text-slate-900 dark:text-white">
             {{ percentLabel }}
