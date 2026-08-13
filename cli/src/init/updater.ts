@@ -18,8 +18,6 @@ export interface PackageInstallState {
   details: string[]
 }
 
-export type UpdaterInstallState = PackageInstallState
-
 interface PackageJsonDependencies {
   dependencies?: Record<string, unknown>
   devDependencies?: Record<string, unknown>
@@ -99,7 +97,7 @@ function readInstalledPackageVersion(packageJsonPath: string, packageName: strin
   return null
 }
 
-export function getPackageInstallState(packageJsonPath: string, packageName: string): PackageInstallState {
+function getPackageInstallState(packageJsonPath: string, packageName: string): PackageInstallState {
   const projectDir = dirname(packageJsonPath)
   const declaration = getDeclaredDependency(packageJsonPath, packageName)
   const installedVersion = readInstalledPackageVersion(packageJsonPath, packageName)
