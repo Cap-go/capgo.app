@@ -4,6 +4,7 @@ import {
   APP_NAME,
   BASE_URL,
   getAuthHeaders,
+  getEndpointUrl,
   headers,
   NON_OWNER_ORG_ID,
   ORG_ID,
@@ -78,7 +79,7 @@ describe('[POST] /private/events operations', () => {
   })
 
   it('accepts the allowlisted AI-instructions copy event with onboarding attempt context', async () => {
-    const response = await fetch(`${BASE_URL}/private/events`, {
+    const response = await fetch(getEndpointUrl('/private/events'), {
       method: 'POST',
       headers: {
         capgkey: headers.Authorization,

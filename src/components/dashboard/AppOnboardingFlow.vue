@@ -1021,7 +1021,7 @@ function trackSuccessfulCopy(event: OnboardingCopyEvent) {
     org_id: orgId,
     tags: { app_id: appId },
     tracking_version: 2,
-  }).catch()
+  }).catch(() => {})
 }
 
 async function copyCliCommand() {

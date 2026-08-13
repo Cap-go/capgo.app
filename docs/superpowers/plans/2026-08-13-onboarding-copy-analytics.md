@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Add safe onboarding copy-event context
+## Task 1: Add safe onboarding copy-event context
 
 **Files:**
 - Modify: `src/utils/onboardingProgressAnalytics.ts`
@@ -141,7 +141,7 @@ git add src/utils/onboardingProgressAnalytics.ts tests/onboarding-progress-analy
 git commit -m "feat(analytics): add onboarding copy event context"
 ```
 
-### Task 2: Remove the dialog and track successful frontend copies
+## Task 2: Remove the dialog and track successful frontend copies
 
 **Files:**
 - Modify: `src/components/dashboard/AppOnboardingFlow.vue`
@@ -233,7 +233,7 @@ function trackSuccessfulCopy(event: OnboardingCopyEvent) {
     org_id: orgId,
     tags: { app_id: appId },
     tracking_version: 2,
-  }).catch()
+  }).catch(() => {})
 }
 ```
 
@@ -241,9 +241,9 @@ Keep `app_id` in `tags` because the backend's existing authorization path reads
 it there. Put the full safe event context in `nonPersonTags` so it remains event
 metadata, not PostHog person state.
 
-5. Track `onboarding_cli_command_copied` only after `copyText(cliCommand.value)`
+1. Track `onboarding_cli_command_copied` only after `copyText(cliCommand.value)`
    returns `true`.
-6. In `copyAiInstructions`, return immediately after key-loading failure or an
+2. In `copyAiInstructions`, return immediately after key-loading failure or an
    empty key, copy `createAiHelpPrompt()` directly, and track
    `onboarding_ai_instructions_copied` only after success.
 
@@ -278,7 +278,7 @@ git add src/components/dashboard/AppOnboardingFlow.vue src/services/tracking.ts 
 git commit -m "feat(onboarding): copy AI instructions with API key"
 ```
 
-### Task 3: Support internal PostHog provider suppression
+## Task 3: Support internal PostHog provider suppression
 
 **Files:**
 - Modify: `supabase/functions/_backend/utils/tracking.ts`
@@ -356,7 +356,7 @@ git add supabase/functions/_backend/utils/tracking.ts tests/tracking.unit.test.t
 git commit -m "feat(tracking): support internal PostHog suppression"
 ```
 
-### Task 4: Allowlist AI-copy forwarding to Bento
+## Task 4: Allowlist AI-copy forwarding to Bento
 
 **Files:**
 - Create: `supabase/functions/_backend/utils/onboarding_copy_tracking.ts`
@@ -536,7 +536,7 @@ git add supabase/functions/_backend/utils/onboarding_copy_tracking.ts supabase/f
 git commit -m "feat(onboarding): forward AI copy event to Bento"
 ```
 
-### Task 5: Verify the complete change and publish the PR
+## Task 5: Verify the complete change and publish the PR
 
 **Files:**
 - Verify: all files changed in Tasks 1-4
