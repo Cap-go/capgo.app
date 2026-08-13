@@ -16,6 +16,7 @@ import { useSupabase } from '~/services/supabase'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useOrganizationStore } from '~/stores/organization'
 import { filterDailySeriesToBillingPeriod, resolveDashboardDailySeriesWindow } from '~/utils/chartOptimizations'
+import { shouldShowDashboardDemoData } from '~/utils/dashboardDemoMode'
 import { ensureMinDelay } from '~/utils/minDelay'
 import ChartCard from './ChartCard.vue'
 import DeploymentStatsChart from './DeploymentStatsChart.vue'
@@ -70,17 +71,12 @@ const consistentDemoData = computed(() => {
 const demoDeploymentData = computed(() => consistentDemoData.value.total)
 const demoDataByApp = computed(() => consistentDemoData.value.byApp)
 
-// Demo mode: show demo data only when forceDemo is true OR user has no apps
-// If user has apps, ALWAYS show real data (even if empty)
-const isDemoMode = computed(() => {
-  if (props.forceDemo)
-    return true
-  // If user has apps, never show demo data
-  if (dashboardAppsStore.apps.length > 0)
-    return false
-  // No apps and store is loaded = show demo
-  return dashboardAppsStore.isLoaded
-})
+const isDemoMode = computed(() => shouldShowDashboardDemoData({
+  forceDemo: props.forceDemo,
+  appId: props.appId,
+  appsCount: dashboardAppsStore.apps.length,
+  appsLoaded: dashboardAppsStore.isLoaded,
+}))
 
 // Effective values for display
 const effectiveDeploymentData = computed(() => isDemoMode.value ? demoDeploymentData.value : deploymentData.value)

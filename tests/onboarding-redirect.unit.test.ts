@@ -1,8 +1,12 @@
+// @vitest-environment happy-dom
+
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 describe('onboarding dashboard redirect', () => {
   beforeEach(() => {
+    vi.restoreAllMocks()
     vi.resetModules()
+    window.sessionStorage.clear()
   })
 
   async function getRedirect(options: Parameters<(typeof import('../src/utils/onboardingRedirect.ts'))['getOnboardingResumeRedirect']>[0]) {
@@ -22,6 +26,24 @@ describe('onboarding dashboard redirect', () => {
       resumeAppId: null,
       userId: 'user-1',
     })).resolves.toEqual({ path: '/app/new', query: { resume: 'com.example.app' } })
+    await expect(getRedirect({
+      appId: 'com.example.app',
+      appCount: 1,
+      createdAt: eligibleUser,
+      organizationCount: 1,
+      path: '/dashboard',
+      resumeAppId: null,
+      userId: 'user-1',
+    })).resolves.toEqual({ path: '/app/new', query: { resume: 'com.example.app' } })
+    await expect(getRedirect({
+      appId: 'com.example.app',
+      appCount: 1,
+      createdAt: eligibleUser,
+      organizationCount: 1,
+      path: '/apps',
+      resumeAppId: null,
+      userId: 'user-1',
+    })).resolves.toEqual({ path: '/app/new', query: { resume: 'com.example.app' } })
   })
 
   it('does not redirect the resumable onboarding route or ineligible account shapes', async () => {
@@ -32,7 +54,15 @@ describe('onboarding dashboard redirect', () => {
     await expect(getRedirect({ appId: 'com.example.app', appCount: 1, createdAt: '2026-08-03T23:00:00.000Z', organizationCount: 1, path: '/apps', resumeAppId: null, userId: 'user-1' })).resolves.toBeNull()
   })
 
-  it('allows dashboard exploration only until the page is refreshed', async () => {
+  it('lets an onboarding user open their existing app, devices, and settings without a redirect', async () => {
+    await expect(getRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/app/com.example.app', resumeAppId: null, userId: 'user-1' })).resolves.toBeNull()
+    await expect(getRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/app/com.example.app/device/abc', resumeAppId: null, userId: 'user-1' })).resolves.toBeNull()
+    await expect(getRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/app/com.example.app/bundle/12', resumeAppId: null, userId: 'user-1' })).resolves.toBeNull()
+    await expect(getRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/app/com.example.app/settings', resumeAppId: null, userId: 'user-1' })).resolves.toBeNull()
+    await expect(getRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/app/com.example.app/settings/access', resumeAppId: null, userId: 'user-1' })).resolves.toBeNull()
+  })
+
+  it('keeps dashboard exploration granted after a page reload', async () => {
     const module = await import('../src/utils/onboardingRedirect.ts')
     module.allowOnboardingDashboardExploration('user-1', 'com.example.app')
     expect(module.getOnboardingResumeAppId('user-1')).toBe('com.example.app')
@@ -40,10 +70,34 @@ describe('onboarding dashboard redirect', () => {
     expect(module.getOnboardingResumeRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/apps', resumeAppId: null, userId: 'user-1' })).toBeNull()
     expect(module.getOnboardingResumeRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/apps', resumeAppId: null, userId: 'user-2' })).toEqual({ path: '/app/new', query: { resume: 'com.example.app' } })
 
+    // Reloading the page drops module memory but keeps session storage.
     vi.resetModules()
     const refreshedModule = await import('../src/utils/onboardingRedirect.ts')
-    expect(refreshedModule.getOnboardingResumeAppId('user-1')).toBeNull()
-    expect(refreshedModule.getOnboardingResumeRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/apps', resumeAppId: null, userId: 'user-1' })).toEqual({ path: '/app/new', query: { resume: 'com.example.app' } })
+    expect(refreshedModule.getOnboardingResumeAppId('user-1')).toBe('com.example.app')
+    expect(refreshedModule.getOnboardingResumeRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/apps', resumeAppId: null, userId: 'user-1' })).toBeNull()
+  })
+
+  it('ignores a null grant so a missing user id cannot clear exploration', async () => {
+    const module = await import('../src/utils/onboardingRedirect.ts')
+    module.allowOnboardingDashboardExploration('user-1', 'com.example.app')
+    module.allowOnboardingDashboardExploration(null, 'com.example.app')
+    expect(module.getOnboardingResumeAppId('user-1')).toBe('com.example.app')
+    expect(module.getOnboardingResumeRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/apps', resumeAppId: null, userId: 'user-1' })).toBeNull()
+  })
+
+  it('prefers the in-memory grant when session storage still holds another user', async () => {
+    window.sessionStorage.setItem('capgo:onboarding-dashboard-exploration', JSON.stringify({
+      userId: 'user-old',
+      resumeAppId: 'com.old.app',
+    }))
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('quota')
+    })
+
+    const module = await import('../src/utils/onboardingRedirect.ts')
+    module.allowOnboardingDashboardExploration('user-1', 'com.example.app')
+    expect(module.getOnboardingResumeAppId('user-1')).toBe('com.example.app')
+    expect(module.getOnboardingResumeAppId('user-old')).toBeNull()
   })
 
   it('asks for dashboard confirmation only before exploration is granted', async () => {
