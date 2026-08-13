@@ -2771,7 +2771,9 @@ async function waitForVerifiedUpdaterInstall(
   while (true) {
     const state = getUpdaterInstallState(packageJsonPath)
     if (state.ready) {
-      pLog.info(`${CAPGO_UPDATER_PACKAGE} found in package.json and node_modules ✅`)
+      const declaredAt = formatInitFilePath(state.packageJsonPath)
+      const versionLabel = state.installedVersion ? ` ${state.installedVersion}` : ''
+      pLog.info(`${CAPGO_UPDATER_PACKAGE}${versionLabel} is declared in ${declaredAt} and installed in node_modules ✅`)
       return state
     }
 
@@ -2816,7 +2818,7 @@ async function addUpdaterStep(orgId: string, apikey: string, appId: string) {
     message: `Install @capgo/capacitor-updater in your project?`,
     options: [
       { value: 'yes', label: '✅ Yes, install it' },
-      { value: 'no', label: '❌ No, I\'ll do it manually' },
+      { value: 'no', label: '📝 I\'ll do it manually' },
     ],
   })
   await cancelCommand(installChoice, orgId, apikey)
@@ -2842,12 +2844,12 @@ async function addUpdaterStep(orgId: string, apikey: string, appId: string) {
       const installState = getUpdaterInstallState(path)
 
       if (installState.ready) {
-        s.stop(`Capgo already installed ✅`)
+        s.stop(`${CAPGO_UPDATER_PACKAGE} is already declared in ${formatInitFilePath(path)} and installed in node_modules ✅`)
       }
       else {
         try {
           runUpdaterInstallCommand(pm, path, versionToInstall)
-          s.stop(`Install Done ✅`)
+          s.stop(`Installed ${CAPGO_UPDATER_PACKAGE}; declaration is in ${formatInitFilePath(path)} ✅`)
         }
         catch (error) {
           s.stop('Updater install failed ❌')
@@ -2856,7 +2858,7 @@ async function addUpdaterStep(orgId: string, apikey: string, appId: string) {
       }
     }
     else {
-      pLog.info(`Install it manually with: "${getUpdaterInstallCommand(pm, versionToInstall)}"`)
+      pLog.info(`Install it manually in ${formatInitFilePath(dirname(path))} with: "${getUpdaterInstallCommand(pm, versionToInstall)}"`)
     }
 
     await waitForVerifiedUpdaterInstall(orgId, apikey, path, pm, versionToInstall, {
@@ -2873,13 +2875,13 @@ async function addUpdaterStep(orgId: string, apikey: string, appId: string) {
     s.start(`Updating config file`)
     delta = !!doDirectInstall
     const projectDir = dirname(path)
-    await withTemporaryCwd(getInitConfigLoadDir(projectDir), async () => {
+    const updatedConfig = await withTemporaryCwd(getInitConfigLoadDir(projectDir), async () => {
       if (doDirectInstall) {
         await updateConfigbyKey('SplashScreen', { launchAutoHide: false })
       }
-      await updateConfigUpdater(getInitUpdaterPluginConfig(appId, delta))
+      return updateConfigUpdater(getInitUpdaterPluginConfig(appId, delta))
     })
-    s.stop(`Config file updated ✅`)
+    s.stop(`Updated ${formatInitFilePath(updatedConfig.path)} ✅`)
     break
   }
 
@@ -2993,7 +2995,7 @@ async function addCodeStep(orgId: string, apikey: string, appId: string) {
       message: `Add the Capacitor Updater import to your main file?`,
       options: [
         { value: 'yes', label: '✅ Yes, add it' },
-        { value: 'no', label: '❌ No, I\'ll do it manually' },
+        { value: 'no', label: '📝 I\'ll do it manually' },
       ],
     })
     await cancelCommand(addCodeChoice, orgId, apikey)
@@ -3014,10 +3016,11 @@ async function addCodeStep(orgId: string, apikey: string, appId: string) {
     canAutoInject = getCanAutoInject()
   }
 
+  const displayFilePath = formatInitFilePath(filePath)
   if (addCodeChoice === 'yes') {
     if (!canAutoInject) {
       pLog.warn(`An existing Nuxt updater plugin was not changed automatically.`)
-      pLog.info(`Add this plugin code manually:\n\n${getNuxtUpdaterPluginContent()}`)
+      pLog.info(`Add this plugin code manually to ${displayFilePath}:\n\n${getNuxtUpdaterPluginContent()}`)
       await markStep(orgId, apikey, 'add-code-manual', appId)
     }
     else if (!alreadyConfigured) {
@@ -3027,11 +3030,12 @@ async function addCodeStep(orgId: string, apikey: string, appId: string) {
         mkdirSync(dirname(filePath), { recursive: true })
       }
       writeFileSync(filePath, newContent, 'utf8')
-      s.stop()
+      s.stop(`Added notifyAppReady() to ${displayFilePath} ✅`)
       globalCodeDiff = previewDiff
       setInitCodeDiff(globalCodeDiff)
     }
     else {
+      pLog.info(`notifyAppReady() already in ${displayFilePath} ✅`)
       globalCodeDiff = previewDiff
     }
 
@@ -3044,7 +3048,7 @@ async function addCodeStep(orgId: string, apikey: string, appId: string) {
       : getExistingUpdaterBinding(filePath, currentContent)
         ? getInitCodeCall()
         : getInitCodeInjection(filePath)
-    pLog.info(`${createNuxtPlugin ? 'Add this plugin code manually:' : 'Add to your main file the following code:'}\n\n${manualCode}\n`)
+    pLog.info(`${createNuxtPlugin ? 'Add this plugin code' : 'Add this code'} manually to ${displayFilePath}:\n\n${manualCode}\n`)
   }
 }
 
