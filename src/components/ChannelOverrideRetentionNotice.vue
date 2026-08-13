@@ -25,11 +25,12 @@ const trigger = useTemplateRef<HTMLButtonElement>('trigger')
 const panel = useTemplateRef<HTMLElement>('panel')
 const panelPos = ref({ top: 0, left: 0 })
 
-function close() {
+function close(options?: { restoreFocus?: boolean }) {
   if (!open.value)
     return
   open.value = false
-  nextTick(() => trigger.value?.focus())
+  if (options?.restoreFocus)
+    nextTick(() => trigger.value?.focus())
 }
 
 onClickOutside(root, (event) => {
@@ -45,7 +46,7 @@ onKeyStroke('Escape', (event) => {
   if (!open.value)
     return
   event.preventDefault()
-  close()
+  close({ restoreFocus: true })
 })
 
 function placePanel() {
