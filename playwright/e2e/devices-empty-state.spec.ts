@@ -44,6 +44,7 @@ test.describe('Devices empty state', () => {
 
     const emptyState = page.locator('[data-test="devices-empty-state"]')
     await expect(emptyState.getByRole('heading', { name: 'No devices found' })).toBeVisible()
+    await expect(page.locator('[data-test="devices-range-filter-banner"]')).toHaveCount(0)
     await expect(emptyState.getByText('The selected time range is too narrow.')).toBeVisible()
     await expect(emptyState.getByText('The app hasn’t contacted Capgo yet.')).toBeVisible()
     await expect(emptyState.getByText('The device contacted Capgo after this page loaded.')).toBeVisible()
