@@ -101,7 +101,6 @@ watch(() => [props.appId, props.versionName] as const, () => {
     type="button"
     data-test="bundle-adoption-card"
     class="p-4 text-left bg-white border rounded-lg shadow-sm cursor-pointer dark:bg-slate-800 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/40"
-    :aria-label="t('view-bundle-devices')"
     @click="openDevices"
   >
     <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">

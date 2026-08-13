@@ -2657,7 +2657,7 @@
   "view": "Used in Capgo web console areas: components/tables, composables, pages/admin/dashboard, pages/settings/organization. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "view-action-logs": "Used in Capgo web console areas: pages/app. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "view-adoption": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
-  "view-bundle-devices": "Used in Capgo web console areas: components/bundle. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "view-bundle-devices": "Used in bundle management. Role: UI label about \"view bundle devices\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "view-deliveries": "Used in Capgo web console areas: pages/settings/organization. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "view-dependencies": "Used in Capgo web console areas: pages/app. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "view-logs": "Used in Capgo web console areas: pages/app. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
