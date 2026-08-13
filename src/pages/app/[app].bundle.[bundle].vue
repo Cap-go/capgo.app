@@ -17,7 +17,6 @@ import IconTrash from '~icons/heroicons/trash'
 import IconSearch from '~icons/ic/round-search?raw'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconPencil from '~icons/lucide/pencil'
-import BundleInstallStatsPanel from '~/components/dashboard/BundleInstallStatsPanel.vue'
 import { fetchLinkedChannelsForVersion, formatLinkedChannel, unlinkLinkedChannels } from '~/services/bundleLinkedChannels'
 import { findChannelsWithoutPromotionPermission, formatChannelPromotionTargets } from '~/services/channelPromotion'
 import { formatBytes, getChecksumInfo } from '~/services/conversion'
@@ -1049,15 +1048,6 @@ async function deleteBundle() {
               </dl>
             </div>
           </div>
-        </div>
-
-        <div class="px-0 mt-6 sm:px-0">
-          <BundleInstallStatsPanel
-            v-if="version.name"
-            :app-id="packageId"
-            :version-name="version.name"
-            compact
-          />
         </div>
       </div>
     </div>
