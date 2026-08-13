@@ -13,7 +13,7 @@ import {
   getInitSuggestedOtaVersion,
   getInitUpdaterPluginConfig,
   getMissingMainFileRecoveryOptions,
-  readExistingMainFile,
+  getSplashScreenVersionToInstall,
   getResumedOnboardingAccessError,
   getNativePlatformAvailability,
   injectInitCode,
@@ -21,6 +21,7 @@ import {
   revertInitAutoTestChangeContent,
   runInheritedCommand,
   notifyAppReadyDocsUrl,
+  readExistingMainFile,
 } from '../src/init/command.ts'
 import {
   createMissingExecutableError,
@@ -297,6 +298,11 @@ t('init updater config always starts from native version 0.0.0', () => {
     autoUpdate: 'always',
     autoSplashscreen: true,
   })
+})
+
+t('instant updates install splash-screen matching Capacitor major', () => {
+  assert.equal(getSplashScreenVersionToInstall('7.4.0'), '^7.0.0')
+  assert.equal(getSplashScreenVersionToInstall('8.0.0'), 'latest')
 })
 
 t('instant update detection supports new autoUpdate modes and legacy directUpdate', () => {

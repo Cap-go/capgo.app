@@ -27,13 +27,13 @@ describe('app onboarding API key loading state', () => {
     )
     const mountedFlow = onboardingSource.slice(onboardingSource.indexOf('onMounted(async () => {'))
     const resumeLoadIndex = mountedFlow.indexOf('const resumed = await loadResumeApp()')
-    const apiKeyProvisioningIndex = mountedFlow.indexOf('void ensureApiKey().catch')
+    const apiKeyProvisioningIndex = mountedFlow.indexOf('void loadApiKey().catch')
 
     expect(resumeLoader).not.toContain('ensureApiKey')
     expect(resumeLoadIndex).toBeGreaterThanOrEqual(0)
     expect(apiKeyProvisioningIndex).toBeGreaterThanOrEqual(0)
     expect(resumeLoadIndex).toBeLessThan(apiKeyProvisioningIndex)
-    expect(mountedFlow).not.toContain('await ensureApiKey()')
+    expect(mountedFlow).not.toContain('await loadApiKey()')
   })
 
   it.concurrent('renders ready commands as native DaisyUI buttons', () => {
@@ -45,7 +45,29 @@ describe('app onboarding API key loading state', () => {
     expect(onboardingSource).toContain('<span v-if="!usesBuilderSetupCommand" class="text-emerald-300">&nbsp;{{ apiKey }}</span>')
   })
 
-  it.concurrent('provides concise loading copy in the English locale', () => {
+  it.concurrent('provides secure onboarding copy in the English locale', () => {
     expect(englishMessages['app-onboarding-command-apikey-loading']).toBe('Creating your secure API key…')
+    expect(englishMessages['app-onboarding-ai-help-without-key']).toContain('do not ask me to paste my real Capgo API key into this chat')
+    expect(englishMessages['app-onboarding-ai-help-with-key']).toContain('do not repeat the API key in your response')
+    expect(englishMessages['app-onboarding-ai-help-prompt']).toContain('3. Help me verify the installation succeeded.\n4. {apiKeyGuidance}')
+  })
+
+  it.concurrent('asks whether to include the API key and makes inclusion primary', () => {
+    const copyHandlerStart = onboardingSource.indexOf('function copyAiInstructions()')
+    const copyHandlerEnd = onboardingSource.indexOf('function goToInstallStep()', copyHandlerStart)
+    expect(copyHandlerStart).toBeGreaterThanOrEqual(0)
+    expect(copyHandlerEnd).toBeGreaterThan(copyHandlerStart)
+    const copyHandler = onboardingSource.slice(copyHandlerStart, copyHandlerEnd)
+
+    expect(copyHandler).toContain("id: 'app-onboarding-ai-help-copy-dialog'")
+    expect(copyHandler).toContain('await loadApiKey()')
+    expect(copyHandler.indexOf('await loadApiKey()')).toBeLessThan(copyHandler.indexOf('dialogStore.openDialog({'))
+    expect(copyHandler).toContain('createAiHelpPrompt(redactedCliCommand.value)')
+    const withKeyButtonStart = copyHandler.indexOf("text: t('app-onboarding-ai-help-copy-with-key')")
+    expect(withKeyButtonStart).toBeGreaterThanOrEqual(0)
+    const withKeyButton = copyHandler.slice(withKeyButtonStart)
+    expect(withKeyButton).toContain("role: 'primary'")
+    expect(withKeyButton).toContain('disabled: !apiKey.value')
+    expect(withKeyButton).toContain('createAiHelpPrompt(cliCommand.value)')
   })
 })

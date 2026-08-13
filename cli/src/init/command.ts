@@ -4,6 +4,7 @@ import type { UploadReporter } from '../bundle/upload'
 import type { Organization } from '../utils'
 import type { SupportedPackageManager } from './command-execution'
 import type { InitCodeDiff, InitEncryptionPhase, InitEncryptionSummary } from './runtime'
+import type { PackageInstallState } from './updater'
 import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import path, { dirname, join } from 'node:path'
@@ -17,6 +18,7 @@ import { addAppInternal } from '../app/add'
 import { markSnag, waitLog } from '../app/debug'
 import { deleteAppInternal } from '../app/delete'
 import { getInfoInternal } from '../app/info'
+import { WAIT_LOG_CONTINUE_HINT } from '../app/wait-log-query'
 import { canUseFilePicker, openPackageJsonPicker } from '../build/onboarding/file-picker'
 import { getPlatformDirFromCapacitorConfig } from '../build/platform-paths'
 import { uploadBundleInternal } from '../bundle/upload'
@@ -38,9 +40,9 @@ import { isChannelAlreadyExistsError } from './channel-conflict'
 import { createMissingExecutableError, getAvailablePackageManagers, getMissingPackageManagerExecutable, getPackageManagerInfo, preparePackageManagerCommandEnvironment, probeExecutable, probePackageManagerCommand, resolveExecutableProbeError, waitForCommandResult } from './command-execution'
 import { cancel as pCancel, confirm as pConfirm, intro as pIntro, isCancel as pIsCancel, log as pLog, outro as pOutro, select as pSelect, spinner as pSpinner, text as pText } from './prompts'
 import { finishActiveCliReplay, getActiveCliReplaySessionId, isCliTelemetryDisabled, startInitReplay } from './replay'
-import { appendInitStreamingLine, clearInitStreamingOutput, INIT_CANCEL, pushInitLog, setInitCodeDiff, setInitEncryptionSummary, setInitVersionWarning, startInitStreamingOutput, stopInitInkSession, updateInitStreamingStatus, waitForInitStreamingContinue } from './runtime'
+import { appendInitStreamingLine, clearInitStreamingOutput, INIT_CANCEL, pushInitLog, setInitCodeDiff, setInitEncryptionSummary, setInitVersionWarning, startInitStreamingOutput, stopInitInkSession, updateInitStreamingStatus, waitForInitLogSkip, waitForInitStreamingContinue } from './runtime'
 import { formatInitResumeMessage, initOnboardingSteps, renderInitOnboardingComplete, renderInitOnboardingFrame, renderInitOnboardingWelcome } from './ui'
-import { CAPGO_UPDATER_PACKAGE, getUpdaterInstallState } from './updater'
+import { CAPACITOR_SPLASH_SCREEN_PACKAGE, CAPGO_UPDATER_PACKAGE, getSplashScreenInstallState, getUpdaterInstallState } from './updater'
 
 interface SuperOptions extends Options {
   analytics?: boolean
@@ -672,7 +674,7 @@ async function runInitContactSupport(failureText: string, supportPlatform?: Plat
           options: [
             { value: 'yes', label: '📨  Yes, send to support' },
             { value: 'view', label: '👀  View logs first (opens the file)' },
-            { value: 'no', label: '✖  Cancel' },
+            { value: 'no', label: 'Skip sending' },
           ],
         })
         if (pIsCancel(choice) || choice === 'no')
@@ -1434,7 +1436,7 @@ async function tryResumeOnboarding(
       message: 'Would you like to continue from where you left off?',
       options: [
         { value: 'yes', label: '✅ Yes, continue' },
-        { value: 'no', label: '❌ No, start over' },
+        { value: 'no', label: '🔄 Start over from step 1' },
       ],
     })
     await cancelCommand(resumeChoice, orgId, apikey)
@@ -2212,7 +2214,7 @@ async function checkPrerequisitesStep(
   }
 
   if ((nativePlatforms.ios && !hasXcode) && (nativePlatforms.android && !hasAndroidStudio)) {
-    pLog.error(`❌ No development environment detected`)
+    pLog.warn(`⚠️ No development environment detected`)
     pLog.info(``)
     pLog.info(`📱 To develop mobile apps with Capacitor, you need:`)
     pLog.info(`   • For iOS: Xcode (macOS only) - https://developer.apple.com/xcode/`)
@@ -2399,7 +2401,7 @@ async function askForReplacementAppId(
         label: `Use ${suggestion}`,
       })),
       { value: 'custom', label: 'Enter a custom app ID' },
-      { value: 'cancel', label: 'Cancel onboarding' },
+      { value: 'cancel', label: 'Exit onboarding' },
     ],
   })
 
@@ -2429,7 +2431,7 @@ async function addAppStep(organization: Organization, apikey: string, appId: str
         message: `Add ${currentAppId} to Capgo?`,
         options: [
           { value: 'yes', label: '✅ Yes, add it' },
-          { value: 'change', label: '❌ No, use a different app ID' },
+          { value: 'change', label: '✏️ Use a different app ID' },
         ],
       })
       await cancelCommand(addChoice, organization.gid, apikey)
@@ -2719,9 +2721,19 @@ function getUpdaterVersionToInstall(coreVersion: string, logSelection = true): {
   return { versionToInstall: 'latest', shouldOfferDirectInstall: true }
 }
 
-function getUpdaterInstallCommand(pm: PackageManagerInfo, versionToInstall: string, force = false): string {
+function getPackageInstallCommand(pm: PackageManagerInfo, packageName: string, versionToInstall: string, force = false): string {
   const forceFlag = force ? ' --force' : ''
-  return `${pm.installCommand}${forceFlag} ${CAPGO_UPDATER_PACKAGE}@${versionToInstall}`
+  return `${pm.installCommand}${forceFlag} ${packageName}@${versionToInstall}`
+}
+
+function getUpdaterInstallCommand(pm: PackageManagerInfo, versionToInstall: string, force = false): string {
+  return getPackageInstallCommand(pm, CAPGO_UPDATER_PACKAGE, versionToInstall, force)
+}
+
+export function getSplashScreenVersionToInstall(coreVersion: string): string {
+  if (lessThan(parse(coreVersion), parse('8.0.0')))
+    return `^${parse(coreVersion).major}.0.0`
+  return 'latest'
 }
 
 function formatSpawnOutput(output: string | Buffer | null | undefined): string {
@@ -2730,12 +2742,12 @@ function formatSpawnOutput(output: string | Buffer | null | undefined): string {
   return typeof output === 'string' ? output : output.toString('utf8')
 }
 
-function runUpdaterInstallCommand(pm: PackageManagerInfo, packageJsonPath: string, versionToInstall: string): void {
+function runPackageInstallCommand(pm: PackageManagerInfo, packageJsonPath: string, packageName: string, versionToInstall: string): void {
   const [command, ...args] = pm.installCommand.split(whitespaceSplitPattern).filter(Boolean)
   if (!command)
     throw new Error('Cannot determine package manager install command')
 
-  const result = spawnSync(command, [...args, '--force', `${CAPGO_UPDATER_PACKAGE}@${versionToInstall}`], {
+  const result = spawnSync(command, [...args, '--force', `${packageName}@${versionToInstall}`], {
     stdio: 'pipe',
     cwd: dirname(packageJsonPath),
   })
@@ -2745,17 +2757,78 @@ function runUpdaterInstallCommand(pm: PackageManagerInfo, packageJsonPath: strin
       .filter(Boolean)
       .join('\n')
     const outputDetails = output ? `\n${output}` : ''
-    const message = `Updater install failed with code ${result.status ?? 'unknown'}${outputDetails}`
+    const message = `${packageName} install failed with code ${result.status ?? 'unknown'}${outputDetails}`
     throw result.error ?? new Error(message)
   }
 }
 
-function logUpdaterInstallStateDetails(packageJsonPath: string, details: string[], manualCommand: string): void {
-  pLog.warn(`${CAPGO_UPDATER_PACKAGE} is not ready yet.`)
+function runUpdaterInstallCommand(pm: PackageManagerInfo, packageJsonPath: string, versionToInstall: string): void {
+  runPackageInstallCommand(pm, packageJsonPath, CAPGO_UPDATER_PACKAGE, versionToInstall)
+}
+
+function logPackageInstallStateDetails(packageName: string, packageJsonPath: string, details: string[], manualCommand: string): void {
+  pLog.warn(`${packageName} is not ready yet.`)
   for (const detail of details) {
     pLog.warn(detail)
   }
-  pLog.info(`Run this in ${dirname(packageJsonPath)}: ${manualCommand}`)
+  pLog.info(`Run this in ${formatInitFilePath(dirname(packageJsonPath))}: ${manualCommand}`)
+}
+
+function formatPackageReadyMessage(packageName: string, state: PackageInstallState): string {
+  const declaredAt = formatInitFilePath(state.packageJsonPath)
+  const versionLabel = state.installedVersion ? ` ${state.installedVersion}` : ''
+  return `${packageName}${versionLabel} is declared in ${declaredAt} and installed in node_modules ✅`
+}
+
+async function waitForVerifiedPackageInstall(
+  orgId: string,
+  apikey: string,
+  packageJsonPath: string,
+  pm: PackageManagerInfo,
+  packageName: string,
+  versionToInstall: string,
+  getState: (packageJsonPath: string) => PackageInstallState,
+  options: { allowAutoRetry?: boolean, failureText?: string, supportPlatform?: PlatformChoice, noun?: string } = {},
+) {
+  const noun = options.noun ?? packageName
+  const manualCommand = getPackageInstallCommand(pm, packageName, versionToInstall)
+
+  while (true) {
+    const state = getState(packageJsonPath)
+    if (state.ready) {
+      pLog.info(formatPackageReadyMessage(packageName, state))
+      return state
+    }
+
+    logPackageInstallStateDetails(packageName, packageJsonPath, state.details, manualCommand)
+
+    if (options.allowAutoRetry) {
+      const recoveryChoice = await selectRecoveryOption(orgId, apikey, `${noun} install is not complete yet. What do you want to do?`, [
+        { value: 'retry-auto', label: `Retry automatic ${noun} install` },
+        { value: 'manual', label: 'Install it manually, then continue' },
+      ], options.failureText ?? state.details.join('\n'), options.supportPlatform)
+      if (recoveryChoice === 'retry-auto') {
+        const s = pSpinner()
+        try {
+          s.start(`Running: ${getPackageInstallCommand(pm, packageName, versionToInstall, true)}`)
+          runPackageInstallCommand(pm, packageJsonPath, packageName, versionToInstall)
+          s.stop(`${noun} install command finished ✅`)
+        }
+        catch (error) {
+          s.stop(`${noun} install failed ❌`)
+          pLog.error(formatError(error))
+        }
+        continue
+      }
+    }
+
+    await waitForReadyConfirmation(
+      `Install ${packageName} manually, then come back here.`,
+      orgId,
+      apikey,
+      `Type "ready" when ${packageName} is installed.`,
+    )
+  }
 }
 
 async function waitForVerifiedUpdaterInstall(
@@ -2766,44 +2839,68 @@ async function waitForVerifiedUpdaterInstall(
   versionToInstall: string,
   options: { allowAutoRetry?: boolean, failureText?: string, supportPlatform?: PlatformChoice } = {},
 ) {
-  const manualCommand = getUpdaterInstallCommand(pm, versionToInstall)
+  return waitForVerifiedPackageInstall(
+    orgId,
+    apikey,
+    packageJsonPath,
+    pm,
+    CAPGO_UPDATER_PACKAGE,
+    versionToInstall,
+    getUpdaterInstallState,
+    { ...options, noun: 'updater' },
+  )
+}
 
-  while (true) {
-    const state = getUpdaterInstallState(packageJsonPath)
-    if (state.ready) {
-      pLog.info(`${CAPGO_UPDATER_PACKAGE} found in package.json and node_modules ✅`)
-      return state
-    }
-
-    logUpdaterInstallStateDetails(packageJsonPath, state.details, manualCommand)
-
-    if (options.allowAutoRetry) {
-      const recoveryChoice = await selectRecoveryOption(orgId, apikey, 'Updater install is not complete yet. What do you want to do?', [
-        { value: 'retry-auto', label: 'Retry automatic updater install' },
-        { value: 'manual', label: 'Install it manually, then continue' },
-      ], options.failureText ?? state.details.join('\n'), options.supportPlatform)
-      if (recoveryChoice === 'retry-auto') {
-        const s = pSpinner()
-        try {
-          s.start(`Running: ${getUpdaterInstallCommand(pm, versionToInstall, true)}`)
-          runUpdaterInstallCommand(pm, packageJsonPath, versionToInstall)
-          s.stop('Updater install command finished ✅')
-        }
-        catch (error) {
-          s.stop('Updater install failed ❌')
-          pLog.error(formatError(error))
-        }
-        continue
-      }
-    }
-
-    await waitForReadyConfirmation(
-      `Install ${CAPGO_UPDATER_PACKAGE} manually, then come back here.`,
-      orgId,
-      apikey,
-      `Type "ready" when ${CAPGO_UPDATER_PACKAGE} is installed.`,
-    )
+async function ensureSplashScreenForDirectUpdate(
+  orgId: string,
+  apikey: string,
+  packageJsonPath: string,
+  pm: PackageManagerInfo,
+  coreVersion: string,
+) {
+  const versionToInstall = getSplashScreenVersionToInstall(coreVersion)
+  const installState = getSplashScreenInstallState(packageJsonPath)
+  if (installState.ready) {
+    pLog.info(formatPackageReadyMessage(CAPACITOR_SPLASH_SCREEN_PACKAGE, installState))
+    return
   }
+
+  pLog.warn(`Instant updates enable autoSplashscreen, which requires ${CAPACITOR_SPLASH_SCREEN_PACKAGE}.`)
+  const installChoice = await pSelect({
+    message: `${CAPACITOR_SPLASH_SCREEN_PACKAGE} is required for instant updates. Install it now?`,
+    options: [
+      { value: 'yes', label: '✅ Yes, install it' },
+      { value: 'no', label: '📝 I\'ll do it manually' },
+    ],
+  })
+  await cancelCommand(installChoice, orgId, apikey)
+
+  if (installChoice === 'yes') {
+    const s = pSpinner()
+    s.start(`Installing ${CAPACITOR_SPLASH_SCREEN_PACKAGE}`)
+    try {
+      runPackageInstallCommand(pm, packageJsonPath, CAPACITOR_SPLASH_SCREEN_PACKAGE, versionToInstall)
+      s.stop(`Installed ${CAPACITOR_SPLASH_SCREEN_PACKAGE}; declaration is in ${formatInitFilePath(packageJsonPath)} ✅`)
+    }
+    catch (error) {
+      s.stop('Splash screen install failed ❌')
+      pLog.error(formatError(error))
+    }
+  }
+  else {
+    pLog.info(`Install it manually in ${formatInitFilePath(dirname(packageJsonPath))} with: "${getPackageInstallCommand(pm, CAPACITOR_SPLASH_SCREEN_PACKAGE, versionToInstall)}"`)
+  }
+
+  await waitForVerifiedPackageInstall(
+    orgId,
+    apikey,
+    packageJsonPath,
+    pm,
+    CAPACITOR_SPLASH_SCREEN_PACKAGE,
+    versionToInstall,
+    getSplashScreenInstallState,
+    { allowAutoRetry: installChoice === 'yes', noun: 'splash screen plugin' },
+  )
 }
 
 async function addUpdaterStep(orgId: string, apikey: string, appId: string) {
@@ -2816,7 +2913,7 @@ async function addUpdaterStep(orgId: string, apikey: string, appId: string) {
     message: `Install @capgo/capacitor-updater in your project?`,
     options: [
       { value: 'yes', label: '✅ Yes, install it' },
-      { value: 'no', label: '❌ No, I\'ll do it manually' },
+      { value: 'no', label: '📝 I\'ll do it manually' },
     ],
   })
   await cancelCommand(installChoice, orgId, apikey)
@@ -2842,12 +2939,12 @@ async function addUpdaterStep(orgId: string, apikey: string, appId: string) {
       const installState = getUpdaterInstallState(path)
 
       if (installState.ready) {
-        s.stop(`Capgo already installed ✅`)
+        s.stop(`${CAPGO_UPDATER_PACKAGE} is already declared in ${formatInitFilePath(path)} and installed in node_modules ✅`)
       }
       else {
         try {
           runUpdaterInstallCommand(pm, path, versionToInstall)
-          s.stop(`Install Done ✅`)
+          s.stop(`Installed ${CAPGO_UPDATER_PACKAGE}; declaration is in ${formatInitFilePath(path)} ✅`)
         }
         catch (error) {
           s.stop('Updater install failed ❌')
@@ -2856,7 +2953,7 @@ async function addUpdaterStep(orgId: string, apikey: string, appId: string) {
       }
     }
     else {
-      pLog.info(`Install it manually with: "${getUpdaterInstallCommand(pm, versionToInstall)}"`)
+      pLog.info(`Install it manually in ${formatInitFilePath(dirname(path))} with: "${getUpdaterInstallCommand(pm, versionToInstall)}"`)
     }
 
     await waitForVerifiedUpdaterInstall(orgId, apikey, path, pm, versionToInstall, {
@@ -2865,21 +2962,26 @@ async function addUpdaterStep(orgId: string, apikey: string, appId: string) {
 
     let doDirectInstall: boolean | symbol = false
     if (shouldOfferDirectInstall) {
-      doDirectInstall = await pConfirm({ message: `Do you want to set instant updates in ${appId}? Read more about it here: https://capgo.app/docs/live-updates/update-behavior/#applying-updates-immediately` })
+      pLog.info('By default, a downloaded update applies the next time the app launches.')
+      pLog.info('Instant updates apply it as soon as the download finishes: https://capgo.app/docs/live-updates/update-behavior/#applying-updates-immediately')
+      doDirectInstall = await pConfirm({ message: `Enable instant updates for ${appId}?` })
       await cancelCommand(doDirectInstall, orgId, apikey)
     }
+
+    if (doDirectInstall)
+      await ensureSplashScreenForDirectUpdate(orgId, apikey, path, pm, coreVersion)
 
     const s = pSpinner()
     s.start(`Updating config file`)
     delta = !!doDirectInstall
     const projectDir = dirname(path)
-    await withTemporaryCwd(getInitConfigLoadDir(projectDir), async () => {
+    const updatedConfig = await withTemporaryCwd(getInitConfigLoadDir(projectDir), async () => {
       if (doDirectInstall) {
         await updateConfigbyKey('SplashScreen', { launchAutoHide: false })
       }
-      await updateConfigUpdater(getInitUpdaterPluginConfig(appId, delta))
+      return updateConfigUpdater(getInitUpdaterPluginConfig(appId, delta))
     })
-    s.stop(`Config file updated ✅`)
+    s.stop(`Updated ${formatInitFilePath(updatedConfig.path)} ✅`)
     break
   }
 
@@ -2993,7 +3095,7 @@ async function addCodeStep(orgId: string, apikey: string, appId: string) {
       message: `Add the Capacitor Updater import to your main file?`,
       options: [
         { value: 'yes', label: '✅ Yes, add it' },
-        { value: 'no', label: '❌ No, I\'ll do it manually' },
+        { value: 'no', label: '📝 I\'ll do it manually' },
       ],
     })
     await cancelCommand(addCodeChoice, orgId, apikey)
@@ -3014,10 +3116,11 @@ async function addCodeStep(orgId: string, apikey: string, appId: string) {
     canAutoInject = getCanAutoInject()
   }
 
+  const displayFilePath = formatInitFilePath(filePath)
   if (addCodeChoice === 'yes') {
     if (!canAutoInject) {
       pLog.warn(`An existing Nuxt updater plugin was not changed automatically.`)
-      pLog.info(`Add this plugin code manually:\n\n${getNuxtUpdaterPluginContent()}`)
+      pLog.info(`Add this plugin code manually to ${displayFilePath}:\n\n${getNuxtUpdaterPluginContent()}`)
       await markStep(orgId, apikey, 'add-code-manual', appId)
     }
     else if (!alreadyConfigured) {
@@ -3027,11 +3130,12 @@ async function addCodeStep(orgId: string, apikey: string, appId: string) {
         mkdirSync(dirname(filePath), { recursive: true })
       }
       writeFileSync(filePath, newContent, 'utf8')
-      s.stop()
+      s.stop(`Added notifyAppReady() to ${displayFilePath} ✅`)
       globalCodeDiff = previewDiff
       setInitCodeDiff(globalCodeDiff)
     }
     else {
+      pLog.info(`notifyAppReady() already in ${displayFilePath} ✅`)
       globalCodeDiff = previewDiff
     }
 
@@ -3044,7 +3148,7 @@ async function addCodeStep(orgId: string, apikey: string, appId: string) {
       : getExistingUpdaterBinding(filePath, currentContent)
         ? getInitCodeCall()
         : getInitCodeInjection(filePath)
-    pLog.info(`${createNuxtPlugin ? 'Add this plugin code manually:' : 'Add to your main file the following code:'}\n\n${manualCode}\n`)
+    pLog.info(`${createNuxtPlugin ? 'Add this plugin code' : 'Add this code'} manually to ${displayFilePath}:\n\n${manualCode}\n`)
   }
 }
 
@@ -3080,7 +3184,7 @@ async function addEncryptionStep(orgId: string, apikey: string, appId: string) {
     // option once the user has already seen the overview — re-offering it
     // makes no sense and clutters the decision.
     const options: { value: EncryptionChoice, label: string }[] = [
-      { value: 'not_needed', label: '❌ No, my app doesn\'t need this' },
+      { value: 'not_needed', label: '⏭️ Skip encryption (most apps)' },
       { value: 'critical', label: '🔐 Yes — set up end-to-end encryption' },
     ]
     if (!learnShown)
@@ -3167,11 +3271,12 @@ async function addEncryptionStep(orgId: string, apikey: string, appId: string) {
   }
   const skippedSummary: InitEncryptionSummary = {
     phase: 'skipped',
-    title: '⏭️  Encryption SKIPPED',
+    title: '⏭️ Encryption not enabled',
     lines: [
-      '   • Bundles are plain JS / HTML / CSS, fetchable by anyone who finds the URL.',
-      '   • Never put private API keys or backend secrets in a mobile app.',
-      `   • You can enable encryption later with: ${pm.runner} @capgo/cli@latest key create`,
+      '   • Onboarding continues. Most apps do not need this.',
+      '   • Bundles stay regular JS / HTML / CSS over HTTPS.',
+      '   • Do not put private API keys or backend secrets in the app.',
+      `   • Enable later with: ${pm.runner} @capgo/cli@latest key create`,
     ],
   }
   let finalSummary: InitEncryptionSummary = skippedSummary
@@ -3240,7 +3345,7 @@ async function addEncryptionStep(orgId: string, apikey: string, appId: string) {
       if (syncResult.success) {
         finalSummary = {
           phase: 'enabled',
-          title: '🔐 Encryption ENABLED',
+          title: '🔐 Encryption enabled',
           lines: [
             '   • Private RSA key stays on your machine — do not commit it.',
             '   • Public RSA key is bundled in the app (extractable by reverse engineering).',
@@ -3275,7 +3380,7 @@ async function addEncryptionStep(orgId: string, apikey: string, appId: string) {
 
       finalSummary = {
         phase: 'failed',
-        title: '⚠️  Encryption NOT ENABLED (key creation failed)',
+        title: '⚠️ Encryption not enabled — key creation failed',
         lines: [
           '   • Key creation failed and you chose to continue without encryption.',
           `   • You can retry later with: ${pm.runner} @capgo/cli@latest key create`,
@@ -3397,7 +3502,7 @@ function promoteEncryptionSummaryToEnabled(): void {
     return
   const promoted: InitEncryptionSummary = {
     phase: 'enabled',
-    title: '🔐 Encryption ENABLED',
+    title: '🔐 Encryption enabled',
     lines: [
       '   • Private RSA key stays on your machine — do not commit it.',
       '   • Public RSA key is bundled in the app (extractable by reverse engineering).',
@@ -3530,7 +3635,7 @@ async function handleMissingBuildScript(buildCommand: string, appId: string, pla
   const spinner = pSpinner()
   spinner.start('Checking project type')
   spinner.stop('Missing build script', 'neutral')
-  pLog.warn(`❌ Cannot find "${buildCommand}" script in package.json`)
+  pLog.warn(`Cannot find "${buildCommand}" script in package.json`)
   pLog.info(`💡 Your package.json needs a "${buildCommand}" script to build the app`)
 
   const skipBuild = await pConfirm({
@@ -4634,7 +4739,7 @@ async function addCodeChangeStep(orgId: string, apikey: string, appId: string, p
     // check in script build exist
     if (!packScripts[buildCommand]) {
       s.stop('Missing build script', 'neutral')
-      pLog.warn(`❌ Cannot find "${buildCommand}" script in package.json`)
+      pLog.warn(`Cannot find "${buildCommand}" script in package.json`)
       pLog.info(`💡 Build manually in another terminal, then come back and continue`)
       printManualOtaBuildInstructions()
 
@@ -4948,7 +5053,13 @@ async function testCapgoUpdateStep(orgId: string, apikey: string, appId: string,
   if (doWaitLogs) {
     pLog.info(`📊 Watching logs from ${appId}...`)
     pLog.info(`🔄 Please background and reopen your app now to trigger the update`)
-    await waitLog('onboarding-v2', apikey, appId, apikey, orgId)
+    pLog.info(`👀 You can also confirm the update in the dashboard: ${hostWeb}/app/${appId}/logs`)
+    pLog.info(`⌨️  ${WAIT_LOG_CONTINUE_HINT}`)
+    await waitLog('onboarding-v2', apikey, appId, orgId, {
+      spinner: pSpinner(),
+      logInfo: message => pLog.info(message),
+      waitForSkip: signal => waitForInitLogSkip(WAIT_LOG_CONTINUE_HINT, signal),
+    })
   }
   else {
     pLog.info(`📊 Check logs manually at ${hostWeb}/app/${appId}/logs to verify the update`)
@@ -5048,7 +5159,7 @@ async function maybeStarCapgoRepo(includeSkillsRepository = false, repository?: 
     options: [
       { value: 'star-update', label: directLabel },
       { value: 'star-all', label: allLabel },
-      { value: 'skip', label: 'No, thanks' },
+      { value: 'skip', label: 'Skip for now' },
     ],
   })
 
@@ -5219,7 +5330,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
       message: 'Continue anyway?',
       options: [
         { value: 'yes', label: '✅ Yes, continue' },
-        { value: 'no', label: '❌ No, exit' },
+        { value: 'no', label: 'Exit onboarding' },
       ],
     })
     if (pIsCancel(continueAnyway) || continueAnyway === 'no') {
@@ -5239,7 +5350,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
           { value: 'add-ios', label: `🛠  Run ${capAddIos} now` },
           { value: 'add-android', label: `🛠  Run ${capAddAndroid} now` },
           { value: 'yes', label: '✅ Continue without native platforms' },
-          { value: 'no', label: '❌ Exit onboarding' },
+          { value: 'no', label: 'Exit onboarding' },
         ],
       })
 

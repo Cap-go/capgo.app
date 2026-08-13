@@ -192,9 +192,10 @@ const suggestedAppId = computed(() => {
   return `com.${orgSlug}.${appSlug}`
 })
 const generatedAppId = computed(() => createdApp.value?.app_id || manualAppId.value.trim() || suggestedAppId.value)
-const aiHelpPrompt = computed(() => {
+function createAiHelpPrompt(command: string) {
   const resolvedAppId = createdApp.value?.app_id || generatedAppId.value || '[APP_ID]'
   const resolvedAppName = createdApp.value?.name?.trim() || appName.value.trim() || resolvedAppId
+  const apiKeyGuidance = t(command.includes('[YOUR_CAPGO_API_KEY]') ? 'app-onboarding-ai-help-without-key' : 'app-onboarding-ai-help-with-key')
   let appStatus = t('app-onboarding-ai-help-status-new')
   if (props.preOrg)
     appStatus = t('app-onboarding-v2-ai-help-status')
@@ -205,9 +206,10 @@ const aiHelpPrompt = computed(() => {
     appName: resolvedAppName,
     appId: resolvedAppId,
     appStatus,
-    command: redactedCliCommand.value,
+    apiKeyGuidance,
+    command,
   })
-})
+}
 const appOnboardingSteps = computed<Array<{ id: OnboardingFlowStep, label: string }>>(() => {
   if (props.preOrg) {
     return [
@@ -438,6 +440,17 @@ async function ensureApiKey() {
   apiKey.value = typeof data?.key === 'string'
     ? data.key
     : await findUsablePlainApiKey(supabase, claimsUserId, currentOrg.value?.gid, resumeAppId.value)
+}
+
+let apiKeyLoadingPromise: Promise<void> | null = null
+function loadApiKey() {
+  if (apiKey.value)
+    return Promise.resolve()
+
+  apiKeyLoadingPromise ??= ensureApiKey().finally(() => {
+    apiKeyLoadingPromise = null
+  })
+  return apiKeyLoadingPromise
 }
 
 async function loadResumeApp() {
@@ -821,7 +834,7 @@ async function createOrganizationAndApp() {
     removeBeforeUnloadWarning()
 
     try {
-      await ensureApiKey()
+      await loadApiKey()
     }
     catch (apiKeyError) {
       console.error('Cannot ensure API key', apiKeyError)
@@ -996,7 +1009,32 @@ async function copyCliCommand() {
 }
 
 async function copyAiInstructions() {
-  await copyText(aiHelpPrompt.value)
+  try {
+    await loadApiKey()
+  }
+  catch (error) {
+    console.error('Cannot ensure API key', error)
+    toast.error(t('app-onboarding-toast-apikey-error'))
+  }
+
+  dialogStore.openDialog({
+    id: 'app-onboarding-ai-help-copy-dialog',
+    title: t('app-onboarding-ai-help-copy-title'),
+    description: t('app-onboarding-ai-help-copy-description'),
+    buttons: [
+      {
+        text: t('app-onboarding-ai-help-copy-without-key'),
+        role: 'secondary',
+        handler: () => copyText(createAiHelpPrompt(redactedCliCommand.value)),
+      },
+      {
+        text: t('app-onboarding-ai-help-copy-with-key'),
+        role: 'primary',
+        disabled: !apiKey.value,
+        handler: () => copyText(createAiHelpPrompt(cliCommand.value)),
+      },
+    ],
+  })
 }
 
 function goToInstallStep() {
@@ -1044,7 +1082,7 @@ onMounted(async () => {
     if (!resumed)
       flowStep.value = 'details'
 
-    void ensureApiKey().catch((error) => {
+    void loadApiKey().catch((error) => {
       console.error('Cannot ensure API key', error)
       toast.error(t('app-onboarding-toast-apikey-error'))
     })

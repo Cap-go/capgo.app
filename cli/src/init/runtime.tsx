@@ -102,6 +102,11 @@ export interface InitStreamingOutput {
   }
 }
 
+export interface InitLogSkip {
+  hint: string
+  resolve: () => void
+}
+
 export interface InitRuntimeState {
   screen?: InitScreen
   logs: InitLogEntry[]
@@ -111,6 +116,7 @@ export interface InitRuntimeState {
   codeDiff?: InitCodeDiff
   encryptionSummary?: InitEncryptionSummary
   streamingOutput?: InitStreamingOutput
+  logSkip?: InitLogSkip
 }
 
 let state: InitRuntimeState = {
@@ -175,7 +181,7 @@ export function stopInitInkSession(finalMessage?: { text: string, tone: 'green' 
     inkApp = undefined
   }
   started = false
-  state = { screen: undefined, logs: [], spinner: undefined, prompt: undefined, codeDiff: undefined, encryptionSummary: undefined, streamingOutput: undefined }
+  state = { screen: undefined, logs: [], spinner: undefined, prompt: undefined, codeDiff: undefined, encryptionSummary: undefined, streamingOutput: undefined, logSkip: undefined }
   if (finalMessage)
     stdout.write(`${finalMessage.text}\n`)
 }
@@ -305,6 +311,29 @@ export function updateInitStreamingStatus(status: InitStreamingOutputStatus, sta
         statusMessage,
       },
     }
+  })
+}
+
+export function waitForInitLogSkip(hint: string, signal?: AbortSignal): Promise<void> {
+  ensureInitInkSession()
+  return new Promise((resolve) => {
+    const finish = () => {
+      signal?.removeEventListener('abort', finish)
+      updateState(active => ({ ...active, logSkip: undefined }))
+      resolve()
+    }
+    if (signal?.aborted) {
+      resolve()
+      return
+    }
+    signal?.addEventListener('abort', finish, { once: true })
+    updateState(current => ({
+      ...current,
+      logSkip: {
+        hint,
+        resolve: finish,
+      },
+    }))
   })
 }
 
