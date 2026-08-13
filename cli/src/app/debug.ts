@@ -16,11 +16,14 @@ function wait(ms: number, signal?: AbortSignal) {
       resolve()
       return
     }
-    const timeout = setTimeout(resolve, ms)
     const onAbort = () => {
       clearTimeout(timeout)
       resolve()
     }
+    const timeout = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
     signal?.addEventListener('abort', onAbort, { once: true })
   })
 }
@@ -109,7 +112,7 @@ interface LogData {
   version?: number
   created_at: string
 }
-export async function getStats(apikey: string, query: QueryStats, after: string | null): Promise<LogData[]> {
+export async function getStats(apikey: string, query: QueryStats, after: string | null, signal?: AbortSignal): Promise<LogData[]> {
   const localConfig = await getLocalConfig()
   const statsEndpoint = `${localConfig.hostApi}/private/stats`
 
@@ -121,6 +124,7 @@ export async function getStats(apikey: string, query: QueryStats, after: string 
       method: 'POST',
       headers: buildCliRequestHeaders({ 'Content-Type': 'application/json', capgkey: apikey }),
       body: JSON.stringify(effectiveQuery),
+      signal,
     })
 
     if (!response.ok) {
@@ -133,6 +137,8 @@ export async function getStats(apikey: string, query: QueryStats, after: string 
       return dataD
   }
   catch (error) {
+    if (signal?.aborted || (error instanceof Error && error.name === 'AbortError'))
+      return []
     log.error(`Cannot get stats: ${describeFetchFailure(error, statsEndpoint)}`)
   }
   return []
@@ -223,6 +229,9 @@ export interface WaitLogOptions {
 
 function listenForWaitLogContinue(signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
+    const stdin = process.stdin
+    const canUseRawMode = Boolean(stdin.isTTY && typeof stdin.setRawMode === 'function')
+    const previousRawMode = canUseRawMode ? stdin.isRaw : undefined
     const finish = () => {
       cleanup()
       resolve()
@@ -233,13 +242,18 @@ function listenForWaitLogContinue(signal: AbortSignal): Promise<void> {
         finish()
     }
     const cleanup = () => {
-      if (process.stdin.isTTY)
-        process.stdin.off('data', onData)
+      stdin.off('data', onData)
       signal.removeEventListener('abort', finish)
+      if (canUseRawMode && previousRawMode !== undefined)
+        stdin.setRawMode(previousRawMode)
     }
     signal.addEventListener('abort', finish, { once: true })
-    if (process.stdin.isTTY)
-      process.stdin.on('data', onData)
+    if (canUseRawMode) {
+      stdin.setRawMode(true)
+      stdin.resume()
+    }
+    if (stdin.isTTY)
+      stdin.on('data', onData)
   })
 }
 
@@ -273,7 +287,9 @@ export async function waitLog(channel: string, apikey: string, appId: string, or
       if (abort.signal.aborted)
         return 'aborted'
 
-      const data = await getStats(apikey, query, after)
+      const data = await getStats(apikey, query, after, abort.signal)
+      if (abort.signal.aborted)
+        return 'aborted'
       if (data.length === 0)
         continue
 
@@ -304,6 +320,8 @@ export async function waitLog(channel: string, apikey: string, appId: string, or
         if (stop)
           shouldStop = true
       }
+      if (abort.signal.aborted)
+        return 'aborted'
       if (t.rows.length) {
         s.stop('')
         logInfo(t.toString())
@@ -316,12 +334,14 @@ export async function waitLog(channel: string, apikey: string, appId: string, or
     return 'aborted'
   }
 
+  const pollTask = poll()
   try {
     const result = await Promise.race([
-      poll(),
+      pollTask,
       skipPromise.then(() => 'skip' as const),
     ])
     abort.abort()
+    await pollTask
     if (result === 'skip') {
       s.stop('Skipped waiting for logs')
       logInfo('You can confirm the update in the Capgo dashboard anytime.')
@@ -332,6 +352,7 @@ export async function waitLog(channel: string, apikey: string, appId: string, or
   }
   catch (error) {
     abort.abort()
+    await pollTask.catch(() => undefined)
     s.stop('Stop watching logs')
     throw error
   }
