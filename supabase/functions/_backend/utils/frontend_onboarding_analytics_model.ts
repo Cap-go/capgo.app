@@ -1,14 +1,17 @@
-export const FRONTEND_ONBOARDING_VERSION = 1 as const
+export const FRONTEND_ONBOARDING_VERSIONS = [1, 2] as const
+export type FrontendOnboardingVersion = typeof FRONTEND_ONBOARDING_VERSIONS[number]
 export const FRONTEND_ONBOARDING_FOLLOWUP_MS = 24 * 60 * 60 * 1000
 
 export type FrontendOnboardingStageKey = 'intent' | 'details' | 'organization' | 'setup'
 
 export interface FrontendOnboardingAttempt {
   attemptId: string
+  onboardingVersion: FrontendOnboardingVersion
   intentMs: number
   detailsMs: number | null
   organizationMs: number | null
   setupMs: number | null
+  interactionEvents: string[]
 }
 
 export interface FrontendOnboardingFunnelStage {
@@ -42,13 +45,20 @@ export interface FrontendOnboardingComparison {
 
 export interface FrontendOnboardingDailyAttempt {
   date: string
-  attempts: number
+  v1_attempts: number
+  v2_attempts: number
 }
 
 export interface FrontendOnboardingAnalytics {
   kpis: FrontendOnboardingPeriodKpis & { comparison: FrontendOnboardingComparison }
   daily_attempts: FrontendOnboardingDailyAttempt[]
-  funnel: FrontendOnboardingFunnelStage[]
+  funnels: {
+    v1: FrontendOnboardingFunnelStage[]
+    v2: FrontendOnboardingFunnelStage[]
+  }
+  v2_graph: {
+    nodes: Array<{ key: string, count: number }>
+  }
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -156,9 +166,13 @@ function utcDate(ms: number): string {
 }
 
 function buildDailyAttempts(attempts: FrontendOnboardingAttempt[], startMs: number, endMs: number): FrontendOnboardingDailyAttempt[] {
-  const attemptsByDate = new Map<string, number>()
-  for (const attempt of attempts)
-    attemptsByDate.set(utcDate(attempt.intentMs), (attemptsByDate.get(utcDate(attempt.intentMs)) ?? 0) + 1)
+  const attemptsByDate = new Map<string, { v1_attempts: number, v2_attempts: number }>()
+  for (const attempt of attempts) {
+    const date = utcDate(attempt.intentMs)
+    const counts = attemptsByDate.get(date) ?? { v1_attempts: 0, v2_attempts: 0 }
+    counts[`v${attempt.onboardingVersion}_attempts`]++
+    attemptsByDate.set(date, counts)
+  }
 
   const days: FrontendOnboardingDailyAttempt[] = []
   for (let dayStartMs = Date.UTC(
@@ -167,10 +181,22 @@ function buildDailyAttempts(attempts: FrontendOnboardingAttempt[], startMs: numb
     new Date(startMs).getUTCDate(),
   ); dayStartMs < endMs; dayStartMs += DAY_MS) {
     const date = utcDate(dayStartMs)
-    days.push({ date, attempts: attemptsByDate.get(date) ?? 0 })
+    days.push({ date, ...(attemptsByDate.get(date) ?? { v1_attempts: 0, v2_attempts: 0 }) })
   }
 
   return days
+}
+
+function buildV2Graph(attempts: FrontendOnboardingAttempt[]): Array<{ key: string, count: number }> {
+  const counts = new Map<string, number>()
+  for (const attempt of attempts) {
+    for (const event of new Set(attempt.interactionEvents))
+      counts.set(event, (counts.get(event) ?? 0) + 1)
+  }
+
+  return [...counts.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, count]) => ({ key, count }))
 }
 
 function comparePeriods(current: FrontendOnboardingPeriodKpis, previous: FrontendOnboardingPeriodKpis): FrontendOnboardingComparison {
@@ -199,15 +225,22 @@ export function buildFrontendOnboardingAnalytics(
   const previousStartMs = currentStartMs - periodDurationMs
   const currentAttempts = attempts.filter(attempt => attempt.intentMs >= currentStartMs && attempt.intentMs < currentEndMs)
   const previousAttempts = attempts.filter(attempt => attempt.intentMs >= previousStartMs && attempt.intentMs < currentStartMs)
-  const current = summarizePeriod(currentAttempts)
-  const previous = summarizePeriod(previousAttempts)
+  const currentV1Attempts = currentAttempts.filter(attempt => attempt.onboardingVersion === 1)
+  const currentV2Attempts = currentAttempts.filter(attempt => attempt.onboardingVersion === 2)
+  const previousV2Attempts = previousAttempts.filter(attempt => attempt.onboardingVersion === 2)
+  const currentV2 = summarizePeriod(currentV2Attempts)
+  const previousV2 = summarizePeriod(previousV2Attempts)
 
   return {
     kpis: {
-      ...current.kpis,
-      comparison: comparePeriods(current.kpis, previous.kpis),
+      ...currentV2.kpis,
+      comparison: comparePeriods(currentV2.kpis, previousV2.kpis),
     },
     daily_attempts: buildDailyAttempts(currentAttempts, currentStartMs, currentEndMs),
-    funnel: current.funnel,
+    funnels: {
+      v1: buildFunnel(currentV1Attempts),
+      v2: currentV2.funnel,
+    },
+    v2_graph: { nodes: buildV2Graph(currentV2Attempts) },
   }
 }

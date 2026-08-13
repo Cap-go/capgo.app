@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildFrontendOnboardingAnalytics,
   FRONTEND_ONBOARDING_FOLLOWUP_MS,
+  FRONTEND_ONBOARDING_VERSIONS,
   type FrontendOnboardingAttempt,
 } from '../supabase/functions/_backend/utils/frontend_onboarding_analytics_model.ts'
 
@@ -12,6 +13,8 @@ const CURRENT_END_MS = CURRENT_START_MS + 2 * DAY_MS
 
 function attempt(overrides: Partial<FrontendOnboardingAttempt> & Pick<FrontendOnboardingAttempt, 'attemptId' | 'intentMs'>): FrontendOnboardingAttempt {
   return {
+    onboardingVersion: 2,
+    interactionEvents: [],
     detailsMs: null,
     organizationMs: null,
     setupMs: null,
@@ -20,7 +23,7 @@ function attempt(overrides: Partial<FrontendOnboardingAttempt> & Pick<FrontendOn
 }
 
 describe('buildFrontendOnboardingAnalytics', () => {
-  it.concurrent('builds current KPIs, daily attempts, and a monotonic funnel', () => {
+  it.concurrent('builds v2 KPIs, split daily attempts, and per-version monotonic funnels', () => {
     const analytics = buildFrontendOnboardingAnalytics([
       attempt({
         attemptId: 'complete',
@@ -40,6 +43,11 @@ describe('buildFrontendOnboardingAnalytics', () => {
         detailsMs: CURRENT_START_MS + DAY_MS + MINUTE_MS,
       }),
       attempt({ attemptId: 'intent-only', intentMs: CURRENT_START_MS + DAY_MS + MINUTE_MS }),
+      attempt({
+        attemptId: 'v1-intent',
+        intentMs: CURRENT_START_MS + DAY_MS,
+        onboardingVersion: 1,
+      }),
     ], CURRENT_START_MS, CURRENT_END_MS)
 
     expect(analytics.kpis).toMatchObject({
@@ -50,16 +58,17 @@ describe('buildFrontendOnboardingAnalytics', () => {
       largest_dropoff: { from: 'details', to: 'organization', percentage: 1 / 3 * 100 },
     })
     expect(analytics.daily_attempts).toEqual([
-      { date: '2026-08-01', attempts: 2 },
-      { date: '2026-08-02', attempts: 2 },
+      { date: '2026-08-01', v1_attempts: 0, v2_attempts: 2 },
+      { date: '2026-08-02', v1_attempts: 1, v2_attempts: 2 },
     ])
-    expect(analytics.funnel.map(stage => stage.reached)).toEqual([4, 3, 2, 2])
-    expect(analytics.funnel).toEqual([
+    expect(analytics.funnels.v2.map(stage => stage.reached)).toEqual([4, 3, 2, 2])
+    expect(analytics.funnels.v2).toEqual([
       { key: 'intent', label: 'Intent', reached: 4, of_start_percent: 100, dropoff_percent: 0 },
       { key: 'details', label: 'App details', reached: 3, of_start_percent: 75, dropoff_percent: 25 },
       { key: 'organization', label: 'Organization', reached: 2, of_start_percent: 50, dropoff_percent: 1 / 3 * 100 },
       { key: 'setup', label: 'Setup reached', reached: 2, of_start_percent: 50, dropoff_percent: 0 },
     ])
+    expect(analytics.funnels.v1.map(stage => stage.reached)).toEqual([1, 0, 0, 0])
   })
 
   it.concurrent('ignores steps before intent and after the 24-hour progression window', () => {
@@ -74,7 +83,7 @@ describe('buildFrontendOnboardingAnalytics', () => {
       }),
     ], CURRENT_START_MS, CURRENT_END_MS)
 
-    expect(analytics.funnel.map(stage => stage.reached)).toEqual([1, 0, 0, 0])
+    expect(analytics.funnels.v2.map(stage => stage.reached)).toEqual([1, 0, 0, 0])
     expect(analytics.kpis.median_completion_ms).toBeNull()
   })
 
@@ -87,6 +96,11 @@ describe('buildFrontendOnboardingAnalytics', () => {
         setupMs: previousStartMs + 10 * MINUTE_MS,
       }),
       attempt({ attemptId: 'previous-intent-only', intentMs: previousStartMs + MINUTE_MS }),
+      attempt({
+        attemptId: 'previous-v1-intent-only',
+        intentMs: previousStartMs + 2 * MINUTE_MS,
+        onboardingVersion: 1,
+      }),
       attempt({
         attemptId: 'current-complete-one',
         intentMs: CURRENT_START_MS,
@@ -131,10 +145,12 @@ describe('buildFrontendOnboardingAnalytics', () => {
       largest_dropoff: null,
     })
     expect(analytics.daily_attempts).toEqual([
-      { date: '2026-08-01', attempts: 0 },
-      { date: '2026-08-02', attempts: 0 },
+      { date: '2026-08-01', v1_attempts: 0, v2_attempts: 0 },
+      { date: '2026-08-02', v1_attempts: 0, v2_attempts: 0 },
     ])
-    expect(analytics.funnel.map(stage => stage.reached)).toEqual([0, 0, 0, 0])
+    expect(analytics.funnels.v1.map(stage => stage.reached)).toEqual([0, 0, 0, 0])
+    expect(analytics.funnels.v2.map(stage => stage.reached)).toEqual([0, 0, 0, 0])
+    expect(analytics.v2_graph.nodes).toEqual([])
   })
 
   it.concurrent('reports no largest drop-off when every attempt reaches every stage', () => {
@@ -179,8 +195,8 @@ describe('buildFrontendOnboardingAnalytics', () => {
     ], startMs, endMs)
 
     expect(analytics.daily_attempts).toEqual([
-      { date: '2026-08-01', attempts: 1 },
-      { date: '2026-08-02', attempts: 1 },
+      { date: '2026-08-01', v1_attempts: 0, v2_attempts: 1 },
+      { date: '2026-08-02', v1_attempts: 0, v2_attempts: 1 },
     ])
   })
 
@@ -208,5 +224,37 @@ describe('buildFrontendOnboardingAnalytics', () => {
 
   it.concurrent('rejects an infinite end bound', () => {
     expect(() => buildFrontendOnboardingAnalytics([], CURRENT_START_MS, Number.POSITIVE_INFINITY)).toThrow(RangeError)
+  })
+
+  it.concurrent('counts each current v2 interaction event once and ignores v1 events', () => {
+    const analytics = buildFrontendOnboardingAnalytics([
+      attempt({
+        attemptId: 'v2-repeated-events',
+        intentMs: CURRENT_START_MS,
+        interactionEvents: ['organization_created', 'organization_created', 'app_created'],
+      }),
+      attempt({
+        attemptId: 'v2-shared-event',
+        intentMs: CURRENT_START_MS + MINUTE_MS,
+        interactionEvents: ['organization_created'],
+      }),
+      attempt({
+        attemptId: 'v1-ignored-event',
+        intentMs: CURRENT_START_MS + 2 * MINUTE_MS,
+        onboardingVersion: 1,
+        interactionEvents: ['v1_only_event', 'organization_created'],
+      }),
+      attempt({
+        attemptId: 'previous-v2-event',
+        intentMs: CURRENT_START_MS - DAY_MS,
+        interactionEvents: ['previous_event'],
+      }),
+    ], CURRENT_START_MS, CURRENT_END_MS)
+
+    expect(FRONTEND_ONBOARDING_VERSIONS).toEqual([1, 2])
+    expect(analytics.v2_graph.nodes).toEqual([
+      { key: 'app_created', count: 1 },
+      { key: 'organization_created', count: 2 },
+    ])
   })
 })
