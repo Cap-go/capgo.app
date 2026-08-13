@@ -27,13 +27,13 @@ describe('app onboarding API key loading state', () => {
     )
     const mountedFlow = onboardingSource.slice(onboardingSource.indexOf('onMounted(async () => {'))
     const resumeLoadIndex = mountedFlow.indexOf('const resumed = await loadResumeApp()')
-    const apiKeyProvisioningIndex = mountedFlow.indexOf('void ensureApiKey().catch')
+    const apiKeyProvisioningIndex = mountedFlow.indexOf('void loadApiKey().catch')
 
     expect(resumeLoader).not.toContain('ensureApiKey')
     expect(resumeLoadIndex).toBeGreaterThanOrEqual(0)
     expect(apiKeyProvisioningIndex).toBeGreaterThanOrEqual(0)
     expect(resumeLoadIndex).toBeLessThan(apiKeyProvisioningIndex)
-    expect(mountedFlow).not.toContain('await ensureApiKey()')
+    expect(mountedFlow).not.toContain('await loadApiKey()')
   })
 
   it.concurrent('renders ready commands as native DaisyUI buttons', () => {
@@ -56,6 +56,8 @@ describe('app onboarding API key loading state', () => {
     )
 
     expect(copyHandler).toContain("id: 'app-onboarding-ai-help-copy-dialog'")
+    expect(copyHandler).toContain('await loadApiKey()')
+    expect(copyHandler.indexOf('await loadApiKey()')).toBeLessThan(copyHandler.indexOf('dialogStore.openDialog({'))
     expect(copyHandler).toContain('createAiHelpPrompt(redactedCliCommand.value)')
     expect(copyHandler).toContain('createAiHelpPrompt(cliCommand.value)')
     expect(copyHandler).toContain("role: 'primary'")

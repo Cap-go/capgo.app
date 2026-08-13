@@ -440,6 +440,17 @@ async function ensureApiKey() {
     : await findUsablePlainApiKey(supabase, claimsUserId, currentOrg.value?.gid, resumeAppId.value)
 }
 
+let apiKeyLoadingPromise: Promise<void> | null = null
+function loadApiKey() {
+  if (apiKey.value)
+    return Promise.resolve()
+
+  apiKeyLoadingPromise ??= ensureApiKey().finally(() => {
+    apiKeyLoadingPromise = null
+  })
+  return apiKeyLoadingPromise
+}
+
 async function loadResumeApp() {
   if (!resumeAppId.value || !currentOrg.value?.gid)
     return false
@@ -821,7 +832,7 @@ async function createOrganizationAndApp() {
     removeBeforeUnloadWarning()
 
     try {
-      await ensureApiKey()
+      await loadApiKey()
     }
     catch (apiKeyError) {
       console.error('Cannot ensure API key', apiKeyError)
@@ -995,7 +1006,15 @@ async function copyCliCommand() {
   await copyText(cliCommand.value)
 }
 
-function copyAiInstructions() {
+async function copyAiInstructions() {
+  try {
+    await loadApiKey()
+  }
+  catch (error) {
+    console.error('Cannot ensure API key', error)
+    toast.error(t('app-onboarding-toast-apikey-error'))
+  }
+
   dialogStore.openDialog({
     id: 'app-onboarding-ai-help-copy-dialog',
     title: t('app-onboarding-ai-help-copy-title'),
@@ -1061,7 +1080,7 @@ onMounted(async () => {
     if (!resumed)
       flowStep.value = 'details'
 
-    void ensureApiKey().catch((error) => {
+    void loadApiKey().catch((error) => {
       console.error('Cannot ensure API key', error)
       toast.error(t('app-onboarding-toast-apikey-error'))
     })
