@@ -672,7 +672,7 @@ async function runInitContactSupport(failureText: string, supportPlatform?: Plat
           options: [
             { value: 'yes', label: '📨  Yes, send to support' },
             { value: 'view', label: '👀  View logs first (opens the file)' },
-            { value: 'no', label: '✖  Cancel' },
+            { value: 'no', label: 'Skip sending' },
           ],
         })
         if (pIsCancel(choice) || choice === 'no')
@@ -1434,7 +1434,7 @@ async function tryResumeOnboarding(
       message: 'Would you like to continue from where you left off?',
       options: [
         { value: 'yes', label: '✅ Yes, continue' },
-        { value: 'no', label: '❌ No, start over' },
+        { value: 'no', label: '🔄 Start over from step 1' },
       ],
     })
     await cancelCommand(resumeChoice, orgId, apikey)
@@ -2212,7 +2212,7 @@ async function checkPrerequisitesStep(
   }
 
   if ((nativePlatforms.ios && !hasXcode) && (nativePlatforms.android && !hasAndroidStudio)) {
-    pLog.error(`❌ No development environment detected`)
+    pLog.warn(`⚠️ No development environment detected`)
     pLog.info(``)
     pLog.info(`📱 To develop mobile apps with Capacitor, you need:`)
     pLog.info(`   • For iOS: Xcode (macOS only) - https://developer.apple.com/xcode/`)
@@ -2399,7 +2399,7 @@ async function askForReplacementAppId(
         label: `Use ${suggestion}`,
       })),
       { value: 'custom', label: 'Enter a custom app ID' },
-      { value: 'cancel', label: 'Cancel onboarding' },
+      { value: 'cancel', label: 'Exit onboarding' },
     ],
   })
 
@@ -2429,7 +2429,7 @@ async function addAppStep(organization: Organization, apikey: string, appId: str
         message: `Add ${currentAppId} to Capgo?`,
         options: [
           { value: 'yes', label: '✅ Yes, add it' },
-          { value: 'change', label: '❌ No, use a different app ID' },
+          { value: 'change', label: '✏️ Use a different app ID' },
         ],
       })
       await cancelCommand(addChoice, organization.gid, apikey)
@@ -2867,7 +2867,9 @@ async function addUpdaterStep(orgId: string, apikey: string, appId: string) {
 
     let doDirectInstall: boolean | symbol = false
     if (shouldOfferDirectInstall) {
-      doDirectInstall = await pConfirm({ message: `Do you want to set instant updates in ${appId}? Read more about it here: https://capgo.app/docs/live-updates/update-behavior/#applying-updates-immediately` })
+      pLog.info('By default, a downloaded update applies the next time the app launches.')
+      pLog.info('Instant updates apply it as soon as the download finishes: https://capgo.app/docs/live-updates/update-behavior/#applying-updates-immediately')
+      doDirectInstall = await pConfirm({ message: `Enable instant updates for ${appId}?` })
       await cancelCommand(doDirectInstall, orgId, apikey)
     }
 
@@ -3084,7 +3086,7 @@ async function addEncryptionStep(orgId: string, apikey: string, appId: string) {
     // option once the user has already seen the overview — re-offering it
     // makes no sense and clutters the decision.
     const options: { value: EncryptionChoice, label: string }[] = [
-      { value: 'not_needed', label: '❌ No, my app doesn\'t need this' },
+      { value: 'not_needed', label: '⏭️ Skip encryption (most apps)' },
       { value: 'critical', label: '🔐 Yes — set up end-to-end encryption' },
     ]
     if (!learnShown)
@@ -3171,11 +3173,12 @@ async function addEncryptionStep(orgId: string, apikey: string, appId: string) {
   }
   const skippedSummary: InitEncryptionSummary = {
     phase: 'skipped',
-    title: '⏭️  Encryption SKIPPED',
+    title: '⏭️ Encryption not enabled',
     lines: [
-      '   • Bundles are plain JS / HTML / CSS, fetchable by anyone who finds the URL.',
-      '   • Never put private API keys or backend secrets in a mobile app.',
-      `   • You can enable encryption later with: ${pm.runner} @capgo/cli@latest key create`,
+      '   • Onboarding continues. Most apps do not need this.',
+      '   • Bundles stay regular JS / HTML / CSS over HTTPS.',
+      '   • Do not put private API keys or backend secrets in the app.',
+      `   • Enable later with: ${pm.runner} @capgo/cli@latest key create`,
     ],
   }
   let finalSummary: InitEncryptionSummary = skippedSummary
@@ -3244,7 +3247,7 @@ async function addEncryptionStep(orgId: string, apikey: string, appId: string) {
       if (syncResult.success) {
         finalSummary = {
           phase: 'enabled',
-          title: '🔐 Encryption ENABLED',
+          title: '🔐 Encryption enabled',
           lines: [
             '   • Private RSA key stays on your machine — do not commit it.',
             '   • Public RSA key is bundled in the app (extractable by reverse engineering).',
@@ -3279,7 +3282,7 @@ async function addEncryptionStep(orgId: string, apikey: string, appId: string) {
 
       finalSummary = {
         phase: 'failed',
-        title: '⚠️  Encryption NOT ENABLED (key creation failed)',
+        title: '⚠️ Encryption not enabled — key creation failed',
         lines: [
           '   • Key creation failed and you chose to continue without encryption.',
           `   • You can retry later with: ${pm.runner} @capgo/cli@latest key create`,
@@ -3401,7 +3404,7 @@ function promoteEncryptionSummaryToEnabled(): void {
     return
   const promoted: InitEncryptionSummary = {
     phase: 'enabled',
-    title: '🔐 Encryption ENABLED',
+    title: '🔐 Encryption enabled',
     lines: [
       '   • Private RSA key stays on your machine — do not commit it.',
       '   • Public RSA key is bundled in the app (extractable by reverse engineering).',
@@ -3534,7 +3537,7 @@ async function handleMissingBuildScript(buildCommand: string, appId: string, pla
   const spinner = pSpinner()
   spinner.start('Checking project type')
   spinner.stop('Missing build script', 'neutral')
-  pLog.warn(`❌ Cannot find "${buildCommand}" script in package.json`)
+  pLog.warn(`Cannot find "${buildCommand}" script in package.json`)
   pLog.info(`💡 Your package.json needs a "${buildCommand}" script to build the app`)
 
   const skipBuild = await pConfirm({
@@ -4638,7 +4641,7 @@ async function addCodeChangeStep(orgId: string, apikey: string, appId: string, p
     // check in script build exist
     if (!packScripts[buildCommand]) {
       s.stop('Missing build script', 'neutral')
-      pLog.warn(`❌ Cannot find "${buildCommand}" script in package.json`)
+      pLog.warn(`Cannot find "${buildCommand}" script in package.json`)
       pLog.info(`💡 Build manually in another terminal, then come back and continue`)
       printManualOtaBuildInstructions()
 
@@ -5052,7 +5055,7 @@ async function maybeStarCapgoRepo(includeSkillsRepository = false, repository?: 
     options: [
       { value: 'star-update', label: directLabel },
       { value: 'star-all', label: allLabel },
-      { value: 'skip', label: 'No, thanks' },
+      { value: 'skip', label: 'Skip for now' },
     ],
   })
 
@@ -5223,7 +5226,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
       message: 'Continue anyway?',
       options: [
         { value: 'yes', label: '✅ Yes, continue' },
-        { value: 'no', label: '❌ No, exit' },
+        { value: 'no', label: 'Exit onboarding' },
       ],
     })
     if (pIsCancel(continueAnyway) || continueAnyway === 'no') {
@@ -5243,7 +5246,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
           { value: 'add-ios', label: `🛠  Run ${capAddIos} now` },
           { value: 'add-android', label: `🛠  Run ${capAddAndroid} now` },
           { value: 'yes', label: '✅ Continue without native platforms' },
-          { value: 'no', label: '❌ Exit onboarding' },
+          { value: 'no', label: 'Exit onboarding' },
         ],
       })
 
