@@ -6,7 +6,7 @@ import { computed, h, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
-import IconInformation from '~icons/heroicons/information-circle'
+import LogMetadataPopover from '~/components/tables/LogMetadataPopover.vue'
 import { formatDate } from '~/services/date'
 import { getDateRangeForPreset, getTimeWindowPageRange, TABLE_DATE_RANGE_DEFAULT } from '~/services/dateRange'
 import { getLogDocUrl } from '~/services/logDocLinks'
@@ -108,38 +108,6 @@ function normalizeMetadata(metadata: LogData['metadata']): Record<string, string
     return null
   }
   return metadata
-}
-
-function formatMetadata(elem: Element): string {
-  const metadata = normalizeMetadata(elem.metadata)
-  if (!metadata)
-    return ''
-
-  const entries = Object.entries(metadata)
-  if (!entries.length)
-    return ''
-
-  const preview = entries.slice(0, 3).map(([key, value]) => `${key}: ${value}`).join(', ')
-  return entries.length > 3 ? `${preview}, +${entries.length - 3}` : preview
-}
-
-function hasMetadata(elem: Element): boolean {
-  return formatMetadata(elem) !== ''
-}
-
-async function copyMetadata(elem: Element) {
-  const metadata = normalizeMetadata(elem.metadata)
-  if (!metadata)
-    return
-
-  try {
-    await navigator.clipboard.writeText(JSON.stringify(metadata, null, 2))
-    toast.success(t('copied-to-clipboard'))
-  }
-  catch (error) {
-    console.error(error)
-    toast.error(t('copy-fail'))
-  }
 }
 const filterShortcuts = [
   { label: 'filter-shortcut-all-fail', filters: failureActionFilterKeys },
@@ -376,7 +344,7 @@ columns.value = [
     head: true,
     renderFunction: (elem: Element) => {
       const actionLabel = formatAction(elem)
-      const metadataPreview = formatMetadata(elem)
+      const metadata = normalizeMetadata(elem.metadata)
       return h('div', { class: 'flex w-full min-w-0 items-center gap-1.5' }, [
         h('a', {
           href: getLogDocUrl(elem.action),
@@ -385,20 +353,8 @@ columns.value = [
           title: actionLabel,
           class: 'min-w-0 truncate hover:underline',
         }, actionLabel),
-        hasMetadata(elem)
-          ? h('button', {
-              'type': 'button',
-              'class': 'shrink-0 rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-azure-500 dark:hover:bg-slate-700 dark:hover:text-azure-400',
-              'title': metadataPreview,
-              'aria-label': `${t('metadata')}: ${metadataPreview}`,
-              'data-test': 'log-row-metadata',
-              'onClick': (event: MouseEvent) => {
-                event.stopPropagation()
-                void copyMetadata(elem)
-              },
-            }, [
-              h(IconInformation, { class: 'h-4 w-4' }),
-            ])
+        metadata && Object.keys(metadata).length
+          ? h(LogMetadataPopover, { json: JSON.stringify(metadata, null, 2) })
           : null,
       ])
     },
