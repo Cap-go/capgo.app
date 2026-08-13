@@ -138,11 +138,11 @@ test.describe('Devices empty state', () => {
 
     const banner = page.locator('[data-test="devices-range-filter-banner"]')
     await expect(banner).toBeVisible()
-    await expect(banner).toContainText('3 devices are hidden by the current time filter.')
-    await expect(banner.getByRole('button', { name: 'Remove the filter' })).toBeVisible()
+    await expect(banner).toContainText('3 devices are hidden by the current timeframe.')
+    await expect(banner.getByRole('button', { name: 'Change the timeframe' })).toBeVisible()
     await expect(page.locator('[data-test="devices-empty-state"]')).toBeVisible()
 
-    await banner.getByRole('button', { name: 'Remove the filter' }).click()
+    await banner.getByRole('button', { name: 'Change the timeframe' }).click()
     await expect(page.getByRole('dialog', { name: /Date range:/ })).toBeVisible()
   })
 })

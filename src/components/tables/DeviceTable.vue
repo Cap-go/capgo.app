@@ -663,15 +663,15 @@ watch([selectedPlatform, selectedVersionNames], () => {
           <div class="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
             <span>
               {{ hiddenByTimeFilterCount === 1
-                ? t('devices-hidden-by-time-filter-one')
-                : t('devices-hidden-by-time-filter-many', { count: hiddenByTimeFilterCount }) }}
+                ? t('devices-hidden-by-timeframe-one')
+                : t('devices-hidden-by-timeframe-many', { count: hiddenByTimeFilterCount }) }}
             </span>
             <button
               type="button"
               class="d-btn d-btn-link h-auto min-h-0 rounded-sm border-0 p-0 font-semibold text-blue-600 underline underline-offset-2 shadow-none hover:text-blue-800 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:outline-none dark:text-blue-400 dark:hover:text-blue-300 dark:focus-visible:ring-offset-slate-800"
               @click="openDateRangePicker"
             >
-              {{ t('devices-remove-time-filter') }}
+              {{ t('devices-change-timeframe') }}
             </button>
           </div>
         </div>
