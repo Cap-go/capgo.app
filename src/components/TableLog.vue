@@ -3,7 +3,7 @@ import type { TableColumn } from './comp_def'
 import type { DateRangePreset } from '~/services/dateRange'
 import { FormKit } from '@formkit/vue'
 import { useDebounceFn, useNow } from '@vueuse/core'
-import { computed, onMounted, onUnmounted, ref, useId, watch } from 'vue'
+import { computed, defineComponent, onMounted, onUnmounted, ref, useId, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import IconFastBackward from '~icons/ic/round-keyboard-double-arrow-left'
 import IconSearch from '~icons/ic/round-search?raw'
@@ -162,6 +162,20 @@ function displayValueKey(elem: any, col: TableColumn | undefined) {
     return ''
   return col.displayFunction ? col.displayFunction(elem) : elem[col.key]
 }
+
+const RenderCell = defineComponent<{
+  renderer?: (item: any) => any
+  item: any
+}>({
+  name: 'RenderCell',
+  props: {
+    renderer: Function as unknown as () => ((item: any) => any) | undefined,
+    item: { type: Object as any, required: true },
+  },
+  setup(props) {
+    return () => (props.renderer ? (props.renderer as any)(props.item) : null)
+  },
+})
 
 async function fastBackward() {
   emit('fastBackward')
@@ -464,14 +478,20 @@ onMounted(() => {
             class="bg-white border-b dark:bg-gray-800 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600"
           >
             <template v-for="(col, _y) in columns" :key="`${i}_${_y}`">
-              <th v-if="col.head" :class="`${col.class} ${!col.mobile ? 'hidden md:table-cell' : ''} ${col.onClick ? 'cursor-pointer hover:underline clickable-cell' : ''}`" scope="row" class="px-1 py-1 font-medium text-gray-900 whitespace-nowrap md:py-4 md:px-6 dark:text-white" @click.stop="col.onClick ? col.onClick(elem) : () => {}">
-                {{ displayValueKey(elem, col) }}
+              <th v-if="col.head" :class="`${col.class ?? ''} ${!col.mobile ? 'hidden md:table-cell' : ''} ${col.onClick ? 'cursor-pointer hover:underline clickable-cell' : ''}`" scope="row" class="px-1 py-1 font-medium text-gray-900 whitespace-nowrap md:py-4 md:px-6 dark:text-white" @click.stop="col.onClick ? col.onClick(elem) : () => {}">
+                <RenderCell v-if="col.renderFunction" :renderer="col.renderFunction" :item="elem" />
+                <template v-else>
+                  {{ displayValueKey(elem, col) }}
+                </template>
               </th>
-              <td v-else-if="col.icon" :class="`${col.class} ${!col.mobile ? 'hidden md:table-cell' : ''}`" class="px-1 py-1 cursor-pointer md:py-4 md:px-6" @click.stop="col.onClick ? col.onClick(elem) : () => {}">
+              <td v-else-if="col.icon" :class="`${col.class ?? ''} ${!col.mobile ? 'hidden md:table-cell' : ''}`" class="px-1 py-1 cursor-pointer md:py-4 md:px-6" @click.stop="col.onClick ? col.onClick(elem) : () => {}">
                 <component :is="col.icon" />
               </td>
-              <td v-else :class="`${col.class} ${!col.mobile ? 'hidden md:table-cell' : ''} ${col.onClick ? 'cursor-pointer hover:underline clickable-cell' : ''}`" class="px-1 py-1 md:py-4 md:px-6" @click.stop="col.onClick ? col.onClick(elem) : () => {}">
-                {{ displayValueKey(elem, col) }}
+              <td v-else :class="`${col.class ?? ''} ${!col.mobile ? 'hidden md:table-cell' : ''} ${col.onClick ? 'cursor-pointer hover:underline clickable-cell' : ''}`" class="px-1 py-1 md:py-4 md:px-6" @click.stop="col.onClick ? col.onClick(elem) : () => {}">
+                <RenderCell v-if="col.renderFunction" :renderer="col.renderFunction" :item="elem" />
+                <template v-else>
+                  {{ displayValueKey(elem, col) }}
+                </template>
               </td>
             </template>
           </tr>

@@ -2,10 +2,11 @@
 import type { Ref } from 'vue'
 import type { TableColumn } from '../comp_def'
 import { useDebounceFn } from '@vueuse/core'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, h, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
+import IconInformation from '~icons/heroicons/information-circle'
 import { formatDate } from '~/services/date'
 import { getDateRangeForPreset, getTimeWindowPageRange, TABLE_DATE_RANGE_DEFAULT } from '~/services/dateRange'
 import { getLogDocUrl } from '~/services/logDocLinks'
@@ -112,14 +113,18 @@ function normalizeMetadata(metadata: LogData['metadata']): Record<string, string
 function formatMetadata(elem: Element): string {
   const metadata = normalizeMetadata(elem.metadata)
   if (!metadata)
-    return '-'
+    return ''
 
   const entries = Object.entries(metadata)
   if (!entries.length)
-    return '-'
+    return ''
 
   const preview = entries.slice(0, 3).map(([key, value]) => `${key}: ${value}`).join(', ')
   return entries.length > 3 ? `${preview}, +${entries.length - 3}` : preview
+}
+
+function hasMetadata(elem: Element): boolean {
+  return formatMetadata(elem) !== ''
 }
 
 async function copyMetadata(elem: Element) {
@@ -335,33 +340,23 @@ columns.value = [
     label: t('created-at'),
     key: 'created_at',
     mobile: true,
-    class: 'truncate max-w-8',
+    class: 'whitespace-nowrap',
     sortable: 'desc',
     displayFunction: (elem: Element) => formatDate(elem.created_at ?? ''),
   },
   {
     label: t('device-id'),
     key: 'device_id',
-    class: 'truncate max-w-8',
+    class: 'truncate max-w-40',
     mobile: true,
     sortable: true,
     head: true,
     onClick: (elem: Element) => openOne(elem),
   },
   {
-    label: t('action'),
-    key: 'action',
-    mobile: true,
-    class: 'truncate max-w-8',
-    sortable: true,
-    head: true,
-    displayFunction: (elem: Element) => formatAction(elem),
-    onClick: (elem: Element) => window.open(getLogDocUrl(elem.action), '_blank', 'noopener,noreferrer'),
-  },
-  {
     label: t('version'),
     key: 'version_name',
-    class: 'truncate max-w-8',
+    class: 'whitespace-nowrap',
     mobile: false,
     sortable: false,
     displayFunction: (elem: Element) => {
@@ -373,13 +368,38 @@ columns.value = [
     onClick: (elem: Element) => openOneVersion(elem),
   },
   {
-    label: t('metadata'),
-    key: 'metadata',
-    class: 'truncate max-w-48',
-    mobile: false,
-    sortable: false,
-    displayFunction: (elem: Element) => formatMetadata(elem),
-    onClick: (elem: Element) => copyMetadata(elem),
+    label: t('action'),
+    key: 'action',
+    mobile: true,
+    class: 'min-w-64',
+    sortable: true,
+    head: true,
+    displayFunction: (elem: Element) => formatAction(elem),
+    renderFunction: (elem: Element) => {
+      const actionLabel = formatAction(elem)
+      const metadataPreview = formatMetadata(elem)
+      return h('div', { class: 'flex items-center gap-1.5 min-w-0' }, [
+        h('span', {
+          class: 'min-w-0 cursor-pointer hover:underline',
+          onClick: () => window.open(getLogDocUrl(elem.action), '_blank', 'noopener,noreferrer'),
+        }, actionLabel),
+        hasMetadata(elem)
+          ? h('button', {
+              'type': 'button',
+              'class': 'shrink-0 rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-azure-500 dark:hover:bg-slate-700 dark:hover:text-azure-400',
+              'title': metadataPreview,
+              'aria-label': t('metadata'),
+              'data-test': 'log-row-metadata',
+              'onClick': (event: MouseEvent) => {
+                event.stopPropagation()
+                void copyMetadata(elem)
+              },
+            }, [
+              h(IconInformation, { class: 'h-4 w-4' }),
+            ])
+          : null,
+      ])
+    },
   },
 ]
 

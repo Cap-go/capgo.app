@@ -24,6 +24,8 @@ test.describe('Observe sections', () => {
     await logsTab.click()
     await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/logs(?:\?|$)/)
     await expect(logsTab).toHaveAttribute('aria-current', 'page')
+    await expect(page.locator('#custom_table thead')).toContainText(/action/i)
+    await expect(page.locator('#custom_table thead')).not.toContainText(/metadata/i)
 
     await compatibilityTab.click()
     await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/compatibility(?:\?|$)/)
