@@ -5,7 +5,6 @@ import { useDebounceFn } from '@vueuse/core'
 import DOMPurify from 'dompurify'
 import {
   computed,
-  defineComponent,
   onMounted,
   onUnmounted,
   ref,
@@ -27,6 +26,7 @@ import IconSort from '~icons/lucide/chevrons-up-down'
 import IconFilter from '~icons/system-uicons/filtering'
 import IconReload from '~icons/tabler/reload'
 import FilterModal from '~/components/FilterModal.vue'
+import { RenderCell } from '~/components/RenderCell'
 import { createClearedFilters } from '~/composables/useFilterModal'
 
 interface Props {
@@ -499,21 +499,6 @@ function getSkeletonWidth(columnIndex?: number) {
     : `${100 / totalVisibleColumns}%`
   return remainingWidth
 }
-
-// Helper component to render VNode content from a column's renderFunction
-const RenderCell = defineComponent<{
-  renderer?: (item: any) => any
-  item: any
-}>({
-  name: 'RenderCell',
-  props: {
-    renderer: Function as unknown as () => ((item: any) => any) | undefined,
-    item: { type: Object as any, required: true },
-  },
-  setup(props) {
-    return () => (props.renderer ? (props.renderer as any)(props.item) : null)
-  },
-})
 
 const isReloading = computed(() => props.isLoading || pendingReset.value)
 const isAdding = computed(() => props.isLoading || pendingAdd.value)

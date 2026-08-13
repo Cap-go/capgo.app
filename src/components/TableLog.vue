@@ -3,7 +3,7 @@ import type { TableColumn } from './comp_def'
 import type { DateRangePreset } from '~/services/dateRange'
 import { FormKit } from '@formkit/vue'
 import { useDebounceFn, useNow } from '@vueuse/core'
-import { computed, defineComponent, onMounted, onUnmounted, ref, useId, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, useId, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import IconFastBackward from '~icons/ic/round-keyboard-double-arrow-left'
 import IconSearch from '~icons/ic/round-search?raw'
@@ -15,6 +15,7 @@ import IconFilter from '~icons/system-uicons/filtering'
 import IconReload from '~icons/tabler/reload'
 import DateRangePicker from '~/components/DateRangePicker.vue'
 import FilterModal from '~/components/FilterModal.vue'
+import { RenderCell } from '~/components/RenderCell'
 import { createClearedFilters } from '~/composables/useFilterModal'
 import { clampDateRange, getDateRangeForPreset, inferDateRangePreset, TABLE_DATE_RANGE_DEFAULT } from '~/services/dateRange'
 
@@ -162,20 +163,6 @@ function displayValueKey(elem: any, col: TableColumn | undefined) {
     return ''
   return col.displayFunction ? col.displayFunction(elem) : elem[col.key]
 }
-
-const RenderCell = defineComponent<{
-  renderer?: (item: any) => any
-  item: any
-}>({
-  name: 'RenderCell',
-  props: {
-    renderer: Function as unknown as () => ((item: any) => any) | undefined,
-    item: { type: Object as any, required: true },
-  },
-  setup(props) {
-    return () => (props.renderer ? (props.renderer as any)(props.item) : null)
-  },
-})
 
 async function fastBackward() {
   emit('fastBackward')
