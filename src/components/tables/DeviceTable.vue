@@ -6,11 +6,11 @@ import { computed, h, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
+import IconInformationCircle from '~icons/heroicons/information-circle'
 import IconSmartphone from '~icons/lucide/smartphone'
 import DateRangePicker from '~/components/DateRangePicker.vue'
 import { formatDate } from '~/services/date'
 import {
-  DATE_RANGE_PRESET_LABEL_KEYS,
   getDateRangeForPreset,
   getTableDateRangeSignature,
   shouldRecountOnTableReload,
@@ -74,13 +74,11 @@ const platformOptions = computed(() => [
   { value: 'android' as const, label: t('platform-android') },
   { value: 'electron' as const, label: t('platform-electron') },
 ])
-const dateRangeLabel = computed(() => {
-  const mode = dateRangeMode.value
-  if (mode === 'custom')
-    return t('date-range')
-  return t(DATE_RANGE_PRESET_LABEL_KEYS[mode])
+const hiddenByTimeFilterCount = computed(() => {
+  if (unfilteredTotal.value === null)
+    return 0
+  return Math.max(0, unfilteredTotal.value - total.value)
 })
-const showRangeFilterBanner = computed(() => unfilteredTotal.value !== null && total.value < unfilteredTotal.value)
 
 function clearExtraFilters() {
   // Values only — DataTable clear emits a filters update that triggers the single reload.
@@ -642,23 +640,40 @@ watch([selectedPlatform, selectedVersionNames], () => {
       @clear-extra-filters="clearExtraFilters"
     >
       <template #toolbar-extras>
-        <div class="flex min-h-10 min-w-0 items-center gap-1.5">
-          <DateRangePicker
-            ref="dateRangePickerRef"
-            v-model="dateRange"
-            v-model:mode="dateRangeMode"
-            compact
-            @apply="onDateRangeApply"
+        <DateRangePicker
+          ref="dateRangePickerRef"
+          v-model="dateRange"
+          v-model:mode="dateRangeMode"
+          compact
+          @apply="onDateRangeApply"
+        />
+      </template>
+      <template #table-notice>
+        <div
+          v-if="!isLoading && hiddenByTimeFilterCount > 0"
+          role="status"
+          class="mx-3 mb-3 flex items-start gap-2.5 rounded-md border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-800/70 dark:text-slate-200"
+          data-test="devices-range-filter-banner"
+        >
+          <IconInformationCircle
+            data-test="devices-time-notice-icon"
+            aria-hidden="true"
+            class="mt-0.5 size-5 shrink-0 text-blue-500 dark:text-blue-400"
           />
-          <button
-            v-if="showRangeFilterBanner"
-            type="button"
-            class="min-w-0 max-w-sm cursor-pointer rounded-md border border-cyan-300 bg-cyan-50 px-2 py-0.5 text-left text-xs font-medium text-cyan-700 transition-colors hover:border-cyan-300 hover:text-cyan-700 focus:outline-none focus:ring-2 focus:ring-cyan-400 focus:ring-offset-1 dark:border-cyan-500/40 dark:bg-cyan-500/15 dark:text-cyan-200 dark:hover:border-cyan-500/40 dark:hover:text-cyan-200 dark:focus:ring-offset-slate-800"
-            data-test="devices-range-filter-banner"
-            @click="openDateRangePicker"
-          >
-            {{ t('devices-filter-range-banner', { range: dateRangeLabel, shown: total, total: unfilteredTotal }) }}
-          </button>
+          <div class="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
+            <span>
+              {{ hiddenByTimeFilterCount === 1
+                ? t('devices-hidden-by-time-filter-one')
+                : t('devices-hidden-by-time-filter-many', { count: hiddenByTimeFilterCount }) }}
+            </span>
+            <button
+              type="button"
+              class="d-btn d-btn-link h-auto min-h-0 rounded-sm border-0 p-0 font-semibold text-blue-600 underline underline-offset-2 shadow-none hover:text-blue-800 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:outline-none dark:text-blue-400 dark:hover:text-blue-300 dark:focus-visible:ring-offset-slate-800"
+              @click="openDateRangePicker"
+            >
+              {{ t('devices-remove-time-filter') }}
+            </button>
+          </div>
         </div>
       </template>
       <template #empty-state="{ clearFilters, hasActiveFilters }">

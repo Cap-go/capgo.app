@@ -31,6 +31,13 @@ async function expectRequestCountToRemain(requests: Record<string, unknown>[], e
 
 test.describe('Devices empty state', () => {
   test.beforeEach(async ({ page }) => {
+    await page.route('**/private/sso/check-enforcement**', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ allowed: true }),
+      })
+    })
     await page.login('test@capgo.app', 'testtest')
     await page.evaluate((userId) => {
       localStorage.setItem(`capgo.supportUsernames.dismissed.${userId}`, '1')
@@ -131,10 +138,11 @@ test.describe('Devices empty state', () => {
 
     const banner = page.locator('[data-test="devices-range-filter-banner"]')
     await expect(banner).toBeVisible()
-    await expect(banner).toContainText('The Last 30 minutes filter is on, so you see 0 of 3 devices.')
+    await expect(banner).toContainText('3 devices are hidden by the current time filter.')
+    await expect(banner.getByRole('button', { name: 'Remove the filter' })).toBeVisible()
     await expect(page.locator('[data-test="devices-empty-state"]')).toBeVisible()
 
-    await banner.click()
+    await banner.getByRole('button', { name: 'Remove the filter' }).click()
     await expect(page.getByRole('dialog', { name: /Date range:/ })).toBeVisible()
   })
 })
