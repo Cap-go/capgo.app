@@ -631,14 +631,11 @@ watch([selectedPlatform, selectedVersionNames], () => {
       v-if="showRangeFilterBanner"
       class="mx-3 mt-3 flex flex-col gap-3 rounded-lg border border-azure-200 bg-azure-50 px-4 py-3 text-sm text-slate-700 dark:border-azure-800 dark:bg-azure-900/20 dark:text-slate-200 sm:flex-row sm:items-center sm:justify-between"
       data-test="devices-range-filter-banner"
-      role="status"
     >
-      <div class="flex min-w-0 items-start gap-3">
+      <output class="flex min-w-0 items-start gap-3">
         <IconInfo class="mt-0.5 h-5 w-5 shrink-0 text-azure-600 dark:text-azure-400" aria-hidden="true" />
-        <p>
-          {{ t('devices-filter-range-banner', { range: dateRangeLabel, shown: total, total: unfilteredTotal }) }}
-        </p>
-      </div>
+        {{ t('devices-filter-range-banner', { range: dateRangeLabel, shown: total, total: unfilteredTotal }) }}
+      </output>
       <button
         type="button"
         class="d-btn d-btn-sm h-9 min-h-9 shrink-0 border-azure-300 bg-white text-azure-700 hover:border-azure-400 hover:bg-azure-100 dark:border-azure-700 dark:bg-slate-900 dark:text-azure-200 dark:hover:bg-azure-900/40"
