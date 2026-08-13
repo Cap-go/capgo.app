@@ -105,14 +105,6 @@ export function highestAppOnboardingStage(
   return best
 }
 
-export function isFeatureStarted(feature: AppOnboardingFeature): boolean {
-  return Boolean(feature.started_at)
-}
-
-export function isFeatureSucceeded(feature: AppOnboardingFeature): boolean {
-  return Boolean(feature.succeeded_at)
-}
-
 export function isFeatureRetained30d(feature: AppOnboardingFeature): boolean {
   return Boolean(feature.retained_30d_at)
 }
@@ -123,8 +115,6 @@ export function isFeatureUsedSince(feature: AppOnboardingFeature, sinceMs: numbe
   const usedAt = Date.parse(feature.last_used_at)
   return Number.isFinite(usedAt) && usedAt >= now - sinceMs
 }
-
-export const MS_PER_DAY = 24 * 60 * 60 * 1000
 
 export function nextOnboardingAction(ledger: AppOnboardingLedger): {
   feature: AppOnboardingFeatureKey
