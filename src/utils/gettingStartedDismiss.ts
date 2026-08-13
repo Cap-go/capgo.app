@@ -1,4 +1,13 @@
+import { ref } from 'vue'
+
 const STORAGE_PREFIX = 'capgo.gettingStarted.dismissed'
+const STORE_RELEASE_PREFIX = 'capgo.gettingStarted.storeRelease'
+
+export const gettingStartedProgressTick = ref(0)
+
+function bumpGettingStartedProgress() {
+  gettingStartedProgressTick.value += 1
+}
 
 export function gettingStartedDismissedKey(userId: string, appId: string) {
   return `${STORAGE_PREFIX}.${userId}.${appId}`
@@ -57,4 +66,21 @@ export function dismissGettingStarted(userId: string, appId: string) {
   if (!userId || !appId || typeof localStorage === 'undefined')
     return
   writeStorage(gettingStartedDismissedKey(userId, appId), '1')
+}
+
+export function storeReleaseValidatedKey(userId: string, appId: string) {
+  return `${STORE_RELEASE_PREFIX}.${userId}.${appId}`
+}
+
+export function isStoreReleaseValidated(userId: string, appId: string) {
+  if (!userId || !appId || typeof localStorage === 'undefined')
+    return false
+  return readStorage(storeReleaseValidatedKey(userId, appId)) === '1'
+}
+
+export function markStoreReleaseValidated(userId: string, appId: string) {
+  if (!userId || !appId || typeof localStorage === 'undefined')
+    return
+  writeStorage(storeReleaseValidatedKey(userId, appId), '1')
+  bumpGettingStartedProgress()
 }

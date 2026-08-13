@@ -12,7 +12,9 @@ import {
 } from '~/utils/appOnboardingProgress'
 import {
   dismissGettingStarted,
+  gettingStartedProgressTick,
   isGettingStartedDismissed,
+  isStoreReleaseValidated,
 } from '~/utils/gettingStartedDismiss'
 
 const { t } = useI18n()
@@ -26,6 +28,7 @@ const userId = computed(() => main.user?.id ?? main.auth?.id ?? '')
 
 const apps = computed(() => {
   void dismissedTick.value
+  void gettingStartedProgressTick.value
   const orgId = organizationStore.currentOrganization?.gid
   if (!orgId || !userId.value)
     return [] as OrganizationApp[]
@@ -33,7 +36,9 @@ const apps = computed(() => {
   return organizationStore.getAppsByOrgId(orgId).filter((app) => {
     if (isGettingStartedDismissed(userId.value, app.app_id))
       return false
-    return shouldShowGettingStartedNav(parseAppOnboardingLedger(app.onboarding))
+    return shouldShowGettingStartedNav(parseAppOnboardingLedger(app.onboarding), {
+      storeReleaseValidated: isStoreReleaseValidated(userId.value, app.app_id),
+    })
   })
 })
 

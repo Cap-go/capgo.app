@@ -7,16 +7,23 @@ import IconCheck from '~icons/lucide/check'
 import AppPageFrame from '~/components/dashboard/AppPageFrame.vue'
 import { useAppPage } from '~/composables/useAppPage'
 import { useSupabase } from '~/services/supabase'
+import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
 import {
   buildGettingStartedSteps,
   gettingStartedProgress,
   parseAppOnboardingLedger,
 } from '~/utils/appOnboardingProgress'
+import {
+  gettingStartedProgressTick,
+  isStoreReleaseValidated,
+  markStoreReleaseValidated,
+} from '~/utils/gettingStartedDismiss'
 
 const { t } = useI18n()
 const router = useRouter()
 const supabase = useSupabase()
+const main = useMainStore()
 const organizationStore = useOrganizationStore()
 const { id, app, isLoading } = useAppPage({
   routeName: '/app/[app].getting-started',
@@ -34,7 +41,14 @@ const appIcon = computed(() => orgApp.value?.icon_url || '')
 const iconLoading = computed(() => orgApp.value?.icon_url_loading === true)
 
 const ledger = computed(() => parseAppOnboardingLedger(app.value?.onboarding))
-const steps = computed(() => buildGettingStartedSteps(ledger.value, { builderDone: builderDone.value }))
+const userId = computed(() => main.user?.id ?? main.auth?.id ?? '')
+const steps = computed(() => {
+  void gettingStartedProgressTick.value
+  return buildGettingStartedSteps(ledger.value, {
+    builderDone: builderDone.value,
+    storeReleaseValidated: isStoreReleaseValidated(userId.value, id.value),
+  })
+})
 const progress = computed(() => gettingStartedProgress(steps.value))
 const stepGroups = computed(() => {
   const essential = steps.value.filter(step => step.group === 'essential')
@@ -98,6 +112,10 @@ function runStep(step: GettingStartedStep) {
     return
   }
   builderModalOpen.value = true
+}
+
+function onStoreReleaseApplied() {
+  markStoreReleaseValidated(userId.value, id.value)
 }
 
 watch(() => id.value, async (appId) => {
@@ -263,6 +281,7 @@ watch(() => id.value, async (appId) => {
       v-if="id"
       ref="storeModal"
       :app-id="id"
+      @applied="onStoreReleaseApplied"
     />
     <BuilderPresentationModal
       :open="builderModalOpen"

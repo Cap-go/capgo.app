@@ -17,6 +17,10 @@ const props = defineProps<{
   appId: string
 }>()
 
+const emit = defineEmits<{
+  applied: []
+}>()
+
 const RELEASE_INSTALL_SOURCES = ['app_store']
 const TEST_INSTALL_SOURCES = ['testflight']
 const TRACK_UNKNOWN_INSTALL_SOURCES = ['google_play', 'amazon_appstore', 'samsung_galaxy_store', 'huawei_appgallery']
@@ -484,7 +488,8 @@ async function applyProductionSetup() {
         public: shouldDisablePublic ? false : current.public,
       }
     })
-    setupSuccess.value = t('store-release-validation-setup-applied')
+    emit('applied')
+    closeModal()
   }
   finally {
     isApplyingSetup.value = false
