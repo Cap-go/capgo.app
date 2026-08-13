@@ -1620,6 +1620,7 @@ DECLARE
   v_actor_apikey_name text;
   v_stats_refresh_fields constant text[] := ARRAY['stats_refresh_requested_at', 'stats_updated_at', 'updated_at'];
   v_background_counter_fields constant text[] := ARRAY['channel_device_count', 'manifest_bundle_count', 'updated_at'];
+  v_onboarding_progress_fields constant text[] := ARRAY['onboarding', 'updated_at'];
   v_fat_app_version_fields constant text[] := ARRAY['manifest', 'native_packages'];
 BEGIN
   SELECT auth.uid() INTO v_actor_user_id;
@@ -1635,8 +1636,6 @@ BEGIN
       FROM public.find_apikey_by_value(v_api_key_text)
       LIMIT 1;
 
-      -- Attribute only valid, write-capable API keys; a read-only key present on
-      -- a request must not be recorded as the actor of a mutation.
       IF v_api_key.id IS NOT NULL
         AND NOT public.is_apikey_expired(v_api_key.expires_at)
         AND (
@@ -1661,9 +1660,6 @@ BEGIN
 
   v_user_id := v_actor_user_id;
 
-  -- Skip internal app_versions upload/migrate bookkeeping before the generic
-  -- changed_fields walk. Compare via to_jsonb only (this trigger is shared across
-  -- tables; never touch NEW.column names that only exist on app_versions).
   IF TG_OP = 'UPDATE' AND TG_TABLE_NAME = 'app_versions' THEN
     v_old_record := pg_catalog.to_jsonb(OLD);
     v_new_record := pg_catalog.to_jsonb(NEW);
@@ -1703,7 +1699,6 @@ BEGIN
       END IF;
     END LOOP;
 
-    -- Pure updated_at bumps are bookkeeping, not user-facing audit events.
     IF v_changed_fields IS NOT NULL
       AND NOT EXISTS (
         SELECT 1
@@ -1733,10 +1728,18 @@ BEGIN
       ) THEN
       RETURN NEW;
     END IF;
+
+    IF TG_TABLE_NAME = 'apps'
+      AND v_changed_fields && ARRAY['onboarding']
+      AND NOT EXISTS (
+        SELECT 1
+        FROM pg_catalog.unnest(v_changed_fields) AS changed_field(field_name)
+        WHERE changed_field.field_name <> ALL(v_onboarding_progress_fields)
+      ) THEN
+      RETURN NEW;
+    END IF;
   END IF;
 
-  -- Never persist multi-MB array/json columns in audit TOAST.
-  -- Keep fat field names in changed_fields when co-occurring with real user edits.
   IF TG_TABLE_NAME = 'app_versions' THEN
     IF v_old_record IS NOT NULL THEN
       v_old_record := v_old_record - v_fat_app_version_fields;
@@ -1744,7 +1747,6 @@ BEGIN
     IF v_new_record IS NOT NULL THEN
       v_new_record := v_new_record - v_fat_app_version_fields;
     END IF;
-
   END IF;
 
   IF TG_OP = 'DELETE' THEN
@@ -4067,9 +4069,9 @@ BEGIN
 
     -- Use nested block with exception handler to ensure trigger is re-enabled on any failure
     BEGIN
-        -- Delete channel_devices where the last activity (updated_at or created_at) is older than 1 month
+        -- Delete channel_devices where the last override write (updated_at or created_at) is older than 90 days
         DELETE FROM public.channel_devices
-        WHERE COALESCE(updated_at, created_at) < NOW() - INTERVAL '1 month';
+        WHERE COALESCE(updated_at, created_at) < NOW() - INTERVAL '90 days';
 
         GET DIAGNOSTICS deleted_count = ROW_COUNT;
 
@@ -6402,7 +6404,9 @@ CREATE TABLE IF NOT EXISTS "public"."apps" (
     "rollout_paused_version_names" character varying[] DEFAULT '{}'::character varying[] NOT NULL,
     "created_from_onboarding" boolean DEFAULT false NOT NULL,
     "onboarding_completed_at" timestamp with time zone,
-    CONSTRAINT "apps_build_timeout_seconds_check" CHECK ((("build_timeout_seconds" >= 300) AND ("build_timeout_seconds" <= 21600)))
+    "onboarding" "jsonb" DEFAULT '{}'::"jsonb" NOT NULL,
+    CONSTRAINT "apps_build_timeout_seconds_check" CHECK ((("build_timeout_seconds" >= 300) AND ("build_timeout_seconds" <= 21600))),
+    CONSTRAINT "apps_onboarding_valid" CHECK ((("jsonb_typeof"("onboarding") = 'object'::"text") AND ((NOT ("onboarding" ? 'features'::"text")) OR ("jsonb_typeof"(("onboarding" -> 'features'::"text")) = 'object'::"text"))))
 );
 
 ALTER TABLE ONLY "public"."apps" REPLICA IDENTITY FULL;
@@ -6460,6 +6464,10 @@ COMMENT ON COLUMN "public"."apps"."created_from_onboarding" IS 'True when the ap
 
 
 COMMENT ON COLUMN "public"."apps"."onboarding_completed_at" IS 'Timestamp when the guided onboarding flow was completed for this app.';
+
+
+
+COMMENT ON COLUMN "public"."apps"."onboarding" IS 'Extensible feature onboarding ledger. Shape: {"refreshed_at": iso, "features": { "<key>": { "started_at", "succeeded_at", "last_used_at", "retained_30d_at", "stage"? } }}. Success/usage/stage are written by refresh_app_onboarding_progress; clients may only set started_at via mark_onboarding_feature_started.';
 
 
 
@@ -10921,6 +10929,76 @@ $$;
 ALTER FUNCTION "public"."mark_app_stats_refreshed"("p_app_id" character varying) OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."mark_onboarding_feature_started"("p_app_id" character varying, "p_feature_key" "text") RETURNS "jsonb"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $_$
+DECLARE
+  v_owner_org uuid;
+  v_onboarding jsonb;
+  v_feature jsonb;
+  v_now text;
+BEGIN
+  IF p_app_id IS NULL OR btrim(p_app_id) = '' THEN
+    RAISE EXCEPTION 'APP_NOT_FOUND';
+  END IF;
+
+  IF p_feature_key IS NULL OR p_feature_key !~ '^[a-z][a-z0-9_]{0,62}$' THEN
+    RAISE EXCEPTION 'INVALID_FEATURE_KEY';
+  END IF;
+
+  SELECT apps.owner_org, apps.onboarding
+  INTO v_owner_org, v_onboarding
+  FROM public.apps
+  WHERE apps.app_id = p_app_id
+  FOR UPDATE;
+
+  IF v_owner_org IS NULL THEN
+    RAISE EXCEPTION 'NO_PERMISSION';
+  END IF;
+
+  IF NOT public.rbac_check_permission_request(
+    public.rbac_perm_app_read(),
+    v_owner_org,
+    p_app_id,
+    NULL::bigint
+  ) THEN
+    RAISE EXCEPTION 'NO_PERMISSION';
+  END IF;
+
+  v_onboarding := COALESCE(v_onboarding, '{}'::jsonb);
+  IF jsonb_typeof(v_onboarding->'features') IS DISTINCT FROM 'object' THEN
+    v_onboarding := v_onboarding || jsonb_build_object('features', '{}'::jsonb);
+  END IF;
+
+  v_feature := v_onboarding->'features'->p_feature_key;
+  IF jsonb_typeof(v_feature) IS DISTINCT FROM 'object' THEN
+    v_feature := '{}'::jsonb;
+  END IF;
+
+  IF NULLIF(v_feature->>'started_at', '') IS NULL THEN
+    v_now := to_char((now() AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"');
+    v_feature := v_feature || jsonb_build_object('started_at', v_now);
+    v_onboarding := jsonb_set(v_onboarding, ARRAY['features', p_feature_key], v_feature, true);
+
+    UPDATE public.apps
+    SET onboarding = v_onboarding,
+        updated_at = now()
+    WHERE apps.app_id = p_app_id;
+  END IF;
+
+  RETURN v_onboarding;
+END;
+$_$;
+
+
+ALTER FUNCTION "public"."mark_onboarding_feature_started"("p_app_id" character varying, "p_feature_key" "text") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."mark_onboarding_feature_started"("p_app_id" character varying, "p_feature_key" "text") IS 'Sets features.<key>.started_at once when the caller can read the app. Does not write succeeded_at, last_used_at, retained_30d_at, or stage.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."mark_org_delete_cascade"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -10991,6 +11069,97 @@ $_$;
 
 
 ALTER FUNCTION "public"."mass_edit_queue_messages_cf_ids"("updates" "public"."message_update"[]) OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."merge_app_onboarding_feature"("p_existing" "jsonb", "p_started_at" timestamp with time zone, "p_succeeded_at" timestamp with time zone, "p_last_used_at" timestamp with time zone, "p_stage" "text" DEFAULT NULL::"text") RETURNS "jsonb"
+    LANGUAGE "plpgsql" STABLE
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  v_existing jsonb := COALESCE(p_existing, '{}'::jsonb);
+  v_started timestamptz;
+  v_succeeded timestamptz;
+  v_last_used timestamptz;
+  v_retained timestamptz;
+  v_stage text;
+  v_existing_stage text;
+  v_new_rank integer;
+  v_old_rank integer;
+BEGIN
+  BEGIN
+    v_started := NULLIF(v_existing->>'started_at', '')::timestamptz;
+  EXCEPTION WHEN invalid_datetime_format OR datetime_field_overflow THEN
+    v_started := NULL;
+  END;
+  BEGIN
+    v_succeeded := NULLIF(v_existing->>'succeeded_at', '')::timestamptz;
+  EXCEPTION WHEN invalid_datetime_format OR datetime_field_overflow THEN
+    v_succeeded := NULL;
+  END;
+  BEGIN
+    v_last_used := NULLIF(v_existing->>'last_used_at', '')::timestamptz;
+  EXCEPTION WHEN invalid_datetime_format OR datetime_field_overflow THEN
+    v_last_used := NULL;
+  END;
+  BEGIN
+    v_retained := NULLIF(v_existing->>'retained_30d_at', '')::timestamptz;
+  EXCEPTION WHEN invalid_datetime_format OR datetime_field_overflow THEN
+    v_retained := NULL;
+  END;
+
+  v_started := COALESCE(v_started, p_started_at);
+  v_succeeded := COALESCE(v_succeeded, p_succeeded_at);
+  v_last_used := GREATEST(v_last_used, p_last_used_at);
+
+  IF v_retained IS NULL
+    AND v_succeeded IS NOT NULL
+    AND v_last_used IS NOT NULL
+    AND v_last_used >= v_succeeded + INTERVAL '30 days'
+  THEN
+    v_retained := v_last_used;
+  END IF;
+
+  v_existing_stage := NULLIF(v_existing->>'stage', '');
+  v_new_rank := CASE p_stage
+    WHEN 'store_live' THEN 5
+    WHEN 'testflight' THEN 4
+    WHEN 'play_unknown' THEN 3
+    WHEN 'native_unknown' THEN 2
+    WHEN 'local_only' THEN 1
+    WHEN 'no_device' THEN 0
+    ELSE -1
+  END;
+  v_old_rank := CASE v_existing_stage
+    WHEN 'store_live' THEN 5
+    WHEN 'testflight' THEN 4
+    WHEN 'play_unknown' THEN 3
+    WHEN 'native_unknown' THEN 2
+    WHEN 'local_only' THEN 1
+    WHEN 'no_device' THEN 0
+    ELSE -1
+  END;
+  IF p_stage IS NOT NULL AND v_new_rank >= v_old_rank THEN
+    v_stage := p_stage;
+  ELSE
+    v_stage := v_existing_stage;
+  END IF;
+
+  RETURN jsonb_strip_nulls(jsonb_build_object(
+    'started_at', CASE WHEN v_started IS NULL THEN NULL
+      ELSE to_char(v_started AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END,
+    'succeeded_at', CASE WHEN v_succeeded IS NULL THEN NULL
+      ELSE to_char(v_succeeded AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END,
+    'last_used_at', CASE WHEN v_last_used IS NULL THEN NULL
+      ELSE to_char(v_last_used AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END,
+    'retained_30d_at', CASE WHEN v_retained IS NULL THEN NULL
+      ELSE to_char(v_retained AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END,
+    'stage', v_stage
+  ));
+END;
+$$;
+
+
+ALTER FUNCTION "public"."merge_app_onboarding_feature"("p_existing" "jsonb", "p_started_at" timestamp with time zone, "p_succeeded_at" timestamp with time zone, "p_last_used_at" timestamp with time zone, "p_stage" "text") OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."normalize_public_channel_overlap"() RETURNS "trigger"
@@ -12854,6 +13023,26 @@ $$;
 
 
 ALTER FUNCTION "public"."process_subscribed_orgs"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."protect_apps_onboarding"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO ''
+    AS $$
+BEGIN
+  IF current_user IN ('authenticated', 'anon') THEN
+    IF TG_OP = 'INSERT' THEN
+      NEW.onboarding := '{}'::jsonb;
+    ELSIF TG_OP = 'UPDATE' AND NEW.onboarding IS DISTINCT FROM OLD.onboarding THEN
+      NEW.onboarding := OLD.onboarding;
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."protect_apps_onboarding"() OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."queue_canceled_org_retention_alerts"("p_alert_type" "text", "p_min_days" integer, "p_batch_size" integer DEFAULT 500) RETURNS bigint
@@ -15013,6 +15202,142 @@ $$;
 
 
 ALTER FUNCTION "public"."record_trial_extension_event"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."refresh_app_onboarding_progress"("p_batch_size" integer DEFAULT 500) RETURNS integer
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  v_limit integer := GREATEST(1, LEAST(COALESCE(p_batch_size, 500), 2000));
+  v_updated integer := 0;
+BEGIN
+  WITH batch AS (
+    SELECT apps.app_id
+    FROM public.apps
+    ORDER BY COALESCE(apps.onboarding->>'refreshed_at', ''), apps.app_id
+    LIMIT v_limit
+  ),
+  device_signals AS (
+    SELECT
+      devices.app_id,
+      bool_or(devices.install_source = 'app_store') AS has_app_store,
+      bool_or(devices.install_source = 'testflight') AS has_testflight,
+      bool_or(devices.install_source IN (
+        'google_play',
+        'amazon_appstore',
+        'samsung_galaxy_store',
+        'huawei_appgallery'
+      )) AS has_play_unknown,
+      bool_or(devices.is_prod IS TRUE AND devices.is_emulator IS NOT TRUE) AS has_native,
+      bool_or(devices.install_source IS NOT NULL) AS has_install_source,
+      MAX(devices.updated_at) AS last_device_at
+    FROM public.devices
+    INNER JOIN batch ON batch.app_id = devices.app_id
+    WHERE devices.install_source IS NOT NULL
+       OR (devices.is_prod IS TRUE AND devices.is_emulator IS NOT TRUE)
+    GROUP BY devices.app_id
+  ),
+  bundle_signals AS (
+    SELECT
+      app_versions.app_id,
+      MIN(app_versions.created_at) AS first_bundle_at,
+      MAX(app_versions.created_at) AS last_bundle_at
+    FROM public.app_versions
+    INNER JOIN batch ON batch.app_id = app_versions.app_id
+    WHERE app_versions.deleted IS NOT TRUE
+      AND app_versions.name IS DISTINCT FROM 'builtin'
+      AND app_versions.name IS DISTINCT FROM 'unknown'
+    GROUP BY app_versions.app_id
+  ),
+  install_signals AS (
+    SELECT
+      daily_version.app_id,
+      MIN(daily_version.date)::timestamptz AS first_install_at,
+      MAX(daily_version.date)::timestamptz AS last_install_at
+    FROM public.daily_version
+    INNER JOIN batch ON batch.app_id = daily_version.app_id
+    WHERE COALESCE(daily_version.install, 0) > 0
+    GROUP BY daily_version.app_id
+  ),
+  build_signals AS (
+    SELECT
+      build_requests.app_id,
+      MIN(build_requests.created_at) AS first_build_at,
+      MIN(build_requests.completed_at) FILTER (
+        WHERE build_requests.status IN ('succeeded', 'released')
+      ) AS first_success_at,
+      MAX(COALESCE(build_requests.completed_at, build_requests.created_at)) AS last_build_at
+    FROM public.build_requests
+    INNER JOIN batch ON batch.app_id = build_requests.app_id
+    GROUP BY build_requests.app_id
+  ),
+  merged AS (
+    SELECT
+      batch.app_id,
+      public.merge_app_onboarding_feature(
+        apps.onboarding->'features'->'cli_install',
+        device_signals.last_device_at,
+        device_signals.last_device_at,
+        device_signals.last_device_at,
+        NULL
+      ) AS cli_install,
+      public.merge_app_onboarding_feature(
+        apps.onboarding->'features'->'ota',
+        bundle_signals.first_bundle_at,
+        install_signals.first_install_at,
+        GREATEST(install_signals.last_install_at, bundle_signals.last_bundle_at),
+        CASE
+          WHEN device_signals.has_app_store THEN 'store_live'
+          WHEN device_signals.has_testflight THEN 'testflight'
+          WHEN device_signals.has_play_unknown THEN 'play_unknown'
+          WHEN device_signals.has_native THEN 'native_unknown'
+          WHEN device_signals.has_install_source THEN 'local_only'
+          ELSE 'no_device'
+        END
+      ) AS ota,
+      public.merge_app_onboarding_feature(
+        apps.onboarding->'features'->'builder',
+        build_signals.first_build_at,
+        build_signals.first_success_at,
+        build_signals.last_build_at,
+        NULL
+      ) AS builder
+    FROM batch
+    INNER JOIN public.apps ON apps.app_id = batch.app_id
+    LEFT JOIN device_signals ON device_signals.app_id = batch.app_id
+    LEFT JOIN bundle_signals ON bundle_signals.app_id = batch.app_id
+    LEFT JOIN install_signals ON install_signals.app_id = batch.app_id
+    LEFT JOIN build_signals ON build_signals.app_id = batch.app_id
+  )
+  UPDATE public.apps
+  SET
+    onboarding = jsonb_strip_nulls(
+      COALESCE(apps.onboarding, '{}'::jsonb)
+      || jsonb_build_object(
+        'refreshed_at', to_char((now() AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+        'features', COALESCE(apps.onboarding->'features', '{}'::jsonb) || jsonb_build_object(
+          'cli_install', merged.cli_install,
+          'ota', merged.ota,
+          'builder', merged.builder
+        )
+      )
+    ),
+    updated_at = now()
+  FROM merged
+  WHERE apps.app_id = merged.app_id;
+
+  GET DIAGNOSTICS v_updated = ROW_COUNT;
+  RETURN v_updated;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."refresh_app_onboarding_progress"("p_batch_size" integer) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."refresh_app_onboarding_progress"("p_batch_size" integer) IS 'Hourly bounded backfill/refresh of apps.onboarding from devices, bundles, daily_version installs, and build_requests. Never called from plugin request paths.';
+
 
 
 CREATE OR REPLACE FUNCTION "public"."refresh_app_rollout_channel_count"() RETURNS "trigger"
@@ -21411,6 +21736,14 @@ CREATE INDEX "idx_apps_default_upload_channel" ON "public"."apps" USING "btree" 
 
 
 
+CREATE INDEX "idx_apps_onboarding_ota_stage" ON "public"."apps" USING "btree" ((((("onboarding" -> 'features'::"text") -> 'ota'::"text") ->> 'stage'::"text")));
+
+
+
+CREATE INDEX "idx_apps_onboarding_refreshed_at" ON "public"."apps" USING "btree" (COALESCE(("onboarding" ->> 'refreshed_at'::"text"), ''::"text"), "app_id");
+
+
+
 CREATE UNIQUE INDEX "idx_apps_owner_org_app_id" ON "public"."apps" USING "btree" ("owner_org", "app_id");
 
 
@@ -22188,6 +22521,10 @@ CREATE OR REPLACE TRIGGER "prevent_org_id_reuse" BEFORE INSERT OR UPDATE OF "id"
 
 
 CREATE OR REPLACE TRIGGER "prevent_role_binding_priority_escalation" BEFORE INSERT OR DELETE OR UPDATE ON "public"."role_bindings" FOR EACH ROW EXECUTE FUNCTION "public"."prevent_role_binding_priority_escalation"();
+
+
+
+CREATE OR REPLACE TRIGGER "protect_apps_onboarding" BEFORE INSERT OR UPDATE ON "public"."apps" FOR EACH ROW EXECUTE FUNCTION "public"."protect_apps_onboarding"();
 
 
 
@@ -25404,12 +25741,23 @@ GRANT ALL ON FUNCTION "public"."mark_app_stats_refreshed"("p_app_id" character v
 
 
 
+REVOKE ALL ON FUNCTION "public"."mark_onboarding_feature_started"("p_app_id" character varying, "p_feature_key" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."mark_onboarding_feature_started"("p_app_id" character varying, "p_feature_key" "text") TO "service_role";
+GRANT ALL ON FUNCTION "public"."mark_onboarding_feature_started"("p_app_id" character varying, "p_feature_key" "text") TO "authenticated";
+
+
+
 REVOKE ALL ON FUNCTION "public"."mark_org_delete_cascade"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."mark_org_delete_cascade"() TO "service_role";
 
 
 
 REVOKE ALL ON FUNCTION "public"."mass_edit_queue_messages_cf_ids"("updates" "public"."message_update"[]) FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "public"."merge_app_onboarding_feature"("p_existing" "jsonb", "p_started_at" timestamp with time zone, "p_succeeded_at" timestamp with time zone, "p_last_used_at" timestamp with time zone, "p_stage" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."merge_app_onboarding_feature"("p_existing" "jsonb", "p_started_at" timestamp with time zone, "p_succeeded_at" timestamp with time zone, "p_last_used_at" timestamp with time zone, "p_stage" "text") TO "service_role";
 
 
 
@@ -25595,6 +25943,13 @@ REVOKE ALL ON FUNCTION "public"."process_stats_email_weekly"() FROM PUBLIC;
 
 REVOKE ALL ON FUNCTION "public"."process_subscribed_orgs"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."process_subscribed_orgs"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."protect_apps_onboarding"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."protect_apps_onboarding"() TO "service_role";
+GRANT ALL ON FUNCTION "public"."protect_apps_onboarding"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."protect_apps_onboarding"() TO "anon";
 
 
 
@@ -26184,6 +26539,11 @@ GRANT ALL ON FUNCTION "public"."record_email_otp_verified"("p_user_id" "uuid") T
 
 REVOKE ALL ON FUNCTION "public"."record_trial_extension_event"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."record_trial_extension_event"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."refresh_app_onboarding_progress"("p_batch_size" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."refresh_app_onboarding_progress"("p_batch_size" integer) TO "service_role";
 
 
 

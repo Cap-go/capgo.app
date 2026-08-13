@@ -4878,7 +4878,7 @@ export type Database = {
       long_canceled_org_ids: { Args: never; Returns: string[] }
       mark_app_stats_refreshed: { Args: { p_app_id: string }; Returns: string }
       mark_onboarding_feature_started: {
-        Args: { p_app_id: string, p_feature_key: string }
+        Args: { p_app_id: string; p_feature_key: string }
         Returns: Json
       }
       mass_edit_queue_messages_cf_ids: {
@@ -4886,6 +4886,16 @@ export type Database = {
           updates: Database["public"]["CompositeTypes"]["message_update"][]
         }
         Returns: undefined
+      }
+      merge_app_onboarding_feature: {
+        Args: {
+          p_existing: Json
+          p_last_used_at: string
+          p_stage?: string
+          p_started_at: string
+          p_succeeded_at: string
+        }
+        Returns: Json
       }
       null_migrated_app_version_manifests: {
         Args: {
@@ -5197,6 +5207,10 @@ export type Database = {
       record_email_otp_verified: {
         Args: { p_user_id: string }
         Returns: string
+      }
+      refresh_app_onboarding_progress: {
+        Args: { p_batch_size?: number }
+        Returns: number
       }
       refresh_app_rollout_channel_count_for_app: {
         Args: { p_app_id: string }
