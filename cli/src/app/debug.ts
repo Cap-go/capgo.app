@@ -10,8 +10,6 @@ import { CliUserError } from '../shared/cli-user-error'
 import { findSavedKey, formatError, getAppId, getConfig, getLocalConfig, getOrganizationId, sendEvent } from '../utils'
 import { buildWaitLogQuery, isWaitLogContinueKey, WAIT_LOG_CONTINUE_HINT, WAIT_LOG_POLL_MS } from './wait-log-query'
 
-export { buildWaitLogQuery, isWaitLogContinueKey, WAIT_LOG_CONTINUE_HINT, WAIT_LOG_LOOKBACK_MS, WAIT_LOG_POLL_MS } from './wait-log-query'
-
 function wait(ms: number, signal?: AbortSignal) {
   return new Promise<void>((resolve) => {
     if (signal?.aborted) {

@@ -2,7 +2,7 @@ export const WAIT_LOG_LOOKBACK_MS = 5 * 60 * 1000
 export const WAIT_LOG_POLL_MS = 5000
 export const WAIT_LOG_CONTINUE_HINT = 'Press C to continue if you already verified the update in the Capgo dashboard'
 
-export interface WaitLogQuery {
+interface WaitLogQuery {
   appId: string
   devicesId?: string[]
   order: { key: string, sortable: 'asc' | 'desc' }[]
