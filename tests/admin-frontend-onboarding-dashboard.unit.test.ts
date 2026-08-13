@@ -362,7 +362,7 @@ describe('admin frontend onboarding dashboard', () => {
     expect(source).toContain('const visibleAnalytics = computed(() => isLoadingStats.value ? null : analytics.value)')
   })
 
-  it.concurrent('uses the existing admin dashboard components and fixed onboarding version', async () => {
+  it.concurrent('uses the existing admin dashboard components for v2 and the legacy funnel', async () => {
     const source = await readFile(new URL('../src/pages/admin/dashboard/frontend-onboarding.vue', import.meta.url), 'utf8')
     const template = source.slice(source.indexOf('<template>'))
 
@@ -371,11 +371,28 @@ describe('admin frontend onboarding dashboard', () => {
     expect(source.match(/<AdminStatsCard(?:\s|\/?>)/g)).toHaveLength(4)
     expect(source.match(/<ChartCard(?:\s|\/?>)/g)).toHaveLength(1)
     expect(source.match(/<AdminStackedBarChart(?:\s|\/?>)/g)).toHaveLength(1)
-    expect(source.match(/<AdminFunnelChart(?:\s|\/?>)/g)).toHaveLength(1)
-    expect(source).toContain(`t('frontend-onboarding-version-1')`)
+    expect(source.match(/<AdminFunnelChart(?:\s|\/?>)/g)).toHaveLength(2)
+    expect(source.match(/<AdminOnboardingJourneyGraph(?:\s|\/?>)/g)).toHaveLength(1)
+    expect(source).toContain(`t('frontend-onboarding-version-2')`)
+    expect(source).toContain(`t('frontend-onboarding-funnel-v2')`)
+    expect(source).toContain(`t('frontend-onboarding-funnel-v1-legacy')`)
+    expect(source).not.toContain(`t('frontend-onboarding-demo-data')`)
+    expect(source).toContain('buildFrontendOnboardingGraphMetrics')
+    expect(source).toContain('visibleAnalytics.value?.v2_graph.nodes')
+    expect(source).not.toContain('onboardingGraphV2Demo')
     expect(source).toContain('buildFrontendOnboardingFunnelSummaries')
     expect(template).toContain('summary.conversion_percent')
     expect(template).not.toContain('of_start_percent')
+
+    const v2FunnelIndex = source.indexOf(`t('frontend-onboarding-funnel-v2')`)
+    const graphIndex = source.indexOf(`t('frontend-onboarding-graph-v2')`)
+    const legacyIndex = source.indexOf(`t('frontend-onboarding-funnel-v1-legacy')`)
+    expect(v2FunnelIndex).toBeLessThan(graphIndex)
+    expect(graphIndex).toBeLessThan(legacyIndex)
+    expect(source).not.toContain("id: 'organization_name'")
+    expect(source).not.toContain("id: 'organization_size'")
+    expect(source).not.toContain("id: 'invite_opened'")
+    expect(source).not.toContain("id: 'notification_preference'")
 
     const statsCard = await readFile(new URL('../src/components/admin/AdminStatsCard.vue', import.meta.url), 'utf8')
     const funnelChart = await readFile(new URL('../src/components/admin/AdminFunnelChart.vue', import.meta.url), 'utf8')
@@ -425,6 +442,7 @@ describe('admin frontend onboarding dashboard', () => {
 
     expect(messages['frontend-onboarding']).toBe('Frontend onboarding')
     expect(messages['frontend-onboarding-version-1']).toBe('Onboarding v1')
+    expect(messages['frontend-onboarding-version-2']).toBe('Onboarding v2')
     expect(messages['frontend-onboarding-attempts']).toBe('Onboarding attempts')
     expect(messages['frontend-onboarding-attempts-subtitle']).toBe('Unique frontend attempts')
     expect(messages['frontend-onboarding-completed']).toBe('Frontend onboarding completed')
@@ -433,7 +451,9 @@ describe('admin frontend onboarding dashboard', () => {
     expect(messages['frontend-onboarding-median-time-subtitle']).toBe('Completed attempts only')
     expect(messages['frontend-onboarding-largest-dropoff']).toBe('Largest drop-off')
     expect(messages['frontend-onboarding-daily-attempts']).toBe('Daily onboarding attempts')
-    expect(messages['frontend-onboarding-funnel']).toBe('Frontend onboarding funnel')
+    expect(messages['frontend-onboarding-funnel-v2']).toBe('Frontend onboarding funnel (v2)')
+    expect(messages['frontend-onboarding-funnel-v1-legacy']).toBe('Frontend onboarding funnel (v1, legacy)')
+    expect(messages['frontend-onboarding-demo-data']).toBeUndefined()
     expect(messages['frontend-onboarding-funnel-description']).toBe('Progress through the new-user app-creation wizard')
     expect(messages['frontend-onboarding-new-users']).toBe('New user onboarding')
     expect(messages['frontend-onboarding-no-dropoff']).toBe('No drop-off')
