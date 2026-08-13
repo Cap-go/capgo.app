@@ -12,7 +12,6 @@ import Toggle from '~/components/Toggle.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { useSupabase } from '~/services/supabase'
 import { openSupport } from '~/services/support'
-import { completeInviteSessionHandoff } from '~/utils/invites'
 
 const { t } = useI18n()
 const route = useRoute('/invitation')
@@ -140,10 +139,7 @@ async function submitForm() {
     }
 
     if (data?.access_token && data?.refresh_token) {
-      await completeInviteSessionHandoff(
-        () => router.replace('/login'),
-        data,
-      )
+      await router.replace(`/login?access_token=${encodeURIComponent(data.access_token)}&refresh_token=${encodeURIComponent(data.refresh_token)}`)
     }
     else {
       captchaComponent.value?.reset()

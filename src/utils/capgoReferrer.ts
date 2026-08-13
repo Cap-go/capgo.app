@@ -15,3 +15,21 @@ export function isCapgoDomainReferrer(referrer: string | null | undefined): bool
     return false
   }
 }
+
+/**
+ * True when this document first loaded on /login.
+ * Confirmation is only for a direct landing with session tokens.
+ * In-app hops (invite → login, etc.) must not show it.
+ */
+export function isDirectLoginLanding(firstUrl: string | null | undefined): boolean {
+  if (!firstUrl)
+    return true
+
+  try {
+    const path = new URL(firstUrl).pathname.replace(/\/+$/, '') || '/'
+    return path === '/login'
+  }
+  catch {
+    return true
+  }
+}
