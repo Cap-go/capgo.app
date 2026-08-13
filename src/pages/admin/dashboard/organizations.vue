@@ -39,6 +39,7 @@ interface OrganizationInsight {
   last_build_at: string | null
   paid_at: string | null
   registered_at: string
+  distribution_stage: string | null
 }
 
 interface OrganizationInsightsResponse {
@@ -87,6 +88,22 @@ function formatBillingTypeLabel(billingType: OrganizationInsight['billing_type']
 
 function formatDateOrNever(value: string | null) {
   return formatLocalDateTime(value) || t('never')
+}
+
+const DISTRIBUTION_STAGE_LABEL_KEYS: Record<string, string> = {
+  no_device: 'distribution-stage-no-device',
+  local_only: 'distribution-stage-local-only',
+  native_unknown: 'distribution-stage-native-unknown',
+  play_unknown: 'distribution-stage-play-unknown',
+  testflight: 'distribution-stage-testflight',
+  store_live: 'distribution-stage-store-live',
+}
+
+function formatDistributionStage(stage: string | null) {
+  if (!stage)
+    return t('unknown')
+  const key = DISTRIBUTION_STAGE_LABEL_KEYS[stage]
+  return key ? t(key) : t('unknown')
 }
 
 function getOrganizationAttentionLabel(item: OrganizationInsight) {
@@ -281,6 +298,13 @@ const organizationColumns = computed<TableColumn[]>(() => [
     mobile: false,
     sortable: false,
     displayFunction: (item: OrganizationInsight) => formatDateOrNever(item.last_upload_at),
+  },
+  {
+    label: t('distribution-stage'),
+    key: 'distribution_stage',
+    mobile: true,
+    sortable: false,
+    displayFunction: (item: OrganizationInsight) => formatDistributionStage(item.distribution_stage),
   },
   {
     label: t('last-build'),

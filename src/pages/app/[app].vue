@@ -3,6 +3,7 @@ import type { Database } from '~/types/supabase.types'
 import { computed, ref, watchEffect } from 'vue'
 import { useRoute } from 'vue-router'
 import AppNotFoundModal from '~/components/AppNotFoundModal.vue'
+import AppOnboardingNextStep from '~/components/dashboard/AppOnboardingNextStep.vue'
 import BundleUploadsCard from '~/components/dashboard/BundleUploadsCard.vue'
 import CompatibilityBanner from '~/components/dashboard/CompatibilityBanner.vue'
 import DeploymentBanner from '~/components/dashboard/DeploymentBanner.vue'
@@ -160,6 +161,7 @@ watchEffect(async () => {
         <!-- Content - blurred when app not found -->
         <div :class="{ 'blur-sm pointer-events-none select-none': appNotFound }">
           <StoreReleaseValidationModal v-if="!appNotFound && !isLoading && app && !isPendingOnboarding" :app-id="id" />
+          <AppOnboardingNextStep v-if="!appNotFound && !isLoading && app" :app="app" />
           <DeploymentBanner v-if="!appNotFound" :app-id="id" @deployed="refreshData" />
           <ReleaseBanner v-if="!appNotFound" :app-id="id" />
           <CompatibilityBanner v-if="!appNotFound" :app-id="id" />
