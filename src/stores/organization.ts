@@ -39,6 +39,7 @@ export interface OrganizationApp {
   icon_url: string | null
   icon_storage_path?: string | null
   icon_url_loading?: boolean
+  onboarding?: Database['public']['Tables']['apps']['Row']['onboarding']
 }
 export type OrganizationRole
   = 'owner'
@@ -269,7 +270,14 @@ export const useOrganizationStore = defineStore('organization', () => {
     }
   }
 
-  const appWithImmediateIcon = (app: { app_id: string, name: string | null, owner_org: string, need_onboarding: boolean, icon_url: string | null }): OrganizationApp => {
+  const appWithImmediateIcon = (app: {
+    app_id: string
+    name: string | null
+    owner_org: string
+    need_onboarding: boolean
+    icon_url: string | null
+    onboarding?: OrganizationApp['onboarding']
+  }): OrganizationApp => {
     const { normalized, shouldSign } = resolveImagePath(app.icon_url)
     return {
       app_id: app.app_id,
@@ -279,6 +287,7 @@ export const useOrganizationStore = defineStore('organization', () => {
       icon_url: shouldSign ? '' : normalized || null,
       icon_storage_path: normalized || null,
       icon_url_loading: shouldSign,
+      onboarding: app.onboarding ?? {},
     }
   }
 
@@ -393,7 +402,7 @@ export const useOrganizationStore = defineStore('organization', () => {
     const appIconLoadRun = ++organizationAppIconLoadRun
     const { error, data: allAppsByOwner } = await supabase
       .from('apps')
-      .select('app_id, name, owner_org, need_onboarding, icon_url')
+      .select('app_id, name, owner_org, need_onboarding, icon_url, onboarding')
       .in('owner_org', orgIds)
 
     if (error) {

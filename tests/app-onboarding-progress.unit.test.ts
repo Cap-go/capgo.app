@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
+  buildGettingStartedSteps,
   getAppOnboardingFeature,
+  gettingStartedProgress,
   highestAppOnboardingStage,
   isFeatureRetained30d,
   isFeatureUsedSince,
@@ -9,8 +11,13 @@ import {
   parseAppOnboardingLedger,
   parseAppOnboardingStage,
   rankAppOnboardingStage,
+  shouldShowGettingStartedNav,
   shouldShowOnboardingNextStep,
 } from '../src/utils/appOnboardingProgress.ts'
+import {
+  parseDismissedGettingStartedAppIds,
+  serializeDismissedGettingStartedAppIds,
+} from '../src/utils/gettingStartedDismiss.ts'
 
 describe('app onboarding progress ledger', () => {
   it.concurrent('parses feature timestamps and ignores unknown stages', () => {
@@ -118,5 +125,52 @@ describe('app onboarding progress ledger', () => {
         ota: { started_at: '2026-08-03T00:00:00.000Z', succeeded_at: '2026-08-04T00:00:00.000Z', stage: 'store_live' },
       },
     })).toBe(false)
+  })
+
+  it.concurrent('builds getting started checklist from ledger stages', () => {
+    const empty = buildGettingStartedSteps({})
+    expect(empty.every(step => !step.done)).toBe(true)
+    expect(shouldShowGettingStartedNav({})).toBe(true)
+    expect(gettingStartedProgress(empty)).toEqual({ done: 0, total: 4, percent: 0 })
+
+    const live = buildGettingStartedSteps({
+      features: {
+        cli_install: { succeeded_at: '2026-08-02T00:00:00.000Z' },
+        ota: { started_at: '2026-08-03T00:00:00.000Z', succeeded_at: '2026-08-04T00:00:00.000Z', stage: 'store_live' },
+        builder: { succeeded_at: '2026-08-05T00:00:00.000Z' },
+      },
+    })
+    expect(live.every(step => step.done)).toBe(true)
+    expect(shouldShowGettingStartedNav({
+      features: {
+        ota: { stage: 'store_live' },
+      },
+    })).toBe(false)
+    expect(gettingStartedProgress(live).percent).toBe(100)
+  })
+
+  it.concurrent('marks builder done from extras without keeping the sidebar entry', () => {
+    const steps = buildGettingStartedSteps({
+      features: {
+        cli_install: { succeeded_at: '2026-08-02T00:00:00.000Z' },
+        ota: { stage: 'store_live' },
+      },
+    }, { builderDone: true })
+    expect(steps.find(step => step.id === 'builder')?.done).toBe(true)
+    expect(shouldShowGettingStartedNav({
+      features: {
+        cli_install: { succeeded_at: '2026-08-02T00:00:00.000Z' },
+        ota: { stage: 'store_live' },
+      },
+    })).toBe(false)
+  })
+})
+
+describe('getting started dismiss storage', () => {
+  it.concurrent('parses and serializes dismissed app ids', () => {
+    expect(parseDismissedGettingStartedAppIds(null).size).toBe(0)
+    expect(parseDismissedGettingStartedAppIds('not-json').size).toBe(0)
+    expect([...parseDismissedGettingStartedAppIds('["com.demo.app",""]')]).toEqual(['com.demo.app'])
+    expect(serializeDismissedGettingStartedAppIds(['com.a.app', 'com.a.app'])).toBe('["com.a.app"]')
   })
 })

@@ -15,6 +15,7 @@ import { useOrganizationStore } from '~/stores/organization'
 
 const props = defineProps<{
   appId: string
+  showBanner?: boolean
 }>()
 
 const RELEASE_INSTALL_SOURCES = ['app_store']
@@ -373,6 +374,10 @@ function openModal() {
   void queueReminder()
 }
 
+defineExpose({
+  openModal,
+})
+
 function confirmPublished() {
   hasConfirmedPublished.value = true
   void loadChannels()
@@ -515,7 +520,7 @@ onUnmounted(() => {
 
 <template>
   <div
-    v-if="shouldPrompt && !isOpen"
+    v-if="showBanner && shouldPrompt && !isOpen"
     data-test="store-release-validation-alert"
     class="mb-4 rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-950"
   >
@@ -572,7 +577,7 @@ onUnmounted(() => {
   </div>
   <Teleport to="body">
     <div
-      v-if="shouldPrompt && isOpen"
+      v-if="isOpen"
       class="d-modal d-modal-open"
       role="dialog"
       aria-modal="true"

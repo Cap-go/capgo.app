@@ -139,6 +139,107 @@ export function shouldShowOnboardingNextStep(ledger: AppOnboardingLedger): boole
   return nextOnboardingAction(ledger).stage !== 'store_live'
 }
 
+export const GETTING_STARTED_STEP_IDS = ['cli_install', 'live_update', 'store_release', 'builder'] as const
+export type GettingStartedStepId = typeof GETTING_STARTED_STEP_IDS[number]
+export type GettingStartedGroup = 'essential' | 'grow'
+
+export interface GettingStartedStep {
+  id: GettingStartedStepId
+  group: GettingStartedGroup
+  done: boolean
+  titleKey: string
+  descKey: string
+  actionKey: string
+}
+
+function onboardingStage(ledger: AppOnboardingLedger): AppOnboardingStage | null {
+  const ota = ledger.features?.ota ?? {}
+  const cliInstall = ledger.features?.cli_install ?? {}
+  return parseAppOnboardingStage(ota.stage) ?? parseAppOnboardingStage(cliInstall.stage)
+}
+
+export function isGettingStartedStepDone(
+  ledger: AppOnboardingLedger,
+  id: GettingStartedStepId,
+  extras?: { builderDone?: boolean },
+): boolean {
+  const cliInstall = ledger.features?.cli_install ?? {}
+  const ota = ledger.features?.ota ?? {}
+  const builder = ledger.features?.builder ?? {}
+  const stage = onboardingStage(ledger)
+
+  if (id === 'cli_install') {
+    return Boolean(cliInstall.succeeded_at)
+      || rankAppOnboardingStage(stage) > rankAppOnboardingStage('local_only')
+  }
+  if (id === 'live_update') {
+    return Boolean(ota.succeeded_at || ota.started_at)
+      || rankAppOnboardingStage(stage) >= rankAppOnboardingStage('native_unknown')
+  }
+  if (id === 'store_release')
+    return stage === 'store_live'
+  return extras?.builderDone === true || Boolean(builder.succeeded_at)
+}
+
+export function buildGettingStartedSteps(
+  ledger: AppOnboardingLedger,
+  extras?: { builderDone?: boolean },
+): GettingStartedStep[] {
+  return [
+    {
+      id: 'cli_install',
+      group: 'essential',
+      done: isGettingStartedStepDone(ledger, 'cli_install', extras),
+      titleKey: 'onboarding-next-cli-install',
+      descKey: 'onboarding-next-cli-install-desc',
+      actionKey: 'getting-started-action-setup',
+    },
+    {
+      id: 'live_update',
+      group: 'essential',
+      done: isGettingStartedStepDone(ledger, 'live_update', extras),
+      titleKey: 'getting-started-live-update',
+      descKey: 'getting-started-live-update-desc',
+      actionKey: 'getting-started-action-setup',
+    },
+    {
+      id: 'store_release',
+      group: 'essential',
+      done: isGettingStartedStepDone(ledger, 'store_release', extras),
+      titleKey: 'store-release-validation-badge',
+      descKey: 'onboarding-next-ota-store-desc',
+      actionKey: 'getting-started-action-validate',
+    },
+    {
+      id: 'builder',
+      group: 'grow',
+      done: isGettingStartedStepDone(ledger, 'builder', extras),
+      titleKey: 'builder-promo-banner-title',
+      descKey: 'builder-promo-banner-subtitle',
+      actionKey: 'getting-started-action-explore',
+    },
+  ]
+}
+
+export function gettingStartedProgress(steps: GettingStartedStep[]): {
+  done: number
+  total: number
+  percent: number
+} {
+  const total = steps.length
+  const done = steps.filter(step => step.done).length
+  return {
+    done,
+    total,
+    percent: total === 0 ? 0 : Math.round((done / total) * 100),
+  }
+}
+
+export function shouldShowGettingStartedNav(ledger: AppOnboardingLedger): boolean {
+  return buildGettingStartedSteps(ledger)
+    .some(step => step.group === 'essential' && !step.done)
+}
+
 export function onboardingNextStepMessageKeys(ledger: AppOnboardingLedger): {
   titleKey: string
   descKey: string

@@ -3,7 +3,6 @@ import type { Database } from '~/types/supabase.types'
 import { computed, ref, watchEffect } from 'vue'
 import { useRoute } from 'vue-router'
 import AppNotFoundModal from '~/components/AppNotFoundModal.vue'
-import AppOnboardingNextStep from '~/components/dashboard/AppOnboardingNextStep.vue'
 import BundleInstallStatsPanel from '~/components/dashboard/BundleInstallStatsPanel.vue'
 import BundleUploadsCard from '~/components/dashboard/BundleUploadsCard.vue'
 import CompatibilityBanner from '~/components/dashboard/CompatibilityBanner.vue'
@@ -11,13 +10,11 @@ import DeploymentBanner from '~/components/dashboard/DeploymentBanner.vue'
 import DeploymentStatsCard from '~/components/dashboard/DeploymentStatsCard.vue'
 import DevicesStats from '~/components/dashboard/DevicesStats.vue'
 import ReleaseBanner from '~/components/dashboard/ReleaseBanner.vue'
-import StoreReleaseValidationModal from '~/components/dashboard/StoreReleaseValidationModal.vue'
 import UpdateStatsCard from '~/components/dashboard/UpdateStatsCard.vue'
 import { getCapgoVersion, useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
-import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
-import { shouldShowBuilderPromo } from '~/utils/builderPromoVisibility'
+import { useOrganizationStore } from '~/stores/organization'
 
 const id = ref('')
 const route = useRoute('/app/[app]')
@@ -33,25 +30,12 @@ const isLoading = ref(false)
 const supabase = useSupabase()
 const displayStore = useDisplayStore()
 const app = ref<Database['public']['Tables']['apps']['Row']>()
-const appCount = ref<number | null>(null)
 const usageComponent = ref()
 const appNotFound = ref(false)
 const appOrganization = computed(() => {
   if (!id.value)
     return undefined
   return organizationStore.getOrgByAppId(id.value) ?? organizationStore.currentOrganization
-})
-const isPendingOnboarding = computed(() => app.value?.need_onboarding === true)
-const selectableOrganizationCount = computed(() => organizationStore.organizations.filter(org => !isPendingOrganizationInvite(org)).length)
-const showBuilderPromo = computed(() => {
-  if (appCount.value === null)
-    return false
-
-  return shouldShowBuilderPromo({
-    organizationCount: selectableOrganizationCount.value,
-    appCount: appCount.value,
-    appNeedsOnboarding: isPendingOnboarding.value,
-  })
 })
 
 // Check if user lacks security compliance (2FA or password)
@@ -64,7 +48,6 @@ const lacksSecurityAccess = computed(() => {
 
 async function loadAppInfo() {
   app.value = undefined
-  appCount.value = null
   try {
     await organizationStore.awaitInitialLoad()
     const { data: dataApp, error } = await supabase
@@ -88,7 +71,6 @@ async function loadAppInfo() {
       devicesCount,
       bundlesCount,
       channelsCount,
-      ownerAppCount,
     ] = await Promise.all([
       getCapgoVersion(appId, dataApp.last_version),
       main.getTotalStatsByApp(appId, subscriptionStart),
@@ -104,18 +86,12 @@ async function loadAppInfo() {
         .select('*', { count: 'exact', head: true })
         .eq('app_id', appId)
         .then(({ count }) => count ?? 0),
-      supabase
-        .from('apps')
-        .select('app_id', { count: 'exact', head: true })
-        .eq('owner_org', dataApp.owner_org)
-        .then(({ count, error: appCountError }) => appCountError ? null : count ?? 0),
     ])
 
     if (id.value !== appId)
       return
 
     app.value = dataApp
-    appCount.value = ownerAppCount
     capgoVersion.value = capgoVersionResult
     updatesNb.value = updatesCount
     devicesNb.value = devicesCount
@@ -161,14 +137,9 @@ watchEffect(async () => {
 
         <!-- Content - blurred when app not found -->
         <div :class="{ 'blur-sm pointer-events-none select-none': appNotFound }">
-          <StoreReleaseValidationModal v-if="!appNotFound && !isLoading && app && !isPendingOnboarding" :app-id="id" />
-          <AppOnboardingNextStep v-if="!appNotFound && !isLoading && app" :app="app" />
           <DeploymentBanner v-if="!appNotFound" :app-id="id" @deployed="refreshData" />
           <ReleaseBanner v-if="!appNotFound" :app-id="id" />
           <CompatibilityBanner v-if="!appNotFound" :app-id="id" />
-
-          <!-- Capgo Builder promo banner (only for valid apps with no native build yet) -->
-          <BuilderPromoBanner v-if="!appNotFound && app && showBuilderPromo" :app-id="id" />
 
           <Usage
             v-if="!lacksSecurityAccess"
