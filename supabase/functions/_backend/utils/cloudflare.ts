@@ -1524,6 +1524,195 @@ export async function readUpdateDeliveryTimingEventsCF(
   }
 }
 
+const PLATFORM_DELIVERY_END_ACTIONS_SQL = '\'download_complete\', \'download_zip_complete\''
+const PLATFORM_DELIVERY_START_ACTIONS_SQL = '\'download_0\', \'download_zip_start\', \'download_manifest_start\''
+const PLATFORM_DELIVERY_MAX_MS = 7_200_000
+
+export interface PlatformUpdateDeliveryDailyCFRow {
+  day: string
+  samples: number
+  devices: number
+  p50_ms: number | null
+  p75_ms: number | null
+  p95_ms: number | null
+  p99_ms: number | null
+}
+
+export interface PlatformUpdateDeliveryOverviewCFRow {
+  samples: number
+  devices: number
+  p50_ms: number | null
+  p75_ms: number | null
+  p95_ms: number | null
+  p99_ms: number | null
+}
+
+export interface BuildPlatformUpdateDeliveryStatsCFQueryParams {
+  query_start: string
+  period_start: string
+  end_date: string
+}
+
+function platformDeliveryDaySql(value: string): string {
+  return formatDateCF(value).slice(0, 10)
+}
+
+/**
+ * Pair start/complete in AE instead of pulling 50k raw rows per day.
+ * AE SQL has no JOIN/UNION/JSON extract, so this is an explicit approximation:
+ * one sample per app+device+version+UTC day using first start and first complete
+ * (or double1 when the complete already has duration). Same-day multi-attempts
+ * and untimed pairs that cross UTC midnight can drop or skew; blob4 metadata
+ * duration cannot be parsed in-engine. trackLogsCF already writes duration to
+ * double1 when metadata has it.
+ */
+function buildPlatformUpdateDeliveryDeliveriesSubquery(params: BuildPlatformUpdateDeliveryStatsCFQueryParams): string {
+  const metaDurationSql = `min(if(blob2 IN (${PLATFORM_DELIVERY_END_ACTIONS_SQL}) AND double1 > 0, double1, NULL))`
+  const startTsSql = `min(if(blob2 IN (${PLATFORM_DELIVERY_START_ACTIONS_SQL}), timestamp, NULL))`
+  const endTsSql = `min(if(blob2 IN (${PLATFORM_DELIVERY_END_ACTIONS_SQL}), timestamp, NULL))`
+
+  return `SELECT
+  formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d') AS day,
+  format('{}:{}', index1, blob1) AS app_device,
+  1 AS sample_weight,
+  if(
+    ${metaDurationSql} > 0,
+    ${metaDurationSql},
+    (toUnixTimestamp(${endTsSql}) - toUnixTimestamp(${startTsSql})) * 1000
+  ) AS duration_ms
+FROM app_log
+WHERE timestamp >= toDateTime('${formatDateCF(params.query_start)}')
+  AND timestamp < toDateTime('${formatDateCF(params.end_date)}')
+  AND blob2 IN (${PLATFORM_DELIVERY_END_ACTIONS_SQL}, ${PLATFORM_DELIVERY_START_ACTIONS_SQL})
+GROUP BY index1, blob1, blob3, day`
+}
+
+export function buildPlatformUpdateDeliveryDailyCFQuery(params: BuildPlatformUpdateDeliveryStatsCFQueryParams): string {
+  return `SELECT
+  day,
+  quantileExactWeighted(0.50)(duration_ms, sample_weight) AS p50_ms,
+  quantileExactWeighted(0.75)(duration_ms, sample_weight) AS p75_ms,
+  quantileExactWeighted(0.95)(duration_ms, sample_weight) AS p95_ms,
+  quantileExactWeighted(0.99)(duration_ms, sample_weight) AS p99_ms,
+  SUM(sample_weight) AS samples,
+  COUNT(DISTINCT app_device) AS devices
+FROM (
+  ${buildPlatformUpdateDeliveryDeliveriesSubquery(params)}
+)
+WHERE duration_ms > 0
+  AND duration_ms <= ${PLATFORM_DELIVERY_MAX_MS}
+  AND day >= '${platformDeliveryDaySql(params.period_start)}'
+GROUP BY day
+ORDER BY day ASC`
+}
+
+export function buildPlatformUpdateDeliveryOverviewCFQuery(params: BuildPlatformUpdateDeliveryStatsCFQueryParams): string {
+  return `SELECT
+  quantileExactWeighted(0.50)(duration_ms, sample_weight) AS p50_ms,
+  quantileExactWeighted(0.75)(duration_ms, sample_weight) AS p75_ms,
+  quantileExactWeighted(0.95)(duration_ms, sample_weight) AS p95_ms,
+  quantileExactWeighted(0.99)(duration_ms, sample_weight) AS p99_ms,
+  SUM(sample_weight) AS samples,
+  COUNT(DISTINCT app_device) AS devices
+FROM (
+  ${buildPlatformUpdateDeliveryDeliveriesSubquery(params)}
+)
+WHERE duration_ms > 0
+  AND duration_ms <= ${PLATFORM_DELIVERY_MAX_MS}
+  AND day >= '${platformDeliveryDaySql(params.period_start)}'`
+}
+
+function toPlatformDeliveryMetric(value: number | string | null | undefined): number | null {
+  if (value === null || value === undefined || value === '')
+    return null
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? numeric : null
+}
+
+function toPlatformDeliveryCount(value: number | string | null | undefined): number {
+  const numeric = Number(value ?? 0)
+  return Number.isFinite(numeric) ? Math.max(0, Math.round(numeric)) : 0
+}
+
+export async function readPlatformUpdateDeliveryStatsCF(
+  c: Context,
+  params: BuildPlatformUpdateDeliveryStatsCFQueryParams,
+): Promise<{
+  dailyRows: PlatformUpdateDeliveryDailyCFRow[]
+  overviewRow: PlatformUpdateDeliveryOverviewCFRow
+}> {
+  if (!c.env.APP_LOG) {
+    return {
+      dailyRows: [],
+      overviewRow: { samples: 0, devices: 0, p50_ms: null, p75_ms: null, p95_ms: null, p99_ms: null },
+    }
+  }
+
+  // AE SQL has no UNION/ROLLUP, so daily series and true overview percentiles
+  // cannot share one statement. Two parallel queries beat 90 sequential scans.
+  const dailyQuery = buildPlatformUpdateDeliveryDailyCFQuery(params)
+  const overviewQuery = buildPlatformUpdateDeliveryOverviewCFQuery(params)
+  cloudlog({
+    requestId: c.get('requestId'),
+    message: 'readPlatformUpdateDeliveryStatsCF query',
+    dailyQuery,
+    overviewQuery,
+  })
+
+  try {
+    const [daily, overview] = await Promise.all([
+      runQueryToCFA<{
+        day: string
+        samples: number | string
+        devices: number | string
+        p50_ms: number | string | null
+        p75_ms: number | string | null
+        p95_ms: number | string | null
+        p99_ms: number | string | null
+      }>(c, dailyQuery),
+      runQueryToCFA<{
+        samples: number | string
+        devices: number | string
+        p50_ms: number | string | null
+        p75_ms: number | string | null
+        p95_ms: number | string | null
+        p99_ms: number | string | null
+      }>(c, overviewQuery),
+    ])
+
+    const overviewRow = overview[0]
+    return {
+      dailyRows: daily.map(row => ({
+        day: typeof row.day === 'string' ? row.day.slice(0, 10) : String(row.day).slice(0, 10),
+        samples: toPlatformDeliveryCount(row.samples),
+        devices: toPlatformDeliveryCount(row.devices),
+        p50_ms: toPlatformDeliveryMetric(row.p50_ms),
+        p75_ms: toPlatformDeliveryMetric(row.p75_ms),
+        p95_ms: toPlatformDeliveryMetric(row.p95_ms),
+        p99_ms: toPlatformDeliveryMetric(row.p99_ms),
+      })),
+      overviewRow: {
+        samples: toPlatformDeliveryCount(overviewRow?.samples),
+        devices: toPlatformDeliveryCount(overviewRow?.devices),
+        p50_ms: toPlatformDeliveryMetric(overviewRow?.p50_ms),
+        p75_ms: toPlatformDeliveryMetric(overviewRow?.p75_ms),
+        p95_ms: toPlatformDeliveryMetric(overviewRow?.p95_ms),
+        p99_ms: toPlatformDeliveryMetric(overviewRow?.p99_ms),
+      },
+    }
+  }
+  catch (e) {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'Error reading platform update delivery stats',
+      error: serializeError(e),
+      dailyQuery,
+      overviewQuery,
+    })
+    throw e
+  }
+}
+
 export interface NativeObservePluginVersionCF {
   plugin_version: string
   devices: number
