@@ -37,7 +37,6 @@ const percentLabel = computed(() => {
 
 const countLabel = computed(() => formatNumberValue(adoption.value?.count ?? 0))
 const totalLabel = computed(() => formatNumberValue(adoption.value?.total ?? 0))
-const progressWidth = computed(() => `${Math.max(0, Math.min(100, adoption.value?.percent ?? 0))}%`)
 const hasDevices = computed(() => (adoption.value?.total ?? 0) > 0)
 
 async function loadAdoption() {
@@ -134,16 +133,12 @@ watch(() => [props.appId, props.versionName] as const, () => {
             {{ t('bundle-adoption-devices', { count: countLabel, total: totalLabel }) }}
           </span>
         </div>
-        <div
-          class="w-full h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700"
-          role="progressbar"
+        <progress
+          class="w-full h-2 d-progress d-progress-info"
+          :value="adoption?.percent ?? 0"
+          max="100"
           :aria-label="t('bundle-adoption')"
-          :aria-valuemin="0"
-          :aria-valuemax="100"
-          :aria-valuenow="Math.round(adoption?.percent ?? 0)"
-        >
-          <div class="h-full rounded-full bg-sky-500 dark:bg-sky-400" :style="{ width: progressWidth }" />
-        </div>
+        />
         <div class="flex flex-wrap gap-2">
           <button
             type="button"

@@ -208,6 +208,27 @@ async function handleMonthlyCreateStats(c: Context, appId: string) {
   return c.json(BRES)
 }
 
+async function loadDeployVersionAdoption(
+  c: Context,
+  appId: string,
+  versionName?: string,
+  channelName?: string,
+) {
+  try {
+    const deviceCounts = await readDeviceVersionCounts(c, appId, channelName)
+    return summarizeDeviceVersionAdoption(deviceCounts, versionName)
+  }
+  catch (error) {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'Failed to read device version counts for deploy stats email',
+      error,
+      metadata: { appId, versionName, channelName },
+    })
+    return summarizeDeviceVersionAdoption({}, versionName)
+  }
+}
+
 async function handleDeployInstallStats(
   c: Context,
   payload: {
@@ -268,19 +289,7 @@ async function handleDeployInstallStats(
   const installs = sumVersionInstalls(versionStats, versionName, versionId)
 
   if (shouldSendDeployInstallStatsEmail(installs)) {
-    let adoption = summarizeDeviceVersionAdoption({}, versionName)
-    try {
-      const deviceCounts = await readDeviceVersionCounts(c, appId, channelName)
-      adoption = summarizeDeviceVersionAdoption(deviceCounts, versionName)
-    }
-    catch (error) {
-      cloudlogErr({
-        requestId: c.get('requestId'),
-        message: 'Failed to read device version counts for deploy stats email',
-        error,
-        metadata: { appId, versionName, channelName },
-      })
-    }
+    const adoption = await loadDeployVersionAdoption(c, appId, versionName, channelName)
 
     await sendEmailToOrgMembers(c, 'bundle:install_stats_24h', 'deploy_stats_24h', {
       app_id: appId,
