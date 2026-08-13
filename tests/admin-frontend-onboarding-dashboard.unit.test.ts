@@ -103,6 +103,12 @@ describe('admin frontend onboarding dashboard', () => {
       { label: 'Intent', value: 10, color: '#119eff' },
       { label: 'Organization', value: 5, color: '#8b5cf6' },
     ])
+    expect(buildFrontendOnboardingFunnelStages(analytics.funnels.v2)).toEqual([
+      { label: 'Intent', value: 5, color: '#119eff' },
+      { label: 'App details', value: 4, color: '#6366f1' },
+      { label: 'Organization', value: 3, color: '#8b5cf6' },
+      { label: 'Setup reached', value: 2, color: '#10b981' },
+    ])
   })
 
   it.concurrent('adapts either selected funnel into ordered stage-to-stage conversions', () => {
@@ -182,7 +188,7 @@ describe('admin frontend onboarding dashboard', () => {
       { key: 'zero-parent-child', count: 3 },
       { key: 'zero_parent', count: 0 },
     ], 0)).toEqual({
-      missing: { count: 0, levelPercent: 0 },
+      'missing': { count: 0, levelPercent: 0 },
       'missing-parent-child': { count: 3, levelPercent: 0, previousPercent: 0 },
       'zero-parent-child': { count: 3, levelPercent: 0, previousPercent: 0 },
     })

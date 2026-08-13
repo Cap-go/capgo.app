@@ -42,7 +42,7 @@ export interface FrontendOnboardingAnalytics {
   v2_graph: {
     nodes: Array<{
       key: string
-      count?: number
+      count: number
     }>
   }
   posthog_configured: boolean
@@ -179,7 +179,7 @@ export function buildFrontendOnboardingGraphMetrics(
   nodes: readonly FrontendOnboardingAnalytics['v2_graph']['nodes'][number][],
   appDetailsCount: number | undefined,
 ): Record<string, FrontendOnboardingGraphMetric> {
-  const counts = new Map(nodes.map(node => [node.key, node.count ?? 0]))
+  const counts = new Map(nodes.map(node => [node.key, node.count]))
 
   return Object.fromEntries(definitions.map(({ key, parentKey }) => {
     const count = counts.get(key) ?? 0
