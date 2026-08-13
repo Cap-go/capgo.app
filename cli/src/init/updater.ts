@@ -4,10 +4,11 @@ import { dirname, join } from 'node:path'
 import process from 'node:process'
 
 export const CAPGO_UPDATER_PACKAGE = '@capgo/capacitor-updater'
+export const CAPACITOR_SPLASH_SCREEN_PACKAGE = '@capacitor/splash-screen'
 
 type DependencySection = 'dependencies' | 'devDependencies' | 'optionalDependencies'
 
-export interface UpdaterInstallState {
+export interface PackageInstallState {
   packageJsonPath: string
   projectDir: string
   declaredVersion: string | null
@@ -16,6 +17,8 @@ export interface UpdaterInstallState {
   ready: boolean
   details: string[]
 }
+
+export type UpdaterInstallState = PackageInstallState
 
 interface PackageJsonDependencies {
   dependencies?: Record<string, unknown>
@@ -96,16 +99,16 @@ function readInstalledPackageVersion(packageJsonPath: string, packageName: strin
   return null
 }
 
-export function getUpdaterInstallState(packageJsonPath: string): UpdaterInstallState {
+export function getPackageInstallState(packageJsonPath: string, packageName: string): PackageInstallState {
   const projectDir = dirname(packageJsonPath)
-  const declaration = getDeclaredDependency(packageJsonPath, CAPGO_UPDATER_PACKAGE)
-  const installedVersion = readInstalledPackageVersion(packageJsonPath, CAPGO_UPDATER_PACKAGE)
+  const declaration = getDeclaredDependency(packageJsonPath, packageName)
+  const installedVersion = readInstalledPackageVersion(packageJsonPath, packageName)
   const details: string[] = []
 
   if (!declaration.version)
-    details.push(`Missing ${CAPGO_UPDATER_PACKAGE} in ${packageJsonPath}`)
+    details.push(`Missing ${packageName} in ${packageJsonPath}`)
   if (!installedVersion)
-    details.push(`Cannot resolve ${CAPGO_UPDATER_PACKAGE} from ${projectDir}/node_modules`)
+    details.push(`Cannot resolve ${packageName} from ${projectDir}/node_modules`)
 
   return {
     packageJsonPath,
@@ -116,4 +119,12 @@ export function getUpdaterInstallState(packageJsonPath: string): UpdaterInstallS
     ready: details.length === 0,
     details,
   }
+}
+
+export function getUpdaterInstallState(packageJsonPath: string): PackageInstallState {
+  return getPackageInstallState(packageJsonPath, CAPGO_UPDATER_PACKAGE)
+}
+
+export function getSplashScreenInstallState(packageJsonPath: string): PackageInstallState {
+  return getPackageInstallState(packageJsonPath, CAPACITOR_SPLASH_SCREEN_PACKAGE)
 }
