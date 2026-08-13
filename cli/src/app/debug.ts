@@ -232,6 +232,7 @@ function listenForWaitLogContinue(signal: AbortSignal): Promise<void> {
     const stdin = process.stdin
     const canUseRawMode = Boolean(stdin.isTTY && typeof stdin.setRawMode === 'function')
     const previousRawMode = canUseRawMode ? stdin.isRaw : undefined
+    const wasFlowing = stdin.readableFlowing === true
     const finish = () => {
       cleanup()
       resolve()
@@ -246,6 +247,8 @@ function listenForWaitLogContinue(signal: AbortSignal): Promise<void> {
       signal.removeEventListener('abort', finish)
       if (canUseRawMode && previousRawMode !== undefined)
         stdin.setRawMode(previousRawMode)
+      if (!wasFlowing)
+        stdin.pause()
     }
     signal.addEventListener('abort', finish, { once: true })
     if (canUseRawMode) {
