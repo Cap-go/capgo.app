@@ -12,6 +12,7 @@ import { useSupabase } from '~/services/supabase'
 const props = defineProps<{
   appId: string
   versionName: string
+  linkedChannelId?: number | null
 }>()
 
 const { t } = useI18n()
@@ -84,7 +85,11 @@ async function loadAdoption() {
   }
 }
 
-function openDevices() {
+function openAnalytics() {
+  if (props.linkedChannelId) {
+    router.push(`/app/${props.appId}/channel/${props.linkedChannelId}/statistics`)
+    return
+  }
   router.push({
     path: `/app/${props.appId}/devices`,
     query: { version: props.versionName },
@@ -101,7 +106,7 @@ watch(() => [props.appId, props.versionName] as const, () => {
     type="button"
     data-test="bundle-adoption-card"
     class="p-4 text-left bg-white border rounded-lg shadow-sm cursor-pointer dark:bg-slate-800 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/40"
-    @click="openDevices"
+    @click="openAnalytics"
   >
     <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
       <IconPackage class="w-4 h-4" />

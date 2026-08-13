@@ -12,6 +12,6 @@ test.describe('Bundle reach', () => {
     await expect(reachCard).toContainText('Bundle reach')
 
     await reachCard.click()
-    await expect(page).toHaveURL(/\/app\/com\.demo\.app\/devices\?version=/)
+    await expect(page).toHaveURL(/\/app\/com\.demo\.app\/channel\/\d+\/statistics/)
   })
 })

@@ -347,6 +347,7 @@ watchEffect(async () => {
             :key="channel.id"
             :app-id="id"
             :version-name="channel.versionName"
+            :linked-channel-id="channel.id"
           />
           <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
             <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
