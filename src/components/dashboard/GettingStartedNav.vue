@@ -12,7 +12,6 @@ import {
 } from '~/utils/appOnboardingProgress'
 import {
   dismissGettingStarted,
-  gettingStartedProgressTick,
   isGettingStartedDismissed,
   isStoreReleaseValidated,
 } from '~/utils/gettingStartedDismiss'
@@ -28,7 +27,6 @@ const userId = computed(() => main.user?.id ?? main.auth?.id ?? '')
 
 const apps = computed(() => {
   void dismissedTick.value
-  void gettingStartedProgressTick.value
   const orgId = organizationStore.currentOrganization?.gid
   if (!orgId || !userId.value)
     return [] as OrganizationApp[]

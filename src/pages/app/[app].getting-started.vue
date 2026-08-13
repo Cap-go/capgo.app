@@ -15,7 +15,6 @@ import {
   parseAppOnboardingLedger,
 } from '~/utils/appOnboardingProgress'
 import {
-  gettingStartedProgressTick,
   isStoreReleaseValidated,
   markStoreReleaseValidated,
 } from '~/utils/gettingStartedDismiss'
@@ -42,13 +41,10 @@ const iconLoading = computed(() => orgApp.value?.icon_url_loading === true)
 
 const ledger = computed(() => parseAppOnboardingLedger(app.value?.onboarding))
 const userId = computed(() => main.user?.id ?? main.auth?.id ?? '')
-const steps = computed(() => {
-  void gettingStartedProgressTick.value
-  return buildGettingStartedSteps(ledger.value, {
-    builderDone: builderDone.value,
-    storeReleaseValidated: isStoreReleaseValidated(userId.value, id.value),
-  })
-})
+const steps = computed(() => buildGettingStartedSteps(ledger.value, {
+  builderDone: builderDone.value,
+  storeReleaseValidated: isStoreReleaseValidated(userId.value, id.value),
+}))
 const progress = computed(() => gettingStartedProgress(steps.value))
 const stepGroups = computed(() => {
   const essential = steps.value.filter(step => step.group === 'essential')
