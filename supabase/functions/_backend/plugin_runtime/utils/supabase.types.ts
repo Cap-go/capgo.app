@@ -333,6 +333,7 @@ export type Database = {
           manifest_bundle_count: number
           name: string | null
           need_onboarding: boolean
+          onboarding: Json
           onboarding_completed_at: string | null
           owner_org: string
           retention: number
@@ -365,6 +366,7 @@ export type Database = {
           manifest_bundle_count?: number
           name?: string | null
           need_onboarding?: boolean
+          onboarding?: Json
           onboarding_completed_at?: string | null
           owner_org: string
           retention?: number
@@ -397,6 +399,7 @@ export type Database = {
           manifest_bundle_count?: number
           name?: string | null
           need_onboarding?: boolean
+          onboarding?: Json
           onboarding_completed_at?: string | null
           owner_org?: string
           retention?: number
@@ -3947,6 +3950,7 @@ export type Database = {
           manifest_bundle_count: number
           name: string | null
           need_onboarding: boolean
+          onboarding: Json
           onboarding_completed_at: string | null
           owner_org: string
           retention: number
@@ -4679,6 +4683,10 @@ export type Database = {
         Returns: undefined
       }
       mark_app_stats_refreshed: { Args: { p_app_id: string }; Returns: string }
+      mark_onboarding_feature_started: {
+        Args: { p_app_id: string, p_feature_key: string }
+        Returns: Json
+      }
       mass_edit_queue_messages_cf_ids: {
         Args: {
           updates: Database["public"]["CompositeTypes"]["message_update"][]

@@ -130,6 +130,45 @@ const planNameOrder = ['Solo', 'Maker', 'Team', 'Enterprise'] as const
 
 const localCommand = isLocal(config.supaHost) ? ` --supa-host ${config.supaHost} --supa-anon ${config.supaKey}` : ''
 const usesBuilderSetupCommand = computed(() => selectedIntent.value === 'builder')
+const markedOnboardingFeatures = new Set<string>()
+
+async function markOnboardingFeatureStarted(featureKey: 'cli_install' | 'ota' | 'builder') {
+  const appId = createdApp.value?.app_id
+  if (!appId)
+    return
+
+  const markKey = `${appId}:${featureKey}`
+  if (markedOnboardingFeatures.has(markKey))
+    return
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    markedOnboardingFeatures.add(markKey)
+    const { data, error } = await supabase.rpc('mark_onboarding_feature_started', {
+      p_app_id: appId,
+      p_feature_key: featureKey,
+    })
+    if (!error) {
+      organizationStore.updateAppOnboarding(appId, data)
+      return
+    }
+
+    markedOnboardingFeatures.delete(markKey)
+    if (attempt === 0) {
+      await new Promise(resolve => setTimeout(resolve, 400))
+      continue
+    }
+    console.error('Failed to mark onboarding feature started', error)
+  }
+}
+
+watch([flowStep, createdApp, usesBuilderSetupCommand], () => {
+  if (!createdApp.value)
+    return
+  if (flowStep.value === 'install' || (flowStep.value === 'setup' && !usesBuilderSetupCommand.value))
+    void markOnboardingFeatureStarted('cli_install')
+  if (flowStep.value === 'setup')
+    void markOnboardingFeatureStarted(usesBuilderSetupCommand.value ? 'builder' : 'ota')
+})
 const cliSubcommand = computed(() => usesBuilderSetupCommand.value ? 'build init' : 'i')
 const cliCommand = computed(() => {
   const key = apiKey.value
@@ -977,7 +1016,7 @@ async function seedDemoData() {
       name: createdApp.value.name ?? null,
       ownerOrgId: currentOrg.value.gid,
     })
-    router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}?refresh=true`)
+    router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}/getting-started`)
   }
   catch (error) {
     console.error('Cannot seed demo data', error)
@@ -1086,7 +1125,7 @@ function openDashboard() {
     })
   }
   allowOnboardingDashboardExploration(onboardingUserId.value, createdApp.value.app_id)
-  router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}`)
+  router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}/getting-started`)
 }
 
 onMounted(async () => {

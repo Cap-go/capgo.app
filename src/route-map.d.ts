@@ -290,6 +290,13 @@ declare module 'vue-router/auto-routes' {
       { app: ParamValue<false> },
       | never
     >,
+    '/app/[app].getting-started': RouteRecordInfo<
+      '/app/[app].getting-started',
+      '/app/:app/getting-started',
+      { app: ParamValue<true> },
+      { app: ParamValue<false> },
+      | never
+    >,
     '/app/[app].notifications': RouteRecordInfo<
       '/app/[app].notifications',
       '/app/:app/notifications',
@@ -964,6 +971,14 @@ declare module 'vue-router/auto-routes' {
     'src/pages/app/[app].devices.vue': {
       routes:
         | '/app/[app].devices'
+      views:
+        | never
+      pathParamNames:
+        | 'app'
+    }
+    'src/pages/app/[app].getting-started.vue': {
+      routes:
+        | '/app/[app].getting-started'
       views:
         | never
       pathParamNames:

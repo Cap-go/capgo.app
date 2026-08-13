@@ -81,6 +81,50 @@ async function mockCompatibilityEvents(page: Page, rows: () => Record<string, un
   })
 }
 
+async function mockGettingStartedLedger(page: Page) {
+  const ledger = {
+    features: {
+      cli_install: { succeeded_at: '2026-08-01T00:00:00.000Z' },
+      ota: { succeeded_at: '2026-08-02T00:00:00.000Z', stage: 'testflight' },
+    },
+  }
+
+  await page.route('**/rest/v1/apps*', async (route: Route) => {
+    if (route.request().method() !== 'GET') {
+      await route.fallback()
+      return
+    }
+
+    const response = await route.fetch()
+    const contentType = response.headers()['content-type'] ?? ''
+    if (!contentType.includes('json')) {
+      await route.fulfill({ response })
+      return
+    }
+
+    const json = await response.json() as unknown
+    const patchRow = (row: Record<string, unknown>) => {
+      if (row.app_id !== APP_ID)
+        return row
+      return { ...row, onboarding: ledger }
+    }
+    const body = Array.isArray(json)
+      ? json.map(row => (row && typeof row === 'object' ? patchRow(row as Record<string, unknown>) : row))
+      : (json && typeof json === 'object' && 'app_id' in json
+          ? patchRow(json as Record<string, unknown>)
+          : json)
+
+    const headers = { ...response.headers() }
+    delete headers['content-length']
+    delete headers['content-encoding']
+    await route.fulfill({
+      status: response.status(),
+      headers,
+      body: JSON.stringify(body),
+    })
+  })
+}
+
 async function mockStoreReleaseValidationStatus(page: Page) {
   await page.route('**/rest/v1/app_versions*', async (route: Route) => {
     const url = new URL(route.request().url())
@@ -114,34 +158,30 @@ test.describe('Compatibility events', () => {
     }, TEST_USER_ID)
   })
 
-  test('shows the store release validation alert before opening the modal', async ({ page }) => {
+  test('opens store release validation from getting started', async ({ page }) => {
     await mockCompatibilityEvents(page, () => [])
-
+    await mockGettingStartedLedger(page)
     await mockStoreReleaseValidationStatus(page)
-    await page.goto(`/app/${APP_ID}`)
+    await page.goto(`/app/${APP_ID}/getting-started`)
 
-    const alert = page.locator('[data-test="store-release-validation-alert"]')
+    const storeStep = page.locator('[data-test="getting-started-step-store_release"]')
     const modal = page.getByRole('dialog')
-    await expect(alert).toBeVisible()
-    await expect(alert.getByText('Production release check')).toBeVisible()
-    await expect(alert.getByText('Live Update bundle detected')).toBeVisible()
+    await expect(page.locator('[data-test="getting-started-page"]')).toBeVisible()
+    await expect(page.getByRole('button', { name: /^bundles$/i })).toHaveCount(0)
+    await expect(storeStep).toBeVisible()
+    await expect(storeStep.locator('[data-test="getting-started-step-action"]')).toBeVisible()
     await expect(modal).not.toBeVisible()
 
-    await alert.locator('[data-test="store-release-validation-open"]').click()
+    await storeStep.locator('[data-test="getting-started-step-action"]').click()
     await expect(modal).toBeVisible()
     await expect(modal.getByText('Is this app published with Capgo in production?')).toBeVisible()
 
     await modal.getByRole('button', { name: 'Later' }).click()
     await expect(modal).not.toBeVisible()
-    await expect(alert).toBeVisible()
     await page.waitForTimeout(1000)
     await expect(modal).not.toBeVisible()
 
-    await alert.locator('[data-test="store-release-validation-dismiss"]').click()
-    await expect(alert).not.toBeVisible()
-    await page.reload()
-    await expect(alert).toBeVisible()
-    await alert.locator('[data-test="store-release-validation-open"]').click()
+    await storeStep.locator('[data-test="getting-started-step-action"]').click()
     await expect(modal).toBeVisible()
     await modal.getByRole('button', { name: 'Yes, app is published' }).click()
 
@@ -158,11 +198,6 @@ test.describe('Compatibility events', () => {
     await mockCompatibilityEvents(page, () => [unresolvedEvent()])
 
     await page.goto(`/app/${APP_ID}`)
-
-    const storeReleaseValidationAlert = page.locator('[data-test="store-release-validation-alert"]')
-    await storeReleaseValidationAlert.waitFor({ state: 'visible', timeout: 5000 }).catch(() => undefined)
-    if (await storeReleaseValidationAlert.isVisible())
-      await storeReleaseValidationAlert.locator('[data-test="store-release-validation-dismiss"]').click()
     // The banner exposes a stable data-test hook; keep the copy assertions for
     // content correctness but locate the CTA via its data-test attribute.
     const banner = page.locator('[data-test="compatibility-banner"]')
