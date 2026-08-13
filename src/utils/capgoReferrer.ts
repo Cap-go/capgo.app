@@ -28,7 +28,7 @@ export function isDirectLoginLanding(firstUrl: string | null | undefined): boole
 
   try {
     const path = new URL(firstUrl).pathname.replace(/\/+$/, '') || '/'
-    const lastSegment = path.split('/').filter(Boolean).at(-1)
+    const lastSegment = path.split('/').filter(Boolean).pop()
     return lastSegment === 'login'
   }
   catch {

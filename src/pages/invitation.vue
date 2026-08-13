@@ -144,8 +144,10 @@ async function submitForm() {
         access_token: data.access_token,
         refresh_token: data.refresh_token,
       })
-      if (sessionError)
+      if (sessionError) {
+        inviteRow.value = null
         throw sessionError
+      }
       await router.replace('/login')
     }
     else {
