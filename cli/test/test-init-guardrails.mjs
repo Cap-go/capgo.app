@@ -12,12 +12,16 @@ import {
   getInitOtaVersionBase,
   getInitSuggestedOtaVersion,
   getInitUpdaterPluginConfig,
+  getMissingMainFileRecoveryOptions,
+  getSplashScreenVersionToInstall,
   getResumedOnboardingAccessError,
   getNativePlatformAvailability,
   injectInitCode,
   isOnlyAllowedInitAutoTestChange,
   revertInitAutoTestChangeContent,
   runInheritedCommand,
+  notifyAppReadyDocsUrl,
+  readExistingMainFile,
 } from '../src/init/command.ts'
 import {
   createMissingExecutableError,
@@ -219,6 +223,22 @@ t('dirty git status prompt keeps clean repo as the recommended path', () => {
   assert.match(options[1]?.hint ?? '', /not recommended/)
 })
 
+t('missing main file recovery offers manual setup, docs, and path entry', () => {
+  assert.deepEqual(getMissingMainFileRecoveryOptions().map(option => option.value), [
+    'provide-path',
+    'manual',
+    'docs',
+  ])
+  assert.equal(notifyAppReadyDocsUrl, 'https://capgo.app/docs/plugins/updater/notify-app-ready/')
+  withTempDir((root) => {
+    assert.equal(readExistingMainFile(root), null)
+    const entryFile = join(root, 'main.ts')
+    assert.equal(readExistingMainFile(entryFile), null)
+    writeFileSync(entryFile, '')
+    assert.deepEqual(readExistingMainFile(entryFile), { path: entryFile, content: '' })
+  })
+})
+
 t('init code injection preserves framework directives before imports', () => {
   const updated = injectInitCode('src/main.tsx', `'use client'\n\nexport default function App() {}\n`)
 
@@ -278,6 +298,11 @@ t('init updater config always starts from native version 0.0.0', () => {
     autoUpdate: 'always',
     autoSplashscreen: true,
   })
+})
+
+t('instant updates install splash-screen matching Capacitor major', () => {
+  assert.equal(getSplashScreenVersionToInstall('7.4.0'), '^7.0.0')
+  assert.equal(getSplashScreenVersionToInstall('8.0.0'), 'latest')
 })
 
 t('instant update detection supports new autoUpdate modes and legacy directUpdate', () => {

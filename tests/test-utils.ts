@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import process, { env } from 'node:process'
 import { createClient } from '@supabase/supabase-js'
-import { Pool } from 'pg'
+import { type PoolClient, Pool } from 'pg'
 
 function normalizePostgresUrl(raw: string): string {
   // Avoid Node preferring IPv6 (::1) for localhost in some environments.
@@ -949,5 +949,61 @@ export async function cleanupPostgresClient(): Promise<void> {
   if (pool) {
     await pool.end()
     pool = null
+  }
+}
+
+export async function withAuthenticatedUser<T>(
+  db: Pool,
+  userId: string,
+  fn: (client: PoolClient) => Promise<T>,
+): Promise<T> {
+  return withLocalRoleClient(db, async (client) => {
+    await client.query('SET LOCAL ROLE authenticated')
+    await client.query('SELECT set_config($1, $2, true)', ['request.jwt.claim.sub', userId])
+    await client.query('SELECT set_config($1, $2, true)', [
+      'request.jwt.claims',
+      JSON.stringify({ sub: userId, role: 'authenticated', aud: 'authenticated' }),
+    ])
+    return fn(client)
+  })
+}
+
+export async function withAnonymousCapgkey<T>(
+  db: Pool,
+  capgkey: string,
+  fn: (client: PoolClient) => Promise<T>,
+): Promise<T> {
+  return withLocalRoleClient(db, async (client) => {
+    await client.query('SET LOCAL ROLE anon')
+    await client.query('SELECT set_config($1, $2, true)', [
+      'request.headers',
+      JSON.stringify({ capgkey }),
+    ])
+    return fn(client)
+  })
+}
+
+async function withLocalRoleClient<T>(
+  db: Pool,
+  fn: (client: PoolClient) => Promise<T>,
+): Promise<T> {
+  const client = await db.connect()
+  try {
+    await client.query('BEGIN')
+    const result = await fn(client)
+    await client.query('COMMIT')
+    return result
+  }
+  catch (error) {
+    try {
+      await client.query('ROLLBACK')
+    }
+    catch {
+      // Ignore rollback failures for clearer root error handling.
+    }
+    throw error
+  }
+  finally {
+    client.release()
   }
 }

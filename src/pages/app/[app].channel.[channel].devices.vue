@@ -8,6 +8,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import plusOutline from '~icons/ion/add-outline'
 import IconAlertCircle from '~icons/lucide/alert-circle'
+import ChannelOverrideRetentionNotice from '~/components/ChannelOverrideRetentionNotice.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
 import { withBuiltinChannelVersion } from '~/services/versions'
@@ -303,6 +304,9 @@ watchEffect(async () => {
                     <code class="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs text-slate-700 dark:bg-slate-700 dark:text-slate-100">setChannel()</code>
                   </template>
                 </i18n-t>
+                <div class="mt-4">
+                  <ChannelOverrideRetentionNotice show-label />
+                </div>
                 <button type="button" class="mt-8 gap-2 text-white d-btn d-btn-primary" @click="AddDevice">
                   <plusOutline class="h-5 w-5" aria-hidden="true" />
                   {{ t('force-device-to-channel') }}
@@ -329,6 +333,7 @@ watchEffect(async () => {
     <!-- Teleport Content for Add Device Modal -->
     <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions?.title === t('type-device-id')" defer to="#dialog-v2-content">
       <div class="space-y-4">
+        <ChannelOverrideRetentionNotice show-label />
         <FormKit
           v-model="deviceIdInput"
           type="text"

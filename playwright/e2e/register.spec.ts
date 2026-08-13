@@ -38,13 +38,17 @@ test.describe('Registration', () => {
     await page.click('[data-test="onboarding-intent-ota"]')
     await page.click('[data-test="app-onboarding-continue-intent"]')
 
-    await page.click('[data-test="app-onboarding-existing-no"]')
+    await expect(page.locator('[data-test="app-onboarding-existing-yes"]')).toHaveCount(0)
+    await expect(page.locator('[data-test="app-onboarding-existing-no"]')).toHaveCount(0)
+    await expect(page.locator('[data-test="app-onboarding-name"]')).toBeVisible()
+    await expect(page.locator('#app-onboarding-app-id')).toBeVisible()
     await page.fill('[data-test="app-onboarding-name"]', appName)
     await page.click('[data-test="app-onboarding-continue"]')
 
     await expectProtectedRouteRedirect(page, '/apps', /\/onboarding\/app/, '[data-test="onboarding-logout"]')
 
     await expect(page.locator('[data-test="onboarding-org-name"]')).toHaveValue(appName)
+    await page.locator('[data-test="onboarding-estimated-users-option"]').first().click()
     await page.getByRole('button', { name: 'Back', exact: true }).click()
     await page.fill('[data-test="app-onboarding-name"]', editedAppName)
     await page.click('[data-test="app-onboarding-continue"]')

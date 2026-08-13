@@ -32,6 +32,15 @@ function render(lines, rows, cols = 80) {
   return renderFrameText(h(FullscreenBuildOutput, { title: 'Building...', lines, terminalRows: rows }), cols, rows)
 }
 
+function renderReadOnly(lines, rows, cols = 80) {
+  return renderFrameText(h(FullscreenBuildOutput, {
+    title: 'Build failed',
+    lines,
+    terminalRows: rows,
+    onExit: () => {},
+  }), cols, rows)
+}
+
 // 1. NEVER exceeds the terminal height — for any height, even with 400 lines.
 //    This is the whole point: the build phase can no longer report "too small".
 for (const rows of [10, 16, 24, 33, 40, 60]) {
@@ -78,6 +87,16 @@ test('default render follows — shows the following hint, never "paused"', () =
   const frame = render(longLog, 24)
   assert(/scroll back/.test(frame), 'should show the following hint by default')
   assert(!/paused/.test(frame), 'must never show the paused hint while following')
+})
+
+test('read-only failed-build viewer opens at the bottom and shows how to return', () => {
+  const frame = renderReadOnly(longLog, 24)
+  const height = frame.split('\n').length
+  assert(height <= 24, `read-only frame is ${height} rows, exceeds 24`)
+  assert(frame.includes('build log line 400'), 'newest retained line must be visible at the bottom')
+  assert(!frame.includes('build log line 10'), 'far-earlier lines should be clipped on initial render')
+  assert(frame.includes('Build failed'), 'missing completed failure label')
+  assert(frame.includes('Press Esc or Enter to go back.'), 'missing read-only dismissal hint')
 })
 
 // ── buildScrollAction: scroll/follow transitions (less +F style) ─────────────

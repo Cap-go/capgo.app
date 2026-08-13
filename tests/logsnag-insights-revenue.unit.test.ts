@@ -595,10 +595,83 @@ describe('logsnag revenue metric helpers', () => {
     const snapshotEnd = new Date('2026-03-25T00:00:00.000Z')
 
     expect(logsnagInsightsTestUtils.isPaidPlanAtBillingSnapshot(null, '2026-03-26T00:00:00.000Z', snapshotEnd)).toBe(false)
-    expect(logsnagInsightsTestUtils.isPaidPlanAtBillingSnapshot(null, '2026-03-25T00:00:00.000Z', snapshotEnd)).toBe(true)
-    expect(logsnagInsightsTestUtils.isPaidPlanAtBillingSnapshot(null, '2026-03-24T23:59:59.999Z', snapshotEnd)).toBe(true)
+    expect(logsnagInsightsTestUtils.isPaidPlanAtBillingSnapshot(null, '2026-03-25T00:00:00.000Z', snapshotEnd)).toBe(false)
+    expect(logsnagInsightsTestUtils.isPaidPlanAtBillingSnapshot(null, '2026-03-24T23:59:59.999Z', snapshotEnd)).toBe(false)
     expect(logsnagInsightsTestUtils.isPaidPlanAtBillingSnapshot('2026-03-25T00:00:00.000Z', '2026-03-24T00:00:00.000Z', snapshotEnd)).toBe(false)
     expect(logsnagInsightsTestUtils.isPaidPlanAtBillingSnapshot('2026-03-24T23:59:59.999Z', '2026-03-26T00:00:00.000Z', snapshotEnd)).toBe(true)
+  })
+
+  it.concurrent('resolves billing interval from price ids then anchor length', () => {
+    expect(logsnagInsightsTestUtils.resolvePlanBillingInterval({
+      priceId: 'price_m',
+      priceMId: 'price_m',
+      priceYId: 'price_y',
+      anchorStart: '2026-01-01T00:00:00.000Z',
+      anchorEnd: '2027-01-01T00:00:00.000Z',
+    })).toBe('monthly')
+
+    expect(logsnagInsightsTestUtils.resolvePlanBillingInterval({
+      priceId: 'price_y',
+      priceMId: 'price_m',
+      priceYId: 'price_y',
+      anchorStart: '2026-01-01T00:00:00.000Z',
+      anchorEnd: '2026-02-01T00:00:00.000Z',
+    })).toBe('yearly')
+
+    expect(logsnagInsightsTestUtils.resolvePlanBillingInterval({
+      priceId: 'price_custom',
+      priceMId: 'price_m',
+      priceYId: 'price_y',
+      anchorStart: '2026-01-01T00:00:00.000Z',
+      anchorEnd: '2026-12-01T00:00:00.000Z',
+    })).toBe('yearly')
+
+    expect(logsnagInsightsTestUtils.resolvePlanBillingInterval({
+      priceId: null,
+      priceMId: 'price_m',
+      priceYId: 'price_y',
+      anchorStart: '2026-01-01T00:00:00.000Z',
+      anchorEnd: '2026-02-01T00:00:00.000Z',
+    })).toBe('monthly')
+  })
+
+  it.concurrent('resolves MRR from matched price ids with list-price fallback', () => {
+    expect(logsnagInsightsTestUtils.resolvePlanMrrDollars({
+      billing: 'monthly',
+      priceId: 'price_m',
+      priceMId: 'price_m',
+      priceYId: 'price_y',
+      priceM: 14,
+      priceY: 146,
+    })).toBe(14)
+
+    expect(logsnagInsightsTestUtils.resolvePlanMrrDollars({
+      billing: 'yearly',
+      priceId: 'price_y',
+      priceMId: 'price_m',
+      priceYId: 'price_y',
+      priceM: 14,
+      priceY: 146,
+    })).toBe(146 / 12)
+
+    expect(logsnagInsightsTestUtils.resolvePlanMrrDollars({
+      billing: 'yearly',
+      priceId: 'price_custom',
+      priceMId: 'price_m',
+      priceYId: 'price_y',
+      priceM: 249,
+      priceY: 2490,
+    })).toBe(2490 / 12)
+  })
+
+  it.concurrent('keeps active Stripe trials out of MRR until trial_at passes', () => {
+    const snapshotEnd = new Date('2026-08-11T00:00:00.000Z')
+
+    // Matches SQL `si.trial_at <= snapshot` (NULL does not qualify).
+    expect(logsnagInsightsTestUtils.hasLeftTrialAtSnapshot(null, snapshotEnd)).toBe(false)
+    expect(logsnagInsightsTestUtils.hasLeftTrialAtSnapshot('2026-08-10T23:59:59.999Z', snapshotEnd)).toBe(true)
+    expect(logsnagInsightsTestUtils.hasLeftTrialAtSnapshot('2026-08-11T00:00:00.000Z', snapshotEnd)).toBe(true)
+    expect(logsnagInsightsTestUtils.hasLeftTrialAtSnapshot('2026-08-11T00:00:00.001Z', snapshotEnd)).toBe(false)
   })
 
   it.concurrent('normalizes snapshot billing counts from SQL rows', () => {

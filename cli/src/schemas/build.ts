@@ -42,6 +42,8 @@ export const buildCredentialsSchema = z.object({
   KEYSTORE_KEY_PASSWORD: z.string().optional(),
   KEYSTORE_STORE_PASSWORD: z.string().optional(),
   PLAY_CONFIG_JSON: z.string().optional(),
+  PLAY_STORE_TRACK: z.string().optional(),
+  PLAY_STORE_RELEASE_STATUS: z.string().optional(),
   PLAY_STORE_IN_APP_UPDATE_PRIORITY: z.string().optional(),
 }).catchall(z.string().optional())
 
@@ -77,6 +79,8 @@ export const buildRequestOptionsSchema = optionsBaseSchema.extend({
   keystoreStorePassword: z.string().optional(),
   playConfigJson: z.string().optional(),
   androidFlavor: z.string().min(1).optional(),
+  androidTrack: z.enum(['internal', 'alpha', 'beta', 'production']).optional(),
+  androidReleaseStatus: z.enum(['draft', 'completed', 'inProgress', 'halted']).optional(),
   inAppUpdatePriority: inAppUpdatePrioritySchema.optional(),
   storeReleaseNotesLocale: z.array(z.string().min(1)).optional(),
   iosAutomaticRelease: z.boolean().optional(),

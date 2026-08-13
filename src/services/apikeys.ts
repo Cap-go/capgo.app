@@ -216,6 +216,51 @@ export async function findUsablePlainApiKey(
   return liveKeys.find(key => scopedKeyIds.has(key.rbac_id))?.key ?? null
 }
 
+export interface ApiKeyListFilterOptions<T> {
+  searchQuery: string
+  orgFilterIds: string[]
+  appFilterIds: string[]
+  getOrgIds: (row: T) => string[]
+  getAppIds: (row: T) => string[]
+  getSearchableValues: (row: T) => Array<string | null | undefined>
+}
+
+export interface ApiKeyListFilterResult<T> {
+  rows: T[]
+  hiddenByScopeCount: number
+}
+
+export function clearApiKeyScopeFilters(filters: Record<string, boolean>): Record<string, boolean> {
+  return Object.fromEntries(Object.keys(filters).map(key => [key, false]))
+}
+
+export function filterApiKeyListRows<T>(
+  rows: T[],
+  options: ApiKeyListFilterOptions<T>,
+): ApiKeyListFilterResult<T> {
+  const query = options.searchQuery.toLowerCase()
+  const searchableRows = query
+    ? rows.filter(row => options.getSearchableValues(row)
+        .some(value => value?.toLowerCase().includes(query) ?? false))
+    : [...rows]
+
+  let scopedRows = searchableRows
+  if (options.orgFilterIds.length > 0) {
+    scopedRows = scopedRows.filter(row => options.orgFilterIds
+      .some(orgId => options.getOrgIds(row).includes(orgId)))
+  }
+  if (options.appFilterIds.length > 0) {
+    scopedRows = scopedRows.filter(row => options.appFilterIds
+      .some(appId => options.getAppIds(row).includes(appId)))
+  }
+
+  const hasScopeFilter = options.orgFilterIds.length > 0 || options.appFilterIds.length > 0
+  return {
+    rows: scopedRows,
+    hiddenByScopeCount: hasScopeFilter ? searchableRows.length - scopedRows.length : 0,
+  }
+}
+
 interface ApiKeyListRow {
   name?: string | null
   created_at: string | null

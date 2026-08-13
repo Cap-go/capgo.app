@@ -77,6 +77,12 @@ const organizationInitials = computed(() => {
 
 onMounted(async () => {
   const supabase = useSupabase()
+  // Sign out any existing session before the form is usable so a later
+  // sign-out cannot wipe the session established after invite accept.
+  const { data: claimsData } = await supabase.auth.getClaims()
+  if (claimsData?.claims?.sub)
+    await supabase.auth.signOut()
+
   if (route.query.invite_magic_string) {
     inviteMagicString.value = route.query.invite_magic_string as string
     const { data, error } = await supabase.rpc('get_invite_by_magic_lookup', {
@@ -96,11 +102,6 @@ onMounted(async () => {
   }
   else {
     isFetchingInvite.value = false
-  }
-
-  const { data: claimsData } = await supabase.auth.getClaims()
-  if (claimsData?.claims?.sub) {
-    await supabase.auth.signOut()
   }
 })
 
@@ -137,13 +138,17 @@ async function submitForm() {
       throw new Error(error.message || 'Failed to accept invitation')
     }
 
-    // Store tokens in local storage or cookies
     if (data?.access_token && data?.refresh_token) {
-      // Login successful, redirect to dashboard
-      // window.location.href = '/dashboard';
-      router.push(`/login?access_token=${data.access_token}&refresh_token=${data.refresh_token}`)
-
-      // MagicCapgo12@#
+      const supabase = useSupabase()
+      const { error: sessionError } = await supabase.auth.setSession({
+        access_token: data.access_token,
+        refresh_token: data.refresh_token,
+      })
+      if (sessionError) {
+        inviteRow.value = null
+        throw sessionError
+      }
+      await router.replace('/login')
     }
     else {
       captchaComponent.value?.reset()

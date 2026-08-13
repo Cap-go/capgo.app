@@ -1,10 +1,9 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { formatCreditPricingPrice, formatCreditPricingTierLabel, formatIncludedThenPrice, getFirstTierCreditUnitPricing } from '../src/services/creditPricing'
+import { formatCreditPricingPrice, formatCreditPricingTierLabel, getFirstTierCreditUnitPricing } from '../src/services/creditPricing'
 import { useMainStore } from '../src/stores/main'
 
 const messages: Record<string, string> = {
-  'credits-plan-overage': '{included}, then {price}',
   'minutes-short': '{minutes}m',
   'credits-pricing-price': '{price} {unit}',
   'credits-pricing-tier-first': 'Up to {to}',
@@ -13,7 +12,6 @@ const messages: Record<string, string> = {
   'credits-pricing-unit-per-gib': 'per GiB',
   'credits-pricing-unit-per-mau': 'per MAU',
   'credits-pricing-unit-per-minute': 'per minute',
-  'included-in-plan': 'Included in plan',
 }
 
 function t(key: string, values: Record<string, string | number> = {}) {
@@ -110,9 +108,5 @@ describe('credit pricing UI helpers', () => {
       bandwidth: 0.06,
       build_time: 0.08,
     })
-  })
-
-  it('formats plan overage copy from the shared price formatter', () => {
-    expect(formatIncludedThenPrice('build_time', 0.04, t)).toBe(`Included in plan, then ${formatUsd('en-GB', 0.04)} per minute`)
   })
 })
