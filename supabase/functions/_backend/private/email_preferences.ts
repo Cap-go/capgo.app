@@ -27,6 +27,7 @@ export const PUBLIC_EMAIL_PREFERENCE_KEYS = [
   'device_error',
   'channel_self_rejected',
   'bundle_incompatible',
+  'bundle_incompatible_expected',
 ] as const satisfies readonly EmailPreferenceKey[]
 
 type PublicEmailPreferenceKey = typeof PUBLIC_EMAIL_PREFERENCE_KEYS[number]
