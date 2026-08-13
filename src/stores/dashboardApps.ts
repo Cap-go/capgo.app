@@ -101,14 +101,14 @@ export const useDashboardAppsStore = defineStore('dashboardApps', () => {
     if (ownerOrgId && !currentOrgId.value)
       currentOrgId.value = ownerOrgId
 
-    const existingIndex = apps.value.findIndex(item => item.app_id === app.app_id)
+    const nextApp = { app_id: app.app_id, name: app.name }
+    const existingIndex = apps.value.findIndex(item => item.app_id === nextApp.app_id)
     if (existingIndex >= 0) {
-      apps.value[existingIndex] = { ...apps.value[existingIndex], ...app }
+      apps.value[existingIndex] = { ...apps.value[existingIndex], ...nextApp }
       return
     }
 
-    apps.value = [...apps.value, app]
-    isLoaded.value = true
+    apps.value = [...apps.value, nextApp]
   }
 
   function reset() {
