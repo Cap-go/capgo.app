@@ -97,7 +97,7 @@
         "@capgo/capacitor-speech-synthesis": "^8.0.20",
         "@capgo/capacitor-textinteraction": "^8.0.32",
         "@capgo/capacitor-transitions": "^8.1.9",
-        "@capgo/capacitor-updater": "8.51.2",
+        "@capgo/capacitor-updater": "8.51.4",
         "@capgo/capacitor-uploader": "^8.3.5",
         "@capgo/capacitor-video-player": "^8.2.3",
         "@capgo/capacitor-video-thumbnails": "^8.1.18",
@@ -604,7 +604,7 @@
 
     "@capgo/capacitor-transitions": ["@capgo/capacitor-transitions@8.1.9", "", { "peerDependencies": { "@angular/core": ">=17.0.0", "react": ">=18.0.0", "react-dom": ">=18.0.0", "solid-js": ">=1.0.0", "svelte": ">=4.0.0", "vue": ">=3.0.0" }, "optionalPeers": ["@angular/core", "react", "react-dom", "solid-js", "svelte", "vue"] }, "sha512-qw9gs97CuVmnH05iXtsNyH+LSi7m/0T++vpGrAnYYnFQddOXtlbGbdEw6xznOz+3G6YQEnk6PqqJOkStYm69lQ=="],
 
-    "@capgo/capacitor-updater": ["@capgo/capacitor-updater@8.51.2", "", { "peerDependencies": { "@capacitor/core": "^8.0.0" } }, "sha512-pV1pTUl30dHLjgSHoHTffCo2cIEbn1MfdMz6Olpqh9K1dkr/WnRfezdvngBBPXo5X1OFSxyu7DFAon8hdnGz8w=="],
+    "@capgo/capacitor-updater": ["@capgo/capacitor-updater@8.51.4", "", { "peerDependencies": { "@capacitor/core": "^8.0.0" } }, "sha512-Hoj6xg9iP0+7NR1lknGYiNNdunRbV35+MM0Cb8Wp+8W176z2phx2FUPwgmLvNmfmRR1A5Huct5fCvhXxoOxKCQ=="],
 
     "@capgo/capacitor-uploader": ["@capgo/capacitor-uploader@8.3.5", "", { "dependencies": { "idb": "^8.0.2" }, "peerDependencies": { "@capacitor/core": ">=8.0.0" } }, "sha512-JLTLmQ+QjwSni4WovPvSzjq69AcXZv4AIYjPiZV816VRp4I6dXlg07WJ7LbKcxU6R+p5wW8X/krIH1lrziOwcA=="],
 
