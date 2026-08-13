@@ -17,6 +17,7 @@ import { addAppInternal } from '../app/add'
 import { markSnag, waitLog } from '../app/debug'
 import { deleteAppInternal } from '../app/delete'
 import { getInfoInternal } from '../app/info'
+import { WAIT_LOG_CONTINUE_HINT } from '../app/wait-log-query'
 import { canUseFilePicker, openPackageJsonPicker } from '../build/onboarding/file-picker'
 import { getPlatformDirFromCapacitorConfig } from '../build/platform-paths'
 import { uploadBundleInternal } from '../bundle/upload'
@@ -38,7 +39,7 @@ import { isChannelAlreadyExistsError } from './channel-conflict'
 import { createMissingExecutableError, getAvailablePackageManagers, getMissingPackageManagerExecutable, getPackageManagerInfo, preparePackageManagerCommandEnvironment, probeExecutable, probePackageManagerCommand, resolveExecutableProbeError, waitForCommandResult } from './command-execution'
 import { cancel as pCancel, confirm as pConfirm, intro as pIntro, isCancel as pIsCancel, log as pLog, outro as pOutro, select as pSelect, spinner as pSpinner, text as pText } from './prompts'
 import { finishActiveCliReplay, getActiveCliReplaySessionId, isCliTelemetryDisabled, startInitReplay } from './replay'
-import { appendInitStreamingLine, clearInitStreamingOutput, INIT_CANCEL, pushInitLog, setInitCodeDiff, setInitEncryptionSummary, setInitVersionWarning, startInitStreamingOutput, stopInitInkSession, updateInitStreamingStatus, waitForInitStreamingContinue } from './runtime'
+import { appendInitStreamingLine, clearInitStreamingOutput, INIT_CANCEL, pushInitLog, setInitCodeDiff, setInitEncryptionSummary, setInitVersionWarning, startInitStreamingOutput, stopInitInkSession, updateInitStreamingStatus, waitForInitLogSkip, waitForInitStreamingContinue } from './runtime'
 import { formatInitResumeMessage, initOnboardingSteps, renderInitOnboardingComplete, renderInitOnboardingFrame, renderInitOnboardingWelcome } from './ui'
 import { CAPGO_UPDATER_PACKAGE, getUpdaterInstallState } from './updater'
 
@@ -4896,7 +4897,13 @@ async function testCapgoUpdateStep(orgId: string, apikey: string, appId: string,
   if (doWaitLogs) {
     pLog.info(`📊 Watching logs from ${appId}...`)
     pLog.info(`🔄 Please background and reopen your app now to trigger the update`)
-    await waitLog('onboarding-v2', apikey, appId, apikey, orgId)
+    pLog.info(`👀 You can also confirm the update in the dashboard: ${hostWeb}/app/${appId}/logs`)
+    pLog.info(`⌨️  ${WAIT_LOG_CONTINUE_HINT}`)
+    await waitLog('onboarding-v2', apikey, appId, orgId, {
+      spinner: pSpinner(),
+      logInfo: message => pLog.info(message),
+      waitForSkip: signal => waitForInitLogSkip(WAIT_LOG_CONTINUE_HINT, signal),
+    })
   }
   else {
     pLog.info(`📊 Check logs manually at ${hostWeb}/app/${appId}/logs to verify the update`)
