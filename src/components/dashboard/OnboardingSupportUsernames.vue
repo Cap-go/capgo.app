@@ -54,28 +54,28 @@ function openGitHubProfileDialog() {
     aria-labelledby="onboarding-support-usernames-title"
   >
     <div class="space-y-4 p-4 sm:p-5">
-      <div v-if="!hideIntro" class="flex items-start gap-3">
-        <span class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary-500 text-white shadow-sm shadow-primary-500/30">
+      <div :class="hideIntro ? 'sr-only' : 'flex items-start gap-3'">
+        <span v-if="!hideIntro" class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary-500 text-white shadow-sm shadow-primary-500/30">
           <IconHeadset class="h-5 w-5" aria-hidden="true" />
         </span>
-        <div class="min-w-0">
+        <div :class="{ 'min-w-0': !hideIntro }">
           <p
-            v-if="isNewUserOnboarding"
+            v-if="!hideIntro && isNewUserOnboarding"
             class="text-xs font-medium uppercase tracking-wide text-primary-600 dark:text-primary-300"
           >
             {{ t('organization-onboarding-support-usernames-step') }}
           </p>
-          <h3 id="onboarding-support-usernames-title" class="text-base font-semibold text-slate-950 dark:text-white" :class="{ 'mt-1': isNewUserOnboarding }">
+          <h3
+            id="onboarding-support-usernames-title"
+            :class="hideIntro ? '' : ['text-base font-semibold text-slate-950 dark:text-white', { 'mt-1': isNewUserOnboarding }]"
+          >
             {{ t('organization-onboarding-support-usernames-title') }}
           </h3>
-          <p class="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
+          <p v-if="!hideIntro" class="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
             {{ helperText }}
           </p>
         </div>
       </div>
-      <h3 v-else id="onboarding-support-usernames-title" class="sr-only">
-        {{ t('organization-onboarding-support-usernames-title') }}
-      </h3>
 
       <ul class="flex flex-wrap gap-2" :aria-label="t('organization-onboarding-support-usernames-title')">
         <li
