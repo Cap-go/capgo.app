@@ -100,13 +100,13 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
         organization_ms: intentMs + 1_000,
         setup_ms: intentMs + 2_666,
         interaction_events: ['onboarding_app_id_entered', 'onboarding_app_id_entered'],
-        total_attempts: 1,
+        total_attempts: 2,
       }, {
         attempt_id: 'attempt-v1',
         onboarding_version: 1,
         intent_ms: intentMs + 1_000,
         interaction_events: ['onboarding_store_import_submitted'],
-        total_attempts: 1,
+        total_attempts: 2,
       }],
     })
 
