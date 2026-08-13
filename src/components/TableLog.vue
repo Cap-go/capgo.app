@@ -34,6 +34,8 @@ interface Props {
   elementList: { [key: string]: any }[]
   appId: string
   autoReload?: boolean
+  /** Pin column percentages from `col.class`. Logs only — do not enable on DeploymentTable. */
+  fixedLayout?: boolean
 }
 const props = defineProps<Props>()
 const emit = defineEmits([
@@ -444,10 +446,10 @@ onMounted(() => {
       </div>
     </div>
     <div class="block overflow-x-auto">
-      <table id="custom_table" class="w-full table-fixed text-sm text-left text-gray-500 dark:text-gray-400">
+      <table id="custom_table" class="w-full text-sm text-left text-gray-500 dark:text-gray-400" :class="{ 'table-fixed': fixedLayout }">
         <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:text-gray-400 dark:bg-gray-700">
           <tr>
-            <th v-for="(col, i) in columns" :key="i" scope="col" class="px-1 py-3 md:px-6" :class="[col.class, { 'cursor-pointer': col.sortable, 'hidden md:table-cell': !col.mobile }]" @click="sortClick(i)">
+            <th v-for="(col, i) in columns" :key="i" scope="col" class="px-1 py-3 md:px-6" :class="[fixedLayout ? col.class : undefined, { 'cursor-pointer': col.sortable, 'hidden md:table-cell': !col.mobile }]" @click="sortClick(i)">
               <div class="flex items-center first-letter:uppercase">
                 {{ col.label }}
                 <div v-if="col.sortable">

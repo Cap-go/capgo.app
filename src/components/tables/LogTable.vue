@@ -374,21 +374,23 @@ columns.value = [
     class: 'w-[44%] min-w-0',
     sortable: true,
     head: true,
-    displayFunction: (elem: Element) => formatAction(elem),
     renderFunction: (elem: Element) => {
       const actionLabel = formatAction(elem)
       const metadataPreview = formatMetadata(elem)
       return h('div', { class: 'flex w-full min-w-0 items-center gap-1.5' }, [
-        h('span', {
-          class: 'min-w-0 truncate cursor-pointer hover:underline',
-          onClick: () => window.open(getLogDocUrl(elem.action), '_blank', 'noopener,noreferrer'),
+        h('a', {
+          href: getLogDocUrl(elem.action),
+          target: '_blank',
+          rel: 'noopener noreferrer',
+          title: actionLabel,
+          class: 'min-w-0 truncate hover:underline',
         }, actionLabel),
         hasMetadata(elem)
           ? h('button', {
               'type': 'button',
               'class': 'shrink-0 rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-azure-500 dark:hover:bg-slate-700 dark:hover:text-azure-400',
               'title': metadataPreview,
-              'aria-label': t('metadata'),
+              'aria-label': `${t('metadata')}: ${metadataPreview}`,
               'data-test': 'log-row-metadata',
               'onClick': (event: MouseEvent) => {
                 event.stopPropagation()
@@ -488,6 +490,7 @@ watch(range, async () => {
       :exportable="true"
       :export-loading="isExporting"
       :auto-reload="false"
+      :fixed-layout="true"
       :app-id="props.appId ?? ''"
       :search-placeholder="deviceId ? t('search-by-device-id-0') : t('search-by-device-id-')"
       @reload="loadOlder()" @reset="refreshData()" @export="exportCsv()"

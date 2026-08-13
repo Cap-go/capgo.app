@@ -50,4 +50,41 @@ test.describe('Observe sections', () => {
     await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/native(?:\?|$)/)
     await expect(page.getByRole('heading', { name: 'All versions summary', exact: true })).toBeVisible()
   })
+
+  test('shows a metadata info icon only on log rows that have metadata', async ({ page }) => {
+    const now = new Date().toISOString()
+    await page.route('**/private/stats', async (route) => {
+      if (route.request().method() !== 'POST') {
+        await route.continue()
+        return
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([
+          {
+            app_id: 'com.demo.app',
+            device_id: '11111111-1111-1111-1111-111111111111',
+            action: 'get',
+            version_name: '1.0.0',
+            created_at: now,
+          },
+          {
+            app_id: 'com.demo.app',
+            device_id: '22222222-2222-2222-2222-222222222222',
+            action: 'set',
+            version_name: '1.0.0',
+            created_at: now,
+            metadata: { source: 'notify_app_ready' },
+          },
+        ]),
+      })
+    })
+
+    await page.goto('/app/com.demo.app/observe/logs')
+    await expect(page.locator('#custom_table thead')).toContainText(/action/i)
+    await expect(page.locator('#custom_table thead')).not.toContainText(/metadata/i)
+    await expect(page.locator('#custom_table tbody tr')).toHaveCount(2)
+    await expect(page.locator('#custom_table tbody [data-test="log-row-metadata"]')).toHaveCount(1)
+  })
 })
