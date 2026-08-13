@@ -200,6 +200,85 @@ describe('buildFrontendOnboardingAnalytics', () => {
     ])
   })
 
+  it.concurrent('builds daily stage conversions with the funnel version rules and source-stage dates', () => {
+    const dayOneDetailsMs = CURRENT_START_MS + 23 * 60 * MINUTE_MS
+    const dayTwoOrganizationMs = CURRENT_START_MS + DAY_MS + MINUTE_MS
+    const analytics = buildFrontendOnboardingAnalytics([
+      attempt({
+        attemptId: 'v2-crosses-midnight',
+        intentMs: CURRENT_START_MS + 12 * 60 * MINUTE_MS,
+        detailsMs: dayOneDetailsMs,
+        organizationMs: dayTwoOrganizationMs,
+        setupMs: dayTwoOrganizationMs + MINUTE_MS,
+      }),
+      attempt({
+        attemptId: 'v1-converts-first-transition',
+        onboardingVersion: 1,
+        intentMs: CURRENT_START_MS + MINUTE_MS,
+        detailsMs: CURRENT_START_MS + 2 * MINUTE_MS,
+      }),
+      attempt({
+        attemptId: 'v1-does-not-enter-later-series',
+        onboardingVersion: 1,
+        intentMs: CURRENT_START_MS + 3 * MINUTE_MS,
+        detailsMs: CURRENT_START_MS + 4 * MINUTE_MS,
+        organizationMs: CURRENT_START_MS + 5 * MINUTE_MS,
+        setupMs: CURRENT_START_MS + 6 * MINUTE_MS,
+      }),
+      attempt({ attemptId: 'intent-only', intentMs: CURRENT_START_MS + 5 * MINUTE_MS }),
+    ], CURRENT_START_MS, CURRENT_END_MS)
+
+    expect(analytics.daily_conversions).toEqual({
+      intent_to_details: [
+        { date: '2026-08-01', started: 4, converted: 3, conversion_percent: 75 },
+        { date: '2026-08-02', started: 0, converted: 0, conversion_percent: null },
+      ],
+      details_to_organization: [
+        { date: '2026-08-01', started: 1, converted: 1, conversion_percent: 100 },
+        { date: '2026-08-02', started: 0, converted: 0, conversion_percent: null },
+      ],
+      organization_to_setup: [
+        { date: '2026-08-01', started: 0, converted: 0, conversion_percent: null },
+        { date: '2026-08-02', started: 1, converted: 1, conversion_percent: 100 },
+      ],
+    })
+  })
+
+  it.concurrent('uses monotonic stage reach and the inclusive 24-hour window in daily conversions', () => {
+    const intentMs = CURRENT_START_MS + MINUTE_MS
+    const analytics = buildFrontendOnboardingAnalytics([
+      attempt({
+        attemptId: 'setup-at-boundary',
+        intentMs,
+        setupMs: intentMs + FRONTEND_ONBOARDING_FOLLOWUP_MS,
+      }),
+      attempt({
+        attemptId: 'setup-after-boundary',
+        intentMs: intentMs + MINUTE_MS,
+        setupMs: intentMs + MINUTE_MS + FRONTEND_ONBOARDING_FOLLOWUP_MS + 1,
+      }),
+    ], CURRENT_START_MS, CURRENT_END_MS)
+
+    expect(analytics.daily_conversions.intent_to_details[0]).toEqual({
+      date: '2026-08-01',
+      started: 2,
+      converted: 1,
+      conversion_percent: 50,
+    })
+    expect(analytics.daily_conversions.details_to_organization[1]).toEqual({
+      date: '2026-08-02',
+      started: 1,
+      converted: 1,
+      conversion_percent: 100,
+    })
+    expect(analytics.daily_conversions.organization_to_setup[1]).toEqual({
+      date: '2026-08-02',
+      started: 1,
+      converted: 1,
+      conversion_percent: 100,
+    })
+  })
+
   it.concurrent('keeps the median comparison null when the previous cohort has no completions', () => {
     const previousStartMs = CURRENT_START_MS - 2 * DAY_MS
     const analytics = buildFrontendOnboardingAnalytics([
