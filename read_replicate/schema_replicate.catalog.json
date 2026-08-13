@@ -2162,6 +2162,13 @@
     },
     {
       "constraintOwned": false,
+      "definition": "CREATE INDEX idx_apps_onboarding_refreshed_at ON public.apps USING btree (COALESCE((onboarding ->> 'refreshed_at'::text), ''::text), app_id)",
+      "name": "idx_apps_onboarding_refreshed_at",
+      "table": "apps",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
       "definition": "CREATE UNIQUE INDEX idx_apps_owner_org_app_id ON public.apps USING btree (owner_org, app_id)",
       "name": "idx_apps_owner_org_app_id",
       "table": "apps",
