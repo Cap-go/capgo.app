@@ -2851,7 +2851,7 @@ async function ensureSplashScreenForDirectUpdate(
 
   if (installChoice === 'yes') {
     const s = pSpinner()
-    s.start(`Checking if ${CAPACITOR_SPLASH_SCREEN_PACKAGE} is installed`)
+      s.start(`Installing ${CAPACITOR_SPLASH_SCREEN_PACKAGE}`)
     try {
       runPackageInstallCommand(pm, packageJsonPath, CAPACITOR_SPLASH_SCREEN_PACKAGE, versionToInstall)
       s.stop('Install Done ✅')
