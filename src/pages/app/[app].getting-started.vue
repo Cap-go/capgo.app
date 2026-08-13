@@ -20,7 +20,7 @@ const supabase = useSupabase()
 const organizationStore = useOrganizationStore()
 const { id, app, isLoading } = useAppPage({
   routeName: '/app/[app].getting-started',
-  navTitle: '',
+  navTitle: t('getting-started'),
 })
 
 const storeModal = useTemplateRef<{ openModal: () => void }>('storeModal')
@@ -95,9 +95,14 @@ function runStep(step: GettingStartedStep) {
   builderModalOpen.value = true
 }
 
-watch(() => id.value, (appId) => {
-  if (appId)
-    void checkBuilderDone(appId)
+watch(() => id.value, async (appId) => {
+  if (!appId)
+    return
+  await organizationStore.awaitInitialLoad()
+  const appOrganization = organizationStore.getOrgByAppId(appId)
+  if (appOrganization && organizationStore.currentOrganization?.gid !== appOrganization.gid)
+    organizationStore.setCurrentOrganization(appOrganization.gid)
+  void checkBuilderDone(appId)
 }, { immediate: true })
 </script>
 
@@ -202,7 +207,7 @@ watch(() => id.value, (appId) => {
               {{ essentialDoneCount }}/{{ essentialSteps.length }}
             </span>
           </summary>
-          <ul class="divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white dark:divide-slate-800 dark:border-slate-800 dark:bg-slate-950">
+          <ul class="divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white shadow-sm dark:divide-white/10 dark:border-white/10 dark:bg-slate-800 dark:shadow-none dark:inset-ring dark:inset-ring-white/5">
             <li
               v-for="step in essentialSteps"
               :key="step.id"
@@ -256,7 +261,7 @@ watch(() => id.value, (appId) => {
               {{ growDoneCount }}/{{ growSteps.length }}
             </span>
           </summary>
-          <ul class="divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white dark:divide-slate-800 dark:border-slate-800 dark:bg-slate-950">
+          <ul class="divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white shadow-sm dark:divide-white/10 dark:border-white/10 dark:bg-slate-800 dark:shadow-none dark:inset-ring dark:inset-ring-white/5">
             <li
               v-for="step in growSteps"
               :key="step.id"
@@ -312,8 +317,3 @@ watch(() => id.value, (appId) => {
     />
   </AppPageFrame>
 </template>
-
-<route lang="yaml">
-meta:
-  layout: app
-</route>

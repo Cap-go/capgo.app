@@ -123,6 +123,7 @@ test.describe('Compatibility events', () => {
     const storeStep = page.locator('[data-test="getting-started-step-store_release"]')
     const modal = page.getByRole('dialog')
     await expect(page.locator('[data-test="getting-started-page"]')).toBeVisible()
+    await expect(page.getByRole('button', { name: /^bundles$/i })).toHaveCount(0)
     await expect(storeStep).toBeVisible()
     await expect(modal).not.toBeVisible()
 
