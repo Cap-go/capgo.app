@@ -70,4 +70,18 @@ describe('getLatestDayVersionAdoption', () => {
       percent: 60,
     })
   })
+
+  it.concurrent('keeps one-decimal rounding for fractional shares', () => {
+    const adoption = getLatestDayVersionAdoption([
+      { label: '1.0.0', metaCountValues: [77] },
+      { label: '1.1.0', metaCountValues: [56] },
+    ], '1.1.0')
+
+    expect(adoption).toEqual({
+      versionName: '1.1.0',
+      count: 56,
+      total: 133,
+      percent: 42.1,
+    })
+  })
 })

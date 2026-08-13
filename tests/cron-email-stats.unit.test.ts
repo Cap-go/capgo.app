@@ -230,4 +230,15 @@ describe('summarizeDeviceVersionAdoption', () => {
       adoption_percent: '60.0',
     })
   })
+
+  it.concurrent('keeps one-decimal rounding for fractional shares', () => {
+    expect(summarizeDeviceVersionAdoption({
+      '1.0.0': 77,
+      '1.1.0': 56,
+    }, '1.1.0')).toEqual({
+      device_count: 56,
+      total_devices: 133,
+      adoption_percent: '42.1',
+    })
+  })
 })
