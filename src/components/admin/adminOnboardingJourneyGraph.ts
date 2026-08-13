@@ -40,6 +40,7 @@ export interface AdminOnboardingJourneyEdge {
   fromPoint?: AdminOnboardingJourneyPoint
   toPoint?: AdminOnboardingJourneyPoint
   style: AdminOnboardingJourneyEdgeStyle
+  arrow?: boolean
 }
 
 export interface AdminOnboardingJourneyPoint {
@@ -60,4 +61,10 @@ export interface AdminOnboardingJourneyGraphConfig {
   nodes: AdminOnboardingJourneyNode[]
   edges: AdminOnboardingJourneyEdge[]
   levels: AdminOnboardingJourneyLevel[]
+  formatters: {
+    levelPercent: (percent: number, level: string) => string
+    totalPercent: (percent: number) => string
+    previousPercent: (percent: number) => string
+    parentPercent: (percent: number) => string
+  }
 }

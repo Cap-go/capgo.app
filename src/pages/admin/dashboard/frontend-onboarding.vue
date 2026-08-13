@@ -59,21 +59,21 @@ const v2GraphDefinitions = [
 ] as const
 
 const v2GraphEventNodes = [
-  { id: 'app_name', eventKey: 'onboarding_app_name_entered', label: 'App name entered', x: 820, y: 90, icon: 'app' },
-  { id: 'app_id', eventKey: 'onboarding_app_id_entered', label: 'App ID entered', x: 820, y: 195, icon: 'file' },
-  { id: 'learn_more', eventKey: 'onboarding_app_id_help_opened', label: 'App ID help opened', x: 820, y: 300, icon: 'details' },
-  { id: 'store_opened', eventKey: 'onboarding_store_import_shown', label: 'Store import opened', x: 820, y: 455, icon: 'import' },
-  { id: 'import_closed', eventKey: 'onboarding_store_import_hidden', label: 'Import closed', x: 1180, y: 405, icon: 'close', tone: 'muted' },
-  { id: 'store_url', eventKey: 'onboarding_store_url_entered', label: 'Store URL entered', x: 1180, y: 505, icon: 'link' },
-  { id: 'import_clicked', eventKey: 'onboarding_store_import_submitted', label: 'Import clicked', x: 1540, y: 505, icon: 'import' },
-  { id: 'import_succeeded', eventKey: 'onboarding_store_import_succeeded', label: 'Import succeeded', x: 1880, y: 455, icon: 'success', tone: 'success' },
-  { id: 'import_failed', eventKey: 'onboarding_store_import_failed', label: 'Import failed', x: 1880, y: 555, icon: 'failure', tone: 'danger' },
-  { id: 'picker_opened', eventKey: 'onboarding_app_icon_picker_opened', label: 'File picker opened', x: 820, y: 720, icon: 'file' },
-  { id: 'picker_failed', eventKey: 'onboarding_app_icon_picker_open_failed', label: 'File picker failed', x: 1180, y: 620, icon: 'failure', tone: 'danger' },
-  { id: 'picker_closed', eventKey: 'onboarding_app_icon_picker_closed_without_selection', label: 'Closed without selection', x: 1180, y: 720, icon: 'close', tone: 'muted' },
-  { id: 'icon_picked', eventKey: 'onboarding_app_icon_picked', label: 'App icon picked', x: 1180, y: 820, icon: 'icon' },
-  { id: 'icon_uploaded', eventKey: 'onboarding_app_icon_uploaded', label: 'App icon uploaded', x: 1540, y: 770, icon: 'upload', tone: 'success' },
-  { id: 'icon_upload_failed', eventKey: 'onboarding_app_icon_upload_failed', label: 'Icon upload failed', x: 1540, y: 870, icon: 'upload', tone: 'danger' },
+  { id: 'app_name', eventKey: 'onboarding_app_name_entered', labelKey: 'frontend-onboarding-graph-app-name-entered', x: 820, y: 90, icon: 'app' },
+  { id: 'app_id', eventKey: 'onboarding_app_id_entered', labelKey: 'frontend-onboarding-graph-app-id-entered', x: 820, y: 195, icon: 'file' },
+  { id: 'learn_more', eventKey: 'onboarding_app_id_help_opened', labelKey: 'frontend-onboarding-graph-app-id-help-opened', x: 820, y: 300, icon: 'details' },
+  { id: 'store_opened', eventKey: 'onboarding_store_import_shown', labelKey: 'frontend-onboarding-graph-store-import-opened', x: 820, y: 455, icon: 'import' },
+  { id: 'import_closed', eventKey: 'onboarding_store_import_hidden', labelKey: 'frontend-onboarding-graph-import-closed', x: 1180, y: 405, icon: 'close', tone: 'muted' },
+  { id: 'store_url', eventKey: 'onboarding_store_url_entered', labelKey: 'frontend-onboarding-graph-store-url-entered', x: 1180, y: 505, icon: 'link' },
+  { id: 'import_clicked', eventKey: 'onboarding_store_import_submitted', labelKey: 'frontend-onboarding-graph-import-clicked', x: 1540, y: 505, icon: 'import' },
+  { id: 'import_succeeded', eventKey: 'onboarding_store_import_succeeded', labelKey: 'frontend-onboarding-graph-import-succeeded', x: 1880, y: 455, icon: 'success', tone: 'success' },
+  { id: 'import_failed', eventKey: 'onboarding_store_import_failed', labelKey: 'frontend-onboarding-graph-import-failed', x: 1880, y: 555, icon: 'failure', tone: 'danger' },
+  { id: 'picker_opened', eventKey: 'onboarding_app_icon_picker_opened', labelKey: 'frontend-onboarding-graph-file-picker-opened', x: 820, y: 720, icon: 'file' },
+  { id: 'picker_failed', eventKey: 'onboarding_app_icon_picker_open_failed', labelKey: 'frontend-onboarding-graph-file-picker-failed', x: 1180, y: 620, icon: 'failure', tone: 'danger' },
+  { id: 'picker_closed', eventKey: 'onboarding_app_icon_picker_closed_without_selection', labelKey: 'frontend-onboarding-graph-closed-without-selection', x: 1180, y: 720, icon: 'close', tone: 'muted' },
+  { id: 'icon_picked', eventKey: 'onboarding_app_icon_picked', labelKey: 'frontend-onboarding-graph-app-icon-picked', x: 1180, y: 820, icon: 'icon' },
+  { id: 'icon_uploaded', eventKey: 'onboarding_app_icon_uploaded', labelKey: 'frontend-onboarding-graph-app-icon-uploaded', x: 1540, y: 770, icon: 'upload', tone: 'success' },
+  { id: 'icon_upload_failed', eventKey: 'onboarding_app_icon_upload_failed', labelKey: 'frontend-onboarding-graph-icon-upload-failed', x: 1540, y: 870, icon: 'upload', tone: 'danger' },
 ] as const
 
 const loadAnalytics = createFrontendOnboardingAnalyticsLoader(
@@ -128,11 +128,11 @@ const onboardingGraphV2 = computed<AdminOnboardingJourneyGraphConfig>(() => {
     const metric = graphMetrics[node.eventKey]
     return {
       id: node.id,
-      label: node.label,
+      label: t(node.labelKey),
       count: metric?.count ?? 0,
       levelPercent: metric?.levelPercent ?? 0,
       previousPercent: metric?.previousPercent,
-      levelLabel: 'App details',
+      levelLabel: t('frontend-onboarding-graph-stage-app-details'),
       x: node.x,
       y: node.y,
       kind: 'event',
@@ -142,19 +142,19 @@ const onboardingGraphV2 = computed<AdminOnboardingJourneyGraphConfig>(() => {
   })
 
   return {
-    width: 2900,
+    width: 3100,
     height: 1100,
     levels: [
       { label: '1', start: 0, end: 300, divider: 300 },
-      { label: '2', start: 300, end: 2050, divider: 2050 },
-      { label: '3', start: 2050, end: 2450, divider: 2450 },
-      { label: '4', start: 2450, end: 2900 },
+      { label: '2', start: 300, end: 2200, divider: 2200 },
+      { label: '3', start: 2200, end: 2650, divider: 2650 },
+      { label: '4', start: 2650, end: 3100 },
     ],
     nodes: [
-      { id: 'intent', label: 'Intent', count: intent?.reached ?? 0, totalPercent: intent?.of_start_percent ?? 0, x: 145, y: 540, kind: 'stage', icon: 'intent' },
+      { id: 'intent', label: t('frontend-onboarding-graph-stage-intent'), count: intent?.reached ?? 0, totalPercent: intent?.of_start_percent ?? 0, x: 145, y: 540, kind: 'stage', icon: 'intent' },
       {
         id: 'details',
-        label: 'App details',
+        label: t('frontend-onboarding-graph-stage-app-details'),
         count: details?.reached ?? 0,
         totalPercent: details?.of_start_percent ?? 0,
         parentPercent: parentPercent(details?.reached ?? 0, intent?.reached ?? 0),
@@ -166,11 +166,11 @@ const onboardingGraphV2 = computed<AdminOnboardingJourneyGraphConfig>(() => {
       ...eventNodes,
       {
         id: 'organization',
-        label: 'Organization details',
+        label: t('frontend-onboarding-graph-stage-organization-details'),
         count: organization?.reached ?? 0,
         totalPercent: organization?.of_start_percent ?? 0,
         parentPercent: parentPercent(organization?.reached ?? 0, details?.reached ?? 0),
-        x: 2200,
+        x: 2400,
         y: 540,
         kind: 'stage',
         icon: 'organization',
@@ -178,11 +178,11 @@ const onboardingGraphV2 = computed<AdminOnboardingJourneyGraphConfig>(() => {
       },
       {
         id: 'setup',
-        label: 'Setup reached',
+        label: t('frontend-onboarding-graph-stage-setup-reached'),
         count: setup?.reached ?? 0,
         totalPercent: setup?.of_start_percent ?? 0,
         parentPercent: parentPercent(setup?.reached ?? 0, organization?.reached ?? 0),
-        x: 2650,
+        x: 2870,
         y: 540,
         kind: 'stage',
         icon: 'setup',
@@ -206,9 +206,35 @@ const onboardingGraphV2 = computed<AdminOnboardingJourneyGraphConfig>(() => {
       { from: 'picker_opened', to: 'icon_picked', style: 'branch' },
       { from: 'icon_picked', to: 'icon_uploaded', style: 'branch' },
       { from: 'icon_picked', to: 'icon_upload_failed', style: 'branch' },
-      { fromPoint: { x: 2020, y: 540 }, to: 'organization', style: 'primary' },
+      { from: 'app_name', toPoint: { x: 2130, y: 90 }, style: 'dotted' },
+      { from: 'app_id', toPoint: { x: 2130, y: 195 }, style: 'dotted' },
+      { from: 'learn_more', toPoint: { x: 2130, y: 300 }, style: 'dotted' },
+      { from: 'import_closed', toPoint: { x: 2130, y: 405 }, style: 'dotted' },
+      { from: 'import_succeeded', toPoint: { x: 2130, y: 455 }, style: 'dotted' },
+      { from: 'import_failed', toPoint: { x: 2130, y: 555 }, style: 'dotted' },
+      { from: 'picker_failed', toPoint: { x: 2130, y: 620 }, style: 'dotted' },
+      { from: 'picker_closed', toPoint: { x: 2130, y: 720 }, style: 'dotted' },
+      { from: 'icon_uploaded', toPoint: { x: 2130, y: 770 }, style: 'dotted' },
+      { from: 'icon_upload_failed', toPoint: { x: 2130, y: 870 }, style: 'dotted' },
+      { fromPoint: { x: 2130, y: 90 }, toPoint: { x: 2130, y: 870 }, style: 'dotted', arrow: false },
+      { fromPoint: { x: 2130, y: 540 }, to: 'organization', style: 'primary' },
       { from: 'organization', to: 'setup', style: 'primary' },
     ],
+    formatters: {
+      levelPercent: (percent, level) => t('frontend-onboarding-graph-percent-of-level', {
+        percent: formatNumberValue(percent, { maximumFractionDigits: 1 }),
+        level,
+      }),
+      totalPercent: percent => t('frontend-onboarding-graph-percent-of-total', {
+        percent: formatNumberValue(percent, { maximumFractionDigits: 1 }),
+      }),
+      previousPercent: percent => t('frontend-onboarding-graph-percent-of-previous', {
+        percent: formatNumberValue(percent, { maximumFractionDigits: 1 }),
+      }),
+      parentPercent: percent => t('frontend-onboarding-graph-percent-of-parent-stage', {
+        percent: formatNumberValue(percent, { maximumFractionDigits: 1 }),
+      }),
+    },
   }
 })
 const attemptsValue = computed(() => formatNumberValue(kpis.value?.attempts ?? 0))

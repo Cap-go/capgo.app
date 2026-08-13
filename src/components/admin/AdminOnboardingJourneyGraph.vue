@@ -57,6 +57,9 @@ function edgePath(edge: AdminOnboardingJourneyEdge) {
   if (startX === undefined || startY === undefined || endX === undefined || endY === undefined)
     return ''
 
+  if (startX === endX)
+    return `M ${startX} ${startY} V ${endY}`
+
   if (edge.style === 'branch') {
     const trunkX = startX + (endX - startX) / 2
     const radius = Math.min(10, Math.abs(endY - startY) / 2, Math.abs(endX - startX) / 4)
@@ -78,16 +81,16 @@ function nodeStyle(node: AdminOnboardingJourneyNode) {
 
 function tooltipText(node: AdminOnboardingJourneyNode) {
   if (node.kind === 'event') {
-    const level = `${formatNumberValue(node.levelPercent ?? 0, { maximumFractionDigits: 1 })}% of ${node.levelLabel ?? 'level'}`
+    const level = props.config.formatters.levelPercent(node.levelPercent ?? 0, node.levelLabel ?? '')
     if (node.previousPercent === undefined)
       return level
-    return `${level} · ${formatNumberValue(node.previousPercent, { maximumFractionDigits: 1 })}% of previous step`
+    return `${level} · ${props.config.formatters.previousPercent(node.previousPercent)}`
   }
 
-  const total = `${formatNumberValue(node.totalPercent ?? 0, { maximumFractionDigits: 1 })}% of total`
+  const total = props.config.formatters.totalPercent(node.totalPercent ?? 0)
   if (node.parentPercent === undefined)
     return total
-  return `${total} · ${formatNumberValue(node.parentPercent, { maximumFractionDigits: 1 })}% of parent stage`
+  return `${total} · ${props.config.formatters.parentPercent(node.parentPercent)}`
 }
 </script>
 
@@ -137,7 +140,7 @@ function tooltipText(node: AdminOnboardingJourneyNode) {
           :stroke-width="edge.style === 'primary' ? 4 : 1.6"
           :stroke-dasharray="edge.style === 'dotted' ? '3 6' : undefined"
           :opacity="edge.style === 'dotted' ? 0.82 : 1"
-          :marker-end="edge.style === 'primary' ? 'url(#journey-arrow-primary)' : edge.style === 'dotted' ? 'url(#journey-arrow-muted)' : undefined"
+          :marker-end="edge.arrow === false ? undefined : edge.style === 'primary' ? 'url(#journey-arrow-primary)' : edge.style === 'dotted' ? 'url(#journey-arrow-muted)' : undefined"
         />
       </svg>
 
@@ -160,14 +163,14 @@ function tooltipText(node: AdminOnboardingJourneyNode) {
             <span class="journey-node__value">{{ formatNumberValue(node.count) }}</span>
             <span v-if="node.kind === 'event'" class="journey-node__metrics">
               <span class="journey-node__metric journey-node__metric--level">
-                {{ formatNumberValue(node.levelPercent ?? 0, { maximumFractionDigits: 1 }) }}% of {{ node.levelLabel ?? 'level' }}
+                {{ config.formatters.levelPercent(node.levelPercent ?? 0, node.levelLabel ?? '') }}
               </span>
               <span v-if="node.previousPercent !== undefined" class="journey-node__metric">
-                {{ formatNumberValue(node.previousPercent, { maximumFractionDigits: 1 }) }}% of previous
+                {{ config.formatters.previousPercent(node.previousPercent) }}
               </span>
             </span>
             <span v-else class="journey-node__value">
-              {{ formatNumberValue(node.totalPercent ?? 0, { maximumFractionDigits: 1 }) }}% of total
+              {{ config.formatters.totalPercent(node.totalPercent ?? 0) }}
             </span>
           </span>
         </div>
