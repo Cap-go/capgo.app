@@ -3226,6 +3226,10 @@ export interface AdminOnboardingFunnel {
   }>
 }
 
+function adminOnboardingConversionRate(numerator: number, denominator: number): number {
+  return denominator > 0 ? (numerator / denominator) * 100 : 0
+}
+
 export async function getAdminOnboardingFunnel(
   c: Context,
   start_date: string,
@@ -3628,15 +3632,15 @@ export async function getAdminOnboardingFunnel(
       total_invite_registrations: totalInviteRegistrations,
       total_org_joins_invite_register: totalOrgJoinsInviteRegister,
       total_org_joins_existing_account: totalOrgJoinsExistingAccount,
-      org_conversion_rate: totalRegistrations > 0 ? (totalOrgs / totalRegistrations) * 100 : 0,
-      app_conversion_rate: totalOrgs > 0 ? (orgsWithApp / totalOrgs) * 100 : 0,
-      channel_conversion_rate: orgsWithApp > 0 ? (orgsWithChannel / orgsWithApp) * 100 : 0,
-      bundle_conversion_rate: orgsWithChannel > 0 ? (orgsWithBundle / orgsWithChannel) * 100 : 0,
-      subscription_conversion_rate: orgsWithBundle > 0 ? (orgsSubscribed / orgsWithBundle) * 100 : 0,
-      production_device_conversion_rate: orgsWithBundle > 0 ? (activationMetrics.orgs_with_production_device / orgsWithBundle) * 100 : 0,
-      update_download_conversion_rate: activationMetrics.orgs_with_production_device > 0 ? (activationMetrics.orgs_with_update_download / activationMetrics.orgs_with_production_device) * 100 : 0,
-      testflight_conversion_rate: orgsWithBundle > 0 ? (orgsWithTestflight / orgsWithBundle) * 100 : 0,
-      store_live_conversion_rate: orgsWithBundle > 0 ? (orgsWithStoreLive / orgsWithBundle) * 100 : 0,
+      org_conversion_rate: adminOnboardingConversionRate(totalOrgs, totalRegistrations),
+      app_conversion_rate: adminOnboardingConversionRate(orgsWithApp, totalOrgs),
+      channel_conversion_rate: adminOnboardingConversionRate(orgsWithChannel, orgsWithApp),
+      bundle_conversion_rate: adminOnboardingConversionRate(orgsWithBundle, orgsWithChannel),
+      subscription_conversion_rate: adminOnboardingConversionRate(orgsSubscribed, orgsWithBundle),
+      production_device_conversion_rate: adminOnboardingConversionRate(activationMetrics.orgs_with_production_device, orgsWithBundle),
+      update_download_conversion_rate: adminOnboardingConversionRate(activationMetrics.orgs_with_update_download, activationMetrics.orgs_with_production_device),
+      testflight_conversion_rate: adminOnboardingConversionRate(orgsWithTestflight, orgsWithBundle),
+      store_live_conversion_rate: adminOnboardingConversionRate(orgsWithStoreLive, orgsWithBundle),
       trend,
       invite_trend: inviteTrend,
       registration_source_trend: registrationSourceTrend,

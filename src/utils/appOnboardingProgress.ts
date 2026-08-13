@@ -75,13 +75,10 @@ export function parseAppOnboardingLedger(value: unknown): AppOnboardingLedger {
 }
 
 export function getAppOnboardingFeature(
-  ledger: AppOnboardingLedger | unknown,
+  ledger: AppOnboardingLedger,
   key: AppOnboardingFeatureKey,
 ): AppOnboardingFeature {
-  const parsed = isRecord(ledger) && 'features' in ledger
-    ? parseAppOnboardingLedger(ledger)
-    : parseAppOnboardingLedger(ledger)
-  return parsed.features?.[key] ?? {}
+  return parseAppOnboardingLedger(ledger).features?.[key] ?? {}
 }
 
 export function rankAppOnboardingStage(stage: AppOnboardingStage | null | undefined): number {
