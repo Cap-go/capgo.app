@@ -490,11 +490,14 @@ export const useOrganizationStore = defineStore('organization', () => {
     writeAppOnboarding(appId, onboarding)
   }
 
+  let appsOnboardingRefreshGen = 0
+
   const refreshAppsOnboarding = async (orgId?: string) => {
     const orgIds = orgId ? [orgId] : Array.from(_appsByOrgId.value.keys())
     if (orgIds.length === 0)
       return
 
+    const refreshGen = ++appsOnboardingRefreshGen
     const writeGenSnapshot = new Map(appOnboardingWriteGen)
     const { data, error } = await supabase
       .from('apps')
@@ -505,6 +508,8 @@ export const useOrganizationStore = defineStore('organization', () => {
       console.error('Cannot refresh app onboarding', error)
       return
     }
+    if (refreshGen !== appsOnboardingRefreshGen)
+      return
     for (const row of data ?? []) {
       if ((appOnboardingWriteGen.get(row.app_id) ?? 0) !== (writeGenSnapshot.get(row.app_id) ?? 0))
         continue

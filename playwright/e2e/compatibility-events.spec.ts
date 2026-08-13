@@ -114,9 +114,12 @@ async function mockGettingStartedLedger(page: Page) {
           ? patchRow(json as Record<string, unknown>)
           : json)
 
+    const headers = { ...response.headers() }
+    delete headers['content-length']
+    delete headers['content-encoding']
     await route.fulfill({
       status: response.status(),
-      headers: response.headers(),
+      headers,
       body: JSON.stringify(body),
     })
   })

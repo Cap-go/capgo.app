@@ -70,9 +70,11 @@ function dismiss(app: OrganizationApp, event: Event) {
     void router.push(`/app/${encodeURIComponent(app.app_id)}`)
 }
 
-watch(() => organizationStore.currentOrganization?.gid, (orgId) => {
-  if (orgId)
-    void organizationStore.refreshAppsOnboarding(orgId)
+watch(() => organizationStore.currentOrganization?.gid, async (orgId) => {
+  if (!orgId)
+    return
+  await organizationStore.awaitInitialLoad()
+  void organizationStore.refreshAppsOnboarding(orgId)
 }, { immediate: true })
 </script>
 

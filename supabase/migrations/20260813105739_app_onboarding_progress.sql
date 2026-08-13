@@ -62,6 +62,9 @@ CREATE TRIGGER "protect_apps_onboarding"
 CREATE INDEX IF NOT EXISTS "idx_apps_onboarding_ota_stage"
   ON "public"."apps" (("onboarding" -> 'features'::"text" -> 'ota'::"text" ->> 'stage'::"text"));
 
+CREATE INDEX IF NOT EXISTS "idx_apps_onboarding_refreshed_at"
+  ON "public"."apps" ((COALESCE(("onboarding" ->> 'refreshed_at'::"text"), ''::"text")), "app_id");
+
 CREATE OR REPLACE FUNCTION "public"."merge_app_onboarding_feature"(
   "p_existing" "jsonb",
   "p_started_at" timestamp with time zone,
@@ -392,8 +395,8 @@ INSERT INTO public.cron_tasks (
   'refresh_app_onboarding_progress',
   'Refresh apps.onboarding feature ledger (started/succeeded/last_used/stage) in bounded batches',
   'function',
-  'public.refresh_app_onboarding_progress()',
-  500,
+  'public.refresh_app_onboarding_progress(2000)',
+  2000,
   NULL,
   NULL,
   NULL,
