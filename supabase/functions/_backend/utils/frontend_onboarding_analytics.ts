@@ -182,8 +182,9 @@ export async function getAdminFrontendOnboardingAnalytics(c: Context, startDate:
     throw new RangeError('frontend onboarding analytics date range cannot exceed 365 days')
 
   const previousStartMs = startMs - durationMs
+  const queryStartMs = Math.min(previousStartMs, startMs - FRONTEND_ONBOARDING_FOLLOWUP_MS)
   const followupEndMs = endMs + FRONTEND_ONBOARDING_FOLLOWUP_MS
-  if (previousStartMs < POSTHOG_MIN_DATE_MS || previousStartMs >= POSTHOG_MAX_DATE_MS
+  if (queryStartMs < POSTHOG_MIN_DATE_MS || queryStartMs >= POSTHOG_MAX_DATE_MS
     || followupEndMs < POSTHOG_MIN_DATE_MS || followupEndMs >= POSTHOG_MAX_DATE_MS) {
     throw new RangeError('derived analytics date boundaries must be within the supported PostHog range')
   }
@@ -191,7 +192,7 @@ export async function getAdminFrontendOnboardingAnalytics(c: Context, startDate:
   const posthog = await queryPosthogHogql(
     c,
     buildFrontendOnboardingHogql(
-      new Date(previousStartMs).toISOString(),
+      new Date(queryStartMs).toISOString(),
       new Date(endMs).toISOString(),
       new Date(followupEndMs).toISOString(),
     ),

@@ -221,6 +221,21 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
     )
   })
 
+  it('queries a full 24-hour intent lookback for ranges shorter than the follow-up window', async () => {
+    const start = '2026-08-01T12:00:00.000Z'
+    const end = '2026-08-01T18:00:00.000Z'
+
+    await getAdminFrontendOnboardingAnalytics(createContext(), start, end)
+
+    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(1)
+    expect(queryPosthogHogqlMock.mock.calls[0][1]).toContain(
+      `timestamp >= parseDateTimeBestEffort('${new Date(Date.parse(start) - DAY_MS).toISOString()}')`,
+    )
+    expect(queryPosthogHogqlMock.mock.calls[0][1]).toContain(
+      `HAVING intent_ms >= toUnixTimestamp64Milli(parseDateTimeBestEffort('${new Date(Date.parse(start) - DAY_MS).toISOString()}'))`,
+    )
+  })
+
   it('accepts schema-valid sub-millisecond ISO fractions and normalizes them for PostHog', async () => {
     await getAdminFrontendOnboardingAnalytics(
       createContext(),
