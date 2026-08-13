@@ -21,6 +21,13 @@ export interface FrontendOnboardingFunnelStage {
   dropoff_percent: number
 }
 
+export interface FrontendOnboardingDailyConversionPoint {
+  date: string
+  started: number
+  converted: number
+  conversion_percent: number | null
+}
+
 export interface FrontendOnboardingAnalytics {
   kpis: {
     attempts: number
@@ -35,6 +42,11 @@ export interface FrontendOnboardingAnalytics {
     v1_attempts: number
     v2_attempts: number
   }>
+  daily_conversions: {
+    intent_to_details: FrontendOnboardingDailyConversionPoint[]
+    details_to_organization: FrontendOnboardingDailyConversionPoint[]
+    organization_to_setup: FrontendOnboardingDailyConversionPoint[]
+  }
   funnels: {
     v1: FrontendOnboardingFunnelStage[]
     v2: FrontendOnboardingFunnelStage[]
