@@ -22,8 +22,12 @@ function canUseSessionStorage() {
 }
 
 function readDashboardExploration(): DashboardExploration | null {
-  if (!canUseSessionStorage())
+  // In-memory grant is always the latest write in this tab. Prefer it so a
+  // failed sessionStorage setItem cannot keep serving an older stored user.
+  if (dashboardExplorationFallback)
     return dashboardExplorationFallback
+  if (!canUseSessionStorage())
+    return null
 
   try {
     const raw = window.sessionStorage.getItem(DASHBOARD_EXPLORATION_STORAGE_KEY)
@@ -36,9 +40,9 @@ function readDashboardExploration(): DashboardExploration | null {
     }
   }
   catch {
-    // Fall back to module memory below.
+    // Ignore unreadable storage; there is no in-memory grant in this tab.
   }
-  return dashboardExplorationFallback
+  return null
 }
 
 function matchingDashboardExploration(userId: string | null | undefined): DashboardExploration | null {

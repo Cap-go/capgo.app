@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 describe('onboarding dashboard redirect', () => {
   beforeEach(() => {
+    vi.restoreAllMocks()
     vi.resetModules()
     window.sessionStorage.clear()
   })
@@ -82,6 +83,21 @@ describe('onboarding dashboard redirect', () => {
     module.allowOnboardingDashboardExploration(null, 'com.example.app')
     expect(module.getOnboardingResumeAppId('user-1')).toBe('com.example.app')
     expect(module.getOnboardingResumeRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/apps', resumeAppId: null, userId: 'user-1' })).toBeNull()
+  })
+
+  it('prefers the in-memory grant when session storage still holds another user', async () => {
+    window.sessionStorage.setItem('capgo:onboarding-dashboard-exploration', JSON.stringify({
+      userId: 'user-old',
+      resumeAppId: 'com.old.app',
+    }))
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('quota')
+    })
+
+    const module = await import('../src/utils/onboardingRedirect.ts')
+    module.allowOnboardingDashboardExploration('user-1', 'com.example.app')
+    expect(module.getOnboardingResumeAppId('user-1')).toBe('com.example.app')
+    expect(module.getOnboardingResumeAppId('user-old')).toBeNull()
   })
 
   it('asks for dashboard confirmation only before exploration is granted', async () => {

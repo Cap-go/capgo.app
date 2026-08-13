@@ -124,6 +124,7 @@ async function loadAppInfo() {
     dashboardAppsStore.upsertApp({
       app_id: appId,
       name: dataApp.name ?? null,
+      ownerOrgId: dataApp.owner_org,
     })
   }
   catch (error) {

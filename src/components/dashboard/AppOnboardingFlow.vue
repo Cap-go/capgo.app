@@ -829,6 +829,7 @@ async function createAppRecord(options?: { nextStep?: StandardFlowStep | PreOrgF
     dashboardAppsStore.upsertApp({
       app_id: appId,
       name: appName.value.trim() || null,
+      ownerOrgId: currentOrg.value.gid,
     })
     const completionProperties: OnboardingStepCompletionProperties = {
       appId,
@@ -869,6 +870,7 @@ async function seedDemoData() {
     dashboardAppsStore.upsertApp({
       app_id: createdApp.value.app_id,
       name: createdApp.value.name ?? null,
+      ownerOrgId: currentOrg.value.gid,
     })
     router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}?refresh=true`)
   }
