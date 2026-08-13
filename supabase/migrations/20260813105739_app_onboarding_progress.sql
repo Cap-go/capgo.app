@@ -7,8 +7,9 @@
 -- - refresh_app_onboarding_progress: hourly cron_tasks job, service_role only. Pages apps
 --   by app_id (LIMIT 500), then bounded joins on devices (partial app_id indexes),
 --   app_versions(app_id), daily_version(app_id, date), build_requests(app_id).
--- - User-facing writes to apps.onboarding are blocked by protect_apps_onboarding;
---   only SECURITY DEFINER RPCs and service_role/postgres can change the column.
+-- - User-facing writes to apps.onboarding are blocked by protect_apps_onboarding
+--   on INSERT and UPDATE; only SECURITY DEFINER RPCs and service_role/postgres
+--   can change the column. Authenticated inserts are forced to '{}'.
 
 ALTER TABLE "public"."apps"
   ADD COLUMN IF NOT EXISTS "onboarding" "jsonb" DEFAULT '{}'::"jsonb" NOT NULL;
@@ -33,8 +34,10 @@ CREATE OR REPLACE FUNCTION "public"."protect_apps_onboarding"() RETURNS "trigger
     SET "search_path" TO ''
     AS $$
 BEGIN
-  IF TG_OP = 'UPDATE' AND NEW.onboarding IS DISTINCT FROM OLD.onboarding THEN
-    IF current_user IN ('authenticated', 'anon') THEN
+  IF current_user IN ('authenticated', 'anon') THEN
+    IF TG_OP = 'INSERT' THEN
+      NEW.onboarding := '{}'::jsonb;
+    ELSIF TG_OP = 'UPDATE' AND NEW.onboarding IS DISTINCT FROM OLD.onboarding THEN
       NEW.onboarding := OLD.onboarding;
     END IF;
   END IF;
@@ -52,7 +55,7 @@ GRANT ALL ON FUNCTION "public"."protect_apps_onboarding"() TO "anon";
 
 DROP TRIGGER IF EXISTS "protect_apps_onboarding" ON "public"."apps";
 CREATE TRIGGER "protect_apps_onboarding"
-  BEFORE UPDATE ON "public"."apps"
+  BEFORE INSERT OR UPDATE ON "public"."apps"
   FOR EACH ROW
   EXECUTE FUNCTION "public"."protect_apps_onboarding"();
 

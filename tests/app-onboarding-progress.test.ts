@@ -14,6 +14,7 @@ import {
 } from './test-utils.ts'
 
 const APP_RPC = `ob.rpc.${randomUUID().slice(0, 8)}`
+const APP_INSERT = `ob.ins.${randomUUID().slice(0, 8)}`
 const APP_TESTFLIGHT = `ob.tf.${randomUUID().slice(0, 8)}`
 const APP_STORE = `ob.st.${randomUUID().slice(0, 8)}`
 const DEVICE_TF = randomUUID().toLowerCase()
@@ -86,7 +87,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await serviceRoleSupabase.from('devices').delete().eq('app_id', APP_TESTFLIGHT)
   await serviceRoleSupabase.from('devices').delete().eq('app_id', APP_STORE)
-  await serviceRoleSupabase.from('apps').delete().in('app_id', [APP_RPC, APP_TESTFLIGHT, APP_STORE])
+  await serviceRoleSupabase.from('apps').delete().in('app_id', [APP_RPC, APP_INSERT, APP_TESTFLIGHT, APP_STORE])
 })
 
 describe('app onboarding progress RPCs', () => {
@@ -162,6 +163,43 @@ describe('app onboarding progress RPCs', () => {
     expect(ledger.features?.ota?.succeeded_at).toBeFalsy()
     expect(ledger.features?.ota?.stage).not.toBe('store_live')
     expect(ledger.features?.cli_install?.started_at).toBeTruthy()
+  })
+
+  it('clears forged onboarding on authenticated insert', async () => {
+    const authClient = createAuthClient()
+    const { error: signInError } = await authClient.auth.signInWithPassword({
+      email: USER_EMAIL,
+      password: USER_PASSWORD,
+    })
+    if (signInError)
+      throw signInError
+
+    await authClient.from('apps').insert({
+      app_id: APP_INSERT,
+      owner_org: ORG_ID,
+      name: 'Onboarding insert protection test app',
+      icon_url: 'https://example.com/icon.png',
+      onboarding: {
+        features: {
+          ota: {
+            succeeded_at: '2026-01-01T00:00:00.000Z',
+            stage: 'store_live',
+          },
+        },
+      },
+    })
+
+    const { data, error: readError } = await serviceRoleSupabase
+      .from('apps')
+      .select('onboarding')
+      .eq('app_id', APP_INSERT)
+      .maybeSingle()
+    expect(readError).toBeNull()
+    if (!data)
+      return
+    const ledger = parseAppOnboardingLedger(data.onboarding)
+    expect(ledger.features?.ota?.succeeded_at).toBeFalsy()
+    expect(ledger.features?.ota?.stage).not.toBe('store_live')
   })
 
   it('keeps TestFlight-only apps off store_live', async () => {

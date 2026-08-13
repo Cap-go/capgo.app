@@ -463,9 +463,11 @@ export const useOrganizationStore = defineStore('organization', () => {
     return _initialLoadPromise.value.promise
   }
 
-  const updateAppOnboarding = (appId: string, onboarding: OrganizationApp['onboarding'] | null | undefined) => {
+  const appOnboardingWriteGen = new Map<string, number>()
+
+  const writeAppOnboarding = (appId: string, onboarding: OrganizationApp['onboarding']) => {
     const existing = _appsByAppId.value.get(appId)
-    if (!existing || onboarding == null)
+    if (!existing)
       return
 
     const next = { ...existing, onboarding }
@@ -481,11 +483,19 @@ export const useOrganizationStore = defineStore('organization', () => {
     _appsByOrgId.value = nextByOrgId
   }
 
+  const updateAppOnboarding = (appId: string, onboarding: OrganizationApp['onboarding'] | null | undefined) => {
+    if (!_appsByAppId.value.get(appId) || onboarding == null)
+      return
+    appOnboardingWriteGen.set(appId, (appOnboardingWriteGen.get(appId) ?? 0) + 1)
+    writeAppOnboarding(appId, onboarding)
+  }
+
   const refreshAppsOnboarding = async (orgId?: string) => {
     const orgIds = orgId ? [orgId] : Array.from(_appsByOrgId.value.keys())
     if (orgIds.length === 0)
       return
 
+    const writeGenSnapshot = new Map(appOnboardingWriteGen)
     const { data, error } = await supabase
       .from('apps')
       .select('app_id, onboarding')
@@ -495,8 +505,11 @@ export const useOrganizationStore = defineStore('organization', () => {
       console.error('Cannot refresh app onboarding', error)
       return
     }
-    for (const row of data ?? [])
-      updateAppOnboarding(row.app_id, row.onboarding)
+    for (const row of data ?? []) {
+      if ((appOnboardingWriteGen.get(row.app_id) ?? 0) !== (writeGenSnapshot.get(row.app_id) ?? 0))
+        continue
+      writeAppOnboarding(row.app_id, row.onboarding)
+    }
   }
 
   const getCurrentRoleForApp = (appId: string) => {
