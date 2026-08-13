@@ -141,5 +141,12 @@ describe('app onboarding progress RPCs', () => {
     expect(testflight.features?.ota?.stage).toBe('testflight')
     expect(testflight.features?.ota?.stage).not.toBe('store_live')
     expect(store.features?.ota?.stage).toBe('store_live')
+
+    const merged = await executeSQL<{ stage: string | null }>(
+      `SELECT public.merge_app_onboarding_feature(
+         '{"stage":"store_live"}'::jsonb, NULL, NULL, NULL, 'no_device'
+       )->>'stage' AS stage`,
+    )
+    expect(merged[0]?.stage).toBe('store_live')
   })
 })

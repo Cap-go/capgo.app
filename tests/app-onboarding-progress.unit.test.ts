@@ -5,6 +5,7 @@ import {
   isFeatureRetained30d,
   isFeatureUsedSince,
   nextOnboardingAction,
+  onboardingNextStepMessageKeys,
   parseAppOnboardingLedger,
   parseAppOnboardingStage,
   rankAppOnboardingStage,
@@ -89,6 +90,24 @@ describe('app onboarding progress ledger', () => {
         },
       },
     })).toEqual({ feature: 'ota', stage: 'store_live' })
+    expect(nextOnboardingAction({
+      features: {
+        builder: { started_at: '2026-08-01T00:00:00.000Z' },
+      },
+    })).toEqual({ feature: 'builder', stage: 'no_device' })
+    expect(nextOnboardingAction({
+      features: {
+        cli_install: { started_at: '2026-08-01T00:00:00.000Z', succeeded_at: '2026-08-02T00:00:00.000Z' },
+        ota: { stage: 'play_unknown' },
+        builder: { started_at: '2026-08-03T00:00:00.000Z' },
+      },
+    }).feature).toBe('builder')
+    expect(onboardingNextStepMessageKeys({
+      features: { builder: { started_at: '2026-08-01T00:00:00.000Z' } },
+    })).toEqual({
+      titleKey: 'onboarding-next-builder',
+      descKey: 'onboarding-next-builder-desc',
+    })
   })
 
   it.concurrent('hides next-step card once store live is reached', () => {

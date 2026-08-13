@@ -48,6 +48,9 @@ DECLARE
   v_last_used timestamptz;
   v_retained timestamptz;
   v_stage text;
+  v_existing_stage text;
+  v_new_rank integer;
+  v_old_rank integer;
 BEGIN
   BEGIN
     v_started := NULLIF(v_existing->>'started_at', '')::timestamptz;
@@ -82,7 +85,30 @@ BEGIN
     v_retained := v_last_used;
   END IF;
 
-  v_stage := COALESCE(p_stage, NULLIF(v_existing->>'stage', ''));
+  v_existing_stage := NULLIF(v_existing->>'stage', '');
+  v_new_rank := CASE p_stage
+    WHEN 'store_live' THEN 5
+    WHEN 'testflight' THEN 4
+    WHEN 'play_unknown' THEN 3
+    WHEN 'native_unknown' THEN 2
+    WHEN 'local_only' THEN 1
+    WHEN 'no_device' THEN 0
+    ELSE -1
+  END;
+  v_old_rank := CASE v_existing_stage
+    WHEN 'store_live' THEN 5
+    WHEN 'testflight' THEN 4
+    WHEN 'play_unknown' THEN 3
+    WHEN 'native_unknown' THEN 2
+    WHEN 'local_only' THEN 1
+    WHEN 'no_device' THEN 0
+    ELSE -1
+  END;
+  IF p_stage IS NOT NULL AND v_new_rank >= v_old_rank THEN
+    v_stage := p_stage;
+  ELSE
+    v_stage := v_existing_stage;
+  END IF;
 
   RETURN jsonb_strip_nulls(jsonb_build_object(
     'started_at', CASE WHEN v_started IS NULL THEN NULL
@@ -127,10 +153,11 @@ BEGIN
   SELECT apps.owner_org, apps.onboarding
   INTO v_owner_org, v_onboarding
   FROM public.apps
-  WHERE apps.app_id = p_app_id;
+  WHERE apps.app_id = p_app_id
+  FOR UPDATE;
 
   IF v_owner_org IS NULL THEN
-    RAISE EXCEPTION 'APP_NOT_FOUND';
+    RAISE EXCEPTION 'NO_PERMISSION';
   END IF;
 
   IF NOT public.rbac_check_permission_request(

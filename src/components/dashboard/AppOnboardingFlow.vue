@@ -146,7 +146,7 @@ async function markOnboardingFeatureStarted(featureKey: 'cli_install' | 'ota' | 
 watch([flowStep, createdApp, usesBuilderSetupCommand], () => {
   if (!createdApp.value)
     return
-  if (flowStep.value === 'install' || flowStep.value === 'setup')
+  if (flowStep.value === 'install' || (flowStep.value === 'setup' && !usesBuilderSetupCommand.value))
     void markOnboardingFeatureStarted('cli_install')
   if (flowStep.value === 'setup')
     void markOnboardingFeatureStarted(usesBuilderSetupCommand.value ? 'builder' : 'ota')

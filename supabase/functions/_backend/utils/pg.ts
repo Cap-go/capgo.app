@@ -3306,7 +3306,7 @@ export async function getAdminOnboardingFunnel(
           o.id,
           MAX(CASE WHEN a.onboarding -> 'features' -> 'ota' ->> 'stage' = 'store_live' THEN 1 ELSE 0 END) AS has_store_live,
           MAX(CASE WHEN a.onboarding -> 'features' -> 'ota' ->> 'stage' = 'testflight' THEN 1 ELSE 0 END) AS has_testflight
-        FROM orgs_in_range o
+        FROM orgs_with_bundles o
         INNER JOIN apps a ON a.owner_org = o.id
         GROUP BY o.id
       )
@@ -3421,16 +3421,18 @@ export async function getAdminOnboardingFunnel(
           )::int as orgs_with_store_live
         FROM orgs o
         INNER JOIN public.users u ON u.id = o.created_by
+        INNER JOIN apps a ON a.owner_org = o.id
         INNER JOIN LATERAL (
           SELECT
-            MAX(CASE WHEN a.onboarding -> 'features' -> 'ota' ->> 'stage' = 'store_live' THEN 1 ELSE 0 END) AS has_store_live,
-            MAX(CASE WHEN a.onboarding -> 'features' -> 'ota' ->> 'stage' = 'testflight' THEN 1 ELSE 0 END) AS has_testflight
-          FROM apps a
-          WHERE a.owner_org = o.id
+            MAX(CASE WHEN dist_apps.onboarding -> 'features' -> 'ota' ->> 'stage' = 'store_live' THEN 1 ELSE 0 END) AS has_store_live,
+            MAX(CASE WHEN dist_apps.onboarding -> 'features' -> 'ota' ->> 'stage' = 'testflight' THEN 1 ELSE 0 END) AS has_testflight
+          FROM apps dist_apps
+          WHERE dist_apps.owner_org = o.id
         ) stages ON true
         WHERE o.created_at >= ${start_date}::timestamp
           AND o.created_at < ${end_date}::timestamp
           AND u.created_via_invite = false
+          AND ${onboardingBundleEligibility}
         GROUP BY o.created_at::date
       )
       SELECT

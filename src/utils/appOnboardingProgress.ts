@@ -122,6 +122,8 @@ export function nextOnboardingAction(ledger: AppOnboardingLedger): {
   const builder = ledger.features?.builder ?? {}
   const stage = parseAppOnboardingStage(ota.stage) ?? (cliInstall.succeeded_at ? 'native_unknown' : 'no_device')
 
+  if (builder.started_at && !builder.succeeded_at)
+    return { feature: 'builder', stage }
   if (!cliInstall.started_at)
     return { feature: 'cli_install', stage }
   if (!cliInstall.succeeded_at || stage === 'no_device' || stage === 'local_only')
@@ -130,8 +132,6 @@ export function nextOnboardingAction(ledger: AppOnboardingLedger): {
     return { feature: 'ota', stage }
   if (stage === 'testflight' || stage === 'play_unknown' || stage === 'native_unknown')
     return { feature: 'ota', stage }
-  if (builder.started_at && !builder.succeeded_at)
-    return { feature: 'builder', stage }
   return { feature: 'ota', stage }
 }
 
