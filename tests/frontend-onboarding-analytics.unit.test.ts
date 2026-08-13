@@ -40,34 +40,36 @@ beforeEach(() => {
 })
 
 describe('buildFrontendOnboardingHogql', () => {
-  it('queries the fixed v1 pre-org viewed events grouped by attempt in an exclusive time range', () => {
+  it('queries v1 and v2 pre-org attempts, with stage timestamps limited to views and allowlisted v2 interactions', () => {
     const query = buildFrontendOnboardingHogql(
       '2026-08-01T00:00:00.123Z',
       '2026-08-03T00:00:00.456Z',
       '2026-08-04T00:00:00.789Z',
     )
 
-    expect(query).toContain('event = \'onboarding_step_viewed\'')
+    expect(query).toContain("event IN ('onboarding_step_viewed', 'onboarding_app_id_entered', 'onboarding_app_id_help_opened', 'onboarding_app_icon_picked', 'onboarding_app_icon_picker_closed_without_selection', 'onboarding_app_icon_picker_open_failed', 'onboarding_app_icon_picker_opened', 'onboarding_app_icon_upload_failed', 'onboarding_app_icon_uploaded', 'onboarding_app_name_entered', 'onboarding_store_import_failed', 'onboarding_store_import_hidden', 'onboarding_store_import_shown', 'onboarding_store_import_submitted', 'onboarding_store_import_succeeded', 'onboarding_store_url_entered')")
     expect(query).toContain('JSONExtractString(toString(properties), \'flow\') = \'pre_org\'')
-    expect(query).toContain('toIntOrZero(toString(properties.onboarding_version)) = 1')
+    expect(query).toContain('toIntOrZero(toString(properties.onboarding_version)) AS onboarding_version')
+    expect(query).toContain('toIntOrZero(toString(properties.onboarding_version)) IN (1, 2)')
     expect(query).not.toContain('toInt64OrZero')
     expect(query).toContain('JSONExtractString(toString(properties), \'onboarding_attempt_id\')')
     expect(query).toContain('JSONExtractString(toString(properties), \'step\')')
     expect(query).not.toMatch(/WITH\s+JSONExtractString/)
-    expect(query).toContain('FROM (\n      SELECT\n        timestamp,')
+    expect(query).toContain('FROM (\n      SELECT\n        event,')
     expect(query).toContain(')\n    WHERE trim(attempt_id) != \'\'')
-    expect(query).toContain('toUnixTimestamp64Milli(minIf(timestamp, step = \'intent\'))')
-    expect(query).toContain('toUnixTimestamp64Milli(minIf(timestamp, step = \'details\'))')
-    expect(query).toContain('toUnixTimestamp64Milli(minIf(timestamp, step = \'organization\'))')
-    expect(query).toContain('toUnixTimestamp64Milli(minIf(timestamp, step = \'setup\'))')
-    expect(query).toContain('GROUP BY attempt_id')
+    expect(query).toContain("toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'intent'))")
+    expect(query).toContain("toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'details'))")
+    expect(query).toContain("toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'organization'))")
+    expect(query).toContain("toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'setup'))")
+    expect(query).toContain("groupUniqArrayIf(tuple(event, toUnixTimestamp64Milli(timestamp)), event != 'onboarding_step_viewed') AS interaction_events")
+    expect(query).toContain('GROUP BY onboarding_version, attempt_id')
     expect(query).toContain('timestamp >= parseDateTimeBestEffort(\'2026-08-01T00:00:00.123Z\')')
     expect(query).toContain('timestamp < parseDateTimeBestEffort(\'2026-08-04T00:00:00.789Z\')')
     expect(query).toContain('trim(attempt_id) != \'\'')
     expect(query).toContain('HAVING intent_ms >= toUnixTimestamp64Milli(parseDateTimeBestEffort(\'2026-08-01T00:00:00.123Z\'))')
     expect(query).toContain('AND intent_ms < toUnixTimestamp64Milli(parseDateTimeBestEffort(\'2026-08-03T00:00:00.456Z\'))')
     expect(query).not.toContain('parseDateTime64BestEffort')
-    expect(query).toContain('ORDER BY intent_ms ASC, attempt_id ASC')
+    expect(query).toContain('ORDER BY intent_ms ASC, onboarding_version ASC, attempt_id ASC')
     expect(query).toContain('count() OVER () AS total_attempts')
     expect(query).toContain('LIMIT 50000')
     expect(query).not.toContain('LIMIT 50001')
@@ -83,7 +85,7 @@ describe('assertFrontendOnboardingAttemptTotal', () => {
 })
 
 describe('getAdminFrontendOnboardingAnalytics', () => {
-  it('maps a successful grouped row into frontend onboarding analytics', async () => {
+  it('maps grouped v1 and v2 rows, including repeated v2 interactions', async () => {
     const start = '2026-08-01T00:00:00.000Z'
     const intentMs = Date.parse(start) + 60 * 60 * 1000 + 123
     queryPosthogHogqlMock.mockResolvedValueOnce({
@@ -92,32 +94,44 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
       failureReason: null,
       rows: [{
         attempt_id: 'attempt-1',
+        onboarding_version: 2,
         intent_ms: intentMs,
         details_ms: intentMs + 555,
         organization_ms: intentMs + 1_000,
         setup_ms: intentMs + 2_666,
-        total_attempts: 1,
+        interaction_events: [
+          ['onboarding_app_id_entered', intentMs + 100],
+          ['onboarding_app_id_entered', intentMs + 200],
+        ],
+        total_attempts: 2,
+      }, {
+        attempt_id: 'attempt-v1',
+        onboarding_version: 1,
+        intent_ms: intentMs + 1_000,
+        interaction_events: [['onboarding_store_import_submitted', intentMs + 1_100]],
+        total_attempts: 2,
       }],
     })
 
     const result = await getAdminFrontendOnboardingAnalytics(createContext(), start, '2026-08-03T00:00:00.000Z')
 
     expect(result).toMatchObject({
-      onboarding_version: 1,
       kpis: { attempts: 1, completed: 1, completion_rate: 100, median_completion_ms: 2_666 },
       daily_attempts: [
-        { date: '2026-08-01', attempts: 1 },
-        { date: '2026-08-02', attempts: 0 },
+        { date: '2026-08-01', v1_attempts: 1, v2_attempts: 1 },
+        { date: '2026-08-02', v1_attempts: 0, v2_attempts: 0 },
       ],
-      funnel: [
+      funnels: { v2: [
         { key: 'intent', reached: 1 },
         { key: 'details', reached: 1 },
         { key: 'organization', reached: 1 },
         { key: 'setup', reached: 1 },
-      ],
+      ] },
+      v2_graph: { nodes: [{ key: 'onboarding_app_id_entered', count: 1 }] },
       posthog_configured: true,
       posthog_connected: true,
     })
+    expect(result).not.toHaveProperty('onboarding_version')
   })
 
   it('returns zero analytics for a successful PostHog query with no matching attempts', async () => {
@@ -151,21 +165,23 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
     )).rejects.toThrow('frontend onboarding analytics PostHog query failed')
   })
 
-  it('skips invalid attempts and converts missing or invalid optional step timestamps to null', async () => {
+  it('skips invalid attempts, versions, and intents; maps malformed interactions to an empty list', async () => {
     const startMs = Date.parse('2026-08-01T00:00:00.000Z')
     queryPosthogHogqlMock.mockResolvedValueOnce({
       configured: true,
       connected: true,
       failureReason: null,
       rows: [
-        { attempt_id: '  ', intent_ms: startMs + 1_000, details_ms: startMs + 2_000, total_attempts: 8 },
-        { attempt_id: 'no-intent', intent_ms: null, details_ms: startMs + 2_000, total_attempts: 8 },
-        { attempt_id: 'not-finite', intent_ms: 'Infinity', details_ms: startMs + 2_000, total_attempts: 8 },
-        { attempt_id: 'zero-intent', intent_ms: 0, details_ms: startMs + 2_000, total_attempts: 8 },
-        { attempt_id: false, intent_ms: startMs + 1_000, details_ms: startMs + 2_000, total_attempts: 8 },
-        { attempt_id: ['array'], intent_ms: startMs + 1_000, details_ms: startMs + 2_000, total_attempts: 8 },
-        { attempt_id: 'boolean-step', intent_ms: startMs + 2_000, details_ms: true, organization_ms: [], setup_ms: {}, total_attempts: 8 },
-        { attempt_id: 'valid', intent_ms: String(startMs + 1_000), details_ms: undefined, organization_ms: 0, setup_ms: 'not-a-number', total_attempts: 8 },
+        { attempt_id: '  ', onboarding_version: 2, intent_ms: startMs + 1_000, details_ms: startMs + 2_000, total_attempts: 10 },
+        { attempt_id: 'no-intent', onboarding_version: 2, intent_ms: null, details_ms: startMs + 2_000, total_attempts: 10 },
+        { attempt_id: 'not-finite', onboarding_version: 2, intent_ms: 'Infinity', details_ms: startMs + 2_000, total_attempts: 10 },
+        { attempt_id: 'zero-intent', onboarding_version: 2, intent_ms: 0, details_ms: startMs + 2_000, total_attempts: 10 },
+        { attempt_id: false, onboarding_version: 2, intent_ms: startMs + 1_000, details_ms: startMs + 2_000, total_attempts: 10 },
+        { attempt_id: ['array'], onboarding_version: 2, intent_ms: startMs + 1_000, details_ms: startMs + 2_000, total_attempts: 10 },
+        { attempt_id: 'unknown-version', onboarding_version: 3, intent_ms: startMs + 1_000, total_attempts: 10 },
+        { attempt_id: 'string-version', onboarding_version: '2', intent_ms: startMs + 1_000, total_attempts: 10 },
+        { attempt_id: 'boolean-step', onboarding_version: 2, intent_ms: startMs + 2_000, details_ms: true, organization_ms: [], setup_ms: {}, interaction_events: 'not-an-array', total_attempts: 10 },
+        { attempt_id: 'valid', onboarding_version: 2, intent_ms: String(startMs + 1_000), details_ms: undefined, organization_ms: 0, setup_ms: 'not-a-number', interaction_events: [[' valid ', startMs + 2_000], ['', startMs + 2_000], ['missing-time'], 42, null], total_attempts: 10 },
       ],
     })
 
@@ -177,12 +193,13 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
 
     expect(result).toMatchObject({
       kpis: { attempts: 2, completed: 0, completion_rate: 0 },
-      funnel: [
+      funnels: { v2: [
         { key: 'intent', reached: 2 },
         { key: 'details', reached: 0 },
         { key: 'organization', reached: 0 },
         { key: 'setup', reached: 0 },
-      ],
+      ] },
+      v2_graph: { nodes: [{ key: 'valid', count: 1 }] },
     })
   })
 
@@ -201,6 +218,21 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
     )
     expect(queryPosthogHogqlMock.mock.calls[0][1]).toContain(
       `AND intent_ms < toUnixTimestamp64Milli(parseDateTimeBestEffort('${end}'))`,
+    )
+  })
+
+  it('queries a full 24-hour intent lookback for ranges shorter than the follow-up window', async () => {
+    const start = '2026-08-01T12:00:00.000Z'
+    const end = '2026-08-01T18:00:00.000Z'
+
+    await getAdminFrontendOnboardingAnalytics(createContext(), start, end)
+
+    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(1)
+    expect(queryPosthogHogqlMock.mock.calls[0][1]).toContain(
+      `timestamp >= parseDateTimeBestEffort('${new Date(Date.parse(start) - DAY_MS).toISOString()}')`,
+    )
+    expect(queryPosthogHogqlMock.mock.calls[0][1]).toContain(
+      `HAVING intent_ms >= toUnixTimestamp64Milli(parseDateTimeBestEffort('${new Date(Date.parse(start) - DAY_MS).toISOString()}'))`,
     )
   })
 

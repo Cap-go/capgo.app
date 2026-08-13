@@ -227,16 +227,23 @@ export function PromptArea({ prompt, onTextError }: Readonly<{ prompt?: PromptRe
   return <SelectPromptView prompt={prompt} />
 }
 
-export function SpinnerArea({ text }: Readonly<{ text?: string }>) {
+export function SpinnerArea({ text, skipHint }: Readonly<{ text?: string, skipHint?: string }>) {
   if (!text)
     return null
 
   return (
-    <Box marginTop={1}>
-      <Box marginRight={1}>
-        <Text color="cyan"><Spinner type="dots" /></Text>
+    <Box flexDirection="column" marginTop={1}>
+      <Box>
+        <Box marginRight={1}>
+          <Text color="cyan"><Spinner type="dots" /></Text>
+        </Box>
+        <Text>{text}</Text>
       </Box>
-      <Text>{text}</Text>
+      {skipHint && (
+        <Box marginTop={1}>
+          <Text dimColor>{skipHint}</Text>
+        </Box>
+      )}
     </Box>
   )
 }

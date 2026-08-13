@@ -93,6 +93,24 @@ export const useDashboardAppsStore = defineStore('dashboardApps', () => {
     display.setAppNameResolver(appId => appNames.value[appId])
   }
 
+  function upsertApp(app: { app_id: string, name: string | null, ownerOrgId?: string | null }) {
+    const organizationStore = useOrganizationStore()
+    const ownerOrgId = app.ownerOrgId ?? organizationStore.currentOrganization?.gid ?? null
+    if (ownerOrgId && currentOrgId.value && ownerOrgId !== currentOrgId.value)
+      return
+    if (ownerOrgId && !currentOrgId.value)
+      currentOrgId.value = ownerOrgId
+
+    const nextApp = { app_id: app.app_id, name: app.name }
+    const existingIndex = apps.value.findIndex(item => item.app_id === nextApp.app_id)
+    if (existingIndex >= 0) {
+      apps.value[existingIndex] = { ...apps.value[existingIndex], ...nextApp }
+      return
+    }
+
+    apps.value = [...apps.value, nextApp]
+  }
+
   function reset() {
     apps.value = []
     isLoaded.value = false
@@ -113,6 +131,7 @@ export const useDashboardAppsStore = defineStore('dashboardApps', () => {
 
     // Actions
     fetchApps,
+    upsertApp,
     reset,
   }
 })
