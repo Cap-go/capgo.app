@@ -7,6 +7,7 @@ import {
   executeSQL,
   getSupabaseClient,
   ORG_ID,
+  ORG_ID_STATS,
   SUPABASE_ANON_KEY,
   SUPABASE_BASE_URL,
   USER_EMAIL,
@@ -18,8 +19,10 @@ const APP_RPC = `ob.rpc.${randomUUID().slice(0, 8)}`
 const APP_INSERT = `ob.ins.${randomUUID().slice(0, 8)}`
 const APP_TESTFLIGHT = `ob.tf.${randomUUID().slice(0, 8)}`
 const APP_STORE = `ob.st.${randomUUID().slice(0, 8)}`
+const APP_ORG_BF = `ob.org.${randomUUID().slice(0, 8)}`
 const DEVICE_TF = randomUUID().toLowerCase()
 const DEVICE_STORE = randomUUID().toLowerCase()
+const DEVICE_ORG_BF = randomUUID().toLowerCase()
 
 const serviceRoleSupabase = getSupabaseClient()
 
@@ -86,9 +89,8 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
-  await serviceRoleSupabase.from('devices').delete().eq('app_id', APP_TESTFLIGHT)
-  await serviceRoleSupabase.from('devices').delete().eq('app_id', APP_STORE)
-  await serviceRoleSupabase.from('apps').delete().in('app_id', [APP_RPC, APP_INSERT, APP_TESTFLIGHT, APP_STORE])
+  await serviceRoleSupabase.from('devices').delete().in('app_id', [APP_TESTFLIGHT, APP_STORE, APP_ORG_BF])
+  await serviceRoleSupabase.from('apps').delete().in('app_id', [APP_RPC, APP_INSERT, APP_TESTFLIGHT, APP_STORE, APP_ORG_BF])
 })
 
 describe('app onboarding progress RPCs', () => {
@@ -206,9 +208,10 @@ describe('app onboarding progress RPCs', () => {
 
   it('keeps TestFlight-only apps off store_live', async () => {
     const defs = await executeSQL<{ def: string }>(
-      `SELECT pg_get_functiondef('public.refresh_app_onboarding_progress(integer)'::regprocedure) AS def`,
+      `SELECT pg_get_functiondef('public.refresh_app_onboarding_progress(integer, uuid)'::regprocedure) AS def`,
     )
     expect(defs[0]?.def).toContain('INNER JOIN batch ON batch.app_id')
+    expect(defs[0]?.def).toContain('p_owner_org')
 
     const testflight = await refreshUntil(APP_TESTFLIGHT)
     const store = await refreshUntil(APP_STORE)
@@ -223,5 +226,65 @@ describe('app onboarding progress RPCs', () => {
        )->>'stage' AS stage`,
     )
     expect(merged[0]?.stage).toBe('store_live')
+  })
+
+  it('must reject unauthenticated refresh_org_apps_onboarding', async () => {
+    const anon = createAuthClient()
+    const { error } = await anon.rpc('refresh_org_apps_onboarding', {
+      p_org_id: ORG_ID,
+    })
+    expect(error).toBeTruthy()
+  })
+
+  it('denies refresh_org_apps_onboarding for another org', async () => {
+    const authClient = createAuthClient()
+    const { error: signInError } = await authClient.auth.signInWithPassword({
+      email: USER_EMAIL,
+      password: USER_PASSWORD,
+    })
+    if (signInError)
+      throw signInError
+
+    const { error } = await authClient.rpc('refresh_org_apps_onboarding', {
+      p_org_id: ORG_ID_STATS,
+    })
+    expect(error).toBeTruthy()
+  })
+
+  it('backfills the caller org from existing devices', async () => {
+    await createApp(APP_ORG_BF)
+    await insertDevice(APP_ORG_BF, DEVICE_ORG_BF, 'testflight')
+
+    const authClient = createAuthClient()
+    const { error: signInError } = await authClient.auth.signInWithPassword({
+      email: USER_EMAIL,
+      password: USER_PASSWORD,
+    })
+    if (signInError)
+      throw signInError
+
+    const { data: updated, error } = await authClient.rpc('refresh_org_apps_onboarding', {
+      p_org_id: ORG_ID,
+    })
+    expect(error).toBeNull()
+    expect(updated).toBeGreaterThan(0)
+
+    const { data, error: readError } = await serviceRoleSupabase
+      .from('apps')
+      .select('onboarding')
+      .eq('app_id', APP_ORG_BF)
+      .single()
+    expect(readError).toBeNull()
+    const ledger = parseAppOnboardingLedger(data?.onboarding)
+    expect(ledger.refreshed_at).toBeTruthy()
+    expect(ledger.features?.ota?.stage).toBe('testflight')
+    expect(ledger.features?.cli_install?.succeeded_at).toBeTruthy()
+  })
+
+  it('keeps the integer cron signature working', async () => {
+    const rows = await executeSQL<{ refresh_app_onboarding_progress: number }>(
+      'SELECT public.refresh_app_onboarding_progress(2000)',
+    )
+    expect(rows[0]?.refresh_app_onboarding_progress).toBeGreaterThanOrEqual(0)
   })
 })

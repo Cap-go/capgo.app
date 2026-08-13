@@ -4974,6 +4974,10 @@ export type Database = {
         Args: { p_user_id: string }
         Returns: string
       }
+      refresh_app_onboarding_progress: {
+        Args: { p_batch_size?: number; p_owner_org?: string }
+        Returns: number
+      }
       refresh_app_rollout_channel_count_for_app: {
         Args: { p_app_id: string }
         Returns: undefined
@@ -4982,6 +4986,7 @@ export type Database = {
         Args: { p_app_id: string; p_app_uuid: string; p_owner_org: string }
         Returns: undefined
       }
+      refresh_org_apps_onboarding: { Args: { p_org_id: string }; Returns: number }
       refresh_orgs_has_usage_credits: { Args: never; Returns: undefined }
       regenerate_hashed_apikey: {
         Args: { p_apikey_id: number }

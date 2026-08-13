@@ -7,6 +7,7 @@ import { addUtcDays, normalizeToUtcStartOfDay } from '~/services/date'
 import { createSignedImageUrl, getImmediateImageUrl, resolveImagePath } from '~/services/storage'
 import { isPlatformAdmin, stripeEnabled, useSupabase } from '~/services/supabase'
 import { clearWebsitePaidUserCookie, setWebsitePaidUserCookie, syncWebsitePaidUserCookieFromOrganizations } from '~/services/websiteAuthCookie'
+import { parseAppOnboardingLedger } from '../utils/appOnboardingProgress'
 import { createDeferredPromise } from '../utils/promise'
 import { useDashboardAppsStore } from './dashboardApps'
 import { useDisplayStore } from './display'
@@ -499,6 +500,21 @@ export const useOrganizationStore = defineStore('organization', () => {
 
     const refreshGen = ++appsOnboardingRefreshGen
     const writeGenSnapshot = new Map(appOnboardingWriteGen)
+    const orgsNeedingBackfill = orgIds.filter(id =>
+      getAppsByOrgId(id).some(app => !parseAppOnboardingLedger(app.onboarding).refreshed_at),
+    )
+    if (orgsNeedingBackfill.length > 0) {
+      const backfillResults = await Promise.all(orgsNeedingBackfill.map(id =>
+        supabase.rpc('refresh_org_apps_onboarding', { p_org_id: id }),
+      ))
+      for (const { error: rpcError } of backfillResults) {
+        if (rpcError)
+          console.error('Cannot backfill app onboarding', rpcError)
+      }
+    }
+    if (refreshGen !== appsOnboardingRefreshGen)
+      return
+
     const { data, error } = await supabase
       .from('apps')
       .select('app_id, onboarding')

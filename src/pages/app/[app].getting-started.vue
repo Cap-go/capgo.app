@@ -33,7 +33,7 @@ const appName = computed(() => app.value?.name || orgApp.value?.name || id.value
 const appIcon = computed(() => orgApp.value?.icon_url || '')
 const iconLoading = computed(() => orgApp.value?.icon_url_loading === true)
 
-const ledger = computed(() => parseAppOnboardingLedger(app.value?.onboarding))
+const ledger = computed(() => parseAppOnboardingLedger(orgApp.value?.onboarding ?? app.value?.onboarding))
 const steps = computed(() => buildGettingStartedSteps(ledger.value, { builderDone: builderDone.value }))
 const progress = computed(() => gettingStartedProgress(steps.value))
 const stepGroups = computed(() => {
