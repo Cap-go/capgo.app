@@ -19,6 +19,7 @@ import {
   gettingStartedDismissedLegacyKey,
   parseDismissedGettingStartedAppIds,
   serializeDismissedGettingStartedAppIds,
+  storeReleaseValidatedKey,
 } from '../src/utils/gettingStartedDismiss.ts'
 
 describe('app onboarding progress ledger', () => {
@@ -178,6 +179,33 @@ describe('app onboarding progress ledger', () => {
     expect(steps.find(step => step.id === 'live_update')?.done).toBe(false)
     expect(steps.find(step => step.id === 'store_release')?.done).toBe(false)
   })
+
+  it.concurrent('marks install Capgo done when live-update installs exist', () => {
+    const steps = buildGettingStartedSteps({
+      features: {
+        ota: { succeeded_at: '2026-08-04T00:00:00.000Z' },
+      },
+    })
+    expect(steps.find(step => step.id === 'cli_install')?.done).toBe(true)
+    expect(steps.find(step => step.id === 'live_update')?.done).toBe(true)
+    expect(steps.find(step => step.id === 'store_release')?.done).toBe(false)
+    expect(nextOnboardingAction({
+      features: { ota: { succeeded_at: '2026-08-04T00:00:00.000Z' } },
+    }).feature).toBe('ota')
+  })
+
+  it.concurrent('marks store release done after production setup is applied', () => {
+    const steps = buildGettingStartedSteps({
+      features: { ota: { stage: 'testflight' } },
+    }, { storeReleaseValidated: true })
+    expect(steps.find(step => step.id === 'store_release')?.done).toBe(true)
+    expect(shouldShowGettingStartedNav({
+      features: {
+        cli_install: { succeeded_at: '2026-08-02T00:00:00.000Z' },
+        ota: { succeeded_at: '2026-08-04T00:00:00.000Z', stage: 'testflight' },
+      },
+    }, { storeReleaseValidated: true })).toBe(false)
+  })
 })
 
 describe('getting started dismiss storage', () => {
@@ -191,5 +219,6 @@ describe('getting started dismiss storage', () => {
   it.concurrent('uses a per-app dismiss key', () => {
     expect(gettingStartedDismissedKey('user-1', 'com.demo.app')).toBe('capgo.gettingStarted.dismissed.user-1.com.demo.app')
     expect(gettingStartedDismissedLegacyKey('user-1')).toBe('capgo.gettingStarted.dismissed.user-1')
+    expect(storeReleaseValidatedKey('user-1', 'com.demo.app')).toBe('capgo.gettingStarted.storeRelease.user-1.com.demo.app')
   })
 })

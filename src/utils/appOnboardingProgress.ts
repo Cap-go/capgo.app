@@ -120,13 +120,14 @@ export function nextOnboardingAction(ledger: AppOnboardingLedger): {
   const cliInstall = ledger.features?.cli_install ?? {}
   const ota = ledger.features?.ota ?? {}
   const builder = ledger.features?.builder ?? {}
-  const stage = parseAppOnboardingStage(ota.stage) ?? (cliInstall.succeeded_at ? 'native_unknown' : 'no_device')
+  const cliDone = Boolean(cliInstall.succeeded_at)
+    || Boolean(ota.succeeded_at)
+    || rankAppOnboardingStage(parseAppOnboardingStage(ota.stage)) > rankAppOnboardingStage('local_only')
+  const stage = parseAppOnboardingStage(ota.stage) ?? (cliDone ? 'native_unknown' : 'no_device')
 
   if (builder.started_at && !builder.succeeded_at)
     return { feature: 'builder', stage }
-  if (!cliInstall.started_at)
-    return { feature: 'cli_install', stage }
-  if (!cliInstall.succeeded_at || stage === 'no_device' || stage === 'local_only')
+  if (!cliDone)
     return { feature: 'cli_install', stage }
   if (!ota.started_at || !ota.succeeded_at)
     return { feature: 'ota', stage }
@@ -150,6 +151,11 @@ export interface GettingStartedStep {
   titleKey: string
   descKey: string
   actionKey: string
+}
+
+export interface GettingStartedStepExtras {
+  builderDone?: boolean
+  storeReleaseValidated?: boolean
 }
 
 const GETTING_STARTED_STEP_DEFS: Array<Omit<GettingStartedStep, 'done'>> = [
@@ -192,7 +198,7 @@ function onboardingStage(ledger: AppOnboardingLedger): AppOnboardingStage | null
 export function isGettingStartedStepDone(
   ledger: AppOnboardingLedger,
   id: GettingStartedStepId,
-  extras?: { builderDone?: boolean },
+  extras?: GettingStartedStepExtras,
 ): boolean {
   const cliInstall = ledger.features?.cli_install ?? {}
   const ota = ledger.features?.ota ?? {}
@@ -201,18 +207,19 @@ export function isGettingStartedStepDone(
 
   if (id === 'cli_install') {
     return Boolean(cliInstall.succeeded_at)
+      || Boolean(ota.succeeded_at)
       || rankAppOnboardingStage(stage) > rankAppOnboardingStage('local_only')
   }
   if (id === 'live_update')
     return Boolean(ota.succeeded_at)
   if (id === 'store_release')
-    return stage === 'store_live'
+    return stage === 'store_live' || extras?.storeReleaseValidated === true
   return extras?.builderDone === true || Boolean(builder.succeeded_at)
 }
 
 export function buildGettingStartedSteps(
   ledger: AppOnboardingLedger,
-  extras?: { builderDone?: boolean },
+  extras?: GettingStartedStepExtras,
 ): GettingStartedStep[] {
   return GETTING_STARTED_STEP_DEFS.map(def => ({
     ...def,
@@ -234,8 +241,8 @@ export function gettingStartedProgress(steps: GettingStartedStep[]): {
   }
 }
 
-export function shouldShowGettingStartedNav(ledger: AppOnboardingLedger): boolean {
-  return buildGettingStartedSteps(ledger)
+export function shouldShowGettingStartedNav(ledger: AppOnboardingLedger, extras?: GettingStartedStepExtras): boolean {
+  return buildGettingStartedSteps(ledger, extras)
     .some(step => step.group === 'essential' && !step.done)
 }
 

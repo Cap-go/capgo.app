@@ -1,4 +1,8 @@
+import { ref } from 'vue'
+
 const STORAGE_PREFIX = 'capgo.gettingStarted.dismissed'
+const STORE_RELEASE_PREFIX = 'capgo.gettingStarted.storeRelease'
+const storeReleaseValidatedKeys = ref(new Set<string>())
 
 export function gettingStartedDismissedKey(userId: string, appId: string) {
   return `${STORAGE_PREFIX}.${userId}.${appId}`
@@ -57,4 +61,32 @@ export function dismissGettingStarted(userId: string, appId: string) {
   if (!userId || !appId || typeof localStorage === 'undefined')
     return
   writeStorage(gettingStartedDismissedKey(userId, appId), '1')
+}
+
+export function storeReleaseValidatedKey(userId: string, appId: string) {
+  return `${STORE_RELEASE_PREFIX}.${userId}.${appId}`
+}
+
+function storeReleaseSessionKey(userId: string, appId: string) {
+  return `${userId}:${appId}`
+}
+
+export function isStoreReleaseValidated(userId: string, appId: string) {
+  if (!userId || !appId)
+    return false
+  if (storeReleaseValidatedKeys.value.has(storeReleaseSessionKey(userId, appId)))
+    return true
+  if (typeof localStorage === 'undefined')
+    return false
+  return readStorage(storeReleaseValidatedKey(userId, appId)) === '1'
+}
+
+export function markStoreReleaseValidated(userId: string, appId: string) {
+  if (!userId || !appId)
+    return
+  if (typeof localStorage !== 'undefined')
+    writeStorage(storeReleaseValidatedKey(userId, appId), '1')
+  const next = new Set(storeReleaseValidatedKeys.value)
+  next.add(storeReleaseSessionKey(userId, appId))
+  storeReleaseValidatedKeys.value = next
 }

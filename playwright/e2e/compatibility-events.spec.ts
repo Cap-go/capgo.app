@@ -188,10 +188,9 @@ test.describe('Compatibility events', () => {
     await expect(modal.getByText('Validate the production setup')).toBeVisible()
     await expect(modal.getByLabel('Production channel')).toBeVisible()
     await modal.getByRole('button', { name: 'Apply setup' }).click()
-    await expect(modal.getByText('Production channel setup applied.')).toBeVisible()
-
-    await modal.getByText('Close', { exact: true }).click()
     await expect(modal).not.toBeVisible()
+    await expect(storeStep.locator('[data-test="getting-started-step-action"]')).toHaveCount(0)
+    await expect(storeStep.getByText('Done')).toBeVisible()
   })
 
   test('shows the unresolved banner on the app dashboard and links to the history page', async ({ page }) => {

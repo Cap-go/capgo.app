@@ -13,6 +13,7 @@ import {
 import {
   dismissGettingStarted,
   isGettingStartedDismissed,
+  isStoreReleaseValidated,
 } from '~/utils/gettingStartedDismiss'
 
 const { t } = useI18n()
@@ -33,7 +34,9 @@ const apps = computed(() => {
   return organizationStore.getAppsByOrgId(orgId).filter((app) => {
     if (isGettingStartedDismissed(userId.value, app.app_id))
       return false
-    return shouldShowGettingStartedNav(parseAppOnboardingLedger(app.onboarding))
+    return shouldShowGettingStartedNav(parseAppOnboardingLedger(app.onboarding), {
+      storeReleaseValidated: isStoreReleaseValidated(userId.value, app.app_id),
+    })
   })
 })
 
