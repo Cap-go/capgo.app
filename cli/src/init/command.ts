@@ -4,6 +4,7 @@ import type { UploadReporter } from '../bundle/upload'
 import type { Organization } from '../utils'
 import type { SupportedPackageManager } from './command-execution'
 import type { InitCodeDiff, InitEncryptionPhase, InitEncryptionSummary } from './runtime'
+import type { PackageInstallState } from './updater'
 import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import path, { dirname, join } from 'node:path'
@@ -40,7 +41,7 @@ import { cancel as pCancel, confirm as pConfirm, intro as pIntro, isCancel as pI
 import { finishActiveCliReplay, getActiveCliReplaySessionId, isCliTelemetryDisabled, startInitReplay } from './replay'
 import { appendInitStreamingLine, clearInitStreamingOutput, INIT_CANCEL, pushInitLog, setInitCodeDiff, setInitEncryptionSummary, setInitVersionWarning, startInitStreamingOutput, stopInitInkSession, updateInitStreamingStatus, waitForInitStreamingContinue } from './runtime'
 import { formatInitResumeMessage, initOnboardingSteps, renderInitOnboardingComplete, renderInitOnboardingFrame, renderInitOnboardingWelcome } from './ui'
-import { CAPGO_UPDATER_PACKAGE, getUpdaterInstallState } from './updater'
+import { CAPACITOR_SPLASH_SCREEN_PACKAGE, CAPGO_UPDATER_PACKAGE, getSplashScreenInstallState, getUpdaterInstallState } from './updater'
 
 interface SuperOptions extends Options {
   analytics?: boolean
@@ -2719,9 +2720,19 @@ function getUpdaterVersionToInstall(coreVersion: string, logSelection = true): {
   return { versionToInstall: 'latest', shouldOfferDirectInstall: true }
 }
 
-function getUpdaterInstallCommand(pm: PackageManagerInfo, versionToInstall: string, force = false): string {
+function getPackageInstallCommand(pm: PackageManagerInfo, packageName: string, versionToInstall: string, force = false): string {
   const forceFlag = force ? ' --force' : ''
-  return `${pm.installCommand}${forceFlag} ${CAPGO_UPDATER_PACKAGE}@${versionToInstall}`
+  return `${pm.installCommand}${forceFlag} ${packageName}@${versionToInstall}`
+}
+
+function getUpdaterInstallCommand(pm: PackageManagerInfo, versionToInstall: string, force = false): string {
+  return getPackageInstallCommand(pm, CAPGO_UPDATER_PACKAGE, versionToInstall, force)
+}
+
+export function getSplashScreenVersionToInstall(coreVersion: string): string {
+  if (lessThan(parse(coreVersion), parse('8.0.0')))
+    return `^${parse(coreVersion).major}.0.0`
+  return 'latest'
 }
 
 function formatSpawnOutput(output: string | Buffer | null | undefined): string {
@@ -2730,12 +2741,12 @@ function formatSpawnOutput(output: string | Buffer | null | undefined): string {
   return typeof output === 'string' ? output : output.toString('utf8')
 }
 
-function runUpdaterInstallCommand(pm: PackageManagerInfo, packageJsonPath: string, versionToInstall: string): void {
+function runPackageInstallCommand(pm: PackageManagerInfo, packageJsonPath: string, packageName: string, versionToInstall: string): void {
   const [command, ...args] = pm.installCommand.split(whitespaceSplitPattern).filter(Boolean)
   if (!command)
     throw new Error('Cannot determine package manager install command')
 
-  const result = spawnSync(command, [...args, '--force', `${CAPGO_UPDATER_PACKAGE}@${versionToInstall}`], {
+  const result = spawnSync(command, [...args, '--force', `${packageName}@${versionToInstall}`], {
     stdio: 'pipe',
     cwd: dirname(packageJsonPath),
   })
@@ -2745,17 +2756,78 @@ function runUpdaterInstallCommand(pm: PackageManagerInfo, packageJsonPath: strin
       .filter(Boolean)
       .join('\n')
     const outputDetails = output ? `\n${output}` : ''
-    const message = `Updater install failed with code ${result.status ?? 'unknown'}${outputDetails}`
+    const message = `${packageName} install failed with code ${result.status ?? 'unknown'}${outputDetails}`
     throw result.error ?? new Error(message)
   }
 }
 
-function logUpdaterInstallStateDetails(packageJsonPath: string, details: string[], manualCommand: string): void {
-  pLog.warn(`${CAPGO_UPDATER_PACKAGE} is not ready yet.`)
+function runUpdaterInstallCommand(pm: PackageManagerInfo, packageJsonPath: string, versionToInstall: string): void {
+  runPackageInstallCommand(pm, packageJsonPath, CAPGO_UPDATER_PACKAGE, versionToInstall)
+}
+
+function logPackageInstallStateDetails(packageName: string, packageJsonPath: string, details: string[], manualCommand: string): void {
+  pLog.warn(`${packageName} is not ready yet.`)
   for (const detail of details) {
     pLog.warn(detail)
   }
-  pLog.info(`Run this in ${dirname(packageJsonPath)}: ${manualCommand}`)
+  pLog.info(`Run this in ${formatInitFilePath(dirname(packageJsonPath))}: ${manualCommand}`)
+}
+
+function formatPackageReadyMessage(packageName: string, state: PackageInstallState): string {
+  const declaredAt = formatInitFilePath(state.packageJsonPath)
+  const versionLabel = state.installedVersion ? ` ${state.installedVersion}` : ''
+  return `${packageName}${versionLabel} is declared in ${declaredAt} and installed in node_modules ✅`
+}
+
+async function waitForVerifiedPackageInstall(
+  orgId: string,
+  apikey: string,
+  packageJsonPath: string,
+  pm: PackageManagerInfo,
+  packageName: string,
+  versionToInstall: string,
+  getState: (packageJsonPath: string) => PackageInstallState,
+  options: { allowAutoRetry?: boolean, failureText?: string, supportPlatform?: PlatformChoice, noun?: string } = {},
+) {
+  const noun = options.noun ?? packageName
+  const manualCommand = getPackageInstallCommand(pm, packageName, versionToInstall)
+
+  while (true) {
+    const state = getState(packageJsonPath)
+    if (state.ready) {
+      pLog.info(formatPackageReadyMessage(packageName, state))
+      return state
+    }
+
+    logPackageInstallStateDetails(packageName, packageJsonPath, state.details, manualCommand)
+
+    if (options.allowAutoRetry) {
+      const recoveryChoice = await selectRecoveryOption(orgId, apikey, `${noun} install is not complete yet. What do you want to do?`, [
+        { value: 'retry-auto', label: `Retry automatic ${noun} install` },
+        { value: 'manual', label: 'Install it manually, then continue' },
+      ], options.failureText ?? state.details.join('\n'), options.supportPlatform)
+      if (recoveryChoice === 'retry-auto') {
+        const s = pSpinner()
+        try {
+          s.start(`Running: ${getPackageInstallCommand(pm, packageName, versionToInstall, true)}`)
+          runPackageInstallCommand(pm, packageJsonPath, packageName, versionToInstall)
+          s.stop(`${noun} install command finished ✅`)
+        }
+        catch (error) {
+          s.stop(`${noun} install failed ❌`)
+          pLog.error(formatError(error))
+        }
+        continue
+      }
+    }
+
+    await waitForReadyConfirmation(
+      `Install ${packageName} manually, then come back here.`,
+      orgId,
+      apikey,
+      `Type "ready" when ${packageName} is installed.`,
+    )
+  }
 }
 
 async function waitForVerifiedUpdaterInstall(
@@ -2766,46 +2838,68 @@ async function waitForVerifiedUpdaterInstall(
   versionToInstall: string,
   options: { allowAutoRetry?: boolean, failureText?: string, supportPlatform?: PlatformChoice } = {},
 ) {
-  const manualCommand = getUpdaterInstallCommand(pm, versionToInstall)
+  return waitForVerifiedPackageInstall(
+    orgId,
+    apikey,
+    packageJsonPath,
+    pm,
+    CAPGO_UPDATER_PACKAGE,
+    versionToInstall,
+    getUpdaterInstallState,
+    { ...options, noun: 'updater' },
+  )
+}
 
-  while (true) {
-    const state = getUpdaterInstallState(packageJsonPath)
-    if (state.ready) {
-      const declaredAt = formatInitFilePath(state.packageJsonPath)
-      const versionLabel = state.installedVersion ? ` ${state.installedVersion}` : ''
-      pLog.info(`${CAPGO_UPDATER_PACKAGE}${versionLabel} is declared in ${declaredAt} and installed in node_modules ✅`)
-      return state
-    }
-
-    logUpdaterInstallStateDetails(packageJsonPath, state.details, manualCommand)
-
-    if (options.allowAutoRetry) {
-      const recoveryChoice = await selectRecoveryOption(orgId, apikey, 'Updater install is not complete yet. What do you want to do?', [
-        { value: 'retry-auto', label: 'Retry automatic updater install' },
-        { value: 'manual', label: 'Install it manually, then continue' },
-      ], options.failureText ?? state.details.join('\n'), options.supportPlatform)
-      if (recoveryChoice === 'retry-auto') {
-        const s = pSpinner()
-        try {
-          s.start(`Running: ${getUpdaterInstallCommand(pm, versionToInstall, true)}`)
-          runUpdaterInstallCommand(pm, packageJsonPath, versionToInstall)
-          s.stop('Updater install command finished ✅')
-        }
-        catch (error) {
-          s.stop('Updater install failed ❌')
-          pLog.error(formatError(error))
-        }
-        continue
-      }
-    }
-
-    await waitForReadyConfirmation(
-      `Install ${CAPGO_UPDATER_PACKAGE} manually, then come back here.`,
-      orgId,
-      apikey,
-      `Type "ready" when ${CAPGO_UPDATER_PACKAGE} is installed.`,
-    )
+async function ensureSplashScreenForDirectUpdate(
+  orgId: string,
+  apikey: string,
+  packageJsonPath: string,
+  pm: PackageManagerInfo,
+  coreVersion: string,
+) {
+  const versionToInstall = getSplashScreenVersionToInstall(coreVersion)
+  const installState = getSplashScreenInstallState(packageJsonPath)
+  if (installState.ready) {
+    pLog.info(formatPackageReadyMessage(CAPACITOR_SPLASH_SCREEN_PACKAGE, installState))
+    return
   }
+
+  pLog.warn(`Instant updates enable autoSplashscreen, which requires ${CAPACITOR_SPLASH_SCREEN_PACKAGE}.`)
+  const installChoice = await pSelect({
+    message: `${CAPACITOR_SPLASH_SCREEN_PACKAGE} is required for instant updates. Install it now?`,
+    options: [
+      { value: 'yes', label: '✅ Yes, install it' },
+      { value: 'no', label: '📝 I\'ll do it manually' },
+    ],
+  })
+  await cancelCommand(installChoice, orgId, apikey)
+
+  if (installChoice === 'yes') {
+    const s = pSpinner()
+    s.start(`Installing ${CAPACITOR_SPLASH_SCREEN_PACKAGE}`)
+    try {
+      runPackageInstallCommand(pm, packageJsonPath, CAPACITOR_SPLASH_SCREEN_PACKAGE, versionToInstall)
+      s.stop(`Installed ${CAPACITOR_SPLASH_SCREEN_PACKAGE}; declaration is in ${formatInitFilePath(packageJsonPath)} ✅`)
+    }
+    catch (error) {
+      s.stop('Splash screen install failed ❌')
+      pLog.error(formatError(error))
+    }
+  }
+  else {
+    pLog.info(`Install it manually in ${formatInitFilePath(dirname(packageJsonPath))} with: "${getPackageInstallCommand(pm, CAPACITOR_SPLASH_SCREEN_PACKAGE, versionToInstall)}"`)
+  }
+
+  await waitForVerifiedPackageInstall(
+    orgId,
+    apikey,
+    packageJsonPath,
+    pm,
+    CAPACITOR_SPLASH_SCREEN_PACKAGE,
+    versionToInstall,
+    getSplashScreenInstallState,
+    { allowAutoRetry: installChoice === 'yes', noun: 'splash screen plugin' },
+  )
 }
 
 async function addUpdaterStep(orgId: string, apikey: string, appId: string) {
@@ -2870,6 +2964,9 @@ async function addUpdaterStep(orgId: string, apikey: string, appId: string) {
       doDirectInstall = await pConfirm({ message: `Do you want to set instant updates in ${appId}? Read more about it here: https://capgo.app/docs/live-updates/update-behavior/#applying-updates-immediately` })
       await cancelCommand(doDirectInstall, orgId, apikey)
     }
+
+    if (doDirectInstall)
+      await ensureSplashScreenForDirectUpdate(orgId, apikey, path, pm, coreVersion)
 
     const s = pSpinner()
     s.start(`Updating config file`)
