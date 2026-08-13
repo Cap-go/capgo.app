@@ -3,7 +3,6 @@ import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 import {
   buildFrontendOnboardingDailySeries,
-  buildFrontendOnboardingDailyConversionPoints,
   buildFrontendOnboardingFunnelStages,
   buildFrontendOnboardingFunnelSummaries,
   buildFrontendOnboardingGraphMetrics,
@@ -103,13 +102,6 @@ describe('admin frontend onboarding dashboard', () => {
     expect(buildFrontendOnboardingDailySeries([], 'V1', 'V2')).toEqual([
       { label: 'V1', color: '#a78bfa', data: [] },
       { label: 'V2', color: '#06b6d4', data: [] },
-    ])
-  })
-
-  it.concurrent('adapts daily conversions without inventing values for empty denominators', () => {
-    expect(buildFrontendOnboardingDailyConversionPoints(analytics.daily_conversions.intent_to_details)).toEqual([
-      { date: '2026-08-09', started: 5, converted: 4, conversion_percent: 80 },
-      { date: '2026-08-10', started: 0, converted: 0, conversion_percent: null },
     ])
   })
 

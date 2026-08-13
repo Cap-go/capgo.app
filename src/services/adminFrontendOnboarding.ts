@@ -156,12 +156,6 @@ export function buildFrontendOnboardingDailySeries(
   ]
 }
 
-export function buildFrontendOnboardingDailyConversionPoints(
-  points: readonly FrontendOnboardingDailyConversionPoint[],
-): FrontendOnboardingDailyConversionPoint[] {
-  return points.map(point => ({ ...point }))
-}
-
 export function buildFrontendOnboardingFunnelStages(
   funnel: readonly FrontendOnboardingFunnelStage[],
 ): FrontendOnboardingFunnelDisplayStage[] {

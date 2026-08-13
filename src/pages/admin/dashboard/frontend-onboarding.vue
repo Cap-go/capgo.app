@@ -18,7 +18,6 @@ import AdminStatsCard from '~/components/admin/AdminStatsCard.vue'
 import ChartCard from '~/components/dashboard/ChartCard.vue'
 import PageLoader from '~/components/PageLoader.vue'
 import {
-  buildFrontendOnboardingDailyConversionPoints,
   buildFrontendOnboardingDailySeries,
   buildFrontendOnboardingFunnelStages,
   buildFrontendOnboardingFunnelSummaries,
@@ -106,15 +105,9 @@ const dailySeries = computed(() => buildFrontendOnboardingDailySeries(
   t('frontend-onboarding-version-1'),
   t('frontend-onboarding-version-2'),
 ))
-const intentToDetailsDaily = computed(() => buildFrontendOnboardingDailyConversionPoints(
-  visibleAnalytics.value?.daily_conversions.intent_to_details ?? [],
-))
-const detailsToOrganizationDaily = computed(() => buildFrontendOnboardingDailyConversionPoints(
-  visibleAnalytics.value?.daily_conversions.details_to_organization ?? [],
-))
-const organizationToSetupDaily = computed(() => buildFrontendOnboardingDailyConversionPoints(
-  visibleAnalytics.value?.daily_conversions.organization_to_setup ?? [],
-))
+const intentToDetailsDaily = computed(() => visibleAnalytics.value?.daily_conversions?.intent_to_details ?? [])
+const detailsToOrganizationDaily = computed(() => visibleAnalytics.value?.daily_conversions?.details_to_organization ?? [])
+const organizationToSetupDaily = computed(() => visibleAnalytics.value?.daily_conversions?.organization_to_setup ?? [])
 const hasConversionData = (points: readonly { started: number }[]) => points.some(point => point.started > 0)
 const v1FunnelStages = computed(() => buildFrontendOnboardingFunnelStages(visibleAnalytics.value?.funnels.v1 ?? []))
 const v2FunnelStages = computed(() => buildFrontendOnboardingFunnelStages(visibleAnalytics.value?.funnels.v2 ?? []))

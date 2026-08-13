@@ -4,7 +4,7 @@
 
 **Goal:** Add three day-by-day onboarding stage-conversion column charts to the admin frontend-onboarding dashboard.
 
-**Architecture:** Extend the existing frontend-onboarding analytics reducer and response instead of adding a query or endpoint. A focused reusable Vue/Chart.js component renders nullable daily percentages and count-aware tooltips; the existing dashboard page adapts the response and places three cards between the v2 funnel and v2 journey graph.
+**Architecture:** Extend the existing frontend-onboarding analytics reducer and response instead of adding a query or endpoint. A focused reusable Vue/Chart.js component renders nullable daily percentages and count-aware tooltips; the existing dashboard page passes the response points directly into three cards between the v2 funnel and v2 journey graph.
 
 **Tech Stack:** TypeScript, Vue 3, Chart.js/vue-chartjs, PostHog HogQL response model, Vitest, vue-i18n.
 
@@ -126,9 +126,9 @@ git commit -m "feat(admin): add daily conversion chart"
 - Modify: `messages/en.context.json`
 - Modify: `tests/admin-frontend-onboarding-dashboard.unit.test.ts`
 
-- [ ] **Step 1: Write failing frontend adapter and placement tests**
+- [ ] **Step 1: Write failing response and placement tests**
 
-Extend the analytics fixture with `daily_conversions`. Assert that the adapter preserves counts and nullable percentages. Assert exactly three `AdminDailyConversionChart` instances and four `ChartCard` instances, and verify source ordering:
+Extend the analytics fixture with `daily_conversions`. Assert exactly three `AdminDailyConversionChart` instances and four `ChartCard` instances, and verify source ordering:
 
 ```ts
 expect(v2FunnelIndex).toBeLessThan(intentDetailsChartIndex)
@@ -145,9 +145,9 @@ Run: `bun vitest run tests/admin-frontend-onboarding-dashboard.unit.test.ts`
 
 Expected: failures for missing response fields, adapter, translations, and chart components.
 
-- [ ] **Step 3: Extend frontend response types and adapter**
+- [ ] **Step 3: Extend frontend response types**
 
-Add the backend `daily_conversions` response shape to `FrontendOnboardingAnalytics` and a small adapter that returns points unchanged in the reusable component's shape.
+Add the backend `daily_conversions` response shape to `FrontendOnboardingAnalytics` and pass those points directly to the reusable component.
 
 - [ ] **Step 4: Render the charts**
 
