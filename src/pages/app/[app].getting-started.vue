@@ -111,8 +111,6 @@ watch(() => id.value, async (appId) => {
   const appOrganization = organizationStore.getOrgByAppId(appId)
   if (appOrganization && organizationStore.currentOrganization?.gid !== appOrganization.gid)
     organizationStore.setCurrentOrganization(appOrganization.gid)
-  if (appOrganization)
-    void organizationStore.refreshAppsOnboarding(appOrganization.gid)
   void checkBuilderDone(appId)
 }, { immediate: true })
 </script>
