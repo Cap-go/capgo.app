@@ -47,6 +47,7 @@ describe('app onboarding API key loading state', () => {
 
   it.concurrent('provides secure onboarding copy in the English locale', () => {
     expect(englishMessages['app-onboarding-command-apikey-loading']).toBe('Creating your secure API key…')
+    expect(englishMessages['app-onboarding-ai-help-caption']).toBe('Use your preferred AI assistant to help set up Capgo. Copy the onboarding instructions to get step-by-step guidance.')
     expect(englishMessages['app-onboarding-ai-help-without-key']).toContain('do not ask me to paste my real Capgo API key into this chat')
     expect(englishMessages['app-onboarding-ai-help-with-key']).toContain('do not repeat the API key in your response')
     expect(englishMessages['app-onboarding-ai-help-prompt']).toContain('3. Help me verify the installation succeeded.\n4. {apiKeyGuidance}')

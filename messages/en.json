@@ -379,7 +379,7 @@
   "app-onboarding-appid-taken-pick-another": "App ID {appId} is already used. Pick another one or use one of the suggestions.",
   "app-onboarding-appid-taken-switched": "App ID {original} was already taken, so Capgo switched to {replacement}.",
   "app-onboarding-ai-help-button": "Copy AI instructions",
-  "app-onboarding-ai-help-caption": "Choose whether to include your API key before copying instructions for ChatGPT, Claude, Cursor, or another assistant.",
+  "app-onboarding-ai-help-caption": "Use your preferred AI assistant to help set up Capgo. Copy the onboarding instructions to get step-by-step guidance.",
   "app-onboarding-ai-help-copy-description": "Including it gives your assistant a ready-to-run command. Only include it with an assistant you trust.",
   "app-onboarding-ai-help-copy-title": "Include your API key?",
   "app-onboarding-ai-help-copy-with-key": "Copy with API key",
