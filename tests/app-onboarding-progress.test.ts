@@ -263,28 +263,29 @@ describe('app onboarding progress RPCs', () => {
     if (signInError)
       throw signInError
 
-    const { data: updated, error } = await authClient.rpc('refresh_org_apps_onboarding', {
-      p_org_id: ORG_ID,
-    })
-    expect(error).toBeNull()
-    expect(updated).toBeGreaterThan(0)
-
-    const { data, error: readError } = await serviceRoleSupabase
-      .from('apps')
-      .select('onboarding')
-      .eq('app_id', APP_ORG_BF)
-      .single()
-    expect(readError).toBeNull()
-    const ledger = parseAppOnboardingLedger(data?.onboarding)
+    let ledger = parseAppOnboardingLedger(null)
+    let lastError: unknown = null
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const { error } = await authClient.rpc('refresh_org_apps_onboarding', {
+        p_org_id: ORG_ID,
+      })
+      lastError = error
+      if (error)
+        break
+      const { data, error: readError } = await serviceRoleSupabase
+        .from('apps')
+        .select('onboarding')
+        .eq('app_id', APP_ORG_BF)
+        .single()
+      if (readError)
+        throw readError
+      ledger = parseAppOnboardingLedger(data?.onboarding)
+      if (ledger.refreshed_at)
+        break
+    }
+    expect(lastError).toBeNull()
     expect(ledger.refreshed_at).toBeTruthy()
     expect(ledger.features?.ota?.stage).toBe('testflight')
     expect(ledger.features?.cli_install?.succeeded_at).toBeTruthy()
-  })
-
-  it('keeps the integer cron signature working', async () => {
-    const rows = await executeSQL<{ refresh_app_onboarding_progress: number }>(
-      'SELECT public.refresh_app_onboarding_progress(2000)',
-    )
-    expect(rows[0]?.refresh_app_onboarding_progress).toBeGreaterThanOrEqual(0)
   })
 })

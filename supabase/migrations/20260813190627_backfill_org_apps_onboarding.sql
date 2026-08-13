@@ -189,7 +189,6 @@ $$;
 ALTER FUNCTION "public"."refresh_org_apps_onboarding"(uuid) OWNER TO "postgres";
 REVOKE ALL ON FUNCTION "public"."refresh_org_apps_onboarding"(uuid) FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."refresh_org_apps_onboarding"(uuid) TO "authenticated";
-GRANT ALL ON FUNCTION "public"."refresh_org_apps_onboarding"(uuid) TO "service_role";
 
 COMMENT ON FUNCTION "public"."refresh_org_apps_onboarding"(uuid) IS
-  'User-facing org backfill of apps.onboarding. One org.read RBAC check, then refresh_app_onboarding_progress(2000, org). Authenticated only; not granted to anon.';
+  'User-facing org backfill of apps.onboarding. One org.read RBAC check, then refresh_app_onboarding_progress(2000, org). Authenticated only; not granted to anon or service_role. Internal jobs use refresh_app_onboarding_progress directly.';

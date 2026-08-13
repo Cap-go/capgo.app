@@ -33,7 +33,11 @@ const appName = computed(() => app.value?.name || orgApp.value?.name || id.value
 const appIcon = computed(() => orgApp.value?.icon_url || '')
 const iconLoading = computed(() => orgApp.value?.icon_url_loading === true)
 
-const ledger = computed(() => parseAppOnboardingLedger(orgApp.value?.onboarding ?? app.value?.onboarding))
+const ledger = computed(() => {
+  const fromOrg = parseAppOnboardingLedger(orgApp.value?.onboarding)
+  const fromApp = parseAppOnboardingLedger(app.value?.onboarding)
+  return (fromOrg.refreshed_at ?? '') >= (fromApp.refreshed_at ?? '') ? fromOrg : fromApp
+})
 const steps = computed(() => buildGettingStartedSteps(ledger.value, { builderDone: builderDone.value }))
 const progress = computed(() => gettingStartedProgress(steps.value))
 const stepGroups = computed(() => {
@@ -107,6 +111,8 @@ watch(() => id.value, async (appId) => {
   const appOrganization = organizationStore.getOrgByAppId(appId)
   if (appOrganization && organizationStore.currentOrganization?.gid !== appOrganization.gid)
     organizationStore.setCurrentOrganization(appOrganization.gid)
+  if (appOrganization)
+    void organizationStore.refreshAppsOnboarding(appOrganization.gid)
   void checkBuilderDone(appId)
 }, { immediate: true })
 </script>
