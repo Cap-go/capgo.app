@@ -10,6 +10,7 @@ import {
   SUPABASE_ANON_KEY,
   SUPABASE_BASE_URL,
   USER_EMAIL,
+  USER_ID,
   USER_PASSWORD,
 } from './test-utils.ts'
 
@@ -174,9 +175,10 @@ describe('app onboarding progress RPCs', () => {
     if (signInError)
       throw signInError
 
-    await authClient.from('apps').insert({
+    const { error: insertError } = await authClient.from('apps').insert({
       app_id: APP_INSERT,
       owner_org: ORG_ID,
+      user_id: USER_ID,
       name: 'Onboarding insert protection test app',
       icon_url: 'https://example.com/icon.png',
       onboarding: {
@@ -188,16 +190,16 @@ describe('app onboarding progress RPCs', () => {
         },
       },
     })
+    expect(insertError).toBeNull()
 
     const { data, error: readError } = await serviceRoleSupabase
       .from('apps')
       .select('onboarding')
       .eq('app_id', APP_INSERT)
-      .maybeSingle()
+      .single()
     expect(readError).toBeNull()
-    if (!data)
-      return
-    const ledger = parseAppOnboardingLedger(data.onboarding)
+    expect(data).toBeTruthy()
+    const ledger = parseAppOnboardingLedger(data?.onboarding)
     expect(ledger.features?.ota?.succeeded_at).toBeFalsy()
     expect(ledger.features?.ota?.stage).not.toBe('store_live')
   })
