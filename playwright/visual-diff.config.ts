@@ -62,11 +62,6 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
   { slug: 'observe-compatibility', path: '/app/com.demo.app/observe/compatibility', auth: true },
   { slug: 'observe-plugins', path: '/app/com.demo.app/observe/plugins', auth: true },
   {
-    slug: 'bundle-detail',
-    path: '/app/com.demo.app/bundle/3',
-    auth: true,
-  },
-  {
     slug: 'channel-statistics',
     path: '/app/com.demo.app/channel/1/statistics',
     auth: true,

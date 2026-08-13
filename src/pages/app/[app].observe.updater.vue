@@ -291,15 +291,29 @@ watchEffect(async () => {
     <PageLoader v-if="isLoading" />
     <div v-else-if="app" class="w-full h-full px-4 pt-0 mx-auto mb-8 sm:px-6 md:pt-8 lg:px-8 max-w-9xl max-h-fit">
       <div class="flex flex-col gap-6">
-        <BundleAdoptionCard
-          v-for="channel in publicChannels"
-          :key="channel.id"
-          :app-id="id"
-          :version-name="channel.versionName"
-          :linked-channel-id="channel.id"
-          :linked-channel-name="channel.name"
-          compact
-        />
+        <section
+          v-if="publicChannels.length"
+          class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700"
+        >
+          <div class="mb-1">
+            <h3 class="text-lg font-semibold text-slate-900 dark:text-white">
+              {{ t('bundle-adoption') }}
+            </h3>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
+              {{ t('bundle-adoption-observe-help') }}
+            </p>
+          </div>
+          <div class="divide-y divide-slate-100 dark:divide-slate-700">
+            <BundleAdoptionCard
+              v-for="channel in publicChannels"
+              :key="channel.id"
+              :app-id="id"
+              :version-name="channel.versionName"
+              :linked-channel-id="channel.id"
+              :linked-channel-name="channel.name"
+            />
+          </div>
+        </section>
         <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div class="min-w-0">
             <h3 class="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">

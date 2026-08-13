@@ -97,16 +97,6 @@ watch([() => channels.value, () => promotableChannelIds.value], () => {
 
 const canPromoteBundle = computed(() => promotableChannelIds.value.size > 0)
 
-const linkedChannelsForVersion = computed(() => {
-  if (!version.value)
-    return []
-  return channels.value.filter(channel =>
-    channel.version === version.value!.id || channel.rollout_version === version.value!.id,
-  )
-})
-
-const primaryLinkedChannel = computed(() => linkedChannelsForVersion.value[0] ?? null)
-
 const canEditBundleMetadata = computedAsync(async () => {
   if (!version.value?.app_id)
     return false
@@ -826,12 +816,6 @@ async function deleteBundle() {
       <div id="devices" class="mt-0 md:mt-8">
         <div class="w-full h-full px-0 pt-0 mx-auto mb-8 overflow-y-auto sm:px-6 md:pt-8 lg:px-8 max-w-9xl max-h-fit">
           <div class="flex flex-col gap-4">
-            <BundleAdoptionCard
-              :app-id="packageId"
-              :version-name="version.name"
-              :linked-channel-id="primaryLinkedChannel?.id ?? null"
-              :linked-channel-name="primaryLinkedChannel?.name ?? null"
-            />
             <div
               class="flex flex-col overflow-hidden overflow-y-auto bg-white border shadow-lg md:rounded-lg border-slate-300 dark:border-slate-900 dark:bg-slate-800"
             >
