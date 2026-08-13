@@ -40,10 +40,16 @@ describe('app onboarding progress analytics integration', () => {
 
   it.concurrent('tracks AI instruction and CLI copy actions', () => {
     const copyActions = sourceBetween('async function copyText(', 'function goToInstallStep()')
+    const clipboardWriteIndex = copyActions.indexOf('await navigator.clipboard.writeText(text)')
+    const actionTrackIndex = copyActions.indexOf('progressTracker?.trackActionEvent(event)')
+    const catchIndex = copyActions.indexOf('catch (error)')
     expect(copyActions).toContain("trackActionEvent('onboarding_ai_instructions_copy_clicked')")
     expect(copyActions).toContain("'onboarding_ai_instructions_copied_with_api_key'")
     expect(copyActions).toContain("'onboarding_ai_instructions_copied_without_api_key'")
     expect(copyActions).toContain("'onboarding_cli_init_command_copied'")
+    expect(clipboardWriteIndex).toBeGreaterThanOrEqual(0)
+    expect(actionTrackIndex).toBeGreaterThan(clipboardWriteIndex)
+    expect(actionTrackIndex).toBeLessThan(catchIndex)
   })
 
   it.concurrent('keeps the unload warning scoped to unfinished pre-org onboarding', () => {
