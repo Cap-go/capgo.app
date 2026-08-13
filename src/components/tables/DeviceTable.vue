@@ -81,7 +81,7 @@ const dateRangeLabel = computed(() => {
     return t('date-range')
   return t(DATE_RANGE_PRESET_LABEL_KEYS[mode])
 })
-const showRangeFilterBanner = computed(() => unfilteredTotal.value !== null && unfilteredTotal.value > 0)
+const showRangeFilterBanner = computed(() => unfilteredTotal.value !== null && total.value < unfilteredTotal.value)
 
 function clearExtraFilters() {
   // Values only — DataTable clear emits a filters update that triggers the single reload.
@@ -600,6 +600,8 @@ watch(() => props.appId, async (appId) => {
   cancelScheduledReload()
   // Invalidate in-flight reloads from the previous app before awaiting.
   activeLoadId.value += 1
+  total.value = 0
+  unfilteredTotal.value = null
   skipFilterReload.value = true
   selectedPlatform.value = ''
   selectedVersionNames.value = props.versionName ? [props.versionName] : []
