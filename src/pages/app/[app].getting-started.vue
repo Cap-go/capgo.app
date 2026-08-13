@@ -110,8 +110,8 @@ function runStep(step: GettingStartedStep) {
   builderModalOpen.value = true
 }
 
-function onStoreReleaseApplied() {
-  markStoreReleaseValidated(userId.value, id.value)
+function onStoreReleaseApplied(appId: string) {
+  markStoreReleaseValidated(userId.value, appId)
 }
 
 watch(() => id.value, async (appId) => {

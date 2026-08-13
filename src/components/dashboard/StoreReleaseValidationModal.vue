@@ -18,7 +18,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  applied: []
+  applied: [appId: string]
 }>()
 
 const RELEASE_INSTALL_SOURCES = ['app_store']
@@ -56,7 +56,6 @@ const hasDeviceCountError = ref(false)
 const channels = ref<ReleaseChannel[]>([])
 const selectedChannelId = ref<number | null>(null)
 const setupError = ref('')
-const setupSuccess = ref('')
 const setupForm = ref({
   allowProd: true,
   allowDevice: true,
@@ -78,7 +77,6 @@ function resetStatus() {
   channels.value = []
   selectedChannelId.value = null
   setupError.value = ''
-  setupSuccess.value = ''
 }
 
 function clearStatusRetry() {
@@ -364,7 +362,6 @@ function closeModal() {
   isOpen.value = false
   hasConfirmedPublished.value = false
   setupError.value = ''
-  setupSuccess.value = ''
 }
 
 function openModal() {
@@ -384,7 +381,6 @@ function confirmPublished() {
 async function loadChannels() {
   isLoadingChannels.value = true
   setupError.value = ''
-  setupSuccess.value = ''
   try {
     const { data, error } = await supabase
       .from('channels')
@@ -408,6 +404,7 @@ async function loadChannels() {
 }
 
 async function applyProductionSetup() {
+  const appliedAppId = props.appId
   const channel = selectedChannel.value
   if (!channel) {
     setupError.value = t('store-release-validation-setup-empty')
@@ -420,7 +417,6 @@ async function applyProductionSetup() {
   }
 
   setupError.value = ''
-  setupSuccess.value = ''
   isApplyingSetup.value = true
   try {
     const selectedPlatformSet = new Set(selectedChannelPlatforms.value)
@@ -435,7 +431,7 @@ async function applyProductionSetup() {
     const { error: selectedError } = await supabase
       .from('channels')
       .update(selectedUpdate)
-      .eq('app_id', props.appId)
+      .eq('app_id', appliedAppId)
       .eq('id', channel.id)
 
     if (selectedError) {
@@ -459,7 +455,7 @@ async function applyProductionSetup() {
       const { error: publicError } = await supabase
         .from('channels')
         .update({ public: false })
-        .eq('app_id', props.appId)
+        .eq('app_id', appliedAppId)
         .in('id', disablePublicChannelIds)
 
       if (publicError) {
@@ -488,7 +484,7 @@ async function applyProductionSetup() {
         public: shouldDisablePublic ? false : current.public,
       }
     })
-    emit('applied')
+    emit('applied', appliedAppId)
     closeModal()
   }
   finally {
@@ -656,9 +652,6 @@ onUnmounted(() => {
 
             <p v-if="setupError" class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-400/20 dark:bg-red-400/10 dark:text-red-200">
               {{ setupError }}
-            </p>
-            <p v-if="setupSuccess" class="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-400/20 dark:bg-emerald-400/10 dark:text-emerald-100">
-              {{ setupSuccess }}
             </p>
           </div>
         </div>
