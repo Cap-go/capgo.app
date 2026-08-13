@@ -54,11 +54,11 @@ interface FrontendOnboardingAttemptRow {
   details_ms: number | null
   organization_ms: number | null
   setup_ms: number | null
-  interaction_events: string[]
+  interaction_events: Array<[event_name: string, timestamp_ms: number]>
 }
 ```
 
-`interaction_events` contains the unique relevant v2 interaction event names observed for the attempt. Repeated copies of the same event in one attempt do not increase its node count.
+`interaction_events` contains relevant v2 interaction names paired with their event timestamps. The row mapper drops malformed tuples and invalid timestamps. The reducer then keeps only tuples from the attempt's inclusive Intent-to-24-hour follow-up window and deduplicates their event names, so repeated copies of one event in an attempt increase its node count only once.
 
 The query retains the current protections:
 
@@ -179,6 +179,7 @@ Focused tests cover:
 
 - HogQL includes versions 1 and 2 and groups by version plus attempt ID;
 - repeated interaction events in one attempt count once;
+- interaction events before Intent or after the 24-hour attempt window do not count;
 - daily attempts split v1 and v2 and zero-fill dates;
 - v1 and v2 funnels use the expected attempt cohorts;
 - KPI cards use v2 only;

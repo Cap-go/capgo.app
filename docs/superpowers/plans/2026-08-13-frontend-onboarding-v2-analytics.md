@@ -83,7 +83,7 @@ expect(result.v2_graph.nodes).toEqual([
 ])
 ```
 
-Include the same interaction event twice in one attempt fixture and assert its count remains one for that attempt. Include a v1 attempt with the same interaction string and assert it is ignored by `v2_graph`.
+Include the same interaction key twice with valid timestamps in one attempt fixture and assert its count remains one for that attempt. Include before-Intent and after-24-hour tuples and assert they are excluded. Include a v1 attempt with the same interaction key and assert it is ignored by `v2_graph`.
 
 - [ ] **Step 3: Run the model tests and confirm the old shape fails**
 
@@ -232,12 +232,12 @@ git commit -m "feat(admin): aggregate onboarding analytics by version"
 
 - [ ] **Step 1: Write failing HogQL contract tests**
 
-Update the query test to require both versions, grouping by version and attempt ID, and one unique interaction-event array:
+Update the query test to require both versions, grouping by version and attempt ID, and one timestamped interaction-event tuple array:
 
 ```ts
 expect(query).toContain('toIntOrZero(toString(properties.onboarding_version)) IN (1, 2)')
 expect(query).toContain('GROUP BY onboarding_version, attempt_id')
-expect(query).toContain("groupUniqArrayIf(event, event != 'onboarding_step_viewed') AS interaction_events")
+expect(query).toContain("groupUniqArrayIf(tuple(event, toUnixTimestamp64Milli(timestamp)), event != 'onboarding_step_viewed') AS interaction_events")
 expect(query).toContain("event = 'onboarding_step_viewed'")
 expect(query).toContain("event IN ('onboarding_app_id_entered'")
 ```
@@ -246,7 +246,7 @@ Retain assertions for strict date interpolation, Intent cohorting, ordering, the
 
 - [ ] **Step 2: Write failing row-mapping tests**
 
-Return PostHog rows for v1 and v2 and assert the endpoint response contains split analytics. Include repeated interaction names in `interaction_events` to prove the pure reducer deduplicates them:
+Return PostHog rows for v1 and v2 and assert the endpoint response contains split analytics. Include repeated event-name tuples with valid timestamps in `interaction_events` to prove the pure reducer deduplicates names after window filtering:
 
 ```ts
 {
@@ -258,14 +258,14 @@ Return PostHog rows for v1 and v2 and assert the endpoint response contains spli
   organization_ms: currentStartMs + 3_000,
   setup_ms: currentStartMs + 4_000,
   interaction_events: [
-    'onboarding_app_name_entered',
-    'onboarding_app_name_entered',
-    'onboarding_store_import_shown',
+    ['onboarding_app_name_entered', currentStartMs + 2_100],
+    ['onboarding_app_name_entered', currentStartMs + 2_200],
+    ['onboarding_store_import_shown', currentStartMs + 2_300],
   ],
 }
 ```
 
-Assert malformed versions and non-array `interaction_events` rows are ignored or mapped to an empty interaction list without throwing. Keep the attempt total fail-closed assertions.
+Assert malformed versions and non-array `interaction_events` rows are ignored or mapped to an empty interaction list without throwing. Also assert malformed tuples, blank event names, and invalid or missing timestamps are dropped defensively. Keep the attempt total fail-closed assertions.
 
 - [ ] **Step 3: Run the transport tests and confirm they fail**
 
