@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 import {
   buildFrontendOnboardingDailySeries,
+  buildFrontendOnboardingDailyConversionPoints,
   buildFrontendOnboardingFunnelStages,
   buildFrontendOnboardingFunnelSummaries,
   buildFrontendOnboardingGraphMetrics,
@@ -43,6 +44,18 @@ describe('admin frontend onboarding dashboard', () => {
       { date: '2026-08-10', v1_attempts: 6, v2_attempts: 3 },
       { date: '2026-08-09', v1_attempts: 4, v2_attempts: 2 },
     ],
+    daily_conversions: {
+      intent_to_details: [
+        { date: '2026-08-09', started: 5, converted: 4, conversion_percent: 80 },
+        { date: '2026-08-10', started: 0, converted: 0, conversion_percent: null },
+      ],
+      details_to_organization: [
+        { date: '2026-08-09', started: 4, converted: 3, conversion_percent: 75 },
+      ],
+      organization_to_setup: [
+        { date: '2026-08-09', started: 3, converted: 2, conversion_percent: 2 / 3 * 100 },
+      ],
+    },
     funnels: {
       v1: [
         { key: 'intent', label: 'Intent', reached: 10, of_start_percent: 100, dropoff_percent: 0 },
@@ -90,6 +103,13 @@ describe('admin frontend onboarding dashboard', () => {
     expect(buildFrontendOnboardingDailySeries([], 'V1', 'V2')).toEqual([
       { label: 'V1', color: '#a78bfa', data: [] },
       { label: 'V2', color: '#06b6d4', data: [] },
+    ])
+  })
+
+  it.concurrent('adapts daily conversions without inventing values for empty denominators', () => {
+    expect(buildFrontendOnboardingDailyConversionPoints(analytics.daily_conversions.intent_to_details)).toEqual([
+      { date: '2026-08-09', started: 5, converted: 4, conversion_percent: 80 },
+      { date: '2026-08-10', started: 0, converted: 0, conversion_percent: null },
     ])
   })
 
@@ -369,8 +389,9 @@ describe('admin frontend onboarding dashboard', () => {
     expect(source).toContain('<PageLoader')
     expect(source.match(/<AdminFilterBar(?:\s|\/?>)/g)).toHaveLength(1)
     expect(source.match(/<AdminStatsCard(?:\s|\/?>)/g)).toHaveLength(4)
-    expect(source.match(/<ChartCard(?:\s|\/?>)/g)).toHaveLength(1)
+    expect(source.match(/<ChartCard(?:\s|\/?>)/g)).toHaveLength(4)
     expect(source.match(/<AdminStackedBarChart(?:\s|\/?>)/g)).toHaveLength(1)
+    expect(source.match(/<AdminDailyConversionChart(?:\s|\/?>)/g)).toHaveLength(3)
     expect(source.match(/<AdminFunnelChart(?:\s|\/?>)/g)).toHaveLength(2)
     expect(source.match(/<AdminOnboardingJourneyGraph(?:\s|\/?>)/g)).toHaveLength(1)
     expect(source).toContain('<AdminOnboardingJourneyGraph v-else :config="onboardingGraphV2" />')
@@ -387,9 +408,16 @@ describe('admin frontend onboarding dashboard', () => {
     expect(template).not.toContain('of_start_percent')
 
     const v2FunnelIndex = source.indexOf(`t('frontend-onboarding-funnel-v2')`)
+    const intentDetailsChartIndex = source.indexOf(`t('frontend-onboarding-daily-intent-to-details')`)
+    const detailsOrganizationChartIndex = source.indexOf(`t('frontend-onboarding-daily-details-to-organization')`)
+    const organizationSetupChartIndex = source.indexOf(`t('frontend-onboarding-daily-organization-to-setup')`)
     const graphIndex = source.indexOf(`t('frontend-onboarding-graph-v2')`)
     const legacyIndex = source.indexOf(`t('frontend-onboarding-funnel-v1-legacy')`)
     expect(v2FunnelIndex).toBeLessThan(graphIndex)
+    expect(v2FunnelIndex).toBeLessThan(intentDetailsChartIndex)
+    expect(intentDetailsChartIndex).toBeLessThan(detailsOrganizationChartIndex)
+    expect(detailsOrganizationChartIndex).toBeLessThan(organizationSetupChartIndex)
+    expect(organizationSetupChartIndex).toBeLessThan(graphIndex)
     expect(graphIndex).toBeLessThan(legacyIndex)
     expect(source).not.toContain('id: \'organization_name\'')
     expect(source).not.toContain('id: \'organization_size\'')
@@ -456,6 +484,11 @@ describe('admin frontend onboarding dashboard', () => {
     expect(messages['frontend-onboarding-median-time-subtitle']).toBe('Completed attempts only')
     expect(messages['frontend-onboarding-largest-dropoff']).toBe('Largest drop-off')
     expect(messages['frontend-onboarding-daily-attempts']).toBe('Daily onboarding attempts')
+    expect(messages['frontend-onboarding-daily-intent-to-details']).toBe('Daily Intent → App details conversion')
+    expect(messages['frontend-onboarding-daily-details-to-organization']).toBe('Daily App details → Organization conversion (v2)')
+    expect(messages['frontend-onboarding-daily-organization-to-setup']).toBe('Daily Organization → Setup reached conversion (v2)')
+    expect(messages['frontend-onboarding-daily-conversion']).toBe('Conversion')
+    expect(messages['frontend-onboarding-daily-conversion-attempts']).toBe('attempts')
     expect(messages['frontend-onboarding-funnel-v2']).toBe('Frontend onboarding funnel (v2)')
     expect(messages['frontend-onboarding-funnel-v1-legacy']).toBe('Frontend onboarding funnel (v1, legacy)')
     expect(messages['frontend-onboarding-demo-data']).toBeUndefined()

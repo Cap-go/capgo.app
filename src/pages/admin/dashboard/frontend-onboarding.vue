@@ -9,6 +9,7 @@ import type { FrontendOnboardingAnalytics } from '~/services/adminFrontendOnboar
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
+import AdminDailyConversionChart from '~/components/admin/AdminDailyConversionChart.vue'
 import AdminFilterBar from '~/components/admin/AdminFilterBar.vue'
 import AdminFunnelChart from '~/components/admin/AdminFunnelChart.vue'
 import AdminOnboardingJourneyGraph from '~/components/admin/AdminOnboardingJourneyGraph.vue'
@@ -17,6 +18,7 @@ import AdminStatsCard from '~/components/admin/AdminStatsCard.vue'
 import ChartCard from '~/components/dashboard/ChartCard.vue'
 import PageLoader from '~/components/PageLoader.vue'
 import {
+  buildFrontendOnboardingDailyConversionPoints,
   buildFrontendOnboardingDailySeries,
   buildFrontendOnboardingFunnelStages,
   buildFrontendOnboardingFunnelSummaries,
@@ -104,6 +106,16 @@ const dailySeries = computed(() => buildFrontendOnboardingDailySeries(
   t('frontend-onboarding-version-1'),
   t('frontend-onboarding-version-2'),
 ))
+const intentToDetailsDaily = computed(() => buildFrontendOnboardingDailyConversionPoints(
+  visibleAnalytics.value?.daily_conversions.intent_to_details ?? [],
+))
+const detailsToOrganizationDaily = computed(() => buildFrontendOnboardingDailyConversionPoints(
+  visibleAnalytics.value?.daily_conversions.details_to_organization ?? [],
+))
+const organizationToSetupDaily = computed(() => buildFrontendOnboardingDailyConversionPoints(
+  visibleAnalytics.value?.daily_conversions.organization_to_setup ?? [],
+))
+const hasConversionData = (points: readonly { started: number }[]) => points.some(point => point.started > 0)
 const v1FunnelStages = computed(() => buildFrontendOnboardingFunnelStages(visibleAnalytics.value?.funnels.v1 ?? []))
 const v2FunnelStages = computed(() => buildFrontendOnboardingFunnelStages(visibleAnalytics.value?.funnels.v2 ?? []))
 const v1FunnelSummaries = computed(() => buildFrontendOnboardingFunnelSummaries(visibleAnalytics.value?.funnels.v1 ?? []))
@@ -366,6 +378,48 @@ displayStore.defaultBack = '/dashboard'
               </div>
             </div>
           </section>
+
+          <ChartCard
+            :title="t('frontend-onboarding-daily-intent-to-details')"
+            :is-loading="isLoadingStats"
+            :has-data="hasConversionData(intentToDetailsDaily)"
+          >
+            <AdminDailyConversionChart
+              :points="intentToDetailsDaily"
+              :label="t('frontend-onboarding-daily-conversion')"
+              :attempts-label="t('frontend-onboarding-daily-conversion-attempts')"
+              color="#6366f1"
+              :is-loading="isLoadingStats"
+            />
+          </ChartCard>
+
+          <ChartCard
+            :title="t('frontend-onboarding-daily-details-to-organization')"
+            :is-loading="isLoadingStats"
+            :has-data="hasConversionData(detailsToOrganizationDaily)"
+          >
+            <AdminDailyConversionChart
+              :points="detailsToOrganizationDaily"
+              :label="t('frontend-onboarding-daily-conversion')"
+              :attempts-label="t('frontend-onboarding-daily-conversion-attempts')"
+              color="#8b5cf6"
+              :is-loading="isLoadingStats"
+            />
+          </ChartCard>
+
+          <ChartCard
+            :title="t('frontend-onboarding-daily-organization-to-setup')"
+            :is-loading="isLoadingStats"
+            :has-data="hasConversionData(organizationToSetupDaily)"
+          >
+            <AdminDailyConversionChart
+              :points="organizationToSetupDaily"
+              :label="t('frontend-onboarding-daily-conversion')"
+              :attempts-label="t('frontend-onboarding-daily-conversion-attempts')"
+              color="#10b981"
+              :is-loading="isLoadingStats"
+            />
+          </ChartCard>
 
           <section class="overflow-hidden rounded-[1.75rem] border border-slate-200/80 bg-white/95 p-5 shadow-[0_20px_60px_-38px_rgba(15,23,42,0.3)] dark:border-slate-700/70 dark:bg-slate-900/85 sm:p-6">
             <div>
