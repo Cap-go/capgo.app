@@ -205,6 +205,15 @@ watchEffect(async () => {
             />
             <DevicesStats
               :app-id="id"
+              usage-kind="bundle"
+              :use-billing-period="usageComponent?.useBillingPeriod ?? true"
+              :accumulated="false"
+              :reload-trigger="usageComponent?.reloadTrigger ?? 0"
+              :force-demo="appNotFound"
+              class="col-span-full sm:col-span-6 xl:col-span-4"
+            />
+            <DevicesStats
+              :app-id="id"
               usage-kind="native"
               :use-billing-period="usageComponent?.useBillingPeriod ?? true"
               :accumulated="false"

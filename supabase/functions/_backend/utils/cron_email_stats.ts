@@ -215,3 +215,32 @@ export function shouldRetryDeployInstallStats(deployedAt: Date, now: Date = new 
 export function shouldSendDeployInstallStatsEmail(installs: number): boolean {
   return installs > 1
 }
+
+export interface DeviceVersionAdoptionSummary {
+  device_count: number
+  total_devices: number
+  adoption_percent: string
+}
+
+/** Live unique-device reach for a deployed bundle from version_name counts. */
+export function summarizeDeviceVersionAdoption(
+  counts: Record<string, number | string | null | undefined>,
+  versionName?: string | null,
+  versionId?: number | null,
+): DeviceVersionAdoptionSummary {
+  const totalDevices = Object.values(counts).reduce<number>((sum, value) => {
+    return sum + Math.max(0, Math.round(toStatNumber(value)))
+  }, 0)
+  const namedCount = versionName ? counts[versionName] : undefined
+  const idCount = versionId != null ? counts[String(versionId)] : undefined
+  const deviceCount = Math.max(0, Math.round(toStatNumber(namedCount ?? idCount ?? 0)))
+  const adoptionPercent = totalDevices > 0
+    ? (Math.round((deviceCount / totalDevices) * 1000) / 10).toFixed(1)
+    : '0.0'
+
+  return {
+    device_count: deviceCount,
+    total_devices: totalDevices,
+    adoption_percent: adoptionPercent,
+  }
+}
