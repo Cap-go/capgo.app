@@ -81,6 +81,7 @@ declare module 'vue' {
     InviteTeammateModal: typeof import('./components/dashboard/InviteTeammateModal.vue')['default']
     LangSelector: typeof import('./components/LangSelector.vue')['default']
     LineChartStats: typeof import('./components/dashboard/LineChartStats.vue')['default']
+    LogMetadataPopover: typeof import('./components/tables/LogMetadataPopover.vue')['default']
     LogTable: typeof import('./components/tables/LogTable.vue')['default']
     Navbar: typeof import('./components/Navbar.vue')['default']
     OnboardingExploreBanner: typeof import('./components/dashboard/OnboardingExploreBanner.vue')['default']
