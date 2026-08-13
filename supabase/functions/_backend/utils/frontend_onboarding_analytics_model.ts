@@ -11,7 +11,12 @@ export interface FrontendOnboardingAttempt {
   detailsMs: number | null
   organizationMs: number | null
   setupMs: number | null
-  interactionEvents: string[]
+  interactionEvents: FrontendOnboardingInteractionEvent[]
+}
+
+export interface FrontendOnboardingInteractionEvent {
+  key: string
+  timestampMs: number
 }
 
 export interface FrontendOnboardingFunnelStage {
@@ -190,8 +195,11 @@ function buildDailyAttempts(attempts: FrontendOnboardingAttempt[], startMs: numb
 function buildV2Graph(attempts: FrontendOnboardingAttempt[]): Array<{ key: string, count: number }> {
   const counts = new Map<string, number>()
   for (const attempt of attempts) {
-    for (const event of new Set(attempt.interactionEvents))
-      counts.set(event, (counts.get(event) ?? 0) + 1)
+    const eventKeys = new Set(attempt.interactionEvents
+      .filter(event => isStepInFollowupWindow(event.timestampMs, attempt.intentMs))
+      .map(event => event.key))
+    for (const eventKey of eventKeys)
+      counts.set(eventKey, (counts.get(eventKey) ?? 0) + 1)
   }
 
   return [...counts.entries()]

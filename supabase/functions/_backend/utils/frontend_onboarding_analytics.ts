@@ -1,5 +1,5 @@
 import type { Context } from 'hono'
-import type { FrontendOnboardingAttempt, FrontendOnboardingVersion } from './frontend_onboarding_analytics_model.ts'
+import type { FrontendOnboardingAttempt, FrontendOnboardingInteractionEvent, FrontendOnboardingVersion } from './frontend_onboarding_analytics_model.ts'
 import {
   buildFrontendOnboardingAnalytics,
   FRONTEND_ONBOARDING_FOLLOWUP_MS,
@@ -89,15 +89,16 @@ function onboardingVersion(value: unknown): FrontendOnboardingVersion | null {
     : null
 }
 
-function interactionEvents(value: unknown): string[] {
+function interactionEvents(value: unknown): FrontendOnboardingInteractionEvent[] {
   if (!Array.isArray(value))
     return []
 
   return value.flatMap((event) => {
-    if (typeof event !== 'string' || event.trim() === '')
+    if (!Array.isArray(event) || typeof event[0] !== 'string' || event[0].trim() === '')
       return []
 
-    return [event.trim()]
+    const timestampMs = nullableMs(event[1])
+    return timestampMs === null ? [] : [{ key: event[0].trim(), timestampMs }]
   })
 }
 
@@ -147,7 +148,7 @@ export function buildFrontendOnboardingHogql(startDate: string, cohortEndDate: s
       toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'details')) AS details_ms,
       toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'organization')) AS organization_ms,
       toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'setup')) AS setup_ms,
-      groupUniqArrayIf(event, event != 'onboarding_step_viewed') AS interaction_events
+      groupUniqArrayIf(tuple(event, toUnixTimestamp64Milli(timestamp)), event != 'onboarding_step_viewed') AS interaction_events
     FROM (
       SELECT
         event,

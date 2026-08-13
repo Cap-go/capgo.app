@@ -231,23 +231,30 @@ describe('buildFrontendOnboardingAnalytics', () => {
       attempt({
         attemptId: 'v2-repeated-events',
         intentMs: CURRENT_START_MS,
-        interactionEvents: ['organization_created', 'organization_created', 'app_created'],
+        interactionEvents: [
+          { key: 'organization_created', timestampMs: CURRENT_START_MS + MINUTE_MS },
+          { key: 'organization_created', timestampMs: CURRENT_START_MS + 2 * MINUTE_MS },
+          { key: 'app_created', timestampMs: CURRENT_START_MS + 3 * MINUTE_MS },
+        ],
       }),
       attempt({
         attemptId: 'v2-shared-event',
         intentMs: CURRENT_START_MS + MINUTE_MS,
-        interactionEvents: ['organization_created'],
+        interactionEvents: [{ key: 'organization_created', timestampMs: CURRENT_START_MS + 2 * MINUTE_MS }],
       }),
       attempt({
         attemptId: 'v1-ignored-event',
         intentMs: CURRENT_START_MS + 2 * MINUTE_MS,
         onboardingVersion: 1,
-        interactionEvents: ['v1_only_event', 'organization_created'],
+        interactionEvents: [
+          { key: 'v1_only_event', timestampMs: CURRENT_START_MS + 3 * MINUTE_MS },
+          { key: 'organization_created', timestampMs: CURRENT_START_MS + 3 * MINUTE_MS },
+        ],
       }),
       attempt({
         attemptId: 'previous-v2-event',
         intentMs: CURRENT_START_MS - DAY_MS,
-        interactionEvents: ['previous_event'],
+        interactionEvents: [{ key: 'previous_event', timestampMs: CURRENT_START_MS - DAY_MS + MINUTE_MS }],
       }),
     ], CURRENT_START_MS, CURRENT_END_MS)
 
@@ -256,5 +263,24 @@ describe('buildFrontendOnboardingAnalytics', () => {
       { key: 'app_created', count: 1 },
       { key: 'organization_created', count: 2 },
     ])
+  })
+
+  it.concurrent('excludes interactions outside the same 24-hour attempt window as funnel progress', () => {
+    const intentMs = CURRENT_START_MS + MINUTE_MS
+    const analytics = buildFrontendOnboardingAnalytics([
+      attempt({
+        attemptId: 'windowed-interactions',
+        intentMs,
+        detailsMs: intentMs + MINUTE_MS,
+        interactionEvents: [
+          { key: 'before_intent', timestampMs: intentMs - 1 },
+          { key: 'at_boundary', timestampMs: intentMs + FRONTEND_ONBOARDING_FOLLOWUP_MS },
+          { key: 'after_boundary', timestampMs: intentMs + FRONTEND_ONBOARDING_FOLLOWUP_MS + 1 },
+        ],
+      }),
+    ], CURRENT_START_MS, CURRENT_END_MS)
+
+    expect(analytics.funnels.v2.find(stage => stage.key === 'details')?.reached).toBe(1)
+    expect(analytics.v2_graph.nodes).toEqual([{ key: 'at_boundary', count: 1 }])
   })
 })

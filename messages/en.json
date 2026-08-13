@@ -2898,7 +2898,6 @@
   "frontend-onboarding-graph-percent-of-total": "{percent}% of total",
   "frontend-onboarding-graph-percent-of-previous": "{percent}% of previous",
   "frontend-onboarding-graph-percent-of-parent-stage": "{percent}% of parent stage",
-  "frontend-onboarding-new-users": "New user onboarding",
   "frontend-onboarding-no-dropoff": "No drop-off",
   "frontend-onboarding-transition": "{from} → {to}"
 }

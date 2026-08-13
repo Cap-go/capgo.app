@@ -377,7 +377,10 @@ displayStore.defaultBack = '/dashboard'
               </p>
             </div>
             <div class="mt-5">
-              <AdminOnboardingJourneyGraph :config="onboardingGraphV2" />
+              <div v-if="isLoadingStats" class="grid min-h-72 place-items-center">
+                <span class="d-loading d-loading-spinner d-loading-lg text-primary" />
+              </div>
+              <AdminOnboardingJourneyGraph v-else :config="onboardingGraphV2" />
             </div>
           </section>
 

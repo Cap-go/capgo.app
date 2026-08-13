@@ -61,7 +61,7 @@ describe('buildFrontendOnboardingHogql', () => {
     expect(query).toContain("toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'details'))")
     expect(query).toContain("toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'organization'))")
     expect(query).toContain("toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'setup'))")
-    expect(query).toContain("groupUniqArrayIf(event, event != 'onboarding_step_viewed') AS interaction_events")
+    expect(query).toContain("groupUniqArrayIf(tuple(event, toUnixTimestamp64Milli(timestamp)), event != 'onboarding_step_viewed') AS interaction_events")
     expect(query).toContain('GROUP BY onboarding_version, attempt_id')
     expect(query).toContain('timestamp >= parseDateTimeBestEffort(\'2026-08-01T00:00:00.123Z\')')
     expect(query).toContain('timestamp < parseDateTimeBestEffort(\'2026-08-04T00:00:00.789Z\')')
@@ -99,13 +99,16 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
         details_ms: intentMs + 555,
         organization_ms: intentMs + 1_000,
         setup_ms: intentMs + 2_666,
-        interaction_events: ['onboarding_app_id_entered', 'onboarding_app_id_entered'],
+        interaction_events: [
+          ['onboarding_app_id_entered', intentMs + 100],
+          ['onboarding_app_id_entered', intentMs + 200],
+        ],
         total_attempts: 2,
       }, {
         attempt_id: 'attempt-v1',
         onboarding_version: 1,
         intent_ms: intentMs + 1_000,
-        interaction_events: ['onboarding_store_import_submitted'],
+        interaction_events: [['onboarding_store_import_submitted', intentMs + 1_100]],
         total_attempts: 2,
       }],
     })
@@ -178,7 +181,7 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
         { attempt_id: 'unknown-version', onboarding_version: 3, intent_ms: startMs + 1_000, total_attempts: 10 },
         { attempt_id: 'string-version', onboarding_version: '2', intent_ms: startMs + 1_000, total_attempts: 10 },
         { attempt_id: 'boolean-step', onboarding_version: 2, intent_ms: startMs + 2_000, details_ms: true, organization_ms: [], setup_ms: {}, interaction_events: 'not-an-array', total_attempts: 10 },
-        { attempt_id: 'valid', onboarding_version: 2, intent_ms: String(startMs + 1_000), details_ms: undefined, organization_ms: 0, setup_ms: 'not-a-number', interaction_events: [' valid ', '', '  ', 42, null], total_attempts: 10 },
+        { attempt_id: 'valid', onboarding_version: 2, intent_ms: String(startMs + 1_000), details_ms: undefined, organization_ms: 0, setup_ms: 'not-a-number', interaction_events: [[' valid ', startMs + 2_000], ['', startMs + 2_000], ['missing-time'], 42, null], total_attempts: 10 },
       ],
     })
 

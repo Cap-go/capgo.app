@@ -43,7 +43,7 @@ function attempt(
   detailsMs: number | null,
   organizationMs: number | null,
   setupMs: number | null,
-  interactionEvents: string[] = [],
+  interactionEvents: FrontendOnboardingInteractionEvent[] = [],
 ): FrontendOnboardingAttempt {
   return {
     attemptId,
@@ -78,8 +78,8 @@ expect(result.kpis).toMatchObject({
 
 expect(result.v2_graph.nodes).toEqual([
   { key: 'onboarding_app_name_entered', count: 2 },
-  { key: 'onboarding_store_import_shown', count: 1 },
   { key: 'onboarding_store_import_hidden', count: 1 },
+  { key: 'onboarding_store_import_shown', count: 1 },
 ])
 ```
 
@@ -110,7 +110,12 @@ export interface FrontendOnboardingAttempt {
   detailsMs: number | null
   organizationMs: number | null
   setupMs: number | null
-  interactionEvents: string[]
+  interactionEvents: FrontendOnboardingInteractionEvent[]
+}
+
+export interface FrontendOnboardingInteractionEvent {
+  key: string
+  timestampMs: number
 }
 
 export interface FrontendOnboardingDailyAttempt {
@@ -162,23 +167,25 @@ function buildDailyAttempts(
   startMs: number,
   endMs: number,
 ): FrontendOnboardingDailyAttempt[] {
-  const attemptsByDate = new Map<string, { v1: number, v2: number }>()
+  const attemptsByDate = new Map<string, { v1_attempts: number, v2_attempts: number }>()
   for (const attempt of attempts) {
     const date = utcDate(attempt.intentMs)
-    const counts = attemptsByDate.get(date) ?? { v1: 0, v2: 0 }
-    if (attempt.onboardingVersion === 1)
-      counts.v1++
-    else
-      counts.v2++
+    const counts = attemptsByDate.get(date) ?? { v1_attempts: 0, v2_attempts: 0 }
+    counts[`v${attempt.onboardingVersion}_attempts`]++
     attemptsByDate.set(date, counts)
   }
 
-  // Preserve the existing UTC date loop and emit zero-filled entries.
-  return days.map(date => ({
-    date,
-    v1_attempts: attemptsByDate.get(date)?.v1 ?? 0,
-    v2_attempts: attemptsByDate.get(date)?.v2 ?? 0,
-  }))
+  const days: FrontendOnboardingDailyAttempt[] = []
+  for (let dayStartMs = Date.UTC(
+    new Date(startMs).getUTCFullYear(),
+    new Date(startMs).getUTCMonth(),
+    new Date(startMs).getUTCDate(),
+  ); dayStartMs < endMs; dayStartMs += DAY_MS) {
+    const date = utcDate(dayStartMs)
+    days.push({ date, ...(attemptsByDate.get(date) ?? { v1_attempts: 0, v2_attempts: 0 }) })
+  }
+
+  return days
 }
 ```
 
@@ -188,8 +195,11 @@ Count unique event names once per v2 attempt:
 function buildV2GraphNodes(attempts: FrontendOnboardingAttempt[]): FrontendOnboardingGraphNodeCount[] {
   const counts = new Map<string, number>()
   for (const attempt of attempts) {
-    for (const event of new Set(attempt.interactionEvents))
-      counts.set(event, (counts.get(event) ?? 0) + 1)
+    const eventKeys = new Set(attempt.interactionEvents
+      .filter(event => isStepInFollowupWindow(event.timestampMs, attempt.intentMs))
+      .map(event => event.key))
+    for (const eventKey of eventKeys)
+      counts.set(eventKey, (counts.get(eventKey) ?? 0) + 1)
   }
   return [...counts.entries()]
     .sort(([left], [right]) => left.localeCompare(right))
@@ -306,7 +316,7 @@ SELECT
   toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'details')) AS details_ms,
   toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'organization')) AS organization_ms,
   toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'setup')) AS setup_ms,
-  groupUniqArrayIf(event, event != 'onboarding_step_viewed') AS interaction_events
+  groupUniqArrayIf(tuple(event, toUnixTimestamp64Milli(timestamp)), event != 'onboarding_step_viewed') AS interaction_events
 FROM (
   SELECT
     timestamp,
@@ -341,10 +351,16 @@ function onboardingVersion(value: unknown): 1 | 2 | null {
   return parsed === 1 || parsed === 2 ? parsed : null
 }
 
-function interactionEvents(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((event): event is string => typeof event === 'string' && event.trim() !== '')
-    : []
+function interactionEvents(value: unknown): FrontendOnboardingInteractionEvent[] {
+  if (!Array.isArray(value))
+    return []
+
+  return value.flatMap((event) => {
+    if (!Array.isArray(event) || typeof event[0] !== 'string' || event[0].trim() === '')
+      return []
+    const timestampMs = nullableMs(event[1])
+    return timestampMs === null ? [] : [{ key: event[0].trim(), timestampMs }]
+  })
 }
 ```
 
