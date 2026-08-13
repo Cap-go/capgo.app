@@ -227,7 +227,7 @@ export function summarizeDeviceVersionAdoption(
   counts: Record<string, number | string | null | undefined>,
   versionName?: string | null,
 ): DeviceVersionAdoptionSummary {
-  const totalDevices = Object.values(counts).reduce((sum, value) => {
+  const totalDevices = Object.values(counts).reduce<number>((sum, value) => {
     return sum + Math.max(0, Math.round(toStatNumber(value)))
   }, 0)
   const deviceCount = versionName
