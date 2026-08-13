@@ -137,6 +137,32 @@ describe('onboarding progress analytics', () => {
     )
   })
 
+  it.concurrent('associates copy actions with the active onboarding step', () => {
+    const capture = vi.fn()
+    const tracker = createOnboardingProgressTracker({
+      capture,
+      flow: 'existing_org',
+      resumed: true,
+      steps: ['details', 'choice', 'install'],
+      supaHost: 'https://supabase.capgo.test',
+    })
+
+    tracker.viewStep('install')
+    tracker.trackActionEvent('onboarding_cli_init_command_copied')
+
+    expect(capture).toHaveBeenLastCalledWith(
+      'onboarding_cli_init_command_copied',
+      'https://supabase.capgo.test',
+      expect.objectContaining({
+        flow: 'existing_org',
+        onboarding_attempt_id: expect.any(String),
+        onboarding_version: 2,
+        resumed: true,
+        step: 'install',
+      }),
+    )
+  })
+
   it.concurrent('deduplicates completion for one visit and resets timing after back navigation', () => {
     let now = 10
     const capture = vi.fn()

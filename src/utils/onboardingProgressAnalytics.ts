@@ -5,6 +5,11 @@ export const ONBOARDING_ANALYTICS_VERSION = 2
 export type OnboardingAnalyticsFlow = 'pre_org' | 'existing_org'
 export type OnboardingAnalyticsStep = 'intent' | 'details' | 'organization' | 'choice' | 'install' | 'setup'
 export type OnboardingIntent = 'ota' | 'builder' | 'both' | 'exploring'
+export type OnboardingActionEvent
+  = | 'onboarding_ai_instructions_copy_clicked'
+    | 'onboarding_ai_instructions_copied_with_api_key'
+    | 'onboarding_ai_instructions_copied_without_api_key'
+    | 'onboarding_cli_init_command_copied'
 export type OnboardingDetailsEvent
   = | 'onboarding_app_id_entered'
     | 'onboarding_app_id_help_opened'
@@ -172,8 +177,18 @@ export function createOnboardingProgressTracker(options: CreateOnboardingProgres
     safelyCapture(name, { ...properties, ...details })
   }
 
+  function trackActionEvent(name: OnboardingActionEvent) {
+    if (!activeStep)
+      return
+
+    const properties = sharedProperties(activeStep)
+    if (properties)
+      safelyCapture(name, properties)
+  }
+
   return {
     completeStep,
+    trackActionEvent,
     trackDetailsEvent,
     viewStep,
   }

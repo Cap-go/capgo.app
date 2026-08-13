@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { Database } from '~/types/supabase.types'
 import type {
+  OnboardingActionEvent,
   OnboardingDetailsEvent,
   OnboardingDetailsEventProperties,
   OnboardingIntent,
@@ -980,9 +981,11 @@ async function seedDemoData() {
   }
 }
 
-async function copyText(text: string) {
+async function copyText(text: string, event?: OnboardingActionEvent) {
   try {
     await navigator.clipboard.writeText(text)
+    if (event)
+      progressTracker?.trackActionEvent(event)
     toast.success(t('copied-to-clipboard'))
   }
   catch (error) {
@@ -1005,10 +1008,11 @@ async function copyCliCommand() {
   if (!apiKey.value)
     return
 
-  await copyText(cliCommand.value)
+  await copyText(cliCommand.value, 'onboarding_cli_init_command_copied')
 }
 
 async function copyAiInstructions() {
+  progressTracker?.trackActionEvent('onboarding_ai_instructions_copy_clicked')
   try {
     await loadApiKey()
   }
@@ -1025,13 +1029,13 @@ async function copyAiInstructions() {
       {
         text: t('app-onboarding-ai-help-copy-without-key'),
         role: 'secondary',
-        handler: () => copyText(createAiHelpPrompt(redactedCliCommand.value)),
+        handler: () => copyText(createAiHelpPrompt(redactedCliCommand.value), 'onboarding_ai_instructions_copied_without_api_key'),
       },
       {
         text: t('app-onboarding-ai-help-copy-with-key'),
         role: 'primary',
         disabled: !apiKey.value,
-        handler: () => copyText(createAiHelpPrompt(cliCommand.value)),
+        handler: () => copyText(createAiHelpPrompt(cliCommand.value), 'onboarding_ai_instructions_copied_with_api_key'),
       },
     ],
   })
