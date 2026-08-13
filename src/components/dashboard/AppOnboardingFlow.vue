@@ -1012,7 +1012,7 @@ function trackSuccessfulCopy(event: OnboardingCopyEvent) {
   if (event !== 'onboarding_ai_instructions_copied' || !properties || !orgId || !appId)
     return
 
-  sendEvent({
+  void sendEvent({
     channel: 'onboarding',
     event,
     icon: '🤖',

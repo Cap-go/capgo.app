@@ -224,7 +224,7 @@ function trackSuccessfulCopy(event: OnboardingCopyEvent) {
   if (event !== 'onboarding_ai_instructions_copied' || !properties || !orgId || !appId)
     return
 
-  sendEvent({
+  void sendEvent({
     channel: 'onboarding',
     event,
     icon: '🤖',
@@ -444,14 +444,21 @@ interface AiInstructionsCopiedInput {
   orgId?: string
 }
 
+const onboardingAttemptIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
 export function isFrontendPosthogCapturedEvent(event: string) {
   return event === AI_INSTRUCTIONS_COPIED_EVENT
 }
 
 export function buildAiInstructionsCopiedBentoEvent(input: AiInstructionsCopiedInput): BentoTrackingPayload | undefined {
   const attemptId = input.nonPersonTags?.onboarding_attempt_id
-  if (!isFrontendPosthogCapturedEvent(input.event) || !input.orgId || !input.appId || typeof attemptId !== 'string' || !/^[0-9a-f-]{36}$/i.test(attemptId))
+  if (!isFrontendPosthogCapturedEvent(input.event)
+    || !input.orgId
+    || !input.appId
+    || typeof attemptId !== 'string'
+    || !onboardingAttemptIdPattern.test(attemptId)) {
     return undefined
+  }
 
   const context = input.nonPersonTags ?? {}
   return {
