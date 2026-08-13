@@ -340,14 +340,14 @@ columns.value = [
     label: t('created-at'),
     key: 'created_at',
     mobile: true,
-    class: 'whitespace-nowrap',
+    class: 'w-[15%] whitespace-nowrap md:px-3!',
     sortable: 'desc',
     displayFunction: (elem: Element) => formatDate(elem.created_at ?? ''),
   },
   {
     label: t('device-id'),
     key: 'device_id',
-    class: 'truncate max-w-40',
+    class: 'w-[33%] truncate',
     mobile: true,
     sortable: true,
     head: true,
@@ -356,7 +356,7 @@ columns.value = [
   {
     label: t('version'),
     key: 'version_name',
-    class: 'whitespace-nowrap',
+    class: 'w-[8%] whitespace-nowrap md:px-3!',
     mobile: false,
     sortable: false,
     displayFunction: (elem: Element) => {
@@ -371,16 +371,16 @@ columns.value = [
     label: t('action'),
     key: 'action',
     mobile: true,
-    class: 'min-w-64',
+    class: 'w-[44%] min-w-0',
     sortable: true,
     head: true,
     displayFunction: (elem: Element) => formatAction(elem),
     renderFunction: (elem: Element) => {
       const actionLabel = formatAction(elem)
       const metadataPreview = formatMetadata(elem)
-      return h('div', { class: 'flex items-center gap-1.5 min-w-0' }, [
+      return h('div', { class: 'flex w-full min-w-0 items-center gap-1.5' }, [
         h('span', {
-          class: 'min-w-0 cursor-pointer hover:underline',
+          class: 'min-w-0 truncate cursor-pointer hover:underline',
           onClick: () => window.open(getLogDocUrl(elem.action), '_blank', 'noopener,noreferrer'),
         }, actionLabel),
         hasMetadata(elem)
