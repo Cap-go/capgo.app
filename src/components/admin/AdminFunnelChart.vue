@@ -109,7 +109,7 @@ const chartOptions = computed<ChartOptions<'funnel'>>(() => ({
 <template>
   <div class="relative w-full h-full overflow-hidden">
     <div v-if="isLoading" class="flex items-center justify-center h-full">
-      <span class="loading loading-spinner loading-lg text-primary" />
+      <span class="d-loading d-loading-spinner d-loading-lg text-primary" />
     </div>
     <div v-else class="w-full h-full">
       <ChartComponent class="h-full w-full" type="funnel" :data="chartData" :options="(chartOptions as unknown as ChartOptions)" />

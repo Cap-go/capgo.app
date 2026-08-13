@@ -4,7 +4,7 @@ import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { BentoTrackingPayload } from '../utils/tracking.ts'
 import { Hono } from 'hono/tiny'
 import { buildBuilderOnboardingBentoEvent, BUILDER_RECOVERY_MILESTONES } from '../utils/builder_onboarding_recovery.ts'
-import { buildBundleCompatibilityBentoEvent, BUNDLE_INCOMPATIBLE_EVENT } from '../utils/bundle_compatibility_recovery.ts'
+import { buildBundleCompatibilityBentoEvent, BUNDLE_INCOMPATIBLE_EVENT, isBreakingChangeGatedByChannelStrategy } from '../utils/bundle_compatibility_recovery.ts'
 import { BRES, parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
 import { cloudlog } from '../utils/logging.ts'
@@ -289,7 +289,32 @@ async function buildBundleIncompatibleBentoEvent(
       .maybeSingle()
     updateStrategy = channelRow?.disable_auto_update ?? null
   }
-  const skippedForMetadata = updateStrategy === 'version_number'
+  const versionNewName = typeof tags.version_new_name === 'string' && tags.version_new_name.length > 0
+    ? tags.version_new_name
+    : undefined
+  const versionOldName = typeof tags.version_old_name === 'string' ? tags.version_old_name : undefined
+
+  let versionNewId: string | undefined
+  let minUpdateVersion: string | null = null
+  if (versionNewName) {
+    const { data: versionNewData } = await supabase
+      .from('app_versions')
+      .select('id, min_update_version')
+      .eq('app_id', appId)
+      .eq('name', versionNewName)
+      .maybeSingle()
+    versionNewId = toIdString(versionNewData?.id)
+    minUpdateVersion = versionNewData?.min_update_version ?? null
+  }
+
+  // Gated by the channel strategy: devices on the previous (incompatible) native
+  // build never receive this bundle, so the breaking change was done correctly.
+  const gatedByStrategy = isBreakingChangeGatedByChannelStrategy({
+    strategy: updateStrategy,
+    versionOldName,
+    versionNewName,
+    minUpdateVersion,
+  })
   const apikeyId = c.get('apikey')?.id
 
   await backgroundTask(c, trackPosthogEvent(c, {
@@ -299,7 +324,7 @@ async function buildBundleIncompatibleBentoEvent(
     setPersonProperties: false,
     groups: { organization: onboardingOrgId },
     tags: {
-      outcome: skippedForMetadata ? 'skipped_metadata' : 'sent',
+      outcome: gatedByStrategy ? 'sent_expected' : 'sent',
       update_strategy: updateStrategy ?? 'unknown',
       app_id: appId,
       ...(incompatibleChannel ? { channel_name: incompatibleChannel } : {}),
@@ -307,12 +332,6 @@ async function buildBundleIncompatibleBentoEvent(
     nonPersonTags: apikeyId === undefined ? undefined : { apikey_id: apikeyId },
   }))
 
-  if (skippedForMetadata)
-    return undefined
-
-  const versionNewName = typeof tags.version_new_name === 'string' && tags.version_new_name.length > 0
-    ? tags.version_new_name
-    : undefined
   const [orgResult, appResult] = await Promise.all([
     supabase.from('orgs').select('id, name').eq('id', onboardingOrgId).single(),
     supabase.from('apps').select('name').eq('app_id', appId).single(),
@@ -322,17 +341,6 @@ async function buildBundleIncompatibleBentoEvent(
     // event with empty org/app context. Log and skip instead.
     cloudlog({ requestId: c.get('requestId'), message: 'bundle incompatible bento lookup failed; skipping signal', org: orgResult.error, app: appResult.error })
     return undefined
-  }
-
-  let versionNewId: string | undefined
-  if (versionNewName) {
-    const { data: versionNewData } = await supabase
-      .from('app_versions')
-      .select('id')
-      .eq('app_id', appId)
-      .eq('name', versionNewName)
-      .maybeSingle()
-    versionNewId = toIdString(versionNewData?.id)
   }
 
   return buildBundleCompatibilityBentoEvent({
@@ -345,9 +353,11 @@ async function buildBundleIncompatibleBentoEvent(
     versionNewId,
     versionNewName,
     versionOldId: toIdString(tags.version_old_id),
-    versionOldName: typeof tags.version_old_name === 'string' ? tags.version_old_name : undefined,
+    versionOldName,
     orgName: orgResult.data?.name ?? undefined,
     appName: appResult.data?.name ?? undefined,
+    disableAutoUpdate: updateStrategy,
+    minUpdateVersion,
   })
 }
 
@@ -389,11 +399,12 @@ app.post('/', middlewareAuth(), async (c) => {
   // org/app names + the freshly created version id for the payload.
   // PostHog records every incompatible upload (tracking runs unconditionally
   // below). The org-member email is only relevant when the incompatible bundle
-  // actually went live — i.e. the upload overwrote the channel's version — AND the
-  // channel doesn't gate delivery itself. On the metadata (`version_number`)
-  // strategy, `min_update_version` keeps the bundle off incompatible devices, so
-  // there's no breakage to warn about — we skip the email there. Either outcome is
-  // recorded in PostHog (sent vs skipped_metadata) for the weekly breakdown.
+  // actually went live — i.e. the upload overwrote the channel's version. Which
+  // of the two Bento events fires depends on the channel's update strategy: when
+  // the version bump keeps the bundle off devices running the previous native
+  // build, the breaking change was done correctly and the calmer
+  // `bundle_incompatible_expected` event is emitted instead of the crash warning.
+  // Both outcomes are recorded in PostHog (sent vs sent_expected).
   const bundleIncompatibleBentoEvent: BentoTrackingPayload | undefined = await buildBundleIncompatibleBentoEvent(c, supabase, onboardingOrgId, appId, trackedBody)
 
   // Exactly one of these is ever set (distinct event names); `??` picks the active one.

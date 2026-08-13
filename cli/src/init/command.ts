@@ -73,6 +73,7 @@ const appIdRegex = /^[a-z0-9]+(?:\.[\w-]+)+$/i
 const whitespaceSplitPattern = /\s+/
 const capacitorConfigFiles = ['capacitor.config.ts', 'capacitor.config.js', 'capacitor.config.json']
 const capacitorGettingStartedUrl = 'https://capacitorjs.com/docs/getting-started'
+export const notifyAppReadyDocsUrl = 'https://capgo.app/docs/plugins/updater/notify-app-ready/'
 const nextWebDirPattern = /["']?webDir["']?\s*:\s*["']out["']/
 const nuxtWebDirPattern = /["']?webDir["']?\s*:\s*["']\.output\/public["']/
 const initNativeBundleVersion = '0.0.0'
@@ -107,6 +108,24 @@ type CapacitorConfigSnapshot = Awaited<ReturnType<typeof getConfig>>['config']
 type CancelablePromptValue = boolean | string | symbol
 type InitAutoTestChangeKind = 'html-banner' | 'vue-banner' | 'css-background'
 type DirtyGitStatusAction = 'check-again' | 'continue-dirty'
+type MissingMainFileChoice = 'manual' | 'docs' | 'provide-path'
+
+export function getMissingMainFileRecoveryOptions(): { value: MissingMainFileChoice, label: string }[] {
+  return [
+    { value: 'provide-path', label: 'Provide the path to the main file' },
+    { value: 'manual', label: 'I\'ll add the code manually' },
+    { value: 'docs', label: 'Open the notifyAppReady() documentation' },
+  ]
+}
+
+export function readExistingMainFile(mainFilePath: string | null) {
+  try {
+    return mainFilePath && statSync(mainFilePath).isFile() ? { path: mainFilePath, content: readFileSync(mainFilePath, 'utf8') } : null
+  }
+  catch {
+    return null
+  }
+}
 
 interface GitRepoStatus {
   inRepo: boolean
@@ -2751,7 +2770,13 @@ function logPackageInstallStateDetails(packageName: string, packageJsonPath: str
   for (const detail of details) {
     pLog.warn(detail)
   }
-  pLog.info(`Run this in ${dirname(packageJsonPath)}: ${manualCommand}`)
+  pLog.info(`Run this in ${formatInitFilePath(dirname(packageJsonPath))}: ${manualCommand}`)
+}
+
+function formatPackageReadyMessage(packageName: string, state: PackageInstallState): string {
+  const declaredAt = formatInitFilePath(state.packageJsonPath)
+  const versionLabel = state.installedVersion ? ` ${state.installedVersion}` : ''
+  return `${packageName}${versionLabel} is declared in ${declaredAt} and installed in node_modules ✅`
 }
 
 async function waitForVerifiedPackageInstall(
@@ -2770,7 +2795,7 @@ async function waitForVerifiedPackageInstall(
   while (true) {
     const state = getState(packageJsonPath)
     if (state.ready) {
-      pLog.info(`${packageName} found in package.json and node_modules ✅`)
+      pLog.info(formatPackageReadyMessage(packageName, state))
       return state
     }
 
@@ -2835,7 +2860,7 @@ async function ensureSplashScreenForDirectUpdate(
   const versionToInstall = getSplashScreenVersionToInstall(coreVersion)
   const installState = getSplashScreenInstallState(packageJsonPath)
   if (installState.ready) {
-    pLog.info(`${CAPACITOR_SPLASH_SCREEN_PACKAGE} found in package.json and node_modules ✅`)
+    pLog.info(formatPackageReadyMessage(CAPACITOR_SPLASH_SCREEN_PACKAGE, installState))
     return
   }
 
@@ -2844,17 +2869,17 @@ async function ensureSplashScreenForDirectUpdate(
     message: `${CAPACITOR_SPLASH_SCREEN_PACKAGE} is required for instant updates. Install it now?`,
     options: [
       { value: 'yes', label: '✅ Yes, install it' },
-      { value: 'no', label: '❌ No, I\'ll do it manually' },
+      { value: 'no', label: '📝 I\'ll do it manually' },
     ],
   })
   await cancelCommand(installChoice, orgId, apikey)
 
   if (installChoice === 'yes') {
     const s = pSpinner()
-      s.start(`Installing ${CAPACITOR_SPLASH_SCREEN_PACKAGE}`)
+    s.start(`Installing ${CAPACITOR_SPLASH_SCREEN_PACKAGE}`)
     try {
       runPackageInstallCommand(pm, packageJsonPath, CAPACITOR_SPLASH_SCREEN_PACKAGE, versionToInstall)
-      s.stop('Install Done ✅')
+      s.stop(`Installed ${CAPACITOR_SPLASH_SCREEN_PACKAGE}; declaration is in ${formatInitFilePath(packageJsonPath)} ✅`)
     }
     catch (error) {
       s.stop('Splash screen install failed ❌')
@@ -2862,7 +2887,7 @@ async function ensureSplashScreenForDirectUpdate(
     }
   }
   else {
-    pLog.info(`Install it manually with: "${getPackageInstallCommand(pm, CAPACITOR_SPLASH_SCREEN_PACKAGE, versionToInstall)}"`)
+    pLog.info(`Install it manually in ${formatInitFilePath(dirname(packageJsonPath))} with: "${getPackageInstallCommand(pm, CAPACITOR_SPLASH_SCREEN_PACKAGE, versionToInstall)}"`)
   }
 
   await waitForVerifiedPackageInstall(
@@ -2887,7 +2912,7 @@ async function addUpdaterStep(orgId: string, apikey: string, appId: string) {
     message: `Install @capgo/capacitor-updater in your project?`,
     options: [
       { value: 'yes', label: '✅ Yes, install it' },
-      { value: 'no', label: '❌ No, I\'ll do it manually' },
+      { value: 'no', label: '📝 I\'ll do it manually' },
     ],
   })
   await cancelCommand(installChoice, orgId, apikey)
@@ -2913,12 +2938,12 @@ async function addUpdaterStep(orgId: string, apikey: string, appId: string) {
       const installState = getUpdaterInstallState(path)
 
       if (installState.ready) {
-        s.stop(`Capgo already installed ✅`)
+        s.stop(`${CAPGO_UPDATER_PACKAGE} is already declared in ${formatInitFilePath(path)} and installed in node_modules ✅`)
       }
       else {
         try {
           runUpdaterInstallCommand(pm, path, versionToInstall)
-          s.stop(`Install Done ✅`)
+          s.stop(`Installed ${CAPGO_UPDATER_PACKAGE}; declaration is in ${formatInitFilePath(path)} ✅`)
         }
         catch (error) {
           s.stop('Updater install failed ❌')
@@ -2927,7 +2952,7 @@ async function addUpdaterStep(orgId: string, apikey: string, appId: string) {
       }
     }
     else {
-      pLog.info(`Install it manually with: "${getUpdaterInstallCommand(pm, versionToInstall)}"`)
+      pLog.info(`Install it manually in ${formatInitFilePath(dirname(path))} with: "${getUpdaterInstallCommand(pm, versionToInstall)}"`)
     }
 
     await waitForVerifiedUpdaterInstall(orgId, apikey, path, pm, versionToInstall, {
@@ -2947,13 +2972,13 @@ async function addUpdaterStep(orgId: string, apikey: string, appId: string) {
     s.start(`Updating config file`)
     delta = !!doDirectInstall
     const projectDir = dirname(path)
-    await withTemporaryCwd(getInitConfigLoadDir(projectDir), async () => {
+    const updatedConfig = await withTemporaryCwd(getInitConfigLoadDir(projectDir), async () => {
       if (doDirectInstall) {
         await updateConfigbyKey('SplashScreen', { launchAutoHide: false })
       }
-      await updateConfigUpdater(getInitUpdaterPluginConfig(appId, delta))
+      return updateConfigUpdater(getInitUpdaterPluginConfig(appId, delta))
     })
-    s.stop(`Config file updated ✅`)
+    s.stop(`Updated ${formatInitFilePath(updatedConfig.path)} ✅`)
     break
   }
 
@@ -2989,23 +3014,56 @@ async function addCodeStep(orgId: string, apikey: string, appId: string) {
       mainFilePath = projectTypeMainFile ? resolveProjectFilePath(projectTypeMainFile) : projectTypeMainFile
     }
 
-    if (!mainFilePath || !existsSync(mainFilePath)) {
-      const userProvidedPath = await pText({
-        message: `Provide the correct relative path to your main file (JS or TS):`,
-        validate: (value) => {
-          if (!value || !existsSync(resolveProjectFilePath(value)))
-            return 'File does not exist. Please provide a valid path.'
-        },
-      })
-      if (pIsCancel(userProvidedPath)) {
-        pCancel('Operation cancelled.')
-        return await exitAfterFinishingReplay(1)
+    let mainFile = readExistingMainFile(mainFilePath)
+    if (!mainFile) {
+      pLog.warn('Capgo could not find your app\'s JavaScript or TypeScript entry file automatically.')
+      pLog.info('Capgo needs CapacitorUpdater.notifyAppReady() to run when your app starts. Without this call, the update will be marked invalid and rolled back.')
+      pLog.info(`Learn more: ${notifyAppReadyDocsUrl}`)
+
+      while (!mainFile) {
+        const choice = await pSelect<MissingMainFileChoice>({
+          message: 'How do you want to continue?',
+          options: getMissingMainFileRecoveryOptions(),
+        })
+        await cancelCommand(choice, orgId, apikey)
+
+        if (choice === 'docs') {
+          try {
+            await open(notifyAppReadyDocsUrl)
+          }
+          catch {
+            pLog.warn(`Could not open your browser automatically. Visit: ${notifyAppReadyDocsUrl}`)
+          }
+          continue
+        }
+
+        if (choice === 'manual') {
+          pLog.info(`Add CapacitorUpdater.notifyAppReady() where your app starts. Follow the framework-specific guide: ${notifyAppReadyDocsUrl}`)
+          const codeAdded = await pConfirm({ message: 'Have you added CapacitorUpdater.notifyAppReady() to your app startup?' })
+          await cancelCommand(codeAdded, orgId, apikey)
+          if (!codeAdded)
+            continue
+          return
+        }
+
+        const userProvidedPath = await pText({
+          message: 'Provide the relative path to your main file (JS or TS):',
+          validate: (value) => {
+            if (!value || !readExistingMainFile(resolveProjectFilePath(value)))
+              return 'Path must point to an existing file.'
+          },
+        })
+        if (pIsCancel(userProvidedPath)) {
+          pCancel('Operation cancelled.')
+          return await exitAfterFinishingReplay(1)
+        }
+        mainFilePath = resolveProjectFilePath(userProvidedPath as string)
+        mainFile = readExistingMainFile(mainFilePath)
       }
-      mainFilePath = resolveProjectFilePath(userProvidedPath as string)
     }
 
-    filePath = mainFilePath
-    currentContent = readFileSync(filePath, 'utf8')
+    filePath = mainFile.path
+    currentContent = mainFile.content
   }
 
   const getCanAutoInject = () => !createNuxtPlugin || created || currentContent.includes(codeInject)
@@ -3034,7 +3092,7 @@ async function addCodeStep(orgId: string, apikey: string, appId: string) {
       message: `Add the Capacitor Updater import to your main file?`,
       options: [
         { value: 'yes', label: '✅ Yes, add it' },
-        { value: 'no', label: '❌ No, I\'ll do it manually' },
+        { value: 'no', label: '📝 I\'ll do it manually' },
       ],
     })
     await cancelCommand(addCodeChoice, orgId, apikey)
@@ -3055,10 +3113,11 @@ async function addCodeStep(orgId: string, apikey: string, appId: string) {
     canAutoInject = getCanAutoInject()
   }
 
+  const displayFilePath = formatInitFilePath(filePath)
   if (addCodeChoice === 'yes') {
     if (!canAutoInject) {
       pLog.warn(`An existing Nuxt updater plugin was not changed automatically.`)
-      pLog.info(`Add this plugin code manually:\n\n${getNuxtUpdaterPluginContent()}`)
+      pLog.info(`Add this plugin code manually to ${displayFilePath}:\n\n${getNuxtUpdaterPluginContent()}`)
       await markStep(orgId, apikey, 'add-code-manual', appId)
     }
     else if (!alreadyConfigured) {
@@ -3068,11 +3127,12 @@ async function addCodeStep(orgId: string, apikey: string, appId: string) {
         mkdirSync(dirname(filePath), { recursive: true })
       }
       writeFileSync(filePath, newContent, 'utf8')
-      s.stop()
+      s.stop(`Added notifyAppReady() to ${displayFilePath} ✅`)
       globalCodeDiff = previewDiff
       setInitCodeDiff(globalCodeDiff)
     }
     else {
+      pLog.info(`notifyAppReady() already in ${displayFilePath} ✅`)
       globalCodeDiff = previewDiff
     }
 
@@ -3085,7 +3145,7 @@ async function addCodeStep(orgId: string, apikey: string, appId: string) {
       : getExistingUpdaterBinding(filePath, currentContent)
         ? getInitCodeCall()
         : getInitCodeInjection(filePath)
-    pLog.info(`${createNuxtPlugin ? 'Add this plugin code manually:' : 'Add to your main file the following code:'}\n\n${manualCode}\n`)
+    pLog.info(`${createNuxtPlugin ? 'Add this plugin code' : 'Add this code'} manually to ${displayFilePath}:\n\n${manualCode}\n`)
   }
 }
 

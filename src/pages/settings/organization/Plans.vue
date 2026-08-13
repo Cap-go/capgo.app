@@ -10,19 +10,21 @@ import IconArrowRight from '~icons/lucide/arrow-right'
 import IconCheckCircle from '~icons/lucide/check-circle'
 import CreditsCta from '~/components/CreditsCta.vue'
 import RbacPermissionOnlyModal from '~/components/RbacPermissionOnlyModal.vue'
+import { useBillingPaidAt } from '~/composables/useBillingPaidAt'
 import { invokeCapgoApi } from '~/services/capgoApi'
-import { formatIncludedThenPrice } from '~/services/creditPricing'
 import { formatNumberValue } from '~/services/formatLocale'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
+import { shouldShowExpiredTrialPlansState, shouldShowPlanFailureBanner } from '~/services/paymentRequired'
 import { checkPermissions } from '~/services/permissions'
 import { createPlansVisitTracker } from '~/services/plansVisitTracking'
 import { getAffonsoReferral, getDatafastAttribution, openCheckout } from '~/services/stripe'
-import { getCreditUnitPricing, getCurrentPlanNameOrg, useSupabase } from '~/services/supabase'
+import { getCurrentPlanNameOrg, useSupabase } from '~/services/supabase'
 import { openSupport } from '~/services/support'
 import { sendEvent } from '~/services/tracking'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
+import { isCreditsOnlyOrg } from '~/utils/organizationBilling'
 
 const { t } = useI18n()
 const mainStore = useMainStore()
@@ -47,7 +49,14 @@ const isMobile = isNativeAppStoreContext()
 const showAdminModal = ref(false)
 
 const { currentOrganization } = storeToRefs(organizationStore)
-const creditUnitPrices = ref<Partial<Record<Database['public']['Enums']['credit_metric_type'], number>>>({})
+const billingOrgId = computed(() => currentOrganization.value?.gid)
+const { paidAt, billingLookupFailed } = useBillingPaidAt(billingOrgId, isMobile)
+const showExpiredTrialState = computed(() => {
+  return shouldShowExpiredTrialPlansState(organizationStore.currentOrganizationFailed, isMobile, paidAt.value)
+})
+const showPlanFailureBanner = computed(() => {
+  return shouldShowPlanFailureBanner(organizationStore.currentOrganizationFailed, isMobile, paidAt.value, billingLookupFailed.value)
+})
 
 interface PlanFeature {
   label: string
@@ -88,17 +97,9 @@ function planFeatures(plan: Database['public']['Tables']['plans']['Row']) {
     }
   }
 
-  const mauFeature = creditUnitPrices.value.mau !== undefined
-    ? `${formatNumberValue(plan.mau)} ${t('mau')} · ${formatIncludedThenPrice('mau', creditUnitPrices.value.mau, t)}`
-    : `${formatNumberValue(plan.mau)} ${t('mau')}`
-
-  const storageFeature = creditUnitPrices.value.storage !== undefined
-    ? `${formatNumberValue(plan.storage)} ${t('plan-storage')} · ${formatIncludedThenPrice('storage', creditUnitPrices.value.storage, t)}`
-    : `${formatNumberValue(plan.storage)} ${t('plan-storage')}`
-
-  const bandwidthFeature = creditUnitPrices.value.bandwidth !== undefined
-    ? `${formatNumberValue(plan.bandwidth)} ${t('plan-bandwidth')} · ${formatIncludedThenPrice('bandwidth', creditUnitPrices.value.bandwidth, t)}`
-    : `${formatNumberValue(plan.bandwidth)} ${t('plan-bandwidth')}`
+  const mauFeature = `${formatNumberValue(plan.mau)} ${t('mau')}`
+  const storageFeature = `${formatNumberValue(plan.storage)} ${t('plan-storage')}`
+  const bandwidthFeature = `${formatNumberValue(plan.bandwidth)} ${t('plan-bandwidth')}`
 
   const buildTimeFeature = buildTimeDisplay ? planFeature(buildTimeDisplay, true) : null
   const nativeBuildConcurrencyFeature = plan.native_build_concurrency
@@ -137,12 +138,7 @@ const isTrial = computed(() => currentOrganization?.value ? (!currentOrganizatio
 
 // Credits-only org: has credits but no active subscription and no trial remaining.
 // These orgs use pay-as-you-go credits as their primary payment method.
-const isCreditsOnly = computed(() => {
-  const org = currentOrganization?.value
-  if (!org)
-    return false
-  return !org.paying && (org.trial_left ?? 0) <= 0 && (org.credit_available ?? 0) > 0
-})
+const isCreditsOnly = computed(() => isCreditsOnlyOrg(currentOrganization?.value))
 
 async function prefetchStripeCheckoutUrl(plan: Database['public']['Tables']['plans']['Row'], isYear: boolean) {
   if (!plan.stripe_id)
@@ -284,10 +280,6 @@ function isYearlyPlan(plan: Database['public']['Tables']['plans']['Row'], t: 'm'
   return t === 'y'
 }
 
-async function loadCreditPricing(orgId?: string) {
-  creditUnitPrices.value = await getCreditUnitPricing(orgId)
-}
-
 // When no organization can be resolved (e.g. an `?oid=` pointing at an org the
 // user isn't a member of), bail out gracefully instead of throwing: surface the
 // same dialog the no-permission path uses and route back to /apps. Guarded so
@@ -327,34 +319,30 @@ async function loadData(initial: boolean) {
     return
   }
 
-  await Promise.all([
-    loadCreditPricing(orgId),
-    getCurrentPlanNameOrg(orgId).then((res) => {
-      console.log('getCurrentPlanNameOrg', res)
-      currentPlan.value = main.plans.find(plan => plan.name === res)
-    }),
-  ])
+  const res = await getCurrentPlanNameOrg(orgId)
+  console.log('getCurrentPlanNameOrg', res)
+  currentPlan.value = main.plans.find(plan => plan.name === res)
   initialLoad.value = true
 }
 
-// Pick the org with the most apps where the user can actually manage billing.
-// Used as a fallback when the current org's billing is not accessible.
+// Pick the org with the most apps where the user can view billing.
+// Used as a fallback when the current org's billing is not readable.
 async function findBillableFallbackOrg() {
   const candidates = [...organizationStore.getAllOrgs()]
     .map(([_, org]) => org)
     .sort((a, b) => b.app_count - a.app_count)
   for (const org of candidates) {
-    if (await checkPermissions('org.update_billing', { orgId: org.gid }))
+    if (await checkPermissions('org.read_billing', { orgId: org.gid }))
       return org
   }
   return undefined
 }
 watch(currentOrganization, async (newOrg, prevOrg) => {
   if (newOrg) {
-    // Check permission directly instead of relying on computedAsync default
-    const hasUpdateBillingPermission = await checkPermissions('org.update_billing', { orgId: newOrg.gid })
+    // Viewing plans requires read_billing; update_billing is only for checkout actions.
+    const hasReadBillingPermission = await checkPermissions('org.read_billing', { orgId: newOrg.gid })
 
-    if (!hasUpdateBillingPermission) {
+    if (!hasReadBillingPermission) {
       if (!initialLoad.value) {
         const fallbackOrg = await findBillableFallbackOrg()
         if (fallbackOrg) {
@@ -415,14 +403,14 @@ watchEffect(async (onCleanup) => {
         && route.path === '/settings/organization/plans'
         && currentOrganization.value?.gid === orgId
 
-      // Check permission on initial load
+      // Viewing requires org.read_billing; checkout still checks org.update_billing.
       if (orgId) {
-        const hasUpdateBillingPermission = await checkPermissions('org.update_billing', { orgId })
+        const hasReadBillingPermission = await checkPermissions('org.read_billing', { orgId })
 
         if (!isCurrentTrackingContext())
           return
 
-        if (!hasUpdateBillingPermission) {
+        if (!hasReadBillingPermission) {
           const fallbackOrg = await findBillableFallbackOrg()
           if (fallbackOrg) {
             organizationStore.setCurrentOrganization(fallbackOrg.gid)
@@ -461,6 +449,8 @@ function buttonName(p: Database['public']['Tables']['plans']['Row']) {
   if (currentPlan.value?.name === p.name && currentOrganization.value?.paying && currentOrganization.value?.is_yearly === isYearly.value) {
     return t('Current')
   }
+  if (showExpiredTrialState.value)
+    return t('choose-plan-name', { plan: p.name })
   if (isTrial.value || organizationStore.currentOrganizationFailed) {
     return t('plan-upgrade')
   }
@@ -473,6 +463,8 @@ function isDisabled(plan: Database['public']['Tables']['plans']['Row']) {
 }
 
 function isRecommended(p: Database['public']['Tables']['plans']['Row']) {
+  if (showExpiredTrialState.value)
+    return false
   return currentPlanSuggest.value?.name === p.name && (currentPlanSuggest.value?.price_m ?? 0) > (currentPlan.value?.price_m ?? 0)
 }
 function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
@@ -494,8 +486,14 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
         <div class="flex-1">
           <div class="flex items-center gap-3">
             <h1 class="text-3xl font-bold text-gray-900 dark:text-white">
-              {{ t('plan-pricing-plans') }}
+              {{ t(showExpiredTrialState ? 'trial-ended-title' : 'plan-pricing-plans') }}
             </h1>
+            <span
+              v-if="isCreditsOnly"
+              class="inline-flex items-center px-2.5 py-1 text-xs font-semibold text-blue-700 rounded-full bg-blue-50 dark:text-blue-300 dark:bg-blue-900/30"
+            >
+              {{ t('credits-only-badge') }}
+            </span>
             <!-- Custom Plan Trigger -->
             <button
               v-if="!isMobile"
@@ -506,7 +504,7 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
             </button>
           </div>
           <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-            {{ t('plan-desc') }}
+            {{ t(showExpiredTrialState ? 'trial-ended-plans-description' : isCreditsOnly ? 'credits-only-plan-page-desc' : 'plan-desc') }}
           </p>
           <p v-if="!isMobile" class="mt-2 text-sm">
             <a class="font-medium text-blue-600 hover:underline dark:text-blue-300" href="https://capgo.app/pricing/#compare-plans">
@@ -536,7 +534,7 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
       </div>
 
       <!-- Error Message -->
-      <div v-if="organizationStore.currentOrganizationFailed" class="px-4 py-2 mb-4 font-medium text-center text-white bg-red-500 rounded-lg shrink-0">
+      <div v-if="showPlanFailureBanner" class="px-4 py-2 mb-4 font-medium text-center text-white bg-red-500 rounded-lg shrink-0">
         {{ t('plan-failed') }}
       </div>
 
@@ -551,7 +549,7 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
           :class="[
             // Don't highlight the plan card for credits-only orgs — they are not actually
             // on any plan, and highlighting Solo (the fallback) would be misleading.
-            p.name === currentPlan?.name && !isCreditsOnly ? 'border-2 border-blue-500' : 'border-gray-200 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-700',
+            p.name === currentPlan?.name && !isCreditsOnly && !showExpiredTrialState ? 'border-2 border-blue-500' : 'border-gray-200 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-700',
             isRecommended(p) ? 'shadow-lg shadow-blue-500/10' : 'shadow-sm',
           ]"
         >

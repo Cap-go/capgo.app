@@ -72,7 +72,7 @@ export function toStatNumber(value: number | string | null | undefined): number 
  * Weekly email stats.
  * `daily_version.install` and `daily_version.fail` are independent action counters,
  * so success/failure rates must use install / (install + fail), never install - fail.
- * This matches admin success_rate: installs / (installs + fails).
+ * Note: admin/public headline KPIs use device-day app_log outcomes, not this counter formula.
  */
 export function computeWeeklyInstallStats(input: WeeklyInstallStatsInput): WeeklyInstallStatsResult {
   const successfulInstalls = Math.max(0, Math.round(toStatNumber(input.all_updates)))

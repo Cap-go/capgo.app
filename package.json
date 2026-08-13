@@ -1,7 +1,7 @@
 {
   "name": "capgo-app",
   "type": "module",
-  "version": "12.214.1",
+  "version": "12.224.0",
   "private": true,
   "workspaces": [
     "cli",
@@ -299,7 +299,7 @@
     "@capgo/capacitor-speech-synthesis": "^8.0.20",
     "@capgo/capacitor-textinteraction": "^8.0.32",
     "@capgo/capacitor-transitions": "^8.1.9",
-    "@capgo/capacitor-updater": "8.51.2",
+    "@capgo/capacitor-updater": "8.51.4",
     "@capgo/capacitor-uploader": "^8.3.5",
     "@capgo/capacitor-video-player": "^8.2.3",
     "@capgo/capacitor-video-thumbnails": "^8.1.18",

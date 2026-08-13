@@ -110,10 +110,14 @@ function parseTranslationObject(value: unknown): Record<string, string> | null {
   const record = recordOf(value)
   if (record) {
     const translations = recordOf(record.translations)
-    if (translations && Object.values(translations).every(entry => typeof entry === 'string'))
-      return translations as Record<string, string>
-    if (Object.values(record).every(entry => typeof entry === 'string'))
-      return record as Record<string, string>
+    if (translations) {
+      const unwrapped = unwrapTranslationRecord(translations)
+      if (unwrapped)
+        return unwrapped
+    }
+    const flat = unwrapTranslationRecord(record)
+    if (flat)
+      return flat
   }
 
   if (typeof value !== 'string')
@@ -140,15 +144,58 @@ function parseTranslationObject(value: unknown): Record<string, string> | null {
   }
 }
 
+function translatedTextFromEntry(entry: unknown): string | null {
+  return unwrapTranslatedMessage(entry)
+}
+
+function unwrapTranslationRecord(record: Record<string, unknown>): Record<string, string> | null {
+  const output: Record<string, string> = {}
+  for (const [key, entry] of Object.entries(record)) {
+    const value = translatedTextFromEntry(entry)
+    if (value === null)
+      return null
+    output[key] = value
+  }
+  return output
+}
+
 function placeholders(value: string) {
   return value.match(PLACEHOLDER_PATTERN) ?? []
 }
 
-function keepTranslation(source: string, translated: unknown) {
-  if (typeof translated !== 'string')
-    return source
+function unwrapTranslatedMessage(translated: unknown): string | null {
+  if (typeof translated === 'string') {
+    if (!translated.trim())
+      return null
 
-  const normalized = translated.trim()
+    const trimmedForParse = translated.trim()
+    if (!trimmedForParse.startsWith('{'))
+      return translated
+
+    try {
+      const parsed = JSON.parse(trimmedForParse) as unknown
+      const record = recordOf(parsed)
+      if (!record)
+        return translated
+      if (typeof record.text !== 'string' || !record.text.trim())
+        return null
+      return record.text
+    }
+    catch {
+      return translated
+    }
+  }
+
+  const record = recordOf(translated)
+  if (typeof record?.text !== 'string')
+    return null
+  if (!record.text.trim())
+    return null
+  return record.text
+}
+
+function keepTranslation(source: string, translated: unknown) {
+  const normalized = unwrapTranslatedMessage(translated)
   if (!normalized)
     return source
 
@@ -230,6 +277,7 @@ async function translateBatch(ai: AiBinding, model: string, targetLanguage: stri
               'Each input value is an object with text (translate this) and optional context (where/how the text is used in the Capgo console UI).',
               'Use context to disambiguate meaning, tone, and part of speech (button label vs title vs status vs empty state).',
               'Translate only the text field. Do not translate or copy context into the output.',
+              'Each translations value must be a plain string of the translated text only, never a JSON object or {text, context} wrapper.',
               'Translate user-facing text naturally. Keep product names, code, URLs, commands, numbers, and placeholders unchanged.',
               'Every placeholder like {count}, %name%, or $1 must be copied exactly.',
             ].join(' '),

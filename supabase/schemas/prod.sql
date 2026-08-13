@@ -502,12 +502,15 @@ BEGIN
   END IF;
   SELECT org_id, app_id INTO v_org, v_app
     FROM public.compatibility_events WHERE id = event_id;
-  IF v_org IS NULL THEN RETURN; END IF;            -- unknown id: no-op
+  -- Unknown id: raise the same error as an RBAC denial (no existence oracle).
+  IF v_org IS NULL THEN
+    RAISE EXCEPTION 'not_authorized';
+  END IF;
   -- RBAC: app upload-bundle permission (release managers); NOT legacy min_rights.
   -- Adjust the perm key in review if a different role should be allowed to accept.
   IF NOT public.rbac_check_permission_direct(
         public.rbac_perm_app_upload_bundle(), auth.uid(), v_org, v_app, NULL::bigint) THEN
-    RETURN;                                         -- unauthorized: no-op (no oracle)
+    RAISE EXCEPTION 'not_authorized';               -- unauthorized: surface, don't no-op
   END IF;
   UPDATE public.compatibility_events
     SET resolved_at = now(), resolved_by = auth.uid(),
@@ -2303,6 +2306,27 @@ $$;
 ALTER FUNCTION "public"."calculate_org_metrics_cache_entry"("p_org_id" "uuid", "p_start_date" "date", "p_end_date" "date") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."canceled_org_ids_past_grace"("p_days" integer) RETURNS SETOF "uuid"
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  SELECT o.id
+  FROM public.stripe_info AS si
+  JOIN public.orgs AS o ON o.customer_id = si.customer_id
+  WHERE si.status IN ('canceled', 'deleted')
+    AND NOT COALESCE(o.has_usage_credits, false)
+    AND GREATEST(si.canceled_at, si.subscription_anchor_end, si.trial_at)
+      <= pg_catalog.now() - make_interval(days => GREATEST(0, COALESCE(p_days, 0)));
+$$;
+
+
+ALTER FUNCTION "public"."canceled_org_ids_past_grace"("p_days" integer) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."canceled_org_ids_past_grace"("p_days" integer) IS 'Org ids whose stripe_info is canceled/deleted, without active usage credits, and GREATEST(canceled_at, subscription_anchor_end, trial_at) is older than p_days.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."channel_forced_devices_denied_channel_ids"() RETURNS bigint[]
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
@@ -3942,7 +3966,15 @@ CREATE OR REPLACE FUNCTION "public"."cleanup_long_canceled_org_data"() RETURNS "
     SET "search_path" TO ''
     AS $$
 BEGIN
+  -- 85 days: warn that bundles will be deleted in 5 days.
+  PERFORM public.queue_canceled_org_retention_alerts('bundles_deletion_warning', 85);
+  -- 90 days: soft-delete bundles for long-canceled orgs.
   PERFORM public.soft_delete_versions_for_long_canceled_orgs();
+  -- 90 days: warn that apps will be deleted in 5 days.
+  PERFORM public.queue_canceled_org_retention_alerts('app_deletion_warning', 90);
+  -- 95 days: delete apps and keep app_id + creator email in old_apps.
+  PERFORM public.delete_apps_for_long_canceled_orgs();
+  -- Purge audit logs for orgs past the 90-day grace window.
   PERFORM public.cleanup_audit_logs_for_long_canceled_orgs();
 END;
 $$;
@@ -3951,7 +3983,7 @@ $$;
 ALTER FUNCTION "public"."cleanup_long_canceled_org_data"() OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."cleanup_long_canceled_org_data"() IS 'Daily canceled-org retention: soft-delete app versions then purge audit_logs for orgs past the 90-day grace window. Both steps are batch/runtime bounded.';
+COMMENT ON FUNCTION "public"."cleanup_long_canceled_org_data"() IS 'Daily canceled-org retention: 85d bundle warning, 90d soft-delete versions + app warning, 95d delete apps into old_apps, then purge audit_logs. Steps are batch/runtime bounded.';
 
 
 
@@ -4827,6 +4859,72 @@ $$;
 ALTER FUNCTION "public"."delete_accounts_marked_for_deletion"() OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."delete_apps_for_long_canceled_orgs"("p_batch_size" integer DEFAULT 500) RETURNS bigint
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  v_batch_size integer := GREATEST(1, COALESCE(p_batch_size, 500));
+  deleted_count bigint := 0;
+BEGIN
+  WITH candidates AS (
+    SELECT
+      a.app_id,
+      a.owner_org,
+      a.user_id,
+      a.created_at AS app_created_at,
+      COALESCE(u.email::text, o.management_email) AS email
+    FROM public.apps AS a
+    JOIN public.orgs AS o ON o.id = a.owner_org
+    LEFT JOIN public.users AS u ON u.id = a.user_id
+    WHERE a.owner_org IN (SELECT public.canceled_org_ids_past_grace(95))
+    ORDER BY a.app_id
+    LIMIT v_batch_size
+  ),
+  archived AS (
+    INSERT INTO public.old_apps (app_id, email, owner_org, user_id, app_created_at)
+    SELECT
+      c.app_id,
+      c.email,
+      c.owner_org,
+      c.user_id,
+      c.app_created_at
+    FROM candidates AS c
+    ON CONFLICT (app_id, owner_org) DO UPDATE
+    SET
+      email = EXCLUDED.email,
+      user_id = EXCLUDED.user_id,
+      app_created_at = EXCLUDED.app_created_at,
+      deleted_at = pg_catalog.now()
+    RETURNING old_apps.app_id
+  ),
+  deleted AS (
+    DELETE FROM public.apps AS a
+    USING candidates AS c
+    WHERE a.app_id = c.app_id
+      AND a.owner_org = c.owner_org
+    RETURNING a.app_id
+  )
+  SELECT COUNT(*) INTO deleted_count FROM deleted;
+
+  IF deleted_count > 0 THEN
+    RAISE NOTICE
+      'delete_apps_for_long_canceled_orgs: deleted_apps=%',
+      deleted_count;
+  END IF;
+
+  RETURN deleted_count;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."delete_apps_for_long_canceled_orgs"("p_batch_size" integer) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."delete_apps_for_long_canceled_orgs"("p_batch_size" integer) IS 'Deletes apps for orgs past the 95-day canceled grace window after archiving app_id + creator email into old_apps. Bounded by p_batch_size.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."delete_group_with_bindings"("group_id" "uuid") RETURNS "void"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -5523,6 +5621,51 @@ $$;
 
 
 ALTER FUNCTION "public"."enforce_preview_bundle_ownership"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."enforce_public_channel_app_settings_permission"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  -- Prefer current_request_role over auth.role()/session_user: pgTAP and
+  -- PostgREST API-key traffic set the role GUC (and/or JWT role) to anon while
+  -- session_user stays postgres. Falling back to session_user would skip the
+  -- private -> public guard for those callers.
+  v_request_role text := public.current_request_role();
+BEGIN
+  -- Only gate private -> public transitions. Internal/service-role paths
+  -- enforce the matching app.update_settings check in application code.
+  IF NEW.public IS TRUE
+    AND OLD.public IS NOT TRUE
+    AND NOT public.is_internal_request_role(v_request_role)
+  THEN
+    IF v_request_role IS DISTINCT FROM 'anon' AND v_request_role IS DISTINCT FROM 'authenticated' THEN
+      RAISE EXCEPTION 'PERMISSION_DENIED_APP_UPDATE_SETTINGS'
+        USING ERRCODE = '42501';
+    END IF;
+
+    IF NOT public.rbac_check_permission_request(
+      public.rbac_perm_app_update_settings(),
+      NEW.owner_org,
+      NEW.app_id,
+      NULL::bigint
+    ) THEN
+      RAISE EXCEPTION 'PERMISSION_DENIED_APP_UPDATE_SETTINGS'
+        USING ERRCODE = '42501';
+    END IF;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."enforce_public_channel_app_settings_permission"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."enforce_public_channel_app_settings_permission"() IS 'Requires app.update_settings when a user-context write flips a channel from private to public.';
+
 
 
 CREATE OR REPLACE FUNCTION "public"."enforce_role_binding_role_scope"() RETURNS "trigger"
@@ -8811,13 +8954,13 @@ BEGIN
         stats.install,
         stats.get,
         CASE
-            WHEN (stats.install + stats.get) > 0 THEN
-                ROUND((stats.get::numeric / (stats.install + stats.get)) * 100, 2)
+            WHEN (stats.install + stats.failed) > 0 THEN
+                ROUND((stats.install::numeric / (stats.install + stats.failed)) * 100, 2)
             ELSE 100
         END AS success_rate,
         CASE
-            WHEN (stats.install + stats.get) > 0 THEN
-                ((stats.get::numeric / (stats.install + stats.get)) * 100 >= 70)
+            WHEN (stats.install + stats.failed) > 0 THEN
+                ((stats.install::numeric / (stats.install + stats.failed)) * 100 >= 70)
             ELSE true
         END AS healthy
     FROM
@@ -9190,6 +9333,49 @@ $$;
 
 
 ALTER FUNCTION "public"."group_max_role_priority"("p_group_id" "uuid") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."groups_is_insert_returning_row"("p_id" "uuid", "p_created_by" "uuid") RETURNS boolean
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  marker text;
+  uid uuid;
+BEGIN
+  uid := (SELECT auth.uid());
+  IF p_id IS NULL OR p_created_by IS NULL OR uid IS NULL OR p_created_by IS DISTINCT FROM uid THEN
+    RETURN false;
+  END IF;
+  marker := pg_catalog.current_setting('capgo.groups_inserting', true);
+  RETURN marker IS NOT NULL AND marker <> '' AND marker = p_id::text;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."groups_is_insert_returning_row"("p_id" "uuid", "p_created_by" "uuid") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."groups_is_insert_returning_row"("p_id" "uuid", "p_created_by" "uuid") IS 'VOLATILE: true only for the in-flight INSERT row marked by groups_mark_inserting when created_by matches JWT uid.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."groups_mark_inserting"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+BEGIN
+  PERFORM pg_catalog.set_config('capgo.groups_inserting', NEW.id::text, true);
+  RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."groups_mark_inserting"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."groups_mark_inserting"() IS 'BEFORE INSERT: store new group id in a transaction-local GUC for INSERT ... RETURNING SELECT RLS.';
+
 
 
 CREATE OR REPLACE FUNCTION "public"."guard_owner_org_reassignment"() RETURNS "trigger"
@@ -10697,19 +10883,14 @@ CREATE OR REPLACE FUNCTION "public"."long_canceled_org_ids"() RETURNS SETOF "uui
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
-  SELECT o.id
-  FROM public.stripe_info AS si
-  JOIN public.orgs AS o ON o.customer_id = si.customer_id
-  WHERE si.status IN ('canceled', 'deleted')
-    AND GREATEST(si.canceled_at, si.subscription_anchor_end, si.trial_at)
-      <= pg_catalog.now() - INTERVAL '90 days';
+  SELECT public.canceled_org_ids_past_grace(90);
 $$;
 
 
 ALTER FUNCTION "public"."long_canceled_org_ids"() OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."long_canceled_org_ids"() IS 'Org ids whose stripe_info is canceled/deleted and GREATEST(canceled_at, subscription_anchor_end, trial_at) is older than 90 days.';
+COMMENT ON FUNCTION "public"."long_canceled_org_ids"() IS 'Org ids past 90-day canceled grace without active usage credits (see canceled_org_ids_past_grace).';
 
 
 
@@ -12675,6 +12856,142 @@ $$;
 ALTER FUNCTION "public"."process_subscribed_orgs"() OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."queue_canceled_org_retention_alerts"("p_alert_type" "text", "p_min_days" integer, "p_batch_size" integer DEFAULT 500) RETURNS bigint
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  v_batch_size integer := GREATEST(1, COALESCE(p_batch_size, 500));
+  v_min_days integer := GREATEST(0, COALESCE(p_min_days, 0));
+  v_max_days integer := v_min_days + 5;
+  v_event text;
+  v_queued bigint := 0;
+  org_record RECORD;
+  v_days_until integer;
+BEGIN
+  IF p_alert_type = 'bundles_deletion_warning' THEN
+    v_event := 'org:bundles_will_be_deleted';
+  ELSIF p_alert_type = 'app_deletion_warning' THEN
+    v_event := 'org:apps_will_be_deleted';
+  ELSE
+    RAISE EXCEPTION 'unsupported retention alert type: %', p_alert_type;
+  END IF;
+
+  FOR org_record IN
+    SELECT
+      o.id AS org_id,
+      o.name AS org_name,
+      o.management_email,
+      GREATEST(si.canceled_at, si.subscription_anchor_end, si.trial_at) AS access_end,
+      COALESCE(
+        (
+          SELECT jsonb_agg(a.app_id ORDER BY a.app_id)
+          FROM public.apps AS a
+          WHERE a.owner_org = o.id
+        ),
+        '[]'::jsonb
+      ) AS app_ids
+    FROM public.stripe_info AS si
+    JOIN public.orgs AS o ON o.customer_id = si.customer_id
+    WHERE si.status IN ('canceled', 'deleted')
+      AND NOT COALESCE(o.has_usage_credits, false)
+      AND GREATEST(si.canceled_at, si.subscription_anchor_end, si.trial_at)
+        <= pg_catalog.now() - make_interval(days => v_min_days)
+      AND GREATEST(si.canceled_at, si.subscription_anchor_end, si.trial_at)
+        > pg_catalog.now() - make_interval(days => v_max_days)
+      AND (
+        CASE
+          WHEN p_alert_type = 'bundles_deletion_warning' THEN EXISTS (
+            SELECT 1
+            FROM public.app_versions AS av
+            WHERE av.owner_org = o.id
+              AND av.deleted = false
+              AND av.name NOT IN ('builtin', 'unknown')
+          )
+          ELSE EXISTS (
+            SELECT 1
+            FROM public.apps AS a
+            WHERE a.owner_org = o.id
+          )
+        END
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM public.notifications AS n
+        WHERE n.owner_org = o.id
+          AND n.event = v_event
+          AND n.uniq_id = (
+            'retention:'
+            || p_alert_type
+            || ':'
+            || to_char(
+              GREATEST(si.canceled_at, si.subscription_anchor_end, si.trial_at) AT TIME ZONE 'UTC',
+              'YYYY-MM-DD"T"HH24:MI:SS"Z"'
+            )
+          )
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM pgmq.q_canceled_org_retention_alerts AS q
+        WHERE q.message -> 'payload' ->> 'org_id' = o.id::text
+          AND q.message -> 'payload' ->> 'alert_type' = p_alert_type
+      )
+    ORDER BY o.id
+    LIMIT v_batch_size
+  LOOP
+    v_days_until := GREATEST(
+      0,
+      CEIL(
+        EXTRACT(
+          EPOCH FROM (
+            org_record.access_end
+            + make_interval(days => v_max_days)
+            - pg_catalog.now()
+          )
+        ) / 86400.0
+      )::integer
+    );
+
+    PERFORM pgmq.send(
+      'canceled_org_retention_alerts',
+      jsonb_build_object(
+        'function_name', 'canceled_org_retention_alerts',
+        'function_type', 'cloudflare',
+        'payload', jsonb_build_object(
+          'org_id', org_record.org_id,
+          'org_name', org_record.org_name,
+          'management_email', org_record.management_email,
+          'alert_type', p_alert_type,
+          'access_end', org_record.access_end,
+          'days_until_deletion', v_days_until,
+          'app_ids', org_record.app_ids
+        )
+      )
+    );
+    v_queued := v_queued + 1;
+  END LOOP;
+
+  IF v_queued > 0 THEN
+    RAISE NOTICE
+      'queue_canceled_org_retention_alerts: type=% queued=% window=[%,%)',
+      p_alert_type,
+      v_queued,
+      v_min_days,
+      v_max_days;
+  END IF;
+
+  RETURN v_queued;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."queue_canceled_org_retention_alerts"("p_alert_type" "text", "p_min_days" integer, "p_batch_size" integer) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."queue_canceled_org_retention_alerts"("p_alert_type" "text", "p_min_days" integer, "p_batch_size" integer) IS 'Queues once-per-cancel-cycle Bento/tracking warnings for canceled orgs without active usage credits in [p_min_days, p_min_days+5). Bundles require a deletable app_versions row; apps require an apps row. Dedup uniq_id uses access_end UTC timestamp.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."queue_cron_stat_app_for_app"("p_app_id" character varying, "p_org_id" "uuid" DEFAULT NULL::"uuid") RETURNS "void"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -12786,63 +13103,33 @@ CREATE OR REPLACE FUNCTION "public"."rbac_check_permission_direct"("p_permission
     AS $$
 DECLARE
   v_allowed boolean := false;
-  v_effective_org_id uuid := p_org_id;
+  v_effective_org_id uuid;
   v_effective_user_id uuid := p_user_id;
-  v_effective_app_id character varying := p_app_id;
+  v_effective_app_id character varying;
   v_api_key public.apikeys%ROWTYPE;
-  v_app_owner_org uuid;
-  v_channel_org_id uuid;
-  v_channel_app_id character varying;
   v_channel_scope boolean := p_channel_id IS NOT NULL;
   v_override boolean;
+  v_scope_ok boolean;
+  v_use_apikey boolean;
+  v_request_apikey text := NULLIF(btrim(p_apikey), '');
 BEGIN
   IF p_permission_key IS NULL OR p_permission_key = '' THEN
     RETURN false;
   END IF;
 
-  IF p_app_id IS NOT NULL THEN
-    SELECT owner_org INTO v_app_owner_org
-    FROM public.apps
-    WHERE app_id = p_app_id
-    LIMIT 1;
+  SELECT s.ok, s.effective_org_id, s.effective_app_id
+  INTO v_scope_ok, v_effective_org_id, v_effective_app_id
+  FROM public.rbac_resolve_permission_scope(p_org_id, p_app_id, p_channel_id) AS s;
 
-    IF v_app_owner_org IS NULL THEN
-      RETURN false;
-    END IF;
-
-    IF v_effective_org_id IS NOT NULL AND v_effective_org_id IS DISTINCT FROM v_app_owner_org THEN
-      RETURN false;
-    END IF;
-
-    v_effective_org_id := v_app_owner_org;
+  IF NOT COALESCE(v_scope_ok, false) THEN
+    RETURN false;
   END IF;
 
-  IF p_channel_id IS NOT NULL THEN
-    SELECT owner_org, app_id
-    INTO v_channel_org_id, v_channel_app_id
-    FROM public.channels
-    WHERE id = p_channel_id
-    LIMIT 1;
+  v_use_apikey := public.rbac_should_use_apikey_principal(p_user_id, p_apikey);
 
-    IF v_channel_org_id IS NULL THEN
-      RETURN false;
-    END IF;
-
-    IF v_effective_org_id IS NOT NULL AND v_effective_org_id IS DISTINCT FROM v_channel_org_id THEN
-      RETURN false;
-    END IF;
-
-    IF v_effective_app_id IS NOT NULL AND v_effective_app_id IS DISTINCT FROM v_channel_app_id THEN
-      RETURN false;
-    END IF;
-
-    v_effective_org_id := v_channel_org_id;
-    v_effective_app_id := v_channel_app_id;
-  END IF;
-
-  IF p_apikey IS NOT NULL THEN
+  IF v_use_apikey THEN
     SELECT * INTO v_api_key
-    FROM public.find_apikey_by_value(p_apikey)
+    FROM public.find_apikey_by_value(v_request_apikey)
     LIMIT 1;
 
     IF v_api_key.id IS NULL
@@ -12931,7 +13218,7 @@ $$;
 ALTER FUNCTION "public"."rbac_check_permission_direct"("p_permission_key" "text", "p_user_id" "uuid", "p_org_id" "uuid", "p_app_id" character varying, "p_channel_id" bigint, "p_apikey" "text") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."rbac_check_permission_direct"("p_permission_key" "text", "p_user_id" "uuid", "p_org_id" "uuid", "p_app_id" character varying, "p_channel_id" bigint, "p_apikey" "text") IS 'Direct RBAC permission check. Uses role_bindings only, supports hashed API keys via find_apikey_by_value, and applies channel overrides.';
+COMMENT ON FUNCTION "public"."rbac_check_permission_direct"("p_permission_key" "text", "p_user_id" "uuid", "p_org_id" "uuid", "p_app_id" character varying, "p_channel_id" bigint, "p_apikey" "text") IS 'Direct RBAC permission check. Non-empty p_apikey selects the API-key principal unless it is only the request capgkey while JWT auth.uid() matches p_user_id (prefer JWT). Applies channel overrides and password/2FA for users. RLS should use rbac_check_permission_request.';
 
 
 
@@ -12940,61 +13227,31 @@ CREATE OR REPLACE FUNCTION "public"."rbac_check_permission_direct_no_password_po
     SET "search_path" TO ''
     AS $$
 DECLARE
-  v_effective_org_id uuid := p_org_id;
+  v_effective_org_id uuid;
   v_effective_user_id uuid := p_user_id;
-  v_effective_app_id character varying := p_app_id;
+  v_effective_app_id character varying;
   v_api_key public.apikeys%ROWTYPE;
-  v_app_owner_org uuid;
-  v_channel_org_id uuid;
-  v_channel_app_id character varying;
+  v_scope_ok boolean;
+  v_use_apikey boolean;
+  v_request_apikey text := NULLIF(btrim(p_apikey), '');
 BEGIN
   IF p_permission_key IS NULL OR p_permission_key = '' THEN
     RETURN false;
   END IF;
 
-  IF p_app_id IS NOT NULL THEN
-    SELECT owner_org INTO v_app_owner_org
-    FROM public.apps
-    WHERE app_id = p_app_id
-    LIMIT 1;
+  SELECT s.ok, s.effective_org_id, s.effective_app_id
+  INTO v_scope_ok, v_effective_org_id, v_effective_app_id
+  FROM public.rbac_resolve_permission_scope(p_org_id, p_app_id, p_channel_id) AS s;
 
-    IF v_app_owner_org IS NULL THEN
-      RETURN false;
-    END IF;
-
-    IF v_effective_org_id IS NOT NULL AND v_effective_org_id IS DISTINCT FROM v_app_owner_org THEN
-      RETURN false;
-    END IF;
-
-    v_effective_org_id := v_app_owner_org;
+  IF NOT COALESCE(v_scope_ok, false) THEN
+    RETURN false;
   END IF;
 
-  IF p_channel_id IS NOT NULL THEN
-    SELECT owner_org, app_id
-    INTO v_channel_org_id, v_channel_app_id
-    FROM public.channels
-    WHERE id = p_channel_id
-    LIMIT 1;
+  v_use_apikey := public.rbac_should_use_apikey_principal(p_user_id, p_apikey);
 
-    IF v_channel_org_id IS NULL THEN
-      RETURN false;
-    END IF;
-
-    IF v_effective_org_id IS NOT NULL AND v_effective_org_id IS DISTINCT FROM v_channel_org_id THEN
-      RETURN false;
-    END IF;
-
-    IF v_effective_app_id IS NOT NULL AND v_effective_app_id IS DISTINCT FROM v_channel_app_id THEN
-      RETURN false;
-    END IF;
-
-    v_effective_org_id := v_channel_org_id;
-    v_effective_app_id := v_channel_app_id;
-  END IF;
-
-  IF p_apikey IS NOT NULL THEN
+  IF v_use_apikey THEN
     SELECT * INTO v_api_key
-    FROM public.find_apikey_by_value(p_apikey)
+    FROM public.find_apikey_by_value(v_request_apikey)
     LIMIT 1;
 
     IF v_api_key.id IS NULL
@@ -13047,6 +13304,10 @@ $$;
 ALTER FUNCTION "public"."rbac_check_permission_direct_no_password_policy"("p_permission_key" "text", "p_user_id" "uuid", "p_org_id" "uuid", "p_app_id" character varying, "p_channel_id" bigint, "p_apikey" "text") OWNER TO "postgres";
 
 
+COMMENT ON FUNCTION "public"."rbac_check_permission_direct_no_password_policy"("p_permission_key" "text", "p_user_id" "uuid", "p_org_id" "uuid", "p_app_id" character varying, "p_channel_id" bigint, "p_apikey" "text") IS 'Same as rbac_check_permission_direct but skips the password-policy gate. Non-empty p_apikey selects the API-key principal unless it is only the request capgkey while JWT auth.uid() matches p_user_id.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."rbac_check_permission_no_password_policy"("p_permission_key" "text", "p_org_id" "uuid" DEFAULT NULL::"uuid", "p_app_id" character varying DEFAULT NULL::character varying, "p_channel_id" bigint DEFAULT NULL::bigint) RETURNS boolean
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -13079,14 +13340,19 @@ CREATE OR REPLACE FUNCTION "public"."rbac_check_permission_request"("p_permissio
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
+DECLARE
+  v_uid uuid := auth.uid();
 BEGIN
   RETURN public.rbac_check_permission_direct(
     p_permission_key,
-    auth.uid(),
+    v_uid,
     p_org_id,
     p_app_id,
     p_channel_id,
-    public.get_apikey_header()
+    CASE
+      WHEN v_uid IS NOT NULL THEN NULL::text
+      ELSE NULLIF(btrim(public.get_apikey_header()), '')
+    END
   );
 END;
 $$;
@@ -13095,7 +13361,7 @@ $$;
 ALTER FUNCTION "public"."rbac_check_permission_request"("p_permission_key" "text", "p_org_id" "uuid", "p_app_id" character varying, "p_channel_id" bigint) OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."rbac_check_permission_request"("p_permission_key" "text", "p_org_id" "uuid", "p_app_id" character varying, "p_channel_id" bigint) IS 'Request-aware RBAC permission wrapper for RLS and SQL callers. Uses auth.uid() and the API key request header.';
+COMMENT ON FUNCTION "public"."rbac_check_permission_request"("p_permission_key" "text", "p_org_id" "uuid", "p_app_id" character varying, "p_channel_id" bigint) IS 'Request-aware RBAC permission wrapper for RLS and SQL callers. Authenticated JWT requests evaluate the user principal; anonymous capgkey requests evaluate the API-key principal.';
 
 
 
@@ -14005,6 +14271,81 @@ CREATE OR REPLACE FUNCTION "public"."rbac_principal_user"() RETURNS "text"
 ALTER FUNCTION "public"."rbac_principal_user"() OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."rbac_resolve_permission_scope"("p_org_id" "uuid", "p_app_id" character varying, "p_channel_id" bigint) RETURNS TABLE("ok" boolean, "effective_org_id" "uuid", "effective_app_id" character varying)
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  v_app_owner_org uuid;
+  v_channel_org_id uuid;
+  v_channel_app_id character varying;
+BEGIN
+  effective_org_id := p_org_id;
+  effective_app_id := p_app_id;
+
+  IF p_app_id IS NOT NULL THEN
+    SELECT owner_org INTO v_app_owner_org
+    FROM public.apps
+    WHERE app_id = p_app_id
+    LIMIT 1;
+
+    IF v_app_owner_org IS NULL THEN
+      ok := false;
+      RETURN NEXT;
+      RETURN;
+    END IF;
+
+    IF effective_org_id IS NOT NULL AND effective_org_id IS DISTINCT FROM v_app_owner_org THEN
+      ok := false;
+      RETURN NEXT;
+      RETURN;
+    END IF;
+
+    effective_org_id := v_app_owner_org;
+  END IF;
+
+  IF p_channel_id IS NOT NULL THEN
+    SELECT owner_org, app_id
+    INTO v_channel_org_id, v_channel_app_id
+    FROM public.channels
+    WHERE id = p_channel_id
+    LIMIT 1;
+
+    IF v_channel_org_id IS NULL THEN
+      ok := false;
+      RETURN NEXT;
+      RETURN;
+    END IF;
+
+    IF effective_org_id IS NOT NULL AND effective_org_id IS DISTINCT FROM v_channel_org_id THEN
+      ok := false;
+      RETURN NEXT;
+      RETURN;
+    END IF;
+
+    IF effective_app_id IS NOT NULL AND effective_app_id IS DISTINCT FROM v_channel_app_id THEN
+      ok := false;
+      RETURN NEXT;
+      RETURN;
+    END IF;
+
+    effective_org_id := v_channel_org_id;
+    effective_app_id := v_channel_app_id;
+  END IF;
+
+  ok := true;
+  RETURN NEXT;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."rbac_resolve_permission_scope"("p_org_id" "uuid", "p_app_id" character varying, "p_channel_id" bigint) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."rbac_resolve_permission_scope"("p_org_id" "uuid", "p_app_id" character varying, "p_channel_id" bigint) IS 'Resolves effective org/app scope for RBAC permission checks. Called once per direct permission check (RLS/console). Optional PK lookups on apps.app_id and channels.id (apps_pkey, channel_pkey). Returns ok=false on missing/conflicting scope.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."rbac_role_apikey_manager"() RETURNS "text"
     LANGUAGE "sql" IMMUTABLE PARALLEL SAFE
     SET "search_path" TO ''
@@ -14203,6 +14544,35 @@ CREATE OR REPLACE FUNCTION "public"."rbac_scope_platform"() RETURNS "text"
 ALTER FUNCTION "public"."rbac_scope_platform"() OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."rbac_should_use_apikey_principal"("p_user_id" "uuid", "p_apikey" "text") RETURNS boolean
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  v_uid uuid := auth.uid();
+  v_header_apikey text := NULLIF(btrim(public.get_apikey_header()), '');
+  v_request_apikey text := NULLIF(btrim(p_apikey), '');
+BEGIN
+  -- Non-empty p_apikey selects the API-key principal, except when a JWT user is
+  -- authenticated and p_apikey is only the request capgkey header forwarded by a
+  -- DEFINER caller (same value as get_apikey_header). Prefer JWT in that case.
+  RETURN v_request_apikey IS NOT NULL
+    AND NOT (
+      v_uid IS NOT NULL
+      AND p_user_id IS NOT DISTINCT FROM v_uid
+      AND v_request_apikey IS NOT DISTINCT FROM v_header_apikey
+    );
+END;
+$$;
+
+
+ALTER FUNCTION "public"."rbac_should_use_apikey_principal"("p_user_id" "uuid", "p_apikey" "text") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."rbac_should_use_apikey_principal"("p_user_id" "uuid", "p_apikey" "text") IS 'Returns true when direct RBAC checkers should evaluate the API-key principal. False when p_apikey is empty/null, or when JWT auth.uid() matches p_user_id and p_apikey equals the request capgkey header (prefer JWT).';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."read_bandwidth_usage"("p_app_id" character varying, "p_period_start" timestamp without time zone, "p_period_end" timestamp without time zone) RETURNS TABLE("date" timestamp without time zone, "bandwidth" numeric, "app_id" character varying)
     LANGUAGE "plpgsql"
     SET "search_path" TO ''
@@ -14381,7 +14751,7 @@ COMMENT ON FUNCTION "public"."readable_app_version_ids"() IS 'Returns app-versio
 
 
 CREATE OR REPLACE FUNCTION "public"."readable_group_ids"() RETURNS "uuid"[]
-    LANGUAGE "sql" STABLE SECURITY DEFINER
+    LANGUAGE "sql" SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
   WITH direct_group_ids AS (
@@ -18251,6 +18621,34 @@ COMMENT ON COLUMN "public"."channel_permission_overrides"."permission_key" IS 'R
 
 
 
+CREATE TABLE IF NOT EXISTS "public"."cli_usage" (
+    "id" bigint NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "cli_version" "text" NOT NULL,
+    "command" "text" DEFAULT ''::"text" NOT NULL,
+    "node_version" "text" DEFAULT ''::"text" NOT NULL,
+    "os_platform" "text" DEFAULT ''::"text" NOT NULL,
+    "apikey_id" "uuid",
+    "org_id" "uuid",
+    "source" "text" DEFAULT 'config'::"text" NOT NULL,
+    "api_version" "text" DEFAULT ''::"text" NOT NULL
+);
+
+
+ALTER TABLE "public"."cli_usage" OWNER TO "postgres";
+
+
+ALTER TABLE "public"."cli_usage" ALTER COLUMN "id" ADD GENERATED BY DEFAULT AS IDENTITY (
+    SEQUENCE NAME "public"."cli_usage_id_seq"
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+
 CREATE TABLE IF NOT EXISTS "public"."compatibility_events" (
     "id" bigint NOT NULL,
     "org_id" "uuid" NOT NULL,
@@ -18801,7 +19199,8 @@ CREATE TABLE IF NOT EXISTS "public"."global_stats" (
     "notifications_opened_day" bigint DEFAULT 0 NOT NULL,
     "notifications_failed_day" bigint DEFAULT 0 NOT NULL,
     "notifications_sent_last_month" bigint DEFAULT 0 NOT NULL,
-    "notifications_opened_last_month" bigint DEFAULT 0 NOT NULL
+    "notifications_opened_last_month" bigint DEFAULT 0 NOT NULL,
+    "apps_with_preview" bigint DEFAULT 0 NOT NULL
 );
 
 
@@ -19116,6 +19515,10 @@ COMMENT ON COLUMN "public"."global_stats"."notifications_opened_last_month" IS '
 
 
 
+COMMENT ON COLUMN "public"."global_stats"."apps_with_preview" IS 'Number of apps with preview QR enabled (allow_preview = true) at snapshot day end.';
+
+
+
 CREATE TABLE IF NOT EXISTS "public"."group_members" (
     "group_id" "uuid" NOT NULL,
     "user_id" "uuid" NOT NULL,
@@ -19265,6 +19668,44 @@ CREATE TABLE IF NOT EXISTS "public"."notifications" (
 
 
 ALTER TABLE "public"."notifications" OWNER TO "postgres";
+
+
+CREATE TABLE IF NOT EXISTS "public"."old_apps" (
+    "id" bigint NOT NULL,
+    "app_id" character varying NOT NULL,
+    "email" "text" NOT NULL,
+    "owner_org" "uuid" NOT NULL,
+    "user_id" "uuid",
+    "app_created_at" timestamp with time zone,
+    "deleted_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL
+);
+
+
+ALTER TABLE "public"."old_apps" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."old_apps" IS 'Archive of apps deleted after the unpaid/canceled retention window (95 days). Keeps app_id and creator email for support memory; not purged by delete_old_deleted_apps.';
+
+
+
+COMMENT ON COLUMN "public"."old_apps"."email" IS 'Email of the app creator (public.users via apps.user_id), falling back to org management_email.';
+
+
+
+COMMENT ON COLUMN "public"."old_apps"."app_created_at" IS 'Original apps.created_at at archival time.';
+
+
+
+ALTER TABLE "public"."old_apps" ALTER COLUMN "id" ADD GENERATED BY DEFAULT AS IDENTITY (
+    SEQUENCE NAME "public"."old_apps_id_seq"
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
 
 
 CREATE TABLE IF NOT EXISTS "public"."onboarding_demo_data" (
@@ -20406,6 +20847,11 @@ ALTER TABLE ONLY "public"."channels"
 
 
 
+ALTER TABLE ONLY "public"."cli_usage"
+    ADD CONSTRAINT "cli_usage_pkey" PRIMARY KEY ("id");
+
+
+
 ALTER TABLE ONLY "public"."compatibility_events"
     ADD CONSTRAINT "compatibility_events_pkey" PRIMARY KEY ("id");
 
@@ -20543,6 +20989,16 @@ ALTER TABLE ONLY "public"."notification_provider_configs"
 
 ALTER TABLE ONLY "public"."notifications"
     ADD CONSTRAINT "notifications_pkey" PRIMARY KEY ("owner_org", "event", "uniq_id");
+
+
+
+ALTER TABLE ONLY "public"."old_apps"
+    ADD CONSTRAINT "old_apps_app_id_owner_org_key" UNIQUE ("app_id", "owner_org");
+
+
+
+ALTER TABLE ONLY "public"."old_apps"
+    ADD CONSTRAINT "old_apps_pkey" PRIMARY KEY ("id");
 
 
 
@@ -20784,6 +21240,22 @@ CREATE UNIQUE INDEX "channels_one_public_electron_per_app_key" ON "public"."chan
 
 
 CREATE UNIQUE INDEX "channels_one_public_ios_per_app_key" ON "public"."channels" USING "btree" ("app_id") WHERE (("public" = true) AND ("ios" = true));
+
+
+
+CREATE INDEX "cli_usage_api_version_idx" ON "public"."cli_usage" USING "btree" ("api_version");
+
+
+
+CREATE INDEX "cli_usage_apikey_id_idx" ON "public"."cli_usage" USING "btree" ("apikey_id") WHERE ("apikey_id" IS NOT NULL);
+
+
+
+CREATE INDEX "cli_usage_cli_version_idx" ON "public"."cli_usage" USING "btree" ("cli_version");
+
+
+
+CREATE INDEX "cli_usage_created_at_idx" ON "public"."cli_usage" USING "btree" ("created_at" DESC);
 
 
 
@@ -21287,6 +21759,14 @@ CREATE INDEX "notifications_uniq_id_idx" ON "public"."notifications" USING "btre
 
 
 
+CREATE INDEX "old_apps_deleted_at_idx" ON "public"."old_apps" USING "btree" ("deleted_at");
+
+
+
+CREATE INDEX "old_apps_email_idx" ON "public"."old_apps" USING "btree" ("email");
+
+
+
 CREATE UNIQUE INDEX "onboarding_demo_data_app_relation_row_key_idx" ON "public"."onboarding_demo_data" USING "btree" ("app_id", "relation_name", "row_key");
 
 
@@ -21483,6 +21963,10 @@ CREATE OR REPLACE TRIGGER "enforce_encrypted_bundle_trigger" BEFORE INSERT OR UP
 
 
 
+CREATE OR REPLACE TRIGGER "enforce_public_channel_app_settings_permission" BEFORE UPDATE OF "public" ON "public"."channels" FOR EACH ROW EXECUTE FUNCTION "public"."enforce_public_channel_app_settings_permission"();
+
+
+
 CREATE OR REPLACE TRIGGER "enforce_role_binding_role_scope" BEFORE INSERT OR UPDATE OF "role_id", "scope_type" ON "public"."role_bindings" FOR EACH ROW EXECUTE FUNCTION "public"."enforce_role_binding_role_scope"();
 
 
@@ -21524,6 +22008,10 @@ CREATE OR REPLACE TRIGGER "global_stats_creates_on_app_insert" AFTER INSERT ON "
 
 
 CREATE OR REPLACE TRIGGER "global_stats_creates_on_version_insert" AFTER INSERT ON "public"."app_versions" FOR EACH ROW EXECUTE FUNCTION "public"."enqueue_global_stats_creates"();
+
+
+
+CREATE OR REPLACE TRIGGER "groups_mark_inserting" BEFORE INSERT ON "public"."groups" FOR EACH ROW EXECUTE FUNCTION "public"."groups_mark_inserting"();
 
 
 
@@ -22267,7 +22755,7 @@ CREATE POLICY "Allow RBAC channels delete" ON "public"."channels" FOR DELETE TO 
 
 
 
-CREATE POLICY "Allow RBAC channels insert" ON "public"."channels" FOR INSERT TO "anon", "authenticated" WITH CHECK (("public"."rbac_check_permission_request"("public"."rbac_perm_app_create_channel"(), "owner_org", "app_id", NULL::bigint) AND ((("version" IS NULL) AND ("rollout_version" IS NULL)) OR "public"."rbac_check_permission_request"("public"."rbac_perm_channel_promote_bundle"(), "owner_org", "app_id", NULL::bigint))));
+CREATE POLICY "Allow RBAC channels insert" ON "public"."channels" FOR INSERT TO "anon", "authenticated" WITH CHECK (("public"."rbac_check_permission_request"("public"."rbac_perm_app_create_channel"(), "owner_org", "app_id", NULL::bigint) AND (("public" IS FALSE) OR "public"."rbac_check_permission_request"("public"."rbac_perm_app_update_settings"(), "owner_org", "app_id", NULL::bigint)) AND ((("version" IS NULL) AND ("rollout_version" IS NULL)) OR "public"."rbac_check_permission_request"("public"."rbac_perm_channel_promote_bundle"(), "owner_org", "app_id", NULL::bigint))));
 
 
 
@@ -22505,6 +22993,10 @@ CREATE POLICY "Deny all access" ON "public"."to_delete_accounts" USING (false) W
 
 
 
+CREATE POLICY "Deny all access on old_apps" ON "public"."old_apps" TO "anon", "authenticated" USING (false) WITH CHECK (false);
+
+
+
 CREATE POLICY "Deny all authenticated on builder_capacity_events" ON "public"."builder_capacity_events" AS RESTRICTIVE TO "anon", "authenticated" USING (false) WITH CHECK (false);
 
 
@@ -22573,6 +23065,10 @@ CREATE POLICY "Deny delete on apikey_global_permissions" ON "public"."apikey_glo
 
 
 
+CREATE POLICY "Deny delete on cli_usage" ON "public"."cli_usage" AS RESTRICTIVE FOR DELETE TO "anon", "authenticated" USING (false);
+
+
+
 CREATE POLICY "Deny delete on daily_storage_hourly" ON "public"."daily_storage_hourly" AS RESTRICTIVE FOR DELETE TO "anon", "authenticated" USING (false);
 
 
@@ -22609,6 +23105,10 @@ CREATE POLICY "Deny insert on apikey_global_permissions" ON "public"."apikey_glo
 
 
 
+CREATE POLICY "Deny insert on cli_usage" ON "public"."cli_usage" AS RESTRICTIVE FOR INSERT TO "anon", "authenticated" WITH CHECK (false);
+
+
+
 CREATE POLICY "Deny insert on daily_storage_hourly" ON "public"."daily_storage_hourly" AS RESTRICTIVE FOR INSERT TO "anon", "authenticated" WITH CHECK (false);
 
 
@@ -22622,6 +23122,10 @@ CREATE POLICY "Deny insert via RBAC" ON "public"."deploy_history" FOR INSERT WIT
 
 
 CREATE POLICY "Deny select on apikey_global_permissions" ON "public"."apikey_global_permissions" AS RESTRICTIVE FOR SELECT TO "anon", "authenticated" USING (false);
+
+
+
+CREATE POLICY "Deny select on cli_usage" ON "public"."cli_usage" AS RESTRICTIVE FOR SELECT TO "anon", "authenticated" USING (false);
 
 
 
@@ -22646,6 +23150,10 @@ CREATE POLICY "Deny update for org members" ON "public"."usage_overage_events" A
 
 
 CREATE POLICY "Deny update on apikey_global_permissions" ON "public"."apikey_global_permissions" AS RESTRICTIVE FOR UPDATE TO "anon", "authenticated" USING (false) WITH CHECK (false);
+
+
+
+CREATE POLICY "Deny update on cli_usage" ON "public"."cli_usage" AS RESTRICTIVE FOR UPDATE TO "anon", "authenticated" USING (false);
 
 
 
@@ -22873,6 +23381,9 @@ COMMENT ON POLICY "channel_permission_overrides_admin_update" ON "public"."chann
 ALTER TABLE "public"."channels" ENABLE ROW LEVEL SECURITY;
 
 
+ALTER TABLE "public"."cli_usage" ENABLE ROW LEVEL SECURITY;
+
+
 ALTER TABLE "public"."compatibility_events" ENABLE ROW LEVEL SECURITY;
 
 
@@ -23002,7 +23513,11 @@ CREATE POLICY "groups_insert" ON "public"."groups" FOR INSERT TO "authenticated"
 
 
 
-CREATE POLICY "groups_select" ON "public"."groups" FOR SELECT TO "anon", "authenticated" USING (("id" = ANY (COALESCE(( SELECT "public"."readable_group_ids"() AS "readable_group_ids"), '{}'::"uuid"[]))));
+CREATE POLICY "groups_select" ON "public"."groups" FOR SELECT TO "anon", "authenticated" USING ((("id" = ANY (COALESCE(( SELECT "public"."readable_group_ids"() AS "readable_group_ids"), '{}'::"uuid"[]))) OR "public"."groups_is_insert_returning_row"("id", "created_by")));
+
+
+
+COMMENT ON POLICY "groups_select" ON "public"."groups" IS 'Members/admins see groups via readable_group_ids() (rank-bounded). INSERT ... RETURNING also allows the transaction-local insert marker for the creator row.';
 
 
 
@@ -23023,6 +23538,9 @@ ALTER TABLE "public"."notification_provider_configs" ENABLE ROW LEVEL SECURITY;
 
 
 ALTER TABLE "public"."notifications" ENABLE ROW LEVEL SECURITY;
+
+
+ALTER TABLE "public"."old_apps" ENABLE ROW LEVEL SECURITY;
 
 
 ALTER TABLE "public"."onboarding_demo_data" ENABLE ROW LEVEL SECURITY;
@@ -23741,6 +24259,11 @@ REVOKE ALL ON FUNCTION "public"."calculate_org_metrics_cache_entry"("p_org_id" "
 
 
 
+REVOKE ALL ON FUNCTION "public"."canceled_org_ids_past_grace"("p_days" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."canceled_org_ids_past_grace"("p_days" integer) TO "service_role";
+
+
+
 REVOKE ALL ON FUNCTION "public"."channel_forced_devices_denied_channel_ids"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."channel_forced_devices_denied_channel_ids"() TO "service_role";
 GRANT ALL ON FUNCTION "public"."channel_forced_devices_denied_channel_ids"() TO "anon";
@@ -24022,6 +24545,11 @@ GRANT ALL ON FUNCTION "public"."delete_accounts_marked_for_deletion"() TO "servi
 
 
 
+REVOKE ALL ON FUNCTION "public"."delete_apps_for_long_canceled_orgs"("p_batch_size" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."delete_apps_for_long_canceled_orgs"("p_batch_size" integer) TO "service_role";
+
+
+
 REVOKE ALL ON FUNCTION "public"."delete_group_with_bindings"("group_id" "uuid") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."delete_group_with_bindings"("group_id" "uuid") TO "service_role";
 GRANT ALL ON FUNCTION "public"."delete_group_with_bindings"("group_id" "uuid") TO "authenticated";
@@ -24080,6 +24608,11 @@ REVOKE ALL ON FUNCTION "public"."enforce_email_otp_for_mfa"() FROM PUBLIC;
 
 REVOKE ALL ON FUNCTION "public"."enforce_preview_bundle_ownership"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."enforce_preview_bundle_ownership"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."enforce_public_channel_app_settings_permission"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."enforce_public_channel_app_settings_permission"() TO "service_role";
 
 
 
@@ -24519,6 +25052,18 @@ GRANT ALL ON FUNCTION "public"."get_weekly_stats"("app_id" character varying) TO
 
 REVOKE ALL ON FUNCTION "public"."group_max_role_priority"("p_group_id" "uuid") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."group_max_role_priority"("p_group_id" "uuid") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."groups_is_insert_returning_row"("p_id" "uuid", "p_created_by" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."groups_is_insert_returning_row"("p_id" "uuid", "p_created_by" "uuid") TO "service_role";
+GRANT ALL ON FUNCTION "public"."groups_is_insert_returning_row"("p_id" "uuid", "p_created_by" "uuid") TO "anon";
+GRANT ALL ON FUNCTION "public"."groups_is_insert_returning_row"("p_id" "uuid", "p_created_by" "uuid") TO "authenticated";
+
+
+
+REVOKE ALL ON FUNCTION "public"."groups_mark_inserting"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."groups_mark_inserting"() TO "service_role";
 
 
 
@@ -25053,6 +25598,11 @@ GRANT ALL ON FUNCTION "public"."process_subscribed_orgs"() TO "service_role";
 
 
 
+REVOKE ALL ON FUNCTION "public"."queue_canceled_org_retention_alerts"("p_alert_type" "text", "p_min_days" integer, "p_batch_size" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."queue_canceled_org_retention_alerts"("p_alert_type" "text", "p_min_days" integer, "p_batch_size" integer) TO "service_role";
+
+
+
 REVOKE ALL ON FUNCTION "public"."queue_cron_stat_app_for_app"("p_app_id" character varying, "p_org_id" "uuid") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."queue_cron_stat_app_for_app"("p_app_id" character varying, "p_org_id" "uuid") TO "service_role";
 
@@ -25420,6 +25970,11 @@ GRANT ALL ON FUNCTION "public"."rbac_principal_user"() TO "service_role";
 
 
 
+REVOKE ALL ON FUNCTION "public"."rbac_resolve_permission_scope"("p_org_id" "uuid", "p_app_id" character varying, "p_channel_id" bigint) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."rbac_resolve_permission_scope"("p_org_id" "uuid", "p_app_id" character varying, "p_channel_id" bigint) TO "service_role";
+
+
+
 GRANT ALL ON FUNCTION "public"."rbac_role_apikey_manager"() TO "service_role";
 
 
@@ -25544,6 +26099,11 @@ GRANT ALL ON FUNCTION "public"."rbac_scope_org"() TO "service_role";
 GRANT ALL ON FUNCTION "public"."rbac_scope_platform"() TO "anon";
 GRANT ALL ON FUNCTION "public"."rbac_scope_platform"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."rbac_scope_platform"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."rbac_should_use_apikey_principal"("p_user_id" "uuid", "p_apikey" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."rbac_should_use_apikey_principal"("p_user_id" "uuid", "p_apikey" "text") TO "service_role";
 
 
 
@@ -26113,6 +26673,18 @@ GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "public".
 
 
 
+GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "public"."cli_usage" TO "anon";
+GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "public"."cli_usage" TO "authenticated";
+GRANT ALL ON TABLE "public"."cli_usage" TO "service_role";
+
+
+
+GRANT ALL ON SEQUENCE "public"."cli_usage_id_seq" TO "anon";
+GRANT ALL ON SEQUENCE "public"."cli_usage_id_seq" TO "authenticated";
+GRANT ALL ON SEQUENCE "public"."cli_usage_id_seq" TO "service_role";
+
+
+
 GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "public"."compatibility_events" TO "anon";
 GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "public"."compatibility_events" TO "authenticated";
 GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "public"."compatibility_events" TO "service_role";
@@ -26292,6 +26864,14 @@ GRANT ALL ON TABLE "public"."notification_provider_configs" TO "service_role";
 GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "public"."notifications" TO "anon";
 GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "public"."notifications" TO "authenticated";
 GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "public"."notifications" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."old_apps" TO "service_role";
+
+
+
+GRANT ALL ON SEQUENCE "public"."old_apps_id_seq" TO "service_role";
 
 
 

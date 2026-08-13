@@ -7,6 +7,7 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import IconSmartphone from '~icons/lucide/smartphone'
+import ChannelOverrideRetentionNotice from '~/components/ChannelOverrideRetentionNotice.vue'
 import DateRangePicker from '~/components/DateRangePicker.vue'
 import { formatDate } from '~/services/date'
 import {
@@ -622,6 +623,7 @@ watch([selectedPlatform, selectedVersionNames], () => {
       @clear-extra-filters="clearExtraFilters"
     >
       <template #toolbar-extras>
+        <ChannelOverrideRetentionNotice v-if="showAddButton" show-label />
         <DateRangePicker
           ref="dateRangePickerRef"
           v-model="dateRange"

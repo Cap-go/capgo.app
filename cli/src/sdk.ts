@@ -755,6 +755,8 @@ export class CapgoSDK {
         keystoreKeyPassword: creds?.KEYSTORE_KEY_PASSWORD,
         keystoreStorePassword: creds?.KEYSTORE_STORE_PASSWORD,
         playConfigJson: creds?.PLAY_CONFIG_JSON,
+        androidTrack: options.androidTrack ?? (creds?.PLAY_STORE_TRACK as 'internal' | 'alpha' | 'beta' | 'production' | undefined),
+        androidReleaseStatus: options.androidReleaseStatus ?? (creds?.PLAY_STORE_RELEASE_STATUS as 'draft' | 'completed' | 'inProgress' | 'halted' | undefined),
         submitToStoreReview: options.submitToStoreReview ?? (creds?.CAPGO_STORE_SUBMIT_REVIEW === undefined ? undefined : creds.CAPGO_STORE_SUBMIT_REVIEW === 'true'),
         storeReleaseName: options.storeReleaseName ?? creds?.CAPGO_STORE_RELEASE_NAME,
         storeReleaseNotes: options.storeReleaseNotes ?? creds?.CAPGO_STORE_RELEASE_NOTES,

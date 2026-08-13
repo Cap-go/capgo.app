@@ -646,6 +646,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
         </div>
       </div>
     </div>
+    <slot name="table-notice" />
     <div class="block">
       <table id="custom_table" class="w-full text-sm text-left text-gray-500 pb-14 md:pb-0 dark:text-gray-400">
         <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:text-gray-400 dark:bg-gray-700">
