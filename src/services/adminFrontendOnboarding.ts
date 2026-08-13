@@ -13,8 +13,15 @@ export interface FrontendOnboardingComparison {
   largest_dropoff_points: number | null
 }
 
+export interface FrontendOnboardingFunnelStage {
+  key: FrontendOnboardingStageKey
+  label: 'Intent' | 'App details' | 'Organization' | 'Setup reached'
+  reached: number
+  of_start_percent: number
+  dropoff_percent: number
+}
+
 export interface FrontendOnboardingAnalytics {
-  onboarding_version: 1
   kpis: {
     attempts: number
     completed: number
@@ -25,22 +32,26 @@ export interface FrontendOnboardingAnalytics {
   }
   daily_attempts: Array<{
     date: string
-    attempts: number
+    v1_attempts: number
+    v2_attempts: number
   }>
-  funnel: Array<{
-    key: FrontendOnboardingStageKey
-    label: 'Intent' | 'App details' | 'Organization' | 'Setup reached'
-    reached: number
-    of_start_percent: number
-    dropoff_percent: number
-  }>
+  funnels: {
+    v1: FrontendOnboardingFunnelStage[]
+    v2: FrontendOnboardingFunnelStage[]
+  }
+  v2_graph: {
+    nodes: Array<{
+      key: string
+      count?: number
+    }>
+  }
   posthog_configured: boolean
   posthog_connected: boolean
 }
 
 export interface FrontendOnboardingDailySeries {
   label: string
-  color: '#5667d8'
+  color: string
   data: Array<{
     date: string
     value: number
@@ -59,6 +70,17 @@ export interface FrontendOnboardingFunnelSummary {
   reached: number
   from_label: string | null
   to_label: string
+}
+
+export interface FrontendOnboardingGraphMetricDefinition {
+  key: string
+  parentKey?: string
+}
+
+export interface FrontendOnboardingGraphMetric {
+  count: number
+  levelPercent: number
+  previousPercent?: number
 }
 
 export interface FrontendOnboardingAnalyticsLoaderCallbacks {
@@ -105,17 +127,25 @@ export function createFrontendOnboardingAnalyticsLoader(
 
 export function buildFrontendOnboardingDailySeries(
   dailyAttempts: readonly FrontendOnboardingAnalytics['daily_attempts'][number][],
-  label: string,
+  v1Label: string,
+  v2Label: string,
 ): FrontendOnboardingDailySeries[] {
-  return [{
-    label,
-    color: '#5667d8',
-    data: dailyAttempts.map(({ date, attempts }) => ({ date, value: attempts })),
-  }]
+  return [
+    {
+      label: v1Label,
+      color: '#a78bfa',
+      data: dailyAttempts.map(({ date, v1_attempts }) => ({ date, value: v1_attempts })),
+    },
+    {
+      label: v2Label,
+      color: '#06b6d4',
+      data: dailyAttempts.map(({ date, v2_attempts }) => ({ date, value: v2_attempts })),
+    },
+  ]
 }
 
 export function buildFrontendOnboardingFunnelStages(
-  funnel: readonly FrontendOnboardingAnalytics['funnel'][number][],
+  funnel: readonly FrontendOnboardingFunnelStage[],
 ): FrontendOnboardingFunnelDisplayStage[] {
   return funnel.map(stage => ({
     label: stage.label,
@@ -125,7 +155,7 @@ export function buildFrontendOnboardingFunnelStages(
 }
 
 export function buildFrontendOnboardingFunnelSummaries(
-  funnel: readonly FrontendOnboardingAnalytics['funnel'][number][],
+  funnel: readonly FrontendOnboardingFunnelStage[],
 ): FrontendOnboardingFunnelSummary[] {
   const hasAttempts = (funnel[0]?.reached ?? 0) > 0
   return funnel.map((stage, index) => {
@@ -142,6 +172,27 @@ export function buildFrontendOnboardingFunnelSummaries(
       to_label: stage.label,
     }
   })
+}
+
+export function buildFrontendOnboardingGraphMetrics(
+  definitions: readonly FrontendOnboardingGraphMetricDefinition[],
+  nodes: readonly FrontendOnboardingAnalytics['v2_graph']['nodes'][number][],
+  appDetailsCount: number | undefined,
+): Record<string, FrontendOnboardingGraphMetric> {
+  const counts = new Map(nodes.map(node => [node.key, node.count ?? 0]))
+
+  return Object.fromEntries(definitions.map(({ key, parentKey }) => {
+    const count = counts.get(key) ?? 0
+    const levelPercent = appDetailsCount ? count / appDetailsCount * 100 : 0
+    const metric: FrontendOnboardingGraphMetric = { count, levelPercent }
+
+    if (parentKey) {
+      const parentCount = counts.get(parentKey) ?? 0
+      metric.previousPercent = parentCount ? count / parentCount * 100 : 0
+    }
+
+    return [key, metric]
+  }))
 }
 
 export function formatFrontendOnboardingDuration(value: number | null): string {

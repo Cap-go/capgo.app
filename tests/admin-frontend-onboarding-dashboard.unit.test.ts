@@ -5,6 +5,7 @@ import {
   buildFrontendOnboardingDailySeries,
   buildFrontendOnboardingFunnelStages,
   buildFrontendOnboardingFunnelSummaries,
+  buildFrontendOnboardingGraphMetrics,
   createFrontendOnboardingAnalyticsLoader,
   formatFrontendOnboardingDuration,
 } from '../src/services/adminFrontendOnboarding'
@@ -21,7 +22,6 @@ function deferred<T>() {
 
 describe('admin frontend onboarding dashboard', () => {
   const analytics: FrontendOnboardingAnalytics = {
-    onboarding_version: 1,
     kpis: {
       attempts: 10,
       completed: 4,
@@ -40,40 +40,64 @@ describe('admin frontend onboarding dashboard', () => {
       },
     },
     daily_attempts: [
-      { date: '2026-08-10', attempts: 6 },
-      { date: '2026-08-09', attempts: 4 },
+      { date: '2026-08-10', v1_attempts: 6, v2_attempts: 3 },
+      { date: '2026-08-09', v1_attempts: 4, v2_attempts: 2 },
     ],
-    funnel: [
-      { key: 'intent', label: 'Intent', reached: 10, of_start_percent: 100, dropoff_percent: 0 },
-      { key: 'details', label: 'App details', reached: 8, of_start_percent: 80, dropoff_percent: 20 },
-      { key: 'organization', label: 'Organization', reached: 5, of_start_percent: 50, dropoff_percent: 37.5 },
-      { key: 'setup', label: 'Setup reached', reached: 4, of_start_percent: 40, dropoff_percent: 20 },
-    ],
+    funnels: {
+      v1: [
+        { key: 'intent', label: 'Intent', reached: 10, of_start_percent: 100, dropoff_percent: 0 },
+        { key: 'details', label: 'App details', reached: 8, of_start_percent: 80, dropoff_percent: 20 },
+        { key: 'organization', label: 'Organization', reached: 5, of_start_percent: 50, dropoff_percent: 37.5 },
+        { key: 'setup', label: 'Setup reached', reached: 4, of_start_percent: 40, dropoff_percent: 20 },
+      ],
+      v2: [
+        { key: 'intent', label: 'Intent', reached: 5, of_start_percent: 100, dropoff_percent: 0 },
+        { key: 'details', label: 'App details', reached: 4, of_start_percent: 80, dropoff_percent: 20 },
+        { key: 'organization', label: 'Organization', reached: 3, of_start_percent: 60, dropoff_percent: 25 },
+        { key: 'setup', label: 'Setup reached', reached: 2, of_start_percent: 40, dropoff_percent: 33.3 },
+      ],
+    },
+    v2_graph: {
+      nodes: [
+        { key: 'details', count: 4 },
+        { key: 'store_opened', count: 3 },
+        { key: 'import_clicked', count: 2 },
+      ],
+    },
     posthog_configured: true,
     posthog_connected: true,
   }
 
-  it.concurrent('adapts daily attempts into one ordered stacked-chart series', () => {
-    expect(buildFrontendOnboardingDailySeries(analytics.daily_attempts, 'Attempts')).toEqual([
+  it.concurrent('adapts split daily attempts into ordered v1 and v2 chart series', () => {
+    expect(buildFrontendOnboardingDailySeries(analytics.daily_attempts, 'V1', 'V2')).toEqual([
       {
-        label: 'Attempts',
-        color: '#5667d8',
+        label: 'V1',
+        color: '#a78bfa',
         data: [
           { date: '2026-08-10', value: 6 },
           { date: '2026-08-09', value: 4 },
         ],
       },
+      {
+        label: 'V2',
+        color: '#06b6d4',
+        data: [
+          { date: '2026-08-10', value: 3 },
+          { date: '2026-08-09', value: 2 },
+        ],
+      },
     ])
-    expect(buildFrontendOnboardingDailySeries([], 'Attempts')).toEqual([
-      { label: 'Attempts', color: '#5667d8', data: [] },
+    expect(buildFrontendOnboardingDailySeries([], 'V1', 'V2')).toEqual([
+      { label: 'V1', color: '#a78bfa', data: [] },
+      { label: 'V2', color: '#06b6d4', data: [] },
     ])
   })
 
   it.concurrent('adapts reordered funnel stages with stable key-based colors', () => {
     expect(buildFrontendOnboardingFunnelStages([
-      analytics.funnel[3],
-      analytics.funnel[0],
-      analytics.funnel[2],
+      analytics.funnels.v1[3],
+      analytics.funnels.v1[0],
+      analytics.funnels.v1[2],
     ])).toEqual([
       { label: 'Setup reached', value: 4, color: '#10b981' },
       { label: 'Intent', value: 10, color: '#119eff' },
@@ -81,8 +105,8 @@ describe('admin frontend onboarding dashboard', () => {
     ])
   })
 
-  it.concurrent('adapts funnel drop-offs into ordered stage-to-stage conversions', () => {
-    expect(buildFrontendOnboardingFunnelSummaries(analytics.funnel)).toEqual([
+  it.concurrent('adapts either selected funnel into ordered stage-to-stage conversions', () => {
+    expect(buildFrontendOnboardingFunnelSummaries(analytics.funnels.v1)).toEqual([
       {
         key: 'intent',
         conversion_percent: 100,
@@ -112,10 +136,11 @@ describe('admin frontend onboarding dashboard', () => {
         to_label: 'Setup reached',
       },
     ])
+    expect(buildFrontendOnboardingFunnelSummaries(analytics.funnels.v2).map(stage => stage.reached)).toEqual([5, 4, 3, 2])
   })
 
   it.concurrent('shows zero conversion for every stage when the selected cohort is empty', () => {
-    const emptyFunnel = analytics.funnel.map(stage => ({
+    const emptyFunnel = analytics.funnels.v1.map(stage => ({
       ...stage,
       reached: 0,
       of_start_percent: 0,
@@ -126,13 +151,44 @@ describe('admin frontend onboarding dashboard', () => {
   })
 
   it.concurrent('shows zero conversion after a stage has dropped to zero', () => {
-    const collapsedFunnel = analytics.funnel.map((stage, index) => ({
+    const collapsedFunnel = analytics.funnels.v1.map((stage, index) => ({
       ...stage,
       reached: [10, 8, 0, 0][index],
       dropoff_percent: [0, 20, 100, 0][index],
     }))
 
     expect(buildFrontendOnboardingFunnelSummaries(collapsedFunnel).map(stage => stage.conversion_percent)).toEqual([100, 80, 0, 0])
+  })
+
+  it.concurrent('calculates graph metrics against app details and immediate parents', () => {
+    expect(buildFrontendOnboardingGraphMetrics([
+      { key: 'details' },
+      { key: 'store_opened', parentKey: 'details' },
+      { key: 'import_clicked', parentKey: 'store_opened' },
+    ], analytics.v2_graph.nodes, 4)).toEqual({
+      details: { count: 4, levelPercent: 100 },
+      store_opened: { count: 3, levelPercent: 75, previousPercent: 75 },
+      import_clicked: { count: 2, levelPercent: 50, previousPercent: 66.66666666666666 },
+    })
+  })
+
+  it.concurrent('uses zero metrics for missing counts and missing or zero denominators', () => {
+    expect(buildFrontendOnboardingGraphMetrics([
+      { key: 'missing' },
+      { key: 'missing-parent-child', parentKey: 'missing_parent' },
+      { key: 'zero-parent-child', parentKey: 'zero_parent' },
+    ], [
+      { key: 'missing-parent-child', count: 3 },
+      { key: 'zero-parent-child', count: 3 },
+      { key: 'zero_parent', count: 0 },
+    ], 0)).toEqual({
+      missing: { count: 0, levelPercent: 0 },
+      'missing-parent-child': { count: 3, levelPercent: 0, previousPercent: 0 },
+      'zero-parent-child': { count: 3, levelPercent: 0, previousPercent: 0 },
+    })
+    expect(buildFrontendOnboardingGraphMetrics([{ key: 'event' }], [{ key: 'event', count: 3 }], undefined)).toEqual({
+      event: { count: 3, levelPercent: 0 },
+    })
   })
 
   it.concurrent('formats nullable durations as rounded, nonnegative minutes and seconds', () => {
