@@ -396,7 +396,7 @@ INSERT INTO public.cron_tasks (
   'Refresh apps.onboarding feature ledger (started/succeeded/last_used/stage) in bounded batches',
   'function',
   'public.refresh_app_onboarding_progress(2000)',
-  2000,
+  2000, -- informational: function tasks execute `target` as SELECT; batch_size is unused
   NULL,
   NULL,
   NULL,
