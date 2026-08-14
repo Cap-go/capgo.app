@@ -318,6 +318,9 @@ async function generateDemoLogs(c: Context, params: ReadStatsParams): Promise<De
         }
       }
 
+      if (params.version_name && versionName !== params.version_name)
+        continue
+
       const logTime = new Date(sequenceStartTime + (j * 1000)) // 1 second between actions in sequence
 
       logs.push({
