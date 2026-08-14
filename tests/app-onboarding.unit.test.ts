@@ -12,6 +12,7 @@ import {
 
 describe('app onboarding merge', () => {
   it.concurrent('keeps CLI step ids in sync with the CLI onboarding list', () => {
+    // CLI titles live in cli/src/init/ui.ts; backend ids must stay identical.
     expect([...APP_ONBOARDING_STEP_IDS]).toEqual([...INIT_ONBOARDING_STEP_IDS])
   })
 
