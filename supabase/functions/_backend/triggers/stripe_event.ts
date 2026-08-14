@@ -312,16 +312,20 @@ async function lookupOrgCreatorEmail(
   }
 }
 
-async function getStripeCustomerBillingEmail(c: Context, customerId: string): Promise<string | null> {
+async function retrieveStripeCustomerBillingEmail(c: Context, customerId: string): Promise<string | null> {
   if (!customerId || !isStripeConfigured(c))
     return null
 
-  try {
-    const customer = await getStripe(c).customers.retrieve(customerId)
-    if ('deleted' in customer && customer.deleted)
-      return null
+  const customer = await getStripe(c).customers.retrieve(customerId)
+  if ('deleted' in customer && customer.deleted)
+    return null
 
-    return normalizeBillingEmail(customer.email)
+  return normalizeBillingEmail(customer.email)
+}
+
+async function getStripeCustomerBillingEmail(c: Context, customerId: string): Promise<string | null> {
+  try {
+    return await retrieveStripeCustomerBillingEmail(c, customerId)
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'getStripeCustomerBillingEmail error', customerId, error })
@@ -330,15 +334,8 @@ async function getStripeCustomerBillingEmail(c: Context, customerId: string): Pr
 }
 
 async function requireLiveStripeCustomerBillingEmail(c: Context, customerId: string): Promise<string | null> {
-  if (!customerId || !isStripeConfigured(c))
-    return null
-
   try {
-    const customer = await getStripe(c).customers.retrieve(customerId)
-    if ('deleted' in customer && customer.deleted)
-      return null
-
-    return normalizeBillingEmail(customer.email)
+    return await retrieveStripeCustomerBillingEmail(c, customerId)
   }
   catch (error) {
     return quickError(500, 'stripe_customer_email_lookup_failed', 'Failed to read live Stripe customer email', {
