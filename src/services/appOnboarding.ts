@@ -4,6 +4,5 @@ export type {
 
 export {
   APP_ONBOARDING_STEP_IDS,
-  isAppOnboardingSource,
   parseAppOnboarding,
 } from '../../supabase/functions/_backend/utils/appOnboarding.ts'

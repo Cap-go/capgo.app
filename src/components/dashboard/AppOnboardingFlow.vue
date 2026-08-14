@@ -29,7 +29,6 @@ import IconTerminal from '~icons/lucide/terminal'
 import IconUsers from '~icons/lucide/users-round'
 import { createDefaultApiKey, findUsablePlainApiKey } from '~/services/apikeys'
 import {
-  isAppOnboardingSource,
   parseAppOnboarding,
 } from '~/services/appOnboarding'
 import { getCapgoApiErrorCode, invokeCapgoApi } from '~/services/capgoApi'
@@ -75,7 +74,9 @@ const config = getLocalConfig()
 const STORE_ICON_FETCH_TIMEOUT_MS = 10_000
 const removeBeforeUnloadWarning = useBeforeUnloadWarning(Boolean(props.preOrg))
 
-type AppRow = Database['public']['Tables']['apps']['Row']
+type AppRow = Omit<Database['public']['Tables']['apps']['Row'], 'onboarding'> & {
+  onboarding?: unknown
+}
 type StandardFlowStep = 'details' | 'choice' | 'install' | 'setup'
 type PreOrgFlowStep = 'intent' | 'details' | 'organization' | 'setup'
 type OnboardingFlowStep = StandardFlowStep | PreOrgFlowStep
@@ -94,6 +95,7 @@ const isSeedingDemo = ref(false)
 const isCliCommandVisible = ref(false)
 const apiKey = ref<string | null>(null)
 const createdApp = ref<AppRow | null>(null)
+const reportedSetupSource = ref<'manual' | 'cli' | 'mcp' | 'ai' | null>(null)
 const flowStep = ref<OnboardingFlowStep>('details')
 const showLanguageSelector = computed(() => (
   (props.preOrg && !createdApp.value)
@@ -1096,14 +1098,14 @@ async function reportOnboardingPatch(patch: { source?: 'manual' | 'cli' | 'mcp' 
     return
 
   try {
-    const { data: nextOnboarding, error } = await supabase.rpc('report_app_onboarding_setup', {
+    const { error } = await supabase.rpc('report_app_onboarding_setup', {
       p_app_id: app.app_id,
-      p_patch: patch,
+      p_patch: patch as never,
     })
     if (error)
       throw error
-    createdApp.value = { ...app, onboarding: nextOnboarding ?? app.onboarding }
-    organizationStore.updateAppOnboarding(app.app_id, nextOnboarding ?? app.onboarding)
+    if (patch.source)
+      reportedSetupSource.value = patch.source
   }
   catch (error) {
     console.error('Cannot report onboarding progress', error)
@@ -1152,7 +1154,8 @@ async function openDashboard() {
     })
   }
   const current = parseAppOnboarding(createdApp.value.onboarding)
-  if (isAppOnboardingSource(current.source) && current.source !== 'manual' && current.outcome === 'in_progress')
+  const source = reportedSetupSource.value ?? current.source
+  if (source !== 'manual' && current.outcome === 'in_progress')
     await reportOnboardingPatch({ outcome: 'switched_to_manual' })
   allowOnboardingDashboardExploration(onboardingUserId.value, createdApp.value.app_id)
   router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}/getting-started`)
