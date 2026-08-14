@@ -17,9 +17,13 @@ interface InviteSuccessPayload {
 }
 
 const props = withDefaults(defineProps<{
+  analyticsChannel?: string
   inviteKind?: 'generic' | 'technical'
+  trackingVersion?: number
 }>(), {
+  analyticsChannel: 'onboarding-v2',
   inviteKind: 'generic',
+  trackingVersion: 2,
 })
 
 const emit = defineEmits<{
@@ -176,11 +180,11 @@ function completeInviteSuccess(payload: InviteSuccessPayload) {
   const orgId = organizationStore.currentOrganization?.gid
   if (orgId) {
     sendEvent({
-      channel: 'onboarding-v2',
+      channel: props.analyticsChannel,
       event: `onboarding-step-invite-teammate`,
       icon: '👥',
       org_id: orgId,
-      tracking_version: 2,
+      tracking_version: props.trackingVersion,
       notify: false,
     }).catch()
   }

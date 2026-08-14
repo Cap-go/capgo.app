@@ -1,11 +1,22 @@
 import { pushEvent } from '~/services/posthog'
 
-export const ONBOARDING_ANALYTICS_VERSION = 2
+export const ONBOARDING_ANALYTICS_VERSION = 3
 
 export type OnboardingAnalyticsFlow = 'pre_org' | 'existing_org'
 export type OnboardingAnalyticsStep = 'intent' | 'details' | 'organization' | 'choice' | 'install' | 'setup'
 export type OnboardingCopyEvent = 'onboarding_ai_instructions_copied' | 'onboarding_cli_command_copied'
 export type OnboardingIntent = 'ota' | 'builder' | 'both' | 'exploring'
+export type OnboardingInteractionEvent
+  = | 'onboarding_organization_import_opened'
+    | 'onboarding_organization_import_submitted'
+    | 'onboarding_organization_import_succeeded'
+    | 'onboarding_organization_import_failed'
+    | 'onboarding_organization_invite_viewed'
+    | 'onboarding_organization_invite_opened'
+    | 'onboarding_organization_invite_succeeded'
+    | 'onboarding_organization_invite_continued'
+    | 'onboarding_technical_invite_opened'
+    | 'onboarding_technical_invite_succeeded'
 export type OnboardingDetailsEvent
   = | 'onboarding_app_id_entered'
     | 'onboarding_app_id_help_opened'
@@ -37,6 +48,10 @@ export interface OnboardingStepCompletionProperties {
 export interface OnboardingDetailsEventProperties {
   field_length?: number
   icon_source?: 'file' | 'store'
+}
+
+export interface OnboardingInteractionProperties {
+  invitation_count?: number
 }
 
 export interface OnboardingCopyEventProperties {
@@ -181,6 +196,18 @@ export function createOnboardingProgressTracker(options: CreateOnboardingProgres
     safelyCapture(name, { ...properties, ...details })
   }
 
+  function trackStepEvent(
+    name: OnboardingInteractionEvent,
+    step: OnboardingAnalyticsStep,
+    details: OnboardingInteractionProperties = {},
+  ) {
+    const properties = sharedProperties(step)
+    if (!properties)
+      return
+
+    safelyCapture(name, { ...properties, ...details })
+  }
+
   function trackCopyEvent(name: OnboardingCopyEvent, details: OnboardingCopyEventProperties) {
     if (!activeStep)
       return null
@@ -224,6 +251,7 @@ export function createOnboardingProgressTracker(options: CreateOnboardingProgres
     trackCopyEvent,
     trackDashboardExplored,
     trackDetailsEvent,
+    trackStepEvent,
     viewStep,
   }
 }
