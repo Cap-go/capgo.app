@@ -42,12 +42,12 @@ All lifecycle events and existing milestone events share:
 
 Record these lifecycle events at most once per invocation:
 
-| Event | Extra fields |
-| --- | --- |
-| `onboarding-run-started` | `resume_available`; with resume: `resume_journey_id`, optional `resumed_from_run_id`, `saved_step`, `total_steps` |
-| `onboarding-resume-prompt-viewed` | `resume_journey_id`, optional `resumed_from_run_id`, `saved_step`, `total_steps` |
-| `onboarding-resume-decision` | `choice`, `resume_journey_id`, optional `resumed_from_run_id`, `saved_step`; `continue` also sends `initial_journey_id` and switches the active journey before emission |
-| `onboarding-run-ended` | `outcome` (`completed`, `cancelled`, or `failed`), `exit_code` |
+| Event | Timing | Extra fields |
+| --- | --- | --- |
+| `onboarding-run-started` | After authentication and saved-progress validation, before prompt/step one | `resume_available`; with resume: `resume_journey_id`, optional `resumed_from_run_id`, `saved_step`, `total_steps` |
+| `onboarding-resume-prompt-viewed` | Immediately before a valid prompt is displayed | `resume_journey_id`, optional `resumed_from_run_id`, `saved_step`, `total_steps` |
+| `onboarding-resume-decision` | After one valid choice; `continue` switches before emission | `choice`, `resume_journey_id`, optional `resumed_from_run_id`, `saved_step`; `continue` also sends `initial_journey_id` and switches the active journey before emission |
+| `onboarding-run-ended` | Before a normal shared exit | `outcome` (`completed`, `cancelled`, or `failed`), `exit_code` |
 
 Existing `onboarding-step-*`, completion, and cancellation milestones keep
 their names and success boundaries, gaining the shared identity properties.
