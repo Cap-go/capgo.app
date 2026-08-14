@@ -177,7 +177,7 @@ export function getStripeCustomerEmailFromEvent(event: Stripe.Event): string | n
     return null
 
   const customer = event.data.object
-  if (!customer || customer.object !== 'customer')
+  if (customer?.object !== 'customer')
     return null
   if ('deleted' in customer && customer.deleted)
     return null
