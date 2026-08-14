@@ -11,6 +11,7 @@ import IconCopy from '~icons/heroicons/clipboard-document-check'
 import IconCode from '~icons/heroicons/code-bracket'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconDown from '~icons/material-symbols/keyboard-arrow-down-rounded'
+import ChannelOverrideRetentionNotice from '~/components/ChannelOverrideRetentionNotice.vue'
 import { useDeviceUpdateFormat } from '~/composables/useDeviceUpdateFormat'
 import { formatDate } from '~/services/date'
 import { checkPermissions } from '~/services/permissions'
@@ -447,6 +448,7 @@ async function copyCurlCommand() {
             <InfoRow :label="t('channel-link')">
               <div class="flex flex-col items-end gap-1">
                 <div class="flex items-center gap-2">
+                  <ChannelOverrideRetentionNotice />
                   <details ref="channelDropdown" class="relative d-dropdown d-dropdown-end" @click.stop>
                     <summary class="d-btn d-btn-outline d-btn-sm">
                       <span>{{ channelDevice?.name ?? t('none') }}</span>

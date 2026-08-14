@@ -48,6 +48,10 @@ interface TrackOptions {
    */
   tags?: Tags
   /**
+   * Per-event metadata that must not become PostHog person properties.
+   */
+  nonPersonTags?: Tags
+  /**
    * Send push notification
    */
   notify?: boolean

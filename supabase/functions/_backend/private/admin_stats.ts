@@ -4,12 +4,15 @@ import { Hono } from 'hono/tiny'
 import { z } from 'zod'
 import { getAdminBuilderAnalytics } from '../utils/builder_analytics.ts'
 import { getAdminBuilderCapacity } from '../utils/builder_capacity.ts'
+import { getAdminChannelSurfing } from '../utils/channel_surfing.ts'
 import { getAdminCliUsage } from '../utils/cli_usage.ts'
 import { getAdminAppsTrend, getAdminBandwidthTrend, getAdminBundlesTrend, getAdminDistributionMetrics, getAdminFailureMetrics, getAdminMauTrend, getAdminOrgMetrics, getAdminPlatformOverview, getAdminStorageTrend, getAdminSuccessRate, getAdminSuccessRateTrend, getAdminUploadMetrics } from '../utils/cloudflare.ts'
+import { getAdminFrontendOnboardingAnalytics } from '../utils/frontend_onboarding_analytics.ts'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { getAdminCancelledOrganizations, getAdminCustomerCountryBreakdown, getAdminDeploymentsTrend, getAdminEmailTypeBreakdown, getAdminGlobalStatsTrend, getAdminOnboardingFunnel, getAdminOrganizationInsights, getAdminPluginBreakdown, getAdminTrialOrganizations, getAdminTrialPlanBreakdown } from '../utils/pg.ts'
+import { getAdminPlansAnalytics } from '../utils/plans_analytics.ts'
 import { safeParseSchema } from '../utils/schema_validation.ts'
 import { getCancellationDetails } from '../utils/stripe.ts'
 import { supabaseClient as useSupabaseClient } from '../utils/supabase.ts'
@@ -45,6 +48,9 @@ const metricCategories = [
   'builder_analytics',
   'builder_capacity',
   'cli_usage',
+  'channel_surfing',
+  'frontend_onboarding_analytics',
+  'plans_analytics',
 ] as const
 
 const isoUtcDatetimeSchema = z.string().refine(
@@ -323,6 +329,18 @@ app.post('/', middlewareAuth, async (c) => {
 
       case 'cli_usage':
         result = await getAdminCliUsage(c, start_date, end_date)
+        break
+
+      case 'channel_surfing':
+        result = await getAdminChannelSurfing(c, start_date, end_date, app_id)
+        break
+
+      case 'frontend_onboarding_analytics':
+        result = await getAdminFrontendOnboardingAnalytics(c, start_date, end_date)
+        break
+
+      case 'plans_analytics':
+        result = await getAdminPlansAnalytics(c, start_date, end_date)
         break
 
       default:

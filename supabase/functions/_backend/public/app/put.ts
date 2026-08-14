@@ -1,8 +1,8 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
+import { parseAppOnboardingPatch } from '../../utils/appOnboarding.ts'
 import { deleteAppStatus } from '../../utils/appStatus.ts'
-import { mergeAppOnboarding, parseAppOnboardingPatch } from '../../utils/appOnboarding.ts'
 import { trackBentoEvent } from '../../utils/bento.ts'
 import { createIfNotExistStoreInfo } from '../../utils/cloudflare.ts'
 import { lockOnboardingApp, unlockOnboardingApp } from '../../utils/demo.ts'
@@ -31,20 +31,18 @@ interface UpdateApp {
 async function persistAppOnboarding(
   c: Context<MiddlewareKeyVariables>,
   appId: string,
-  currentValue: unknown,
   patch: NonNullable<ReturnType<typeof parseAppOnboardingPatch>>,
   pgClient?: ReturnType<typeof getPgClient>,
 ) {
-  const merged = mergeAppOnboarding(currentValue, patch)
   const client = pgClient ?? getPgClient(c)
   const opened = !pgClient
   try {
     const result = await client.query(
       `UPDATE public.apps
-       SET onboarding = $2::jsonb
+       SET onboarding = public.merge_app_onboarding_setup(onboarding, $2::jsonb)
        WHERE app_id = $1
        RETURNING *`,
-      [appId, JSON.stringify(merged)],
+      [appId, JSON.stringify(patch)],
     )
     return result.rows[0] as Database['public']['Tables']['apps']['Row'] | undefined
   }
@@ -158,7 +156,7 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
             dbError = { message: 'App not found during onboarding completion' }
         }
         if (data && onboardingPatch)
-          data = await persistAppOnboarding(c, appId, data.onboarding ?? previousApp.onboarding, onboardingPatch, pgClient) ?? data
+          data = await persistAppOnboarding(c, appId, onboardingPatch, pgClient) ?? data
       }
       catch (error) {
         dbError = { message: (error as Error)?.message }
@@ -172,7 +170,7 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
     else if (!canUpdateSettings && onboardingPatch) {
       const pgClient = getPgClient(c)
       try {
-        data = await persistAppOnboarding(c, appId, previousApp.onboarding, onboardingPatch, pgClient)
+        data = await persistAppOnboarding(c, appId, onboardingPatch, pgClient)
         if (!data)
           dbError = { message: 'App not found during onboarding progress update' }
       }
@@ -206,7 +204,7 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
       if (data)
         completedPendingOnboarding = previousApp.need_onboarding === true && data.need_onboarding === false
       if (data && onboardingPatch)
-        data = await persistAppOnboarding(c, appId, data.onboarding ?? previousApp.onboarding, onboardingPatch) ?? data
+        data = await persistAppOnboarding(c, appId, onboardingPatch) ?? data
     }
   }
   finally {

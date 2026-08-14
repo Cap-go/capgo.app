@@ -139,6 +139,12 @@ export const useDisplayStore = defineStore('display', () => {
 
     const breadcrumbs: BreadcrumbItem[] = []
 
+    // Getting Started is not an in-app section — no app tabs, no app crumbs.
+    if (splitPath[0] === 'app' && splitPath[2] === 'getting-started') {
+      pathTitle.value = []
+      return
+    }
+
     // App flow: Apps / <AppName> / <Section>
     if (splitPath[0] === 'app' && splitPath[1]) {
       const appId = splitPath[1]

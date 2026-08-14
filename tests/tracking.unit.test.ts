@@ -167,4 +167,26 @@ describe('sendEventToTracking', () => {
       provider: 'logsnag',
     }))
   })
+
+  it('can skip PostHog while preserving LogSnag and Bento delivery', async () => {
+    const { sendEventToTracking } = await import('../supabase/functions/_backend/utils/tracking.ts')
+
+    await sendEventToTracking(createContext(), {
+      bento: {
+        data: { app_id: 'com.example.app' },
+        event: 'app:ai_instructions_copied',
+        preferenceKey: 'onboarding',
+        uniqId: 'app:ai_instructions_copied:com.example.app:attempt-id',
+      },
+      channel: 'onboarding',
+      event: 'onboarding_ai_instructions_copied',
+      notify: false,
+      sentToBento: true,
+      user_id: 'org-id',
+    }, { background: false, posthog: false })
+
+    expect(logsnagTrackMock).toHaveBeenCalledOnce()
+    expect(posthogMock).not.toHaveBeenCalled()
+    expect(notifToOrgMembersMock).toHaveBeenCalledOnce()
+  })
 })

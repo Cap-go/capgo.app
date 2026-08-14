@@ -97,6 +97,7 @@ export type OnboardingStep
     | 'writing-workflow-file'
     | 'ask-build'
     | 'requesting-build'
+    | 'build-log-view'
     // AI debug — only entered when the build fails and logs were captured
     | 'ai-analysis-prompt'
     | 'ai-analysis-running'
@@ -429,6 +430,7 @@ export const STEP_PROGRESS: Record<OnboardingStep, number> = {
   'writing-workflow-file': 98,
   'ask-build': 85,
   'requesting-build': 90,
+  'build-log-view': 92,
   'ai-analysis-prompt': 92,
   'ai-analysis-running': 95,
   'ai-analysis-result-scroll': 97,
@@ -524,6 +526,7 @@ export function getPhaseLabel(step: OnboardingStep): string {
     case 'ai-analysis-running':
     case 'ai-analysis-result':
     case 'ai-analysis-result-scroll':
+    case 'build-log-view':
       return 'AI debug'
     case 'build-complete':
       return 'Complete'

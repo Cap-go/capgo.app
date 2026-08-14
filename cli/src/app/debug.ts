@@ -1,5 +1,6 @@
 import type { AppDebugOptions } from '../schemas/app'
 import type { Database } from '../types/supabase.types'
+import process from 'node:process'
 import { confirm as confirmC, intro, isCancel, log, outro, spinner } from '@clack/prompts'
 import { Table } from '@sauber/table'
 // Native fetch is available in Node.js >= 18
@@ -7,10 +8,23 @@ import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { checkAlerts } from '../api/update'
 import { CliUserError } from '../shared/cli-user-error'
 import { findSavedKey, formatError, getAppId, getConfig, getLocalConfig, getOrganizationId, sendEvent } from '../utils'
+import { buildWaitLogQuery, isWaitLogContinueKey, WAIT_LOG_CONTINUE_HINT, WAIT_LOG_POLL_MS } from './wait-log-query'
 
-function wait(ms: number) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms)
+function wait(ms: number, signal?: AbortSignal) {
+  return new Promise<void>((resolve) => {
+    if (signal?.aborted) {
+      resolve()
+      return
+    }
+    const onAbort = () => {
+      clearTimeout(timeout)
+      resolve()
+    }
+    const timeout = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    signal?.addEventListener('abort', onAbort, { once: true })
   })
 }
 
@@ -98,7 +112,7 @@ interface LogData {
   version?: number
   created_at: string
 }
-export async function getStats(apikey: string, query: QueryStats, after: string | null): Promise<LogData[]> {
+export async function getStats(apikey: string, query: QueryStats, after: string | null, signal?: AbortSignal): Promise<LogData[]> {
   const localConfig = await getLocalConfig()
   const statsEndpoint = `${localConfig.hostApi}/private/stats`
 
@@ -110,6 +124,7 @@ export async function getStats(apikey: string, query: QueryStats, after: string 
       method: 'POST',
       headers: buildCliRequestHeaders({ 'Content-Type': 'application/json', capgkey: apikey }),
       body: JSON.stringify(effectiveQuery),
+      signal,
     })
 
     if (!response.ok) {
@@ -122,6 +137,8 @@ export async function getStats(apikey: string, query: QueryStats, after: string 
       return dataD
   }
   catch (error) {
+    if (signal?.aborted || (error instanceof Error && error.name === 'AbortError'))
+      return []
     log.error(`Cannot get stats: ${describeFetchFailure(error, statsEndpoint)}`)
   }
   return []
@@ -196,30 +213,89 @@ async function toTableRow(data: LogData, channel: string, orgId: string, apikey:
   return { row: [time, data.device_id, key, msg], stop: spec.stop }
 }
 
-export async function waitLog(channel: string, apikey: string, appId: string, orgId: string, deviceId?: string) {
+export interface WaitLogOptions {
+  deviceId?: string
+  lookbackMs?: number
+  pollMs?: number
+  now?: Date
+  waitForSkip?: (signal: AbortSignal) => Promise<void>
+  spinner?: {
+    start: (message: string) => void
+    stop: (message?: string) => void
+  }
+  logInfo?: (message: string) => void
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>
+}
+
+function listenForWaitLogContinue(signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const stdin = process.stdin
+    const canUseRawMode = Boolean(stdin.isTTY && typeof stdin.setRawMode === 'function')
+    const previousRawMode = canUseRawMode ? stdin.isRaw : undefined
+    const wasFlowing = stdin.readableFlowing === true
+    const finish = () => {
+      cleanup()
+      resolve()
+    }
+    const onData = (chunk: string | Uint8Array) => {
+      const input = String(chunk)
+      if (input === '\u0003' || isWaitLogContinueKey(input))
+        finish()
+    }
+    const cleanup = () => {
+      stdin.off('data', onData)
+      signal.removeEventListener('abort', finish)
+      if (canUseRawMode && previousRawMode !== undefined)
+        stdin.setRawMode(previousRawMode)
+      if (!wasFlowing)
+        stdin.pause()
+    }
+    signal.addEventListener('abort', finish, { once: true })
+    if (canUseRawMode) {
+      stdin.setRawMode(true)
+      stdin.resume()
+    }
+    if (stdin.isTTY)
+      stdin.on('data', onData)
+  })
+}
+
+export async function waitLog(channel: string, apikey: string, appId: string, orgId: string, options: WaitLogOptions = {}): Promise<{ skipped: boolean }> {
   const config = await getLocalConfig()
   const baseAppUrl = `${config.hostWeb}/app/${appId}`
   await markSnag(channel, orgId, apikey, 'Use waitlog', appId)
-  const query: QueryStats = {
-    appId,
-    devicesId: deviceId ? [deviceId] : undefined,
-    order: [{
-      key: 'created_at',
-      sortable: 'desc',
-    }],
-    rangeStart: new Date().toISOString(),
-  }
+  const query = buildWaitLogQuery(appId, options.deviceId, options.now, options.lookbackMs)
   let after: string | null = null
   // Track displayed log items to avoid duplicates across rounds
   const seen = new Set<string>()
-  const s = spinner()
+  const s = options.spinner ?? spinner()
+  const logInfo = options.logInfo ?? ((message: string) => { log.info(message) })
+  const sleep = options.sleep ?? wait
+  const pollMs = options.pollMs ?? WAIT_LOG_POLL_MS
   const docsUrl = `${config.host}/docs/plugins/updater/debugging/#sent-from-the-backend`
-  s.start(`Waiting for logs (Expect delay of 30 sec) more info: ${docsUrl}`)
-  while (true) {
-    await wait(5000)
-    const data = await getStats(apikey, query, after)
-    if (data.length > 0) {
-      // Update 'after' to the newest timestamp returned
+  const waitingMessage = `Waiting for logs (expect ~30s delay). ${WAIT_LOG_CONTINUE_HINT}. More info: ${docsUrl}`
+  s.start(waitingMessage)
+
+  const abort = new AbortController()
+  const skipPromise = options.waitForSkip
+    ? options.waitForSkip(abort.signal)
+    : listenForWaitLogContinue(abort.signal)
+
+  const poll = async (): Promise<'set' | 'aborted'> => {
+    let first = true
+    while (!abort.signal.aborted) {
+      if (!first)
+        await sleep(pollMs, abort.signal)
+      first = false
+      if (abort.signal.aborted)
+        return 'aborted'
+
+      const data = await getStats(apikey, query, after, abort.signal)
+      if (abort.signal.aborted)
+        return 'aborted'
+      if (data.length === 0)
+        continue
+
       const newest: number = data.reduce<number>((acc, d) => {
         const t = new Date(d.created_at).getTime()
         return Math.max(acc, t)
@@ -227,7 +303,6 @@ export async function waitLog(channel: string, apikey: string, appId: string, or
       if (newest > 0)
         after = new Date(newest).toISOString()
 
-      // Filter out already printed entries and sort chronologically
       const fresh = data.filter((d) => {
         const key = `${d.app_id}|${d.device_id}|${d.action}|${d.version_id}|${d.created_at}`
         if (seen.has(key))
@@ -248,18 +323,42 @@ export async function waitLog(channel: string, apikey: string, appId: string, or
         if (stop)
           shouldStop = true
       }
+      if (abort.signal.aborted)
+        return 'aborted'
       if (t.rows.length) {
         s.stop('')
-        log.info(t.toString())
-        s.start(`Waiting for logs (Expect delay of 30 sec) more info: ${docsUrl}`)
+        logInfo(t.toString())
+        if (!shouldStop)
+          s.start(waitingMessage)
       }
-      if (shouldStop) {
-        break
-      }
+      if (shouldStop)
+        return 'set'
     }
+    return 'aborted'
   }
-  s.stop(`Stop watching logs`)
-  return Promise.resolve()
+
+  const pollTask = poll()
+  try {
+    const result = await Promise.race([
+      pollTask,
+      skipPromise.then(() => 'skip' as const),
+    ])
+    abort.abort()
+    await pollTask
+    if (result === 'skip') {
+      s.stop('Skipped waiting for logs')
+      logInfo('You can confirm the update in the Capgo dashboard anytime.')
+      return { skipped: true }
+    }
+    s.stop('Stop watching logs')
+    return { skipped: false }
+  }
+  catch (error) {
+    abort.abort()
+    await pollTask.catch(() => undefined)
+    s.stop('Stop watching logs')
+    throw error
+  }
 }
 
 export async function debugApp(appId: string, options: AppDebugOptions) {
@@ -285,7 +384,8 @@ export async function debugApp(appId: string, options: AppDebugOptions) {
   await cancelCommand('debug', doRun, orgId, options.apikey)
   if (doRun) {
     log.info(`Wait logs sent to Capgo from ${appId} device, Please background your app and open it again 💪`)
-    await waitLog('debug', options.apikey, appId, orgId, deviceId)
+    log.info(WAIT_LOG_CONTINUE_HINT)
+    await waitLog('debug', options.apikey, appId, orgId, { deviceId })
     outro('Done ✅')
   }
   else {

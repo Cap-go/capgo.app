@@ -168,6 +168,18 @@ export default function InitInkApp({ getSnapshot, subscribe, updatePromptError }
   const columns = stdout?.columns ?? 96
   const rows = stdout?.rows ?? 24
   const contentWidth = Math.max(0, columns - 6)
+
+  useInput((input, key) => {
+    const skip = snapshot.logSkip
+    if (!skip)
+      return
+    if (key.ctrl && input === 'c') {
+      skip.resolve()
+      return
+    }
+    if (!key.ctrl && (input === 'c' || input === 'C'))
+      skip.resolve()
+  }, { isActive: Boolean(snapshot.logSkip) && !snapshot.prompt && !snapshot.streamingOutput })
   // Estimate how many terminal rows the code diff panel consumes so the log
   // area (and the prompt/spinner rendered after it) still fit in the viewport
   // on short terminals. Overhead covers the panel's marginTop, top/bottom
@@ -268,7 +280,7 @@ export default function InitInkApp({ getSnapshot, subscribe, updatePromptError }
       </Box>
 
       <Box width={contentWidth}>
-        <SpinnerArea text={snapshot.spinner} />
+        <SpinnerArea text={snapshot.spinner} skipHint={snapshot.logSkip?.hint} />
       </Box>
     </Box>
   )

@@ -1,12 +1,29 @@
 import { pushEvent } from '~/services/posthog'
 
-export const ONBOARDING_ANALYTICS_VERSION = 1
+export const ONBOARDING_ANALYTICS_VERSION = 2
 
 export type OnboardingAnalyticsFlow = 'pre_org' | 'existing_org'
 export type OnboardingAnalyticsStep = 'intent' | 'details' | 'organization' | 'choice' | 'install' | 'setup'
+export type OnboardingCopyEvent = 'onboarding_ai_instructions_copied' | 'onboarding_cli_command_copied'
 export type OnboardingIntent = 'ota' | 'builder' | 'both' | 'exploring'
+export type OnboardingDetailsEvent
+  = | 'onboarding_app_id_entered'
+    | 'onboarding_app_id_help_opened'
+    | 'onboarding_app_icon_picked'
+    | 'onboarding_app_icon_picker_closed_without_selection'
+    | 'onboarding_app_icon_picker_open_failed'
+    | 'onboarding_app_icon_picker_opened'
+    | 'onboarding_app_icon_upload_failed'
+    | 'onboarding_app_icon_uploaded'
+    | 'onboarding_app_name_entered'
+    | 'onboarding_store_import_failed'
+    | 'onboarding_store_import_hidden'
+    | 'onboarding_store_import_shown'
+    | 'onboarding_store_import_submitted'
+    | 'onboarding_store_import_succeeded'
+    | 'onboarding_store_url_entered'
 
-type AnalyticsPrimitive = string | number | boolean | null
+type AnalyticsPrimitive = string | number | boolean
 type AnalyticsProperties = Record<string, AnalyticsPrimitive>
 type CaptureEvent = (name: string, supaHost: string, properties?: AnalyticsProperties) => void
 
@@ -15,6 +32,61 @@ export interface OnboardingStepCompletionProperties {
   intent?: OnboardingIntent
   nextStep?: OnboardingAnalyticsStep
   storeImportUsed?: boolean
+}
+
+export interface OnboardingDetailsEventProperties {
+  field_length?: number
+  icon_source?: 'file' | 'store'
+}
+
+export interface OnboardingCopyEventProperties {
+  app_id?: string
+  existing_app?: boolean
+  intent?: OnboardingIntent
+  org_id?: string
+  setup_command: 'builder' | 'ota'
+}
+
+export type OnboardingDetailsField = 'app_id' | 'app_name' | 'store_url'
+
+export function createOnboardingDetailsFieldDebouncer(
+  emit: (name: OnboardingDetailsEvent, properties: OnboardingDetailsEventProperties) => void,
+  delayMs = 1_000,
+) {
+  const timers = new Map<OnboardingDetailsField, ReturnType<typeof setTimeout>>()
+  const pending = new Map<OnboardingDetailsField, { name: OnboardingDetailsEvent, properties: OnboardingDetailsEventProperties }>()
+
+  function schedule(name: OnboardingDetailsEvent, field: OnboardingDetailsField, value: string) {
+    const activeTimer = timers.get(field)
+    if (activeTimer)
+      clearTimeout(activeTimer)
+
+    const normalizedValue = value.trim()
+    if (!normalizedValue) {
+      timers.delete(field)
+      pending.delete(field)
+      return
+    }
+
+    const event = { name, properties: { field_length: normalizedValue.length } }
+    pending.set(field, event)
+    timers.set(field, setTimeout(() => {
+      emit(event.name, event.properties)
+      timers.delete(field)
+      pending.delete(field)
+    }, delayMs))
+  }
+
+  function dispose() {
+    for (const timer of timers.values())
+      clearTimeout(timer)
+    for (const event of pending.values())
+      emit(event.name, event.properties)
+    timers.clear()
+    pending.clear()
+  }
+
+  return { dispose, schedule }
 }
 
 interface CreateOnboardingProgressTrackerOptions {
@@ -101,8 +173,43 @@ export function createOnboardingProgressTracker(options: CreateOnboardingProgres
     safelyCapture('onboarding_step_completed', properties)
   }
 
+  function trackDetailsEvent(name: OnboardingDetailsEvent, details: OnboardingDetailsEventProperties = {}) {
+    const properties = sharedProperties('details')
+    if (!properties)
+      return
+
+    safelyCapture(name, { ...properties, ...details })
+  }
+
+  function trackCopyEvent(name: OnboardingCopyEvent, details: OnboardingCopyEventProperties) {
+    if (!activeStep)
+      return null
+
+    const properties = sharedProperties(activeStep)
+    if (!properties)
+      return null
+
+    const eventProperties: AnalyticsProperties = {
+      ...properties,
+      setup_command: details.setup_command,
+    }
+    if (details.app_id)
+      eventProperties.app_id = details.app_id
+    if (details.existing_app !== undefined)
+      eventProperties.existing_app = details.existing_app
+    if (details.intent)
+      eventProperties.intent = details.intent
+    if (details.org_id)
+      eventProperties.org_id = details.org_id
+
+    safelyCapture(name, eventProperties)
+    return eventProperties
+  }
+
   return {
     completeStep,
+    trackCopyEvent,
+    trackDetailsEvent,
     viewStep,
   }
 }

@@ -1668,6 +1668,7 @@ export type Database = {
           paying: number | null
           paying_monthly: number | null
           paying_yearly: number | null
+          plan_credits: number
           plan_enterprise: number | null
           plan_enterprise_conversion_rate: number
           plan_enterprise_monthly: number
@@ -1778,6 +1779,7 @@ export type Database = {
           paying?: number | null
           paying_monthly?: number | null
           paying_yearly?: number | null
+          plan_credits?: number
           plan_enterprise?: number | null
           plan_enterprise_conversion_rate?: number
           plan_enterprise_monthly?: number
@@ -1888,6 +1890,7 @@ export type Database = {
           paying?: number | null
           paying_monthly?: number | null
           paying_yearly?: number | null
+          plan_credits?: number
           plan_enterprise?: number | null
           plan_enterprise_conversion_rate?: number
           plan_enterprise_monthly?: number
@@ -4715,6 +4718,10 @@ export type Database = {
         }[]
       }
       group_max_role_priority: { Args: { p_group_id: string }; Returns: number }
+      groups_is_insert_returning_row: {
+        Args: { p_created_by: string; p_id: string }
+        Returns: boolean
+      }
       has_2fa_enabled:
         | { Args: never; Returns: boolean }
         | { Args: { user_id: string }; Returns: boolean }
@@ -4870,11 +4877,29 @@ export type Database = {
       }
       long_canceled_org_ids: { Args: never; Returns: string[] }
       mark_app_stats_refreshed: { Args: { p_app_id: string }; Returns: string }
+      mark_onboarding_feature_started: {
+        Args: { p_app_id: string; p_feature_key: string }
+        Returns: Json
+      }
       mass_edit_queue_messages_cf_ids: {
         Args: {
           updates: Database["public"]["CompositeTypes"]["message_update"][]
         }
         Returns: undefined
+      }
+      merge_app_onboarding_feature: {
+        Args: {
+          p_existing: Json
+          p_last_used_at: string
+          p_stage?: string
+          p_started_at: string
+          p_succeeded_at: string
+        }
+        Returns: Json
+      }
+      merge_app_onboarding_setup: {
+        Args: { p_existing: Json, p_patch: Json }
+        Returns: Json
       }
       null_migrated_app_version_manifests: {
         Args: {
@@ -5084,6 +5109,14 @@ export type Database = {
       rbac_principal_apikey: { Args: never; Returns: string }
       rbac_principal_group: { Args: never; Returns: string }
       rbac_principal_user: { Args: never; Returns: string }
+      rbac_resolve_permission_scope: {
+        Args: { p_app_id: string; p_channel_id: number; p_org_id: string }
+        Returns: {
+          effective_app_id: string
+          effective_org_id: string
+          ok: boolean
+        }[]
+      }
       rbac_role_apikey_manager: { Args: never; Returns: string }
       rbac_role_apikey_org_reader: { Args: never; Returns: string }
       rbac_role_app_admin: { Args: never; Returns: string }
@@ -5106,6 +5139,10 @@ export type Database = {
       rbac_scope_channel: { Args: never; Returns: string }
       rbac_scope_org: { Args: never; Returns: string }
       rbac_scope_platform: { Args: never; Returns: string }
+      rbac_should_use_apikey_principal: {
+        Args: { p_apikey: string; p_user_id: string }
+        Returns: boolean
+      }
       read_bandwidth_usage: {
         Args: { p_app_id: string; p_period_end: string; p_period_start: string }
         Returns: {
@@ -5175,6 +5212,10 @@ export type Database = {
         Args: { p_user_id: string }
         Returns: string
       }
+      refresh_app_onboarding_progress: {
+        Args: { p_batch_size?: number }
+        Returns: number
+      }
       refresh_app_rollout_channel_count_for_app: {
         Args: { p_app_id: string }
         Returns: undefined
@@ -5241,6 +5282,10 @@ export type Database = {
         Returns: boolean
       }
       remove_old_jobs: { Args: never; Returns: undefined }
+      report_app_onboarding_setup: {
+        Args: { p_app_id: string, p_patch: Json }
+        Returns: Json
+      }
       request_actor_user_id: { Args: never; Returns: string }
       request_app_chart_refresh: {
         Args: { app_id: string }

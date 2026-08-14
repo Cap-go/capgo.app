@@ -1,7 +1,7 @@
 import type { Context } from 'hono'
-import { cloudlog, cloudlogErr } from './logging.ts'
+import { cloudlog } from './logging.ts'
 import { closeClient, getPgClient } from './pg.ts'
-import { getEnv } from './utils.ts'
+import { isPosthogReadConfigured, queryPosthogHogql } from './posthog_read.ts'
 
 // Builder analytics for the admin dashboard. Live (no cache):
 //  - Onboarding funnel / AI usage / per-org journeys come from PostHog (HogQL).
@@ -119,43 +119,6 @@ function sqlStr(v: string): string {
   return `'${v.replace(/'/g, '\'\'')}'`
 }
 
-interface HogResult { ok: boolean, rows: Record<string, unknown>[] }
-
-// Returns ok=false on any hard failure (not configured, non-2xx, network/abort/timeout, bad JSON)
-// so callers can tell "PostHog unavailable" apart from "PostHog returned zero rows".
-async function hogql(c: Context, query: string): Promise<HogResult> {
-  const key = (getEnv(c, 'POSTHOG_READ_KEY') || '').trim()
-  if (!key)
-    return { ok: false, rows: [] }
-  const host = ((getEnv(c, 'POSTHOG_READ_HOST') || 'https://eu.posthog.com').trim()).replace(/\/$/, '')
-  const project = (getEnv(c, 'POSTHOG_READ_PROJECT_ID') || '22029').trim()
-  try {
-    const res = await fetch(`${host}/api/projects/${project}/query/`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query: { kind: 'HogQLQuery', query } }),
-      // Bound the request so a slow/unresponsive PostHog can't hang the Worker.
-      signal: AbortSignal.timeout(20_000),
-    })
-    if (!res.ok) {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'posthog_query_failed', status: res.status })
-      return { ok: false, rows: [] }
-    }
-    const json = await res.json() as { columns?: string[], results?: unknown[][] }
-    const cols = json.columns ?? []
-    const rows = (json.results ?? []).map((row) => {
-      const obj: Record<string, unknown> = {}
-      cols.forEach((col, i) => { obj[col] = row[i] })
-      return obj
-    })
-    return { ok: true, rows }
-  }
-  catch (e) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'posthog_query_error', error: (e as Error).message })
-    return { ok: false, rows: [] }
-  }
-}
-
 const num = (v: unknown): number => {
   const n = Number(v)
   return Number.isFinite(n) ? n : 0
@@ -184,7 +147,7 @@ async function loadOnboardingEvents(c: Context, start: string, end: string): Pro
       AND timestamp <= parseDateTimeBestEffort(${sqlStr(end)})
     ORDER BY timestamp DESC
     LIMIT ${ONBOARDING_EVENT_LIMIT}`
-  const { ok, rows } = await hogql(c, q)
+  const { connected, failureReason, rows } = await queryPosthogHogql(c, q)
   if (rows.length >= ONBOARDING_EVENT_LIMIT)
     cloudlog({ requestId: c.get('requestId'), message: 'builder_analytics onboarding events truncated', limit: ONBOARDING_EVENT_LIMIT })
   const events = rows
@@ -198,7 +161,7 @@ async function loadOnboardingEvents(c: Context, start: string, end: string): Pro
       errorCategory: str(r.error_category),
     }))
     .filter(e => e.appId || e.journeyId)
-  return { ok, events }
+  return { ok: connected && failureReason === null, events }
 }
 
 async function loadAiChoiceCount(c: Context, start: string, end: string): Promise<number> {
@@ -209,7 +172,7 @@ async function loadAiChoiceCount(c: Context, start: string, end: string): Promis
       AND JSONExtractString(toString(properties), 'choice') IN ('capgo_ai', 'local_ai')
       AND timestamp >= parseDateTimeBestEffort(${sqlStr(start)})
       AND timestamp <= parseDateTimeBestEffort(${sqlStr(end)})`
-  const { rows } = await hogql(c, q)
+  const { rows } = await queryPosthogHogql(c, q)
   return rows.length ? num(rows[0].orgs) : 0
 }
 
@@ -246,7 +209,7 @@ export async function getAdminBuilderAnalytics(c: Context, startDate: string, en
   const nowMs = Date.now()
   const startMs = Date.parse(startDate)
   const endMs = Date.parse(endDate)
-  const posthogConfigured = Boolean((getEnv(c, 'POSTHOG_READ_KEY') || '').trim())
+  const posthogConfigured = isPosthogReadConfigured(c)
 
   // --- PostHog onboarding (parallel, each bounded by a fetch timeout) ---
   const [onboarding, aiOrgs] = await Promise.all([

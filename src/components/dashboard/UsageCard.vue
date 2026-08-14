@@ -12,6 +12,7 @@ import {
 } from '~/services/demoChartData'
 import { hasPositiveSeriesData, resolveUsageDisplaySeries, sumSeries } from '~/services/usageSeries'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
+import { shouldShowDashboardDemoData } from '~/utils/dashboardDemoMode'
 import ChartCard from './ChartCard.vue'
 import LineChartStats from './LineChartStats.vue'
 
@@ -53,6 +54,10 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  appId: {
+    type: String,
+    default: '',
+  },
 })
 
 // Get the appropriate data generator based on chart type
@@ -83,18 +88,13 @@ const consistentDemoData = computed(() => {
 const demoData = computed(() => consistentDemoData.value.total)
 const demoDataByApp = computed(() => consistentDemoData.value.byApp)
 
-// Demo mode: show demo data only when forceDemo is true OR user has no apps
-// If user has apps, ALWAYS show real data (even if empty)
 const dashboardAppsStore = useDashboardAppsStore()
-const isDemoMode = computed(() => {
-  if (props.forceDemo)
-    return true
-  // If user has apps, never show demo data
-  if (dashboardAppsStore.apps.length > 0)
-    return false
-  // No apps and store is loaded = show demo
-  return dashboardAppsStore.isLoaded
-})
+const isDemoMode = computed(() => shouldShowDashboardDemoData({
+  forceDemo: props.forceDemo,
+  appId: props.appId,
+  appsCount: dashboardAppsStore.apps.length,
+  appsLoaded: dashboardAppsStore.isLoaded,
+}))
 const effectiveData = computed(() => isDemoMode.value ? demoData.value : props.data as number[])
 const effectiveDataByApp = computed(() => isDemoMode.value ? demoDataByApp.value : props.dataByApp)
 const effectiveAppNames = computed(() => isDemoMode.value ? DEMO_APP_NAMES : props.appNames)

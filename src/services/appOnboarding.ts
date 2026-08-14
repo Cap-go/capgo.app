@@ -10,6 +10,7 @@ export type {
 
 export {
   APP_ONBOARDING_STEP_IDS,
+  applyAppOnboardingPatch,
   defaultAppOnboarding,
   deriveAppOnboardingOutcome,
   isAppOnboardingOutcome,

@@ -1,8 +1,8 @@
-import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 import { INIT_ONBOARDING_STEP_IDS } from '../cli/src/init/ui'
 import {
   APP_ONBOARDING_STEP_IDS,
+  applyAppOnboardingPatch,
   defaultAppOnboarding,
   mergeAppOnboarding,
   parseAppOnboarding,
@@ -19,6 +19,33 @@ describe('app onboarding merge', () => {
   it.concurrent('defaults missing onboarding to manual in progress', () => {
     expect(parseAppOnboarding(null)).toEqual(defaultAppOnboarding())
     expect(parseAppOnboarding('nope')).toEqual(defaultAppOnboarding())
+  })
+
+  it.concurrent('reads nested setup without dropping the feature ledger', () => {
+    const ledger = {
+      refreshed_at: '2026-08-14T00:00:00.000Z',
+      features: { ota: { stage: 'local_only' } },
+      setup: {
+        source: 'cli',
+        outcome: 'in_progress',
+        steps: { add_app: { status: 'done', at: '2026-08-14T10:00:00.000Z' } },
+      },
+    }
+
+    expect(parseAppOnboarding(ledger)).toMatchObject({
+      source: 'cli',
+      outcome: 'in_progress',
+      steps: { add_app: { status: 'done', at: '2026-08-14T10:00:00.000Z' } },
+    })
+
+    const next = applyAppOnboardingPatch(ledger, {
+      steps: { add_channel: { status: 'done' } },
+    }, () => '2026-08-14T10:02:00.000Z')
+
+    expect(next.features).toEqual({ ota: { stage: 'local_only' } })
+    expect(next.refreshed_at).toBe('2026-08-14T00:00:00.000Z')
+    expect(parseAppOnboarding(next).steps.add_channel?.status).toBe('done')
+    expect(next.source).toBeUndefined()
   })
 
   it.concurrent('never downgrades a stronger onboarding source', () => {

@@ -45,6 +45,8 @@ interface OnboardingFunnelData {
   orgs_subscribed: number
   orgs_with_production_device: number
   orgs_with_update_download: number
+  orgs_with_testflight: number
+  orgs_with_store_live: number
   activation_telemetry_available: boolean
   total_invite_registrations: number
   total_org_joins_invite_register: number
@@ -56,6 +58,8 @@ interface OnboardingFunnelData {
   subscription_conversion_rate: number
   production_device_conversion_rate: number
   update_download_conversion_rate: number
+  testflight_conversion_rate: number
+  store_live_conversion_rate: number
   trend: Array<{
     date: string
     new_registrations: number
@@ -66,6 +70,8 @@ interface OnboardingFunnelData {
     orgs_subscribed: number
     orgs_with_production_device: number
     orgs_with_update_download: number
+    orgs_with_testflight: number
+    orgs_with_store_live: number
   }>
   invite_trend: Array<{
     date: string
@@ -142,6 +148,7 @@ const globalStatsTrendData = ref<Array<{
   plan_maker: number
   plan_team: number
   plan_enterprise: number
+  plan_credits: number
   registers_today: number
   new_paying_orgs: number
   apps_created: number
@@ -760,7 +767,7 @@ const planDistributionData = computed(() => {
     return []
 
   const latest = globalStatsTrendData.value[globalStatsTrendData.value.length - 1]
-  const total = latest.plan_solo + latest.plan_maker + latest.plan_team + latest.plan_enterprise
+  const total = latest.plan_solo + latest.plan_maker + latest.plan_team + latest.plan_enterprise + (latest.plan_credits ?? 0)
 
   return [
     {
@@ -782,6 +789,11 @@ const planDistributionData = computed(() => {
       label: 'Enterprise',
       value: latest.plan_enterprise,
       percentage: total > 0 ? formatOneDecimal((latest.plan_enterprise / total) * 100) : formatOneDecimal(0),
+    },
+    {
+      label: 'Credits',
+      value: latest.plan_credits ?? 0,
+      percentage: total > 0 ? formatOneDecimal(((latest.plan_credits ?? 0) / total) * 100) : formatOneDecimal(0),
     },
   ]
 })
@@ -823,6 +835,14 @@ const planDistributionTrendSeries = computed(() => {
       })),
       color: '#f59e0b', // amber
     },
+    {
+      label: 'Credits',
+      data: globalStatsTrendData.value.map(item => ({
+        date: item.date,
+        value: item.plan_credits ?? 0,
+      })),
+      color: '#119eff', // azure
+    },
   ]
 })
 
@@ -842,6 +862,8 @@ const onboardingFunnelRates = computed(() => {
       subscribed: 0,
       productionDevice: 0,
       updateDownload: 0,
+      testflight: 0,
+      storeLive: 0,
     }
   }
 
@@ -853,6 +875,8 @@ const onboardingFunnelRates = computed(() => {
   const orgsSubscribed = Number(onboardingFunnelData.value.orgs_subscribed) || 0
   const orgsWithProductionDevice = Number(onboardingFunnelData.value.orgs_with_production_device) || 0
   const orgsWithUpdateDownload = Number(onboardingFunnelData.value.orgs_with_update_download) || 0
+  const orgsWithTestflight = Number(onboardingFunnelData.value.orgs_with_testflight) || 0
+  const orgsWithStoreLive = Number(onboardingFunnelData.value.orgs_with_store_live) || 0
 
   return {
     org: totalRegistrations > 0 ? (totalOrgs / totalRegistrations) * 100 : 0,
@@ -862,6 +886,8 @@ const onboardingFunnelRates = computed(() => {
     subscribed: orgsWithBundle > 0 ? (orgsSubscribed / orgsWithBundle) * 100 : 0,
     productionDevice: orgsWithBundle > 0 ? (orgsWithProductionDevice / orgsWithBundle) * 100 : 0,
     updateDownload: orgsWithProductionDevice > 0 ? (orgsWithUpdateDownload / orgsWithProductionDevice) * 100 : 0,
+    testflight: orgsWithBundle > 0 ? (orgsWithTestflight / orgsWithBundle) * 100 : 0,
+    storeLive: orgsWithBundle > 0 ? (orgsWithStoreLive / orgsWithBundle) * 100 : 0,
   }
 })
 
@@ -891,6 +917,18 @@ const onboardingFunnelConversionSummaries = computed(() => {
       value: rates.bundle,
       label: t('channel-to-bundle'),
       colorClass: 'text-emerald-500',
+    },
+    {
+      key: 'testflight',
+      value: rates.testflight,
+      label: t('bundle-to-testflight'),
+      colorClass: 'text-cyan-500',
+    },
+    {
+      key: 'storeLive',
+      value: rates.storeLive,
+      label: t('bundle-to-store-live'),
+      colorClass: 'text-teal-500',
     },
   ]
 
@@ -924,6 +962,8 @@ const onboardingFunnelConversionSummaries = computed(() => {
 const onboardingFunnelConversionGridClass = computed(() => {
   // Keep one row on large screens so rates follow the funnel columns.
   const count = onboardingFunnelConversionSummaries.value.length
+  if (count >= 9)
+    return 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-9'
   if (count >= 7)
     return 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-7'
   if (count >= 6)
@@ -968,6 +1008,18 @@ const onboardingFunnelStages = computed(() => {
       value: Number(data.orgs_with_bundle) || 0,
       percentage: rates.bundle,
       color: '#10b981', // green
+    },
+    {
+      label: t('reached-testflight'),
+      value: Number(data.orgs_with_testflight) || 0,
+      percentage: rates.testflight,
+      color: '#06b6d4', // cyan
+    },
+    {
+      label: t('reached-app-store-live'),
+      value: Number(data.orgs_with_store_live) || 0,
+      percentage: rates.storeLive,
+      color: '#0d9488', // teal
     },
     ...(data.activation_telemetry_available
       ? [
@@ -1039,6 +1091,22 @@ const onboardingFunnelTrendSeries = computed(() => {
         value: item.orgs_created_bundle,
       })),
       color: '#10b981', // green
+    },
+    {
+      label: t('reached-testflight-within-7-days'),
+      data: trend.map(item => ({
+        date: item.date,
+        value: item.orgs_with_testflight,
+      })),
+      color: '#06b6d4', // cyan
+    },
+    {
+      label: t('reached-app-store-live-within-7-days'),
+      data: trend.map(item => ({
+        date: item.date,
+        value: item.orgs_with_store_live,
+      })),
+      color: '#0d9488', // teal
     },
     ...(onboardingFunnelData.value.activation_telemetry_available
       ? [
@@ -1761,7 +1829,7 @@ displayStore.defaultBack = '/dashboard'
               <div v-if="isLoadingGlobalStatsTrend" class="flex items-center justify-center h-32">
                 <span class="loading loading-spinner loading-lg" />
               </div>
-              <div v-else-if="planDistributionData.length > 0" class="grid grid-cols-2 gap-4 md:grid-cols-4">
+              <div v-else-if="planDistributionData.length > 0" class="grid grid-cols-2 gap-4 md:grid-cols-5">
                 <div v-for="plan in planDistributionData" :key="plan.label" class="flex flex-col items-center p-4 bg-gray-100 rounded-lg dark:bg-gray-700">
                   <span class="text-sm font-medium text-gray-600 dark:text-gray-400">{{ plan.label }}</span>
                   <span class="mt-2 text-2xl font-bold">{{ formatNumberValue(plan.value) }}</span>

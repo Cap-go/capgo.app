@@ -2411,6 +2411,17 @@ const AndroidOnboardingApp: FC<AppProps> = ({ appId, initialProgress, androidDir
   if (step === 'requesting-build')
     return <FullscreenBuildOutput title="Building..." lines={buildOutput} terminalRows={terminalRows} />
 
+  if (step === 'build-log-view') {
+    return (
+      <FullscreenBuildOutput
+        title="Build failed"
+        lines={buildOutput}
+        terminalRows={terminalRows}
+        onExit={() => setStep('ai-analysis-prompt')}
+      />
+    )
+  }
+
   // Fullscreen AI viewer is a takeover too — early return BEFORE the gate so it
   // owns the whole terminal (it paginates to the live size itself) and a mid-view
   // shrink can't replace the scrollable analysis with the resize prompt.
@@ -3808,6 +3819,10 @@ const AndroidOnboardingApp: FC<AppProps> = ({ appId, initialProgress, androidDir
         <AiAnalysisPromptStep
           dense={false}
           onChoose={async (choice) => {
+            if (choice === 'logs') {
+              setStep('build-log-view')
+              return
+            }
             if (choice === 'support') {
               // Best-effort flow — surface unexpected failures but don't block.
               await handleSupport('ai-analysis-prompt').catch((err) => { console.error('[support-flow]', err) })

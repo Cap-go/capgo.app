@@ -8,7 +8,9 @@ describe('getting started CLI onboarding accordion', () => {
     const accordion = await readFile(new URL('../src/components/dashboard/AppOnboardingCliSteps.vue', import.meta.url), 'utf8')
     const messages = JSON.parse(await readFile(new URL('../messages/en.json', import.meta.url), 'utf8')) as Record<string, string>
 
+    const gettingStarted = await readFile(new URL('../src/pages/app/[app].getting-started.vue', import.meta.url), 'utf8')
     expect(source).toContain('<AppOnboardingCliSteps')
+    expect(gettingStarted).toContain('<AppOnboardingCliSteps')
     expect(source).toContain('reportOnboardingPatch({ source: \'ai\' })')
     expect(source).toContain('switched_to_manual')
     expect(accordion).toContain('data-test="app-onboarding-cli-steps"')

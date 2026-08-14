@@ -21,6 +21,7 @@ import {
   shouldConfirmOnboardingDashboardExploration,
 } from '~/utils/onboardingRedirect'
 import DropdownProfile from '../components/dashboard/DropdownProfile.vue'
+import GettingStartedNav from '../components/dashboard/GettingStartedNav.vue'
 
 const props = defineProps <{
   sidebarOpen: boolean
@@ -193,6 +194,8 @@ const tabs = computed<Tab[]>(() => {
           <span class="text-xl font-semibold truncate transition duration-150 hover:text-white font-prompt text-slate-200 lg:text-slate-200 lg:hover:text-white">Capgo</span>
         </router-link>
       </div>
+
+      <GettingStartedNav />
 
       <!-- Organization dropdown -->
       <div class="px-3 py-4 lg:py-4 lg:px-6 shrink-0">

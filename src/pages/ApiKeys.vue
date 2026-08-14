@@ -15,10 +15,14 @@ import IconPencil from '~icons/heroicons/pencil'
 import IconShield from '~icons/heroicons/shield-check'
 import IconTrash from '~icons/heroicons/trash'
 import IconXMark from '~icons/heroicons/x-mark'
+import ApiKeyHiddenScopeNotice from '~/components/ApiKeyHiddenScopeNotice.vue'
+import RoleCapabilitiesHint from '~/components/forms/RoleCapabilitiesHint.vue'
 import ChannelPermissionOverridesPanel from '~/components/permissions/ChannelPermissionOverridesPanel.vue'
 import {
+  clearApiKeyScopeFilters,
   confirmApiKeyDeletion,
   confirmApiKeyRegeneration,
+  filterApiKeyListRows,
   isApiKeyExpired,
   showApiKeySecretModal,
   sortApiKeyRows,
@@ -173,6 +177,7 @@ function getRoleDisplayName(roleName: string): string {
   const i18nKey = getRbacRoleI18nKey(normalized)
   return i18nKey ? t(i18nKey) : normalized.replaceAll('_', ' ')
 }
+
 const systemApiKeyOrgReaderRole = 'apikey_org_reader'
 
 // Get bindings for a specific key
@@ -296,9 +301,7 @@ function clearScopeFilters(markUserChange = true) {
   if (markUserChange)
     hasUserChangedScopeFilters.value = true
 
-  scopeFilters.value = Object.fromEntries(
-    Object.keys(scopeFilters.value).map(key => [key, false]),
-  )
+  scopeFilters.value = clearApiKeyScopeFilters(scopeFilters.value)
   currentPage.value = 1
 }
 
@@ -620,38 +623,25 @@ async function fetchOrgAndAppNames() {
 
 const searchQuery = ref('')
 
+const apiKeyFilterResult = computed(() => filterApiKeyListRows(keys.value ?? [], {
+  searchQuery: searchQuery.value,
+  orgFilterIds: selectedScopeFilterIds('org'),
+  appFilterIds: selectedScopeFilterIds('app'),
+  getOrgIds: getFilterOrgIds,
+  getAppIds: getDisplayAppIds,
+  getSearchableValues: key => [
+    key.name,
+    key.key,
+    getRoleDisplayName(getHighestRole(key) || ''),
+    formatDisplayOrganizations(key),
+    formatDisplayApps(key),
+  ],
+}))
+
+const hiddenByScopeCount = computed(() => apiKeyFilterResult.value.hiddenByScopeCount)
+
 const filteredAndSortedKeys = computed(() => {
-  let result = keys.value ?? []
-
-  const orgFilterIds = selectedScopeFilterIds('org')
-  if (orgFilterIds.length > 0) {
-    result = result.filter((key) => {
-      const orgIds = getFilterOrgIds(key)
-      return orgFilterIds.some(orgId => orgIds.includes(orgId))
-    })
-  }
-
-  const appFilterIds = selectedScopeFilterIds('app')
-  if (appFilterIds.length > 0) {
-    result = result.filter((key) => {
-      const appIds = getDisplayAppIds(key)
-      return appFilterIds.some(appId => appIds.includes(appId))
-    })
-  }
-
-  // Filter first
-  if (searchQuery.value) {
-    const query = searchQuery.value.toLowerCase()
-    result = result.filter(key =>
-      key.name?.toLowerCase().includes(query)
-      || key.key?.toLowerCase().includes(query)
-      || getRoleDisplayName(getHighestRole(key) || '').toLowerCase().includes(query)
-      || formatDisplayOrganizations(key).toLowerCase().includes(query)
-      || formatDisplayApps(key).toLowerCase().includes(query),
-    )
-  }
-
-  // Then sort based on column state
+  const result = apiKeyFilterResult.value.rows
   return columns.value.length ? sortApiKeyRows(result, columns.value) : result
 })
 
@@ -1673,7 +1663,15 @@ getKeys()
               @update:search="searchQuery = $event"
               @reload="getKeys()"
               @reset="refreshData()"
-            />
+            >
+              <template #table-notice>
+                <ApiKeyHiddenScopeNotice
+                  :hidden-count="hiddenByScopeCount"
+                  :is-loading="isLoading"
+                  @remove-filter="clearScopeFilters()"
+                />
+              </template>
+            </DataTable>
           </div>
           <p class="mt-6 ml-4">
             {{ t('api-keys-are-used-for-cli-and-public-api') }}
@@ -1885,21 +1883,29 @@ getKeys()
               {{ t('select-user-role') }}
             </p>
             <div class="space-y-2">
-              <label
+              <div
                 v-for="role in orgRoleOptions"
                 :key="role.id"
-                class="flex items-center gap-3 cursor-pointer"
+                class="flex items-center gap-2"
               >
-                <input
-                  v-model="selectedOrgRole"
-                  type="radio"
-                  :data-test="`create-key-org-role-${role.name}`"
-                  class="d-radio d-radio-primary d-radio-sm"
-                  name="create-org-role"
-                  :value="role.name"
+                <label
+                  class="flex min-w-0 flex-1 cursor-pointer items-center gap-3 rounded-md border p-3 transition-colors"
+                  :class="selectedOrgRole === role.name
+                    ? 'border-primary bg-primary/5 ring-1 ring-primary/30 dark:bg-primary/10'
+                    : 'border-slate-200 bg-white hover:border-primary/60 dark:border-slate-700 dark:bg-transparent'"
                 >
-                <span class="text-sm font-medium dark:text-white text-slate-800">{{ role.description }}</span>
-              </label>
+                  <input
+                    v-model="selectedOrgRole"
+                    type="radio"
+                    :data-test="`create-key-org-role-${role.name}`"
+                    class="d-radio d-radio-primary d-radio-sm"
+                    name="create-org-role"
+                    :value="role.name"
+                  >
+                  <span class="text-sm font-medium dark:text-white text-slate-800">{{ role.description }}</span>
+                </label>
+                <RoleCapabilitiesHint :role-name="role.name" />
+              </div>
             </div>
           </div>
 
@@ -1993,7 +1999,7 @@ getKeys()
                 v-for="appId in selectedAppIds"
                 :key="appId"
                 data-test="create-key-selected-app"
-                class="flex items-center gap-4 px-4 py-2.5 border-b last:border-0 border-slate-100 dark:border-slate-700 hover:bg-slate-50/50 dark:hover:bg-slate-700/20"
+                class="flex items-center gap-3 px-4 py-2.5 border-b last:border-0 border-slate-100 dark:border-slate-700 hover:bg-slate-50/50 dark:hover:bg-slate-700/20"
               >
                 <span class="flex-1 text-sm font-medium truncate dark:text-white text-slate-800">
                   {{ getAppNameById(appId) }}
@@ -2012,10 +2018,18 @@ getKeys()
                   <option value="">
                     {{ t('select-role') }}
                   </option>
-                  <option v-for="role in appRoleOptions" :key="role.id" :value="role.name">
+                  <option
+                    v-for="role in appRoleOptions"
+                    :key="role.id"
+                    :value="role.name"
+                  >
                     {{ role.description }}
                   </option>
                 </select>
+                <RoleCapabilitiesHint
+                  v-if="pendingAppBindings[appId]"
+                  :role-name="pendingAppBindings[appId]"
+                />
                 <button
                   class="text-red-500 d-btn d-btn-xs d-btn-ghost shrink-0"
                   type="button"

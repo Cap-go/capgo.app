@@ -20,7 +20,7 @@ describe('onboarding progress analytics', () => {
 
     tracker.viewStep('intent')
 
-    expect(ONBOARDING_ANALYTICS_VERSION).toBe(1)
+    expect(ONBOARDING_ANALYTICS_VERSION).toBe(2)
     expect(capture).toHaveBeenCalledOnce()
     expect(capture).toHaveBeenCalledWith(
       'onboarding_step_viewed',
@@ -110,6 +110,70 @@ describe('onboarding progress analytics', () => {
       step_index: 1,
       total_steps: 4,
     })
+  })
+
+  it.concurrent('associates app-details interaction events with the active onboarding attempt', () => {
+    const capture = vi.fn()
+    const tracker = createOnboardingProgressTracker({
+      capture,
+      flow: 'pre_org',
+      resumed: false,
+      steps,
+      supaHost: 'https://supabase.capgo.test',
+    })
+
+    tracker.trackDetailsEvent('onboarding_app_name_entered', { field_length: 11 })
+
+    expect(capture).toHaveBeenCalledWith(
+      'onboarding_app_name_entered',
+      'https://supabase.capgo.test',
+      expect.objectContaining({
+        field_length: 11,
+        flow: 'pre_org',
+        onboarding_attempt_id: expect.any(String),
+        onboarding_version: 2,
+        step: 'details',
+      }),
+    )
+  })
+
+  it.concurrent('captures copy events with the active onboarding attempt context', () => {
+    const capture = vi.fn()
+    const tracker = createOnboardingProgressTracker({
+      capture,
+      flow: 'pre_org',
+      resumed: true,
+      steps,
+      supaHost: 'https://supabase.capgo.test',
+    })
+    tracker.viewStep('setup')
+    capture.mockClear()
+
+    const properties = tracker.trackCopyEvent('onboarding_ai_instructions_copied', {
+      app_id: 'com.example.app',
+      existing_app: true,
+      intent: 'ota',
+      org_id: 'org-id',
+      setup_command: 'ota',
+    })
+
+    expect(capture).toHaveBeenCalledWith(
+      'onboarding_ai_instructions_copied',
+      'https://supabase.capgo.test',
+      expect.objectContaining({
+        app_id: 'com.example.app',
+        existing_app: true,
+        flow: 'pre_org',
+        intent: 'ota',
+        onboarding_attempt_id: expect.any(String),
+        onboarding_version: ONBOARDING_ANALYTICS_VERSION,
+        org_id: 'org-id',
+        resumed: true,
+        setup_command: 'ota',
+        step: 'setup',
+      }),
+    )
+    expect(properties).toEqual(capture.mock.calls[0]?.[2])
   })
 
   it.concurrent('deduplicates completion for one visit and resets timing after back navigation', () => {

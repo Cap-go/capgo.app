@@ -574,6 +574,7 @@ describe('logsnag revenue metric helpers', () => {
 
   it.concurrent('defaults missing plan buckets to zero for global stats snapshots', () => {
     expect(logsnagInsightsTestUtils.normalizePlanTotals({ Solo: 12, Team: Number.NaN })).toEqual({
+      Credits: 0,
       Enterprise: 0,
       Maker: 0,
       Solo: 12,
@@ -595,10 +596,83 @@ describe('logsnag revenue metric helpers', () => {
     const snapshotEnd = new Date('2026-03-25T00:00:00.000Z')
 
     expect(logsnagInsightsTestUtils.isPaidPlanAtBillingSnapshot(null, '2026-03-26T00:00:00.000Z', snapshotEnd)).toBe(false)
-    expect(logsnagInsightsTestUtils.isPaidPlanAtBillingSnapshot(null, '2026-03-25T00:00:00.000Z', snapshotEnd)).toBe(true)
-    expect(logsnagInsightsTestUtils.isPaidPlanAtBillingSnapshot(null, '2026-03-24T23:59:59.999Z', snapshotEnd)).toBe(true)
+    expect(logsnagInsightsTestUtils.isPaidPlanAtBillingSnapshot(null, '2026-03-25T00:00:00.000Z', snapshotEnd)).toBe(false)
+    expect(logsnagInsightsTestUtils.isPaidPlanAtBillingSnapshot(null, '2026-03-24T23:59:59.999Z', snapshotEnd)).toBe(false)
     expect(logsnagInsightsTestUtils.isPaidPlanAtBillingSnapshot('2026-03-25T00:00:00.000Z', '2026-03-24T00:00:00.000Z', snapshotEnd)).toBe(false)
     expect(logsnagInsightsTestUtils.isPaidPlanAtBillingSnapshot('2026-03-24T23:59:59.999Z', '2026-03-26T00:00:00.000Z', snapshotEnd)).toBe(true)
+  })
+
+  it.concurrent('resolves billing interval from price ids then anchor length', () => {
+    expect(logsnagInsightsTestUtils.resolvePlanBillingInterval({
+      priceId: 'price_m',
+      priceMId: 'price_m',
+      priceYId: 'price_y',
+      anchorStart: '2026-01-01T00:00:00.000Z',
+      anchorEnd: '2027-01-01T00:00:00.000Z',
+    })).toBe('monthly')
+
+    expect(logsnagInsightsTestUtils.resolvePlanBillingInterval({
+      priceId: 'price_y',
+      priceMId: 'price_m',
+      priceYId: 'price_y',
+      anchorStart: '2026-01-01T00:00:00.000Z',
+      anchorEnd: '2026-02-01T00:00:00.000Z',
+    })).toBe('yearly')
+
+    expect(logsnagInsightsTestUtils.resolvePlanBillingInterval({
+      priceId: 'price_custom',
+      priceMId: 'price_m',
+      priceYId: 'price_y',
+      anchorStart: '2026-01-01T00:00:00.000Z',
+      anchorEnd: '2026-12-01T00:00:00.000Z',
+    })).toBe('yearly')
+
+    expect(logsnagInsightsTestUtils.resolvePlanBillingInterval({
+      priceId: null,
+      priceMId: 'price_m',
+      priceYId: 'price_y',
+      anchorStart: '2026-01-01T00:00:00.000Z',
+      anchorEnd: '2026-02-01T00:00:00.000Z',
+    })).toBe('monthly')
+  })
+
+  it.concurrent('resolves MRR from matched price ids with list-price fallback', () => {
+    expect(logsnagInsightsTestUtils.resolvePlanMrrDollars({
+      billing: 'monthly',
+      priceId: 'price_m',
+      priceMId: 'price_m',
+      priceYId: 'price_y',
+      priceM: 14,
+      priceY: 146,
+    })).toBe(14)
+
+    expect(logsnagInsightsTestUtils.resolvePlanMrrDollars({
+      billing: 'yearly',
+      priceId: 'price_y',
+      priceMId: 'price_m',
+      priceYId: 'price_y',
+      priceM: 14,
+      priceY: 146,
+    })).toBe(146 / 12)
+
+    expect(logsnagInsightsTestUtils.resolvePlanMrrDollars({
+      billing: 'yearly',
+      priceId: 'price_custom',
+      priceMId: 'price_m',
+      priceYId: 'price_y',
+      priceM: 249,
+      priceY: 2490,
+    })).toBe(2490 / 12)
+  })
+
+  it.concurrent('keeps active Stripe trials out of MRR until trial_at passes', () => {
+    const snapshotEnd = new Date('2026-08-11T00:00:00.000Z')
+
+    // Matches SQL `si.trial_at <= snapshot` (NULL does not qualify).
+    expect(logsnagInsightsTestUtils.hasLeftTrialAtSnapshot(null, snapshotEnd)).toBe(false)
+    expect(logsnagInsightsTestUtils.hasLeftTrialAtSnapshot('2026-08-10T23:59:59.999Z', snapshotEnd)).toBe(true)
+    expect(logsnagInsightsTestUtils.hasLeftTrialAtSnapshot('2026-08-11T00:00:00.000Z', snapshotEnd)).toBe(true)
+    expect(logsnagInsightsTestUtils.hasLeftTrialAtSnapshot('2026-08-11T00:00:00.001Z', snapshotEnd)).toBe(false)
   })
 
   it.concurrent('normalizes snapshot billing counts from SQL rows', () => {
@@ -619,10 +693,19 @@ describe('logsnag revenue metric helpers', () => {
         plan_name: 'Trial',
         plan_count: '1',
       },
+      {
+        yearly: '2',
+        monthly: '3',
+        total: '5',
+        paying_orgs_for_conversion: '4',
+        plan_name: 'Credits',
+        plan_count: '3',
+      },
     ])).toEqual({
       customers: { yearly: 2, monthly: 3, total: 5 },
       payingOrgsForConversion: 4,
       plans: {
+        Credits: 3,
         Enterprise: 0,
         Maker: 0,
         Solo: 2,
@@ -637,6 +720,7 @@ describe('logsnag revenue metric helpers', () => {
       customers: { yearly: 0, monthly: 0, total: 0 },
       payingOrgsForConversion: 0,
       plans: {
+        Credits: 0,
         Enterprise: 0,
         Maker: 0,
         Solo: 0,
@@ -669,16 +753,41 @@ describe('logsnag revenue metric helpers', () => {
 
   it.concurrent('reconstructs above-plan credit state at the replayed snapshot boundary', () => {
     const source = readFileSync(new URL('../supabase/functions/_backend/triggers/logsnag_insights.ts', import.meta.url), 'utf8')
+    const remainingCreditsHelper = source.match(/function remainingCreditsAtSnapshotSql[\s\S]*?\n\}/)?.[0] ?? ''
     const coreSnapshotQuery = source.match(/async function getCoreSnapshotCounts[\s\S]*?async function runCoreGlobalStatsShard/)?.[0] ?? ''
 
+    expect(remainingCreditsHelper).toContain('g.granted_at < ${snapshotExclusiveEndIso}::timestamptz')
+    expect(remainingCreditsHelper).toContain('g.expires_at >= ${snapshotExclusiveEndIso}::timestamptz')
+    expect(remainingCreditsHelper).toContain('c.applied_at < ${snapshotExclusiveEndIso}::timestamptz')
     expect(coreSnapshotQuery).toContain('public.usage_credit_grants')
-    expect(coreSnapshotQuery).toContain('public.usage_credit_consumptions')
-    expect(coreSnapshotQuery).toContain('g.granted_at < ${snapshotExclusiveEndIso}::timestamptz')
-    expect(coreSnapshotQuery).toContain('g.expires_at >= ${snapshotExclusiveEndIso}::timestamptz')
-    expect(coreSnapshotQuery).toContain('c.applied_at < ${snapshotExclusiveEndIso}::timestamptz')
+    expect(coreSnapshotQuery).toContain('remainingCreditsAtSnapshotSql(snapshotExclusiveEndIso)')
     expect(coreSnapshotQuery).toContain('si.is_above_plan = true')
     expect(coreSnapshotQuery).not.toContain('si.plan_usage > 100')
     expect(coreSnapshotQuery).not.toContain('o.has_usage_credits')
+  })
+
+  it.concurrent('counts credit-only orgs as a daily plan bucket at the replayed snapshot boundary', () => {
+    const source = readFileSync(new URL('../supabase/functions/_backend/triggers/logsnag_insights.ts', import.meta.url), 'utf8')
+    const billingSnapshotQuery = source.match(/async function getBillingSnapshotCounts[\s\S]*?async function getSubscriptionAccessSnapshotCounts/)?.[0] ?? ''
+    const coreShard = source.match(/async function runCoreGlobalStatsShard[\s\S]*?async function getRegistersToday/)?.[0] ?? ''
+
+    expect(billingSnapshotQuery).toContain('credit_only_orgs')
+    expect(billingSnapshotQuery).toContain("SELECT 'Credits'::character varying AS plan_name")
+    expect(billingSnapshotQuery).toContain('public.usage_credit_grants')
+    expect(billingSnapshotQuery).toContain('remainingCreditsAtSnapshotSql(snapshotExclusiveEndIso)')
+    expect(billingSnapshotQuery).toContain('FROM active_subscriptions a')
+    expect(billingSnapshotQuery).toContain('FROM trial_users t')
+    expect(billingSnapshotQuery).not.toContain('o.has_usage_credits')
+    expect(coreShard).toContain('plan_credits: plans.Credits || 0')
+    expect(source).toContain('plan_credits?: number')
+  })
+
+  it.concurrent('shares remaining-credits snapshot predicate between billing and core snapshots', () => {
+    const source = readFileSync(new URL('../supabase/functions/_backend/triggers/logsnag_insights.ts', import.meta.url), 'utf8')
+    const helperMatches = source.match(/remainingCreditsAtSnapshotSql\(/g) ?? []
+
+    expect(source).toContain('function remainingCreditsAtSnapshotSql')
+    expect(helperMatches).toHaveLength(3)
   })
 
   it.concurrent('snapshots apps with preview QR enabled in the core global stats shard', () => {

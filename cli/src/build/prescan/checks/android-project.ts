@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   appBuildGradle,
+  capacitorPluginAndroidDirs,
   gradleProperties,
   readTextIfExists,
   resolveSdk,
@@ -558,6 +559,61 @@ export const minSdkCapacitor: PrescanCheck = {
       title: `minSdk ${minSdk} is below the Capacitor ${major} floor`,
       detail: `Capacitor ${major} requires minSdkVersion >= ${floor}`,
       fix: `Raise minSdkVersion to at least ${floor} in android/variables.gradle`,
+    }]
+  },
+}
+
+interface MinSdkArtifact {
+  pattern: RegExp
+  minSdk: number
+  label: string
+}
+
+// Transitive Android libraries whose manifests declare a higher minSdk than Capacitor's floor.
+const MIN_SDK_ARTIFACTS: MinSdkArtifact[] = [
+  { pattern: /['"]com\.google\.mlkit:genai-prompt/, minSdk: 26, label: 'com.google.mlkit:genai-prompt' },
+]
+
+export const minSdkDependencies: PrescanCheck = {
+  id: 'android/min-sdk-dependencies',
+  platforms: ['android'],
+  appliesTo: ctx => resolveSdk(ctx.projectDir, 'minSdk') !== null && capacitorPluginAndroidDirs(ctx.projectDir).length > 0,
+  async run(ctx): Promise<Finding[]> {
+    const projectMinSdk = resolveSdk(ctx.projectDir, 'minSdk')
+    if (projectMinSdk === null)
+      return []
+
+    const requiredByFloor = new Map<number, string[]>()
+    for (const pluginDir of capacitorPluginAndroidDirs(ctx.projectDir)) {
+      const gradle = readTextIfExists(join(pluginDir, 'build.gradle'))
+        ?? readTextIfExists(join(pluginDir, 'build.gradle.kts'))
+      if (!gradle)
+        continue
+      const stripped = stripGradleComments(gradle)
+      for (const { pattern, minSdk, label } of MIN_SDK_ARTIFACTS) {
+        if (!pattern.test(stripped))
+          continue
+        const labels = requiredByFloor.get(minSdk) ?? []
+        if (!labels.includes(label))
+          labels.push(label)
+        requiredByFloor.set(minSdk, labels)
+      }
+    }
+
+    if (requiredByFloor.size === 0)
+      return []
+
+    const highestFloor = Math.max(...requiredByFloor.keys())
+    if (projectMinSdk >= highestFloor)
+      return []
+
+    const labels = requiredByFloor.get(highestFloor) ?? []
+    return [{
+      id: 'android/min-sdk-dependencies',
+      severity: 'error',
+      title: `minSdk ${projectMinSdk} is below a plugin dependency requirement (${highestFloor})`,
+      detail: `Synced Capacitor plugin(s) depend on ${labels.join(', ')} which requires minSdkVersion >= ${highestFloor}`,
+      fix: `Raise minSdkVersion to at least ${highestFloor} in android/variables.gradle`,
     }]
   },
 }

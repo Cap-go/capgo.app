@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { parseAppOnboarding } from '../supabase/functions/_backend/utils/appOnboarding.ts'
 import { BASE_URL, createDirectApiKeyWithBindings, executeSQL, fetchTestRequest, getAuthHeaders, getSupabaseClient, headers, ORG_ID, ORG_ID_2, resetAndSeedAppData, resetAppData, resetAppDataStats, USER_ID, USER_ID_2 } from './test-utils.ts'
 
 function isDuplicateAppCreationError(body: any): boolean {
@@ -548,9 +549,9 @@ describe('[POST]/[PUT] /app onboarding progress', () => {
       }),
     })
     expect(createApp.status).toBe(200)
-    const created = await createApp.json() as { onboarding?: { source?: string, outcome?: string, steps?: Record<string, { status: string }> } }
-    expect(created.onboarding?.source).toBe('manual')
-    expect(created.onboarding?.outcome).toBe('in_progress')
+    const created = parseAppOnboarding((await createApp.json() as { onboarding?: unknown }).onboarding)
+    expect(created.source).toBe('manual')
+    expect(created.outcome).toBe('in_progress')
 
     const firstPut = await fetchTestRequest(`${BASE_URL}/app/${APPNAME}`, {
       method: 'PUT',
@@ -565,9 +566,9 @@ describe('[POST]/[PUT] /app onboarding progress', () => {
       }),
     })
     expect(firstPut.status).toBe(200)
-    const afterCli = await firstPut.json() as { onboarding?: { source?: string, outcome?: string, steps?: Record<string, { status: string }> } }
-    expect(afterCli.onboarding?.source).toBe('cli')
-    expect(afterCli.onboarding?.steps?.add_app?.status).toBe('done')
+    const afterCli = parseAppOnboarding((await firstPut.json() as { onboarding?: unknown }).onboarding)
+    expect(afterCli.source).toBe('cli')
+    expect(afterCli.steps.add_app?.status).toBe('done')
 
     const skipPut = await fetchTestRequest(`${BASE_URL}/app/${APPNAME}`, {
       method: 'PUT',
@@ -583,10 +584,10 @@ describe('[POST]/[PUT] /app onboarding progress', () => {
       }),
     })
     expect(skipPut.status).toBe(200)
-    const afterSkip = await skipPut.json() as { onboarding?: { source?: string, outcome?: string, steps?: Record<string, { status: string }> } }
-    expect(afterSkip.onboarding?.source).toBe('cli')
-    expect(afterSkip.onboarding?.steps?.add_app?.status).toBe('done')
-    expect(afterSkip.onboarding?.steps?.add_channel?.status).toBe('skipped')
-    expect(afterSkip.onboarding?.outcome).toBe('in_progress')
+    const afterSkip = parseAppOnboarding((await skipPut.json() as { onboarding?: unknown }).onboarding)
+    expect(afterSkip.source).toBe('cli')
+    expect(afterSkip.steps.add_app?.status).toBe('done')
+    expect(afterSkip.steps.add_channel?.status).toBe('skipped')
+    expect(afterSkip.outcome).toBe('in_progress')
   })
 })

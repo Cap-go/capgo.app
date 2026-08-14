@@ -24,6 +24,7 @@ export const apps = pgTable('apps', {
   block_provider_infra_requests: boolean('block_provider_infra_requests').notNull().default(true),
   allow_device_custom_id: boolean('allow_device_custom_id').notNull().default(true),
   need_onboarding: boolean('need_onboarding').notNull().default(false),
+  onboarding: jsonb('onboarding').notNull().default({}),
   created_from_onboarding: boolean('created_from_onboarding').notNull().default(false),
   onboarding_completed_at: timestamp('onboarding_completed_at', { withTimezone: true }),
   existing_app: boolean('existing_app').notNull().default(false),

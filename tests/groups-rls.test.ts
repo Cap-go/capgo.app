@@ -1,8 +1,7 @@
-import type { PoolClient } from 'pg'
 import { randomUUID } from 'node:crypto'
 import { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { POSTGRES_URL, USER_ID, USER_ID_2 } from './test-utils.ts'
+import { POSTGRES_URL, USER_ID, USER_ID_2, withAuthenticatedUser } from './test-utils.ts'
 
 const fixtureId = randomUUID()
 const orgId = randomUUID()
@@ -12,34 +11,6 @@ const adminGroupName = `Group RLS Admin ${fixtureId}`
 let pool: Pool
 let memberGroupId: string
 let adminOnlyGroupId: string
-
-async function withAuthenticatedUser<T>(userId: string, fn: (client: PoolClient) => Promise<T>): Promise<T> {
-  const client = await pool.connect()
-  try {
-    await client.query('BEGIN')
-    await client.query('SET LOCAL ROLE authenticated')
-    await client.query('SELECT set_config($1, $2, true)', ['request.jwt.claim.sub', userId])
-    await client.query('SELECT set_config($1, $2, true)', [
-      'request.jwt.claims',
-      JSON.stringify({ sub: userId, role: 'authenticated', aud: 'authenticated' }),
-    ])
-    const result = await fn(client)
-    await client.query('COMMIT')
-    return result
-  }
-  catch (error) {
-    try {
-      await client.query('ROLLBACK')
-    }
-    catch {
-      // Ignore rollback failures for clearer root error handling.
-    }
-    throw error
-  }
-  finally {
-    client.release()
-  }
-}
 
 beforeAll(async () => {
   pool = new Pool({ connectionString: POSTGRES_URL })
@@ -100,7 +71,7 @@ afterAll(async () => {
 
 describe('groups RLS', () => {
   it('denies org members from listing groups they do not belong to', async () => {
-    const rows = await withAuthenticatedUser(USER_ID_2, async (client) => {
+    const rows = await withAuthenticatedUser(pool, USER_ID_2, async (client) => {
       const result = await client.query(`
         SELECT id, org_id, name, description, created_at
         FROM public.groups
@@ -114,7 +85,7 @@ describe('groups RLS', () => {
   })
 
   it('denies org members from reading group metadata by id', async () => {
-    const rows = await withAuthenticatedUser(USER_ID_2, async (client) => {
+    const rows = await withAuthenticatedUser(pool, USER_ID_2, async (client) => {
       const result = await client.query(`
         SELECT id, org_id, name, description, created_at
         FROM public.groups
@@ -127,7 +98,7 @@ describe('groups RLS', () => {
   })
 
   it('denies org members from reading group membership lists', async () => {
-    const rows = await withAuthenticatedUser(USER_ID_2, async (client) => {
+    const rows = await withAuthenticatedUser(pool, USER_ID_2, async (client) => {
       const result = await client.query(`
         SELECT user_id
         FROM public.group_members
@@ -140,7 +111,7 @@ describe('groups RLS', () => {
   })
 
   it('allows org admins to list groups in their org without group membership', async () => {
-    const rows = await withAuthenticatedUser(USER_ID, async (client) => {
+    const rows = await withAuthenticatedUser(pool, USER_ID, async (client) => {
       const result = await client.query(`
         SELECT id
         FROM public.groups
@@ -153,6 +124,22 @@ describe('groups RLS', () => {
     expect(rows[0]?.id).toBe(adminOnlyGroupId)
   })
 
+  it('allows org creators (org_super_admin) to insert a group with RETURNING', async () => {
+    const groupId = randomUUID()
+
+    const row = await withAuthenticatedUser(pool, USER_ID, async (client) => {
+      const result = await client.query(`
+        INSERT INTO public.groups (id, org_id, name, description, created_by)
+        VALUES ($1::uuid, $2::uuid, $3, $4, $5::uuid)
+        RETURNING id, org_id, name
+      `, [groupId, orgId, `Group RLS Returning ${fixtureId}`, 'INSERT RETURNING regression', USER_ID])
+      return result.rows[0]
+    })
+
+    expect(row?.id).toBe(groupId)
+    expect(row?.org_id).toBe(orgId)
+  })
+
   it('allows org admins to read group membership lists without group membership', async () => {
     const client = await pool.connect()
     try {
@@ -161,7 +148,7 @@ describe('groups RLS', () => {
         VALUES ($1::uuid, $2::uuid, $3::uuid)
       `, [adminOnlyGroupId, USER_ID_2, USER_ID])
 
-      const rows = await withAuthenticatedUser(USER_ID, async (queryClient) => {
+      const rows = await withAuthenticatedUser(pool, USER_ID, async (queryClient) => {
         const result = await queryClient.query(`
           SELECT user_id
           FROM public.group_members
@@ -194,7 +181,7 @@ describe('groups RLS', () => {
         VALUES ($1::uuid, $2::uuid, $3::uuid)
       `, [memberGroupId, USER_ID_2, USER_ID])
 
-      const groupRows = await withAuthenticatedUser(USER_ID_2, async (queryClient) => {
+      const groupRows = await withAuthenticatedUser(pool, USER_ID_2, async (queryClient) => {
         const result = await queryClient.query(`
           SELECT id
           FROM public.groups
@@ -205,7 +192,7 @@ describe('groups RLS', () => {
       expect(groupRows).toHaveLength(1)
       expect(groupRows[0]?.id).toBe(memberGroupId)
 
-      const memberRows = await withAuthenticatedUser(USER_ID_2, async (queryClient) => {
+      const memberRows = await withAuthenticatedUser(pool, USER_ID_2, async (queryClient) => {
         const result = await queryClient.query(`
           SELECT user_id
           FROM public.group_members

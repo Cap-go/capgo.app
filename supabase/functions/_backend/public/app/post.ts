@@ -1,7 +1,7 @@
-import type { Database } from '../../utils/supabase.types.ts'
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
-import { isAppOnboardingSource, mergeAppOnboarding } from '../../utils/appOnboarding.ts'
+import type { Database } from '../../utils/supabase.types.ts'
+import { applyAppOnboardingPatch, isAppOnboardingSource } from '../../utils/appOnboarding.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { closeClient, getPgClient, logPgError } from '../../utils/pg.ts'
 import { checkPermission } from '../../utils/rbac.ts'
@@ -56,7 +56,7 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: CreateApp):
     existing_app: body.existing_app ?? false,
     ios_store_url: body.ios_store_url ?? null,
     android_store_url: body.android_store_url ?? null,
-    onboarding: mergeAppOnboarding({}, {
+    onboarding: applyAppOnboardingPatch({}, {
       source: isAppOnboardingSource(body.onboarding?.source) ? body.onboarding.source : 'manual',
     }),
   }

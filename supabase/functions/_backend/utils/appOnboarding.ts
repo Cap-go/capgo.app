@@ -68,29 +68,41 @@ export function isAppOnboardingStepId(value: unknown): value is AppOnboardingSte
   return typeof value === 'string' && STEP_ID_SET.has(value)
 }
 
-export function parseAppOnboarding(value: unknown): AppOnboardingState {
-  const fallback = defaultAppOnboarding()
-  if (!value || typeof value !== 'object' || Array.isArray(value))
-    return fallback
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
 
-  const raw = value as Record<string, unknown>
-  const source = isAppOnboardingSource(raw.source) ? raw.source : fallback.source
-  const outcome = isAppOnboardingOutcome(raw.outcome) ? raw.outcome : fallback.outcome
+function parseSetupRecord(value: unknown): Record<string, unknown> {
+  if (!isRecord(value))
+    return {}
+  return isRecord(value.setup) ? value.setup : value
+}
+
+function parseSteps(value: unknown): AppOnboardingState['steps'] {
   const steps: AppOnboardingState['steps'] = {}
-  if (raw.steps && typeof raw.steps === 'object' && !Array.isArray(raw.steps)) {
-    for (const [key, stepValue] of Object.entries(raw.steps as Record<string, unknown>)) {
-      if (!isAppOnboardingStepId(key) || !stepValue || typeof stepValue !== 'object' || Array.isArray(stepValue))
-        continue
-      const status = (stepValue as { status?: unknown }).status
-      if (!STEP_STATUS_SET.has(String(status)))
-        continue
-      const at = (stepValue as { at?: unknown }).at
-      steps[key] = {
-        status: status as AppOnboardingStepStatus,
-        ...(typeof at === 'string' ? { at } : {}),
-      }
+  if (!isRecord(value))
+    return steps
+  for (const [key, stepValue] of Object.entries(value)) {
+    if (!isAppOnboardingStepId(key) || !isRecord(stepValue))
+      continue
+    const status = stepValue.status
+    if (!STEP_STATUS_SET.has(String(status)))
+      continue
+    const at = stepValue.at
+    steps[key] = {
+      status: status as AppOnboardingStepStatus,
+      ...(typeof at === 'string' ? { at } : {}),
     }
   }
+  return steps
+}
+
+export function parseAppOnboarding(value: unknown): AppOnboardingState {
+  const fallback = defaultAppOnboarding()
+  const raw = parseSetupRecord(value)
+  const source = isAppOnboardingSource(raw.source) ? raw.source : fallback.source
+  const outcome = isAppOnboardingOutcome(raw.outcome) ? raw.outcome : fallback.outcome
+  const steps = parseSteps(raw.steps)
 
   return {
     source,
@@ -191,5 +203,22 @@ export function mergeAppOnboarding(
     outcome: deriveAppOnboardingOutcome(steps, current.outcome, patch.outcome),
     steps,
     updated_at: now(),
+  }
+}
+
+export function applyAppOnboardingPatch(
+  currentValue: unknown,
+  patch: AppOnboardingPatch,
+  now = () => new Date().toISOString(),
+): Record<string, unknown> {
+  const existing = isRecord(currentValue) ? { ...currentValue } : {}
+  const setup = mergeAppOnboarding(existing.setup ?? existing, patch, now)
+  delete existing.source
+  delete existing.outcome
+  delete existing.steps
+  delete existing.updated_at
+  return {
+    ...existing,
+    setup,
   }
 }

@@ -6,7 +6,9 @@ import { computed, h, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
+import IconInformationCircle from '~icons/heroicons/information-circle'
 import IconSmartphone from '~icons/lucide/smartphone'
+import ChannelOverrideRetentionNotice from '~/components/ChannelOverrideRetentionNotice.vue'
 import DateRangePicker from '~/components/DateRangePicker.vue'
 import { formatDate } from '~/services/date'
 import {
@@ -40,6 +42,7 @@ const { t } = useI18n()
 const supabase = useSupabase()
 const router = useRouter()
 const total = ref(0)
+const unfilteredTotal = ref<number | null>(null)
 const search = ref('')
 const elements = ref<Device[]>([])
 const isLoading = ref(true)
@@ -72,6 +75,11 @@ const platformOptions = computed(() => [
   { value: 'android' as const, label: t('platform-android') },
   { value: 'electron' as const, label: t('platform-electron') },
 ])
+const hiddenByTimeFilterCount = computed(() => {
+  if (unfilteredTotal.value === null)
+    return 0
+  return Math.max(0, unfilteredTotal.value - total.value)
+})
 
 function clearExtraFilters() {
   // Values only — DataTable clear emits a filters update that triggers the single reload.
@@ -251,7 +259,7 @@ async function resolveDeviceIds() {
   return []
 }
 
-async function countDevices() {
+async function countDevices(options?: { includeDateRange?: boolean }) {
   const { data: currentSession } = await supabase.auth.getSession()!
   if (!currentSession.session)
     return 0
@@ -276,7 +284,7 @@ async function countDevices() {
         search: searchTerm,
         order: getActiveOrder(columns.value),
         customIdMode: filters.value.CustomId,
-        ...getDateRangePayload(),
+        ...(options?.includeDateRange === false ? {} : getDateRangePayload()),
       }),
     })
 
@@ -292,6 +300,18 @@ async function countDevices() {
     console.log('Cannot get devices', err)
     return 0
   }
+}
+
+async function recountDevices(loadId: number) {
+  const [filteredCount, allCount] = await Promise.all([
+    countDevices(),
+    countDevices({ includeDateRange: false }),
+  ])
+  if (loadId !== activeLoadId.value)
+    return false
+  total.value = filteredCount
+  unfilteredTotal.value = allCount
+  return true
 }
 
 interface DevicesResponse {
@@ -338,10 +358,9 @@ async function reload() {
       // cursors so the new window cannot reuse stale page offsets.
       if (!filtersChanged)
         resetTablePagination({ snapRolling: true })
-      const newTotal = await countDevices()
-      if (loadId !== activeLoadId.value)
+      const counted = await recountDevices(loadId)
+      if (!counted)
         return
-      total.value = newTotal
     }
 
     await getData(loadId)
@@ -363,11 +382,9 @@ async function refreshData() {
   isLoading.value = true
   try {
     resetTablePagination({ snapRolling: true })
-    const newTotal = await countDevices()
-    if (loadId !== activeLoadId.value)
+    const counted = await recountDevices(loadId)
+    if (!counted)
       return
-
-    total.value = newTotal
     await getData(loadId)
     if (loadId === activeLoadId.value)
       previousPage.value = currentPage.value
@@ -581,6 +598,8 @@ watch(() => props.appId, async (appId) => {
   cancelScheduledReload()
   // Invalidate in-flight reloads from the previous app before awaiting.
   activeLoadId.value += 1
+  total.value = 0
+  unfilteredTotal.value = null
   skipFilterReload.value = true
   selectedPlatform.value = ''
   selectedVersionNames.value = props.versionName ? [props.versionName] : []
@@ -622,6 +641,7 @@ watch([selectedPlatform, selectedVersionNames], () => {
       @clear-extra-filters="clearExtraFilters"
     >
       <template #toolbar-extras>
+        <ChannelOverrideRetentionNotice v-if="showAddButton" show-label />
         <DateRangePicker
           ref="dateRangePickerRef"
           v-model="dateRange"
@@ -629,6 +649,34 @@ watch([selectedPlatform, selectedVersionNames], () => {
           compact
           @apply="onDateRangeApply"
         />
+      </template>
+      <template #table-notice>
+        <div
+          v-if="!isLoading && hiddenByTimeFilterCount > 0"
+          role="status"
+          class="mx-3 mb-3 flex items-start gap-2.5 rounded-md border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-800/70 dark:text-slate-200"
+          data-test="devices-range-filter-banner"
+        >
+          <IconInformationCircle
+            data-test="devices-time-notice-icon"
+            aria-hidden="true"
+            class="mt-0.5 size-5 shrink-0 text-blue-500 dark:text-blue-400"
+          />
+          <div class="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
+            <span>
+              {{ hiddenByTimeFilterCount === 1
+                ? t('devices-hidden-by-timeframe-one')
+                : t('devices-hidden-by-timeframe-many', { count: hiddenByTimeFilterCount }) }}
+            </span>
+            <button
+              type="button"
+              class="d-btn d-btn-link h-auto min-h-0 rounded-sm border-0 p-0 font-semibold text-blue-600 underline underline-offset-2 shadow-none hover:text-blue-800 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:outline-none dark:text-blue-400 dark:hover:text-blue-300 dark:focus-visible:ring-offset-slate-800"
+              @click="openDateRangePicker"
+            >
+              {{ t('devices-change-timeframe') }}
+            </button>
+          </div>
+        </div>
       </template>
       <template #empty-state="{ clearFilters, hasActiveFilters }">
         <div

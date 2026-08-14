@@ -9,7 +9,7 @@ function sourceBetween(start: string, end: string) {
 
 describe('app onboarding progress analytics integration', () => {
   it.concurrent('initializes tracking once the real initial or resumed step is resolved', () => {
-    expect(onboardingSource).toContain("import { createOnboardingProgressTracker } from '~/utils/onboardingProgressAnalytics'")
+    expect(onboardingSource).toContain("import { createOnboardingDetailsFieldDebouncer, createOnboardingProgressTracker } from '~/utils/onboardingProgressAnalytics'")
 
     const initializer = sourceBetween('function initializeProgressTracking(', 'function whiteCardToggleButtonClass(')
     expect(initializer).toContain("flow: props.preOrg ? 'pre_org' : 'existing_org'")
@@ -36,6 +36,12 @@ describe('app onboarding progress analytics integration', () => {
 
   it.concurrent('retains the existing intent compatibility event', () => {
     expect(onboardingSource).toContain("pushEvent('onboarding_intent_selected', config.supaHost, {")
+  })
+
+  it.concurrent('keeps the unload warning scoped to unfinished pre-org onboarding', () => {
+    expect(onboardingSource).toContain('useBeforeUnloadWarning(Boolean(props.preOrg))')
+    const creation = sourceBetween('async function createOrganizationAndApp()', 'async function createAppRecord(')
+    expect(creation.indexOf('if (!createdApp.value)')).toBeLessThan(creation.indexOf('removeBeforeUnloadWarning()'))
   })
 
   it.concurrent('tracks only successful forward transitions with approved context', () => {
@@ -77,11 +83,14 @@ describe('app onboarding progress analytics integration', () => {
     const demoAction = sourceBetween('async function seedDemoData()', 'async function copyText(')
     expect(demoAction).not.toContain('completeStep')
     expect(demoAction).not.toContain('completeAndViewStep')
+    expect(demoAction).toContain('allowOnboardingDashboardExploration')
+    expect(demoAction).toContain('/getting-started')
 
     const dashboardExit = sourceBetween('function openDashboard()', 'onMounted(async () => {')
     expect(dashboardExit).toContain("if (flowStep.value === 'install' || flowStep.value === 'setup')")
     expect(dashboardExit).toContain('progressTracker?.completeStep(flowStep.value, {')
     expect(dashboardExit).toContain('appId: createdApp.value.app_id')
+    expect(dashboardExit).toContain('/getting-started')
     expect(dashboardExit.indexOf('completeStep')).toBeLessThan(dashboardExit.indexOf('router.push'))
   })
 })
