@@ -278,10 +278,6 @@ function buildV2Graph(attempts: FrontendOnboardingAttempt[]): Array<{ key: strin
     .map(([key, count]) => ({ key, count }))
 }
 
-function isInSetupFollowupWindow(timestamp: number, setupMs: number) {
-  return timestamp >= setupMs && timestamp <= setupMs + FRONTEND_ONBOARDING_FOLLOWUP_MS
-}
-
 function buildV2SetupCliOutcomes(attempts: FrontendOnboardingAttempt[]): FrontendOnboardingSetupCliOutcomes {
   const outcomesByPerson = new Map<string, { copiedAiInstructions: boolean, startedCli: boolean }>()
 
@@ -291,8 +287,8 @@ function buildV2SetupCliOutcomes(attempts: FrontendOnboardingAttempt[]): Fronten
       continue
 
     const outcome = outcomesByPerson.get(attempt.personId) ?? { copiedAiInstructions: false, startedCli: false }
-    outcome.copiedAiInstructions ||= attempt.aiInstructionsCopiedMs.some(timestamp => isInSetupFollowupWindow(timestamp, setupMs))
-    outcome.startedCli ||= attempt.cliStartedMs.some(timestamp => isInSetupFollowupWindow(timestamp, setupMs))
+    outcome.copiedAiInstructions ||= attempt.aiInstructionsCopiedMs.some(timestamp => isStepInFollowupWindow(timestamp, setupMs))
+    outcome.startedCli ||= attempt.cliStartedMs.some(timestamp => isStepInFollowupWindow(timestamp, setupMs))
     outcomesByPerson.set(attempt.personId, outcome)
   }
 
