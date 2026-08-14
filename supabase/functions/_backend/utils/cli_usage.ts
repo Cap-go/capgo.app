@@ -32,7 +32,7 @@ export interface AdminCliUsageStats {
 }
 
 const TOP_USERS_LIMIT = 20
-const TOP_APIKEY_LOOKUP_LIMIT = 100
+const TOP_APIKEY_LOOKUP_LIMIT = 1000
 const APIKEY_RBAC_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 function emptyAdminCliUsageStats(): AdminCliUsageStats {
