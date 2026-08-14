@@ -329,6 +329,29 @@ describe('public channel post', () => {
     )
   })
 
+  it('maps updatePackage onto the channel row', async () => {
+    supabaseAdmin.mockImplementation(() => buildAdminChain({
+      existingChannelId: 42,
+      existingChannelVersion: 123,
+      existingChannelPublic: true,
+    }))
+    const { post } = await import('../supabase/functions/_backend/public/channel/post.ts')
+    const c = context()
+
+    await post(c, {
+      app_id: 'com.test.update-package',
+      channel: 'production',
+      updatePackage: 'zip_from_builtin',
+    }, apiKey())
+
+    expect(updateOrCreateChannel).toHaveBeenCalledWith(
+      c,
+      expect.objectContaining({ update_package: 'zip_from_builtin' }),
+      42,
+      true,
+    )
+  })
+
   it('preserves the stable version for a settings-only update without channel.read or bundle lookup', async () => {
     const fromCalls: string[] = []
     supabaseAdmin.mockImplementation(() => buildAdminChain({

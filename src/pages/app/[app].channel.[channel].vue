@@ -43,6 +43,7 @@ type EditableChannelKey = 'allow_dev'
   | 'disable_auto_update_under_native'
   | 'electron'
   | 'ios'
+  | 'update_package'
   | 'rollout_cache_ttl_seconds'
   | 'rollout_enabled'
   | 'rollout_paused_at'
@@ -136,6 +137,8 @@ const showDebugSection = ref(false)
 // Auto update dropdown state
 const autoUpdateDropdown = useTemplateRef('autoUpdateDropdown')
 onClickOutside(autoUpdateDropdown, () => closeAutoUpdateDropdown())
+const updatePackageDropdown = useTemplateRef('updatePackageDropdown')
+onClickOutside(updatePackageDropdown, () => closeUpdatePackageDropdown())
 
 function openBundle() {
   if (!channel.value || channel.value.version.storage_provider === 'revert_to_builtin')
@@ -722,6 +725,12 @@ function closeAutoUpdateDropdown() {
   }
 }
 
+function closeUpdatePackageDropdown() {
+  if (updatePackageDropdown.value) {
+    updatePackageDropdown.value.removeAttribute('open')
+  }
+}
+
 function getAutoUpdateLabel(value: string) {
   switch (value) {
     case 'major':
@@ -766,6 +775,39 @@ async function onSelectAutoUpdate(value: Database['public']['Enums']['disable_up
     channel.value.disable_auto_update = value
 
   closeAutoUpdateDropdown()
+}
+
+const updatePackageOptions = [
+  'all',
+  'zip',
+  'delta',
+  'zip_from_builtin',
+  'delta_from_builtin',
+] as const satisfies Database['public']['Enums']['channel_update_package'][]
+
+function getUpdatePackageLabel(value?: Database['public']['Enums']['channel_update_package'] | null) {
+  switch (value) {
+    case 'zip':
+      return t('update-package-zip')
+    case 'delta':
+      return t('update-package-delta')
+    case 'zip_from_builtin':
+      return t('update-package-zip-from-builtin')
+    case 'delta_from_builtin':
+      return t('update-package-delta-from-builtin')
+    default:
+      return t('update-package-all')
+  }
+}
+
+async function onSelectUpdatePackage(value: Database['public']['Enums']['channel_update_package']) {
+  if (!canUpdateChannelSettings.value) {
+    toast.error(t('no-permission'))
+    return false
+  }
+
+  await saveChannelChange('update_package', value)
+  closeUpdatePackageDropdown()
 }
 
 function openLink(url?: string): void {
@@ -1302,6 +1344,37 @@ async function copyCurlCommand() {
                   {{ t('version-rules-tester') }}
                   <IconExternalLink class="w-3.5 h-3.5" />
                 </a>
+              </div>
+            </InfoRow>
+            <InfoRow :label="t('update-package')">
+              <div class="flex items-center justify-end w-full gap-3">
+                <details ref="updatePackageDropdown" class="d-dropdown d-dropdown-end">
+                  <summary class="d-btn d-btn-outline d-btn-sm">
+                    <span>{{ getUpdatePackageLabel(channel.update_package) }}</span>
+                    <IconDown class="w-4 h-4 ml-1 fill-current" />
+                  </summary>
+                  <ul class="w-64 p-2 bg-white shadow d-dropdown-content dark:bg-base-200 rounded-box z-1">
+                    <li
+                      v-for="option in updatePackageOptions"
+                      :key="option"
+                      class="block px-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-600"
+                    >
+                      <a
+                        class="block px-3 py-2 text-gray-900 dark:text-white"
+                        @click="onSelectUpdatePackage(option)"
+                      >
+                        {{ getUpdatePackageLabel(option) }}
+                      </a>
+                    </li>
+                  </ul>
+                </details>
+                <div class="relative inline-flex group">
+                  <IconInformation class="w-4 h-4 transition-colors text-slate-400 cursor-help dark:text-slate-400 dark:group-hover:text-slate-200 group-hover:text-slate-600" />
+                  <div class="absolute right-0 w-64 px-3 py-2 mb-2 text-xs text-white transition-opacity duration-150 bg-gray-800 rounded-lg shadow-lg opacity-0 pointer-events-none bottom-full group-hover:opacity-100">
+                    {{ t('update-package-help') }}
+                    <div class="absolute w-2 h-2 rotate-45 bg-gray-800 -bottom-1 right-2" />
+                  </div>
+                </div>
               </div>
             </InfoRow>
             <InfoRow :label="t('allow-dev-build')">

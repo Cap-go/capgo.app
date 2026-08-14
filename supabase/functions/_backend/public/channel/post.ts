@@ -17,6 +17,8 @@ interface ChannelSet {
   public?: boolean
   disableAutoUpdateUnderNative?: boolean
   disableAutoUpdate?: Database['public']['Enums']['disable_update']
+  updatePackage?: Database['public']['Enums']['channel_update_package']
+  update_package?: Database['public']['Enums']['channel_update_package']
   ios?: boolean
   android?: boolean
   electron?: boolean
@@ -86,6 +88,7 @@ function normalizeChannelSet(body: ChannelSet): ChannelSet {
     autoPauseMinFailures: definedOrAlias(body.autoPauseMinFailures, body.auto_pause_min_failures),
     autoPauseAction: definedOrAlias(body.autoPauseAction, body.auto_pause_action),
     autoPauseCooldownMinutes: definedOrAlias(body.autoPauseCooldownMinutes, body.auto_pause_cooldown_minutes),
+    updatePackage: definedOrAlias(body.updatePackage, body.update_package),
   }
 }
 
@@ -154,6 +157,7 @@ const channelInsertColumns = [
   'public',
   'disable_auto_update_under_native',
   'disable_auto_update',
+  'update_package',
   'ios',
   'android',
   'electron',
@@ -198,6 +202,7 @@ async function insertChannelInTransaction(
     public: channel.public,
     disable_auto_update_under_native: channel.disable_auto_update_under_native,
     disable_auto_update: channel.disable_auto_update,
+    update_package: channel.update_package,
     ios: channel.ios,
     android: channel.android,
     electron: channel.electron,
@@ -398,6 +403,10 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: ChannelSet,
   if (body.autoPauseAction && !['pause', 'rollback', 'notify'].includes(body.autoPauseAction)) {
     throw simpleError('invalid_auto_pause_action', 'Auto-pause action must be pause, rollback, or notify', { autoPauseAction: body.autoPauseAction })
   }
+  const updatePackages = ['all', 'zip', 'delta', 'zip_from_builtin', 'delta_from_builtin'] as const
+  if (body.updatePackage != null && !updatePackages.includes(body.updatePackage)) {
+    throw simpleError('invalid_update_package', 'Update package must be all, zip, delta, zip_from_builtin, or delta_from_builtin', { updatePackage: body.updatePackage })
+  }
   const disablesRollout = body.rolloutEnabled === false && !body.rollback && !body.promoteToStable
   // Clearing rollout_version (disable unlink / explicit target / rollback / promote) is gated by the DB trigger with channel.promote_bundle.
   const changesRolloutTarget = body.rolloutVersion !== undefined
@@ -428,6 +437,7 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: ChannelSet,
     ...(body.public == null ? {} : { public: body.public }),
     ...(body.disableAutoUpdateUnderNative == null ? {} : { disable_auto_update_under_native: body.disableAutoUpdateUnderNative }),
     ...(body.disableAutoUpdate == null ? {} : { disable_auto_update: body.disableAutoUpdate }),
+    ...(body.updatePackage == null ? {} : { update_package: body.updatePackage }),
     ...(body.allow_device_self_set == null ? {} : { allow_device_self_set: body.allow_device_self_set }),
     ...(body.allow_emulator == null ? {} : { allow_emulator: body.allow_emulator }),
     ...(body.allow_device == null ? {} : { allow_device: body.allow_device }),

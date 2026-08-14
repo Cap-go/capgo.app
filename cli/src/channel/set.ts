@@ -93,6 +93,7 @@ export async function setChannelInternal(channel: string, appId: string, options
     android,
     selfAssign,
     disableAutoUpdate,
+    updatePackage,
     dev,
     emulator,
     device,
@@ -152,6 +153,7 @@ export async function setChannelInternal(channel: string, appId: string, options
     && device == null
     && prod == null
     && disableAutoUpdate == null
+    && updatePackage == null
     && rolloutBundle == null
     && rolloutPercentage == null
     && rolloutPercentageBps == null
@@ -201,6 +203,7 @@ export async function setChannelInternal(channel: string, appId: string, options
     || android != null
     || selfAssign != null
     || disableAutoUpdate != null
+    || updatePackage != null
     || dev != null
     || emulator != null
     || device != null
@@ -577,6 +580,12 @@ export async function setChannelInternal(channel: string, appId: string, options
       log.info(`Set ${appId} channel: ${channel} to ${finalDisableAutoUpdate} disable update strategy to this channel`)
   }
 
+  if (updatePackage != null) {
+    channelPayload.update_package = updatePackage
+    if (!silent)
+      log.info(`Set ${appId} channel: ${channel} update package to ${updatePackage}`)
+  }
+
   if (hasStableBundlePromotion && !hasSettingsUpdate) {
     const { error } = await invokeCapgoCliApi('bundle', {
       apikey: options.apikey!,
@@ -627,6 +636,8 @@ export async function setChannelInternal(channel: string, appId: string, options
       channelBody.disableAutoUpdateUnderNative = channelPayload.disable_auto_update_under_native
     if (channelPayload.disable_auto_update !== undefined)
       channelBody.disableAutoUpdate = channelPayload.disable_auto_update
+    if (channelPayload.update_package !== undefined)
+      channelBody.updatePackage = channelPayload.update_package
     if (channelPayload.ios !== undefined)
       channelBody.ios = channelPayload.ios
     if (channelPayload.android !== undefined)

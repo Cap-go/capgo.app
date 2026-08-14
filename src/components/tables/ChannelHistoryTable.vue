@@ -70,6 +70,7 @@ const fieldLabels: Record<string, string> = {
   allow_device_self_set: 'channel-allow-device-self-set',
   disable_auto_update: 'channel-disable-auto-update',
   disable_auto_update_under_native: 'channel-disable-auto-update-under-native',
+  update_package: 'update-package',
 }
 
 function getFieldLabel(field: string): string {

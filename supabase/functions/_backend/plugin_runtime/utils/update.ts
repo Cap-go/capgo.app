@@ -234,6 +234,27 @@ function getResponseFeatureSupport(plugin_version: string): ResponseFeatureSuppo
   return support
 }
 
+export const CHANNEL_UPDATE_PACKAGE_VALUES = ['all', 'zip', 'delta', 'zip_from_builtin', 'delta_from_builtin'] as const
+export type ChannelUpdatePackage = typeof CHANNEL_UPDATE_PACKAGE_VALUES[number]
+export type ResolvedChannelUpdatePackage = 'all' | 'zip' | 'delta'
+
+export function isOnBuiltinVersion(versionName: string, versionBuild: string) {
+  return versionName === 'builtin' || versionName === versionBuild
+}
+
+export function resolveChannelUpdatePackage(
+  mode: ChannelUpdatePackage | null | undefined,
+  isOnBuiltin: boolean,
+): ResolvedChannelUpdatePackage {
+  if (mode === 'zip' || mode === 'delta')
+    return mode
+  if (isOnBuiltin && mode === 'zip_from_builtin')
+    return 'zip'
+  if (isOnBuiltin && mode === 'delta_from_builtin')
+    return 'delta'
+  return 'all'
+}
+
 export function resToVersion(plugin_version: string, signedURL: string, version: Database['public']['Tables']['app_versions']['Row'], manifest: ManifestEntry[], expose_metadata: boolean = false) {
   const support = getResponseFeatureSupport(plugin_version)
   const res: {
@@ -547,12 +568,20 @@ export async function updateWithPG(
 
   const version = channelOverride?.version ?? channelData.version
   let manifestEntries = (channelOverride?.manifestEntries ?? channelData?.manifestEntries ?? []) as Partial<Database['public']['Tables']['manifest']['Row']>[]
+  const updatePackage = resolveChannelUpdatePackage(
+    channelData.channels.update_package,
+    isOnBuiltinVersion(version_name, version_build),
+  )
+  const serveZip = updatePackage !== 'delta'
+  const serveDelta = updatePackage !== 'zip'
   // device.version = versionData ? versionData.id : version.id
 
   // App-level manifest_bundle_count gates whether we may load files later.
   // Do not require version.manifest_count here — seed/legacy rows can lag that column
   // while still having manifest table entries (and the old json_agg path found them).
-  if (!version.external_url && !version.r2_path && !isInternalVersionName(version.name) && !fetchManifestEntries && (!manifestEntries || manifestEntries.length === 0)) {
+  const hasZip = Boolean(version.external_url || version.r2_path)
+  const canServeDelta = serveDelta && (fetchManifestEntries || (manifestEntries && manifestEntries.length > 0))
+  if (!isInternalVersionName(version.name) && !hasZip && !canServeDelta) {
     cloudlog({ requestId: c.get('requestId'), message: 'Cannot get bundle', id: app_id, version, manifestEntriesLength: manifestEntries ? manifestEntries.length : 0, channelData: channelData ? channelData.channels.name : 'no channel data', defaultChannel })
     await sendStatsAndDevice(c, device, [{ action: 'missingBundle', versionName: version.name }])
     return updateError200(c, 'no_bundle', 'Cannot get bundle')
@@ -590,7 +619,8 @@ export async function updateWithPG(
 
   // Manifest is loaded later (after gates) via indexed app_version_id — never
   // channel-query json_agg (that was the P999 tax on up-to-date).
-  const needsDeferredManifest = !version.external_url
+  const needsDeferredManifest = serveDelta
+    && !version.external_url
     && fetchManifestEntries
     && (!manifestEntries || manifestEntries.length === 0)
 
@@ -770,7 +800,7 @@ export async function updateWithPG(
     return updateError200(c, 'revert_to_builtin_plugin_version_too_old', 'revert_to_builtin used, but plugin version is too old')
   }
   const startBundleUrl = performance.now()
-  let signedURL = version.external_url ?? ''
+  let signedURL = serveZip ? (version.external_url ?? '') : ''
   let manifest: ManifestEntry[] = []
   let manifestFetchMs = 0
   if (!version.external_url) {
@@ -786,7 +816,7 @@ export async function updateWithPG(
         })
       : null
     const [url, deferredEntries] = await Promise.all([
-      version.r2_path
+      serveZip && version.r2_path
         ? getBundleUrl(c, version.r2_path, device_id, version.checksum ?? '')
         : Promise.resolve(null),
       deferredManifestPromise ?? Promise.resolve(null),
@@ -803,12 +833,16 @@ export async function updateWithPG(
         })
       }
     }
-    if (!version.r2_path && !isInternalVersionName(version.name) && (!manifestEntries || manifestEntries.length === 0)) {
+    if (!version.r2_path && !isInternalVersionName(version.name) && !(serveDelta && manifestEntries && manifestEntries.length > 0)) {
       cloudlog({ requestId: c.get('requestId'), message: 'Cannot get bundle', id: app_id, version, manifestEntriesLength: 0, channelData: channelData ? channelData.channels.name : 'no channel data', defaultChannel })
       await sendStatsAndDevice(c, device, [{ action: 'missingBundle', versionName: version.name }])
       return updateError200(c, 'no_bundle', 'Cannot get bundle')
     }
-    manifest = getManifestUrl(c, version.id, manifestEntries, device_id)
+    if (serveDelta)
+      manifest = getManifestUrl(c, version.id, manifestEntries, device_id)
+  }
+  else if (!serveZip) {
+    signedURL = ''
   }
   const endBundleUrl = performance.now()
   const bundleUrlMs = Math.round(endBundleUrl - startBundleUrl)

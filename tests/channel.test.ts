@@ -81,6 +81,30 @@ describe('[POST] /channel operations', () => {
     expect(data.status).toBe('ok')
   })
 
+  it('update channel package mode', async () => {
+    const response = await fetch(`${BASE_URL}/channel`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        app_id: APPNAME,
+        channel: 'production',
+        updatePackage: 'zip',
+      }),
+    })
+
+    const data = await response.json<{ status: string }>()
+    expect(response.status).toBe(200)
+    expect(data.status).toBe('ok')
+
+    const getResponse = await fetch(`${BASE_URL}/channel?${new URLSearchParams({ app_id: APPNAME, channel: 'production' }).toString()}`, {
+      method: 'GET',
+      headers,
+    })
+    const channel = await getResponse.json<{ updatePackage: string }>()
+    expect(getResponse.status).toBe(200)
+    expect(channel.updatePackage).toBe('zip')
+  })
+
   it('invalid app_id', async () => {
     const response = await fetch(`${BASE_URL}/channel`, {
       method: 'POST',

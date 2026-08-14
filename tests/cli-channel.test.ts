@@ -593,6 +593,24 @@ describe('tests CLI channel commands', () => {
     expect(data?.disable_auto_update).toBe('major')
   })
 
+  it.concurrent('should set channel update package', async () => {
+    const testChannelName = generateChannelName()
+    await createChannel(testChannelName, APPNAME)
+
+    const result = await createTestSDK().updateChannel({ channelId: testChannelName, appId: APPNAME, bundle: undefined, ...{ updatePackage: 'delta' } })
+    expect(result.success).toBe(true)
+
+    const { data, error } = await getSupabaseClient()
+      .from('channels')
+      .select('*')
+      .eq('name', testChannelName)
+      .eq('app_id', APPNAME)
+      .single()
+      .throwOnError()
+    expect(error).toBeNull()
+    expect(data?.update_package).toBe('delta')
+  })
+
   it.concurrent('should set channel for dev environment', async () => {
     const testChannelName = generateChannelName()
     await createChannel(testChannelName, APPNAME)
