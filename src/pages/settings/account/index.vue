@@ -496,7 +496,14 @@ async function logOut() {
         role: 'danger',
         id: 'confirm-button',
         handler: async () => {
-          main.logout().then(() => router.replace('/login'))
+          try {
+            await main.logout()
+            await router.replace('/login')
+          }
+          catch (error) {
+            console.error('Failed to log out', error)
+            toast.error(t('cannot-sign-off'))
+          }
         },
       },
     ],
