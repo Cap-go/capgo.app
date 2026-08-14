@@ -122,23 +122,9 @@ export function parseAppOnboardingPatch(value: unknown): AppOnboardingPatch | nu
     patch.source = raw.source
   if (isAppOnboardingOutcome(raw.outcome))
     patch.outcome = raw.outcome
-  if (raw.steps && typeof raw.steps === 'object' && !Array.isArray(raw.steps)) {
-    const steps: NonNullable<AppOnboardingPatch['steps']> = {}
-    for (const [key, stepValue] of Object.entries(raw.steps as Record<string, unknown>)) {
-      if (!isAppOnboardingStepId(key) || !stepValue || typeof stepValue !== 'object' || Array.isArray(stepValue))
-        continue
-      const status = (stepValue as { status?: unknown }).status
-      if (!STEP_STATUS_SET.has(String(status)))
-        continue
-      const at = (stepValue as { at?: unknown }).at
-      steps[key] = {
-        status: status as AppOnboardingStepStatus,
-        ...(typeof at === 'string' ? { at } : {}),
-      }
-    }
-    if (Object.keys(steps).length > 0)
-      patch.steps = steps
-  }
+  const steps = parseSteps(raw.steps)
+  if (Object.keys(steps).length > 0)
+    patch.steps = steps
 
   if (!patch.source && !patch.outcome && !patch.steps)
     return null

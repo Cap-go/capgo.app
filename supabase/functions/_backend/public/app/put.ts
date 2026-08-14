@@ -70,8 +70,9 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
   const onboardingPatch = parseAppOnboardingPatch(body.onboarding)
   const canUpdateSettings = await checkPermission(c, 'app.update_settings', { appId })
 
-  // Service-role load is only for the pending-onboarding completion path so keys
-  // with org.create_app can finish apps they cannot yet read via RLS.
+  // Service-role load is used when the key cannot update settings: pending
+  // onboarding completion, or a valid onboarding progress patch. Authorization
+  // still runs after this read and blocks unauthorized callers.
   const previousAppClient = canUpdateSettings || (body.need_onboarding !== false && !onboardingPatch)
     ? supabaseApikey(c, apikey.key)
     : supabaseAdmin(c)
@@ -101,18 +102,21 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
 
   // Completing pending onboarding with only org.create_app must not allow arbitrary
   // settings changes. Restrict the writable fields in that case.
+  // Single source of truth for settings fields. `need_onboarding` is writable on the
+  // onboarding-completion path, so it is tracked separately.
+  const extraSettingsValues = [
+    body.name,
+    body.icon,
+    body.retention,
+    body.expose_metadata,
+    body.allow_device_custom_id,
+    body.existing_app,
+    body.block_provider_infra_requests,
+    body.ios_store_url,
+    body.android_store_url,
+  ]
   if (!canUpdateSettings && (canCompleteOnboarding || canReportOnboarding)) {
-    const disallowedFields = [
-      body.name,
-      body.icon,
-      body.retention,
-      body.expose_metadata,
-      body.allow_device_custom_id,
-      body.existing_app,
-      body.block_provider_infra_requests,
-      body.ios_store_url,
-      body.android_store_url,
-    ].some(value => value !== undefined)
+    const disallowedFields = extraSettingsValues.some(value => value !== undefined)
     if (disallowedFields) {
       throw quickError(401, 'cannot_access_app', 'You can\'t access this app', { app_id: appId })
     }
@@ -124,16 +128,8 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
     : null
 
   const hasSettingsPayload = [
-    body.name,
-    body.icon,
-    body.retention,
-    body.expose_metadata,
-    body.allow_device_custom_id,
+    ...extraSettingsValues,
     body.need_onboarding,
-    body.existing_app,
-    body.block_provider_infra_requests,
-    body.ios_store_url,
-    body.android_store_url,
   ].some(value => value !== undefined)
 
   let data: Database['public']['Tables']['apps']['Row'] | undefined

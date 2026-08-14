@@ -1327,6 +1327,8 @@ function markStepDone(step: number, pathToPackageJson?: string, channelName?: st
         supaHost: globalReportContext.supaHost,
         supaAnon: globalReportContext.supaAnon,
         outcome: isLastStep ? (status === 'skipped' ? 'skipped' : 'completed') : 'in_progress',
+      }).catch((error) => {
+        pLog.warn(`Cannot report onboarding progress:\n${error}`)
       })
     }
   }
@@ -4589,6 +4591,8 @@ async function runDeviceStep(orgId: string, apikey: string, appId: string, platf
     else {
       pLog.info(`You can run the app manually in ${projectDir} with: ${runCommand.command}`)
     }
+    await markStep(orgId, apikey, 'run-device', appId)
+    return 'skipped'
   }
   else {
     s.stop(`App started ✅`)

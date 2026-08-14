@@ -75,7 +75,7 @@ onBeforeUnmount(() => {
   >
     <button
       type="button"
-      class="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
+      class="d-btn d-btn-ghost d-btn-block h-auto min-h-0 justify-between gap-3 rounded-none px-4 py-3 text-left"
       :aria-expanded="isOpen"
       :aria-controls="`app-onboarding-cli-steps-${appId}`"
       @click="isOpen = !isOpen"

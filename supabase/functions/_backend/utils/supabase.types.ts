@@ -4898,7 +4898,7 @@ export type Database = {
         Returns: Json
       }
       merge_app_onboarding_setup: {
-        Args: { p_existing: Json, p_patch: Json }
+        Args: { p_existing: Json; p_patch: Json }
         Returns: Json
       }
       null_migrated_app_version_manifests: {
@@ -5283,7 +5283,7 @@ export type Database = {
       }
       remove_old_jobs: { Args: never; Returns: undefined }
       report_app_onboarding_setup: {
-        Args: { p_app_id: string, p_patch: Json }
+        Args: { p_app_id: string; p_patch: Json }
         Returns: Json
       }
       request_actor_user_id: { Args: never; Returns: string }

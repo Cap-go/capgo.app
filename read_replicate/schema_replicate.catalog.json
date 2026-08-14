@@ -1785,7 +1785,7 @@
       "name": "apps_onboarding_valid",
       "table": "apps",
       "type": "c",
-      "valid": true
+      "valid": false
     },
     {
       "definition": "PRIMARY KEY (app_id)",

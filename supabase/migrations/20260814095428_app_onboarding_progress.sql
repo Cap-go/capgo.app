@@ -40,7 +40,7 @@ ALTER TABLE public.apps
       NOT (onboarding ? 'outcome'::text)
       OR ((onboarding ->> 'outcome'::text) = ANY (ARRAY['in_progress'::text, 'completed'::text, 'skipped'::text, 'switched_to_manual'::text]))
     )
-  );
+  ) NOT VALID;
 
 COMMENT ON COLUMN public.apps.onboarding IS
   'Feature ledger plus setup source. Shape: {"refreshed_at": iso, "features": {...}, "setup": {"source": manual|cli|mcp|ai, "outcome": in_progress|completed|skipped|switched_to_manual, "steps": {step_id: {"status": done|skipped, "at": iso}}}}. Manual is the default when setup.source is missing.';
@@ -141,7 +141,7 @@ BEGIN
       IF jsonb_typeof(v_step) IS DISTINCT FROM 'object' THEN
         CONTINUE;
       END IF;
-      IF (v_step ->> 'status') NOT IN ('done', 'skipped') THEN
+      IF COALESCE(v_step ->> 'status', '') NOT IN ('done', 'skipped') THEN
         CONTINUE;
       END IF;
       v_existing_step := v_steps -> v_step_id;
@@ -245,11 +245,19 @@ BEGIN
     RAISE EXCEPTION 'NO_PERMISSION';
   END IF;
 
-  IF NOT public.rbac_check_permission_request(
-    public.rbac_perm_app_read(),
-    v_owner_org,
-    p_app_id,
-    NULL::bigint
+  IF NOT (
+    public.rbac_check_permission_request(
+      public.rbac_perm_app_update_settings(),
+      v_owner_org,
+      p_app_id,
+      NULL::bigint
+    )
+    OR public.rbac_check_permission_request(
+      public.rbac_perm_org_create_app(),
+      v_owner_org,
+      NULL::character varying,
+      NULL::bigint
+    )
   ) THEN
     RAISE EXCEPTION 'NO_PERMISSION';
   END IF;
@@ -271,4 +279,4 @@ GRANT ALL ON FUNCTION public.report_app_onboarding_setup(character varying, json
 GRANT ALL ON FUNCTION public.report_app_onboarding_setup(character varying, jsonb) TO "service_role";
 
 COMMENT ON FUNCTION public.report_app_onboarding_setup(character varying, jsonb) IS
-  'Records CLI/MCP/AI/manual setup progress for an app the caller can read. Does not write feature ledger fields.';
+  'Records CLI/MCP/AI/manual setup progress for an app the caller can update. Requires app.update_settings or org.create_app. Does not write feature ledger fields.';

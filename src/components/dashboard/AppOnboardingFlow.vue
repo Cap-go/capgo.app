@@ -1097,17 +1097,20 @@ async function reportOnboardingPatch(patch: { source?: 'manual' | 'cli' | 'mcp' 
   if (!app)
     return
 
+  const previousSource = reportedSetupSource.value
   try {
+    if (patch.source)
+      reportedSetupSource.value = patch.source
     const { error } = await supabase.rpc('report_app_onboarding_setup', {
       p_app_id: app.app_id,
       p_patch: patch as never,
     })
     if (error)
       throw error
-    if (patch.source)
-      reportedSetupSource.value = patch.source
   }
   catch (error) {
+    if (patch.source)
+      reportedSetupSource.value = previousSource
     console.error('Cannot report onboarding progress', error)
   }
 }

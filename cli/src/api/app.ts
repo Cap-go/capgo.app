@@ -157,6 +157,7 @@ export async function reportAppOnboardingProgress(
       'capgkey': apikey,
     }),
     body: JSON.stringify({ onboarding }),
+    signal: AbortSignal.timeout(10_000),
   })
 
   if (!response.ok) {
