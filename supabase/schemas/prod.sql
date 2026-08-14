@@ -124,6 +124,18 @@ CREATE TYPE "public"."action_type" AS ENUM (
 ALTER TYPE "public"."action_type" OWNER TO "postgres";
 
 
+CREATE TYPE "public"."channel_update_package" AS ENUM (
+    'all',
+    'zip',
+    'delta',
+    'zip_from_builtin',
+    'delta_from_builtin'
+);
+
+
+ALTER TYPE "public"."channel_update_package" OWNER TO "postgres";
+
+
 CREATE TYPE "public"."credit_metric_type" AS ENUM (
     'mau',
     'bandwidth',
@@ -2499,6 +2511,89 @@ ALTER FUNCTION "public"."channel_readable_channel_ids"() OWNER TO "postgres";
 
 
 COMMENT ON FUNCTION "public"."channel_readable_channel_ids"() IS 'Returns role-bound or explicitly allowed channel IDs with channel.read after concrete-ID evaluation, so explicit channel denies win.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."channel_update_package_mismatch"("p_update_package" "public"."channel_update_package", "p_version_id" bigint, "p_channel_name" "text") RETURNS "text"
+    LANGUAGE "plpgsql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  v_name text;
+  v_storage_provider text;
+  v_r2_path text;
+  v_external_url text;
+  v_legacy_manifest public.manifest_entry[];
+  v_has_zip boolean;
+  v_has_delta boolean;
+BEGIN
+  IF p_version_id IS NULL OR p_update_package IS NULL OR p_update_package = 'all' THEN
+    RETURN NULL;
+  END IF;
+
+  SELECT
+    app_version.name,
+    app_version.storage_provider,
+    app_version.r2_path,
+    app_version.external_url,
+    app_version.manifest
+  INTO
+    v_name,
+    v_storage_provider,
+    v_r2_path,
+    v_external_url,
+    v_legacy_manifest
+  FROM public.app_versions AS app_version
+  WHERE app_version.id = p_version_id;
+
+  IF NOT FOUND THEN
+    RETURN NULL;
+  END IF;
+
+  IF v_name IN ('builtin', 'unknown') THEN
+    RETURN NULL;
+  END IF;
+
+  v_has_zip := (
+    (v_storage_provider = 'external' AND NULLIF(BTRIM(COALESCE(v_external_url, '')), '') IS NOT NULL)
+    OR (
+      v_storage_provider IS DISTINCT FROM 'r2-direct'
+      AND NULLIF(BTRIM(COALESCE(v_r2_path, '')), '') IS NOT NULL
+    )
+  );
+
+  v_has_delta := COALESCE(pg_catalog.array_length(v_legacy_manifest, 1), 0) > 0
+    OR EXISTS (
+      SELECT 1
+      FROM public.manifest AS manifest_row
+      WHERE manifest_row.app_version_id = p_version_id
+    );
+
+  IF p_update_package IN ('zip', 'zip_from_builtin') AND NOT v_has_zip THEN
+    RETURN format(
+      'CHANNEL_ZIP_REQUIRED: Channel "%s" requires a zip package, but bundle "%s" has no zip. Upload a full zip (omit --delta-only) or set the channel to delta only / zip and delta.',
+      p_channel_name,
+      v_name
+    );
+  END IF;
+
+  IF p_update_package IN ('delta', 'delta_from_builtin') AND NOT v_has_delta THEN
+    RETURN format(
+      'CHANNEL_DELTA_REQUIRED: Channel "%s" requires a delta package, but bundle "%s" has no delta files. Upload with delta enabled (`npx @capgo/cli@latest bundle upload --delta`) or set the channel to zip only / zip and delta.',
+      p_channel_name,
+      v_name
+    );
+  END IF;
+
+  RETURN NULL;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."channel_update_package_mismatch"("p_update_package" "public"."channel_update_package", "p_version_id" bigint, "p_channel_name" "text") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."channel_update_package_mismatch"("p_update_package" "public"."channel_update_package", "p_version_id" bigint, "p_channel_name" "text") IS 'Returns a user-facing error when a channel package mode cannot be served by the given bundle. NULL means compatible. Internal builtin/unknown versions are skipped.';
 
 
 
@@ -5410,6 +5505,45 @@ $$;
 
 
 ALTER FUNCTION "public"."enforce_apikey_role_binding_expiration_policy"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."enforce_channel_update_package_bundle"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  v_msg text;
+BEGIN
+  IF TG_OP = 'UPDATE'
+    AND NEW.update_package IS NOT DISTINCT FROM OLD.update_package
+    AND NEW.version IS NOT DISTINCT FROM OLD.version
+    AND NEW.rollout_version IS NOT DISTINCT FROM OLD.rollout_version
+  THEN
+    RETURN NEW;
+  END IF;
+
+  v_msg := public.channel_update_package_mismatch(NEW.update_package, NEW.version, NEW.name);
+  IF v_msg IS NOT NULL THEN
+    RAISE EXCEPTION '%', v_msg
+      USING ERRCODE = '22023';
+  END IF;
+
+  v_msg := public.channel_update_package_mismatch(NEW.update_package, NEW.rollout_version, NEW.name);
+  IF v_msg IS NOT NULL THEN
+    RAISE EXCEPTION '%', v_msg
+      USING ERRCODE = '22023';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."enforce_channel_update_package_bundle"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."enforce_channel_update_package_bundle"() IS 'Blocks channel writes that pair zip-only or delta-only package modes with a bundle that cannot serve that package, including rollout targets.';
+
 
 
 CREATE OR REPLACE FUNCTION "public"."enforce_channel_version_promotion_permission"() RETURNS "trigger"
@@ -18879,6 +19013,7 @@ CREATE TABLE IF NOT EXISTS "public"."channels" (
     "auto_pause_cooldown_minutes" integer DEFAULT 60 NOT NULL,
     "auto_pause_last_triggered_at" timestamp with time zone,
     "auto_pause_last_checked_at" timestamp with time zone,
+    "update_package" "public"."channel_update_package" DEFAULT 'all'::"public"."channel_update_package" NOT NULL,
     CONSTRAINT "channels_auto_pause_action_check" CHECK (("auto_pause_action" = ANY (ARRAY['pause'::"text", 'rollback'::"text", 'notify'::"text"]))),
     CONSTRAINT "channels_auto_pause_confidence_check" CHECK ((("auto_pause_confidence" > (0)::numeric) AND ("auto_pause_confidence" < (1)::numeric))),
     CONSTRAINT "channels_auto_pause_cooldown_minutes_check" CHECK ((("auto_pause_cooldown_minutes" >= 0) AND ("auto_pause_cooldown_minutes" <= 10080))),
@@ -18897,6 +19032,10 @@ ALTER TABLE "public"."channels" OWNER TO "postgres";
 
 
 COMMENT ON COLUMN "public"."channels"."rbac_id" IS 'Stable UUID to bind RBAC roles to channel scope.';
+
+
+
+COMMENT ON COLUMN "public"."channels"."update_package" IS 'How /updates serves the channel bundle: all (zip+delta), zip, delta, or zip/delta only when the device is still on the store builtin version.';
 
 
 
@@ -22293,6 +22432,10 @@ CREATE OR REPLACE TRIGGER "credit_usage_posthog_on_transactions" AFTER INSERT ON
 
 
 
+CREATE OR REPLACE TRIGGER "enforce_channel_update_package_bundle" BEFORE INSERT OR UPDATE OF "version", "rollout_version", "update_package" ON "public"."channels" FOR EACH ROW EXECUTE FUNCTION "public"."enforce_channel_update_package_bundle"();
+
+
+
 CREATE OR REPLACE TRIGGER "enforce_channel_version_promotion_permission" BEFORE INSERT OR UPDATE OF "version" ON "public"."channels" FOR EACH ROW EXECUTE FUNCTION "public"."enforce_channel_version_promotion_permission"();
 
 
@@ -24640,6 +24783,11 @@ GRANT ALL ON FUNCTION "public"."channel_readable_channel_ids"() TO "authenticate
 
 
 
+REVOKE ALL ON FUNCTION "public"."channel_update_package_mismatch"("p_update_package" "public"."channel_update_package", "p_version_id" bigint, "p_channel_name" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."channel_update_package_mismatch"("p_update_package" "public"."channel_update_package", "p_version_id" bigint, "p_channel_name" "text") TO "service_role";
+
+
+
 GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "public"."apikeys" TO "anon";
 GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "public"."apikeys" TO "authenticated";
 GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "public"."apikeys" TO "service_role";
@@ -24936,6 +25084,11 @@ GRANT ALL ON FUNCTION "public"."enforce_apikey_expiration_policy"() TO "service_
 
 REVOKE ALL ON FUNCTION "public"."enforce_apikey_role_binding_expiration_policy"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."enforce_apikey_role_binding_expiration_policy"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."enforce_channel_update_package_bundle"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."enforce_channel_update_package_bundle"() TO "service_role";
 
 
 
