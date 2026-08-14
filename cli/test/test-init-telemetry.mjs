@@ -102,6 +102,14 @@ function assertBefore(source, first, second, message) {
 {
   const progress = { app_id: 'com.example.app', step_done: 2, telemetry: { journey_id: 'bad' } }
   assert.equal(parseInitProgressTelemetry(progress), undefined, 'malformed nested telemetry is ignored')
+  const mixedProgress = { ...progress, telemetry: { journey_id: 'ij_saved', last_run_id: 'invalid' } }
+  const mixedTelemetry = parseInitProgressTelemetry(mixedProgress)
+  assert.deepEqual(mixedTelemetry, { journey_id: 'ij_saved' }, 'a malformed optional run ID does not discard a valid journey')
+  const { telemetry } = create({ enabled: false })
+  telemetry.prepareResumeCandidate(mixedTelemetry, 2, 12)
+  await telemetry.recordRunStarted()
+  await telemetry.recordResumeDecision('continue')
+  assert.deepEqual(telemetry.getProgressMetadata(), { journey_id: 'ij_saved' }, 'disabled accepted resumes preserve a valid journey without advancing its run ID')
   assert.deepEqual(mergeInitProgressTelemetry(progress, saved), { ...progress, telemetry: saved }, 'telemetry merge preserves operational progress fields')
 }
 

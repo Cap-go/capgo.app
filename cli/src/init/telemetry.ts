@@ -33,7 +33,7 @@ export function parseInitProgressTelemetry(progress: unknown): InitProgressTelem
   if (typeof journey_id !== 'string' || !journeyIdPattern.test(journey_id))
     return undefined
   if (last_run_id !== undefined && (typeof last_run_id !== 'string' || !runIdPattern.test(last_run_id)))
-    return undefined
+    return { journey_id }
   return last_run_id ? { journey_id, last_run_id } : { journey_id }
 }
 
