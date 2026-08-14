@@ -45,6 +45,14 @@ function stopPolling() {
   }
 }
 
+function startPolling() {
+  if (pollTimer !== null)
+    return
+  pollTimer = window.setInterval(() => {
+    void refreshOnboarding()
+  }, 2000)
+}
+
 async function refreshOnboarding() {
   const generation = ++refreshGeneration
   const appId = props.appId
@@ -72,13 +80,17 @@ function statusLabel(status: AppOnboardingStepStatus | undefined) {
   return t('app-onboarding-cli-step-pending')
 }
 
+watch(isTerminal, (terminal) => {
+  if (terminal)
+    stopPolling()
+  else
+    startPolling()
+})
+
 onMounted(() => {
   void refreshOnboarding()
-  if (!isTerminal.value) {
-    pollTimer = window.setInterval(() => {
-      void refreshOnboarding()
-    }, 2000)
-  }
+  if (!isTerminal.value)
+    startPolling()
 })
 
 onBeforeUnmount(() => {
