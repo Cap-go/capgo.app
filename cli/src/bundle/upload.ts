@@ -65,6 +65,11 @@ function uploadFail(message: string): never {
   throw new CliUserError(message)
 }
 
+async function uploadFailIfChannelError(error: unknown, fallback: string): Promise<never> {
+  const packageError = await channelUpdatePackageCliError(error)
+  uploadFail(packageError || fallback)
+}
+
 // A user-initiated cancel is an expected exit, not a crash: warn instead of
 // error, and throw `CliUserError` so error tracking skips it.
 function uploadCancel(): never {
@@ -1025,12 +1030,8 @@ async function promoteExistingChannel(
     supaAnon: options?.supaAnon,
   })
 
-  if (error) {
-    const packageError = await channelUpdatePackageCliError(error)
-    if (packageError)
-      uploadFail(packageError)
-    uploadFail(`Cannot set channel because this API key does not have the required RBAC permission. ${await formatFunctionInvokeError(error)}`)
-  }
+  if (error)
+    await uploadFailIfChannelError(error, `Cannot set channel because this API key does not have the required RBAC permission. ${await formatFunctionInvokeError(error)}`)
 
   const bundleUrl = `${localConfig.hostWeb}/app/${appid}/channel/${targetChannel.id}`
   if (targetChannel.public)
@@ -1092,12 +1093,8 @@ async function setVersionInChannel(
       owner_org: orgId,
       ...(selfAssign ? { allow_device_self_set: true } : {}),
     })
-    if (dbError3) {
-      const packageError = await channelUpdatePackageCliError(dbError3)
-      if (packageError)
-        uploadFail(packageError)
-      uploadFail(`Cannot set channel because this API key does not have the required RBAC permission. ${formatError(dbError3)}`)
-    }
+    if (dbError3)
+      await uploadFailIfChannelError(dbError3, `Cannot set channel because this API key does not have the required RBAC permission. ${formatError(dbError3)}`)
     const bundleUrl = `${localConfig.hostWeb}/app/${appid}/channel/${data.id}`
     if (data?.public)
       log.info('Your update is now available in your public channel 🎉')
@@ -1124,12 +1121,8 @@ async function setVersionInChannel(
       supaHost: cliHost?.supaHost,
       supaAnon: cliHost?.supaAnon,
     })
-    if (error) {
-      const packageError = await channelUpdatePackageCliError(error)
-      if (packageError)
-        uploadFail(packageError)
-      uploadFail(`Cannot create channel and set its bundle because this API key does not have the required RBAC permission. ${await formatFunctionInvokeError(error)}`)
-    }
+    if (error)
+      await uploadFailIfChannelError(error, `Cannot create channel and set its bundle because this API key does not have the required RBAC permission. ${await formatFunctionInvokeError(error)}`)
 
     const createdChannel = data as { id?: unknown, public?: unknown } | null
     let createdChannelId = Number(createdChannel?.id)
@@ -1215,12 +1208,8 @@ async function setRolloutVersionInChannel(
     supaAnon: cliHost?.supaAnon,
   })
 
-  if (rolloutError) {
-    const packageError = await channelUpdatePackageCliError(rolloutError)
-    if (packageError)
-      uploadFail(packageError)
-    uploadFail(`Cannot set rollout in channel ${await formatFunctionInvokeError(rolloutError)}`)
-  }
+  if (rolloutError)
+    await uploadFailIfChannelError(rolloutError, `Cannot set rollout in channel ${await formatFunctionInvokeError(rolloutError)}`)
 
   const bundleUrl = `${localConfig.hostWeb}/app/${appid}/channel/${targetChannel.id}`
   log.info(`Set ${appid} channel ${channel} rollout target to @${bundle} (${formatRolloutPercentage(rolloutPercentageBps)})`)

@@ -14,6 +14,17 @@ describe('channelUpdatePackageErrorKey', () => {
     })).toBe('update-package-delta-required')
   })
 
+  it('maps API error codes', () => {
+    expect(channelUpdatePackageErrorKey({
+      error: 'channel_zip_required',
+      message: 'This channel requires a zip package, but the bundle has no zip.',
+    })).toBe('update-package-zip-required')
+    expect(channelUpdatePackageErrorKey({
+      error: 'channel_delta_required',
+      message: 'This channel requires a delta package, but the bundle has no delta files.',
+    })).toBe('update-package-delta-required')
+  })
+
   it('ignores unrelated errors', () => {
     expect(channelUpdatePackageErrorKey({ message: 'permission denied' })).toBeNull()
     expect(channelUpdatePackageErrorKey(null)).toBeNull()
