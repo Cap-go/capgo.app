@@ -1,7 +1,6 @@
 import type { Context } from 'hono'
 import type Stripe from 'stripe'
 import type { MiddlewareKeyVariablesStripe } from '../utils/hono_middleware_stripe.ts'
-import type { NotificationAudience } from '../utils/org_email_notifications.ts'
 import type { StripeData, StripeWebhookStatus } from '../utils/stripe.ts'
 import type { Database } from '../utils/supabase.types.ts'
 import { eq, sql } from 'drizzle-orm'
@@ -359,21 +358,14 @@ async function requireLiveStripeCustomerBillingEmail(c: Context, customerId: str
   }
 }
 
-async function collectOrgBentoEmails(
-  c: Context,
-  org: Org,
-  customerId: string,
-  audiences: NotificationAudience[],
-) {
+async function getBillingBentoEmails(c: Context, org: Org, customerId: string) {
   const emails: Array<string | null | undefined> = [org.management_email]
   const pgClient = getPgClient(c, true)
 
   try {
     const drizzleClient = getDrizzleClient(pgClient)
-    for (const audience of audiences) {
-      const { emails: memberEmails } = await getOrgAdminMemberEmailsForTags(c, org.id, drizzleClient, audience)
-      emails.push(...memberEmails)
-    }
+    const { emails: memberEmails } = await getOrgAdminMemberEmailsForTags(c, org.id, drizzleClient, 'billing')
+    emails.push(...memberEmails)
 
     const creatorEmail = await lookupOrgCreatorEmail(c, drizzleClient, org)
     emails.push(creatorEmail)
@@ -385,14 +377,6 @@ async function collectOrgBentoEmails(
   emails.push(await getStripeCustomerBillingEmail(c, customerId))
 
   return emails
-}
-
-async function getBillingBentoEmails(c: Context, org: Org, customerId: string) {
-  return collectOrgBentoEmails(c, org, customerId, ['billing'])
-}
-
-async function getOrgBentoEmails(c: Context, org: Org, customerId: string) {
-  return collectOrgBentoEmails(c, org, customerId, ['billing', 'admins'])
 }
 
 async function getBillingPlans(c: Context): Promise<PlanRow[]> {
@@ -443,7 +427,7 @@ async function trackBillingBentoEvent(
   if (!isBentoConfigured(c))
     return
 
-  const emails = uniqueBillingEmails(await getOrgBentoEmails(c, org, customerId))
+  const emails = uniqueBillingEmails(await getBillingBentoEmails(c, org, customerId))
   if (emails.length === 0) {
     cloudlog({
       requestId: c.get('requestId'),

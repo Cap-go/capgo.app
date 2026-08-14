@@ -45,7 +45,7 @@ describe('stripe billing Bento tag updates', () => {
 })
 
 describe('dunning Bento stop event', () => {
-  it.concurrent('uses a Capgo event so Bento can exit dunning for every org user', () => {
+  it.concurrent('uses a Capgo event so Bento can exit dunning for billing contacts', () => {
     expect(stripeEventTestUtils.BENTO_CHARGE_SUCCEEDED_EVENT).toBe('org:charge_succeeded')
   })
 
@@ -114,5 +114,53 @@ describe('stripe charge events', () => {
 
     expect(stripeData.data.customer_id).toBe('cus_charge_fail')
     expect(stripeData.data.status).toBe('failed')
+  })
+
+  it.concurrent('leaves customer_id empty when charge.succeeded has no customer', () => {
+    const stripeData = extractDataEvent(mockContext, {
+      data: {
+        object: {
+          customer: null,
+          id: 'ch_no_customer',
+          object: 'charge',
+        },
+      },
+      type: 'charge.succeeded',
+    } as any)
+
+    expect(stripeData.data.customer_id).toBe('')
+  })
+
+  it.concurrent('leaves customer_id empty when charge.failed has no customer', () => {
+    const stripeData = extractDataEvent(mockContext, {
+      data: {
+        object: {
+          customer: null,
+          id: 'ch_fail_no_customer',
+          object: 'charge',
+        },
+      },
+      type: 'charge.failed',
+    } as any)
+
+    expect(stripeData.data.customer_id).toBe('')
+  })
+
+  it.concurrent('extracts the customer id from an expanded charge customer', () => {
+    const stripeData = extractDataEvent(mockContext, {
+      data: {
+        object: {
+          customer: {
+            id: 'cus_expanded',
+            object: 'customer',
+          },
+          id: 'ch_expanded',
+          object: 'charge',
+        },
+      },
+      type: 'charge.succeeded',
+    } as any)
+
+    expect(stripeData.data.customer_id).toBe('cus_expanded')
   })
 })
