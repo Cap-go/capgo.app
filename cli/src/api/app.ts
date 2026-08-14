@@ -132,6 +132,40 @@ export async function completePendingOnboardingApp(
   }
 }
 
+export interface AppOnboardingProgressPatch {
+  source?: 'manual' | 'cli' | 'mcp' | 'ai'
+  outcome?: 'in_progress' | 'completed' | 'skipped' | 'switched_to_manual'
+  steps?: Record<string, { status: 'done' | 'skipped', at?: string }>
+}
+
+export async function reportAppOnboardingProgress(
+  apikey: string,
+  appId: string,
+  onboarding: AppOnboardingProgressPatch,
+  options?: { supaHost?: string, supaAnon?: string },
+): Promise<void> {
+  const apiHost = await resolveCapgoPublicApiHost(options)
+  const usesFunctionsV1 = apiHost.includes('/functions/v1')
+  const authorization = usesFunctionsV1 && options?.supaAnon
+    ? `Bearer ${options.supaAnon}`
+    : apikey
+  const response = await fetch(`${apiHost}/app/${encodeURIComponent(appId)}`, {
+    method: 'PUT',
+    headers: buildCliRequestHeaders({
+      'Content-Type': 'application/json',
+      'Authorization': authorization,
+      'capgkey': apikey,
+    }),
+    body: JSON.stringify({ onboarding }),
+  })
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => null)
+    const details = formatCapgoApiErrorBody(data) || `HTTP ${response.status}`
+    throw new Error(`Could not report onboarding progress for app ${appId}: ${details}`)
+  }
+}
+
 /**
  * Check multiple app IDs at once for batch validation (e.g., for suggestions)
  */

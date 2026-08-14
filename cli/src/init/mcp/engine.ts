@@ -36,6 +36,7 @@ export interface EngineDeps {
   uploadBundle: (appId: string, opts: { channelName: string, version: string, delta?: boolean, encrypt?: boolean }) => Promise<{ ok: boolean, error?: string }>
   getRunDeviceCommand: (platform: Platform) => { command: string, cwd?: string }
   getGitStatus: (cwd?: string) => GitRepoStatus
+  reportOnboardingStep?: (appId: string, stepDone: number) => void
 }
 
 export interface LiveUpdateFacts {
@@ -122,6 +123,8 @@ function nextAction(instruction: string, withArgs?: Record<string, unknown>, cal
 function mergeProgress(deps: EngineDeps, progress: LiveUpdateProgress | null, patch: Partial<LiveUpdateProgress>): LiveUpdateProgress {
   const next: LiveUpdateProgress = { step_done: 0, ...progress, ...patch }
   deps.saveProgress(next)
+  if (next.appId && next.step_done > 0)
+    deps.reportOnboardingStep?.(next.appId, next.step_done)
   return next
 }
 

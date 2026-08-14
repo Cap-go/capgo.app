@@ -333,6 +333,7 @@ export type Database = {
           manifest_bundle_count: number
           name: string | null
           need_onboarding: boolean
+          onboarding: Json
           onboarding_completed_at: string | null
           owner_org: string
           retention: number
@@ -365,6 +366,7 @@ export type Database = {
           manifest_bundle_count?: number
           name?: string | null
           need_onboarding?: boolean
+          onboarding?: Json
           onboarding_completed_at?: string | null
           owner_org: string
           retention?: number
@@ -397,6 +399,7 @@ export type Database = {
           manifest_bundle_count?: number
           name?: string | null
           need_onboarding?: boolean
+          onboarding?: Json
           onboarding_completed_at?: string | null
           owner_org?: string
           retention?: number

@@ -26,6 +26,7 @@ export const apps = pgTable('apps', {
   need_onboarding: boolean('need_onboarding').notNull().default(false),
   created_from_onboarding: boolean('created_from_onboarding').notNull().default(false),
   onboarding_completed_at: timestamp('onboarding_completed_at', { withTimezone: true }),
+  onboarding: jsonb('onboarding').notNull().default({ source: 'manual', outcome: 'in_progress', steps: {} }),
   existing_app: boolean('existing_app').notNull().default(false),
   ios_store_url: text('ios_store_url'),
   android_store_url: text('android_store_url'),

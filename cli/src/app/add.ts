@@ -5,6 +5,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { intro, log, outro } from '@clack/prompts'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { getInvocationSource } from '../analytics/track'
+import { isAiAgentEnvironment } from '../init/onboarding-report'
 import { checkAppExists, defaultAppIconPath, getAppIconStoragePath, newIconPath } from '../api/app'
 import { checkAlerts } from '../api/update'
 import { CliUserError } from '../shared/cli-user-error'
@@ -95,6 +96,7 @@ async function createAppViaApi(
     name: string
     iconUrl: string
     createdFromOnboarding: boolean
+    onboardingSource?: 'cli' | 'mcp' | 'ai'
     supaHost?: string
     supaAnon?: string
   },
@@ -123,6 +125,9 @@ async function createAppViaApi(
       icon: params.iconUrl,
       need_onboarding: false,
       created_from_onboarding: params.createdFromOnboarding,
+      onboarding: params.onboardingSource
+        ? { source: params.onboardingSource, outcome: 'in_progress' }
+        : undefined,
     }),
   })
 
@@ -232,6 +237,9 @@ export async function addAppInternal(
   }
 
   const appCreateSource = resolveAppCreateSource(source)
+  const onboardingSource = appCreateSource === 'mcp'
+    ? 'mcp'
+    : isAiAgentEnvironment() ? 'ai' : 'cli'
 
   try {
     // Use the same authorized API path as the web console. Direct PostgREST inserts
@@ -242,6 +250,7 @@ export async function addAppInternal(
       name,
       iconUrl,
       createdFromOnboarding: appCreateSource === 'onboarding',
+      onboardingSource,
       supaHost: options.supaHost,
       supaAnon: options.supaAnon,
     })

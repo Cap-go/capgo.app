@@ -1,6 +1,7 @@
 import type { Database } from '../../utils/supabase.types.ts'
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
+import { isAppOnboardingSource, mergeAppOnboarding } from '../../utils/appOnboarding.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { closeClient, getPgClient, logPgError } from '../../utils/pg.ts'
 import { checkPermission } from '../../utils/rbac.ts'
@@ -17,6 +18,9 @@ export interface CreateApp {
   existing_app?: boolean
   ios_store_url?: string
   android_store_url?: string
+  onboarding?: {
+    source?: string
+  }
 }
 
 export async function post(c: Context<MiddlewareKeyVariables>, body: CreateApp): Promise<Response> {
@@ -52,6 +56,9 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: CreateApp):
     existing_app: body.existing_app ?? false,
     ios_store_url: body.ios_store_url ?? null,
     android_store_url: body.android_store_url ?? null,
+    onboarding: mergeAppOnboarding({}, {
+      source: isAppOnboardingSource(body.onboarding?.source) ? body.onboarding.source : 'manual',
+    }),
   }
   let pgClient
   let data: Database['public']['Tables']['apps']['Row'] | undefined
@@ -69,9 +76,10 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: CreateApp):
          created_from_onboarding,
          existing_app,
          ios_store_url,
-         android_store_url
+         android_store_url,
+         onboarding
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb)
        RETURNING *`,
       [
         dataInsert.owner_org,
@@ -85,6 +93,7 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: CreateApp):
         dataInsert.existing_app,
         dataInsert.ios_store_url,
         dataInsert.android_store_url,
+        JSON.stringify(dataInsert.onboarding),
       ],
     )
     data = result.rows[0]

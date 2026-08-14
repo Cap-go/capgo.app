@@ -526,3 +526,67 @@ describe('[POST] /app operations with non-owner user', () => {
     expect(responseData).toHaveProperty('app_id', adminAccessAppName)
   })
 })
+
+describe('[POST]/[PUT] /app onboarding progress', () => {
+  const id = randomUUID()
+  const APPNAME = `com.onboarding.progress.${id}`
+
+  afterAll(async () => {
+    await resetAppData(APPNAME)
+    await resetAppDataStats(APPNAME)
+  })
+
+  it('defaults new apps to manual onboarding and merges CLI progress', async () => {
+    const createApp = await fetchTestRequest(`${BASE_URL}/app`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        owner_org: ORG_ID,
+        app_id: APPNAME,
+        name: `App ${APPNAME}`,
+        icon: 'test-icon',
+      }),
+    })
+    expect(createApp.status).toBe(200)
+    const created = await createApp.json() as { onboarding?: { source?: string, outcome?: string, steps?: Record<string, { status: string }> } }
+    expect(created.onboarding?.source).toBe('manual')
+    expect(created.onboarding?.outcome).toBe('in_progress')
+
+    const firstPut = await fetchTestRequest(`${BASE_URL}/app/${APPNAME}`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({
+        onboarding: {
+          source: 'cli',
+          steps: {
+            add_app: { status: 'done' },
+          },
+        },
+      }),
+    })
+    expect(firstPut.status).toBe(200)
+    const afterCli = await firstPut.json() as { onboarding?: { source?: string, outcome?: string, steps?: Record<string, { status: string }> } }
+    expect(afterCli.onboarding?.source).toBe('cli')
+    expect(afterCli.onboarding?.steps?.add_app?.status).toBe('done')
+
+    const skipPut = await fetchTestRequest(`${BASE_URL}/app/${APPNAME}`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({
+        onboarding: {
+          source: 'ai',
+          steps: {
+            add_app: { status: 'skipped' },
+            add_channel: { status: 'skipped' },
+          },
+        },
+      }),
+    })
+    expect(skipPut.status).toBe(200)
+    const afterSkip = await skipPut.json() as { onboarding?: { source?: string, outcome?: string, steps?: Record<string, { status: string }> } }
+    expect(afterSkip.onboarding?.source).toBe('cli')
+    expect(afterSkip.onboarding?.steps?.add_app?.status).toBe('done')
+    expect(afterSkip.onboarding?.steps?.add_channel?.status).toBe('skipped')
+    expect(afterSkip.onboarding?.outcome).toBe('in_progress')
+  })
+})

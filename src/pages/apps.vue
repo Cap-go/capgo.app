@@ -42,6 +42,9 @@ function normalizeAppRow(app: AppIconSource): AppRow {
   return {
     ...app,
     created_from_onboarding: 'created_from_onboarding' in app ? app.created_from_onboarding : false,
+    onboarding: 'onboarding' in app && app.onboarding
+      ? app.onboarding
+      : { source: 'manual', outcome: 'in_progress', steps: {} },
     onboarding_completed_at: 'onboarding_completed_at' in app ? app.onboarding_completed_at : null,
     rollout_channel_count: 'rollout_channel_count' in app ? app.rollout_channel_count : 0,
     rollout_paused_version_names: 'rollout_paused_version_names' in app ? app.rollout_paused_version_names : [],

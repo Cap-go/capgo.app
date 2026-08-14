@@ -39,6 +39,7 @@ import { createMissingExecutableError, getAvailablePackageManagers, getMissingPa
 import { cancel as pCancel, confirm as pConfirm, intro as pIntro, isCancel as pIsCancel, log as pLog, outro as pOutro, select as pSelect, spinner as pSpinner, text as pText } from './prompts'
 import { finishActiveCliReplay, getActiveCliReplaySessionId, isCliTelemetryDisabled, startInitReplay } from './replay'
 import { appendInitStreamingLine, clearInitStreamingOutput, INIT_CANCEL, pushInitLog, setInitCodeDiff, setInitEncryptionSummary, setInitVersionWarning, startInitStreamingOutput, stopInitInkSession, updateInitStreamingStatus, waitForInitStreamingContinue } from './runtime'
+import { reportInitOnboardingStep } from './onboarding-report'
 import { formatInitResumeMessage, initOnboardingSteps, renderInitOnboardingComplete, renderInitOnboardingFrame, renderInitOnboardingWelcome } from './ui'
 import { CAPGO_UPDATER_PACKAGE, getUpdaterInstallState } from './updater'
 
@@ -1271,8 +1272,9 @@ async function ensureWorkspaceReadyForInit(initialAppId?: string): Promise<strin
 
 let globalOrgId: string | undefined
 let globalOrgName: string | undefined
+let globalReportContext: { apikey: string, supaHost?: string, supaAnon?: string } | undefined
 
-function markStepDone(step: number, pathToPackageJson?: string, channelName?: string) {
+function markStepDone(step: number, pathToPackageJson?: string, channelName?: string, status: 'done' | 'skipped' = 'done') {
   try {
     writeFileSync(getTmpObjectPath(), JSON.stringify({
       step_done: step,
@@ -1297,6 +1299,14 @@ function markStepDone(step: number, pathToPackageJson?: string, channelName?: st
     }
     if (channelName) {
       globalChannelName = channelName
+    }
+    if (globalReportContext?.apikey && globalAppId) {
+      const isLastStep = step >= initOnboardingSteps.length
+      void reportInitOnboardingStep(globalReportContext.apikey, globalAppId, step, status, {
+        supaHost: globalReportContext.supaHost,
+        supaAnon: globalReportContext.supaAnon,
+        outcome: isLastStep ? (status === 'skipped' ? 'skipped' : 'completed') : 'in_progress',
+      })
     }
   }
   catch (err) {
@@ -3657,7 +3667,7 @@ async function runProjectBuildAndSync(appId: string, platform: PlatformChoice, o
   return 'completed'
 }
 
-async function buildProjectStep(orgId: string, apikey: string, appId: string, platform: 'ios' | 'android', config?: CapacitorConfigSnapshot) {
+async function buildProjectStep(orgId: string, apikey: string, appId: string, platform: 'ios' | 'android', config?: CapacitorConfigSnapshot): Promise<'completed' | 'skipped'> {
   const packageJsonPath = path.resolve(globalPathToPackageJson ?? join(findRoot(cwd()), PACKNAME))
   const projectDir = dirname(packageJsonPath)
   const pm = await selectAvailablePackageManager(getPMAndCommand(), projectDir, orgId, apikey)
@@ -3668,14 +3678,15 @@ async function buildProjectStep(orgId: string, apikey: string, appId: string, pl
   if (!doBuild) {
     pLog.info(`Build yourself in ${projectDir} with command: ${pm.pm} run build && ${pm.runner} cap sync ${platform}`)
     await markStep(orgId, apikey, 'build-project', appId)
-    return
+    return 'skipped'
   }
 
   const buildOutcome = await runProjectBuildAndSync(appId, platform, orgId, apikey, pm)
   if (buildOutcome === 'skipped')
-    return
+    return 'skipped'
 
   await markStep(orgId, apikey, 'build-project', appId)
+  return 'completed'
 }
 
 export function runPackageRunnerSync(runner: string, args: string[], options: Parameters<typeof spawnSync>[2]) {
@@ -4335,17 +4346,21 @@ async function selectPlatformStep(orgId: string, apikey: string, config?: Capaci
   }
 }
 
-async function runDeviceStep(orgId: string, apikey: string, appId: string, platform: 'ios' | 'android', projectDir = cwd()) {
+async function runDeviceStep(orgId: string, apikey: string, appId: string, platform: 'ios' | 'android', projectDir = cwd()): Promise<'completed' | 'skipped'> {
   const pm = getPMAndCommand()
   const doRun = await pConfirm({ message: `Run ${appId} on ${platform.toUpperCase()} device now to test the initial version?` })
   await cancelCommand(doRun, orgId, apikey)
-  if (doRun) {
-    const runCommand = await resolveRunDeviceCommand(() => exitCanceledInitOnboarding(orgId, apikey), pm, platform, projectDir)
-    if (!runCommand.args) {
-      pLog.info(`Skipped device launch. You can run it manually in ${projectDir} with: ${runCommand.command}`)
-      await markStep(orgId, apikey, 'run-device', appId)
-      return
-    }
+  if (!doRun) {
+    await markStep(orgId, apikey, 'run-device', appId)
+    return 'skipped'
+  }
+
+  const runCommand = await resolveRunDeviceCommand(() => exitCanceledInitOnboarding(orgId, apikey), pm, platform, projectDir)
+  if (!runCommand.args) {
+    pLog.info(`Skipped device launch. You can run it manually in ${projectDir} with: ${runCommand.command}`)
+    await markStep(orgId, apikey, 'run-device', appId)
+    return 'skipped'
+  }
 
     const s = pSpinner()
     const runMessage = projectDir === cwd()
@@ -4423,11 +4438,8 @@ async function runDeviceStep(orgId: string, apikey: string, appId: string, platf
       pLog.info(`📱 Your app should now be running on your ${platform} device with Capgo integrated`)
       pLog.info(`🔄 This is your baseline version - we'll create an update next`)
     }
-  }
-  else {
-    pLog.info(`If you change your mind, run it for yourself in ${projectDir} with: ${pm.runner} cap run ${platform}`)
-  }
   await markStep(orgId, apikey, 'run-device', appId)
+  return 'completed'
 }
 
 async function addCodeChangeStep(orgId: string, apikey: string, appId: string, pkgVersion: string, platform: 'ios' | 'android') {
@@ -5326,6 +5338,11 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
   const orgId = organization.gid
   globalOrgId = orgId
   globalOrgName = organization.name
+  globalReportContext = {
+    apikey: options.apikey,
+    supaHost: options.supaHost,
+    supaAnon: options.supaAnon,
+  }
 
   if (resumed?.appId) {
     appId = resumed.appId
@@ -5431,7 +5448,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
       // change the moment sync completes, which is much clearer than a
       // panel that silently disappears.
       await buildProjectStep(orgId, options.apikey, appId, platform, extConfig?.config)
-      markStepDone(7)
+        .then(outcome => markStepDone(7, undefined, undefined, outcome === 'skipped' ? 'skipped' : 'done'))
     }
 
     // Clear the encryption summary after step 7 — by this point it has
@@ -5446,7 +5463,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
     if (stepToSkip < 8) {
       renderCurrentStep(8)
       await runDeviceStep(orgId, options.apikey, appId, platform, selectedProjectDir)
-      markStepDone(8)
+        .then(outcome => markStepDone(8, undefined, undefined, outcome === 'skipped' ? 'skipped' : 'done'))
     }
 
     if (stepToSkip < 9) {
