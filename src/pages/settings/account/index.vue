@@ -496,14 +496,8 @@ async function logOut() {
         role: 'danger',
         id: 'confirm-button',
         handler: async () => {
-          try {
-            await main.logout()
-            await router.replace('/login')
-          }
-          catch (error) {
-            console.error('Failed to log out', error)
-            toast.error(t('cannot-sign-off'))
-          }
+          await main.logout()
+          await router.replace('/login')
         },
       },
     ],
@@ -693,7 +687,7 @@ onMounted(async () => {
               <div class="flex flex-wrap gap-3 items-center justify-between">
                 <button
                   type="button"
-                  class="p-2 text-gray-700 border rounded-lg cursor-pointer dark:text-white hover:bg-gray-100 border-slate-500 dark:hover:bg-gray-600"
+                  class="d-btn p-2 text-gray-700 border rounded-lg cursor-pointer dark:text-white hover:bg-gray-100 border-slate-500 dark:hover:bg-gray-600"
                   @click="logOut()"
                 >
                   {{ t('sign-out') }}

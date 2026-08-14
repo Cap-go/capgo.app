@@ -54,14 +54,13 @@ export const useMainStore = defineStore('main', () => {
     const supabase = useSupabase()
     const config = getLocalConfig()
     const { error } = await supabase.auth.signOut()
-    if (error)
-      throw error
-
     auth.value = undefined
     user.value = undefined
     isAdmin.value = false
     reset(config.supaHost)
     clearSpoof()
+    if (error)
+      console.error('Failed to log out', error)
   }
 
   const getTotalStats: () => TotalStats = () => {
