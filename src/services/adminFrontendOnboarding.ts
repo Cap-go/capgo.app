@@ -41,6 +41,7 @@ export interface FrontendOnboardingAnalytics {
     date: string
     v1_attempts: number
     v2_attempts: number
+    v3_attempts: number
   }>
   daily_conversions: {
     intent_to_details: FrontendOnboardingDailyConversionPoint[]
@@ -50,8 +51,15 @@ export interface FrontendOnboardingAnalytics {
   funnels: {
     v1: FrontendOnboardingFunnelStage[]
     v2: FrontendOnboardingFunnelStage[]
+    v3: FrontendOnboardingFunnelStage[]
   }
   v2_graph: {
+    nodes: Array<{
+      key: string
+      count: number
+    }>
+  }
+  v3_graph: {
     nodes: Array<{
       key: string
       count: number
@@ -141,6 +149,7 @@ export function buildFrontendOnboardingDailySeries(
   dailyAttempts: readonly FrontendOnboardingAnalytics['daily_attempts'][number][],
   v1Label: string,
   v2Label: string,
+  v3Label: string,
 ): FrontendOnboardingDailySeries[] {
   return [
     {
@@ -152,6 +161,11 @@ export function buildFrontendOnboardingDailySeries(
       label: v2Label,
       color: '#06b6d4',
       data: dailyAttempts.map(({ date, v2_attempts }) => ({ date, value: v2_attempts })),
+    },
+    {
+      label: v3Label,
+      color: '#10b981',
+      data: dailyAttempts.map(({ date, v3_attempts }) => ({ date, value: v3_attempts })),
     },
   ]
 }
@@ -188,7 +202,7 @@ export function buildFrontendOnboardingFunnelSummaries(
 
 export function buildFrontendOnboardingGraphMetrics(
   definitions: readonly FrontendOnboardingGraphMetricDefinition[],
-  nodes: readonly FrontendOnboardingAnalytics['v2_graph']['nodes'][number][],
+  nodes: readonly FrontendOnboardingAnalytics['v3_graph']['nodes'][number][],
   appDetailsCount: number | undefined,
 ): Record<string, FrontendOnboardingGraphMetric> {
   const counts = new Map(nodes.map(node => [node.key, node.count]))

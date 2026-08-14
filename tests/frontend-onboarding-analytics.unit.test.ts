@@ -40,17 +40,20 @@ beforeEach(() => {
 })
 
 describe('buildFrontendOnboardingHogql', () => {
-  it('queries v1 and v2 pre-org attempts, with stage timestamps limited to views and allowlisted v2 interactions', () => {
+  it('queries supported pre-org attempts, with stage timestamps limited to views and allowlisted interactions', () => {
     const query = buildFrontendOnboardingHogql(
       '2026-08-01T00:00:00.123Z',
       '2026-08-03T00:00:00.456Z',
       '2026-08-04T00:00:00.789Z',
     )
 
-    expect(query).toContain("event IN ('onboarding_step_viewed', 'onboarding_app_id_entered', 'onboarding_app_id_help_opened', 'onboarding_app_icon_picked', 'onboarding_app_icon_picker_closed_without_selection', 'onboarding_app_icon_picker_open_failed', 'onboarding_app_icon_picker_opened', 'onboarding_app_icon_upload_failed', 'onboarding_app_icon_uploaded', 'onboarding_app_name_entered', 'onboarding_store_import_failed', 'onboarding_store_import_hidden', 'onboarding_store_import_shown', 'onboarding_store_import_submitted', 'onboarding_store_import_succeeded', 'onboarding_store_url_entered')")
+    expect(query).toContain("event IN ('onboarding_step_viewed', 'onboarding_app_id_entered'")
+    expect(query).toContain("'onboarding_organization_import_opened'")
+    expect(query).toContain("'onboarding_organization_invite_succeeded'")
+    expect(query).toContain("'onboarding_technical_invite_succeeded'")
     expect(query).toContain('JSONExtractString(toString(properties), \'flow\') = \'pre_org\'')
     expect(query).toContain('toIntOrZero(toString(properties.onboarding_version)) AS onboarding_version')
-    expect(query).toContain('toIntOrZero(toString(properties.onboarding_version)) IN (1, 2)')
+    expect(query).toContain('toIntOrZero(toString(properties.onboarding_version)) IN (1, 2, 3)')
     expect(query).not.toContain('toInt64OrZero')
     expect(query).toContain('JSONExtractString(toString(properties), \'onboarding_attempt_id\')')
     expect(query).toContain('JSONExtractString(toString(properties), \'step\')')
@@ -85,7 +88,7 @@ describe('assertFrontendOnboardingAttemptTotal', () => {
 })
 
 describe('getAdminFrontendOnboardingAnalytics', () => {
-  it('maps grouped v1 and v2 rows, including repeated v2 interactions', async () => {
+  it('maps grouped v1 and v3 rows, including repeated v3 interactions', async () => {
     const start = '2026-08-01T00:00:00.000Z'
     const intentMs = Date.parse(start) + 60 * 60 * 1000 + 123
     queryPosthogHogqlMock.mockResolvedValueOnce({
@@ -94,7 +97,7 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
       failureReason: null,
       rows: [{
         attempt_id: 'attempt-1',
-        onboarding_version: 2,
+        onboarding_version: 3,
         intent_ms: intentMs,
         details_ms: intentMs + 555,
         organization_ms: intentMs + 1_000,
@@ -118,16 +121,16 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
     expect(result).toMatchObject({
       kpis: { attempts: 1, completed: 1, completion_rate: 100, median_completion_ms: 2_666 },
       daily_attempts: [
-        { date: '2026-08-01', v1_attempts: 1, v2_attempts: 1 },
-        { date: '2026-08-02', v1_attempts: 0, v2_attempts: 0 },
+        { date: '2026-08-01', v1_attempts: 1, v2_attempts: 0, v3_attempts: 1 },
+        { date: '2026-08-02', v1_attempts: 0, v2_attempts: 0, v3_attempts: 0 },
       ],
-      funnels: { v2: [
+      funnels: { v3: [
         { key: 'intent', reached: 1 },
         { key: 'details', reached: 1 },
         { key: 'organization', reached: 1 },
         { key: 'setup', reached: 1 },
       ] },
-      v2_graph: { nodes: [{ key: 'onboarding_app_id_entered', count: 1 }] },
+      v3_graph: { nodes: [{ key: 'onboarding_app_id_entered', count: 1 }] },
       posthog_configured: true,
       posthog_connected: true,
     })
@@ -178,10 +181,10 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
         { attempt_id: 'zero-intent', onboarding_version: 2, intent_ms: 0, details_ms: startMs + 2_000, total_attempts: 10 },
         { attempt_id: false, onboarding_version: 2, intent_ms: startMs + 1_000, details_ms: startMs + 2_000, total_attempts: 10 },
         { attempt_id: ['array'], onboarding_version: 2, intent_ms: startMs + 1_000, details_ms: startMs + 2_000, total_attempts: 10 },
-        { attempt_id: 'unknown-version', onboarding_version: 3, intent_ms: startMs + 1_000, total_attempts: 10 },
-        { attempt_id: 'string-version', onboarding_version: '2', intent_ms: startMs + 1_000, total_attempts: 10 },
-        { attempt_id: 'boolean-step', onboarding_version: 2, intent_ms: startMs + 2_000, details_ms: true, organization_ms: [], setup_ms: {}, interaction_events: 'not-an-array', total_attempts: 10 },
-        { attempt_id: 'valid', onboarding_version: 2, intent_ms: String(startMs + 1_000), details_ms: undefined, organization_ms: 0, setup_ms: 'not-a-number', interaction_events: [[' valid ', startMs + 2_000], ['', startMs + 2_000], ['missing-time'], 42, null], total_attempts: 10 },
+        { attempt_id: 'unknown-version', onboarding_version: 4, intent_ms: startMs + 1_000, total_attempts: 10 },
+        { attempt_id: 'string-version', onboarding_version: '3', intent_ms: startMs + 1_000, total_attempts: 10 },
+        { attempt_id: 'boolean-step', onboarding_version: 3, intent_ms: startMs + 2_000, details_ms: true, organization_ms: [], setup_ms: {}, interaction_events: 'not-an-array', total_attempts: 10 },
+        { attempt_id: 'valid', onboarding_version: 3, intent_ms: String(startMs + 1_000), details_ms: undefined, organization_ms: 0, setup_ms: 'not-a-number', interaction_events: [[' valid ', startMs + 2_000], ['', startMs + 2_000], ['missing-time'], 42, null], total_attempts: 10 },
       ],
     })
 
@@ -193,13 +196,13 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
 
     expect(result).toMatchObject({
       kpis: { attempts: 2, completed: 0, completion_rate: 0 },
-      funnels: { v2: [
+      funnels: { v3: [
         { key: 'intent', reached: 2 },
         { key: 'details', reached: 0 },
         { key: 'organization', reached: 0 },
         { key: 'setup', reached: 0 },
       ] },
-      v2_graph: { nodes: [{ key: 'valid', count: 1 }] },
+      v3_graph: { nodes: [{ key: 'valid', count: 1 }] },
     })
   })
 

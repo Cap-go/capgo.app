@@ -19,6 +19,7 @@ interface InviteSuccessPayload {
 const props = withDefaults(defineProps<{
   analyticsChannel?: string
   inviteKind?: 'generic' | 'technical'
+  organizationId?: string
   trackingVersion?: number
 }>(), {
   analyticsChannel: 'onboarding-v2',
@@ -43,6 +44,7 @@ const inviteCaptchaElement = ref<InstanceType<typeof VueTurnstile> | null>(null)
 const captchaKey = ref(import.meta.env.VITE_CAPTCHA_KEY)
 const shouldUseCaptcha = computed(() => Boolean(captchaKey.value))
 const isInviting = ref(false)
+const targetOrganizationId = computed(() => props.organizationId || organizationStore.currentOrganization?.gid || '')
 const existingUserInviteRole = 'org_admin'
 const newUserInviteRole = 'org_admin'
 const emailDialogTitle = computed(() => props.inviteKind === 'technical'
@@ -177,7 +179,7 @@ function completeInviteSuccess(payload: InviteSuccessPayload) {
   isEmailDialogOpen.value = false
   isFullDetailsDialogOpen.value = false
   emit('success', payload)
-  const orgId = organizationStore.currentOrganization?.gid
+  const orgId = targetOrganizationId.value
   if (orgId) {
     sendEvent({
       channel: props.analyticsChannel,
@@ -206,7 +208,7 @@ async function handleEmailSubmit() {
     return
   }
 
-  const orgId = organizationStore.currentOrganization?.gid
+  const orgId = targetOrganizationId.value
   if (!orgId) {
     toast.error(t('organization-not-found'))
     return
@@ -311,7 +313,7 @@ async function handleFullDetailsSubmit() {
     return
   }
 
-  const orgId = organizationStore.currentOrganization?.gid
+  const orgId = targetOrganizationId.value
   if (!orgId) {
     toast.error(t('organization-not-found'))
     return

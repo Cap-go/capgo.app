@@ -10,11 +10,13 @@ const technicalInviteSource = readFileSync(new URL('../src/components/dashboard/
 describe('onboarding invite analytics context', () => {
   it.concurrent('keeps v2 defaults while allowing v3 callers', () => {
     expect(modalSource).toContain('analyticsChannel?: string')
+    expect(modalSource).toContain('organizationId?: string')
     expect(modalSource).toContain('trackingVersion?: number')
     expect(modalSource).toContain("analyticsChannel: 'onboarding-v2'")
     expect(modalSource).toContain('trackingVersion: 2')
     expect(modalSource).toContain('channel: props.analyticsChannel')
     expect(modalSource).toContain('tracking_version: props.trackingVersion')
+    expect(modalSource).toContain("props.organizationId || organizationStore.currentOrganization?.gid || ''")
     expect(modalSource).toContain("existingUserInviteRole = 'org_admin'")
     expect(modalSource).toContain("newUserInviteRole = 'org_admin'")
   })
@@ -42,6 +44,7 @@ describe('shared organization onboarding invite panel', () => {
     expect(organizationInviteSource).toContain('data-test="onboarding-invite-users"')
     expect(organizationInviteSource).toContain('data-test="onboarding-finish"')
     expect(organizationInviteSource).toContain('<InviteTeammateModal')
+    expect(organizationInviteSource).toContain(':organization-id="organizationId"')
     expect(organizationInviteSource).toContain("emit('continue', sentInvites.value.length)")
   })
 })

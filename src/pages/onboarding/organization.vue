@@ -28,6 +28,7 @@ import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
 import { clearOnboardingAppDraft, loadOnboardingAppDraft } from '~/utils/onboardingAppDraft'
+import { onboardingPrimaryButtonClass, onboardingSecondaryButtonClass } from '~/utils/onboardingButtonClasses'
 
 type OnboardingStep = 'details' | 'logo' | 'invite'
 type OnboardingMode = 'website' | 'name' | 'app-name' | null
@@ -186,11 +187,11 @@ function whiteCardToggleButtonClass(active: boolean) {
 }
 
 function whiteCardSecondaryButtonClass() {
-  return 'border-slate-300 bg-white text-slate-700 hover:border-slate-400 hover:bg-slate-50 disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400 disabled:opacity-100 dark:border-white/20 dark:bg-slate-950/90 dark:text-slate-100 dark:hover:border-white/30 dark:hover:bg-slate-900 dark:disabled:border-white/15 dark:disabled:bg-slate-900 dark:disabled:text-slate-500'
+  return onboardingSecondaryButtonClass
 }
 
 function whiteCardPrimaryButtonClass() {
-  return 'border-primary-500 bg-primary-500 text-white hover:border-primary-500 hover:bg-primary-500/90 disabled:border-slate-300 disabled:bg-slate-300 disabled:text-white disabled:opacity-100 dark:border-primary-500/90 dark:bg-primary-500 dark:hover:border-primary-500 dark:hover:bg-primary-500/90 dark:disabled:border-white/15 dark:disabled:bg-slate-800 dark:disabled:text-slate-500'
+  return onboardingPrimaryButtonClass
 }
 
 function formatUserCount(value: number, plus = false) {

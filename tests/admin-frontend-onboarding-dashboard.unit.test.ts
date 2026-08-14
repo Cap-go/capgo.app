@@ -40,8 +40,8 @@ describe('admin frontend onboarding dashboard', () => {
       },
     },
     daily_attempts: [
-      { date: '2026-08-10', v1_attempts: 6, v2_attempts: 3 },
-      { date: '2026-08-09', v1_attempts: 4, v2_attempts: 2 },
+      { date: '2026-08-10', v1_attempts: 6, v2_attempts: 3, v3_attempts: 2 },
+      { date: '2026-08-09', v1_attempts: 4, v2_attempts: 2, v3_attempts: 1 },
     ],
     daily_conversions: {
       intent_to_details: [
@@ -68,6 +68,12 @@ describe('admin frontend onboarding dashboard', () => {
         { key: 'organization', label: 'Organization', reached: 3, of_start_percent: 60, dropoff_percent: 25 },
         { key: 'setup', label: 'Setup reached', reached: 2, of_start_percent: 40, dropoff_percent: 33.3 },
       ],
+      v3: [
+        { key: 'intent', label: 'Intent', reached: 4, of_start_percent: 100, dropoff_percent: 0 },
+        { key: 'details', label: 'App details', reached: 3, of_start_percent: 75, dropoff_percent: 25 },
+        { key: 'organization', label: 'Organization', reached: 2, of_start_percent: 50, dropoff_percent: 1 / 3 * 100 },
+        { key: 'setup', label: 'Setup reached', reached: 1, of_start_percent: 25, dropoff_percent: 50 },
+      ],
     },
     v2_graph: {
       nodes: [
@@ -76,12 +82,19 @@ describe('admin frontend onboarding dashboard', () => {
         { key: 'import_clicked', count: 2 },
       ],
     },
+    v3_graph: {
+      nodes: [
+        { key: 'details', count: 3 },
+        { key: 'store_opened', count: 2 },
+        { key: 'import_clicked', count: 1 },
+      ],
+    },
     posthog_configured: true,
     posthog_connected: true,
   }
 
-  it.concurrent('adapts split daily attempts into ordered v1 and v2 chart series', () => {
-    expect(buildFrontendOnboardingDailySeries(analytics.daily_attempts, 'V1', 'V2')).toEqual([
+  it.concurrent('adapts split daily attempts into ordered version chart series', () => {
+    expect(buildFrontendOnboardingDailySeries(analytics.daily_attempts, 'V1', 'V2', 'V3')).toEqual([
       {
         label: 'V1',
         color: '#a78bfa',
@@ -98,10 +111,19 @@ describe('admin frontend onboarding dashboard', () => {
           { date: '2026-08-09', value: 2 },
         ],
       },
+      {
+        label: 'V3',
+        color: '#10b981',
+        data: [
+          { date: '2026-08-10', value: 2 },
+          { date: '2026-08-09', value: 1 },
+        ],
+      },
     ])
-    expect(buildFrontendOnboardingDailySeries([], 'V1', 'V2')).toEqual([
+    expect(buildFrontendOnboardingDailySeries([], 'V1', 'V2', 'V3')).toEqual([
       { label: 'V1', color: '#a78bfa', data: [] },
       { label: 'V2', color: '#06b6d4', data: [] },
+      { label: 'V3', color: '#10b981', data: [] },
     ])
   })
 
@@ -386,27 +408,28 @@ describe('admin frontend onboarding dashboard', () => {
     expect(source.match(/<AdminDailyConversionChart(?:\s|\/?>)/g)).toHaveLength(3)
     expect(source.match(/<AdminFunnelChart(?:\s|\/?>)/g)).toHaveLength(2)
     expect(source.match(/<AdminOnboardingJourneyGraph(?:\s|\/?>)/g)).toHaveLength(1)
-    expect(source).toContain('<AdminOnboardingJourneyGraph v-else :config="onboardingGraphV2" />')
+    expect(source).toContain('<AdminOnboardingJourneyGraph v-else :config="onboardingGraphV3" />')
     expect(source).toContain('v-if="isLoadingStats" class="grid min-h-72 place-items-center"')
     expect(source).toContain(`t('frontend-onboarding-version-2')`)
-    expect(source).toContain(`t('frontend-onboarding-funnel-v2')`)
+    expect(source).toContain(`t('frontend-onboarding-version-3')`)
+    expect(source).toContain(`t('frontend-onboarding-funnel-v3')`)
     expect(source).toContain(`t('frontend-onboarding-funnel-v1-legacy')`)
     expect(source).not.toContain(`t('frontend-onboarding-demo-data')`)
     expect(source).toContain('buildFrontendOnboardingGraphMetrics')
-    expect(source).toContain('visibleAnalytics.value?.v2_graph.nodes')
-    expect(source).not.toContain('onboardingGraphV2Demo')
+    expect(source).toContain('visibleAnalytics.value?.v3_graph.nodes')
+    expect(source).not.toContain('onboardingGraphV3Demo')
     expect(source).toContain('buildFrontendOnboardingFunnelSummaries')
     expect(template).toContain('summary.conversion_percent')
     expect(template).not.toContain('of_start_percent')
 
-    const v2FunnelIndex = source.indexOf(`t('frontend-onboarding-funnel-v2')`)
+    const v3FunnelIndex = source.indexOf(`t('frontend-onboarding-funnel-v3')`)
     const intentDetailsChartIndex = source.indexOf(`t('frontend-onboarding-daily-intent-to-details')`)
     const detailsOrganizationChartIndex = source.indexOf(`t('frontend-onboarding-daily-details-to-organization')`)
     const organizationSetupChartIndex = source.indexOf(`t('frontend-onboarding-daily-organization-to-setup')`)
-    const graphIndex = source.indexOf(`t('frontend-onboarding-graph-v2')`)
+    const graphIndex = source.indexOf(`t('frontend-onboarding-graph-v3')`)
     const legacyIndex = source.indexOf(`t('frontend-onboarding-funnel-v1-legacy')`)
-    expect(v2FunnelIndex).toBeLessThan(graphIndex)
-    expect(v2FunnelIndex).toBeLessThan(intentDetailsChartIndex)
+    expect(v3FunnelIndex).toBeLessThan(graphIndex)
+    expect(v3FunnelIndex).toBeLessThan(intentDetailsChartIndex)
     expect(intentDetailsChartIndex).toBeLessThan(detailsOrganizationChartIndex)
     expect(detailsOrganizationChartIndex).toBeLessThan(organizationSetupChartIndex)
     expect(organizationSetupChartIndex).toBeLessThan(graphIndex)
@@ -468,6 +491,7 @@ describe('admin frontend onboarding dashboard', () => {
     expect(messages['frontend-onboarding']).toBe('Frontend onboarding')
     expect(messages['frontend-onboarding-version-1']).toBe('Onboarding v1')
     expect(messages['frontend-onboarding-version-2']).toBe('Onboarding v2')
+    expect(messages['frontend-onboarding-version-3']).toBe('Onboarding v3')
     expect(messages['frontend-onboarding-attempts']).toBe('Onboarding attempts')
     expect(messages['frontend-onboarding-attempts-subtitle']).toBe('Unique frontend attempts')
     expect(messages['frontend-onboarding-completed']).toBe('Frontend onboarding completed')

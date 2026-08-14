@@ -7,6 +7,7 @@ import IconLoader from '~icons/lucide/loader-2'
 import IconUserPlus from '~icons/lucide/user-plus'
 import InviteTeammateModal from '~/components/dashboard/InviteTeammateModal.vue'
 import { useOrganizationStore } from '~/stores/organization'
+import { onboardingPrimaryButtonClass, onboardingSecondaryButtonClass } from '~/utils/onboardingButtonClasses'
 
 interface SentInvite {
   email: string
@@ -37,8 +38,6 @@ const { t } = useI18n()
 const organizationStore = useOrganizationStore()
 const inviteModalRef = ref<InstanceType<typeof InviteTeammateModal> | null>(null)
 const sentInvites = ref<SentInvite[]>([])
-const primaryButtonClass = 'border-primary-500 bg-primary-500 text-white hover:border-primary-500 hover:bg-primary-500/90 disabled:border-slate-300 disabled:bg-slate-300 disabled:text-white disabled:opacity-100 dark:border-primary-500/90 dark:bg-primary-500 dark:hover:border-primary-500 dark:hover:bg-primary-500/90 dark:disabled:border-white/15 dark:disabled:bg-slate-800 dark:disabled:text-slate-500'
-const secondaryButtonClass = 'border-slate-300 bg-white text-slate-700 hover:border-slate-400 hover:bg-slate-50 disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400 disabled:opacity-100 dark:border-white/20 dark:bg-slate-950/90 dark:text-slate-100 dark:hover:border-white/30 dark:hover:bg-slate-900 dark:disabled:border-white/15 dark:disabled:bg-slate-900 dark:disabled:text-slate-500'
 
 function getInviteDisplayName(invite: SentInvite) {
   return [invite.firstName, invite.lastName].filter(Boolean).join(' ') || invite.email
@@ -127,11 +126,11 @@ function continueOnboarding() {
       </div>
 
       <div class="flex flex-wrap gap-2">
-        <button type="button" class="d-btn min-h-11" :class="primaryButtonClass" data-test="onboarding-invite-users" @click="openInviteModal">
+        <button type="button" class="d-btn min-h-11" :class="onboardingPrimaryButtonClass" data-test="onboarding-invite-users" @click="openInviteModal">
           <IconUserPlus class="h-4 w-4" />
           {{ t('organization-onboarding-open-invite') }}
         </button>
-        <button type="button" class="d-btn min-h-11" :class="secondaryButtonClass" data-test="onboarding-finish" :disabled="continuing" @click="continueOnboarding">
+        <button type="button" class="d-btn min-h-11" :class="onboardingSecondaryButtonClass" data-test="onboarding-finish" :disabled="continuing" @click="continueOnboarding">
           <IconLoader v-if="continuing" class="h-4 w-4 animate-spin" />
           <template v-else>
             {{ continueLabel }}
@@ -145,6 +144,7 @@ function continueOnboarding() {
   <InviteTeammateModal
     ref="inviteModalRef"
     :analytics-channel="analyticsChannel"
+    :organization-id="organizationId"
     :tracking-version="trackingVersion"
     @success="onInviteSuccess"
   />

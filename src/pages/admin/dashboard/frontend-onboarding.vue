@@ -41,7 +41,7 @@ const isReady = ref(false)
 const analytics = ref<FrontendOnboardingAnalytics | null>(null)
 const loadError = ref(false)
 
-const v2GraphDefinitions = [
+const v3GraphDefinitions = [
   { key: 'onboarding_app_name_entered' },
   { key: 'onboarding_app_id_entered' },
   { key: 'onboarding_app_id_help_opened' },
@@ -59,7 +59,7 @@ const v2GraphDefinitions = [
   { key: 'onboarding_app_icon_upload_failed', parentKey: 'onboarding_app_icon_picked' },
 ] as const
 
-const v2GraphEventNodes = [
+const v3GraphEventNodes = [
   { id: 'app_name', eventKey: 'onboarding_app_name_entered', labelKey: 'frontend-onboarding-graph-app-name-entered', x: 820, y: 90, icon: 'app' },
   { id: 'app_id', eventKey: 'onboarding_app_id_entered', labelKey: 'frontend-onboarding-graph-app-id-entered', x: 820, y: 195, icon: 'file' },
   { id: 'learn_more', eventKey: 'onboarding_app_id_help_opened', labelKey: 'frontend-onboarding-graph-app-id-help-opened', x: 820, y: 300, icon: 'details' },
@@ -104,32 +104,33 @@ const dailySeries = computed(() => buildFrontendOnboardingDailySeries(
   visibleAnalytics.value?.daily_attempts ?? [],
   t('frontend-onboarding-version-1'),
   t('frontend-onboarding-version-2'),
+  t('frontend-onboarding-version-3'),
 ))
 const intentToDetailsDaily = computed(() => visibleAnalytics.value?.daily_conversions?.intent_to_details ?? [])
 const detailsToOrganizationDaily = computed(() => visibleAnalytics.value?.daily_conversions?.details_to_organization ?? [])
 const organizationToSetupDaily = computed(() => visibleAnalytics.value?.daily_conversions?.organization_to_setup ?? [])
 const hasConversionData = (points: readonly { started: number }[]) => points.some(point => point.started > 0)
 const v1FunnelStages = computed(() => buildFrontendOnboardingFunnelStages(visibleAnalytics.value?.funnels.v1 ?? []))
-const v2FunnelStages = computed(() => buildFrontendOnboardingFunnelStages(visibleAnalytics.value?.funnels.v2 ?? []))
+const v3FunnelStages = computed(() => buildFrontendOnboardingFunnelStages(visibleAnalytics.value?.funnels.v3 ?? []))
 const v1FunnelSummaries = computed(() => buildFrontendOnboardingFunnelSummaries(visibleAnalytics.value?.funnels.v1 ?? []))
-const v2FunnelSummaries = computed(() => buildFrontendOnboardingFunnelSummaries(visibleAnalytics.value?.funnels.v2 ?? []))
+const v3FunnelSummaries = computed(() => buildFrontendOnboardingFunnelSummaries(visibleAnalytics.value?.funnels.v3 ?? []))
 const hasDailyAttempts = computed(() => (visibleAnalytics.value?.daily_attempts ?? [])
-  .some(day => day.v1_attempts > 0 || day.v2_attempts > 0))
+  .some(day => day.v1_attempts > 0 || day.v2_attempts > 0 || day.v3_attempts > 0))
 
-const onboardingGraphV2 = computed<AdminOnboardingJourneyGraphConfig>(() => {
-  const funnel = visibleAnalytics.value?.funnels.v2 ?? []
-  const stage = (key: FrontendOnboardingAnalytics['funnels']['v2'][number]['key']) => funnel.find(item => item.key === key)
+const onboardingGraphV3 = computed<AdminOnboardingJourneyGraphConfig>(() => {
+  const funnel = visibleAnalytics.value?.funnels.v3 ?? []
+  const stage = (key: FrontendOnboardingAnalytics['funnels']['v3'][number]['key']) => funnel.find(item => item.key === key)
   const intent = stage('intent')
   const details = stage('details')
   const organization = stage('organization')
   const setup = stage('setup')
   const parentPercent = (current: number, previous: number) => previous > 0 ? current / previous * 100 : 0
   const graphMetrics = buildFrontendOnboardingGraphMetrics(
-    v2GraphDefinitions,
-    visibleAnalytics.value?.v2_graph.nodes ?? [],
+    v3GraphDefinitions,
+    visibleAnalytics.value?.v3_graph.nodes ?? [],
     details?.reached,
   )
-  const eventNodes: AdminOnboardingJourneyNode[] = v2GraphEventNodes.map((node) => {
+  const eventNodes: AdminOnboardingJourneyNode[] = v3GraphEventNodes.map((node) => {
     const metric = graphMetrics[node.eventKey]
     return {
       id: node.id,
@@ -261,7 +262,7 @@ const largestDropoffSubtitle = computed(() => {
   if (!dropoff)
     return t('frontend-onboarding-no-dropoff')
 
-  const stages = visibleAnalytics.value?.funnels.v2 ?? []
+  const stages = visibleAnalytics.value?.funnels.v3 ?? []
   const from = stages.find(stage => stage.key === dropoff.from)?.label ?? dropoff.from
   const to = stages.find(stage => stage.key === dropoff.to)?.label ?? dropoff.to
   return t('frontend-onboarding-transition', { from, to })
@@ -302,7 +303,7 @@ displayStore.defaultBack = '/dashboard'
             {{ t('frontend-onboarding') }}
           </h1>
           <span class="px-3 py-1 text-xs font-semibold text-indigo-700 bg-indigo-100 rounded-full dark:bg-indigo-500/20 dark:text-indigo-200">
-            {{ t('frontend-onboarding-version-2') }}
+            {{ t('frontend-onboarding-version-3') }}
           </span>
         </div>
 
@@ -352,16 +353,16 @@ displayStore.defaultBack = '/dashboard'
 
           <section class="p-6 bg-white border rounded-lg shadow-lg border-slate-300 dark:bg-gray-800 dark:border-slate-900">
             <h2 class="text-lg font-semibold text-slate-900 dark:text-white">
-              {{ t('frontend-onboarding-funnel-v2') }}
+              {{ t('frontend-onboarding-funnel-v3') }}
             </h2>
             <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
               {{ t('frontend-onboarding-funnel-description') }}
             </p>
             <div class="mt-6 h-72 sm:h-80">
-              <AdminFunnelChart :stages="v2FunnelStages" :is-loading="isLoadingStats" />
+              <AdminFunnelChart :stages="v3FunnelStages" :is-loading="isLoadingStats" />
             </div>
             <div class="grid grid-cols-2 gap-4 pt-5 mt-5 border-t border-slate-200 md:grid-cols-4 dark:border-slate-700">
-              <div v-for="summary in v2FunnelSummaries" :key="summary.key" class="text-center">
+              <div v-for="summary in v3FunnelSummaries" :key="summary.key" class="text-center">
                 <p class="text-xl font-bold text-slate-900 tabular-nums dark:text-white">
                   {{ formatNumberValue(summary.conversion_percent) }}%
                 </p>
@@ -417,17 +418,17 @@ displayStore.defaultBack = '/dashboard'
           <section class="overflow-hidden rounded-[1.75rem] border border-slate-200/80 bg-white/95 p-5 shadow-[0_20px_60px_-38px_rgba(15,23,42,0.3)] dark:border-slate-700/70 dark:bg-slate-900/85 sm:p-6">
             <div>
               <h2 class="text-xl font-semibold leading-tight text-slate-900 dark:text-white sm:text-2xl">
-                {{ t('frontend-onboarding-graph-v2') }}
+                {{ t('frontend-onboarding-graph-v3') }}
               </h2>
               <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
-                {{ t('frontend-onboarding-graph-v2-description') }}
+                {{ t('frontend-onboarding-graph-v3-description') }}
               </p>
             </div>
             <div class="mt-5">
               <div v-if="isLoadingStats" class="grid min-h-72 place-items-center">
                 <span class="d-loading d-loading-spinner d-loading-lg text-primary" />
               </div>
-              <AdminOnboardingJourneyGraph v-else :config="onboardingGraphV2" />
+              <AdminOnboardingJourneyGraph v-else :config="onboardingGraphV3" />
             </div>
           </section>
 

@@ -13,7 +13,7 @@ const CURRENT_END_MS = CURRENT_START_MS + 2 * DAY_MS
 
 function attempt(overrides: Partial<FrontendOnboardingAttempt> & Pick<FrontendOnboardingAttempt, 'attemptId' | 'intentMs'>): FrontendOnboardingAttempt {
   return {
-    onboardingVersion: 2,
+    onboardingVersion: 3,
     interactionEvents: [],
     detailsMs: null,
     organizationMs: null,
@@ -23,7 +23,7 @@ function attempt(overrides: Partial<FrontendOnboardingAttempt> & Pick<FrontendOn
 }
 
 describe('buildFrontendOnboardingAnalytics', () => {
-  it.concurrent('builds v2 KPIs, split daily attempts, and per-version monotonic funnels', () => {
+  it.concurrent('builds v3 KPIs, split daily attempts, and per-version monotonic funnels', () => {
     const analytics = buildFrontendOnboardingAnalytics([
       attempt({
         attemptId: 'complete',
@@ -58,11 +58,11 @@ describe('buildFrontendOnboardingAnalytics', () => {
       largest_dropoff: { from: 'details', to: 'organization', percentage: 1 / 3 * 100 },
     })
     expect(analytics.daily_attempts).toEqual([
-      { date: '2026-08-01', v1_attempts: 0, v2_attempts: 2 },
-      { date: '2026-08-02', v1_attempts: 1, v2_attempts: 2 },
+      { date: '2026-08-01', v1_attempts: 0, v2_attempts: 0, v3_attempts: 2 },
+      { date: '2026-08-02', v1_attempts: 1, v2_attempts: 0, v3_attempts: 2 },
     ])
-    expect(analytics.funnels.v2.map(stage => stage.reached)).toEqual([4, 3, 2, 2])
-    expect(analytics.funnels.v2).toEqual([
+    expect(analytics.funnels.v3.map(stage => stage.reached)).toEqual([4, 3, 2, 2])
+    expect(analytics.funnels.v3).toEqual([
       { key: 'intent', label: 'Intent', reached: 4, of_start_percent: 100, dropoff_percent: 0 },
       { key: 'details', label: 'App details', reached: 3, of_start_percent: 75, dropoff_percent: 25 },
       { key: 'organization', label: 'Organization', reached: 2, of_start_percent: 50, dropoff_percent: 1 / 3 * 100 },
@@ -83,7 +83,7 @@ describe('buildFrontendOnboardingAnalytics', () => {
       }),
     ], CURRENT_START_MS, CURRENT_END_MS)
 
-    expect(analytics.funnels.v2.map(stage => stage.reached)).toEqual([1, 0, 0, 0])
+    expect(analytics.funnels.v3.map(stage => stage.reached)).toEqual([1, 0, 0, 0])
     expect(analytics.kpis.median_completion_ms).toBeNull()
   })
 
@@ -145,12 +145,14 @@ describe('buildFrontendOnboardingAnalytics', () => {
       largest_dropoff: null,
     })
     expect(analytics.daily_attempts).toEqual([
-      { date: '2026-08-01', v1_attempts: 0, v2_attempts: 0 },
-      { date: '2026-08-02', v1_attempts: 0, v2_attempts: 0 },
+      { date: '2026-08-01', v1_attempts: 0, v2_attempts: 0, v3_attempts: 0 },
+      { date: '2026-08-02', v1_attempts: 0, v2_attempts: 0, v3_attempts: 0 },
     ])
     expect(analytics.funnels.v1.map(stage => stage.reached)).toEqual([0, 0, 0, 0])
     expect(analytics.funnels.v2.map(stage => stage.reached)).toEqual([0, 0, 0, 0])
+    expect(analytics.funnels.v3.map(stage => stage.reached)).toEqual([0, 0, 0, 0])
     expect(analytics.v2_graph.nodes).toEqual([])
+    expect(analytics.v3_graph.nodes).toEqual([])
   })
 
   it.concurrent('reports no largest drop-off when every attempt reaches every stage', () => {
@@ -195,8 +197,8 @@ describe('buildFrontendOnboardingAnalytics', () => {
     ], startMs, endMs)
 
     expect(analytics.daily_attempts).toEqual([
-      { date: '2026-08-01', v1_attempts: 0, v2_attempts: 1 },
-      { date: '2026-08-02', v1_attempts: 0, v2_attempts: 1 },
+      { date: '2026-08-01', v1_attempts: 0, v2_attempts: 0, v3_attempts: 1 },
+      { date: '2026-08-02', v1_attempts: 0, v2_attempts: 0, v3_attempts: 1 },
     ])
   })
 
@@ -205,7 +207,7 @@ describe('buildFrontendOnboardingAnalytics', () => {
     const dayTwoOrganizationMs = CURRENT_START_MS + DAY_MS + MINUTE_MS
     const analytics = buildFrontendOnboardingAnalytics([
       attempt({
-        attemptId: 'v2-crosses-midnight',
+        attemptId: 'v3-crosses-midnight',
         intentMs: CURRENT_START_MS + 12 * 60 * MINUTE_MS,
         detailsMs: dayOneDetailsMs,
         organizationMs: dayTwoOrganizationMs,
@@ -230,7 +232,7 @@ describe('buildFrontendOnboardingAnalytics', () => {
 
     expect(analytics.daily_conversions).toEqual({
       intent_to_details: [
-        { date: '2026-08-01', started: 4, converted: 3, conversion_percent: 75 },
+        { date: '2026-08-01', started: 2, converted: 1, conversion_percent: 50 },
         { date: '2026-08-02', started: 0, converted: 0, conversion_percent: null },
       ],
       details_to_organization: [
@@ -332,10 +334,10 @@ describe('buildFrontendOnboardingAnalytics', () => {
     expect(() => buildFrontendOnboardingAnalytics([], CURRENT_START_MS, Number.POSITIVE_INFINITY)).toThrow(RangeError)
   })
 
-  it.concurrent('counts each current v2 interaction event once and ignores v1 events', () => {
+  it.concurrent('counts each current v3 interaction event once and ignores older-version events', () => {
     const analytics = buildFrontendOnboardingAnalytics([
       attempt({
-        attemptId: 'v2-repeated-events',
+        attemptId: 'v3-repeated-events',
         intentMs: CURRENT_START_MS,
         interactionEvents: [
           { key: 'organization_created', timestampMs: CURRENT_START_MS + MINUTE_MS },
@@ -344,7 +346,7 @@ describe('buildFrontendOnboardingAnalytics', () => {
         ],
       }),
       attempt({
-        attemptId: 'v2-shared-event',
+        attemptId: 'v3-shared-event',
         intentMs: CURRENT_START_MS + MINUTE_MS,
         interactionEvents: [{ key: 'organization_created', timestampMs: CURRENT_START_MS + 2 * MINUTE_MS }],
       }),
@@ -358,14 +360,14 @@ describe('buildFrontendOnboardingAnalytics', () => {
         ],
       }),
       attempt({
-        attemptId: 'previous-v2-event',
+        attemptId: 'previous-v3-event',
         intentMs: CURRENT_START_MS - DAY_MS,
         interactionEvents: [{ key: 'previous_event', timestampMs: CURRENT_START_MS - DAY_MS + MINUTE_MS }],
       }),
     ], CURRENT_START_MS, CURRENT_END_MS)
 
-    expect(FRONTEND_ONBOARDING_VERSIONS).toEqual([1, 2])
-    expect(analytics.v2_graph.nodes).toEqual([
+    expect(FRONTEND_ONBOARDING_VERSIONS).toEqual([1, 2, 3])
+    expect(analytics.v3_graph.nodes).toEqual([
       { key: 'app_created', count: 1 },
       { key: 'organization_created', count: 2 },
     ])
@@ -386,7 +388,7 @@ describe('buildFrontendOnboardingAnalytics', () => {
       }),
     ], CURRENT_START_MS, CURRENT_END_MS)
 
-    expect(analytics.funnels.v2.find(stage => stage.key === 'details')?.reached).toBe(1)
-    expect(analytics.v2_graph.nodes).toEqual([{ key: 'at_boundary', count: 1 }])
+    expect(analytics.funnels.v3.find(stage => stage.key === 'details')?.reached).toBe(1)
+    expect(analytics.v3_graph.nodes).toEqual([{ key: 'at_boundary', count: 1 }])
   })
 })
