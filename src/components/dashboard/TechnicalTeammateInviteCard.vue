@@ -9,7 +9,7 @@ interface InviteSuccessPayload {
   lastName: string
 }
 
-const props = withDefaults(defineProps<{
+withDefaults(defineProps<{
   analyticsChannel?: string
   trackingVersion?: number
 }>(), {

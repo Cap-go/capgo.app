@@ -45,11 +45,16 @@ function getInviteDisplayName(invite: SentInvite) {
 }
 
 function getInviteInitials(invite: SentInvite) {
-  const initials = [invite.firstName, invite.lastName]
-    .filter(Boolean)
-    .map(value => value.charAt(0).toUpperCase())
-    .join('')
-  return initials || invite.email.charAt(0).toUpperCase()
+  const fullName = `${invite.firstName} ${invite.lastName}`.trim()
+  if (fullName) {
+    return fullName
+      .split(/\s+/)
+      .slice(0, 2)
+      .map(part => part[0]?.toUpperCase() ?? '')
+      .join('')
+  }
+
+  return invite.email.slice(0, 2).toUpperCase()
 }
 
 function openInviteModal() {
@@ -59,8 +64,10 @@ function openInviteModal() {
 }
 
 function onInviteSuccess(invite: SentInvite) {
-  if (!sentInvites.value.some(existing => existing.email === invite.email))
-    sentInvites.value.push(invite)
+  sentInvites.value = [
+    invite,
+    ...sentInvites.value.filter(entry => entry.email !== invite.email),
+  ]
   emit('inviteSucceeded', invite)
 }
 
