@@ -596,26 +596,29 @@ describe('tests CLI channel commands', () => {
   it.concurrent('should set channel update package', async () => {
     const testChannelName = generateChannelName()
     await createChannel(testChannelName, APPNAME)
-
-    const { data: channel } = await getSupabaseClient()
-      .from('channels')
-      .select('version')
-      .eq('name', testChannelName)
-      .eq('app_id', APPNAME)
-      .single()
-      .throwOnError()
+    const withDelta = await createAppVersions(`1.0.cli-delta-set-${randomUUID().slice(0, 8)}`, APPNAME, {
+      checksum: 'cli-delta-set',
+      storage_provider: 'r2',
+      r2_path: `orgs/test/apps/${APPNAME}/cli-delta-set.zip`,
+    })
     await getSupabaseClient()
       .from('manifest')
       .insert({
-        app_version_id: channel.version!,
+        app_version_id: withDelta.id,
         file_name: `cli-delta-${testChannelName}.js`,
         s3_path: `/cli-delta-${testChannelName}.js`,
         file_hash: 'cli-delta',
         file_size: 8,
       })
       .throwOnError()
+    await getSupabaseClient()
+      .from('channels')
+      .update({ version: withDelta.id })
+      .eq('app_id', APPNAME)
+      .eq('name', testChannelName)
+      .throwOnError()
 
-    const result = await createTestSDK().updateChannel({ channelId: testChannelName, appId: APPNAME, bundle: undefined, ...{ updatePackage: 'delta' } })
+    const result = await createTestSDK().updateChannel({ channelId: testChannelName, appId: APPNAME, bundle: undefined, updatePackage: 'delta' })
     expect(result.success).toBe(true)
 
     const { data, error } = await getSupabaseClient()
@@ -644,7 +647,7 @@ describe('tests CLI channel commands', () => {
       .eq('name', testChannelName)
       .throwOnError()
 
-    const result = await createTestSDK().updateChannel({ channelId: testChannelName, appId: APPNAME, bundle: undefined, ...{ updatePackage: 'delta' } })
+    const result = await createTestSDK().updateChannel({ channelId: testChannelName, appId: APPNAME, bundle: undefined, updatePackage: 'delta' })
     expect(result.success).toBe(false)
     expect(result.error).toContain('CHANNEL_DELTA_REQUIRED')
     expect(result.error).toContain('no delta files')
