@@ -156,6 +156,11 @@ function formatLastSeen(value: string | null | undefined) {
   return value ? formatLocalDateTime(value) : '-'
 }
 
+function ensureBundleName(name: string) {
+  if (name && !bundleNames.value.includes(name))
+    bundleNames.value = [name, ...bundleNames.value]
+}
+
 async function loadBundleNames() {
   if (!id.value)
     return
@@ -177,10 +182,8 @@ async function loadBundleNames() {
     return
   }
 
-  const names = [...new Set(data.map(row => row.name).filter(Boolean))]
-  if (selectedVersionName.value && !names.includes(selectedVersionName.value))
-    names.unshift(selectedVersionName.value)
-  bundleNames.value = names
+  bundleNames.value = [...new Set(data.map(row => row.name).filter(Boolean))]
+  ensureBundleName(selectedVersionName.value)
 }
 
 async function loadAppInfo() {
@@ -298,8 +301,7 @@ async function selectPeriod(option: PeriodDayOption) {
 async function applyVersionFilter(name: string) {
   if (selectedVersionName.value === name)
     return
-  if (name && !bundleNames.value.includes(name))
-    bundleNames.value = [name, ...bundleNames.value]
+  ensureBundleName(name)
   selectedVersionName.value = name
   const query = { ...route.query }
   if (name)
@@ -344,8 +346,7 @@ watchEffect(async () => {
 watch(() => typeof route.query.version === 'string' ? route.query.version : '', async (version) => {
   if (selectedVersionName.value === version)
     return
-  if (version && !bundleNames.value.includes(version))
-    bundleNames.value = [version, ...bundleNames.value]
+  ensureBundleName(version)
   selectedVersionName.value = version
   if (id.value)
     await fetchInsights()
