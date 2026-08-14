@@ -1,5 +1,6 @@
 // August uses Central European Summer Time (UTC+2).
 export const ONBOARDING_REDIRECT_CUTOFF = Date.parse('2026-08-04T01:00:00+02:00')
+export const ONBOARDING_DASHBOARD_EXPLORED_EVENT = 'capgo:onboarding-dashboard-explored'
 
 const DASHBOARD_EXPLORATION_STORAGE_KEY = 'capgo:onboarding-dashboard-exploration'
 
@@ -78,6 +79,9 @@ export function allowOnboardingDashboardExploration(userId: string | null | unde
       // Storage can be blocked in private or restricted browsing contexts.
     }
   }
+
+  if (typeof window !== 'undefined')
+    window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))
 }
 
 export function canExploreOnboardingDashboard(userId: string | null | undefined) {

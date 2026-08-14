@@ -176,6 +176,33 @@ describe('onboarding progress analytics', () => {
     expect(properties).toEqual(capture.mock.calls[0]?.[2])
   })
 
+  it.concurrent('captures dashboard exploration with the active onboarding attempt context', () => {
+    const capture = vi.fn()
+    const tracker = createOnboardingProgressTracker({
+      capture,
+      flow: 'pre_org',
+      resumed: true,
+      steps,
+      supaHost: 'https://supabase.capgo.test',
+    })
+    tracker.viewStep('setup')
+    capture.mockClear()
+
+    tracker.trackDashboardExplored('com.example.app')
+
+    expect(capture).toHaveBeenCalledWith(
+      'onboarding_dashboard_explored',
+      'https://supabase.capgo.test',
+      expect.objectContaining({
+        app_id: 'com.example.app',
+        onboarding_attempt_id: expect.any(String),
+        onboarding_version: ONBOARDING_ANALYTICS_VERSION,
+        resumed: true,
+        step: 'setup',
+      }),
+    )
+  })
+
   it.concurrent('deduplicates completion for one visit and resets timing after back navigation', () => {
     let now = 10
     const capture = vi.fn()

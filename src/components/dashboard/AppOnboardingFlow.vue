@@ -48,7 +48,7 @@ import {
   loadOnboardingAppDraft,
 } from '~/utils/onboardingAppDraft'
 import { createOnboardingDetailsFieldDebouncer, createOnboardingProgressTracker } from '~/utils/onboardingProgressAnalytics'
-import { allowOnboardingDashboardExploration } from '~/utils/onboardingRedirect'
+import { allowOnboardingDashboardExploration, ONBOARDING_DASHBOARD_EXPLORED_EVENT } from '~/utils/onboardingRedirect'
 import { slugifyOnboardingSegment } from '~/utils/onboardingSlug'
 import AppOnboardingIconInput from './AppOnboardingIconInput.vue'
 
@@ -1128,7 +1128,12 @@ function openDashboard() {
   router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}/getting-started`)
 }
 
+function trackDashboardExplored() {
+  progressTracker?.trackDashboardExplored(createdApp.value?.app_id)
+}
+
 onMounted(async () => {
+  window.addEventListener(ONBOARDING_DASHBOARD_EXPLORED_EVENT, trackDashboardExplored)
   let resumedFlow = false
   isLoading.value = true
   try {
@@ -1162,6 +1167,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener(ONBOARDING_DASHBOARD_EXPLORED_EVENT, trackDashboardExplored)
   detailsFieldTracker.dispose()
 
   if (localIconPreview.value.startsWith('blob:'))
