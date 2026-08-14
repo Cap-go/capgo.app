@@ -167,7 +167,8 @@ BEGIN
   END IF;
 
   FOREACH v_step_id IN ARRAY v_step_ids LOOP
-    -- Missing keys yield NULL; NULL NOT IN (...) is unknown, not true.
+    -- jsonb -> missing key ->> 'status' is NULL. NULL NOT IN (...) is unknown, not true,
+    -- so treat empty status as "step not reported yet".
     IF COALESCE(v_steps -> v_step_id ->> 'status', '') NOT IN ('done', 'skipped') THEN
       v_all_present := false;
     ELSIF v_steps -> v_step_id ->> 'status' = 'skipped' THEN
