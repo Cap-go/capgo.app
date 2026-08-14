@@ -22,20 +22,20 @@ vi.mock('../supabase/functions/_backend/utils/hono_middleware.ts', () => ({
 }))
 
 vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({
-  checkPermission: (...args: unknown[]) => checkPermissionMock(...args),
+  checkPermission: checkPermissionMock,
 }))
 
 vi.mock('../supabase/functions/_backend/utils/stripe.ts', () => ({
-  updateCustomerEmail: (...args: unknown[]) => updateCustomerEmailMock(...args),
+  updateCustomerEmail: updateCustomerEmailMock,
 }))
 
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  supabaseWithAuth: (...args: unknown[]) => supabaseWithAuthMock(...args),
-  supabaseAdmin: (...args: unknown[]) => supabaseAdminMock(...args),
+  supabaseWithAuth: supabaseWithAuthMock,
+  supabaseAdmin: supabaseAdminMock,
 }))
 
 vi.mock('../supabase/functions/_backend/triggers/stripe_event.ts', () => ({
-  syncBillingBentoTagsFromStoredStripeInfo: (...args: unknown[]) => syncBillingBentoTagsFromStoredStripeInfoMock(...args),
+  syncBillingBentoTagsFromStoredStripeInfo: syncBillingBentoTagsFromStoredStripeInfoMock,
 }))
 
 const { app } = await import('../supabase/functions/_backend/private/set_org_email.ts')
