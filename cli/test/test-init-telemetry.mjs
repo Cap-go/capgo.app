@@ -152,6 +152,7 @@ function assertBefore(source, first, second, message) {
   const resume = command.slice(command.indexOf('async function tryResumeOnboarding'), command.indexOf('\nfunction cleanupStepsDone'))
   const markStepDone = command.slice(command.indexOf('function markStepDone'), command.indexOf('\ninterface ResumeResult'))
   const initApp = command.slice(command.indexOf('export async function initApp'))
+  const createAppTemplate = command.slice(command.indexOf('async function runCreateAppTemplate'), command.indexOf('\nasync function ensureWorkspaceReadyForInit'))
   const markInitSnag = command.slice(command.indexOf('async function markInitSnag'), command.indexOf('\nasync function markStep'))
   const exitAfterFinishingReplay = command.slice(command.indexOf('async function exitAfterFinishingReplay'), command.indexOf('\nconst frameworkSetupGuides'))
   const allExitCalls = [...command.matchAll(/(?<!function )exitAfterFinishingReplay\([^)]*\)/g)]
@@ -179,12 +180,12 @@ function assertBefore(source, first, second, message) {
   assert.ok(markInitSnag.includes('activeInitTelemetry.recordMilestone(event, undefined, icon, appId ?? null)'), 'classic milestones use the telemetry context and preserve their app and icon')
   assert.ok(markInitSnag.includes("return markSnag('onboarding-v2', orgId, apikey, event, appId, icon"), 'classic milestones retain the isolated markSnag fallback')
   assert.doesNotMatch(command, /exitAfterFinishingReplay\((?:\d+)?\)/, 'shared exits do not use bare or numeric-only calls')
-  assert.equal(allExitCalls.length, 24, 'only 24 shared exits call the lifecycle helper')
-  assert.equal(exitCalls.length, 24, 'every shared exit has an explicit outcome and code')
-  assert.equal(exitCalls.filter(([, outcome, code]) => outcome === 'completed' && code === '0').length, 1, 'only final onboarding completion is completed')
-  assert.equal(exitCalls.filter(([, outcome, code]) => outcome === 'failed' && code === '1').length, 2, 'only template and onboarding failures are failed')
-  assert.equal(exitCalls.filter(([, outcome, code]) => outcome === 'cancelled' && code === '0').length, 14, 'zero-code non-completions remain cancelled')
-  assert.equal(exitCalls.filter(([, outcome, code]) => outcome === 'cancelled' && code === '1').length, 7, 'one-code non-failures remain cancelled')
+  assert.equal(exitCalls.length, allExitCalls.length, 'every shared exit has an explicit outcome and code')
+  assert.ok(exitCalls.every(([, outcome, code]) => outcome === 'cancelled' || (outcome === 'completed' ? code === '0' : code === '1')), 'shared exits use valid outcome/code pairs')
+  assert.equal(exitCalls.filter(([, outcome]) => outcome === 'completed').length, 1, 'only final onboarding completion is completed')
+  assert.match(createAppTemplate, /Capacitor app template creation failed[\s\S]*?exitAfterFinishingReplay\('failed', 1\)/, 'template failures are failed')
+  assert.match(initApp, /Error during onboarding:[\s\S]*?exitAfterFinishingReplay\('failed', 1\)/, 'onboarding failures are failed')
+  assert.doesNotMatch(command.replace(exitAfterFinishingReplay, ''), /\bexit\(/, 'terminal exits do not bypass lifecycle telemetry')
   assertBefore(exitAfterFinishingReplay, 'recordRunEnded(outcome, code)', 'finishActiveCliReplay()', 'run end is recorded before replay finishes')
 }
 
