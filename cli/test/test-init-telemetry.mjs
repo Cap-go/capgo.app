@@ -169,6 +169,7 @@ function assertBefore(source, first, second, message) {
   assertBefore(continueBranch, "recordResumeDecision('continue')", 'getProgressMetadata()', 'continue records its decision before reading progress telemetry')
   assertBefore(continueBranch, 'getProgressMetadata()', 'writeFileSync(getTmpObjectPath(), JSON.stringify(mergeInitProgressTelemetry(progress, progressMetadata)))', 'continue persists current telemetry immediately after reading it')
   assertBefore(continueBranch, 'writeFileSync(getTmpObjectPath(), JSON.stringify(mergeInitProgressTelemetry(progress, progressMetadata)))', 'const resumedTargets = resolveResumedInitTargets', 'continue persists telemetry before restoring targets')
+  assert.match(continueBranch, /if \(!resumedTargets\) \{[\s\S]*?activeInitTelemetry\?\.clearScope\(\)[\s\S]*?cleanupStepsDone\(\)[\s\S]*?return undefined\n      \}/, 'invalid resumed targets clear saved scope before cleanup and fresh-flow return')
   const restartBranch = resume.slice(resume.indexOf('// User chose to start over'))
   assertBefore(restartBranch, "recordResumeDecision('restart')", 'clearScope()', 'restart records its decision before clearing scope')
   assertBefore(restartBranch, 'clearScope()', 'cleanupStepsDone()', 'restart clears scope before cleanup')

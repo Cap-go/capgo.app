@@ -1480,6 +1480,7 @@ async function tryResumeOnboarding(
       }, initialCwd)
       if (!resumedTargets) {
         pLog.warn('Saved onboarding targets are no longer available. Starting over.')
+        activeInitTelemetry?.clearScope()
         cleanupStepsDone()
         globalCodeDiff = undefined
         setInitCodeDiff(undefined)

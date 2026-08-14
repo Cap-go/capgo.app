@@ -38,7 +38,7 @@ progress file remains.
 All lifecycle events and existing milestone events share:
 `onboarding_event_version: 1`, `onboarding_run_id`,
 `onboarding_journey_id`, and `$session_id` when replay is active. Existing
-`org_id` and `app_id` continue once known.
+`org_id` and `tags['app-id']` continue once known.
 
 Record these lifecycle events at most once per invocation:
 
