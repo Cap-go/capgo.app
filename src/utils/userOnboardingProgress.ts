@@ -49,11 +49,13 @@ function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value
   return typeof value === 'string' && (allowed as readonly string[]).includes(value)
 }
 
-function optionalTrimmedString(value: unknown): string | undefined {
+function optionalTrimmedString(value: unknown, maxLength = 1024): string | undefined {
   if (typeof value !== 'string')
     return undefined
   const trimmed = value.trim()
-  return trimmed || undefined
+  if (!trimmed)
+    return undefined
+  return trimmed.length > maxLength ? trimmed.slice(0, maxLength) : trimmed
 }
 
 function optionalBoolean(value: unknown): boolean | null | undefined {

@@ -110,4 +110,15 @@ describe('user onboarding progress', () => {
     expect(clampResumableOnboardingStep('install', 'existing_org')).toBe('install')
     expect(clampResumableOnboardingStep('details', 'pre_org')).toBe('details')
   })
+
+  it.concurrent('clamps oversize optional strings before they can fail the jsonb check', () => {
+    const parsed = parseUserOnboardingProgress({
+      status: 'in_progress',
+      step: 'details',
+      flow: 'pre_org',
+      app_name: 'A'.repeat(1200),
+      updated_at: '2026-08-15T00:00:00.000Z',
+    })
+    expect(parsed?.app_name).toHaveLength(1024)
+  })
 })

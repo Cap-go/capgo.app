@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(8);
+SELECT plan(9);
 
 SELECT tests.create_supabase_user('onboarding_progress_user', 'onboarding_progress_user@test.local');
 
@@ -77,6 +77,15 @@ SELECT throws_ok(
   '23514',
   NULL,
   'oversized onboarding jsonb is rejected'
+);
+
+SELECT throws_ok(
+  $$UPDATE public.users
+    SET onboarding = '{"status":null,"step":"details","flow":"pre_org"}'::jsonb
+    WHERE id = tests.get_supabase_uid('onboarding_progress_user')$$,
+  '23514',
+  NULL,
+  'json null onboarding status is rejected'
 );
 
 SELECT tests.authenticate_as('onboarding_progress_user');

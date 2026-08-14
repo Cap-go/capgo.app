@@ -302,6 +302,7 @@ const setupSubtitle = computed(() => usesBuilderSetupCommand.value ? t('unified-
 
 let progressTracker: ReturnType<typeof createOnboardingProgressTracker> | null = null
 let persistChain = Promise.resolve()
+let persistFieldsTimer: ReturnType<typeof setTimeout> | undefined
 let pendingDashboardExplored = false
 
 function trackV2DetailsEvent(name: OnboardingDetailsEvent, details: OnboardingDetailsEventProperties = {}) {
@@ -376,6 +377,15 @@ async function persistOnboardingProgress(status: UserOnboardingStatus = 'in_prog
       console.error('Failed to persist onboarding progress', error)
     })
   return persistChain
+}
+
+function schedulePersistOnboardingProgress() {
+  if (isHydratingOnboarding.value)
+    return
+  window.clearTimeout(persistFieldsTimer)
+  persistFieldsTimer = setTimeout(() => {
+    void persistOnboardingProgress()
+  }, 400)
 }
 
 async function writeOnboardingProgress(status: UserOnboardingStatus) {
@@ -911,6 +921,8 @@ function restoreDraftState() {
     return false
 
   appName.value = draft.appName
+  if (!hasEditedOrgName.value)
+    orgNameInput.value = draft.appName.trim()
   manualAppId.value = draft.appId
   hasEditedAppId.value = true
   existingApp.value = draft.existingApp
@@ -1381,8 +1393,11 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  window.clearTimeout(persistFieldsTimer)
   window.removeEventListener(ONBOARDING_DASHBOARD_EXPLORED_EVENT, trackDashboardExplored)
   detailsFieldTracker.dispose()
+  if (!isHydratingOnboarding.value)
+    void persistOnboardingProgress()
 
   if (localIconPreview.value.startsWith('blob:'))
     URL.revokeObjectURL(localIconPreview.value)
@@ -1391,6 +1406,7 @@ onBeforeUnmount(() => {
 watch(existingApp, (value) => {
   if (isHydratingOnboarding.value)
     return
+  schedulePersistOnboardingProgress()
   if (props.preOrg) {
     if (value === false)
       estimatedUsersIndex.value = 0
@@ -1424,7 +1440,16 @@ watch(appName, (value) => {
     return
   if (!hasEditedOrgName.value)
     orgNameInput.value = value.trim()
+  schedulePersistOnboardingProgress()
 }, { immediate: true })
+
+watch([orgNameInput, storeUrl, selectedIntent, existingAppSetup, estimatedUsersIndex], () => {
+  schedulePersistOnboardingProgress()
+})
+
+defineExpose({
+  persistOnboardingProgress,
+})
 </script>
 
 <template>

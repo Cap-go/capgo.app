@@ -12,6 +12,7 @@ const router = useRouter()
 const { t } = useI18n()
 const displayStore = useDisplayStore()
 const main = useMainStore()
+const onboardingFlow = ref<{ persistOnboardingProgress?: () => Promise<unknown> } | null>(null)
 const isReady = ref(false)
 const isLoggingOut = ref(false)
 
@@ -21,6 +22,7 @@ async function logoutFromOnboarding() {
 
   isLoggingOut.value = true
   try {
+    await onboardingFlow.value?.persistOnboardingProgress?.()
     clearOnboardingAppDraft(main.user?.id ?? main.auth?.id)
     await main.logout()
     await router.replace('/login')
@@ -63,7 +65,7 @@ onMounted(async () => {
     </div>
 
     <PageLoader v-if="!isReady" />
-    <AppOnboardingFlow v-else pre-org onboarding />
+    <AppOnboardingFlow v-else ref="onboardingFlow" pre-org onboarding />
   </div>
 </template>
 
