@@ -7,10 +7,13 @@ export type FrontendOnboardingStageKey = 'intent' | 'details' | 'organization' |
 export interface FrontendOnboardingAttempt {
   attemptId: string
   onboardingVersion: FrontendOnboardingVersion
+  personId: string
   intentMs: number
   detailsMs: number | null
   organizationMs: number | null
   setupMs: number | null
+  aiInstructionsCopiedMs: number[]
+  cliStartedMs: number[]
   interactionEvents: FrontendOnboardingInteractionEvent[]
 }
 
@@ -61,6 +64,13 @@ export interface FrontendOnboardingDailyConversion {
   conversion_percent: number | null
 }
 
+export interface FrontendOnboardingSetupCliOutcomes {
+  total_users: number
+  cli_only: number
+  cli_and_ai_instructions: number
+  no_cli: number
+}
+
 export interface FrontendOnboardingAnalytics {
   kpis: FrontendOnboardingPeriodKpis & { comparison: FrontendOnboardingComparison }
   daily_attempts: FrontendOnboardingDailyAttempt[]
@@ -76,6 +86,7 @@ export interface FrontendOnboardingAnalytics {
   v2_graph: {
     nodes: Array<{ key: string, count: number }>
   }
+  v2_setup_cli_outcomes: FrontendOnboardingSetupCliOutcomes
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -267,6 +278,44 @@ function buildV2Graph(attempts: FrontendOnboardingAttempt[]): Array<{ key: strin
     .map(([key, count]) => ({ key, count }))
 }
 
+function isInSetupFollowupWindow(timestamp: number, setupMs: number) {
+  return timestamp >= setupMs && timestamp <= setupMs + FRONTEND_ONBOARDING_FOLLOWUP_MS
+}
+
+function buildV2SetupCliOutcomes(attempts: FrontendOnboardingAttempt[]): FrontendOnboardingSetupCliOutcomes {
+  const outcomesByPerson = new Map<string, { copiedAiInstructions: boolean, startedCli: boolean }>()
+
+  for (const attempt of attempts) {
+    const setupMs = attempt.setupMs
+    if (!attempt.personId || !isStepInFollowupWindow(setupMs, attempt.intentMs))
+      continue
+
+    const outcome = outcomesByPerson.get(attempt.personId) ?? { copiedAiInstructions: false, startedCli: false }
+    outcome.copiedAiInstructions ||= attempt.aiInstructionsCopiedMs.some(timestamp => isInSetupFollowupWindow(timestamp, setupMs))
+    outcome.startedCli ||= attempt.cliStartedMs.some(timestamp => isInSetupFollowupWindow(timestamp, setupMs))
+    outcomesByPerson.set(attempt.personId, outcome)
+  }
+
+  let cliOnly = 0
+  let cliAndAiInstructions = 0
+  let noCli = 0
+  for (const outcome of outcomesByPerson.values()) {
+    if (!outcome.startedCli)
+      noCli++
+    else if (outcome.copiedAiInstructions)
+      cliAndAiInstructions++
+    else
+      cliOnly++
+  }
+
+  return {
+    total_users: outcomesByPerson.size,
+    cli_only: cliOnly,
+    cli_and_ai_instructions: cliAndAiInstructions,
+    no_cli: noCli,
+  }
+}
+
 function comparePeriods(current: FrontendOnboardingPeriodKpis, previous: FrontendOnboardingPeriodKpis): FrontendOnboardingComparison {
   const hasPreviousAttempts = previous.attempts > 0
   return {
@@ -318,5 +367,6 @@ export function buildFrontendOnboardingAnalytics(
       v2: currentV2.funnel,
     },
     v2_graph: { nodes: buildV2Graph(currentV2Attempts) },
+    v2_setup_cli_outcomes: buildV2SetupCliOutcomes(currentV2Attempts),
   }
 }
