@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { stripeEventTestUtils } from '../supabase/functions/_backend/triggers/stripe_event.ts'
-import { extractDataEvent, getStripeCustomerEmailFromEvent } from '../supabase/functions/_backend/utils/stripe_event.ts'
+import { extractDataEvent, getStripeCustomerEmailFromEvent, normalizeBillingEmail } from '../supabase/functions/_backend/utils/stripe_event.ts'
 
 const mockContext = {
   get: () => 'test-request-id',
@@ -21,6 +21,12 @@ function makeCustomerEvent(type: 'customer.created' | 'customer.updated', custom
 }
 
 describe('stripe customer billing email sync', () => {
+  it.concurrent('normalizes billing emails the same way extraction does', () => {
+    expect(normalizeBillingEmail(' Billing@Stripe.Example ')).toBe('billing@stripe.example')
+    expect(normalizeBillingEmail('   ')).toBeNull()
+    expect(normalizeBillingEmail(null)).toBeNull()
+  })
+
   it.concurrent('extracts a normalized customer email from customer.updated', () => {
     const event = makeCustomerEvent('customer.updated', {
       email: ' Billing@Stripe.Example ',

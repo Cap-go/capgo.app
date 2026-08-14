@@ -15,7 +15,7 @@ import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import * as schema from '../utils/postgres_schema.ts'
 import { groupIdentifyPosthog } from '../utils/posthog.ts'
 import { ensureCustomerMetadata, getCreditCheckoutDetails, getStripe, syncStripeCustomerCountry } from '../utils/stripe.ts'
-import { getStripeCustomerEmailFromEvent } from '../utils/stripe_event.ts'
+import { getStripeCustomerEmailFromEvent, normalizeBillingEmail } from '../utils/stripe_event.ts'
 import { customerToSegmentOrg, supabaseAdmin } from '../utils/supabase.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
 import { purgeOnPremCacheForOrg, purgePlanCacheForOrg } from '../utils/cloudflare_cache_purge.ts'
@@ -119,11 +119,6 @@ function isSubscriptionUpdateStatus(
   status: StripeWebhookStatus | null | undefined,
 ): status is StripeWebhookStatus {
   return Boolean(status && SUBSCRIPTION_UPDATE_STATUSES.has(status))
-}
-
-function normalizeBillingEmail(email: string | null | undefined) {
-  const normalized = email?.trim().toLowerCase()
-  return normalized || null
 }
 
 function shouldReplaceOrgManagementEmail(currentEmail: string | null | undefined, stripeEmail: string | null) {
@@ -1248,14 +1243,14 @@ async function syncOrgManagementEmailFromStripeCustomer(
   customerId: string,
   event: Stripe.Event,
 ): Promise<Org> {
-  const stripeEmail = getStripeCustomerEmailFromEvent(event)
-  if (
-    !stripeEmail
-    || !shouldReplaceOrgManagementEmail(org.management_email, stripeEmail)
-    || !didStripeCustomerEmailChange(event)
-  ) {
+  if (!didStripeCustomerEmailChange(event))
     return org
-  }
+
+  // Prefer the live Stripe customer so a stale webhook cannot roll the email back.
+  const stripeEmail = await getStripeCustomerBillingEmail(c, customerId)
+    ?? getStripeCustomerEmailFromEvent(event)
+  if (!shouldReplaceOrgManagementEmail(org.management_email, stripeEmail) || !stripeEmail)
+    return org
 
   const { data: updatedOrg, error } = await supabaseAdmin(c)
     .from('orgs')
@@ -1266,16 +1261,13 @@ async function syncOrgManagementEmailFromStripeCustomer(
     .maybeSingle()
 
   if (error || !updatedOrg) {
-    cloudlogErr({
-      requestId: c.get('requestId'),
-      message: 'syncOrgManagementEmailFromStripeCustomer error',
+    return quickError(500, 'stripe_management_email_sync_failed', 'Failed to sync org management email from Stripe', {
       orgId: org.id,
       customerId,
       previousEmail: org.management_email,
       stripeEmail,
       error,
     })
-    return org
   }
 
   cloudlog({
