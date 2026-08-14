@@ -73,8 +73,10 @@ export function createInitTelemetry(options: InitTelemetryOptions = {}) {
       const eventProperties = properties(extra)
       if (options.capture)
         await options.capture(event, eventProperties)
-      else if (auth)
-        await import('../app/debug').then(({ markSnag }) => markSnag('onboarding-v2', auth.orgId, auth.apikey, event, appId, '✅', eventProperties))
+      else if (auth) {
+        const { apikey, orgId } = auth
+        await import('../app/debug').then(({ markSnag }) => markSnag('onboarding-v2', orgId, apikey, event, appId, '✅', eventProperties))
+      }
     }
     catch {
       // Analytics is best-effort and must not interrupt onboarding.
@@ -121,7 +123,7 @@ export function createInitTelemetry(options: InitTelemetryOptions = {}) {
         choice: nextChoice,
       }, true)
     },
-    recordResumePromptViewed: () => candidate ? emit('onboarding-resume-prompt-viewed', resumeProperties(), true) : Promise.resolve(),
+    recordResumePromptViewed: () => candidate ? emit('onboarding-resume-prompt-viewed', { ...resumeProperties(), ...(candidate.totalSteps === undefined ? {} : { total_steps: candidate.totalSteps }) }, true) : Promise.resolve(),
     recordRunEnded: (outcome: 'completed' | 'cancelled' | 'failed', exitCode: number) => emit('onboarding-run-ended', { outcome, exit_code: exitCode }, true),
     recordRunStarted: () => emit('onboarding-run-started', {
       resume_available: Boolean(candidate),

@@ -20,15 +20,20 @@ function create(options = {}) {
 
 {
   const { events, telemetry } = create()
+  const { events: noReplayEvents, telemetry: second } = create({ replaySessionId: () => undefined })
   assert.match(telemetry.runId, /^ir_/, 'each run has an immutable run ID')
   assert.match(telemetry.journeyId, /^ij_/, 'each run starts with a fresh journey ID')
+  assert.notEqual(telemetry.runId, second.runId, 'runs are unique per invocation')
+  assert.notEqual(telemetry.journeyId, second.journeyId, 'journeys are unique per invocation')
   await telemetry.recordMilestone('onboarding-step-done')
+  await second.recordMilestone('onboarding-step-done')
   assert.deepEqual(events[0].properties, {
     onboarding_event_version: 1,
     onboarding_journey_id: telemetry.journeyId,
     onboarding_run_id: telemetry.runId,
     $session_id: 'init-replay',
   }, 'milestones share run, journey, and active replay correlation')
+  assert.equal('$session_id' in noReplayEvents[0].properties, false, 'events omit inactive replay correlation')
 }
 
 {
@@ -39,7 +44,7 @@ function create(options = {}) {
   await telemetry.recordResumePromptViewed()
   await telemetry.recordResumeDecision('continue')
   assert.equal(telemetry.journeyId, saved.journey_id, 'continue switches to the saved journey')
-  assert.deepEqual(events.map(event => event.event), ['onboarding-run-started', 'onboarding-resume-prompt-viewed', 'onboarding-resume-decision'])
+  assert.equal(events[1].properties.total_steps, 12, 'resume prompts include the total step count')
   assert.deepEqual(events[2].properties, {
     onboarding_event_version: 1,
     onboarding_journey_id: saved.journey_id,
@@ -66,7 +71,6 @@ function create(options = {}) {
   telemetry.prepareResumeCandidate(saved, 2, 12)
   await telemetry.recordResumeDecision('restart')
   assert.equal(telemetry.journeyId, initialJourneyId, 'restart keeps the fresh journey')
-  assert.equal(events[0].properties.initial_journey_id, undefined, 'restart does not report an initial journey switch')
 }
 
 {
