@@ -20,12 +20,12 @@ export default defineConfig(({ mode }) => ({
       },
     },
     {
-      name: 'vitest-apikeys-route-block',
+      name: 'vitest-route-block',
       enforce: 'pre',
       transform(_, id) {
-        return id.includes('/src/pages/ApiKeys.vue?vue&type=route')
-          ? 'export default { path: "/apikeys" }'
-          : null
+        if (!id.includes('?vue&type=route'))
+          return null
+        return id.includes('/src/pages/ApiKeys.vue') ? 'export default { path: "/apikeys" }' : 'export default {}'
       },
     },
     vue(),
