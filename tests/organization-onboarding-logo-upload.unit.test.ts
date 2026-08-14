@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createApp, nextTick, reactive, ref, toRef } from 'vue'
 import OrganizationOnboarding from '../src/pages/onboarding/organization.vue'
 
@@ -33,6 +33,8 @@ vi.mock('~/utils/onboardingAppDraft', () => ({
   clearOnboardingAppDraft: vi.fn(),
   loadOnboardingAppDraft: () => ({ appName: 'Example App', appId: 'com.example.app' }),
 }))
+
+afterEach(() => vi.unstubAllGlobals())
 
 async function flushPromises() {
   for (let index = 0; index < 8; index++)
