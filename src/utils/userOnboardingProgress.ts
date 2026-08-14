@@ -200,7 +200,7 @@ export function shouldPromptOnboardingResume(
   progress: UserOnboardingProgress | null,
   flow: OnboardingAnalyticsFlow,
 ): boolean {
-  if (!progress || progress.status !== 'in_progress' || progress.flow !== flow)
+  if (progress?.status !== 'in_progress' || progress.flow !== flow)
     return false
 
   const firstStep = flow === 'pre_org' ? 'intent' : 'details'

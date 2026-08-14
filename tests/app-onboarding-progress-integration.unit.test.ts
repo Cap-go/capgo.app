@@ -5,7 +5,13 @@ const onboardingSource = readFileSync(new URL('../src/components/dashboard/AppOn
 const sidebarSource = readFileSync(new URL('../src/components/Sidebar.vue', import.meta.url), 'utf8')
 
 function sourceBetween(start: string, end: string) {
-  return onboardingSource.slice(onboardingSource.indexOf(start), onboardingSource.indexOf(end))
+  const startIndex = onboardingSource.indexOf(start)
+  const endIndex = onboardingSource.indexOf(end)
+  if (startIndex === -1)
+    throw new Error(`Missing start marker in AppOnboardingFlow.vue: ${start}`)
+  if (endIndex === -1 || endIndex < startIndex)
+    throw new Error(`Missing end marker in AppOnboardingFlow.vue: ${end}`)
+  return onboardingSource.slice(startIndex, endIndex)
 }
 
 describe('app onboarding progress analytics integration', () => {
