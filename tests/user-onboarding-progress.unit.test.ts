@@ -4,6 +4,7 @@ import {
   clampResumableOnboardingStep,
   parseUserOnboardingProgress,
   shouldPromptOnboardingResume,
+  USER_ONBOARDING_MAX_JSON_BYTES,
 } from '../src/utils/userOnboardingProgress'
 
 describe('user onboarding progress', () => {
@@ -120,5 +121,45 @@ describe('user onboarding progress', () => {
       updated_at: '2026-08-15T00:00:00.000Z',
     })
     expect(parsed?.app_name).toHaveLength(1024)
+  })
+
+  it.concurrent('truncates optional strings on Unicode code points, not UTF-16 units', () => {
+    const emoji = '\u{1F600}'
+    const boundary = `${'A'.repeat(1023)}${emoji}`
+    expect(boundary.slice(0, 1024)).not.toBe(boundary)
+
+    const kept = buildUserOnboardingProgress({
+      status: 'in_progress',
+      step: 'details',
+      flow: 'pre_org',
+      appName: boundary,
+      updatedAt: '2026-08-15T00:00:00.000Z',
+    })
+    expect(kept.app_name).toBe(boundary)
+
+    const truncated = buildUserOnboardingProgress({
+      status: 'in_progress',
+      step: 'details',
+      flow: 'pre_org',
+      appName: `${'A'.repeat(1024)}${emoji}`,
+      updatedAt: '2026-08-15T00:00:00.000Z',
+    })
+    expect(truncated.app_name).toBe('A'.repeat(1024))
+  })
+
+  it.concurrent('keeps the built jsonb payload under the database byte limit', () => {
+    const fourByteChar = '\u{1F600}'
+    const progress = buildUserOnboardingProgress({
+      status: 'in_progress',
+      step: 'details',
+      flow: 'pre_org',
+      appName: fourByteChar.repeat(1024),
+      appId: fourByteChar.repeat(1024),
+      storeUrl: fourByteChar.repeat(1024),
+      importedStoreAppId: fourByteChar.repeat(1024),
+      orgName: fourByteChar.repeat(1024),
+      updatedAt: '2026-08-15T00:00:00.000Z',
+    })
+    expect(new TextEncoder().encode(JSON.stringify(progress)).length).toBeLessThanOrEqual(USER_ONBOARDING_MAX_JSON_BYTES)
   })
 })

@@ -49,13 +49,43 @@ function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value
   return typeof value === 'string' && (allowed as readonly string[]).includes(value)
 }
 
+export const USER_ONBOARDING_MAX_JSON_BYTES = 8192
+const OPTIONAL_STRING_KEYS = ['store_url', 'org_name', 'app_name', 'app_id', 'imported_store_app_id'] as const
+
+function truncateToCodePoints(value: string, maxLength: number): string {
+  return Array.from(value).slice(0, maxLength).join('')
+}
+
 function optionalTrimmedString(value: unknown, maxLength = 1024): string | undefined {
   if (typeof value !== 'string')
     return undefined
   const trimmed = value.trim()
   if (!trimmed)
     return undefined
-  return trimmed.length > maxLength ? trimmed.slice(0, maxLength) : trimmed
+  return Array.from(trimmed).length > maxLength ? truncateToCodePoints(trimmed, maxLength) : trimmed
+}
+
+function jsonByteLength(value: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(value)).length
+}
+
+function clampOnboardingPayload(progress: UserOnboardingProgress): UserOnboardingProgress {
+  for (const key of OPTIONAL_STRING_KEYS) {
+    while (jsonByteLength(progress) > USER_ONBOARDING_MAX_JSON_BYTES) {
+      const current = progress[key]
+      if (!current)
+        break
+      const chars = Array.from(current)
+      if (chars.length <= 1) {
+        delete progress[key]
+        break
+      }
+      progress[key] = chars.slice(0, Math.floor(chars.length / 2)).join('')
+    }
+    if (jsonByteLength(progress) <= USER_ONBOARDING_MAX_JSON_BYTES)
+      return progress
+  }
+  return progress
 }
 
 function optionalBoolean(value: unknown): boolean | null | undefined {
@@ -184,7 +214,7 @@ export function buildUserOnboardingProgress(input: UserOnboardingProgressInput):
   if (input.status === 'completed')
     progress.completed_at = optionalTrimmedString(input.completedAt) ?? progress.updated_at
 
-  return progress
+  return clampOnboardingPayload(progress)
 }
 
 export function clampResumableOnboardingStep(

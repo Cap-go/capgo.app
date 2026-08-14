@@ -405,6 +405,10 @@ async function writeOnboardingProgress(status: UserOnboardingStatus) {
     .eq('id', userId)
   if (status !== 'completed') {
     query = query.or('onboarding->>status.is.null,onboarding->>status.neq.completed')
+    const lastUpdated = current?.updated_at
+    query = lastUpdated
+      ? query.or(`onboarding->>updated_at.is.null,onboarding->>updated_at.eq."${lastUpdated}"`)
+      : query.or('onboarding->>updated_at.is.null')
   }
   const { data, error } = await query
     .select()
@@ -1443,7 +1447,7 @@ watch(appName, (value) => {
   schedulePersistOnboardingProgress()
 }, { immediate: true })
 
-watch([orgNameInput, storeUrl, selectedIntent, existingAppSetup, estimatedUsersIndex], () => {
+watch([orgNameInput, storeUrl, selectedIntent, existingAppSetup, estimatedUsersIndex, manualAppId, importedStoreAppId], () => {
   schedulePersistOnboardingProgress()
 })
 
