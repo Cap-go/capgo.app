@@ -5,7 +5,7 @@ export const test = base.extend({
   // Add custom commands here
   page: async ({ page }, use) => {
     // Add custom commands to page
-    page.login = async (email: string, password: string) => {
+    page.login = async (email: string, password: string, targetUrl = /\/(apps|dashboard)(\/|$)/) => {
       await page.goto('/login/')
       await page.fill('[data-test="email"]', email)
       await page.click('[data-test="continue"]')
@@ -28,7 +28,7 @@ export const test = base.extend({
         }
 
         try {
-          await page.waitForURL(/\/(apps|dashboard)(\/|$)/, { timeout: attempt === 2 ? 30000 : 10000 })
+          await page.waitForURL(targetUrl, { timeout: attempt === 2 ? 30000 : 10000 })
           return
         }
         catch (error) {

@@ -93,7 +93,7 @@ describe('app onboarding progress analytics integration', () => {
     expect(dashboardExit).toContain("if (flowStep.value === 'install' || flowStep.value === 'setup')")
     expect(dashboardExit).toContain('progressTracker?.completeStep(flowStep.value, {')
     expect(dashboardExit).toContain('appId: createdApp.value.app_id')
-    expect(dashboardExit).toContain("void persistOnboardingProgress('completed')")
+    expect(dashboardExit).toContain("await persistOnboardingProgress('completed')")
     expect(dashboardExit).toContain('/getting-started')
     expect(dashboardExit.indexOf('completeStep')).toBeLessThan(dashboardExit.indexOf('router.push'))
     expect(dashboardExit).toContain('window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))')

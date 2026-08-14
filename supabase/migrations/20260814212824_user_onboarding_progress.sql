@@ -11,7 +11,7 @@ ADD CONSTRAINT "users_onboarding_valid" CHECK (
   AND ((NOT ("onboarding" ? 'step'::"text")) OR (("onboarding" ->> 'step'::"text") = ANY (ARRAY['intent'::"text", 'details'::"text", 'organization'::"text", 'choice'::"text", 'install'::"text", 'setup'::"text"])))
   AND ((NOT ("onboarding" ? 'flow'::"text")) OR (("onboarding" ->> 'flow'::"text") = ANY (ARRAY['pre_org'::"text", 'existing_org'::"text"])))
   AND ((NOT ("onboarding" ? 'intent'::"text")) OR (("onboarding" ->> 'intent'::"text") = ANY (ARRAY['ota'::"text", 'builder'::"text", 'both'::"text", 'exploring'::"text"])))
-);
+) NOT VALID;
 
 CREATE INDEX "users_onboarding_in_progress_step_idx"
   ON "public"."users" USING "btree" (("onboarding" ->> 'step'::"text"))

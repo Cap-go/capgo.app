@@ -7,6 +7,7 @@ import type {
   OnboardingIntent,
   OnboardingStepCompletionProperties,
 } from '~/utils/onboardingProgressAnalytics'
+import type { UserOnboardingStatus } from '~/utils/userOnboardingProgress'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
@@ -350,7 +351,7 @@ function viewPreviousStep(nextStep: OnboardingFlowStep) {
   void persistOnboardingProgress()
 }
 
-function snapshotOnboardingProgress(status: 'in_progress' | 'completed' | 'abandoned' = 'in_progress') {
+function snapshotOnboardingProgress(status: UserOnboardingStatus = 'in_progress') {
   const flow = props.preOrg ? 'pre_org' : 'existing_org'
   return buildUserOnboardingProgress({
     status,
@@ -368,7 +369,7 @@ function snapshotOnboardingProgress(status: 'in_progress' | 'completed' | 'aband
   })
 }
 
-async function persistOnboardingProgress(status: 'in_progress' | 'completed' | 'abandoned' = 'in_progress') {
+async function persistOnboardingProgress(status: UserOnboardingStatus = 'in_progress') {
   persistChain = persistChain
     .then(() => writeOnboardingProgress(status))
     .catch((error) => {
@@ -377,7 +378,7 @@ async function persistOnboardingProgress(status: 'in_progress' | 'completed' | '
   return persistChain
 }
 
-async function writeOnboardingProgress(status: 'in_progress' | 'completed' | 'abandoned') {
+async function writeOnboardingProgress(status: UserOnboardingStatus) {
   const userId = onboardingUserId.value
   if (!userId || isHydratingOnboarding.value)
     return
@@ -388,10 +389,14 @@ async function writeOnboardingProgress(status: 'in_progress' | 'completed' | 'ab
 
   const progress = snapshotOnboardingProgress(status)
   const onboarding = progress as unknown as Json
-  const { data, error } = await supabase
+  let query = supabase
     .from('users')
     .update({ onboarding })
     .eq('id', userId)
+  if (status !== 'completed') {
+    query = query.or('onboarding->>status.is.null,onboarding->>status.neq.completed')
+  }
+  const { data, error } = await query
     .select()
     .maybeSingle()
 
@@ -402,8 +407,6 @@ async function writeOnboardingProgress(status: 'in_progress' | 'completed' | 'ab
 
   if (data && main.user?.id === userId)
     main.user = data
-  else if (main.user?.id === userId)
-    main.user = { ...main.user, onboarding }
 }
 
 function resetOnboardingForm() {
@@ -1332,7 +1335,7 @@ async function openDashboard() {
     await reportOnboardingPatch({ outcome: 'switched_to_manual' })
   window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))
   allowOnboardingDashboardExploration(onboardingUserId.value, createdApp.value.app_id)
-  void persistOnboardingProgress('completed')
+  await persistOnboardingProgress('completed')
   router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}/getting-started`)
 }
 

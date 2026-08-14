@@ -72,27 +72,10 @@ function optionalIndex(value: unknown): number | null | undefined {
   return undefined
 }
 
-export function parseUserOnboardingProgress(value: unknown): UserOnboardingProgress | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value))
-    return null
-
-  const raw = value as Record<string, unknown>
-  if (!isOneOf(raw.status, USER_ONBOARDING_STATUSES))
-    return null
-  if (!isOneOf(raw.step, USER_ONBOARDING_STEPS))
-    return null
-  if (!isOneOf(raw.flow, USER_ONBOARDING_FLOWS))
-    return null
-
-  const progress: UserOnboardingProgress = {
-    status: raw.status,
-    step: raw.step,
-    flow: raw.flow,
-    updated_at: typeof raw.updated_at === 'string' && raw.updated_at.trim()
-      ? raw.updated_at
-      : new Date(0).toISOString(),
-  }
-
+function applyOptionalUserOnboardingFields(
+  progress: UserOnboardingProgress,
+  raw: Record<string, unknown>,
+): UserOnboardingProgress {
   if (isOneOf(raw.intent, USER_ONBOARDING_INTENTS))
     progress.intent = raw.intent
 
@@ -132,6 +115,28 @@ export function parseUserOnboardingProgress(value: unknown): UserOnboardingProgr
     progress.completed_at = completedAt
 
   return progress
+}
+
+export function parseUserOnboardingProgress(value: unknown): UserOnboardingProgress | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    return null
+
+  const raw = value as Record<string, unknown>
+  if (!isOneOf(raw.status, USER_ONBOARDING_STATUSES))
+    return null
+  if (!isOneOf(raw.step, USER_ONBOARDING_STEPS))
+    return null
+  if (!isOneOf(raw.flow, USER_ONBOARDING_FLOWS))
+    return null
+
+  return applyOptionalUserOnboardingFields({
+    status: raw.status,
+    step: raw.step,
+    flow: raw.flow,
+    updated_at: typeof raw.updated_at === 'string' && raw.updated_at.trim()
+      ? raw.updated_at
+      : new Date(0).toISOString(),
+  }, raw)
 }
 
 export function buildUserOnboardingProgress(input: UserOnboardingProgressInput): UserOnboardingProgress {
