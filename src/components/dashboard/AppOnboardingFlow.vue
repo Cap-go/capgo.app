@@ -419,8 +419,21 @@ async function writeOnboardingProgress(status: UserOnboardingStatus) {
     return
   }
 
-  if (data && main.user?.id === userId)
+  if (data && main.user?.id === userId) {
     main.user = data
+    return
+  }
+
+  if (status === 'completed' || main.user?.id !== userId)
+    return
+
+  const { data: latest } = await supabase
+    .from('users')
+    .select()
+    .eq('id', userId)
+    .maybeSingle()
+  if (latest && main.user?.id === userId)
+    main.user = latest
 }
 
 function resetOnboardingForm() {

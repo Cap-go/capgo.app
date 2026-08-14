@@ -49,7 +49,8 @@ function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value
   return typeof value === 'string' && (allowed as readonly string[]).includes(value)
 }
 
-export const USER_ONBOARDING_MAX_JSON_BYTES = 8192
+// Leave headroom: PostgreSQL jsonb::text is slightly larger than JSON.stringify.
+export const USER_ONBOARDING_MAX_JSON_BYTES = 8000
 const OPTIONAL_STRING_KEYS = ['store_url', 'org_name', 'app_name', 'app_id', 'imported_store_app_id'] as const
 
 function truncateToCodePoints(value: string, maxLength: number): string {
