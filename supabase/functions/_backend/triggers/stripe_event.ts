@@ -382,7 +382,7 @@ async function syncBillingBentoTags(
   })
 }
 
-async function syncBillingBentoTagsFromStoredStripeInfo(c: Context, org: Org, customerId: string) {
+export async function syncBillingBentoTagsFromStoredStripeInfo(c: Context, org: Org, customerId: string) {
   if (!isBentoConfigured(c))
     return
 

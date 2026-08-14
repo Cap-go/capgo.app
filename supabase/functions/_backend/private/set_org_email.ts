@@ -1,10 +1,11 @@
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { z } from 'zod'
 import { Hono } from 'hono/tiny'
-import { safeParseSchema } from '../utils/schema_validation.ts'
+import { syncBillingBentoTagsFromStoredStripeInfo } from '../triggers/stripe_event.ts'
 import { BRES, parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
 import { checkPermission } from '../utils/rbac.ts'
+import { safeParseSchema } from '../utils/schema_validation.ts'
 import { updateCustomerEmail } from '../utils/stripe.ts'
 import { supabaseAdmin, supabaseWithAuth } from '../utils/supabase.ts'
 
@@ -32,7 +33,7 @@ app.post('/', middlewareAuth(), async (c) => {
   const supabase = supabaseWithAuth(c, auth)
 
   const { data: organization, error: organizationError } = await supabase.from('orgs')
-    .select('customer_id, management_email')
+    .select('customer_id, management_email, created_by, name')
     .eq('id', safeBody.org_id)
     .maybeSingle()
 
@@ -66,6 +67,14 @@ app.post('/', middlewareAuth(), async (c) => {
     await updateCustomerEmail(c, organization.customer_id, organization.management_email)
     throw simpleError('critical_error', 'Critical error', { updateOrgErr, orgId: safeBody.org_id })
   }
+
+  await syncBillingBentoTagsFromStoredStripeInfo(c, {
+    id: safeBody.org_id,
+    name: organization.name,
+    management_email: safeBody.email,
+    created_by: organization.created_by,
+    customer_id: organization.customer_id,
+  }, organization.customer_id)
 
   return c.json(BRES)
 })
