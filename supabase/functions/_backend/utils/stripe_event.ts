@@ -171,3 +171,17 @@ export function extractDataEvent(c: Context, event: Stripe.Event): StripeData {
   }
   return { data, isUpgrade, previousPriceId, previousProductId }
 }
+
+export function getStripeCustomerEmailFromEvent(event: Stripe.Event): string | null {
+  if (event.type !== 'customer.created' && event.type !== 'customer.updated')
+    return null
+
+  const customer = event.data.object
+  if (!customer || customer.object !== 'customer')
+    return null
+  if ('deleted' in customer && customer.deleted)
+    return null
+
+  const normalized = customer.email?.trim().toLowerCase()
+  return normalized || null
+}

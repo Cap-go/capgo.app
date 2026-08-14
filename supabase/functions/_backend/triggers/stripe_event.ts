@@ -15,6 +15,7 @@ import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import * as schema from '../utils/postgres_schema.ts'
 import { groupIdentifyPosthog } from '../utils/posthog.ts'
 import { ensureCustomerMetadata, getCreditCheckoutDetails, getStripe, syncStripeCustomerCountry } from '../utils/stripe.ts'
+import { getStripeCustomerEmailFromEvent } from '../utils/stripe_event.ts'
 import { customerToSegmentOrg, supabaseAdmin } from '../utils/supabase.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
 import { purgeOnPremCacheForOrg, purgePlanCacheForOrg } from '../utils/cloudflare_cache_purge.ts'
@@ -123,6 +124,20 @@ function isSubscriptionUpdateStatus(
 function normalizeBillingEmail(email: string | null | undefined) {
   const normalized = email?.trim().toLowerCase()
   return normalized || null
+}
+
+function shouldReplaceOrgManagementEmail(currentEmail: string | null | undefined, stripeEmail: string | null) {
+  return Boolean(stripeEmail && stripeEmail !== normalizeBillingEmail(currentEmail))
+}
+
+function didStripeCustomerEmailChange(event: Stripe.Event) {
+  if (event.type === 'customer.created')
+    return true
+  if (event.type !== 'customer.updated')
+    return false
+
+  const previousAttributes = event.data.previous_attributes as Partial<Stripe.Customer> | undefined
+  return Boolean(previousAttributes && Object.hasOwn(previousAttributes, 'email'))
 }
 
 function buildBillingBentoTagUpdates(
@@ -1227,6 +1242,53 @@ async function getOrgForCustomerId(c: Context, customerId: string): Promise<Org 
   return org ?? null
 }
 
+async function syncOrgManagementEmailFromStripeCustomer(
+  c: Context,
+  org: Org,
+  customerId: string,
+  event: Stripe.Event,
+): Promise<Org> {
+  const stripeEmail = getStripeCustomerEmailFromEvent(event)
+  if (
+    !stripeEmail
+    || !shouldReplaceOrgManagementEmail(org.management_email, stripeEmail)
+    || !didStripeCustomerEmailChange(event)
+  ) {
+    return org
+  }
+
+  const { data: updatedOrg, error } = await supabaseAdmin(c)
+    .from('orgs')
+    .update({ management_email: stripeEmail })
+    .eq('id', org.id)
+    .eq('customer_id', customerId)
+    .select('id')
+    .maybeSingle()
+
+  if (error || !updatedOrg) {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'syncOrgManagementEmailFromStripeCustomer error',
+      orgId: org.id,
+      customerId,
+      previousEmail: org.management_email,
+      stripeEmail,
+      error,
+    })
+    return org
+  }
+
+  cloudlog({
+    requestId: c.get('requestId'),
+    message: 'Synced org management_email from Stripe customer email',
+    orgId: org.id,
+    customerId,
+    previousEmail: org.management_email,
+    stripeEmail,
+  })
+  return { ...org, management_email: stripeEmail }
+}
+
 async function getOrg(c: Context, stripeData: StripeData) {
   const org = await getOrgForCustomerId(c, stripeData.data.customer_id)
   if (!org)
@@ -1304,7 +1366,13 @@ app.post('/', middlewareStripeWebhook(), async (c) => {
     const org = await getOrgForCustomerId(c, stripeData.data.customer_id)
     if (org) {
       await ensureCustomerMetadata(c, stripeData.data.customer_id, org.id, org.created_by)
-      await syncBillingBentoTagsFromStoredStripeInfo(c, org, stripeData.data.customer_id)
+      const billingOrg = await syncOrgManagementEmailFromStripeCustomer(
+        c,
+        org,
+        stripeData.data.customer_id,
+        stripeEvent,
+      )
+      await syncBillingBentoTagsFromStoredStripeInfo(c, billingOrg, stripeData.data.customer_id)
     }
     return c.json(BRES)
   }
@@ -1442,5 +1510,7 @@ export const stripeEventTestUtils = {
   getSubscriptionTrackingState,
   isStaleStripeEvent,
   isCustomerProfileEvent,
+  didStripeCustomerEmailChange,
+  shouldReplaceOrgManagementEmail,
   shouldTrackOrganizationUpgrade,
 }
