@@ -10,7 +10,7 @@ export interface InitProgressTelemetry {
 }
 
 export interface InitTelemetryOptions {
-  capture?: (event: string, properties: TelemetryProperties) => Promise<void> | void
+  capture?: (event: string, properties: TelemetryProperties, icon: string) => Promise<void> | void
   enabled?: boolean
   replaySessionId?: () => string | undefined
 }
@@ -64,7 +64,7 @@ export function createInitTelemetry(options: InitTelemetryOptions = {}) {
     }
   }
 
-  async function emit(event: string, extra?: TelemetryProperties, once = false) {
+  async function emit(event: string, extra?: TelemetryProperties, once = false, icon = '✅') {
     if (!enabled || (once && recorded.has(event)))
       return
     if (once)
@@ -72,10 +72,10 @@ export function createInitTelemetry(options: InitTelemetryOptions = {}) {
     try {
       const eventProperties = properties(extra)
       if (options.capture)
-        await options.capture(event, eventProperties)
+        await options.capture(event, eventProperties, icon)
       else if (auth) {
         const { apikey, orgId } = auth
-        await import('../app/debug').then(({ markSnag }) => markSnag('onboarding-v2', orgId, apikey, event, appId, '✅', eventProperties))
+        await import('../app/debug').then(({ markSnag }) => markSnag('onboarding-v2', orgId, apikey, event, appId, icon, eventProperties))
       }
     }
     catch {
@@ -109,7 +109,7 @@ export function createInitTelemetry(options: InitTelemetryOptions = {}) {
       candidate = saved ? { ...saved, savedStep, totalSteps } : { journey_id: `ij_${randomUUID()}`, savedStep, totalSteps }
       return { journey_id: candidate.journey_id, ...(candidate.last_run_id ? { last_run_id: candidate.last_run_id } : {}) }
     },
-    recordMilestone: (event: string, extra?: TelemetryProperties) => emit(event, extra),
+    recordMilestone: (event: string, extra?: TelemetryProperties, icon = '✅') => emit(event, extra, false, icon),
     recordResumeDecision: async (nextChoice: 'continue' | 'restart') => {
       if (!candidate || choice)
         return

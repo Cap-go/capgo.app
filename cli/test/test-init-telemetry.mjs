@@ -10,7 +10,7 @@ const saved = { journey_id: 'ij_saved', last_run_id: 'ir_previous' }
 function create(options = {}) {
   const events = []
   const telemetry = createInitTelemetry({
-    capture: async (event, properties) => events.push({ event, properties }),
+    capture: async (event, properties, icon) => events.push({ event, properties, icon }),
     replaySessionId: () => 'init-replay',
     ...options,
   })
@@ -123,10 +123,20 @@ function assertBefore(source, first, second, message) {
 }
 
 {
+  const { events, telemetry } = create()
+  await telemetry.recordMilestone('canceled', undefined, '🤷')
+  assert.equal(events[0].icon, '🤷', 'milestones preserve their icon through injected capture')
+}
+
+{
   const command = readFileSync(new URL('../src/init/command.ts', import.meta.url), 'utf8')
   const resume = command.slice(command.indexOf('async function tryResumeOnboarding'), command.indexOf('\nfunction cleanupStepsDone'))
   const markStepDone = command.slice(command.indexOf('function markStepDone'), command.indexOf('\ninterface ResumeResult'))
   const initApp = command.slice(command.indexOf('export async function initApp'))
+  const markInitSnag = command.slice(command.indexOf('async function markInitSnag'), command.indexOf('\nasync function markStep'))
+  const exitAfterFinishingReplay = command.slice(command.indexOf('async function exitAfterFinishingReplay'), command.indexOf('\nconst frameworkSetupGuides'))
+  const allExitCalls = [...command.matchAll(/(?<!function )exitAfterFinishingReplay\([^)]*\)/g)]
+  const exitCalls = [...command.matchAll(/(?<!function )exitAfterFinishingReplay\('(completed|cancelled|failed)', (0|1)\)/g)]
 
   assert.ok(command.includes("import { createInitTelemetry, mergeInitProgressTelemetry, parseInitProgressTelemetry } from './telemetry'"), 'classic init imports telemetry helpers')
   assert.ok(command.includes('let activeInitTelemetry: ReturnType<typeof createInitTelemetry> | undefined'), 'classic init owns one active telemetry context')
@@ -144,6 +154,18 @@ function assertBefore(source, first, second, message) {
   assertBefore(restartBranch, "recordResumeDecision('restart')", 'clearScope()', 'restart records its decision before clearing scope')
   assertBefore(restartBranch, 'clearScope()', 'cleanupStepsDone()', 'restart clears scope before cleanup')
   assert.ok(markStepDone.indexOf('const progress = {') >= 0 && markStepDone.indexOf('mergeInitProgressTelemetry(progress, activeInitTelemetry?.getProgressMetadata())') >= 0, 'checkpoints merge telemetry into the existing operational progress payload')
+  assert.ok(markInitSnag.includes('activeInitTelemetry?.setAuth(orgId, apikey)'), 'classic milestones set active authentication')
+  assert.ok(markInitSnag.includes('activeInitTelemetry?.setScope(appId)'), 'classic milestones set active app scope')
+  assert.ok(markInitSnag.includes('activeInitTelemetry.recordMilestone(event, undefined, icon)'), 'classic milestones use the telemetry context and preserve their icon')
+  assert.ok(markInitSnag.includes("return markSnag('onboarding-v2', orgId, apikey, event, appId, icon"), 'classic milestones retain the isolated markSnag fallback')
+  assert.doesNotMatch(command, /exitAfterFinishingReplay\((?:\d+)?\)/, 'shared exits do not use bare or numeric-only calls')
+  assert.equal(allExitCalls.length, 24, 'only 24 shared exits call the lifecycle helper')
+  assert.equal(exitCalls.length, 24, 'every shared exit has an explicit outcome and code')
+  assert.equal(exitCalls.filter(([, outcome, code]) => outcome === 'completed' && code === '0').length, 1, 'only final onboarding completion is completed')
+  assert.equal(exitCalls.filter(([, outcome, code]) => outcome === 'failed' && code === '1').length, 2, 'only template and onboarding failures are failed')
+  assert.equal(exitCalls.filter(([, outcome, code]) => outcome === 'cancelled' && code === '0').length, 14, 'zero-code non-completions remain cancelled')
+  assert.equal(exitCalls.filter(([, outcome, code]) => outcome === 'cancelled' && code === '1').length, 7, 'one-code non-failures remain cancelled')
+  assertBefore(exitAfterFinishingReplay, 'recordRunEnded(outcome, code)', 'finishActiveCliReplay()', 'run end is recorded before replay finishes')
 }
 
 console.log('✅ Init telemetry context tests passed')
