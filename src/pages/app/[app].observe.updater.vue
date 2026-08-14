@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { Database } from '~/types/supabase.types'
-import { computed, ref, useId, watchEffect } from 'vue'
+import { computed, ref, useId, watch, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
@@ -252,12 +252,17 @@ async function fetchInsights() {
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}))
+      if (requestId !== latestInsightsRequest)
+        return
       console.error('Failed to fetch log insights:', errorData)
       toast.error(t('failed-to-fetch-log-insights'))
       return
     }
 
-    insights.value = await response.json() as LogInsightsResponse
+    const payload = await response.json() as LogInsightsResponse
+    if (requestId !== latestInsightsRequest)
+      return
+    insights.value = payload
   }
   catch (error) {
     if (requestId !== latestInsightsRequest)
@@ -334,6 +339,14 @@ watchEffect(async () => {
     displayStore.NavTitle = ''
     displayStore.defaultBack = '/apps'
   }
+})
+
+watch(() => typeof route.query.version === 'string' ? route.query.version : '', async (version) => {
+  if (selectedVersionName.value === version)
+    return
+  selectedVersionName.value = version
+  if (id.value)
+    await fetchInsights()
 })
 </script>
 
