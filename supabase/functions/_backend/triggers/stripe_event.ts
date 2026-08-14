@@ -163,16 +163,6 @@ function buildBillingBentoTagUpdates(
   }))
 }
 
-function shouldSendDunningStopEvent(
-  currentStripeInfo: Pick<StripeInfoRow, 'past_due_at' | 'status'> | null | undefined,
-  status: StripeWebhookStatus | null | undefined,
-): boolean {
-  if (!status || !['created', 'succeeded', 'updated'].includes(status))
-    return false
-
-  return currentStripeInfo?.status === 'failed' || Boolean(currentStripeInfo?.past_due_at)
-}
-
 function getPaidAtUpdate(
   currentStripeInfo: Pick<StripeInfoRow, 'paid_at' | 'status'> | null | undefined,
   nextStatus: StripeWebhookStatus | null | undefined,
@@ -1189,11 +1179,6 @@ async function createdOrUpdated(
     const subscriptionMetadata = buildSubscriptionEventMetadata(stripeData, plan, previousPlan)
     await syncBillingBentoTags(c, org, stripeData.data.customer_id, segment)
     const isNewSubscription = status === 'created'
-    // Bento Dunning must exit on this Capgo event, not Stripe's $ChargeSucceeded.
-    // Stripe's plugin only records $ChargeSucceeded on the customer email.
-    if (shouldSendDunningStopEvent(currentStripeInfo, status)) {
-      await trackBillingBentoEvent(c, org, stripeData.data.customer_id, BENTO_CHARGE_SUCCEEDED_EVENT, subscriptionMetadata)
-    }
     await sendEventToTracking(c, {
       bento: {
         cron: '* * * * *',
@@ -1472,6 +1457,8 @@ app.post('/', middlewareStripeWebhook(), async (c) => {
     return invoiceUpcoming(c, org, stripeEvent, stripeData)
   }
   else if (stripeEvent.type === 'charge.succeeded') {
+    // Canonical dunning exit. Do not also emit this from subscription.updated:
+    // Stripe sends both, and a plan change is not proof of payment recovery.
     await trackBillingBentoEvent(c, org, stripeData.data.customer_id, BENTO_CHARGE_SUCCEEDED_EVENT)
     return c.json(BRES)
   }
@@ -1569,7 +1556,6 @@ app.post('/', middlewareStripeWebhook(), async (c) => {
 export const stripeEventTestUtils = {
   BENTO_CHARGE_SUCCEEDED_EVENT,
   buildBillingBentoTagUpdates,
-  shouldSendDunningStopEvent,
   uniqueBillingEmails,
   buildSubscriptionEventMetadata,
   classifyRevenueMovement,

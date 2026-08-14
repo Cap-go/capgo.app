@@ -48,39 +48,6 @@ describe('dunning Bento stop event', () => {
   it.concurrent('uses a Capgo event so Bento can exit dunning for billing contacts', () => {
     expect(stripeEventTestUtils.BENTO_CHARGE_SUCCEEDED_EVENT).toBe('org:charge_succeeded')
   })
-
-  it.concurrent('sends org:charge_succeeded after a failed payment recovers', () => {
-    expect(stripeEventTestUtils.shouldSendDunningStopEvent(
-      { status: 'failed', past_due_at: null },
-      'updated',
-    )).toBe(true)
-    expect(stripeEventTestUtils.shouldSendDunningStopEvent(
-      { status: 'failed', past_due_at: null },
-      'succeeded',
-    )).toBe(true)
-    expect(stripeEventTestUtils.shouldSendDunningStopEvent(
-      { status: 'failed', past_due_at: null },
-      'created',
-    )).toBe(true)
-  })
-
-  it.concurrent('sends org:charge_succeeded after past_due recovers', () => {
-    expect(stripeEventTestUtils.shouldSendDunningStopEvent(
-      { status: 'succeeded', past_due_at: '2026-08-01T00:00:00.000Z' },
-      'updated',
-    )).toBe(true)
-  })
-
-  it.concurrent('does not send org:charge_succeeded on a routine renewal', () => {
-    expect(stripeEventTestUtils.shouldSendDunningStopEvent(
-      { status: 'succeeded', past_due_at: null },
-      'updated',
-    )).toBe(false)
-    expect(stripeEventTestUtils.shouldSendDunningStopEvent(
-      { status: 'succeeded', past_due_at: '2026-08-01T00:00:00.000Z' },
-      'past_due',
-    )).toBe(false)
-  })
 })
 
 describe('stripe charge events', () => {
