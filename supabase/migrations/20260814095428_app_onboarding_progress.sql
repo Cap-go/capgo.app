@@ -158,6 +158,7 @@ BEGIN
           'status', v_step ->> 'status',
           'at', COALESCE(
             NULLIF(v_step ->> 'at', ''),
+            NULLIF(v_existing_step ->> 'at', ''),
             to_char((now() AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
           )
         )),

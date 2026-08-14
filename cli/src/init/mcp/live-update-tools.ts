@@ -255,7 +255,7 @@ export function buildDeps(
         return
       void reportInitOnboardingStep(apikey, appId, stepDone, 'done', {
         outcome: stepDone >= initOnboardingSteps.length ? 'completed' : 'in_progress',
-      })
+      }).catch(() => {})
     },
   }
 }

@@ -86,6 +86,22 @@ describe('app onboarding merge', () => {
     expect(skipped.outcome).toBe('skipped')
   })
 
+  it.concurrent('keeps the original step timestamp when a later report omits at', () => {
+    const first = mergeAppOnboarding({}, {
+      source: 'cli',
+      steps: { add_app: { status: 'done', at: '2026-08-14T10:00:00.000Z' } },
+    }, () => '2026-08-14T10:00:00.000Z')
+
+    const again = mergeAppOnboarding(first, {
+      steps: { add_app: { status: 'done' } },
+    }, () => '2026-08-14T11:00:00.000Z')
+
+    expect(again.steps.add_app).toEqual({
+      status: 'done',
+      at: '2026-08-14T10:00:00.000Z',
+    })
+  })
+
   it.concurrent('keeps switched_to_manual until the CLI finishes', () => {
     const switched = mergeAppOnboarding({ source: 'cli' }, {
       outcome: 'switched_to_manual',

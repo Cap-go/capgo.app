@@ -362,6 +362,8 @@ async function decideAtStep(facts: LiveUpdateFacts, deps: EngineDeps, input?: Li
   }
 
   if (stepNumber === 12) {
+    if ((progress?.step_done ?? 0) < TOTAL_STEPS)
+      mergeProgress(deps, progress, { step_done: TOTAL_STEPS, appId: facts.appId })
     const channel = progress?.channelName ?? session.channelName ?? DEFAULT_CHANNEL
     return baseResult(stepNumber, 'completion', 'done', `${facts.appId} is wired for Capgo OTA updates.`, {
       progress: 100,

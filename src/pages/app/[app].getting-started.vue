@@ -272,6 +272,7 @@ watch(() => id.value, async (appId) => {
               </div>
               <AppOnboardingCliSteps
                 v-if="step.id === 'cli_install'"
+                :key="id"
                 class="mt-3"
                 :app-id="id"
                 :initial-onboarding="app.onboarding"

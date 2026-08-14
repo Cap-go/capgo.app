@@ -18,6 +18,7 @@ const supabase = useSupabase()
 const isOpen = ref(false)
 const onboarding = ref(parseAppOnboarding(props.initialOnboarding))
 let pollTimer: number | null = null
+let refreshGeneration = 0
 
 const steps = computed(() => APP_ONBOARDING_STEP_IDS.map(id => ({
   id,
@@ -26,6 +27,7 @@ const steps = computed(() => APP_ONBOARDING_STEP_IDS.map(id => ({
 })))
 
 const doneCount = computed(() => steps.value.filter(step => step.status === 'done' || step.status === 'skipped').length)
+const isTerminal = computed(() => onboarding.value.outcome === 'completed' || onboarding.value.outcome === 'skipped')
 
 watch(() => props.initialOnboarding, (value) => {
   onboarding.value = parseAppOnboarding(value)
@@ -36,15 +38,30 @@ watch(doneCount, (count) => {
     isOpen.value = true
 }, { immediate: true })
 
+function stopPolling() {
+  if (pollTimer !== null) {
+    window.clearInterval(pollTimer)
+    pollTimer = null
+  }
+}
+
 async function refreshOnboarding() {
+  const generation = ++refreshGeneration
+  const appId = props.appId
   const { data } = await supabase
     .from('apps')
     .select('onboarding')
-    .eq('app_id', props.appId)
+    .eq('app_id', appId)
     .maybeSingle()
+
+  if (generation !== refreshGeneration || appId !== props.appId)
+    return
 
   if (data)
     onboarding.value = parseAppOnboarding(data.onboarding)
+
+  if (isTerminal.value)
+    stopPolling()
 }
 
 function statusLabel(status: AppOnboardingStepStatus | undefined) {
@@ -57,14 +74,16 @@ function statusLabel(status: AppOnboardingStepStatus | undefined) {
 
 onMounted(() => {
   void refreshOnboarding()
-  pollTimer = window.setInterval(() => {
-    void refreshOnboarding()
-  }, 2000)
+  if (!isTerminal.value) {
+    pollTimer = window.setInterval(() => {
+      void refreshOnboarding()
+    }, 2000)
+  }
 })
 
 onBeforeUnmount(() => {
-  if (pollTimer !== null)
-    window.clearInterval(pollTimer)
+  refreshGeneration += 1
+  stopPolling()
 })
 </script>
 

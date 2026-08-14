@@ -179,7 +179,7 @@ export function mergeAppOnboarding(
         continue
       steps[key] = {
         status: value.status,
-        at: value.at ?? now(),
+        at: value.at ?? existing?.at ?? now(),
       }
     }
   }

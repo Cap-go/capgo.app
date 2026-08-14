@@ -66,7 +66,7 @@ describe('admin app onboarding dashboard', () => {
     const messages = JSON.parse(await readFile(new URL('../messages/en.json', import.meta.url), 'utf8')) as Record<string, string>
 
     expect(messages['apps-onboarding-by-method']).toBe('App onboarding by method')
-    expect(messages['apps-onboarding-by-outcome']).toBe('CLI onboarding outcomes')
+    expect(messages['apps-onboarding-by-outcome']).toBe('Setup outcomes')
     expect(messages['onboarding-source-cli']).toBe('CLI')
     expect(messages['onboarding-outcome-switched-to-manual']).toBe('Switched to dashboard')
   })

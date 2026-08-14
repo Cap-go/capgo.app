@@ -1160,7 +1160,13 @@ async function openDashboard() {
       appId: createdApp.value.app_id,
     })
   }
-  const current = parseAppOnboarding(createdApp.value.onboarding)
+  const app = createdApp.value
+  const { data } = await supabase
+    .from('apps')
+    .select('onboarding')
+    .eq('app_id', app.app_id)
+    .maybeSingle()
+  const current = parseAppOnboarding(data?.onboarding ?? app.onboarding)
   const source = reportedSetupSource.value ?? current.source
   if (source !== 'manual' && current.outcome === 'in_progress')
     await reportOnboardingPatch({ outcome: 'switched_to_manual' })
@@ -1816,6 +1822,7 @@ watch(appName, (value) => {
           </div>
 
           <AppOnboardingCliSteps
+            :key="createdApp.app_id"
             :app-id="createdApp.app_id"
             :initial-onboarding="createdApp.onboarding"
           />
@@ -1961,6 +1968,7 @@ watch(appName, (value) => {
             </div>
 
             <AppOnboardingCliSteps
+              :key="createdApp.app_id"
               :app-id="createdApp.app_id"
               :initial-onboarding="createdApp.onboarding"
             />

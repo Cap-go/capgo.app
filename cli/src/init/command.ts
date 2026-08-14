@@ -5518,6 +5518,8 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
 
   const pendingOnboardingSelection = await maybeReusePendingOnboardingApp(organization, options.apikey, appId, supabase, options)
   appId = pendingOnboardingSelection.appId ?? appId
+  if (appId)
+    globalAppId = appId
   await ensureCapacitorProjectReady(orgId, options.apikey, appId, pendingOnboardingSelection.pendingApp)
   selectedPackageJsonPath = path.resolve(globalPathToPackageJson ?? join(findRoot(cwd()), PACKNAME))
   selectedProjectDir = dirname(selectedPackageJsonPath)

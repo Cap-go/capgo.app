@@ -1870,7 +1870,7 @@
   "registrations-by-source-description": "New authentication accounts grouped by their profile creation state",
   "apps-onboarding-by-method": "App onboarding by method",
   "apps-onboarding-by-method-description": "New apps grouped by how onboarding started: CLI, MCP, AI, or manual",
-  "apps-onboarding-by-outcome": "CLI onboarding outcomes",
+  "apps-onboarding-by-outcome": "Setup outcomes",
   "apps-onboarding-by-outcome-description": "Apps started with CLI, MCP, or AI, grouped by whether onboarding finished, skipped steps, switched to the dashboard, or is still in progress",
   "onboarding-source-manual": "Manual",
   "onboarding-source-cli": "CLI",
