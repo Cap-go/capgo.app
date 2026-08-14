@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { INIT_ONBOARDING_STEP_IDS } from '../cli/src/init/ui'
+import { INIT_ONBOARDING_STEP_IDS } from '../cli/src/init/onboarding-steps'
 import {
   APP_ONBOARDING_STEP_IDS,
   applyAppOnboardingPatch,
@@ -12,7 +12,7 @@ import {
 
 describe('app onboarding merge', () => {
   it.concurrent('keeps CLI step ids in sync with the CLI onboarding list', () => {
-    // CLI titles live in cli/src/init/ui.ts; backend ids must stay identical.
+    // CLI titles live in cli/src/init/onboarding-steps.ts; backend ids must stay identical.
     expect([...APP_ONBOARDING_STEP_IDS]).toEqual([...INIT_ONBOARDING_STEP_IDS])
   })
 

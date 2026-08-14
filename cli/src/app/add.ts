@@ -5,9 +5,9 @@ import { existsSync, readFileSync } from 'node:fs'
 import { intro, log, outro } from '@clack/prompts'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { getInvocationSource } from '../analytics/track'
-import { isAiAgentEnvironment } from '../init/onboarding-report'
 import { checkAppExists, defaultAppIconPath, getAppIconStoragePath, newIconPath } from '../api/app'
 import { checkAlerts } from '../api/update'
+import { isAiAgentEnvironment } from '../init/onboarding-source'
 import { CliUserError } from '../shared/cli-user-error'
 import {
   assertCliPermission,
@@ -220,7 +220,7 @@ export async function addAppInternal(
   // the web onboarding path already continues without an icon on upload failure.
   if (iconBuff && iconType) {
     // TODO(cli-http): icon upload still requires supabase storage
-  const { error } = await supabase.storage
+    const { error } = await supabase.storage
       .from('images')
       .upload(iconPath, iconBuff, {
         contentType: iconType,

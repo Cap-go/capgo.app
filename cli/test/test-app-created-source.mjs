@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { setInvocationSource } from '../src/analytics/track.ts'
 import { resolveAppCreateSource } from '../src/app/add.ts'
-import { detectOnboardingSource, isAiAgentEnvironment } from '../src/init/onboarding-report.ts'
+import { detectOnboardingSource, isAiAgentEnvironment } from '../src/init/onboarding-source.ts'
 
 console.log('🧪 Testing App Created source resolution...\n')
 
