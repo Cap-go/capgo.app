@@ -18,6 +18,7 @@ import { useMainStore } from '~/stores/main'
 import {
   allowOnboardingDashboardExploration,
   getOnboardingResumeAppId,
+  ONBOARDING_DASHBOARD_EXPLORED_EVENT,
   shouldConfirmOnboardingDashboardExploration,
 } from '~/utils/onboardingRedirect'
 import DropdownProfile from '../components/dashboard/DropdownProfile.vue'
@@ -96,6 +97,7 @@ async function openTab(tab: Tab) {
     if (dialogStore.lastButtonRole !== 'primary')
       return
 
+    window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))
     allowOnboardingDashboardExploration(onboardingUserId, onboardingResumeAppId)
   }
 
