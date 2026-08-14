@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { createInitTelemetry, mergeInitProgressTelemetry, parseInitProgressTelemetry } from '../src/init/telemetry.ts'
 
 console.log('🧪 Testing init telemetry context...\n')
@@ -103,6 +104,25 @@ function create(options = {}) {
   await telemetry.recordRunEnded('completed', 0)
   await telemetry.recordRunEnded('completed', 0)
   assert.deepEqual(events.map(event => event.event), ['onboarding-run-started', 'onboarding-run-ended'], 'lifecycle events are emitted once')
+}
+
+{
+  const command = readFileSync(new URL('../src/init/command.ts', import.meta.url), 'utf8')
+  const resume = command.slice(command.indexOf('async function tryResumeOnboarding'), command.indexOf('\nfunction cleanupStepsDone'))
+  const markStepDone = command.slice(command.indexOf('function markStepDone'), command.indexOf('\ninterface ResumeResult'))
+  const initApp = command.slice(command.indexOf('export async function initApp'))
+
+  assert.ok(command.includes("import { createInitTelemetry, mergeInitProgressTelemetry, parseInitProgressTelemetry } from './telemetry'"), 'classic init imports telemetry helpers')
+  assert.ok(command.includes('let activeInitTelemetry: ReturnType<typeof createInitTelemetry> | undefined'), 'classic init owns one active telemetry context')
+  assert.ok(initApp.indexOf("activeInitTelemetry?.setAuth('', options.apikey)") < initApp.indexOf('let resumed = await tryResumeOnboarding'), 'authentication is set before no-resume lifecycle telemetry')
+  assert.ok(initApp.indexOf('let resumed = await tryResumeOnboarding') < initApp.indexOf('await activeInitTelemetry?.recordRunStarted()'), 'fresh paths record a run after resume detection')
+  assert.ok(resume.indexOf('parseInitProgressTelemetry(progress)') >= 0, 'resume parses nested telemetry from the full saved progress object')
+  assert.ok(resume.indexOf('prepareResumeCandidate(savedTelemetry, step_done, initOnboardingSteps.length)') < resume.indexOf('await activeInitTelemetry?.recordRunStarted()') && resume.indexOf('await activeInitTelemetry?.recordRunStarted()') < resume.indexOf('await activeInitTelemetry?.recordResumePromptViewed()') && resume.indexOf('await activeInitTelemetry?.recordResumePromptViewed()') < resume.indexOf('const resumeChoice = await pSelect'), 'resume candidate, start, and prompt telemetry precede the resume selector')
+  const continueBranch = resume.slice(resume.indexOf("if (resumeChoice === 'yes')"), resume.indexOf('// User chose to start over'))
+  assert.ok(continueBranch.indexOf("recordResumeDecision('continue')") < continueBranch.indexOf('getProgressMetadata()') && continueBranch.indexOf('getProgressMetadata()') < continueBranch.indexOf('const resumedTargets = resolveResumedInitTargets'), 'continue records its decision and persists current telemetry before restoring targets')
+  const restartBranch = resume.slice(resume.indexOf('// User chose to start over'))
+  assert.ok(restartBranch.indexOf("recordResumeDecision('restart')") < restartBranch.indexOf('clearScope()') && restartBranch.indexOf('clearScope()') < restartBranch.indexOf('cleanupStepsDone()'), 'restart records its decision and clears scope before cleanup')
+  assert.ok(markStepDone.indexOf('const progress = {') >= 0 && markStepDone.indexOf('mergeInitProgressTelemetry(progress, activeInitTelemetry?.getProgressMetadata())') >= 0, 'checkpoints merge telemetry into the existing operational progress payload')
 }
 
 console.log('✅ Init telemetry context tests passed')

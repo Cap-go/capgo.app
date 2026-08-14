@@ -41,6 +41,7 @@ import { createMissingExecutableError, getAvailablePackageManagers, getMissingPa
 import { cancel as pCancel, confirm as pConfirm, intro as pIntro, isCancel as pIsCancel, log as pLog, outro as pOutro, select as pSelect, spinner as pSpinner, text as pText } from './prompts'
 import { finishActiveCliReplay, getActiveCliReplaySessionId, isCliTelemetryDisabled, startInitReplay } from './replay'
 import { appendInitStreamingLine, clearInitStreamingOutput, INIT_CANCEL, pushInitLog, setInitCodeDiff, setInitEncryptionSummary, setInitVersionWarning, startInitStreamingOutput, stopInitInkSession, updateInitStreamingStatus, waitForInitLogSkip, waitForInitStreamingContinue } from './runtime'
+import { createInitTelemetry, mergeInitProgressTelemetry, parseInitProgressTelemetry } from './telemetry'
 import { formatInitResumeMessage, initOnboardingSteps, renderInitOnboardingComplete, renderInitOnboardingFrame, renderInitOnboardingWelcome } from './ui'
 import { CAPACITOR_SPLASH_SCREEN_PACKAGE, CAPGO_UPDATER_PACKAGE, getSplashScreenInstallState, getUpdaterInstallState } from './updater'
 
@@ -1292,10 +1293,11 @@ async function ensureWorkspaceReadyForInit(initialAppId?: string): Promise<strin
 
 let globalOrgId: string | undefined
 let globalOrgName: string | undefined
+let activeInitTelemetry: ReturnType<typeof createInitTelemetry> | undefined
 
 function markStepDone(step: number, pathToPackageJson?: string, channelName?: string) {
   try {
-    writeFileSync(getTmpObjectPath(), JSON.stringify({
+    const progress = {
       step_done: step,
       orgId: globalOrgId,
       orgName: globalOrgName,
@@ -1312,7 +1314,8 @@ function markStepDone(step: number, pathToPackageJson?: string, channelName?: st
       encryptionSummary: globalEncryptionSummary,
       autoTestChange: globalAutoTestChange,
       nodeModulesPath: globalNodeModulesPath,
-    }))
+    }
+    writeFileSync(getTmpObjectPath(), JSON.stringify(mergeInitProgressTelemetry(progress, activeInitTelemetry?.getProgressMetadata())))
     if (pathToPackageJson) {
       globalPathToPackageJson = pathToPackageJson
     }
@@ -1396,6 +1399,7 @@ async function tryResumeOnboarding(
     if (!rawData || rawData.length === 0)
       return undefined
 
+    const progress = JSON.parse(rawData)
     const {
       step_done,
       orgId,
@@ -1413,7 +1417,7 @@ async function tryResumeOnboarding(
       codeDiff,
       encryptionSummary,
       autoTestChange,
-    } = JSON.parse(rawData)
+    } = progress
     if (!orgId || !step_done) {
       pLog.warn('⚠️  Found previous onboarding progress, but it was saved in an older format.')
       pLog.info('   Starting fresh. Your previous progress cannot be resumed.')
@@ -1428,10 +1432,26 @@ async function tryResumeOnboarding(
       return undefined
     }
 
+    const savedTelemetry = parseInitProgressTelemetry(progress)
+    activeInitTelemetry?.setAuth(orgId, apikey)
+    activeInitTelemetry?.setScope(savedAppId)
+    activeInitTelemetry?.prepareResumeCandidate(savedTelemetry, step_done, initOnboardingSteps.length)
+    await activeInitTelemetry?.recordRunStarted()
+    const legacyBackfill = activeInitTelemetry?.getLegacyBackfillMetadata()
+    if (legacyBackfill) {
+      try {
+        writeFileSync(getTmpObjectPath(), JSON.stringify(mergeInitProgressTelemetry(progress, legacyBackfill)))
+      }
+      catch {
+        pLog.warn('Could not save onboarding telemetry metadata. Continuing onboarding.')
+      }
+    }
+
     pLog.info(formatInitResumeMessage(step_done, initOnboardingSteps.length))
     if (orgName) {
       pLog.info(`   Organization: ${orgName}`)
     }
+    await activeInitTelemetry?.recordResumePromptViewed()
     const resumeChoice = await pSelect({
       message: 'Would you like to continue from where you left off?',
       options: [
@@ -1441,6 +1461,16 @@ async function tryResumeOnboarding(
     })
     await cancelCommand(resumeChoice, orgId, apikey)
     if (resumeChoice === 'yes') {
+      await activeInitTelemetry?.recordResumeDecision('continue')
+      const progressMetadata = activeInitTelemetry?.getProgressMetadata()
+      if (progressMetadata) {
+        try {
+          writeFileSync(getTmpObjectPath(), JSON.stringify(mergeInitProgressTelemetry(progress, progressMetadata)))
+        }
+        catch {
+          pLog.warn('Could not save onboarding telemetry metadata. Continuing onboarding.')
+        }
+      }
       const resumedTargets = resolveResumedInitTargets(initialTargets, {
         pathToPackageJson: typeof pathToPackageJson === 'string' ? pathToPackageJson : undefined,
         capacitorConfigPath: typeof capacitorConfigPath === 'string' ? capacitorConfigPath : undefined,
@@ -1549,6 +1579,8 @@ async function tryResumeOnboarding(
     // User chose to start over — delete the saved progress and drop any
     // restored code diff / encryption summary so a fresh manual path
     // doesn't re-show stale content.
+    await activeInitTelemetry?.recordResumeDecision('restart')
+    activeInitTelemetry?.clearScope()
     cleanupStepsDone()
     globalCodeDiff = undefined
     setInitCodeDiff(undefined)
@@ -5211,6 +5243,8 @@ async function maybeStarCapgoRepo(includeSkillsRepository = false, repository?: 
 }
 
 export async function initApp(apikeyCommand: string, appId: string, options: SuperOptions) {
+  const analyticsEnabled = options.analytics !== false && !isCliTelemetryDisabled()
+  activeInitTelemetry = createInitTelemetry({ enabled: analyticsEnabled })
   const initialCwd = cwd()
   const packageJsonPath = resolveInitTargetPath(options.packageJson, 'Package JSON path', initialCwd)
   const capacitorConfigPath = getConfigWriteTarget() ?? resolveCapacitorConfigTargetPath(options.capacitorConfig, initialCwd)
@@ -5234,7 +5268,6 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
   globalSupaHost = options.supaHost // honor --supa-host for the support-logs upload
   const pm = getPMAndCommand()
   options.apikey = apikeyCommand
-  const analyticsEnabled = options.analytics !== false && !isCliTelemetryDisabled()
   startInitReplay({
     analyticsEnabled,
     apikey: options.apikey?.trim() || findSavedKeySilent(),
@@ -5271,11 +5304,13 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
 
   const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
   await resolveUserIdFromApiKey(supabase, options.apikey)
+  activeInitTelemetry?.setAuth('', options.apikey)
 
   let resumed = await tryResumeOnboarding(options.apikey, initialTargets, initialCwd, supabase, {
     supaHost: options.supaHost,
     supaAnon: options.supaAnon,
   })
+  await activeInitTelemetry?.recordRunStarted()
   let stepToSkip = resumed?.stepDone ?? 0
 
   await ensureGitRepoCleanBeforeInit(stepToSkip > 0 ? globalAutoTestChange : undefined)
