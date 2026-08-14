@@ -118,6 +118,16 @@ function invoiceUpcoming(event: Stripe.InvoiceUpcomingEvent, data: StripeData['d
   return data
 }
 
+function getStripeCustomerId(customer: Stripe.Charge['customer'] | Stripe.Checkout.Session['customer']): string {
+  if (!customer)
+    return ''
+  if (typeof customer === 'string')
+    return customer
+  if (typeof customer === 'object' && 'id' in customer && typeof customer.id === 'string')
+    return customer.id
+  return ''
+}
+
 export function extractDataEvent(c: Context, event: Stripe.Event): StripeData {
   let data: StripeData['data'] = {
     product_id: undefined as any, // Changed from '' to undefined to avoid FK constraint violations
@@ -151,14 +161,19 @@ export function extractDataEvent(c: Context, event: Stripe.Event): StripeData {
   else if (event.type === 'charge.failed') {
     const charge = event.data.object
     data.status = 'failed'
-    data.customer_id = String(charge.customer)
+    data.customer_id = getStripeCustomerId(charge.customer)
+  }
+  else if (event.type === 'charge.succeeded') {
+    const charge = event.data.object
+    data.status = 'succeeded'
+    data.customer_id = getStripeCustomerId(charge.customer)
   }
   else if (event.type === 'invoice.upcoming') {
     data = invoiceUpcoming(event, data)
   }
   else if (event.type === 'checkout.session.completed' || event.type === 'checkout.session.async_payment_succeeded') {
     const session = event.data.object as Stripe.Checkout.Session
-    data.customer_id = String(session.customer ?? '')
+    data.customer_id = getStripeCustomerId(session.customer)
     data.status = 'succeeded'
   }
   else if (event.type === 'customer.updated' || event.type === 'customer.created') {
@@ -170,4 +185,22 @@ export function extractDataEvent(c: Context, event: Stripe.Event): StripeData {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Other event', event })
   }
   return { data, isUpgrade, previousPriceId, previousProductId }
+}
+
+export function normalizeBillingEmail(email: string | null | undefined) {
+  const normalized = email?.trim().toLowerCase()
+  return normalized || null
+}
+
+export function getStripeCustomerEmailFromEvent(event: Stripe.Event): string | null {
+  if (event.type !== 'customer.created' && event.type !== 'customer.updated')
+    return null
+
+  const customer = event.data.object
+  if (customer?.object !== 'customer')
+    return null
+  if ('deleted' in customer && customer.deleted)
+    return null
+
+  return normalizeBillingEmail(customer.email)
 }

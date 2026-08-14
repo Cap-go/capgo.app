@@ -15,6 +15,7 @@ import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import * as schema from '../utils/postgres_schema.ts'
 import { groupIdentifyPosthog } from '../utils/posthog.ts'
 import { ensureCustomerMetadata, getCreditCheckoutDetails, getStripe, syncStripeCustomerCountry } from '../utils/stripe.ts'
+import { normalizeBillingEmail } from '../utils/stripe_event.ts'
 import { customerToSegmentOrg, supabaseAdmin } from '../utils/supabase.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
 import { purgeOnPremCacheForOrg, purgePlanCacheForOrg } from '../utils/cloudflare_cache_purge.ts'
@@ -61,6 +62,7 @@ interface RevenueMovement {
 type PersistRevenueMovementResult = 'applied' | 'duplicate' | 'missing' | 'stale'
 type BentoSegmentUpdate = { segments: string[], deleteSegments: string[] }
 type BentoSubscriberTagUpdate = { email: string, segments: string[], deleteSegments: string[] }
+const BENTO_CHARGE_SUCCEEDED_EVENT = 'org:charge_succeeded'
 
 const ZERO_REVENUE_MOVEMENT: RevenueMovement = {
   currentMrr: 0,
@@ -120,17 +122,23 @@ function isSubscriptionUpdateStatus(
   return Boolean(status && SUBSCRIPTION_UPDATE_STATUSES.has(status))
 }
 
-function normalizeBillingEmail(email: string | null | undefined) {
-  const normalized = email?.trim().toLowerCase()
-  return normalized || null
+function shouldReplaceOrgManagementEmail(currentEmail: string | null | undefined, stripeEmail: string | null): stripeEmail is string {
+  return Boolean(stripeEmail && stripeEmail !== normalizeBillingEmail(currentEmail))
 }
 
-function buildBillingBentoTagUpdates(
-  emails: Array<string | null | undefined>,
-  segments: BentoSegmentUpdate,
-): BentoSubscriberTagUpdate[] {
+function didStripeCustomerEmailChange(event: Stripe.Event) {
+  if (event.type === 'customer.created')
+    return true
+  if (event.type !== 'customer.updated')
+    return false
+
+  const previousAttributes = event.data.previous_attributes as Partial<Stripe.Customer> | undefined
+  return Boolean(previousAttributes && Object.hasOwn(previousAttributes, 'email'))
+}
+
+function uniqueBillingEmails(emails: Array<string | null | undefined>): string[] {
   const emailSet = new Set<string>()
-  const updates: BentoSubscriberTagUpdate[] = []
+  const unique: string[] = []
 
   for (const email of emails) {
     const normalizedEmail = normalizeBillingEmail(email)
@@ -138,14 +146,21 @@ function buildBillingBentoTagUpdates(
       continue
 
     emailSet.add(normalizedEmail)
-    updates.push({
-      email: normalizedEmail,
-      segments: [...segments.segments],
-      deleteSegments: [...segments.deleteSegments],
-    })
+    unique.push(normalizedEmail)
   }
 
-  return updates
+  return unique
+}
+
+function buildBillingBentoTagUpdates(
+  emails: Array<string | null | undefined>,
+  segments: BentoSegmentUpdate,
+): BentoSubscriberTagUpdate[] {
+  return uniqueBillingEmails(emails).map(email => ({
+    email,
+    segments: [...segments.segments],
+    deleteSegments: [...segments.deleteSegments],
+  }))
 }
 
 function getPaidAtUpdate(
@@ -297,20 +312,36 @@ async function lookupOrgCreatorEmail(
   }
 }
 
-async function getStripeCustomerBillingEmail(c: Context, customerId: string): Promise<string | null> {
+async function retrieveStripeCustomerBillingEmail(c: Context, customerId: string): Promise<string | null> {
   if (!customerId || !isStripeConfigured(c))
     return null
 
-  try {
-    const customer = await getStripe(c).customers.retrieve(customerId)
-    if ('deleted' in customer && customer.deleted)
-      return null
+  const customer = await getStripe(c).customers.retrieve(customerId)
+  if ('deleted' in customer && customer.deleted)
+    return null
 
-    return normalizeBillingEmail(customer.email)
+  return normalizeBillingEmail(customer.email)
+}
+
+async function getStripeCustomerBillingEmail(c: Context, customerId: string): Promise<string | null> {
+  try {
+    return await retrieveStripeCustomerBillingEmail(c, customerId)
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'getStripeCustomerBillingEmail error', customerId, error })
     return null
+  }
+}
+
+async function requireLiveStripeCustomerBillingEmail(c: Context, customerId: string): Promise<string | null> {
+  try {
+    return await retrieveStripeCustomerBillingEmail(c, customerId)
+  }
+  catch (error) {
+    return quickError(500, 'stripe_customer_email_lookup_failed', 'Failed to read live Stripe customer email', {
+      customerId,
+      error,
+    })
   }
 }
 
@@ -320,8 +351,8 @@ async function getBillingBentoEmails(c: Context, org: Org, customerId: string) {
 
   try {
     const drizzleClient = getDrizzleClient(pgClient)
-    const { emails: billingMemberEmails } = await getOrgAdminMemberEmailsForTags(c, org.id, drizzleClient, 'billing')
-    emails.push(...billingMemberEmails)
+    const { emails: memberEmails } = await getOrgAdminMemberEmailsForTags(c, org.id, drizzleClient, 'billing')
+    emails.push(...memberEmails)
 
     const creatorEmail = await lookupOrgCreatorEmail(c, drizzleClient, org)
     emails.push(creatorEmail)
@@ -357,7 +388,8 @@ async function syncBillingBentoTags(
   if (!isBentoConfigured(c))
     return
 
-  const updates = buildBillingBentoTagUpdates(await getBillingBentoEmails(c, org, customerId), segment)
+  const billingEmails = await getBillingBentoEmails(c, org, customerId)
+  const updates = buildBillingBentoTagUpdates(billingEmails, segment)
   if (updates.length === 0)
     return
 
@@ -372,7 +404,40 @@ async function syncBillingBentoTags(
   })
 }
 
-async function syncBillingBentoTagsFromStoredStripeInfo(c: Context, org: Org, customerId: string) {
+async function trackBillingBentoEvent(
+  c: Context,
+  org: Org,
+  customerId: string,
+  event: string,
+  data: Record<string, unknown> = {},
+) {
+  if (!isBentoConfigured(c))
+    return
+
+  const emails = uniqueBillingEmails(await getBillingBentoEmails(c, org, customerId))
+  if (emails.length === 0) {
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'trackBillingBentoEvent: no billing emails',
+      orgId: org.id,
+      customerId,
+      event,
+    })
+    return
+  }
+
+  await Promise.all(emails.map(email => trackBentoEvent(c, email, data, event)))
+  cloudlog({
+    requestId: c.get('requestId'),
+    message: 'trackBillingBentoEvent',
+    orgId: org.id,
+    customerId,
+    event,
+    recipientCount: emails.length,
+  })
+}
+
+export async function syncBillingBentoTagsFromStoredStripeInfo(c: Context, org: Org, customerId: string) {
   if (!isBentoConfigured(c))
     return
 
@@ -1227,6 +1292,50 @@ async function getOrgForCustomerId(c: Context, customerId: string): Promise<Org 
   return org ?? null
 }
 
+async function syncOrgManagementEmailFromStripeCustomer(
+  c: Context,
+  org: Org,
+  customerId: string,
+  event: Stripe.Event,
+): Promise<Org> {
+  if (!didStripeCustomerEmailChange(event))
+    return org
+
+  // Live Stripe customer is the source of truth. Do not fall back to the webhook
+  // snapshot: a failed retrieve plus a stale customer.updated would roll the email back.
+  const stripeEmail = await requireLiveStripeCustomerBillingEmail(c, customerId)
+  if (!shouldReplaceOrgManagementEmail(org.management_email, stripeEmail))
+    return org
+
+  const { data: updatedOrg, error } = await supabaseAdmin(c)
+    .from('orgs')
+    .update({ management_email: stripeEmail })
+    .eq('id', org.id)
+    .eq('customer_id', customerId)
+    .select('id')
+    .maybeSingle()
+
+  if (error || !updatedOrg) {
+    return quickError(500, 'stripe_management_email_sync_failed', 'Failed to sync org management email from Stripe', {
+      orgId: org.id,
+      customerId,
+      previousEmail: org.management_email,
+      stripeEmail,
+      error,
+    })
+  }
+
+  cloudlog({
+    requestId: c.get('requestId'),
+    message: 'Synced org management_email from Stripe customer email',
+    orgId: org.id,
+    customerId,
+    previousEmail: org.management_email,
+    stripeEmail,
+  })
+  return { ...org, management_email: stripeEmail }
+}
+
 async function getOrg(c: Context, stripeData: StripeData) {
   const org = await getOrgForCustomerId(c, stripeData.data.customer_id)
   if (!org)
@@ -1304,7 +1413,13 @@ app.post('/', middlewareStripeWebhook(), async (c) => {
     const org = await getOrgForCustomerId(c, stripeData.data.customer_id)
     if (org) {
       await ensureCustomerMetadata(c, stripeData.data.customer_id, org.id, org.created_by)
-      await syncBillingBentoTagsFromStoredStripeInfo(c, org, stripeData.data.customer_id)
+      const billingOrg = await syncOrgManagementEmailFromStripeCustomer(
+        c,
+        org,
+        stripeData.data.customer_id,
+        stripeEvent,
+      )
+      await syncBillingBentoTagsFromStoredStripeInfo(c, billingOrg, stripeData.data.customer_id)
     }
     return c.json(BRES)
   }
@@ -1338,6 +1453,12 @@ app.post('/', middlewareStripeWebhook(), async (c) => {
   else if (stripeEvent.type === 'invoice.upcoming') {
     return invoiceUpcoming(c, org, stripeEvent, stripeData)
   }
+  else if (stripeEvent.type === 'charge.succeeded') {
+    // Canonical dunning exit. Do not also emit this from subscription.updated:
+    // Stripe sends both, and a plan change is not proof of payment recovery.
+    await trackBillingBentoEvent(c, org, stripeData.data.customer_id, BENTO_CHARGE_SUCCEEDED_EVENT)
+    return c.json(BRES)
+  }
 
   if (isSubscriptionUpdateStatus(stripeData.data.status) && stripeData.data.price_id && stripeData.data.product_id) {
     const originalStatus = stripeData.data.status
@@ -1352,7 +1473,7 @@ app.post('/', middlewareStripeWebhook(), async (c) => {
       cloudlog({ requestId: c.get('requestId'), message: 'Skipping failed payment email because org has active usage credits', orgId: org.id })
     }
     else {
-      await trackBentoEvent(c, org.management_email, {}, 'org:failed_payment')
+      await trackBillingBentoEvent(c, org, stripeData.data.customer_id, 'org:failed_payment')
     }
     // Update the database with failed status
     await updateStripeInfo(c, stripeData)
@@ -1430,7 +1551,9 @@ app.post('/', middlewareStripeWebhook(), async (c) => {
 })
 
 export const stripeEventTestUtils = {
+  BENTO_CHARGE_SUCCEEDED_EVENT,
   buildBillingBentoTagUpdates,
+  uniqueBillingEmails,
   buildSubscriptionEventMetadata,
   classifyRevenueMovement,
   getEventDateId,
@@ -1442,5 +1565,7 @@ export const stripeEventTestUtils = {
   getSubscriptionTrackingState,
   isStaleStripeEvent,
   isCustomerProfileEvent,
+  didStripeCustomerEmailChange,
+  shouldReplaceOrgManagementEmail,
   shouldTrackOrganizationUpgrade,
 }
