@@ -125,7 +125,7 @@ afterEach(async () => {
 
   // Reset app-level manifest_bundle_count
   await supabase.from('apps').update({ manifest_bundle_count: 0 }).eq('app_id', APPNAME)
-  await supabase.from('channels').update({ update_package: 'all' }).eq('app_id', APPNAME).eq('name', 'production')
+  await supabase.from('channels').update({ update_package: 'all' }).eq('app_id', APPNAME).eq('name', 'production').throwOnError()
   createdVersionIds = []
 })
 

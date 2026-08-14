@@ -1,12 +1,20 @@
 import { randomUUID } from 'node:crypto'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { BASE_URL, headers, resetAndSeedAppData, resetAppData, resetAppDataStats } from './test-utils.ts'
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { BASE_URL, getSupabaseClient, headers, resetAndSeedAppData, resetAppData, resetAppDataStats } from './test-utils.ts'
 
 const id = randomUUID()
 const APPNAME = `com.app.c.${id}`
 
 beforeAll(async () => {
   await resetAndSeedAppData(APPNAME)
+})
+afterEach(async () => {
+  await getSupabaseClient()
+    .from('channels')
+    .update({ update_package: 'all' })
+    .eq('app_id', APPNAME)
+    .eq('name', 'production')
+    .throwOnError()
 })
 afterAll(async () => {
   await resetAppData(APPNAME)

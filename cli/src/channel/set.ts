@@ -34,6 +34,7 @@ function displayCompatibilityTable(packages: Compatibility[]) {
 export type { OptionsSetChannel } from '../schemas/channel'
 
 const disableAutoUpdatesPossibleOptions = ['major', 'minor', 'metadata', 'patch', 'none']
+const updatePackagePossibleOptions = ['all', 'zip', 'delta', 'zip_from_builtin', 'delta_from_builtin'] as const
 
 function assertIntegerInRange(value: number, label: string, min: number, max: number) {
   if (!Number.isFinite(value) || !Number.isInteger(value) || value < min || value > max)
@@ -581,6 +582,11 @@ export async function setChannelInternal(channel: string, appId: string, options
   }
 
   if (updatePackage != null) {
+    if (!updatePackagePossibleOptions.includes(updatePackage)) {
+      if (!silent)
+        log.error(`Update package ${updatePackage} is not known. The possible values are: ${updatePackagePossibleOptions.join(', ')}.`)
+      throw new Error(`Unknown update package ${updatePackage}`)
+    }
     channelPayload.update_package = updatePackage
     if (!silent)
       log.info(`Set ${appId} channel: ${channel} update package to ${updatePackage}`)

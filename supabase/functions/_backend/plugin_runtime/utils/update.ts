@@ -572,8 +572,10 @@ export async function updateWithPG(
     channelData.channels.update_package,
     isOnBuiltinVersion(version_name, version_build),
   )
-  const serveZip = updatePackage !== 'delta'
-  const serveDelta = updatePackage !== 'zip'
+  const pluginSupportsManifest = getResponseFeatureSupport(plugin_version).manifest
+  // External URLs and old plugins cannot consume delta manifests — keep a zip.
+  const serveZip = updatePackage !== 'delta' || !pluginSupportsManifest || Boolean(version.external_url)
+  const serveDelta = updatePackage !== 'zip' && pluginSupportsManifest && !version.external_url
   // device.version = versionData ? versionData.id : version.id
 
   // App-level manifest_bundle_count gates whether we may load files later.
@@ -840,9 +842,6 @@ export async function updateWithPG(
     }
     if (serveDelta)
       manifest = getManifestUrl(c, version.id, manifestEntries, device_id)
-  }
-  else if (!serveZip) {
-    signedURL = ''
   }
   const endBundleUrl = performance.now()
   const bundleUrlMs = Math.round(endBundleUrl - startBundleUrl)

@@ -2427,7 +2427,7 @@
   "update-package-all": "Zip and delta",
   "update-package-delta": "Delta only",
   "update-package-delta-from-builtin": "Delta only from builtin",
-  "update-package-help": "Choose whether devices download a full zip, a delta of changed files, or only apply that rule when they are still on the store builtin version.",
+  "update-package-help": "Choose whether devices download a full zip, a delta of changed files, or both. Restrict zip-only or delta-only delivery to devices still on the store builtin version if needed.",
   "update-package-zip": "Zip only",
   "update-package-zip-from-builtin": "Zip only from builtin",
   "update-delivery-devices": "Devices measured",

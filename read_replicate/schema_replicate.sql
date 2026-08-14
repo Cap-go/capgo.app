@@ -3,7 +3,7 @@ BEGIN;
 DROP TABLE IF EXISTS public.channel_devices, public.manifest, public.onboarding_demo_data, public.app_versions, public.channels, public.apps, public.notifications, public.org_users, public.orgs, public.stripe_info CASCADE;
 DROP SEQUENCE IF EXISTS public.app_versions_id_seq, public.channel_devices_id_seq, public.channel_id_seq, public.manifest_id_seq, public.org_users_id_seq, public.stripe_info_id_seq CASCADE;
 DROP FUNCTION IF EXISTS public.one_month_ahead();
-DROP TYPE IF EXISTS public.manifest_entry, public.disable_update, public.stripe_status;
+DROP TYPE IF EXISTS public.channel_update_package, public.manifest_entry, public.disable_update, public.stripe_status;
 
 --
 --

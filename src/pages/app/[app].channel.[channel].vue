@@ -208,6 +208,7 @@ async function getChannel(force = false) {
           allow_device_self_set,
           disable_auto_update_under_native,
           disable_auto_update,
+          update_package,
           ios,
           android,
           electron,
@@ -1359,12 +1360,13 @@ async function copyCurlCommand() {
                       :key="option"
                       class="block px-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-600"
                     >
-                      <a
-                        class="block px-3 py-2 text-gray-900 dark:text-white"
+                      <button
+                        type="button"
+                        class="block w-full px-3 py-2 text-left text-gray-900 dark:text-white"
                         @click="onSelectUpdatePackage(option)"
                       >
                         {{ getUpdatePackageLabel(option) }}
-                      </a>
+                      </button>
                     </li>
                   </ul>
                 </details>

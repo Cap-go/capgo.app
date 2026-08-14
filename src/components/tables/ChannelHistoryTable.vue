@@ -85,6 +85,20 @@ function formatValue(field: string, value: unknown): string {
     return value ? t('yes') : t('no')
   if (field === 'version' && typeof value === 'number')
     return `#${value}`
+  if (field === 'update_package') {
+    switch (value) {
+      case 'zip':
+        return t('update-package-zip')
+      case 'delta':
+        return t('update-package-delta')
+      case 'zip_from_builtin':
+        return t('update-package-zip-from-builtin')
+      case 'delta_from_builtin':
+        return t('update-package-delta-from-builtin')
+      default:
+        return t('update-package-all')
+    }
+  }
   return String(value)
 }
 
