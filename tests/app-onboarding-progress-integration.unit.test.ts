@@ -97,6 +97,8 @@ describe('app onboarding progress analytics integration', () => {
     expect(onboardingSource).toContain('progressTracker?.trackDashboardExplored(createdApp.value?.app_id)')
     expect(onboardingSource).toContain('window.addEventListener(ONBOARDING_DASHBOARD_EXPLORED_EVENT, trackDashboardExplored)')
     expect(onboardingSource).toContain('window.removeEventListener(ONBOARDING_DASHBOARD_EXPLORED_EVENT, trackDashboardExplored)')
+    expect(onboardingSource).toContain('pendingDashboardExplored = true')
+    expect(onboardingSource).toContain('if (pendingDashboardExplored)')
 
     const confirmedSidebarExit = sidebarSource.slice(sidebarSource.indexOf('if (requiresOnboardingExplorationConfirmation)'), sidebarSource.indexOf('if (tab.onClick)'))
     expect(confirmedSidebarExit.indexOf("lastButtonRole !== 'primary'")).toBeLessThan(confirmedSidebarExit.indexOf('window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))'))

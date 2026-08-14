@@ -286,6 +286,7 @@ const setupTitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onb
 const setupSubtitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onboarding-setup-builder-subtitle') : t('unified-onboarding-setup-ota-subtitle'))
 
 let progressTracker: ReturnType<typeof createOnboardingProgressTracker> | null = null
+let pendingDashboardExplored = false
 
 function trackV2DetailsEvent(name: OnboardingDetailsEvent, details: OnboardingDetailsEventProperties = {}) {
   if (props.preOrg)
@@ -306,6 +307,8 @@ function initializeProgressTracking(resumed: boolean) {
     supaHost: config.supaHost,
   })
   progressTracker.viewStep(flowStep.value)
+  if (pendingDashboardExplored)
+    trackDashboardExplored()
 }
 
 function completeAndViewStep(nextStep: OnboardingFlowStep, completionProperties: OnboardingStepCompletionProperties = {}) {
@@ -1130,6 +1133,11 @@ function openDashboard() {
 }
 
 function trackDashboardExplored() {
+  if (!progressTracker) {
+    pendingDashboardExplored = true
+    return
+  }
+  pendingDashboardExplored = false
   progressTracker?.trackDashboardExplored(createdApp.value?.app_id)
 }
 
