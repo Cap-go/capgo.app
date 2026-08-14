@@ -538,6 +538,7 @@ async function uploadLogoBlob(blob: Blob, filename?: string) {
     step.value = 'invite'
     toast.success(t('organization-onboarding-logo-saved'))
     await syncRouteQuery('invite', orgId)
+      .catch(error => console.error('Failed to sync onboarding route after logo upload', error))
     return true
   }
   catch (error) {
