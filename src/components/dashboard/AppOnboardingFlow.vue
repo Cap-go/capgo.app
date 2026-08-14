@@ -1013,6 +1013,7 @@ async function seedDemoData() {
       throw error
     }
 
+    window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))
     allowOnboardingDashboardExploration(onboardingUserId.value, createdApp.value.app_id)
     dashboardAppsStore.upsertApp({
       app_id: createdApp.value.app_id,
