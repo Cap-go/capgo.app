@@ -1097,7 +1097,7 @@ async function setVersionInChannel(
     if (dbError3) {
       await uploadFailIfChannelError(dbError3, () => `Cannot set channel because this API key does not have the required RBAC permission. ${formatError(dbError3)}`)
     }
-    const bundleUrl = `${localConfig.hostWeb}/app/${appid}/channel/${data.id}`
+    const bundleUrl = `${localConfig.hostWeb}/app/${appid}/channel/${data?.id}`
     if (data?.public)
       log.info('Your update is now available in your public channel 🎉')
     else if (data?.id)
