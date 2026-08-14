@@ -3905,6 +3905,14 @@ export type Database = {
       }
       channel_read_denied_channel_ids: { Args: never; Returns: number[] }
       channel_readable_channel_ids: { Args: never; Returns: number[] }
+      channel_update_package_mismatch: {
+        Args: {
+          p_channel_name: string
+          p_update_package: Database["public"]["Enums"]["channel_update_package"]
+          p_version_id: number
+        }
+        Returns: string
+      }
       check_apikey_hashed_key_enforcement: {
         Args: { apikey_row: Database["public"]["Tables"]["apikeys"]["Row"] }
         Returns: boolean

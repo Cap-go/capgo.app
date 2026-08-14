@@ -19525,7 +19525,8 @@ CREATE TABLE IF NOT EXISTS "public"."global_stats" (
     "notifications_failed_day" bigint DEFAULT 0 NOT NULL,
     "notifications_sent_last_month" bigint DEFAULT 0 NOT NULL,
     "notifications_opened_last_month" bigint DEFAULT 0 NOT NULL,
-    "apps_with_preview" bigint DEFAULT 0 NOT NULL
+    "apps_with_preview" bigint DEFAULT 0 NOT NULL,
+    "plan_credits" integer DEFAULT 0 NOT NULL
 );
 
 
@@ -19841,6 +19842,10 @@ COMMENT ON COLUMN "public"."global_stats"."notifications_opened_last_month" IS '
 
 
 COMMENT ON COLUMN "public"."global_stats"."apps_with_preview" IS 'Number of apps with preview QR enabled (allow_preview = true) at snapshot day end.';
+
+
+
+COMMENT ON COLUMN "public"."global_stats"."plan_credits" IS 'Orgs with remaining unexpired usage credits and no active Stripe plan or trial at snapshot day end.';
 
 
 
