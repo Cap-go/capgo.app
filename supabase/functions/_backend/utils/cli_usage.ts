@@ -17,14 +17,23 @@ export interface CliUsageEvent {
   api_version: string
 }
 
+export interface AdminCliUsageUser {
+  email: string
+  count: number
+}
+
 export interface AdminCliUsageStats {
   total: number
   by_version: Record<string, number>
   by_command: Record<string, number>
   by_api_version: Record<string, number>
   by_day: Array<{ date: string, count: number }>
-  top_apikeys: Array<{ apikey_id: string, count: number }>
+  top_users: AdminCliUsageUser[]
 }
+
+const TOP_USERS_LIMIT = 20
+const TOP_APIKEY_LOOKUP_LIMIT = 100
+const APIKEY_RBAC_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 function emptyAdminCliUsageStats(): AdminCliUsageStats {
   return {
@@ -33,8 +42,61 @@ function emptyAdminCliUsageStats(): AdminCliUsageStats {
     by_command: {},
     by_api_version: {},
     by_day: [],
-    top_apikeys: [],
+    top_users: [],
   }
+}
+
+export function aggregateTopUsersByEmail(
+  rows: Array<{ email: string, count: number }>,
+  limit = TOP_USERS_LIMIT,
+): AdminCliUsageUser[] {
+  const totals = new Map<string, number>()
+  for (const row of rows) {
+    const email = row.email.trim() || 'unknown'
+    totals.set(email, (totals.get(email) || 0) + (Number(row.count) || 0))
+  }
+  return [...totals.entries()]
+    .map(([email, count]) => ({ email, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, limit)
+}
+
+function validApikeyIds(ids: string[]): string[] {
+  const unique = new Set<string>()
+  for (const id of ids) {
+    if (APIKEY_RBAC_ID_RE.test(id))
+      unique.add(id)
+  }
+  return [...unique]
+}
+
+async function resolveApikeyEmails(c: Context, apikeyIds: string[]): Promise<Map<string, string>> {
+  const emails = new Map<string, string>()
+  const ids = validApikeyIds(apikeyIds)
+  if (ids.length === 0)
+    return emails
+
+  const pgClient = getPgClient(c, true)
+  try {
+    const result = await pgClient.query<{ rbac_id: string, email: string }>(
+      `SELECT a.rbac_id::text AS rbac_id, u.email
+       FROM public.apikeys a
+       JOIN public.users u ON u.id = a.user_id
+       WHERE a.rbac_id = ANY($1::uuid[])`,
+      [ids],
+    )
+    for (const row of result.rows) {
+      if (row.rbac_id && row.email)
+        emails.set(row.rbac_id, row.email)
+    }
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'resolveApikeyEmails failed', error: serializeError(error) })
+  }
+  finally {
+    await closeClient(c, pgClient)
+  }
+  return emails
 }
 
 function usesAnalyticsEngine(c: Context): boolean {
@@ -152,8 +214,10 @@ async function getAdminCliUsageFromAE(
     runQueryToCFA<{ key: string, count: number }>(c, `SELECT blob2 AS key, count() AS count FROM cli_usage WHERE ${timeFilter} GROUP BY key ORDER BY count DESC LIMIT 50`),
     runQueryToCFA<{ key: string, count: number }>(c, `SELECT blob8 AS key, count() AS count FROM cli_usage WHERE ${timeFilter} GROUP BY key ORDER BY count DESC LIMIT 50`),
     runQueryToCFA<{ date: string, count: number }>(c, `SELECT formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d') AS date, count() AS count FROM cli_usage WHERE ${timeFilter} GROUP BY date ORDER BY date ASC`),
-    runQueryToCFA<{ apikey_id: string, count: number }>(c, `SELECT index1 AS apikey_id, count() AS count FROM cli_usage WHERE ${timeFilter} AND index1 != 'anonymous' GROUP BY apikey_id ORDER BY count DESC LIMIT 20`),
+    runQueryToCFA<{ apikey_id: string, count: number }>(c, `SELECT index1 AS apikey_id, count() AS count FROM cli_usage WHERE ${timeFilter} AND index1 != 'anonymous' GROUP BY apikey_id ORDER BY count DESC LIMIT ${TOP_APIKEY_LOOKUP_LIMIT}`),
   ])
+
+  const emails = await resolveApikeyEmails(c, apikeyRows.map(row => row.apikey_id))
 
   return {
     total: Number(totalRows[0]?.total) || 0,
@@ -161,10 +225,10 @@ async function getAdminCliUsageFromAE(
     by_command: rowsToRecord(commandRows),
     by_api_version: rowsToRecord(apiVersionRows),
     by_day: dayRows.map(row => ({ date: row.date, count: Number(row.count) || 0 })),
-    top_apikeys: apikeyRows.map(row => ({
-      apikey_id: row.apikey_id || 'unknown',
+    top_users: aggregateTopUsersByEmail(apikeyRows.map(row => ({
+      email: emails.get(row.apikey_id) || 'unknown',
       count: Number(row.count) || 0,
-    })),
+    }))),
   }
 }
 
@@ -175,7 +239,7 @@ async function getAdminCliUsageFromPostgres(
 ): Promise<AdminCliUsageStats> {
   const pgClient = getPgClient(c, true)
   try {
-    const [totalRes, versionRes, commandRes, apiVersionRes, dayRes, apikeyRes] = await Promise.all([
+    const [totalRes, versionRes, commandRes, apiVersionRes, dayRes, userRes] = await Promise.all([
       pgClient.query<{ total: string }>(
         `SELECT count(*)::bigint AS total FROM public.cli_usage
          WHERE created_at >= $1::timestamptz AND created_at < $2::timestamptz`,
@@ -210,11 +274,13 @@ async function getAdminCliUsageFromPostgres(
          GROUP BY 1 ORDER BY 1 ASC`,
         [start_date, end_date],
       ),
-      pgClient.query<{ apikey_id: string, count: string }>(
-        `SELECT apikey_id::text AS apikey_id, count(*)::bigint AS count
-         FROM public.cli_usage
-         WHERE created_at >= $1::timestamptz AND created_at < $2::timestamptz
-           AND apikey_id IS NOT NULL
+      pgClient.query<{ email: string, count: string }>(
+        `SELECT coalesce(u.email, 'unknown') AS email, count(*)::bigint AS count
+         FROM public.cli_usage cu
+         LEFT JOIN public.apikeys a ON a.rbac_id = cu.apikey_id
+         LEFT JOIN public.users u ON u.id = a.user_id
+         WHERE cu.created_at >= $1::timestamptz AND cu.created_at < $2::timestamptz
+           AND cu.apikey_id IS NOT NULL
          GROUP BY 1 ORDER BY count DESC LIMIT 20`,
         [start_date, end_date],
       ),
@@ -226,8 +292,8 @@ async function getAdminCliUsageFromPostgres(
       by_command: rowsToRecord(commandRes.rows.map(r => ({ key: r.key, count: Number(r.count) }))),
       by_api_version: rowsToRecord(apiVersionRes.rows.map(r => ({ key: r.key, count: Number(r.count) }))),
       by_day: dayRes.rows.map(row => ({ date: row.date, count: Number(row.count) || 0 })),
-      top_apikeys: apikeyRes.rows.map(row => ({
-        apikey_id: row.apikey_id || 'unknown',
+      top_users: userRes.rows.map(row => ({
+        email: row.email || 'unknown',
         count: Number(row.count) || 0,
       })),
     }
