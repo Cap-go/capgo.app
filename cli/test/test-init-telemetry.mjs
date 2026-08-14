@@ -10,7 +10,7 @@ const saved = { journey_id: 'ij_saved', last_run_id: 'ir_previous' }
 function create(options = {}) {
   const events = []
   const telemetry = createInitTelemetry({
-    capture: async (event, properties, icon) => events.push({ event, properties, icon }),
+    capture: async (event, properties, icon, appId) => events.push({ event, properties, icon, appId }),
     replaySessionId: () => 'init-replay',
     ...options,
   })
@@ -126,6 +126,25 @@ function assertBefore(source, first, second, message) {
   const { events, telemetry } = create()
   await telemetry.recordMilestone('canceled', undefined, '🤷')
   assert.equal(events[0].icon, '🤷', 'milestones preserve their icon through injected capture')
+}
+
+{
+  const { events, telemetry } = create()
+  telemetry.setScope('scoped-app')
+  telemetry.setScope()
+  await telemetry.recordMilestone('app-less-milestone')
+  await telemetry.recordRunEnded('cancelled', 0)
+  assert.deepEqual(events.map(event => event.appId), ['scoped-app', 'scoped-app'], 'omitted scope retains the app for milestones and lifecycle events')
+}
+
+{
+  const icons = []
+  for (const [outcome, code] of [['completed', 0], ['cancelled', 0], ['failed', 1]]) {
+    const { events, telemetry } = create()
+    await telemetry.recordRunEnded(outcome, code)
+    icons.push(events[0].icon)
+  }
+  assert.deepEqual(icons, ['✅', '🤷', '❌'], 'run endings use their outcome icon')
 }
 
 {

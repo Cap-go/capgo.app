@@ -10,7 +10,7 @@ export interface InitProgressTelemetry {
 }
 
 export interface InitTelemetryOptions {
-  capture?: (event: string, properties: TelemetryProperties, icon: string) => Promise<void> | void
+  capture?: (event: string, properties: TelemetryProperties, icon: string, appId?: string) => Promise<void> | void
   enabled?: boolean
   replaySessionId?: () => string | undefined
 }
@@ -72,7 +72,7 @@ export function createInitTelemetry(options: InitTelemetryOptions = {}) {
     try {
       const eventProperties = properties(extra)
       if (options.capture)
-        await options.capture(event, eventProperties, icon)
+        await options.capture(event, eventProperties, icon, appId)
       else if (auth) {
         const { apikey, orgId } = auth
         await import('../app/debug').then(({ markSnag }) => markSnag('onboarding-v2', orgId, apikey, event, appId, icon, eventProperties))
@@ -124,13 +124,13 @@ export function createInitTelemetry(options: InitTelemetryOptions = {}) {
       }, true)
     },
     recordResumePromptViewed: () => candidate ? emit('onboarding-resume-prompt-viewed', { ...resumeProperties(), ...(candidate.totalSteps === undefined ? {} : { total_steps: candidate.totalSteps }) }, true) : Promise.resolve(),
-    recordRunEnded: (outcome: 'completed' | 'cancelled' | 'failed', exitCode: number) => emit('onboarding-run-ended', { outcome, exit_code: exitCode }, true),
+    recordRunEnded: (outcome: 'completed' | 'cancelled' | 'failed', exitCode: number) => emit('onboarding-run-ended', { outcome, exit_code: exitCode }, true, outcome === 'completed' ? '✅' : outcome === 'cancelled' ? '🤷' : '❌'),
     recordRunStarted: () => emit('onboarding-run-started', {
       resume_available: Boolean(candidate),
       ...resumeProperties(),
       ...(candidate?.totalSteps === undefined ? {} : { total_steps: candidate.totalSteps }),
     }, true),
     setAuth: (orgId: string, apikey: string) => { auth = { apikey, orgId } },
-    setScope: (nextAppId?: string) => { appId = nextAppId },
+    setScope: (nextAppId?: string) => { if (nextAppId !== undefined) appId = nextAppId },
   }
 }
