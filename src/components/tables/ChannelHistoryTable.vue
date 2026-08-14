@@ -4,6 +4,7 @@ import type { TableColumn, TableSort } from '~/components/comp_def'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
+import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageError'
 import { formatDate } from '~/services/date'
 import { checkPermissions } from '~/services/permissions'
 import { useSupabase } from '~/services/supabase'
@@ -400,7 +401,7 @@ async function handleRollback(item: HistoryEntry) {
 
             if (error) {
               console.error('Error rolling back version:', error)
-              toast.error(t('error-rollback'))
+              toast.error(t(channelUpdatePackageErrorKey(error) ?? 'error-rollback'))
               return
             }
 
@@ -410,7 +411,7 @@ async function handleRollback(item: HistoryEntry) {
           }
           catch (error) {
             console.error('Error rolling back version:', error)
-            toast.error(t('error-rollback'))
+            toast.error(t(channelUpdatePackageErrorKey(error) ?? 'error-rollback'))
           }
         },
       },

@@ -25,7 +25,7 @@ import { showReplicationProgress } from '../replicationProgress'
 import { CliUserError } from '../shared/cli-user-error'
 import { formatTable } from '../terminal-table'
 import { usesAlwaysDirectUpdate } from '../updaterConfig'
-import { baseKeyV2, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, canPromptInteractively, checkCompatibilityCloud, checkPlanValidUpload, checkRemoteCliMessages, createSupabaseClient, deletedFailedVersion, deltaManifestTooLargeMessage, findRoot, findSavedKey, formatError, getAppId, getBundleVersion, getCompatibilityDetails, getConfig, getInstalledVersion, getLocalConfig, getLocalDependencies, getOrganizationId, getPMAndCommand, getRemoteChecksums, getRemoteFileConfig, hasCliPermission, invokeCapgoCliApi, isCompatible, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, regexSemver, resolveUserIdFromApiKey, sendEvent, setVersionManifest, updateConfigUpdater, updateOrCreateChannel, updateOrCreateVersion, UPLOAD_TIMEOUT, UPLOAD_TIMEOUT_ERROR_NAME, uploadTimeoutMessage, uploadTUS, uploadUrl, zipFile } from '../utils'
+import { baseKeyV2, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, canPromptInteractively, channelUpdatePackageCliError, checkCompatibilityCloud, checkPlanValidUpload, checkRemoteCliMessages, createSupabaseClient, deletedFailedVersion, deltaManifestTooLargeMessage, findRoot, findSavedKey, formatError, getAppId, getBundleVersion, getCompatibilityDetails, getConfig, getInstalledVersion, getLocalConfig, getLocalDependencies, getOrganizationId, getPMAndCommand, getRemoteChecksums, getRemoteFileConfig, hasCliPermission, invokeCapgoCliApi, isCompatible, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, regexSemver, resolveUserIdFromApiKey, sendEvent, setVersionManifest, updateConfigUpdater, updateOrCreateChannel, updateOrCreateVersion, UPLOAD_TIMEOUT, UPLOAD_TIMEOUT_ERROR_NAME, uploadTimeoutMessage, uploadTUS, uploadUrl, zipFile } from '../utils'
 import type { AutoBumpLevel } from '../versionHelpers'
 import { autoBumpVersionBy, getVersionSuggestions, interactiveVersionBump, normalizeAutoBumpInput } from '../versionHelpers'
 import { resolveAutoBumpLevelFromAi } from './auto-bump-ai'
@@ -1025,8 +1025,12 @@ async function promoteExistingChannel(
     supaAnon: options?.supaAnon,
   })
 
-  if (error)
+  if (error) {
+    const packageError = await channelUpdatePackageCliError(error)
+    if (packageError)
+      uploadFail(packageError)
     uploadFail(`Cannot set channel because this API key does not have the required RBAC permission. ${await formatFunctionInvokeError(error)}`)
+  }
 
   const bundleUrl = `${localConfig.hostWeb}/app/${appid}/channel/${targetChannel.id}`
   if (targetChannel.public)
@@ -1088,8 +1092,12 @@ async function setVersionInChannel(
       owner_org: orgId,
       ...(selfAssign ? { allow_device_self_set: true } : {}),
     })
-    if (dbError3)
+    if (dbError3) {
+      const packageError = await channelUpdatePackageCliError(dbError3)
+      if (packageError)
+        uploadFail(packageError)
       uploadFail(`Cannot set channel because this API key does not have the required RBAC permission. ${formatError(dbError3)}`)
+    }
     const bundleUrl = `${localConfig.hostWeb}/app/${appid}/channel/${data.id}`
     if (data?.public)
       log.info('Your update is now available in your public channel 🎉')
@@ -1117,6 +1125,9 @@ async function setVersionInChannel(
       supaAnon: cliHost?.supaAnon,
     })
     if (error) {
+      const packageError = await channelUpdatePackageCliError(error)
+      if (packageError)
+        uploadFail(packageError)
       uploadFail(`Cannot create channel and set its bundle because this API key does not have the required RBAC permission. ${await formatFunctionInvokeError(error)}`)
     }
 
@@ -1204,8 +1215,12 @@ async function setRolloutVersionInChannel(
     supaAnon: cliHost?.supaAnon,
   })
 
-  if (rolloutError)
+  if (rolloutError) {
+    const packageError = await channelUpdatePackageCliError(rolloutError)
+    if (packageError)
+      uploadFail(packageError)
     uploadFail(`Cannot set rollout in channel ${await formatFunctionInvokeError(rolloutError)}`)
+  }
 
   const bundleUrl = `${localConfig.hostWeb}/app/${appid}/channel/${targetChannel.id}`
   log.info(`Set ${appid} channel ${channel} rollout target to @${bundle} (${formatRolloutPercentage(rolloutPercentageBps)})`)

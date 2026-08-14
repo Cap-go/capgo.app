@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { createClient } from '@supabase/supabase-js'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createTestSDK } from './cli-sdk-utils'
-import { BASE_URL, createDirectApiKeyWithBindings, createIsolatedSeedAppOptions, getSupabaseClient, resetAndSeedAppData, resetAppData, SUPABASE_ANON_KEY, SUPABASE_BASE_URL, USER_ID } from './test-utils'
+import { BASE_URL, createAppVersions, createDirectApiKeyWithBindings, createIsolatedSeedAppOptions, getSupabaseClient, resetAndSeedAppData, resetAppData, SUPABASE_ANON_KEY, SUPABASE_BASE_URL, USER_ID } from './test-utils'
 
 const seedOptions = createIsolatedSeedAppOptions()
 
@@ -597,6 +597,24 @@ describe('tests CLI channel commands', () => {
     const testChannelName = generateChannelName()
     await createChannel(testChannelName, APPNAME)
 
+    const { data: channel } = await getSupabaseClient()
+      .from('channels')
+      .select('version')
+      .eq('name', testChannelName)
+      .eq('app_id', APPNAME)
+      .single()
+      .throwOnError()
+    await getSupabaseClient()
+      .from('manifest')
+      .insert({
+        app_version_id: channel.version!,
+        file_name: `cli-delta-${testChannelName}.js`,
+        s3_path: `/cli-delta-${testChannelName}.js`,
+        file_hash: 'cli-delta',
+        file_size: 8,
+      })
+      .throwOnError()
+
     const result = await createTestSDK().updateChannel({ channelId: testChannelName, appId: APPNAME, bundle: undefined, ...{ updatePackage: 'delta' } })
     expect(result.success).toBe(true)
 
@@ -609,6 +627,68 @@ describe('tests CLI channel commands', () => {
       .throwOnError()
     expect(error).toBeNull()
     expect(data?.update_package).toBe('delta')
+  })
+
+  it.concurrent('should refuse delta-only when the linked bundle has no delta files', async () => {
+    const testChannelName = generateChannelName()
+    await createChannel(testChannelName, APPNAME)
+    const zipOnly = await createAppVersions(`1.0.cli-zip-${randomUUID().slice(0, 8)}`, APPNAME, {
+      checksum: 'cli-zip-only',
+      storage_provider: 'r2',
+      r2_path: `orgs/test/apps/${APPNAME}/cli-zip-only.zip`,
+    })
+    await getSupabaseClient()
+      .from('channels')
+      .update({ version: zipOnly.id, update_package: 'all' })
+      .eq('app_id', APPNAME)
+      .eq('name', testChannelName)
+      .throwOnError()
+
+    const result = await createTestSDK().updateChannel({ channelId: testChannelName, appId: APPNAME, bundle: undefined, ...{ updatePackage: 'delta' } })
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('CHANNEL_DELTA_REQUIRED')
+    expect(result.error).toContain('no delta files')
+  })
+
+  it.concurrent('should refuse assigning a delta-only bundle to a zip-only channel', async () => {
+    const testChannelName = generateChannelName()
+    await createChannel(testChannelName, APPNAME)
+
+    const { data: zipVersion } = await getSupabaseClient()
+      .from('app_versions')
+      .select('id, name')
+      .eq('app_id', APPNAME)
+      .eq('name', '1.0.0')
+      .single()
+      .throwOnError()
+    await getSupabaseClient()
+      .from('channels')
+      .update({ version: zipVersion.id, update_package: 'zip' })
+      .eq('app_id', APPNAME)
+      .eq('name', testChannelName)
+      .throwOnError()
+
+    const deltaOnly = `1.0.cli-delta-${randomUUID().slice(0, 8)}`
+    const version = await createAppVersions(deltaOnly, APPNAME, {
+      checksum: 'cli-delta-only',
+      storage_provider: 'r2-direct',
+      r2_path: null,
+    })
+    await getSupabaseClient()
+      .from('manifest')
+      .insert({
+        app_version_id: version.id,
+        file_name: `${deltaOnly}.js`,
+        s3_path: `/${deltaOnly}.js`,
+        file_hash: 'cli-delta-only',
+        file_size: 8,
+      })
+      .throwOnError()
+
+    const result = await createTestSDK().updateChannel({ channelId: testChannelName, appId: APPNAME, bundle: deltaOnly })
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('CHANNEL_ZIP_REQUIRED')
+    expect(result.error).toContain('no zip')
   })
 
   it.concurrent('should set channel for dev environment', async () => {

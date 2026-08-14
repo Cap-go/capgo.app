@@ -352,6 +352,25 @@ describe('public channel post', () => {
     )
   })
 
+  it('maps zip package mismatches from the database', async () => {
+    supabaseAdmin.mockImplementation(() => buildAdminChain({
+      existingChannelId: 42,
+      existingChannelVersion: 123,
+      existingChannelPublic: true,
+    }))
+    updateOrCreateChannel.mockRejectedValue(new Error('CHANNEL_ZIP_REQUIRED: Channel "production" requires a zip package, but bundle "1.2.3" has no zip. Upload a full zip (omit --delta-only) or set the channel to delta only / zip and delta.'))
+    const { post } = await import('../supabase/functions/_backend/public/channel/post.ts')
+    const c = context()
+
+    await expect(post(c, {
+      app_id: 'com.test.update-package',
+      channel: 'production',
+      updatePackage: 'zip',
+    }, apiKey())).rejects.toMatchObject({
+      cause: expect.objectContaining({ error: 'channel_zip_required' }),
+    })
+  })
+
   it('preserves the stable version for a settings-only update without channel.read or bundle lookup', async () => {
     const fromCalls: string[] = []
     supabaseAdmin.mockImplementation(() => buildAdminChain({

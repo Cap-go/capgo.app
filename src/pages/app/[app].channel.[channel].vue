@@ -16,6 +16,7 @@ import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconWarning from '~icons/lucide/alert-triangle'
 import IconExternalLink from '~icons/lucide/external-link'
 import IconDown from '~icons/material-symbols/keyboard-arrow-down-rounded'
+import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageError'
 import { formatDate, formatLocalDate } from '~/services/date'
 import { checkPermissions } from '~/services/permissions'
 import { checkCompatibilityNativePackages, defaultApiHost, isCompatible, useSupabase } from '~/services/supabase'
@@ -268,7 +269,7 @@ async function saveChannelChanges(update: ChannelUpdate) {
       .update(update)
       .eq('id', id.value)
     if (error) {
-      toast.error(t('error-update-channel'))
+      toast.error(t(channelUpdatePackageErrorKey(error) ?? 'error-update-channel'))
       console.error('no channel update', error)
       return false
     }

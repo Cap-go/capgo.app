@@ -2,6 +2,7 @@ import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import { HTTPException } from 'hono/http-exception'
+import { throwIfChannelUpdatePackageMismatch } from '../../utils/channel_update_package.ts'
 import { simpleError } from '../../utils/hono.ts'
 import { closeClient, getDrizzleClient, getPgClient, logPgError } from '../../utils/pg.ts'
 import { checkPermissionPg } from '../../utils/rbac.ts'
@@ -166,6 +167,7 @@ export async function setChannel(c: Context<MiddlewareKeyVariables>, body: SetCh
     }
     if (error instanceof HTTPException)
       throw error
+    throwIfChannelUpdatePackageMismatch(error)
     logPgError(c, 'set_channel_update', error)
     throw simpleError('cannot_set_bundle_to_channel', 'Cannot set bundle to channel', { error: (error as Error)?.message })
   }

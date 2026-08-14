@@ -120,12 +120,12 @@ afterEach(async () => {
   }
 
   if (versionId) {
+    await supabase.from('channels').update({ update_package: 'all' }).eq('app_id', APPNAME).eq('name', 'production').throwOnError()
     await setProductionVersion(versionId)
   }
 
   // Reset app-level manifest_bundle_count
   await supabase.from('apps').update({ manifest_bundle_count: 0 }).eq('app_id', APPNAME)
-  await supabase.from('channels').update({ update_package: 'all' }).eq('app_id', APPNAME).eq('name', 'production').throwOnError()
   createdVersionIds = []
 })
 
@@ -264,6 +264,15 @@ describe('channel update package', () => {
   })
 
   it('delta only omits the zip url', async () => {
+    const { data: versionData } = await getSupabaseClient()
+      .from('app_versions')
+      .select('id')
+      .eq('name', '1.0.0')
+      .eq('app_id', APPNAME)
+      .single()
+    if (!versionData)
+      throw new Error('Version data not found')
+    await insertManifestEntries(versionData.id)
     await setUpdatePackage('delta')
     const json = await requestUpdate('1.1.0')
     expect(json.version).toBe('1.0.0')

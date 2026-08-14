@@ -2,6 +2,7 @@ import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import { HTTPException } from 'hono/http-exception'
+import { throwIfChannelUpdatePackageMismatch } from '../../utils/channel_update_package.ts'
 import { BRES, simpleError } from '../../utils/hono.ts'
 import { cloudlogErr } from '../../utils/logging.ts'
 import { closeClient, getDrizzleClient, getPgClient, logPgError } from '../../utils/pg.ts'
@@ -317,6 +318,7 @@ async function createAndPromoteChannelInTransaction(
     }
     if (error instanceof HTTPException)
       throw error
+    throwIfChannelUpdatePackageMismatch(error)
     logPgError(c, 'create_and_promote_channel', error)
     throw simpleError('cannot_set_bundle_to_channel', 'Cannot set bundle to channel', { error: (error as Error)?.message })
   }
@@ -506,6 +508,12 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: ChannelSet,
     return c.json({ ...BRES, ...createdChannel })
   }
 
-  await updateOrCreateChannel(c, channel, existingChannelId, body.version === undefined && !body.promoteToStable)
+  try {
+    await updateOrCreateChannel(c, channel, existingChannelId, body.version === undefined && !body.promoteToStable)
+  }
+  catch (error) {
+    throwIfChannelUpdatePackageMismatch(error)
+    throw error
+  }
   return c.json(BRES)
 }

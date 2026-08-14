@@ -8,7 +8,7 @@ import { getActiveAppVersions, getVersionData } from '../api/versions'
 import { sendUpdateNotificationsForChannels } from '../notifications/send-update'
 import { printPreviewQrForResolvedTarget, resolveChannelPreviewTarget } from '../preview/qr'
 import { formatTable } from '../terminal-table'
-import { checkCompatibilityNativePackages, checkPlanValid, createSupabaseClient, findSavedKey, getAppId, getBundleVersion, getCompatibilityDetails, getConfig, getOrganizationId, invokeCapgoCliApi, isCompatible, resolveUserIdFromApiKey, sendEvent } from '../utils'
+import { channelUpdatePackageCliError, checkCompatibilityNativePackages, checkPlanValid, createSupabaseClient, findSavedKey, getAppId, getBundleVersion, getCompatibilityDetails, getConfig, getOrganizationId, invokeCapgoCliApi, isCompatible, resolveUserIdFromApiKey, sendEvent } from '../utils'
 
 /**
  * Display a compatibility table for the given packages
@@ -605,6 +605,12 @@ export async function setChannelInternal(channel: string, appId: string, options
       supaAnon: options.supaAnon,
     })
     if (error) {
+      const packageError = await channelUpdatePackageCliError(error)
+      if (packageError) {
+        if (!silent)
+          log.error(packageError)
+        throw new Error(packageError)
+      }
       if (!silent)
         log.error('Cannot set channel because this API key does not have the required RBAC permission.')
       throw new Error('API key is not allowed to set this channel')
@@ -713,6 +719,12 @@ export async function setChannelInternal(channel: string, appId: string, options
       supaAnon: options.supaAnon,
     })
     if (dbError) {
+      const packageError = await channelUpdatePackageCliError(dbError)
+      if (packageError) {
+        if (!silent)
+          log.error(packageError)
+        throw new Error(packageError)
+      }
       if (!silent)
         log.error('Cannot set channel because this API key does not have the required RBAC permission.')
       throw new Error('API key is not allowed to set this channel')
