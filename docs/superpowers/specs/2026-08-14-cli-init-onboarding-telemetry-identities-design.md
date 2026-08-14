@@ -27,10 +27,11 @@ Progress writes nest telemetry without replacing operational fields:
 { "telemetry": { "journey_id": "ij_...", "last_run_id": "ir_..." } }
 ```
 
-Existing/legacy progress remains resumable; malformed telemetry metadata is
-ignored rather than invalidating operational progress. When analytics is opted
-out, do not emit this telemetry, add metadata, or advance `last_run_id`; retain
-any existing telemetry metadata while the progress file remains.
+Operationally valid progress without valid telemetry metadata remains resumable.
+Malformed telemetry metadata is ignored rather than invalidating operational
+progress. When analytics is opted out, do not emit this telemetry, add metadata,
+or advance `last_run_id`; retain any existing telemetry metadata while the
+progress file remains.
 
 ## Events
 
@@ -41,12 +42,12 @@ All lifecycle events and existing milestone events share:
 
 Record these lifecycle events at most once per invocation:
 
-- `onboarding-run-started` after authentication and saved-progress validation;
-- `onboarding-resume-prompt-viewed` immediately before a valid prompt is shown;
-- `onboarding-resume-decision` for `continue` or `restart`, including resume
-  metadata, the choice, and `initial_journey_id` for continue;
-- `onboarding-run-ended` with `outcome` (`completed`, `cancelled`, or `failed`)
-  and `exit_code`.
+| Event | Extra fields |
+| --- | --- |
+| `onboarding-run-started` | `resume_available`; with resume: `resume_journey_id`, optional `resumed_from_run_id`, `saved_step`, `total_steps` |
+| `onboarding-resume-prompt-viewed` | `resume_journey_id`, optional `resumed_from_run_id`, `saved_step`, `total_steps` |
+| `onboarding-resume-decision` | `choice`, `resume_journey_id`, optional `resumed_from_run_id`, `saved_step`; `continue` also sends `initial_journey_id` and switches the active journey before emission |
+| `onboarding-run-ended` | `outcome` (`completed`, `cancelled`, or `failed`), `exit_code` |
 
 Existing `onboarding-step-*`, completion, and cancellation milestones keep
 their names and success boundaries, gaining the shared identity properties.
