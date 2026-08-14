@@ -1793,18 +1793,27 @@ function buildStatsInsightsActionFilter(actions?: string[]) {
   return `AND blob2 IN (${actionList})`
 }
 
+function buildStatsInsightsVersionFilter(versionName?: string) {
+  const name = versionName?.trim()
+  if (!name)
+    return ''
+  return `AND blob3 = '${escapeSqlString(name)}'`
+}
+
 export async function readStatsInsightsCF(c: Context, params: ReadStatsInsightsParams): Promise<StatsInsightsResult> {
   const emptyResult = emptyStatsInsights()
   if (!c.env.APP_LOG)
     return emptyResult
 
   const actionFilter = buildStatsInsightsActionFilter(params.actions)
+  const versionFilter = buildStatsInsightsVersionFilter(params.version_name)
   const periodStart = formatDateCF(params.start_date)
   const periodEnd = formatDateCF(params.end_date)
   const baseWhere = `index1 = '${escapeSqlString(params.app_id)}'
     AND timestamp >= toDateTime('${periodStart}')
     AND timestamp < toDateTime('${periodEnd}')
-    ${actionFilter}`
+    ${actionFilter}
+    ${versionFilter}`
 
   const summaryQuery = `SELECT
     count() AS total,
@@ -1861,7 +1870,7 @@ export async function readStatsInsightsCF(c: Context, params: ReadStatsInsightsP
   ORDER BY total DESC
   LIMIT 30`
 
-  cloudlog({ requestId: c.get('requestId'), message: 'readStatsInsightsCF queries', appId: params.app_id, start: params.start_date, end: params.end_date, actions: params.actions })
+  cloudlog({ requestId: c.get('requestId'), message: 'readStatsInsightsCF queries', appId: params.app_id, start: params.start_date, end: params.end_date, actions: params.actions, versionName: params.version_name })
 
   try {
     const [summaryRows, actionRows, dailyRows, versionRows, deviceRows] = await Promise.all([

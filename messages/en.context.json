@@ -325,6 +325,7 @@
   "alert-unknown-error": "Used in Capgo web console areas: components/dashboard. Role: toast or status message. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "all-billing-cycles": "Used in Capgo web console areas: pages/admin/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "all-bundles": "Used in Capgo web console. Role: UI label about \"all bundles\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "all-versions": "Used in Capgo web console areas: pages/app. Role: filter option label for every bundle version. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "all-plans": "Used in Capgo web console areas: pages/admin/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "all-platforms": "Used in Capgo web console areas: components/tables. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "allow-api-key-create-organizations": "Used in Capgo web console areas: pages. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",

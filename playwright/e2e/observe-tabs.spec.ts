@@ -20,6 +20,7 @@ test.describe('Observe sections', () => {
     await expect(compatibilityTab).toBeVisible()
     await expect(pluginsTab).toBeVisible()
     await expect(updaterTab).toHaveAttribute('aria-current', 'page')
+    await expect(page.locator('[data-test="observe-updater-version-filter"]')).toBeVisible()
 
     await logsTab.click()
     await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/logs(?:\?|$)/)
