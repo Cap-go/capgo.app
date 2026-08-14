@@ -836,6 +836,7 @@ function getSchemaUpdatesAlias(includeMetadata = false) {
     allow_device: channelAlias.allow_device,
     disable_auto_update_under_native: channelAlias.disable_auto_update_under_native,
     disable_auto_update: channelAlias.disable_auto_update,
+    update_package: channelAlias.update_package,
     ios: channelAlias.ios,
     android: channelAlias.android,
     electron: channelAlias.electron,

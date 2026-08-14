@@ -981,6 +981,16 @@
       "type": "timestamp with time zone"
     },
     {
+      "default": "'all'::channel_update_package",
+      "generated": "",
+      "identity": "",
+      "name": "update_package",
+      "notNull": true,
+      "position": 38,
+      "table": "channels",
+      "type": "channel_update_package"
+    },
+    {
       "default": "nextval('manifest_id_seq'::regclass)",
       "generated": "",
       "identity": "",
@@ -2644,6 +2654,17 @@
     }
   ],
   "types": [
+    {
+      "definition": [
+        "all",
+        "zip",
+        "delta",
+        "zip_from_builtin",
+        "delta_from_builtin"
+      ],
+      "kind": "e",
+      "name": "channel_update_package"
+    },
     {
       "definition": [
         "major",

@@ -873,6 +873,7 @@ export type Database = {
           rollout_paused_at: string | null
           rollout_percentage_bps: number
           rollout_version: number | null
+          update_package: Database["public"]["Enums"]["channel_update_package"]
           updated_at: string
           version: number | null
         }
@@ -912,6 +913,7 @@ export type Database = {
           rollout_paused_at?: string | null
           rollout_percentage_bps?: number
           rollout_version?: number | null
+          update_package?: Database["public"]["Enums"]["channel_update_package"]
           updated_at?: string
           version?: number | null
         }
@@ -951,6 +953,7 @@ export type Database = {
           rollout_paused_at?: string | null
           rollout_percentage_bps?: number
           rollout_version?: number | null
+          update_package?: Database["public"]["Enums"]["channel_update_package"]
           updated_at?: string
           version?: number | null
         }
@@ -5443,6 +5446,12 @@ export type Database = {
     }
     Enums: {
       action_type: "mau" | "storage" | "bandwidth" | "build_time"
+      channel_update_package:
+        | "all"
+        | "zip"
+        | "delta"
+        | "zip_from_builtin"
+        | "delta_from_builtin"
       credit_metric_type: "mau" | "bandwidth" | "storage" | "build_time"
       credit_transaction_type:
         | "grant"
@@ -5715,6 +5724,13 @@ export const Constants = {
   public: {
     Enums: {
       action_type: ["mau", "storage", "bandwidth", "build_time"],
+      channel_update_package: [
+        "all",
+        "zip",
+        "delta",
+        "zip_from_builtin",
+        "delta_from_builtin",
+      ],
       credit_metric_type: ["mau", "bandwidth", "storage", "build_time"],
       credit_transaction_type: [
         "grant",

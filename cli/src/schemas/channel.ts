@@ -61,6 +61,7 @@ export const optionsSetChannelSchema = optionsBaseSchema.extend({
   android: z.boolean().optional(),
   selfAssign: z.boolean().optional(),
   disableAutoUpdate: z.string().optional(),
+  updatePackage: z.enum(['all', 'zip', 'delta', 'zip_from_builtin', 'delta_from_builtin']).optional(),
   dev: z.boolean().optional(),
   emulator: z.boolean().optional(),
   device: z.boolean().optional(),
