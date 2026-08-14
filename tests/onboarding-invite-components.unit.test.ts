@@ -4,6 +4,8 @@ import { describe, expect, it } from 'vitest'
 const modalSource = readFileSync(new URL('../src/components/dashboard/InviteTeammateModal.vue', import.meta.url), 'utf8')
 const organizationPageSource = readFileSync(new URL('../src/pages/onboarding/organization.vue', import.meta.url), 'utf8')
 const organizationInviteSource = readFileSync(new URL('../src/components/dashboard/OrganizationOnboardingInvite.vue', import.meta.url), 'utf8')
+const stepsAppSource = readFileSync(new URL('../src/components/dashboard/StepsApp.vue', import.meta.url), 'utf8')
+const technicalInviteSource = readFileSync(new URL('../src/components/dashboard/TechnicalTeammateInviteCard.vue', import.meta.url), 'utf8')
 
 describe('onboarding invite analytics context', () => {
   it.concurrent('keeps v2 defaults while allowing v3 callers', () => {
@@ -15,6 +17,18 @@ describe('onboarding invite analytics context', () => {
     expect(modalSource).toContain('tracking_version: props.trackingVersion')
     expect(modalSource).toContain("existingUserInviteRole = 'org_admin'")
     expect(modalSource).toContain("newUserInviteRole = 'org_admin'")
+  })
+})
+
+describe('shared technical teammate invitation', () => {
+  it.concurrent('reuses one card and preserves the technical modal', () => {
+    expect(stepsAppSource).toContain("import TechnicalTeammateInviteCard from '~/components/dashboard/TechnicalTeammateInviteCard.vue'")
+    expect(stepsAppSource).toContain('<TechnicalTeammateInviteCard')
+    expect(stepsAppSource).toContain('@opened="onTechnicalInviteOpened"')
+    expect(stepsAppSource).not.toContain('<!-- Invite Teammate Option -->')
+    expect(technicalInviteSource).toContain('data-test="onboarding-technical-invite"')
+    expect(technicalInviteSource).toContain('invite-kind="technical"')
+    expect(technicalInviteSource).toContain("emit('success', invite)")
   })
 })
 
