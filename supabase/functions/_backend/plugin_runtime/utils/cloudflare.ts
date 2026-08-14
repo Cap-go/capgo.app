@@ -1875,8 +1875,8 @@ export async function getUpdateStatsCF(c: Context): Promise<UpdateStats> {
     const apps = result
       .filter(app => app.get > 0)
       .map((app) => {
-        const totalEvents = app.set + app.get
-        const successRate = Number(Number(totalEvents > 0 ? (app.get / totalEvents) * 100 : 100).toFixed(2))
+        const totalOutcomes = app.set + app.failed
+        const successRate = Number(Number(totalOutcomes > 0 ? (app.set / totalOutcomes) * 100 : 100).toFixed(2))
         return {
           ...app,
           success_rate: successRate,
@@ -1891,8 +1891,8 @@ export async function getUpdateStatsCF(c: Context): Promise<UpdateStats> {
       return acc
     }, { failed: 0, set: 0, get: 0 })
 
-    const totalEvents = total.set + total.get
-    const totalSuccessRate = totalEvents > 0 ? (total.get / totalEvents) * 100 : 100
+    const totalOutcomes = total.set + total.failed
+    const totalSuccessRate = totalOutcomes > 0 ? (total.set / totalOutcomes) * 100 : 100
 
     return {
       apps,
@@ -1919,6 +1919,10 @@ export async function getUpdateStatsCF(c: Context): Promise<UpdateStats> {
 }
 
 // Note: Device cleanup is no longer needed as Analytics Engine handles data retention automatically
+
+
+// Shared failure taxonomy for device-day success rates (admin + public /data).
+const PUBLIC_FAILURE_ACTIONS = ['set_fail', 'update_fail', 'download_fail', 'windows_path_fail', 'canonical_path_fail', 'directory_path_fail', 'unzip_fail', 'low_mem_fail', 'download_manifest_file_fail', 'download_manifest_checksum_fail', 'download_manifest_brotli_fail', 'finish_download_fail', 'manifest_path_fail', 'decrypt_fail', 'insufficient_disk_space', 'cannotGetBundle', 'checksum_fail', 'blocked_by_server_url', 'backend_refusal'] as const
 
 // ============================================================================
 // ADMIN ANALYTICS FUNCTIONS
@@ -2122,8 +2126,8 @@ export async function getAdminFailureMetrics(
 }
 
 /**
- * Get platform success rate for admin dashboard
- * Returns overall install vs fail statistics
+ * Get platform success rate for admin dashboard.
+ * Device-day outcomes from app_log (same formula as public /data).
  */
 export async function getAdminSuccessRate(
   c: Context,
@@ -2131,18 +2135,15 @@ export async function getAdminSuccessRate(
   end_date: string,
   app_id?: string,
 ): Promise<AdminSuccessRate | null> {
-  if (!c.env.VERSION_USAGE)
+  if (!c.env.APP_LOG)
     return null
 
-  const appFilter = app_id ? `AND blob1 = '${escapeSqlString(app_id)}'` : ''
-
-  const query = `SELECT
-    sum(if(blob3 = 'install', 1, 0)) AS installs,
-    sum(if(blob3 = 'fail', 1, 0)) AS fails
-  FROM version_usage
-  WHERE timestamp >= toDateTime('${formatDateCF(start_date)}')
-    AND timestamp < toDateTime('${formatDateCF(end_date)}')
-    ${appFilter}`
+  const appFilter = app_id ? `AND index1 = '${escapeSqlString(app_id)}'` : ''
+  const window = `timestamp >= toDateTime('${formatDateCF(start_date)}') AND timestamp < toDateTime('${formatDateCF(end_date)}') ${appFilter}`
+  const failureActions = PUBLIC_FAILURE_ACTIONS.map(action => `'${action}'`).join(', ')
+  const day = `formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d')`
+  const outcomeBase = `SELECT ${day} AS date, index1 AS app_id, blob1 AS device_id, max(if(blob2 = 'set', 1, 0)) AS succeeded, max(if(blob2 IN (${failureActions}), 1, 0)) AS failed FROM app_log WHERE ${window} AND (blob2 = 'set' OR blob2 IN (${failureActions})) GROUP BY date, app_id, device_id`
+  const query = `SELECT sum(succeeded) AS installs, sum(if(succeeded = 0, failed, 0)) AS fails FROM (${outcomeBase})`
 
   cloudlog({ requestId: c.get('requestId'), message: 'getAdminSuccessRate query', query })
 
@@ -2152,12 +2153,14 @@ export async function getAdminSuccessRate(
     if (!row)
       return null
 
-    const totalActions = (row.installs || 0) + (row.fails || 0)
+    const installs = Number(row.installs) || 0
+    const fails = Number(row.fails) || 0
+    const totalActions = installs + fails
     return {
-      installs: row.installs || 0,
-      fails: row.fails || 0,
+      installs,
+      fails,
       total_actions: totalActions,
-      success_rate: totalActions > 0 ? ((row.installs || 0) / totalActions) * 100 : 0,
+      success_rate: totalActions > 0 ? (installs / totalActions) * 100 : 0,
     }
   }
   catch (e) {
@@ -2404,8 +2407,8 @@ export async function getAdminMauTrend(
 }
 
 /**
- * Get success rate trend over time for admin dashboard
- * Returns daily install vs fail counts with calculated success rate
+ * Get success rate trend over time for admin dashboard.
+ * Device-day outcomes from app_log (same formula as public /data).
  */
 export async function getAdminSuccessRateTrend(
   c: Context,
@@ -2413,33 +2416,30 @@ export async function getAdminSuccessRateTrend(
   end_date: string,
   app_id?: string,
 ): Promise<AdminSuccessRateTrend[]> {
-  if (!c.env.VERSION_USAGE)
+  if (!c.env.APP_LOG)
     return []
 
-  const appFilter = app_id ? `AND blob1 = '${escapeSqlString(app_id)}'` : ''
-
-  const query = `SELECT
-    formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d') AS date,
-    sum(if(blob3 = 'install', 1, 0)) AS installs,
-    sum(if(blob3 = 'fail', 1, 0)) AS fails
-  FROM version_usage
-  WHERE timestamp >= toDateTime('${formatDateCF(start_date)}')
-    AND timestamp < toDateTime('${formatDateCF(end_date)}')
-    ${appFilter}
-  GROUP BY date
-  ORDER BY date ASC`
+  const appFilter = app_id ? `AND index1 = '${escapeSqlString(app_id)}'` : ''
+  const window = `timestamp >= toDateTime('${formatDateCF(start_date)}') AND timestamp < toDateTime('${formatDateCF(end_date)}') ${appFilter}`
+  const failureActions = PUBLIC_FAILURE_ACTIONS.map(action => `'${action}'`).join(', ')
+  const day = `formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d')`
+  const outcomeBase = `SELECT ${day} AS date, index1 AS app_id, blob1 AS device_id, max(if(blob2 = 'set', 1, 0)) AS succeeded, max(if(blob2 IN (${failureActions}), 1, 0)) AS failed FROM app_log WHERE ${window} AND (blob2 = 'set' OR blob2 IN (${failureActions})) GROUP BY date, app_id, device_id`
+  const query = `SELECT date, sum(succeeded) AS installs, sum(if(succeeded = 0, failed, 0)) AS fails FROM (${outcomeBase}) GROUP BY date ORDER BY date ASC`
 
   cloudlog({ requestId: c.get('requestId'), message: 'getAdminSuccessRateTrend query', query })
 
   try {
     const rawResult = await runQueryToCFA<{ date: string, installs: number, fails: number }>(c, query)
-    // Calculate success_rate in JavaScript for each day
-    const result: AdminSuccessRateTrend[] = rawResult.map(row => ({
-      date: row.date,
-      installs: row.installs,
-      fails: row.fails,
-      success_rate: (row.installs + row.fails) > 0 ? (row.installs / (row.installs + row.fails)) * 100 : 0,
-    }))
+    const result: AdminSuccessRateTrend[] = rawResult.map((row) => {
+      const installs = Number(row.installs) || 0
+      const fails = Number(row.fails) || 0
+      return {
+        date: row.date,
+        installs,
+        fails,
+        success_rate: (installs + fails) > 0 ? (installs / (installs + fails)) * 100 : 0,
+      }
+    })
     return result
   }
   catch (e) {
@@ -2745,7 +2745,6 @@ export async function getPluginBreakdownCF(c: Context, referenceDate?: Date): Pr
   }
 }
 
-const PUBLIC_FAILURE_ACTIONS = ['set_fail', 'update_fail', 'download_fail', 'windows_path_fail', 'canonical_path_fail', 'directory_path_fail', 'unzip_fail', 'low_mem_fail', 'download_manifest_file_fail', 'download_manifest_checksum_fail', 'download_manifest_brotli_fail', 'finish_download_fail', 'manifest_path_fail', 'decrypt_fail', 'insufficient_disk_space', 'cannotGetBundle', 'checksum_fail', 'blocked_by_server_url', 'backend_refusal'] as const
 
 export interface PublicBreakdownMetric {
   key: string
@@ -2846,6 +2845,7 @@ export async function getPublicLiveUpdateMetricsCF(c: Context, referenceDate = n
   const window = `timestamp >= toDateTime('${formatDateCF(start)}') AND timestamp < toDateTime('${formatDateCF(end)}')`
   const failureActions = PUBLIC_FAILURE_ACTIONS.map(action => `'${action}'`).join(', ')
   const day = `formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d')`
+  // Device-day outcomes: one success/fail per device per day. Fail-then-set same day counts as success only.
   const outcomeBase = `SELECT ${day} AS date, index1 AS app_id, blob1 AS device_id, max(if(blob2 = 'set', 1, 0)) AS succeeded, max(if(blob2 IN (${failureActions}), 1, 0)) AS failed, argMax(blob5, timestamp) AS platform, argMax(blob6, timestamp) AS country, argMax(blob7, timestamp) AS plugin_version FROM app_log WHERE ${window} AND (blob2 = 'set' OR blob2 IN (${failureActions})) GROUP BY date, app_id, device_id`
   const outcomesQuery = `SELECT date, sum(succeeded) AS successes, sum(if(succeeded = 0, failed, 0)) AS failures FROM (${outcomeBase}) GROUP BY date`
   const failuresQuery = `SELECT action, count() AS devices FROM (SELECT ${day} AS date, blob2 AS action, index1 AS app_id, blob1 AS device_id FROM app_log WHERE ${window} AND blob2 IN (${failureActions}) GROUP BY date, action, app_id, device_id) GROUP BY action`

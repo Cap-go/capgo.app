@@ -7,6 +7,7 @@ import {
   getPreviousMonthUtcRange,
   shouldRetryDeployInstallStats,
   shouldSendDeployInstallStatsEmail,
+  summarizeDeviceVersionAdoption,
   sumVersionInstalls,
   toStatNumber,
 } from '../supabase/functions/_backend/utils/cron_email_stats.ts'
@@ -196,5 +197,48 @@ describe('shouldRetryDeployInstallStats', () => {
     const deployedAt = new Date('2026-07-26T00:00:00.000Z')
     const now = new Date('2026-07-25T00:00:00.000Z')
     expect(shouldRetryDeployInstallStats(deployedAt, now)).toBe(false)
+  })
+})
+
+describe('summarizeDeviceVersionAdoption', () => {
+  it.concurrent('computes live device reach for a deployed bundle', () => {
+    expect(summarizeDeviceVersionAdoption({
+      '1.0.0': 20,
+      '1.1.0': 80,
+    }, '1.1.0')).toEqual({
+      device_count: 80,
+      total_devices: 100,
+      adoption_percent: '80.0',
+    })
+  })
+
+  it.concurrent('returns zeros when no devices have reported', () => {
+    expect(summarizeDeviceVersionAdoption({}, '1.1.0')).toEqual({
+      device_count: 0,
+      total_devices: 0,
+      adoption_percent: '0.0',
+    })
+  })
+
+  it.concurrent('falls back to version_id string keys used by legacy device counts', () => {
+    expect(summarizeDeviceVersionAdoption({
+      9601: 40,
+      9602: 60,
+    }, '1.1.0', 9602)).toEqual({
+      device_count: 60,
+      total_devices: 100,
+      adoption_percent: '60.0',
+    })
+  })
+
+  it.concurrent('keeps one-decimal rounding for fractional shares', () => {
+    expect(summarizeDeviceVersionAdoption({
+      '1.0.0': 77,
+      '1.1.0': 56,
+    }, '1.1.0')).toEqual({
+      device_count: 56,
+      total_devices: 133,
+      adoption_percent: '42.1',
+    })
   })
 })

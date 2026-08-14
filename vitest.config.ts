@@ -1,11 +1,36 @@
 import path from 'node:path'
 import { cwd } from 'node:process'
 import vue from '@vitejs/plugin-vue'
+import Icons from 'unplugin-icons/vite'
 import { loadEnv } from 'vite'
 import { defineConfig } from 'vitest/config'
 
+const rawIconId = '\0vitest-raw-icon'
+
 export default defineConfig(({ mode }) => ({
-  plugins: [vue()],
+  plugins: [
+    {
+      name: 'vitest-raw-icon',
+      enforce: 'pre',
+      resolveId(id) {
+        return id.startsWith('~icons/') && id.endsWith('?raw') ? rawIconId : null
+      },
+      load(id) {
+        return id === rawIconId ? 'export default "<svg />"' : null
+      },
+    },
+    {
+      name: 'vitest-route-block',
+      enforce: 'pre',
+      transform(_, id) {
+        if (!id.includes('?vue&type=route'))
+          return null
+        return id.includes('/src/pages/ApiKeys.vue') ? 'export default { path: "/apikeys" }' : 'export default {}'
+      },
+    },
+    vue(),
+    Icons({ compiler: 'vue3' }),
+  ],
   resolve: {
     alias: {
       '@capgo/cli/sdk': path.resolve(cwd(), 'cli/src/sdk.ts'),

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import process from 'node:process'
 import { getBuildOnboardingRecoveryAdvice } from '../src/build/onboarding/recovery.ts'
-import { CAPGO_UPDATER_PACKAGE, getUpdaterInstallState } from '../src/init/updater.ts'
+import { CAPACITOR_SPLASH_SCREEN_PACKAGE, CAPGO_UPDATER_PACKAGE, getSplashScreenInstallState, getUpdaterInstallState } from '../src/init/updater.ts'
 import { renderOnboardingSupportBundle, writeOnboardingSupportBundle } from '../src/onboarding-support.ts'
 import { splitRunnerCommand } from '../src/runner-command.ts'
 
@@ -30,6 +30,14 @@ function writeProjectPackage(root, dependencies) {
 
 function writeUpdaterInstall(root, version = '7.0.1') {
   writeFile(join(root, 'node_modules', '@capgo', 'capacitor-updater', 'package.json'), JSON.stringify({ version }))
+}
+
+function writeSplashScreenInstall(root, version = '8.0.0') {
+  writeFile(join(root, 'node_modules', '@capacitor', 'splash-screen', 'package.json'), JSON.stringify({ version }))
+}
+
+function readSplashScreenState(root) {
+  return getSplashScreenInstallState(join(root, 'package.json'))
 }
 
 function readUpdaterState(root) {
@@ -135,6 +143,52 @@ t('updater install state passes with declaration and install', () => {
       throw new Error('Expected declared updater version')
     if (state.installedVersion !== '7.0.1')
       throw new Error('Expected installed updater version')
+  })
+})
+
+t('splash screen install state requires package.json declaration', () => {
+  withTempProject((root) => {
+    writeProjectPackage(root, { '@capacitor/core': '^8.0.0' })
+    writeSplashScreenInstall(root)
+
+    const state = readSplashScreenState(root)
+    if (state.ready)
+      throw new Error('Expected splash screen state to fail without declaration')
+    if (!state.details.some(detail => detail.includes(`Missing ${CAPACITOR_SPLASH_SCREEN_PACKAGE}`)))
+      throw new Error('Expected missing splash screen declaration detail')
+  })
+})
+
+t('splash screen install state requires node_modules install', () => {
+  withTempProject((root) => {
+    writeProjectPackage(root, {
+      '@capacitor/core': '^8.0.0',
+      [CAPACITOR_SPLASH_SCREEN_PACKAGE]: '^8.0.0',
+    })
+
+    const state = readSplashScreenState(root)
+    if (state.ready)
+      throw new Error('Expected splash screen state to fail without node_modules install')
+    if (!state.details.some(detail => detail.includes(`Cannot resolve ${CAPACITOR_SPLASH_SCREEN_PACKAGE}`)))
+      throw new Error('Expected missing splash screen install detail')
+  })
+})
+
+t('splash screen install state passes with declaration and install', () => {
+  withTempProject((root) => {
+    writeProjectPackage(root, {
+      '@capacitor/core': '^8.0.0',
+      [CAPACITOR_SPLASH_SCREEN_PACKAGE]: '^8.0.0',
+    })
+    writeSplashScreenInstall(root)
+
+    const state = readSplashScreenState(root)
+    if (!state.ready)
+      throw new Error(`Expected splash screen state to pass: ${state.details.join(', ')}`)
+    if (state.declaredVersion !== '^8.0.0')
+      throw new Error('Expected declared splash screen version')
+    if (state.installedVersion !== '8.0.0')
+      throw new Error('Expected installed splash screen version')
   })
 })
 

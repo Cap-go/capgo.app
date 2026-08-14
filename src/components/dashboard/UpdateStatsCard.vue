@@ -13,6 +13,7 @@ import { useSupabase } from '~/services/supabase'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useOrganizationStore } from '~/stores/organization'
 import { createUndefinedArray, incrementArrayValue } from '~/utils/chartOptimizations'
+import { shouldShowDashboardDemoData } from '~/utils/dashboardDemoMode'
 import ChartCard from './ChartCard.vue'
 
 const props = defineProps({
@@ -90,17 +91,12 @@ const actionDisplayNames = computed(() => ({
 // Generate demo data when forceDemo is true
 const demoStats = computed(() => generateDemoUpdateStatsData(30))
 
-// Demo mode: show demo data only when forceDemo is true OR user has no apps
-// If user has apps, ALWAYS show real data (even if empty)
-const isDemoMode = computed(() => {
-  if (props.forceDemo)
-    return true
-  // If user has apps, never show demo data
-  if (dashboardAppsStore.apps.length > 0)
-    return false
-  // No apps and store is loaded = show demo
-  return dashboardAppsStore.isLoaded
-})
+const isDemoMode = computed(() => shouldShowDashboardDemoData({
+  forceDemo: props.forceDemo,
+  appId: props.appId,
+  appsCount: dashboardAppsStore.apps.length,
+  appsLoaded: dashboardAppsStore.isLoaded,
+}))
 
 // Effective values for display
 const effectiveChartData = computed(() => isDemoMode.value ? demoStats.value.total : chartUpdateData.value)

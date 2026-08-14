@@ -1558,6 +1558,7 @@ export interface AdminGlobalStatsTrend {
   plan_maker: number
   plan_team: number
   plan_enterprise: number
+  plan_credits: number
   registers_today: number
   demo_apps_created: number
   devices_last_month: number
@@ -1696,6 +1697,7 @@ export async function getAdminGlobalStatsTrend(
         gs.plan_maker::int AS plan_maker,
         gs.plan_team::int AS plan_team,
         gs.plan_enterprise::int AS plan_enterprise,
+        COALESCE(NULLIF(to_jsonb(gs) ->> 'plan_credits', '')::int, 0)::int AS plan_credits,
         gs.registers_today::int AS registers_today,
         COALESCE(gs.demo_apps_created, 0)::int AS demo_apps_created,
         gs.devices_last_month::int AS devices_last_month,
@@ -1863,6 +1865,7 @@ export async function getAdminGlobalStatsTrend(
       plan_maker: Number(row.plan_maker) || 0,
       plan_team: Number(row.plan_team) || 0,
       plan_enterprise: Number(row.plan_enterprise) || 0,
+      plan_credits: Number(row.plan_credits) || 0,
       registers_today: Number(row.registers_today) || 0,
       demo_apps_created: Number(row.demo_apps_created) || 0,
       devices_last_month: Number(row.devices_last_month) || 0,
@@ -2481,6 +2484,7 @@ export interface AdminOrganizationInsightRow {
   last_build_at: string | null
   paid_at: string | null
   registered_at: string
+  distribution_stage: string | null
 }
 
 export interface AdminOrganizationInsightsResult {
@@ -2687,6 +2691,32 @@ export async function getAdminOrganizationInsights(
         FROM build_logs bl
         INNER JOIN filtered_orgs filtered ON filtered.org_id = bl.org_id
         GROUP BY bl.org_id
+      ),
+      onboarding_stage_by_org AS (
+        SELECT
+          a.owner_org AS org_id,
+          CASE MAX(
+            CASE a.onboarding -> 'features' -> 'ota' ->> 'stage'
+              WHEN 'store_live' THEN 5
+              WHEN 'testflight' THEN 4
+              WHEN 'play_unknown' THEN 3
+              WHEN 'native_unknown' THEN 2
+              WHEN 'local_only' THEN 1
+              WHEN 'no_device' THEN 0
+              ELSE -1
+            END
+          )
+            WHEN 5 THEN 'store_live'
+            WHEN 4 THEN 'testflight'
+            WHEN 3 THEN 'play_unknown'
+            WHEN 2 THEN 'native_unknown'
+            WHEN 1 THEN 'local_only'
+            WHEN 0 THEN 'no_device'
+            ELSE NULL
+          END AS distribution_stage
+        FROM apps a
+        INNER JOIN filtered_orgs filtered ON filtered.org_id = a.owner_org
+        GROUP BY a.owner_org
       )
       SELECT
         filtered.org_id,
@@ -2707,7 +2737,8 @@ export async function getAdminOrganizationInsights(
         buo.last_upload_at,
         lb.last_build_at,
         filtered.paid_at,
-        filtered.registered_at
+        filtered.registered_at,
+        stage.distribution_stage
       FROM filtered_orgs filtered
       LEFT JOIN apps_by_org apps ON apps.org_id = filtered.org_id
       LEFT JOIN members_by_org members ON members.org_id = filtered.org_id
@@ -2715,6 +2746,7 @@ export async function getAdminOrganizationInsights(
       LEFT JOIN build_usage_by_org bu ON bu.org_id = filtered.org_id
       LEFT JOIN bundle_uploads_by_org buo ON buo.org_id = filtered.org_id
       LEFT JOIN last_builds_by_org lb ON lb.org_id = filtered.org_id
+      LEFT JOIN onboarding_stage_by_org stage ON stage.org_id = filtered.org_id
       ORDER BY
         filtered.needs_attention DESC,
         CASE
@@ -2770,6 +2802,7 @@ export async function getAdminOrganizationInsights(
       last_build_at: normalizeTimestamp(row.last_build_at),
       paid_at: normalizeTimestamp(row.paid_at),
       registered_at: normalizeTimestamp(row.registered_at) ?? '',
+      distribution_stage: row.distribution_stage ?? null,
     }))
 
     const total = Number((countResult.rows[0] as any)?.total) || 0
@@ -3151,6 +3184,8 @@ export interface AdminOnboardingFunnel {
   orgs_subscribed: number
   orgs_with_production_device: number
   orgs_with_update_download: number
+  orgs_with_testflight: number
+  orgs_with_store_live: number
   activation_telemetry_available: boolean
   // Invite join metrics (team invites)
   total_invite_registrations: number
@@ -3164,6 +3199,8 @@ export interface AdminOnboardingFunnel {
   subscription_conversion_rate: number
   production_device_conversion_rate: number
   update_download_conversion_rate: number
+  testflight_conversion_rate: number
+  store_live_conversion_rate: number
   // Trend data
   trend: Array<{
     date: string
@@ -3175,6 +3212,8 @@ export interface AdminOnboardingFunnel {
     orgs_subscribed: number
     orgs_with_production_device: number
     orgs_with_update_download: number
+    orgs_with_testflight: number
+    orgs_with_store_live: number
   }>
   invite_trend: Array<{
     date: string
@@ -3188,6 +3227,10 @@ export interface AdminOnboardingFunnel {
     invite_registrations: number
     without_profile: number
   }>
+}
+
+function adminOnboardingConversionRate(numerator: number, denominator: number): number {
+  return denominator > 0 ? (numerator / denominator) * 100 : 0
 }
 
 export async function getAdminOnboardingFunnel(
@@ -3260,6 +3303,15 @@ export async function getAdminOnboardingFunnel(
         WHERE si.paid_at IS NOT NULL
           AND si.paid_at >= o.created_at
           AND si.paid_at < o.created_at + interval '7 days'
+      ),
+      orgs_with_distribution AS (
+        SELECT
+          o.id,
+          MAX(CASE WHEN a.onboarding -> 'features' -> 'ota' ->> 'stage' = 'store_live' THEN 1 ELSE 0 END) AS has_store_live,
+          MAX(CASE WHEN a.onboarding -> 'features' -> 'ota' ->> 'stage' = 'testflight' THEN 1 ELSE 0 END) AS has_testflight
+        FROM orgs_with_bundles o
+        INNER JOIN apps a ON a.owner_org = o.id
+        GROUP BY o.id
       )
       SELECT
         (SELECT COUNT(*)::int FROM registrations_in_range) as total_registrations,
@@ -3267,7 +3319,9 @@ export async function getAdminOnboardingFunnel(
         (SELECT COUNT(*)::int FROM orgs_with_apps) as orgs_with_app,
         (SELECT COUNT(*)::int FROM orgs_with_channels) as orgs_with_channel,
         (SELECT COUNT(*)::int FROM orgs_with_bundles) as orgs_with_bundle,
-        (SELECT COUNT(*)::int FROM orgs_subscribed) as orgs_subscribed
+        (SELECT COUNT(*)::int FROM orgs_subscribed) as orgs_subscribed,
+        (SELECT COUNT(*)::int FROM orgs_with_distribution d WHERE d.has_store_live = 0 AND d.has_testflight = 1) as orgs_with_testflight,
+        (SELECT COUNT(*)::int FROM orgs_with_distribution d WHERE d.has_store_live = 1) as orgs_with_store_live
     `
 
     const funnelResult = await drizzleClient.execute(funnelQuery)
@@ -3279,6 +3333,8 @@ export async function getAdminOnboardingFunnel(
     const orgsWithChannel = Number(funnelRow.orgs_with_channel) || 0
     const orgsWithBundle = Number(funnelRow.orgs_with_bundle) || 0
     const orgsSubscribed = Number(funnelRow.orgs_subscribed) || 0
+    const orgsWithTestflight = Number(funnelRow.orgs_with_testflight) || 0
+    const orgsWithStoreLive = Number(funnelRow.orgs_with_store_live) || 0
 
     // Get daily trend data
     const trendQuery = sql`
@@ -3356,6 +3412,38 @@ export async function getAdminOnboardingFunnel(
           AND si.paid_at >= o.created_at
           AND si.paid_at < o.created_at + interval '7 days'
         GROUP BY o.created_at::date
+      ),
+      org_distribution_stages AS (
+        SELECT
+          a.owner_org,
+          MAX(CASE WHEN a.onboarding -> 'features' -> 'ota' ->> 'stage' = 'store_live' THEN 1 ELSE 0 END) AS has_store_live,
+          MAX(CASE WHEN a.onboarding -> 'features' -> 'ota' ->> 'stage' = 'testflight' THEN 1 ELSE 0 END) AS has_testflight
+        FROM apps a
+        INNER JOIN orgs o ON o.id = a.owner_org
+        INNER JOIN public.users u ON u.id = o.created_by
+        WHERE o.created_at >= ${start_date}::timestamp
+          AND o.created_at < ${end_date}::timestamp
+          AND u.created_via_invite = false
+        GROUP BY a.owner_org
+      ),
+      daily_distribution AS (
+        SELECT
+          o.created_at::date as date,
+          COUNT(DISTINCT o.id) FILTER (
+            WHERE stages.has_store_live = 0 AND stages.has_testflight = 1
+          )::int as orgs_with_testflight,
+          COUNT(DISTINCT o.id) FILTER (
+            WHERE stages.has_store_live = 1
+          )::int as orgs_with_store_live
+        FROM orgs o
+        INNER JOIN public.users u ON u.id = o.created_by
+        INNER JOIN apps a ON a.owner_org = o.id
+        INNER JOIN org_distribution_stages stages ON stages.owner_org = o.id
+        WHERE o.created_at >= ${start_date}::timestamp
+          AND o.created_at < ${end_date}::timestamp
+          AND u.created_via_invite = false
+          AND ${onboardingBundleEligibility}
+        GROUP BY o.created_at::date
       )
       SELECT
         ds.date,
@@ -3364,7 +3452,9 @@ export async function getAdminOnboardingFunnel(
         COALESCE(dapps.orgs_created_app, 0) as orgs_created_app,
         COALESCE(dchannels.orgs_created_channel, 0) as orgs_created_channel,
         COALESCE(dbundles.orgs_created_bundle, 0) as orgs_created_bundle,
-        COALESCE(dsubscriptions.orgs_subscribed, 0) as orgs_subscribed
+        COALESCE(dsubscriptions.orgs_subscribed, 0) as orgs_subscribed,
+        COALESCE(ddistribution.orgs_with_testflight, 0) as orgs_with_testflight,
+        COALESCE(ddistribution.orgs_with_store_live, 0) as orgs_with_store_live
       FROM date_series ds
       LEFT JOIN daily_registrations dregs ON dregs.date = ds.date
       LEFT JOIN daily_orgs dorgs ON dorgs.date = ds.date
@@ -3372,6 +3462,7 @@ export async function getAdminOnboardingFunnel(
       LEFT JOIN daily_channels dchannels ON dchannels.date = ds.date
       LEFT JOIN daily_bundles dbundles ON dbundles.date = ds.date
       LEFT JOIN daily_subscriptions dsubscriptions ON dsubscriptions.date = ds.date
+      LEFT JOIN daily_distribution ddistribution ON ddistribution.date = ds.date
       ORDER BY ds.date ASC
     `
 
@@ -3512,6 +3603,8 @@ export async function getAdminOnboardingFunnel(
         orgs_subscribed: Number(row.orgs_subscribed) || 0,
         orgs_with_production_device: activationTrend?.orgs_with_production_device ?? 0,
         orgs_with_update_download: activationTrend?.orgs_with_update_download ?? 0,
+        orgs_with_testflight: Number(row.orgs_with_testflight) || 0,
+        orgs_with_store_live: Number(row.orgs_with_store_live) || 0,
       }
     })
 
@@ -3545,17 +3638,21 @@ export async function getAdminOnboardingFunnel(
       orgs_subscribed: orgsSubscribed,
       orgs_with_production_device: activationMetrics.orgs_with_production_device,
       orgs_with_update_download: activationMetrics.orgs_with_update_download,
+      orgs_with_testflight: orgsWithTestflight,
+      orgs_with_store_live: orgsWithStoreLive,
       activation_telemetry_available: activationTelemetry.available,
       total_invite_registrations: totalInviteRegistrations,
       total_org_joins_invite_register: totalOrgJoinsInviteRegister,
       total_org_joins_existing_account: totalOrgJoinsExistingAccount,
-      org_conversion_rate: totalRegistrations > 0 ? (totalOrgs / totalRegistrations) * 100 : 0,
-      app_conversion_rate: totalOrgs > 0 ? (orgsWithApp / totalOrgs) * 100 : 0,
-      channel_conversion_rate: orgsWithApp > 0 ? (orgsWithChannel / orgsWithApp) * 100 : 0,
-      bundle_conversion_rate: orgsWithChannel > 0 ? (orgsWithBundle / orgsWithChannel) * 100 : 0,
-      subscription_conversion_rate: orgsWithBundle > 0 ? (orgsSubscribed / orgsWithBundle) * 100 : 0,
-      production_device_conversion_rate: orgsWithBundle > 0 ? (activationMetrics.orgs_with_production_device / orgsWithBundle) * 100 : 0,
-      update_download_conversion_rate: activationMetrics.orgs_with_production_device > 0 ? (activationMetrics.orgs_with_update_download / activationMetrics.orgs_with_production_device) * 100 : 0,
+      org_conversion_rate: adminOnboardingConversionRate(totalOrgs, totalRegistrations),
+      app_conversion_rate: adminOnboardingConversionRate(orgsWithApp, totalOrgs),
+      channel_conversion_rate: adminOnboardingConversionRate(orgsWithChannel, orgsWithApp),
+      bundle_conversion_rate: adminOnboardingConversionRate(orgsWithBundle, orgsWithChannel),
+      subscription_conversion_rate: adminOnboardingConversionRate(orgsSubscribed, orgsWithBundle),
+      production_device_conversion_rate: adminOnboardingConversionRate(activationMetrics.orgs_with_production_device, orgsWithBundle),
+      update_download_conversion_rate: adminOnboardingConversionRate(activationMetrics.orgs_with_update_download, activationMetrics.orgs_with_production_device),
+      testflight_conversion_rate: adminOnboardingConversionRate(orgsWithTestflight, orgsWithBundle),
+      store_live_conversion_rate: adminOnboardingConversionRate(orgsWithStoreLive, orgsWithBundle),
       trend,
       invite_trend: inviteTrend,
       registration_source_trend: registrationSourceTrend,
@@ -3576,6 +3673,8 @@ export async function getAdminOnboardingFunnel(
       orgs_subscribed: 0,
       orgs_with_production_device: 0,
       orgs_with_update_download: 0,
+      orgs_with_testflight: 0,
+      orgs_with_store_live: 0,
       activation_telemetry_available: false,
       total_invite_registrations: 0,
       total_org_joins_invite_register: 0,
@@ -3587,6 +3686,8 @@ export async function getAdminOnboardingFunnel(
       subscription_conversion_rate: 0,
       production_device_conversion_rate: 0,
       update_download_conversion_rate: 0,
+      testflight_conversion_rate: 0,
+      store_live_conversion_rate: 0,
       trend: [],
       invite_trend: [],
       registration_source_trend: [],

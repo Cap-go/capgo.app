@@ -1765,8 +1765,8 @@ export async function getUpdateStatsSB(c: Context): Promise<UpdateStats> {
   }
 
   const apps = data.map((app: any) => {
-    const totalEvents = app.failed + app.install + app.get
-    const successRate = Number((totalEvents > 0 ? ((app.install + app.get) / totalEvents) * 100 : 100).toFixed(2))
+    const totalOutcomes = app.failed + app.install
+    const successRate = Number((totalOutcomes > 0 ? (app.install / totalOutcomes) * 100 : 100).toFixed(2))
     return {
       app_id: app.app_id,
       failed: Number(app.failed),
@@ -1784,8 +1784,8 @@ export async function getUpdateStatsSB(c: Context): Promise<UpdateStats> {
     return acc
   }, { failed: 0, set: 0, get: 0 })
 
-  const totalEvents = total.failed + total.set + total.get
-  const totalSuccessRate = totalEvents > 0 ? ((total.set + total.get) / totalEvents) * 100 : 100
+  const totalOutcomes = total.failed + total.set
+  const totalSuccessRate = totalOutcomes > 0 ? (total.set / totalOutcomes) * 100 : 100
 
   return {
     apps,

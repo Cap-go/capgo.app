@@ -5,6 +5,7 @@ import { useI18n } from 'vue-i18n'
 
 import { stripeEnabled } from '~/services/supabase'
 import { useOrganizationStore } from '~/stores/organization'
+import { isCreditsOnlyOrg } from '~/utils/organizationBilling'
 
 const props = defineProps({
   text: { type: String, default: '' },
@@ -15,7 +16,21 @@ const props = defineProps({
 const { t } = useI18n()
 const organizationStore = useOrganizationStore()
 const isMobile = Capacitor.isNativePlatform()
-const billingCtaHref = computed(() => isMobile ? '/settings/organization/usage' : '/settings/organization/plans')
+const isCreditsOnly = computed(() => isCreditsOnlyOrg(organizationStore.currentOrganization))
+const billingCtaHref = computed(() => {
+  if (isMobile)
+    return '/settings/organization/usage'
+  if (isCreditsOnly.value)
+    return '/settings/organization/credits'
+  return '/settings/organization/plans'
+})
+const billingCtaLabel = computed(() => {
+  if (isMobile)
+    return t('see-usage')
+  if (isCreditsOnly.value)
+    return t('manage')
+  return t('upgrade')
+})
 
 // Check if user lacks security compliance (2FA or password) - data is unreliable in this case
 const lacksSecurityAccess = computed(() => {
@@ -27,6 +42,8 @@ const lacksSecurityAccess = computed(() => {
 
 const bannerLeftText = computed(() => {
   const org = organizationStore.currentOrganization
+  if (isCreditsOnlyOrg(org))
+    return t('credits')
   if (org?.paying)
     return t('billing')
 
@@ -46,6 +63,10 @@ const bannerText = computed(() => {
 
   if (organizationStore.currentOrganizationFailed)
     return t('subscription-required')
+
+  if (isCreditsOnlyOrg(org)) {
+    return t('credits-only-banner')
+  }
 
   if (org.is_canceled) {
     return t('plan-inactive')
@@ -85,6 +106,9 @@ const bannerColor = computed(() => {
   if (org.paying && org.can_use_more)
     return ''
 
+  else if (isCreditsOnlyOrg(org))
+    return success
+
   else if (org.is_canceled)
     return warning
 
@@ -114,7 +138,7 @@ const bannerColor = computed(() => {
       {{ bannerText }}
     </span>
     <a :href="billingCtaHref" class="border-none d-btn d-btn-xs sm:d-btn-sm" :class="bannerColor">
-      {{ isMobile ? t('see-usage') : t('upgrade') }}
+      {{ billingCtaLabel }}
     </a>
   </div>
 
@@ -124,6 +148,6 @@ const bannerColor = computed(() => {
       {{ bannerLeftText }}:
     </span>
     <span class="text-xs font-medium text-black sm:text-base dark:text-white">{{ bannerText }}</span>
-    <a :href="billingCtaHref" class="ml-2 whitespace-nowrap border-none d-btn d-btn-xs sm:d-btn-sm" :class="bannerColor">{{ isMobile ? t('see-usage') : t('upgrade') }}</a>
+    <a :href="billingCtaHref" class="ml-2 whitespace-nowrap border-none d-btn d-btn-xs sm:d-btn-sm" :class="bannerColor">{{ billingCtaLabel }}</a>
   </div>
 </template>

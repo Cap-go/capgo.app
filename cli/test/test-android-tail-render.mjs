@@ -304,17 +304,22 @@ test('error shows the failure message and the support/retry/exit control', () =>
 })
 
 // ── ai-analysis-prompt — offer to debug with Capgo AI ─────────────────────────
-test('ai-analysis-prompt shows the build-failed line, the offer and the debug/skip control', () => {
+test('ai-analysis-prompt shows the build-log option immediately above Skip', () => {
+  const element = h(AiAnalysisPromptStep, { onChoose: noop })
   assertContains(
-    h(AiAnalysisPromptStep, { onChoose: noop }),
+    element,
     [
       'Build failed.',
       'We can analyze the build log with Capgo AI and suggest a fix.',
       'Debug with AI',
+      'Show me the build logs',
       'Skip',
     ],
     'ai-analysis-prompt',
   )
+  const frame = renderFrameText(element, 80)
+  if (frame.indexOf('Show me the build logs') >= frame.indexOf('Skip'))
+    throw new Error(`build-log option must render above Skip:\n${frame}`)
 })
 
 // ── ai-analysis-running (spinner) ─────────────────────────────────────────────

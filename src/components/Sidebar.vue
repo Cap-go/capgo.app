@@ -18,9 +18,11 @@ import { useMainStore } from '~/stores/main'
 import {
   allowOnboardingDashboardExploration,
   getOnboardingResumeAppId,
+  ONBOARDING_DASHBOARD_EXPLORED_EVENT,
   shouldConfirmOnboardingDashboardExploration,
 } from '~/utils/onboardingRedirect'
 import DropdownProfile from '../components/dashboard/DropdownProfile.vue'
+import GettingStartedNav from '../components/dashboard/GettingStartedNav.vue'
 
 const props = defineProps <{
   sidebarOpen: boolean
@@ -95,6 +97,7 @@ async function openTab(tab: Tab) {
     if (dialogStore.lastButtonRole !== 'primary')
       return
 
+    window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))
     allowOnboardingDashboardExploration(onboardingUserId, onboardingResumeAppId)
   }
 
@@ -193,6 +196,8 @@ const tabs = computed<Tab[]>(() => {
           <span class="text-xl font-semibold truncate transition duration-150 hover:text-white font-prompt text-slate-200 lg:text-slate-200 lg:hover:text-white">Capgo</span>
         </router-link>
       </div>
+
+      <GettingStartedNav />
 
       <!-- Organization dropdown -->
       <div class="px-3 py-4 lg:py-4 lg:px-6 shrink-0">

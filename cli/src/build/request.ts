@@ -67,7 +67,7 @@ import { uploadSupportLogs } from '../support/support-upload.js'
 import { offerSupportUploadBeforeAi } from '../support/support-upload-prompt.js'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { assertCliPermission, canPromptInteractively, createSupabaseClient, findSavedKey, getConfig, getOrganizationId, getRemoteConfig, sendEvent, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
-import { mergeCredentials, MIN_OUTPUT_RETENTION_SECONDS, parseInAppUpdatePriority, parseOptionalBoolean, parseOutputRetentionSeconds } from './credentials'
+import { mergeCredentials, MIN_OUTPUT_RETENTION_SECONDS, parseAndroidPlayStoreReleaseStatus, parseAndroidPlayStoreTrack, parseInAppUpdatePriority, parseOptionalBoolean, parseOutputRetentionSeconds } from './credentials'
 import { buildProvisioningMap } from './credentials-command'
 import { withCwd } from './cwd'
 import { syncIosMarketingVersion } from './ios-marketing-version'
@@ -1526,6 +1526,12 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
     }
     if (options.playConfigJson)
       cliCredentials.PLAY_CONFIG_JSON = options.playConfigJson
+    if (typeof options.androidTrack === 'string' && options.androidTrack.trim()) {
+      cliCredentials.PLAY_STORE_TRACK = parseAndroidPlayStoreTrack(options.androidTrack)
+    }
+    if (typeof options.androidReleaseStatus === 'string' && options.androidReleaseStatus.trim()) {
+      cliCredentials.PLAY_STORE_RELEASE_STATUS = parseAndroidPlayStoreReleaseStatus(options.androidReleaseStatus)
+    }
     if (options.inAppUpdatePriority !== undefined) {
       cliCredentials.PLAY_STORE_IN_APP_UPDATE_PRIORITY = String(parseInAppUpdatePriority(options.inAppUpdatePriority as number | string))
     }

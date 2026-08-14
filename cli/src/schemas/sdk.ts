@@ -372,6 +372,8 @@ export const requestBuildOptionsSchema = z.object({
   nodeModules: z.string().optional(),
   platform: z.enum(['ios', 'android']),
   credentials: buildCredentialsSchema.optional(),
+  androidTrack: z.enum(['internal', 'alpha', 'beta', 'production']).optional(),
+  androidReleaseStatus: z.enum(['draft', 'completed', 'inProgress', 'halted']).optional(),
   submitToStoreReview: z.boolean().optional(),
   storeReleaseName: z.string().min(1).optional(),
   storeReleaseNotes: z.string().min(1).optional(),

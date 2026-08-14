@@ -59,6 +59,20 @@ declare module 'vue-router/auto-routes' {
       Record<never, never>,
       | never
     >,
+    '/admin/dashboard/channel-surfing': RouteRecordInfo<
+      '/admin/dashboard/channel-surfing',
+      '/admin/dashboard/channel-surfing',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
+    '/admin/dashboard/cli': RouteRecordInfo<
+      '/admin/dashboard/cli',
+      '/admin/dashboard/cli',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
     '/admin/dashboard/credits': RouteRecordInfo<
       '/admin/dashboard/credits',
       '/admin/dashboard/credits',
@@ -73,9 +87,30 @@ declare module 'vue-router/auto-routes' {
       Record<never, never>,
       | never
     >,
+    '/admin/dashboard/frontend-onboarding': RouteRecordInfo<
+      '/admin/dashboard/frontend-onboarding',
+      '/admin/dashboard/frontend-onboarding',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
+    '/admin/dashboard/notifications': RouteRecordInfo<
+      '/admin/dashboard/notifications',
+      '/admin/dashboard/notifications',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
     '/admin/dashboard/organizations': RouteRecordInfo<
       '/admin/dashboard/organizations',
       '/admin/dashboard/organizations',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
+    '/admin/dashboard/plans': RouteRecordInfo<
+      '/admin/dashboard/plans',
+      '/admin/dashboard/plans',
       Record<never, never>,
       Record<never, never>,
       | never
@@ -251,6 +286,13 @@ declare module 'vue-router/auto-routes' {
     '/app/[app].devices': RouteRecordInfo<
       '/app/[app].devices',
       '/app/:app/devices',
+      { app: ParamValue<true> },
+      { app: ParamValue<false> },
+      | never
+    >,
+    '/app/[app].getting-started': RouteRecordInfo<
+      '/app/[app].getting-started',
+      '/app/:app/getting-started',
       { app: ParamValue<true> },
       { app: ParamValue<false> },
       | never
@@ -657,6 +699,22 @@ declare module 'vue-router/auto-routes' {
       pathParamNames:
         | never
     }
+    'src/pages/admin/dashboard/channel-surfing.vue': {
+      routes:
+        | '/admin/dashboard/channel-surfing'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
+    'src/pages/admin/dashboard/cli.vue': {
+      routes:
+        | '/admin/dashboard/cli'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
     'src/pages/admin/dashboard/credits.vue': {
       routes:
         | '/admin/dashboard/credits'
@@ -673,9 +731,33 @@ declare module 'vue-router/auto-routes' {
       pathParamNames:
         | never
     }
+    'src/pages/admin/dashboard/frontend-onboarding.vue': {
+      routes:
+        | '/admin/dashboard/frontend-onboarding'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
+    'src/pages/admin/dashboard/notifications.vue': {
+      routes:
+        | '/admin/dashboard/notifications'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
     'src/pages/admin/dashboard/organizations.vue': {
       routes:
         | '/admin/dashboard/organizations'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
+    'src/pages/admin/dashboard/plans.vue': {
+      routes:
+        | '/admin/dashboard/plans'
       views:
         | never
       pathParamNames:
@@ -889,6 +971,14 @@ declare module 'vue-router/auto-routes' {
     'src/pages/app/[app].devices.vue': {
       routes:
         | '/app/[app].devices'
+      views:
+        | never
+      pathParamNames:
+        | 'app'
+    }
+    'src/pages/app/[app].getting-started.vue': {
+      routes:
+        | '/app/[app].getting-started'
       views:
         | never
       pathParamNames:
