@@ -123,6 +123,19 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
     ? await lockOnboardingApp(c, appId)
     : null
 
+  const hasSettingsPayload = [
+    body.name,
+    body.icon,
+    body.retention,
+    body.expose_metadata,
+    body.allow_device_custom_id,
+    body.need_onboarding,
+    body.existing_app,
+    body.block_provider_infra_requests,
+    body.ios_store_url,
+    body.android_store_url,
+  ].some(value => value !== undefined)
+
   let data: Database['public']['Tables']['apps']['Row'] | undefined
   let dbError: { message?: string } | null = null
   let completedPendingOnboarding = false
@@ -167,7 +180,7 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
           await closeClient(c, pgClient)
       }
     }
-    else if (!canUpdateSettings && onboardingPatch) {
+    else if (onboardingPatch && !hasSettingsPayload) {
       const pgClient = getPgClient(c)
       try {
         data = await persistAppOnboarding(c, appId, onboardingPatch, pgClient)
