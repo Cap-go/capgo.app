@@ -7,7 +7,6 @@ import { toast } from 'vue-sonner'
 import IconSettings from '~icons/lucide/settings'
 import { logAsUser } from '~/services/logAs'
 import { isSpoofed, unspoofUser } from '~/services/supabase'
-import { openSupport } from '~/services/support'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import { allowOnboardingDashboardExploration } from '~/utils/onboardingRedirect'
@@ -98,7 +97,7 @@ async function resetSpoofedUser() {
   <div>
     <div class="relative text-gray-300">
       <div class="flex flex-col p-4 space-y-2">
-        <div class="flex items-center mb-4">
+        <div class="flex items-center">
           <img v-if="main.user?.image_url" class="mr-3 w-10 h-10 d-mask d-mask-squircle" :src="main.user?.image_url" alt="User" width="32" height="32">
           <div v-else class="p-2 mr-3 bg-gray-700 d-mask d-mask-squircle">
             <span class="font-medium">
@@ -130,9 +129,6 @@ async function resetSpoofedUser() {
         <router-link v-if="isMobile" to="/app/modules_test" class="block py-2 px-3 rounded-lg hover:bg-slate-700/50">
           {{ t('module-heading') }} {{ t('tests') }}
         </router-link>
-        <div class="block py-2 px-3 rounded-lg cursor-pointer hover:bg-slate-700/50" @click="openSupport">
-          {{ t('support') }}
-        </div>
         <div v-if="main.isAdmin && !spoofed" class="block py-2 px-3 rounded-lg cursor-pointer hover:bg-slate-700/50" :class="{ 'opacity-50 cursor-not-allowed': isLoading }" @click="openLogAsDialog">
           <span v-if="!isLoading">{{ t('log-as') }}</span>
           <span v-else class="flex items-center">
