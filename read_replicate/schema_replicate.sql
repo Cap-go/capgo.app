@@ -10,6 +10,19 @@ DROP TYPE IF EXISTS public.manifest_entry, public.disable_update, public.stripe_
 
 
 --
+-- Name: channel_update_package; Type: TYPE; Schema: public; Owner: -
+--
+
+CREATE TYPE public.channel_update_package AS ENUM (
+    'all',
+    'zip',
+    'delta',
+    'zip_from_builtin',
+    'delta_from_builtin'
+);
+
+
+--
 -- Name: disable_update; Type: TYPE; Schema: public; Owner: -
 --
 
@@ -231,6 +244,7 @@ CREATE TABLE public.channels (
     auto_pause_cooldown_minutes integer DEFAULT 60 NOT NULL,
     auto_pause_last_triggered_at timestamp with time zone,
     auto_pause_last_checked_at timestamp with time zone,
+    update_package public.channel_update_package DEFAULT 'all'::public.channel_update_package NOT NULL,
     CONSTRAINT channels_auto_pause_action_check CHECK ((auto_pause_action = ANY (ARRAY['pause'::text, 'rollback'::text, 'notify'::text]))),
     CONSTRAINT channels_auto_pause_confidence_check CHECK (((auto_pause_confidence > (0)::numeric) AND (auto_pause_confidence < (1)::numeric))),
     CONSTRAINT channels_auto_pause_cooldown_minutes_check CHECK (((auto_pause_cooldown_minutes >= 0) AND (auto_pause_cooldown_minutes <= 10080))),

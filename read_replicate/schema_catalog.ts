@@ -14,6 +14,7 @@ export const REPLICA_TABLES = [
 ] as const
 
 export const REPLICA_TYPES = [
+  'channel_update_package',
   'disable_update',
   'manifest_entry',
   'stripe_status',
