@@ -1124,6 +1124,7 @@ function openDashboard() {
       appId: createdApp.value.app_id,
     })
   }
+  window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))
   allowOnboardingDashboardExploration(onboardingUserId.value, createdApp.value.app_id)
   router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}/getting-started`)
 }

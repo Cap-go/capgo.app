@@ -77,14 +77,14 @@ describe('onboarding dashboard redirect', () => {
     expect(refreshedModule.getOnboardingResumeRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/apps', resumeAppId: null, userId: 'user-1' })).toBeNull()
   })
 
-  it('announces dashboard exploration to the active onboarding flow', async () => {
+  it('keeps the shared exploration grant free of analytics signals', async () => {
     const module = await import('../src/utils/onboardingRedirect.ts')
     const listener = vi.fn()
     window.addEventListener(module.ONBOARDING_DASHBOARD_EXPLORED_EVENT, listener)
 
     module.allowOnboardingDashboardExploration('user-1', 'com.example.app')
 
-    expect(listener).toHaveBeenCalledOnce()
+    expect(listener).not.toHaveBeenCalled()
     window.removeEventListener(module.ONBOARDING_DASHBOARD_EXPLORED_EVENT, listener)
   })
 

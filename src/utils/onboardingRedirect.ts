@@ -79,9 +79,6 @@ export function allowOnboardingDashboardExploration(userId: string | null | unde
       // Storage can be blocked in private or restricted browsing contexts.
     }
   }
-
-  if (typeof window !== 'undefined')
-    window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))
 }
 
 export function canExploreOnboardingDashboard(userId: string | null | undefined) {
