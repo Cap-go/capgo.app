@@ -100,7 +100,7 @@ describe('app onboarding progress analytics integration', () => {
     expect(onboardingSource).toContain('pendingDashboardExplored = true')
     expect(onboardingSource).toContain('if (pendingDashboardExplored)')
 
-    const demoExit = sourceBetween('async function seedDemoData()', 'function openAppSwitcher()')
+    const demoExit = sourceBetween('async function seedDemoData()', 'async function copyText(')
     expect(demoExit.indexOf('window.dispatchEvent')).toBeLessThan(demoExit.indexOf('allowOnboardingDashboardExploration'))
 
     const confirmedSidebarExit = sidebarSource.slice(sidebarSource.indexOf('if (requiresOnboardingExplorationConfirmation)'), sidebarSource.indexOf('if (tab.onClick)'))
