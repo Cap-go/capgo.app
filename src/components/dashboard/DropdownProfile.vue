@@ -4,6 +4,7 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
+import IconSettings from '~icons/lucide/settings'
 import { logAsUser } from '~/services/logAs'
 import { isSpoofed, unspoofUser } from '~/services/supabase'
 import { openSupport } from '~/services/support'
@@ -91,27 +92,6 @@ async function resetSpoofedUser() {
     isLoading.value = false
   }
 }
-
-async function logOut() {
-  dialogStore.openDialog({
-    title: t('are-u-sure'),
-    buttons: [
-      {
-        text: t('button-cancel'),
-        role: 'cancel',
-      },
-      {
-        text: t('logout'),
-        role: 'danger',
-        id: 'confirm-button',
-        handler: async () => {
-          main.logout().then(() => router.replace('/login'))
-        },
-      },
-    ],
-  })
-  await dialogStore.onDialogDismiss()
-}
 </script>
 
 <template>
@@ -125,18 +105,25 @@ async function logOut() {
               {{ acronym }}
             </span>
           </div>
-          <div class="min-w-0">
+          <div class="min-w-0 flex-1">
             <p class="font-medium truncate">
               {{ `${main.user?.first_name} ${main.user?.last_name}` }}
             </p>
-            <p class="text-sm text-gray-400 truncate">
-              {{ main.user?.email }}
-            </p>
+            <div class="flex items-center gap-1 min-w-0">
+              <p class="text-sm text-gray-400 truncate min-w-0 flex-1">
+                {{ main.user?.email }}
+              </p>
+              <router-link
+                to="/settings/account"
+                class="d-btn d-btn-ghost d-btn-sm d-btn-square size-8 min-h-0 border-none text-slate-300 hover:bg-slate-500/30 hover:text-white shrink-0"
+                :aria-label="t('settings')"
+                @click="allowPendingOnboardingDashboardExploration"
+              >
+                <IconSettings class="size-4" />
+              </router-link>
+            </div>
           </div>
         </div>
-        <router-link to="/settings/account" class="block py-2 px-3 rounded-lg hover:bg-slate-700/50" @click="allowPendingOnboardingDashboardExploration">
-          {{ t('settings') }}
-        </router-link>
         <router-link v-if="isMobile" to="/app/modules" class="block py-2 px-3 rounded-lg hover:bg-slate-700/50">
           {{ t('module-heading') }}
         </router-link>
@@ -155,9 +142,6 @@ async function logOut() {
         </div>
         <div v-if="spoofed" class="block py-2 px-3 rounded-lg cursor-pointer hover:bg-slate-700/50" :class="{ 'opacity-50 cursor-not-allowed': isLoading }" @click="resetSpoofedUser">
           {{ t('reset-spoofed-user') }}
-        </div>
-        <div class="block py-2 px-3 rounded-lg cursor-pointer hover:bg-slate-700/50" @click="logOut">
-          {{ t('sign-out') }}
         </div>
       </div>
     </div>
