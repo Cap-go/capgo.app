@@ -61,4 +61,15 @@ describe('pre-organization onboarding v3', () => {
     )
     expect(creation.indexOf('await createAppRecord(')).toBeLessThan(creation.indexOf('showOrganizationInvite.value = shouldInvite'))
   })
+
+  it.concurrent('shows technical delegation unconditionally on pre-org setup', () => {
+    const setup = onboardingSource.slice(
+      onboardingSource.indexOf("flowStep === 'setup' && createdApp"),
+      onboardingSource.indexOf("!props.preOrg && flowStep === 'choice'"),
+    )
+    expect(setup).toContain('<TechnicalTeammateInviteCard')
+    expect(setup).toContain('analytics-channel="onboarding-v3"')
+    expect(setup).toContain(':tracking-version="3"')
+    expect(setup).not.toContain('selectedUserCountStop')
+  })
 })

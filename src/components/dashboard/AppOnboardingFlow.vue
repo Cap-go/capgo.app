@@ -55,6 +55,7 @@ import { allowOnboardingDashboardExploration, ONBOARDING_DASHBOARD_EXPLORED_EVEN
 import { slugifyOnboardingSegment } from '~/utils/onboardingSlug'
 import AppOnboardingIconInput from './AppOnboardingIconInput.vue'
 import OrganizationOnboardingInvite from './OrganizationOnboardingInvite.vue'
+import TechnicalTeammateInviteCard from './TechnicalTeammateInviteCard.vue'
 
 const props = defineProps<{
   onboarding: boolean
@@ -989,6 +990,14 @@ function continueFromOrganizationInvite(invitationCount: number) {
   })
   showOrganizationInvite.value = false
   completeAndViewStep('setup', { appId: createdApp.value.app_id })
+}
+
+function onTechnicalInviteOpened() {
+  progressTracker?.trackStepEvent('onboarding_technical_invite_opened', 'setup')
+}
+
+function onTechnicalInviteSucceeded() {
+  progressTracker?.trackStepEvent('onboarding_technical_invite_succeeded', 'setup')
 }
 
 async function createAppRecord(options?: { nextStep?: StandardFlowStep | PreOrgFlowStep }) {
@@ -1944,6 +1953,13 @@ watch(appName, (value) => {
               <span>{{ t('app-onboarding-command-apikey-loading') }}</span>
             </div>
           </div>
+
+          <TechnicalTeammateInviteCard
+            analytics-channel="onboarding-v3"
+            :tracking-version="3"
+            @opened="onTechnicalInviteOpened"
+            @success="onTechnicalInviteSucceeded"
+          />
 
           <div class="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-sm text-slate-700 dark:border-white/15 dark:bg-slate-950/90 dark:text-slate-200">
             <div class="flex flex-wrap items-start justify-between gap-3">
