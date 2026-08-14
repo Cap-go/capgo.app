@@ -588,6 +588,7 @@ describe('[POST]/[PUT] /app onboarding progress', () => {
     expect(afterSkip.source).toBe('cli')
     expect(afterSkip.steps.add_app?.status).toBe('done')
     expect(afterSkip.steps.add_channel?.status).toBe('skipped')
+    // Partial CLI progress stays in_progress. Missing steps are not skipped.
     expect(afterSkip.outcome).toBe('in_progress')
   })
 })
