@@ -5,6 +5,8 @@ import type {
   OnboardingDetailsEvent,
   OnboardingDetailsEventProperties,
   OnboardingIntent,
+  OnboardingInteractionEvent,
+  OnboardingInteractionProperties,
   OnboardingStepCompletionProperties,
 } from '~/utils/onboardingProgressAnalytics'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -29,6 +31,7 @@ import IconTerminal from '~icons/lucide/terminal'
 import IconUsers from '~icons/lucide/users-round'
 import { createDefaultApiKey, findUsablePlainApiKey } from '~/services/apikeys'
 import { getCapgoApiErrorCode, invokeCapgoApi } from '~/services/capgoApi'
+import { uploadOrgLogoFile } from '~/services/photos'
 import { pushEvent } from '~/services/posthog'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
 import { getLocalConfig, isLocal, useSupabase } from '~/services/supabase'
@@ -51,6 +54,7 @@ import { createOnboardingDetailsFieldDebouncer, createOnboardingProgressTracker 
 import { allowOnboardingDashboardExploration, ONBOARDING_DASHBOARD_EXPLORED_EVENT } from '~/utils/onboardingRedirect'
 import { slugifyOnboardingSegment } from '~/utils/onboardingSlug'
 import AppOnboardingIconInput from './AppOnboardingIconInput.vue'
+import OrganizationOnboardingInvite from './OrganizationOnboardingInvite.vue'
 
 const props = defineProps<{
   onboarding: boolean
@@ -79,6 +83,13 @@ interface UserCountStop {
   value: number
   label: string
   planName: string
+}
+
+interface OrganizationWebsitePreview {
+  hostname: string
+  icon: string | null
+  name: string
+  website: string
 }
 
 const isLoading = ref(true)
@@ -112,6 +123,11 @@ const selectedIntent = ref<OnboardingIntent | null>(null)
 const orgNameInput = ref('')
 const hasEditedOrgName = ref(false)
 const estimatedUsersIndex = ref<number | null>(null)
+const isOrganizationImportOpen = ref(false)
+const isImportingOrganizationWebsite = ref(false)
+const organizationWebsiteInput = ref('')
+const websitePreview = ref<OrganizationWebsitePreview | null>(null)
+const showOrganizationInvite = ref(false)
 
 const intentOptions = [
   { value: 'ota', icon: IconRefresh },
@@ -288,12 +304,19 @@ const setupSubtitle = computed(() => usesBuilderSetupCommand.value ? t('unified-
 let progressTracker: ReturnType<typeof createOnboardingProgressTracker> | null = null
 let pendingDashboardExplored = false
 
-function trackV2DetailsEvent(name: OnboardingDetailsEvent, details: OnboardingDetailsEventProperties = {}) {
+function trackDetailsEvent(name: OnboardingDetailsEvent, details: OnboardingDetailsEventProperties = {}) {
   if (props.preOrg)
     progressTracker?.trackDetailsEvent(name, details)
 }
 
-const detailsFieldTracker = createOnboardingDetailsFieldDebouncer(trackV2DetailsEvent)
+function trackOrganizationEvent(
+  name: OnboardingInteractionEvent,
+  details: OnboardingInteractionProperties = {},
+) {
+  progressTracker?.trackStepEvent(name, 'organization', details)
+}
+
+const detailsFieldTracker = createOnboardingDetailsFieldDebouncer(trackDetailsEvent)
 
 function initializeProgressTracking(resumed: boolean) {
   const trackedSteps = appOnboardingSteps.value.map(step => step.id)
@@ -419,12 +442,12 @@ function resetStoreImportState() {
 
 function togglePreOrgStoreImport() {
   if (existingAppSetup.value === 'import') {
-    trackV2DetailsEvent('onboarding_store_import_hidden')
+    trackDetailsEvent('onboarding_store_import_hidden')
     existingAppSetup.value = 'manual'
     return
   }
 
-  trackV2DetailsEvent('onboarding_store_import_shown')
+  trackDetailsEvent('onboarding_store_import_shown')
   existingAppSetup.value = 'import'
 }
 
@@ -532,7 +555,7 @@ async function importStoreMetadata() {
   if (!requestedUrl || existingAppSetup.value !== 'import')
     return
 
-  trackV2DetailsEvent('onboarding_store_import_submitted')
+  trackDetailsEvent('onboarding_store_import_submitted')
   const requestedRun = ++storeImportRun
   isImportingStore.value = true
   try {
@@ -567,19 +590,75 @@ async function importStoreMetadata() {
     if (props.preOrg)
       existingApp.value = true
 
-    trackV2DetailsEvent('onboarding_store_import_succeeded')
+    trackDetailsEvent('onboarding_store_import_succeeded')
   }
   catch (error) {
     if (requestedRun !== storeImportRun || existingAppSetup.value !== 'import' || storeUrl.value.trim() !== requestedUrl)
       return
 
     console.error('Cannot import store metadata', error)
-    trackV2DetailsEvent('onboarding_store_import_failed')
+    trackDetailsEvent('onboarding_store_import_failed')
     toast.error(t('app-onboarding-toast-store-metadata-error'))
   }
   finally {
     if (requestedRun === storeImportRun)
       isImportingStore.value = false
+  }
+}
+
+function toggleOrganizationWebsiteImport() {
+  isOrganizationImportOpen.value = !isOrganizationImportOpen.value
+  if (isOrganizationImportOpen.value)
+    trackOrganizationEvent('onboarding_organization_import_opened')
+}
+
+async function importOrganizationWebsite() {
+  const website = organizationWebsiteInput.value.trim()
+  if (!website) {
+    toast.error(t('organization-onboarding-website-invalid'))
+    return
+  }
+
+  isImportingOrganizationWebsite.value = true
+  trackOrganizationEvent('onboarding_organization_import_submitted')
+  try {
+    const { data, error } = await invokeCapgoApi('private/website_preview', {
+      body: { website },
+    })
+    if (error || !data) {
+      console.error('Failed to import organization website', error)
+      toast.error(t('organization-onboarding-website-fetch-failed'))
+      trackOrganizationEvent('onboarding_organization_import_failed')
+      return
+    }
+
+    websitePreview.value = data as OrganizationWebsitePreview
+    if (websitePreview.value.name) {
+      orgNameInput.value = websitePreview.value.name
+      hasEditedOrgName.value = true
+    }
+    trackOrganizationEvent('onboarding_organization_import_succeeded')
+  }
+  finally {
+    isImportingOrganizationWebsite.value = false
+  }
+}
+
+async function uploadImportedOrganizationLogo(orgId: string) {
+  const icon = websitePreview.value?.icon
+  if (!icon)
+    return
+
+  try {
+    const response = await fetch(icon)
+    const contentType = response.headers.get('content-type')?.split(';')[0]?.trim() ?? ''
+    if (!response.ok || !contentType.startsWith('image/'))
+      throw new Error('Imported organization logo is not an image')
+    await uploadOrgLogoFile(orgId, await response.blob(), `${websitePreview.value?.hostname || 'website-logo'}.png`)
+  }
+  catch (error) {
+    console.error('Failed to upload imported organization logo', error)
+    toast.error(t('organization-onboarding-imported-logo-failed'))
   }
 }
 
@@ -597,19 +676,19 @@ function onSelectIconFormKit(value: unknown) {
   localIconPreview.value = file ? URL.createObjectURL(file) : ''
   isResumeIconLoading.value = false
   if (file)
-    trackV2DetailsEvent('onboarding_app_icon_picked', { icon_source: 'file' })
+    trackDetailsEvent('onboarding_app_icon_picked', { icon_source: 'file' })
 }
 
 function onIconPickerOpened() {
-  trackV2DetailsEvent('onboarding_app_icon_picker_opened')
+  trackDetailsEvent('onboarding_app_icon_picker_opened')
 }
 
 function onIconPickerOpenFailed() {
-  trackV2DetailsEvent('onboarding_app_icon_picker_open_failed')
+  trackDetailsEvent('onboarding_app_icon_picker_open_failed')
 }
 
 function onIconPickerClosedWithoutSelection() {
-  trackV2DetailsEvent('onboarding_app_icon_picker_closed_without_selection')
+  trackDetailsEvent('onboarding_app_icon_picker_closed_without_selection')
 }
 
 function onAppNameInput(event: Event) {
@@ -628,7 +707,7 @@ function onStoreUrlInput(event: Event) {
 }
 
 function openAppIdHelp() {
-  trackV2DetailsEvent('onboarding_app_id_help_opened')
+  trackDetailsEvent('onboarding_app_id_help_opened')
   dialogStore.openDialog({
     title: t('app-onboarding-v2-appid-dialog-title'),
     description: t('app-onboarding-v2-appid-dialog-description'),
@@ -685,7 +764,7 @@ async function uploadIcon(appId: string, iconSourceUrl?: string) {
 
   if (!fileToUpload) {
     if (iconSourceUrl)
-      trackV2DetailsEvent('onboarding_app_icon_upload_failed', { icon_source: 'store' })
+      trackDetailsEvent('onboarding_app_icon_upload_failed', { icon_source: 'store' })
     return
   }
 
@@ -701,7 +780,7 @@ async function uploadIcon(appId: string, iconSourceUrl?: string) {
 
   if (uploadError) {
     console.error('Cannot upload app icon', uploadError)
-    trackV2DetailsEvent('onboarding_app_icon_upload_failed', { icon_source: iconSource })
+    trackDetailsEvent('onboarding_app_icon_upload_failed', { icon_source: iconSource })
     return
   }
 
@@ -712,11 +791,11 @@ async function uploadIcon(appId: string, iconSourceUrl?: string) {
 
   if (appUpdateError) {
     console.error('Cannot save app icon path', appUpdateError)
-    trackV2DetailsEvent('onboarding_app_icon_upload_failed', { icon_source: iconSource })
+    trackDetailsEvent('onboarding_app_icon_upload_failed', { icon_source: iconSource })
     return
   }
 
-  trackV2DetailsEvent('onboarding_app_icon_uploaded', { icon_source: iconSource })
+  trackDetailsEvent('onboarding_app_icon_uploaded', { icon_source: iconSource })
 }
 
 function ensureValidAppId(): boolean {
@@ -822,6 +901,7 @@ async function createOrganizationAndApp() {
     toast.error(t('organization-onboarding-user-scale-required'))
     return
   }
+  const shouldInvite = selectedUserCountStop.value?.planName !== 'Solo'
 
   isSubmitting.value = true
   try {
@@ -832,6 +912,7 @@ async function createOrganizationAndApp() {
         email: main.auth?.email ?? '',
         estimatedMau,
         intent: selectedIntent.value,
+        website: websitePreview.value?.website,
       },
     })
 
@@ -866,10 +947,16 @@ async function createOrganizationAndApp() {
     }
 
     clearOnboardingAppDraft(onboardingUserId.value)
-    await createAppRecord({ nextStep: 'setup' })
+    await createAppRecord({ nextStep: shouldInvite ? 'organization' : 'setup' })
 
     if (!createdApp.value)
       return
+
+    await uploadImportedOrganizationLogo(data.id)
+    showOrganizationInvite.value = shouldInvite
+    if (shouldInvite)
+      trackOrganizationEvent('onboarding_organization_invite_viewed')
+
     removeBeforeUnloadWarning()
 
     try {
@@ -883,6 +970,25 @@ async function createOrganizationAndApp() {
   finally {
     isSubmitting.value = false
   }
+}
+
+function onOrganizationInviteOpened() {
+  trackOrganizationEvent('onboarding_organization_invite_opened')
+}
+
+function onOrganizationInviteSucceeded() {
+  trackOrganizationEvent('onboarding_organization_invite_succeeded')
+}
+
+function continueFromOrganizationInvite(invitationCount: number) {
+  if (!createdApp.value)
+    return
+
+  trackOrganizationEvent('onboarding_organization_invite_continued', {
+    invitation_count: invitationCount,
+  })
+  showOrganizationInvite.value = false
+  completeAndViewStep('setup', { appId: createdApp.value.app_id })
 }
 
 async function createAppRecord(options?: { nextStep?: StandardFlowStep | PreOrgFlowStep }) {
@@ -1631,8 +1737,20 @@ watch(appName, (value) => {
           </div>
         </div>
 
-        <div v-else-if="props.preOrg && flowStep === 'organization'" class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900/95">
-          <div class="space-y-6">
+        <template v-else-if="props.preOrg && flowStep === 'organization'">
+          <OrganizationOnboardingInvite
+            v-if="showOrganizationInvite && createdApp && currentOrg"
+            analytics-channel="onboarding-v3"
+            :continue-label="t('continue')"
+            :organization-id="currentOrg.gid"
+            :organization-name="currentOrg.name"
+            :tracking-version="3"
+            @continue="continueFromOrganizationInvite"
+            @invite-opened="onOrganizationInviteOpened"
+            @invite-succeeded="onOrganizationInviteSucceeded"
+          />
+          <div v-else class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900/95">
+            <div class="space-y-6">
             <div>
               <p class="text-sm font-semibold text-primary-500 dark:text-slate-300">
                 {{ t('unified-onboarding-step-organization') }}
@@ -1660,6 +1778,53 @@ watch(appName, (value) => {
                 class="d-input mt-2 min-h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-base text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/10 sm:text-sm dark:border-white/20 dark:bg-slate-950/90 dark:text-white dark:placeholder:text-slate-500 dark:focus:border-primary-500 dark:focus:ring-primary-500/30"
                 @input="hasEditedOrgName = true"
               >
+            </div>
+
+            <div class="space-y-3">
+              <button
+                type="button"
+                class="d-btn min-h-11"
+                :class="whiteCardSecondaryButtonClass()"
+                data-test="onboarding-toggle-organization-import"
+                :aria-expanded="isOrganizationImportOpen"
+                @click="toggleOrganizationWebsiteImport"
+              >
+                <IconGlobe class="h-4 w-4" />
+                {{ t('organization-onboarding-import-website') }}
+              </button>
+
+              <div v-if="isOrganizationImportOpen" class="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-white/15 dark:bg-slate-950/90">
+                <label for="onboarding-organization-website" class="text-sm font-medium text-slate-800 dark:text-slate-200">
+                  {{ t('organization-onboarding-website-label') }}
+                </label>
+                <div class="flex flex-col gap-3 sm:flex-row">
+                  <input
+                    id="onboarding-organization-website"
+                    v-model="organizationWebsiteInput"
+                    type="url"
+                    placeholder="https://capgo.app"
+                    data-test="onboarding-organization-website"
+                    class="d-input min-h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-base text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/10 sm:text-sm dark:border-white/20 dark:bg-slate-950/90 dark:text-white dark:placeholder:text-slate-500 dark:focus:border-primary-500 dark:focus:ring-primary-500/30"
+                    @input="websitePreview = null"
+                  >
+                  <button
+                    type="button"
+                    class="d-btn min-h-11 shrink-0"
+                    :class="whiteCardSecondaryButtonClass()"
+                    :disabled="isImportingOrganizationWebsite || !organizationWebsiteInput.trim()"
+                    data-test="onboarding-import-organization-website"
+                    @click="importOrganizationWebsite"
+                  >
+                    <IconLoader v-if="isImportingOrganizationWebsite" class="h-4 w-4 animate-spin" />
+                    <IconSparkles v-else class="h-4 w-4" />
+                    {{ t('organization-onboarding-import-website') }}
+                  </button>
+                </div>
+                <div v-if="websitePreview" class="flex items-center gap-3 text-sm text-slate-600 dark:text-slate-300">
+                  <img v-if="websitePreview.icon" :src="websitePreview.icon" :alt="t('organization-onboarding-imported-logo-preview-alt')" class="h-10 w-10 rounded-lg object-cover">
+                  <span>{{ t('organization-onboarding-website-imported') }}</span>
+                </div>
+              </div>
             </div>
 
             <div v-if="existingApp === true">
@@ -1738,7 +1903,8 @@ watch(appName, (value) => {
               </button>
             </div>
           </div>
-        </div>
+          </div>
+        </template>
 
         <div v-else-if="flowStep === 'setup' && createdApp" class="space-y-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900/95">
           <div>
