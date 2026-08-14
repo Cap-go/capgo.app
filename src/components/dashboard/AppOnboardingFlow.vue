@@ -28,6 +28,9 @@ import IconStore from '~icons/lucide/store'
 import IconTerminal from '~icons/lucide/terminal'
 import IconUsers from '~icons/lucide/users-round'
 import { createDefaultApiKey, findUsablePlainApiKey } from '~/services/apikeys'
+import {
+  parseAppOnboarding,
+} from '~/services/appOnboarding'
 import { getCapgoApiErrorCode, invokeCapgoApi } from '~/services/capgoApi'
 import { pushEvent } from '~/services/posthog'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
@@ -50,6 +53,7 @@ import {
 import { createOnboardingDetailsFieldDebouncer, createOnboardingProgressTracker } from '~/utils/onboardingProgressAnalytics'
 import { allowOnboardingDashboardExploration, ONBOARDING_DASHBOARD_EXPLORED_EVENT } from '~/utils/onboardingRedirect'
 import { slugifyOnboardingSegment } from '~/utils/onboardingSlug'
+import AppOnboardingCliSteps from './AppOnboardingCliSteps.vue'
 import AppOnboardingIconInput from './AppOnboardingIconInput.vue'
 
 const props = defineProps<{
@@ -70,7 +74,9 @@ const config = getLocalConfig()
 const STORE_ICON_FETCH_TIMEOUT_MS = 10_000
 const removeBeforeUnloadWarning = useBeforeUnloadWarning(Boolean(props.preOrg))
 
-type AppRow = Database['public']['Tables']['apps']['Row']
+type AppRow = Omit<Database['public']['Tables']['apps']['Row'], 'onboarding'> & {
+  onboarding?: unknown
+}
 type StandardFlowStep = 'details' | 'choice' | 'install' | 'setup'
 type PreOrgFlowStep = 'intent' | 'details' | 'organization' | 'setup'
 type OnboardingFlowStep = StandardFlowStep | PreOrgFlowStep
@@ -89,6 +95,7 @@ const isSeedingDemo = ref(false)
 const isCliCommandVisible = ref(false)
 const apiKey = ref<string | null>(null)
 const createdApp = ref<AppRow | null>(null)
+const reportedSetupSource = ref<'manual' | 'cli' | 'mcp' | 'ai' | null>(null)
 const flowStep = ref<OnboardingFlowStep>('details')
 const showLanguageSelector = computed(() => (
   (props.preOrg && !createdApp.value)
@@ -1089,6 +1096,29 @@ async function copyCliCommand() {
     trackSuccessfulCopy('onboarding_cli_command_copied')
 }
 
+async function reportOnboardingPatch(patch: { source?: 'manual' | 'cli' | 'mcp' | 'ai', outcome?: 'in_progress' | 'completed' | 'skipped' | 'switched_to_manual' }) {
+  const app = createdApp.value
+  if (!app)
+    return
+
+  const previousSource = reportedSetupSource.value
+  try {
+    if (patch.source)
+      reportedSetupSource.value = patch.source
+    const { error } = await supabase.rpc('report_app_onboarding_setup', {
+      p_app_id: app.app_id,
+      p_patch: patch as never,
+    })
+    if (error)
+      throw error
+  }
+  catch (error) {
+    if (patch.source)
+      reportedSetupSource.value = previousSource
+    console.error('Cannot report onboarding progress', error)
+  }
+}
+
 async function copyAiInstructions() {
   try {
     await loadApiKey()
@@ -1105,8 +1135,10 @@ async function copyAiInstructions() {
   }
 
   const copied = await copyText(createAiHelpPrompt())
-  if (copied)
+  if (copied) {
     trackSuccessfulCopy('onboarding_ai_instructions_copied')
+    await reportOnboardingPatch({ source: 'ai' })
+  }
 }
 
 function goToInstallStep() {
@@ -1119,7 +1151,7 @@ function goToInstallStep() {
   })
 }
 
-function openDashboard() {
+async function openDashboard() {
   if (!createdApp.value)
     return
 
@@ -1128,6 +1160,16 @@ function openDashboard() {
       appId: createdApp.value.app_id,
     })
   }
+  const app = createdApp.value
+  const { data } = await supabase
+    .from('apps')
+    .select('onboarding')
+    .eq('app_id', app.app_id)
+    .maybeSingle()
+  const current = parseAppOnboarding(data?.onboarding ?? app.onboarding)
+  const source = reportedSetupSource.value ?? current.source
+  if (source !== 'manual' && current.outcome === 'in_progress')
+    await reportOnboardingPatch({ outcome: 'switched_to_manual' })
   window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))
   allowOnboardingDashboardExploration(onboardingUserId.value, createdApp.value.app_id)
   router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}/getting-started`)
@@ -1779,6 +1821,12 @@ watch(appName, (value) => {
             </div>
           </div>
 
+          <AppOnboardingCliSteps
+            :key="createdApp.app_id"
+            :app-id="createdApp.app_id"
+            :initial-onboarding="createdApp.onboarding"
+          />
+
           <div class="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-sm text-slate-700 dark:border-white/15 dark:bg-slate-950/90 dark:text-slate-200">
             <div class="flex flex-wrap items-start justify-between gap-3">
               <div class="max-w-2xl">
@@ -1918,6 +1966,12 @@ watch(appName, (value) => {
                 <span>{{ t('app-onboarding-command-apikey-loading') }}</span>
               </div>
             </div>
+
+            <AppOnboardingCliSteps
+              :key="createdApp.app_id"
+              :app-id="createdApp.app_id"
+              :initial-onboarding="createdApp.onboarding"
+            />
 
             <div class="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-sm text-slate-700 dark:border-white/15 dark:bg-slate-950/90 dark:text-slate-200">
               <div class="flex flex-wrap items-start justify-between gap-3">

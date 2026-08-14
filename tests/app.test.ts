@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { parseAppOnboarding } from '../supabase/functions/_backend/utils/appOnboarding.ts'
 import { BASE_URL, createDirectApiKeyWithBindings, executeSQL, fetchTestRequest, getAuthHeaders, getSupabaseClient, headers, ORG_ID, ORG_ID_2, resetAndSeedAppData, resetAppData, resetAppDataStats, USER_ID, USER_ID_2 } from './test-utils.ts'
 
 function isDuplicateAppCreationError(body: any): boolean {
@@ -524,5 +525,70 @@ describe('[POST] /app operations with non-owner user', () => {
     expect(createApp.status).toBe(200)
     const responseData = await createApp.json()
     expect(responseData).toHaveProperty('app_id', adminAccessAppName)
+  })
+})
+
+describe('[POST]/[PUT] /app onboarding progress', () => {
+  const id = randomUUID()
+  const APPNAME = `com.onboarding.progress.${id}`
+
+  afterAll(async () => {
+    await resetAppData(APPNAME)
+    await resetAppDataStats(APPNAME)
+  })
+
+  it('defaults new apps to manual onboarding and merges CLI progress', async () => {
+    const createApp = await fetchTestRequest(`${BASE_URL}/app`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        owner_org: ORG_ID,
+        app_id: APPNAME,
+        name: `App ${APPNAME}`,
+        icon: 'test-icon',
+      }),
+    })
+    expect(createApp.status).toBe(200)
+    const created = parseAppOnboarding((await createApp.json() as { onboarding?: unknown }).onboarding)
+    expect(created.source).toBe('manual')
+    expect(created.outcome).toBe('in_progress')
+
+    const firstPut = await fetchTestRequest(`${BASE_URL}/app/${APPNAME}`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({
+        onboarding: {
+          source: 'cli',
+          steps: {
+            add_app: { status: 'done' },
+          },
+        },
+      }),
+    })
+    expect(firstPut.status).toBe(200)
+    const afterCli = parseAppOnboarding((await firstPut.json() as { onboarding?: unknown }).onboarding)
+    expect(afterCli.source).toBe('cli')
+    expect(afterCli.steps.add_app?.status).toBe('done')
+
+    const skipPut = await fetchTestRequest(`${BASE_URL}/app/${APPNAME}`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({
+        onboarding: {
+          source: 'ai',
+          steps: {
+            add_app: { status: 'skipped' },
+            add_channel: { status: 'skipped' },
+          },
+        },
+      }),
+    })
+    expect(skipPut.status).toBe(200)
+    const afterSkip = parseAppOnboarding((await skipPut.json() as { onboarding?: unknown }).onboarding)
+    expect(afterSkip.source).toBe('cli')
+    expect(afterSkip.steps.add_app?.status).toBe('done')
+    expect(afterSkip.steps.add_channel?.status).toBe('skipped')
+    // Partial CLI progress stays in_progress. Missing steps are not skipped.
+    expect(afterSkip.outcome).toBe('in_progress')
   })
 })

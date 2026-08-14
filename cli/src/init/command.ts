@@ -38,6 +38,7 @@ import { consoleWebUrl, createSupabaseClient, defaultApiHost, findBuildCommandFo
 import { buildAppIdConflictSuggestions, isAppAlreadyExistsError } from './app-conflict'
 import { isChannelAlreadyExistsError } from './channel-conflict'
 import { createMissingExecutableError, getAvailablePackageManagers, getMissingPackageManagerExecutable, getPackageManagerInfo, preparePackageManagerCommandEnvironment, probeExecutable, probePackageManagerCommand, resolveExecutableProbeError, waitForCommandResult } from './command-execution'
+import { reportInitOnboardingStep } from './onboarding-report'
 import { cancel as pCancel, confirm as pConfirm, intro as pIntro, isCancel as pIsCancel, log as pLog, outro as pOutro, select as pSelect, spinner as pSpinner, text as pText } from './prompts'
 import { finishActiveCliReplay, getActiveCliReplaySessionId, isCliTelemetryDisabled, startInitReplay } from './replay'
 import { appendInitStreamingLine, clearInitStreamingOutput, INIT_CANCEL, pushInitLog, setInitCodeDiff, setInitEncryptionSummary, setInitVersionWarning, startInitStreamingOutput, stopInitInkSession, updateInitStreamingStatus, waitForInitLogSkip, waitForInitStreamingContinue } from './runtime'
@@ -1292,8 +1293,9 @@ async function ensureWorkspaceReadyForInit(initialAppId?: string): Promise<strin
 
 let globalOrgId: string | undefined
 let globalOrgName: string | undefined
+let globalReportContext: { apikey: string, supaHost?: string, supaAnon?: string } | undefined
 
-function markStepDone(step: number, pathToPackageJson?: string, channelName?: string) {
+function markStepDone(step: number, pathToPackageJson?: string, channelName?: string, status: 'done' | 'skipped' = 'done') {
   try {
     writeFileSync(getTmpObjectPath(), JSON.stringify({
       step_done: step,
@@ -1318,6 +1320,16 @@ function markStepDone(step: number, pathToPackageJson?: string, channelName?: st
     }
     if (channelName) {
       globalChannelName = channelName
+    }
+    if (globalReportContext?.apikey && globalAppId) {
+      const isLastStep = step >= initOnboardingSteps.length
+      void reportInitOnboardingStep(globalReportContext.apikey, globalAppId, step, status, {
+        supaHost: globalReportContext.supaHost,
+        supaAnon: globalReportContext.supaAnon,
+        outcome: isLastStep ? (status === 'skipped' ? 'skipped' : 'completed') : 'in_progress',
+      }).catch((error) => {
+        pLog.warn(`Cannot report onboarding progress:\n${error}`)
+      })
     }
   }
   catch (err) {
@@ -3814,7 +3826,7 @@ async function runProjectBuildAndSync(appId: string, platform: PlatformChoice, o
   return 'completed'
 }
 
-async function buildProjectStep(orgId: string, apikey: string, appId: string, platform: 'ios' | 'android', config?: CapacitorConfigSnapshot) {
+async function buildProjectStep(orgId: string, apikey: string, appId: string, platform: 'ios' | 'android', config?: CapacitorConfigSnapshot): Promise<'completed' | 'skipped'> {
   const packageJsonPath = path.resolve(globalPathToPackageJson ?? join(findRoot(cwd()), PACKNAME))
   const projectDir = dirname(packageJsonPath)
   const pm = await selectAvailablePackageManager(getPMAndCommand(), projectDir, orgId, apikey)
@@ -3825,14 +3837,15 @@ async function buildProjectStep(orgId: string, apikey: string, appId: string, pl
   if (!doBuild) {
     pLog.info(`Build yourself in ${projectDir} with command: ${pm.pm} run build && ${pm.runner} cap sync ${platform}`)
     await markStep(orgId, apikey, 'build-project', appId)
-    return
+    return 'skipped'
   }
 
   const buildOutcome = await runProjectBuildAndSync(appId, platform, orgId, apikey, pm)
   if (buildOutcome === 'skipped')
-    return
+    return 'skipped'
 
   await markStep(orgId, apikey, 'build-project', appId)
+  return 'completed'
 }
 
 export function runPackageRunnerSync(runner: string, args: string[], options: Parameters<typeof spawnSync>[2]) {
@@ -4492,99 +4505,102 @@ async function selectPlatformStep(orgId: string, apikey: string, config?: Capaci
   }
 }
 
-async function runDeviceStep(orgId: string, apikey: string, appId: string, platform: 'ios' | 'android', projectDir = cwd()) {
+async function runDeviceStep(orgId: string, apikey: string, appId: string, platform: 'ios' | 'android', projectDir = cwd()): Promise<'completed' | 'skipped'> {
   const pm = getPMAndCommand()
   const doRun = await pConfirm({ message: `Run ${appId} on ${platform.toUpperCase()} device now to test the initial version?` })
   await cancelCommand(doRun, orgId, apikey)
-  if (doRun) {
-    const runCommand = await resolveRunDeviceCommand(() => exitCanceledInitOnboarding(orgId, apikey), pm, platform, projectDir)
-    if (!runCommand.args) {
-      pLog.info(`Skipped device launch. You can run it manually in ${projectDir} with: ${runCommand.command}`)
-      await markStep(orgId, apikey, 'run-device', appId)
-      return
-    }
+  if (!doRun) {
+    await markStep(orgId, apikey, 'run-device', appId)
+    return 'skipped'
+  }
 
-    const s = pSpinner()
-    const runMessage = projectDir === cwd()
-      ? `Running: ${runCommand.command}`
-      : `Running in ${projectDir}: ${runCommand.command}`
-    s.start(runMessage)
-    s.stop()
+  const runCommand = await resolveRunDeviceCommand(() => exitCanceledInitOnboarding(orgId, apikey), pm, platform, projectDir)
+  if (!runCommand.args) {
+    pLog.info(`Skipped device launch. You can run it manually in ${projectDir} with: ${runCommand.command}`)
+    await markStep(orgId, apikey, 'run-device', appId)
+    return 'skipped'
+  }
 
-    let runResult: Awaited<ReturnType<typeof streamCommandInInitPanel>> | undefined
-    let runError: Error | undefined
-    try {
-      runResult = await streamCommandInInitPanel({
-        title: `Running on ${platform.toUpperCase()} device`,
-        runner: pm.runner,
-        args: runCommand.args,
-        cwd: projectDir,
-      })
-      await delay(runResult.success ? 750 : 3500)
-      clearInitStreamingOutput()
-    }
-    catch (error) {
-      runError = error instanceof Error ? error : new Error(String(error))
-      clearInitStreamingOutput()
-    }
-    const runFailed = runError || !runResult?.success
+  const s = pSpinner()
+  const runMessage = projectDir === cwd()
+    ? `Running: ${runCommand.command}`
+    : `Running in ${projectDir}: ${runCommand.command}`
+  s.start(runMessage)
+  s.stop()
 
-    if (runFailed) {
-      const platformName = platform === 'ios' ? 'iOS' : 'Android'
-      s.stop(`App failed to start ❌`)
-      appendInternalLog(`app run failed (${platformName}): ${(runError || runResult?.error) ? formatError(runError ?? runResult?.error) : 'unknown error'}`)
-      if (runError || runResult?.error)
-        pLog.error(formatError(runError ?? runResult?.error))
-      pLog.error(`The app failed to start on your ${platformName} device.`)
+  let runResult: Awaited<ReturnType<typeof streamCommandInInitPanel>> | undefined
+  let runError: Error | undefined
+  try {
+    runResult = await streamCommandInInitPanel({
+      title: `Running on ${platform.toUpperCase()} device`,
+      runner: pm.runner,
+      args: runCommand.args,
+      cwd: projectDir,
+    })
+    await delay(runResult.success ? 750 : 3500)
+    clearInitStreamingOutput()
+  }
+  catch (error) {
+    runError = error instanceof Error ? error : new Error(String(error))
+    clearInitStreamingOutput()
+  }
+  const runFailed = runError || !runResult?.success
 
-      const openIDE = await pConfirm({
-        message: `Would you like to open ${platform === 'ios' ? 'Xcode' : 'Android Studio'} to run the app manually?`,
-      })
+  if (runFailed) {
+    const platformName = platform === 'ios' ? 'iOS' : 'Android'
+    s.stop(`App failed to start ❌`)
+    appendInternalLog(`app run failed (${platformName}): ${(runError || runResult?.error) ? formatError(runError ?? runResult?.error) : 'unknown error'}`)
+    if (runError || runResult?.error)
+      pLog.error(formatError(runError ?? runResult?.error))
+    pLog.error(`The app failed to start on your ${platformName} device.`)
 
-      if (!pIsCancel(openIDE) && openIDE) {
-        const s2 = pSpinner()
-        s2.start(`Opening ${platform === 'ios' ? 'Xcode' : 'Android Studio'}...`)
-        s2.stop()
-        try {
-          const openResult = await streamCommandInInitPanel({
-            title: `Opening ${platform === 'ios' ? 'Xcode' : 'Android Studio'}`,
-            runner: pm.runner,
-            args: ['cap', 'open', platform],
-            cwd: projectDir,
-          })
-          await delay(openResult.success ? 750 : 3500)
-          clearInitStreamingOutput()
-          if (!openResult.success) {
-            s2.stop(`Could not open ${platform === 'ios' ? 'Xcode' : 'Android Studio'} ❌`)
-            if (openResult.error)
-              pLog.error(formatError(openResult.error))
-            pLog.info(`You can run the app manually in ${projectDir} with: ${runCommand.command}`)
-          }
-          else {
-            s2.stop(`IDE opened ✅`)
-            pLog.info(`Please run the app manually from ${platform === 'ios' ? 'Xcode' : 'Android Studio'}`)
-          }
-        }
-        catch (error) {
+    const openIDE = await pConfirm({
+      message: `Would you like to open ${platform === 'ios' ? 'Xcode' : 'Android Studio'} to run the app manually?`,
+    })
+
+    if (!pIsCancel(openIDE) && openIDE) {
+      const s2 = pSpinner()
+      s2.start(`Opening ${platform === 'ios' ? 'Xcode' : 'Android Studio'}...`)
+      s2.stop()
+      try {
+        const openResult = await streamCommandInInitPanel({
+          title: `Opening ${platform === 'ios' ? 'Xcode' : 'Android Studio'}`,
+          runner: pm.runner,
+          args: ['cap', 'open', platform],
+          cwd: projectDir,
+        })
+        await delay(openResult.success ? 750 : 3500)
+        clearInitStreamingOutput()
+        if (!openResult.success) {
           s2.stop(`Could not open ${platform === 'ios' ? 'Xcode' : 'Android Studio'} ❌`)
-          pLog.error(formatError(error))
+          if (openResult.error)
+            pLog.error(formatError(openResult.error))
           pLog.info(`You can run the app manually in ${projectDir} with: ${runCommand.command}`)
         }
+        else {
+          s2.stop(`IDE opened ✅`)
+          pLog.info(`Please run the app manually from ${platform === 'ios' ? 'Xcode' : 'Android Studio'}`)
+        }
       }
-      else {
+      catch (error) {
+        s2.stop(`Could not open ${platform === 'ios' ? 'Xcode' : 'Android Studio'} ❌`)
+        pLog.error(formatError(error))
         pLog.info(`You can run the app manually in ${projectDir} with: ${runCommand.command}`)
       }
     }
     else {
-      s.stop(`App started ✅`)
-      pLog.info(`📱 Your app should now be running on your ${platform} device with Capgo integrated`)
-      pLog.info(`🔄 This is your baseline version - we'll create an update next`)
+      pLog.info(`You can run the app manually in ${projectDir} with: ${runCommand.command}`)
     }
+    await markStep(orgId, apikey, 'run-device', appId)
+    return 'skipped'
   }
   else {
-    pLog.info(`If you change your mind, run it for yourself in ${projectDir} with: ${pm.runner} cap run ${platform}`)
+    s.stop(`App started ✅`)
+    pLog.info(`📱 Your app should now be running on your ${platform} device with Capgo integrated`)
+    pLog.info(`🔄 This is your baseline version - we'll create an update next`)
   }
   await markStep(orgId, apikey, 'run-device', appId)
+  return 'completed'
 }
 
 async function addCodeChangeStep(orgId: string, apikey: string, appId: string, pkgVersion: string, platform: 'ios' | 'android') {
@@ -4964,10 +4980,10 @@ async function uploadStep(orgId: string, apikey: string, appId: string, newVersi
           updateInitStreamingStatus('error', 'Bundle upload did not complete successfully.')
         }
       }
-  catch (error) {
-    const failureText = formatError(error)
-    updateInitStreamingStatus('error', failureText)
-    const continueResult = await waitForInitStreamingContinue('Press Enter to continue, or Ctrl+C to cancel.')
+      catch (error) {
+        const failureText = formatError(error)
+        updateInitStreamingStatus('error', failureText)
+        const continueResult = await waitForInitStreamingContinue('Press Enter to continue, or Ctrl+C to cancel.')
         clearInitStreamingOutput()
         if (pIsCancel(continueResult)) {
           await cancelCommand(continueResult, orgId, apikey)
@@ -4978,8 +4994,8 @@ async function uploadStep(orgId: string, apikey: string, appId: string, newVersi
         ], failureText, supportPlatform)
         continue
       }
-  if (!uploadRes?.success) {
-    const continueResult = await waitForInitStreamingContinue('Press Enter to continue, or Ctrl+C to cancel.')
+      if (!uploadRes?.success) {
+        const continueResult = await waitForInitStreamingContinue('Press Enter to continue, or Ctrl+C to cancel.')
         clearInitStreamingOutput()
         if (pIsCancel(continueResult)) {
           await cancelCommand(continueResult, orgId, apikey)
@@ -5489,6 +5505,11 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
   const orgId = organization.gid
   globalOrgId = orgId
   globalOrgName = organization.name
+  globalReportContext = {
+    apikey: options.apikey,
+    supaHost: options.supaHost,
+    supaAnon: options.supaAnon,
+  }
 
   if (resumed?.appId) {
     appId = resumed.appId
@@ -5497,6 +5518,8 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
 
   const pendingOnboardingSelection = await maybeReusePendingOnboardingApp(organization, options.apikey, appId, supabase, options)
   appId = pendingOnboardingSelection.appId ?? appId
+  if (appId)
+    globalAppId = appId
   await ensureCapacitorProjectReady(orgId, options.apikey, appId, pendingOnboardingSelection.pendingApp)
   selectedPackageJsonPath = path.resolve(globalPathToPackageJson ?? join(findRoot(cwd()), PACKNAME))
   selectedProjectDir = dirname(selectedPackageJsonPath)
@@ -5594,7 +5617,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
       // change the moment sync completes, which is much clearer than a
       // panel that silently disappears.
       await buildProjectStep(orgId, options.apikey, appId, platform, extConfig?.config)
-      markStepDone(7)
+        .then(outcome => markStepDone(7, undefined, undefined, outcome === 'skipped' ? 'skipped' : 'done'))
     }
 
     // Clear the encryption summary after step 7 — by this point it has
@@ -5609,7 +5632,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
     if (stepToSkip < 8) {
       renderCurrentStep(8)
       await runDeviceStep(orgId, options.apikey, appId, platform, selectedProjectDir)
-      markStepDone(8)
+        .then(outcome => markStepDone(8, undefined, undefined, outcome === 'skipped' ? 'skipped' : 'done'))
     }
 
     if (stepToSkip < 9) {

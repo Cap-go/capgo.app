@@ -1382,6 +1382,79 @@ describe('/private/admin_stats', () => {
     expect(exclusiveEndData.registration_source_trend.some(row => row.date === '2026-02-02')).toBe(false)
   })
 
+  it('returns a daily breakdown of app onboarding methods and CLI outcomes', async () => {
+    const supabase = getSupabaseClient()
+    const suffix = randomUUID().replaceAll('-', '').slice(0, 12)
+    const createdAt = '2097-08-14T10:00:00.000Z'
+    const apps = [
+      { app_id: `com.admin.onboard.manual.${suffix}`, source: 'manual', outcome: 'in_progress' },
+      { app_id: `com.admin.onboard.cli.${suffix}`, source: 'cli', outcome: 'completed' },
+      { app_id: `com.admin.onboard.cliwip.${suffix}`, source: 'cli', outcome: 'in_progress' },
+      { app_id: `com.admin.onboard.mcp.${suffix}`, source: 'mcp', outcome: 'skipped' },
+      { app_id: `com.admin.onboard.ai.${suffix}`, source: 'ai', outcome: 'switched_to_manual' },
+    ]
+
+    try {
+      const { error } = await supabase.from('apps').insert(apps.map(app => ({
+        owner_org: ONBOARDING_ORG_ID,
+        name: `Admin onboarding ${app.app_id}`,
+        app_id: app.app_id,
+        icon_url: 'https://example.com/icon.png',
+        created_at: createdAt,
+        onboarding: {
+          setup: {
+            source: app.source,
+            outcome: app.outcome,
+            steps: {},
+          },
+        },
+      })))
+      if (error)
+        throw error
+
+      const data = await getOnboardingFunnelDirect(
+        '2097-08-14T00:00:00.000Z',
+        '2097-08-16T00:00:00.000Z',
+      )
+
+      expect(data.onboarding_method_trend).toEqual([
+        {
+          date: '2097-08-14',
+          manual: 1,
+          cli: 2,
+          mcp: 1,
+          ai: 1,
+        },
+        {
+          date: '2097-08-15',
+          manual: 0,
+          cli: 0,
+          mcp: 0,
+          ai: 0,
+        },
+      ])
+      expect(data.onboarding_outcome_trend).toEqual([
+        {
+          date: '2097-08-14',
+          completed: 1,
+          skipped: 1,
+          switched_to_manual: 1,
+          in_progress: 1,
+        },
+        {
+          date: '2097-08-15',
+          completed: 0,
+          skipped: 0,
+          switched_to_manual: 0,
+          in_progress: 0,
+        },
+      ])
+    }
+    finally {
+      await supabase.from('apps').delete().in('app_id', apps.map(app => app.app_id))
+    }
+  })
+
   it.concurrent('keeps an uploaded bundle in the funnel after a later channel promotion', async () => {
     if (!soloPlan)
       throw new Error('Expected Solo plan to exist for onboarding funnel test')

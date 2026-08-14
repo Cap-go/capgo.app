@@ -5,6 +5,7 @@ meta:
 
 <script setup lang="ts">
 import type { TableColumn } from '~/components/comp_def'
+import type { AppOnboardingMethodTrendPoint, AppOnboardingOutcomeTrendPoint } from '~/services/adminAppOnboarding'
 import type { RegistrationSourceTrendPoint } from '~/services/adminRegistrationSources'
 import { computed, h, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -17,6 +18,7 @@ import AdminStackedBarChart from '~/components/admin/AdminStackedBarChart.vue'
 import AdminStatsCard from '~/components/admin/AdminStatsCard.vue'
 import ChartCard from '~/components/dashboard/ChartCard.vue'
 import PageLoader from '~/components/PageLoader.vue'
+import { aggregateAppOnboardingMethodTotals, aggregateAppOnboardingOutcomeTotals } from '~/services/adminAppOnboarding'
 import { aggregateRegistrationSourceTotals } from '~/services/adminRegistrationSources'
 import { formatLocalDate, formatLocalDateTime } from '~/services/date'
 import { formatNumberValue, formatOneDecimal } from '~/services/formatLocale'
@@ -78,6 +80,8 @@ interface OnboardingFunnelData {
     org_joins_existing_account: number
   }>
   registration_source_trend: RegistrationSourceTrendPoint[]
+  onboarding_method_trend: AppOnboardingMethodTrendPoint[]
+  onboarding_outcome_trend: AppOnboardingOutcomeTrendPoint[]
 }
 
 interface EmailTypeBreakdown {
@@ -1213,6 +1217,96 @@ const registrationSourceTrendSeries = computed(() => {
   ]
 })
 
+const appOnboardingMethodTotals = computed(() => {
+  return aggregateAppOnboardingMethodTotals(onboardingFunnelData.value?.onboarding_method_trend ?? [])
+})
+
+const appOnboardingMethodTrendSeries = computed(() => {
+  const trend = onboardingFunnelData.value?.onboarding_method_trend
+  if (!trend || trend.length === 0)
+    return []
+
+  return [
+    {
+      label: t('onboarding-source-manual'),
+      data: trend.map(item => ({
+        date: item.date,
+        value: Number(item.manual) || 0,
+      })),
+      color: '#94a3b8',
+    },
+    {
+      label: t('onboarding-source-cli'),
+      data: trend.map(item => ({
+        date: item.date,
+        value: Number(item.cli) || 0,
+      })),
+      color: '#119eff',
+    },
+    {
+      label: t('onboarding-source-mcp'),
+      data: trend.map(item => ({
+        date: item.date,
+        value: Number(item.mcp) || 0,
+      })),
+      color: '#8b5cf6',
+    },
+    {
+      label: t('onboarding-source-ai'),
+      data: trend.map(item => ({
+        date: item.date,
+        value: Number(item.ai) || 0,
+      })),
+      color: '#10b981',
+    },
+  ]
+})
+
+const appOnboardingOutcomeTotals = computed(() => {
+  return aggregateAppOnboardingOutcomeTotals(onboardingFunnelData.value?.onboarding_outcome_trend ?? [])
+})
+
+const appOnboardingOutcomeTrendSeries = computed(() => {
+  const trend = onboardingFunnelData.value?.onboarding_outcome_trend
+  if (!trend || trend.length === 0)
+    return []
+
+  return [
+    {
+      label: t('onboarding-outcome-completed'),
+      data: trend.map(item => ({
+        date: item.date,
+        value: Number(item.completed) || 0,
+      })),
+      color: '#22c55e',
+    },
+    {
+      label: t('onboarding-outcome-skipped'),
+      data: trend.map(item => ({
+        date: item.date,
+        value: Number(item.skipped) || 0,
+      })),
+      color: '#f59e0b',
+    },
+    {
+      label: t('onboarding-outcome-switched-to-manual'),
+      data: trend.map(item => ({
+        date: item.date,
+        value: Number(item.switched_to_manual) || 0,
+      })),
+      color: '#f97316',
+    },
+    {
+      label: t('onboarding-outcome-in-progress'),
+      data: trend.map(item => ({
+        date: item.date,
+        value: Number(item.in_progress) || 0,
+      })),
+      color: '#94a3b8',
+    },
+  ]
+})
+
 watch(() => adminStore.activeDateRange, () => {
   loadGlobalStatsTrend()
   loadOnboardingFunnel()
@@ -1338,6 +1432,96 @@ displayStore.defaultBack = '/dashboard'
               <AdminStatsCard
                 :title="t('without-profile')"
                 :value="registrationSourceTotals.withoutProfiles"
+                color-class="text-slate-400"
+                :is-loading="isLoadingOnboardingFunnel"
+                :subtitle="t('selected-period')"
+              />
+            </div>
+          </ChartCard>
+
+          <!-- App onboarding method chart -->
+          <ChartCard
+            :title="t('apps-onboarding-by-method')"
+            :is-loading="isLoadingOnboardingFunnel"
+            :has-data="appOnboardingMethodTrendSeries.length > 0"
+          >
+            <p class="mb-3 text-sm text-slate-500 dark:text-slate-400">
+              {{ t('apps-onboarding-by-method-description') }}
+            </p>
+            <AdminStackedBarChart
+              :series="appOnboardingMethodTrendSeries"
+              :is-loading="isLoadingOnboardingFunnel"
+            />
+            <div data-test="app-onboarding-method-totals" class="grid grid-cols-1 gap-6 mt-6 md:grid-cols-4">
+              <AdminStatsCard
+                :title="t('onboarding-source-manual')"
+                :value="appOnboardingMethodTotals.manual"
+                color-class="text-slate-400"
+                :is-loading="isLoadingOnboardingFunnel"
+                :subtitle="t('selected-period')"
+              />
+              <AdminStatsCard
+                :title="t('onboarding-source-cli')"
+                :value="appOnboardingMethodTotals.cli"
+                color-class="text-azure-500"
+                :is-loading="isLoadingOnboardingFunnel"
+                :subtitle="t('selected-period')"
+              />
+              <AdminStatsCard
+                :title="t('onboarding-source-mcp')"
+                :value="appOnboardingMethodTotals.mcp"
+                color-class="text-violet-500"
+                :is-loading="isLoadingOnboardingFunnel"
+                :subtitle="t('selected-period')"
+              />
+              <AdminStatsCard
+                :title="t('onboarding-source-ai')"
+                :value="appOnboardingMethodTotals.ai"
+                color-class="text-emerald-500"
+                :is-loading="isLoadingOnboardingFunnel"
+                :subtitle="t('selected-period')"
+              />
+            </div>
+          </ChartCard>
+
+          <!-- App onboarding outcome chart -->
+          <ChartCard
+            :title="t('apps-onboarding-by-outcome')"
+            :is-loading="isLoadingOnboardingFunnel"
+            :has-data="appOnboardingOutcomeTrendSeries.length > 0"
+          >
+            <p class="mb-3 text-sm text-slate-500 dark:text-slate-400">
+              {{ t('apps-onboarding-by-outcome-description') }}
+            </p>
+            <AdminStackedBarChart
+              :series="appOnboardingOutcomeTrendSeries"
+              :is-loading="isLoadingOnboardingFunnel"
+            />
+            <div data-test="app-onboarding-outcome-totals" class="grid grid-cols-1 gap-6 mt-6 md:grid-cols-4">
+              <AdminStatsCard
+                :title="t('onboarding-outcome-completed')"
+                :value="appOnboardingOutcomeTotals.completed"
+                color-class="text-emerald-500"
+                :is-loading="isLoadingOnboardingFunnel"
+                :subtitle="t('selected-period')"
+              />
+              <AdminStatsCard
+                :title="t('onboarding-outcome-skipped')"
+                :value="appOnboardingOutcomeTotals.skipped"
+                color-class="text-amber-500"
+                :is-loading="isLoadingOnboardingFunnel"
+                :subtitle="t('selected-period')"
+              />
+              <AdminStatsCard
+                :title="t('onboarding-outcome-switched-to-manual')"
+                :value="appOnboardingOutcomeTotals.switchedToManual"
+                color-class="text-orange-500"
+                :is-loading="isLoadingOnboardingFunnel"
+                :subtitle="t('selected-period')"
+              />
+              <AdminStatsCard
+                :title="t('onboarding-outcome-in-progress')"
+                :value="appOnboardingOutcomeTotals.inProgress"
                 color-class="text-slate-400"
                 :is-loading="isLoadingOnboardingFunnel"
                 :subtitle="t('selected-period')"

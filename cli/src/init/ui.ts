@@ -1,73 +1,7 @@
+import { initOnboardingSteps } from './onboarding-steps'
 import { clearInitLogs, setInitScreen, setInitSpinner } from './runtime'
 
-export interface InitOnboardingStepDefinition {
-  title: string
-  summary: string
-  phase: string
-}
-
-export const initOnboardingSteps: InitOnboardingStepDefinition[] = [
-  {
-    title: 'Add Your App',
-    summary: 'Create the Capgo app for this project, or confirm the one you already use.',
-    phase: 'Prepare',
-  },
-  {
-    title: 'Create Production Channel',
-    summary: 'Set up the default release channel used for your first OTA validation.',
-    phase: 'Prepare',
-  },
-  {
-    title: 'Install Updater Plugin',
-    summary: 'Install the updater dependency and configure it for this project.',
-    phase: 'Integrate',
-  },
-  {
-    title: 'Add Integration Code',
-    summary: 'Inject the app-ready hook so the native app can confirm bundle startup.',
-    phase: 'Integrate',
-  },
-  {
-    title: 'Setup Encryption',
-    summary: 'Decide whether to enable end-to-end bundle encryption for sensitive apps.',
-    phase: 'Integrate',
-  },
-  {
-    title: 'Select Platform',
-    summary: 'Choose the device platform you want to use for the guided validation path.',
-    phase: 'Integrate',
-  },
-  {
-    title: 'Build Your Project',
-    summary: 'Build web assets, sync native sources, and validate the generated app shell.',
-    phase: 'Integrate',
-  },
-  {
-    title: 'Run on Device',
-    summary: 'Launch the baseline app on a real device or simulator before the OTA test.',
-    phase: 'Validate',
-  },
-  {
-    title: 'Make a Test Change',
-    summary: 'Create a visible change and prepare the next version for upload.',
-    phase: 'Validate',
-  },
-  {
-    title: 'Upload Bundle',
-    summary: 'Ship the updated web bundle to Capgo for OTA delivery.',
-    phase: 'Validate',
-  },
-  {
-    title: 'Test Update on Device',
-    summary: 'Confirm that the installed app receives and applies the OTA update.',
-    phase: 'Validate',
-  },
-  {
-    title: 'Completion',
-    summary: 'Wrap up onboarding and leave you with the next commands to use.',
-    phase: 'Finish',
-  },
-]
+export { initOnboardingSteps }
 
 type PanelTone = 'cyan' | 'blue' | 'green' | 'yellow'
 
