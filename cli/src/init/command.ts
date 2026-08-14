@@ -1801,9 +1801,8 @@ async function warnIfNotInCapacitorRoot() {
 
 async function markInitSnag(orgId: string, apikey: string, event: string, appId?: string, icon = '✅') {
   activeInitTelemetry?.setAuth(orgId, apikey)
-  activeInitTelemetry?.setScope(appId)
   if (activeInitTelemetry)
-    return activeInitTelemetry.recordMilestone(event, undefined, icon)
+    return activeInitTelemetry.recordMilestone(event, undefined, icon, appId ?? null)
   const replaySessionId = getActiveCliReplaySessionId()
   return markSnag('onboarding-v2', orgId, apikey, event, appId, icon, replaySessionId ? { $session_id: replaySessionId } : undefined)
 }
@@ -5540,6 +5539,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
 
   const pendingOnboardingSelection = await maybeReusePendingOnboardingApp(organization, options.apikey, appId, supabase, options)
   appId = pendingOnboardingSelection.appId ?? appId
+  activeInitTelemetry?.setScope(appId)
   await ensureCapacitorProjectReady(orgId, options.apikey, appId, pendingOnboardingSelection.pendingApp)
   selectedPackageJsonPath = path.resolve(globalPathToPackageJson ?? join(findRoot(cwd()), PACKNAME))
   selectedProjectDir = dirname(selectedPackageJsonPath)

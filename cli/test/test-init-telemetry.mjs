@@ -132,9 +132,9 @@ function assertBefore(source, first, second, message) {
   const { events, telemetry } = create()
   telemetry.setScope('scoped-app')
   telemetry.setScope()
-  await telemetry.recordMilestone('app-less-milestone')
+  await telemetry.recordMilestone('event-scoped-milestone', undefined, '✅', 'checked')
   await telemetry.recordRunEnded('cancelled', 0)
-  assert.deepEqual(events.map(event => event.appId), ['scoped-app', 'scoped-app'], 'omitted scope retains the app for milestones and lifecycle events')
+  assert.deepEqual(events.map(event => event.appId), ['checked', 'scoped-app'], 'event scope does not replace the retained lifecycle app')
 }
 
 {
@@ -174,8 +174,8 @@ function assertBefore(source, first, second, message) {
   assertBefore(restartBranch, 'clearScope()', 'cleanupStepsDone()', 'restart clears scope before cleanup')
   assert.ok(markStepDone.indexOf('const progress = {') >= 0 && markStepDone.indexOf('mergeInitProgressTelemetry(progress, activeInitTelemetry?.getProgressMetadata())') >= 0, 'checkpoints merge telemetry into the existing operational progress payload')
   assert.ok(markInitSnag.includes('activeInitTelemetry?.setAuth(orgId, apikey)'), 'classic milestones set active authentication')
-  assert.ok(markInitSnag.includes('activeInitTelemetry?.setScope(appId)'), 'classic milestones set active app scope')
-  assert.ok(markInitSnag.includes('activeInitTelemetry.recordMilestone(event, undefined, icon)'), 'classic milestones use the telemetry context and preserve their icon')
+  assert.ok(!markInitSnag.includes('setScope('), 'classic milestones do not persist event-only app associations')
+  assert.ok(markInitSnag.includes('activeInitTelemetry.recordMilestone(event, undefined, icon, appId ?? null)'), 'classic milestones use the telemetry context and preserve their app and icon')
   assert.ok(markInitSnag.includes("return markSnag('onboarding-v2', orgId, apikey, event, appId, icon"), 'classic milestones retain the isolated markSnag fallback')
   assert.doesNotMatch(command, /exitAfterFinishingReplay\((?:\d+)?\)/, 'shared exits do not use bare or numeric-only calls')
   assert.equal(allExitCalls.length, 24, 'only 24 shared exits call the lifecycle helper')
