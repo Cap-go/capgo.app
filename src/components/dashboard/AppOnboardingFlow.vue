@@ -51,7 +51,7 @@ import {
   loadOnboardingAppDraft,
 } from '~/utils/onboardingAppDraft'
 import { createOnboardingDetailsFieldDebouncer, createOnboardingProgressTracker } from '~/utils/onboardingProgressAnalytics'
-import { allowOnboardingDashboardExploration } from '~/utils/onboardingRedirect'
+import { allowOnboardingDashboardExploration, ONBOARDING_DASHBOARD_EXPLORED_EVENT } from '~/utils/onboardingRedirect'
 import { slugifyOnboardingSegment } from '~/utils/onboardingSlug'
 import AppOnboardingCliSteps from './AppOnboardingCliSteps.vue'
 import AppOnboardingIconInput from './AppOnboardingIconInput.vue'
@@ -293,6 +293,7 @@ const setupTitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onb
 const setupSubtitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onboarding-setup-builder-subtitle') : t('unified-onboarding-setup-ota-subtitle'))
 
 let progressTracker: ReturnType<typeof createOnboardingProgressTracker> | null = null
+let pendingDashboardExplored = false
 
 function trackV2DetailsEvent(name: OnboardingDetailsEvent, details: OnboardingDetailsEventProperties = {}) {
   if (props.preOrg)
@@ -313,6 +314,8 @@ function initializeProgressTracking(resumed: boolean) {
     supaHost: config.supaHost,
   })
   progressTracker.viewStep(flowStep.value)
+  if (pendingDashboardExplored)
+    trackDashboardExplored()
 }
 
 function completeAndViewStep(nextStep: OnboardingFlowStep, completionProperties: OnboardingStepCompletionProperties = {}) {
@@ -1017,6 +1020,7 @@ async function seedDemoData() {
       throw error
     }
 
+    window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))
     allowOnboardingDashboardExploration(onboardingUserId.value, createdApp.value.app_id)
     dashboardAppsStore.upsertApp({
       app_id: createdApp.value.app_id,
@@ -1160,11 +1164,22 @@ async function openDashboard() {
   const source = reportedSetupSource.value ?? current.source
   if (source !== 'manual' && current.outcome === 'in_progress')
     await reportOnboardingPatch({ outcome: 'switched_to_manual' })
+  window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))
   allowOnboardingDashboardExploration(onboardingUserId.value, createdApp.value.app_id)
   router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}/getting-started`)
 }
 
+function trackDashboardExplored() {
+  if (!progressTracker) {
+    pendingDashboardExplored = true
+    return
+  }
+  pendingDashboardExplored = false
+  progressTracker?.trackDashboardExplored(createdApp.value?.app_id)
+}
+
 onMounted(async () => {
+  window.addEventListener(ONBOARDING_DASHBOARD_EXPLORED_EVENT, trackDashboardExplored)
   let resumedFlow = false
   isLoading.value = true
   try {
@@ -1198,6 +1213,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener(ONBOARDING_DASHBOARD_EXPLORED_EVENT, trackDashboardExplored)
   detailsFieldTracker.dispose()
 
   if (localIconPreview.value.startsWith('blob:'))
