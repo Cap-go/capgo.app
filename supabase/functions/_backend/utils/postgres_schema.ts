@@ -163,6 +163,7 @@ export const users = pgTable('users', {
     channel_self_rejected: true,
     cli_realtime_feed: true,
   }),
+  onboarding: jsonb('onboarding').notNull().default({}),
 })
 
 export const stripe_info = pgTable('stripe_info', {

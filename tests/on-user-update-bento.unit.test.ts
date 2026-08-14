@@ -59,6 +59,7 @@ function userRecord(email: string, overrides: Record<string, unknown> = {}) {
     id: USER_ID,
     image_url: null,
     last_name: 'Example',
+    onboarding: {},
     opt_for_newsletters: false,
     updated_at: '2026-08-03T09:00:00.000Z',
     ...overrides,

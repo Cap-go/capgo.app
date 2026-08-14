@@ -72,6 +72,10 @@ interface OnboardingFunnelData {
     org_joins_existing_account: number
   }>
   registration_source_trend: RegistrationSourceTrendPoint[]
+  wizard_dropoff: Array<{
+    step: string
+    count: number
+  }>
 }
 
 interface EmailTypeBreakdown {
@@ -984,6 +988,23 @@ const onboardingFunnelStages = computed(() => {
   ]
 })
 
+const wizardDropoffLabelKeys: Record<string, string> = {
+  not_started: 'onboarding-wizard-not-started',
+  intent: 'unified-onboarding-step-intent',
+  details: 'app-onboarding-step-details',
+  organization: 'unified-onboarding-step-organization',
+  choice: 'app-onboarding-step-choice',
+  install: 'app-onboarding-step-install',
+  setup: 'unified-onboarding-step-setup',
+  completed: 'onboarding-wizard-completed',
+  abandoned: 'onboarding-wizard-abandoned',
+}
+
+const wizardDropoffEntries = computed(() => onboardingFunnelData.value?.wizard_dropoff ?? [])
+const wizardDropoffLabels = computed(() => wizardDropoffEntries.value.map(entry => t(wizardDropoffLabelKeys[entry.step] ?? entry.step)))
+const wizardDropoffValues = computed(() => wizardDropoffEntries.value.map(entry => Number(entry.count) || 0))
+const hasWizardDropoff = computed(() => wizardDropoffValues.value.some(count => count > 0))
+
 // Onboarding funnel trend for multi-line chart
 function normalizeTrendDate(value: string) {
   return value.includes('T') ? value.split('T')[0] : value
@@ -1238,6 +1259,23 @@ displayStore.defaultBack = '/dashboard'
               {{ t('no-data-available') }}
             </div>
           </div>
+
+          <ChartCard
+            :title="t('onboarding-wizard-dropoff')"
+            :is-loading="isLoadingOnboardingFunnel"
+            :has-data="hasWizardDropoff"
+          >
+            <p class="mb-3 text-sm text-slate-500 dark:text-slate-400">
+              {{ t('onboarding-wizard-dropoff-description') }}
+            </p>
+            <AdminBarChart
+              :labels="wizardDropoffLabels"
+              :values="wizardDropoffValues"
+              :label="t('onboarding-wizard-dropoff')"
+              value-mode="count"
+              :is-loading="isLoadingOnboardingFunnel"
+            />
+          </ChartCard>
 
           <!-- Registration Source Trend Chart -->
           <ChartCard

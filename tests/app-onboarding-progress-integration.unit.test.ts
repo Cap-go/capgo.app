@@ -26,6 +26,7 @@ describe('app onboarding progress analytics integration', () => {
 
     const mountedFlow = onboardingSource.slice(onboardingSource.indexOf('onMounted(async () => {'))
     expect(mountedFlow).toContain('let resumedFlow = false')
+    expect(mountedFlow).toContain('resumedFlow = await maybeResumeSavedOnboarding()')
     expect(mountedFlow).toContain('const resumed = await loadResumeApp()')
     expect(mountedFlow).toContain('resumedFlow = resumed')
     const loadingFinishedIndex = mountedFlow.indexOf('isLoading.value = false')
@@ -43,6 +44,7 @@ describe('app onboarding progress analytics integration', () => {
     expect(transitionHelpers).toContain('progressTracker?.completeStep(previousStep, {')
     expect(transitionHelpers).toContain('nextStep,')
     expect(transitionHelpers).toContain('progressTracker?.viewStep(nextStep, previousStep)')
+    expect(transitionHelpers).toContain('void persistOnboardingProgress()')
 
     const intentTransition = sourceBetween('function continueFromIntent()', 'function continuePreOrgDetails()')
     expect(intentTransition).toContain("completeAndViewStep('details', { intent: selectedIntent.value })")
@@ -82,6 +84,7 @@ describe('app onboarding progress analytics integration', () => {
     expect(dashboardExit).toContain("if (flowStep.value === 'install' || flowStep.value === 'setup')")
     expect(dashboardExit).toContain('progressTracker?.completeStep(flowStep.value, {')
     expect(dashboardExit).toContain('appId: createdApp.value.app_id')
+    expect(dashboardExit).toContain("void persistOnboardingProgress('completed')")
     expect(dashboardExit.indexOf('completeStep')).toBeLessThan(dashboardExit.indexOf('router.push'))
   })
 })

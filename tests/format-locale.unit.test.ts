@@ -30,6 +30,7 @@ describe('format locale helpers', () => {
       id: '00000000-0000-0000-0000-000000000000',
       image_url: null,
       last_name: 'User',
+      onboarding: {},
       opt_for_newsletters: false,
       updated_at: null,
     }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { Database } from '~/types/supabase.types'
+import type { Database, Json } from '~/types/supabase.types'
 import type {
   OnboardingIntent,
   OnboardingStepCompletionProperties,
@@ -44,6 +44,12 @@ import {
 import { createOnboardingProgressTracker } from '~/utils/onboardingProgressAnalytics'
 import { allowOnboardingDashboardExploration } from '~/utils/onboardingRedirect'
 import { slugifyOnboardingSegment } from '~/utils/onboardingSlug'
+import {
+  buildUserOnboardingProgress,
+  clampResumableOnboardingStep,
+  parseUserOnboardingProgress,
+  shouldPromptOnboardingResume,
+} from '~/utils/userOnboardingProgress'
 import AppOnboardingIconInput from './AppOnboardingIconInput.vue'
 
 const props = defineProps<{
@@ -73,6 +79,7 @@ interface UserCountStop {
 }
 
 const isLoading = ref(true)
+const isHydratingOnboarding = ref(true)
 const isSubmitting = ref(false)
 const isImportingStore = ref(false)
 const isResumeIconLoading = ref(false)
@@ -239,6 +246,7 @@ const setupTitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onb
 const setupSubtitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onboarding-setup-builder-subtitle') : t('unified-onboarding-setup-ota-subtitle'))
 
 let progressTracker: ReturnType<typeof createOnboardingProgressTracker> | null = null
+let persistChain = Promise.resolve()
 
 function initializeProgressTracking(resumed: boolean) {
   const trackedSteps = appOnboardingSteps.value.map(step => step.id)
@@ -265,6 +273,7 @@ function completeAndViewStep(nextStep: OnboardingFlowStep, completionProperties:
   })
   flowStep.value = nextStep
   progressTracker?.viewStep(nextStep, previousStep)
+  void persistOnboardingProgress()
 }
 
 function viewPreviousStep(nextStep: OnboardingFlowStep) {
@@ -274,6 +283,146 @@ function viewPreviousStep(nextStep: OnboardingFlowStep) {
 
   flowStep.value = nextStep
   progressTracker?.viewStep(nextStep, previousStep)
+  void persistOnboardingProgress()
+}
+
+function snapshotOnboardingProgress(status: 'in_progress' | 'completed' | 'abandoned' = 'in_progress') {
+  const flow = props.preOrg ? 'pre_org' : 'existing_org'
+  return buildUserOnboardingProgress({
+    status,
+    step: clampResumableOnboardingStep(flowStep.value, flow),
+    flow,
+    intent: selectedIntent.value,
+    appName: appName.value,
+    appId: generatedAppId.value,
+    existingApp: existingApp.value,
+    existingAppSetup: existingAppSetup.value,
+    storeUrl: storeUrl.value,
+    importedStoreAppId: importedStoreAppId.value,
+    orgName: orgNameInput.value,
+    estimatedUsersIndex: estimatedUsersIndex.value,
+  })
+}
+
+async function persistOnboardingProgress(status: 'in_progress' | 'completed' | 'abandoned' = 'in_progress') {
+  persistChain = persistChain
+    .then(() => writeOnboardingProgress(status))
+    .catch((error) => {
+      console.error('Failed to persist onboarding progress', error)
+    })
+  return persistChain
+}
+
+async function writeOnboardingProgress(status: 'in_progress' | 'completed' | 'abandoned') {
+  const userId = onboardingUserId.value
+  if (!userId || isHydratingOnboarding.value)
+    return
+
+  const current = parseUserOnboardingProgress(main.user?.onboarding)
+  if (current?.status === 'completed' && status !== 'completed')
+    return
+
+  const progress = snapshotOnboardingProgress(status)
+  const onboarding = progress as unknown as Json
+  const { data, error } = await supabase
+    .from('users')
+    .update({ onboarding })
+    .eq('id', userId)
+    .select()
+    .maybeSingle()
+
+  if (error) {
+    console.error('Failed to persist onboarding progress', error)
+    return
+  }
+
+  if (data && main.user?.id === userId)
+    main.user = data
+  else if (main.user?.id === userId)
+    main.user = { ...main.user, onboarding }
+}
+
+function resetOnboardingForm() {
+  flowStep.value = props.preOrg ? 'intent' : 'details'
+  selectedIntent.value = null
+  existingApp.value = null
+  appName.value = ''
+  manualAppId.value = ''
+  hasEditedAppId.value = false
+  orgNameInput.value = ''
+  hasEditedOrgName.value = false
+  estimatedUsersIndex.value = null
+  createdApp.value = null
+  selectedIconFile.value = null
+  if (localIconPreview.value.startsWith('blob:'))
+    URL.revokeObjectURL(localIconPreview.value)
+  localIconPreview.value = ''
+  resetStoreImportState()
+}
+
+function applyOnboardingProgress(progress: ReturnType<typeof parseUserOnboardingProgress>) {
+  if (!progress)
+    return
+
+  const flow = props.preOrg ? 'pre_org' : 'existing_org'
+  flowStep.value = clampResumableOnboardingStep(progress.step, flow)
+  if (progress.intent)
+    selectedIntent.value = progress.intent
+  if (progress.existing_app === true || progress.existing_app === false)
+    existingApp.value = progress.existing_app
+  if (progress.existing_app_setup === 'import' || progress.existing_app_setup === 'manual')
+    existingAppSetup.value = progress.existing_app_setup
+  if (progress.app_name)
+    appName.value = progress.app_name
+  if (progress.app_id) {
+    manualAppId.value = progress.app_id
+    hasEditedAppId.value = true
+  }
+  if (progress.store_url)
+    storeUrl.value = progress.store_url
+  if (progress.imported_store_app_id)
+    importedStoreAppId.value = progress.imported_store_app_id
+  if (progress.org_name) {
+    orgNameInput.value = progress.org_name
+    hasEditedOrgName.value = true
+  }
+  if (typeof progress.estimated_users_index === 'number')
+    estimatedUsersIndex.value = progress.estimated_users_index
+}
+
+async function maybeResumeSavedOnboarding() {
+  const flow = props.preOrg ? 'pre_org' : 'existing_org'
+  const saved = parseUserOnboardingProgress(main.user?.onboarding)
+
+  if (!shouldPromptOnboardingResume(saved, flow) || !saved) {
+    if (saved?.status === 'in_progress' && saved.flow === flow) {
+      applyOnboardingProgress(saved)
+    }
+    else {
+      restoreDraftState()
+      flowStep.value = 'intent'
+    }
+    return false
+  }
+
+  dialogStore.openDialog({
+    title: t('onboarding-resume-title'),
+    description: t('onboarding-resume-description'),
+    preventAccidentalClose: true,
+    buttons: [
+      { text: t('onboarding-resume-restart'), id: 'onboarding-resume-restart', role: 'secondary' },
+      { text: t('onboarding-resume-continue'), id: 'onboarding-resume-continue', role: 'primary' },
+    ],
+  })
+  await dialogStore.onDialogDismiss()
+
+  if (dialogStore.lastButtonRole === 'onboarding-resume-restart') {
+    resetOnboardingForm()
+    return false
+  }
+
+  applyOnboardingProgress(saved)
+  return true
 }
 
 function whiteCardToggleButtonClass(active: boolean) {
@@ -859,6 +1008,7 @@ async function seedDemoData() {
       throw error
     }
 
+    await persistOnboardingProgress('completed')
     router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}?refresh=true`)
   }
   catch (error) {
@@ -922,16 +1072,17 @@ function openDashboard() {
     })
   }
   allowOnboardingDashboardExploration(onboardingUserId.value, createdApp.value.app_id)
+  void persistOnboardingProgress('completed')
   router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}`)
 }
 
 onMounted(async () => {
   let resumedFlow = false
   isLoading.value = true
+  isHydratingOnboarding.value = true
   try {
     if (props.preOrg) {
-      restoreDraftState()
-      flowStep.value = 'intent'
+      resumedFlow = await maybeResumeSavedOnboarding()
       return
     }
 
@@ -949,8 +1100,10 @@ onMounted(async () => {
     })
   }
   finally {
+    isHydratingOnboarding.value = false
     isLoading.value = false
     initializeProgressTracking(resumedFlow)
+    void persistOnboardingProgress()
   }
 })
 
@@ -960,6 +1113,8 @@ onBeforeUnmount(() => {
 })
 
 watch(existingApp, (value) => {
+  if (isHydratingOnboarding.value)
+    return
   existingAppSetup.value = value === true ? null : value === false ? 'manual' : null
   if (value !== true) {
     resetStoreImportState()
@@ -981,6 +1136,8 @@ watch(suggestedAppId, (value) => {
 }, { immediate: true })
 
 watch(appName, (value) => {
+  if (isHydratingOnboarding.value)
+    return
   if (!hasEditedOrgName.value)
     orgNameInput.value = value.trim()
 }, { immediate: true })
