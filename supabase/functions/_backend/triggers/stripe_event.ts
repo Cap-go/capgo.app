@@ -15,7 +15,7 @@ import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import * as schema from '../utils/postgres_schema.ts'
 import { groupIdentifyPosthog } from '../utils/posthog.ts'
 import { ensureCustomerMetadata, getCreditCheckoutDetails, getStripe, syncStripeCustomerCountry } from '../utils/stripe.ts'
-import { getStripeCustomerEmailFromEvent, normalizeBillingEmail } from '../utils/stripe_event.ts'
+import { normalizeBillingEmail } from '../utils/stripe_event.ts'
 import { customerToSegmentOrg, supabaseAdmin } from '../utils/supabase.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
 import { purgeOnPremCacheForOrg, purgePlanCacheForOrg } from '../utils/cloudflare_cache_purge.ts'
@@ -121,7 +121,7 @@ function isSubscriptionUpdateStatus(
   return Boolean(status && SUBSCRIPTION_UPDATE_STATUSES.has(status))
 }
 
-function shouldReplaceOrgManagementEmail(currentEmail: string | null | undefined, stripeEmail: string | null) {
+function shouldReplaceOrgManagementEmail(currentEmail: string | null | undefined, stripeEmail: string | null): stripeEmail is string {
   return Boolean(stripeEmail && stripeEmail !== normalizeBillingEmail(currentEmail))
 }
 
@@ -321,6 +321,25 @@ async function getStripeCustomerBillingEmail(c: Context, customerId: string): Pr
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'getStripeCustomerBillingEmail error', customerId, error })
     return null
+  }
+}
+
+async function requireLiveStripeCustomerBillingEmail(c: Context, customerId: string): Promise<string | null> {
+  if (!customerId || !isStripeConfigured(c))
+    return null
+
+  try {
+    const customer = await getStripe(c).customers.retrieve(customerId)
+    if ('deleted' in customer && customer.deleted)
+      return null
+
+    return normalizeBillingEmail(customer.email)
+  }
+  catch (error) {
+    return quickError(500, 'stripe_customer_email_lookup_failed', 'Failed to read live Stripe customer email', {
+      customerId,
+      error,
+    })
   }
 }
 
@@ -1246,10 +1265,10 @@ async function syncOrgManagementEmailFromStripeCustomer(
   if (!didStripeCustomerEmailChange(event))
     return org
 
-  // Prefer the live Stripe customer so a stale webhook cannot roll the email back.
-  const stripeEmail = await getStripeCustomerBillingEmail(c, customerId)
-    ?? getStripeCustomerEmailFromEvent(event)
-  if (!shouldReplaceOrgManagementEmail(org.management_email, stripeEmail) || !stripeEmail)
+  // Live Stripe customer is the source of truth. Do not fall back to the webhook
+  // snapshot: a failed retrieve plus a stale customer.updated would roll the email back.
+  const stripeEmail = await requireLiveStripeCustomerBillingEmail(c, customerId)
+  if (!shouldReplaceOrgManagementEmail(org.management_email, stripeEmail))
     return org
 
   const { data: updatedOrg, error } = await supabaseAdmin(c)
