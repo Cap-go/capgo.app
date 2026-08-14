@@ -145,7 +145,7 @@ async function insertOrgForApiKey(
     management_email: string
     customer_id: string
     website: string | null
-    onboarding: { intent: string }
+    onboarding: { intent: string, starting_out: boolean }
   },
 ) {
   const apikeyRbacId = auth.apikey?.rbac_id

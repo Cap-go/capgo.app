@@ -63,14 +63,20 @@ describe('pre-organization onboarding v3', () => {
   })
 
   it.concurrent('creates both records before exposing invitations', () => {
+    expect(onboardingSource).toContain('async function createOrganizationAndApp()')
+    expect(onboardingSource).toContain('async function createAppRecord(')
     const creation = onboardingSource.slice(
       onboardingSource.indexOf('async function createOrganizationAndApp()'),
       onboardingSource.indexOf('async function createAppRecord('),
     )
+    expect(creation).toContain('await createAppRecord(')
+    expect(creation).toContain('showOrganizationInvite.value = shouldInvite')
     expect(creation.indexOf('await createAppRecord(')).toBeLessThan(creation.indexOf('showOrganizationInvite.value = shouldInvite'))
   })
 
   it.concurrent('shows technical delegation unconditionally on pre-org setup', () => {
+    expect(onboardingSource).toContain("flowStep === 'setup' && createdApp")
+    expect(onboardingSource).toContain("!props.preOrg && flowStep === 'choice'")
     const setup = onboardingSource.slice(
       onboardingSource.indexOf("flowStep === 'setup' && createdApp"),
       onboardingSource.indexOf("!props.preOrg && flowStep === 'choice'"),
@@ -79,6 +85,8 @@ describe('pre-organization onboarding v3', () => {
     expect(setup).toContain('analytics-channel="onboarding-v3"')
     expect(setup).toContain(':show-manual-setup-link="false"')
     expect(setup).toContain(':tracking-version="3"')
+    expect(setup).toContain("t('onboarding-manual-setup-prefix')")
+    expect(setup).toContain('<TechnicalTeammateInviteCard')
     expect(setup.indexOf("t('onboarding-manual-setup-prefix')")).toBeLessThan(setup.indexOf('<TechnicalTeammateInviteCard'))
     expect(setup).not.toContain('selectedUserCountStop')
   })

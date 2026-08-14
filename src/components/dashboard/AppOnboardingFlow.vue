@@ -9,6 +9,7 @@ import type {
   OnboardingInteractionProperties,
   OnboardingStepCompletionProperties,
 } from '~/utils/onboardingProgressAnalytics'
+import mime from 'mime'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
@@ -306,9 +307,7 @@ const selectedUserCountStop = computed<UserCountStop | null>(() => estimatedUser
 const canCreatePreOrgOrganization = computed(() => {
   if (!orgNameInput.value.trim())
     return false
-  if (existingApp.value === true)
-    return selectedUserCountStop.value !== null
-  return true
+  return selectedUserCountStop.value !== null
 })
 const setupTitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onboarding-setup-builder-title') : t('unified-onboarding-setup-ota-title'))
 const setupSubtitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onboarding-setup-builder-subtitle') : t('unified-onboarding-setup-ota-subtitle'))
@@ -627,8 +626,17 @@ function toggleOrganizationWebsiteImport() {
 }
 
 async function importOrganizationWebsite() {
-  const website = organizationWebsiteInput.value.trim()
+  let website = organizationWebsiteInput.value.trim()
   if (!website) {
+    toast.error(t('organization-onboarding-website-invalid'))
+    return
+  }
+
+  try {
+    const normalizedWebsite = /^https?:\/\//.test(website) ? website : `https://${website}`
+    website = new URL(normalizedWebsite).toString()
+  }
+  catch {
     toast.error(t('organization-onboarding-website-invalid'))
     return
   }
@@ -653,6 +661,11 @@ async function importOrganizationWebsite() {
     }
     trackOrganizationEvent('onboarding_organization_import_succeeded')
   }
+  catch (error) {
+    console.error('Failed to import organization website', error)
+    toast.error(t('organization-onboarding-website-fetch-failed'))
+    trackOrganizationEvent('onboarding_organization_import_failed')
+  }
   finally {
     isImportingOrganizationWebsite.value = false
   }
@@ -664,11 +677,20 @@ async function uploadImportedOrganizationLogo(orgId: string) {
     return
 
   try {
-    const response = await fetch(icon)
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), STORE_ICON_FETCH_TIMEOUT_MS)
+    let response: Response
+    try {
+      response = await fetch(icon, { signal: controller.signal })
+    }
+    finally {
+      clearTimeout(timeoutId)
+    }
     const contentType = response.headers.get('content-type')?.split(';')[0]?.trim() ?? ''
     if (!response.ok || !contentType.startsWith('image/'))
       throw new Error('Imported organization logo is not an image')
-    await uploadOrgLogoFile(orgId, await response.blob(), `${websitePreview.value?.hostname || 'website-logo'}.png`)
+    const extension = mime.getExtension(contentType) ?? 'png'
+    await uploadOrgLogoFile(orgId, await response.blob(), `${websitePreview.value?.hostname || 'website-logo'}.${extension}`)
   }
   catch (error) {
     console.error('Failed to upload imported organization logo', error)
@@ -1314,7 +1336,7 @@ onBeforeUnmount(() => {
 watch(existingApp, (value) => {
   if (props.preOrg) {
     if (value === false)
-      estimatedUsersIndex.value = 0
+      estimatedUsersIndex.value = 1
     appIdSuggestions.value = []
     appIdFeedback.value = ''
     return
@@ -1325,7 +1347,7 @@ watch(existingApp, (value) => {
     resetStoreImportState()
   }
   if (value === false)
-    estimatedUsersIndex.value = 0
+    estimatedUsersIndex.value = 1
   appIdSuggestions.value = []
   appIdFeedback.value = ''
 })
