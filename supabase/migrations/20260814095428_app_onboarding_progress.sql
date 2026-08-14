@@ -167,7 +167,8 @@ BEGIN
   END IF;
 
   FOREACH v_step_id IN ARRAY v_step_ids LOOP
-    IF (v_steps -> v_step_id ->> 'status') NOT IN ('done', 'skipped') THEN
+    -- Missing keys yield NULL; NULL NOT IN (...) is unknown, not true.
+    IF COALESCE(v_steps -> v_step_id ->> 'status', '') NOT IN ('done', 'skipped') THEN
       v_all_present := false;
     ELSIF v_steps -> v_step_id ->> 'status' = 'skipped' THEN
       v_any_skipped := true;
