@@ -344,6 +344,8 @@ watchEffect(async () => {
 watch(() => typeof route.query.version === 'string' ? route.query.version : '', async (version) => {
   if (selectedVersionName.value === version)
     return
+  if (version && !bundleNames.value.includes(version))
+    bundleNames.value = [version, ...bundleNames.value]
   selectedVersionName.value = version
   if (id.value)
     await fetchInsights()
