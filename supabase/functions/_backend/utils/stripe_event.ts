@@ -153,6 +153,11 @@ export function extractDataEvent(c: Context, event: Stripe.Event): StripeData {
     data.status = 'failed'
     data.customer_id = String(charge.customer)
   }
+  else if (event.type === 'charge.succeeded') {
+    const charge = event.data.object
+    data.status = 'succeeded'
+    data.customer_id = String(charge.customer)
+  }
   else if (event.type === 'invoice.upcoming') {
     data = invoiceUpcoming(event, data)
   }

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { stripeEventTestUtils } from '../supabase/functions/_backend/triggers/stripe_event.ts'
+import { extractDataEvent } from '../supabase/functions/_backend/utils/stripe_event.ts'
+
+const mockContext = {
+  get: () => 'test-request-id',
+} as any
 
 describe('stripe billing Bento tag updates', () => {
   it.concurrent('normalizes and deduplicates every billing-linked email', () => {
@@ -21,5 +26,93 @@ describe('stripe billing Bento tag updates', () => {
       { email: 'billing@stripe.example', segments: segment.segments, deleteSegments: segment.deleteSegments },
       { email: 'creator@example.com', segments: segment.segments, deleteSegments: segment.deleteSegments },
     ])
+  })
+
+  it.concurrent('keeps unique billing emails in first-seen order', () => {
+    expect(stripeEventTestUtils.uniqueBillingEmails([
+      ' Owner@Example.com ',
+      'owner@example.com',
+      'billing@stripe.example',
+      null,
+      ' Billing@Stripe.Example ',
+      'creator@example.com',
+    ])).toEqual([
+      'owner@example.com',
+      'billing@stripe.example',
+      'creator@example.com',
+    ])
+  })
+})
+
+describe('dunning Bento stop event', () => {
+  it.concurrent('uses a Capgo event so Bento can exit dunning for every org user', () => {
+    expect(stripeEventTestUtils.BENTO_CHARGE_SUCCEEDED_EVENT).toBe('org:charge_succeeded')
+  })
+
+  it.concurrent('sends org:charge_succeeded after a failed payment recovers', () => {
+    expect(stripeEventTestUtils.shouldSendDunningStopEvent(
+      { status: 'failed', past_due_at: null },
+      'updated',
+    )).toBe(true)
+    expect(stripeEventTestUtils.shouldSendDunningStopEvent(
+      { status: 'failed', past_due_at: null },
+      'succeeded',
+    )).toBe(true)
+    expect(stripeEventTestUtils.shouldSendDunningStopEvent(
+      { status: 'failed', past_due_at: null },
+      'created',
+    )).toBe(true)
+  })
+
+  it.concurrent('sends org:charge_succeeded after past_due recovers', () => {
+    expect(stripeEventTestUtils.shouldSendDunningStopEvent(
+      { status: 'succeeded', past_due_at: '2026-08-01T00:00:00.000Z' },
+      'updated',
+    )).toBe(true)
+  })
+
+  it.concurrent('does not send org:charge_succeeded on a routine renewal', () => {
+    expect(stripeEventTestUtils.shouldSendDunningStopEvent(
+      { status: 'succeeded', past_due_at: null },
+      'updated',
+    )).toBe(false)
+    expect(stripeEventTestUtils.shouldSendDunningStopEvent(
+      { status: 'succeeded', past_due_at: '2026-08-01T00:00:00.000Z' },
+      'past_due',
+    )).toBe(false)
+  })
+})
+
+describe('stripe charge events', () => {
+  it.concurrent('extracts the customer id from charge.succeeded', () => {
+    const stripeData = extractDataEvent(mockContext, {
+      data: {
+        object: {
+          customer: 'cus_charge_ok',
+          id: 'ch_ok',
+          object: 'charge',
+        },
+      },
+      type: 'charge.succeeded',
+    } as any)
+
+    expect(stripeData.data.customer_id).toBe('cus_charge_ok')
+    expect(stripeData.data.status).toBe('succeeded')
+  })
+
+  it.concurrent('extracts the customer id from charge.failed', () => {
+    const stripeData = extractDataEvent(mockContext, {
+      data: {
+        object: {
+          customer: 'cus_charge_fail',
+          id: 'ch_fail',
+          object: 'charge',
+        },
+      },
+      type: 'charge.failed',
+    } as any)
+
+    expect(stripeData.data.customer_id).toBe('cus_charge_fail')
+    expect(stripeData.data.status).toBe('failed')
   })
 })
