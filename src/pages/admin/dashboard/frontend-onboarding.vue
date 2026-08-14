@@ -41,7 +41,7 @@ const isReady = ref(false)
 const analytics = ref<FrontendOnboardingAnalytics | null>(null)
 const loadError = ref(false)
 
-const v3GraphDefinitions = [
+const v3DetailsGraphDefinitions = [
   { key: 'onboarding_app_name_entered' },
   { key: 'onboarding_app_id_entered' },
   { key: 'onboarding_app_id_help_opened' },
@@ -59,7 +59,23 @@ const v3GraphDefinitions = [
   { key: 'onboarding_app_icon_upload_failed', parentKey: 'onboarding_app_icon_picked' },
 ] as const
 
-const v3GraphEventNodes = [
+const v3OrganizationGraphDefinitions = [
+  { key: 'onboarding_organization_import_opened' },
+  { key: 'onboarding_organization_import_submitted', parentKey: 'onboarding_organization_import_opened' },
+  { key: 'onboarding_organization_import_succeeded', parentKey: 'onboarding_organization_import_submitted' },
+  { key: 'onboarding_organization_import_failed', parentKey: 'onboarding_organization_import_submitted' },
+  { key: 'onboarding_organization_invite_viewed' },
+  { key: 'onboarding_organization_invite_opened', parentKey: 'onboarding_organization_invite_viewed' },
+  { key: 'onboarding_organization_invite_succeeded', parentKey: 'onboarding_organization_invite_opened' },
+  { key: 'onboarding_organization_invite_continued', parentKey: 'onboarding_organization_invite_viewed' },
+] as const
+
+const v3SetupGraphDefinitions = [
+  { key: 'onboarding_technical_invite_opened' },
+  { key: 'onboarding_technical_invite_succeeded', parentKey: 'onboarding_technical_invite_opened' },
+] as const
+
+const v3DetailsGraphEventNodes = [
   { id: 'app_name', eventKey: 'onboarding_app_name_entered', labelKey: 'frontend-onboarding-graph-app-name-entered', x: 820, y: 90, icon: 'app' },
   { id: 'app_id', eventKey: 'onboarding_app_id_entered', labelKey: 'frontend-onboarding-graph-app-id-entered', x: 820, y: 195, icon: 'file' },
   { id: 'learn_more', eventKey: 'onboarding_app_id_help_opened', labelKey: 'frontend-onboarding-graph-app-id-help-opened', x: 820, y: 300, icon: 'details' },
@@ -75,6 +91,22 @@ const v3GraphEventNodes = [
   { id: 'icon_picked', eventKey: 'onboarding_app_icon_picked', labelKey: 'frontend-onboarding-graph-app-icon-picked', x: 1180, y: 820, icon: 'icon' },
   { id: 'icon_uploaded', eventKey: 'onboarding_app_icon_uploaded', labelKey: 'frontend-onboarding-graph-app-icon-uploaded', x: 1540, y: 770, icon: 'upload', tone: 'success' },
   { id: 'icon_upload_failed', eventKey: 'onboarding_app_icon_upload_failed', labelKey: 'frontend-onboarding-graph-icon-upload-failed', x: 1540, y: 870, icon: 'upload', tone: 'danger' },
+] as const
+
+const v3OrganizationGraphEventNodes = [
+  { id: 'organization_import_opened', eventKey: 'onboarding_organization_import_opened', labelKey: 'frontend-onboarding-graph-organization-import-opened', x: 2800, y: 160, icon: 'import' },
+  { id: 'organization_import_submitted', eventKey: 'onboarding_organization_import_submitted', labelKey: 'frontend-onboarding-graph-organization-import-submitted', x: 3160, y: 160, icon: 'import' },
+  { id: 'organization_import_succeeded', eventKey: 'onboarding_organization_import_succeeded', labelKey: 'frontend-onboarding-graph-organization-import-succeeded', x: 3520, y: 110, icon: 'success', tone: 'success' },
+  { id: 'organization_import_failed', eventKey: 'onboarding_organization_import_failed', labelKey: 'frontend-onboarding-graph-organization-import-failed', x: 3520, y: 210, icon: 'failure', tone: 'danger' },
+  { id: 'organization_invite_viewed', eventKey: 'onboarding_organization_invite_viewed', labelKey: 'frontend-onboarding-graph-organization-invite-viewed', x: 2800, y: 650, icon: 'organization' },
+  { id: 'organization_invite_opened', eventKey: 'onboarding_organization_invite_opened', labelKey: 'frontend-onboarding-graph-organization-invite-opened', x: 3160, y: 570, icon: 'organization' },
+  { id: 'organization_invite_succeeded', eventKey: 'onboarding_organization_invite_succeeded', labelKey: 'frontend-onboarding-graph-organization-invite-succeeded', x: 3520, y: 520, icon: 'success', tone: 'success' },
+  { id: 'organization_invite_continued', eventKey: 'onboarding_organization_invite_continued', labelKey: 'frontend-onboarding-graph-organization-invite-continued', x: 3880, y: 700, icon: 'setup' },
+] as const
+
+const v3SetupGraphEventNodes = [
+  { id: 'technical_invite_opened', eventKey: 'onboarding_technical_invite_opened', labelKey: 'frontend-onboarding-graph-technical-invite-opened', x: 4950, y: 450, icon: 'organization' },
+  { id: 'technical_invite_succeeded', eventKey: 'onboarding_technical_invite_succeeded', labelKey: 'frontend-onboarding-graph-technical-invite-succeeded', x: 5300, y: 450, icon: 'success', tone: 'success' },
 ] as const
 
 const loadAnalytics = createFrontendOnboardingAnalyticsLoader(
@@ -125,12 +157,16 @@ const onboardingGraphV3 = computed<AdminOnboardingJourneyGraphConfig>(() => {
   const organization = stage('organization')
   const setup = stage('setup')
   const parentPercent = (current: number, previous: number) => previous > 0 ? current / previous * 100 : 0
-  const graphMetrics = buildFrontendOnboardingGraphMetrics(
-    v3GraphDefinitions,
-    visibleAnalytics.value?.v3_graph.nodes ?? [],
-    details?.reached,
-  )
-  const eventNodes: AdminOnboardingJourneyNode[] = v3GraphEventNodes.map((node) => {
+  const interactionNodes = visibleAnalytics.value?.v3_graph.nodes ?? []
+  const graphMetrics = {
+    ...buildFrontendOnboardingGraphMetrics(v3DetailsGraphDefinitions, interactionNodes, details?.reached),
+    ...buildFrontendOnboardingGraphMetrics(v3OrganizationGraphDefinitions, interactionNodes, organization?.reached),
+    ...buildFrontendOnboardingGraphMetrics(v3SetupGraphDefinitions, interactionNodes, setup?.reached),
+  }
+  const mapEventNodes = (
+    nodes: readonly (typeof v3DetailsGraphEventNodes[number] | typeof v3OrganizationGraphEventNodes[number] | typeof v3SetupGraphEventNodes[number])[],
+    levelLabelKey: string,
+  ): AdminOnboardingJourneyNode[] => nodes.map((node) => {
     const metric = graphMetrics[node.eventKey]
     return {
       id: node.id,
@@ -138,7 +174,7 @@ const onboardingGraphV3 = computed<AdminOnboardingJourneyGraphConfig>(() => {
       count: metric?.count ?? 0,
       levelPercent: metric?.levelPercent ?? 0,
       previousPercent: metric?.previousPercent,
-      levelLabel: t('frontend-onboarding-graph-stage-app-details'),
+      levelLabel: t(levelLabelKey),
       x: node.x,
       y: node.y,
       kind: 'event',
@@ -146,15 +182,20 @@ const onboardingGraphV3 = computed<AdminOnboardingJourneyGraphConfig>(() => {
       ...('tone' in node ? { tone: node.tone } : {}),
     }
   })
+  const eventNodes = [
+    ...mapEventNodes(v3DetailsGraphEventNodes, 'frontend-onboarding-graph-stage-app-details'),
+    ...mapEventNodes(v3OrganizationGraphEventNodes, 'frontend-onboarding-graph-stage-organization-details'),
+    ...mapEventNodes(v3SetupGraphEventNodes, 'frontend-onboarding-graph-stage-setup-reached'),
+  ]
 
   return {
-    width: 3100,
+    width: 5500,
     height: 1100,
     levels: [
       { label: '1', start: 0, end: 300, divider: 300 },
       { label: '2', start: 300, end: 2200, divider: 2200 },
-      { label: '3', start: 2200, end: 2650, divider: 2650 },
-      { label: '4', start: 2650, end: 3100 },
+      { label: '3', start: 2200, end: 4400, divider: 4400 },
+      { label: '4', start: 4400, end: 5500 },
     ],
     nodes: [
       { id: 'intent', label: t('frontend-onboarding-graph-stage-intent'), count: intent?.reached ?? 0, totalPercent: intent?.of_start_percent ?? 0, x: 145, y: 540, kind: 'stage', icon: 'intent' },
@@ -188,7 +229,7 @@ const onboardingGraphV3 = computed<AdminOnboardingJourneyGraphConfig>(() => {
         count: setup?.reached ?? 0,
         totalPercent: setup?.of_start_percent ?? 0,
         parentPercent: parentPercent(setup?.reached ?? 0, organization?.reached ?? 0),
-        x: 2870,
+        x: 4650,
         y: 540,
         kind: 'stage',
         icon: 'setup',
@@ -224,7 +265,22 @@ const onboardingGraphV3 = computed<AdminOnboardingJourneyGraphConfig>(() => {
       { from: 'icon_upload_failed', toPoint: { x: 2130, y: 870 }, style: 'dotted' },
       { fromPoint: { x: 2130, y: 90 }, toPoint: { x: 2130, y: 870 }, style: 'dotted', arrow: false },
       { fromPoint: { x: 2130, y: 540 }, to: 'organization', style: 'primary' },
-      { from: 'organization', to: 'setup', style: 'primary' },
+      { from: 'organization', to: 'organization_import_opened', style: 'branch' },
+      { from: 'organization_import_opened', to: 'organization_import_submitted', style: 'branch' },
+      { from: 'organization_import_submitted', to: 'organization_import_succeeded', style: 'branch' },
+      { from: 'organization_import_submitted', to: 'organization_import_failed', style: 'branch' },
+      { from: 'organization', to: 'organization_invite_viewed', style: 'branch' },
+      { from: 'organization_invite_viewed', to: 'organization_invite_opened', style: 'branch' },
+      { from: 'organization_invite_opened', to: 'organization_invite_succeeded', style: 'branch' },
+      { from: 'organization_invite_viewed', to: 'organization_invite_continued', style: 'branch' },
+      { from: 'organization_import_succeeded', toPoint: { x: 4200, y: 110 }, style: 'dotted' },
+      { from: 'organization_import_failed', toPoint: { x: 4200, y: 210 }, style: 'dotted' },
+      { from: 'organization_invite_continued', toPoint: { x: 4200, y: 700 }, style: 'dotted' },
+      { fromPoint: { x: 4200, y: 110 }, toPoint: { x: 4200, y: 700 }, style: 'dotted', arrow: false },
+      { from: 'organization', toPoint: { x: 4200, y: 540 }, style: 'primary' },
+      { fromPoint: { x: 4200, y: 540 }, to: 'setup', style: 'primary' },
+      { from: 'setup', to: 'technical_invite_opened', style: 'branch' },
+      { from: 'technical_invite_opened', to: 'technical_invite_succeeded', style: 'branch' },
     ],
     formatters: {
       levelPercent: (percent, level) => t('frontend-onboarding-graph-percent-of-level', {
