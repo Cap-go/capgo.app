@@ -1369,7 +1369,7 @@ describe('[POST] /organization', () => {
     const response = await fetch(`${BASE_URL}/organization`, {
       headers: authHeaders,
       method: 'POST',
-      body: JSON.stringify({ name, website }),
+      body: JSON.stringify({ name, startingOut: true, website }),
     })
     expect(response.status).toBe(200)
     const responseType = z.object({
@@ -1386,6 +1386,7 @@ describe('[POST] /organization', () => {
       expect(error).toBeNull()
       expect(data).toBeTruthy()
       expect(data?.name).toBe(name)
+      expect(data?.onboarding).toEqual({ intent: 'unknown', starting_out: true })
       expect(data?.website).toBe('https://capgo.app/')
     }
     finally {

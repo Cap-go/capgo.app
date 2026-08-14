@@ -20,6 +20,7 @@ import IconCheck from '~icons/lucide/check'
 import IconCode from '~icons/lucide/code-2'
 import IconCompass from '~icons/lucide/compass'
 import IconGlobe from '~icons/lucide/globe-2'
+import IconInfo from '~icons/lucide/info'
 import IconLayers from '~icons/lucide/layers'
 import IconLoader from '~icons/lucide/loader-2'
 import IconPackage from '~icons/lucide/package'
@@ -84,6 +85,7 @@ interface UserCountStop {
   value: number
   label: string
   planName: string
+  startingOut?: boolean
 }
 
 interface OrganizationWebsitePreview {
@@ -143,6 +145,12 @@ const fallbackUserCountStops: UserCountStop[] = [
   { value: 100000, label: '100K', planName: 'Team' },
   { value: 1000000, label: '1M+', planName: 'Enterprise' },
 ]
+const startingOutUserCountStop: UserCountStop = {
+  value: 0,
+  label: '0',
+  planName: 'Solo',
+  startingOut: true,
+}
 const planNameOrder = ['Solo', 'Maker', 'Team', 'Enterprise'] as const
 
 const localCommand = isLocal(config.supaHost) ? ` --supa-host ${config.supaHost} --supa-anon ${config.supaKey}` : ''
@@ -289,7 +297,10 @@ const userCountStops = computed<UserCountStop[]>(() => {
       return []
     return [{ value: mau, label: formatUserCount(mau, plan.name === 'Enterprise'), planName: plan.name }]
   })
-  return planStops.length === planNameOrder.length ? planStops : fallbackUserCountStops
+  return [
+    startingOutUserCountStop,
+    ...(planStops.length === planNameOrder.length ? planStops : fallbackUserCountStops),
+  ]
 })
 const selectedUserCountStop = computed<UserCountStop | null>(() => estimatedUsersIndex.value === null ? null : userCountStops.value[Math.min(estimatedUsersIndex.value, userCountStops.value.length - 1)] ?? null)
 const canCreatePreOrgOrganization = computed(() => {
@@ -379,6 +390,8 @@ function formatUserCount(value: number, plus = false) {
   return String(value)
 }
 function getUserCountStopTitle(stop: UserCountStop) {
+  if (stop.startingOut)
+    return t('organization-onboarding-starting-out')
   if (stop.value >= 1_000_000)
     return t('organization-onboarding-active-users-plus', { count: stop.label })
   return t('organization-onboarding-active-users-up-to', { count: stop.label })
@@ -894,15 +907,13 @@ async function createOrganizationAndApp() {
     return
   }
 
-  const estimatedMau = existingApp.value === true
-    ? selectedUserCountStop.value?.value
-    : userCountStops.value[0]?.value
-
-  if (!estimatedMau) {
+  const selectedStop = selectedUserCountStop.value
+  if (!selectedStop) {
     toast.error(t('organization-onboarding-user-scale-required'))
     return
   }
-  const shouldInvite = selectedUserCountStop.value?.planName !== 'Solo'
+  const estimatedMau = selectedStop.value
+  const shouldInvite = selectedStop.planName !== 'Solo'
 
   isSubmitting.value = true
   try {
@@ -913,6 +924,7 @@ async function createOrganizationAndApp() {
         email: main.auth?.email ?? '',
         estimatedMau,
         intent: selectedIntent.value,
+        startingOut: selectedStop.startingOut === true,
         website: websitePreview.value?.website,
       },
     })
@@ -1803,10 +1815,26 @@ watch(appName, (value) => {
                 </button>
 
                 <div v-if="isOrganizationImportOpen" class="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-white/15 dark:bg-slate-950/90">
-                  <label for="onboarding-organization-website" class="text-sm font-medium text-slate-800 dark:text-slate-200">
-                    {{ t('organization-onboarding-website-label') }}
-                  </label>
-                  <div class="flex flex-col gap-3 sm:flex-row">
+                  <div class="flex items-center gap-2">
+                    <label for="onboarding-organization-website" class="text-sm font-medium text-slate-800 dark:text-slate-200">
+                      {{ t('organization-onboarding-website-label') }}
+                    </label>
+                    <span
+                      class="group relative inline-flex rounded-full text-slate-400 outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-slate-500"
+                      tabindex="0"
+                      aria-describedby="onboarding-organization-website-help"
+                    >
+                      <IconInfo class="h-4 w-4" aria-hidden="true" />
+                      <span
+                        id="onboarding-organization-website-help"
+                        role="tooltip"
+                        class="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 w-64 -translate-x-1/2 rounded-lg bg-slate-950 px-3 py-2 text-xs font-normal leading-5 text-white opacity-0 shadow-lg transition-opacity group-hover:opacity-100 group-focus:opacity-100 dark:bg-slate-800"
+                      >
+                        {{ t('organization-onboarding-website-help') }}
+                      </span>
+                    </span>
+                  </div>
+                  <div class="space-y-3">
                     <input
                       id="onboarding-organization-website"
                       v-model="organizationWebsiteInput"
@@ -1818,7 +1846,7 @@ watch(appName, (value) => {
                     >
                     <button
                       type="button"
-                      class="d-btn min-h-11 shrink-0"
+                      class="d-btn min-h-11 w-full sm:w-auto"
                       :class="whiteCardSecondaryButtonClass()"
                       :disabled="isImportingOrganizationWebsite || !organizationWebsiteInput.trim()"
                       data-test="onboarding-import-organization-website"
@@ -1857,8 +1885,9 @@ watch(appName, (value) => {
                     v-for="(stop, index) in userCountStops"
                     :key="`${stop.planName}-${stop.value}`"
                     class="group cursor-pointer"
+                    :class="{ 'sm:col-span-2': stop.startingOut }"
                     :data-value="stop.value"
-                    data-test="onboarding-estimated-users-option"
+                    :data-test="stop.startingOut ? 'onboarding-starting-out' : 'onboarding-estimated-users-option'"
                   >
                     <input
                       type="radio"
@@ -1928,38 +1957,52 @@ watch(appName, (value) => {
             </p>
           </div>
 
-          <button
-            v-if="apiKey"
-            type="button"
-            class="d-btn group relative h-auto min-h-0 w-full justify-start whitespace-normal rounded-2xl border-0 bg-slate-950 p-5 pr-14 text-left font-normal ring-1 ring-white/10 transition hover:bg-slate-950 hover:ring-white/20"
-            data-test="app-onboarding-command-copy"
-            :aria-label="t('app-onboarding-command-copy')"
-            @click="copyCliCommand"
-          >
-            <code class="block whitespace-pre-wrap break-all text-sm">
-              <span class="text-slate-500">npx</span>
-              <span class="text-sky-300"> @capgo/cli@latest</span>
-              <span class="font-bold text-violet-300">&nbsp;{{ cliSubcommand }}</span>
-              <span v-if="!usesBuilderSetupCommand" class="text-emerald-300">&nbsp;{{ apiKey }}</span>
-              <template v-for="(arg, index) in cliCommandArgs" :key="`${arg}-${index}`">
-                <span :class="index % 2 === 0 ? 'text-amber-300' : 'text-cyan-300'"> {{ arg }}</span>
-              </template>
-            </code>
-            <IconCopy class="absolute right-4 top-4 h-5 w-5 text-muted-blue-300 transition group-hover:text-white" />
-          </button>
-          <div v-else class="rounded-2xl bg-slate-950 p-5 pr-14 ring-1 ring-white/10" role="status">
-            <div class="flex min-h-6 items-center gap-3 text-sm text-slate-300">
-              <Spinner size="w-5 h-5" />
-              <span>{{ t('app-onboarding-command-apikey-loading') }}</span>
+          <div class="space-y-2">
+            <button
+              v-if="apiKey"
+              type="button"
+              class="d-btn group relative h-auto min-h-0 w-full justify-start whitespace-normal rounded-2xl border-0 bg-slate-950 p-5 pr-14 text-left font-normal ring-1 ring-white/10 transition hover:bg-slate-950 hover:ring-white/20"
+              data-test="app-onboarding-command-copy"
+              :aria-label="t('app-onboarding-command-copy')"
+              @click="copyCliCommand"
+            >
+              <code class="block whitespace-pre-wrap break-all text-sm">
+                <span class="text-slate-500">npx</span>
+                <span class="text-sky-300"> @capgo/cli@latest</span>
+                <span class="font-bold text-violet-300">&nbsp;{{ cliSubcommand }}</span>
+                <span v-if="!usesBuilderSetupCommand" class="text-emerald-300">&nbsp;{{ apiKey }}</span>
+                <template v-for="(arg, index) in cliCommandArgs" :key="`${arg}-${index}`">
+                  <span :class="index % 2 === 0 ? 'text-amber-300' : 'text-cyan-300'"> {{ arg }}</span>
+                </template>
+              </code>
+              <IconCopy class="absolute right-4 top-4 h-5 w-5 text-muted-blue-300 transition group-hover:text-white" />
+            </button>
+            <div v-else class="rounded-2xl bg-slate-950 p-5 pr-14 ring-1 ring-white/10" role="status">
+              <div class="flex min-h-6 items-center gap-3 text-sm text-slate-300">
+                <Spinner size="w-5 h-5" />
+                <span>{{ t('app-onboarding-command-apikey-loading') }}</span>
+              </div>
             </div>
+            <p class="text-sm leading-6 text-slate-500 dark:text-slate-400">
+              {{ t('onboarding-manual-setup-prefix') }}
+              <a
+                href="https://capgo.app/docs/getting-started/add-an-app/#manual-setup"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="underline decoration-slate-300 underline-offset-2 transition hover:text-slate-700 dark:decoration-slate-600 dark:hover:text-slate-200"
+              >{{ t('onboarding-manual-setup-link') }}</a>
+            </p>
           </div>
 
-          <TechnicalTeammateInviteCard
-            analytics-channel="onboarding-v3"
-            :tracking-version="3"
-            @opened="onTechnicalInviteOpened"
-            @success="onTechnicalInviteSucceeded"
-          />
+          <div class="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-sm text-slate-700 dark:border-white/15 dark:bg-slate-950/90 dark:text-slate-200">
+            <TechnicalTeammateInviteCard
+              analytics-channel="onboarding-v3"
+              :show-manual-setup-link="false"
+              :tracking-version="3"
+              @opened="onTechnicalInviteOpened"
+              @success="onTechnicalInviteSucceeded"
+            />
+          </div>
 
           <div class="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-sm text-slate-700 dark:border-white/15 dark:bg-slate-950/90 dark:text-slate-200">
             <div class="flex flex-wrap items-start justify-between gap-3">

@@ -28,6 +28,8 @@ describe('shared technical teammate invitation', () => {
     expect(stepsAppSource).not.toContain('<!-- Invite Teammate Option -->')
     expect(technicalInviteSource).toContain('data-test="onboarding-technical-invite"')
     expect(technicalInviteSource).toContain('invite-kind="technical"')
+    expect(technicalInviteSource).toContain('showManualSetupLink?: boolean')
+    expect(technicalInviteSource).toContain('showManualSetupLink: true')
     expect(technicalInviteSource).toContain("emit('success', invite)")
   })
 })

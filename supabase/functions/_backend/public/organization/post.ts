@@ -22,6 +22,7 @@ const bodySchema = z.object({
   estimatedMau: estimatedMauSchema.optional(),
   website: z.string().optional(),
   intent: z.enum(['ota', 'builder', 'both', 'exploring', 'unknown']).optional(),
+  startingOut: z.boolean().optional(),
 })
 
 
@@ -270,7 +271,10 @@ export async function post(
   const ownerEmail = await getOwnerEmail(c, auth)
   const orgId = crypto.randomUUID()
   const pendingCustomerId = await createPendingStripeInfo(c, orgId, estimatedMau)
-  const onboarding = { intent: parseOrgOnboardingIntent({ intent: body.intent }) }
+  const onboarding = {
+    intent: parseOrgOnboardingIntent({ intent: body.intent }),
+    starting_out: body.startingOut ?? false,
+  }
   const newOrg = {
     id: orgId,
     name: body.name,

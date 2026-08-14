@@ -2100,6 +2100,7 @@
   "organization-onboarding-question": "Used in Capgo web console areas: pages/onboarding. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "organization-onboarding-refresh-failed": "Used in Capgo web console areas: components/dashboard, pages/onboarding. Role: toast or status message. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "organization-onboarding-selected-path": "Used in Capgo web console. Role: UI label about \"organization onboarding selected path\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "organization-onboarding-starting-out": "Used in Capgo web console. Role: UI sentence for an organization that does not have any users yet. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "organization-onboarding-starting-plan": "Used in Capgo web console. Role: UI label about \"organization onboarding starting plan\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "organization-onboarding-step-details": "Used in Capgo web console areas: pages/onboarding. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "organization-onboarding-step-invite": "Used in Capgo web console areas: pages/onboarding. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",

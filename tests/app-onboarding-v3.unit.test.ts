@@ -49,9 +49,17 @@ describe('pre-organization onboarding v3', () => {
     expect(onboardingSource).toContain('data-test="onboarding-organization-website"')
     expect(onboardingSource).toContain("invokeCapgoApi('private/website_preview'")
     expect(onboardingSource).toContain('website: websitePreview.value?.website')
-    expect(onboardingSource).toContain("selectedUserCountStop.value?.planName !== 'Solo'")
+    expect(onboardingSource).toContain("selectedStop.planName !== 'Solo'")
     expect(onboardingSource).toContain('<OrganizationOnboardingInvite')
     expect(onboardingSource).toContain("completeAndViewStep('setup', { appId: createdApp.value.app_id })")
+  })
+
+  it.concurrent('captures the starting-out signal separately from the Solo tier', () => {
+    expect(onboardingSource).toContain("value: 0")
+    expect(onboardingSource).toContain("startingOut: true")
+    expect(onboardingSource).toContain("data-test=\"stop.startingOut ? 'onboarding-starting-out' : 'onboarding-estimated-users-option'\"")
+    expect(onboardingSource).toContain("{ 'sm:col-span-2': stop.startingOut }")
+    expect(onboardingSource).toContain('startingOut: selectedStop.startingOut === true')
   })
 
   it.concurrent('creates both records before exposing invitations', () => {
@@ -69,7 +77,9 @@ describe('pre-organization onboarding v3', () => {
     )
     expect(setup).toContain('<TechnicalTeammateInviteCard')
     expect(setup).toContain('analytics-channel="onboarding-v3"')
+    expect(setup).toContain(':show-manual-setup-link="false"')
     expect(setup).toContain(':tracking-version="3"')
+    expect(setup.indexOf("t('onboarding-manual-setup-prefix')")).toBeLessThan(setup.indexOf('<TechnicalTeammateInviteCard'))
     expect(setup).not.toContain('selectedUserCountStop')
   })
 })
