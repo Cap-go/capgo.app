@@ -108,9 +108,6 @@ CREATE TABLE public.apps (
     CONSTRAINT apps_build_timeout_seconds_check CHECK (((build_timeout_seconds >= 300) AND (build_timeout_seconds <= 21600)))
 );
 
-ALTER TABLE ONLY public.apps
-    ADD CONSTRAINT apps_onboarding_valid CHECK (((jsonb_typeof(onboarding) = 'object'::text) AND ((NOT (onboarding ? 'features'::text)) OR (jsonb_typeof((onboarding -> 'features'::text)) = 'object'::text)) AND ((NOT (onboarding ? 'setup'::text)) OR ((jsonb_typeof((onboarding -> 'setup'::text)) = 'object'::text) AND ((NOT ((onboarding -> 'setup'::text) ? 'source'::text)) OR (((onboarding -> 'setup'::text) ->> 'source'::text) = ANY (ARRAY['manual'::text, 'cli'::text, 'mcp'::text, 'ai'::text]))) AND ((NOT ((onboarding -> 'setup'::text) ? 'outcome'::text)) OR (((onboarding -> 'setup'::text) ->> 'outcome'::text) = ANY (ARRAY['in_progress'::text, 'completed'::text, 'skipped'::text, 'switched_to_manual'::text]))))) AND ((NOT (onboarding ? 'source'::text)) OR ((onboarding ->> 'source'::text) = ANY (ARRAY['manual'::text, 'cli'::text, 'mcp'::text, 'ai'::text]))) AND ((NOT (onboarding ? 'outcome'::text)) OR ((onboarding ->> 'outcome'::text) = ANY (ARRAY['in_progress'::text, 'completed'::text, 'skipped'::text, 'switched_to_manual'::text]))))) NOT VALID;
-
 ALTER TABLE ONLY public.apps REPLICA IDENTITY FULL;
 
 
@@ -490,6 +487,14 @@ ALTER TABLE ONLY public.app_versions
 
 ALTER TABLE ONLY public.apps
     ADD CONSTRAINT apps_id_unique UNIQUE (id);
+
+
+--
+-- Name: apps apps_onboarding_valid; Type: CHECK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE public.apps
+    ADD CONSTRAINT apps_onboarding_valid CHECK (((jsonb_typeof(onboarding) = 'object'::text) AND ((NOT (onboarding ? 'features'::text)) OR (jsonb_typeof((onboarding -> 'features'::text)) = 'object'::text)) AND ((NOT (onboarding ? 'setup'::text)) OR ((jsonb_typeof((onboarding -> 'setup'::text)) = 'object'::text) AND ((NOT ((onboarding -> 'setup'::text) ? 'source'::text)) OR (((onboarding -> 'setup'::text) ->> 'source'::text) = ANY (ARRAY['manual'::text, 'cli'::text, 'mcp'::text, 'ai'::text]))) AND ((NOT ((onboarding -> 'setup'::text) ? 'outcome'::text)) OR (((onboarding -> 'setup'::text) ->> 'outcome'::text) = ANY (ARRAY['in_progress'::text, 'completed'::text, 'skipped'::text, 'switched_to_manual'::text]))))) AND ((NOT (onboarding ? 'source'::text)) OR ((onboarding ->> 'source'::text) = ANY (ARRAY['manual'::text, 'cli'::text, 'mcp'::text, 'ai'::text]))) AND ((NOT (onboarding ? 'outcome'::text)) OR ((onboarding ->> 'outcome'::text) = ANY (ARRAY['in_progress'::text, 'completed'::text, 'skipped'::text, 'switched_to_manual'::text]))))) NOT VALID;
 
 
 --
