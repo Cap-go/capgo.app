@@ -24,7 +24,7 @@ interface CliUsageData {
   by_command: Record<string, number>
   by_api_version: Record<string, number>
   by_day: Array<{ date: string, count: number }>
-  top_apikeys: Array<{ apikey_id: string, count: number }>
+  top_users: Array<{ email: string, count: number }>
 }
 
 const { t } = useI18n()
@@ -98,7 +98,7 @@ const dailySeries = computed(() => {
   }]
 })
 
-const topApikeys = computed(() => cliUsage.value?.top_apikeys ?? [])
+const topUsers = computed(() => cliUsage.value?.top_users ?? [])
 
 watch(() => adminStore.activeDateRange, () => {
   loadCliUsage()
@@ -220,10 +220,10 @@ displayStore.defaultBack = '/dashboard'
           <div class="overflow-hidden bg-white shadow dark:bg-gray-800 sm:rounded-lg">
             <div class="px-4 py-5 sm:px-6">
               <h3 class="text-base font-semibold text-gray-900 dark:text-white">
-                Top API keys
+                Top users
               </h3>
               <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                Most active CLI API keys in the selected period
+                Most active CLI users in the selected period
               </p>
             </div>
             <div class="border-t border-gray-200 dark:border-gray-700">
@@ -231,7 +231,7 @@ displayStore.defaultBack = '/dashboard'
                 <thead class="bg-gray-50 dark:bg-gray-900">
                   <tr>
                     <th scope="col" class="px-4 py-3 text-xs font-medium tracking-wider text-left text-gray-500 uppercase dark:text-gray-400">
-                      API key id
+                      Email
                     </th>
                     <th scope="col" class="px-4 py-3 text-xs font-medium tracking-wider text-right text-gray-500 uppercase dark:text-gray-400">
                       Count
@@ -239,14 +239,14 @@ displayStore.defaultBack = '/dashboard'
                   </tr>
                 </thead>
                 <tbody class="bg-white divide-y divide-gray-200 dark:bg-gray-800 dark:divide-gray-700">
-                  <tr v-if="topApikeys.length === 0">
+                  <tr v-if="topUsers.length === 0">
                     <td colspan="2" class="px-4 py-4 text-sm text-center text-gray-500 dark:text-gray-400">
-                      No API key activity in this period
+                      No CLI user activity in this period
                     </td>
                   </tr>
-                  <tr v-for="row in topApikeys" :key="row.apikey_id">
-                    <td class="px-4 py-3 font-mono text-sm text-gray-900 truncate dark:text-white max-w-md">
-                      {{ row.apikey_id }}
+                  <tr v-for="row in topUsers" :key="row.email">
+                    <td class="px-4 py-3 text-sm text-gray-900 truncate dark:text-white max-w-md">
+                      {{ row.email }}
                     </td>
                     <td class="px-4 py-3 text-sm text-right text-gray-900 dark:text-white">
                       {{ formatNumberValue(row.count) }}
