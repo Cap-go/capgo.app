@@ -5,6 +5,7 @@ meta:
 
 <script setup lang="ts">
 import type { TableColumn } from '~/components/comp_def'
+import type { AppOnboardingMethodTrendPoint, AppOnboardingOutcomeTrendPoint } from '~/services/adminAppOnboarding'
 import type { RegistrationSourceTrendPoint } from '~/services/adminRegistrationSources'
 import { computed, h, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -17,6 +18,7 @@ import AdminStackedBarChart from '~/components/admin/AdminStackedBarChart.vue'
 import AdminStatsCard from '~/components/admin/AdminStatsCard.vue'
 import ChartCard from '~/components/dashboard/ChartCard.vue'
 import PageLoader from '~/components/PageLoader.vue'
+import { aggregateAppOnboardingMethodTotals, aggregateAppOnboardingOutcomeTotals } from '~/services/adminAppOnboarding'
 import { aggregateRegistrationSourceTotals } from '~/services/adminRegistrationSources'
 import { formatLocalDate, formatLocalDateTime } from '~/services/date'
 import { formatNumberValue, formatOneDecimal } from '~/services/formatLocale'
@@ -43,6 +45,8 @@ interface OnboardingFunnelData {
   orgs_subscribed: number
   orgs_with_production_device: number
   orgs_with_update_download: number
+  orgs_with_testflight: number
+  orgs_with_store_live: number
   activation_telemetry_available: boolean
   total_invite_registrations: number
   total_org_joins_invite_register: number
@@ -54,6 +58,8 @@ interface OnboardingFunnelData {
   subscription_conversion_rate: number
   production_device_conversion_rate: number
   update_download_conversion_rate: number
+  testflight_conversion_rate: number
+  store_live_conversion_rate: number
   trend: Array<{
     date: string
     new_registrations: number
@@ -64,6 +70,8 @@ interface OnboardingFunnelData {
     orgs_subscribed: number
     orgs_with_production_device: number
     orgs_with_update_download: number
+    orgs_with_testflight: number
+    orgs_with_store_live: number
   }>
   invite_trend: Array<{
     date: string
@@ -76,6 +84,8 @@ interface OnboardingFunnelData {
     step: string
     count: number
   }>
+  onboarding_method_trend: AppOnboardingMethodTrendPoint[]
+  onboarding_outcome_trend: AppOnboardingOutcomeTrendPoint[]
 }
 
 interface EmailTypeBreakdown {
@@ -142,6 +152,7 @@ const globalStatsTrendData = ref<Array<{
   plan_maker: number
   plan_team: number
   plan_enterprise: number
+  plan_credits: number
   registers_today: number
   new_paying_orgs: number
   apps_created: number
@@ -760,7 +771,7 @@ const planDistributionData = computed(() => {
     return []
 
   const latest = globalStatsTrendData.value[globalStatsTrendData.value.length - 1]
-  const total = latest.plan_solo + latest.plan_maker + latest.plan_team + latest.plan_enterprise
+  const total = latest.plan_solo + latest.plan_maker + latest.plan_team + latest.plan_enterprise + (latest.plan_credits ?? 0)
 
   return [
     {
@@ -782,6 +793,11 @@ const planDistributionData = computed(() => {
       label: 'Enterprise',
       value: latest.plan_enterprise,
       percentage: total > 0 ? formatOneDecimal((latest.plan_enterprise / total) * 100) : formatOneDecimal(0),
+    },
+    {
+      label: 'Credits',
+      value: latest.plan_credits ?? 0,
+      percentage: total > 0 ? formatOneDecimal(((latest.plan_credits ?? 0) / total) * 100) : formatOneDecimal(0),
     },
   ]
 })
@@ -823,6 +839,14 @@ const planDistributionTrendSeries = computed(() => {
       })),
       color: '#f59e0b', // amber
     },
+    {
+      label: 'Credits',
+      data: globalStatsTrendData.value.map(item => ({
+        date: item.date,
+        value: item.plan_credits ?? 0,
+      })),
+      color: '#119eff', // azure
+    },
   ]
 })
 
@@ -842,6 +866,8 @@ const onboardingFunnelRates = computed(() => {
       subscribed: 0,
       productionDevice: 0,
       updateDownload: 0,
+      testflight: 0,
+      storeLive: 0,
     }
   }
 
@@ -853,6 +879,8 @@ const onboardingFunnelRates = computed(() => {
   const orgsSubscribed = Number(onboardingFunnelData.value.orgs_subscribed) || 0
   const orgsWithProductionDevice = Number(onboardingFunnelData.value.orgs_with_production_device) || 0
   const orgsWithUpdateDownload = Number(onboardingFunnelData.value.orgs_with_update_download) || 0
+  const orgsWithTestflight = Number(onboardingFunnelData.value.orgs_with_testflight) || 0
+  const orgsWithStoreLive = Number(onboardingFunnelData.value.orgs_with_store_live) || 0
 
   return {
     org: totalRegistrations > 0 ? (totalOrgs / totalRegistrations) * 100 : 0,
@@ -862,6 +890,8 @@ const onboardingFunnelRates = computed(() => {
     subscribed: orgsWithBundle > 0 ? (orgsSubscribed / orgsWithBundle) * 100 : 0,
     productionDevice: orgsWithBundle > 0 ? (orgsWithProductionDevice / orgsWithBundle) * 100 : 0,
     updateDownload: orgsWithProductionDevice > 0 ? (orgsWithUpdateDownload / orgsWithProductionDevice) * 100 : 0,
+    testflight: orgsWithBundle > 0 ? (orgsWithTestflight / orgsWithBundle) * 100 : 0,
+    storeLive: orgsWithBundle > 0 ? (orgsWithStoreLive / orgsWithBundle) * 100 : 0,
   }
 })
 
@@ -891,6 +921,18 @@ const onboardingFunnelConversionSummaries = computed(() => {
       value: rates.bundle,
       label: t('channel-to-bundle'),
       colorClass: 'text-emerald-500',
+    },
+    {
+      key: 'testflight',
+      value: rates.testflight,
+      label: t('bundle-to-testflight'),
+      colorClass: 'text-cyan-500',
+    },
+    {
+      key: 'storeLive',
+      value: rates.storeLive,
+      label: t('bundle-to-store-live'),
+      colorClass: 'text-teal-500',
     },
   ]
 
@@ -924,6 +966,8 @@ const onboardingFunnelConversionSummaries = computed(() => {
 const onboardingFunnelConversionGridClass = computed(() => {
   // Keep one row on large screens so rates follow the funnel columns.
   const count = onboardingFunnelConversionSummaries.value.length
+  if (count >= 9)
+    return 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-9'
   if (count >= 7)
     return 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-7'
   if (count >= 6)
@@ -968,6 +1012,18 @@ const onboardingFunnelStages = computed(() => {
       value: Number(data.orgs_with_bundle) || 0,
       percentage: rates.bundle,
       color: '#10b981', // green
+    },
+    {
+      label: t('reached-testflight'),
+      value: Number(data.orgs_with_testflight) || 0,
+      percentage: rates.testflight,
+      color: '#06b6d4', // cyan
+    },
+    {
+      label: t('reached-app-store-live'),
+      value: Number(data.orgs_with_store_live) || 0,
+      percentage: rates.storeLive,
+      color: '#0d9488', // teal
     },
     ...(data.activation_telemetry_available
       ? [
@@ -1056,6 +1112,22 @@ const onboardingFunnelTrendSeries = computed(() => {
         value: item.orgs_created_bundle,
       })),
       color: '#10b981', // green
+    },
+    {
+      label: t('reached-testflight-within-7-days'),
+      data: trend.map(item => ({
+        date: item.date,
+        value: item.orgs_with_testflight,
+      })),
+      color: '#06b6d4', // cyan
+    },
+    {
+      label: t('reached-app-store-live-within-7-days'),
+      data: trend.map(item => ({
+        date: item.date,
+        value: item.orgs_with_store_live,
+      })),
+      color: '#0d9488', // teal
     },
     ...(onboardingFunnelData.value.activation_telemetry_available
       ? [
@@ -1160,6 +1232,96 @@ const registrationSourceTrendSeries = computed(() => {
       data: trend.map(item => ({
         date: item.date,
         value: Number(item.without_profile) || 0,
+      })),
+      color: '#94a3b8',
+    },
+  ]
+})
+
+const appOnboardingMethodTotals = computed(() => {
+  return aggregateAppOnboardingMethodTotals(onboardingFunnelData.value?.onboarding_method_trend ?? [])
+})
+
+const appOnboardingMethodTrendSeries = computed(() => {
+  const trend = onboardingFunnelData.value?.onboarding_method_trend
+  if (!trend || trend.length === 0)
+    return []
+
+  return [
+    {
+      label: t('onboarding-source-manual'),
+      data: trend.map(item => ({
+        date: item.date,
+        value: Number(item.manual) || 0,
+      })),
+      color: '#94a3b8',
+    },
+    {
+      label: t('onboarding-source-cli'),
+      data: trend.map(item => ({
+        date: item.date,
+        value: Number(item.cli) || 0,
+      })),
+      color: '#119eff',
+    },
+    {
+      label: t('onboarding-source-mcp'),
+      data: trend.map(item => ({
+        date: item.date,
+        value: Number(item.mcp) || 0,
+      })),
+      color: '#8b5cf6',
+    },
+    {
+      label: t('onboarding-source-ai'),
+      data: trend.map(item => ({
+        date: item.date,
+        value: Number(item.ai) || 0,
+      })),
+      color: '#10b981',
+    },
+  ]
+})
+
+const appOnboardingOutcomeTotals = computed(() => {
+  return aggregateAppOnboardingOutcomeTotals(onboardingFunnelData.value?.onboarding_outcome_trend ?? [])
+})
+
+const appOnboardingOutcomeTrendSeries = computed(() => {
+  const trend = onboardingFunnelData.value?.onboarding_outcome_trend
+  if (!trend || trend.length === 0)
+    return []
+
+  return [
+    {
+      label: t('onboarding-outcome-completed'),
+      data: trend.map(item => ({
+        date: item.date,
+        value: Number(item.completed) || 0,
+      })),
+      color: '#22c55e',
+    },
+    {
+      label: t('onboarding-outcome-skipped'),
+      data: trend.map(item => ({
+        date: item.date,
+        value: Number(item.skipped) || 0,
+      })),
+      color: '#f59e0b',
+    },
+    {
+      label: t('onboarding-outcome-switched-to-manual'),
+      data: trend.map(item => ({
+        date: item.date,
+        value: Number(item.switched_to_manual) || 0,
+      })),
+      color: '#f97316',
+    },
+    {
+      label: t('onboarding-outcome-in-progress'),
+      data: trend.map(item => ({
+        date: item.date,
+        value: Number(item.in_progress) || 0,
       })),
       color: '#94a3b8',
     },
@@ -1308,6 +1470,96 @@ displayStore.defaultBack = '/dashboard'
               <AdminStatsCard
                 :title="t('without-profile')"
                 :value="registrationSourceTotals.withoutProfiles"
+                color-class="text-slate-400"
+                :is-loading="isLoadingOnboardingFunnel"
+                :subtitle="t('selected-period')"
+              />
+            </div>
+          </ChartCard>
+
+          <!-- App onboarding method chart -->
+          <ChartCard
+            :title="t('apps-onboarding-by-method')"
+            :is-loading="isLoadingOnboardingFunnel"
+            :has-data="appOnboardingMethodTrendSeries.length > 0"
+          >
+            <p class="mb-3 text-sm text-slate-500 dark:text-slate-400">
+              {{ t('apps-onboarding-by-method-description') }}
+            </p>
+            <AdminStackedBarChart
+              :series="appOnboardingMethodTrendSeries"
+              :is-loading="isLoadingOnboardingFunnel"
+            />
+            <div data-test="app-onboarding-method-totals" class="grid grid-cols-1 gap-6 mt-6 md:grid-cols-4">
+              <AdminStatsCard
+                :title="t('onboarding-source-manual')"
+                :value="appOnboardingMethodTotals.manual"
+                color-class="text-slate-400"
+                :is-loading="isLoadingOnboardingFunnel"
+                :subtitle="t('selected-period')"
+              />
+              <AdminStatsCard
+                :title="t('onboarding-source-cli')"
+                :value="appOnboardingMethodTotals.cli"
+                color-class="text-azure-500"
+                :is-loading="isLoadingOnboardingFunnel"
+                :subtitle="t('selected-period')"
+              />
+              <AdminStatsCard
+                :title="t('onboarding-source-mcp')"
+                :value="appOnboardingMethodTotals.mcp"
+                color-class="text-violet-500"
+                :is-loading="isLoadingOnboardingFunnel"
+                :subtitle="t('selected-period')"
+              />
+              <AdminStatsCard
+                :title="t('onboarding-source-ai')"
+                :value="appOnboardingMethodTotals.ai"
+                color-class="text-emerald-500"
+                :is-loading="isLoadingOnboardingFunnel"
+                :subtitle="t('selected-period')"
+              />
+            </div>
+          </ChartCard>
+
+          <!-- App onboarding outcome chart -->
+          <ChartCard
+            :title="t('apps-onboarding-by-outcome')"
+            :is-loading="isLoadingOnboardingFunnel"
+            :has-data="appOnboardingOutcomeTrendSeries.length > 0"
+          >
+            <p class="mb-3 text-sm text-slate-500 dark:text-slate-400">
+              {{ t('apps-onboarding-by-outcome-description') }}
+            </p>
+            <AdminStackedBarChart
+              :series="appOnboardingOutcomeTrendSeries"
+              :is-loading="isLoadingOnboardingFunnel"
+            />
+            <div data-test="app-onboarding-outcome-totals" class="grid grid-cols-1 gap-6 mt-6 md:grid-cols-4">
+              <AdminStatsCard
+                :title="t('onboarding-outcome-completed')"
+                :value="appOnboardingOutcomeTotals.completed"
+                color-class="text-emerald-500"
+                :is-loading="isLoadingOnboardingFunnel"
+                :subtitle="t('selected-period')"
+              />
+              <AdminStatsCard
+                :title="t('onboarding-outcome-skipped')"
+                :value="appOnboardingOutcomeTotals.skipped"
+                color-class="text-amber-500"
+                :is-loading="isLoadingOnboardingFunnel"
+                :subtitle="t('selected-period')"
+              />
+              <AdminStatsCard
+                :title="t('onboarding-outcome-switched-to-manual')"
+                :value="appOnboardingOutcomeTotals.switchedToManual"
+                color-class="text-orange-500"
+                :is-loading="isLoadingOnboardingFunnel"
+                :subtitle="t('selected-period')"
+              />
+              <AdminStatsCard
+                :title="t('onboarding-outcome-in-progress')"
+                :value="appOnboardingOutcomeTotals.inProgress"
                 color-class="text-slate-400"
                 :is-loading="isLoadingOnboardingFunnel"
                 :subtitle="t('selected-period')"
@@ -1615,7 +1867,7 @@ displayStore.defaultBack = '/dashboard'
               <div v-if="isLoadingGlobalStatsTrend" class="flex items-center justify-center h-32">
                 <span class="loading loading-spinner loading-lg" />
               </div>
-              <div v-else-if="planDistributionData.length > 0" class="grid grid-cols-2 gap-4 md:grid-cols-4">
+              <div v-else-if="planDistributionData.length > 0" class="grid grid-cols-2 gap-4 md:grid-cols-5">
                 <div v-for="plan in planDistributionData" :key="plan.label" class="flex flex-col items-center p-4 bg-gray-100 rounded-lg dark:bg-gray-700">
                   <span class="text-sm font-medium text-gray-600 dark:text-gray-400">{{ plan.label }}</span>
                   <span class="mt-2 text-2xl font-bold">{{ formatNumberValue(plan.value) }}</span>

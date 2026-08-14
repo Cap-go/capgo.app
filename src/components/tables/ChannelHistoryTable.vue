@@ -4,6 +4,7 @@ import type { TableColumn, TableSort } from '~/components/comp_def'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
+import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageError'
 import { formatDate } from '~/services/date'
 import { checkPermissions } from '~/services/permissions'
 import { useSupabase } from '~/services/supabase'
@@ -70,6 +71,7 @@ const fieldLabels: Record<string, string> = {
   allow_device_self_set: 'channel-allow-device-self-set',
   disable_auto_update: 'channel-disable-auto-update',
   disable_auto_update_under_native: 'channel-disable-auto-update-under-native',
+  update_package: 'update-package',
 }
 
 function getFieldLabel(field: string): string {
@@ -84,6 +86,20 @@ function formatValue(field: string, value: unknown): string {
     return value ? t('yes') : t('no')
   if (field === 'version' && typeof value === 'number')
     return `#${value}`
+  if (field === 'update_package') {
+    switch (value) {
+      case 'zip':
+        return t('update-package-zip')
+      case 'delta':
+        return t('update-package-delta')
+      case 'zip_from_builtin':
+        return t('update-package-zip-from-builtin')
+      case 'delta_from_builtin':
+        return t('update-package-delta-from-builtin')
+      default:
+        return t('update-package-all')
+    }
+  }
   return String(value)
 }
 
@@ -385,7 +401,7 @@ async function handleRollback(item: HistoryEntry) {
 
             if (error) {
               console.error('Error rolling back version:', error)
-              toast.error(t('error-rollback'))
+              toast.error(t(channelUpdatePackageErrorKey(error) ?? 'error-rollback'))
               return
             }
 
@@ -395,7 +411,7 @@ async function handleRollback(item: HistoryEntry) {
           }
           catch (error) {
             console.error('Error rolling back version:', error)
-            toast.error(t('error-rollback'))
+            toast.error(t(channelUpdatePackageErrorKey(error) ?? 'error-rollback'))
           }
         },
       },

@@ -19,6 +19,8 @@ import {
   resolveInitTargetPath,
 } from '../command.js'
 import { getUpdaterInstallState } from '../updater.js'
+import { initOnboardingSteps } from '../ui.js'
+import { reportInitOnboardingStep } from '../onboarding-report.js'
 import { baseKeyV2, findSavedKeySilent, findMainFile, findRoot, getAppId, getBundleVersion, getConfig, getPMAndCommand, PACKNAME, updateConfigUpdater } from '../../utils.js'
 import { formatRunnerCommand } from '../../runner-command.js'
 import { addChannelInternal } from '../../channel/add.js'
@@ -247,6 +249,14 @@ export function buildDeps(
 
     getRunDeviceCommand: platform => getRunDeviceCommandForPlatform(platform, getProjectDir(), cwd),
     getGitStatus: startDir => getGitRepoStatus(startDir ?? getProjectDir()),
+    reportOnboardingStep: (appId, stepDone) => {
+      const apikey = findSavedKeySilent()
+      if (!apikey)
+        return
+      void reportInitOnboardingStep(apikey, appId, stepDone, 'done', {
+        outcome: stepDone >= initOnboardingSteps.length ? 'completed' : 'in_progress',
+      }).catch(() => {})
+    },
   }
 }
 

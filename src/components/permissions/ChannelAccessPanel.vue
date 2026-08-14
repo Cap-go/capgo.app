@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import IconPlus from '~icons/heroicons/plus'
 import IconTrash from '~icons/heroicons/trash'
+import RoleCapabilitiesHint from '~/components/forms/RoleCapabilitiesHint.vue'
 import ChannelPermissionOverridesPanel from '~/components/permissions/ChannelPermissionOverridesPanel.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { useSupabase } from '~/services/supabase'
@@ -90,12 +91,6 @@ const canAddChannelRole = computed(() => {
 function getRoleDisplayName(roleName: string): string {
   const i18nKey = getRbacRoleI18nKey(roleName)
   return i18nKey ? t(i18nKey) : roleName.replaceAll('_', ' ')
-}
-
-function getRoleOptionLabel(role: Role): string {
-  return role.description
-    ? `${getRoleDisplayName(role.name)} - ${role.description}`
-    : getRoleDisplayName(role.name)
 }
 
 function normalizeChannelBindings(rows: any[]): ChannelRoleBinding[] {
@@ -327,17 +322,20 @@ watch(
           <label class="sr-only" :for="`channel-role-${binding.id}`">
             {{ t('select-channel-role') }}
           </label>
-          <select
-            :id="`channel-role-${binding.id}`"
-            class="min-h-11 w-full rounded-md border border-slate-300 bg-white px-3 text-sm dark:border-slate-600 dark:bg-slate-900 sm:w-64"
-            :value="binding.role_name"
-            :disabled="!editable || isSaving"
-            @change="updateChannelRole(binding, $event)"
-          >
-            <option v-for="role in channelRoles" :key="role.id" :value="role.name">
-              {{ getRoleOptionLabel(role) }}
-            </option>
-          </select>
+          <div class="flex w-full items-center gap-2 sm:w-auto">
+            <select
+              :id="`channel-role-${binding.id}`"
+              class="min-h-11 w-full rounded-md border border-slate-300 bg-white px-3 text-sm dark:border-slate-600 dark:bg-slate-900 sm:w-64"
+              :value="binding.role_name"
+              :disabled="!editable || isSaving"
+              @change="updateChannelRole(binding, $event)"
+            >
+              <option v-for="role in channelRoles" :key="role.id" :value="role.name">
+                {{ getRoleDisplayName(role.name) }}
+              </option>
+            </select>
+            <RoleCapabilitiesHint :role-name="binding.role_name" />
+          </div>
 
           <button
             class="d-btn d-btn-ghost min-h-11 w-11 text-error"
@@ -377,16 +375,22 @@ watch(
             <label for="channel-role-role" class="label">
               <span class="label-text">{{ t('role') }}</span>
             </label>
-            <select
-              id="channel-role-role"
-              v-model="selectedRoleName"
-              class="min-h-11 rounded-md border border-slate-300 bg-white px-3 text-sm dark:border-slate-600 dark:bg-slate-900"
-              :disabled="channelRoles.length === 0 || isSaving"
-            >
-              <option v-for="role in channelRoles" :key="role.id" :value="role.name">
-                {{ getRoleOptionLabel(role) }}
-              </option>
-            </select>
+            <div class="flex items-center gap-2">
+              <select
+                id="channel-role-role"
+                v-model="selectedRoleName"
+                class="min-h-11 min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-3 text-sm dark:border-slate-600 dark:bg-slate-900"
+                :disabled="channelRoles.length === 0 || isSaving"
+              >
+                <option v-for="role in channelRoles" :key="role.id" :value="role.name">
+                  {{ getRoleDisplayName(role.name) }}
+                </option>
+              </select>
+              <RoleCapabilitiesHint
+                v-if="selectedRoleName"
+                :role-name="selectedRoleName"
+              />
+            </div>
           </div>
 
           <div class="flex items-end">

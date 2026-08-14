@@ -483,6 +483,28 @@ async function submit(form: { first_name: string, last_name: string, email: stri
   isLoading.value = false
 }
 
+async function logOut() {
+  dialogStore.openDialog({
+    title: t('are-u-sure'),
+    buttons: [
+      {
+        text: t('button-cancel'),
+        role: 'cancel',
+      },
+      {
+        text: t('logout'),
+        role: 'danger',
+        id: 'confirm-button',
+        handler: async () => {
+          await main.logout()
+          await router.replace('/login')
+        },
+      },
+    ],
+  })
+  await dialogStore.onDialogDismiss()
+}
+
 onMounted(async () => {
   // Auto-redirect to Manage 2FA page if setup2fa query param is present
   if (route.query.setup2fa === 'true') {
@@ -662,21 +684,30 @@ onMounted(async () => {
           <!-- Panel footer -->
           <footer>
             <div class="flex flex-col px-2 py-5 border-t md:px-6 border-slate-300">
-              <div class="flex self-end">
-                <button type="button" class="p-2 text-red-600 border border-red-400 rounded-lg hover:text-white hover:bg-red-600" @click="deleteAccount()">
-                  {{ t('delete-account') }}
-                </button>
+              <div class="flex flex-wrap gap-3 items-center justify-between">
                 <button
-                  class="p-2 ml-3 text-white bg-blue-500 rounded-lg hover:bg-blue-600 d-btn"
-                  type="submit"
-                  color="secondary"
-                  shape="round"
+                  type="button"
+                  class="d-btn p-2 text-gray-700 border rounded-lg cursor-pointer dark:text-white hover:bg-gray-100 border-slate-500 dark:hover:bg-gray-600"
+                  @click="logOut()"
                 >
-                  <span v-if="!isLoading" class="rounded-4xl">
-                    {{ t('update') }}
-                  </span>
-                  <Spinner v-else size="w-8 h-8" class="px-4" color="fill-gray-100 text-gray-200 dark:text-gray-600" />
+                  {{ t('sign-out') }}
                 </button>
+                <div class="flex">
+                  <button type="button" class="p-2 text-red-600 border border-red-400 rounded-lg hover:text-white hover:bg-red-600" @click="deleteAccount()">
+                    {{ t('delete-account') }}
+                  </button>
+                  <button
+                    class="p-2 ml-3 text-white bg-blue-500 rounded-lg hover:bg-blue-600 d-btn"
+                    type="submit"
+                    color="secondary"
+                    shape="round"
+                  >
+                    <span v-if="!isLoading" class="rounded-4xl">
+                      {{ t('update') }}
+                    </span>
+                    <Spinner v-else size="w-8 h-8" class="px-4" color="fill-gray-100 text-gray-200 dark:text-gray-600" />
+                  </button>
+                </div>
               </div>
             </div>
           </footer>

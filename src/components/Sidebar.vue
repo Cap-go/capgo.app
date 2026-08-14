@@ -10,6 +10,7 @@ import IconDoc from '~icons/gg/loadbar-doc'
 import IconChart from '~icons/heroicons/chart-bar'
 import IconShield from '~icons/heroicons/shield-check'
 import IconDiscord from '~icons/ic/round-discord'
+import IconHeadset from '~icons/lucide/headset'
 import IconScanQrCode from '~icons/lucide/scan-qr-code'
 import IconApiKey from '~icons/mdi/shield-key'
 import IconAppStore from '~icons/simple-icons/appstore'
@@ -18,9 +19,11 @@ import { useMainStore } from '~/stores/main'
 import {
   allowOnboardingDashboardExploration,
   getOnboardingResumeAppId,
+  ONBOARDING_DASHBOARD_EXPLORED_EVENT,
   shouldConfirmOnboardingDashboardExploration,
 } from '~/utils/onboardingRedirect'
 import DropdownProfile from '../components/dashboard/DropdownProfile.vue'
+import GettingStartedNav from '../components/dashboard/GettingStartedNav.vue'
 
 const props = defineProps <{
   sidebarOpen: boolean
@@ -95,6 +98,7 @@ async function openTab(tab: Tab) {
     if (dialogStore.lastButtonRole !== 'primary')
       return
 
+    window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))
     allowOnboardingDashboardExploration(onboardingUserId, onboardingResumeAppId)
   }
 
@@ -142,6 +146,13 @@ const tabs = computed<Tab[]>(() => {
       icon: IconDiscord,
       key: '#',
       onClick: () => window.open('https://discord.capgo.app', '_blank', 'noopener,noreferrer'),
+      redirect: true,
+    },
+    {
+      label: 'support',
+      icon: IconHeadset,
+      key: '#support',
+      onClick: () => window.open('https://support.capgo.app', '_blank', 'noopener,noreferrer'),
       redirect: true,
     },
   ]
@@ -193,6 +204,8 @@ const tabs = computed<Tab[]>(() => {
           <span class="text-xl font-semibold truncate transition duration-150 hover:text-white font-prompt text-slate-200 lg:text-slate-200 lg:hover:text-white">Capgo</span>
         </router-link>
       </div>
+
+      <GettingStartedNav />
 
       <!-- Organization dropdown -->
       <div class="px-3 py-4 lg:py-4 lg:px-6 shrink-0">

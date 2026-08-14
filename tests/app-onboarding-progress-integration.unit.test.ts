@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 const onboardingSource = readFileSync(new URL('../src/components/dashboard/AppOnboardingFlow.vue', import.meta.url), 'utf8')
+const sidebarSource = readFileSync(new URL('../src/components/Sidebar.vue', import.meta.url), 'utf8')
 
 function sourceBetween(start: string, end: string) {
   return onboardingSource.slice(onboardingSource.indexOf(start), onboardingSource.indexOf(end))
@@ -9,7 +10,7 @@ function sourceBetween(start: string, end: string) {
 
 describe('app onboarding progress analytics integration', () => {
   it.concurrent('initializes tracking once the real initial or resumed step is resolved', () => {
-    expect(onboardingSource).toContain("import { createOnboardingProgressTracker } from '~/utils/onboardingProgressAnalytics'")
+    expect(onboardingSource).toContain("import { createOnboardingDetailsFieldDebouncer, createOnboardingProgressTracker } from '~/utils/onboardingProgressAnalytics'")
 
     const initializer = sourceBetween('function initializeProgressTracking(', 'function whiteCardToggleButtonClass(')
     expect(initializer).toContain("flow: props.preOrg ? 'pre_org' : 'existing_org'")
@@ -37,6 +38,12 @@ describe('app onboarding progress analytics integration', () => {
 
   it.concurrent('retains the existing intent compatibility event', () => {
     expect(onboardingSource).toContain("pushEvent('onboarding_intent_selected', config.supaHost, {")
+  })
+
+  it.concurrent('keeps the unload warning scoped to unfinished pre-org onboarding', () => {
+    expect(onboardingSource).toContain('useBeforeUnloadWarning(Boolean(props.preOrg))')
+    const creation = sourceBetween('async function createOrganizationAndApp()', 'async function createAppRecord(')
+    expect(creation.indexOf('if (!createdApp.value)')).toBeLessThan(creation.indexOf('removeBeforeUnloadWarning()'))
   })
 
   it.concurrent('tracks only successful forward transitions with approved context', () => {
@@ -79,12 +86,29 @@ describe('app onboarding progress analytics integration', () => {
     const demoAction = sourceBetween('async function seedDemoData()', 'async function copyText(')
     expect(demoAction).not.toContain('completeStep')
     expect(demoAction).not.toContain('completeAndViewStep')
+    expect(demoAction).toContain('allowOnboardingDashboardExploration')
+    expect(demoAction).toContain('/getting-started')
 
     const dashboardExit = sourceBetween('function openDashboard()', 'onMounted(async () => {')
     expect(dashboardExit).toContain("if (flowStep.value === 'install' || flowStep.value === 'setup')")
     expect(dashboardExit).toContain('progressTracker?.completeStep(flowStep.value, {')
     expect(dashboardExit).toContain('appId: createdApp.value.app_id')
     expect(dashboardExit).toContain("void persistOnboardingProgress('completed')")
+    expect(dashboardExit).toContain('/getting-started')
     expect(dashboardExit.indexOf('completeStep')).toBeLessThan(dashboardExit.indexOf('router.push'))
+    expect(dashboardExit).toContain('window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))')
+    expect(onboardingSource).toContain('progressTracker?.trackDashboardExplored(createdApp.value?.app_id)')
+    expect(onboardingSource).toContain('window.addEventListener(ONBOARDING_DASHBOARD_EXPLORED_EVENT, trackDashboardExplored)')
+    expect(onboardingSource).toContain('window.removeEventListener(ONBOARDING_DASHBOARD_EXPLORED_EVENT, trackDashboardExplored)')
+    expect(onboardingSource).toContain('pendingDashboardExplored = true')
+    expect(onboardingSource).toContain('if (pendingDashboardExplored)')
+
+    const demoExit = sourceBetween('async function seedDemoData()', 'async function copyText(')
+    expect(demoExit).toContain('window.dispatchEvent')
+    expect(demoExit).toContain('allowOnboardingDashboardExploration')
+    expect(demoExit.indexOf('window.dispatchEvent')).toBeLessThan(demoExit.indexOf('allowOnboardingDashboardExploration'))
+
+    const confirmedSidebarExit = sidebarSource.slice(sidebarSource.indexOf('if (requiresOnboardingExplorationConfirmation)'), sidebarSource.indexOf('if (tab.onClick)'))
+    expect(confirmedSidebarExit.indexOf("lastButtonRole !== 'primary'")).toBeLessThan(confirmedSidebarExit.indexOf('window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))'))
   })
 })

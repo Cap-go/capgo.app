@@ -599,6 +599,7 @@ onMounted(async () => {
           v-model="assignRoleForm.role_name"
           :roles="availableAppRoles"
           :label="t('select-app-role')"
+          show-capabilities
           class="mt-4"
           required
         />

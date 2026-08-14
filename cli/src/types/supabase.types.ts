@@ -335,6 +335,7 @@ export type Database = {
           rollout_paused_version_names: string[]
           name: string | null
           need_onboarding: boolean
+          onboarding: Json
           onboarding_completed_at: string | null
           owner_org: string
           retention: number
@@ -367,6 +368,7 @@ export type Database = {
           rollout_paused_version_names?: string[]
           name?: string | null
           need_onboarding?: boolean
+          onboarding?: Json
           onboarding_completed_at?: string | null
           owner_org: string
           retention?: number
@@ -399,6 +401,7 @@ export type Database = {
           rollout_paused_version_names?: string[]
           name?: string | null
           need_onboarding?: boolean
+          onboarding?: Json
           onboarding_completed_at?: string | null
           owner_org?: string
           retention?: number
@@ -840,6 +843,7 @@ export type Database = {
           rollout_percentage_bps: number
           rollout_version: number | null
           rbac_id: string
+          update_package: Database["public"]["Enums"]["channel_update_package"]
           updated_at: string
           version: number | null
         }
@@ -879,6 +883,7 @@ export type Database = {
           rollout_percentage_bps?: number
           rollout_version?: number | null
           rbac_id?: string
+          update_package?: Database["public"]["Enums"]["channel_update_package"]
           updated_at?: string
           version?: number | null
         }
@@ -918,6 +923,7 @@ export type Database = {
           rollout_percentage_bps?: number
           rollout_version?: number | null
           rbac_id?: string
+          update_package?: Database["public"]["Enums"]["channel_update_package"]
           updated_at?: string
           version?: number | null
         }
@@ -1575,6 +1581,7 @@ export type Database = {
           paying: number | null
           paying_monthly: number | null
           paying_yearly: number | null
+          plan_credits: number
           plan_enterprise: number | null
           plan_enterprise_conversion_rate: number
           plan_enterprise_monthly: number
@@ -1669,6 +1676,7 @@ export type Database = {
           paying?: number | null
           paying_monthly?: number | null
           paying_yearly?: number | null
+          plan_credits?: number
           plan_enterprise?: number | null
           plan_enterprise_conversion_rate?: number
           plan_enterprise_monthly?: number
@@ -1763,6 +1771,7 @@ export type Database = {
           paying?: number | null
           paying_monthly?: number | null
           paying_yearly?: number | null
+          plan_credits?: number
           plan_enterprise?: number | null
           plan_enterprise_conversion_rate?: number
           plan_enterprise_monthly?: number
@@ -3640,6 +3649,7 @@ export type Database = {
           manifest_bundle_count: number
           name: string | null
           need_onboarding: boolean
+          onboarding: Json
           onboarding_completed_at: string | null
           owner_org: string
           retention: number
@@ -4326,6 +4336,10 @@ export type Database = {
         Returns: boolean
       }
       mark_app_stats_refreshed: { Args: { p_app_id: string }; Returns: string }
+      mark_onboarding_feature_started: {
+        Args: { p_app_id: string, p_feature_key: string }
+        Returns: Json
+      }
       mass_edit_queue_messages_cf_ids: {
         Args: {
           updates: Database["public"]["CompositeTypes"]["message_update"][]
@@ -4775,6 +4789,12 @@ export type Database = {
     }
     Enums: {
       action_type: "mau" | "storage" | "bandwidth" | "build_time"
+      channel_update_package:
+        | "all"
+        | "zip"
+        | "delta"
+        | "zip_from_builtin"
+        | "delta_from_builtin"
       credit_metric_type: "mau" | "bandwidth" | "storage" | "build_time"
       credit_transaction_type:
         | "grant"
@@ -5036,6 +5056,13 @@ export const Constants = {
   public: {
     Enums: {
       action_type: ["mau", "storage", "bandwidth", "build_time"],
+      channel_update_package: [
+        "all",
+        "zip",
+        "delta",
+        "zip_from_builtin",
+        "delta_from_builtin",
+      ],
       credit_metric_type: ["mau", "bandwidth", "storage", "build_time"],
       credit_transaction_type: [
         "grant",

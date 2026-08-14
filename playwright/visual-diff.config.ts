@@ -16,8 +16,10 @@ export interface VisualDiffRoute {
 export const visualDiffRoutes: VisualDiffRoute[] = [
   { slug: 'login', path: '/login/', auth: false },
   { slug: 'dashboard', path: '/dashboard', auth: true },
+  { slug: 'account-settings', path: '/settings/account', auth: true },
   { slug: 'apps', path: '/apps', auth: true },
   { slug: 'app-overview', path: '/app/com.demo.app', auth: true },
+  { slug: 'app-getting-started', path: '/app/com.demo.app/getting-started', auth: true },
   { slug: 'app-settings', path: '/app/com.demo.app/settings', auth: true },
   { slug: 'app-settings-access', path: '/app/com.demo.app/settings/access', auth: true },
   { slug: 'channels', path: '/app/com.demo.app/channels', auth: true },
@@ -61,6 +63,11 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
   { slug: 'observe-native', path: '/app/com.demo.app/observe/native', auth: true },
   { slug: 'observe-compatibility', path: '/app/com.demo.app/observe/compatibility', auth: true },
   { slug: 'observe-plugins', path: '/app/com.demo.app/observe/plugins', auth: true },
+  {
+    slug: 'channel-statistics',
+    path: '/app/com.demo.app/channel/1/statistics',
+    auth: true,
+  },
   {
     slug: 'api-keys-app-preview',
     path: '/apikeys',

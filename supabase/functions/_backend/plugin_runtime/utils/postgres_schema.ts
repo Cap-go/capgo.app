@@ -3,6 +3,7 @@ import { bigint, boolean, integer, jsonb, numeric, pgEnum, pgTable, primaryKey, 
 // do_not_change
 
 export const disableUpdatePgEnum = pgEnum('disable_update', ['major', 'minor', 'patch', 'version_number', 'none'])
+export const channelUpdatePackagePgEnum = pgEnum('channel_update_package', ['all', 'zip', 'delta', 'zip_from_builtin', 'delta_from_builtin'])
 
 export const apps = pgTable('apps', {
   created_at: timestamp('created_at').notNull().defaultNow(),
@@ -24,6 +25,7 @@ export const apps = pgTable('apps', {
   block_provider_infra_requests: boolean('block_provider_infra_requests').notNull().default(true),
   allow_device_custom_id: boolean('allow_device_custom_id').notNull().default(true),
   need_onboarding: boolean('need_onboarding').notNull().default(false),
+  onboarding: jsonb('onboarding').notNull().default({}),
   created_from_onboarding: boolean('created_from_onboarding').notNull().default(false),
   onboarding_completed_at: timestamp('onboarding_completed_at', { withTimezone: true }),
   existing_app: boolean('existing_app').notNull().default(false),
@@ -75,6 +77,7 @@ export const channels = pgTable('channels', {
   public: boolean('public').notNull().default(false),
   disable_auto_update_under_native: boolean('disable_auto_update_under_native').notNull().default(true),
   disable_auto_update: disableUpdatePgEnum('disable_auto_update').default('major').notNull(),
+  update_package: channelUpdatePackagePgEnum('update_package').default('all').notNull(),
   ios: boolean('ios').default(true).notNull(),
   android: boolean('android').notNull().default(true),
   electron: boolean('electron').notNull().default(true),

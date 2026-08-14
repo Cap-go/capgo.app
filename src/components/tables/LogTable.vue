@@ -2,10 +2,11 @@
 import type { Ref } from 'vue'
 import type { TableColumn } from '../comp_def'
 import { useDebounceFn } from '@vueuse/core'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, h, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
+import LogMetadataPopover from '~/components/tables/LogMetadataPopover.vue'
 import { formatDate } from '~/services/date'
 import { getDateRangeForPreset, getTimeWindowPageRange, TABLE_DATE_RANGE_DEFAULT } from '~/services/dateRange'
 import { getLogDocUrl } from '~/services/logDocLinks'
@@ -107,34 +108,6 @@ function normalizeMetadata(metadata: LogData['metadata']): Record<string, string
     return null
   }
   return metadata
-}
-
-function formatMetadata(elem: Element): string {
-  const metadata = normalizeMetadata(elem.metadata)
-  if (!metadata)
-    return '-'
-
-  const entries = Object.entries(metadata)
-  if (!entries.length)
-    return '-'
-
-  const preview = entries.slice(0, 3).map(([key, value]) => `${key}: ${value}`).join(', ')
-  return entries.length > 3 ? `${preview}, +${entries.length - 3}` : preview
-}
-
-async function copyMetadata(elem: Element) {
-  const metadata = normalizeMetadata(elem.metadata)
-  if (!metadata)
-    return
-
-  try {
-    await navigator.clipboard.writeText(JSON.stringify(metadata, null, 2))
-    toast.success(t('copied-to-clipboard'))
-  }
-  catch (error) {
-    console.error(error)
-    toast.error(t('copy-fail'))
-  }
 }
 const filterShortcuts = [
   { label: 'filter-shortcut-all-fail', filters: failureActionFilterKeys },
@@ -335,33 +308,23 @@ columns.value = [
     label: t('created-at'),
     key: 'created_at',
     mobile: true,
-    class: 'truncate max-w-8',
+    class: 'w-[15%] whitespace-nowrap md:px-3!',
     sortable: 'desc',
     displayFunction: (elem: Element) => formatDate(elem.created_at ?? ''),
   },
   {
     label: t('device-id'),
     key: 'device_id',
-    class: 'truncate max-w-8',
+    class: 'w-[33%] truncate',
     mobile: true,
     sortable: true,
     head: true,
     onClick: (elem: Element) => openOne(elem),
   },
   {
-    label: t('action'),
-    key: 'action',
-    mobile: true,
-    class: 'truncate max-w-8',
-    sortable: true,
-    head: true,
-    displayFunction: (elem: Element) => formatAction(elem),
-    onClick: (elem: Element) => window.open(getLogDocUrl(elem.action), '_blank', 'noopener,noreferrer'),
-  },
-  {
     label: t('version'),
     key: 'version_name',
-    class: 'truncate max-w-8',
+    class: 'w-[8%] whitespace-nowrap md:px-3!',
     mobile: false,
     sortable: false,
     displayFunction: (elem: Element) => {
@@ -373,13 +336,28 @@ columns.value = [
     onClick: (elem: Element) => openOneVersion(elem),
   },
   {
-    label: t('metadata'),
-    key: 'metadata',
-    class: 'truncate max-w-48',
-    mobile: false,
-    sortable: false,
-    displayFunction: (elem: Element) => formatMetadata(elem),
-    onClick: (elem: Element) => copyMetadata(elem),
+    label: t('action'),
+    key: 'action',
+    mobile: true,
+    class: 'w-[44%] min-w-0',
+    sortable: true,
+    head: true,
+    renderFunction: (elem: Element) => {
+      const actionLabel = formatAction(elem)
+      const metadata = normalizeMetadata(elem.metadata)
+      return h('div', { class: 'flex w-full min-w-0 items-center gap-1.5' }, [
+        h('a', {
+          href: getLogDocUrl(elem.action),
+          target: '_blank',
+          rel: 'noopener noreferrer',
+          title: actionLabel,
+          class: 'min-w-0 truncate hover:underline',
+        }, actionLabel),
+        metadata && Object.keys(metadata).length
+          ? h(LogMetadataPopover, { json: JSON.stringify(metadata, null, 2) })
+          : null,
+      ])
+    },
   },
 ]
 
@@ -468,6 +446,7 @@ watch(range, async () => {
       :exportable="true"
       :export-loading="isExporting"
       :auto-reload="false"
+      :fixed-layout="true"
       :app-id="props.appId ?? ''"
       :search-placeholder="deviceId ? t('search-by-device-id-0') : t('search-by-device-id-')"
       @reload="loadOlder()" @reset="refreshData()" @export="exportCsv()"

@@ -45,6 +45,8 @@ function clearCredentialEnvVars() {
     'KEYSTORE_KEY_PASSWORD',
     'KEYSTORE_STORE_PASSWORD',
     'PLAY_CONFIG_JSON',
+    'PLAY_STORE_TRACK',
+    'PLAY_STORE_RELEASE_STATUS',
     'BUILD_OUTPUT_UPLOAD_ENABLED',
     'BUILD_OUTPUT_RETENTION_SECONDS',
     'CAPGO_ANDROID_FLAVOR',
@@ -251,6 +253,8 @@ await test('All credential types can be loaded from environment', async () => {
   process.env.KEYSTORE_KEY_PASSWORD = 'keypass'
   process.env.KEYSTORE_STORE_PASSWORD = 'storepass'
   process.env.PLAY_CONFIG_JSON = 'playconfig'
+  process.env.PLAY_STORE_TRACK = 'internal'
+  process.env.PLAY_STORE_RELEASE_STATUS = 'draft'
 
   const { loadCredentialsFromEnv } = await importCredentials()
   const creds = loadCredentialsFromEnv()
@@ -267,6 +271,8 @@ await test('All credential types can be loaded from environment', async () => {
   assertEquals(creds.KEYSTORE_KEY_ALIAS, 'alias')
   assertEquals(creds.KEYSTORE_KEY_PASSWORD, 'keypass')
   assertEquals(creds.PLAY_CONFIG_JSON, 'playconfig')
+  assertEquals(creds.PLAY_STORE_TRACK, 'internal')
+  assertEquals(creds.PLAY_STORE_RELEASE_STATUS, 'draft')
 
   clearCredentialEnvVars()
   await cleanupTestEnv()
@@ -534,6 +540,34 @@ await test('CAPGO_IOS_PROVISIONING_MAP takes precedence over the BASE64 form', a
   const creds = loadCredentialsFromEnv()
 
   assertEquals(creds.CAPGO_IOS_PROVISIONING_MAP, rawJson, 'Raw JSON form must win over BASE64')
+
+  clearCredentialEnvVars()
+  await cleanupTestEnv()
+})
+
+await test('PLAY_STORE_TRACK and PLAY_STORE_RELEASE_STATUS are forwarded and validated from env', async () => {
+  await setupTestEnv()
+  clearCredentialEnvVars()
+
+  process.env.PLAY_STORE_TRACK = ' beta '
+  process.env.PLAY_STORE_RELEASE_STATUS = 'inprogress'
+
+  const { loadCredentialsFromEnv, parseAndroidPlayStoreTrack, parseAndroidPlayStoreReleaseStatus } = await importCredentials()
+  const creds = loadCredentialsFromEnv()
+
+  assertEquals(creds.PLAY_STORE_TRACK, 'beta')
+  assertEquals(creds.PLAY_STORE_RELEASE_STATUS, 'inProgress')
+  assertEquals(parseAndroidPlayStoreTrack('PRODUCTION'), 'production')
+  assertEquals(parseAndroidPlayStoreReleaseStatus('halted'), 'halted')
+
+  let threw = false
+  try {
+    parseAndroidPlayStoreTrack('nightly')
+  }
+  catch {
+    threw = true
+  }
+  assert(threw, 'invalid track must throw')
 
   clearCredentialEnvVars()
   await cleanupTestEnv()

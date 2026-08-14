@@ -17,6 +17,10 @@ const props = defineProps<{
   appId: string
 }>()
 
+const emit = defineEmits<{
+  applied: [appId: string]
+}>()
+
 const RELEASE_INSTALL_SOURCES = ['app_store']
 const TEST_INSTALL_SOURCES = ['testflight']
 const TRACK_UNKNOWN_INSTALL_SOURCES = ['google_play', 'amazon_appstore', 'samsung_galaxy_store', 'huawei_appgallery']
@@ -52,7 +56,6 @@ const hasDeviceCountError = ref(false)
 const channels = ref<ReleaseChannel[]>([])
 const selectedChannelId = ref<number | null>(null)
 const setupError = ref('')
-const setupSuccess = ref('')
 const setupForm = ref({
   allowProd: true,
   allowDevice: true,
@@ -74,7 +77,6 @@ function resetStatus() {
   channels.value = []
   selectedChannelId.value = null
   setupError.value = ''
-  setupSuccess.value = ''
 }
 
 function clearStatusRetry() {
@@ -360,18 +362,16 @@ function closeModal() {
   isOpen.value = false
   hasConfirmedPublished.value = false
   setupError.value = ''
-  setupSuccess.value = ''
-}
-
-function dismissPrompt() {
-  closeModal()
-  hasDismissedPrompt.value = true
 }
 
 function openModal() {
   isOpen.value = true
   void queueReminder()
 }
+
+defineExpose({
+  openModal,
+})
 
 function confirmPublished() {
   hasConfirmedPublished.value = true
@@ -381,7 +381,6 @@ function confirmPublished() {
 async function loadChannels() {
   isLoadingChannels.value = true
   setupError.value = ''
-  setupSuccess.value = ''
   try {
     const { data, error } = await supabase
       .from('channels')
@@ -405,6 +404,7 @@ async function loadChannels() {
 }
 
 async function applyProductionSetup() {
+  const appliedAppId = props.appId
   const channel = selectedChannel.value
   if (!channel) {
     setupError.value = t('store-release-validation-setup-empty')
@@ -417,7 +417,6 @@ async function applyProductionSetup() {
   }
 
   setupError.value = ''
-  setupSuccess.value = ''
   isApplyingSetup.value = true
   try {
     const selectedPlatformSet = new Set(selectedChannelPlatforms.value)
@@ -432,7 +431,7 @@ async function applyProductionSetup() {
     const { error: selectedError } = await supabase
       .from('channels')
       .update(selectedUpdate)
-      .eq('app_id', props.appId)
+      .eq('app_id', appliedAppId)
       .eq('id', channel.id)
 
     if (selectedError) {
@@ -456,7 +455,7 @@ async function applyProductionSetup() {
       const { error: publicError } = await supabase
         .from('channels')
         .update({ public: false })
-        .eq('app_id', props.appId)
+        .eq('app_id', appliedAppId)
         .in('id', disablePublicChannelIds)
 
       if (publicError) {
@@ -485,7 +484,8 @@ async function applyProductionSetup() {
         public: shouldDisablePublic ? false : current.public,
       }
     })
-    setupSuccess.value = t('store-release-validation-setup-applied')
+    emit('applied', appliedAppId)
+    closeModal()
   }
   finally {
     isApplyingSetup.value = false
@@ -514,65 +514,9 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div
-    v-if="shouldPrompt && !isOpen"
-    data-test="store-release-validation-alert"
-    class="mb-4 rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-950"
-  >
-    <div class="flex flex-col gap-3 border-l-4 border-azure-500 px-3 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-4">
-      <div class="flex min-w-0 gap-2.5">
-        <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-700 dark:bg-slate-900 dark:text-slate-200">
-          <IconStore class="h-4 w-4" />
-        </span>
-
-        <div class="min-w-0">
-          <p class="text-sm font-semibold leading-5 text-slate-950 dark:text-white">
-            {{ t('store-release-validation-badge') }}
-          </p>
-          <p class="mt-0.5 max-w-3xl text-sm leading-5 text-slate-600 dark:text-slate-300">
-            {{ body }}
-          </p>
-          <div class="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs leading-4 text-slate-500 dark:text-slate-400">
-            <span class="inline-flex items-center gap-1.5">
-              <IconCheck class="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-300" />
-              {{ t('store-release-validation-signal-live-update') }}
-            </span>
-            <span class="inline-flex items-center gap-1.5">
-              <IconSmartphone class="h-3.5 w-3.5 text-slate-500 dark:text-slate-400" />
-              {{ storeSignal }}
-            </span>
-            <span class="inline-flex items-center gap-1.5">
-              <IconBell class="h-3.5 w-3.5 text-amber-600 dark:text-amber-300" />
-              {{ t('store-release-validation-signal-reminder') }}
-            </span>
-          </div>
-        </div>
-      </div>
-
-      <div class="flex shrink-0 flex-col-reverse gap-2 sm:flex-row sm:items-center">
-        <button
-          type="button"
-          class="d-btn d-btn-ghost d-btn-sm h-9 min-h-9 px-3 text-slate-600 dark:text-slate-300"
-          data-test="store-release-validation-dismiss"
-          @click="dismissPrompt"
-        >
-          {{ t('store-release-validation-dismiss') }}
-        </button>
-        <button
-          type="button"
-          class="d-btn d-btn-primary d-btn-sm h-9 min-h-9 px-3"
-          data-test="store-release-validation-open"
-          @click="openModal"
-        >
-          {{ t('store-release-validation-open') }}
-          <IconArrowRight class="h-4 w-4" />
-        </button>
-      </div>
-    </div>
-  </div>
   <Teleport to="body">
     <div
-      v-if="shouldPrompt && isOpen"
+      v-if="isOpen"
       class="d-modal d-modal-open"
       role="dialog"
       aria-modal="true"
@@ -708,9 +652,6 @@ onUnmounted(() => {
 
             <p v-if="setupError" class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-400/20 dark:bg-red-400/10 dark:text-red-200">
               {{ setupError }}
-            </p>
-            <p v-if="setupSuccess" class="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-400/20 dark:bg-emerald-400/10 dark:text-emerald-100">
-              {{ setupSuccess }}
             </p>
           </div>
         </div>

@@ -948,6 +948,7 @@ npx @capgo/cli@latest channel set production com.example.app --bundle 1.0.0 --st
 | **--self-assign** | <code>boolean</code> | Allow device to self-assign to this channel |
 | **--no-self-assign** | <code>boolean</code> | Disable devices to self-assign to this channel |
 | **--disable-auto-update** | <code>string</code> | Block updates by type: major, minor, metadata, patch, or none (allows all) |
+| **--update-package** | <code>string</code> | Serve zip, delta, or both: all, zip, delta, zip_from_builtin, or delta_from_builtin |
 | **--rollout-bundle** | <code>string</code> | Bundle version to release gradually on this channel |
 | **--rollout-percentage** | <code>string</code> | Rollout percentage from 0 to 100 |
 | **--rollout-percentage-bps** | <code>string</code> | Rollout percentage in basis points from 0 to 10000 |
@@ -1443,9 +1444,11 @@ npx @capgo/cli@latest build request com.example.app --platform ios --path .
 | **--keystore-store-password** | <code>string</code> | Android: Keystore store password |
 | **--play-config-json** | <code>string</code> | Android: Base64-encoded Google Play service account JSON |
 | **--android-flavor** | <code>string</code> | Android: Product flavor to build (e.g. production). Required if your project has multiple flavors. |
+| **--android-track** | <code>string</code> | Android: Google Play track for this upload (internal, alpha, beta, production). Default without --submit-to-store-review: internal. With --submit-to-store-review and no track set: production. Precedence: CLI > env > saved credentials |
+| **--android-release-status** | <code>string</code> | Android: Google Play release status (draft, completed, inProgress, halted). Default without --submit-to-store-review: draft. With --submit-to-store-review and no status set: completed. Precedence: CLI > env > saved credentials |
 | **--in-app-update-priority** | <code>string</code> | Android: Google Play in-app update priority for this release (integer 0–5; higher = more urgent). See https://developer.android.com/guide/playcore/in-app-updates. Precedence: CLI > env > saved credentials |
 | **--no-playstore-upload** | <code>boolean</code> | Android: do not upload the AAB/APK to Google Play for this build (ignores saved Play credentials). Use when the Play app does not exist yet, or you only want a Capgo download link. Requires --output-upload. |
-| **--submit-to-store-review** | <code>boolean</code> | After upload, submit the store release for review instead of leaving it as a draft/inactive build. Android marks the Play release completed; iOS submits the processed TestFlight build to App Store review. |
+| **--submit-to-store-review** | <code>boolean</code> | After upload, submit the store release for review instead of leaving it as a draft/inactive build. On Android this defaults to the production track with release_status completed (override with --android-track / PLAY_STORE_TRACK and --android-release-status / PLAY_STORE_RELEASE_STATUS). On iOS this submits the processed TestFlight build to App Store review. |
 | **--store-release-name** | <code>string</code> | Store release name/version label. Android sends this as the Google Play version_name; iOS uses it as the App Store version when creating or reusing the editable version. |
 | **--store-release-notes** | <code>string</code> | Default store release notes. Android uses this as the Play changelog; iOS uses it as the fallback App Store What's New text. |
 | **--store-release-notes-locale** | <code>string</code> | Localized store release notes (repeatable), for example --store-release-notes-locale en-US="Bug fixes" --store-release-notes-locale fr-FR="Corrections". |

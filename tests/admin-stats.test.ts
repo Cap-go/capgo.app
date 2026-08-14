@@ -4,7 +4,7 @@ import { Hono } from 'hono/tiny'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { logsnagInsightsTestUtils } from '../supabase/functions/_backend/triggers/logsnag_insights.ts'
 import { REQUIRED_GLOBAL_STATS_SHARDS } from '../supabase/functions/_backend/utils/global_stats.ts'
-import { getAdminOnboardingFunnel } from '../supabase/functions/_backend/utils/pg.ts'
+import { getAdminGlobalStatsTrend, getAdminOnboardingFunnel } from '../supabase/functions/_backend/utils/pg.ts'
 import { BASE_URL, executeSQL, fetchTestRequest, getAuthHeadersForCredentials, getEndpointUrl, getSupabaseClient, POSTGRES_URL, PRODUCT_ID, resetAndSeedAppData, resetAppData, TEST_EMAIL, USER_ADMIN_EMAIL, USER_ID, USER_PASSWORD_HASH } from './test-utils.ts'
 
 const DAY_IN_MS = 24 * 60 * 60 * 1000
@@ -110,9 +110,23 @@ async function getCoreSnapshotCountsAt(snapshotExclusiveEnd: Date) {
   })
 }
 
+async function getBillingSnapshotCountsAt(snapshotExclusiveEnd: Date) {
+  return requestDirectAdminStats<{
+    plans: Record<string, number>
+  }>(app => {
+    app.get('/', async c => c.json(await logsnagInsightsTestUtils.getBillingSnapshotCounts(c, snapshotExclusiveEnd)))
+  })
+}
+
 async function getOnboardingFunnelDirect(startDate: string, endDate: string) {
   return requestDirectAdminStats<Awaited<ReturnType<typeof getAdminOnboardingFunnel>>>(app => {
     app.get('/', async c => c.json(await getAdminOnboardingFunnel(c, startDate, endDate)))
+  })
+}
+
+async function getGlobalStatsTrendDirect(startDate: string, endDate: string) {
+  return requestDirectAdminStats<Awaited<ReturnType<typeof getAdminGlobalStatsTrend>>>(app => {
+    app.get('/', async c => c.json(await getAdminGlobalStatsTrend(c, startDate, endDate)))
   })
 }
 
@@ -170,6 +184,7 @@ beforeAll(async () => {
       plan_maker: 2,
       plan_team: 1,
       plan_enterprise: 0,
+      plan_credits: 1,
       registers_today: 3,
       devices_last_month: 9,
       stars: 1,
@@ -214,6 +229,7 @@ beforeAll(async () => {
       plan_maker: 2,
       plan_team: 1,
       plan_enterprise: 0,
+      plan_credits: 3,
       registers_today: 4,
       devices_last_month: 12,
       stars: 2,
@@ -258,6 +274,7 @@ beforeAll(async () => {
       plan_maker: 0,
       plan_team: 0,
       plan_enterprise: 0,
+      plan_credits: 0,
       registers_today: 0,
       devices_last_month: 0,
       stars: 3,
@@ -836,6 +853,137 @@ describe('global stats core snapshots', () => {
       await executeSQL('DELETE FROM public.stripe_info WHERE customer_id = ANY($1::text[])', [customerIds])
     }
   }, 90000)
+
+  it.concurrent('counts orgs with remaining credits and no plan as the Credits plan bucket', async () => {
+    const snapshotExclusiveEnd = new Date('2030-03-02T00:00:00.000Z')
+    const beforeSnapshot = '2030-01-01T00:00:00.000Z'
+    const afterSnapshot = '2030-04-01T00:00:00.000Z'
+    const creditOnlyOrgId = randomUUID()
+    const planPlusCreditsOrgId = randomUUID()
+    const consumedOrgId = randomUUID()
+    const trialPlusCreditsOrgId = randomUUID()
+    const creditOnlyAppId = `com.admin.stats.plan.credits.only.${creditOnlyOrgId.slice(0, 8)}`
+    const planPlusCreditsAppId = `com.admin.stats.plan.credits.sub.${planPlusCreditsOrgId.slice(0, 8)}`
+    const consumedAppId = `com.admin.stats.plan.credits.consumed.${consumedOrgId.slice(0, 8)}`
+    const trialPlusCreditsAppId = `com.admin.stats.plan.credits.trial.${trialPlusCreditsOrgId.slice(0, 8)}`
+    const creditOnlyCustomerId = `cus_admin_stats_plan_credits_only_${creditOnlyOrgId.slice(0, 8)}`
+    const planPlusCreditsCustomerId = `cus_admin_stats_plan_credits_sub_${planPlusCreditsOrgId.slice(0, 8)}`
+    const consumedCustomerId = `cus_admin_stats_plan_credits_consumed_${consumedOrgId.slice(0, 8)}`
+    const trialPlusCreditsCustomerId = `cus_admin_stats_plan_credits_trial_${trialPlusCreditsOrgId.slice(0, 8)}`
+    const orgIds = [creditOnlyOrgId, planPlusCreditsOrgId, consumedOrgId, trialPlusCreditsOrgId]
+    const appIds = [creditOnlyAppId, planPlusCreditsAppId, consumedAppId, trialPlusCreditsAppId]
+    const customerIds = [creditOnlyCustomerId, planPlusCreditsCustomerId, consumedCustomerId, trialPlusCreditsCustomerId]
+    const baseline = await getBillingSnapshotCountsAt(snapshotExclusiveEnd)
+
+    try {
+      await Promise.all([
+        resetAndSeedAppData(creditOnlyAppId, {
+          orgId: creditOnlyOrgId,
+          stripeCustomerId: creditOnlyCustomerId,
+          planProductId: PRODUCT_ID,
+        }),
+        resetAndSeedAppData(planPlusCreditsAppId, {
+          orgId: planPlusCreditsOrgId,
+          stripeCustomerId: planPlusCreditsCustomerId,
+          planProductId: PRODUCT_ID,
+        }),
+        resetAndSeedAppData(consumedAppId, {
+          orgId: consumedOrgId,
+          stripeCustomerId: consumedCustomerId,
+          planProductId: PRODUCT_ID,
+        }),
+        resetAndSeedAppData(trialPlusCreditsAppId, {
+          orgId: trialPlusCreditsOrgId,
+          stripeCustomerId: trialPlusCreditsCustomerId,
+          planProductId: PRODUCT_ID,
+        }),
+      ])
+
+      await executeSQL(`
+        UPDATE public.stripe_info
+        SET status = 'canceled'::public.stripe_status,
+            is_good_plan = false,
+            created_at = $2::timestamptz,
+            paid_at = $2::timestamptz,
+            canceled_at = $2::timestamptz,
+            trial_at = '1970-01-01T00:00:00.000Z'::timestamptz,
+            subscription_anchor_end = $2::timestamptz
+        WHERE customer_id = ANY($1::text[])
+      `, [[creditOnlyCustomerId, consumedCustomerId], beforeSnapshot])
+
+      await executeSQL(`
+        UPDATE public.stripe_info
+        SET status = 'succeeded'::public.stripe_status,
+            is_good_plan = true,
+            created_at = $2::timestamptz,
+            paid_at = $2::timestamptz,
+            canceled_at = NULL,
+            trial_at = '1970-01-01T00:00:00.000Z'::timestamptz,
+            subscription_anchor_end = $3::timestamptz
+        WHERE customer_id = $1
+      `, [planPlusCreditsCustomerId, beforeSnapshot, afterSnapshot])
+
+      await executeSQL(`
+        UPDATE public.stripe_info
+        SET status = 'created'::public.stripe_status,
+            is_good_plan = false,
+            created_at = $2::timestamptz,
+            paid_at = NULL,
+            canceled_at = NULL,
+            trial_at = $3::timestamptz,
+            subscription_anchor_end = $3::timestamptz
+        WHERE customer_id = $1
+      `, [trialPlusCreditsCustomerId, beforeSnapshot, afterSnapshot])
+
+      const grants = await executeSQL(`
+        INSERT INTO public.usage_credit_grants (
+          org_id,
+          credits_total,
+          granted_at,
+          expires_at,
+          source
+        ) VALUES
+          ($1, 10, $5::timestamptz, $6::timestamptz, 'manual'),
+          ($2, 10, $5::timestamptz, $6::timestamptz, 'manual'),
+          ($3, 10, $5::timestamptz, $6::timestamptz, 'manual'),
+          ($4, 10, $5::timestamptz, $6::timestamptz, 'manual')
+        RETURNING id, org_id
+      `, [creditOnlyOrgId, planPlusCreditsOrgId, consumedOrgId, trialPlusCreditsOrgId, beforeSnapshot, afterSnapshot])
+
+      const consumedGrantId = grants.find(row => row.org_id === consumedOrgId)?.id
+      expect(consumedGrantId).toBeTruthy()
+
+      await executeSQL(`
+        INSERT INTO public.usage_credit_consumptions (
+          grant_id,
+          org_id,
+          metric,
+          credits_used,
+          applied_at
+        ) VALUES ($1, $2, 'mau'::public.credit_metric_type, 10, $3::timestamptz)
+      `, [consumedGrantId, consumedOrgId, beforeSnapshot])
+
+      const counts = await getBillingSnapshotCountsAt(snapshotExclusiveEnd)
+      expect(counts.plans.Credits).toBe((baseline.plans.Credits ?? 0) + 1)
+    }
+    finally {
+      await executeSQL('DELETE FROM public.usage_credit_consumptions WHERE org_id = ANY($1::uuid[])', [orgIds])
+      await executeSQL('DELETE FROM public.usage_credit_grants WHERE org_id = ANY($1::uuid[])', [orgIds])
+      await Promise.all(appIds.map(appId => resetAppData(appId)))
+      await executeSQL('DELETE FROM public.org_users WHERE org_id = ANY($1::uuid[])', [orgIds])
+      await executeSQL('DELETE FROM public.orgs WHERE id = ANY($1::uuid[])', [orgIds])
+      await executeSQL('DELETE FROM public.stripe_info WHERE customer_id = ANY($1::text[])', [customerIds])
+    }
+  }, 90000)
+
+  it.concurrent('exposes plan_credits on global stats trend rows', async () => {
+    const data = await getGlobalStatsTrendDirect('2099-12-30T00:00:00.000Z', '2099-12-31T23:59:59.000Z')
+    const historical = data.find(row => row.date === GLOBAL_STATS_TREND_DATES[0])
+    const latest = data.find(row => row.date === GLOBAL_STATS_TREND_DATES[1])
+
+    expect(historical?.plan_credits).toBe(1)
+    expect(latest?.plan_credits).toBe(3)
+  })
 })
 
 describe('/private/admin_stats', () => {
@@ -870,6 +1018,7 @@ describe('/private/admin_stats', () => {
         past_due_orgs_average_days: number
         above_plan_with_credits: number | null
         above_plan_without_credits: number | null
+        plan_credits: number
       }>
     }
 
@@ -879,6 +1028,7 @@ describe('/private/admin_stats', () => {
     const historical = payload.data.find(row => row.date === GLOBAL_STATS_TREND_DATES[0])
     expect(historical?.above_plan_with_credits).toBeNull()
     expect(historical?.above_plan_without_credits).toBeNull()
+    expect(historical?.plan_credits).toBe(1)
 
     const latest = payload.data.find(row => row.date === GLOBAL_STATS_TREND_DATES[1])
     expect(latest).toBeTruthy()
@@ -897,6 +1047,7 @@ describe('/private/admin_stats', () => {
     expect(latest?.trial_extended_subscribed_orgs).toBe(2)
     expect(latest?.above_plan_with_credits).toBe(4)
     expect(latest?.above_plan_without_credits).toBe(2)
+    expect(latest?.plan_credits).toBe(3)
   })
 
   it('returns last bundle upload for trial organizations and excludes builtin versions', async () => {
@@ -1229,6 +1380,79 @@ describe('/private/admin_stats', () => {
       },
     ])
     expect(exclusiveEndData.registration_source_trend.some(row => row.date === '2026-02-02')).toBe(false)
+  })
+
+  it('returns a daily breakdown of app onboarding methods and CLI outcomes', async () => {
+    const supabase = getSupabaseClient()
+    const suffix = randomUUID().replaceAll('-', '').slice(0, 12)
+    const createdAt = '2097-08-14T10:00:00.000Z'
+    const apps = [
+      { app_id: `com.admin.onboard.manual.${suffix}`, source: 'manual', outcome: 'in_progress' },
+      { app_id: `com.admin.onboard.cli.${suffix}`, source: 'cli', outcome: 'completed' },
+      { app_id: `com.admin.onboard.cliwip.${suffix}`, source: 'cli', outcome: 'in_progress' },
+      { app_id: `com.admin.onboard.mcp.${suffix}`, source: 'mcp', outcome: 'skipped' },
+      { app_id: `com.admin.onboard.ai.${suffix}`, source: 'ai', outcome: 'switched_to_manual' },
+    ]
+
+    try {
+      const { error } = await supabase.from('apps').insert(apps.map(app => ({
+        owner_org: ONBOARDING_ORG_ID,
+        name: `Admin onboarding ${app.app_id}`,
+        app_id: app.app_id,
+        icon_url: 'https://example.com/icon.png',
+        created_at: createdAt,
+        onboarding: {
+          setup: {
+            source: app.source,
+            outcome: app.outcome,
+            steps: {},
+          },
+        },
+      })))
+      if (error)
+        throw error
+
+      const data = await getOnboardingFunnelDirect(
+        '2097-08-14T00:00:00.000Z',
+        '2097-08-16T00:00:00.000Z',
+      )
+
+      expect(data.onboarding_method_trend).toEqual([
+        {
+          date: '2097-08-14',
+          manual: 1,
+          cli: 2,
+          mcp: 1,
+          ai: 1,
+        },
+        {
+          date: '2097-08-15',
+          manual: 0,
+          cli: 0,
+          mcp: 0,
+          ai: 0,
+        },
+      ])
+      expect(data.onboarding_outcome_trend).toEqual([
+        {
+          date: '2097-08-14',
+          completed: 1,
+          skipped: 1,
+          switched_to_manual: 1,
+          in_progress: 1,
+        },
+        {
+          date: '2097-08-15',
+          completed: 0,
+          skipped: 0,
+          switched_to_manual: 0,
+          in_progress: 0,
+        },
+      ])
+    }
+    finally {
+      await supabase.from('apps').delete().in('app_id', apps.map(app => app.app_id))
+    }
   })
 
   it.concurrent('keeps an uploaded bundle in the funnel after a later channel promotion', async () => {

@@ -10,7 +10,15 @@ import FailedCard from '~/components/FailedCard.vue'
 import RbacPermissionOnlyModal from '~/components/RbacPermissionOnlyModal.vue'
 import Tabs from '~/components/Tabs.vue'
 import { accountTabs } from '~/constants/accountTabs'
-import { organizationTabs as baseOrgTabs } from '~/constants/organizationTabs'
+import {
+  organizationMainTabs as baseOrgMainTabs,
+  organizationPlanSubTabs as basePlanSubTabs,
+  organizationTeamSubTabs as baseTeamSubTabs,
+  isOrgPlanPath,
+  isOrgTeamPath,
+  ORG_PLAN_HUB,
+  ORG_TEAM_HUB,
+} from '~/constants/organizationTabs'
 import { settingsTabs } from '~/constants/settingsTabs'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { checkPermissions } from '~/services/permissions'
@@ -49,11 +57,14 @@ function withoutExternalPurchaseTabs(tabs: Tab[]) {
     '/billing',
     '/settings/organization/credits',
     '/settings/organization/plans',
+    ORG_PLAN_HUB,
   ])
   return tabs.filter(tab => !restrictedKeys.has(tab.key))
 }
 
-const organizationTabs = ref<Tab[]>(withoutExternalPurchaseTabs([...baseOrgTabs])) as Ref<Tab[]>
+const organizationTabs = ref<Tab[]>(withoutExternalPurchaseTabs([...baseOrgMainTabs])) as Ref<Tab[]>
+const teamSubTabs = ref<Tab[]>([...baseTeamSubTabs]) as Ref<Tab[]>
+const planSubTabs = ref<Tab[]>(withoutExternalPurchaseTabs([...basePlanSubTabs])) as Ref<Tab[]>
 
 const canReadBilling = computedAsync(async () => {
   const orgId = organizationStore.currentOrganization?.gid
@@ -105,6 +116,34 @@ const showAdminOnlyModal = computed(() => {
   return !!gate && !gate.evaluating && !gate.hasAccess
 })
 
+function sortByBase(tabs: Tab[], base: Tab[]) {
+  tabs.sort((a, b) => {
+    const idxA = base.findIndex(t => t.key === a.key)
+    const idxB = base.findIndex(t => t.key === b.key)
+    if (idxA === -1 && idxB === -1)
+      return 0
+    if (idxA === -1)
+      return 1
+    if (idxB === -1)
+      return -1
+    return idxA - idxB
+  })
+}
+
+function upsertTab(tabs: Ref<Tab[]>, key: string, base: Tab[]) {
+  if (tabs.value.find(tab => tab.key === key))
+    return
+  const found = base.find(t => t.key === key)
+  if (found)
+    tabs.value.push({ ...found })
+}
+
+function removeTab(tabs: Ref<Tab[]>, key: string) {
+  if (!tabs.value.find(tab => tab.key === key))
+    return
+  tabs.value = tabs.value.filter(tab => tab.key !== key)
+}
+
 watchEffect(() => {
   if (!stripeEnabled.value || hideExternalPurchaseFlows) {
     const path = route.path.replace(/\/$/, '')
@@ -122,114 +161,92 @@ watchEffect(() => {
 watchEffect(() => {
   const billingEnabled = stripeEnabled.value
   const needsGroups = !!organizationStore.currentOrganization?.gid
-  const hasGroups = organizationTabs.value.find(tab => tab.key === '/settings/organization/groups')
-  if (needsGroups && !hasGroups) {
-    const base = baseOrgTabs.find(t => t.key === '/settings/organization/groups')
-    const membersIndex = organizationTabs.value.findIndex(tab => tab.key === '/settings/organization/members')
-    if (base && membersIndex >= 0)
-      organizationTabs.value.splice(membersIndex + 1, 0, { ...base })
-    else if (base)
-      organizationTabs.value.push({ ...base })
-  }
-  if (!needsGroups && hasGroups)
-    organizationTabs.value = organizationTabs.value.filter(tab => tab.key !== '/settings/organization/groups')
-
-  // ensure usage/plans tabs based on permissions (keeps icons from base)
   const needsUsage = billingEnabled && canReadBilling.value
-  const hasUsage = organizationTabs.value.find(tab => tab.key === '/settings/organization/usage')
-  if (needsUsage && !hasUsage) {
-    const base = baseOrgTabs.find(t => t.key === '/settings/organization/usage')
-    if (base)
-      organizationTabs.value.push({ ...base })
-  }
-  if (!needsUsage && hasUsage)
-    organizationTabs.value = organizationTabs.value.filter(tab => tab.key !== '/settings/organization/usage')
-
-  const needsCredits = billingEnabled && canUpdateBilling.value && !hideExternalPurchaseFlows
-  const hasCredits = organizationTabs.value.find(tab => tab.key === '/settings/organization/credits')
-
-  if (needsCredits && !hasCredits) {
-    const base = baseOrgTabs.find(t => t.key === '/settings/organization/credits')
-    if (base)
-      organizationTabs.value.push({ ...base })
-  }
-
-  if (!needsCredits && hasCredits)
-    organizationTabs.value = organizationTabs.value.filter(tab => tab.key !== '/settings/organization/credits')
-
-  const needsPlans = billingEnabled && canUpdateBilling.value && !hideExternalPurchaseFlows
-  const hasPlans = organizationTabs.value.find(tab => tab.key === '/settings/organization/plans')
-  if (needsPlans && !hasPlans) {
-    const base = baseOrgTabs.find(t => t.key === '/settings/organization/plans')
-    if (base)
-      organizationTabs.value.push({ ...base })
-  }
-  if (!needsPlans && hasPlans)
-    organizationTabs.value = organizationTabs.value.filter(tab => tab.key !== '/settings/organization/plans')
-
-  // Audit logs - visible only to super_admins
+  // Plans/Credits/Billing are visible with org.read_billing; mutations stay gated by org.update_billing.
+  const needsPlanPages = billingEnabled && canReadBilling.value && !hideExternalPurchaseFlows
   const needsAuditLogs = canReadAuditLogs.value
-  const hasAuditLogs = organizationTabs.value.find(tab => tab.key === '/settings/organization/audit-logs')
-  if (needsAuditLogs && !hasAuditLogs) {
-    const base = baseOrgTabs.find(t => t.key === '/settings/organization/audit-logs')
-    if (base)
-      organizationTabs.value.push({ ...base })
-  }
-  if (!needsAuditLogs && hasAuditLogs)
-    organizationTabs.value = organizationTabs.value.filter(tab => tab.key !== '/settings/organization/audit-logs')
-
-  // Security - visible only to super_admins
   const needsSecurity = canManageSecurity.value
-  const hasSecurity = organizationTabs.value.find(tab => tab.key === '/settings/organization/security')
-  if (needsSecurity && !hasSecurity) {
-    const base = baseOrgTabs.find(t => t.key === '/settings/organization/security')
-    if (base)
-      organizationTabs.value.push({ ...base })
-  }
-  if (!needsSecurity && hasSecurity)
-    organizationTabs.value = organizationTabs.value.filter(tab => tab.key !== '/settings/organization/security')
 
-  // Ensure tabs appear in the exact order defined by baseOrgTabs
-  organizationTabs.value.sort((a, b) => {
-    const idxA = baseOrgTabs.findIndex(t => t.key === a.key)
-    const idxB = baseOrgTabs.findIndex(t => t.key === b.key)
-    if (idxA === -1 && idxB === -1)
-      return 0
-    if (idxA === -1)
-      return 1
-    if (idxB === -1)
-      return -1
-    return idxA - idxB
-  })
+  // --- Secondary (main) org tabs ---
+  upsertTab(organizationTabs, ORG_TEAM_HUB, baseOrgMainTabs)
 
-  // Check billing access - users with org.read_billing permission can access billing
-  if (!hideExternalPurchaseFlows
-    && billingEnabled
-    && canReadBilling.value
-    && !organizationTabs.value.find(tab => tab.key === '/billing')) {
-    organizationTabs.value.push({
-      label: 'billing',
-      icon: IconBilling,
-      key: '/billing',
-      onClick: () => {
-        // Check permission at click time to handle role changes
-        if (canUpdateBilling.value) {
-          openPortal(organizationStore.currentOrganization?.gid ?? '', t)
-        }
-        else {
-          showBillingModal.value = true
-        }
-      },
-    })
+  if (needsPlanPages)
+    upsertTab(organizationTabs, ORG_PLAN_HUB, baseOrgMainTabs)
+  else
+    removeTab(organizationTabs, ORG_PLAN_HUB)
+
+  if (needsUsage)
+    upsertTab(organizationTabs, '/settings/organization/usage', baseOrgMainTabs)
+  else
+    removeTab(organizationTabs, '/settings/organization/usage')
+
+  if (needsAuditLogs)
+    upsertTab(organizationTabs, '/settings/organization/auditlogs', baseOrgMainTabs)
+  else
+    removeTab(organizationTabs, '/settings/organization/auditlogs')
+
+  sortByBase(organizationTabs.value, baseOrgMainTabs)
+
+  // --- Team sub-tabs ---
+  if (needsGroups)
+    upsertTab(teamSubTabs, '/settings/organization/groups', baseTeamSubTabs)
+  else
+    removeTab(teamSubTabs, '/settings/organization/groups')
+
+  if (needsSecurity)
+    upsertTab(teamSubTabs, '/settings/organization/security', baseTeamSubTabs)
+  else
+    removeTab(teamSubTabs, '/settings/organization/security')
+
+  // Members is always present in the team hub
+  upsertTab(teamSubTabs, '/settings/organization/members', baseTeamSubTabs)
+  sortByBase(teamSubTabs.value, baseTeamSubTabs)
+
+  // --- Plan sub-tabs ---
+  if (needsPlanPages) {
+    upsertTab(planSubTabs, '/settings/organization/plans', basePlanSubTabs)
+    upsertTab(planSubTabs, '/settings/organization/credits', basePlanSubTabs)
   }
-  else if (hideExternalPurchaseFlows || !canReadBilling.value || !billingEnabled) {
-    organizationTabs.value = organizationTabs.value.filter(tab => tab.key !== '/billing')
+  else {
+    removeTab(planSubTabs, '/settings/organization/plans')
+    removeTab(planSubTabs, '/settings/organization/credits')
   }
+
+  // Billing portal entry: users with org.read_billing can see it; update opens Stripe
+  const billingTabKey = '/billing'
+  const openBilling = () => {
+    if (canUpdateBilling.value) {
+      openPortal(organizationStore.currentOrganization?.gid ?? '', t)
+    }
+    else {
+      showBillingModal.value = true
+    }
+  }
+  const hasBilling = planSubTabs.value.find(tab => tab.key === billingTabKey)
+  if (needsPlanPages) {
+    if (!hasBilling) {
+      planSubTabs.value.push({
+        label: 'billing',
+        icon: IconBilling,
+        key: billingTabKey,
+        onClick: openBilling,
+      })
+    }
+  }
+  else if (hasBilling) {
+    removeTab(planSubTabs, billingTabKey)
+  }
+
+  sortByBase(planSubTabs.value, [...basePlanSubTabs, { label: 'billing', key: billingTabKey, icon: IconBilling }])
+
+  // Drop plan hub entirely when no plan sub-tabs remain
+  if (planSubTabs.value.length === 0)
+    removeTab(organizationTabs, ORG_PLAN_HUB)
 })
 
 const activePrimary = computed(() => {
   const path = route.path
-  if (path.startsWith('/settings/organization'))
+  if (path.startsWith('/settings/organization') || path === '/billing' || path.startsWith('/billing/'))
     return '/settings/organization'
   return '/settings/account'
 })
@@ -242,6 +259,13 @@ const activeSecondary = computed(() => {
   const tabs = secondaryTabs.value
   const path = route.path.replace(/\/$/, '')
 
+  if (activePrimary.value === '/settings/organization') {
+    if (isOrgTeamPath(path))
+      return ORG_TEAM_HUB
+    if (isOrgPlanPath(path))
+      return ORG_PLAN_HUB
+  }
+
   // Prefer the most specific match (longest path) so nested routes like
   // `/settings/organization/members` don't get claimed by the parent
   // `/settings/organization` tab.
@@ -251,6 +275,36 @@ const activeSecondary = computed(() => {
     const key = t.key.replace(/\/$/, '')
     return path === key || path.startsWith(`${key}/`)
   })
+
+  return match?.key ?? tabs[0]?.key
+})
+
+const tertiaryTabs = computed(() => {
+  if (shouldBlockContent.value || activePrimary.value !== '/settings/organization')
+    return []
+  const path = route.path.replace(/\/$/, '')
+  if (isOrgTeamPath(path))
+    return teamSubTabs.value
+  if (isOrgPlanPath(path))
+    return planSubTabs.value
+  return []
+})
+
+const activeTertiary = computed(() => {
+  const tabs = tertiaryTabs.value
+  if (!tabs.length)
+    return undefined
+  const path = route.path.replace(/\/$/, '')
+
+  const ordered = [...tabs].sort((a, b) => b.key.length - a.key.length)
+  const match = ordered.find((t) => {
+    const key = t.key.replace(/\/$/, '')
+    return path === key || path.startsWith(`${key}/`)
+  })
+
+  // Billing is an action tab without a route match while staying under Plan hub
+  if (!match && isOrgPlanPath(path) && path === '/billing')
+    return '/billing'
 
   return match?.key ?? tabs[0]?.key
 })
@@ -267,6 +321,14 @@ function handleSecondary(val: string) {
   }
   router.push(val)
 }
+function handleTertiary(val: string) {
+  const tab = tertiaryTabs.value.find(t => t.key === val)
+  if (tab?.onClick) {
+    tab.onClick(val)
+    return
+  }
+  router.push(val)
+}
 </script>
 
 <template>
@@ -276,9 +338,12 @@ function handleSecondary(val: string) {
       :active-tab="activePrimary"
       :secondary-tabs="shouldBlockContent ? [] : secondaryTabs"
       :secondary-active-tab="activeSecondary"
+      :tertiary-tabs="tertiaryTabs"
+      :tertiary-active-tab="activeTertiary"
       no-wrap
       @update:active-tab="handlePrimary"
       @update:secondary-active-tab="handleSecondary"
+      @update:tertiary-active-tab="handleTertiary"
     />
     <main class="flex relative flex-1 w-full min-h-0 mt-0 overflow-hidden bg-blue-50 dark:bg-slate-800/40">
       <div

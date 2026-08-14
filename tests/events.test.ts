@@ -4,6 +4,7 @@ import {
   APP_NAME,
   BASE_URL,
   getAuthHeaders,
+  getEndpointUrl,
   headers,
   NON_OWNER_ORG_ID,
   ORG_ID,
@@ -69,6 +70,37 @@ describe('[POST] /private/events operations', () => {
           app_id: APPNAME_EVENT,
           test: true,
         },
+      }),
+    })
+
+    const data = await response.json() as { status: string }
+    expect(response.status).toBe(200)
+    expect(data.status).toBe('ok')
+  })
+
+  it('accepts the allowlisted AI-instructions copy event with onboarding attempt context', async () => {
+    const response = await fetch(getEndpointUrl('/private/events'), {
+      method: 'POST',
+      headers: {
+        capgkey: headers.Authorization,
+      },
+      body: JSON.stringify({
+        channel: 'onboarding',
+        event: 'onboarding_ai_instructions_copied',
+        icon: '🤖',
+        nonPersonTags: {
+          flow: 'existing_org',
+          onboarding_attempt_id: id,
+          onboarding_version: 2,
+          resumed: true,
+          setup_command: 'ota',
+        },
+        notify: false,
+        org_id: ORG_ID,
+        tags: {
+          app_id: APPNAME_EVENT,
+        },
+        tracking_version: 2,
       }),
     })
 

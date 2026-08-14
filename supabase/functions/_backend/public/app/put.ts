@@ -1,6 +1,7 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
+import { parseAppOnboardingPatch } from '../../utils/appOnboarding.ts'
 import { deleteAppStatus } from '../../utils/appStatus.ts'
 import { trackBentoEvent } from '../../utils/bento.ts'
 import { createIfNotExistStoreInfo } from '../../utils/cloudflare.ts'
@@ -24,6 +25,31 @@ interface UpdateApp {
   block_provider_infra_requests?: boolean
   ios_store_url?: string | null
   android_store_url?: string | null
+  onboarding?: unknown
+}
+
+async function persistAppOnboarding(
+  c: Context<MiddlewareKeyVariables>,
+  appId: string,
+  patch: NonNullable<ReturnType<typeof parseAppOnboardingPatch>>,
+  pgClient?: ReturnType<typeof getPgClient>,
+) {
+  const client = pgClient ?? getPgClient(c)
+  const opened = !pgClient
+  try {
+    const result = await client.query(
+      `UPDATE public.apps
+       SET onboarding = public.merge_app_onboarding_setup(onboarding, $2::jsonb)
+       WHERE app_id = $1
+       RETURNING *`,
+      [appId, JSON.stringify(patch)],
+    )
+    return result.rows[0] as Database['public']['Tables']['apps']['Row'] | undefined
+  }
+  finally {
+    if (opened)
+      await closeClient(c, client)
+  }
 }
 
 export async function put(c: Context<MiddlewareKeyVariables>, appId: string, body: UpdateApp, apikey: Database['public']['Tables']['apikeys']['Row']): Promise<Response> {
@@ -41,16 +67,18 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
     throw quickError(400, 'retention_to_small', 'Retention cannot be smaller than 0', { retention: body.retention })
   }
 
+  const onboardingPatch = parseAppOnboardingPatch(body.onboarding)
   const canUpdateSettings = await checkPermission(c, 'app.update_settings', { appId })
 
-  // Service-role load is only for the pending-onboarding completion path so keys
-  // with org.create_app can finish apps they cannot yet read via RLS.
-  const previousAppClient = canUpdateSettings || body.need_onboarding !== false
+  // Service-role load is used when the key cannot update settings: pending
+  // onboarding completion, or a valid onboarding progress patch. Authorization
+  // still runs after this read and blocks unauthorized callers.
+  const previousAppClient = canUpdateSettings || (body.need_onboarding !== false && !onboardingPatch)
     ? supabaseApikey(c, apikey.key)
     : supabaseAdmin(c)
   const { data: previousApp, error: previousAppError } = await previousAppClient
     .from('apps')
-    .select('need_onboarding, owner_org, name, app_id')
+    .select('need_onboarding, owner_org, name, app_id, onboarding')
     .eq('app_id', appId)
     .single()
 
@@ -65,25 +93,30 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
   const canCompleteOnboarding = !canUpdateSettings
     && shouldSerializeOnboardingCompletion
     && await checkPermission(c, 'org.create_app', { orgId: previousApp.owner_org })
+  const canReportOnboarding = !!onboardingPatch
+    && (canUpdateSettings || await checkPermission(c, 'org.create_app', { orgId: previousApp.owner_org }))
 
-  if (!canUpdateSettings && !canCompleteOnboarding) {
+  if (!canUpdateSettings && !canCompleteOnboarding && !canReportOnboarding) {
     throw quickError(401, 'cannot_access_app', 'You can\'t access this app', { app_id: appId })
   }
 
   // Completing pending onboarding with only org.create_app must not allow arbitrary
   // settings changes. Restrict the writable fields in that case.
-  if (canCompleteOnboarding) {
-    const disallowedFields = [
-      body.name,
-      body.icon,
-      body.retention,
-      body.expose_metadata,
-      body.allow_device_custom_id,
-      body.existing_app,
-      body.block_provider_infra_requests,
-      body.ios_store_url,
-      body.android_store_url,
-    ].some(value => value !== undefined)
+  // Single source of truth for settings fields. `need_onboarding` is writable on the
+  // onboarding-completion path, so it is tracked separately.
+  const extraSettingsValues = [
+    body.name,
+    body.icon,
+    body.retention,
+    body.expose_metadata,
+    body.allow_device_custom_id,
+    body.existing_app,
+    body.block_provider_infra_requests,
+    body.ios_store_url,
+    body.android_store_url,
+  ]
+  if (!canUpdateSettings && (canCompleteOnboarding || canReportOnboarding)) {
+    const disallowedFields = extraSettingsValues.some(value => value !== undefined)
     if (disallowedFields) {
       throw quickError(401, 'cannot_access_app', 'You can\'t access this app', { app_id: appId })
     }
@@ -93,6 +126,11 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
   const onboardingLock = shouldSerializeOnboardingCompletion
     ? await lockOnboardingApp(c, appId)
     : null
+
+  const hasSettingsPayload = [
+    ...extraSettingsValues,
+    body.need_onboarding,
+  ].some(value => value !== undefined)
 
   let data: Database['public']['Tables']['apps']['Row'] | undefined
   let dbError: { message?: string } | null = null
@@ -126,6 +164,8 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
           if (!data)
             dbError = { message: 'App not found during onboarding completion' }
         }
+        if (data && onboardingPatch)
+          data = await persistAppOnboarding(c, appId, onboardingPatch, pgClient) ?? data
       }
       catch (error) {
         dbError = { message: (error as Error)?.message }
@@ -134,6 +174,20 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
         // Only close a client we opened here; unlockOnboardingApp owns the lock session.
         if (!onboardingLock)
           await closeClient(c, pgClient)
+      }
+    }
+    else if (onboardingPatch && !hasSettingsPayload) {
+      const pgClient = getPgClient(c)
+      try {
+        data = await persistAppOnboarding(c, appId, onboardingPatch, pgClient)
+        if (!data)
+          dbError = { message: 'App not found during onboarding progress update' }
+      }
+      catch (error) {
+        dbError = { message: (error as Error)?.message }
+      }
+      finally {
+        await closeClient(c, pgClient)
       }
     }
     else {
@@ -158,6 +212,8 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
       dbError = updateResult.error
       if (data)
         completedPendingOnboarding = previousApp.need_onboarding === true && data.need_onboarding === false
+      if (data && onboardingPatch)
+        data = await persistAppOnboarding(c, appId, onboardingPatch) ?? data
     }
   }
   finally {

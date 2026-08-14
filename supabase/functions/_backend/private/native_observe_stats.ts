@@ -574,7 +574,7 @@ function buildNativeObserveResponse(input: BuildNativeObserveResponseInput) {
   const affectedDevices = toCount(overview.affected_devices)
   const issueFreeRate = totalDevices > 0
     ? toMetric(((totalDevices - affectedDevices) / totalDevices) * 100, 1) ?? 0
-    : 100
+    : null
 
   return {
     labels: input.labels,
@@ -623,7 +623,7 @@ function buildNativeObserveResponse(input: BuildNativeObserveResponseInput) {
       affected_devices: toCount(row.affected_devices),
       issue_free_rate: toCount(row.devices) > 0
         ? toMetric(((toCount(row.devices) - toCount(row.affected_devices)) / toCount(row.devices)) * 100, 1) ?? 0
-        : 100,
+        : null,
       launch_p90_ms: toMetric(row.launch_p90_ms),
       webview_load_p90_ms: toMetric(row.webview_load_p90_ms),
     })),

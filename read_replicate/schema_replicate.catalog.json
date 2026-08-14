@@ -531,6 +531,16 @@
       "type": "timestamp with time zone"
     },
     {
+      "default": "'{}'::jsonb",
+      "generated": "",
+      "identity": "",
+      "name": "onboarding",
+      "notNull": true,
+      "position": 31,
+      "table": "apps",
+      "type": "jsonb"
+    },
+    {
       "default": "now()",
       "generated": "",
       "identity": "",
@@ -969,6 +979,16 @@
       "position": 37,
       "table": "channels",
       "type": "timestamp with time zone"
+    },
+    {
+      "default": "'all'::channel_update_package",
+      "generated": "",
+      "identity": "",
+      "name": "update_package",
+      "notNull": true,
+      "position": 38,
+      "table": "channels",
+      "type": "channel_update_package"
     },
     {
       "default": "nextval('manifest_id_seq'::regclass)",
@@ -1771,6 +1791,13 @@
       "valid": true
     },
     {
+      "definition": "CHECK (jsonb_typeof(onboarding) = 'object'::text AND (NOT onboarding ? 'features'::text OR jsonb_typeof(onboarding -> 'features'::text) = 'object'::text) AND (NOT onboarding ? 'setup'::text OR jsonb_typeof(onboarding -> 'setup'::text) = 'object'::text AND (NOT (onboarding -> 'setup'::text) ? 'source'::text OR (((onboarding -> 'setup'::text) ->> 'source'::text) = ANY (ARRAY['manual'::text, 'cli'::text, 'mcp'::text, 'ai'::text]))) AND (NOT (onboarding -> 'setup'::text) ? 'outcome'::text OR (((onboarding -> 'setup'::text) ->> 'outcome'::text) = ANY (ARRAY['in_progress'::text, 'completed'::text, 'skipped'::text, 'switched_to_manual'::text])))) AND (NOT onboarding ? 'source'::text OR ((onboarding ->> 'source'::text) = ANY (ARRAY['manual'::text, 'cli'::text, 'mcp'::text, 'ai'::text]))) AND (NOT onboarding ? 'outcome'::text OR ((onboarding ->> 'outcome'::text) = ANY (ARRAY['in_progress'::text, 'completed'::text, 'skipped'::text, 'switched_to_manual'::text])))) NOT VALID",
+      "name": "apps_onboarding_valid",
+      "table": "apps",
+      "type": "c",
+      "valid": false
+    },
+    {
       "definition": "PRIMARY KEY (app_id)",
       "name": "apps_pkey",
       "table": "apps",
@@ -2095,6 +2122,13 @@
       "valid": true
     },
     {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX apps_created_at_onboarding_setup_source_idx ON public.apps USING btree (created_at, (((onboarding -> 'setup'::text) ->> 'source'::text)))",
+      "name": "apps_created_at_onboarding_setup_source_idx",
+      "table": "apps",
+      "valid": true
+    },
+    {
       "constraintOwned": true,
       "definition": "CREATE UNIQUE INDEX apps_id_unique ON public.apps USING btree (id)",
       "name": "apps_id_unique",
@@ -2133,6 +2167,20 @@
       "constraintOwned": false,
       "definition": "CREATE INDEX idx_apps_default_upload_channel ON public.apps USING btree (default_upload_channel)",
       "name": "idx_apps_default_upload_channel",
+      "table": "apps",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX idx_apps_onboarding_ota_stage ON public.apps USING btree (((((onboarding -> 'features'::text) -> 'ota'::text) ->> 'stage'::text)))",
+      "name": "idx_apps_onboarding_ota_stage",
+      "table": "apps",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX idx_apps_onboarding_refreshed_at ON public.apps USING btree (COALESCE((onboarding ->> 'refreshed_at'::text), ''::text), app_id)",
+      "name": "idx_apps_onboarding_refreshed_at",
       "table": "apps",
       "valid": true
     },
@@ -2613,6 +2661,17 @@
     }
   ],
   "types": [
+    {
+      "definition": [
+        "all",
+        "zip",
+        "delta",
+        "zip_from_builtin",
+        "delta_from_builtin"
+      ],
+      "kind": "e",
+      "name": "channel_update_package"
+    },
     {
       "definition": [
         "major",

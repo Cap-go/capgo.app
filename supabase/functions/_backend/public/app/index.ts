@@ -57,6 +57,7 @@ app.put('/:id', middlewareKey(), async (c) => {
     block_provider_infra_requests?: boolean
     ios_store_url?: string | null
     android_store_url?: string | null
+    onboarding?: unknown
   }>(c)
   const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
   const subkey = c.get('subkey') as Database['public']['Tables']['apikeys']['Row'] | undefined

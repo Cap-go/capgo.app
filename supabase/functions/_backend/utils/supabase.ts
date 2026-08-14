@@ -1404,10 +1404,18 @@ export async function readStatsSB(c: Context, params: ReadStatsParams) {
 export async function readStatsInsightsSB(c: Context, params: ReadStatsInsightsParams): Promise<StatsInsightsResult> {
   const pgClient = getPgClient(c)
   const actionValues = params.actions?.length ? params.actions : []
-  const actionFilter = actionValues.length > 0 ? 'AND action = ANY($4::public.stats_action[])' : ''
-  const values = actionValues.length > 0
-    ? [params.app_id, params.start_date, params.end_date, actionValues]
-    : [params.app_id, params.start_date, params.end_date]
+  const versionName = params.version_name?.trim()
+  const values: unknown[] = [params.app_id, params.start_date, params.end_date]
+  const extraFilters: string[] = []
+  if (actionValues.length > 0) {
+    extraFilters.push(`AND action = ANY($${values.length + 1}::public.stats_action[])`)
+    values.push(actionValues)
+  }
+  if (versionName) {
+    extraFilters.push(`AND version_name = $${values.length + 1}`)
+    values.push(versionName)
+  }
+  const extraFilter = extraFilters.join('\n        ')
 
   try {
     const summaryQuery = `
@@ -1419,7 +1427,7 @@ export async function readStatsInsightsSB(c: Context, params: ReadStatsInsightsP
       WHERE app_id = $1
         AND created_at >= $2::timestamptz
         AND created_at < $3::timestamptz
-        ${actionFilter}
+        ${extraFilter}
     `
 
     const actionsQuery = `
@@ -1436,7 +1444,7 @@ export async function readStatsInsightsSB(c: Context, params: ReadStatsInsightsP
       WHERE app_id = $1
         AND created_at >= $2::timestamptz
         AND created_at < $3::timestamptz
-        ${actionFilter}
+        ${extraFilter}
       GROUP BY action
       ORDER BY COUNT(*) DESC
       LIMIT 20
@@ -1451,7 +1459,7 @@ export async function readStatsInsightsSB(c: Context, params: ReadStatsInsightsP
       WHERE app_id = $1
         AND created_at >= $2::timestamptz
         AND created_at < $3::timestamptz
-        ${actionFilter}
+        ${extraFilter}
       GROUP BY 1, 2
       ORDER BY 1 ASC, COUNT(*) DESC
     `
@@ -1467,7 +1475,7 @@ export async function readStatsInsightsSB(c: Context, params: ReadStatsInsightsP
       WHERE app_id = $1
         AND created_at >= $2::timestamptz
         AND created_at < $3::timestamptz
-        ${actionFilter}
+        ${extraFilter}
       GROUP BY action, COALESCE(NULLIF(version_name, ''), 'unknown')
       ORDER BY COUNT(*) DESC
       LIMIT 30
@@ -1484,7 +1492,7 @@ export async function readStatsInsightsSB(c: Context, params: ReadStatsInsightsP
       WHERE app_id = $1
         AND created_at >= $2::timestamptz
         AND created_at < $3::timestamptz
-        ${actionFilter}
+        ${extraFilter}
       GROUP BY action, device_id
       ORDER BY COUNT(*) DESC
       LIMIT 30
@@ -1757,8 +1765,8 @@ export async function getUpdateStatsSB(c: Context): Promise<UpdateStats> {
   }
 
   const apps = data.map((app: any) => {
-    const totalEvents = app.failed + app.install + app.get
-    const successRate = Number((totalEvents > 0 ? ((app.install + app.get) / totalEvents) * 100 : 100).toFixed(2))
+    const totalOutcomes = app.failed + app.install
+    const successRate = Number((totalOutcomes > 0 ? (app.install / totalOutcomes) * 100 : 100).toFixed(2))
     return {
       app_id: app.app_id,
       failed: Number(app.failed),
@@ -1776,8 +1784,8 @@ export async function getUpdateStatsSB(c: Context): Promise<UpdateStats> {
     return acc
   }, { failed: 0, set: 0, get: 0 })
 
-  const totalEvents = total.failed + total.set + total.get
-  const totalSuccessRate = totalEvents > 0 ? ((total.set + total.get) / totalEvents) * 100 : 100
+  const totalOutcomes = total.failed + total.set
+  const totalSuccessRate = totalOutcomes > 0 ? (total.set / totalOutcomes) * 100 : 100
 
   return {
     apps,

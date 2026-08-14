@@ -87,7 +87,7 @@ describe('frontend channel RBAC scope regressions', () => {
     const source = await readRepoFile('src/pages/ApiKeys.vue')
 
     expect(source).toMatch(/if\s*\(\s*binding\.scope_type\s*===\s*['"]app['"]\s*&&\s*binding\.org_id\s*\)/)
-    expect(source).toMatch(/const\s+orgIds\s*=\s*getFilterOrgIds\s*\(\s*key\s*\)/)
+    expect(source).toMatch(/getOrgIds:\s*getFilterOrgIds/)
     expect(source).toMatch(/binding\.scope_type\s*===\s*['"]org['"]\s*&&\s*binding\.org_id\s*&&\s*binding\.role_name\s*!==\s*systemApiKeyOrgReaderRole/)
     expect(source).toMatch(/const\s+directOrgBindings\s*=\s*bindings\.filter\(\s*binding\s*=>\s*binding\.scope_type\s*===\s*['"]org['"]\s*&&\s*binding\.role_name\s*!==\s*systemApiKeyOrgReaderRole\s*,?\s*\)/)
   })

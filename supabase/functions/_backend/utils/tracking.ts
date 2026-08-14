@@ -36,6 +36,7 @@ export interface SendEventToTrackingPayload extends TrackOptions {
 export interface SendEventToTrackingOptions {
   background?: boolean
   ip?: string
+  posthog?: boolean
   strict?: boolean
 }
 
@@ -92,7 +93,9 @@ function getTrackingIp(c: Context, ip?: string) {
 async function executeTracking(c: Context, payload: SendEventToTrackingPayload, options: SendEventToTrackingOptions) {
   const tasks: Array<Promise<void>> = [
     runTrackedCall(c, 'logsnag', () => logsnag(c).track(payload), options.strict),
-    runTrackedCall(c, 'posthog', () => trackPosthogEvent(c, {
+  ]
+  if (options.posthog !== false) {
+    tasks.push(runTrackedCall(c, 'posthog', () => trackPosthogEvent(c, {
       event: payload.event,
       user_id: payload.user_id,
       tags: payload.tags,
@@ -101,8 +104,8 @@ async function executeTracking(c: Context, payload: SendEventToTrackingPayload, 
       description: payload.description,
       groups: payload.groups,
       ip: getTrackingIp(c, options.ip),
-    }), options.strict),
-  ]
+    }), options.strict))
+  }
 
   await Promise.all(tasks)
 }

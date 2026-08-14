@@ -39,6 +39,7 @@ export interface OrganizationApp {
   icon_url: string | null
   icon_storage_path?: string | null
   icon_url_loading?: boolean
+  onboarding?: Database['public']['Tables']['apps']['Row']['onboarding']
 }
 export type OrganizationRole
   = 'owner'
@@ -65,6 +66,9 @@ export const RBAC_ORG_ROLE_I18N_KEYS: Record<string, string> = {
   app_uploader: 'role-app-uploader',
   app_reader: 'role-app-reader',
   channel_admin: 'role-channel-admin',
+  channel_developer: 'role-channel-developer',
+  channel_preview: 'role-channel-preview',
+  channel_uploader: 'role-channel-uploader',
   channel_reader: 'role-channel-reader',
 }
 
@@ -266,7 +270,14 @@ export const useOrganizationStore = defineStore('organization', () => {
     }
   }
 
-  const appWithImmediateIcon = (app: { app_id: string, name: string | null, owner_org: string, need_onboarding: boolean, icon_url: string | null }): OrganizationApp => {
+  const appWithImmediateIcon = (app: {
+    app_id: string
+    name: string | null
+    owner_org: string
+    need_onboarding: boolean
+    icon_url: string | null
+    onboarding?: OrganizationApp['onboarding']
+  }): OrganizationApp => {
     const { normalized, shouldSign } = resolveImagePath(app.icon_url)
     return {
       app_id: app.app_id,
@@ -276,6 +287,7 @@ export const useOrganizationStore = defineStore('organization', () => {
       icon_url: shouldSign ? '' : normalized || null,
       icon_storage_path: normalized || null,
       icon_url_loading: shouldSign,
+      onboarding: app.onboarding ?? {},
     }
   }
 
@@ -390,7 +402,7 @@ export const useOrganizationStore = defineStore('organization', () => {
     const appIconLoadRun = ++organizationAppIconLoadRun
     const { error, data: allAppsByOwner } = await supabase
       .from('apps')
-      .select('app_id, name, owner_org, need_onboarding, icon_url')
+      .select('app_id, name, owner_org, need_onboarding, icon_url, onboarding')
       .in('owner_org', orgIds)
 
     if (error) {
@@ -449,6 +461,60 @@ export const useOrganizationStore = defineStore('organization', () => {
 
   const awaitInitialLoad = () => {
     return _initialLoadPromise.value.promise
+  }
+
+  const appOnboardingWriteGen = new Map<string, number>()
+
+  const writeAppOnboarding = (appId: string, onboarding: OrganizationApp['onboarding']) => {
+    const existing = _appsByAppId.value.get(appId)
+    if (!existing)
+      return
+
+    const next = { ...existing, onboarding }
+    const nextByAppId = new Map(_appsByAppId.value)
+    nextByAppId.set(appId, next)
+    _appsByAppId.value = nextByAppId
+
+    const orgApps = _appsByOrgId.value.get(existing.owner_org)
+    if (!orgApps)
+      return
+    const nextByOrgId = new Map(_appsByOrgId.value)
+    nextByOrgId.set(existing.owner_org, orgApps.map(app => app.app_id === appId ? next : app))
+    _appsByOrgId.value = nextByOrgId
+  }
+
+  const updateAppOnboarding = (appId: string, onboarding: OrganizationApp['onboarding'] | null | undefined) => {
+    if (!_appsByAppId.value.get(appId) || onboarding == null)
+      return
+    appOnboardingWriteGen.set(appId, (appOnboardingWriteGen.get(appId) ?? 0) + 1)
+    writeAppOnboarding(appId, onboarding)
+  }
+
+  let appsOnboardingRefreshGen = 0
+
+  const refreshAppsOnboarding = async (orgId?: string) => {
+    const orgIds = orgId ? [orgId] : Array.from(_appsByOrgId.value.keys())
+    if (orgIds.length === 0)
+      return
+
+    const refreshGen = ++appsOnboardingRefreshGen
+    const writeGenSnapshot = new Map(appOnboardingWriteGen)
+    const { data, error } = await supabase
+      .from('apps')
+      .select('app_id, onboarding')
+      .in('owner_org', orgIds)
+
+    if (error) {
+      console.error('Cannot refresh app onboarding', error)
+      return
+    }
+    if (refreshGen !== appsOnboardingRefreshGen)
+      return
+    for (const row of data ?? []) {
+      if ((appOnboardingWriteGen.get(row.app_id) ?? 0) !== (writeGenSnapshot.get(row.app_id) ?? 0))
+        continue
+      writeAppOnboarding(row.app_id, row.onboarding)
+    }
   }
 
   const getCurrentRoleForApp = (appId: string) => {
@@ -763,6 +829,8 @@ export const useOrganizationStore = defineStore('organization', () => {
     getAppByAppId,
     getAppsByOrgId,
     awaitInitialLoad,
+    updateAppOnboarding,
+    refreshAppsOnboarding,
     deleteOrganization,
     canDeleteOrganization,
     checkPasswordPolicyImpact,

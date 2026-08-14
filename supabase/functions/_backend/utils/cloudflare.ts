@@ -30,7 +30,7 @@ function formatLocalDateTime(date = new Date()): string {
   return `${formatLocalYmd(date)} ${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`
 }
 
-const MAX_ANALYTICS_QUERY_LIMIT = 50_000
+export const MAX_ANALYTICS_QUERY_LIMIT = 50_000
 const INSTALL_SOURCE_COUNT_CACHE_TTL_SECONDS = 60 * 60 * 24 * 30
 
 export function normalizeAnalyticsLimit(limit: unknown, fallback = DEFAULT_LIMIT): number {
@@ -1426,6 +1426,8 @@ export interface ReadUpdateDeliveryTimingEventsCFParams {
   actions: string[]
   /** When set, restrict to these app ids. Omit for platform-wide scans. */
   app_ids?: string[]
+  /** When set, restrict to these version names (blob3). */
+  version_names?: string[]
   limit?: number
   /**
    * Platform metadata-only mode: keep AE's 50k row budget on timed completes.
@@ -1443,6 +1445,13 @@ export function buildUpdateDeliveryTimingEventsCFQuery(params: ReadUpdateDeliver
         params.app_ids.length === 1
           ? `AND index1 = '${escapeSqlString(params.app_ids[0])}'`
           : `AND index1 IN (${params.app_ids.map(id => `'${escapeSqlString(id)}'`).join(', ')})`
+      )
+    : ''
+  const versionFilter = params.version_names?.length
+    ? (
+        params.version_names.length === 1
+          ? `AND blob3 = '${escapeSqlString(params.version_names[0]!)}'`
+          : `AND blob3 IN (${params.version_names.map(name => `'${escapeSqlString(name)}'`).join(', ')})`
       )
     : ''
   // Prefer double1 (written by trackLogsCF) and keep blob4 duration for older rows.
@@ -1464,6 +1473,7 @@ WHERE
   AND timestamp < toDateTime('${formatDateCF(params.end_date)}')
   AND blob2 IN (${actionsList})
   ${appFilter}
+  ${versionFilter}
   ${durationFilter}
 ORDER BY created_at ASC
 LIMIT ${limit}`
@@ -1510,6 +1520,195 @@ export async function readUpdateDeliveryTimingEventsCF(
   }
   catch (e) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading update delivery timing events', error: serializeError(e), query })
+    throw e
+  }
+}
+
+const PLATFORM_DELIVERY_END_ACTIONS_SQL = '\'download_complete\', \'download_zip_complete\''
+const PLATFORM_DELIVERY_START_ACTIONS_SQL = '\'download_0\', \'download_zip_start\', \'download_manifest_start\''
+const PLATFORM_DELIVERY_MAX_MS = 7_200_000
+
+export interface PlatformUpdateDeliveryDailyCFRow {
+  day: string
+  samples: number
+  devices: number
+  p50_ms: number | null
+  p75_ms: number | null
+  p95_ms: number | null
+  p99_ms: number | null
+}
+
+export interface PlatformUpdateDeliveryOverviewCFRow {
+  samples: number
+  devices: number
+  p50_ms: number | null
+  p75_ms: number | null
+  p95_ms: number | null
+  p99_ms: number | null
+}
+
+export interface BuildPlatformUpdateDeliveryStatsCFQueryParams {
+  query_start: string
+  period_start: string
+  end_date: string
+}
+
+function platformDeliveryDaySql(value: string): string {
+  return formatDateCF(value).slice(0, 10)
+}
+
+/**
+ * Pair start/complete in AE instead of pulling 50k raw rows per day.
+ * AE SQL has no JOIN/UNION/JSON extract, so this is an explicit approximation:
+ * one sample per app+device+version+UTC day using first start and first complete
+ * (or double1 when the complete already has duration). Same-day multi-attempts
+ * and untimed pairs that cross UTC midnight can drop or skew; blob4 metadata
+ * duration cannot be parsed in-engine. trackLogsCF already writes duration to
+ * double1 when metadata has it.
+ */
+function buildPlatformUpdateDeliveryDeliveriesSubquery(params: BuildPlatformUpdateDeliveryStatsCFQueryParams): string {
+  const metaDurationSql = `min(if(blob2 IN (${PLATFORM_DELIVERY_END_ACTIONS_SQL}) AND double1 > 0, double1, NULL))`
+  const startTsSql = `min(if(blob2 IN (${PLATFORM_DELIVERY_START_ACTIONS_SQL}), timestamp, NULL))`
+  const endTsSql = `min(if(blob2 IN (${PLATFORM_DELIVERY_END_ACTIONS_SQL}), timestamp, NULL))`
+
+  return `SELECT
+  formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d') AS day,
+  format('{}:{}', index1, blob1) AS app_device,
+  1 AS sample_weight,
+  if(
+    ${metaDurationSql} > 0,
+    ${metaDurationSql},
+    (toUnixTimestamp(${endTsSql}) - toUnixTimestamp(${startTsSql})) * 1000
+  ) AS duration_ms
+FROM app_log
+WHERE timestamp >= toDateTime('${formatDateCF(params.query_start)}')
+  AND timestamp < toDateTime('${formatDateCF(params.end_date)}')
+  AND blob2 IN (${PLATFORM_DELIVERY_END_ACTIONS_SQL}, ${PLATFORM_DELIVERY_START_ACTIONS_SQL})
+GROUP BY index1, blob1, blob3, day`
+}
+
+export function buildPlatformUpdateDeliveryDailyCFQuery(params: BuildPlatformUpdateDeliveryStatsCFQueryParams): string {
+  return `SELECT
+  day,
+  quantileExactWeighted(0.50)(duration_ms, sample_weight) AS p50_ms,
+  quantileExactWeighted(0.75)(duration_ms, sample_weight) AS p75_ms,
+  quantileExactWeighted(0.95)(duration_ms, sample_weight) AS p95_ms,
+  quantileExactWeighted(0.99)(duration_ms, sample_weight) AS p99_ms,
+  SUM(sample_weight) AS samples,
+  COUNT(DISTINCT app_device) AS devices
+FROM (
+  ${buildPlatformUpdateDeliveryDeliveriesSubquery(params)}
+)
+WHERE duration_ms > 0
+  AND duration_ms <= ${PLATFORM_DELIVERY_MAX_MS}
+  AND day >= '${platformDeliveryDaySql(params.period_start)}'
+GROUP BY day
+ORDER BY day ASC`
+}
+
+export function buildPlatformUpdateDeliveryOverviewCFQuery(params: BuildPlatformUpdateDeliveryStatsCFQueryParams): string {
+  return `SELECT
+  quantileExactWeighted(0.50)(duration_ms, sample_weight) AS p50_ms,
+  quantileExactWeighted(0.75)(duration_ms, sample_weight) AS p75_ms,
+  quantileExactWeighted(0.95)(duration_ms, sample_weight) AS p95_ms,
+  quantileExactWeighted(0.99)(duration_ms, sample_weight) AS p99_ms,
+  SUM(sample_weight) AS samples,
+  COUNT(DISTINCT app_device) AS devices
+FROM (
+  ${buildPlatformUpdateDeliveryDeliveriesSubquery(params)}
+)
+WHERE duration_ms > 0
+  AND duration_ms <= ${PLATFORM_DELIVERY_MAX_MS}
+  AND day >= '${platformDeliveryDaySql(params.period_start)}'`
+}
+
+function toPlatformDeliveryMetric(value: number | string | null | undefined): number | null {
+  if (value === null || value === undefined || value === '')
+    return null
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? numeric : null
+}
+
+function toPlatformDeliveryCount(value: number | string | null | undefined): number {
+  const numeric = Number(value ?? 0)
+  return Number.isFinite(numeric) ? Math.max(0, Math.round(numeric)) : 0
+}
+
+export async function readPlatformUpdateDeliveryStatsCF(
+  c: Context,
+  params: BuildPlatformUpdateDeliveryStatsCFQueryParams,
+): Promise<{
+  dailyRows: PlatformUpdateDeliveryDailyCFRow[]
+  overviewRow: PlatformUpdateDeliveryOverviewCFRow
+}> {
+  if (!c.env.APP_LOG) {
+    return {
+      dailyRows: [],
+      overviewRow: { samples: 0, devices: 0, p50_ms: null, p75_ms: null, p95_ms: null, p99_ms: null },
+    }
+  }
+
+  // AE SQL has no UNION/ROLLUP, so daily series and true overview percentiles
+  // cannot share one statement. Two parallel queries beat 90 sequential scans.
+  const dailyQuery = buildPlatformUpdateDeliveryDailyCFQuery(params)
+  const overviewQuery = buildPlatformUpdateDeliveryOverviewCFQuery(params)
+  cloudlog({
+    requestId: c.get('requestId'),
+    message: 'readPlatformUpdateDeliveryStatsCF query',
+    dailyQuery,
+    overviewQuery,
+  })
+
+  try {
+    const [daily, overview] = await Promise.all([
+      runQueryToCFA<{
+        day: string
+        samples: number | string
+        devices: number | string
+        p50_ms: number | string | null
+        p75_ms: number | string | null
+        p95_ms: number | string | null
+        p99_ms: number | string | null
+      }>(c, dailyQuery),
+      runQueryToCFA<{
+        samples: number | string
+        devices: number | string
+        p50_ms: number | string | null
+        p75_ms: number | string | null
+        p95_ms: number | string | null
+        p99_ms: number | string | null
+      }>(c, overviewQuery),
+    ])
+
+    const overviewRow = overview[0]
+    return {
+      dailyRows: daily.map(row => ({
+        day: typeof row.day === 'string' ? row.day.slice(0, 10) : String(row.day).slice(0, 10),
+        samples: toPlatformDeliveryCount(row.samples),
+        devices: toPlatformDeliveryCount(row.devices),
+        p50_ms: toPlatformDeliveryMetric(row.p50_ms),
+        p75_ms: toPlatformDeliveryMetric(row.p75_ms),
+        p95_ms: toPlatformDeliveryMetric(row.p95_ms),
+        p99_ms: toPlatformDeliveryMetric(row.p99_ms),
+      })),
+      overviewRow: {
+        samples: toPlatformDeliveryCount(overviewRow?.samples),
+        devices: toPlatformDeliveryCount(overviewRow?.devices),
+        p50_ms: toPlatformDeliveryMetric(overviewRow?.p50_ms),
+        p75_ms: toPlatformDeliveryMetric(overviewRow?.p75_ms),
+        p95_ms: toPlatformDeliveryMetric(overviewRow?.p95_ms),
+        p99_ms: toPlatformDeliveryMetric(overviewRow?.p99_ms),
+      },
+    }
+  }
+  catch (e) {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'Error reading platform update delivery stats',
+      error: serializeError(e),
+      dailyQuery,
+      overviewQuery,
+    })
     throw e
   }
 }
@@ -1594,18 +1793,27 @@ function buildStatsInsightsActionFilter(actions?: string[]) {
   return `AND blob2 IN (${actionList})`
 }
 
+function buildStatsInsightsVersionFilter(versionName?: string) {
+  const name = versionName?.trim()
+  if (!name)
+    return ''
+  return `AND blob3 = '${escapeSqlString(name)}'`
+}
+
 export async function readStatsInsightsCF(c: Context, params: ReadStatsInsightsParams): Promise<StatsInsightsResult> {
   const emptyResult = emptyStatsInsights()
   if (!c.env.APP_LOG)
     return emptyResult
 
   const actionFilter = buildStatsInsightsActionFilter(params.actions)
+  const versionFilter = buildStatsInsightsVersionFilter(params.version_name)
   const periodStart = formatDateCF(params.start_date)
   const periodEnd = formatDateCF(params.end_date)
   const baseWhere = `index1 = '${escapeSqlString(params.app_id)}'
     AND timestamp >= toDateTime('${periodStart}')
     AND timestamp < toDateTime('${periodEnd}')
-    ${actionFilter}`
+    ${actionFilter}
+    ${versionFilter}`
 
   const summaryQuery = `SELECT
     count() AS total,
@@ -1662,7 +1870,7 @@ export async function readStatsInsightsCF(c: Context, params: ReadStatsInsightsP
   ORDER BY total DESC
   LIMIT 30`
 
-  cloudlog({ requestId: c.get('requestId'), message: 'readStatsInsightsCF queries', appId: params.app_id, start: params.start_date, end: params.end_date, actions: params.actions })
+  cloudlog({ requestId: c.get('requestId'), message: 'readStatsInsightsCF queries', appId: params.app_id, start: params.start_date, end: params.end_date, actions: params.actions, versionName: params.version_name })
 
   try {
     const [summaryRows, actionRows, dailyRows, versionRows, deviceRows] = await Promise.all([
@@ -2124,8 +2332,8 @@ export async function getUpdateStatsCF(c: Context): Promise<UpdateStats> {
     const apps = result
       .filter(app => app.get > 0)
       .map((app) => {
-        const totalEvents = app.set + app.get
-        const successRate = Number(Number(totalEvents > 0 ? (app.get / totalEvents) * 100 : 100).toFixed(2))
+        const totalOutcomes = app.set + app.failed
+        const successRate = Number(Number(totalOutcomes > 0 ? (app.set / totalOutcomes) * 100 : 100).toFixed(2))
         return {
           ...app,
           success_rate: successRate,
@@ -2140,8 +2348,8 @@ export async function getUpdateStatsCF(c: Context): Promise<UpdateStats> {
       return acc
     }, { failed: 0, set: 0, get: 0 })
 
-    const totalEvents = total.set + total.get
-    const totalSuccessRate = totalEvents > 0 ? (total.get / totalEvents) * 100 : 100
+    const totalOutcomes = total.set + total.failed
+    const totalSuccessRate = totalOutcomes > 0 ? (total.set / totalOutcomes) * 100 : 100
 
     return {
       apps,
@@ -2168,6 +2376,9 @@ export async function getUpdateStatsCF(c: Context): Promise<UpdateStats> {
 }
 
 // Note: Device cleanup is no longer needed as Analytics Engine handles data retention automatically
+
+// Shared failure taxonomy for device-day success rates (admin + public /data).
+const PUBLIC_FAILURE_ACTIONS = ['set_fail', 'update_fail', 'download_fail', 'windows_path_fail', 'canonical_path_fail', 'directory_path_fail', 'unzip_fail', 'low_mem_fail', 'download_manifest_file_fail', 'download_manifest_checksum_fail', 'download_manifest_brotli_fail', 'finish_download_fail', 'manifest_path_fail', 'decrypt_fail', 'insufficient_disk_space', 'cannotGetBundle', 'checksum_fail', 'blocked_by_server_url', 'backend_refusal'] as const
 
 // ============================================================================
 // ADMIN ANALYTICS FUNCTIONS
@@ -2371,8 +2582,8 @@ export async function getAdminFailureMetrics(
 }
 
 /**
- * Get platform success rate for admin dashboard
- * Returns overall install vs fail statistics
+ * Get platform success rate for admin dashboard.
+ * Device-day outcomes from app_log (same formula as public /data).
  */
 export async function getAdminSuccessRate(
   c: Context,
@@ -2380,18 +2591,15 @@ export async function getAdminSuccessRate(
   end_date: string,
   app_id?: string,
 ): Promise<AdminSuccessRate | null> {
-  if (!c.env.VERSION_USAGE)
+  if (!c.env.APP_LOG)
     return null
 
-  const appFilter = app_id ? `AND blob1 = '${escapeSqlString(app_id)}'` : ''
-
-  const query = `SELECT
-    sum(if(blob3 = 'install', 1, 0)) AS installs,
-    sum(if(blob3 = 'fail', 1, 0)) AS fails
-  FROM version_usage
-  WHERE timestamp >= toDateTime('${formatDateCF(start_date)}')
-    AND timestamp < toDateTime('${formatDateCF(end_date)}')
-    ${appFilter}`
+  const appFilter = app_id ? `AND index1 = '${escapeSqlString(app_id)}'` : ''
+  const window = `timestamp >= toDateTime('${formatDateCF(start_date)}') AND timestamp < toDateTime('${formatDateCF(end_date)}') ${appFilter}`
+  const failureActions = PUBLIC_FAILURE_ACTIONS.map(action => `'${action}'`).join(', ')
+  const day = `formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d')`
+  const outcomeBase = `SELECT ${day} AS date, index1 AS app_id, blob1 AS device_id, max(if(blob2 = 'set', 1, 0)) AS succeeded, max(if(blob2 IN (${failureActions}), 1, 0)) AS failed FROM app_log WHERE ${window} AND (blob2 = 'set' OR blob2 IN (${failureActions})) GROUP BY date, app_id, device_id`
+  const query = `SELECT sum(succeeded) AS installs, sum(if(succeeded = 0, failed, 0)) AS fails FROM (${outcomeBase})`
 
   cloudlog({ requestId: c.get('requestId'), message: 'getAdminSuccessRate query', query })
 
@@ -2401,12 +2609,14 @@ export async function getAdminSuccessRate(
     if (!row)
       return null
 
-    const totalActions = (row.installs || 0) + (row.fails || 0)
+    const installs = Number(row.installs) || 0
+    const fails = Number(row.fails) || 0
+    const totalActions = installs + fails
     return {
-      installs: row.installs || 0,
-      fails: row.fails || 0,
+      installs,
+      fails,
       total_actions: totalActions,
-      success_rate: totalActions > 0 ? ((row.installs || 0) / totalActions) * 100 : 0,
+      success_rate: totalActions > 0 ? (installs / totalActions) * 100 : 0,
     }
   }
   catch (e) {
@@ -2653,8 +2863,8 @@ export async function getAdminMauTrend(
 }
 
 /**
- * Get success rate trend over time for admin dashboard
- * Returns daily install vs fail counts with calculated success rate
+ * Get success rate trend over time for admin dashboard.
+ * Device-day outcomes from app_log (same formula as public /data).
  */
 export async function getAdminSuccessRateTrend(
   c: Context,
@@ -2662,33 +2872,30 @@ export async function getAdminSuccessRateTrend(
   end_date: string,
   app_id?: string,
 ): Promise<AdminSuccessRateTrend[]> {
-  if (!c.env.VERSION_USAGE)
+  if (!c.env.APP_LOG)
     return []
 
-  const appFilter = app_id ? `AND blob1 = '${escapeSqlString(app_id)}'` : ''
-
-  const query = `SELECT
-    formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d') AS date,
-    sum(if(blob3 = 'install', 1, 0)) AS installs,
-    sum(if(blob3 = 'fail', 1, 0)) AS fails
-  FROM version_usage
-  WHERE timestamp >= toDateTime('${formatDateCF(start_date)}')
-    AND timestamp < toDateTime('${formatDateCF(end_date)}')
-    ${appFilter}
-  GROUP BY date
-  ORDER BY date ASC`
+  const appFilter = app_id ? `AND index1 = '${escapeSqlString(app_id)}'` : ''
+  const window = `timestamp >= toDateTime('${formatDateCF(start_date)}') AND timestamp < toDateTime('${formatDateCF(end_date)}') ${appFilter}`
+  const failureActions = PUBLIC_FAILURE_ACTIONS.map(action => `'${action}'`).join(', ')
+  const day = `formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d')`
+  const outcomeBase = `SELECT ${day} AS date, index1 AS app_id, blob1 AS device_id, max(if(blob2 = 'set', 1, 0)) AS succeeded, max(if(blob2 IN (${failureActions}), 1, 0)) AS failed FROM app_log WHERE ${window} AND (blob2 = 'set' OR blob2 IN (${failureActions})) GROUP BY date, app_id, device_id`
+  const query = `SELECT date, sum(succeeded) AS installs, sum(if(succeeded = 0, failed, 0)) AS fails FROM (${outcomeBase}) GROUP BY date ORDER BY date ASC`
 
   cloudlog({ requestId: c.get('requestId'), message: 'getAdminSuccessRateTrend query', query })
 
   try {
     const rawResult = await runQueryToCFA<{ date: string, installs: number, fails: number }>(c, query)
-    // Calculate success_rate in JavaScript for each day
-    const result: AdminSuccessRateTrend[] = rawResult.map(row => ({
-      date: row.date,
-      installs: row.installs,
-      fails: row.fails,
-      success_rate: (row.installs + row.fails) > 0 ? (row.installs / (row.installs + row.fails)) * 100 : 0,
-    }))
+    const result: AdminSuccessRateTrend[] = rawResult.map((row) => {
+      const installs = Number(row.installs) || 0
+      const fails = Number(row.fails) || 0
+      return {
+        date: row.date,
+        installs,
+        fails,
+        success_rate: (installs + fails) > 0 ? (installs / (installs + fails)) * 100 : 0,
+      }
+    })
     return result
   }
   catch (e) {
@@ -2994,8 +3201,6 @@ export async function getPluginBreakdownCF(c: Context, referenceDate?: Date): Pr
   }
 }
 
-const PUBLIC_FAILURE_ACTIONS = ['set_fail', 'update_fail', 'download_fail', 'windows_path_fail', 'canonical_path_fail', 'directory_path_fail', 'unzip_fail', 'low_mem_fail', 'download_manifest_file_fail', 'download_manifest_checksum_fail', 'download_manifest_brotli_fail', 'finish_download_fail', 'manifest_path_fail', 'decrypt_fail', 'insufficient_disk_space', 'cannotGetBundle', 'checksum_fail', 'blocked_by_server_url', 'backend_refusal'] as const
-
 export interface PublicBreakdownMetric {
   key: string
   share: number
@@ -3095,6 +3300,7 @@ export async function getPublicLiveUpdateMetricsCF(c: Context, referenceDate = n
   const window = `timestamp >= toDateTime('${formatDateCF(start)}') AND timestamp < toDateTime('${formatDateCF(end)}')`
   const failureActions = PUBLIC_FAILURE_ACTIONS.map(action => `'${action}'`).join(', ')
   const day = `formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d')`
+  // Device-day outcomes: one success/fail per device per day. Fail-then-set same day counts as success only.
   const outcomeBase = `SELECT ${day} AS date, index1 AS app_id, blob1 AS device_id, max(if(blob2 = 'set', 1, 0)) AS succeeded, max(if(blob2 IN (${failureActions}), 1, 0)) AS failed, argMax(blob5, timestamp) AS platform, argMax(blob6, timestamp) AS country, argMax(blob7, timestamp) AS plugin_version FROM app_log WHERE ${window} AND (blob2 = 'set' OR blob2 IN (${failureActions})) GROUP BY date, app_id, device_id`
   const outcomesQuery = `SELECT date, sum(succeeded) AS successes, sum(if(succeeded = 0, failed, 0)) AS failures FROM (${outcomeBase}) GROUP BY date`
   const failuresQuery = `SELECT action, count() AS devices FROM (SELECT ${day} AS date, blob2 AS action, index1 AS app_id, blob1 AS device_id FROM app_log WHERE ${window} AND blob2 IN (${failureActions}) GROUP BY date, action, app_id, device_id) GROUP BY action`
@@ -3172,5 +3378,34 @@ export async function getPublicLiveUpdateMetricsCF(c: Context, referenceDate = n
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading public live update metrics', error: serializeError(error) })
     throw error
+  }
+}
+
+/**
+ * Device-day install success rate for a closed time window.
+ * Used by global_stats.success_rate so admin matches public /data.
+ */
+export async function getDeviceDaySuccessRateCF(c: Context, start: Date, end: Date): Promise<number> {
+  if (!c.env.APP_LOG)
+    return 0
+
+  const window = `timestamp >= toDateTime('${formatDateCF(start)}') AND timestamp < toDateTime('${formatDateCF(end)}')`
+  const failureActions = PUBLIC_FAILURE_ACTIONS.map(action => `'${action}'`).join(', ')
+  const day = `formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d')`
+  const outcomeBase = `SELECT ${day} AS date, index1 AS app_id, blob1 AS device_id, max(if(blob2 = 'set', 1, 0)) AS succeeded, max(if(blob2 IN (${failureActions}), 1, 0)) AS failed FROM app_log WHERE ${window} AND (blob2 = 'set' OR blob2 IN (${failureActions})) GROUP BY date, app_id, device_id`
+  const query = `SELECT sum(succeeded) AS successes, sum(if(succeeded = 0, failed, 0)) AS failures FROM (${outcomeBase})`
+
+  cloudlog({ requestId: c.get('requestId'), message: 'getDeviceDaySuccessRateCF query', query })
+  try {
+    const result = await runQueryToCFA<{ successes: number, failures: number }>(c, query)
+    const row = result[0]
+    const successes = Number(row?.successes) || 0
+    const failures = Number(row?.failures) || 0
+    const outcomes = successes + failures
+    return outcomes > 0 ? Number(((successes / outcomes) * 100).toFixed(1)) : 0
+  }
+  catch (e) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Error in getDeviceDaySuccessRateCF', error: serializeError(e), query })
+    return 0
   }
 }

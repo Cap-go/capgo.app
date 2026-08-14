@@ -120,4 +120,14 @@ describe('display app-name lookups', () => {
 
     expect(mockFrom).not.toHaveBeenCalled()
   })
+
+  it('keeps Getting Started out of the in-app breadcrumb trail', async () => {
+    const { useDisplayStore } = await import('../src/stores/display.ts')
+    const display = useDisplayStore()
+
+    display.updatePathTitle('/app/com.demo.app/getting-started')
+
+    expect(display.pathTitle).toEqual([])
+    expect(mockFrom).not.toHaveBeenCalled()
+  })
 })

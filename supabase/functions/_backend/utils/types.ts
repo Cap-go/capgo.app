@@ -55,6 +55,8 @@ export interface ReadStatsInsightsParams {
   start_date: string
   end_date: string
   actions?: string[]
+  /** Exact bundle version_name match. */
+  version_name?: string
 }
 
 export interface StatsInsightSummary {
