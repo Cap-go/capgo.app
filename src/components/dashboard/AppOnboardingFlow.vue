@@ -420,20 +420,22 @@ async function writeOnboardingProgress(status: UserOnboardingStatus) {
   }
 
   if (data && main.user?.id === userId) {
-    main.user = data
+    main.user = { ...data, image_url: main.user.image_url }
     return
   }
 
   if (status === 'completed' || main.user?.id !== userId)
     return
 
-  const { data: latest } = await supabase
+  const { data: latest, error: latestError } = await supabase
     .from('users')
     .select()
     .eq('id', userId)
     .maybeSingle()
+  if (latestError)
+    console.error('Failed to refresh onboarding progress snapshot', latestError)
   if (latest && main.user?.id === userId)
-    main.user = latest
+    main.user = { ...latest, image_url: main.user.image_url }
 }
 
 function resetOnboardingForm() {
