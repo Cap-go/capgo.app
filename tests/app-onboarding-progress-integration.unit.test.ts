@@ -16,7 +16,7 @@ function sourceBetween(start: string, end: string) {
 
 describe('app onboarding progress analytics integration', () => {
   it.concurrent('initializes tracking once the real initial or resumed step is resolved', () => {
-    expect(onboardingSource).toContain("import { createOnboardingDetailsFieldDebouncer, createOnboardingProgressTracker } from '~/utils/onboardingProgressAnalytics'")
+    expect(onboardingSource).toContain("import { createOnboardingDetailsFieldDebouncer, createOnboardingProgressTracker, createOnboardingTelemetryIdentity } from '~/utils/onboardingProgressAnalytics'")
 
     const initializer = sourceBetween('function initializeProgressTracking(', 'function whiteCardToggleButtonClass(')
     expect(initializer).toContain("flow: props.preOrg ? 'pre_org' : 'existing_org'")
@@ -25,7 +25,16 @@ describe('app onboarding progress analytics integration', () => {
     expect(initializer).toContain("trackedSteps.push('setup')")
     expect(initializer).toContain('steps: trackedSteps')
     expect(initializer).toContain('resumed,')
+    expect(initializer).toContain('onboardingAttemptId: onboardingTelemetry.attemptId')
+    expect(initializer).toContain('onboardingRunId: onboardingTelemetry.runId')
     expect(initializer).toContain('progressTracker.viewStep(flowStep.value)')
+
+    const resumeDialog = sourceBetween('async function maybeResumeSavedOnboarding()', 'function whiteCardToggleButtonClass(')
+    expect(resumeDialog).toContain('onboardingTelemetry.prepareResumeCandidate({')
+    expect(resumeDialog).toContain('onboardingTelemetry.recordResumeDialogViewed()')
+    expect(resumeDialog).toContain('onboardingTelemetry.recordResumeContinued()')
+    expect(resumeDialog).toContain('onboardingTelemetry.recordResumeRestarted()')
+    expect(resumeDialog).not.toContain('.viewStep(')
 
     const resumeLoader = sourceBetween('async function loadResumeApp()', 'async function importStoreMetadata()')
     expect(resumeLoader).not.toContain('initializeProgressTracking')
@@ -40,6 +49,13 @@ describe('app onboarding progress analytics integration', () => {
     const initializationIndex = mountedFlow.indexOf('initializeProgressTracking(resumedFlow)')
     expect(loadingFinishedIndex).toBeGreaterThanOrEqual(0)
     expect(initializationIndex).toBeGreaterThan(loadingFinishedIndex)
+  })
+
+  it.concurrent('persists telemetry identity metadata with each progress snapshot', () => {
+    const snapshot = sourceBetween('function snapshotOnboardingProgress(', 'async function persistOnboardingProgress(')
+    expect(snapshot).toContain('const telemetry = onboardingTelemetry.getProgressMetadata()')
+    expect(snapshot).toContain('onboardingAttemptId: telemetry.onboardingAttemptId')
+    expect(snapshot).toContain('lastRunId: telemetry.lastRunId')
   })
 
   it.concurrent('retains the existing intent compatibility event', () => {

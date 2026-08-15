@@ -51,7 +51,7 @@ import {
   clearOnboardingAppDraft,
   loadOnboardingAppDraft,
 } from '~/utils/onboardingAppDraft'
-import { createOnboardingDetailsFieldDebouncer, createOnboardingProgressTracker } from '~/utils/onboardingProgressAnalytics'
+import { createOnboardingDetailsFieldDebouncer, createOnboardingProgressTracker, createOnboardingTelemetryIdentity } from '~/utils/onboardingProgressAnalytics'
 import { allowOnboardingDashboardExploration, ONBOARDING_DASHBOARD_EXPLORED_EVENT } from '~/utils/onboardingRedirect'
 import { slugifyOnboardingSegment } from '~/utils/onboardingSlug'
 import {
@@ -78,6 +78,7 @@ const organizationStore = useOrganizationStore()
 const dashboardAppsStore = useDashboardAppsStore()
 const onboardingUserId = computed(() => main.user?.id ?? main.auth?.id ?? null)
 const config = getLocalConfig()
+const onboardingTelemetry = createOnboardingTelemetryIdentity({ flow: props.preOrg ? 'pre_org' : 'existing_org', supaHost: config.supaHost })
 const STORE_ICON_FETCH_TIMEOUT_MS = 10_000
 const removeBeforeUnloadWarning = useBeforeUnloadWarning(Boolean(props.preOrg))
 
@@ -322,6 +323,8 @@ function initializeProgressTracking(resumed: boolean) {
     resumed,
     steps: trackedSteps,
     supaHost: config.supaHost,
+    onboardingAttemptId: onboardingTelemetry.attemptId,
+    onboardingRunId: onboardingTelemetry.runId,
   })
   progressTracker.viewStep(flowStep.value)
   if (pendingDashboardExplored)
@@ -354,6 +357,7 @@ function viewPreviousStep(nextStep: OnboardingFlowStep) {
 
 function snapshotOnboardingProgress(status: UserOnboardingStatus = 'in_progress') {
   const flow = props.preOrg ? 'pre_org' : 'existing_org'
+  const telemetry = onboardingTelemetry.getProgressMetadata()
   return buildUserOnboardingProgress({
     status,
     step: clampResumableOnboardingStep(flowStep.value, flow),
@@ -367,6 +371,8 @@ function snapshotOnboardingProgress(status: UserOnboardingStatus = 'in_progress'
     importedStoreAppId: importedStoreAppId.value,
     orgName: orgNameInput.value,
     estimatedUsersIndex: estimatedUsersIndex.value,
+    onboardingAttemptId: telemetry.onboardingAttemptId,
+    lastRunId: telemetry.lastRunId,
   })
 }
 
@@ -509,6 +515,13 @@ async function maybeResumeSavedOnboarding() {
     return false
   }
 
+  const resumableStep = clampResumableOnboardingStep(saved.step, flow)
+  onboardingTelemetry.prepareResumeCandidate({
+    onboardingAttemptId: saved.onboarding_attempt_id,
+    lastRunId: saved.last_run_id,
+    savedStep: resumableStep,
+    steps: appOnboardingSteps.value.map(step => step.id),
+  })
   dialogStore.openDialog({
     title: t('onboarding-resume-title'),
     description: t('onboarding-resume-description'),
@@ -518,15 +531,18 @@ async function maybeResumeSavedOnboarding() {
       { text: t('onboarding-resume-continue'), id: 'onboarding-resume-continue', role: 'primary' },
     ],
   })
+  onboardingTelemetry.recordResumeDialogViewed()
   await dialogStore.onDialogDismiss()
 
   if (dialogStore.lastButtonRole === 'onboarding-resume-restart') {
+    onboardingTelemetry.recordResumeRestarted()
     resetOnboardingForm()
     existingApp.value = true
     existingAppSetup.value = 'manual'
     return false
   }
 
+  onboardingTelemetry.recordResumeContinued()
   applyOnboardingProgress(saved)
   return true
 }
