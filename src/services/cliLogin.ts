@@ -111,7 +111,7 @@ export function canonicalizeCliBindings(bindings: CliKeyBinding[]): string[] {
     binding.org_id ?? '',
     binding.app_id ?? '',
     binding.channel_id ?? '',
-  ].join('|')).sort()
+  ].join('|')).sort((left, right) => left.localeCompare(right))
 }
 
 export function aggregateCliKeyPolicy(orgs: CliLoginOrganization[], now = new Date()): CliKeyPolicy {
