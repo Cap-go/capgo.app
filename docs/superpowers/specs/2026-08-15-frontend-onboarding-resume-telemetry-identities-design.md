@@ -91,9 +91,8 @@ saved wizard step or form fields. A valid saved attempt without a valid previous
 run may still be continued; the next successful write repairs the pair.
 
 The existing JSONB column, size check, and partial step index can contain these
-fields without structural changes. A small migration updates the column comment
-to document the expanded payload; it does not add a column, constraint, or
-index.
+fields without structural changes. To keep the implementation PR small, do not
+add a comment-only migration, constraint, column, index, or Postgres test.
 
 ## Event Contract
 
