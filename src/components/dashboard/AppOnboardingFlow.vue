@@ -305,6 +305,8 @@ let progressTracker: ReturnType<typeof createOnboardingProgressTracker> | null =
 let persistChain = Promise.resolve()
 let persistFieldsTimer: ReturnType<typeof setTimeout> | undefined
 let pendingDashboardExplored = false
+let onboardingFlowDisposed = false
+let onboardingInitialPersistInFlight = false
 
 function trackV2DetailsEvent(name: OnboardingDetailsEvent, details: OnboardingDetailsEventProperties = {}) {
   if (props.preOrg)
@@ -1421,17 +1423,25 @@ onMounted(async () => {
   }
   finally {
     isHydratingOnboarding.value = false
+    onboardingInitialPersistInFlight = true
     await persistOnboardingProgress()
-    isLoading.value = false
-    initializeProgressTracking(resumedFlow)
+    onboardingInitialPersistInFlight = false
+    function finishOnboardingMount() {
+      if (onboardingFlowDisposed)
+        return
+      isLoading.value = false
+      initializeProgressTracking(resumedFlow)
+    }
+    finishOnboardingMount()
   }
 })
 
 onBeforeUnmount(() => {
+  onboardingFlowDisposed = true
   window.clearTimeout(persistFieldsTimer)
   window.removeEventListener(ONBOARDING_DASHBOARD_EXPLORED_EVENT, trackDashboardExplored)
   detailsFieldTracker.dispose()
-  if (!isHydratingOnboarding.value)
+  if (!isHydratingOnboarding.value && !onboardingInitialPersistInFlight)
     void persistOnboardingProgress()
 
   if (localIconPreview.value.startsWith('blob:'))

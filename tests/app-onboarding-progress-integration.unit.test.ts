@@ -100,6 +100,31 @@ describe('app onboarding progress analytics integration', () => {
     expect(snapshot).toContain('lastRunId: telemetry.lastRunId')
   })
 
+  it.concurrent('does not initialize tracking after unmount during the initial persistence', () => {
+    expect(onboardingSource).toContain('let onboardingFlowDisposed = false')
+    expect(onboardingSource).toContain('let onboardingInitialPersistInFlight = false')
+
+    const mountedFlow = sourceBetween('onMounted(async () => {', 'onBeforeUnmount(() => {')
+    expect(mountedFlow).toContain('function finishOnboardingMount()')
+    expectSourceOrder(mountedFlow, [
+      'onboardingInitialPersistInFlight = true',
+      'await persistOnboardingProgress()',
+      'onboardingInitialPersistInFlight = false',
+      'if (onboardingFlowDisposed)',
+      'return',
+      'isLoading.value = false',
+      'initializeProgressTracking(resumedFlow)',
+      'finishOnboardingMount()',
+    ])
+
+    const unmountFlow = sourceBetween('onBeforeUnmount(() => {', 'watch(existingApp,')
+    expectSourceOrder(unmountFlow, [
+      'onboardingFlowDisposed = true',
+      'if (!isHydratingOnboarding.value && !onboardingInitialPersistInFlight)',
+      'void persistOnboardingProgress()',
+    ])
+  })
+
   it.concurrent('retains the existing intent compatibility event', () => {
     expect(onboardingSource).toContain(`pushEvent('onboarding_intent_selected', config.supaHost, {`)
   })
