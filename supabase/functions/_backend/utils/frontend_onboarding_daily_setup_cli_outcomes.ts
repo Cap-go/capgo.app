@@ -136,7 +136,7 @@ export async function getFrontendOnboardingDailySetupCliEvents(
       }
 
       totalEvents = expectedTotalEvents
-      if (posthog.rows.length > expectedTotalEvents)
+      if (posthog.rows.length !== expectedTotalEvents)
         throw new Error(INVALID_TOTAL_EVENTS_ERROR)
     }
     catch (error) {

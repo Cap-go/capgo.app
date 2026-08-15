@@ -61,6 +61,10 @@ describe('buildFrontendOnboardingDailySetupCliHogql', () => {
 
     expect(selectedProjection).toContain('toString(selected_events.person_id) AS person_id')
     expect(selectedProjection).toContain('toUnixTimestamp64Milli(selected_events.timestamp) AS timestamp_ms')
+    expect(selectedProjection).toContain('selected_events.event = \'onboarding_step_viewed\', \'setup\'')
+    expect(selectedProjection).toContain('selected_events.event = \'onboarding_cli_command_copied\', \'cli_copy\'')
+    expect(selectedProjection).toContain('selected_events.event = \'onboarding_ai_instructions_copied\', \'ai_copy\'')
+    expect(selectedProjection).toContain('\'cli_command\'\n      ) AS event_kind')
     expect(selectedProjection).toContain('if(selected_events.event = \'CLI Command Invoked\', JSONExtractString(toString(selected_events.properties), \'command_path\'), \'\') AS command_path')
     expect(selectedProjection).toContain('count() OVER () AS total_events')
     expect(selectedProjection).toContain('CLI Command Invoked')
@@ -329,6 +333,31 @@ describe('getFrontendOnboardingDailySetupCliEvents', () => {
       event_limit: 50_000,
       total_events: 1,
       returned_rows: 2,
+    })
+  })
+
+  it('logs and rejects when returned rows are fewer than the asserted total', async () => {
+    queryPosthogHogqlMock.mockResolvedValueOnce({
+      configured: true,
+      connected: true,
+      failureReason: null,
+      rows: [
+        { person_id: 'person-1', timestamp_ms: 1000, event_kind: 'setup', command_path: '', total_events: 2 },
+      ],
+    })
+
+    await expect(getFrontendOnboardingDailySetupCliEvents(
+      createContext(),
+      '2026-08-01T00:00:00.000Z',
+      '2026-08-03T00:00:00.000Z',
+      '2026-08-04T00:00:00.000Z',
+    )).rejects.toThrow('daily Setup CLI analytics query returned invalid total metadata')
+    expect(cloudlogErrMock).toHaveBeenCalledWith({
+      requestId: 'request-id',
+      message: 'frontend_onboarding_daily_setup_cli_invalid_total_events',
+      event_limit: 50_000,
+      total_events: 2,
+      returned_rows: 1,
     })
   })
 
