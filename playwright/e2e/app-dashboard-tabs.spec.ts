@@ -41,4 +41,25 @@ test.describe('App dashboard sections', () => {
     await expect(page.getByRole('heading', { name: 'Active bundle' })).toBeVisible()
     await expect(page.locator('[data-testid="bundle-install-stats"]')).toHaveCount(0)
   })
+
+  test('native and active bundle charts request the last 30 days ending today', async ({ page }) => {
+    const today = new Date()
+    today.setUTCHours(0, 0, 0, 0)
+    const start = new Date(today)
+    start.setUTCDate(start.getUTCDate() - 29)
+    const expectedFrom = start.toISOString().slice(0, 10)
+    const expectedTo = today.toISOString().slice(0, 10)
+
+    const nativeRequest = page.waitForRequest(request => request.url().includes('/native_usage?'))
+    await page.goto('/app/com.demo.app/native')
+    const nativeUrl = new URL((await nativeRequest).url())
+    expect(nativeUrl.searchParams.get('from')).toBe(expectedFrom)
+    expect(nativeUrl.searchParams.get('to')).toBe(expectedTo)
+
+    const bundleRequest = page.waitForRequest(request => request.url().includes('/bundle_usage?'))
+    await page.goto('/app/com.demo.app/active-bundle')
+    const bundleUrl = new URL((await bundleRequest).url())
+    expect(bundleUrl.searchParams.get('from')).toBe(expectedFrom)
+    expect(bundleUrl.searchParams.get('to')).toBe(expectedTo)
+  })
 })
