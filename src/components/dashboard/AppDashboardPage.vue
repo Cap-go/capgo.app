@@ -176,7 +176,7 @@ watchEffect(async () => {
             </div>
           </template>
 
-          <!-- Version mix is operational history, not billed usage. Last 30 days ending today. -->
+          <!-- Version mix is operational history, not billed usage. Default last 1 day. -->
           <div v-else-if="!lacksSecurityAccess && props.section === 'native'" class="grid grid-cols-1 gap-6 mb-6">
             <DevicesStats
               :app-id="id"
@@ -195,7 +195,7 @@ watchEffect(async () => {
             />
           </div>
 
-          <!-- Same last-30-days window as Native. Billing end dates are in the future and empty. -->
+          <!-- Same period selector as Native. Default last 1 day. -->
           <div v-else-if="!lacksSecurityAccess && props.section === 'active-bundle'" class="grid grid-cols-1 gap-6 mb-6">
             <DevicesStats
               :app-id="id"

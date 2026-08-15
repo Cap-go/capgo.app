@@ -234,24 +234,25 @@ function getDatesInRange(startDate: Date, endDate: Date) {
   return dates
 }
 
-export function getChartDateRange(useBillingPeriod: boolean, billingStart?: Date | string | null, billingEnd?: Date | string | null) {
+export function getLastNUtcDaysRange(dayCount: number) {
+  const days = Number.isFinite(dayCount) ? Math.max(1, Math.floor(dayCount)) : 30
+  const endDate = normalizeToUtcStartOfDay(new Date())
+  const startDate = addUtcDays(endDate, -(days - 1))
+  return { startDate, endDate }
+}
+
+export function getChartDateRange(useBillingPeriod: boolean, billingStart?: Date | string | null, billingEnd?: Date | string | null, dayCount = 30) {
   if (useBillingPeriod) {
     const startDate = normalizeToUtcStartOfDay(parseUtcRangeBoundary(billingStart) ?? new Date())
     const endDate = normalizeToUtcStartOfDay(parseUtcRangeBoundary(billingEnd) ?? new Date())
     return { startDate, endDate }
   }
 
-  const endDate = normalizeToUtcStartOfDay(new Date())
-  const startDate = addUtcDays(endDate, -29)
-  return { startDate, endDate }
+  return getLastNUtcDaysRange(dayCount)
 }
 
-export function generateChartDayLabels(useBillingPeriod: boolean, startDate: Date, endDate: Date) {
-  const { startDate: rangeStart, endDate: rangeEnd } = useBillingPeriod
-    ? { startDate, endDate }
-    : getChartDateRange(false)
-
-  return getDatesInRange(rangeStart, rangeEnd).map(formatLocalDateShort)
+export function generateChartDayLabels(_useBillingPeriod: boolean, startDate: Date, endDate: Date) {
+  return getDatesInRange(startDate, endDate).map(formatLocalDateShort)
 }
 
 export function generateMonthDays(useBillingPeriod: boolean, cycleStart: Date, cycleEnd: Date) {

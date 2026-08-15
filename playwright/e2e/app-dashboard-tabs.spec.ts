@@ -42,8 +42,8 @@ test.describe('App dashboard sections', () => {
     await expect(page.locator('[data-testid="bundle-install-stats"]')).toHaveCount(0)
   })
 
-  test('native and active bundle charts request the last 30 days ending today', async ({ page }) => {
-    function assertLastThirtyDays(url: URL) {
+  test('native, installs, and active bundle default to the 1 day period', async ({ page }) => {
+    function assertDayWindow(url: URL, days: number) {
       const from = url.searchParams.get('from')
       const to = url.searchParams.get('to')
       expect(from).toBeTruthy()
@@ -54,15 +54,28 @@ test.describe('App dashboard sections', () => {
       const twoDaysAgo = Date.now() - 2 * 24 * 60 * 60 * 1000
       expect(toDate.getTime()).toBeGreaterThanOrEqual(twoDaysAgo)
       expect(toDate.getTime()).toBeLessThanOrEqual(Date.now())
-      expect(daySpan).toBe(29)
+      expect(daySpan).toBe(days - 1)
     }
+
+    const oneDayButton = (locator = page.locator('[data-testid="period-day-selector"]')) =>
+      locator.getByRole('button', { name: '1 day', exact: true })
 
     const nativeRequest = page.waitForRequest(request => request.url().includes('/native_usage?'))
     await page.goto('/app/com.demo.app/native')
-    assertLastThirtyDays(new URL((await nativeRequest).url()))
+    assertDayWindow(new URL((await nativeRequest).url()), 1)
+    await expect(oneDayButton()).toHaveAttribute('aria-pressed', 'true')
+
+    await page.goto('/app/com.demo.app/installs')
+    await expect(page.locator('[data-testid="period-day-selector"]')).toBeVisible()
+    await expect(oneDayButton()).toHaveAttribute('aria-pressed', 'true')
 
     const bundleRequest = page.waitForRequest(request => request.url().includes('/bundle_usage?'))
     await page.goto('/app/com.demo.app/active-bundle')
-    assertLastThirtyDays(new URL((await bundleRequest).url()))
+    assertDayWindow(new URL((await bundleRequest).url()), 1)
+    await expect(oneDayButton()).toHaveAttribute('aria-pressed', 'true')
+
+    const maxRequest = page.waitForRequest(request => request.url().includes('/bundle_usage?'))
+    await page.locator('[data-testid="period-day-selector"]').getByRole('button', { name: 'Max', exact: true }).click()
+    assertDayWindow(new URL((await maxRequest).url()), 30)
   })
 })

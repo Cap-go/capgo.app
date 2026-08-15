@@ -13,6 +13,7 @@ import {
   generateMonthDays,
   getChartDateRange,
   getDateLocale,
+  getLastNUtcDaysRange,
   getUtcDayBounds,
   normalizeToUtcStartOfDay,
   resolveDateLocale,
@@ -134,6 +135,18 @@ describe('date helpers', () => {
     expect(formatUtcDateParam(range.endDate)).toBe(formatUtcDateParam(normalizeToUtcStartOfDay(new Date())))
     const daySpan = Math.round((range.endDate.getTime() - range.startDate.getTime()) / (24 * 60 * 60 * 1000))
     expect(daySpan).toBe(29)
+  })
+
+  it('builds last-N-day chart ranges ending today', () => {
+    const oneDay = getLastNUtcDaysRange(1)
+    expect(formatUtcDateParam(oneDay.startDate)).toBe(formatUtcDateParam(oneDay.endDate))
+    expect(formatUtcDateParam(oneDay.endDate)).toBe(formatUtcDateParam(normalizeToUtcStartOfDay(new Date())))
+    expect(generateChartDayLabels(false, oneDay.startDate, oneDay.endDate)).toHaveLength(1)
+
+    const sevenDays = getLastNUtcDaysRange(7)
+    const sevenSpan = Math.round((sevenDays.endDate.getTime() - sevenDays.startDate.getTime()) / (24 * 60 * 60 * 1000))
+    expect(sevenSpan).toBe(6)
+    expect(generateChartDayLabels(false, sevenDays.startDate, sevenDays.endDate)).toHaveLength(7)
   })
 
   it('keeps formatUtcDateParam stable for date-only strings', () => {
