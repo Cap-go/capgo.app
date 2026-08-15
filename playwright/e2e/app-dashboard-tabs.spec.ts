@@ -48,22 +48,35 @@ test.describe('App dashboard sections', () => {
   })
 
   test('native, installs, and active bundle default to the 1 day period', async ({ page }) => {
+    function daySpan(from: string | null, to: string | null) {
+      if (!from || !to)
+        return Number.NaN
+      const fromDate = new Date(`${from}T00:00:00.000Z`)
+      const toDate = new Date(`${to}T00:00:00.000Z`)
+      return Math.round((toDate.getTime() - fromDate.getTime()) / (24 * 60 * 60 * 1000))
+    }
+
     function assertDayWindow(from: string | null, to: string | null, days: number) {
       expect(from).toBeTruthy()
       expect(to).toBeTruthy()
-      const fromDate = new Date(`${from}T00:00:00.000Z`)
       const toDate = new Date(`${to}T00:00:00.000Z`)
-      const daySpan = Math.round((toDate.getTime() - fromDate.getTime()) / (24 * 60 * 60 * 1000))
       const twoDaysAgo = Date.now() - 2 * 24 * 60 * 60 * 1000
       expect(toDate.getTime()).toBeGreaterThanOrEqual(twoDaysAgo)
       expect(toDate.getTime()).toBeLessThanOrEqual(Date.now())
-      expect(daySpan).toBe(days - 1)
+      expect(daySpan(from, to)).toBe(days - 1)
+    }
+
+    function isUsageWindow(url: string, path: string, days: number) {
+      if (!url.includes(`/${path}?`))
+        return false
+      const parsed = new URL(url)
+      return daySpan(parsed.searchParams.get('from'), parsed.searchParams.get('to')) === days - 1
     }
 
     const oneDayButton = (locator = page.locator('[data-testid="period-day-selector"]')) =>
       locator.getByRole('button', { name: '1 day', exact: true })
 
-    const nativeRequest = page.waitForRequest(request => request.url().includes('/native_usage?'))
+    const nativeRequest = page.waitForRequest(request => isUsageWindow(request.url(), 'native_usage', 1))
     await page.goto('/app/com.demo.app/native')
     const nativeUrl = new URL((await nativeRequest).url())
     assertDayWindow(nativeUrl.searchParams.get('from'), nativeUrl.searchParams.get('to'), 1)
@@ -73,7 +86,7 @@ test.describe('App dashboard sections', () => {
     await expect(page.locator('[data-testid="period-day-selector"]')).toBeVisible()
     await expect(oneDayButton()).toHaveAttribute('aria-pressed', 'true')
 
-    const bundleRequest = page.waitForRequest(request => request.url().includes('/bundle_usage?'))
+    const bundleRequest = page.waitForRequest(request => isUsageWindow(request.url(), 'bundle_usage', 1))
     await page.goto('/app/com.demo.app/active-bundle')
     const bundleUrl = new URL((await bundleRequest).url())
     assertDayWindow(bundleUrl.searchParams.get('from'), bundleUrl.searchParams.get('to'), 1)
@@ -84,13 +97,7 @@ test.describe('App dashboard sections', () => {
     await maxButton.click()
     await expect(maxButton).toHaveAttribute('aria-pressed', 'true')
     await expect.poll(async () => {
-      const from = await range.getAttribute('data-from')
-      const to = await range.getAttribute('data-to')
-      if (!from || !to)
-        return -1
-      const fromDate = new Date(`${from}T00:00:00.000Z`)
-      const toDate = new Date(`${to}T00:00:00.000Z`)
-      return Math.round((toDate.getTime() - fromDate.getTime()) / (24 * 60 * 60 * 1000))
+      return daySpan(await range.getAttribute('data-from'), await range.getAttribute('data-to'))
     }).toBe(29)
     assertDayWindow(await range.getAttribute('data-from'), await range.getAttribute('data-to'), 30)
   })
