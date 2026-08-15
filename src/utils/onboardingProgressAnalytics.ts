@@ -27,6 +27,20 @@ type AnalyticsPrimitive = string | number | boolean
 type AnalyticsProperties = Record<string, AnalyticsPrimitive>
 type CaptureEvent = (name: string, supaHost: string, properties?: AnalyticsProperties) => void
 
+interface OnboardingResumeCandidate {
+  lastRunId?: string
+  onboardingAttemptId?: string
+  savedStep: OnboardingAnalyticsStep
+  steps: readonly OnboardingAnalyticsStep[]
+}
+
+interface CreateOnboardingTelemetryIdentityOptions {
+  capture?: CaptureEvent
+  flow: OnboardingAnalyticsFlow
+  idFactory?: () => string
+  supaHost: string
+}
+
 export interface OnboardingStepCompletionProperties {
   appId?: string
   intent?: OnboardingIntent
@@ -89,10 +103,78 @@ export function createOnboardingDetailsFieldDebouncer(
   return { dispose, schedule }
 }
 
+export function createOnboardingTelemetryIdentity(options: CreateOnboardingTelemetryIdentityOptions) {
+  const capture = options.capture ?? pushEvent
+  const idFactory = options.idFactory ?? (() => crypto.randomUUID())
+  const initialAttemptId = idFactory()
+  const onboardingRunId = `ir_${idFactory()}`
+  let activeAttemptId = initialAttemptId
+  let candidate: OnboardingResumeCandidate | undefined
+  const recorded = { decision: false, dialog: false }
+
+  function safelyCapture(name: string, properties: AnalyticsProperties) {
+    try {
+      capture(name, options.supaHost, properties)
+    }
+    catch {
+      // Analytics must never interrupt onboarding.
+    }
+  }
+
+  function resumeProperties(resumeCandidate: OnboardingResumeCandidate): AnalyticsProperties {
+    return {
+      flow: options.flow,
+      onboarding_attempt_id: activeAttemptId,
+      onboarding_run_id: onboardingRunId,
+      onboarding_version: ONBOARDING_ANALYTICS_VERSION,
+      ...(resumeCandidate.onboardingAttemptId ? { resume_onboarding_attempt_id: resumeCandidate.onboardingAttemptId } : {}),
+      ...(resumeCandidate.lastRunId ? { resumed_from_run_id: resumeCandidate.lastRunId } : {}),
+      saved_step: resumeCandidate.savedStep,
+      step_index: resumeCandidate.steps.indexOf(resumeCandidate.savedStep),
+      total_steps: resumeCandidate.steps.length,
+    }
+  }
+
+  function recordResumeDialogViewed() {
+    if (recorded.dialog || !candidate)
+      return
+    recorded.dialog = true
+    safelyCapture('onboarding_resume_dialog_viewed', resumeProperties(candidate))
+  }
+
+  function recordDecision(name: string, continueSavedAttempt: boolean) {
+    if (recorded.decision || !candidate)
+      return
+    recorded.decision = true
+    const previousAttemptId = activeAttemptId
+    if (continueSavedAttempt && candidate.onboardingAttemptId)
+      activeAttemptId = candidate.onboardingAttemptId
+
+    const properties = resumeProperties(candidate)
+    if (activeAttemptId !== previousAttemptId)
+      properties.initial_onboarding_attempt_id = initialAttemptId
+    safelyCapture(name, properties)
+  }
+
+  return {
+    get attemptId() { return activeAttemptId },
+    get runId() { return onboardingRunId },
+    getProgressMetadata: () => ({ onboardingAttemptId: activeAttemptId, lastRunId: onboardingRunId }),
+    prepareResumeCandidate(next: OnboardingResumeCandidate) {
+      candidate = next
+    },
+    recordResumeContinued: () => recordDecision('onboarding_resume_continued', true),
+    recordResumeDialogViewed,
+    recordResumeRestarted: () => recordDecision('onboarding_resume_restarted', false),
+  }
+}
+
 interface CreateOnboardingProgressTrackerOptions {
   capture?: CaptureEvent
   flow: OnboardingAnalyticsFlow
   now?: () => number
+  onboardingAttemptId: string
+  onboardingRunId: string
   resumed: boolean
   steps: readonly OnboardingAnalyticsStep[]
   supaHost: string
@@ -101,7 +183,6 @@ interface CreateOnboardingProgressTrackerOptions {
 export function createOnboardingProgressTracker(options: CreateOnboardingProgressTrackerOptions) {
   const capture = options.capture ?? pushEvent
   const now = options.now ?? Date.now
-  const onboardingAttemptId = crypto.randomUUID()
   let activeStep: OnboardingAnalyticsStep | null = null
   let activePreviousStep: OnboardingAnalyticsStep | null = null
   let activeStepViewedAt = 0
@@ -114,7 +195,8 @@ export function createOnboardingProgressTracker(options: CreateOnboardingProgres
 
     return {
       flow: options.flow,
-      onboarding_attempt_id: onboardingAttemptId,
+      onboarding_attempt_id: options.onboardingAttemptId,
+      onboarding_run_id: options.onboardingRunId,
       onboarding_version: ONBOARDING_ANALYTICS_VERSION,
       resumed: options.resumed,
       step,
