@@ -12,7 +12,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { createChartScales } from '~/services/chartConfig'
 import { useChartData } from '~/services/chartDataService'
 import { createTooltipConfig, todayLinePlugin, verticalLinePlugin } from '~/services/chartTooltip'
-import { generateChartDayLabels, getChartDateRange, getLastNUtcDaysRange, normalizeToUtcStartOfDay } from '~/services/date'
+import { formatUtcDateParam, generateChartDayLabels, getChartDateRange, getLastNUtcDaysRange, normalizeToUtcStartOfDay } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
 import { useSupabase } from '~/services/supabase'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
@@ -752,7 +752,12 @@ watch(
   >
     <template #header>
       <div class="flex flex-col flex-1 gap-3">
-        <div class="flex flex-wrap items-start justify-between gap-3">
+        <div
+          class="flex flex-wrap items-start justify-between gap-3"
+          data-testid="version-chart-range"
+          :data-from="currentRange ? formatUtcDateParam(currentRange.startDate) : undefined"
+          :data-to="currentRange ? formatUtcDateParam(currentRange.endDate) : undefined"
+        >
           <h2 class="min-w-0 text-2xl font-semibold leading-tight dark:text-white text-slate-600">
             {{ t(titleKey) }}
           </h2>

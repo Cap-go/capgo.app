@@ -1,8 +1,13 @@
 import { expect, test } from '../support/commands'
 
+const TEST_USER_ID = '6aa76066-55ef-4238-ade6-0b32334a4097'
+
 test.describe('App dashboard sections', () => {
   test.beforeEach(async ({ page }) => {
     await page.login('test@capgo.app', 'testtest')
+    await page.evaluate((userId) => {
+      localStorage.setItem(`capgo.supportUsernames.dismissed.${userId}`, '1')
+    }, TEST_USER_ID)
   })
 
   test('moves native, installs, and active bundle into dashboard subtabs', async ({ page }) => {
@@ -43,9 +48,7 @@ test.describe('App dashboard sections', () => {
   })
 
   test('native, installs, and active bundle default to the 1 day period', async ({ page }) => {
-    function assertDayWindow(url: URL, days: number) {
-      const from = url.searchParams.get('from')
-      const to = url.searchParams.get('to')
+    function assertDayWindow(from: string | null, to: string | null, days: number) {
       expect(from).toBeTruthy()
       expect(to).toBeTruthy()
       const fromDate = new Date(`${from}T00:00:00.000Z`)
@@ -62,7 +65,8 @@ test.describe('App dashboard sections', () => {
 
     const nativeRequest = page.waitForRequest(request => request.url().includes('/native_usage?'))
     await page.goto('/app/com.demo.app/native')
-    assertDayWindow(new URL((await nativeRequest).url()), 1)
+    const nativeUrl = new URL((await nativeRequest).url())
+    assertDayWindow(nativeUrl.searchParams.get('from'), nativeUrl.searchParams.get('to'), 1)
     await expect(oneDayButton()).toHaveAttribute('aria-pressed', 'true')
 
     await page.goto('/app/com.demo.app/installs')
@@ -71,11 +75,23 @@ test.describe('App dashboard sections', () => {
 
     const bundleRequest = page.waitForRequest(request => request.url().includes('/bundle_usage?'))
     await page.goto('/app/com.demo.app/active-bundle')
-    assertDayWindow(new URL((await bundleRequest).url()), 1)
+    const bundleUrl = new URL((await bundleRequest).url())
+    assertDayWindow(bundleUrl.searchParams.get('from'), bundleUrl.searchParams.get('to'), 1)
     await expect(oneDayButton()).toHaveAttribute('aria-pressed', 'true')
 
-    const maxRequest = page.waitForRequest(request => request.url().includes('/bundle_usage?'))
-    await page.locator('[data-testid="period-day-selector"]').getByRole('button', { name: 'Max', exact: true }).click()
-    assertDayWindow(new URL((await maxRequest).url()), 30)
+    const maxButton = page.locator('[data-testid="period-day-selector"]').getByRole('button', { name: 'Max', exact: true })
+    const range = page.locator('[data-testid="version-chart-range"]')
+    await maxButton.click()
+    await expect(maxButton).toHaveAttribute('aria-pressed', 'true')
+    await expect.poll(async () => {
+      const from = await range.getAttribute('data-from')
+      const to = await range.getAttribute('data-to')
+      if (!from || !to)
+        return -1
+      const fromDate = new Date(`${from}T00:00:00.000Z`)
+      const toDate = new Date(`${to}T00:00:00.000Z`)
+      return Math.round((toDate.getTime() - fromDate.getTime()) / (24 * 60 * 60 * 1000))
+    }).toBe(29)
+    assertDayWindow(await range.getAttribute('data-from'), await range.getAttribute('data-to'), 30)
   })
 })
