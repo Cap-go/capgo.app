@@ -59,6 +59,7 @@ const { t } = useI18n()
             <dropdown-organization compact />
           </div>
           <button
+            type="button"
             class="hidden p-1 rounded-md lg:flex dark:text-white focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none text-slate-500 dark:hover:text-slate-50 hover:text-slate-600"
             data-test="sidebar-collapse-toggle"
             aria-controls="sidebar"
