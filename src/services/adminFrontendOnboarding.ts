@@ -57,6 +57,12 @@ export interface FrontendOnboardingAnalytics {
       count: number
     }>
   }
+  v2_setup_cli_outcomes: {
+    total_users: number
+    cli_only: number
+    cli_and_ai_instructions: number
+    no_cli: number
+  }
   posthog_configured: boolean
   posthog_connected: boolean
 }

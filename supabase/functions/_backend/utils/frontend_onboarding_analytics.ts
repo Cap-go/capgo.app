@@ -35,6 +35,8 @@ const ONBOARDING_INTERACTION_EVENTS = [
   'onboarding_store_url_entered',
 ] as const
 
+const AI_INSTRUCTIONS_COPIED_EVENT = 'onboarding_ai_instructions_copied'
+
 function sqlStr(value: string): string {
   return `'${value.replace(/'/g, '\'\'')}'`
 }
@@ -83,6 +85,10 @@ function attemptId(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+function personId(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
 function onboardingVersion(value: unknown): FrontendOnboardingVersion | null {
   return FRONTEND_ONBOARDING_VERSIONS.includes(value as FrontendOnboardingVersion)
     ? value as FrontendOnboardingVersion
@@ -99,6 +105,16 @@ function interactionEvents(value: unknown): FrontendOnboardingInteractionEvent[]
 
     const timestampMs = nullableMs(event[1])
     return timestampMs === null ? [] : [{ key: event[0].trim(), timestampMs }]
+  })
+}
+
+function timestamps(value: unknown): number[] {
+  if (!Array.isArray(value))
+    return []
+
+  return value.flatMap((timestamp) => {
+    const timestampMs = nullableMs(timestamp)
+    return timestampMs === null ? [] : [timestampMs]
   })
 }
 
@@ -126,33 +142,29 @@ function mapAttempts(rows: Record<string, unknown>[]): FrontendOnboardingAttempt
     return [{
       attemptId: id,
       onboardingVersion: version,
+      personId: personId(row.person_id),
       intentMs,
       detailsMs: nullableMs(row.details_ms),
       organizationMs: nullableMs(row.organization_ms),
       setupMs: nullableMs(row.setup_ms),
+      aiInstructionsCopiedMs: timestamps(row.ai_instructions_copied_ms),
+      cliStartedMs: timestamps(row.cli_started_ms),
       interactionEvents: interactionEvents(row.interaction_events),
     }]
   })
 }
 
 export function buildFrontendOnboardingHogql(startDate: string, cohortEndDate: string, followupEndDate: string): string {
-  const eventAllowlist = ['onboarding_step_viewed', ...ONBOARDING_INTERACTION_EVENTS].map(sqlStr).join(', ')
+  const eventAllowlist = ['onboarding_step_viewed', AI_INSTRUCTIONS_COPIED_EVENT, ...ONBOARDING_INTERACTION_EVENTS].map(sqlStr).join(', ')
+  const interactionEventAllowlist = ONBOARDING_INTERACTION_EVENTS.map(sqlStr).join(', ')
   const versionAllowlist = FRONTEND_ONBOARDING_VERSIONS.join(', ')
 
   return `
-    SELECT
-      onboarding_version,
-      attempt_id,
-      count() OVER () AS total_attempts,
-      toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'intent')) AS intent_ms,
-      toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'details')) AS details_ms,
-      toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'organization')) AS organization_ms,
-      toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'setup')) AS setup_ms,
-      groupUniqArrayIf(tuple(event, toUnixTimestamp64Milli(timestamp)), event != 'onboarding_step_viewed') AS interaction_events
-    FROM (
+    WITH frontend_events AS (
       SELECT
         event,
         timestamp,
+        person_id,
         toIntOrZero(toString(properties.onboarding_version)) AS onboarding_version,
         JSONExtractString(toString(properties), 'onboarding_attempt_id') AS attempt_id,
         JSONExtractString(toString(properties), 'step') AS step
@@ -162,11 +174,52 @@ export function buildFrontendOnboardingHogql(startDate: string, cohortEndDate: s
         AND toIntOrZero(toString(properties.onboarding_version)) IN (${versionAllowlist})
         AND timestamp >= parseDateTimeBestEffort(${sqlStr(startDate)})
         AND timestamp < parseDateTimeBestEffort(${sqlStr(followupEndDate)})
+    ), onboarding_attempts AS (
+      SELECT
+        onboarding_version,
+        attempt_id,
+        toString(argMin(person_id, timestamp)) AS person_id,
+        toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'intent')) AS intent_ms,
+        toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'details')) AS details_ms,
+        toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'organization')) AS organization_ms,
+        toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'setup')) AS setup_ms,
+        groupUniqArrayIf(tuple(event, toUnixTimestamp64Milli(timestamp)), event IN (${interactionEventAllowlist})) AS interaction_events,
+        groupUniqArrayIf(toUnixTimestamp64Milli(timestamp), event = ${sqlStr(AI_INSTRUCTIONS_COPIED_EVENT)}) AS ai_instructions_copied_ms
+      FROM frontend_events
+      WHERE trim(attempt_id) != ''
+      GROUP BY onboarding_version, attempt_id
+      HAVING intent_ms >= toUnixTimestamp64Milli(parseDateTimeBestEffort(${sqlStr(startDate)}))
+        AND intent_ms < toUnixTimestamp64Milli(parseDateTimeBestEffort(${sqlStr(cohortEndDate)}))
+    ), cli_starts AS (
+      SELECT
+        toString(person_id) AS person_id,
+        groupUniqArray(toUnixTimestamp64Milli(timestamp)) AS cli_started_ms
+      FROM events
+      WHERE timestamp >= parseDateTimeBestEffort(${sqlStr(startDate)})
+        AND timestamp < parseDateTimeBestEffort(${sqlStr(followupEndDate)})
+        AND (
+          JSONExtractString(toString(properties), 'channel') = 'onboarding-v2'
+          OR (event = 'CLI Command Invoked'
+            AND JSONExtractString(toString(properties), 'command_path') = 'init')
+          OR (event = 'Builder Onboarding Step'
+            AND JSONExtractString(toString(properties), 'step') IN ('welcome', 'resume-prompt'))
+        )
+      GROUP BY person_id
     )
-    WHERE trim(attempt_id) != ''
-    GROUP BY onboarding_version, attempt_id
-    HAVING intent_ms >= toUnixTimestamp64Milli(parseDateTimeBestEffort(${sqlStr(startDate)}))
-      AND intent_ms < toUnixTimestamp64Milli(parseDateTimeBestEffort(${sqlStr(cohortEndDate)}))
+    SELECT
+      onboarding_version,
+      attempt_id,
+      onboarding_attempts.person_id AS person_id,
+      count() OVER () AS total_attempts,
+      intent_ms,
+      details_ms,
+      organization_ms,
+      setup_ms,
+      interaction_events,
+      ai_instructions_copied_ms,
+      cli_started_ms
+    FROM onboarding_attempts
+    LEFT JOIN cli_starts USING person_id
     ORDER BY intent_ms ASC, onboarding_version ASC, attempt_id ASC
     LIMIT ${FRONTEND_ONBOARDING_ATTEMPT_LIMIT}`
 }
@@ -183,7 +236,7 @@ export async function getAdminFrontendOnboardingAnalytics(c: Context, startDate:
 
   const previousStartMs = startMs - durationMs
   const queryStartMs = Math.min(previousStartMs, startMs - FRONTEND_ONBOARDING_FOLLOWUP_MS)
-  const followupEndMs = endMs + FRONTEND_ONBOARDING_FOLLOWUP_MS
+  const followupEndMs = endMs + 2 * FRONTEND_ONBOARDING_FOLLOWUP_MS
   if (queryStartMs < POSTHOG_MIN_DATE_MS || queryStartMs >= POSTHOG_MAX_DATE_MS
     || followupEndMs < POSTHOG_MIN_DATE_MS || followupEndMs >= POSTHOG_MAX_DATE_MS) {
     throw new RangeError('derived analytics date boundaries must be within the supported PostHog range')
