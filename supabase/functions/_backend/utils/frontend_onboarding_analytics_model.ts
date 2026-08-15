@@ -1,6 +1,7 @@
 export const FRONTEND_ONBOARDING_VERSIONS = [1, 2, 3] as const
 export type FrontendOnboardingVersion = typeof FRONTEND_ONBOARDING_VERSIONS[number]
 export const FRONTEND_ONBOARDING_FOLLOWUP_MS = 24 * 60 * 60 * 1000
+export const FRONTEND_ONBOARDING_PRODUCTION_HOST = ['console', 'capgo', 'app'].join('.')
 
 export type FrontendOnboardingStageKey = 'intent' | 'details' | 'organization' | 'setup'
 
