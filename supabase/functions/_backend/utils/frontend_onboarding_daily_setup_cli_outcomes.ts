@@ -106,7 +106,7 @@ export function buildFrontendOnboardingDailySetupCliHogql(
           AND JSONExtractString(toString(selected_events.properties), 'step') = 'setup'
         )
       )
-    ORDER BY person_id ASC, timestamp_ms ASC, event_kind ASC
+    ORDER BY person_id ASC, timestamp_ms ASC, event_kind ASC, command_path ASC
     LIMIT ${FRONTEND_ONBOARDING_DAILY_SETUP_CLI_EVENT_LIMIT}`
 }
 
@@ -124,9 +124,20 @@ export async function getFrontendOnboardingDailySetupCliEvents(
     throw new Error('daily Setup CLI analytics PostHog query failed')
 
   if (posthog.rows.length > 0) {
-    const totalEvents = posthog.rows[0].total_events
+    let totalEvents = posthog.rows[0].total_events
     try {
-      assertFrontendOnboardingDailySetupCliEventTotal(totalEvents)
+      const expectedTotalEvents = assertFrontendOnboardingDailySetupCliEventTotal(totalEvents)
+      for (let index = 1; index < posthog.rows.length; index++) {
+        const row = posthog.rows[index]
+        totalEvents = row.total_events
+        const rowTotalEvents = assertFrontendOnboardingDailySetupCliEventTotal(totalEvents)
+        if (rowTotalEvents !== expectedTotalEvents)
+          throw new Error(INVALID_TOTAL_EVENTS_ERROR)
+      }
+
+      totalEvents = expectedTotalEvents
+      if (posthog.rows.length > expectedTotalEvents)
+        throw new Error(INVALID_TOTAL_EVENTS_ERROR)
     }
     catch (error) {
       const message = error instanceof Error && error.message === EVENT_LIMIT_EXCEEDED_ERROR

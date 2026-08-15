@@ -43,30 +43,43 @@ describe('buildFrontendOnboardingDailySetupCliHogql', () => {
       '2026-08-03T00:00:00.456Z',
       '2026-08-04T00:00:00.789Z',
     )
+    const setupPeople = query.match(/WITH setup_people AS \(([\s\S]*?)\n {4}\)\n {4}SELECT/)?.[1] ?? ''
+    const selectedProjectionStart = query.indexOf('\n    SELECT\n      toString(selected_events.person_id)')
+    const selectedFromStart = query.indexOf('\n    FROM events AS selected_events')
+    const selectedOrderStart = query.indexOf('\n    ORDER BY person_id ASC')
+    const selectedProjection = query.slice(selectedProjectionStart, selectedFromStart)
+    const selectedEventsFromWhere = query.slice(selectedFromStart, selectedOrderStart)
+    const selectedSetupCopyBranch = selectedEventsFromWhere.match(/OR \(\n([\s\S]*?)\n {8}\)\n {6}\)/)?.[1] ?? ''
 
-    expect(query).toContain('WITH setup_people AS')
-    expect(query).toContain('event = \'onboarding_step_viewed\'')
-    expect(query).toContain('JSONExtractString(toString(properties), \'flow\') = \'pre_org\'')
-    expect(query).toContain('toIntOrZero(toString(properties.onboarding_version)) = 2')
-    expect(query).toContain('JSONExtractString(toString(properties), \'step\') = \'setup\'')
-    expect(query).toContain('event IN (\'onboarding_step_viewed\', \'onboarding_cli_command_copied\', \'onboarding_ai_instructions_copied\')')
-    expect(query).toContain('event = \'CLI Command Invoked\'')
-    expect(query).not.toContain('JSONExtractString(toString(properties), \'channel\')')
-    expect(query).not.toContain('JSONExtractString(toString(properties), \'command_path\') = \'init\'')
-    expect(query).toContain('timestamp >= parseDateTimeBestEffort(\'2026-08-01T00:00:00.123Z\')')
-    expect(query).toContain('timestamp < parseDateTimeBestEffort(\'2026-08-03T00:00:00.456Z\')')
-    expect(query).toContain('selected_events.timestamp >= parseDateTimeBestEffort(\'2026-08-01T00:00:00.123Z\')')
-    expect(query).toContain('selected_events.timestamp < parseDateTimeBestEffort(\'2026-08-04T00:00:00.789Z\')')
-    expect(query).toContain('JSONExtractString(toString(selected_events.properties), \'flow\') = \'pre_org\'')
-    expect(query).toContain('toIntOrZero(toString(selected_events.properties.onboarding_version)) = 2')
-    expect(query).toContain('JSONExtractString(toString(selected_events.properties), \'step\') = \'setup\'')
-    expect(query).toContain('INNER JOIN setup_people AS cohort')
-    expect(query).toContain('ON toString(selected_events.person_id) = cohort.person_id')
-    expect(query).toContain('toString(selected_events.person_id) AS person_id')
-    expect(query).toContain('toUnixTimestamp64Milli(selected_events.timestamp) AS timestamp_ms')
-    expect(query).toContain('if(selected_events.event = \'CLI Command Invoked\', JSONExtractString(toString(selected_events.properties), \'command_path\'), \'\') AS command_path')
+    expect(setupPeople).toContain('WHERE event = \'onboarding_step_viewed\'')
+    expect(setupPeople).toContain('JSONExtractString(toString(properties), \'flow\') = \'pre_org\'')
+    expect(setupPeople).toContain('toIntOrZero(toString(properties.onboarding_version)) = 2')
+    expect(setupPeople).toContain('JSONExtractString(toString(properties), \'step\') = \'setup\'')
+    expect(setupPeople).toContain('timestamp >= parseDateTimeBestEffort(\'2026-08-01T00:00:00.123Z\')')
+    expect(setupPeople).toContain('timestamp < parseDateTimeBestEffort(\'2026-08-03T00:00:00.456Z\')')
+    expect(setupPeople).not.toContain('2026-08-04T00:00:00.789Z')
+
+    expect(selectedProjection).toContain('toString(selected_events.person_id) AS person_id')
+    expect(selectedProjection).toContain('toUnixTimestamp64Milli(selected_events.timestamp) AS timestamp_ms')
+    expect(selectedProjection).toContain('if(selected_events.event = \'CLI Command Invoked\', JSONExtractString(toString(selected_events.properties), \'command_path\'), \'\') AS command_path')
+    expect(selectedProjection).toContain('count() OVER () AS total_events')
+    expect(selectedProjection).toContain('CLI Command Invoked')
+
+    expect(selectedEventsFromWhere).toContain('INNER JOIN setup_people AS cohort')
+    expect(selectedEventsFromWhere).toContain('ON toString(selected_events.person_id) = cohort.person_id')
+    expect(selectedEventsFromWhere).toContain('selected_events.timestamp >= parseDateTimeBestEffort(\'2026-08-01T00:00:00.123Z\')')
+    expect(selectedEventsFromWhere).toContain('selected_events.timestamp < parseDateTimeBestEffort(\'2026-08-04T00:00:00.789Z\')')
+    expect(selectedEventsFromWhere).not.toContain('2026-08-03T00:00:00.456Z')
+    expect(selectedEventsFromWhere).toContain('selected_events.event = \'CLI Command Invoked\'\n        OR (')
+    expect(selectedEventsFromWhere).not.toContain('JSONExtractString(toString(selected_events.properties), \'channel\')')
+    expect(selectedEventsFromWhere).not.toContain('JSONExtractString(toString(selected_events.properties), \'command_path\') = \'init\'')
+    expect(selectedSetupCopyBranch).toContain('selected_events.event IN (\'onboarding_step_viewed\', \'onboarding_cli_command_copied\', \'onboarding_ai_instructions_copied\')')
+    expect(selectedSetupCopyBranch).toContain('JSONExtractString(toString(selected_events.properties), \'flow\') = \'pre_org\'')
+    expect(selectedSetupCopyBranch).toContain('toIntOrZero(toString(selected_events.properties.onboarding_version)) = 2')
+    expect(selectedSetupCopyBranch).toContain('JSONExtractString(toString(selected_events.properties), \'step\') = \'setup\'')
+
     expect(query).toContain('count() OVER () AS total_events')
-    expect(query).toContain('ORDER BY person_id ASC, timestamp_ms ASC, event_kind ASC')
+    expect(query).toContain('ORDER BY person_id ASC, timestamp_ms ASC, event_kind ASC, command_path ASC')
     expect(query).toContain('LIMIT 50000')
     expect(query).not.toContain('LIMIT 50001')
   })
@@ -212,6 +225,110 @@ describe('getFrontendOnboardingDailySetupCliEvents', () => {
       event_limit: 50_000,
       total_events: '1',
       returned_rows: 1,
+    })
+  })
+
+  it('logs and rejects malformed total metadata on a later row', async () => {
+    queryPosthogHogqlMock.mockResolvedValueOnce({
+      configured: true,
+      connected: true,
+      failureReason: null,
+      rows: [
+        { person_id: 'person-1', timestamp_ms: 1000, event_kind: 'setup', command_path: '', total_events: 2 },
+        { person_id: 'person-1', timestamp_ms: 1100, event_kind: 'cli_copy', command_path: '', total_events: '2' },
+      ],
+    })
+
+    await expect(getFrontendOnboardingDailySetupCliEvents(
+      createContext(),
+      '2026-08-01T00:00:00.000Z',
+      '2026-08-03T00:00:00.000Z',
+      '2026-08-04T00:00:00.000Z',
+    )).rejects.toThrow('daily Setup CLI analytics query returned invalid total metadata')
+    expect(cloudlogErrMock).toHaveBeenCalledWith({
+      requestId: 'request-id',
+      message: 'frontend_onboarding_daily_setup_cli_invalid_total_events',
+      event_limit: 50_000,
+      total_events: '2',
+      returned_rows: 2,
+    })
+  })
+
+  it('logs and rejects over-limit total metadata on a later row', async () => {
+    queryPosthogHogqlMock.mockResolvedValueOnce({
+      configured: true,
+      connected: true,
+      failureReason: null,
+      rows: [
+        { person_id: 'person-1', timestamp_ms: 1000, event_kind: 'setup', command_path: '', total_events: 2 },
+        { person_id: 'person-1', timestamp_ms: 1100, event_kind: 'cli_copy', command_path: '', total_events: 50_001 },
+      ],
+    })
+
+    await expect(getFrontendOnboardingDailySetupCliEvents(
+      createContext(),
+      '2026-08-01T00:00:00.000Z',
+      '2026-08-03T00:00:00.000Z',
+      '2026-08-04T00:00:00.000Z',
+    )).rejects.toThrow('daily Setup CLI analytics query exceeded event limit')
+    expect(cloudlogErrMock).toHaveBeenCalledWith({
+      requestId: 'request-id',
+      message: 'frontend_onboarding_daily_setup_cli_event_limit_exceeded',
+      event_limit: 50_000,
+      total_events: 50_001,
+      returned_rows: 2,
+    })
+  })
+
+  it('logs and rejects inconsistent totals across rows', async () => {
+    queryPosthogHogqlMock.mockResolvedValueOnce({
+      configured: true,
+      connected: true,
+      failureReason: null,
+      rows: [
+        { person_id: 'person-1', timestamp_ms: 1000, event_kind: 'setup', command_path: '', total_events: 2 },
+        { person_id: 'person-1', timestamp_ms: 1100, event_kind: 'cli_copy', command_path: '', total_events: 3 },
+      ],
+    })
+
+    await expect(getFrontendOnboardingDailySetupCliEvents(
+      createContext(),
+      '2026-08-01T00:00:00.000Z',
+      '2026-08-03T00:00:00.000Z',
+      '2026-08-04T00:00:00.000Z',
+    )).rejects.toThrow('daily Setup CLI analytics query returned invalid total metadata')
+    expect(cloudlogErrMock).toHaveBeenCalledWith({
+      requestId: 'request-id',
+      message: 'frontend_onboarding_daily_setup_cli_invalid_total_events',
+      event_limit: 50_000,
+      total_events: 3,
+      returned_rows: 2,
+    })
+  })
+
+  it('logs and rejects when returned rows exceed the asserted total', async () => {
+    queryPosthogHogqlMock.mockResolvedValueOnce({
+      configured: true,
+      connected: true,
+      failureReason: null,
+      rows: [
+        { person_id: 'person-1', timestamp_ms: 1000, event_kind: 'setup', command_path: '', total_events: 1 },
+        { person_id: 'person-1', timestamp_ms: 1100, event_kind: 'cli_copy', command_path: '', total_events: 1 },
+      ],
+    })
+
+    await expect(getFrontendOnboardingDailySetupCliEvents(
+      createContext(),
+      '2026-08-01T00:00:00.000Z',
+      '2026-08-03T00:00:00.000Z',
+      '2026-08-04T00:00:00.000Z',
+    )).rejects.toThrow('daily Setup CLI analytics query returned invalid total metadata')
+    expect(cloudlogErrMock).toHaveBeenCalledWith({
+      requestId: 'request-id',
+      message: 'frontend_onboarding_daily_setup_cli_invalid_total_events',
+      event_limit: 50_000,
+      total_events: 1,
+      returned_rows: 2,
     })
   })
 
