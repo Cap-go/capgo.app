@@ -95,6 +95,12 @@ describe('buildFrontendOnboardingDailySetupCliHogql', () => {
     expect(query).toContain('parseDateTimeBestEffort(\'end\'\'value\')')
     expect(query).toContain('parseDateTimeBestEffort(\'followup\'\'value\')')
   })
+
+  it('escapes a backslash immediately before a quote in interpolated date strings', () => {
+    const query = buildFrontendOnboardingDailySetupCliHogql(String.raw`start\'value`, 'end', 'followup')
+
+    expect(query).toContain(String.raw`parseDateTimeBestEffort('start\\''value')`)
+  })
 })
 
 describe('assertFrontendOnboardingDailySetupCliEventTotal', () => {
@@ -365,6 +371,9 @@ describe('getFrontendOnboardingDailySetupCliEvents', () => {
     ['empty person', { person_id: ' ', timestamp_ms: 1000, event_kind: 'setup', command_path: '', total_events: 1 }],
     ['non-string person', { person_id: 42, timestamp_ms: 1000, event_kind: 'setup', command_path: '', total_events: 1 }],
     ['zero timestamp', { person_id: 'person-1', timestamp_ms: 0, event_kind: 'setup', command_path: '', total_events: 1 }],
+    ['fractional timestamp', { person_id: 'person-1', timestamp_ms: 1000.5, event_kind: 'setup', command_path: '', total_events: 1 }],
+    ['unsafe numeric timestamp', { person_id: 'person-1', timestamp_ms: Number.MAX_SAFE_INTEGER + 1, event_kind: 'setup', command_path: '', total_events: 1 }],
+    ['unsafe numeric string timestamp', { person_id: 'person-1', timestamp_ms: String(Number.MAX_SAFE_INTEGER + 1), event_kind: 'setup', command_path: '', total_events: 1 }],
     ['non-numeric timestamp', { person_id: 'person-1', timestamp_ms: 'later', event_kind: 'setup', command_path: '', total_events: 1 }],
     ['unknown kind', { person_id: 'person-1', timestamp_ms: 1000, event_kind: 'unknown', command_path: '', total_events: 1 }],
     ['missing CLI path', { person_id: 'person-1', timestamp_ms: 1000, event_kind: 'cli_command', total_events: 1 }],

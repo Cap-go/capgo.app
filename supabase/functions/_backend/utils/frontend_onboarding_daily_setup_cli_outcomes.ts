@@ -14,7 +14,7 @@ const EVENT_KINDS: readonly FrontendOnboardingDailySetupCliEventKind[] = ['setup
 export const FRONTEND_ONBOARDING_DAILY_SETUP_CLI_EVENT_LIMIT = 50_000
 
 function sqlStr(value: string): string {
-  return `'${value.replace(/'/g, '\'\'')}'`
+  return `'${value.replace(/\\/g, '\\\\').replace(/'/g, '\'\'')}'`
 }
 
 function timestampMs(value: unknown): number | null {
@@ -24,7 +24,7 @@ function timestampMs(value: unknown): number | null {
       ? Number(value)
       : Number.NaN
 
-  return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : null
+  return Number.isSafeInteger(timestamp) && timestamp > 0 ? timestamp : null
 }
 
 function mapEvent(row: Record<string, unknown>): FrontendOnboardingDailySetupCliEvent {
