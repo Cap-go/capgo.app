@@ -229,6 +229,13 @@ future resumes of that progress preserve A2 and advance the saved run ID.
   progress writes.
 - A failed progress write may prevent continuity on a later visit, but it must
   not alter the active in-memory identity for the current run.
+- The initial progress write retries once after a retryable failure. If both
+  attempts fail, initialize the in-memory tracker for the resolved visible step
+  so later navigation events are not dropped. Regular progress writes may still
+  persist the same active identity later in the run.
+- A `skipped` initial write does not prove that the active identity was stored,
+  and a compare-and-swap conflict proves that another snapshot won. Neither
+  outcome initializes the tracker.
 - The existing `updated_at` compare-and-swap behavior remains authoritative for
   concurrent tabs. A stale tab does not overwrite newer progress merely to
   claim telemetry identity ownership.
@@ -258,6 +265,9 @@ coverage for the component lifecycle:
 - dialog and decision events cannot duplicate within one mount;
 - legacy and malformed identity metadata do not break operational resume;
 - persistence and capture failures do not interrupt onboarding;
+- two retryable initial persistence failures do not drop later step transitions;
+- skipped and conflicting initial writes do not emit step events with an
+  unconfirmed identity;
 - no new direct `viewStep()` call exists in either resume decision branch.
 
 Extend the existing registration Playwright scenario to retain its functional

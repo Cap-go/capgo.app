@@ -766,3 +766,99 @@ git status --short
 ```
 
 Expected: clean working tree.
+
+### Task 5: Keep navigation telemetry complete after a transient persistence outage
+
+**Files:**
+- Modify: `tests/app-onboarding-progress-integration.unit.test.ts`
+- Modify: `src/components/dashboard/AppOnboardingFlow.vue:305-410`
+- Modify: `src/components/dashboard/AppOnboardingFlow.vue:1449-1475`
+
+- [ ] **Step 1: Write the failing mount-gate regression test**
+
+Replace the late-recovery assertions with a source-contract assertion that the
+mount initializes only for a confirmed write or exhausted retryable failures:
+
+```ts
+expect(onboardingSource).not.toContain('pendingProgressTrackingResumed')
+expectSourceOrder(mountedFlow, [
+  `if (onboardingPersistResult === 'retryable_failure' && !onboardingFlowDisposed)`,
+  'onboardingPersistResult = await persistOnboardingProgress()',
+  `onboardingPersistResult === 'persisted'`,
+  `onboardingPersistResult === 'retryable_failure'`,
+  'initializeProgressTracking(resumedFlow)',
+])
+expect(mountedFlow).not.toContain(`onboardingPersistResult === 'skipped'`)
+```
+
+- [ ] **Step 2: Run the focused test and verify RED**
+
+Run:
+
+```bash
+bunx vitest run tests/app-onboarding-progress-integration.unit.test.ts
+```
+
+Expected: FAIL because the component still uses
+`pendingProgressTrackingResumed` and late initialization.
+
+- [ ] **Step 3: Replace late recovery with immediate retryable-failure tracking**
+
+Remove `pendingProgressTrackingResumed` and the initialization side effect from
+`persistOnboardingProgress()`, returning its serialized result directly:
+
+```ts
+persistChain = persistChain
+  .then(() => {
+    if (onboardingPersistenceBlocked && status !== 'completed')
+      return 'skipped'
+    return writeOnboardingProgress(status)
+  })
+  .catch((error) => {
+    console.error('Failed to persist onboarding progress', error)
+    return 'retryable_failure' as const
+  })
+return persistChain
+```
+
+After the two mount attempts, initialize for `persisted` or
+`retryable_failure`, while continuing to exclude `skipped`, `conflict`, abort,
+and disposal:
+
+```ts
+const shouldInitializeProgressTracking
+  = onboardingPersistResult === 'persisted'
+    || onboardingPersistResult === 'retryable_failure'
+
+if (!onboardingMountAborted && shouldInitializeProgressTracking)
+  initializeProgressTracking(resumedFlow)
+```
+
+- [ ] **Step 4: Run focused verification and verify GREEN**
+
+Run:
+
+```bash
+bunx vitest run tests/onboarding-progress-analytics.unit.test.ts tests/user-onboarding-progress.unit.test.ts tests/app-onboarding-progress-integration.unit.test.ts
+```
+
+Expected: PASS with exactly one mount-owned first step view and no delayed
+tracker initialization in `persistOnboardingProgress()`.
+
+- [ ] **Step 5: Run lint and frontend type checking**
+
+Run:
+
+```bash
+bun lint
+bun run typecheck:frontend
+```
+
+Expected: both commands PASS.
+
+- [ ] **Step 6: Commit the correction**
+
+```bash
+git add src/components/dashboard/AppOnboardingFlow.vue tests/app-onboarding-progress-integration.unit.test.ts docs/superpowers/specs/2026-08-15-frontend-onboarding-resume-telemetry-identities-design.md docs/superpowers/plans/2026-08-15-frontend-onboarding-resume-telemetry-identities.md
+git commit -m "fix(onboarding): preserve tracking during persistence outages"
+```

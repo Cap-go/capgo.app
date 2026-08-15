@@ -307,9 +307,9 @@ let persistChain: Promise<OnboardingPersistResult> = Promise.resolve('persisted'
 let persistFieldsTimer: ReturnType<typeof setTimeout> | undefined
 let pendingDashboardExplored = false
 let onboardingFlowDisposed = false
+let onboardingMountAborted = false
 let onboardingInitialPersistInFlight = false
 let onboardingPersistenceBlocked = false
-let pendingProgressTrackingResumed: boolean | null = null
 
 function trackV2DetailsEvent(name: OnboardingDetailsEvent, details: OnboardingDetailsEventProperties = {}) {
   if (props.preOrg)
@@ -382,11 +382,11 @@ function snapshotOnboardingProgress(status: UserOnboardingStatus = 'in_progress'
 }
 
 async function persistOnboardingProgress(status: UserOnboardingStatus = 'in_progress') {
-  if (onboardingPersistenceBlocked && status !== 'completed')
+  if (onboardingMountAborted || (onboardingPersistenceBlocked && status !== 'completed'))
     return 'skipped'
   persistChain = persistChain
     .then(() => {
-      if (onboardingPersistenceBlocked && status !== 'completed')
+      if (onboardingMountAborted || (onboardingPersistenceBlocked && status !== 'completed'))
         return 'skipped'
       return writeOnboardingProgress(status)
     })
@@ -394,18 +394,11 @@ async function persistOnboardingProgress(status: UserOnboardingStatus = 'in_prog
       console.error('Failed to persist onboarding progress', error)
       return 'retryable_failure' as const
     })
-  const result = await persistChain
-  if (status !== 'completed' && result === 'persisted' && pendingProgressTrackingResumed !== null) {
-    const resumed = pendingProgressTrackingResumed
-    pendingProgressTrackingResumed = null
-    if (!onboardingFlowDisposed && !progressTracker)
-      initializeProgressTracking(resumed)
-  }
-  return result
+  return persistChain
 }
 
 function schedulePersistOnboardingProgress() {
-  if (isHydratingOnboarding.value || onboardingPersistenceBlocked)
+  if (isHydratingOnboarding.value || onboardingPersistenceBlocked || onboardingMountAborted)
     return
   window.clearTimeout(persistFieldsTimer)
   persistFieldsTimer = setTimeout(() => {
@@ -1425,7 +1418,6 @@ function trackDashboardExplored() {
 onMounted(async () => {
   window.addEventListener(ONBOARDING_DASHBOARD_EXPLORED_EVENT, trackDashboardExplored)
   let resumedFlow = false
-  let onboardingMountAborted = false
   isLoading.value = true
   isHydratingOnboarding.value = true
   try {
@@ -1460,16 +1452,16 @@ onMounted(async () => {
       onboardingPersistResult = await persistOnboardingProgress()
       if (onboardingPersistResult === 'retryable_failure' && !onboardingFlowDisposed)
         onboardingPersistResult = await persistOnboardingProgress()
-      if (onboardingPersistResult === 'retryable_failure')
-        pendingProgressTrackingResumed = resumedFlow
       onboardingInitialPersistInFlight = false
     }
     function finishOnboardingMount() {
-      if (onboardingFlowDisposed)
+      if (onboardingFlowDisposed || onboardingMountAborted)
         return
       isLoading.value = false
-      // Unpersisted telemetry identities must not emit onboarding events.
-      if (!onboardingMountAborted && onboardingPersistResult === 'persisted')
+      const shouldInitializeProgressTracking
+        = onboardingPersistResult === 'persisted'
+          || onboardingPersistResult === 'retryable_failure'
+      if (!onboardingMountAborted && shouldInitializeProgressTracking)
         initializeProgressTracking(resumedFlow)
     }
     finishOnboardingMount()
@@ -1481,7 +1473,7 @@ onBeforeUnmount(() => {
   window.clearTimeout(persistFieldsTimer)
   window.removeEventListener(ONBOARDING_DASHBOARD_EXPLORED_EVENT, trackDashboardExplored)
   detailsFieldTracker.dispose()
-  if (!isHydratingOnboarding.value && !onboardingInitialPersistInFlight && !onboardingPersistenceBlocked)
+  if (!isHydratingOnboarding.value && !onboardingInitialPersistInFlight && !onboardingPersistenceBlocked && !onboardingMountAborted)
     void persistOnboardingProgress()
 
   if (localIconPreview.value.startsWith('blob:'))
