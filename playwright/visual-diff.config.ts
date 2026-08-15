@@ -32,7 +32,10 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
       catch {
         // Prompt is delayed and only shown when support usernames are missing.
       }
-      await page.locator('[data-test="sidebar-collapse-toggle"]').click()
+      const toggle = page.locator('[data-test="sidebar-collapse-toggle"]')
+      if (!(await toggle.count()))
+        return
+      await toggle.click()
       await page.locator('#sidebar').waitFor({ state: 'hidden' })
     },
   },
