@@ -1,5 +1,5 @@
 import { createPinia, setActivePinia } from 'pinia'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   formatLocalDate,
   formatLocalDateShort,
@@ -138,15 +138,22 @@ describe('date helpers', () => {
   })
 
   it('builds last-N-day chart ranges ending today', () => {
-    const oneDay = getLastNUtcDaysRange(1)
-    expect(formatUtcDateParam(oneDay.startDate)).toBe(formatUtcDateParam(oneDay.endDate))
-    expect(formatUtcDateParam(oneDay.endDate)).toBe(formatUtcDateParam(normalizeToUtcStartOfDay(new Date())))
-    expect(generateChartDayLabels(oneDay.startDate, oneDay.endDate)).toHaveLength(1)
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-15T12:00:00.000Z'))
+    try {
+      const oneDay = getLastNUtcDaysRange(1)
+      expect(formatUtcDateParam(oneDay.startDate)).toBe(formatUtcDateParam(oneDay.endDate))
+      expect(formatUtcDateParam(oneDay.endDate)).toBe(formatUtcDateParam(normalizeToUtcStartOfDay(new Date())))
+      expect(generateChartDayLabels(oneDay.startDate, oneDay.endDate)).toHaveLength(1)
 
-    const sevenDays = getLastNUtcDaysRange(7)
-    const sevenSpan = Math.round((sevenDays.endDate.getTime() - sevenDays.startDate.getTime()) / (24 * 60 * 60 * 1000))
-    expect(sevenSpan).toBe(6)
-    expect(generateChartDayLabels(sevenDays.startDate, sevenDays.endDate)).toHaveLength(7)
+      const sevenDays = getLastNUtcDaysRange(7)
+      const sevenSpan = Math.round((sevenDays.endDate.getTime() - sevenDays.startDate.getTime()) / (24 * 60 * 60 * 1000))
+      expect(sevenSpan).toBe(6)
+      expect(generateChartDayLabels(sevenDays.startDate, sevenDays.endDate)).toHaveLength(7)
+    }
+    finally {
+      vi.useRealTimers()
+    }
   })
 
   it('keeps formatUtcDateParam stable for date-only strings', () => {
