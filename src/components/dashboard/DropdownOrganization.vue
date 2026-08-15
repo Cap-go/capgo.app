@@ -15,6 +15,12 @@ import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/orga
 
 type OrganizationInvitationTarget = Pick<Organization, 'gid' | 'name' | 'role' | 'is_invite'>
 
+const props = withDefaults(defineProps<{
+  compact?: boolean
+}>(), {
+  compact: false,
+})
+
 const router = useRouter()
 const route = useRoute()
 const organizationStore = useOrganizationStore()
@@ -345,19 +351,33 @@ watch(
 
 <template>
   <div>
-    <details v-if="hasVisibleOrganizations" ref="dropdown" class="w-full d-dropdown d-dropdown-end">
-      <summary class="h-auto min-h-12 justify-between shadow-none w-full d-btn d-btn-sm border border-gray-700 text-white bg-[#1a1d24] px-3 py-2 hover:bg-gray-700 hover:text-white active:text-white focus-visible:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-800">
-        <div class="flex flex-1 items-center min-w-0 text-left">
+    <details
+      v-if="hasVisibleOrganizations"
+      ref="dropdown"
+      data-test="org-switcher"
+      class="d-dropdown"
+      :class="props.compact ? 'w-auto' : 'w-full d-dropdown-end'"
+    >
+      <summary
+        class="shadow-none d-btn d-btn-sm border border-gray-700 text-white bg-[#1a1d24] hover:bg-gray-700 hover:text-white active:text-white focus-visible:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-800"
+        :class="props.compact
+          ? 'relative size-10 min-h-10 p-1 justify-center'
+          : 'h-auto min-h-12 justify-between w-full px-3 py-2'"
+        :aria-label="currentLabel"
+      >
+        <div class="flex items-center min-w-0 text-left" :class="props.compact ? 'justify-center' : 'flex-1'">
           <img
             v-if="currentOrganization?.logo"
             :src="currentOrganization.logo"
             :alt="`${currentOrganization.name} logo`"
-            class="object-cover size-6 mr-2 rounded-sm d-mask d-mask-squircle shrink-0"
+            class="object-cover rounded-sm d-mask d-mask-squircle shrink-0"
+            :class="props.compact ? 'size-8' : 'size-6 mr-2'"
             @error="refreshBrokenOrganizationLogo(currentOrganization)"
           >
           <div
             v-else-if="currentOrganization?.logo_is_loading"
-            class="flex items-center justify-center size-6 mr-2 bg-gray-700 rounded-sm d-mask d-mask-squircle shrink-0"
+            class="flex items-center justify-center bg-gray-700 rounded-sm d-mask d-mask-squircle shrink-0"
+            :class="props.compact ? 'size-8' : 'size-6 mr-2'"
             :aria-label="t('loading')"
           >
             <span class="size-3.5 rounded-full border-2 border-blue-400 border-t-transparent animate-spin" />
@@ -365,27 +385,40 @@ watch(
           </div>
           <div
             v-else
-            class="flex items-center justify-center size-6 mr-2 text-xs font-semibold text-gray-300 bg-gray-700 rounded-sm d-mask d-mask-squircle shrink-0"
+            class="flex items-center justify-center text-xs font-semibold text-gray-300 bg-gray-700 rounded-sm d-mask d-mask-squircle shrink-0"
+            :class="props.compact ? 'size-8' : 'size-6 mr-2'"
           >
             {{ acronym(currentLabel) }}
           </div>
-          <span class="min-w-0 flex-1">
-            <span class="block truncate text-sm font-medium">{{ currentLabel }}</span>
-            <span class="block truncate text-xs font-normal text-slate-400">
-              {{ currentAppLabel || t('select-app') }}
+          <template v-if="!props.compact">
+            <span class="min-w-0 flex-1">
+              <span class="block truncate text-sm font-medium">{{ currentLabel }}</span>
+              <span class="block truncate text-xs font-normal text-slate-400">
+                {{ currentAppLabel || t('select-app') }}
+              </span>
             </span>
-          </span>
-          <div
-            v-if="invitationCount > 0"
-            class="inline-flex items-center gap-1 px-2 py-0.5 ml-2 text-[11px] font-medium rounded-full border border-amber-400/30 bg-amber-500/10 text-amber-200 shrink-0"
-          >
-            <span class="size-1.5 rounded-full bg-amber-300" />
-            <span>{{ invitationCount }}</span>
-          </div>
+            <div
+              v-if="invitationCount > 0"
+              class="inline-flex items-center gap-1 px-2 py-0.5 ml-2 text-[11px] font-medium rounded-full border border-amber-400/30 bg-amber-500/10 text-amber-200 shrink-0"
+            >
+              <span class="size-1.5 rounded-full bg-amber-300" />
+              <span>{{ invitationCount }}</span>
+            </div>
+          </template>
         </div>
-        <IconDown class="size-6 ml-1 fill-current shrink-0 text-slate-400" />
+        <span
+          v-if="props.compact && invitationCount > 0"
+          class="absolute top-0.5 right-0.5 size-2 rounded-full bg-amber-300"
+          aria-hidden="true"
+        />
+        <IconDown v-if="!props.compact" class="size-6 ml-1 fill-current shrink-0 text-slate-400" />
       </summary>
-      <div class="flex flex-col w-full min-w-0 max-h-[60vh] shadow d-dropdown-content bg-[#1a1d24] rounded-box z-50 text-white" @click="closeDropdown()">
+      <div
+        data-test="org-switcher-menu"
+        class="flex flex-col max-h-[60vh] shadow d-dropdown-content bg-[#1a1d24] rounded-box z-50 text-white"
+        :class="props.compact ? 'min-w-72' : 'w-full min-w-0'"
+        @click="closeDropdown()"
+      >
         <ul class="flex-1 overflow-y-auto p-2">
           <li
             v-for="org in organizationStore.organizations"

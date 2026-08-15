@@ -25,8 +25,9 @@ import {
 import DropdownProfile from '../components/dashboard/DropdownProfile.vue'
 import GettingStartedNav from '../components/dashboard/GettingStartedNav.vue'
 
-const props = defineProps <{
+const props = defineProps<{
   sidebarOpen: boolean
+  sidebarCollapsed?: boolean
 }>()
 
 const emit = defineEmits(['closeSidebar'])
@@ -187,10 +188,12 @@ const tabs = computed<Tab[]>(() => {
     <div
       id="sidebar"
       ref="sidebar"
-      class="fixed z-60 left-4 top-16 h-[calc(100%-4rem)] w-64 flex shrink-0 flex-col bg-slate-800 transition-all duration-200 ease-in-out rounded-xl shadow-lg lg:static lg:left-0 lg:top-0 lg:w-64 lg:h-full lg:bg-slate-800 lg:rounded-none lg:shadow-none lg:translate-x-0"
+      class="fixed z-60 left-4 top-16 h-[calc(100%-4rem)] w-64 flex shrink-0 flex-col bg-slate-800 transition-all duration-200 ease-in-out rounded-xl shadow-lg lg:static lg:left-0 lg:top-0 lg:h-full lg:bg-slate-800 lg:rounded-none lg:shadow-none lg:translate-x-0"
       :class="{
         'translate-x-0': props.sidebarOpen,
         '-translate-x-[120%]': !props.sidebarOpen,
+        'lg:w-64': !props.sidebarCollapsed,
+        'lg:hidden': props.sidebarCollapsed,
       }"
     >
       <!-- Sidebar header -->
@@ -209,7 +212,7 @@ const tabs = computed<Tab[]>(() => {
 
       <!-- Organization dropdown -->
       <div class="px-3 py-4 lg:py-4 lg:px-6 shrink-0">
-        <dropdown-organization v-if="main.user" />
+        <dropdown-organization v-if="main.user && !props.sidebarCollapsed" />
       </div>
 
       <!-- Navigation -->

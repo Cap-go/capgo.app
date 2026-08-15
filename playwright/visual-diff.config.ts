@@ -18,6 +18,15 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
   { slug: 'dashboard', path: '/dashboard', auth: true },
   { slug: 'account-settings', path: '/settings/account', auth: true },
   { slug: 'apps', path: '/apps', auth: true },
+  {
+    slug: 'apps-sidebar-collapsed',
+    path: '/apps',
+    auth: true,
+    prepare: async (page) => {
+      await page.locator('[data-test="sidebar-collapse-toggle"]').click()
+      await page.locator('#sidebar').waitFor({ state: 'hidden' })
+    },
+  },
   { slug: 'app-overview', path: '/app/com.demo.app', auth: true },
   { slug: 'app-getting-started', path: '/app/com.demo.app/getting-started', auth: true },
   { slug: 'app-settings', path: '/app/com.demo.app/settings', auth: true },
