@@ -1935,7 +1935,7 @@
   "org-notifications-title": "Organization Email Notifications",
   "org-notifications-usage-limit-desc": "Send plan usage alerts to the organization's management email",
   "org-notifications-weekly-stats-desc": "Send weekly statistics to the organization's management email",
-  "org-switcher-pending-invites": "{count} pending invitation(s)",
+  "org-switcher-pending-invites": "{n} pending invitation | {n} pending invitations",
   "org-with-this-name-exists": "You have already created an organization with this name!",
   "organization": "Organization",
   "organization-create-badge": "New organization",

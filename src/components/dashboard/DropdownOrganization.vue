@@ -46,9 +46,12 @@ const currentApp = computed(() => currentAppId.value ? organizationStore.getAppB
 const currentAppLabel = computed(() => currentApp.value ? getAppLabel(currentApp.value) : currentAppId.value)
 const invitationCount = computed(() => organizationStore.organizations.filter(org => isPendingOrganizationInvite(org)).length)
 const triggerAriaLabel = computed(() => {
+  const baseLabel = props.compact
+    ? currentLabel.value
+    : `${currentLabel.value}, ${currentAppLabel.value || t('select-app')}`
   if (invitationCount.value <= 0)
-    return currentLabel.value
-  return `${currentLabel.value}, ${t('org-switcher-pending-invites', { count: invitationCount.value })}`
+    return baseLabel
+  return `${baseLabel}, ${t('org-switcher-pending-invites', invitationCount.value)}`
 })
 const canCreateOrganizationInContext = !isNativeAppStoreContext()
 const ORGANIZATION_LOGO_REFRESH_INTERVAL_MS = 10 * 60 * 1000
