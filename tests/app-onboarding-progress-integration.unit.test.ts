@@ -169,7 +169,7 @@ describe('app onboarding progress analytics integration', () => {
     expect(onboardingSource).not.toContain('pendingProgressTrackingResumed')
 
     const mountedFlow = sourceBetween('onMounted(async () => {', 'onBeforeUnmount(() => {')
-    const persistenceGuard = 'if (!onboardingProgressPersistence.isAborted()) {'
+    const persistenceGuard = 'if (!onboardingFlowDisposed && !onboardingProgressPersistence.isAborted()) {'
     const persistenceGuardStart = mountedFlow.indexOf(persistenceGuard)
     const persistenceGuardEnd = mountedFlow.indexOf('\n    }\n', persistenceGuardStart)
     expect(persistenceGuardStart).toBeGreaterThan(mountedFlow.indexOf('isHydratingOnboarding.value = false'))

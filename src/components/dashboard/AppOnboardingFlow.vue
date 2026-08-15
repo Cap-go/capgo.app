@@ -1595,7 +1595,7 @@ onMounted(async () => {
   finally {
     isHydratingOnboarding.value = false
     let onboardingPersistResult: OnboardingPersistResult = 'skipped'
-    if (!onboardingProgressPersistence.isAborted()) {
+    if (!onboardingFlowDisposed && !onboardingProgressPersistence.isAborted()) {
       onboardingInitialPersistInFlight = true
       onboardingPersistResult = await persistOnboardingProgress()
       if (onboardingPersistResult === 'retryable_failure' && !onboardingFlowDisposed)
