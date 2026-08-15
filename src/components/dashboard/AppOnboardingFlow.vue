@@ -88,7 +88,7 @@ type AppRow = Omit<Database['public']['Tables']['apps']['Row'], 'onboarding'> & 
 type StandardFlowStep = 'details' | 'choice' | 'install' | 'setup'
 type PreOrgFlowStep = 'intent' | 'details' | 'organization' | 'setup'
 type OnboardingFlowStep = StandardFlowStep | PreOrgFlowStep
-type OnboardingPersistResult = 'persisted' | 'retryable_failure' | 'conflict_or_skipped'
+type OnboardingPersistResult = 'persisted' | 'retryable_failure' | 'conflict' | 'skipped'
 
 interface UserCountStop {
   value: number
@@ -308,6 +308,7 @@ let persistFieldsTimer: ReturnType<typeof setTimeout> | undefined
 let pendingDashboardExplored = false
 let onboardingFlowDisposed = false
 let onboardingInitialPersistInFlight = false
+let onboardingPersistenceBlocked = false
 
 function trackV2DetailsEvent(name: OnboardingDetailsEvent, details: OnboardingDetailsEventProperties = {}) {
   if (props.preOrg)
@@ -380,6 +381,8 @@ function snapshotOnboardingProgress(status: UserOnboardingStatus = 'in_progress'
 }
 
 async function persistOnboardingProgress(status: UserOnboardingStatus = 'in_progress') {
+  if (onboardingPersistenceBlocked)
+    return 'skipped'
   persistChain = persistChain
     .then(() => writeOnboardingProgress(status))
     .catch((error) => {
@@ -390,7 +393,7 @@ async function persistOnboardingProgress(status: UserOnboardingStatus = 'in_prog
 }
 
 function schedulePersistOnboardingProgress() {
-  if (isHydratingOnboarding.value)
+  if (isHydratingOnboarding.value || onboardingPersistenceBlocked)
     return
   window.clearTimeout(persistFieldsTimer)
   persistFieldsTimer = setTimeout(() => {
@@ -401,11 +404,11 @@ function schedulePersistOnboardingProgress() {
 async function writeOnboardingProgress(status: UserOnboardingStatus) {
   const userId = onboardingUserId.value
   if (!userId || isHydratingOnboarding.value)
-    return 'conflict_or_skipped'
+    return 'skipped'
 
   const current = parseUserOnboardingProgress(main.user?.onboarding)
   if (current?.status === 'completed' && status !== 'completed')
-    return 'conflict_or_skipped'
+    return 'skipped'
 
   const progress = snapshotOnboardingProgress(status)
   const onboarding = progress as unknown as Json
@@ -435,7 +438,7 @@ async function writeOnboardingProgress(status: UserOnboardingStatus) {
   }
 
   if (status === 'completed' || main.user?.id !== userId)
-    return 'conflict_or_skipped'
+    return 'skipped'
 
   const { data: latest, error: latestError } = await supabase
     .from('users')
@@ -446,7 +449,7 @@ async function writeOnboardingProgress(status: UserOnboardingStatus) {
     console.error('Failed to refresh onboarding progress snapshot', latestError)
   if (latest && main.user?.id === userId)
     main.user = { ...latest, image_url: main.user.image_url }
-  return 'conflict_or_skipped'
+  return 'conflict'
 }
 
 function resetOnboardingForm() {
@@ -1438,12 +1441,14 @@ onMounted(async () => {
   }
   finally {
     isHydratingOnboarding.value = false
-    let onboardingPersistResult: OnboardingPersistResult = 'conflict_or_skipped'
+    let onboardingPersistResult: OnboardingPersistResult = 'skipped'
     if (!onboardingMountAborted) {
       onboardingInitialPersistInFlight = true
       onboardingPersistResult = await persistOnboardingProgress()
       if (onboardingPersistResult === 'retryable_failure' && !onboardingFlowDisposed)
         onboardingPersistResult = await persistOnboardingProgress()
+      if (onboardingPersistResult === 'conflict')
+        onboardingPersistenceBlocked = true
       onboardingInitialPersistInFlight = false
     }
     function finishOnboardingMount() {
@@ -1462,7 +1467,7 @@ onBeforeUnmount(() => {
   window.clearTimeout(persistFieldsTimer)
   window.removeEventListener(ONBOARDING_DASHBOARD_EXPLORED_EVENT, trackDashboardExplored)
   detailsFieldTracker.dispose()
-  if (!isHydratingOnboarding.value && !onboardingInitialPersistInFlight)
+  if (!isHydratingOnboarding.value && !onboardingInitialPersistInFlight && !onboardingPersistenceBlocked)
     void persistOnboardingProgress()
 
   if (localIconPreview.value.startsWith('blob:'))

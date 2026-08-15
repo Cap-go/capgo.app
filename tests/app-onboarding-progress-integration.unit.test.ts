@@ -118,16 +118,21 @@ describe('app onboarding progress analytics integration', () => {
     expect(snapshot).toContain('lastRunId: telemetry.lastRunId')
   })
 
-  it.concurrent('distinguishes persisted, retryable, and conflict progress outcomes', () => {
-    expect(onboardingSource).toContain(`type OnboardingPersistResult = 'persisted' | 'retryable_failure' | 'conflict_or_skipped'`)
+  it.concurrent('distinguishes persisted, retryable, conflict, and skipped progress outcomes', () => {
+    expect(onboardingSource).toContain(`type OnboardingPersistResult = 'persisted' | 'retryable_failure' | 'conflict' | 'skipped'`)
 
     const persistenceQueue = sourceBetween('async function persistOnboardingProgress(', 'function schedulePersistOnboardingProgress(')
-    expect(persistenceQueue).toContain(`return 'retryable_failure'`)
-    expect(persistenceQueue).toContain('return persistChain')
+    expectSourceOrder(persistenceQueue, [
+      'if (onboardingPersistenceBlocked)',
+      `return 'skipped'`,
+      'persistChain = persistChain',
+      `return 'retryable_failure'`,
+      'return persistChain',
+    ])
 
     const writer = sourceBetween('async function writeOnboardingProgress(', 'function resetOnboardingForm(')
-    expect(writer).toContain(`if (!userId || isHydratingOnboarding.value)\n    return 'conflict_or_skipped'`)
-    expect(writer).toContain(`if (current?.status === 'completed' && status !== 'completed')\n    return 'conflict_or_skipped'`)
+    expect(writer).toContain(`if (!userId || isHydratingOnboarding.value)\n    return 'skipped'`)
+    expect(writer).toContain(`if (current?.status === 'completed' && status !== 'completed')\n    return 'skipped'`)
     expectSourceOrder(writer, [
       'if (error) {',
       `console.error('Failed to persist onboarding progress', error)`,
@@ -135,21 +140,22 @@ describe('app onboarding progress analytics integration', () => {
     ])
     expect(writer).toContain('if (data && main.user?.id === userId) {')
     expect(writer).toContain(`main.user = { ...data, image_url: main.user.image_url }\n    return 'persisted'`)
-    expect(writer).toContain(`if (status === 'completed' || main.user?.id !== userId)\n    return 'conflict_or_skipped'`)
+    expect(writer).toContain(`if (status === 'completed' || main.user?.id !== userId)\n    return 'skipped'`)
 
     const noRowRefresh = writer.slice(writer.indexOf('const { data: latest, error: latestError }'))
     expectSourceOrder(noRowRefresh, [
       'const { data: latest, error: latestError }',
       'if (latestError)',
       'if (latest && main.user?.id === userId)',
-      `return 'conflict_or_skipped'`,
+      `return 'conflict'`,
     ])
-    expect(writer.trimEnd().endsWith(`return 'conflict_or_skipped'\n}`)).toBe(true)
+    expect(writer.trimEnd().endsWith(`return 'conflict'\n}`)).toBe(true)
   })
 
-  it.concurrent('does not initialize tracking after unmount during the initial persistence', () => {
+  it.concurrent('blocks tracking and later writes after an initial conflict or disposal', () => {
     expect(onboardingSource).toContain('let onboardingFlowDisposed = false')
     expect(onboardingSource).toContain('let onboardingInitialPersistInFlight = false')
+    expect(onboardingSource).toContain('let onboardingPersistenceBlocked = false')
 
     const mountedFlow = sourceBetween('onMounted(async () => {', 'onBeforeUnmount(() => {')
     const persistenceGuard = 'if (!onboardingMountAborted) {'
@@ -161,12 +167,14 @@ describe('app onboarding progress analytics integration', () => {
     expect(initialPersistence.match(/persistOnboardingProgress\(\)/g)).toHaveLength(2)
     expect(mountedFlow).toContain('function finishOnboardingMount()')
     expectSourceOrder(mountedFlow, [
-      `let onboardingPersistResult: OnboardingPersistResult = 'conflict_or_skipped'`,
+      `let onboardingPersistResult: OnboardingPersistResult = 'skipped'`,
       persistenceGuard,
       'onboardingInitialPersistInFlight = true',
       'onboardingPersistResult = await persistOnboardingProgress()',
       `if (onboardingPersistResult === 'retryable_failure' && !onboardingFlowDisposed)`,
       'onboardingPersistResult = await persistOnboardingProgress()',
+      `if (onboardingPersistResult === 'conflict')`,
+      'onboardingPersistenceBlocked = true',
       'onboardingInitialPersistInFlight = false',
       'if (onboardingFlowDisposed)',
       'return',
@@ -176,10 +184,18 @@ describe('app onboarding progress analytics integration', () => {
       'finishOnboardingMount()',
     ])
 
+    const scheduledPersistence = sourceBetween('function schedulePersistOnboardingProgress(', 'async function writeOnboardingProgress(')
+    expectSourceOrder(scheduledPersistence, [
+      'if (isHydratingOnboarding.value || onboardingPersistenceBlocked)',
+      'return',
+      'persistFieldsTimer = setTimeout',
+      'void persistOnboardingProgress()',
+    ])
+
     const unmountFlow = sourceBetween('onBeforeUnmount(() => {', 'watch(existingApp,')
     expectSourceOrder(unmountFlow, [
       'onboardingFlowDisposed = true',
-      'if (!isHydratingOnboarding.value && !onboardingInitialPersistInFlight)',
+      'if (!isHydratingOnboarding.value && !onboardingInitialPersistInFlight && !onboardingPersistenceBlocked)',
       'void persistOnboardingProgress()',
     ])
   })
