@@ -86,6 +86,7 @@ export function buildFrontendOnboardingDailySetupCliOutcomes(
   if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs)
     throw new RangeError('startMs and endMs must be finite bounds with endMs greater than startMs')
 
+  const tailEndMs = endMs + UTC_DAY_MS
   const normalizedEvents = events.map((event) => {
     const personId = event.personId?.trim()
     if (!personId)
@@ -97,8 +98,8 @@ export function buildFrontendOnboardingDailySetupCliOutcomes(
     if (!['setup', 'cli_copy', 'ai_copy', 'cli_command'].includes(event.kind))
       throw new Error(`Unsupported frontend onboarding event kind: ${event.kind}`)
 
-    const commandPath = event.commandPath?.trim()
-    if (event.kind === 'cli_command' && !commandPath)
+    const commandPath = event.commandPath
+    if (event.kind === 'cli_command' && !commandPath?.trim())
       throw new Error('CLI command event commandPath must be a non-empty string')
 
     return {
@@ -110,7 +111,7 @@ export function buildFrontendOnboardingDailySetupCliOutcomes(
 
   const anchorsByPersonDate = new Map<string, FrontendOnboardingDailySetupCliAnchor>()
   for (const event of normalizedEvents) {
-    if (event.kind !== 'setup')
+    if (event.kind !== 'setup' || event.timestampMs < startMs || event.timestampMs >= tailEndMs)
       continue
 
     const date = getUtcDate(event.timestampMs)
@@ -128,12 +129,8 @@ export function buildFrontendOnboardingDailySetupCliOutcomes(
     })
   }
 
-  const tailEndMs = endMs + UTC_DAY_MS
   const anchorsByPerson = new Map<string, FrontendOnboardingDailySetupCliAnchor[]>()
   for (const anchor of anchorsByPersonDate.values()) {
-    if (anchor.timestampMs < startMs || anchor.timestampMs >= tailEndMs)
-      continue
-
     const anchors = anchorsByPerson.get(anchor.personId) ?? []
     anchors.push(anchor)
     anchorsByPerson.set(anchor.personId, anchors)

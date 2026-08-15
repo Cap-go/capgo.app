@@ -93,6 +93,18 @@ describe('buildFrontendOnboardingDailySetupCliOutcomes', () => {
     ])
   })
 
+  it('does not let a pre-range Setup suppress an in-range Setup on the same UTC day', () => {
+    const august3 = utcMs('2026-08-03')
+    const startMs = august3 + 12 * 60 * 60 * 1_000
+
+    expect(buildFrontendOnboardingDailySetupCliOutcomes([
+      setup('person', august3 + 9 * 60 * 60 * 1_000),
+      setup('person', august3 + 13 * 60 * 60 * 1_000),
+    ], startMs, august3 + 86_400_000)).toMatchObject([
+      { date: '2026-08-03', first_time: { no_action: 1 } },
+    ])
+  })
+
   it('classifies first-time and returning Setup person-days and zero-fills dates', () => {
     const august3 = utcMs('2026-08-03')
     const august4 = utcMs('2026-08-04')
@@ -125,9 +137,9 @@ describe('buildFrontendOnboardingDailySetupCliOutcomes', () => {
     const september1 = utcMs('2026-09-01')
 
     expect(buildFrontendOnboardingDailySetupCliOutcomes([
-      setup('person', august31 + 1_000),
-      setup('person', september1 + 1_000),
-      { personId: 'person', timestampMs: september1 + 2_000, kind: 'cli_command', commandPath: 'init' },
+      setup('person', august31 + 23 * 60 * 60 * 1_000 + 30 * 60 * 1_000),
+      setup('person', september1 + 15 * 60 * 1_000),
+      { personId: 'person', timestampMs: september1 + 20 * 60 * 1_000, kind: 'cli_command', commandPath: 'init' },
     ], august31, september1)).toMatchObject([
       { date: '2026-08-31', first_time: { no_action: 1 } },
     ])
@@ -167,6 +179,15 @@ describe('buildFrontendOnboardingDailySetupCliOutcomes', () => {
     expect(points[0].first_time.both_copy_init).toBe(1)
   })
 
+  it('treats whitespace-padded init as another CLI command', () => {
+    const august3 = utcMs('2026-08-03')
+
+    expect(buildFrontendOnboardingDailySetupCliOutcomes([
+      setup('person', august3 + 1_000),
+      { personId: 'person', timestampMs: august3 + 2_000, kind: 'cli_command', commandPath: ' init ' },
+    ], august3, august3 + 86_400_000)[0].first_time.no_copy_other_cli).toBe(1)
+  })
+
   it('treats an in-range Setup as first-time despite pre-range Setup history', () => {
     const august2 = utcMs('2026-08-02')
     const august3 = utcMs('2026-08-03')
@@ -182,9 +203,13 @@ describe('buildFrontendOnboardingDailySetupCliOutcomes', () => {
 
     expect(() => buildFrontendOnboardingDailySetupCliOutcomes([], august3, august3)).toThrow(RangeError)
     expect(() => buildFrontendOnboardingDailySetupCliOutcomes([], Number.NaN, august3)).toThrow(RangeError)
+    expect(() => buildFrontendOnboardingDailySetupCliOutcomes([], august3, august3 - 1)).toThrow(RangeError)
     expect(() => buildFrontendOnboardingDailySetupCliOutcomes([
       setup('  ', august3),
     ], august3, august3 + 86_400_000)).toThrow(/personId/i)
+    expect(() => buildFrontendOnboardingDailySetupCliOutcomes([
+      setup('person', Number.NaN),
+    ], august3, august3 + 86_400_000)).toThrow(/timestampMs/i)
     expect(() => buildFrontendOnboardingDailySetupCliOutcomes([
       { personId: 'person', timestampMs: august3, kind: 'cli_command' },
     ], august3, august3 + 86_400_000)).toThrow(/commandPath/i)
