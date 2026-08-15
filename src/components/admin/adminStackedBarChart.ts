@@ -1,16 +1,25 @@
-import type { ChartData, ChartOptions } from 'chart.js'
+import type { ChartData, Chart as ChartJs, ChartOptions, LegendItem } from 'chart.js'
 import { formatNumberValue } from '~/services/formatLocale'
 
 export interface AdminStackedBarDataset {
   label: string
   data: number[]
   color: string
+  stack?: string
+  stackLabel?: string
 }
+
+export type AdminStackedBarChartDataset = ChartData<'bar'>['datasets'][number] & { stackLabel?: string }
+export type AdminStackedBarChartData = Omit<ChartData<'bar'>, 'datasets'> & { datasets: AdminStackedBarChartDataset[] }
+type AdminStackedBarCompatibleDataset = Pick<
+  ChartData['datasets'][number],
+  'backgroundColor' | 'borderColor' | 'borderWidth' | 'data' | 'label'
+> & { stack?: string, stackLabel?: string }
 
 export function buildAdminStackedBarChartData(
   labels: string[],
   series: AdminStackedBarDataset[],
-): ChartData<'bar'> {
+): AdminStackedBarChartData {
   return {
     labels,
     datasets: series.map(item => ({
@@ -21,15 +30,17 @@ export function buildAdminStackedBarChartData(
       borderWidth: 0,
       borderRadius: 4,
       borderSkipped: false,
+      stack: item.stack,
+      stackLabel: item.stackLabel,
     })),
   }
 }
 
 export function applyAdminStackedBarAccessibleBorders(
-  data: ChartData<'bar'>,
+  data: AdminStackedBarChartData,
   accessibleBorders: boolean,
   isDark: boolean,
-): ChartData<'bar'> {
+): AdminStackedBarChartData {
   if (!accessibleBorders)
     return data
 
@@ -48,7 +59,78 @@ export function formatAdminStackedBarTooltip(label: string, value: number, total
   return `${label}: ${formatNumberValue(value)} (${formatNumberValue(percentage, { maximumFractionDigits: 1 })}%)`
 }
 
-export function buildAdminStackedBarChartOptions(isDark: boolean): ChartOptions<'bar'> {
+interface AdminLegendDataChart {
+  data: { datasets: AdminStackedBarCompatibleDataset[] }
+  isDatasetVisible: ChartJs['isDatasetVisible']
+}
+type AdminLegendToggleChart = AdminLegendDataChart & Pick<ChartJs, 'setDatasetVisibility' | 'update'>
+
+function datasetValue(dataset: AdminStackedBarCompatibleDataset, dataIndex: number): number {
+  const value = dataset.data[dataIndex]
+  return typeof value === 'number' ? value : 0
+}
+
+function datasetTotal(dataset: AdminStackedBarCompatibleDataset): number {
+  let total = 0
+  for (let dataIndex = 0; dataIndex < dataset.data.length; dataIndex++)
+    total += datasetValue(dataset, dataIndex)
+  return total
+}
+
+export function getAdminStackedBarTooltipTotal(
+  datasets: readonly AdminStackedBarCompatibleDataset[],
+  datasetIndex: number,
+  dataIndex: number,
+): number {
+  const activeStack = datasets[datasetIndex]?.stack
+  return datasets.reduce((sum, dataset) => {
+    if (activeStack !== undefined && dataset.stack !== activeStack)
+      return sum
+    return sum + datasetValue(dataset, dataIndex)
+  }, 0)
+}
+
+export function buildAdminStackedBarLegendItems(chart: AdminLegendDataChart): LegendItem[] {
+  const seen = new Set<string>()
+  return chart.data.datasets.flatMap((dataset, datasetIndex) => {
+    const label = dataset.label ?? ''
+    if (!label || seen.has(label) || datasetTotal(dataset) === 0)
+      return []
+
+    const matchingDatasets = chart.data.datasets
+      .map((candidate, index) => ({ candidate, index }))
+      .filter(({ candidate }) => candidate.label === label)
+    if (matchingDatasets.every(({ candidate }) => datasetTotal(candidate) === 0))
+      return []
+
+    seen.add(label)
+    return [{
+      text: label,
+      fillStyle: typeof dataset.backgroundColor === 'string' ? dataset.backgroundColor : '#94a3b8',
+      strokeStyle: typeof dataset.borderColor === 'string' ? dataset.borderColor : '#94a3b8',
+      lineWidth: typeof dataset.borderWidth === 'number' ? dataset.borderWidth : 0,
+      hidden: matchingDatasets.every(({ index }) => !chart.isDatasetVisible(index)),
+      datasetIndex,
+      pointStyle: 'circle' as const,
+    }]
+  })
+}
+
+export function toggleAdminStackedBarLegendGroup(chart: AdminLegendToggleChart, label: string): void {
+  const indexes = chart.data.datasets
+    .map((dataset, index) => ({ dataset, index }))
+    .filter(({ dataset }) => dataset.label === label)
+    .map(({ index }) => index)
+  const show = indexes.every(index => !chart.isDatasetVisible(index))
+  for (const index of indexes)
+    chart.setDatasetVisibility(index, show)
+  chart.update()
+}
+
+export function buildAdminStackedBarChartOptions(
+  isDark: boolean,
+  groupedStacks = false,
+): ChartOptions<'bar'> {
   const textColor = isDark ? '#d1d5db' : '#4b5563'
   const mutedTextColor = isDark ? '#9ca3af' : '#6b7280'
 
@@ -56,7 +138,7 @@ export function buildAdminStackedBarChartOptions(isDark: boolean): ChartOptions<
     responsive: true,
     maintainAspectRatio: false,
     interaction: {
-      mode: 'index',
+      mode: groupedStacks ? 'nearest' : 'index',
       intersect: false,
     },
     layout: {
@@ -81,7 +163,11 @@ export function buildAdminStackedBarChartOptions(isDark: boolean): ChartOptions<
           },
           padding: 18,
           usePointStyle: true,
+          ...(groupedStacks ? { generateLabels: buildAdminStackedBarLegendItems } : {}),
         },
+        ...(groupedStacks
+          ? { onClick: (_event, item, legend) => toggleAdminStackedBarLegendGroup(legend.chart, item.text) }
+          : {}),
       },
       tooltip: {
         backgroundColor: isDark ? 'rgba(31, 41, 55, 0.95)' : 'rgba(255, 255, 255, 0.95)',
@@ -94,10 +180,16 @@ export function buildAdminStackedBarChartOptions(isDark: boolean): ChartOptions<
         callbacks: {
           label: (context) => {
             const value = Number(context.parsed.y ?? 0)
-            const total = context.chart.data.datasets.reduce((sum, dataset) => {
-              return sum + Number(dataset.data[context.dataIndex] ?? 0)
-            }, 0)
-            return formatAdminStackedBarTooltip(context.dataset.label || '', value, total)
+            const total = getAdminStackedBarTooltipTotal(
+              context.chart.data.datasets,
+              context.datasetIndex,
+              context.dataIndex,
+            )
+            const dataset: AdminStackedBarCompatibleDataset = context.dataset
+            const label = dataset.stackLabel
+              ? `${dataset.stackLabel} · ${dataset.label ?? ''}`
+              : dataset.label ?? ''
+            return formatAdminStackedBarTooltip(label, value, total)
           },
         },
       },
