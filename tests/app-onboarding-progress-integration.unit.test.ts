@@ -46,6 +46,12 @@ describe('app onboarding progress analytics integration', () => {
     expect(onboardingSource).toContain("pushEvent('onboarding_intent_selected', config.supaHost, {")
   })
 
+  it.concurrent('keeps Maker+ invitations inside the organization progress step', () => {
+    expect(onboardingSource).toContain("createAppRecord({ nextStep: shouldInvite ? 'organization' : 'setup' })")
+    expect(onboardingSource).toContain("trackOrganizationEvent('onboarding_organization_invite_viewed')")
+    expect(onboardingSource).toContain("completeAndViewStep('setup', { appId: createdApp.value.app_id })")
+  })
+
   it.concurrent('keeps the unload warning scoped to unfinished pre-org onboarding', () => {
     expect(onboardingSource).toContain('useBeforeUnloadWarning(Boolean(props.preOrg))')
     const creation = sourceBetween('async function createOrganizationAndApp()', 'async function createAppRecord(')
