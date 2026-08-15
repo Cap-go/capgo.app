@@ -56,7 +56,7 @@ describe('app onboarding progress analytics integration', () => {
     expectSourceOrder(resumeDialog, [
       'await dialogStore.onDialogDismiss()',
       'if (onboardingFlowDisposed)',
-      'return false',
+      'return null',
       restartCheck,
     ])
     const restartBranchStart = resumeDialog.indexOf(restartCheck)
@@ -73,18 +73,27 @@ describe('app onboarding progress analytics integration', () => {
     const continueCheck = `if (dialogStore.lastButtonRole !== 'onboarding-resume-continue')`
     expectSourceOrder(resumeDialog.slice(restartBranchEnd), [
       continueCheck,
-      'return false',
+      'return null',
       'onboardingTelemetry.recordResumeContinued()',
       'applyOnboardingProgress(saved)',
+      'return true',
     ])
+    expect(resumeDialog.match(/return null/g)).toHaveLength(2)
 
     const resumeLoader = sourceBetween('async function loadResumeApp()', 'async function importStoreMetadata()')
     expect(resumeLoader).not.toContain('initializeProgressTracking')
     expect(resumeLoader).not.toContain('viewStep')
 
     const mountedFlow = sourceBetween('onMounted(async () => {', 'onBeforeUnmount(() => {')
+    expect(mountedFlow).toContain('let onboardingMountAborted = false')
     expect(mountedFlow).toContain('let resumedFlow = false')
-    expect(mountedFlow).toContain('resumedFlow = await maybeResumeSavedOnboarding()')
+    expectSourceOrder(mountedFlow, [
+      'const resumeResult = await maybeResumeSavedOnboarding()',
+      'if (resumeResult === null)',
+      'onboardingMountAborted = true',
+      'return',
+      'resumedFlow = resumeResult',
+    ])
     expect(mountedFlow).toContain('const resumed = await loadResumeApp()')
     expect(mountedFlow).toContain('resumedFlow = resumed')
     expect(mountedFlow).not.toContain('.viewStep(')
@@ -93,7 +102,7 @@ describe('app onboarding progress analytics integration', () => {
     const finallyBlock = mountedFlow.slice(mountedFlow.indexOf('finally {'))
     expect(finallyBlock).toContain('initializeProgressTracking(resumedFlow)')
     expectSourceOrder(mountedFlow, [
-      'resumedFlow = await maybeResumeSavedOnboarding()',
+      'resumedFlow = resumeResult',
       'finally {',
       'isHydratingOnboarding.value = false',
       'await persistOnboardingProgress()',
@@ -130,17 +139,26 @@ describe('app onboarding progress analytics integration', () => {
     expect(onboardingSource).toContain('let onboardingInitialPersistInFlight = false')
 
     const mountedFlow = sourceBetween('onMounted(async () => {', 'onBeforeUnmount(() => {')
+    const persistenceGuard = 'if (!onboardingMountAborted) {'
+    const persistenceGuardStart = mountedFlow.indexOf(persistenceGuard)
+    const persistenceGuardEnd = mountedFlow.indexOf('\n    }\n', persistenceGuardStart)
+    expect(persistenceGuardStart).toBeGreaterThan(mountedFlow.indexOf('isHydratingOnboarding.value = false'))
+    expect(persistenceGuardEnd).toBeGreaterThan(persistenceGuardStart)
+    const initialPersistence = mountedFlow.slice(persistenceGuardStart, persistenceGuardEnd)
+    expect(initialPersistence.match(/persistOnboardingProgress\(\)/g)).toHaveLength(2)
     expect(mountedFlow).toContain('function finishOnboardingMount()')
     expectSourceOrder(mountedFlow, [
+      'let onboardingIdentityPersisted = false',
+      persistenceGuard,
       'onboardingInitialPersistInFlight = true',
-      'let onboardingIdentityPersisted = await persistOnboardingProgress()',
+      'onboardingIdentityPersisted = await persistOnboardingProgress()',
       'if (!onboardingIdentityPersisted && !onboardingFlowDisposed)',
       'onboardingIdentityPersisted = await persistOnboardingProgress()',
       'onboardingInitialPersistInFlight = false',
       'if (onboardingFlowDisposed)',
       'return',
       'isLoading.value = false',
-      'if (onboardingIdentityPersisted)',
+      'if (!onboardingMountAborted && onboardingIdentityPersisted)',
       'initializeProgressTracking(resumedFlow)',
       'finishOnboardingMount()',
     ])

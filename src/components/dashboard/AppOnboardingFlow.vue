@@ -539,7 +539,7 @@ async function maybeResumeSavedOnboarding() {
   await dialogStore.onDialogDismiss()
 
   if (onboardingFlowDisposed)
-    return false
+    return null
 
   if (dialogStore.lastButtonRole === 'onboarding-resume-restart') {
     onboardingTelemetry.recordResumeRestarted()
@@ -550,7 +550,7 @@ async function maybeResumeSavedOnboarding() {
   }
 
   if (dialogStore.lastButtonRole !== 'onboarding-resume-continue')
-    return false
+    return null
 
   onboardingTelemetry.recordResumeContinued()
   applyOnboardingProgress(saved)
@@ -1408,11 +1408,17 @@ function trackDashboardExplored() {
 onMounted(async () => {
   window.addEventListener(ONBOARDING_DASHBOARD_EXPLORED_EVENT, trackDashboardExplored)
   let resumedFlow = false
+  let onboardingMountAborted = false
   isLoading.value = true
   isHydratingOnboarding.value = true
   try {
     if (props.preOrg) {
-      resumedFlow = await maybeResumeSavedOnboarding()
+      const resumeResult = await maybeResumeSavedOnboarding()
+      if (resumeResult === null) {
+        onboardingMountAborted = true
+        return
+      }
+      resumedFlow = resumeResult
       return
     }
 
@@ -1431,16 +1437,19 @@ onMounted(async () => {
   }
   finally {
     isHydratingOnboarding.value = false
-    onboardingInitialPersistInFlight = true
-    let onboardingIdentityPersisted = await persistOnboardingProgress()
-    if (!onboardingIdentityPersisted && !onboardingFlowDisposed)
+    let onboardingIdentityPersisted = false
+    if (!onboardingMountAborted) {
+      onboardingInitialPersistInFlight = true
       onboardingIdentityPersisted = await persistOnboardingProgress()
-    onboardingInitialPersistInFlight = false
+      if (!onboardingIdentityPersisted && !onboardingFlowDisposed)
+        onboardingIdentityPersisted = await persistOnboardingProgress()
+      onboardingInitialPersistInFlight = false
+    }
     function finishOnboardingMount() {
       if (onboardingFlowDisposed)
         return
       isLoading.value = false
-      if (onboardingIdentityPersisted)
+      if (!onboardingMountAborted && onboardingIdentityPersisted)
         initializeProgressTracking(resumedFlow)
     }
     finishOnboardingMount()
