@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   classifyFrontendOnboardingDailySetupCliOutcome,
+  createFrontendOnboardingDailySetupCliOutcomeCounts,
   FRONTEND_ONBOARDING_DAILY_SETUP_CLI_OUTCOME_KEYS,
 } from '../supabase/functions/_backend/utils/frontend_onboarding_daily_setup_cli_outcomes_model.ts'
 
@@ -22,13 +23,18 @@ describe('classifyFrontendOnboardingDailySetupCliOutcome', () => {
     expect(classifyFrontendOnboardingDailySetupCliOutcome({ cliCopied, aiCopied, initRun, otherCliRun })).toBe(expected)
   })
 
-  it('prioritizes init when init and another CLI command both run', () => {
+  it.each([
+    [false, false, 'no_copy_init'],
+    [true, false, 'cli_copy_init'],
+    [false, true, 'ai_copy_init'],
+    [true, true, 'both_copy_init'],
+  ] as const)('prioritizes init over another CLI command for cliCopied=%s and aiCopied=%s', (cliCopied, aiCopied, expected) => {
     expect(classifyFrontendOnboardingDailySetupCliOutcome({
-      cliCopied: true,
-      aiCopied: true,
+      cliCopied,
+      aiCopied,
       initRun: true,
       otherCliRun: true,
-    })).toBe('both_copy_init')
+    })).toBe(expected)
   })
 
   it('exports every outcome key once in taxonomy order', () => {
@@ -47,5 +53,11 @@ describe('classifyFrontendOnboardingDailySetupCliOutcome', () => {
       'no_action',
     ])
     expect(new Set(FRONTEND_ONBOARDING_DAILY_SETUP_CLI_OUTCOME_KEYS)).toHaveLength(12)
+  })
+
+  it('creates zero counts in canonical outcome order', () => {
+    expect(Object.entries(createFrontendOnboardingDailySetupCliOutcomeCounts())).toEqual(
+      FRONTEND_ONBOARDING_DAILY_SETUP_CLI_OUTCOME_KEYS.map(key => [key, 0]),
+    )
   })
 })

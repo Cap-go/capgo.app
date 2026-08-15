@@ -14,17 +14,17 @@ export const FRONTEND_ONBOARDING_DAILY_SETUP_CLI_OUTCOME_KEYS = [
 ] as const
 
 export type FrontendOnboardingDailySetupCliOutcomeKey = typeof FRONTEND_ONBOARDING_DAILY_SETUP_CLI_OUTCOME_KEYS[number]
-export type FrontendOnboardingDailySetupCliOutcomeLifecycle = 'first_time' | 'returning'
-export type FrontendOnboardingDailySetupCliOutcomeEventKind = 'setup' | 'cli_copy' | 'ai_copy' | 'cli_command'
+export type FrontendOnboardingDailySetupCliLifecycle = 'first_time' | 'returning'
+export type FrontendOnboardingDailySetupCliEventKind = 'setup' | 'cli_copy' | 'ai_copy' | 'cli_command'
 
-export interface FrontendOnboardingDailySetupCliOutcomeEvent {
+export interface FrontendOnboardingDailySetupCliEvent {
   personId: string
   timestampMs: number
-  kind: FrontendOnboardingDailySetupCliOutcomeEventKind
+  kind: FrontendOnboardingDailySetupCliEventKind
   commandPath?: string
 }
 
-export interface FrontendOnboardingDailySetupCliOutcomeSignals {
+export interface FrontendOnboardingDailySetupCliSignals {
   cliCopied: boolean
   aiCopied: boolean
   initRun: boolean
@@ -33,31 +33,20 @@ export interface FrontendOnboardingDailySetupCliOutcomeSignals {
 
 export type FrontendOnboardingDailySetupCliOutcomeCounts = Record<FrontendOnboardingDailySetupCliOutcomeKey, number>
 
-export interface FrontendOnboardingDailySetupCliOutcomeDailyPoint {
+export interface FrontendOnboardingDailySetupCliOutcomePoint {
   date: string
   first_time: FrontendOnboardingDailySetupCliOutcomeCounts
   returning: FrontendOnboardingDailySetupCliOutcomeCounts
 }
 
 export function createFrontendOnboardingDailySetupCliOutcomeCounts(): FrontendOnboardingDailySetupCliOutcomeCounts {
-  return {
-    cli_copy_init: 0,
-    ai_copy_init: 0,
-    both_copy_init: 0,
-    no_copy_init: 0,
-    cli_copy_other_cli: 0,
-    ai_copy_other_cli: 0,
-    both_copy_other_cli: 0,
-    no_copy_other_cli: 0,
-    cli_copy_no_cli: 0,
-    ai_copy_no_cli: 0,
-    both_copy_no_cli: 0,
-    no_action: 0,
-  }
+  return Object.fromEntries(
+    FRONTEND_ONBOARDING_DAILY_SETUP_CLI_OUTCOME_KEYS.map(key => [key, 0]),
+  ) as FrontendOnboardingDailySetupCliOutcomeCounts
 }
 
 export function classifyFrontendOnboardingDailySetupCliOutcome(
-  signals: FrontendOnboardingDailySetupCliOutcomeSignals,
+  signals: FrontendOnboardingDailySetupCliSignals,
 ): FrontendOnboardingDailySetupCliOutcomeKey {
   const copyPrefix = signals.cliCopied && signals.aiCopied
     ? 'both_copy'
