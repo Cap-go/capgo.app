@@ -3,6 +3,7 @@ import { bigint, boolean, integer, jsonb, numeric, pgEnum, pgTable, primaryKey, 
 // do_not_change
 
 export const disableUpdatePgEnum = pgEnum('disable_update', ['major', 'minor', 'patch', 'version_number', 'none'])
+export const channelUpdatePackagePgEnum = pgEnum('channel_update_package', ['all', 'zip', 'delta', 'zip_from_builtin', 'delta_from_builtin'])
 
 export const apps = pgTable('apps', {
   created_at: timestamp('created_at').notNull().defaultNow(),
@@ -76,6 +77,7 @@ export const channels = pgTable('channels', {
   public: boolean('public').notNull().default(false),
   disable_auto_update_under_native: boolean('disable_auto_update_under_native').notNull().default(true),
   disable_auto_update: disableUpdatePgEnum('disable_auto_update').default('major').notNull(),
+  update_package: channelUpdatePackagePgEnum('update_package').default('all').notNull(),
   ios: boolean('ios').default(true).notNull(),
   android: boolean('android').notNull().default(true),
   electron: boolean('electron').notNull().default(true),
@@ -164,6 +166,7 @@ export const users = pgTable('users', {
     channel_self_rejected: true,
     cli_realtime_feed: true,
   }),
+  onboarding: jsonb('onboarding').notNull().default({}),
 })
 
 export const stripe_info = pgTable('stripe_info', {

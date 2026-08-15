@@ -43,6 +43,14 @@ const props = defineProps({
     type: String,
     default: '',
   },
+  orientation: {
+    type: String as () => 'horizontal' | 'vertical',
+    default: 'horizontal',
+  },
+  colors: {
+    type: Array as () => string[],
+    default: () => [],
+  },
 })
 
 const isDark = useDark()
@@ -80,7 +88,7 @@ const chartData = computed<ChartData<'bar'>>(() => ({
     {
       label: props.label,
       data: props.values,
-      backgroundColor: props.labels.map((_, index) => palette[index % palette.length]),
+      backgroundColor: props.labels.map((_, index) => props.colors[index] ?? palette[index % palette.length]),
       borderRadius: 6,
       borderSkipped: false,
     },
@@ -90,7 +98,7 @@ const chartData = computed<ChartData<'bar'>>(() => ({
 const chartOptions = computed<ChartOptions<'bar'>>(() => ({
   responsive: true,
   maintainAspectRatio: false,
-  indexAxis: 'y',
+  indexAxis: props.orientation === 'vertical' ? 'x' : 'y',
   layout: {
     padding: {
       left: 0,
@@ -112,7 +120,7 @@ const chartOptions = computed<ChartOptions<'bar'>>(() => ({
       padding: 12,
       callbacks: {
         label: (context) => {
-          const value = Number(context.parsed.x ?? 0)
+          const value = Number((props.orientation === 'vertical' ? context.parsed.y : context.parsed.x) ?? 0)
           if (props.valueMode === 'count')
             return `${context.dataset.label || props.label}: ${formatCountValue(value)}`
 
@@ -126,31 +134,39 @@ const chartOptions = computed<ChartOptions<'bar'>>(() => ({
       },
     },
   },
-  scales: {
-    x: {
-      beginAtZero: true,
-      suggestedMax: props.valueMode === 'percent' ? 100 : undefined,
-      grid: {
-        color: isDark.value ? 'rgba(75, 85, 99, 0.3)' : 'rgba(229, 231, 235, 0.8)',
-      },
-      ticks: {
-        color: isDark.value ? '#9ca3af' : '#6b7280',
-        callback: (value) => {
-          if (props.valueMode === 'count')
-            return formatCountValue(Number(value))
-          return `${value}%`
+  scales: props.orientation === 'vertical'
+    ? {
+        x: {
+          grid: { display: false },
+          ticks: { color: isDark.value ? '#9ca3af' : '#6b7280' },
+        },
+        y: {
+          beginAtZero: true,
+          suggestedMax: props.valueMode === 'percent' ? 100 : undefined,
+          grid: { color: isDark.value ? 'rgba(75, 85, 99, 0.3)' : 'rgba(229, 231, 235, 0.8)' },
+          ticks: {
+            color: isDark.value ? '#9ca3af' : '#6b7280',
+            precision: props.valueMode === 'count' ? 0 : undefined,
+            callback: value => props.valueMode === 'count' ? formatCountValue(Number(value)) : `${value}%`,
+          },
+        },
+      }
+    : {
+        x: {
+          beginAtZero: true,
+          suggestedMax: props.valueMode === 'percent' ? 100 : undefined,
+          grid: { color: isDark.value ? 'rgba(75, 85, 99, 0.3)' : 'rgba(229, 231, 235, 0.8)' },
+          ticks: {
+            color: isDark.value ? '#9ca3af' : '#6b7280',
+            precision: props.valueMode === 'count' ? 0 : undefined,
+            callback: value => props.valueMode === 'count' ? formatCountValue(Number(value)) : `${value}%`,
+          },
+        },
+        y: {
+          grid: { display: false },
+          ticks: { color: isDark.value ? '#9ca3af' : '#6b7280' },
         },
       },
-    },
-    y: {
-      grid: {
-        display: false,
-      },
-      ticks: {
-        color: isDark.value ? '#9ca3af' : '#6b7280',
-      },
-    },
-  },
 }))
 </script>
 

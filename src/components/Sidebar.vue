@@ -10,6 +10,7 @@ import IconDoc from '~icons/gg/loadbar-doc'
 import IconChart from '~icons/heroicons/chart-bar'
 import IconShield from '~icons/heroicons/shield-check'
 import IconDiscord from '~icons/ic/round-discord'
+import IconHeadset from '~icons/lucide/headset'
 import IconScanQrCode from '~icons/lucide/scan-qr-code'
 import IconApiKey from '~icons/mdi/shield-key'
 import IconAppStore from '~icons/simple-icons/appstore'
@@ -145,6 +146,13 @@ const tabs = computed<Tab[]>(() => {
       icon: IconDiscord,
       key: '#',
       onClick: () => window.open('https://discord.capgo.app', '_blank', 'noopener,noreferrer'),
+      redirect: true,
+    },
+    {
+      label: 'support',
+      icon: IconHeadset,
+      key: '#support',
+      onClick: () => window.open('https://support.capgo.app', '_blank', 'noopener,noreferrer'),
       redirect: true,
     },
   ]

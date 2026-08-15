@@ -9,7 +9,7 @@ import { toCsv } from '../utils/csv.ts'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
 import { cloudlog } from '../utils/logging.ts'
-import { appIdSchema, deviceIdSchema, hasInvalidQueryLimitInput, hasUnsafeStatsQueryText, MAX_QUERY_LIMIT, queryLimitSchema, safeQueryDateSchema, safeQueryTextSchema, statsActionSchema } from '../utils/privateAnalyticsValidation.ts'
+import { appIdSchema, deviceIdSchema, hasInvalidQueryLimitInput, hasUnsafeQueryText, hasUnsafeStatsQueryText, MAX_QUERY_LIMIT, queryLimitSchema, safeQueryDateSchema, safeQueryTextSchema, statsActionSchema } from '../utils/privateAnalyticsValidation.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { readStats, readStatsInsights } from '../utils/stats.ts'
 
@@ -23,6 +23,7 @@ interface DataStats {
   limit?: number
   actions?: string[]
   days?: number
+  versionName?: string
 }
 
 const ORDER_KEYS = ['created_at', 'app_id', 'device_id', 'action', 'version_name'] as const
@@ -87,6 +88,7 @@ const statsInsightsSchema = z.object({
   appId: appIdSchema,
   days: z.number().optional(),
   actions: z.array(statsActionSchema).optional(),
+  versionName: safeQueryTextSchema.optional(),
 })
 
 const insightPeriodDays = [1, 3, 7, 30] as const
@@ -142,6 +144,7 @@ interface StatsInsightsBody {
   appId: string
   days?: number
   actions?: string[]
+  versionName?: string
 }
 
 interface ExportBody extends StatsBody {
@@ -262,6 +265,8 @@ app.post('/insights', middlewareAuth(), async (c) => {
     throw simpleError('invalid_body', 'Invalid body', { error: parsed.error })
 
   const body = parsed.data as StatsInsightsBody
+  if (hasUnsafeQueryText(body.versionName))
+    throw simpleError('invalid_body', 'Invalid body')
   const days = normalizeStatsInsightsPeriodDays(body.days)
   if (!days)
     throw simpleError('invalid_days', 'days must be one of 1, 3, 7, or 30')
@@ -272,7 +277,8 @@ app.post('/insights', middlewareAuth(), async (c) => {
 
   const period = getStatsInsightsPeriod(days)
   const actions = body.actions?.length ? body.actions : defaultInsightActions
-  cloudlog({ requestId: c.get('requestId'), message: 'post private/stats/insights body', body: { appId: body.appId, days, actionCount: actions.length } })
+  const versionName = body.versionName?.trim() || undefined
+  cloudlog({ requestId: c.get('requestId'), message: 'post private/stats/insights body', body: { appId: body.appId, days, actionCount: actions.length, versionName } })
 
   return c.json({
     ...(await readStatsInsights(c, {
@@ -280,6 +286,7 @@ app.post('/insights', middlewareAuth(), async (c) => {
       start_date: period.start,
       end_date: period.end_exclusive,
       actions,
+      version_name: versionName,
     })),
     period: {
       requested_days: period.requested_days,

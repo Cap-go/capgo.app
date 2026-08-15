@@ -14,6 +14,9 @@ const CURRENT_END_MS = CURRENT_START_MS + 2 * DAY_MS
 function attempt(overrides: Partial<FrontendOnboardingAttempt> & Pick<FrontendOnboardingAttempt, 'attemptId' | 'intentMs'>): FrontendOnboardingAttempt {
   return {
     onboardingVersion: 3,
+    personId: overrides.attemptId,
+    aiInstructionsCopiedMs: [],
+    cliStartedMs: [],
     interactionEvents: [],
     detailsMs: null,
     organizationMs: null,
@@ -390,5 +393,103 @@ describe('buildFrontendOnboardingAnalytics', () => {
 
     expect(analytics.funnels.v3.find(stage => stage.key === 'details')?.reached).toBe(1)
     expect(analytics.v3_graph.nodes).toEqual([{ key: 'at_boundary', count: 1 }])
+  })
+
+  it.concurrent('classifies each setup-reaching v2 person once across mutually exclusive CLI outcomes', () => {
+    const setupMs = CURRENT_START_MS + 10 * MINUTE_MS
+    const analytics = buildFrontendOnboardingAnalytics([
+      attempt({
+        attemptId: 'cli-only',
+        onboardingVersion: 2,
+        personId: 'person-cli-only',
+        intentMs: CURRENT_START_MS,
+        setupMs,
+        cliStartedMs: [setupMs + MINUTE_MS],
+      }),
+      attempt({
+        attemptId: 'cli-and-ai-first-attempt',
+        onboardingVersion: 2,
+        personId: 'person-cli-and-ai',
+        intentMs: CURRENT_START_MS + MINUTE_MS,
+        setupMs: setupMs + MINUTE_MS,
+        aiInstructionsCopiedMs: [setupMs + 2 * MINUTE_MS],
+      }),
+      attempt({
+        attemptId: 'cli-and-ai-second-attempt',
+        onboardingVersion: 2,
+        personId: 'person-cli-and-ai',
+        intentMs: CURRENT_START_MS + 2 * MINUTE_MS,
+        setupMs: setupMs + 2 * MINUTE_MS,
+        cliStartedMs: [setupMs + 3 * MINUTE_MS],
+      }),
+      attempt({
+        attemptId: 'no-cli',
+        onboardingVersion: 2,
+        personId: 'person-no-cli',
+        intentMs: CURRENT_START_MS + 3 * MINUTE_MS,
+        setupMs: setupMs + 3 * MINUTE_MS,
+      }),
+      attempt({
+        attemptId: 'ai-without-cli',
+        onboardingVersion: 2,
+        personId: 'person-ai-without-cli',
+        intentMs: CURRENT_START_MS + 4 * MINUTE_MS,
+        setupMs: setupMs + 4 * MINUTE_MS,
+        aiInstructionsCopiedMs: [setupMs + 5 * MINUTE_MS],
+      }),
+      attempt({
+        attemptId: 'v1-ignored',
+        personId: 'person-v1',
+        onboardingVersion: 1,
+        intentMs: CURRENT_START_MS + 5 * MINUTE_MS,
+        setupMs: setupMs + 5 * MINUTE_MS,
+        cliStartedMs: [setupMs + 6 * MINUTE_MS],
+      }),
+    ], CURRENT_START_MS, CURRENT_END_MS)
+
+    expect(analytics.v2_setup_cli_outcomes).toEqual({
+      total_users: 4,
+      cli_only: 1,
+      cli_and_ai_instructions: 1,
+      no_cli: 2,
+    })
+  })
+
+  it.concurrent('ignores CLI and AI signals outside the 24 hours after setup', () => {
+    const setupMs = CURRENT_START_MS + MINUTE_MS
+    const analytics = buildFrontendOnboardingAnalytics([
+      attempt({
+        attemptId: 'windowed-outcomes',
+        onboardingVersion: 2,
+        personId: 'person-windowed',
+        intentMs: CURRENT_START_MS,
+        setupMs,
+        cliStartedMs: [setupMs - 1, setupMs + FRONTEND_ONBOARDING_FOLLOWUP_MS + 1],
+        aiInstructionsCopiedMs: [setupMs + FRONTEND_ONBOARDING_FOLLOWUP_MS + 1],
+      }),
+      attempt({
+        attemptId: 'boundary-outcomes',
+        onboardingVersion: 2,
+        personId: 'person-boundary',
+        intentMs: CURRENT_START_MS + MINUTE_MS,
+        setupMs: setupMs + MINUTE_MS,
+        cliStartedMs: [setupMs + MINUTE_MS + FRONTEND_ONBOARDING_FOLLOWUP_MS],
+        aiInstructionsCopiedMs: [setupMs + MINUTE_MS],
+      }),
+      attempt({
+        attemptId: 'no-setup',
+        onboardingVersion: 2,
+        personId: 'person-no-setup',
+        intentMs: CURRENT_START_MS + 2 * MINUTE_MS,
+        cliStartedMs: [setupMs + 3 * MINUTE_MS],
+      }),
+    ], CURRENT_START_MS, CURRENT_END_MS)
+
+    expect(analytics.v2_setup_cli_outcomes).toEqual({
+      total_users: 2,
+      cli_only: 0,
+      cli_and_ai_instructions: 1,
+      no_cli: 1,
+    })
   })
 })

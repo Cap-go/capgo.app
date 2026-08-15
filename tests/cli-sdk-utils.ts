@@ -685,6 +685,7 @@ export function createTestSDK(apikey: string = APIKEY_TEST_ORG_SUPER_ADMIN) {
     android,
     selfAssign,
     disableAutoUpdate,
+    updatePackage,
     dev,
     emulator,
     device,
@@ -699,6 +700,7 @@ export function createTestSDK(apikey: string = APIKEY_TEST_ORG_SUPER_ADMIN) {
     android?: boolean
     selfAssign?: boolean
     disableAutoUpdate?: Database['public']['Enums']['disable_update']
+    updatePackage?: Database['public']['Enums']['channel_update_package']
     dev?: boolean
     emulator?: boolean
     device?: boolean
@@ -723,6 +725,7 @@ export function createTestSDK(apikey: string = APIKEY_TEST_ORG_SUPER_ADMIN) {
       || android != null
       || selfAssign != null
       || disableAutoUpdate != null
+      || updatePackage != null
       || dev != null
       || emulator != null
       || device != null
@@ -754,6 +757,7 @@ export function createTestSDK(apikey: string = APIKEY_TEST_ORG_SUPER_ADMIN) {
         ...(typeof android === 'boolean' ? { android } : {}),
         ...(typeof selfAssign === 'boolean' ? { allow_device_self_set: selfAssign } : {}),
         ...(disableAutoUpdate == null ? {} : { disable_auto_update: disableAutoUpdate }),
+        ...(updatePackage == null ? {} : { update_package: updatePackage }),
         ...(typeof dev === 'boolean' ? { allow_dev: dev } : {}),
         ...(typeof emulator === 'boolean' ? { allow_emulator: emulator } : {}),
         ...(typeof device === 'boolean' ? { allow_device: device } : {}),

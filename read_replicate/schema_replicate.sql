@@ -3,10 +3,23 @@ BEGIN;
 DROP TABLE IF EXISTS public.channel_devices, public.manifest, public.onboarding_demo_data, public.app_versions, public.channels, public.apps, public.notifications, public.org_users, public.orgs, public.stripe_info CASCADE;
 DROP SEQUENCE IF EXISTS public.app_versions_id_seq, public.channel_devices_id_seq, public.channel_id_seq, public.manifest_id_seq, public.org_users_id_seq, public.stripe_info_id_seq CASCADE;
 DROP FUNCTION IF EXISTS public.one_month_ahead();
-DROP TYPE IF EXISTS public.manifest_entry, public.disable_update, public.stripe_status;
+DROP TYPE IF EXISTS public.channel_update_package, public.manifest_entry, public.disable_update, public.stripe_status;
 
 --
 --
+
+
+--
+-- Name: channel_update_package; Type: TYPE; Schema: public; Owner: -
+--
+
+CREATE TYPE public.channel_update_package AS ENUM (
+    'all',
+    'zip',
+    'delta',
+    'zip_from_builtin',
+    'delta_from_builtin'
+);
 
 
 --
@@ -105,8 +118,7 @@ CREATE TABLE public.apps (
     created_from_onboarding boolean DEFAULT false NOT NULL,
     onboarding_completed_at timestamp with time zone,
     onboarding jsonb DEFAULT '{}'::jsonb NOT NULL,
-    CONSTRAINT apps_build_timeout_seconds_check CHECK (((build_timeout_seconds >= 300) AND (build_timeout_seconds <= 21600))),
-    CONSTRAINT apps_onboarding_valid CHECK (((jsonb_typeof(onboarding) = 'object'::text) AND ((NOT (onboarding ? 'features'::text)) OR (jsonb_typeof((onboarding -> 'features'::text)) = 'object'::text))))
+    CONSTRAINT apps_build_timeout_seconds_check CHECK (((build_timeout_seconds >= 300) AND (build_timeout_seconds <= 21600)))
 );
 
 ALTER TABLE ONLY public.apps REPLICA IDENTITY FULL;
@@ -233,6 +245,7 @@ CREATE TABLE public.channels (
     auto_pause_cooldown_minutes integer DEFAULT 60 NOT NULL,
     auto_pause_last_triggered_at timestamp with time zone,
     auto_pause_last_checked_at timestamp with time zone,
+    update_package public.channel_update_package DEFAULT 'all'::public.channel_update_package NOT NULL,
     CONSTRAINT channels_auto_pause_action_check CHECK ((auto_pause_action = ANY (ARRAY['pause'::text, 'rollback'::text, 'notify'::text]))),
     CONSTRAINT channels_auto_pause_confidence_check CHECK (((auto_pause_confidence > (0)::numeric) AND (auto_pause_confidence < (1)::numeric))),
     CONSTRAINT channels_auto_pause_cooldown_minutes_check CHECK (((auto_pause_cooldown_minutes >= 0) AND (auto_pause_cooldown_minutes <= 10080))),
@@ -491,6 +504,14 @@ ALTER TABLE ONLY public.apps
 
 
 --
+-- Name: apps apps_onboarding_valid; Type: CHECK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE public.apps
+    ADD CONSTRAINT apps_onboarding_valid CHECK (((jsonb_typeof(onboarding) = 'object'::text) AND ((NOT (onboarding ? 'features'::text)) OR (jsonb_typeof((onboarding -> 'features'::text)) = 'object'::text)) AND ((NOT (onboarding ? 'setup'::text)) OR ((jsonb_typeof((onboarding -> 'setup'::text)) = 'object'::text) AND ((NOT ((onboarding -> 'setup'::text) ? 'source'::text)) OR (((onboarding -> 'setup'::text) ->> 'source'::text) = ANY (ARRAY['manual'::text, 'cli'::text, 'mcp'::text, 'ai'::text]))) AND ((NOT ((onboarding -> 'setup'::text) ? 'outcome'::text)) OR (((onboarding -> 'setup'::text) ->> 'outcome'::text) = ANY (ARRAY['in_progress'::text, 'completed'::text, 'skipped'::text, 'switched_to_manual'::text]))))) AND ((NOT (onboarding ? 'source'::text)) OR ((onboarding ->> 'source'::text) = ANY (ARRAY['manual'::text, 'cli'::text, 'mcp'::text, 'ai'::text]))) AND ((NOT (onboarding ? 'outcome'::text)) OR ((onboarding ->> 'outcome'::text) = ANY (ARRAY['in_progress'::text, 'completed'::text, 'skipped'::text, 'switched_to_manual'::text]))))) NOT VALID;
+
+
+--
 -- Name: apps apps_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -614,6 +635,13 @@ CREATE INDEX app_versions_cli_version_idx ON public.app_versions USING btree (cl
 --
 
 CREATE INDEX app_versions_r2_path_idx ON public.app_versions USING btree (r2_path);
+
+
+--
+-- Name: apps_created_at_onboarding_setup_source_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX apps_created_at_onboarding_setup_source_idx ON public.apps USING btree (created_at, (((onboarding -> 'setup'::text) ->> 'source'::text)));
 
 
 --

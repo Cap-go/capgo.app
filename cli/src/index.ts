@@ -592,6 +592,7 @@ Example: npx @capgo/cli@latest channel set production com.example.app --bundle 1
   .option('--self-assign', `Allow device to self-assign to this channel`)
   .option('--no-self-assign', `Disable devices to self-assign to this channel`)
   .option('--disable-auto-update <disableAutoUpdate>', `Block updates by type: major, minor, metadata, patch, or none (allows all)`)
+  .option('--update-package <updatePackage>', `Serve zip, delta, or both: all, zip, delta, zip_from_builtin, or delta_from_builtin`)
   .option('--rollout-bundle <rolloutBundle>', `Bundle version to release gradually on this channel`)
   .option('--rollout-percentage <rolloutPercentage>', `Rollout percentage from 0 to 100`, value => Number.parseFloat(value))
   .option('--rollout-percentage-bps <rolloutPercentageBps>', `Rollout percentage in basis points from 0 to 10000`, value => Number.parseInt(value, 10))

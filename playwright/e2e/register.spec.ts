@@ -1,6 +1,10 @@
 import type { Page } from '@playwright/test'
 import { expect, test } from '../support/commands'
 
+async function loginToOnboarding(page: Page, email: string, password: string) {
+  await page.login(email, password, /\/onboarding\/app/)
+}
+
 async function expectProtectedRouteRedirect(page: Page, targetPath: string, expectedUrl: RegExp, expectedSelector: string) {
   const redirectedPage = await page.context().newPage()
 
@@ -68,6 +72,50 @@ test.describe('Registration', () => {
     await expect(page.locator('[data-test="app-onboarding-command-copy"]')).toBeVisible({ timeout: 60000 })
     await expect(page.locator('[data-test="onboarding-technical-invite"]')).toBeVisible()
     await expect(page).toHaveURL(/\/onboarding\/app/)
+  })
+
+  test('should offer to continue or restart onboarding after a dropout', async ({ page }) => {
+    const uniqueSuffix = Date.now()
+    const email = `onboarding-resume-e2e-${uniqueSuffix}@example.com`
+    const appName = `Resume App ${uniqueSuffix}`
+    const password = 'Password123!'
+
+    await page.fill('[data-test="email"]', email)
+    await page.fill('[data-test="first_name"]', 'Resume')
+    await page.fill('[data-test="last_name"]', 'User')
+    await page.fill('[data-test="password"]', password)
+    await page.fill('[data-test="confirm-password"]', password)
+    await page.click('[data-test="submit"]')
+
+    await page.waitForURL(/\/onboarding\/app/)
+    await page.click('[data-test="onboarding-intent-ota"]')
+    await page.click('[data-test="app-onboarding-continue-intent"]')
+    await page.fill('[data-test="app-onboarding-name"]', appName)
+    await Promise.all([
+      page.waitForResponse((response) => {
+        if (!response.url().includes('/rest/v1/users') || response.request().method() !== 'PATCH' || !response.ok())
+          return false
+        return (response.request().postData() ?? '').includes('"step":"organization"')
+      }),
+      page.click('[data-test="app-onboarding-continue"]'),
+    ])
+    await expect(page.locator('[data-test="onboarding-org-name"]')).toHaveValue(appName)
+
+    await page.click('[data-test="onboarding-logout"]')
+    await page.waitForURL(/\/login\/?$/)
+    await loginToOnboarding(page, email, password)
+
+    await expect(page.locator('[data-test="onboarding-resume-continue"]')).toBeVisible()
+    await page.locator('[data-test="onboarding-resume-continue"]').click()
+    await expect(page.locator('[data-test="onboarding-org-name"]')).toHaveValue(appName)
+
+    await page.click('[data-test="onboarding-logout"]')
+    await page.waitForURL(/\/login\/?$/)
+    await loginToOnboarding(page, email, password)
+    await expect(page.locator('[data-test="onboarding-resume-restart"]')).toBeVisible()
+    await page.locator('[data-test="onboarding-resume-restart"]').click()
+    await expect(page.locator('[data-test="onboarding-intent-ota"]')).toBeVisible()
+    await expect(page.locator('[data-test="onboarding-org-name"]')).toHaveCount(0)
   })
 
   test('should allow new users to log out from org onboarding', async ({ page }) => {

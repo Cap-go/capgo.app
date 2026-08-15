@@ -44,6 +44,7 @@ import type {
   ZipBundleOptions,
 } from './schemas/sdk'
 import type { Organization } from './utils'
+import { buildCliRequestHeaders } from './analytics/cli-headers'
 import { checkAppExistsAndHasPermissionOrgErr } from './api/app'
 import { getActiveAppVersions } from './api/versions'
 import { addAppInternal } from './app/add'
@@ -74,7 +75,6 @@ import { deleteOrganizationInternal } from './organization/delete'
 import { listOrganizationsInternal } from './organization/list'
 import { setOrganizationInternal } from './organization/set'
 import { getUserIdInternal } from './user/account'
-import { buildCliRequestHeaders } from './analytics/cli-headers'
 import { createSupabaseClient, findSavedKey, getConfig, getLocalConfig } from './utils'
 import { parseSecurityPolicyError } from './utils/security_policy_errors'
 import { normalizeAutoBumpInput } from './versionHelpers'
@@ -875,6 +875,7 @@ export class CapgoSDK {
         android: options.android,
         selfAssign: options.selfAssign,
         disableAutoUpdate: options.disableAutoUpdate ?? undefined,
+        updatePackage: options.updatePackage,
         dev: options.dev,
         emulator: options.emulator,
         device: options.device,
@@ -1211,7 +1212,7 @@ export class CapgoSDK {
 
       const response = await fetch(`${localConfig.hostApi}/private/stats`, {
         method: 'POST',
-headers: buildCliRequestHeaders({ 'Content-Type': 'application/json', capgkey: apikey }),
+        headers: buildCliRequestHeaders({ 'Content-Type': 'application/json', 'capgkey': apikey }),
         body: JSON.stringify(query),
       })
 

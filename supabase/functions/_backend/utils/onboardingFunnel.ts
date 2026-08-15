@@ -7,6 +7,48 @@ export interface AdminOnboardingActivationCohort {
   activation_window_end: Date | string
 }
 
+export const ADMIN_ONBOARDING_WIZARD_BUCKETS = [
+  'not_started',
+  'intent',
+  'details',
+  'organization',
+  'choice',
+  'install',
+  'setup',
+  'completed',
+  'abandoned',
+] as const
+
+export type AdminOnboardingWizardBucket = typeof ADMIN_ONBOARDING_WIZARD_BUCKETS[number]
+
+export interface AdminOnboardingWizardDropoff {
+  step: AdminOnboardingWizardBucket
+  count: number
+}
+
+export function buildAdminOnboardingWizardDropoff(
+  rows: Array<{ step?: unknown, count?: unknown }>,
+): AdminOnboardingWizardDropoff[] {
+  const counts = Object.fromEntries(
+    ADMIN_ONBOARDING_WIZARD_BUCKETS.map(step => [step, 0]),
+  ) as Record<AdminOnboardingWizardBucket, number>
+
+  for (const row of rows) {
+    const count = Number(row.count) || 0
+    if (!count)
+      continue
+    const step = typeof row.step === 'string' && (ADMIN_ONBOARDING_WIZARD_BUCKETS as readonly string[]).includes(row.step)
+      ? row.step as AdminOnboardingWizardBucket
+      : 'not_started'
+    counts[step] += count
+  }
+
+  return ADMIN_ONBOARDING_WIZARD_BUCKETS.map(step => ({
+    step,
+    count: counts[step],
+  }))
+}
+
 export interface AdminOnboardingActivationMetrics {
   orgs_with_production_device: number
   orgs_with_update_download: number

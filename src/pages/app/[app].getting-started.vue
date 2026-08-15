@@ -4,6 +4,7 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import IconCheck from '~icons/lucide/check'
+import AppOnboardingCliSteps from '~/components/dashboard/AppOnboardingCliSteps.vue'
 import AppPageFrame from '~/components/dashboard/AppPageFrame.vue'
 import { useAppPage } from '~/composables/useAppPage'
 import { useSupabase } from '~/services/supabase'
@@ -234,39 +235,48 @@ watch(() => id.value, async (appId) => {
             <li
               v-for="step in group.steps"
               :key="step.id"
-              class="flex items-center gap-3 px-4 py-3"
+              class="px-4 py-3"
               :data-test="`getting-started-step-${step.id}`"
             >
-              <span
-                class="flex size-6 shrink-0 items-center justify-center rounded-full"
-                :class="step.done ? 'bg-emerald-600 text-white' : 'border-2 border-slate-300 dark:border-slate-600'"
-                :aria-hidden="true"
-              >
-                <IconCheck v-if="step.done" class="size-3.5" />
-              </span>
-              <div class="min-w-0 flex-1">
-                <p class="font-semibold text-slate-950 dark:text-white">
-                  {{ t(step.titleKey) }}
-                </p>
-                <p class="text-sm leading-5 text-slate-500 dark:text-slate-400">
-                  {{ t(step.descKey) }}
-                </p>
+              <div class="flex items-center gap-3">
+                <span
+                  class="flex size-6 shrink-0 items-center justify-center rounded-full"
+                  :class="step.done ? 'bg-emerald-600 text-white' : 'border-2 border-slate-300 dark:border-slate-600'"
+                  :aria-hidden="true"
+                >
+                  <IconCheck v-if="step.done" class="size-3.5" />
+                </span>
+                <div class="min-w-0 flex-1">
+                  <p class="font-semibold text-slate-950 dark:text-white">
+                    {{ t(step.titleKey) }}
+                  </p>
+                  <p class="text-sm leading-5 text-slate-500 dark:text-slate-400">
+                    {{ t(step.descKey) }}
+                  </p>
+                </div>
+                <span
+                  v-if="step.done"
+                  class="shrink-0 text-sm font-medium text-slate-400 dark:text-slate-500"
+                >
+                  {{ t('getting-started-done') }}
+                </span>
+                <button
+                  v-else
+                  type="button"
+                  class="d-btn d-btn-ghost d-btn-sm h-11 min-h-11 shrink-0 px-3 text-azure-700 dark:text-azure-300"
+                  data-test="getting-started-step-action"
+                  @click="runStep(step)"
+                >
+                  {{ t(step.actionKey) }}
+                </button>
               </div>
-              <span
-                v-if="step.done"
-                class="shrink-0 text-sm font-medium text-slate-400 dark:text-slate-500"
-              >
-                {{ t('getting-started-done') }}
-              </span>
-              <button
-                v-else
-                type="button"
-                class="d-btn d-btn-ghost d-btn-sm h-11 min-h-11 shrink-0 px-3 text-azure-700 dark:text-azure-300"
-                data-test="getting-started-step-action"
-                @click="runStep(step)"
-              >
-                {{ t(step.actionKey) }}
-              </button>
+              <AppOnboardingCliSteps
+                v-if="step.id === 'cli_install'"
+                :key="id"
+                class="mt-3"
+                :app-id="id"
+                :initial-onboarding="app.onboarding"
+              />
             </li>
           </ul>
         </details>

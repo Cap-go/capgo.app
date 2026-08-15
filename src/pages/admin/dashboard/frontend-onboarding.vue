@@ -9,6 +9,7 @@ import type { FrontendOnboardingAnalytics } from '~/services/adminFrontendOnboar
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
+import AdminBarChart from '~/components/admin/AdminBarChart.vue'
 import AdminDailyConversionChart from '~/components/admin/AdminDailyConversionChart.vue'
 import AdminFilterBar from '~/components/admin/AdminFilterBar.vue'
 import AdminFunnelChart from '~/components/admin/AdminFunnelChart.vue'
@@ -148,6 +149,24 @@ const v1FunnelSummaries = computed(() => buildFrontendOnboardingFunnelSummaries(
 const v3FunnelSummaries = computed(() => buildFrontendOnboardingFunnelSummaries(visibleAnalytics.value?.funnels.v3 ?? []))
 const hasDailyAttempts = computed(() => (visibleAnalytics.value?.daily_attempts ?? [])
   .some(day => day.v1_attempts > 0 || day.v2_attempts > 0 || day.v3_attempts > 0))
+const setupCliOutcomes = computed(() => visibleAnalytics.value?.v2_setup_cli_outcomes ?? {
+  total_users: 0,
+  cli_only: 0,
+  cli_and_ai_instructions: 0,
+  no_cli: 0,
+})
+const setupCliOutcomeLabels = computed(() => [
+  t('frontend-onboarding-setup-cli-only'),
+  t('frontend-onboarding-setup-cli-and-ai'),
+  t('frontend-onboarding-setup-no-cli'),
+])
+const setupCliOutcomeValues = computed(() => [
+  setupCliOutcomes.value.cli_only,
+  setupCliOutcomes.value.cli_and_ai_instructions,
+  setupCliOutcomes.value.no_cli,
+])
+const setupCliOutcomeColors = ['#119eff', '#8b5cf6', '#94a3b8']
+const hasSetupCliOutcomeData = computed(() => setupCliOutcomes.value.total_users > 0)
 
 const onboardingGraphV3 = computed<AdminOnboardingJourneyGraphConfig>(() => {
   const funnel = visibleAnalytics.value?.funnels.v3 ?? []
@@ -487,6 +506,35 @@ displayStore.defaultBack = '/dashboard'
               <AdminOnboardingJourneyGraph v-else :config="onboardingGraphV3" />
             </div>
           </section>
+
+          <ChartCard
+            :title="t('frontend-onboarding-setup-cli-outcomes-v2')"
+            :total="setupCliOutcomes.total_users"
+            :unit="t('frontend-onboarding-people')"
+            :is-loading="isLoadingStats"
+            :has-data="hasSetupCliOutcomeData"
+          >
+            <template #header>
+              <div class="min-w-0">
+                <h2 class="text-xl font-semibold leading-tight text-slate-900 dark:text-white sm:text-2xl">
+                  {{ t('frontend-onboarding-setup-cli-outcomes-v2') }}
+                </h2>
+                <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
+                  {{ t('frontend-onboarding-setup-cli-outcomes-description') }}
+                </p>
+              </div>
+            </template>
+            <AdminBarChart
+              :labels="setupCliOutcomeLabels"
+              :values="setupCliOutcomeValues"
+              :colors="setupCliOutcomeColors"
+              :label="t('frontend-onboarding-people')"
+              :total="setupCliOutcomes.total_users"
+              value-mode="count"
+              orientation="vertical"
+              :is-loading="isLoadingStats"
+            />
+          </ChartCard>
 
           <section class="p-6 bg-white border rounded-lg shadow-lg border-slate-300 dark:bg-gray-800 dark:border-slate-900">
             <h2 class="text-lg font-semibold text-slate-900 dark:text-white">

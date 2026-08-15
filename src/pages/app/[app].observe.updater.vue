@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { Database } from '~/types/supabase.types'
-import { computed, ref, watchEffect } from 'vue'
+import { computed, ref, useId, watch, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
@@ -83,6 +83,9 @@ const lastPath = ref('')
 const isLoading = ref(false)
 const insightsLoading = ref(false)
 const selectedDays = ref<PeriodDayOption>(7)
+const selectedVersionName = ref('')
+const bundleNames = ref<string[]>([])
+const versionFilterId = useId()
 const app = ref<Database['public']['Tables']['apps']['Row']>()
 const insights = ref<LogInsightsResponse | null>(null)
 const publicChannels = ref<{ id: number, name: string, versionName: string }[]>([])
@@ -153,6 +156,36 @@ function formatLastSeen(value: string | null | undefined) {
   return value ? formatLocalDateTime(value) : '-'
 }
 
+function ensureBundleName(name: string) {
+  if (name && !bundleNames.value.includes(name))
+    bundleNames.value = [name, ...bundleNames.value]
+}
+
+async function loadBundleNames() {
+  if (!id.value)
+    return
+
+  const appId = id.value
+  const { data, error } = await supabase
+    .from('app_versions')
+    .select('name')
+    .eq('app_id', appId)
+    .eq('deleted', false)
+    .order('created_at', { ascending: false })
+    .limit(200)
+
+  if (appId !== id.value)
+    return
+
+  if (error || !data) {
+    bundleNames.value = selectedVersionName.value ? [selectedVersionName.value] : []
+    return
+  }
+
+  bundleNames.value = [...new Set(data.map(row => row.name).filter(Boolean))]
+  ensureBundleName(selectedVersionName.value)
+}
+
 async function loadAppInfo() {
   try {
     const { data: dataApp } = await supabase
@@ -213,6 +246,7 @@ async function fetchInsights() {
       body: JSON.stringify({
         appId: id.value,
         days: selectedDays.value,
+        ...(selectedVersionName.value ? { versionName: selectedVersionName.value } : {}),
       }),
     })
 
@@ -221,12 +255,17 @@ async function fetchInsights() {
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}))
+      if (requestId !== latestInsightsRequest)
+        return
       console.error('Failed to fetch log insights:', errorData)
       toast.error(t('failed-to-fetch-log-insights'))
       return
     }
 
-    insights.value = await response.json() as LogInsightsResponse
+    const payload = await response.json() as LogInsightsResponse
+    if (requestId !== latestInsightsRequest)
+      return
+    insights.value = payload
   }
   catch (error) {
     if (requestId !== latestInsightsRequest)
@@ -243,7 +282,7 @@ async function fetchInsights() {
 async function refreshData() {
   isLoading.value = true
   try {
-    await loadAppInfo()
+    await Promise.all([loadAppInfo(), loadBundleNames()])
     await fetchInsights()
   }
   catch (error) {
@@ -257,6 +296,24 @@ async function selectPeriod(option: PeriodDayOption) {
     return
   selectedDays.value = option
   await fetchInsights()
+}
+
+async function applyVersionFilter(name: string) {
+  if (selectedVersionName.value === name)
+    return
+  ensureBundleName(name)
+  selectedVersionName.value = name
+  const query = { ...route.query }
+  if (name)
+    query.version = name
+  else
+    delete query.version
+  await router.replace({ query })
+  await fetchInsights()
+}
+
+function onVersionSelectChange(event: Event) {
+  void applyVersionFilter((event.target as HTMLSelectElement).value)
 }
 
 function logQuery(action?: string) {
@@ -279,10 +336,20 @@ watchEffect(async () => {
   if (route.params.app && lastPath.value !== route.path) {
     lastPath.value = route.path
     id.value = route.params.app as string
+    selectedVersionName.value = typeof route.query.version === 'string' ? route.query.version : ''
     await refreshData()
     displayStore.NavTitle = ''
     displayStore.defaultBack = '/apps'
   }
+})
+
+watch(() => typeof route.query.version === 'string' ? route.query.version : '', async (version) => {
+  if (selectedVersionName.value === version)
+    return
+  ensureBundleName(version)
+  selectedVersionName.value = version
+  if (id.value)
+    await fetchInsights()
 })
 </script>
 
@@ -303,7 +370,31 @@ watchEffect(async () => {
               {{ t('log-insights-period-help') }}
             </p>
           </div>
-          <PeriodDaySelector :model-value="selectedDays" @update:model-value="selectPeriod" />
+          <div class="flex flex-col items-stretch gap-3 sm:flex-row sm:items-end">
+            <div class="min-w-0 sm:w-56">
+              <label
+                :for="versionFilterId"
+                class="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400"
+              >
+                {{ t('version') }}
+              </label>
+              <select
+                :id="versionFilterId"
+                class="d-select d-select-bordered mt-1 h-9 min-h-9 w-full py-0 text-sm"
+                :value="selectedVersionName"
+                data-test="observe-updater-version-filter"
+                @change="onVersionSelectChange"
+              >
+                <option value="">
+                  {{ t('all-versions') }}
+                </option>
+                <option v-for="name in bundleNames" :key="name" :value="name">
+                  {{ name }}
+                </option>
+              </select>
+            </div>
+            <PeriodDaySelector :model-value="selectedDays" @update:model-value="selectPeriod" />
+          </div>
         </div>
 
         <div
@@ -479,9 +570,20 @@ watchEffect(async () => {
                     </tr>
                   </thead>
                   <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
-                    <tr v-for="version in insights.versions" :key="`${version.action}-${version.version_name}`">
+                    <tr
+                      v-for="version in insights.versions"
+                      :key="`${version.action}-${version.version_name}`"
+                      :class="selectedVersionName === version.version_name ? 'bg-azure-50/70 dark:bg-azure-400/5' : ''"
+                    >
                       <td class="px-0 py-2 font-medium text-slate-900 dark:text-white">
-                        {{ version.version_name }}
+                        <button
+                          type="button"
+                          class="text-left hover:text-azure-600 focus:outline-hidden focus-visible:rounded-sm focus-visible:ring-2 focus-visible:ring-azure-500 dark:hover:text-azure-300"
+                          :aria-pressed="selectedVersionName === version.version_name"
+                          @click="applyVersionFilter(selectedVersionName === version.version_name ? '' : version.version_name)"
+                        >
+                          {{ version.version_name }}
+                        </button>
                       </td>
                       <td class="px-3 py-2 text-slate-600 dark:text-slate-300">
                         {{ formatAction(version.action) }}

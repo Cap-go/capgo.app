@@ -6,7 +6,7 @@ import {
   getAdminOnboardingTelemetry,
   isAdminOnboardingTelemetryWithinRetention,
 } from '../supabase/functions/_backend/utils/cloudflare.ts'
-import { getAdminOnboardingActivationMetrics } from '../supabase/functions/_backend/utils/onboardingFunnel.ts'
+import { buildAdminOnboardingWizardDropoff, getAdminOnboardingActivationMetrics } from '../supabase/functions/_backend/utils/onboardingFunnel.ts'
 
 vi.mock('hono/adapter', async (importOriginal) => {
   const actual = await importOriginal<typeof import('hono/adapter')>()
@@ -185,5 +185,26 @@ describe('admin onboarding activation telemetry', () => {
       orgs_with_update_download: 0,
       trend_by_date: new Map(),
     })
+  })
+})
+
+describe('admin onboarding wizard drop-off', () => {
+  it.concurrent('fills every wizard bucket and folds unknown steps into not_started', () => {
+    expect(buildAdminOnboardingWizardDropoff([
+      { step: 'details', count: 4 },
+      { step: 'completed', count: 2 },
+      { step: 'mystery', count: 1 },
+      { step: 'details', count: 3 },
+    ])).toEqual([
+      { step: 'not_started', count: 1 },
+      { step: 'intent', count: 0 },
+      { step: 'details', count: 7 },
+      { step: 'organization', count: 0 },
+      { step: 'choice', count: 0 },
+      { step: 'install', count: 0 },
+      { step: 'setup', count: 0 },
+      { step: 'completed', count: 2 },
+      { step: 'abandoned', count: 0 },
+    ])
   })
 })

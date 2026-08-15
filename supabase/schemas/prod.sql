@@ -124,6 +124,18 @@ CREATE TYPE "public"."action_type" AS ENUM (
 ALTER TYPE "public"."action_type" OWNER TO "postgres";
 
 
+CREATE TYPE "public"."channel_update_package" AS ENUM (
+    'all',
+    'zip',
+    'delta',
+    'zip_from_builtin',
+    'delta_from_builtin'
+);
+
+
+ALTER TYPE "public"."channel_update_package" OWNER TO "postgres";
+
+
 CREATE TYPE "public"."credit_metric_type" AS ENUM (
     'mau',
     'bandwidth',
@@ -2499,6 +2511,89 @@ ALTER FUNCTION "public"."channel_readable_channel_ids"() OWNER TO "postgres";
 
 
 COMMENT ON FUNCTION "public"."channel_readable_channel_ids"() IS 'Returns role-bound or explicitly allowed channel IDs with channel.read after concrete-ID evaluation, so explicit channel denies win.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."channel_update_package_mismatch"("p_update_package" "public"."channel_update_package", "p_version_id" bigint, "p_channel_name" "text") RETURNS "text"
+    LANGUAGE "plpgsql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  v_name text;
+  v_storage_provider text;
+  v_r2_path text;
+  v_external_url text;
+  v_legacy_manifest public.manifest_entry[];
+  v_has_zip boolean;
+  v_has_delta boolean;
+BEGIN
+  IF p_version_id IS NULL OR p_update_package IS NULL OR p_update_package = 'all' THEN
+    RETURN NULL;
+  END IF;
+
+  SELECT
+    app_version.name,
+    app_version.storage_provider,
+    app_version.r2_path,
+    app_version.external_url,
+    app_version.manifest
+  INTO
+    v_name,
+    v_storage_provider,
+    v_r2_path,
+    v_external_url,
+    v_legacy_manifest
+  FROM public.app_versions AS app_version
+  WHERE app_version.id = p_version_id;
+
+  IF NOT FOUND THEN
+    RETURN NULL;
+  END IF;
+
+  IF v_name IN ('builtin', 'unknown') THEN
+    RETURN NULL;
+  END IF;
+
+  v_has_zip := (
+    (v_storage_provider = 'external' AND NULLIF(BTRIM(COALESCE(v_external_url, '')), '') IS NOT NULL)
+    OR (
+      v_storage_provider IS DISTINCT FROM 'r2-direct'
+      AND NULLIF(BTRIM(COALESCE(v_r2_path, '')), '') IS NOT NULL
+    )
+  );
+
+  v_has_delta := COALESCE(pg_catalog.array_length(v_legacy_manifest, 1), 0) > 0
+    OR EXISTS (
+      SELECT 1
+      FROM public.manifest AS manifest_row
+      WHERE manifest_row.app_version_id = p_version_id
+    );
+
+  IF p_update_package IN ('zip', 'zip_from_builtin') AND NOT v_has_zip THEN
+    RETURN format(
+      'CHANNEL_ZIP_REQUIRED: Channel "%s" requires a zip package, but bundle "%s" has no zip. Upload a full zip (omit --delta-only) or set the channel to delta only / zip and delta.',
+      p_channel_name,
+      v_name
+    );
+  END IF;
+
+  IF p_update_package IN ('delta', 'delta_from_builtin') AND NOT v_has_delta THEN
+    RETURN format(
+      'CHANNEL_DELTA_REQUIRED: Channel "%s" requires a delta package, but bundle "%s" has no delta files. Upload with delta enabled (`npx @capgo/cli@latest bundle upload --delta`) or set the channel to zip only / zip and delta.',
+      p_channel_name,
+      v_name
+    );
+  END IF;
+
+  RETURN NULL;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."channel_update_package_mismatch"("p_update_package" "public"."channel_update_package", "p_version_id" bigint, "p_channel_name" "text") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."channel_update_package_mismatch"("p_update_package" "public"."channel_update_package", "p_version_id" bigint, "p_channel_name" "text") IS 'Returns a user-facing error when a channel package mode cannot be served by the given bundle. NULL means compatible. Internal builtin/unknown versions are skipped.';
 
 
 
@@ -5412,6 +5507,45 @@ $$;
 ALTER FUNCTION "public"."enforce_apikey_role_binding_expiration_policy"() OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."enforce_channel_update_package_bundle"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  v_msg text;
+BEGIN
+  IF TG_OP = 'UPDATE'
+    AND NEW.update_package IS NOT DISTINCT FROM OLD.update_package
+    AND NEW.version IS NOT DISTINCT FROM OLD.version
+    AND NEW.rollout_version IS NOT DISTINCT FROM OLD.rollout_version
+  THEN
+    RETURN NEW;
+  END IF;
+
+  v_msg := public.channel_update_package_mismatch(NEW.update_package, NEW.version, NEW.name);
+  IF v_msg IS NOT NULL THEN
+    RAISE EXCEPTION '%', v_msg
+      USING ERRCODE = '22023';
+  END IF;
+
+  v_msg := public.channel_update_package_mismatch(NEW.update_package, NEW.rollout_version, NEW.name);
+  IF v_msg IS NOT NULL THEN
+    RAISE EXCEPTION '%', v_msg
+      USING ERRCODE = '22023';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."enforce_channel_update_package_bundle"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."enforce_channel_update_package_bundle"() IS 'Blocks channel writes that pair zip-only or delta-only package modes with a bundle that cannot serve that package, including rollout targets.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."enforce_channel_version_promotion_permission"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -6405,8 +6539,7 @@ CREATE TABLE IF NOT EXISTS "public"."apps" (
     "created_from_onboarding" boolean DEFAULT false NOT NULL,
     "onboarding_completed_at" timestamp with time zone,
     "onboarding" "jsonb" DEFAULT '{}'::"jsonb" NOT NULL,
-    CONSTRAINT "apps_build_timeout_seconds_check" CHECK ((("build_timeout_seconds" >= 300) AND ("build_timeout_seconds" <= 21600))),
-    CONSTRAINT "apps_onboarding_valid" CHECK ((("jsonb_typeof"("onboarding") = 'object'::"text") AND ((NOT ("onboarding" ? 'features'::"text")) OR ("jsonb_typeof"(("onboarding" -> 'features'::"text")) = 'object'::"text"))))
+    CONSTRAINT "apps_build_timeout_seconds_check" CHECK ((("build_timeout_seconds" >= 300) AND ("build_timeout_seconds" <= 21600)))
 );
 
 ALTER TABLE ONLY "public"."apps" REPLICA IDENTITY FULL;
@@ -6467,7 +6600,7 @@ COMMENT ON COLUMN "public"."apps"."onboarding_completed_at" IS 'Timestamp when t
 
 
 
-COMMENT ON COLUMN "public"."apps"."onboarding" IS 'Extensible feature onboarding ledger. Shape: {"refreshed_at": iso, "features": { "<key>": { "started_at", "succeeded_at", "last_used_at", "retained_30d_at", "stage"? } }}. Success/usage/stage are written by refresh_app_onboarding_progress; clients may only set started_at via mark_onboarding_feature_started.';
+COMMENT ON COLUMN "public"."apps"."onboarding" IS 'Feature ledger plus setup source. Shape: {"refreshed_at": iso, "features": {...}, "setup": {"source": manual|cli|mcp|ai, "outcome": in_progress|completed|skipped|switched_to_manual, "steps": {step_id: {"status": done|skipped, "at": iso}}}}. Manual is the default when setup.source is missing.';
 
 
 
@@ -11162,6 +11295,169 @@ $$;
 ALTER FUNCTION "public"."merge_app_onboarding_feature"("p_existing" "jsonb", "p_started_at" timestamp with time zone, "p_succeeded_at" timestamp with time zone, "p_last_used_at" timestamp with time zone, "p_stage" "text") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."merge_app_onboarding_setup"("p_existing" "jsonb", "p_patch" "jsonb") RETURNS "jsonb"
+    LANGUAGE "plpgsql" STABLE
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  v_current jsonb := COALESCE(p_existing, '{}'::jsonb);
+  v_setup jsonb;
+  v_source text;
+  v_next_source text;
+  v_outcome text;
+  v_patch_outcome text;
+  v_steps jsonb;
+  v_patch_steps jsonb;
+  v_step_id text;
+  v_step jsonb;
+  v_existing_step jsonb;
+  v_now text;
+  v_all_present boolean := true;
+  v_any_skipped boolean := false;
+  v_step_ids text[] := ARRAY[
+    'add_app',
+    'add_channel',
+    'add_updater',
+    'add_code',
+    'add_encryption',
+    'select_platform',
+    'build_project',
+    'run_device',
+    'add_code_change',
+    'upload_bundle',
+    'test_update',
+    'completion'
+  ];
+  v_source_rank integer;
+  v_next_rank integer;
+BEGIN
+  IF jsonb_typeof(v_current) IS DISTINCT FROM 'object' THEN
+    v_current := '{}'::jsonb;
+  END IF;
+
+  IF jsonb_typeof(v_current -> 'setup') = 'object' THEN
+    v_setup := v_current -> 'setup';
+  ELSE
+    v_setup := v_current;
+  END IF;
+
+  v_source := CASE v_setup ->> 'source'
+    WHEN 'cli' THEN 'cli'
+    WHEN 'mcp' THEN 'mcp'
+    WHEN 'ai' THEN 'ai'
+    WHEN 'manual' THEN 'manual'
+    ELSE 'manual'
+  END;
+  v_next_source := NULLIF(p_patch ->> 'source', '');
+  v_source_rank := CASE v_source
+    WHEN 'manual' THEN 0
+    WHEN 'ai' THEN 1
+    WHEN 'cli' THEN 2
+    WHEN 'mcp' THEN 3
+    ELSE 0
+  END;
+  v_next_rank := CASE v_next_source
+    WHEN 'manual' THEN 0
+    WHEN 'ai' THEN 1
+    WHEN 'cli' THEN 2
+    WHEN 'mcp' THEN 3
+    ELSE -1
+  END;
+  IF v_next_rank >= v_source_rank THEN
+    v_source := v_next_source;
+  END IF;
+
+  v_steps := COALESCE(v_setup -> 'steps', '{}'::jsonb);
+  IF jsonb_typeof(v_steps) IS DISTINCT FROM 'object' THEN
+    v_steps := '{}'::jsonb;
+  END IF;
+
+  v_patch_steps := p_patch -> 'steps';
+  IF jsonb_typeof(v_patch_steps) = 'object' THEN
+    FOR v_step_id, v_step IN
+      SELECT key, value FROM jsonb_each(v_patch_steps)
+    LOOP
+      IF v_step_id <> ALL (v_step_ids) THEN
+        CONTINUE;
+      END IF;
+      IF jsonb_typeof(v_step) IS DISTINCT FROM 'object' THEN
+        CONTINUE;
+      END IF;
+      IF COALESCE(v_step ->> 'status', '') NOT IN ('done', 'skipped') THEN
+        CONTINUE;
+      END IF;
+      v_existing_step := v_steps -> v_step_id;
+      IF jsonb_typeof(v_existing_step) = 'object'
+        AND v_existing_step ->> 'status' = 'done'
+        AND v_step ->> 'status' = 'skipped'
+      THEN
+        CONTINUE;
+      END IF;
+      v_steps := jsonb_set(
+        v_steps,
+        ARRAY[v_step_id],
+        jsonb_strip_nulls(jsonb_build_object(
+          'status', v_step ->> 'status',
+          'at', COALESCE(
+            NULLIF(v_step ->> 'at', ''),
+            NULLIF(v_existing_step ->> 'at', ''),
+            to_char((now() AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+          )
+        )),
+        true
+      );
+    END LOOP;
+  END IF;
+
+  FOREACH v_step_id IN ARRAY v_step_ids LOOP
+    -- jsonb -> missing key ->> 'status' is NULL. NULL NOT IN (...) is unknown, not true,
+    -- so treat empty status as "step not reported yet".
+    IF COALESCE(v_steps -> v_step_id ->> 'status', '') NOT IN ('done', 'skipped') THEN
+      v_all_present := false;
+    ELSIF v_steps -> v_step_id ->> 'status' = 'skipped' THEN
+      v_any_skipped := true;
+    END IF;
+  END LOOP;
+
+  v_patch_outcome := p_patch ->> 'outcome';
+  v_outcome := CASE v_setup ->> 'outcome'
+    WHEN 'completed' THEN 'completed'
+    WHEN 'skipped' THEN 'skipped'
+    WHEN 'switched_to_manual' THEN 'switched_to_manual'
+    ELSE 'in_progress'
+  END;
+  IF v_all_present THEN
+    v_outcome := CASE WHEN v_any_skipped THEN 'skipped' ELSE 'completed' END;
+  ELSIF v_patch_outcome IN ('completed', 'skipped') THEN
+    v_outcome := v_patch_outcome;
+  ELSIF v_patch_outcome = 'switched_to_manual' OR v_outcome = 'switched_to_manual' THEN
+    v_outcome := 'switched_to_manual';
+  ELSE
+    v_outcome := 'in_progress';
+  END IF;
+
+  v_now := to_char((now() AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"');
+
+  RETURN (v_current - 'source' - 'outcome' - 'steps' - 'updated_at')
+    || jsonb_build_object(
+      'setup', jsonb_build_object(
+        'source', v_source,
+        'outcome', v_outcome,
+        'steps', v_steps,
+        'updated_at', v_now
+      )
+    );
+END;
+$$;
+
+
+ALTER FUNCTION "public"."merge_app_onboarding_setup"("p_existing" "jsonb", "p_patch" "jsonb") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."merge_app_onboarding_setup"("p_existing" "jsonb", "p_patch" "jsonb") IS 'Merges CLI/MCP/AI setup source, outcome, and step progress into apps.onboarding.setup without touching features.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."normalize_public_channel_overlap"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -15837,6 +16133,68 @@ $$;
 ALTER FUNCTION "public"."remove_old_jobs"() OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."report_app_onboarding_setup"("p_app_id" character varying, "p_patch" "jsonb") RETURNS "jsonb"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  v_owner_org uuid;
+  v_onboarding jsonb;
+BEGIN
+  IF p_app_id IS NULL OR btrim(p_app_id) = '' THEN
+    RAISE EXCEPTION 'APP_NOT_FOUND';
+  END IF;
+
+  IF jsonb_typeof(p_patch) IS DISTINCT FROM 'object' THEN
+    RAISE EXCEPTION 'INVALID_PATCH';
+  END IF;
+
+  SELECT apps.owner_org, apps.onboarding
+  INTO v_owner_org, v_onboarding
+  FROM public.apps
+  WHERE apps.app_id = p_app_id
+  FOR UPDATE;
+
+  IF v_owner_org IS NULL THEN
+    RAISE EXCEPTION 'NO_PERMISSION';
+  END IF;
+
+  IF NOT (
+    public.rbac_check_permission_request(
+      public.rbac_perm_app_update_settings(),
+      v_owner_org,
+      p_app_id,
+      NULL::bigint
+    )
+    OR public.rbac_check_permission_request(
+      public.rbac_perm_org_create_app(),
+      v_owner_org,
+      NULL::character varying,
+      NULL::bigint
+    )
+  ) THEN
+    RAISE EXCEPTION 'NO_PERMISSION';
+  END IF;
+
+  v_onboarding := public.merge_app_onboarding_setup(v_onboarding, p_patch);
+
+  UPDATE public.apps
+  SET onboarding = v_onboarding,
+      updated_at = now()
+  WHERE apps.app_id = p_app_id;
+
+  RETURN v_onboarding;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."report_app_onboarding_setup"("p_app_id" character varying, "p_patch" "jsonb") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."report_app_onboarding_setup"("p_app_id" character varying, "p_patch" "jsonb") IS 'Records CLI/MCP/AI/manual setup progress for an app the caller can update. Requires app.update_settings or org.create_app. Does not write feature ledger fields.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."request_actor_user_id"() RETURNS "uuid"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -18879,6 +19237,7 @@ CREATE TABLE IF NOT EXISTS "public"."channels" (
     "auto_pause_cooldown_minutes" integer DEFAULT 60 NOT NULL,
     "auto_pause_last_triggered_at" timestamp with time zone,
     "auto_pause_last_checked_at" timestamp with time zone,
+    "update_package" "public"."channel_update_package" DEFAULT 'all'::"public"."channel_update_package" NOT NULL,
     CONSTRAINT "channels_auto_pause_action_check" CHECK (("auto_pause_action" = ANY (ARRAY['pause'::"text", 'rollback'::"text", 'notify'::"text"]))),
     CONSTRAINT "channels_auto_pause_confidence_check" CHECK ((("auto_pause_confidence" > (0)::numeric) AND ("auto_pause_confidence" < (1)::numeric))),
     CONSTRAINT "channels_auto_pause_cooldown_minutes_check" CHECK ((("auto_pause_cooldown_minutes" >= 0) AND ("auto_pause_cooldown_minutes" <= 10080))),
@@ -18897,6 +19256,10 @@ ALTER TABLE "public"."channels" OWNER TO "postgres";
 
 
 COMMENT ON COLUMN "public"."channels"."rbac_id" IS 'Stable UUID to bind RBAC roles to channel scope.';
+
+
+
+COMMENT ON COLUMN "public"."channels"."update_package" IS 'How /updates serves the channel bundle: all (zip+delta), zip, delta, or zip/delta only when the device is still on the store builtin version.';
 
 
 
@@ -19525,7 +19888,8 @@ CREATE TABLE IF NOT EXISTS "public"."global_stats" (
     "notifications_failed_day" bigint DEFAULT 0 NOT NULL,
     "notifications_sent_last_month" bigint DEFAULT 0 NOT NULL,
     "notifications_opened_last_month" bigint DEFAULT 0 NOT NULL,
-    "apps_with_preview" bigint DEFAULT 0 NOT NULL
+    "apps_with_preview" bigint DEFAULT 0 NOT NULL,
+    "plan_credits" integer DEFAULT 0 NOT NULL
 );
 
 
@@ -19841,6 +20205,10 @@ COMMENT ON COLUMN "public"."global_stats"."notifications_opened_last_month" IS '
 
 
 COMMENT ON COLUMN "public"."global_stats"."apps_with_preview" IS 'Number of apps with preview QR enabled (allow_preview = true) at snapshot day end.';
+
+
+
+COMMENT ON COLUMN "public"."global_stats"."plan_credits" IS 'Orgs with remaining unexpired usage credits and no active Stripe plan or trial at snapshot day end.';
 
 
 
@@ -21097,6 +21465,11 @@ ALTER TABLE ONLY "public"."apps"
 
 
 
+ALTER TABLE "public"."apps"
+    ADD CONSTRAINT "apps_onboarding_valid" CHECK ((("jsonb_typeof"("onboarding") = 'object'::"text") AND ((NOT ("onboarding" ? 'features'::"text")) OR ("jsonb_typeof"(("onboarding" -> 'features'::"text")) = 'object'::"text")) AND ((NOT ("onboarding" ? 'setup'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'setup'::"text")) = 'object'::"text") AND ((NOT (("onboarding" -> 'setup'::"text") ? 'source'::"text")) OR ((("onboarding" -> 'setup'::"text") ->> 'source'::"text") = ANY (ARRAY['manual'::"text", 'cli'::"text", 'mcp'::"text", 'ai'::"text"]))) AND ((NOT (("onboarding" -> 'setup'::"text") ? 'outcome'::"text")) OR ((("onboarding" -> 'setup'::"text") ->> 'outcome'::"text") = ANY (ARRAY['in_progress'::"text", 'completed'::"text", 'skipped'::"text", 'switched_to_manual'::"text"]))))) AND ((NOT ("onboarding" ? 'source'::"text")) OR (("onboarding" ->> 'source'::"text") = ANY (ARRAY['manual'::"text", 'cli'::"text", 'mcp'::"text", 'ai'::"text"]))) AND ((NOT ("onboarding" ? 'outcome'::"text")) OR (("onboarding" ->> 'outcome'::"text") = ANY (ARRAY['in_progress'::"text", 'completed'::"text", 'skipped'::"text", 'switched_to_manual'::"text"]))))) NOT VALID;
+
+
+
 ALTER TABLE ONLY "public"."apps"
     ADD CONSTRAINT "apps_pkey" PRIMARY KEY ("app_id");
 
@@ -21533,6 +21906,10 @@ CREATE INDEX "app_versions_meta_app_id_idx" ON "public"."app_versions_meta" USIN
 
 
 CREATE INDEX "app_versions_r2_path_idx" ON "public"."app_versions" USING "btree" ("r2_path");
+
+
+
+CREATE INDEX "apps_created_at_onboarding_setup_source_idx" ON "public"."apps" USING "btree" ("created_at", ((("onboarding" -> 'setup'::"text") ->> 'source'::"text")));
 
 
 
@@ -22285,6 +22662,10 @@ CREATE OR REPLACE TRIGGER "credit_usage_alert_on_transactions" AFTER INSERT ON "
 
 
 CREATE OR REPLACE TRIGGER "credit_usage_posthog_on_transactions" AFTER INSERT ON "public"."usage_credit_transactions" FOR EACH ROW EXECUTE FUNCTION "public"."enqueue_credit_usage_posthog_event"();
+
+
+
+CREATE OR REPLACE TRIGGER "enforce_channel_update_package_bundle" BEFORE INSERT OR UPDATE OF "version", "rollout_version", "update_package" ON "public"."channels" FOR EACH ROW EXECUTE FUNCTION "public"."enforce_channel_update_package_bundle"();
 
 
 
@@ -24635,6 +25016,11 @@ GRANT ALL ON FUNCTION "public"."channel_readable_channel_ids"() TO "authenticate
 
 
 
+REVOKE ALL ON FUNCTION "public"."channel_update_package_mismatch"("p_update_package" "public"."channel_update_package", "p_version_id" bigint, "p_channel_name" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."channel_update_package_mismatch"("p_update_package" "public"."channel_update_package", "p_version_id" bigint, "p_channel_name" "text") TO "service_role";
+
+
+
 GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "public"."apikeys" TO "anon";
 GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "public"."apikeys" TO "authenticated";
 GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "public"."apikeys" TO "service_role";
@@ -24931,6 +25317,11 @@ GRANT ALL ON FUNCTION "public"."enforce_apikey_expiration_policy"() TO "service_
 
 REVOKE ALL ON FUNCTION "public"."enforce_apikey_role_binding_expiration_policy"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."enforce_apikey_role_binding_expiration_policy"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."enforce_channel_update_package_bundle"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."enforce_channel_update_package_bundle"() TO "service_role";
 
 
 
@@ -25758,6 +26149,11 @@ REVOKE ALL ON FUNCTION "public"."mass_edit_queue_messages_cf_ids"("updates" "pub
 
 REVOKE ALL ON FUNCTION "public"."merge_app_onboarding_feature"("p_existing" "jsonb", "p_started_at" timestamp with time zone, "p_succeeded_at" timestamp with time zone, "p_last_used_at" timestamp with time zone, "p_stage" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."merge_app_onboarding_feature"("p_existing" "jsonb", "p_started_at" timestamp with time zone, "p_succeeded_at" timestamp with time zone, "p_last_used_at" timestamp with time zone, "p_stage" "text") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."merge_app_onboarding_setup"("p_existing" "jsonb", "p_patch" "jsonb") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."merge_app_onboarding_setup"("p_existing" "jsonb", "p_patch" "jsonb") TO "service_role";
 
 
 
@@ -26609,6 +27005,12 @@ GRANT ALL ON FUNCTION "public"."reject_access_due_to_password_policy"("org_id" "
 
 
 REVOKE ALL ON FUNCTION "public"."remove_old_jobs"() FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "public"."report_app_onboarding_setup"("p_app_id" character varying, "p_patch" "jsonb") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."report_app_onboarding_setup"("p_app_id" character varying, "p_patch" "jsonb") TO "service_role";
+GRANT ALL ON FUNCTION "public"."report_app_onboarding_setup"("p_app_id" character varying, "p_patch" "jsonb") TO "authenticated";
 
 
 

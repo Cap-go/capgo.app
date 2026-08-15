@@ -40,14 +40,14 @@ beforeEach(() => {
 })
 
 describe('buildFrontendOnboardingHogql', () => {
-  it('queries supported pre-org attempts, with stage timestamps limited to views and allowlisted interactions', () => {
+  it('queries supported pre-org attempts and joins actor-scoped CLI starts by human identity', () => {
     const query = buildFrontendOnboardingHogql(
       '2026-08-01T00:00:00.123Z',
       '2026-08-03T00:00:00.456Z',
       '2026-08-04T00:00:00.789Z',
     )
 
-    expect(query).toContain("event IN ('onboarding_step_viewed', 'onboarding_app_id_entered'")
+    expect(query).toContain("event IN ('onboarding_step_viewed', 'onboarding_ai_instructions_copied', 'onboarding_app_id_entered'")
     expect(query).toContain("'onboarding_organization_import_opened'")
     expect(query).toContain("'onboarding_organization_invite_succeeded'")
     expect(query).toContain("'onboarding_technical_invite_succeeded'")
@@ -58,14 +58,22 @@ describe('buildFrontendOnboardingHogql', () => {
     expect(query).toContain('JSONExtractString(toString(properties), \'onboarding_attempt_id\')')
     expect(query).toContain('JSONExtractString(toString(properties), \'step\')')
     expect(query).not.toMatch(/WITH\s+JSONExtractString/)
-    expect(query).toContain('FROM (\n      SELECT\n        event,')
-    expect(query).toContain(')\n    WHERE trim(attempt_id) != \'\'')
+    expect(query).toContain('toString(person_id) AS person_id')
+    expect(query).toContain('onboarding_attempts.person_id AS person_id')
+    expect(query).toContain("JSONExtractString(toString(properties), 'channel') = 'onboarding-v2'")
+    expect(query).toContain("event = 'CLI Command Invoked'")
+    expect(query).toContain("JSONExtractString(toString(properties), 'command_path') = 'init'")
+    expect(query).toContain("event = 'Builder Onboarding Step'")
+    expect(query).toContain("JSONExtractString(toString(properties), 'step') IN ('welcome', 'resume-prompt')")
     expect(query).toContain("toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'intent'))")
     expect(query).toContain("toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'details'))")
     expect(query).toContain("toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'organization'))")
     expect(query).toContain("toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'setup'))")
-    expect(query).toContain("groupUniqArrayIf(tuple(event, toUnixTimestamp64Milli(timestamp)), event != 'onboarding_step_viewed') AS interaction_events")
+    expect(query).toContain("groupUniqArrayIf(tuple(event, toUnixTimestamp64Milli(timestamp)), event IN (")
+    expect(query).toContain("groupUniqArrayIf(toUnixTimestamp64Milli(timestamp), event = 'onboarding_ai_instructions_copied') AS ai_instructions_copied_ms")
+    expect(query).toContain('groupUniqArray(toUnixTimestamp64Milli(timestamp)) AS cli_started_ms')
     expect(query).toContain('GROUP BY onboarding_version, attempt_id')
+    expect(query).toContain('LEFT JOIN cli_starts USING person_id')
     expect(query).toContain('timestamp >= parseDateTimeBestEffort(\'2026-08-01T00:00:00.123Z\')')
     expect(query).toContain('timestamp < parseDateTimeBestEffort(\'2026-08-04T00:00:00.789Z\')')
     expect(query).toContain('trim(attempt_id) != \'\'')
@@ -97,6 +105,7 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
       failureReason: null,
       rows: [{
         attempt_id: 'attempt-1',
+        person_id: 'person-v3',
         onboarding_version: 3,
         intent_ms: intentMs,
         details_ms: intentMs + 555,
@@ -106,13 +115,27 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
           ['onboarding_app_id_entered', intentMs + 100],
           ['onboarding_app_id_entered', intentMs + 200],
         ],
-        total_attempts: 2,
+        ai_instructions_copied_ms: [],
+        cli_started_ms: [],
+        total_attempts: 3,
+      }, {
+        attempt_id: 'attempt-v2',
+        person_id: 'person-v2',
+        onboarding_version: 2,
+        intent_ms: intentMs + 500,
+        details_ms: intentMs + 1_000,
+        organization_ms: intentMs + 1_500,
+        setup_ms: intentMs + 2_500,
+        interaction_events: [['onboarding_app_name_entered', intentMs + 800]],
+        ai_instructions_copied_ms: [intentMs + 3_000],
+        cli_started_ms: [intentMs + 3_200],
+        total_attempts: 3,
       }, {
         attempt_id: 'attempt-v1',
         onboarding_version: 1,
         intent_ms: intentMs + 1_000,
         interaction_events: [['onboarding_store_import_submitted', intentMs + 1_100]],
-        total_attempts: 2,
+        total_attempts: 3,
       }],
     })
 
@@ -121,7 +144,7 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
     expect(result).toMatchObject({
       kpis: { attempts: 1, completed: 1, completion_rate: 100, median_completion_ms: 2_666 },
       daily_attempts: [
-        { date: '2026-08-01', v1_attempts: 1, v2_attempts: 0, v3_attempts: 1 },
+        { date: '2026-08-01', v1_attempts: 1, v2_attempts: 1, v3_attempts: 1 },
         { date: '2026-08-02', v1_attempts: 0, v2_attempts: 0, v3_attempts: 0 },
       ],
       funnels: { v3: [
@@ -131,6 +154,13 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
         { key: 'setup', reached: 1 },
       ] },
       v3_graph: { nodes: [{ key: 'onboarding_app_id_entered', count: 1 }] },
+      v2_graph: { nodes: [{ key: 'onboarding_app_name_entered', count: 1 }] },
+      v2_setup_cli_outcomes: {
+        total_users: 1,
+        cli_only: 0,
+        cli_and_ai_instructions: 1,
+        no_cli: 0,
+      },
       posthog_configured: true,
       posthog_connected: true,
     })
@@ -206,7 +236,7 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
     })
   })
 
-  it('queries the equal-length previous window through the current end plus 24 hours', async () => {
+  it('queries the equal-length previous window through the current end plus 48 hours for post-setup outcomes', async () => {
     const start = '2026-08-01T00:00:00.000Z'
     const end = '2026-08-03T00:00:00.000Z'
 
@@ -217,7 +247,7 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
       `timestamp >= parseDateTimeBestEffort('${new Date(Date.parse(start) - 2 * DAY_MS).toISOString()}')`,
     )
     expect(queryPosthogHogqlMock.mock.calls[0][1]).toContain(
-      `timestamp < parseDateTimeBestEffort('${new Date(Date.parse(end) + DAY_MS).toISOString()}')`,
+      `timestamp < parseDateTimeBestEffort('${new Date(Date.parse(end) + 2 * DAY_MS).toISOString()}')`,
     )
     expect(queryPosthogHogqlMock.mock.calls[0][1]).toContain(
       `AND intent_ms < toUnixTimestamp64Milli(parseDateTimeBestEffort('${end}'))`,

@@ -8,7 +8,7 @@ import { getActiveAppVersions, getVersionData } from '../api/versions'
 import { sendUpdateNotificationsForChannels } from '../notifications/send-update'
 import { printPreviewQrForResolvedTarget, resolveChannelPreviewTarget } from '../preview/qr'
 import { formatTable } from '../terminal-table'
-import { checkCompatibilityNativePackages, checkPlanValid, createSupabaseClient, findSavedKey, getAppId, getBundleVersion, getCompatibilityDetails, getConfig, getOrganizationId, invokeCapgoCliApi, isCompatible, resolveUserIdFromApiKey, sendEvent } from '../utils'
+import { channelUpdatePackageCliError, checkCompatibilityNativePackages, checkPlanValid, createSupabaseClient, findSavedKey, getAppId, getBundleVersion, getCompatibilityDetails, getConfig, getOrganizationId, invokeCapgoCliApi, isCompatible, resolveUserIdFromApiKey, sendEvent } from '../utils'
 
 /**
  * Display a compatibility table for the given packages
@@ -34,6 +34,7 @@ function displayCompatibilityTable(packages: Compatibility[]) {
 export type { OptionsSetChannel } from '../schemas/channel'
 
 const disableAutoUpdatesPossibleOptions = ['major', 'minor', 'metadata', 'patch', 'none']
+const updatePackagePossibleOptions = ['all', 'zip', 'delta', 'zip_from_builtin', 'delta_from_builtin'] as const
 
 function assertIntegerInRange(value: number, label: string, min: number, max: number) {
   if (!Number.isFinite(value) || !Number.isInteger(value) || value < min || value > max)
@@ -93,6 +94,7 @@ export async function setChannelInternal(channel: string, appId: string, options
     android,
     selfAssign,
     disableAutoUpdate,
+    updatePackage,
     dev,
     emulator,
     device,
@@ -152,6 +154,7 @@ export async function setChannelInternal(channel: string, appId: string, options
     && device == null
     && prod == null
     && disableAutoUpdate == null
+    && updatePackage == null
     && rolloutBundle == null
     && rolloutPercentage == null
     && rolloutPercentageBps == null
@@ -201,6 +204,7 @@ export async function setChannelInternal(channel: string, appId: string, options
     || android != null
     || selfAssign != null
     || disableAutoUpdate != null
+    || updatePackage != null
     || dev != null
     || emulator != null
     || device != null
@@ -577,6 +581,17 @@ export async function setChannelInternal(channel: string, appId: string, options
       log.info(`Set ${appId} channel: ${channel} to ${finalDisableAutoUpdate} disable update strategy to this channel`)
   }
 
+  if (updatePackage != null) {
+    if (!updatePackagePossibleOptions.includes(updatePackage)) {
+      if (!silent)
+        log.error(`Update package ${updatePackage} is not known. The possible values are: ${updatePackagePossibleOptions.join(', ')}.`)
+      throw new Error(`Unknown update package ${updatePackage}`)
+    }
+    channelPayload.update_package = updatePackage
+    if (!silent)
+      log.info(`Set ${appId} channel: ${channel} update package to ${updatePackage}`)
+  }
+
   if (hasStableBundlePromotion && !hasSettingsUpdate) {
     const { error } = await invokeCapgoCliApi('bundle', {
       apikey: options.apikey!,
@@ -590,6 +605,12 @@ export async function setChannelInternal(channel: string, appId: string, options
       supaAnon: options.supaAnon,
     })
     if (error) {
+      const packageError = await channelUpdatePackageCliError(error)
+      if (packageError) {
+        if (!silent)
+          log.error(packageError)
+        throw new Error(packageError)
+      }
       if (!silent)
         log.error('Cannot set channel because this API key does not have the required RBAC permission.')
       throw new Error('API key is not allowed to set this channel')
@@ -627,6 +648,8 @@ export async function setChannelInternal(channel: string, appId: string, options
       channelBody.disableAutoUpdateUnderNative = channelPayload.disable_auto_update_under_native
     if (channelPayload.disable_auto_update !== undefined)
       channelBody.disableAutoUpdate = channelPayload.disable_auto_update
+    if (channelPayload.update_package !== undefined)
+      channelBody.updatePackage = channelPayload.update_package
     if (channelPayload.ios !== undefined)
       channelBody.ios = channelPayload.ios
     if (channelPayload.android !== undefined)
@@ -696,6 +719,12 @@ export async function setChannelInternal(channel: string, appId: string, options
       supaAnon: options.supaAnon,
     })
     if (dbError) {
+      const packageError = await channelUpdatePackageCliError(dbError)
+      if (packageError) {
+        if (!silent)
+          log.error(packageError)
+        throw new Error(packageError)
+      }
       if (!silent)
         log.error('Cannot set channel because this API key does not have the required RBAC permission.')
       throw new Error('API key is not allowed to set this channel')

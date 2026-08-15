@@ -16,6 +16,7 @@ export interface VisualDiffRoute {
 export const visualDiffRoutes: VisualDiffRoute[] = [
   { slug: 'login', path: '/login/', auth: false },
   { slug: 'dashboard', path: '/dashboard', auth: true },
+  { slug: 'account-settings', path: '/settings/account', auth: true },
   { slug: 'apps', path: '/apps', auth: true },
   { slug: 'app-overview', path: '/app/com.demo.app', auth: true },
   { slug: 'app-getting-started', path: '/app/com.demo.app/getting-started', auth: true },

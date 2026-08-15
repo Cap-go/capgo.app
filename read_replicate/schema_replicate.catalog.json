@@ -981,6 +981,16 @@
       "type": "timestamp with time zone"
     },
     {
+      "default": "'all'::channel_update_package",
+      "generated": "",
+      "identity": "",
+      "name": "update_package",
+      "notNull": true,
+      "position": 38,
+      "table": "channels",
+      "type": "channel_update_package"
+    },
+    {
       "default": "nextval('manifest_id_seq'::regclass)",
       "generated": "",
       "identity": "",
@@ -1781,11 +1791,11 @@
       "valid": true
     },
     {
-      "definition": "CHECK (jsonb_typeof(onboarding) = 'object'::text AND (NOT onboarding ? 'features'::text OR jsonb_typeof(onboarding -> 'features'::text) = 'object'::text))",
+      "definition": "CHECK (jsonb_typeof(onboarding) = 'object'::text AND (NOT onboarding ? 'features'::text OR jsonb_typeof(onboarding -> 'features'::text) = 'object'::text) AND (NOT onboarding ? 'setup'::text OR jsonb_typeof(onboarding -> 'setup'::text) = 'object'::text AND (NOT (onboarding -> 'setup'::text) ? 'source'::text OR (((onboarding -> 'setup'::text) ->> 'source'::text) = ANY (ARRAY['manual'::text, 'cli'::text, 'mcp'::text, 'ai'::text]))) AND (NOT (onboarding -> 'setup'::text) ? 'outcome'::text OR (((onboarding -> 'setup'::text) ->> 'outcome'::text) = ANY (ARRAY['in_progress'::text, 'completed'::text, 'skipped'::text, 'switched_to_manual'::text])))) AND (NOT onboarding ? 'source'::text OR ((onboarding ->> 'source'::text) = ANY (ARRAY['manual'::text, 'cli'::text, 'mcp'::text, 'ai'::text]))) AND (NOT onboarding ? 'outcome'::text OR ((onboarding ->> 'outcome'::text) = ANY (ARRAY['in_progress'::text, 'completed'::text, 'skipped'::text, 'switched_to_manual'::text])))) NOT VALID",
       "name": "apps_onboarding_valid",
       "table": "apps",
       "type": "c",
-      "valid": true
+      "valid": false
     },
     {
       "definition": "PRIMARY KEY (app_id)",
@@ -2109,6 +2119,13 @@
       "definition": "CREATE INDEX idx_app_versions_retention_cleanup ON public.app_versions USING btree (deleted, created_at, app_id) WHERE (deleted = false)",
       "name": "idx_app_versions_retention_cleanup",
       "table": "app_versions",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
+      "definition": "CREATE INDEX apps_created_at_onboarding_setup_source_idx ON public.apps USING btree (created_at, (((onboarding -> 'setup'::text) ->> 'source'::text)))",
+      "name": "apps_created_at_onboarding_setup_source_idx",
+      "table": "apps",
       "valid": true
     },
     {
@@ -2644,6 +2661,17 @@
     }
   ],
   "types": [
+    {
+      "definition": [
+        "all",
+        "zip",
+        "delta",
+        "zip_from_builtin",
+        "delta_from_builtin"
+      ],
+      "kind": "e",
+      "name": "channel_update_package"
+    },
     {
       "definition": [
         "major",

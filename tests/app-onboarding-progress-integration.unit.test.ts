@@ -5,7 +5,13 @@ const onboardingSource = readFileSync(new URL('../src/components/dashboard/AppOn
 const sidebarSource = readFileSync(new URL('../src/components/Sidebar.vue', import.meta.url), 'utf8')
 
 function sourceBetween(start: string, end: string) {
-  return onboardingSource.slice(onboardingSource.indexOf(start), onboardingSource.indexOf(end))
+  const startIndex = onboardingSource.indexOf(start)
+  const endIndex = onboardingSource.indexOf(end)
+  if (startIndex === -1)
+    throw new Error(`Missing start marker in AppOnboardingFlow.vue: ${start}`)
+  if (endIndex === -1 || endIndex < startIndex)
+    throw new Error(`Missing end marker in AppOnboardingFlow.vue: ${end}`)
+  return onboardingSource.slice(startIndex, endIndex)
 }
 
 describe('app onboarding progress analytics integration', () => {
@@ -27,6 +33,7 @@ describe('app onboarding progress analytics integration', () => {
 
     const mountedFlow = onboardingSource.slice(onboardingSource.indexOf('onMounted(async () => {'))
     expect(mountedFlow).toContain('let resumedFlow = false')
+    expect(mountedFlow).toContain('resumedFlow = await maybeResumeSavedOnboarding()')
     expect(mountedFlow).toContain('const resumed = await loadResumeApp()')
     expect(mountedFlow).toContain('resumedFlow = resumed')
     const loadingFinishedIndex = mountedFlow.indexOf('isLoading.value = false')
@@ -56,6 +63,7 @@ describe('app onboarding progress analytics integration', () => {
     expect(transitionHelpers).toContain('progressTracker?.completeStep(previousStep, {')
     expect(transitionHelpers).toContain('nextStep,')
     expect(transitionHelpers).toContain('progressTracker?.viewStep(nextStep, previousStep)')
+    expect(transitionHelpers).toContain('void persistOnboardingProgress()')
 
     const intentTransition = sourceBetween('function continueFromIntent()', 'function continuePreOrgDetails()')
     expect(intentTransition).toContain("completeAndViewStep('details', { intent: selectedIntent.value })")
@@ -97,6 +105,7 @@ describe('app onboarding progress analytics integration', () => {
     expect(dashboardExit).toContain("if (flowStep.value === 'install' || flowStep.value === 'setup')")
     expect(dashboardExit).toContain('progressTracker?.completeStep(flowStep.value, {')
     expect(dashboardExit).toContain('appId: createdApp.value.app_id')
+    expect(dashboardExit).toContain("await persistOnboardingProgress('completed')")
     expect(dashboardExit).toContain('/getting-started')
     expect(dashboardExit.indexOf('completeStep')).toBeLessThan(dashboardExit.indexOf('router.push'))
     expect(dashboardExit).toContain('window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))')

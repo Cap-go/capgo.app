@@ -8,7 +8,8 @@ import {
   setCurrentCliCommand,
 } from '../cli/src/analytics/cli-headers.ts'
 import pack from '../cli/package.json'
-import { resolveCliUsageIdentity, trackCliUsage } from '../supabase/functions/_backend/utils/cli_usage.ts'
+import { runQueryToCFA } from '../supabase/functions/_backend/utils/cloudflare.ts'
+import { aggregateTopUsersByEmail, getAdminCliUsage, resolveCliUsageIdentity, trackCliUsage } from '../supabase/functions/_backend/utils/cli_usage.ts'
 
 const {
   backgroundTaskMock,
@@ -222,5 +223,96 @@ describe('resolveCliUsageIdentity', () => {
       org_id: null,
     })
     expect(cloudlogErrMock).toHaveBeenCalled()
+  })
+})
+
+describe('aggregateTopUsersByEmail', () => {
+  it('sums counts for the same email and keeps the top users', () => {
+    expect(aggregateTopUsersByEmail([
+      { email: 'alice@capgo.app', count: 10 },
+      { email: 'bob@capgo.app', count: 7 },
+      { email: 'alice@capgo.app', count: 5 },
+      { email: '  ', count: 3 },
+    ])).toEqual([
+      { email: 'alice@capgo.app', count: 15 },
+      { email: 'bob@capgo.app', count: 7 },
+      { email: 'unknown', count: 3 },
+    ])
+  })
+})
+
+describe('getAdminCliUsage', () => {
+  beforeEach(() => {
+    cloudlogErrMock.mockReset()
+    getPgClientMock.mockReset()
+    closeClientMock.mockReset()
+    queryMock.mockReset()
+    getPgClientMock.mockReturnValue({ query: queryMock })
+    closeClientMock.mockResolvedValue(undefined)
+    vi.mocked(getRuntimeKey).mockReset()
+    vi.mocked(runQueryToCFA).mockReset()
+  })
+
+  it('maps Analytics Engine API keys to user emails and aggregates by user', async () => {
+    vi.mocked(getRuntimeKey).mockReturnValue('workerd')
+    vi.mocked(runQueryToCFA).mockImplementation(async (_c, sql) => {
+      if (String(sql).includes('index1 AS apikey_id')) {
+        return [
+          { apikey_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', count: 10 },
+          { apikey_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', count: 5 },
+          { apikey_id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', count: 4 },
+        ]
+      }
+      if (String(sql).includes('AS total'))
+        return [{ total: 19 }]
+      return []
+    })
+    queryMock.mockResolvedValue({
+      rows: [
+        { rbac_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', email: 'alice@capgo.app' },
+        { rbac_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', email: 'alice@capgo.app' },
+        { rbac_id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', email: 'bob@capgo.app' },
+      ],
+    })
+
+    const result = await getAdminCliUsage(
+      createContext({ CLI_USAGE: {} }),
+      '2026-01-01T00:00:00.000Z',
+      '2026-02-01T00:00:00.000Z',
+    )
+
+    expect(result.top_users).toEqual([
+      { email: 'alice@capgo.app', count: 15 },
+      { email: 'bob@capgo.app', count: 4 },
+    ])
+    expect(queryMock).toHaveBeenCalled()
+    const [sql, args] = queryMock.mock.calls[0] ?? []
+    expect(String(sql)).toContain('public.users')
+    expect(args?.[0]).toEqual([
+      'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+    ])
+  })
+
+  it('joins Postgres CLI usage to user emails', async () => {
+    vi.mocked(getRuntimeKey).mockReturnValue('deno')
+    queryMock.mockImplementation(async (sql: string) => {
+      if (String(sql).includes('u.email')) {
+        return { rows: [{ email: 'bob@capgo.app', count: '42' }] }
+      }
+      if (String(sql).includes('count(*)::bigint AS total'))
+        return { rows: [{ total: '42' }] }
+      return { rows: [] }
+    })
+
+    const result = await getAdminCliUsage(
+      createContext({}),
+      '2026-01-01T00:00:00.000Z',
+      '2026-02-01T00:00:00.000Z',
+    )
+
+    expect(result.top_users).toEqual([{ email: 'bob@capgo.app', count: 42 }])
+    expect(queryMock.mock.calls.some(([sql]) => String(sql).includes('LEFT JOIN public.apikeys'))).toBe(true)
   })
 })

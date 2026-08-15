@@ -89,6 +89,12 @@ describe('admin frontend onboarding dashboard', () => {
         { key: 'import_clicked', count: 1 },
       ],
     },
+    v2_setup_cli_outcomes: {
+      total_users: 2,
+      cli_only: 1,
+      cli_and_ai_instructions: 1,
+      no_cli: 0,
+    },
     posthog_configured: true,
     posthog_connected: true,
   }
@@ -403,12 +409,16 @@ describe('admin frontend onboarding dashboard', () => {
     expect(source).toContain('<PageLoader')
     expect(source.match(/<AdminFilterBar(?:\s|\/?>)/g)).toHaveLength(1)
     expect(source.match(/<AdminStatsCard(?:\s|\/?>)/g)).toHaveLength(4)
-    expect(source.match(/<ChartCard(?:\s|\/?>)/g)).toHaveLength(4)
+    expect(source.match(/<ChartCard(?:\s|\/?>)/g)).toHaveLength(5)
+    expect(source.match(/<AdminBarChart(?:\s|\/?>)/g)).toHaveLength(1)
     expect(source.match(/<AdminStackedBarChart(?:\s|\/?>)/g)).toHaveLength(1)
     expect(source.match(/<AdminDailyConversionChart(?:\s|\/?>)/g)).toHaveLength(3)
     expect(source.match(/<AdminFunnelChart(?:\s|\/?>)/g)).toHaveLength(2)
     expect(source.match(/<AdminOnboardingJourneyGraph(?:\s|\/?>)/g)).toHaveLength(1)
     expect(source).toContain('<AdminOnboardingJourneyGraph v-else :config="onboardingGraphV3" />')
+    expect(source).toContain('orientation="vertical"')
+    expect(source).toContain(':values="setupCliOutcomeValues"')
+    expect(source).toContain('visibleAnalytics.value?.v2_setup_cli_outcomes')
     expect(source).toContain('v-if="isLoadingStats" class="grid min-h-72 place-items-center"')
     expect(source).toContain(`t('frontend-onboarding-version-2')`)
     expect(source).toContain(`t('frontend-onboarding-version-3')`)
@@ -427,13 +437,15 @@ describe('admin frontend onboarding dashboard', () => {
     const detailsOrganizationChartIndex = source.indexOf(`t('frontend-onboarding-daily-details-to-organization')`)
     const organizationSetupChartIndex = source.indexOf(`t('frontend-onboarding-daily-organization-to-setup')`)
     const graphIndex = source.indexOf(`t('frontend-onboarding-graph-v3')`)
+    const cliOutcomeIndex = source.indexOf(`t('frontend-onboarding-setup-cli-outcomes-v2')`)
     const legacyIndex = source.indexOf(`t('frontend-onboarding-funnel-v1-legacy')`)
     expect(v3FunnelIndex).toBeLessThan(graphIndex)
     expect(v3FunnelIndex).toBeLessThan(intentDetailsChartIndex)
     expect(intentDetailsChartIndex).toBeLessThan(detailsOrganizationChartIndex)
     expect(detailsOrganizationChartIndex).toBeLessThan(organizationSetupChartIndex)
     expect(organizationSetupChartIndex).toBeLessThan(graphIndex)
-    expect(graphIndex).toBeLessThan(legacyIndex)
+    expect(graphIndex).toBeLessThan(cliOutcomeIndex)
+    expect(cliOutcomeIndex).toBeLessThan(legacyIndex)
     expect(source).not.toContain('id: \'organization_name\'')
     expect(source).not.toContain('id: \'organization_size\'')
     expect(source).not.toContain('id: \'invite_opened\'')
@@ -505,13 +517,13 @@ describe('admin frontend onboarding dashboard', () => {
   it.concurrent('defines every frontend onboarding page label in English', async () => {
     const messages = JSON.parse(await readFile(new URL('../messages/en.json', import.meta.url), 'utf8')) as Record<string, string>
 
-    expect(messages['frontend-onboarding']).toBe('Frontend onboarding')
+    expect(messages['frontend-onboarding']).toBe('Onboarding')
     expect(messages['frontend-onboarding-version-1']).toBe('Onboarding v1')
     expect(messages['frontend-onboarding-version-2']).toBe('Onboarding v2')
     expect(messages['frontend-onboarding-version-3']).toBe('Onboarding v3')
     expect(messages['frontend-onboarding-attempts']).toBe('Onboarding attempts')
-    expect(messages['frontend-onboarding-attempts-subtitle']).toBe('Unique frontend attempts')
-    expect(messages['frontend-onboarding-completed']).toBe('Frontend onboarding completed')
+    expect(messages['frontend-onboarding-attempts-subtitle']).toBe('Unique onboarding attempts')
+    expect(messages['frontend-onboarding-completed']).toBe('Onboarding completed')
     expect(messages['frontend-onboarding-completed-subtitle']).toBe('{count} attempts reached setup')
     expect(messages['frontend-onboarding-median-time']).toBe('Median completion time')
     expect(messages['frontend-onboarding-median-time-subtitle']).toBe('Completed attempts only')
@@ -522,8 +534,15 @@ describe('admin frontend onboarding dashboard', () => {
     expect(messages['frontend-onboarding-daily-organization-to-setup']).toBe('Daily Organization → Setup reached conversion (v3)')
     expect(messages['frontend-onboarding-daily-conversion']).toBe('Conversion')
     expect(messages['frontend-onboarding-daily-conversion-attempts']).toBe('attempts')
-    expect(messages['frontend-onboarding-funnel-v2']).toBe('Frontend onboarding funnel (v2)')
-    expect(messages['frontend-onboarding-funnel-v1-legacy']).toBe('Frontend onboarding funnel (v1, legacy)')
+    expect(messages['frontend-onboarding-funnel-v2']).toBe('Onboarding funnel (v2)')
+    expect(messages['frontend-onboarding-funnel-v1-legacy']).toBe('Onboarding funnel (v1, legacy)')
+    expect(messages['frontend-onboarding-graph-v2']).toBe('Onboarding graph (v2)')
+    expect(messages['frontend-onboarding-setup-cli-outcomes-v2']).toBe('Setup → CLI outcomes (v2)')
+    expect(messages['frontend-onboarding-setup-cli-outcomes-description']).toBe('Unique people who reached setup, grouped by their CLI and copied AI instruction activity within 24 hours')
+    expect(messages['frontend-onboarding-setup-cli-only']).toBe('Started CLI')
+    expect(messages['frontend-onboarding-setup-cli-and-ai']).toBe('Started CLI + AI instructions')
+    expect(messages['frontend-onboarding-setup-no-cli']).toBe("Didn't start CLI")
+    expect(messages['frontend-onboarding-people']).toBe('people')
     expect(messages['frontend-onboarding-demo-data']).toBeUndefined()
     expect(messages['frontend-onboarding-graph-stage-app-details']).toBe('App details')
     expect(messages['frontend-onboarding-graph-stage-organization-details']).toBe('Organization details')
