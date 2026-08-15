@@ -1,4 +1,5 @@
 import type { Page } from '@playwright/test'
+import { dismissSupportPrompt } from './support/dismissSupportPrompt'
 
 export interface VisualDiffRoute {
   slug: string
@@ -18,6 +19,22 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
   { slug: 'dashboard', path: '/dashboard', auth: true },
   { slug: 'account-settings', path: '/settings/account', auth: true },
   { slug: 'apps', path: '/apps', auth: true },
+  {
+    slug: 'apps-sidebar-collapsed',
+    path: '/apps',
+    auth: true,
+    prepare: async (page) => {
+      await dismissSupportPrompt(page)
+      const toggle = page.locator('[data-test="sidebar-collapse-toggle"]')
+      if (!(await toggle.count()))
+        return
+      const sidebar = page.locator('#sidebar')
+      if (await sidebar.isVisible()) {
+        await toggle.click()
+        await sidebar.waitFor({ state: 'hidden' })
+      }
+    },
+  },
   { slug: 'app-overview', path: '/app/com.demo.app', auth: true },
   { slug: 'app-dashboard-native', path: '/app/com.demo.app/native', auth: true },
   { slug: 'app-dashboard-installs', path: '/app/com.demo.app/installs', auth: true },
