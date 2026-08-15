@@ -44,7 +44,7 @@ const { t } = useI18n()
     <div class="px-2 sm:px-4 lg:px-6">
       <div class="relative flex items-center justify-between h-16 -mb-px">
         <!-- Header: Left side -->
-        <div class="flex items-center space-x-2 lg:space-x-3">
+        <div class="flex items-center space-x-4 lg:space-x-3">
           <div v-if="displayStore.NavTitle && isMobile" class="pr-2">
             <button
               class="flex p-2 rounded-sm dark:text-white focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none text-slate-500 dark:hover:bg-slate-600 hover:bg-slate-300"
@@ -58,18 +58,20 @@ const { t } = useI18n()
           <div v-if="props.sidebarCollapsed && main.user" class="hidden lg:block">
             <dropdown-organization compact />
           </div>
-          <button
-            type="button"
-            class="hidden p-1 rounded-md lg:flex dark:text-white focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none text-slate-500 dark:hover:text-slate-50 hover:text-slate-600"
-            data-test="sidebar-collapse-toggle"
-            aria-controls="sidebar"
-            :aria-expanded="!props.sidebarCollapsed"
-            :aria-label="props.sidebarCollapsed ? t('expand-sidebar') : t('collapse-sidebar')"
-            @click.stop="$emit('toggleSidebarCollapse')"
-          >
-            <span class="sr-only">{{ props.sidebarCollapsed ? t('expand-sidebar') : t('collapse-sidebar') }}</span>
-            <IconPanelLeft class="w-6 h-6" />
-          </button>
+          <div class="hidden lg:block">
+            <button
+              type="button"
+              class="d-btn d-btn-ghost d-btn-square d-btn-sm dark:text-white focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none text-slate-500 dark:hover:text-slate-50 hover:text-slate-600"
+              data-test="sidebar-collapse-toggle"
+              aria-controls="sidebar"
+              :aria-expanded="!props.sidebarCollapsed"
+              :aria-label="props.sidebarCollapsed ? t('expand-sidebar') : t('collapse-sidebar')"
+              @click.stop="$emit('toggleSidebarCollapse')"
+            >
+              <span class="sr-only">{{ props.sidebarCollapsed ? t('expand-sidebar') : t('collapse-sidebar') }}</span>
+              <IconPanelLeft class="w-6 h-6" />
+            </button>
+          </div>
           <!-- Hamburger button -->
           <button
             class="p-1 rounded-md lg:hidden dark:text-white focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none text-slate-500 dark:hover:text-slate-50 hover:text-slate-600"

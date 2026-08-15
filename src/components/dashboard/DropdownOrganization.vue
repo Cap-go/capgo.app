@@ -45,6 +45,11 @@ const currentAppId = computed(() => {
 const currentApp = computed(() => currentAppId.value ? organizationStore.getAppByAppId(currentAppId.value) : undefined)
 const currentAppLabel = computed(() => currentApp.value ? getAppLabel(currentApp.value) : currentAppId.value)
 const invitationCount = computed(() => organizationStore.organizations.filter(org => isPendingOrganizationInvite(org)).length)
+const triggerAriaLabel = computed(() => {
+  if (invitationCount.value <= 0)
+    return currentLabel.value
+  return `${currentLabel.value}, ${t('org-switcher-pending-invites', { count: invitationCount.value })}`
+})
 const canCreateOrganizationInContext = !isNativeAppStoreContext()
 const ORGANIZATION_LOGO_REFRESH_INTERVAL_MS = 10 * 60 * 1000
 const isRefreshingBrokenLogos = ref(false)
@@ -363,7 +368,7 @@ watch(
         :class="props.compact
           ? 'relative size-10 min-h-10 p-1 justify-center'
           : 'h-auto min-h-12 justify-between w-full px-3 py-2'"
-        :aria-label="currentLabel"
+        :aria-label="triggerAriaLabel"
       >
         <div class="flex items-center min-w-0 text-left" :class="props.compact ? 'justify-center' : 'flex-1'">
           <img

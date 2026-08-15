@@ -1,4 +1,5 @@
 import type { Page } from '@playwright/test'
+import { dismissSupportPrompt } from './support/dismissSupportPrompt'
 
 export interface VisualDiffRoute {
   slug: string
@@ -23,20 +24,15 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
     path: '/apps',
     auth: true,
     prepare: async (page) => {
-      const prompt = page.locator('[data-test="support-usernames-prompt"]')
-      try {
-        await prompt.waitFor({ state: 'visible', timeout: 4000 })
-        await prompt.getByRole('button', { name: /remind me later/i }).click()
-        await prompt.waitFor({ state: 'hidden' })
-      }
-      catch {
-        // Prompt is delayed and only shown when support usernames are missing.
-      }
+      await dismissSupportPrompt(page)
       const toggle = page.locator('[data-test="sidebar-collapse-toggle"]')
       if (!(await toggle.count()))
         return
-      await toggle.click()
-      await page.locator('#sidebar').waitFor({ state: 'hidden' })
+      const sidebar = page.locator('#sidebar')
+      if (await sidebar.isVisible()) {
+        await toggle.click()
+        await sidebar.waitFor({ state: 'hidden' })
+      }
     },
   },
   { slug: 'app-overview', path: '/app/com.demo.app', auth: true },

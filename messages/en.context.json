@@ -2070,6 +2070,7 @@
   "org-notifications-title": "Used in Capgo web console areas: components/dashboard. Role: section or dialog title. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "org-notifications-usage-limit-desc": "Used in Capgo web console areas: components/dashboard. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "org-notifications-weekly-stats-desc": "Used in Capgo web console areas: components/dashboard. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "org-switcher-pending-invites": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "org-to-app": "Used in Capgo web console areas: pages/admin/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "org-with-this-name-exists": "Used in Capgo web console areas: components/dashboard, pages/onboarding. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "organization": "Used in Capgo web console areas: components/dashboard, components/tables, constants, pages/onboarding, pages/settings/organization. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",

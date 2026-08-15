@@ -1,5 +1,6 @@
 import type { Page } from '@playwright/test'
 import { expect, test } from '../support/commands'
+import { dismissSupportPrompt } from '../support/dismissSupportPrompt'
 
 test.use({ screenshot: 'off', trace: 'off', video: 'off' })
 
@@ -8,18 +9,6 @@ async function shellPadding(page: Page) {
     const style = getComputedStyle(el)
     return `${style.paddingTop} ${style.paddingRight} ${style.paddingBottom}`
   })
-}
-
-async function dismissSupportPrompt(page: Page) {
-  const prompt = page.locator('[data-test="support-usernames-prompt"]')
-  try {
-    await prompt.waitFor({ state: 'visible', timeout: 4000 })
-    await prompt.getByRole('button', { name: /remind me later/i }).click()
-    await prompt.waitFor({ state: 'hidden' })
-  }
-  catch {
-    // The prompt is delayed and only appears for users missing support usernames.
-  }
 }
 
 test.describe('Desktop sidebar collapse', () => {
