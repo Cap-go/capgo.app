@@ -903,7 +903,7 @@
   "cli-login-copied": "API key copied.",
   "cli-login-copy-note": "Copying keeps the key hidden on this page.",
   "cli-login-continue-setup": "Continue the setup",
-  "cli-login-direct-description": "Run npx @capgo/cli@latest init in your terminal to start a CLI login session.",
+  "cli-login-direct-description": "Run npx {'@'}capgo/cli{'@'}latest init in your terminal to start a CLI login session.",
   "cli-login-direct-title": "Start from the Capgo CLI",
   "cli-login-error": "We could not prepare your CLI key. Try again or open the dashboard.",
   "cli-login-expiration-warning": "Your organization policy requires this key to expire on {date}.",

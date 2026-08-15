@@ -35,6 +35,7 @@ describe('/login-cli page contract', () => {
   })
 
   it.concurrent('contains focused key, paste, warning, waiting, and success copy', () => {
+    expect(messages['cli-login-direct-description']).toContain("{'@'}capgo/cli{'@'}latest")
     expect(messages['cli-login-paste-instruction']).toContain('terminal')
     expect(messages['cli-login-security-warning']).toContain('trust')
     expect(messages['cli-login-copy-note']).toContain('hidden')
