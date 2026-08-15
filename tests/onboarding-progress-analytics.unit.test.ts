@@ -127,7 +127,7 @@ describe('onboarding progress analytics', () => {
 
     tracker.viewStep('intent')
 
-    expect(ONBOARDING_ANALYTICS_VERSION).toBe(2)
+    expect(ONBOARDING_ANALYTICS_VERSION).toBe(3)
     expect(capture).toHaveBeenCalledOnce()
     expect(capture).toHaveBeenCalledWith(
       'onboarding_step_viewed',
@@ -235,8 +235,34 @@ describe('onboarding progress analytics', () => {
         flow: 'pre_org',
         onboarding_attempt_id: ATTEMPT_A1,
         onboarding_run_id: RUN_R1,
-        onboarding_version: 2,
+        onboarding_version: ONBOARDING_ANALYTICS_VERSION,
         step: 'details',
+      }),
+    )
+  })
+
+  it.concurrent('associates organization interactions with the active attempt', () => {
+    const capture = vi.fn()
+    const tracker = createOnboardingProgressTracker({
+      ...trackerIdentity,
+      capture,
+      flow: 'pre_org',
+      resumed: false,
+      steps,
+      supaHost: 'https://supabase.capgo.test',
+    })
+
+    tracker.trackStepEvent('onboarding_organization_import_opened', 'organization')
+
+    expect(capture).toHaveBeenCalledWith(
+      'onboarding_organization_import_opened',
+      'https://supabase.capgo.test',
+      expect.objectContaining({
+        flow: 'pre_org',
+        onboarding_attempt_id: ATTEMPT_A1,
+        onboarding_run_id: RUN_R1,
+        onboarding_version: ONBOARDING_ANALYTICS_VERSION,
+        step: 'organization',
       }),
     )
   })

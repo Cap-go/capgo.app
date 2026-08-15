@@ -42,6 +42,7 @@ import { reportInitOnboardingStep } from './onboarding-report'
 import { cancel as pCancel, confirm as pConfirm, intro as pIntro, isCancel as pIsCancel, log as pLog, outro as pOutro, select as pSelect, spinner as pSpinner, text as pText } from './prompts'
 import { finishActiveCliReplay, getActiveCliReplaySessionId, isCliTelemetryDisabled, startInitReplay } from './replay'
 import { appendInitStreamingLine, clearInitStreamingOutput, INIT_CANCEL, pushInitLog, setInitCodeDiff, setInitEncryptionSummary, setInitVersionWarning, startInitStreamingOutput, stopInitInkSession, updateInitStreamingStatus, waitForInitLogSkip, waitForInitStreamingContinue } from './runtime'
+import { createInitTelemetry, mergeInitProgressTelemetry, parseInitProgressTelemetry } from './telemetry'
 import { formatInitResumeMessage, initOnboardingSteps, renderInitOnboardingComplete, renderInitOnboardingFrame, renderInitOnboardingWelcome } from './ui'
 import { CAPACITOR_SPLASH_SCREEN_PACKAGE, CAPGO_UPDATER_PACKAGE, getSplashScreenInstallState, getUpdaterInstallState } from './updater'
 
@@ -96,7 +97,8 @@ body {
 }
 
 `
-async function exitAfterFinishingReplay(code?: number): Promise<never> {
+async function exitAfterFinishingReplay(outcome: 'completed' | 'cancelled' | 'failed', code: number): Promise<never> {
+  await activeInitTelemetry?.recordRunEnded(outcome, code)
   await finishActiveCliReplay()
   exit(code)
   throw new Error('process.exit returned unexpectedly')
@@ -726,7 +728,7 @@ async function runInitDoctorDiagnostics(): Promise<void> {
 async function exitCanceledInitOnboarding(orgId: string, apikey: string, message = 'You can resume the onboarding anytime by running the same command again'): Promise<never> {
   await markInitSnag(orgId, apikey, 'canceled', undefined, '🤷')
   pOutro(`Bye 👋\n💡 ${message}`)
-  return await exitAfterFinishingReplay(1)
+  return await exitAfterFinishingReplay('cancelled', 1)
 }
 
 // Render an init-time file path with its project directory prefix so users
@@ -1044,7 +1046,7 @@ function getFrameworkSetupIssues(projectType: string, projectDir: string, capaci
 }
 async function exitBeforeAuthenticatedOnboarding() {
   pOutro(`Bye 👋\n💡 You can resume the onboarding anytime by running the same command again`)
-  return await exitAfterFinishingReplay(1)
+  return await exitAfterFinishingReplay('cancelled', 1)
 }
 
 async function cancelBeforeAuthenticatedOnboarding(command: CancelablePromptValue) {
@@ -1214,11 +1216,11 @@ async function runCreateAppTemplate() {
     stdout.write(`Capacitor app template creation failed. Run ${templateCommand.display} manually and try again.\n`)
     if (result.error)
       pLog.error(formatError(result.error))
-    return await exitAfterFinishingReplay(1)
+    return await exitAfterFinishingReplay('failed', 1)
   }
 
   stdout.write('Capacitor app template creation finished. Run init again from the new app folder.\n')
-  return await exitAfterFinishingReplay(0)
+  return await exitAfterFinishingReplay('cancelled', 0)
 }
 
 async function ensureWorkspaceReadyForInit(initialAppId?: string): Promise<string | undefined> {
@@ -1293,11 +1295,12 @@ async function ensureWorkspaceReadyForInit(initialAppId?: string): Promise<strin
 
 let globalOrgId: string | undefined
 let globalOrgName: string | undefined
+let activeInitTelemetry: ReturnType<typeof createInitTelemetry> | undefined
 let globalReportContext: { apikey: string, supaHost?: string, supaAnon?: string } | undefined
 
 function markStepDone(step: number, pathToPackageJson?: string, channelName?: string, status: 'done' | 'skipped' = 'done') {
   try {
-    writeFileSync(getTmpObjectPath(), JSON.stringify({
+    const progress = {
       step_done: step,
       orgId: globalOrgId,
       orgName: globalOrgName,
@@ -1314,7 +1317,8 @@ function markStepDone(step: number, pathToPackageJson?: string, channelName?: st
       encryptionSummary: globalEncryptionSummary,
       autoTestChange: globalAutoTestChange,
       nodeModulesPath: globalNodeModulesPath,
-    }))
+    }
+    writeFileSync(getTmpObjectPath(), JSON.stringify(mergeInitProgressTelemetry(progress, activeInitTelemetry?.getProgressMetadata())))
     if (pathToPackageJson) {
       globalPathToPackageJson = pathToPackageJson
     }
@@ -1328,7 +1332,7 @@ function markStepDone(step: number, pathToPackageJson?: string, channelName?: st
         supaAnon: globalReportContext.supaAnon,
         outcome: isLastStep ? (status === 'skipped' ? 'skipped' : 'completed') : 'in_progress',
       }).catch((error) => {
-        pLog.warn(`Cannot report onboarding progress:\n${error}`)
+        pLog.warn(`Cannot report onboarding progress:\n${formatError(error)}`)
       })
     }
   }
@@ -1408,6 +1412,7 @@ async function tryResumeOnboarding(
     if (!rawData || rawData.length === 0)
       return undefined
 
+    const progress = JSON.parse(rawData)
     const {
       step_done,
       orgId,
@@ -1425,7 +1430,7 @@ async function tryResumeOnboarding(
       codeDiff,
       encryptionSummary,
       autoTestChange,
-    } = JSON.parse(rawData)
+    } = progress
     if (!orgId || !step_done) {
       pLog.warn('⚠️  Found previous onboarding progress, but it was saved in an older format.')
       pLog.info('   Starting fresh. Your previous progress cannot be resumed.')
@@ -1440,10 +1445,26 @@ async function tryResumeOnboarding(
       return undefined
     }
 
+    const savedTelemetry = parseInitProgressTelemetry(progress)
+    activeInitTelemetry?.setAuth(orgId, apikey)
+    activeInitTelemetry?.setScope(savedAppId)
+    activeInitTelemetry?.prepareResumeCandidate(savedTelemetry, step_done, initOnboardingSteps.length)
+    await activeInitTelemetry?.recordRunStarted()
+    const legacyBackfill = activeInitTelemetry?.getLegacyBackfillMetadata()
+    if (legacyBackfill) {
+      try {
+        writeFileSync(getTmpObjectPath(), JSON.stringify(mergeInitProgressTelemetry(progress, legacyBackfill)))
+      }
+      catch {
+        pLog.warn('Could not save onboarding telemetry metadata. Continuing onboarding.')
+      }
+    }
+
     pLog.info(formatInitResumeMessage(step_done, initOnboardingSteps.length))
     if (orgName) {
       pLog.info(`   Organization: ${orgName}`)
     }
+    await activeInitTelemetry?.recordResumePromptViewed()
     const resumeChoice = await pSelect({
       message: 'Would you like to continue from where you left off?',
       options: [
@@ -1453,6 +1474,16 @@ async function tryResumeOnboarding(
     })
     await cancelCommand(resumeChoice, orgId, apikey)
     if (resumeChoice === 'yes') {
+      await activeInitTelemetry?.recordResumeDecision('continue')
+      const progressMetadata = activeInitTelemetry?.getProgressMetadata()
+      if (progressMetadata) {
+        try {
+          writeFileSync(getTmpObjectPath(), JSON.stringify(mergeInitProgressTelemetry(progress, progressMetadata)))
+        }
+        catch {
+          pLog.warn('Could not save onboarding telemetry metadata. Continuing onboarding.')
+        }
+      }
       const resumedTargets = resolveResumedInitTargets(initialTargets, {
         pathToPackageJson: typeof pathToPackageJson === 'string' ? pathToPackageJson : undefined,
         capacitorConfigPath: typeof capacitorConfigPath === 'string' ? capacitorConfigPath : undefined,
@@ -1461,6 +1492,7 @@ async function tryResumeOnboarding(
       }, initialCwd)
       if (!resumedTargets) {
         pLog.warn('Saved onboarding targets are no longer available. Starting over.')
+        activeInitTelemetry?.clearScope()
         cleanupStepsDone()
         globalCodeDiff = undefined
         setInitCodeDiff(undefined)
@@ -1561,6 +1593,8 @@ async function tryResumeOnboarding(
     // User chose to start over — delete the saved progress and drop any
     // restored code diff / encryption summary so a fresh manual path
     // doesn't re-show stale content.
+    await activeInitTelemetry?.recordResumeDecision('restart')
+    activeInitTelemetry?.clearScope()
     cleanupStepsDone()
     globalCodeDiff = undefined
     setInitCodeDiff(undefined)
@@ -1573,6 +1607,7 @@ async function tryResumeOnboarding(
   catch (err) {
     pLog.error(`Cannot read which steps have been completed, error:\n${err}`)
     pLog.warn('Onboarding will continue but please report it to the capgo team!')
+    activeInitTelemetry?.clearScope()
     globalCodeDiff = undefined
     setInitCodeDiff(undefined)
     globalEncryptionSummary = undefined
@@ -1602,7 +1637,7 @@ async function cancelCommand(command: boolean | string | symbol, orgId: string, 
   if (pIsCancel(command)) {
     await markInitSnag(orgId, apikey, 'canceled', undefined, '🤷')
     pOutro(`Bye 👋\n💡 You can resume the onboarding anytime by running the same command again`)
-    return await exitAfterFinishingReplay()
+    return await exitAfterFinishingReplay('cancelled', 0)
   }
 }
 
@@ -1637,7 +1672,7 @@ async function selectRecoveryOption<T extends string>(
     if (pIsCancel(choice) || choice === '__cancel__') {
       await markInitSnag(orgId, apikey, 'canceled', undefined, '🤷')
       pOutro(`Bye 👋\n💡 You can resume the onboarding anytime by running the same command again`)
-      return await exitAfterFinishingReplay(1)
+      return await exitAfterFinishingReplay('cancelled', 1)
     }
 
     if (choice === '__doctor__') {
@@ -1755,7 +1790,7 @@ async function warnIfNotInCapacitorRoot() {
 
     if (pIsCancel(choice) || choice === 'exit') {
       pCancel('Operation cancelled.')
-      return await exitAfterFinishingReplay(1)
+      return await exitAfterFinishingReplay('cancelled', 1)
     }
 
     if (choice === 'switch') {
@@ -1774,11 +1809,14 @@ async function warnIfNotInCapacitorRoot() {
 
   if (pIsCancel(continueAnyway) || !continueAnyway) {
     pCancel('Operation cancelled.')
-    return await exitAfterFinishingReplay(1)
+    return await exitAfterFinishingReplay('cancelled', 1)
   }
 }
 
 async function markInitSnag(orgId: string, apikey: string, event: string, appId?: string, icon = '✅') {
+  activeInitTelemetry?.setAuth(orgId, apikey)
+  if (activeInitTelemetry)
+    return activeInitTelemetry.recordMilestone(event, undefined, icon, appId ?? null)
   const replaySessionId = getActiveCliReplaySessionId()
   return markSnag('onboarding-v2', orgId, apikey, event, appId, icon, replaySessionId ? { $session_id: replaySessionId } : undefined)
 }
@@ -1994,7 +2032,7 @@ async function askForAppId(message = 'Enter your appId:'): Promise<string> {
   if (pIsCancel(appId)) {
     pCancel('Operation cancelled.')
     pOutro(`Bye 👋\n💡 You can resume the onboarding anytime by running the same command again`)
-    return await exitAfterFinishingReplay()
+    return await exitAfterFinishingReplay('cancelled', 0)
   }
 
   return appId as string
@@ -2169,7 +2207,7 @@ async function selectOrganizationForInit(
 
   if (pIsCancel(organizationUidRaw)) {
     pOutro('Bye 👋\n💡 You can resume the onboarding anytime by running the same command again')
-    return await exitAfterFinishingReplay()
+    return await exitAfterFinishingReplay('cancelled', 0)
   }
 
   const organizationUid = organizationUidRaw as string
@@ -2242,7 +2280,7 @@ async function checkPrerequisitesStep(
     if (!continueAnyway) {
       pLog.info(`📝 Please install a development environment and run the onboarding again`)
       pOutro(`Bye 👋\n💡 You can resume the onboarding anytime by running the same command again`)
-      return await exitAfterFinishingReplay()
+      return await exitAfterFinishingReplay('cancelled', 0)
     }
 
     pLog.warn(`⚠️  Continuing without development environment - you'll need to set it up later`)
@@ -2422,7 +2460,7 @@ async function askForReplacementAppId(
   if (choice === 'cancel') {
     await markInitSnag(organization.gid, apikey, 'canceled-appid-conflict', undefined, '🤷')
     pOutro(`Bye 👋\n💡 You can resume the onboarding anytime by running the same command again`)
-    return await exitAfterFinishingReplay()
+    return await exitAfterFinishingReplay('cancelled', 0)
   }
 
   if (choice === 'custom')
@@ -2585,7 +2623,7 @@ function rememberPackageJsonPath(packageJsonPath: string): void {
 async function cancelPackageJsonSelection(command: boolean | string | symbol): Promise<void> {
   if (pIsCancel(command)) {
     pCancel('Operation cancelled.')
-    return await exitAfterFinishingReplay(1)
+    return await exitAfterFinishingReplay('cancelled', 1)
   }
 }
 
@@ -3070,7 +3108,7 @@ async function addCodeStep(orgId: string, apikey: string, appId: string) {
         })
         if (pIsCancel(userProvidedPath)) {
           pCancel('Operation cancelled.')
-          return await exitAfterFinishingReplay(1)
+          return await exitAfterFinishingReplay('cancelled', 1)
         }
         mainFilePath = resolveProjectFilePath(userProvidedPath as string)
         mainFile = readExistingMainFile(mainFilePath)
@@ -3630,7 +3668,7 @@ async function ensureNativePlatformForBuild(platform: PlatformChoice, config: Ca
 
     if (pIsCancel(recoveryChoice) || recoveryChoice === 'exit') {
       pOutro(`Bye 👋\n💡 Run "${addPlatformCommand}", then try again.`)
-      return await exitAfterFinishingReplay()
+      return await exitAfterFinishingReplay('cancelled', 0)
     }
 
     if (recoveryChoice === 'doctor') {
@@ -3663,7 +3701,7 @@ async function handleMissingBuildScript(buildCommand: string, appId: string, pla
   }
 
   pOutro(`Bye 👋\n💡 Add a "${buildCommand}" script to package.json and run the command again`)
-  return await exitAfterFinishingReplay()
+  return await exitAfterFinishingReplay('cancelled', 0)
 }
 
 async function getCompatibleUpdaterVersionForPackage(packageJsonPath: string, pm: PackageManagerInfo): Promise<string> {
@@ -4620,7 +4658,7 @@ async function addCodeChangeStep(orgId: string, apikey: string, appId: string, p
   if (pIsCancel(modificationType)) {
     await markInitSnag(orgId, apikey, 'canceled', undefined, '🤷')
     pOutro(`Bye 👋\n💡 You can resume the onboarding anytime by running the same command again`)
-    return await exitAfterFinishingReplay()
+    return await exitAfterFinishingReplay('cancelled', 0)
   }
 
   if (modificationType === 'auto') {
@@ -4706,7 +4744,7 @@ async function addCodeChangeStep(orgId: string, apikey: string, appId: string, p
   if (pIsCancel(versionChoice)) {
     await markInitSnag(orgId, apikey, 'canceled', undefined, '🤷')
     pOutro(`Bye 👋\n💡 You can resume the onboarding anytime by running the same command again`)
-    return await exitAfterFinishingReplay()
+    return await exitAfterFinishingReplay('cancelled', 0)
   }
 
   let newVersion: string
@@ -4727,7 +4765,7 @@ async function addCodeChangeStep(orgId: string, apikey: string, appId: string, p
     if (pIsCancel(userVersion)) {
       await markInitSnag(orgId, apikey, 'canceled', undefined, '🤷')
       pOutro(`Bye 👋\n💡 You can resume the onboarding anytime by running the same command again`)
-      return await exitAfterFinishingReplay()
+      return await exitAfterFinishingReplay('cancelled', 0)
     }
     newVersion = userVersion as string
   }
@@ -5227,6 +5265,8 @@ async function maybeStarCapgoRepo(includeSkillsRepository = false, repository?: 
 }
 
 export async function initApp(apikeyCommand: string, appId: string, options: SuperOptions) {
+  const analyticsEnabled = options.analytics !== false && !isCliTelemetryDisabled()
+  activeInitTelemetry = createInitTelemetry({ enabled: analyticsEnabled })
   const initialCwd = cwd()
   const packageJsonPath = resolveInitTargetPath(options.packageJson, 'Package JSON path', initialCwd)
   const capacitorConfigPath = getConfigWriteTarget() ?? resolveCapacitorConfigTargetPath(options.capacitorConfig, initialCwd)
@@ -5250,7 +5290,6 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
   globalSupaHost = options.supaHost // honor --supa-host for the support-logs upload
   const pm = getPMAndCommand()
   options.apikey = apikeyCommand
-  const analyticsEnabled = options.analytics !== false && !isCliTelemetryDisabled()
   startInitReplay({
     analyticsEnabled,
     apikey: options.apikey?.trim() || findSavedKeySilent(),
@@ -5287,11 +5326,13 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
 
   const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
   await resolveUserIdFromApiKey(supabase, options.apikey)
+  activeInitTelemetry?.setAuth('', options.apikey)
 
   let resumed = await tryResumeOnboarding(options.apikey, initialTargets, initialCwd, supabase, {
     supaHost: options.supaHost,
     supaAnon: options.supaAnon,
   })
+  await activeInitTelemetry?.recordRunStarted()
   let stepToSkip = resumed?.stepDone ?? 0
 
   await ensureGitRepoCleanBeforeInit(stepToSkip > 0 ? globalAutoTestChange : undefined)
@@ -5351,7 +5392,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
     })
     if (pIsCancel(continueAnyway) || continueAnyway === 'no') {
       pOutro('Bye 👋')
-      return await exitAfterFinishingReplay()
+      return await exitAfterFinishingReplay('cancelled', 0)
     }
   }
   else {
@@ -5372,7 +5413,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
 
       if (pIsCancel(continueWithout) || continueWithout === 'no') {
         pOutro(`Bye 👋\n💡 Run "${capAddIos}" or "${capAddAndroid}", then try again.`)
-        return await exitAfterFinishingReplay()
+        return await exitAfterFinishingReplay('cancelled', 0)
       }
 
       if (continueWithout === 'add-ios' || continueWithout === 'add-android') {
@@ -5391,7 +5432,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
 
           if (pIsCancel(recoveryChoice) || recoveryChoice === 'exit') {
             pOutro(`Bye 👋\n💡 Run "${platformToAdd === 'ios' ? capAddIos : capAddAndroid}", then try again.`)
-            return await exitAfterFinishingReplay()
+            return await exitAfterFinishingReplay('cancelled', 0)
           }
 
           if (recoveryChoice === 'doctor') {
@@ -5432,6 +5473,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
     globalDelta = false
     globalCurrentVersion = undefined
     globalAppId = undefined
+    activeInitTelemetry?.clearScope()
     globalOrgId = undefined
     globalOrgName = undefined
     globalCodeDiff = undefined
@@ -5504,6 +5546,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
 
   const orgId = organization.gid
   globalOrgId = orgId
+  activeInitTelemetry?.setAuth(orgId, options.apikey)
   globalOrgName = organization.name
   globalReportContext = {
     apikey: options.apikey,
@@ -5514,12 +5557,14 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
   if (resumed?.appId) {
     appId = resumed.appId
     globalAppId = appId
+    activeInitTelemetry?.setScope(appId)
   }
 
   const pendingOnboardingSelection = await maybeReusePendingOnboardingApp(organization, options.apikey, appId, supabase, options)
   appId = pendingOnboardingSelection.appId ?? appId
   if (appId)
     globalAppId = appId
+  activeInitTelemetry?.setScope(appId)
   await ensureCapacitorProjectReady(orgId, options.apikey, appId, pendingOnboardingSelection.pendingApp)
   selectedPackageJsonPath = path.resolve(globalPathToPackageJson ?? join(findRoot(cwd()), PACKNAME))
   selectedProjectDir = dirname(selectedPackageJsonPath)
@@ -5552,6 +5597,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
       await checkPrerequisitesStep(orgId, options.apikey, nativePlatforms)
       appId = await addAppStep(organization, options.apikey, appId, options)
       globalAppId = appId
+      activeInitTelemetry?.setScope(appId)
       markStepDone(1)
     }
 
@@ -5675,7 +5721,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
       pLog.error('Could not save a support bundle automatically.')
     pLog.error(`Run ${doctor} for extra diagnostics before contacting support@capgo.app`)
     pLog.error('Manual installation guide: https://capgo.app/docs/getting-started/add-an-app/')
-    return await exitAfterFinishingReplay(1)
+    return await exitAfterFinishingReplay('failed', 1)
   }
 
   renderInitOnboardingComplete(
@@ -5691,7 +5737,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
   pLog.warn('Reason: cap sync puts your local build directly in the native app, which bypasses the Capgo OTA path.')
   pLog.info(`If you have any issue try to use the debug command \`${pm.runner} @capgo/cli@latest app debug\``)
   const didChooseSkills = await maybeInstallCapgoSkills()
-  await maybeStarCapgoRepo(didChooseSkills)
+  await maybeStarCapgoRepo(didChooseSkills).catch(error => pLog.warn(`Cannot offer GitHub support actions: ${formatError(error)}`))
   pOutro(`Bye 👋`)
-  return await exitAfterFinishingReplay()
+  return await exitAfterFinishingReplay('completed', 0)
 }

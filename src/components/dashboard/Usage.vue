@@ -1094,7 +1094,6 @@ onBeforeUnmount(() => {
   <div
     v-if="!noData || isLoading"
     class="grid grid-cols-1 gap-6 mb-6 sm:grid-cols-12"
-    :class="appId ? 'xl:grid-cols-16' : 'xl:grid-cols-12'"
   >
     <UsageCard
       id="mau-stat" :limits="allLimits.mau" :colors="colors.cyan" :accumulated="useBillingPeriod && showCumulative"
@@ -1149,7 +1148,6 @@ onBeforeUnmount(() => {
       :app-id="appId"
       class="col-span-full sm:col-span-6 xl:col-span-4"
     />
-    <DevicesStats v-show="appId" :app-id="appId" :use-billing-period="useBillingPeriod" :accumulated="false" :reload-trigger="reloadTrigger" :force-demo="forceDemo" class="col-span-full sm:col-span-6 xl:col-span-4" />
     <BundleUploadsCard v-show="!appId" :use-billing-period="useBillingPeriod" :accumulated="useBillingPeriod && showCumulative" :reload-trigger="reloadTrigger" :force-demo="forceDemo" class="col-span-full sm:col-span-6 xl:col-span-4" />
     <UpdateStatsCard v-show="!appId" :use-billing-period="useBillingPeriod" :accumulated="useBillingPeriod && showCumulative" :reload-trigger="reloadTrigger" :force-demo="forceDemo" class="col-span-full sm:col-span-6 xl:col-span-4" />
     <DeploymentStatsCard v-show="!appId" :use-billing-period="useBillingPeriod" :accumulated="useBillingPeriod && showCumulative" :reload-trigger="reloadTrigger" :force-demo="forceDemo" class="col-span-full sm:col-span-6 xl:col-span-4" />

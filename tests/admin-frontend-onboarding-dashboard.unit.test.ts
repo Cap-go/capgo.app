@@ -40,8 +40,8 @@ describe('admin frontend onboarding dashboard', () => {
       },
     },
     daily_attempts: [
-      { date: '2026-08-10', v1_attempts: 6, v2_attempts: 3 },
-      { date: '2026-08-09', v1_attempts: 4, v2_attempts: 2 },
+      { date: '2026-08-10', v1_attempts: 6, v2_attempts: 3, v3_attempts: 2 },
+      { date: '2026-08-09', v1_attempts: 4, v2_attempts: 2, v3_attempts: 1 },
     ],
     daily_conversions: {
       intent_to_details: [
@@ -68,12 +68,25 @@ describe('admin frontend onboarding dashboard', () => {
         { key: 'organization', label: 'Organization', reached: 3, of_start_percent: 60, dropoff_percent: 25 },
         { key: 'setup', label: 'Setup reached', reached: 2, of_start_percent: 40, dropoff_percent: 33.3 },
       ],
+      v3: [
+        { key: 'intent', label: 'Intent', reached: 4, of_start_percent: 100, dropoff_percent: 0 },
+        { key: 'details', label: 'App details', reached: 3, of_start_percent: 75, dropoff_percent: 25 },
+        { key: 'organization', label: 'Organization', reached: 2, of_start_percent: 50, dropoff_percent: 1 / 3 * 100 },
+        { key: 'setup', label: 'Setup reached', reached: 1, of_start_percent: 25, dropoff_percent: 50 },
+      ],
     },
     v2_graph: {
       nodes: [
         { key: 'details', count: 4 },
         { key: 'store_opened', count: 3 },
         { key: 'import_clicked', count: 2 },
+      ],
+    },
+    v3_graph: {
+      nodes: [
+        { key: 'details', count: 3 },
+        { key: 'store_opened', count: 2 },
+        { key: 'import_clicked', count: 1 },
       ],
     },
     v2_setup_cli_outcomes: {
@@ -86,8 +99,8 @@ describe('admin frontend onboarding dashboard', () => {
     posthog_connected: true,
   }
 
-  it.concurrent('adapts split daily attempts into ordered v1 and v2 chart series', () => {
-    expect(buildFrontendOnboardingDailySeries(analytics.daily_attempts, 'V1', 'V2')).toEqual([
+  it.concurrent('adapts split daily attempts into ordered version chart series', () => {
+    expect(buildFrontendOnboardingDailySeries(analytics.daily_attempts, 'V1', 'V2', 'V3')).toEqual([
       {
         label: 'V1',
         color: '#a78bfa',
@@ -104,10 +117,19 @@ describe('admin frontend onboarding dashboard', () => {
           { date: '2026-08-09', value: 2 },
         ],
       },
+      {
+        label: 'V3',
+        color: '#10b981',
+        data: [
+          { date: '2026-08-10', value: 2 },
+          { date: '2026-08-09', value: 1 },
+        ],
+      },
     ])
-    expect(buildFrontendOnboardingDailySeries([], 'V1', 'V2')).toEqual([
+    expect(buildFrontendOnboardingDailySeries([], 'V1', 'V2', 'V3')).toEqual([
       { label: 'V1', color: '#a78bfa', data: [] },
       { label: 'V2', color: '#06b6d4', data: [] },
+      { label: 'V3', color: '#10b981', data: [] },
     ])
   })
 
@@ -393,31 +415,32 @@ describe('admin frontend onboarding dashboard', () => {
     expect(source.match(/<AdminDailyConversionChart(?:\s|\/?>)/g)).toHaveLength(3)
     expect(source.match(/<AdminFunnelChart(?:\s|\/?>)/g)).toHaveLength(2)
     expect(source.match(/<AdminOnboardingJourneyGraph(?:\s|\/?>)/g)).toHaveLength(1)
-    expect(source).toContain('<AdminOnboardingJourneyGraph v-else :config="onboardingGraphV2" />')
+    expect(source).toContain('<AdminOnboardingJourneyGraph v-else :config="onboardingGraphV3" />')
     expect(source).toContain('orientation="vertical"')
     expect(source).toContain(':values="setupCliOutcomeValues"')
     expect(source).toContain('visibleAnalytics.value?.v2_setup_cli_outcomes')
     expect(source).toContain('v-if="isLoadingStats" class="grid min-h-72 place-items-center"')
     expect(source).toContain(`t('frontend-onboarding-version-2')`)
-    expect(source).toContain(`t('frontend-onboarding-funnel-v2')`)
+    expect(source).toContain(`t('frontend-onboarding-version-3')`)
+    expect(source).toContain(`t('frontend-onboarding-funnel-v3')`)
     expect(source).toContain(`t('frontend-onboarding-funnel-v1-legacy')`)
     expect(source).not.toContain(`t('frontend-onboarding-demo-data')`)
     expect(source).toContain('buildFrontendOnboardingGraphMetrics')
-    expect(source).toContain('visibleAnalytics.value?.v2_graph.nodes')
-    expect(source).not.toContain('onboardingGraphV2Demo')
+    expect(source).toContain('visibleAnalytics.value?.v3_graph.nodes')
+    expect(source).not.toContain('onboardingGraphV3Demo')
     expect(source).toContain('buildFrontendOnboardingFunnelSummaries')
     expect(template).toContain('summary.conversion_percent')
     expect(template).not.toContain('of_start_percent')
 
-    const v2FunnelIndex = source.indexOf(`t('frontend-onboarding-funnel-v2')`)
+    const v3FunnelIndex = source.indexOf(`t('frontend-onboarding-funnel-v3')`)
     const intentDetailsChartIndex = source.indexOf(`t('frontend-onboarding-daily-intent-to-details')`)
     const detailsOrganizationChartIndex = source.indexOf(`t('frontend-onboarding-daily-details-to-organization')`)
     const organizationSetupChartIndex = source.indexOf(`t('frontend-onboarding-daily-organization-to-setup')`)
-    const graphIndex = source.indexOf(`t('frontend-onboarding-graph-v2')`)
+    const graphIndex = source.indexOf(`t('frontend-onboarding-graph-v3')`)
     const cliOutcomeIndex = source.indexOf(`t('frontend-onboarding-setup-cli-outcomes-v2')`)
     const legacyIndex = source.indexOf(`t('frontend-onboarding-funnel-v1-legacy')`)
-    expect(v2FunnelIndex).toBeLessThan(graphIndex)
-    expect(v2FunnelIndex).toBeLessThan(intentDetailsChartIndex)
+    expect(v3FunnelIndex).toBeLessThan(graphIndex)
+    expect(v3FunnelIndex).toBeLessThan(intentDetailsChartIndex)
     expect(intentDetailsChartIndex).toBeLessThan(detailsOrganizationChartIndex)
     expect(detailsOrganizationChartIndex).toBeLessThan(organizationSetupChartIndex)
     expect(organizationSetupChartIndex).toBeLessThan(graphIndex)
@@ -430,6 +453,23 @@ describe('admin frontend onboarding dashboard', () => {
     expect(source).toContain(`from: 'import_succeeded', toPoint: { x: 2130, y: 455 }, style: 'dotted'`)
     expect(source).toContain(`fromPoint: { x: 2130, y: 90 }, toPoint: { x: 2130, y: 870 }, style: 'dotted', arrow: false`)
     expect(source).toContain(`fromPoint: { x: 2130, y: 540 }, to: 'organization', style: 'primary'`)
+    for (const eventKey of [
+      'onboarding_organization_import_opened',
+      'onboarding_organization_import_submitted',
+      'onboarding_organization_import_succeeded',
+      'onboarding_organization_import_failed',
+      'onboarding_organization_invite_viewed',
+      'onboarding_organization_invite_opened',
+      'onboarding_organization_invite_succeeded',
+      'onboarding_organization_invite_continued',
+      'onboarding_technical_invite_opened',
+      'onboarding_technical_invite_succeeded',
+    ]) {
+      expect(source).toContain(`eventKey: '${eventKey}'`)
+    }
+    expect(source).toContain(`from: 'organization', to: 'organization_import_opened', style: 'branch'`)
+    expect(source).toContain(`from: 'organization', to: 'organization_invite_viewed', style: 'branch'`)
+    expect(source).toContain(`from: 'setup', to: 'technical_invite_opened', style: 'branch'`)
 
     const statsCard = await readFile(new URL('../src/components/admin/AdminStatsCard.vue', import.meta.url), 'utf8')
     const funnelChart = await readFile(new URL('../src/components/admin/AdminFunnelChart.vue', import.meta.url), 'utf8')
@@ -480,6 +520,7 @@ describe('admin frontend onboarding dashboard', () => {
     expect(messages['frontend-onboarding']).toBe('Onboarding')
     expect(messages['frontend-onboarding-version-1']).toBe('Onboarding v1')
     expect(messages['frontend-onboarding-version-2']).toBe('Onboarding v2')
+    expect(messages['frontend-onboarding-version-3']).toBe('Onboarding v3')
     expect(messages['frontend-onboarding-attempts']).toBe('Onboarding attempts')
     expect(messages['frontend-onboarding-attempts-subtitle']).toBe('Unique onboarding attempts')
     expect(messages['frontend-onboarding-completed']).toBe('Onboarding completed')
@@ -489,8 +530,8 @@ describe('admin frontend onboarding dashboard', () => {
     expect(messages['frontend-onboarding-largest-dropoff']).toBe('Largest drop-off')
     expect(messages['frontend-onboarding-daily-attempts']).toBe('Daily onboarding attempts')
     expect(messages['frontend-onboarding-daily-intent-to-details']).toBe('Daily Intent → App details conversion')
-    expect(messages['frontend-onboarding-daily-details-to-organization']).toBe('Daily App details → Organization conversion (v2)')
-    expect(messages['frontend-onboarding-daily-organization-to-setup']).toBe('Daily Organization → Setup reached conversion (v2)')
+    expect(messages['frontend-onboarding-daily-details-to-organization']).toBe('Daily App details → Organization conversion (v3)')
+    expect(messages['frontend-onboarding-daily-organization-to-setup']).toBe('Daily Organization → Setup reached conversion (v3)')
     expect(messages['frontend-onboarding-daily-conversion']).toBe('Conversion')
     expect(messages['frontend-onboarding-daily-conversion-attempts']).toBe('attempts')
     expect(messages['frontend-onboarding-funnel-v2']).toBe('Onboarding funnel (v2)')
@@ -507,6 +548,16 @@ describe('admin frontend onboarding dashboard', () => {
     expect(messages['frontend-onboarding-graph-stage-organization-details']).toBe('Organization details')
     expect(messages['frontend-onboarding-graph-app-name-entered']).toBe('App name entered')
     expect(messages['frontend-onboarding-graph-closed-without-selection']).toBe('Closed without selection')
+    expect(messages['frontend-onboarding-graph-organization-import-opened']).toBe('Organization import opened')
+    expect(messages['frontend-onboarding-graph-organization-import-submitted']).toBe('Organization import submitted')
+    expect(messages['frontend-onboarding-graph-organization-import-succeeded']).toBe('Organization import succeeded')
+    expect(messages['frontend-onboarding-graph-organization-import-failed']).toBe('Organization import failed')
+    expect(messages['frontend-onboarding-graph-organization-invite-viewed']).toBe('Invitation step viewed')
+    expect(messages['frontend-onboarding-graph-organization-invite-opened']).toBe('Invitation opened')
+    expect(messages['frontend-onboarding-graph-organization-invite-succeeded']).toBe('Invitation succeeded')
+    expect(messages['frontend-onboarding-graph-organization-invite-continued']).toBe('Invitation step continued')
+    expect(messages['frontend-onboarding-graph-technical-invite-opened']).toBe('Technical invite opened')
+    expect(messages['frontend-onboarding-graph-technical-invite-succeeded']).toBe('Technical invite succeeded')
     expect(messages['frontend-onboarding-graph-percent-of-level']).toBe('{percent}% of {level}')
     expect(messages['frontend-onboarding-graph-percent-of-total']).toBe('{percent}% of total')
     expect(messages['frontend-onboarding-graph-percent-of-previous']).toBe('{percent}% of previous')

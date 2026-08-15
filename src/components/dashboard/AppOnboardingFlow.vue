@@ -5,9 +5,12 @@ import type {
   OnboardingDetailsEvent,
   OnboardingDetailsEventProperties,
   OnboardingIntent,
+  OnboardingInteractionEvent,
+  OnboardingInteractionProperties,
   OnboardingStepCompletionProperties,
 } from '~/utils/onboardingProgressAnalytics'
 import type { UserOnboardingStatus } from '~/utils/userOnboardingProgress'
+import mime from 'mime'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
@@ -16,9 +19,12 @@ import IconCopy from '~icons/ion/copy-outline'
 import IconAppWindow from '~icons/lucide/app-window'
 import IconArrowRight from '~icons/lucide/arrow-right'
 import IconCheck from '~icons/lucide/check'
+import IconChevronDown from '~icons/lucide/chevron-down'
+import IconChevronUp from '~icons/lucide/chevron-up'
 import IconCode from '~icons/lucide/code-2'
 import IconCompass from '~icons/lucide/compass'
 import IconGlobe from '~icons/lucide/globe-2'
+import IconInfo from '~icons/lucide/info'
 import IconLayers from '~icons/lucide/layers'
 import IconLoader from '~icons/lucide/loader-2'
 import IconPackage from '~icons/lucide/package'
@@ -27,12 +33,14 @@ import IconSmartphone from '~icons/lucide/smartphone'
 import IconSparkles from '~icons/lucide/sparkles'
 import IconStore from '~icons/lucide/store'
 import IconTerminal from '~icons/lucide/terminal'
+import IconTrash from '~icons/lucide/trash-2'
 import IconUsers from '~icons/lucide/users-round'
 import { createDefaultApiKey, findUsablePlainApiKey } from '~/services/apikeys'
 import {
   parseAppOnboarding,
 } from '~/services/appOnboarding'
 import { getCapgoApiErrorCode, invokeCapgoApi } from '~/services/capgoApi'
+import { uploadOrgLogoFile } from '~/services/photos'
 import { pushEvent } from '~/services/posthog'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
 import { getLocalConfig, isLocal, useSupabase } from '~/services/supabase'
@@ -51,6 +59,7 @@ import {
   clearOnboardingAppDraft,
   loadOnboardingAppDraft,
 } from '~/utils/onboardingAppDraft'
+import { onboardingPrimaryButtonClass, onboardingSecondaryButtonClass } from '~/utils/onboardingButtonClasses'
 import { createOnboardingDetailsFieldDebouncer, createOnboardingProgressTracker, createOnboardingTelemetryIdentity } from '~/utils/onboardingProgressAnalytics'
 import { allowOnboardingDashboardExploration, ONBOARDING_DASHBOARD_EXPLORED_EVENT } from '~/utils/onboardingRedirect'
 import { slugifyOnboardingSegment } from '~/utils/onboardingSlug'
@@ -62,6 +71,8 @@ import {
 } from '~/utils/userOnboardingProgress'
 import AppOnboardingCliSteps from './AppOnboardingCliSteps.vue'
 import AppOnboardingIconInput from './AppOnboardingIconInput.vue'
+import OrganizationOnboardingInvite from './OrganizationOnboardingInvite.vue'
+import TechnicalTeammateInviteCard from './TechnicalTeammateInviteCard.vue'
 
 const props = defineProps<{
   onboarding: boolean
@@ -94,6 +105,14 @@ interface UserCountStop {
   value: number
   label: string
   planName: string
+  startingOut?: boolean
+}
+
+interface OrganizationWebsitePreview {
+  hostname: string
+  icon: string | null
+  name: string
+  website: string
 }
 
 const isLoading = ref(true)
@@ -129,6 +148,11 @@ const selectedIntent = ref<OnboardingIntent | null>(null)
 const orgNameInput = ref('')
 const hasEditedOrgName = ref(false)
 const estimatedUsersIndex = ref<number | null>(null)
+const isOrganizationImportOpen = ref(false)
+const isImportingOrganizationWebsite = ref(false)
+const organizationWebsiteInput = ref('')
+const websitePreview = ref<OrganizationWebsitePreview | null>(null)
+const showOrganizationInvite = ref(false)
 
 const intentOptions = [
   { value: 'ota', icon: IconRefresh },
@@ -143,6 +167,12 @@ const fallbackUserCountStops: UserCountStop[] = [
   { value: 100000, label: '100K', planName: 'Team' },
   { value: 1000000, label: '1M+', planName: 'Enterprise' },
 ]
+const startingOutUserCountStop: UserCountStop = {
+  value: 0,
+  label: '0',
+  planName: 'Solo',
+  startingOut: true,
+}
 const planNameOrder = ['Solo', 'Maker', 'Team', 'Enterprise'] as const
 
 const localCommand = isLocal(config.supaHost) ? ` --supa-host ${config.supaHost} --supa-anon ${config.supaKey}` : ''
@@ -289,15 +319,16 @@ const userCountStops = computed<UserCountStop[]>(() => {
       return []
     return [{ value: mau, label: formatUserCount(mau, plan.name === 'Enterprise'), planName: plan.name }]
   })
-  return planStops.length === planNameOrder.length ? planStops : fallbackUserCountStops
+  return [
+    startingOutUserCountStop,
+    ...(planStops.length === planNameOrder.length ? planStops : fallbackUserCountStops),
+  ]
 })
 const selectedUserCountStop = computed<UserCountStop | null>(() => estimatedUsersIndex.value === null ? null : userCountStops.value[Math.min(estimatedUsersIndex.value, userCountStops.value.length - 1)] ?? null)
 const canCreatePreOrgOrganization = computed(() => {
-  if (!orgNameInput.value.trim())
+  if (!orgNameInput.value.trim() || isImportingOrganizationWebsite.value)
     return false
-  if (existingApp.value === true)
-    return selectedUserCountStop.value !== null
-  return true
+  return selectedUserCountStop.value !== null
 })
 const setupTitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onboarding-setup-builder-title') : t('unified-onboarding-setup-ota-title'))
 const setupSubtitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onboarding-setup-builder-subtitle') : t('unified-onboarding-setup-ota-subtitle'))
@@ -311,12 +342,19 @@ let onboardingMountAborted = false
 let onboardingInitialPersistInFlight = false
 let onboardingPersistenceBlocked = false
 
-function trackV2DetailsEvent(name: OnboardingDetailsEvent, details: OnboardingDetailsEventProperties = {}) {
+function trackDetailsEvent(name: OnboardingDetailsEvent, details: OnboardingDetailsEventProperties = {}) {
   if (props.preOrg)
     progressTracker?.trackDetailsEvent(name, details)
 }
 
-const detailsFieldTracker = createOnboardingDetailsFieldDebouncer(trackV2DetailsEvent)
+function trackOrganizationEvent(
+  name: OnboardingInteractionEvent,
+  details: OnboardingInteractionProperties = {},
+) {
+  progressTracker?.trackStepEvent(name, 'organization', details)
+}
+
+const detailsFieldTracker = createOnboardingDetailsFieldDebouncer(trackDetailsEvent)
 
 function initializeProgressTracking(resumed: boolean) {
   const trackedSteps = appOnboardingSteps.value.map(step => step.id)
@@ -574,11 +612,11 @@ function whiteCardToggleButtonClass(active: boolean) {
 }
 
 function whiteCardSecondaryButtonClass() {
-  return 'border-slate-300 bg-white text-slate-700 hover:border-slate-400 hover:bg-slate-50 disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400 disabled:opacity-100 dark:border-white/20 dark:bg-slate-950/90 dark:text-slate-100 dark:hover:border-white/30 dark:hover:bg-slate-900 dark:disabled:border-white/15 dark:disabled:bg-slate-900 dark:disabled:text-slate-500'
+  return onboardingSecondaryButtonClass
 }
 
 function whiteCardPrimaryButtonClass() {
-  return 'border-primary-500 bg-primary-500 text-white hover:border-primary-500 hover:bg-primary-500/90 disabled:border-slate-300 disabled:bg-slate-300 disabled:text-white disabled:opacity-100 dark:border-primary-500/90 dark:bg-primary-500 dark:hover:border-primary-500 dark:hover:bg-primary-500/90 dark:disabled:border-white/15 dark:disabled:bg-slate-800 dark:disabled:text-slate-500'
+  return onboardingPrimaryButtonClass
 }
 
 function formatUserCount(value: number, plus = false) {
@@ -589,6 +627,8 @@ function formatUserCount(value: number, plus = false) {
   return String(value)
 }
 function getUserCountStopTitle(stop: UserCountStop) {
+  if (stop.startingOut)
+    return t('organization-onboarding-starting-out')
   if (stop.value >= 1_000_000)
     return t('organization-onboarding-active-users-plus', { count: stop.label })
   return t('organization-onboarding-active-users-up-to', { count: stop.label })
@@ -653,12 +693,12 @@ function resetStoreImportState() {
 
 function togglePreOrgStoreImport() {
   if (existingAppSetup.value === 'import') {
-    trackV2DetailsEvent('onboarding_store_import_hidden')
+    trackDetailsEvent('onboarding_store_import_hidden')
     existingAppSetup.value = 'manual'
     return
   }
 
-  trackV2DetailsEvent('onboarding_store_import_shown')
+  trackDetailsEvent('onboarding_store_import_shown')
   existingAppSetup.value = 'import'
 }
 
@@ -766,7 +806,7 @@ async function importStoreMetadata() {
   if (!requestedUrl || existingAppSetup.value !== 'import')
     return
 
-  trackV2DetailsEvent('onboarding_store_import_submitted')
+  trackDetailsEvent('onboarding_store_import_submitted')
   const requestedRun = ++storeImportRun
   isImportingStore.value = true
   try {
@@ -801,19 +841,104 @@ async function importStoreMetadata() {
     if (props.preOrg)
       existingApp.value = true
 
-    trackV2DetailsEvent('onboarding_store_import_succeeded')
+    trackDetailsEvent('onboarding_store_import_succeeded')
   }
   catch (error) {
     if (requestedRun !== storeImportRun || existingAppSetup.value !== 'import' || storeUrl.value.trim() !== requestedUrl)
       return
 
     console.error('Cannot import store metadata', error)
-    trackV2DetailsEvent('onboarding_store_import_failed')
+    trackDetailsEvent('onboarding_store_import_failed')
     toast.error(t('app-onboarding-toast-store-metadata-error'))
   }
   finally {
     if (requestedRun === storeImportRun)
       isImportingStore.value = false
+  }
+}
+
+function toggleOrganizationWebsiteImport() {
+  isOrganizationImportOpen.value = !isOrganizationImportOpen.value
+  if (isOrganizationImportOpen.value)
+    trackOrganizationEvent('onboarding_organization_import_opened')
+}
+
+async function importOrganizationWebsite() {
+  let website = organizationWebsiteInput.value.trim()
+  if (!website) {
+    toast.error(t('organization-onboarding-website-invalid'))
+    return
+  }
+
+  try {
+    const normalizedWebsite = /^https?:\/\//i.test(website) ? website : `https://${website}`
+    website = new URL(normalizedWebsite).toString()
+  }
+  catch {
+    toast.error(t('organization-onboarding-website-invalid'))
+    return
+  }
+
+  isImportingOrganizationWebsite.value = true
+  trackOrganizationEvent('onboarding_organization_import_submitted')
+  try {
+    const { data, error } = await invokeCapgoApi('private/website_preview', {
+      body: { website },
+    })
+    if (error || !data) {
+      console.error('Failed to import organization website', error)
+      toast.error(t('organization-onboarding-website-fetch-failed'))
+      trackOrganizationEvent('onboarding_organization_import_failed')
+      return
+    }
+
+    websitePreview.value = data as OrganizationWebsitePreview
+    if (websitePreview.value.name) {
+      orgNameInput.value = websitePreview.value.name
+      hasEditedOrgName.value = true
+    }
+    trackOrganizationEvent('onboarding_organization_import_succeeded')
+  }
+  catch (error) {
+    console.error('Failed to import organization website', error)
+    toast.error(t('organization-onboarding-website-fetch-failed'))
+    trackOrganizationEvent('onboarding_organization_import_failed')
+  }
+  finally {
+    isImportingOrganizationWebsite.value = false
+  }
+}
+
+function deleteImportedOrganizationDetails() {
+  websitePreview.value = null
+  organizationWebsiteInput.value = ''
+  isOrganizationImportOpen.value = true
+}
+
+async function uploadImportedOrganizationLogo(orgId: string) {
+  const icon = websitePreview.value?.icon
+  if (!icon)
+    return
+
+  try {
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), STORE_ICON_FETCH_TIMEOUT_MS)
+    let response: Response
+    try {
+      response = await fetch(icon, { signal: controller.signal })
+    }
+    finally {
+      clearTimeout(timeoutId)
+    }
+    const contentType = response.headers.get('content-type')?.split(';')[0]?.trim() ?? ''
+    if (!response.ok || !contentType.startsWith('image/'))
+      throw new Error('Imported organization logo is not an image')
+    const extension = mime.getExtension(contentType) ?? 'png'
+    await uploadOrgLogoFile(orgId, await response.blob(), `${websitePreview.value?.hostname || 'website-logo'}.${extension}`)
+  }
+  catch (error) {
+    console.error('Failed to upload imported organization logo', error)
+    toast.error(t('organization-onboarding-imported-logo-failed'))
   }
 }
 
@@ -831,19 +956,19 @@ function onSelectIconFormKit(value: unknown) {
   localIconPreview.value = file ? URL.createObjectURL(file) : ''
   isResumeIconLoading.value = false
   if (file)
-    trackV2DetailsEvent('onboarding_app_icon_picked', { icon_source: 'file' })
+    trackDetailsEvent('onboarding_app_icon_picked', { icon_source: 'file' })
 }
 
 function onIconPickerOpened() {
-  trackV2DetailsEvent('onboarding_app_icon_picker_opened')
+  trackDetailsEvent('onboarding_app_icon_picker_opened')
 }
 
 function onIconPickerOpenFailed() {
-  trackV2DetailsEvent('onboarding_app_icon_picker_open_failed')
+  trackDetailsEvent('onboarding_app_icon_picker_open_failed')
 }
 
 function onIconPickerClosedWithoutSelection() {
-  trackV2DetailsEvent('onboarding_app_icon_picker_closed_without_selection')
+  trackDetailsEvent('onboarding_app_icon_picker_closed_without_selection')
 }
 
 function onAppNameInput(event: Event) {
@@ -862,7 +987,7 @@ function onStoreUrlInput(event: Event) {
 }
 
 function openAppIdHelp() {
-  trackV2DetailsEvent('onboarding_app_id_help_opened')
+  trackDetailsEvent('onboarding_app_id_help_opened')
   dialogStore.openDialog({
     title: t('app-onboarding-v2-appid-dialog-title'),
     description: t('app-onboarding-v2-appid-dialog-description'),
@@ -919,7 +1044,7 @@ async function uploadIcon(appId: string, iconSourceUrl?: string) {
 
   if (!fileToUpload) {
     if (iconSourceUrl)
-      trackV2DetailsEvent('onboarding_app_icon_upload_failed', { icon_source: 'store' })
+      trackDetailsEvent('onboarding_app_icon_upload_failed', { icon_source: 'store' })
     return
   }
 
@@ -935,7 +1060,7 @@ async function uploadIcon(appId: string, iconSourceUrl?: string) {
 
   if (uploadError) {
     console.error('Cannot upload app icon', uploadError)
-    trackV2DetailsEvent('onboarding_app_icon_upload_failed', { icon_source: iconSource })
+    trackDetailsEvent('onboarding_app_icon_upload_failed', { icon_source: iconSource })
     return
   }
 
@@ -946,11 +1071,11 @@ async function uploadIcon(appId: string, iconSourceUrl?: string) {
 
   if (appUpdateError) {
     console.error('Cannot save app icon path', appUpdateError)
-    trackV2DetailsEvent('onboarding_app_icon_upload_failed', { icon_source: iconSource })
+    trackDetailsEvent('onboarding_app_icon_upload_failed', { icon_source: iconSource })
     return
   }
 
-  trackV2DetailsEvent('onboarding_app_icon_uploaded', { icon_source: iconSource })
+  trackDetailsEvent('onboarding_app_icon_uploaded', { icon_source: iconSource })
 }
 
 function ensureValidAppId(): boolean {
@@ -1050,14 +1175,13 @@ async function createOrganizationAndApp() {
     return
   }
 
-  const estimatedMau = existingApp.value === true
-    ? selectedUserCountStop.value?.value
-    : userCountStops.value[0]?.value
-
-  if (!estimatedMau) {
+  const selectedStop = selectedUserCountStop.value
+  if (!selectedStop) {
     toast.error(t('organization-onboarding-user-scale-required'))
     return
   }
+  const estimatedMau = selectedStop.value
+  const shouldInvite = selectedStop.planName !== 'Solo'
 
   isSubmitting.value = true
   try {
@@ -1068,6 +1192,8 @@ async function createOrganizationAndApp() {
         email: main.auth?.email ?? '',
         estimatedMau,
         intent: selectedIntent.value,
+        startingOut: selectedStop.startingOut === true,
+        website: websitePreview.value?.website,
       },
     })
 
@@ -1102,10 +1228,16 @@ async function createOrganizationAndApp() {
     }
 
     clearOnboardingAppDraft(onboardingUserId.value)
-    await createAppRecord({ nextStep: 'setup' })
+    await createAppRecord({ nextStep: shouldInvite ? 'organization' : 'setup' })
 
     if (!createdApp.value)
       return
+
+    await uploadImportedOrganizationLogo(data.id)
+    showOrganizationInvite.value = shouldInvite
+    if (shouldInvite)
+      trackOrganizationEvent('onboarding_organization_invite_viewed')
+
     removeBeforeUnloadWarning()
 
     try {
@@ -1119,6 +1251,33 @@ async function createOrganizationAndApp() {
   finally {
     isSubmitting.value = false
   }
+}
+
+function onOrganizationInviteOpened() {
+  trackOrganizationEvent('onboarding_organization_invite_opened')
+}
+
+function onOrganizationInviteSucceeded() {
+  trackOrganizationEvent('onboarding_organization_invite_succeeded')
+}
+
+function continueFromOrganizationInvite(invitationCount: number) {
+  if (!createdApp.value)
+    return
+
+  trackOrganizationEvent('onboarding_organization_invite_continued', {
+    invitation_count: invitationCount,
+  })
+  showOrganizationInvite.value = false
+  completeAndViewStep('setup', { appId: createdApp.value.app_id })
+}
+
+function onTechnicalInviteOpened() {
+  progressTracker?.trackStepEvent('onboarding_technical_invite_opened', 'setup')
+}
+
+function onTechnicalInviteSucceeded() {
+  progressTracker?.trackStepEvent('onboarding_technical_invite_succeeded', 'setup')
 }
 
 async function createAppRecord(options?: { nextStep?: StandardFlowStep | PreOrgFlowStep }) {
@@ -1486,7 +1645,7 @@ watch(existingApp, (value) => {
   schedulePersistOnboardingProgress()
   if (props.preOrg) {
     if (value === false)
-      estimatedUsersIndex.value = 0
+      estimatedUsersIndex.value = 1
     appIdSuggestions.value = []
     appIdFeedback.value = ''
     return
@@ -1497,7 +1656,7 @@ watch(existingApp, (value) => {
     resetStoreImportState()
   }
   if (value === false)
-    estimatedUsersIndex.value = 0
+    estimatedUsersIndex.value = 1
   appIdSuggestions.value = []
   appIdFeedback.value = ''
 })
@@ -1811,24 +1970,27 @@ defineExpose({
                   </div>
                 </div>
 
-                <div v-if="props.preOrg" class="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-white/15 dark:bg-slate-950/60">
+                <div v-if="props.preOrg" class="overflow-hidden rounded-xl border border-slate-200 bg-slate-50 dark:border-white/15 dark:bg-slate-950/60">
                   <button
                     type="button"
-                    class="d-btn min-h-10"
-                    :class="whiteCardSecondaryButtonClass()"
+                    class="flex min-h-12 w-full items-center justify-between gap-3 px-4 py-3 text-left text-sm font-semibold text-slate-800 transition hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-500 dark:text-slate-200 dark:hover:bg-slate-900"
                     :aria-expanded="existingAppSetup === 'import'"
                     data-test="app-onboarding-toggle-store-import"
                     @click="togglePreOrgStoreImport()"
                   >
-                    <IconStore class="h-4 w-4" />
-                    <span>{{ t('app-onboarding-v2-store-import-toggle') }}</span>
+                    <span class="flex items-center gap-2">
+                      <IconStore class="h-4 w-4" />
+                      <span>{{ t('app-onboarding-v2-store-import-toggle') }}</span>
+                    </span>
+                    <IconChevronUp v-if="existingAppSetup === 'import'" class="h-4 w-4 shrink-0 text-slate-500" aria-hidden="true" />
+                    <IconChevronDown v-else class="h-4 w-4 shrink-0 text-slate-500" aria-hidden="true" />
                   </button>
 
-                  <div v-if="existingAppSetup === 'import'" class="mt-4 border-t border-slate-200 pt-4 dark:border-white/15">
+                  <div v-if="existingAppSetup === 'import'" class="border-t border-slate-200 p-4 dark:border-white/15">
                     <label for="app-onboarding-v2-store-url" class="text-sm font-medium text-slate-800 dark:text-slate-200">
                       {{ t('app-onboarding-store-link-label') }}
                     </label>
-                    <div class="mt-2 flex flex-col gap-3 sm:flex-row">
+                    <div class="mt-2 space-y-3">
                       <input
                         id="app-onboarding-v2-store-url"
                         v-model="storeUrl"
@@ -1837,7 +1999,7 @@ defineExpose({
                         type="url"
                         @input="onStoreUrlInput"
                       >
-                      <button type="button" class="d-btn min-h-12 shrink-0" :class="whiteCardPrimaryButtonClass()" :disabled="isImportingStore || !storeUrl" @click="importStoreMetadata()">
+                      <button type="button" class="d-btn min-h-12 w-full sm:w-auto" :class="whiteCardPrimaryButtonClass()" :disabled="isImportingStore || !storeUrl" @click="importStoreMetadata()">
                         <IconLoader v-if="isImportingStore" class="h-4 w-4 animate-spin" />
                         <IconSparkles v-else class="h-4 w-4" />
                         <span>{{ t('app-onboarding-store-import-button') }}</span>
@@ -1941,114 +2103,225 @@ defineExpose({
           </div>
         </div>
 
-        <div v-else-if="props.preOrg && flowStep === 'organization'" class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900/95">
-          <div class="space-y-6">
-            <div>
-              <p class="text-sm font-semibold text-primary-500 dark:text-slate-300">
-                {{ t('unified-onboarding-step-organization') }}
-              </p>
-              <h2 class="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
-                {{ t('unified-onboarding-organization-title') }}
-              </h2>
-              <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                {{ t('unified-onboarding-organization-helper') }}
-              </p>
-            </div>
+        <template v-else-if="props.preOrg && flowStep === 'organization'">
+          <OrganizationOnboardingInvite
+            v-if="showOrganizationInvite && createdApp && currentOrg"
+            analytics-channel="onboarding-v3"
+            :continue-label="t('continue')"
+            :organization-id="currentOrg.gid"
+            :organization-name="currentOrg.name"
+            :tracking-version="3"
+            @continue="continueFromOrganizationInvite"
+            @invite-opened="onOrganizationInviteOpened"
+            @invite-succeeded="onOrganizationInviteSucceeded"
+          />
+          <div v-else class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900/95">
+            <div class="space-y-6">
+              <div>
+                <p class="text-sm font-semibold text-primary-500 dark:text-slate-300">
+                  {{ t('unified-onboarding-step-organization') }}
+                </p>
+                <h2 class="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
+                  {{ t('unified-onboarding-organization-title') }}
+                </h2>
+                <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                  {{ t('unified-onboarding-organization-helper') }}
+                </p>
+              </div>
 
-            <div>
-              <label for="onboarding-org-name-input" class="text-sm font-medium text-slate-800 dark:text-slate-200">
-                {{ t('organization-name') }}
-              </label>
-              <input
-                id="onboarding-org-name-input"
-                v-model="orgNameInput"
-                type="text"
-                :placeholder="t('organization-name')"
-                data-test="onboarding-org-name"
-                autocomplete="organization"
-                autofocus
-                class="d-input mt-2 min-h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-base text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/10 sm:text-sm dark:border-white/20 dark:bg-slate-950/90 dark:text-white dark:placeholder:text-slate-500 dark:focus:border-primary-500 dark:focus:ring-primary-500/30"
-                @input="hasEditedOrgName = true"
-              >
-            </div>
-
-            <div v-if="existingApp === true">
-              <p id="estimated-users-label" class="flex items-center gap-2 text-sm font-medium text-slate-800 dark:text-slate-200">
-                <IconUsers class="h-4 w-4 text-primary-500" />
-                {{ t('organization-onboarding-existing-users-label') }}
-              </p>
-              <p id="estimated-users-help" class="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
-                {{ t('organization-onboarding-existing-users-helper') }}
-              </p>
-
-              <div
-                id="estimated-users"
-                class="mt-3 grid gap-2 sm:grid-cols-2"
-                role="radiogroup"
-                aria-labelledby="estimated-users-label"
-                aria-describedby="estimated-users-help"
-                data-test="onboarding-estimated-users"
-              >
-                <label
-                  v-for="(stop, index) in userCountStops"
-                  :key="`${stop.planName}-${stop.value}`"
-                  class="group cursor-pointer"
-                  :data-value="stop.value"
-                  data-test="onboarding-estimated-users-option"
-                >
-                  <input
-                    type="radio"
-                    name="estimated-users"
-                    class="peer sr-only"
-                    :value="index"
-                    :checked="isUserCountStopSelected(index)"
-                    @change="selectUserCountStop(index)"
-                  >
-                  <span
-                    class="flex min-h-16 items-center justify-between gap-3 rounded-xl border p-3 text-left transition peer-focus-visible:outline-none peer-focus-visible:ring-2 peer-focus-visible:ring-primary-500 peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-white dark:peer-focus-visible:ring-offset-slate-900"
-                    :class="isUserCountStopSelected(index)
-                      ? 'border-primary-500 bg-slate-100 text-slate-950 ring-2 ring-primary-500/15 dark:border-primary-500/80 dark:bg-primary-500/25 dark:text-white dark:ring-primary-500/30'
-                      : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50 dark:border-white/15 dark:bg-slate-950/90 dark:text-slate-200 dark:hover:border-white/30 dark:hover:bg-slate-900'"
-                  >
-                    <span class="min-w-0">
-                      <span class="block text-sm font-semibold">
-                        {{ getUserCountStopTitle(stop) }}
-                      </span>
-                      <span class="mt-1 block text-xs text-slate-500 dark:text-slate-400">
-                        {{ t('organization-onboarding-plan-match') }}: {{ stop.planName }}
-                      </span>
-                    </span>
-                    <span
-                      class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border transition"
-                      :class="isUserCountStopSelected(index) ? 'border-primary-500 bg-primary-500 text-white' : 'border-slate-300 bg-white text-transparent group-hover:border-slate-400 dark:border-white/20 dark:bg-slate-900'"
-                      aria-hidden="true"
-                    >
-                      <IconCheck class="h-3.5 w-3.5" />
-                    </span>
-                  </span>
+              <div>
+                <label for="onboarding-org-name-input" class="text-sm font-medium text-slate-800 dark:text-slate-200">
+                  {{ t('organization-name') }}
                 </label>
+                <input
+                  id="onboarding-org-name-input"
+                  v-model="orgNameInput"
+                  type="text"
+                  :placeholder="t('organization-name')"
+                  data-test="onboarding-org-name"
+                  autocomplete="organization"
+                  autofocus
+                  class="d-input mt-2 min-h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-base text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/10 sm:text-sm dark:border-white/20 dark:bg-slate-950/90 dark:text-white dark:placeholder:text-slate-500 dark:focus:border-primary-500 dark:focus:ring-primary-500/30"
+                  @input="hasEditedOrgName = true"
+                >
+              </div>
+
+              <div class="overflow-hidden rounded-xl border border-slate-200 bg-slate-50 dark:border-white/15 dark:bg-slate-950/90">
+                <button
+                  type="button"
+                  class="flex min-h-12 w-full items-center justify-between gap-3 px-4 py-3 text-left text-sm font-semibold text-slate-800 transition hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-500 dark:text-slate-200 dark:hover:bg-slate-900"
+                  data-test="onboarding-toggle-organization-import"
+                  :aria-expanded="isOrganizationImportOpen"
+                  @click="toggleOrganizationWebsiteImport"
+                >
+                  <span class="flex items-center gap-2">
+                    <IconGlobe class="h-4 w-4" />
+                    {{ t('organization-onboarding-import-website') }}
+                  </span>
+                  <IconChevronUp v-if="isOrganizationImportOpen" class="h-4 w-4 shrink-0 text-slate-500" aria-hidden="true" />
+                  <IconChevronDown v-else class="h-4 w-4 shrink-0 text-slate-500" aria-hidden="true" />
+                </button>
+
+                <div v-if="isOrganizationImportOpen" class="space-y-4 border-t border-slate-200 p-4 dark:border-white/15">
+                  <div>
+                    <div class="flex items-center gap-2">
+                      <label for="onboarding-organization-website" class="text-sm font-medium text-slate-800 dark:text-slate-200">
+                        {{ t('organization-onboarding-website-label') }}
+                      </label>
+                      <span
+                        class="group relative inline-flex rounded-full text-slate-400 outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-slate-500"
+                        tabindex="0"
+                        aria-describedby="onboarding-organization-website-help"
+                      >
+                        <IconInfo class="h-4 w-4" aria-hidden="true" />
+                        <span
+                          id="onboarding-organization-website-help"
+                          role="tooltip"
+                          class="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 w-64 -translate-x-1/2 rounded-lg bg-slate-950 px-3 py-2 text-xs font-normal leading-5 text-white opacity-0 shadow-lg transition-opacity group-hover:opacity-100 group-focus:opacity-100 dark:bg-slate-800"
+                        >
+                          {{ t('organization-onboarding-website-help') }}
+                        </span>
+                      </span>
+                    </div>
+                    <input
+                      id="onboarding-organization-website"
+                      v-model="organizationWebsiteInput"
+                      type="url"
+                      placeholder="https://capgo.app"
+                      data-test="onboarding-organization-website"
+                      :readonly="!!websitePreview"
+                      class="d-input mt-2 min-h-11 w-full rounded-xl border border-slate-300 px-3 text-base text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/10 read-only:cursor-not-allowed read-only:bg-slate-100 read-only:text-slate-600 sm:text-sm dark:border-white/20 dark:bg-slate-950/90 dark:text-white dark:placeholder:text-slate-500 dark:focus:border-primary-500 dark:focus:ring-primary-500/30 dark:read-only:bg-slate-900 dark:read-only:text-slate-300"
+                      @input="websitePreview = null"
+                    >
+                  </div>
+
+                  <template v-if="websitePreview">
+                    <p class="flex items-center gap-2 text-sm font-medium text-emerald-600 dark:text-emerald-300" aria-live="polite">
+                      <IconCheck class="h-4 w-4 shrink-0" />
+                      {{ t('organization-onboarding-website-import-success') }}
+                    </p>
+
+                    <div>
+                      <p class="text-sm font-medium text-slate-800 dark:text-slate-200">
+                        {{ t('organization-onboarding-imported-logo-label') }}
+                      </p>
+                      <img
+                        v-if="websitePreview.icon"
+                        :src="websitePreview.icon"
+                        :alt="t('organization-onboarding-imported-logo-preview-alt')"
+                        class="mt-2 h-16 w-16 rounded-xl border border-slate-200 bg-white object-cover dark:border-white/15 dark:bg-slate-900"
+                      >
+                      <p v-else class="mt-2 text-sm text-slate-500 dark:text-slate-400">
+                        {{ t('organization-onboarding-imported-logo-unavailable') }}
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      class="d-btn min-h-10 border-red-200 bg-white text-red-700 hover:border-red-300 hover:bg-red-50 dark:border-red-500/30 dark:bg-slate-950 dark:text-red-300 dark:hover:bg-red-500/10"
+                      data-test="onboarding-delete-imported-organization-details"
+                      @click="deleteImportedOrganizationDetails"
+                    >
+                      <IconTrash class="h-4 w-4" />
+                      {{ t('organization-onboarding-delete-imported-details') }}
+                    </button>
+                  </template>
+
+                  <button
+                    v-else
+                    type="button"
+                    class="d-btn min-h-11 w-full sm:w-auto"
+                    :class="whiteCardSecondaryButtonClass()"
+                    :disabled="isImportingOrganizationWebsite || !organizationWebsiteInput.trim()"
+                    data-test="onboarding-import-organization-website"
+                    @click="importOrganizationWebsite"
+                  >
+                    <IconLoader v-if="isImportingOrganizationWebsite" class="h-4 w-4 animate-spin" />
+                    <IconSparkles v-else class="h-4 w-4" />
+                    {{ t('organization-onboarding-import-website') }}
+                  </button>
+                </div>
+              </div>
+
+              <div v-if="existingApp === true">
+                <p id="estimated-users-label" class="flex items-center gap-2 text-sm font-medium text-slate-800 dark:text-slate-200">
+                  <IconUsers class="h-4 w-4 text-primary-500" />
+                  {{ t('organization-onboarding-existing-users-label') }}
+                </p>
+                <p id="estimated-users-help" class="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
+                  {{ t('organization-onboarding-existing-users-helper') }}
+                </p>
+
+                <div
+                  id="estimated-users"
+                  class="mt-3 grid gap-2 sm:grid-cols-2"
+                  role="radiogroup"
+                  aria-labelledby="estimated-users-label"
+                  aria-describedby="estimated-users-help"
+                  data-test="onboarding-estimated-users"
+                >
+                  <label
+                    v-for="(stop, index) in userCountStops"
+                    :key="`${stop.planName}-${stop.value}`"
+                    class="group cursor-pointer"
+                    :class="{ 'sm:col-span-2': stop.startingOut }"
+                    :data-value="stop.value"
+                    :data-test="stop.startingOut ? 'onboarding-starting-out' : 'onboarding-estimated-users-option'"
+                  >
+                    <input
+                      type="radio"
+                      name="estimated-users"
+                      class="peer sr-only"
+                      :value="index"
+                      :checked="isUserCountStopSelected(index)"
+                      @change="selectUserCountStop(index)"
+                    >
+                    <span
+                      class="flex min-h-16 items-center justify-between gap-3 rounded-xl border p-3 text-left transition peer-focus-visible:outline-none peer-focus-visible:ring-2 peer-focus-visible:ring-primary-500 peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-white dark:peer-focus-visible:ring-offset-slate-900"
+                      :class="isUserCountStopSelected(index)
+                        ? 'border-primary-500 bg-slate-100 text-slate-950 ring-2 ring-primary-500/15 dark:border-primary-500/80 dark:bg-primary-500/25 dark:text-white dark:ring-primary-500/30'
+                        : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50 dark:border-white/15 dark:bg-slate-950/90 dark:text-slate-200 dark:hover:border-white/30 dark:hover:bg-slate-900'"
+                    >
+                      <span class="min-w-0">
+                        <span class="block text-sm font-semibold">
+                          {{ getUserCountStopTitle(stop) }}
+                        </span>
+                        <span class="mt-1 block text-xs text-slate-500 dark:text-slate-400">
+                          {{ t('organization-onboarding-plan-match') }}: {{ stop.planName }}
+                        </span>
+                      </span>
+                      <span
+                        class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border transition"
+                        :class="isUserCountStopSelected(index) ? 'border-primary-500 bg-primary-500 text-white' : 'border-slate-300 bg-white text-transparent group-hover:border-slate-400 dark:border-white/20 dark:bg-slate-900'"
+                        aria-hidden="true"
+                      >
+                        <IconCheck class="h-3.5 w-3.5" />
+                      </span>
+                    </span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="flex flex-col-reverse gap-3 border-t border-slate-200 pt-6 sm:flex-row sm:items-center sm:justify-between dark:border-white/15">
+                <button type="button" class="d-btn min-h-12" :class="whiteCardSecondaryButtonClass()" @click="viewPreviousStep('details')">
+                  {{ t('button-back') }}
+                </button>
+                <button
+                  type="button"
+                  class="d-btn min-h-12"
+                  :class="whiteCardPrimaryButtonClass()"
+                  data-test="onboarding-create-org"
+                  :disabled="!canCreatePreOrgOrganization || isSubmitting"
+                  @click="createOrganizationAndApp()"
+                >
+                  <IconLoader v-if="isSubmitting" class="h-4 w-4 animate-spin" />
+                  <span v-else>{{ t('unified-onboarding-continue-organization') }}</span>
+                  <IconArrowRight v-if="!isSubmitting" class="h-4 w-4" />
+                </button>
               </div>
             </div>
-
-            <div class="flex flex-col-reverse gap-3 border-t border-slate-200 pt-6 sm:flex-row sm:items-center sm:justify-between dark:border-white/15">
-              <button type="button" class="d-btn min-h-12" :class="whiteCardSecondaryButtonClass()" @click="viewPreviousStep('details')">
-                {{ t('button-back') }}
-              </button>
-              <button
-                type="button"
-                class="d-btn min-h-12"
-                :class="whiteCardPrimaryButtonClass()"
-                data-test="onboarding-create-org"
-                :disabled="!canCreatePreOrgOrganization || isSubmitting"
-                @click="createOrganizationAndApp()"
-              >
-                <IconLoader v-if="isSubmitting" class="h-4 w-4 animate-spin" />
-                <span v-else>{{ t('unified-onboarding-continue-organization') }}</span>
-                <IconArrowRight v-if="!isSubmitting" class="h-4 w-4" />
-              </button>
-            </div>
           </div>
-        </div>
+        </template>
 
         <div v-else-if="flowStep === 'setup' && createdApp" class="space-y-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900/95">
           <div>
@@ -2063,30 +2336,41 @@ defineExpose({
             </p>
           </div>
 
-          <button
-            v-if="apiKey"
-            type="button"
-            class="d-btn group relative h-auto min-h-0 w-full justify-start whitespace-normal rounded-2xl border-0 bg-slate-950 p-5 pr-14 text-left font-normal ring-1 ring-white/10 transition hover:bg-slate-950 hover:ring-white/20"
-            data-test="app-onboarding-command-copy"
-            :aria-label="t('app-onboarding-command-copy')"
-            @click="copyCliCommand"
-          >
-            <code class="block whitespace-pre-wrap break-all text-sm">
-              <span class="text-slate-500">npx</span>
-              <span class="text-sky-300"> @capgo/cli@latest</span>
-              <span class="font-bold text-violet-300">&nbsp;{{ cliSubcommand }}</span>
-              <span v-if="!usesBuilderSetupCommand" class="text-emerald-300">&nbsp;{{ apiKey }}</span>
-              <template v-for="(arg, index) in cliCommandArgs" :key="`${arg}-${index}`">
-                <span :class="index % 2 === 0 ? 'text-amber-300' : 'text-cyan-300'"> {{ arg }}</span>
-              </template>
-            </code>
-            <IconCopy class="absolute right-4 top-4 h-5 w-5 text-muted-blue-300 transition group-hover:text-white" />
-          </button>
-          <div v-else class="rounded-2xl bg-slate-950 p-5 pr-14 ring-1 ring-white/10" role="status">
-            <div class="flex min-h-6 items-center gap-3 text-sm text-slate-300">
-              <Spinner size="w-5 h-5" />
-              <span>{{ t('app-onboarding-command-apikey-loading') }}</span>
+          <div class="space-y-2">
+            <button
+              v-if="apiKey"
+              type="button"
+              class="d-btn group relative h-auto min-h-0 w-full justify-start whitespace-normal rounded-2xl border-0 bg-slate-950 p-5 pr-14 text-left font-normal ring-1 ring-white/10 transition hover:bg-slate-950 hover:ring-white/20"
+              data-test="app-onboarding-command-copy"
+              :aria-label="t('app-onboarding-command-copy')"
+              @click="copyCliCommand"
+            >
+              <code class="block whitespace-pre-wrap break-all text-sm">
+                <span class="text-slate-500">npx</span>
+                <span class="text-sky-300"> @capgo/cli@latest</span>
+                <span class="font-bold text-violet-300">&nbsp;{{ cliSubcommand }}</span>
+                <span v-if="!usesBuilderSetupCommand" class="text-emerald-300">&nbsp;{{ apiKey }}</span>
+                <template v-for="(arg, index) in cliCommandArgs" :key="`${arg}-${index}`">
+                  <span :class="index % 2 === 0 ? 'text-amber-300' : 'text-cyan-300'"> {{ arg }}</span>
+                </template>
+              </code>
+              <IconCopy class="absolute right-4 top-4 h-5 w-5 text-muted-blue-300 transition group-hover:text-white" />
+            </button>
+            <div v-else class="rounded-2xl bg-slate-950 p-5 pr-14 ring-1 ring-white/10" role="status">
+              <div class="flex min-h-6 items-center gap-3 text-sm text-slate-300">
+                <Spinner size="w-5 h-5" />
+                <span>{{ t('app-onboarding-command-apikey-loading') }}</span>
+              </div>
             </div>
+            <p class="text-sm leading-6 text-slate-500 dark:text-slate-400">
+              {{ t('onboarding-manual-setup-prefix') }}
+              <a
+                href="https://capgo.app/docs/getting-started/add-an-app/#manual-setup"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="underline decoration-slate-300 underline-offset-2 transition hover:text-slate-700 dark:decoration-slate-600 dark:hover:text-slate-200"
+              >{{ t('onboarding-manual-setup-link') }}</a>
+            </p>
           </div>
 
           <AppOnboardingCliSteps
@@ -2094,6 +2378,16 @@ defineExpose({
             :app-id="createdApp.app_id"
             :initial-onboarding="createdApp.onboarding"
           />
+
+          <div class="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-sm text-slate-700 dark:border-white/15 dark:bg-slate-950/90 dark:text-slate-200">
+            <TechnicalTeammateInviteCard
+              analytics-channel="onboarding-v3"
+              :show-manual-setup-link="false"
+              :tracking-version="3"
+              @opened="onTechnicalInviteOpened"
+              @success="onTechnicalInviteSucceeded"
+            />
+          </div>
 
           <div class="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-sm text-slate-700 dark:border-white/15 dark:bg-slate-950/90 dark:text-slate-200">
             <div class="flex flex-wrap items-start justify-between gap-3">

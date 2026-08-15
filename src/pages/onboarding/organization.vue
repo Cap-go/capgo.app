@@ -4,7 +4,6 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import IconArrowRight from '~icons/lucide/arrow-right'
-import IconBuilding from '~icons/lucide/building-2'
 import IconCheck from '~icons/lucide/check'
 import IconCompass from '~icons/lucide/compass'
 import IconGlobe from '~icons/lucide/globe-2'
@@ -15,11 +14,10 @@ import IconRefresh from '~icons/lucide/refresh-cw'
 import IconSmartphone from '~icons/lucide/smartphone'
 import IconSparkles from '~icons/lucide/sparkles'
 import IconUpload from '~icons/lucide/upload-cloud'
-import IconUserPlus from '~icons/lucide/user-plus'
 import IconUsers from '~icons/lucide/users-round'
 import IconBack from '~icons/material-symbols/arrow-back-ios-rounded'
-import InviteTeammateModal from '~/components/dashboard/InviteTeammateModal.vue'
 import OnboardingSupportUsernames from '~/components/dashboard/OnboardingSupportUsernames.vue'
+import OrganizationOnboardingInvite from '~/components/dashboard/OrganizationOnboardingInvite.vue'
 import { getCapgoApiErrorCode, invokeCapgoApi } from '~/services/capgoApi'
 import { formatNumberValue } from '~/services/formatLocale'
 import { createOnboardingAppFromDraft } from '~/services/onboardingAppCreate'
@@ -30,19 +28,10 @@ import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
 import { clearOnboardingAppDraft, loadOnboardingAppDraft } from '~/utils/onboardingAppDraft'
+import { onboardingPrimaryButtonClass, onboardingSecondaryButtonClass } from '~/utils/onboardingButtonClasses'
 
 type OnboardingStep = 'details' | 'logo' | 'invite'
 type OnboardingMode = 'website' | 'name' | 'app-name' | null
-
-interface InviteTeammateModalRef {
-  openDialog: () => void
-}
-
-interface SentInvite {
-  email: string
-  firstName: string
-  lastName: string
-}
 
 interface WebsitePreview {
   hostname: string
@@ -81,9 +70,7 @@ const isUploadingLogo = ref(false)
 const isLoadingWebsitePreview = ref(false)
 const isLoggingOut = ref(false)
 const selectedLogoPreview = ref('')
-const sentInvites = ref<SentInvite[]>([])
 const websitePreview = ref<WebsitePreview | null>(null)
-const inviteModalRef = ref<InviteTeammateModalRef | null>(null)
 const logoInputRef = useTemplateRef<HTMLInputElement>('logoInput')
 const isAdditionalOrgFlow = ref(false)
 const appDraft = ref(loadOnboardingAppDraft(main.user?.id ?? main.auth?.id))
@@ -178,7 +165,6 @@ const canCreateOrganization = computed(() => {
   return !!orgNameInput.value.trim() && !!selectedUserCountStop.value
 })
 const hasExistingOrganization = computed(() => organizationStore.organizations.some(org => !org.role.includes('invite')))
-const inviteSuccessCount = computed(() => sentInvites.value.length)
 const isCompactCreateOrgFlow = computed(() => isAdditionalOrgFlow.value)
 const onboardingBadge = computed(() => isCompactCreateOrgFlow.value
   ? t('organization-create-badge')
@@ -201,11 +187,11 @@ function whiteCardToggleButtonClass(active: boolean) {
 }
 
 function whiteCardSecondaryButtonClass() {
-  return 'border-slate-300 bg-white text-slate-700 hover:border-slate-400 hover:bg-slate-50 disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400 disabled:opacity-100 dark:border-white/20 dark:bg-slate-950/90 dark:text-slate-100 dark:hover:border-white/30 dark:hover:bg-slate-900 dark:disabled:border-white/15 dark:disabled:bg-slate-900 dark:disabled:text-slate-500'
+  return onboardingSecondaryButtonClass
 }
 
 function whiteCardPrimaryButtonClass() {
-  return 'border-primary-500 bg-primary-500 text-white hover:border-primary-500 hover:bg-primary-500/90 disabled:border-slate-300 disabled:bg-slate-300 disabled:text-white disabled:opacity-100 dark:border-primary-500/90 dark:bg-primary-500 dark:hover:border-primary-500 dark:hover:bg-primary-500/90 dark:disabled:border-white/15 dark:disabled:bg-slate-800 dark:disabled:text-slate-500'
+  return onboardingPrimaryButtonClass
 }
 
 function formatUserCount(value: number, plus = false) {
@@ -229,31 +215,6 @@ function isUserCountStopSelected(index: number) {
 
 function selectUserCountStop(index: number) {
   estimatedUsersIndex.value = index
-}
-
-function getInviteDisplayName(invite: SentInvite) {
-  const fullName = `${invite.firstName} ${invite.lastName}`.trim()
-  return fullName || invite.email
-}
-
-function getInviteInitials(invite: SentInvite) {
-  const fullName = `${invite.firstName} ${invite.lastName}`.trim()
-  if (fullName) {
-    return fullName
-      .split(/\s+/)
-      .slice(0, 2)
-      .map(part => part[0]?.toUpperCase() ?? '')
-      .join('')
-  }
-
-  return invite.email.slice(0, 2).toUpperCase()
-}
-
-function onInviteSuccess(invite: SentInvite) {
-  sentInvites.value = [
-    invite,
-    ...sentInvites.value.filter(entry => entry.email !== invite.email),
-  ]
 }
 
 function toTitleCaseSegment(segment: string) {
@@ -612,15 +573,6 @@ async function skipLogo() {
   await syncRouteQuery('invite')
 }
 
-function openInviteModal() {
-  if (!activeOrgId.value) {
-    toast.error(t('organization-not-found'))
-    return
-  }
-  organizationStore.setCurrentOrganization(activeOrgId.value)
-  inviteModalRef.value?.openDialog()
-}
-
 async function finishOnboarding() {
   const draft = appDraft.value
   const orgId = activeOrgId.value
@@ -739,7 +691,6 @@ onUnmounted(() => {
 <template>
   <section class="h-full min-h-0 overflow-y-auto bg-slate-50 px-4 py-4 text-slate-950 sm:px-5 sm:py-6 lg:px-6 dark:bg-slate-950 dark:text-slate-50">
     <div class="relative mx-auto flex w-full max-w-3xl flex-col gap-4">
-      <InviteTeammateModal ref="inviteModalRef" @success="onInviteSuccess" />
       <input
         id="org-logo-input"
         ref="logoInput"
@@ -1177,70 +1128,14 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <div v-else-if="step === 'invite'" class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5 dark:border-white/15 dark:bg-slate-900/95">
-          <div class="space-y-4">
-            <div>
-              <h2 class="text-lg font-semibold text-slate-950 dark:text-white">
-                {{ t('organization-onboarding-invite-title') }}
-              </h2>
-              <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                {{ t('organization-onboarding-invite-subtitle') }}
-              </p>
-            </div>
-
-            <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-white/15 dark:bg-slate-950/90">
-              <div class="flex items-start gap-4">
-                <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-slate-900 text-white dark:bg-slate-800">
-                  <IconBuilding class="h-5 w-5" />
-                </div>
-                <div class="min-w-0">
-                  <div class="truncate text-base font-semibold text-slate-950 dark:text-white">
-                    {{ activeOrgName || t('organization-onboarding-org-placeholder') }}
-                  </div>
-                  <p class="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
-                    {{ inviteSuccessCount > 0
-                      ? t('organization-onboarding-invite-success-state')
-                      : t('organization-onboarding-invite-empty-state') }}
-                  </p>
-                </div>
-              </div>
-
-              <ul v-if="inviteSuccessCount > 0" class="mt-4 space-y-3">
-                <li
-                  v-for="invite in sentInvites"
-                  :key="invite.email"
-                  class="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 dark:border-white/15 dark:bg-slate-900/95"
-                >
-                  <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary-500 text-xs font-semibold text-white">
-                    {{ getInviteInitials(invite) }}
-                  </div>
-                  <div class="min-w-0">
-                    <div class="truncate text-sm font-semibold text-slate-950 dark:text-white">
-                      {{ getInviteDisplayName(invite) }}
-                    </div>
-                    <div class="truncate text-xs text-slate-500 dark:text-slate-400">
-                      {{ invite.email }}
-                    </div>
-                  </div>
-                </li>
-              </ul>
-            </div>
-
-            <div class="flex flex-wrap gap-2">
-              <button type="button" class="d-btn min-h-11" :class="whiteCardPrimaryButtonClass()" data-test="onboarding-invite-users" @click="openInviteModal">
-                <IconUserPlus class="h-4 w-4" />
-                {{ t('organization-onboarding-open-invite') }}
-              </button>
-              <button type="button" class="d-btn min-h-11" :class="whiteCardSecondaryButtonClass()" data-test="onboarding-finish" :disabled="isSubmitting" @click="finishOnboarding">
-                <IconLoader v-if="isSubmitting" class="h-4 w-4 animate-spin" />
-                <template v-else>
-                  {{ appDraft ? t('organization-onboarding-finish-setup') : t('organization-onboarding-create-app') }}
-                  <IconArrowRight class="h-4 w-4" />
-                </template>
-              </button>
-            </div>
-          </div>
-        </div>
+        <OrganizationOnboardingInvite
+          v-else-if="step === 'invite'"
+          :organization-id="activeOrgId"
+          :organization-name="activeOrgName"
+          :continue-label="appDraft ? t('organization-onboarding-finish-setup') : t('organization-onboarding-create-app')"
+          :continuing="isSubmitting"
+          @continue="finishOnboarding"
+        />
       </div>
     </div>
   </section>

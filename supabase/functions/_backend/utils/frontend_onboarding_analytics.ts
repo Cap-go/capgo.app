@@ -33,6 +33,16 @@ const ONBOARDING_INTERACTION_EVENTS = [
   'onboarding_store_import_submitted',
   'onboarding_store_import_succeeded',
   'onboarding_store_url_entered',
+  'onboarding_organization_import_opened',
+  'onboarding_organization_import_submitted',
+  'onboarding_organization_import_succeeded',
+  'onboarding_organization_import_failed',
+  'onboarding_organization_invite_viewed',
+  'onboarding_organization_invite_opened',
+  'onboarding_organization_invite_succeeded',
+  'onboarding_organization_invite_continued',
+  'onboarding_technical_invite_opened',
+  'onboarding_technical_invite_succeeded',
 ] as const
 
 const AI_INSTRUCTIONS_COPIED_EVENT = 'onboarding_ai_instructions_copied'
