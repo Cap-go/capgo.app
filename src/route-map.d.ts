@@ -164,6 +164,13 @@ declare module 'vue-router/auto-routes' {
       { app: ParamValue<false> },
       | never
     >,
+    '/app/[app].active-bundle': RouteRecordInfo<
+      '/app/[app].active-bundle',
+      '/app/:app/active-bundle',
+      { app: ParamValue<true> },
+      { app: ParamValue<false> },
+      | never
+    >,
     '/app/[app].builds': RouteRecordInfo<
       '/app/[app].builds',
       '/app/:app/builds',
@@ -293,6 +300,20 @@ declare module 'vue-router/auto-routes' {
     '/app/[app].getting-started': RouteRecordInfo<
       '/app/[app].getting-started',
       '/app/:app/getting-started',
+      { app: ParamValue<true> },
+      { app: ParamValue<false> },
+      | never
+    >,
+    '/app/[app].installs': RouteRecordInfo<
+      '/app/[app].installs',
+      '/app/:app/installs',
+      { app: ParamValue<true> },
+      { app: ParamValue<false> },
+      | never
+    >,
+    '/app/[app].native': RouteRecordInfo<
+      '/app/[app].native',
+      '/app/:app/native',
       { app: ParamValue<true> },
       { app: ParamValue<false> },
       | never
@@ -819,6 +840,14 @@ declare module 'vue-router/auto-routes' {
       pathParamNames:
         | 'app'
     }
+    'src/pages/app/[app].active-bundle.vue': {
+      routes:
+        | '/app/[app].active-bundle'
+      views:
+        | never
+      pathParamNames:
+        | 'app'
+    }
     'src/pages/app/[app].builds.vue': {
       routes:
         | '/app/[app].builds'
@@ -979,6 +1008,22 @@ declare module 'vue-router/auto-routes' {
     'src/pages/app/[app].getting-started.vue': {
       routes:
         | '/app/[app].getting-started'
+      views:
+        | never
+      pathParamNames:
+        | 'app'
+    }
+    'src/pages/app/[app].installs.vue': {
+      routes:
+        | '/app/[app].installs'
+      views:
+        | never
+      pathParamNames:
+        | 'app'
+    }
+    'src/pages/app/[app].native.vue': {
+      routes:
+        | '/app/[app].native'
       views:
         | never
       pathParamNames:

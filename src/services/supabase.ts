@@ -2,7 +2,6 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { RouteLocationNormalizedLoaded } from 'vue-router'
 import type { CreditMetricType, CreditPricingStep } from './creditPricing'
 import type { Database } from '~/types/supabase.types'
-import { format, parse } from '@std/semver'
 import { createClient } from '@supabase/supabase-js'
 import subset from 'semver/ranges/subset'
 import { ref } from 'vue'
@@ -448,32 +447,6 @@ export async function getAllDashboard(orgId: string, startDate?: string, endDate
     console.error('Error in getAllDashboard:', error)
     throw error
   }
-}
-interface NativePackage {
-  name: string
-  version: string
-}
-
-export async function getCapgoVersion(appId: string, versionId: string | null | undefined): Promise<string> {
-  if (!versionId)
-    return ''
-  const { data, error } = await useSupabase()
-    .from('app_versions')
-    .select('native_packages')
-    .eq('app_id', appId)
-    .eq('name', versionId)
-    .single()
-
-  if (error)
-    return ''
-
-  const nativePackages: NativePackage[] = (data?.native_packages ?? []) as any as NativePackage[]
-  for (const pkg of nativePackages) {
-    if (pkg && pkg.name === '@capgo/capacitor-updater') {
-      return format(parse(pkg.version.replace('^', '').replace('~', '')))
-    }
-  }
-  return ''
 }
 
 export async function getTotalStorage(orgId?: string): Promise<number> {

@@ -1129,6 +1129,7 @@
   "dashboard-overview-kicker": "Used in Capgo web console. Role: UI label about \"dashboard overview kicker\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "dashboard-overview-thirty-day-copy": "Used in Capgo web console. Role: UI sentence about \"dashboard overview thirty day copy\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "dashboard-overview-title": "Used in Capgo web console. Role: section or dialog title about \"dashboard overview title\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "dashboard-tab-installs": "Used in Capgo web console areas: constants, pages/app. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "dashboard-tab-usage": "Used in Capgo web console areas: pages. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "date": "Used in Capgo web console areas: components/dashboard, components/tables, pages/app, services. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "date-number-format": "Used in Capgo web console areas: pages/settings/account. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
