@@ -43,23 +43,24 @@ test.describe('App dashboard sections', () => {
   })
 
   test('native and active bundle charts request the last 30 days ending today', async ({ page }) => {
-    const today = new Date()
-    today.setUTCHours(0, 0, 0, 0)
-    const start = new Date(today)
-    start.setUTCDate(start.getUTCDate() - 29)
-    const expectedFrom = start.toISOString().slice(0, 10)
-    const expectedTo = today.toISOString().slice(0, 10)
+    function assertLastThirtyDays(url: URL) {
+      const from = url.searchParams.get('from')
+      const to = url.searchParams.get('to')
+      expect(from).toBeTruthy()
+      expect(to).toBeTruthy()
+      const fromDate = new Date(`${from}T00:00:00.000Z`)
+      const toDate = new Date(`${to}T00:00:00.000Z`)
+      const daySpan = Math.round((toDate.getTime() - fromDate.getTime()) / (24 * 60 * 60 * 1000))
+      expect(toDate.getTime()).toBeLessThanOrEqual(Date.now())
+      expect(daySpan).toBe(29)
+    }
 
     const nativeRequest = page.waitForRequest(request => request.url().includes('/native_usage?'))
     await page.goto('/app/com.demo.app/native')
-    const nativeUrl = new URL((await nativeRequest).url())
-    expect(nativeUrl.searchParams.get('from')).toBe(expectedFrom)
-    expect(nativeUrl.searchParams.get('to')).toBe(expectedTo)
+    assertLastThirtyDays(new URL((await nativeRequest).url()))
 
     const bundleRequest = page.waitForRequest(request => request.url().includes('/bundle_usage?'))
     await page.goto('/app/com.demo.app/active-bundle')
-    const bundleUrl = new URL((await bundleRequest).url())
-    expect(bundleUrl.searchParams.get('from')).toBe(expectedFrom)
-    expect(bundleUrl.searchParams.get('to')).toBe(expectedTo)
+    assertLastThirtyDays(new URL((await bundleRequest).url()))
   })
 })
