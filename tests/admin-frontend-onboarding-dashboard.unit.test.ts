@@ -740,7 +740,7 @@ describe('admin frontend onboarding dashboard', () => {
     expect(messages['frontend-onboarding-setup-no-cli']).toBe('Didn\'t start CLI')
     expect(messages['frontend-onboarding-people']).toBe('people')
     expect(messages['frontend-onboarding-daily-setup-cli-outcomes-v2']).toBe('Daily Setup → CLI outcomes (v2)')
-    expect(messages['frontend-onboarding-daily-setup-cli-outcomes-description']).toBe('Each person is counted once per UTC day. Left: first-time Setup views; right: returning views. Actions are attributed for up to 24 hours after the latest Setup view.')
+    expect(messages['frontend-onboarding-daily-setup-cli-outcomes-description']).toBe('Each person is counted once per UTC day. Left: first-time Setup views; right: returning views. Actions are attributed for up to 24 hours.')
     expect(messages['frontend-onboarding-daily-setup-cli-first-time']).toBe('First-time')
     expect(messages['frontend-onboarding-daily-setup-cli-returning']).toBe('Returning')
     expect(messages['frontend-onboarding-daily-setup-cli-cli-copy-init']).toBe('CLI copy + init')
