@@ -1,6 +1,6 @@
 import type { SQL } from 'drizzle-orm'
 import type { Context } from 'hono'
-import type { AdminOnboardingActivationCohort } from './onboardingFunnel.ts'
+import type { AdminOnboardingActivationCohort, AdminOnboardingWizardDropoff } from './onboardingFunnel.ts'
 import { and, eq, isNotNull, isNull, or, sql } from 'drizzle-orm'
 import { drizzle } from 'drizzle-orm/node-postgres'
 import { alias } from 'drizzle-orm/pg-core'
@@ -15,7 +15,7 @@ import { DISPOSABLE_EMAIL_DOMAINS, PERSONAL_EMAIL_DOMAINS } from './emailClassif
 import { getClientDbRegionSB } from './geolocation.ts'
 import { REQUIRED_GLOBAL_STATS_SHARDS } from './global_stats.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
-import { getAdminOnboardingActivationMetrics } from './onboardingFunnel.ts'
+import { buildAdminOnboardingWizardDropoff, getAdminOnboardingActivationMetrics } from './onboardingFunnel.ts'
 import * as schema from './postgres_schema.ts'
 import { withOptionalManifestSelect } from './queryHelpers.ts'
 import { getRolloutDecision } from './rollout.ts'
@@ -3228,6 +3228,7 @@ export interface AdminOnboardingFunnel {
     invite_registrations: number
     without_profile: number
   }>
+  wizard_dropoff: AdminOnboardingWizardDropoff[]
   onboarding_method_trend: Array<{
     date: string
     manual: number
@@ -3570,6 +3571,23 @@ export async function getAdminOnboardingFunnel(
       ORDER BY ds.date ASC
     `
 
+    const wizardDropoffQuery = sql`
+      SELECT
+        CASE
+          WHEN onboarding->>'status' = 'completed' THEN 'completed'
+          WHEN onboarding->>'status' = 'abandoned' THEN 'abandoned'
+          WHEN COALESCE(onboarding->>'step', '') = '' THEN 'not_started'
+          WHEN onboarding->>'step' IN ('intent', 'details', 'organization', 'choice', 'install', 'setup') THEN onboarding->>'step'
+          ELSE 'not_started'
+        END as step,
+        COUNT(*)::int as count
+      FROM public.users
+      WHERE created_at >= ${start_date}::timestamp
+        AND created_at < ${end_date}::timestamp
+        AND created_via_invite = false
+      GROUP BY 1
+    `
+
     const onboardingMethodTrendQuery = sql`
       WITH date_series AS (
         SELECT generate_series(
@@ -3649,11 +3667,12 @@ export async function getAdminOnboardingFunnel(
       ORDER BY ds.date ASC
     `
 
-    const [trendResult, activationCohortResult, inviteTrendResult, registrationSourceTrendResult, onboardingMethodTrendResult, onboardingOutcomeTrendResult] = await Promise.all([
+    const [trendResult, activationCohortResult, inviteTrendResult, registrationSourceTrendResult, wizardDropoffResult, onboardingMethodTrendResult, onboardingOutcomeTrendResult] = await Promise.all([
       drizzleClient.execute(trendQuery),
       drizzleClient.execute(activationCohortQuery),
       drizzleClient.execute(inviteTrendQuery),
       drizzleClient.execute(registrationSourceTrendQuery),
+      drizzleClient.execute(wizardDropoffQuery),
       drizzleClient.execute(onboardingMethodTrendQuery),
       drizzleClient.execute(onboardingOutcomeTrendQuery),
     ])
@@ -3768,6 +3787,7 @@ export async function getAdminOnboardingFunnel(
       trend,
       invite_trend: inviteTrend,
       registration_source_trend: registrationSourceTrend,
+      wizard_dropoff: buildAdminOnboardingWizardDropoff(wizardDropoffResult.rows as Array<{ step?: unknown, count?: unknown }>),
       onboarding_method_trend: onboardingMethodTrend,
       onboarding_outcome_trend: onboardingOutcomeTrend,
     }
@@ -3805,6 +3825,7 @@ export async function getAdminOnboardingFunnel(
       trend: [],
       invite_trend: [],
       registration_source_trend: [],
+      wizard_dropoff: buildAdminOnboardingWizardDropoff([]),
       onboarding_method_trend: [],
       onboarding_outcome_trend: [],
     }

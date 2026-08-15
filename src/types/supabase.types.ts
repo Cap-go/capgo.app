@@ -3495,6 +3495,7 @@ export type Database = {
           id: string
           image_url: string | null
           last_name: string | null
+          onboarding: Json
           opt_for_newsletters: boolean
           updated_at: string | null
         }
@@ -3514,6 +3515,7 @@ export type Database = {
           id: string
           image_url?: string | null
           last_name?: string | null
+          onboarding?: Json
           opt_for_newsletters?: boolean
           updated_at?: string | null
         }
@@ -3533,6 +3535,7 @@ export type Database = {
           id?: string
           image_url?: string | null
           last_name?: string | null
+          onboarding?: Json
           opt_for_newsletters?: boolean
           updated_at?: string | null
         }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { Database } from '~/types/supabase.types'
+import type { Database, Json } from '~/types/supabase.types'
 import type {
   OnboardingCopyEvent,
   OnboardingDetailsEvent,
@@ -7,6 +7,7 @@ import type {
   OnboardingIntent,
   OnboardingStepCompletionProperties,
 } from '~/utils/onboardingProgressAnalytics'
+import type { UserOnboardingStatus } from '~/utils/userOnboardingProgress'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
@@ -53,6 +54,12 @@ import {
 import { createOnboardingDetailsFieldDebouncer, createOnboardingProgressTracker } from '~/utils/onboardingProgressAnalytics'
 import { allowOnboardingDashboardExploration, ONBOARDING_DASHBOARD_EXPLORED_EVENT } from '~/utils/onboardingRedirect'
 import { slugifyOnboardingSegment } from '~/utils/onboardingSlug'
+import {
+  buildUserOnboardingProgress,
+  clampResumableOnboardingStep,
+  parseUserOnboardingProgress,
+  shouldPromptOnboardingResume,
+} from '~/utils/userOnboardingProgress'
 import AppOnboardingCliSteps from './AppOnboardingCliSteps.vue'
 import AppOnboardingIconInput from './AppOnboardingIconInput.vue'
 
@@ -88,6 +95,7 @@ interface UserCountStop {
 }
 
 const isLoading = ref(true)
+const isHydratingOnboarding = ref(true)
 const isSubmitting = ref(false)
 const isImportingStore = ref(false)
 const isResumeIconLoading = ref(false)
@@ -293,6 +301,8 @@ const setupTitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onb
 const setupSubtitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onboarding-setup-builder-subtitle') : t('unified-onboarding-setup-ota-subtitle'))
 
 let progressTracker: ReturnType<typeof createOnboardingProgressTracker> | null = null
+let persistChain = Promise.resolve()
+let persistFieldsTimer: ReturnType<typeof setTimeout> | undefined
 let pendingDashboardExplored = false
 
 function trackV2DetailsEvent(name: OnboardingDetailsEvent, details: OnboardingDetailsEventProperties = {}) {
@@ -329,6 +339,7 @@ function completeAndViewStep(nextStep: OnboardingFlowStep, completionProperties:
   })
   flowStep.value = nextStep
   progressTracker?.viewStep(nextStep, previousStep)
+  void persistOnboardingProgress()
 }
 
 function viewPreviousStep(nextStep: OnboardingFlowStep) {
@@ -338,6 +349,186 @@ function viewPreviousStep(nextStep: OnboardingFlowStep) {
 
   flowStep.value = nextStep
   progressTracker?.viewStep(nextStep, previousStep)
+  void persistOnboardingProgress()
+}
+
+function snapshotOnboardingProgress(status: UserOnboardingStatus = 'in_progress') {
+  const flow = props.preOrg ? 'pre_org' : 'existing_org'
+  return buildUserOnboardingProgress({
+    status,
+    step: clampResumableOnboardingStep(flowStep.value, flow),
+    flow,
+    intent: selectedIntent.value,
+    appName: appName.value,
+    appId: generatedAppId.value,
+    existingApp: existingApp.value,
+    existingAppSetup: existingAppSetup.value,
+    storeUrl: storeUrl.value,
+    importedStoreAppId: importedStoreAppId.value,
+    orgName: orgNameInput.value,
+    estimatedUsersIndex: estimatedUsersIndex.value,
+  })
+}
+
+async function persistOnboardingProgress(status: UserOnboardingStatus = 'in_progress') {
+  persistChain = persistChain
+    .then(() => writeOnboardingProgress(status))
+    .catch((error) => {
+      console.error('Failed to persist onboarding progress', error)
+    })
+  return persistChain
+}
+
+function schedulePersistOnboardingProgress() {
+  if (isHydratingOnboarding.value)
+    return
+  window.clearTimeout(persistFieldsTimer)
+  persistFieldsTimer = setTimeout(() => {
+    void persistOnboardingProgress()
+  }, 400)
+}
+
+async function writeOnboardingProgress(status: UserOnboardingStatus) {
+  const userId = onboardingUserId.value
+  if (!userId || isHydratingOnboarding.value)
+    return
+
+  const current = parseUserOnboardingProgress(main.user?.onboarding)
+  if (current?.status === 'completed' && status !== 'completed')
+    return
+
+  const progress = snapshotOnboardingProgress(status)
+  const onboarding = progress as unknown as Json
+  let query = supabase
+    .from('users')
+    .update({ onboarding })
+    .eq('id', userId)
+  if (status !== 'completed') {
+    query = query.or('onboarding->>status.is.null,onboarding->>status.neq.completed')
+    const lastUpdated = current?.updated_at
+    query = lastUpdated
+      ? query.or(`onboarding->>updated_at.is.null,onboarding->>updated_at.eq."${lastUpdated}"`)
+      : query.or('onboarding->>updated_at.is.null')
+  }
+  const { data, error } = await query
+    .select()
+    .maybeSingle()
+
+  if (error) {
+    console.error('Failed to persist onboarding progress', error)
+    return
+  }
+
+  if (data && main.user?.id === userId) {
+    main.user = { ...data, image_url: main.user.image_url }
+    return
+  }
+
+  if (status === 'completed' || main.user?.id !== userId)
+    return
+
+  const { data: latest, error: latestError } = await supabase
+    .from('users')
+    .select()
+    .eq('id', userId)
+    .maybeSingle()
+  if (latestError)
+    console.error('Failed to refresh onboarding progress snapshot', latestError)
+  if (latest && main.user?.id === userId)
+    main.user = { ...latest, image_url: main.user.image_url }
+}
+
+function resetOnboardingForm() {
+  flowStep.value = props.preOrg ? 'intent' : 'details'
+  selectedIntent.value = null
+  existingApp.value = null
+  appName.value = ''
+  manualAppId.value = ''
+  hasEditedAppId.value = false
+  orgNameInput.value = ''
+  hasEditedOrgName.value = false
+  estimatedUsersIndex.value = null
+  createdApp.value = null
+  selectedIconFile.value = null
+  if (localIconPreview.value.startsWith('blob:'))
+    URL.revokeObjectURL(localIconPreview.value)
+  localIconPreview.value = ''
+  resetStoreImportState()
+}
+
+function applyOnboardingProgress(progress: ReturnType<typeof parseUserOnboardingProgress>) {
+  if (!progress)
+    return
+
+  const flow = props.preOrg ? 'pre_org' : 'existing_org'
+  flowStep.value = clampResumableOnboardingStep(progress.step, flow)
+  if (progress.intent)
+    selectedIntent.value = progress.intent
+  if (progress.existing_app === true || progress.existing_app === false)
+    existingApp.value = progress.existing_app
+  if (progress.existing_app_setup === 'import' || progress.existing_app_setup === 'manual')
+    existingAppSetup.value = progress.existing_app_setup
+  if (progress.app_name)
+    appName.value = progress.app_name
+  if (progress.app_id) {
+    manualAppId.value = progress.app_id
+    hasEditedAppId.value = true
+  }
+  if (progress.store_url)
+    storeUrl.value = progress.store_url
+  if (progress.imported_store_app_id)
+    importedStoreAppId.value = progress.imported_store_app_id
+  if (progress.org_name) {
+    orgNameInput.value = progress.org_name
+    hasEditedOrgName.value = true
+  }
+  if (typeof progress.estimated_users_index === 'number')
+    estimatedUsersIndex.value = progress.estimated_users_index
+}
+
+function applyDefaultPreOrgDetails() {
+  const restoredDraft = restoreDraftState()
+  if (!restoredDraft || existingAppSetup.value !== 'import') {
+    existingApp.value = true
+    existingAppSetup.value = 'manual'
+  }
+  flowStep.value = 'intent'
+}
+
+async function maybeResumeSavedOnboarding() {
+  const flow = props.preOrg ? 'pre_org' : 'existing_org'
+  const saved = parseUserOnboardingProgress(main.user?.onboarding)
+
+  if (!shouldPromptOnboardingResume(saved, flow) || !saved) {
+    if (saved?.status === 'in_progress' && saved.flow === flow) {
+      applyOnboardingProgress(saved)
+    }
+    else {
+      applyDefaultPreOrgDetails()
+    }
+    return false
+  }
+
+  dialogStore.openDialog({
+    title: t('onboarding-resume-title'),
+    description: t('onboarding-resume-description'),
+    preventAccidentalClose: true,
+    buttons: [
+      { text: t('onboarding-resume-restart'), id: 'onboarding-resume-restart', role: 'secondary' },
+      { text: t('onboarding-resume-continue'), id: 'onboarding-resume-continue', role: 'primary' },
+    ],
+  })
+  await dialogStore.onDialogDismiss()
+
+  if (dialogStore.lastButtonRole === 'onboarding-resume-restart') {
+    resetOnboardingForm()
+    existingApp.value = true
+    existingAppSetup.value = 'manual'
+    return false
+  }
+
+  applyOnboardingProgress(saved)
+  return true
 }
 
 function whiteCardToggleButtonClass(active: boolean) {
@@ -749,6 +940,8 @@ function restoreDraftState() {
     return false
 
   appName.value = draft.appName
+  if (!hasEditedOrgName.value)
+    orgNameInput.value = draft.appName.trim()
   manualAppId.value = draft.appId
   hasEditedAppId.value = true
   existingApp.value = draft.existingApp
@@ -1027,6 +1220,7 @@ async function seedDemoData() {
       name: createdApp.value.name ?? null,
       ownerOrgId: currentOrg.value.gid,
     })
+    await persistOnboardingProgress('completed')
     router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}/getting-started`)
   }
   catch (error) {
@@ -1172,6 +1366,7 @@ async function openDashboard() {
     await reportOnboardingPatch({ outcome: 'switched_to_manual' })
   window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))
   allowOnboardingDashboardExploration(onboardingUserId.value, createdApp.value.app_id)
+  await persistOnboardingProgress('completed')
   router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}/getting-started`)
 }
 
@@ -1188,14 +1383,10 @@ onMounted(async () => {
   window.addEventListener(ONBOARDING_DASHBOARD_EXPLORED_EVENT, trackDashboardExplored)
   let resumedFlow = false
   isLoading.value = true
+  isHydratingOnboarding.value = true
   try {
     if (props.preOrg) {
-      const restoredDraft = restoreDraftState()
-      if (!restoredDraft || existingAppSetup.value !== 'import') {
-        existingApp.value = true
-        existingAppSetup.value = 'manual'
-      }
-      flowStep.value = 'intent'
+      resumedFlow = await maybeResumeSavedOnboarding()
       return
     }
 
@@ -1213,20 +1404,28 @@ onMounted(async () => {
     })
   }
   finally {
+    isHydratingOnboarding.value = false
     isLoading.value = false
     initializeProgressTracking(resumedFlow)
+    void persistOnboardingProgress()
   }
 })
 
 onBeforeUnmount(() => {
+  window.clearTimeout(persistFieldsTimer)
   window.removeEventListener(ONBOARDING_DASHBOARD_EXPLORED_EVENT, trackDashboardExplored)
   detailsFieldTracker.dispose()
+  if (!isHydratingOnboarding.value)
+    void persistOnboardingProgress()
 
   if (localIconPreview.value.startsWith('blob:'))
     URL.revokeObjectURL(localIconPreview.value)
 })
 
 watch(existingApp, (value) => {
+  if (isHydratingOnboarding.value)
+    return
+  schedulePersistOnboardingProgress()
   if (props.preOrg) {
     if (value === false)
       estimatedUsersIndex.value = 0
@@ -1256,9 +1455,20 @@ watch(suggestedAppId, (value) => {
 }, { immediate: true })
 
 watch(appName, (value) => {
+  if (isHydratingOnboarding.value)
+    return
   if (!hasEditedOrgName.value)
     orgNameInput.value = value.trim()
+  schedulePersistOnboardingProgress()
 }, { immediate: true })
+
+watch([orgNameInput, storeUrl, selectedIntent, existingAppSetup, estimatedUsersIndex, manualAppId, importedStoreAppId], () => {
+  schedulePersistOnboardingProgress()
+})
+
+defineExpose({
+  persistOnboardingProgress,
+})
 </script>
 
 <template>

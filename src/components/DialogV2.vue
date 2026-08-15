@@ -171,6 +171,7 @@ onUnmounted(() => {
                 type="button"
                 :class="getButtonClasses(button)"
                 :disabled="button.disabled"
+                :data-test="button.id"
                 @click="handleButtonClick(button, $event)"
               >
                 {{ button.text }}
