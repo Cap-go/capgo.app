@@ -80,17 +80,17 @@ describe('app onboarding progress analytics integration', () => {
     expect(mountedFlow).toContain('resumedFlow = resumed')
     expect(mountedFlow).not.toContain('.viewStep(')
     expect(mountedFlow.match(/initializeProgressTracking\(resumedFlow\)/g)).toHaveLength(1)
+    expect(mountedFlow.match(/persistOnboardingProgress\(\)/g)).toHaveLength(1)
     const finallyBlock = mountedFlow.slice(mountedFlow.indexOf('finally {'))
     expect(finallyBlock).toContain('initializeProgressTracking(resumedFlow)')
     expectSourceOrder(mountedFlow, [
       'resumedFlow = await maybeResumeSavedOnboarding()',
       'finally {',
+      'isHydratingOnboarding.value = false',
+      'await persistOnboardingProgress()',
+      'isLoading.value = false',
       'initializeProgressTracking(resumedFlow)',
     ])
-    const loadingFinishedIndex = mountedFlow.indexOf('isLoading.value = false')
-    const initializationIndex = mountedFlow.indexOf('initializeProgressTracking(resumedFlow)')
-    expect(loadingFinishedIndex).toBeGreaterThanOrEqual(0)
-    expect(initializationIndex).toBeGreaterThan(loadingFinishedIndex)
   })
 
   it.concurrent('persists telemetry identity metadata with each progress snapshot', () => {

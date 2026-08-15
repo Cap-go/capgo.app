@@ -1421,9 +1421,9 @@ onMounted(async () => {
   }
   finally {
     isHydratingOnboarding.value = false
+    await persistOnboardingProgress()
     isLoading.value = false
     initializeProgressTracking(resumedFlow)
-    void persistOnboardingProgress()
   }
 })
 
