@@ -5,7 +5,10 @@ meta:
 
 <script setup lang="ts">
 import type { AdminOnboardingJourneyGraphConfig, AdminOnboardingJourneyNode } from '~/components/admin/adminOnboardingJourneyGraph'
-import type { FrontendOnboardingAnalytics } from '~/services/adminFrontendOnboarding'
+import type {
+  FrontendOnboardingAnalytics,
+  FrontendOnboardingDailySetupCliOutcomeKey,
+} from '~/services/adminFrontendOnboarding'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
@@ -20,6 +23,7 @@ import ChartCard from '~/components/dashboard/ChartCard.vue'
 import PageLoader from '~/components/PageLoader.vue'
 import {
   buildFrontendOnboardingDailySeries,
+  buildFrontendOnboardingDailySetupCliSeries,
   buildFrontendOnboardingFunnelStages,
   buildFrontendOnboardingFunnelSummaries,
   buildFrontendOnboardingGraphMetrics,
@@ -167,6 +171,27 @@ const setupCliOutcomeValues = computed(() => [
 ])
 const setupCliOutcomeColors = ['#119eff', '#8b5cf6', '#94a3b8']
 const hasSetupCliOutcomeData = computed(() => setupCliOutcomes.value.total_users > 0)
+const dailySetupCliOutcomeLabels = computed<Record<FrontendOnboardingDailySetupCliOutcomeKey, string>>(() => ({
+  cli_copy_init: t('frontend-onboarding-daily-setup-cli-cli-copy-init'),
+  ai_copy_init: t('frontend-onboarding-daily-setup-cli-ai-copy-init'),
+  both_copy_init: t('frontend-onboarding-daily-setup-cli-both-copy-init'),
+  no_copy_init: t('frontend-onboarding-daily-setup-cli-no-copy-init'),
+  cli_copy_other_cli: t('frontend-onboarding-daily-setup-cli-cli-copy-other-cli'),
+  ai_copy_other_cli: t('frontend-onboarding-daily-setup-cli-ai-copy-other-cli'),
+  both_copy_other_cli: t('frontend-onboarding-daily-setup-cli-both-copy-other-cli'),
+  no_copy_other_cli: t('frontend-onboarding-daily-setup-cli-no-copy-other-cli'),
+  cli_copy_no_cli: t('frontend-onboarding-daily-setup-cli-cli-copy-no-cli'),
+  ai_copy_no_cli: t('frontend-onboarding-daily-setup-cli-ai-copy-no-cli'),
+  both_copy_no_cli: t('frontend-onboarding-daily-setup-cli-both-copy-no-cli'),
+  no_action: t('frontend-onboarding-daily-setup-cli-no-action'),
+}))
+const dailySetupCliSeries = computed(() => buildFrontendOnboardingDailySetupCliSeries(
+  visibleAnalytics.value?.daily_setup_cli_outcomes ?? [],
+  dailySetupCliOutcomeLabels.value,
+  t('frontend-onboarding-daily-setup-cli-first-time'),
+  t('frontend-onboarding-daily-setup-cli-returning'),
+))
+const hasDailySetupCliOutcomeData = computed(() => dailySetupCliSeries.value.length > 0)
 
 const onboardingGraphV3 = computed<AdminOnboardingJourneyGraphConfig>(() => {
   const funnel = visibleAnalytics.value?.funnels.v3 ?? []
@@ -533,6 +558,28 @@ displayStore.defaultBack = '/dashboard'
               value-mode="count"
               orientation="vertical"
               :is-loading="isLoadingStats"
+            />
+          </ChartCard>
+
+          <ChartCard
+            :title="t('frontend-onboarding-daily-setup-cli-outcomes-v2')"
+            :is-loading="isLoadingStats"
+            :has-data="hasDailySetupCliOutcomeData"
+          >
+            <template #header>
+              <div class="min-w-0">
+                <h2 class="text-xl font-semibold leading-tight text-slate-900 dark:text-white sm:text-2xl">
+                  {{ t('frontend-onboarding-daily-setup-cli-outcomes-v2') }}
+                </h2>
+                <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
+                  {{ t('frontend-onboarding-daily-setup-cli-outcomes-description') }}
+                </p>
+              </div>
+            </template>
+            <AdminStackedBarChart
+              :series="dailySetupCliSeries"
+              :is-loading="isLoadingStats"
+              accessible-borders
             />
           </ChartCard>
 
