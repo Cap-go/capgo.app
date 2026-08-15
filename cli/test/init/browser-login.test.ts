@@ -3,6 +3,7 @@ import { describe, expect, it, mock } from 'bun:test'
 import { loginInitInBrowser, shouldStartInitBrowserLogin } from '../../src/init/browser-login'
 
 const helperSource = readFileSync(new URL('../../src/init/browser-login.ts', import.meta.url), 'utf8')
+const initSource = readFileSync(new URL('../../src/init/command.ts', import.meta.url), 'utf8')
 
 describe('init browser login', () => {
   it('starts only for an interactive init with no resolved key', () => {
@@ -14,6 +15,18 @@ describe('init browser login', () => {
   it('uses a password prompt with star masking', () => {
     expect(helperSource).toContain("mask: '*'")
     expect(helperSource).not.toContain('text({')
+  })
+
+  it('wires browser login after saved-key lookup and only for interactive init', () => {
+    const initApp = initSource.slice(initSource.indexOf('export async function initApp('))
+    const savedKeyLookup = initApp.indexOf('options.apikey ??= findSavedKey(true)')
+    const browserGate = initApp.indexOf('shouldStartInitBrowserLogin(options.apikey, canPromptInteractively())')
+    const authenticatedClient = initApp.indexOf('const supabase = await createSupabaseClient(options.apikey')
+
+    expect(savedKeyLookup).toBeGreaterThanOrEqual(0)
+    expect(browserGate).toBeGreaterThan(savedKeyLookup)
+    expect(browserGate).toBeLessThan(authenticatedClient)
+    expect(initApp).toContain('options.apikey = await loginInitInBrowser({')
   })
 
   it('opens the correlated URL, saves the masked input, and notifies every org', async () => {

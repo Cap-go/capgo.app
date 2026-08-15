@@ -34,8 +34,9 @@ import { copyToClipboard, revealInFinder } from '../support/clipboard'
 import { contactSupport } from '../support/contact-support'
 import { appendInternalLog, getInternalLogPath, startInternalLog } from '../support/internal-log'
 import { uploadSupportLogs } from '../support/support-upload'
-import { consoleWebUrl, createSupabaseClient, defaultApiHost, findBuildCommandForProjectType, findMainFile, findMainFileForProjectType, findProjectType, findRoot, findSavedKey, findSavedKeySilent, formatError, getAllPackagesDependencies, getAppId, getBundleVersion, getConfig, getConfigForWrite, getLocalConfig, getNativeProjectResetAdvice, getOrganizationListWithPermission, getPackageScripts, getPMAndCommand, hasCliPermission, PACKNAME, projectIsMonorepo, resolveUserIdFromApiKey, setPMAndCommand, updateConfigbyKey, updateConfigUpdater, validateIosUpdaterSync } from '../utils'
+import { canPromptInteractively, consoleWebUrl, createSupabaseClient, defaultApiHost, findBuildCommandForProjectType, findMainFile, findMainFileForProjectType, findProjectType, findRoot, findSavedKey, findSavedKeySilent, formatError, getAllPackagesDependencies, getAppId, getBundleVersion, getConfig, getConfigForWrite, getLocalConfig, getNativeProjectResetAdvice, getOrganizationListWithPermission, getPackageScripts, getPMAndCommand, hasCliPermission, PACKNAME, projectIsMonorepo, resolveUserIdFromApiKey, setPMAndCommand, updateConfigbyKey, updateConfigUpdater, validateIosUpdaterSync } from '../utils'
 import { buildAppIdConflictSuggestions, isAppAlreadyExistsError } from './app-conflict'
+import { loginInitInBrowser, shouldStartInitBrowserLogin } from './browser-login'
 import { isChannelAlreadyExistsError } from './channel-conflict'
 import { createMissingExecutableError, getAvailablePackageManagers, getMissingPackageManagerExecutable, getPackageManagerInfo, preparePackageManagerCommandEnvironment, probeExecutable, probePackageManagerCommand, resolveExecutableProbeError, waitForCommandResult } from './command-execution'
 import { reportInitOnboardingStep } from './onboarding-report'
@@ -5309,6 +5310,14 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
     }
     catch {
     }
+  }
+
+  if (shouldStartInitBrowserLogin(options.apikey, canPromptInteractively())) {
+    options.apikey = await loginInitInBrowser({
+      local: options.local,
+      supaHost: options.supaHost,
+      supaAnon: options.supaAnon,
+    })
   }
 
   const log = pSpinner()
