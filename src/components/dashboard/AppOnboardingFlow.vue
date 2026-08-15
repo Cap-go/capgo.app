@@ -309,6 +309,7 @@ let pendingDashboardExplored = false
 let onboardingFlowDisposed = false
 let onboardingInitialPersistInFlight = false
 let onboardingPersistenceBlocked = false
+let pendingProgressTrackingResumed: boolean | null = null
 
 function trackV2DetailsEvent(name: OnboardingDetailsEvent, details: OnboardingDetailsEventProperties = {}) {
   if (props.preOrg)
@@ -393,7 +394,14 @@ async function persistOnboardingProgress(status: UserOnboardingStatus = 'in_prog
       console.error('Failed to persist onboarding progress', error)
       return 'retryable_failure' as const
     })
-  return persistChain
+  const result = await persistChain
+  if (status !== 'completed' && result === 'persisted' && pendingProgressTrackingResumed !== null) {
+    const resumed = pendingProgressTrackingResumed
+    pendingProgressTrackingResumed = null
+    if (!onboardingFlowDisposed && !progressTracker)
+      initializeProgressTracking(resumed)
+  }
+  return result
 }
 
 function schedulePersistOnboardingProgress() {
@@ -1452,8 +1460,8 @@ onMounted(async () => {
       onboardingPersistResult = await persistOnboardingProgress()
       if (onboardingPersistResult === 'retryable_failure' && !onboardingFlowDisposed)
         onboardingPersistResult = await persistOnboardingProgress()
-      if (onboardingPersistResult === 'conflict')
-        onboardingPersistenceBlocked = true
+      if (onboardingPersistResult === 'retryable_failure')
+        pendingProgressTrackingResumed = resumedFlow
       onboardingInitialPersistInFlight = false
     }
     function finishOnboardingMount() {
