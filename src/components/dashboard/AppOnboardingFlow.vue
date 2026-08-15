@@ -19,6 +19,8 @@ import IconCopy from '~icons/ion/copy-outline'
 import IconAppWindow from '~icons/lucide/app-window'
 import IconArrowRight from '~icons/lucide/arrow-right'
 import IconCheck from '~icons/lucide/check'
+import IconChevronDown from '~icons/lucide/chevron-down'
+import IconChevronUp from '~icons/lucide/chevron-up'
 import IconCode from '~icons/lucide/code-2'
 import IconCompass from '~icons/lucide/compass'
 import IconGlobe from '~icons/lucide/globe-2'
@@ -31,6 +33,7 @@ import IconSmartphone from '~icons/lucide/smartphone'
 import IconSparkles from '~icons/lucide/sparkles'
 import IconStore from '~icons/lucide/store'
 import IconTerminal from '~icons/lucide/terminal'
+import IconTrash from '~icons/lucide/trash-2'
 import IconUsers from '~icons/lucide/users-round'
 import { createDefaultApiKey, findUsablePlainApiKey } from '~/services/apikeys'
 import {
@@ -868,6 +871,12 @@ async function importOrganizationWebsite() {
   finally {
     isImportingOrganizationWebsite.value = false
   }
+}
+
+function deleteImportedOrganizationDetails() {
+  websitePreview.value = null
+  organizationWebsiteInput.value = ''
+  isOrganizationImportOpen.value = true
 }
 
 async function uploadImportedOrganizationLogo(orgId: string) {
@@ -1903,24 +1912,27 @@ defineExpose({
                   </div>
                 </div>
 
-                <div v-if="props.preOrg" class="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-white/15 dark:bg-slate-950/60">
+                <div v-if="props.preOrg" class="overflow-hidden rounded-xl border border-slate-200 bg-slate-50 dark:border-white/15 dark:bg-slate-950/60">
                   <button
                     type="button"
-                    class="d-btn min-h-10"
-                    :class="whiteCardSecondaryButtonClass()"
+                    class="flex min-h-12 w-full items-center justify-between gap-3 px-4 py-3 text-left text-sm font-semibold text-slate-800 transition hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-500 dark:text-slate-200 dark:hover:bg-slate-900"
                     :aria-expanded="existingAppSetup === 'import'"
                     data-test="app-onboarding-toggle-store-import"
                     @click="togglePreOrgStoreImport()"
                   >
-                    <IconStore class="h-4 w-4" />
-                    <span>{{ t('app-onboarding-v2-store-import-toggle') }}</span>
+                    <span class="flex items-center gap-2">
+                      <IconStore class="h-4 w-4" />
+                      <span>{{ t('app-onboarding-v2-store-import-toggle') }}</span>
+                    </span>
+                    <IconChevronUp v-if="existingAppSetup === 'import'" class="h-4 w-4 shrink-0 text-slate-500" aria-hidden="true" />
+                    <IconChevronDown v-else class="h-4 w-4 shrink-0 text-slate-500" aria-hidden="true" />
                   </button>
 
-                  <div v-if="existingAppSetup === 'import'" class="mt-4 border-t border-slate-200 pt-4 dark:border-white/15">
+                  <div v-if="existingAppSetup === 'import'" class="border-t border-slate-200 p-4 dark:border-white/15">
                     <label for="app-onboarding-v2-store-url" class="text-sm font-medium text-slate-800 dark:text-slate-200">
                       {{ t('app-onboarding-store-link-label') }}
                     </label>
-                    <div class="mt-2 flex flex-col gap-3 sm:flex-row">
+                    <div class="mt-2 space-y-3">
                       <input
                         id="app-onboarding-v2-store-url"
                         v-model="storeUrl"
@@ -1929,7 +1941,7 @@ defineExpose({
                         type="url"
                         @input="onStoreUrlInput"
                       >
-                      <button type="button" class="d-btn min-h-12 shrink-0" :class="whiteCardPrimaryButtonClass()" :disabled="isImportingStore || !storeUrl" @click="importStoreMetadata()">
+                      <button type="button" class="d-btn min-h-12 w-full sm:w-auto" :class="whiteCardPrimaryButtonClass()" :disabled="isImportingStore || !storeUrl" @click="importStoreMetadata()">
                         <IconLoader v-if="isImportingStore" class="h-4 w-4 animate-spin" />
                         <IconSparkles v-else class="h-4 w-4" />
                         <span>{{ t('app-onboarding-store-import-button') }}</span>
@@ -2076,66 +2088,100 @@ defineExpose({
                 >
               </div>
 
-              <div class="space-y-3">
+              <div class="overflow-hidden rounded-xl border border-slate-200 bg-slate-50 dark:border-white/15 dark:bg-slate-950/90">
                 <button
                   type="button"
-                  class="d-btn min-h-11"
-                  :class="whiteCardSecondaryButtonClass()"
+                  class="flex min-h-12 w-full items-center justify-between gap-3 px-4 py-3 text-left text-sm font-semibold text-slate-800 transition hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-500 dark:text-slate-200 dark:hover:bg-slate-900"
                   data-test="onboarding-toggle-organization-import"
                   :aria-expanded="isOrganizationImportOpen"
                   @click="toggleOrganizationWebsiteImport"
                 >
-                  <IconGlobe class="h-4 w-4" />
-                  {{ t('organization-onboarding-import-website') }}
+                  <span class="flex items-center gap-2">
+                    <IconGlobe class="h-4 w-4" />
+                    {{ t('organization-onboarding-import-website') }}
+                  </span>
+                  <IconChevronUp v-if="isOrganizationImportOpen" class="h-4 w-4 shrink-0 text-slate-500" aria-hidden="true" />
+                  <IconChevronDown v-else class="h-4 w-4 shrink-0 text-slate-500" aria-hidden="true" />
                 </button>
 
-                <div v-if="isOrganizationImportOpen" class="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-white/15 dark:bg-slate-950/90">
-                  <div class="flex items-center gap-2">
-                    <label for="onboarding-organization-website" class="text-sm font-medium text-slate-800 dark:text-slate-200">
-                      {{ t('organization-onboarding-website-label') }}
-                    </label>
-                    <span
-                      class="group relative inline-flex rounded-full text-slate-400 outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-slate-500"
-                      tabindex="0"
-                      aria-describedby="onboarding-organization-website-help"
-                    >
-                      <IconInfo class="h-4 w-4" aria-hidden="true" />
+                <div v-if="isOrganizationImportOpen" class="space-y-4 border-t border-slate-200 p-4 dark:border-white/15">
+                  <div>
+                    <div class="flex items-center gap-2">
+                      <label for="onboarding-organization-website" class="text-sm font-medium text-slate-800 dark:text-slate-200">
+                        {{ t('organization-onboarding-website-label') }}
+                      </label>
                       <span
-                        id="onboarding-organization-website-help"
-                        role="tooltip"
-                        class="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 w-64 -translate-x-1/2 rounded-lg bg-slate-950 px-3 py-2 text-xs font-normal leading-5 text-white opacity-0 shadow-lg transition-opacity group-hover:opacity-100 group-focus:opacity-100 dark:bg-slate-800"
+                        class="group relative inline-flex rounded-full text-slate-400 outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-slate-500"
+                        tabindex="0"
+                        aria-describedby="onboarding-organization-website-help"
                       >
-                        {{ t('organization-onboarding-website-help') }}
+                        <IconInfo class="h-4 w-4" aria-hidden="true" />
+                        <span
+                          id="onboarding-organization-website-help"
+                          role="tooltip"
+                          class="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 w-64 -translate-x-1/2 rounded-lg bg-slate-950 px-3 py-2 text-xs font-normal leading-5 text-white opacity-0 shadow-lg transition-opacity group-hover:opacity-100 group-focus:opacity-100 dark:bg-slate-800"
+                        >
+                          {{ t('organization-onboarding-website-help') }}
+                        </span>
                       </span>
-                    </span>
-                  </div>
-                  <div class="space-y-3">
+                    </div>
                     <input
                       id="onboarding-organization-website"
                       v-model="organizationWebsiteInput"
                       type="url"
                       placeholder="https://capgo.app"
                       data-test="onboarding-organization-website"
-                      class="d-input min-h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-base text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/10 sm:text-sm dark:border-white/20 dark:bg-slate-950/90 dark:text-white dark:placeholder:text-slate-500 dark:focus:border-primary-500 dark:focus:ring-primary-500/30"
+                      :readonly="!!websitePreview"
+                      class="d-input mt-2 min-h-11 w-full rounded-xl border border-slate-300 px-3 text-base text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/10 read-only:cursor-not-allowed read-only:bg-slate-100 read-only:text-slate-600 sm:text-sm dark:border-white/20 dark:bg-slate-950/90 dark:text-white dark:placeholder:text-slate-500 dark:focus:border-primary-500 dark:focus:ring-primary-500/30 dark:read-only:bg-slate-900 dark:read-only:text-slate-300"
                       @input="websitePreview = null"
                     >
+                  </div>
+
+                  <template v-if="websitePreview">
+                    <p class="flex items-center gap-2 text-sm font-medium text-emerald-600 dark:text-emerald-300" aria-live="polite">
+                      <IconCheck class="h-4 w-4 shrink-0" />
+                      {{ t('organization-onboarding-website-import-success') }}
+                    </p>
+
+                    <div>
+                      <p class="text-sm font-medium text-slate-800 dark:text-slate-200">
+                        {{ t('organization-onboarding-imported-logo-label') }}
+                      </p>
+                      <img
+                        v-if="websitePreview.icon"
+                        :src="websitePreview.icon"
+                        :alt="t('organization-onboarding-imported-logo-preview-alt')"
+                        class="mt-2 h-16 w-16 rounded-xl border border-slate-200 bg-white object-cover dark:border-white/15 dark:bg-slate-900"
+                      >
+                      <p v-else class="mt-2 text-sm text-slate-500 dark:text-slate-400">
+                        {{ t('organization-onboarding-imported-logo-unavailable') }}
+                      </p>
+                    </div>
+
                     <button
                       type="button"
-                      class="d-btn min-h-11 w-full sm:w-auto"
-                      :class="whiteCardSecondaryButtonClass()"
-                      :disabled="isImportingOrganizationWebsite || !organizationWebsiteInput.trim()"
-                      data-test="onboarding-import-organization-website"
-                      @click="importOrganizationWebsite"
+                      class="d-btn min-h-10 border-red-200 bg-white text-red-700 hover:border-red-300 hover:bg-red-50 dark:border-red-500/30 dark:bg-slate-950 dark:text-red-300 dark:hover:bg-red-500/10"
+                      data-test="onboarding-delete-imported-organization-details"
+                      @click="deleteImportedOrganizationDetails"
                     >
-                      <IconLoader v-if="isImportingOrganizationWebsite" class="h-4 w-4 animate-spin" />
-                      <IconSparkles v-else class="h-4 w-4" />
-                      {{ t('organization-onboarding-import-website') }}
+                      <IconTrash class="h-4 w-4" />
+                      {{ t('organization-onboarding-delete-imported-details') }}
                     </button>
-                  </div>
-                  <div v-if="websitePreview" class="flex items-center gap-3 text-sm text-slate-600 dark:text-slate-300">
-                    <img v-if="websitePreview.icon" :src="websitePreview.icon" :alt="t('organization-onboarding-imported-logo-preview-alt')" class="h-10 w-10 rounded-lg object-cover">
-                    <span>{{ t('organization-onboarding-website-imported') }}</span>
-                  </div>
+                  </template>
+
+                  <button
+                    v-else
+                    type="button"
+                    class="d-btn min-h-11 w-full sm:w-auto"
+                    :class="whiteCardSecondaryButtonClass()"
+                    :disabled="isImportingOrganizationWebsite || !organizationWebsiteInput.trim()"
+                    data-test="onboarding-import-organization-website"
+                    @click="importOrganizationWebsite"
+                  >
+                    <IconLoader v-if="isImportingOrganizationWebsite" class="h-4 w-4 animate-spin" />
+                    <IconSparkles v-else class="h-4 w-4" />
+                    {{ t('organization-onboarding-import-website') }}
+                  </button>
                 </div>
               </div>
 
@@ -2269,6 +2315,12 @@ defineExpose({
             </p>
           </div>
 
+          <AppOnboardingCliSteps
+            :key="createdApp.app_id"
+            :app-id="createdApp.app_id"
+            :initial-onboarding="createdApp.onboarding"
+          />
+
           <div class="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-sm text-slate-700 dark:border-white/15 dark:bg-slate-950/90 dark:text-slate-200">
             <TechnicalTeammateInviteCard
               analytics-channel="onboarding-v3"
@@ -2278,12 +2330,6 @@ defineExpose({
               @success="onTechnicalInviteSucceeded"
             />
           </div>
-
-          <AppOnboardingCliSteps
-            :key="createdApp.app_id"
-            :app-id="createdApp.app_id"
-            :initial-onboarding="createdApp.onboarding"
-          />
 
           <div class="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-sm text-slate-700 dark:border-white/15 dark:bg-slate-950/90 dark:text-slate-200">
             <div class="flex flex-wrap items-start justify-between gap-3">

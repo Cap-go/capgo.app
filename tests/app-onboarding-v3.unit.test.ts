@@ -17,6 +17,13 @@ describe('pre-organization onboarding v3', () => {
     expect(onboardingSource).toContain("trackDetailsEvent('onboarding_store_import_succeeded'")
     expect(onboardingSource).toContain("trackDetailsEvent('onboarding_store_import_failed'")
     expect(onboardingSource).not.toContain("{ store_url: requestedUrl }")
+    const storeImport = onboardingSource.slice(
+      onboardingSource.indexOf('data-test="app-onboarding-toggle-store-import"'),
+      onboardingSource.indexOf('<AppOnboardingIconInput'),
+    )
+    expect(storeImport).toContain('<IconChevronUp v-if="existingAppSetup === \'import\'"')
+    expect(storeImport).toContain('class="mt-2 space-y-3"')
+    expect(storeImport).toContain('class="d-btn min-h-12 w-full sm:w-auto"')
   })
 
   it.concurrent('does not send raw onboarding field values to analytics', () => {
@@ -55,6 +62,20 @@ describe('pre-organization onboarding v3', () => {
     expect(onboardingSource).toContain("completeAndViewStep('setup', { appId: createdApp.value.app_id })")
   })
 
+  it.concurrent('keeps imported organization details reviewable and removable before creation', () => {
+    expect(onboardingSource).toContain(':readonly="!!websitePreview"')
+    expect(onboardingSource).toContain('data-test="onboarding-delete-imported-organization-details"')
+    expect(onboardingSource).toContain('function deleteImportedOrganizationDetails()')
+    expect(onboardingSource).toContain("organizationWebsiteInput.value = ''")
+    expect(onboardingSource).toContain("t('organization-onboarding-imported-logo-label')")
+    expect(onboardingSource).toContain("t('organization-onboarding-website-import-success')")
+    const deletion = onboardingSource.slice(
+      onboardingSource.indexOf('function deleteImportedOrganizationDetails()'),
+      onboardingSource.indexOf('async function uploadImportedOrganizationLogo('),
+    )
+    expect(deletion).not.toContain('orgNameInput')
+  })
+
   it.concurrent('captures the starting-out signal separately from the Solo tier', () => {
     expect(onboardingSource).toContain("value: 0")
     expect(onboardingSource).toContain("startingOut: true")
@@ -88,6 +109,7 @@ describe('pre-organization onboarding v3', () => {
     expect(setup).toContain(':tracking-version="3"')
     expect(setup).toContain("t('onboarding-manual-setup-prefix')")
     expect(setup.indexOf("t('onboarding-manual-setup-prefix')")).toBeLessThan(setup.indexOf('<TechnicalTeammateInviteCard'))
+    expect(setup.indexOf('<AppOnboardingCliSteps')).toBeLessThan(setup.indexOf('<TechnicalTeammateInviteCard'))
     expect(setup).not.toContain('selectedUserCountStop')
   })
 })
