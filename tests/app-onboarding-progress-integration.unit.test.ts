@@ -14,20 +14,30 @@ function sourceBetween(start: string, end: string) {
   return onboardingSource.slice(startIndex, endIndex)
 }
 
+function expectSourceOrder(source: string, markers: string[]) {
+  let previousIndex = -1
+  for (const marker of markers) {
+    const index = source.indexOf(marker, previousIndex + 1)
+    expect(index, `Expected source marker after previous marker: ${marker}`).toBeGreaterThan(previousIndex)
+    previousIndex = index
+  }
+}
+
 describe('app onboarding progress analytics integration', () => {
   it.concurrent('initializes tracking once the real initial or resumed step is resolved', () => {
-    expect(onboardingSource).toContain("import { createOnboardingDetailsFieldDebouncer, createOnboardingProgressTracker, createOnboardingTelemetryIdentity } from '~/utils/onboardingProgressAnalytics'")
+    expect(onboardingSource).toContain(`import { createOnboardingDetailsFieldDebouncer, createOnboardingProgressTracker, createOnboardingTelemetryIdentity } from '~/utils/onboardingProgressAnalytics'`)
 
-    const initializer = sourceBetween('function initializeProgressTracking(', 'function whiteCardToggleButtonClass(')
-    expect(initializer).toContain("flow: props.preOrg ? 'pre_org' : 'existing_org'")
+    const initializer = sourceBetween('function initializeProgressTracking(', 'function completeAndViewStep(')
+    expect(initializer).toContain(`flow: props.preOrg ? 'pre_org' : 'existing_org'`)
     expect(initializer).toContain('const trackedSteps = appOnboardingSteps.value.map(step => step.id)')
-    expect(initializer).toContain("if (!props.preOrg && resumed && flowStep.value === 'setup')")
-    expect(initializer).toContain("trackedSteps.push('setup')")
+    expect(initializer).toContain(`if (!props.preOrg && resumed && flowStep.value === 'setup')`)
+    expect(initializer).toContain(`trackedSteps.push('setup')`)
     expect(initializer).toContain('steps: trackedSteps')
     expect(initializer).toContain('resumed,')
     expect(initializer).toContain('onboardingAttemptId: onboardingTelemetry.attemptId')
     expect(initializer).toContain('onboardingRunId: onboardingTelemetry.runId')
     expect(initializer).toContain('progressTracker.viewStep(flowStep.value)')
+    expect(initializer.match(/\.viewStep\(/g)).toHaveLength(1)
 
     const resumeDialog = sourceBetween('async function maybeResumeSavedOnboarding()', 'function whiteCardToggleButtonClass(')
     expect(resumeDialog).toContain('onboardingTelemetry.prepareResumeCandidate({')
@@ -35,16 +45,48 @@ describe('app onboarding progress analytics integration', () => {
     expect(resumeDialog).toContain('onboardingTelemetry.recordResumeContinued()')
     expect(resumeDialog).toContain('onboardingTelemetry.recordResumeRestarted()')
     expect(resumeDialog).not.toContain('.viewStep(')
+    expectSourceOrder(resumeDialog, [
+      'onboardingTelemetry.prepareResumeCandidate({',
+      'dialogStore.openDialog({',
+      'onboardingTelemetry.recordResumeDialogViewed()',
+      'await dialogStore.onDialogDismiss()',
+    ])
+
+    const restartCheck = `if (dialogStore.lastButtonRole === 'onboarding-resume-restart')`
+    const restartBranchStart = resumeDialog.indexOf(restartCheck)
+    const restartBranchEnd = resumeDialog.indexOf('\n  }\n', restartBranchStart)
+    expect(restartBranchStart).toBeGreaterThan(resumeDialog.indexOf('await dialogStore.onDialogDismiss()'))
+    expect(restartBranchEnd).toBeGreaterThan(restartBranchStart)
+    const restartBranch = resumeDialog.slice(restartBranchStart, restartBranchEnd)
+    expectSourceOrder(restartBranch, [
+      restartCheck,
+      'onboardingTelemetry.recordResumeRestarted()',
+      'resetOnboardingForm()',
+      'return false',
+    ])
+    expectSourceOrder(resumeDialog.slice(restartBranchEnd), [
+      'onboardingTelemetry.recordResumeContinued()',
+      'applyOnboardingProgress(saved)',
+    ])
 
     const resumeLoader = sourceBetween('async function loadResumeApp()', 'async function importStoreMetadata()')
     expect(resumeLoader).not.toContain('initializeProgressTracking')
     expect(resumeLoader).not.toContain('viewStep')
 
-    const mountedFlow = onboardingSource.slice(onboardingSource.indexOf('onMounted(async () => {'))
+    const mountedFlow = sourceBetween('onMounted(async () => {', 'onBeforeUnmount(() => {')
     expect(mountedFlow).toContain('let resumedFlow = false')
     expect(mountedFlow).toContain('resumedFlow = await maybeResumeSavedOnboarding()')
     expect(mountedFlow).toContain('const resumed = await loadResumeApp()')
     expect(mountedFlow).toContain('resumedFlow = resumed')
+    expect(mountedFlow).not.toContain('.viewStep(')
+    expect(mountedFlow.match(/initializeProgressTracking\(resumedFlow\)/g)).toHaveLength(1)
+    const finallyBlock = mountedFlow.slice(mountedFlow.indexOf('finally {'))
+    expect(finallyBlock).toContain('initializeProgressTracking(resumedFlow)')
+    expectSourceOrder(mountedFlow, [
+      'resumedFlow = await maybeResumeSavedOnboarding()',
+      'finally {',
+      'initializeProgressTracking(resumedFlow)',
+    ])
     const loadingFinishedIndex = mountedFlow.indexOf('isLoading.value = false')
     const initializationIndex = mountedFlow.indexOf('initializeProgressTracking(resumedFlow)')
     expect(loadingFinishedIndex).toBeGreaterThanOrEqual(0)
@@ -59,7 +101,7 @@ describe('app onboarding progress analytics integration', () => {
   })
 
   it.concurrent('retains the existing intent compatibility event', () => {
-    expect(onboardingSource).toContain("pushEvent('onboarding_intent_selected', config.supaHost, {")
+    expect(onboardingSource).toContain(`pushEvent('onboarding_intent_selected', config.supaHost, {`)
   })
 
   it.concurrent('keeps the unload warning scoped to unfinished pre-org onboarding', () => {
@@ -76,10 +118,10 @@ describe('app onboarding progress analytics integration', () => {
     expect(transitionHelpers).toContain('void persistOnboardingProgress()')
 
     const intentTransition = sourceBetween('function continueFromIntent()', 'function continuePreOrgDetails()')
-    expect(intentTransition).toContain("completeAndViewStep('details', { intent: selectedIntent.value })")
+    expect(intentTransition).toContain(`completeAndViewStep('details', { intent: selectedIntent.value })`)
 
     const preOrgDetailsTransition = sourceBetween('function continuePreOrgDetails()', 'async function createOrganizationAndApp()')
-    expect(preOrgDetailsTransition).toContain("completeAndViewStep('organization', {")
+    expect(preOrgDetailsTransition).toContain(`completeAndViewStep('organization', {`)
     expect(preOrgDetailsTransition).toContain('storeImportUsed: hasImportedStoreMetadata.value')
 
     const appCreation = sourceBetween('async function createAppRecord(', 'async function seedDemoData()')
@@ -88,7 +130,7 @@ describe('app onboarding progress analytics integration', () => {
     expect(appCreation).toContain('completeAndViewStep(options?.nextStep ?? \'choice\', completionProperties)')
 
     const realSetupChoice = sourceBetween('function goToInstallStep()', 'function openDashboard()')
-    expect(realSetupChoice).toContain("completeAndViewStep('install', {")
+    expect(realSetupChoice).toContain(`completeAndViewStep('install', {`)
     expect(realSetupChoice).toContain('appId: createdApp.value.app_id')
   })
 
@@ -98,10 +140,10 @@ describe('app onboarding progress analytics integration', () => {
     expect(backNavigation).toContain('progressTracker?.viewStep(nextStep, previousStep)')
     expect(onboardingSource).toContain('@click="viewPreviousStep(\'choice\')"')
     expect(onboardingSource).toContain('@click="viewPreviousStep(\'details\')"')
-    expect(onboardingSource).toContain("props.preOrg ? viewPreviousStep('intent') : router.push('/apps')")
+    expect(onboardingSource).toContain(`props.preOrg ? viewPreviousStep('intent') : router.push('/apps')`)
     expect(onboardingSource).not.toContain('@click="flowStep = \'details\'"')
     expect(onboardingSource).not.toContain('@click="flowStep = \'choice\'"')
-    expect(onboardingSource).not.toContain("props.preOrg ? (flowStep = 'intent') : router.push('/apps')")
+    expect(onboardingSource).not.toContain(`props.preOrg ? (flowStep = 'intent') : router.push('/apps')`)
   })
 
   it.concurrent('completes only terminal install or setup exits and leaves demo selection incomplete', () => {
@@ -112,10 +154,10 @@ describe('app onboarding progress analytics integration', () => {
     expect(demoAction).toContain('/getting-started')
 
     const dashboardExit = sourceBetween('function openDashboard()', 'onMounted(async () => {')
-    expect(dashboardExit).toContain("if (flowStep.value === 'install' || flowStep.value === 'setup')")
+    expect(dashboardExit).toContain(`if (flowStep.value === 'install' || flowStep.value === 'setup')`)
     expect(dashboardExit).toContain('progressTracker?.completeStep(flowStep.value, {')
     expect(dashboardExit).toContain('appId: createdApp.value.app_id')
-    expect(dashboardExit).toContain("await persistOnboardingProgress('completed')")
+    expect(dashboardExit).toContain(`await persistOnboardingProgress('completed')`)
     expect(dashboardExit).toContain('/getting-started')
     expect(dashboardExit.indexOf('completeStep')).toBeLessThan(dashboardExit.indexOf('router.push'))
     expect(dashboardExit).toContain('window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))')
@@ -131,6 +173,6 @@ describe('app onboarding progress analytics integration', () => {
     expect(demoExit.indexOf('window.dispatchEvent')).toBeLessThan(demoExit.indexOf('allowOnboardingDashboardExploration'))
 
     const confirmedSidebarExit = sidebarSource.slice(sidebarSource.indexOf('if (requiresOnboardingExplorationConfirmation)'), sidebarSource.indexOf('if (tab.onClick)'))
-    expect(confirmedSidebarExit.indexOf("lastButtonRole !== 'primary'")).toBeLessThan(confirmedSidebarExit.indexOf('window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))'))
+    expect(confirmedSidebarExit.indexOf(`lastButtonRole !== 'primary'`)).toBeLessThan(confirmedSidebarExit.indexOf('window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))'))
   })
 })
