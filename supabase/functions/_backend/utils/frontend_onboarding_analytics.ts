@@ -183,6 +183,7 @@ export function buildFrontendOnboardingHogql(startDate: string, cohortEndDate: s
       FROM events
       WHERE event IN (${eventAllowlist})
         AND JSONExtractString(toString(properties), 'flow') = 'pre_org'
+        AND JSONExtractString(toString(properties), '$host') = 'console.capgo.app'
         AND toIntOrZero(toString(properties.onboarding_version)) IN (${versionAllowlist})
         AND timestamp >= parseDateTimeBestEffort(${sqlStr(startDate)})
         AND timestamp < parseDateTimeBestEffort(${sqlStr(followupEndDate)})
