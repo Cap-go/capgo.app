@@ -53,6 +53,7 @@ describe('buildFrontendOnboardingDailySetupCliHogql', () => {
 
     expect(setupPeople).toContain('WHERE event = \'onboarding_step_viewed\'')
     expect(setupPeople).toContain('JSONExtractString(toString(properties), \'flow\') = \'pre_org\'')
+    expect(setupPeople).toContain('JSONExtractString(toString(properties), \'$host\') = \'console.capgo.app\'')
     expect(setupPeople).toContain('toIntOrZero(toString(properties.onboarding_version)) = 2')
     expect(setupPeople).toContain('JSONExtractString(toString(properties), \'step\') = \'setup\'')
     expect(setupPeople).toContain('timestamp >= parseDateTimeBestEffort(\'2026-08-01T00:00:00.123Z\')')
@@ -79,6 +80,7 @@ describe('buildFrontendOnboardingDailySetupCliHogql', () => {
     expect(selectedEventsFromWhere).not.toContain('JSONExtractString(toString(selected_events.properties), \'command_path\') = \'init\'')
     expect(selectedSetupCopyBranch).toContain('selected_events.event IN (\'onboarding_step_viewed\', \'onboarding_cli_command_copied\', \'onboarding_ai_instructions_copied\')')
     expect(selectedSetupCopyBranch).toContain('JSONExtractString(toString(selected_events.properties), \'flow\') = \'pre_org\'')
+    expect(selectedSetupCopyBranch).toContain('JSONExtractString(toString(selected_events.properties), \'$host\') = \'console.capgo.app\'')
     expect(selectedSetupCopyBranch).toContain('toIntOrZero(toString(selected_events.properties.onboarding_version)) = 2')
     expect(selectedSetupCopyBranch).toContain('JSONExtractString(toString(selected_events.properties), \'step\') = \'setup\'')
 

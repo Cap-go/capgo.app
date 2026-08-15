@@ -10,6 +10,7 @@ const INVALID_TOTAL_EVENTS_ERROR = 'daily Setup CLI analytics query returned inv
 const EVENT_LIMIT_EXCEEDED_ERROR = 'daily Setup CLI analytics query exceeded event limit'
 const INVALID_ROW_ERROR = 'daily Setup CLI analytics row is invalid'
 const EVENT_KINDS: readonly FrontendOnboardingDailySetupCliEventKind[] = ['setup', 'cli_copy', 'ai_copy', 'cli_command']
+const FRONTEND_ONBOARDING_HOST = ['console', 'capgo', 'app'].join('.')
 
 export const FRONTEND_ONBOARDING_DAILY_SETUP_CLI_EVENT_LIMIT = 50_000
 
@@ -76,6 +77,7 @@ export function buildFrontendOnboardingDailySetupCliHogql(
       FROM events
       WHERE event = 'onboarding_step_viewed'
         AND JSONExtractString(toString(properties), 'flow') = 'pre_org'
+        AND JSONExtractString(toString(properties), '$host') = ${sqlStr(FRONTEND_ONBOARDING_HOST)}
         AND toIntOrZero(toString(properties.onboarding_version)) = 2
         AND JSONExtractString(toString(properties), 'step') = 'setup'
         AND timestamp >= parseDateTimeBestEffort(${sqlStr(startDate)})
@@ -102,6 +104,7 @@ export function buildFrontendOnboardingDailySetupCliHogql(
         OR (
           selected_events.event IN ('onboarding_step_viewed', 'onboarding_cli_command_copied', 'onboarding_ai_instructions_copied')
           AND JSONExtractString(toString(selected_events.properties), 'flow') = 'pre_org'
+          AND JSONExtractString(toString(selected_events.properties), '$host') = ${sqlStr(FRONTEND_ONBOARDING_HOST)}
           AND toIntOrZero(toString(selected_events.properties.onboarding_version)) = 2
           AND JSONExtractString(toString(selected_events.properties), 'step') = 'setup'
         )
