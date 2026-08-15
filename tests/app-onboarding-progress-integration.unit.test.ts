@@ -53,6 +53,12 @@ describe('app onboarding progress analytics integration', () => {
     ])
 
     const restartCheck = `if (dialogStore.lastButtonRole === 'onboarding-resume-restart')`
+    expectSourceOrder(resumeDialog, [
+      'await dialogStore.onDialogDismiss()',
+      'if (onboardingFlowDisposed)',
+      'return false',
+      restartCheck,
+    ])
     const restartBranchStart = resumeDialog.indexOf(restartCheck)
     const restartBranchEnd = resumeDialog.indexOf('\n  }\n', restartBranchStart)
     expect(restartBranchStart).toBeGreaterThan(resumeDialog.indexOf('await dialogStore.onDialogDismiss()'))
@@ -64,7 +70,10 @@ describe('app onboarding progress analytics integration', () => {
       'resetOnboardingForm()',
       'return false',
     ])
+    const continueCheck = `if (dialogStore.lastButtonRole !== 'onboarding-resume-continue')`
     expectSourceOrder(resumeDialog.slice(restartBranchEnd), [
+      continueCheck,
+      'return false',
       'onboardingTelemetry.recordResumeContinued()',
       'applyOnboardingProgress(saved)',
     ])
@@ -80,7 +89,7 @@ describe('app onboarding progress analytics integration', () => {
     expect(mountedFlow).toContain('resumedFlow = resumed')
     expect(mountedFlow).not.toContain('.viewStep(')
     expect(mountedFlow.match(/initializeProgressTracking\(resumedFlow\)/g)).toHaveLength(1)
-    expect(mountedFlow.match(/persistOnboardingProgress\(\)/g)).toHaveLength(1)
+    expect(mountedFlow.match(/persistOnboardingProgress\(\)/g)).toHaveLength(2)
     const finallyBlock = mountedFlow.slice(mountedFlow.indexOf('finally {'))
     expect(finallyBlock).toContain('initializeProgressTracking(resumedFlow)')
     expectSourceOrder(mountedFlow, [
@@ -100,6 +109,22 @@ describe('app onboarding progress analytics integration', () => {
     expect(snapshot).toContain('lastRunId: telemetry.lastRunId')
   })
 
+  it.concurrent('reports whether the requested progress write updated the current user', () => {
+    const persistenceQueue = sourceBetween('async function persistOnboardingProgress(', 'function schedulePersistOnboardingProgress(')
+    expect(persistenceQueue).toContain('return false')
+    expect(persistenceQueue).toContain('return persistChain')
+
+    const writer = sourceBetween('async function writeOnboardingProgress(', 'function resetOnboardingForm(')
+    expect(writer).toContain('if (!userId || isHydratingOnboarding.value)\n    return false')
+    expect(writer).toContain(`if (current?.status === 'completed' && status !== 'completed')\n    return false`)
+    expect(writer).toContain('if (data && main.user?.id === userId) {')
+    expect(writer).toContain('main.user = { ...data, image_url: main.user.image_url }\n    return true')
+    expect(writer).toContain(`if (status === 'completed' || main.user?.id !== userId)\n    return false`)
+    expect(writer.match(/return true/g)).toHaveLength(1)
+    expect(writer.match(/return false/g)).toHaveLength(5)
+    expect(writer.trimEnd().endsWith('return false\n}')).toBe(true)
+  })
+
   it.concurrent('does not initialize tracking after unmount during the initial persistence', () => {
     expect(onboardingSource).toContain('let onboardingFlowDisposed = false')
     expect(onboardingSource).toContain('let onboardingInitialPersistInFlight = false')
@@ -108,11 +133,14 @@ describe('app onboarding progress analytics integration', () => {
     expect(mountedFlow).toContain('function finishOnboardingMount()')
     expectSourceOrder(mountedFlow, [
       'onboardingInitialPersistInFlight = true',
-      'await persistOnboardingProgress()',
+      'let onboardingIdentityPersisted = await persistOnboardingProgress()',
+      'if (!onboardingIdentityPersisted && !onboardingFlowDisposed)',
+      'onboardingIdentityPersisted = await persistOnboardingProgress()',
       'onboardingInitialPersistInFlight = false',
       'if (onboardingFlowDisposed)',
       'return',
       'isLoading.value = false',
+      'if (onboardingIdentityPersisted)',
       'initializeProgressTracking(resumedFlow)',
       'finishOnboardingMount()',
     ])

@@ -302,7 +302,7 @@ const setupTitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onb
 const setupSubtitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onboarding-setup-builder-subtitle') : t('unified-onboarding-setup-ota-subtitle'))
 
 let progressTracker: ReturnType<typeof createOnboardingProgressTracker> | null = null
-let persistChain = Promise.resolve()
+let persistChain = Promise.resolve(true)
 let persistFieldsTimer: ReturnType<typeof setTimeout> | undefined
 let pendingDashboardExplored = false
 let onboardingFlowDisposed = false
@@ -383,6 +383,7 @@ async function persistOnboardingProgress(status: UserOnboardingStatus = 'in_prog
     .then(() => writeOnboardingProgress(status))
     .catch((error) => {
       console.error('Failed to persist onboarding progress', error)
+      return false
     })
   return persistChain
 }
@@ -399,11 +400,11 @@ function schedulePersistOnboardingProgress() {
 async function writeOnboardingProgress(status: UserOnboardingStatus) {
   const userId = onboardingUserId.value
   if (!userId || isHydratingOnboarding.value)
-    return
+    return false
 
   const current = parseUserOnboardingProgress(main.user?.onboarding)
   if (current?.status === 'completed' && status !== 'completed')
-    return
+    return false
 
   const progress = snapshotOnboardingProgress(status)
   const onboarding = progress as unknown as Json
@@ -424,16 +425,16 @@ async function writeOnboardingProgress(status: UserOnboardingStatus) {
 
   if (error) {
     console.error('Failed to persist onboarding progress', error)
-    return
+    return false
   }
 
   if (data && main.user?.id === userId) {
     main.user = { ...data, image_url: main.user.image_url }
-    return
+    return true
   }
 
   if (status === 'completed' || main.user?.id !== userId)
-    return
+    return false
 
   const { data: latest, error: latestError } = await supabase
     .from('users')
@@ -444,6 +445,7 @@ async function writeOnboardingProgress(status: UserOnboardingStatus) {
     console.error('Failed to refresh onboarding progress snapshot', latestError)
   if (latest && main.user?.id === userId)
     main.user = { ...latest, image_url: main.user.image_url }
+  return false
 }
 
 function resetOnboardingForm() {
@@ -536,6 +538,9 @@ async function maybeResumeSavedOnboarding() {
   onboardingTelemetry.recordResumeDialogViewed()
   await dialogStore.onDialogDismiss()
 
+  if (onboardingFlowDisposed)
+    return false
+
   if (dialogStore.lastButtonRole === 'onboarding-resume-restart') {
     onboardingTelemetry.recordResumeRestarted()
     resetOnboardingForm()
@@ -543,6 +548,9 @@ async function maybeResumeSavedOnboarding() {
     existingAppSetup.value = 'manual'
     return false
   }
+
+  if (dialogStore.lastButtonRole !== 'onboarding-resume-continue')
+    return false
 
   onboardingTelemetry.recordResumeContinued()
   applyOnboardingProgress(saved)
@@ -1424,13 +1432,16 @@ onMounted(async () => {
   finally {
     isHydratingOnboarding.value = false
     onboardingInitialPersistInFlight = true
-    await persistOnboardingProgress()
+    let onboardingIdentityPersisted = await persistOnboardingProgress()
+    if (!onboardingIdentityPersisted && !onboardingFlowDisposed)
+      onboardingIdentityPersisted = await persistOnboardingProgress()
     onboardingInitialPersistInFlight = false
     function finishOnboardingMount() {
       if (onboardingFlowDisposed)
         return
       isLoading.value = false
-      initializeProgressTracking(resumedFlow)
+      if (onboardingIdentityPersisted)
+        initializeProgressTracking(resumedFlow)
     }
     finishOnboardingMount()
   }
