@@ -19,8 +19,9 @@ This is deliberately a small PR:
 
 - Start the implementation branch from `origin/main`, not from the planning
   branch, so planning documents do not count toward the implementation PR.
-- Target at most 300 changed implementation/test lines; stop and simplify
-  before the entire PR reaches 500 changed lines.
+- Target at most 300 changed production lines; stop and simplify before the
+  production diff reaches 500 changed lines. Keep the required tests focused,
+  but do not trade behavioral coverage for a smaller test diff.
 - Do not change PostHog queries, the admin dashboard, the resume dialog UI,
   translations, Playwright scenarios, or backend endpoints.
 - Do not add a migration, database constraint, index, Postgres test, generic
@@ -35,18 +36,25 @@ This is deliberately a small PR:
   Budget: about 90 changed lines.
 - Modify `src/utils/userOnboardingProgress.ts` — parse and build the two optional
   persisted telemetry fields. Budget: about 25 changed lines.
+- Create `src/utils/onboardingProgressPersistence.ts` — isolate the serialized
+  persistence lifecycle and its abort/conflict barriers. Budget: about 70
+  changed lines.
 - Modify `src/components/dashboard/AppOnboardingFlow.vue` — wire the identity
-  context into persistence, dialog decisions, and tracker initialization.
-  Budget: about 35 changed lines.
+  context into persistence, dialog decisions, tracker initialization, and the
+  lifecycle controller. Budget: about 90 changed lines.
 - Modify `tests/onboarding-progress-analytics.unit.test.ts` — deterministic
   identity/event coverage and existing tracker assertions. Budget: about 100
   changed lines.
 - Modify `tests/user-onboarding-progress.unit.test.ts` — persisted metadata
   parsing/building coverage. Budget: about 20 changed lines.
 - Modify `tests/app-onboarding-progress-integration.unit.test.ts` — ordering and
-  ownership contract. Budget: about 25 changed lines.
+  ownership contract plus component/controller integration coverage.
+- Create `tests/onboarding-progress-persistence.unit.test.ts` — executable
+  abort, conflict, queue, failure, and initialization behavior coverage.
 
-No files are created by the implementation.
+The implementation creates only the persistence controller and its focused unit
+test. The expected production total is about 275 changed lines, below the
+500-line production ceiling.
 
 ### Task 1: Persist the existing attempt ID and latest run ID
 
@@ -756,8 +764,9 @@ Run:
 git diff --stat origin/main...HEAD
 ```
 
-Expected: only the six files in the File Map, with no admin-dashboard, PostHog
-query, generated type, migration, translation, or Playwright changes.
+Expected: only the eight implementation/test files in the File Map, with no
+admin-dashboard, PostHog query, generated type, migration, translation, or
+Playwright changes.
 
 Run:
 
@@ -930,9 +939,11 @@ test.
 
 - [ ] **Step 5: Add identity capture-failure coverage**
 
-Create an identity helper with a `capture` dependency that throws. Call dialog,
-Continue, and Restart recording methods and assert none throws; then assert the
-active attempt/run metadata remains valid and usable.
+In `tests/onboarding-progress-analytics.unit.test.ts`, add a local identity
+helper fixture whose `capture` dependency throws. Call dialog, Continue, and
+Restart recording methods and assert none throws; then assert the active
+attempt/run metadata remains valid and usable. No additional helper file is
+created.
 
 - [ ] **Step 6: Run focused and repository verification**
 
@@ -941,7 +952,7 @@ Run:
 ```bash
 bunx vitest run tests/onboarding-progress-persistence.unit.test.ts tests/onboarding-progress-analytics.unit.test.ts tests/user-onboarding-progress.unit.test.ts tests/app-onboarding-progress-integration.unit.test.ts
 bun lint
-bun run typecheck:frontend
+bun typecheck
 bun test:unit
 git diff --check origin/main...HEAD
 ```
