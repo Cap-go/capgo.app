@@ -32,7 +32,7 @@ const props = withDefaults(defineProps<{
 const { t } = useI18n()
 const router = useRouter()
 const supabase = useSupabase()
-const localDays = ref<PeriodDayOption>(30)
+const localDays = ref<PeriodDayOption>(1)
 const days = computed(() => props.days ?? localDays.value)
 const bundleIdCache = ref<Record<string, number>>({})
 

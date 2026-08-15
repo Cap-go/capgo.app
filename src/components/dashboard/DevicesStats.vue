@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { ChartData, ChartOptions, Plugin } from 'chart.js'
+import type { PeriodDayOption } from './PeriodDaySelector.vue'
 import type { TooltipClickHandler } from '~/services/chartTooltip'
 import type { Organization } from '~/stores/organization'
 import { useDark } from '@vueuse/core'
@@ -11,13 +12,14 @@ import { useRoute, useRouter } from 'vue-router'
 import { createChartScales } from '~/services/chartConfig'
 import { useChartData } from '~/services/chartDataService'
 import { createTooltipConfig, todayLinePlugin, verticalLinePlugin } from '~/services/chartTooltip'
-import { generateChartDayLabels, getChartDateRange, normalizeToUtcStartOfDay } from '~/services/date'
+import { formatUtcDateParam, generateChartDayLabels, getChartDateRange, getLastNUtcDaysRange, normalizeToUtcStartOfDay } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
 import { useSupabase } from '~/services/supabase'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useOrganizationStore } from '~/stores/organization'
 import { shouldShowDashboardDemoData } from '~/utils/dashboardDemoMode'
 import ChartCard from './ChartCard.vue'
+import PeriodDaySelector from './PeriodDaySelector.vue'
 
 const props = defineProps({
   appId: {
@@ -166,6 +168,7 @@ const tooltipClickHandler = computed<TooltipClickHandler | undefined>(() => {
   }
 })
 const isLoading = ref(true)
+const periodDays = ref<PeriodDayOption>(1)
 const currentRange = ref<{ startDate: Date, endDate: Date } | null>(null)
 let requestToken = 0
 
@@ -281,9 +284,12 @@ function resolveOrganizationForCurrentContext(): Organization | undefined {
 }
 
 function getDateRange() {
+  if (!props.useBillingPeriod)
+    return getLastNUtcDaysRange(periodDays.value)
+
   const activeOrganization = resolveOrganizationForCurrentContext()
   return getChartDateRange(
-    props.useBillingPeriod,
+    true,
     activeOrganization?.subscription_start,
     activeOrganization?.subscription_end,
   )
@@ -305,7 +311,7 @@ function generateDayLabels(_totalLength: number) {
 
   // Both modes: generate labels for the full date range
   const { startDate, endDate } = currentRange.value
-  return generateChartDayLabels(props.useBillingPeriod, startDate, endDate)
+  return generateChartDayLabels(startDate, endDate)
 }
 
 const processedChartData = computed<ChartData<'line'> | null>(() => {
@@ -539,20 +545,26 @@ const chartOptions = computed<ChartOptions<'line'>>(() => {
 
   return {
     maintainAspectRatio: false,
-    scales: createChartScales(isDark.value, {
-      max: props.accumulated ? 110 : 100,
-      xStacked: props.accumulated,
-      yStacked: props.accumulated,
-      yTickCallback: (tickValue: string | number) => {
-        const numericValue = typeof tickValue === 'number' ? tickValue : Number(tickValue)
-        if (props.accumulated && numericValue > 100)
-          return ''
-        const display = Number.isFinite(numericValue)
-          ? formatNumberValue(numericValue, { minimumFractionDigits: 1, maximumFractionDigits: 1 })
-          : tickValue
-        return `${display}%`
-      },
-    }),
+    scales: (() => {
+      const scales = createChartScales(isDark.value, {
+        max: props.accumulated ? 110 : 100,
+        xStacked: props.accumulated,
+        yStacked: props.accumulated,
+        yTickCallback: (tickValue: string | number) => {
+          const numericValue = typeof tickValue === 'number' ? tickValue : Number(tickValue)
+          if (props.accumulated && numericValue > 100)
+            return ''
+          const display = Number.isFinite(numericValue)
+            ? formatNumberValue(numericValue, { minimumFractionDigits: 1, maximumFractionDigits: 1 })
+            : tickValue
+          return `${display}%`
+        },
+      })
+      const labelCount = processedChartData.value?.labels?.length ?? 0
+      if (labelCount <= 2)
+        Object.assign(scales.x, { offset: true })
+      return scales
+    })(),
     plugins: pluginOptions as unknown as NonNullable<ChartOptions<'line'>['plugins']>,
   }
 })
@@ -646,6 +658,11 @@ async function loadData(forceRefetch = false) {
   }
 }
 
+watch(periodDays, async () => {
+  if (activeAppId.value)
+    await loadData(true)
+})
+
 // Watch billing period changes - use cached data if available
 watch(() => props.useBillingPeriod, async () => {
   if (activeAppId.value)
@@ -734,12 +751,23 @@ watch(
     :is-demo-data="isDemoMode"
   >
     <template #header>
-      <div class="flex items-start justify-between flex-1 gap-2">
-        <h2 class="flex-1 min-w-0 text-2xl font-semibold leading-tight dark:text-white text-slate-600">
-          {{ t(titleKey) }}
-        </h2>
+      <div class="flex flex-col flex-1 gap-3">
+        <div
+          class="flex flex-wrap items-start justify-between gap-3"
+          data-testid="version-chart-range"
+          :data-from="currentRange ? formatUtcDateParam(currentRange.startDate) : undefined"
+          :data-to="currentRange ? formatUtcDateParam(currentRange.endDate) : undefined"
+        >
+          <h2 class="min-w-0 text-2xl font-semibold leading-tight dark:text-white text-slate-600">
+            {{ t(titleKey) }}
+          </h2>
+          <PeriodDaySelector
+            v-model="periodDays"
+            :labels="{ 30: 'max-period' }"
+          />
+        </div>
 
-        <div class="flex max-w-[11rem] flex-col items-end text-right shrink-0">
+        <div class="flex max-w-[11rem] flex-col items-end self-end text-right shrink-0">
           <div
             class="inline-flex items-center justify-center px-2 py-1 text-xs font-bold text-white rounded-full shadow-lg whitespace-nowrap bg-cyan-500"
           >
