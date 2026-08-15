@@ -384,7 +384,11 @@ async function persistOnboardingProgress(status: UserOnboardingStatus = 'in_prog
   if (onboardingPersistenceBlocked)
     return 'skipped'
   persistChain = persistChain
-    .then(() => writeOnboardingProgress(status))
+    .then(() => {
+      if (onboardingPersistenceBlocked)
+        return 'skipped'
+      return writeOnboardingProgress(status)
+    })
     .catch((error) => {
       console.error('Failed to persist onboarding progress', error)
       return 'retryable_failure' as const
@@ -440,6 +444,7 @@ async function writeOnboardingProgress(status: UserOnboardingStatus) {
   if (status === 'completed' || main.user?.id !== userId)
     return 'skipped'
 
+  onboardingPersistenceBlocked = true
   const { data: latest, error: latestError } = await supabase
     .from('users')
     .select()

@@ -126,6 +126,14 @@ describe('app onboarding progress analytics integration', () => {
       'if (onboardingPersistenceBlocked)',
       `return 'skipped'`,
       'persistChain = persistChain',
+    ])
+    expect(persistenceQueue.match(/if \(onboardingPersistenceBlocked\)/g)).toHaveLength(2)
+    const queuedPersistence = persistenceQueue.slice(persistenceQueue.indexOf('persistChain = persistChain'))
+    expectSourceOrder(queuedPersistence, [
+      '.then(() => {',
+      'if (onboardingPersistenceBlocked)',
+      `return 'skipped'`,
+      'return writeOnboardingProgress(status)',
       `return 'retryable_failure'`,
       'return persistChain',
     ])
@@ -143,6 +151,13 @@ describe('app onboarding progress analytics integration', () => {
     expect(writer).toContain(`if (status === 'completed' || main.user?.id !== userId)\n    return 'skipped'`)
 
     const noRowRefresh = writer.slice(writer.indexOf('const { data: latest, error: latestError }'))
+    const noRowConflict = writer.slice(writer.indexOf(`if (status === 'completed' || main.user?.id !== userId)`))
+    expectSourceOrder(noRowConflict, [
+      `return 'skipped'`,
+      'onboardingPersistenceBlocked = true',
+      'const { data: latest, error: latestError }',
+      `return 'conflict'`,
+    ])
     expectSourceOrder(noRowRefresh, [
       'const { data: latest, error: latestError }',
       'if (latestError)',
