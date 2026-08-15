@@ -1,0 +1,147 @@
+import type { Context } from 'hono'
+import type {
+  FrontendOnboardingDailySetupCliEvent,
+  FrontendOnboardingDailySetupCliEventKind,
+} from './frontend_onboarding_daily_setup_cli_outcomes_model.ts'
+import { cloudlogErr } from './logging.ts'
+import { queryPosthogHogql } from './posthog_read.ts'
+
+const INVALID_TOTAL_EVENTS_ERROR = 'daily Setup CLI analytics query returned invalid total metadata'
+const EVENT_LIMIT_EXCEEDED_ERROR = 'daily Setup CLI analytics query exceeded event limit'
+const INVALID_ROW_ERROR = 'daily Setup CLI analytics row is invalid'
+const EVENT_KINDS: readonly FrontendOnboardingDailySetupCliEventKind[] = ['setup', 'cli_copy', 'ai_copy', 'cli_command']
+
+export const FRONTEND_ONBOARDING_DAILY_SETUP_CLI_EVENT_LIMIT = 50_000
+
+function sqlStr(value: string): string {
+  return `'${value.replace(/'/g, '\'\'')}'`
+}
+
+function timestampMs(value: unknown): number | null {
+  const timestamp = typeof value === 'number'
+    ? value
+    : typeof value === 'string' && value.trim() !== ''
+      ? Number(value)
+      : Number.NaN
+
+  return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : null
+}
+
+function mapEvent(row: Record<string, unknown>): FrontendOnboardingDailySetupCliEvent {
+  const personId = typeof row.person_id === 'string' ? row.person_id.trim() : ''
+  const timestamp = timestampMs(row.timestamp_ms)
+  const kind = EVENT_KINDS.includes(row.event_kind as FrontendOnboardingDailySetupCliEventKind)
+    ? row.event_kind as FrontendOnboardingDailySetupCliEventKind
+    : null
+
+  if (!personId || timestamp === null || kind === null)
+    throw new Error(INVALID_ROW_ERROR)
+
+  if (kind === 'cli_command') {
+    const commandPath = row.command_path
+    if (typeof commandPath !== 'string' || commandPath.trim() === '')
+      throw new Error(INVALID_ROW_ERROR)
+
+    return { personId, timestampMs: timestamp, kind, commandPath }
+  }
+
+  return { personId, timestampMs: timestamp, kind }
+}
+
+export function assertFrontendOnboardingDailySetupCliEventTotal(
+  totalEvents: unknown,
+  limit = FRONTEND_ONBOARDING_DAILY_SETUP_CLI_EVENT_LIMIT,
+): number {
+  if (typeof totalEvents !== 'number'
+    || !Number.isFinite(totalEvents)
+    || !Number.isInteger(totalEvents)
+    || totalEvents < 0) {
+    throw new Error(INVALID_TOTAL_EVENTS_ERROR)
+  }
+  if (totalEvents > limit)
+    throw new Error(EVENT_LIMIT_EXCEEDED_ERROR)
+
+  return totalEvents
+}
+
+export function buildFrontendOnboardingDailySetupCliHogql(
+  startDate: string,
+  endDate: string,
+  followupEndDate: string,
+): string {
+  return `
+    WITH setup_people AS (
+      SELECT DISTINCT
+        toString(person_id) AS person_id
+      FROM events
+      WHERE event = 'onboarding_step_viewed'
+        AND JSONExtractString(toString(properties), 'flow') = 'pre_org'
+        AND toIntOrZero(toString(properties.onboarding_version)) = 2
+        AND JSONExtractString(toString(properties), 'step') = 'setup'
+        AND timestamp >= parseDateTimeBestEffort(${sqlStr(startDate)})
+        AND timestamp < parseDateTimeBestEffort(${sqlStr(endDate)})
+    )
+    SELECT
+      toString(selected_events.person_id) AS person_id,
+      toUnixTimestamp64Milli(selected_events.timestamp) AS timestamp_ms,
+      multiIf(
+        selected_events.event = 'onboarding_step_viewed', 'setup',
+        selected_events.event = 'onboarding_cli_command_copied', 'cli_copy',
+        selected_events.event = 'onboarding_ai_instructions_copied', 'ai_copy',
+        'cli_command'
+      ) AS event_kind,
+      if(selected_events.event = 'CLI Command Invoked', JSONExtractString(toString(selected_events.properties), 'command_path'), '') AS command_path,
+      count() OVER () AS total_events
+    FROM events AS selected_events
+    INNER JOIN setup_people AS cohort
+      ON toString(selected_events.person_id) = cohort.person_id
+    WHERE selected_events.timestamp >= parseDateTimeBestEffort(${sqlStr(startDate)})
+      AND selected_events.timestamp < parseDateTimeBestEffort(${sqlStr(followupEndDate)})
+      AND (
+        selected_events.event = 'CLI Command Invoked'
+        OR (
+          selected_events.event IN ('onboarding_step_viewed', 'onboarding_cli_command_copied', 'onboarding_ai_instructions_copied')
+          AND JSONExtractString(toString(selected_events.properties), 'flow') = 'pre_org'
+          AND toIntOrZero(toString(selected_events.properties.onboarding_version)) = 2
+          AND JSONExtractString(toString(selected_events.properties), 'step') = 'setup'
+        )
+      )
+    ORDER BY person_id ASC, timestamp_ms ASC, event_kind ASC
+    LIMIT ${FRONTEND_ONBOARDING_DAILY_SETUP_CLI_EVENT_LIMIT}`
+}
+
+export async function getFrontendOnboardingDailySetupCliEvents(
+  c: Context,
+  startDate: string,
+  endDate: string,
+  followupEndDate: string,
+): Promise<FrontendOnboardingDailySetupCliEvent[]> {
+  const posthog = await queryPosthogHogql(
+    c,
+    buildFrontendOnboardingDailySetupCliHogql(startDate, endDate, followupEndDate),
+  )
+  if (!posthog.configured || !posthog.connected || posthog.failureReason !== null)
+    throw new Error('daily Setup CLI analytics PostHog query failed')
+
+  if (posthog.rows.length > 0) {
+    const totalEvents = posthog.rows[0].total_events
+    try {
+      assertFrontendOnboardingDailySetupCliEventTotal(totalEvents)
+    }
+    catch (error) {
+      const message = error instanceof Error && error.message === EVENT_LIMIT_EXCEEDED_ERROR
+        ? 'frontend_onboarding_daily_setup_cli_event_limit_exceeded'
+        : 'frontend_onboarding_daily_setup_cli_invalid_total_events'
+      cloudlogErr({
+        requestId: c.get('requestId'),
+        message,
+        event_limit: FRONTEND_ONBOARDING_DAILY_SETUP_CLI_EVENT_LIMIT,
+        total_events: totalEvents,
+        returned_rows: posthog.rows.length,
+      })
+      throw error
+    }
+  }
+
+  return posthog.rows.map(mapEvent)
+}

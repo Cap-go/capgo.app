@@ -1,0 +1,241 @@
+import type { Context } from 'hono'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+import {
+  assertFrontendOnboardingDailySetupCliEventTotal,
+  buildFrontendOnboardingDailySetupCliHogql,
+  FRONTEND_ONBOARDING_DAILY_SETUP_CLI_EVENT_LIMIT,
+  getFrontendOnboardingDailySetupCliEvents,
+} from '../supabase/functions/_backend/utils/frontend_onboarding_daily_setup_cli_outcomes.ts'
+
+const { cloudlogErrMock, queryPosthogHogqlMock } = vi.hoisted(() => ({
+  cloudlogErrMock: vi.fn(),
+  queryPosthogHogqlMock: vi.fn(),
+}))
+
+vi.mock('../supabase/functions/_backend/utils/posthog_read.ts', () => ({
+  queryPosthogHogql: queryPosthogHogqlMock,
+}))
+
+vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
+  cloudlogErr: cloudlogErrMock,
+}))
+
+function createContext(): Context {
+  return { get: () => 'request-id' } as unknown as Context
+}
+
+beforeEach(() => {
+  cloudlogErrMock.mockReset()
+  queryPosthogHogqlMock.mockReset()
+  queryPosthogHogqlMock.mockResolvedValue({
+    configured: true,
+    connected: true,
+    failureReason: null,
+    rows: [],
+  })
+})
+
+describe('buildFrontendOnboardingDailySetupCliHogql', () => {
+  it('selects the bounded v2 Setup cohort and its Setup, copy, and unfiltered CLI events', () => {
+    const query = buildFrontendOnboardingDailySetupCliHogql(
+      '2026-08-01T00:00:00.123Z',
+      '2026-08-03T00:00:00.456Z',
+      '2026-08-04T00:00:00.789Z',
+    )
+
+    expect(query).toContain('WITH setup_people AS')
+    expect(query).toContain('event = \'onboarding_step_viewed\'')
+    expect(query).toContain('JSONExtractString(toString(properties), \'flow\') = \'pre_org\'')
+    expect(query).toContain('toIntOrZero(toString(properties.onboarding_version)) = 2')
+    expect(query).toContain('JSONExtractString(toString(properties), \'step\') = \'setup\'')
+    expect(query).toContain('event IN (\'onboarding_step_viewed\', \'onboarding_cli_command_copied\', \'onboarding_ai_instructions_copied\')')
+    expect(query).toContain('event = \'CLI Command Invoked\'')
+    expect(query).not.toContain('JSONExtractString(toString(properties), \'channel\')')
+    expect(query).not.toContain('JSONExtractString(toString(properties), \'command_path\') = \'init\'')
+    expect(query).toContain('timestamp >= parseDateTimeBestEffort(\'2026-08-01T00:00:00.123Z\')')
+    expect(query).toContain('timestamp < parseDateTimeBestEffort(\'2026-08-03T00:00:00.456Z\')')
+    expect(query).toContain('selected_events.timestamp >= parseDateTimeBestEffort(\'2026-08-01T00:00:00.123Z\')')
+    expect(query).toContain('selected_events.timestamp < parseDateTimeBestEffort(\'2026-08-04T00:00:00.789Z\')')
+    expect(query).toContain('JSONExtractString(toString(selected_events.properties), \'flow\') = \'pre_org\'')
+    expect(query).toContain('toIntOrZero(toString(selected_events.properties.onboarding_version)) = 2')
+    expect(query).toContain('JSONExtractString(toString(selected_events.properties), \'step\') = \'setup\'')
+    expect(query).toContain('INNER JOIN setup_people AS cohort')
+    expect(query).toContain('ON toString(selected_events.person_id) = cohort.person_id')
+    expect(query).toContain('toString(selected_events.person_id) AS person_id')
+    expect(query).toContain('toUnixTimestamp64Milli(selected_events.timestamp) AS timestamp_ms')
+    expect(query).toContain('if(selected_events.event = \'CLI Command Invoked\', JSONExtractString(toString(selected_events.properties), \'command_path\'), \'\') AS command_path')
+    expect(query).toContain('count() OVER () AS total_events')
+    expect(query).toContain('ORDER BY person_id ASC, timestamp_ms ASC, event_kind ASC')
+    expect(query).toContain('LIMIT 50000')
+    expect(query).not.toContain('LIMIT 50001')
+  })
+
+  it('escapes interpolated date strings', () => {
+    const query = buildFrontendOnboardingDailySetupCliHogql('start\'value', 'end\'value', 'followup\'value')
+
+    expect(query).toContain('parseDateTimeBestEffort(\'start\'\'value\')')
+    expect(query).toContain('parseDateTimeBestEffort(\'end\'\'value\')')
+    expect(query).toContain('parseDateTimeBestEffort(\'followup\'\'value\')')
+  })
+})
+
+describe('assertFrontendOnboardingDailySetupCliEventTotal', () => {
+  it('accepts finite non-negative integer totals through the limit', () => {
+    expect(assertFrontendOnboardingDailySetupCliEventTotal(0)).toBe(0)
+    expect(assertFrontendOnboardingDailySetupCliEventTotal(1, 1)).toBe(1)
+    expect(assertFrontendOnboardingDailySetupCliEventTotal(FRONTEND_ONBOARDING_DAILY_SETUP_CLI_EVENT_LIMIT))
+      .toBe(FRONTEND_ONBOARDING_DAILY_SETUP_CLI_EVENT_LIMIT)
+    expect(FRONTEND_ONBOARDING_DAILY_SETUP_CLI_EVENT_LIMIT).toBe(50_000)
+  })
+
+  it.each([undefined, null, '1', Number.NaN, Number.POSITIVE_INFINITY, -1, 1.5])(
+    'rejects malformed total metadata %s',
+    (totalEvents) => {
+      expect(() => assertFrontendOnboardingDailySetupCliEventTotal(totalEvents))
+        .toThrow('daily Setup CLI analytics query returned invalid total metadata')
+    },
+  )
+
+  it('uses a distinct error when the total exceeds the limit', () => {
+    expect(() => assertFrontendOnboardingDailySetupCliEventTotal(2, 1))
+      .toThrow('daily Setup CLI analytics query exceeded event limit')
+  })
+})
+
+describe('getFrontendOnboardingDailySetupCliEvents', () => {
+  it('strictly maps Setup, copy, and CLI rows while preserving the raw CLI command path', async () => {
+    queryPosthogHogqlMock.mockResolvedValueOnce({
+      configured: true,
+      connected: true,
+      failureReason: null,
+      rows: [
+        { person_id: ' person-1 ', timestamp_ms: '1000', event_kind: 'setup', command_path: 'ignored', total_events: 5 },
+        { person_id: 'person-1', timestamp_ms: 1100, event_kind: 'cli_copy', command_path: '', total_events: 5 },
+        { person_id: 'person-1', timestamp_ms: 1200, event_kind: 'ai_copy', command_path: '', total_events: 5 },
+        { person_id: 'person-1', timestamp_ms: 1300, event_kind: 'cli_command', command_path: 'init', total_events: 5 },
+        { person_id: 'person-1', timestamp_ms: 1400, event_kind: 'cli_command', command_path: ' init ', total_events: 5 },
+      ],
+    })
+
+    const result = await getFrontendOnboardingDailySetupCliEvents(
+      createContext(),
+      '2026-08-01T00:00:00.000Z',
+      '2026-08-03T00:00:00.000Z',
+      '2026-08-04T00:00:00.000Z',
+    )
+
+    expect(queryPosthogHogqlMock).toHaveBeenCalledWith(
+      expect.anything(),
+      buildFrontendOnboardingDailySetupCliHogql(
+        '2026-08-01T00:00:00.000Z',
+        '2026-08-03T00:00:00.000Z',
+        '2026-08-04T00:00:00.000Z',
+      ),
+    )
+    expect(result).toEqual([
+      { personId: 'person-1', timestampMs: 1000, kind: 'setup' },
+      { personId: 'person-1', timestampMs: 1100, kind: 'cli_copy' },
+      { personId: 'person-1', timestampMs: 1200, kind: 'ai_copy' },
+      { personId: 'person-1', timestampMs: 1300, kind: 'cli_command', commandPath: 'init' },
+      { personId: 'person-1', timestampMs: 1400, kind: 'cli_command', commandPath: ' init ' },
+    ])
+  })
+
+  it('returns an empty list for a successful empty query', async () => {
+    await expect(getFrontendOnboardingDailySetupCliEvents(
+      createContext(),
+      '2026-08-01T00:00:00.000Z',
+      '2026-08-03T00:00:00.000Z',
+      '2026-08-04T00:00:00.000Z',
+    )).resolves.toEqual([])
+  })
+
+  it.each([
+    { configured: false, connected: true, failureReason: null },
+    { configured: true, connected: false, failureReason: null },
+    { configured: false, connected: false, failureReason: 'unconfigured' },
+    { configured: true, connected: false, failureReason: 'unavailable' },
+    { configured: true, connected: false, failureReason: 'timeout' },
+    { configured: true, connected: true, failureReason: 'too_large' },
+  ])('fails closed for configured=$configured, connected=$connected, failureReason=$failureReason', async (posthog) => {
+    queryPosthogHogqlMock.mockResolvedValueOnce({ ...posthog, rows: [] })
+
+    await expect(getFrontendOnboardingDailySetupCliEvents(
+      createContext(),
+      '2026-08-01T00:00:00.000Z',
+      '2026-08-03T00:00:00.000Z',
+      '2026-08-04T00:00:00.000Z',
+    )).rejects.toThrow('daily Setup CLI analytics PostHog query failed')
+  })
+
+  it('logs total metadata and rejects when the event limit is exceeded', async () => {
+    queryPosthogHogqlMock.mockResolvedValueOnce({
+      configured: true,
+      connected: true,
+      failureReason: null,
+      rows: [{ person_id: 'person-1', timestamp_ms: 1000, event_kind: 'setup', command_path: '', total_events: 50_001 }],
+    })
+
+    await expect(getFrontendOnboardingDailySetupCliEvents(
+      createContext(),
+      '2026-08-01T00:00:00.000Z',
+      '2026-08-03T00:00:00.000Z',
+      '2026-08-04T00:00:00.000Z',
+    )).rejects.toThrow('daily Setup CLI analytics query exceeded event limit')
+    expect(cloudlogErrMock).toHaveBeenCalledWith({
+      requestId: 'request-id',
+      message: 'frontend_onboarding_daily_setup_cli_event_limit_exceeded',
+      event_limit: 50_000,
+      total_events: 50_001,
+      returned_rows: 1,
+    })
+  })
+
+  it('logs a distinct message and rejects invalid total metadata', async () => {
+    queryPosthogHogqlMock.mockResolvedValueOnce({
+      configured: true,
+      connected: true,
+      failureReason: null,
+      rows: [{ person_id: 'person-1', timestamp_ms: 1000, event_kind: 'setup', command_path: '', total_events: '1' }],
+    })
+
+    await expect(getFrontendOnboardingDailySetupCliEvents(
+      createContext(),
+      '2026-08-01T00:00:00.000Z',
+      '2026-08-03T00:00:00.000Z',
+      '2026-08-04T00:00:00.000Z',
+    )).rejects.toThrow('daily Setup CLI analytics query returned invalid total metadata')
+    expect(cloudlogErrMock).toHaveBeenCalledWith({
+      requestId: 'request-id',
+      message: 'frontend_onboarding_daily_setup_cli_invalid_total_events',
+      event_limit: 50_000,
+      total_events: '1',
+      returned_rows: 1,
+    })
+  })
+
+  it.each([
+    ['empty person', { person_id: ' ', timestamp_ms: 1000, event_kind: 'setup', command_path: '', total_events: 1 }],
+    ['non-string person', { person_id: 42, timestamp_ms: 1000, event_kind: 'setup', command_path: '', total_events: 1 }],
+    ['zero timestamp', { person_id: 'person-1', timestamp_ms: 0, event_kind: 'setup', command_path: '', total_events: 1 }],
+    ['non-numeric timestamp', { person_id: 'person-1', timestamp_ms: 'later', event_kind: 'setup', command_path: '', total_events: 1 }],
+    ['unknown kind', { person_id: 'person-1', timestamp_ms: 1000, event_kind: 'unknown', command_path: '', total_events: 1 }],
+    ['missing CLI path', { person_id: 'person-1', timestamp_ms: 1000, event_kind: 'cli_command', total_events: 1 }],
+    ['whitespace CLI path', { person_id: 'person-1', timestamp_ms: 1000, event_kind: 'cli_command', command_path: '   ', total_events: 1 }],
+  ])('rejects the whole query result for a malformed %s row', async (_name, row) => {
+    queryPosthogHogqlMock.mockResolvedValueOnce({
+      configured: true,
+      connected: true,
+      failureReason: null,
+      rows: [row],
+    })
+
+    await expect(getFrontendOnboardingDailySetupCliEvents(
+      createContext(),
+      '2026-08-01T00:00:00.000Z',
+      '2026-08-03T00:00:00.000Z',
+      '2026-08-04T00:00:00.000Z',
+    )).rejects.toThrow('daily Setup CLI analytics row is invalid')
+  })
+})
