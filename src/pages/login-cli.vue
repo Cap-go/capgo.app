@@ -65,10 +65,10 @@ async function resolveDestination(): Promise<string> {
 async function complete(): Promise<void> {
   if (state.value === 'success')
     return
+  destination.value = await resolveDestination()
   state.value = 'success'
   clearSecret()
   clearChannels()
-  destination.value = await resolveDestination()
 }
 
 function subscribe(orgIds: string[], session: string): Promise<boolean[]> {
@@ -182,19 +182,19 @@ onBeforeUnmount(() => {
           {{ t('cli-login-direct-title') }}
         </h2>
         <p>{{ t('cli-login-direct-description') }}</p>
-        <button class="btn" type="button" @click="router.push('/dashboard')">
+        <button class="d-btn" type="button" @click="router.push('/dashboard')">
           {{ t('dashboard') }}
         </button>
       </div>
 
       <div v-else-if="state === 'empty'" class="space-y-4">
-        <p class="alert alert-warning">
+        <p class="d-alert d-alert-warning">
           {{ t('cli-login-no-eligible') }}
         </p>
         <p v-if="skippedNames.length" class="text-sm">
           {{ t('cli-login-skipped-organizations', { organizations: skippedNames.join(', ') }) }}
         </p>
-        <button class="btn" type="button" @click="router.push('/dashboard')">
+        <button class="d-btn" type="button" @click="router.push('/dashboard')">
           {{ t('dashboard') }}
         </button>
       </div>
@@ -205,17 +205,17 @@ onBeforeUnmount(() => {
         </p>
         <div class="flex items-center gap-2 rounded-2xl border border-slate-200 p-3 dark:border-slate-700">
           <code :class="revealed ? '' : 'select-none blur-[5px]'" class="min-w-0 flex-1 truncate">{{ displayedKey }}</code>
-          <button class="btn btn-ghost btn-sm" type="button" :aria-pressed="revealed" @click="revealed = !revealed">
+          <button class="d-btn d-btn-ghost d-btn-sm" type="button" :aria-pressed="revealed" @click="revealed = !revealed">
             {{ t(revealed ? 'cli-login-hide-key' : 'cli-login-reveal-key') }}
           </button>
-          <button class="btn btn-primary btn-sm" type="button" @click="copyKey">
+          <button class="d-btn d-btn-primary d-btn-sm" type="button" @click="copyKey">
             <IconClipboard class="h-4 w-4" /> {{ t('copy') }}
           </button>
         </div>
         <p class="text-xs text-slate-500">
           {{ t('cli-login-copy-note') }}
         </p>
-        <p class="alert alert-warning text-sm">
+        <p class="d-alert d-alert-warning text-sm">
           {{ t('cli-login-security-warning') }}
         </p>
         <p v-if="reused" class="text-sm">
@@ -240,20 +240,20 @@ onBeforeUnmount(() => {
         <h2 class="text-xl font-semibold">
           {{ t('cli-login-success-title') }}
         </h2>
-        <button class="btn btn-primary" type="button" @click="goToDestination">
+        <button class="d-btn d-btn-primary" type="button" @click="goToDestination">
           {{ t(destination.startsWith('/app/new') ? 'cli-login-continue-setup' : 'dashboard') }}
         </button>
       </div>
 
       <div v-else class="space-y-4">
-        <p class="alert alert-error">
+        <p class="d-alert d-alert-error">
           {{ t('cli-login-error') }}
         </p>
         <div class="flex gap-2">
-          <button class="btn btn-primary" type="button" @click="prepare">
+          <button class="d-btn d-btn-primary" type="button" @click="prepare">
             {{ t('retry') }}
           </button>
-          <button class="btn" type="button" @click="router.push('/dashboard')">
+          <button class="d-btn" type="button" @click="router.push('/dashboard')">
             {{ t('dashboard') }}
           </button>
         </div>

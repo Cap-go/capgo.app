@@ -41,7 +41,7 @@ function dependencies(overrides: Record<string, unknown> = {}) {
 }
 
 describe('CLI login key model', () => {
-  it.each([
+  it.concurrent.each([
     ['owner', 'org_super_admin'],
     ['org_super_admin', 'org_super_admin'],
     ['org_admin', 'org_admin'],
@@ -52,7 +52,7 @@ describe('CLI login key model', () => {
     expect(roleForCliKey(role)).toBe(expected)
   })
 
-  it('combines hashing with the strictest expiration and clock margin', () => {
+  it.concurrent('combines hashing with the strictest expiration and clock margin', () => {
     expect(aggregateCliKeyPolicy([
       org({ enforce_hashed_api_keys: true, max_apikey_expiration_days: 30 }),
       org({ gid: 'org-b', require_apikey_expiration: true, max_apikey_expiration_days: 90 }),
@@ -62,7 +62,7 @@ describe('CLI login key model', () => {
     })
   })
 
-  it('uses 365 days only when expiration is required and no positive max exists', () => {
+  it.concurrent('uses 365 days only when expiration is required and no positive max exists', () => {
     expect(aggregateCliKeyPolicy([
       org({ require_apikey_expiration: true, max_apikey_expiration_days: null }),
     ], now)).toEqual({
@@ -71,7 +71,7 @@ describe('CLI login key model', () => {
     })
   })
 
-  it('parses only exact managed names and fills the first gap', () => {
+  it.concurrent('parses only exact managed names and fills the first gap', () => {
     expect(nextManagedCliKeyName([
       'Capgo CLI',
       'Capgo CLI (3)',
@@ -80,7 +80,7 @@ describe('CLI login key model', () => {
     ])).toBe('Capgo CLI (2)')
   })
 
-  it('canonicalizes all scope fields so extra app or channel access is not equal', () => {
+  it.concurrent('canonicalizes all scope fields so extra app or channel access is not equal', () => {
     const expected = canonicalizeCliBindings([
       { role_name: 'org_admin', scope_type: 'org', org_id: 'org-a' },
     ])
@@ -90,7 +90,7 @@ describe('CLI login key model', () => {
     ])).not.toEqual(expected)
   })
 
-  it('validates high-entropy sessions and matches only the exact login event', () => {
+  it.concurrent('validates high-entropy sessions and matches only the exact login event', () => {
     const session = 'AbCdEfGhIjKlMnOpQrStUv'
     expect(isValidCliLoginSession(session)).toBe(true)
     expect(isValidCliLoginSession('short')).toBe(false)
@@ -106,7 +106,7 @@ describe('CLI login key model', () => {
     }, session)).toBe(false)
   })
 
-  it('offers onboarding only for one accepted org and one pending app', () => {
+  it.concurrent('offers onboarding only for one accepted org and one pending app', () => {
     expect(getCliLoginDestination(1, [
       { app_id: 'com.demo.app', need_onboarding: true },
     ])).toBe('/app/new?resume=com.demo.app')
@@ -120,7 +120,7 @@ describe('CLI login key model', () => {
 })
 
 describe('prepareCliLoginKey', () => {
-  it('skips unsupported, invited, security-blocked, and permission-blocked orgs', async () => {
+  it.concurrent('skips unsupported, invited, security-blocked, and permission-blocked orgs', async () => {
     const io = dependencies({
       hasRequiredPermissions: vi.fn(async (orgId: string) => orgId !== 'blocked'),
     })
@@ -141,7 +141,7 @@ describe('prepareCliLoginKey', () => {
     }))
   })
 
-  it('reuses the exact plaintext key and rejects global permissions', async () => {
+  it.concurrent('reuses the exact plaintext key and rejects global permissions', async () => {
     const exact = {
       id: 1,
       name: 'Capgo CLI',
@@ -177,7 +177,7 @@ describe('prepareCliLoginKey', () => {
     })
   })
 
-  it('rejects extra bindings, expired keys, and plaintext keys under a hashed policy', async () => {
+  it.concurrent('rejects extra or expired bindings, expired keys, and plaintext keys under a hashed policy', async () => {
     const metadata = {
       id: 1,
       name: 'Capgo CLI',
@@ -199,6 +199,17 @@ describe('prepareCliLoginKey', () => {
     await expect(prepareCliLoginKey([org()], io, now)).resolves.toMatchObject({ reused: false })
 
     io.listBindings.mockResolvedValue([
+      {
+        principal_id: 'rbac-1',
+        role_name: 'org_admin',
+        scope_type: 'org',
+        org_id: 'org-a',
+        expires_at: '2026-08-14T00:00:00Z',
+      },
+    ])
+    await expect(prepareCliLoginKey([org()], io, now)).resolves.toMatchObject({ reused: false })
+
+    io.listBindings.mockResolvedValue([
       { principal_id: 'rbac-1', role_name: 'org_admin', scope_type: 'org', org_id: 'org-a' },
     ])
     io.listOwnedKeys.mockResolvedValue([{
@@ -214,7 +225,33 @@ describe('prepareCliLoginKey', () => {
     ], io, now)).resolves.toMatchObject({ reused: false })
   })
 
-  it('reserves exact managed names even when a hashed key cannot be reused', async () => {
+  it.concurrent('reuses a key that expires exactly at the organization maximum', async () => {
+    const exact = {
+      id: 1,
+      name: 'Capgo CLI',
+      rbac_id: 'rbac-1',
+      created_at: '2026-08-01T00:00:00Z',
+      expires_at: '2026-09-14T12:00:00Z',
+      is_hashed_key: false,
+      global_permissions: [],
+    }
+    const io = dependencies({
+      listMetadata: vi.fn(async () => [exact]),
+      listOwnedKeys: vi.fn(async () => [{ ...exact, key: 'existing-secret' }]),
+      listBindings: vi.fn(async () => [{
+        principal_id: 'rbac-1',
+        role_name: 'org_admin',
+        scope_type: 'org',
+        org_id: 'org-a',
+      }]),
+    })
+
+    await expect(prepareCliLoginKey([
+      org({ require_apikey_expiration: true, max_apikey_expiration_days: 30 }),
+    ], io, now)).resolves.toMatchObject({ reused: true, secret: 'existing-secret' })
+  })
+
+  it.concurrent('reserves exact managed names even when a hashed key cannot be reused', async () => {
     const io = dependencies({
       listOwnedKeys: vi.fn(async () => [
         { id: 1, name: 'Capgo CLI', key: null, rbac_id: 'one', created_at: '', expires_at: null },
@@ -226,7 +263,7 @@ describe('prepareCliLoginKey', () => {
     expect(io.createKey).toHaveBeenCalledWith(expect.objectContaining({ name: 'Capgo CLI (3)' }))
   })
 
-  it('does not call key APIs when every organization is skipped', async () => {
+  it.concurrent('does not call key APIs when every organization is skipped', async () => {
     const io = dependencies()
     await expect(prepareCliLoginKey([
       org({ role: 'org_member' }),

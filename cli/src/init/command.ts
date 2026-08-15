@@ -5312,7 +5312,8 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
     }
   }
 
-  if (shouldStartInitBrowserLogin(options.apikey, canPromptInteractively())) {
+  const supportsBrowserLogin = !options.local && !options.supaHost && !options.supaAnon
+  if (shouldStartInitBrowserLogin(options.apikey, supportsBrowserLogin && canPromptInteractively())) {
     options.apikey = await loginInitInBrowser({
       local: options.local,
       supaHost: options.supaHost,

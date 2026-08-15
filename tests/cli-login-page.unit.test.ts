@@ -41,4 +41,13 @@ describe('/login-cli page contract', () => {
     expect(messages['cli-login-waiting']).toContain('Waiting')
     expect(messages['cli-login-success-title']).toContain('successful')
   })
+
+  it.concurrent('uses prefixed DaisyUI primitives and resolves the destination before success', () => {
+    const page = readFileSync(pagePath, 'utf8')
+    expect(page).toContain('class="d-btn')
+    expect(page).toContain('class="d-alert')
+    expect(page).not.toMatch(/class="(?:btn|alert)(?:\s|\")/)
+    expect(page.indexOf('destination.value = await resolveDestination()'))
+      .toBeLessThan(page.indexOf("state.value = 'success'"))
+  })
 })

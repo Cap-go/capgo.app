@@ -24,6 +24,7 @@ export interface CliKeyBinding {
   app_id?: string | null
   channel_id?: string | null
   principal_id?: string | null
+  expires_at?: string | null
 }
 
 export interface CliKeyPolicy {
@@ -111,7 +112,7 @@ export function canonicalizeCliBindings(bindings: CliKeyBinding[]): string[] {
     binding.org_id ?? '',
     binding.app_id ?? '',
     binding.channel_id ?? '',
-  ].join('|')).sort((left, right) => left.localeCompare(right))
+  ].join('|')).sort((left, right) => (left < right ? -1 : left > right ? 1 : 0))
 }
 
 export function aggregateCliKeyPolicy(orgs: CliLoginOrganization[], now = new Date()): CliKeyPolicy {
@@ -180,7 +181,7 @@ function candidatePolicyAllows(
     return false
   if (!policy.expiresAt)
     return true
-  return expiresAt !== null && expiresAt <= new Date(policy.expiresAt).getTime()
+  return expiresAt !== null && expiresAt <= new Date(policy.expiresAt).getTime() + CLOCK_MARGIN_MS
 }
 
 export async function prepareCliLoginKey(
@@ -223,7 +224,8 @@ export async function prepareCliLoginKey(
     const keyMetadata = metadataById.get(key.id)
     if (!keyMetadata || !Array.isArray(keyMetadata.global_permissions) || keyMetadata.global_permissions.length !== 0)
       continue
-    const bindings = allBindings.filter(binding => binding.principal_id === key.rbac_id)
+    const bindings = allBindings.filter(binding => binding.principal_id === key.rbac_id
+      && (!binding.expires_at || new Date(binding.expires_at).getTime() > now.getTime()))
     if (!sameStringArray(canonicalizeCliBindings(bindings), expectedCanonical))
       continue
     if (!candidatePolicyAllows(key, keyMetadata, policy, now))
@@ -292,7 +294,7 @@ export function createCliLoginKeyDependencies(
         return []
       const { data, error } = await supabase
         .from('role_bindings')
-        .select('principal_id, scope_type, org_id, app_id, channel_id, roles(name)')
+        .select('principal_id, scope_type, org_id, app_id, channel_id, expires_at, roles(name)')
         .eq('principal_type', 'apikey')
         .in('principal_id', principalIds)
       if (error)
@@ -307,6 +309,7 @@ export function createCliLoginKeyDependencies(
           org_id: row.org_id,
           app_id: row.app_id,
           channel_id: row.channel_id,
+          expires_at: row.expires_at,
         }
       })
     },

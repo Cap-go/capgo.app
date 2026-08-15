@@ -223,8 +223,9 @@ export interface CliKeyBinding {
   scope_type: string
   org_id: string | null
   app_id?: string | null
-  channel_id?: number | null
+  channel_id?: string | null
   principal_id?: string | null
+  expires_at?: string | null
 }
 
 export interface CliKeyPolicy {
@@ -312,7 +313,7 @@ export function canonicalizeCliBindings(bindings: CliKeyBinding[]): string[] {
     binding.org_id ?? '',
     binding.app_id ?? '',
     binding.channel_id ?? '',
-  ].join('|')).sort()
+  ].join('|')).sort((left, right) => (left < right ? -1 : left > right ? 1 : 0))
 }
 
 export function aggregateCliKeyPolicy(orgs: CliLoginOrganization[], now = new Date()): CliKeyPolicy {
@@ -430,6 +431,32 @@ describe('prepareCliLoginKey', () => {
     })
   })
 
+  it('reuses a key that expires exactly at the organization maximum', async () => {
+    const exact = {
+      id: 1,
+      name: 'Capgo CLI',
+      rbac_id: 'rbac-1',
+      created_at: '2026-08-01T00:00:00Z',
+      expires_at: '2026-09-14T12:00:00Z',
+      is_hashed_key: false,
+      global_permissions: [],
+    }
+    const io = deps({
+      listMetadata: vi.fn(async () => [exact]),
+      listOwnedKeys: vi.fn(async () => [{ ...exact, key: 'existing-secret' }]),
+      listBindings: vi.fn(async () => [{
+        principal_id: 'rbac-1',
+        role_name: 'org_admin',
+        scope_type: 'org',
+        org_id: 'org-a',
+      }]),
+    })
+
+    await expect(prepareCliLoginKey([
+      org({ require_apikey_expiration: true, max_apikey_expiration_days: 30 }),
+    ], io, now)).resolves.toMatchObject({ reused: true, secret: 'existing-secret' })
+  })
+
   it('reserves exact managed names even when a hashed key cannot be reused', async () => {
     const io = deps({
       listOwnedKeys: vi.fn(async () => [
@@ -489,7 +516,7 @@ function candidatePolicyAllows(key: CliOwnedKey, metadata: CliApiKeyMetadata, po
     return false
   if (!policy.expiresAt)
     return true
-  return expiresAt !== null && expiresAt <= new Date(policy.expiresAt).getTime()
+  return expiresAt !== null && expiresAt <= new Date(policy.expiresAt).getTime() + CLOCK_MARGIN_MS
 }
 
 export async function prepareCliLoginKey(
@@ -532,7 +559,8 @@ export async function prepareCliLoginKey(
     const keyMetadata = metadataById.get(key.id)
     if (!keyMetadata || !Array.isArray(keyMetadata.global_permissions) || keyMetadata.global_permissions.length !== 0)
       continue
-    const bindings = allBindings.filter(binding => binding.principal_id === key.rbac_id)
+    const bindings = allBindings.filter(binding => binding.principal_id === key.rbac_id
+      && (!binding.expires_at || new Date(binding.expires_at).getTime() > now.getTime()))
     if (!sameStringArray(canonicalizeCliBindings(bindings), expectedCanonical))
       continue
     if (!candidatePolicyAllows(key, keyMetadata, policy, now))
@@ -605,7 +633,7 @@ export function createCliLoginKeyDependencies(
         return []
       const { data, error } = await supabase
         .from('role_bindings')
-        .select('principal_id, scope_type, org_id, app_id, channel_id, roles(name)')
+        .select('principal_id, scope_type, org_id, app_id, channel_id, expires_at, roles(name)')
         .eq('principal_type', 'apikey')
         .in('principal_id', principalIds)
       if (error)
@@ -619,6 +647,7 @@ export function createCliLoginKeyDependencies(
           org_id: row.org_id,
           app_id: row.app_id,
           channel_id: row.channel_id,
+          expires_at: row.expires_at,
         }
       })
     },
@@ -853,9 +882,9 @@ async function resolveDestination(): Promise<string> {
 async function complete(): Promise<void> {
   if (state.value === 'success')
     return
+  destination.value = await resolveDestination()
   state.value = 'success'
   clearSecret()
-  destination.value = await resolveDestination()
 }
 
 function subscribe(orgIds: string[], session: string): Promise<boolean[]> {
@@ -969,28 +998,28 @@ Use one centered card on the naked layout. The ready state must render exactly o
       <div v-else-if="state === 'direct'" class="space-y-4">
         <h2 class="text-lg font-semibold">{{ t('cli-login-direct-title') }}</h2>
         <p>{{ t('cli-login-direct-description') }}</p>
-        <button class="btn" type="button" @click="router.push('/dashboard')">{{ t('dashboard') }}</button>
+        <button class="d-btn" type="button" @click="router.push('/dashboard')">{{ t('dashboard') }}</button>
       </div>
 
       <div v-else-if="state === 'empty'" class="space-y-4">
-        <p class="alert alert-warning">{{ t('cli-login-no-eligible') }}</p>
+        <p class="d-alert d-alert-warning">{{ t('cli-login-no-eligible') }}</p>
         <p v-if="skippedNames.length" class="text-sm">{{ t('cli-login-skipped-organizations', { organizations: skippedNames.join(', ') }) }}</p>
-        <button class="btn" type="button" @click="router.push('/dashboard')">{{ t('dashboard') }}</button>
+        <button class="d-btn" type="button" @click="router.push('/dashboard')">{{ t('dashboard') }}</button>
       </div>
 
       <div v-else-if="state === 'ready'" class="space-y-5">
         <p class="text-slate-600 dark:text-slate-300">{{ t('cli-login-paste-instruction') }}</p>
         <div class="flex items-center gap-2 rounded-2xl border border-slate-200 p-3 dark:border-slate-700">
           <code :class="revealed ? '' : 'select-none blur-[5px]'" class="min-w-0 flex-1 truncate">{{ displayedKey }}</code>
-          <button class="btn btn-ghost btn-sm" type="button" @click="revealed = !revealed">
+          <button class="d-btn d-btn-ghost d-btn-sm" type="button" @click="revealed = !revealed">
             {{ t(revealed ? 'cli-login-hide-key' : 'cli-login-reveal-key') }}
           </button>
-          <button class="btn btn-primary btn-sm" type="button" @click="copyKey">
+          <button class="d-btn d-btn-primary d-btn-sm" type="button" @click="copyKey">
             <IconClipboard class="h-4 w-4" /> {{ t('copy') }}
           </button>
         </div>
         <p class="text-xs text-slate-500">{{ t('cli-login-copy-note') }}</p>
-        <p class="alert alert-warning text-sm">{{ t('cli-login-security-warning') }}</p>
+        <p class="d-alert d-alert-warning text-sm">{{ t('cli-login-security-warning') }}</p>
         <p v-if="reused" class="text-sm">{{ t('cli-login-reused') }}</p>
         <p v-if="hashed" class="text-sm text-amber-700 dark:text-amber-300">{{ t('cli-login-hashed-warning') }}</p>
         <p v-if="expiresAt" class="text-sm text-amber-700 dark:text-amber-300">
@@ -1007,16 +1036,16 @@ Use one centered card on the naked layout. The ready state must render exactly o
       <div v-else-if="state === 'success'" class="space-y-5 text-center">
         <IconCheckCircle class="mx-auto h-12 w-12 text-emerald-500" />
         <h2 class="text-xl font-semibold">{{ t('cli-login-success-title') }}</h2>
-        <button class="btn btn-primary" type="button" @click="goToDestination">
+        <button class="d-btn d-btn-primary" type="button" @click="goToDestination">
           {{ t(destination.startsWith('/app/new') ? 'cli-login-continue-setup' : 'dashboard') }}
         </button>
       </div>
 
       <div v-else class="space-y-4">
-        <p class="alert alert-error">{{ t('cli-login-error') }}</p>
+        <p class="d-alert d-alert-error">{{ t('cli-login-error') }}</p>
         <div class="flex gap-2">
-          <button class="btn btn-primary" type="button" @click="prepare">{{ t('retry') }}</button>
-          <button class="btn" type="button" @click="router.push('/dashboard')">{{ t('dashboard') }}</button>
+          <button class="d-btn d-btn-primary" type="button" @click="prepare">{{ t('retry') }}</button>
+          <button class="d-btn" type="button" @click="router.push('/dashboard')">{{ t('dashboard') }}</button>
         </div>
       </div>
     </section>
@@ -1184,6 +1213,7 @@ async function promptForKey(): Promise<string | undefined> {
 
 async function listOrganizationIds(key: string, options: BrowserLoginOptions): Promise<string[]> {
   const supabase = await createSupabaseClient(key, options.supaHost, options.supaAnon, true)
+  await resolveUserIdFromApiKey(supabase, key, true)
   const { data, error } = await supabase.rpc('get_orgs_v7')
   if (error)
     throw error
@@ -1362,7 +1392,8 @@ Add `canPromptInteractively` to the existing import from `../utils`.
 After the existing `findSavedKey(true)` attempt and before the current login spinner, insert:
 
 ```ts
-if (shouldStartInitBrowserLogin(options.apikey, canPromptInteractively())) {
+const supportsBrowserLogin = !options.local && !options.supaHost && !options.supaAnon
+if (shouldStartInitBrowserLogin(options.apikey, supportsBrowserLogin && canPromptInteractively())) {
   options.apikey = await loginInitInBrowser({
     local: options.local,
     supaHost: options.supaHost,
