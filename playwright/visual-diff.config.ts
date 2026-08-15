@@ -23,6 +23,15 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
     path: '/apps',
     auth: true,
     prepare: async (page) => {
+      const prompt = page.locator('[data-test="support-usernames-prompt"]')
+      try {
+        await prompt.waitFor({ state: 'visible', timeout: 4000 })
+        await prompt.getByRole('button', { name: /remind me later/i }).click()
+        await prompt.waitFor({ state: 'hidden' })
+      }
+      catch {
+        // Prompt is delayed and only shown when support usernames are missing.
+      }
       await page.locator('[data-test="sidebar-collapse-toggle"]').click()
       await page.locator('#sidebar').waitFor({ state: 'hidden' })
     },

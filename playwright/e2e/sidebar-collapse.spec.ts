@@ -10,10 +10,23 @@ async function shellPadding(page: Page) {
   })
 }
 
+async function dismissSupportPrompt(page: Page) {
+  const prompt = page.locator('[data-test="support-usernames-prompt"]')
+  try {
+    await prompt.waitFor({ state: 'visible', timeout: 4000 })
+    await prompt.getByRole('button', { name: /remind me later/i }).click()
+    await prompt.waitFor({ state: 'hidden' })
+  }
+  catch {
+    // The prompt is delayed and only appears for users missing support usernames.
+  }
+}
+
 test.describe('Desktop sidebar collapse', () => {
   test.beforeEach(async ({ page }) => {
     await page.login('test@capgo.app', 'testtest')
     await page.goto('/apps')
+    await dismissSupportPrompt(page)
     await expect(page.locator('#sidebar')).toBeVisible()
   })
 
@@ -33,6 +46,7 @@ test.describe('Desktop sidebar collapse', () => {
     await expect(page.locator('[data-test="org-switcher-menu"]')).toContainText(/add organization/i)
 
     await page.reload()
+    await dismissSupportPrompt(page)
     await expect(page.locator('#sidebar')).toBeHidden()
     await expect(page.locator('[data-test="org-switcher"]')).toBeVisible()
 
