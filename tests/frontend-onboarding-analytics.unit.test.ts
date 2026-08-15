@@ -8,6 +8,7 @@ import {
   FRONTEND_ONBOARDING_MAX_RANGE_MS,
   getAdminFrontendOnboardingAnalytics,
 } from '../supabase/functions/_backend/utils/frontend_onboarding_analytics.ts'
+import { createFrontendOnboardingDailySetupCliOutcomeCounts } from '../supabase/functions/_backend/utils/frontend_onboarding_daily_setup_cli_outcomes_model.ts'
 
 const { cloudlogErrMock, queryPosthogHogqlMock } = vi.hoisted(() => ({
   cloudlogErrMock: vi.fn(),
@@ -60,17 +61,17 @@ describe('buildFrontendOnboardingHogql', () => {
     expect(query).not.toMatch(/WITH\s+JSONExtractString/)
     expect(query).toContain('toString(person_id) AS person_id')
     expect(query).toContain('onboarding_attempts.person_id AS person_id')
-    expect(query).toContain("JSONExtractString(toString(properties), 'channel') = 'onboarding-v2'")
-    expect(query).toContain("event = 'CLI Command Invoked'")
-    expect(query).toContain("JSONExtractString(toString(properties), 'command_path') = 'init'")
-    expect(query).toContain("event = 'Builder Onboarding Step'")
-    expect(query).toContain("JSONExtractString(toString(properties), 'step') IN ('welcome', 'resume-prompt')")
-    expect(query).toContain("toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'intent'))")
-    expect(query).toContain("toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'details'))")
-    expect(query).toContain("toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'organization'))")
-    expect(query).toContain("toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'setup'))")
-    expect(query).toContain("groupUniqArrayIf(tuple(event, toUnixTimestamp64Milli(timestamp)), event IN (")
-    expect(query).toContain("groupUniqArrayIf(toUnixTimestamp64Milli(timestamp), event = 'onboarding_ai_instructions_copied') AS ai_instructions_copied_ms")
+    expect(query).toContain('JSONExtractString(toString(properties), \'channel\') = \'onboarding-v2\'')
+    expect(query).toContain('event = \'CLI Command Invoked\'')
+    expect(query).toContain('JSONExtractString(toString(properties), \'command_path\') = \'init\'')
+    expect(query).toContain('event = \'Builder Onboarding Step\'')
+    expect(query).toContain('JSONExtractString(toString(properties), \'step\') IN (\'welcome\', \'resume-prompt\')')
+    expect(query).toContain('toUnixTimestamp64Milli(minIf(timestamp, event = \'onboarding_step_viewed\' AND step = \'intent\'))')
+    expect(query).toContain('toUnixTimestamp64Milli(minIf(timestamp, event = \'onboarding_step_viewed\' AND step = \'details\'))')
+    expect(query).toContain('toUnixTimestamp64Milli(minIf(timestamp, event = \'onboarding_step_viewed\' AND step = \'organization\'))')
+    expect(query).toContain('toUnixTimestamp64Milli(minIf(timestamp, event = \'onboarding_step_viewed\' AND step = \'setup\'))')
+    expect(query).toContain('groupUniqArrayIf(tuple(event, toUnixTimestamp64Milli(timestamp)), event IN (')
+    expect(query).toContain('groupUniqArrayIf(toUnixTimestamp64Milli(timestamp), event = \'onboarding_ai_instructions_copied\') AS ai_instructions_copied_ms')
     expect(query).toContain('groupUniqArray(toUnixTimestamp64Milli(timestamp)) AS cli_started_ms')
     expect(query).toContain('GROUP BY onboarding_version, attempt_id')
     expect(query).toContain('LEFT JOIN cli_starts USING person_id')
@@ -99,6 +100,7 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
   it('maps grouped v1 and v3 rows, including repeated v3 interactions', async () => {
     const start = '2026-08-01T00:00:00.000Z'
     const intentMs = Date.parse(start) + 60 * 60 * 1000 + 123
+    const dailySetupMs = Date.parse(start) + 2 * 60 * 60 * 1000
     queryPosthogHogqlMock.mockResolvedValueOnce({
       configured: true,
       connected: true,
@@ -138,6 +140,30 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
         total_attempts: 3,
       }],
     })
+    queryPosthogHogqlMock.mockResolvedValueOnce({
+      configured: true,
+      connected: true,
+      failureReason: null,
+      rows: [{
+        person_id: 'person-1',
+        timestamp_ms: dailySetupMs,
+        event_kind: 'setup',
+        command_path: '',
+        total_events: 3,
+      }, {
+        person_id: 'person-1',
+        timestamp_ms: dailySetupMs + 1_000,
+        event_kind: 'cli_copy',
+        command_path: '',
+        total_events: 3,
+      }, {
+        person_id: 'person-1',
+        timestamp_ms: dailySetupMs + 2_000,
+        event_kind: 'cli_command',
+        command_path: 'init',
+        total_events: 3,
+      }],
+    })
 
     const result = await getAdminFrontendOnboardingAnalytics(createContext(), start, '2026-08-03T00:00:00.000Z')
 
@@ -164,7 +190,29 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
       posthog_configured: true,
       posthog_connected: true,
     })
+    expect(result.daily_setup_cli_outcomes).toEqual([
+      {
+        date: '2026-08-01',
+        first_time: {
+          ...createFrontendOnboardingDailySetupCliOutcomeCounts(),
+          cli_copy_init: 1,
+        },
+        returning: createFrontendOnboardingDailySetupCliOutcomeCounts(),
+      },
+      {
+        date: '2026-08-02',
+        first_time: createFrontendOnboardingDailySetupCliOutcomeCounts(),
+        returning: createFrontendOnboardingDailySetupCliOutcomeCounts(),
+      },
+    ])
+    expect(result.v2_setup_cli_outcomes).toEqual({
+      total_users: 1,
+      cli_only: 0,
+      cli_and_ai_instructions: 1,
+      no_cli: 0,
+    })
     expect(result).not.toHaveProperty('onboarding_version')
+    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(2)
   })
 
   it('returns zero analytics for a successful PostHog query with no matching attempts', async () => {
@@ -179,6 +227,32 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
       posthog_configured: true,
       posthog_connected: true,
     })
+    expect(result.daily_setup_cli_outcomes).toEqual([
+      {
+        date: '2026-08-01',
+        first_time: createFrontendOnboardingDailySetupCliOutcomeCounts(),
+        returning: createFrontendOnboardingDailySetupCliOutcomeCounts(),
+      },
+      {
+        date: '2026-08-02',
+        first_time: createFrontendOnboardingDailySetupCliOutcomeCounts(),
+        returning: createFrontendOnboardingDailySetupCliOutcomeCounts(),
+      },
+    ])
+    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('fails closed when the daily Setup CLI PostHog query fails', async () => {
+    queryPosthogHogqlMock
+      .mockResolvedValueOnce({ configured: true, connected: true, failureReason: null, rows: [] })
+      .mockResolvedValueOnce({ configured: true, connected: false, failureReason: 'timeout', rows: [] })
+
+    await expect(getAdminFrontendOnboardingAnalytics(
+      createContext(),
+      '2026-08-01T00:00:00.000Z',
+      '2026-08-03T00:00:00.000Z',
+    )).rejects.toThrow('daily Setup CLI analytics PostHog query failed')
+    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(2)
   })
 
   it.each([
@@ -234,6 +308,7 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
       ] },
       v3_graph: { nodes: [{ key: 'valid', count: 1 }] },
     })
+    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(2)
   })
 
   it('queries the equal-length previous window through the current end plus 48 hours for post-setup outcomes', async () => {
@@ -242,7 +317,7 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
 
     await getAdminFrontendOnboardingAnalytics(createContext(), start, end)
 
-    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(1)
+    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(2)
     expect(queryPosthogHogqlMock.mock.calls[0][1]).toContain(
       `timestamp >= parseDateTimeBestEffort('${new Date(Date.parse(start) - 2 * DAY_MS).toISOString()}')`,
     )
@@ -252,6 +327,15 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
     expect(queryPosthogHogqlMock.mock.calls[0][1]).toContain(
       `AND intent_ms < toUnixTimestamp64Milli(parseDateTimeBestEffort('${end}'))`,
     )
+    expect(queryPosthogHogqlMock.mock.calls[1][1]).toContain(
+      `timestamp >= parseDateTimeBestEffort('${start}')`,
+    )
+    expect(queryPosthogHogqlMock.mock.calls[1][1]).toContain(
+      `timestamp < parseDateTimeBestEffort('${end}')`,
+    )
+    expect(queryPosthogHogqlMock.mock.calls[1][1]).toContain(
+      `timestamp < parseDateTimeBestEffort('${new Date(Date.parse(end) + DAY_MS).toISOString()}')`,
+    )
   })
 
   it('queries a full 24-hour intent lookback for ranges shorter than the follow-up window', async () => {
@@ -260,12 +344,15 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
 
     await getAdminFrontendOnboardingAnalytics(createContext(), start, end)
 
-    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(1)
+    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(2)
     expect(queryPosthogHogqlMock.mock.calls[0][1]).toContain(
       `timestamp >= parseDateTimeBestEffort('${new Date(Date.parse(start) - DAY_MS).toISOString()}')`,
     )
     expect(queryPosthogHogqlMock.mock.calls[0][1]).toContain(
       `HAVING intent_ms >= toUnixTimestamp64Milli(parseDateTimeBestEffort('${new Date(Date.parse(start) - DAY_MS).toISOString()}'))`,
+    )
+    expect(queryPosthogHogqlMock.mock.calls[1][1]).toContain(
+      `timestamp >= parseDateTimeBestEffort('${start}')`,
     )
   })
 
@@ -276,8 +363,11 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
       '2026-08-03T00:00:00.5678Z',
     )
 
-    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(1)
+    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(2)
     expect(queryPosthogHogqlMock.mock.calls[0][1]).toContain('parseDateTimeBestEffort(\'2026-08-03T00:00:00.567Z\')')
+    expect(queryPosthogHogqlMock.mock.calls[1][1]).toContain('parseDateTimeBestEffort(\'2026-08-01T00:00:00.123Z\')')
+    expect(queryPosthogHogqlMock.mock.calls[1][1]).toContain('parseDateTimeBestEffort(\'2026-08-03T00:00:00.567Z\')')
+    expect(queryPosthogHogqlMock.mock.calls[1][1]).toContain('parseDateTimeBestEffort(\'2026-08-04T00:00:00.567Z\')')
   })
 
   it('rejects date ranges wider than the dashboard maximum before querying PostHog', async () => {

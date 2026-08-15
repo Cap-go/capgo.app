@@ -5,6 +5,8 @@ import {
   FRONTEND_ONBOARDING_FOLLOWUP_MS,
   FRONTEND_ONBOARDING_VERSIONS,
 } from './frontend_onboarding_analytics_model.ts'
+import { getFrontendOnboardingDailySetupCliEvents } from './frontend_onboarding_daily_setup_cli_outcomes.ts'
+import { buildFrontendOnboardingDailySetupCliOutcomes } from './frontend_onboarding_daily_setup_cli_outcomes_model.ts'
 import { cloudlogErr } from './logging.ts'
 import { queryPosthogHogql } from './posthog_read.ts'
 
@@ -244,22 +246,33 @@ export async function getAdminFrontendOnboardingAnalytics(c: Context, startDate:
   if (durationMs > FRONTEND_ONBOARDING_MAX_RANGE_MS)
     throw new RangeError('frontend onboarding analytics date range cannot exceed 365 days')
 
+  const normalizedStartDate = new Date(startMs).toISOString()
+  const normalizedEndDate = new Date(endMs).toISOString()
   const previousStartMs = startMs - durationMs
   const queryStartMs = Math.min(previousStartMs, startMs - FRONTEND_ONBOARDING_FOLLOWUP_MS)
-  const followupEndMs = endMs + 2 * FRONTEND_ONBOARDING_FOLLOWUP_MS
+  const dailyFollowupEndMs = endMs + FRONTEND_ONBOARDING_FOLLOWUP_MS
+  const aggregateFollowupEndMs = endMs + 2 * FRONTEND_ONBOARDING_FOLLOWUP_MS
   if (queryStartMs < POSTHOG_MIN_DATE_MS || queryStartMs >= POSTHOG_MAX_DATE_MS
-    || followupEndMs < POSTHOG_MIN_DATE_MS || followupEndMs >= POSTHOG_MAX_DATE_MS) {
+    || aggregateFollowupEndMs < POSTHOG_MIN_DATE_MS || aggregateFollowupEndMs >= POSTHOG_MAX_DATE_MS) {
     throw new RangeError('derived analytics date boundaries must be within the supported PostHog range')
   }
 
-  const posthog = await queryPosthogHogql(
-    c,
-    buildFrontendOnboardingHogql(
-      new Date(queryStartMs).toISOString(),
-      new Date(endMs).toISOString(),
-      new Date(followupEndMs).toISOString(),
+  const [posthog, dailySetupCliEvents] = await Promise.all([
+    queryPosthogHogql(
+      c,
+      buildFrontendOnboardingHogql(
+        new Date(queryStartMs).toISOString(),
+        normalizedEndDate,
+        new Date(aggregateFollowupEndMs).toISOString(),
+      ),
     ),
-  )
+    getFrontendOnboardingDailySetupCliEvents(
+      c,
+      normalizedStartDate,
+      normalizedEndDate,
+      new Date(dailyFollowupEndMs).toISOString(),
+    ),
+  ])
   if (!posthog.configured || !posthog.connected || posthog.failureReason !== null)
     throw new Error('frontend onboarding analytics PostHog query failed')
 
@@ -283,9 +296,11 @@ export async function getAdminFrontendOnboardingAnalytics(c: Context, startDate:
     }
   }
   const analytics = buildFrontendOnboardingAnalytics(mapAttempts(posthog.rows), startMs, endMs)
+  const dailySetupCliOutcomes = buildFrontendOnboardingDailySetupCliOutcomes(dailySetupCliEvents, startMs, endMs)
 
   return {
     ...analytics,
+    daily_setup_cli_outcomes: dailySetupCliOutcomes,
     posthog_configured: posthog.configured,
     posthog_connected: posthog.connected,
   }
