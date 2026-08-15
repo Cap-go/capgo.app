@@ -122,16 +122,18 @@ describe('app onboarding progress analytics integration', () => {
     expect(onboardingSource).toContain(`type OnboardingPersistResult = 'persisted' | 'retryable_failure' | 'conflict' | 'skipped'`)
 
     const persistenceQueue = sourceBetween('async function persistOnboardingProgress(', 'function schedulePersistOnboardingProgress(')
+    const blockedWriteGuard = `if (onboardingPersistenceBlocked && status !== 'completed')`
+    expect(persistenceQueue).toContain(`status: UserOnboardingStatus = 'in_progress'`)
     expectSourceOrder(persistenceQueue, [
-      'if (onboardingPersistenceBlocked)',
+      blockedWriteGuard,
       `return 'skipped'`,
       'persistChain = persistChain',
     ])
-    expect(persistenceQueue.match(/if \(onboardingPersistenceBlocked\)/g)).toHaveLength(2)
+    expect(persistenceQueue.match(/if \(onboardingPersistenceBlocked && status !== 'completed'\)/g)).toHaveLength(2)
     const queuedPersistence = persistenceQueue.slice(persistenceQueue.indexOf('persistChain = persistChain'))
     expectSourceOrder(queuedPersistence, [
       '.then(() => {',
-      'if (onboardingPersistenceBlocked)',
+      blockedWriteGuard,
       `return 'skipped'`,
       'return writeOnboardingProgress(status)',
       `return 'retryable_failure'`,
@@ -194,10 +196,12 @@ describe('app onboarding progress analytics integration', () => {
       'if (onboardingFlowDisposed)',
       'return',
       'isLoading.value = false',
+      '// Unpersisted telemetry identities must not emit onboarding events.',
       `if (!onboardingMountAborted && onboardingPersistResult === 'persisted')`,
       'initializeProgressTracking(resumedFlow)',
       'finishOnboardingMount()',
     ])
+    expect(mountedFlow).not.toContain(`onboardingPersistResult === 'skipped'`)
 
     const scheduledPersistence = sourceBetween('function schedulePersistOnboardingProgress(', 'async function writeOnboardingProgress(')
     expectSourceOrder(scheduledPersistence, [

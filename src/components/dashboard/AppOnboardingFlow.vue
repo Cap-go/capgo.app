@@ -381,11 +381,11 @@ function snapshotOnboardingProgress(status: UserOnboardingStatus = 'in_progress'
 }
 
 async function persistOnboardingProgress(status: UserOnboardingStatus = 'in_progress') {
-  if (onboardingPersistenceBlocked)
+  if (onboardingPersistenceBlocked && status !== 'completed')
     return 'skipped'
   persistChain = persistChain
     .then(() => {
-      if (onboardingPersistenceBlocked)
+      if (onboardingPersistenceBlocked && status !== 'completed')
         return 'skipped'
       return writeOnboardingProgress(status)
     })
@@ -1460,6 +1460,7 @@ onMounted(async () => {
       if (onboardingFlowDisposed)
         return
       isLoading.value = false
+      // Unpersisted telemetry identities must not emit onboarding events.
       if (!onboardingMountAborted && onboardingPersistResult === 'persisted')
         initializeProgressTracking(resumedFlow)
     }
