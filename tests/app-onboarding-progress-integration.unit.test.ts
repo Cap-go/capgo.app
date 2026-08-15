@@ -118,20 +118,33 @@ describe('app onboarding progress analytics integration', () => {
     expect(snapshot).toContain('lastRunId: telemetry.lastRunId')
   })
 
-  it.concurrent('reports whether the requested progress write updated the current user', () => {
+  it.concurrent('distinguishes persisted, retryable, and conflict progress outcomes', () => {
+    expect(onboardingSource).toContain(`type OnboardingPersistResult = 'persisted' | 'retryable_failure' | 'conflict_or_skipped'`)
+
     const persistenceQueue = sourceBetween('async function persistOnboardingProgress(', 'function schedulePersistOnboardingProgress(')
-    expect(persistenceQueue).toContain('return false')
+    expect(persistenceQueue).toContain(`return 'retryable_failure'`)
     expect(persistenceQueue).toContain('return persistChain')
 
     const writer = sourceBetween('async function writeOnboardingProgress(', 'function resetOnboardingForm(')
-    expect(writer).toContain('if (!userId || isHydratingOnboarding.value)\n    return false')
-    expect(writer).toContain(`if (current?.status === 'completed' && status !== 'completed')\n    return false`)
+    expect(writer).toContain(`if (!userId || isHydratingOnboarding.value)\n    return 'conflict_or_skipped'`)
+    expect(writer).toContain(`if (current?.status === 'completed' && status !== 'completed')\n    return 'conflict_or_skipped'`)
+    expectSourceOrder(writer, [
+      'if (error) {',
+      `console.error('Failed to persist onboarding progress', error)`,
+      `return 'retryable_failure'`,
+    ])
     expect(writer).toContain('if (data && main.user?.id === userId) {')
-    expect(writer).toContain('main.user = { ...data, image_url: main.user.image_url }\n    return true')
-    expect(writer).toContain(`if (status === 'completed' || main.user?.id !== userId)\n    return false`)
-    expect(writer.match(/return true/g)).toHaveLength(1)
-    expect(writer.match(/return false/g)).toHaveLength(5)
-    expect(writer.trimEnd().endsWith('return false\n}')).toBe(true)
+    expect(writer).toContain(`main.user = { ...data, image_url: main.user.image_url }\n    return 'persisted'`)
+    expect(writer).toContain(`if (status === 'completed' || main.user?.id !== userId)\n    return 'conflict_or_skipped'`)
+
+    const noRowRefresh = writer.slice(writer.indexOf('const { data: latest, error: latestError }'))
+    expectSourceOrder(noRowRefresh, [
+      'const { data: latest, error: latestError }',
+      'if (latestError)',
+      'if (latest && main.user?.id === userId)',
+      `return 'conflict_or_skipped'`,
+    ])
+    expect(writer.trimEnd().endsWith(`return 'conflict_or_skipped'\n}`)).toBe(true)
   })
 
   it.concurrent('does not initialize tracking after unmount during the initial persistence', () => {
@@ -148,17 +161,17 @@ describe('app onboarding progress analytics integration', () => {
     expect(initialPersistence.match(/persistOnboardingProgress\(\)/g)).toHaveLength(2)
     expect(mountedFlow).toContain('function finishOnboardingMount()')
     expectSourceOrder(mountedFlow, [
-      'let onboardingIdentityPersisted = false',
+      `let onboardingPersistResult: OnboardingPersistResult = 'conflict_or_skipped'`,
       persistenceGuard,
       'onboardingInitialPersistInFlight = true',
-      'onboardingIdentityPersisted = await persistOnboardingProgress()',
-      'if (!onboardingIdentityPersisted && !onboardingFlowDisposed)',
-      'onboardingIdentityPersisted = await persistOnboardingProgress()',
+      'onboardingPersistResult = await persistOnboardingProgress()',
+      `if (onboardingPersistResult === 'retryable_failure' && !onboardingFlowDisposed)`,
+      'onboardingPersistResult = await persistOnboardingProgress()',
       'onboardingInitialPersistInFlight = false',
       'if (onboardingFlowDisposed)',
       'return',
       'isLoading.value = false',
-      'if (!onboardingMountAborted && onboardingIdentityPersisted)',
+      `if (!onboardingMountAborted && onboardingPersistResult === 'persisted')`,
       'initializeProgressTracking(resumedFlow)',
       'finishOnboardingMount()',
     ])

@@ -88,6 +88,7 @@ type AppRow = Omit<Database['public']['Tables']['apps']['Row'], 'onboarding'> & 
 type StandardFlowStep = 'details' | 'choice' | 'install' | 'setup'
 type PreOrgFlowStep = 'intent' | 'details' | 'organization' | 'setup'
 type OnboardingFlowStep = StandardFlowStep | PreOrgFlowStep
+type OnboardingPersistResult = 'persisted' | 'retryable_failure' | 'conflict_or_skipped'
 
 interface UserCountStop {
   value: number
@@ -302,7 +303,7 @@ const setupTitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onb
 const setupSubtitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onboarding-setup-builder-subtitle') : t('unified-onboarding-setup-ota-subtitle'))
 
 let progressTracker: ReturnType<typeof createOnboardingProgressTracker> | null = null
-let persistChain = Promise.resolve(true)
+let persistChain: Promise<OnboardingPersistResult> = Promise.resolve('persisted')
 let persistFieldsTimer: ReturnType<typeof setTimeout> | undefined
 let pendingDashboardExplored = false
 let onboardingFlowDisposed = false
@@ -383,7 +384,7 @@ async function persistOnboardingProgress(status: UserOnboardingStatus = 'in_prog
     .then(() => writeOnboardingProgress(status))
     .catch((error) => {
       console.error('Failed to persist onboarding progress', error)
-      return false
+      return 'retryable_failure' as const
     })
   return persistChain
 }
@@ -400,11 +401,11 @@ function schedulePersistOnboardingProgress() {
 async function writeOnboardingProgress(status: UserOnboardingStatus) {
   const userId = onboardingUserId.value
   if (!userId || isHydratingOnboarding.value)
-    return false
+    return 'conflict_or_skipped'
 
   const current = parseUserOnboardingProgress(main.user?.onboarding)
   if (current?.status === 'completed' && status !== 'completed')
-    return false
+    return 'conflict_or_skipped'
 
   const progress = snapshotOnboardingProgress(status)
   const onboarding = progress as unknown as Json
@@ -425,16 +426,16 @@ async function writeOnboardingProgress(status: UserOnboardingStatus) {
 
   if (error) {
     console.error('Failed to persist onboarding progress', error)
-    return false
+    return 'retryable_failure'
   }
 
   if (data && main.user?.id === userId) {
     main.user = { ...data, image_url: main.user.image_url }
-    return true
+    return 'persisted'
   }
 
   if (status === 'completed' || main.user?.id !== userId)
-    return false
+    return 'conflict_or_skipped'
 
   const { data: latest, error: latestError } = await supabase
     .from('users')
@@ -445,7 +446,7 @@ async function writeOnboardingProgress(status: UserOnboardingStatus) {
     console.error('Failed to refresh onboarding progress snapshot', latestError)
   if (latest && main.user?.id === userId)
     main.user = { ...latest, image_url: main.user.image_url }
-  return false
+  return 'conflict_or_skipped'
 }
 
 function resetOnboardingForm() {
@@ -1437,19 +1438,19 @@ onMounted(async () => {
   }
   finally {
     isHydratingOnboarding.value = false
-    let onboardingIdentityPersisted = false
+    let onboardingPersistResult: OnboardingPersistResult = 'conflict_or_skipped'
     if (!onboardingMountAborted) {
       onboardingInitialPersistInFlight = true
-      onboardingIdentityPersisted = await persistOnboardingProgress()
-      if (!onboardingIdentityPersisted && !onboardingFlowDisposed)
-        onboardingIdentityPersisted = await persistOnboardingProgress()
+      onboardingPersistResult = await persistOnboardingProgress()
+      if (onboardingPersistResult === 'retryable_failure' && !onboardingFlowDisposed)
+        onboardingPersistResult = await persistOnboardingProgress()
       onboardingInitialPersistInFlight = false
     }
     function finishOnboardingMount() {
       if (onboardingFlowDisposed)
         return
       isLoading.value = false
-      if (!onboardingMountAborted && onboardingIdentityPersisted)
+      if (!onboardingMountAborted && onboardingPersistResult === 'persisted')
         initializeProgressTracking(resumedFlow)
     }
     finishOnboardingMount()
