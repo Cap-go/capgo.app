@@ -1332,7 +1332,7 @@ function markStepDone(step: number, pathToPackageJson?: string, channelName?: st
         supaAnon: globalReportContext.supaAnon,
         outcome: isLastStep ? (status === 'skipped' ? 'skipped' : 'completed') : 'in_progress',
       }).catch((error) => {
-        pLog.warn(`Cannot report onboarding progress:\n${error}`)
+        pLog.warn(`Cannot report onboarding progress:\n${formatError(error)}`)
       })
     }
   }
@@ -1607,6 +1607,7 @@ async function tryResumeOnboarding(
   catch (err) {
     pLog.error(`Cannot read which steps have been completed, error:\n${err}`)
     pLog.warn('Onboarding will continue but please report it to the capgo team!')
+    activeInitTelemetry?.clearScope()
     globalCodeDiff = undefined
     setInitCodeDiff(undefined)
     globalEncryptionSummary = undefined
@@ -5736,7 +5737,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
   pLog.warn('Reason: cap sync puts your local build directly in the native app, which bypasses the Capgo OTA path.')
   pLog.info(`If you have any issue try to use the debug command \`${pm.runner} @capgo/cli@latest app debug\``)
   const didChooseSkills = await maybeInstallCapgoSkills()
-  await maybeStarCapgoRepo(didChooseSkills)
+  await maybeStarCapgoRepo(didChooseSkills).catch(error => pLog.warn(`Cannot offer GitHub support actions: ${formatError(error)}`))
   pOutro(`Bye 👋`)
   return await exitAfterFinishingReplay('completed', 0)
 }
