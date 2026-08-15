@@ -113,6 +113,50 @@ describe('onboarding progress analytics', () => {
     })
   })
 
+  it.concurrent('keeps resume identity metadata valid when lifecycle capture throws', () => {
+    const capture = vi.fn(() => {
+      throw new Error('PostHog unavailable')
+    })
+    const createIdentity = () => {
+      const ids = [ATTEMPT_A2, RUN_R2_UUID]
+      const identity = createOnboardingTelemetryIdentity({
+        capture,
+        flow: 'pre_org',
+        idFactory: () => ids.shift()!,
+        supaHost: 'https://supabase.capgo.test',
+      })
+      identity.prepareResumeCandidate({
+        lastRunId: RUN_R1,
+        onboardingAttemptId: ATTEMPT_A1,
+        savedStep: 'organization',
+        steps,
+      })
+      return identity
+    }
+    const continuedIdentity = createIdentity()
+    const restartedIdentity = createIdentity()
+
+    expect(() => continuedIdentity.recordResumeDialogViewed()).not.toThrow()
+    expect(() => continuedIdentity.recordResumeContinued()).not.toThrow()
+    expect(() => restartedIdentity.recordResumeDialogViewed()).not.toThrow()
+    expect(() => restartedIdentity.recordResumeRestarted()).not.toThrow()
+
+    expect(capture.mock.calls.map(call => call[0])).toEqual([
+      'onboarding_resume_dialog_viewed',
+      'onboarding_resume_continued',
+      'onboarding_resume_dialog_viewed',
+      'onboarding_resume_restarted',
+    ])
+    expect(continuedIdentity.getProgressMetadata()).toEqual({
+      lastRunId: RUN_R2,
+      onboardingAttemptId: ATTEMPT_A1,
+    })
+    expect(restartedIdentity.getProgressMetadata()).toEqual({
+      lastRunId: RUN_R2,
+      onboardingAttemptId: ATTEMPT_A2,
+    })
+  })
+
   it.concurrent('reports the initial real step with the stable version and approved properties', () => {
     const capture = vi.fn()
     const tracker = createOnboardingProgressTracker({

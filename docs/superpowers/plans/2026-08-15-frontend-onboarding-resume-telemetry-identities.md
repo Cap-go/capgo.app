@@ -862,3 +862,96 @@ Expected: both commands PASS.
 git add src/components/dashboard/AppOnboardingFlow.vue tests/app-onboarding-progress-integration.unit.test.ts docs/superpowers/specs/2026-08-15-frontend-onboarding-resume-telemetry-identities-design.md docs/superpowers/plans/2026-08-15-frontend-onboarding-resume-telemetry-identities.md
 git commit -m "fix(onboarding): preserve tracking during persistence outages"
 ```
+
+### Task 6: Behavior-test the persistence lifecycle
+
+**Files:**
+- Create: `src/utils/onboardingProgressPersistence.ts`
+- Create: `tests/onboarding-progress-persistence.unit.test.ts`
+- Modify: `src/components/dashboard/AppOnboardingFlow.vue`
+- Modify: `tests/app-onboarding-progress-integration.unit.test.ts`
+- Modify: `tests/onboarding-progress-analytics.unit.test.ts`
+
+- [ ] **Step 1: Write failing behavioral persistence tests**
+
+Define the wished-for controller API and use deferred promises to cover:
+
+```ts
+const controller = createOnboardingProgressPersistence({ write })
+
+const first = controller.persist()
+const queued = controller.persist()
+controller.abort()
+resolveFirst('persisted')
+
+expect(await first).toBe('persisted')
+expect(await queued).toBe('skipped')
+expect(write).toHaveBeenCalledTimes(1)
+```
+
+Add separate tests proving a conflict blocks queued and later non-terminal
+writes, an explicit `completed` write bypasses only the conflict barrier, a
+write exception returns `retryable_failure` without poisoning the queue, and
+`shouldInitializeOnboardingProgressTracking()` accepts only `persisted` or
+`retryable_failure` on a live non-aborted mount.
+
+- [ ] **Step 2: Verify the new unit test is RED**
+
+Run:
+
+```bash
+bunx vitest run tests/onboarding-progress-persistence.unit.test.ts
+```
+
+Expected: FAIL because `onboardingProgressPersistence.ts` does not exist.
+
+- [ ] **Step 3: Implement the minimal persistence controller**
+
+Create a typed controller that owns one promise chain plus abort and conflict
+state. It accepts the existing component writer and optional error callback,
+checks barriers both before enqueue and inside the serialized callback, marks
+conflicts from the writer result, and exposes `persist`, `abort`, `isAborted`,
+and `isBlocked`. Keep the initialization decision as a pure exported helper.
+
+Do not move Supabase access, snapshots, retries, UI state, or tracker creation
+into the controller.
+
+- [ ] **Step 4: Wire the component to the tested controller**
+
+Replace the component-local promise chain and abort/conflict booleans with the
+controller. Keep the existing `persistOnboardingProgress()` wrapper and writer,
+but let the controller own conflict activation and all barrier checks. Use the
+pure initialization helper in the mount finalizer.
+
+Keep source-contract tests only for integration ownership: one mount
+initializer, no resume-branch view calls, controller guards used by scheduling
+and unmount, and no manual watcher. Move race semantics to the executable unit
+test.
+
+- [ ] **Step 5: Add identity capture-failure coverage**
+
+Create an identity helper with a `capture` dependency that throws. Call dialog,
+Continue, and Restart recording methods and assert none throws; then assert the
+active attempt/run metadata remains valid and usable.
+
+- [ ] **Step 6: Run focused and repository verification**
+
+Run:
+
+```bash
+bunx vitest run tests/onboarding-progress-persistence.unit.test.ts tests/onboarding-progress-analytics.unit.test.ts tests/user-onboarding-progress.unit.test.ts tests/app-onboarding-progress-integration.unit.test.ts
+bun lint
+bun run typecheck:frontend
+bun test:unit
+git diff --check origin/main...HEAD
+```
+
+Expected: all commands PASS and the production changed-line count remains below
+`500` with `codedb.snapshot` excluded.
+
+- [ ] **Step 7: Commit the behavioral coverage**
+
+```bash
+git add src/utils/onboardingProgressPersistence.ts src/components/dashboard/AppOnboardingFlow.vue tests/onboarding-progress-persistence.unit.test.ts tests/app-onboarding-progress-integration.unit.test.ts tests/onboarding-progress-analytics.unit.test.ts docs/superpowers/specs/2026-08-15-frontend-onboarding-resume-telemetry-identities-design.md docs/superpowers/plans/2026-08-15-frontend-onboarding-resume-telemetry-identities.md
+git commit -m "test(onboarding): exercise persistence lifecycle"
+```

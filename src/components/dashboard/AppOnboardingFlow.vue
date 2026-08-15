@@ -9,6 +9,7 @@ import type {
   OnboardingInteractionProperties,
   OnboardingStepCompletionProperties,
 } from '~/utils/onboardingProgressAnalytics'
+import type { OnboardingPersistResult } from '~/utils/onboardingProgressPersistence'
 import type { UserOnboardingStatus } from '~/utils/userOnboardingProgress'
 import mime from 'mime'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -61,6 +62,7 @@ import {
 } from '~/utils/onboardingAppDraft'
 import { onboardingPrimaryButtonClass, onboardingSecondaryButtonClass } from '~/utils/onboardingButtonClasses'
 import { createOnboardingDetailsFieldDebouncer, createOnboardingProgressTracker, createOnboardingTelemetryIdentity } from '~/utils/onboardingProgressAnalytics'
+import { createOnboardingProgressPersistence, shouldInitializeOnboardingProgressTracking } from '~/utils/onboardingProgressPersistence'
 import { allowOnboardingDashboardExploration, ONBOARDING_DASHBOARD_EXPLORED_EVENT } from '~/utils/onboardingRedirect'
 import { slugifyOnboardingSegment } from '~/utils/onboardingSlug'
 import {
@@ -99,7 +101,6 @@ type AppRow = Omit<Database['public']['Tables']['apps']['Row'], 'onboarding'> & 
 type StandardFlowStep = 'details' | 'choice' | 'install' | 'setup'
 type PreOrgFlowStep = 'intent' | 'details' | 'organization' | 'setup'
 type OnboardingFlowStep = StandardFlowStep | PreOrgFlowStep
-type OnboardingPersistResult = 'persisted' | 'retryable_failure' | 'conflict' | 'skipped'
 
 interface UserCountStop {
   value: number
@@ -334,13 +335,14 @@ const setupTitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onb
 const setupSubtitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onboarding-setup-builder-subtitle') : t('unified-onboarding-setup-ota-subtitle'))
 
 let progressTracker: ReturnType<typeof createOnboardingProgressTracker> | null = null
-let persistChain: Promise<OnboardingPersistResult> = Promise.resolve('persisted')
 let persistFieldsTimer: ReturnType<typeof setTimeout> | undefined
 let pendingDashboardExplored = false
 let onboardingFlowDisposed = false
-let onboardingMountAborted = false
 let onboardingInitialPersistInFlight = false
-let onboardingPersistenceBlocked = false
+const onboardingProgressPersistence = createOnboardingProgressPersistence({
+  write: writeOnboardingProgress,
+  onError: error => console.error('Failed to persist onboarding progress', error),
+})
 
 function trackDetailsEvent(name: OnboardingDetailsEvent, details: OnboardingDetailsEventProperties = {}) {
   if (props.preOrg)
@@ -420,23 +422,11 @@ function snapshotOnboardingProgress(status: UserOnboardingStatus = 'in_progress'
 }
 
 async function persistOnboardingProgress(status: UserOnboardingStatus = 'in_progress') {
-  if (onboardingMountAborted || (onboardingPersistenceBlocked && status !== 'completed'))
-    return 'skipped'
-  persistChain = persistChain
-    .then(() => {
-      if (onboardingMountAborted || (onboardingPersistenceBlocked && status !== 'completed'))
-        return 'skipped'
-      return writeOnboardingProgress(status)
-    })
-    .catch((error) => {
-      console.error('Failed to persist onboarding progress', error)
-      return 'retryable_failure' as const
-    })
-  return persistChain
+  return onboardingProgressPersistence.persist(status)
 }
 
 function schedulePersistOnboardingProgress() {
-  if (isHydratingOnboarding.value || onboardingPersistenceBlocked || onboardingMountAborted)
+  if (isHydratingOnboarding.value || onboardingProgressPersistence.isBlocked() || onboardingProgressPersistence.isAborted())
     return
   window.clearTimeout(persistFieldsTimer)
   persistFieldsTimer = setTimeout(() => {
@@ -483,7 +473,6 @@ async function writeOnboardingProgress(status: UserOnboardingStatus) {
   if (status === 'completed' || main.user?.id !== userId)
     return 'skipped'
 
-  onboardingPersistenceBlocked = true
   const { data: latest, error: latestError } = await supabase
     .from('users')
     .select()
@@ -1583,7 +1572,7 @@ onMounted(async () => {
     if (props.preOrg) {
       const resumeResult = await maybeResumeSavedOnboarding()
       if (resumeResult === null) {
-        onboardingMountAborted = true
+        onboardingProgressPersistence.abort()
         return
       }
       resumedFlow = resumeResult
@@ -1606,7 +1595,7 @@ onMounted(async () => {
   finally {
     isHydratingOnboarding.value = false
     let onboardingPersistResult: OnboardingPersistResult = 'skipped'
-    if (!onboardingMountAborted) {
+    if (!onboardingProgressPersistence.isAborted()) {
       onboardingInitialPersistInFlight = true
       onboardingPersistResult = await persistOnboardingProgress()
       if (onboardingPersistResult === 'retryable_failure' && !onboardingFlowDisposed)
@@ -1614,13 +1603,17 @@ onMounted(async () => {
       onboardingInitialPersistInFlight = false
     }
     function finishOnboardingMount() {
-      if (onboardingFlowDisposed || onboardingMountAborted)
+      if (onboardingFlowDisposed || onboardingProgressPersistence.isAborted())
         return
       isLoading.value = false
-      const shouldInitializeProgressTracking
-        = onboardingPersistResult === 'persisted'
-          || onboardingPersistResult === 'retryable_failure'
-      if (!onboardingMountAborted && shouldInitializeProgressTracking)
+      const shouldInitializeProgressTracking = shouldInitializeOnboardingProgressTracking(
+        onboardingPersistResult,
+        {
+          aborted: onboardingProgressPersistence.isAborted(),
+          disposed: onboardingFlowDisposed,
+        },
+      )
+      if (shouldInitializeProgressTracking)
         initializeProgressTracking(resumedFlow)
     }
     finishOnboardingMount()
@@ -1632,7 +1625,7 @@ onBeforeUnmount(() => {
   window.clearTimeout(persistFieldsTimer)
   window.removeEventListener(ONBOARDING_DASHBOARD_EXPLORED_EVENT, trackDashboardExplored)
   detailsFieldTracker.dispose()
-  if (!isHydratingOnboarding.value && !onboardingInitialPersistInFlight && !onboardingPersistenceBlocked && !onboardingMountAborted)
+  if (!isHydratingOnboarding.value && !onboardingInitialPersistInFlight && !onboardingProgressPersistence.isBlocked() && !onboardingProgressPersistence.isAborted())
     void persistOnboardingProgress()
 
   if (localIconPreview.value.startsWith('blob:'))

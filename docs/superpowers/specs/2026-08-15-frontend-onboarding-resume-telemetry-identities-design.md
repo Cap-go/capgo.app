@@ -209,6 +209,12 @@ candidate from parsed progress, records the dialog and decision, applies or
 resets wizard state, and only then initializes the existing progress tracker.
 It does not build identity properties itself.
 
+A small dependency-injected persistence controller owns serialization and the
+component-lifetime abort/conflict barriers. Its write dependency remains in the
+component, while deterministic unit tests drive deferred writes to prove queued
+non-terminal suppression, terminal conflict bypass, retry recovery, and durable
+abort behavior without mounting the full wizard.
+
 `userOnboardingProgress.ts` parses, validates, builds, and clamps the two
 optional persisted identity fields. Invalid identity fields are dropped rather
 than invalidating otherwise resumable progress.
@@ -268,6 +274,9 @@ coverage for the component lifecycle:
 - two retryable initial persistence failures do not drop later step transitions;
 - skipped and conflicting initial writes do not emit step events with an
   unconfirmed identity;
+- deferred-write tests execute the persistence controller's abort, conflict,
+  terminal, and retry behavior rather than relying only on component source
+  markers;
 - no new direct `viewStep()` call exists in either resume decision branch.
 
 Extend the existing registration Playwright scenario to retain its functional
