@@ -90,7 +90,10 @@ export function getAdminStackedBarTooltipTotal(
   }, 0)
 }
 
-export function buildAdminStackedBarLegendItems(chart: AdminLegendDataChart): LegendItem[] {
+export function buildAdminStackedBarLegendItems(
+  chart: AdminLegendDataChart,
+  fontColor: LegendItem['fontColor'] = '#4b5563',
+): LegendItem[] {
   const seen = new Set<string>()
   return chart.data.datasets.flatMap((dataset, datasetIndex) => {
     const label = dataset.label ?? ''
@@ -107,6 +110,7 @@ export function buildAdminStackedBarLegendItems(chart: AdminLegendDataChart): Le
     return [{
       text: label,
       fillStyle: typeof dataset.backgroundColor === 'string' ? dataset.backgroundColor : '#94a3b8',
+      fontColor,
       strokeStyle: typeof dataset.borderColor === 'string' ? dataset.borderColor : '#94a3b8',
       lineWidth: typeof dataset.borderWidth === 'number' ? dataset.borderWidth : 0,
       hidden: matchingDatasets.every(({ index }) => !chart.isDatasetVisible(index)),
@@ -163,7 +167,7 @@ export function buildAdminStackedBarChartOptions(
           },
           padding: 18,
           usePointStyle: true,
-          ...(groupedStacks ? { generateLabels: buildAdminStackedBarLegendItems } : {}),
+          ...(groupedStacks ? { generateLabels: chart => buildAdminStackedBarLegendItems(chart, textColor) } : {}),
         },
         ...(groupedStacks
           ? { onClick: (_event, item, legend) => toggleAdminStackedBarLegendGroup(legend.chart, item.text) }

@@ -134,6 +134,33 @@ describe('admin stacked bar chart', () => {
     expect(buildAdminStackedBarLegendItems(chart).map(item => item.text)).toEqual(['CLI + init', 'No action'])
   })
 
+  it.concurrent('wires grouped legend generation and toggling through chart options', () => {
+    const data = buildAdminStackedBarChartData(['Aug 1'], [
+      { label: 'No action', data: [3], color: '#94a3b8', stack: 'first_time' },
+      { label: 'No action', data: [2], color: '#94a3b8', stack: 'returning' },
+      { label: 'Never happened', data: [0], color: '#ef4444', stack: 'first_time' },
+    ])
+    const visibility = [true, true, true]
+    let updateCount = 0
+    const chart = {
+      data,
+      isDatasetVisible: (index: number) => visibility[index],
+      setDatasetVisibility: (index: number, visible: boolean) => { visibility[index] = visible },
+      update: () => { updateCount++ },
+    }
+    const options = buildAdminStackedBarChartOptions(true, true) as any
+    const items = options.plugins.legend.labels.generateLabels(chart)
+
+    expect(items.map((item: { text: string, fontColor?: string }) => ({
+      text: item.text,
+      fontColor: item.fontColor,
+    }))).toEqual([{ text: 'No action', fontColor: '#d1d5db' }])
+
+    options.plugins.legend.onClick({}, items[0], { chart })
+    expect(visibility).toEqual([false, false, true])
+    expect(updateCount).toBe(1)
+  })
+
   it.concurrent('toggles every lifecycle dataset represented by one legend item', () => {
     const visibility = [true, true, true]
     const chart = {
