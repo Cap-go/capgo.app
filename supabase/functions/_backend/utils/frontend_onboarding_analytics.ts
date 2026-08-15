@@ -15,6 +15,7 @@ const POSTHOG_MIN_DATE_MS = Date.UTC(1970, 0, 1)
 const POSTHOG_MAX_DATE_MS = Date.UTC(2106, 0, 1)
 const INVALID_TOTAL_ATTEMPTS_ERROR = 'frontend onboarding analytics query returned invalid total metadata'
 const ATTEMPT_LIMIT_EXCEEDED_ERROR = 'frontend onboarding analytics query exceeded attempt limit'
+const FRONTEND_ONBOARDING_HOST = ['console', 'capgo', 'app'].join('.')
 
 export const FRONTEND_ONBOARDING_ATTEMPT_LIMIT = 50_000
 export const FRONTEND_ONBOARDING_MAX_RANGE_MS = 365 * 24 * 60 * 60 * 1000
@@ -183,7 +184,7 @@ export function buildFrontendOnboardingHogql(startDate: string, cohortEndDate: s
       FROM events
       WHERE event IN (${eventAllowlist})
         AND JSONExtractString(toString(properties), 'flow') = 'pre_org'
-        AND JSONExtractString(toString(properties), '$host') = 'console.capgo.app'
+        AND JSONExtractString(toString(properties), '$host') = ${sqlStr(FRONTEND_ONBOARDING_HOST)}
         AND toIntOrZero(toString(properties.onboarding_version)) IN (${versionAllowlist})
         AND timestamp >= parseDateTimeBestEffort(${sqlStr(startDate)})
         AND timestamp < parseDateTimeBestEffort(${sqlStr(followupEndDate)})
