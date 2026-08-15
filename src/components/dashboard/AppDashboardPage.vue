@@ -37,7 +37,11 @@ const isLoading = ref(false)
 const supabase = useSupabase()
 const displayStore = useDisplayStore()
 const app = ref<Database['public']['Tables']['apps']['Row']>()
-const usageComponent = ref()
+const usageComponent = ref<{
+  useBillingPeriod: boolean
+  showCumulative: boolean
+  reloadTrigger: number
+} | null>(null)
 const appNotFound = ref(false)
 const appOrganization = computed(() => {
   if (!id.value)
