@@ -193,6 +193,7 @@ async function guard(
     ? to.query.invite_org
     : null
   const isAdminRoute = to.path.startsWith('/admin')
+  const isCliLoginRoute = to.path === '/login-cli'
 
   async function tryLoadOrganizations(fetcher: () => Promise<void>) {
     try {
@@ -213,6 +214,8 @@ async function guard(
   }
 
   function shouldRedirectToOrgOnboarding() {
+    if (isCliLoginRoute)
+      return false
     if (to.path.startsWith('/onboarding/app'))
       return false
     if (to.path.startsWith('/onboarding/organization'))
@@ -225,6 +228,8 @@ async function guard(
   }
 
   function shouldRedirectToPendingInviteOnboarding(organizationsLoaded: boolean) {
+    if (isCliLoginRoute)
+      return false
     if (!organizationsLoaded)
       return false
     if (isNativeAppStoreContext())
@@ -237,6 +242,8 @@ async function guard(
   }
 
   async function getPendingOnboardingRedirect(organizationsLoaded: boolean) {
+    if (isCliLoginRoute)
+      return null
     if (!organizationsLoaded)
       return null
     if (!isNewOnboardingUser(sessionUser?.created_at))

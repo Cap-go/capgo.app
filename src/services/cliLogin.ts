@@ -4,17 +4,17 @@ import { invokeCapgoApi } from '~/services/capgoApi'
 import { checkPermissions } from '~/services/permissions'
 
 export interface CliLoginOrganization {
-  gid: string
-  name: string
-  role: string
-  is_invite: boolean
-  enforcing_2fa: boolean
+  'gid': string
+  'name': string
+  'role': string
+  'is_invite': boolean
+  'enforcing_2fa': boolean
   '2fa_has_access': boolean
-  password_policy_config: { enabled?: boolean } | null
-  password_has_access: boolean
-  enforce_hashed_api_keys: boolean
-  require_apikey_expiration: boolean
-  max_apikey_expiration_days: number | null
+  'password_policy_config': { enabled?: boolean } | null
+  'password_has_access': boolean
+  'enforce_hashed_api_keys': boolean
+  'require_apikey_expiration': boolean
+  'max_apikey_expiration_days': number | null
 }
 
 export interface CliKeyBinding {
@@ -134,7 +134,7 @@ export function aggregateCliKeyPolicy(orgs: CliLoginOrganization[], now = new Da
 }
 
 export function isValidCliLoginSession(value: unknown): value is string {
-  return typeof value === 'string' && /^[A-Za-z0-9_-]{22,}$/.test(value)
+  return typeof value === 'string' && /^[\w-]{22,}$/.test(value)
 }
 
 export function isMatchingCliLoginEvent(
