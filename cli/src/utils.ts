@@ -816,6 +816,25 @@ export function formatCapgoApiErrorBody(body: unknown): string {
   return [record.error, record.message, record.status].filter(Boolean).join(' | ')
 }
 
+function messageAfterPrefix(text: string, prefix: string): string {
+  const index = text.indexOf(prefix)
+  if (index < 0)
+    return text
+  return text.slice(index + prefix.length).replace(/^:\s*/, '').split('\n')[0]!.trim()
+}
+
+export async function channelUpdatePackageCliError(error: unknown): Promise<string | null> {
+  const payload = await readCapgoCliApiErrorPayload(error)
+  if (payload?.error === 'channel_zip_required' || payload?.error === 'channel_delta_required')
+    return payload.message || payload.error
+  const text = error instanceof Error ? error.message : String(error ?? '')
+  if (text.includes('CHANNEL_ZIP_REQUIRED'))
+    return messageAfterPrefix(text, 'CHANNEL_ZIP_REQUIRED')
+  if (text.includes('CHANNEL_DELTA_REQUIRED'))
+    return messageAfterPrefix(text, 'CHANNEL_DELTA_REQUIRED')
+  return null
+}
+
 /** Capgo-managed Supabase hosts (cloud). Match hostname exactly. */
 export function isCapgoManagedSupabaseHost(supaHost?: string): boolean {
   if (!supaHost)

@@ -120,6 +120,7 @@ afterEach(async () => {
   }
 
   if (versionId) {
+    await supabase.from('channels').update({ update_package: 'all' }).eq('app_id', APPNAME).eq('name', 'production').throwOnError()
     await setProductionVersion(versionId)
   }
 
@@ -220,5 +221,128 @@ describe('update manifest scenarios', () => {
     expect(response.status).toBe(200)
     const json = await response.json<UpdateRes>()
     expect(json.manifest).toBeDefined()
+  })
+})
+
+describe('channel update package', () => {
+  async function setUpdatePackage(mode: 'all' | 'zip' | 'delta' | 'zip_from_builtin' | 'delta_from_builtin') {
+    await getSupabaseClient()
+      .from('channels')
+      .update({ update_package: mode })
+      .eq('app_id', APPNAME)
+      .eq('name', 'production')
+      .throwOnError()
+  }
+
+  async function requestUpdate(versionName: string, versionBuild = '1.0.0') {
+    const { data: versionData } = await getSupabaseClient()
+      .from('app_versions')
+      .select('id')
+      .eq('name', '1.0.0')
+      .eq('app_id', APPNAME)
+      .single()
+    if (!versionData)
+      throw new Error('Version data not found')
+    await insertManifestEntries(versionData.id)
+
+    const baseData = getBaseData(APPNAME)
+    baseData.version_name = versionName
+    baseData.version_build = versionBuild
+    baseData.plugin_version = '6.25.0'
+    const response = await postUpdate(baseData)
+    expect(response.status).toBe(200)
+    return response.json<UpdateRes>()
+  }
+
+  it('zip only omits the manifest', async () => {
+    await setUpdatePackage('zip')
+    const json = await requestUpdate('1.1.0')
+    expect(json.version).toBe('1.0.0')
+    expect(json.url).toBeDefined()
+    expect(json.url).not.toBe('https://404.capgo.app/no.zip')
+    expect(json.manifest).toBeUndefined()
+  })
+
+  it('delta only omits the zip url', async () => {
+    const { data: versionData } = await getSupabaseClient()
+      .from('app_versions')
+      .select('id')
+      .eq('name', '1.0.0')
+      .eq('app_id', APPNAME)
+      .single()
+    if (!versionData)
+      throw new Error('Version data not found')
+    await insertManifestEntries(versionData.id)
+    await setUpdatePackage('delta')
+    const json = await requestUpdate('1.1.0')
+    expect(json.version).toBe('1.0.0')
+    expect(json.manifest).toBeDefined()
+    expect(json.url).toBe('https://404.capgo.app/no.zip')
+  })
+
+  it('zip only from builtin applies only on the store binary', async () => {
+    const version = await createAppVersions(`1.0.${Math.floor(Math.random() * 100000) + 2000}`, APPNAME, {
+      checksum: 'pkg-zip-builtin',
+      r2_path: `orgs/test/apps/${APPNAME}/zip-builtin.zip`,
+    })
+    createdVersionIds.push(version.id)
+    await insertManifestEntries(version.id)
+    await setProductionVersion(version.id)
+    await setUpdatePackage('zip_from_builtin')
+
+    const builtinData = getBaseData(APPNAME)
+    builtinData.version_name = '1.0.0'
+    builtinData.version_build = '1.0.0'
+    builtinData.plugin_version = '6.25.0'
+    const builtinResponse = await postUpdate(builtinData)
+    expect(builtinResponse.status).toBe(200)
+    const builtinJson = await builtinResponse.json<UpdateRes>()
+    expect(builtinJson.version).toBe(version.name)
+    expect(builtinJson.manifest).toBeUndefined()
+    expect(builtinJson.url).not.toBe('https://404.capgo.app/no.zip')
+
+    const otaData = getBaseData(APPNAME)
+    otaData.version_name = '1.1.0'
+    otaData.version_build = '1.0.0'
+    otaData.plugin_version = '6.25.0'
+    const otaResponse = await postUpdate(otaData)
+    expect(otaResponse.status).toBe(200)
+    const otaJson = await otaResponse.json<UpdateRes>()
+    expect(otaJson.version).toBe(version.name)
+    expect(otaJson.manifest).toBeDefined()
+    expect(otaJson.url).not.toBe('https://404.capgo.app/no.zip')
+  })
+
+  it('delta only from builtin applies only on the store binary', async () => {
+    const version = await createAppVersions(`1.0.${Math.floor(Math.random() * 100000) + 2000}`, APPNAME, {
+      checksum: 'pkg-delta-builtin',
+      r2_path: `orgs/test/apps/${APPNAME}/delta-builtin.zip`,
+    })
+    createdVersionIds.push(version.id)
+    await insertManifestEntries(version.id)
+    await setProductionVersion(version.id)
+    await setUpdatePackage('delta_from_builtin')
+
+    const builtinData = getBaseData(APPNAME)
+    builtinData.version_name = '1.0.0'
+    builtinData.version_build = '1.0.0'
+    builtinData.plugin_version = '6.25.0'
+    const builtinResponse = await postUpdate(builtinData)
+    expect(builtinResponse.status).toBe(200)
+    const builtinJson = await builtinResponse.json<UpdateRes>()
+    expect(builtinJson.version).toBe(version.name)
+    expect(builtinJson.manifest).toBeDefined()
+    expect(builtinJson.url).toBe('https://404.capgo.app/no.zip')
+
+    const otaData = getBaseData(APPNAME)
+    otaData.version_name = '1.1.0'
+    otaData.version_build = '1.0.0'
+    otaData.plugin_version = '6.25.0'
+    const otaResponse = await postUpdate(otaData)
+    expect(otaResponse.status).toBe(200)
+    const otaJson = await otaResponse.json<UpdateRes>()
+    expect(otaJson.version).toBe(version.name)
+    expect(otaJson.manifest).toBeDefined()
+    expect(otaJson.url).not.toBe('https://404.capgo.app/no.zip')
   })
 })

@@ -873,6 +873,7 @@ export type Database = {
           rollout_paused_at: string | null
           rollout_percentage_bps: number
           rollout_version: number | null
+          update_package: Database["public"]["Enums"]["channel_update_package"]
           updated_at: string
           version: number | null
         }
@@ -912,6 +913,7 @@ export type Database = {
           rollout_paused_at?: string | null
           rollout_percentage_bps?: number
           rollout_version?: number | null
+          update_package?: Database["public"]["Enums"]["channel_update_package"]
           updated_at?: string
           version?: number | null
         }
@@ -951,6 +953,7 @@ export type Database = {
           rollout_paused_at?: string | null
           rollout_percentage_bps?: number
           rollout_version?: number | null
+          update_package?: Database["public"]["Enums"]["channel_update_package"]
           updated_at?: string
           version?: number | null
         }
@@ -3492,6 +3495,7 @@ export type Database = {
           id: string
           image_url: string | null
           last_name: string | null
+          onboarding: Json
           opt_for_newsletters: boolean
           updated_at: string | null
         }
@@ -3511,6 +3515,7 @@ export type Database = {
           id: string
           image_url?: string | null
           last_name?: string | null
+          onboarding?: Json
           opt_for_newsletters?: boolean
           updated_at?: string | null
         }
@@ -3530,6 +3535,7 @@ export type Database = {
           id?: string
           image_url?: string | null
           last_name?: string | null
+          onboarding?: Json
           opt_for_newsletters?: boolean
           updated_at?: string | null
         }
@@ -3902,6 +3908,14 @@ export type Database = {
       }
       channel_read_denied_channel_ids: { Args: never; Returns: number[] }
       channel_readable_channel_ids: { Args: never; Returns: number[] }
+      channel_update_package_mismatch: {
+        Args: {
+          p_channel_name: string
+          p_update_package: Database["public"]["Enums"]["channel_update_package"]
+          p_version_id: number
+        }
+        Returns: string
+      }
       check_apikey_hashed_key_enforcement: {
         Args: { apikey_row: Database["public"]["Tables"]["apikeys"]["Row"] }
         Returns: boolean
@@ -4897,6 +4911,10 @@ export type Database = {
         }
         Returns: Json
       }
+      merge_app_onboarding_setup: {
+        Args: { p_existing: Json; p_patch: Json }
+        Returns: Json
+      }
       null_migrated_app_version_manifests: {
         Args: {
           batch_size?: number
@@ -5278,6 +5296,10 @@ export type Database = {
         Returns: boolean
       }
       remove_old_jobs: { Args: never; Returns: undefined }
+      report_app_onboarding_setup: {
+        Args: { p_app_id: string; p_patch: Json }
+        Returns: Json
+      }
       request_actor_user_id: { Args: never; Returns: string }
       request_app_chart_refresh: {
         Args: { app_id: string }
@@ -5443,6 +5465,12 @@ export type Database = {
     }
     Enums: {
       action_type: "mau" | "storage" | "bandwidth" | "build_time"
+      channel_update_package:
+        | "all"
+        | "zip"
+        | "delta"
+        | "zip_from_builtin"
+        | "delta_from_builtin"
       credit_metric_type: "mau" | "bandwidth" | "storage" | "build_time"
       credit_transaction_type:
         | "grant"
@@ -5715,6 +5743,13 @@ export const Constants = {
   public: {
     Enums: {
       action_type: ["mau", "storage", "bandwidth", "build_time"],
+      channel_update_package: [
+        "all",
+        "zip",
+        "delta",
+        "zip_from_builtin",
+        "delta_from_builtin",
+      ],
       credit_metric_type: ["mau", "bandwidth", "storage", "build_time"],
       credit_transaction_type: [
         "grant",

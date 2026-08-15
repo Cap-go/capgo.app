@@ -19,6 +19,7 @@ import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconPencil from '~icons/lucide/pencil'
 import { fetchLinkedChannelsForVersion, formatLinkedChannel, unlinkLinkedChannels } from '~/services/bundleLinkedChannels'
 import { findChannelsWithoutPromotionPermission, formatChannelPromotionTargets } from '~/services/channelPromotion'
+import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageError'
 import { formatBytes, getChecksumInfo } from '~/services/conversion'
 import { formatDate, formatLocalDate } from '~/services/date'
 import { checkPermissions } from '~/services/permissions'
@@ -341,7 +342,7 @@ async function handleChannelLink(chan: Database['public']['Tables']['channels'][
   }
   catch (error) {
     console.error(error)
-    toast.error(t('cannot-test-app-some'))
+    toast.error(t(channelUpdatePackageErrorKey(error) ?? 'cannot-test-app-some'))
   }
 }
 

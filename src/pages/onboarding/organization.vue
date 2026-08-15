@@ -529,7 +529,7 @@ async function uploadLogoBlob(blob: Blob, filename?: string) {
   const orgId = activeOrgId.value
   if (!orgId) {
     toast.error(t('organization-not-found'))
-    return
+    return false
   }
 
   isUploadingLogo.value = true
@@ -538,10 +538,13 @@ async function uploadLogoBlob(blob: Blob, filename?: string) {
     step.value = 'invite'
     toast.success(t('organization-onboarding-logo-saved'))
     await syncRouteQuery('invite', orgId)
+      .catch(error => console.error('Failed to sync onboarding route after logo upload', error))
+    return true
   }
   catch (error) {
     console.error('Failed to upload organization logo during onboarding', error)
     toast.error(t('something-went-wrong-try-again-later'))
+    return false
   }
   finally {
     isUploadingLogo.value = false
@@ -566,8 +569,7 @@ async function useImportedLogo() {
       const binary = atob(payload)
       const bytes = Uint8Array.from(binary, char => char.charCodeAt(0))
       const blob = new Blob([bytes], { type: contentType })
-      await uploadLogoBlob(blob, `${websiteHostname.value || 'website-logo'}.png`)
-      return true
+      return await uploadLogoBlob(blob, `${websiteHostname.value || 'website-logo'}.png`)
     }
 
     const response = await fetch(importedLogoUrl.value)
@@ -577,8 +579,7 @@ async function useImportedLogo() {
       return false
     }
     const blob = await response.blob()
-    await uploadLogoBlob(blob, `${websiteHostname.value || 'website-logo'}.png`)
-    return true
+    return await uploadLogoBlob(blob, `${websiteHostname.value || 'website-logo'}.png`)
   }
   catch (error) {
     console.error('Failed to fetch imported logo', error)

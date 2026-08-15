@@ -6,6 +6,7 @@ const checkPermissionMock = vi.fn()
 const countDevicesMock = vi.fn()
 const readDevicesMock = vi.fn()
 const readStatsMock = vi.fn()
+const readStatsInsightsMock = vi.fn()
 
 vi.mock('../supabase/functions/_backend/utils/hono_middleware.ts', () => ({
   middlewareAuth: () => async (_c: unknown, next: () => Promise<void>) => {
@@ -21,6 +22,7 @@ vi.mock('../supabase/functions/_backend/utils/stats.ts', () => ({
   countDevices: (...args: unknown[]) => countDevicesMock(...args),
   readDevices: (...args: unknown[]) => readDevicesMock(...args),
   readStats: (...args: unknown[]) => readStatsMock(...args),
+  readStatsInsights: (...args: unknown[]) => readStatsInsightsMock(...args),
 }))
 
 function postJson(url: string, body: unknown) {
@@ -67,6 +69,13 @@ beforeEach(() => {
   countDevicesMock.mockResolvedValue(0)
   readDevicesMock.mockResolvedValue([])
   readStatsMock.mockResolvedValue([])
+  readStatsInsightsMock.mockResolvedValue({
+    summary: { total: 0, device_count: 0, action_count: 0 },
+    actions: [],
+    daily: [],
+    versions: [],
+    devices: [],
+  })
 })
 
 describe('private analytics route validation', () => {
@@ -122,6 +131,31 @@ describe('private analytics route validation', () => {
     ['invalid platform', { platform: 'windows' }],
   ])('rejects %s on /private/devices', async (_label, body) => {
     await expectRejectedDevicesBody(body)
+  })
+
+  it('accepts versionName on /private/stats/insights', async () => {
+    const response = await statsApp.request(postJson('http://local/insights', {
+      appId: 'com.example.app',
+      days: 7,
+      versionName: '1.2.3',
+    }))
+
+    expect(response.status).toBe(200)
+    expect(readStatsInsightsMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      app_id: 'com.example.app',
+      version_name: '1.2.3',
+    }))
+  })
+
+  it('rejects control characters in versionName on /private/stats/insights', async () => {
+    const response = await statsApp.request(postJson('http://local/insights', {
+      appId: 'com.example.app',
+      days: 7,
+      versionName: 'bad\u0000version',
+    }))
+
+    await expectInvalidBody(response)
+    expect(readStatsInsightsMock).not.toHaveBeenCalled()
   })
 
   it('accepts platform and versionName filters on /private/devices', async () => {

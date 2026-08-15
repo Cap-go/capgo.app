@@ -206,9 +206,23 @@ export function createOnboardingProgressTracker(options: CreateOnboardingProgres
     return eventProperties
   }
 
+  function trackDashboardExplored(appId?: string) {
+    if (!activeStep)
+      return
+
+    const properties = sharedProperties(activeStep)
+    if (!properties)
+      return
+    if (appId)
+      properties.app_id = appId
+
+    safelyCapture('onboarding_dashboard_explored', properties)
+  }
+
   return {
     completeStep,
     trackCopyEvent,
+    trackDashboardExplored,
     trackDetailsEvent,
     viewStep,
   }

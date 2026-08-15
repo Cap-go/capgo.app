@@ -1,6 +1,6 @@
 import type { SQL } from 'drizzle-orm'
 import type { Context } from 'hono'
-import type { AdminOnboardingActivationCohort } from './onboardingFunnel.ts'
+import type { AdminOnboardingActivationCohort, AdminOnboardingWizardDropoff } from './onboardingFunnel.ts'
 import { and, eq, isNotNull, isNull, or, sql } from 'drizzle-orm'
 import { drizzle } from 'drizzle-orm/node-postgres'
 import { alias } from 'drizzle-orm/pg-core'
@@ -15,7 +15,7 @@ import { DISPOSABLE_EMAIL_DOMAINS, PERSONAL_EMAIL_DOMAINS } from './emailClassif
 import { getClientDbRegionSB } from './geolocation.ts'
 import { REQUIRED_GLOBAL_STATS_SHARDS } from './global_stats.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
-import { getAdminOnboardingActivationMetrics } from './onboardingFunnel.ts'
+import { buildAdminOnboardingWizardDropoff, getAdminOnboardingActivationMetrics } from './onboardingFunnel.ts'
 import * as schema from './postgres_schema.ts'
 import { withOptionalManifestSelect } from './queryHelpers.ts'
 import { getRolloutDecision } from './rollout.ts'
@@ -505,6 +505,7 @@ function getSchemaUpdatesAlias(includeMetadata = false) {
     allow_device: channelAlias.allow_device,
     disable_auto_update_under_native: channelAlias.disable_auto_update_under_native,
     disable_auto_update: channelAlias.disable_auto_update,
+    update_package: channelAlias.update_package,
     ios: channelAlias.ios,
     android: channelAlias.android,
     electron: channelAlias.electron,
@@ -3227,6 +3228,21 @@ export interface AdminOnboardingFunnel {
     invite_registrations: number
     without_profile: number
   }>
+  wizard_dropoff: AdminOnboardingWizardDropoff[]
+  onboarding_method_trend: Array<{
+    date: string
+    manual: number
+    cli: number
+    mcp: number
+    ai: number
+  }>
+  onboarding_outcome_trend: Array<{
+    date: string
+    completed: number
+    skipped: number
+    switched_to_manual: number
+    in_progress: number
+  }>
 }
 
 function adminOnboardingConversionRate(numerator: number, denominator: number): number {
@@ -3555,11 +3571,110 @@ export async function getAdminOnboardingFunnel(
       ORDER BY ds.date ASC
     `
 
-    const [trendResult, activationCohortResult, inviteTrendResult, registrationSourceTrendResult] = await Promise.all([
+    const wizardDropoffQuery = sql`
+      SELECT
+        CASE
+          WHEN onboarding->>'status' = 'completed' THEN 'completed'
+          WHEN onboarding->>'status' = 'abandoned' THEN 'abandoned'
+          WHEN COALESCE(onboarding->>'step', '') = '' THEN 'not_started'
+          WHEN onboarding->>'step' IN ('intent', 'details', 'organization', 'choice', 'install', 'setup') THEN onboarding->>'step'
+          ELSE 'not_started'
+        END as step,
+        COUNT(*)::int as count
+      FROM public.users
+      WHERE created_at >= ${start_date}::timestamp
+        AND created_at < ${end_date}::timestamp
+        AND created_via_invite = false
+      GROUP BY 1
+    `
+
+    const onboardingMethodTrendQuery = sql`
+      WITH date_series AS (
+        SELECT generate_series(
+          ${start_date}::timestamptz::date,
+          (${end_date}::timestamptz::date - 1),
+          '1 day'::interval
+        )::date as date
+      ),
+      daily_methods AS (
+        SELECT
+          a.created_at::date as date,
+          COUNT(*) FILTER (
+            WHERE COALESCE(NULLIF(a.onboarding->'setup'->>'source', ''), NULLIF(a.onboarding->>'source', ''), 'manual') = 'manual'
+          )::int as manual,
+          COUNT(*) FILTER (
+            WHERE COALESCE(NULLIF(a.onboarding->'setup'->>'source', ''), a.onboarding->>'source') = 'cli'
+          )::int as cli,
+          COUNT(*) FILTER (
+            WHERE COALESCE(NULLIF(a.onboarding->'setup'->>'source', ''), a.onboarding->>'source') = 'mcp'
+          )::int as mcp,
+          COUNT(*) FILTER (
+            WHERE COALESCE(NULLIF(a.onboarding->'setup'->>'source', ''), a.onboarding->>'source') = 'ai'
+          )::int as ai
+        FROM public.apps a
+        WHERE a.created_at >= ${start_date}::timestamptz
+          AND a.created_at < ${end_date}::timestamptz
+        GROUP BY a.created_at::date
+      )
+      SELECT
+        ds.date,
+        COALESCE(dm.manual, 0) as manual,
+        COALESCE(dm.cli, 0) as cli,
+        COALESCE(dm.mcp, 0) as mcp,
+        COALESCE(dm.ai, 0) as ai
+      FROM date_series ds
+      LEFT JOIN daily_methods dm ON dm.date = ds.date
+      ORDER BY ds.date ASC
+    `
+
+    const onboardingOutcomeTrendQuery = sql`
+      WITH date_series AS (
+        SELECT generate_series(
+          ${start_date}::timestamptz::date,
+          (${end_date}::timestamptz::date - 1),
+          '1 day'::interval
+        )::date as date
+      ),
+      daily_outcomes AS (
+        SELECT
+          a.created_at::date as date,
+          COUNT(*) FILTER (
+            WHERE COALESCE(NULLIF(a.onboarding->'setup'->>'outcome', ''), NULLIF(a.onboarding->>'outcome', ''), 'in_progress') = 'completed'
+          )::int as completed,
+          COUNT(*) FILTER (
+            WHERE COALESCE(NULLIF(a.onboarding->'setup'->>'outcome', ''), a.onboarding->>'outcome') = 'skipped'
+          )::int as skipped,
+          COUNT(*) FILTER (
+            WHERE COALESCE(NULLIF(a.onboarding->'setup'->>'outcome', ''), a.onboarding->>'outcome') = 'switched_to_manual'
+          )::int as switched_to_manual,
+          COUNT(*) FILTER (
+            WHERE COALESCE(NULLIF(a.onboarding->'setup'->>'outcome', ''), NULLIF(a.onboarding->>'outcome', ''), 'in_progress') = 'in_progress'
+          )::int as in_progress
+        FROM public.apps a
+        WHERE a.created_at >= ${start_date}::timestamptz
+          AND a.created_at < ${end_date}::timestamptz
+          AND COALESCE(NULLIF(a.onboarding->'setup'->>'source', ''), NULLIF(a.onboarding->>'source', ''), 'manual') <> 'manual'
+        GROUP BY a.created_at::date
+      )
+      SELECT
+        ds.date,
+        COALESCE(d.completed, 0) as completed,
+        COALESCE(d.skipped, 0) as skipped,
+        COALESCE(d.switched_to_manual, 0) as switched_to_manual,
+        COALESCE(d.in_progress, 0) as in_progress
+      FROM date_series ds
+      LEFT JOIN daily_outcomes d ON d.date = ds.date
+      ORDER BY ds.date ASC
+    `
+
+    const [trendResult, activationCohortResult, inviteTrendResult, registrationSourceTrendResult, wizardDropoffResult, onboardingMethodTrendResult, onboardingOutcomeTrendResult] = await Promise.all([
       drizzleClient.execute(trendQuery),
       drizzleClient.execute(activationCohortQuery),
       drizzleClient.execute(inviteTrendQuery),
       drizzleClient.execute(registrationSourceTrendQuery),
+      drizzleClient.execute(wizardDropoffQuery),
+      drizzleClient.execute(onboardingMethodTrendQuery),
+      drizzleClient.execute(onboardingOutcomeTrendQuery),
     ])
 
     const activationCohorts: AdminOnboardingActivationCohort[] = []
@@ -3625,6 +3740,22 @@ export async function getAdminOnboardingFunnel(
       without_profile: Number(row.without_profile) || 0,
     }))
 
+    const onboardingMethodTrend = onboardingMethodTrendResult.rows.map((row: any) => ({
+      date: row.date instanceof Date ? row.date.toISOString().split('T')[0] : String(row.date),
+      manual: Number(row.manual) || 0,
+      cli: Number(row.cli) || 0,
+      mcp: Number(row.mcp) || 0,
+      ai: Number(row.ai) || 0,
+    }))
+
+    const onboardingOutcomeTrend = onboardingOutcomeTrendResult.rows.map((row: any) => ({
+      date: row.date instanceof Date ? row.date.toISOString().split('T')[0] : String(row.date),
+      completed: Number(row.completed) || 0,
+      skipped: Number(row.skipped) || 0,
+      switched_to_manual: Number(row.switched_to_manual) || 0,
+      in_progress: Number(row.in_progress) || 0,
+    }))
+
     const totalInviteRegistrations = inviteTrend.reduce((sum, row) => sum + row.invite_registrations, 0)
     const totalOrgJoinsInviteRegister = inviteTrend.reduce((sum, row) => sum + row.org_joins_invite_register, 0)
     const totalOrgJoinsExistingAccount = inviteTrend.reduce((sum, row) => sum + row.org_joins_existing_account, 0)
@@ -3656,6 +3787,9 @@ export async function getAdminOnboardingFunnel(
       trend,
       invite_trend: inviteTrend,
       registration_source_trend: registrationSourceTrend,
+      wizard_dropoff: buildAdminOnboardingWizardDropoff(wizardDropoffResult.rows as Array<{ step?: unknown, count?: unknown }>),
+      onboarding_method_trend: onboardingMethodTrend,
+      onboarding_outcome_trend: onboardingOutcomeTrend,
     }
 
     cloudlog({ requestId: c.get('requestId'), message: 'getAdminOnboardingFunnel result', result })
@@ -3691,6 +3825,9 @@ export async function getAdminOnboardingFunnel(
       trend: [],
       invite_trend: [],
       registration_source_trend: [],
+      wizard_dropoff: buildAdminOnboardingWizardDropoff([]),
+      onboarding_method_trend: [],
+      onboarding_outcome_trend: [],
     }
   }
 }

@@ -136,6 +136,7 @@ function userRecord(overrides: Record<string, unknown> = {}) {
     id: USER_ID,
     image_url: null,
     last_name: 'User',
+    onboarding: {},
     opt_for_newsletters: false,
     updated_at: REGISTERED_AT,
     ...overrides,

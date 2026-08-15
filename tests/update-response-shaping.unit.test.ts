@@ -1,6 +1,6 @@
 import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'
 import { describe, expect, it, vi } from 'vitest'
-import { resToVersion } from '../supabase/functions/_backend/plugin_runtime/utils/update.ts'
+import { isOnBuiltinVersion, resolveChannelUpdatePackage, resToVersion } from '../supabase/functions/_backend/plugin_runtime/utils/update.ts'
 
 vi.mock('../supabase/functions/_backend/plugin_runtime/utils/org_email_notifications.ts', () => ({
   sendNotifToOrgMembersCached: vi.fn(() => Promise.resolve()),
@@ -41,5 +41,30 @@ describe('update response shaping', () => {
     expect(response).toMatchObject({ manifest })
     expect(response).not.toHaveProperty('link')
     expect(response).not.toHaveProperty('comment')
+  })
+})
+
+describe('channel update package resolution', () => {
+  it.concurrent('keeps both zip and delta by default', () => {
+    expect(resolveChannelUpdatePackage('all', false)).toBe('all')
+    expect(resolveChannelUpdatePackage('all', true)).toBe('all')
+    expect(resolveChannelUpdatePackage(undefined, true)).toBe('all')
+  })
+
+  it.concurrent('forces zip or delta for every device', () => {
+    expect(resolveChannelUpdatePackage('zip', false)).toBe('zip')
+    expect(resolveChannelUpdatePackage('zip', true)).toBe('zip')
+    expect(resolveChannelUpdatePackage('delta', false)).toBe('delta')
+    expect(resolveChannelUpdatePackage('delta', true)).toBe('delta')
+  })
+
+  it.concurrent('applies builtin-only modes only on the store binary', () => {
+    expect(resolveChannelUpdatePackage('zip_from_builtin', true)).toBe('zip')
+    expect(resolveChannelUpdatePackage('zip_from_builtin', false)).toBe('all')
+    expect(resolveChannelUpdatePackage('delta_from_builtin', true)).toBe('delta')
+    expect(resolveChannelUpdatePackage('delta_from_builtin', false)).toBe('all')
+    expect(isOnBuiltinVersion('1.0.0', '1.0.0')).toBe(true)
+    expect(isOnBuiltinVersion('builtin', '1.0.0')).toBe(true)
+    expect(isOnBuiltinVersion('1.0.1', '1.0.0')).toBe(false)
   })
 })
