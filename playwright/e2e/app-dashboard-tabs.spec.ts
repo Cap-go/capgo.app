@@ -51,6 +51,8 @@ test.describe('App dashboard sections', () => {
       const fromDate = new Date(`${from}T00:00:00.000Z`)
       const toDate = new Date(`${to}T00:00:00.000Z`)
       const daySpan = Math.round((toDate.getTime() - fromDate.getTime()) / (24 * 60 * 60 * 1000))
+      const twoDaysAgo = Date.now() - 2 * 24 * 60 * 60 * 1000
+      expect(toDate.getTime()).toBeGreaterThanOrEqual(twoDaysAgo)
       expect(toDate.getTime()).toBeLessThanOrEqual(Date.now())
       expect(daySpan).toBe(29)
     }
