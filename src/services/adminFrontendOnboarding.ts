@@ -1,5 +1,29 @@
 export type FrontendOnboardingStageKey = 'intent' | 'details' | 'organization' | 'setup'
 
+export const FRONTEND_ONBOARDING_DAILY_SETUP_CLI_OUTCOME_KEYS = [
+  'cli_copy_init',
+  'ai_copy_init',
+  'both_copy_init',
+  'no_copy_init',
+  'cli_copy_other_cli',
+  'ai_copy_other_cli',
+  'both_copy_other_cli',
+  'no_copy_other_cli',
+  'cli_copy_no_cli',
+  'ai_copy_no_cli',
+  'both_copy_no_cli',
+  'no_action',
+] as const
+
+export type FrontendOnboardingDailySetupCliOutcomeKey = typeof FRONTEND_ONBOARDING_DAILY_SETUP_CLI_OUTCOME_KEYS[number]
+export type FrontendOnboardingDailySetupCliOutcomeCounts = Record<FrontendOnboardingDailySetupCliOutcomeKey, number>
+
+export interface FrontendOnboardingDailySetupCliOutcomePoint {
+  date: string
+  first_time: FrontendOnboardingDailySetupCliOutcomeCounts
+  returning: FrontendOnboardingDailySetupCliOutcomeCounts
+}
+
 export interface FrontendOnboardingLargestDropoff {
   from: Exclude<FrontendOnboardingStageKey, 'setup'>
   to: Exclude<FrontendOnboardingStageKey, 'intent'>
@@ -71,6 +95,7 @@ export interface FrontendOnboardingAnalytics {
     cli_and_ai_instructions: number
     no_cli: number
   }
+  daily_setup_cli_outcomes: FrontendOnboardingDailySetupCliOutcomePoint[]
   posthog_configured: boolean
   posthog_connected: boolean
 }
@@ -78,6 +103,8 @@ export interface FrontendOnboardingAnalytics {
 export interface FrontendOnboardingDailySeries {
   label: string
   color: string
+  stack?: 'first_time' | 'returning'
+  stackLabel?: string
   data: Array<{
     date: string
     value: number
@@ -174,6 +201,49 @@ export function buildFrontendOnboardingDailySeries(
       data: dailyAttempts.map(({ date, v3_attempts }) => ({ date, value: v3_attempts })),
     },
   ]
+}
+
+const DAILY_SETUP_CLI_OUTCOME_COLORS: Record<FrontendOnboardingDailySetupCliOutcomeKey, string> = {
+  cli_copy_init: '#047857',
+  ai_copy_init: '#10b981',
+  both_copy_init: '#34d399',
+  no_copy_init: '#86efac',
+  cli_copy_other_cli: '#1d4ed8',
+  ai_copy_other_cli: '#3b82f6',
+  both_copy_other_cli: '#7c3aed',
+  no_copy_other_cli: '#a78bfa',
+  cli_copy_no_cli: '#c2410c',
+  ai_copy_no_cli: '#f97316',
+  both_copy_no_cli: '#fbbf24',
+  no_action: '#94a3b8',
+}
+
+export function buildFrontendOnboardingDailySetupCliSeries(
+  points: readonly FrontendOnboardingDailySetupCliOutcomePoint[],
+  labels: Record<FrontendOnboardingDailySetupCliOutcomeKey, string>,
+  firstTimeLabel: string,
+  returningLabel: string,
+): FrontendOnboardingDailySeries[] {
+  const activeKeys = FRONTEND_ONBOARDING_DAILY_SETUP_CLI_OUTCOME_KEYS.filter(key => points.some(
+    point => point.first_time[key] + point.returning[key] > 0,
+  ))
+
+  return activeKeys.flatMap(key => ([
+    {
+      label: labels[key],
+      color: DAILY_SETUP_CLI_OUTCOME_COLORS[key],
+      stack: 'first_time' as const,
+      stackLabel: firstTimeLabel,
+      data: points.map(point => ({ date: point.date, value: point.first_time[key] })),
+    },
+    {
+      label: labels[key],
+      color: DAILY_SETUP_CLI_OUTCOME_COLORS[key],
+      stack: 'returning' as const,
+      stackLabel: returningLabel,
+      data: points.map(point => ({ date: point.date, value: point.returning[key] })),
+    },
+  ]))
 }
 
 export function buildFrontendOnboardingFunnelStages(

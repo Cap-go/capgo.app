@@ -19,6 +19,8 @@ interface DataSeries {
   label: string
   data: Array<{ date: string, value: number }>
   color: string
+  stack?: string
+  stackLabel?: string
 }
 
 const props = defineProps({
@@ -56,6 +58,8 @@ const chartData = computed(() => {
     label: item.label,
     data: item.data.map(point => point.value),
     color: item.color,
+    stack: item.stack,
+    stackLabel: item.stackLabel,
   }))
 
   return applyAdminStackedBarAccessibleBorders(
@@ -65,7 +69,8 @@ const chartData = computed(() => {
   )
 })
 
-const chartOptions = computed(() => buildAdminStackedBarChartOptions(isDark.value))
+const hasGroupedStacks = computed(() => props.series.some(item => item.stack !== undefined))
+const chartOptions = computed(() => buildAdminStackedBarChartOptions(isDark.value, hasGroupedStacks.value))
 </script>
 
 <template>

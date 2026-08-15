@@ -1,8 +1,12 @@
-import type { FrontendOnboardingAnalytics } from '../src/services/adminFrontendOnboarding'
+import type {
+  FrontendOnboardingAnalytics,
+  FrontendOnboardingDailySetupCliOutcomeCounts,
+} from '../src/services/adminFrontendOnboarding'
 import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 import {
   buildFrontendOnboardingDailySeries,
+  buildFrontendOnboardingDailySetupCliSeries,
   buildFrontendOnboardingFunnelStages,
   buildFrontendOnboardingFunnelSummaries,
   buildFrontendOnboardingGraphMetrics,
@@ -18,6 +22,23 @@ function deferred<T>() {
     reject = rejectPromise
   })
   return { promise, reject, resolve }
+}
+
+function setupCliOutcomeCounts(value: number): FrontendOnboardingDailySetupCliOutcomeCounts {
+  return {
+    cli_copy_init: value,
+    ai_copy_init: value,
+    both_copy_init: value,
+    no_copy_init: value,
+    cli_copy_other_cli: value,
+    ai_copy_other_cli: value,
+    both_copy_other_cli: value,
+    no_copy_other_cli: value,
+    cli_copy_no_cli: value,
+    ai_copy_no_cli: value,
+    both_copy_no_cli: value,
+    no_action: value,
+  }
 }
 
 describe('admin frontend onboarding dashboard', () => {
@@ -95,6 +116,37 @@ describe('admin frontend onboarding dashboard', () => {
       cli_and_ai_instructions: 1,
       no_cli: 0,
     },
+    daily_setup_cli_outcomes: [{
+      date: '2026-08-10',
+      first_time: {
+        cli_copy_init: 2,
+        ai_copy_init: 0,
+        both_copy_init: 0,
+        no_copy_init: 0,
+        cli_copy_other_cli: 0,
+        ai_copy_other_cli: 0,
+        both_copy_other_cli: 0,
+        no_copy_other_cli: 0,
+        cli_copy_no_cli: 0,
+        ai_copy_no_cli: 0,
+        both_copy_no_cli: 0,
+        no_action: 0,
+      },
+      returning: {
+        cli_copy_init: 0,
+        ai_copy_init: 0,
+        both_copy_init: 0,
+        no_copy_init: 0,
+        cli_copy_other_cli: 0,
+        ai_copy_other_cli: 0,
+        both_copy_other_cli: 0,
+        no_copy_other_cli: 0,
+        cli_copy_no_cli: 0,
+        ai_copy_no_cli: 1,
+        both_copy_no_cli: 0,
+        no_action: 0,
+      },
+    }],
     posthog_configured: true,
     posthog_connected: true,
   }
@@ -130,6 +182,136 @@ describe('admin frontend onboarding dashboard', () => {
       { label: 'V1', color: '#a78bfa', data: [] },
       { label: 'V2', color: '#06b6d4', data: [] },
       { label: 'V3', color: '#10b981', data: [] },
+    ])
+  })
+
+  it.concurrent('builds paired stacks only for Setup CLI outcome categories present in the range', () => {
+    const labels = {
+      cli_copy_init: 'CLI copy + init',
+      ai_copy_init: 'AI copy + init',
+      both_copy_init: 'Both copied + init',
+      no_copy_init: 'No copy + init',
+      cli_copy_other_cli: 'CLI copy + other CLI',
+      ai_copy_other_cli: 'AI copy + other CLI',
+      both_copy_other_cli: 'Both copied + other CLI',
+      no_copy_other_cli: 'No copy + other CLI',
+      cli_copy_no_cli: 'CLI copied · no CLI run',
+      ai_copy_no_cli: 'AI copied · no CLI run',
+      both_copy_no_cli: 'Both copied · no CLI run',
+      no_action: 'No action',
+    }
+
+    const series = buildFrontendOnboardingDailySetupCliSeries(
+      analytics.daily_setup_cli_outcomes,
+      labels,
+      'First-time',
+      'Returning',
+    )
+
+    expect(series).toEqual([
+      {
+        label: 'CLI copy + init',
+        color: '#047857',
+        stack: 'first_time',
+        stackLabel: 'First-time',
+        data: [{ date: '2026-08-10', value: 2 }],
+      },
+      {
+        label: 'CLI copy + init',
+        color: '#047857',
+        stack: 'returning',
+        stackLabel: 'Returning',
+        data: [{ date: '2026-08-10', value: 0 }],
+      },
+      {
+        label: 'AI copied · no CLI run',
+        color: '#f97316',
+        stack: 'first_time',
+        stackLabel: 'First-time',
+        data: [{ date: '2026-08-10', value: 0 }],
+      },
+      {
+        label: 'AI copied · no CLI run',
+        color: '#f97316',
+        stack: 'returning',
+        stackLabel: 'Returning',
+        data: [{ date: '2026-08-10', value: 1 }],
+      },
+    ])
+    expect(series.some(item => item.label === 'No action')).toBe(false)
+  })
+
+  it.concurrent('keeps every date and uses the stable outcome order and colors', () => {
+    const outcomeKeys = [
+      'cli_copy_init',
+      'ai_copy_init',
+      'both_copy_init',
+      'no_copy_init',
+      'cli_copy_other_cli',
+      'ai_copy_other_cli',
+      'both_copy_other_cli',
+      'no_copy_other_cli',
+      'cli_copy_no_cli',
+      'ai_copy_no_cli',
+      'both_copy_no_cli',
+      'no_action',
+    ] as const
+    const colors = [
+      '#047857',
+      '#10b981',
+      '#34d399',
+      '#86efac',
+      '#1d4ed8',
+      '#3b82f6',
+      '#7c3aed',
+      '#a78bfa',
+      '#c2410c',
+      '#f97316',
+      '#fbbf24',
+      '#94a3b8',
+    ]
+    const zeroCounts = setupCliOutcomeCounts(0)
+    const activeCounts = setupCliOutcomeCounts(1)
+    const labels = {
+      cli_copy_init: 'Label cli_copy_init',
+      ai_copy_init: 'Label ai_copy_init',
+      both_copy_init: 'Label both_copy_init',
+      no_copy_init: 'Label no_copy_init',
+      cli_copy_other_cli: 'Label cli_copy_other_cli',
+      ai_copy_other_cli: 'Label ai_copy_other_cli',
+      both_copy_other_cli: 'Label both_copy_other_cli',
+      no_copy_other_cli: 'Label no_copy_other_cli',
+      cli_copy_no_cli: 'Label cli_copy_no_cli',
+      ai_copy_no_cli: 'Label ai_copy_no_cli',
+      both_copy_no_cli: 'Label both_copy_no_cli',
+      no_action: 'Label no_action',
+    }
+
+    const series = buildFrontendOnboardingDailySetupCliSeries([
+      {
+        date: '2026-08-09',
+        first_time: activeCounts,
+        returning: zeroCounts,
+      },
+      {
+        date: '2026-08-10',
+        first_time: zeroCounts,
+        returning: activeCounts,
+      },
+    ], labels, 'First-time', 'Returning')
+
+    expect(series).toHaveLength(outcomeKeys.length * 2)
+    expect(series.map(item => item.label)).toEqual(outcomeKeys.flatMap(key => [`Label ${key}`, `Label ${key}`]))
+    expect(series.map(item => item.color)).toEqual(colors.flatMap(color => [color, color]))
+    expect(series.map(item => item.stack)).toEqual(outcomeKeys.flatMap(() => ['first_time', 'returning']))
+    expect(series.map(item => item.stackLabel)).toEqual(outcomeKeys.flatMap(() => ['First-time', 'Returning']))
+    expect(series[0].data).toEqual([
+      { date: '2026-08-09', value: 1 },
+      { date: '2026-08-10', value: 0 },
+    ])
+    expect(series[1].data).toEqual([
+      { date: '2026-08-09', value: 0 },
+      { date: '2026-08-10', value: 1 },
     ])
   })
 
@@ -409,9 +591,9 @@ describe('admin frontend onboarding dashboard', () => {
     expect(source).toContain('<PageLoader')
     expect(source.match(/<AdminFilterBar(?:\s|\/?>)/g)).toHaveLength(1)
     expect(source.match(/<AdminStatsCard(?:\s|\/?>)/g)).toHaveLength(4)
-    expect(source.match(/<ChartCard(?:\s|\/?>)/g)).toHaveLength(5)
+    expect(source.match(/<ChartCard(?:\s|\/?>)/g)).toHaveLength(6)
     expect(source.match(/<AdminBarChart(?:\s|\/?>)/g)).toHaveLength(1)
-    expect(source.match(/<AdminStackedBarChart(?:\s|\/?>)/g)).toHaveLength(1)
+    expect(source.match(/<AdminStackedBarChart(?:\s|\/?>)/g)).toHaveLength(2)
     expect(source.match(/<AdminDailyConversionChart(?:\s|\/?>)/g)).toHaveLength(3)
     expect(source.match(/<AdminFunnelChart(?:\s|\/?>)/g)).toHaveLength(2)
     expect(source.match(/<AdminOnboardingJourneyGraph(?:\s|\/?>)/g)).toHaveLength(1)
@@ -419,6 +601,10 @@ describe('admin frontend onboarding dashboard', () => {
     expect(source).toContain('orientation="vertical"')
     expect(source).toContain(':values="setupCliOutcomeValues"')
     expect(source).toContain('visibleAnalytics.value?.v2_setup_cli_outcomes')
+    expect(source).toContain('buildFrontendOnboardingDailySetupCliSeries')
+    expect(source).toContain('visibleAnalytics.value?.daily_setup_cli_outcomes')
+    expect(source).toContain(':series="dailySetupCliSeries"')
+    expect(source).toContain('accessible-borders')
     expect(source).toContain('v-if="isLoadingStats" class="grid min-h-72 place-items-center"')
     expect(source).toContain(`t('frontend-onboarding-version-2')`)
     expect(source).toContain(`t('frontend-onboarding-version-3')`)
@@ -438,6 +624,7 @@ describe('admin frontend onboarding dashboard', () => {
     const organizationSetupChartIndex = source.indexOf(`t('frontend-onboarding-daily-organization-to-setup')`)
     const graphIndex = source.indexOf(`t('frontend-onboarding-graph-v3')`)
     const cliOutcomeIndex = source.indexOf(`t('frontend-onboarding-setup-cli-outcomes-v2')`)
+    const dailyCliOutcomeIndex = source.indexOf(`t('frontend-onboarding-daily-setup-cli-outcomes-v2')`)
     const legacyIndex = source.indexOf(`t('frontend-onboarding-funnel-v1-legacy')`)
     expect(v3FunnelIndex).toBeLessThan(graphIndex)
     expect(v3FunnelIndex).toBeLessThan(intentDetailsChartIndex)
@@ -445,7 +632,16 @@ describe('admin frontend onboarding dashboard', () => {
     expect(detailsOrganizationChartIndex).toBeLessThan(organizationSetupChartIndex)
     expect(organizationSetupChartIndex).toBeLessThan(graphIndex)
     expect(graphIndex).toBeLessThan(cliOutcomeIndex)
-    expect(cliOutcomeIndex).toBeLessThan(legacyIndex)
+    expect(cliOutcomeIndex).toBeLessThan(dailyCliOutcomeIndex)
+    expect(dailyCliOutcomeIndex).toBeLessThan(legacyIndex)
+
+    const dailyCliOutcomeSection = source.slice(dailyCliOutcomeIndex, legacyIndex)
+    expect(dailyCliOutcomeSection).toContain(':has-data="hasDailySetupCliOutcomeData"')
+    expect(dailyCliOutcomeSection).toContain(`t('frontend-onboarding-daily-setup-cli-outcomes-description')`)
+    expect(dailyCliOutcomeSection).toContain('<AdminStackedBarChart')
+    expect(dailyCliOutcomeSection).toContain(':series="dailySetupCliSeries"')
+    expect(dailyCliOutcomeSection).not.toContain(':total=')
+    expect(dailyCliOutcomeSection).not.toContain(':unit=')
     expect(source).not.toContain('id: \'organization_name\'')
     expect(source).not.toContain('id: \'organization_size\'')
     expect(source).not.toContain('id: \'invite_opened\'')
@@ -541,8 +737,24 @@ describe('admin frontend onboarding dashboard', () => {
     expect(messages['frontend-onboarding-setup-cli-outcomes-description']).toBe('Unique people who reached setup, grouped by their CLI and copied AI instruction activity within 24 hours')
     expect(messages['frontend-onboarding-setup-cli-only']).toBe('Started CLI')
     expect(messages['frontend-onboarding-setup-cli-and-ai']).toBe('Started CLI + AI instructions')
-    expect(messages['frontend-onboarding-setup-no-cli']).toBe("Didn't start CLI")
+    expect(messages['frontend-onboarding-setup-no-cli']).toBe('Didn\'t start CLI')
     expect(messages['frontend-onboarding-people']).toBe('people')
+    expect(messages['frontend-onboarding-daily-setup-cli-outcomes-v2']).toBe('Daily Setup → CLI outcomes (v2)')
+    expect(messages['frontend-onboarding-daily-setup-cli-outcomes-description']).toBe('Each person is counted once per UTC day. Left: first-time Setup views; right: returning views. Actions are attributed for up to 24 hours.')
+    expect(messages['frontend-onboarding-daily-setup-cli-first-time']).toBe('First-time')
+    expect(messages['frontend-onboarding-daily-setup-cli-returning']).toBe('Returning')
+    expect(messages['frontend-onboarding-daily-setup-cli-cli-copy-init']).toBe('CLI copy + init')
+    expect(messages['frontend-onboarding-daily-setup-cli-ai-copy-init']).toBe('AI copy + init')
+    expect(messages['frontend-onboarding-daily-setup-cli-both-copy-init']).toBe('Both copied + init')
+    expect(messages['frontend-onboarding-daily-setup-cli-no-copy-init']).toBe('No copy + init')
+    expect(messages['frontend-onboarding-daily-setup-cli-cli-copy-other-cli']).toBe('CLI copy + other CLI')
+    expect(messages['frontend-onboarding-daily-setup-cli-ai-copy-other-cli']).toBe('AI copy + other CLI')
+    expect(messages['frontend-onboarding-daily-setup-cli-both-copy-other-cli']).toBe('Both copied + other CLI')
+    expect(messages['frontend-onboarding-daily-setup-cli-no-copy-other-cli']).toBe('No copy + other CLI')
+    expect(messages['frontend-onboarding-daily-setup-cli-cli-copy-no-cli']).toBe('CLI copied · no CLI run')
+    expect(messages['frontend-onboarding-daily-setup-cli-ai-copy-no-cli']).toBe('AI copied · no CLI run')
+    expect(messages['frontend-onboarding-daily-setup-cli-both-copy-no-cli']).toBe('Both copied · no CLI run')
+    expect(messages['frontend-onboarding-daily-setup-cli-no-action']).toBe('No action')
     expect(messages['frontend-onboarding-demo-data']).toBeUndefined()
     expect(messages['frontend-onboarding-graph-stage-app-details']).toBe('App details')
     expect(messages['frontend-onboarding-graph-stage-organization-details']).toBe('Organization details')
