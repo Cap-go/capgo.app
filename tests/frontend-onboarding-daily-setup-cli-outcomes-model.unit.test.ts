@@ -66,7 +66,7 @@ describe('classifyFrontendOnboardingDailySetupCliOutcome', () => {
       'both_copy_no_cli',
       'no_action',
     ])
-    expect(new Set(FRONTEND_ONBOARDING_DAILY_SETUP_CLI_OUTCOME_KEYS)).toHaveLength(12)
+    expect(new Set(FRONTEND_ONBOARDING_DAILY_SETUP_CLI_OUTCOME_KEYS).size).toBe(12)
   })
 
   it('creates zero counts in canonical outcome order', () => {
@@ -226,13 +226,14 @@ describe('buildFrontendOnboardingDailySetupCliOutcomes', () => {
       { personId: 'person-b', timestampMs: august3 + 4_000, kind: 'cli_copy' },
     ], august3, august5)
 
-    expect(points.map(point => ({
-      date: point.date,
-      first_time: categoryTotal(point, 'first_time'),
-      returning: categoryTotal(point, 'returning'),
-    }))).toEqual([
-      { date: '2026-08-03', first_time: 2, returning: 0 },
-      { date: '2026-08-04', first_time: 0, returning: 1 },
-    ])
+    const expectedSetupPersonDays: Record<string, Record<'first_time' | 'returning', number>> = {
+      '2026-08-03': { first_time: 2, returning: 0 },
+      '2026-08-04': { first_time: 0, returning: 1 },
+    }
+
+    for (const point of points) {
+      for (const lifecycle of ['first_time', 'returning'] as const)
+        expect(categoryTotal(point, lifecycle)).toBe(expectedSetupPersonDays[point.date][lifecycle])
+    }
   })
 })

@@ -255,6 +255,32 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
     expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(2)
   })
 
+  it('propagates an aggregate query rejection while the daily query is configured', async () => {
+    queryPosthogHogqlMock
+      .mockRejectedValueOnce(new Error('aggregate PostHog request rejected'))
+      .mockResolvedValueOnce({ configured: true, connected: true, failureReason: null, rows: [] })
+
+    await expect(getAdminFrontendOnboardingAnalytics(
+      createContext(),
+      '2026-08-01T00:00:00.000Z',
+      '2026-08-03T00:00:00.000Z',
+    )).rejects.toThrow('aggregate PostHog request rejected')
+    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('propagates a daily query rejection while the aggregate query is configured', async () => {
+    queryPosthogHogqlMock
+      .mockResolvedValueOnce({ configured: true, connected: true, failureReason: null, rows: [] })
+      .mockRejectedValueOnce(new Error('daily PostHog request rejected'))
+
+    await expect(getAdminFrontendOnboardingAnalytics(
+      createContext(),
+      '2026-08-01T00:00:00.000Z',
+      '2026-08-03T00:00:00.000Z',
+    )).rejects.toThrow('daily PostHog request rejected')
+    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(2)
+  })
+
   it.each([
     { configured: false, connected: true, failureReason: null },
     { configured: true, connected: false, failureReason: null },

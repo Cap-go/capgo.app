@@ -237,6 +237,18 @@ Append inside the existing `describe` block:
     expect(points[1].first_time.cli_copy_other_cli).toBe(1)
     expect(Object.values(points[2].first_time).reduce((sum, value) => sum + value, 0)).toBe(0)
     expect(Object.values(points[2].returning).reduce((sum, value) => sum + value, 0)).toBe(0)
+
+    const expectedSetupPersonDays: Record<string, Record<'first_time' | 'returning', number>> = {
+      '2026-08-03': { first_time: 1, returning: 0 },
+      '2026-08-04': { first_time: 1, returning: 1 },
+      '2026-08-05': { first_time: 0, returning: 0 },
+    }
+    for (const point of points) {
+      for (const lifecycle of ['first_time', 'returning'] as const) {
+        const outcomeTotal = Object.values(point[lifecycle]).reduce((sum, value) => sum + value, 0)
+        expect(outcomeTotal).toBe(expectedSetupPersonDays[point.date][lifecycle])
+      }
+    }
   })
 
   it('uses an ownership-only tail anchor to prevent the last displayed day stealing an action', () => {
@@ -733,24 +745,44 @@ export function buildFrontendOnboardingDailySetupCliHogql(
     LIMIT ${FRONTEND_ONBOARDING_DAILY_SETUP_CLI_EVENT_LIMIT}`
 }
 
-function mapRows(rows: Record<string, unknown>[]): FrontendOnboardingDailySetupCliEvent[] {
+function timestampMs(value: unknown): number | null {
+  const timestamp = typeof value === 'number'
+    ? value
+    : typeof value === 'string' && /^\d+$/.test(value)
+      ? Number(value)
+      : Number.NaN
+  return Number.isSafeInteger(timestamp) && timestamp > 0 ? timestamp : null
+}
+
+function mapRows(c: Context, rows: Record<string, unknown>[]): FrontendOnboardingDailySetupCliEvent[] {
   const validKinds = new Set<FrontendOnboardingDailySetupCliEventKind>(['setup', 'cli_copy', 'ai_copy', 'cli_command'])
-  return rows.map((row) => {
-    const personId = typeof row.person_id === 'string' ? row.person_id.trim() : ''
-    const timestampMs = typeof row.timestamp_ms === 'number' ? row.timestamp_ms : Number(row.timestamp_ms)
-    const kind = typeof row.event_kind === 'string' ? row.event_kind as FrontendOnboardingDailySetupCliEventKind : null
-    const commandPath = typeof row.command_path === 'string' ? row.command_path.trim() : ''
+  return rows.map((row, rowIndex) => {
+    try {
+      const personId = typeof row.person_id === 'string' ? row.person_id.trim() : ''
+      const timestamp = timestampMs(row.timestamp_ms)
+      const kind = typeof row.event_kind === 'string' ? row.event_kind as FrontendOnboardingDailySetupCliEventKind : null
+      const commandPath = row.command_path
 
-    if (!personId || !Number.isFinite(timestampMs) || timestampMs <= 0 || !kind || !validKinds.has(kind))
-      throw new Error(INVALID_ROW_ERROR)
-    if (kind === 'cli_command' && !commandPath)
-      throw new Error(INVALID_ROW_ERROR)
+      if (!personId || timestamp === null || !kind || !validKinds.has(kind))
+        throw new Error(INVALID_ROW_ERROR)
+      if (kind === 'cli_command' && (typeof commandPath !== 'string' || commandPath.trim() === ''))
+        throw new Error(INVALID_ROW_ERROR)
 
-    return {
-      personId,
-      timestampMs,
-      kind,
-      ...(kind === 'cli_command' ? { commandPath } : {}),
+      return {
+        personId,
+        timestampMs: timestamp,
+        kind,
+        ...(kind === 'cli_command' ? { commandPath: commandPath as string } : {}),
+      }
+    }
+    catch (error) {
+      cloudlogErr({
+        requestId: c.get('requestId'),
+        message: 'frontend_onboarding_daily_setup_cli_invalid_row',
+        row_index: rowIndex,
+        returned_rows: rows.length,
+      })
+      throw error
     }
   })
 }
@@ -786,7 +818,7 @@ export async function getFrontendOnboardingDailySetupCliEvents(
     }
   }
 
-  return mapRows(posthog.rows)
+  return mapRows(c, posthog.rows)
 }
 ```
 
@@ -860,6 +892,29 @@ In `tests/frontend-onboarding-analytics.unit.test.ts`, add this test inside `des
       '2026-08-01T00:00:00.000Z',
       '2026-08-03T00:00:00.000Z',
     )).rejects.toThrow('daily Setup CLI analytics PostHog query failed')
+  })
+
+  it('propagates either PostHog promise rejection after starting both queries', async () => {
+    queryPosthogHogqlMock
+      .mockRejectedValueOnce(new Error('aggregate PostHog request rejected'))
+      .mockResolvedValueOnce({ configured: true, connected: true, failureReason: null, rows: [] })
+    await expect(getAdminFrontendOnboardingAnalytics(
+      createContext(),
+      '2026-08-01T00:00:00.000Z',
+      '2026-08-03T00:00:00.000Z',
+    )).rejects.toThrow('aggregate PostHog request rejected')
+    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(2)
+
+    queryPosthogHogqlMock.mockReset()
+    queryPosthogHogqlMock
+      .mockResolvedValueOnce({ configured: true, connected: true, failureReason: null, rows: [] })
+      .mockRejectedValueOnce(new Error('daily PostHog request rejected'))
+    await expect(getAdminFrontendOnboardingAnalytics(
+      createContext(),
+      '2026-08-01T00:00:00.000Z',
+      '2026-08-03T00:00:00.000Z',
+    )).rejects.toThrow('daily PostHog request rejected')
+    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(2)
   })
 ```
 
@@ -1112,11 +1167,6 @@ export function buildAdminStackedBarLegendItems(chart: AdminLegendDataChart): Le
     const dataset = rawDataset as AdminStackedBarChartDataset
     const label = dataset.label ?? ''
     if (!label || seen.has(label) || datasetTotal(dataset) === 0)
-      return []
-    const matching = chart.data.datasets
-      .map(candidate => candidate as AdminStackedBarChartDataset)
-      .filter(candidate => candidate.label === label)
-    if (matching.every(candidate => datasetTotal(candidate) === 0))
       return []
     seen.add(label)
     return [{
@@ -1643,9 +1693,9 @@ Expected: all unit tests pass, including the four onboarding analytics suites an
 Run:
 
 ```bash
-git diff --check <design-commit>..HEAD
+git diff --check origin/main...HEAD
 git status --short
-git diff <design-commit>..HEAD -- supabase/functions/_backend/utils/frontend_onboarding_analytics_model.ts
+git diff origin/main...HEAD -- supabase/functions/_backend/utils/frontend_onboarding_analytics_model.ts
 ```
 
 Expected:

@@ -374,6 +374,11 @@ describe('getFrontendOnboardingDailySetupCliEvents', () => {
     ['fractional timestamp', { person_id: 'person-1', timestamp_ms: 1000.5, event_kind: 'setup', command_path: '', total_events: 1 }],
     ['unsafe numeric timestamp', { person_id: 'person-1', timestamp_ms: Number.MAX_SAFE_INTEGER + 1, event_kind: 'setup', command_path: '', total_events: 1 }],
     ['unsafe numeric string timestamp', { person_id: 'person-1', timestamp_ms: String(Number.MAX_SAFE_INTEGER + 1), event_kind: 'setup', command_path: '', total_events: 1 }],
+    ['decimal numeric string timestamp', { person_id: 'person-1', timestamp_ms: '1000.0', event_kind: 'setup', command_path: '', total_events: 1 }],
+    ['scientific numeric string timestamp', { person_id: 'person-1', timestamp_ms: '1e3', event_kind: 'setup', command_path: '', total_events: 1 }],
+    ['whitespace-padded numeric string timestamp', { person_id: 'person-1', timestamp_ms: ' 1000 ', event_kind: 'setup', command_path: '', total_events: 1 }],
+    ['boolean timestamp', { person_id: 'person-1', timestamp_ms: true, event_kind: 'setup', command_path: '', total_events: 1 }],
+    ['array timestamp', { person_id: 'person-1', timestamp_ms: [1000], event_kind: 'setup', command_path: '', total_events: 1 }],
     ['non-numeric timestamp', { person_id: 'person-1', timestamp_ms: 'later', event_kind: 'setup', command_path: '', total_events: 1 }],
     ['unknown kind', { person_id: 'person-1', timestamp_ms: 1000, event_kind: 'unknown', command_path: '', total_events: 1 }],
     ['missing CLI path', { person_id: 'person-1', timestamp_ms: 1000, event_kind: 'cli_command', total_events: 1 }],
@@ -392,5 +397,11 @@ describe('getFrontendOnboardingDailySetupCliEvents', () => {
       '2026-08-03T00:00:00.000Z',
       '2026-08-04T00:00:00.000Z',
     )).rejects.toThrow('daily Setup CLI analytics row is invalid')
+    expect(cloudlogErrMock).toHaveBeenCalledWith({
+      requestId: 'request-id',
+      message: 'frontend_onboarding_daily_setup_cli_invalid_row',
+      row_index: 0,
+      returned_rows: 1,
+    })
   })
 })

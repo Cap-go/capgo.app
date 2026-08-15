@@ -103,8 +103,6 @@ export function buildAdminStackedBarLegendItems(
     const matchingDatasets = chart.data.datasets
       .map((candidate, index) => ({ candidate, index }))
       .filter(({ candidate }) => candidate.label === label)
-    if (matchingDatasets.every(({ candidate }) => datasetTotal(candidate) === 0))
-      return []
 
     seen.add(label)
     return [{

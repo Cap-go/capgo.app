@@ -20,7 +20,7 @@ function sqlStr(value: string): string {
 function timestampMs(value: unknown): number | null {
   const timestamp = typeof value === 'number'
     ? value
-    : typeof value === 'string' && value.trim() !== ''
+    : typeof value === 'string' && /^\d+$/.test(value)
       ? Number(value)
       : Number.NaN
 
@@ -154,5 +154,21 @@ export async function getFrontendOnboardingDailySetupCliEvents(
     }
   }
 
-  return posthog.rows.map(mapEvent)
+  const events: FrontendOnboardingDailySetupCliEvent[] = []
+  for (let rowIndex = 0; rowIndex < posthog.rows.length; rowIndex++) {
+    try {
+      events.push(mapEvent(posthog.rows[rowIndex]))
+    }
+    catch (error) {
+      cloudlogErr({
+        requestId: c.get('requestId'),
+        message: 'frontend_onboarding_daily_setup_cli_invalid_row',
+        row_index: rowIndex,
+        returned_rows: posthog.rows.length,
+      })
+      throw error
+    }
+  }
+
+  return events
 }
