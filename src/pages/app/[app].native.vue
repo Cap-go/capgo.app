@@ -3,7 +3,7 @@ import AppDashboardPage from '~/components/dashboard/AppDashboardPage.vue'
 </script>
 
 <template>
-  <AppDashboardPage section="usage" />
+  <AppDashboardPage section="native" />
 </template>
 
 <route lang="yaml">

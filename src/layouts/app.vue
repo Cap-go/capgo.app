@@ -5,6 +5,7 @@ import { useRoute, useRouter } from 'vue-router'
 import PaymentRequiredModal from '~/components/PaymentRequiredModal.vue'
 import Tabs from '~/components/Tabs.vue'
 import UnpaidState from '~/components/UnpaidState.vue'
+import { appDashboardTabs, isAppDashboardPath } from '~/constants/appDashboardTabs'
 import { appSettingsTabs } from '~/constants/appSettingsTabs'
 import { appTabs as baseAppTabs } from '~/constants/appTabs'
 import { bundleTabs } from '~/constants/bundleTabs'
@@ -131,6 +132,8 @@ const appSectionType = computed(() => {
     return 'observe'
   if (/^\/app\/[^/]+\/settings(?:\/|$)/.test(route.path))
     return 'settings'
+  if (isAppDashboardPath(route.path))
+    return 'dashboard'
   return null
 })
 
@@ -145,6 +148,8 @@ const secondaryTabBasePath = computed(() => {
     return `/app/${appRouteSegment.value}/observe`
   if (secondaryTabType.value === 'settings')
     return `/app/${appRouteSegment.value}/settings`
+  if (secondaryTabType.value === 'dashboard')
+    return `/app/${appRouteSegment.value}`
   return ''
 })
 
@@ -155,6 +160,7 @@ const tabsConfig: Record<string, Tab[]> = {
   bundle: bundleTabs,
   observe: observeTabs,
   settings: appSettingsTabs,
+  dashboard: appDashboardTabs,
 }
 
 // Generate secondary tabs with full paths for the current resource or app section
@@ -187,6 +193,8 @@ const activeTab = computed(() => {
     return `/app/${appRouteSegment.value}/observe/updater`
   if (appSectionType.value === 'settings')
     return `/app/${appRouteSegment.value}/settings`
+  if (appSectionType.value === 'dashboard')
+    return `/app/${appRouteSegment.value}`
   // If on a resource detail page (bundle/channel/device), keep parent tab active
   if (resourceType.value) {
     const parentTab = parentTabMap[resourceType.value]
