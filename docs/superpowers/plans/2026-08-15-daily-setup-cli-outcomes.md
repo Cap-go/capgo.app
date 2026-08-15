@@ -1643,9 +1643,9 @@ Expected: all unit tests pass, including the four onboarding analytics suites an
 Run:
 
 ```bash
-git diff --check 07ba500a2..HEAD
+git diff --check <design-commit>..HEAD
 git status --short
-git diff 07ba500a2..HEAD -- supabase/functions/_backend/utils/frontend_onboarding_analytics_model.ts
+git diff <design-commit>..HEAD -- supabase/functions/_backend/utils/frontend_onboarding_analytics_model.ts
 ```
 
 Expected:
