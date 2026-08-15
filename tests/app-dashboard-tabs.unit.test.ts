@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { isAppDashboardPath } from '../src/constants/appDashboardTabs'
+import { isAppDashboardPath } from '../src/utils/appDashboardPath'
 
 test('isAppDashboardPath only matches the app overview and its subtabs', () => {
   expect(isAppDashboardPath('/app/com.demo.app')).toBe(true)

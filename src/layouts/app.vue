@@ -5,7 +5,7 @@ import { useRoute, useRouter } from 'vue-router'
 import PaymentRequiredModal from '~/components/PaymentRequiredModal.vue'
 import Tabs from '~/components/Tabs.vue'
 import UnpaidState from '~/components/UnpaidState.vue'
-import { appDashboardTabs, isAppDashboardPath } from '~/constants/appDashboardTabs'
+import { appDashboardTabs } from '~/constants/appDashboardTabs'
 import { appSettingsTabs } from '~/constants/appSettingsTabs'
 import { appTabs as baseAppTabs } from '~/constants/appTabs'
 import { bundleTabs } from '~/constants/bundleTabs'
@@ -13,6 +13,7 @@ import { channelTabs } from '~/constants/channelTabs'
 import { deviceTabs } from '~/constants/deviceTabs'
 import { observeTabs } from '~/constants/observeTabs'
 import { useOrganizationStore } from '~/stores/organization'
+import { isAppDashboardPath } from '~/utils/appDashboardPath'
 
 const router = useRouter()
 const route = useRoute()
