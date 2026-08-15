@@ -1,5 +1,9 @@
+export const APP_DASHBOARD_SUBTABS = ['native', 'installs', 'active-bundle'] as const
+
+export type AppDashboardSubtab = typeof APP_DASHBOARD_SUBTABS[number]
+export type AppDashboardSection = 'usage' | AppDashboardSubtab
+
 const RESERVED_APP_SEGMENTS = new Set(['new', 'modules', 'modules_test'])
-const DASHBOARD_SUBTABS = new Set(['native', 'installs', 'active-bundle'])
 
 export function isAppDashboardPath(path: string) {
   const parts = path.replace(/\/$/, '').split('/').filter(Boolean)
@@ -9,5 +13,5 @@ export function isAppDashboardPath(path: string) {
     return false
   if (parts.length === 2)
     return true
-  return DASHBOARD_SUBTABS.has(parts[2])
+  return (APP_DASHBOARD_SUBTABS as readonly string[]).includes(parts[2])
 }

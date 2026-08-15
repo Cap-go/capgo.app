@@ -12,7 +12,7 @@ import DeploymentStatsCard from '~/components/dashboard/DeploymentStatsCard.vue'
 import DevicesStats from '~/components/dashboard/DevicesStats.vue'
 import ReleaseBanner from '~/components/dashboard/ReleaseBanner.vue'
 import UpdateStatsCard from '~/components/dashboard/UpdateStatsCard.vue'
-import { getCapgoVersion, useSupabase } from '~/services/supabase'
+import { useSupabase } from '~/services/supabase'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
@@ -25,11 +25,6 @@ const props = defineProps<{
 const id = ref('')
 const route = useRoute()
 const lastAppId = ref('')
-const bundlesNb = ref(0)
-const devicesNb = ref(0)
-const updatesNb = ref(0)
-const channelsNb = ref(0)
-const capgoVersion = ref('')
 const main = useMainStore()
 const organizationStore = useOrganizationStore()
 const dashboardAppsStore = useDashboardAppsStore()
@@ -43,11 +38,7 @@ const usageComponent = ref<{
   reloadTrigger: number
 } | null>(null)
 const appNotFound = ref(false)
-const appOrganization = computed(() => {
-  if (!id.value)
-    return undefined
-  return organizationStore.getOrgByAppId(id.value) ?? organizationStore.currentOrganization
-})
+let loadGeneration = 0
 
 const lacksSecurityAccess = computed(() => {
   const org = organizationStore.currentOrganization
@@ -65,64 +56,38 @@ const chartPeriodProps = computed(() => {
   }
 })
 
-async function loadAppInfo() {
+async function loadAppInfo(requestedId: string, generation: number) {
   app.value = undefined
   try {
     await organizationStore.awaitInitialLoad()
+    if (generation !== loadGeneration || id.value !== requestedId)
+      return
+
     const { data: dataApp, error } = await supabase
       .from('apps')
       .select()
-      .eq('app_id', id.value)
+      .eq('app_id', requestedId)
       .single()
+
+    if (generation !== loadGeneration || id.value !== requestedId)
+      return
 
     if (error || !dataApp) {
       appNotFound.value = true
       return
     }
 
-    const appId = id.value
-    const subscriptionStart = appOrganization.value?.subscription_start
     appNotFound.value = false
-
-    const [
-      capgoVersionResult,
-      updatesCount,
-      devicesCount,
-      bundlesCount,
-      channelsCount,
-    ] = await Promise.all([
-      getCapgoVersion(appId, dataApp.last_version),
-      main.getTotalStatsByApp(appId, subscriptionStart),
-      main.getTotalMauByApp(appId, subscriptionStart),
-      supabase
-        .from('app_versions')
-        .select('*', { count: 'exact', head: true })
-        .eq('app_id', appId)
-        .eq('deleted', false)
-        .then(({ count }) => count ?? 0),
-      supabase
-        .from('channels')
-        .select('*', { count: 'exact', head: true })
-        .eq('app_id', appId)
-        .then(({ count }) => count ?? 0),
-    ])
-
-    if (id.value !== appId)
-      return
-
     app.value = dataApp
-    capgoVersion.value = capgoVersionResult
-    updatesNb.value = updatesCount
-    devicesNb.value = devicesCount
-    bundlesNb.value = bundlesCount
-    channelsNb.value = channelsCount
     dashboardAppsStore.upsertApp({
-      app_id: appId,
+      app_id: requestedId,
       name: dataApp.name ?? null,
       ownerOrgId: dataApp.owner_org,
     })
   }
   catch (error) {
+    if (generation !== loadGeneration || id.value !== requestedId)
+      return
     console.error(error)
     appNotFound.value = true
     app.value = undefined
@@ -130,15 +95,24 @@ async function loadAppInfo() {
 }
 
 async function refreshData() {
+  const requestedId = id.value
+  const generation = ++loadGeneration
   isLoading.value = true
   try {
     await main.awaitInitialLoad()
-    await loadAppInfo()
+    if (generation !== loadGeneration || id.value !== requestedId)
+      return
+    await loadAppInfo(requestedId, generation)
   }
   catch (error) {
+    if (generation !== loadGeneration || id.value !== requestedId)
+      return
     console.error(error)
   }
-  isLoading.value = false
+  finally {
+    if (generation === loadGeneration)
+      isLoading.value = false
+  }
 }
 
 watchEffect(async () => {
