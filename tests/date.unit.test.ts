@@ -98,7 +98,7 @@ describe('date helpers', () => {
     const startDate = new Date(Date.UTC(2026, 0, 31))
     const endDate = new Date(Date.UTC(2026, 1, 2))
 
-    expect(generateChartDayLabels(true, startDate, endDate)).toEqual([
+    expect(generateChartDayLabels(startDate, endDate)).toEqual([
       formatLocalDateShort(utcCalendarDayAsLocalDate(startDate)),
       formatLocalDateShort(utcCalendarDayAsLocalDate(new Date(Date.UTC(2026, 1, 1)))),
       formatLocalDateShort(utcCalendarDayAsLocalDate(endDate)),
@@ -141,12 +141,12 @@ describe('date helpers', () => {
     const oneDay = getLastNUtcDaysRange(1)
     expect(formatUtcDateParam(oneDay.startDate)).toBe(formatUtcDateParam(oneDay.endDate))
     expect(formatUtcDateParam(oneDay.endDate)).toBe(formatUtcDateParam(normalizeToUtcStartOfDay(new Date())))
-    expect(generateChartDayLabels(false, oneDay.startDate, oneDay.endDate)).toHaveLength(1)
+    expect(generateChartDayLabels(oneDay.startDate, oneDay.endDate)).toHaveLength(1)
 
     const sevenDays = getLastNUtcDaysRange(7)
     const sevenSpan = Math.round((sevenDays.endDate.getTime() - sevenDays.startDate.getTime()) / (24 * 60 * 60 * 1000))
     expect(sevenSpan).toBe(6)
-    expect(generateChartDayLabels(false, sevenDays.startDate, sevenDays.endDate)).toHaveLength(7)
+    expect(generateChartDayLabels(sevenDays.startDate, sevenDays.endDate)).toHaveLength(7)
   })
 
   it('keeps formatUtcDateParam stable for date-only strings', () => {

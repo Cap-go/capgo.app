@@ -251,7 +251,7 @@ export function getChartDateRange(useBillingPeriod: boolean, billingStart?: Date
   return getLastNUtcDaysRange(dayCount)
 }
 
-export function generateChartDayLabels(_useBillingPeriod: boolean, startDate: Date, endDate: Date) {
+export function generateChartDayLabels(startDate: Date, endDate: Date) {
   return getDatesInRange(startDate, endDate).map(formatLocalDateShort)
 }
 

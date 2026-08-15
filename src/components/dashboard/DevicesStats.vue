@@ -311,7 +311,7 @@ function generateDayLabels(_totalLength: number) {
 
   // Both modes: generate labels for the full date range
   const { startDate, endDate } = currentRange.value
-  return generateChartDayLabels(props.useBillingPeriod, startDate, endDate)
+  return generateChartDayLabels(startDate, endDate)
 }
 
 const processedChartData = computed<ChartData<'line'> | null>(() => {
