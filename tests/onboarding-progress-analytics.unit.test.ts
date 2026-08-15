@@ -114,7 +114,9 @@ describe('onboarding progress analytics', () => {
   })
 
   it.concurrent('keeps resume identity metadata valid when lifecycle capture throws', () => {
-    const capture = vi.fn(() => {
+    const capturedEvents: string[] = []
+    const capture = vi.fn((name: string) => {
+      capturedEvents.push(name)
       throw new Error('PostHog unavailable')
     })
     const createIdentity = () => {
@@ -141,7 +143,7 @@ describe('onboarding progress analytics', () => {
     expect(() => restartedIdentity.recordResumeDialogViewed()).not.toThrow()
     expect(() => restartedIdentity.recordResumeRestarted()).not.toThrow()
 
-    expect(capture.mock.calls.map(call => call[0])).toEqual([
+    expect(capturedEvents).toEqual([
       'onboarding_resume_dialog_viewed',
       'onboarding_resume_continued',
       'onboarding_resume_dialog_viewed',
