@@ -110,7 +110,7 @@ describe('admin frontend onboarding dashboard', () => {
         { key: 'import_clicked', count: 1 },
       ],
     },
-    v2_setup_cli_outcomes: {
+    v2_v3_setup_cli_outcomes: {
       total_users: 2,
       cli_only: 1,
       cli_and_ai_instructions: 1,
@@ -600,7 +600,7 @@ describe('admin frontend onboarding dashboard', () => {
     expect(source).toContain('<AdminOnboardingJourneyGraph v-else :config="onboardingGraphV3" />')
     expect(source).toContain('orientation="vertical"')
     expect(source).toContain(':values="setupCliOutcomeValues"')
-    expect(source).toContain('visibleAnalytics.value?.v2_setup_cli_outcomes')
+    expect(source).toContain('visibleAnalytics.value?.v2_v3_setup_cli_outcomes')
     expect(source).toContain('buildFrontendOnboardingDailySetupCliSeries')
     expect(source).toContain('visibleAnalytics.value?.daily_setup_cli_outcomes')
     expect(source).toContain(':series="dailySetupCliSeries"')
@@ -623,8 +623,8 @@ describe('admin frontend onboarding dashboard', () => {
     const detailsOrganizationChartIndex = source.indexOf(`t('frontend-onboarding-daily-details-to-organization')`)
     const organizationSetupChartIndex = source.indexOf(`t('frontend-onboarding-daily-organization-to-setup')`)
     const graphIndex = source.indexOf(`t('frontend-onboarding-graph-v3')`)
-    const cliOutcomeIndex = source.indexOf(`t('frontend-onboarding-setup-cli-outcomes-v2')`)
-    const dailyCliOutcomeIndex = source.indexOf(`t('frontend-onboarding-daily-setup-cli-outcomes-v2')`)
+    const cliOutcomeIndex = source.indexOf(`t('frontend-onboarding-setup-cli-outcomes-v2-v3')`)
+    const dailyCliOutcomeIndex = source.indexOf(`t('frontend-onboarding-daily-setup-cli-outcomes-v2-v3')`)
     const legacyIndex = source.indexOf(`t('frontend-onboarding-funnel-v1-legacy')`)
     expect(v3FunnelIndex).toBeLessThan(graphIndex)
     expect(v3FunnelIndex).toBeLessThan(intentDetailsChartIndex)
@@ -733,13 +733,13 @@ describe('admin frontend onboarding dashboard', () => {
     expect(messages['frontend-onboarding-funnel-v2']).toBe('Onboarding funnel (v2)')
     expect(messages['frontend-onboarding-funnel-v1-legacy']).toBe('Onboarding funnel (v1, legacy)')
     expect(messages['frontend-onboarding-graph-v2']).toBe('Onboarding graph (v2)')
-    expect(messages['frontend-onboarding-setup-cli-outcomes-v2']).toBe('Setup → CLI outcomes (v2)')
+    expect(messages['frontend-onboarding-setup-cli-outcomes-v2-v3']).toBe('Setup → CLI outcomes (v2 and v3)')
     expect(messages['frontend-onboarding-setup-cli-outcomes-description']).toBe('Unique people who reached setup, grouped by their CLI and copied AI instruction activity within 24 hours')
     expect(messages['frontend-onboarding-setup-cli-only']).toBe('Started CLI')
     expect(messages['frontend-onboarding-setup-cli-and-ai']).toBe('Started CLI + AI instructions')
     expect(messages['frontend-onboarding-setup-no-cli']).toBe('Didn\'t start CLI')
     expect(messages['frontend-onboarding-people']).toBe('people')
-    expect(messages['frontend-onboarding-daily-setup-cli-outcomes-v2']).toBe('Daily Setup → CLI outcomes (v2)')
+    expect(messages['frontend-onboarding-daily-setup-cli-outcomes-v2-v3']).toBe('Daily Setup → CLI outcomes (v2 and v3)')
     expect(messages['frontend-onboarding-daily-setup-cli-outcomes-description']).toBe('Each person is counted once per UTC day. Left: first-time Setup views; right: returning views. Actions are attributed for up to 24 hours.')
     expect(messages['frontend-onboarding-daily-setup-cli-first-time']).toBe('First-time')
     expect(messages['frontend-onboarding-daily-setup-cli-returning']).toBe('Returning')

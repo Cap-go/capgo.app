@@ -78,7 +78,7 @@ export function buildFrontendOnboardingDailySetupCliHogql(
       WHERE event = 'onboarding_step_viewed'
         AND JSONExtractString(toString(properties), 'flow') = 'pre_org'
         AND JSONExtractString(toString(properties), '$host') = ${sqlStr(FRONTEND_ONBOARDING_PRODUCTION_HOST)}
-        AND toIntOrZero(toString(properties.onboarding_version)) = 2
+        AND toIntOrZero(toString(properties.onboarding_version)) IN (2, 3)
         AND JSONExtractString(toString(properties), 'step') = 'setup'
         AND timestamp >= parseDateTimeBestEffort(${sqlStr(startDate)})
         AND timestamp < parseDateTimeBestEffort(${sqlStr(endDate)})
@@ -105,7 +105,7 @@ export function buildFrontendOnboardingDailySetupCliHogql(
           selected_events.event IN ('onboarding_step_viewed', 'onboarding_cli_command_copied', 'onboarding_ai_instructions_copied')
           AND JSONExtractString(toString(selected_events.properties), 'flow') = 'pre_org'
           AND JSONExtractString(toString(selected_events.properties), '$host') = ${sqlStr(FRONTEND_ONBOARDING_PRODUCTION_HOST)}
-          AND toIntOrZero(toString(selected_events.properties.onboarding_version)) = 2
+          AND toIntOrZero(toString(selected_events.properties.onboarding_version)) IN (2, 3)
           AND JSONExtractString(toString(selected_events.properties), 'step') = 'setup'
         )
       )
