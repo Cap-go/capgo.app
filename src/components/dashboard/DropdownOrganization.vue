@@ -275,7 +275,7 @@ function closeDropdown(options?: { restoreFocus?: boolean }) {
 }
 
 onKeyStroke('Escape', (event) => {
-  if (!compactMenuOpen.value && !dropdown.value?.open)
+  if (!compactMenuOpen.value)
     return
   event.preventDefault()
   closeDropdown({ restoreFocus: true })
