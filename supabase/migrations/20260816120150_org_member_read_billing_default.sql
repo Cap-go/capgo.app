@@ -405,7 +405,7 @@ BEGIN
     o.id AS gid,
     o.created_by,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR ba.should_redact_billing THEN NULL::timestamptz
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR billing_acc.should_redact_billing THEN NULL::timestamptz
       ELSE o.created_at
     END AS created_at,
     o.logo,
@@ -414,41 +414,41 @@ BEGIN
     COALESCE(pi.role_name::varchar, ror.role_name::varchar, public.rbac_role_org_member()::varchar) AS role,
     (pi.org_id IS NOT NULL) AS is_invite,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR ba.should_redact_billing THEN false
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR billing_acc.should_redact_billing THEN false
       ELSE COALESCE(si.status = 'succeeded', false)
     END AS paying,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR ba.should_redact_billing THEN 0
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR billing_acc.should_redact_billing THEN 0
       ELSE GREATEST(COALESCE((si.trial_at::date - NOW()::date), 0), 0)::integer
     END AS trial_left,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR ba.should_redact_billing THEN false
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR billing_acc.should_redact_billing THEN false
       ELSE COALESCE((si.status = 'succeeded' AND si.is_good_plan = true)
         OR (si.trial_at::date - NOW()::date > 0)
         OR COALESCE(ucb.available_credits, 0) > 0, false)
     END AS can_use_more,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR ba.should_redact_billing THEN false
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR billing_acc.should_redact_billing THEN false
       ELSE COALESCE(si.status = 'canceled', false)
     END AS is_canceled,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR ba.should_redact_billing THEN 0::bigint
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR billing_acc.should_redact_billing THEN 0::bigint
       ELSE COALESCE(ac.cnt, 0)
     END AS app_count,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR ba.should_redact_billing THEN NULL::timestamptz
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR billing_acc.should_redact_billing THEN NULL::timestamptz
       ELSE bc.cycle_start
     END AS subscription_start,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR ba.should_redact_billing THEN NULL::timestamptz
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR billing_acc.should_redact_billing THEN NULL::timestamptz
       ELSE (bc.cycle_start + INTERVAL '1 MONTH')
     END AS subscription_end,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR ba.should_redact_billing THEN NULL::text
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR billing_acc.should_redact_billing THEN NULL::text
       ELSE o.management_email
     END AS management_email,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR ba.should_redact_billing THEN false
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR billing_acc.should_redact_billing THEN false
       ELSE COALESCE(si.price_id = p.price_y_id, false)
     END AS is_yearly,
     o.stats_updated_at,
@@ -459,15 +459,15 @@ BEGIN
       ELSE NULL
     END AS next_stats_update_at,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR ba.should_redact_billing THEN NULL::numeric
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR billing_acc.should_redact_billing THEN NULL::numeric
       ELSE COALESCE(ucb.available_credits, 0)
     END AS credit_available,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR ba.should_redact_billing THEN NULL::numeric
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR billing_acc.should_redact_billing THEN NULL::numeric
       ELSE COALESCE(ucb.total_credits, 0)
     END AS credit_total,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR ba.should_redact_billing THEN NULL::timestamptz
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR billing_acc.should_redact_billing THEN NULL::timestamptz
       ELSE ucb.next_expiration
     END AS credit_next_expiration,
     tfa.enforcing_2fa,
@@ -485,7 +485,7 @@ BEGIN
   LEFT JOIN rbac_org_roles ror ON ror.org_id = o.id
   LEFT JOIN two_fa_access tfa ON tfa.org_id = o.id
   LEFT JOIN password_policy_access ppa ON ppa.org_id = o.id
-  LEFT JOIN billing_access ba ON ba.org_id = o.id
+  LEFT JOIN billing_access billing_acc ON billing_acc.org_id = o.id
   LEFT JOIN public.stripe_info si ON o.customer_id = si.customer_id
   LEFT JOIN public.plans p ON si.product_id = p.stripe_id
   LEFT JOIN app_counts ac ON ac.owner_org = o.id
