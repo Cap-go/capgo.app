@@ -11,6 +11,19 @@ export interface ImagePathScope {
   appId?: string
 }
 
+function decodePathname(pathname: string) {
+  try {
+    return decodeURIComponent(pathname)
+  }
+  catch {
+    return pathname
+  }
+}
+
+function matchStorageImagePath(pathname: string) {
+  return STORAGE_URL_REGEX.exec(decodePathname(pathname))
+}
+
 function originFromEnvUrl(raw: string) {
   const trimmed = raw.trim()
   if (!trimmed)
@@ -40,7 +53,7 @@ export function getStorageAllowedOrigins(c: Context): string[] {
 
 export function isSupabaseStorageImageUrl(raw: string) {
   try {
-    return STORAGE_URL_REGEX.test(new URL(raw).pathname)
+    return !!matchStorageImagePath(new URL(raw).pathname)
   }
   catch {
     return false
@@ -80,7 +93,7 @@ export function normalizeImagePath(
 
   try {
     const url = new URL(trimmed)
-    const match = STORAGE_URL_REGEX.exec(url.pathname)
+    const match = matchStorageImagePath(url.pathname)
     if (match?.[1]) {
       // Require an explicit allow-list; empty list means misconfigured, not open.
       const allowed = options?.allowedOrigins ?? []
@@ -166,7 +179,7 @@ export async function createSignedImageUrl(
   if (rawPath.includes('://')) {
     try {
       const url = new URL(rawPath)
-      const isOurStoragePath = STORAGE_URL_REGEX.test(url.pathname)
+      const isOurStoragePath = !!matchStorageImagePath(url.pathname)
         && allowedOrigins.includes(url.origin)
       if (!isOurStoragePath)
         return rawPath

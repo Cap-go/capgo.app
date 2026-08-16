@@ -165,4 +165,15 @@ describe('image path ownership for signed URLs', () => {
       ['https://example.supabase.co'],
     )).toBe('org/org-1/logo/a.png')
   })
+
+  it('detects percent-encoded storage routes as storage-shaped URLs', () => {
+    const encodedEvil = 'https://evil.example/%73torage/v1/object/sign/images/org/org-1/logo/a.png'
+    expect(isSupabaseStorageImageUrl(encodedEvil)).toBe(true)
+    expect(resolveWritableImageValue(encodedEvil, { orgId: 'org-1' }, ['https://example.supabase.co']))
+      .toBeNull()
+    expect(normalizeImagePath(
+      'https://example.supabase.co/%73torage/v1/object/sign/images/org/org-1/logo/a.png',
+      { allowedOrigins: ['https://example.supabase.co'] },
+    )).toBe('org/org-1/logo/a.png')
+  })
 })
