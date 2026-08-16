@@ -12,6 +12,7 @@ import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
 import { closeClient, getPgClient, logPgError } from '../utils/pg.ts'
 import { checkPermission } from '../utils/rbac.ts'
+import { getRollingStatsPeriod } from '../utils/statsPeriod.ts'
 import { supabaseAdmin, supabaseClient as useSupabaseClient } from '../utils/supabase.ts'
 
 dayjs.extend(utc)
@@ -700,10 +701,11 @@ async function readUpdateDeliveryStats(
   if (cached)
     return cached
 
-  const endExclusive = dayjs().utc().add(1, 'day').startOf('day')
-  const start = endExclusive.subtract(days, 'day')
-  const endInclusive = endExclusive.subtract(1, 'millisecond')
-  const labels = generateDateLabels(start.toDate(), endExclusive.subtract(1, 'day').toDate())
+  const period = getRollingStatsPeriod(days)
+  const start = dayjs(period.start)
+  const endExclusive = dayjs(period.endExclusive)
+  const endInclusive = dayjs(period.endInclusive)
+  const labels = period.labels
 
   // Same dual-path pattern as private/stats: Analytics Engine in prod, Postgres locally.
   if (c.env.APP_LOG) {

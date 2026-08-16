@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import type { ChartData, ChartOptions, Plugin } from 'chart.js'
-import type { PeriodDayOption } from './PeriodDaySelector.vue'
 import type { TooltipClickHandler } from '~/services/chartTooltip'
 import type { Organization } from '~/stores/organization'
 import { useDark } from '@vueuse/core'
@@ -9,6 +8,7 @@ import { computed, ref, watch } from 'vue'
 import { Line } from 'vue-chartjs'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
+import { usePeriodDaysQuery } from '~/composables/usePeriodDaysQuery'
 import { createChartScales } from '~/services/chartConfig'
 import { useChartData } from '~/services/chartDataService'
 import { createTooltipConfig, todayLinePlugin, verticalLinePlugin } from '~/services/chartTooltip'
@@ -168,7 +168,7 @@ const tooltipClickHandler = computed<TooltipClickHandler | undefined>(() => {
   }
 })
 const isLoading = ref(true)
-const periodDays = ref<PeriodDayOption>(1)
+const { days: periodDays } = usePeriodDaysQuery()
 const currentRange = ref<{ startDate: Date, endDate: Date } | null>(null)
 let requestToken = 0
 

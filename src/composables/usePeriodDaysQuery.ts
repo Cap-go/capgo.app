@@ -1,0 +1,32 @@
+import type { PeriodDayOption } from '~/components/dashboard/PeriodDaySelector.vue'
+import { computed } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+
+export const PERIOD_DAY_OPTIONS: PeriodDayOption[] = [1, 3, 7, 30]
+export const DEFAULT_PERIOD_DAYS: PeriodDayOption = 1
+
+export function parsePeriodDays(value: unknown): PeriodDayOption | null {
+  const raw = Array.isArray(value) ? value[0] : value
+  const days = Number(raw)
+  if (!PERIOD_DAY_OPTIONS.includes(days as PeriodDayOption))
+    return null
+  return days as PeriodDayOption
+}
+
+export function usePeriodDaysQuery(defaultDays: PeriodDayOption = DEFAULT_PERIOD_DAYS) {
+  const route = useRoute()
+  const router = useRouter()
+
+  const days = computed<PeriodDayOption>({
+    get() {
+      return parsePeriodDays(route.query.days) ?? defaultDays
+    },
+    set(value) {
+      if (String(route.query.days ?? '') === String(value))
+        return
+      void router.replace({ query: { ...route.query, days: String(value) } })
+    },
+  })
+
+  return { days }
+}

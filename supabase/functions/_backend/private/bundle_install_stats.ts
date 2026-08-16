@@ -12,6 +12,7 @@ import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
 import { closeClient, getPgClient, logPgError } from '../utils/pg.ts'
 import { checkPermission } from '../utils/rbac.ts'
+import { getRollingStatsPeriod } from '../utils/statsPeriod.ts'
 import { supabaseWithAuth } from '../utils/supabase.ts'
 
 dayjs.extend(utc)
@@ -666,10 +667,11 @@ async function readBundleInstallStats(
   if (channelId) {
     versionFilter = await resolveChannelVersionFilter(c, appId, channelId)
     if (versionFilter.size === 0) {
+      const emptyPeriod = getRollingStatsPeriod(days)
       const empty = buildBundleInstallResponse({
         days,
-        start: dayjs().utc().subtract(days - 1, 'day').startOf('day').toISOString(),
-        end: dayjs().utc().endOf('day').toISOString(),
+        start: emptyPeriod.start,
+        end: emptyPeriod.endInclusive,
         successRows: [],
         timingRows: new Map(),
         versionFilter,
@@ -678,9 +680,10 @@ async function readBundleInstallStats(
     }
   }
 
-  const endExclusive = dayjs().utc().add(1, 'day').startOf('day')
-  const start = endExclusive.subtract(days, 'day')
-  const endInclusive = endExclusive.subtract(1, 'millisecond')
+  const period = getRollingStatsPeriod(days)
+  const start = dayjs(period.start)
+  const endExclusive = dayjs(period.endExclusive)
+  const endInclusive = dayjs(period.endInclusive)
 
   let response: BundleInstallStatsResponse
   if (c.env.APP_LOG) {

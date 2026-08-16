@@ -11,6 +11,7 @@ import IconExternalLink from '~icons/lucide/external-link'
 import IconLayers from '~icons/lucide/layers'
 import IconSmartphone from '~icons/lucide/smartphone'
 import PeriodDaySelector from '~/components/dashboard/PeriodDaySelector.vue'
+import { usePeriodDaysQuery } from '~/composables/usePeriodDaysQuery'
 import { formatLocalDateShort, formatLocalDateTime } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
 import { actionToFilter } from '~/services/statsActions'
@@ -82,7 +83,7 @@ const id = ref('')
 const lastPath = ref('')
 const isLoading = ref(false)
 const insightsLoading = ref(false)
-const selectedDays = ref<PeriodDayOption>(7)
+const { days: selectedDays } = usePeriodDaysQuery()
 const selectedVersionName = ref('')
 const bundleNames = ref<string[]>([])
 const versionFilterId = useId()
@@ -292,10 +293,7 @@ async function refreshData() {
 }
 
 async function selectPeriod(option: PeriodDayOption) {
-  if (selectedDays.value === option)
-    return
   selectedDays.value = option
-  await fetchInsights()
 }
 
 async function applyVersionFilter(name: string) {
@@ -348,6 +346,11 @@ watch(() => typeof route.query.version === 'string' ? route.query.version : '', 
     return
   ensureBundleName(version)
   selectedVersionName.value = version
+  if (id.value)
+    await fetchInsights()
+})
+
+watch(selectedDays, async () => {
   if (id.value)
     await fetchInsights()
 })

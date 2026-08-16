@@ -7,6 +7,7 @@ import IconCheckCircle from '~icons/lucide/check-circle'
 import PeriodDaySelector from '~/components/dashboard/PeriodDaySelector.vue'
 import Spinner from '~/components/Spinner.vue'
 import { buildDemoBundleInstallStats, useBundleInstallStats } from '~/composables/useBundleInstallStats'
+import { usePeriodDaysQuery } from '~/composables/usePeriodDaysQuery'
 import { formatLocalDateShort } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
 import { useSupabase } from '~/services/supabase'
@@ -32,8 +33,8 @@ const props = withDefaults(defineProps<{
 const { t } = useI18n()
 const router = useRouter()
 const supabase = useSupabase()
-const localDays = ref<PeriodDayOption>(1)
-const days = computed(() => props.days ?? localDays.value)
+const { days: queryDays } = usePeriodDaysQuery()
+const days = computed(() => props.days ?? queryDays.value)
 const bundleIdCache = ref<Record<string, number>>({})
 
 const { stats, statsLoading, statsError, fetchStats } = useBundleInstallStats(() => ({
@@ -111,9 +112,9 @@ async function navigateToBundle(versionName: string) {
 }
 
 function selectPeriod(option: PeriodDayOption) {
-  if (props.days !== undefined || localDays.value === option)
+  if (props.days !== undefined)
     return
-  localDays.value = option
+  queryDays.value = option
 }
 
 watch(
@@ -151,7 +152,7 @@ watch(
       </div>
       <PeriodDaySelector
         v-if="!hidePeriodSelector && props.days === undefined"
-        :model-value="localDays"
+        :model-value="queryDays"
         :labels="{ 30: 'max-period' }"
         @update:model-value="selectPeriod"
       />

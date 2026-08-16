@@ -53,6 +53,27 @@ test.describe('Observe sections', () => {
     await expect(page.getByRole('heading', { name: 'Observe', exact: true, level: 1 })).toBeVisible()
   })
 
+  test('observe updater and native default to 1 day and persist the period in the URL', async ({ page }) => {
+    const oneDayButton = () => page.locator('[data-testid="period-day-selector"]').getByRole('button', { name: '1 day', exact: true })
+    const sevenDayButton = () => page.locator('[data-testid="period-day-selector"]').getByRole('button', { name: '7 days', exact: true })
+
+    await page.goto('/app/com.demo.app/observe/updater')
+    await expect(oneDayButton()).toHaveAttribute('aria-pressed', 'true')
+
+    await sevenDayButton().click()
+    await expect(page).toHaveURL(/[?&]days=7(?:&|$)/)
+    await expect(sevenDayButton()).toHaveAttribute('aria-pressed', 'true')
+
+    await page.goto('/app/com.demo.app/observe/native')
+    await expect(oneDayButton()).toHaveAttribute('aria-pressed', 'true')
+    await sevenDayButton().click()
+    await expect(page).toHaveURL(/[?&]days=7(?:&|$)/)
+    await expect(sevenDayButton()).toHaveAttribute('aria-pressed', 'true')
+
+    await page.goto('/app/com.demo.app/observe/native?days=3')
+    await expect(page.locator('[data-testid="period-day-selector"]').getByRole('button', { name: '3 days', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  })
+
   test('shows a metadata info icon only on log rows that have metadata', async ({ page }) => {
     const now = new Date().toISOString()
     await page.route('**/private/stats', async (route) => {
