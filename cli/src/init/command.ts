@@ -5309,7 +5309,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
 
   if (!options.apikey) {
     try {
-      options.apikey ??= findSavedKey(true)
+      options.apikey = findSavedKey(true)
     }
     catch {
     }

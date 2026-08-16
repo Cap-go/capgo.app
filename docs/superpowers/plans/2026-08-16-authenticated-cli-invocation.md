@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Lock command-input behavior with failing tests
+## Task 1: Lock command-input behavior with failing tests
 
 **Files:**
 - Create: `cli/src/auth/command-input.ts`
@@ -79,7 +79,7 @@ Run `bun run --cwd cli test:authenticated-command-invocation`.
 Expected: input-resolution assertions pass; deferred telemetry assertions added
 in Task 2 still fail.
 
-### Task 2: Add deferred, explicit-key invocation telemetry
+## Task 2: Add deferred, explicit-key invocation telemetry
 
 **Files:**
 - Modify: `cli/src/analytics/track.ts`
@@ -151,7 +151,7 @@ other commands.
 
 Expected: both commands exit 0 with no duplicate request.
 
-### Task 3: Wire validated command actions and `-a`
+## Task 3: Wire validated command actions and `-a`
 
 **Files:**
 - Modify: `cli/src/index.ts`
@@ -211,7 +211,7 @@ bun run --cwd cli test:init-telemetry
 
 Expected: all commands exit 0.
 
-### Task 4: Verify, review, and publish
+## Task 4: Verify, review, and publish
 
 **Files:**
 - Review every changed file against `docs/superpowers/specs/2026-08-16-authenticated-cli-invocation-design.md`.
