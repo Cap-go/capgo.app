@@ -9,7 +9,7 @@ import type {
   OnboardingInteractionProperties,
   OnboardingStepCompletionProperties,
 } from '~/utils/onboardingProgressAnalytics'
-import type { OnboardingPersistResult } from '~/utils/onboardingProgressPersistence'
+import type { OnboardingPersistOptions, OnboardingPersistResult } from '~/utils/onboardingProgressPersistence'
 import type { UserOnboardingStatus } from '~/utils/userOnboardingProgress'
 import mime from 'mime'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -47,7 +47,11 @@ import { pushEvent } from '~/services/posthog'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
 import { getLocalConfig, isLocal, useSupabase } from '~/services/supabase'
 import { sendEvent } from '~/services/tracking'
-import { serializeUserOnboardingWrite } from '~/services/userOnboardingWriteQueue'
+import {
+  MAX_USER_ONBOARDING_WRITE_ATTEMPTS,
+  replaceUserOnboardingIfUnchanged,
+  serializeUserOnboardingWrite,
+} from '~/services/userOnboardingWriteQueue'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
@@ -423,8 +427,11 @@ function snapshotOnboardingProgress(status: UserOnboardingStatus = 'in_progress'
   })
 }
 
-async function persistOnboardingProgress(status: UserOnboardingStatus = 'in_progress') {
-  return onboardingProgressPersistence.persist(status)
+async function persistOnboardingProgress(
+  status: UserOnboardingStatus = 'in_progress',
+  options: OnboardingPersistOptions = {},
+) {
+  return onboardingProgressPersistence.persist(status, options)
 }
 
 function schedulePersistOnboardingProgress() {
@@ -436,7 +443,10 @@ function schedulePersistOnboardingProgress() {
   }, 400)
 }
 
-async function writeOnboardingProgress(status: UserOnboardingStatus) {
+async function writeOnboardingProgress(
+  status: UserOnboardingStatus,
+  options: OnboardingPersistOptions,
+) {
   const userId = onboardingUserId.value
   if (!userId || isHydratingOnboarding.value)
     return 'skipped'
@@ -444,7 +454,7 @@ async function writeOnboardingProgress(status: UserOnboardingStatus) {
   const authGeneration = main.authGeneration
   return serializeUserOnboardingWrite(userId, async () => {
     if (
-      onboardingFlowDisposed
+      (onboardingFlowDisposed && !options.allowDisposed)
       || onboardingUserId.value !== userId
       || main.authGeneration !== authGeneration
       || isHydratingOnboarding.value
@@ -452,53 +462,66 @@ async function writeOnboardingProgress(status: UserOnboardingStatus) {
       return 'skipped'
     }
 
-    const current = parseUserOnboardingProgress(main.user?.onboarding)
-    if (current?.status === 'completed' && status !== 'completed')
+    if (main.user?.id !== userId)
       return 'skipped'
 
     const progress = snapshotOnboardingProgress(status)
-    const onboarding = preserveAdminDashboardMinimize(
-      progress as unknown as Json,
-      main.user?.onboarding,
-      main.isAdmin,
-    )
-    let query = supabase
-      .from('users')
-      .update({ onboarding })
-      .eq('id', userId)
-    if (status !== 'completed') {
-      query = query.or('onboarding->>status.is.null,onboarding->>status.neq.completed')
-      const lastUpdated = current?.updated_at
-      query = lastUpdated
-        ? query.or(`onboarding->>updated_at.is.null,onboarding->>updated_at.eq."${lastUpdated}"`)
-        : query.or('onboarding->>updated_at.is.null')
+    let currentOnboarding = main.user.onboarding
+    let latestProfile = main.user
+
+    for (let attempt = 0; attempt < MAX_USER_ONBOARDING_WRITE_ATTEMPTS; attempt++) {
+      if (
+        onboardingUserId.value !== userId
+        || main.authGeneration !== authGeneration
+        || (onboardingFlowDisposed && !options.allowDisposed)
+      ) {
+        return 'skipped'
+      }
+
+      const current = parseUserOnboardingProgress(currentOnboarding)
+      if (current?.status === 'completed' && status !== 'completed')
+        return 'skipped'
+
+      const onboarding = preserveAdminDashboardMinimize(
+        progress as unknown as Json,
+        currentOnboarding,
+        main.isAdmin,
+      )
+      const { data, error } = await replaceUserOnboardingIfUnchanged(
+        userId,
+        currentOnboarding,
+        onboarding,
+      )
+
+      if (error) {
+        console.error('Failed to persist onboarding progress', error)
+        return 'retryable_failure'
+      }
+
+      if (data) {
+        if (main.user?.id === userId && main.authGeneration === authGeneration)
+          main.user = { ...data, image_url: main.user.image_url }
+        return 'persisted'
+      }
+
+      const { data: latest, error: latestError } = await supabase
+        .from('users')
+        .select()
+        .eq('id', userId)
+        .maybeSingle()
+      if (latestError) {
+        console.error('Failed to refresh onboarding progress snapshot', latestError)
+        return 'retryable_failure'
+      }
+      if (!latest)
+        return status === 'completed' ? 'skipped' : 'conflict'
+
+      latestProfile = latest
+      currentOnboarding = latest.onboarding
     }
-    const { data, error } = await query
-      .select()
-      .maybeSingle()
 
-    if (error) {
-      console.error('Failed to persist onboarding progress', error)
-      return 'retryable_failure'
-    }
-
-    if (data && main.user?.id === userId) {
-      main.user = { ...data, image_url: main.user.image_url }
-      return 'persisted'
-    }
-
-    if (status === 'completed' || main.user?.id !== userId)
-      return 'skipped'
-
-    const { data: latest, error: latestError } = await supabase
-      .from('users')
-      .select()
-      .eq('id', userId)
-      .maybeSingle()
-    if (latestError)
-      console.error('Failed to refresh onboarding progress snapshot', latestError)
-    if (latest && main.user?.id === userId)
-      main.user = { ...latest, image_url: main.user.image_url }
+    if (main.user?.id === userId && main.authGeneration === authGeneration)
+      main.user = { ...latestProfile, image_url: main.user.image_url }
     return 'conflict'
   })
 }
@@ -1644,7 +1667,7 @@ onBeforeUnmount(() => {
   window.removeEventListener(ONBOARDING_DASHBOARD_EXPLORED_EVENT, trackDashboardExplored)
   detailsFieldTracker.dispose()
   if (!isHydratingOnboarding.value && !onboardingInitialPersistInFlight && !onboardingProgressPersistence.isBlocked() && !onboardingProgressPersistence.isAborted())
-    void persistOnboardingProgress()
+    void persistOnboardingProgress('in_progress', { allowDisposed: true })
 
   if (localIconPreview.value.startsWith('blob:'))
     URL.revokeObjectURL(localIconPreview.value)

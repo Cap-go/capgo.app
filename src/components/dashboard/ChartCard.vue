@@ -112,7 +112,7 @@ function toggleCollapsed() {
               v-if="canCollapse"
               data-test="chart-collapse-toggle"
               type="button"
-              class="group inline-flex size-9 shrink-0 items-center justify-center rounded-full border border-slate-200/90 bg-white/85 text-slate-500 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:border-indigo-300 hover:text-indigo-600 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 dark:border-slate-700 dark:bg-slate-800/85 dark:text-slate-300 dark:hover:border-indigo-500/70 dark:hover:text-indigo-300 dark:focus-visible:ring-offset-slate-900"
+              class="d-btn d-btn-circle d-btn-ghost group size-9 shrink-0 border border-slate-200/90 bg-white/85 text-slate-500 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:border-indigo-300 hover:text-indigo-600 hover:shadow-md focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 dark:border-slate-700 dark:bg-slate-800/85 dark:text-slate-300 dark:hover:border-indigo-500/70 dark:hover:text-indigo-300 dark:focus-visible:ring-offset-slate-900"
               :aria-label="t(isCollapsed ? 'expand-chart' : 'collapse-chart')"
               :title="t(isCollapsed ? 'expand-chart' : 'collapse-chart')"
               :aria-expanded="!isCollapsed"

@@ -10,7 +10,11 @@ import {
   getDateRangeForPreset as getDateRangeForMode,
 } from '~/services/dateRange'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
-import { serializeUserOnboardingWrite } from '~/services/userOnboardingWriteQueue'
+import {
+  MAX_USER_ONBOARDING_WRITE_ATTEMPTS,
+  replaceUserOnboardingIfUnchanged,
+  serializeUserOnboardingWrite,
+} from '~/services/userOnboardingWriteQueue'
 import { useMainStore } from '~/stores/main'
 
 export type MetricCategory = 'uploads' | 'distribution' | 'failures' | 'success_rate' | 'platform_overview' | 'org_metrics' | 'mau_trend' | 'success_rate_trend' | 'apps_trend' | 'bundles_trend' | 'deployments_trend' | 'storage_trend' | 'bandwidth_trend' | 'global_stats_trend' | 'plugin_breakdown' | 'trial_organizations' | 'trial_plan_breakdown' | 'onboarding_funnel' | 'cancelled_users' | 'email_type_breakdown' | 'customer_country_breakdown' | 'organization_insights' | 'builder_analytics' | 'builder_capacity' | 'cli_usage' | 'channel_surfing' | 'frontend_onboarding_analytics' | 'plans_analytics'
@@ -122,11 +126,8 @@ export const useAdminDashboardStore = defineStore('adminDashboard', () => {
       ...adminDashboardMinimize.value,
       [key]: minimized,
     }
+    const preferenceUpdate = { [key]: minimized }
     adminDashboardMinimize.value = preferences
-    main.user = {
-      ...main.user,
-      onboarding: withAdminDashboardMinimize(main.user.onboarding, preferences),
-    }
 
     return serializeUserOnboardingWrite(userId, async () => {
       const latestMain = useMainStore()
@@ -138,21 +139,48 @@ export const useAdminDashboardStore = defineStore('adminDashboard', () => {
         return
       }
 
-      const onboarding = withAdminDashboardMinimize(
-        latestMain.user.onboarding,
-        adminDashboardMinimize.value,
-      )
-      latestMain.user = {
-        ...latestMain.user,
-        onboarding,
-      }
-      const { error } = await useSupabase()
-        .from('users')
-        .update({ onboarding })
-        .eq('id', userId)
+      let currentOnboarding = latestMain.user.onboarding
+      for (let attempt = 0; attempt < MAX_USER_ONBOARDING_WRITE_ATTEMPTS; attempt++) {
+        const activeMain = useMainStore()
+        if (
+          !activeMain.isAdmin
+          || activeMain.user?.id !== userId
+          || activeMain.authGeneration !== authGeneration
+        ) {
+          return
+        }
 
-      if (error)
-        throw error
+        const onboarding = withAdminDashboardMinimize(currentOnboarding, {
+          ...readAdminDashboardMinimize(currentOnboarding),
+          ...preferenceUpdate,
+        })
+        const { data, error } = await replaceUserOnboardingIfUnchanged(
+          userId,
+          currentOnboarding,
+          onboarding,
+        )
+        if (error)
+          throw error
+
+        if (data) {
+          if (activeMain.user?.id === userId && activeMain.authGeneration === authGeneration)
+            activeMain.user = { ...data, image_url: activeMain.user.image_url }
+          return
+        }
+
+        const { data: latest, error: latestError } = await useSupabase()
+          .from('users')
+          .select()
+          .eq('id', userId)
+          .maybeSingle()
+        if (latestError)
+          throw latestError
+        if (!latest)
+          throw new Error('Cannot refresh admin dashboard graph preferences')
+        currentOnboarding = latest.onboarding
+      }
+
+      throw new Error('Admin dashboard graph preferences changed too often to persist')
     })
       .catch((error) => {
         console.error('Failed to persist admin dashboard graph preference', error)

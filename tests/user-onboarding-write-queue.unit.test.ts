@@ -10,7 +10,7 @@ function deferred() {
 }
 
 describe('user onboarding write queue', () => {
-  it('serializes writes for the same user', async () => {
+  it.concurrent('serializes writes for the same user', async () => {
     const firstWrite = deferred()
     const events: string[] = []
 
@@ -31,7 +31,7 @@ describe('user onboarding write queue', () => {
     expect(events).toEqual(['first:start', 'first:end', 'second:start'])
   })
 
-  it('continues the queue after a failed write', async () => {
+  it.concurrent('continues the queue after a failed write', async () => {
     const first = serializeUserOnboardingWrite('admin-2', async () => {
       throw new Error('write failed')
     })
@@ -41,7 +41,7 @@ describe('user onboarding write queue', () => {
     await expect(second).resolves.toBe('persisted')
   })
 
-  it('does not block writes for different users', async () => {
+  it.concurrent('does not block writes for different users', async () => {
     const firstWrite = deferred()
     const first = serializeUserOnboardingWrite('admin-3', async () => firstWrite.promise)
     const second = serializeUserOnboardingWrite('admin-4', async () => 'persisted')

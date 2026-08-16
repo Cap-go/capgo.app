@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Lock the shared card interaction with a failing test
+## Task 1: Lock the shared card interaction with a failing test
 
 **Files:**
 - Create: `tests/admin-chart-card-collapse.unit.test.ts`
@@ -19,7 +19,7 @@
 - [x] Mount it on a customer route and assert that no toggle appears.
 - [x] Run `bun vitest run tests/admin-chart-card-collapse.unit.test.ts` and confirm it fails because the toggle does not exist.
 
-### Task 2: Implement the shared minimize control
+## Task 2: Implement the shared minimize control
 
 **Files:**
 - Modify: `src/components/dashboard/ChartCard.vue`
@@ -31,7 +31,7 @@
 - [x] Add the English `collapse-chart` and `expand-chart` translation keys, run `bun run i18n:contexts`, and commit the regenerated context catalog.
 - [x] Re-run the focused test and confirm it passes.
 
-### Task 3: Put custom admin graphs into the shared shell
+## Task 3: Put custom admin graphs into the shared shell
 
 **Files:**
 - Modify: `src/pages/admin/dashboard/frontend-onboarding.vue`
@@ -40,7 +40,7 @@
 - [x] Replace both custom funnel sections and the journey graph section in `frontend-onboarding.vue` with `ChartCard`, retaining their descriptions, sizing, summaries, loading state, and data.
 - [x] Replace the custom onboarding funnel section in `users.vue` with `ChartCard`, retaining its loading, empty, chart, summary, and telemetry states.
 
-### Task 4: Verify the result
+## Task 4: Verify the result
 
 **Files:**
 - Verify only
@@ -50,7 +50,7 @@
 - [x] Run `bun typecheck` and `bun run build`.
 - [x] Confirm the existing production-backed server hot-reloads and inspect the admin frontend-onboarding page at desktop and mobile widths.
 
-### Task 5: Define preference parsing, merging, and stable graph keys
+## Task 5: Define preference parsing, merging, and stable graph keys
 
 **Files:**
 - Create: `src/services/adminDashboardPreferences.ts`
@@ -87,7 +87,7 @@ The key must combine a compact route slug, compact title slug, and deterministic
 Run: `bun vitest run tests/admin-dashboard-preferences.unit.test.ts`
 Expected: PASS.
 
-### Task 6: Cache and write preferences from the admin dashboard store
+## Task 6: Cache and write preferences from the admin dashboard store
 
 **Files:**
 - Modify: `src/stores/adminDashboard.ts`
@@ -113,14 +113,14 @@ function isChartMinimized(key: string): boolean
 function setChartMinimized(key: string, minimized: boolean): Promise<void>
 ```
 
-`setChartMinimized` must update the Pinia map and `main.user.onboarding` synchronously, then enqueue a merged frontend Supabase update. It must not select or refetch after writing.
+`setChartMinimized` must update the Pinia map synchronously, then enqueue a conditional merged frontend Supabase update. The normal path is one update; if another tab changed the JSON snapshot, refetch and retry without overwriting its onboarding data.
 
 - [x] **Step 4: Re-run the store test**
 
 Run: `bun vitest run tests/admin-dashboard-minimize-store.unit.test.ts`
 Expected: PASS.
 
-### Task 7: Connect every admin ChartCard and preserve preferences during onboarding saves
+## Task 7: Connect every admin ChartCard and preserve preferences during onboarding saves
 
 **Files:**
 - Modify: `src/components/dashboard/ChartCard.vue`
@@ -139,7 +139,7 @@ Expected: FAIL because `ChartCard` still owns a component-local ref.
 - [x] **Step 3: Replace local state with the admin dashboard store**
 
 ```ts
-const preferenceKey = computed(() => props.preferenceKey || createAdminDashboardChartPreferenceKey(route.path, props.title))
+const preferenceKey = computed(() => createAdminDashboardChartPreferenceKey(route.path, props.chartId))
 const isCollapsed = computed(() => adminDashboard.isChartMinimized(preferenceKey.value))
 
 function toggleCollapsed() {
@@ -152,7 +152,7 @@ function toggleCollapsed() {
 ```ts
 const onboarding = preserveAdminDashboardMinimize(
   progress as unknown as Json,
-  main.user?.onboarding,
+  currentOnboarding,
   main.isAdmin,
 )
 ```
@@ -162,7 +162,7 @@ const onboarding = preserveAdminDashboardMinimize(
 Run: `bun vitest run tests/admin-dashboard-preferences.unit.test.ts tests/admin-dashboard-minimize-store.unit.test.ts tests/admin-chart-card-collapse.unit.test.ts`
 Expected: PASS.
 
-### Task 8: Verify frontend-only scope and production build
+## Task 8: Verify frontend-only scope and production build
 
 **Files:**
 - Verify only

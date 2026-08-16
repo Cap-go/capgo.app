@@ -8,7 +8,7 @@ import {
 } from '../src/services/adminDashboardPreferences'
 
 describe('admin dashboard graph preferences', () => {
-  it('reads only boolean minimize preferences from user onboarding', () => {
+  it.concurrent('reads only boolean minimize preferences from user onboarding', () => {
     const onboarding = {
       status: 'in_progress',
       admin_dashboard_minimize: {
@@ -27,7 +27,7 @@ describe('admin dashboard graph preferences', () => {
     expect(readAdminDashboardMinimize({ admin_dashboard_minimize: true })).toEqual({})
   })
 
-  it('merges preferences without replacing unrelated onboarding progress', () => {
+  it.concurrent('merges preferences without replacing unrelated onboarding progress', () => {
     expect(withAdminDashboardMinimize({
       status: 'in_progress',
       step: 'details',
@@ -44,7 +44,7 @@ describe('admin dashboard graph preferences', () => {
     })
   })
 
-  it('preserves the preference object only for administrators', () => {
+  it.concurrent('preserves the preference object only for administrators', () => {
     const current = {
       status: 'in_progress',
       admin_dashboard_minimize: {
@@ -66,7 +66,7 @@ describe('admin dashboard graph preferences', () => {
     expect(preserveAdminDashboardMinimize(next, current, false)).toEqual(next)
   })
 
-  it('creates compact deterministic keys from stable IDs and separates routes', () => {
+  it.concurrent('creates compact deterministic keys from stable IDs and separates routes', () => {
     const key = createAdminDashboardChartPreferenceKey(
       '/admin/dashboard/frontend-onboarding',
       'funnel-v3',
