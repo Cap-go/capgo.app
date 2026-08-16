@@ -189,7 +189,7 @@ const tabs = computed<Tab[]>(() => {
     <div
       id="sidebar"
       ref="sidebar"
-      class="fixed z-60 left-4 top-16 h-[calc(100%-4rem)] w-64 flex shrink-0 flex-col overflow-x-hidden bg-slate-800 rounded-xl shadow-lg transition-transform duration-200 ease-out motion-reduce:transition-none lg:static lg:left-0 lg:top-0 lg:h-full lg:bg-slate-800 lg:rounded-none lg:shadow-none lg:translate-x-0 lg:transition-none"
+      class="fixed z-60 left-4 top-16 h-[calc(100%-4rem)] w-64 flex shrink-0 flex-col overflow-x-hidden bg-slate-800 rounded-xl shadow-lg transition-transform duration-200 ease-out motion-reduce:transition-none lg:static lg:left-0 lg:top-0 lg:h-full lg:overflow-hidden lg:bg-slate-800 lg:rounded-none lg:shadow-none lg:translate-x-0 lg:transition-[width] lg:duration-300 lg:ease-out"
       :class="{
         'translate-x-0': props.sidebarOpen,
         '-translate-x-[120%]': !props.sidebarOpen,
