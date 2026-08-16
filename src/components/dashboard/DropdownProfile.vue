@@ -138,10 +138,7 @@ async function resetSpoofedUser() {
             </div>
           </div>
         </div>
-        <div
-          class="overflow-hidden transition-[max-height,opacity] duration-500 ease-in-out motion-reduce:!transition-none"
-          :class="props.compact ? 'max-h-0 opacity-0' : 'max-h-40 opacity-100'"
-        >
+        <template v-if="!props.compact">
           <router-link v-if="isMobile" to="/app/modules" class="block py-2 pl-12 pr-3 rounded-lg hover:bg-slate-700/50">
             {{ t('module-heading') }}
           </router-link>
@@ -158,7 +155,7 @@ async function resetSpoofedUser() {
           <div v-if="spoofed" class="block py-2 pl-12 pr-3 rounded-lg cursor-pointer hover:bg-slate-700/50" :class="{ 'opacity-50 cursor-not-allowed': isLoading }" @click="resetSpoofedUser">
             {{ t('reset-spoofed-user') }}
           </div>
-        </div>
+        </template>
       </div>
     </div>
 

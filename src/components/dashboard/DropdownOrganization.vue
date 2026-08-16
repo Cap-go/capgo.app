@@ -77,6 +77,7 @@ function refreshOnVisibilityChange() {
 onClickOutside(dropdown, () => closeDropdown({ restoreFocus: false }), { ignore: [menu] })
 
 let compactMenuListenersBound = false
+let compactMenuResizeObserver: ResizeObserver | undefined
 
 function placeCompactMenu() {
   const trigger = dropdown.value?.querySelector('summary')
@@ -115,6 +116,11 @@ function bindCompactMenuListeners() {
     return
   window.addEventListener('resize', onCompactMenuReposition)
   window.addEventListener('scroll', onCompactMenuScroll, true)
+  const rail = dropdown.value?.closest('#sidebar')
+  if (rail instanceof HTMLElement) {
+    compactMenuResizeObserver = new ResizeObserver(onCompactMenuReposition)
+    compactMenuResizeObserver.observe(rail)
+  }
   compactMenuListenersBound = true
 }
 
@@ -123,6 +129,8 @@ function unbindCompactMenuListeners() {
     return
   window.removeEventListener('resize', onCompactMenuReposition)
   window.removeEventListener('scroll', onCompactMenuScroll, true)
+  compactMenuResizeObserver?.disconnect()
+  compactMenuResizeObserver = undefined
   compactMenuListenersBound = false
 }
 

@@ -141,10 +141,10 @@ watch(() => organizationStore.currentOrganization?.gid, async (orgId) => {
             </span>
           </router-link>
           <button
+            v-if="!props.compact"
             type="button"
             class="flex size-11 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors duration-150 hover:bg-slate-700/80 hover:text-white focus:outline-none focus:ring-2 focus:ring-azure-500 focus:ring-offset-2 focus:ring-offset-slate-800"
             :aria-label="`${t('getting-started-dismiss')} — ${appLabel(app)}`"
-            :tabindex="props.compact ? -1 : undefined"
             data-test="getting-started-nav-dismiss"
             @click="dismiss(app, $event)"
           >
