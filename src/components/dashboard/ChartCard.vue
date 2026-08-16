@@ -7,6 +7,7 @@ import Spinner from '~/components/Spinner.vue'
 import { createAdminDashboardChartPreferenceKey } from '~/services/adminDashboardPreferences'
 import { formatNumberValue } from '~/services/formatLocale'
 import { useAdminDashboardStore } from '~/stores/adminDashboard'
+import { useMainStore } from '~/stores/main'
 
 const props = defineProps({
   title: {
@@ -53,41 +54,54 @@ const props = defineProps({
 
 const { t } = useI18n()
 const route = useRoute()
-const adminDashboard = useAdminDashboardStore()
+const main = useMainStore()
 const chartContentId = `chart-content-${useId()}`
+let adminDashboard: ReturnType<typeof useAdminDashboardStore> | undefined
 
 const showEvolutionBadge = computed(() => props.lastDayEvolution !== undefined && props.lastDayEvolution !== null)
 const displayNoDataMessage = computed(() => props.noDataMessage ?? t('no-data'))
 const isAdminDashboard = computed(() => route.path === '/admin/dashboard' || route.path.startsWith('/admin/dashboard/'))
-const canCollapse = computed(() => isAdminDashboard.value && props.chartId.length > 0)
+const canCollapse = computed(() => main.isAdmin && isAdminDashboard.value && props.chartId.length > 0)
 const chartPreferenceKey = computed(() => createAdminDashboardChartPreferenceKey(route.path, props.chartId))
 const isCollapsed = computed(() => (
   canCollapse.value
-  && adminDashboard.isChartMinimized(chartPreferenceKey.value)
+  && getAdminDashboard().isChartMinimized(chartPreferenceKey.value)
 ))
 
+function getAdminDashboard() {
+  adminDashboard ??= useAdminDashboardStore()
+  return adminDashboard
+}
+
 function toggleCollapsed() {
-  void adminDashboard.setChartMinimized(chartPreferenceKey.value, !isCollapsed.value)
+  if (canCollapse.value)
+    void getAdminDashboard().setChartMinimized(chartPreferenceKey.value, !isCollapsed.value)
 }
 </script>
 
 <template>
   <div
-    class="relative col-span-full flex flex-col overflow-hidden rounded-[1.75rem] border border-slate-200/80 bg-white/95 shadow-[0_20px_60px_-38px_rgba(15,23,42,0.3)] backdrop-blur transition-[min-height,box-shadow] duration-300 dark:border-slate-700/70 dark:bg-slate-900/85 dark:shadow-[0_24px_70px_-42px_rgba(2,6,23,0.72)]"
-    :class="isCollapsed ? 'min-h-0' : 'min-h-[460px]'"
+    class="relative col-span-full flex flex-col overflow-hidden rounded-[1.75rem] border border-slate-200/80 bg-white/95 shadow-[0_20px_60px_-38px_rgba(15,23,42,0.3)] backdrop-blur dark:border-slate-700/70 dark:bg-slate-900/85 dark:shadow-[0_24px_70px_-42px_rgba(2,6,23,0.72)]"
+    :class="canCollapse
+      ? ['transition-[min-height,box-shadow] duration-300', isCollapsed ? 'min-h-0' : 'min-h-[460px]']
+      : 'min-h-[460px]'"
   >
     <div class="pointer-events-none absolute inset-x-0 top-0 h-28 bg-gradient-to-br from-slate-50 via-white to-transparent dark:from-slate-800/70 dark:via-slate-900/40 dark:to-transparent" />
 
     <!-- Header with title and stats -->
     <div
       class="relative overflow-hidden px-5"
-      :class="isCollapsed ? 'py-4' : 'pt-5'"
+      :class="canCollapse && isCollapsed ? 'py-4' : 'pt-5'"
     >
       <!-- Custom header slot or default header -->
-      <div class="flex flex-col" :class="isCollapsed ? 'gap-0' : 'gap-4'">
-        <div class="flex items-start justify-between gap-3">
+      <div class="flex flex-col" :class="canCollapse && isCollapsed ? 'gap-0' : 'gap-4'">
+        <div
+          :class="canCollapse
+            ? 'flex items-start justify-between gap-3'
+            : 'flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between'"
+        >
           <div class="min-w-0 flex-1">
-            <h2 v-if="isCollapsed" class="truncate text-xl font-semibold leading-tight text-slate-900 dark:text-white sm:text-2xl">
+            <h2 v-if="canCollapse && isCollapsed" class="truncate text-xl font-semibold leading-tight text-slate-900 dark:text-white sm:text-2xl">
               {{ title }}
             </h2>
             <slot v-else name="header">
@@ -99,15 +113,15 @@ function toggleCollapsed() {
             </slot>
           </div>
 
-          <div class="flex shrink-0 items-center gap-2 sm:justify-end">
+          <div class="flex items-center gap-2 sm:justify-end" :class="{ 'shrink-0': canCollapse }">
             <div
-              v-if="!isCollapsed && showEvolutionBadge"
+              v-if="(!canCollapse || !isCollapsed) && showEvolutionBadge"
               class="inline-flex justify-center items-center rounded-full px-3 py-1 text-xs font-bold text-white shadow-sm"
               :class="{ 'bg-cyan-500': (lastDayEvolution ?? 0) >= 0, 'bg-amber-500': (lastDayEvolution ?? 0) < 0 }"
             >
               {{ (lastDayEvolution ?? 0) < 0 ? '-' : '+' }}{{ formatNumberValue(Math.abs(lastDayEvolution ?? 0), { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }}%
             </div>
-            <div v-else-if="!isCollapsed" class="inline-flex rounded-full px-3 py-1 text-xs font-semibold opacity-0" aria-hidden="true" />
+            <div v-else-if="!canCollapse || !isCollapsed" class="inline-flex rounded-full px-3 py-1 text-xs font-semibold opacity-0" aria-hidden="true" />
             <button
               v-if="canCollapse"
               data-test="chart-collapse-toggle"
@@ -128,7 +142,7 @@ function toggleCollapsed() {
           </div>
         </div>
 
-        <div v-if="!isCollapsed && total !== undefined" class="flex items-end gap-2">
+        <div v-if="(!canCollapse || !isCollapsed) && total !== undefined" class="flex items-end gap-2">
           <div class="max-w-full text-3xl font-semibold leading-none tracking-tight break-words text-slate-900 dark:text-white sm:text-4xl">
             {{ formatNumberValue(total) }}
           </div>
@@ -140,7 +154,11 @@ function toggleCollapsed() {
     </div>
 
     <!-- Chart content area -->
-    <div v-if="!isCollapsed" :id="chartContentId" class="relative flex min-h-0 flex-1 flex-col px-5 pb-5 pt-4">
+    <div
+      v-if="!canCollapse || !isCollapsed"
+      :id="canCollapse ? chartContentId : undefined"
+      class="relative flex min-h-0 flex-1 flex-col px-5 pb-5 pt-4"
+    >
       <!-- Loading state -->
       <div v-if="isLoading" class="flex h-full items-center justify-center">
         <Spinner size="w-24 h-24" />

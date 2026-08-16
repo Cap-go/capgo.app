@@ -142,12 +142,33 @@ describe('admin chart card minimize control', () => {
     expect(collapsedTitleTypography).toEqual(expandedTitleTypography)
   })
 
-  it('does not add the minimize control outside the admin dashboard', () => {
+  it('preserves the original chart markup outside the admin dashboard', () => {
     route.path = '/app/com.example.app'
+    const container = mountChartCard()
+    const card = container.firstElementChild
+    const header = card?.children[1]
+    const headerRow = header?.firstElementChild?.firstElementChild
+    const headerActions = headerRow?.lastElementChild
+    const content = container.querySelector('[data-test="chart-content"]')?.parentElement
+
+    expect(container.querySelector('[data-test="chart-collapse-toggle"]')).toBeNull()
+    expect(card?.classList).toContain('min-h-[460px]')
+    expect(card?.classList).not.toContain('transition-[min-height,box-shadow]')
+    expect(header?.className).toContain('pt-5')
+    expect(headerRow?.className).toContain('flex-col')
+    expect(headerRow?.className).toContain('sm:flex-row')
+    expect(headerActions?.classList).not.toContain('shrink-0')
+    expect(content).not.toBeNull()
+    expect(content?.hasAttribute('id')).toBe(false)
+  })
+
+  it('does not enable chart collapsing for non-admin users', () => {
+    mainStore.isAdmin = false
     const container = mountChartCard()
 
     expect(container.querySelector('[data-test="chart-collapse-toggle"]')).toBeNull()
     expect(container.querySelector('[data-test="chart-content"]')).not.toBeNull()
+    expect(supabaseMocks.update).not.toHaveBeenCalled()
   })
 
   it('starts from the cached database preference and writes the expanded state', async () => {
