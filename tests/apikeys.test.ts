@@ -176,13 +176,17 @@ describe('[POST] /apikey operations', () => {
       console.log(`apikey_create_latency_ms p50=${p50.toFixed(1)} samples=${samples.map(sample => sample.toFixed(1)).join(',')}`)
     }
     finally {
-      for (const keyId of createdIds) {
-        const response = await fetch(`${BASE_URL}/apikey/${keyId}`, {
-          method: 'DELETE',
-          headers: authHeaders,
-        })
-        expect(response.status).toBe(200)
-      }
+      await Promise.all(createdIds.map(async (keyId) => {
+        try {
+          await fetch(`${BASE_URL}/apikey/${keyId}`, {
+            method: 'DELETE',
+            headers: authHeaders,
+          })
+        }
+        catch {
+          // Best-effort: a failed DELETE must not skip remaining keys or mask the test error.
+        }
+      }))
     }
   })
 
