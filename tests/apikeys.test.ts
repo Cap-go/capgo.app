@@ -145,6 +145,42 @@ describe('[POST] /apikey operations', () => {
     expect(verifyData.name).toBe(keyName)
   })
 
+  it('create api key latency', async () => {
+    const warmup = await fetch(`${BASE_URL}/apikey`, {
+      method: 'POST',
+      headers: authHeaders,
+      body: JSON.stringify(orgKeyBody(`latency-warmup-${id.slice(0, 8)}`)),
+    })
+    expect(warmup.status).toBe(200)
+    const warmupData = await warmup.json<{ id: number }>()
+    await fetch(`${BASE_URL}/apikey/${warmupData.id}`, {
+      method: 'DELETE',
+      headers: authHeaders,
+    })
+
+    const samples: number[] = []
+    for (let index = 0; index < 5; index += 1) {
+      const startedAt = performance.now()
+      const response = await fetch(`${BASE_URL}/apikey`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify(orgKeyBody(`latency-${id.slice(0, 8)}-${index}`)),
+      })
+      samples.push(performance.now() - startedAt)
+      expect(response.status).toBe(200)
+      const data = await response.json<{ id: number }>()
+      await fetch(`${BASE_URL}/apikey/${data.id}`, {
+        method: 'DELETE',
+        headers: authHeaders,
+      })
+    }
+
+    samples.sort((left, right) => left - right)
+    const p50 = samples[Math.floor(samples.length / 2)] ?? 0
+    console.log(`apikey_create_latency_ms p50=${p50.toFixed(1)} samples=${samples.map(sample => sample.toFixed(1)).join(',')}`)
+    expect(p50).toBeLessThan(3000)
+  })
+
   it.concurrent('creates an app-only preview key bound to its owning organization', async () => {
     const appBindings = await appApiKeyBindings(APPNAME, 'app_preview')
     const response = await fetch(`${BASE_URL}/apikey`, {

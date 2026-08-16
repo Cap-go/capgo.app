@@ -3,15 +3,15 @@ import type { Database } from '../../utils/supabase.types.ts'
 import type { ClientBindingInput } from './scope.ts'
 import { sql } from 'drizzle-orm'
 import { createRoleBindingForPrincipal, lockRbacOrgs } from '../../private/role_bindings.ts'
+import { getErrorStatus } from '../../utils/errors.ts'
 import { honoFactory, parseBody, quickError, simpleError } from '../../utils/hono.ts'
 import { middlewareAuth } from '../../utils/hono_middleware.ts'
 import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../../utils/pg.ts'
-import { checkPermission, checkPermissionPg } from '../../utils/rbac.ts'
-import { supabaseWithAuth, validateExpirationAgainstOrgPolicies, validateExpirationDate } from '../../utils/supabase.ts'
+import { checkPermissionPg } from '../../utils/rbac.ts'
+import { assertExpirationMatchesOrgPolicies, validateExpirationDate } from '../../utils/supabase.ts'
 import { parseApiKeyGlobalPermissions, replaceApiKeyGlobalPermissions, validateApiKeyGlobalPermissionsForBindings } from './global_permissions.ts'
 import { assertApiKeyManagerCanAssignBindings, ensureApiKeyManagementAllowed, requireApiKeyManagementAuth, sanitizeClientBindings } from './scope.ts'
-import { getErrorStatus } from '../../utils/errors.ts'
 
 type BindingInput = ClientBindingInput
 type ApiKeyRow = Database['public']['Tables']['apikeys']['Row']
@@ -58,18 +58,43 @@ async function createApiKeyRecord(
   return apiKey
 }
 
-async function assertCanManageApiKeysForOrgs(
-  c: Parameters<typeof checkPermission>[0],
+async function assertCanManageApiKeysForOrgsPg(
+  c: Parameters<typeof checkPermissionPg>[0],
+  drizzle: ReturnType<typeof getDrizzleClient>,
+  userId: string,
+  apikeyString: string | null,
   orgIds: string[],
 ): Promise<void> {
   for (const orgId of orgIds) {
-    if (!(await checkPermission(c, 'org.manage_apikeys', { orgId }))) {
+    if (!(await checkPermissionPg(c, 'org.manage_apikeys', { orgId }, drizzle, userId, apikeyString))) {
       throw quickError(403, 'forbidden_binding', `Forbidden - API key management rights required for org ${orgId}`)
     }
   }
 }
 
+async function assertExpirationMatchesOrgPoliciesPg(
+  db: DrizzleExecutor,
+  orgIds: string[],
+  expiresAt: string | null,
+): Promise<void> {
+  if (orgIds.length === 0) {
+    return
+  }
+
+  const result = await db.execute<{
+    require_apikey_expiration: boolean | null
+    max_apikey_expiration_days: number | null
+  }>(sql`
+    SELECT require_apikey_expiration, max_apikey_expiration_days
+    FROM public.orgs
+    WHERE id IN (${sql.join(orgIds.map(orgId => sql`${orgId}::uuid`), sql`, `)})
+  `)
+
+  assertExpirationMatchesOrgPolicies(result.rows, expiresAt)
+}
+
 app.post('/', middlewareAuth(), async (c) => {
+  const startedAt = Date.now()
   const auth = requireApiKeyManagementAuth(c, 'not_authorized', 'API key management requires authentication')
   if (auth.authType !== 'jwt' || !auth.userId) {
     if (auth.authType === 'apikey') {
@@ -105,25 +130,16 @@ app.post('/', middlewareAuth(), async (c) => {
   // Validate expiration date format (throws if invalid)
   validateExpirationDate(expiresAt)
 
-  // Preserve caller RLS context; the route guard above keeps management JWT-only.
-  const supabase = supabaseWithAuth(c, auth)
-
   const resolvedBindings = bindings
   const globalPermissions = parseApiKeyGlobalPermissions(body.global_permissions, c.get('requestId')) ?? []
   validateApiKeyGlobalPermissionsForBindings(globalPermissions, resolvedBindings, c.get('requestId'))
 
-  // Validate expiration against org policies (throws if invalid)
   const allOrgIds = [...new Set(resolvedBindings.map(binding => binding.org_id))]
-  await validateExpirationAgainstOrgPolicies(allOrgIds, expiresAt, supabase)
-  await assertApiKeyManagerCanAssignBindings(c, auth, resolvedBindings)
 
   let apikeyData: ApiKeyRow | null = null
 
   let pgClient: ReturnType<typeof getPgClient> | undefined
   try {
-    // Check RBAC permission for each unique org in the bindings before creating anything.
-    await assertCanManageApiKeysForOrgs(c, allOrgIds)
-
     pgClient = getPgClient(c)
     const drizzle = getDrizzleClient(pgClient)
     const createdBindings: unknown[] = []
@@ -134,12 +150,9 @@ app.post('/', middlewareAuth(), async (c) => {
       await lockRbacOrgs(txDrizzle, allOrgIds)
 
       const apikeyString = auth.apikey?.key ?? c.get('capgkey') ?? null
-      for (const bindingOrgId of allOrgIds) {
-        if (!(await checkPermissionPg(c, 'org.manage_apikeys', { orgId: bindingOrgId }, txDrizzle, auth.userId, apikeyString))) {
-          throw quickError(403, 'forbidden_binding', `Forbidden - API key management rights required for org ${bindingOrgId}`)
-        }
-      }
+      await assertCanManageApiKeysForOrgsPg(c, txDrizzle, auth.userId, apikeyString, allOrgIds)
       await assertApiKeyManagerCanAssignBindings(c, auth, resolvedBindings, txDrizzle)
+      await assertExpirationMatchesOrgPoliciesPg(tx, allOrgIds, expiresAt)
 
       apikeyData = await createApiKeyRecord(tx, {
         userId: auth.userId,
@@ -169,6 +182,10 @@ app.post('/', middlewareAuth(), async (c) => {
           auth.userId,
           'jwt',
           callerPrincipalId,
+          {
+            skipOrgLock: true,
+            skipPrincipalValidation: true,
+          },
         )
 
         if (!result.ok) {
@@ -184,7 +201,9 @@ app.post('/', middlewareAuth(), async (c) => {
         createdBindings.push(result.data)
       }
 
-      await replaceApiKeyGlobalPermissions(tx, apikeyData.rbac_id, globalPermissions, auth.userId)
+      if (globalPermissions.length > 0) {
+        await replaceApiKeyGlobalPermissions(tx, apikeyData.rbac_id, globalPermissions, auth.userId)
+      }
     })
 
     cloudlog({
@@ -192,6 +211,7 @@ app.post('/', middlewareAuth(), async (c) => {
       message: 'apikey_bindings_created',
       apikeyId: (apikeyData as ApiKeyRow | null)?.id,
       bindingsCount: createdBindings.length,
+      durationMs: Date.now() - startedAt,
     })
   }
   catch (error: unknown) {

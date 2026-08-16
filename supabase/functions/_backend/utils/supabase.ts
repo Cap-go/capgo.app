@@ -1954,6 +1954,34 @@ export async function resolveApikeyPolicyOrgIds(
   return [...orgIds]
 }
 
+interface ApiKeyExpirationPolicyRow {
+  require_apikey_expiration?: boolean | null
+  max_apikey_expiration_days?: number | null
+}
+
+/**
+ * Validate API key expiration against already-loaded org policy rows.
+ * Throws simpleError if any org policy is violated.
+ */
+export function assertExpirationMatchesOrgPolicies(
+  orgs: ApiKeyExpirationPolicyRow[],
+  expiresAt: string | null,
+): void {
+  for (const org of orgs) {
+    if (org.require_apikey_expiration && !expiresAt) {
+      throw simpleError('expiration_required', 'This organization requires API keys to have an expiration date')
+    }
+
+    if (org.max_apikey_expiration_days && expiresAt) {
+      const maxDate = new Date()
+      maxDate.setDate(maxDate.getDate() + org.max_apikey_expiration_days)
+      if (new Date(expiresAt) > maxDate) {
+        throw simpleError('expiration_exceeds_max', `API key expiration cannot exceed ${org.max_apikey_expiration_days} days for this organization`)
+      }
+    }
+  }
+}
+
 /**
  * Validate API key expiration against org policies for multiple orgs.
  * Throws simpleError if any org policy is violated.
@@ -1980,21 +2008,7 @@ export async function validateExpirationAgainstOrgPolicies(
     return
   }
 
-  for (const org of orgs) {
-    // Check if expiration is required but not provided
-    if (org.require_apikey_expiration && !expiresAt) {
-      throw simpleError('expiration_required', 'This organization requires API keys to have an expiration date')
-    }
-
-    // Check if expiration exceeds max allowed
-    if (org.max_apikey_expiration_days && expiresAt) {
-      const maxDate = new Date()
-      maxDate.setDate(maxDate.getDate() + org.max_apikey_expiration_days)
-      if (new Date(expiresAt) > maxDate) {
-        throw simpleError('expiration_exceeds_max', `API key expiration cannot exceed ${org.max_apikey_expiration_days} days for this organization`)
-      }
-    }
-  }
+  assertExpirationMatchesOrgPolicies(orgs, expiresAt)
 }
 
 /**
