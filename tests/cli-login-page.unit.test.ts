@@ -45,10 +45,14 @@ describe('/login-cli page contract', () => {
 
   it.concurrent('uses prefixed DaisyUI primitives and resolves the destination before success', () => {
     const page = readFileSync(pagePath, 'utf8')
+    const resolveDestination = page.indexOf('destination.value = await resolveDestination()')
+    const assignSuccess = page.indexOf("state.value = 'success'")
+
     expect(page).toContain('class="d-btn')
     expect(page).toContain('class="d-alert')
     expect(page).not.toMatch(/class="(?:btn|alert)(?:\s|\")/)
-    expect(page.indexOf('destination.value = await resolveDestination()'))
-      .toBeLessThan(page.indexOf("state.value = 'success'"))
+    expect(resolveDestination).toBeGreaterThanOrEqual(0)
+    expect(assignSuccess).toBeGreaterThanOrEqual(0)
+    expect(resolveDestination).toBeLessThan(assignSuccess)
   })
 })

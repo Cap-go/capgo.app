@@ -20,7 +20,7 @@ describe('init browser login', () => {
   it('wires browser login after saved-key lookup and only for interactive init', () => {
     const initApp = initSource.slice(initSource.indexOf('export async function initApp('))
     const savedKeyLookup = initApp.indexOf('options.apikey = findSavedKey(true)')
-    const browserGate = initApp.indexOf('shouldStartInitBrowserLogin(options.apikey, supportsBrowserLogin && canPromptInteractively())')
+    const browserGate = initApp.indexOf('shouldStartInitBrowserLogin(options.apikey, supportsBrowserLogin && canPromptInteractively({ silent: options.silent }))')
     const authenticatedClient = initApp.indexOf('const supabase = await createSupabaseClient(options.apikey')
 
     expect(savedKeyLookup).toBeGreaterThanOrEqual(0)
@@ -31,8 +31,12 @@ describe('init browser login', () => {
   })
 
   it('resolves plain API-key identity before listing organizations', () => {
-    expect(helperSource.indexOf('await resolveUserIdFromApiKey(supabase, key, true)'))
-      .toBeLessThan(helperSource.indexOf("await supabase.rpc('get_orgs_v7')"))
+    const resolveUserId = helperSource.indexOf('await resolveUserIdFromApiKey(supabase, key, true)')
+    const listOrganizations = helperSource.indexOf("await supabase.rpc('get_orgs_v7')")
+
+    expect(resolveUserId).toBeGreaterThanOrEqual(0)
+    expect(listOrganizations).toBeGreaterThanOrEqual(0)
+    expect(resolveUserId).toBeLessThan(listOrganizations)
   })
 
   it('opens the correlated URL, saves the masked input, and notifies every org', async () => {

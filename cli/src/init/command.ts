@@ -55,6 +55,7 @@ interface SuperOptions extends Options {
   local: boolean
   mainFile?: string
   packageJson?: string
+  silent?: boolean
 }
 
 interface InitTargetPaths {
@@ -5317,7 +5318,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
   }
 
   const supportsBrowserLogin = !options.local && !options.supaHost && !options.supaAnon
-  if (shouldStartInitBrowserLogin(options.apikey, supportsBrowserLogin && canPromptInteractively())) {
+  if (shouldStartInitBrowserLogin(options.apikey, supportsBrowserLogin && canPromptInteractively({ silent: options.silent }))) {
     options.apikey = await loginInitInBrowser({
       local: options.local,
       supaHost: options.supaHost,
