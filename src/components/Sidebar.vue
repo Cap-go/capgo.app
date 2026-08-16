@@ -246,7 +246,7 @@ const tabs = computed<Tab[]>(() => {
                   'bg-slate-700 text-white lg:bg-slate-700 lg:text-white': isTabActive(tab.key),
                   'cursor-default': isTabActive(tab.key),
                 }"
-                :title="t(tab.label)"
+                :title="isRail ? t(tab.label) : undefined"
                 :aria-label="tab.redirect ? `${t(tab.label)} (opens in new tab)` : t(tab.label)"
                 :aria-current="isTabActive(tab.key) ? 'page' : undefined"
                 @click="openTab(tab)"
