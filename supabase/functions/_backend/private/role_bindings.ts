@@ -553,7 +553,12 @@ export type CreateBindingResult = {
 }
 
 export interface CreateBindingOptions {
+  // Caller must already hold advisory locks for every org_id in this request.
   skipOrgLock?: boolean
+  // Caller must already have proven the principal exists and the owner has
+  // active org access. API key create may set this after inserting the key in
+  // the same txn and asserting org.manage_apikeys for each org. Do not use this
+  // to skip owner-active-member / pending-invite checks on an existing principal.
   skipPrincipalValidation?: boolean
 }
 

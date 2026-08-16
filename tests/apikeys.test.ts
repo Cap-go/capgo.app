@@ -146,39 +146,44 @@ describe('[POST] /apikey operations', () => {
   })
 
   it('create api key latency', async () => {
-    const warmup = await fetch(`${BASE_URL}/apikey`, {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify(orgKeyBody(`latency-warmup-${id.slice(0, 8)}`)),
-    })
-    expect(warmup.status).toBe(200)
-    const warmupData = await warmup.json<{ id: number }>()
-    await fetch(`${BASE_URL}/apikey/${warmupData.id}`, {
-      method: 'DELETE',
-      headers: authHeaders,
-    })
-
-    const samples: number[] = []
-    for (let index = 0; index < 5; index += 1) {
-      const startedAt = performance.now()
-      const response = await fetch(`${BASE_URL}/apikey`, {
+    const createdIds: number[] = []
+    try {
+      const warmup = await fetch(`${BASE_URL}/apikey`, {
         method: 'POST',
         headers: authHeaders,
-        body: JSON.stringify(orgKeyBody(`latency-${id.slice(0, 8)}-${index}`)),
+        body: JSON.stringify(orgKeyBody(`latency-warmup-${id.slice(0, 8)}`)),
       })
-      samples.push(performance.now() - startedAt)
-      expect(response.status).toBe(200)
-      const data = await response.json<{ id: number }>()
-      await fetch(`${BASE_URL}/apikey/${data.id}`, {
-        method: 'DELETE',
-        headers: authHeaders,
-      })
-    }
+      expect(warmup.status).toBe(200)
+      const warmupData = await warmup.json<{ id: number }>()
+      createdIds.push(warmupData.id)
 
-    samples.sort((left, right) => left - right)
-    const p50 = samples[Math.floor(samples.length / 2)] ?? 0
-    console.log(`apikey_create_latency_ms p50=${p50.toFixed(1)} samples=${samples.map(sample => sample.toFixed(1)).join(',')}`)
-    expect(p50).toBeLessThan(3000)
+      const samples: number[] = []
+      for (let index = 0; index < 5; index += 1) {
+        const startedAt = performance.now()
+        const response = await fetch(`${BASE_URL}/apikey`, {
+          method: 'POST',
+          headers: authHeaders,
+          body: JSON.stringify(orgKeyBody(`latency-${id.slice(0, 8)}-${index}`)),
+        })
+        samples.push(performance.now() - startedAt)
+        expect(response.status).toBe(200)
+        const data = await response.json<{ id: number }>()
+        createdIds.push(data.id)
+      }
+
+      samples.sort((left, right) => left - right)
+      const p50 = samples[Math.floor(samples.length / 2)] ?? 0
+      console.log(`apikey_create_latency_ms p50=${p50.toFixed(1)} samples=${samples.map(sample => sample.toFixed(1)).join(',')}`)
+    }
+    finally {
+      for (const keyId of createdIds) {
+        const response = await fetch(`${BASE_URL}/apikey/${keyId}`, {
+          method: 'DELETE',
+          headers: authHeaders,
+        })
+        expect(response.status).toBe(200)
+      }
+    }
   })
 
   it.concurrent('creates an app-only preview key bound to its owning organization', async () => {

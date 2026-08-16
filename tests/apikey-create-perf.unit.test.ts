@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const {
   assertApiKeyManagerCanAssignBindingsMock,
+  assertExpirationMatchesOrgPoliciesMock,
   checkPermissionMock,
   checkPermissionPgMock,
   closeClientMock,
@@ -15,9 +16,9 @@ const {
   requireApiKeyManagementAuthMock,
   sanitizeClientBindingsMock,
   supabaseWithAuthMock,
-  validateExpirationAgainstOrgPoliciesMock,
 } = vi.hoisted(() => ({
   assertApiKeyManagerCanAssignBindingsMock: vi.fn(),
+  assertExpirationMatchesOrgPoliciesMock: vi.fn(),
   checkPermissionMock: vi.fn(),
   checkPermissionPgMock: vi.fn(),
   closeClientMock: vi.fn(),
@@ -31,7 +32,6 @@ const {
   requireApiKeyManagementAuthMock: vi.fn(),
   sanitizeClientBindingsMock: vi.fn(),
   supabaseWithAuthMock: vi.fn(),
-  validateExpirationAgainstOrgPoliciesMock: vi.fn(),
 }))
 
 const ORG_ID = '00000000-0000-4000-8000-000000000111'
@@ -83,9 +83,8 @@ vi.mock('../supabase/functions/_backend/public/apikey/scope.ts', () => ({
 }))
 
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  assertExpirationMatchesOrgPolicies: vi.fn(),
+  assertExpirationMatchesOrgPolicies: assertExpirationMatchesOrgPoliciesMock,
   supabaseWithAuth: supabaseWithAuthMock,
-  validateExpirationAgainstOrgPolicies: validateExpirationAgainstOrgPoliciesMock,
   validateExpirationDate: vi.fn(),
 }))
 
@@ -95,7 +94,8 @@ describe('api key create postgres round trips', () => {
   // transaction, then repeated the same RBAC checks after lockRbacOrgs().
   // Measured on this mocked handler: checkPermission x1, assertApiKeyManagerCanAssignBindings x2,
   // validateExpirationAgainstOrgPolicies x1, createRoleBindingForPrincipal without skip flags.
-  // After: one getPgClient, in-transaction RBAC only, no PostgREST, skipOrgLock + skipPrincipalValidation.
+  // After: one getPgClient, in-transaction RBAC only, assertExpirationMatchesOrgPolicies x1,
+  // no PostgREST, skipOrgLock + skipPrincipalValidation.
   beforeEach(() => {
     vi.clearAllMocks()
     vi.resetModules()
@@ -110,7 +110,7 @@ describe('api key create postgres round trips', () => {
     closeClientMock.mockResolvedValue(undefined)
     getPgClientMock.mockReturnValue({ id: 'pg-client' })
     supabaseWithAuthMock.mockReturnValue({ id: 'supabase-auth' })
-    validateExpirationAgainstOrgPoliciesMock.mockResolvedValue(undefined)
+    assertExpirationMatchesOrgPoliciesMock.mockReturnValue(undefined)
     lockRbacOrgsMock.mockResolvedValue(undefined)
     createRoleBindingForPrincipalMock.mockResolvedValue({ ok: true, data: { id: 'binding-1' } })
     replaceApiKeyGlobalPermissionsMock.mockResolvedValue(undefined)
@@ -156,7 +156,14 @@ describe('api key create postgres round trips', () => {
     expect(getPgClientMock).toHaveBeenCalledTimes(1)
     expect(checkPermissionMock).not.toHaveBeenCalled()
     expect(supabaseWithAuthMock).not.toHaveBeenCalled()
-    expect(validateExpirationAgainstOrgPoliciesMock).not.toHaveBeenCalled()
+    expect(assertExpirationMatchesOrgPoliciesMock).toHaveBeenCalledTimes(1)
+    expect(assertExpirationMatchesOrgPoliciesMock).toHaveBeenCalledWith(
+      expect.arrayContaining([expect.objectContaining({
+        require_apikey_expiration: false,
+        max_apikey_expiration_days: null,
+      })]),
+      null,
+    )
     expect(assertApiKeyManagerCanAssignBindingsMock).toHaveBeenCalledTimes(1)
     expect(assertApiKeyManagerCanAssignBindingsMock).toHaveBeenCalledWith(
       expect.anything(),
