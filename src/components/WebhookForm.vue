@@ -226,10 +226,10 @@ function handleDeliveryVersionChange() {
         </div>
 
         <!-- Events -->
-        <div>
-          <label class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+        <fieldset class="min-w-0 border-0 p-0">
+          <legend class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">
             {{ t('webhook-events') }} <span class="text-red-500">*</span>
-          </label>
+          </legend>
           <div class="space-y-2">
             <label
               v-for="event in WEBHOOK_EVENT_TYPES"
@@ -258,7 +258,7 @@ function handleDeliveryVersionChange() {
           <p v-if="selectedEvents.length === 0" class="mt-1 text-sm text-red-500">
             {{ t('webhook-events-required') }}
           </p>
-        </div>
+        </fieldset>
 
         <!-- Enabled Toggle (only shown when editing) -->
         <div v-if="isEditing" class="flex items-center gap-3">

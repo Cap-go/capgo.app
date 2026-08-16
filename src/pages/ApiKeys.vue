@@ -2054,7 +2054,7 @@ getKeys()
             </label>
           </div>
           <div v-if="setExpirationCheckbox" class="pl-6">
-            <label class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-200">
+            <label for="apikey-expiration-date" class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-200">
               {{ t('expiration-date') }}
             </label>
             <VueDatePicker
@@ -2074,6 +2074,7 @@ getKeys()
             >
               <template #trigger>
                 <button
+                  id="apikey-expiration-date"
                   type="button"
                   class="flex items-center w-full gap-2 px-3 py-2 text-sm text-left transition-colors bg-white border border-gray-300 rounded-md dark:text-white dark:bg-gray-800 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 focus:ring-2 focus:ring-primary-500 focus:outline-none"
                 >

@@ -306,9 +306,9 @@ onMounted (() => {
         </div>
 
         <div v-if="captchaKey" class="space-y-2 overflow-hidden">
-          <label class="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-200">
+          <p class="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-200">
             {{ t('captcha') }}
-          </label>
+          </p>
           <VueTurnstile ref="captchaComponent" v-model="turnstileToken" size="flexible" :site-key="captchaKey" />
         </div>
 
@@ -360,9 +360,9 @@ onMounted (() => {
 
     <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions?.id === 'delete-account-confirm'" to="#dialog-v2-content" defer>
       <div v-if="captchaKey" class="mt-4">
-        <label class="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-200">
+        <p class="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-200">
           {{ t('captcha') }}
-        </label>
+        </p>
         <VueTurnstile
           ref="confirmCaptchaComponent"
           v-model="confirmCaptchaToken"

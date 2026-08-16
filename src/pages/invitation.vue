@@ -240,8 +240,8 @@ function openPrivacy() {
 
       <div :class="authInsetCardClass">
         <div class="space-y-4">
-          <label class="flex items-start gap-3">
-            <Toggle :value="acceptTerms" class="mt-0.5 shrink-0" @update:value="acceptTerms = !acceptTerms" />
+          <div class="flex items-start gap-3">
+            <Toggle :value="acceptTerms" class="mt-0.5 shrink-0" :aria-label="t('accept-terms-of-service-and-privacy-policy')" @update:value="acceptTerms = !acceptTerms" />
             <span class="text-sm leading-6 text-slate-600 dark:text-slate-300">
               {{ t('accept-terms-of-service-and-privacy-policy') }}
               <button type="button" class="font-semibold text-[rgb(255,114,17)] transition-colors duration-200 hover:text-[rgb(235,94,0)]" @click="openTos">
@@ -252,18 +252,18 @@ function openPrivacy() {
                 {{ t('privacy-policy') }}
               </button>
             </span>
-          </label>
+          </div>
 
           <div v-if="showTermsError" class="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:border-rose-900/70 dark:bg-rose-950/30 dark:text-rose-200">
             {{ t('accept-terms-of-service-and-privacy-policy') }}
           </div>
 
-          <label class="flex items-start gap-3">
-            <Toggle :value="acceptMarketing" class="mt-0.5 shrink-0" @update:value="acceptMarketing = !acceptMarketing" />
+          <div class="flex items-start gap-3">
+            <Toggle :value="acceptMarketing" class="mt-0.5 shrink-0" :aria-label="t('accept-email-newsletter-and-future-marketing-offers')" @update:value="acceptMarketing = !acceptMarketing" />
             <span class="text-sm leading-6 text-slate-600 dark:text-slate-300">
               {{ t('accept-email-newsletter-and-future-marketing-offers') }}
             </span>
-          </label>
+          </div>
         </div>
       </div>
 

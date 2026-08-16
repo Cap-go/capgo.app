@@ -117,7 +117,7 @@ const chartData = computed<ChartData<any>>(() => {
       processed = transformDailySeries(appData, false, labelCount)
       // Use existing bar chart colors for bar mode
       backgroundColor = appColors[index]
-      borderColor = backgroundColor.replace('hsla', 'hsl').replace(', 0.8)', ')').replace(/(\d+)%\)/, (_, lightness) => {
+      borderColor = backgroundColor.replace('hsla', 'hsl').replace(', 0.8)', ')').replace(/(\d{1,3})%\)/, (_, lightness) => {
         const newLightness = Math.max(Number(lightness) - 15, 30)
         return `${newLightness}%)`
       })

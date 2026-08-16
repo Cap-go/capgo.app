@@ -260,7 +260,7 @@ async function copyOrganizationId() {
               <FormKit
                 type="text"
                 name="orgName"
-                autocomplete="given-name"
+                autocomplete="organization"
                 :prefix-icon="iconName"
                 :disabled="!canUpdateOrgSettings"
                 :value="orgName"
@@ -275,7 +275,7 @@ async function copyOrganizationId() {
                 type="email"
                 name="email"
                 :prefix-icon="iconEmail"
-                autocomplete="given-name"
+                autocomplete="email"
                 :disabled="!canUpdateOrgSettings"
                 :value="email"
                 validation="required:trim" enterkeyhint="next"

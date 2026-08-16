@@ -23,7 +23,7 @@ function encodeBase64Url(input: Uint8Array): string {
   return btoa(binary)
     .replace(/\+/g, '-')
     .replace(/\//g, '_')
-    .replace(/=+$/g, '')
+    .replace(/=+$/, '')
 }
 
 async function signHs256Jwt(payload: Record<string, unknown>, secret: string): Promise<string> {

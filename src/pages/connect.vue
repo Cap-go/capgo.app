@@ -462,9 +462,9 @@ function back(): void {
 
         <!-- API key -->
         <div class="mt-6">
-          <label class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-200">
+          <p class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-200">
             {{ t('connect-key-label') }}
-          </label>
+          </p>
           <div class="flex items-stretch gap-2">
             <code class="flex-1 truncate rounded-xl border border-slate-300 bg-slate-50 px-3.5 py-3 font-mono text-sm text-slate-800 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100">
               {{ generatedKey }}

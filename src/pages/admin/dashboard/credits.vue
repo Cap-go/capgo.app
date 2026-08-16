@@ -541,9 +541,9 @@ onMounted(async () => {
           <div class="space-y-6">
             <!-- Organization Search -->
             <div>
-              <label class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+              <p class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">
                 {{ t('admin-credits-select-org') }}
-              </label>
+              </p>
 
               <div v-if="selectedOrg" class="flex items-center justify-between p-4 rounded-lg bg-blue-50 dark:bg-blue-900/20">
                 <div>

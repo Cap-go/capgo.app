@@ -229,7 +229,7 @@ const chartData = computed<ChartData<'line' | 'bar'>>(() => {
           const saturation = 50 + (index % 3) * 8
           const lightness = 60 + (index % 4) * 5
           backgroundColor = `hsla(${hue}, ${saturation}%, ${lightness}%, 0.8)`
-          borderColor = backgroundColor.replace('hsla', 'hsl').replace(', 0.8)', ')').replace(/(\d+)%\)/, (_, lightness) => {
+          borderColor = backgroundColor.replace('hsla', 'hsl').replace(', 0.8)', ')').replace(/(\d{1,3})%\)/, (_, lightness) => {
             const newLightness = Math.max(Number(lightness) - 15, 30)
             return `${newLightness}%)`
           })

@@ -9,7 +9,6 @@ defineProps<{
 <template>
   <ul
     v-if="items.length"
-    tabindex="0"
     aria-label="Chart legend"
     class="mt-3 flex max-w-full shrink-0 gap-4 overflow-x-auto overflow-y-hidden whitespace-nowrap pb-1 pr-1 [scrollbar-gutter:stable]"
   >

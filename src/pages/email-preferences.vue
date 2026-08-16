@@ -216,7 +216,7 @@ async function savePreferences() {
         </div>
 
         <div class="rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-950/60">
-          <label class="flex items-start justify-between gap-4">
+          <div class="flex items-start justify-between gap-4">
             <span>
               <span class="block text-sm font-semibold text-slate-800 dark:text-slate-100">
                 {{ t('email-preferences-unsubscribe-all') }}
@@ -225,8 +225,8 @@ async function savePreferences() {
                 {{ t('email-preferences-unsubscribe-all-desc') }}
               </span>
             </span>
-            <Toggle v-model:value="unsubscribeAll" />
-          </label>
+            <Toggle v-model:value="unsubscribeAll" :aria-label="t('email-preferences-unsubscribe-all')" />
+          </div>
         </div>
 
         <div v-show="!unsubscribeAll" class="space-y-6">
@@ -235,20 +235,20 @@ async function savePreferences() {
               {{ t('notifications-general') }}
             </h2>
             <div class="space-y-3">
-              <label class="flex items-start justify-between gap-4 rounded-xl border border-slate-200 px-3 py-3 dark:border-slate-700">
+              <div class="flex items-start justify-between gap-4 rounded-xl border border-slate-200 px-3 py-3 dark:border-slate-700">
                 <span>
                   <span class="block text-sm font-medium text-slate-800 dark:text-slate-100">{{ t('activation-notification') }}</span>
                   <span class="mt-1 block text-xs text-slate-500 dark:text-slate-400">{{ t('activation-notification-desc') }}</span>
                 </span>
-                <Toggle v-model:value="enableNotifications" />
-              </label>
-              <label class="flex items-start justify-between gap-4 rounded-xl border border-slate-200 px-3 py-3 dark:border-slate-700">
+                <Toggle v-model:value="enableNotifications" :aria-label="t('activation-notification')" />
+              </div>
+              <div class="flex items-start justify-between gap-4 rounded-xl border border-slate-200 px-3 py-3 dark:border-slate-700">
                 <span>
                   <span class="block text-sm font-medium text-slate-800 dark:text-slate-100">{{ t('activation-doi') }}</span>
                   <span class="mt-1 block text-xs text-slate-500 dark:text-slate-400">{{ t('activation-doi-desc') }}</span>
                 </span>
-                <Toggle v-model:value="optForNewsletters" />
-              </label>
+                <Toggle v-model:value="optForNewsletters" :aria-label="t('activation-doi')" />
+              </div>
             </div>
           </div>
 
@@ -257,7 +257,7 @@ async function savePreferences() {
               {{ t(section.titleKey) }}
             </h2>
             <div class="space-y-3">
-              <label
+              <div
                 v-for="key in section.keys"
                 :key="key"
                 class="flex items-start justify-between gap-4 rounded-xl border border-slate-200 px-3 py-3 dark:border-slate-700"
@@ -266,8 +266,8 @@ async function savePreferences() {
                   <span class="block text-sm font-medium text-slate-800 dark:text-slate-100">{{ t(PREFERENCE_LABEL_KEYS[key]) }}</span>
                   <span class="mt-1 block text-xs text-slate-500 dark:text-slate-400">{{ t(PREFERENCE_DESC_KEYS[key]) }}</span>
                 </span>
-                <Toggle v-model:value="preferences[key]" />
-              </label>
+                <Toggle v-model:value="preferences[key]" :aria-label="t(PREFERENCE_LABEL_KEYS[key])" />
+              </div>
             </div>
           </div>
         </div>

@@ -2203,9 +2203,9 @@ defineExpose({
                       <label for="onboarding-organization-website" class="text-sm font-medium text-slate-800 dark:text-slate-200">
                         {{ t('organization-onboarding-website-label') }}
                       </label>
-                      <span
-                        class="group relative inline-flex rounded-full text-slate-400 outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-slate-500"
-                        tabindex="0"
+                      <button
+                        type="button"
+                        class="group relative inline-flex rounded-full border-0 bg-transparent p-0 text-slate-400 outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-slate-500"
                         aria-describedby="onboarding-organization-website-help"
                       >
                         <IconInfo class="h-4 w-4" aria-hidden="true" />
@@ -2216,7 +2216,7 @@ defineExpose({
                         >
                           {{ t('organization-onboarding-website-help') }}
                         </span>
-                      </span>
+                      </button>
                     </div>
                     <input
                       id="onboarding-organization-website"

@@ -2,7 +2,7 @@
 import type { Database } from '~/types/supabase.types'
 import { FormKit } from '@formkit/vue'
 import { useDebounceFn } from '@vueuse/core'
-import { computed, ref, watch } from 'vue'
+import { computed, ref, useId, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import IconDown from '~icons/ic/round-keyboard-arrow-down'
 import IconSearch from '~icons/ic/round-search?raw'
@@ -38,6 +38,7 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const supabase = useSupabase()
+const triggerId = useId()
 
 const latestCompareVersions = ref<VersionRow[]>([])
 const preferredCompareVersions = ref<VersionRow[]>([])
@@ -427,12 +428,13 @@ watch(
 
 <template>
   <div class="w-full md:max-w-sm">
-    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+    <label :for="triggerId" class="block text-sm font-medium text-gray-700 dark:text-gray-300">
       {{ label }}
     </label>
     <div class="flex items-center gap-2 mt-2">
       <div class="w-full d-dropdown">
         <button
+          :id="triggerId"
           type="button"
           tabindex="0"
           class="inline-flex w-full min-w-0 items-center justify-between rounded-lg border border-slate-300 bg-white px-3 py-2 text-left text-sm text-slate-700 shadow-sm transition hover:border-slate-400 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200"

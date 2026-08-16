@@ -2825,6 +2825,7 @@
   "to-open-encrypted-bu": "Used in Capgo web console areas: pages/app. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "today": "Used in Capgo web console areas: components/dashboard, composables, services. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "today-vs-yesterday": "Used in Capgo web console. Role: UI label about \"today vs yesterday\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "toggle": "Used in Capgo web console. Role: accessible name for a switch control when a specific label is not provided. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "too-recent-invitation-cancelation": "Used in Capgo web console areas: components/dashboard, pages/settings/organization, utils. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "top-error-devices": "Used in Capgo web console areas: pages/app. Role: toast or status message. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "top-error-versions": "Used in Capgo web console areas: pages/app. Role: toast or status message. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",

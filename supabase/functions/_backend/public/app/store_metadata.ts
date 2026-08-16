@@ -144,8 +144,8 @@ function normalizeStoreName(name: string, url: URL) {
 
   if (host === 'play.google.com') {
     return trimmed
-      .replace(/[ \t]*[-|:][ \t]*Apps on Google Play[ \t]*$/gi, '')
-      .replace(/[ \t]*[-|:][ \t]*Google Play[ \t]*$/gi, '')
+      .replace(/[-|:]\s*Apps on Google Play\s*$/gi, '')
+      .replace(/[-|:]\s*Google Play\s*$/gi, '')
       .trim()
   }
 

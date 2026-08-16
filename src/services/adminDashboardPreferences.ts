@@ -57,9 +57,9 @@ function slugify(value: string, fallback: string, maxLength: number): string {
     .replace(/[\u0300-\u036F]/g, '')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
+    .replace(/^-+/, '')
     .slice(0, maxLength)
-    .replace(/-+$/g, '')
+    .replace(/-+$/, '')
 
   return slug || fallback
 }

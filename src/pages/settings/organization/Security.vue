@@ -1120,7 +1120,7 @@ onMounted(async () => {
                     <img
                       v-if="member.image_url"
                       :src="member.image_url"
-                      :alt="`Profile picture for ${member.email}`"
+                      :alt="member.email"
                       class="w-8 h-8 rounded-full shrink-0"
                     >
                     <div v-else class="flex items-center justify-center w-8 h-8 text-sm bg-gray-700 rounded-full shrink-0">
@@ -1420,7 +1420,7 @@ onMounted(async () => {
                   <img
                     v-if="member.image_url"
                     :src="member.image_url"
-                    :alt="`Profile picture for ${member.email}`"
+                    :alt="member.email"
                     class="w-8 h-8 rounded-full shrink-0"
                   >
                   <div v-else class="flex items-center justify-center w-8 h-8 text-sm bg-gray-700 rounded-full shrink-0">

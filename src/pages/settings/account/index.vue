@@ -776,9 +776,9 @@ onMounted(async () => {
           >
         </div>
         <div v-if="captchaKey" class="mt-4">
-          <label class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+          <p class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">
             {{ t('captcha') }}
-          </label>
+          </p>
           <VueTurnstile
             ref="deleteAccountCaptchaRef"
             v-model="deleteAccountCaptchaToken"

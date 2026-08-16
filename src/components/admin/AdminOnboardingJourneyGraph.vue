@@ -144,17 +144,16 @@ function tooltipText(node: AdminOnboardingJourneyNode) {
         />
       </svg>
 
-      <div
+      <button
         v-for="node in config.nodes"
         :key="node.id"
-        class="journey-node group absolute z-10 -translate-x-1/2 -translate-y-1/2 outline-none"
+        type="button"
+        class="journey-node group absolute z-10 -translate-x-1/2 -translate-y-1/2 border-0 bg-transparent p-0 text-inherit outline-none"
         :class="[`journey-node--${node.kind}`, `journey-node--${node.tone ?? 'default'}`]"
         :style="nodeStyle(node)"
-        role="group"
-        tabindex="0"
         :aria-label="`${node.label}: ${formatNumberValue(node.count)}, ${tooltipText(node)}`"
       >
-        <div class="journey-node__body">
+        <span class="journey-node__body">
           <span class="journey-node__icon" aria-hidden="true">
             <component :is="iconComponents[node.icon]" />
           </span>
@@ -173,9 +172,9 @@ function tooltipText(node: AdminOnboardingJourneyNode) {
               {{ config.formatters.totalPercent(node.totalPercent ?? 0) }}
             </span>
           </span>
-        </div>
+        </span>
         <span class="journey-tooltip" role="tooltip">{{ tooltipText(node) }}</span>
-      </div>
+      </button>
 
       <div
         v-for="level in config.levels"
