@@ -2,7 +2,7 @@
 -- checksum/session_key. Unlinked in-progress r2-direct can still finalize.
 BEGIN;
 
-SELECT plan(4);
+SELECT plan(5);
 
 SELECT tests.authenticate_as_service_role();
 SELECT tests.create_supabase_user('r2_direct_ota_lock_owner', 'r2_direct_ota_lock_owner@test.local');
@@ -179,6 +179,16 @@ SELECT lives_ok(
       AND name = '1.0.0-unlinked'
   $sql$,
   'unlinked in-progress r2-direct can finalize to r2'
+);
+
+SELECT lives_ok(
+  $sql$
+    UPDATE public.app_versions
+    SET native_packages = NULL
+    WHERE app_id = 'com.test.r2direct.ota.lock'
+      AND name = '1.0.0-linked'
+  $sql$,
+  'channel-linked r2-direct can still update non-delivery metadata'
 );
 
 SELECT * FROM finish();

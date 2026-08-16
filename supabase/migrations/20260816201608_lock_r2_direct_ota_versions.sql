@@ -1,7 +1,7 @@
 -- GHSA-5rg9-rhwj-wj76: channel-linked / OTA-selectable r2-direct versions
--- were treated as "not ready" and stayed mutable via PostgREST. Lock the
--- same delivery-critical fields the ready-bundle path already locks.
--- Unlinked in-progress r2-direct rows can still finalize (r2-direct -> r2).
+-- were treated as "not ready" and stayed mutable via PostgREST. Lock
+-- checksum/session_key/key_id on those rows. Unlinked in-progress r2-direct
+-- rows can still finalize (r2-direct -> r2).
 
 CREATE OR REPLACE FUNCTION "public"."check_encrypted_bundle_on_insert"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
@@ -51,15 +51,7 @@ BEGIN
         || 'until every entry exists in public.manifest.';
     END IF;
 
-    -- Ready bundles stay locked. r2-direct is also locked once a channel
-    -- points at it (version or rollout_version), because /updates will serve it.
-    bundle_was_ready := OLD.storage_provider IS DISTINCT FROM 'r2-direct'
-      OR EXISTS (
-        SELECT 1
-        FROM public.channels AS ch
-        WHERE ch.version = OLD.id
-           OR ch.rollout_version = OLD.id
-      );
+    bundle_was_ready := OLD.storage_provider IS DISTINCT FROM 'r2-direct';
 
     IF bundle_was_ready
       AND (
@@ -99,6 +91,37 @@ BEGIN
           'old_storage_provider', OLD.storage_provider,
           'new_storage_provider', NEW.storage_provider,
           'reason', 'bundle_ready'
+        ));
+      RAISE EXCEPTION '%',
+        'bundle_already_ready: Bundle content cannot be changed '
+        || 'after upload is complete. Upload a new bundle instead.';
+    END IF;
+
+    -- GHSA-5rg9-rhwj-wj76: /updates serves channel-linked r2-direct rows.
+    -- Lock checksum/session_key/key_id on those OTA-selectable in-progress
+    -- rows. Finalize (r2-direct -> r2) and other upload metadata stay allowed.
+    IF NOT bundle_was_ready
+      AND (
+        NEW.session_key IS DISTINCT FROM OLD.session_key
+        OR NEW.key_id IS DISTINCT FROM OLD.key_id
+        OR NEW.checksum IS DISTINCT FROM OLD.checksum
+      )
+      AND EXISTS (
+        SELECT 1
+        FROM public.channels AS ch
+        WHERE ch.version = OLD.id
+           OR ch.rollout_version = OLD.id
+      )
+    THEN
+      PERFORM public.pg_log('deny: BUNDLE_CONTENT_LOCKED_TRIGGER',
+        pg_catalog.jsonb_build_object(
+          'org_id', OLD.owner_org,
+          'app_id', OLD.app_id,
+          'version_name', OLD.name,
+          'user_id', OLD.user_id,
+          'old_storage_provider', OLD.storage_provider,
+          'new_storage_provider', NEW.storage_provider,
+          'reason', 'ota_selectable_r2_direct'
         ));
       RAISE EXCEPTION '%',
         'bundle_already_ready: Bundle content cannot be changed '
