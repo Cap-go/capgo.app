@@ -511,24 +511,28 @@ export async function checkApiKeyOrgPermissionsPg(
   try {
     const result = await drizzleClient.execute<ApiKeyOrgPermissionRow>(
       sql`SELECT
-        requested_orgs.org_id::text AS org_id,
-        public.rbac_check_permission_direct(
-          'org.manage_apikeys',
-          ${userId}::uuid,
-          requested_orgs.org_id,
-          NULL::varchar,
-          NULL::bigint,
-          ${apikeyString}::text
-        ) AS can_manage_apikeys,
-        public.rbac_check_permission_direct(
-          'org.update_user_roles',
-          ${userId}::uuid,
-          requested_orgs.org_id,
-          NULL::varchar,
-          NULL::bigint,
-          ${apikeyString}::text
-        ) AS can_update_user_roles
-      FROM unnest(${orgIds}::uuid[]) WITH ORDINALITY AS requested_orgs(org_id, ordinal)
+        requested_orgs.org_id,
+        CASE WHEN pg_input_is_valid(requested_orgs.org_id, 'uuid') THEN
+          public.rbac_check_permission_direct(
+            'org.manage_apikeys',
+            ${userId}::uuid,
+            requested_orgs.org_id::uuid,
+            NULL::varchar,
+            NULL::bigint,
+            ${apikeyString}::text
+          )
+        ELSE false END AS can_manage_apikeys,
+        CASE WHEN pg_input_is_valid(requested_orgs.org_id, 'uuid') THEN
+          public.rbac_check_permission_direct(
+            'org.update_user_roles',
+            ${userId}::uuid,
+            requested_orgs.org_id::uuid,
+            NULL::varchar,
+            NULL::bigint,
+            ${apikeyString}::text
+          )
+        ELSE false END AS can_update_user_roles
+      FROM unnest(${orgIds}::text[]) WITH ORDINALITY AS requested_orgs(org_id, ordinal)
       ORDER BY requested_orgs.ordinal`,
     )
 

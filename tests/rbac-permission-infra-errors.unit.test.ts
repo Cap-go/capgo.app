@@ -1,4 +1,5 @@
 import { HTTPException } from 'hono/http-exception'
+import { PgDialect } from 'drizzle-orm/pg-core'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const executeMock = vi.fn()
@@ -193,6 +194,57 @@ describe('rbac permission infra errors', () => {
     ]))
 
     expect(executeMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('checkApiKeyOrgPermissionsPg preserves an uppercase UUID as the result-map key', async () => {
+    const uppercaseOrgId = '046A36AC-E03C-4590-9257-BD6C9DBA9EE8'
+    executeMock.mockImplementationOnce((query) => {
+      const renderedQuery = new PgDialect().sqlToQuery(query)
+      expect(renderedQuery.sql).toContain('::text[]) WITH ORDINALITY')
+
+      return {
+        rows: [{ org_id: uppercaseOrgId, can_manage_apikeys: true, can_update_user_roles: false }],
+      }
+    })
+
+    await expect(checkApiKeyOrgPermissionsPg(
+      makeContext(),
+      [uppercaseOrgId],
+      { execute: executeMock },
+      '00000000-0000-4000-8000-000000000001',
+      'capgo_test_key',
+      'org.manage_apikeys',
+    )).resolves.toEqual(new Map([
+      [uppercaseOrgId, { canManageApiKeys: true, canUpdateUserRoles: false }],
+    ]))
+  })
+
+  it('checkApiKeyOrgPermissionsPg denies only a malformed UUID row and preserves following results', async () => {
+    const malformedOrgId = 'bad-org-id'
+    const validOrgId = '00000000-0000-4000-8000-000000000011'
+    executeMock.mockImplementationOnce((query) => {
+      const renderedQuery = new PgDialect().sqlToQuery(query)
+      expect(renderedQuery.sql.match(/pg_input_is_valid\(requested_orgs\.org_id, 'uuid'\)/g)).toHaveLength(2)
+
+      return {
+        rows: [
+          { org_id: malformedOrgId, can_manage_apikeys: false, can_update_user_roles: false },
+          { org_id: validOrgId, can_manage_apikeys: true, can_update_user_roles: true },
+        ],
+      }
+    })
+
+    await expect(checkApiKeyOrgPermissionsPg(
+      makeContext(),
+      [malformedOrgId, validOrgId],
+      { execute: executeMock },
+      '00000000-0000-4000-8000-000000000001',
+      'capgo_test_key',
+      'org.update_user_roles',
+    )).resolves.toEqual(new Map([
+      [malformedOrgId, { canManageApiKeys: false, canUpdateUserRoles: false }],
+      [validOrgId, { canManageApiKeys: true, canUpdateUserRoles: true }],
+    ]))
   })
 
   it('checkApiKeyOrgPermissionsPg treats invalid UUID cast errors as ACL deny', async () => {
