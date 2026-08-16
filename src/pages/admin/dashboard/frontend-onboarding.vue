@@ -444,6 +444,7 @@ displayStore.defaultBack = '/dashboard'
           </div>
 
           <ChartCard
+            chart-id="daily-attempts"
             :title="t('frontend-onboarding-daily-attempts')"
             :is-loading="isLoadingStats"
             :has-data="hasDailyAttempts"
@@ -451,15 +452,23 @@ displayStore.defaultBack = '/dashboard'
             <AdminStackedBarChart :series="dailySeries" :is-loading="isLoadingStats" />
           </ChartCard>
 
-          <section class="p-6 bg-white border rounded-lg shadow-lg border-slate-300 dark:bg-gray-800 dark:border-slate-900">
-            <h2 class="text-lg font-semibold text-slate-900 dark:text-white">
-              {{ t('frontend-onboarding-funnel-v3') }}
-            </h2>
-            <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
-              {{ t('frontend-onboarding-funnel-description') }}
-            </p>
+          <ChartCard
+            chart-id="funnel-v3"
+            :title="t('frontend-onboarding-funnel-v3')"
+            :is-loading="isLoadingStats"
+          >
+            <template #header>
+              <div class="min-w-0">
+                <h2 class="text-xl font-semibold leading-tight text-slate-900 dark:text-white sm:text-2xl">
+                  {{ t('frontend-onboarding-funnel-v3') }}
+                </h2>
+                <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
+                  {{ t('frontend-onboarding-funnel-description') }}
+                </p>
+              </div>
+            </template>
             <div class="mt-6 h-72 sm:h-80">
-              <AdminFunnelChart :stages="v3FunnelStages" :is-loading="isLoadingStats" />
+              <AdminFunnelChart :stages="v3FunnelStages" />
             </div>
             <div class="grid grid-cols-2 gap-4 pt-5 mt-5 border-t border-slate-200 md:grid-cols-4 dark:border-slate-700">
               <div v-for="summary in v3FunnelSummaries" :key="summary.key" class="text-center">
@@ -471,9 +480,10 @@ displayStore.defaultBack = '/dashboard'
                 </p>
               </div>
             </div>
-          </section>
+          </ChartCard>
 
           <ChartCard
+            chart-id="daily-intent-to-details"
             :title="t('frontend-onboarding-daily-intent-to-details')"
             :is-loading="isLoadingStats"
             :has-data="hasConversionData(intentToDetailsDaily)"
@@ -488,6 +498,7 @@ displayStore.defaultBack = '/dashboard'
           </ChartCard>
 
           <ChartCard
+            chart-id="daily-details-to-organization"
             :title="t('frontend-onboarding-daily-details-to-organization')"
             :is-loading="isLoadingStats"
             :has-data="hasConversionData(detailsToOrganizationDaily)"
@@ -502,6 +513,7 @@ displayStore.defaultBack = '/dashboard'
           </ChartCard>
 
           <ChartCard
+            chart-id="daily-organization-to-setup"
             :title="t('frontend-onboarding-daily-organization-to-setup')"
             :is-loading="isLoadingStats"
             :has-data="hasConversionData(organizationToSetupDaily)"
@@ -515,24 +527,28 @@ displayStore.defaultBack = '/dashboard'
             />
           </ChartCard>
 
-          <section class="overflow-hidden rounded-[1.75rem] border border-slate-200/80 bg-white/95 p-5 shadow-[0_20px_60px_-38px_rgba(15,23,42,0.3)] dark:border-slate-700/70 dark:bg-slate-900/85 sm:p-6">
-            <div>
-              <h2 class="text-xl font-semibold leading-tight text-slate-900 dark:text-white sm:text-2xl">
-                {{ t('frontend-onboarding-graph-v3') }}
-              </h2>
-              <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
-                {{ t('frontend-onboarding-graph-v3-description') }}
-              </p>
-            </div>
-            <div class="mt-5">
-              <div v-if="isLoadingStats" class="grid min-h-72 place-items-center">
-                <span class="d-loading d-loading-spinner d-loading-lg text-primary" />
+          <ChartCard
+            chart-id="journey-graph-v3"
+            :title="t('frontend-onboarding-graph-v3')"
+            :is-loading="isLoadingStats"
+          >
+            <template #header>
+              <div class="min-w-0">
+                <h2 class="text-xl font-semibold leading-tight text-slate-900 dark:text-white sm:text-2xl">
+                  {{ t('frontend-onboarding-graph-v3') }}
+                </h2>
+                <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
+                  {{ t('frontend-onboarding-graph-v3-description') }}
+                </p>
               </div>
-              <AdminOnboardingJourneyGraph v-else :config="onboardingGraphV3" />
+            </template>
+            <div class="mt-1">
+              <AdminOnboardingJourneyGraph :config="onboardingGraphV3" />
             </div>
-          </section>
+          </ChartCard>
 
           <ChartCard
+            chart-id="setup-cli-outcomes-v2-v3"
             :title="t('frontend-onboarding-setup-cli-outcomes-v2-v3')"
             :total="setupCliOutcomes.total_users"
             :unit="t('frontend-onboarding-people')"
@@ -562,6 +578,7 @@ displayStore.defaultBack = '/dashboard'
           </ChartCard>
 
           <ChartCard
+            chart-id="daily-setup-cli-outcomes-v2-v3"
             :title="t('frontend-onboarding-daily-setup-cli-outcomes-v2-v3')"
             :is-loading="isLoadingStats"
             :has-data="hasDailySetupCliOutcomeData"
@@ -583,15 +600,23 @@ displayStore.defaultBack = '/dashboard'
             />
           </ChartCard>
 
-          <section class="p-6 bg-white border rounded-lg shadow-lg border-slate-300 dark:bg-gray-800 dark:border-slate-900">
-            <h2 class="text-lg font-semibold text-slate-900 dark:text-white">
-              {{ t('frontend-onboarding-funnel-v1-legacy') }}
-            </h2>
-            <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
-              {{ t('frontend-onboarding-funnel-description') }}
-            </p>
+          <ChartCard
+            chart-id="funnel-v1-legacy"
+            :title="t('frontend-onboarding-funnel-v1-legacy')"
+            :is-loading="isLoadingStats"
+          >
+            <template #header>
+              <div class="min-w-0">
+                <h2 class="text-xl font-semibold leading-tight text-slate-900 dark:text-white sm:text-2xl">
+                  {{ t('frontend-onboarding-funnel-v1-legacy') }}
+                </h2>
+                <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
+                  {{ t('frontend-onboarding-funnel-description') }}
+                </p>
+              </div>
+            </template>
             <div class="mt-6 h-72 sm:h-80">
-              <AdminFunnelChart :stages="v1FunnelStages" :is-loading="isLoadingStats" />
+              <AdminFunnelChart :stages="v1FunnelStages" />
             </div>
             <div class="grid grid-cols-2 gap-4 pt-5 mt-5 border-t border-slate-200 md:grid-cols-4 dark:border-slate-700">
               <div v-for="summary in v1FunnelSummaries" :key="summary.key" class="text-center">
@@ -603,7 +628,7 @@ displayStore.defaultBack = '/dashboard'
                 </p>
               </div>
             </div>
-          </section>
+          </ChartCard>
         </template>
       </div>
     </div>

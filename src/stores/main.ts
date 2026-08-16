@@ -2,7 +2,7 @@ import type { User } from '@supabase/supabase-js'
 import type { AppUsageByApp, AppUsageGlobal } from './../services/supabase'
 import type { Database } from '~/types/supabase.types'
 import { acceptHMRUpdate, defineStore } from 'pinia'
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { getDaysBetweenDates } from '~/services/conversion'
 import { normalizeToUtcStartOfDay } from '~/services/date'
 import { reset } from '~/services/posthog'
@@ -26,6 +26,7 @@ interface TotalStats {
 
 export const useMainStore = defineStore('main', () => {
   const auth = ref<User | undefined>()
+  const authGeneration = ref(0)
   const path = ref('')
   const user = ref<Database['public']['Tables']['users']['Row']>()
   const plans = ref<Database['public']['Tables']['plans']['Row'][]>([])
@@ -49,6 +50,10 @@ export const useMainStore = defineStore('main', () => {
   const _initialLoadPromise = ref(createDeferredPromise<boolean>())
 
   const totalDownload = ref<number>(0)
+
+  watch(auth, () => {
+    authGeneration.value += 1
+  }, { flush: 'sync' })
 
   const logout = async () => {
     const supabase = useSupabase()
@@ -147,6 +152,7 @@ export const useMainStore = defineStore('main', () => {
 
   return {
     auth,
+    authGeneration,
     statsTime,
     plans,
     isAdmin,

@@ -1,10 +1,21 @@
+import type { AdminDashboardMinimize } from '~/services/adminDashboardPreferences'
 import type { DateRangePreset, DateRangeValue } from '~/services/dateRange'
 import { acceptHMRUpdate, defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import {
+  readAdminDashboardMinimize,
+  withAdminDashboardMinimize,
+} from '~/services/adminDashboardPreferences'
+import {
   getDateRangeForPreset as getDateRangeForMode,
 } from '~/services/dateRange'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
+import {
+  MAX_USER_ONBOARDING_WRITE_ATTEMPTS,
+  replaceUserOnboardingIfUnchanged,
+  serializeUserOnboardingWrite,
+} from '~/services/userOnboardingWriteQueue'
+import { useMainStore } from '~/stores/main'
 
 export type MetricCategory = 'uploads' | 'distribution' | 'failures' | 'success_rate' | 'platform_overview' | 'org_metrics' | 'mau_trend' | 'success_rate_trend' | 'apps_trend' | 'bundles_trend' | 'deployments_trend' | 'storage_trend' | 'bandwidth_trend' | 'global_stats_trend' | 'plugin_breakdown' | 'trial_organizations' | 'trial_plan_breakdown' | 'onboarding_funnel' | 'cancelled_users' | 'email_type_breakdown' | 'customer_country_breakdown' | 'organization_insights' | 'builder_analytics' | 'builder_capacity' | 'cli_usage' | 'channel_surfing' | 'frontend_onboarding_analytics' | 'plans_analytics'
 
@@ -59,6 +70,14 @@ export const useAdminDashboardStore = defineStore('adminDashboard', () => {
   // Refresh trigger - increment this to force all watchers to refetch
   const refreshTrigger = ref(0)
 
+  // Graph minimize preferences are hydrated once from the user profile fetched by auth.
+  const adminDashboardMinimize = ref<AdminDashboardMinimize>({})
+  const adminDashboardMinimizeUserId = ref<string | null>(null)
+  const adminDashboardMinimizeAuthGeneration = ref<number | null>(null)
+  const pendingAdminDashboardMinimize = ref<AdminDashboardMinimize>({})
+  const pendingAdminDashboardMinimizeUserId = ref<string | null>(null)
+  const pendingAdminDashboardMinimizeAuthGeneration = ref<number | null>(null)
+
   function getRollingDateRange(now = new Date()): DateRange {
     return getDateRangeForMode(dateRangeMode.value, now, customDateRange.value)
   }
@@ -67,6 +86,160 @@ export const useAdminDashboardStore = defineStore('adminDashboard', () => {
     void refreshTrigger.value
     return getRollingDateRange()
   })
+
+  function hydrateAdminDashboardMinimize(): boolean {
+    const main = useMainStore()
+    const userId = main.user?.id
+    if (!main.isAdmin || !userId) {
+      adminDashboardMinimize.value = {}
+      adminDashboardMinimizeUserId.value = null
+      adminDashboardMinimizeAuthGeneration.value = null
+      pendingAdminDashboardMinimize.value = {}
+      pendingAdminDashboardMinimizeUserId.value = null
+      pendingAdminDashboardMinimizeAuthGeneration.value = null
+      return false
+    }
+
+    if (
+      pendingAdminDashboardMinimizeUserId.value !== userId
+      || pendingAdminDashboardMinimizeAuthGeneration.value !== main.authGeneration
+    ) {
+      pendingAdminDashboardMinimize.value = {}
+      pendingAdminDashboardMinimizeUserId.value = userId
+      pendingAdminDashboardMinimizeAuthGeneration.value = main.authGeneration
+    }
+
+    if (
+      adminDashboardMinimizeUserId.value !== userId
+      || adminDashboardMinimizeAuthGeneration.value !== main.authGeneration
+    ) {
+      adminDashboardMinimize.value = {
+        ...readAdminDashboardMinimize(main.user?.onboarding),
+        ...pendingAdminDashboardMinimize.value,
+      }
+      adminDashboardMinimizeUserId.value = userId
+      adminDashboardMinimizeAuthGeneration.value = main.authGeneration
+    }
+
+    return true
+  }
+
+  function isChartMinimized(key: string): boolean {
+    if (!hydrateAdminDashboardMinimize())
+      return false
+    return adminDashboardMinimize.value[key] === true
+  }
+
+  function setChartMinimized(key: string, minimized: boolean): Promise<void> {
+    if (!hydrateAdminDashboardMinimize())
+      return Promise.resolve()
+
+    const main = useMainStore()
+    if (!main.user)
+      return Promise.resolve()
+
+    const userId = main.user.id
+    const authGeneration = main.authGeneration
+    const preferences = {
+      ...adminDashboardMinimize.value,
+      [key]: minimized,
+    }
+    const preferenceUpdate = {
+      ...pendingAdminDashboardMinimize.value,
+      [key]: minimized,
+    }
+    pendingAdminDashboardMinimize.value = preferenceUpdate
+    adminDashboardMinimize.value = preferences
+
+    return serializeUserOnboardingWrite(userId, async () => {
+      const latestMain = useMainStore()
+      if (
+        !latestMain.isAdmin
+        || latestMain.user?.id !== userId
+        || latestMain.authGeneration !== authGeneration
+      ) {
+        return
+      }
+
+      let currentOnboarding = latestMain.user.onboarding
+      let latestProfile = latestMain.user
+      for (let attempt = 0; attempt < MAX_USER_ONBOARDING_WRITE_ATTEMPTS; attempt++) {
+        const activeMain = useMainStore()
+        if (
+          !activeMain.isAdmin
+          || activeMain.user?.id !== userId
+          || activeMain.authGeneration !== authGeneration
+        ) {
+          return
+        }
+
+        const onboarding = withAdminDashboardMinimize(currentOnboarding, {
+          ...readAdminDashboardMinimize(currentOnboarding),
+          ...preferenceUpdate,
+        })
+        const { data, error } = await replaceUserOnboardingIfUnchanged(
+          userId,
+          currentOnboarding,
+          onboarding,
+        )
+        if (error)
+          throw error
+
+        if (data) {
+          if (activeMain.user?.id === userId && activeMain.authGeneration === authGeneration) {
+            activeMain.user = { ...data, image_url: activeMain.user.image_url }
+            const remainingPending = { ...pendingAdminDashboardMinimize.value }
+            for (const [pendingKey, pendingValue] of Object.entries(preferenceUpdate)) {
+              if (remainingPending[pendingKey] === pendingValue)
+                delete remainingPending[pendingKey]
+            }
+            pendingAdminDashboardMinimize.value = remainingPending
+            if (
+              adminDashboardMinimizeUserId.value === userId
+              && adminDashboardMinimizeAuthGeneration.value === authGeneration
+            ) {
+              adminDashboardMinimize.value = {
+                ...readAdminDashboardMinimize(data.onboarding),
+                ...remainingPending,
+              }
+            }
+          }
+          return
+        }
+
+        const { data: latest, error: latestError } = await useSupabase()
+          .from('users')
+          .select()
+          .eq('id', userId)
+          .maybeSingle()
+        if (latestError)
+          throw latestError
+        if (!latest)
+          throw new Error('Cannot refresh admin dashboard graph preferences')
+        latestProfile = latest
+        currentOnboarding = latest.onboarding
+      }
+
+      const activeMain = useMainStore()
+      if (activeMain.user?.id === userId && activeMain.authGeneration === authGeneration) {
+        activeMain.user = { ...latestProfile, image_url: activeMain.user.image_url }
+        if (
+          adminDashboardMinimizeUserId.value === userId
+          && adminDashboardMinimizeAuthGeneration.value === authGeneration
+        ) {
+          adminDashboardMinimize.value = {
+            ...readAdminDashboardMinimize(currentOnboarding),
+            ...pendingAdminDashboardMinimize.value,
+          }
+        }
+      }
+
+      throw new Error('Admin dashboard graph preferences changed too often to persist')
+    })
+      .catch((error) => {
+        console.error('Failed to persist admin dashboard graph preference', error)
+      })
+  }
 
   // Actions
   function setOrgFilter(orgId: string | null) {
@@ -198,6 +371,12 @@ export const useAdminDashboardStore = defineStore('adminDashboard', () => {
     invalidateCache()
     loadingCount.value = 0
     loadingCategory.value = null
+    adminDashboardMinimize.value = {}
+    adminDashboardMinimizeUserId.value = null
+    adminDashboardMinimizeAuthGeneration.value = null
+    pendingAdminDashboardMinimize.value = {}
+    pendingAdminDashboardMinimizeUserId.value = null
+    pendingAdminDashboardMinimizeAuthGeneration.value = null
   }
 
   return {
@@ -209,6 +388,7 @@ export const useAdminDashboardStore = defineStore('adminDashboard', () => {
     customDateRange,
     isLoading,
     loadingCategory,
+    adminDashboardMinimize,
 
     // Computed
     activeDateRange,
@@ -219,6 +399,8 @@ export const useAdminDashboardStore = defineStore('adminDashboard', () => {
     setDateRangeMode,
     setCustomDateRange,
     clearFilters,
+    isChartMinimized,
+    setChartMinimized,
     fetchStats,
     invalidateCache,
     $reset,

@@ -82,7 +82,23 @@ describe('onboarding progress persistence', () => {
     await expect(persistence.persist('completed')).resolves.toBe('skipped')
 
     expect(write).toHaveBeenCalledTimes(2)
-    expect(write).toHaveBeenNthCalledWith(2, 'completed')
+    expect(write).toHaveBeenNthCalledWith(2, 'completed', {})
+  })
+
+  it('keeps final-flush options attached to their queued write', async () => {
+    const firstWrite = deferred<'persisted'>()
+    const write = vi.fn()
+      .mockImplementationOnce(() => firstWrite.promise)
+      .mockResolvedValueOnce('persisted')
+    const persistence = createOnboardingProgressPersistence({ write })
+
+    const first = persistence.persist()
+    const finalFlush = persistence.persist('in_progress', { allowDisposed: true })
+    firstWrite.resolve('persisted')
+
+    await expect(first).resolves.toBe('persisted')
+    await expect(finalFlush).resolves.toBe('persisted')
+    expect(write).toHaveBeenNthCalledWith(2, 'in_progress', { allowDisposed: true })
   })
 
   it('turns a rejected write into a retryable failure without poisoning later queue work', async () => {

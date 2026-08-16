@@ -519,6 +519,7 @@ displayStore.defaultBack = '/dashboard'
 
           <div class="grid grid-cols-1 gap-6">
             <ChartCard
+              chart-id="usage-by-hour"
               title="Builder usage by hour"
               :is-loading="isLoadingCapacity"
               :has-data="hasCapacityHourly"
@@ -545,6 +546,7 @@ displayStore.defaultBack = '/dashboard'
           <!-- ===================== Build volume overview (global_stats) ===================== -->
           <div class="grid grid-cols-1 gap-6">
             <ChartCard
+              chart-id="paying-client-product-activity-trend"
               :title="t('paying-client-product-activity-trend')"
               :is-loading="isLoadingGlobalStatsTrend"
               :has-data="builderActivityTrendSeries.length > 0"
@@ -577,22 +579,22 @@ displayStore.defaultBack = '/dashboard'
           </div>
 
           <div class="grid grid-cols-1 gap-6 xl:grid-cols-2">
-            <ChartCard :title="t('builds-trend')" :is-loading="isLoadingGlobalStatsTrend" :has-data="buildsTrendSeries.length > 0">
+            <ChartCard chart-id="builds-trend" :title="t('builds-trend')" :is-loading="isLoadingGlobalStatsTrend" :has-data="buildsTrendSeries.length > 0">
               <AdminMultiLineChart :series="buildsTrendSeries" :is-loading="isLoadingGlobalStatsTrend" />
             </ChartCard>
-            <ChartCard :title="t('builds-last-month-trend')" :is-loading="isLoadingGlobalStatsTrend" :has-data="buildsLastMonthTrendSeries.length > 0">
+            <ChartCard chart-id="builds-last-month-trend" :title="t('builds-last-month-trend')" :is-loading="isLoadingGlobalStatsTrend" :has-data="buildsLastMonthTrendSeries.length > 0">
               <AdminMultiLineChart :series="buildsLastMonthTrendSeries" :is-loading="isLoadingGlobalStatsTrend" />
             </ChartCard>
           </div>
 
           <div class="grid grid-cols-1 gap-6">
-            <ChartCard title="Build Total Seconds by Day" :is-loading="isLoadingGlobalStatsTrend" :has-data="buildTotalSecondsTrendSeries.length > 0">
+            <ChartCard chart-id="build-total-seconds-by-day" title="Build Total Seconds by Day" :is-loading="isLoadingGlobalStatsTrend" :has-data="buildTotalSecondsTrendSeries.length > 0">
               <AdminMultiLineChart :series="buildTotalSecondsTrendSeries" :is-loading="isLoadingGlobalStatsTrend" />
             </ChartCard>
           </div>
 
           <div class="grid grid-cols-1 gap-6">
-            <ChartCard title="Average Build Time by Day (sec)" :is-loading="isLoadingGlobalStatsTrend" :has-data="buildAverageSecondsTrendSeries.length > 0">
+            <ChartCard chart-id="average-build-time-by-day" title="Average Build Time by Day (sec)" :is-loading="isLoadingGlobalStatsTrend" :has-data="buildAverageSecondsTrendSeries.length > 0">
               <AdminMultiLineChart :series="buildAverageSecondsTrendSeries" :is-loading="isLoadingGlobalStatsTrend" />
             </ChartCard>
           </div>
@@ -619,6 +621,7 @@ displayStore.defaultBack = '/dashboard'
           <!-- New errors alert -->
           <ChartCard
             v-if="newErrorGroups.length"
+            chart-id="new-build-errors"
             title="New build errors (last 3 days)"
             :is-loading="isLoadingData"
             :has-data="true"
@@ -647,6 +650,7 @@ displayStore.defaultBack = '/dashboard'
 
           <!-- Onboarding funnel -->
           <ChartCard
+            chart-id="onboarding-funnel"
             title="Onboarding funnel"
             :total="funnelStart"
             unit="journeys"
@@ -676,6 +680,7 @@ displayStore.defaultBack = '/dashboard'
 
           <!-- Build outcomes over time -->
           <ChartCard
+            chart-id="build-outcomes"
             title="Build outcomes over time"
             :is-loading="isLoadingData"
             :has-data="hasBuildsTrend"
@@ -697,6 +702,7 @@ displayStore.defaultBack = '/dashboard'
           <div class="grid grid-cols-1 gap-6 xl:grid-cols-2">
             <!-- Where users drop off -->
             <ChartCard
+              chart-id="onboarding-dropoff"
               title="Where users drop off"
               :is-loading="isLoadingData"
               :has-data="quitItems.length > 0"
@@ -717,6 +723,7 @@ displayStore.defaultBack = '/dashboard'
 
             <!-- Onboarding error categories -->
             <ChartCard
+              chart-id="onboarding-error-categories"
               title="Onboarding error categories"
               :is-loading="isLoadingData"
               :has-data="onbErrorCategories.length > 0"
@@ -738,6 +745,7 @@ displayStore.defaultBack = '/dashboard'
 
           <!-- Build failure signatures -->
           <ChartCard
+            chart-id="build-failure-signatures"
             title="Build failure signatures"
             :is-loading="isLoadingData"
             :has-data="errorGroups.length > 0"
@@ -782,6 +790,7 @@ displayStore.defaultBack = '/dashboard'
 
           <!-- Orgs -->
           <ChartCard
+            chart-id="organizations"
             title="Organizations"
             :is-loading="isLoadingData"
             :has-data="orgs.length > 0"
@@ -858,6 +867,7 @@ displayStore.defaultBack = '/dashboard'
 
           <!-- Onboarding journeys -->
           <ChartCard
+            chart-id="onboarding-journeys"
             title="Onboarding journeys"
             :is-loading="isLoadingData"
             :has-data="journeys.length > 0"
