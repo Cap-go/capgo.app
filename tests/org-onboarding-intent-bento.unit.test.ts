@@ -15,6 +15,12 @@ vi.mock('../supabase/functions/_backend/utils/org_email_notifications.ts', () =>
 vi.mock('../supabase/functions/_backend/utils/utils.ts', () => ({
   getEnv: (_c: unknown, key: string) => key === 'WEBAPP_URL' ? 'https://console.capgo.app/' : undefined,
   backgroundTask: async (_c: unknown, task: () => Promise<unknown>) => task(),
+  trimTrailingSlashes: (value: string) => {
+    let end = value.length
+    while (end > 0 && value[end - 1] === '/')
+      end -= 1
+    return value.slice(0, end)
+  },
 }))
 
 vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({

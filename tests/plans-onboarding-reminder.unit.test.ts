@@ -66,6 +66,12 @@ vi.mock('../supabase/functions/_backend/utils/tracking.ts', () => ({
 vi.mock('../supabase/functions/_backend/utils/utils.ts', () => ({
   getEnv: vi.fn((_c: unknown, key: string) => key === 'WEBAPP_URL' ? 'https://console.capgo.app/' : undefined),
   isStripeConfigured: vi.fn(),
+  trimTrailingSlashes: (value: string) => {
+    let end = value.length
+    while (end > 0 && value[end - 1] === '/')
+      end -= 1
+    return value.slice(0, end)
+  },
 }))
 
 function createContext() {

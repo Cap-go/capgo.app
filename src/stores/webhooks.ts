@@ -52,7 +52,7 @@ function getFunctionErrorMessage(error: unknown, fallback: string) {
   return errorMessage(error, fallback)
 }
 
-const VALID_WEBHOOK_EVENT_VALUES = new Set(WEBHOOK_EVENT_TYPES.map(e => e.value))
+const VALID_WEBHOOK_EVENT_VALUES = new Set<string>(WEBHOOK_EVENT_TYPES.map(e => e.value))
 
 export const useWebhooksStore = defineStore('webhooks', () => {
   const webhooks: Ref<Webhook[]> = ref([])
