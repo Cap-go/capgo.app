@@ -74,7 +74,7 @@ function refreshOnVisibilityChange() {
     void refreshOrganizationLogosIfNeeded()
 }
 
-onClickOutside(dropdown, () => closeDropdown(), { ignore: [menu] })
+onClickOutside(dropdown, () => closeDropdown({ restoreFocus: false }), { ignore: [menu] })
 
 let compactMenuListenersBound = false
 
@@ -265,14 +265,21 @@ async function openInvitationFromRouteIfNeeded() {
     await handleOrganizationInvitation(inviteOrg)
 }
 
-function closeDropdown() {
+function closeDropdown(options?: { restoreFocus?: boolean }) {
   const wasCompactOpen = compactMenuOpen.value
   compactMenuOpen.value = false
   unbindCompactMenuListeners()
   dropdown.value?.removeAttribute('open')
-  if (wasCompactOpen)
+  if (wasCompactOpen && options?.restoreFocus !== false)
     dropdown.value?.querySelector('summary')?.focus()
 }
+
+onKeyStroke('Escape', (event) => {
+  if (!compactMenuOpen.value && !dropdown.value?.open)
+    return
+  event.preventDefault()
+  closeDropdown({ restoreFocus: true })
+})
 
 function getLogoRefreshKey(org?: Organization | null) {
   if (!org)
@@ -604,7 +611,7 @@ watch(
             <div class="block p-px rounded-lg from-cyan-500 to-purple-500 bg-linear-to-r">
               <button
                 type="button"
-                class="flex w-full justify-center items-center py-3 px-3 text-center text-white rounded-lg bg-[#1a1d24] hover:bg-gray-600 cursor-pointer"
+                class="d-btn d-btn-ghost flex w-full h-auto min-h-0 justify-center items-center py-3 px-3 text-center text-white rounded-lg bg-[#1a1d24] hover:bg-gray-600 cursor-pointer"
                 @click="createNewOrg"
               >
                 {{ t('add-organization') }}
