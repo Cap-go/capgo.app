@@ -14,6 +14,12 @@ async function shellPadding(page: Page) {
 async function orgSwitcherMenuIsOnTop(page: Page) {
   const menu = page.locator('[data-test="org-switcher-menu"]')
   await expect(menu).toBeVisible()
+  await expect.poll(async () => {
+    return menu.evaluate((el) => {
+      const style = getComputedStyle(el)
+      return `${style.position}:${style.display}`
+    })
+  }).toMatch(/^(absolute|fixed):(?!none).+/)
   const menuBox = await menu.boundingBox()
   expect(menuBox).toBeTruthy()
   expect(menuBox!.width).toBeGreaterThanOrEqual(280)
@@ -79,6 +85,7 @@ test.describe('Desktop sidebar collapse', () => {
     await dismissSupportPrompt(page)
     await expect(page.locator('[data-test="org-switcher"]')).toBeVisible()
     await page.locator('[data-test="org-switcher"] summary').click()
+    await expect(page.locator('[data-test="org-switcher-menu"]')).toHaveCSS('position', 'fixed')
     expect(await orgSwitcherMenuIsOnTop(page)).toBe(true)
   })
 })
