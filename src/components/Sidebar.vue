@@ -241,7 +241,7 @@ const tabs = computed<Tab[]>(() => {
                 class="d-btn d-btn-ghost flex items-center w-full rounded-md border-none shadow-none transition duration-150 cursor-pointer lg:rounded-lg focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none text-slate-200 lg:text-slate-200 lg:hover:bg-slate-700/50 hover:bg-slate-700/50 focus:ring-offset-slate-800"
                 :class="{
                   'd-btn-square justify-center p-1 min-h-9 h-9 min-w-0': isRail,
-                  'h-auto p-3 lg:p-3 min-h-11': !isRail,
+                  'justify-start h-auto p-3 lg:p-3 min-h-11': !isRail,
                   'hover:bg-slate-700/50 lg:hover:bg-slate-700/50': !isTabActive(tab.key),
                   'bg-slate-700 text-white lg:bg-slate-700 lg:text-white': isTabActive(tab.key),
                   'cursor-default': isTabActive(tab.key),

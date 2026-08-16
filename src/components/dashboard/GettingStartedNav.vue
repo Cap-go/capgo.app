@@ -109,7 +109,7 @@ watch(() => organizationStore.currentOrganization?.gid, async (orgId) => {
         >
           <router-link
             class="d-btn d-btn-ghost flex min-h-11 h-auto items-center border-none bg-transparent shadow-none hover:bg-transparent focus:outline-none focus:ring-2 focus:ring-azure-500 focus:ring-offset-2 focus:ring-offset-slate-800"
-            :class="props.compact ? 'min-w-0 flex-1 justify-center px-1 py-1.5' : 'min-w-0 flex-1 gap-2 px-2 py-1.5'"
+            :class="props.compact ? 'min-w-0 flex-1 justify-center px-1 py-1.5' : 'min-w-0 flex-1 justify-start gap-2 px-2 py-1.5'"
             :to="gettingStartedPath(app.app_id)"
             :aria-current="isActive(app.app_id) ? 'page' : undefined"
             :aria-label="`${t('getting-started')} — ${appLabel(app)}`"
