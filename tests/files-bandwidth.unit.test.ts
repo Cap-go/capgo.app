@@ -101,12 +101,16 @@ describe('files bandwidth tracking', () => {
   it('does not track bandwidth for cached HEAD reads', async () => {
     globalThis.caches = {
       default: {
-        match: async () => new Response(null, {
-          headers: {
-            'cache-control': 'public, max-age=3600',
-            'content-length': '3478395',
-          },
-        }),
+        match: async (request: Request) => {
+          if (new URL(request.url).pathname.startsWith('/deleted/'))
+            return null
+          return new Response(null, {
+            headers: {
+              'cache-control': 'public, max-age=3600',
+              'content-length': '3478395',
+            },
+          })
+        },
         put: async () => { },
       },
     } as any

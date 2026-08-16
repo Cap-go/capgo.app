@@ -76,6 +76,9 @@ describe('files R2 error handling', () => {
 
     const matchMock = vi.fn(async (request: Request) => {
       const cacheUrl = new URL(request.url)
+      if (cacheUrl.pathname.startsWith('/deleted/'))
+        return null
+
       expect(cacheUrl.searchParams.get('device_id')).toBeNull()
       expect(cacheUrl.searchParams.get('key')).toBe('checksum')
       expect(cacheUrl.searchParams.get('range')).toBe('')
@@ -112,7 +115,7 @@ describe('files R2 error handling', () => {
 
     expect(response.status).toBe(200)
     expect(response.headers.get('cache-control')).toBe('public, max-age=31536000, immutable, no-transform')
-    expect(matchMock).toHaveBeenCalledTimes(1)
+    expect(matchMock).toHaveBeenCalled()
   })
 
   it('should persist no-transform in file metadata written to R2', async () => {

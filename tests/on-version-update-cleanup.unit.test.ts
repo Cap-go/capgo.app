@@ -13,6 +13,7 @@ const {
   manifestSelectWhere,
   moveObjectToTrash,
   pgQuery,
+  purgeFileReadCache,
   supabaseAdmin,
 } = vi.hoisted(() => {
   const callOrder: string[] = []
@@ -75,9 +76,14 @@ const {
     manifestSelectWhere,
     moveObjectToTrash,
     pgQuery,
+    purgeFileReadCache: vi.fn(async () => {}),
     supabaseAdmin: vi.fn(() => ({ from: supabaseFrom })),
   }
 })
+
+vi.mock('../supabase/functions/_backend/files/file_read_cache.ts', () => ({
+  purgeFileReadCache,
+}))
 
 vi.mock('../supabase/functions/_backend/utils/s3.ts', () => ({
   getPath: vi.fn(),
@@ -179,6 +185,7 @@ describe('on_version_update deleted version cleanup', () => {
   it('moves the bundle to trash and clears stored size for soft-deleted versions', async () => {
     const response = await deleteIt(createContext(), createVersion())
     expect(response.status).toBe(200)
+    expect(purgeFileReadCache).toHaveBeenCalledWith('orgs/org-1/apps/com.cleanup.test/1.0.0.zip')
     expect(moveObjectToTrash).toHaveBeenCalledWith(expect.anything(), 'orgs/org-1/apps/com.cleanup.test/1.0.0.zip')
     expect(appVersionsMetaUpdate).toHaveBeenCalledWith({ size: 0 })
   })

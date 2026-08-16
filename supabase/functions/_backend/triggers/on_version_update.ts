@@ -3,6 +3,7 @@ import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Database } from '../utils/supabase.types.ts'
 import { eq } from 'drizzle-orm'
 import { Hono } from 'hono/tiny'
+import { purgeFileReadCache } from '../files/file_read_cache.ts'
 import { BRES, middlewareAPISecret, simpleError, triggerValidator } from '../utils/hono.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { persistVersionManifestEntries } from '../utils/manifest_persist.ts'
@@ -424,6 +425,9 @@ async function deleteManifest(c: Context, record: Database['public']['Tables']['
 
 export async function deleteIt(c: Context, record: Database['public']['Tables']['app_versions']['Row']) {
   cloudlog({ requestId: c.get('requestId'), message: 'Delete', r2_path: record.r2_path })
+
+  if (record.r2_path)
+    await purgeFileReadCache(record.r2_path)
 
   // Manifest files: trash R2 first, then drop DB rows. Must finish before ACK.
   await deleteManifest(c, record)

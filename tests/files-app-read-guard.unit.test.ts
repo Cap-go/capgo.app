@@ -1,7 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
 const getAppByAppIdPgMock = vi.fn(async () => null)
-const getPgClientMock = vi.fn(() => ({}))
+const getPgClientMock = vi.fn(() => ({
+  query: async () => ({ rows: [] }),
+}))
 const originalCaches = globalThis.caches
 const cachedBodiesByPath = new Map([
   ['/read/attachments/orgs/test-org/apps/test-app/orphan.txt', 'cached orphan bytes'],
@@ -70,7 +72,7 @@ describe('files app-scoped cached reads', () => {
     globalThis.caches = originalCaches
   })
 
-  it.concurrent('serves deleted app-scoped files from cache without a database lookup', async () => {
+  it.concurrent('serves orphan app-scoped files from cache when no deleted version row exists', async () => {
     const bucketPut = vi.fn()
     const appGlobal = await createFilesApp()
 
@@ -85,11 +87,10 @@ describe('files app-scoped cached reads', () => {
     expect(response.status).toBe(200)
     expect(await response.text()).toBe('cached orphan bytes')
     expect(bucketPut).not.toHaveBeenCalled()
-    expect(getPgClientMock).not.toHaveBeenCalled()
     expect(getAppByAppIdPgMock).not.toHaveBeenCalled()
   })
 
-  it.concurrent('serves malformed app-scoped paths from cache without a database lookup', async () => {
+  it.concurrent('serves malformed app-scoped paths from cache when no deleted version row exists', async () => {
     const bucketPut = vi.fn()
     const appGlobal = await createFilesApp()
 
@@ -104,8 +105,6 @@ describe('files app-scoped cached reads', () => {
     expect(response.status).toBe(200)
     expect(await response.text()).toBe('cached malformed bytes')
     expect(bucketPut).not.toHaveBeenCalled()
-    expect(getPgClientMock).not.toHaveBeenCalled()
     expect(getAppByAppIdPgMock).not.toHaveBeenCalled()
-    expect(getPgClientMock).not.toHaveBeenCalled()
   })
 })
