@@ -1,6 +1,6 @@
 import type { Context } from 'hono'
 import { cloudlog, cloudlogErr } from './logging.ts'
-import { normalizeImagePath } from './storage.ts'
+import { getStorageAllowedOrigins, normalizeImagePath } from './storage.ts'
 import { supabaseAdmin } from './supabase.ts'
 
 const JPEG_SIGNATURE = [0xFF, 0xD8]
@@ -162,7 +162,9 @@ function mimeFromFilePath(path: string): string | null {
 
 export async function cleanStoredImageMetadata(c: Context, rawImagePath: string): Promise<void> {
   const requestId = c.get('requestId')
-  const normalizedPath = normalizeImagePath(rawImagePath)
+  const normalizedPath = normalizeImagePath(rawImagePath, {
+    allowedOrigins: getStorageAllowedOrigins(c),
+  })
 
   if (!normalizedPath) {
     cloudlog({ requestId, message: 'Cannot normalize image path', rawImagePath })

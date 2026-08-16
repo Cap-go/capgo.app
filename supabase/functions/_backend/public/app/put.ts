@@ -10,7 +10,7 @@ import { quickError, simpleError } from '../../utils/hono.ts'
 import { cloudlog } from '../../utils/logging.ts'
 import { closeClient, getPgClient } from '../../utils/pg.ts'
 import { checkPermission } from '../../utils/rbac.ts'
-import { assertAllowedImagePath, createSignedImageUrl, normalizeImagePath } from '../../utils/storage.ts'
+import { assertAllowedImagePath, createSignedImageUrl, getStorageAllowedOrigins, normalizeImagePath } from '../../utils/storage.ts'
 import { supabaseAdmin, supabaseApikey } from '../../utils/supabase.ts'
 import { isValidAppId } from '../../utils/utils.ts'
 
@@ -130,7 +130,9 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
     normalizedIcon = ''
   }
   else {
-    const normalized = normalizeImagePath(body.icon)
+    const normalized = normalizeImagePath(body.icon, {
+      allowedOrigins: getStorageAllowedOrigins(c),
+    })
     normalizedIcon = body.icon.includes('://') && !normalized
       ? body.icon
       : assertAllowedImagePath(normalized, {

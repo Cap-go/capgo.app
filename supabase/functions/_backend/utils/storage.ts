@@ -1,9 +1,9 @@
 import type { Context } from 'hono'
 import { supabaseAdmin } from './supabase.ts'
+import { getEnv } from './utils.ts'
 
 const SIGNED_URL_TTL_SECONDS = 60 * 60 * 24 * 7
 const STORAGE_URL_REGEX = /\/storage\/v1\/object(?:\/(?:public|sign))?\/images\/(.+)$/
-const USER_FOLDER_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\//i
 
 export interface ImagePathScope {
   orgId?: string
@@ -11,7 +11,22 @@ export interface ImagePathScope {
   appId?: string
 }
 
-export function normalizeImagePath(raw?: string | null) {
+export function getStorageAllowedOrigins(c: Context): string[] {
+  const supabaseUrl = getEnv(c, 'SUPABASE_URL').trim()
+  if (!supabaseUrl)
+    return []
+  try {
+    return [new URL(supabaseUrl).origin]
+  }
+  catch {
+    return []
+  }
+}
+
+export function normalizeImagePath(
+  raw?: string | null,
+  options?: { allowedOrigins?: string[] },
+) {
   if (!raw)
     return null
 
@@ -22,9 +37,13 @@ export function normalizeImagePath(raw?: string | null) {
   try {
     const url = new URL(trimmed)
     const match = STORAGE_URL_REGEX.exec(url.pathname)
-    if (match?.[1])
-      return decodeURIComponent(match[1])
-    // External non-storage URL — leave as absolute URL marker via null normalize
+    if (match?.[1]) {
+      // Only extract object paths from our configured Supabase origin.
+      if (!options?.allowedOrigins?.includes(url.origin))
+        return null
+      return decodeURIComponent(match[1]).replace(/^\/+/, '')
+    }
+    // External non-storage URL
     return null
   }
   catch {
@@ -39,12 +58,17 @@ function hasUnsafeImagePathSegments(normalized: string) {
     || normalized.split('/').some(segment => segment === '.' || segment === '..')
 }
 
+/** Legacy icons stored as a single root-level filename (no `/`). */
+export function isLegacyBareImageFilename(normalized: string) {
+  return !!normalized && !normalized.includes('/') && !hasUnsafeImagePathSegments(normalized)
+}
+
 /**
- * Paths that claim an org or user folder must be ownership-checked.
- * Legacy bare filenames (e.g. `test-icon`) are not ownership-bearing.
+ * Any path with a folder segment must pass ownership checks.
+ * Bare filenames are the only legacy exception.
  */
 export function isOwnershipBearingImagePath(normalized: string) {
-  return normalized.startsWith('org/') || USER_FOLDER_REGEX.test(normalized)
+  return normalized.includes('/')
 }
 
 /**
@@ -76,7 +100,9 @@ export function assertAllowedImagePath(normalized: string | null, scope: ImagePa
     return null
   if (hasUnsafeImagePathSegments(normalized))
     return null
-  if (isOwnershipBearingImagePath(normalized) && !isAllowedImagePath(normalized, scope))
+  if (isLegacyBareImageFilename(normalized))
+    return normalized
+  if (!isAllowedImagePath(normalized, scope))
     return null
   return normalized
 }
@@ -89,11 +115,15 @@ export async function createSignedImageUrl(
   if (!rawPath)
     return null
 
-  // Absolute non-storage URLs are returned unchanged (no admin signing).
+  const allowedOrigins = getStorageAllowedOrigins(c)
+
+  // Absolute non-storage / foreign-host URLs are returned unchanged (no admin signing).
   if (rawPath.includes('://')) {
     try {
-      const pathname = new URL(rawPath).pathname
-      if (!STORAGE_URL_REGEX.test(pathname))
+      const url = new URL(rawPath)
+      const isOurStoragePath = STORAGE_URL_REGEX.test(url.pathname)
+        && allowedOrigins.includes(url.origin)
+      if (!isOurStoragePath)
         return rawPath
     }
     catch {
@@ -101,11 +131,11 @@ export async function createSignedImageUrl(
     }
   }
 
-  const normalized = normalizeImagePath(rawPath)
+  const normalized = normalizeImagePath(rawPath, { allowedOrigins })
   if (!normalized || hasUnsafeImagePathSegments(normalized))
     return null
 
-  // Ownership-bearing paths require a matching scope before admin signing.
+  // Foldered paths require a matching ownership scope before admin signing.
   if (isOwnershipBearingImagePath(normalized)) {
     if (!scope || !isAllowedImagePath(normalized, scope))
       return null

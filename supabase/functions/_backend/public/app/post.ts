@@ -5,7 +5,7 @@ import { applyAppOnboardingPatch, isAppOnboardingSource } from '../../utils/appO
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { closeClient, getPgClient, logPgError } from '../../utils/pg.ts'
 import { checkPermission } from '../../utils/rbac.ts'
-import { assertAllowedImagePath, createSignedImageUrl, normalizeImagePath } from '../../utils/storage.ts'
+import { assertAllowedImagePath, createSignedImageUrl, getStorageAllowedOrigins, normalizeImagePath } from '../../utils/storage.ts'
 import { isValidAppId } from '../../utils/utils.ts'
 
 export interface CreateApp {
@@ -44,7 +44,9 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: CreateApp):
 
   let normalizedIcon: string | null = null
   if (body.icon) {
-    const normalized = normalizeImagePath(body.icon)
+    const normalized = normalizeImagePath(body.icon, {
+      allowedOrigins: getStorageAllowedOrigins(c),
+    })
     normalizedIcon = body.icon.includes('://') && !normalized
       ? body.icon
       : assertAllowedImagePath(normalized, {
