@@ -59,7 +59,7 @@ function normalizeEmail(email: string) {
 
 /** Escape `%` / `_` so PostgREST `ilike` cannot be used as a wildcard probe. */
 export function escapeIlikeExact(value: string) {
-  return value.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_')
+  return value.replace(/\\/g, String.raw`\\`).replace(/%/g, String.raw`\%`).replace(/_/g, String.raw`\_`)
 }
 
 /**

@@ -1490,7 +1490,7 @@ export async function readUpdateDeliveryTimingEventsCF(
     return []
 
   // Empty app_ids array means "no apps in scope" (e.g. empty org), not platform-wide.
-  if (params.app_ids && params.app_ids.length === 0)
+  if (params.app_ids?.length === 0)
     return []
 
   const query = buildUpdateDeliveryTimingEventsCFQuery(params)

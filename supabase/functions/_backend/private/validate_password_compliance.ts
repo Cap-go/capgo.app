@@ -231,7 +231,7 @@ app.post('/', async (c) => {
     require_special?: boolean
   } | null
 
-  if (!policy || !policy.enabled) {
+  if (!policy?.enabled) {
     return quickError(400, 'no_policy', 'Organization does not have a password policy enabled')
   }
 

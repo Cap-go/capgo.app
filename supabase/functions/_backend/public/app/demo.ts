@@ -56,13 +56,17 @@ function getDemoNativePackages(versionName: string): DemoNativePackage[] {
 
   // Add more plugins in later versions
   if (versionName >= '1.1.0') {
-    basePackages.push({ name: '@capacitor/push-notifications', version: '8.1.1' })
-    basePackages.push({ name: '@capacitor/local-notifications', version: '8.2.0' })
+    basePackages.push(
+      { name: '@capacitor/push-notifications', version: '8.1.1' },
+      { name: '@capacitor/local-notifications', version: '8.2.0' },
+    )
   }
 
   if (versionName >= '1.2.0') {
-    basePackages.push({ name: '@capacitor/camera', version: '8.2.0' })
-    basePackages.push({ name: '@capacitor/filesystem', version: '8.1.2' })
+    basePackages.push(
+      { name: '@capacitor/camera', version: '8.2.0' },
+      { name: '@capacitor/filesystem', version: '8.1.2' },
+    )
   }
 
   return basePackages
@@ -1051,7 +1055,7 @@ export async function createDemoApp(c: Context<MiddlewareKeyVariables>, body: Cr
       // Storage: Add new version sizes when they're released
       for (const [versionName, size] of Object.entries(versionSizes)) {
         const versionConfig = demoVersions.find(v => v.name === versionName)
-        if (versionConfig && versionConfig.daysAgo === daysAgo) {
+        if (versionConfig?.daysAgo === daysAgo) {
           cumulativeStorage += size
         }
       }

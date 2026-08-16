@@ -207,8 +207,10 @@ function clearDelayedRefreshes() {
 
 function scheduleDelayedRefreshes() {
   clearDelayedRefreshes()
-  pendingRefreshTimers.push(setTimeout(() => refreshData(), 4000))
-  pendingRefreshTimers.push(setTimeout(() => refreshData(), 10000))
+  pendingRefreshTimers.push(
+    setTimeout(() => refreshData(), 4000),
+    setTimeout(() => refreshData(), 10000),
+  )
 }
 
 onUnmounted(clearDelayedRefreshes)

@@ -48,7 +48,7 @@ export function buildAdminDailyConversionChartOptions(
         callbacks: {
           label: (context: TooltipItem<'bar'>) => {
             const point = points[context.dataIndex]
-            if (!point || point.conversion_percent === null)
+            if (point?.conversion_percent == null)
               return ''
 
             const percent = formatNumberValue(point.conversion_percent, { maximumFractionDigits: 1 })

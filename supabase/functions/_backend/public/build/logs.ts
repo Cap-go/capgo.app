@@ -94,7 +94,7 @@ export async function streamBuildLogs(
     throw simpleError('internal_error', 'Failed to fetch build request')
   }
 
-  if (!buildRequest || buildRequest.app_id !== appId) {
+  if (buildRequest?.app_id !== appId) {
     // Treat missing row and mismatched app_id as unauthorized to avoid leaking job existence.
     throw simpleError('unauthorized', 'You do not have permission to view logs for this app')
   }

@@ -115,8 +115,7 @@ interface InvalidIpInfo {
 let loadInvalidIpInfo: Promise<((ip: string, context?: Context) => Promise<InvalidIpInfo>)> | null = null
 
 function getInvalidIpInfo(): Promise<(ip: string, context?: Context) => Promise<InvalidIpInfo>> {
-  if (!loadInvalidIpInfo)
-    loadInvalidIpInfo = import('./invalids_ip.ts').then(module => module.invalidIpInfo)
+  loadInvalidIpInfo ??= import('./invalids_ip.ts').then(module => module.invalidIpInfo)
   return loadInvalidIpInfo
 }
 

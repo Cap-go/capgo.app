@@ -506,7 +506,7 @@ async function foundJWT(c: Context, jwt: string) {
 
   // Decode JWT claims via Supabase Auth `getClaims()`.
   const claims = await getClaimsFromJWT(c, jwt)
-  if (!claims || !claims.sub) {
+  if (!claims?.sub) {
     cloudlog({ requestId: c.get('requestId'), message: 'Invalid JWT claims' })
     // Record failed auth attempt - await to ensure accurate counting
     await recordFailedAuth(c)

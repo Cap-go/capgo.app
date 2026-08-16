@@ -462,7 +462,7 @@ export async function syncBillingBentoTagsFromStoredStripeInfo(c: Context, org: 
 }
 
 function getSubscriptionPlan(plans: RevenuePlanRow[], stripeInfo: StripeInfoRevenueState) {
-  if (!stripeInfo || !stripeInfo.status || !REVENUE_SUBSCRIPTION_STATUSES.has(stripeInfo.status) || stripeInfo.is_good_plan === false)
+  if (!stripeInfo?.status || !REVENUE_SUBSCRIPTION_STATUSES.has(stripeInfo.status) || stripeInfo.is_good_plan === false)
     return null
 
   return getPlanByProductId(plans, stripeInfo.product_id)

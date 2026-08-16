@@ -2,7 +2,7 @@ import type { Context } from 'hono'
 import { supabaseAdmin } from './supabase.ts'
 
 const SIGNED_URL_TTL_SECONDS = 60 * 60 * 24 * 7
-const STORAGE_URL_REGEX = /\/storage\/v1\/object(?:\/(public|sign))?\/images\/(.+)$/
+const STORAGE_URL_REGEX = /\/storage\/v1\/object(?:\/(?:public|sign))?\/images\/(.+)$/
 
 export function normalizeImagePath(raw?: string | null) {
   if (!raw)
@@ -14,9 +14,9 @@ export function normalizeImagePath(raw?: string | null) {
 
   try {
     const url = new URL(trimmed)
-    const match = url.pathname.match(STORAGE_URL_REGEX)
-    if (match?.[2])
-      return decodeURIComponent(match[2])
+    const match = STORAGE_URL_REGEX.exec(url.pathname)
+    if (match?.[1])
+      return decodeURIComponent(match[1])
     return trimmed
   }
   catch {
