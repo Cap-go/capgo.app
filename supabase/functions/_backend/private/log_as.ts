@@ -272,14 +272,34 @@ app.post('/', middlewareAuth, async (c) => {
   const adminUserId = adminAuth?.userId
   const sessionId = spoofClaims?.session_id
   const targetUserId = spoofClaims?.sub
-  if (sessionId && targetUserId && adminUserId) {
-    const expiresAt = spoofClaims.exp
-      ? new Date(spoofClaims.exp * 1000)
-      : new Date(Date.now() + 60 * 60 * 1000)
-    const pgClient = getPgClient(c)
-    try {
-      await pgClient.query(
-        `
+  if (!spoofClaims || !sessionId || !targetUserId || !adminUserId) {
+    cloudlog({
+      requestId: c.get('requestId'),
+      context: 'log_as - missing claims for impersonation session registration',
+      hasSpoofClaims: Boolean(spoofClaims),
+      hasSessionId: Boolean(sessionId),
+      hasTargetUserId: Boolean(targetUserId),
+      hasAdminUserId: Boolean(adminUserId),
+    })
+    throw simpleError(
+      'impersonation_session_error',
+      'Failed to resolve claims for impersonation session',
+      {
+        hasSpoofClaims: Boolean(spoofClaims),
+        hasSessionId: Boolean(sessionId),
+        hasTargetUserId: Boolean(targetUserId),
+        hasAdminUserId: Boolean(adminUserId),
+      },
+    )
+  }
+
+  const expiresAt = spoofClaims.exp
+    ? new Date(spoofClaims.exp * 1000)
+    : new Date(Date.now() + 60 * 60 * 1000)
+  const pgClient = getPgClient(c)
+  try {
+    await pgClient.query(
+      `
           INSERT INTO public.platform_impersonation_sessions
             (session_id, target_user_id, admin_user_id, expires_at)
           VALUES ($1::uuid, $2::uuid, $3::uuid, $4::timestamptz)
@@ -288,32 +308,22 @@ app.post('/', middlewareAuth, async (c) => {
             admin_user_id = EXCLUDED.admin_user_id,
             expires_at = EXCLUDED.expires_at
         `,
-        [sessionId, targetUserId, adminUserId, expiresAt.toISOString()],
-      )
-    }
-    catch (error) {
-      cloudlogErr({
-        requestId: c.get('requestId'),
-        context: 'log_as - failed to register impersonation session',
-        error: error instanceof Error ? error.message : String(error),
-        sessionId,
-        targetUserId,
-        adminUserId,
-      })
-      throw simpleError('impersonation_session_error', 'Failed to register impersonation session', { error })
-    }
-    finally {
-      await closeClient(c, pgClient)
-    }
+      [sessionId, targetUserId, adminUserId, expiresAt.toISOString()],
+    )
   }
-  else {
-    cloudlog({
+  catch (error) {
+    cloudlogErr({
       requestId: c.get('requestId'),
-      context: 'log_as - missing claims for impersonation session registration',
-      hasSessionId: Boolean(sessionId),
-      hasTargetUserId: Boolean(targetUserId),
-      hasAdminUserId: Boolean(adminUserId),
+      context: 'log_as - failed to register impersonation session',
+      error: error instanceof Error ? error.message : String(error),
+      sessionId,
+      targetUserId,
+      adminUserId,
     })
+    throw simpleError('impersonation_session_error', 'Failed to register impersonation session', { error })
+  }
+  finally {
+    await closeClient(c, pgClient)
   }
 
   return c.json({ jwt, refreshToken })

@@ -2675,6 +2675,30 @@ export type Database = {
         }
         Relationships: []
       }
+      platform_impersonation_sessions: {
+        Row: {
+          admin_user_id: string
+          created_at: string
+          expires_at: string
+          session_id: string
+          target_user_id: string
+        }
+        Insert: {
+          admin_user_id: string
+          created_at?: string
+          expires_at: string
+          session_id: string
+          target_user_id: string
+        }
+        Update: {
+          admin_user_id?: string
+          created_at?: string
+          expires_at?: string
+          session_id?: string
+          target_user_id?: string
+        }
+        Relationships: []
+      }
       processed_stripe_events: {
         Row: {
           created_at: string
@@ -3983,6 +4007,10 @@ export type Database = {
       cleanup_completed_onboarding_apps: { Args: never; Returns: undefined }
       cleanup_expired_apikeys: { Args: never; Returns: undefined }
       cleanup_expired_demo_apps: { Args: never; Returns: undefined }
+      cleanup_expired_platform_impersonation_sessions: {
+        Args: never
+        Returns: undefined
+      }
       cleanup_frequent_job_details: { Args: never; Returns: undefined }
       cleanup_job_run_details_7days: { Args: never; Returns: undefined }
       cleanup_long_canceled_org_data: { Args: never; Returns: undefined }
@@ -4776,6 +4804,7 @@ export type Database = {
         }
         Returns: boolean
       }
+      is_active_platform_impersonation: { Args: never; Returns: boolean }
       is_allowed_action: {
         Args: { apikey: string; appid: string }
         Returns: boolean
@@ -4867,6 +4896,7 @@ export type Database = {
       is_platform_admin:
         | { Args: never; Returns: boolean }
         | { Args: { userid: string }; Returns: boolean }
+      is_platform_admin_listed: { Args: { userid: string }; Returns: boolean }
       is_rbac_enabled_globally: { Args: never; Returns: boolean }
       is_recent_email_otp_verified: {
         Args: { user_id: string }
@@ -5464,8 +5494,6 @@ export type Database = {
       }
       verify_email_otp_auth: { Args: never; Returns: boolean }
       verify_mfa: { Args: never; Returns: boolean }
-      is_platform_admin_listed: { Args: { userid: string }; Returns: boolean }
-      is_active_platform_impersonation: { Args: never; Returns: boolean }
     }
     Enums: {
       action_type: "mau" | "storage" | "bandwidth" | "build_time"

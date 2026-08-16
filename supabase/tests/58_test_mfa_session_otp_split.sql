@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(8);
+SELECT plan(11);
 
 SELECT tests.create_supabase_user(
   'mfa_session_split_with_mfa',
@@ -11,6 +11,7 @@ SELECT tests.create_supabase_user(
   'mfa-session-split-without-mfa@test.local'
 );
 SELECT tests.mark_email_otp_verified('mfa_session_split_with_mfa');
+SELECT tests.mark_email_otp_verified('test_admin');
 
 INSERT INTO auth.mfa_factors (
   id,
@@ -183,6 +184,76 @@ SELECT is(
   public.verify_mfa(),
   true,
   'verify_mfa allows active platform-admin impersonation sessions'
+);
+SELECT tests.clear_authentication();
+
+-- Expired impersonation row must not satisfy verify_mfa.
+UPDATE public.platform_impersonation_sessions
+SET expires_at = now() - interval '1 minute'
+WHERE session_id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'::uuid;
+
+SELECT tests.authenticate_as('mfa_session_split_with_mfa');
+SELECT set_config(
+  'request.jwt.claims',
+  jsonb_build_object(
+    'sub', tests.get_supabase_uid('mfa_session_split_with_mfa'),
+    'email', 'mfa-session-split-with-mfa@test.local',
+    'aal', 'aal1',
+    'session_id', 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+    'amr', jsonb_build_array(jsonb_build_object('method', 'otp'))
+  )::text,
+  true
+);
+SELECT is(
+  public.verify_mfa(),
+  false,
+  'verify_mfa rejects expired platform-admin impersonation sessions'
+);
+SELECT tests.clear_authentication();
+
+-- session_id registered for a different target must not pass.
+UPDATE public.platform_impersonation_sessions
+SET
+  expires_at = now() + interval '1 hour',
+  target_user_id = tests.get_supabase_uid('mfa_session_split_without_mfa')
+WHERE session_id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'::uuid;
+
+SELECT tests.authenticate_as('mfa_session_split_with_mfa');
+SELECT set_config(
+  'request.jwt.claims',
+  jsonb_build_object(
+    'sub', tests.get_supabase_uid('mfa_session_split_with_mfa'),
+    'email', 'mfa-session-split-with-mfa@test.local',
+    'aal', 'aal1',
+    'session_id', 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+    'amr', jsonb_build_array(jsonb_build_object('method', 'otp'))
+  )::text,
+  true
+);
+SELECT is(
+  public.verify_mfa(),
+  false,
+  'verify_mfa rejects impersonation session_id for a different target'
+);
+SELECT tests.clear_authentication();
+
+-- Malformed session_id claim must return false without raising.
+SELECT tests.authenticate_as('mfa_session_split_with_mfa');
+SELECT set_config(
+  'request.jwt.claims',
+  jsonb_build_object(
+    'sub', tests.get_supabase_uid('mfa_session_split_with_mfa'),
+    'email', 'mfa-session-split-with-mfa@test.local',
+    'aal', 'aal1',
+    'session_id', 'not-a-uuid',
+    'amr', jsonb_build_array(jsonb_build_object('method', 'otp'))
+  )::text,
+  true
+);
+SELECT is(
+  public.verify_mfa(),
+  false,
+  'verify_mfa rejects malformed impersonation session_id without error'
 );
 SELECT tests.clear_authentication();
 

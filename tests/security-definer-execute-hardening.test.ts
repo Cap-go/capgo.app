@@ -53,6 +53,7 @@ const SERVICE_ONLY_PROCS = [
   'public.sync_org_has_usage_credits_from_grants()',
   'public.is_platform_admin_listed(uuid)',
   'public.is_active_platform_impersonation()',
+  'public.cleanup_expired_platform_impersonation_sessions()',
 ] as const
 
 const REMOVED_OLD_RIGHTS_PROCS = [

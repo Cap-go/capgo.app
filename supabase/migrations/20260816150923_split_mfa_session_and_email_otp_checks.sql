@@ -34,7 +34,8 @@ COMMENT ON FUNCTION public.is_platform_admin_listed(userid uuid) IS
 'to allow legacy OTP for platform admins without recursion.';
 
 ALTER FUNCTION public.is_platform_admin_listed(userid uuid) OWNER TO postgres;
-REVOKE ALL ON FUNCTION public.is_platform_admin_listed(userid uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.is_platform_admin_listed(userid uuid)
+  FROM PUBLIC;
 -- service_role + SECURITY DEFINER callers only (not an admin-oracle RPC)
 GRANT EXECUTE ON FUNCTION public.is_platform_admin_listed(userid uuid)
   TO service_role;
@@ -53,6 +54,7 @@ COMMENT ON TABLE public.platform_impersonation_sessions IS
 
 ALTER TABLE public.platform_impersonation_sessions OWNER TO postgres;
 
+-- Regular index: CONCURRENTLY is not allowed inside migration txs.
 CREATE INDEX IF NOT EXISTS platform_impersonation_sessions_expires_at_idx
   ON public.platform_impersonation_sessions (expires_at);
 
@@ -99,7 +101,8 @@ GRANT ALL ON TABLE public.platform_impersonation_sessions TO postgres;
 GRANT ALL ON TABLE public.platform_impersonation_sessions TO service_role;
 REVOKE ALL ON TABLE public.platform_impersonation_sessions FROM PUBLIC;
 REVOKE ALL ON TABLE public.platform_impersonation_sessions FROM anon;
-REVOKE ALL ON TABLE public.platform_impersonation_sessions FROM authenticated;
+REVOKE ALL ON TABLE public.platform_impersonation_sessions
+  FROM authenticated;
 
 CREATE OR REPLACE FUNCTION public.is_active_platform_impersonation()
 RETURNS boolean
@@ -111,13 +114,13 @@ AS $$
   SELECT EXISTS (
     SELECT 1
     FROM public.platform_impersonation_sessions AS s
-    WHERE s.target_user_id = auth.uid()
+    WHERE s.target_user_id = (SELECT auth.uid())
       AND s.expires_at > now()
       AND s.session_id = (
         CASE
-          WHEN (auth.jwt() ->> 'session_id')
+          WHEN ((SELECT auth.jwt()) ->> 'session_id')
             ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-          THEN (auth.jwt() ->> 'session_id')::uuid
+          THEN ((SELECT auth.jwt()) ->> 'session_id')::uuid
           ELSE NULL
         END
       )
@@ -129,7 +132,8 @@ COMMENT ON FUNCTION public.is_active_platform_impersonation() IS
 'log_as and has not expired.';
 
 ALTER FUNCTION public.is_active_platform_impersonation() OWNER TO postgres;
-REVOKE ALL ON FUNCTION public.is_active_platform_impersonation() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.is_active_platform_impersonation()
+  FROM PUBLIC;
 -- Invoked from verify_mfa (SECURITY DEFINER) only
 GRANT EXECUTE ON FUNCTION public.is_active_platform_impersonation()
   TO service_role;
@@ -154,20 +158,26 @@ AS $$
     )
     OR (
       -- Legacy OTP path kept only for listed platform admins.
+      -- Scalar SELECTs keep Vault/impersonation lookups statement-level
+      -- under RLS rather than once-per-row.
       EXISTS (
         SELECT 1
         FROM pg_catalog.jsonb_array_elements(
           CASE
-            WHEN pg_catalog.jsonb_typeof(auth.jwt()->'amr') = 'array'
-              THEN auth.jwt()->'amr'
+            WHEN pg_catalog.jsonb_typeof(
+              (SELECT auth.jwt())->'amr'
+            ) = 'array'
+              THEN (SELECT auth.jwt())->'amr'
             ELSE '[]'::jsonb
           END
         ) AS amr_elem
         WHERE amr_elem->>'method' = 'otp'
       )
-      AND public.is_platform_admin_listed((SELECT auth.uid()))
+      AND (
+        SELECT public.is_platform_admin_listed((SELECT auth.uid()))
+      )
     )
-    OR public.is_active_platform_impersonation();
+    OR (SELECT public.is_active_platform_impersonation());
 $$;
 
 COMMENT ON FUNCTION public.verify_mfa() IS
@@ -219,3 +229,75 @@ GRANT EXECUTE ON FUNCTION public.verify_email_otp_auth()
   TO authenticated;
 GRANT EXECUTE ON FUNCTION public.verify_email_otp_auth()
   TO service_role;
+
+CREATE OR REPLACE FUNCTION
+  public.cleanup_expired_platform_impersonation_sessions()
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  deleted_count bigint;
+BEGIN
+  DELETE FROM public.platform_impersonation_sessions
+  WHERE expires_at <= now();
+  GET DIAGNOSTICS deleted_count = ROW_COUNT;
+  RAISE NOTICE
+    'cleanup_expired_platform_impersonation_sessions: deleted %',
+    deleted_count;
+END;
+$$;
+
+COMMENT ON FUNCTION
+  public.cleanup_expired_platform_impersonation_sessions() IS
+'Deletes expired platform-admin log_as impersonation session rows.';
+
+ALTER FUNCTION
+  public.cleanup_expired_platform_impersonation_sessions()
+  OWNER TO postgres;
+REVOKE ALL ON FUNCTION
+  public.cleanup_expired_platform_impersonation_sessions()
+  FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION
+  public.cleanup_expired_platform_impersonation_sessions()
+  TO service_role;
+
+INSERT INTO public.cron_tasks (
+  name,
+  description,
+  task_type,
+  target,
+  batch_size,
+  payload,
+  second_interval,
+  minute_interval,
+  hour_interval,
+  run_at_hour,
+  run_at_minute,
+  run_at_second,
+  run_on_dow,
+  run_on_day,
+  enabled
+)
+SELECT
+  'cleanup_expired_platform_impersonation_sessions',
+  'Delete expired platform-admin log_as impersonation sessions',
+  'function',
+  'public.cleanup_expired_platform_impersonation_sessions()',
+  NULL,
+  NULL,
+  NULL,
+  5,
+  NULL,
+  NULL,
+  NULL,
+  NULL,
+  NULL,
+  NULL,
+  true
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM public.cron_tasks
+  WHERE name = 'cleanup_expired_platform_impersonation_sessions'
+);
