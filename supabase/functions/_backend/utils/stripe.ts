@@ -458,7 +458,7 @@ async function getPriceIds(c: Context, planId: string, recurrence: string): Prom
     const prices = await listPricesByProduct(c, planId)
     cloudlog({ requestId: c.get('requestId'), message: 'prices stripe', prices })
     prices.data.forEach((price) => {
-      if (price.recurring && price.recurring.interval === recurrence && price.active && price.recurring.usage_type === 'licensed')
+      if (price.recurring?.interval === recurrence && price.active && price.recurring?.usage_type === 'licensed')
         priceId = price.id
     })
   }

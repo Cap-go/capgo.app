@@ -130,7 +130,7 @@ export interface NativeVersionUsage {
 export interface ReadDevicesParams {
   app_id: string
   /** Exact version_name match. Pass a string for one bundle, or an array for OR across bundles. */
-  version_name?: string | string[] | undefined
+  version_name?: string | string[]
   /** Exact platform filter (`ios` | `android` | `electron`) */
   platform?: Database['public']['Enums']['platform_os']
   deviceIds?: string[]

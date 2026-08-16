@@ -112,7 +112,7 @@ export async function getBuildStatus(
     throw simpleError('internal_error', 'Failed to fetch build request')
   }
 
-  if (!buildRequest || buildRequest.app_id !== app_id) {
+  if (buildRequest?.app_id !== app_id) {
     // Treat missing row and mismatched app_id as unauthorized to avoid leaking job existence.
     throw simpleError('unauthorized', 'You do not have permission to view builds for this app')
   }

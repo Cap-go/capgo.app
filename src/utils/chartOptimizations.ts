@@ -19,7 +19,7 @@ export function createUndefinedArray(length: number): (number | undefined)[] {
  * Optimized array increment with undefined handling
  */
 export function incrementArrayValue(arr: (number | undefined)[], index: number, increment: number): void {
-  arr[index] = (arr[index] === undefined ? 0 : arr[index]) + increment
+  arr[index] = (arr[index] ?? 0) + increment
 }
 
 export interface DashboardDailySeriesWindow {

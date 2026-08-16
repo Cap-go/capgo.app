@@ -393,7 +393,7 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
     return c.json(BRES)
   }
   // if dataChannelOverride is same from dataChannel and exist then do nothing
-  if (dataChannelOverride && dataChannelOverride.channel_id.id === dataChannel.id) {
+  if (dataChannelOverride?.channel_id.id === dataChannel.id) {
     // already set
     cloudlog({ requestId: c.get('requestId'), message: 'channel already set' })
     return c.json(BRES)

@@ -208,7 +208,7 @@ export function parsePreviewSubdomain(subdomain: string): ParsedPreviewSubdomain
  * Extracts and parses the preview label from a full preview hostname.
  */
 export function parsePreviewHostname(hostname: string): ParsedPreviewSubdomain | null {
-  const match = hostname.match(PREVIEW_HOSTNAME_REGEX)
+  const match = PREVIEW_HOSTNAME_REGEX.exec(hostname)
   if (!match)
     return null
 

@@ -95,7 +95,7 @@ function getExpectedVersion(results: PluginRegionResult[]) {
   if (!sorted.length)
     return null
 
-  if (sorted[1] && sorted[0][1] === sorted[1][1])
+  if (sorted[0][1] === sorted[1]?.[1])
     return null
 
   return sorted[0][0]

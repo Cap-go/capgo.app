@@ -373,8 +373,7 @@ export async function syncBentoFirstOrgOnRoleBindingWrite(
     }
 
     if (
-      !binding
-      || binding.principal_type !== 'user'
+      binding?.principal_type !== 'user'
       || binding.scope_type !== 'org'
       || !binding.org_id
       || binding.is_direct !== true

@@ -23,7 +23,7 @@ import BundleMultiFilter from './BundleMultiFilter.vue'
 const props = defineProps<{
   appId: string
   ids?: string[]
-  versionName?: string | undefined
+  versionName?: string
   showAddButton?: boolean
   channel?: unknown
 }>()

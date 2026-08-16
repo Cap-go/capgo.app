@@ -86,7 +86,7 @@ async function resolveTrackingUserId(
         .eq('app_id', appId)
         .single()
 
-      if (error || !app || app.owner_org !== requestedOrgId) {
+      if (error || app?.owner_org !== requestedOrgId) {
         throw quickError(403, forbiddenError, 'You cannot send events for this organization')
       }
 
@@ -116,7 +116,7 @@ async function resolveTrackingUserId(
       .eq('app_id', appId)
       .single()
 
-    if (error || !app || app.owner_org !== requestedUserId) {
+    if (error || app?.owner_org !== requestedUserId) {
       throw quickError(403, forbiddenError, 'You cannot send events for this organization')
     }
 

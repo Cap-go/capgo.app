@@ -41,7 +41,7 @@ function normalize(value: string | undefined) {
 }
 
 function parseAsn(asValue: string | undefined) {
-  const match = normalize(asValue).match(/\bas(\d+)\b/)
+  const match = /\bas(\d+)\b/.exec(normalize(asValue))
   return match ? `AS${match[1]}` : null
 }
 

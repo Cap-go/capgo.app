@@ -249,7 +249,7 @@ async function persistCompatibilityEvents(
       if (oldWasDefault) {
         // Case B — same-channel version change. Only fires on an actual version
         // delta; an identical version (pure name/flag edit) yields no event.
-        if (oldRecord && oldRecord.version != null && oldRecord.version !== record.version) {
+        if (oldRecord?.version != null && oldRecord.version !== record.version) {
           previousDefaults.push({
             platform,
             source: 'default_channel_version_changed',
