@@ -4,8 +4,6 @@ import { getEnv } from './utils.ts'
 
 const SIGNED_URL_TTL_SECONDS = 60 * 60 * 24 * 7
 const STORAGE_URL_REGEX = /\/storage\/v1\/object(?:\/(?:public|sign))?\/images\/(.+)$/
-/** Matches storage image routes even when route segments are percent-encoded. */
-const STORAGE_PREFIX_RE = /\/(?:storage|%73torage)\/v1\/object(?:\/(?:public|sign|%70ublic|%73ign))?\/(?:images|%69mages)\//i
 
 export interface ImagePathScope {
   orgId?: string
@@ -22,12 +20,22 @@ function tryDecodeUri(value: string) {
   }
 }
 
+/**
+ * Decode each path segment independently so a malformed object-key escape
+ * cannot hide a percent-encoded `/storage/.../images/` route.
+ */
+function decodePathnameSegments(pathname: string) {
+  return pathname.split('/').map((segment) => {
+    if (!segment.includes('%'))
+      return segment
+    return tryDecodeUri(segment) ?? segment
+  }).join('/')
+}
+
 /** True when pathname is a Capgo images storage object URL (raw or percent-encoded route). */
 function isStorageImagePathname(pathname: string) {
-  if (STORAGE_URL_REGEX.test(pathname) || STORAGE_PREFIX_RE.test(pathname))
-    return true
-  const decoded = tryDecodeUri(pathname)
-  return !!decoded && STORAGE_URL_REGEX.test(decoded)
+  return STORAGE_URL_REGEX.test(pathname)
+    || STORAGE_URL_REGEX.test(decodePathnameSegments(pathname))
 }
 
 /**
@@ -40,21 +48,16 @@ function extractStorageImageKey(pathname: string) {
   if (rawMatch?.[1])
     return tryDecodeUri(rawMatch[1])?.replace(/^\/+/, '') ?? null
 
-  const decodedPath = tryDecodeUri(pathname)
-  if (decodedPath) {
-    const decodedMatch = STORAGE_URL_REGEX.exec(decodedPath)
-    if (decodedMatch?.[1])
-      return decodedMatch[1].replace(/^\/+/, '')
-  }
+  const segmentDecoded = decodePathnameSegments(pathname)
+  const decodedMatch = STORAGE_URL_REGEX.exec(segmentDecoded)
+  if (!decodedMatch?.[1])
+    return null
 
-  // Encoded route (possibly with an undecodable key): still treat as storage.
-  const prefix = STORAGE_PREFIX_RE.exec(pathname)
-  if (!prefix)
+  // Key came from segment-wise decode; reject if any segment stayed malformed (%).
+  const key = decodedMatch[1].replace(/^\/+/, '')
+  if (key.split('/').some(segment => segment.includes('%') && tryDecodeUri(segment) === null))
     return null
-  const key = pathname.slice(prefix.index! + prefix[0].length)
-  if (!key)
-    return null
-  return tryDecodeUri(key)?.replace(/^\/+/, '') ?? null
+  return key
 }
 
 function originFromEnvUrl(raw: string) {

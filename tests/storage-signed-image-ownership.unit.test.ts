@@ -213,5 +213,13 @@ describe('image path ownership for signed URLs', () => {
       'https://example.supabase.co/%73torage/v1/object/sign/images/org/org-1/file%.png',
       { allowedOrigins: ['https://example.supabase.co'] },
     )).toBeNull()
+
+    const multiEncodedRoute = 'https://evil.example/%73%74orage/v1/object/sign/images/org/org-1/file%.png'
+    expect(isSupabaseStorageImageUrl(multiEncodedRoute)).toBe(true)
+    expect(resolveWritableImageValue(
+      multiEncodedRoute,
+      { orgId: 'org-1' },
+      ['https://example.supabase.co'],
+    )).toBeNull()
   })
 })
