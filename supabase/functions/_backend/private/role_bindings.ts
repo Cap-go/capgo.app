@@ -552,12 +552,23 @@ export type CreateBindingResult = {
   error: string
 }
 
+export interface CreateBindingOptions {
+  // Caller must already hold advisory locks for every org_id in this request.
+  skipOrgLock?: boolean
+  // Caller must already have proven the principal exists and the owner has
+  // active org access. API key create may set this after inserting the key in
+  // the same txn and asserting org.manage_apikeys for each org. Do not use this
+  // to skip owner-active-member / pending-invite checks on an existing principal.
+  skipPrincipalValidation?: boolean
+}
+
 export async function createRoleBindingForPrincipal(
   drizzle: ReturnType<typeof getDrizzleClient>,
   params: CreateBindingParams,
   grantedBy: string,
   authType: 'jwt' | 'apikey',
   callerPrincipalId: string,
+  options?: CreateBindingOptions,
 ): Promise<CreateBindingResult> {
   const {
     principal_type,
@@ -570,7 +581,9 @@ export async function createRoleBindingForPrincipal(
     reason,
   } = params
 
-  await lockRbacOrgs(drizzle, [org_id])
+  if (!options?.skipOrgLock) {
+    await lockRbacOrgs(drizzle, [org_id])
+  }
 
   // 1. Resolve role by name
   const [role] = await drizzle
@@ -612,9 +625,11 @@ export async function createRoleBindingForPrincipal(
   const normalizedChannelId = scopedAppValidation.data.channelRbacId
 
   // 6. Principal existence & org-membership check
-  const principalValidation = await validatePrincipalAccess(drizzle, principal_type, principal_id, org_id)
-  if (!principalValidation.ok) {
-    return { ok: false, status: principalValidation.status, error: principalValidation.error }
+  if (!options?.skipPrincipalValidation) {
+    const principalValidation = await validatePrincipalAccess(drizzle, principal_type, principal_id, org_id)
+    if (!principalValidation.ok) {
+      return { ok: false, status: principalValidation.status, error: principalValidation.error }
+    }
   }
 
   // 7. Create the binding

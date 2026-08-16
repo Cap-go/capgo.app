@@ -145,6 +145,54 @@ describe('[POST] /apikey operations', () => {
     expect(verifyData.name).toBe(keyName)
   })
 
+  it('create api key latency', async () => {
+    const createdIds: number[] = []
+    try {
+      const warmup = await fetch(`${BASE_URL}/apikey`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify(orgKeyBody(`latency-warmup-${id.slice(0, 8)}`)),
+      })
+      expect(warmup.status).toBe(200)
+      const warmupData = await warmup.json<{ id: number }>()
+      createdIds.push(warmupData.id)
+
+      const samples: number[] = []
+      for (let index = 0; index < 5; index += 1) {
+        const startedAt = performance.now()
+        const response = await fetch(`${BASE_URL}/apikey`, {
+          method: 'POST',
+          headers: authHeaders,
+          body: JSON.stringify(orgKeyBody(`latency-${id.slice(0, 8)}-${index}`)),
+        })
+        samples.push(performance.now() - startedAt)
+        expect(response.status).toBe(200)
+        const data = await response.json<{ id: number }>()
+        createdIds.push(data.id)
+      }
+
+      samples.sort((left, right) => left - right)
+      const p50 = samples[Math.floor(samples.length / 2)] ?? 0
+      console.log(`apikey_create_latency_ms p50=${p50.toFixed(1)} samples=${samples.map(sample => sample.toFixed(1)).join(',')}`)
+    }
+    finally {
+      await Promise.all(createdIds.map(async (keyId) => {
+        try {
+          const response = await fetch(`${BASE_URL}/apikey/${keyId}`, {
+            method: 'DELETE',
+            headers: authHeaders,
+          })
+          if (!response.ok) {
+            console.warn(`apikey latency cleanup delete ${keyId} status=${response.status}`)
+          }
+        }
+        catch (error) {
+          console.warn(`apikey latency cleanup delete ${keyId} failed`, error)
+        }
+      }))
+    }
+  })
+
   it.concurrent('creates an app-only preview key bound to its owning organization', async () => {
     const appBindings = await appApiKeyBindings(APPNAME, 'app_preview')
     const response = await fetch(`${BASE_URL}/apikey`, {
