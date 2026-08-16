@@ -53,6 +53,7 @@ describe('buildFrontendOnboardingHogql', () => {
     expect(query).toContain("'onboarding_organization_invite_succeeded'")
     expect(query).toContain("'onboarding_technical_invite_succeeded'")
     expect(query).toContain('JSONExtractString(toString(properties), \'flow\') = \'pre_org\'')
+    expect(query).toContain('JSONExtractString(toString(properties), \'$host\') = \'console.capgo.app\'')
     expect(query).toContain('toIntOrZero(toString(properties.onboarding_version)) AS onboarding_version')
     expect(query).toContain('toIntOrZero(toString(properties.onboarding_version)) IN (1, 2, 3)')
     expect(query).not.toContain('toInt64OrZero')

@@ -3,6 +3,7 @@ import type { FrontendOnboardingAttempt, FrontendOnboardingInteractionEvent, Fro
 import {
   buildFrontendOnboardingAnalytics,
   FRONTEND_ONBOARDING_FOLLOWUP_MS,
+  FRONTEND_ONBOARDING_PRODUCTION_HOST,
   FRONTEND_ONBOARDING_VERSIONS,
 } from './frontend_onboarding_analytics_model.ts'
 import { getFrontendOnboardingDailySetupCliEvents } from './frontend_onboarding_daily_setup_cli_outcomes.ts'
@@ -183,6 +184,7 @@ export function buildFrontendOnboardingHogql(startDate: string, cohortEndDate: s
       FROM events
       WHERE event IN (${eventAllowlist})
         AND JSONExtractString(toString(properties), 'flow') = 'pre_org'
+        AND JSONExtractString(toString(properties), '$host') = ${sqlStr(FRONTEND_ONBOARDING_PRODUCTION_HOST)}
         AND toIntOrZero(toString(properties.onboarding_version)) IN (${versionAllowlist})
         AND timestamp >= parseDateTimeBestEffort(${sqlStr(startDate)})
         AND timestamp < parseDateTimeBestEffort(${sqlStr(followupEndDate)})
