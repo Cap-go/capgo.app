@@ -138,7 +138,7 @@ window.addEventListener('vite:preloadError', (event) => {
   handleChunkError(message)
 })
 
-const guestPath = ['/login', '/delete_account', '/confirm-signup', '/forgot_password', '/resend_email', '/onboarding', '/register', '/invitation', '/email-preferences', '/scan', '/sso-callback']
+const guestPath = new Set(['/login', '/delete_account', '/confirm-signup', '/forgot_password', '/resend_email', '/onboarding', '/register', '/invitation', '/email-preferences', '/scan', '/sso-callback'])
 
 function redirectAppPath(suffix: string) {
   return (to: RouteLocationNormalized) => ({
@@ -149,7 +149,7 @@ function redirectAppPath(suffix: string) {
 }
 
 function isGuestRoutePath(path: string) {
-  return guestPath.includes(path) || path === '/preview' || path.startsWith('/preview/')
+  return guestPath.has(path) || path === '/preview' || path.startsWith('/preview/')
 }
 
 getRemoteConfig()

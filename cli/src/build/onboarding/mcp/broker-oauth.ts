@@ -9,6 +9,7 @@
 // process dies between tool calls, uses this broker.
 import process from 'node:process'
 import { buildCliRequestHeaders } from '../../../analytics/cli-headers'
+import { trimTrailingSlashes } from '../../../utils'
 
 const DEFAULT_BROKER_BASE = 'https://api.capgo.app'
 /** Override the broker base via env (staging / local). */
@@ -16,7 +17,7 @@ const BROKER_BASE_ENV = 'CAPGO_OAUTH_BROKER_URL'
 const BROKER_PATH = '/builder_auth_direct/google'
 
 function brokerBase(): string {
-  return (process.env[BROKER_BASE_ENV] || DEFAULT_BROKER_BASE).replace(/\/+$/, '')
+  return trimTrailingSlashes(process.env[BROKER_BASE_ENV] || DEFAULT_BROKER_BASE)
 }
 
 export interface BrokerSession {

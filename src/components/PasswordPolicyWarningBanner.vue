@@ -32,6 +32,7 @@ function goToChangePassword() {
         </p>
       </div>
       <button
+        type="button"
         class="px-4 py-1 ml-4 text-sm font-medium text-red-500 bg-white rounded-lg hover:bg-gray-100"
         @click="goToChangePassword"
       >

@@ -359,7 +359,7 @@ app.post('/', middlewareAuth, async (c) => {
         requested_days: period.requestedDays,
         actual_days: labels.length,
         start: dayjs.utc(labels[0] ?? period.startDate).startOf('day').toISOString(),
-        end: dayjs.utc(labels[labels.length - 1] ?? period.endDate).endOf('day').toISOString(),
+        end: dayjs.utc(labels.at(-1) ?? period.endDate).endOf('day').toISOString(),
         start_reason: period.startReason,
       },
       totals: {

@@ -131,7 +131,7 @@ function sortByBase(tabs: Tab[], base: Tab[]) {
 }
 
 function upsertTab(tabs: Ref<Tab[]>, key: string, base: Tab[]) {
-  if (tabs.value.find(tab => tab.key === key))
+  if (tabs.value.some(tab => tab.key === key))
     return
   const found = base.find(t => t.key === key)
   if (found)
@@ -139,7 +139,7 @@ function upsertTab(tabs: Ref<Tab[]>, key: string, base: Tab[]) {
 }
 
 function removeTab(tabs: Ref<Tab[]>, key: string) {
-  if (!tabs.value.find(tab => tab.key === key))
+  if (!tabs.value.some(tab => tab.key === key))
     return
   tabs.value = tabs.value.filter(tab => tab.key !== key)
 }
@@ -222,7 +222,7 @@ watchEffect(() => {
       showBillingModal.value = true
     }
   }
-  const hasBilling = planSubTabs.value.find(tab => tab.key === billingTabKey)
+  const hasBilling = planSubTabs.value.some(tab => tab.key === billingTabKey)
   if (needsPlanPages) {
     if (!hasBilling) {
       planSubTabs.value.push({

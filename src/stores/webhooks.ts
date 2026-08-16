@@ -52,7 +52,7 @@ function getFunctionErrorMessage(error: unknown, fallback: string) {
   return errorMessage(error, fallback)
 }
 
-const VALID_WEBHOOK_EVENT_VALUES: readonly string[] = WEBHOOK_EVENT_TYPES.map(e => e.value)
+const VALID_WEBHOOK_EVENT_VALUES = new Set<string>(WEBHOOK_EVENT_TYPES.map(e => e.value))
 
 export const useWebhooksStore = defineStore('webhooks', () => {
   const webhooks: Ref<Webhook[]> = ref([])
@@ -157,7 +157,7 @@ export const useWebhooksStore = defineStore('webhooks', () => {
     }
 
     // Validate events
-    const invalidEvents = webhookData.events.filter(e => !VALID_WEBHOOK_EVENT_VALUES.includes(e))
+    const invalidEvents = webhookData.events.filter(e => !VALID_WEBHOOK_EVENT_VALUES.has(e))
     if (invalidEvents.length > 0) {
       return { success: false, error: `Invalid event types: ${invalidEvents.join(', ')}` }
     }
@@ -229,7 +229,7 @@ export const useWebhooksStore = defineStore('webhooks', () => {
 
     // Validate events if provided
     if (webhookData.events) {
-      const invalidEvents = webhookData.events.filter(e => !VALID_WEBHOOK_EVENT_VALUES.includes(e))
+      const invalidEvents = webhookData.events.filter(e => !VALID_WEBHOOK_EVENT_VALUES.has(e))
       if (invalidEvents.length > 0) {
         return { success: false, error: `Invalid event types: ${invalidEvents.join(', ')}` }
       }

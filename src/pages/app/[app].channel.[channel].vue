@@ -988,6 +988,7 @@ async function copyCurlCommand() {
               <div class="flex items-center gap-3">
                 <span class="text-base leading-5 cursor-pointer" @click="openBundle()">{{ channel.version.name }}</span>
                 <button
+                  type="button"
                   v-if="channel"
                   class="relative p-0 d-btn d-btn-outline size-6 min-h-6 before:absolute before:-inset-2.5 before:content-['']"
                   :aria-label="t('select-stable-bundle')"
@@ -1023,7 +1024,7 @@ async function copyCurlCommand() {
               {{ channel.version.comment }}
             </InfoRow>
             <InfoRow v-if="showRolloutEnableRow" :label="t('progressive-rollout')" :value="t('disabled')">
-              <button class="d-btn d-btn-sm d-btn-outline" :disabled="rolloutEnableDisabled" @click="enableRollout()">
+              <button type="button" class="d-btn d-btn-sm d-btn-outline" :disabled="rolloutEnableDisabled" @click="enableRollout()">
                 {{ t('enable') }}
               </button>
             </InfoRow>
@@ -1105,19 +1106,19 @@ async function copyCurlCommand() {
                     </div>
 
                     <div class="flex flex-wrap gap-2 lg:justify-end">
-                      <button class="min-h-11 d-btn d-btn-ghost" :disabled="!canPromoteBundle" @click="openSelectRolloutVersion()">
+                      <button type="button" class="min-h-11 d-btn d-btn-ghost" :disabled="!canPromoteBundle" @click="openSelectRolloutVersion()">
                         {{ t('set-rollout-target') }}
                       </button>
-                      <button class="min-h-11 d-btn d-btn-outline" :disabled="channel.rollout_enabled ? (rolloutTargetActionsDisabled || rolloutControlsDisabled) : rolloutEnableDisabled" @click="channel.rollout_enabled ? disableRollout() : enableRollout()">
+                      <button type="button" class="min-h-11 d-btn d-btn-outline" :disabled="channel.rollout_enabled ? (rolloutTargetActionsDisabled || rolloutControlsDisabled) : rolloutEnableDisabled" @click="channel.rollout_enabled ? disableRollout() : enableRollout()">
                         {{ channel.rollout_enabled ? t('disable') : t('enable') }}
                       </button>
-                      <button class="min-h-11 d-btn d-btn-outline" :disabled="rolloutPauseDisabled" @click="toggleRolloutPause()">
+                      <button type="button" class="min-h-11 d-btn d-btn-outline" :disabled="rolloutPauseDisabled" @click="toggleRolloutPause()">
                         {{ channel.rollout_paused_at ? t('resume') : t('pause') }}
                       </button>
-                      <button class="min-h-11 d-btn d-btn-primary" :disabled="rolloutTargetActionsDisabled" @click="promoteRollout()">
+                      <button type="button" class="min-h-11 d-btn d-btn-primary" :disabled="rolloutTargetActionsDisabled" @click="promoteRollout()">
                         {{ t('promote') }}
                       </button>
-                      <button class="min-h-11 capitalize d-btn d-btn-error d-btn-ghost" :disabled="rolloutTargetActionsDisabled" @click="rollbackRollout()">
+                      <button type="button" class="min-h-11 capitalize d-btn d-btn-error d-btn-ghost" :disabled="rolloutTargetActionsDisabled" @click="rollbackRollout()">
                         {{ t('rollback') }}
                       </button>
                     </div>
@@ -1415,6 +1416,7 @@ async function copyCurlCommand() {
           <!-- Debug API Section -->
           <div class="border-t border-slate-300 dark:border-slate-700">
             <button
+              type="button"
               class="flex items-center justify-between w-full px-6 py-4 transition-colors dark:hover:bg-slate-700/50 hover:bg-slate-50"
               @click="showDebugSection = !showDebugSection"
             >
@@ -1440,6 +1442,7 @@ async function copyCurlCommand() {
               <div class="relative">
                 <pre class="p-4 overflow-x-auto text-sm rounded-lg bg-slate-900 text-slate-100"><code>{{ getChannelCurlCommand() }}</code></pre>
                 <button
+                  type="button"
                   class="absolute p-2 transition-colors rounded top-2 right-2 hover:bg-slate-700"
                   :title="t('copy-curl')"
                   @click="copyCurlCommand"
@@ -1466,7 +1469,7 @@ async function copyCurlCommand() {
       <p class="mt-2 text-muted-foreground">
         {{ t('channel-not-found-description') }}
       </p>
-      <button class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/channels`)">
+      <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/channels`)">
         {{ t('back-to-channels') }}
       </button>
     </div>

@@ -426,7 +426,7 @@ onUnmounted(() => {
           <div class="bp-dots">
             <span v-for="i in SLIDE_COUNT" :key="i" class="bp-dot" :class="{ on: cur === i - 1 }" />
           </div>
-          <button class="bp-x" :aria-label="t('builder-promo-close')" @click="close">
+          <button type="button" class="bp-x" :aria-label="t('builder-promo-close')" @click="close">
             ✕
           </button>
         </div>
@@ -659,7 +659,7 @@ onUnmounted(() => {
                   {{ t('builder-promo-s5-lead1') }} <b>{{ t('builder-promo-s5-lead2') }}</b>
                 </p>
                 <div>
-                  <button class="bp-cta" @click="startBuild">
+                  <button type="button" class="bp-cta" @click="startBuild">
                     {{ t('builder-promo-s5-cta') }}
                     <svg viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" /></svg>
                   </button>
@@ -671,10 +671,10 @@ onUnmounted(() => {
 
         <!-- footer -->
         <div class="bp-foot">
-          <button class="bp-ghost" :disabled="isFirst" @click="prev">
+          <button type="button" class="bp-ghost" :disabled="isFirst" @click="prev">
             ← {{ t('builder-promo-back') }}
           </button>
-          <button v-if="!isLast" class="bp-next" @click="next">
+          <button type="button" v-if="!isLast" class="bp-next" @click="next">
             {{ t('builder-promo-next') }} →
           </button>
           <span v-else />

@@ -88,10 +88,11 @@ function handleConfirm() {
       />
 
       <div class="modal-action">
-        <button class="d-btn" @click="handleClose">
+        <button type="button" class="d-btn" @click="handleClose">
           {{ cancelButtonText }}
         </button>
         <button
+          type="button"
           class="d-btn d-btn-primary"
           :disabled="!selectedRole || isLoading"
           @click="handleConfirm"

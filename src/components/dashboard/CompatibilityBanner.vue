@@ -57,8 +57,8 @@ watch(() => props.appId, () => {
 
 <template>
   <button
-    v-if="unresolvedCount > 0"
     type="button"
+    v-if="unresolvedCount > 0"
     data-test="compatibility-banner"
     class="block w-full mb-4 overflow-hidden text-left transition-colors border rounded-lg cursor-pointer border-amber-200 bg-amber-50 hover:bg-amber-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 dark:bg-amber-900/20 dark:border-amber-800 dark:hover:bg-amber-900/30"
     @click="viewCompatibility"

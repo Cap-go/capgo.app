@@ -113,6 +113,7 @@ watch(
 
       <!-- Right: CTA button (matches DeploymentBanner's deploy button) -->
       <button
+        type="button"
         class="inline-flex flex-shrink-0 items-center justify-center whitespace-nowrap rounded-md bg-blue-500 px-5 py-2 text-sm font-semibold text-white transition-colors hover:bg-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:ring-offset-2 focus:ring-offset-blue-100/40 dark:focus:ring-offset-[#121b3a]"
         @click.stop="openModal"
       >

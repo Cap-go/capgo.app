@@ -38,13 +38,13 @@ displayStore.defaultBack = '/apps'
     <div class="flex overflow-y-auto flex-col bg-white shadow-lg md:mx-auto md:mt-5 md:w-2/3 md:rounded-lg md:border border-slate-300 dark:border-slate-900 dark:bg-slate-800">
       <dl class="divide-y divide-slate-200 dark:divide-slate-500">
         <InfoRow :label="t('discover-module-in-a')" :is-link="true" @click="openLink('https://github.com/riderx/awesome-capacitor')">
-          <button class="ml-auto w-7 h-7 bg-transparent">
+          <button type="button" class="ml-auto w-7 h-7 bg-transparent">
             <IconNext />
           </button>
         </InfoRow>
         <InfoRow :label="t('available-in-the-san')" />
         <InfoRow v-for="(module, index) in modules" :key="index" :label="`${module.name}@${module.version}`" :is-link="true" @click="openLink(module.url)">
-          <button class="ml-auto w-7 h-7 bg-transparent">
+          <button type="button" class="ml-auto w-7 h-7 bg-transparent">
             <IconNext />
           </button>
         </InfoRow>

@@ -118,7 +118,7 @@ export const EXPLANATIONS: Record<string, string> = {
 
 /** Return the explanation for a state, or a generic fallback for unknown states. */
 export function explainForState(state: string | undefined | null): string {
-  if (state && Object.prototype.hasOwnProperty.call(EXPLANATIONS, state))
+  if (state && Object.hasOwn(EXPLANATIONS, state))
     return EXPLANATIONS[state]
   return FALLBACK
 }

@@ -47,6 +47,7 @@ const { t } = useI18n()
         <div class="flex items-center space-x-4 lg:space-x-3">
           <div v-if="displayStore.NavTitle && isMobile" class="pr-2">
             <button
+              type="button"
               class="flex p-2 rounded-sm dark:text-white focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none text-slate-500 dark:hover:bg-slate-600 hover:bg-slate-300"
               :aria-label="t('button-back')"
               @click="back()"
@@ -69,11 +70,12 @@ const { t } = useI18n()
               @click.stop="$emit('toggleSidebarCollapse')"
             >
               <span class="sr-only">{{ props.sidebarCollapsed ? t('expand-sidebar') : t('collapse-sidebar') }}</span>
-              <IconPanelLeft class="w-6 h-6" />
+              <IconPanelLeft class="h-5 w-5 [stroke-width:1.5]" />
             </button>
           </div>
           <!-- Hamburger button -->
           <button
+            type="button"
             class="p-1 rounded-md lg:hidden dark:text-white focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none text-slate-500 dark:hover:text-slate-50 hover:text-slate-600"
             data-test="sidebar-mobile-toggle"
             aria-controls="sidebar"
@@ -116,7 +118,6 @@ const { t } = useI18n()
                   </li>
                 </ol>
               </nav>
-              <!-- <span v-if="showNavTitle" class="mx-1">{{ displayStore.NavTitle }}</span> -->
             </div>
           </div>
         </div>

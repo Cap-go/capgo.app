@@ -1,7 +1,7 @@
 import type { TrackOptions } from '@logsnag/node'
 import type { Context } from 'hono'
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
-import { existInEnv, getEnv } from './utils.ts'
+import { existInEnv, getEnv, trimTrailingSlashes } from './utils.ts'
 
 const POSTHOG_CAPTURE_URL = 'https://eu.i.posthog.com/capture/'
 const POSTHOG_EXCEPTION_URL = 'https://eu.i.posthog.com/i/v0/e/'
@@ -89,13 +89,6 @@ export async function trackPosthogEvent(c: Context, payload: PostHogCapturePaylo
     if (timeoutId)
       clearTimeout(timeoutId)
   }
-}
-
-function trimTrailingSlashes(value: string) {
-  let end = value.length
-  while (end > 0 && value.charCodeAt(end - 1) === 47)
-    end--
-  return value.slice(0, end)
 }
 
 function stripPostHogEndpoint(host: string) {

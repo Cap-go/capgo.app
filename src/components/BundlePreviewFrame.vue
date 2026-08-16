@@ -205,6 +205,7 @@ async function startPreview() {
     class="flex min-h-[calc(100dvh-8rem)] w-full flex-col items-center justify-center gap-5 px-4 py-6"
   >
     <button
+      type="button"
       class="inline-flex min-h-12 w-full max-w-xs items-center justify-center gap-2 rounded-xl bg-blue-500 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-blue-500/20 transition-colors hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-60"
       :disabled="startPreviewDisabled"
       @click="startPreview"
@@ -253,6 +254,7 @@ async function startPreview() {
 
   <div v-else class="relative min-h-[calc(100dvh-8rem)] w-full overflow-y-auto px-3 py-4 md:px-6 md:py-6">
     <button
+      type="button"
       v-if="showBrowserPreview"
       class="absolute z-10 p-2 transition-colors bg-white rounded-lg shadow-lg top-4 right-4 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700"
       :title="t('open-in-external')"
@@ -271,6 +273,7 @@ async function startPreview() {
       <div v-if="showBrowserPreview" class="flex min-w-0 flex-col items-center">
         <div class="flex items-center gap-2 mb-4">
           <button
+            type="button"
             class="flex items-center gap-2 px-3 py-2 text-sm transition-colors border rounded-lg"
             :class="selectedDevice === 'iphone'
               ? 'bg-blue-500 text-white border-blue-500'
@@ -281,6 +284,7 @@ async function startPreview() {
             {{ t('device-iphone') }}
           </button>
           <button
+            type="button"
             class="flex items-center gap-2 px-3 py-2 text-sm transition-colors border rounded-lg"
             :class="selectedDevice === 'pixel'
               ? 'bg-blue-500 text-white border-blue-500'

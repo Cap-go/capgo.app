@@ -18,7 +18,7 @@ interface BuilderStartResponse {
 function encodeBase64Url(input: Uint8Array): string {
   let binary = ''
   for (const byte of input) {
-    binary += String.fromCharCode(byte)
+    binary += String.fromCodePoint(byte)
   }
   return btoa(binary)
     .replace(/\+/g, '-')

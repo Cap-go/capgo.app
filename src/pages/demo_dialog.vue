@@ -114,6 +114,7 @@ function readExternalInput() {
     <!-- Demo Controls -->
     <div class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
       <button
+        type="button"
         class="d-btn d-btn-primary"
         @click="openBasicDialog"
       >
@@ -121,6 +122,7 @@ function readExternalInput() {
       </button>
 
       <button
+        type="button"
         class="d-btn d-btn-secondary"
         @click="openInputDialog"
       >
@@ -128,6 +130,7 @@ function readExternalInput() {
       </button>
 
       <button
+        type="button"
         class="d-btn d-btn-error"
         @click="openDangerDialog"
       >
@@ -135,6 +138,7 @@ function readExternalInput() {
       </button>
 
       <button
+        type="button"
         class="d-btn d-btn-accent"
         @click="openFormDialog"
       >
@@ -158,6 +162,7 @@ function readExternalInput() {
           class="flex-1 input input-bordered"
         >
         <button
+          type="button"
           class="d-btn d-btn-outline"
           @click="readExternalInput"
         >

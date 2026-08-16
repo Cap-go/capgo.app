@@ -139,7 +139,7 @@ function calcOffset(eye: HTMLElement | null, ev: MouseEvent) {
   const dx = ev.clientX - cx
   const dy = ev.clientY - cy
 
-  const dist = Math.sqrt(dx * dx + dy * dy)
+  const dist = Math.hypot(dx, dy)
   if (dist === 0)
     return { x: 0, y: 0 }
 
@@ -157,7 +157,7 @@ const exciteDistance = 80 // px from CTA edge to trigger excitement
 function distToRect(x: number, y: number, rect: DOMRect): number {
   const dx = Math.max(rect.left - x, 0, x - rect.right)
   const dy = Math.max(rect.top - y, 0, y - rect.bottom)
-  return Math.sqrt(dx * dx + dy * dy)
+  return Math.hypot(dx, dy)
 }
 
 function handleMouseMove(e: MouseEvent) {

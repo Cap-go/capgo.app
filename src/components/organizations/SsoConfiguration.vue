@@ -385,6 +385,7 @@ defineExpose({
           <span class="ml-1 break-all">{{ spMetadata.acs_url }}</span>
         </p>
         <button
+          type="button"
           class="d-btn d-btn-ghost d-btn-xs flex-shrink-0"
           :title="t('sso-copy')"
           :aria-label="`${t('sso-copy')} ${t('sso-acs-url')}`"
@@ -399,6 +400,7 @@ defineExpose({
           <span class="ml-1 break-all">{{ spMetadata.entity_id }}</span>
         </p>
         <button
+          type="button"
           class="d-btn d-btn-ghost d-btn-xs flex-shrink-0"
           :title="t('sso-copy')"
           :aria-label="`${t('sso-copy')} ${t('sso-entity-id')}`"
@@ -413,6 +415,7 @@ defineExpose({
           <span class="ml-1 break-all">{{ spMetadata.sp_metadata_url }}</span>
         </p>
         <button
+          type="button"
           class="d-btn d-btn-ghost d-btn-xs flex-shrink-0"
           :title="t('sso-copy')"
           :aria-label="`${t('sso-copy')} ${t('sso-sp-metadata-url')}`"
@@ -427,6 +430,7 @@ defineExpose({
           <span class="ml-1 break-all">{{ spMetadata.nameid_format }}</span>
         </p>
         <button
+          type="button"
           class="d-btn d-btn-ghost d-btn-xs flex-shrink-0"
           :title="t('sso-copy')"
           :aria-label="`${t('sso-copy')} ${t('sso-nameid-format')}`"
@@ -483,6 +487,7 @@ defineExpose({
       </div>
       <div class="flex items-center gap-3">
         <button
+          type="button"
           :disabled="isSubmitting"
           class="d-btn d-btn-primary d-btn-sm"
           :class="{ 'd-btn-disabled': isSubmitting }"
@@ -495,6 +500,7 @@ defineExpose({
           <span v-else>{{ t('sso-create-provider') }}</span>
         </button>
         <button
+          type="button"
           :disabled="isSubmitting"
           class="d-btn d-btn-outline d-btn-sm"
           @click="showAddForm = false"
@@ -525,6 +531,7 @@ defineExpose({
           {{ t('sso-dns-record-name') }}: <span class="font-semibold text-slate-800 dark:text-white">_capgo-sso.{{ pendingVerificationProvider.domain }}</span>
         </p>
         <button
+          type="button"
           class="d-btn d-btn-ghost d-btn-xs"
           :title="t('sso-copy')"
           @click="copyToClipboard(`_capgo-sso.${pendingVerificationProvider.domain}`, t('sso-dns-record-name'))"
@@ -537,6 +544,7 @@ defineExpose({
           {{ t('sso-dns-record-value') }}: <span class="font-semibold text-slate-800 dark:text-white">{{ pendingVerificationProvider.dns_verification_token }}</span>
         </p>
         <button
+          type="button"
           class="d-btn d-btn-ghost d-btn-xs flex-shrink-0"
           :title="t('sso-copy')"
           @click="copyToClipboard(pendingVerificationProvider.dns_verification_token!, t('sso-dns-record-value'))"
@@ -548,6 +556,7 @@ defineExpose({
 
     <div class="flex items-center gap-3">
       <button
+        type="button"
         :disabled="isVerifying === pendingVerificationProvider.id"
         class="d-btn d-btn-primary d-btn-sm"
         :class="{ 'd-btn-disabled': isVerifying === pendingVerificationProvider.id }"
@@ -560,6 +569,7 @@ defineExpose({
         <span v-else>{{ t('sso-verify-dns') }}</span>
       </button>
       <button
+        type="button"
         class="d-btn d-btn-outline d-btn-sm"
         @click="recentlyCreatedId = null"
       >
@@ -590,6 +600,7 @@ defineExpose({
       {{ t('sso-no-providers-description') }}
     </p>
     <button
+      type="button"
       class="d-btn d-btn-primary d-btn-sm mt-4"
       @click="showAddForm = true"
     >
@@ -627,6 +638,7 @@ defineExpose({
         <div class="flex items-center gap-2 shrink-0">
           <!-- Verify DNS button (pending_verification) -->
           <button
+            type="button"
             v-if="provider.status === 'pending_verification'"
             :disabled="isVerifying === provider.id"
             class="d-btn d-btn-primary d-btn-sm"
@@ -639,6 +651,7 @@ defineExpose({
 
           <!-- Activate button (verified) -->
           <button
+            type="button"
             v-if="provider.status === 'verified'"
             class="d-btn d-btn-success d-btn-sm"
             @click="updateProviderStatus(provider.id, 'active')"
@@ -648,6 +661,7 @@ defineExpose({
 
           <!-- Deactivate button (active) -->
           <button
+            type="button"
             v-if="provider.status === 'active'"
             class="d-btn d-btn-warning d-btn-outline d-btn-sm"
             @click="updateProviderStatus(provider.id, 'disabled')"
@@ -657,6 +671,7 @@ defineExpose({
 
           <!-- Re-activate button (disabled) -->
           <button
+            type="button"
             v-if="provider.status === 'disabled'"
             class="d-btn d-btn-success d-btn-outline d-btn-sm"
             @click="updateProviderStatus(provider.id, 'active')"
@@ -681,6 +696,7 @@ defineExpose({
 
           <!-- Delete button (always visible) -->
           <button
+            type="button"
             class="d-btn d-btn-error d-btn-outline d-btn-sm"
             @click="deleteProvider(provider)"
           >

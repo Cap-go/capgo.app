@@ -602,6 +602,7 @@ watch(bundleRouteKey, async (key) => {
                             <IconPuzzle class="w-4 h-4 text-gray-400" />
                             {{ entry.name }}
                             <button
+                              type="button"
                               class="p-1 transition-colors rounded-md hover:bg-gray-100 dark:hover:bg-gray-600"
                               :title="t('view-on-npm')"
                               @click="openNpmPackage(entry.name)"
@@ -697,6 +698,7 @@ watch(bundleRouteKey, async (key) => {
                             <IconPuzzle class="w-4 h-4 text-gray-400" />
                             {{ pkg.name }}
                             <button
+                              type="button"
                               class="p-1 transition-colors rounded-md hover:bg-gray-100 dark:hover:bg-gray-600"
                               :title="t('view-on-npm')"
                               @click="openNpmPackage(pkg.name)"
@@ -745,7 +747,7 @@ watch(bundleRouteKey, async (key) => {
       <p class="mt-2 text-muted-foreground">
         {{ t('bundle-not-found-description') }}
       </p>
-      <button class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/bundles`)">
+      <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/bundles`)">
         {{ t('back-to-bundles') }}
       </button>
     </div>

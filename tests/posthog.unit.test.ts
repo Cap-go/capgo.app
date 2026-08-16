@@ -36,6 +36,12 @@ vi.mock('../supabase/functions/_backend/utils/utils.ts', () => ({
       return 'prod'
     return ''
   },
+  trimTrailingSlashes: (value: string) => {
+    let end = value.length
+    while (end > 0 && value[end - 1] === '/')
+      end -= 1
+    return value.slice(0, end)
+  },
 }))
 
 function createContext() {

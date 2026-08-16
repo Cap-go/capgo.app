@@ -426,9 +426,9 @@ function convertDataToJsTypes<T>(apiResponse: AnalyticsApiResponse) {
   const { meta, data } = apiResponse
 
   // cloudlog(c.get('requestId'), 'meta', meta)
-  const toNumber = (value: string) => Number(value)
+  const toNumber = Number
   const converters: Record<string, (value: string) => unknown> = {
-    String: (value: string) => String(value),
+    String,
     // Analytics Engine returns aggregate sums as Float64 string values.
     // Without conversion, callers that do `sum + row.install` string-concatenate.
     Float64: toNumber,

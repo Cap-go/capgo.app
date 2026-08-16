@@ -4,11 +4,10 @@ import Stripe from 'stripe'
 import { simpleError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { supabaseAdmin } from './supabase.ts'
-import { getEnv, isStripeConfigured } from './utils.ts'
+import { getEnv, isStripeConfigured, trimTrailingSlashes } from './utils.ts'
 
 const TRACKED_STRIPE_SUBSCRIPTION_STATUSES = ['active', 'trialing', 'past_due'] as const
 const ISO_COUNTRY_CODE_REGEX = /^[A-Z]{2}$/
-const TRAILING_SLASHES_REGEX = /\/+$/g
 
 // Checks if SUPABASE_URL points to a local instance
 function isLocalSupabase(c: Context): boolean {
@@ -771,7 +770,7 @@ export interface StripeCustomer {
 
 export async function createCustomer(c: Context, email: string, userId: string, orgId: string, name: string) {
   cloudlog({ requestId: c.get('requestId'), message: 'createCustomer', email, userId, orgId, name })
-  const baseConsoleUrl = (getEnv(c, 'WEBAPP_URL') || '').replace(TRAILING_SLASHES_REGEX, '')
+  const baseConsoleUrl = trimTrailingSlashes(getEnv(c, 'WEBAPP_URL') || '')
   const metadata: Record<string, string> = {
     user_id: userId,
     org_id: orgId,
@@ -805,7 +804,7 @@ export async function ensureCustomerMetadata(c: Context, customerId: string, org
   if (!isStripeConfigured(c))
     return
 
-  const baseConsoleUrl = (getEnv(c, 'WEBAPP_URL') || '').replace(TRAILING_SLASHES_REGEX, '')
+  const baseConsoleUrl = trimTrailingSlashes(getEnv(c, 'WEBAPP_URL') || '')
   const metadata: Record<string, string> = {
     org_id: orgId,
   }

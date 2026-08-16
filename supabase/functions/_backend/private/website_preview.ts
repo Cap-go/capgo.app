@@ -62,7 +62,7 @@ function decodeHtmlEntities(value: string) {
 }
 
 function deriveNameFromHostname(hostname: string) {
-  const segment = hostname.replace(/^www\./, '').split('.').filter(Boolean)[0] ?? ''
+  const segment = hostname.replace(/^www\./, '').split('.').find(Boolean) ?? ''
   return segment
     .split(/[-_]+/)
     .filter(Boolean)
@@ -139,7 +139,7 @@ function findIconHref(html: string) {
     candidates.push({ priority, href })
   }
 
-  return candidates.sort((a, b) => b.priority - a.priority)[0]?.href ?? ''
+  return candidates.toSorted((a, b) => b.priority - a.priority)[0]?.href ?? ''
 }
 
 async function getWebsitePublicHostnameValidationError(urlString: string) {
@@ -222,7 +222,7 @@ async function fetchIconDataUrl(iconUrl: string) {
   let binary = ''
   const chunkSize = 0x8000
   for (let index = 0; index < bytes.length; index += chunkSize)
-    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize))
+    binary += String.fromCodePoint(...bytes.subarray(index, index + chunkSize))
 
   return `data:${contentType};base64,${btoa(binary)}`
 }

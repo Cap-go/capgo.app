@@ -142,13 +142,11 @@ async function loadAppSettingIcon(rawIconUrl: string | null | undefined, run: nu
 onMounted(async () => {
   isLoading.value = true
 
-  const [{ error, data }] = await Promise.all([
-    supabase
-      .from('apps')
-      .select('*, owner_org ( name, id )')
-      .eq('app_id', props.appId)
-      .single(),
-  ])
+  const { error, data } = await supabase
+    .from('apps')
+    .select('*, owner_org ( name, id )')
+    .eq('app_id', props.appId)
+    .single()
 
   if (error) {
     toast.error(t('cannot-load-app-settings'))
@@ -660,8 +658,8 @@ async function setDefaultChannel() {
             return false
           }
 
-          const matchedChannel = uploadChannelOptions.value.find(channel => channel.name === selectedChannel.value)
-          if (!matchedChannel) {
+          const hasMatchedChannel = uploadChannelOptions.value.some(channel => channel.name === selectedChannel.value)
+          if (!hasMatchedChannel) {
             toast.error(t('channel-not-found'))
             return false
           }
