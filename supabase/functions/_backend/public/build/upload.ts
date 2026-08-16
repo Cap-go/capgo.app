@@ -41,10 +41,10 @@ export async function tusProxy(
   // Use authenticated client for data queries - RLS will enforce access
   const supabase = supabaseApikey(c, apikey.key)
 
-  // Get build request to verify ownership
+  // Get build request to verify ownership and that the upload window is still open
   const { data: buildRequest, error: buildRequestError } = await supabase
     .from('build_requests')
-    .select('app_id, owner_org, builder_job_id, upload_path')
+    .select('app_id, owner_org, builder_job_id, upload_path, upload_expires_at, status')
     .eq('builder_job_id', jobId)
     .single()
 
@@ -56,6 +56,38 @@ export async function tusProxy(
       error: buildRequestError,
     })
     throw simpleError('not_found', 'Build request not found')
+  }
+
+  // Fail closed: only `pending` is the upload window (set in request.ts).
+  // After /build/start the row moves to running/terminal and must not accept more bytes.
+  if (!buildRequest.status || buildRequest.status !== 'pending') {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'TUS upload rejected for non-pending build status',
+      job_id: jobId,
+      status: buildRequest.status,
+    })
+    throw quickError(403, 'upload_not_allowed', 'Upload is not allowed for this build status')
+  }
+
+  if (!buildRequest.upload_expires_at) {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'TUS upload rejected: missing upload_expires_at',
+      job_id: jobId,
+    })
+    throw quickError(403, 'upload_expired', 'Upload window has expired')
+  }
+
+  const uploadExpiresAt = new Date(buildRequest.upload_expires_at)
+  if (Number.isNaN(uploadExpiresAt.getTime()) || uploadExpiresAt.getTime() <= Date.now()) {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'TUS upload rejected: upload window expired',
+      job_id: jobId,
+      upload_expires_at: buildRequest.upload_expires_at,
+    })
+    throw quickError(403, 'upload_expired', 'Upload window has expired')
   }
 
   // Check if user has permission to upload for this build (auth context set by middlewareKey)
@@ -115,7 +147,7 @@ export async function tusProxy(
     upload_path: buildRequest.upload_path,
   })
 
-  // Extract the path after /upload/:jobId/ and forward to builder
+  // Extract the path after /upload/:jobId/ and bind it to this job's upload resource
   // Example: /build/upload/abc123/myfile.zip -> /upload/myfile.zip
   // Example: /build/upload/abc123 -> /upload/
   const requestUrl = c.req.raw.url
@@ -161,8 +193,45 @@ export async function tusProxy(
     throw quickError(400, 'invalid_path', 'Invalid upload path')
   }
 
+  const clientSuffix = decodedTusPath.replace(/^\/+|\/+$/g, '')
+  const jobUploadResource = buildRequest.upload_path.split('/').filter(Boolean).at(-1)
+  if (!jobUploadResource) {
+    throw simpleError('invalid_request', 'Invalid upload path format')
+  }
+
+  // POST creates this job's upload only. Never forward a client-chosen extra segment.
+  if (forwardMethod === 'POST' && clientSuffix) {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'Rejected POST with extra TUS path segment',
+      job_id: jobId,
+      original_path: originalPath,
+      upload_path: decodedTusPath,
+    })
+    throw quickError(400, 'invalid_path', 'Upload create path must not include a TUS resource id.')
+  }
+
+  // PATCH/HEAD/OPTIONS may send a Location suffix. Bind it to this job's upload_path
+  // (last segment or the full stored path). Anything else is another job's resource.
+  if (forwardMethod !== 'POST' && clientSuffix
+    && clientSuffix !== jobUploadResource
+    && clientSuffix !== buildRequest.upload_path) {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'Rejected TUS path that does not belong to this job',
+      job_id: jobId,
+      original_path: originalPath,
+      upload_path: decodedTusPath,
+    })
+    throw quickError(400, 'invalid_path', 'Upload path does not match this build request')
+  }
+
+  const boundTusPath = forwardMethod === 'POST'
+    ? '/'
+    : `/${clientSuffix === buildRequest.upload_path ? buildRequest.upload_path : jobUploadResource}`
+
   const baseUploadUrl = new URL(`${builderUrl}/upload/`)
-  const resolvedTusUrl = new URL(`.${tusPath}`, baseUploadUrl)
+  const resolvedTusUrl = new URL(`.${boundTusPath}`, baseUploadUrl)
   if (!resolvedTusUrl.pathname.startsWith(baseUploadUrl.pathname)) {
     cloudlogErr({
       requestId: c.get('requestId'),
