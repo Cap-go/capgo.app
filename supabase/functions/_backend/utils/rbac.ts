@@ -413,6 +413,73 @@ export async function checkPermissionPg(
 // =============================================================================
 
 /**
+ * Match invite_user_to_org_rbac: caller max org priority_rank must be
+ * >= the assignable target role's priority_rank.
+ */
+export async function canCallerAssignOrgRole(
+  c: Context<MiddlewareKeyVariables>,
+  orgId: string,
+  roleName?: string | null,
+): Promise<boolean> {
+  const auth = c.get('auth')
+  if (!auth?.userId)
+    return false
+
+  const targetRoleName = roleName?.trim()
+  if (!targetRoleName)
+    return false
+
+  let principalType = 'user'
+  let principalId = auth.userId
+  if (auth.authType === 'apikey' && auth.apikey?.rbac_id) {
+    principalType = 'apikey'
+    principalId = auth.apikey.rbac_id
+  }
+  if (!principalId)
+    return false
+
+  let pgClient
+  try {
+    pgClient = getPgClient(c)
+    const result = await pgClient.query<{ allowed: boolean }>(`
+      WITH target_role AS (
+        SELECT r.priority_rank
+        FROM public.roles r
+        WHERE r.name = $4
+          AND r.scope_type = public.rbac_scope_org()
+          AND r.is_assignable = true
+        LIMIT 1
+      ),
+      caller_priority AS (
+        SELECT COALESCE(MAX(r.priority_rank), 0) AS max_priority
+        FROM public.role_bindings rb
+        JOIN public.roles r
+          ON r.id = rb.role_id
+          AND r.scope_type = rb.scope_type
+        WHERE rb.principal_type = $1
+          AND rb.principal_id = $2::uuid
+          AND rb.org_id = $3::uuid
+          AND (rb.expires_at IS NULL OR rb.expires_at > now())
+      )
+      SELECT
+        (SELECT max_priority FROM caller_priority) >= COALESCE(
+          (SELECT priority_rank FROM target_role),
+          2147483647
+        ) AS allowed
+    `, [principalType, principalId, orgId, targetRoleName])
+
+    return result.rows[0]?.allowed === true
+  }
+  catch (e) {
+    return handlePermissionCheckError(c, 'org.update_user_roles', { orgId }, e, 'checkPermission')
+  }
+  finally {
+    if (pgClient)
+      closeClient(c, pgClient)
+  }
+}
+
+/**
  * Infer the scope type from a permission key.
  */
 export function getScopeTypeFromPermission(permission: Permission): ScopeType {

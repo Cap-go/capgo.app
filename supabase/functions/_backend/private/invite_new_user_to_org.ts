@@ -10,7 +10,7 @@ import { verifyCaptchaToken } from '../utils/captcha.ts'
 import { BRES, parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog } from '../utils/logging.ts'
-import { checkPermission } from '../utils/rbac.ts'
+import { canCallerAssignOrgRole, checkPermission } from '../utils/rbac.ts'
 import { supabaseAdmin, supabaseClient } from '../utils/supabase.ts'
 import { getEnv } from '../utils/utils.ts'
 
@@ -67,6 +67,14 @@ async function validateInvite(c: Context, rawBody: any) {
   const isSuperAdminInvite = body.invite_type === 'org_super_admin'
   const requiredPermission = isSuperAdminInvite ? 'org.update_user_roles' : 'org.invite_user'
   if (!await checkPermission(c, requiredPermission, { orgId: body.org_id })) {
+    return quickError(403, 'not_authorized', 'Not authorized', {
+      requiredPermission,
+      orgId: body.org_id,
+    })
+  }
+
+  // Match invite_user_to_org_rbac: deny when caller max rank is below the target role.
+  if (!await canCallerAssignOrgRole(c, body.org_id, body.invite_type)) {
     return quickError(403, 'not_authorized', 'Not authorized', {
       requiredPermission,
       orgId: body.org_id,
