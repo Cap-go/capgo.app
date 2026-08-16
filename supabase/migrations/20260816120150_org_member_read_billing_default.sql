@@ -396,7 +396,7 @@ BEGIN
         o.id,
         NULL::character varying,
         NULL::bigint,
-        NULL
+        public.get_apikey_header()
       ) AS should_redact_billing
     FROM public.orgs o
     JOIN user_orgs uo ON uo.org_id = o.id
@@ -405,7 +405,7 @@ BEGIN
     o.id AS gid,
     o.created_by,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR billing_acc.should_redact_billing THEN NULL::timestamptz
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password THEN NULL::timestamptz
       ELSE o.created_at
     END AS created_at,
     o.logo,
@@ -432,7 +432,7 @@ BEGIN
       ELSE COALESCE(si.status = 'canceled', false)
     END AS is_canceled,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR billing_acc.should_redact_billing THEN 0::bigint
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password THEN 0::bigint
       ELSE COALESCE(ac.cnt, 0)
     END AS app_count,
     CASE

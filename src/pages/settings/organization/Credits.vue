@@ -398,13 +398,25 @@ async function loadPricingSteps() {
 }
 
 // Page view requires org.read_billing; buy/checkout still requires org.update_billing.
-async function ensureReadBillingAccess() {
-  const orgId = currentOrganization.value?.gid
-  if (orgId && await checkPermissions('org.read_billing', { orgId })) {
+async function ensureReadBillingAccess(expectedOrgId?: string) {
+  const orgId = expectedOrgId ?? currentOrganization.value?.gid
+  // Hide previous org data immediately while the async permission check runs.
+  hasReadBillingAccess.value = false
+  if (!orgId)
+    return false
+
+  const allowed = await checkPermissions('org.read_billing', { orgId })
+  // Ignore stale results if the user switched orgs mid-check.
+  if (currentOrganization.value?.gid !== orgId)
+    return false
+
+  if (allowed) {
     hasReadBillingAccess.value = true
+    if (adminModalPermission.value === 'org.read_billing')
+      showAdminModal.value = false
     return true
   }
-  hasReadBillingAccess.value = false
+
   adminModalPermission.value = 'org.read_billing'
   showAdminModal.value = true
   return false
@@ -518,10 +530,12 @@ onMounted(async () => {
 
   displayStore.NavTitle = t('credits')
   await organizationStore.awaitInitialLoad()
+  // Finalize Stripe return before the read gate so update-billing holders can
+  // complete a top-up even when they temporarily lack org.read_billing.
+  await handleCreditCheckoutReturn()
   if (!(await ensureReadBillingAccess()))
     return
   await Promise.allSettled([loadTransactions(), loadPricingSteps()])
-  await handleCreditCheckoutReturn()
 })
 
 watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined, oldOrgId: string | undefined) => {
@@ -530,10 +544,10 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
 
   if (!newOrgId || newOrgId === oldOrgId)
     return
-  if (!(await ensureReadBillingAccess()))
+  await handleCreditCheckoutReturn()
+  if (!(await ensureReadBillingAccess(newOrgId)))
     return
   await Promise.allSettled([loadTransactions(), loadPricingSteps()])
-  await handleCreditCheckoutReturn()
 })
 </script>
 
