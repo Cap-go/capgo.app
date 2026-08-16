@@ -20,8 +20,26 @@ function decodePathname(pathname: string) {
   }
 }
 
-function matchStorageImagePath(pathname: string) {
-  return STORAGE_URL_REGEX.exec(decodePathname(pathname))
+/** True when pathname is a Capgo images storage object URL (raw or percent-encoded route). */
+function isStorageImagePathname(pathname: string) {
+  return STORAGE_URL_REGEX.test(pathname)
+    || STORAGE_URL_REGEX.test(decodePathname(pathname))
+}
+
+/**
+ * Extract the images object key from a storage pathname.
+ * Decode the route for matching when needed, but decode the object key only once.
+ */
+function extractStorageImageKey(pathname: string) {
+  const rawMatch = STORAGE_URL_REGEX.exec(pathname)
+  if (rawMatch?.[1])
+    return decodeURIComponent(rawMatch[1]).replace(/^\/+/, '')
+
+  const decodedMatch = STORAGE_URL_REGEX.exec(decodePathname(pathname))
+  if (decodedMatch?.[1])
+    return decodedMatch[1].replace(/^\/+/, '')
+
+  return null
 }
 
 function originFromEnvUrl(raw: string) {
@@ -53,7 +71,7 @@ export function getStorageAllowedOrigins(c: Context): string[] {
 
 export function isSupabaseStorageImageUrl(raw: string) {
   try {
-    return !!matchStorageImagePath(new URL(raw).pathname)
+    return isStorageImagePathname(new URL(raw).pathname)
   }
   catch {
     return false
@@ -93,13 +111,13 @@ export function normalizeImagePath(
 
   try {
     const url = new URL(trimmed)
-    const match = matchStorageImagePath(url.pathname)
-    if (match?.[1]) {
+    const objectKey = extractStorageImageKey(url.pathname)
+    if (objectKey) {
       // Require an explicit allow-list; empty list means misconfigured, not open.
       const allowed = options?.allowedOrigins ?? []
       if (!allowed.includes(url.origin))
         return null
-      return decodeURIComponent(match[1]).replace(/^\/+/, '')
+      return objectKey
     }
     // External non-storage URL
     return null
@@ -179,7 +197,7 @@ export async function createSignedImageUrl(
   if (rawPath.includes('://')) {
     try {
       const url = new URL(rawPath)
-      const isOurStoragePath = !!matchStorageImagePath(url.pathname)
+      const isOurStoragePath = isStorageImagePathname(url.pathname)
         && allowedOrigins.includes(url.origin)
       if (!isOurStoragePath)
         return rawPath

@@ -176,4 +176,16 @@ describe('image path ownership for signed URLs', () => {
       { allowedOrigins: ['https://example.supabase.co'] },
     )).toBe('org/org-1/logo/a.png')
   })
+
+  it('decodes object keys only once', () => {
+    expect(normalizeImagePath(
+      'https://example.supabase.co/storage/v1/object/sign/images/org/org-1/file%20name.png',
+      { allowedOrigins: ['https://example.supabase.co'] },
+    )).toBe('org/org-1/file name.png')
+    // Encoded route + encoded key: decode route for match, key once.
+    expect(normalizeImagePath(
+      'https://example.supabase.co/%73torage/v1/object/sign/images/org/org-1/file%20name.png',
+      { allowedOrigins: ['https://example.supabase.co'] },
+    )).toBe('org/org-1/file name.png')
+  })
 })
