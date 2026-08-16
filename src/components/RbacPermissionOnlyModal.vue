@@ -16,6 +16,10 @@ const props = defineProps<{
   permission: Permission | Permission[]
 }>()
 
+const emit = defineEmits<{
+  close: []
+}>()
+
 const { t } = useI18n()
 const organizationStore = useOrganizationStore()
 const mainStore = useMainStore()
@@ -93,10 +97,6 @@ async function loadContacts() {
       isLoading.value = false
   }
 }
-
-const emit = defineEmits<{
-  close: []
-}>()
 
 function onBackdropClick() {
   emit('close')
