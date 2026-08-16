@@ -151,23 +151,27 @@ FROM _tmp_needs_org_read_billing nb
 JOIN public.orgs o ON o.id = nb.org_id
 ON CONFLICT (org_id, name) DO NOTHING;
 
--- If the reserved name is taken by a non-system group, allocate a unique system name.
+-- If the reserved name is taken by a non-system group, allocate one unique
+-- system name per org (not per needing user).
 INSERT INTO public.groups (org_id, name, description, is_system, created_by)
-SELECT DISTINCT
-  nb.org_id,
+SELECT
+  src.org_id,
   '__capgo.sys.billing_read_backfill.' || gen_random_uuid()::text,
   'System group: preserves org.read_billing for users who already saw billing before enforcement',
   true,
   o.created_by
-FROM _tmp_needs_org_read_billing nb
-JOIN public.orgs o ON o.id = nb.org_id
-WHERE NOT EXISTS (
-  SELECT 1
-  FROM public.groups g
-  WHERE g.org_id = nb.org_id
-    AND g.is_system = true
-    AND g.name LIKE '\_\_capgo.sys.billing\_read\_backfill%' ESCAPE '\'
-);
+FROM (
+  SELECT DISTINCT nb.org_id
+  FROM _tmp_needs_org_read_billing nb
+  WHERE NOT EXISTS (
+    SELECT 1
+    FROM public.groups g
+    WHERE g.org_id = nb.org_id
+      AND g.is_system = true
+      AND g.name LIKE '\_\_capgo.sys.billing\_read\_backfill%' ESCAPE '\'
+  )
+) src
+JOIN public.orgs o ON o.id = src.org_id;
 
 -- 3b) Bind org_billing_reader to each backfill group (org-scoped).
 INSERT INTO public.role_bindings (
