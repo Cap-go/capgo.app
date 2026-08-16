@@ -240,10 +240,9 @@ export function chartLabelCountForPeriodDays(dayCount: number) {
 }
 
 export function getLastNUtcDaysRange(dayCount: number) {
-  const days = Number.isFinite(dayCount) ? Math.max(1, Math.floor(dayCount)) : 30
   const endDate = normalizeToUtcStartOfDay(new Date())
   // 1 day = last 24h: yesterday + today so charts have two points.
-  const startDate = addUtcDays(endDate, -(chartLabelCountForPeriodDays(days) - 1))
+  const startDate = addUtcDays(endDate, -(chartLabelCountForPeriodDays(dayCount) - 1))
   return { startDate, endDate }
 }
 

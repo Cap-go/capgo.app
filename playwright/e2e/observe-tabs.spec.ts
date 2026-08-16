@@ -60,12 +60,15 @@ test.describe('Observe sections', () => {
     await page.goto('/app/com.demo.app/observe/updater')
     await expect(oneDayButton()).toHaveAttribute('aria-pressed', 'true')
 
+    await expect.poll(async () => Number(await page.locator('[data-testid="observe-period-labels"]').getAttribute('data-count'))).toBe(2)
+
     await sevenDayButton().click()
     await expect(page).toHaveURL(/[?&]days=7(?:&|$)/)
     await expect(sevenDayButton()).toHaveAttribute('aria-pressed', 'true')
 
     await page.goto('/app/com.demo.app/observe/native')
     await expect(oneDayButton()).toHaveAttribute('aria-pressed', 'true')
+    await expect.poll(async () => Number(await page.locator('[data-testid="observe-period-labels"]').getAttribute('data-count'))).toBe(2)
     await sevenDayButton().click()
     await expect(page).toHaveURL(/[?&]days=7(?:&|$)/)
     await expect(sevenDayButton()).toHaveAttribute('aria-pressed', 'true')

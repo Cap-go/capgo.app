@@ -1,6 +1,7 @@
 import type { Context } from 'hono'
 import type { UpdateDeliveryTimingEventCF } from '../utils/cloudflare.ts'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
+import type { VersionUsage } from '../utils/types.ts'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc.js'
 import { HTTPException } from 'hono/http-exception'
@@ -12,6 +13,7 @@ import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
 import { closeClient, getPgClient, logPgError } from '../utils/pg.ts'
 import { checkPermission } from '../utils/rbac.ts'
+import { readStatsVersion } from '../utils/stats.ts'
 import { getRollingStatsPeriod } from '../utils/statsPeriod.ts'
 import { supabaseWithAuth } from '../utils/supabase.ts'
 
@@ -242,6 +244,36 @@ function aggregateInstallTimingsByVersion(samples: InstallTimingSample[]) {
     })
   }
   return rows
+}
+
+function aggregateSuccessRowsFromVersionUsage(usage: VersionUsage[], versionFilter?: Set<string>): BundleSuccessRow[] {
+  const successByVersion = new Map<string, { install: number, fail: number }>()
+  for (const row of usage) {
+    if (!row.version_name)
+      continue
+    if (versionFilter && !versionFilter.has(row.version_name))
+      continue
+    const current = successByVersion.get(row.version_name) ?? { install: 0, fail: 0 }
+    current.install += toCount(row.install)
+    current.fail += toCount(row.fail)
+    successByVersion.set(row.version_name, current)
+  }
+  return [...successByVersion.entries()].map(([version_name, counts]) => ({
+    version_name,
+    install: counts.install,
+    fail: counts.fail,
+  }))
+}
+
+async function readRollingSuccessRows(
+  c: Context<MiddlewareKeyVariables>,
+  appId: string,
+  start: dayjs.Dayjs,
+  endExclusive: dayjs.Dayjs,
+  versionFilter?: Set<string>,
+) {
+  const usage = await readStatsVersion(c, appId, start.toISOString(), endExclusive.toISOString())
+  return aggregateSuccessRowsFromVersionUsage(usage, versionFilter)
 }
 
 function buildBundleInstallResponse(input: {
@@ -516,12 +548,8 @@ async function readBundleInstallStatsSB(
 ) {
   const db = getPgClient(c, true)
   try {
-    const startDate = start.format('YYYY-MM-DD')
-    const endDate = endInclusive.format('YYYY-MM-DD')
     const versionNames = versionFilter ? [...versionFilter] : undefined
     const hasVersionFilter = Boolean(versionNames?.length)
-
-    const successParams: unknown[] = [appId, startDate, endDate]
     const timingParams: unknown[] = [
       appId,
       start.toISOString(),
@@ -529,13 +557,16 @@ async function readBundleInstallStatsSB(
       [...installTimingActions],
       [...installStartActions],
     ]
-    if (hasVersionFilter) {
-      successParams.push(versionNames)
+    if (hasVersionFilter)
       timingParams.push(versionNames)
-    }
 
-    const [successResult, timingResult] = await Promise.all([
-      db.query<BundleSuccessRow>(buildSuccessRateQuery(hasVersionFilter), successParams),
+    const [successRows, timingResult] = await Promise.all([
+      days === 1
+        ? readRollingSuccessRows(c, appId, start, endExclusive, versionFilter)
+        : db.query<BundleSuccessRow>(
+            buildSuccessRateQuery(hasVersionFilter),
+            hasVersionFilter ? [appId, start.format('YYYY-MM-DD'), endInclusive.format('YYYY-MM-DD'), versionNames] : [appId, start.format('YYYY-MM-DD'), endInclusive.format('YYYY-MM-DD')],
+          ).then(result => result.rows),
       db.query<BundleTimingRow>(buildInstallTimingQuery(hasVersionFilter), timingParams),
     ])
 
@@ -547,7 +578,7 @@ async function readBundleInstallStatsSB(
       days,
       start: start.toISOString(),
       end: endInclusive.toISOString(),
-      successRows: successResult.rows,
+      successRows,
       timingRows,
       versionFilter,
     })
@@ -585,45 +616,51 @@ async function readBundleInstallStatsCF(
   })
   const timingRows = aggregateInstallTimingsByVersion(timingSamples)
 
-  const auth = c.get('auth')
-  if (!auth)
-    throw simpleError('not_authenticated', 'Authentication required')
-
-  const supabase = supabaseWithAuth(c, auth)
-  const startDate = start.format('YYYY-MM-DD')
-  const endDate = endInclusive.format('YYYY-MM-DD')
-
-  let dailyQuery = supabase
-    .from('daily_version')
-    .select('version_name, install, fail')
-    .eq('app_id', appId)
-    .gte('date', startDate)
-    .lte('date', endDate)
-  if (versionNames?.length)
-    dailyQuery = dailyQuery.in('version_name', versionNames)
-
-  const { data: dailyRows, error } = await dailyQuery
-
-  if (error) {
-    cloudlog({ requestId: c.get('requestId'), message: 'bundle_install_stats daily_version error', error })
-    throw simpleError('fetch_error', 'Failed to fetch bundle success rates')
+  let successRows: BundleSuccessRow[]
+  if (days === 1) {
+    successRows = await readRollingSuccessRows(c, appId, start, endExclusive, versionFilter)
   }
+  else {
+    const auth = c.get('auth')
+    if (!auth)
+      throw simpleError('not_authenticated', 'Authentication required')
 
-  const successByVersion = new Map<string, { install: number, fail: number }>()
-  for (const row of dailyRows ?? []) {
-    if (!row.version_name)
-      continue
-    const current = successByVersion.get(row.version_name) ?? { install: 0, fail: 0 }
-    current.install += toCount(row.install)
-    current.fail += toCount(row.fail)
-    successByVersion.set(row.version_name, current)
+    const supabase = supabaseWithAuth(c, auth)
+    const startDate = start.format('YYYY-MM-DD')
+    const endDate = endInclusive.format('YYYY-MM-DD')
+
+    let dailyQuery = supabase
+      .from('daily_version')
+      .select('version_name, install, fail')
+      .eq('app_id', appId)
+      .gte('date', startDate)
+      .lte('date', endDate)
+    if (versionNames?.length)
+      dailyQuery = dailyQuery.in('version_name', versionNames)
+
+    const { data: dailyRows, error } = await dailyQuery
+
+    if (error) {
+      cloudlog({ requestId: c.get('requestId'), message: 'bundle_install_stats daily_version error', error })
+      throw simpleError('fetch_error', 'Failed to fetch bundle success rates')
+    }
+
+    const successByVersion = new Map<string, { install: number, fail: number }>()
+    for (const row of dailyRows ?? []) {
+      if (!row.version_name)
+        continue
+      const current = successByVersion.get(row.version_name) ?? { install: 0, fail: 0 }
+      current.install += toCount(row.install)
+      current.fail += toCount(row.fail)
+      successByVersion.set(row.version_name, current)
+    }
+
+    successRows = [...successByVersion.entries()].map(([version_name, counts]) => ({
+      version_name,
+      install: counts.install,
+      fail: counts.fail,
+    }))
   }
-
-  const successRows: BundleSuccessRow[] = [...successByVersion.entries()].map(([version_name, counts]) => ({
-    version_name,
-    install: counts.install,
-    fail: counts.fail,
-  }))
 
   if (timingRows.size === 0 && events.length > 0) {
     cloudlog({
@@ -654,10 +691,14 @@ async function readBundleInstallStats(
   const cache = new CacheHelper(c)
   // Exclude version_name from the cache key: filtering happens after lookup so
   // callers cannot cache-bust with unique version_name values.
+  // 1-day is a rolling window, so bucket by TTL to keep responses relative to now.
   const cacheKey = cache.buildRequest(BUNDLE_INSTALL_STATS_CACHE_PATH, {
     appId,
     days: String(days),
     channelId: channelId ? String(channelId) : '',
+    ...(days === 1
+      ? { bucket: String(Math.floor(Date.now() / (BUNDLE_INSTALL_STATS_CACHE_TTL_SECONDS * 1000))) }
+      : {}),
   })
   const cached = await cache.matchJson<BundleInstallStatsResponse>(cacheKey)
   if (cached)
@@ -758,6 +799,7 @@ export const bundleInstallStatsTestUtils = {
   buildInstallTimingsFromEvents,
   aggregateInstallTimingsByVersion,
   buildBundleInstallResponse,
+  aggregateSuccessRowsFromVersionUsage,
   filterResponseByVersionName,
   parseMetaDurationMs: parseStatsDurationMs,
 }

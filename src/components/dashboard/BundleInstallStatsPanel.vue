@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { PeriodDayOption } from '~/utils/periodDays'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
@@ -11,8 +12,6 @@ import { usePeriodDaysQuery } from '~/composables/usePeriodDaysQuery'
 import { formatLocalDateShort } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
 import { useSupabase } from '~/services/supabase'
-
-type PeriodDayOption = 1 | 3 | 7 | 30
 
 const props = withDefaults(defineProps<{
   appId: string

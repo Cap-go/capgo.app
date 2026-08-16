@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { ChartData, ChartOptions } from 'chart.js'
+import type { PeriodDayOption } from '~/utils/periodDays'
 import { BarElement, CategoryScale, Chart, Legend, LinearScale, LineElement, PointElement, Tooltip } from 'chart.js'
 import { computed, watch } from 'vue'
 import { Bar, Line } from 'vue-chartjs'
@@ -20,8 +21,6 @@ import { actionToFilter } from '~/services/statsActions'
 import { useDisplayStore } from '~/stores/display'
 
 Chart.register(CategoryScale, LinearScale, PointElement, LineElement, BarElement, Tooltip, Legend)
-
-type PeriodDayOption = 1 | 3 | 7 | 30
 
 type NullableSeries = Array<number | null>
 
@@ -307,7 +306,11 @@ watch([packageId, days], async () => {
           <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">
             {{ t('native-observe-subtitle') }}
           </p>
-          <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+          <p
+            class="mt-1 text-xs text-slate-500 dark:text-slate-400"
+            data-testid="observe-period-labels"
+            :data-count="stats?.labels.length ?? 0"
+          >
             {{ observeScopeLabel }}
           </p>
         </div>
