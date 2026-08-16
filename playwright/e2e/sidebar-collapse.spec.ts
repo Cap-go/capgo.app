@@ -7,7 +7,7 @@ test.use({ screenshot: 'off', trace: 'off', video: 'off' })
 async function shellPadding(page: Page) {
   return page.locator('[data-test="dashboard-shell"]').evaluate((el) => {
     const style = getComputedStyle(el)
-    return `${style.paddingTop} ${style.paddingRight} ${style.paddingBottom}`
+    return `${style.paddingTop} ${style.paddingRight} ${style.paddingBottom} ${style.paddingLeft}`
   })
 }
 
@@ -54,7 +54,7 @@ test.describe('Desktop sidebar collapse', () => {
   test('collapses to an icon rail that stays usable', async ({ page }) => {
     await expect(page.locator('[data-test="sidebar-collapse-toggle"]')).toBeVisible()
     await expect(page.locator('[data-test="sidebar-mobile-toggle"]')).toBeHidden()
-    await expect.poll(() => shellPadding(page)).toBe('12px 12px 12px')
+    await expect.poll(() => shellPadding(page)).toBe('12px 12px 12px 12px')
     await expect.poll(() => sidebarWidth(page)).toBeGreaterThan(200)
 
     await page.locator('[data-test="sidebar-collapse-toggle"]').click()
@@ -64,7 +64,7 @@ test.describe('Desktop sidebar collapse', () => {
     await expect.poll(() => sidebarWidth(page)).toBeLessThan(56)
     await expect(page.locator('#sidebar [data-test="org-switcher"]')).toBeVisible()
     await expect(page.locator('#sidebar').getByRole('button', { name: 'Dashboard' })).toBeVisible()
-    await expect.poll(() => shellPadding(page)).toBe('0px 0px 0px')
+    await expect.poll(() => shellPadding(page)).toBe('0px 0px 0px 0px')
 
     await page.locator('#sidebar [data-test="org-switcher"] summary').click()
     await expect(page.locator('[data-test="org-switcher-menu"]').filter({ visible: true })).toContainText(/add organization/i)
@@ -81,7 +81,7 @@ test.describe('Desktop sidebar collapse', () => {
 
     await page.locator('[data-test="sidebar-collapse-toggle"]').click()
     await expect.poll(() => sidebarWidth(page)).toBeGreaterThan(200)
-    await expect.poll(() => shellPadding(page)).toBe('12px 12px 12px')
+    await expect.poll(() => shellPadding(page)).toBe('12px 12px 12px 12px')
   })
 
   test('keeps the mobile overlay sidebar when the viewport is small', async ({ page }) => {
