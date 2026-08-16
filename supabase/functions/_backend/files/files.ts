@@ -434,10 +434,11 @@ async function getHandler(c: Context): Promise<Response> {
       return c.json({ error: 'not_found', message: 'Not found' }, 404)
     }
 
-    response = ensureNoTransformResponse(response)
+    const cachedResponse = ensureNoTransformResponse(response)
+    response = cachedResponse
     cloudlog({ requestId: c.get('requestId'), message: 'getHandler files cache hit' })
     if (c.req.raw.method !== 'HEAD') {
-      await saveBandwidthUsage(c, getTransferredBytesFromResponse(response))
+      await saveBandwidthUsage(c, getTransferredBytesFromResponse(cachedResponse))
     }
     // Best-effort restore: if a live file is cached but missing in R2, write it back.
     await backgroundTask(c, async () => {
@@ -450,7 +451,7 @@ async function getHandler(c: Context): Promise<Response> {
         if (existingObject != null)
           return
 
-        const cached = response.clone()
+        const cached = cachedResponse.clone()
         const data = await cached.arrayBuffer()
         const contentType = cached.headers.get('content-type') || undefined
         const httpMetadata = buildFileHttpMetadata(contentType, cached.headers.get('cache-control'))
@@ -464,7 +465,7 @@ async function getHandler(c: Context): Promise<Response> {
         cloudlog({ requestId: c.get('requestId'), message: 'Failed to restore cached file to R2', fileId, error: String(err) })
       }
     })
-    return response
+    return cachedResponse
   }
 
   const rangeHeaderFromRequest = c.req.header('range')

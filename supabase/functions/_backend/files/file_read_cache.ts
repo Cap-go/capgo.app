@@ -61,7 +61,7 @@ export function getFileReadCache(): Cache | null {
   if (typeof caches === 'undefined')
     return null
 
-  const cacheStorage = caches as Cache & { default?: Cache }
+  const cacheStorage = caches as unknown as Cache & { default?: Cache, open?: (cacheName: string) => Promise<Cache> }
   if (cacheStorage.default)
     return cacheStorage.default
   return cacheStorage
