@@ -235,7 +235,7 @@ describe('buildFrontendOnboardingAnalytics', () => {
 
     expect(analytics.daily_conversions).toEqual({
       intent_to_details: [
-        { date: '2026-08-01', started: 2, converted: 1, conversion_percent: 50 },
+        { date: '2026-08-01', started: 4, converted: 3, conversion_percent: 75 },
         { date: '2026-08-02', started: 0, converted: 0, conversion_percent: null },
       ],
       details_to_organization: [
