@@ -364,7 +364,7 @@ watch(
       ref="dropdown"
       data-test="org-switcher"
       class="d-dropdown"
-      :class="props.compact ? 'w-auto' : 'w-full d-dropdown-end'"
+      :class="props.compact ? 'w-auto d-dropdown-bottom' : 'w-full d-dropdown-end'"
     >
       <summary
         class="shadow-none d-btn d-btn-sm border border-gray-700 text-white bg-[#1a1d24] hover:bg-gray-700 hover:text-white active:text-white focus-visible:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-800"
@@ -424,7 +424,7 @@ watch(
       <div
         data-test="org-switcher-menu"
         class="flex flex-col max-h-[60vh] shadow d-dropdown-content bg-[#1a1d24] rounded-box z-50 text-white"
-        :class="props.compact ? 'min-w-72' : 'w-full min-w-0'"
+        :class="props.compact ? 'absolute left-0 top-full z-50 mt-1 min-w-72' : 'w-full min-w-0'"
         @click="closeDropdown()"
       >
         <ul class="flex-1 overflow-y-auto p-2">
