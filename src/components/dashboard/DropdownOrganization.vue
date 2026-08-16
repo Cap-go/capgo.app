@@ -76,6 +76,8 @@ function refreshOnVisibilityChange() {
 
 onClickOutside(dropdown, () => closeDropdown(), { ignore: [menu] })
 
+let compactMenuListenersBound = false
+
 function placeCompactMenu() {
   const trigger = dropdown.value?.querySelector('summary')
   if (!(trigger instanceof HTMLElement))
@@ -83,20 +85,18 @@ function placeCompactMenu() {
 
   const rect = trigger.getBoundingClientRect()
   const menuWidth = Math.max(menu.value?.offsetWidth || 288, 288)
+  const menuHeight = menu.value?.offsetHeight || 0
   const left = Math.max(8, Math.min(rect.left, window.innerWidth - menuWidth - 8))
+  const gap = 4
+  let top = rect.bottom + gap
+  if (menuHeight && top + menuHeight > window.innerHeight - 8) {
+    const above = rect.top - gap - menuHeight
+    top = above >= 8 ? above : Math.max(8, window.innerHeight - menuHeight - 8)
+  }
   compactMenuStyle.value = {
-    top: `${Math.round(rect.bottom + 4)}px`,
+    top: `${Math.round(top)}px`,
     left: `${Math.round(left)}px`,
   }
-}
-
-async function onDropdownToggle() {
-  const open = dropdown.value?.open ?? false
-  compactMenuOpen.value = props.compact && open
-  if (!compactMenuOpen.value)
-    return
-  await nextTick()
-  placeCompactMenu()
 }
 
 function onCompactMenuReposition() {
@@ -104,10 +104,43 @@ function onCompactMenuReposition() {
     placeCompactMenu()
 }
 
+function onCompactMenuScroll(event: Event) {
+  const target = event.target
+  if (target instanceof Node && menu.value?.contains(target))
+    return
+  onCompactMenuReposition()
+}
+
+function bindCompactMenuListeners() {
+  if (compactMenuListenersBound)
+    return
+  window.addEventListener('resize', onCompactMenuReposition)
+  window.addEventListener('scroll', onCompactMenuScroll, true)
+  compactMenuListenersBound = true
+}
+
+function unbindCompactMenuListeners() {
+  if (!compactMenuListenersBound)
+    return
+  window.removeEventListener('resize', onCompactMenuReposition)
+  window.removeEventListener('scroll', onCompactMenuScroll, true)
+  compactMenuListenersBound = false
+}
+
+async function onDropdownToggle() {
+  const open = dropdown.value?.open ?? false
+  compactMenuOpen.value = props.compact && open
+  if (!compactMenuOpen.value) {
+    unbindCompactMenuListeners()
+    return
+  }
+  bindCompactMenuListeners()
+  await nextTick()
+  placeCompactMenu()
+}
+
 onMounted(async () => {
   isOrganizationDropdownMounted = true
-  window.addEventListener('resize', onCompactMenuReposition)
-  window.addEventListener('scroll', onCompactMenuReposition, true)
   await organizationStore.fetchOrganizations()
   if (!isOrganizationDropdownMounted)
     return
@@ -127,10 +160,9 @@ onMounted(async () => {
 onUnmounted(() => {
   isOrganizationDropdownMounted = false
   compactMenuOpen.value = false
+  unbindCompactMenuListeners()
   window.removeEventListener('focus', refreshOnFocus)
   document.removeEventListener('visibilitychange', refreshOnVisibilityChange)
-  window.removeEventListener('resize', onCompactMenuReposition)
-  window.removeEventListener('scroll', onCompactMenuReposition, true)
   if (organizationLogoRefreshInterval !== null)
     window.clearInterval(organizationLogoRefreshInterval)
   organizationLogoRefreshInterval = null
@@ -234,8 +266,12 @@ async function openInvitationFromRouteIfNeeded() {
 }
 
 function closeDropdown() {
+  const wasCompactOpen = compactMenuOpen.value
   compactMenuOpen.value = false
+  unbindCompactMenuListeners()
   dropdown.value?.removeAttribute('open')
+  if (wasCompactOpen)
+    dropdown.value?.querySelector('summary')?.focus()
 }
 
 function getLogoRefreshKey(org?: Organization | null) {
@@ -566,11 +602,13 @@ watch(
           </ul>
           <div v-if="canCreateOrganizationInContext" class="p-2 border-t border-gray-700">
             <div class="block p-px rounded-lg from-cyan-500 to-purple-500 bg-linear-to-r">
-              <a
-                class="flex justify-center items-center py-3 px-3 text-center text-white rounded-lg bg-[#1a1d24] hover:bg-gray-600 cursor-pointer"
+              <button
+                type="button"
+                class="flex w-full justify-center items-center py-3 px-3 text-center text-white rounded-lg bg-[#1a1d24] hover:bg-gray-600 cursor-pointer"
                 @click="createNewOrg"
-              >{{ t('add-organization') }}
-              </a>
+              >
+                {{ t('add-organization') }}
+              </button>
             </div>
           </div>
         </div>

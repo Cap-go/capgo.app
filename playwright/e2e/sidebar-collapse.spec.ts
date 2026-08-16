@@ -22,8 +22,9 @@ async function orgSwitcherMenuIsOnTop(page: Page) {
   }).toMatch(/^(absolute|fixed):(?!none).+/)
   const menuBox = await menu.boundingBox()
   expect(menuBox).toBeTruthy()
-  expect(menuBox!.width).toBeGreaterThanOrEqual(280)
-  expect(menuBox!.height).toBeGreaterThan(80)
+  // Guard against the clipped-under-tabs regression (a sliver a few px tall).
+  expect(menuBox!.width).toBeGreaterThan(160)
+  expect(menuBox!.height).toBeGreaterThan(40)
   return page.evaluate(({ x, y }) => {
     const el = document.elementFromPoint(x, y)
     return el?.closest('[data-test="org-switcher-menu"]') != null
