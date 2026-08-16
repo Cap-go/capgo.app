@@ -200,4 +200,18 @@ describe('image path ownership for signed URLs', () => {
       ['https://example.supabase.co'],
     )).toBeNull()
   })
+
+  it('rejects encoded storage routes with malformed keys instead of treating them as CDN URLs', () => {
+    const encodedMalformed = 'https://evil.example/%73torage/v1/object/sign/images/org/org-1/file%.png'
+    expect(isSupabaseStorageImageUrl(encodedMalformed)).toBe(true)
+    expect(resolveWritableImageValue(
+      encodedMalformed,
+      { orgId: 'org-1' },
+      ['https://example.supabase.co'],
+    )).toBeNull()
+    expect(normalizeImagePath(
+      'https://example.supabase.co/%73torage/v1/object/sign/images/org/org-1/file%.png',
+      { allowedOrigins: ['https://example.supabase.co'] },
+    )).toBeNull()
+  })
 })
