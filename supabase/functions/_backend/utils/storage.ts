@@ -44,20 +44,18 @@ function isStorageImagePathname(pathname: string) {
  * Malformed percent-escapes are rejected (null), not returned as raw URLs.
  */
 function extractStorageImageKey(pathname: string) {
+  // Reject undecodable escapes in the original pathname (before segment decode).
+  if (pathname.split('/').some(segment => segment.includes('%') && tryDecodeUri(segment) === null))
+    return null
+
   const rawMatch = STORAGE_URL_REGEX.exec(pathname)
   if (rawMatch?.[1])
     return tryDecodeUri(rawMatch[1])?.replace(/^\/+/, '') ?? null
 
-  const segmentDecoded = decodePathnameSegments(pathname)
-  const decodedMatch = STORAGE_URL_REGEX.exec(segmentDecoded)
+  const decodedMatch = STORAGE_URL_REGEX.exec(decodePathnameSegments(pathname))
   if (!decodedMatch?.[1])
     return null
-
-  // Key came from segment-wise decode; reject if any segment stayed malformed (%).
-  const key = decodedMatch[1].replace(/^\/+/, '')
-  if (key.split('/').some(segment => segment.includes('%') && tryDecodeUri(segment) === null))
-    return null
-  return key
+  return decodedMatch[1].replace(/^\/+/, '')
 }
 
 function originFromEnvUrl(raw: string) {

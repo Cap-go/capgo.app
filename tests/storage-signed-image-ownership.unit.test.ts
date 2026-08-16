@@ -222,4 +222,11 @@ describe('image path ownership for signed URLs', () => {
       ['https://example.supabase.co'],
     )).toBeNull()
   })
+
+  it('accepts encoded routes with a literal percent in the object key (%25)', () => {
+    expect(normalizeImagePath(
+      'https://example.supabase.co/%73torage/v1/object/sign/images/org/org-1/file%25name.png',
+      { allowedOrigins: ['https://example.supabase.co'] },
+    )).toBe('org/org-1/file%name.png')
+  })
 })
